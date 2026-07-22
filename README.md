@@ -1,33 +1,46 @@
-<div align="center">
-  <!-- <img src="https://github.com/allenai/OLMo/assets/8812459/774ac485-a535-4768-8f7c-db7be20f5cc3" width="300"/> -->
-  <img src="https://huggingface.co/datasets/allenai/blog-images/resolve/main/olmo2/olmo.png" alt="OLMo Logo" width="280" style="margin-left:'auto' margin-right:'auto' display:'block'"/>
-  <br>
-  <h1>OLMo-core</h1>
-  <h4>Building blocks for OLMo modeling and training</h4>
-</div>
-<p align="center">
-  <a href="https://olmo-core.readthedocs.io/en/latest/">
-    <img alt="Docs" src="https://img.shields.io/badge/API-docs-red">
-  </a>
-  <a href="https://github.com/allenai/OLMo-core/tree/main/src/examples">
-    <img alt="Examples" src="https://img.shields.io/badge/API-examples-994B00">
-  </a>
-  <a href="https://github.com/allenai/OLMo-core/releases/tag/v1.9.0">
-    <img alt="Pypi" src="https://img.shields.io/pypi/v/ai2-olmo-core.svg">
-  </a>
-  <a href="https://github.com/allenai/OLMo-core/blob/main/LICENSE">
-    <img alt="GitHub License" src="https://img.shields.io/github/license/allenai/OLMo">
-  </a>
-  <a href="https://arxiv.org/pdf/2501.00656.pdf">
-    <img alt="Paper URL" src="https://img.shields.io/badge/arxiv-2402.00838-orange">
-  </a>
-  <a href="https://playground.allenai.org">
-    <img alt="Playground" src="https://img.shields.io/badge/Ai2-Playground-F0529C">
-  </a>
-  <a href="https://discord.gg/sZq3jTNVNG">
-    <img alt="Discord" src="https://img.shields.io/badge/Discord%20-%20blue?style=flat&logo=discord&label=Ai2&color=%235B65E9">
-  </a>
-</p>
+  
+
+
+# OLMo-core
+
+#### Building blocks for OLMo modeling and training
+
+
+
+> ## edu-llm fork — adds 370M training on AWS
+>
+> This branch is a **temporary template** that adds **370M (and 190M) model training on AWS** for
+> the AlphaAI/edu-llm project — a SLURM training path layered on top of upstream OLMo-core. The
+> changes are **purely additive — new files only, no upstream code is modified.** If you are
+> **not** using the AWS training path, this fork behaves exactly like stock OLMo-core and nothing
+> below affects you.
+>
+> **New files:**
+>
+> - `src/scripts/aws/` — a shared SLURM submit kit (`submit.sh` → `train-job.sbatch` →
+> `entrypoint.sh`), an ECR build script, and an env template. Runs the plain `train` command
+> under `torchrun` with S3 for data/checkpoints, **bypassing the Beaker/Gantry** `launch` **path**.
+> - `src/scripts/train/OLMo2/OLMo2-190M.py` and `OLMo2-370M.py` — small-model pre-training for
+> fast hypothesis iteration.
+> - `src/scripts/train/sft/Olmo-2-370M-SFT.py` — 370M SFT, decoupled from Beaker.
+>
+> **Evidence / provenance:** the 190M/370M architectures are official ladder configs from
+> `src/olmo_core/nn/transformer/config.py`; the pre-training scripts derive from the official
+> `OLMo2-1B.py`; the SFT script derives from `sft/Olmo-2-7B-SFT.py`.
+>
+> **Caveats (apply only to these new scripts):**
+>
+> - *Pre-train (*`OLMo2-370M.py`*):* `lr=8e-4` and batch size are **heuristic** scalings of the 1B
+> recipe (1B uses `4e-4` / `512×seq`) — verify with a short run. `MAX_DURATION` is inherited at
+> `4e12` tokens; override it per run.
+> - *SFT (*`Olmo-2-370M-SFT.py`*):* `lr=8e-5` is inherited verbatim from the **7B** recipe and is
+> likely **too low** for 370M — sweep it.
+> - *Both:* syntax-checked but **not yet dry-run validated**; the `olmo_core.model_ladder` module
+> is absent here (so the `ladder/*.py` scripts don't run); GPU compute is not yet provisioned.
+>
+> See `[src/scripts/aws/README.md](src/scripts/aws/README.md)` for details.
+
+
 
 ## Installation
 
@@ -40,6 +53,7 @@ git clone https://github.com/allenai/OLMo-core.git
 cd OLMo-core
 pip install -e .[all]
 ```
+
 Or you can install from PyPI with:
 
 ```bash
@@ -64,9 +78,9 @@ If the published images do not work for your use-case for any of the above reaso
 
 ## Official training scripts
 
-Official training scripts for released models can be found in [`src/scripts/official/`](https://github.com/allenai/OLMo-core/tree/main/src/scripts/official).
+Official training scripts for released models can be found in `[src/scripts/official/](https://github.com/allenai/OLMo-core/tree/main/src/scripts/official)`.
 
-These scripts are meant to be launched with ``torchrun``, or with OLMo-core's Beaker launch CLI if you have access to Beaker.
+These scripts are meant to be launched with `torchrun`, or with OLMo-core's Beaker launch CLI if you have access to Beaker.
 
 For example:
 
@@ -91,14 +105,22 @@ torchrun --nproc-per-node=8 src/scripts/official/OLMo2/OLMo-2-0325-32B-anneal.py
   --checkpoint=https://storage.googleapis.com/ai2-llm/peteish32/step721901
 ```
 
+
+
 ### Available Training Scripts
 
-| Model Family | Directory | Description |
-|--------------|-----------|-------------|
-| **OLMo-2** | [`src/scripts/official/OLMo2/`](https://github.com/allenai/OLMo-core/tree/main/src/scripts/official/OLMo2) | Training scripts and model card for OLMo-2 32B models |
-| **OLMo-3** | [`src/scripts/official/OLMo3/`](https://github.com/allenai/OLMo-core/tree/main/src/scripts/official/OLMo3) | Training scripts and model cards for OLMo-3 7B and 32B models |
+
+| Model Family | Directory                                                                                                  | Description                                                   |
+| ------------ | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| **OLMo-2**   | `[src/scripts/official/OLMo2/](https://github.com/allenai/OLMo-core/tree/main/src/scripts/official/OLMo2)` | Training scripts and model card for OLMo-2 32B models         |
+| **OLMo-3**   | `[src/scripts/official/OLMo3/](https://github.com/allenai/OLMo-core/tree/main/src/scripts/official/OLMo3)` | Training scripts and model cards for OLMo-3 7B and 32B models |
+
+
+
 
 ## Inference
+
+
 
 ### With Hugging Face Transformers
 
@@ -127,6 +149,8 @@ from transformers import pipeline
 olmo_pipe = pipeline("text-generation", model="allenai/Olmo-3-1125-32B")
 print(olmo_pipe("Language modeling is"))
 ```
+
+
 
 ### With vLLM
 
@@ -158,6 +182,8 @@ Autoregressive generation is supported directly in Olmo-core. Using this capabil
 python -m olmo_core.generate.chat https://olmo-checkpoints.org/ai2-llm/Olmo-3-1025-7B/stage3/step11921/ --max-new-tokens 512
 ```
 
+
+
 ## Evaluation
 
 Additional tools for evaluating OLMo models are available at the [OLMo Eval](https://github.com/allenai/OLMo-eval) and [olmes](https://github.com/allenai/olmes) repositories.
@@ -173,6 +199,8 @@ Code checks:
 - We use `ruff` as our primary linter. You can run it with `make lint-check`.
 - We use `mypy` as our type checker. You can run it with `make type-check`.
 
+
+
 ## Citing
 
 ```bibtex
@@ -186,3 +214,4 @@ Code checks:
       url={https://arxiv.org/abs/2501.00656},
 }
 ```
+
