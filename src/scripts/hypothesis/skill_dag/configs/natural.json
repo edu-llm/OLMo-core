@@ -1,0 +1,12 @@
+{
+  "name": "natural",
+  "description": "Size-proportional domain weights (filled by prepare_smoke_dolma.py; this is a placeholder equal mix for smoke).",
+  "weights": {
+    "web": 0.30,
+    "code": 0.15,
+    "stem": 0.20,
+    "wiki": 0.15,
+    "social": 0.10,
+    "flan": 0.10
+  }
+}

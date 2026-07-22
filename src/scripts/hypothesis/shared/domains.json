@@ -1,0 +1,30 @@
+{
+  "substrate_version": "smoke_dolma_v0",
+  "notes": "Map Dolma v1.7-style sources into a small Skill-DAG / CL domain set for smoke tests. Adjust freely; keep IDs stable once frozen.",
+  "domains": {
+    "web": {
+      "dolma_sources": ["c4", "common-crawl", "cc_news", "refinedweb", "falcon-refinedweb"],
+      "hf_source_substrings": ["c4", "common", "cc_news", "refined", "crawl"]
+    },
+    "code": {
+      "dolma_sources": ["starcoder", "stack"],
+      "hf_source_substrings": ["starcoder", "stack", "code"]
+    },
+    "stem": {
+      "dolma_sources": ["pes2o", "arxiv", "openwebmath", "algebraic"],
+      "hf_source_substrings": ["pes2o", "arxiv", "math", "algebraic", "s2"]
+    },
+    "wiki": {
+      "dolma_sources": ["wikipedia", "wikibooks", "megawika"],
+      "hf_source_substrings": ["wiki", "gutenberg"]
+    },
+    "social": {
+      "dolma_sources": ["reddit", "stackexchange"],
+      "hf_source_substrings": ["reddit", "stackexchange"]
+    },
+    "flan": {
+      "dolma_sources": ["flan"],
+      "hf_source_substrings": ["flan"]
+    }
+  }
+}

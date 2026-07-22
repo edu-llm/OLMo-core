@@ -1,0 +1,12 @@
+{
+  "name": "fixed_uniform",
+  "description": "Smoke stand-in for RegMix/mixing-law fixed optimum (replace after proxy fit).",
+  "weights": {
+    "web": 0.1667,
+    "code": 0.1667,
+    "stem": 0.1667,
+    "wiki": 0.1667,
+    "social": 0.1666,
+    "flan": 0.1666
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "skillit_init",
+  "description": "Initial Skill-it weights + placeholder A_ij schedule (5 updates). Smoke only — replace A_ij after probing.",
+  "initial_weights": {
+    "web": 0.25,
+    "code": 0.15,
+    "stem": 0.25,
+    "wiki": 0.15,
+    "social": 0.10,
+    "flan": 0.10
+  },
+  "n_updates": 5,
+  "A_ij": {
+    "comment": "adjacency[domain_i][skill_j]; zeros = unknown until proxy probing",
+    "matrix": {}
+  }
+}
