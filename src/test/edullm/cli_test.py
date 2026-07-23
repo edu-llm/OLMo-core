@@ -10,6 +10,7 @@ import pytest
 import yaml
 
 import edullm.cli as cli
+import edullm.secure_publish as secure_publish
 from edullm.assignment import AssignmentResult
 from edullm.automation import AutomationResult
 
@@ -1226,10 +1227,14 @@ def test_write_operator_config_is_atomic_and_mode_0600(tmp_path, monkeypatch):
     cli.write_operator_config(config, {"version": 1})
     original = config.read_bytes()
 
-    def fail_replace(*args, **kwargs):
-        raise OSError("simulated failure")
+    real_link = secure_publish.os.link
 
-    monkeypatch.setattr(cli.os, "replace", fail_replace)
+    def fail_publish(source, target, **kwargs):
+        if target == config.name and source.startswith(f".{config.name}.edullm-"):
+            raise OSError("simulated failure")
+        return real_link(source, target, **kwargs)
+
+    monkeypatch.setattr(secure_publish.os, "link", fail_publish)
     with pytest.raises(cli.SetupError, match="operator config"):
         cli.write_operator_config(config, {"version": 2})
 
@@ -1255,14 +1260,15 @@ def test_write_operator_config_rejects_unsafe_existing_mode_before_replace(tmp_p
 def test_write_operator_config_commits_with_same_open_directory_fd(tmp_path, monkeypatch):
     config = tmp_path / "config" / "config.yaml"
     cli.write_operator_config(config, {"version": 1})
-    real_replace = cli.os.replace
+    real_link = secure_publish.os.link
     calls = []
 
-    def record_replace(*args, **kwargs):
-        calls.append((args, kwargs))
-        return real_replace(*args, **kwargs)
+    def record_publish(source, target, **kwargs):
+        if target == config.name and source.startswith(f".{config.name}.edullm-"):
+            calls.append(((source, target), kwargs))
+        return real_link(source, target, **kwargs)
 
-    monkeypatch.setattr(cli.os, "replace", record_replace)
+    monkeypatch.setattr(secure_publish.os, "link", record_publish)
 
     cli.write_operator_config(config, {"version": 2})
 
@@ -1270,6 +1276,116 @@ def test_write_operator_config_commits_with_same_open_directory_fd(tmp_path, mon
     _, options = calls[0]
     assert options["src_dir_fd"] == options["dst_dir_fd"]
     assert yaml.safe_load(config.read_text(encoding="utf-8")) == {"version": 2}
+
+
+def test_write_operator_config_establishes_exact_mode_before_write_under_umask(
+    tmp_path, monkeypatch
+):
+    config = tmp_path / "home" / ".config" / "edullm" / "config.yaml"
+    config.parents[2].mkdir()
+    observed_modes = []
+    real_write = cli._write_descriptor
+
+    def record_mode(descriptor, content):
+        observed_modes.append(stat.S_IMODE(os.fstat(descriptor).st_mode))
+        real_write(descriptor, content)
+
+    monkeypatch.setattr(cli, "_write_descriptor", record_mode)
+    previous_umask = os.umask(0o777)
+    try:
+        cli.write_operator_config(config, {"version": 1})
+    finally:
+        os.umask(previous_umask)
+
+    assert observed_modes == [0o600]
+    assert stat.S_IMODE(config.stat().st_mode) == 0o600
+
+
+def test_write_operator_config_restores_edit_at_actual_publish_boundary(tmp_path, monkeypatch):
+    config = tmp_path / "config" / "config.yaml"
+    cli.write_operator_config(config, {"version": 1})
+    concurrent_fd = os.open(config, os.O_WRONLY)
+    real_link = secure_publish.os.link
+
+    def edit_then_publish(source, target, **kwargs):
+        if target == config.name and source.startswith(f".{config.name}.edullm-"):
+            os.lseek(concurrent_fd, 0, os.SEEK_SET)
+            os.write(concurrent_fd, b"version: concurrent\n")
+            os.ftruncate(concurrent_fd, len(b"version: concurrent\n"))
+            os.fsync(concurrent_fd)
+        return real_link(source, target, **kwargs)
+
+    monkeypatch.setattr(secure_publish.os, "link", edit_then_publish)
+    try:
+        with pytest.raises(cli.SetupError, match="operator config"):
+            cli.write_operator_config(config, {"version": 2})
+    finally:
+        os.close(concurrent_fd)
+
+    assert config.read_bytes() == b"version: concurrent\n"
+    assert not list(config.parent.glob(f".{config.name}.edullm-*"))
+
+
+def test_write_operator_config_never_clobbers_boundary_path_replacement(tmp_path, monkeypatch):
+    config = tmp_path / "config" / "config.yaml"
+    cli.write_operator_config(config, {"version": 1})
+    original = config.read_bytes()
+    real_link = secure_publish.os.link
+    replaced = False
+
+    def replace_then_publish(source, target, **kwargs):
+        nonlocal replaced
+        if target == config.name and source.startswith(f".{config.name}.edullm-") and not replaced:
+            replaced = True
+            descriptor = os.open(
+                config.name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=kwargs["dst_dir_fd"],
+            )
+            os.fchmod(descriptor, 0o600)
+            os.write(descriptor, b"version: concurrent\n")
+            os.close(descriptor)
+        return real_link(source, target, **kwargs)
+
+    monkeypatch.setattr(secure_publish.os, "link", replace_then_publish)
+
+    with pytest.raises(cli.SetupError, match="operator config"):
+        cli.write_operator_config(config, {"version": 2})
+
+    assert config.read_bytes() == b"version: concurrent\n"
+    recovery = list(config.parent.glob(f".{config.name}.edullm-recovery-*/original"))
+    assert len(recovery) == 1
+    assert recovery[0].read_bytes() == original
+
+
+def test_write_operator_config_rejects_parent_swap_at_actual_publish_boundary(
+    tmp_path, monkeypatch
+):
+    parent = tmp_path / "config"
+    config = parent / "config.yaml"
+    cli.write_operator_config(config, {"version": 1})
+    original = config.read_bytes()
+    moved = tmp_path / "config-moved"
+    real_link = secure_publish.os.link
+    swapped = False
+
+    def swap_then_publish(source, target, **kwargs):
+        nonlocal swapped
+        if target == config.name and source.startswith(f".{config.name}.edullm-") and not swapped:
+            swapped = True
+            parent.rename(moved)
+            parent.mkdir()
+        return real_link(source, target, **kwargs)
+
+    monkeypatch.setattr(secure_publish.os, "link", swap_then_publish)
+
+    with pytest.raises(cli.SetupError, match="operator config"):
+        cli.write_operator_config(config, {"version": 2})
+
+    assert not config.exists()
+    assert (moved / config.name).read_bytes() == original
+    assert not list(moved.glob(f".{config.name}.edullm-*"))
 
 
 def test_write_operator_config_rejects_parent_swap_and_cleans_old_temp(tmp_path, monkeypatch):

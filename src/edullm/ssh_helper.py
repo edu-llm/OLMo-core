@@ -16,6 +16,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
+from edullm.secure_publish import (
+    SecurePublishError,
+    capture_file,
+    compare_and_publish,
+)
+
 _TARGETS = frozenset({"wandb.env", "wandb.key"})
 _DIRECTORY_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
 
@@ -67,8 +73,7 @@ def atomic_write_private(home: Path, target_name: str, source: BinaryIO) -> None
         parent = home / ".config" / "edullm"
         directory_fd, directory_snapshot = _open_private_parent(home)
         _validate_directory_identity(parent, directory_fd, directory_snapshot)
-        target_snapshot = _inspect_target(directory_fd, target_name)
-        _validate_target_snapshot(directory_fd, target_name, target_snapshot)
+        target_state = capture_file(directory_fd, target_name, exact_mode=0o600)
 
         temporary_name = f".edullm-write-{secrets.token_hex(12)}"
         descriptor = os.open(
@@ -77,6 +82,9 @@ def atomic_write_private(home: Path, target_name: str, source: BinaryIO) -> None
             0o600,
             dir_fd=directory_fd,
         )
+        os.fchmod(descriptor, 0o600)
+        if stat.S_IMODE(os.fstat(descriptor).st_mode) != 0o600:
+            raise PrivateWriteError("private write failed")
         while True:
             chunk = source.read(1024 * 1024)
             if chunk == b"":
@@ -87,19 +95,28 @@ def atomic_write_private(home: Path, target_name: str, source: BinaryIO) -> None
         os.fsync(descriptor)
         os.close(descriptor)
         descriptor = None
-
-        _validate_directory_identity(parent, directory_fd, directory_snapshot)
-        _validate_target_snapshot(directory_fd, target_name, target_snapshot)
-        os.replace(
-            temporary_name,
-            target_name,
-            src_dir_fd=directory_fd,
-            dst_dir_fd=directory_fd,
-        )
+        prepared = capture_file(directory_fd, temporary_name, exact_mode=0o600)
+        if prepared is None:
+            raise PrivateWriteError("private write failed")
+        publishing_name = temporary_name
         temporary_name = None
-        os.fsync(directory_fd)
+        compare_and_publish(
+            directory_fd,
+            parent,
+            (
+                directory_snapshot.device,
+                directory_snapshot.inode,
+                directory_snapshot.owner,
+            ),
+            target_name,
+            publishing_name,
+            target_state,
+            prepared,
+        )
     except PrivateWriteError:
         raise
+    except SecurePublishError:
+        raise PrivateWriteError("private write failed") from None
     except Exception:
         raise PrivateWriteError("private write failed") from None
     finally:
@@ -136,6 +153,7 @@ def _open_or_create_directory(parent_fd: int, name: str) -> int:
         descriptor = os.open(name, _DIRECTORY_FLAGS, dir_fd=parent_fd)
     except FileNotFoundError:
         os.mkdir(name, 0o700, dir_fd=parent_fd)
+        os.chmod(name, 0o700, dir_fd=parent_fd, follow_symlinks=False)
         descriptor = os.open(name, _DIRECTORY_FLAGS, dir_fd=parent_fd)
     try:
         _validate_owned_directory(descriptor)
@@ -149,28 +167,6 @@ def _open_or_create_directory(parent_fd: int, name: str) -> int:
 def _validate_owned_directory(descriptor: int) -> None:
     status = os.fstat(descriptor)
     if not stat.S_ISDIR(status.st_mode) or status.st_uid != os.getuid():
-        raise PrivateWriteError("private write failed")
-
-
-def _inspect_target(directory_fd: int, target_name: str) -> _Snapshot | None:
-    try:
-        status = os.stat(target_name, dir_fd=directory_fd, follow_symlinks=False)
-    except FileNotFoundError:
-        return None
-    if (
-        not stat.S_ISREG(status.st_mode)
-        or status.st_uid != os.getuid()
-        or stat.S_IMODE(status.st_mode) != 0o600
-    ):
-        raise PrivateWriteError("private write failed")
-    return _Snapshot.from_stat(status)
-
-
-def _validate_target_snapshot(
-    directory_fd: int, target_name: str, expected: _Snapshot | None
-) -> None:
-    current = _inspect_target(directory_fd, target_name)
-    if current != expected:
         raise PrivateWriteError("private write failed")
 
 

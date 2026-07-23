@@ -31,6 +31,11 @@ from edullm.automation import AutomationResult, load_team_leads, validate_issue
 from edullm.github import GitHubClient, GitHubError
 from edullm.notifications import SlackNotifier
 from edullm.policy import load_operators, load_policy
+from edullm.secure_publish import (
+    SecurePublishError,
+    capture_file,
+    compare_and_publish,
+)
 from edullm.ssh import (
     COMMAND_TIMEOUT_SECONDS,
     SSHClient,
@@ -354,7 +359,7 @@ def write_operator_config(path: Path, config: Mapping[str, object]) -> None:
         directory_fd = _open_operator_directory(parent)
         directory_identity = _operator_directory_identity(directory_fd)
         _validate_operator_directory(parent, directory_fd, directory_identity)
-        original_signature = _operator_file_signature_at(directory_fd, path.name)
+        original_state = capture_file(directory_fd, path.name, exact_mode=0o600)
         temporary_name = f".{path.name}.edullm-{secrets.token_hex(8)}"
         descriptor = os.open(
             temporary_name,
@@ -362,24 +367,31 @@ def write_operator_config(path: Path, config: Mapping[str, object]) -> None:
             0o600,
             dir_fd=directory_fd,
         )
+        os.fchmod(descriptor, 0o600)
+        if stat.S_IMODE(os.fstat(descriptor).st_mode) != 0o600:
+            raise SetupError("operator config could not be written safely")
         _write_descriptor(descriptor, serialized)
         os.fsync(descriptor)
         os.close(descriptor)
         descriptor = None
-
-        _validate_operator_directory(parent, directory_fd, directory_identity)
-        if _operator_file_signature_at(directory_fd, path.name) != original_signature:
-            raise SetupError("operator config changed while it was being updated")
-        os.replace(
-            temporary_name,
-            path.name,
-            src_dir_fd=directory_fd,
-            dst_dir_fd=directory_fd,
-        )
+        prepared = capture_file(directory_fd, temporary_name, exact_mode=0o600)
+        if prepared is None:
+            raise SetupError("operator config could not be written safely")
+        publishing_name = temporary_name
         temporary_name = None
-        os.fsync(directory_fd)
+        compare_and_publish(
+            directory_fd,
+            parent,
+            directory_identity,
+            path.name,
+            publishing_name,
+            original_state,
+            prepared,
+        )
     except SetupError:
         raise
+    except SecurePublishError:
+        raise SetupError("operator config changed while it was being updated") from None
     except OSError:
         raise SetupError("operator config could not be written safely") from None
     finally:
@@ -541,8 +553,21 @@ def _ensure_operator_directory(path: Path) -> None:
     try:
         status = path.lstat()
     except FileNotFoundError:
+        missing = []
+        current = path
+        while True:
+            try:
+                current.lstat()
+                break
+            except FileNotFoundError:
+                missing.append(current)
+                current = current.parent
+            except OSError:
+                raise SetupError("operator config directory could not be created safely") from None
         try:
-            path.mkdir(mode=0o700, parents=True)
+            for directory in reversed(missing):
+                directory.mkdir(mode=0o700)
+                directory.chmod(0o700)
             status = path.lstat()
         except OSError:
             raise SetupError("operator config directory could not be created safely") from None
@@ -611,33 +636,6 @@ def _validate_operator_directory(
         or not stat.S_ISDIR(status.st_mode)
     ):
         raise SetupError("operator config changed while it was being updated")
-
-
-def _operator_file_signature_at(
-    directory_fd: int, name: str
-) -> tuple[int, int, int, int, int, int, int] | None:
-    try:
-        status = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-    except FileNotFoundError:
-        return None
-    except OSError:
-        raise SetupError("operator config could not be inspected safely") from None
-    if (
-        stat.S_ISLNK(status.st_mode)
-        or not stat.S_ISREG(status.st_mode)
-        or status.st_uid != os.getuid()
-        or stat.S_IMODE(status.st_mode) != 0o600
-    ):
-        raise SetupError("operator config path is unsafe")
-    return (
-        status.st_dev,
-        status.st_ino,
-        status.st_mode,
-        status.st_uid,
-        status.st_size,
-        status.st_mtime_ns,
-        status.st_ctime_ns,
-    )
 
 
 def _write_descriptor(descriptor: int, content: bytes) -> None:

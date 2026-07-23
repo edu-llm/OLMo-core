@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import edullm.secure_publish as secure_publish
 import edullm.ssh as ssh
 
 
@@ -313,7 +314,7 @@ def test_plan_rejects_comment_inside_target_block_before_safe_directive():
     assert "inside-secret" not in str(raised.value)
 
 
-def test_secure_apply_creates_backup_and_preserves_safe_original_mode(tmp_path):
+def test_secure_apply_creates_exact_mode_0600_backup_and_config(tmp_path):
     config = tmp_path / ".ssh" / "config"
     config.parent.mkdir(mode=0o700)
     original = b"Host github.com\n  User git\n"
@@ -326,8 +327,8 @@ def test_secure_apply_creates_backup_and_preserves_safe_original_mode(tmp_path):
     assert backup is not None
     assert backup.read_bytes() == original
     assert config.read_bytes() == plan.proposed
-    assert stat.S_IMODE(config.stat().st_mode) == 0o644
-    assert stat.S_IMODE(backup.stat().st_mode) == 0o644
+    assert stat.S_IMODE(config.stat().st_mode) == 0o600
+    assert stat.S_IMODE(backup.stat().st_mode) == 0o600
     assert stat.S_IMODE(config.parent.stat().st_mode) == 0o700
     assert not list(config.parent.glob(".config.edullm-*"))
 
@@ -380,12 +381,16 @@ def test_failed_atomic_replace_leaves_original_and_secure_backup(tmp_path, monke
     config.chmod(0o640)
     plan = ssh.plan_control_config(original, "philote")
 
-    def fail_replace(*args, **kwargs):
-        raise OSError("simulated replace failure")
+    real_link = secure_publish.os.link
 
-    monkeypatch.setattr(ssh.os, "replace", fail_replace)
+    def fail_publish(source, target, **kwargs):
+        if target == config.name and source.startswith(f".{config.name}.edullm-"):
+            raise OSError("simulated publish failure")
+        return real_link(source, target, **kwargs)
 
-    with pytest.raises(ssh.SSHConfigError, match="could not update"):
+    monkeypatch.setattr(secure_publish.os, "link", fail_publish)
+
+    with pytest.raises(ssh.SSHConfigError, match="changed"):
         ssh.apply_control_config(config, plan)
 
     assert config.read_bytes() == original
@@ -393,7 +398,7 @@ def test_failed_atomic_replace_leaves_original_and_secure_backup(tmp_path, monke
     backups = list(config.parent.glob("config.edullm-backup*"))
     assert len(backups) == 1
     assert backups[0].read_bytes() == original
-    assert stat.S_IMODE(backups[0].stat().st_mode) == 0o640
+    assert stat.S_IMODE(backups[0].stat().st_mode) == 0o600
     assert not list(config.parent.glob(".config.edullm-*"))
 
 
@@ -410,15 +415,120 @@ def test_read_control_config_rejects_unsafe_parent_symlink(tmp_path):
 def test_created_config_and_backup_never_have_group_or_other_permissions(tmp_path):
     config = tmp_path / ".ssh" / "config"
     plan = ssh.plan_control_config(b"", "philote")
-    previous_umask = os.umask(0)
+    observed_modes = []
+    real_write = ssh._write_all
+
+    def record_mode_before_write(descriptor, content):
+        observed_modes.append(stat.S_IMODE(os.fstat(descriptor).st_mode))
+        real_write(descriptor, content)
+
+    previous_umask = os.umask(0o777)
     try:
-        backup = ssh.apply_control_config(config, plan)
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.setattr(ssh, "_write_all", record_mode_before_write)
+            backup = ssh.apply_control_config(config, plan)
     finally:
         os.umask(previous_umask)
 
     assert backup is not None
+    assert observed_modes and set(observed_modes) == {0o600}
     assert stat.S_IMODE(config.stat().st_mode) == 0o600
     assert stat.S_IMODE(backup.stat().st_mode) == 0o600
+
+
+def test_secure_apply_restores_target_edited_at_actual_publish_boundary(tmp_path, monkeypatch):
+    config = tmp_path / ".ssh" / "config"
+    config.parent.mkdir(mode=0o700)
+    original = b"Host github.com\n"
+    config.write_bytes(original)
+    config.chmod(0o600)
+    plan = ssh.plan_control_config(original, "philote")
+    concurrent_fd = os.open(config, os.O_WRONLY)
+    real_link = secure_publish.os.link
+
+    def edit_then_publish(source, target, **kwargs):
+        if target == config.name and source.startswith(f".{config.name}.edullm-"):
+            os.lseek(concurrent_fd, 0, os.SEEK_SET)
+            os.write(concurrent_fd, b"Host concurrent.example\n")
+            os.ftruncate(concurrent_fd, len(b"Host concurrent.example\n"))
+            os.fsync(concurrent_fd)
+        return real_link(source, target, **kwargs)
+
+    monkeypatch.setattr(secure_publish.os, "link", edit_then_publish)
+    try:
+        with pytest.raises(ssh.SSHConfigError, match="changed|safely"):
+            ssh.apply_control_config(config, plan)
+    finally:
+        os.close(concurrent_fd)
+
+    assert config.read_bytes() == b"Host concurrent.example\n"
+    assert not list(config.parent.glob(f".{config.name}.edullm-*"))
+
+
+def test_secure_apply_never_clobbers_path_replaced_at_publish_boundary(tmp_path, monkeypatch):
+    config = tmp_path / ".ssh" / "config"
+    config.parent.mkdir(mode=0o700)
+    original = b"Host github.com\n"
+    config.write_bytes(original)
+    config.chmod(0o600)
+    plan = ssh.plan_control_config(original, "philote")
+    real_link = secure_publish.os.link
+    replaced = False
+
+    def replace_then_publish(source, target, **kwargs):
+        nonlocal replaced
+        if target == config.name and source.startswith(f".{config.name}.edullm-") and not replaced:
+            replaced = True
+            descriptor = os.open(
+                config.name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=kwargs["dst_dir_fd"],
+            )
+            os.fchmod(descriptor, 0o600)
+            os.write(descriptor, b"Host concurrent.example\n")
+            os.close(descriptor)
+        return real_link(source, target, **kwargs)
+
+    monkeypatch.setattr(secure_publish.os, "link", replace_then_publish)
+
+    with pytest.raises(ssh.SSHConfigError, match="changed|safely"):
+        ssh.apply_control_config(config, plan)
+
+    assert config.read_bytes() == b"Host concurrent.example\n"
+    recovery = list(config.parent.glob(f".{config.name}.edullm-recovery-*/original"))
+    assert len(recovery) == 1
+    assert recovery[0].read_bytes() == original
+
+
+def test_secure_apply_rejects_parent_swap_at_actual_publish_boundary(tmp_path, monkeypatch):
+    ssh_dir = tmp_path / ".ssh"
+    ssh_dir.mkdir(mode=0o700)
+    config = ssh_dir / "config"
+    original = b"Host github.com\n"
+    config.write_bytes(original)
+    config.chmod(0o600)
+    plan = ssh.plan_control_config(original, "philote")
+    moved = tmp_path / ".ssh-moved"
+    real_link = secure_publish.os.link
+    swapped = False
+
+    def swap_then_publish(source, target, **kwargs):
+        nonlocal swapped
+        if target == config.name and source.startswith(f".{config.name}.edullm-") and not swapped:
+            swapped = True
+            ssh_dir.rename(moved)
+            ssh_dir.mkdir(mode=0o700)
+        return real_link(source, target, **kwargs)
+
+    monkeypatch.setattr(secure_publish.os, "link", swap_then_publish)
+
+    with pytest.raises(ssh.SSHConfigError, match="changed|safely"):
+        ssh.apply_control_config(config, plan)
+
+    assert not config.exists()
+    assert (moved / "config").read_bytes() == original
+    assert not list(moved.glob(f".{config.name}.edullm-*"))
 
 
 def test_secure_apply_commits_with_same_open_directory_fd(tmp_path, monkeypatch):
@@ -428,14 +538,15 @@ def test_secure_apply_commits_with_same_open_directory_fd(tmp_path, monkeypatch)
     config.write_bytes(original)
     config.chmod(0o600)
     plan = ssh.plan_control_config(original, "philote")
-    real_replace = ssh.os.replace
+    real_link = secure_publish.os.link
     calls = []
 
-    def record_replace(*args, **kwargs):
-        calls.append((args, kwargs))
-        return real_replace(*args, **kwargs)
+    def record_publish(source, target, **kwargs):
+        if target == config.name and source.startswith(f".{config.name}.edullm-"):
+            calls.append(((source, target), kwargs))
+        return real_link(source, target, **kwargs)
 
-    monkeypatch.setattr(ssh.os, "replace", record_replace)
+    monkeypatch.setattr(secure_publish.os, "link", record_publish)
 
     ssh.apply_control_config(config, plan)
 
@@ -522,6 +633,37 @@ def test_remote_helper_atomically_creates_mode_0600_file(tmp_path, target_name):
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
     assert stat.S_IMODE(target.parent.stat().st_mode) == 0o700
     assert not list(target.parent.glob(".edullm-write-*"))
+
+
+@pytest.mark.parametrize("target_name", ["wandb.key", "wandb.env"])
+def test_remote_helper_establishes_exact_mode_before_read_under_umask(tmp_path, target_name):
+    from edullm import ssh_helper
+
+    home = tmp_path / "home"
+    home.mkdir()
+    observed_modes = []
+
+    class InspectingInput(io.BytesIO):
+        def read(self, size=-1):
+            temporary = list(_private_parent(home).glob(".edullm-write-*"))
+            assert len(temporary) == 1
+            observed_modes.append(stat.S_IMODE(temporary[0].stat().st_mode))
+            return super().read(size)
+
+    previous_umask = os.umask(0o777)
+    try:
+        ssh_helper.atomic_write_private(
+            home,
+            target_name,
+            InspectingInput(b"private-content\n"),
+        )
+    finally:
+        os.umask(previous_umask)
+
+    target = _private_parent(home) / target_name
+    assert observed_modes and set(observed_modes) == {0o600}
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert stat.S_IMODE(target.parent.stat().st_mode) == 0o700
 
 
 def test_remote_helper_rejects_existing_0644_before_reading_input(tmp_path):
@@ -648,10 +790,14 @@ def test_remote_helper_replace_failure_cleans_temp_and_preserves_target(tmp_path
     target.write_bytes(b"existing")
     target.chmod(0o600)
 
-    def fail_replace(*args, **kwargs):
-        raise OSError("replace failed")
+    real_link = secure_publish.os.link
 
-    monkeypatch.setattr(ssh_helper.os, "replace", fail_replace)
+    def fail_publish(source, destination, **kwargs):
+        if destination == target.name and source.startswith(".edullm-write-"):
+            raise OSError("publish failed")
+        return real_link(source, destination, **kwargs)
+
+    monkeypatch.setattr(secure_publish.os, "link", fail_publish)
 
     with pytest.raises(ssh_helper.PrivateWriteError, match="private write failed"):
         ssh_helper.atomic_write_private(home, "wandb.key", io.BytesIO(b"replacement"))
@@ -660,7 +806,7 @@ def test_remote_helper_replace_failure_cleans_temp_and_preserves_target(tmp_path
     assert not list(parent.glob(".edullm-write-*"))
 
 
-def test_remote_helper_detects_target_edit_before_commit(tmp_path, monkeypatch):
+def test_remote_helper_restores_edit_at_actual_publish_boundary(tmp_path, monkeypatch):
     from edullm import ssh_helper
 
     home = tmp_path / "home"
@@ -669,48 +815,94 @@ def test_remote_helper_detects_target_edit_before_commit(tmp_path, monkeypatch):
     target = parent / "wandb.key"
     target.write_bytes(b"existing")
     target.chmod(0o600)
-    real_validate = ssh_helper._validate_target_snapshot
-    calls = 0
+    concurrent_fd = os.open(target, os.O_WRONLY)
+    real_link = secure_publish.os.link
 
-    def edit_before_validate(directory_fd, target_name, expected):
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            target.write_bytes(b"concurrent")
-            target.chmod(0o600)
-        return real_validate(directory_fd, target_name, expected)
+    def edit_then_publish(source, destination, **kwargs):
+        if destination == target.name and source.startswith(".edullm-write-"):
+            os.lseek(concurrent_fd, 0, os.SEEK_SET)
+            os.write(concurrent_fd, b"concurrent")
+            os.ftruncate(concurrent_fd, len(b"concurrent"))
+            os.fsync(concurrent_fd)
+        return real_link(source, destination, **kwargs)
 
-    monkeypatch.setattr(ssh_helper, "_validate_target_snapshot", edit_before_validate)
-
-    with pytest.raises(ssh_helper.PrivateWriteError, match="private write failed"):
-        ssh_helper.atomic_write_private(home, "wandb.key", io.BytesIO(b"replacement"))
+    monkeypatch.setattr(secure_publish.os, "link", edit_then_publish)
+    try:
+        with pytest.raises(ssh_helper.PrivateWriteError, match="private write failed"):
+            ssh_helper.atomic_write_private(home, target.name, io.BytesIO(b"replacement"))
+    finally:
+        os.close(concurrent_fd)
 
     assert target.read_bytes() == b"concurrent"
     assert not list(parent.glob(".edullm-write-*"))
+    assert not list(parent.glob(f".{target.name}.edullm-recovery-*"))
 
 
-def test_remote_helper_detects_parent_swap_before_commit(tmp_path, monkeypatch):
+def test_remote_helper_never_clobbers_boundary_path_replacement(tmp_path, monkeypatch):
     from edullm import ssh_helper
 
     home = tmp_path / "home"
     parent = _private_parent(home)
     parent.mkdir(parents=True)
-    real_validate = ssh_helper._validate_directory_identity
-    calls = 0
+    target = parent / "wandb.key"
+    target.write_bytes(b"existing")
+    target.chmod(0o600)
+    real_link = secure_publish.os.link
+    replaced = False
 
-    def swap_before_validate(path, directory_fd, expected):
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            moved = path.with_name("edullm-moved")
-            path.rename(moved)
-            path.mkdir()
-        return real_validate(path, directory_fd, expected)
+    def replace_then_publish(source, destination, **kwargs):
+        nonlocal replaced
+        if destination == target.name and source.startswith(".edullm-write-") and not replaced:
+            replaced = True
+            descriptor = os.open(
+                target.name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=kwargs["dst_dir_fd"],
+            )
+            os.fchmod(descriptor, 0o600)
+            os.write(descriptor, b"concurrent")
+            os.close(descriptor)
+        return real_link(source, destination, **kwargs)
 
-    monkeypatch.setattr(ssh_helper, "_validate_directory_identity", swap_before_validate)
+    monkeypatch.setattr(secure_publish.os, "link", replace_then_publish)
 
     with pytest.raises(ssh_helper.PrivateWriteError, match="private write failed"):
-        ssh_helper.atomic_write_private(home, "wandb.key", io.BytesIO(b"private-content"))
+        ssh_helper.atomic_write_private(home, target.name, io.BytesIO(b"replacement"))
 
-    assert not (_private_parent(home) / "wandb.key").exists()
-    assert not list((_private_parent(home).with_name("edullm-moved")).glob(".edullm-write-*"))
+    assert target.read_bytes() == b"concurrent"
+    recovery = list(parent.glob(f".{target.name}.edullm-recovery-*/original"))
+    assert len(recovery) == 1
+    assert recovery[0].read_bytes() == b"existing"
+
+
+def test_remote_helper_rejects_parent_swap_at_actual_publish_boundary(tmp_path, monkeypatch):
+    from edullm import ssh_helper
+
+    home = tmp_path / "home"
+    parent = _private_parent(home)
+    parent.mkdir(parents=True)
+    target = parent / "wandb.key"
+    target.write_bytes(b"existing")
+    target.chmod(0o600)
+    moved = parent.with_name("edullm-moved-at-publish")
+    real_link = secure_publish.os.link
+    swapped = False
+
+    def swap_then_publish(source, destination, **kwargs):
+        nonlocal swapped
+        if destination == target.name and source.startswith(".edullm-write-") and not swapped:
+            swapped = True
+            parent.rename(moved)
+            parent.mkdir()
+        return real_link(source, destination, **kwargs)
+
+    monkeypatch.setattr(secure_publish.os, "link", swap_then_publish)
+
+    with pytest.raises(ssh_helper.PrivateWriteError, match="private write failed"):
+        ssh_helper.atomic_write_private(home, target.name, io.BytesIO(b"replacement"))
+
+    assert not target.exists()
+    assert (moved / target.name).read_bytes() == b"existing"
+    assert not list(moved.glob(".edullm-write-*"))
+    assert not list(moved.glob(f".{target.name}.edullm-recovery-*"))

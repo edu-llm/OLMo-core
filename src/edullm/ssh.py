@@ -16,6 +16,12 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from edullm.secure_publish import (
+    SecurePublishError,
+    capture_file,
+    compare_and_publish,
+)
+
 COMMAND_TIMEOUT_SECONDS = 30.0
 _ALIAS = "orcd-login"
 _HOSTNAME = "orcd-login.mit.edu"
@@ -335,18 +341,19 @@ def apply_control_config(path: Path, plan: SSHConfigPlan) -> Path | None:
         directory_fd = _open_private_directory(path.parent)
         directory_identity = _directory_identity(directory_fd)
         _validate_directory_identity(path.parent, directory_fd, directory_identity)
-        current, target_snapshot = _read_config_at(directory_fd, path.name)
+        current, _ = _read_config_at(directory_fd, path.name)
+        target_state = capture_file(directory_fd, path.name, reject_write_bits=True)
         if current != plan.original:
+            raise SSHConfigError("SSH config changed after the proposed diff")
+        if (target_state.content if target_state is not None else b"") != plan.original:
             raise SSHConfigError("SSH config changed after the proposed diff")
         if not plan.changed:
             return None
 
-        target_mode = stat.S_IMODE(target_snapshot.mode) if target_snapshot is not None else 0o600
         backup = _create_backup_at(
             path,
             directory_fd,
             current,
-            target_mode,
         )
         temporary_name = f".{path.name}.edullm-{secrets.token_hex(8)}"
         descriptor = os.open(
@@ -355,29 +362,31 @@ def apply_control_config(path: Path, plan: SSHConfigPlan) -> Path | None:
             0o600,
             dir_fd=directory_fd,
         )
+        os.fchmod(descriptor, 0o600)
+        if stat.S_IMODE(os.fstat(descriptor).st_mode) != 0o600:
+            raise SSHConfigError("SSH config could not update safely")
         _write_all(descriptor, plan.proposed)
-        os.fchmod(descriptor, target_mode)
         os.fsync(descriptor)
         os.close(descriptor)
         descriptor = None
-
-        _validate_directory_identity(path.parent, directory_fd, directory_identity)
-        _validate_config_snapshot(
-            directory_fd,
-            path.name,
-            target_snapshot,
-            plan.original,
-        )
-        os.replace(
-            temporary_name,
-            path.name,
-            src_dir_fd=directory_fd,
-            dst_dir_fd=directory_fd,
-        )
+        prepared = capture_file(directory_fd, temporary_name, exact_mode=0o600)
+        if prepared is None:
+            raise SSHConfigError("SSH config could not update safely")
+        publishing_name = temporary_name
         temporary_name = None
-        os.fsync(directory_fd)
+        compare_and_publish(
+            directory_fd,
+            path.parent,
+            directory_identity,
+            path.name,
+            publishing_name,
+            target_state,
+            prepared,
+        )
     except SSHConfigError:
         raise
+    except SecurePublishError:
+        raise SSHConfigError("SSH config changed after the proposed diff") from None
     except OSError:
         raise SSHConfigError("SSH config could not update safely") from None
     finally:
@@ -577,25 +586,10 @@ def _read_config_at(directory_fd: int, name: str) -> tuple[bytes, _FileSnapshot 
             os.close(descriptor)
 
 
-def _validate_config_snapshot(
-    directory_fd: int,
-    name: str,
-    expected: _FileSnapshot | None,
-    expected_content: bytes,
-) -> None:
-    try:
-        content, current = _read_config_at(directory_fd, name)
-    except SSHConfigError:
-        raise SSHConfigError("SSH config changed after the proposed diff") from None
-    if current != expected or content != expected_content:
-        raise SSHConfigError("SSH config changed after the proposed diff")
-
-
 def _create_backup_at(
     path: Path,
     directory_fd: int,
     content: bytes,
-    mode: int,
 ) -> Path:
     index = 0
     while True:
@@ -614,8 +608,10 @@ def _create_backup_at(
         except OSError:
             raise SSHConfigError("SSH config backup could not be created safely") from None
         try:
+            os.fchmod(descriptor, 0o600)
+            if stat.S_IMODE(os.fstat(descriptor).st_mode) != 0o600:
+                raise OSError("unsafe backup mode")
             _write_all(descriptor, content)
-            os.fchmod(descriptor, mode)
             os.fsync(descriptor)
         except OSError:
             try:
