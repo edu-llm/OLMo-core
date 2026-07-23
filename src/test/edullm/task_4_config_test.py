@@ -212,10 +212,36 @@ def test_ruleset_matches_policy_checks_and_has_no_bypass():
     assert "Test edullm queue" not in contexts
 
 
-def test_pilot_has_exactly_one_lead_and_one_enabled_operator():
+def test_reviewed_team_roster_and_staged_operators_are_exact():
+    expected_leads = [
+        "ericrcwu001",
+        "pianomaster99",
+        "philote-dev",
+        "syz2026",
+        "hiyasvyas",
+        "meric233",
+        "alsy7009",
+        "gorpyshortlegs",
+    ]
+    assert _load_yaml(TEAM_LEADS) == {"team_leads": expected_leads}
+
     leads = load_team_leads(TEAM_LEADS)
     operators = load_operators(OPERATORS)
 
-    assert len(leads) == 1
-    assert len(operators) == 1
-    assert sum(operator.enabled for operator in operators) == 1
+    assert leads == frozenset(expected_leads)
+    assert [
+        (
+            operator.github,
+            operator.slack_user_id,
+            operator.rotation_order,
+            operator.enabled,
+        )
+        for operator in operators
+    ] == [
+        ("philote-dev", "U0BA7EHAKJR", 0, True),
+        ("meric233", "U0BAARXNKC2", 1, False),
+        ("alsy7009", "U0B9K2XTTBL", 2, False),
+    ]
+    assert len({operator.slack_user_id for operator in operators}) == len(operators)
+    assert len({operator.rotation_order for operator in operators}) == len(operators)
+    assert {operator.github for operator in operators if operator.enabled} == {"philote-dev"}

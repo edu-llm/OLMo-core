@@ -1,10 +1,11 @@
-Activating the eduLLM core
-==========================
+eduLLM activation administration
+================================
 
-The core remains fail-closed until a separately reviewed activation change is
-merged and a repository administrator completes the user-only setup below.
-Never put the Slack webhook or any compute or experiment credential in Git or
-chat.
+The eduLLM pilot is operational. Current teammate, approver, and operator
+onboarding lives in :doc:`edullm_engaging`; earlier instructions to wait for
+Issue support or pilot activation are obsolete. The sections below retain the
+administrator-only activation boundary for reference. Never put the Slack
+webhook or any compute or experiment credential in Git or chat.
 
 Agent can prepare
 -----------------

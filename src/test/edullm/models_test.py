@@ -610,13 +610,25 @@ def test_operator_enabled_preserves_explicit_yaml_booleans(tmp_path, enabled):
     assert load_operators(path)[0].enabled is enabled
 
 
-def test_operator_files_keep_exact_pilot_operator_and_examples_inert():
+def test_operator_files_keep_reviewed_roster_and_examples_inert():
     assert load_operators(Path("config/edullm/operators.yaml")) == (
         Operator(
             github="philote-dev",
             slack_user_id="U0BA7EHAKJR",
             rotation_order=0,
             enabled=True,
+        ),
+        Operator(
+            github="meric233",
+            slack_user_id="U0BAARXNKC2",
+            rotation_order=1,
+            enabled=False,
+        ),
+        Operator(
+            github="alsy7009",
+            slack_user_id="U0B9K2XTTBL",
+            rotation_order=2,
+            enabled=False,
         ),
     )
     examples = load_operators(Path("config/edullm/operators.example.yaml"))

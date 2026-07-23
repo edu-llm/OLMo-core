@@ -167,8 +167,19 @@ def test_load_team_leads_normalizes_users_and_supported_bots(tmp_path):
     assert load_team_leads(path) == frozenset({"team-lead", "review-app[bot]"})
 
 
-def test_production_team_lead_allowlist_has_pilot_approver():
-    assert load_team_leads(Path("config/edullm/team-leads.yaml")) == frozenset({"pianomaster99"})
+def test_production_team_lead_allowlist_matches_reviewed_roster():
+    assert load_team_leads(Path("config/edullm/team-leads.yaml")) == frozenset(
+        {
+            "ericrcwu001",
+            "pianomaster99",
+            "philote-dev",
+            "syz2026",
+            "hiyasvyas",
+            "meric233",
+            "alsy7009",
+            "gorpyshortlegs",
+        }
+    )
 
 
 @pytest.mark.parametrize(
