@@ -138,6 +138,7 @@ def _gate_client(
     details: Mapping[int, object] | None = None,
     reviews: Mapping[int, object] | None = None,
     checks: object = None,
+    check_payload: object = None,
     file_status: int = 200,
     file_payload: object = None,
 ) -> tuple[GitHubClient, FakeSession]:
@@ -145,6 +146,11 @@ def _gate_client(
     details = {7: _open_pull()} if details is None else details
     reviews = {7: [_review()]} if reviews is None else reviews
     checks = _successful_checks() if checks is None else checks
+    check_payload = (
+        {"total_count": len(checks) if isinstance(checks, list) else 0, "check_runs": checks}
+        if check_payload is None
+        else check_payload
+    )
     file_payload = {"type": "file", "path": SCRIPT_PATH} if file_payload is None else file_payload
     session = FakeSession()
     session.add(
@@ -162,7 +168,7 @@ def _gate_client(
         )
     session.add(
         f"/repos/{REPO}/commits/{SHA}/check-runs?filter=latest",
-        {"total_count": len(checks) if isinstance(checks, list) else 0, "check_runs": checks},
+        check_payload,
         params={"page": 1, "per_page": 100},
     )
     session.add(
@@ -216,6 +222,7 @@ def test_client_repr_does_not_expose_token():
         ("token", "../repo"),
         ("token", "owner/../repo"),
         ("token", "owner/repo?ref=main"),
+        ("token", "review-app[bot]/repo"),
     ],
 )
 def test_client_rejects_invalid_credentials_or_repository(token, repo):
@@ -312,13 +319,133 @@ def test_paginated_get_preserves_existing_query_and_reads_second_page():
 def test_paginated_get_extracts_a_keyed_envelope():
     session = FakeSession()
     session.add(
-        "/check-runs?filter=latest",
-        {"total_count": 1, "check_runs": [{"id": 1}]},
+        "/rows",
+        {"rows": [{"id": 1}]},
         params={"page": 1, "per_page": 100},
     )
     client = GitHubClient("token", REPO, base_url=BASE_URL, session=session)
 
-    assert client.paginated_get("/check-runs?filter=latest", key="check_runs") == [{"id": 1}]
+    assert client.paginated_get("/rows", key="rows") == [{"id": 1}]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"check_runs": []},
+        {"total_count": True, "check_runs": []},
+        {"total_count": "0", "check_runs": []},
+        {"total_count": -1, "check_runs": []},
+    ],
+)
+def test_counted_pagination_rejects_missing_or_malformed_total_count(payload):
+    session = FakeSession()
+    session.add(
+        "/check-runs?filter=latest",
+        payload,
+        params={"page": 1, "per_page": 100},
+    )
+    client = GitHubClient("token", REPO, base_url=BASE_URL, session=session)
+
+    with pytest.raises(GitHubDataError, match="malformed paginated response"):
+        client.paginated_get(
+            "/check-runs?filter=latest",
+            key="check_runs",
+            total_count_key="total_count",
+        )
+
+
+@pytest.mark.parametrize("total_count", [0, 2])
+def test_counted_pagination_rejects_one_page_count_mismatch(total_count):
+    session = FakeSession()
+    session.add(
+        "/check-runs?filter=latest",
+        {"total_count": total_count, "check_runs": [{"id": 1}]},
+        params={"page": 1, "per_page": 100},
+    )
+    client = GitHubClient("token", REPO, base_url=BASE_URL, session=session)
+
+    with pytest.raises(GitHubDataError, match="paginated response count is inconsistent"):
+        client.paginated_get(
+            "/check-runs?filter=latest",
+            key="check_runs",
+            total_count_key="total_count",
+        )
+
+
+@pytest.mark.parametrize("total_count", [100, 102])
+def test_counted_pagination_rejects_multiple_page_count_mismatch(total_count):
+    session = FakeSession()
+    first_page = [{"id": index} for index in range(100)]
+    path = "/check-runs?filter=latest"
+    session.add(
+        path,
+        {"total_count": total_count, "check_runs": first_page},
+        params={"page": 1, "per_page": 100},
+    )
+    session.add(
+        path,
+        {"total_count": total_count, "check_runs": [{"id": 100}]},
+        params={"page": 2, "per_page": 100},
+    )
+    client = GitHubClient("token", REPO, base_url=BASE_URL, session=session)
+
+    with pytest.raises(GitHubDataError, match="paginated response count is inconsistent"):
+        client.paginated_get(
+            path,
+            key="check_runs",
+            total_count_key="total_count",
+        )
+
+
+def test_counted_pagination_rejects_a_changing_total_count():
+    session = FakeSession()
+    first_page = [{"id": index} for index in range(100)]
+    path = "/check-runs?filter=latest"
+    session.add(
+        path,
+        {"total_count": 101, "check_runs": first_page},
+        params={"page": 1, "per_page": 100},
+    )
+    session.add(
+        path,
+        {"total_count": 102, "check_runs": [{"id": 100}]},
+        params={"page": 2, "per_page": 100},
+    )
+    client = GitHubClient("token", REPO, base_url=BASE_URL, session=session)
+
+    with pytest.raises(GitHubDataError, match="paginated response count is inconsistent"):
+        client.paginated_get(
+            path,
+            key="check_runs",
+            total_count_key="total_count",
+        )
+
+
+def test_counted_pagination_accepts_an_exact_stable_paginated_count():
+    session = FakeSession()
+    first_page = [{"id": index} for index in range(100)]
+    path = "/check-runs?filter=latest"
+    session.add(
+        path,
+        {"total_count": 101, "check_runs": first_page},
+        params={"page": 1, "per_page": 100},
+    )
+    session.add(
+        path,
+        {"total_count": 101, "check_runs": [{"id": 100}]},
+        params={"page": 2, "per_page": 100},
+    )
+    client = GitHubClient("token", REPO, base_url=BASE_URL, session=session)
+
+    assert client.paginated_get(
+        path,
+        key="check_runs",
+        total_count_key="total_count",
+    ) == first_page + [{"id": 100}]
+    assert session.calls == [
+        (f"{BASE_URL}{path}", {"page": 1, "per_page": 100}, (5, 20)),
+        (f"{BASE_URL}{path}", {"page": 2, "per_page": 100}, (5, 20)),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -526,6 +653,74 @@ def test_authorized_reviewer_logins_are_case_insensitive():
     assert _result(client, allowed_reviewers={"oPeRaToR"}).approved is True
 
 
+def test_authorized_github_app_bot_can_approve_case_insensitively():
+    client, _ = _gate_client(reviews={7: [_review(login="Review-App[bot]")]})
+
+    assert _result(client, allowed_reviewers={"review-app[BOT]"}).approved is True
+
+
+def test_unauthorized_bot_comment_does_not_invalidate_an_authorized_approval():
+    client, _ = _gate_client(
+        reviews={
+            7: [
+                _review(login="operator", submitted_at="2026-07-22T10:00:00Z"),
+                _review(
+                    "COMMENTED",
+                    login="review-app[bot]",
+                    submitted_at="2026-07-22T11:00:00Z",
+                ),
+            ]
+        }
+    )
+
+    assert _result(client).approved is True
+
+
+def test_authorized_bot_changes_requested_blocks_approval():
+    client, _ = _gate_client(
+        reviews={
+            7: [
+                _review(login="operator", submitted_at="2026-07-22T10:00:00Z"),
+                _review(
+                    "CHANGES_REQUESTED",
+                    login="review-app[bot]",
+                    submitted_at="2026-07-22T11:00:00Z",
+                ),
+            ]
+        }
+    )
+
+    assert _result(
+        client,
+        allowed_reviewers={"operator", "Review-App[BOT]"},
+    ) == ReviewResult(
+        False,
+        None,
+        "an authorized reviewer currently requests changes",
+    )
+
+
+def test_authorized_bot_dismissal_does_not_count_as_approval():
+    client, _ = _gate_client(
+        reviews={
+            7: [
+                _review(login="review-app[bot]", submitted_at="2026-07-22T10:00:00Z"),
+                _review(
+                    "DISMISSED",
+                    login="Review-App[BOT]",
+                    submitted_at="2026-07-22T11:00:00Z",
+                ),
+            ]
+        }
+    )
+
+    assert _result(client, allowed_reviewers={"review-app[bot]"}) == ReviewResult(
+        False,
+        None,
+        "no authorized reviewer approved the requested SHA",
+    )
+
+
 def test_unauthorized_approval_does_not_pass():
     client, _ = _gate_client(reviews={7: [_review(login="outsider")]})
 
@@ -540,6 +735,7 @@ def test_unauthorized_approval_does_not_pass():
         {" operator"},
         {"operator/other"},
         {"Operator", "operator"},
+        {"Review-App[bot]", "review-app[BOT]"},
         {"operator", 7},
     ],
 )
@@ -548,6 +744,55 @@ def test_reviewed_commit_rejects_empty_or_malformed_reviewer_sets(allowed_review
 
     with pytest.raises(GitHubValidationError, match="allowed_reviewers"):
         _result(client, allowed_reviewers=allowed_reviewers)
+
+
+@pytest.mark.parametrize(
+    "login",
+    [
+        "[bot]",
+        "-review-app[bot]",
+        "review-app-[bot]",
+        "review--app[bot]",
+        "review-app[bot",
+        "review-appbot]",
+        "review-app[robot]",
+        "review-app[bot]suffix",
+        "review/app[bot]",
+        r"review\app[bot]",
+        "review?app[bot]",
+        "review#app[bot]",
+        "review&app[bot]",
+        "review=app[bot]",
+        "review\napp[bot]",
+        ("a" * 101) + "[bot]",
+    ],
+)
+def test_reviewed_commit_rejects_malformed_bot_reviewer_identities(login):
+    client, _ = _gate_client()
+
+    with pytest.raises(GitHubValidationError, match="allowed_reviewers"):
+        _result(client, allowed_reviewers={login})
+
+
+@pytest.mark.parametrize(
+    "login",
+    [
+        "[bot]",
+        "-review-app[bot]",
+        "review-app-[bot]",
+        "review--app[bot]",
+        "review-app[robot]",
+        "review/app[bot]",
+        r"review\app[bot]",
+        "review?app[bot]",
+        "review\napp[bot]",
+        ("a" * 101) + "[bot]",
+    ],
+)
+def test_malformed_bot_identity_in_review_payload_fails_closed(login):
+    client, _ = _gate_client(reviews={7: [_review(login=login)]})
+
+    assert _result(client) == ReviewResult(False, None, "malformed GitHub review evidence")
 
 
 def test_pending_review_fails_closed():
@@ -590,6 +835,12 @@ def test_malformed_review_rows_fail_closed(review):
     client, _ = _gate_client(reviews={7: [review]})
 
     assert _result(client) == ReviewResult(False, None, "malformed GitHub review evidence")
+
+
+def test_reviewed_commit_rejects_check_runs_without_total_count():
+    client, _ = _gate_client(check_payload={"check_runs": _successful_checks()})
+
+    assert _result(client) == ReviewResult(False, None, "malformed GitHub check evidence")
 
 
 @pytest.mark.parametrize(

@@ -20,7 +20,9 @@ _DEFAULT_MAX_PAGES = 100
 _SHA_PATTERN = re.compile(r"[0-9a-f]{40}\Z")
 _OWNER_PATTERN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\Z")
 _REPO_PATTERN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,98}[A-Za-z0-9_.-])?\Z")
-_LOGIN_PATTERN = _OWNER_PATTERN
+_ACTOR_NAME_PATTERN = re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\Z")
+_MAX_USER_LOGIN_LENGTH = 39
+_MAX_ACTOR_LOGIN_LENGTH = 100
 _PATH_SEGMENT_PATTERN = re.compile(r"[A-Za-z0-9._~-]+\Z")
 _QUERY_NAME_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_]*\Z")
 _QUERY_VALUE_PATTERN = re.compile(r"[A-Za-z0-9._~-]*\Z")
@@ -150,12 +152,20 @@ class GitHubClient:
         response = self._request(path, params=params)
         return self._decode_json(response)
 
-    def paginated_get(self, path: str, *, key: str | None = None) -> list[dict[str, object]]:
+    def paginated_get(
+        self,
+        path: str,
+        *,
+        key: str | None = None,
+        total_count_key: str | None = None,
+    ) -> list[dict[str, object]]:
         """
         Read all object rows from a list or keyed-list GitHub endpoint.
 
         :param path: A relative API path, optionally with an existing query string.
         :param key: The list field for endpoints that return an object envelope.
+        :param total_count_key: The required count field for a counted object
+            envelope. Bare-list endpoints should leave this unset.
 
         :returns: All rows in server order.
 
@@ -167,14 +177,30 @@ class GitHubClient:
             raise GitHubValidationError("paginated path must not set page or per_page")
         if key is not None and (type(key) is not str or _QUERY_NAME_PATTERN.fullmatch(key) is None):
             raise GitHubValidationError("pagination key is invalid")
+        if total_count_key is not None and (
+            key is None
+            or type(total_count_key) is not str
+            or _QUERY_NAME_PATTERN.fullmatch(total_count_key) is None
+        ):
+            raise GitHubValidationError("pagination total-count key is invalid")
 
         rows: list[dict[str, object]] = []
+        expected_total: int | None = None
         for page in range(1, self._max_pages + 1):
             payload = self.get(path, params={"per_page": 100, "page": page})
             if key is None:
                 batch = payload
             elif type(payload) is dict:
-                batch = cast(dict[object, object], payload).get(key)
+                envelope = cast(dict[object, object], payload)
+                batch = envelope.get(key)
+                if total_count_key is not None:
+                    total_count = envelope.get(total_count_key)
+                    if type(total_count) is not int or total_count < 0:
+                        raise GitHubDataError("GitHub API returned malformed paginated response")
+                    if expected_total is None:
+                        expected_total = total_count
+                    elif total_count != expected_total:
+                        raise GitHubDataError("GitHub API paginated response count is inconsistent")
             else:
                 raise GitHubDataError("GitHub API returned malformed paginated response")
             if type(batch) is not list or len(batch) > 100:
@@ -184,6 +210,8 @@ class GitHubClient:
                 raise GitHubDataError("GitHub API returned malformed paginated response")
             rows.extend(cast(list[dict[str, object]], typed_batch))
             if len(typed_batch) < 100:
+                if expected_total is not None and expected_total != len(rows):
+                    raise GitHubDataError("GitHub API paginated response count is inconsistent")
                 return rows
 
         raise GitHubDataError("GitHub pagination limit exceeded")
@@ -292,6 +320,7 @@ class GitHubClient:
             check_runs = self.paginated_get(
                 f"/repos/{self.repo}/commits/{sha}/check-runs?filter=latest",
                 key="check_runs",
+                total_count_key="total_count",
             )
             unsuccessful = _unsuccessful_required_checks(check_runs, checks_required)
         except GitHubDataError:
@@ -500,13 +529,26 @@ def _normalize_reviewers(reviewers: object) -> frozenset[str]:
         raise GitHubValidationError("allowed_reviewers must be an explicit non-empty set")
     normalized: set[str] = set()
     for reviewer in cast(set[object] | frozenset[object], reviewers):
-        if type(reviewer) is not str or _LOGIN_PATTERN.fullmatch(reviewer) is None:
+        if not _is_valid_actor_login(reviewer):
             raise GitHubValidationError("allowed_reviewers contains an invalid GitHub login")
-        login = reviewer.casefold()
+        login = cast(str, reviewer).casefold()
         if login in normalized:
             raise GitHubValidationError("allowed_reviewers contains duplicate GitHub logins")
         normalized.add(login)
     return frozenset(normalized)
+
+
+def _is_valid_actor_login(value: object) -> bool:
+    if type(value) is not str or not value or len(value) > _MAX_ACTOR_LOGIN_LENGTH:
+        return False
+    normalized = value.casefold()
+    if normalized.endswith("[bot]"):
+        name = value[:-5]
+        max_name_length = _MAX_ACTOR_LOGIN_LENGTH - 5
+    else:
+        name = value
+        max_name_length = _MAX_USER_LOGIN_LENGTH
+    return 1 <= len(name) <= max_name_length and _ACTOR_NAME_PATTERN.fullmatch(name) is not None
 
 
 def _normalize_required_checks(checks: object) -> frozenset[str]:
@@ -583,14 +625,14 @@ def _effective_review_decision(
         if type(state) is not str or state not in _REVIEW_STATES or type(user) is not dict:
             raise GitHubDataError("GitHub API returned malformed review evidence")
         login = cast(dict[object, object], user).get("login")
-        if type(login) is not str or _LOGIN_PATTERN.fullmatch(login) is None:
+        if not _is_valid_actor_login(login):
             raise GitHubDataError("GitHub API returned malformed review evidence")
         if state == "PENDING":
             raise GitHubDataError("GitHub API returned pending review evidence")
         if type(commit_id) is not str or _SHA_PATTERN.fullmatch(commit_id) is None:
             raise GitHubDataError("GitHub API returned malformed review evidence")
         timestamp = _parse_timestamp(submitted_at)
-        normalized_login = login.casefold()
+        normalized_login = cast(str, login).casefold()
         if normalized_login not in allowed_reviewers or state == "COMMENTED":
             continue
         substantive.setdefault(normalized_login, []).append(
