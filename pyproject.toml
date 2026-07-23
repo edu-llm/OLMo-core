@@ -86,7 +86,7 @@ version = { attr = "olmo_core.version.VERSION" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["olmo_core*"]
+include = ["olmo_core*", "edullm*"]
 exclude = []
 
 [tool.black]
