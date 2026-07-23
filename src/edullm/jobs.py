@@ -858,13 +858,7 @@ def _fixed_option_value(value: object, request: JobRequest) -> str:
 def _resolve_fixed_arguments(
     profile: Mapping[str, object],
     request: JobRequest,
-) -> tuple[
-    tuple[str, ...],
-    tuple[str, ...],
-    tuple[str, ...],
-    tuple[str, ...],
-    tuple[str, ...],
-]:
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...],]:
     launcher_values = profile.get("fixed_launcher_arguments", ())
     option_values = profile.get("fixed_options", {})
     if type(launcher_values) is not tuple or not isinstance(option_values, Mapping):
