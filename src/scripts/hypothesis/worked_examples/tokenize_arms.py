@@ -94,32 +94,61 @@ def main():
 
     for arm in ARMS:
         docs_path = pack / "arms" / arm / "docs.jsonl"
-        texts = []
+        docs = []
         with docs_path.open(encoding="utf-8") as f:
             for line in f:
-                texts.append(json.loads(line)["text"])
+                docs.append(json.loads(line))
 
         ids: list[int] = []
-        for t in texts:
-            enc = tok.encode(t, add_special_tokens=True)
+        mask_bits: list[bool] = []
+        for doc in docs:
+            text = doc["text"]
+            enc = tok.encode(text, add_special_tokens=True)
             if eos_id is not None and (not enc or enc[-1] != eos_id):
                 enc.append(eos_id)
+
+            # Fade arms: train only after loss_start_char (shown scaffold is context).
+            # Bare/complete: train on the full document.
+            loss_start = doc.get("loss_start_char")
+            if loss_start is None:
+                doc_mask = [True] * len(enc)
+            else:
+                context = text[: int(loss_start)]
+                ctx_enc = tok.encode(context, add_special_tokens=True)
+                n_ctx = min(len(ctx_enc), len(enc))
+                doc_mask = [False] * n_ctx + [True] * (len(enc) - n_ctx)
+                if not any(doc_mask):
+                    doc_mask[-1] = True
+
             ids.extend(enc)
+            mask_bits.extend(doc_mask)
 
         out_dir = pack / "tokenized" / arm
         out_dir.mkdir(parents=True, exist_ok=True)
         shard = out_dir / "shard-00000.npy"
+        mask_path = out_dir / "label_mask-00000.npy"
         arr = np.asarray(ids, dtype=np.uint32)
         mm = np.memmap(shard, mode="w+", dtype=np.uint32, shape=(len(arr),))
         mm[:] = arr
         mm.flush()
+        mask_arr = np.asarray(mask_bits, dtype=np.bool_)
+        if mask_arr.shape[0] != arr.shape[0]:
+            raise SystemExit(f"{arm}: token/mask length mismatch {arr.size} vs {mask_arr.size}")
+        mask_mm = np.memmap(mask_path, mode="w+", dtype=np.bool_, shape=(len(mask_arr),))
+        mask_mm[:] = mask_arr
+        mask_mm.flush()
         summary["arms"][arm] = {
-            "n_docs": len(texts),
+            "n_docs": len(docs),
             "n_tokens": int(arr.size),
-            "tokens_per_doc_approx": round(arr.size / max(len(texts), 1), 1),
+            "tokens_per_doc_approx": round(arr.size / max(len(docs), 1), 1),
             "shard": str(shard),
+            "label_mask": str(mask_path),
+            "label_mask_true_frac": round(float(mask_arr.mean()) if mask_arr.size else 0.0, 4),
         }
-        print(f"{arm}: {len(texts)} docs, {arr.size} tokens -> {shard}")
+        print(
+            f"{arm}: {len(docs)} docs, {arr.size} tokens, "
+            f"mask_true={summary['arms'][arm]['label_mask_true_frac']} -> {shard}"
+        )
 
     (pack / "reports" / "tokenize_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))

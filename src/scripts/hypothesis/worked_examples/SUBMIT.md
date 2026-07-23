@@ -26,18 +26,21 @@ Use the **generic-smoke** fixture so the queue + W&B `eduLLM/test` path is verif
 
 Then invoke `/submit-edullm-job` from a **clean**, **pushed** feature branch (not `main`).
 
-## Scientific CPT (later — needs policy + operator)
+## Scientific CPT (needs operator allowlist — do not invent policy)
 
 | Item | Value |
 |------|--------|
+| Train script | `train_cpt_arm.py` (this folder) |
 | Data (HF) | https://huggingface.co/datasets/hiyasvyas/worked-examples-metamath-v0 |
-| Train shards | `tokenized/{bare,complete,fade_ordered,fade_shuffled}/shard-00000.npy` |
-| Eval | `eval/holdout_bare.jsonl` |
-| Base ckpt | https://huggingface.co/allenai/OLMo-Ladder-760M-0.5xC |
+| Train shards | `tokenized/{arm}/shard-00000.npy` + `label_mask-00000.npy` |
+| Eval | `eval/holdout_bare.jsonl` → `eval/pass_at_n`, `eval/pass_ratio_at_n` |
+| Base ckpt | https://huggingface.co/allenai/OLMo-Ladder-760M-0.5xC (convert via HF→core) |
 | Arms | 4 matched-token-budget CPT jobs |
-| Fade | mask loss before `loss_start_char` |
+| Fade | `label_mask` from `loss_start_char` (re-tokenize after pull) |
+| Operator ask | **`OPERATOR_ALLOWLIST.md`** |
+| Request drafts | `request_drafts/arm_*.json` (stamp SHA with `fill_sha.py`) |
 
-Until policy adds a worked-examples / 760M-CPT profile, submit scientific runs only after operators extend the allowlist.
+Until operators add `worked-examples-cpt` on `main` and publish an `/orcd/pool/...` manifest, `/submit-edullm-job` will reject scientific Issues. Do **not** reuse `generic-smoke` for this study.
 
 ## Local W&B env (never commit secrets)
 

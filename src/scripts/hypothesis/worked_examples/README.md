@@ -37,7 +37,7 @@ python src/scripts/hypothesis/worked_examples/build_from_metamath.py \
 python src/scripts/hypothesis/worked_examples/validate_pack.py \
   --pack-dir ./data/worked_examples_metamath_v0
 
-# 3) Tokenize with dolma2 → uint32 .npy per arm
+# 3) Tokenize with dolma2 → uint32 .npy + label_mask per arm
 python src/scripts/hypothesis/worked_examples/tokenize_arms.py \
   --pack-dir ./data/worked_examples_metamath_v0 \
   --tokenizer allenai/dolma2-tokenizer
@@ -45,6 +45,12 @@ python src/scripts/hypothesis/worked_examples/tokenize_arms.py \
 # 4) Confirm eval JSONL
 python src/scripts/hypothesis/worked_examples/export_eval.py \
   --pack-dir ./data/worked_examples_metamath_v0
+
+# 5) CPT one arm (after HF→core convert of Ladder 760M-0.5xC)
+# torchrun --standalone --nproc-per-node=1 \
+#   src/scripts/hypothesis/worked_examples/train_cpt_arm.py RUN \
+#   --arm fade_ordered --pack-dir ./data/worked_examples_metamath_v0 \
+#   --load-path /path/to/converted-ckpt --token-budget 200000000
 ```
 
 Windows: same commands in PowerShell.
@@ -63,18 +69,19 @@ data/worked_examples_metamath_v0/
     fade_shuffled/docs.jsonl
   eval/holdout_bare.jsonl
   tokenized/<arm>/shard-00000.npy
+  tokenized/<arm>/label_mask-00000.npy
   reports/validation.json
 ```
 
 ## CPT note
 
-Point OLMo-core CPT at each arm’s tokenized shard with the **same** `max_duration` token budget and the same early checkpoint (e.g. 760M-0.5xC). Fade arms: mask loss before `loss_start_char`. See `run_cards/`.
+Use `train_cpt_arm.py` with the **same** `--token-budget` and converted Ladder 760M-0.5xC init for every arm. Fade arms use `label_mask-00000.npy` (from `loss_start_char`). Holdout metrics: `holdout_passn.py` / `PassNEvalCallback` → `eval/pass_at_n`, `eval/pass_ratio_at_n`. See `run_cards/` and `OPERATOR_ALLOWLIST.md`.
 
 ## eduLLM / W&B / ORCD submit
 
-See **`SUBMIT.md`** and **`run_smoke_wandb.md`**.
+See **`SUBMIT.md`**, **`run_smoke_wandb.md`**, **`OPERATOR_ALLOWLIST.md`**.
 
 - Metrics go to W&B entity **`eduLLM`** (projects allowlisted in policy: `test`, `pretraining`, …).
-- First engineering verify: `/submit-edullm-job` with **generic-smoke** fixture.
-- Full MetaMath 4-arm CPT is **not** in policy yet — ask operators before adding an entrypoint.
+- First engineering verify: `/submit-edullm-job` with **generic-smoke** fixture (Issue #20).
+- Full MetaMath 4-arm CPT is **not** in policy yet — use `OPERATOR_ALLOWLIST.md` + `request_drafts/`.
 - Never commit W&B keys; use `src/scripts/orcd/wandb.env.example`.

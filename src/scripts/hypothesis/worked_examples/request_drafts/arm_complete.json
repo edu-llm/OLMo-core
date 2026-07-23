@@ -1,0 +1,21 @@
+{
+  "Purpose": "Null vs alt: at matched CPT token budget, bare problem-answer pairs vs worked/faded scaffolds on MetaMath holdout Pass@N",
+  "Study": "worked-examples-faded-scaffolds",
+  "Condition": "complete",
+  "Comparison": "bare-vs-complete-vs-fade_ordered-vs-fade_shuffled",
+  "Commit SHA": "REPLACE_WITH_PUSHED_SHA40",
+  "Entrypoint profile": "worked-examples-cpt",
+  "Script path": "src/scripts/hypothesis/worked_examples/train_cpt_arm.py",
+  "Launcher": "torchrun",
+  "Arguments JSON": "[\"we-cpt-complete\", \"--arm=complete\"]",
+  "Data manifest": "REPLACE_WITH_ORCD_MANIFEST",
+  "Data manifest SHA-256": "REPLACE_WITH_MANIFEST_SHA256",
+  "Data classification": "public",
+  "Seed": "0",
+  "W&B project": "pretraining",
+  "Success signal": "Finite train/PPL and logged eval/pass_at_n plus eval/pass_ratio_at_n on holdout_bare",
+  "Success metrics": "eval/pass_at_n,eval/pass_ratio_at_n",
+  "GPU count": "4",
+  "GPU preference": "h100",
+  "Maximum runtime minutes": "360"
+}
