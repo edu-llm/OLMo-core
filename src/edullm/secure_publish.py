@@ -262,15 +262,22 @@ def _validate_parent(
         raise SecurePublishError("safe publication failed")
 
 
+def _mkdir_private(directory_fd: int, name: str) -> None:
+    previous_umask = os.umask(0o077)
+    try:
+        os.mkdir(name, 0o700, dir_fd=directory_fd)
+    finally:
+        os.umask(previous_umask)
+
+
 def _create_stage(directory_fd: int, target_name: str) -> tuple[str, int]:
     for _ in range(100):
         name = f".{target_name}.edullm-recovery-{secrets.token_hex(12)}"
         try:
-            os.mkdir(name, 0o700, dir_fd=directory_fd)
+            _mkdir_private(directory_fd, name)
         except FileExistsError:
             continue
         try:
-            os.chmod(name, 0o700, dir_fd=directory_fd, follow_symlinks=False)
             descriptor = os.open(name, _DIRECTORY_FLAGS, dir_fd=directory_fd)
             os.fchmod(descriptor, 0o700)
             if stat.S_IMODE(os.fstat(descriptor).st_mode) != 0o700:

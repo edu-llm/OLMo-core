@@ -63,6 +63,8 @@ SETUP_POLL_INTERVAL_SECONDS = 5.0
 SETUP_POLL_TIMEOUT_SECONDS = 3600.0
 REMOTE_REPO_ROOT = "$HOME/OLMo-core"
 REMOTE_SCRATCH = "$HOME/orcd/scratch/edullm"
+_DIRECT_ENGAGING_REACHABILITY_ERROR = "operator setup failed during direct Engaging reachability"
+_SSH_CONFIGURATION_PLANNING_ERROR = "operator setup failed while planning SSH configuration"
 _GITHUB_LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\Z")
 _ORCD_USERNAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _FINGERPRINT = re.compile(r"[0-9a-f]{64}\Z")
@@ -110,7 +112,14 @@ printf '%s\n' edullm-probe > "$SCRATCH_PROBE"
 rm -f "$SCRATCH_PROBE"
 trap - EXIT"""
 
-ENVIRONMENT_CHECK_SCRIPT = r"""test -x "$HOME/venvs/edullm/bin/python" """
+ENVIRONMENT_CHECK_SCRIPT = r"""set -euo pipefail
+EDULLM_REPO_ROOT="$HOME/OLMo-core"
+EDULLM_VENV="$HOME/venvs/edullm"
+test -x "$EDULLM_VENV/bin/python"
+"$EDULLM_VENV/bin/python" -c "import edullm.ssh_helper"
+test -f "$EDULLM_VENV/.edullm-commit"
+test "$(cat "$EDULLM_VENV/.edullm-commit")" = \
+  "$(git -C "$EDULLM_REPO_ROOT" rev-parse HEAD)" """
 
 SUBMIT_ENV_SCRIPT = r"""set -euo pipefail
 EDULLM_REPO_ROOT="$HOME/OLMo-core"
@@ -135,7 +144,7 @@ sbatch --parsable \
 
 IMPORT_CHECK_SCRIPT = r"""set -euo pipefail
 source "$HOME/venvs/edullm/bin/activate"
-python -c "import torch, wandb, olmo_core" """
+python -c "import torch, wandb, olmo_core, edullm.ssh_helper" """
 
 FINGERPRINT_SCRIPT = r"""set -euo pipefail
 source "$HOME/venvs/edullm/bin/activate"
@@ -165,6 +174,10 @@ class SetupDeclined(SetupError):
     """The operator declined the displayed SSH configuration change."""
 
 
+class _MissingWandbDependency(SetupError):
+    pass
+
+
 @dataclass(frozen=True)
 class SetupResult:
     """Public, secret-free values recorded by successful operator setup."""
@@ -191,7 +204,10 @@ class OperatorServices:
 
 
 def _default_wandb_api() -> Any:
-    import wandb
+    try:
+        import wandb
+    except ImportError:
+        raise _MissingWandbDependency from None
 
     return wandb.Api(timeout=10)
 
@@ -256,22 +272,21 @@ def setup_operator(
 
     wandb_username = _verify_local_wandb(dependencies.wandb_api_factory)
 
-    try:
-        dependencies.ssh_client.run_direct(
-            orcd_username,
-            ["hostname"],
-            timeout=COMMAND_TIMEOUT_SECONDS,
-        )
-    except (SSHError, ValueError):
-        raise SetupError("operator setup failed during direct Engaging reachability") from None
-
     ssh_config = home / ".ssh" / "config"
     try:
         original = read_control_config(ssh_config)
         ssh_plan = plan_control_config(original, orcd_username)
     except (SSHConfigError, ValueError):
-        raise SetupError("operator setup failed while planning SSH configuration") from None
+        raise SetupError(_SSH_CONFIGURATION_PLANNING_ERROR) from None
     if ssh_plan.changed:
+        try:
+            dependencies.ssh_client.run_direct(
+                orcd_username,
+                ["hostname"],
+                timeout=COMMAND_TIMEOUT_SECONDS,
+            )
+        except (SSHError, ValueError):
+            raise SetupError(_DIRECT_ENGAGING_REACHABILITY_ERROR) from None
         output.write(ssh_plan.redacted_diff)
         output.flush()
         try:
@@ -455,6 +470,8 @@ def _verify_local_wandb(api_factory: Callable[[], Any]) -> str:
         api = api_factory()
         username = api.viewer.username
         project_names = {project.name for project in api.projects(entity="eduLLM")}
+    except _MissingWandbDependency:
+        raise
     except Exception:
         raise SetupError("operator setup failed during local W&B verification") from None
     if type(username) is not str or not username.strip():
@@ -683,6 +700,12 @@ def _positive_integer(value: str) -> int:
     return parsed
 
 
+def _orcd_username(value: str) -> str:
+    if _ORCD_USERNAME.fullmatch(value) is None:
+        raise argparse.ArgumentTypeError("must be a valid ORCD username")
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the complete public and internal eduLLM command parser."""
     parser = argparse.ArgumentParser(prog="edullm")
@@ -691,7 +714,8 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         metavar="{setup,jobs,run,logs,stop,logout}",
     )
-    commands.add_parser("setup", help="configure this operator")
+    setup = commands.add_parser("setup", help="configure this operator")
+    setup.add_argument("--orcd-username", type=_orcd_username)
     jobs = commands.add_parser("jobs", help="show job requests")
     jobs.add_argument("--mine", action="store_true", help="show only requests assigned to you")
     commands.add_parser("run", help="run the next assigned request")
@@ -720,19 +744,37 @@ def _parser() -> argparse.ArgumentParser:
     return build_parser()
 
 
-def handle_setup() -> int:
-    """Run focused operator setup handling."""
+def handle_setup(orcd_username: str | None = None) -> int:
+    """
+    Run focused operator setup handling.
+
+    :param orcd_username: Optional personal Engaging login. Defaults to the local
+        operating-system username.
+    """
     try:
         result = setup_operator(
             root=Path(__file__).resolve().parents[2],
             home=Path.home(),
-            orcd_username=getpass.getuser(),
+            orcd_username=orcd_username or getpass.getuser(),
         )
+    except _MissingWandbDependency:
+        print(
+            "eduLLM operator setup failed: local W&B SDK is unavailable; "
+            "run python -m pip install -e '.[wandb]'",
+            file=sys.stderr,
+        )
+        return 1
     except SetupDeclined:
         print("eduLLM operator setup cancelled; no SSH change was applied", file=sys.stderr)
         return 2
-    except SetupError:
-        print("eduLLM operator setup failed", file=sys.stderr)
+    except SetupError as error:
+        if str(error) in {
+            _DIRECT_ENGAGING_REACHABILITY_ERROR,
+            _SSH_CONFIGURATION_PLANNING_ERROR,
+        }:
+            print(f"eduLLM {error}", file=sys.stderr)
+        else:
+            print("eduLLM operator setup failed", file=sys.stderr)
         return 1
     print(f"eduLLM operator setup complete for {result.github}")
     return 0
@@ -1124,7 +1166,7 @@ def main(
     """
     arguments = _parser().parse_args(argv)
     if arguments.command == "setup":
-        return handle_setup()
+        return handle_setup(arguments.orcd_username)
     if arguments.command == "jobs":
         return handle_jobs(arguments.mine)
     if arguments.command == "run":
