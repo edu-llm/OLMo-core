@@ -4,8 +4,34 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 
 SCRIPT_ROOT = Path("src/scripts/orcd")
+README = SCRIPT_ROOT / "README.md"
+
+
+def _readme_submission(label: str) -> str:
+    text = README.read_text(encoding="utf-8")
+    marker = f"# {label}\n"
+    assert marker in text
+    lines = text.split(marker, maxsplit=1)[1].splitlines()
+    command_lines = []
+    for line in lines:
+        if not command_lines:
+            if line.startswith("sbatch "):
+                command_lines.append(line)
+        else:
+            command_lines.append(line)
+        if command_lines and not line.endswith("\\"):
+            break
+    assert command_lines
+    return " ".join(line.removesuffix("\\").strip() for line in command_lines)
+
+
+def _export_names(command: str) -> tuple[str, ...]:
+    match = re.search(r"--export=([^\s]+)", command)
+    assert match is not None
+    return tuple(item.split("=", maxsplit=1)[0] for item in match.group(1).split(","))
 
 
 def test_generic_job_requests_one_l40s():
@@ -28,6 +54,7 @@ def test_generic_smoke_uses_canonical_training_command():
         "--trainer.callbacks.lm_evaluator.enabled=false",
         "--trainer.callbacks.downstream_evaluator.enabled=false",
         "--trainer.callbacks.checkpointer.save_interval=10",
+        "--trainer.callbacks.checkpointer.ephemeral_save_interval=null",
         "--trainer.callbacks.wandb.enabled=true",
         '--trainer.callbacks.wandb.entity="$WANDB_ENTITY"',
         '--trainer.callbacks.wandb.project="$WANDB_PROJECT"',
@@ -39,7 +66,7 @@ def test_generic_smoke_uses_canonical_training_command():
     assert 'HARD_STOP_STEPS="${HARD_STOP_STEPS:-20}"' in text
     assert 'SAVE_FOLDER="${SAVE_FOLDER:-$EDULLM_SCRATCH/runs/$RUN_NAME}"' in text
     assert '--save-folder="$SAVE_FOLDER"' in text
-    assert '--work-dir="$EDULLM_SCRATCH/cache/$RUN_NAME"' in text
+    assert '--work-dir="$SAVE_FOLDER"' in text
     for argument in expected_arguments:
         assert argument in text
 
@@ -58,14 +85,15 @@ def test_generic_smoke_checkpoint_overrides_build_valid_config(tmp_path):
         text,
         flags=re.MULTILINE,
     )
+    run_dir = tmp_path / "runs"
     command = [
         sys.executable,
         "src/examples/llm/train.py",
         "orcd-config-test",
         "--model-factory=olmo2_190M",
         "--sequence-length=512",
-        f"--save-folder={tmp_path / 'runs'}",
-        f"--work-dir={tmp_path / 'cache'}",
+        f"--save-folder={run_dir}",
+        f"--work-dir={run_dir}",
         "--dry-run",
         *(f"--{override}" for override in checkpoint_overrides),
     ]
@@ -85,7 +113,8 @@ def test_generic_smoke_checks_source_and_preserves_offline_wandb_data():
     assert ': "${WANDB_API_KEY:?missing WANDB_API_KEY}"' in text
     assert 'test "$(git -C "$EDULLM_REPO_ROOT" rev-parse HEAD)" = "$EDULLM_COMMIT_SHA"' in text
     assert 'test -z "$(git -C "$EDULLM_REPO_ROOT" status --porcelain)"' in text
-    assert 'WANDB_SYNC_DIR="$SAVE_FOLDER/wandb"' in text
+    assert "WANDB_SYNC_DIR" not in text
+    assert '--work-dir="$SAVE_FOLDER"' in text
     assert "WANDB_MODE=offline" in text
     assert 'PYTHONPATH="$EDULLM_REPO_ROOT/src"' in text
     assert "WANDB_API_KEY=" not in text
@@ -143,3 +172,121 @@ def test_wandb_environment_example_reads_private_key_and_contains_no_secret():
     assert 'export WANDB_PROJECT="test"' in text
     assert 'export WANDB_GROUP="orcd-bootstrap"' in text
     assert "set -x" not in text
+
+
+def test_setup_job_prints_public_dependency_versions():
+    text = (SCRIPT_ROOT / "setup_env.sbatch").read_text(encoding="utf-8")
+
+    for expression in (
+        "platform.python_version()",
+        "torch.__version__",
+        "wandb.__version__",
+        "VERSION",
+    ):
+        assert expression in text
+    for label in ("Python:", "Torch:", "W&B:", "OLMo-core:"):
+        assert label in text
+    assert "WANDB_API_KEY" not in text
+    assert "set -x" not in text
+
+
+def test_readme_requires_real_scratch_and_known_reviewed_sha():
+    text = README.read_text(encoding="utf-8")
+
+    assert ': "${EDULLM_COMMIT_SHA:?' in text
+    assert ': "${EDULLM_SCRATCH:?' in text
+    assert 'export EDULLM_COMMIT_SHA="$(git -C "$EDULLM_REPO_ROOT" rev-parse HEAD)"' not in text
+    assert 'case "$EDULLM_SCRATCH" in' in text
+    assert '"$HOME"|"$HOME"/*)' in text
+    assert "/*) ;;" in text
+    assert 'cd "$EDULLM_REPO_ROOT"' in text
+    assert 'test "$(git -C "$EDULLM_REPO_ROOT" rev-parse HEAD)" = "$EDULLM_COMMIT_SHA"' in text
+    assert 'test -z "$(git -C "$EDULLM_REPO_ROOT" status --porcelain)"' in text
+
+
+@pytest.mark.parametrize(
+    "label",
+    ["Setup environment", "GPU probe", "Initial run", "Resume run", "Forced-offline smoke"],
+)
+def test_readme_routes_every_submission_to_scratch_logs(label):
+    command = _readme_submission(label)
+
+    assert '--output="$EDULLM_SCRATCH/logs/%x-%j.log"' in command
+    assert '--error="$EDULLM_SCRATCH/logs/%x-%j.log"' in command
+
+
+@pytest.mark.parametrize(
+    ("label", "expected_names"),
+    [
+        (
+            "Setup environment",
+            ("EDULLM_REPO_ROOT", "EDULLM_COMMIT_SHA", "EDULLM_SCRATCH"),
+        ),
+        (
+            "GPU probe",
+            ("EDULLM_REPO_ROOT", "EDULLM_COMMIT_SHA", "EDULLM_SCRATCH"),
+        ),
+        (
+            "Initial run",
+            (
+                "EDULLM_REPO_ROOT",
+                "EDULLM_COMMIT_SHA",
+                "EDULLM_SCRATCH",
+                "RUN_NAME",
+                "WANDB_RUN_ID",
+                "SAVE_FOLDER",
+                "HARD_STOP_STEPS",
+            ),
+        ),
+        (
+            "Resume run",
+            (
+                "EDULLM_REPO_ROOT",
+                "EDULLM_COMMIT_SHA",
+                "EDULLM_SCRATCH",
+                "RUN_NAME",
+                "WANDB_RUN_ID",
+                "SAVE_FOLDER",
+                "HARD_STOP_STEPS",
+            ),
+        ),
+        (
+            "Forced-offline smoke",
+            (
+                "EDULLM_REPO_ROOT",
+                "EDULLM_COMMIT_SHA",
+                "EDULLM_SCRATCH",
+                "RUN_NAME",
+                "WANDB_RUN_ID",
+                "SAVE_FOLDER",
+                "HARD_STOP_STEPS",
+                "WANDB_MODE",
+            ),
+        ),
+    ],
+)
+def test_readme_submissions_export_only_required_safe_variables(label, expected_names):
+    command = _readme_submission(label)
+
+    assert _export_names(command) == expected_names
+    assert "--export=ALL" not in command
+    assert "WANDB_API_KEY" not in command
+
+
+def test_readme_preserves_private_wandb_key_and_team_visibility_flow():
+    text = README.read_text(encoding="utf-8")
+
+    assert 'cp src/scripts/orcd/wandb.env.example "$HOME/.config/edullm/wandb.env"' in text
+    assert 'chmod 600 "$HOME/.config/edullm/wandb.env" "$HOME/.config/edullm/wandb.key"' in text
+    assert "another `eduLLM` member" in text
+
+
+def test_readme_syncs_one_exact_offline_run_directory():
+    script = (SCRIPT_ROOT / "run_generic_smoke.sh").read_text(encoding="utf-8")
+    text = README.read_text(encoding="utf-8")
+
+    assert "WANDB_SYNC_DIR" not in script
+    assert '--work-dir="$SAVE_FOLDER"' in script
+    assert "offline-run-*" in text
+    assert 'wandb sync "$OFFLINE_RUN_DIR"' in text
+    assert "wandb sync --sync-all" not in text

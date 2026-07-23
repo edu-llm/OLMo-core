@@ -11,7 +11,6 @@ from typing import Any
 
 import requests
 
-
 _TRANSFER_CHUNK_BYTES = 1024 * 1024
 _TRANSFER_TIMEOUT_SECONDS = 60
 

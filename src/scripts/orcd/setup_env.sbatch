@@ -23,4 +23,16 @@ source "$EDULLM_VENV/bin/activate"
 python -m pip install --upgrade pip wheel setuptools uv
 uv pip install torch --torch-backend=cu128
 uv pip install "${EDULLM_REPO_ROOT}[wandb]"
-python -c "import torch, wandb, olmo_core; print(torch.__version__)"
+python - <<'PY'
+import platform
+
+import torch
+import wandb
+
+from olmo_core.version import VERSION
+
+print(f"Python: {platform.python_version()}")
+print(f"Torch: {torch.__version__}")
+print(f"W&B: {wandb.__version__}")
+print(f"OLMo-core: {VERSION}")
+PY

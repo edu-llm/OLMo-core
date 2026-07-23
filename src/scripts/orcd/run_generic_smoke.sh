@@ -14,7 +14,6 @@ SAVE_FOLDER="${SAVE_FOLDER:-$EDULLM_SCRATCH/runs/$RUN_NAME}"
 export OLMO_DATA_ROOT="$DATA_ROOT"
 export WANDB_RUN_ID="${WANDB_RUN_ID:-$RUN_NAME}"
 export WANDB_RESUME=allow
-export WANDB_SYNC_DIR="$SAVE_FOLDER/wandb"
 if ! python -c 'import requests; raise SystemExit(0 if requests.get("https://api.wandb.ai", timeout=5).status_code < 500 else 1)'
 then
   export WANDB_MODE=offline
@@ -30,7 +29,7 @@ torchrun --standalone --nproc-per-node=1 \
   --model-factory=olmo2_190M \
   --sequence-length=512 \
   --save-folder="$SAVE_FOLDER" \
-  --work-dir="$EDULLM_SCRATCH/cache/$RUN_NAME" \
+  --work-dir="$SAVE_FOLDER" \
   --data_loader.global_batch_size=8192 \
   --train_module.rank_microbatch_size=2048 \
   --train_module.max_sequence_length=512 \
