@@ -43,6 +43,35 @@ def _prepared_publish(tmp_path, *, existing=b"original", proposed=b"proposed"):
     return publish, parent, directory_fd, expected, prepared
 
 
+def test_file_state_representations_never_include_private_content():
+    publish = _module()
+    private_content = b"edullm-distinctive-private-repr-regression"
+    state = publish.FileState(
+        device=11,
+        inode=22,
+        mode=stat.S_IFREG | 0o600,
+        owner=33,
+        content=private_content,
+    )
+    error = publish.SecurePublishError({"state": state})
+    renderings = (
+        repr(state),
+        str(state),
+        repr([state]),
+        repr({"captured": state}),
+        repr(error),
+        str(error),
+        repr({"error": error}),
+    )
+
+    private_text = private_content.decode("ascii")
+    if any(private_text in rendering for rendering in renderings):
+        pytest.fail("private file content appeared in a state representation", pytrace=False)
+    assert all("device=11" in rendering for rendering in renderings)
+    assert "mode=33152" in repr(state)
+    assert "content=" not in repr(state)
+
+
 @pytest.mark.parametrize("existing", [None, b"original"])
 def test_compare_and_publish_succeeds_for_new_and_existing_target(tmp_path, existing):
     publish, parent, directory_fd, expected, prepared = _prepared_publish(

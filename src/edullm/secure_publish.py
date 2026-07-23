@@ -14,7 +14,7 @@ import fcntl
 import os
 import secrets
 import stat
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 _DIRECTORY_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
@@ -33,7 +33,7 @@ class FileState:
     inode: int
     mode: int
     owner: int
-    content: bytes
+    content: bytes = field(repr=False)
 
 
 def directory_identity(directory_fd: int) -> tuple[int, int, int]:
