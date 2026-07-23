@@ -20,7 +20,7 @@ from edullm.github import (
     IssueComment,
     normalize_actor_login,
 )
-from edullm.models import JobRequest, JobStatus
+from edullm.models import JobRequest
 from edullm.policy import Policy
 from edullm.request_parser import IssueParseError, parse_issue
 from edullm.validation import (
@@ -33,7 +33,6 @@ from edullm.validation import (
 VALIDATION_MARKER = "<!-- edullm-validation:v1 -->"
 
 _TEAM_LEADS_FIELD = "team_leads"
-_MANAGED_STATUS_LABELS = frozenset(f"status:{status.value}" for status in JobStatus)
 _SAFE_REVIEW_REASONS = frozenset(
     {
         "malformed GitHub pull evidence",
@@ -166,7 +165,10 @@ def validate_issue(
     ``status:ready`` is invalidated before parsing or remote review. A canonical
     status comment is persisted only after the current Issue is re-fetched and
     re-parsed to the same digest, and the ready label is written only after that
-    comment succeeds.
+    comment succeeds. GitHub has no transaction or compare-and-swap spanning
+    Issue bodies, comments, and labels, so before/after postconditions narrow but
+    cannot eliminate every external race. Per-Issue workflow concurrency and
+    later submission-time digest revalidation remain required safety layers.
 
     :param issue_number: The trusted positive Issue number.
     :param github: A :class:`~edullm.github.GitHubClient`-compatible client.
@@ -177,19 +179,17 @@ def validate_issue(
     :returns: The immutable validation attempt result.
     """
     try:
-        initial = github.fetch_issue(issue_number)
-        requested_labels = _transition_labels(initial.labels, JobStatus.REQUESTED)
-        github.replace_issue_labels(issue_number, requested_labels)
+        current = _set_requested(github, issue_number)
 
         try:
             request = parse_issue(
-                initial.body,
+                current.body,
                 issue_number=issue_number,
-                requester=initial.requester,
+                requester=current.requester,
             )
         except IssueParseError as error:
             errors = tuple(error.errors)
-            _persist_validation_errors(github, issue_number, errors)
+            _persist_requested_errors(github, issue_number, errors)
             return AutomationResult("requested", errors, False)
 
         decision = validation_decision(
@@ -199,41 +199,61 @@ def validate_issue(
             allowed_reviewers=allowed_reviewers,
         )
         if decision.errors:
-            _persist_validation_errors(github, issue_number, decision.errors)
+            _persist_requested_errors(github, issue_number, decision.errors)
             return AutomationResult("requested", decision.errors, False)
 
         status_body = build_status_comment(request, validated_at=validated_at)
         current = github.fetch_issue(issue_number)
-        try:
-            current_request = parse_issue(
-                current.body,
-                issue_number=issue_number,
-                requester=current.requester,
-            )
-        except IssueParseError:
-            current_request = None
-        if (
-            current_request is None
-            or current_request.digest != request.digest
-            or current_request.canonical_json() != request.canonical_json()
-        ):
+        if not _issue_matches_request(current, request, issue_number):
             errors = ("Issue changed during validation; submit or save the current request again",)
-            _persist_validation_errors(github, issue_number, errors)
+            _persist_requested_errors(github, issue_number, errors)
             return AutomationResult("requested", errors, False)
 
-        _persist_machine_comment(
+        persisted_status = _persist_machine_comment(
             github,
             issue_number,
             marker=STATUS_MARKER,
             kind="status",
             body=status_body,
         )
-        ready_labels = _transition_labels(current.labels, JobStatus.READY)
-        github.replace_issue_labels(issue_number, ready_labels)
+        current = github.fetch_issue(issue_number)
+        if not _issue_matches_request(current, request, issue_number):
+            errors = ("Issue changed during validation; submit or save the current request again",)
+            _persist_requested_errors(github, issue_number, errors)
+            return AutomationResult("requested", errors, False)
+
+        final_issue = _set_ready(github, issue_number)
+        if not _issue_matches_request(final_issue, request, issue_number):
+            raise AutomationStateError(
+                "Issue changed during validation; submit or save the current request again"
+            )
+        _require_exact_machine_comment(
+            github,
+            issue_number,
+            marker=STATUS_MARKER,
+            kind="status",
+            body=status_body,
+            expected_id=persisted_status.id,
+        )
+        confirmed_issue = github.fetch_issue(issue_number)
+        if (
+            not _issue_matches_request(confirmed_issue, request, issue_number)
+            or "status:ready" not in confirmed_issue.labels
+            or "status:requested" in confirmed_issue.labels
+        ):
+            raise AutomationStateError(
+                "Issue changed during validation; submit or save the current request again"
+            )
         return AutomationResult("ready", (), False)
-    except AutomationStateError as error:
-        return AutomationResult("requested", (str(error),), True)
-    except (GitHubError, StatusCommentError):
+    except (AutomationStateError, GitHubError, StatusCommentError) as error:
+        if _force_requested(github, issue_number) is None:
+            return AutomationResult(
+                "requested",
+                ("GitHub validation reconciliation failed",),
+                True,
+            )
+        if isinstance(error, AutomationStateError):
+            return AutomationResult("requested", (str(error),), True)
         return AutomationResult(
             "requested",
             ("GitHub validation operation failed",),
@@ -251,10 +271,32 @@ def _sanitized_review_reason(reason: object) -> str:
     return "commit review evidence was not accepted"
 
 
-def _transition_labels(labels: Iterable[str], status: JobStatus) -> tuple[str, ...]:
-    preserved = {label for label in labels if label not in _MANAGED_STATUS_LABELS}
-    preserved.add(f"status:{status.value}")
-    return tuple(sorted(preserved))
+def _set_requested(github: Any, issue_number: int) -> Any:
+    issue = _force_requested(github, issue_number)
+    if issue is None:
+        raise AutomationStateError("failed to establish requested status")
+    return issue
+
+
+def _force_requested(github: Any, issue_number: int) -> Any | None:
+    try:
+        github.add_issue_status_label(issue_number, "status:requested")
+        github.remove_issue_status_label(issue_number, "status:ready")
+        issue = github.fetch_issue(issue_number)
+    except GitHubError:
+        return None
+    if "status:requested" not in issue.labels or "status:ready" in issue.labels:
+        return None
+    return issue
+
+
+def _set_ready(github: Any, issue_number: int) -> Any:
+    github.add_issue_status_label(issue_number, "status:ready")
+    github.remove_issue_status_label(issue_number, "status:requested")
+    issue = github.fetch_issue(issue_number)
+    if "status:ready" not in issue.labels or "status:requested" in issue.labels:
+        raise AutomationStateError("failed to establish ready status")
+    return issue
 
 
 def _persist_validation_errors(
@@ -277,6 +319,15 @@ def _persist_validation_errors(
     )
 
 
+def _persist_requested_errors(
+    github: Any,
+    issue_number: int,
+    errors: tuple[str, ...],
+) -> None:
+    _persist_validation_errors(github, issue_number, errors)
+    _set_requested(github, issue_number)
+
+
 def _persist_machine_comment(
     github: Any,
     issue_number: int,
@@ -284,7 +335,7 @@ def _persist_machine_comment(
     marker: str,
     kind: str,
     body: str,
-) -> None:
+) -> IssueComment:
     comments = github.list_issue_comments(issue_number)
     existing = _find_machine_comment(comments, marker=marker, kind=kind)
     if existing is None:
@@ -293,6 +344,49 @@ def _persist_machine_comment(
         persisted = github.update_issue_comment(existing.id, body)
     if not persisted.author_is_bot or persisted.body != body:
         raise AutomationStateError(f"persisted eduLLM {kind} comment is invalid")
+    return _require_exact_machine_comment(
+        github,
+        issue_number,
+        marker=marker,
+        kind=kind,
+        body=body,
+        expected_id=persisted.id,
+    )
+
+
+def _require_exact_machine_comment(
+    github: Any,
+    issue_number: int,
+    *,
+    marker: str,
+    kind: str,
+    body: str,
+    expected_id: int,
+) -> IssueComment:
+    comments = github.list_issue_comments(issue_number)
+    persisted = _find_machine_comment(comments, marker=marker, kind=kind)
+    if persisted is None:
+        raise AutomationStateError(f"persisted eduLLM {kind} comment is missing")
+    if persisted.id != expected_id:
+        raise AutomationStateError(f"persisted eduLLM {kind} comment identity changed")
+    if persisted.body != body:
+        raise AutomationStateError(f"persisted eduLLM {kind} comment body changed")
+    return persisted
+
+
+def _issue_matches_request(issue: Any, request: JobRequest, issue_number: int) -> bool:
+    try:
+        current_request = parse_issue(
+            issue.body,
+            issue_number=issue_number,
+            requester=issue.requester,
+        )
+    except IssueParseError:
+        return False
+    return (
+        current_request.digest == request.digest
+        and current_request.canonical_json() == request.canonical_json()
+    )
 
 
 def _find_machine_comment(

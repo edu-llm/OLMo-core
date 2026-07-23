@@ -61,8 +61,8 @@ class FakeSession:
     def patch(self, url, *, params=None, json=None, timeout=None):
         return self._call("PATCH", url, params=params, json=json, timeout=timeout)
 
-    def put(self, url, *, params=None, json=None, timeout=None):
-        return self._call("PUT", url, params=params, json=json, timeout=timeout)
+    def delete(self, url, *, params=None, json=None, timeout=None):
+        return self._call("DELETE", url, params=params, json=json, timeout=timeout)
 
     def _call(self, method, url, *, params, json, timeout):
         copied_params = dict(params) if params is not None else None
@@ -266,28 +266,74 @@ def test_comment_writes_reject_mismatched_success_payloads(method, payload):
             _client(session).update_issue_comment(7, "expected")
 
 
-def test_replace_issue_labels_uses_json_and_returns_exact_validated_labels():
+def test_add_issue_status_label_uses_targeted_json_and_preserves_server_labels():
     session = FakeSession()
     path = f"/repos/{REPO}/issues/42/labels"
-    labels = ("edullm-job", "research", "status:requested")
+    labels = ("edullm-job", "concurrent", "status:requested")
     session.add(
-        "PUT",
+        "POST",
         path,
         [{"name": label} for label in labels],
     )
 
-    result = _client(session).replace_issue_labels(42, labels)
+    result = _client(session).add_issue_status_label(42, "status:requested")
 
     assert result == labels
     assert session.calls == [
         (
-            "PUT",
+            "POST",
             f"{BASE_URL}{path}",
             None,
-            {"labels": list(labels)},
+            {"labels": ["status:requested"]},
             (5, 20),
         )
     ]
+
+
+def test_remove_issue_status_label_encodes_path_and_validates_success():
+    session = FakeSession()
+    path = f"/repos/{REPO}/issues/42/labels/status%3Aready"
+    session.add(
+        "DELETE",
+        path,
+        [{"name": "edullm-job"}, {"name": "concurrent"}],
+    )
+
+    removed = _client(session).remove_issue_status_label(42, "status:ready")
+
+    assert removed is True
+    assert session.calls == [
+        (
+            "DELETE",
+            f"{BASE_URL}{path}",
+            None,
+            None,
+            (5, 20),
+        )
+    ]
+
+
+def test_remove_issue_status_label_treats_only_404_as_already_absent():
+    session = FakeSession()
+    path = f"/repos/{REPO}/issues/42/labels/status%3Aready"
+    session.add("DELETE", path, {"message": "Not Found"}, status_code=404)
+
+    assert _client(session).remove_issue_status_label(42, "status:ready") is False
+
+
+@pytest.mark.parametrize("status_code", [401, 403, 500])
+def test_remove_issue_status_label_keeps_non_404_failures_as_errors(status_code):
+    session = FakeSession()
+    path = f"/repos/{REPO}/issues/42/labels/status%3Aready"
+    session.add(
+        "DELETE",
+        path,
+        {"message": "failure"},
+        status_code=status_code,
+    )
+
+    with pytest.raises(GitHubAPIError, match="GitHub API request failed"):
+        _client(session).remove_issue_status_label(42, "status:ready")
 
 
 @pytest.mark.parametrize(
@@ -302,22 +348,27 @@ def test_issue_operations_reject_unsafe_issue_identifiers(issue_number):
 
 
 @pytest.mark.parametrize(
-    "labels",
+    "label",
     [
-        (),
-        ("",),
-        (" status:ready",),
-        ("status:ready\nother",),
-        ("status:ready", "status:ready"),
-        ("a" * 51,),
-        ("status:ready", 7),
+        "",
+        "status:submitted",
+        "status:ready/other",
+        "status%3Aready",
+        " status:ready",
+        7,
     ],
 )
-def test_replace_issue_labels_rejects_empty_malformed_or_duplicate_labels(labels):
+def test_targeted_status_label_operations_reject_other_labels(label):
     client = _client(FakeSession())
 
-    with pytest.raises(GitHubValidationError, match="labels"):
-        client.replace_issue_labels(42, labels)
+    with pytest.raises(GitHubValidationError, match="status label"):
+        client.add_issue_status_label(42, label)
+    with pytest.raises(GitHubValidationError, match="status label"):
+        client.remove_issue_status_label(42, label)
+
+
+def test_general_full_label_replacement_is_not_exposed():
+    assert not hasattr(_client(FakeSession()), "replace_issue_labels")
 
 
 @pytest.mark.parametrize("body", ["", "x" * 65_537, "bad\x00body", 7])
@@ -328,7 +379,7 @@ def test_comment_writes_reject_invalid_bodies(body):
         client.create_issue_comment(42, body)
 
 
-@pytest.mark.parametrize("method", ["POST", "PATCH", "PUT"])
+@pytest.mark.parametrize("method", ["POST", "PATCH", "DELETE"])
 def test_write_failures_are_sanitized(method):
     token = "top-secret-token"
     session = FakeSession()
@@ -341,7 +392,7 @@ def test_write_failures_are_sanitized(method):
         elif method == "PATCH":
             client.update_issue_comment(7, "body")
         else:
-            client.replace_issue_labels(42, ("status:requested",))
+            client.remove_issue_status_label(42, "status:ready")
 
     assert str(raised.value) == "GitHub API request failed"
     assert token not in repr(raised.value)

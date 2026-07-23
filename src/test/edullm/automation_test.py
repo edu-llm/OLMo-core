@@ -12,7 +12,13 @@ from edullm.automation import (
     validate_issue,
     validation_decision,
 )
-from edullm.github import GitHubAPIError, GitHubIssue, IssueComment, ReviewResult
+from edullm.github import (
+    GitHubAPIError,
+    GitHubDataError,
+    GitHubIssue,
+    IssueComment,
+    ReviewResult,
+)
 from edullm.validation import STATUS_MARKER, parse_status_comment
 
 VALIDATED_AT = datetime(2026, 7, 23, 6, 0, 0, tzinfo=timezone.utc)
@@ -47,6 +53,7 @@ class AutomationGitHub(RecordingReviewGitHub):
         create_error=None,
         update_error=None,
         labels_error=None,
+        concurrent_label_on_add=None,
     ):
         super().__init__(result)
         self.issues = list(issues)
@@ -55,6 +62,7 @@ class AutomationGitHub(RecordingReviewGitHub):
         self.create_error = create_error
         self.update_error = update_error
         self.labels_error = labels_error
+        self.concurrent_label_on_add = concurrent_label_on_add
         self.events = []
 
     def fetch_issue(self, issue_number):
@@ -63,11 +71,33 @@ class AutomationGitHub(RecordingReviewGitHub):
             return self.issues.pop(0)
         return self.issues[0]
 
-    def replace_issue_labels(self, issue_number, labels):
-        self.events.append(("labels", issue_number, tuple(labels)))
+    def add_issue_status_label(self, issue_number, label):
+        self.events.append(("add-label", issue_number, label))
         if self.labels_error is not None:
             raise self.labels_error
-        return tuple(labels)
+        additions = {label}
+        if self.concurrent_label_on_add is not None:
+            additions.add(self.concurrent_label_on_add)
+            self.concurrent_label_on_add = None
+        self.issues = [
+            replace(issue, labels=tuple(sorted(set(issue.labels) | additions)))
+            for issue in self.issues
+        ]
+        return self.issues[-1].labels
+
+    def remove_issue_status_label(self, issue_number, label):
+        self.events.append(("remove-label", issue_number, label))
+        if self.labels_error is not None:
+            raise self.labels_error
+        was_present = any(label in issue.labels for issue in self.issues)
+        self.issues = [
+            replace(
+                issue,
+                labels=tuple(existing for existing in issue.labels if existing != label),
+            )
+            for issue in self.issues
+        ]
+        return was_present
 
     def reviewed_commit(self, *args, **kwargs):
         self.events.append(("review", args[0]))
@@ -123,7 +153,7 @@ def _issue(
 
 
 def _labels_events(github):
-    return [event for event in github.events if event[0] == "labels"]
+    return [event for event in github.events if event[0] in {"add-label", "remove-label"}]
 
 
 def test_load_team_leads_normalizes_users_and_supported_bots(tmp_path):
@@ -308,7 +338,10 @@ def test_invalid_issue_is_requested_and_updates_one_sanitized_validation_comment
     assert result.operational_error is False
     assert github.calls == []
     assert _labels_events(github) == [
-        ("labels", 42, ("edullm-job", "research", "status:requested"))
+        ("add-label", 42, "status:requested"),
+        ("remove-label", 42, "status:ready"),
+        ("add-label", 42, "status:requested"),
+        ("remove-label", 42, "status:ready"),
     ]
     updates = [event for event in github.events if event[0] == "update"]
     assert len(updates) == 1
@@ -316,6 +349,64 @@ def test_invalid_issue_is_requested_and_updates_one_sanitized_validation_comment
     assert updates[0][2].startswith(VALIDATION_MARKER + "\n")
     assert "missing heading: Purpose" in updates[0][2]
     assert BODY not in updates[0][2]
+
+
+def test_ready_added_during_invalid_validation_comment_is_removed(policy):
+    class AddReadyDuringValidationComment(AutomationGitHub):
+        def create_issue_comment(self, issue_number, body):
+            persisted = super().create_issue_comment(issue_number, body)
+            super().add_issue_status_label(issue_number, "status:ready")
+            return persisted
+
+    github = AddReadyDuringValidationComment(
+        [_issue(body=BODY.replace("### Purpose", "## Purpose", 1))]
+    )
+
+    result = validate_issue(
+        42,
+        github=github,
+        policy=policy,
+        allowed_reviewers={"team-lead"},
+        validated_at=VALIDATED_AT,
+    )
+
+    assert result.status == "requested"
+    assert "status:requested" in github.issues[0].labels
+    assert "status:ready" not in github.issues[0].labels
+
+
+def test_initial_invalidation_targets_only_managed_labels_and_verifies_postcondition(
+    policy,
+):
+    github = AutomationGitHub(
+        [_issue(body=BODY.replace("### Purpose", "## Purpose", 1))],
+        concurrent_label_on_add="concurrent-review",
+    )
+
+    result = validate_issue(
+        42,
+        github=github,
+        policy=policy,
+        allowed_reviewers={"team-lead"},
+        validated_at=VALIDATED_AT,
+    )
+
+    assert result.status == "requested"
+    assert _labels_events(github)[:2] == [
+        ("add-label", 42, "status:requested"),
+        ("remove-label", 42, "status:ready"),
+    ]
+    assert set(github.issues[0].labels) == {
+        "edullm-job",
+        "research",
+        "concurrent-review",
+        "status:requested",
+    }
+    assert github.events[:3] == [
+        ("add-label", 42, "status:requested"),
+        ("remove-label", 42, "status:ready"),
+        ("fetch", 42),
+    ]
 
 
 def test_valid_issue_persists_canonical_status_before_ready_and_preserves_labels(
@@ -338,11 +429,14 @@ def test_valid_issue_persists_canonical_status_before_ready_and_preserves_labels
     assert status.request.requester == "student"
     assert status.validated_at == VALIDATED_AT
     assert github.events.index(("review", "a" * 40)) > github.events.index(
-        ("labels", 42, ("edullm-job", "research", "status:requested"))
+        ("remove-label", 42, "status:ready")
     )
-    assert github.events.index(creates[0]) < github.events.index(
-        ("labels", 42, ("edullm-job", "research", "status:ready"))
-    )
+    assert github.events.index(creates[0]) < github.events.index(("add-label", 42, "status:ready"))
+    assert set(github.issues[0].labels) == {
+        "edullm-job",
+        "research",
+        "status:ready",
+    }
 
 
 @pytest.mark.parametrize(
@@ -369,7 +463,10 @@ def test_issue_edit_or_requester_race_fails_closed(policy, second_issue):
     )
     assert not any(event[0] == "create" and STATUS_MARKER in event[2] for event in github.events)
     assert _labels_events(github) == [
-        ("labels", 42, ("edullm-job", "research", "status:requested"))
+        ("add-label", 42, "status:requested"),
+        ("remove-label", 42, "status:ready"),
+        ("add-label", 42, "status:requested"),
+        ("remove-label", 42, "status:ready"),
     ]
 
 
@@ -396,7 +493,8 @@ def test_duplicate_status_comments_are_rejected_without_selecting_one(policy, va
     assert result.operational_error is True
     assert result.errors == ("multiple eduLLM status comments were found",)
     assert not any(event[0] in {"create", "update"} for event in github.events)
-    assert all("status:ready" not in event[2] for event in _labels_events(github))
+    assert "status:ready" not in github.issues[0].labels
+    assert "status:requested" in github.issues[0].labels
 
 
 def test_duplicate_status_markers_in_one_comment_are_rejected(policy):
@@ -467,6 +565,278 @@ def test_idempotent_retry_updates_existing_status_comment_without_duplication(
     parse_status_comment(github.comments[0].body)
 
 
+def test_repeated_unchanged_validation_converges_to_one_comment_and_ready(policy):
+    github = AutomationGitHub([_issue(labels=("edullm-job", "research", "status:ready"))])
+
+    first = validate_issue(
+        42,
+        github=github,
+        policy=policy,
+        allowed_reviewers={"team-lead"},
+        validated_at=VALIDATED_AT,
+    )
+    second = validate_issue(
+        42,
+        github=github,
+        policy=policy,
+        allowed_reviewers={"team-lead"},
+        validated_at=VALIDATED_AT,
+    )
+
+    assert first.status == second.status == "ready"
+    assert len(github.comments) == 1
+    parse_status_comment(github.comments[0].body)
+    assert set(github.issues[0].labels) == {
+        "edullm-job",
+        "research",
+        "status:ready",
+    }
+
+
+def test_concurrent_unrelated_label_during_ready_is_preserved(policy):
+    class AddUnrelatedWithReady(AutomationGitHub):
+        def add_issue_status_label(self, issue_number, label):
+            result = super().add_issue_status_label(issue_number, label)
+            if label == "status:ready":
+                self.issues = [
+                    replace(
+                        issue,
+                        labels=tuple(sorted(set(issue.labels) | {"concurrent-review"})),
+                    )
+                    for issue in self.issues
+                ]
+            return result
+
+    github = AddUnrelatedWithReady([_issue(), _issue()])
+
+    result = validate_issue(
+        42,
+        github=github,
+        policy=policy,
+        allowed_reviewers={"team-lead"},
+        validated_at=VALIDATED_AT,
+    )
+
+    assert result.status == "ready"
+    assert "concurrent-review" in github.issues[0].labels
+    assert "status:ready" in github.issues[0].labels
+    assert "status:requested" not in github.issues[0].labels
+
+
+def test_concurrent_duplicate_after_status_create_fails_closed(policy):
+    class DuplicateAfterCreate(AutomationGitHub):
+        def create_issue_comment(self, issue_number, body):
+            persisted = super().create_issue_comment(issue_number, body)
+            self.comments.append(
+                IssueComment(
+                    id=100,
+                    body=body,
+                    author="other-bot[bot]",
+                    author_is_bot=True,
+                )
+            )
+            return persisted
+
+    github = DuplicateAfterCreate([_issue(), _issue()])
+
+    result = validate_issue(
+        42,
+        github=github,
+        policy=policy,
+        allowed_reviewers={"team-lead"},
+        validated_at=VALIDATED_AT,
+    )
+
+    assert result.status == "requested"
+    assert result.operational_error is True
+    assert result.errors == ("multiple eduLLM status comments were found",)
+    assert "status:requested" in github.issues[0].labels
+    assert "status:ready" not in github.issues[0].labels
+
+
+def test_concurrent_human_marker_after_status_create_fails_closed(policy):
+    class HumanMarkerAfterCreate(AutomationGitHub):
+        def create_issue_comment(self, issue_number, body):
+            persisted = super().create_issue_comment(issue_number, body)
+            self.comments.append(
+                IssueComment(
+                    id=100,
+                    body=body,
+                    author="student",
+                    author_is_bot=False,
+                )
+            )
+            return persisted
+
+    github = HumanMarkerAfterCreate([_issue(), _issue()])
+
+    result = validate_issue(
+        42,
+        github=github,
+        policy=policy,
+        allowed_reviewers={"team-lead"},
+        validated_at=VALIDATED_AT,
+    )
+
+    assert result.status == "requested"
+    assert result.operational_error is True
+    assert "status:requested" in github.issues[0].labels
+    assert "status:ready" not in github.issues[0].labels
+
+
+def test_status_write_requires_relisted_persisted_comment_identity(policy):
+    class MismatchedCreateIdentity(AutomationGitHub):
+        def create_issue_comment(self, issue_number, body):
+            persisted = super().create_issue_comment(issue_number, body)
+            return replace(persisted, id=persisted.id + 1)
+
+    github = MismatchedCreateIdentity([_issue(), _issue()])
+
+    result = validate_issue(
+        42,
+        github=github,
+        policy=policy,
+        allowed_reviewers={"team-lead"},
+        validated_at=VALIDATED_AT,
+    )
+
+    assert result.status == "requested"
+    assert result.operational_error is True
+    assert result.errors == ("persisted eduLLM status comment identity changed",)
+    assert "status:requested" in github.issues[0].labels
+    assert "status:ready" not in github.issues[0].labels
+
+
+@pytest.mark.parametrize("field", ["body", "requester"])
+def test_issue_identity_change_after_comment_before_ready_converges_requested(policy, field):
+    class EditAfterCreate(AutomationGitHub):
+        def create_issue_comment(self, issue_number, body):
+            persisted = super().create_issue_comment(issue_number, body)
+            if field == "body":
+                self.issues = [
+                    replace(issue, body=issue.body.replace("Skill-DAG smoke", "edited", 1))
+                    for issue in self.issues
+                ]
+            else:
+                self.issues = [replace(issue, requester="different-user") for issue in self.issues]
+            return persisted
+
+    github = EditAfterCreate([_issue(), _issue()])
+
+    result = validate_issue(
+        42,
+        github=github,
+        policy=policy,
+        allowed_reviewers={"team-lead"},
+        validated_at=VALIDATED_AT,
+    )
+
+    assert result.status == "requested"
+    assert result.errors == (
+        "Issue changed during validation; submit or save the current request again",
+    )
+    assert "status:requested" in github.issues[0].labels
+    assert "status:ready" not in github.issues[0].labels
+
+
+def test_concurrent_duplicate_during_ready_write_reconciles_requested(policy):
+    class DuplicateDuringReady(AutomationGitHub):
+        def remove_issue_status_label(self, issue_number, label):
+            removed = super().remove_issue_status_label(issue_number, label)
+            if label == "status:requested":
+                self.comments.append(
+                    IssueComment(
+                        id=100,
+                        body=self.comments[0].body,
+                        author="other-bot[bot]",
+                        author_is_bot=True,
+                    )
+                )
+            return removed
+
+    github = DuplicateDuringReady([_issue(), _issue()])
+
+    result = validate_issue(
+        42,
+        github=github,
+        policy=policy,
+        allowed_reviewers={"team-lead"},
+        validated_at=VALIDATED_AT,
+    )
+
+    assert result.status == "requested"
+    assert result.operational_error is True
+    assert "status:requested" in github.issues[0].labels
+    assert "status:ready" not in github.issues[0].labels
+
+
+@pytest.mark.parametrize("field", ["body", "requester"])
+def test_issue_identity_change_during_ready_write_reconciles_requested(policy, field):
+    class EditDuringReady(AutomationGitHub):
+        def remove_issue_status_label(self, issue_number, label):
+            removed = super().remove_issue_status_label(issue_number, label)
+            if label == "status:requested":
+                if field == "body":
+                    self.issues = [
+                        replace(issue, body=issue.body.replace("Skill-DAG smoke", "edited", 1))
+                        for issue in self.issues
+                    ]
+                else:
+                    self.issues = [
+                        replace(issue, requester="different-user") for issue in self.issues
+                    ]
+            return removed
+
+    github = EditDuringReady([_issue(), _issue()])
+
+    result = validate_issue(
+        42,
+        github=github,
+        policy=policy,
+        allowed_reviewers={"team-lead"},
+        validated_at=VALIDATED_AT,
+    )
+
+    assert result.status == "requested"
+    assert "status:requested" in github.issues[0].labels
+    assert "status:ready" not in github.issues[0].labels
+
+
+@pytest.mark.parametrize("field", ["body", "requester"])
+def test_issue_identity_change_after_ready_postcondition_reconciles_requested(policy, field):
+    class EditAfterReadyFetch(AutomationGitHub):
+        edited = False
+
+        def fetch_issue(self, issue_number):
+            issue = super().fetch_issue(issue_number)
+            if "status:ready" in issue.labels and not self.edited:
+                self.edited = True
+                if field == "body":
+                    self.issues = [
+                        replace(current, body=current.body.replace("Skill-DAG smoke", "edited", 1))
+                        for current in self.issues
+                    ]
+                else:
+                    self.issues = [
+                        replace(current, requester="different-user") for current in self.issues
+                    ]
+            return issue
+
+    github = EditAfterReadyFetch([_issue(), _issue()])
+
+    result = validate_issue(
+        42,
+        github=github,
+        policy=policy,
+        allowed_reviewers={"team-lead"},
+        validated_at=VALIDATED_AT,
+    )
+
+    assert result.status == "requested"
+    assert "status:requested" in github.issues[0].labels
+    assert "status:ready" not in github.issues[0].labels
+
+
 def test_duplicate_validation_comments_fail_closed_on_invalid_request(policy):
     comments = [
         IssueComment(
@@ -524,17 +894,18 @@ def test_github_failures_never_transition_to_ready(policy, failure_field):
     assert result.status == "requested"
     assert result.operational_error is True
     assert result.errors == ("GitHub validation operation failed",)
-    assert all("status:ready" not in event[2] for event in _labels_events(github))
+    assert "status:ready" not in github.issues[0].labels
+    assert "status:requested" in github.issues[0].labels
 
 
 def test_ready_label_failure_reports_operational_error_after_status_persistence(
     policy,
 ):
     class FailSecondLabelUpdate(AutomationGitHub):
-        def replace_issue_labels(self, issue_number, labels):
-            if any(label == "status:ready" for label in labels):
+        def add_issue_status_label(self, issue_number, label):
+            if label == "status:ready":
                 raise GitHubAPIError("sensitive API response")
-            return super().replace_issue_labels(issue_number, labels)
+            return super().add_issue_status_label(issue_number, label)
 
     github = FailSecondLabelUpdate([_issue(), _issue()])
 
@@ -553,5 +924,179 @@ def test_ready_label_failure_reports_operational_error_after_status_persistence(
     )
     assert any(event[0] == "create" and STATUS_MARKER in event[2] for event in github.events)
     assert _labels_events(github) == [
-        ("labels", 42, ("edullm-job", "research", "status:requested"))
+        ("add-label", 42, "status:requested"),
+        ("remove-label", 42, "status:ready"),
+        ("add-label", 42, "status:requested"),
+        ("remove-label", 42, "status:ready"),
     ]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        GitHubAPIError("request timed out"),
+        GitHubDataError("malformed write response"),
+    ],
+)
+def test_ready_add_committed_before_error_is_reconciled_requested(policy, error):
+    class CommitReadyThenFail(AutomationGitHub):
+        failed = False
+
+        def add_issue_status_label(self, issue_number, label):
+            result = super().add_issue_status_label(issue_number, label)
+            if label == "status:ready" and not self.failed:
+                self.failed = True
+                self.issues = [
+                    replace(
+                        issue,
+                        labels=tuple(sorted(set(issue.labels) | {"concurrent-review"})),
+                    )
+                    for issue in self.issues
+                ]
+                raise error
+            return result
+
+    github = CommitReadyThenFail([_issue(), _issue()])
+
+    result = validate_issue(
+        42,
+        github=github,
+        policy=policy,
+        allowed_reviewers={"team-lead"},
+        validated_at=VALIDATED_AT,
+    )
+
+    assert result == AutomationResult(
+        "requested",
+        ("GitHub validation operation failed",),
+        True,
+    )
+    assert set(github.issues[0].labels) == {
+        "edullm-job",
+        "research",
+        "concurrent-review",
+        "status:requested",
+    }
+
+
+def test_requested_remove_committed_before_timeout_is_reconciled(policy):
+    class CommitRemoveThenTimeout(AutomationGitHub):
+        failed = False
+
+        def remove_issue_status_label(self, issue_number, label):
+            result = super().remove_issue_status_label(issue_number, label)
+            if label == "status:requested" and not self.failed:
+                self.failed = True
+                raise GitHubAPIError("request timed out")
+            return result
+
+    github = CommitRemoveThenTimeout([_issue(), _issue()])
+
+    result = validate_issue(
+        42,
+        github=github,
+        policy=policy,
+        allowed_reviewers={"team-lead"},
+        validated_at=VALIDATED_AT,
+    )
+
+    assert result.status == "requested"
+    assert "status:requested" in github.issues[0].labels
+    assert "status:ready" not in github.issues[0].labels
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        GitHubAPIError("request timed out"),
+        GitHubDataError("malformed write response"),
+    ],
+)
+def test_comment_committed_before_error_is_reconciled_requested(policy, error):
+    class CommitCommentThenFail(AutomationGitHub):
+        failed = False
+
+        def create_issue_comment(self, issue_number, body):
+            persisted = super().create_issue_comment(issue_number, body)
+            if not self.failed:
+                self.failed = True
+                raise error
+            return persisted
+
+    github = CommitCommentThenFail([_issue(), _issue()])
+
+    result = validate_issue(
+        42,
+        github=github,
+        policy=policy,
+        allowed_reviewers={"team-lead"},
+        validated_at=VALIDATED_AT,
+    )
+
+    assert result.status == "requested"
+    assert len(github.comments) == 1
+    assert "status:requested" in github.issues[0].labels
+    assert "status:ready" not in github.issues[0].labels
+
+
+def test_failed_ready_postcondition_is_reconciled_requested(policy):
+    class StaleReadyPostcondition(AutomationGitHub):
+        injected = False
+
+        def fetch_issue(self, issue_number):
+            issue = super().fetch_issue(issue_number)
+            if "status:ready" in issue.labels and not self.injected:
+                self.injected = True
+                return replace(
+                    issue,
+                    labels=tuple(sorted(set(issue.labels) | {"status:requested"})),
+                )
+            return issue
+
+    github = StaleReadyPostcondition([_issue(), _issue()])
+
+    result = validate_issue(
+        42,
+        github=github,
+        policy=policy,
+        allowed_reviewers={"team-lead"},
+        validated_at=VALIDATED_AT,
+    )
+
+    assert result.status == "requested"
+    assert result.errors == ("failed to establish ready status",)
+    assert "status:requested" in github.issues[0].labels
+    assert "status:ready" not in github.issues[0].labels
+
+
+def test_unavailable_reconciliation_never_claims_ready_and_is_sanitized(policy):
+    secret = "ghp_DO_NOT_ECHO_THIS_SECRET"
+
+    class TotalOutageAfterReadyCommit(AutomationGitHub):
+        ready_failed = False
+
+        def add_issue_status_label(self, issue_number, label):
+            if label == "status:requested" and self.ready_failed:
+                raise GitHubAPIError(f"outage contains {secret}")
+            result = super().add_issue_status_label(issue_number, label)
+            if label == "status:ready" and not self.ready_failed:
+                self.ready_failed = True
+                raise GitHubAPIError(f"timeout contains {secret}")
+            return result
+
+    github = TotalOutageAfterReadyCommit([_issue(), _issue()])
+
+    result = validate_issue(
+        42,
+        github=github,
+        policy=policy,
+        allowed_reviewers={"team-lead"},
+        validated_at=VALIDATED_AT,
+    )
+
+    assert result == AutomationResult(
+        "requested",
+        ("GitHub validation reconciliation failed",),
+        True,
+    )
+    assert secret not in "\n".join(result.errors)

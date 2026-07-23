@@ -160,6 +160,7 @@ def test_codeowners_protects_all_queue_controls_with_team_leads():
     assert lines == {
         "/config/edullm/ @edu-llm/team-leads",
         "/.github/CODEOWNERS @edu-llm/team-leads",
+        "/.github/ISSUE_TEMPLATE/ @edu-llm/team-leads",
         "/.github/workflows/edullm-* @edu-llm/team-leads",
         "/src/edullm/ @edu-llm/team-leads",
         "/.cursor/skills/submit-edullm-job/ @edu-llm/team-leads",

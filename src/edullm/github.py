@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, cast
-from urllib.parse import parse_qsl, unquote, urlsplit
+from urllib.parse import parse_qsl, quote, unquote, urlsplit
 
 import requests
 
@@ -46,6 +46,7 @@ _CHECK_CONCLUSIONS = frozenset(
 )
 _MAX_COMMENT_CHARS = 65_536
 _MAX_LABEL_CHARS = 50
+_MANAGED_STATUS_LABELS = frozenset({"status:requested", "status:ready"})
 
 
 class GitHubError(RuntimeError):
@@ -342,43 +343,55 @@ class GitHubClient:
             raise GitHubDataError("GitHub API returned malformed Issue comment response")
         return comment
 
-    def replace_issue_labels(
+    def add_issue_status_label(
         self,
         issue_number: int,
-        labels: tuple[str, ...] | list[str],
+        label: str,
     ) -> tuple[str, ...]:
         """
-        Atomically replace Issue labels with an explicitly validated complete set.
-
-        The caller owns preservation of unrelated labels by including them in
-        ``labels``.
+        Add one managed status label without replacing unrelated labels.
 
         :param issue_number: The positive Issue number.
-        :param labels: The non-empty complete label sequence.
+        :param label: ``status:requested`` or ``status:ready``.
 
-        :returns: The deterministic requested label sequence.
+        :returns: The complete validated server label sequence after the add.
         """
         _validate_positive_identifier(issue_number, "issue number")
-        normalized = _validate_labels(labels)
+        _validate_status_label(label)
         response = self._write_request(
-            "put",
+            "post",
             f"/repos/{self.repo}/issues/{issue_number}/labels",
-            json_body={"labels": list(normalized)},
+            json_body={"labels": [label]},
         )
-        payload = self._decode_json(response)
-        if type(payload) is not list:
+        labels = _label_names_from_payload(self._decode_json(response))
+        if label not in labels:
             raise GitHubDataError("GitHub API returned malformed Issue labels response")
-        returned: list[str] = []
-        for row in cast(list[object], payload):
-            if type(row) is not dict:
-                raise GitHubDataError("GitHub API returned malformed Issue labels response")
-            name = cast(dict[object, object], row).get("name")
-            if not _is_valid_label_name(name):
-                raise GitHubDataError("GitHub API returned malformed Issue labels response")
-            returned.append(cast(str, name))
-        if len(set(returned)) != len(returned) or set(returned) != set(normalized):
+        return labels
+
+    def remove_issue_status_label(self, issue_number: int, label: str) -> bool:
+        """
+        Idempotently remove one managed status label without touching other labels.
+
+        :param issue_number: The positive Issue number.
+        :param label: ``status:requested`` or ``status:ready``.
+
+        :returns: ``True`` when removed, or ``False`` only when GitHub returns 404.
+        """
+        _validate_positive_identifier(issue_number, "issue number")
+        _validate_status_label(label)
+        encoded_label = quote(label, safe="")
+        response = self._write_request(
+            "delete",
+            f"/repos/{self.repo}/issues/{issue_number}/labels/{encoded_label}",
+            allow_not_found=True,
+            encoded_status_label=True,
+        )
+        if response.status_code == 404:
+            return False
+        labels = _label_names_from_payload(self._decode_json(response))
+        if label in labels:
             raise GitHubDataError("GitHub API returned malformed Issue labels response")
-        return normalized
+        return True
 
     def file_exists(self, path: str, *, ref: str) -> bool:
         """
@@ -559,23 +572,29 @@ class GitHubClient:
         method: str,
         path: str,
         *,
-        json_body: Mapping[str, object],
+        json_body: Mapping[str, object] | None = None,
+        allow_not_found: bool = False,
+        encoded_status_label: bool = False,
     ) -> Any:
-        _validate_api_path(path)
+        if encoded_status_label:
+            _validate_encoded_status_label_path(path, self.repo)
+        else:
+            _validate_api_path(path)
         requester = getattr(self._session, method, None)
         if not callable(requester):
             raise GitHubDataError("GitHub session cannot perform write requests")
+        request_arguments: dict[str, object] = {"timeout": self._timeout}
+        if json_body is not None:
+            request_arguments["json"] = dict(json_body)
         try:
-            response = requester(
-                f"{self.base_url}{path}",
-                json=dict(json_body),
-                timeout=self._timeout,
-            )
+            response = requester(f"{self.base_url}{path}", **request_arguments)
         except requests.RequestException:
             raise GitHubAPIError("GitHub API request failed") from None
         status_code = getattr(response, "status_code", None)
         if type(status_code) is not int:
             raise GitHubDataError("GitHub API returned malformed HTTP response")
+        if allow_not_found and status_code == 404:
+            return response
         try:
             response.raise_for_status()
         except requests.RequestException:
@@ -713,16 +732,41 @@ def _is_valid_label_name(value: object) -> bool:
     )
 
 
-def _validate_labels(value: object) -> tuple[str, ...]:
-    if type(value) not in {tuple, list} or not value:
-        raise GitHubValidationError("labels must be a non-empty sequence")
-    labels = cast(tuple[object, ...] | list[object], value)
-    if any(not _is_valid_label_name(label) for label in labels):
-        raise GitHubValidationError("labels contain an invalid name")
-    normalized = tuple(cast(str, label) for label in labels)
-    if len(set(normalized)) != len(normalized):
-        raise GitHubValidationError("labels contain duplicate names")
-    return normalized
+def _validate_status_label(label: object) -> None:
+    if type(label) is not str or label not in _MANAGED_STATUS_LABELS:
+        raise GitHubValidationError("status label must be requested or ready")
+
+
+def _validate_encoded_status_label_path(path: object, repo: str) -> None:
+    expected_prefix = f"/repos/{repo}/issues/"
+    if type(path) is not str or not path.startswith(expected_prefix):
+        raise GitHubValidationError("GitHub API path must be relative")
+    suffix = path[len(expected_prefix) :]
+    issue, separator, label_path = suffix.partition("/labels/")
+    if (
+        not separator
+        or not issue.isascii()
+        or not issue.isdecimal()
+        or issue.startswith("0")
+        or label_path not in {"status%3Arequested", "status%3Aready"}
+    ):
+        raise GitHubValidationError("GitHub API path is invalid")
+
+
+def _label_names_from_payload(payload: object) -> tuple[str, ...]:
+    if type(payload) is not list:
+        raise GitHubDataError("GitHub API returned malformed Issue labels response")
+    labels: list[str] = []
+    for row in cast(list[object], payload):
+        if type(row) is not dict:
+            raise GitHubDataError("GitHub API returned malformed Issue labels response")
+        name = cast(dict[object, object], row).get("name")
+        if not _is_valid_label_name(name):
+            raise GitHubDataError("GitHub API returned malformed Issue labels response")
+        labels.append(cast(str, name))
+    if len(set(labels)) != len(labels):
+        raise GitHubDataError("GitHub API returned malformed Issue labels response")
+    return tuple(labels)
 
 
 def _validate_comment_body(body: object) -> None:
