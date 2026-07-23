@@ -2,7 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from edullm.request_parser import IssueParseError, parse_issue
+from edullm.request_parser import (
+    IssueParseError,
+    fields_from_markdown,
+    issue_body_from_fields,
+    parse_issue,
+)
 
 FIXTURE = Path("src/test/edullm/fixtures/valid_issue.md")
 
@@ -17,6 +22,29 @@ def _replace_field(body: str, heading: str, value: str) -> str:
     if separator:
         return f"{prefix}### {heading}\n{value}\n\n### {suffix}"
     return f"{prefix}### {heading}\n{value}"
+
+
+def test_issue_body_renderer_round_trips_the_authoritative_parser():
+    original = FIXTURE.read_text(encoding="utf-8")
+    fields = fields_from_markdown(original)
+    rendered = issue_body_from_fields(fields)
+
+    assert fields_from_markdown(rendered) == fields
+    assert parse_issue(
+        rendered, issue_number=42, requester="student"
+    ).canonical_json() == parse_issue(
+        original, issue_number=42, requester="student"
+    ).canonical_json()
+
+
+def test_issue_body_renderer_rejects_missing_extra_and_non_string_fields():
+    fields = fields_from_markdown(FIXTURE.read_text(encoding="utf-8"))
+    with pytest.raises(IssueParseError, match="missing heading: Purpose"):
+        issue_body_from_fields({key: value for key, value in fields.items() if key != "Purpose"})
+    with pytest.raises(IssueParseError, match="unexpected heading at index"):
+        issue_body_from_fields({**fields, "Shell command": "sbatch anything"})
+    with pytest.raises(IssueParseError, match="GPU count must be text"):
+        issue_body_from_fields({**fields, "GPU count": 1})  # type: ignore[dict-item]
 
 
 def test_parse_valid_issue():

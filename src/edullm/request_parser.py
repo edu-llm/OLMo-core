@@ -5,6 +5,7 @@ Parse deterministic eduLLM GitHub Issue-form requests.
 import json
 import re
 from collections import Counter
+from collections.abc import Mapping
 from typing import cast
 
 from edullm.models import JobRequest
@@ -104,6 +105,21 @@ def fields_from_markdown(body: str) -> dict[str, str]:
     if empty:
         raise IssueParseError(tuple(empty))
     return fields
+
+
+def issue_body_from_fields(fields: Mapping[str, str]) -> str:
+    """Render the exact Issue-form Markdown accepted by :func:`parse_issue`."""
+    if not isinstance(fields, Mapping):
+        raise IssueParseError(("Issue fields must be a mapping",))
+    names = list(fields)
+    errors = _shape_errors(names)
+    for heading in ISSUE_HEADINGS:
+        if heading in fields and type(fields[heading]) is not str:
+            errors.append(f"{heading} must be text")
+    if errors:
+        raise IssueParseError(tuple(errors))
+    typed = cast(Mapping[str, str], fields)
+    return "\n\n".join(f"### {heading}\n{typed[heading]}" for heading in ISSUE_HEADINGS)
 
 
 def _parse_arguments(value: str, errors: list[str]) -> tuple[str, ...]:
