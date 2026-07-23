@@ -69,7 +69,7 @@ def test_submission_skill_is_real_agent_facing_workflow():
     assert "Issue form is not a substitute" in text
     assert "Never request or handle credentials" in text
     assert "ssh orcd-login" not in text
-    assert "edullm run" not in text
+    assert "The assigned operator authorizes a job by running `edullm run`." in text
     assert "sbatch " not in text
     assert 'STATUS="$(git status --porcelain=v1)" || exit 2' in text
     assert 'test -z "$STATUS"' in text
@@ -77,17 +77,30 @@ def test_submission_skill_is_real_agent_facing_workflow():
     assert len(text.splitlines()) < 500
 
 
-def test_skill_fails_closed_on_exact_pr_head_and_cleans_private_files():
+def test_skill_fails_closed_on_exact_pushed_commit_and_cleans_private_files():
     text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    lowered = text.lower()
     assert 'test "$BRANCH" != main' in text
     assert 'COMMIT_SHA="$(git rev-parse HEAD)" || exit 2' in text
     assert 'test "${#COMMIT_SHA}" -eq 40' in text
     assert 'case "$COMMIT_SHA" in' in text
     assert '(*[!0-9a-f]*|"") exit 2 ;;' in text
-    assert "gh pr view --json number,state,isDraft,headRefOid,url" in text
-    assert 'test "$(gh pr view --json headRefOid --jq .headRefOid)" = "$COMMIT_SHA"' in text
-    assert 'test "$(gh pr view --json isDraft --jq .isDraft)" = false' in text
-    assert 'case "$PR_STATE" in OPEN|MERGED) ;; *) exit 2 ;; esac' in text
+    assert "gh repo view edu-llm/OLMo-core --json nameWithOwner --jq .nameWithOwner" in text
+    assert 'test "$CANONICAL_OWNER" = edu-llm/OLMo-core' in text
+    assert 'REMOTE_URL="$(git remote get-url origin)" || exit 2' in text
+    assert '"$CANONICAL_HTTPS.git"' in text
+    assert '"$CANONICAL_SSH"' in text
+    assert "ssh://git@github.com/edu-llm/OLMo-core.git" in text
+    assert (
+        'REMOTE_SHA="$(gh api "repos/edu-llm/OLMo-core/commits/$COMMIT_SHA" --jq .sha)" || exit 2'
+        in text
+    )
+    assert 'test "$REMOTE_SHA" = "$COMMIT_SHA"' in text
+    assert "gh pr view" not in text
+    assert "approval" not in lowered
+    assert "reviewer" not in lowered
+    assert "check state" not in lowered
+    assert "pr url" not in lowered
     assert 'REQUEST_DIR="$(mktemp -d)"' in text
     assert 'chmod 700 "$REQUEST_DIR"' in text
     assert "trap 'rm -rf \"$REQUEST_DIR\"' EXIT" in text
@@ -104,6 +117,9 @@ def test_skill_passes_the_unchanged_validated_body_as_a_file():
     assert "--label status:requested" in text
     assert "Do not edit, re-render, copy, or transform `issue.md`" in text
     assert "Actions is authoritative" in text
+    assert "The request Issue is not a compute submission." in text
+    assert "edullm approve" not in text
+    assert "edullm reject" not in text
 
 
 def test_skill_suppresses_external_diagnostics_and_checks_requester_lookup():
@@ -121,12 +137,15 @@ def test_request_reference_tracks_the_authoritative_heading_order():
     text = (SKILL / "request-reference.md").read_text(encoding="utf-8")
     offsets = [text.index(f"`{heading}`") for heading in ISSUE_HEADINGS]
     assert offsets == sorted(offsets)
-    assert "exact full PR head SHA" in text
+    assert "exact full pushed commit SHA" in text
+    assert "pull request" not in text.lower()
+    assert "approval" not in text.lower()
     assert "ordered JSON array of strings" in text
     assert "`builtin://generic-smoke-v1`" in text
-    assert "reviewed `/orcd/pool/...`" in text
+    assert "policy-controlled" in text
+    assert "`/orcd/pool/...`" in text
     assert "no S3 URI" in text
-    assert "names actually emitted by the reviewed code" in text
+    assert "names actually emitted by the selected code" in text
     assert "`generic-smoke`" in text
     assert "`src/examples/llm/train.py`" in text
     assert "`torchrun`" in text

@@ -12,20 +12,21 @@ Build one JSON object whose string keys follow `ISSUE_HEADINGS` exactly:
 2. `Study` — the submitting team's stable study identifier.
 3. `Condition` — the submitting team's condition identifier.
 4. `Comparison` — the submitting team's comparison or control.
-5. `Commit SHA` — the exact full PR head SHA. Reject a direct-main SHA and any
-   value other than the verified 40-character lowercase SHA.
+5. `Commit SHA` — the exact full pushed commit SHA from `edu-llm/OLMo-core`.
+   Reject a direct-main SHA and any value other than the verified 40-character
+   lowercase SHA.
 6. `Entrypoint profile` — a profile accepted by the trusted policy.
-7. `Script path` — the reviewed repository-relative script selected by the team.
+7. `Script path` — the repository-relative script selected by the team.
 8. `Launcher` — the launcher's policy value, not a shell command.
 9. `Arguments JSON` — an ordered JSON array of strings, never a shell command.
-10. `Data manifest` — `builtin://generic-smoke-v1` or a reviewed `/orcd/pool/...`
-    manifest; no S3 URI.
-11. `Data manifest SHA-256` — the reviewed manifest's exact lowercase digest.
-12. `Data classification` — the team's reviewed classification.
+10. `Data manifest` — `builtin://generic-smoke-v1` or a policy-controlled
+    `/orcd/pool/...` manifest; no S3 URI.
+11. `Data manifest SHA-256` — the exact manifest's lowercase digest.
+12. `Data classification` — the team's classification.
 13. `Seed` — the submitting team's seed.
 14. `W&B project` — a project accepted by policy.
 15. `Success signal` — the submitting team's scientific or engineering signal.
-16. `Success metrics` — comma-separated names actually emitted by the reviewed code.
+16. `Success metrics` — comma-separated names actually emitted by the selected code.
 17. `GPU count` — the requested integer count within policy.
 18. `GPU preference` — the requested policy value.
 19. `Maximum runtime minutes` — the requested integer runtime within policy.
@@ -44,8 +45,8 @@ scientific request.
 Read the selected script and configuration plus its W&B callback before
 collecting `Success metrics`. If a requested metric is not emitted, stop and
 direct the user to `/weights-and-biases`. Metric wiring requires a new commit,
-the exact updated PR head, and approval before a request can be created. Do not
-call W&B APIs from this Skill.
+the exact updated pushed SHA, and a passing exact-SHA gate before a request can
+be created. Do not call W&B APIs from this Skill.
 
 ## Only offerable platform fixture
 
@@ -71,6 +72,9 @@ The Skill creates one validated request Issue. GitHub Actions performs validatio
 and assignment, and its recorded state is authoritative. Report `requested`,
 validation errors, `ready`, or the assigned operator from Issue state; do not
 infer assignment.
+
+PR review controls merging to main.
+The assigned operator authorizes a job by running `edullm run`.
 
 `edullm run` is operator-only. This Skill never runs compute, calls SSH or
 Slurm, accesses W&B, handles credentials, or acts as an operator.

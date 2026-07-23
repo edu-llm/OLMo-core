@@ -22,7 +22,7 @@ from edullm.assignment import (
     AUTOMATION_ACTOR,
     parse_assignment_comment,
 )
-from edullm.automation import load_team_leads, validation_decision
+from edullm.automation import validation_decision
 from edullm.github import GitHubError, GitHubIssue, IssueComment, normalize_actor_login
 from edullm.models import JobRequest, JobStatus, Operator, ResolvedRequest
 from edullm.notifications import SlackNotificationError
@@ -172,7 +172,6 @@ class GateConfiguration:
 
     policy: Policy
     operators: tuple[Operator, ...]
-    reviewers: frozenset[str]
     digest: str
 
 
@@ -260,13 +259,12 @@ def load_gate_configuration(root: Path) -> GateConfiguration:
     if not isinstance(root, Path) or not root.is_absolute():
         raise JobOperationError("protected configuration root is invalid")
     config = root / "config" / "edullm"
-    names = ("policy.yaml", "entrypoints.yaml", "operators.yaml", "team-leads.yaml")
+    names = ("policy.yaml", "entrypoints.yaml", "operators.yaml")
     paths = {name: config / name for name in names}
     before = {name: _capture_protected_file(path) for name, path in paths.items()}
     try:
         policy = load_policy(paths["policy.yaml"], paths["entrypoints.yaml"])
         operators = load_operators(paths["operators.yaml"])
-        reviewers = load_team_leads(paths["team-leads.yaml"])
     except (OSError, ValueError):
         raise JobOperationError("protected configuration schema is invalid") from None
     after = {name: _capture_protected_file(path) for name, path in paths.items()}
@@ -280,7 +278,7 @@ def load_gate_configuration(root: Path) -> GateConfiguration:
         digest.update(str(len(content)).encode("ascii"))
         digest.update(b"\0")
         digest.update(content)
-    return GateConfiguration(policy, operators, reviewers, digest.hexdigest())
+    return GateConfiguration(policy, operators, digest.hexdigest())
 
 
 def _bounded_integer(value: str) -> int:
@@ -622,21 +620,11 @@ def _validate_configuration(configuration: object) -> GateConfiguration:
         not isinstance(configuration, GateConfiguration)
         or not isinstance(configuration.policy, Policy)
         or type(configuration.operators) is not tuple
-        or type(configuration.reviewers) is not frozenset
-        or not configuration.reviewers
         or type(configuration.digest) is not str
         or _SHA256.fullmatch(configuration.digest) is None
     ):
         raise JobOperationError("protected gate configuration is invalid")
-    enabled = _enabled_operators(configuration.operators)
-    if len(enabled) > 1:
-        raise JobOperationError("one-operator pilot configuration is invalid")
-    try:
-        reviewers = frozenset(normalize_actor_login(value) for value in configuration.reviewers)
-    except Exception:
-        raise JobOperationError("protected gate configuration is invalid") from None
-    if reviewers != configuration.reviewers:
-        raise JobOperationError("protected gate configuration is invalid")
+    _enabled_operators(configuration.operators)
     return configuration
 
 
@@ -663,7 +651,7 @@ def _gate(
     github: Any,
     configuration: GateConfiguration,
     allowed_statuses: Set[str],
-    review_required: bool,
+    revalidate_commit: bool,
     automation_actor: str,
 ) -> SubmissionGateSnapshot:
     configuration = _validate_configuration(configuration)
@@ -734,15 +722,17 @@ def _gate(
     kinds = cast(tuple[object, ...] | list[object], allowed_kinds)
     if not kinds or any(type(kind) is not str for kind in kinds):
         raise JobOperationError("protected entrypoint profile is incomplete")
-    if review_required:
-        decision = validation_decision(
-            request,
-            policy=configuration.policy,
-            github=github,
-            allowed_reviewers=configuration.reviewers,
-        )
+    if revalidate_commit:
+        try:
+            decision = validation_decision(
+                request,
+                policy=configuration.policy,
+                github=github,
+            )
+        except Exception:
+            raise JobOperationError("commit or script evidence is unavailable") from None
         if decision.status != "ready" or decision.errors:
-            raise JobOperationError("reviewed commit or request policy is no longer authorized")
+            raise JobOperationError("commit or request policy is no longer authorized")
     elif validate_request(request, configuration.policy):
         raise JobOperationError("current request no longer satisfies protected policy")
 
@@ -806,14 +796,14 @@ def full_submission_gate(
     configuration: GateConfiguration,
     automation_actor: str = AUTOMATION_ACTOR,
 ) -> SubmissionGateSnapshot:
-    """Perform the complete fresh unprotected-pilot pre-submission gate."""
+    """Perform the complete fresh pre-submission gate."""
     return _gate(
         issue_number,
         operator=operator,
         github=github,
         configuration=configuration,
         allowed_statuses={"assigned"},
-        review_required=True,
+        revalidate_commit=True,
         automation_actor=automation_actor,
     )
 
@@ -1486,7 +1476,7 @@ def _authorized_lifecycle_gate(
         github=github,
         configuration=configuration,
         allowed_statuses={"submitted", "running", *_TERMINAL_STATES},
-        review_required=False,
+        revalidate_commit=False,
         automation_actor=automation_actor,
     )
     if snapshot.lifecycle is None or not snapshot.lifecycle.attempts:

@@ -1,11 +1,12 @@
 eduLLM activation administration
 ================================
 
-The eduLLM pilot is operational. Current teammate, approver, and operator
-onboarding lives in :doc:`edullm_engaging`; earlier instructions to wait for
-Issue support or pilot activation are obsolete. The sections below retain the
-administrator-only activation boundary for reference. Never put the Slack
-webhook or any compute or experiment credential in Git or chat.
+The eduLLM pilot is operational. Current teammate and operator onboarding lives
+in :doc:`edullm_engaging`; earlier instructions to wait for Issue support or
+pilot activation are obsolete. PR review controls merging to ``main``. The
+assigned operator authorizes a job by running ``edullm run``. The sections
+below retain the administrator-only activation boundary for reference. Never
+put the Slack webhook or any compute or experiment credential in Git or chat.
 
 Agent can prepare
 -----------------
@@ -37,8 +38,8 @@ The user must:
 * create or confirm the required labels with repository administration
   permission;
 * review and merge the activation change; and
-* provide team-lead approval and operator GitHub, SSH, Kerberos, Duo, and W&B
-  access at the live stop points.
+* provide team-lead merge review plus operator GitHub, SSH, Kerberos, Duo, and
+  W&B access at the live stop points.
 
 User-only repository commands
 -----------------------------

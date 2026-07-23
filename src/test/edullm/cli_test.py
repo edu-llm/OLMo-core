@@ -149,20 +149,17 @@ def test_invalid_request_is_a_handled_requested_result(capsys):
     assert output.out == "eduLLM Issue #42: requested\n"
 
 
-def test_default_runner_loads_only_tracked_configuration(tmp_path, monkeypatch):
+def test_default_runner_loads_only_tracked_configuration_for_canonical_repository(
+    tmp_path, monkeypatch
+):
     loaded = []
     fake_policy = object()
-    fake_reviewers = frozenset({"lead"})
     fake_client = object()
     expected_result = AutomationResult("ready", (), False)
 
     def fake_load_policy(policy_path, entrypoints_path=None):
         loaded.append((policy_path, entrypoints_path))
         return fake_policy
-
-    def fake_load_team_leads(path):
-        loaded.append(path)
-        return fake_reviewers
 
     def fake_client_factory(token, repository):
         assert token == "token"
@@ -174,18 +171,15 @@ def test_default_runner_loads_only_tracked_configuration(tmp_path, monkeypatch):
         *,
         github,
         policy,
-        allowed_reviewers,
         validated_at,
     ):
         assert issue_number == 42
         assert github is fake_client
         assert policy is fake_policy
-        assert allowed_reviewers is fake_reviewers
         assert validated_at.tzinfo is not None
         return expected_result
 
     monkeypatch.setattr(cli, "load_policy", fake_load_policy)
-    monkeypatch.setattr(cli, "load_team_leads", fake_load_team_leads)
     monkeypatch.setattr(cli, "GitHubClient", fake_client_factory)
     monkeypatch.setattr(cli, "validate_issue", fake_validate_issue)
 
@@ -202,8 +196,38 @@ def test_default_runner_loads_only_tracked_configuration(tmp_path, monkeypatch):
             tmp_path / "config/edullm/policy.yaml",
             tmp_path / "config/edullm/entrypoints.yaml",
         ),
-        tmp_path / "config/edullm/team-leads.yaml",
     ]
+
+
+def test_cli_rejects_noncanonical_repository_before_authorization(tmp_path, monkeypatch, capsys):
+    raw_repository = "attacker/fork"
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "load_policy", lambda *args: object())
+    monkeypatch.setattr(
+        cli,
+        "GitHubClient",
+        lambda *args, **kwargs: pytest.fail("GitHub client must not be constructed"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "validate_issue",
+        lambda *args, **kwargs: pytest.fail("commit evidence must not be authorized"),
+    )
+
+    exit_code = cli.main(
+        ["automation", "validate", "--issue", "42"],
+        environ={
+            "GITHUB_TOKEN": "token",
+            "GITHUB_REPOSITORY": raw_repository,
+        },
+    )
+
+    assert exit_code == 1
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "eduLLM validation configuration or GitHub access failed" in output.err
+    assert raw_repository not in output.out + output.err
 
 
 def test_package_registers_user_facing_edullm_console_entrypoint():
@@ -1540,7 +1564,6 @@ def test_handle_run_calls_run_assigned_without_manual_confirmation(monkeypatch, 
     configuration = GateConfiguration(
         policy=Policy(wandb_entity="eduLLM", allowed_wandb_projects=("test",)),
         operators=(),
-        reviewers=frozenset(),
         digest="a" * 64,
     )
     services = cli.OperatorServices(
@@ -1580,7 +1603,6 @@ def test_handle_run_calls_run_assigned_without_manual_confirmation(monkeypatch, 
 def test_operator_services_reject_matching_login_with_bot_actor_type(monkeypatch):
     configuration = SimpleNamespace(
         operators=(SimpleNamespace(github="operator", enabled=True),),
-        reviewers=frozenset({"team-lead"}),
     )
     document = {
         "environment_fingerprint": "a" * 64,
@@ -1621,7 +1643,6 @@ def test_operator_services_reject_matching_login_with_bot_actor_type(monkeypatch
 def test_operator_services_carry_private_orcd_user_separately_from_github_login(monkeypatch):
     configuration = SimpleNamespace(
         operators=(SimpleNamespace(github="github-operator", enabled=True),),
-        reviewers=frozenset({"team-lead"}),
     )
     document = {
         "environment_fingerprint": "a" * 64,
@@ -1764,7 +1785,14 @@ def test_main_dispatches_each_public_command_to_focused_handler(monkeypatch):
         (["stop", "42"], "stop"),
     ],
 )
-def test_task_7_commands_fail_closed_with_empty_protected_roster(arguments, command, capsys):
+def test_task_7_commands_fail_closed_with_empty_protected_roster(
+    arguments,
+    command,
+    capsys,
+    monkeypatch,
+):
+    monkeypatch.setattr(cli, "load_gate_configuration", lambda root: SimpleNamespace(operators=()))
+
     exit_code = cli.main(arguments, environ=RestrictedEnvironment({}))
 
     assert exit_code == 1

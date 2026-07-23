@@ -78,6 +78,16 @@ def test_valid_request_has_no_validation_errors(valid_request, policy):
     assert validate_request(valid_request, policy) == []
 
 
+def test_validate_request_docstring_describes_commit_script_submission_gate():
+    documentation = validate_request.__doc__
+
+    assert documentation is not None
+    normalized = " ".join(documentation.split())
+    assert "exact commit and protected script" in normalized
+    assert "operator-submission gate" in normalized
+    assert "approved exact pull-request head" not in normalized
+
+
 def test_brief_fixture_parses_and_validates_against_production_policy():
     body = Path("src/test/edullm/fixtures/valid_issue.md").read_text(encoding="utf-8")
     request = parse_issue(body, issue_number=42, requester="student")

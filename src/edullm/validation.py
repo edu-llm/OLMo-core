@@ -306,8 +306,9 @@ def validate_request(request: JobRequest, policy: Policy) -> list[str]:
     """
     Return deterministic policy and safety errors for a job request.
 
-    This validates only commit-SHA syntax. GitHub review state is a separate,
-    later gate that must bind the SHA to an approved exact pull-request head.
+    This validates only commit-SHA syntax. GitHub repository evidence is a
+    separate automation and operator-submission gate that must bind the exact
+    commit and protected script before execution.
 
     :param request: The immutable request to validate.
     :param policy: Trusted, recursively immutable queue policy.

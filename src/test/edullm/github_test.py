@@ -7,6 +7,7 @@ import pytest
 import requests
 
 from edullm.github import (
+    CommitResult,
     GitHubAPIError,
     GitHubClient,
     GitHubDataError,
@@ -556,6 +557,96 @@ def test_file_exists_rejects_malformed_success_payload():
 
     with pytest.raises(GitHubDataError, match="malformed contents response"):
         client.file_exists(SCRIPT_PATH, ref=SHA)
+
+
+def _commit_client(
+    *,
+    commit_status: int = 200,
+    commit_payload: object = None,
+    file_status: int = 200,
+    file_payload: object = None,
+) -> tuple[GitHubClient, FakeSession]:
+    commit_payload = {"sha": SHA} if commit_payload is None else commit_payload
+    file_payload = {"type": "file", "path": SCRIPT_PATH} if file_payload is None else file_payload
+    session = FakeSession()
+    session.add(
+        f"/repos/{REPO}/commits/{SHA}",
+        commit_payload,
+        status_code=commit_status,
+    )
+    session.add(
+        f"/repos/{REPO}/contents/{SCRIPT_PATH}",
+        file_payload,
+        params={"ref": SHA},
+        status_code=file_status,
+    )
+    return GitHubClient("token", REPO, base_url=BASE_URL, session=session), session
+
+
+def test_executable_commit_accepts_exact_pushed_commit_and_script():
+    client, session = _commit_client()
+
+    result = client.executable_commit(SHA, script_path=SCRIPT_PATH)
+
+    assert result == CommitResult(True, "commit and script exist")
+    assert all("/pulls" not in call[0] for call in session.calls)
+    assert all("/reviews" not in call[0] for call in session.calls)
+    assert all("/check-runs" not in call[0] for call in session.calls)
+
+
+def test_executable_commit_rejects_missing_commit():
+    client, _ = _commit_client(
+        commit_status=404,
+        commit_payload={"message": "Not Found"},
+    )
+
+    assert client.executable_commit(SHA, script_path=SCRIPT_PATH) == CommitResult(
+        False,
+        "commit does not exist at the requested SHA",
+    )
+
+
+@pytest.mark.parametrize(
+    "commit_payload",
+    [
+        {},
+        {"sha": OTHER_SHA},
+        {"sha": "not-a-sha"},
+        {"not_sha": SHA},
+    ],
+)
+def test_executable_commit_rejects_malformed_commit_payload(commit_payload):
+    client, _ = _commit_client(commit_payload=commit_payload)
+
+    assert client.executable_commit(SHA, script_path=SCRIPT_PATH) == CommitResult(
+        False,
+        "malformed GitHub commit evidence",
+    )
+
+
+def test_executable_commit_rejects_missing_script():
+    client, _ = _commit_client(file_status=404, file_payload={"message": "Not Found"})
+
+    assert client.executable_commit(SHA, script_path=SCRIPT_PATH) == CommitResult(
+        False,
+        "script does not exist at the requested SHA",
+    )
+
+
+def test_executable_commit_rejects_malformed_contents_payload():
+    client, _ = _commit_client(file_payload=[{"type": "file"}])
+
+    assert client.executable_commit(SHA, script_path=SCRIPT_PATH) == CommitResult(
+        False,
+        "malformed GitHub contents evidence",
+    )
+
+
+def test_commit_result_is_immutable():
+    result = CommitResult(False, "rejected")
+
+    with pytest.raises(FrozenInstanceError):
+        result.available = True  # type: ignore[misc]
 
 
 @pytest.mark.parametrize("details", [_open_pull(), _merged_pull()])

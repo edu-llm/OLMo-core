@@ -27,7 +27,7 @@ from edullm.assignment import (
     assign_ready_issues,
     process_assignment_timeouts,
 )
-from edullm.automation import AutomationResult, load_team_leads, validate_issue
+from edullm.automation import AutomationResult, validate_issue
 from edullm.github import GitHubClient, GitHubError
 from edullm.jobs import (
     GateConfiguration,
@@ -63,6 +63,7 @@ SETUP_POLL_INTERVAL_SECONDS = 5.0
 SETUP_POLL_TIMEOUT_SECONDS = 3600.0
 REMOTE_REPO_ROOT = "$HOME/OLMo-core"
 REMOTE_SCRATCH = "$HOME/orcd/scratch/edullm"
+_CANONICAL_REPOSITORY = "edu-llm/OLMo-core"
 _DIRECT_ENGAGING_REACHABILITY_ERROR = "operator setup failed during direct Engaging reachability"
 _SSH_CONFIGURATION_PLANNING_ERROR = "operator setup failed while planning SSH configuration"
 _GITHUB_LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\Z")
@@ -841,7 +842,7 @@ def _load_operator_services() -> OperatorServices:
     root = Path(__file__).resolve().parents[2]
     configuration = load_gate_configuration(root)
     enabled = {operator.github for operator in configuration.operators if operator.enabled}
-    if not enabled or not configuration.reviewers:
+    if not enabled:
         raise JobOperationError("operator execution is disabled by protected configuration")
     path = Path.home() / ".config" / "edullm" / "config.yaml"
     document = _read_operator_document(path)
@@ -1026,19 +1027,19 @@ def automation_validate(
 
     :returns: The validation automation result.
     """
+    if repository != _CANONICAL_REPOSITORY:
+        raise ValueError("GitHub repository is not supported")
     config = root / "config/edullm"
     policy = load_policy(
         config / "policy.yaml",
         config / "entrypoints.yaml",
     )
-    reviewers = load_team_leads(config / "team-leads.yaml")
     github = GitHubClient(token, repository)
     validated_at = datetime.now(timezone.utc).replace(microsecond=0)
     return validate_issue(
         issue_number,
         github=github,
         policy=policy,
-        allowed_reviewers=reviewers,
         validated_at=validated_at,
     )
 

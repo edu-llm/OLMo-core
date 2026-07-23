@@ -8,7 +8,10 @@ disable-model-invocation: true
 
 Use this workflow only after the user explicitly invokes `/submit-edullm-job`.
 The Skill creates one validated request Issue; it never submits ORCD work.
+The request Issue is not a compute submission.
 Issue form is not a substitute for this Skill.
+PR review controls merging to main.
+The assigned operator authorizes a job by running `edullm run`.
 
 Never request or handle credentials. Never read or print tokens, environment
 variables, or authentication material. Use only the user's already configured
@@ -19,10 +22,10 @@ Read the [request reference](request-reference.md) before collecting fields.
 Execute the [validation adapter](scripts/validate_request.py); do not replace,
 copy, or reimplement its parser, policy, or validation.
 
-## 1. Fail closed on repository and PR identity
+## 1. Fail closed on repository and pushed commit identity
 
 Run this exact gate from the repository root. A command error is a failed gate,
-not evidence of a clean tree or valid PR.
+not evidence of a clean tree, canonical repository, or pushed commit.
 
 ```bash
 set -euo pipefail
@@ -39,31 +42,34 @@ case "$COMMIT_SHA" in
   (*[!0-9a-f]*|"") exit 2 ;;
   (*) ;;
 esac
-PR_JSON="$(gh pr view --json number,state,isDraft,headRefOid,url)" || exit 2
-test -n "$PR_JSON"
-test "$(gh pr view --json headRefOid --jq .headRefOid)" = "$COMMIT_SHA"
-test "$(gh pr view --json isDraft --jq .isDraft)" = false
-PR_STATE="$(gh pr view --json state --jq .state)"
-case "$PR_STATE" in OPEN|MERGED) ;; *) exit 2 ;; esac
+CANONICAL_OWNER="$(gh repo view edu-llm/OLMo-core --json nameWithOwner --jq .nameWithOwner)" || exit 2
+test "$CANONICAL_OWNER" = edu-llm/OLMo-core
+CANONICAL_HTTPS="$(gh repo view edu-llm/OLMo-core --json url --jq .url)" || exit 2
+CANONICAL_SSH="$(gh repo view edu-llm/OLMo-core --json sshUrl --jq .sshUrl)" || exit 2
+REMOTE_URL="$(git remote get-url origin)" || exit 2
+case "$REMOTE_URL" in
+  "$CANONICAL_HTTPS"|"$CANONICAL_HTTPS.git"|"$CANONICAL_SSH"|ssh://git@github.com/edu-llm/OLMo-core.git) ;;
+  (*) exit 2 ;;
+esac
+REMOTE_SHA="$(gh api "repos/edu-llm/OLMo-core/commits/$COMMIT_SHA" --jq .sha)" || exit 2
+test "$REMOTE_SHA" = "$COMMIT_SHA"
 exec 2>&3 3>&-
 ```
 
 Do not push, commit, switch branches, clean the tree, create a PR, or accept a
 short SHA for the user. The gate suppresses raw diagnostics. Stop and explain
-the failed precondition with a fixed summary.
-
-Read and report the PR URL, approval state, and check state. Checks do not
-approve a request: Actions is authoritative for request validation and
-assignment.
+the failed precondition with a fixed summary. Preview the full SHA only; do not
+use PR links as request evidence.
 
 ## 2. Verify observable metrics
 
 Read the selected script and configuration and trace its W&B callback. List the
-metric names actually emitted by the reviewed code. Do not call W&B.
+metric names actually emitted by the selected code. Do not call W&B.
 
 If a requested scientific metric is absent, stop and direct the user to
-`/weights-and-biases`. Metric wiring must be committed, reviewed in a new or
-updated PR, and pass the exact-SHA gate before restarting this Skill.
+`/weights-and-biases`. Metric wiring must be committed in a new or updated
+branch commit, pushed, and pass the exact-SHA gate before restarting this
+Skill.
 
 ## 3. Collect team intent
 
@@ -117,9 +123,9 @@ any `git` or `gh` subprocess failure, report the failed step with a fixed
 summary; do not replay raw arguments, environment data, stdout, or stderr.
 
 Read `issue.md` using a file-reading operation. Show its exact contents and a
-concise request summary, including the full commit SHA, PR URL, script, data
-manifest, seed, metrics, GPU request, and runtime. Ask for explicit confirmation
-to create the request Issue. Urgency never replaces confirmation.
+concise request summary, including the full commit SHA, script, data manifest,
+seed, metrics, GPU request, and runtime. Ask for explicit confirmation to create
+the request Issue. Urgency never replaces confirmation.
 
 If the user changes any field, update `request.json`, rerun the adapter, replace
 the preview, and ask again. Never continue from a stale preview.
@@ -151,7 +157,8 @@ clean it on every error, refusal, or interruption.
 ## 6. Report Actions state
 
 Read the created Issue's labels, assignees, and machine-maintained validation
-comment. Report only the state Actions recorded:
+comment. Actions is authoritative for request validation and assignment. Report
+only the state Actions recorded:
 
 - `requested` while validation has not completed
 - validation errors when Actions rejected the request
@@ -159,5 +166,5 @@ comment. Report only the state Actions recorded:
 - the assigned operator only when Actions recorded that assignee
 
 Never claim acceptance, readiness, or assignment from the initial labels, local
-validation, PR checks, elapsed time, or inference. The request Issue is the end
-of this Skill's authority.
+validation, elapsed time, or inference. The request Issue is the end of this
+Skill's authority.
