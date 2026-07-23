@@ -88,6 +88,14 @@ class ReviewResult:
 
 
 @dataclass(frozen=True)
+class CommitResult:
+    """Immutable commit-and-script evidence result."""
+
+    available: bool
+    reason: str
+
+
+@dataclass(frozen=True)
 class GitHubIssue:
     """Validated Issue state used by the queue automation."""
 
@@ -464,6 +472,40 @@ class GitHubClient:
         ):
             raise GitHubDataError("GitHub API returned malformed contents response")
         return True
+
+    def executable_commit(self, sha: str, *, script_path: str) -> CommitResult:
+        """
+        Prove that an exact pushed commit and script exist.
+
+        :param sha: The requested full commit SHA.
+        :param script_path: The protected script selected by policy.
+
+        :returns: A deterministic, fail-closed evidence result.
+
+        :raises GitHubValidationError: If caller-controlled input is malformed.
+        :raises GitHubAPIError: If GitHub evidence cannot be retrieved.
+        """
+        _validate_sha(sha)
+        _validate_script_path(script_path)
+        response = self._request(
+            f"/repos/{self.repo}/commits/{sha}",
+            allow_not_found=True,
+        )
+        if response.status_code == 404:
+            return CommitResult(False, "commit does not exist at the requested SHA")
+        payload = self._decode_json(response)
+        if type(payload) is not dict:
+            return CommitResult(False, "malformed GitHub commit evidence")
+        commit_sha = cast(dict[object, object], payload).get("sha")
+        if type(commit_sha) is not str or commit_sha != sha:
+            return CommitResult(False, "malformed GitHub commit evidence")
+        try:
+            exists = self.file_exists(script_path, ref=sha)
+        except GitHubDataError:
+            return CommitResult(False, "malformed GitHub contents evidence")
+        if not exists:
+            return CommitResult(False, "script does not exist at the requested SHA")
+        return CommitResult(True, "commit and script exist")
 
     def reviewed_commit(
         self,
