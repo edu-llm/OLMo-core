@@ -127,6 +127,54 @@ _APPROVED_ENTRYPOINTS = {
             },
         },
     },
+    "worked-examples-cpt": {
+        "script": "src/scripts/hypothesis/worked_examples/train_cpt_arm.py",
+        "launcher": "torchrun",
+        "wandb_callback": True,
+        "model_identity": "olmo2-760m",
+        "allowed_data_kinds": ("worked-examples",),
+        "fixed_launcher_arguments": ("--standalone", "--nproc-per-node=2"),
+        "fixed_options": {
+            "pack-dir": "/orcd/pool/edullm/data/worked-examples-metamath-v0",
+            "load-path": "/orcd/pool/edullm/checkpoints/OLMo-Ladder-760M-0.5xC-core",
+            "token-budget": 200_000_000,
+            "seed": 0,
+            "save-folder": {
+                "type": "derived_path",
+                "root_env": "EDULLM_SCRATCH",
+                "relative": "runs/{run_name}",
+            },
+            "work-dir": {
+                "type": "derived_path",
+                "root_env": "EDULLM_SCRATCH",
+                "relative": "runs/{run_name}",
+            },
+            "wandb-project": "pretraining",
+            "wandb-group": {"type": "request_field", "field": "study"},
+            "trainer.callbacks.wandb.enabled": True,
+            "trainer.callbacks.wandb.entity": "eduLLM",
+            "trainer.callbacks.wandb.project": "pretraining",
+            "trainer.callbacks.wandb.group": {"type": "request_field", "field": "study"},
+            "trainer.callbacks.wandb.tags": (
+                "orcd",
+                "worked-examples-cpt",
+                "olmo2-760m",
+            ),
+        },
+        "positionals": 1,
+        "allowed_positionals": {0: {"type": "slug"}},
+        "allowed_options": {
+            "arm": {
+                "type": "choice",
+                "values": ("bare", "complete", "fade_ordered", "fade_shuffled"),
+                "required": True,
+                "request_field": "condition",
+            },
+        },
+        "gpu_count": 2,
+        "gpu_preference": "h100",
+        "max_runtime_minutes": 360,
+    },
 }
 
 

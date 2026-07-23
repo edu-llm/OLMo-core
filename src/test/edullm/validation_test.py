@@ -64,6 +64,27 @@ def _generic_request(valid_request):
     )
 
 
+def _worked_examples_request(valid_request, arm="bare"):
+    return replace(
+        valid_request,
+        purpose="Compare worked and faded scaffolds at a matched CPT token budget",
+        study="worked-examples-faded-scaffolds",
+        condition=arm,
+        comparison="bare-vs-complete-vs-fade-ordered-vs-fade-shuffled",
+        entrypoint_profile="worked-examples-cpt",
+        script_path="src/scripts/hypothesis/worked_examples/train_cpt_arm.py",
+        launcher="torchrun",
+        argv=(f"we-cpt-{arm.replace('_', '-')}", f"--arm={arm}"),
+        data_manifest="/orcd/pool/edullm/manifests/worked-examples-metamath-v0.json",
+        wandb_project="pretraining",
+        success_signal="Finite train/PPL and Pass@N metrics",
+        success_metrics=("eval/pass_at_n", "eval/pass_ratio_at_n"),
+        gpu_count=2,
+        gpu_preference="h100",
+        max_runtime_minutes=360,
+    )
+
+
 def _payload(comment):
     marker, encoded = comment.split("\n", 1)
     assert marker == STATUS_MARKER
@@ -271,6 +292,40 @@ def test_generic_profile_rejects_bare_positional_after_options_begin(valid_reque
     errors = validate_request(request, policy)
 
     assert "positional argument at index 2 is not allowed after options begin" in errors
+
+
+@pytest.mark.parametrize("arm", ["bare", "complete", "fade_ordered", "fade_shuffled"])
+def test_production_policy_accepts_locked_worked_examples_request(valid_request, arm):
+    policy = load_policy(Path("config/edullm/policy.yaml"))
+
+    errors = validate_request(_worked_examples_request(valid_request, arm), policy)
+
+    assert errors == []
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"argv": ("we-cpt-other", "--arm=other")}, "value for --arm is not allowed"),
+        (
+            {"argv": ("we-cpt-complete", "--arm=complete")},
+            "value for --arm must match request.condition",
+        ),
+        ({"seed": 1}, "seed is fixed by entrypoint policy"),
+        ({"gpu_count": 1}, "GPU count is fixed by entrypoint policy"),
+        ({"gpu_preference": "l40s"}, "GPU preference is fixed by entrypoint policy"),
+        ({"max_runtime_minutes": 30}, "runtime is fixed by entrypoint policy"),
+    ],
+)
+def test_worked_examples_profile_rejects_unapproved_arm_or_resources(
+    valid_request, changes, message
+):
+    policy = load_policy(Path("config/edullm/policy.yaml"))
+    request = replace(_worked_examples_request(valid_request), **changes)
+
+    errors = validate_request(request, policy)
+
+    assert message in errors
 
 
 def test_rejects_non_tuple_argv_without_iterating_a_shell_string(valid_request, policy):
