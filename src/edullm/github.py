@@ -1,5 +1,5 @@
 """
-Read-only GitHub REST access and reviewed-commit authorization.
+Constrained GitHub REST access and reviewed-commit authorization.
 """
 
 from __future__ import annotations
@@ -44,6 +44,8 @@ _CHECK_CONCLUSIONS = frozenset(
         "startup_failure",
     }
 )
+_MAX_COMMENT_CHARS = 65_536
+_MAX_LABEL_CHARS = 50
 
 
 class GitHubError(RuntimeError):
@@ -72,6 +74,26 @@ class ReviewResult:
 
 
 @dataclass(frozen=True)
+class GitHubIssue:
+    """Validated Issue state used by the queue automation."""
+
+    number: int
+    body: str
+    requester: str
+    labels: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class IssueComment:
+    """Validated Issue comment state used by the queue automation."""
+
+    id: int
+    body: str
+    author: str
+    author_is_bot: bool
+
+
+@dataclass(frozen=True)
 class _ReviewState:
     state: str
     commit_id: str
@@ -79,7 +101,7 @@ class _ReviewState:
 
 
 class GitHubClient:
-    """A small read-only client for the GitHub evidence used by the queue."""
+    """A small client for the GitHub evidence and Issue state used by the queue."""
 
     def __init__(
         self,
@@ -215,6 +237,148 @@ class GitHubClient:
                 return rows
 
         raise GitHubDataError("GitHub pagination limit exceeded")
+
+    def fetch_issue(self, issue_number: int) -> GitHubIssue:
+        """
+        Fetch and validate the current body, requester, and labels for an Issue.
+
+        :param issue_number: The positive Issue number.
+
+        :returns: Immutable validated Issue state.
+        """
+        _validate_positive_identifier(issue_number, "issue number")
+        payload = self.get(f"/repos/{self.repo}/issues/{issue_number}")
+        if type(payload) is not dict:
+            raise GitHubDataError("GitHub API returned malformed Issue response")
+        issue = cast(dict[object, object], payload)
+        number = issue.get("number")
+        body = issue.get("body")
+        user = issue.get("user")
+        labels = issue.get("labels")
+        if (
+            number != issue_number
+            or type(number) is not int
+            or (body is not None and type(body) is not str)
+            or type(user) is not dict
+            or type(labels) is not list
+        ):
+            raise GitHubDataError("GitHub API returned malformed Issue response")
+        requester = cast(dict[object, object], user).get("login")
+        if not _is_valid_actor_login(requester):
+            raise GitHubDataError("GitHub API returned malformed Issue response")
+
+        label_names: list[str] = []
+        for row in cast(list[object], labels):
+            if type(row) is not dict:
+                raise GitHubDataError("GitHub API returned malformed Issue response")
+            name = cast(dict[object, object], row).get("name")
+            if not _is_valid_label_name(name):
+                raise GitHubDataError("GitHub API returned malformed Issue response")
+            label_names.append(cast(str, name))
+        if len(set(label_names)) != len(label_names):
+            raise GitHubDataError("GitHub API returned malformed Issue response")
+        return GitHubIssue(
+            number=issue_number,
+            body="" if body is None else cast(str, body),
+            requester=cast(str, requester),
+            labels=tuple(label_names),
+        )
+
+    def list_issue_comments(self, issue_number: int) -> tuple[IssueComment, ...]:
+        """
+        Fetch every validated comment for an Issue.
+
+        :param issue_number: The positive Issue number.
+
+        :returns: Immutable comments in GitHub's server order.
+        """
+        _validate_positive_identifier(issue_number, "issue number")
+        rows = self.paginated_get(f"/repos/{self.repo}/issues/{issue_number}/comments")
+        comments = tuple(_issue_comment_from_payload(row) for row in rows)
+        ids = [comment.id for comment in comments]
+        if len(set(ids)) != len(ids):
+            raise GitHubDataError("GitHub API returned malformed Issue comment response")
+        return comments
+
+    def create_issue_comment(self, issue_number: int, body: str) -> IssueComment:
+        """
+        Create one Issue comment using a JSON request body.
+
+        :param issue_number: The positive Issue number.
+        :param body: The complete machine comment body.
+
+        :returns: The validated created comment.
+        """
+        _validate_positive_identifier(issue_number, "issue number")
+        _validate_comment_body(body)
+        response = self._write_request(
+            "post",
+            f"/repos/{self.repo}/issues/{issue_number}/comments",
+            json_body={"body": body},
+        )
+        comment = _issue_comment_from_payload(self._decode_json(response))
+        if comment.body != body:
+            raise GitHubDataError("GitHub API returned malformed Issue comment response")
+        return comment
+
+    def update_issue_comment(self, comment_id: int, body: str) -> IssueComment:
+        """
+        Replace one Issue comment using a JSON request body.
+
+        :param comment_id: The positive repository comment identifier.
+        :param body: The complete replacement body.
+
+        :returns: The validated updated comment.
+        """
+        _validate_positive_identifier(comment_id, "comment identifier")
+        _validate_comment_body(body)
+        response = self._write_request(
+            "patch",
+            f"/repos/{self.repo}/issues/comments/{comment_id}",
+            json_body={"body": body},
+        )
+        comment = _issue_comment_from_payload(self._decode_json(response))
+        if comment.id != comment_id or comment.body != body:
+            raise GitHubDataError("GitHub API returned malformed Issue comment response")
+        return comment
+
+    def replace_issue_labels(
+        self,
+        issue_number: int,
+        labels: tuple[str, ...] | list[str],
+    ) -> tuple[str, ...]:
+        """
+        Atomically replace Issue labels with an explicitly validated complete set.
+
+        The caller owns preservation of unrelated labels by including them in
+        ``labels``.
+
+        :param issue_number: The positive Issue number.
+        :param labels: The non-empty complete label sequence.
+
+        :returns: The deterministic requested label sequence.
+        """
+        _validate_positive_identifier(issue_number, "issue number")
+        normalized = _validate_labels(labels)
+        response = self._write_request(
+            "put",
+            f"/repos/{self.repo}/issues/{issue_number}/labels",
+            json_body={"labels": list(normalized)},
+        )
+        payload = self._decode_json(response)
+        if type(payload) is not list:
+            raise GitHubDataError("GitHub API returned malformed Issue labels response")
+        returned: list[str] = []
+        for row in cast(list[object], payload):
+            if type(row) is not dict:
+                raise GitHubDataError("GitHub API returned malformed Issue labels response")
+            name = cast(dict[object, object], row).get("name")
+            if not _is_valid_label_name(name):
+                raise GitHubDataError("GitHub API returned malformed Issue labels response")
+            returned.append(cast(str, name))
+        if len(set(returned)) != len(returned) or set(returned) != set(normalized):
+            raise GitHubDataError("GitHub API returned malformed Issue labels response")
+        return normalized
 
     def file_exists(self, path: str, *, ref: str) -> bool:
         """
@@ -390,6 +554,34 @@ class GitHubClient:
             raise GitHubAPIError("GitHub API request failed") from None
         return response
 
+    def _write_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: Mapping[str, object],
+    ) -> Any:
+        _validate_api_path(path)
+        requester = getattr(self._session, method, None)
+        if not callable(requester):
+            raise GitHubDataError("GitHub session cannot perform write requests")
+        try:
+            response = requester(
+                f"{self.base_url}{path}",
+                json=dict(json_body),
+                timeout=self._timeout,
+            )
+        except requests.RequestException:
+            raise GitHubAPIError("GitHub API request failed") from None
+        status_code = getattr(response, "status_code", None)
+        if type(status_code) is not int:
+            raise GitHubDataError("GitHub API returned malformed HTTP response")
+        try:
+            response.raise_for_status()
+        except requests.RequestException:
+            raise GitHubAPIError("GitHub API request failed") from None
+        return response
+
     @staticmethod
     def _decode_json(response: Any) -> object:
         try:
@@ -506,6 +698,73 @@ def _validate_query_params(params: Mapping[str, object] | None) -> None:
             raise GitHubValidationError("GitHub API parameter value is invalid")
 
 
+def _validate_positive_identifier(value: object, name: str) -> None:
+    if type(value) is not int or value <= 0:
+        raise GitHubValidationError(f"{name} must be a positive integer")
+
+
+def _is_valid_label_name(value: object) -> bool:
+    return (
+        type(value) is str
+        and bool(value)
+        and value == value.strip()
+        and len(value) <= _MAX_LABEL_CHARS
+        and all(ord(character) >= 32 and ord(character) != 127 for character in value)
+    )
+
+
+def _validate_labels(value: object) -> tuple[str, ...]:
+    if type(value) not in {tuple, list} or not value:
+        raise GitHubValidationError("labels must be a non-empty sequence")
+    labels = cast(tuple[object, ...] | list[object], value)
+    if any(not _is_valid_label_name(label) for label in labels):
+        raise GitHubValidationError("labels contain an invalid name")
+    normalized = tuple(cast(str, label) for label in labels)
+    if len(set(normalized)) != len(normalized):
+        raise GitHubValidationError("labels contain duplicate names")
+    return normalized
+
+
+def _validate_comment_body(body: object) -> None:
+    if (
+        type(body) is not str
+        or not body
+        or len(body) > _MAX_COMMENT_CHARS
+        or any(
+            ord(character) < 32 and character not in {"\t", "\n", "\r"} or ord(character) == 127
+            for character in body
+        )
+    ):
+        raise GitHubValidationError("comment body is invalid")
+
+
+def _issue_comment_from_payload(payload: object) -> IssueComment:
+    if type(payload) is not dict:
+        raise GitHubDataError("GitHub API returned malformed Issue comment response")
+    row = cast(dict[object, object], payload)
+    comment_id = row.get("id")
+    body = row.get("body")
+    user = row.get("user")
+    if (
+        type(comment_id) is not int
+        or comment_id <= 0
+        or type(body) is not str
+        or len(body) > _MAX_COMMENT_CHARS
+        or type(user) is not dict
+    ):
+        raise GitHubDataError("GitHub API returned malformed Issue comment response")
+    author = cast(dict[object, object], user).get("login")
+    author_type = cast(dict[object, object], user).get("type")
+    if not _is_valid_actor_login(author) or author_type not in {"User", "Bot"}:
+        raise GitHubDataError("GitHub API returned malformed Issue comment response")
+    return IssueComment(
+        id=comment_id,
+        body=body,
+        author=cast(str, author),
+        author_is_bot=author_type == "Bot",
+    )
+
+
 def _validate_sha(sha: object) -> None:
     if type(sha) is not str or _SHA_PATTERN.fullmatch(sha) is None:
         raise GitHubValidationError("SHA must be a lowercase 40-character hexadecimal value")
@@ -529,13 +788,31 @@ def _normalize_reviewers(reviewers: object) -> frozenset[str]:
         raise GitHubValidationError("allowed_reviewers must be an explicit non-empty set")
     normalized: set[str] = set()
     for reviewer in cast(set[object] | frozenset[object], reviewers):
-        if not _is_valid_actor_login(reviewer):
-            raise GitHubValidationError("allowed_reviewers contains an invalid GitHub login")
-        login = cast(str, reviewer).casefold()
+        try:
+            login = normalize_actor_login(reviewer)
+        except GitHubValidationError:
+            raise GitHubValidationError(
+                "allowed_reviewers contains an invalid GitHub login"
+            ) from None
         if login in normalized:
             raise GitHubValidationError("allowed_reviewers contains duplicate GitHub logins")
         normalized.add(login)
     return frozenset(normalized)
+
+
+def normalize_actor_login(value: object) -> str:
+    """
+    Validate and case-normalize a GitHub user or ``[bot]`` actor login.
+
+    :param value: The candidate GitHub actor login.
+
+    :returns: Its case-folded canonical form.
+
+    :raises GitHubValidationError: If the actor login is malformed.
+    """
+    if not _is_valid_actor_login(value):
+        raise GitHubValidationError("GitHub actor login is invalid")
+    return cast(str, value).casefold()
 
 
 def _is_valid_actor_login(value: object) -> bool:

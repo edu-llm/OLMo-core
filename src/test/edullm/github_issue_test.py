@@ -1,0 +1,347 @@
+from collections.abc import Mapping
+from dataclasses import FrozenInstanceError
+
+import pytest
+import requests
+
+from edullm.github import (
+    GitHubAPIError,
+    GitHubClient,
+    GitHubDataError,
+    GitHubIssue,
+    GitHubValidationError,
+    IssueComment,
+)
+
+REPO = "edu-llm/OLMo-core"
+BASE_URL = "https://api.github.test"
+
+
+class FakeResponse:
+    def __init__(
+        self,
+        payload,
+        *,
+        status_code=200,
+        error_message=None,
+        json_error=None,
+    ):
+        self.payload = payload
+        self.status_code = status_code
+        self.error_message = error_message
+        self.json_error = json_error
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.HTTPError(self.error_message or f"HTTP {self.status_code}")
+
+    def json(self):
+        if self.json_error is not None:
+            raise self.json_error
+        return self.payload
+
+
+class FakeSession:
+    def __init__(self):
+        self.headers = {}
+        self.calls = []
+        self.responses = {}
+        self.failure = None
+
+    def add(self, method, path, payload, *, params=None, **response_kwargs):
+        key = (method, f"{BASE_URL}{path}", _params_key(params))
+        self.responses.setdefault(key, []).append(FakeResponse(payload, **response_kwargs))
+
+    def get(self, url, *, params=None, timeout=None):
+        return self._call("GET", url, params=params, json=None, timeout=timeout)
+
+    def post(self, url, *, params=None, json=None, timeout=None):
+        return self._call("POST", url, params=params, json=json, timeout=timeout)
+
+    def patch(self, url, *, params=None, json=None, timeout=None):
+        return self._call("PATCH", url, params=params, json=json, timeout=timeout)
+
+    def put(self, url, *, params=None, json=None, timeout=None):
+        return self._call("PUT", url, params=params, json=json, timeout=timeout)
+
+    def _call(self, method, url, *, params, json, timeout):
+        copied_params = dict(params) if params is not None else None
+        self.calls.append((method, url, copied_params, json, timeout))
+        if self.failure is not None:
+            raise self.failure
+        key = (method, url, _params_key(params))
+        responses = self.responses.get(key)
+        if not responses:
+            raise AssertionError(f"unexpected request: {key!r}")
+        return responses.pop(0)
+
+
+def _params_key(
+    params: Mapping[str, object] | None,
+) -> tuple[tuple[str, object], ...]:
+    return tuple(sorted((params or {}).items()))
+
+
+def _issue_payload(*, body="body", labels=None, number=42, login="student"):
+    return {
+        "number": number,
+        "body": body,
+        "user": {"login": login},
+        "labels": [{"name": label} for label in (labels or ["edullm-job"])],
+    }
+
+
+def _comment_payload(
+    *,
+    comment_id=7,
+    body="comment",
+    login="github-actions[bot]",
+    user_type="Bot",
+):
+    return {
+        "id": comment_id,
+        "body": body,
+        "user": {"login": login, "type": user_type},
+    }
+
+
+def _client(session):
+    return GitHubClient("token", REPO, base_url=BASE_URL, session=session)
+
+
+def test_fetch_issue_returns_validated_immutable_record():
+    session = FakeSession()
+    session.add(
+        "GET",
+        f"/repos/{REPO}/issues/42",
+        _issue_payload(labels=["status:ready", "edullm-job"]),
+    )
+
+    issue = _client(session).fetch_issue(42)
+
+    assert issue == GitHubIssue(
+        number=42,
+        body="body",
+        requester="student",
+        labels=("status:ready", "edullm-job"),
+    )
+    with pytest.raises(FrozenInstanceError):
+        issue.body = "edited"  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [],
+        _issue_payload(number=41),
+        {**_issue_payload(), "user": {}},
+        {**_issue_payload(), "labels": ["edullm-job"]},
+        {**_issue_payload(), "labels": [{"name": ""}]},
+        {
+            **_issue_payload(),
+            "labels": [{"name": "edullm-job"}, {"name": "edullm-job"}],
+        },
+    ],
+)
+def test_fetch_issue_rejects_malformed_response_shapes(payload):
+    session = FakeSession()
+    session.add("GET", f"/repos/{REPO}/issues/42", payload)
+
+    with pytest.raises(GitHubDataError, match="malformed Issue response"):
+        _client(session).fetch_issue(42)
+
+
+def test_fetch_issue_normalizes_nullable_github_body_to_empty_text():
+    session = FakeSession()
+    session.add(
+        "GET",
+        f"/repos/{REPO}/issues/42",
+        _issue_payload(body=None),
+    )
+
+    assert _client(session).fetch_issue(42).body == ""
+
+
+def test_list_issue_comments_uses_pagination_and_validates_bot_authorship():
+    session = FakeSession()
+    path = f"/repos/{REPO}/issues/42/comments"
+    session.add(
+        "GET",
+        path,
+        [_comment_payload()],
+        params={"page": 1, "per_page": 100},
+    )
+
+    comments = _client(session).list_issue_comments(42)
+
+    assert comments == (
+        IssueComment(
+            id=7,
+            body="comment",
+            author="github-actions[bot]",
+            author_is_bot=True,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [{"id": 7, "body": "comment", "user": {"login": "student"}}],
+        [_comment_payload(comment_id=0)],
+        [_comment_payload(body=None)],
+        [_comment_payload(user_type="Organization")],
+        [
+            _comment_payload(comment_id=7),
+            _comment_payload(comment_id=7),
+        ],
+    ],
+)
+def test_list_issue_comments_rejects_malformed_rows(payload):
+    session = FakeSession()
+    path = f"/repos/{REPO}/issues/42/comments"
+    session.add(
+        "GET",
+        path,
+        payload,
+        params={"page": 1, "per_page": 100},
+    )
+
+    with pytest.raises(GitHubDataError, match="malformed Issue comment response"):
+        _client(session).list_issue_comments(42)
+
+
+def test_create_issue_comment_json_encodes_body_and_validates_response():
+    session = FakeSession()
+    path = f"/repos/{REPO}/issues/42/comments"
+    body = "<!-- edullm-validation:v1 -->\nRequest needs changes."
+    session.add("POST", path, _comment_payload(body=body))
+
+    comment = _client(session).create_issue_comment(42, body)
+
+    assert comment.body == body
+    assert session.calls == [
+        (
+            "POST",
+            f"{BASE_URL}{path}",
+            None,
+            {"body": body},
+            (5, 20),
+        )
+    ]
+
+
+def test_update_issue_comment_json_encodes_body_and_requires_matching_id_and_body():
+    session = FakeSession()
+    path = f"/repos/{REPO}/issues/comments/7"
+    body = "<!-- edullm-status:v1 -->\n{}"
+    session.add("PATCH", path, _comment_payload(body=body))
+
+    comment = _client(session).update_issue_comment(7, body)
+
+    assert comment.id == 7
+    assert session.calls[0][3] == {"body": body}
+
+
+@pytest.mark.parametrize(
+    "method,payload",
+    [
+        ("create", _comment_payload(body="different")),
+        ("update", _comment_payload(comment_id=8, body="expected")),
+    ],
+)
+def test_comment_writes_reject_mismatched_success_payloads(method, payload):
+    session = FakeSession()
+    if method == "create":
+        path = f"/repos/{REPO}/issues/42/comments"
+        session.add("POST", path, payload)
+    else:
+        path = f"/repos/{REPO}/issues/comments/7"
+        session.add("PATCH", path, payload)
+
+    with pytest.raises(GitHubDataError, match="malformed Issue comment response"):
+        if method == "create":
+            _client(session).create_issue_comment(42, "expected")
+        else:
+            _client(session).update_issue_comment(7, "expected")
+
+
+def test_replace_issue_labels_uses_json_and_returns_exact_validated_labels():
+    session = FakeSession()
+    path = f"/repos/{REPO}/issues/42/labels"
+    labels = ("edullm-job", "research", "status:requested")
+    session.add(
+        "PUT",
+        path,
+        [{"name": label} for label in labels],
+    )
+
+    result = _client(session).replace_issue_labels(42, labels)
+
+    assert result == labels
+    assert session.calls == [
+        (
+            "PUT",
+            f"{BASE_URL}{path}",
+            None,
+            {"labels": list(labels)},
+            (5, 20),
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "issue_number",
+    [0, -1, True, "42", "1/comments"],
+)
+def test_issue_operations_reject_unsafe_issue_identifiers(issue_number):
+    client = _client(FakeSession())
+
+    with pytest.raises(GitHubValidationError, match="positive integer"):
+        client.fetch_issue(issue_number)
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [
+        (),
+        ("",),
+        (" status:ready",),
+        ("status:ready\nother",),
+        ("status:ready", "status:ready"),
+        ("a" * 51,),
+        ("status:ready", 7),
+    ],
+)
+def test_replace_issue_labels_rejects_empty_malformed_or_duplicate_labels(labels):
+    client = _client(FakeSession())
+
+    with pytest.raises(GitHubValidationError, match="labels"):
+        client.replace_issue_labels(42, labels)
+
+
+@pytest.mark.parametrize("body", ["", "x" * 65_537, "bad\x00body", 7])
+def test_comment_writes_reject_invalid_bodies(body):
+    client = _client(FakeSession())
+
+    with pytest.raises(GitHubValidationError, match="comment body"):
+        client.create_issue_comment(42, body)
+
+
+@pytest.mark.parametrize("method", ["POST", "PATCH", "PUT"])
+def test_write_failures_are_sanitized(method):
+    token = "top-secret-token"
+    session = FakeSession()
+    session.failure = requests.ConnectionError(f"failure contains {token}")
+    client = GitHubClient(token, REPO, base_url=BASE_URL, session=session)
+
+    with pytest.raises(GitHubAPIError) as raised:
+        if method == "POST":
+            client.create_issue_comment(42, "body")
+        elif method == "PATCH":
+            client.update_issue_comment(7, "body")
+        else:
+            client.replace_issue_labels(42, ("status:requested",))
+
+    assert str(raised.value) == "GitHub API request failed"
+    assert token not in repr(raised.value)
