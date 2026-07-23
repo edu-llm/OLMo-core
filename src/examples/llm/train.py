@@ -4,6 +4,11 @@ Example of how to train a transformer language model.
 Launch this with torchrun:
 
     torchrun --nproc-per-node=4 src/examples/llm/train.py run_name [OVERRIDES...]
+
+This module is also the fixed ``generic-smoke`` entrypoint referenced by
+``config/edullm/entrypoints.yaml``. For eduLLM runs the queue enables the W&B
+callback and the 20-step hard stop through fixed option overrides, so the
+in-file ``enabled=False`` callback defaults below do not apply to those runs.
 """
 
 import argparse
