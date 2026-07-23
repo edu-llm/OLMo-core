@@ -38,6 +38,7 @@ torchrun --standalone --nproc-per-node=1 \
   --trainer.callbacks.lm_evaluator.enabled=false \
   --trainer.callbacks.downstream_evaluator.enabled=false \
   --trainer.callbacks.checkpointer.save_interval=10 \
+  --trainer.callbacks.checkpointer.ephemeral_save_interval=null \
   --trainer.callbacks.wandb.enabled=true \
   --trainer.callbacks.wandb.entity="$WANDB_ENTITY" \
   --trainer.callbacks.wandb.project="$WANDB_PROJECT" \

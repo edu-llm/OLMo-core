@@ -27,6 +27,7 @@ EDULLM_DATA_MODE="${EDULLM_DATA_MODE:-synthetic}"
 if [[ "$EDULLM_DATA_MODE" == "synthetic" ]]; then
   python "$EDULLM_REPO_ROOT/src/scripts/orcd/create_tiny_data.py" \
     --output "$EDULLM_SCRATCH/data/generic-smoke"
+  export OLMO_DATA_ROOT="$EDULLM_SCRATCH/data/generic-smoke"
 elif [[ "$EDULLM_DATA_MODE" == "staged" ]]; then
   : "${OLMO_DATA_ROOT:?staged mode requires OLMO_DATA_ROOT}"
   test -s "$OLMO_DATA_ROOT/c4-train.00000-00099.npy"

@@ -1,3 +1,7 @@
+import os
+import re
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -38,6 +42,31 @@ def test_generic_smoke_uses_canonical_training_command():
     assert '--work-dir="$EDULLM_SCRATCH/cache/$RUN_NAME"' in text
     for argument in expected_arguments:
         assert argument in text
+
+
+def test_generic_smoke_checkpoint_overrides_build_valid_config(tmp_path):
+    text = (SCRIPT_ROOT / "run_generic_smoke.sh").read_text(encoding="utf-8")
+    checkpoint_overrides = re.findall(
+        r"^\s+--(trainer\.callbacks\.checkpointer\.[^=\s]+=[^\s\\]+)",
+        text,
+        flags=re.MULTILINE,
+    )
+    command = [
+        sys.executable,
+        "src/examples/llm/train.py",
+        "orcd-config-test",
+        "--model-factory=olmo2_190M",
+        "--sequence-length=512",
+        f"--save-folder={tmp_path / 'runs'}",
+        f"--work-dir={tmp_path / 'cache'}",
+        "--dry-run",
+        *(f"--{override}" for override in checkpoint_overrides),
+    ]
+    env = {**os.environ, "OLMO_DATA_ROOT": str(tmp_path / "data")}
+
+    result = subprocess.run(command, env=env, capture_output=True, text=True, check=False)
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_generic_smoke_checks_source_and_preserves_offline_wandb_data():
@@ -87,6 +116,15 @@ def test_generic_job_supports_synthetic_and_staged_data():
     assert ': "${OLMO_DATA_ROOT:?staged mode requires OLMO_DATA_ROOT}"' in text
     assert 'source "$WANDB_ENV"' in text
     assert 'bash "$EDULLM_REPO_ROOT/src/scripts/orcd/run_generic_smoke.sh"' in text
+
+
+def test_generic_job_forces_scratch_data_root_in_synthetic_mode():
+    text = (SCRIPT_ROOT / "generic_smoke.sbatch").read_text(encoding="utf-8")
+    synthetic_branch = text.split('if [[ "$EDULLM_DATA_MODE" == "synthetic" ]]; then', maxsplit=1)[
+        1
+    ].split('elif [[ "$EDULLM_DATA_MODE" == "staged" ]]', maxsplit=1)[0]
+
+    assert 'export OLMO_DATA_ROOT="$EDULLM_SCRATCH/data/generic-smoke"' in synthetic_branch
 
 
 def test_wandb_environment_example_reads_private_key_and_contains_no_secret():
