@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import html
 import re
-from collections.abc import Iterable, Set
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -33,14 +33,10 @@ from edullm.validation import (
 VALIDATION_MARKER = "<!-- edullm-validation:v1 -->"
 
 _TEAM_LEADS_FIELD = "team_leads"
-_SAFE_REVIEW_REASONS = frozenset(
+_SAFE_COMMIT_REASONS = frozenset(
     {
-        "malformed GitHub pull evidence",
-        "no qualifying pull request has the requested SHA as its head",
-        "malformed GitHub review evidence",
-        "an authorized reviewer currently requests changes",
-        "no authorized reviewer approved the requested SHA",
-        "malformed GitHub check evidence",
+        "commit does not exist at the requested SHA",
+        "malformed GitHub commit evidence",
         "malformed GitHub contents evidence",
         "script does not exist at the requested SHA",
     }
@@ -53,7 +49,7 @@ class AutomationStateError(RuntimeError):
 
 @dataclass(frozen=True)
 class ValidationDecision:
-    """Immutable result of local policy and reviewed-commit validation."""
+    """Immutable result of local policy and executable-commit validation."""
 
     status: str
     errors: tuple[str, ...]
@@ -72,9 +68,8 @@ def load_team_leads(path: Path) -> frozenset[str]:
     """
     Load the protected, explicit team-lead login allowlist.
 
-    The exact schema is ``team_leads: [<login>, ...]``. An empty list is a
-    valid disabled configuration; validation will not become ready until at
-    least one protected login is present.
+    The exact schema is ``team_leads: [<login>, ...]``. An empty list remains
+    a valid disabled configuration for reviewer-gated submission paths.
 
     :param path: The tracked team-lead YAML path.
 
@@ -111,15 +106,13 @@ def validation_decision(
     *,
     policy: Policy,
     github: Any,
-    allowed_reviewers: Set[str],
 ) -> ValidationDecision:
     """
-    Validate local request safety before consulting reviewed-commit evidence.
+    Validate local request safety before consulting executable-commit evidence.
 
     :param request: The parsed immutable request.
     :param policy: The trusted queue policy.
     :param github: A :class:`~edullm.github.GitHubClient`-compatible client.
-    :param allowed_reviewers: Protected explicit team-lead logins.
 
     :returns: A deterministic immutable ready/requested decision.
     """
@@ -127,28 +120,13 @@ def validation_decision(
     if local_errors:
         return ValidationDecision("requested", tuple(local_errors))
 
-    try:
-        reviewers = frozenset(normalize_actor_login(value) for value in allowed_reviewers)
-    except (GitHubValidationError, TypeError):
-        return ValidationDecision(
-            "requested",
-            ("protected team lead configuration is invalid",),
-        )
-    if not reviewers:
-        return ValidationDecision(
-            "requested",
-            ("validation is disabled until protected team leads are configured",),
-        )
-
-    review = github.reviewed_commit(
+    evidence = github.executable_commit(
         request.commit_sha,
         script_path=request.script_path,
-        allowed_reviewers=set(reviewers),
-        required_checks=set(policy.required_checks),
     )
-    if review.approved:
+    if evidence.available:
         return ValidationDecision("ready", ())
-    return ValidationDecision("requested", (_sanitized_review_reason(review.reason),))
+    return ValidationDecision("requested", (_sanitized_commit_reason(evidence.reason),))
 
 
 def validate_issue(
@@ -156,13 +134,12 @@ def validate_issue(
     *,
     github: Any,
     policy: Policy,
-    allowed_reviewers: Set[str],
     validated_at: datetime,
 ) -> AutomationResult:
     """
     Validate one current Issue and persist its fail-closed machine state.
 
-    ``status:ready`` is invalidated before parsing or remote review. A canonical
+    ``status:ready`` is invalidated before parsing or remote evidence. A canonical
     status comment is persisted only after the current Issue is re-fetched and
     re-parsed to the same digest, and the ready label is written only after that
     comment succeeds. GitHub has no transaction or compare-and-swap spanning
@@ -173,7 +150,6 @@ def validate_issue(
     :param issue_number: The trusted positive Issue number.
     :param github: A :class:`~edullm.github.GitHubClient`-compatible client.
     :param policy: The trusted queue policy.
-    :param allowed_reviewers: Protected explicit team-lead logins.
     :param validated_at: The canonical validation timestamp.
 
     :returns: The immutable validation attempt result.
@@ -196,7 +172,6 @@ def validate_issue(
             request,
             policy=policy,
             github=github,
-            allowed_reviewers=allowed_reviewers,
         )
         if decision.errors:
             _persist_requested_errors(github, issue_number, decision.errors)
@@ -265,14 +240,12 @@ def validate_issue(
         )
 
 
-def _sanitized_review_reason(reason: object) -> str:
+def _sanitized_commit_reason(reason: object) -> str:
     if type(reason) is not str:
-        return "commit review evidence was not accepted"
-    if reason in _SAFE_REVIEW_REASONS or reason.startswith(
-        "required checks are not uniquely successful: "
-    ):
+        return "commit evidence was not accepted"
+    if reason in _SAFE_COMMIT_REASONS:
         return reason
-    return "commit review evidence was not accepted"
+    return "commit evidence was not accepted"
 
 
 def _set_requested(github: Any, issue_number: int) -> Any:

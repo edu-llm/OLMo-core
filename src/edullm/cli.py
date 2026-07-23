@@ -27,7 +27,7 @@ from edullm.assignment import (
     assign_ready_issues,
     process_assignment_timeouts,
 )
-from edullm.automation import AutomationResult, load_team_leads, validate_issue
+from edullm.automation import AutomationResult, validate_issue
 from edullm.github import GitHubClient, GitHubError
 from edullm.jobs import (
     GateConfiguration,
@@ -1031,14 +1031,12 @@ def automation_validate(
         config / "policy.yaml",
         config / "entrypoints.yaml",
     )
-    reviewers = load_team_leads(config / "team-leads.yaml")
     github = GitHubClient(token, repository)
     validated_at = datetime.now(timezone.utc).replace(microsecond=0)
     return validate_issue(
         issue_number,
         github=github,
         policy=policy,
-        allowed_reviewers=reviewers,
         validated_at=validated_at,
     )
 

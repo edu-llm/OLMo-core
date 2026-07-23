@@ -152,17 +152,12 @@ def test_invalid_request_is_a_handled_requested_result(capsys):
 def test_default_runner_loads_only_tracked_configuration(tmp_path, monkeypatch):
     loaded = []
     fake_policy = object()
-    fake_reviewers = frozenset({"lead"})
     fake_client = object()
     expected_result = AutomationResult("ready", (), False)
 
     def fake_load_policy(policy_path, entrypoints_path=None):
         loaded.append((policy_path, entrypoints_path))
         return fake_policy
-
-    def fake_load_team_leads(path):
-        loaded.append(path)
-        return fake_reviewers
 
     def fake_client_factory(token, repository):
         assert token == "token"
@@ -174,18 +169,15 @@ def test_default_runner_loads_only_tracked_configuration(tmp_path, monkeypatch):
         *,
         github,
         policy,
-        allowed_reviewers,
         validated_at,
     ):
         assert issue_number == 42
         assert github is fake_client
         assert policy is fake_policy
-        assert allowed_reviewers is fake_reviewers
         assert validated_at.tzinfo is not None
         return expected_result
 
     monkeypatch.setattr(cli, "load_policy", fake_load_policy)
-    monkeypatch.setattr(cli, "load_team_leads", fake_load_team_leads)
     monkeypatch.setattr(cli, "GitHubClient", fake_client_factory)
     monkeypatch.setattr(cli, "validate_issue", fake_validate_issue)
 
@@ -202,7 +194,6 @@ def test_default_runner_loads_only_tracked_configuration(tmp_path, monkeypatch):
             tmp_path / "config/edullm/policy.yaml",
             tmp_path / "config/edullm/entrypoints.yaml",
         ),
-        tmp_path / "config/edullm/team-leads.yaml",
     ]
 
 

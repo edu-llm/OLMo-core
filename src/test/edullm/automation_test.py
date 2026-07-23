@@ -14,11 +14,11 @@ from edullm.automation import (
     validation_decision,
 )
 from edullm.github import (
+    CommitResult,
     GitHubAPIError,
     GitHubDataError,
     GitHubIssue,
     IssueComment,
-    ReviewResult,
 )
 from edullm.validation import STATUS_MARKER, parse_status_comment
 
@@ -26,31 +26,24 @@ VALIDATED_AT = datetime(2026, 7, 23, 6, 0, 0, tzinfo=timezone.utc)
 BODY = Path("src/test/edullm/fixtures/valid_issue.md").read_text(encoding="utf-8")
 
 
-class RecordingReviewGitHub:
+class RecordingCommitGitHub:
     def __init__(self, result=None):
-        self.result = result or ReviewResult(True, 7, "approved")
+        self.result = result or CommitResult(True, "commit and script exist")
         self.calls = []
 
-    def reviewed_commit(
-        self,
-        sha,
-        *,
-        script_path,
-        allowed_reviewers,
-        required_checks,
-    ):
-        self.calls.append((sha, script_path, allowed_reviewers, required_checks))
+    def executable_commit(self, sha, *, script_path):
+        self.calls.append((sha, script_path))
         return self.result
 
 
-class AutomationGitHub(RecordingReviewGitHub):
+class AutomationGitHub(RecordingCommitGitHub):
     def __init__(
         self,
         issues,
         *,
         comments=(),
         result=None,
-        review_error=None,
+        evidence_error=None,
         create_error=None,
         update_error=None,
         labels_error=None,
@@ -59,7 +52,7 @@ class AutomationGitHub(RecordingReviewGitHub):
         super().__init__(result)
         self.issues = list(issues)
         self.comments = list(comments)
-        self.review_error = review_error
+        self.evidence_error = evidence_error
         self.create_error = create_error
         self.update_error = update_error
         self.labels_error = labels_error
@@ -100,11 +93,11 @@ class AutomationGitHub(RecordingReviewGitHub):
         ]
         return was_present
 
-    def reviewed_commit(self, *args, **kwargs):
-        self.events.append(("review", args[0]))
-        if self.review_error is not None:
-            raise self.review_error
-        return super().reviewed_commit(*args, **kwargs)
+    def executable_commit(self, *args, **kwargs):
+        self.events.append(("evidence", args[0]))
+        if self.evidence_error is not None:
+            raise self.evidence_error
+        return super().executable_commit(*args, **kwargs)
 
     def list_issue_comments(self, issue_number):
         self.events.append(("comments", issue_number))
@@ -167,7 +160,7 @@ def test_load_team_leads_normalizes_users_and_supported_bots(tmp_path):
     assert load_team_leads(path) == frozenset({"team-lead", "review-app[bot]"})
 
 
-def test_production_team_lead_allowlist_matches_reviewed_roster():
+def test_production_team_lead_allowlist_matches_configured_roster():
     assert load_team_leads(Path("config/edullm/team-leads.yaml")) == frozenset(
         {
             "ericrcwu001",
@@ -218,46 +211,59 @@ def test_load_team_leads_redacts_yaml_parser_details(tmp_path):
     assert secret not in str(raised.value)
 
 
-def test_valid_request_uses_task_3_review_contract(valid_request, policy, reviewed_github):
+def test_valid_request_uses_immutable_commit_and_script_evidence(valid_request, policy):
+    github = RecordingCommitGitHub()
+
     decision = validation_decision(
         valid_request,
         policy=policy,
-        github=reviewed_github,
-        allowed_reviewers={"operator"},
+        github=github,
     )
 
     assert decision == ValidationDecision(status="ready", errors=())
+    assert github.calls == [(valid_request.commit_sha, valid_request.script_path)]
 
 
-def test_validation_decision_passes_exact_script_reviewers_and_policy_checks(valid_request, policy):
-    github = RecordingReviewGitHub()
+def test_missing_script_evidence_stays_requested_with_safe_reason(valid_request, policy):
+    github = RecordingCommitGitHub(
+        CommitResult(False, "script does not exist at the requested SHA")
+    )
 
-    validation_decision(
+    decision = validation_decision(
         valid_request,
         policy=policy,
         github=github,
-        allowed_reviewers={"team-lead"},
     )
 
-    assert github.calls == [
-        (
-            valid_request.commit_sha,
-            valid_request.script_path,
-            {"team-lead"},
-            set(policy.required_checks),
-        )
-    ]
+    assert decision == ValidationDecision(
+        "requested",
+        ("script does not exist at the requested SHA",),
+    )
 
 
-def test_local_errors_short_circuit_github_review(valid_request, policy):
-    github = RecordingReviewGitHub()
+def test_private_commit_evidence_reason_is_sanitized(valid_request, policy):
+    github = RecordingCommitGitHub(CommitResult(False, f"private reason: {valid_request.purpose}"))
+
+    decision = validation_decision(
+        valid_request,
+        policy=policy,
+        github=github,
+    )
+
+    assert decision == ValidationDecision(
+        "requested",
+        ("commit evidence was not accepted",),
+    )
+
+
+def test_local_request_errors_short_circuit_commit_evidence(valid_request, policy):
+    github = RecordingCommitGitHub()
     request = replace(valid_request, commit_sha="main")
 
     decision = validation_decision(
         request,
         policy=policy,
         github=github,
-        allowed_reviewers={"team-lead"},
     )
 
     assert decision.status == "requested"
@@ -265,53 +271,18 @@ def test_local_errors_short_circuit_github_review(valid_request, policy):
     assert github.calls == []
 
 
-def test_restricted_request_is_rejected_before_github_review(valid_request, policy):
-    github = RecordingReviewGitHub()
+def test_restricted_request_is_rejected_before_commit_evidence(valid_request, policy):
+    github = RecordingCommitGitHub()
     request = replace(valid_request, data_classification="restricted")
 
     decision = validation_decision(
         request,
         policy=policy,
         github=github,
-        allowed_reviewers={"team-lead"},
     )
 
     assert decision.errors == ("restricted data is not accepted by the public pilot queue",)
     assert github.calls == []
-
-
-def test_empty_protected_reviewer_set_fails_closed_without_review_call(valid_request, policy):
-    github = RecordingReviewGitHub()
-
-    decision = validation_decision(
-        valid_request,
-        policy=policy,
-        github=github,
-        allowed_reviewers=frozenset(),
-    )
-
-    assert decision == ValidationDecision(
-        "requested",
-        ("validation is disabled until protected team leads are configured",),
-    )
-    assert github.calls == []
-
-
-def test_review_rejection_reason_is_returned_without_request_data(valid_request, policy):
-    github = RecordingReviewGitHub(
-        ReviewResult(False, None, "no authorized reviewer approved the requested SHA")
-    )
-
-    decision = validation_decision(
-        valid_request,
-        policy=policy,
-        github=github,
-        allowed_reviewers={"team-lead"},
-    )
-
-    assert decision.errors == ("no authorized reviewer approved the requested SHA",)
-    assert valid_request.purpose not in "\n".join(decision.errors)
-    assert not any(argument in "\n".join(decision.errors) for argument in valid_request.argv)
 
 
 def test_decision_and_automation_results_are_immutable():
@@ -342,7 +313,6 @@ def test_invalid_issue_is_requested_and_updates_one_sanitized_validation_comment
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -378,7 +348,6 @@ def test_ready_added_during_invalid_validation_comment_is_removed(policy):
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -399,7 +368,6 @@ def test_initial_invalidation_targets_only_managed_labels_and_verifies_postcondi
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -430,7 +398,6 @@ def test_valid_issue_persists_canonical_status_before_ready_and_preserves_labels
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -440,7 +407,7 @@ def test_valid_issue_persists_canonical_status_before_ready_and_preserves_labels
     status = parse_status_comment(creates[0][2])
     assert status.request.requester == "student"
     assert status.validated_at == VALIDATED_AT
-    assert github.events.index(("review", "a" * 40)) > github.events.index(
+    assert github.events.index(("evidence", "a" * 40)) > github.events.index(
         ("remove-label", 42, "status:ready")
     )
     assert github.events.index(creates[0]) < github.events.index(("add-label", 42, "status:ready"))
@@ -465,7 +432,6 @@ def test_issue_edit_or_requester_race_fails_closed(policy, second_issue):
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -498,7 +464,6 @@ def test_duplicate_status_comments_are_rejected_without_selecting_one(policy, va
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -522,7 +487,6 @@ def test_duplicate_status_markers_in_one_comment_are_rejected(policy):
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -543,7 +507,6 @@ def test_human_authored_machine_marker_is_rejected(policy):
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -597,7 +560,6 @@ def test_invalid_validation_marker_namespace_blocks_ready(policy, comments, expe
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -627,7 +589,6 @@ def test_validation_marker_inserted_after_status_persistence_blocks_ready(policy
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -658,7 +619,6 @@ def test_validation_marker_inserted_during_ready_write_blocks_ready(policy):
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -695,7 +655,6 @@ def test_validation_marker_inserted_after_ready_publication_blocks_ready(policy)
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -718,7 +677,6 @@ def test_single_bot_validation_comment_may_coexist_with_ready(policy):
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -743,7 +701,6 @@ def test_idempotent_retry_updates_existing_status_comment_without_duplication(
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -761,14 +718,12 @@ def test_repeated_unchanged_validation_converges_to_one_comment_and_ready(policy
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
     second = validate_issue(
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -802,7 +757,6 @@ def test_concurrent_unrelated_label_during_ready_is_preserved(policy):
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -832,7 +786,6 @@ def test_concurrent_duplicate_after_status_create_fails_closed(policy):
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -863,7 +816,6 @@ def test_concurrent_human_marker_after_status_create_fails_closed(policy):
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -885,7 +837,6 @@ def test_status_write_requires_relisted_persisted_comment_identity(policy):
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -916,7 +867,6 @@ def test_issue_identity_change_after_comment_before_ready_converges_requested(po
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -949,7 +899,6 @@ def test_concurrent_duplicate_during_ready_write_reconciles_requested(policy):
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -982,7 +931,6 @@ def test_issue_identity_change_during_ready_write_reconciles_requested(policy, f
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -1017,7 +965,6 @@ def test_issue_identity_change_after_ready_postcondition_reconciles_requested(po
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -1045,7 +992,6 @@ def test_duplicate_validation_comments_fail_closed_on_invalid_request(policy):
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -1056,7 +1002,7 @@ def test_duplicate_validation_comments_fail_closed_on_invalid_request(policy):
 
 @pytest.mark.parametrize(
     "failure_field",
-    ["review_error", "create_error", "update_error"],
+    ["evidence_error", "create_error", "update_error"],
 )
 def test_github_failures_never_transition_to_ready(policy, failure_field):
     kwargs = {failure_field: GitHubAPIError("GitHub API request failed")}
@@ -1076,7 +1022,6 @@ def test_github_failures_never_transition_to_ready(policy, failure_field):
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -1102,7 +1047,6 @@ def test_ready_label_failure_reports_operational_error_after_status_persistence(
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -1151,7 +1095,6 @@ def test_ready_add_committed_before_error_is_reconciled_requested(policy, error)
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -1185,7 +1128,6 @@ def test_requested_remove_committed_before_timeout_is_reconciled(policy):
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -1218,7 +1160,6 @@ def test_comment_committed_before_error_is_reconciled_requested(policy, error):
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -1248,7 +1189,6 @@ def test_failed_ready_postcondition_is_reconciled_requested(policy):
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -1284,7 +1224,6 @@ def test_unavailable_reconciliation_never_claims_ready_and_is_sanitized(policy):
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
@@ -1410,7 +1349,6 @@ def test_ready_commit_then_error_removes_ready_even_if_reconciliation_add_fails(
         42,
         github=github,
         policy=policy,
-        allowed_reviewers={"team-lead"},
         validated_at=VALIDATED_AT,
     )
 
