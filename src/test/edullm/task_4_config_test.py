@@ -9,6 +9,7 @@ from edullm.policy import load_operators, load_policy
 from edullm.request_parser import ISSUE_HEADINGS, fields_from_markdown, parse_issue
 from edullm.validation import validate_request
 
+PYPROJECT = Path("pyproject.toml")
 ISSUE_FORM = Path(".github/ISSUE_TEMPLATE/edullm-job-request.yml")
 ISSUE_CONFIG = Path(".github/ISSUE_TEMPLATE/config.yml")
 WORKFLOW = Path(".github/workflows/edullm-validate.yml")
@@ -27,6 +28,16 @@ def _load_yaml(path):
 def _workflow_trigger(document):
     # PyYAML's YAML 1.1 resolver treats the plain key "on" as boolean true.
     return document.get("on", document.get(True))
+
+
+def test_ci_linter_dependency_is_exactly_pinned():
+    pyproject = PYPROJECT.read_text(encoding="utf-8")
+    dev_dependencies = pyproject.partition("[project.optional-dependencies]\n")[2].partition(
+        "\nbeaker ="
+    )[0]
+
+    assert '"ruff==0.15.22",' in dev_dependencies
+    assert '\n    "ruff",' not in dev_dependencies
 
 
 def test_main_ci_has_one_required_edullm_core_check():
