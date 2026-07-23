@@ -4,6 +4,11 @@ Example of how to train a transformer language model.
 Launch this with torchrun:
 
     torchrun --nproc-per-node=4 src/examples/llm/train.py run_name [OVERRIDES...]
+
+This script is the ``generic-smoke`` eduLLM entrypoint. When submitted as a
+generic engineering smoke job (positional ``orcd-bootstrap``), it runs a short
+20-step OLMo2-190M bootstrap on a single GPU to verify the ORCD submission path
+end-to-end.
 """
 
 import argparse
