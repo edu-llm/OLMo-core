@@ -1,0 +1,5 @@
+operators:
+- github: philote-dev
+  slack_user_id: U0BA7EHAKJR
+  rotation_order: 0
+  enabled: true
