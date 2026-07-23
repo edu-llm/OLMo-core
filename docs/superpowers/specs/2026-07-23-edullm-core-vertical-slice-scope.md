@@ -1,15 +1,14 @@
 # eduLLM Core Vertical Slice Scope Amendment
 
 Date: 2026-07-23
-Status: Approved scope; written amendment awaiting user review
+Status: User-approved scope amendment (approved 2026-07-23)
 Amends: `docs/superpowers/specs/2026-07-22-orcd-job-pool-design.md`
 
 ## Purpose and Precedence
 
 This amendment defines the current acceptance boundary for the ORCD job-pool design. Where the
 original design describes a broader rollout or staged follow-on work, this amendment controls the
-remaining core implementation and acceptance scope. The implementation plan must not be updated
-until the user reviews this written amendment.
+remaining core implementation and acceptance scope.
 
 The product must complete one real request-to-running-job path. It is not an Issue-form-only
 workflow, local-automation endpoint, or other stopgap. Existing general code may remain, including

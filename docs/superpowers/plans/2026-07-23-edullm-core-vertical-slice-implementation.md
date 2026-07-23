@@ -75,6 +75,7 @@ Files created by this continuation:
 - `src/test/edullm/skill_test.py` — Skill metadata, safety text, adapter behavior, parser/schema reuse, and supported `gh issue create --body-file` contract.
 - `docs/source/guides/edullm_engaging.rst` — concise teammate, team-lead, and operator path plus status and failure guidance.
 - `docs/source/guides/edullm_activation.rst` — user/admin activation checklist, exact external stop points, credential boundary, labels, and live evidence checklist.
+- `docs/superpowers/reports/2026-07-23-edullm-core-acceptance.md` — tracked, redacted evidence for the comprehensive local gate, final review, and live generic-smoke acceptance.
 
 Existing files modified by this continuation:
 
@@ -94,6 +95,9 @@ Existing files modified by this continuation:
 - `config/edullm/team-leads.yaml` — activation-only one-element allowlist, populated solely from the user's supplied GitHub login.
 - `config/edullm/operators.yaml` — activation-only one enabled operator, populated solely from the user's supplied GitHub and Slack identities.
 - `.github/workflows/edullm-validate.yml` — activation-only removal of the two core literal disables: validation and reusable assignment handoff.
+
+Ignored local bookkeeping artifacts updated but never staged or committed:
+
 - `.superpowers/sdd/plan-2-task-7-report.md` — append the Task 7 independent review outcome and any task-scoped repair evidence.
 - `.superpowers/sdd/progress.md` — mark Task 7 complete and record the remaining-slice commits/reviews.
 
@@ -121,13 +125,13 @@ Files intentionally not created or activated:
 - Review: the exact existing range `b222f47862ea0549449f1f0e4b694f5437e81324..d8eec13`
 - Read: `docs/superpowers/specs/2026-07-23-edullm-core-vertical-slice-scope.md`
 - Read: `.superpowers/sdd/plan-2-task-7-report.md`
-- Modify: `.superpowers/sdd/plan-2-task-7-report.md`
-- Modify: `.superpowers/sdd/progress.md`
+- Modify locally, never stage: `.superpowers/sdd/plan-2-task-7-report.md`
+- Modify locally, never stage: `.superpowers/sdd/progress.md`
 - Conditional repair: only the source/test pair named by a Critical or Important finding inside the Task 7 changed-file set listed above
 
 **Interfaces:**
 - Consumes: Task 7 commits `c47b7de` and `d8eec13`, Task 6 head `b222f47`, the existing Task 7 brief/report, and the approved scope.
-- Produces: one independent review with separate `Spec: APPROVE` and `Quality: APPROVE` decisions, plus focused repair commits if required.
+- Produces: one independent task review with the standard `### Spec Compliance` verdict and `**Task quality:** [Approved | Needs fixes]` assessment, plus focused repair commits if required.
 - Preserves: `run_assigned(...) -> LifecycleState`, `jobs(...) -> tuple[LifecycleState, ...]`, `logs(...) -> str`, `stop(...) -> LifecycleState`, `render_sbatch(ResolvedRequest) -> str`, and `submission_transaction(...) -> SubmissionReceipt`.
 
 - [ ] **Step 1: Confirm the range and generate one review artifact**
@@ -135,36 +139,61 @@ Files intentionally not created or activated:
 Run:
 
 ```bash
-test "$(git rev-parse HEAD)" = 05ed8faeca230e9e92af501207aea5cb18e8665b
-test -z "$(git status --porcelain=v1)"
-git diff --find-renames --stat b222f47862ea0549449f1f0e4b694f5437e81324..d8eec13
-git diff --find-renames --check b222f47862ea0549449f1f0e4b694f5437e81324..d8eec13
-git diff --find-renames --binary \
-  b222f47862ea0549449f1f0e4b694f5437e81324..d8eec13 \
-  > /tmp/edullm-plan-2-task-7.patch
+set -euo pipefail
+STATUS="$(git status --porcelain=v1)" || exit 2
+test -z "$STATUS"
+git merge-base --is-ancestor d8eec13a90f336a08f9c5e7f8988be98417d04fb HEAD
+git merge-base --is-ancestor 05ed8faeca230e9e92af501207aea5cb18e8665b HEAD
+git rev-parse HEAD > /tmp/edullm-task-1-start-head
+TASK1_START_HEAD="$(cat /tmp/edullm-task-1-start-head)" || exit 2
+git diff --find-renames --stat b222f47862ea0549449f1f0e4b694f5437e81324..d8eec13a90f336a08f9c5e7f8988be98417d04fb
+git diff --find-renames --check b222f47862ea0549449f1f0e4b694f5437e81324..d8eec13a90f336a08f9c5e7f8988be98417d04fb
+TASK7_REVIEW_PACKAGE=/tmp/edullm-plan-2-task-7-review.txt
+{
+  printf '%s\n' '# Commit list'
+  git log --oneline b222f47862ea0549449f1f0e4b694f5437e81324..d8eec13a90f336a08f9c5e7f8988be98417d04fb
+  printf '%s\n' '# Stat'
+  git diff --find-renames --stat b222f47862ea0549449f1f0e4b694f5437e81324..d8eec13a90f336a08f9c5e7f8988be98417d04fb
+  printf '%s\n' '# Full diff'
+  git diff --find-renames -U10 b222f47862ea0549449f1f0e4b694f5437e81324..d8eec13a90f336a08f9c5e7f8988be98417d04fb
+} > "$TASK7_REVIEW_PACKAGE"
 ```
 
-Expected: clean status; `24 files changed, 5650 insertions(+), 60 deletions(-)`; no whitespace errors; the patch contains only the Task 7 range.
+Expected: clean status; both ancestry checks exit 0; `TASK1_START_HEAD` records the plan/correction head before any Task 1 repair; the stat is `24 files changed, 5650 insertions(+), 60 deletions(-)`; no whitespace errors; the review package contains the Task 7 commit list, stat, and full diff only.
 
 - [ ] **Step 2: Run one task-scoped independent review**
 
-Give one fresh reviewer `/tmp/edullm-plan-2-task-7.patch`, the Task 7 report, and the approved scope with this exact brief:
+Use the subagent-driven-development task-reviewer template once, with the generated Task 1 brief, `.superpowers/sdd/plan-2-task-7-report.md` as the implementer report, base `b222f47862ea0549449f1f0e4b694f5437e81324`, head `d8eec13a90f336a08f9c5e7f8988be98417d04fb`, and `/tmp/edullm-plan-2-task-7-review.txt` as the diff file. The review prompt must retain the template's read-only rule, “Do Not Trust the Report” section, focused-test policy, calibration, and output format.
+
+Use this exact task-specific context in the template:
 
 ```text
-Review only Plan 2 Task 7 from b222f47 through d8eec13. This is existing
-implementation, not a request to redesign or rerun the full repository.
-First decide spec compliance under the 2026-07-23 core vertical-slice scope;
-then decide code/security quality. Prioritize no credential leakage, exact
-approved SHA at both gates, shell-safe submission, and at-most-one sbatch.
-Classify findings Critical, Important, or Minor. Return exactly:
-Spec: APPROVE|REJECT
-Quality: APPROVE|REJECT
-Findings: [severity, file:line, concrete defect, smallest repair]
-Do not require scheduled W&B monitoring, Plan 3, S3, Apptainer, multiple
-operators, advanced Slack, strict ruleset automation, or broad rollout polish.
+This is the single task-scoped review for the existing Plan 2 Task 7 range,
+not the final integrated review. Review spec compliance first and task quality
+second. The binding guarantees are no credential leakage, exact approved SHA
+at both submission gates, shell-safe submission, and at-most-one sbatch. The
+approved scope defines scheduled W&B monitoring, Plan 3, S3, Apptainer,
+multiple operators, advanced Slack behavior, strict ruleset automation, and
+broad rollout polish as deferred non-requirements for this task.
 ```
 
-Expected: one review result, not multiple blanket reviews. Task 7 closes only when both decisions are `APPROVE`.
+Require these standard report sections exactly:
+
+```text
+### Spec Compliance
+- ✅ Spec compliant | ❌ Issues found
+- ⚠️ Cannot verify from diff
+### Strengths
+### Issues
+#### Critical (Must Fix)
+#### Important (Should Fix)
+#### Minor (Nice to Have)
+### Assessment
+**Task quality:** Approved | Needs fixes
+**Reasoning:**
+```
+
+Expected: one task-scoped review result, not multiple blanket reviews. Task 7 closes only when the spec-compliance verdict is `✅ Spec compliant` and task quality is `Approved`, with every `⚠️ Cannot verify from diff` item resolved by the controller.
 
 - [ ] **Step 3: Repair only Critical or Important findings test-first**
 
@@ -192,59 +221,64 @@ Minor findings are recorded under `## Deferred Minor Triage` in the Task 7 repor
 Run only the source/test pair selected in Step 3, followed by:
 
 ```bash
+TASK1_START_HEAD="$(cat /tmp/edullm-task-1-start-head)" || exit 2
 pytest -v "${REPAIR_TEST_FILE}::${REPAIR_TEST_NAME}"
-CHANGED_PYTHON="$(git diff --name-only d8eec13..HEAD -- '*.py')"
+CHANGED_PYTHON="$(git diff --name-only "$TASK1_START_HEAD" -- '*.py')"
 test -n "$CHANGED_PYTHON"
 python -m ruff check $CHANGED_PYTHON
 python -m black --check $CHANGED_PYTHON
 python -m isort --check-only $CHANGED_PYTHON
-CHANGED_PRODUCTION="$(git diff --name-only d8eec13..HEAD -- 'src/edullm/*.py')"
+CHANGED_PRODUCTION="$(git diff --name-only "$TASK1_START_HEAD" -- 'src/edullm/*.py')"
 if test -n "$CHANGED_PRODUCTION"; then
   python -m mypy $CHANGED_PRODUCTION
 fi
 git diff --check
 ```
 
-Expected: the named regression passes; each changed-file command receives only Task 7 repair paths from `d8eec13..HEAD` and exits 0.
+Expected: the named regression passes; each changed-file command receives only Task 1 repair paths after `TASK1_START_HEAD` and exits 0.
 
-- [ ] **Step 5: Re-present only the repair to the same review gate**
+- [ ] **Step 5: Commit and re-review only a required repair**
 
-Run:
+When a repair exists, commit only the focused source/test change:
 
 ```bash
-git diff --find-renames d8eec13..HEAD > /tmp/edullm-plan-2-task-7-repair.patch
-git diff --check d8eec13..HEAD
+TASK1_START_HEAD="$(cat /tmp/edullm-task-1-start-head)" || exit 2
+git add -u src/edullm src/test/edullm .github/workflows config/edullm
+git commit -m "fix: close eduLLM Task 7 review findings"
+git diff --check "$TASK1_START_HEAD"..HEAD
+TASK7_REPAIR_PACKAGE=/tmp/edullm-plan-2-task-7-repair-review.txt
+{
+  printf '%s\n' '# Commit list'
+  git log --oneline "$TASK1_START_HEAD"..HEAD
+  printf '%s\n' '# Stat'
+  git diff --find-renames --stat "$TASK1_START_HEAD"..HEAD
+  printf '%s\n' '# Full diff'
+  git diff --find-renames -U10 "$TASK1_START_HEAD"..HEAD
+} > "$TASK7_REPAIR_PACKAGE"
 ```
 
-Expected: either an empty repair patch when the first review approved, or only the focused test/source repair. The independent reviewer returns `Spec: APPROVE` and `Quality: APPROVE`.
+Pass `/tmp/edullm-plan-2-task-7-repair-review.txt` to the same independent task-review gate. Expected: one focused repair commit and a package containing only its commit list, stat, and diff. The re-review returns `✅ Spec compliant` and `**Task quality:** Approved`. If the first review approved with no Critical/Important findings, skip this step and create no commit.
 
 - [ ] **Step 6: Record closure in the durable ledger**
 
-Append the exact review decisions, reviewer findings, focused commands/results, and repair commit (or `none`) to `.superpowers/sdd/plan-2-task-7-report.md`. Replace the current Task 7 ledger line with:
+Append the exact review decisions, reviewer findings, focused commands/results, and repair commit (or `none`) to the ignored local `.superpowers/sdd/plan-2-task-7-report.md`. Replace the current Task 7 line in ignored local `.superpowers/sdd/progress.md` with:
 
 ```text
 Plan 2 Task 7: complete (commits b222f47..d8eec13 plus focused review repairs if any; one task-scoped independent review approved spec and quality).
 ```
 
-Expected: Plan 1 and Plan 2 Tasks 1–6 remain unchanged and no completed task is redispatched.
+Expected: both ignored scratch artifacts are updated in the same bookkeeping step, remain unstaged, and preserve Plan 1 and Plan 2 Tasks 1–6 unchanged. No completed task is redispatched.
 
-- [ ] **Step 7: Commit the closure**
-
-If repairs were required:
+- [ ] **Step 7: Confirm ignored bookkeeping remains local**
 
 ```bash
-git add -u src/edullm src/test/edullm .github/workflows config/edullm
-git commit -m "fix: close eduLLM Task 7 review findings"
+TASK1_START_HEAD="$(cat /tmp/edullm-task-1-start-head)" || exit 2
+git check-ignore -q .superpowers/sdd/progress.md
+git check-ignore -q .superpowers/sdd/plan-2-task-7-report.md
+git diff --cached --quiet
 ```
 
-Then commit the ledger/report separately:
-
-```bash
-git add .superpowers/sdd/progress.md .superpowers/sdd/plan-2-task-7-report.md
-git commit -m "docs: close eduLLM Task 7 gate"
-```
-
-Expected: one focused repair commit at most, followed by one documentation closure commit; no full-suite campaign.
+Expected: both bookkeeping files are ignored and the index is empty. Task 1 has one focused repair commit at most; when no repair exists, `HEAD` still equals `TASK1_START_HEAD` and no closure commit is made. `.superpowers/sdd/progress.md` and `.superpowers/sdd/plan-2-task-7-report.md` are never staged or committed.
 
 ---
 
@@ -378,6 +412,9 @@ def test_submission_skill_is_real_agent_facing_workflow():
     assert "ssh orcd-login" not in text
     assert "edullm run" not in text
     assert "sbatch " not in text
+    assert 'STATUS="$(git status --porcelain=v1)" || exit 2' in text
+    assert 'test -z "$STATUS"' in text
+    assert 'test -z "$(git status' not in text
     assert len(text.splitlines()) < 500
 
 
@@ -534,11 +571,13 @@ Use this ordered behavior in `.cursor/skills/submit-edullm-job/SKILL.md`:
 Include these exact command shapes:
 
 ```bash
-test -z "$(git status --porcelain=v1)"
-BRANCH="$(git branch --show-current)"
+set -euo pipefail
+STATUS="$(git status --porcelain=v1)" || exit 2
+test -z "$STATUS"
+BRANCH="$(git branch --show-current)" || exit 2
 test -n "$BRANCH"
 test "$BRANCH" != main
-COMMIT_SHA="$(git rev-parse HEAD)"
+COMMIT_SHA="$(git rev-parse HEAD)" || exit 2
 test "${#COMMIT_SHA}" -eq 40
 test "$(gh pr view --json headRefOid --jq .headRefOid)" = "$COMMIT_SHA"
 test "$(gh pr view --json isDraft --jq .isDraft)" = false
@@ -1226,13 +1265,14 @@ Expected: secret name present without value; all 11 labels present. No ORCD/SSH/
 ### Task 5: Run the Final Local Gate and User-Assisted Live Acceptance
 
 **Files:**
-- Verify: all files changed from `b222f47862ea0549449f1f0e4b694f5437e81324..HEAD`
+- Verify: all Plan 2 vertical-slice files changed from `0599e1e544c7621988aef7a08467bbc078d5ec0f..HEAD`
 - Modify after real failures only: the smallest source/test/docs pair that reproduces the accepted Critical/Important defect
-- Modify: `.superpowers/sdd/progress.md`
+- Create: `docs/superpowers/reports/2026-07-23-edullm-core-acceptance.md`
+- Modify locally, never stage: `.superpowers/sdd/progress.md`
 
 **Interfaces:**
 - Consumes: approved Tasks 1–4, one approved generic-smoke PR head SHA, one real Skill-created Issue, one Slack assignment, one configured operator CLI, and user-held GitHub/SSH/Kerberos/Duo/W&B access.
-- Produces: one comprehensive local result, one final whole-branch review, and one live one-L40S generic-smoke evidence bundle ending in a terminal Issue state through `edullm jobs`.
+- Produces: one comprehensive local result, one final full-Plan-2 whole-branch review, and one tracked redacted live one-L40S generic-smoke evidence report ending in a terminal Issue state through `edullm jobs`.
 - Live stop points: team-lead approval, GitHub activation, operator authentication, `edullm run`, ORCD observation, and W&B inspection all require the user or designated credential holder.
 
 - [ ] **Step 1: Run the comprehensive local gate exactly once after assembly**
@@ -1240,6 +1280,7 @@ Expected: secret name present without value; all 11 labels present. No ORCD/SSH/
 Run:
 
 ```bash
+set -euo pipefail
 pytest -v src/test/edullm/ src/test/scripts/orcd/
 
 python -m ruff check \
@@ -1292,8 +1333,9 @@ json.loads(Path("config/edullm/main-ruleset.json").read_text(encoding="utf-8"))
 tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 PY
 
-git diff --check b222f47862ea0549449f1f0e4b694f5437e81324..HEAD
-test -z "$(git status --porcelain=v1)"
+git diff --check 0599e1e544c7621988aef7a08467bbc078d5ec0f..HEAD
+STATUS="$(git status --porcelain=v1)" || exit 2
+test -z "$STATUS"
 ```
 
 Expected: all eduLLM and Plan 1 ORCD tests pass; changed project lint/type/style, actionlint, Python 3.10 compile/import, YAML/JSON/TOML parsing, diff check, and clean-status check exit 0. This gate is not rerun after every later micro-fix.
@@ -1303,14 +1345,24 @@ Expected: all eduLLM and Plan 1 ORCD tests pass; changed project lint/type/style
 Generate:
 
 ```bash
-git diff --find-renames --binary \
-  b222f47862ea0549449f1f0e4b694f5437e81324..HEAD \
-  > /tmp/edullm-core-vertical-slice.patch
+set -euo pipefail
+FINAL_REVIEW_BASE=0599e1e544c7621988aef7a08467bbc078d5ec0f
+FINAL_REVIEW_PACKAGE=/tmp/edullm-plan-2-whole-branch-review.txt
 git diff --find-renames --stat \
-  b222f47862ea0549449f1f0e4b694f5437e81324..HEAD
+  "$FINAL_REVIEW_BASE"..HEAD
+{
+  printf '%s\n' '# Commit list'
+  git log --oneline "$FINAL_REVIEW_BASE"..HEAD
+  printf '%s\n' '# Stat'
+  git diff --find-renames --stat "$FINAL_REVIEW_BASE"..HEAD
+  printf '%s\n' '# Full diff'
+  git diff --find-renames -U10 "$FINAL_REVIEW_BASE"..HEAD
+} > "$FINAL_REVIEW_PACKAGE"
 ```
 
-Give one fresh reviewer the whole patch, the approved scope, progress ledger, and all remaining-slice review outcomes. Require spec/quality decisions and explicit checks for credential leakage, exact approved SHA, shell-safe submission, duplicate `sbatch`, Skill/Actions handoff, one-operator activation, W&B identity, terminal reconciliation, and deferred-scope containment.
+Give one fresh final reviewer `/tmp/edullm-plan-2-whole-branch-review.txt`, the approved scope, the ignored local progress ledger, and all task-review outcomes. The package starts at the Plan 2 base and therefore includes completed Plan 2 Tasks 1–6, existing Task 7, and every remaining slice. Tasks 1–6 remain complete and are not redispatched; their code appears only in this one integrated final review.
+
+Require spec-compliance and code-quality verdicts plus explicit checks for credential leakage, exact approved SHA, shell-safe submission, duplicate `sbatch`, Skill/Actions handoff, one-operator activation, W&B identity, terminal reconciliation, and deferred-scope containment.
 
 Expected: fix Critical/Important findings only. Add one focused failing regression, make the smallest repair, run only covering tests and changed-file checks, and obtain approval on that repair. Record Minor findings in final triage. Do not rerun the 900-plus suite unless the reviewer proves the comprehensive gate itself was invalid.
 
@@ -1321,8 +1373,9 @@ The teammate and agent prepare generic-smoke code/config on a branch and open a 
 Capture:
 
 ```bash
-PR_NUMBER="$(gh pr view --repo edu-llm/OLMo-core --json number --jq .number)"
-APPROVED_SHA="$(gh pr view "$PR_NUMBER" --repo edu-llm/OLMo-core --json headRefOid --jq .headRefOid)"
+set -euo pipefail
+PR_NUMBER="$(gh pr view --repo edu-llm/OLMo-core --json number --jq .number)" || exit 2
+APPROVED_SHA="$(gh pr view "$PR_NUMBER" --repo edu-llm/OLMo-core --json headRefOid --jq .headRefOid)" || exit 2
 test "${#APPROVED_SHA}" -eq 40
 gh pr view "$PR_NUMBER" --repo edu-llm/OLMo-core \
   --json number,url,state,isDraft,headRefName,headRefOid,reviews,statusCheckRollup
@@ -1443,33 +1496,131 @@ For a live defect:
 
 Minor live polish is recorded for final triage. Do not rerun the comprehensive local gate after each fix and do not expand into deferred features.
 
-- [ ] **Step 9: Record acceptance and commit evidence documentation**
+- [ ] **Step 9: Write tracked redacted acceptance evidence**
 
-Update `.superpowers/sdd/progress.md` with:
+Create `docs/superpowers/reports/2026-07-23-edullm-core-acceptance.md` with exactly these sections and fields:
 
-- Task 7 closure review result;
-- Skill, core integration, and activation commit/review results;
-- comprehensive local gate command/result;
-- final whole-branch review result;
-- approved PR number/full SHA;
-- Skill-created Issue number;
-- Actions run URL;
-- redacted Slack delivery evidence;
-- operator command result;
-- Slurm job ID/state/L40S evidence;
-- W&B run URL/20-step finite-loss evidence;
-- terminal Issue state;
-- explicit no-credential-leak and no-duplicate-`sbatch` result;
-- deferred original Plan 2 Task 8 scheduled W&B monitoring and all Plan 3 work.
+```text
+# eduLLM Core Vertical Slice Acceptance
 
-Commit:
+## Summary
+- Acceptance date in UTC
+- Final status: accepted or failed
+- Approved scope commit: 05ed8faeca230e9e92af501207aea5cb18e8665b
+- Implementation head: full 40-character SHA
+
+## Redaction Rules
+- Evidence contains no GitHub token, Slack webhook URL, SSH private key,
+  Kerberos ticket, Duo response, W&B API key, S3/AWS credential, secret
+  environment value, or unredacted operator home/ORCD username.
+- Public GitHub logins, Slack member ID, Issue/PR/Actions URLs, Slurm job ID,
+  W&B run URL, request digest, commit SHA, timestamps, exit codes, and bounded
+  sanitized diagnostics are permitted.
+- Raw command output is redacted before it enters this tracked report.
+
+## Comprehensive Local Gate
+- Execution UTC timestamp
+- Full implementation SHA
+- Exact command block from Task 5 Step 1
+- eduLLM pytest passed/failed count
+- Plan 1 ORCD pytest passed/failed count
+- Ruff, Black, isort, mypy, actionlint, Python 3.10 compile/import,
+  YAML/JSON/TOML parse, git diff, and clean-status exit results
+
+## Final Whole-Branch Review
+- Base: 0599e1e544c7621988aef7a08467bbc078d5ec0f
+- Head: full 40-character SHA
+- Review-package path
+- Spec-compliance verdict
+- Code-quality verdict
+- Critical, Important, and Minor findings
+- Repair commit SHAs and focused verification results
+
+## Reviewed Generic-Smoke PR and SHA
+- PR number and URL
+- Non-main head branch
+- Exact full approved PR head SHA
+- Allowlisted approving team-lead GitHub login and approval UTC timestamp
+- Required CI check names and successful conclusions
+
+## Skill-Created Issue
+- `/submit-edullm-job` invocation UTC timestamp
+- Skill confirmation result
+- Issue number and URL
+- Canonical request digest
+- Exact requested commit SHA
+
+## GitHub Actions Validation and Assignment
+- Validation run ID and URL
+- Validation conclusion and resulting status label
+- Assignment run ID and URL
+- Assigned operator GitHub login and resulting status label
+
+## Slack Assignment Delivery
+- Delivery UTC timestamp
+- Channel identifier
+- Issue number
+- Mapped operator Slack member ID
+- Delivery confirmation with webhook and message payload secrets omitted
+
+## Operator Command
+- Operator public GitHub login
+- `edullm setup` exit status
+- `edullm run` UTC timestamp and exit status
+- Redacted command result
+- SSH ControlMaster reuse confirmation
+
+## Slurm and L40S Evidence
+- Slurm job ID
+- Partition
+- Allocated GPU type and count
+- Job state and exit code
+- Top-level accounting row count
+- Canonical lifecycle attempt count
+
+## W&B Metrics Evidence
+- Entity, project, run ID, and run URL
+- Run state
+- Maximum `_step`
+- Metric name `train/CE loss`
+- Finite final metric value
+
+## Terminal Issue Reconciliation
+- `edullm jobs --mine` UTC timestamp and exit status
+- Final Issue label
+- Canonical lifecycle state
+- Slurm job ID, W&B run ID/URL, request digest, operator, and attempt count
+
+## No-Secret and No-Duplicate Proof
+- Enabled-workflow secret-reference scan result
+- Tracked-file credential scan result
+- Redacted-output inspection result
+- Submission receipt count
+- Canonical lifecycle attempt count
+- Top-level Slurm accounting row count
+
+## Deferred Scope
+- Original Plan 2 Task 8 scheduled W&B monitoring remains deferred;
+  `edullm jobs` supplied terminal reconciliation.
+- All Plan 3 work, S3, Apptainer, multiple operators, advanced Slack,
+  strict ruleset automation, and broad rollout polish remain deferred.
+```
+
+Expected: every field has captured evidence or an explicit failed result; the final status is `accepted` only if all nine approved outcomes pass.
+
+- [ ] **Step 10: Update ignored progress and commit only tracked evidence**
+
+Update ignored local `.superpowers/sdd/progress.md` with the Task 7 closure, remaining-slice commits/reviews, comprehensive local gate, final review, and live acceptance result. Confirm its ignored status:
 
 ```bash
-git add .superpowers/sdd/progress.md
+git check-ignore -q .superpowers/sdd/progress.md
+git add docs/superpowers/reports/2026-07-23-edullm-core-acceptance.md
+test "$(git diff --cached --name-only)" = \
+  "docs/superpowers/reports/2026-07-23-edullm-core-acceptance.md"
 git commit -m "docs: record eduLLM core acceptance"
 ```
 
-Expected: a documentation-only acceptance commit. Push only if the user separately requests it.
+Expected: a documentation-only commit containing the tracked acceptance report. `.superpowers/sdd/progress.md` remains updated local scratch and is not staged. Push only if the user separately requests it.
 
 ---
 
