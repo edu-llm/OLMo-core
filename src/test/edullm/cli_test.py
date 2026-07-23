@@ -15,8 +15,9 @@ import edullm.cli as cli
 import edullm.secure_publish as secure_publish
 from edullm.assignment import AssignmentResult
 from edullm.automation import AutomationResult
-from edullm.jobs import GateConfiguration
+from edullm.jobs import GateConfiguration, OperatorJobSummary
 from edullm.policy import Policy
+from edullm.ssh import SSHSessionError
 
 
 class RestrictedEnvironment(dict):
@@ -410,6 +411,11 @@ class StatefulSetupSSH:
             raise cli.SSHError("SSH command failed")
         return result
 
+    def ensure_master(self):
+        self.events.append("ensure-master")
+        if self.fail_at == "ensure-master":
+            raise SSHSessionError("ORCD SSH login failed")
+
     def run_remote(self, argv, *, check=True, timeout=30):
         assert timeout > 0
         command = " ".join(argv)
@@ -578,7 +584,7 @@ def _setup_dependencies(
     )
 
 
-def test_setup_runs_checks_in_safe_alias_order_and_writes_secret_free_config(tmp_path):
+def test_setup_runs_checks_in_safe_alias_order_and_writes_secret_free_config(tmp_path, monkeypatch):
     root = tmp_path / "checkout"
     home = tmp_path / "home"
     _write_operator_roster(root)
@@ -586,6 +592,13 @@ def test_setup_runs_checks_in_safe_alias_order_and_writes_secret_free_config(tmp
     ssh_client = StatefulSetupSSH(events)
     dependencies = _setup_dependencies(events, ssh_client)
     output = StringIO()
+    apply_control_config = cli.apply_control_config
+
+    def apply_and_record(path, plan):
+        events.append("apply-ssh-config")
+        return apply_control_config(path, plan)
+
+    monkeypatch.setattr(cli, "apply_control_config", apply_and_record)
 
     result = cli.setup_operator(
         root=root,
@@ -601,8 +614,9 @@ def test_setup_runs_checks_in_safe_alias_order_and_writes_secret_free_config(tmp
         "gh-login",
         "wandb-viewer",
         "wandb-projects",
-        "ssh-direct",
         "confirm",
+        "apply-ssh-config",
+        "ensure-master",
         "tool-hostname",
         "tool-sbatch",
         "tool-squeue",
@@ -639,7 +653,6 @@ def test_setup_runs_checks_in_safe_alias_order_and_writes_secret_free_config(tmp
         "gh-login",
         "wandb-viewer",
         "wandb-projects",
-        "ssh-direct",
         "tool-hostname",
         "tool-sbatch",
         "tool-squeue",
@@ -842,6 +855,28 @@ def test_setup_is_idempotent_and_does_not_confirm_or_backup_twice(tmp_path):
     assert list((home / ".ssh").glob("config.edullm-backup*")) == backups
     assert "confirm" not in second_events
     assert "ssh-direct" not in second_events
+    assert second_events.index("ensure-master") < second_events.index("tool-hostname")
+
+
+def test_setup_session_bootstrap_failure_stops_before_alias_remote_checks(tmp_path):
+    root = tmp_path / "checkout"
+    home = tmp_path / "home"
+    _write_operator_roster(root)
+    events: list[str] = []
+    ssh_client = StatefulSetupSSH(events, fail_at="ensure-master")
+
+    with pytest.raises(SSHSessionError, match="ORCD SSH login failed") as raised:
+        cli.setup_operator(
+            root=root,
+            home=home,
+            orcd_username="orcd-user",
+            dependencies=_setup_dependencies(events, ssh_client),
+            output=StringIO(),
+        )
+
+    assert events[-1] == "ensure-master"
+    assert "tool-hostname" not in events
+    assert "sensitive" not in str(raised.value)
 
 
 def test_setup_submits_reviewed_environment_script_and_polls_to_completed(tmp_path):
@@ -1660,6 +1695,7 @@ def test_operator_services_carry_private_orcd_user_separately_from_github_login(
         ]
     )
     captured = {}
+    events = []
 
     class HumanClient:
         def __init__(self, token, repository):
@@ -1673,22 +1709,35 @@ def test_operator_services_carry_private_orcd_user_separately_from_github_login(
 
     class SubmissionRemote:
         def __init__(self, ssh_client, *, remote_user):
+            events.append("remote")
             captured["ssh_client"] = ssh_client
             captured["remote_user"] = remote_user
 
-    ssh_client = object()
+    class Slurm:
+        def __init__(self, ssh_client):
+            events.append("slurm")
+            assert ssh_client is session_client
+
+    class SessionClient:
+        @staticmethod
+        def ensure_master():
+            events.append("ensure-master")
+
+    session_client = SessionClient()
     monkeypatch.setattr(cli, "load_gate_configuration", lambda root: configuration)
     monkeypatch.setattr(cli, "_read_operator_document", lambda path: document)
     monkeypatch.setattr(cli, "_run_local", lambda *args: next(local_results))
     monkeypatch.setattr(cli, "GitHubClient", HumanClient)
-    monkeypatch.setattr(cli, "SSHClient", lambda: ssh_client)
+    monkeypatch.setattr(cli, "SSHClient", lambda: session_client)
     monkeypatch.setattr(cli, "SSHSubmissionRemote", SubmissionRemote)
+    monkeypatch.setattr(cli, "SSHSlurm", Slurm)
 
     services = cli._load_operator_services()
 
     assert services.operator == "github-operator"
     assert services.remote_user == "orcd-user"
-    assert captured == {"ssh_client": ssh_client, "remote_user": "orcd-user"}
+    assert captured == {"ssh_client": session_client, "remote_user": "orcd-user"}
+    assert events == ["ensure-master", "remote", "slurm"]
 
 
 def test_public_parser_has_complete_arguments_without_task_7_behavior():
@@ -1702,6 +1751,129 @@ def test_public_parser_has_complete_arguments_without_task_7_behavior():
     assert parser.parse_args(["logs", "42"]).issue == 42
     assert parser.parse_args(["stop", "42"]).issue == 42
     assert parser.parse_args(["logout"]).command == "logout"
+
+
+def test_format_operator_jobs_renders_mixed_groups_exactly():
+    summaries = (
+        OperatorJobSummary(20, "assigned", None, None),
+        OperatorJobSummary(
+            12,
+            "completed",
+            "18653501",
+            "https://wandb.ai/eduLLM/test/runs/issue-12-attempt-1-18653501",
+        ),
+    )
+
+    assert cli._format_operator_jobs("operator", summaries) == (
+        "eduLLM jobs for operator\n"
+        "\n"
+        "Ready to run (1)\n"
+        "  #20  assigned\n"
+        "       Next: edullm run\n"
+        "\n"
+        "Submitted and recent (1)\n"
+        "  #12  completed   Slurm 18653501\n"
+        "       W&B: https://wandb.ai/eduLLM/test/runs/issue-12-attempt-1-18653501"
+    )
+
+
+def test_format_operator_jobs_identifies_only_lowest_assigned_issue_as_next_exactly():
+    summaries = (
+        OperatorJobSummary(23, "assigned", None, None),
+        OperatorJobSummary(20, "assigned", None, None),
+    )
+
+    assert cli._format_operator_jobs("operator", summaries) == (
+        "eduLLM jobs for operator\n"
+        "\n"
+        "Ready to run (2)\n"
+        "  #20  assigned\n"
+        "       Next: edullm run\n"
+        "  #23  assigned\n"
+        "       Waiting behind #20\n"
+        "\n"
+        "Submitted and recent (0)"
+    )
+
+
+def test_format_operator_jobs_aligns_mixed_long_issue_ids_exactly():
+    summaries = (
+        OperatorJobSummary(20, "assigned", None, None),
+        OperatorJobSummary(
+            1234,
+            "completed",
+            "18653501",
+            "https://wandb.ai/eduLLM/test/runs/issue-1234-attempt-1-18653501",
+        ),
+    )
+
+    assert cli._format_operator_jobs("operator", summaries) == (
+        "eduLLM jobs for operator\n"
+        "\n"
+        "Ready to run (1)\n"
+        "  #20   assigned\n"
+        "        Next: edullm run\n"
+        "\n"
+        "Submitted and recent (1)\n"
+        "  #1234 completed   Slurm 18653501\n"
+        "        W&B: https://wandb.ai/eduLLM/test/runs/issue-1234-attempt-1-18653501"
+    )
+
+
+def test_format_operator_jobs_renders_empty_ready_group_exactly():
+    summaries = (
+        OperatorJobSummary(
+            12,
+            "completed",
+            "18653501",
+            "https://wandb.ai/eduLLM/test/runs/issue-12-attempt-1-18653501",
+        ),
+    )
+
+    assert cli._format_operator_jobs("operator", summaries) == (
+        "eduLLM jobs for operator\n"
+        "\n"
+        "Ready to run (0)\n"
+        "\n"
+        "Submitted and recent (1)\n"
+        "  #12  completed   Slurm 18653501\n"
+        "       W&B: https://wandb.ai/eduLLM/test/runs/issue-12-attempt-1-18653501"
+    )
+
+
+def test_format_operator_jobs_renders_no_jobs_message_only():
+    assert cli._format_operator_jobs("operator", ()) == "No eduLLM jobs assigned to operator."
+
+
+def test_handle_jobs_prints_formatted_operator_summaries(monkeypatch, capsys):
+    summaries = (OperatorJobSummary(20, "assigned", None, None),)
+    calls = []
+    services = SimpleNamespace(
+        operator="operator",
+        github=object(),
+        slurm=object(),
+        load_configuration=lambda: object(),
+    )
+
+    def list_jobs(**kwargs):
+        calls.append(kwargs)
+        return summaries
+
+    monkeypatch.setattr(cli, "list_operator_jobs", list_jobs)
+
+    assert cli.handle_jobs(True, services=services) == 0
+    assert len(calls) == 1
+    assert calls[0]["mine"] is True
+    assert calls[0]["operator"] == "operator"
+    assert capsys.readouterr().out == (
+        "eduLLM jobs for operator\n"
+        "\n"
+        "Ready to run (1)\n"
+        "  #20  assigned\n"
+        "       Next: edullm run\n"
+        "\n"
+        "Submitted and recent (0)\n"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1847,16 +2019,17 @@ def test_setup_handler_reports_missing_local_wandb_dependency_action(monkeypatch
     assert "sensitive import diagnostics" not in output.err
 
 
-def test_setup_handler_reports_direct_engaging_reachability_stage(monkeypatch, capsys):
+def test_setup_handler_reports_session_bootstrap_recovery(monkeypatch, capsys):
     def failed(**kwargs):
-        raise cli.SetupError("operator setup failed during direct Engaging reachability")
+        raise SSHSessionError("private SSH diagnostics")
 
     monkeypatch.setattr(cli, "setup_operator", failed)
 
     assert cli.handle_setup("orcd-user") == 1
     output = capsys.readouterr()
     assert output.out == ""
-    assert "failed during direct Engaging reachability" in output.err
+    assert output.err == "ORCD SSH login failed; run ssh -MNf orcd-login and retry.\n"
+    assert "private SSH diagnostics" not in output.err
 
 
 def test_setup_handler_reports_ssh_configuration_planning_stage(monkeypatch, capsys):
@@ -1869,6 +2042,53 @@ def test_setup_handler_reports_ssh_configuration_planning_stage(monkeypatch, cap
     output = capsys.readouterr()
     assert output.out == ""
     assert "failed while planning SSH configuration" in output.err
+
+
+@pytest.mark.parametrize(
+    "handler",
+    [
+        lambda: cli.handle_jobs(False),
+        cli.handle_run,
+        lambda: cli.handle_logs(42),
+        lambda: cli.handle_stop(42),
+    ],
+)
+def test_operator_commands_report_fixed_session_bootstrap_recovery(handler, monkeypatch, capsys):
+    def failed():
+        raise SSHSessionError("private SSH diagnostics")
+
+    monkeypatch.setattr(cli, "_load_operator_services", failed)
+
+    assert handler() == 1
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert output.err == "ORCD SSH login failed; run ssh -MNf orcd-login and retry.\n"
+    assert "private SSH diagnostics" not in output.err
+
+
+@pytest.mark.parametrize(
+    ("handler", "generic_message"),
+    [
+        (lambda: cli.handle_jobs(False), "edullm jobs failed\n"),
+        (cli.handle_run, "edullm run failed before a safe submission could be confirmed\n"),
+        (lambda: cli.handle_logs(42), "edullm logs failed\n"),
+        (lambda: cli.handle_stop(42), "edullm stop failed\n"),
+    ],
+)
+def test_operator_commands_keep_other_failures_generic(
+    handler, generic_message, monkeypatch, capsys
+):
+    def failed():
+        raise cli.JobOperationError("private non-session diagnostics")
+
+    monkeypatch.setattr(cli, "_load_operator_services", failed)
+
+    assert handler() == 1
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert output.err == generic_message
+    assert "private non-session diagnostics" not in output.err
+    assert "ssh -MNf" not in output.err
 
 
 def test_setup_cli_passes_explicit_orcd_username_to_handler(monkeypatch):

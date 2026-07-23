@@ -12,6 +12,7 @@ import secrets
 import shlex
 import stat
 import subprocess
+import termios
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,9 @@ from pathlib import Path
 from edullm.secure_publish import SecurePublishError, capture_file, compare_and_publish
 
 COMMAND_TIMEOUT_SECONDS = 30.0
+LOGIN_TIMEOUT_SECONDS = 300.0
+LOGIN_TERMINATE_GRACE_SECONDS = 2.0
+HEALTH_TIMEOUT_SECONDS = 15.0
 _ALIAS = "orcd-login"
 _HOSTNAME = "orcd-login.mit.edu"
 _USERNAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
@@ -36,6 +40,10 @@ _SAFE_CONTROL_MASTER = frozenset({"auto", "autoask", "ask", "no", "yes"})
 
 class SSHError(RuntimeError):
     """A sanitized SSH operation failure."""
+
+
+class SSHSessionError(SSHError):
+    """A sanitized SSH authentication or ControlMaster failure."""
 
 
 class SSHConfigError(RuntimeError):
@@ -79,11 +87,71 @@ class _FileSnapshot:
         )
 
 
+def _run_interactive_login(
+    *,
+    popen_factory: Callable[..., subprocess.Popen[bytes]] = subprocess.Popen,
+    timeout: float = LOGIN_TIMEOUT_SECONDS,
+    terminate_grace: float = LOGIN_TERMINATE_GRACE_SECONDS,
+) -> int:
+    terminal_fd: int | None = None
+    terminal_state = None
+    try:
+        try:
+            terminal_fd = os.open(
+                "/dev/tty",
+                os.O_RDWR | getattr(os, "O_CLOEXEC", 0),
+            )
+            terminal_state = termios.tcgetattr(terminal_fd)
+        except (OSError, termios.error):
+            if terminal_fd is not None:
+                try:
+                    os.close(terminal_fd)
+                except OSError:
+                    pass
+            terminal_fd = None
+            terminal_state = None
+
+        process = popen_factory(
+            ["ssh", "-MNf", _ALIAS],
+            stdin=None,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        try:
+            return process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=terminate_grace)
+            except subprocess.TimeoutExpired:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+                process.wait()
+            raise
+    finally:
+        if terminal_fd is not None:
+            try:
+                if terminal_state is not None:
+                    termios.tcsetattr(terminal_fd, termios.TCSANOW, terminal_state)
+            finally:
+                os.close(terminal_fd)
+
+
 class SSHClient:
     """Injectable subprocess boundary for project SSH operations."""
 
-    def __init__(self, runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run):
+    def __init__(
+        self,
+        runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+        login_runner: Callable[[], int] = _run_interactive_login,
+    ):
         self._runner = runner
+        self._login_runner = login_runner
 
     def _run(
         self,
@@ -109,6 +177,59 @@ class SSHClient:
             raise SSHError(operation)
         return result
 
+    def _master_healthy(self) -> bool:
+        try:
+            result = self._runner(
+                [
+                    "ssh",
+                    "-o",
+                    "BatchMode=yes",
+                    "-o",
+                    "ConnectTimeout=10",
+                    _ALIAS,
+                    "true",
+                ],
+                check=False,
+                text=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=HEALTH_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return result.returncode == 0
+
+    def ensure_master(self) -> None:
+        """
+        Ensure a healthy project ControlMaster is available.
+
+        Probes ``orcd-login`` in batch mode, closes any stale master on a
+        best-effort basis, opens an interactive ``ssh -MNf orcd-login`` session
+        when needed, and verifies the master afterward.
+
+        :raises SSHSessionError: If interactive login or post-login verification
+            fails.
+        """
+        if self._master_healthy():
+            return
+        try:
+            self._runner(
+                ["ssh", "-O", "exit", _ALIAS],
+                check=False,
+                text=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=COMMAND_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+        try:
+            returncode = self._login_runner()
+        except (OSError, subprocess.SubprocessError):
+            raise SSHSessionError("ORCD SSH login failed") from None
+        if returncode != 0 or not self._master_healthy():
+            raise SSHSessionError("ORCD SSH login failed")
+
     def run_remote(
         self,
         argv: Sequence[str],
@@ -119,7 +240,7 @@ class SSHClient:
         """Run one argv-safe command through the project alias."""
         command = _remote_command(argv)
         return self._run(
-            ["ssh", _ALIAS, command],
+            ["ssh", "-o", "BatchMode=yes", _ALIAS, command],
             check=check,
             timeout=timeout,
         )
@@ -172,7 +293,7 @@ class SSHClient:
                 f"--target submission --key {match.group(1)}"
             )
         self._run(
-            ["ssh", _ALIAS, command],
+            ["ssh", "-o", "BatchMode=yes", _ALIAS, command],
             input_text=content,
             timeout=timeout,
         )

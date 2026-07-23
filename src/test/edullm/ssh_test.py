@@ -1,8 +1,13 @@
 import io
 import os
+import pty
+import select
 import shlex
+import signal
 import stat
 import subprocess
+import sys
+import termios
 from pathlib import Path
 
 import pytest
@@ -24,6 +29,39 @@ class RecordingRunner:
                 raise result
             return result
         return subprocess.CompletedProcess(argv, 0, "", "")
+
+
+class RecordingLoginRunner:
+    def __init__(self, result=0):
+        self.calls = 0
+        self.result = result
+
+    def __call__(self):
+        self.calls += 1
+        if isinstance(self.result, BaseException):
+            raise self.result
+        return self.result
+
+
+class RecordingProcess:
+    def __init__(self, wait_results):
+        self.wait_results = list(wait_results)
+        self.wait_calls = []
+        self.terminate_calls = 0
+        self.kill_calls = 0
+
+    def wait(self, timeout=None):
+        self.wait_calls.append(timeout)
+        result = self.wait_results.pop(0)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+    def terminate(self):
+        self.terminate_calls += 1
+
+    def kill(self):
+        self.kill_calls += 1
 
 
 def test_control_block_uses_project_alias_and_one_hour_persist():
@@ -56,6 +94,8 @@ def test_remote_argv_is_shell_quoted_once_and_has_finite_timeout():
     argv, options = runner.calls[0]
     assert argv == [
         "ssh",
+        "-o",
+        "BatchMode=yes",
         "orcd-login",
         "python -c 'print('\"'\"'two words; $HOME'\"'\"')'",
     ]
@@ -97,15 +137,15 @@ def test_write_remote_sends_file_content_only_via_stdin():
     assert secret not in repr(argv)
     assert options["input"] == secret + "\n"
     assert options["timeout"] == ssh.COMMAND_TIMEOUT_SECONDS
-    assert argv[:2] == ["ssh", "orcd-login"]
-    assert shlex.split(argv[2]) == [
+    assert argv[:4] == ["ssh", "-o", "BatchMode=yes", "orcd-login"]
+    assert shlex.split(argv[4]) == [
         "$HOME/venvs/edullm/bin/python",
         "-m",
         "edullm.ssh_helper",
         "--target",
         "wandb.key",
     ]
-    assert "cat >" not in argv[2]
+    assert "cat >" not in argv[4]
 
 
 def test_write_remote_rejects_paths_outside_fixed_private_targets():
@@ -146,6 +186,266 @@ def test_nonzero_remote_failure_is_sanitized():
 
     with pytest.raises(ssh.SSHError, match="SSH command failed") as raised:
         client.run_remote(["false"])
+
+    assert "private" not in str(raised.value)
+
+
+def test_interactive_login_uses_fixed_argv_inherited_stdin_and_devnull_output():
+    process = RecordingProcess([0])
+    calls = []
+
+    def popen_factory(argv, **kwargs):
+        calls.append((list(argv), dict(kwargs)))
+        return process
+
+    result = ssh._run_interactive_login(popen_factory=popen_factory)
+
+    assert result == 0
+    assert calls == [
+        (
+            ["ssh", "-MNf", "orcd-login"],
+            {
+                "stdin": None,
+                "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.DEVNULL,
+            },
+        )
+    ]
+    assert process.wait_calls == [ssh.LOGIN_TIMEOUT_SECONDS]
+
+
+def test_interactive_login_discards_diagnostics_and_returns_only_status(capfd):
+    secret = "private-ssh-diagnostic"
+
+    def popen_factory(argv, **kwargs):
+        assert argv == ["ssh", "-MNf", "orcd-login"]
+        return subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import sys; "
+                    f"print({secret!r}); "
+                    f"print({secret!r}, file=sys.stderr); "
+                    "raise SystemExit(23)"
+                ),
+            ],
+            **kwargs,
+        )
+
+    result = ssh._run_interactive_login(popen_factory=popen_factory)
+
+    output = capfd.readouterr()
+    assert result == 23
+    assert output.out == ""
+    assert output.err == ""
+    assert secret not in repr(result)
+
+
+def test_interactive_login_timeout_terminates_then_kills_and_reaps():
+    command = ["ssh", "-MNf", "orcd-login"]
+    process = RecordingProcess(
+        [
+            subprocess.TimeoutExpired(command, ssh.LOGIN_TIMEOUT_SECONDS),
+            subprocess.TimeoutExpired(command, ssh.LOGIN_TERMINATE_GRACE_SECONDS),
+            -9,
+        ]
+    )
+
+    with pytest.raises(subprocess.TimeoutExpired) as raised:
+        ssh._run_interactive_login(popen_factory=lambda argv, **kwargs: process)
+
+    assert raised.value.output is None
+    assert raised.value.stderr is None
+    assert process.terminate_calls == 1
+    assert process.kill_calls == 1
+    assert process.wait_calls == [
+        ssh.LOGIN_TIMEOUT_SECONDS,
+        ssh.LOGIN_TERMINATE_GRACE_SECONDS,
+        None,
+    ]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires a POSIX controlling terminal")
+def test_interactive_login_restores_controlling_terminal_after_timeout():
+    child_pid, master_fd = pty.fork()
+    if child_pid == 0:
+        try:
+            terminal_fd = os.open("/dev/tty", os.O_RDWR)
+            original = termios.tcgetattr(terminal_fd)
+            original[3] |= termios.ECHO
+            termios.tcsetattr(terminal_fd, termios.TCSANOW, original)
+            ready_read, ready_write = os.pipe()
+            disable_echo = (
+                "import os, signal, sys, termios, time; "
+                "ready = int(sys.argv[1]); "
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                "fd = os.open('/dev/tty', os.O_RDWR); "
+                "state = termios.tcgetattr(fd); "
+                "state[3] &= ~termios.ECHO; "
+                "termios.tcsetattr(fd, termios.TCSANOW, state); "
+                "os.write(ready, b'1'); "
+                "os.close(ready); "
+                "time.sleep(5)"
+            )
+            login_process = None
+
+            def popen_factory(argv, **kwargs):
+                nonlocal login_process
+                assert argv == ["ssh", "-MNf", "orcd-login"]
+                login_process = subprocess.Popen(
+                    [sys.executable, "-c", disable_echo, str(ready_write)],
+                    pass_fds=(ready_write,),
+                    **kwargs,
+                )
+                os.close(ready_write)
+                readable, _, _ = select.select([ready_read], [], [], 2.0)
+                ready = os.read(ready_read, 1) if readable else b""
+                os.close(ready_read)
+                if ready != b"1":
+                    login_process.kill()
+                    login_process.wait()
+                    raise AssertionError("login child did not become ready")
+                return login_process
+
+            with pytest.raises(subprocess.TimeoutExpired):
+                ssh._run_interactive_login(
+                    popen_factory=popen_factory,
+                    timeout=0.25,
+                    terminate_grace=0.25,
+                )
+            restored = termios.tcgetattr(terminal_fd)
+            os.close(terminal_fd)
+            killed_and_reaped = (
+                login_process is not None and login_process.returncode == -signal.SIGKILL
+            )
+            os._exit(0 if restored[3] & termios.ECHO and killed_and_reaped else 1)
+        except BaseException:
+            os._exit(2)
+
+    try:
+        _, status = os.waitpid(child_pid, 0)
+    finally:
+        os.close(master_fd)
+
+    assert os.waitstatus_to_exitcode(status) == 0
+
+
+def test_ensure_master_reuses_healthy_batch_session_without_login():
+    healthy = subprocess.CompletedProcess(["ssh"], 0, "", "")
+    runner = RecordingRunner([healthy])
+    login_runner = RecordingLoginRunner()
+
+    ssh.SSHClient(runner=runner, login_runner=login_runner).ensure_master()
+
+    assert len(runner.calls) == 1
+    assert login_runner.calls == 0
+    argv, options = runner.calls[0]
+    assert argv == [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "orcd-login",
+        "true",
+    ]
+    assert options == {
+        "check": False,
+        "text": True,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "timeout": ssh.HEALTH_TIMEOUT_SECONDS,
+    }
+
+
+@pytest.mark.parametrize(
+    "close_failure",
+    [
+        subprocess.TimeoutExpired(["ssh", "-O", "exit", "orcd-login"], 30),
+        OSError("private cleanup failure"),
+    ],
+)
+def test_ensure_master_continues_when_stale_close_fails(close_failure):
+    unavailable = subprocess.CompletedProcess(["ssh"], 255, "", "private")
+    healthy = subprocess.CompletedProcess(["ssh"], 0, "", "")
+    runner = RecordingRunner([unavailable, close_failure, healthy])
+    login_runner = RecordingLoginRunner()
+
+    ssh.SSHClient(runner=runner, login_runner=login_runner).ensure_master()
+
+    close_argv, close_options = runner.calls[1]
+    assert close_argv == ["ssh", "-O", "exit", "orcd-login"]
+    assert close_options == {
+        "check": False,
+        "text": True,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "timeout": ssh.COMMAND_TIMEOUT_SECONDS,
+    }
+    assert runner.calls[2][0][-2:] == ["orcd-login", "true"]
+    assert login_runner.calls == 1
+    assert "private" not in repr(runner.calls)
+
+
+def test_ensure_master_opens_and_verifies_missing_session_interactively():
+    unavailable = subprocess.CompletedProcess(["ssh"], 255, "", "private")
+    closed = subprocess.CompletedProcess(["ssh"], 255, "", "private")
+    healthy = subprocess.CompletedProcess(["ssh"], 0, "", "")
+    runner = RecordingRunner([unavailable, closed, healthy])
+    login_runner = RecordingLoginRunner()
+
+    ssh.SSHClient(runner=runner, login_runner=login_runner).ensure_master()
+
+    assert login_runner.calls == 1
+    assert runner.calls[2][0][-2:] == ["orcd-login", "true"]
+
+
+def test_ensure_master_raises_sanitized_error_on_login_timeout():
+    unavailable = subprocess.CompletedProcess(["ssh"], 255, "", "private")
+    closed = subprocess.CompletedProcess(["ssh"], 255, "", "private")
+    private_timeout = subprocess.TimeoutExpired(
+        ["ssh", "-MNf", "orcd-login"],
+        300,
+        output="private stdout",
+        stderr="private stderr",
+    )
+    client = ssh.SSHClient(
+        runner=RecordingRunner([unavailable, closed]),
+        login_runner=RecordingLoginRunner(private_timeout),
+    )
+
+    with pytest.raises(ssh.SSHSessionError) as raised:
+        client.ensure_master()
+
+    assert str(raised.value) == "ORCD SSH login failed"
+    assert raised.value.__cause__ is None
+    assert "private" not in repr(raised.value)
+
+
+def test_ensure_master_raises_sanitized_error_on_login_nonzero():
+    unavailable = subprocess.CompletedProcess(["ssh"], 255, "", "private")
+    closed = subprocess.CompletedProcess(["ssh"], 255, "", "private")
+    runner = RecordingRunner([unavailable, closed])
+    login_runner = RecordingLoginRunner(255)
+    client = ssh.SSHClient(runner=runner, login_runner=login_runner)
+
+    with pytest.raises(ssh.SSHSessionError, match="ORCD SSH login failed") as raised:
+        client.ensure_master()
+
+    assert login_runner.calls == 1
+    assert "private" not in str(raised.value)
+
+
+def test_ensure_master_raises_sanitized_error_on_failed_post_login_verification():
+    unavailable = subprocess.CompletedProcess(["ssh"], 255, "", "private")
+    closed = subprocess.CompletedProcess(["ssh"], 255, "", "private")
+    still_unhealthy = subprocess.CompletedProcess(["ssh"], 255, "", "private")
+    runner = RecordingRunner([unavailable, closed, still_unhealthy])
+    client = ssh.SSHClient(runner=runner, login_runner=RecordingLoginRunner())
+
+    with pytest.raises(ssh.SSHSessionError, match="ORCD SSH login failed") as raised:
+        client.ensure_master()
 
     assert "private" not in str(raised.value)
 
