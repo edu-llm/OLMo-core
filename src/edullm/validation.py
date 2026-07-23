@@ -96,6 +96,9 @@ def _parse_profile_arguments(
     fixed_wandb_project = fixed_options.get("trainer.callbacks.wandb.project")
     if type(fixed_wandb_project) is str and request.wandb_project != fixed_wandb_project:
         errors.append("W&B project is fixed by entrypoint policy")
+    fixed_seed = fixed_options.get("seed")
+    if type(fixed_seed) is int and request.seed != fixed_seed:
+        errors.append("seed is fixed by entrypoint policy")
 
     expected_positionals = profile.get("positionals")
     if type(expected_positionals) is not int or len(arguments) < expected_positionals:
@@ -257,6 +260,15 @@ def _validate_option(
             errors.append(f"value for --{name} must be a lowercase slug")
             return _INVALID_OPTION_VALUE
         return value if allowed else _INVALID_OPTION_VALUE
+    elif rule_type == "choice":
+        if (
+            type(allowed_values) not in {tuple, list}
+            or not allowed_values
+            or any(type(item) is not str for item in cast(tuple[object, ...], allowed_values))
+        ):
+            errors.append(f"validation rule for --{name} is invalid")
+            return _INVALID_OPTION_VALUE
+        return value if allowed else _INVALID_OPTION_VALUE
     elif rule_type == "duration":
         match = _DURATION.fullmatch(value)
         if match is None:
@@ -331,6 +343,19 @@ def validate_request(request: JobRequest, policy: Policy) -> list[str]:
         "launcher"
     ):
         errors.append("script and launcher do not match the entrypoint profile")
+    if profile is not None:
+        if type(profile.get("gpu_count")) is int and request.gpu_count != profile["gpu_count"]:
+            errors.append("GPU count is fixed by entrypoint policy")
+        if (
+            type(profile.get("gpu_preference")) is str
+            and request.gpu_preference != profile["gpu_preference"]
+        ):
+            errors.append("GPU preference is fixed by entrypoint policy")
+        if (
+            type(profile.get("max_runtime_minutes")) is int
+            and request.max_runtime_minutes != profile["max_runtime_minutes"]
+        ):
+            errors.append("runtime is fixed by entrypoint policy")
 
     if not _valid_repository_path(request.script_path):
         errors.append("script path must be repository-relative without traversal")

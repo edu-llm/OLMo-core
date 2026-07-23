@@ -32,6 +32,7 @@ from edullm.github import GitHubClient, GitHubError
 from edullm.jobs import (
     GateConfiguration,
     JobOperationError,
+    OperatorJobSummary,
     SSHSlurm,
     deliver_terminal_notifications,
 )
@@ -49,6 +50,7 @@ from edullm.ssh import (
     SSHClient,
     SSHConfigError,
     SSHError,
+    SSHSessionError,
     apply_control_config,
     plan_control_config,
     read_control_config,
@@ -64,8 +66,8 @@ SETUP_POLL_TIMEOUT_SECONDS = 3600.0
 REMOTE_REPO_ROOT = "$HOME/OLMo-core"
 REMOTE_SCRATCH = "$HOME/orcd/scratch/edullm"
 _CANONICAL_REPOSITORY = "edu-llm/OLMo-core"
-_DIRECT_ENGAGING_REACHABILITY_ERROR = "operator setup failed during direct Engaging reachability"
 _SSH_CONFIGURATION_PLANNING_ERROR = "operator setup failed while planning SSH configuration"
+_SSH_SESSION_RECOVERY = "ORCD SSH login failed; run ssh -MNf orcd-login and retry."
 _GITHUB_LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\Z")
 _ORCD_USERNAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _FINGERPRINT = re.compile(r"[0-9a-f]{64}\Z")
@@ -255,6 +257,7 @@ def setup_operator(
     :returns: The public, secret-free setup result.
 
     :raises SetupError: If any ordered preflight or setup transition fails.
+    :raises SSHSessionError: If the project SSH session cannot be established.
     """
     dependencies = dependencies or SetupDependencies()
     output = output or sys.stdout
@@ -280,14 +283,6 @@ def setup_operator(
     except (SSHConfigError, ValueError):
         raise SetupError(_SSH_CONFIGURATION_PLANNING_ERROR) from None
     if ssh_plan.changed:
-        try:
-            dependencies.ssh_client.run_direct(
-                orcd_username,
-                ["hostname"],
-                timeout=COMMAND_TIMEOUT_SECONDS,
-            )
-        except (SSHError, ValueError):
-            raise SetupError(_DIRECT_ENGAGING_REACHABILITY_ERROR) from None
         output.write(ssh_plan.redacted_diff)
         output.flush()
         try:
@@ -303,6 +298,7 @@ def setup_operator(
         except SSHConfigError:
             raise SetupError("operator setup failed while applying SSH configuration") from None
 
+    dependencies.ssh_client.ensure_master()
     for command, label in (
         (["hostname"], "remote hostname verification"),
         (["command", "-v", "sbatch"], "remote sbatch verification"),
@@ -768,11 +764,11 @@ def handle_setup(orcd_username: str | None = None) -> int:
     except SetupDeclined:
         print("eduLLM operator setup cancelled; no SSH change was applied", file=sys.stderr)
         return 2
+    except SSHSessionError:
+        print(_SSH_SESSION_RECOVERY, file=sys.stderr)
+        return 1
     except SetupError as error:
-        if str(error) in {
-            _DIRECT_ENGAGING_REACHABILITY_ERROR,
-            _SSH_CONFIGURATION_PLANNING_ERROR,
-        }:
+        if str(error) == _SSH_CONFIGURATION_PLANNING_ERROR:
             print(f"eduLLM {error}", file=sys.stderr)
         else:
             print("eduLLM operator setup failed", file=sys.stderr)
@@ -898,6 +894,7 @@ def _load_operator_services() -> OperatorServices:
     except Exception:
         raise JobOperationError("authenticated GitHub identity is unavailable") from None
     ssh_client = SSHClient()
+    ssh_client.ensure_master()
     return OperatorServices(
         operator=operator,
         remote_user=remote_user,
@@ -908,11 +905,52 @@ def _load_operator_services() -> OperatorServices:
     )
 
 
+def _format_operator_jobs(
+    operator: str,
+    summaries: Sequence[OperatorJobSummary],
+) -> str:
+    """Render validated job summaries as the deterministic operator dashboard."""
+    if not summaries:
+        return f"No eduLLM jobs assigned to {operator}."
+
+    issue_width = max(3, max(len(str(summary.issue)) for summary in summaries))
+    continuation = " " * (issue_width + 4)
+    ready = sorted(
+        (summary for summary in summaries if summary.status == "assigned"),
+        key=lambda summary: summary.issue,
+    )
+    recent = [summary for summary in summaries if summary.status != "assigned"]
+    lines = [
+        f"eduLLM jobs for {operator}",
+        "",
+        f"Ready to run ({len(ready)})",
+    ]
+    for index, summary in enumerate(ready):
+        action = "Next: edullm run" if index == 0 else f"Waiting behind #{ready[0].issue}"
+        lines.extend(
+            (
+                f"  #{summary.issue:<{issue_width}} assigned",
+                f"{continuation}{action}",
+            )
+        )
+    lines.extend(("", f"Submitted and recent ({len(recent)})"))
+    for summary in recent:
+        assert summary.slurm_job_id is not None and summary.wandb_url is not None
+        lines.extend(
+            (
+                f"  #{summary.issue:<{issue_width}} {summary.status:<11} "
+                f"Slurm {summary.slurm_job_id}",
+                f"{continuation}W&B: {summary.wandb_url}",
+            )
+        )
+    return "\n".join(lines)
+
+
 def handle_jobs(mine: bool, *, services: OperatorServices | None = None) -> int:
     """List authorized jobs and monotonically repair stale lifecycle state."""
     try:
         services = services or _load_operator_services()
-        states = list_operator_jobs(
+        summaries = list_operator_jobs(
             mine=mine,
             operator=services.operator,
             github=services.github,
@@ -920,17 +958,13 @@ def handle_jobs(mine: bool, *, services: OperatorServices | None = None) -> int:
             slurm=services.slurm,
             now=datetime.now(timezone.utc).replace(microsecond=0),
         )
+    except SSHSessionError:
+        print(_SSH_SESSION_RECOVERY, file=sys.stderr)
+        return 1
     except (GitHubError, JobOperationError, OSError, ValueError):
         print("edullm jobs failed", file=sys.stderr)
         return 1
-    for state in states:
-        attempt = state.attempts[-1]
-        print(
-            f"#{state.issue} {state.current_state} "
-            f"Slurm={attempt.slurm_job_id} W&B={attempt.wandb_url}"
-        )
-    if not states:
-        print("No authorized eduLLM jobs.")
+    print(_format_operator_jobs(services.operator, summaries))
     return 0
 
 
@@ -945,6 +979,9 @@ def handle_run(*, services: OperatorServices | None = None) -> int:
             remote=services.remote,
             now=datetime.now(timezone.utc).replace(microsecond=0),
         )
+    except SSHSessionError:
+        print(_SSH_SESSION_RECOVERY, file=sys.stderr)
+        return 1
     except (GitHubError, JobOperationError, OSError, ValueError):
         print("edullm run failed before a safe submission could be confirmed", file=sys.stderr)
         return 1
@@ -967,6 +1004,9 @@ def handle_logs(issue: int, *, services: OperatorServices | None = None) -> int:
             configuration=services.load_configuration(),
             slurm=services.slurm,
         )
+    except SSHSessionError:
+        print(_SSH_SESSION_RECOVERY, file=sys.stderr)
+        return 1
     except (GitHubError, JobOperationError, OSError, ValueError):
         print("edullm logs failed", file=sys.stderr)
         return 1
@@ -988,6 +1028,9 @@ def handle_stop(issue: int, *, services: OperatorServices | None = None) -> int:
             slurm=services.slurm,
             now=datetime.now(timezone.utc).replace(microsecond=0),
         )
+    except SSHSessionError:
+        print(_SSH_SESSION_RECOVERY, file=sys.stderr)
+        return 1
     except (GitHubError, JobOperationError, OSError, ValueError):
         print("edullm stop failed", file=sys.stderr)
         return 1

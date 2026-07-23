@@ -7,7 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from edullm.assignment import AssignmentState, build_assignment_comment
+import edullm.jobs as jobs_module
+from edullm.assignment import (
+    ASSIGNMENT_MARKER,
+    AssignmentState,
+    build_assignment_comment,
+)
 from edullm.github import (
     CommitResult,
     GitHubError,
@@ -526,9 +531,45 @@ class StatefulRemote:
 
 
 class ReverseOrderGitHub(StatefulGitHub):
+    def __init__(self, valid_request):
+        super().__init__(valid_request)
+        request_43 = replace(valid_request, issue_number=43)
+        self.issue_43 = _issue(request_43, number=43)
+        assignment_43 = AssignmentState(
+            issue=43,
+            request_digest=request_43.digest,
+            operator_github="operator",
+            assigned_at=NOW,
+            reminder_at=None,
+            history=(),
+            slack_status="sent",
+        )
+        self.comments_43 = [
+            IssueComment(
+                431,
+                build_status_comment(request_43, validated_at=NOW),
+                "github-actions[bot]",
+                True,
+            ),
+            IssueComment(
+                432,
+                build_assignment_comment(assignment_43),
+                "github-actions[bot]",
+                True,
+            ),
+        ]
+
     def list_active_queue_issues(self):
-        issue_43 = replace(self.issue, number=43)
-        return (issue_43, self.issue)
+        self.events.append(("list",))
+        return (self.issue_43, self.issue)
+
+    def fetch_issue(self, number):
+        self.events.append(("fetch", number))
+        return self.issue_43 if number == 43 else self.issue
+
+    def list_issue_comments(self, number):
+        self.events.append(("comments", number))
+        return tuple(self.comments_43 if number == 43 else self.comments)
 
 
 def test_run_selects_oldest_assigned_issue_and_submits_once(valid_request):
@@ -917,6 +958,291 @@ class CompletedSlurm:
         return None
 
 
+class MixedIssueGitHub:
+    def __init__(self, valid_request):
+        self.issues = {}
+        self.comments = {}
+        self.next_comment_id = 1000
+        self.list_calls = 0
+        self.fetch_calls = []
+        self.comment_calls = []
+        self.order = (46, 44, 41, 49)
+        lifecycle_specs = {
+            44: ("running", "44001"),
+            49: ("submitted", "49001"),
+        }
+        for number in self.order:
+            request = replace(valid_request, issue_number=number)
+            lifecycle = None
+            status = "assigned"
+            if number in lifecycle_specs:
+                status, job_id = lifecycle_specs[number]
+                attempt = JobAttempt(
+                    attempt_id="attempt-1",
+                    attempt_number=1,
+                    request_digest=request.digest,
+                    operator="operator",
+                    slurm_job_id=job_id,
+                    wandb_run_id=f"issue-{number}-attempt-1-{job_id}",
+                    wandb_url=(
+                        "https://wandb.ai/eduLLM/pretraining/runs/"
+                        f"issue-{number}-attempt-1-{job_id}"
+                    ),
+                    log_path=(
+                        "/home/operator/orcd/scratch/edullm/logs/"
+                        f"issue-{number}-attempt-1-{job_id}.log"
+                    ),
+                    state=status,
+                    submitted_at=NOW,
+                    updated_at=NOW,
+                )
+                lifecycle = LifecycleState(
+                    issue=number,
+                    request_digest=request.digest,
+                    operator="operator",
+                    assignment_version=0,
+                    attempts=(attempt,),
+                    current_state=status,
+                    updated_at=NOW,
+                    notification=NotificationRecord("none", "none", NOW),
+                )
+            self.issues[number] = _issue(
+                request,
+                number=number,
+                labels=("edullm-job", f"status:{status}", "research"),
+            )
+            assignment = AssignmentState(
+                issue=number,
+                request_digest=request.digest,
+                operator_github="operator",
+                assigned_at=NOW,
+                reminder_at=None,
+                history=(),
+                slack_status="sent",
+            )
+            comments = [
+                IssueComment(
+                    number * 10 + 1,
+                    build_status_comment(request, validated_at=NOW),
+                    "github-actions[bot]",
+                    True,
+                ),
+                IssueComment(
+                    number * 10 + 2,
+                    build_assignment_comment(assignment),
+                    "github-actions[bot]",
+                    True,
+                ),
+            ]
+            if lifecycle is not None:
+                comments.append(
+                    IssueComment(
+                        number * 10 + 3,
+                        build_job_comment(lifecycle),
+                        "operator",
+                        False,
+                    )
+                )
+            self.comments[number] = comments
+
+    def list_active_queue_issues(self):
+        self.list_calls += 1
+        return tuple(self.issues[number] for number in self.order)
+
+    def fetch_issue(self, number):
+        self.fetch_calls.append(number)
+        return self.issues[number]
+
+    def list_issue_comments(self, number):
+        self.comment_calls.append(number)
+        return tuple(self.comments[number])
+
+    def create_issue_comment(self, number, body):
+        comment = IssueComment(self.next_comment_id, body, "operator", False)
+        self.next_comment_id += 1
+        self.comments[number].append(comment)
+        return comment
+
+    def update_issue_comment(self, comment_id, body):
+        for number, comments in self.comments.items():
+            for index, comment in enumerate(comments):
+                if comment.id == comment_id:
+                    updated = replace(comment, body=body)
+                    comments[index] = updated
+                    return updated
+        raise AssertionError(f"unknown comment {comment_id}")
+
+    def add_issue_status_label(self, number, label):
+        issue = self.issues[number]
+        self.issues[number] = replace(
+            issue,
+            labels=tuple(sorted(set(issue.labels) | {label})),
+        )
+        return self.issues[number].labels
+
+    def remove_issue_status_label(self, number, label):
+        issue = self.issues[number]
+        self.issues[number] = replace(
+            issue,
+            labels=tuple(existing for existing in issue.labels if existing != label),
+        )
+        return True
+
+
+class MixedJobSlurm:
+    def __init__(self):
+        self.queries = []
+        self.offline_reconciliations = 0
+
+    def query(self, job_ids):
+        self.queries.append(tuple(job_ids))
+        return {
+            "49001": SlurmJob(
+                job_id="49001",
+                name="issue-49-skill-dag-v1-natural",
+                state="RUNNING",
+                user="operator",
+                lifecycle_state="running",
+            ),
+            "44001": SlurmJob(
+                job_id="44001",
+                name="issue-44-skill-dag-v1-natural",
+                state="COMPLETED",
+                user="operator",
+                lifecycle_state="completed",
+            ),
+        }
+
+    def reconcile_offline_tracking(self):
+        self.offline_reconciliations += 1
+
+
+def test_jobs_lists_assigned_request_without_querying_slurm(valid_request):
+    github = StatefulGitHub(valid_request)
+    slurm = CompletedSlurm()
+
+    summaries = jobs(
+        mine=True,
+        operator="operator",
+        github=github,
+        configuration=_config(),
+        slurm=slurm,
+        now=NOW,
+    )
+
+    assert summaries == (
+        jobs_module.OperatorJobSummary(
+            issue=42,
+            status="assigned",
+            slurm_job_id=None,
+            wandb_url=None,
+        ),
+    )
+    assert slurm.queries == []
+    assert ("fetch", 42) in github.events
+    assert ("comments", 42) in github.events
+    assert github.commit_evidence_calls == []
+
+
+@pytest.mark.parametrize("assignment_evidence", ["malformed", "mismatched"])
+def test_jobs_rejects_invalid_assigned_request_evidence(valid_request, assignment_evidence):
+    github = StatefulGitHub(valid_request)
+    if assignment_evidence == "malformed":
+        body = f"{ASSIGNMENT_MARKER}\n{{"
+    else:
+        body = github.comments[1].body.replace(valid_request.digest, "b" * 64)
+    github.comments[1] = replace(github.comments[1], body=body)
+    slurm = CompletedSlurm()
+
+    with pytest.raises(JobOperationError):
+        jobs(
+            mine=True,
+            operator="operator",
+            github=github,
+            configuration=_config(),
+            slurm=slurm,
+            now=NOW,
+        )
+
+    assert slurm.queries == []
+    assert github.commit_evidence_calls == []
+
+
+def test_jobs_rejects_assigned_request_with_multiple_enabled_operator_assignees(valid_request):
+    github = StatefulGitHub(valid_request, operator="philote-dev")
+    github.issue = replace(github.issue, assignees=("philote-dev", "meric233"))
+    slurm = CompletedSlurm()
+
+    with pytest.raises(JobOperationError, match="assignee"):
+        jobs(
+            mine=True,
+            operator="philote-dev",
+            github=github,
+            configuration=_multi_operator_config(),
+            slurm=slurm,
+            now=NOW,
+        )
+
+    assert slurm.queries == []
+    assert github.commit_evidence_calls == []
+
+
+def test_jobs_orders_assigned_requests_oldest_first(valid_request):
+    github = ReverseOrderGitHub(valid_request)
+    slurm = CompletedSlurm()
+
+    summaries = jobs(
+        mine=True,
+        operator="operator",
+        github=github,
+        configuration=_config(),
+        slurm=slurm,
+        now=NOW,
+    )
+
+    assert summaries == (
+        jobs_module.OperatorJobSummary(42, "assigned", None, None),
+        jobs_module.OperatorJobSummary(43, "assigned", None, None),
+    )
+    assert slurm.queries == []
+
+
+def test_jobs_orders_mixed_summaries_and_queries_only_lifecycle_job_ids(valid_request):
+    github = MixedIssueGitHub(valid_request)
+    slurm = MixedJobSlurm()
+
+    summaries = jobs(
+        mine=True,
+        operator="operator",
+        github=github,
+        configuration=_config(),
+        slurm=slurm,
+        now=NOW,
+    )
+
+    assert summaries == (
+        jobs_module.OperatorJobSummary(41, "assigned", None, None),
+        jobs_module.OperatorJobSummary(46, "assigned", None, None),
+        jobs_module.OperatorJobSummary(
+            49,
+            "running",
+            "49001",
+            "https://wandb.ai/eduLLM/pretraining/runs/issue-49-attempt-1-49001",
+        ),
+        jobs_module.OperatorJobSummary(
+            44,
+            "completed",
+            "44001",
+            "https://wandb.ai/eduLLM/pretraining/runs/issue-44-attempt-1-44001",
+        ),
+    )
+    assert github.list_calls == 1
+    assert github.fetch_calls[:4] == list(github.order)
+    assert github.comment_calls[:4] == list(github.order)
+    assert slurm.queries == [("44001", "49001")]
+    assert slurm.offline_reconciliations == 1
+
+
 def test_jobs_repairs_terminal_issue_without_submitting(valid_request):
     lifecycle = replace(
         _lifecycle("running"),
@@ -926,7 +1252,7 @@ def test_jobs_repairs_terminal_issue_without_submitting(valid_request):
     github = StatefulGitHub(valid_request, lifecycle=lifecycle)
     slurm = CompletedSlurm()
 
-    repaired = jobs(
+    summaries = jobs(
         mine=True,
         operator="operator",
         github=github,
@@ -935,7 +1261,14 @@ def test_jobs_repairs_terminal_issue_without_submitting(valid_request):
         now=NOW,
     )
 
-    assert repaired[0].current_state == "completed"
+    assert summaries == (
+        jobs_module.OperatorJobSummary(
+            issue=42,
+            status="completed",
+            slurm_job_id="12345",
+            wandb_url="https://wandb.ai/eduLLM/pretraining/runs/issue-42-attempt-1-12345",
+        ),
+    )
     assert set(github.issue.labels) == {"edullm-job", "research", "status:completed"}
     assert slurm.queries == [("12345",)]
     assert github.commit_evidence_calls == []

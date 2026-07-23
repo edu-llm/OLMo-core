@@ -184,6 +184,69 @@ def test_generic_smoke_renders_every_protected_launcher_and_training_option(
     assert '"--work-dir=$EDULLM_RUN_DIR"' in text
 
 
+@pytest.mark.parametrize("arm", ["bare", "complete", "fade_ordered", "fade_shuffled"])
+def test_worked_examples_cpt_renders_locked_science_inputs(valid_resolved_request, arm):
+    policy = load_policy(Path("config/edullm/policy.yaml"))
+    request = replace(
+        valid_resolved_request.request,
+        purpose="Compare worked and faded scaffolds at a matched CPT token budget",
+        study="worked-examples-faded-scaffolds",
+        condition=arm,
+        comparison="bare-vs-complete-vs-fade-ordered-vs-fade-shuffled",
+        entrypoint_profile="worked-examples-cpt",
+        script_path="src/scripts/hypothesis/worked_examples/train_cpt_arm.py",
+        launcher="torchrun",
+        argv=(f"we-cpt-{arm.replace('_', '-')}", f"--arm={arm}"),
+        data_manifest="/orcd/pool/edullm/manifests/worked-examples-metamath-v0.json",
+        wandb_project="pretraining",
+        success_signal="Finite train/PPL and Pass@N metrics",
+        success_metrics=("eval/pass_at_n", "eval/pass_ratio_at_n"),
+        gpu_count=2,
+        gpu_preference="h100",
+        max_runtime_minutes=360,
+    )
+    assert validate_request(request, policy) == []
+    snapshot = SubmissionGateSnapshot(
+        issue=request.issue_number,
+        request=request,
+        request_digest=request.digest,
+        operator="operator",
+        validated_at=NOW,
+        status_comment_id=1,
+        assignment_comment_id=2,
+        assignment_binding="b" * 64,
+        assignment_version=0,
+        config_digest="c" * 64,
+        lifecycle=None,
+        profile=policy.entrypoints["worked-examples-cpt"],
+        repository_url=policy.repository_url,
+        scratch_root=policy.scratch_root,
+        slurm_partition=policy.slurm_partition,
+        slurm_memory=policy.slurm_memory,
+        slurm_cpus_per_gpu=policy.slurm_cpus_per_gpu,
+    )
+
+    text = render_sbatch(build_resolved_request(snapshot, attempt_number=1))
+
+    for argument in (
+        f"--arm={arm}",
+        "--pack-dir=/orcd/pool/edullm/data/worked-examples-metamath-v0",
+        "--load-path=/orcd/pool/edullm/checkpoints/OLMo-Ladder-760M-0.5xC-core",
+        "--token-budget=200000000",
+        "--seed=0",
+        "--wandb-project=pretraining",
+        "--wandb-group=worked-examples-faded-scaffolds",
+        "--trainer.callbacks.wandb.project=pretraining",
+    ):
+        assert argument in text
+    assert "#SBATCH -G h100:2" in text
+    assert "#SBATCH -t 06:00:00" in text
+    assert text.count("--standalone") == 1
+    assert text.count("--nproc-per-node=2") == 1
+    assert '"--save-folder=$EDULLM_RUN_DIR"' in text
+    assert '"--work-dir=$EDULLM_RUN_DIR"' in text
+
+
 def test_generic_smoke_merges_static_and_dynamic_audit_tags_once_shell_safely(
     valid_resolved_request,
 ):
