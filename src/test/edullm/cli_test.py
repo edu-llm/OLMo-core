@@ -5,6 +5,7 @@ import subprocess
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 import yaml
@@ -268,7 +269,7 @@ def test_internal_cli_exposes_only_hard_disabled_assignment_automation(
         calls.append((token, repository, webhook, root))
         return (AssignmentResult(42, "assigned", "alice", False),)
 
-    kwargs = {
+    kwargs: dict[str, Any] = {
         "assignment_runner": lambda **unused: (),
         "reminder_runner": lambda **unused: (),
         "terminal_runner": lambda **unused: (),

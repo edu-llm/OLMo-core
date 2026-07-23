@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -145,7 +146,8 @@ def test_rejects_duplicate_json_fields_and_duplicate_shards(tmp_path):
         )
 
     path, _, data = _write_manifest(root)
-    data["files"].append(dict(data["files"][0]))
+    files = cast(list[dict[str, object]], data["files"])
+    files.append(dict(files[0]))
     encoded = json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
     path.write_bytes(encoded)
     with pytest.raises(DataManifestError, match="duplicate"):
@@ -160,14 +162,16 @@ def test_rejects_wrong_manifest_shard_size_and_hash(tmp_path):
         verify_manifest(str(path), digest, {"skill-dag"}, allowed_roots=(root,))
 
     path, _, data = _write_manifest(root)
-    data["files"][0]["size"] += 1
+    files = cast(list[dict[str, object]], data["files"])
+    files[0]["size"] = cast(int, files[0]["size"]) + 1
     encoded = json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
     path.write_bytes(encoded)
     with pytest.raises(DataManifestError, match="size"):
         verify_manifest(str(path), _sha256(encoded), {"skill-dag"}, allowed_roots=(root,))
 
     path, _, data = _write_manifest(root)
-    data["files"][0]["sha256"] = "0" * 64
+    files = cast(list[dict[str, object]], data["files"])
+    files[0]["sha256"] = "0" * 64
     encoded = json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
     path.write_bytes(encoded)
     with pytest.raises(DataManifestError, match="shard digest"):
@@ -197,7 +201,7 @@ def test_rejects_traversal_symlink_escape_and_hardlinks(tmp_path):
 
     link = root / "escape"
     link.symlink_to(outside, target_is_directory=True)
-    data = {
+    data: dict[str, object] = {
         "data_dir": str(root),
         "files": [
             {
@@ -216,7 +220,8 @@ def test_rejects_traversal_symlink_escape_and_hardlinks(tmp_path):
 
     hardlink = root / "hardlink"
     os.link(secret, hardlink)
-    data["files"][0]["path"] = str(hardlink)
+    files = cast(list[dict[str, object]], data["files"])
+    files[0]["path"] = str(hardlink)
     encoded = json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
     path.write_bytes(encoded)
     with pytest.raises(DataManifestError, match="link"):
@@ -279,7 +284,7 @@ def test_bounded_manifest_bytes_file_count_depth_and_shard_sizes(tmp_path):
         )
 
     path, _, data = _write_manifest(root)
-    data["files"] = data["files"] * 65
+    data["files"] = cast(list[dict[str, object]], data["files"]) * 65
     encoded = json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
     path.write_bytes(encoded)
     with pytest.raises(DataManifestError, match="many"):

@@ -74,16 +74,17 @@ def _operator() -> Operator:
 
 
 def _issue(valid_request, **changes) -> GitHubIssue:
-    values = {
-        "number": 42,
-        "body": BODY,
-        "requester": "student",
-        "labels": ("edullm-job", "status:assigned", "research"),
-        "title": "Untrusted <script>alert(1)</script>",
-        "assignees": ("operator", "faculty"),
-    }
-    values.update(changes)
-    return GitHubIssue(**values)
+    return replace(
+        GitHubIssue(
+            number=42,
+            body=BODY,
+            requester="student",
+            labels=("edullm-job", "status:assigned", "research"),
+            title="Untrusted <script>alert(1)</script>",
+            assignees=("operator", "faculty"),
+        ),
+        **changes,
+    )
 
 
 def _assignment(valid_request) -> AssignmentState:
