@@ -47,10 +47,9 @@ Replace ``YOUR_MIT_USERNAME`` with the operator's MIT username. Operator Slack
 member IDs are centrally configured in the reviewed roster; ``edullm setup``
 never asks for a Slack ID.
 
-Meric (``meric233``) and Amy Lin (``alsy7009``) are staged in the roster but
-are not assignment-enabled. Each must report successful personal setup before
-assignment can be enabled. Enabling either operator requires a later, tiny,
-reviewed configuration change.
+Meric (``meric233``) and Amy Lin (``alsy7009``) are assignment-enabled in the
+reviewed roster. Each must finish or fix their local and ORCD setup before
+accepting jobs; assignment eligibility does not mean that setup has succeeded.
 
 Prepare and review
 ------------------
@@ -110,6 +109,5 @@ Deferred
 --------
 
 The initial slice does not include scheduled W&B monitoring from the original
-Plan 2 Task 8, Plan 3 work, S3, Apptainer, assignment enablement for staged
-operators, advanced Slack reminders or terminal threads, strict ruleset
-automation, or broad rollout polish.
+Plan 2 Task 8, Plan 3 work, S3, Apptainer, advanced Slack reminders or terminal
+threads, strict ruleset automation, or broad rollout polish.

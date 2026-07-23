@@ -6,8 +6,8 @@ operators:
 - github: meric233
   slack_user_id: U0BAARXNKC2
   rotation_order: 1
-  enabled: false
+  enabled: true
 - github: alsy7009
   slack_user_id: U0B9K2XTTBL
   rotation_order: 2
-  enabled: false
+  enabled: true

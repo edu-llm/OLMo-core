@@ -212,7 +212,7 @@ def test_ruleset_matches_policy_checks_and_has_no_bypass():
     assert "Test edullm queue" not in contexts
 
 
-def test_reviewed_team_roster_and_staged_operators_are_exact():
+def test_reviewed_team_roster_and_enabled_operators_are_exact():
     expected_leads = [
         "ericrcwu001",
         "pianomaster99",
@@ -239,9 +239,13 @@ def test_reviewed_team_roster_and_staged_operators_are_exact():
         for operator in operators
     ] == [
         ("philote-dev", "U0BA7EHAKJR", 0, True),
-        ("meric233", "U0BAARXNKC2", 1, False),
-        ("alsy7009", "U0B9K2XTTBL", 2, False),
+        ("meric233", "U0BAARXNKC2", 1, True),
+        ("alsy7009", "U0B9K2XTTBL", 2, True),
     ]
     assert len({operator.slack_user_id for operator in operators}) == len(operators)
     assert len({operator.rotation_order for operator in operators}) == len(operators)
-    assert {operator.github for operator in operators if operator.enabled} == {"philote-dev"}
+    assert {operator.github for operator in operators if operator.enabled} == {
+        "philote-dev",
+        "meric233",
+        "alsy7009",
+    }
