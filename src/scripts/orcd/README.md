@@ -125,6 +125,27 @@ sbatch --output="$EDULLM_SCRATCH/logs/%x-%j.log" \
 Wait for setup to finish before submitting the probe, and wait for the probe to confirm one L40S,
 CUDA, imports, W&B reachability status, and writable Scratch before training.
 
+## Run the GPU and W&B access smoke
+
+Use this five-minute job when the goal is only to verify one-L40S access and live W&B metrics,
+without starting an OLMo training run. It performs five bounded CUDA matrix multiplications and
+logs timing, TFLOPS, allocated/reserved GPU memory, result sanity, and pass/fail metrics to the
+configured W&B project. The job rejects `main`, a dirty checkout, and a checkout whose full SHA
+does not match `EDULLM_COMMIT_SHA`.
+
+```bash
+export RUN_NAME="gpu-wandb-access-$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$EDULLM_SCRATCH/logs"
+sbatch --output="$EDULLM_SCRATCH/logs/%x-%j.log" \
+  --error="$EDULLM_SCRATCH/logs/%x-%j.log" \
+  --export=EDULLM_REPO_ROOT="$EDULLM_REPO_ROOT",EDULLM_COMMIT_SHA="$EDULLM_COMMIT_SHA",EDULLM_SCRATCH="$EDULLM_SCRATCH",RUN_NAME="$RUN_NAME" \
+  src/scripts/orcd/gpu_wandb_smoke.sbatch
+```
+
+The secret stays in `$HOME/.config/edullm/wandb.key`; do not add it to `--export`. The JSON probe
+report is written to `$EDULLM_SCRATCH/probes/<job-id>-gpu-wandb.json`, and the full job log is
+written under `$EDULLM_SCRATCH/logs/`.
+
 ## Configure W&B privately
 
 Provision the operator's own key without putting it in a command argument, repository, Slurm log,

@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "skills": {
+    "submit-edullm-job": {
+      "source": ".cursor/skills/submit-edullm-job",
+      "sourceType": "local",
+      "computedHash": "34138a2f4448cdcaf8789c612e644e995a6fd09ef9e713916f0881f3af6321a6"
+    },
+    "weights-and-biases": {
+      "source": "orchestra-research/ai-research-skills",
+      "sourceType": "github",
+      "skillPath": "13-mlops/weights-and-biases/SKILL.md",
+      "computedHash": "6d98bac42f756c4ab15701e9aedd9f62d6f1d65dedf050d6c9814dc1525005fa"
+    }
+  }
+}
