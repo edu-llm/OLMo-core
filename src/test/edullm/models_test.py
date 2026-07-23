@@ -622,13 +622,13 @@ def test_operator_files_keep_reviewed_roster_and_examples_inert():
             github="meric233",
             slack_user_id="U0BAARXNKC2",
             rotation_order=1,
-            enabled=False,
+            enabled=True,
         ),
         Operator(
             github="alsy7009",
             slack_user_id="U0B9K2XTTBL",
             rotation_order=2,
-            enabled=False,
+            enabled=True,
         ),
     )
     examples = load_operators(Path("config/edullm/operators.example.yaml"))
