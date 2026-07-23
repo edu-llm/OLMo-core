@@ -1819,6 +1819,18 @@ def test_setup_handler_reports_direct_engaging_reachability_stage(monkeypatch, c
     assert "failed during direct Engaging reachability" in output.err
 
 
+def test_setup_handler_reports_ssh_configuration_planning_stage(monkeypatch, capsys):
+    def failed(**kwargs):
+        raise cli.SetupError("operator setup failed while planning SSH configuration")
+
+    monkeypatch.setattr(cli, "setup_operator", failed)
+
+    assert cli.handle_setup("orcd-user") == 1
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "failed while planning SSH configuration" in output.err
+
+
 def test_setup_cli_passes_explicit_orcd_username_to_handler(monkeypatch):
     calls = []
 
