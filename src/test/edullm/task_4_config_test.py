@@ -4,7 +4,8 @@ from pathlib import Path
 
 import yaml
 
-from edullm.policy import load_policy
+from edullm.automation import load_team_leads
+from edullm.policy import load_operators, load_policy
 from edullm.request_parser import ISSUE_HEADINGS, fields_from_markdown, parse_issue
 from edullm.validation import validate_request
 
@@ -15,6 +16,7 @@ MAIN_WORKFLOW = Path(".github/workflows/main.yml")
 CODEOWNERS = Path(".github/CODEOWNERS")
 RULESET = Path("config/edullm/main-ruleset.json")
 TEAM_LEADS = Path("config/edullm/team-leads.yaml")
+OPERATORS = Path("config/edullm/operators.yaml")
 FIXTURE = Path("src/test/edullm/fixtures/valid_issue.md")
 
 
@@ -106,18 +108,15 @@ def test_issue_template_config_disables_blank_issues_without_invented_links():
     }
 
 
-def test_workflow_is_hard_disabled_with_exact_triggers_and_issue_filter():
-    text = WORKFLOW.read_text(encoding="utf-8")
+def test_workflow_has_exact_triggers_and_enabled_issue_filter():
     workflow = _load_yaml(WORKFLOW)
     trigger = _workflow_trigger(workflow)
     job = workflow["jobs"]["validate"]
 
     assert trigger == {"issues": {"types": ["opened", "edited", "reopened"]}}
-    assert "false" in job["if"]
-    assert "contains(github.event.issue.labels.*.name, 'edullm-job')" in job["if"]
+    assert job["if"] == "${{ contains(github.event.issue.labels.*.name, 'edullm-job') }}"
     assert "vars." not in job["if"]
     assert "secrets." not in job["if"]
-    assert "${{ false &&" in text
 
 
 def test_workflow_has_per_issue_concurrency_and_exact_least_privilege():
@@ -213,5 +212,10 @@ def test_ruleset_matches_policy_checks_and_has_no_bypass():
     assert "Test edullm queue" not in contexts
 
 
-def test_production_team_leads_file_is_explicitly_empty():
-    assert _load_yaml(TEAM_LEADS) == {"team_leads": []}
+def test_pilot_has_exactly_one_lead_and_one_enabled_operator():
+    leads = load_team_leads(TEAM_LEADS)
+    operators = load_operators(OPERATORS)
+
+    assert len(leads) == 1
+    assert len(operators) == 1
+    assert sum(operator.enabled for operator in operators) == 1

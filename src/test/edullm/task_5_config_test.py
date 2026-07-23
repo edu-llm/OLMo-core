@@ -25,33 +25,31 @@ def test_assignment_workflow_has_explicit_handoff_and_retry_triggers():
     assert trigger["workflow_call"]["secrets"] == {"SLACK_WEBHOOK_URL": {"required": True}}
 
 
-def test_validation_workflow_has_a_literal_false_reusable_assignment_handoff():
-    text = VALIDATE.read_text(encoding="utf-8")
+def test_validation_workflow_has_enabled_reusable_assignment_handoff():
     workflow = _load(VALIDATE)
     handoff = workflow["jobs"]["assign"]
 
     assert handoff["needs"] == "validate"
-    assert "${{ false &&" in handoff["if"]
+    assert handoff["if"] == "${{ needs.validate.result == 'success' }}"
     assert handoff["uses"] == "./.github/workflows/edullm-assign.yml"
     assert handoff["secrets"] == {"SLACK_WEBHOOK_URL": "${{ secrets.SLACK_WEBHOOK_URL }}"}
     assert "status:ready" not in _trigger(workflow)["issues"]["types"]
-    assert text.count("${{ false &&") >= 2
 
 
-def test_task_5_workflows_are_hard_disabled_and_globally_serialized():
+def test_task_5_workflows_are_globally_serialized_and_reminders_stay_disabled():
     for path in (ASSIGN, REMINDERS):
-        text = path.read_text(encoding="utf-8")
         workflow = _load(path)
-        job = next(iter(workflow["jobs"].values()))
-
-        assert "${{ false" in job["if"]
-        assert "vars." not in job["if"]
-        assert "secrets." not in job["if"]
         assert workflow["concurrency"] == {
             "group": "edullm-assignment",
             "cancel-in-progress": False,
         }
-        assert "${{ false" in text
+
+    text = REMINDERS.read_text(encoding="utf-8")
+    job = next(iter(_load(REMINDERS)["jobs"].values()))
+    assert "${{ false" in job["if"]
+    assert "vars." not in job["if"]
+    assert "secrets." not in job["if"]
+    assert "${{ false" in text
 
 
 def test_reminder_workflow_has_only_scheduled_and_manual_scanning():

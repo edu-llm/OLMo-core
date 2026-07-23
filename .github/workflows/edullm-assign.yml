@@ -20,7 +20,7 @@ permissions:
 jobs:
   assign:
     # Manual governance gate: a reviewed code change must remove this literal false.
-    if: ${{ false && github.repository != '' }}
+    if: ${{ github.repository == 'edu-llm/OLMo-core' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262

@@ -25,12 +25,30 @@ def test_core_assignment_handoff_requires_only_the_slack_secret():
     }
 
 
-def test_every_edullm_workflow_remains_literally_disabled_and_sha_pinned():
+def test_only_core_workflows_are_enabled():
+    validate = yaml.load(
+        (WORKFLOWS / "edullm-validate.yml").read_text(encoding="utf-8"),
+        Loader=yaml.BaseLoader,
+    )
+    assign = yaml.load(
+        (WORKFLOWS / "edullm-assign.yml").read_text(encoding="utf-8"),
+        Loader=yaml.BaseLoader,
+    )
+    reminders = (WORKFLOWS / "edullm-reminders.yml").read_text(encoding="utf-8")
+    terminal = (WORKFLOWS / "edullm-terminal-notify.yml").read_text(encoding="utf-8")
+
+    assert validate["jobs"]["validate"]["if"] == (
+        "${{ contains(github.event.issue.labels.*.name, 'edullm-job') }}"
+    )
+    assert validate["jobs"]["assign"]["if"] == "${{ needs.validate.result == 'success' }}"
+    assert assign["jobs"]["assign"]["if"] == "${{ github.repository == 'edu-llm/OLMo-core' }}"
+    assert "${{ false &&" in reminders
+    assert "${{ false &&" in terminal
+
     paths = sorted(WORKFLOWS.glob("edullm-*.yml"))
     assert paths
     for path in paths:
         text = path.read_text(encoding="utf-8")
-        assert "${{ false &&" in text
         assert "persist-credentials: false" in text
         for line in text.splitlines():
             if line.strip().startswith("- uses:"):
