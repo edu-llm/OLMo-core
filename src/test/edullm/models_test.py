@@ -1,6 +1,7 @@
 import dataclasses
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,21 @@ import yaml
 
 from edullm.models import AttemptRecord, JobRequest, JobStatus, Operator
 from edullm.policy import load_operators, load_policy
+
+
+def _policy_documents():
+    policy = yaml.safe_load(Path("config/edullm/policy.yaml").read_text(encoding="utf-8"))
+    entrypoints = yaml.safe_load(Path("config/edullm/entrypoints.yaml").read_text(encoding="utf-8"))
+    return policy, entrypoints
+
+
+def _write_policy_bundle(tmp_path, policy, entrypoints):
+    policy_path = tmp_path / "policy.yaml"
+    policy_path.write_text(yaml.safe_dump(policy, sort_keys=False), encoding="utf-8")
+    (tmp_path / "entrypoints.yaml").write_text(
+        yaml.safe_dump(entrypoints, sort_keys=False), encoding="utf-8"
+    )
+    return policy_path
 
 
 def test_job_request_generates_stable_name():
@@ -92,19 +108,31 @@ def test_supporting_records_are_immutable(valid_resolved_request):
         attempt.slurm_job_id = "54321"
 
 
-def test_policy_loads_allowed_projects(tmp_path):
-    path = tmp_path / "policy.yaml"
-    path.write_text(
-        "wandb_entity: eduLLM\n" "allowed_wandb_projects: [test]\n" "required_checks: [Lint]\n"
-    )
-    (tmp_path / "entrypoints.yaml").write_text("entrypoints: {}\n")
-    policy = load_policy(path)
+def test_policy_loads_reviewed_defaults(tmp_path):
+    policy_data, entrypoints = _policy_documents()
+    for field in (
+        "max_runtime_minutes",
+        "max_gpu_count",
+        "allowed_gpu_preferences",
+        "reminder_after_minutes",
+        "reassign_after_minutes",
+    ):
+        policy_data.pop(field)
+    policy = load_policy(_write_policy_bundle(tmp_path, policy_data, entrypoints))
 
     assert policy.wandb_entity == "eduLLM"
-    assert policy.allowed_wandb_projects == ("test",)
-    assert policy.required_checks == ("Lint",)
+    assert policy.allowed_wandb_projects == (
+        "test",
+        "pretraining",
+        "posttraining",
+        "evaluation",
+        "data-pipeline",
+    )
     assert policy.max_runtime_minutes == 360
     assert policy.max_gpu_count == 2
+    assert policy.allowed_gpu_preferences == ("any", "l40s", "h100", "h200")
+    assert policy.reminder_after_minutes == 15
+    assert policy.reassign_after_minutes == 30
 
 
 def test_production_policy_has_reviewed_limits_and_staged_required_checks():
@@ -140,12 +168,254 @@ def test_production_policy_has_reviewed_limits_and_staged_required_checks():
     assert "Test edullm queue" not in policy.required_checks
 
 
+def test_policy_rejects_invalid_yaml(tmp_path):
+    _, entrypoints = _policy_documents()
+    path = tmp_path / "policy.yaml"
+    path.write_text("wandb_entity: [\n", encoding="utf-8")
+    (tmp_path / "entrypoints.yaml").write_text(
+        yaml.safe_dump(entrypoints, sort_keys=False), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="policy.yaml: invalid YAML"):
+        load_policy(path)
+
+
+@pytest.mark.parametrize(
+    ("document", "message"),
+    [
+        ([], "policy must be a mapping"),
+        (
+            {"entrypoints": []},
+            "entrypoints must be a mapping",
+        ),
+    ],
+    ids=["policy-root", "entrypoints-container"],
+)
+def test_policy_rejects_malformed_document_containers(tmp_path, document, message):
+    policy, entrypoints = _policy_documents()
+    if message.startswith("policy "):
+        policy = document
+    else:
+        entrypoints = document
+
+    with pytest.raises(ValueError, match=re.escape(message)):
+        load_policy(_write_policy_bundle(tmp_path, policy, entrypoints))
+
+
+@pytest.mark.parametrize("field", ["wandb_entity", "allowed_wandb_projects", "required_checks"])
+def test_policy_rejects_missing_required_fields(tmp_path, field):
+    policy, entrypoints = _policy_documents()
+    policy.pop(field)
+
+    with pytest.raises(ValueError, match=re.escape(f"policy: missing required fields: {field}")):
+        load_policy(_write_policy_bundle(tmp_path, policy, entrypoints))
+
+
+def test_policy_rejects_unknown_root_fields(tmp_path):
+    policy, entrypoints = _policy_documents()
+    policy["unreviewed"] = True
+
+    with pytest.raises(ValueError, match="policy: unknown fields: unreviewed"):
+        load_policy(_write_policy_bundle(tmp_path, policy, entrypoints))
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("wandb_entity", "other", "policy.wandb_entity must be 'eduLLM'"),
+        (
+            "allowed_wandb_projects",
+            ["test"],
+            "policy.allowed_wandb_projects must exactly match the reviewed projects",
+        ),
+        (
+            "allowed_wandb_projects",
+            "test",
+            "policy.allowed_wandb_projects must be a list",
+        ),
+        (
+            "max_runtime_minutes",
+            361,
+            "policy.max_runtime_minutes must be an integer from 1 to 360",
+        ),
+        (
+            "max_runtime_minutes",
+            True,
+            "policy.max_runtime_minutes must be an integer from 1 to 360",
+        ),
+        (
+            "max_gpu_count",
+            3,
+            "policy.max_gpu_count must be an integer from 1 to 2",
+        ),
+        (
+            "max_gpu_count",
+            "2",
+            "policy.max_gpu_count must be an integer from 1 to 2",
+        ),
+        (
+            "allowed_gpu_preferences",
+            ["any", "l40s", "attacker"],
+            "policy.allowed_gpu_preferences must exactly match the reviewed preferences",
+        ),
+        (
+            "required_checks",
+            ["Lint"],
+            "policy.required_checks must exactly match the staged required checks",
+        ),
+        (
+            "required_checks",
+            "Lint",
+            "policy.required_checks must be a list",
+        ),
+        (
+            "reminder_after_minutes",
+            0,
+            "policy.reminder_after_minutes must be a positive integer",
+        ),
+        (
+            "reassign_after_minutes",
+            15,
+            "policy.reassign_after_minutes must be greater than reminder_after_minutes",
+        ),
+    ],
+)
+def test_policy_rejects_limit_and_allowlist_violations(tmp_path, field, value, message):
+    policy, entrypoints = _policy_documents()
+    policy[field] = value
+
+    with pytest.raises(ValueError, match=re.escape(message)):
+        load_policy(_write_policy_bundle(tmp_path, policy, entrypoints))
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    [
+        ("unknown-root", "entrypoints document: unknown fields: unreviewed"),
+        ("missing-profile", "entrypoints: missing required fields: generic-smoke"),
+        ("unknown-profile", "entrypoints: unknown fields: arbitrary"),
+        ("profile-container", "entrypoints.generic-smoke must be a mapping"),
+        ("unknown-profile-field", "entrypoints.generic-smoke: unknown fields: arbitrary"),
+        ("missing-script", "entrypoints.generic-smoke: missing required fields: script"),
+        (
+            "script-traversal",
+            "entrypoints.generic-smoke.script must be 'src/examples/llm/train.py'",
+        ),
+        ("launcher", "entrypoints.generic-smoke.launcher must be 'torchrun'"),
+        (
+            "wandb-callback-type",
+            "entrypoints.generic-smoke.wandb_callback must be a boolean",
+        ),
+        (
+            "allowed-data",
+            "entrypoints.generic-smoke.allowed_data_kinds[0] must be 'generic-smoke'",
+        ),
+        (
+            "positionals-type",
+            "entrypoints.generic-smoke.positionals must be an integer",
+        ),
+        (
+            "positional-schema",
+            "entrypoints.generic-smoke.allowed_positionals.0.type must be 'slug'",
+        ),
+        (
+            "option-schema",
+            "entrypoints.hypothesis-smoke.allowed_options.trainer.hard_stop.type "
+            "must be 'duration'",
+        ),
+        (
+            "derived-root",
+            "entrypoints.generic-smoke.fixed_options.save-folder.root_env "
+            "must be 'EDULLM_SCRATCH'",
+        ),
+        (
+            "derived-relative",
+            "entrypoints.generic-smoke.fixed_options.save-folder.relative "
+            "must be 'runs/{run_name}'",
+        ),
+        (
+            "fixed-option-value",
+            "entrypoints.generic-smoke.fixed_options.model-factory must be 'olmo2_190M'",
+        ),
+        (
+            "unknown-fixed-option",
+            "entrypoints.generic-smoke.fixed_options: unknown fields: attacker",
+        ),
+        (
+            "missing-fixed-option",
+            "entrypoints.generic-smoke.fixed_options: missing required fields: trainer.hard_stop",
+        ),
+        (
+            "hypothesis-wandb-false",
+            "entrypoints.hypothesis-smoke.fixed_options."
+            "trainer.callbacks.wandb.enabled must be true",
+        ),
+        (
+            "hypothesis-wandb-allowed",
+            "entrypoints.hypothesis-smoke.allowed_options: unknown fields: "
+            "trainer.callbacks.wandb.enabled",
+        ),
+    ],
+)
+def test_policy_rejects_profile_schema_violations(tmp_path, case, message):
+    policy, document = _policy_documents()
+    profiles = document["entrypoints"]
+    generic = profiles["generic-smoke"]
+    hypothesis = profiles["hypothesis-smoke"]
+
+    if case == "unknown-root":
+        document["unreviewed"] = True
+    elif case == "missing-profile":
+        profiles.pop("generic-smoke")
+    elif case == "unknown-profile":
+        profiles["arbitrary"] = generic.copy()
+    elif case == "profile-container":
+        profiles["generic-smoke"] = []
+    elif case == "unknown-profile-field":
+        generic["arbitrary"] = True
+    elif case == "missing-script":
+        generic.pop("script")
+    elif case == "script-traversal":
+        generic["script"] = "../attacker.py"
+    elif case == "launcher":
+        generic["launcher"] = "bash"
+    elif case == "wandb-callback-type":
+        generic["wandb_callback"] = "true"
+    elif case == "allowed-data":
+        generic["allowed_data_kinds"] = ["attacker"]
+    elif case == "positionals-type":
+        generic["positionals"] = "1"
+    elif case == "positional-schema":
+        generic["allowed_positionals"][0]["type"] = "string"
+    elif case == "option-schema":
+        hypothesis["allowed_options"]["trainer.hard_stop"]["type"] = "unknown"
+    elif case == "derived-root":
+        generic["fixed_options"]["save-folder"]["root_env"] = "HOME"
+    elif case == "derived-relative":
+        generic["fixed_options"]["save-folder"]["relative"] = "../runs/{run_name}"
+    elif case == "fixed-option-value":
+        generic["fixed_options"]["model-factory"] = "attacker"
+    elif case == "unknown-fixed-option":
+        generic["fixed_options"]["attacker"] = True
+    elif case == "missing-fixed-option":
+        generic["fixed_options"].pop("trainer.hard_stop")
+    elif case == "hypothesis-wandb-false":
+        hypothesis["fixed_options"]["trainer.callbacks.wandb.enabled"] = False
+    elif case == "hypothesis-wandb-allowed":
+        hypothesis["allowed_options"]["trainer.callbacks.wandb.enabled"] = {"type": "boolean"}
+    else:
+        raise AssertionError(f"unhandled test case: {case}")
+
+    with pytest.raises(ValueError, match=re.escape(message)):
+        load_policy(_write_policy_bundle(tmp_path, policy, document))
+
+
 def test_generic_profile_owns_the_reviewed_plan_1_smoke_arguments():
     profile = load_policy(Path("config/edullm/policy.yaml")).entrypoints["generic-smoke"]
 
     assert profile["script"] == "src/examples/llm/train.py"
     assert profile["launcher"] == "torchrun"
-    assert profile["fixed_launcher_arguments"] == ["--standalone", "--nproc-per-node=1"]
+    assert profile["fixed_launcher_arguments"] == ("--standalone", "--nproc-per-node=1")
     assert profile["fixed_options"] == {
         "model-factory": "olmo2_190M",
         "sequence-length": 512,
@@ -171,7 +441,7 @@ def test_generic_profile_owns_the_reviewed_plan_1_smoke_arguments():
         "trainer.callbacks.wandb.entity": "eduLLM",
         "trainer.callbacks.wandb.project": "test",
         "trainer.callbacks.wandb.group": {"type": "request_field", "field": "study"},
-        "trainer.callbacks.wandb.tags": ["orcd", "generic-smoke", "olmo2-190m"],
+        "trainer.callbacks.wandb.tags": ("orcd", "generic-smoke", "olmo2-190m"),
     }
 
 
@@ -181,9 +451,92 @@ def test_generic_profile_only_accepts_typed_non_safety_critical_values():
     assert profile["positionals"] == 1
     assert profile["allowed_positionals"] == {0: {"type": "slug"}}
     assert profile["allowed_options"] == {}
-    serialized = yaml.safe_dump(profile, sort_keys=True)
+    serialized = repr(profile)
     assert "$HOME" not in serialized
     assert "EDULLM_SCRATCH" in serialized
+
+
+def test_loaded_policy_is_recursively_immutable():
+    policy = load_policy(Path("config/edullm/policy.yaml"))
+    generic = policy.entrypoints["generic-smoke"]
+    hypothesis = policy.entrypoints["hypothesis-smoke"]
+
+    with pytest.raises(TypeError):
+        policy.entrypoints["generic-smoke"] = {}
+    with pytest.raises(TypeError):
+        generic["script"] = "src/attacker.py"
+    with pytest.raises(TypeError):
+        generic["launcher"] = "bash"
+    with pytest.raises(TypeError):
+        generic["fixed_options"]["model-factory"] = "attacker"
+    with pytest.raises(TypeError):
+        generic["fixed_options"]["trainer.callbacks.wandb.tags"][0] = "attacker"
+    with pytest.raises(TypeError):
+        generic["allowed_positionals"][0]["type"] = "string"
+    with pytest.raises(TypeError):
+        hypothesis["allowed_positionals"][0][0] = "attacker"
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        policy.max_gpu_count = 99
+
+    assert generic["script"] == "src/examples/llm/train.py"
+    assert generic["launcher"] == "torchrun"
+    assert generic["fixed_options"]["model-factory"] == "olmo2_190M"
+    assert generic["fixed_options"]["trainer.callbacks.wandb.tags"] == (
+        "orcd",
+        "generic-smoke",
+        "olmo2-190m",
+    )
+    assert generic["allowed_positionals"][0]["type"] == "slug"
+    assert hypothesis["allowed_positionals"][0] == ("dry_run", "train_single", "train")
+    assert policy.max_gpu_count == 2
+
+
+def test_hypothesis_profile_fixes_wandb_enabled():
+    profile = load_policy(Path("config/edullm/policy.yaml")).entrypoints["hypothesis-smoke"]
+
+    assert profile["fixed_options"]["trainer.callbacks.wandb.enabled"] is True
+    assert "trainer.callbacks.wandb.enabled" not in profile["allowed_options"]
+
+
+@pytest.mark.parametrize(
+    "enabled",
+    [pytest.param(None, id="missing"), pytest.param("false", id="quoted-false"), 0, 1],
+)
+def test_operator_enabled_requires_an_explicit_yaml_boolean(tmp_path, enabled):
+    row = {
+        "github": "operator",
+        "slack_user_id": "U11111111",
+        "rotation_order": 0,
+    }
+    if enabled is not None:
+        row["enabled"] = enabled
+    path = tmp_path / "operators.yaml"
+    path.write_text(yaml.safe_dump({"operators": [row]}), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"operators\[0\]\.enabled must be a boolean"):
+        load_operators(path)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_operator_enabled_preserves_explicit_yaml_booleans(tmp_path, enabled):
+    path = tmp_path / "operators.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "operators": [
+                    {
+                        "github": "operator",
+                        "slack_user_id": "U11111111",
+                        "rotation_order": 0,
+                        "enabled": enabled,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert load_operators(path)[0].enabled is enabled
 
 
 def test_operator_files_keep_production_closed_and_examples_inert():

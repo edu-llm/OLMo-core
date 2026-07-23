@@ -42,6 +42,7 @@ entrypoints:
     allowed_positionals:
       0: [dry_run, train_single, train]
       2: [local]
+    fixed_options:
+      trainer.callbacks.wandb.enabled: true
     allowed_options:
       trainer.hard_stop: {type: duration, max_steps: 100}
-      trainer.callbacks.wandb.enabled: {type: boolean}

@@ -2,12 +2,119 @@
 Load trusted eduLLM queue policy and operator configuration.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
+from typing import cast
 
 import yaml
 
 from edullm.models import Operator
+
+_WANDB_ENTITY = "eduLLM"
+_ALLOWED_WANDB_PROJECTS = (
+    "test",
+    "pretraining",
+    "posttraining",
+    "evaluation",
+    "data-pipeline",
+)
+_ALLOWED_GPU_PREFERENCES = ("any", "l40s", "h100", "h200")
+_REQUIRED_CHECKS = (
+    "Lint",
+    "Test",
+    "Test checkpoint",
+    "Test transformer",
+    "Test attention",
+    "Test examples",
+    "Test scripts",
+    "Integration tests",
+    "Test olmo3 ladder",
+    "Type check",
+    "Build",
+    "Style",
+    "Docs",
+)
+_POLICY_REQUIRED_FIELDS = {
+    "wandb_entity",
+    "allowed_wandb_projects",
+    "required_checks",
+}
+_POLICY_OPTIONAL_FIELDS = {
+    "max_runtime_minutes",
+    "max_gpu_count",
+    "allowed_gpu_preferences",
+    "reminder_after_minutes",
+    "reassign_after_minutes",
+}
+_APPROVED_ENTRYPOINTS = {
+    "generic-smoke": {
+        "script": "src/examples/llm/train.py",
+        "launcher": "torchrun",
+        "wandb_callback": True,
+        "allowed_data_kinds": ("generic-smoke",),
+        "fixed_launcher_arguments": ("--standalone", "--nproc-per-node=1"),
+        "fixed_options": {
+            "model-factory": "olmo2_190M",
+            "sequence-length": 512,
+            "save-folder": {
+                "type": "derived_path",
+                "root_env": "EDULLM_SCRATCH",
+                "relative": "runs/{run_name}",
+            },
+            "work-dir": {
+                "type": "derived_path",
+                "root_env": "EDULLM_SCRATCH",
+                "relative": "runs/{run_name}",
+            },
+            "data_loader.global_batch_size": 8192,
+            "train_module.rank_microbatch_size": 2048,
+            "train_module.max_sequence_length": 512,
+            "trainer.hard_stop": {"value": 20, "unit": "steps"},
+            "trainer.callbacks.lm_evaluator.enabled": False,
+            "trainer.callbacks.downstream_evaluator.enabled": False,
+            "trainer.callbacks.checkpointer.save_interval": 10,
+            "trainer.callbacks.checkpointer.ephemeral_save_interval": None,
+            "trainer.callbacks.wandb.enabled": True,
+            "trainer.callbacks.wandb.entity": "eduLLM",
+            "trainer.callbacks.wandb.project": "test",
+            "trainer.callbacks.wandb.group": {"type": "request_field", "field": "study"},
+            "trainer.callbacks.wandb.tags": ("orcd", "generic-smoke", "olmo2-190m"),
+        },
+        "positionals": 1,
+        "allowed_positionals": {0: {"type": "slug"}},
+        "allowed_options": {},
+    },
+    "hypothesis-smoke": {
+        "script": "src/scripts/train/smoketests/OLMo2-190M-hypothesis-smoke.py",
+        "launcher": "python",
+        "wandb_callback": True,
+        "allowed_data_kinds": ("skill-dag", "curriculum"),
+        "positionals": 3,
+        "allowed_positionals": {
+            0: ("dry_run", "train_single", "train"),
+            2: ("local",),
+        },
+        "fixed_options": {"trainer.callbacks.wandb.enabled": True},
+        "allowed_options": {
+            "trainer.hard_stop": {
+                "type": "duration",
+                "max_steps": 100,
+            }
+        },
+    },
+}
+
+
+def _deep_freeze(value: object) -> object:
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _deep_freeze(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_deep_freeze(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_deep_freeze(item) for item in value)
+    return value
 
 
 @dataclass(frozen=True)
@@ -18,25 +125,114 @@ class Policy:
     allowed_wandb_projects: tuple[str, ...]
     max_runtime_minutes: int = 360
     max_gpu_count: int = 2
-    allowed_gpu_preferences: tuple[str, ...] = ("any", "l40s", "h100", "h200")
-    required_checks: tuple[str, ...] = (
-        "Lint",
-        "Test",
-        "Test checkpoint",
-        "Test transformer",
-        "Test attention",
-        "Test examples",
-        "Test scripts",
-        "Integration tests",
-        "Test olmo3 ladder",
-        "Type check",
-        "Build",
-        "Style",
-        "Docs",
-    )
-    entrypoints: dict[str, dict] = field(default_factory=dict)
+    allowed_gpu_preferences: tuple[str, ...] = _ALLOWED_GPU_PREFERENCES
+    required_checks: tuple[str, ...] = _REQUIRED_CHECKS
+    entrypoints: Mapping[str, Mapping[str, object]] = field(default_factory=dict)
     reminder_after_minutes: int = 15
     reassign_after_minutes: int = 30
+
+    def __post_init__(self) -> None:
+        """Detach and recursively freeze every policy container."""
+        object.__setattr__(self, "allowed_wandb_projects", tuple(self.allowed_wandb_projects))
+        object.__setattr__(self, "allowed_gpu_preferences", tuple(self.allowed_gpu_preferences))
+        object.__setattr__(self, "required_checks", tuple(self.required_checks))
+        object.__setattr__(
+            self,
+            "entrypoints",
+            cast(Mapping[str, Mapping[str, object]], _deep_freeze(self.entrypoints)),
+        )
+
+
+def _load_yaml(path: Path) -> object:
+    try:
+        return yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as error:
+        raise ValueError(f"{path.name}: invalid YAML") from error
+
+
+def _require_mapping(value: object, path: str) -> dict[object, object]:
+    if type(value) is not dict:
+        raise ValueError(f"{path} must be a mapping")
+    return cast(dict[object, object], value)
+
+
+def _field_names(fields: set[object]) -> str:
+    return ", ".join(sorted(str(field) for field in fields))
+
+
+def _validate_fields(
+    value: Mapping[object, object],
+    *,
+    required: set[object],
+    optional: set[object],
+    path: str,
+) -> None:
+    fields = set(value)
+    unknown = fields - required - optional
+    if unknown:
+        raise ValueError(f"{path}: unknown fields: {_field_names(unknown)}")
+    missing = required - fields
+    if missing:
+        raise ValueError(f"{path}: missing required fields: {_field_names(missing)}")
+
+
+def _require_string_list(value: object, path: str) -> tuple[str, ...]:
+    if type(value) is not list:
+        raise ValueError(f"{path} must be a list")
+    result = []
+    for index, item in enumerate(cast(list[object], value)):
+        if type(item) is not str:
+            raise ValueError(f"{path}[{index}] must be a string")
+        result.append(cast(str, item))
+    return tuple(result)
+
+
+def _validate_exact(value: object, expected: object, path: str) -> None:
+    if isinstance(expected, Mapping):
+        mapping = _require_mapping(value, path)
+        expected_mapping = cast(Mapping[object, object], expected)
+        expected_fields = set(expected_mapping)
+        _validate_fields(
+            mapping,
+            required=expected_fields,
+            optional=set(),
+            path=path,
+        )
+        for field, expected_value in expected_mapping.items():
+            _validate_exact(mapping[field], expected_value, f"{path}.{field}")
+        return
+    if isinstance(expected, tuple):
+        if type(value) is not list:
+            raise ValueError(f"{path} must be a list")
+        items = cast(list[object], value)
+        if len(items) != len(expected):
+            raise ValueError(f"{path} must contain {len(expected)} items")
+        for index, (item, expected_item) in enumerate(zip(items, expected)):
+            _validate_exact(item, expected_item, f"{path}[{index}]")
+        return
+    if type(expected) is bool:
+        if type(value) is not bool:
+            raise ValueError(f"{path} must be a boolean")
+        if value is not expected:
+            raise ValueError(f"{path} must be {str(expected).lower()}")
+        return
+    if type(expected) is int:
+        if type(value) is not int:
+            raise ValueError(f"{path} must be an integer")
+        if value != expected:
+            raise ValueError(f"{path} must be {expected}")
+        return
+    if type(expected) is str:
+        if type(value) is not str:
+            raise ValueError(f"{path} must be a string")
+        if value != expected:
+            raise ValueError(f"{path} must be {expected!r}")
+        return
+    if expected is None:
+        if value is not None:
+            raise ValueError(f"{path} must be null")
+        return
+    raise TypeError(f"unsupported policy schema value at {path}")
 
 
 def load_policy(path: Path, entrypoints_path: Path | None = None) -> Policy:
@@ -49,21 +245,75 @@ def load_policy(path: Path, entrypoints_path: Path | None = None) -> Policy:
 
     :returns: The loaded immutable policy record.
     """
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data = _require_mapping(_load_yaml(path), "policy")
+    _validate_fields(
+        data,
+        required=set(_POLICY_REQUIRED_FIELDS),
+        optional=set(_POLICY_OPTIONAL_FIELDS),
+        path="policy",
+    )
+
+    wandb_entity = data["wandb_entity"]
+    _validate_exact(wandb_entity, _WANDB_ENTITY, "policy.wandb_entity")
+
+    allowed_wandb_projects = _require_string_list(
+        data["allowed_wandb_projects"], "policy.allowed_wandb_projects"
+    )
+    if allowed_wandb_projects != _ALLOWED_WANDB_PROJECTS:
+        raise ValueError("policy.allowed_wandb_projects must exactly match the reviewed projects")
+
+    max_runtime_minutes = data.get("max_runtime_minutes", 360)
+    if type(max_runtime_minutes) is not int or not 1 <= max_runtime_minutes <= 360:
+        raise ValueError("policy.max_runtime_minutes must be an integer from 1 to 360")
+
+    max_gpu_count = data.get("max_gpu_count", 2)
+    if type(max_gpu_count) is not int or not 1 <= max_gpu_count <= 2:
+        raise ValueError("policy.max_gpu_count must be an integer from 1 to 2")
+
+    allowed_gpu_preferences = _require_string_list(
+        data.get("allowed_gpu_preferences", list(_ALLOWED_GPU_PREFERENCES)),
+        "policy.allowed_gpu_preferences",
+    )
+    if allowed_gpu_preferences != _ALLOWED_GPU_PREFERENCES:
+        raise ValueError(
+            "policy.allowed_gpu_preferences must exactly match the reviewed preferences"
+        )
+
+    required_checks = _require_string_list(data["required_checks"], "policy.required_checks")
+    if required_checks != _REQUIRED_CHECKS:
+        raise ValueError("policy.required_checks must exactly match the staged required checks")
+
+    reminder_after_minutes = data.get("reminder_after_minutes", 15)
+    if type(reminder_after_minutes) is not int or reminder_after_minutes < 1:
+        raise ValueError("policy.reminder_after_minutes must be a positive integer")
+
+    reassign_after_minutes = data.get("reassign_after_minutes", 30)
+    if type(reassign_after_minutes) is not int or reassign_after_minutes <= reminder_after_minutes:
+        raise ValueError(
+            "policy.reassign_after_minutes must be greater than reminder_after_minutes"
+        )
+
     entrypoints_path = entrypoints_path or path.with_name("entrypoints.yaml")
-    entrypoints = yaml.safe_load(entrypoints_path.read_text(encoding="utf-8"))["entrypoints"]
+    entrypoints_document = _require_mapping(_load_yaml(entrypoints_path), "entrypoints document")
+    _validate_fields(
+        entrypoints_document,
+        required={"entrypoints"},
+        optional=set(),
+        path="entrypoints document",
+    )
+    entrypoints = entrypoints_document["entrypoints"]
+    _validate_exact(entrypoints, _APPROVED_ENTRYPOINTS, "entrypoints")
+
     return Policy(
-        wandb_entity=data["wandb_entity"],
-        allowed_wandb_projects=tuple(data["allowed_wandb_projects"]),
-        max_runtime_minutes=int(data.get("max_runtime_minutes", 360)),
-        max_gpu_count=int(data.get("max_gpu_count", 2)),
-        allowed_gpu_preferences=tuple(
-            data.get("allowed_gpu_preferences", ["any", "l40s", "h100", "h200"])
-        ),
-        required_checks=tuple(data["required_checks"]),
-        entrypoints=entrypoints,
-        reminder_after_minutes=int(data.get("reminder_after_minutes", 15)),
-        reassign_after_minutes=int(data.get("reassign_after_minutes", 30)),
+        wandb_entity=cast(str, wandb_entity),
+        allowed_wandb_projects=allowed_wandb_projects,
+        max_runtime_minutes=cast(int, max_runtime_minutes),
+        max_gpu_count=cast(int, max_gpu_count),
+        allowed_gpu_preferences=allowed_gpu_preferences,
+        required_checks=required_checks,
+        entrypoints=cast(Mapping[str, Mapping[str, object]], entrypoints),
+        reminder_after_minutes=cast(int, reminder_after_minutes),
+        reassign_after_minutes=cast(int, reassign_after_minutes),
     )
 
 
@@ -76,14 +326,19 @@ def load_operators(path: Path) -> tuple[Operator, ...]:
     :returns: Operators in their configured order.
     """
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    return tuple(
-        Operator(
-            github=row["github"],
-            slack_user_id=row["slack_user_id"],
-            rotation_order=int(row["rotation_order"]),
-            enabled=bool(row.get("enabled", True)),
-            apptainer_path=row.get("apptainer_path"),
-            apptainer_sha256=row.get("apptainer_sha256"),
+    operators = []
+    for index, row in enumerate(data["operators"]):
+        enabled = row.get("enabled")
+        if type(enabled) is not bool:
+            raise ValueError(f"operators[{index}].enabled must be a boolean")
+        operators.append(
+            Operator(
+                github=row["github"],
+                slack_user_id=row["slack_user_id"],
+                rotation_order=int(row["rotation_order"]),
+                enabled=enabled,
+                apptainer_path=row.get("apptainer_path"),
+                apptainer_sha256=row.get("apptainer_sha256"),
+            )
         )
-        for row in data["operators"]
-    )
+    return tuple(operators)
