@@ -1566,7 +1566,6 @@ def test_handle_run_calls_run_assigned_without_manual_confirmation(monkeypatch, 
     configuration = GateConfiguration(
         policy=Policy(wandb_entity="eduLLM", allowed_wandb_projects=("test",)),
         operators=(),
-        reviewers=frozenset(),
         digest="a" * 64,
     )
     services = cli.OperatorServices(
@@ -1606,7 +1605,6 @@ def test_handle_run_calls_run_assigned_without_manual_confirmation(monkeypatch, 
 def test_operator_services_reject_matching_login_with_bot_actor_type(monkeypatch):
     configuration = SimpleNamespace(
         operators=(SimpleNamespace(github="operator", enabled=True),),
-        reviewers=frozenset({"team-lead"}),
     )
     document = {
         "environment_fingerprint": "a" * 64,
@@ -1647,7 +1645,6 @@ def test_operator_services_reject_matching_login_with_bot_actor_type(monkeypatch
 def test_operator_services_carry_private_orcd_user_separately_from_github_login(monkeypatch):
     configuration = SimpleNamespace(
         operators=(SimpleNamespace(github="github-operator", enabled=True),),
-        reviewers=frozenset({"team-lead"}),
     )
     document = {
         "environment_fingerprint": "a" * 64,

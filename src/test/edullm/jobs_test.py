@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from edullm.assignment import AssignmentState, build_assignment_comment
-from edullm.github import GitHubError, GitHubIssue, IssueComment, ReviewResult
+from edullm.github import CommitResult, GitHubError, GitHubIssue, IssueComment, ReviewResult
 from edullm.jobs import (
     JOB_MARKER,
     GateConfiguration,
@@ -71,11 +71,19 @@ def _policy() -> Policy:
     )
 
 
-def _operator() -> Operator:
-    return Operator("operator", "U12345678", 0, True)
+def _operator(github: str = "operator", rotation_order: int = 0) -> Operator:
+    return Operator(github, "U12345678", rotation_order, True)
 
 
-def _issue(valid_request, **changes) -> GitHubIssue:
+def _three_enabled_operators() -> tuple[Operator, ...]:
+    return (
+        _operator("philote-dev", 0),
+        _operator("meric233", 1),
+        _operator("alsy7009", 2),
+    )
+
+
+def _issue(valid_request, *, operator: str = "operator", **changes) -> GitHubIssue:
     return replace(
         GitHubIssue(
             number=42,
@@ -83,17 +91,17 @@ def _issue(valid_request, **changes) -> GitHubIssue:
             requester="student",
             labels=("edullm-job", "status:assigned", "research"),
             title="Untrusted <script>alert(1)</script>",
-            assignees=("operator", "faculty"),
+            assignees=(operator, "faculty"),
         ),
         **changes,
     )
 
 
-def _assignment(valid_request) -> AssignmentState:
+def _assignment(valid_request, *, operator: str = "operator") -> AssignmentState:
     return AssignmentState(
         issue=42,
         request_digest=valid_request.digest,
-        operator_github="operator",
+        operator_github=operator,
         assigned_at=NOW,
         reminder_at=None,
         history=(),
@@ -101,7 +109,12 @@ def _assignment(valid_request) -> AssignmentState:
     )
 
 
-def _comments(valid_request, lifecycle: LifecycleState | None = None):
+def _comments(
+    valid_request,
+    lifecycle: LifecycleState | None = None,
+    *,
+    operator: str = "operator",
+):
     comments = [
         IssueComment(
             1,
@@ -111,7 +124,7 @@ def _comments(valid_request, lifecycle: LifecycleState | None = None):
         ),
         IssueComment(
             2,
-            build_assignment_comment(_assignment(valid_request)),
+            build_assignment_comment(_assignment(valid_request, operator=operator)),
             "github-actions[bot]",
             True,
         ),
@@ -133,16 +146,21 @@ class StatefulGitHub:
         stored_write_author_is_bot=None,
         fail_add_once=False,
         fail_remove_once=False,
+        operator="operator",
+        commit_evidence=CommitResult(True, "commit and script exist"),
     ):
         self.valid_request = valid_request
-        self.issue = _issue(valid_request)
+        self.issue = _issue(valid_request, operator=operator)
         if lifecycle is not None:
             self.issue = replace(
                 self.issue,
                 labels=("edullm-job", f"status:{lifecycle.current_state}", "research"),
             )
-        self.comments = _comments(valid_request, lifecycle)
+        self.comments = _comments(valid_request, lifecycle, operator=operator)
         self.review = ReviewResult(True, 7, "approved")
+        self.commit_evidence = commit_evidence
+        self.commit_evidence_calls = []
+        self.review_calls = []
         self.events = []
         self.next_comment_id = 10
         self.write_author = write_author
@@ -165,8 +183,14 @@ class StatefulGitHub:
         return tuple(self.comments)
 
     def reviewed_commit(self, sha, **kwargs):
+        self.review_calls.append((sha, kwargs))
         self.events.append(("review", sha))
         return self.review
+
+    def executable_commit(self, sha, *, script_path):
+        self.commit_evidence_calls.append((sha, script_path))
+        self.events.append(("commit-evidence", sha, script_path))
+        return self.commit_evidence
 
     def create_issue_comment(self, number, body):
         self.events.append(("create-comment", number, body))
@@ -228,7 +252,14 @@ def _config() -> GateConfiguration:
     return GateConfiguration(
         policy=_policy(),
         operators=(_operator(),),
-        reviewers=frozenset({"team-lead"}),
+        digest="c" * 64,
+    )
+
+
+def _multi_operator_config() -> GateConfiguration:
+    return GateConfiguration(
+        policy=_policy(),
+        operators=_three_enabled_operators(),
         digest="c" * 64,
     )
 
@@ -298,7 +329,7 @@ def test_job_lifecycle_rejects_tampered_noncanonical_or_regressive_state(mutator
         parse_job_comment(mutator(build_job_comment(_lifecycle())))
 
 
-def test_gate_proves_fresh_issue_status_assignment_identity_policy_and_review(
+def test_gate_proves_fresh_issue_status_assignment_identity_policy_and_commit_evidence(
     valid_request,
 ):
     github = StatefulGitHub(valid_request)
@@ -316,7 +347,71 @@ def test_gate_proves_fresh_issue_status_assignment_identity_policy_and_review(
     assert snapshot.validated_at == NOW
     assert snapshot.assignment_version == 0
     assert snapshot.config_digest == "c" * 64
-    assert github.events.count(("review", valid_request.commit_sha)) == 1
+    assert github.commit_evidence_calls == [(valid_request.commit_sha, valid_request.script_path)]
+    assert github.review_calls == []
+
+
+@pytest.mark.parametrize("operator", ["philote-dev", "meric233", "alsy7009"])
+def test_gate_accepts_each_enabled_assigned_operator_without_review_calls(
+    valid_request,
+    operator,
+):
+    github = StatefulGitHub(
+        valid_request,
+        operator=operator,
+        commit_evidence=CommitResult(True, "commit and script exist"),
+    )
+
+    snapshot = full_submission_gate(
+        42,
+        operator=operator,
+        github=github,
+        configuration=_multi_operator_config(),
+    )
+
+    assert snapshot.operator == operator
+    assert github.commit_evidence_calls == [(valid_request.commit_sha, valid_request.script_path)]
+    assert github.review_calls == []
+
+
+def test_gate_rejects_enabled_operator_when_assignee_is_different(valid_request):
+    github = StatefulGitHub(valid_request, operator="philote-dev")
+
+    with pytest.raises(JobOperationError, match="assignee"):
+        full_submission_gate(
+            42,
+            operator="meric233",
+            github=github,
+            configuration=_multi_operator_config(),
+        )
+
+    assert github.commit_evidence_calls == []
+    assert github.review_calls == []
+
+
+@pytest.mark.parametrize(
+    "commit_evidence",
+    [
+        CommitResult(False, "commit does not exist at the requested SHA"),
+        CommitResult(False, "script does not exist at the requested SHA"),
+    ],
+)
+def test_gate_rejects_missing_commit_or_script_evidence_without_review_calls(
+    valid_request,
+    commit_evidence,
+):
+    github = StatefulGitHub(valid_request, commit_evidence=commit_evidence)
+
+    with pytest.raises(JobOperationError, match="commit or request policy"):
+        full_submission_gate(
+            42,
+            operator="operator",
+            github=github,
+            configuration=_config(),
+        )
+
+    assert github.commit_evidence_calls == [(valid_request.commit_sha, valid_request.script_path)]
+    assert github.review_calls == []
 
 
 @pytest.mark.parametrize(
@@ -351,7 +446,9 @@ def test_gate_proves_fresh_issue_status_assignment_identity_policy_and_review(
             + github.comments[1:],
         ),
         lambda github: setattr(
-            github, "review", ReviewResult(False, 7, "no authorized reviewer approved")
+            github,
+            "commit_evidence",
+            CommitResult(False, "commit does not exist at the requested SHA"),
         ),
     ],
 )
@@ -559,7 +656,7 @@ def test_run_fails_closed_when_post_write_comment_author_changes(valid_request):
         "assignees",
         "status",
         "assignment",
-        "review",
+        "commit",
         "config",
     ],
 )
@@ -596,8 +693,8 @@ def test_run_revalidates_every_resource_between_stage_and_submit_with_zero_sbatc
                     '"slack_status":"sent"', '"slack_status":"pending"'
                 ),
             )
-        elif resource == "review":
-            github.review = ReviewResult(False, 7, "no authorized reviewer approved")
+        elif resource == "commit":
+            github.commit_evidence = CommitResult(False, "script does not exist at the requested SHA")
         elif resource == "config":
             configs[1] = replace(configs[1], digest="d" * 64)
 
@@ -659,11 +756,11 @@ def test_run_places_final_authorization_after_remote_manifest_verification(valid
     github = StatefulGitHub(valid_request)
 
     def change_head_authorization():
-        github.review = ReviewResult(False, 7, "head changed")
+        github.commit_evidence = CommitResult(False, "commit does not exist at the requested SHA")
 
     remote = StatefulRemote(verify_mutate=change_head_authorization)
 
-    with pytest.raises(JobOperationError, match="reviewed commit"):
+    with pytest.raises(JobOperationError, match="commit or request policy"):
         run_assigned(
             operator="operator",
             github=github,
@@ -801,6 +898,8 @@ def test_jobs_repairs_terminal_issue_without_submitting(valid_request):
     assert repaired[0].current_state == "completed"
     assert set(github.issue.labels) == {"edullm-job", "research", "status:completed"}
     assert slurm.queries == [("12345",)]
+    assert github.commit_evidence_calls == []
+    assert github.review_calls == []
 
 
 @pytest.mark.parametrize(

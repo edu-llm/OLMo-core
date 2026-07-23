@@ -842,7 +842,7 @@ def _load_operator_services() -> OperatorServices:
     root = Path(__file__).resolve().parents[2]
     configuration = load_gate_configuration(root)
     enabled = {operator.github for operator in configuration.operators if operator.enabled}
-    if not enabled or not configuration.reviewers:
+    if not enabled:
         raise JobOperationError("operator execution is disabled by protected configuration")
     path = Path.home() / ".config" / "edullm" / "config.yaml"
     document = _read_operator_document(path)
