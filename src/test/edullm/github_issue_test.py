@@ -82,12 +82,22 @@ def _params_key(
     return tuple(sorted((params or {}).items()))
 
 
-def _issue_payload(*, body="body", labels=None, number=42, login="student"):
+def _issue_payload(
+    *,
+    body="body",
+    labels=None,
+    number=42,
+    login="student",
+    title="Queue title",
+    assignees=None,
+):
     return {
         "number": number,
         "body": body,
+        "title": title,
         "user": {"login": login},
         "labels": [{"name": label} for label in (labels or ["edullm-job"])],
+        "assignees": [{"login": assignee} for assignee in (assignees or [])],
     }
 
 
@@ -124,6 +134,8 @@ def test_fetch_issue_returns_validated_immutable_record():
         body="body",
         requester="student",
         labels=("status:ready", "edullm-job"),
+        title="Queue title",
+        assignees=(),
     )
     with pytest.raises(FrozenInstanceError):
         issue.body = "edited"  # type: ignore[misc]
@@ -135,8 +147,11 @@ def test_fetch_issue_returns_validated_immutable_record():
         [],
         _issue_payload(number=41),
         {**_issue_payload(), "user": {}},
+        {**_issue_payload(), "title": None},
         {**_issue_payload(), "labels": ["edullm-job"]},
         {**_issue_payload(), "labels": [{"name": ""}]},
+        {**_issue_payload(), "assignees": [{"login": ""}]},
+        {**_issue_payload(), "assignees": [{"login": "alice"}, {"login": "Alice"}]},
         {
             **_issue_payload(),
             "labels": [{"name": "edullm-job"}, {"name": "edullm-job"}],
@@ -290,6 +305,21 @@ def test_add_issue_status_label_uses_targeted_json_and_preserves_server_labels()
     ]
 
 
+def test_task_5_can_target_the_assigned_status_label():
+    session = FakeSession()
+    path = f"/repos/{REPO}/issues/42/labels"
+    session.add(
+        "POST",
+        path,
+        [{"name": "edullm-job"}, {"name": "status:ready"}, {"name": "status:assigned"}],
+    )
+
+    labels = _client(session).add_issue_status_label(42, "status:assigned")
+
+    assert "status:assigned" in labels
+    assert session.calls[0][3] == {"labels": ["status:assigned"]}
+
+
 def test_remove_issue_status_label_encodes_path_and_validates_success():
     session = FakeSession()
     path = f"/repos/{REPO}/issues/42/labels/status%3Aready"
@@ -369,6 +399,95 @@ def test_targeted_status_label_operations_reject_other_labels(label):
 
 def test_general_full_label_replacement_is_not_exposed():
     assert not hasattr(_client(FakeSession()), "replace_issue_labels")
+
+
+def test_list_active_queue_issues_scans_current_open_issues_and_rejects_pull_rows():
+    session = FakeSession()
+    path = f"/repos/{REPO}/issues?labels=edullm-job&state=open"
+    session.add(
+        "GET",
+        path,
+        [
+            _issue_payload(
+                number=42,
+                labels=["edullm-job", "status:ready"],
+                assignees=["alice"],
+            ),
+            _issue_payload(
+                number=43,
+                labels=["edullm-job", "status:assigned"],
+                login="other",
+            ),
+        ],
+        params={"page": 1, "per_page": 100},
+    )
+
+    issues = _client(session).list_active_queue_issues()
+
+    assert [issue.number for issue in issues] == [42, 43]
+    assert issues[0].assignees == ("alice",)
+    assert session.calls[0][1].endswith("?labels=edullm-job&state=open")
+
+    bad_session = FakeSession()
+    bad_session.add(
+        "GET",
+        path,
+        [{**_issue_payload(), "pull_request": {"url": "https://api.github.test/pulls/42"}}],
+        params={"page": 1, "per_page": 100},
+    )
+    with pytest.raises(GitHubDataError, match="malformed Issue response"):
+        _client(bad_session).list_active_queue_issues()
+
+
+def test_targeted_assignee_add_preserves_existing_assignees_and_validates_response():
+    session = FakeSession()
+    path = f"/repos/{REPO}/issues/42/assignees"
+    session.add(
+        "POST",
+        path,
+        _issue_payload(assignees=["reviewer", "alice"]),
+    )
+
+    result = _client(session).add_issue_assignee(42, "alice")
+
+    assert result == ("reviewer", "alice")
+    assert session.calls[0][3] == {"assignees": ["alice"]}
+
+
+def test_targeted_assignee_remove_preserves_others_and_treats_only_404_as_absent():
+    session = FakeSession()
+    path = f"/repos/{REPO}/issues/42/assignees"
+    session.add(
+        "DELETE",
+        path,
+        _issue_payload(assignees=["reviewer"]),
+    )
+
+    assert _client(session).remove_issue_assignee(42, "alice") is True
+    assert session.calls[0][3] == {"assignees": ["alice"]}
+
+    absent = FakeSession()
+    absent.add("DELETE", path, {"message": "Not Found"}, status_code=404)
+    assert _client(absent).remove_issue_assignee(42, "alice") is False
+
+
+@pytest.mark.parametrize("login", ["", "Alice", "alice/other", "review-app[bot]", 7])
+def test_targeted_assignee_operations_reject_unsafe_or_noncanonical_logins(login):
+    client = _client(FakeSession())
+
+    with pytest.raises(GitHubValidationError, match="assignee"):
+        client.add_issue_assignee(42, login)
+    with pytest.raises(GitHubValidationError, match="assignee"):
+        client.remove_issue_assignee(42, login)
+
+
+def test_targeted_assignee_write_requires_requested_postcondition():
+    session = FakeSession()
+    path = f"/repos/{REPO}/issues/42/assignees"
+    session.add("POST", path, _issue_payload(assignees=["reviewer"]))
+
+    with pytest.raises(GitHubDataError, match="assignee"):
+        _client(session).add_issue_assignee(42, "alice")
 
 
 @pytest.mark.parametrize("body", ["", "x" * 65_537, "bad\x00body", 7])

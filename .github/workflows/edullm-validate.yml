@@ -34,3 +34,15 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+
+  assign:
+    # Explicit handoff avoids relying on non-recursive GITHUB_TOKEN label events.
+    # Governance must separately remove this literal false and the callee's gate.
+    needs: validate
+    if: ${{ false && needs.validate.result == 'success' }}
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/edullm-assign.yml
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

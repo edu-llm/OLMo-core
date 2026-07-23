@@ -2,6 +2,7 @@
 Load trusted eduLLM queue policy and operator configuration.
 """
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import cast
 
 import yaml
 
+from edullm.github import GitHubValidationError, normalize_actor_login
 from edullm.models import Operator
 
 _WANDB_ENTITY = "eduLLM"
@@ -48,6 +50,15 @@ _POLICY_OPTIONAL_FIELDS = {
     "reminder_after_minutes",
     "reassign_after_minutes",
 }
+_OPERATOR_REQUIRED_FIELDS = {
+    "github",
+    "slack_user_id",
+    "rotation_order",
+    "enabled",
+}
+_OPERATOR_OPTIONAL_FIELDS = {"apptainer_path", "apptainer_sha256"}
+_SLACK_USER_ID = re.compile(r"[UW][A-Z0-9]{8,20}\Z")
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _APPROVED_ENTRYPOINTS = {
     "generic-smoke": {
         "script": "src/examples/llm/train.py",
@@ -332,20 +343,86 @@ def load_operators(path: Path) -> tuple[Operator, ...]:
 
     :returns: Operators in their configured order.
     """
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    operators = []
-    for index, row in enumerate(data["operators"]):
-        enabled = row.get("enabled")
+    try:
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError:
+        raise ValueError("operators: invalid YAML") from None
+    except OSError:
+        raise ValueError("operators: configuration cannot be read") from None
+    if type(document) is not dict or set(document) != {"operators"}:
+        raise ValueError("operators: expected only the operators field")
+    rows = cast(dict[object, object], document)["operators"]
+    if type(rows) is not list:
+        raise ValueError("operators: operators must be a list")
+
+    operators: list[Operator] = []
+    github_identities: set[str] = set()
+    slack_identities: set[str] = set()
+    enabled_rotations: set[int] = set()
+    for index, value in enumerate(cast(list[object], rows)):
+        if type(value) is not dict:
+            raise ValueError(f"operators[{index}] must be a mapping")
+        row = cast(dict[object, object], value)
+        if "enabled" not in row:
+            raise ValueError(f"operators[{index}].enabled must be a boolean")
+        _validate_fields(
+            row,
+            required=set(_OPERATOR_REQUIRED_FIELDS),
+            optional=set(_OPERATOR_OPTIONAL_FIELDS),
+            path=f"operators[{index}]",
+        )
+        enabled = row["enabled"]
         if type(enabled) is not bool:
             raise ValueError(f"operators[{index}].enabled must be a boolean")
+        try:
+            github = normalize_actor_login(row["github"])
+        except GitHubValidationError:
+            raise ValueError(f"operators[{index}].github is invalid") from None
+        if github != row["github"] or github.endswith("[bot]"):
+            raise ValueError(f"operators[{index}].github must be a canonical user login")
+        if github in github_identities:
+            raise ValueError("operators: duplicate GitHub identities")
+        github_identities.add(github)
+
+        slack_user_id = row["slack_user_id"]
+        if type(slack_user_id) is not str or _SLACK_USER_ID.fullmatch(slack_user_id) is None:
+            raise ValueError(f"operators[{index}].slack_user_id is invalid")
+        if slack_user_id in slack_identities:
+            raise ValueError("operators: duplicate Slack identities")
+        slack_identities.add(slack_user_id)
+
+        rotation_order = row["rotation_order"]
+        if type(rotation_order) is not int or rotation_order < 0:
+            raise ValueError(f"operators[{index}].rotation_order must be a non-negative integer")
+        if enabled and rotation_order in enabled_rotations:
+            raise ValueError("operators: enabled rotation orders must be unique")
+        if enabled:
+            enabled_rotations.add(rotation_order)
+
+        apptainer_path = row.get("apptainer_path")
+        apptainer_sha256 = row.get("apptainer_sha256")
+        if apptainer_path is not None and (
+            type(apptainer_path) is not str
+            or not apptainer_path.startswith("/")
+            or ".." in apptainer_path.split("/")
+        ):
+            raise ValueError(f"operators[{index}].apptainer_path is invalid")
+        if apptainer_sha256 is not None and (
+            type(apptainer_sha256) is not str or _SHA256.fullmatch(apptainer_sha256) is None
+        ):
+            raise ValueError(f"operators[{index}].apptainer_sha256 is invalid")
+        if (apptainer_path is None) != (apptainer_sha256 is None):
+            raise ValueError(
+                f"operators[{index}] must set both apptainer_path and apptainer_sha256"
+            )
         operators.append(
             Operator(
-                github=row["github"],
-                slack_user_id=row["slack_user_id"],
-                rotation_order=int(row["rotation_order"]),
-                enabled=enabled,
-                apptainer_path=row.get("apptainer_path"),
-                apptainer_sha256=row.get("apptainer_sha256"),
+                github=github,
+                slack_user_id=slack_user_id,
+                rotation_order=rotation_order,
+                enabled=cast(bool, enabled),
+                apptainer_path=cast(str | None, apptainer_path),
+                apptainer_sha256=cast(str | None, apptainer_sha256),
             )
         )
     return tuple(operators)

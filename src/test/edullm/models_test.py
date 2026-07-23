@@ -598,6 +598,112 @@ def test_operator_files_keep_production_closed_and_examples_inert():
     assert [operator.rotation_order for operator in examples] == [0, 1, 2]
 
 
+@pytest.mark.parametrize(
+    "document",
+    [
+        "",
+        "[]\n",
+        "unknown: []\n",
+        "operators: {}\n",
+        "operators: []\nextra: true\n",
+        "operators:\n  - github: alice\n",
+        (
+            "operators:\n"
+            "  - github: Alice\n"
+            "    slack_user_id: U11111111\n"
+            "    rotation_order: 0\n"
+            "    enabled: true\n"
+        ),
+        (
+            "operators:\n"
+            "  - github: alice\n"
+            "    slack_user_id: invalid\n"
+            "    rotation_order: 0\n"
+            "    enabled: true\n"
+        ),
+        (
+            "operators:\n"
+            "  - github: alice\n"
+            "    slack_user_id: U11111111\n"
+            "    rotation_order: -1\n"
+            "    enabled: true\n"
+        ),
+        (
+            "operators:\n"
+            "  - github: alice\n"
+            "    slack_user_id: U11111111\n"
+            "    rotation_order: 0\n"
+            "    enabled: true\n"
+            "    unknown: secret\n"
+        ),
+        (
+            "operators:\n"
+            "  - github: alice\n"
+            "    slack_user_id: U11111111\n"
+            "    rotation_order: 0\n"
+            "    enabled: true\n"
+            "  - github: Alice\n"
+            "    slack_user_id: U22222222\n"
+            "    rotation_order: 1\n"
+            "    enabled: false\n"
+        ),
+        (
+            "operators:\n"
+            "  - github: alice\n"
+            "    slack_user_id: U11111111\n"
+            "    rotation_order: 0\n"
+            "    enabled: true\n"
+            "  - github: bob\n"
+            "    slack_user_id: U11111111\n"
+            "    rotation_order: 1\n"
+            "    enabled: true\n"
+        ),
+        (
+            "operators:\n"
+            "  - github: alice\n"
+            "    slack_user_id: U11111111\n"
+            "    rotation_order: 0\n"
+            "    enabled: true\n"
+            "  - github: bob\n"
+            "    slack_user_id: U22222222\n"
+            "    rotation_order: 0\n"
+            "    enabled: true\n"
+        ),
+    ],
+)
+def test_operator_roster_rejects_malformed_or_duplicate_protected_state(tmp_path, document):
+    path = tmp_path / "operators.yaml"
+    path.write_text(document, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="operators"):
+        load_operators(path)
+
+
+def test_disabled_operators_may_not_hide_duplicate_enabled_rotation(tmp_path):
+    path = tmp_path / "operators.yaml"
+    path.write_text(
+        """
+operators:
+  - github: disabled
+    slack_user_id: U00000000
+    rotation_order: 0
+    enabled: false
+  - github: alice
+    slack_user_id: U11111111
+    rotation_order: 0
+    enabled: true
+  - github: bob
+    slack_user_id: U22222222
+    rotation_order: 0
+    enabled: true
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="rotation"):
+        load_operators(path)
+
+
 def test_package_metadata_includes_edullm_without_a_premature_console_script():
     metadata = Path("pyproject.toml").read_text(encoding="utf-8")
 

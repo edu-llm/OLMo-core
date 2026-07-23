@@ -46,7 +46,7 @@ _CHECK_CONCLUSIONS = frozenset(
 )
 _MAX_COMMENT_CHARS = 65_536
 _MAX_LABEL_CHARS = 50
-_MANAGED_STATUS_LABELS = frozenset({"status:requested", "status:ready"})
+_WRITABLE_STATUS_LABELS = frozenset({"status:requested", "status:ready", "status:assigned"})
 
 
 class GitHubError(RuntimeError):
@@ -82,6 +82,8 @@ class GitHubIssue:
     body: str
     requester: str
     labels: tuple[str, ...]
+    title: str = ""
+    assignees: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -249,41 +251,22 @@ class GitHubClient:
         """
         _validate_positive_identifier(issue_number, "issue number")
         payload = self.get(f"/repos/{self.repo}/issues/{issue_number}")
-        if type(payload) is not dict:
-            raise GitHubDataError("GitHub API returned malformed Issue response")
-        issue = cast(dict[object, object], payload)
-        number = issue.get("number")
-        body = issue.get("body")
-        user = issue.get("user")
-        labels = issue.get("labels")
-        if (
-            number != issue_number
-            or type(number) is not int
-            or (body is not None and type(body) is not str)
-            or type(user) is not dict
-            or type(labels) is not list
-        ):
-            raise GitHubDataError("GitHub API returned malformed Issue response")
-        requester = cast(dict[object, object], user).get("login")
-        if not _is_valid_actor_login(requester):
-            raise GitHubDataError("GitHub API returned malformed Issue response")
+        return _issue_from_payload(payload, expected_number=issue_number)
 
-        label_names: list[str] = []
-        for row in cast(list[object], labels):
-            if type(row) is not dict:
-                raise GitHubDataError("GitHub API returned malformed Issue response")
-            name = cast(dict[object, object], row).get("name")
-            if not _is_valid_label_name(name):
-                raise GitHubDataError("GitHub API returned malformed Issue response")
-            label_names.append(cast(str, name))
-        if len(set(label_names)) != len(label_names):
+    def list_active_queue_issues(self) -> tuple[GitHubIssue, ...]:
+        """
+        List every current open Issue carrying the queue discriminator label.
+
+        Pull-request rows are rejected rather than silently treated as Issues.
+
+        :returns: Validated immutable Issue snapshots in server order.
+        """
+        rows = self.paginated_get(f"/repos/{self.repo}/issues?labels=edullm-job&state=open")
+        issues = tuple(_issue_from_payload(row, reject_pull=True) for row in rows)
+        numbers = [issue.number for issue in issues]
+        if len(set(numbers)) != len(numbers):
             raise GitHubDataError("GitHub API returned malformed Issue response")
-        return GitHubIssue(
-            number=issue_number,
-            body="" if body is None else cast(str, body),
-            requester=cast(str, requester),
-            labels=tuple(label_names),
-        )
+        return issues
 
     def list_issue_comments(self, issue_number: int) -> tuple[IssueComment, ...]:
         """
@@ -352,7 +335,8 @@ class GitHubClient:
         Add one managed status label without replacing unrelated labels.
 
         :param issue_number: The positive Issue number.
-        :param label: ``status:requested`` or ``status:ready``.
+        :param label: ``status:requested``, ``status:ready``, or
+            ``status:assigned``.
 
         :returns: The complete validated server label sequence after the add.
         """
@@ -373,7 +357,8 @@ class GitHubClient:
         Idempotently remove one managed status label without touching other labels.
 
         :param issue_number: The positive Issue number.
-        :param label: ``status:requested`` or ``status:ready``.
+        :param label: ``status:requested``, ``status:ready``, or
+            ``status:assigned``.
 
         :returns: ``True`` when removed, or ``False`` only when GitHub returns 404.
         """
@@ -391,6 +376,51 @@ class GitHubClient:
         labels = _label_names_from_payload(self._decode_json(response))
         if label in labels:
             raise GitHubDataError("GitHub API returned malformed Issue labels response")
+        return True
+
+    def add_issue_assignee(self, issue_number: int, login: str) -> tuple[str, ...]:
+        """
+        Add one operator assignee without replacing unrelated assignees.
+
+        :param issue_number: The positive Issue number.
+        :param login: A canonical lowercase GitHub user login.
+
+        :returns: The complete validated assignee sequence after the write.
+        """
+        _validate_positive_identifier(issue_number, "issue number")
+        _validate_assignee_login(login)
+        response = self._write_request(
+            "post",
+            f"/repos/{self.repo}/issues/{issue_number}/assignees",
+            json_body={"assignees": [login]},
+        )
+        issue = _issue_from_payload(self._decode_json(response), expected_number=issue_number)
+        if login not in issue.assignees:
+            raise GitHubDataError("GitHub API returned malformed Issue assignee response")
+        return issue.assignees
+
+    def remove_issue_assignee(self, issue_number: int, login: str) -> bool:
+        """
+        Idempotently remove one operator without replacing unrelated assignees.
+
+        :param issue_number: The positive Issue number.
+        :param login: A canonical lowercase GitHub user login.
+
+        :returns: ``True`` when removed, or ``False`` only for a 404 response.
+        """
+        _validate_positive_identifier(issue_number, "issue number")
+        _validate_assignee_login(login)
+        response = self._write_request(
+            "delete",
+            f"/repos/{self.repo}/issues/{issue_number}/assignees",
+            json_body={"assignees": [login]},
+            allow_not_found=True,
+        )
+        if response.status_code == 404:
+            return False
+        issue = _issue_from_payload(self._decode_json(response), expected_number=issue_number)
+        if login in issue.assignees:
+            raise GitHubDataError("GitHub API returned malformed Issue assignee response")
         return True
 
     def file_exists(self, path: str, *, ref: str) -> bool:
@@ -733,8 +763,8 @@ def _is_valid_label_name(value: object) -> bool:
 
 
 def _validate_status_label(label: object) -> None:
-    if type(label) is not str or label not in _MANAGED_STATUS_LABELS:
-        raise GitHubValidationError("status label must be requested or ready")
+    if type(label) is not str or label not in _WRITABLE_STATUS_LABELS:
+        raise GitHubValidationError("status label must be requested, ready, or assigned")
 
 
 def _validate_encoded_status_label_path(path: object, repo: str) -> None:
@@ -748,7 +778,7 @@ def _validate_encoded_status_label_path(path: object, repo: str) -> None:
         or not issue.isascii()
         or not issue.isdecimal()
         or issue.startswith("0")
-        or label_path not in {"status%3Arequested", "status%3Aready"}
+        or label_path not in {"status%3Arequested", "status%3Aready", "status%3Aassigned"}
     ):
         raise GitHubValidationError("GitHub API path is invalid")
 
@@ -807,6 +837,84 @@ def _issue_comment_from_payload(payload: object) -> IssueComment:
         author=cast(str, author),
         author_is_bot=author_type == "Bot",
     )
+
+
+def _issue_from_payload(
+    payload: object,
+    *,
+    expected_number: int | None = None,
+    reject_pull: bool = False,
+) -> GitHubIssue:
+    if type(payload) is not dict:
+        raise GitHubDataError("GitHub API returned malformed Issue response")
+    issue = cast(dict[object, object], payload)
+    number = issue.get("number")
+    body = issue.get("body")
+    title = issue.get("title")
+    user = issue.get("user")
+    labels = issue.get("labels")
+    assignees = issue.get("assignees")
+    if (
+        type(number) is not int
+        or number <= 0
+        or (expected_number is not None and number != expected_number)
+        or (body is not None and type(body) is not str)
+        or type(title) is not str
+        or not title
+        or len(title) > 256
+        or any(ord(character) < 32 or ord(character) == 127 for character in title)
+        or type(user) is not dict
+        or type(labels) is not list
+        or type(assignees) is not list
+        or (reject_pull and "pull_request" in issue)
+    ):
+        raise GitHubDataError("GitHub API returned malformed Issue response")
+    requester = cast(dict[object, object], user).get("login")
+    if not _is_valid_actor_login(requester):
+        raise GitHubDataError("GitHub API returned malformed Issue response")
+
+    label_names: list[str] = []
+    for row in cast(list[object], labels):
+        if type(row) is not dict:
+            raise GitHubDataError("GitHub API returned malformed Issue response")
+        name = cast(dict[object, object], row).get("name")
+        if not _is_valid_label_name(name):
+            raise GitHubDataError("GitHub API returned malformed Issue response")
+        label_names.append(cast(str, name))
+    if len(set(label_names)) != len(label_names):
+        raise GitHubDataError("GitHub API returned malformed Issue response")
+
+    assignee_names: list[str] = []
+    for row in cast(list[object], assignees):
+        if type(row) is not dict:
+            raise GitHubDataError("GitHub API returned malformed Issue response")
+        login = cast(dict[object, object], row).get("login")
+        if not _is_valid_actor_login(login):
+            raise GitHubDataError("GitHub API returned malformed Issue response")
+        normalized = cast(str, login).casefold()
+        if normalized.endswith("[bot]"):
+            raise GitHubDataError("GitHub API returned malformed Issue response")
+        assignee_names.append(normalized)
+    if len(set(assignee_names)) != len(assignee_names):
+        raise GitHubDataError("GitHub API returned malformed Issue response")
+    return GitHubIssue(
+        number=cast(int, number),
+        body="" if body is None else cast(str, body),
+        requester=cast(str, requester),
+        labels=tuple(label_names),
+        title=cast(str, title),
+        assignees=tuple(assignee_names),
+    )
+
+
+def _validate_assignee_login(value: object) -> None:
+    if (
+        type(value) is not str
+        or not _is_valid_actor_login(value)
+        or value != value.casefold()
+        or value.endswith("[bot]")
+    ):
+        raise GitHubValidationError("assignee must be a canonical GitHub user login")
 
 
 def _validate_sha(sha: object) -> None:

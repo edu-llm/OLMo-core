@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 import edullm.cli as cli
+from edullm.assignment import AssignmentResult
 from edullm.automation import AutomationResult
 
 
@@ -18,9 +19,7 @@ class RestrictedEnvironment(dict):
         return super().get(key, default)
 
 
-def test_module_cli_accepts_only_automation_validate_and_positive_issue(
-    tmp_path, monkeypatch, capsys
-):
+def test_module_cli_accepts_automation_validate_and_positive_issue(tmp_path, monkeypatch, capsys):
     environment = RestrictedEnvironment(
         {
             "GITHUB_TOKEN": "secret-token",
@@ -200,3 +199,106 @@ def test_package_does_not_register_user_facing_edullm_console_entrypoint():
 
     assert "[project.scripts]" not in pyproject
     assert "edullm =" not in pyproject
+
+
+@pytest.mark.parametrize(
+    "command,runner_name,expected_output",
+    [
+        (
+            "assign",
+            "assignment_runner",
+            "eduLLM assignment scan: 1 result(s)\n",
+        ),
+        (
+            "reminders",
+            "reminder_runner",
+            "eduLLM reminder scan: 1 result(s)\n",
+        ),
+    ],
+)
+def test_internal_cli_exposes_only_hard_disabled_assignment_automation(
+    tmp_path,
+    monkeypatch,
+    capsys,
+    command,
+    runner_name,
+    expected_output,
+):
+    calls = []
+
+    def runner(*, token, repository, webhook, root):
+        calls.append((token, repository, webhook, root))
+        return (AssignmentResult(42, "assigned", "alice", False),)
+
+    kwargs = {
+        "assignment_runner": lambda **unused: (),
+        "reminder_runner": lambda **unused: (),
+        runner_name: runner,
+    }
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = cli.main(
+        ["automation", command],
+        environ={
+            "GITHUB_TOKEN": "token",
+            "GITHUB_REPOSITORY": "edu-llm/OLMo-core",
+            "SLACK_WEBHOOK_URL": "https://hooks.slack.com/services/T1/B1/secret",
+        },
+        **kwargs,
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        (
+            "token",
+            "edu-llm/OLMo-core",
+            "https://hooks.slack.com/services/T1/B1/secret",
+            tmp_path,
+        )
+    ]
+    output = capsys.readouterr()
+    assert output.out == expected_output
+    assert "hooks.slack.com" not in output.out + output.err
+
+
+@pytest.mark.parametrize("command", ["assign", "reminders"])
+def test_assignment_cli_allows_absent_webhook_for_closed_operator_roster(command, capsys):
+    def runner(*, token, repository, webhook, root):  # noqa: ARG001
+        assert webhook is None
+        return ()
+
+    kwargs = {
+        "assignment_runner": runner,
+        "reminder_runner": runner,
+    }
+    exit_code = cli.main(
+        ["automation", command],
+        environ={
+            "GITHUB_TOKEN": "token",
+            "GITHUB_REPOSITORY": "edu-llm/OLMo-core",
+        },
+        **kwargs,
+    )
+
+    assert exit_code == 0
+    assert "0 result(s)" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("command", ["assign", "reminders"])
+def test_assignment_cli_returns_nonzero_for_sanitized_operational_result(command, capsys):
+    def runner(**unused):
+        return (AssignmentResult(42, "error", None, True),)
+
+    exit_code = cli.main(
+        ["automation", command],
+        environ={
+            "GITHUB_TOKEN": "token",
+            "GITHUB_REPOSITORY": "edu-llm/OLMo-core",
+        },
+        assignment_runner=runner,
+        reminder_runner=runner,
+    )
+
+    assert exit_code == 1
+    output = capsys.readouterr()
+    assert "automation operation failed" in output.err
