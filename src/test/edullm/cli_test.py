@@ -199,9 +199,7 @@ def test_default_runner_loads_only_tracked_configuration_for_canonical_repositor
     ]
 
 
-def test_cli_rejects_noncanonical_repository_before_authorization(
-    tmp_path, monkeypatch, capsys
-):
+def test_cli_rejects_noncanonical_repository_before_authorization(tmp_path, monkeypatch, capsys):
     raw_repository = "attacker/fork"
 
     monkeypatch.chdir(tmp_path)

@@ -8,7 +8,13 @@ from pathlib import Path
 import pytest
 
 from edullm.assignment import AssignmentState, build_assignment_comment
-from edullm.github import CommitResult, GitHubError, GitHubIssue, IssueComment, ReviewResult
+from edullm.github import (
+    CommitResult,
+    GitHubError,
+    GitHubIssue,
+    IssueComment,
+    ReviewResult,
+)
 from edullm.jobs import (
     JOB_MARKER,
     GateConfiguration,
@@ -726,7 +732,9 @@ def test_run_revalidates_every_resource_between_stage_and_submit_with_zero_sbatc
                 ),
             )
         elif resource == "commit":
-            github.commit_evidence = CommitResult(False, "script does not exist at the requested SHA")
+            github.commit_evidence = CommitResult(
+                False, "script does not exist at the requested SHA"
+            )
         elif resource == "config":
             configs[1] = replace(configs[1], digest="d" * 64)
 

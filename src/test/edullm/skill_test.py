@@ -91,7 +91,10 @@ def test_skill_fails_closed_on_exact_pushed_commit_and_cleans_private_files():
     assert '"$CANONICAL_HTTPS.git"' in text
     assert '"$CANONICAL_SSH"' in text
     assert "ssh://git@github.com/edu-llm/OLMo-core.git" in text
-    assert 'REMOTE_SHA="$(gh api "repos/edu-llm/OLMo-core/commits/$COMMIT_SHA" --jq .sha)" || exit 2' in text
+    assert (
+        'REMOTE_SHA="$(gh api "repos/edu-llm/OLMo-core/commits/$COMMIT_SHA" --jq .sha)" || exit 2'
+        in text
+    )
     assert 'test "$REMOTE_SHA" = "$COMMIT_SHA"' in text
     assert "gh pr view" not in text
     assert "approval" not in lowered
