@@ -5,6 +5,26 @@ import yaml
 WORKFLOWS = Path(".github/workflows")
 
 
+def _load(path):
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def _trigger(document):
+    return document.get("on", document.get(True))
+
+
+def test_core_assignment_handoff_requires_only_the_slack_secret():
+    assign = _load(WORKFLOWS / "edullm-assign.yml")
+    validate = _load(WORKFLOWS / "edullm-validate.yml")
+
+    assert _trigger(assign)["workflow_call"]["secrets"] == {"SLACK_WEBHOOK_URL": {"required": True}}
+    assert validate["jobs"]["assign"]["needs"] == "validate"
+    assert validate["jobs"]["assign"]["uses"] == "./.github/workflows/edullm-assign.yml"
+    assert validate["jobs"]["assign"]["secrets"] == {
+        "SLACK_WEBHOOK_URL": "${{ secrets.SLACK_WEBHOOK_URL }}"
+    }
+
+
 def test_every_edullm_workflow_remains_literally_disabled_and_sha_pinned():
     paths = sorted(WORKFLOWS.glob("edullm-*.yml"))
     assert paths

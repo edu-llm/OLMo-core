@@ -55,6 +55,9 @@
             "context": "Test scripts"
           },
           {
+            "context": "Test eduLLM core"
+          },
+          {
             "context": "Integration tests"
           },
           {

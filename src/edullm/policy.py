@@ -31,6 +31,7 @@ _REQUIRED_CHECKS = (
     "Test attention",
     "Test examples",
     "Test scripts",
+    "Test eduLLM core",
     "Integration tests",
     "Test olmo3 ladder",
     "Type check",

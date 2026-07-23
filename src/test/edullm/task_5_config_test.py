@@ -22,7 +22,7 @@ def test_assignment_workflow_has_explicit_handoff_and_retry_triggers():
 
     assert set(trigger) == {"workflow_call", "workflow_dispatch", "schedule"}
     assert trigger["schedule"] == [{"cron": "*/5 * * * *"}]
-    assert trigger["workflow_call"]["secrets"] == {"SLACK_WEBHOOK_URL": {"required": False}}
+    assert trigger["workflow_call"]["secrets"] == {"SLACK_WEBHOOK_URL": {"required": True}}
 
 
 def test_validation_workflow_has_a_literal_false_reusable_assignment_handoff():

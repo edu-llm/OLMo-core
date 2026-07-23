@@ -11,6 +11,7 @@ from edullm.validation import validate_request
 ISSUE_FORM = Path(".github/ISSUE_TEMPLATE/edullm-job-request.yml")
 ISSUE_CONFIG = Path(".github/ISSUE_TEMPLATE/config.yml")
 WORKFLOW = Path(".github/workflows/edullm-validate.yml")
+MAIN_WORKFLOW = Path(".github/workflows/main.yml")
 CODEOWNERS = Path(".github/CODEOWNERS")
 RULESET = Path("config/edullm/main-ruleset.json")
 TEAM_LEADS = Path("config/edullm/team-leads.yaml")
@@ -24,6 +25,15 @@ def _load_yaml(path):
 def _workflow_trigger(document):
     # PyYAML's YAML 1.1 resolver treats the plain key "on" as boolean true.
     return document.get("on", document.get(True))
+
+
+def test_main_ci_has_one_required_edullm_core_check():
+    workflow = _load_yaml(MAIN_WORKFLOW)
+    names = [row["name"] for row in workflow["jobs"]["checks"]["strategy"]["matrix"]["task"]]
+    assert names.count("Test eduLLM core") == 1
+
+    policy = load_policy(Path("config/edullm/policy.yaml"))
+    assert policy.required_checks.count("Test eduLLM core") == 1
 
 
 def test_issue_form_exactly_matches_parser_headings_and_production_validation():
