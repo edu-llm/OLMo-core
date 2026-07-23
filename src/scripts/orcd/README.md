@@ -86,9 +86,26 @@ verify_edullm_scratch() {
 }
 verify_edullm_scratch || exit $?
 
-cd "$EDULLM_REPO_ROOT"
-test "$(git -C "$EDULLM_REPO_ROOT" rev-parse HEAD)" = "$EDULLM_COMMIT_SHA"
-test -z "$(git -C "$EDULLM_REPO_ROOT" status --porcelain)"
+if ! cd "$EDULLM_REPO_ROOT"; then
+  echo "could not enter EDULLM_REPO_ROOT" >&2
+  exit 2
+fi
+if ! REMOTE_COMMIT_SHA="$(git -C "$EDULLM_REPO_ROOT" rev-parse HEAD)"; then
+  echo "could not resolve remote commit SHA" >&2
+  exit 2
+fi
+if [[ "$REMOTE_COMMIT_SHA" != "$EDULLM_COMMIT_SHA" ]]; then
+  echo "remote commit does not match reviewed EDULLM_COMMIT_SHA" >&2
+  exit 2
+fi
+if ! REMOTE_STATUS="$(git -C "$EDULLM_REPO_ROOT" status --porcelain)"; then
+  echo "could not inspect remote checkout cleanliness" >&2
+  exit 2
+fi
+if [[ -n "$REMOTE_STATUS" ]]; then
+  echo "remote checkout is not clean" >&2
+  exit 2
+fi
 
 # Setup environment
 mkdir -p "$EDULLM_SCRATCH/logs"
@@ -194,7 +211,11 @@ if [[ "${#OFFLINE_RUN_DIRS[@]}" -ne 1 ]]; then
 fi
 OFFLINE_RUN_DIR="${OFFLINE_RUN_DIRS[0]}"
 wandb sync "$OFFLINE_RUN_DIR"
+WANDB_SYNC_STATUS=$?
 unset WANDB_MODE
+if [[ "$WANDB_SYNC_STATUS" -ne 0 ]]; then
+  exit "$WANDB_SYNC_STATUS"
+fi
 ```
 
 ## Pilot a bounded S3 transfer
@@ -225,13 +246,17 @@ credentials or presigned URLs.
 
 ## Engaging acceptance evidence — 2026-07-22
 
-Status: accepted. All binding Engaging gates passed.
+Status: acceptance evidence complete; independent re-review pending.
 
 - Accepted commit: `cf6118809ec135c66d471727d7ba34c82f8465f5`
 - Scratch: `$HOME/orcd/scratch/edullm`, resolved under the separate
   `/orcd/scratch/orcd/008` mount and verified writable
 - Environment: Python `3.10.14`, PyTorch `2.11.0+cu128`, W&B `0.28.1`,
   OLMo-core `2.5.0`
+- Environment setup: Slurm `18575176`, `COMPLETED 0:0` in `00:01:56`, submitted
+  with the accepted commit SHA and Scratch root
+- Pre-execution review: the exact `8d20b59..cf61188` SDD review package received
+  an independent Approved verdict before setup job `18575176` began
 - GPU probe: Slurm `18576231`, `COMPLETED 0:0` in `00:00:12`, one NVIDIA L40S
 - Initial smoke: Slurm `18576778`, `COMPLETED 0:0` in `00:04:19`, trained from
   scratch through step 20
@@ -252,9 +277,11 @@ Status: accepted. All binding Engaging gates passed.
   `$HOME/orcd/scratch/edullm/runs/orcd-bootstrap/step20` and
   `$HOME/orcd/scratch/edullm/runs/orcd-bootstrap/step25`
 - Logs:
+  `$HOME/orcd/scratch/edullm/logs/edullm-env-18575176.log`,
   `$HOME/orcd/scratch/edullm/logs/edullm-probe-18576231.log`,
   `$HOME/orcd/scratch/edullm/logs/edullm-smoke-18576778.log`,
   `$HOME/orcd/scratch/edullm/logs/edullm-smoke-18577188.log`, and
   `$HOME/orcd/scratch/edullm/logs/edullm-smoke-18578152.log`
-- S3 pilot: not run. No explicit approval, presigned-URL file, expected digest,
-  or size bound was present. This is conditional and non-blocking for Plan 1.
+- S3 pilot: not run. The eligible result file existed, but no approved concrete
+  mode-`0600` URL JSON, expected digest, or size bound existed; no transfer
+  measurements were produced. This is conditional and non-blocking for Plan 1.

@@ -58,7 +58,9 @@ def _offline_sync_commands() -> str:
     return marker + text.split(marker, maxsplit=1)[1].split("```", maxsplit=1)[0]
 
 
-def _run_offline_sync_commands(save_folder: Path) -> subprocess.CompletedProcess[str]:
+def _run_offline_sync_commands(
+    save_folder: Path, *, wandb_exit_code: int = 0, report_wandb_mode: bool = False
+) -> subprocess.CompletedProcess[str]:
     script = (
         """
 mapfile() {
@@ -74,14 +76,84 @@ mapfile() {
 wandb() {
   test "$1" = sync
   printf 'synced=%s\\n' "$2"
+  return "$WANDB_EXIT_CODE"
 }
 """
+        + (
+            """
+trap 'if [[ -n "${WANDB_MODE+x}" ]]; then printf "wandb_mode=set\\n"; else printf "wandb_mode=unset\\n"; fi' EXIT
+"""
+            if report_wandb_mode
+            else ""
+        )
         + _offline_sync_commands()
     )
     return subprocess.run(
         ["bash"],
         input=script,
-        env={**os.environ, "SAVE_FOLDER": str(save_folder)},
+        env={
+            **os.environ,
+            "SAVE_FOLDER": str(save_folder),
+            "WANDB_EXIT_CODE": str(wandb_exit_code),
+            "WANDB_MODE": "offline",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _checkout_submission_commands() -> str:
+    text = README.read_text(encoding="utf-8")
+    marker = 'if ! cd "$EDULLM_REPO_ROOT"; then\n'
+    end_marker = "\n```\n\nWait for setup"
+    assert marker in text
+    start = text.index(marker)
+    end = text.index(end_marker, start)
+    return text[start:end]
+
+
+def _run_checkout_submission_commands(
+    tmp_path: Path, *, repo_exists: bool, remote_head: str, dirty: bool
+) -> subprocess.CompletedProcess[str]:
+    home = tmp_path / "home"
+    repo_root = home / "OLMo-core"
+    scratch = home / "orcd" / "scratch" / "edullm"
+    home.mkdir()
+    if repo_exists:
+        repo_root.mkdir()
+    script = (
+        """
+git() {
+  case "$*" in
+    *"rev-parse HEAD"*) printf '%s\\n' "$REMOTE_HEAD" ;;
+    *"status --porcelain"*)
+      if [[ "$DIRTY" = 1 ]]; then
+        printf 'uncommitted-change\\n'
+      fi
+      ;;
+    *) return 99 ;;
+  esac
+}
+sbatch() {
+  printf 'submitted=%s\\n' "$*"
+}
+"""
+        + _checkout_submission_commands()
+    )
+    return subprocess.run(
+        ["bash"],
+        input=script,
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "HOME": str(home),
+            "EDULLM_REPO_ROOT": str(repo_root),
+            "EDULLM_COMMIT_SHA": "cf6118809ec135c66d471727d7ba34c82f8465f5",
+            "EDULLM_SCRATCH": str(scratch),
+            "REMOTE_HEAD": remote_head,
+            "DIRTY": "1" if dirty else "0",
+        },
         capture_output=True,
         text=True,
         check=False,
@@ -316,9 +388,31 @@ def test_readme_documents_official_scratch_path_and_known_reviewed_sha():
     assert "a path under Home is forbidden" not in text
     assert '"$HOME"|"$HOME"/*)' not in text
     assert 'export EDULLM_COMMIT_SHA="$(git -C "$EDULLM_REPO_ROOT" rev-parse HEAD)"' not in text
-    assert 'cd "$EDULLM_REPO_ROOT"' in text
-    assert 'test "$(git -C "$EDULLM_REPO_ROOT" rev-parse HEAD)" = "$EDULLM_COMMIT_SHA"' in text
-    assert 'test -z "$(git -C "$EDULLM_REPO_ROOT" status --porcelain)"' in text
+    assert 'if ! cd "$EDULLM_REPO_ROOT"; then' in text
+    assert 'REMOTE_COMMIT_SHA="$(git -C "$EDULLM_REPO_ROOT" rev-parse HEAD)"' in text
+    assert '[[ "$REMOTE_COMMIT_SHA" != "$EDULLM_COMMIT_SHA" ]]' in text
+    assert 'REMOTE_STATUS="$(git -C "$EDULLM_REPO_ROOT" status --porcelain)"' in text
+    assert '[[ -n "$REMOTE_STATUS" ]]' in text
+
+
+@pytest.mark.parametrize(
+    ("repo_exists", "remote_head", "dirty"),
+    [
+        (False, "cf6118809ec135c66d471727d7ba34c82f8465f5", False),
+        (True, "0000000000000000000000000000000000000000", False),
+        (True, "cf6118809ec135c66d471727d7ba34c82f8465f5", True),
+    ],
+    ids=["failed-cd", "wrong-sha", "dirty-checkout"],
+)
+def test_readme_checkout_preflight_failure_cannot_reach_submission(
+    tmp_path, repo_exists, remote_head, dirty
+):
+    result = _run_checkout_submission_commands(
+        tmp_path, repo_exists=repo_exists, remote_head=remote_head, dirty=dirty
+    )
+
+    assert result.returncode == 2
+    assert "submitted=" not in result.stdout
 
 
 def test_readme_scratch_preflight_checks_root_mount_resolution_and_writability():
@@ -517,3 +611,14 @@ def test_readme_offline_sync_fails_closed_without_exactly_one_candidate(tmp_path
     assert result.returncode == 2
     assert "expected exactly one offline W&B run directory" in result.stderr
     assert "synced=" not in result.stdout
+
+
+def test_readme_offline_sync_propagates_failure_and_unsets_mode(tmp_path):
+    offline_run = tmp_path / "wandb" / "wandb" / "offline-run-only"
+    offline_run.mkdir(parents=True)
+
+    result = _run_offline_sync_commands(tmp_path, wandb_exit_code=7, report_wandb_mode=True)
+
+    assert result.returncode == 7
+    assert f"synced={offline_run}" in result.stdout
+    assert "wandb_mode=unset" in result.stdout
