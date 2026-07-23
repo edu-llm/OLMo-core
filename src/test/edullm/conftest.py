@@ -67,3 +67,21 @@ def valid_resolved_request(valid_request):
         log_pattern="logs/issue-42-attempt-1-%j.log",
         allowed_data_kinds=("skill-dag", "curriculum"),
     )
+
+
+@pytest.fixture
+def reviewed_github():
+    from edullm.github import ReviewResult
+
+    class ReviewedGitHub:
+        @staticmethod
+        def reviewed_commit(
+            sha,
+            *,
+            script_path,
+            allowed_reviewers,
+            required_checks,
+        ):
+            return ReviewResult(True, 7, "approved")
+
+    return ReviewedGitHub()
