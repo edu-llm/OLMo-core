@@ -22,7 +22,7 @@ Suggested name: `worked-examples-cpt`
 | Init ckpt | converted `allenai/OLMo-Ladder-760M-0.5xC` |
 | Data kind | new kind e.g. `worked-examples` |
 | W&B | entity `eduLLM`, project `pretraining`, callback required |
-| GPUs | up to 4× H100 (matched token budget across arms) |
+| GPUs | policy today caps `max_gpu_count` at **2**; request 2× H100 (or ask operators to raise cap for this study) |
 | Metrics emitted | `train/PPL`, `eval/pass_at_n`, `eval/pass_ratio_at_n` |
 
 ### Data / manifest

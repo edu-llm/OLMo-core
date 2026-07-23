@@ -15,7 +15,7 @@
   "W&B project": "pretraining",
   "Success signal": "Finite train/PPL and logged eval/pass_at_n plus eval/pass_ratio_at_n on holdout_bare",
   "Success metrics": "eval/pass_at_n,eval/pass_ratio_at_n",
-  "GPU count": "4",
+  "GPU count": "2",
   "GPU preference": "h100",
   "Maximum runtime minutes": "360"
 }
