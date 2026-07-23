@@ -222,3 +222,39 @@ local validation shard there, and submit the staged-data training run with both
 `EDULLM_SCRATCH` and `OLMO_DATA_ROOT` set to explicit Engaging Scratch paths. The
 tool reports byte counts, SHA-256, elapsed time, and throughput without including
 credentials or presigned URLs.
+
+## Engaging acceptance evidence — 2026-07-22
+
+Status: accepted. All binding Engaging gates passed.
+
+- Accepted commit: `cf6118809ec135c66d471727d7ba34c82f8465f5`
+- Scratch: `$HOME/orcd/scratch/edullm`, resolved under the separate
+  `/orcd/scratch/orcd/008` mount and verified writable
+- Environment: Python `3.10.14`, PyTorch `2.11.0+cu128`, W&B `0.28.1`,
+  OLMo-core `2.5.0`
+- GPU probe: Slurm `18576231`, `COMPLETED 0:0` in `00:00:12`, one NVIDIA L40S
+- Initial smoke: Slurm `18576778`, `COMPLETED 0:0` in `00:04:19`, trained from
+  scratch through step 20
+- Resume smoke: Slurm `18577188`, `COMPLETED 0:0` in `00:01:42`, loaded step 20
+  and advanced through step 25 with the same run identity
+- Forced-offline smoke: Slurm `18578152`, `COMPLETED 0:0` in `00:01:21`; exactly
+  one offline run directory was preserved and synced successfully
+- W&B run: https://wandb.ai/eduLLM/test/runs/orcd-bootstrap
+- W&B identity: run ID, name, and group `orcd-bootstrap`; state `finished`;
+  25 `train/CE loss` points; final step `25`; final value
+  `10.968331336975098`
+- W&B evidence: required config, output, requirements, metadata, and summary files
+  are present; system history includes CPU, memory, disk, network, process, and
+  GPU metrics
+- Second-member visibility: Frank Gonzalez requested a check at 22:24; Eric Wu
+  confirmed at 22:25 that he could see `eduLLM/test/orcd-bootstrap`
+- Checkpoints:
+  `$HOME/orcd/scratch/edullm/runs/orcd-bootstrap/step20` and
+  `$HOME/orcd/scratch/edullm/runs/orcd-bootstrap/step25`
+- Logs:
+  `$HOME/orcd/scratch/edullm/logs/edullm-probe-18576231.log`,
+  `$HOME/orcd/scratch/edullm/logs/edullm-smoke-18576778.log`,
+  `$HOME/orcd/scratch/edullm/logs/edullm-smoke-18577188.log`, and
+  `$HOME/orcd/scratch/edullm/logs/edullm-smoke-18578152.log`
+- S3 pilot: not run. No explicit approval, presigned-URL file, expected digest,
+  or size bound was present. This is conditional and non-blocking for Plan 1.
