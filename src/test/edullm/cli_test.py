@@ -1124,6 +1124,14 @@ def test_environment_commands_use_reviewed_checkout_and_sorted_freeze():
     assert "import torch, wandb, olmo_core" in cli.IMPORT_CHECK_SCRIPT
 
 
+def test_environment_readiness_requires_remote_private_write_helper():
+    setup_script = Path("src/scripts/orcd/setup_env.sbatch").read_text(encoding="utf-8")
+
+    assert 'python" -c "import edullm.ssh_helper"' in cli.ENVIRONMENT_CHECK_SCRIPT
+    assert "import torch, wandb, olmo_core, edullm.ssh_helper" in cli.IMPORT_CHECK_SCRIPT
+    assert "\nimport edullm.ssh_helper\n" in setup_script
+
+
 @pytest.mark.parametrize(
     ("failing_tool", "forbidden_later"),
     [

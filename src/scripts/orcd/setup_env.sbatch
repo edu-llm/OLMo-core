@@ -26,6 +26,7 @@ uv pip install "${EDULLM_REPO_ROOT}[wandb]"
 python - <<'PY'
 import platform
 
+import edullm.ssh_helper
 import torch
 import wandb
 

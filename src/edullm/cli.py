@@ -112,7 +112,8 @@ printf '%s\n' edullm-probe > "$SCRATCH_PROBE"
 rm -f "$SCRATCH_PROBE"
 trap - EXIT"""
 
-ENVIRONMENT_CHECK_SCRIPT = r"""test -x "$HOME/venvs/edullm/bin/python" """
+ENVIRONMENT_CHECK_SCRIPT = r"""test -x "$HOME/venvs/edullm/bin/python" &&
+"$HOME/venvs/edullm/bin/python" -c "import edullm.ssh_helper" """
 
 SUBMIT_ENV_SCRIPT = r"""set -euo pipefail
 EDULLM_REPO_ROOT="$HOME/OLMo-core"
@@ -137,7 +138,7 @@ sbatch --parsable \
 
 IMPORT_CHECK_SCRIPT = r"""set -euo pipefail
 source "$HOME/venvs/edullm/bin/activate"
-python -c "import torch, wandb, olmo_core" """
+python -c "import torch, wandb, olmo_core, edullm.ssh_helper" """
 
 FINGERPRINT_SCRIPT = r"""set -euo pipefail
 source "$HOME/venvs/edullm/bin/activate"
