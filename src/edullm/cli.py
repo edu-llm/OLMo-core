@@ -29,6 +29,21 @@ from edullm.assignment import (
 )
 from edullm.automation import AutomationResult, load_team_leads, validate_issue
 from edullm.github import GitHubClient, GitHubError
+from edullm.jobs import (
+    GateConfiguration,
+    JobOperationError,
+    SSHSlurm,
+    deliver_terminal_notifications,
+)
+from edullm.jobs import jobs as list_operator_jobs
+from edullm.jobs import (
+    load_gate_configuration,
+)
+from edullm.jobs import logs as read_operator_logs
+from edullm.jobs import (
+    run_assigned,
+)
+from edullm.jobs import stop as stop_operator_job
 from edullm.notifications import SlackNotifier
 from edullm.policy import load_operators, load_policy
 from edullm.secure_publish import (
@@ -36,6 +51,7 @@ from edullm.secure_publish import (
     capture_file,
     compare_and_publish,
 )
+from edullm.slurm import SSHSubmissionRemote
 from edullm.ssh import (
     COMMAND_TIMEOUT_SECONDS,
     SSHClient,
@@ -48,6 +64,7 @@ from edullm.ssh import (
 
 ValidationRunner = Callable[..., AutomationResult]
 AssignmentRunner = Callable[..., tuple[AssignmentResult, ...]]
+TerminalRunner = Callable[..., tuple[Any, ...]]
 LocalRunner = Callable[..., subprocess.CompletedProcess[str]]
 
 SETUP_POLL_INTERVAL_SECONDS = 5.0
@@ -162,6 +179,21 @@ class SetupResult:
     github: str
     wandb_username: str
     environment_fingerprint: str
+
+
+@dataclass(frozen=True)
+class OperatorServices:
+    """Authenticated local operator dependencies for one focused CLI action."""
+
+    operator: str
+    github: Any
+    root: Path
+    remote: Any
+    slurm: Any
+
+    def load_configuration(self) -> GateConfiguration:
+        """Reload all protected controls for each mandatory gate."""
+        return load_gate_configuration(self.root)
 
 
 def _default_wandb_api() -> Any:
@@ -686,6 +718,7 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--issue", type=_positive_integer, required=True)
     automation_commands.add_parser("assign")
     automation_commands.add_parser("reminders")
+    automation_commands.add_parser("terminal")
     return parser
 
 
@@ -711,43 +744,210 @@ def handle_setup() -> int:
     return 0
 
 
-def handle_jobs(mine: bool) -> int:
-    """Fail closed until Task 7 implements job status."""
-    del mine
-    print(
-        "edullm jobs is unavailable until Task 7 implements job status",
-        file=sys.stderr,
+def _read_operator_document(path: Path) -> object:
+    directory_fd: int | None = None
+    descriptor: int | None = None
+    try:
+        _reject_operator_symlink_ancestors(path)
+        directory_fd = _open_operator_directory(path.parent)
+        directory_before = os.fstat(directory_fd)
+        if stat.S_IMODE(directory_before.st_mode) != 0o700:
+            raise OSError
+        descriptor = os.open(
+            path.name,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory_fd,
+        )
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.getuid()
+            or before.st_nlink != 1
+            or stat.S_IMODE(before.st_mode) != 0o600
+            or before.st_size > 65_536
+        ):
+            raise OSError
+        content = os.read(descriptor, 65_537)
+        after = os.fstat(descriptor)
+        named = os.stat(path.name, dir_fd=directory_fd, follow_symlinks=False)
+        directory_after = os.fstat(directory_fd)
+
+        def identity(status: os.stat_result) -> tuple[int, ...]:
+            return (
+                status.st_dev,
+                status.st_ino,
+                status.st_mode,
+                status.st_uid,
+                status.st_nlink,
+                status.st_size,
+                status.st_mtime_ns,
+                status.st_ctime_ns,
+            )
+
+        if (
+            len(content) > 65_536
+            or identity(before) != identity(after)
+            or identity(after) != identity(named)
+            or identity(directory_before) != identity(directory_after)
+        ):
+            raise OSError
+        return yaml.safe_load(content.decode("utf-8"))
+    except (OSError, SetupError, UnicodeDecodeError, yaml.YAMLError):
+        raise JobOperationError("local operator configuration is unavailable") from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+
+def _load_operator_services() -> OperatorServices:
+    root = Path(__file__).resolve().parents[2]
+    configuration = load_gate_configuration(root)
+    enabled = {operator.github for operator in configuration.operators if operator.enabled}
+    if not enabled or not configuration.reviewers:
+        raise JobOperationError("operator execution is disabled by protected configuration")
+    path = Path.home() / ".config" / "edullm" / "config.yaml"
+    document = _read_operator_document(path)
+    expected_fields = {
+        "environment_fingerprint",
+        "github",
+        "orcd_username",
+        "remote_repo_root",
+        "scratch",
+        "version",
+        "wandb_username",
+    }
+    if type(document) is not dict or set(document) != expected_fields:
+        raise JobOperationError("local operator configuration is invalid")
+    operator = document.get("github")
+    if type(operator) is not str or operator not in enabled:
+        raise JobOperationError("local identity is not an enabled protected operator")
+    try:
+        login = _run_local(
+            subprocess.run,
+            ["gh", "api", "user", "--jq", ".login"],
+            "GitHub identity",
+        ).stdout.strip()
+    except SetupError:
+        raise JobOperationError("local GitHub identity is unavailable") from None
+    if login != operator:
+        raise JobOperationError("local GitHub identity does not match operator configuration")
+    try:
+        token = _run_local(
+            subprocess.run,
+            ["gh", "auth", "token"],
+            "GitHub authentication",
+        ).stdout.strip()
+    except SetupError:
+        raise JobOperationError("local GitHub authentication is unavailable") from None
+    try:
+        github = GitHubClient(token, "edu-llm/OLMo-core")
+    finally:
+        token = ""
+    try:
+        identity = github.get("/user")
+        if type(identity) is not dict or identity.get("login") != operator:
+            raise JobOperationError("authenticated GitHub identity does not match the operator")
+    except JobOperationError:
+        raise
+    except Exception:
+        raise JobOperationError("authenticated GitHub identity is unavailable") from None
+    ssh_client = SSHClient()
+    return OperatorServices(
+        operator=operator,
+        github=github,
+        root=root,
+        remote=SSHSubmissionRemote(ssh_client),
+        slurm=SSHSlurm(ssh_client),
     )
-    return 2
 
 
-def handle_run() -> int:
-    """Fail closed until Task 7 implements job submission."""
+def handle_jobs(mine: bool, *, services: OperatorServices | None = None) -> int:
+    """List authorized jobs and monotonically repair stale lifecycle state."""
+    try:
+        services = services or _load_operator_services()
+        states = list_operator_jobs(
+            mine=mine,
+            operator=services.operator,
+            github=services.github,
+            configuration=services.load_configuration(),
+            slurm=services.slurm,
+            now=datetime.now(timezone.utc).replace(microsecond=0),
+        )
+    except (GitHubError, JobOperationError, OSError, ValueError):
+        print("edullm jobs failed", file=sys.stderr)
+        return 1
+    for state in states:
+        attempt = state.attempts[-1]
+        print(
+            f"#{state.issue} {state.current_state} "
+            f"Slurm={attempt.slurm_job_id} W&B={attempt.wandb_url}"
+        )
+    if not states:
+        print("No authorized eduLLM jobs.")
+    return 0
+
+
+def handle_run(*, services: OperatorServices | None = None) -> int:
+    """Submit the next assigned request after both mandatory fresh gates."""
+    try:
+        services = services or _load_operator_services()
+        state = run_assigned(
+            operator=services.operator,
+            github=services.github,
+            load_configuration=services.load_configuration,
+            remote=services.remote,
+            now=datetime.now(timezone.utc).replace(microsecond=0),
+        )
+    except (GitHubError, JobOperationError, OSError, ValueError):
+        print("edullm run failed before a safe submission could be confirmed", file=sys.stderr)
+        return 1
+    attempt = state.attempts[-1]
     print(
-        "edullm run is unavailable until Task 7 implements job submission",
-        file=sys.stderr,
+        f"Submitted Issue #{state.issue} as Slurm job {attempt.slurm_job_id}. "
+        f"W&B: {attempt.wandb_url}"
     )
-    return 2
+    return 0
 
 
-def handle_logs(issue: int) -> int:
-    """Fail closed until Task 7 implements job logs."""
-    del issue
-    print(
-        "edullm logs is unavailable until Task 7 implements job logs",
-        file=sys.stderr,
-    )
-    return 2
+def handle_logs(issue: int, *, services: OperatorServices | None = None) -> int:
+    """Print only the authorized canonical bounded redacted Issue log."""
+    try:
+        services = services or _load_operator_services()
+        text = read_operator_logs(
+            issue,
+            operator=services.operator,
+            github=services.github,
+            configuration=services.load_configuration(),
+            slurm=services.slurm,
+        )
+    except (GitHubError, JobOperationError, OSError, ValueError):
+        print("edullm logs failed", file=sys.stderr)
+        return 1
+    sys.stdout.write(text)
+    if text and not text.endswith("\n"):
+        sys.stdout.write("\n")
+    return 0
 
 
-def handle_stop(issue: int) -> int:
-    """Fail closed until Task 7 implements job cancellation."""
-    del issue
-    print(
-        "edullm stop is unavailable until Task 7 implements job cancellation",
-        file=sys.stderr,
-    )
-    return 2
+def handle_stop(issue: int, *, services: OperatorServices | None = None) -> int:
+    """Cancel only the current operator's canonical Issue job binding."""
+    try:
+        services = services or _load_operator_services()
+        state = stop_operator_job(
+            issue,
+            operator=services.operator,
+            github=services.github,
+            configuration=services.load_configuration(),
+            slurm=services.slurm,
+            now=datetime.now(timezone.utc).replace(microsecond=0),
+        )
+    except (GitHubError, JobOperationError, OSError, ValueError):
+        print("edullm stop failed", file=sys.stderr)
+        return 1
+    print(f"Issue #{issue}: {state.current_state}")
+    return 0
 
 
 def handle_logout(*, ssh_client: Any | None = None) -> int:
@@ -873,6 +1073,28 @@ def automation_reminders(
     )
 
 
+def automation_terminal(
+    *,
+    token: str,
+    repository: str,
+    webhook: str | None,
+    root: Path,
+) -> tuple[Any, ...]:
+    """Deliver hard-disabled workflow terminal events from canonical lifecycle state."""
+    configuration = load_gate_configuration(root.resolve())
+    if not any(operator.enabled for operator in configuration.operators):
+        return ()
+    if webhook is None:
+        raise ValueError("Slack notification configuration is unavailable")
+    return deliver_terminal_notifications(
+        github=GitHubClient(token, repository),
+        configuration=configuration,
+        notifier=SlackNotifier(webhook),
+        now=datetime.now(timezone.utc).replace(microsecond=0),
+        automation_actor=AUTOMATION_ACTOR,
+    )
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -880,20 +1102,21 @@ def main(
     validation_runner: ValidationRunner = automation_validate,
     assignment_runner: AssignmentRunner = automation_assign,
     reminder_runner: AssignmentRunner = automation_reminders,
+    terminal_runner: TerminalRunner = automation_terminal,
 ) -> int:
     """
     Run the ``edullm`` console entry point and internal automation commands.
 
     Public commands are ``setup``, ``jobs``, ``run``, ``logs``, ``stop``, and
-    ``logout``. Job behavior remains unavailable until Task 7. Internal
-    workflow commands remain ``automation validate``, ``automation assign``,
-    and ``automation reminders``.
+    ``logout``. Internal workflow commands are ``automation validate``,
+    ``automation assign``, ``automation reminders``, and ``automation terminal``.
 
     :param argv: Optional command arguments without the module name.
     :param environ: Optional environment mapping for tests.
     :param validation_runner: Optional validation dependency for tests.
     :param assignment_runner: Optional ready-Issue assignment dependency for tests.
     :param reminder_runner: Optional reminder and reassignment dependency for tests.
+    :param terminal_runner: Optional terminal-notification dependency for tests.
 
     :returns: A process exit status.
     """
@@ -943,7 +1166,12 @@ def main(
         return 0
 
     webhook = environment.get("SLACK_WEBHOOK_URL")
-    runner = assignment_runner if arguments.automation_command == "assign" else reminder_runner
+    if arguments.automation_command == "assign":
+        runner: Callable[..., tuple[Any, ...]] = assignment_runner
+    elif arguments.automation_command == "reminders":
+        runner = reminder_runner
+    else:
+        runner = terminal_runner
     try:
         results = runner(
             token=token,
@@ -954,10 +1182,16 @@ def main(
     except (GitHubError, OSError, ValueError):
         print("eduLLM automation operation failed", file=sys.stderr)
         return 1
-    if any(result.operational_error for result in results):
+    if arguments.automation_command != "terminal" and any(
+        result.operational_error for result in results
+    ):
         print("eduLLM automation operation failed", file=sys.stderr)
         return 1
-    label = "assignment" if arguments.automation_command == "assign" else "reminder"
+    label = {
+        "assign": "assignment",
+        "reminders": "reminder",
+        "terminal": "terminal notification",
+    }[arguments.automation_command]
     print(f"eduLLM {label} scan: {len(results)} result(s)")
     return 0
 

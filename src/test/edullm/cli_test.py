@@ -226,9 +226,11 @@ def test_main_docstring_documents_public_and_internal_commands_and_runners():
     assert "automation validate" in documentation
     assert "automation assign" in documentation
     assert "automation reminders" in documentation
+    assert "automation terminal" in documentation
     assert ":param validation_runner:" in documentation
     assert ":param assignment_runner:" in documentation
     assert ":param reminder_runner:" in documentation
+    assert ":param terminal_runner:" in documentation
     assert "console entry point" in documentation
 
 
@@ -244,6 +246,11 @@ def test_main_docstring_documents_public_and_internal_commands_and_runners():
             "reminders",
             "reminder_runner",
             "eduLLM reminder scan: 1 result(s)\n",
+        ),
+        (
+            "terminal",
+            "terminal_runner",
+            "eduLLM terminal notification scan: 1 result(s)\n",
         ),
     ],
 )
@@ -264,6 +271,7 @@ def test_internal_cli_exposes_only_hard_disabled_assignment_automation(
     kwargs = {
         "assignment_runner": lambda **unused: (),
         "reminder_runner": lambda **unused: (),
+        "terminal_runner": lambda **unused: (),
         runner_name: runner,
     }
     monkeypatch.chdir(tmp_path)
@@ -292,7 +300,7 @@ def test_internal_cli_exposes_only_hard_disabled_assignment_automation(
     assert "hooks.slack.com" not in output.out + output.err
 
 
-@pytest.mark.parametrize("command", ["assign", "reminders"])
+@pytest.mark.parametrize("command", ["assign", "reminders", "terminal"])
 def test_assignment_cli_allows_absent_webhook_for_closed_operator_roster(command, capsys):
     def runner(*, token, repository, webhook, root):  # noqa: ARG001
         assert webhook is None
@@ -301,6 +309,7 @@ def test_assignment_cli_allows_absent_webhook_for_closed_operator_roster(command
     kwargs = {
         "assignment_runner": runner,
         "reminder_runner": runner,
+        "terminal_runner": runner,
     }
     exit_code = cli.main(
         ["automation", command],
@@ -1556,14 +1565,14 @@ def test_main_dispatches_each_public_command_to_focused_handler(monkeypatch):
         (["stop", "42"], "stop"),
     ],
 )
-def test_task_7_commands_fail_closed_with_clear_scoped_message(arguments, command, capsys):
+def test_task_7_commands_fail_closed_with_empty_protected_roster(arguments, command, capsys):
     exit_code = cli.main(arguments, environ=RestrictedEnvironment({}))
 
-    assert exit_code == 2
+    assert exit_code == 1
     output = capsys.readouterr()
     assert output.out == ""
-    assert f"edullm {command} is unavailable" in output.err
-    assert "Task 7" in output.err or "Tasks 7-8" in output.err
+    assert f"edullm {command} failed" in output.err
+    assert "Task 7" not in output.err
 
 
 def test_setup_handler_reports_decline_without_traceback(monkeypatch, capsys):

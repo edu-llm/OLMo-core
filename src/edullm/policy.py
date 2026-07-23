@@ -42,6 +42,11 @@ _POLICY_REQUIRED_FIELDS = {
     "wandb_entity",
     "allowed_wandb_projects",
     "required_checks",
+    "repository_url",
+    "scratch_root",
+    "slurm_cpus_per_gpu",
+    "slurm_memory",
+    "slurm_partition",
 }
 _POLICY_OPTIONAL_FIELDS = {
     "max_runtime_minutes",
@@ -64,6 +69,7 @@ _APPROVED_ENTRYPOINTS = {
         "script": "src/examples/llm/train.py",
         "launcher": "torchrun",
         "wandb_callback": True,
+        "model_identity": "olmo2-190m",
         "allowed_data_kinds": ("generic-smoke",),
         "fixed_launcher_arguments": ("--standalone", "--nproc-per-node=1"),
         "fixed_options": {
@@ -101,6 +107,7 @@ _APPROVED_ENTRYPOINTS = {
         "script": "src/scripts/train/smoketests/OLMo2-190M-hypothesis-smoke.py",
         "launcher": "python",
         "wandb_callback": True,
+        "model_identity": "olmo2-190m",
         "allowed_data_kinds": ("skill-dag", "curriculum"),
         "positionals": 3,
         "allowed_positionals": {
@@ -148,6 +155,11 @@ class Policy:
     entrypoints: Mapping[str, Mapping[str, object]] = field(default_factory=dict)
     reminder_after_minutes: int = 15
     reassign_after_minutes: int = 30
+    repository_url: str = "https://github.com/edu-llm/OLMo-core.git"
+    scratch_root: str = "$HOME/orcd/scratch/edullm"
+    slurm_partition: str = "mit_normal_gpu"
+    slurm_memory: str = "64G"
+    slurm_cpus_per_gpu: int = 4
 
     def __post_init__(self) -> None:
         """Detach and recursively freeze every policy container."""
@@ -301,6 +313,16 @@ def load_policy(path: Path, entrypoints_path: Path | None = None) -> Policy:
     if required_checks != _REQUIRED_CHECKS:
         raise ValueError("policy.required_checks must exactly match the staged required checks")
 
+    fixed_policy = {
+        "repository_url": "https://github.com/edu-llm/OLMo-core.git",
+        "scratch_root": "$HOME/orcd/scratch/edullm",
+        "slurm_cpus_per_gpu": 4,
+        "slurm_memory": "64G",
+        "slurm_partition": "mit_normal_gpu",
+    }
+    for field_name, expected in fixed_policy.items():
+        _validate_exact(data[field_name], expected, f"policy.{field_name}")
+
     reminder_after_minutes = data.get("reminder_after_minutes", 15)
     if type(reminder_after_minutes) is not int or reminder_after_minutes < 1:
         raise ValueError("policy.reminder_after_minutes must be a positive integer")
@@ -325,6 +347,11 @@ def load_policy(path: Path, entrypoints_path: Path | None = None) -> Policy:
     return Policy(
         wandb_entity=cast(str, wandb_entity),
         allowed_wandb_projects=allowed_wandb_projects,
+        repository_url=cast(str, data["repository_url"]),
+        scratch_root=cast(str, data["scratch_root"]),
+        slurm_partition=cast(str, data["slurm_partition"]),
+        slurm_memory=cast(str, data["slurm_memory"]),
+        slurm_cpus_per_gpu=cast(int, data["slurm_cpus_per_gpu"]),
         max_runtime_minutes=cast(int, max_runtime_minutes),
         max_gpu_count=cast(int, max_gpu_count),
         allowed_gpu_preferences=allowed_gpu_preferences,

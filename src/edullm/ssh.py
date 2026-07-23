@@ -30,6 +30,7 @@ _REMOTE_PRIVATE_TARGETS = {
     "~/.config/edullm/wandb.env": "wandb.env",
     "~/.config/edullm/wandb.key": "wandb.key",
 }
+_REMOTE_SUBMISSION_TARGET = re.compile(r"submission/([0-9a-f]{64})/request\.sbatch\Z")
 _SAFE_HOST_LINE = re.compile(r"(?i)^\s*Host\s+orcd-login\s*$")
 _SAFE_HOSTNAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\Z")
 _SAFE_CONTROL_PATH = re.compile(r"[A-Za-z0-9_./~%+-]+\Z")
@@ -160,14 +161,20 @@ class SSHClient:
         timeout: float = COMMAND_TIMEOUT_SECONDS,
     ) -> None:
         """Write private content remotely using standard input."""
-        try:
-            target = _REMOTE_PRIVATE_TARGETS[path]
-        except KeyError:
-            raise ValueError("remote path is unsafe")
-        command = (
-            '"$HOME/venvs/edullm/bin/python" -m edullm.ssh_helper '
-            f"--target {shlex.quote(target)}"
-        )
+        target = _REMOTE_PRIVATE_TARGETS.get(path)
+        if target is not None:
+            command = (
+                '"$HOME/venvs/edullm/bin/python" -m edullm.ssh_helper '
+                f"--target {shlex.quote(target)}"
+            )
+        else:
+            match = _REMOTE_SUBMISSION_TARGET.fullmatch(path) if type(path) is str else None
+            if match is None:
+                raise ValueError("remote path is unsafe")
+            command = (
+                '"$HOME/venvs/edullm/bin/python" -m edullm.ssh_helper '
+                f"--target submission --key {match.group(1)}"
+            )
         self._run(
             ["ssh", _ALIAS, command],
             input_text=content,

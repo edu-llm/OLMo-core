@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
 from typing import cast
 
+from edullm.data_manifest import BUILTINS
 from edullm.models import JobRequest, JobStatus
 from edullm.policy import Policy
 
@@ -357,6 +358,23 @@ def validate_request(request: JobRequest, policy: Policy) -> list[str]:
         errors.append("data manifest SHA-256 must be 64 lowercase hexadecimal characters")
     if not _valid_manifest_location(request.data_manifest):
         errors.append("data manifest location is not allowed")
+    elif request.data_manifest.startswith("builtin://"):
+        builtin = BUILTINS.get(request.data_manifest)
+        if builtin is None:
+            errors.append("built-in data manifest is unknown")
+        else:
+            builtin_digest, builtin_data = builtin
+            if request.data_manifest_sha256 != builtin_digest:
+                errors.append("built-in data manifest digest does not match its fixed identity")
+            if profile is not None:
+                allowed_kinds = profile.get("allowed_data_kinds")
+                if type(allowed_kinds) not in {tuple, list}:
+                    errors.append("built-in data kind is not allowed for this entrypoint")
+                elif builtin_data["kind"] not in cast(
+                    tuple[object, ...] | list[object],
+                    allowed_kinds,
+                ):
+                    errors.append("built-in data kind is not allowed for this entrypoint")
 
     if (
         type(request.gpu_count) is not int

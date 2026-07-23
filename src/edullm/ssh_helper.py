@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import secrets
 import stat
 import sys
@@ -23,6 +24,8 @@ from edullm.secure_publish import (
 )
 
 _TARGETS = frozenset({"wandb.env", "wandb.key"})
+_SUBMISSION_KEY = re.compile(r"[0-9a-f]{64}\Z")
+_MAX_SUBMISSION_BYTES = 1_048_576
 _DIRECTORY_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
 
 
@@ -198,10 +201,34 @@ def _write_all(descriptor: int, content: bytes) -> None:
 def main(argv: list[str] | None = None) -> int:
     """Read stdin and atomically write one fixed private target."""
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--target", choices=sorted(_TARGETS), required=True)
+    parser.add_argument("--target", choices=sorted(_TARGETS | {"submission"}), required=True)
+    parser.add_argument("--key")
     arguments = parser.parse_args(argv)
     try:
-        atomic_write_private(Path.home(), arguments.target, sys.stdin.buffer)
+        if arguments.target == "submission":
+            if type(arguments.key) is not str or _SUBMISSION_KEY.fullmatch(arguments.key) is None:
+                raise PrivateWriteError("private write failed")
+            content = sys.stdin.buffer.read(_MAX_SUBMISSION_BYTES + 1)
+            if len(content) > _MAX_SUBMISSION_BYTES:
+                raise PrivateWriteError("private write failed")
+            try:
+                script = content.decode("utf-8")
+            except UnicodeDecodeError:
+                raise PrivateWriteError("private write failed") from None
+            from edullm.slurm import SubmissionError, stage_submission
+
+            try:
+                stage_submission(
+                    Path.home() / "orcd" / "scratch" / "edullm" / "state",
+                    arguments.key,
+                    script,
+                )
+            except SubmissionError:
+                raise PrivateWriteError("private write failed") from None
+        else:
+            if arguments.key is not None:
+                raise PrivateWriteError("private write failed")
+            atomic_write_private(Path.home(), arguments.target, sys.stdin.buffer)
     except PrivateWriteError:
         print("private write failed", file=sys.stderr)
         return 1

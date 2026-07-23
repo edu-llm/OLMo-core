@@ -7,6 +7,7 @@ from __future__ import annotations
 import html
 import math
 import re
+from collections.abc import Mapping
 from typing import Any, cast
 from urllib.parse import urlsplit
 
@@ -17,6 +18,7 @@ _SLACK_ID = re.compile(r"[UW][A-Z0-9]{8,20}\Z")
 _WEBHOOK_PATH = re.compile(r"/services/[A-Za-z0-9]+/[A-Za-z0-9]+/[A-Za-z0-9]+\Z")
 _MAX_TITLE_CHARS = 120
 _KINDS = frozenset({"assignment", "reassignment"})
+_TERMINAL_STATES = frozenset({"completed", "failed", "cancelled", "preempted"})
 
 
 class SlackValidationError(ValueError):
@@ -120,6 +122,38 @@ class SlackNotifier:
                 },
             ],
         }
+        self._send(payload)
+
+    def terminal(
+        self,
+        *,
+        issue: int,
+        operator_slack_id: str,
+        state: str,
+    ) -> None:
+        """Send one bounded terminal event using only protected and canonical fields."""
+        if type(issue) is not int or issue <= 0:
+            raise SlackValidationError("Slack Issue number must be a positive integer")
+        if type(operator_slack_id) is not str or _SLACK_ID.fullmatch(operator_slack_id) is None:
+            raise SlackValidationError("Slack operator user ID is invalid")
+        if type(state) is not str or state not in _TERMINAL_STATES:
+            raise SlackValidationError("Slack terminal state is invalid")
+        payload = {
+            "text": f"eduLLM job #{issue} {state}",
+            "blocks": [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"eduLLM job #{issue} {state}; operator <@{operator_slack_id}>",
+                    },
+                }
+            ],
+        }
+        self._send(payload)
+
+    def _send(self, payload: Mapping[str, object]) -> None:
+        """Deliver one already-validated payload with sanitized outcome semantics."""
         try:
             response = self._session.post(
                 self._webhook,

@@ -5,6 +5,11 @@ allowed_wandb_projects:
   - posttraining
   - evaluation
   - data-pipeline
+repository_url: https://github.com/edu-llm/OLMo-core.git
+scratch_root: $HOME/orcd/scratch/edullm
+slurm_partition: mit_normal_gpu
+slurm_memory: 64G
+slurm_cpus_per_gpu: 4
 max_runtime_minutes: 360
 max_gpu_count: 2
 allowed_gpu_preferences: [any, l40s, h100, h200]

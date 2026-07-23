@@ -18,7 +18,7 @@ def valid_request():
         script_path="src/scripts/train/smoketests/OLMo2-190M-hypothesis-smoke.py",
         launcher="python",
         argv=("train_single", "skilldag-natural", "local", "--seed=0"),
-        data_manifest="builtin://generic-smoke-v1",
+        data_manifest="/orcd/pool/edullm/manifests/skill-dag-v1.json",
         data_manifest_sha256="b" * 64,
         data_classification="public",
         seed=0,

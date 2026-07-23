@@ -46,7 +46,20 @@ _CHECK_CONCLUSIONS = frozenset(
 )
 _MAX_COMMENT_CHARS = 65_536
 _MAX_LABEL_CHARS = 50
-_WRITABLE_STATUS_LABELS = frozenset({"status:requested", "status:ready", "status:assigned"})
+_WRITABLE_STATUS_LABELS = frozenset(
+    {
+        "status:requested",
+        "status:validating",
+        "status:ready",
+        "status:assigned",
+        "status:submitted",
+        "status:running",
+        "status:completed",
+        "status:failed",
+        "status:cancelled",
+        "status:preempted",
+    }
+)
 
 
 class GitHubError(RuntimeError):
@@ -335,8 +348,7 @@ class GitHubClient:
         Add one managed status label without replacing unrelated labels.
 
         :param issue_number: The positive Issue number.
-        :param label: ``status:requested``, ``status:ready``, or
-            ``status:assigned``.
+        :param label: One exact managed :class:`~edullm.models.JobStatus` label.
 
         :returns: The complete validated server label sequence after the add.
         """
@@ -357,8 +369,7 @@ class GitHubClient:
         Idempotently remove one managed status label without touching other labels.
 
         :param issue_number: The positive Issue number.
-        :param label: ``status:requested``, ``status:ready``, or
-            ``status:assigned``.
+        :param label: One exact managed :class:`~edullm.models.JobStatus` label.
 
         :returns: ``True`` when removed, or ``False`` only when GitHub returns 404.
         """
@@ -764,7 +775,7 @@ def _is_valid_label_name(value: object) -> bool:
 
 def _validate_status_label(label: object) -> None:
     if type(label) is not str or label not in _WRITABLE_STATUS_LABELS:
-        raise GitHubValidationError("status label must be requested, ready, or assigned")
+        raise GitHubValidationError("status label must be an exact managed lifecycle label")
 
 
 def _validate_encoded_status_label_path(path: object, repo: str) -> None:
@@ -778,7 +789,7 @@ def _validate_encoded_status_label_path(path: object, repo: str) -> None:
         or not issue.isascii()
         or not issue.isdecimal()
         or issue.startswith("0")
-        or label_path not in {"status%3Arequested", "status%3Aready", "status%3Aassigned"}
+        or label_path not in {quote(label, safe="") for label in _WRITABLE_STATUS_LABELS}
     ):
         raise GitHubValidationError("GitHub API path is invalid")
 

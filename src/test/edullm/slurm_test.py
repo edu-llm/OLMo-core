@@ -1,0 +1,538 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import stat
+import subprocess
+import threading
+import time
+from dataclasses import replace
+from datetime import datetime, timezone
+
+import pytest
+
+from edullm.slurm import (
+    SubmissionError,
+    SubmissionReceipt,
+    SubmissionSpec,
+    build_submission_key,
+    parse_submission_receipt,
+    render_sbatch,
+    stage_submission,
+    submission_transaction,
+)
+
+NOW = datetime(2026, 7, 23, 13, 0, 0, tzinfo=timezone.utc)
+
+
+def _spec(valid_resolved_request, script: str) -> SubmissionSpec:
+    request = valid_resolved_request.request
+    return SubmissionSpec(
+        issue=request.issue_number,
+        request_digest=request.digest,
+        attempt_number=1,
+        operator=valid_resolved_request.operator,
+        script_sha256=hashlib.sha256(script.encode()).hexdigest(),
+        manifest_uri=request.data_manifest,
+        manifest_sha256=request.data_manifest_sha256,
+        allowed_data_kinds=valid_resolved_request.allowed_data_kinds,
+        log_pattern=valid_resolved_request.log_pattern,
+    )
+
+
+def _runner(
+    calls: list[list[str]],
+    *,
+    output: str = "12345\n",
+    returncode: int = 0,
+):
+    def run(argv, **kwargs):
+        calls.append(list(argv))
+        assert kwargs["check"] is False
+        assert kwargs["text"] is True
+        assert kwargs["capture_output"] is True
+        assert kwargs["timeout"] > 0
+        assert kwargs["cwd"].startswith("/")
+        return subprocess.CompletedProcess(argv, returncode, output, "private slurm diagnostics")
+
+    return run
+
+
+def test_render_uses_fixed_directives_structured_argv_and_reviewed_worktree(
+    valid_resolved_request,
+):
+    text = render_sbatch(valid_resolved_request)
+
+    assert "#SBATCH -p mit_normal_gpu" in text
+    assert "#SBATCH -G l40s:1" in text
+    assert "#SBATCH -t 00:30:00" in text
+    assert "#SBATCH -c 4" in text
+    assert "#SBATCH --mem=64G" in text
+    assert "#SBATCH --export=NONE" in text
+    assert "#SBATCH -o logs/issue-42-attempt-1-%j.log" in text
+    assert "#SBATCH -e logs/issue-42-attempt-1-%j.log" in text
+    assert "git clone --no-checkout https://github.com/edu-llm/OLMo-core.git" in text
+    assert "git checkout --detach " + "a" * 40 in text
+    assert 'mkdir -p "$(dirname "$WORKTREE")"' in text
+    assert 'export PYTHONPATH="$WORKTREE/src"' in text
+    assert 'source "$HOME/venvs/edullm/bin/activate"' in text
+    assert 'source "$HOME/.config/edullm/wandb.env"' in text
+    assert "python -m edullm.data_manifest render-env" in text
+    assert "eval " not in text
+    assert "pip install" not in text
+    assert "WANDB_API_KEY" not in text
+
+
+def test_render_audit_metadata_is_complete_and_wandb_id_is_slurm_deterministic(
+    valid_resolved_request,
+):
+    text = render_sbatch(valid_resolved_request)
+    request = valid_resolved_request.request
+
+    for value in (
+        "issue-42",
+        "attempt-1",
+        request.entrypoint_profile,
+        request.condition,
+        "l40s",
+        request.commit_sha,
+        f"seed-{request.seed}",
+        request.digest,
+        request.data_manifest_sha256,
+        valid_resolved_request.model_identity,
+        "engaging",
+    ):
+        assert value in text
+    assert 'WANDB_RUN_ID="${WANDB_RUN_PREFIX}-${SLURM_JOB_ID}"' in text
+    assert (
+        'WANDB_RUN_URL="https://wandb.ai/${WANDB_ENTITY}/${WANDB_PROJECT}/runs/${WANDB_RUN_ID}"'
+        in text
+    )
+    assert "timeout 10" in text
+    assert "WANDB_MODE=offline" in text
+    assert "wandb sync" in text
+    assert "|| true" in text
+
+
+@pytest.mark.parametrize(
+    "launcher,expected",
+    [
+        ("python", "python src/scripts/train/smoketests/"),
+        ("torchrun", "torchrun --standalone --nproc-per-node=1"),
+        ("bash", "bash src/scripts/train/smoketests/"),
+    ],
+)
+def test_render_quotes_arguments_once_for_every_launcher(
+    valid_resolved_request,
+    launcher,
+    expected,
+):
+    request = replace(
+        valid_resolved_request.request,
+        launcher=launcher,
+        argv=("value with spaces", "$(touch nope)", ";", "--option=-leading"),
+    )
+    resolved = replace(valid_resolved_request, request=request)
+
+    text = render_sbatch(resolved)
+
+    assert expected in text
+    assert "'value with spaces'" in text
+    assert "'$(touch nope)'" in text
+    assert "';'" in text
+    assert "--option=-leading" in text
+    assert "eval " not in text
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda resolved: replace(resolved, slurm_job_name="bad\n#SBATCH --uid=root"),
+        lambda resolved: replace(resolved, log_pattern="../../tmp/%j"),
+        lambda resolved: replace(resolved, slurm_partition="other"),
+        lambda resolved: replace(resolved, slurm_memory="64G\n#SBATCH --requeue"),
+        lambda resolved: replace(resolved, repository_url="https://evil.invalid/repo"),
+        lambda resolved: replace(resolved, model_identity="model\nBAD"),
+        lambda resolved: replace(
+            resolved,
+            request=replace(resolved.request, gpu_preference="l40s\n#SBATCH --uid=0"),
+        ),
+        lambda resolved: replace(
+            resolved,
+            request=replace(resolved.request, argv=("nul\x00value",)),
+        ),
+        lambda resolved: replace(
+            resolved,
+            request=replace(resolved.request, commit_sha="A" * 40),
+        ),
+    ],
+)
+def test_render_revalidates_every_resolved_value(valid_resolved_request, mutator):
+    with pytest.raises(SubmissionError):
+        render_sbatch(mutator(valid_resolved_request))
+
+
+def test_render_creates_private_atomic_request_and_data_environment(
+    valid_resolved_request,
+):
+    text = render_sbatch(valid_resolved_request)
+
+    assert "umask 077" in text
+    assert 'REQUEST_TMP="$(mktemp "$WORKTREE/.edullm-request.XXXXXX")"' in text
+    assert 'chmod 600 "$REQUEST_TMP"' in text
+    assert 'mv -f "$REQUEST_TMP" "$EDULLM_REQUEST_PATH"' in text
+    assert 'DATA_ENV_TMP="$(mktemp "$WORKTREE/.edullm-data.XXXXXX")"' in text
+    assert 'chmod 600 "$DATA_ENV_TMP"' in text
+    assert 'mv -f "$DATA_ENV_TMP" "$DATA_ENV"' in text
+    assert 'if ! GIT_STATUS="$(git status --porcelain --untracked-files=all)"; then' in text
+    assert 'test -z "$GIT_STATUS"' in text
+
+
+def test_submission_key_is_deterministic_bounded_and_nonsemantic(valid_resolved_request):
+    request = valid_resolved_request.request
+
+    first = build_submission_key(42, request.digest, 1, "operator")
+    second = build_submission_key(42, request.digest, 1, "operator")
+
+    assert first == second
+    assert len(first) == 64
+    assert first.isalnum()
+    with pytest.raises(SubmissionError):
+        build_submission_key(0, request.digest, 1, "operator")
+    with pytest.raises(SubmissionError):
+        build_submission_key(42, request.digest, 1, "Operator")
+
+
+def test_transaction_submits_once_and_persists_private_canonical_receipt(
+    tmp_path,
+    valid_resolved_request,
+):
+    script = render_sbatch(valid_resolved_request)
+    spec = _spec(valid_resolved_request, script)
+    key = build_submission_key(spec.issue, spec.request_digest, spec.attempt_number, spec.operator)
+    stage_submission(tmp_path, key, script)
+    calls: list[list[str]] = []
+    manifest_calls = []
+
+    receipt = submission_transaction(
+        tmp_path,
+        key,
+        spec,
+        sbatch_runner=_runner(calls),
+        manifest_verifier=lambda *args: manifest_calls.append(args),
+        now=NOW,
+    )
+
+    assert receipt.slurm_job_id == "12345"
+    assert receipt.log_path == str(tmp_path.parent / "logs/issue-42-attempt-1-12345.log").replace(
+        str(tmp_path.parent), str(tmp_path.parent)
+    )
+    assert calls == [
+        [
+            "sbatch",
+            "--export=NONE",
+            "--parsable",
+            str(tmp_path / key / "request.sbatch"),
+        ]
+    ]
+    assert manifest_calls == [
+        (
+            spec.manifest_uri,
+            spec.manifest_sha256,
+            set(spec.allowed_data_kinds),
+        )
+    ]
+    receipt_path = tmp_path / key / "receipt.json"
+    assert stat.S_IMODE(receipt_path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(receipt_path.parent.stat().st_mode) == 0o700
+    assert parse_submission_receipt(receipt_path.read_text(encoding="utf-8")) == receipt
+
+
+def test_retry_returns_existing_receipt_without_second_submit(
+    tmp_path,
+    valid_resolved_request,
+):
+    script = render_sbatch(valid_resolved_request)
+    spec = _spec(valid_resolved_request, script)
+    key = build_submission_key(spec.issue, spec.request_digest, 1, spec.operator)
+    stage_submission(tmp_path, key, script)
+    calls: list[list[str]] = []
+    first = submission_transaction(
+        tmp_path,
+        key,
+        spec,
+        sbatch_runner=_runner(calls),
+        manifest_verifier=lambda *args: None,
+        now=NOW,
+    )
+    second = submission_transaction(
+        tmp_path,
+        key,
+        spec,
+        sbatch_runner=_runner(calls, output="99999\n"),
+        manifest_verifier=lambda *args: None,
+        now=NOW,
+    )
+
+    assert second == first
+    assert len(calls) == 1
+
+
+def test_concurrent_transaction_invocations_submit_only_once(
+    tmp_path,
+    valid_resolved_request,
+):
+    script = render_sbatch(valid_resolved_request)
+    spec = _spec(valid_resolved_request, script)
+    key = build_submission_key(spec.issue, spec.request_digest, 1, spec.operator)
+    stage_submission(tmp_path, key, script)
+    calls: list[list[str]] = []
+    barrier = threading.Barrier(2)
+    results: list[SubmissionReceipt] = []
+
+    def run_sbatch(argv, **kwargs):
+        calls.append(list(argv))
+        time.sleep(0.05)
+        return subprocess.CompletedProcess(argv, 0, "12345\n", "")
+
+    def invoke():
+        barrier.wait()
+        results.append(
+            submission_transaction(
+                tmp_path,
+                key,
+                spec,
+                sbatch_runner=run_sbatch,
+                manifest_verifier=lambda *args: None,
+                now=NOW,
+            )
+        )
+
+    threads = [threading.Thread(target=invoke) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(calls) == 1
+    assert results == [results[0], results[0]]
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "",
+        "12345;cluster\n",
+        "12345_2\n",
+        "12345 extra\n",
+        "0\n",
+        "-1\n",
+        "1\n2\n",
+        "x" * 1000,
+    ],
+)
+def test_transaction_rejects_malformed_sbatch_output_without_retrying(
+    tmp_path,
+    valid_resolved_request,
+    output,
+):
+    script = render_sbatch(valid_resolved_request)
+    spec = _spec(valid_resolved_request, script)
+    key = build_submission_key(spec.issue, spec.request_digest, 1, spec.operator)
+    stage_submission(tmp_path, key, script)
+    calls: list[list[str]] = []
+
+    with pytest.raises(SubmissionError):
+        submission_transaction(
+            tmp_path,
+            key,
+            spec,
+            sbatch_runner=_runner(calls, output=output),
+            manifest_verifier=lambda *args: None,
+            now=NOW,
+        )
+    with pytest.raises(SubmissionError, match="ambiguous"):
+        submission_transaction(
+            tmp_path,
+            key,
+            spec,
+            sbatch_runner=_runner(calls, output="99999\n"),
+            manifest_verifier=lambda *args: None,
+            now=NOW,
+        )
+    assert len(calls) == 1
+
+
+def test_transaction_rejects_failed_sbatch_without_receipt(
+    tmp_path,
+    valid_resolved_request,
+):
+    script = render_sbatch(valid_resolved_request)
+    spec = _spec(valid_resolved_request, script)
+    key = build_submission_key(spec.issue, spec.request_digest, 1, spec.operator)
+    stage_submission(tmp_path, key, script)
+    calls: list[list[str]] = []
+
+    with pytest.raises(SubmissionError, match="failed") as raised:
+        submission_transaction(
+            tmp_path,
+            key,
+            spec,
+            sbatch_runner=_runner(calls, returncode=1),
+            manifest_verifier=lambda *args: None,
+            now=NOW,
+        )
+
+    assert "private" not in str(raised.value)
+    assert not (tmp_path / key / "receipt.json").exists()
+
+
+def test_transaction_rejects_tampered_script_receipt_and_spec_mismatch(
+    tmp_path,
+    valid_resolved_request,
+):
+    script = render_sbatch(valid_resolved_request)
+    spec = _spec(valid_resolved_request, script)
+    key = build_submission_key(spec.issue, spec.request_digest, 1, spec.operator)
+    stage_submission(tmp_path, key, script)
+    script_path = tmp_path / key / "request.sbatch"
+    script_path.write_text("tampered", encoding="utf-8")
+    with pytest.raises(SubmissionError, match="script"):
+        submission_transaction(
+            tmp_path,
+            key,
+            spec,
+            sbatch_runner=_runner([]),
+            manifest_verifier=lambda *args: None,
+            now=NOW,
+        )
+
+    stage_submission(tmp_path, key, script)
+    receipt = submission_transaction(
+        tmp_path,
+        key,
+        spec,
+        sbatch_runner=_runner([]),
+        manifest_verifier=lambda *args: None,
+        now=NOW,
+    )
+    receipt_path = tmp_path / key / "receipt.json"
+    payload = json.loads(receipt_path.read_text())
+    payload["operator"] = "other"
+    receipt_path.write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+    receipt_path.chmod(0o600)
+    with pytest.raises(SubmissionError, match="receipt"):
+        submission_transaction(
+            tmp_path,
+            key,
+            spec,
+            sbatch_runner=_runner([]),
+            manifest_verifier=lambda *args: None,
+            now=NOW,
+        )
+
+    receipt_path.write_text(receipt.canonical_json(), encoding="utf-8")
+    receipt_path.chmod(0o600)
+    with pytest.raises(SubmissionError, match="receipt"):
+        submission_transaction(
+            tmp_path,
+            key,
+            replace(spec, operator="other"),
+            sbatch_runner=_runner([]),
+            manifest_verifier=lambda *args: None,
+            now=NOW,
+        )
+
+
+def test_failed_receipt_persistence_leaves_durable_ambiguous_intent_and_never_resubmits(
+    tmp_path,
+    valid_resolved_request,
+    monkeypatch,
+):
+    script = render_sbatch(valid_resolved_request)
+    spec = _spec(valid_resolved_request, script)
+    key = build_submission_key(spec.issue, spec.request_digest, 1, spec.operator)
+    stage_submission(tmp_path, key, script)
+    calls: list[list[str]] = []
+    import edullm.slurm as module
+
+    real_publish = module._publish_private
+
+    def fail_receipt(path, content):
+        if path.name == "receipt.json":
+            raise OSError("private persistence diagnostics")
+        return real_publish(path, content)
+
+    monkeypatch.setattr(module, "_publish_private", fail_receipt)
+    with pytest.raises(SubmissionError, match="receipt") as raised:
+        submission_transaction(
+            tmp_path,
+            key,
+            spec,
+            sbatch_runner=_runner(calls),
+            manifest_verifier=lambda *args: None,
+            now=NOW,
+        )
+    assert "private" not in str(raised.value)
+    assert (tmp_path / key / "intent.json").exists()
+
+    monkeypatch.setattr(module, "_publish_private", real_publish)
+    with pytest.raises(SubmissionError, match="ambiguous"):
+        submission_transaction(
+            tmp_path,
+            key,
+            spec,
+            sbatch_runner=_runner(calls, output="99999\n"),
+            manifest_verifier=lambda *args: None,
+            now=NOW,
+        )
+    assert len(calls) == 1
+
+
+def test_stage_submission_is_private_atomic_and_rejects_symlinks(
+    tmp_path,
+    valid_resolved_request,
+):
+    script = render_sbatch(valid_resolved_request)
+    spec = _spec(valid_resolved_request, script)
+    key = build_submission_key(spec.issue, spec.request_digest, 1, spec.operator)
+
+    path = stage_submission(tmp_path, key, script)
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    target = tmp_path / "outside"
+    target.write_text("unchanged", encoding="utf-8")
+    path.unlink()
+    path.symlink_to(target)
+    with pytest.raises(SubmissionError):
+        stage_submission(tmp_path, key, script)
+    assert target.read_text(encoding="utf-8") == "unchanged"
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda text: text + "\n",
+        lambda text: text.replace('"operator":"operator"', '"operator":"Operator"'),
+        lambda text: text.replace('"slurm_job_id":"12345"', '"slurm_job_id":"12345;cluster"'),
+        lambda text: text.replace('"issue":42', '"issue":0'),
+        lambda text: text.replace('"attempt_number":1', '"attempt_number":true'),
+        lambda text: text.replace('{"attempt_number"', '{"extra":1,"attempt_number"'),
+    ],
+)
+def test_receipt_parser_rejects_noncanonical_or_malformed_records(mutator):
+    receipt = SubmissionReceipt(
+        issue=42,
+        request_digest="a" * 64,
+        attempt_number=1,
+        operator="operator",
+        script_sha256="b" * 64,
+        manifest_sha256="c" * 64,
+        slurm_job_id="12345",
+        log_path="/home/operator/orcd/scratch/edullm/logs/issue-42-attempt-1-12345.log",
+        submitted_at=NOW,
+    )
+
+    with pytest.raises(SubmissionError):
+        parse_submission_receipt(mutator(receipt.canonical_json()))

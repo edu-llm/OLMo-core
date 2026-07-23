@@ -26,7 +26,7 @@ python
 ["train_single", "skilldag-natural", "local", "--seed=0"]
 
 ### Data manifest
-builtin://generic-smoke-v1
+/orcd/pool/edullm/manifests/skill-dag-v1.json
 
 ### Data manifest SHA-256
 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb

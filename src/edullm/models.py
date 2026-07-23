@@ -103,6 +103,12 @@ class ResolvedRequest:
     log_pattern: str
     allowed_data_kinds: tuple[str, ...]
     slurm_job_id: str | None = None
+    model_identity: str = "olmo2-190m"
+    repository_url: str = "https://github.com/edu-llm/OLMo-core.git"
+    slurm_partition: str = "mit_normal_gpu"
+    slurm_memory: str = "64G"
+    slurm_cpus_per_gpu: int = 4
+    scratch_root: str = "$HOME/orcd/scratch/edullm"
 
 
 @dataclass(frozen=True)

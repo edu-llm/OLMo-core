@@ -381,7 +381,7 @@ def test_issue_operations_reject_unsafe_issue_identifiers(issue_number):
     "label",
     [
         "",
-        "status:submitted",
+        "status:unknown",
         "status:ready/other",
         "status%3Aready",
         " status:ready",

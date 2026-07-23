@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from edullm.data_manifest import BUILTIN_GENERIC_SMOKE_SHA256
 from edullm.policy import Policy, load_policy
 from edullm.request_parser import parse_issue
 from edullm.validation import (
@@ -596,6 +597,35 @@ def test_accepts_strict_manifest_location_forms(valid_request, policy, location)
     errors = validate_request(replace(valid_request, data_manifest=location), policy)
 
     assert "data manifest location is not allowed" not in errors
+
+
+def test_builtin_manifest_requires_known_uri_fixed_digest_and_matching_profile(
+    valid_request,
+):
+    policy = load_policy(Path("config/edullm/policy.yaml"))
+    generic = replace(
+        _generic_request(valid_request),
+        data_manifest="builtin://generic-smoke-v1",
+        data_manifest_sha256=BUILTIN_GENERIC_SMOKE_SHA256,
+    )
+
+    assert not any("built-in" in error for error in validate_request(generic, policy))
+    assert "built-in data manifest is unknown" in validate_request(
+        replace(generic, data_manifest="builtin://other"),
+        policy,
+    )
+    assert "built-in data manifest digest does not match its fixed identity" in validate_request(
+        replace(generic, data_manifest_sha256="b" * 64),
+        policy,
+    )
+    assert "built-in data kind is not allowed for this entrypoint" in validate_request(
+        replace(
+            valid_request,
+            data_manifest="builtin://generic-smoke-v1",
+            data_manifest_sha256=BUILTIN_GENERIC_SMOKE_SHA256,
+        ),
+        policy,
+    )
 
 
 @pytest.mark.parametrize("gpu_count", [0, 3, True])

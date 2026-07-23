@@ -82,6 +82,54 @@ def test_reassignment_payload_labels_the_trusted_notification_kind():
     assert payload["blocks"][0]["text"]["text"] == ("eduLLM job #42 reassigned to <@W12345678>")
 
 
+@pytest.mark.parametrize("state", ["completed", "failed", "cancelled", "preempted"])
+def test_terminal_payload_uses_only_trusted_bounded_fields(state):
+    session = FakeSession()
+
+    SlackNotifier(WEBHOOK, session=session).terminal(
+        issue=42,
+        operator_slack_id="U12345678",
+        state=state,
+    )
+
+    payload = session.calls[0][1]
+    assert payload == {
+        "text": f"eduLLM job #42 {state}",
+        "blocks": [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"eduLLM job #42 {state}; operator <@U12345678>",
+                },
+            }
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    "issue,user_id,state",
+    [
+        (0, "U12345678", "completed"),
+        (True, "U12345678", "completed"),
+        (42, "U123", "completed"),
+        (42, "U12345678", "running"),
+        (42, "U12345678", "COMPLETED"),
+    ],
+)
+def test_terminal_notification_inputs_are_strict(issue, user_id, state):
+    session = FakeSession()
+
+    with pytest.raises(SlackValidationError):
+        SlackNotifier(WEBHOOK, session=session).terminal(
+            issue=issue,
+            operator_slack_id=user_id,
+            state=state,
+        )
+
+    assert session.calls == []
+
+
 @pytest.mark.parametrize(
     "webhook",
     [
