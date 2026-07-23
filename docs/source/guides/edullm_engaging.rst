@@ -5,11 +5,11 @@ Pilot status
 ------------
 
 The eduLLM pilot is operational. The core request-to-results flow passed
-end-to-end on Issue #8, so teammates may submit reviewed requests; earlier
+end-to-end on Issue #8, so teammates may submit validated requests; earlier
 draft guidance that said to wait for Issues or pilot activation is obsolete.
 
-Teammate and approver onboarding
---------------------------------
+Teammate onboarding
+-------------------
 
 Teammates clone or update the repository, then open it in Cursor:
 
@@ -21,8 +21,9 @@ Teammates clone or update the repository, then open it in Cursor:
    git pull --ff-only origin main
    cursor .
 
-For an existing clone, start with ``git switch main``. Approvers use normal
-GitHub pull-request reviews and do not run operator setup.
+For an existing clone, start with ``git switch main``. PR review controls
+merging to ``main``. The assigned operator authorizes a job by running
+``edullm run``.
 
 Operator onboarding
 -------------------
@@ -51,21 +52,25 @@ Meric (``meric233``) and Amy Lin (``alsy7009``) are assignment-enabled in the
 reviewed roster. Each must finish or fix their local and ORCD setup before
 accepting jobs; assignment eligibility does not mean that setup has succeeded.
 
-Prepare and review
-------------------
+Prepare request evidence
+------------------------
 
-The submitting teammate owns the experiment branch and pull request, including
-the training code, configuration, data choices, and success metrics. A team
-lead approves the exact current pull-request head SHA only after the required
-CI checks pass. A direct-main SHA is not eligible.
+The submitting teammate owns the experiment branch, including the training
+code, configuration, data choices, and success metrics. The request uses a
+clean non-main tree, the canonical ``edu-llm/OLMo-core`` origin, the exact full
+pushed commit SHA, and script evidence. A direct-main SHA is not eligible.
+
+PR review controls merging to ``main``. The assigned operator authorizes a job
+by running ``edullm run``.
 
 Submit with /submit-edullm-job
 ------------------------------
 
-Run the real ``/submit-edullm-job`` Skill after the pull request is ready. The
-Skill validates the request, shows the canonical Issue preview, asks for
-confirmation, and creates the structured Issue without changing its validated
-body. Manually completing the Issue form does not satisfy acceptance.
+Run the real ``/submit-edullm-job`` Skill after the exact commit is pushed to
+the canonical repository. The Skill validates the request, shows the canonical
+Issue preview, asks for confirmation, and creates the structured Issue without
+changing its validated body. Manually completing the Issue form does not
+satisfy acceptance. Creating the Issue does not submit compute.
 
 Assignment
 ----------
@@ -81,8 +86,8 @@ Operate
 Operators use:
 
 * ``edullm setup`` to configure and verify the local operator environment.
-* ``edullm run`` to accept the oldest assigned eligible request, revalidate it,
-  and submit it without a separate manual audit prompt.
+* ``edullm run`` to authorize, revalidate, and submit the oldest assigned
+  eligible request.
 * ``edullm jobs [--mine]`` to list authorized requests and reconcile scheduler
   state.
 * ``edullm logs ISSUE`` to read the authorized bounded redacted log.
@@ -93,9 +98,9 @@ Identity and safety
 -------------------
 
 There are no shared credentials. Requests cannot use a direct-main SHA or
-supply shell text. The approved exact SHA is checked during validation and
-again immediately before submission. Structured arguments are shell-quoted,
-and the idempotent submission transaction permits exactly one ``sbatch``.
+supply shell text. The exact pushed SHA is checked during validation and again
+immediately before submission. Structured arguments are shell-quoted, and the
+idempotent submission transaction permits exactly one ``sbatch``.
 
 Status and tracking
 -------------------

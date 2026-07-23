@@ -37,7 +37,7 @@ body:
     id: commit_sha
     attributes:
       label: Commit SHA
-      description: Exact lowercase 40-character commit SHA from a reviewed pull request.
+      description: Exact lowercase 40-character pushed commit SHA from edu-llm/OLMo-core.
     validations:
       required: true
   - type: dropdown
