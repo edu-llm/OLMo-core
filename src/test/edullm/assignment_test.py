@@ -533,8 +533,8 @@ def test_assignment_marker_spoof_or_duplicate_fails_closed(
     assert github.issue.assignees == ()
 
 
-@pytest.mark.parametrize("mode", ["human", "duplicate"])
-def test_downstream_ready_revalidation_requires_one_bot_status_comment(
+@pytest.mark.parametrize("mode", ["human", "duplicate", "missing"])
+def test_downstream_ready_revalidation_requires_one_owned_status_comment(
     valid_request,
     policy,
     mode,
@@ -546,8 +546,10 @@ def test_downstream_ready_revalidation_requires_one_bot_status_comment(
             author="student",
             author_is_bot=False,
         )
-    else:
+    elif mode == "duplicate":
         github.comments.append(replace(github.comments[0], id=99))
+    else:
+        github.comments.clear()
 
     result = assign_ready_issues(
         github=github,
@@ -560,6 +562,114 @@ def test_downstream_ready_revalidation_requires_one_bot_status_comment(
     assert result.action == "error"
     assert github.issue.assignees == ()
     assert "status:ready" in github.issue.labels
+
+
+def test_downstream_revalidation_rejects_unrelated_bot_status_owner(
+    valid_request,
+    policy,
+):
+    github = QueueGitHub(valid_request)
+    github.comments[0] = replace(
+        github.comments[0],
+        author="other-automation[bot]",
+        author_is_bot=True,
+    )
+
+    result = assign_ready_issues(
+        github=github,
+        operators=(_operator("alice"),),
+        policy=policy,
+        now=NOW,
+        notifier=RecordingNotifier(),
+    )[0]
+
+    assert result.action == "error"
+    assert github.issue.assignees == ()
+    assert "status:ready" in github.issue.labels
+
+
+@pytest.mark.parametrize(
+    "author,author_is_bot",
+    [
+        ("student", False),
+        ("other-automation[bot]", True),
+    ],
+)
+def test_partial_assignment_rejects_wrong_machine_comment_owner(
+    valid_request,
+    policy,
+    author,
+    author_is_bot,
+):
+    github = QueueGitHub(
+        valid_request,
+        assignment_state=_state(valid_request, slack_status="pending"),
+    )
+    github.comments[1] = replace(
+        github.comments[1],
+        author=author,
+        author_is_bot=author_is_bot,
+    )
+
+    result = assign_ready_issues(
+        github=github,
+        operators=(_operator("alice"),),
+        policy=policy,
+        now=NOW,
+        notifier=RecordingNotifier(),
+    )[0]
+
+    assert result.action == "error"
+    assert github.issue.assignees == ()
+    assert "status:ready" in github.issue.labels
+
+
+def test_partial_assignment_rejects_unrelated_bot_notice_owner(valid_request, policy):
+    github = QueueGitHub(
+        valid_request,
+        assignees=("alice",),
+        assignment_state=_state(valid_request, slack_status="pending"),
+    )
+    github.comments.append(
+        IssueComment(
+            9,
+            "@alice eduLLM job assignment is ready for submission " "(assignment generation 0).",
+            "other-automation[bot]",
+            True,
+        )
+    )
+
+    result = assign_ready_issues(
+        github=github,
+        operators=(_operator("alice"),),
+        policy=policy,
+        now=NOW,
+        notifier=RecordingNotifier(),
+    )[0]
+
+    assert result.action == "error"
+    assert "status:ready" in github.issue.labels
+
+
+def test_exact_automation_comment_owner_is_accepted(valid_request, policy):
+    github = QueueGitHub(valid_request)
+
+    result = assign_ready_issues(
+        github=github,
+        operators=(_operator("alice"),),
+        policy=policy,
+        now=NOW,
+        notifier=RecordingNotifier(),
+    )[0]
+
+    assert result.action == "assigned"
+    machine_comments = [
+        comment
+        for comment in github.comments
+        if "<!-- edullm-status:v1 -->" in comment.body or ASSIGNMENT_MARKER in comment.body
+    ]
+    assert machine_comments
+    assert {comment.author for comment in machine_comments} == {"github-actions[bot]"}
 
 
 def test_malformed_other_ready_issue_blocks_repository_load_snapshot(
@@ -808,6 +918,142 @@ def test_ambiguous_assignment_writes_reconcile_before_claiming_success(
     assert "status:assigned" in github.issue.labels
     assert github.issue.assignees == ("alice",)
     assert len(_assignment_comments(github)) == 1
+
+
+def test_interrupted_ready_to_assigned_transition_resumes_on_restart(
+    valid_request,
+    policy,
+):
+    class InterruptReadyRemovalOnce(QueueGitHub):
+        interrupted = False
+
+        def remove_issue_status_label(self, issue_number, label):
+            if label == "status:ready" and not self.interrupted:
+                self.interrupted = True
+                self.events.append(("remove-label-interrupted", issue_number, label))
+                raise GitHubAPIError("interrupted label removal")
+            return super().remove_issue_status_label(issue_number, label)
+
+    github = InterruptReadyRemovalOnce(valid_request)
+    notifier = RecordingNotifier()
+    kwargs = {
+        "github": github,
+        "operators": (_operator("alice"),),
+        "policy": policy,
+        "notifier": notifier,
+    }
+
+    first = assign_ready_issues(now=NOW, **kwargs)[0]
+
+    assert first.action == "error"
+    assert set(github.issue.labels) >= {"status:ready", "status:assigned", "research"}
+    assert github.issue.assignees == ("alice",)
+    assert parse_assignment_comment(_assignment_comments(github)[0].body).slack_status == "pending"
+    assert notifier.calls == []
+
+    second = assign_ready_issues(now=NOW + timedelta(minutes=1), **kwargs)[0]
+
+    assert second.action == "assigned_notification_pending"
+    assert "status:assigned" in github.issue.labels
+    assert "status:ready" not in github.issue.labels
+    assert "research" in github.issue.labels
+    assert github.issue.assignees == ("alice",)
+    assert len(_assignment_comments(github)) == 1
+    assert notifier.calls == []
+
+
+def test_ambiguous_ready_label_removal_reconciles_committed_write(
+    valid_request,
+    policy,
+):
+    class LoseReadyRemovalResponseOnce(QueueGitHub):
+        lost_response = False
+
+        def remove_issue_status_label(self, issue_number, label):
+            result = super().remove_issue_status_label(issue_number, label)
+            if label == "status:ready" and not self.lost_response:
+                self.lost_response = True
+                raise GitHubAPIError("lost label removal response")
+            return result
+
+    github = LoseReadyRemovalResponseOnce(valid_request)
+
+    result = assign_ready_issues(
+        github=github,
+        operators=(_operator("alice"),),
+        policy=policy,
+        now=NOW,
+        notifier=RecordingNotifier(),
+    )[0]
+
+    assert result.action == "assigned"
+    assert "status:assigned" in github.issue.labels
+    assert "status:ready" not in github.issue.labels
+    assert "research" in github.issue.labels
+
+
+@pytest.mark.parametrize("mode", ["missing-assignment", "stale-digest", "sent-state"])
+def test_both_label_state_is_rejected_without_proven_in_progress_assignment(
+    valid_request,
+    policy,
+    mode,
+):
+    state = None
+    if mode != "missing-assignment":
+        state = _state(
+            valid_request,
+            slack_status="sent" if mode == "sent-state" else "pending",
+        )
+        if mode == "stale-digest":
+            state = replace(state, request_digest="0" * 64)
+    github = QueueGitHub(
+        valid_request,
+        labels=("edullm-job", "research", "status:ready", "status:assigned"),
+        assignees=("alice",),
+        assignment_state=state,
+    )
+    if state is not None:
+        github.comments.append(
+            IssueComment(
+                9,
+                "@alice eduLLM job assignment is ready for submission "
+                "(assignment generation 0).",
+                "github-actions[bot]",
+                True,
+            )
+        )
+
+    result = assign_ready_issues(
+        github=github,
+        operators=(_operator("alice"),),
+        policy=policy,
+        now=NOW,
+        notifier=RecordingNotifier(),
+    )[0]
+
+    assert result.action == "error"
+    assert {"status:ready", "status:assigned"} <= set(github.issue.labels)
+    assert "research" in github.issue.labels
+
+
+def test_both_label_state_requires_owned_assignment_notice(valid_request, policy):
+    github = QueueGitHub(
+        valid_request,
+        labels=("edullm-job", "research", "status:ready", "status:assigned"),
+        assignees=("alice",),
+        assignment_state=_state(valid_request, slack_status="pending"),
+    )
+
+    result = assign_ready_issues(
+        github=github,
+        operators=(_operator("alice"),),
+        policy=policy,
+        now=NOW,
+        notifier=RecordingNotifier(),
+    )[0]
+
+    assert result.action == "error"
+    assert {"status:ready", "status:assigned"} <= set(github.issue.labels)
 
 
 def test_assignment_aborts_if_state_changes_after_assignee_write(valid_request, policy):
@@ -1115,6 +1361,72 @@ def test_reassigns_after_thirty_minutes_excluding_timed_out_operator(
     assert state.reminder_at is None
     assert state.history == (AssignmentHistory("alice", NOW),)
     assert notifier.calls[-1][-1] == "reassignment"
+
+
+@pytest.mark.parametrize("operation", ["add-new", "remove-old"])
+def test_reassignment_detects_and_repairs_unrelated_assignee_loss(
+    valid_request,
+    policy,
+    operation,
+):
+    class DropsUnrelatedAssignee(QueueGitHub):
+        def add_issue_assignee(self, issue_number, login):
+            result = super().add_issue_assignee(issue_number, login)
+            if operation == "add-new" and login == "bob":
+                self.issue = replace(
+                    self.issue,
+                    assignees=tuple(
+                        assignee for assignee in self.issue.assignees if assignee != "reviewer"
+                    ),
+                )
+            return result
+
+        def remove_issue_assignee(self, issue_number, login):
+            result = super().remove_issue_assignee(issue_number, login)
+            if operation == "remove-old" and login == "alice":
+                self.issue = replace(
+                    self.issue,
+                    assignees=tuple(
+                        assignee for assignee in self.issue.assignees if assignee != "reviewer"
+                    ),
+                )
+            return result
+
+    github = DropsUnrelatedAssignee(
+        valid_request,
+        labels=("edullm-job", "status:assigned"),
+        assignees=("alice", "reviewer"),
+        assignment_state=_state(
+            valid_request,
+            assigned_at=NOW - timedelta(minutes=30),
+            reminder_at=NOW - timedelta(minutes=15),
+        ),
+    )
+    notifier = RecordingNotifier()
+
+    result = process_assignment_timeouts(
+        github=github,
+        operators=(
+            _operator("alice"),
+            _operator("bob", slack="U22222222", rotation=1),
+        ),
+        policy=policy,
+        now=NOW,
+        notifier=notifier,
+    )[0]
+
+    assert result.action == "error"
+    assert "reviewer" in github.issue.assignees
+    assert ("add-assignee", 42, "reviewer") in github.events
+    assert notifier.calls == []
+    state = parse_assignment_comment(_assignment_comments(github)[0].body)
+    if operation == "add-new":
+        assert state.operator_github == "alice"
+        assert "alice" in github.issue.assignees
+    else:
+        assert state.operator_github == "bob"
+        assert "alice" not in github.issue.assignees
+    assert "bob" in github.issue.assignees
 
 
 def test_reassignment_deadline_takes_priority_over_old_slack_retry(valid_request, policy):

@@ -1,3 +1,4 @@
+import inspect
 from pathlib import Path
 
 import pytest
@@ -199,6 +200,19 @@ def test_package_does_not_register_user_facing_edullm_console_entrypoint():
 
     assert "[project.scripts]" not in pyproject
     assert "edullm =" not in pyproject
+
+
+def test_main_docstring_documents_all_internal_automation_commands_and_runners():
+    documentation = inspect.getdoc(cli.main)
+
+    assert documentation is not None
+    assert "automation validate" in documentation
+    assert "automation assign" in documentation
+    assert "automation reminders" in documentation
+    assert ":param validation_runner:" in documentation
+    assert ":param assignment_runner:" in documentation
+    assert ":param reminder_runner:" in documentation
+    assert "console entry point" in documentation
 
 
 @pytest.mark.parametrize(

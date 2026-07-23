@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from edullm.assignment import (
+    AUTOMATION_ACTOR,
     AssignmentResult,
     assign_ready_issues,
     process_assignment_timeouts,
@@ -119,6 +120,7 @@ def automation_assign(
         policy=policy,
         now=now,
         notifier=notifier,
+        automation_actor=AUTOMATION_ACTOR,
     )
 
 
@@ -155,6 +157,7 @@ def automation_reminders(
         policy=policy,
         now=now,
         notifier=notifier,
+        automation_actor=AUTOMATION_ACTOR,
     )
 
 
@@ -167,11 +170,17 @@ def main(
     reminder_runner: AssignmentRunner = automation_reminders,
 ) -> int:
     """
-    Run the internal ``automation validate`` module command.
+    Run an internal hard-disabled workflow automation module command.
+
+    Supported commands are ``automation validate``, ``automation assign``, and
+    ``automation reminders``. This module runner does not register the
+    user-facing ``edullm`` console entry point owned by Task 6.
 
     :param argv: Optional command arguments without the module name.
     :param environ: Optional environment mapping for tests.
     :param validation_runner: Optional validation dependency for tests.
+    :param assignment_runner: Optional ready-Issue assignment dependency for tests.
+    :param reminder_runner: Optional reminder and reassignment dependency for tests.
 
     :returns: A process exit status.
     """

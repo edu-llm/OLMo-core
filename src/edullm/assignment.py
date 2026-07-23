@@ -24,11 +24,13 @@ from edullm.validation import (
 )
 
 ASSIGNMENT_MARKER = "<!-- edullm-assignment:v1 -->"
+AUTOMATION_ACTOR = "github-actions[bot]"
 MAX_ASSIGNMENT_COMMENT_CHARS = 65_536
 MAX_ASSIGNMENT_HISTORY = 32
 
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _LOGIN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+_BOT_LOGIN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\[bot\]\Z")
 _SLACK_USER_ID = re.compile(r"[UW][A-Z0-9]{8,20}\Z")
 _TIMESTAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z")
 _ASSIGNMENT_MARKER_LINE = re.compile(rf"^{re.escape(ASSIGNMENT_MARKER)}$", re.MULTILINE)
@@ -114,6 +116,7 @@ class _IssueContext:
     issue: GitHubIssue
     request: JobRequest
     comments: tuple[IssueComment, ...]
+    automation_actor: str
     status: str
     assignment_comment: IssueComment | None
     assignment: AssignmentState | None
@@ -323,6 +326,7 @@ def assign_ready_issues(
     policy: Policy,
     now: datetime,
     notifier: Any,
+    automation_actor: str = AUTOMATION_ACTOR,
 ) -> tuple[AssignmentResult, ...]:
     """
     Scan and assign every currently ready queue Issue.
@@ -335,12 +339,14 @@ def assign_ready_issues(
     :param policy: Trusted queue policy and capacity.
     :param now: Canonical current UTC whole-second timestamp.
     :param notifier: An injectable Slack notifier.
+    :param automation_actor: The exact trusted GitHub machine-comment author.
 
     :returns: One sanitized result per attempted ready Issue.
     """
     enabled = _enabled_operator_map(operators)
     _validate_now(now)
     _validate_policy_capacity(policy)
+    _validate_automation_actor(automation_actor)
     if not enabled:
         return ()
     try:
@@ -361,6 +367,7 @@ def assign_ready_issues(
                     policy=policy,
                     now=now,
                     notifier=notifier,
+                    automation_actor=automation_actor,
                 )
             )
         except (AssignmentStateError, GitHubError, IssueParseError, StatusCommentError, ValueError):
@@ -375,6 +382,7 @@ def process_assignment_timeouts(
     policy: Policy,
     now: datetime,
     notifier: Any,
+    automation_actor: str = AUTOMATION_ACTOR,
 ) -> tuple[AssignmentResult, ...]:
     """
     Scan assigned Issues for a one-time reminder or timed-out reassignment.
@@ -387,12 +395,14 @@ def process_assignment_timeouts(
     :param policy: Trusted reminder, reassignment, and capacity policy.
     :param now: Canonical current UTC whole-second timestamp.
     :param notifier: An injectable Slack notifier.
+    :param automation_actor: The exact trusted GitHub machine-comment author.
 
     :returns: One sanitized result per currently assigned Issue.
     """
     enabled = _enabled_operator_map(operators)
     _validate_now(now)
     _validate_policy_capacity(policy)
+    _validate_automation_actor(automation_actor)
     if not enabled:
         return ()
     try:
@@ -406,13 +416,18 @@ def process_assignment_timeouts(
             managed = _managed_statuses(snapshot)
             if managed != {"assigned"}:
                 continue
-            context = _current_context(github, snapshot.number, allowed_statuses=({"assigned"},))
-            state = _require_assignment(context, enabled)
-            _reject_future_assignment_time(state, now)
-            _reconcile_current_assignees(github, context, state)
             context = _current_context(
                 github,
                 snapshot.number,
+                allowed_statuses=({"assigned"},),
+                automation_actor=automation_actor,
+            )
+            state = _require_assignment(context, enabled)
+            _reject_future_assignment_time(state, now)
+            _reconcile_current_assignees(github, context, state)
+            context = _refresh_context(
+                github,
+                context,
                 allowed_statuses=({"assigned"},),
             )
             state = _require_assignment(context, enabled)
@@ -422,9 +437,9 @@ def process_assignment_timeouts(
                 context,
                 _assignment_notice(state.operator_github, len(state.history)),
             )
-            context = _current_context(
+            context = _refresh_context(
                 github,
-                snapshot.number,
+                context,
                 allowed_statuses=({"assigned"},),
             )
             state = _require_assignment(context, enabled)
@@ -489,11 +504,25 @@ def _assign_one(
     policy: Policy,
     now: datetime,
     notifier: Any,
+    automation_actor: str,
 ) -> AssignmentResult:
-    context = _current_context(github, issue_number, allowed_statuses=({"ready"},))
+    context = _current_context(
+        github,
+        issue_number,
+        allowed_statuses=({"ready"}, {"ready", "assigned"}),
+        automation_actor=automation_actor,
+    )
+    if _managed_statuses(context.issue) == {"ready", "assigned"}:
+        state = _require_assignment(context, enabled)
+        _require_in_progress_assignment(context, state)
+        _reject_future_assignment_time(state, now)
     send_pending = context.assignment is None
     if context.assignment is None:
-        loads = _fresh_loads(github, enabled)
+        loads = _fresh_loads(
+            github,
+            enabled,
+            automation_actor=context.automation_actor,
+        )
         try:
             selected = select_operator(
                 loads,
@@ -512,10 +541,10 @@ def _assign_one(
             history=(),
             slack_status="pending",
         )
-        context = _current_context(
+        context = _refresh_context(
             github,
-            issue_number,
-            allowed_statuses=({"ready"},),
+            context,
+            allowed_statuses=({"ready"}, {"ready", "assigned"}),
         )
         if context.assignment is not None:
             raise AssignmentStateError("assignment changed during scoring")
@@ -525,7 +554,11 @@ def _assign_one(
         _reject_future_assignment_time(state, now)
         operator = enabled[state.operator_github]
 
-    context = _current_context(github, issue_number, allowed_statuses=({"ready"},))
+    context = _refresh_context(
+        github,
+        context,
+        allowed_statuses=({"ready"}, {"ready", "assigned"}),
+    )
     state = _require_assignment(context, enabled)
     _reject_future_assignment_time(state, now)
     original_assignees = set(context.issue.assignees)
@@ -540,7 +573,11 @@ def _assign_one(
         ):
             raise AssignmentStateError("assignment assignee postcondition failed")
 
-    context = _current_context(github, issue_number, allowed_statuses=({"ready"},))
+    context = _refresh_context(
+        github,
+        context,
+        allowed_statuses=({"ready"}, {"ready", "assigned"}),
+    )
     current = _require_assignment(context, enabled)
     if current != state:
         raise AssignmentStateError("assignment changed during assignment")
@@ -550,12 +587,16 @@ def _assign_one(
         _assignment_notice(operator.github, len(state.history)),
     )
 
-    context = _current_context(github, issue_number, allowed_statuses=({"ready"},))
+    context = _refresh_context(
+        github,
+        context,
+        allowed_statuses=({"ready"}, {"ready", "assigned"}),
+    )
     current = _require_assignment(context, enabled)
     if current != state:
         raise AssignmentStateError("assignment changed during assignment")
     _set_assigned(github, context)
-    context = _current_context(github, issue_number, allowed_statuses=({"assigned"},))
+    context = _refresh_context(github, context, allowed_statuses=({"assigned"},))
     current = _require_assignment(context, enabled)
     if current != state:
         raise AssignmentStateError("assignment changed during assignment")
@@ -580,9 +621,9 @@ def _remind(
 ) -> AssignmentResult:
     body = _reminder_notice(state.operator_github, len(state.history))
     _ensure_notice(github, context, body)
-    context = _current_context(
+    context = _refresh_context(
         github,
-        context.issue.number,
+        context,
         allowed_statuses=({"assigned"},),
     )
     current = _require_assignment(context)
@@ -612,7 +653,11 @@ def _reassign(
     now: datetime,
     notifier: Any,
 ) -> AssignmentResult:
-    loads = _fresh_loads(github, enabled)
+    loads = _fresh_loads(
+        github,
+        enabled,
+        automation_actor=context.automation_actor,
+    )
     try:
         selected = select_operator(
             loads,
@@ -629,15 +674,16 @@ def _reassign(
         )
     operator = enabled[selected.github]
 
-    context = _current_context(
+    context = _refresh_context(
         github,
-        context.issue.number,
+        context,
         allowed_statuses=({"assigned"},),
     )
     current = _require_assignment(context, enabled)
     if current != state:
         raise AssignmentStateError("assignment changed during reassignment")
     preserved = set(context.issue.assignees)
+    unrelated_assignees = preserved - {state.operator_github, operator.github}
     if operator.github not in context.issue.assignees:
         try:
             github.add_issue_assignee(context.issue.number, operator.github)
@@ -645,11 +691,17 @@ def _reassign(
             pass
         confirmed = github.fetch_issue(context.issue.number)
         if operator.github not in confirmed.assignees or not preserved <= set(confirmed.assignees):
+            _best_effort_restore_assignees(
+                github,
+                context,
+                state,
+                preserved,
+            )
             raise AssignmentStateError("reassignment assignee postcondition failed")
 
-    context = _current_context(
+    context = _refresh_context(
         github,
-        context.issue.number,
+        context,
         allowed_statuses=({"assigned"},),
     )
     current = _require_assignment(context, enabled)
@@ -666,9 +718,9 @@ def _reassign(
     )
     _persist_assignment_state(github, context, updated)
 
-    context = _current_context(
+    context = _refresh_context(
         github,
-        context.issue.number,
+        context,
         allowed_statuses=({"assigned"},),
     )
     current = _require_assignment(context, enabled)
@@ -680,9 +732,9 @@ def _reassign(
         _assignment_notice(operator.github, len(updated.history)),
     )
 
-    context = _current_context(
+    context = _refresh_context(
         github,
-        context.issue.number,
+        context,
         allowed_statuses=({"assigned"},),
     )
     current = _require_assignment(context, enabled)
@@ -697,17 +749,32 @@ def _reassign(
         if (
             state.operator_github in confirmed.assignees
             or operator.github not in confirmed.assignees
+            or not unrelated_assignees <= set(confirmed.assignees)
         ):
+            _best_effort_restore_assignees(
+                github,
+                context,
+                updated,
+                unrelated_assignees,
+            )
             raise AssignmentStateError("reassignment assignee postcondition failed")
 
-    context = _current_context(
+    context = _refresh_context(
         github,
-        context.issue.number,
+        context,
         allowed_statuses=({"assigned"},),
     )
     current = _require_assignment(context, enabled)
     if current != updated:
         raise AssignmentStateError("assignment changed during reassignment")
+    if not unrelated_assignees <= set(context.issue.assignees):
+        _best_effort_restore_assignees(
+            github,
+            context,
+            updated,
+            unrelated_assignees,
+        )
+        raise AssignmentStateError("reassignment assignee postcondition failed")
     return _send_notification(
         github,
         context,
@@ -758,9 +825,9 @@ def _send_notification(
     except SlackNotificationError as error:
         slack_status = "ambiguous" if error.ambiguous else "failed"
 
-    current = _current_context(
+    current = _refresh_context(
         github,
-        context.issue.number,
+        context,
         allowed_statuses=({"assigned"},),
     )
     current_state = _require_assignment(current)
@@ -788,12 +855,25 @@ def _send_notification(
 def _fresh_loads(
     github: Any,
     enabled: dict[str, Operator],
+    *,
+    automation_actor: str,
 ) -> tuple[OperatorLoad, ...]:
     active_jobs: list[ActiveJob] = []
     snapshots = github.list_active_queue_issues()
     for snapshot in snapshots:
         current = github.fetch_issue(snapshot.number)
         managed = _managed_statuses(current)
+        if managed == {"ready", "assigned"}:
+            context = _context_from_issue(
+                github,
+                current,
+                allowed_statuses=({"ready", "assigned"},),
+                automation_actor=automation_actor,
+            )
+            state = _require_assignment(context, enabled)
+            _require_in_progress_assignment(context, state)
+            active_jobs.append(ActiveJob(state.operator_github, context.request.gpu_count))
+            continue
         if len(managed) != 1:
             raise AssignmentStateError("managed status labels are malformed")
         status = next(iter(managed))
@@ -802,6 +882,7 @@ def _fresh_loads(
                 github,
                 current,
                 allowed_statuses=({"ready"},),
+                automation_actor=automation_actor,
             )
             if context.assignment is not None:
                 state = _require_assignment(context, enabled)
@@ -813,6 +894,7 @@ def _fresh_loads(
             github,
             current,
             allowed_statuses=({status},),
+            automation_actor=automation_actor,
         )
         state = _require_assignment(context, enabled)
         active_jobs.append(ActiveJob(state.operator_github, context.request.gpu_count))
@@ -824,9 +906,29 @@ def _current_context(
     issue_number: int,
     *,
     allowed_statuses: tuple[set[str], ...],
+    automation_actor: str = AUTOMATION_ACTOR,
 ) -> _IssueContext:
     issue = github.fetch_issue(issue_number)
-    return _context_from_issue(github, issue, allowed_statuses=allowed_statuses)
+    return _context_from_issue(
+        github,
+        issue,
+        allowed_statuses=allowed_statuses,
+        automation_actor=automation_actor,
+    )
+
+
+def _refresh_context(
+    github: Any,
+    context: _IssueContext,
+    *,
+    allowed_statuses: tuple[set[str], ...],
+) -> _IssueContext:
+    return _current_context(
+        github,
+        context.issue.number,
+        allowed_statuses=allowed_statuses,
+        automation_actor=context.automation_actor,
+    )
 
 
 def _context_from_issue(
@@ -834,6 +936,7 @@ def _context_from_issue(
     issue: GitHubIssue,
     *,
     allowed_statuses: tuple[set[str], ...],
+    automation_actor: str = AUTOMATION_ACTOR,
 ) -> _IssueContext:
     if "edullm-job" not in issue.labels:
         raise AssignmentStateError("Issue is not in the eduLLM queue")
@@ -854,6 +957,7 @@ def _context_from_issue(
         marker_line=_STATUS_MARKER_LINE,
         kind="status",
         required=True,
+        expected_author=automation_actor,
     )
     assert status_comment is not None
     try:
@@ -866,6 +970,7 @@ def _context_from_issue(
         marker_line=_ASSIGNMENT_MARKER_LINE,
         kind="assignment",
         required=False,
+        expected_author=automation_actor,
     )
     assignment = None
     if assignment_comment is not None:
@@ -877,6 +982,7 @@ def _context_from_issue(
         issue=issue,
         request=request,
         comments=comments,
+        automation_actor=automation_actor,
         status=status,
         assignment_comment=assignment_comment,
         assignment=assignment,
@@ -896,6 +1002,7 @@ def _persist_assignment_state(
         marker_line=_ASSIGNMENT_MARKER_LINE,
         kind="assignment",
         required=False,
+        expected_author=context.automation_actor,
     )
     if existing is None:
         try:
@@ -907,6 +1014,7 @@ def _persist_assignment_state(
                 marker_line=_ASSIGNMENT_MARKER_LINE,
                 kind="assignment",
                 required=True,
+                expected_author=context.automation_actor,
             )
             if reconciled is None or reconciled.body != body:
                 raise
@@ -921,11 +1029,16 @@ def _persist_assignment_state(
                 marker_line=_ASSIGNMENT_MARKER_LINE,
                 kind="assignment",
                 required=True,
+                expected_author=context.automation_actor,
             )
             if reconciled is None or reconciled.id != existing.id or reconciled.body != body:
                 raise
             persisted = reconciled
-    if not persisted.author_is_bot or persisted.body != body:
+    if (
+        not persisted.author_is_bot
+        or persisted.author != context.automation_actor
+        or persisted.body != body
+    ):
         raise AssignmentStateError("persisted assignment comment is invalid")
     comments = github.list_issue_comments(context.issue.number)
     confirmed = _exact_marker_comment(
@@ -933,6 +1046,7 @@ def _persist_assignment_state(
         marker_line=_ASSIGNMENT_MARKER_LINE,
         kind="assignment",
         required=True,
+        expected_author=context.automation_actor,
     )
     if confirmed is None or confirmed.id != persisted.id or confirmed.body != body:
         raise AssignmentStateError("persisted assignment comment postcondition failed")
@@ -947,9 +1061,9 @@ def _set_assigned(github: Any, context: _IssueContext) -> None:
         current = github.fetch_issue(issue_number)
         if "status:assigned" not in current.labels:
             raise
-    transitional = _current_context(
+    transitional = _refresh_context(
         github,
-        issue_number,
+        context,
         allowed_statuses=({"ready", "assigned"}, {"assigned"}),
     )
     _require_assignment(transitional)
@@ -959,7 +1073,7 @@ def _set_assigned(github: Any, context: _IssueContext) -> None:
         current = github.fetch_issue(issue_number)
         if "status:ready" in current.labels:
             raise
-    final = _current_context(github, issue_number, allowed_statuses=({"assigned"},))
+    final = _refresh_context(github, context, allowed_statuses=({"assigned"},))
     _require_assignment(final)
     if "status:assigned" not in final.issue.labels or "status:ready" in final.issue.labels:
         raise AssignmentStateError("assigned status postcondition failed")
@@ -970,29 +1084,94 @@ def _reconcile_current_assignees(
     context: _IssueContext,
     state: AssignmentState,
 ) -> None:
+    preserved = set(context.issue.assignees)
     if state.operator_github not in context.issue.assignees:
         try:
             github.add_issue_assignee(context.issue.number, state.operator_github)
         except GitHubError:
             pass
         confirmed = github.fetch_issue(context.issue.number)
-        if state.operator_github not in confirmed.assignees:
+        if state.operator_github not in confirmed.assignees or not preserved <= set(
+            confirmed.assignees
+        ):
+            _best_effort_restore_assignees(
+                github,
+                context,
+                state,
+                preserved,
+            )
             raise AssignmentStateError("assignment assignee postcondition failed")
-        context = _current_context(
+        context = _refresh_context(
             github,
-            context.issue.number,
+            context,
             allowed_statuses=({"assigned"},),
         )
     if state.history:
         prior = state.history[-1].previous_operator
+        unrelated_assignees = set(context.issue.assignees) - {
+            prior,
+            state.operator_github,
+        }
         if prior != state.operator_github and prior in context.issue.assignees:
             try:
                 github.remove_issue_assignee(context.issue.number, prior)
             except GitHubError:
                 pass
             confirmed = github.fetch_issue(context.issue.number)
-            if prior in confirmed.assignees or state.operator_github not in confirmed.assignees:
+            if (
+                prior in confirmed.assignees
+                or state.operator_github not in confirmed.assignees
+                or not unrelated_assignees <= set(confirmed.assignees)
+            ):
+                _best_effort_restore_assignees(
+                    github,
+                    context,
+                    state,
+                    unrelated_assignees,
+                )
                 raise AssignmentStateError("reassignment assignee postcondition failed")
+
+
+def _best_effort_restore_assignees(
+    github: Any,
+    context: _IssueContext,
+    state: AssignmentState,
+    expected: set[str],
+) -> None:
+    for login in sorted(expected):
+        try:
+            current = _refresh_context(
+                github,
+                context,
+                allowed_statuses=({"assigned"},),
+            )
+            if _require_assignment(current) != state:
+                return
+            if login not in current.issue.assignees:
+                github.add_issue_assignee(current.issue.number, login)
+        except (AssignmentStateError, GitHubError, IssueParseError, StatusCommentError):
+            continue
+
+
+def _require_in_progress_assignment(
+    context: _IssueContext,
+    state: AssignmentState,
+) -> None:
+    if (
+        state.slack_status != "pending"
+        or state.reminder_at is not None
+        or state.history
+        or state.operator_github not in context.issue.assignees
+    ):
+        raise AssignmentStateError("label transition is not a proven in-progress assignment")
+    body = _assignment_notice(state.operator_github, 0)
+    matches = [comment for comment in context.comments if comment.body == body]
+    if (
+        len(matches) != 1
+        or not matches[0].author_is_bot
+        or matches[0].author != context.automation_actor
+    ):
+        raise AssignmentStateError("label transition assignment notice is invalid")
 
 
 def _ensure_notice(github: Any, context: _IssueContext, body: str) -> IssueComment:
@@ -1000,22 +1179,37 @@ def _ensure_notice(github: Any, context: _IssueContext, body: str) -> IssueComme
     if len(matches) > 1:
         raise AssignmentStateError("duplicate assignment notice comments were found")
     if matches:
-        if not matches[0].author_is_bot:
-            raise AssignmentStateError("assignment notice is not bot-authored")
+        if not matches[0].author_is_bot or matches[0].author != context.automation_actor:
+            raise AssignmentStateError(
+                "assignment notice is not owned by the expected automation actor"
+            )
         return matches[0]
     try:
         persisted = github.create_issue_comment(context.issue.number, body)
     except GitHubError:
         comments = github.list_issue_comments(context.issue.number)
         matches = [comment for comment in comments if comment.body == body]
-        if len(matches) != 1 or not matches[0].author_is_bot:
+        if (
+            len(matches) != 1
+            or not matches[0].author_is_bot
+            or matches[0].author != context.automation_actor
+        ):
             raise
         persisted = matches[0]
-    if not persisted.author_is_bot or persisted.body != body:
+    if (
+        not persisted.author_is_bot
+        or persisted.author != context.automation_actor
+        or persisted.body != body
+    ):
         raise AssignmentStateError("persisted assignment notice is invalid")
     comments = github.list_issue_comments(context.issue.number)
     matches = [comment for comment in comments if comment.body == body]
-    if len(matches) != 1 or not matches[0].author_is_bot or matches[0].id != persisted.id:
+    if (
+        len(matches) != 1
+        or not matches[0].author_is_bot
+        or matches[0].author != context.automation_actor
+        or matches[0].id != persisted.id
+    ):
         raise AssignmentStateError("persisted assignment notice postcondition failed")
     return matches[0]
 
@@ -1026,6 +1220,7 @@ def _exact_marker_comment(
     marker_line: re.Pattern[str],
     kind: str,
     required: bool,
+    expected_author: str,
 ) -> IssueComment | None:
     matches: list[IssueComment] = []
     for comment in comments:
@@ -1040,8 +1235,10 @@ def _exact_marker_comment(
         if required:
             raise AssignmentStateError(f"eduLLM {kind} comment is missing")
         return None
-    if not matches[0].author_is_bot:
-        raise AssignmentStateError(f"eduLLM {kind} marker is not bot-authored")
+    if not matches[0].author_is_bot or matches[0].author != expected_author:
+        raise AssignmentStateError(
+            f"eduLLM {kind} marker is not owned by the expected automation actor"
+        )
     return matches[0]
 
 
@@ -1141,6 +1338,11 @@ def _valid_login(value: object) -> bool:
         and 1 <= len(value) <= 39
         and _LOGIN.fullmatch(cast(str, value)) is not None
     )
+
+
+def _validate_automation_actor(value: object) -> None:
+    if type(value) is not str or len(value) > 100 or _BOT_LOGIN.fullmatch(value) is None:
+        raise ValueError("automation actor is malformed")
 
 
 def _validate_now(value: object) -> None:
