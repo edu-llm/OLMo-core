@@ -1807,6 +1807,18 @@ def test_setup_handler_reports_missing_local_wandb_dependency_action(monkeypatch
     assert "sensitive import diagnostics" not in output.err
 
 
+def test_setup_handler_reports_direct_engaging_reachability_stage(monkeypatch, capsys):
+    def failed(**kwargs):
+        raise cli.SetupError("operator setup failed during direct Engaging reachability")
+
+    monkeypatch.setattr(cli, "setup_operator", failed)
+
+    assert cli.handle_setup("orcd-user") == 1
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "failed during direct Engaging reachability" in output.err
+
+
 def test_setup_cli_passes_explicit_orcd_username_to_handler(monkeypatch):
     calls = []
 

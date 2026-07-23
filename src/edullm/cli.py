@@ -67,6 +67,7 @@ SETUP_POLL_INTERVAL_SECONDS = 5.0
 SETUP_POLL_TIMEOUT_SECONDS = 3600.0
 REMOTE_REPO_ROOT = "$HOME/OLMo-core"
 REMOTE_SCRATCH = "$HOME/orcd/scratch/edullm"
+_DIRECT_ENGAGING_REACHABILITY_ERROR = "operator setup failed during direct Engaging reachability"
 _GITHUB_LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\Z")
 _ORCD_USERNAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _FINGERPRINT = re.compile(r"[0-9a-f]{64}\Z")
@@ -274,7 +275,7 @@ def setup_operator(
             timeout=COMMAND_TIMEOUT_SECONDS,
         )
     except (SSHError, ValueError):
-        raise SetupError("operator setup failed during direct Engaging reachability") from None
+        raise SetupError(_DIRECT_ENGAGING_REACHABILITY_ERROR) from None
 
     ssh_config = home / ".ssh" / "config"
     try:
@@ -763,8 +764,11 @@ def handle_setup(orcd_username: str | None = None) -> int:
     except SetupDeclined:
         print("eduLLM operator setup cancelled; no SSH change was applied", file=sys.stderr)
         return 2
-    except SetupError:
-        print("eduLLM operator setup failed", file=sys.stderr)
+    except SetupError as error:
+        if str(error) == _DIRECT_ENGAGING_REACHABILITY_ERROR:
+            print(f"eduLLM {_DIRECT_ENGAGING_REACHABILITY_ERROR}", file=sys.stderr)
+        else:
+            print("eduLLM operator setup failed", file=sys.stderr)
         return 1
     print(f"eduLLM operator setup complete for {result.github}")
     return 0
