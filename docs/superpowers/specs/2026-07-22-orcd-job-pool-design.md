@@ -1,7 +1,7 @@
 # eduLLM ORCD Job Pool Design
 
 Date: 2026-07-22
-Status: Approved design, pending implementation plan
+Status: Approved design; implementation plans available under `docs/superpowers/plans/`
 
 ## Purpose
 
@@ -23,8 +23,10 @@ appears under the `eduLLM/test` W&B project.
 6. The training code defines scientific metrics. Queue automation only records and routes them.
 7. W&B projects are durable work lanes; W&B groups are stable studies, not per-request folders.
 8. Engaging Scratch is the fast working tier. S3 is introduced only after an explicit access,
-   transfer, and cost test.
+  transfer, and cost test.
 9. Begin with one account and one GPU. Add the other operators only after the direct path works.
+
+
 
 ## Non-Goals
 
@@ -36,7 +38,9 @@ appears under the `eduLLM/test` W&B project.
 - Building a custom experiment tracker or storing large datasets in W&B.
 - Treating the current unversioned sandbox S3 buckets as permanent production storage.
 - Claiming the current Skill-DAG or curriculum scripts are end-to-end ready before their generated
-  mix/order is connected to the training loader.
+mix/order is connected to the training loader.
+
+
 
 ## System Overview
 
@@ -69,7 +73,11 @@ OLMo torchrun job
         +---- S3 pilot: staged data and selected output copies
 ```
 
+
+
 ## Roles
+
+
 
 ### Researcher
 
@@ -77,6 +85,8 @@ OLMo torchrun job
 - Uses the Agent Skill to create a valid request.
 - Monitors the GitHub Issue and W&B run.
 - Does not require Engaging access.
+
+
 
 ### Compute Operator
 
@@ -86,6 +96,8 @@ OLMo torchrun job
 - Runs `edullm run` to submit the next assigned request through their own account.
 - Never shares credentials with researchers or other operators.
 
+
+
 ### Queue Automation
 
 - Validates request structure and code review state.
@@ -94,6 +106,8 @@ OLMo torchrun job
 - Posts GitHub and Slack notifications.
 - Polls W&B every five minutes for started-run state.
 - Holds no MIT or SSH credentials.
+
+
 
 ## Engaging Resource Model
 
@@ -109,24 +123,25 @@ The initial design targets the documented `mit_normal_gpu` partition:
 
 Multi-node jobs are supported by Engaging but excluded from the initial implementation. A
 two-GPU job is one Slurm allocation submitted by one operator and launches two local `torchrun`
-processes. Independent requests may run under different operators, subject to ORCD policy.
-
-Before treating three personal allocations as a project pool, ask ORCD whether a shared Slurm
-project/account should be created. The system must not be used to evade per-user fair-use limits.
+processes.
 
 ## W&B Organization
+
+
 
 ### Entity and Projects
 
 Use entity `eduLLM`.
 
-| Project | Purpose |
-| --- | --- |
-| `test` | Temporary ORCD, environment, and integration smoke tests |
-| `pretraining` | Architecture, data-mixture, Skill-DAG, and curriculum training |
-| `posttraining` | SFT, preference optimization, reinforcement learning, and alignment |
-| `evaluation` | PedBench and checkpoint-only benchmark runs |
+
+| Project         | Purpose                                                             |
+| --------------- | ------------------------------------------------------------------- |
+| `test`          | Temporary ORCD, environment, and integration smoke tests            |
+| `pretraining`   | Architecture, data-mixture, Skill-DAG, and curriculum training      |
+| `posttraining`  | SFT, preference optimization, reinforcement learning, and alignment |
+| `evaluation`    | PedBench and checkpoint-only benchmark runs                         |
 | `data-pipeline` | Dolma preparation, filtering, tokenization, and corpus-quality jobs |
+
 
 Do not initially create separate `model-architecture` or `data-corpus` projects. Those dimensions
 belong inside `pretraining` so their runs remain comparable.
@@ -173,15 +188,15 @@ Every request uses the same Issue form. There is no separate "custom job" catego
 
 Required fields:
 
-1. Requester GitHub username.
+1. Requester identity derived from the GitHub Issue author.
 2. Plain-language purpose.
 3. Study/group name.
 4. Condition/arm.
 5. Comparison condition or explicit "engineering smoke only."
 6. Repository and exact full commit SHA.
-7. Script path inside the repository.
-8. Argument list represented as structured values, not a shell string.
-9. Data path/manifest and data classification.
+7. Protected entrypoint profile and script path inside the repository.
+8. Ordered argument list represented as structured values, not a shell string.
+9. Immutable data manifest, manifest SHA-256, and data classification.
 10. Seed.
 11. W&B project.
 12. Expected success signal and metric names emitted by the code.
@@ -196,9 +211,10 @@ The system generates:
 - Slurm job name and resource flags.
 - Operator assignment.
 - Resolved request JSON consumed by the operator CLI.
+- Canonical request SHA-256 and append-only attempt identity.
 
 Students never supply a repository URL, environment path, credential, `sbatch` command, or
-arbitrary shell pipeline.
+arbitrary shell pipeline. Restricted data is rejected by the public pilot queue.
 
 ## Code Review Gate
 
@@ -206,9 +222,11 @@ arbitrary shell pipeline.
 
 1. The researcher pushes a branch and opens a pull request.
 2. Repository CI passes.
-3. At least one member of the compute-operator/team-lead review group approves the changes.
+3. At least one authorized reviewer approves that exact SHA and no current authorized review
+   requests changes.
 4. The request references the approved full commit SHA.
-5. The queue verifies that the SHA is part of the approved pull request.
+5. The queue verifies that the SHA is the exact head of an open/merged approved pull request, all
+   required non-GPU repository checks pass, and the selected script exists at that SHA.
 6. Any code change creates a different SHA and invalidates the previous approval.
 
 This gate is required because training code runs under an operator's Unix identity and may receive
@@ -242,6 +260,20 @@ The skill:
 The skill may default an engineering smoke to one L40S and 30 minutes. It may not choose the
 hypothesis, comparison, condition, or scientific metric for the researcher.
 
+### Metric-Instrumentation Handoff
+
+When a requested success metric is not emitted by the training code:
+
+1. The researcher uses the `/weights-and-biases` skill to implement and test that metric.
+2. The researcher commits the change, opens a pull request, and obtains review.
+3. The `/submit-edullm-job` skill verifies the approved commit and confirms that the metric is
+   present before creating the request.
+
+The W&B skill changes experiment instrumentation; it does not submit Slurm jobs. The submission
+skill creates requests; it does not invent or implement scientific metrics. Large datasets and
+checkpoints remain in Engaging/S3, while W&B stores metrics, configuration, comparisons, and
+artifact references.
+
 ## Operator CLI
 
 Expose only:
@@ -269,6 +301,8 @@ There is no user-facing `claim`, `run-next`, `sync`, or `tail` command.
 - Builds or verifies the operator's persistent virtualenv in Engaging Home.
 - Verifies Scratch paths and records an environment fingerprint.
 
+
+
 ### `edullm run`
 
 1. Refreshes current jobs belonging to the operator.
@@ -281,6 +315,8 @@ There is no user-facing `claim`, `run-next`, `sync`, or `tail` command.
 8. Generates an `sbatch` file from structured arguments without `eval`.
 9. Submits the job and records the Slurm ID in the Issue.
 10. Posts the predetermined W&B URL.
+
+
 
 ### SSH Convenience and Limits
 
@@ -321,11 +357,12 @@ requested
   -> assigned
   -> submitted
   -> running
-  -> completed | failed | cancelled
+  -> completed | failed | cancelled | preempted
 ```
 
-W&B is polled every five minutes after a run starts. W&B states map to running, completed, or
-failed. `edullm jobs` queries the operator's `squeue`/`sacct` and repairs stale GitHub state.
+W&B is polled every five minutes after a run starts. State transitions are monotonic; terminal
+states cannot regress, and preempted requests require explicit retry approval. `edullm jobs`
+queries the operator's `squeue`/`sacct` and repairs stale GitHub state.
 
 The polling workflow uses a dedicated W&B monitoring credential stored as a GitHub Actions secret,
 never an Engaging operator's key. If the W&B organization cannot provide a dedicated credential,
@@ -339,6 +376,8 @@ limitation.
 
 ## Engaging Files and Environment
 
+
+
 ### Initial Virtualenv
 
 For the first operator:
@@ -348,8 +387,9 @@ For the first operator:
 - Shared/reusable datasets: PI shared Pool when available.
 - Important outputs: copy to backed-up Home or approved durable storage.
 
-Each job activates the existing environment. Dependencies are not reinstalled per job. After the
-first smoke succeeds, produce an Apptainer image for consistent rollout to the other operators.
+Each pilot job activates the existing environment but imports OLMo from a pristine reviewed
+checkout. Dependencies are not reinstalled per job. After the first smoke succeeds, produce and
+verify a source-complete, digest-pinned Apptainer image before onboarding other operators.
 
 ### Current Hypothesis Branch Gaps
 
@@ -382,6 +422,8 @@ Rules:
 - Do not place interactive `sbsandbox` credentials on Engaging.
 - Prefer short-lived, least-privilege credentials or presigned URLs.
 - Separate read-only dataset access from write-only run-output access.
+- Stage data to an approved Engaging path and verify every manifest-referenced shard's size and
+  SHA-256 immediately before training.
 - Confirm outbound S3 access or an ORCD-managed transfer method with ORCD.
 - Use only public/research-cleared data for the pilot.
 - Licensed, FERPA, PII, or restricted data requires MIT and organizational approval.
@@ -391,6 +433,8 @@ Rules:
 If S3 access is not confirmed, the first smoke remains entirely on Engaging storage.
 
 ## Staged Verification
+
+
 
 ### Stage 1: Environment Probe
 
@@ -404,6 +448,8 @@ Verify:
 - W&B import and outbound connectivity.
 - Write/read in Scratch.
 
+
+
 ### Stage 2: Generic OLMo + W&B Smoke
 
 - OLMo2-190M.
@@ -413,11 +459,15 @@ Verify:
 - W&B entity `eduLLM`, project `test`, group `orcd-bootstrap`.
 - Success: finite loss, no OOM, run visible to other organization members.
 
+
+
 ### Stage 3: Checkpoint and Resume
 
 - Save a local checkpoint.
 - Restart from it and advance beyond the saved step.
 - Preserve the resolved config and metrics.
+
+
 
 ### Stage 4: S3 Transfer Pilot
 
@@ -426,11 +476,15 @@ Verify:
 - Upload one checkpoint/result.
 - Record transfer time and cost.
 
+
+
 ### Stage 5: Hypothesis Smoke
 
 - Correct the Skill-DAG/curriculum data wiring.
 - Run one control and one treatment at equal tokens.
 - Use stable W&B study groups under `pretraining`.
+
+
 
 ### Stage 6: Three-Operator Rollout
 
@@ -438,6 +492,8 @@ Verify:
 - Verify least-loaded assignment and timeout reassignment.
 - Verify GitHub and Slack notifications.
 - Confirm ORCD policy for the shared project workflow.
+
+
 
 ## Acceptance Criteria
 
@@ -454,6 +510,8 @@ The initial vertical slice passes when:
 9. No personal credential appears in Git, GitHub Actions, Slurm output, or W&B config.
 10. A second operator command during the ControlPersist window does not require another Duo prompt.
 
+
+
 ## Failure Handling
 
 - Validation failure: leave the Issue open with actionable corrections; do not assign.
@@ -463,5 +521,5 @@ The initial vertical slice passes when:
 - W&B unavailable: retain local W&B files and sync later; do not fail training solely for tracking.
 - GPU OOM: fail without automatic resource escalation; researcher must submit a revised request.
 - Preemption: preserve checkpoint if available and return the request to ready only after operator or
-  researcher approval.
+researcher approval.
 - S3 failure: preserve local outputs and mark the transfer step failed; do not discard the run.
