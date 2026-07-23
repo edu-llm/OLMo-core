@@ -20,10 +20,15 @@ COMMAND_TIMEOUT_SECONDS = 30.0
 _ALIAS = "orcd-login"
 _HOSTNAME = "orcd-login.mit.edu"
 _USERNAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
-_SENSITIVE_DIRECTIVE = re.compile(
-    r"(?i)^([+-]?\s*)(IdentityFile|CertificateFile|ProxyCommand|LocalCommand|RemoteCommand)\b"
-)
-_REMOTE_PATH = re.compile(r"(?:~|/)[A-Za-z0-9._~/-]+\Z")
+_REMOTE_PRIVATE_TARGETS = {
+    "~/.config/edullm/wandb.env": "wandb.env",
+    "~/.config/edullm/wandb.key": "wandb.key",
+}
+_SAFE_HOST_LINE = re.compile(r"(?i)^\s*Host\s+orcd-login\s*$")
+_SAFE_HOSTNAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\Z")
+_SAFE_CONTROL_PATH = re.compile(r"[A-Za-z0-9_./~%+-]+\Z")
+_SAFE_CONTROL_PERSIST = re.compile(r"(?:yes|no|[0-9]+[smhdw]?)\Z", re.IGNORECASE)
+_SAFE_CONTROL_MASTER = frozenset({"auto", "autoask", "ask", "no", "yes"})
 
 
 class SSHError(RuntimeError):
@@ -46,6 +51,29 @@ class SSHConfigPlan:
     def changed(self) -> bool:
         """Return whether this plan changes the configuration."""
         return self.original != self.proposed
+
+
+@dataclass(frozen=True)
+class _FileSnapshot:
+    device: int
+    inode: int
+    mode: int
+    owner: int
+    size: int
+    modified_ns: int
+    changed_ns: int
+
+    @classmethod
+    def from_stat(cls, status: os.stat_result) -> "_FileSnapshot":
+        return cls(
+            status.st_dev,
+            status.st_ino,
+            status.st_mode,
+            status.st_uid,
+            status.st_size,
+            status.st_mtime_ns,
+            status.st_ctime_ns,
+        )
 
 
 class SSHClient:
@@ -126,10 +154,14 @@ class SSHClient:
         timeout: float = COMMAND_TIMEOUT_SECONDS,
     ) -> None:
         """Write private content remotely using standard input."""
-        if _REMOTE_PATH.fullmatch(path) is None or ".." in path.split("/"):
+        try:
+            target = _REMOTE_PRIVATE_TARGETS[path]
+        except KeyError:
             raise ValueError("remote path is unsafe")
-        parent = path.rsplit("/", maxsplit=1)[0]
-        command = f"umask 077 && mkdir -p {parent} && cat > {path} && chmod 600 {path}"
+        command = (
+            '"$HOME/venvs/edullm/bin/python" -m edullm.ssh_helper '
+            f"--target {shlex.quote(target)}"
+        )
         self._run(
             ["ssh", _ALIAS, command],
             input_text=content,
@@ -227,17 +259,23 @@ def plan_control_config(original: bytes, username: str) -> SSHConfigPlan:
         raise SSHConfigError("SSH config cannot be updated safely")
 
     rendered = block.replace("\n", newline) + newline
+    old_display = ""
     if exact_starts:
         start = exact_starts[0]
-        end = len(lines)
+        stanza_end = len(lines)
         for index in range(start + 1, len(lines)):
             stripped = lines[index].lstrip()
             directive = stripped.rstrip("\r\n").split(None, maxsplit=1)
             keyword = directive[0].casefold() if directive else ""
             if keyword in {"host", "match"}:
-                end = index
+                stanza_end = index
                 break
-        proposed_text = "".join(lines[:start]) + rendered + "".join(lines[end:])
+        content_end = stanza_end
+        while content_end > start + 1 and _is_comment_or_blank(lines[content_end - 1]):
+            content_end -= 1
+        _validate_safe_target_block(lines[start:content_end])
+        old_display = "".join(lines[start:content_end])
+        proposed_text = "".join(lines[:start]) + rendered + "".join(lines[content_end:])
     else:
         separator = newline if text else ""
         proposed_text = text + separator + rendered
@@ -246,7 +284,7 @@ def plan_control_config(original: bytes, username: str) -> SSHConfigPlan:
     return SSHConfigPlan(
         original=original,
         proposed=proposed,
-        redacted_diff=_redacted_diff(text, proposed_text) if proposed != original else "",
+        redacted_diff=_safe_block_diff(old_display, rendered) if proposed != original else "",
     )
 
 
@@ -289,37 +327,55 @@ def read_control_config(path: Path) -> bytes:
 
 def apply_control_config(path: Path, plan: SSHConfigPlan) -> Path | None:
     """Apply a confirmed plan atomically and return its secure backup."""
-    current = read_control_config(path)
-    if current != plan.original:
-        raise SSHConfigError("SSH config changed after the proposed diff")
-    if not plan.changed:
-        if path.exists():
-            _ensure_private_directory(path.parent)
-            _secure_existing_file(path)
-        return None
-
     _ensure_private_directory(path.parent)
-    if path.exists():
-        _secure_existing_file(path)
-    backup = _create_backup(path, current)
-    temporary = path.with_name(f".{path.name}.edullm-{secrets.token_hex(8)}")
+    directory_fd: int | None = None
+    temporary_name: str | None = None
     descriptor: int | None = None
     try:
+        directory_fd = _open_private_directory(path.parent)
+        directory_identity = _directory_identity(directory_fd)
+        _validate_directory_identity(path.parent, directory_fd, directory_identity)
+        current, target_snapshot = _read_config_at(directory_fd, path.name)
+        if current != plan.original:
+            raise SSHConfigError("SSH config changed after the proposed diff")
+        if not plan.changed:
+            return None
+
+        target_mode = stat.S_IMODE(target_snapshot.mode) if target_snapshot is not None else 0o600
+        backup = _create_backup_at(
+            path,
+            directory_fd,
+            current,
+            target_mode,
+        )
+        temporary_name = f".{path.name}.edullm-{secrets.token_hex(8)}"
         descriptor = os.open(
-            temporary,
+            temporary_name,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
             0o600,
+            dir_fd=directory_fd,
         )
         _write_all(descriptor, plan.proposed)
-        os.fchmod(descriptor, 0o600)
+        os.fchmod(descriptor, target_mode)
         os.fsync(descriptor)
         os.close(descriptor)
         descriptor = None
-        if read_control_config(path) != plan.original:
-            raise SSHConfigError("SSH config changed after the proposed diff")
-        os.replace(temporary, path)
-        _secure_existing_file(path)
-        _fsync_directory(path.parent)
+
+        _validate_directory_identity(path.parent, directory_fd, directory_identity)
+        _validate_config_snapshot(
+            directory_fd,
+            path.name,
+            target_snapshot,
+            plan.original,
+        )
+        os.replace(
+            temporary_name,
+            path.name,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+        )
+        temporary_name = None
+        os.fsync(directory_fd)
     except SSHConfigError:
         raise
     except OSError:
@@ -327,12 +383,13 @@ def apply_control_config(path: Path, plan: SSHConfigPlan) -> Path | None:
     finally:
         if descriptor is not None:
             os.close(descriptor)
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError:
-            pass
+        if temporary_name is not None and directory_fd is not None:
+            try:
+                os.unlink(temporary_name, dir_fd=directory_fd)
+            except OSError:
+                pass
+        if directory_fd is not None:
+            os.close(directory_fd)
     return backup
 
 
@@ -368,7 +425,7 @@ def _host_pattern_matches(pattern: str, hostname: str) -> bool:
     return fnmatch.fnmatchcase(hostname.casefold(), pattern.casefold())
 
 
-def _redacted_diff(original: str, proposed: str) -> str:
+def _safe_block_diff(original: str, proposed: str) -> str:
     lines = difflib.unified_diff(
         original.splitlines(),
         proposed.splitlines(),
@@ -377,14 +434,42 @@ def _redacted_diff(original: str, proposed: str) -> str:
         n=0,
         lineterm="",
     )
-    redacted = []
-    for line in lines:
-        match = _SENSITIVE_DIRECTIVE.match(line)
-        if match:
-            redacted.append(f"{match.group(1)}{match.group(2)} <redacted>")
+    return "\n".join(lines) + "\n"
+
+
+def _is_comment_or_blank(line: str) -> bool:
+    stripped = line.strip()
+    return not stripped or stripped.startswith("#")
+
+
+def _validate_safe_target_block(lines: Sequence[str]) -> None:
+    if not lines or _SAFE_HOST_LINE.fullmatch(lines[0].rstrip("\r\n")) is None:
+        raise SSHConfigError("SSH config cannot be updated safely")
+    for line in lines[1:]:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            raise SSHConfigError("SSH config cannot be updated safely")
+        match = re.fullmatch(r"([A-Za-z]+)(?:\s+|=)(\S+)", stripped)
+        if match is None:
+            raise SSHConfigError("SSH config cannot be updated safely")
+        directive, value = match.groups()
+        normalized = directive.casefold()
+        if normalized == "hostname":
+            safe = _SAFE_HOSTNAME.fullmatch(value) is not None
+        elif normalized == "user":
+            safe = _USERNAME.fullmatch(value) is not None and not value.startswith("-")
+        elif normalized == "controlmaster":
+            safe = value.casefold() in _SAFE_CONTROL_MASTER
+        elif normalized == "controlpath":
+            safe = _SAFE_CONTROL_PATH.fullmatch(value) is not None
+        elif normalized == "controlpersist":
+            safe = _SAFE_CONTROL_PERSIST.fullmatch(value) is not None
         else:
-            redacted.append(line)
-    return "\n".join(redacted) + "\n"
+            safe = False
+        if not safe:
+            raise SSHConfigError("SSH config cannot be updated safely")
 
 
 def _ensure_private_directory(path: Path) -> None:
@@ -422,16 +507,106 @@ def _inspect_private_directory(path: Path) -> bool:
     return True
 
 
-def _create_backup(path: Path, content: bytes) -> Path:
+def _open_private_directory(path: Path) -> int:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+        status = os.fstat(descriptor)
+        if not stat.S_ISDIR(status.st_mode) or status.st_uid != os.getuid():
+            raise SSHConfigError("SSH directory is unsafe")
+        return descriptor
+    except SSHConfigError:
+        if "descriptor" in locals():
+            os.close(descriptor)
+        raise
+    except OSError:
+        raise SSHConfigError("SSH directory cannot be opened safely") from None
+
+
+def _directory_identity(descriptor: int) -> tuple[int, int, int]:
+    status = os.fstat(descriptor)
+    return status.st_dev, status.st_ino, status.st_uid
+
+
+def _validate_directory_identity(
+    path: Path,
+    descriptor: int,
+    expected: tuple[int, int, int],
+) -> None:
+    try:
+        status = path.stat(follow_symlinks=False)
+    except OSError:
+        raise SSHConfigError("SSH config changed after the proposed diff") from None
+    if (
+        _directory_identity(descriptor) != expected
+        or (status.st_dev, status.st_ino, status.st_uid) != expected
+        or not stat.S_ISDIR(status.st_mode)
+    ):
+        raise SSHConfigError("SSH config changed after the proposed diff")
+
+
+def _read_config_at(directory_fd: int, name: str) -> tuple[bytes, _FileSnapshot | None]:
+    try:
+        status = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return b"", None
+    except OSError:
+        raise SSHConfigError("SSH config cannot be read safely") from None
+    mode = stat.S_IMODE(status.st_mode)
+    if stat.S_ISLNK(status.st_mode):
+        raise SSHConfigError("SSH config must not be a symbolic link")
+    if not stat.S_ISREG(status.st_mode) or status.st_uid != os.getuid() or mode & 0o022:
+        raise SSHConfigError("SSH config is unsafe")
+    expected = _FileSnapshot.from_stat(status)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(name, flags, dir_fd=directory_fd)
+        opened = _FileSnapshot.from_stat(os.fstat(descriptor))
+        if opened != expected:
+            raise SSHConfigError("SSH config changed after the proposed diff")
+        chunks = []
+        while chunk := os.read(descriptor, 1024 * 1024):
+            chunks.append(chunk)
+        return b"".join(chunks), expected
+    except SSHConfigError:
+        raise
+    except OSError:
+        raise SSHConfigError("SSH config cannot be read safely") from None
+    finally:
+        if "descriptor" in locals():
+            os.close(descriptor)
+
+
+def _validate_config_snapshot(
+    directory_fd: int,
+    name: str,
+    expected: _FileSnapshot | None,
+    expected_content: bytes,
+) -> None:
+    try:
+        content, current = _read_config_at(directory_fd, name)
+    except SSHConfigError:
+        raise SSHConfigError("SSH config changed after the proposed diff") from None
+    if current != expected or content != expected_content:
+        raise SSHConfigError("SSH config changed after the proposed diff")
+
+
+def _create_backup_at(
+    path: Path,
+    directory_fd: int,
+    content: bytes,
+    mode: int,
+) -> Path:
     index = 0
     while True:
         suffix = "" if index == 0 else f".{index}"
-        candidate = path.with_name(f"{path.name}.edullm-backup{suffix}")
+        candidate_name = f"{path.name}.edullm-backup{suffix}"
         try:
             descriptor = os.open(
-                candidate,
+                candidate_name,
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
                 0o600,
+                dir_fd=directory_fd,
             )
         except FileExistsError:
             index += 1
@@ -440,35 +615,18 @@ def _create_backup(path: Path, content: bytes) -> Path:
             raise SSHConfigError("SSH config backup could not be created safely") from None
         try:
             _write_all(descriptor, content)
-            os.fchmod(descriptor, 0o600)
+            os.fchmod(descriptor, mode)
             os.fsync(descriptor)
         except OSError:
             try:
-                candidate.unlink()
+                os.unlink(candidate_name, dir_fd=directory_fd)
             except OSError:
                 pass
             raise SSHConfigError("SSH config backup could not be created safely") from None
         finally:
             os.close(descriptor)
-        _fsync_directory(path.parent)
-        return candidate
-
-
-def _secure_existing_file(path: Path) -> None:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        descriptor = os.open(path, flags)
-        status = os.fstat(descriptor)
-        if not stat.S_ISREG(status.st_mode) or status.st_uid != os.getuid():
-            raise SSHConfigError("SSH config is unsafe")
-        os.fchmod(descriptor, 0o600)
-    except SSHConfigError:
-        raise
-    except OSError:
-        raise SSHConfigError("SSH config permissions cannot be secured") from None
-    finally:
-        if "descriptor" in locals():
-            os.close(descriptor)
+        os.fsync(directory_fd)
+        return path.with_name(candidate_name)
 
 
 def _write_all(descriptor: int, content: bytes) -> None:
@@ -478,14 +636,3 @@ def _write_all(descriptor: int, content: bytes) -> None:
         if written <= 0:
             raise OSError("short write")
         view = view[written:]
-
-
-def _fsync_directory(path: Path) -> None:
-    try:
-        descriptor = os.open(path, os.O_RDONLY)
-        os.fsync(descriptor)
-    except OSError:
-        raise SSHConfigError("SSH directory could not be synchronized") from None
-    finally:
-        if "descriptor" in locals():
-            os.close(descriptor)

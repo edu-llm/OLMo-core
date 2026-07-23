@@ -107,7 +107,10 @@ case "$EDULLM_COMMIT_SHA" in
   ""|*[!0-9a-f]*) exit 2 ;;
 esac
 test "${#EDULLM_COMMIT_SHA}" -eq 40
-test -z "$(git -C "$EDULLM_REPO_ROOT" status --porcelain)"
+if ! EDULLM_GIT_STATUS="$(git -C "$EDULLM_REPO_ROOT" status --porcelain)"; then
+  exit 2
+fi
+test -z "$EDULLM_GIT_STATUS"
 mkdir -p "$EDULLM_SCRATCH/logs"
 sbatch --parsable \
   --output="$EDULLM_SCRATCH/logs/%x-%j.log" \
@@ -253,11 +256,12 @@ def setup_operator(
         except SSHConfigError:
             raise SetupError("operator setup failed while applying SSH configuration") from None
 
-    _run_required_remote(
-        dependencies.ssh_client,
-        ["bash", "-lc", "hostname; command -v sbatch; command -v squeue"],
-        "remote tool verification",
-    )
+    for command, label in (
+        (["hostname"], "remote hostname verification"),
+        (["command", "-v", "sbatch"], "remote sbatch verification"),
+        (["command", "-v", "squeue"], "remote squeue verification"),
+    ):
+        _run_required_remote(dependencies.ssh_client, command, label)
     _run_required_remote(
         dependencies.ssh_client,
         ["bash", "-lc", SCRATCH_CHECK_SCRIPT],
@@ -343,34 +347,37 @@ def write_operator_config(path: Path, config: Mapping[str, object]) -> None:
     parent = path.parent
     _reject_operator_symlink_ancestors(parent)
     _ensure_operator_directory(parent)
-    original_signature = _operator_file_signature(path)
-    if original_signature is not None:
-        _secure_operator_file(path)
-    temporary = parent / f".{path.name}.edullm-{secrets.token_hex(8)}"
+    directory_fd: int | None = None
+    temporary_name: str | None = None
     descriptor: int | None = None
     try:
+        directory_fd = _open_operator_directory(parent)
+        directory_identity = _operator_directory_identity(directory_fd)
+        _validate_operator_directory(parent, directory_fd, directory_identity)
+        original_signature = _operator_file_signature_at(directory_fd, path.name)
+        temporary_name = f".{path.name}.edullm-{secrets.token_hex(8)}"
         descriptor = os.open(
-            temporary,
+            temporary_name,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
             0o600,
+            dir_fd=directory_fd,
         )
         _write_descriptor(descriptor, serialized)
-        os.fchmod(descriptor, 0o600)
         os.fsync(descriptor)
         os.close(descriptor)
         descriptor = None
-        if _operator_file_signature(path) != original_signature:
+
+        _validate_operator_directory(parent, directory_fd, directory_identity)
+        if _operator_file_signature_at(directory_fd, path.name) != original_signature:
             raise SetupError("operator config changed while it was being updated")
-        os.replace(temporary, path)
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-        status = os.fstat(descriptor)
-        if not stat.S_ISREG(status.st_mode) or status.st_uid != os.getuid():
-            raise SetupError("operator config is unsafe")
-        os.fchmod(descriptor, 0o600)
-        os.fsync(descriptor)
-        os.close(descriptor)
-        descriptor = None
-        _fsync_operator_directory(parent)
+        os.replace(
+            temporary_name,
+            path.name,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+        )
+        temporary_name = None
+        os.fsync(directory_fd)
     except SetupError:
         raise
     except OSError:
@@ -378,12 +385,13 @@ def write_operator_config(path: Path, config: Mapping[str, object]) -> None:
     finally:
         if descriptor is not None:
             os.close(descriptor)
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError:
-            pass
+        if temporary_name is not None and directory_fd is not None:
+            try:
+                os.unlink(temporary_name, dir_fd=directory_fd)
+            except OSError:
+                pass
+        if directory_fd is not None:
+            os.close(directory_fd)
 
 
 def _run_local(
@@ -567,9 +575,49 @@ def _reject_operator_symlink_ancestors(path: Path) -> None:
         current = current.parent
 
 
-def _operator_file_signature(path: Path) -> tuple[int, int, int, int] | None:
+def _open_operator_directory(path: Path) -> int:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        status = path.lstat()
+        descriptor = os.open(path, flags)
+        status = os.fstat(descriptor)
+        if not stat.S_ISDIR(status.st_mode) or status.st_uid != os.getuid():
+            raise SetupError("operator config directory is unsafe")
+        return descriptor
+    except SetupError:
+        if "descriptor" in locals():
+            os.close(descriptor)
+        raise
+    except OSError:
+        raise SetupError("operator config directory could not be opened safely") from None
+
+
+def _operator_directory_identity(descriptor: int) -> tuple[int, int, int]:
+    status = os.fstat(descriptor)
+    return status.st_dev, status.st_ino, status.st_uid
+
+
+def _validate_operator_directory(
+    path: Path,
+    descriptor: int,
+    expected: tuple[int, int, int],
+) -> None:
+    try:
+        status = path.stat(follow_symlinks=False)
+    except OSError:
+        raise SetupError("operator config changed while it was being updated") from None
+    if (
+        _operator_directory_identity(descriptor) != expected
+        or (status.st_dev, status.st_ino, status.st_uid) != expected
+        or not stat.S_ISDIR(status.st_mode)
+    ):
+        raise SetupError("operator config changed while it was being updated")
+
+
+def _operator_file_signature_at(
+    directory_fd: int, name: str
+) -> tuple[int, int, int, int, int, int, int] | None:
+    try:
+        status = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
     except FileNotFoundError:
         return None
     except OSError:
@@ -578,26 +626,18 @@ def _operator_file_signature(path: Path) -> tuple[int, int, int, int] | None:
         stat.S_ISLNK(status.st_mode)
         or not stat.S_ISREG(status.st_mode)
         or status.st_uid != os.getuid()
+        or stat.S_IMODE(status.st_mode) != 0o600
     ):
         raise SetupError("operator config path is unsafe")
-    return status.st_dev, status.st_ino, status.st_mtime_ns, status.st_size
-
-
-def _secure_operator_file(path: Path) -> None:
-    descriptor: int | None = None
-    try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-        status = os.fstat(descriptor)
-        if not stat.S_ISREG(status.st_mode) or status.st_uid != os.getuid():
-            raise SetupError("operator config is unsafe")
-        os.fchmod(descriptor, 0o600)
-    except SetupError:
-        raise
-    except OSError:
-        raise SetupError("operator config permissions could not be secured") from None
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
+    return (
+        status.st_dev,
+        status.st_ino,
+        status.st_mode,
+        status.st_uid,
+        status.st_size,
+        status.st_mtime_ns,
+        status.st_ctime_ns,
+    )
 
 
 def _write_descriptor(descriptor: int, content: bytes) -> None:
@@ -607,18 +647,6 @@ def _write_descriptor(descriptor: int, content: bytes) -> None:
         if written <= 0:
             raise OSError("short write")
         view = view[written:]
-
-
-def _fsync_operator_directory(path: Path) -> None:
-    descriptor: int | None = None
-    try:
-        descriptor = os.open(path, os.O_RDONLY)
-        os.fsync(descriptor)
-    except OSError:
-        raise SetupError("operator config directory could not be synchronized") from None
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
 
 
 def _positive_integer(value: str) -> int:

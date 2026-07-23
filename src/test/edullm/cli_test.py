@@ -1,7 +1,7 @@
 import inspect
+import os
 import stat
 import subprocess
-import tomllib
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -202,10 +202,17 @@ def test_default_runner_loads_only_tracked_configuration(tmp_path, monkeypatch):
 
 
 def test_package_registers_user_facing_edullm_console_entrypoint():
-    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
+    scripts_section = pyproject.partition("[project.scripts]\n")[2].partition("\n[")[0]
 
-    assert pyproject["project"]["scripts"] == {"edullm": "edullm.cli:main"}
-    assert pyproject["project"]["requires-python"] == ">=3.10"
+    assert scripts_section.strip() == 'edullm = "edullm.cli:main"'
+    assert 'requires-python = ">=3.10"' in pyproject
+
+
+def test_cli_tests_do_not_import_python_311_only_tomllib():
+    source = Path(__file__).read_text(encoding="utf-8")
+
+    assert "\nimport tomllib\n" not in source
 
 
 def test_main_docstring_documents_public_and_internal_commands_and_runners():
@@ -368,9 +375,15 @@ class StatefulSetupSSH:
     def run_remote(self, argv, *, check=True, timeout=30):
         assert timeout > 0
         command = " ".join(argv)
-        if "command -v sbatch" in command:
-            label = "tools"
-            result = self._result(label, stdout="host\n/bin/sbatch\n/bin/squeue\n")
+        if argv == ["hostname"]:
+            label = "tool-hostname"
+            result = self._result(label, stdout="host\n")
+        elif argv == ["command", "-v", "sbatch"]:
+            label = "tool-sbatch"
+            result = self._result(label, stdout="/bin/sbatch\n")
+        elif argv == ["command", "-v", "squeue"]:
+            label = "tool-squeue"
+            result = self._result(label, stdout="/bin/squeue\n")
         elif "findmnt -n -o TARGET" in command:
             label = "scratch"
             result = self._result(label)
@@ -552,7 +565,9 @@ def test_setup_runs_checks_in_safe_alias_order_and_writes_secret_free_config(tmp
         "wandb-projects",
         "ssh-direct",
         "confirm",
-        "tools",
+        "tool-hostname",
+        "tool-sbatch",
+        "tool-squeue",
         "scratch",
         "env-check",
         "imports",
@@ -587,7 +602,9 @@ def test_setup_runs_checks_in_safe_alias_order_and_writes_secret_free_config(tmp
         "wandb-viewer",
         "wandb-projects",
         "ssh-direct",
-        "tools",
+        "tool-hostname",
+        "tool-sbatch",
+        "tool-squeue",
         "scratch",
         "imports",
         "fingerprint",
@@ -616,6 +633,41 @@ def test_setup_stops_on_first_failed_transition_and_sanitizes_failure(tmp_path, 
     assert events.count(fail_at) == 1
     assert "sensitive" not in str(raised.value)
     assert not (home / ".config" / "edullm" / "config.yaml").exists()
+
+
+@pytest.mark.parametrize(
+    ("fail_at", "ssh_options", "forbidden_later"),
+    [
+        ("env-check", {}, "imports"),
+        ("env-submit", {"env_ready": False}, "sacct"),
+        ("sacct", {"env_ready": False}, "imports"),
+        ("key-check", {}, "remote-wandb"),
+        ("write-key", {"key_exists": False}, "remote-wandb"),
+    ],
+)
+def test_setup_late_failure_transitions_stop_without_insecure_artifacts(
+    tmp_path, fail_at, ssh_options, forbidden_later
+):
+    root = tmp_path / "checkout"
+    home = tmp_path / "home"
+    _write_operator_roster(root)
+    events = []
+    ssh_client = StatefulSetupSSH(events, fail_at=fail_at, **ssh_options)
+
+    with pytest.raises(cli.SetupError, match="setup failed") as raised:
+        cli.setup_operator(
+            root=root,
+            home=home,
+            orcd_username="orcd-user",
+            dependencies=_setup_dependencies(events, ssh_client),
+            output=StringIO(),
+        )
+
+    assert events[-1] == fail_at
+    assert forbidden_later not in events
+    assert "sensitive" not in str(raised.value)
+    assert not (home / ".config" / "edullm" / "config.yaml").exists()
+    assert not any(path.endswith("wandb.key") for path, _ in ssh_client.writes)
 
 
 def test_setup_requires_actual_local_wandb_project_access(tmp_path):
@@ -657,6 +709,38 @@ def test_setup_decline_does_not_modify_ssh_or_continue(tmp_path):
 
     assert events[-1] == "decline"
     assert not (home / ".ssh").exists()
+
+
+def test_setup_rejects_unsafe_target_block_before_output_or_confirmation(tmp_path):
+    root = tmp_path / "checkout"
+    home = tmp_path / "home"
+    _write_operator_roster(root)
+    ssh_dir = home / ".ssh"
+    ssh_dir.mkdir(parents=True)
+    config = ssh_dir / "config"
+    unsafe = (
+        "Host orcd-login\n" "  Hostname old.example\n" "  SetEnv WANDB_API_KEY=never-display-this\n"
+    )
+    config.write_text(unsafe, encoding="utf-8")
+    events = []
+    ssh_client = StatefulSetupSSH(events)
+    dependencies = _setup_dependencies(events, ssh_client)
+    dependencies.confirm = lambda prompt: pytest.fail("unsafe config reached confirmation")
+    output = StringIO()
+
+    with pytest.raises(cli.SetupError, match="planning SSH configuration") as raised:
+        cli.setup_operator(
+            root=root,
+            home=home,
+            orcd_username="orcd-user",
+            dependencies=dependencies,
+            output=output,
+        )
+
+    assert output.getvalue() == ""
+    assert "never-display-this" not in str(raised.value)
+    assert config.read_text(encoding="utf-8") == unsafe
+    assert events[-1] == "ssh-direct"
 
 
 def test_setup_sanitizes_confirmation_prompt_failure_without_modifying_ssh(tmp_path):
@@ -1021,6 +1105,98 @@ def test_environment_commands_use_reviewed_checkout_and_sorted_freeze():
     assert "import torch, wandb, olmo_core" in cli.IMPORT_CHECK_SCRIPT
 
 
+@pytest.mark.parametrize(
+    ("failing_tool", "forbidden_later"),
+    [
+        ("tool-hostname", "tool-sbatch"),
+        ("tool-sbatch", "tool-squeue"),
+        ("tool-squeue", "scratch"),
+    ],
+)
+def test_setup_remote_tool_checks_fail_immediately_in_order(
+    tmp_path, failing_tool, forbidden_later
+):
+    root = tmp_path / "checkout"
+    _write_operator_roster(root)
+    events = []
+    ssh_client = StatefulSetupSSH(events, fail_at=failing_tool)
+
+    with pytest.raises(cli.SetupError, match="setup failed"):
+        cli.setup_operator(
+            root=root,
+            home=tmp_path / "home",
+            orcd_username="orcd-user",
+            dependencies=_setup_dependencies(events, ssh_client),
+            output=StringIO(),
+        )
+
+    assert events[-1] == failing_tool
+    assert forbidden_later not in events
+
+
+def _run_submit_env_script(tmp_path, status_mode):
+    home = tmp_path / "home"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    setup_script = home / "OLMo-core" / "src" / "scripts" / "orcd" / "setup_env.sbatch"
+    setup_script.parent.mkdir(parents=True)
+    setup_script.write_text("#!/bin/bash\n", encoding="utf-8")
+    sbatch_log = tmp_path / "sbatch.log"
+    (fake_bin / "git").write_text(
+        """#!/bin/bash
+case "$*" in
+  *"rev-parse HEAD"*) printf '%040d\n' 0 ;;
+  *"status --porcelain"*)
+    case "$GIT_STATUS_MODE" in
+      fail) exit 17 ;;
+      tracked) printf ' M tracked.py\n' ;;
+      untracked) printf '?? untracked.py\n' ;;
+      clean) exit 0 ;;
+    esac
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    (fake_bin / "sbatch").write_text(
+        '#!/bin/bash\nprintf "%s\\n" "$*" > "$SBATCH_LOG"\nprintf "12345\\n"\n',
+        encoding="utf-8",
+    )
+    (fake_bin / "git").chmod(0o755)
+    (fake_bin / "sbatch").chmod(0o755)
+    environment = {
+        **os.environ,
+        "GIT_STATUS_MODE": status_mode,
+        "HOME": str(home),
+        "PATH": str(fake_bin) + os.pathsep + os.environ["PATH"],
+        "SBATCH_LOG": str(sbatch_log),
+    }
+    result = subprocess.run(
+        ["bash", "-c", cli.SUBMIT_ENV_SCRIPT],
+        check=False,
+        text=True,
+        capture_output=True,
+        env=environment,
+        timeout=10,
+    )
+    return result, sbatch_log
+
+
+@pytest.mark.parametrize("status_mode", ["fail", "tracked", "untracked"])
+def test_environment_submit_rejects_failed_or_dirty_git_status(tmp_path, status_mode):
+    result, sbatch_log = _run_submit_env_script(tmp_path, status_mode)
+
+    assert result.returncode != 0
+    assert not sbatch_log.exists()
+
+
+def test_environment_submit_accepts_clean_git_status(tmp_path):
+    result, sbatch_log = _run_submit_env_script(tmp_path, "clean")
+
+    assert result.returncode == 0
+    assert sbatch_log.exists()
+
+
 def test_write_operator_config_rejects_symlink_and_preserves_target(tmp_path):
     config = tmp_path / "config.yaml"
     target = tmp_path / "target"
@@ -1049,9 +1225,8 @@ def test_write_operator_config_is_atomic_and_mode_0600(tmp_path, monkeypatch):
     config = tmp_path / "config" / "config.yaml"
     cli.write_operator_config(config, {"version": 1})
     original = config.read_bytes()
-    config.chmod(0o666)
 
-    def fail_replace(source, destination):
+    def fail_replace(*args, **kwargs):
         raise OSError("simulated failure")
 
     monkeypatch.setattr(cli.os, "replace", fail_replace)
@@ -1060,6 +1235,89 @@ def test_write_operator_config_is_atomic_and_mode_0600(tmp_path, monkeypatch):
 
     assert config.read_bytes() == original
     assert stat.S_IMODE(config.stat().st_mode) == 0o600
+    assert not list(config.parent.glob(".config.yaml.edullm-*"))
+
+
+def test_write_operator_config_rejects_unsafe_existing_mode_before_replace(tmp_path):
+    config = tmp_path / "config" / "config.yaml"
+    config.parent.mkdir()
+    config.write_text("version: 1\n", encoding="utf-8")
+    config.chmod(0o644)
+
+    with pytest.raises(cli.SetupError, match="operator config"):
+        cli.write_operator_config(config, {"version": 2})
+
+    assert config.read_text(encoding="utf-8") == "version: 1\n"
+    assert stat.S_IMODE(config.stat().st_mode) == 0o644
+    assert not list(config.parent.glob(".config.yaml.edullm-*"))
+
+
+def test_write_operator_config_commits_with_same_open_directory_fd(tmp_path, monkeypatch):
+    config = tmp_path / "config" / "config.yaml"
+    cli.write_operator_config(config, {"version": 1})
+    real_replace = cli.os.replace
+    calls = []
+
+    def record_replace(*args, **kwargs):
+        calls.append((args, kwargs))
+        return real_replace(*args, **kwargs)
+
+    monkeypatch.setattr(cli.os, "replace", record_replace)
+
+    cli.write_operator_config(config, {"version": 2})
+
+    assert len(calls) == 1
+    _, options = calls[0]
+    assert options["src_dir_fd"] == options["dst_dir_fd"]
+    assert yaml.safe_load(config.read_text(encoding="utf-8")) == {"version": 2}
+
+
+def test_write_operator_config_rejects_parent_swap_and_cleans_old_temp(tmp_path, monkeypatch):
+    parent = tmp_path / "config"
+    config = parent / "config.yaml"
+    cli.write_operator_config(config, {"version": 1})
+    moved = tmp_path / "config-moved"
+    real_write = cli._write_descriptor
+    swapped = False
+
+    def swap_parent_after_write(descriptor, content):
+        nonlocal swapped
+        real_write(descriptor, content)
+        if not swapped:
+            swapped = True
+            parent.rename(moved)
+            parent.mkdir()
+
+    monkeypatch.setattr(cli, "_write_descriptor", swap_parent_after_write)
+
+    with pytest.raises(cli.SetupError, match="changed"):
+        cli.write_operator_config(config, {"version": 2})
+
+    assert yaml.safe_load((moved / "config.yaml").read_text(encoding="utf-8")) == {"version": 1}
+    assert not list(moved.glob(".config.yaml.edullm-*"))
+    assert not config.exists()
+
+
+def test_write_operator_config_rejects_target_edit_after_validation(tmp_path, monkeypatch):
+    config = tmp_path / "config" / "config.yaml"
+    cli.write_operator_config(config, {"version": 1})
+    real_write = cli._write_descriptor
+    edited = False
+
+    def edit_target_after_write(descriptor, content):
+        nonlocal edited
+        real_write(descriptor, content)
+        if not edited:
+            edited = True
+            config.write_text("version: concurrent\n", encoding="utf-8")
+            config.chmod(0o600)
+
+    monkeypatch.setattr(cli, "_write_descriptor", edit_target_after_write)
+
+    with pytest.raises(cli.SetupError, match="changed"):
+        cli.write_operator_config(config, {"version": 2})
+
+    assert config.read_text(encoding="utf-8") == "version: concurrent\n"
     assert not list(config.parent.glob(".config.yaml.edullm-*"))
 
 
