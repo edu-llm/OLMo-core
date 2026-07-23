@@ -9,6 +9,7 @@ import pytest
 
 SCRIPT_ROOT = Path("src/scripts/orcd")
 README = SCRIPT_ROOT / "README.md"
+ORCD_FILESYSTEMS_URL = "https://orcd-docs.mit.edu/filesystems-file-transfer/filesystems/"
 
 
 def _readme_section(label: str) -> str:
@@ -81,6 +82,68 @@ wandb() {
         ["bash"],
         input=script,
         env={**os.environ, "SAVE_FOLDER": str(save_folder)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _scratch_preflight_commands() -> str:
+    text = README.read_text(encoding="utf-8")
+    marker = "verify_edullm_scratch() {"
+    invocation = "\nverify_edullm_scratch || exit $?"
+    assert marker in text
+    assert invocation in text
+    start = text.index(marker)
+    end = text.index(invocation, start) + len(invocation)
+    return text[start:end]
+
+
+def _run_scratch_preflight(
+    home: Path, scratch: Path, *, separate_mount: bool
+) -> subprocess.CompletedProcess[str]:
+    script = (
+        """
+realpath() {
+  local mode="$1" path
+  if [[ "$mode" = "-e" || "$mode" = "-m" ]]; then
+    shift
+  else
+    mode=
+  fi
+  path="$1"
+  if [[ "$mode" = "-e" && ! -e "$path" ]]; then
+    return 1
+  fi
+  printf '%s\\n' "$path"
+}
+findmnt() {
+  local path
+  for path in "$@"; do :; done
+  if [[ "$path" = "$HOME" ]]; then
+    printf '/home-mount\\n'
+  elif [[ "$path" = "$HOME/orcd/scratch" ]]; then
+    if [[ "$SEPARATE_MOUNT" = 1 ]]; then
+      printf '/scratch-mount\\n'
+    else
+      printf '/home-mount\\n'
+    fi
+  else
+    return 1
+  fi
+}
+"""
+        + _scratch_preflight_commands()
+    )
+    return subprocess.run(
+        ["bash"],
+        input=script,
+        env={
+            **os.environ,
+            "HOME": str(home),
+            "EDULLM_SCRATCH": str(scratch),
+            "SEPARATE_MOUNT": "1" if separate_mount else "0",
+        },
         capture_output=True,
         text=True,
         check=False,
@@ -243,18 +306,73 @@ def test_setup_job_prints_public_dependency_versions():
     assert "set -x" not in text
 
 
-def test_readme_requires_real_scratch_and_known_reviewed_sha():
+def test_readme_documents_official_scratch_path_and_known_reviewed_sha():
     text = README.read_text(encoding="utf-8")
 
     assert ': "${EDULLM_COMMIT_SHA:?' in text
-    assert ': "${EDULLM_SCRATCH:?' in text
+    assert 'export EDULLM_SCRATCH="$HOME/orcd/scratch/edullm"' in text
+    assert ORCD_FILESYSTEMS_URL in text
+    assert "separate Engaging Scratch mount and quota" in text
+    assert "a path under Home is forbidden" not in text
+    assert '"$HOME"|"$HOME"/*)' not in text
     assert 'export EDULLM_COMMIT_SHA="$(git -C "$EDULLM_REPO_ROOT" rev-parse HEAD)"' not in text
-    assert 'case "$EDULLM_SCRATCH" in' in text
-    assert '"$HOME"|"$HOME"/*)' in text
-    assert "/*) ;;" in text
     assert 'cd "$EDULLM_REPO_ROOT"' in text
     assert 'test "$(git -C "$EDULLM_REPO_ROOT" rev-parse HEAD)" = "$EDULLM_COMMIT_SHA"' in text
     assert 'test -z "$(git -C "$EDULLM_REPO_ROOT" status --porcelain)"' in text
+
+
+def test_readme_scratch_preflight_checks_root_mount_resolution_and_writability():
+    commands = _scratch_preflight_commands()
+    required_in_order = [
+        '[[ ! -d "$EDULLM_SCRATCH_ROOT" ]]',
+        'RESOLVED_SCRATCH_ROOT="$(realpath -e "$EDULLM_SCRATCH_ROOT")"',
+        'RESOLVED_SCRATCH="$(realpath -m "$EDULLM_SCRATCH")"',
+        'SCRATCH_MOUNT="$(findmnt -n -o TARGET -T "$RESOLVED_SCRATCH_ROOT")"',
+        'HOME_MOUNT="$(findmnt -n -o TARGET -T "$HOME")"',
+        '"$SCRATCH_MOUNT" == "$HOME_MOUNT"',
+        'mkdir -p "$EDULLM_SCRATCH"',
+        '[[ ! -w "$EDULLM_SCRATCH" ]]',
+        'mktemp "$EDULLM_SCRATCH/.edullm-preflight.XXXXXX"',
+    ]
+
+    positions = [commands.index(requirement) for requirement in required_in_order]
+    assert positions == sorted(positions)
+
+
+def test_readme_scratch_preflight_accepts_official_under_home_mount(tmp_path):
+    home = tmp_path / "home" / "operator"
+    scratch_root = home / "orcd" / "scratch"
+    scratch_root.mkdir(parents=True)
+    scratch = scratch_root / "edullm"
+
+    result = _run_scratch_preflight(home, scratch, separate_mount=True)
+
+    assert result.returncode == 0, result.stderr
+    assert scratch.is_dir()
+    assert not list(scratch.glob(".edullm-preflight.*"))
+
+
+def test_readme_scratch_preflight_rejects_ordinary_home_directory(tmp_path):
+    home = tmp_path / "home" / "operator"
+    scratch_root = home / "orcd" / "scratch"
+    scratch_root.mkdir(parents=True)
+
+    result = _run_scratch_preflight(home, scratch_root / "edullm", separate_mount=False)
+
+    assert result.returncode == 2
+    assert "not a separate mounted filesystem" in result.stderr
+
+
+def test_readme_scratch_preflight_rejects_path_outside_official_root(tmp_path):
+    home = tmp_path / "home" / "operator"
+    (home / "orcd" / "scratch").mkdir(parents=True)
+    scratch = home / "scratch-looking" / "edullm"
+
+    result = _run_scratch_preflight(home, scratch, separate_mount=True)
+
+    assert result.returncode == 2
+    assert "does not resolve under Engaging Scratch" in result.stderr
+    assert not scratch.exists()
 
 
 @pytest.mark.parametrize(

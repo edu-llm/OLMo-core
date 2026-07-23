@@ -7,27 +7,84 @@ local verification gate passes and the operator has Engaging access, one-L40S pe
 W&B `eduLLM/test` membership.
 
 The operator or review process must supply the full reviewed commit SHA. Never derive trust from
-whatever commit happens to be checked out remotely. `EDULLM_SCRATCH` must be the operator's real,
-absolute Engaging Scratch path; a path under Home is forbidden. If the reviewed commit is not
-available from a remote, transfer the exact commit object through an approved mechanism such as a
-verified Git bundle.
+whatever commit happens to be checked out remotely. Official ORCD documentation places Engaging
+Scratch at `/home/<username>/orcd/scratch` and Pool at `/home/<username>/orcd/pool`.
+`$HOME/orcd/scratch` is a separate Engaging Scratch mount and quota despite its Home-shaped path;
+it is for active jobs, not ordinary backed-up Home storage. The standard eduLLM candidate is
+`$HOME/orcd/scratch/edullm`; set it explicitly and verify the mount before submission. See
+https://orcd-docs.mit.edu/filesystems-file-transfer/filesystems/.
+
+If the reviewed commit is not available from a remote, transfer the exact commit object through
+an approved mechanism such as a verified Git bundle.
 
 ```bash
 export EDULLM_REPO_ROOT="$HOME/OLMo-core"
 : "${EDULLM_COMMIT_SHA:?set the known reviewed 40-character commit SHA}"
-: "${EDULLM_SCRATCH:?set the real absolute Engaging Scratch path}"
+export EDULLM_SCRATCH="$HOME/orcd/scratch/edullm"
 
 [[ "$EDULLM_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]] || {
   echo "EDULLM_COMMIT_SHA must be a full lowercase commit SHA" >&2
   exit 2
 }
-case "$EDULLM_SCRATCH" in
-  /*) ;;
-  *) echo "EDULLM_SCRATCH must be an absolute Engaging Scratch path" >&2; exit 2 ;;
-esac
-case "$EDULLM_SCRATCH" in
-  "$HOME"|"$HOME"/*) echo "EDULLM_SCRATCH must not be under Home" >&2; exit 2 ;;
-esac
+
+verify_edullm_scratch() {
+  local EDULLM_SCRATCH_ROOT="$HOME/orcd/scratch"
+  local RESOLVED_SCRATCH_ROOT RESOLVED_SCRATCH RESOLVED_CREATED_SCRATCH
+  local SCRATCH_MOUNT HOME_MOUNT SCRATCH_PROBE
+
+  if [[ ! -d "$EDULLM_SCRATCH_ROOT" ]]; then
+    echo "Engaging Scratch root does not exist: $EDULLM_SCRATCH_ROOT" >&2
+    return 2
+  fi
+  if ! RESOLVED_SCRATCH_ROOT="$(realpath -e "$EDULLM_SCRATCH_ROOT")"; then
+    echo "could not resolve Engaging Scratch root" >&2
+    return 2
+  fi
+  if ! RESOLVED_SCRATCH="$(realpath -m "$EDULLM_SCRATCH")"; then
+    echo "could not resolve EDULLM_SCRATCH" >&2
+    return 2
+  fi
+  case "$RESOLVED_SCRATCH/" in
+    "$RESOLVED_SCRATCH_ROOT/"*) ;;
+    *) echo "EDULLM_SCRATCH does not resolve under Engaging Scratch" >&2; return 2 ;;
+  esac
+
+  if ! SCRATCH_MOUNT="$(findmnt -n -o TARGET -T "$RESOLVED_SCRATCH_ROOT")"; then
+    echo "findmnt could not identify the Engaging Scratch filesystem" >&2
+    return 2
+  fi
+  if ! HOME_MOUNT="$(findmnt -n -o TARGET -T "$HOME")"; then
+    echo "findmnt could not identify the Home filesystem" >&2
+    return 2
+  fi
+  if [[ -z "$SCRATCH_MOUNT" || "$SCRATCH_MOUNT" == "$HOME_MOUNT" ]]; then
+    echo "Engaging Scratch is not a separate mounted filesystem" >&2
+    return 2
+  fi
+
+  if ! mkdir -p "$EDULLM_SCRATCH"; then
+    echo "could not create EDULLM_SCRATCH" >&2
+    return 2
+  fi
+  if ! RESOLVED_CREATED_SCRATCH="$(realpath -e "$EDULLM_SCRATCH")"; then
+    echo "could not resolve created EDULLM_SCRATCH" >&2
+    return 2
+  fi
+  case "$RESOLVED_CREATED_SCRATCH/" in
+    "$RESOLVED_SCRATCH_ROOT/"*) ;;
+    *) echo "created EDULLM_SCRATCH escaped Engaging Scratch" >&2; return 2 ;;
+  esac
+  if [[ ! -w "$EDULLM_SCRATCH" ]]; then
+    echo "EDULLM_SCRATCH is not writable" >&2
+    return 2
+  fi
+  if ! SCRATCH_PROBE="$(mktemp "$EDULLM_SCRATCH/.edullm-preflight.XXXXXX")"; then
+    echo "could not write an EDULLM_SCRATCH probe" >&2
+    return 2
+  fi
+  rm -f "$SCRATCH_PROBE"
+}
+verify_edullm_scratch || exit $?
 
 cd "$EDULLM_REPO_ROOT"
 test "$(git -C "$EDULLM_REPO_ROOT" rev-parse HEAD)" = "$EDULLM_COMMIT_SHA"
