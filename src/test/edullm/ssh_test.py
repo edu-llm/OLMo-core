@@ -676,9 +676,8 @@ def test_remote_helper_rejects_existing_0644_before_reading_input(tmp_path):
     target.write_bytes(b"existing")
     target.chmod(0o644)
 
-    class Unreadable:
-        @staticmethod
-        def read(size=-1):
+    class Unreadable(io.BytesIO):
+        def read(self, size=-1):
             raise AssertionError("input must not be read")
 
     with pytest.raises(ssh_helper.PrivateWriteError, match="private write failed"):
@@ -727,9 +726,8 @@ def test_remote_helper_input_failure_is_sanitized_and_cleans_temp(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
 
-    class FailedInput:
-        @staticmethod
-        def read(size=-1):
+    class FailedInput(io.BytesIO):
+        def read(self, size=-1):
             assert list(_private_parent(home).glob(".edullm-write-*"))
             raise OSError("private-content")
 
@@ -747,9 +745,8 @@ def test_remote_helper_sanitizes_non_os_input_failure(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
 
-    class FailedInput:
-        @staticmethod
-        def read(size=-1):
+    class FailedInput(io.BytesIO):
+        def read(self, size=-1):
             raise RuntimeError("private-content")
 
     with pytest.raises(ssh_helper.PrivateWriteError, match="private write failed") as raised:

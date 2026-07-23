@@ -1,5 +1,6 @@
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +20,11 @@ from edullm.validation import (
 )
 
 VALIDATED_AT = datetime(2026, 7, 23, 5, 0, 0, tzinfo=timezone.utc)
+
+
+def _mapping(value: object) -> Mapping[object, object]:
+    assert isinstance(value, Mapping)
+    return value
 
 
 def _policy_with_option(valid_request, name, rule):
@@ -539,14 +545,15 @@ def test_rejects_researcher_override_of_fixed_launcher_arguments(valid_request):
 def test_policy_owned_derived_paths_are_not_request_arguments(valid_request):
     policy = load_policy(Path("config/edullm/policy.yaml"))
     profile = policy.entrypoints["generic-smoke"]
+    fixed_options = _mapping(profile["fixed_options"])
     errors = validate_request(_generic_request(valid_request), policy)
 
-    assert profile["fixed_options"]["save-folder"] == {
+    assert fixed_options["save-folder"] == {
         "type": "derived_path",
         "root_env": "EDULLM_SCRATCH",
         "relative": "runs/{run_name}",
     }
-    assert profile["fixed_options"]["work-dir"] == {
+    assert fixed_options["work-dir"] == {
         "type": "derived_path",
         "root_env": "EDULLM_SCRATCH",
         "relative": "runs/{run_name}",

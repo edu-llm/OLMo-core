@@ -7,11 +7,7 @@ from pathlib import Path
 from typing import NoReturn, cast
 
 from edullm.policy import load_policy
-from edullm.request_parser import (
-    IssueParseError,
-    issue_body_from_fields,
-    parse_issue,
-)
+from edullm.request_parser import IssueParseError, issue_body_from_fields, parse_issue
 from edullm.validation import validate_request
 
 

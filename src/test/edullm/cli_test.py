@@ -14,6 +14,8 @@ import edullm.cli as cli
 import edullm.secure_publish as secure_publish
 from edullm.assignment import AssignmentResult
 from edullm.automation import AutomationResult
+from edullm.jobs import GateConfiguration
+from edullm.policy import Policy
 
 
 class RestrictedEnvironment(dict):
@@ -555,7 +557,7 @@ def test_setup_runs_checks_in_safe_alias_order_and_writes_secret_free_config(tmp
     root = tmp_path / "checkout"
     home = tmp_path / "home"
     _write_operator_roster(root)
-    events = []
+    events: list[str] = []
     ssh_client = StatefulSetupSSH(events)
     dependencies = _setup_dependencies(events, ssh_client)
     output = StringIO()
@@ -627,7 +629,7 @@ def test_setup_stops_on_first_failed_transition_and_sanitizes_failure(tmp_path, 
     root = tmp_path / "checkout"
     home = tmp_path / "home"
     _write_operator_roster(root)
-    events = []
+    events: list[str] = []
     ssh_client = StatefulSetupSSH(events, fail_at=fail_at)
     dependencies = _setup_dependencies(events, ssh_client, fail_at=fail_at)
 
@@ -662,7 +664,7 @@ def test_setup_late_failure_transitions_stop_without_insecure_artifacts(
     root = tmp_path / "checkout"
     home = tmp_path / "home"
     _write_operator_roster(root)
-    events = []
+    events: list[str] = []
     ssh_client = StatefulSetupSSH(events, fail_at=fail_at, **ssh_options)
 
     with pytest.raises(cli.SetupError, match="setup failed") as raised:
@@ -684,7 +686,7 @@ def test_setup_late_failure_transitions_stop_without_insecure_artifacts(
 def test_setup_requires_actual_local_wandb_project_access(tmp_path):
     root = tmp_path / "checkout"
     _write_operator_roster(root)
-    events = []
+    events: list[str] = []
     ssh_client = StatefulSetupSSH(events)
     dependencies = _setup_dependencies(events, ssh_client, project_access=False)
 
@@ -704,10 +706,15 @@ def test_setup_decline_does_not_modify_ssh_or_continue(tmp_path):
     root = tmp_path / "checkout"
     home = tmp_path / "home"
     _write_operator_roster(root)
-    events = []
+    events: list[str] = []
     ssh_client = StatefulSetupSSH(events)
     dependencies = _setup_dependencies(events, ssh_client)
-    dependencies.confirm = lambda prompt: events.append("decline") or False
+
+    def decline(prompt: str) -> bool:
+        events.append("decline")
+        return False
+
+    dependencies.confirm = decline
 
     with pytest.raises(cli.SetupDeclined):
         cli.setup_operator(
@@ -733,7 +740,7 @@ def test_setup_rejects_unsafe_target_block_before_output_or_confirmation(tmp_pat
         "Host orcd-login\n" "  Hostname old.example\n" "  SetEnv WANDB_API_KEY=never-display-this\n"
     )
     config.write_text(unsafe, encoding="utf-8")
-    events = []
+    events: list[str] = []
     ssh_client = StatefulSetupSSH(events)
     dependencies = _setup_dependencies(events, ssh_client)
     dependencies.confirm = lambda prompt: pytest.fail("unsafe config reached confirmation")
@@ -758,7 +765,7 @@ def test_setup_sanitizes_confirmation_prompt_failure_without_modifying_ssh(tmp_p
     root = tmp_path / "checkout"
     home = tmp_path / "home"
     _write_operator_roster(root)
-    events = []
+    events: list[str] = []
     ssh_client = StatefulSetupSSH(events)
     dependencies = _setup_dependencies(events, ssh_client)
 
@@ -784,7 +791,7 @@ def test_setup_is_idempotent_and_does_not_confirm_or_backup_twice(tmp_path):
     root = tmp_path / "checkout"
     home = tmp_path / "home"
     _write_operator_roster(root)
-    first_events = []
+    first_events: list[str] = []
     first_ssh = StatefulSetupSSH(first_events)
     cli.setup_operator(
         root=root,
@@ -794,7 +801,7 @@ def test_setup_is_idempotent_and_does_not_confirm_or_backup_twice(tmp_path):
         output=StringIO(),
     )
     backups = list((home / ".ssh").glob("config.edullm-backup*"))
-    second_events = []
+    second_events: list[str] = []
     second_ssh = StatefulSetupSSH(second_events)
     second_dependencies = _setup_dependencies(second_events, second_ssh)
     second_dependencies.confirm = lambda prompt: pytest.fail("idempotent setup asked to confirm")
@@ -814,7 +821,7 @@ def test_setup_is_idempotent_and_does_not_confirm_or_backup_twice(tmp_path):
 def test_setup_submits_reviewed_environment_script_and_polls_to_completed(tmp_path):
     root = tmp_path / "checkout"
     _write_operator_roster(root)
-    events = []
+    events: list[str] = []
     ssh_client = StatefulSetupSSH(
         events,
         env_ready=False,
@@ -846,7 +853,7 @@ def test_setup_submits_reviewed_environment_script_and_polls_to_completed(tmp_pa
 def test_setup_requires_exact_completed_terminal_state(tmp_path, state):
     root = tmp_path / "checkout"
     _write_operator_roster(root)
-    events = []
+    events: list[str] = []
     ssh_client = StatefulSetupSSH(events, env_ready=False, states=(state,))
 
     with pytest.raises(cli.SetupError, match="did not complete"):
@@ -865,7 +872,7 @@ def test_setup_requires_exact_completed_terminal_state(tmp_path, state):
 def test_setup_polling_is_bounded(tmp_path):
     root = tmp_path / "checkout"
     _write_operator_roster(root)
-    events = []
+    events: list[str] = []
     ssh_client = StatefulSetupSSH(events, env_ready=False, states=())
     clock = SetupClock()
 
@@ -882,10 +889,10 @@ def test_setup_polling_is_bounded(tmp_path):
     assert clock.now == 10
 
 
-def test_setup_rejects_malformed_fingerprint(tmp_path):
+def test_setup_rejects_malformed_fingerprint(tmp_path, monkeypatch):
     root = tmp_path / "checkout"
     _write_operator_roster(root)
-    events = []
+    events: list[str] = []
     ssh_client = StatefulSetupSSH(events)
     original_result = ssh_client._result
 
@@ -894,7 +901,7 @@ def test_setup_rejects_malformed_fingerprint(tmp_path):
             kwargs["stdout"] = "not-a-fingerprint\n"
         return original_result(label, **kwargs)
 
-    ssh_client._result = malformed
+    monkeypatch.setattr(ssh_client, "_result", malformed)
 
     with pytest.raises(cli.SetupError, match="fingerprint"):
         cli.setup_operator(
@@ -909,7 +916,7 @@ def test_setup_rejects_malformed_fingerprint(tmp_path):
 def test_setup_wandb_environment_is_secret_free_and_reads_mode_0600_key(tmp_path):
     root = tmp_path / "checkout"
     _write_operator_roster(root)
-    events = []
+    events: list[str] = []
     ssh_client = StatefulSetupSSH(events)
 
     cli.setup_operator(
@@ -936,7 +943,7 @@ def test_setup_wandb_environment_is_secret_free_and_reads_mode_0600_key(tmp_path
 def test_setup_prompts_and_writes_key_only_when_verified_remote_key_is_absent(tmp_path):
     root = tmp_path / "checkout"
     _write_operator_roster(root)
-    events = []
+    events: list[str] = []
     ssh_client = StatefulSetupSSH(events, key_exists=False)
     secret = "literal-wandb-key"
     output = StringIO()
@@ -968,7 +975,7 @@ def test_setup_prompts_and_writes_key_only_when_verified_remote_key_is_absent(tm
 def test_setup_sanitizes_secret_prompt_failure(tmp_path):
     root = tmp_path / "checkout"
     _write_operator_roster(root)
-    events = []
+    events: list[str] = []
     ssh_client = StatefulSetupSSH(events, key_exists=False)
     dependencies = _setup_dependencies(events, ssh_client)
 
@@ -992,7 +999,7 @@ def test_setup_sanitizes_secret_prompt_failure(tmp_path):
 def test_setup_replaces_unverified_existing_remote_key_without_exposing_it(tmp_path):
     root = tmp_path / "checkout"
     _write_operator_roster(root)
-    events = []
+    events: list[str] = []
     ssh_client = StatefulSetupSSH(events, key_exists=True, existing_key_valid=False)
 
     cli.setup_operator(
@@ -1015,7 +1022,7 @@ def test_setup_replaces_unverified_existing_remote_key_without_exposing_it(tmp_p
 def test_setup_does_not_prompt_when_existing_key_verifies(tmp_path):
     root = tmp_path / "checkout"
     _write_operator_roster(root)
-    events = []
+    events: list[str] = []
     ssh_client = StatefulSetupSSH(events, key_exists=True, existing_key_valid=True)
     dependencies = _setup_dependencies(events, ssh_client)
     dependencies.get_secret = lambda prompt: pytest.fail("unexpected W&B key prompt")
@@ -1034,7 +1041,7 @@ def test_setup_does_not_prompt_when_existing_key_verifies(tmp_path):
 def test_setup_requires_remote_wandb_identity_to_match_local_identity(tmp_path):
     root = tmp_path / "checkout"
     _write_operator_roster(root)
-    events = []
+    events: list[str] = []
     ssh_client = StatefulSetupSSH(events, remote_wandb_username="different-user")
 
     with pytest.raises(cli.SetupError, match="W&B identity"):
@@ -1050,7 +1057,7 @@ def test_setup_requires_remote_wandb_identity_to_match_local_identity(tmp_path):
 def test_setup_fails_closed_when_github_login_is_not_protected_operator(tmp_path):
     root = tmp_path / "checkout"
     _write_operator_roster(root, github="someone-else")
-    events = []
+    events: list[str] = []
     ssh_client = StatefulSetupSSH(events)
 
     with pytest.raises(cli.SetupError, match="protected operator"):
@@ -1066,7 +1073,7 @@ def test_setup_fails_closed_when_github_login_is_not_protected_operator(tmp_path
 
 
 def test_production_empty_roster_fails_closed(tmp_path):
-    events = []
+    events: list[str] = []
     ssh_client = StatefulSetupSSH(events)
 
     with pytest.raises(cli.SetupError, match="protected operator"):
@@ -1129,7 +1136,7 @@ def test_setup_remote_tool_checks_fail_immediately_in_order(
 ):
     root = tmp_path / "checkout"
     _write_operator_roster(root)
-    events = []
+    events: list[str] = []
     ssh_client = StatefulSetupSSH(events, fail_at=failing_tool)
 
     with pytest.raises(cli.SetupError, match="setup failed"):
@@ -1517,12 +1524,19 @@ def test_public_parser_exposes_exact_commands_and_hides_automation_metavar():
 
 def test_handle_run_calls_run_assigned_without_manual_confirmation(monkeypatch, capsys):
     calls = []
-    configuration = object()
-    services = SimpleNamespace(
+    configuration = GateConfiguration(
+        policy=Policy(wandb_entity="eduLLM", allowed_wandb_projects=("test",)),
+        operators=(),
+        reviewers=frozenset(),
+        digest="a" * 64,
+    )
+    services = cli.OperatorServices(
         operator="operator",
+        remote_user="orcd-user",
         github=object(),
-        load_configuration=lambda: configuration,
+        root=Path.cwd(),
         remote=object(),
+        slurm=object(),
     )
     state = SimpleNamespace(
         issue=42,
@@ -1539,12 +1553,13 @@ def test_handle_run_calls_run_assigned_without_manual_confirmation(monkeypatch, 
         return state
 
     monkeypatch.setattr(cli, "run_assigned", run_assigned)
+    monkeypatch.setattr(cli, "load_gate_configuration", lambda root: configuration)
 
     assert cli.handle_run(services=services) == 0
     assert len(calls) == 1
     assert calls[0]["operator"] == "operator"
     assert calls[0]["github"] is services.github
-    assert calls[0]["load_configuration"] is services.load_configuration
+    assert calls[0]["load_configuration"]() is configuration
     assert calls[0]["remote"] is services.remote
     assert "Submitted Issue #42" in capsys.readouterr().out
 
@@ -1677,13 +1692,38 @@ def test_public_parser_rejects_invalid_or_unpublished_surface(arguments):
 
 
 def test_main_dispatches_each_public_command_to_focused_handler(monkeypatch):
-    calls = []
-    monkeypatch.setattr(cli, "handle_setup", lambda: calls.append(("setup",)) or 11)
-    monkeypatch.setattr(cli, "handle_jobs", lambda mine: calls.append(("jobs", mine)) or 12)
-    monkeypatch.setattr(cli, "handle_run", lambda: calls.append(("run",)) or 13)
-    monkeypatch.setattr(cli, "handle_logs", lambda issue: calls.append(("logs", issue)) or 14)
-    monkeypatch.setattr(cli, "handle_stop", lambda issue: calls.append(("stop", issue)) or 15)
-    monkeypatch.setattr(cli, "handle_logout", lambda: calls.append(("logout",)) or 16)
+    calls: list[tuple[object, ...]] = []
+
+    def handle_setup() -> int:
+        calls.append(("setup",))
+        return 11
+
+    def handle_jobs(mine: bool) -> int:
+        calls.append(("jobs", mine))
+        return 12
+
+    def handle_run() -> int:
+        calls.append(("run",))
+        return 13
+
+    def handle_logs(issue: int) -> int:
+        calls.append(("logs", issue))
+        return 14
+
+    def handle_stop(issue: int) -> int:
+        calls.append(("stop", issue))
+        return 15
+
+    def handle_logout() -> int:
+        calls.append(("logout",))
+        return 16
+
+    monkeypatch.setattr(cli, "handle_setup", handle_setup)
+    monkeypatch.setattr(cli, "handle_jobs", handle_jobs)
+    monkeypatch.setattr(cli, "handle_run", handle_run)
+    monkeypatch.setattr(cli, "handle_logs", handle_logs)
+    monkeypatch.setattr(cli, "handle_stop", handle_stop)
+    monkeypatch.setattr(cli, "handle_logout", handle_logout)
 
     assert cli.main(["setup"], environ=RestrictedEnvironment({})) == 11
     assert cli.main(["jobs", "--mine"], environ=RestrictedEnvironment({})) == 12

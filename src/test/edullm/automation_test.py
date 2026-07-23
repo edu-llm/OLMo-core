@@ -1049,7 +1049,7 @@ def test_duplicate_validation_comments_fail_closed_on_invalid_request(policy):
 )
 def test_github_failures_never_transition_to_ready(policy, failure_field):
     kwargs = {failure_field: GitHubAPIError("GitHub API request failed")}
-    comments = ()
+    comments: tuple[IssueComment, ...] = ()
     if failure_field == "update_error":
         comments = (
             IssueComment(

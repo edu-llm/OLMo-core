@@ -1,7 +1,9 @@
 import dataclasses
 import hashlib
 import json
+import operator
 import re
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -9,6 +11,15 @@ import yaml
 
 from edullm.models import AttemptRecord, JobRequest, JobStatus, Operator
 from edullm.policy import load_operators, load_policy
+
+
+def _mapping(value: object) -> Mapping[object, object]:
+    assert isinstance(value, Mapping)
+    return value
+
+
+def _setitem(container: object, key: object, value: object) -> None:
+    operator.setitem(container, key, value)  # type: ignore[call-overload]
 
 
 def _policy_documents():
@@ -101,11 +112,11 @@ def test_supporting_records_are_immutable(valid_resolved_request):
     assert operator.enabled is True
     assert attempt.operator == "operator"
     with pytest.raises(dataclasses.FrozenInstanceError):
-        operator.enabled = False
+        setattr(operator, "enabled", False)
     with pytest.raises(dataclasses.FrozenInstanceError):
-        valid_resolved_request.slurm_job_id = "12345"
+        setattr(valid_resolved_request, "slurm_job_id", "12345")
     with pytest.raises(dataclasses.FrozenInstanceError):
-        attempt.slurm_job_id = "54321"
+        setattr(attempt, "slurm_job_id", "54321")
 
 
 def test_policy_loads_reviewed_defaults(tmp_path):
@@ -495,51 +506,61 @@ def test_loaded_policy_is_recursively_immutable():
     policy = load_policy(Path("config/edullm/policy.yaml"))
     generic = policy.entrypoints["generic-smoke"]
     hypothesis = policy.entrypoints["hypothesis-smoke"]
+    fixed_options = _mapping(generic["fixed_options"])
+    tags = fixed_options["trainer.callbacks.wandb.tags"]
+    generic_positionals = _mapping(generic["allowed_positionals"])
+    generic_first_positional = _mapping(generic_positionals[0])
+    hypothesis_positionals = _mapping(hypothesis["allowed_positionals"])
+    hypothesis_options = _mapping(hypothesis["allowed_options"])
+    seed_rule = _mapping(hypothesis_options["seed"])
 
     with pytest.raises(TypeError):
-        policy.entrypoints["generic-smoke"] = {}
+        _setitem(policy.entrypoints, "generic-smoke", {})
     with pytest.raises(TypeError):
-        generic["script"] = "src/attacker.py"
+        _setitem(generic, "script", "src/attacker.py")
     with pytest.raises(TypeError):
-        generic["launcher"] = "bash"
+        _setitem(generic, "launcher", "bash")
     with pytest.raises(TypeError):
-        generic["fixed_options"]["model-factory"] = "attacker"
+        _setitem(fixed_options, "model-factory", "attacker")
     with pytest.raises(TypeError):
-        generic["fixed_options"]["trainer.callbacks.wandb.tags"][0] = "attacker"
+        _setitem(tags, 0, "attacker")
     with pytest.raises(TypeError):
-        generic["allowed_positionals"][0]["type"] = "string"
+        _setitem(generic_first_positional, "type", "string")
     with pytest.raises(TypeError):
-        hypothesis["allowed_positionals"][0][0] = "attacker"
+        _setitem(hypothesis_positionals[0], 0, "attacker")
     with pytest.raises(TypeError):
-        hypothesis["allowed_options"]["seed"]["max"] = 99
+        _setitem(seed_rule, "max", 99)
     with pytest.raises(dataclasses.FrozenInstanceError):
-        policy.max_gpu_count = 99
+        setattr(policy, "max_gpu_count", 99)
 
     assert generic["script"] == "src/examples/llm/train.py"
     assert generic["launcher"] == "torchrun"
-    assert generic["fixed_options"]["model-factory"] == "olmo2_190M"
-    assert generic["fixed_options"]["trainer.callbacks.wandb.tags"] == (
+    assert fixed_options["model-factory"] == "olmo2_190M"
+    assert fixed_options["trainer.callbacks.wandb.tags"] == (
         "orcd",
         "generic-smoke",
         "olmo2-190m",
     )
-    assert generic["allowed_positionals"][0]["type"] == "slug"
-    assert hypothesis["allowed_positionals"][0] == ("dry_run", "train_single", "train")
-    assert hypothesis["allowed_options"]["seed"]["max"] == 2147483647
+    assert generic_first_positional["type"] == "slug"
+    assert hypothesis_positionals[0] == ("dry_run", "train_single", "train")
+    assert seed_rule["max"] == 2147483647
     assert policy.max_gpu_count == 2
 
 
 def test_hypothesis_profile_fixes_wandb_enabled():
     profile = load_policy(Path("config/edullm/policy.yaml")).entrypoints["hypothesis-smoke"]
+    fixed_options = _mapping(profile["fixed_options"])
+    allowed_options = _mapping(profile["allowed_options"])
 
-    assert profile["fixed_options"]["trainer.callbacks.wandb.enabled"] is True
-    assert "trainer.callbacks.wandb.enabled" not in profile["allowed_options"]
+    assert fixed_options["trainer.callbacks.wandb.enabled"] is True
+    assert "trainer.callbacks.wandb.enabled" not in allowed_options
 
 
 def test_hypothesis_profile_allows_one_authoritative_bounded_seed():
     profile = load_policy(Path("config/edullm/policy.yaml")).entrypoints["hypothesis-smoke"]
+    allowed_options = _mapping(profile["allowed_options"])
 
-    assert profile["allowed_options"]["seed"] == {
+    assert allowed_options["seed"] == {
         "type": "integer",
         "min": 0,
         "max": 2147483647,

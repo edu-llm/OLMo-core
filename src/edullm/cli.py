@@ -36,21 +36,13 @@ from edullm.jobs import (
     deliver_terminal_notifications,
 )
 from edullm.jobs import jobs as list_operator_jobs
-from edullm.jobs import (
-    load_gate_configuration,
-)
+from edullm.jobs import load_gate_configuration
 from edullm.jobs import logs as read_operator_logs
-from edullm.jobs import (
-    run_assigned,
-)
+from edullm.jobs import run_assigned
 from edullm.jobs import stop as stop_operator_job
 from edullm.notifications import SlackNotifier
 from edullm.policy import load_operators, load_policy
-from edullm.secure_publish import (
-    SecurePublishError,
-    capture_file,
-    compare_and_publish,
-)
+from edullm.secure_publish import SecurePublishError, capture_file, compare_and_publish
 from edullm.slurm import SSHSubmissionRemote
 from edullm.ssh import (
     COMMAND_TIMEOUT_SECONDS,

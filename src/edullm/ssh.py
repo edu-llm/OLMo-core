@@ -16,11 +16,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from edullm.secure_publish import (
-    SecurePublishError,
-    capture_file,
-    compare_and_publish,
-)
+from edullm.secure_publish import SecurePublishError, capture_file, compare_and_publish
 
 COMMAND_TIMEOUT_SECONDS = 30.0
 _ALIAS = "orcd-login"

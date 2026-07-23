@@ -25,7 +25,7 @@ def _readme_section(label: str) -> str:
 
 def _readme_submission(label: str) -> str:
     lines = _readme_section(label).splitlines()
-    command_lines = []
+    command_lines: list[str] = []
     for line in lines:
         if not command_lines:
             if line.startswith("sbatch "):

@@ -808,13 +808,17 @@ def test_recovery_identity_switches_and_missing_identity_fail_without_sbatch(
         intent = state_root / key / "intent.json"
         intent.write_text(spec.canonical_json(), encoding="utf-8")
         intent.chmod(0o600)
+
+        def remote_user_getter() -> str:
+            return authenticated_user
+
         with pytest.raises(SubmissionError, match="remote user"):
             submission_transaction(
                 state_root,
                 key,
                 spec,
                 sbatch_runner=unexpected_runner,
-                remote_user_getter=lambda user=authenticated_user: user,
+                remote_user_getter=remote_user_getter,
                 now=NOW,
             )
 

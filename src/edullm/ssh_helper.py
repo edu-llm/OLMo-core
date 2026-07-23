@@ -17,11 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
-from edullm.secure_publish import (
-    SecurePublishError,
-    capture_file,
-    compare_and_publish,
-)
+from edullm.secure_publish import SecurePublishError, capture_file, compare_and_publish
 
 _TARGETS = frozenset({"wandb.env", "wandb.key"})
 _SUBMISSION_KEY = re.compile(r"[0-9a-f]{64}\Z")
