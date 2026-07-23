@@ -8,6 +8,7 @@ from edullm.automation import (
     VALIDATION_MARKER,
     AutomationResult,
     ValidationDecision,
+    _force_requested,
     load_team_leads,
     validate_issue,
     validation_decision,
@@ -537,6 +538,183 @@ def test_human_authored_machine_marker_is_rejected(policy):
 
     assert result.operational_error is True
     assert result.errors == ("eduLLM status marker is not bot-authored",)
+
+
+@pytest.mark.parametrize(
+    "comments,expected_error",
+    [
+        (
+            [
+                IssueComment(
+                    id=5,
+                    body=f"{VALIDATION_MARKER}\nold",
+                    author="student",
+                    author_is_bot=False,
+                )
+            ],
+            "eduLLM validation marker is not bot-authored",
+        ),
+        (
+            [
+                IssueComment(
+                    id=index,
+                    body=f"{VALIDATION_MARKER}\nold",
+                    author="github-actions[bot]",
+                    author_is_bot=True,
+                )
+                for index in (5, 6)
+            ],
+            "multiple eduLLM validation comments were found",
+        ),
+        (
+            [
+                IssueComment(
+                    id=5,
+                    body=f"{VALIDATION_MARKER}\nold\n{VALIDATION_MARKER}",
+                    author="github-actions[bot]",
+                    author_is_bot=True,
+                )
+            ],
+            "multiple eduLLM validation markers were found",
+        ),
+    ],
+)
+def test_invalid_validation_marker_namespace_blocks_ready(policy, comments, expected_error):
+    github = AutomationGitHub([_issue(), _issue()], comments=comments)
+
+    result = validate_issue(
+        42,
+        github=github,
+        policy=policy,
+        allowed_reviewers={"team-lead"},
+        validated_at=VALIDATED_AT,
+    )
+
+    assert result == AutomationResult("requested", (expected_error,), True)
+    assert "status:requested" in github.issues[0].labels
+    assert "status:ready" not in github.issues[0].labels
+
+
+def test_validation_marker_inserted_after_status_persistence_blocks_ready(policy):
+    class InsertValidationAfterStatusCreate(AutomationGitHub):
+        def create_issue_comment(self, issue_number, body):
+            persisted = super().create_issue_comment(issue_number, body)
+            if STATUS_MARKER in body:
+                self.comments.append(
+                    IssueComment(
+                        id=100,
+                        body=f"{VALIDATION_MARKER}\nspoofed",
+                        author="student",
+                        author_is_bot=False,
+                    )
+                )
+            return persisted
+
+    github = InsertValidationAfterStatusCreate([_issue(), _issue()])
+
+    result = validate_issue(
+        42,
+        github=github,
+        policy=policy,
+        allowed_reviewers={"team-lead"},
+        validated_at=VALIDATED_AT,
+    )
+
+    assert result.status == "requested"
+    assert result.operational_error is True
+    assert "status:requested" in github.issues[0].labels
+    assert "status:ready" not in github.issues[0].labels
+
+
+def test_validation_marker_inserted_during_ready_write_blocks_ready(policy):
+    class InsertValidationDuringReady(AutomationGitHub):
+        def remove_issue_status_label(self, issue_number, label):
+            removed = super().remove_issue_status_label(issue_number, label)
+            if label == "status:requested":
+                self.comments.append(
+                    IssueComment(
+                        id=100,
+                        body=f"{VALIDATION_MARKER}\nspoofed",
+                        author="student",
+                        author_is_bot=False,
+                    )
+                )
+            return removed
+
+    github = InsertValidationDuringReady([_issue(), _issue()])
+
+    result = validate_issue(
+        42,
+        github=github,
+        policy=policy,
+        allowed_reviewers={"team-lead"},
+        validated_at=VALIDATED_AT,
+    )
+
+    assert result.status == "requested"
+    assert result.operational_error is True
+    assert "status:requested" in github.issues[0].labels
+    assert "status:ready" not in github.issues[0].labels
+
+
+def test_validation_marker_inserted_after_ready_publication_blocks_ready(policy):
+    class InsertValidationOnPublishedCommentRead(AutomationGitHub):
+        inserted = False
+
+        def list_issue_comments(self, issue_number):
+            labels = set(self.issues[0].labels)
+            if "status:ready" in labels and "status:requested" not in labels and not self.inserted:
+                self.inserted = True
+                self.comments.extend(
+                    [
+                        IssueComment(
+                            id=index,
+                            body=f"{VALIDATION_MARKER}\nold",
+                            author="github-actions[bot]",
+                            author_is_bot=True,
+                        )
+                        for index in (100, 101)
+                    ]
+                )
+            return super().list_issue_comments(issue_number)
+
+    github = InsertValidationOnPublishedCommentRead([_issue(), _issue()])
+
+    result = validate_issue(
+        42,
+        github=github,
+        policy=policy,
+        allowed_reviewers={"team-lead"},
+        validated_at=VALIDATED_AT,
+    )
+
+    assert result.status == "requested"
+    assert result.operational_error is True
+    assert "status:requested" in github.issues[0].labels
+    assert "status:ready" not in github.issues[0].labels
+
+
+def test_single_bot_validation_comment_may_coexist_with_ready(policy):
+    validation_comment = IssueComment(
+        id=5,
+        body=f"{VALIDATION_MARKER}\nprior validation",
+        author="github-actions[bot]",
+        author_is_bot=True,
+    )
+    github = AutomationGitHub([_issue(), _issue()], comments=[validation_comment])
+
+    result = validate_issue(
+        42,
+        github=github,
+        policy=policy,
+        allowed_reviewers={"team-lead"},
+        validated_at=VALIDATED_AT,
+    )
+
+    assert result.status == "ready"
+    assert len(github.comments) == 2
+    assert "status:ready" in github.issues[0].labels
+    assert "status:requested" not in github.issues[0].labels
 
 
 def test_idempotent_retry_updates_existing_status_comment_without_duplication(
@@ -1084,6 +1262,11 @@ def test_unavailable_reconciliation_never_claims_ready_and_is_sanitized(policy):
                 raise GitHubAPIError(f"timeout contains {secret}")
             return result
 
+        def fetch_issue(self, issue_number):
+            if self.ready_failed:
+                raise GitHubAPIError(f"outage contains {secret}")
+            return super().fetch_issue(issue_number)
+
     github = TotalOutageAfterReadyCommit([_issue(), _issue()])
 
     result = validate_issue(
@@ -1100,3 +1283,131 @@ def test_unavailable_reconciliation_never_claims_ready_and_is_sanitized(policy):
         True,
     )
     assert secret not in "\n".join(result.errors)
+
+
+class ReconciliationGitHub(AutomationGitHub):
+    def __init__(
+        self,
+        issue,
+        *,
+        add_error=False,
+        remove_error=False,
+        fetch_error=False,
+    ):
+        super().__init__([issue])
+        self.add_error = add_error
+        self.remove_error = remove_error
+        self.fetch_error = fetch_error
+
+    def add_issue_status_label(self, issue_number, label):
+        if self.add_error:
+            self.events.append(("add-error", issue_number, label))
+            raise GitHubAPIError("add failed")
+        return super().add_issue_status_label(issue_number, label)
+
+    def remove_issue_status_label(self, issue_number, label):
+        if self.remove_error:
+            self.events.append(("remove-error", issue_number, label))
+            raise GitHubAPIError("remove failed")
+        return super().remove_issue_status_label(issue_number, label)
+
+    def fetch_issue(self, issue_number):
+        if self.fetch_error:
+            self.events.append(("fetch-error", issue_number))
+            raise GitHubAPIError("fetch failed")
+        return super().fetch_issue(issue_number)
+
+
+def test_force_requested_attempts_remove_when_add_fails_and_accepts_postcondition():
+    github = ReconciliationGitHub(
+        _issue(labels=("edullm-job", "research", "status:requested", "status:ready")),
+        add_error=True,
+    )
+
+    issue = _force_requested(github, 42)
+
+    assert issue is not None
+    assert set(github.issues[0].labels) == {
+        "edullm-job",
+        "research",
+        "status:requested",
+    }
+    assert ("remove-label", 42, "status:ready") in github.events
+
+
+def test_force_requested_accepts_remove_error_when_ready_is_already_absent():
+    github = ReconciliationGitHub(
+        _issue(labels=("edullm-job", "research")),
+        remove_error=True,
+    )
+
+    issue = _force_requested(github, 42)
+
+    assert issue is not None
+    assert set(github.issues[0].labels) == {
+        "edullm-job",
+        "research",
+        "status:requested",
+    }
+    assert ("fetch", 42) in github.events
+
+
+def test_force_requested_accepts_both_write_errors_when_state_is_already_safe():
+    github = ReconciliationGitHub(
+        _issue(labels=("edullm-job", "research", "status:requested")),
+        add_error=True,
+        remove_error=True,
+    )
+
+    issue = _force_requested(github, 42)
+
+    assert issue is not None
+    assert ("add-error", 42, "status:requested") in github.events
+    assert ("remove-error", 42, "status:ready") in github.events
+    assert ("fetch", 42) in github.events
+
+
+def test_force_requested_attempts_both_writes_before_unavailable_fetch():
+    github = ReconciliationGitHub(
+        _issue(labels=("edullm-job", "research", "status:ready")),
+        fetch_error=True,
+    )
+
+    assert _force_requested(github, 42) is None
+    assert ("add-label", 42, "status:requested") in github.events
+    assert ("remove-label", 42, "status:ready") in github.events
+    assert ("fetch-error", 42) in github.events
+
+
+def test_ready_commit_then_error_removes_ready_even_if_reconciliation_add_fails(policy):
+    class CommitReadyThenFailWithAddOutage(AutomationGitHub):
+        ready_failed = False
+
+        def add_issue_status_label(self, issue_number, label):
+            if label == "status:requested" and self.ready_failed:
+                self.events.append(("add-error", issue_number, label))
+                raise GitHubAPIError("add endpoint unavailable")
+            result = super().add_issue_status_label(issue_number, label)
+            if label == "status:ready" and not self.ready_failed:
+                self.ready_failed = True
+                raise GitHubAPIError("ready response lost")
+            return result
+
+    github = CommitReadyThenFailWithAddOutage([_issue(), _issue()])
+
+    result = validate_issue(
+        42,
+        github=github,
+        policy=policy,
+        allowed_reviewers={"team-lead"},
+        validated_at=VALIDATED_AT,
+    )
+
+    assert result == AutomationResult(
+        "requested",
+        ("GitHub validation operation failed",),
+        True,
+    )
+    assert "status:requested" in github.issues[0].labels
+    assert "status:ready" not in github.issues[0].labels
+    assert ("remove-label", 42, "status:ready") in github.events

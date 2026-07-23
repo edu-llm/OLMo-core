@@ -222,18 +222,22 @@ def validate_issue(
             _persist_requested_errors(github, issue_number, errors)
             return AutomationResult("requested", errors, False)
 
+        pre_ready_comments = github.list_issue_comments(issue_number)
+        _validate_ready_comment_snapshot(
+            pre_ready_comments,
+            status_body=status_body,
+            status_id=persisted_status.id,
+        )
         final_issue = _set_ready(github, issue_number)
         if not _issue_matches_request(final_issue, request, issue_number):
             raise AutomationStateError(
                 "Issue changed during validation; submit or save the current request again"
             )
-        _require_exact_machine_comment(
-            github,
-            issue_number,
-            marker=STATUS_MARKER,
-            kind="status",
-            body=status_body,
-            expected_id=persisted_status.id,
+        published_comments = github.list_issue_comments(issue_number)
+        _validate_ready_comment_snapshot(
+            published_comments,
+            status_body=status_body,
+            status_id=persisted_status.id,
         )
         confirmed_issue = github.fetch_issue(issue_number)
         if (
@@ -281,7 +285,13 @@ def _set_requested(github: Any, issue_number: int) -> Any:
 def _force_requested(github: Any, issue_number: int) -> Any | None:
     try:
         github.add_issue_status_label(issue_number, "status:requested")
+    except GitHubError:
+        pass
+    try:
         github.remove_issue_status_label(issue_number, "status:ready")
+    except GitHubError:
+        pass
+    try:
         issue = github.fetch_issue(issue_number)
     except GitHubError:
         return None
@@ -337,16 +347,16 @@ def _persist_machine_comment(
     body: str,
 ) -> IssueComment:
     comments = github.list_issue_comments(issue_number)
-    existing = _find_machine_comment(comments, marker=marker, kind=kind)
+    existing = _validate_marker_namespace(comments, marker=marker, kind=kind)
     if existing is None:
         persisted = github.create_issue_comment(issue_number, body)
     else:
         persisted = github.update_issue_comment(existing.id, body)
     if not persisted.author_is_bot or persisted.body != body:
         raise AutomationStateError(f"persisted eduLLM {kind} comment is invalid")
+    comments = github.list_issue_comments(issue_number)
     return _require_exact_machine_comment(
-        github,
-        issue_number,
+        comments,
         marker=marker,
         kind=kind,
         body=body,
@@ -355,16 +365,14 @@ def _persist_machine_comment(
 
 
 def _require_exact_machine_comment(
-    github: Any,
-    issue_number: int,
+    comments: Iterable[IssueComment],
     *,
     marker: str,
     kind: str,
     body: str,
     expected_id: int,
 ) -> IssueComment:
-    comments = github.list_issue_comments(issue_number)
-    persisted = _find_machine_comment(comments, marker=marker, kind=kind)
+    persisted = _validate_marker_namespace(comments, marker=marker, kind=kind)
     if persisted is None:
         raise AutomationStateError(f"persisted eduLLM {kind} comment is missing")
     if persisted.id != expected_id:
@@ -372,6 +380,26 @@ def _require_exact_machine_comment(
     if persisted.body != body:
         raise AutomationStateError(f"persisted eduLLM {kind} comment body changed")
     return persisted
+
+
+def _validate_ready_comment_snapshot(
+    comments: tuple[IssueComment, ...],
+    *,
+    status_body: str,
+    status_id: int,
+) -> None:
+    _validate_marker_namespace(
+        comments,
+        marker=VALIDATION_MARKER,
+        kind="validation",
+    )
+    _require_exact_machine_comment(
+        comments,
+        marker=STATUS_MARKER,
+        kind="status",
+        body=status_body,
+        expected_id=status_id,
+    )
 
 
 def _issue_matches_request(issue: Any, request: JobRequest, issue_number: int) -> bool:
@@ -389,7 +417,7 @@ def _issue_matches_request(issue: Any, request: JobRequest, issue_number: int) -
     )
 
 
-def _find_machine_comment(
+def _validate_marker_namespace(
     comments: Iterable[IssueComment],
     *,
     marker: str,
