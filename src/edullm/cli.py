@@ -63,6 +63,7 @@ SETUP_POLL_INTERVAL_SECONDS = 5.0
 SETUP_POLL_TIMEOUT_SECONDS = 3600.0
 REMOTE_REPO_ROOT = "$HOME/OLMo-core"
 REMOTE_SCRATCH = "$HOME/orcd/scratch/edullm"
+_CANONICAL_REPOSITORY = "edu-llm/OLMo-core"
 _DIRECT_ENGAGING_REACHABILITY_ERROR = "operator setup failed during direct Engaging reachability"
 _SSH_CONFIGURATION_PLANNING_ERROR = "operator setup failed while planning SSH configuration"
 _GITHUB_LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\Z")
@@ -1026,6 +1027,8 @@ def automation_validate(
 
     :returns: The validation automation result.
     """
+    if repository != _CANONICAL_REPOSITORY:
+        raise ValueError("GitHub repository is not supported")
     config = root / "config/edullm"
     policy = load_policy(
         config / "policy.yaml",

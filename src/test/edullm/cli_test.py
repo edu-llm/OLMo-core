@@ -149,7 +149,9 @@ def test_invalid_request_is_a_handled_requested_result(capsys):
     assert output.out == "eduLLM Issue #42: requested\n"
 
 
-def test_default_runner_loads_only_tracked_configuration(tmp_path, monkeypatch):
+def test_default_runner_loads_only_tracked_configuration_for_canonical_repository(
+    tmp_path, monkeypatch
+):
     loaded = []
     fake_policy = object()
     fake_client = object()
@@ -195,6 +197,39 @@ def test_default_runner_loads_only_tracked_configuration(tmp_path, monkeypatch):
             tmp_path / "config/edullm/entrypoints.yaml",
         ),
     ]
+
+
+def test_cli_rejects_noncanonical_repository_before_authorization(
+    tmp_path, monkeypatch, capsys
+):
+    raw_repository = "attacker/fork"
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "load_policy", lambda *args: object())
+    monkeypatch.setattr(
+        cli,
+        "GitHubClient",
+        lambda *args, **kwargs: pytest.fail("GitHub client must not be constructed"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "validate_issue",
+        lambda *args, **kwargs: pytest.fail("commit evidence must not be authorized"),
+    )
+
+    exit_code = cli.main(
+        ["automation", "validate", "--issue", "42"],
+        environ={
+            "GITHUB_TOKEN": "token",
+            "GITHUB_REPOSITORY": raw_repository,
+        },
+    )
+
+    assert exit_code == 1
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "eduLLM validation configuration or GitHub access failed" in output.err
+    assert raw_repository not in output.out + output.err
 
 
 def test_package_registers_user_facing_edullm_console_entrypoint():
