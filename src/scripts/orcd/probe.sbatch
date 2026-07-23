@@ -5,7 +5,8 @@
 #SBATCH -c 4
 #SBATCH --mem=16G
 #SBATCH -J edullm-probe
-#SBATCH -o %x-%j.log
+#SBATCH -o /dev/null
+#SBATCH -e /dev/null
 set -euo pipefail
 
 : "${EDULLM_REPO_ROOT:?export EDULLM_REPO_ROOT before sbatch}"
@@ -13,6 +14,8 @@ set -euo pipefail
 : "${EDULLM_SCRATCH:?export EDULLM_SCRATCH before sbatch}"
 EDULLM_VENV="${EDULLM_VENV:-$HOME/venvs/edullm}"
 
+mkdir -p "$EDULLM_SCRATCH/logs"
+exec >"$EDULLM_SCRATCH/logs/${SLURM_JOB_NAME}-${SLURM_JOB_ID}.log" 2>&1
 source "$EDULLM_VENV/bin/activate"
 export PYTHONPATH="$EDULLM_REPO_ROOT/src"
 test "$(git -C "$EDULLM_REPO_ROOT" rev-parse HEAD)" = "$EDULLM_COMMIT_SHA"

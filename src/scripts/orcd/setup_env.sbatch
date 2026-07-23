@@ -4,7 +4,8 @@
 #SBATCH -c 8
 #SBATCH --mem=32G
 #SBATCH -J edullm-env
-#SBATCH -o %x-%j.log
+#SBATCH -o /dev/null
+#SBATCH -e /dev/null
 set -euo pipefail
 
 : "${EDULLM_REPO_ROOT:?export EDULLM_REPO_ROOT before sbatch}"
@@ -12,10 +13,11 @@ set -euo pipefail
 : "${EDULLM_SCRATCH:?export EDULLM_SCRATCH before sbatch}"
 EDULLM_VENV="${EDULLM_VENV:-$HOME/venvs/edullm}"
 
+mkdir -p "$EDULLM_SCRATCH/logs"
+exec >"$EDULLM_SCRATCH/logs/${SLURM_JOB_NAME}-${SLURM_JOB_ID}.log" 2>&1
 module load miniforge/24.3.0-0
 test "$(git -C "$EDULLM_REPO_ROOT" rev-parse HEAD)" = "$EDULLM_COMMIT_SHA"
 test -z "$(git -C "$EDULLM_REPO_ROOT" status --porcelain)"
-mkdir -p "$EDULLM_SCRATCH"
 python -m venv "$EDULLM_VENV"
 source "$EDULLM_VENV/bin/activate"
 python -m pip install --upgrade pip wheel setuptools uv
