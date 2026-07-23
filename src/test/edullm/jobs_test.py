@@ -190,6 +190,8 @@ class StatefulGitHub:
     def executable_commit(self, sha, *, script_path):
         self.commit_evidence_calls.append((sha, script_path))
         self.events.append(("commit-evidence", sha, script_path))
+        if isinstance(self.commit_evidence, Exception):
+            raise self.commit_evidence
         return self.commit_evidence
 
     def create_issue_comment(self, number, body):
@@ -645,6 +647,36 @@ def test_run_fails_closed_when_post_write_comment_author_changes(valid_request):
             remote=StatefulRemote(),
             now=NOW,
         )
+
+
+def test_run_sanitizes_unavailable_commit_evidence_without_submission(valid_request):
+    secret = "ghp_private_token_forbidden"
+    github = StatefulGitHub(
+        valid_request,
+        commit_evidence=GitHubError(
+            f"{secret} failed for {valid_request.commit_sha} {valid_request.data_manifest}"
+        ),
+    )
+    remote = StatefulRemote()
+
+    with pytest.raises(JobOperationError) as raised:
+        run_assigned(
+            operator="operator",
+            github=github,
+            load_configuration=_config,
+            remote=remote,
+            now=NOW,
+        )
+
+    message = str(raised.value)
+    assert "commit or script evidence is unavailable" in message
+    assert secret not in message
+    assert valid_request.commit_sha not in message
+    assert valid_request.data_manifest not in message
+    assert github.commit_evidence_calls == [(valid_request.commit_sha, valid_request.script_path)]
+    assert remote.staged == []
+    assert remote.verified == []
+    assert remote.submissions == []
 
 
 @pytest.mark.parametrize(

@@ -1787,7 +1787,14 @@ def test_main_dispatches_each_public_command_to_focused_handler(monkeypatch):
         (["stop", "42"], "stop"),
     ],
 )
-def test_task_7_commands_fail_closed_with_empty_protected_roster(arguments, command, capsys):
+def test_task_7_commands_fail_closed_with_empty_protected_roster(
+    arguments,
+    command,
+    capsys,
+    monkeypatch,
+):
+    monkeypatch.setattr(cli, "load_gate_configuration", lambda root: SimpleNamespace(operators=()))
+
     exit_code = cli.main(arguments, environ=RestrictedEnvironment({}))
 
     assert exit_code == 1

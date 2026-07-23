@@ -723,11 +723,14 @@ def _gate(
     if not kinds or any(type(kind) is not str for kind in kinds):
         raise JobOperationError("protected entrypoint profile is incomplete")
     if revalidate_commit:
-        decision = validation_decision(
-            request,
-            policy=configuration.policy,
-            github=github,
-        )
+        try:
+            decision = validation_decision(
+                request,
+                policy=configuration.policy,
+                github=github,
+            )
+        except Exception:
+            raise JobOperationError("commit or script evidence is unavailable") from None
         if decision.status != "ready" or decision.errors:
             raise JobOperationError("commit or request policy is no longer authorized")
     elif validate_request(request, configuration.policy):
