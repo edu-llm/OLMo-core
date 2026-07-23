@@ -16,10 +16,12 @@ from edullm.jobs import (
     JobOperationError,
     LifecycleState,
     NotificationRecord,
+    SlurmJob,
     build_job_comment,
     build_resolved_request,
     deliver_terminal_notifications,
     full_submission_gate,
+    jobs,
     parse_job_comment,
     parse_sacct,
     parse_squeue_json,
@@ -418,6 +420,34 @@ class StatefulRemote:
         )
 
 
+class ReverseOrderGitHub(StatefulGitHub):
+    def list_active_queue_issues(self):
+        issue_43 = replace(self.issue, number=43)
+        return (issue_43, self.issue)
+
+
+def test_run_selects_oldest_assigned_issue_and_submits_once(valid_request):
+    github = ReverseOrderGitHub(valid_request)
+    remote = StatefulRemote()
+
+    state = run_assigned(
+        operator="operator",
+        github=github,
+        load_configuration=_config,
+        remote=remote,
+        now=NOW,
+    )
+
+    assert state.issue == 42
+    assert len(remote.staged) == 1
+    assert len(remote.verified) == 1
+    assert len(remote.submissions) == 1
+    assert state.attempts[-1].wandb_run_id == "issue-42-attempt-1-12345"
+    assert state.attempts[-1].wandb_url == (
+        "https://wandb.ai/eduLLM/pretraining/runs/issue-42-attempt-1-12345"
+    )
+
+
 def test_run_publishes_lifecycle_as_the_authenticated_operator_user(valid_request):
     github = StatefulGitHub(
         valid_request,
@@ -728,6 +758,49 @@ def test_run_repairs_github_outage_after_receipt_without_new_attempt(valid_reque
     assert len(remote.submissions) == 1
     assert "status:submitted" in github.issue.labels
     assert "status:assigned" not in github.issue.labels
+
+
+class CompletedSlurm:
+    def __init__(self):
+        self.queries = []
+
+    def query(self, job_ids):
+        self.queries.append(tuple(job_ids))
+        return {
+            "12345": SlurmJob(
+                job_id="12345",
+                name="issue-42-skill-dag-v1-natural",
+                state="COMPLETED",
+                user="operator",
+                lifecycle_state="completed",
+            )
+        }
+
+    def reconcile_offline_tracking(self):
+        return None
+
+
+def test_jobs_repairs_terminal_issue_without_submitting(valid_request):
+    lifecycle = replace(
+        _lifecycle("running"),
+        request_digest=valid_request.digest,
+        attempts=(replace(_attempt("running"), request_digest=valid_request.digest),),
+    )
+    github = StatefulGitHub(valid_request, lifecycle=lifecycle)
+    slurm = CompletedSlurm()
+
+    repaired = jobs(
+        mine=True,
+        operator="operator",
+        github=github,
+        configuration=_config(),
+        slurm=slurm,
+        now=NOW,
+    )
+
+    assert repaired[0].current_state == "completed"
+    assert set(github.issue.labels) == {"edullm-job", "research", "status:completed"}
+    assert slurm.queries == [("12345",)]
 
 
 @pytest.mark.parametrize(

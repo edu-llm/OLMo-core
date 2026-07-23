@@ -1497,6 +1497,58 @@ def test_commands_are_plain_language_and_internal_automation_remains_available()
     assert automation.issue == 42
 
 
+def test_public_parser_exposes_exact_commands_and_hides_automation_metavar():
+    parser = cli.build_parser()
+    command_action = next(action for action in parser._actions if action.dest == "command")
+
+    assert command_action.metavar == "{setup,jobs,run,logs,stop,logout}"
+    assert "automation" not in parser.format_usage()
+    assert command_action.choices is not None
+    assert set(command_action.choices) == {
+        "setup",
+        "jobs",
+        "run",
+        "logs",
+        "stop",
+        "logout",
+        "automation",
+    }
+
+
+def test_handle_run_calls_run_assigned_without_manual_confirmation(monkeypatch, capsys):
+    calls = []
+    configuration = object()
+    services = SimpleNamespace(
+        operator="operator",
+        github=object(),
+        load_configuration=lambda: configuration,
+        remote=object(),
+    )
+    state = SimpleNamespace(
+        issue=42,
+        attempts=(
+            SimpleNamespace(
+                slurm_job_id="12345",
+                wandb_url="https://wandb.ai/eduLLM/test/runs/issue-42-attempt-1-12345",
+            ),
+        ),
+    )
+
+    def run_assigned(**kwargs):
+        calls.append(kwargs)
+        return state
+
+    monkeypatch.setattr(cli, "run_assigned", run_assigned)
+
+    assert cli.handle_run(services=services) == 0
+    assert len(calls) == 1
+    assert calls[0]["operator"] == "operator"
+    assert calls[0]["github"] is services.github
+    assert calls[0]["load_configuration"] is services.load_configuration
+    assert calls[0]["remote"] is services.remote
+    assert "Submitted Issue #42" in capsys.readouterr().out
+
+
 def test_operator_services_reject_matching_login_with_bot_actor_type(monkeypatch):
     configuration = SimpleNamespace(
         operators=(SimpleNamespace(github="operator", enabled=True),),

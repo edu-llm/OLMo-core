@@ -93,6 +93,21 @@ def test_render_uses_fixed_directives_structured_argv_and_reviewed_worktree(
     assert "WANDB_API_KEY" not in text
 
 
+def test_sbatch_binds_exact_sha_wandb_identity_and_safe_argv(valid_resolved_request):
+    text = render_sbatch(valid_resolved_request)
+    request = valid_resolved_request.request
+
+    assert f"git fetch --no-tags origin {request.commit_sha}" in text
+    assert f'test "$(git rev-parse HEAD)" = {request.commit_sha}' in text
+    assert 'WANDB_RUN_ID="${WANDB_RUN_PREFIX}-${SLURM_JOB_ID}"' in text
+    assert (
+        'WANDB_RUN_URL="https://wandb.ai/${WANDB_ENTITY}/${WANDB_PROJECT}' '/runs/${WANDB_RUN_ID}"'
+    ) in text
+    assert request.digest in text
+    assert "eval " not in text
+    assert "WANDB_API_KEY" not in text
+
+
 def test_generic_smoke_renders_every_protected_launcher_and_training_option(
     valid_resolved_request,
 ):
