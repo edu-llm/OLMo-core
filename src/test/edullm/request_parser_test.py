@@ -30,11 +30,10 @@ def test_issue_body_renderer_round_trips_the_authoritative_parser():
     rendered = issue_body_from_fields(fields)
 
     assert fields_from_markdown(rendered) == fields
-    assert parse_issue(
-        rendered, issue_number=42, requester="student"
-    ).canonical_json() == parse_issue(
-        original, issue_number=42, requester="student"
-    ).canonical_json()
+    assert (
+        parse_issue(rendered, issue_number=42, requester="student").canonical_json()
+        == parse_issue(original, issue_number=42, requester="student").canonical_json()
+    )
 
 
 def test_issue_body_renderer_rejects_missing_extra_and_non_string_fields():
