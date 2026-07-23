@@ -37,11 +37,18 @@ def test_generic_smoke_uses_canonical_training_command():
 
     assert "torchrun --standalone --nproc-per-node=1" in text
     assert 'HARD_STOP_STEPS="${HARD_STOP_STEPS:-20}"' in text
-    assert 'SAVE_FOLDER="$EDULLM_SCRATCH/runs/$RUN_NAME"' in text
+    assert 'SAVE_FOLDER="${SAVE_FOLDER:-$EDULLM_SCRATCH/runs/$RUN_NAME}"' in text
     assert '--save-folder="$SAVE_FOLDER"' in text
     assert '--work-dir="$EDULLM_SCRATCH/cache/$RUN_NAME"' in text
     for argument in expected_arguments:
         assert argument in text
+
+
+def test_resume_uses_stable_save_folder_and_wandb_id():
+    text = Path("src/scripts/orcd/run_generic_smoke.sh").read_text()
+    assert 'SAVE_FOLDER="${SAVE_FOLDER:-' in text
+    assert 'WANDB_RUN_ID="${WANDB_RUN_ID:-$RUN_NAME}"' in text
+    assert "WANDB_RESUME=allow" in text
 
 
 def test_generic_smoke_checkpoint_overrides_build_valid_config(tmp_path):
