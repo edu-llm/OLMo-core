@@ -851,14 +851,20 @@ def _fixed_option_value(value: object, request: JobRequest) -> str:
             unit = value.get("unit")
             if type(steps) is not int or not 1 <= steps <= 100 or unit != "steps":
                 raise JobOperationError("protected duration option is invalid")
-            return f"{{value:{steps},unit:steps}}"
+            return json.dumps({"value": steps, "unit": unit}, separators=(",", ":"))
     raise JobOperationError("protected fixed option is invalid")
 
 
 def _resolve_fixed_arguments(
     profile: Mapping[str, object],
     request: JobRequest,
-) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...],]:
+) -> tuple[
+    tuple[str, ...],
+    tuple[str, ...],
+    tuple[str, ...],
+    tuple[str, ...],
+    tuple[str, ...],
+]:
     launcher_values = profile.get("fixed_launcher_arguments", ())
     option_values = profile.get("fixed_options", {})
     if type(launcher_values) is not tuple or not isinstance(option_values, Mapping):
@@ -1266,6 +1272,10 @@ def _clean_scheduler_text(value: object, name: str) -> str:
 
 
 def _scheduler_state(value: object) -> tuple[str, str]:
+    if type(value) is list:
+        if len(value) != 1 or type(value[0]) is not str:
+            raise JobOperationError("Slurm state is invalid")
+        value = value[0]
     if type(value) is not str:
         raise JobOperationError("Slurm state is invalid")
     normalized = value.partition("+")[0].partition(" ")[0]
