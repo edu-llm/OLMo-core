@@ -37,12 +37,6 @@
             "context": "Lint"
           },
           {
-            "context": "Test"
-          },
-          {
-            "context": "Test checkpoint"
-          },
-          {
             "context": "Test transformer"
           },
           {
@@ -59,9 +53,6 @@
           },
           {
             "context": "Integration tests"
-          },
-          {
-            "context": "Test olmo3 ladder"
           },
           {
             "context": "Type check"

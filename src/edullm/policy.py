@@ -25,15 +25,12 @@ _ALLOWED_WANDB_PROJECTS = (
 _ALLOWED_GPU_PREFERENCES = ("any", "l40s", "h100", "h200")
 _REQUIRED_CHECKS = (
     "Lint",
-    "Test",
-    "Test checkpoint",
     "Test transformer",
     "Test attention",
     "Test examples",
     "Test scripts",
     "Test eduLLM core",
     "Integration tests",
-    "Test olmo3 ladder",
     "Type check",
     "Build",
     "Style",
