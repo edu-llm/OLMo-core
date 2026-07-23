@@ -169,6 +169,7 @@ def test_production_policy_has_reviewed_limits_and_staged_required_checks():
         "Test attention",
         "Test examples",
         "Test scripts",
+        "Test eduLLM core",
         "Integration tests",
         "Test olmo3 ladder",
         "Type check",
@@ -610,8 +611,15 @@ def test_operator_enabled_preserves_explicit_yaml_booleans(tmp_path, enabled):
     assert load_operators(path)[0].enabled is enabled
 
 
-def test_operator_files_keep_production_closed_and_examples_inert():
-    assert load_operators(Path("config/edullm/operators.yaml")) == ()
+def test_operator_files_keep_exact_pilot_operator_and_examples_inert():
+    assert load_operators(Path("config/edullm/operators.yaml")) == (
+        Operator(
+            github="philote-dev",
+            slack_user_id="U0BA7EHAKJR",
+            rotation_order=0,
+            enabled=True,
+        ),
+    )
     examples = load_operators(Path("config/edullm/operators.example.yaml"))
 
     assert [operator.github for operator in examples] == ["alice", "bob", "carol"]
