@@ -50,6 +50,7 @@ DEFAULT_LOG_BYTES = 262_144
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _LOGIN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+_REMOTE_USER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _JOB_ID = re.compile(r"[1-9][0-9]{0,19}\Z")
 _ATTEMPT_ID = re.compile(r"attempt-([1-9][0-9]{0,5})\Z")
 _RUN_ID = re.compile(r"issue-([1-9][0-9]*)-attempt-([1-9][0-9]{0,5})-([1-9][0-9]{0,19})\Z")
@@ -857,7 +858,13 @@ def _fixed_option_value(value: object, request: JobRequest) -> str:
 def _resolve_fixed_arguments(
     profile: Mapping[str, object],
     request: JobRequest,
-) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+) -> tuple[
+    tuple[str, ...],
+    tuple[str, ...],
+    tuple[str, ...],
+    tuple[str, ...],
+    tuple[str, ...],
+]:
     launcher_values = profile.get("fixed_launcher_arguments", ())
     option_values = profile.get("fixed_options", {})
     if type(launcher_values) is not tuple or not isinstance(option_values, Mapping):
@@ -871,10 +878,17 @@ def _resolve_fixed_arguments(
     arguments: list[str] = []
     names: list[str] = []
     derived: list[str] = []
+    wandb_tags: tuple[str, ...] = ()
     for name, value in option_values.items():
         if type(name) is not str or _FIXED_OPTION_NAME.fullmatch(name) is None or name in names:
             raise JobOperationError("protected fixed option name is invalid")
         names.append(name)
+        if name == "trainer.callbacks.wandb.tags":
+            if type(value) is not tuple:
+                raise JobOperationError("protected W&B tags are invalid")
+            _fixed_option_value(value, request)
+            wandb_tags = tuple(cast(Sequence[str], value))
+            continue
         if isinstance(value, Mapping) and value.get("type") == "derived_path":
             if (
                 set(value) != {"type", "root_env", "relative"}
@@ -887,7 +901,7 @@ def _resolve_fixed_arguments(
             continue
         rendered = _fixed_option_value(value, request)
         arguments.append(f"--{name}={rendered}")
-    return launcher, tuple(arguments), tuple(names), tuple(derived)
+    return launcher, tuple(arguments), tuple(names), tuple(derived), wandb_tags
 
 
 def build_resolved_request(
@@ -904,7 +918,7 @@ def build_resolved_request(
     if type(model_identity) is not str or type(kinds) not in {tuple, list}:
         raise JobOperationError("protected entrypoint profile is invalid")
     request = snapshot.request
-    launcher, fixed, fixed_names, derived = _resolve_fixed_arguments(profile, request)
+    launcher, fixed, fixed_names, derived, wandb_tags = _resolve_fixed_arguments(profile, request)
     return ResolvedRequest(
         request=request,
         operator=snapshot.operator,
@@ -923,6 +937,7 @@ def build_resolved_request(
         fixed_arguments=fixed,
         fixed_option_names=fixed_names,
         derived_path_options=derived,
+        fixed_wandb_tags=wandb_tags,
     )
 
 
@@ -1075,6 +1090,7 @@ def _receipt_matches(receipt: SubmissionReceipt, spec: SubmissionSpec) -> bool:
         and receipt.request_digest == spec.request_digest
         and receipt.attempt_number == spec.attempt_number
         and receipt.operator == spec.operator
+        and receipt.remote_user == spec.remote_user
         and receipt.script_sha256 == spec.script_sha256
         and receipt.manifest_sha256 == spec.manifest_sha256
     )
@@ -1139,11 +1155,15 @@ def run_assigned(
         attempt_number = 1
     resolved = build_resolved_request(first, attempt_number=attempt_number)
     script = render_sbatch(resolved)
+    remote_user = getattr(remote, "remote_user", None)
+    if type(remote_user) is not str or _REMOTE_USER.fullmatch(remote_user) is None:
+        raise JobOperationError("trusted remote user identity is unavailable")
     spec = SubmissionSpec(
         issue=issue_number,
         request_digest=first.request_digest,
         attempt_number=attempt_number,
         operator=operator,
+        remote_user=remote_user,
         script_sha256=hashlib.sha256(script.encode("utf-8")).hexdigest(),
         manifest_uri=first.request.data_manifest,
         manifest_sha256=first.request.data_manifest_sha256,

@@ -113,6 +113,7 @@ class ResolvedRequest:
     fixed_arguments: tuple[str, ...] = ()
     fixed_option_names: tuple[str, ...] = ()
     derived_path_options: tuple[str, ...] = ()
+    fixed_wandb_tags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

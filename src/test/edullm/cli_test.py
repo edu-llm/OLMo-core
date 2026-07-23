@@ -1538,6 +1538,58 @@ def test_operator_services_reject_matching_login_with_bot_actor_type(monkeypatch
         cli._load_operator_services()
 
 
+def test_operator_services_carry_private_orcd_user_separately_from_github_login(monkeypatch):
+    configuration = SimpleNamespace(
+        operators=(SimpleNamespace(github="github-operator", enabled=True),),
+        reviewers=frozenset({"team-lead"}),
+    )
+    document = {
+        "environment_fingerprint": "a" * 64,
+        "github": "github-operator",
+        "orcd_username": "orcd-user",
+        "remote_repo_root": "$HOME/OLMo-core",
+        "scratch": "$HOME/orcd/scratch/edullm",
+        "version": 1,
+        "wandb_username": "wandb-user",
+    }
+    local_results = iter(
+        [
+            subprocess.CompletedProcess([], 0, "github-operator\n", ""),
+            subprocess.CompletedProcess([], 0, "token\n", ""),
+        ]
+    )
+    captured = {}
+
+    class HumanClient:
+        def __init__(self, token, repository):
+            assert token == "token"
+            assert repository == "edu-llm/OLMo-core"
+
+        @staticmethod
+        def get(path):
+            assert path == "/user"
+            return {"login": "github-operator", "type": "User"}
+
+    class SubmissionRemote:
+        def __init__(self, ssh_client, *, remote_user):
+            captured["ssh_client"] = ssh_client
+            captured["remote_user"] = remote_user
+
+    ssh_client = object()
+    monkeypatch.setattr(cli, "load_gate_configuration", lambda root: configuration)
+    monkeypatch.setattr(cli, "_read_operator_document", lambda path: document)
+    monkeypatch.setattr(cli, "_run_local", lambda *args: next(local_results))
+    monkeypatch.setattr(cli, "GitHubClient", HumanClient)
+    monkeypatch.setattr(cli, "SSHClient", lambda: ssh_client)
+    monkeypatch.setattr(cli, "SSHSubmissionRemote", SubmissionRemote)
+
+    services = cli._load_operator_services()
+
+    assert services.operator == "github-operator"
+    assert services.remote_user == "orcd-user"
+    assert captured == {"ssh_client": ssh_client, "remote_user": "orcd-user"}
+
+
 def test_public_parser_has_complete_arguments_without_task_7_behavior():
     parser = cli.build_parser()
 

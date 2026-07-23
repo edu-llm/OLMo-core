@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import pwd
+import shlex
 import stat
 import subprocess
 import threading
@@ -28,6 +31,7 @@ from edullm.slurm import (
 from edullm.validation import validate_request
 
 NOW = datetime(2026, 7, 23, 13, 0, 0, tzinfo=timezone.utc)
+REMOTE_USER = pwd.getpwuid(os.geteuid()).pw_name
 
 
 def _spec(valid_resolved_request, script: str) -> SubmissionSpec:
@@ -37,6 +41,7 @@ def _spec(valid_resolved_request, script: str) -> SubmissionSpec:
         request_digest=request.digest,
         attempt_number=1,
         operator=valid_resolved_request.operator,
+        remote_user=REMOTE_USER,
         script_sha256=hashlib.sha256(script.encode()).hexdigest(),
         manifest_uri=request.data_manifest,
         manifest_sha256=request.data_manifest_sha256,
@@ -139,7 +144,6 @@ def test_generic_smoke_renders_every_protected_launcher_and_training_option(
         "trainer.callbacks.wandb.entity=eduLLM",
         "trainer.callbacks.wandb.project=test",
         "trainer.callbacks.wandb.group=skill-dag-v1",
-        'trainer.callbacks.wandb.tags=["orcd","generic-smoke","olmo2-190m"]',
     )
     for argument in expected:
         assert argument in text
@@ -150,6 +154,71 @@ def test_generic_smoke_renders_every_protected_launcher_and_training_option(
     assert '"--work-dir=$EDULLM_RUN_DIR"' in text
 
 
+def test_generic_smoke_merges_static_and_dynamic_audit_tags_once_shell_safely(
+    valid_resolved_request,
+):
+    policy = load_policy(Path("config/edullm/policy.yaml"))
+    request = replace(
+        valid_resolved_request.request,
+        entrypoint_profile="generic-smoke",
+        script_path="src/examples/llm/train.py",
+        launcher="torchrun",
+        argv=("generic-run",),
+        data_manifest="builtin://generic-smoke-v1",
+        data_manifest_sha256=BUILTIN_GENERIC_SMOKE_SHA256,
+        wandb_project="test",
+    )
+    snapshot = SubmissionGateSnapshot(
+        issue=request.issue_number,
+        request=request,
+        request_digest=request.digest,
+        operator="operator",
+        validated_at=NOW,
+        status_comment_id=1,
+        assignment_comment_id=2,
+        assignment_binding="b" * 64,
+        assignment_version=0,
+        config_digest="c" * 64,
+        lifecycle=None,
+        profile=policy.entrypoints["generic-smoke"],
+        repository_url=policy.repository_url,
+        scratch_root=policy.scratch_root,
+        slurm_partition=policy.slurm_partition,
+        slurm_memory=policy.slurm_memory,
+        slurm_cpus_per_gpu=policy.slurm_cpus_per_gpu,
+    )
+
+    text = render_sbatch(build_resolved_request(snapshot, attempt_number=1))
+    command_line = next(line for line in text.splitlines() if line.startswith("TRAIN_COMMAND=("))
+    command = command_line.removeprefix("TRAIN_COMMAND=(").removesuffix(")")
+    tokens = shlex.split(command)
+    tag_arguments = [
+        token for token in tokens if token.startswith("--trainer.callbacks.wandb.tags=")
+    ]
+
+    assert len(tag_arguments) == 1
+    tags_json = tag_arguments[0].split("=", 1)[1]
+    tags = json.loads(tags_json)
+    assert tags == [
+        "orcd",
+        "generic-smoke",
+        "olmo2-190m",
+        "issue-42",
+        "attempt-1",
+        "natural",
+        "l40s",
+        "engaging",
+        request.commit_sha,
+        request.commit_sha[:12],
+        f"seed-{request.seed}",
+        request.digest,
+        request.data_manifest_sha256,
+    ]
+    assert tag_arguments[0] == (
+        "--trainer.callbacks.wandb.tags=" + json.dumps(tags, separators=(",", ":"))
+    )
+
+
 @pytest.mark.parametrize(
     "override",
     [
@@ -158,6 +227,7 @@ def test_generic_smoke_renders_every_protected_launcher_and_training_option(
         "--save-folder=/tmp/escape",
         "--trainer.hard_stop={value:200,unit:steps}",
         "--trainer.callbacks.wandb.project=other",
+        '--trainer.callbacks.wandb.tags=["requester-controlled"]',
     ],
 )
 def test_generic_smoke_rejects_researcher_overrides_of_protected_options(
@@ -639,7 +709,7 @@ def test_failed_receipt_persistence_recovers_one_exact_authoritative_job_without
         calls.append(list(argv))
         assert argv[0] == "sacct"
         identity = f"edullm-{key}"
-        output = f"12345|{identity}|PENDING|operator|edullm:{key}|" "2026-07-23T13:00:00\n"
+        output = f"12345|{identity}|PENDING|{REMOTE_USER}|edullm:{key}|" "2026-07-23T13:00:00\n"
         return subprocess.CompletedProcess(argv, 0, output, "")
 
     receipt = submission_transaction(
@@ -661,19 +731,151 @@ def test_failed_receipt_persistence_recovers_one_exact_authoritative_job_without
     )
 
 
+def test_recovery_uses_trusted_orcd_user_separately_from_github_operator(
+    tmp_path,
+    valid_resolved_request,
+):
+    script = render_sbatch(valid_resolved_request)
+    spec = replace(
+        _spec(valid_resolved_request, script),
+        operator="github-operator",
+        remote_user="orcd-user",
+    )
+    key = build_submission_key(spec.issue, spec.request_digest, 1, spec.operator)
+    stage_submission(tmp_path, key, script)
+    intent = tmp_path / key / "intent.json"
+    intent.write_text(spec.canonical_json(), encoding="utf-8")
+    intent.chmod(0o600)
+    calls: list[list[str]] = []
+
+    def discover(argv, **kwargs):
+        calls.append(list(argv))
+        identity = f"edullm-{key}"
+        output = f"12345|{identity}|PENDING|orcd-user|edullm:{key}|" "2026-07-23T13:00:00\n"
+        return subprocess.CompletedProcess(argv, 0, output, "")
+
+    receipt = submission_transaction(
+        tmp_path,
+        key,
+        spec,
+        sbatch_runner=discover,
+        manifest_verifier=lambda *args: None,
+        remote_user_getter=lambda: "orcd-user",
+        now=NOW,
+    )
+
+    assert receipt.operator == "github-operator"
+    assert receipt.remote_user == "orcd-user"
+    assert len([argv for argv in calls if argv[0] == "sbatch"]) == 0
+    assert len([argv for argv in calls if argv[0] == "sacct"]) == 1
+
+
+def test_recovery_identity_switches_and_missing_identity_fail_without_sbatch(
+    tmp_path,
+    valid_resolved_request,
+):
+    script = render_sbatch(valid_resolved_request)
+    spec = replace(
+        _spec(valid_resolved_request, script),
+        operator="github-operator",
+        remote_user="orcd-user",
+    )
+    key = build_submission_key(spec.issue, spec.request_digest, 1, spec.operator)
+    calls: list[list[str]] = []
+
+    def unexpected_runner(argv, **kwargs):
+        calls.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, "99999\n", "")
+
+    for identity_name, authenticated_user in (("wrong-user", "other-user"), ("missing", "")):
+        state_root = tmp_path / identity_name
+        stage_submission(state_root, key, script)
+        intent = state_root / key / "intent.json"
+        intent.write_text(spec.canonical_json(), encoding="utf-8")
+        intent.chmod(0o600)
+        with pytest.raises(SubmissionError, match="remote user"):
+            submission_transaction(
+                state_root,
+                key,
+                spec,
+                sbatch_runner=unexpected_runner,
+                remote_user_getter=lambda user=authenticated_user: user,
+                now=NOW,
+            )
+
+    switched_user_root = tmp_path / "switched-user"
+    stage_submission(switched_user_root, key, script)
+    switched_intent = switched_user_root / key / "intent.json"
+    switched_intent.write_text(spec.canonical_json(), encoding="utf-8")
+    switched_intent.chmod(0o600)
+    with pytest.raises(SubmissionError, match="intent"):
+        submission_transaction(
+            switched_user_root,
+            key,
+            replace(spec, remote_user="other-user"),
+            sbatch_runner=unexpected_runner,
+            remote_user_getter=lambda: "other-user",
+            now=NOW,
+        )
+
+    mismatched_receipt_root = tmp_path / "mismatched-receipt"
+    stage_submission(mismatched_receipt_root, key, script)
+    mismatched_receipt = SubmissionReceipt(
+        issue=spec.issue,
+        request_digest=spec.request_digest,
+        attempt_number=spec.attempt_number,
+        operator=spec.operator,
+        remote_user="other-user",
+        script_sha256=spec.script_sha256,
+        manifest_sha256=spec.manifest_sha256,
+        slurm_job_id="12345",
+        log_path=str(tmp_path / "logs/issue-42-attempt-1-12345.log"),
+        submitted_at=NOW,
+    )
+    receipt_path = mismatched_receipt_root / key / "receipt.json"
+    receipt_path.write_text(mismatched_receipt.canonical_json(), encoding="utf-8")
+    receipt_path.chmod(0o600)
+    with pytest.raises(SubmissionError, match="receipt"):
+        submission_transaction(
+            mismatched_receipt_root,
+            key,
+            spec,
+            sbatch_runner=unexpected_runner,
+            remote_user_getter=lambda: "orcd-user",
+            now=NOW,
+        )
+
+    switched_operator_root = tmp_path / "switched-operator"
+    stage_submission(switched_operator_root, key, script)
+    switched_operator_intent = switched_operator_root / key / "intent.json"
+    switched_operator_intent.write_text(spec.canonical_json(), encoding="utf-8")
+    switched_operator_intent.chmod(0o600)
+    with pytest.raises(SubmissionError, match="key"):
+        submission_transaction(
+            switched_operator_root,
+            key,
+            replace(spec, operator="other-operator"),
+            sbatch_runner=unexpected_runner,
+            remote_user_getter=lambda: "orcd-user",
+            now=NOW,
+        )
+
+    assert calls == []
+
+
 @pytest.mark.parametrize(
     "output",
     [
         "",
         (
-            "12345|{identity}|PENDING|operator|edullm:{key}|2026-07-23T13:00:00\n"
-            "12346|{identity}|PENDING|operator|edullm:{key}|2026-07-23T13:00:01\n"
+            "12345|{identity}|PENDING|{user}|edullm:{key}|2026-07-23T13:00:00\n"
+            "12346|{identity}|PENDING|{user}|edullm:{key}|2026-07-23T13:00:01\n"
         ),
         "malformed\n",
-        "12345|wrong-name|PENDING|operator|edullm:{key}|2026-07-23T13:00:00\n",
+        "12345|wrong-name|PENDING|{user}|edullm:{key}|2026-07-23T13:00:00\n",
         "12345|{identity}|PENDING|other|edullm:{key}|2026-07-23T13:00:00\n",
-        "12345|{identity}|PENDING|operator|wrong-comment|2026-07-23T13:00:00\n",
-        "12345.batch|{identity}|PENDING|operator|edullm:{key}|2026-07-23T13:00:00\n",
+        "12345|{identity}|PENDING|{user}|wrong-comment|2026-07-23T13:00:00\n",
+        "12345.batch|{identity}|PENDING|{user}|edullm:{key}|2026-07-23T13:00:00\n",
     ],
 )
 def test_ambiguous_intent_never_resubmits_for_zero_multiple_or_mismatched_evidence(
@@ -689,7 +891,7 @@ def test_ambiguous_intent_never_resubmits_for_zero_multiple_or_mismatched_eviden
     intent.write_text(spec.canonical_json(), encoding="utf-8")
     intent.chmod(0o600)
     calls: list[list[str]] = []
-    rendered_output = output.format(identity=f"edullm-{key}", key=key)
+    rendered_output = output.format(identity=f"edullm-{key}", key=key, user=REMOTE_USER)
 
     def discover(argv, **kwargs):
         calls.append(list(argv))
@@ -747,6 +949,7 @@ def test_receipt_parser_rejects_noncanonical_or_malformed_records(mutator):
         request_digest="a" * 64,
         attempt_number=1,
         operator="operator",
+        remote_user=REMOTE_USER,
         script_sha256="b" * 64,
         manifest_sha256="c" * 64,
         slurm_job_id="12345",

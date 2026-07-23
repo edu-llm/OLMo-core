@@ -72,6 +72,7 @@ SETUP_POLL_TIMEOUT_SECONDS = 3600.0
 REMOTE_REPO_ROOT = "$HOME/OLMo-core"
 REMOTE_SCRATCH = "$HOME/orcd/scratch/edullm"
 _GITHUB_LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\Z")
+_ORCD_USERNAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _FINGERPRINT = re.compile(r"[0-9a-f]{64}\Z")
 _JOB_ID = re.compile(r"([0-9]+)(?:;[A-Za-z0-9._-]+)?\Z")
 _TERMINAL_SLURM_STATES = frozenset(
@@ -186,6 +187,7 @@ class OperatorServices:
     """Authenticated local operator dependencies for one focused CLI action."""
 
     operator: str
+    remote_user: str
     github: Any
     root: Path
     remote: Any
@@ -823,6 +825,9 @@ def _load_operator_services() -> OperatorServices:
     operator = document.get("github")
     if type(operator) is not str or operator not in enabled:
         raise JobOperationError("local identity is not an enabled protected operator")
+    remote_user = document.get("orcd_username")
+    if type(remote_user) is not str or _ORCD_USERNAME.fullmatch(remote_user) is None:
+        raise JobOperationError("local ORCD identity is invalid")
     try:
         login = _run_local(
             subprocess.run,
@@ -860,9 +865,10 @@ def _load_operator_services() -> OperatorServices:
     ssh_client = SSHClient()
     return OperatorServices(
         operator=operator,
+        remote_user=remote_user,
         github=github,
         root=root,
-        remote=SSHSubmissionRemote(ssh_client),
+        remote=SSHSubmissionRemote(ssh_client, remote_user=remote_user),
         slurm=SSHSlurm(ssh_client),
     )
 

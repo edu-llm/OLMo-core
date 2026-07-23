@@ -10,6 +10,7 @@ import fcntl
 import hashlib
 import json
 import os
+import pwd
 import re
 import secrets
 import shlex
@@ -40,6 +41,7 @@ MAX_SCRIPT_BYTES = 1_048_576
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _SHA = re.compile(r"[0-9a-f]{40}\Z")
 _LOGIN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+_REMOTE_USER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _JOB_ID = re.compile(r"[1-9][0-9]{0,19}\Z")
 _SAFE_SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,99}\Z")
 _MODEL = re.compile(r"[a-z0-9][a-z0-9._-]{0,99}\Z")
@@ -79,6 +81,7 @@ _SUBMISSION_FIELDS = frozenset(
         "manifest_sha256",
         "manifest_uri",
         "operator",
+        "remote_user",
         "request_digest",
         "script_sha256",
     }
@@ -90,6 +93,7 @@ _RECEIPT_FIELDS = frozenset(
         "log_path",
         "manifest_sha256",
         "operator",
+        "remote_user",
         "request_digest",
         "script_sha256",
         "slurm_job_id",
@@ -111,6 +115,7 @@ class SubmissionSpec:
     request_digest: str
     attempt_number: int
     operator: str
+    remote_user: str
     script_sha256: str
     manifest_uri: str
     manifest_sha256: str
@@ -131,6 +136,7 @@ class SubmissionReceipt:
     request_digest: str
     attempt_number: int
     operator: str
+    remote_user: str
     script_sha256: str
     manifest_sha256: str
     slurm_job_id: str
@@ -146,6 +152,7 @@ class SubmissionReceipt:
             "log_path": self.log_path,
             "manifest_sha256": self.manifest_sha256,
             "operator": self.operator,
+            "remote_user": self.remote_user,
             "request_digest": self.request_digest,
             "script_sha256": self.script_sha256,
             "slurm_job_id": self.slurm_job_id,
@@ -278,6 +285,7 @@ def _validate_resolved(resolved: object) -> tuple[int, list[str]]:
         or type(resolved.fixed_arguments) is not tuple
         or type(resolved.fixed_option_names) is not tuple
         or type(resolved.derived_path_options) is not tuple
+        or type(resolved.fixed_wandb_tags) is not tuple
     ):
         raise SubmissionError("protected fixed arguments are invalid")
     launcher_arguments = [_safe_argument(value) for value in resolved.fixed_launcher_arguments]
@@ -291,6 +299,9 @@ def _validate_resolved(resolved: object) -> tuple[int, list[str]]:
     elif launcher_arguments:
         raise SubmissionError("protected launcher arguments are invalid")
     fixed_arguments = [_safe_argument(value) for value in resolved.fixed_arguments]
+    fixed_wandb_tags = [_safe_argument(value) for value in resolved.fixed_wandb_tags]
+    if len(set(fixed_wandb_tags)) != len(fixed_wandb_tags):
+        raise SubmissionError("protected W&B tags are invalid")
     names = list(resolved.fixed_option_names)
     derived = list(resolved.derived_path_options)
     if (
@@ -307,7 +318,10 @@ def _validate_resolved(resolved: object) -> tuple[int, list[str]]:
         for argument in fixed_arguments
         if "=" in argument
     }
-    if rendered_names | set(derived) != set(names) or len(rendered_names) != len(fixed_arguments):
+    special_names = {"trainer.callbacks.wandb.tags"} if fixed_wandb_tags else set()
+    if rendered_names | set(derived) | special_names != set(names) or len(rendered_names) != len(
+        fixed_arguments
+    ):
         raise SubmissionError("protected fixed options are invalid")
     return attempt, arguments
 
@@ -328,7 +342,7 @@ def render_sbatch(resolved: ResolvedRequest) -> str:
     data_kind_arguments = " ".join(
         f"--allowed-kind {shlex.quote(kind)}" for kind in resolved.allowed_data_kinds
     )
-    tags = [
+    dynamic_tags = [
         f"issue-{request.issue_number}",
         f"attempt-{attempt}",
         request.entrypoint_profile,
@@ -336,11 +350,13 @@ def render_sbatch(resolved: ResolvedRequest) -> str:
         request.gpu_preference,
         "engaging",
         request.commit_sha,
+        request.commit_sha[:12],
         f"seed-{request.seed}",
         request.digest,
         request.data_manifest_sha256,
         resolved.model_identity,
     ]
+    tags = list(dict.fromkeys((*resolved.fixed_wandb_tags, *dynamic_tags)))
     fixed_names = set(resolved.fixed_option_names)
     callback_values = {
         "trainer.callbacks.wandb.enabled": "true",
@@ -350,7 +366,9 @@ def render_sbatch(resolved: ResolvedRequest) -> str:
         "trainer.callbacks.wandb.tags": json.dumps(tags, sort_keys=True, separators=(",", ":")),
     }
     callback_arguments = [
-        f"--{name}={value}" for name, value in callback_values.items() if name not in fixed_names
+        f"--{name}={value}"
+        for name, value in callback_values.items()
+        if name not in fixed_names or name == "trainer.callbacks.wandb.tags"
     ]
     callback_arguments.append(f"--trainer.callbacks.wandb.notes=request_digest:{request.digest}")
     command_arguments = [
@@ -485,6 +503,7 @@ def _validate_spec(spec: object) -> None:
     if not isinstance(spec, SubmissionSpec):
         raise SubmissionError("submission spec is invalid")
     build_submission_key(spec.issue, spec.request_digest, spec.attempt_number, spec.operator)
+    _safe_text(spec.remote_user, _REMOTE_USER, "remote user")
     _safe_text(spec.script_sha256, _SHA256, "script digest")
     _safe_text(spec.manifest_sha256, _SHA256, "manifest digest")
     if (
@@ -551,6 +570,7 @@ def _validate_receipt(receipt: object) -> None:
         receipt.attempt_number,
         receipt.operator,
     )
+    _safe_text(receipt.remote_user, _REMOTE_USER, "remote user")
     _safe_text(receipt.script_sha256, _SHA256, "script digest")
     _safe_text(receipt.manifest_sha256, _SHA256, "manifest digest")
     _safe_text(receipt.slurm_job_id, _JOB_ID, "Slurm job ID")
@@ -584,6 +604,7 @@ def parse_submission_receipt(text: str) -> SubmissionReceipt:
         request_digest=cast(str, data["request_digest"]),
         attempt_number=cast(int, data["attempt_number"]),
         operator=cast(str, data["operator"]),
+        remote_user=cast(str, data["remote_user"]),
         script_sha256=cast(str, data["script_sha256"]),
         manifest_sha256=cast(str, data["manifest_sha256"]),
         slurm_job_id=cast(str, data["slurm_job_id"]),
@@ -771,6 +792,7 @@ def _receipt_matches_spec(receipt: SubmissionReceipt, spec: SubmissionSpec) -> b
         and receipt.request_digest == spec.request_digest
         and receipt.attempt_number == spec.attempt_number
         and receipt.operator == spec.operator
+        and receipt.remote_user == spec.remote_user
         and receipt.script_sha256 == spec.script_sha256
         and receipt.manifest_sha256 == spec.manifest_sha256
     )
@@ -844,7 +866,7 @@ def _discover_submission_receipt(
         _JOB_ID.fullmatch(job_id) is None
         or job_name != name
         or state not in _RECOVERABLE_SLURM_STATES
-        or user != spec.operator
+        or user != spec.remote_user
         or job_comment != comment
     ):
         raise SubmissionError("submission recovery evidence is invalid")
@@ -856,12 +878,20 @@ def _discover_submission_receipt(
         request_digest=spec.request_digest,
         attempt_number=spec.attempt_number,
         operator=spec.operator,
+        remote_user=spec.remote_user,
         script_sha256=spec.script_sha256,
         manifest_sha256=spec.manifest_sha256,
         slurm_job_id=job_id,
         log_path=str(cwd / spec.log_pattern.replace("%j", job_id)),
         submitted_at=submitted_at,
     )
+
+
+def _effective_remote_user() -> str:
+    try:
+        return pwd.getpwuid(os.geteuid()).pw_name
+    except (KeyError, OSError):
+        raise SubmissionError("authenticated remote user is unavailable") from None
 
 
 def submission_transaction(
@@ -871,6 +901,7 @@ def submission_transaction(
     *,
     sbatch_runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
     manifest_verifier: Callable[..., object] = verify_manifest,
+    remote_user_getter: Callable[[], str] = _effective_remote_user,
     now: datetime | None = None,
 ) -> SubmissionReceipt:
     """
@@ -881,6 +912,18 @@ def submission_transaction(
     """
     del manifest_verifier  # Remote preparation verifies the manifest before the final GitHub gate.
     _validate_spec(spec)
+    try:
+        authenticated_remote_user = remote_user_getter()
+    except SubmissionError:
+        raise
+    except Exception:
+        raise SubmissionError("authenticated remote user is unavailable") from None
+    if (
+        type(authenticated_remote_user) is not str
+        or _REMOTE_USER.fullmatch(authenticated_remote_user) is None
+        or authenticated_remote_user != spec.remote_user
+    ):
+        raise SubmissionError("authenticated remote user does not match submission identity")
     expected_key = build_submission_key(
         spec.issue,
         spec.request_digest,
@@ -1003,6 +1046,7 @@ def submission_transaction(
             request_digest=spec.request_digest,
             attempt_number=spec.attempt_number,
             operator=spec.operator,
+            remote_user=spec.remote_user,
             script_sha256=spec.script_sha256,
             manifest_sha256=spec.manifest_sha256,
             slurm_job_id=output,
@@ -1032,20 +1076,29 @@ class SSHSubmissionRemote:
         self,
         ssh_client: Any | None = None,
         *,
+        remote_user: str | None = None,
         local_recovery_root: Path | None = None,
     ) -> None:
         from edullm.ssh import SSHClient
 
         self.ssh_client = SSHClient() if ssh_client is None else ssh_client
+        self.remote_user = (
+            None if remote_user is None else _safe_text(remote_user, _REMOTE_USER, "remote user")
+        )
         self.local_recovery_root = (
             Path.home() / ".config" / "edullm" / "recovery"
             if local_recovery_root is None
             else local_recovery_root
         )
 
+    def _validate_identity(self, spec: SubmissionSpec) -> None:
+        if self.remote_user is None or spec.remote_user != self.remote_user:
+            raise SubmissionError("remote submission user identity is invalid")
+
     def stage(self, key: str, script: str, spec: SubmissionSpec) -> None:
         """Upload one private script through the constrained stdin helper."""
         _validate_spec(spec)
+        self._validate_identity(spec)
         expected = build_submission_key(
             spec.issue,
             spec.request_digest,
@@ -1075,6 +1128,7 @@ class SSHSubmissionRemote:
     def verify_manifest(self, spec: SubmissionSpec) -> None:
         """Reverify the complete remote manifest immediately before submission."""
         _validate_spec(spec)
+        self._validate_identity(spec)
         arguments = [
             "python",
             "-m",
@@ -1099,6 +1153,7 @@ class SSHSubmissionRemote:
     def submit(self, key: str, spec: SubmissionSpec) -> SubmissionReceipt:
         """Run or reconcile the single remote transaction and save recovery state."""
         _validate_spec(spec)
+        self._validate_identity(spec)
         expected = build_submission_key(
             spec.issue,
             spec.request_digest,
@@ -1154,6 +1209,7 @@ def submit(
     resolved: ResolvedRequest,
     *,
     ssh_client: Any | None = None,
+    remote_user: str | None = None,
     local_recovery_root: Path | None = None,
 ) -> str:
     """
@@ -1170,6 +1226,7 @@ def submit(
         request_digest=request.digest,
         attempt_number=attempt,
         operator=resolved.operator,
+        remote_user=cast(str, remote_user),
         script_sha256=hashlib.sha256(script.encode("utf-8")).hexdigest(),
         manifest_uri=request.data_manifest,
         manifest_sha256=request.data_manifest_sha256,
@@ -1184,6 +1241,7 @@ def submit(
     )
     remote = SSHSubmissionRemote(
         ssh_client,
+        remote_user=remote_user,
         local_recovery_root=local_recovery_root,
     )
     remote.stage(key, script, spec)
@@ -1203,6 +1261,7 @@ def _spec_from_payload(payload: object) -> SubmissionSpec:
         request_digest=cast(str, data["request_digest"]),
         attempt_number=cast(int, data["attempt_number"]),
         operator=cast(str, data["operator"]),
+        remote_user=cast(str, data["remote_user"]),
         script_sha256=cast(str, data["script_sha256"]),
         manifest_uri=cast(str, data["manifest_uri"]),
         manifest_sha256=cast(str, data["manifest_sha256"]),

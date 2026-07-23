@@ -384,9 +384,10 @@ def test_resolved_request_uses_only_protected_model_and_profile_values(valid_req
 
 
 class StatefulRemote:
-    def __init__(self, mutate=None, verify_mutate=None):
+    def __init__(self, mutate=None, verify_mutate=None, remote_user="orcd-user"):
         self.mutate = mutate
         self.verify_mutate = verify_mutate
+        self.remote_user = remote_user
         self.staged = []
         self.submissions = []
         self.verified = []
@@ -408,6 +409,7 @@ class StatefulRemote:
             request_digest=spec.request_digest,
             attempt_number=spec.attempt_number,
             operator=spec.operator,
+            remote_user=spec.remote_user,
             script_sha256=spec.script_sha256,
             manifest_sha256=spec.manifest_sha256,
             slurm_job_id="12345",
@@ -434,9 +436,31 @@ def test_run_publishes_lifecycle_as_the_authenticated_operator_user(valid_reques
 
     lifecycle_comments = [comment for comment in github.comments if JOB_MARKER in comment.body]
     assert state.current_state == "submitted"
+    assert remote.submissions[0][1].remote_user == "orcd-user"
     assert [(comment.author, comment.author_is_bot) for comment in lifecycle_comments] == [
         ("operator", False)
     ]
+
+
+def test_run_fails_before_staging_without_trusted_remote_user_identity(valid_request):
+    github = StatefulGitHub(
+        valid_request,
+        write_author="operator",
+        write_author_is_bot=False,
+    )
+    remote = StatefulRemote(remote_user=None)
+
+    with pytest.raises(JobOperationError, match="remote user identity"):
+        run_assigned(
+            operator="operator",
+            github=github,
+            load_configuration=_config,
+            remote=remote,
+            now=NOW,
+        )
+
+    assert remote.staged == []
+    assert remote.submissions == []
 
 
 @pytest.mark.parametrize(
