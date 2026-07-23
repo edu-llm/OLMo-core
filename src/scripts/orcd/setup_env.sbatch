@@ -7,6 +7,7 @@
 #SBATCH -o /dev/null
 #SBATCH -e /dev/null
 set -euo pipefail
+umask 077
 
 : "${EDULLM_REPO_ROOT:?export EDULLM_REPO_ROOT before sbatch}"
 : "${EDULLM_COMMIT_SHA:?export EDULLM_COMMIT_SHA before sbatch}"
@@ -37,3 +38,5 @@ print(f"Torch: {torch.__version__}")
 print(f"W&B: {wandb.__version__}")
 print(f"OLMo-core: {VERSION}")
 PY
+printf '%s\n' "$EDULLM_COMMIT_SHA" > "$EDULLM_VENV/.edullm-commit"
+chmod 600 "$EDULLM_VENV/.edullm-commit"

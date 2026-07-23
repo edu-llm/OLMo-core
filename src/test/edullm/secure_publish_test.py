@@ -96,6 +96,31 @@ def test_compare_and_publish_succeeds_for_new_and_existing_target(tmp_path, exis
     assert not list(parent.glob(".target.edullm-recovery-*"))
 
 
+def test_compare_and_publish_uses_descriptor_chmod_for_recovery_directory(tmp_path, monkeypatch):
+    publish, parent, directory_fd, expected, prepared = _prepared_publish(tmp_path)
+
+    def unsupported_path_chmod(*args, **kwargs):
+        raise ValueError("dir_fd and follow_symlinks are incompatible")
+
+    monkeypatch.setattr(publish.os, "chmod", unsupported_path_chmod)
+    try:
+        publish.compare_and_publish(
+            directory_fd,
+            parent,
+            publish.directory_identity(directory_fd),
+            "target",
+            "temporary",
+            expected,
+            prepared,
+        )
+    finally:
+        os.close(directory_fd)
+
+    assert (parent / "target").read_bytes() == b"proposed"
+    assert stat.S_IMODE((parent / "target").stat().st_mode) == 0o600
+    assert not list(parent.glob(".target.edullm-recovery-*"))
+
+
 def test_compare_and_publish_restores_content_edited_at_publish_boundary(tmp_path, monkeypatch):
     publish, parent, directory_fd, expected, prepared = _prepared_publish(tmp_path)
     concurrent_fd = os.open("target", os.O_WRONLY, dir_fd=directory_fd)

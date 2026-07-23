@@ -635,6 +635,24 @@ def test_remote_helper_atomically_creates_mode_0600_file(tmp_path, target_name):
     assert not list(target.parent.glob(".edullm-write-*"))
 
 
+def test_remote_helper_uses_descriptor_chmod_for_private_directories(tmp_path, monkeypatch):
+    from edullm import ssh_helper
+
+    home = tmp_path / "home"
+    home.mkdir()
+
+    def unsupported_path_chmod(*args, **kwargs):
+        raise ValueError("dir_fd and follow_symlinks are incompatible")
+
+    monkeypatch.setattr(ssh_helper.os, "chmod", unsupported_path_chmod)
+
+    ssh_helper.atomic_write_private(home, "wandb.env", io.BytesIO(b"private-content\n"))
+
+    target = _private_parent(home) / "wandb.env"
+    assert target.read_bytes() == b"private-content\n"
+    assert stat.S_IMODE(target.parent.stat().st_mode) == 0o700
+
+
 @pytest.mark.parametrize("target_name", ["wandb.key", "wandb.env"])
 def test_remote_helper_establishes_exact_mode_before_read_under_umask(tmp_path, target_name):
     from edullm import ssh_helper

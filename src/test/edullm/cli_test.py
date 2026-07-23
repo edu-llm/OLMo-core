@@ -401,7 +401,7 @@ class StatefulSetupSSH:
         elif "findmnt -n -o TARGET" in command:
             label = "scratch"
             result = self._result(label)
-        elif 'test -x "$HOME/venvs/edullm/bin/python"' in command:
+        elif 'test -x "$EDULLM_VENV/bin/python"' in command:
             label = "env-check"
             result = self._result(label, returncode=0 if self.env_ready else 1)
         elif "sbatch --parsable" in command:
@@ -1129,8 +1129,11 @@ def test_environment_readiness_requires_remote_private_write_helper():
     setup_script = Path("src/scripts/orcd/setup_env.sbatch").read_text(encoding="utf-8")
 
     assert 'python" -c "import edullm.ssh_helper"' in cli.ENVIRONMENT_CHECK_SCRIPT
+    assert 'git -C "$EDULLM_REPO_ROOT" rev-parse HEAD' in cli.ENVIRONMENT_CHECK_SCRIPT
+    assert '"$EDULLM_VENV/.edullm-commit"' in cli.ENVIRONMENT_CHECK_SCRIPT
     assert "import torch, wandb, olmo_core, edullm.ssh_helper" in cli.IMPORT_CHECK_SCRIPT
     assert "\nimport edullm.ssh_helper\n" in setup_script
+    assert 'printf \'%s\\n\' "$EDULLM_COMMIT_SHA" > "$EDULLM_VENV/.edullm-commit"' in setup_script
 
 
 @pytest.mark.parametrize(

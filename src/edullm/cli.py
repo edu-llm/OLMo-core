@@ -112,8 +112,14 @@ printf '%s\n' edullm-probe > "$SCRATCH_PROBE"
 rm -f "$SCRATCH_PROBE"
 trap - EXIT"""
 
-ENVIRONMENT_CHECK_SCRIPT = r"""test -x "$HOME/venvs/edullm/bin/python" &&
-"$HOME/venvs/edullm/bin/python" -c "import edullm.ssh_helper" """
+ENVIRONMENT_CHECK_SCRIPT = r"""set -euo pipefail
+EDULLM_REPO_ROOT="$HOME/OLMo-core"
+EDULLM_VENV="$HOME/venvs/edullm"
+test -x "$EDULLM_VENV/bin/python"
+"$EDULLM_VENV/bin/python" -c "import edullm.ssh_helper"
+test -f "$EDULLM_VENV/.edullm-commit"
+test "$(cat "$EDULLM_VENV/.edullm-commit")" = \
+  "$(git -C "$EDULLM_REPO_ROOT" rev-parse HEAD)" """
 
 SUBMIT_ENV_SCRIPT = r"""set -euo pipefail
 EDULLM_REPO_ROOT="$HOME/OLMo-core"

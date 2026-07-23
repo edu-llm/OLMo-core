@@ -151,8 +151,11 @@ def _open_or_create_directory(parent_fd: int, name: str) -> int:
     try:
         descriptor = os.open(name, _DIRECTORY_FLAGS, dir_fd=parent_fd)
     except FileNotFoundError:
-        os.mkdir(name, 0o700, dir_fd=parent_fd)
-        os.chmod(name, 0o700, dir_fd=parent_fd, follow_symlinks=False)
+        previous_umask = os.umask(0o077)
+        try:
+            os.mkdir(name, 0o700, dir_fd=parent_fd)
+        finally:
+            os.umask(previous_umask)
         descriptor = os.open(name, _DIRECTORY_FLAGS, dir_fd=parent_fd)
     try:
         _validate_owned_directory(descriptor)
