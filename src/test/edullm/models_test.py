@@ -704,10 +704,10 @@ operators:
         load_operators(path)
 
 
-def test_package_metadata_includes_edullm_without_a_premature_console_script():
+def test_package_metadata_includes_edullm_with_task_6_console_script():
     metadata = Path("pyproject.toml").read_text(encoding="utf-8")
 
     assert 'requires-python = ">=3.10"' in metadata
     assert 'include = ["olmo_core*", "edullm*"]' in metadata
-    assert "[project.scripts]" not in metadata
-    assert 'edullm = "edullm.cli:main"' not in metadata
+    assert "[project.scripts]" in metadata
+    assert 'edullm = "edullm.cli:main"' in metadata

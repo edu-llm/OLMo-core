@@ -1,7 +1,13 @@
 import inspect
+import stat
+import subprocess
+import tomllib
+from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+import yaml
 
 import edullm.cli as cli
 from edullm.assignment import AssignmentResult
@@ -195,17 +201,20 @@ def test_default_runner_loads_only_tracked_configuration(tmp_path, monkeypatch):
     ]
 
 
-def test_package_does_not_register_user_facing_edullm_console_entrypoint():
-    pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
+def test_package_registers_user_facing_edullm_console_entrypoint():
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
-    assert "[project.scripts]" not in pyproject
-    assert "edullm =" not in pyproject
+    assert pyproject["project"]["scripts"] == {"edullm": "edullm.cli:main"}
+    assert pyproject["project"]["requires-python"] == ">=3.10"
 
 
-def test_main_docstring_documents_all_internal_automation_commands_and_runners():
+def test_main_docstring_documents_public_and_internal_commands_and_runners():
     documentation = inspect.getdoc(cli.main)
 
     assert documentation is not None
+    assert "setup" in documentation
+    assert "jobs" in documentation
+    assert "logout" in documentation
     assert "automation validate" in documentation
     assert "automation assign" in documentation
     assert "automation reminders" in documentation
@@ -316,3 +325,930 @@ def test_assignment_cli_returns_nonzero_for_sanitized_operational_result(command
     assert exit_code == 1
     output = capsys.readouterr()
     assert "automation operation failed" in output.err
+
+
+class StatefulSetupSSH:
+    def __init__(
+        self,
+        events,
+        *,
+        fail_at=None,
+        env_ready=True,
+        states=("COMPLETED",),
+        key_exists=True,
+        existing_key_valid=True,
+        remote_wandb_username="wandb-user",
+    ):
+        self.events = events
+        self.fail_at = fail_at
+        self.env_ready = env_ready
+        self.states = list(states)
+        self.key_exists = key_exists
+        self.existing_key_valid = existing_key_valid
+        self.remote_wandb_username = remote_wandb_username
+        self.writes = []
+        self.remote_wandb_attempts = 0
+
+    def _result(self, label, *, stdout="", returncode=0):
+        self.events.append(label)
+        if self.fail_at == label:
+            returncode = 19
+            stdout = "sensitive captured output"
+        return subprocess.CompletedProcess(["ssh"], returncode, stdout, "sensitive stderr")
+
+    def run_direct(self, username, argv, **kwargs):
+        assert username == "orcd-user"
+        assert argv == ["hostname"]
+        assert kwargs["timeout"] > 0
+        result = self._result("ssh-direct")
+        if result.returncode:
+            raise cli.SSHError("SSH command failed")
+        return result
+
+    def run_remote(self, argv, *, check=True, timeout=30):
+        assert timeout > 0
+        command = " ".join(argv)
+        if "command -v sbatch" in command:
+            label = "tools"
+            result = self._result(label, stdout="host\n/bin/sbatch\n/bin/squeue\n")
+        elif "findmnt -n -o TARGET" in command:
+            label = "scratch"
+            result = self._result(label)
+        elif 'test -x "$HOME/venvs/edullm/bin/python"' in command:
+            label = "env-check"
+            result = self._result(label, returncode=0 if self.env_ready else 1)
+        elif "sbatch --parsable" in command:
+            label = "env-submit"
+            result = self._result(label, stdout="12345\n")
+        elif "sacct -j" in command:
+            label = "sacct"
+            state = self.states.pop(0) if self.states else "PENDING"
+            result = self._result(label, stdout=state + "|\n")
+        elif "import torch, wandb, olmo_core" in command:
+            label = "imports"
+            result = self._result(label)
+        elif "pip freeze --all" in command:
+            label = "fingerprint"
+            result = self._result(label, stdout="a" * 64 + "  -\n")
+        elif 'test -s "$HOME/.config/edullm/wandb.key"' in command:
+            label = "key-check"
+            result = self._result(label, returncode=0 if self.key_exists else 1)
+        elif "api.projects(entity=" in command:
+            label = "remote-wandb"
+            self.remote_wandb_attempts += 1
+            valid = self.existing_key_valid or self.remote_wandb_attempts > 1
+            result = self._result(
+                label,
+                stdout=self.remote_wandb_username + "\n",
+                returncode=0 if valid else 1,
+            )
+        else:
+            raise AssertionError(f"unexpected remote command: {command}")
+        if check and result.returncode:
+            raise cli.SSHError("SSH command failed")
+        return result
+
+    def write_remote(self, path, content, **kwargs):
+        assert kwargs["timeout"] > 0
+        label = "write-key" if path.endswith("wandb.key") else "write-env"
+        self.events.append(label)
+        if self.fail_at == label:
+            raise cli.SSHError("SSH command failed")
+        self.writes.append((path, content))
+
+    def close_master(self):
+        self.events.append("logout")
+        return True
+
+
+class StatefulWandbAPI:
+    def __init__(self, events, *, project_access=True, fail_at=None):
+        self.events = events
+        self.project_access = project_access
+        self.fail_at = fail_at
+
+    @property
+    def viewer(self):
+        self.events.append("wandb-viewer")
+        if self.fail_at == "wandb-viewer":
+            raise RuntimeError("sensitive W&B failure")
+        return SimpleNamespace(username="wandb-user")
+
+    def projects(self, *, entity):
+        assert entity == "eduLLM"
+        self.events.append("wandb-projects")
+        if self.fail_at == "wandb-projects":
+            raise RuntimeError("sensitive W&B failure")
+        names = ["test"] if self.project_access else ["other"]
+        return [SimpleNamespace(name=name) for name in names]
+
+
+class SetupClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+def _write_operator_roster(root, github="operator"):
+    config = root / "config" / "edullm"
+    config.mkdir(parents=True)
+    (config / "operators.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "operators": [
+                    {
+                        "github": github,
+                        "slack_user_id": "U12345678",
+                        "rotation_order": 0,
+                        "enabled": True,
+                    }
+                ]
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _setup_dependencies(
+    events,
+    ssh_client,
+    *,
+    fail_at=None,
+    project_access=True,
+    secret="literal-wandb-key",
+    clock=None,
+):
+    def local_runner(argv, **kwargs):
+        assert kwargs["timeout"] > 0
+        assert kwargs["capture_output"] is True
+        assert kwargs["text"] is True
+        assert kwargs["check"] is False
+        label = "gh-auth" if argv == ["gh", "auth", "status"] else "gh-login"
+        events.append(label)
+        return subprocess.CompletedProcess(
+            argv,
+            1 if fail_at == label else 0,
+            "operator\n" if label == "gh-login" else "",
+            "sensitive local stderr",
+        )
+
+    def api_factory():
+        return StatefulWandbAPI(
+            events,
+            project_access=project_access,
+            fail_at=fail_at,
+        )
+
+    def confirm(prompt):
+        assert "~/.ssh/config" in prompt
+        events.append("confirm")
+        return True
+
+    def get_secret(prompt):
+        assert "W&B API key" in prompt
+        events.append("secret-prompt")
+        return secret
+
+    clock = clock or SetupClock()
+    return cli.SetupDependencies(
+        local_runner=local_runner,
+        ssh_client=ssh_client,
+        wandb_api_factory=api_factory,
+        confirm=confirm,
+        get_secret=get_secret,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+
+
+def test_setup_runs_checks_in_safe_alias_order_and_writes_secret_free_config(tmp_path):
+    root = tmp_path / "checkout"
+    home = tmp_path / "home"
+    _write_operator_roster(root)
+    events = []
+    ssh_client = StatefulSetupSSH(events)
+    dependencies = _setup_dependencies(events, ssh_client)
+    output = StringIO()
+
+    result = cli.setup_operator(
+        root=root,
+        home=home,
+        orcd_username="orcd-user",
+        dependencies=dependencies,
+        output=output,
+    )
+
+    assert result.github == "operator"
+    assert events == [
+        "gh-auth",
+        "gh-login",
+        "wandb-viewer",
+        "wandb-projects",
+        "ssh-direct",
+        "confirm",
+        "tools",
+        "scratch",
+        "env-check",
+        "imports",
+        "fingerprint",
+        "write-env",
+        "key-check",
+        "remote-wandb",
+    ]
+    config_path = home / ".config" / "edullm" / "config.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert config == {
+        "environment_fingerprint": "a" * 64,
+        "github": "operator",
+        "orcd_username": "orcd-user",
+        "remote_repo_root": "$HOME/OLMo-core",
+        "scratch": "$HOME/orcd/scratch/edullm",
+        "version": 1,
+        "wandb_username": "wandb-user",
+    }
+    assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(config_path.parent.stat().st_mode) == 0o700
+    assert "literal-wandb-key" not in config_path.read_text(encoding="utf-8")
+    assert "Host orcd-login" in (home / ".ssh" / "config").read_text(encoding="utf-8")
+    assert "--- ~/.ssh/config" in output.getvalue()
+
+
+@pytest.mark.parametrize(
+    "fail_at",
+    [
+        "gh-auth",
+        "gh-login",
+        "wandb-viewer",
+        "wandb-projects",
+        "ssh-direct",
+        "tools",
+        "scratch",
+        "imports",
+        "fingerprint",
+        "write-env",
+        "remote-wandb",
+    ],
+)
+def test_setup_stops_on_first_failed_transition_and_sanitizes_failure(tmp_path, fail_at):
+    root = tmp_path / "checkout"
+    home = tmp_path / "home"
+    _write_operator_roster(root)
+    events = []
+    ssh_client = StatefulSetupSSH(events, fail_at=fail_at)
+    dependencies = _setup_dependencies(events, ssh_client, fail_at=fail_at)
+
+    with pytest.raises(cli.SetupError, match="setup failed") as raised:
+        cli.setup_operator(
+            root=root,
+            home=home,
+            orcd_username="orcd-user",
+            dependencies=dependencies,
+            output=StringIO(),
+        )
+
+    assert events[-1] == fail_at
+    assert events.count(fail_at) == 1
+    assert "sensitive" not in str(raised.value)
+    assert not (home / ".config" / "edullm" / "config.yaml").exists()
+
+
+def test_setup_requires_actual_local_wandb_project_access(tmp_path):
+    root = tmp_path / "checkout"
+    _write_operator_roster(root)
+    events = []
+    ssh_client = StatefulSetupSSH(events)
+    dependencies = _setup_dependencies(events, ssh_client, project_access=False)
+
+    with pytest.raises(cli.SetupError, match="eduLLM/test access"):
+        cli.setup_operator(
+            root=root,
+            home=tmp_path / "home",
+            orcd_username="orcd-user",
+            dependencies=dependencies,
+            output=StringIO(),
+        )
+
+    assert events == ["gh-auth", "gh-login", "wandb-viewer", "wandb-projects"]
+
+
+def test_setup_decline_does_not_modify_ssh_or_continue(tmp_path):
+    root = tmp_path / "checkout"
+    home = tmp_path / "home"
+    _write_operator_roster(root)
+    events = []
+    ssh_client = StatefulSetupSSH(events)
+    dependencies = _setup_dependencies(events, ssh_client)
+    dependencies.confirm = lambda prompt: events.append("decline") or False
+
+    with pytest.raises(cli.SetupDeclined):
+        cli.setup_operator(
+            root=root,
+            home=home,
+            orcd_username="orcd-user",
+            dependencies=dependencies,
+            output=StringIO(),
+        )
+
+    assert events[-1] == "decline"
+    assert not (home / ".ssh").exists()
+
+
+def test_setup_sanitizes_confirmation_prompt_failure_without_modifying_ssh(tmp_path):
+    root = tmp_path / "checkout"
+    home = tmp_path / "home"
+    _write_operator_roster(root)
+    events = []
+    ssh_client = StatefulSetupSSH(events)
+    dependencies = _setup_dependencies(events, ssh_client)
+
+    def fail_confirmation(prompt):
+        raise RuntimeError("sensitive prompt diagnostics")
+
+    dependencies.confirm = fail_confirmation
+
+    with pytest.raises(cli.SetupError, match="confirmation prompt") as raised:
+        cli.setup_operator(
+            root=root,
+            home=home,
+            orcd_username="orcd-user",
+            dependencies=dependencies,
+            output=StringIO(),
+        )
+
+    assert "sensitive" not in str(raised.value)
+    assert not (home / ".ssh").exists()
+
+
+def test_setup_is_idempotent_and_does_not_confirm_or_backup_twice(tmp_path):
+    root = tmp_path / "checkout"
+    home = tmp_path / "home"
+    _write_operator_roster(root)
+    first_events = []
+    first_ssh = StatefulSetupSSH(first_events)
+    cli.setup_operator(
+        root=root,
+        home=home,
+        orcd_username="orcd-user",
+        dependencies=_setup_dependencies(first_events, first_ssh),
+        output=StringIO(),
+    )
+    backups = list((home / ".ssh").glob("config.edullm-backup*"))
+    second_events = []
+    second_ssh = StatefulSetupSSH(second_events)
+    second_dependencies = _setup_dependencies(second_events, second_ssh)
+    second_dependencies.confirm = lambda prompt: pytest.fail("idempotent setup asked to confirm")
+
+    cli.setup_operator(
+        root=root,
+        home=home,
+        orcd_username="orcd-user",
+        dependencies=second_dependencies,
+        output=StringIO(),
+    )
+
+    assert list((home / ".ssh").glob("config.edullm-backup*")) == backups
+    assert "confirm" not in second_events
+
+
+def test_setup_submits_reviewed_environment_script_and_polls_to_completed(tmp_path):
+    root = tmp_path / "checkout"
+    _write_operator_roster(root)
+    events = []
+    ssh_client = StatefulSetupSSH(
+        events,
+        env_ready=False,
+        states=("PENDING", "RUNNING", "COMPLETED"),
+    )
+    clock = SetupClock()
+
+    cli.setup_operator(
+        root=root,
+        home=tmp_path / "home",
+        orcd_username="orcd-user",
+        dependencies=_setup_dependencies(events, ssh_client, clock=clock),
+        output=StringIO(),
+    )
+
+    assert events.index("env-check") < events.index("env-submit")
+    assert events[events.index("env-submit") + 1 : events.index("imports")] == [
+        "sacct",
+        "sacct",
+        "sacct",
+    ]
+    assert clock.now == 2 * cli.SETUP_POLL_INTERVAL_SECONDS
+
+
+@pytest.mark.parametrize(
+    "state",
+    ["FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL", "PREEMPTED"],
+)
+def test_setup_requires_exact_completed_terminal_state(tmp_path, state):
+    root = tmp_path / "checkout"
+    _write_operator_roster(root)
+    events = []
+    ssh_client = StatefulSetupSSH(events, env_ready=False, states=(state,))
+
+    with pytest.raises(cli.SetupError, match="did not complete"):
+        cli.setup_operator(
+            root=root,
+            home=tmp_path / "home",
+            orcd_username="orcd-user",
+            dependencies=_setup_dependencies(events, ssh_client),
+            output=StringIO(),
+        )
+
+    assert events[-1] == "sacct"
+    assert "imports" not in events
+
+
+def test_setup_polling_is_bounded(tmp_path):
+    root = tmp_path / "checkout"
+    _write_operator_roster(root)
+    events = []
+    ssh_client = StatefulSetupSSH(events, env_ready=False, states=())
+    clock = SetupClock()
+
+    with pytest.raises(cli.SetupError, match="timed out"):
+        cli.setup_operator(
+            root=root,
+            home=tmp_path / "home",
+            orcd_username="orcd-user",
+            dependencies=_setup_dependencies(events, ssh_client, clock=clock),
+            output=StringIO(),
+            poll_timeout=10,
+        )
+
+    assert clock.now == 10
+
+
+def test_setup_rejects_malformed_fingerprint(tmp_path):
+    root = tmp_path / "checkout"
+    _write_operator_roster(root)
+    events = []
+    ssh_client = StatefulSetupSSH(events)
+    original_result = ssh_client._result
+
+    def malformed(label, **kwargs):
+        if label == "fingerprint":
+            kwargs["stdout"] = "not-a-fingerprint\n"
+        return original_result(label, **kwargs)
+
+    ssh_client._result = malformed
+
+    with pytest.raises(cli.SetupError, match="fingerprint"):
+        cli.setup_operator(
+            root=root,
+            home=tmp_path / "home",
+            orcd_username="orcd-user",
+            dependencies=_setup_dependencies(events, ssh_client),
+            output=StringIO(),
+        )
+
+
+def test_setup_wandb_environment_is_secret_free_and_reads_mode_0600_key(tmp_path):
+    root = tmp_path / "checkout"
+    _write_operator_roster(root)
+    events = []
+    ssh_client = StatefulSetupSSH(events)
+
+    cli.setup_operator(
+        root=root,
+        home=tmp_path / "home",
+        orcd_username="orcd-user",
+        dependencies=_setup_dependencies(events, ssh_client),
+        output=StringIO(),
+    )
+
+    assert ssh_client.writes == [
+        (
+            "~/.config/edullm/wandb.env",
+            'export WANDB_API_KEY="$(cat "$HOME/.config/edullm/wandb.key")"\n'
+            'export WANDB_ENTITY="eduLLM"\n'
+            'export WANDB_PROJECT="test"\n',
+        )
+    ]
+    assert "api.viewer.username" in cli.REMOTE_WANDB_CHECK_SCRIPT
+    assert "api.projects(entity='eduLLM')" in cli.REMOTE_WANDB_CHECK_SCRIPT
+    assert "assert 'test'" not in cli.REMOTE_WANDB_CHECK_SCRIPT
+
+
+def test_setup_prompts_and_writes_key_only_when_verified_remote_key_is_absent(tmp_path):
+    root = tmp_path / "checkout"
+    _write_operator_roster(root)
+    events = []
+    ssh_client = StatefulSetupSSH(events, key_exists=False)
+    secret = "literal-wandb-key"
+    output = StringIO()
+
+    cli.setup_operator(
+        root=root,
+        home=tmp_path / "home",
+        orcd_username="orcd-user",
+        dependencies=_setup_dependencies(events, ssh_client, secret=secret),
+        output=output,
+    )
+
+    assert events[events.index("key-check") :] == [
+        "key-check",
+        "secret-prompt",
+        "write-key",
+        "remote-wandb",
+    ]
+    key_write = ssh_client.writes[-1]
+    assert key_write == ("~/.config/edullm/wandb.key", secret + "\n")
+    non_stdin_surfaces = (
+        output.getvalue()
+        + (tmp_path / "home" / ".config" / "edullm" / "config.yaml").read_text()
+        + repr(events)
+    )
+    assert secret not in non_stdin_surfaces
+
+
+def test_setup_sanitizes_secret_prompt_failure(tmp_path):
+    root = tmp_path / "checkout"
+    _write_operator_roster(root)
+    events = []
+    ssh_client = StatefulSetupSSH(events, key_exists=False)
+    dependencies = _setup_dependencies(events, ssh_client)
+
+    def fail_prompt(prompt):
+        raise RuntimeError("sensitive prompt diagnostics")
+
+    dependencies.get_secret = fail_prompt
+
+    with pytest.raises(cli.SetupError, match="W&B key prompt") as raised:
+        cli.setup_operator(
+            root=root,
+            home=tmp_path / "home",
+            orcd_username="orcd-user",
+            dependencies=dependencies,
+            output=StringIO(),
+        )
+
+    assert "sensitive" not in str(raised.value)
+
+
+def test_setup_replaces_unverified_existing_remote_key_without_exposing_it(tmp_path):
+    root = tmp_path / "checkout"
+    _write_operator_roster(root)
+    events = []
+    ssh_client = StatefulSetupSSH(events, key_exists=True, existing_key_valid=False)
+
+    cli.setup_operator(
+        root=root,
+        home=tmp_path / "home",
+        orcd_username="orcd-user",
+        dependencies=_setup_dependencies(events, ssh_client),
+        output=StringIO(),
+    )
+
+    assert events[events.index("key-check") :] == [
+        "key-check",
+        "remote-wandb",
+        "secret-prompt",
+        "write-key",
+        "remote-wandb",
+    ]
+
+
+def test_setup_does_not_prompt_when_existing_key_verifies(tmp_path):
+    root = tmp_path / "checkout"
+    _write_operator_roster(root)
+    events = []
+    ssh_client = StatefulSetupSSH(events, key_exists=True, existing_key_valid=True)
+    dependencies = _setup_dependencies(events, ssh_client)
+    dependencies.get_secret = lambda prompt: pytest.fail("unexpected W&B key prompt")
+
+    cli.setup_operator(
+        root=root,
+        home=tmp_path / "home",
+        orcd_username="orcd-user",
+        dependencies=dependencies,
+        output=StringIO(),
+    )
+
+    assert not any(path.endswith("wandb.key") for path, _ in ssh_client.writes)
+
+
+def test_setup_requires_remote_wandb_identity_to_match_local_identity(tmp_path):
+    root = tmp_path / "checkout"
+    _write_operator_roster(root)
+    events = []
+    ssh_client = StatefulSetupSSH(events, remote_wandb_username="different-user")
+
+    with pytest.raises(cli.SetupError, match="W&B identity"):
+        cli.setup_operator(
+            root=root,
+            home=tmp_path / "home",
+            orcd_username="orcd-user",
+            dependencies=_setup_dependencies(events, ssh_client),
+            output=StringIO(),
+        )
+
+
+def test_setup_fails_closed_when_github_login_is_not_protected_operator(tmp_path):
+    root = tmp_path / "checkout"
+    _write_operator_roster(root, github="someone-else")
+    events = []
+    ssh_client = StatefulSetupSSH(events)
+
+    with pytest.raises(cli.SetupError, match="protected operator"):
+        cli.setup_operator(
+            root=root,
+            home=tmp_path / "home",
+            orcd_username="orcd-user",
+            dependencies=_setup_dependencies(events, ssh_client),
+            output=StringIO(),
+        )
+
+    assert not (tmp_path / "home" / ".config" / "edullm" / "config.yaml").exists()
+
+
+def test_production_empty_roster_fails_closed(tmp_path):
+    events = []
+    ssh_client = StatefulSetupSSH(events)
+
+    with pytest.raises(cli.SetupError, match="protected operator"):
+        cli.setup_operator(
+            root=Path.cwd(),
+            home=tmp_path / "home",
+            orcd_username="orcd-user",
+            dependencies=_setup_dependencies(events, ssh_client),
+            output=StringIO(),
+        )
+
+
+def test_scratch_check_matches_reviewed_mount_containment_and_write_probe():
+    script = cli.SCRATCH_CHECK_SCRIPT
+    required = [
+        'realpath -e "$EDULLM_SCRATCH_ROOT"',
+        'realpath -m "$EDULLM_SCRATCH"',
+        '"$RESOLVED_SCRATCH_ROOT/"*',
+        'findmnt -n -o TARGET -T "$RESOLVED_SCRATCH_ROOT"',
+        'findmnt -n -o TARGET -T "$HOME"',
+        '"$SCRATCH_MOUNT" != "$HOME_MOUNT"',
+        'mkdir -p "$EDULLM_SCRATCH"',
+        'realpath -e "$EDULLM_SCRATCH"',
+        'test -w "$EDULLM_SCRATCH"',
+        'mktemp "$EDULLM_SCRATCH/.edullm-preflight.XXXXXX"',
+        "printf '%s\\n' edullm-probe",
+        'rm -f "$SCRATCH_PROBE"',
+    ]
+    positions = [
+        script.rindex(item) if item == 'rm -f "$SCRATCH_PROBE"' else script.index(item)
+        for item in required
+    ]
+
+    assert positions == sorted(positions)
+    assert "$HOME/orcd/scratch/edullm" in script
+    assert '"$HOME"|"$HOME"/*)' not in script
+
+
+def test_environment_commands_use_reviewed_checkout_and_sorted_freeze():
+    assert "$HOME/OLMo-core/src/scripts/orcd/setup_env.sbatch" in cli.SUBMIT_ENV_SCRIPT
+    assert "git -C" in cli.SUBMIT_ENV_SCRIPT
+    assert "status --porcelain" in cli.SUBMIT_ENV_SCRIPT
+    assert "*[!0-9a-f]*" in cli.SUBMIT_ENV_SCRIPT
+    assert 'test "${#EDULLM_COMMIT_SHA}" -eq 40' in cli.SUBMIT_ENV_SCRIPT
+    assert "sbatch --parsable" in cli.SUBMIT_ENV_SCRIPT
+    assert "python -m pip freeze --all | LC_ALL=C sort | sha256sum" in cli.FINGERPRINT_SCRIPT
+    assert "import torch, wandb, olmo_core" in cli.IMPORT_CHECK_SCRIPT
+
+
+def test_write_operator_config_rejects_symlink_and_preserves_target(tmp_path):
+    config = tmp_path / "config.yaml"
+    target = tmp_path / "target"
+    target.write_text("unchanged", encoding="utf-8")
+    config.symlink_to(target)
+
+    with pytest.raises(cli.SetupError, match="operator config"):
+        cli.write_operator_config(config, {"version": 1})
+
+    assert target.read_text(encoding="utf-8") == "unchanged"
+
+
+def test_write_operator_config_rejects_symlinked_ancestor(tmp_path):
+    real_config = tmp_path / "real-config"
+    real_config.mkdir()
+    linked_config = tmp_path / ".config"
+    linked_config.symlink_to(real_config, target_is_directory=True)
+
+    with pytest.raises(cli.SetupError, match="operator config"):
+        cli.write_operator_config(linked_config / "edullm" / "config.yaml", {"version": 1})
+
+    assert not (real_config / "edullm").exists()
+
+
+def test_write_operator_config_is_atomic_and_mode_0600(tmp_path, monkeypatch):
+    config = tmp_path / "config" / "config.yaml"
+    cli.write_operator_config(config, {"version": 1})
+    original = config.read_bytes()
+    config.chmod(0o666)
+
+    def fail_replace(source, destination):
+        raise OSError("simulated failure")
+
+    monkeypatch.setattr(cli.os, "replace", fail_replace)
+    with pytest.raises(cli.SetupError, match="operator config"):
+        cli.write_operator_config(config, {"version": 2})
+
+    assert config.read_bytes() == original
+    assert stat.S_IMODE(config.stat().st_mode) == 0o600
+    assert not list(config.parent.glob(".config.yaml.edullm-*"))
+
+
+def test_local_subprocess_timeout_is_sanitized(tmp_path):
+    root = tmp_path / "checkout"
+    _write_operator_roster(root)
+
+    def timed_out(argv, **kwargs):
+        raise subprocess.TimeoutExpired(argv, kwargs["timeout"], output="sensitive output")
+
+    dependencies = cli.SetupDependencies(
+        local_runner=timed_out,
+        ssh_client=StatefulSetupSSH([]),
+        wandb_api_factory=lambda: pytest.fail("must stop before W&B"),
+        confirm=lambda prompt: True,
+        get_secret=lambda prompt: pytest.fail("must not prompt"),
+        sleep=lambda seconds: None,
+        monotonic=lambda: 0.0,
+    )
+
+    with pytest.raises(cli.SetupError, match="setup failed") as raised:
+        cli.setup_operator(
+            root=root,
+            home=tmp_path / "home",
+            orcd_username="orcd-user",
+            dependencies=dependencies,
+            output=StringIO(),
+        )
+
+    assert "sensitive" not in str(raised.value)
+
+
+def test_slurm_state_parser_normalizes_reason_but_preserves_nonexact_state():
+    assert cli._parse_slurm_state("CANCELLED by 12345|\n") == "CANCELLED"
+    assert cli._parse_slurm_state("COMPLETED+|\n") == "COMPLETED+"
+    assert cli._parse_slurm_state("\n|\n") == ""
+
+
+def test_commands_are_plain_language_and_internal_automation_remains_available():
+    parser = cli.build_parser()
+    text = parser.format_help()
+
+    for command in ("setup", "jobs", "run", "logs", "stop", "logout"):
+        assert command in text
+    for forbidden in ("claim", "run-next", "sync", "tail"):
+        assert forbidden not in text
+    assert "automation" not in text
+    automation = parser.parse_args(["automation", "validate", "--issue", "42"])
+    assert automation.command == "automation"
+    assert automation.automation_command == "validate"
+    assert automation.issue == 42
+
+
+def test_public_parser_has_complete_arguments_without_task_7_behavior():
+    parser = cli.build_parser()
+
+    assert parser.parse_args(["setup"]).command == "setup"
+    jobs = parser.parse_args(["jobs", "--mine"])
+    assert jobs.command == "jobs"
+    assert jobs.mine is True
+    assert parser.parse_args(["run"]).command == "run"
+    assert parser.parse_args(["logs", "42"]).issue == 42
+    assert parser.parse_args(["stop", "42"]).issue == 42
+    assert parser.parse_args(["logout"]).command == "logout"
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["jobs", "extra"],
+        ["run", "extra"],
+        ["logs"],
+        ["logs", "0"],
+        ["stop", "-1"],
+        ["claim"],
+        ["run-next"],
+        ["sync"],
+        ["tail", "42"],
+    ],
+)
+def test_public_parser_rejects_invalid_or_unpublished_surface(arguments):
+    with pytest.raises(SystemExit) as raised:
+        cli.build_parser().parse_args(arguments)
+
+    assert raised.value.code == 2
+
+
+def test_main_dispatches_each_public_command_to_focused_handler(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "handle_setup", lambda: calls.append(("setup",)) or 11)
+    monkeypatch.setattr(cli, "handle_jobs", lambda mine: calls.append(("jobs", mine)) or 12)
+    monkeypatch.setattr(cli, "handle_run", lambda: calls.append(("run",)) or 13)
+    monkeypatch.setattr(cli, "handle_logs", lambda issue: calls.append(("logs", issue)) or 14)
+    monkeypatch.setattr(cli, "handle_stop", lambda issue: calls.append(("stop", issue)) or 15)
+    monkeypatch.setattr(cli, "handle_logout", lambda: calls.append(("logout",)) or 16)
+
+    assert cli.main(["setup"], environ=RestrictedEnvironment({})) == 11
+    assert cli.main(["jobs", "--mine"], environ=RestrictedEnvironment({})) == 12
+    assert cli.main(["run"], environ=RestrictedEnvironment({})) == 13
+    assert cli.main(["logs", "42"], environ=RestrictedEnvironment({})) == 14
+    assert cli.main(["stop", "42"], environ=RestrictedEnvironment({})) == 15
+    assert cli.main(["logout"], environ=RestrictedEnvironment({})) == 16
+    assert calls == [
+        ("setup",),
+        ("jobs", True),
+        ("run",),
+        ("logs", 42),
+        ("stop", 42),
+        ("logout",),
+    ]
+
+
+@pytest.mark.parametrize(
+    "arguments,command",
+    [
+        (["jobs"], "jobs"),
+        (["jobs", "--mine"], "jobs"),
+        (["run"], "run"),
+        (["logs", "42"], "logs"),
+        (["stop", "42"], "stop"),
+    ],
+)
+def test_task_7_commands_fail_closed_with_clear_scoped_message(arguments, command, capsys):
+    exit_code = cli.main(arguments, environ=RestrictedEnvironment({}))
+
+    assert exit_code == 2
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert f"edullm {command} is unavailable" in output.err
+    assert "Task 7" in output.err or "Tasks 7-8" in output.err
+
+
+def test_setup_handler_reports_decline_without_traceback(monkeypatch, capsys):
+    def declined(**kwargs):
+        raise cli.SetupDeclined("declined")
+
+    monkeypatch.setattr(cli, "setup_operator", declined)
+
+    assert cli.handle_setup() == 2
+    output = capsys.readouterr()
+    assert "cancelled" in output.err
+    assert "declined" not in output.err
+
+
+def test_setup_handler_sanitizes_operational_failure(monkeypatch, capsys):
+    def failed(**kwargs):
+        raise cli.SetupError("private implementation detail")
+
+    monkeypatch.setattr(cli, "setup_operator", failed)
+
+    assert cli.handle_setup() == 1
+    output = capsys.readouterr()
+    assert "operator setup failed" in output.err
+    assert "private implementation detail" not in output.err
+
+
+def test_logout_closes_only_project_master_and_reports_closed(capsys):
+    class Client:
+        def __init__(self):
+            self.calls = 0
+
+        def close_master(self):
+            self.calls += 1
+            return True
+
+    client = Client()
+
+    assert cli.handle_logout(ssh_client=client) == 0
+    assert client.calls == 1
+    assert "closed" in capsys.readouterr().out
+
+
+def test_logout_handles_already_closed_master_cleanly(capsys):
+    class Client:
+        @staticmethod
+        def close_master():
+            return False
+
+    assert cli.handle_logout(ssh_client=Client()) == 0
+    assert "already closed" in capsys.readouterr().out
+
+
+def test_logout_does_not_hide_other_sanitized_errors(capsys):
+    class Client:
+        @staticmethod
+        def close_master():
+            raise cli.SSHError("private SSH diagnostics")
+
+    assert cli.handle_logout(ssh_client=Client()) == 1
+    output = capsys.readouterr()
+    assert "could not close" in output.err
+    assert "private SSH diagnostics" not in output.err

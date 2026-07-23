@@ -33,6 +33,9 @@ Homepage = "https://github.com/allenai/OLMo-core"
 Documentation = "https://olmo-core.readthedocs.io/en/latest/"
 Changelog = "https://github.com/allenai/OLMo-core/blob/main/CHANGELOG.md"
 
+[project.scripts]
+edullm = "edullm.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "black>=23.1,<24.0",

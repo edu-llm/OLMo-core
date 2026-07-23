@@ -1,17 +1,25 @@
 """
-Internal module CLI used by the hard-disabled validation workflow.
-
-The user-facing ``edullm`` console entry point remains owned by Task 6.
+Operator and internal automation CLI for the eduLLM ORCD job pool.
 """
 
 from __future__ import annotations
 
 import argparse
+import getpass
 import os
+import re
+import secrets
+import stat
+import subprocess
 import sys
+import time
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, TextIO
+
+import yaml
 
 from edullm.assignment import (
     AUTOMATION_ACTOR,
@@ -23,9 +31,594 @@ from edullm.automation import AutomationResult, load_team_leads, validate_issue
 from edullm.github import GitHubClient, GitHubError
 from edullm.notifications import SlackNotifier
 from edullm.policy import load_operators, load_policy
+from edullm.ssh import (
+    COMMAND_TIMEOUT_SECONDS,
+    SSHClient,
+    SSHConfigError,
+    SSHError,
+    apply_control_config,
+    plan_control_config,
+    read_control_config,
+)
 
 ValidationRunner = Callable[..., AutomationResult]
 AssignmentRunner = Callable[..., tuple[AssignmentResult, ...]]
+LocalRunner = Callable[..., subprocess.CompletedProcess[str]]
+
+SETUP_POLL_INTERVAL_SECONDS = 5.0
+SETUP_POLL_TIMEOUT_SECONDS = 3600.0
+REMOTE_REPO_ROOT = "$HOME/OLMo-core"
+REMOTE_SCRATCH = "$HOME/orcd/scratch/edullm"
+_GITHUB_LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\Z")
+_FINGERPRINT = re.compile(r"[0-9a-f]{64}\Z")
+_JOB_ID = re.compile(r"([0-9]+)(?:;[A-Za-z0-9._-]+)?\Z")
+_TERMINAL_SLURM_STATES = frozenset(
+    {
+        "BOOT_FAIL",
+        "CANCELLED",
+        "COMPLETED",
+        "DEADLINE",
+        "FAILED",
+        "NODE_FAIL",
+        "OUT_OF_MEMORY",
+        "PREEMPTED",
+        "REVOKED",
+        "SPECIAL_EXIT",
+        "TIMEOUT",
+    }
+)
+
+SCRATCH_CHECK_SCRIPT = r"""set -euo pipefail
+EDULLM_SCRATCH_ROOT="$HOME/orcd/scratch"
+EDULLM_SCRATCH="$HOME/orcd/scratch/edullm"
+test -d "$EDULLM_SCRATCH_ROOT"
+RESOLVED_SCRATCH_ROOT="$(realpath -e "$EDULLM_SCRATCH_ROOT")"
+RESOLVED_SCRATCH="$(realpath -m "$EDULLM_SCRATCH")"
+case "$RESOLVED_SCRATCH/" in
+  "$RESOLVED_SCRATCH_ROOT/"*) ;;
+  *) exit 2 ;;
+esac
+SCRATCH_MOUNT="$(findmnt -n -o TARGET -T "$RESOLVED_SCRATCH_ROOT")"
+HOME_MOUNT="$(findmnt -n -o TARGET -T "$HOME")"
+test -n "$SCRATCH_MOUNT"
+test "$SCRATCH_MOUNT" != "$HOME_MOUNT"
+mkdir -p "$EDULLM_SCRATCH"
+RESOLVED_CREATED_SCRATCH="$(realpath -e "$EDULLM_SCRATCH")"
+case "$RESOLVED_CREATED_SCRATCH/" in
+  "$RESOLVED_SCRATCH_ROOT/"*) ;;
+  *) exit 2 ;;
+esac
+test -w "$EDULLM_SCRATCH"
+SCRATCH_PROBE="$(mktemp "$EDULLM_SCRATCH/.edullm-preflight.XXXXXX")"
+trap 'rm -f "$SCRATCH_PROBE"' EXIT
+printf '%s\n' edullm-probe > "$SCRATCH_PROBE"
+rm -f "$SCRATCH_PROBE"
+trap - EXIT"""
+
+ENVIRONMENT_CHECK_SCRIPT = r"""test -x "$HOME/venvs/edullm/bin/python" """
+
+SUBMIT_ENV_SCRIPT = r"""set -euo pipefail
+EDULLM_REPO_ROOT="$HOME/OLMo-core"
+EDULLM_SCRATCH="$HOME/orcd/scratch/edullm"
+SETUP_SCRIPT="$HOME/OLMo-core/src/scripts/orcd/setup_env.sbatch"
+test -f "$SETUP_SCRIPT"
+EDULLM_COMMIT_SHA="$(git -C "$EDULLM_REPO_ROOT" rev-parse HEAD)"
+case "$EDULLM_COMMIT_SHA" in
+  ""|*[!0-9a-f]*) exit 2 ;;
+esac
+test "${#EDULLM_COMMIT_SHA}" -eq 40
+test -z "$(git -C "$EDULLM_REPO_ROOT" status --porcelain)"
+mkdir -p "$EDULLM_SCRATCH/logs"
+sbatch --parsable \
+  --output="$EDULLM_SCRATCH/logs/%x-%j.log" \
+  --error="$EDULLM_SCRATCH/logs/%x-%j.log" \
+  --export=EDULLM_REPO_ROOT="$EDULLM_REPO_ROOT",EDULLM_COMMIT_SHA="$EDULLM_COMMIT_SHA",EDULLM_SCRATCH="$EDULLM_SCRATCH" \
+  "$HOME/OLMo-core/src/scripts/orcd/setup_env.sbatch" """
+
+IMPORT_CHECK_SCRIPT = r"""set -euo pipefail
+source "$HOME/venvs/edullm/bin/activate"
+python -c "import torch, wandb, olmo_core" """
+
+FINGERPRINT_SCRIPT = r"""set -euo pipefail
+source "$HOME/venvs/edullm/bin/activate"
+python -m pip freeze --all | LC_ALL=C sort | sha256sum"""
+
+REMOTE_KEY_CHECK_SCRIPT = r"""set -euo pipefail
+test -s "$HOME/.config/edullm/wandb.key"
+test "$(stat -c '%a' "$HOME/.config/edullm/wandb.key")" = 600"""
+
+REMOTE_WANDB_CHECK_SCRIPT = r"""set -euo pipefail
+source "$HOME/venvs/edullm/bin/activate"
+source "$HOME/.config/edullm/wandb.env"
+python -c "import sys, wandb; api=wandb.Api(timeout=10); username=api.viewer.username; projects={project.name for project in api.projects(entity='eduLLM')}; 'test' in projects or sys.exit(2); print(username)" """
+
+WANDB_ENV = (
+    'export WANDB_API_KEY="$(cat "$HOME/.config/edullm/wandb.key")"\n'
+    'export WANDB_ENTITY="eduLLM"\n'
+    'export WANDB_PROJECT="test"\n'
+)
+
+
+class SetupError(RuntimeError):
+    """A sanitized operator setup failure."""
+
+
+class SetupDeclined(SetupError):
+    """The operator declined the displayed SSH configuration change."""
+
+
+@dataclass(frozen=True)
+class SetupResult:
+    """Public, secret-free values recorded by successful operator setup."""
+
+    github: str
+    wandb_username: str
+    environment_fingerprint: str
+
+
+def _default_wandb_api() -> Any:
+    import wandb
+
+    return wandb.Api(timeout=10)
+
+
+def _default_confirm(prompt: str) -> bool:
+    return input(prompt).strip().casefold() == "yes"
+
+
+@dataclass
+class SetupDependencies:
+    """Injectable local, remote, API, prompt, and clock boundaries for setup."""
+
+    local_runner: LocalRunner = subprocess.run
+    ssh_client: Any = field(default_factory=SSHClient)
+    wandb_api_factory: Callable[[], Any] = _default_wandb_api
+    confirm: Callable[[str], bool] = _default_confirm
+    get_secret: Callable[[str], str] = getpass.getpass
+    sleep: Callable[[float], None] = time.sleep
+    monotonic: Callable[[], float] = time.monotonic
+
+
+def setup_operator(
+    *,
+    root: Path,
+    home: Path,
+    orcd_username: str,
+    dependencies: SetupDependencies | None = None,
+    output: TextIO | None = None,
+    poll_timeout: float = SETUP_POLL_TIMEOUT_SECONDS,
+) -> SetupResult:
+    """
+    Perform ordered, fail-closed setup for one ORCD operator.
+
+    No service is contacted until this function is explicitly called. All
+    subprocess, W&B API, prompt, SSH, and clock boundaries are injectable.
+
+    :param root: Trusted local checkout containing protected operator config.
+    :param home: Local operator home directory.
+    :param orcd_username: Personal Engaging login.
+    :param dependencies: Optional injectable setup boundaries.
+    :param output: Destination for the exact redacted SSH diff.
+    :param poll_timeout: Maximum environment-setup polling duration.
+
+    :returns: The public, secret-free setup result.
+
+    :raises SetupError: If any ordered preflight or setup transition fails.
+    """
+    dependencies = dependencies or SetupDependencies()
+    output = output or sys.stdout
+    if poll_timeout <= 0:
+        raise ValueError("poll timeout must be positive")
+
+    _run_local(dependencies.local_runner, ["gh", "auth", "status"], "GitHub authentication")
+    github_result = _run_local(
+        dependencies.local_runner,
+        ["gh", "api", "user", "--jq", ".login"],
+        "GitHub identity",
+    )
+    github_login = github_result.stdout.strip()
+    if _GITHUB_LOGIN.fullmatch(github_login) is None:
+        raise SetupError("operator setup failed during GitHub identity verification")
+
+    wandb_username = _verify_local_wandb(dependencies.wandb_api_factory)
+
+    try:
+        dependencies.ssh_client.run_direct(
+            orcd_username,
+            ["hostname"],
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+    except (SSHError, ValueError):
+        raise SetupError("operator setup failed during direct Engaging reachability") from None
+
+    ssh_config = home / ".ssh" / "config"
+    try:
+        original = read_control_config(ssh_config)
+        ssh_plan = plan_control_config(original, orcd_username)
+    except (SSHConfigError, ValueError):
+        raise SetupError("operator setup failed while planning SSH configuration") from None
+    if ssh_plan.changed:
+        output.write(ssh_plan.redacted_diff)
+        output.flush()
+        try:
+            confirmed = dependencies.confirm(
+                "Apply the displayed change to ~/.ssh/config? Type yes: "
+            )
+        except Exception:
+            raise SetupError("operator setup failed during the SSH confirmation prompt") from None
+        if not confirmed:
+            raise SetupDeclined("SSH configuration change was declined")
+        try:
+            apply_control_config(ssh_config, ssh_plan)
+        except SSHConfigError:
+            raise SetupError("operator setup failed while applying SSH configuration") from None
+
+    _run_required_remote(
+        dependencies.ssh_client,
+        ["bash", "-lc", "hostname; command -v sbatch; command -v squeue"],
+        "remote tool verification",
+    )
+    _run_required_remote(
+        dependencies.ssh_client,
+        ["bash", "-lc", SCRATCH_CHECK_SCRIPT],
+        "Engaging Scratch verification",
+    )
+    _ensure_environment(dependencies, poll_timeout=poll_timeout)
+    _run_required_remote(
+        dependencies.ssh_client,
+        ["bash", "-lc", IMPORT_CHECK_SCRIPT],
+        "remote Python import verification",
+    )
+    fingerprint = _environment_fingerprint(dependencies.ssh_client)
+
+    try:
+        dependencies.ssh_client.write_remote(
+            "~/.config/edullm/wandb.env",
+            WANDB_ENV,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+    except (SSHError, ValueError):
+        raise SetupError("operator setup failed while writing remote W&B environment") from None
+
+    key_exists = _remote_key_exists(dependencies.ssh_client)
+    remote_username = (
+        _try_remote_wandb(dependencies.ssh_client, expected_failure=key_exists)
+        if key_exists
+        else None
+    )
+    if remote_username is None:
+        try:
+            key = dependencies.get_secret("W&B API key: ")
+        except Exception:
+            raise SetupError("operator setup failed during the W&B key prompt") from None
+        if not key or "\n" in key or "\r" in key:
+            raise SetupError("operator setup failed because the W&B key is invalid")
+        try:
+            dependencies.ssh_client.write_remote(
+                "~/.config/edullm/wandb.key",
+                key + "\n",
+                timeout=COMMAND_TIMEOUT_SECONDS,
+            )
+        except (SSHError, ValueError):
+            raise SetupError("operator setup failed while writing the remote W&B key") from None
+        finally:
+            key = ""
+        remote_username = _try_remote_wandb(dependencies.ssh_client, expected_failure=False)
+    if remote_username != wandb_username:
+        raise SetupError("operator setup failed because the remote W&B identity does not match")
+
+    try:
+        operators = load_operators(root / "config" / "edullm" / "operators.yaml")
+    except (OSError, ValueError):
+        raise SetupError("operator setup failed while reading protected operators") from None
+    if not any(operator.github == github_login for operator in operators):
+        raise SetupError("GitHub login is not present in the protected operator roster")
+
+    config = {
+        "environment_fingerprint": fingerprint,
+        "github": github_login,
+        "orcd_username": orcd_username,
+        "remote_repo_root": REMOTE_REPO_ROOT,
+        "scratch": REMOTE_SCRATCH,
+        "version": 1,
+        "wandb_username": wandb_username,
+    }
+    write_operator_config(home / ".config" / "edullm" / "config.yaml", config)
+    return SetupResult(github_login, wandb_username, fingerprint)
+
+
+def write_operator_config(path: Path, config: Mapping[str, object]) -> None:
+    """
+    Atomically write a secret-free operator config with mode ``0600``.
+
+    :param path: Local operator config path.
+    :param config: Public setup values to serialize.
+
+    :raises SetupError: If path safety, permissions, or atomic replacement fail.
+    """
+    try:
+        serialized = yaml.safe_dump(dict(config), sort_keys=True).encode("utf-8")
+    except yaml.YAMLError:
+        raise SetupError("operator config could not be serialized safely") from None
+    parent = path.parent
+    _reject_operator_symlink_ancestors(parent)
+    _ensure_operator_directory(parent)
+    original_signature = _operator_file_signature(path)
+    if original_signature is not None:
+        _secure_operator_file(path)
+    temporary = parent / f".{path.name}.edullm-{secrets.token_hex(8)}"
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        _write_descriptor(descriptor, serialized)
+        os.fchmod(descriptor, 0o600)
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        if _operator_file_signature(path) != original_signature:
+            raise SetupError("operator config changed while it was being updated")
+        os.replace(temporary, path)
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        status = os.fstat(descriptor)
+        if not stat.S_ISREG(status.st_mode) or status.st_uid != os.getuid():
+            raise SetupError("operator config is unsafe")
+        os.fchmod(descriptor, 0o600)
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        _fsync_operator_directory(parent)
+    except SetupError:
+        raise
+    except OSError:
+        raise SetupError("operator config could not be written safely") from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+
+def _run_local(
+    runner: LocalRunner, argv: list[str], label: str
+) -> subprocess.CompletedProcess[str]:
+    try:
+        result = runner(
+            argv,
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        raise SetupError(f"operator setup failed during {label}") from None
+    if result.returncode != 0:
+        raise SetupError(f"operator setup failed during {label}")
+    return result
+
+
+def _verify_local_wandb(api_factory: Callable[[], Any]) -> str:
+    try:
+        api = api_factory()
+        username = api.viewer.username
+        project_names = {project.name for project in api.projects(entity="eduLLM")}
+    except Exception:
+        raise SetupError("operator setup failed during local W&B verification") from None
+    if type(username) is not str or not username.strip():
+        raise SetupError("operator setup failed during local W&B identity verification")
+    if "test" not in project_names:
+        raise SetupError("verified eduLLM/test access is required")
+    return username.strip()
+
+
+def _run_required_remote(
+    ssh_client: Any, argv: list[str], label: str
+) -> subprocess.CompletedProcess[str]:
+    try:
+        return ssh_client.run_remote(
+            argv,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+    except (SSHError, ValueError):
+        raise SetupError(f"operator setup failed during {label}") from None
+
+
+def _ensure_environment(dependencies: SetupDependencies, *, poll_timeout: float) -> None:
+    try:
+        existing = dependencies.ssh_client.run_remote(
+            ["bash", "-lc", ENVIRONMENT_CHECK_SCRIPT],
+            check=False,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+    except (SSHError, ValueError):
+        raise SetupError("operator setup failed while checking the remote environment") from None
+    if existing.returncode == 0:
+        return
+    if existing.returncode != 1:
+        raise SetupError("operator setup failed while checking the remote environment")
+
+    submitted = _run_required_remote(
+        dependencies.ssh_client,
+        ["bash", "-lc", SUBMIT_ENV_SCRIPT],
+        "environment setup submission",
+    )
+    match = _JOB_ID.fullmatch(submitted.stdout.strip())
+    if match is None:
+        raise SetupError("operator setup failed because sbatch returned an invalid job ID")
+    job_id = match.group(1)
+    deadline = dependencies.monotonic() + poll_timeout
+    while True:
+        if dependencies.monotonic() >= deadline:
+            raise SetupError("environment setup timed out")
+        state_result = _run_required_remote(
+            dependencies.ssh_client,
+            ["sacct", "-j", job_id, "--noheader", "--parsable2", "--format=State%32"],
+            "environment setup status",
+        )
+        state = _parse_slurm_state(state_result.stdout)
+        if state in _TERMINAL_SLURM_STATES:
+            if state != "COMPLETED":
+                raise SetupError("environment setup job did not complete successfully")
+            return
+        dependencies.sleep(
+            min(SETUP_POLL_INTERVAL_SECONDS, max(0.0, deadline - dependencies.monotonic()))
+        )
+
+
+def _parse_slurm_state(output: str) -> str:
+    states = []
+    for line in output.splitlines():
+        value = line.partition("|")[0].strip()
+        if not value:
+            continue
+        states.append(value.split(maxsplit=1)[0])
+    if not states:
+        return ""
+    return states[0]
+
+
+def _environment_fingerprint(ssh_client: Any) -> str:
+    result = _run_required_remote(
+        ssh_client,
+        ["bash", "-lc", FINGERPRINT_SCRIPT],
+        "environment fingerprint",
+    )
+    fingerprint = result.stdout.strip().partition(" ")[0]
+    if _FINGERPRINT.fullmatch(fingerprint) is None:
+        raise SetupError("remote environment fingerprint is invalid")
+    return fingerprint
+
+
+def _remote_key_exists(ssh_client: Any) -> bool:
+    try:
+        result = ssh_client.run_remote(
+            ["bash", "-lc", REMOTE_KEY_CHECK_SCRIPT],
+            check=False,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+    except (SSHError, ValueError):
+        raise SetupError("operator setup failed while checking the remote W&B key") from None
+    if result.returncode not in {0, 1}:
+        raise SetupError("operator setup failed while checking the remote W&B key")
+    return result.returncode == 0
+
+
+def _try_remote_wandb(ssh_client: Any, *, expected_failure: bool) -> str | None:
+    try:
+        result = ssh_client.run_remote(
+            ["bash", "-lc", REMOTE_WANDB_CHECK_SCRIPT],
+            check=False,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+    except (SSHError, ValueError):
+        raise SetupError("operator setup failed during remote W&B verification") from None
+    if result.returncode == 1 and expected_failure:
+        return None
+    if result.returncode != 0:
+        raise SetupError("operator setup failed during remote W&B verification")
+    username = result.stdout.strip()
+    if not username or "\n" in username:
+        raise SetupError("operator setup failed during remote W&B identity verification")
+    return username
+
+
+def _ensure_operator_directory(path: Path) -> None:
+    try:
+        status = path.lstat()
+    except FileNotFoundError:
+        try:
+            path.mkdir(mode=0o700, parents=True)
+            status = path.lstat()
+        except OSError:
+            raise SetupError("operator config directory could not be created safely") from None
+    except OSError:
+        raise SetupError("operator config directory could not be inspected safely") from None
+    if (
+        stat.S_ISLNK(status.st_mode)
+        or not stat.S_ISDIR(status.st_mode)
+        or status.st_uid != os.getuid()
+    ):
+        raise SetupError("operator config directory is unsafe")
+    try:
+        path.chmod(0o700)
+    except OSError:
+        raise SetupError("operator config directory permissions could not be secured") from None
+
+
+def _reject_operator_symlink_ancestors(path: Path) -> None:
+    current = path
+    while current != current.parent:
+        try:
+            status = current.lstat()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            raise SetupError("operator config path could not be inspected safely") from None
+        else:
+            if stat.S_ISLNK(status.st_mode):
+                raise SetupError("operator config path contains a symbolic link")
+        current = current.parent
+
+
+def _operator_file_signature(path: Path) -> tuple[int, int, int, int] | None:
+    try:
+        status = path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError:
+        raise SetupError("operator config could not be inspected safely") from None
+    if (
+        stat.S_ISLNK(status.st_mode)
+        or not stat.S_ISREG(status.st_mode)
+        or status.st_uid != os.getuid()
+    ):
+        raise SetupError("operator config path is unsafe")
+    return status.st_dev, status.st_ino, status.st_mtime_ns, status.st_size
+
+
+def _secure_operator_file(path: Path) -> None:
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        status = os.fstat(descriptor)
+        if not stat.S_ISREG(status.st_mode) or status.st_uid != os.getuid():
+            raise SetupError("operator config is unsafe")
+        os.fchmod(descriptor, 0o600)
+    except SetupError:
+        raise
+    except OSError:
+        raise SetupError("operator config permissions could not be secured") from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _write_descriptor(descriptor: int, content: bytes) -> None:
+    view = memoryview(content)
+    while view:
+        written = os.write(descriptor, view)
+        if written <= 0:
+            raise OSError("short write")
+        view = view[written:]
+
+
+def _fsync_operator_directory(path: Path) -> None:
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+        os.fsync(descriptor)
+    except OSError:
+        raise SetupError("operator config directory could not be synchronized") from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def _positive_integer(value: str) -> int:
@@ -38,10 +631,27 @@ def _positive_integer(value: str) -> int:
     return parsed
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python -m edullm.cli")
-    commands = parser.add_subparsers(dest="command", required=True)
+def build_parser() -> argparse.ArgumentParser:
+    """Build the complete public and internal eduLLM command parser."""
+    parser = argparse.ArgumentParser(prog="edullm")
+    commands = parser.add_subparsers(
+        dest="command",
+        required=True,
+        metavar="{setup,jobs,run,logs,stop,logout}",
+    )
+    commands.add_parser("setup", help="configure this operator")
+    jobs = commands.add_parser("jobs", help="show job requests")
+    jobs.add_argument("--mine", action="store_true", help="show only requests assigned to you")
+    commands.add_parser("run", help="run the next assigned request")
+    logs = commands.add_parser("logs", help="show logs for an Issue")
+    logs.add_argument("issue", type=_positive_integer)
+    stop = commands.add_parser("stop", help="stop an Issue job")
+    stop.add_argument("issue", type=_positive_integer)
+    commands.add_parser("logout", help="close the project SSH session")
     automation = commands.add_parser("automation")
+    commands._choices_actions = [
+        action for action in commands._choices_actions if action.dest != "automation"
+    ]
     automation_commands = automation.add_subparsers(
         dest="automation_command",
         required=True,
@@ -51,6 +661,82 @@ def _parser() -> argparse.ArgumentParser:
     automation_commands.add_parser("assign")
     automation_commands.add_parser("reminders")
     return parser
+
+
+def _parser() -> argparse.ArgumentParser:
+    return build_parser()
+
+
+def handle_setup() -> int:
+    """Run focused operator setup handling."""
+    try:
+        result = setup_operator(
+            root=Path(__file__).resolve().parents[2],
+            home=Path.home(),
+            orcd_username=getpass.getuser(),
+        )
+    except SetupDeclined:
+        print("eduLLM operator setup cancelled; no SSH change was applied", file=sys.stderr)
+        return 2
+    except SetupError:
+        print("eduLLM operator setup failed", file=sys.stderr)
+        return 1
+    print(f"eduLLM operator setup complete for {result.github}")
+    return 0
+
+
+def handle_jobs(mine: bool) -> int:
+    """Fail closed until Task 7 implements job status."""
+    del mine
+    print(
+        "edullm jobs is unavailable until Task 7 implements job status",
+        file=sys.stderr,
+    )
+    return 2
+
+
+def handle_run() -> int:
+    """Fail closed until Task 7 implements job submission."""
+    print(
+        "edullm run is unavailable until Task 7 implements job submission",
+        file=sys.stderr,
+    )
+    return 2
+
+
+def handle_logs(issue: int) -> int:
+    """Fail closed until Task 7 implements job logs."""
+    del issue
+    print(
+        "edullm logs is unavailable until Task 7 implements job logs",
+        file=sys.stderr,
+    )
+    return 2
+
+
+def handle_stop(issue: int) -> int:
+    """Fail closed until Task 7 implements job cancellation."""
+    del issue
+    print(
+        "edullm stop is unavailable until Task 7 implements job cancellation",
+        file=sys.stderr,
+    )
+    return 2
+
+
+def handle_logout(*, ssh_client: Any | None = None) -> int:
+    """Close only the project ControlMaster, tolerating an absent master."""
+    client = ssh_client or SSHClient()
+    try:
+        closed = client.close_master()
+    except SSHError:
+        print("eduLLM could not close the project SSH session", file=sys.stderr)
+        return 1
+    if closed:
+        print("eduLLM project SSH session closed")
+    else:
+        print("eduLLM project SSH session was already closed")
+    return 0
 
 
 def automation_validate(
@@ -170,11 +856,12 @@ def main(
     reminder_runner: AssignmentRunner = automation_reminders,
 ) -> int:
     """
-    Run an internal hard-disabled workflow automation module command.
+    Run the ``edullm`` console entry point and internal automation commands.
 
-    Supported commands are ``automation validate``, ``automation assign``, and
-    ``automation reminders``. This module runner does not register the
-    user-facing ``edullm`` console entry point owned by Task 6.
+    Public commands are ``setup``, ``jobs``, ``run``, ``logs``, ``stop``, and
+    ``logout``. Job behavior remains unavailable until Task 7. Internal
+    workflow commands remain ``automation validate``, ``automation assign``,
+    and ``automation reminders``.
 
     :param argv: Optional command arguments without the module name.
     :param environ: Optional environment mapping for tests.
@@ -185,6 +872,19 @@ def main(
     :returns: A process exit status.
     """
     arguments = _parser().parse_args(argv)
+    if arguments.command == "setup":
+        return handle_setup()
+    if arguments.command == "jobs":
+        return handle_jobs(arguments.mine)
+    if arguments.command == "run":
+        return handle_run()
+    if arguments.command == "logs":
+        return handle_logs(arguments.issue)
+    if arguments.command == "stop":
+        return handle_stop(arguments.issue)
+    if arguments.command == "logout":
+        return handle_logout()
+
     environment = os.environ if environ is None else environ
     token = environment.get("GITHUB_TOKEN")
     if not token:
