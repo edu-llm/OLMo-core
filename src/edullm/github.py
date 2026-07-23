@@ -560,6 +560,17 @@ class GitHubClient:
                 selected_pr,
                 "script does not exist at the requested SHA",
             )
+        try:
+            final_pull = self.get(f"/repos/{self.repo}/pulls/{selected_pr}")
+            still_qualifying = _is_qualifying_pull(final_pull, sha)
+        except GitHubDataError:
+            return ReviewResult(False, selected_pr, "malformed GitHub pull evidence")
+        if not still_qualifying:
+            return ReviewResult(
+                False,
+                selected_pr,
+                "selected pull request head changed during authorization",
+            )
         return ReviewResult(
             True,
             selected_pr,

@@ -1497,6 +1497,47 @@ def test_commands_are_plain_language_and_internal_automation_remains_available()
     assert automation.issue == 42
 
 
+def test_operator_services_reject_matching_login_with_bot_actor_type(monkeypatch):
+    configuration = SimpleNamespace(
+        operators=(SimpleNamespace(github="operator", enabled=True),),
+        reviewers=frozenset({"team-lead"}),
+    )
+    document = {
+        "environment_fingerprint": "a" * 64,
+        "github": "operator",
+        "orcd_username": "operator",
+        "remote_repo_root": "$HOME/OLMo-core",
+        "scratch": "$HOME/orcd/scratch/edullm",
+        "version": 1,
+        "wandb_username": "operator",
+    }
+    local_results = iter(
+        [
+            subprocess.CompletedProcess([], 0, "operator\n", ""),
+            subprocess.CompletedProcess([], 0, "token\n", ""),
+        ]
+    )
+
+    class BotClient:
+        def __init__(self, token, repository):
+            assert token == "token"
+            assert repository == "edu-llm/OLMo-core"
+
+        @staticmethod
+        def get(path):
+            assert path == "/user"
+            return {"login": "operator", "type": "Bot"}
+
+    monkeypatch.setattr(cli, "load_gate_configuration", lambda root: configuration)
+    monkeypatch.setattr(cli, "_read_operator_document", lambda path: document)
+    monkeypatch.setattr(cli, "_run_local", lambda *args: next(local_results))
+    monkeypatch.setattr(cli, "GitHubClient", BotClient)
+    monkeypatch.setattr(cli, "SSHClient", lambda: object())
+
+    with pytest.raises(cli.JobOperationError, match="does not match"):
+        cli._load_operator_services()
+
+
 def test_public_parser_has_complete_arguments_without_task_7_behavior():
     parser = cli.build_parser()
 

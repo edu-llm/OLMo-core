@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from edullm.assignment import AssignmentState, build_assignment_comment
-from edullm.github import GitHubIssue, IssueComment, ReviewResult
+from edullm.github import GitHubError, GitHubIssue, IssueComment, ReviewResult
 from edullm.jobs import (
     JOB_MARKER,
     GateConfiguration,
@@ -115,12 +115,23 @@ def _comments(valid_request, lifecycle: LifecycleState | None = None):
         ),
     ]
     if lifecycle is not None:
-        comments.append(IssueComment(3, build_job_comment(lifecycle), "github-actions[bot]", True))
+        comments.append(IssueComment(3, build_job_comment(lifecycle), lifecycle.operator, False))
     return comments
 
 
 class StatefulGitHub:
-    def __init__(self, valid_request, *, lifecycle=None):
+    def __init__(
+        self,
+        valid_request,
+        *,
+        lifecycle=None,
+        write_author="operator",
+        write_author_is_bot=False,
+        stored_write_author=None,
+        stored_write_author_is_bot=None,
+        fail_add_once=False,
+        fail_remove_once=False,
+    ):
         self.valid_request = valid_request
         self.issue = _issue(valid_request)
         if lifecycle is not None:
@@ -132,6 +143,12 @@ class StatefulGitHub:
         self.review = ReviewResult(True, 7, "approved")
         self.events = []
         self.next_comment_id = 10
+        self.write_author = write_author
+        self.write_author_is_bot = write_author_is_bot
+        self.stored_write_author = stored_write_author
+        self.stored_write_author_is_bot = stored_write_author_is_bot
+        self.fail_add_once = fail_add_once
+        self.fail_remove_once = fail_remove_once
 
     def list_active_queue_issues(self):
         self.events.append(("list",))
@@ -154,11 +171,23 @@ class StatefulGitHub:
         comment = IssueComment(
             self.next_comment_id,
             body,
-            "github-actions[bot]",
-            True,
+            self.write_author,
+            self.write_author_is_bot,
         )
         self.next_comment_id += 1
-        self.comments.append(comment)
+        self.comments.append(
+            replace(
+                comment,
+                author=(
+                    comment.author if self.stored_write_author is None else self.stored_write_author
+                ),
+                author_is_bot=(
+                    comment.author_is_bot
+                    if self.stored_write_author_is_bot is None
+                    else self.stored_write_author_is_bot
+                ),
+            )
+        )
         return comment
 
     def update_issue_comment(self, comment_id, body):
@@ -176,10 +205,16 @@ class StatefulGitHub:
             self.issue,
             labels=tuple(sorted(set(self.issue.labels) | {label})),
         )
+        if self.fail_add_once:
+            self.fail_add_once = False
+            raise GitHubError("ambiguous add")
         return self.issue.labels
 
     def remove_issue_status_label(self, number, label):
         self.events.append(("remove-label", number, label))
+        if self.fail_remove_once:
+            self.fail_remove_once = False
+            raise GitHubError("ambiguous remove")
         self.issue = replace(
             self.issue,
             labels=tuple(item for item in self.issue.labels if item != label),
@@ -349,8 +384,9 @@ def test_resolved_request_uses_only_protected_model_and_profile_values(valid_req
 
 
 class StatefulRemote:
-    def __init__(self, mutate=None):
+    def __init__(self, mutate=None, verify_mutate=None):
         self.mutate = mutate
+        self.verify_mutate = verify_mutate
         self.staged = []
         self.submissions = []
         self.verified = []
@@ -362,6 +398,8 @@ class StatefulRemote:
 
     def verify_manifest(self, spec):
         self.verified.append(spec)
+        if self.verify_mutate:
+            self.verify_mutate()
 
     def submit(self, key, spec):
         self.submissions.append((key, spec))
@@ -375,6 +413,86 @@ class StatefulRemote:
             slurm_job_id="12345",
             log_path="/home/operator/orcd/scratch/edullm/logs/issue-42-attempt-1-12345.log",
             submitted_at=NOW,
+        )
+
+
+def test_run_publishes_lifecycle_as_the_authenticated_operator_user(valid_request):
+    github = StatefulGitHub(
+        valid_request,
+        write_author="operator",
+        write_author_is_bot=False,
+    )
+    remote = StatefulRemote()
+
+    state = run_assigned(
+        operator="operator",
+        github=github,
+        load_configuration=_config,
+        remote=remote,
+        now=NOW,
+    )
+
+    lifecycle_comments = [comment for comment in github.comments if JOB_MARKER in comment.body]
+    assert state.current_state == "submitted"
+    assert [(comment.author, comment.author_is_bot) for comment in lifecycle_comments] == [
+        ("operator", False)
+    ]
+
+
+@pytest.mark.parametrize(
+    "author,author_is_bot",
+    [
+        ("unrelated-human", False),
+        ("operator", True),
+        ("github-actions[bot]", True),
+    ],
+)
+def test_gate_rejects_lifecycle_owned_by_unrelated_human_or_bot(
+    valid_request,
+    author,
+    author_is_bot,
+):
+    lifecycle = replace(
+        _lifecycle("submitted"),
+        request_digest=valid_request.digest,
+        attempts=(replace(_attempt("submitted"), request_digest=valid_request.digest),),
+    )
+    github = StatefulGitHub(valid_request, lifecycle=lifecycle)
+    github.issue = replace(
+        github.issue,
+        labels=("edullm-job", "status:assigned", "research"),
+    )
+    github.comments[2] = replace(
+        github.comments[2],
+        author=author,
+        author_is_bot=author_is_bot,
+    )
+
+    with pytest.raises(JobOperationError, match="ownership"):
+        full_submission_gate(
+            42,
+            operator="operator",
+            github=github,
+            configuration=_config(),
+        )
+
+
+def test_run_fails_closed_when_post_write_comment_author_changes(valid_request):
+    github = StatefulGitHub(
+        valid_request,
+        write_author="operator",
+        write_author_is_bot=False,
+        stored_write_author="github-actions[bot]",
+        stored_write_author_is_bot=True,
+    )
+
+    with pytest.raises(JobOperationError, match="ownership"):
+        run_assigned(
+            operator="operator",
+            github=github,
+            load_configuration=_config,
+            remote=StatefulRemote(),
+            now=NOW,
         )
 
 
@@ -481,6 +599,83 @@ def test_run_reverifies_manifest_then_submits_once_and_publishes_monotonic_state
         "W&B: https://wandb.ai/eduLLM/pretraining/runs/issue-42-attempt-1-12345"
     ]
     assert "<script>" not in "\n".join(notices)
+
+
+def test_run_places_final_authorization_after_remote_manifest_verification(valid_request):
+    github = StatefulGitHub(valid_request)
+
+    def change_head_authorization():
+        github.review = ReviewResult(False, 7, "head changed")
+
+    remote = StatefulRemote(verify_mutate=change_head_authorization)
+
+    with pytest.raises(JobOperationError, match="reviewed commit"):
+        run_assigned(
+            operator="operator",
+            github=github,
+            load_configuration=_config,
+            remote=remote,
+            now=NOW,
+        )
+
+    assert len(remote.verified) == 1
+    assert remote.submissions == []
+
+
+def test_run_repairs_interrupted_add_before_remove_label_transition(valid_request):
+    github = StatefulGitHub(valid_request, fail_remove_once=True)
+    remote = StatefulRemote()
+
+    with pytest.raises(JobOperationError, match="label write"):
+        run_assigned(
+            operator="operator",
+            github=github,
+            load_configuration=_config,
+            remote=remote,
+            now=NOW,
+        )
+
+    assert {"status:assigned", "status:submitted"} <= set(github.issue.labels)
+    assert "research" in github.issue.labels
+
+    repaired = run_assigned(
+        operator="operator",
+        github=github,
+        load_configuration=_config,
+        remote=remote,
+        now=NOW,
+    )
+
+    assert repaired.current_state == "submitted"
+    assert set(github.issue.labels) == {"edullm-job", "status:submitted", "research"}
+
+
+def test_run_reconciles_ambiguous_label_add_and_rejects_later_state_pair(valid_request):
+    github = StatefulGitHub(valid_request, fail_add_once=True)
+
+    state = run_assigned(
+        operator="operator",
+        github=github,
+        load_configuration=_config,
+        remote=StatefulRemote(),
+        now=NOW,
+    )
+
+    assert state.current_state == "submitted"
+    assert set(github.issue.labels) == {"edullm-job", "status:submitted", "research"}
+
+    github.issue = replace(
+        github.issue,
+        labels=("edullm-job", "status:submitted", "status:running", "research"),
+    )
+    with pytest.raises(JobOperationError, match="malformed"):
+        run_assigned(
+            operator="operator",
+            github=github,
+            load_configuration=_config,
+            remote=StatefulRemote(),
+            now=NOW,
+        )
 
 
 def test_run_repairs_github_outage_after_receipt_without_new_attempt(valid_request):

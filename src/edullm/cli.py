@@ -847,7 +847,11 @@ def _load_operator_services() -> OperatorServices:
         token = ""
     try:
         identity = github.get("/user")
-        if type(identity) is not dict or identity.get("login") != operator:
+        if (
+            type(identity) is not dict
+            or identity.get("login") != operator
+            or identity.get("type") != "User"
+        ):
             raise JobOperationError("authenticated GitHub identity does not match the operator")
     except JobOperationError:
         raise

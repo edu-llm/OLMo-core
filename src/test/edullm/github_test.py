@@ -136,6 +136,7 @@ def _gate_client(
     *,
     pulls: object = None,
     details: Mapping[int, object] | None = None,
+    final_details: Mapping[int, object] | None = None,
     reviews: Mapping[int, object] | None = None,
     checks: object = None,
     check_payload: object = None,
@@ -144,6 +145,7 @@ def _gate_client(
 ) -> tuple[GitHubClient, FakeSession]:
     pulls = [{"number": 7}] if pulls is None else pulls
     details = {7: _open_pull()} if details is None else details
+    final_details = details if final_details is None else final_details
     reviews = {7: [_review()]} if reviews is None else reviews
     checks = _successful_checks() if checks is None else checks
     check_payload = (
@@ -160,6 +162,8 @@ def _gate_client(
     )
     for number, payload in details.items():
         session.add(f"/repos/{REPO}/pulls/{number}", payload)
+        if number in final_details:
+            session.add(f"/repos/{REPO}/pulls/{number}", final_details[number])
     for number, payload in reviews.items():
         session.add(
             f"/repos/{REPO}/pulls/{number}/reviews",
@@ -582,6 +586,21 @@ def test_reviewed_commit_rejects_closed_unmerged_pull():
         None,
         "no qualifying pull request has the requested SHA as its head",
     )
+
+
+def test_reviewed_commit_refetches_selected_pr_head_after_checks_and_file_evidence():
+    client, session = _gate_client(final_details={7: _open_pull(OTHER_SHA)})
+
+    result = _result(client)
+
+    assert result == ReviewResult(
+        False,
+        7,
+        "selected pull request head changed during authorization",
+    )
+    pull_url = f"{BASE_URL}/repos/{REPO}/pulls/7"
+    assert [call[0] for call in session.calls].count(pull_url) == 2
+    assert session.calls[-1][0] == pull_url
 
 
 @pytest.mark.parametrize("pulls", [[], [{"number": 7}]])

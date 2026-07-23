@@ -153,7 +153,7 @@ class JobAttempt:
 
 @dataclass(frozen=True)
 class LifecycleState:
-    """Canonical public lifecycle state kept in one bot-owned comment."""
+    """Canonical public lifecycle state kept in one assigned-operator-owned comment."""
 
     issue: int
     request_digest: str
@@ -554,6 +554,7 @@ def _exact_marker(
     kind: str,
     required: bool,
     actor: str,
+    actor_is_bot: bool,
 ) -> IssueComment | None:
     matches: list[IssueComment] = []
     for comment in comments:
@@ -569,16 +570,33 @@ def _exact_marker(
             raise JobOperationError(f"{kind} comment is missing")
         return None
     selected = matches[0]
-    if not selected.author_is_bot or selected.author != actor:
+    if selected.author_is_bot is not actor_is_bot or selected.author != actor:
         raise JobOperationError(f"{kind} comment ownership is invalid")
     return selected
 
 
 def _managed_status(issue: GitHubIssue) -> str:
-    labels = {label for label in issue.labels if label.startswith("status:")}
-    if not labels <= _MANAGED_STATUS_LABELS or len(labels) != 1:
+    labels = _managed_status_labels(issue)
+    if len(labels) != 1:
         raise JobOperationError("managed status labels are malformed")
     return next(iter(labels)).removeprefix("status:")
+
+
+def _managed_status_labels(issue: GitHubIssue) -> set[str]:
+    labels = {label for label in issue.labels if label.startswith("status:")}
+    if not labels or not labels <= _MANAGED_STATUS_LABELS or len(labels) > 2:
+        raise JobOperationError("managed status labels are malformed")
+    return labels
+
+
+def _valid_label_transition(old: str, new: str) -> bool:
+    if old == "assigned":
+        return new == "submitted"
+    if old == "submitted":
+        return new == "running" or new in _TERMINAL_STATES
+    if old == "running":
+        return new in _TERMINAL_STATES
+    return False
 
 
 def _enabled_operators(operators: Sequence[Operator]) -> dict[str, Operator]:
@@ -654,9 +672,7 @@ def _gate(
     if operator not in enabled:
         raise JobOperationError("local identity is not an enabled protected operator")
     issue = _issue_snapshot(github, issue_number)
-    status = _managed_status(issue)
-    if status not in allowed_statuses:
-        raise JobOperationError("Issue lifecycle status is not authorized for this operation")
+    managed_labels = _managed_status_labels(issue)
     enabled_assignees = set(issue.assignees) & set(enabled)
     if operator not in issue.assignees or enabled_assignees != {operator}:
         raise JobOperationError("Issue assignee does not match the protected operator")
@@ -677,6 +693,7 @@ def _gate(
         kind="validated status",
         required=True,
         actor=automation_actor,
+        actor_is_bot=True,
     )
     assignment_comment = _exact_marker(
         comments,
@@ -684,6 +701,7 @@ def _gate(
         kind="assignment",
         required=True,
         actor=automation_actor,
+        actor_is_bot=True,
     )
     assert status_comment is not None and assignment_comment is not None
     try:
@@ -732,7 +750,8 @@ def _gate(
         marker=_JOB_MARKER_LINE,
         kind="job lifecycle",
         required=False,
-        actor=automation_actor,
+        actor=operator,
+        actor_is_bot=False,
     )
     lifecycle = None if lifecycle_comment is None else parse_job_comment(lifecycle_comment.body)
     if lifecycle is not None and (
@@ -742,6 +761,20 @@ def _gate(
         or lifecycle.assignment_version != len(assignment.history)
     ):
         raise JobOperationError("job lifecycle does not match its assignment")
+    managed_states = {label.removeprefix("status:") for label in managed_labels}
+    if len(managed_states) == 1:
+        if next(iter(managed_states)) not in allowed_statuses:
+            raise JobOperationError("Issue lifecycle status is not authorized for this operation")
+    else:
+        if lifecycle is None or lifecycle.current_state not in managed_states:
+            raise JobOperationError("managed status labels are malformed")
+        stale_states = managed_states - {lifecycle.current_state}
+        if (
+            len(stale_states) != 1
+            or not stale_states <= allowed_statuses
+            or not _valid_label_transition(next(iter(stale_states)), lifecycle.current_state)
+        ):
+            raise JobOperationError("managed status labels are malformed")
 
     return SubmissionGateSnapshot(
         issue=issue.number,
@@ -784,6 +817,79 @@ def full_submission_gate(
     )
 
 
+_FIXED_OPTION_NAME = re.compile(r"[a-z][a-z0-9_.-]{0,127}\Z")
+
+
+def _fixed_option_value(value: object, request: JobRequest) -> str:
+    if type(value) is bool:
+        return "true" if value else "false"
+    if value is None:
+        return "null"
+    if type(value) is int:
+        return str(value)
+    if type(value) is str:
+        if _SAFE_TEXT.fullmatch(value) is None:
+            raise JobOperationError("protected fixed option is invalid")
+        return value
+    if type(value) is tuple:
+        items = cast(tuple[object, ...], value)
+        if not items or any(
+            type(item) is not str or _SAFE_TEXT.fullmatch(item) is None for item in items
+        ):
+            raise JobOperationError("protected fixed option is invalid")
+        return json.dumps(items, separators=(",", ":"))
+    if isinstance(value, Mapping):
+        fields = set(value)
+        if fields == {"type", "field"} and value.get("type") == "request_field":
+            field = value.get("field")
+            if field != "study" or _SAFE_TEXT.fullmatch(request.study) is None:
+                raise JobOperationError("protected request-derived option is invalid")
+            return request.study
+        if fields == {"value", "unit"}:
+            steps = value.get("value")
+            unit = value.get("unit")
+            if type(steps) is not int or not 1 <= steps <= 100 or unit != "steps":
+                raise JobOperationError("protected duration option is invalid")
+            return f"{{value:{steps},unit:steps}}"
+    raise JobOperationError("protected fixed option is invalid")
+
+
+def _resolve_fixed_arguments(
+    profile: Mapping[str, object],
+    request: JobRequest,
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    launcher_values = profile.get("fixed_launcher_arguments", ())
+    option_values = profile.get("fixed_options", {})
+    if type(launcher_values) is not tuple or not isinstance(option_values, Mapping):
+        raise JobOperationError("protected fixed arguments are invalid")
+    launcher = tuple(cast(Sequence[str], launcher_values))
+    if any(
+        type(argument) is not str or _SAFE_TEXT.fullmatch(argument) is None for argument in launcher
+    ):
+        raise JobOperationError("protected fixed launcher argument is invalid")
+
+    arguments: list[str] = []
+    names: list[str] = []
+    derived: list[str] = []
+    for name, value in option_values.items():
+        if type(name) is not str or _FIXED_OPTION_NAME.fullmatch(name) is None or name in names:
+            raise JobOperationError("protected fixed option name is invalid")
+        names.append(name)
+        if isinstance(value, Mapping) and value.get("type") == "derived_path":
+            if (
+                set(value) != {"type", "root_env", "relative"}
+                or value.get("root_env") != "EDULLM_SCRATCH"
+                or value.get("relative") != "runs/{run_name}"
+                or name not in {"save-folder", "work-dir"}
+            ):
+                raise JobOperationError("protected derived path option is invalid")
+            derived.append(name)
+            continue
+        rendered = _fixed_option_value(value, request)
+        arguments.append(f"--{name}={rendered}")
+    return launcher, tuple(arguments), tuple(names), tuple(derived)
+
+
 def build_resolved_request(
     snapshot: SubmissionGateSnapshot,
     *,
@@ -798,6 +904,7 @@ def build_resolved_request(
     if type(model_identity) is not str or type(kinds) not in {tuple, list}:
         raise JobOperationError("protected entrypoint profile is invalid")
     request = snapshot.request
+    launcher, fixed, fixed_names, derived = _resolve_fixed_arguments(profile, request)
     return ResolvedRequest(
         request=request,
         operator=snapshot.operator,
@@ -812,6 +919,10 @@ def build_resolved_request(
         slurm_partition=snapshot.slurm_partition,
         slurm_memory=snapshot.slurm_memory,
         slurm_cpus_per_gpu=snapshot.slurm_cpus_per_gpu,
+        fixed_launcher_arguments=launcher,
+        fixed_arguments=fixed,
+        fixed_option_names=fixed_names,
+        derived_path_options=derived,
     )
 
 
@@ -820,8 +931,10 @@ def _persist_lifecycle(
     issue: int,
     state: LifecycleState,
     *,
-    actor: str = AUTOMATION_ACTOR,
+    operator: str,
 ) -> IssueComment:
+    if operator != state.operator or not _valid_login(operator):
+        raise JobOperationError("lifecycle operator binding is invalid")
     body = build_job_comment(state)
     comments = github.list_issue_comments(issue)
     existing = _exact_marker(
@@ -829,7 +942,8 @@ def _persist_lifecycle(
         marker=_JOB_MARKER_LINE,
         kind="job lifecycle",
         required=False,
-        actor=actor,
+        actor=operator,
+        actor_is_bot=False,
     )
     try:
         persisted = (
@@ -844,7 +958,8 @@ def _persist_lifecycle(
             marker=_JOB_MARKER_LINE,
             kind="job lifecycle",
             required=True,
-            actor=actor,
+            actor=operator,
+            actor_is_bot=False,
         )
         if (
             reconciled is None
@@ -853,14 +968,15 @@ def _persist_lifecycle(
         ):
             raise JobOperationError("GitHub lifecycle write outcome is ambiguous") from None
         persisted = reconciled
-    if persisted.body != body or not persisted.author_is_bot or persisted.author != actor:
+    if persisted.body != body or persisted.author_is_bot or persisted.author != operator:
         raise JobOperationError("persisted lifecycle ownership is invalid")
     confirmed = _exact_marker(
         github.list_issue_comments(issue),
         marker=_JOB_MARKER_LINE,
         kind="job lifecycle",
         required=True,
-        actor=actor,
+        actor=operator,
+        actor_is_bot=False,
     )
     if confirmed is None or confirmed.id != persisted.id or confirmed.body != body:
         raise JobOperationError("lifecycle postcondition failed")
@@ -868,33 +984,68 @@ def _persist_lifecycle(
 
 
 def _transition_labels(github: Any, issue: int, old: str, new: str) -> None:
-    try:
-        github.add_issue_status_label(issue, f"status:{new}")
-    except GitHubError:
-        current = github.fetch_issue(issue)
-        if f"status:{new}" not in current.labels:
-            raise JobOperationError("lifecycle label write failed") from None
+    old_label = f"status:{old}"
+    new_label = f"status:{new}"
     current = github.fetch_issue(issue)
-    managed = {label for label in current.labels if label.startswith("status:")}
-    if not managed <= _MANAGED_STATUS_LABELS or f"status:{new}" not in managed:
+    managed = _managed_status_labels(current)
+    allowed = {old_label, new_label}
+    if not managed <= allowed:
         raise JobOperationError("lifecycle label transition is malformed")
-    if old != new:
+    if managed == {new_label}:
+        return
+    if old == new or managed not in ({old_label}, {old_label, new_label}):
+        raise JobOperationError("lifecycle label transition is malformed")
+    if managed == {old_label}:
         try:
-            github.remove_issue_status_label(issue, f"status:{old}")
+            github.add_issue_status_label(issue, new_label)
         except GitHubError:
             current = github.fetch_issue(issue)
-            if f"status:{old}" in current.labels:
+            if new_label not in current.labels:
                 raise JobOperationError("lifecycle label write failed") from None
+        current = github.fetch_issue(issue)
+        managed = _managed_status_labels(current)
+    if managed != {old_label, new_label}:
+        raise JobOperationError("lifecycle label transition is malformed")
+    try:
+        github.remove_issue_status_label(issue, old_label)
+    except GitHubError:
+        current = github.fetch_issue(issue)
+        if old_label in current.labels:
+            raise JobOperationError("lifecycle label write failed") from None
     final = github.fetch_issue(issue)
     if _managed_status(final) != new:
         raise JobOperationError("lifecycle label postcondition failed")
 
 
-def _ensure_notice(github: Any, issue: int, body: str, *, actor: str) -> None:
+def _repair_labels_to_lifecycle(github: Any, issue: int, state: str) -> None:
+    current = github.fetch_issue(issue)
+    managed = _managed_status_labels(current)
+    expected = f"status:{state}"
+    if managed == {expected}:
+        return
+    if len(managed) == 1:
+        stale = next(iter(managed)).removeprefix("status:")
+    elif expected in managed and len(managed) == 2:
+        stale = next(iter(managed - {expected})).removeprefix("status:")
+    else:
+        raise JobOperationError("lifecycle label transition is malformed")
+    if not _valid_label_transition(stale, state):
+        raise JobOperationError("lifecycle label transition is malformed")
+    _transition_labels(github, issue, stale, state)
+
+
+def _ensure_notice(
+    github: Any,
+    issue: int,
+    body: str,
+    *,
+    actor: str,
+    actor_is_bot: bool,
+) -> None:
     comments = github.list_issue_comments(issue)
     matches = [comment for comment in comments if comment.body == body]
     if len(matches) > 1 or (
-        matches and (not matches[0].author_is_bot or matches[0].author != actor)
+        matches and (matches[0].author_is_bot is not actor_is_bot or matches[0].author != actor)
     ):
         raise JobOperationError("requester notice ownership is invalid")
     if matches:
@@ -903,10 +1054,18 @@ def _ensure_notice(github: Any, issue: int, body: str, *, actor: str) -> None:
         persisted = github.create_issue_comment(issue, body)
     except GitHubError:
         matches = [comment for comment in github.list_issue_comments(issue) if comment.body == body]
-        if len(matches) != 1 or not matches[0].author_is_bot or matches[0].author != actor:
+        if (
+            len(matches) != 1
+            or matches[0].author_is_bot is not actor_is_bot
+            or matches[0].author != actor
+        ):
             raise JobOperationError("requester notice write outcome is ambiguous") from None
         return
-    if persisted.body != body or not persisted.author_is_bot or persisted.author != actor:
+    if (
+        persisted.body != body
+        or persisted.author_is_bot is not actor_is_bot
+        or persisted.author != actor
+    ):
         raise JobOperationError("requester notice ownership is invalid")
 
 
@@ -946,8 +1105,11 @@ def run_assigned(
     candidates = []
     for issue in listed:
         try:
-            if _managed_status(issue) == "assigned" and operator in issue.assignees:
+            managed = _managed_status_labels(issue)
+            if "status:assigned" in managed and operator in issue.assignees:
                 candidates.append(issue.number)
+            elif len(managed) != 1:
+                raise JobOperationError("managed status labels are malformed")
         except JobOperationError:
             raise
     if not candidates:
@@ -991,8 +1153,9 @@ def run_assigned(
     key = build_submission_key(issue_number, first.request_digest, attempt_number, operator)
     try:
         remote.stage(key, script, spec)
+        remote.verify_manifest(spec)
     except Exception:
-        raise JobOperationError("remote submission staging failed") from None
+        raise JobOperationError("remote submission preparation failed") from None
 
     second_config = load_configuration()
     second = full_submission_gate(
@@ -1005,7 +1168,6 @@ def run_assigned(
     if second != first:
         raise JobOperationError("submission evidence changed between mandatory gates")
     try:
-        remote.verify_manifest(spec)
         receipt = remote.submit(key, spec)
     except Exception:
         raise JobOperationError("remote submission transaction failed") from None
@@ -1030,7 +1192,7 @@ def run_assigned(
             or recorded.submitted_at != receipt.submitted_at
         ):
             raise JobOperationError("recovery receipt does not match canonical lifecycle state")
-        _persist_lifecycle(github, issue_number, recovery_state, actor=automation_actor)
+        _persist_lifecycle(github, issue_number, recovery_state, operator=operator)
         _transition_labels(
             github,
             issue_number,
@@ -1042,7 +1204,8 @@ def run_assigned(
             github,
             issue_number,
             _submission_notice(requester, issue_number, recorded),
-            actor=automation_actor,
+            actor=operator,
+            actor_is_bot=False,
         )
         return recovery_state
 
@@ -1069,14 +1232,15 @@ def run_assigned(
         updated_at=receipt.submitted_at,
         notification=NotificationRecord("none", "none", receipt.submitted_at),
     )
-    _persist_lifecycle(github, issue_number, state, actor=automation_actor)
+    _persist_lifecycle(github, issue_number, state, operator=operator)
     _transition_labels(github, issue_number, "assigned", "submitted")
     requester = normalize_actor_login(first.request.requester)
     _ensure_notice(
         github,
         issue_number,
         _submission_notice(requester, issue_number, attempt),
-        actor=automation_actor,
+        actor=operator,
+        actor_is_bot=False,
     )
     return state
 
@@ -1343,16 +1507,15 @@ def stop_job(
     if evidence in _TERMINAL_STATES:
         repaired = reconcile_lifecycle(state, evidence, now=now)
         if repaired != state:
-            _persist_lifecycle(github, issue, repaired, actor=automation_actor)
-        public_status = _managed_status(github.fetch_issue(issue))
-        if public_status != repaired.current_state:
-            _transition_labels(github, issue, public_status, repaired.current_state)
+            _persist_lifecycle(github, issue, repaired, operator=operator)
+        _repair_labels_to_lifecycle(github, issue, repaired.current_state)
         requester = normalize_actor_login(first.request.requester)
         _ensure_notice(
             github,
             issue,
             _terminal_notice(requester, issue, repaired),
-            actor=automation_actor,
+            actor=operator,
+            actor_is_bot=False,
         )
         return repaired
     if evidence not in {"submitted", "running"}:
@@ -1376,17 +1539,16 @@ def stop_job(
         raise JobOperationError("authoritative Slurm state is invalid")
     repaired = reconcile_lifecycle(state, after, now=now)
     if repaired != state:
-        _persist_lifecycle(github, issue, repaired, actor=automation_actor)
-    public_status = _managed_status(github.fetch_issue(issue))
-    if public_status != repaired.current_state:
-        _transition_labels(github, issue, public_status, repaired.current_state)
+        _persist_lifecycle(github, issue, repaired, operator=operator)
+    _repair_labels_to_lifecycle(github, issue, repaired.current_state)
     if repaired.current_state == "cancelled":
         requester = normalize_actor_login(first.request.requester)
         _ensure_notice(
             github,
             issue,
             f"@{requester} eduLLM job #{issue} was cancelled.",
-            actor=automation_actor,
+            actor=operator,
+            actor_is_bot=False,
         )
     return repaired
 
@@ -1583,16 +1745,9 @@ def reconcile_operator_jobs(
                 github,
                 snapshot.issue,
                 repaired,
-                actor=automation_actor,
+                operator=operator,
             )
-        public_status = _managed_status(github.fetch_issue(snapshot.issue))
-        if public_status != repaired.current_state:
-            _transition_labels(
-                github,
-                snapshot.issue,
-                public_status,
-                repaired.current_state,
-            )
+        _repair_labels_to_lifecycle(github, snapshot.issue, repaired.current_state)
         requester = normalize_actor_login(snapshot.request.requester)
         if repaired.current_state == "submitted":
             notice = _submission_notice(
@@ -1608,7 +1763,8 @@ def reconcile_operator_jobs(
             github,
             snapshot.issue,
             notice,
-            actor=automation_actor,
+            actor=operator,
+            actor_is_bot=False,
         )
         states.append(repaired)
     try:
@@ -1709,7 +1865,7 @@ def deliver_terminal_notifications(
             github,
             issue.number,
             in_flight,
-            actor=automation_actor,
+            operator=state.operator,
         )
         try:
             notifier.terminal(
@@ -1727,7 +1883,7 @@ def deliver_terminal_notifications(
                     github,
                     issue.number,
                     pending,
-                    actor=automation_actor,
+                    operator=state.operator,
                 )
             raise JobOperationError("terminal Slack notification failed") from None
         except Exception:
@@ -1740,7 +1896,7 @@ def deliver_terminal_notifications(
             github,
             issue.number,
             sent,
-            actor=automation_actor,
+            operator=state.operator,
         )
         results.append(sent)
     return tuple(results)

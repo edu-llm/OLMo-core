@@ -109,6 +109,10 @@ class ResolvedRequest:
     slurm_memory: str = "64G"
     slurm_cpus_per_gpu: int = 4
     scratch_root: str = "$HOME/orcd/scratch/edullm"
+    fixed_launcher_arguments: tuple[str, ...] = ()
+    fixed_arguments: tuple[str, ...] = ()
+    fixed_option_names: tuple[str, ...] = ()
+    derived_path_options: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

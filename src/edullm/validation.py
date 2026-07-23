@@ -93,6 +93,9 @@ def _parse_profile_arguments(
     )
     fixed_options = cast(Mapping[str, object], profile.get("fixed_options", {}))
     allowed_options = cast(Mapping[str, Mapping[str, object]], profile.get("allowed_options", {}))
+    fixed_wandb_project = fixed_options.get("trainer.callbacks.wandb.project")
+    if type(fixed_wandb_project) is str and request.wandb_project != fixed_wandb_project:
+        errors.append("W&B project is fixed by entrypoint policy")
 
     expected_positionals = profile.get("positionals")
     if type(expected_positionals) is not int or len(arguments) < expected_positionals:

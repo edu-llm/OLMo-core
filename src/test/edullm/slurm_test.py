@@ -8,9 +8,13 @@ import threading
 import time
 from dataclasses import replace
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
+from edullm.data_manifest import BUILTIN_GENERIC_SMOKE_SHA256
+from edullm.jobs import SubmissionGateSnapshot, build_resolved_request
+from edullm.policy import load_policy
 from edullm.slurm import (
     SubmissionError,
     SubmissionReceipt,
@@ -21,6 +25,7 @@ from edullm.slurm import (
     stage_submission,
     submission_transaction,
 )
+from edullm.validation import validate_request
 
 NOW = datetime(2026, 7, 23, 13, 0, 0, tzinfo=timezone.utc)
 
@@ -81,6 +86,119 @@ def test_render_uses_fixed_directives_structured_argv_and_reviewed_worktree(
     assert "eval " not in text
     assert "pip install" not in text
     assert "WANDB_API_KEY" not in text
+
+
+def test_generic_smoke_renders_every_protected_launcher_and_training_option(
+    valid_resolved_request,
+):
+    policy = load_policy(Path("config/edullm/policy.yaml"))
+    request = replace(
+        valid_resolved_request.request,
+        entrypoint_profile="generic-smoke",
+        script_path="src/examples/llm/train.py",
+        launcher="torchrun",
+        argv=("generic-run",),
+        data_manifest="builtin://generic-smoke-v1",
+        data_manifest_sha256=BUILTIN_GENERIC_SMOKE_SHA256,
+        wandb_project="test",
+    )
+    snapshot = SubmissionGateSnapshot(
+        issue=request.issue_number,
+        request=request,
+        request_digest=request.digest,
+        operator="operator",
+        validated_at=NOW,
+        status_comment_id=1,
+        assignment_comment_id=2,
+        assignment_binding="b" * 64,
+        assignment_version=0,
+        config_digest="c" * 64,
+        lifecycle=None,
+        profile=policy.entrypoints["generic-smoke"],
+        repository_url=policy.repository_url,
+        scratch_root=policy.scratch_root,
+        slurm_partition=policy.slurm_partition,
+        slurm_memory=policy.slurm_memory,
+        slurm_cpus_per_gpu=policy.slurm_cpus_per_gpu,
+    )
+
+    text = render_sbatch(build_resolved_request(snapshot, attempt_number=1))
+
+    expected = (
+        "--model-factory=olmo2_190M",
+        "--sequence-length=512",
+        "data_loader.global_batch_size=8192",
+        "train_module.rank_microbatch_size=2048",
+        "train_module.max_sequence_length=512",
+        "trainer.hard_stop={value:20,unit:steps}",
+        "trainer.callbacks.lm_evaluator.enabled=false",
+        "trainer.callbacks.downstream_evaluator.enabled=false",
+        "trainer.callbacks.checkpointer.save_interval=10",
+        "trainer.callbacks.checkpointer.ephemeral_save_interval=null",
+        "trainer.callbacks.wandb.enabled=true",
+        "trainer.callbacks.wandb.entity=eduLLM",
+        "trainer.callbacks.wandb.project=test",
+        "trainer.callbacks.wandb.group=skill-dag-v1",
+        'trainer.callbacks.wandb.tags=["orcd","generic-smoke","olmo2-190m"]',
+    )
+    for argument in expected:
+        assert argument in text
+    assert text.count("--standalone") == 1
+    assert text.count("--nproc-per-node=1") == 1
+    assert 'EDULLM_RUN_DIR="$EDULLM_SCRATCH/runs/issue-42-skill-dag-v1-natural"' in text
+    assert '"--save-folder=$EDULLM_RUN_DIR"' in text
+    assert '"--work-dir=$EDULLM_RUN_DIR"' in text
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        "--model-factory=other",
+        "--sequence-length=4096",
+        "--save-folder=/tmp/escape",
+        "--trainer.hard_stop={value:200,unit:steps}",
+        "--trainer.callbacks.wandb.project=other",
+    ],
+)
+def test_generic_smoke_rejects_researcher_overrides_of_protected_options(
+    valid_resolved_request,
+    override,
+):
+    policy = load_policy(Path("config/edullm/policy.yaml"))
+    request = replace(
+        valid_resolved_request.request,
+        entrypoint_profile="generic-smoke",
+        script_path="src/examples/llm/train.py",
+        launcher="torchrun",
+        argv=("generic-run", override),
+        data_manifest="builtin://generic-smoke-v1",
+        data_manifest_sha256=BUILTIN_GENERIC_SMOKE_SHA256,
+        wandb_project="test",
+    )
+
+    errors = validate_request(request, policy)
+
+    assert any("fixed by policy" in error for error in errors)
+
+
+def test_generic_smoke_rejects_request_level_wandb_project_override(
+    valid_resolved_request,
+):
+    policy = load_policy(Path("config/edullm/policy.yaml"))
+    request = replace(
+        valid_resolved_request.request,
+        entrypoint_profile="generic-smoke",
+        script_path="src/examples/llm/train.py",
+        launcher="torchrun",
+        argv=("generic-run",),
+        data_manifest="builtin://generic-smoke-v1",
+        data_manifest_sha256=BUILTIN_GENERIC_SMOKE_SHA256,
+        wandb_project="pretraining",
+    )
+
+    errors = validate_request(request, policy)
+
+    assert "W&B project is fixed by entrypoint policy" in errors
 
 
 def test_render_audit_metadata_is_complete_and_wandb_id_is_slurm_deterministic(
@@ -232,16 +350,12 @@ def test_transaction_submits_once_and_persists_private_canonical_receipt(
             "sbatch",
             "--export=NONE",
             "--parsable",
+            f"--job-name=edullm-{key}",
+            f"--comment=edullm:{key}",
             str(tmp_path / key / "request.sbatch"),
         ]
     ]
-    assert manifest_calls == [
-        (
-            spec.manifest_uri,
-            spec.manifest_sha256,
-            set(spec.allowed_data_kinds),
-        )
-    ]
+    assert manifest_calls == []
     receipt_path = tmp_path / key / "receipt.json"
     assert stat.S_IMODE(receipt_path.stat().st_mode) == 0o600
     assert stat.S_IMODE(receipt_path.parent.stat().st_mode) == 0o700
@@ -351,7 +465,7 @@ def test_transaction_rejects_malformed_sbatch_output_without_retrying(
             manifest_verifier=lambda *args: None,
             now=NOW,
         )
-    with pytest.raises(SubmissionError, match="ambiguous"):
+    with pytest.raises(SubmissionError):
         submission_transaction(
             tmp_path,
             key,
@@ -360,7 +474,7 @@ def test_transaction_rejects_malformed_sbatch_output_without_retrying(
             manifest_verifier=lambda *args: None,
             now=NOW,
         )
-    assert len(calls) == 1
+    assert len([argv for argv in calls if argv[0] == "sbatch"]) == 1
 
 
 def test_transaction_rejects_failed_sbatch_without_receipt(
@@ -477,7 +591,7 @@ def test_failed_receipt_persistence_leaves_durable_ambiguous_intent_and_never_re
     assert (tmp_path / key / "intent.json").exists()
 
     monkeypatch.setattr(module, "_publish_private", real_publish)
-    with pytest.raises(SubmissionError, match="ambiguous"):
+    with pytest.raises(SubmissionError):
         submission_transaction(
             tmp_path,
             key,
@@ -486,7 +600,113 @@ def test_failed_receipt_persistence_leaves_durable_ambiguous_intent_and_never_re
             manifest_verifier=lambda *args: None,
             now=NOW,
         )
-    assert len(calls) == 1
+    assert len([argv for argv in calls if argv[0] == "sbatch"]) == 1
+
+
+def test_failed_receipt_persistence_recovers_one_exact_authoritative_job_without_resubmit(
+    tmp_path,
+    valid_resolved_request,
+    monkeypatch,
+):
+    script = render_sbatch(valid_resolved_request)
+    spec = _spec(valid_resolved_request, script)
+    key = build_submission_key(spec.issue, spec.request_digest, 1, spec.operator)
+    stage_submission(tmp_path, key, script)
+    calls: list[list[str]] = []
+    import edullm.slurm as module
+
+    real_publish = module._publish_private
+
+    def fail_receipt(path, content):
+        if path.name == "receipt.json":
+            raise OSError("private persistence diagnostics")
+        return real_publish(path, content)
+
+    monkeypatch.setattr(module, "_publish_private", fail_receipt)
+    with pytest.raises(SubmissionError, match="receipt"):
+        submission_transaction(
+            tmp_path,
+            key,
+            spec,
+            sbatch_runner=_runner(calls),
+            manifest_verifier=lambda *args: None,
+            now=NOW,
+        )
+
+    monkeypatch.setattr(module, "_publish_private", real_publish)
+
+    def discover(argv, **kwargs):
+        calls.append(list(argv))
+        assert argv[0] == "sacct"
+        identity = f"edullm-{key}"
+        output = f"12345|{identity}|PENDING|operator|edullm:{key}|" "2026-07-23T13:00:00\n"
+        return subprocess.CompletedProcess(argv, 0, output, "")
+
+    receipt = submission_transaction(
+        tmp_path,
+        key,
+        spec,
+        sbatch_runner=discover,
+        manifest_verifier=lambda *args: None,
+        now=NOW,
+    )
+
+    assert receipt.slurm_job_id == "12345"
+    assert receipt.submitted_at == NOW
+    assert len([argv for argv in calls if argv[0] == "sbatch"]) == 1
+    assert len([argv for argv in calls if argv[0] == "sacct"]) == 1
+    assert (
+        parse_submission_receipt((tmp_path / key / "receipt.json").read_text(encoding="utf-8"))
+        == receipt
+    )
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "",
+        (
+            "12345|{identity}|PENDING|operator|edullm:{key}|2026-07-23T13:00:00\n"
+            "12346|{identity}|PENDING|operator|edullm:{key}|2026-07-23T13:00:01\n"
+        ),
+        "malformed\n",
+        "12345|wrong-name|PENDING|operator|edullm:{key}|2026-07-23T13:00:00\n",
+        "12345|{identity}|PENDING|other|edullm:{key}|2026-07-23T13:00:00\n",
+        "12345|{identity}|PENDING|operator|wrong-comment|2026-07-23T13:00:00\n",
+        "12345.batch|{identity}|PENDING|operator|edullm:{key}|2026-07-23T13:00:00\n",
+    ],
+)
+def test_ambiguous_intent_never_resubmits_for_zero_multiple_or_mismatched_evidence(
+    tmp_path,
+    valid_resolved_request,
+    output,
+):
+    script = render_sbatch(valid_resolved_request)
+    spec = _spec(valid_resolved_request, script)
+    key = build_submission_key(spec.issue, spec.request_digest, 1, spec.operator)
+    stage_submission(tmp_path, key, script)
+    intent = tmp_path / key / "intent.json"
+    intent.write_text(spec.canonical_json(), encoding="utf-8")
+    intent.chmod(0o600)
+    calls: list[list[str]] = []
+    rendered_output = output.format(identity=f"edullm-{key}", key=key)
+
+    def discover(argv, **kwargs):
+        calls.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, rendered_output, "")
+
+    with pytest.raises(SubmissionError):
+        submission_transaction(
+            tmp_path,
+            key,
+            spec,
+            sbatch_runner=discover,
+            manifest_verifier=lambda *args: None,
+            now=NOW,
+        )
+
+    assert calls and all(argv[0] == "sacct" for argv in calls)
+    assert not (tmp_path / key / "receipt.json").exists()
 
 
 def test_stage_submission_is_private_atomic_and_rejects_symlinks(

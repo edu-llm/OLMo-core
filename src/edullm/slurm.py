@@ -33,6 +33,7 @@ from edullm.secure_publish import (
 
 SBATCH_TIMEOUT_SECONDS = 30.0
 MAX_SBATCH_OUTPUT_CHARS = 64
+MAX_RECOVERY_OUTPUT_CHARS = 65_536
 MAX_RECEIPT_CHARS = 16_384
 MAX_SCRIPT_BYTES = 1_048_576
 
@@ -44,6 +45,31 @@ _SAFE_SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,99}\Z")
 _MODEL = re.compile(r"[a-z0-9][a-z0-9._-]{0,99}\Z")
 _PROJECT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}\Z")
 _TIMESTAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z")
+_RECOVERABLE_SLURM_STATES = frozenset(
+    {
+        "BOOT_FAIL",
+        "CANCELLED",
+        "COMPLETED",
+        "COMPLETING",
+        "CONFIGURING",
+        "DEADLINE",
+        "FAILED",
+        "NODE_FAIL",
+        "OUT_OF_MEMORY",
+        "PENDING",
+        "PREEMPTED",
+        "REQUEUED",
+        "REQUEUE_FED",
+        "REQUEUE_HOLD",
+        "RESIZING",
+        "REVOKED",
+        "RUNNING",
+        "SPECIAL_EXIT",
+        "STAGE_OUT",
+        "SUSPENDED",
+        "TIMEOUT",
+    }
+)
 _SUBMISSION_FIELDS = frozenset(
     {
         "allowed_data_kinds",
@@ -247,6 +273,42 @@ def _validate_resolved(resolved: object) -> tuple[int, list[str]]:
         or len(set(resolved.allowed_data_kinds)) != len(resolved.allowed_data_kinds)
     ):
         raise SubmissionError("allowed data kinds are invalid")
+    if (
+        type(resolved.fixed_launcher_arguments) is not tuple
+        or type(resolved.fixed_arguments) is not tuple
+        or type(resolved.fixed_option_names) is not tuple
+        or type(resolved.derived_path_options) is not tuple
+    ):
+        raise SubmissionError("protected fixed arguments are invalid")
+    launcher_arguments = [_safe_argument(value) for value in resolved.fixed_launcher_arguments]
+    if request.launcher == "torchrun":
+        expected_launcher = {"--standalone", f"--nproc-per-node={request.gpu_count}"}
+        if launcher_arguments and (
+            set(launcher_arguments) != expected_launcher
+            or len(launcher_arguments) != len(expected_launcher)
+        ):
+            raise SubmissionError("protected launcher arguments are invalid")
+    elif launcher_arguments:
+        raise SubmissionError("protected launcher arguments are invalid")
+    fixed_arguments = [_safe_argument(value) for value in resolved.fixed_arguments]
+    names = list(resolved.fixed_option_names)
+    derived = list(resolved.derived_path_options)
+    if (
+        not all(
+            type(name) is str and re.fullmatch(r"[a-z][a-z0-9_.-]{0,127}", name) for name in names
+        )
+        or len(set(names)) != len(names)
+        or any(name not in names or name not in {"save-folder", "work-dir"} for name in derived)
+        or len(set(derived)) != len(derived)
+    ):
+        raise SubmissionError("protected fixed options are invalid")
+    rendered_names = {
+        argument.removeprefix("--").split("=", 1)[0]
+        for argument in fixed_arguments
+        if "=" in argument
+    }
+    if rendered_names | set(derived) != set(names) or len(rendered_names) != len(fixed_arguments):
+        raise SubmissionError("protected fixed options are invalid")
     return attempt, arguments
 
 
@@ -279,31 +341,42 @@ def render_sbatch(resolved: ResolvedRequest) -> str:
         request.data_manifest_sha256,
         resolved.model_identity,
     ]
+    fixed_names = set(resolved.fixed_option_names)
+    callback_values = {
+        "trainer.callbacks.wandb.enabled": "true",
+        "trainer.callbacks.wandb.entity": resolved.wandb_entity,
+        "trainer.callbacks.wandb.project": request.wandb_project,
+        "trainer.callbacks.wandb.group": request.study,
+        "trainer.callbacks.wandb.tags": json.dumps(tags, sort_keys=True, separators=(",", ":")),
+    }
     callback_arguments = [
-        "--trainer.callbacks.wandb.enabled=true",
-        f"--trainer.callbacks.wandb.entity={resolved.wandb_entity}",
-        f"--trainer.callbacks.wandb.project={request.wandb_project}",
-        f"--trainer.callbacks.wandb.group={request.study}",
-        "--trainer.callbacks.wandb.tags=" + json.dumps(tags, sort_keys=True, separators=(",", ":")),
-        f"--trainer.callbacks.wandb.notes=request_digest:{request.digest}",
+        f"--{name}={value}" for name, value in callback_values.items() if name not in fixed_names
     ]
+    callback_arguments.append(f"--trainer.callbacks.wandb.notes=request_digest:{request.digest}")
     command_arguments = [
         _safe_repository_path(request.script_path),
         *request_arguments,
+        *resolved.fixed_arguments,
         *callback_arguments,
     ]
     if request.launcher == "python":
         command_arguments = ["python", *command_arguments]
     elif request.launcher == "torchrun":
-        command_arguments = [
-            "torchrun",
+        launcher_arguments = resolved.fixed_launcher_arguments or (
             "--standalone",
             f"--nproc-per-node={request.gpu_count}",
+        )
+        command_arguments = [
+            "torchrun",
+            *launcher_arguments,
             *command_arguments,
         ]
     else:
         command_arguments = ["bash", *command_arguments]
     command = shlex.join(command_arguments)
+    derived_arguments = "\n".join(
+        f'TRAIN_COMMAND+=("--{name}=$EDULLM_RUN_DIR")' for name in resolved.derived_path_options
+    )
 
     return f"""#!/bin/bash
 #SBATCH -p {resolved.slurm_partition}
@@ -321,6 +394,7 @@ source "$HOME/venvs/edullm/bin/activate"
 source "$HOME/.config/edullm/wandb.env"
 EDULLM_SCRATCH="$HOME/orcd/scratch/edullm"
 WORKTREE="$EDULLM_SCRATCH/work/{request.request_name}/${{SLURM_JOB_ID}}"
+EDULLM_RUN_DIR="$EDULLM_SCRATCH/runs/{request.request_name}"
 mkdir -p "$(dirname "$WORKTREE")"
 chmod 700 "$(dirname "$WORKTREE")"
 git clone --no-checkout {resolved.repository_url} "$WORKTREE"
@@ -354,6 +428,10 @@ export EDULLM_COMMIT_SHA={request.commit_sha}
 export EDULLM_REQUEST_DIGEST={request.digest}
 export EDULLM_DATA_DIGEST={request.data_manifest_sha256}
 export EDULLM_MODEL_IDENTITY={shlex.quote(resolved.model_identity)}
+export EDULLM_PROFILE={shlex.quote(request.entrypoint_profile)}
+export EDULLM_STUDY={shlex.quote(request.study)}
+export EDULLM_CONDITION={shlex.quote(request.condition)}
+export EDULLM_GPU={shlex.quote(request.gpu_preference)}
 export EDULLM_SEED={request.seed}
 export EDULLM_DATA_MANIFEST={shlex.quote(request.data_manifest)}
 export EDULLM_DATA_MANIFEST_SHA256={request.data_manifest_sha256}
@@ -374,7 +452,9 @@ if [[ "${{EDULLM_DATA_MODE:-}}" == "synthetic" ]]; then
   python src/scripts/orcd/create_tiny_data.py --output "$OLMO_DATA_ROOT"
 fi
 set +e
-{command}
+TRAIN_COMMAND=({command})
+{derived_arguments}
+"${{TRAIN_COMMAND[@]}}"
 TRAIN_STATUS=$?
 set -e
 if [[ "${{WANDB_MODE}}" == "offline" ]]; then
@@ -708,6 +788,82 @@ def _remove_intent(path: Path) -> None:
         raise SubmissionError("failed submission intent could not be cleared safely") from None
 
 
+def _submission_job_name(key: str) -> str:
+    _safe_text(key, _SHA256, "submission key")
+    return f"edullm-{key}"
+
+
+def _discover_submission_receipt(
+    runner: Callable[..., subprocess.CompletedProcess[str]],
+    *,
+    key: str,
+    spec: SubmissionSpec,
+    cwd: Path,
+) -> SubmissionReceipt | None:
+    name = _submission_job_name(key)
+    comment = f"edullm:{key}"
+    argv = [
+        "sacct",
+        "-X",
+        "--noheader",
+        "--parsable2",
+        f"--name={name}",
+        "--format=JobIDRaw,JobName,State,User,Comment,Submit",
+    ]
+    try:
+        result = runner(
+            argv,
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=SBATCH_TIMEOUT_SECONDS,
+            cwd=str(cwd),
+        )
+    except (OSError, subprocess.SubprocessError):
+        raise SubmissionError("submission recovery evidence is unavailable") from None
+    if (
+        not isinstance(result, subprocess.CompletedProcess)
+        or type(result.returncode) is not int
+        or type(result.stdout) is not str
+        or type(result.stderr) is not str
+        or result.returncode != 0
+        or len(result.stdout) > MAX_RECOVERY_OUTPUT_CHARS
+    ):
+        raise SubmissionError("submission recovery evidence is unavailable")
+    lines = [line for line in result.stdout.splitlines() if line]
+    if not lines:
+        return None
+    if len(lines) != 1:
+        raise SubmissionError("submission recovery evidence is ambiguous")
+    fields = lines[0].split("|")
+    if len(fields) != 6:
+        raise SubmissionError("submission recovery evidence is invalid")
+    job_id, job_name, raw_state, user, job_comment, submitted = fields
+    state = raw_state.partition("+")[0].partition(" ")[0]
+    if (
+        _JOB_ID.fullmatch(job_id) is None
+        or job_name != name
+        or state not in _RECOVERABLE_SLURM_STATES
+        or user != spec.operator
+        or job_comment != comment
+    ):
+        raise SubmissionError("submission recovery evidence is invalid")
+    if not submitted.endswith("Z"):
+        submitted += "Z"
+    submitted_at = _parse_time(submitted)
+    return SubmissionReceipt(
+        issue=spec.issue,
+        request_digest=spec.request_digest,
+        attempt_number=spec.attempt_number,
+        operator=spec.operator,
+        script_sha256=spec.script_sha256,
+        manifest_sha256=spec.manifest_sha256,
+        slurm_job_id=job_id,
+        log_path=str(cwd / spec.log_pattern.replace("%j", job_id)),
+        submitted_at=submitted_at,
+    )
+
+
 def submission_transaction(
     state_root: Path,
     key: str,
@@ -723,6 +879,7 @@ def submission_transaction(
     A durable intent is fsynced before ``sbatch``. If output or receipt
     persistence is ambiguous, retries fail closed instead of submitting again.
     """
+    del manifest_verifier  # Remote preparation verifies the manifest before the final GitHub gate.
     _validate_spec(spec)
     expected_key = build_submission_key(
         spec.issue,
@@ -763,33 +920,52 @@ def submission_transaction(
                 raise SubmissionError("submission receipt does not match this attempt")
             return receipt
 
-        intent_path = directory / "intent.json"
-        intent_bytes = _read_private(intent_path, maximum=MAX_RECEIPT_CHARS)
-        if intent_bytes is not None:
-            if intent_bytes != spec.canonical_json().encode("utf-8"):
-                raise SubmissionError("submission intent is malformed or tampered")
-            raise SubmissionError("submission outcome is ambiguous; operator repair is required")
-
         script_path = directory / "request.sbatch"
         script = _read_private(script_path, maximum=MAX_SCRIPT_BYTES)
         if script is None or hashlib.sha256(script).hexdigest() != spec.script_sha256:
             raise SubmissionError("staged submission script identity is invalid")
 
-        try:
-            manifest_verifier(
-                spec.manifest_uri,
-                spec.manifest_sha256,
-                set(spec.allowed_data_kinds),
+        intent_path = directory / "intent.json"
+        intent_bytes = _read_private(intent_path, maximum=MAX_RECEIPT_CHARS)
+        if intent_bytes is not None:
+            if intent_bytes != spec.canonical_json().encode("utf-8"):
+                raise SubmissionError("submission intent is malformed or tampered")
+            recovered = _discover_submission_receipt(
+                sbatch_runner,
+                key=key,
+                spec=spec,
+                cwd=state_root.parent,
             )
-        except Exception:
-            raise SubmissionError("remote data manifest verification failed") from None
+            if recovered is None:
+                raise SubmissionError(
+                    "submission outcome is ambiguous; operator repair is required"
+                )
+            try:
+                _publish_private(receipt_path, recovered.canonical_json().encode("utf-8"))
+            except OSError:
+                raise SubmissionError(
+                    "submission receipt persistence failed; operator repair is required"
+                ) from None
+            persisted = _read_private(receipt_path, maximum=MAX_RECEIPT_CHARS)
+            if persisted != recovered.canonical_json().encode("utf-8"):
+                raise SubmissionError(
+                    "submission receipt persistence failed; operator repair is required"
+                )
+            return recovered
 
         try:
             _publish_private(intent_path, spec.canonical_json().encode("utf-8"))
         except OSError:
             raise SubmissionError("submission intent could not be persisted") from None
 
-        argv = ["sbatch", "--export=NONE", "--parsable", str(script_path)]
+        argv = [
+            "sbatch",
+            "--export=NONE",
+            "--parsable",
+            f"--job-name={_submission_job_name(key)}",
+            f"--comment=edullm:{key}",
+            str(script_path),
+        ]
         try:
             result = sbatch_runner(
                 argv,
