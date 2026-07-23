@@ -167,6 +167,39 @@ class LifecycleState:
 
 
 @dataclass(frozen=True)
+class OperatorJobSummary:
+    """One validated operator-facing queue record."""
+
+    issue: int
+    status: str
+    slurm_job_id: str | None
+    wandb_url: str | None
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.issue) is not int
+            or self.issue <= 0
+            or type(self.status) is not str
+            or self.status not in _LIFECYCLE_STATES
+        ):
+            raise JobOperationError("operator job summary is invalid")
+        if self.status == "assigned":
+            if self.slurm_job_id is not None or self.wandb_url is not None:
+                raise JobOperationError("assigned job summary is invalid")
+            return
+        if (
+            type(self.slurm_job_id) is not str
+            or _JOB_ID.fullmatch(self.slurm_job_id) is None
+            or type(self.wandb_url) is not str
+            or not _wandb_project(self.wandb_url)
+        ):
+            raise JobOperationError("Slurm-backed job summary is invalid")
+        run = _RUN_ID.fullmatch(self.wandb_url.rpartition("/")[2])
+        if run is None or int(run.group(1)) != self.issue or run.group(3) != self.slurm_job_id:
+            raise JobOperationError("operator job summary binding is invalid")
+
+
+@dataclass(frozen=True)
 class GateConfiguration:
     """Strict protected controls and their immutable evidence digest."""
 
@@ -628,18 +661,27 @@ def _validate_configuration(configuration: object) -> GateConfiguration:
     return configuration
 
 
-def _issue_snapshot(github: Any, issue_number: int) -> GitHubIssue:
+def _issue_snapshot(
+    github: Any,
+    issue_number: int,
+    *,
+    expected_issue: GitHubIssue | None = None,
+) -> GitHubIssue:
     try:
-        listed = github.list_active_queue_issues()
-        matches = [issue for issue in listed if issue.number == issue_number]
-        if len(matches) != 1:
+        if expected_issue is None:
+            listed = github.list_active_queue_issues()
+            matches = [issue for issue in listed if issue.number == issue_number]
+            if len(matches) != 1:
+                raise JobOperationError("exact queue Issue was not found")
+            expected_issue = matches[0]
+        elif not isinstance(expected_issue, GitHubIssue) or expected_issue.number != issue_number:
             raise JobOperationError("exact queue Issue was not found")
         current = github.fetch_issue(issue_number)
     except JobOperationError:
         raise
     except Exception:
         raise JobOperationError("fresh GitHub Issue evidence is unavailable") from None
-    if current.number != matches[0].number or "edullm-job" not in current.labels:
+    if current.number != expected_issue.number or "edullm-job" not in current.labels:
         raise JobOperationError("exact queue Issue was not found")
     return current
 
@@ -653,6 +695,7 @@ def _gate(
     allowed_statuses: Set[str],
     revalidate_commit: bool,
     automation_actor: str,
+    expected_issue: GitHubIssue | None = None,
 ) -> SubmissionGateSnapshot:
     configuration = _validate_configuration(configuration)
     if not _valid_login(operator):
@@ -660,7 +703,7 @@ def _gate(
     enabled = _enabled_operators(configuration.operators)
     if operator not in enabled:
         raise JobOperationError("local identity is not an enabled protected operator")
-    issue = _issue_snapshot(github, issue_number)
+    issue = _issue_snapshot(github, issue_number, expected_issue=expected_issue)
     managed_labels = _managed_status_labels(issue)
     enabled_assignees = set(issue.assignees) & set(enabled)
     if operator not in issue.assignees or enabled_assignees != {operator}:
@@ -1469,6 +1512,7 @@ def _authorized_lifecycle_gate(
     github: Any,
     configuration: GateConfiguration,
     automation_actor: str,
+    expected_issue: GitHubIssue | None = None,
 ) -> SubmissionGateSnapshot:
     snapshot = _gate(
         issue,
@@ -1478,6 +1522,7 @@ def _authorized_lifecycle_gate(
         allowed_statuses={"submitted", "running", *_TERMINAL_STATES},
         revalidate_commit=False,
         automation_actor=automation_actor,
+        expected_issue=expected_issue,
     )
     if snapshot.lifecycle is None or not snapshot.lifecycle.attempts:
         raise JobOperationError("authorized Issue has no canonical attempt binding")
@@ -1707,7 +1752,7 @@ def reconcile_operator_jobs(
     now: datetime,
     mine: bool = False,
     automation_actor: str = AUTOMATION_ACTOR,
-) -> tuple[LifecycleState, ...]:
+) -> tuple[OperatorJobSummary, ...]:
     """Query only this operator's canonical jobs and repair GitHub monotonically."""
     del mine  # The one-operator pilot authorizes the same bounded view for both forms.
     _valid_time(now)
@@ -1715,12 +1760,30 @@ def reconcile_operator_jobs(
         issues = github.list_active_queue_issues()
     except Exception:
         raise JobOperationError("job Issue scan failed") from None
+    if not isinstance(issues, Sequence):
+        raise JobOperationError("job Issue scan is invalid")
+    assigned: list[OperatorJobSummary] = []
     snapshots: list[SubmissionGateSnapshot] = []
+    seen: set[int] = set()
     for issue in issues:
+        if not isinstance(issue, GitHubIssue) or issue.number in seen:
+            raise JobOperationError("job Issue scan is invalid")
+        seen.add(issue.number)
         if operator not in issue.assignees:
             continue
         status = _managed_status(issue)
         if status == "assigned":
+            snapshot = _gate(
+                issue.number,
+                operator=operator,
+                github=github,
+                configuration=configuration,
+                allowed_statuses={"assigned"},
+                revalidate_commit=False,
+                automation_actor=automation_actor,
+                expected_issue=issue,
+            )
+            assigned.append(OperatorJobSummary(snapshot.issue, status, None, None))
             continue
         snapshot = _authorized_lifecycle_gate(
             issue.number,
@@ -1728,10 +1791,12 @@ def reconcile_operator_jobs(
             github=github,
             configuration=configuration,
             automation_actor=automation_actor,
+            expected_issue=issue,
         )
         snapshots.append(snapshot)
+    assigned.sort(key=lambda summary: summary.issue)
     if not snapshots:
-        return ()
+        return tuple(assigned)
     ids = [
         snapshot.lifecycle.attempts[-1].slurm_job_id for snapshot in snapshots if snapshot.lifecycle
     ]
@@ -1739,7 +1804,7 @@ def reconcile_operator_jobs(
         evidence = slurm.query(tuple(ids))
     except Exception:
         raise JobOperationError("authoritative Slurm query failed") from None
-    states: list[LifecycleState] = []
+    summaries: list[OperatorJobSummary] = []
     for snapshot in snapshots:
         assert snapshot.lifecycle is not None
         current = snapshot.lifecycle
@@ -1774,12 +1839,21 @@ def reconcile_operator_jobs(
             actor=operator,
             actor_is_bot=False,
         )
-        states.append(repaired)
+        latest = repaired.attempts[-1]
+        summaries.append(
+            OperatorJobSummary(
+                issue=repaired.issue,
+                status=repaired.current_state,
+                slurm_job_id=latest.slurm_job_id,
+                wandb_url=latest.wandb_url,
+            )
+        )
     try:
         slurm.reconcile_offline_tracking()
     except Exception:
         pass
-    return tuple(states)
+    summaries.sort(key=lambda summary: summary.issue, reverse=True)
+    return tuple(assigned + summaries)
 
 
 def authorized_logs(
@@ -1918,7 +1992,7 @@ def jobs(
     configuration: GateConfiguration,
     slurm: Any,
     now: datetime,
-) -> tuple[LifecycleState, ...]:
+) -> tuple[OperatorJobSummary, ...]:
     """Public operator service for authorized status listing and repair."""
     return reconcile_operator_jobs(
         operator=operator,
