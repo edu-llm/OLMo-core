@@ -36,9 +36,13 @@ from edullm.jobs import (
     deliver_terminal_notifications,
 )
 from edullm.jobs import jobs as list_operator_jobs
-from edullm.jobs import load_gate_configuration
+from edullm.jobs import (
+    load_gate_configuration,
+)
 from edullm.jobs import logs as read_operator_logs
-from edullm.jobs import run_assigned
+from edullm.jobs import (
+    run_assigned,
+)
 from edullm.jobs import stop as stop_operator_job
 from edullm.notifications import SlackNotifier
 from edullm.policy import load_operators, load_policy
@@ -165,6 +169,10 @@ class SetupDeclined(SetupError):
     """The operator declined the displayed SSH configuration change."""
 
 
+class _MissingWandbDependency(SetupError):
+    pass
+
+
 @dataclass(frozen=True)
 class SetupResult:
     """Public, secret-free values recorded by successful operator setup."""
@@ -191,7 +199,10 @@ class OperatorServices:
 
 
 def _default_wandb_api() -> Any:
-    import wandb
+    try:
+        import wandb
+    except ImportError:
+        raise _MissingWandbDependency from None
 
     return wandb.Api(timeout=10)
 
@@ -455,6 +466,8 @@ def _verify_local_wandb(api_factory: Callable[[], Any]) -> str:
         api = api_factory()
         username = api.viewer.username
         project_names = {project.name for project in api.projects(entity="eduLLM")}
+    except _MissingWandbDependency:
+        raise
     except Exception:
         raise SetupError("operator setup failed during local W&B verification") from None
     if type(username) is not str or not username.strip():
@@ -683,6 +696,12 @@ def _positive_integer(value: str) -> int:
     return parsed
 
 
+def _orcd_username(value: str) -> str:
+    if _ORCD_USERNAME.fullmatch(value) is None:
+        raise argparse.ArgumentTypeError("must be a valid ORCD username")
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the complete public and internal eduLLM command parser."""
     parser = argparse.ArgumentParser(prog="edullm")
@@ -691,7 +710,8 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         metavar="{setup,jobs,run,logs,stop,logout}",
     )
-    commands.add_parser("setup", help="configure this operator")
+    setup = commands.add_parser("setup", help="configure this operator")
+    setup.add_argument("--orcd-username", type=_orcd_username)
     jobs = commands.add_parser("jobs", help="show job requests")
     jobs.add_argument("--mine", action="store_true", help="show only requests assigned to you")
     commands.add_parser("run", help="run the next assigned request")
@@ -720,14 +740,26 @@ def _parser() -> argparse.ArgumentParser:
     return build_parser()
 
 
-def handle_setup() -> int:
-    """Run focused operator setup handling."""
+def handle_setup(orcd_username: str | None = None) -> int:
+    """
+    Run focused operator setup handling.
+
+    :param orcd_username: Optional personal Engaging login. Defaults to the local
+        operating-system username.
+    """
     try:
         result = setup_operator(
             root=Path(__file__).resolve().parents[2],
             home=Path.home(),
-            orcd_username=getpass.getuser(),
+            orcd_username=orcd_username or getpass.getuser(),
         )
+    except _MissingWandbDependency:
+        print(
+            "eduLLM operator setup failed: local W&B SDK is unavailable; "
+            "run python -m pip install -e '.[wandb]'",
+            file=sys.stderr,
+        )
+        return 1
     except SetupDeclined:
         print("eduLLM operator setup cancelled; no SSH change was applied", file=sys.stderr)
         return 2
@@ -1124,7 +1156,7 @@ def main(
     """
     arguments = _parser().parse_args(argv)
     if arguments.command == "setup":
-        return handle_setup()
+        return handle_setup(arguments.orcd_username)
     if arguments.command == "jobs":
         return handle_jobs(arguments.mine)
     if arguments.command == "run":

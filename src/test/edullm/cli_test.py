@@ -1,3 +1,4 @@
+import builtins
 import inspect
 import os
 import stat
@@ -1694,8 +1695,8 @@ def test_public_parser_rejects_invalid_or_unpublished_surface(arguments):
 def test_main_dispatches_each_public_command_to_focused_handler(monkeypatch):
     calls: list[tuple[object, ...]] = []
 
-    def handle_setup() -> int:
-        calls.append(("setup",))
+    def handle_setup(orcd_username=None) -> int:
+        calls.append(("setup", orcd_username))
         return 11
 
     def handle_jobs(mine: bool) -> int:
@@ -1732,7 +1733,7 @@ def test_main_dispatches_each_public_command_to_focused_handler(monkeypatch):
     assert cli.main(["stop", "42"], environ=RestrictedEnvironment({})) == 15
     assert cli.main(["logout"], environ=RestrictedEnvironment({})) == 16
     assert calls == [
-        ("setup",),
+        ("setup", None),
         ("jobs", True),
         ("run",),
         ("logs", 42),
@@ -1783,6 +1784,62 @@ def test_setup_handler_sanitizes_operational_failure(monkeypatch, capsys):
     output = capsys.readouterr()
     assert "operator setup failed" in output.err
     assert "private implementation detail" not in output.err
+
+
+def test_setup_handler_reports_missing_local_wandb_dependency_action(monkeypatch, capsys):
+    original_import = builtins.__import__
+
+    def import_without_wandb(name, *args, **kwargs):
+        if name == "wandb":
+            raise ModuleNotFoundError("sensitive import diagnostics", name=name)
+        return original_import(name, *args, **kwargs)
+
+    def setup_with_missing_wandb(**kwargs):
+        cli._verify_local_wandb(cli._default_wandb_api)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_wandb)
+    monkeypatch.setattr(cli, "setup_operator", setup_with_missing_wandb)
+
+    assert cli.handle_setup() == 1
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "python -m pip install -e '.[wandb]'" in output.err
+    assert "sensitive import diagnostics" not in output.err
+
+
+def test_setup_cli_passes_explicit_orcd_username_to_handler(monkeypatch):
+    calls = []
+
+    def handle_setup(orcd_username=None):
+        calls.append(orcd_username)
+        return 17
+
+    monkeypatch.setattr(cli, "handle_setup", handle_setup)
+
+    assert (
+        cli.main(
+            ["setup", "--orcd-username", "orcd-user"],
+            environ=RestrictedEnvironment({}),
+        )
+        == 17
+    )
+    assert calls == ["orcd-user"]
+
+
+def test_setup_cli_rejects_invalid_orcd_username_before_handler(monkeypatch):
+    monkeypatch.setattr(
+        cli,
+        "handle_setup",
+        lambda orcd_username=None: pytest.fail("invalid ORCD username reached handler"),
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        cli.main(
+            ["setup", "--orcd-username", "invalid username"],
+            environ=RestrictedEnvironment({}),
+        )
+
+    assert raised.value.code == 2
 
 
 def test_logout_closes_only_project_master_and_reports_closed(capsys):
