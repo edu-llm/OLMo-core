@@ -131,7 +131,10 @@ source "$HOME/.config/edullm/wandb.env"
 mapfile -t OFFLINE_RUN_DIRS < <(
   find "$SAVE_FOLDER/wandb/wandb" -mindepth 1 -maxdepth 1 -type d -name 'offline-run-*'
 )
-test "${#OFFLINE_RUN_DIRS[@]}" -eq 1
+if [[ "${#OFFLINE_RUN_DIRS[@]}" -ne 1 ]]; then
+  echo "expected exactly one offline W&B run directory; found ${#OFFLINE_RUN_DIRS[@]}" >&2
+  exit 2
+fi
 OFFLINE_RUN_DIR="${OFFLINE_RUN_DIRS[0]}"
 wandb sync "$OFFLINE_RUN_DIR"
 unset WANDB_MODE

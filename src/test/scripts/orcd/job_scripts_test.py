@@ -1,5 +1,6 @@
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -10,11 +11,19 @@ SCRIPT_ROOT = Path("src/scripts/orcd")
 README = SCRIPT_ROOT / "README.md"
 
 
-def _readme_submission(label: str) -> str:
+def _readme_section(label: str) -> str:
     text = README.read_text(encoding="utf-8")
     marker = f"# {label}\n"
     assert marker in text
-    lines = text.split(marker, maxsplit=1)[1].splitlines()
+    section = text.split(marker, maxsplit=1)[1]
+    boundaries = [
+        position for boundary in ("\n# ", "\n```") if (position := section.find(boundary)) >= 0
+    ]
+    return section[: min(boundaries)] if boundaries else section
+
+
+def _readme_submission(label: str) -> str:
+    lines = _readme_section(label).splitlines()
     command_lines = []
     for line in lines:
         if not command_lines:
@@ -28,10 +37,54 @@ def _readme_submission(label: str) -> str:
     return " ".join(line.removesuffix("\\").strip() for line in command_lines)
 
 
-def _export_names(command: str) -> tuple[str, ...]:
+def _export_assignments(command: str) -> dict[str, str]:
     match = re.search(r"--export=([^\s]+)", command)
     assert match is not None
-    return tuple(item.split("=", maxsplit=1)[0] for item in match.group(1).split(","))
+    assignments = (item.split("=", maxsplit=1) for item in match.group(1).split(","))
+    return {name: value for name, value in assignments}
+
+
+def _shell_assignments(label: str) -> dict[str, str]:
+    return dict(
+        re.findall(r"^export ([A-Z][A-Z0-9_]*)=(.+)$", _readme_section(label), re.MULTILINE)
+    )
+
+
+def _offline_sync_commands() -> str:
+    text = README.read_text(encoding="utf-8")
+    marker = "mapfile -t OFFLINE_RUN_DIRS"
+    assert marker in text
+    return marker + text.split(marker, maxsplit=1)[1].split("```", maxsplit=1)[0]
+
+
+def _run_offline_sync_commands(save_folder: Path) -> subprocess.CompletedProcess[str]:
+    script = (
+        """
+mapfile() {
+  local target index=0 line quoted
+  for target in "$@"; do :; done
+  eval "${target}=()"
+  while IFS= read -r line; do
+    printf -v quoted '%q' "$line"
+    eval "${target}[${index}]=${quoted}"
+    index=$((index + 1))
+  done
+}
+wandb() {
+  test "$1" = sync
+  printf 'synced=%s\\n' "$2"
+}
+"""
+        + _offline_sync_commands()
+    )
+    return subprocess.run(
+        ["bash"],
+        input=script,
+        env={**os.environ, "SAVE_FOLDER": str(save_folder)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
 
 def test_generic_job_requests_one_l40s():
@@ -216,61 +269,100 @@ def test_readme_routes_every_submission_to_scratch_logs(label):
 
 
 @pytest.mark.parametrize(
-    ("label", "expected_names"),
+    ("label", "expected_assignments", "expected_script"),
     [
         (
             "Setup environment",
-            ("EDULLM_REPO_ROOT", "EDULLM_COMMIT_SHA", "EDULLM_SCRATCH"),
+            {
+                "EDULLM_REPO_ROOT": '"$EDULLM_REPO_ROOT"',
+                "EDULLM_COMMIT_SHA": '"$EDULLM_COMMIT_SHA"',
+                "EDULLM_SCRATCH": '"$EDULLM_SCRATCH"',
+            },
+            "src/scripts/orcd/setup_env.sbatch",
         ),
         (
             "GPU probe",
-            ("EDULLM_REPO_ROOT", "EDULLM_COMMIT_SHA", "EDULLM_SCRATCH"),
+            {
+                "EDULLM_REPO_ROOT": '"$EDULLM_REPO_ROOT"',
+                "EDULLM_COMMIT_SHA": '"$EDULLM_COMMIT_SHA"',
+                "EDULLM_SCRATCH": '"$EDULLM_SCRATCH"',
+            },
+            "src/scripts/orcd/probe.sbatch",
         ),
         (
             "Initial run",
-            (
-                "EDULLM_REPO_ROOT",
-                "EDULLM_COMMIT_SHA",
-                "EDULLM_SCRATCH",
-                "RUN_NAME",
-                "WANDB_RUN_ID",
-                "SAVE_FOLDER",
-                "HARD_STOP_STEPS",
-            ),
+            {
+                "EDULLM_REPO_ROOT": '"$EDULLM_REPO_ROOT"',
+                "EDULLM_COMMIT_SHA": '"$EDULLM_COMMIT_SHA"',
+                "EDULLM_SCRATCH": '"$EDULLM_SCRATCH"',
+                "RUN_NAME": '"$RUN_NAME"',
+                "WANDB_RUN_ID": '"$WANDB_RUN_ID"',
+                "SAVE_FOLDER": '"$SAVE_FOLDER"',
+                "HARD_STOP_STEPS": '"$HARD_STOP_STEPS"',
+            },
+            "src/scripts/orcd/generic_smoke.sbatch",
         ),
         (
             "Resume run",
-            (
-                "EDULLM_REPO_ROOT",
-                "EDULLM_COMMIT_SHA",
-                "EDULLM_SCRATCH",
-                "RUN_NAME",
-                "WANDB_RUN_ID",
-                "SAVE_FOLDER",
-                "HARD_STOP_STEPS",
-            ),
+            {
+                "EDULLM_REPO_ROOT": '"$EDULLM_REPO_ROOT"',
+                "EDULLM_COMMIT_SHA": '"$EDULLM_COMMIT_SHA"',
+                "EDULLM_SCRATCH": '"$EDULLM_SCRATCH"',
+                "RUN_NAME": '"$RUN_NAME"',
+                "WANDB_RUN_ID": '"$WANDB_RUN_ID"',
+                "SAVE_FOLDER": '"$SAVE_FOLDER"',
+                "HARD_STOP_STEPS": '"$HARD_STOP_STEPS"',
+            },
+            "src/scripts/orcd/generic_smoke.sbatch",
         ),
         (
             "Forced-offline smoke",
-            (
-                "EDULLM_REPO_ROOT",
-                "EDULLM_COMMIT_SHA",
-                "EDULLM_SCRATCH",
-                "RUN_NAME",
-                "WANDB_RUN_ID",
-                "SAVE_FOLDER",
-                "HARD_STOP_STEPS",
-                "WANDB_MODE",
-            ),
+            {
+                "EDULLM_REPO_ROOT": '"$EDULLM_REPO_ROOT"',
+                "EDULLM_COMMIT_SHA": '"$EDULLM_COMMIT_SHA"',
+                "EDULLM_SCRATCH": '"$EDULLM_SCRATCH"',
+                "RUN_NAME": '"$RUN_NAME"',
+                "WANDB_RUN_ID": '"$WANDB_RUN_ID"',
+                "SAVE_FOLDER": '"$SAVE_FOLDER"',
+                "HARD_STOP_STEPS": '"$HARD_STOP_STEPS"',
+                "WANDB_MODE": '"$WANDB_MODE"',
+            },
+            "src/scripts/orcd/generic_smoke.sbatch",
         ),
     ],
 )
-def test_readme_submissions_export_only_required_safe_variables(label, expected_names):
+def test_readme_submissions_preserve_export_dataflow_and_target(
+    label, expected_assignments, expected_script
+):
     command = _readme_submission(label)
 
-    assert _export_names(command) == expected_names
+    assert _export_assignments(command) == expected_assignments
+    assert shlex.split(command)[-1] == expected_script
     assert "--export=ALL" not in command
     assert "WANDB_API_KEY" not in command
+
+
+def test_readme_preserves_smoke_identity_hard_stops_and_offline_mode():
+    initial = _shell_assignments("Initial run")
+    resume = _shell_assignments("Resume run")
+    offline = _shell_assignments("Forced-offline smoke")
+
+    assert initial == {
+        "RUN_NAME": "orcd-bootstrap",
+        "WANDB_RUN_ID": "orcd-bootstrap",
+        "SAVE_FOLDER": '"$EDULLM_SCRATCH/runs/$RUN_NAME"',
+        "HARD_STOP_STEPS": "20",
+    }
+    assert resume == {"HARD_STOP_STEPS": "25"}
+    assert offline == {
+        "RUN_NAME": "orcd-bootstrap-offline",
+        "WANDB_RUN_ID": "orcd-bootstrap-offline",
+        "SAVE_FOLDER": '"$EDULLM_SCRATCH/runs/$RUN_NAME"',
+        "HARD_STOP_STEPS": "20",
+        "WANDB_MODE": "offline",
+    }
+    assert "WANDB_MODE" not in _export_assignments(_readme_submission("Initial run"))
+    assert "WANDB_MODE" not in _export_assignments(_readme_submission("Resume run"))
 
 
 def test_readme_preserves_private_wandb_key_and_team_visibility_flow():
@@ -281,12 +373,29 @@ def test_readme_preserves_private_wandb_key_and_team_visibility_flow():
     assert "another `eduLLM` member" in text
 
 
-def test_readme_syncs_one_exact_offline_run_directory():
+def test_readme_syncs_one_exact_offline_run_directory(tmp_path):
     script = (SCRIPT_ROOT / "run_generic_smoke.sh").read_text(encoding="utf-8")
     text = README.read_text(encoding="utf-8")
+    offline_run = tmp_path / "wandb" / "wandb" / "offline-run-only"
+    offline_run.mkdir(parents=True)
 
     assert "WANDB_SYNC_DIR" not in script
     assert '--work-dir="$SAVE_FOLDER"' in script
-    assert "offline-run-*" in text
-    assert 'wandb sync "$OFFLINE_RUN_DIR"' in text
     assert "wandb sync --sync-all" not in text
+    result = _run_offline_sync_commands(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == f"synced={offline_run}\n"
+
+
+@pytest.mark.parametrize("candidate_count", [0, 2])
+def test_readme_offline_sync_fails_closed_without_exactly_one_candidate(tmp_path, candidate_count):
+    wandb_dir = tmp_path / "wandb" / "wandb"
+    wandb_dir.mkdir(parents=True)
+    for index in range(candidate_count):
+        (wandb_dir / f"offline-run-{index}").mkdir()
+
+    result = _run_offline_sync_commands(tmp_path)
+
+    assert result.returncode == 2
+    assert "expected exactly one offline W&B run directory" in result.stderr
+    assert "synced=" not in result.stdout
