@@ -9,7 +9,7 @@ import stat
 import subprocess
 import threading
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -29,9 +29,16 @@ from edullm.slurm import (
     submission_transaction,
 )
 from edullm.validation import validate_request
+from olmo_core.config import Config
+from olmo_core.train import Duration
 
 NOW = datetime(2026, 7, 23, 13, 0, 0, tzinfo=timezone.utc)
 REMOTE_USER = pwd.getpwuid(os.geteuid()).pw_name
+
+
+@dataclass
+class DurationConfig(Config):
+    hard_stop: Duration | None = None
 
 
 def _spec(valid_resolved_request, script: str) -> SubmissionSpec:
@@ -150,7 +157,7 @@ def test_generic_smoke_renders_every_protected_launcher_and_training_option(
         "data_loader.global_batch_size=8192",
         "train_module.rank_microbatch_size=2048",
         "train_module.max_sequence_length=512",
-        "trainer.hard_stop={value:20,unit:steps}",
+        'trainer.hard_stop={"value":20,"unit":"steps"}',
         "trainer.callbacks.lm_evaluator.enabled=false",
         "trainer.callbacks.downstream_evaluator.enabled=false",
         "trainer.callbacks.checkpointer.save_interval=10",
@@ -162,6 +169,14 @@ def test_generic_smoke_renders_every_protected_launcher_and_training_option(
     )
     for argument in expected:
         assert argument in text
+    command_line = next(line for line in text.splitlines() if line.startswith("TRAIN_COMMAND=("))
+    command = command_line.removeprefix("TRAIN_COMMAND=(").removesuffix(")")
+    tokens = shlex.split(command)
+    hard_stop = next(token for token in tokens if token.startswith("--trainer.hard_stop=")).split(
+        "=", 1
+    )[1]
+    parsed = DurationConfig().merge([f"hard_stop={hard_stop}"])
+    assert parsed.hard_stop == Duration.steps(20)
     assert text.count("--standalone") == 1
     assert text.count("--nproc-per-node=1") == 1
     assert 'EDULLM_RUN_DIR="$EDULLM_SCRATCH/runs/issue-42-skill-dag-v1-natural"' in text

@@ -811,6 +811,19 @@ def test_jobs_repairs_terminal_issue_without_submitting(valid_request):
             "submitted",
         ),
         (
+            {
+                "jobs": [
+                    {
+                        "job_id": 12345,
+                        "job_state": ["PENDING"],
+                        "name": "job",
+                        "user_name": "u",
+                    }
+                ]
+            },
+            "submitted",
+        ),
+        (
             {"jobs": [{"job_id": 12345, "job_state": "RUNNING", "name": "job", "user_name": "u"}]},
             "running",
         ),
@@ -863,6 +876,10 @@ def test_squeue_json_maps_only_known_bounded_states(payload, expected):
         '{"jobs":{}}',
         '{"jobs":[{"job_id":"123","job_state":"RUNNING","name":"x","user_name":"u"}]}',
         '{"jobs":[{"job_id":123,"job_state":"UNKNOWN","name":"x","user_name":"u"}]}',
+        '{"jobs":[{"job_id":123,"job_state":[],"name":"x","user_name":"u"}]}',
+        '{"jobs":[{"job_id":123,"job_state":["RUNNING","PENDING"],"name":"x","user_name":"u"}]}',
+        '{"jobs":[{"job_id":123,"job_state":["UNKNOWN"],"name":"x","user_name":"u"}]}',
+        '{"jobs":[{"job_id":123,"job_state":[1],"name":"x","user_name":"u"}]}',
         '{"jobs":[{"job_id":123,"job_state":"RUNNING","name":"x\\n","user_name":"u"}]}',
         '{"jobs":[' + '{"job_id":1,"job_state":"RUNNING","name":"x","user_name":"u"},' * 257 + "]}",
     ],
