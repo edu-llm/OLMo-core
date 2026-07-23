@@ -759,7 +759,7 @@ def test_setup_rejects_unsafe_target_block_before_output_or_confirmation(tmp_pat
     assert output.getvalue() == ""
     assert "never-display-this" not in str(raised.value)
     assert config.read_text(encoding="utf-8") == unsafe
-    assert events[-1] == "ssh-direct"
+    assert "ssh-direct" not in events
 
 
 def test_setup_sanitizes_confirmation_prompt_failure_without_modifying_ssh(tmp_path):
@@ -817,6 +817,7 @@ def test_setup_is_idempotent_and_does_not_confirm_or_backup_twice(tmp_path):
 
     assert list((home / ".ssh").glob("config.edullm-backup*")) == backups
     assert "confirm" not in second_events
+    assert "ssh-direct" not in second_events
 
 
 def test_setup_submits_reviewed_environment_script_and_polls_to_completed(tmp_path):

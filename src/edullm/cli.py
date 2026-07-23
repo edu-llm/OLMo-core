@@ -266,15 +266,6 @@ def setup_operator(
 
     wandb_username = _verify_local_wandb(dependencies.wandb_api_factory)
 
-    try:
-        dependencies.ssh_client.run_direct(
-            orcd_username,
-            ["hostname"],
-            timeout=COMMAND_TIMEOUT_SECONDS,
-        )
-    except (SSHError, ValueError):
-        raise SetupError(_DIRECT_ENGAGING_REACHABILITY_ERROR) from None
-
     ssh_config = home / ".ssh" / "config"
     try:
         original = read_control_config(ssh_config)
@@ -282,6 +273,14 @@ def setup_operator(
     except (SSHConfigError, ValueError):
         raise SetupError(_SSH_CONFIGURATION_PLANNING_ERROR) from None
     if ssh_plan.changed:
+        try:
+            dependencies.ssh_client.run_direct(
+                orcd_username,
+                ["hostname"],
+                timeout=COMMAND_TIMEOUT_SECONDS,
+            )
+        except (SSHError, ValueError):
+            raise SetupError(_DIRECT_ENGAGING_REACHABILITY_ERROR) from None
         output.write(ssh_plan.redacted_diff)
         output.flush()
         try:
