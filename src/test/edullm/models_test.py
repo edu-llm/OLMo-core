@@ -163,20 +163,19 @@ def test_production_policy_has_reviewed_limits_and_staged_required_checks():
     assert policy.reassign_after_minutes == 30
     assert policy.required_checks == (
         "Lint",
-        "Test",
-        "Test checkpoint",
         "Test transformer",
         "Test attention",
         "Test examples",
         "Test scripts",
         "Test eduLLM core",
         "Integration tests",
-        "Test olmo3 ladder",
         "Type check",
         "Build",
         "Style",
         "Docs",
     )
+    # These upstream jobs require credentials that are unavailable in the pilot fork.
+    assert {"Test", "Test checkpoint", "Test olmo3 ladder"}.isdisjoint(policy.required_checks)
     assert "Test edullm queue" not in policy.required_checks
 
 
