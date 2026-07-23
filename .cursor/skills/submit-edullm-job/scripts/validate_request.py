@@ -4,7 +4,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import cast
+from typing import NoReturn, cast
 
 from edullm.policy import load_policy
 from edullm.request_parser import (
@@ -17,6 +17,11 @@ from edullm.validation import validate_request
 
 class SubmissionInputError(ValueError):
     """A sanitized request-input error safe to show to the submitter."""
+
+
+class _SanitizedArgumentParser(argparse.ArgumentParser):
+    def error(self, _message: str) -> NoReturn:
+        raise SubmissionInputError("invalid command arguments")
 
 
 def _read_document(input_path: Path) -> object:
@@ -68,7 +73,7 @@ def validate_submission(
 
 def main() -> int:
     """Validate private request JSON and print only canonical Issue Markdown."""
-    parser = argparse.ArgumentParser()
+    parser = _SanitizedArgumentParser()
     parser.add_argument("--input-json", type=Path, required=True)
     parser.add_argument("--requester", required=True)
     parser.add_argument(
@@ -81,8 +86,8 @@ def main() -> int:
         type=Path,
         default=Path("config/edullm/entrypoints.yaml"),
     )
-    arguments = parser.parse_args()
     try:
+        arguments = parser.parse_args()
         body = validate_submission(
             arguments.input_json,
             requester=arguments.requester,

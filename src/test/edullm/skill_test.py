@@ -5,6 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 from edullm.request_parser import (
@@ -25,20 +26,26 @@ class _FlushFailure:
         raise OSError("raw output failure")
 
 
-def _run_adapter(source: Path) -> subprocess.CompletedProcess[str]:
+def _run_adapter_arguments(*arguments: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
             sys.executable,
             str(SKILL / "scripts/validate_request.py"),
-            "--input-json",
-            str(source),
-            "--requester",
-            "student",
+            *arguments,
         ],
         check=False,
         text=True,
         capture_output=True,
         env={"PYTHONPATH": "src", "WANDB_API_KEY": "must-not-appear"},
+    )
+
+
+def _run_adapter(source: Path) -> subprocess.CompletedProcess[str]:
+    return _run_adapter_arguments(
+        "--input-json",
+        str(source),
+        "--requester",
+        "student",
     )
 
 
@@ -142,6 +149,30 @@ def test_adapter_reuses_parser_policy_and_emits_exact_validated_body(tmp_path):
     assert result.stdout == issue_body_from_fields(fields) + "\n"
     assert fields_from_markdown(result.stdout) == fields
     assert result.stderr == ""
+
+
+@pytest.mark.parametrize(
+    "raw_argument",
+    [
+        "--unknown=ghp_SENTINEL_SECRET",
+        "/private/credentials/ghp_SENTINEL_SECRET/wandb.key",
+    ],
+)
+def test_adapter_sanitizes_unknown_or_malformed_command_arguments(tmp_path, raw_argument):
+    source = tmp_path / "request.json"
+
+    result = _run_adapter_arguments(
+        "--input-json",
+        str(source),
+        "--requester",
+        "student",
+        raw_argument,
+    )
+
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert result.stderr == "invalid command arguments\n"
+    assert "ghp_SENTINEL_SECRET" not in result.stdout + result.stderr
 
 
 def test_adapter_rejects_unsafe_argv_without_echoing_credentials(tmp_path):
