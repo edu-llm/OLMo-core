@@ -16,6 +16,7 @@ import termios
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from edullm.secure_publish import SecurePublishError, capture_file, compare_and_publish
 
@@ -48,6 +49,17 @@ class SSHSessionError(SSHError):
 
 class SSHConfigError(RuntimeError):
     """An unsafe or failed OpenSSH configuration operation."""
+
+
+class _LoginProcess(Protocol):
+    def wait(self, timeout: float | None = None) -> int:
+        ...
+
+    def terminate(self) -> None:
+        ...
+
+    def kill(self) -> None:
+        ...
 
 
 @dataclass(frozen=True)
@@ -89,7 +101,7 @@ class _FileSnapshot:
 
 def _run_interactive_login(
     *,
-    popen_factory: Callable[..., subprocess.Popen[bytes]] = subprocess.Popen,
+    popen_factory: Callable[..., _LoginProcess] = subprocess.Popen,
     timeout: float = LOGIN_TIMEOUT_SECONDS,
     terminate_grace: float = LOGIN_TERMINATE_GRACE_SECONDS,
 ) -> int:

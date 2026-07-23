@@ -1848,11 +1848,13 @@ def test_format_operator_jobs_renders_no_jobs_message_only():
 def test_handle_jobs_prints_formatted_operator_summaries(monkeypatch, capsys):
     summaries = (OperatorJobSummary(20, "assigned", None, None),)
     calls = []
-    services = SimpleNamespace(
+    services = cli.OperatorServices(
         operator="operator",
+        remote_user="orcd-user",
         github=object(),
+        root=Path.cwd(),
+        remote=object(),
         slurm=object(),
-        load_configuration=lambda: object(),
     )
 
     def list_jobs(**kwargs):
@@ -1860,6 +1862,7 @@ def test_handle_jobs_prints_formatted_operator_summaries(monkeypatch, capsys):
         return summaries
 
     monkeypatch.setattr(cli, "list_operator_jobs", list_jobs)
+    monkeypatch.setattr(cli, "load_gate_configuration", lambda root: object())
 
     assert cli.handle_jobs(True, services=services) == 0
     assert len(calls) == 1
