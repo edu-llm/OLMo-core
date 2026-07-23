@@ -324,6 +324,22 @@ def test_policy_rejects_limit_and_allowlist_violations(tmp_path, field, value, m
             "must be 'duration'",
         ),
         (
+            "seed-min",
+            "entrypoints.hypothesis-smoke.allowed_options.seed.min must be 0",
+        ),
+        (
+            "seed-max",
+            "entrypoints.hypothesis-smoke.allowed_options.seed.max must be 2147483647",
+        ),
+        (
+            "seed-required",
+            "entrypoints.hypothesis-smoke.allowed_options.seed.required must be true",
+        ),
+        (
+            "seed-request-field",
+            "entrypoints.hypothesis-smoke.allowed_options.seed.request_field must be 'seed'",
+        ),
+        (
             "derived-root",
             "entrypoints.generic-smoke.fixed_options.save-folder.root_env "
             "must be 'EDULLM_SCRATCH'",
@@ -389,6 +405,25 @@ def test_policy_rejects_profile_schema_violations(tmp_path, case, message):
         generic["allowed_positionals"][0]["type"] = "string"
     elif case == "option-schema":
         hypothesis["allowed_options"]["trainer.hard_stop"]["type"] = "unknown"
+    elif case in {"seed-min", "seed-max", "seed-required", "seed-request-field"}:
+        seed_rule = hypothesis["allowed_options"].setdefault(
+            "seed",
+            {
+                "type": "integer",
+                "min": 0,
+                "max": 2147483647,
+                "required": True,
+                "request_field": "seed",
+            },
+        )
+        if case == "seed-min":
+            seed_rule["min"] = -1
+        elif case == "seed-max":
+            seed_rule["max"] = 2147483648
+        elif case == "seed-required":
+            seed_rule["required"] = False
+        else:
+            seed_rule["request_field"] = "other"
     elif case == "derived-root":
         generic["fixed_options"]["save-folder"]["root_env"] = "HOME"
     elif case == "derived-relative":
@@ -475,6 +510,8 @@ def test_loaded_policy_is_recursively_immutable():
         generic["allowed_positionals"][0]["type"] = "string"
     with pytest.raises(TypeError):
         hypothesis["allowed_positionals"][0][0] = "attacker"
+    with pytest.raises(TypeError):
+        hypothesis["allowed_options"]["seed"]["max"] = 99
     with pytest.raises(dataclasses.FrozenInstanceError):
         policy.max_gpu_count = 99
 
@@ -488,6 +525,7 @@ def test_loaded_policy_is_recursively_immutable():
     )
     assert generic["allowed_positionals"][0]["type"] == "slug"
     assert hypothesis["allowed_positionals"][0] == ("dry_run", "train_single", "train")
+    assert hypothesis["allowed_options"]["seed"]["max"] == 2147483647
     assert policy.max_gpu_count == 2
 
 
@@ -496,6 +534,18 @@ def test_hypothesis_profile_fixes_wandb_enabled():
 
     assert profile["fixed_options"]["trainer.callbacks.wandb.enabled"] is True
     assert "trainer.callbacks.wandb.enabled" not in profile["allowed_options"]
+
+
+def test_hypothesis_profile_allows_one_authoritative_bounded_seed():
+    profile = load_policy(Path("config/edullm/policy.yaml")).entrypoints["hypothesis-smoke"]
+
+    assert profile["allowed_options"]["seed"] == {
+        "type": "integer",
+        "min": 0,
+        "max": 2147483647,
+        "required": True,
+        "request_field": "seed",
+    }
 
 
 @pytest.mark.parametrize(

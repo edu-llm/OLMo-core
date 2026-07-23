@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from edullm.policy import Policy, load_policy
+from edullm.request_parser import parse_issue
 from edullm.validation import (
     STATUS_MARKER,
     StatusCommentError,
@@ -68,6 +69,72 @@ def _comment(payload):
 
 def test_valid_request_has_no_validation_errors(valid_request, policy):
     assert validate_request(valid_request, policy) == []
+
+
+def test_brief_fixture_parses_and_validates_against_production_policy():
+    body = Path("src/test/edullm/fixtures/valid_issue.md").read_text(encoding="utf-8")
+    request = parse_issue(body, issue_number=42, requester="student")
+    policy = load_policy(Path("config/edullm/policy.yaml"))
+
+    assert request.argv == ("train_single", "skilldag-natural", "local", "--seed=0")
+    assert request.seed == 0
+    assert validate_request(request, policy) == []
+
+
+def test_production_policy_rejects_missing_required_seed_option(valid_request):
+    policy = load_policy(Path("config/edullm/policy.yaml"))
+    request = replace(valid_request, argv=("train_single", "skilldag-natural", "local"))
+
+    errors = validate_request(request, policy)
+
+    assert "required option is missing: --seed" in errors
+
+
+def test_production_policy_rejects_duplicate_seed_identity(valid_request):
+    policy = load_policy(Path("config/edullm/policy.yaml"))
+    request = replace(
+        valid_request,
+        argv=(
+            "train_single",
+            "skilldag-natural",
+            "local",
+            "--seed=0",
+            "--seed=0",
+        ),
+    )
+
+    errors = validate_request(request, policy)
+
+    assert errors == ["option may be supplied only once: --seed"]
+
+
+@pytest.mark.parametrize(
+    ("argv_seed", "message"),
+    [
+        ("not-an-integer", "value for --seed must be an integer"),
+        ("-1", "value for --seed is outside its allowed range"),
+        ("2147483648", "value for --seed is outside its allowed range"),
+    ],
+)
+def test_production_policy_validates_required_seed_option(valid_request, argv_seed, message):
+    policy = load_policy(Path("config/edullm/policy.yaml"))
+    request = replace(
+        valid_request,
+        argv=("train_single", "skilldag-natural", "local", f"--seed={argv_seed}"),
+    )
+
+    errors = validate_request(request, policy)
+
+    assert message in errors
+
+
+def test_production_policy_rejects_request_and_argv_seed_divergence(valid_request):
+    policy = load_policy(Path("config/edullm/policy.yaml"))
+    request = replace(valid_request, seed=1)
+
+    errors = validate_request(request, policy)
+
+    assert "value for --seed must match request.seed" in errors
 
 
 def test_full_lowercase_sha_passes_shape_validation_without_claiming_review_approval(
@@ -138,6 +205,57 @@ def test_rejects_profile_positional_boundary_violations(valid_request, policy, a
     assert message in errors
 
 
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ("--seed=0", "train_single", "skilldag-natural", "local"),
+        ("train_single", "--seed=0", "skilldag-natural", "local"),
+        ("train_single", "skilldag-natural", "--seed=0", "local"),
+    ],
+)
+def test_hypothesis_profile_requires_three_positionals_as_ordered_prefix(
+    valid_request, policy, argv
+):
+    errors = validate_request(replace(valid_request, argv=argv), policy)
+
+    assert "the first 3 arguments must be positional" in errors
+
+
+def test_hypothesis_profile_rejects_bare_positional_after_options_begin(valid_request, policy):
+    request = replace(
+        valid_request,
+        argv=("train_single", "skilldag-natural", "local", "--seed=0", "extra"),
+    )
+
+    errors = validate_request(request, policy)
+
+    assert "positional argument at index 4 is not allowed after options begin" in errors
+
+
+def test_generic_profile_requires_its_positional_as_ordered_prefix(valid_request):
+    policy = load_policy(Path("config/edullm/policy.yaml"))
+    request = replace(
+        _generic_request(valid_request),
+        argv=("--save-folder=/tmp/untrusted", "generic-smoke-run"),
+    )
+
+    errors = validate_request(request, policy)
+
+    assert "the first 1 arguments must be positional" in errors
+
+
+def test_generic_profile_rejects_bare_positional_after_options_begin(valid_request):
+    policy = load_policy(Path("config/edullm/policy.yaml"))
+    request = replace(
+        _generic_request(valid_request),
+        argv=("generic-smoke-run", "--save-folder=/tmp/untrusted", "extra"),
+    )
+
+    errors = validate_request(request, policy)
+
+    assert "positional argument at index 2 is not allowed after options begin" in errors
+
+
 def test_rejects_non_tuple_argv_without_iterating_a_shell_string(valid_request, policy):
     errors = validate_request(
         replace(valid_request, argv="train_single --seed=0"),  # type: ignore[arg-type]
@@ -174,7 +292,8 @@ def test_rejects_non_string_argv_member(valid_request, policy):
 def test_rejects_shell_control_syntax_in_arguments(valid_request, policy, argument):
     errors = validate_request(replace(valid_request, argv=(argument,)), policy)
 
-    assert f"unsafe argument value: {argument!r}" in errors
+    assert "unsafe argument at index 0" in errors
+    assert argument not in "\n".join(errors)
 
 
 def test_rejects_empty_argument(valid_request, policy):
@@ -183,7 +302,7 @@ def test_rejects_empty_argument(valid_request, policy):
     assert "argument values must not be empty" in errors
 
 
-def test_rejects_unknown_options_in_sorted_order(valid_request, policy):
+def test_rejects_unknown_options_by_index_without_echoing_names(valid_request, policy):
     request = replace(
         valid_request,
         argv=(
@@ -197,7 +316,10 @@ def test_rejects_unknown_options_in_sorted_order(valid_request, policy):
 
     errors = validate_request(request, policy)
 
-    assert "options are not allowed for this entrypoint: ['alpha', 'zeta']" in errors
+    assert "option at index 3 is not allowed for this entrypoint" in errors
+    assert "option at index 4 is not allowed for this entrypoint" in errors
+    assert "alpha" not in "\n".join(errors)
+    assert "zeta" not in "\n".join(errors)
 
 
 def test_rejects_option_without_an_explicit_value(valid_request, policy):
@@ -209,7 +331,27 @@ def test_rejects_option_without_an_explicit_value(valid_request, policy):
         policy,
     )
 
-    assert "option must use --name=value form: --seed" in errors
+    assert "option --seed at index 3 must use --name=value form" in errors
+
+
+@pytest.mark.parametrize(
+    "argument",
+    [
+        "--ghp_DO_NOT_ECHO_THIS_SECRET",
+        "--unknown-ghp_DO_NOT_ECHO_THIS_SECRET=value",
+        "--seed=ghp_DO_NOT_ECHO_THIS_SECRET;payload",
+    ],
+)
+def test_validation_errors_never_echo_secret_bearing_arguments(valid_request, policy, argument):
+    request = replace(
+        valid_request,
+        argv=("train_single", "skilldag-natural", "local", argument),
+    )
+
+    errors = validate_request(request, policy)
+
+    assert errors
+    assert "ghp_DO_NOT_ECHO_THIS_SECRET" not in "\n".join(errors)
 
 
 def test_rejects_duplicate_options(valid_request, policy):
@@ -242,6 +384,31 @@ def test_validates_integer_option_type_and_range(valid_request, policy, value, m
     errors = validate_request(_request_with_option(valid_request, "seed", value), policy)
 
     assert message in errors
+
+
+def test_rejects_oversized_typed_integer_without_calling_int(valid_request, policy):
+    request = _request_with_option(valid_request, "seed", "9" * 5000)
+
+    errors = validate_request(request, policy)
+
+    assert "value for --seed integer exceeds 10 characters" in errors
+
+
+def test_rejects_oversized_duration_integer_without_yaml_integer_conversion(valid_request):
+    policy = _policy_with_option(
+        valid_request,
+        "duration",
+        {"type": "duration", "max_steps": 100},
+    )
+    request = _request_with_option(
+        valid_request,
+        "duration",
+        f"{{value: {'9' * 5000}, unit: steps}}",
+    )
+
+    errors = validate_request(request, policy)
+
+    assert "value for --duration integer exceeds 10 characters" in errors
 
 
 def test_validates_enumerated_option_values(valid_request):
@@ -352,7 +519,8 @@ def test_rejects_researcher_override_of_policy_owned_fixed_options(valid_request
     errors = validate_request(request, policy)
 
     assert "option is fixed by policy and cannot be supplied: --save-folder" in errors
-    assert "unsafe argument value: '--save-folder=$HOME/attacker'" in errors
+    assert "unsafe argument at index 1" in errors
+    assert "$HOME/attacker" not in "\n".join(errors)
 
 
 def test_rejects_researcher_override_of_fixed_launcher_arguments(valid_request):
@@ -364,7 +532,7 @@ def test_rejects_researcher_override_of_fixed_launcher_arguments(valid_request):
 
     errors = validate_request(request, policy)
 
-    assert "launcher argument is fixed by policy and cannot be supplied: --standalone" in errors
+    assert "argument at index 1 is fixed by launcher policy" in errors
 
 
 def test_policy_owned_derived_paths_are_not_request_arguments(valid_request):
@@ -509,11 +677,11 @@ def test_rejects_non_string_or_non_tuple_success_metrics(valid_request, policy, 
     assert errors == ["success metrics must be an immutable array of strings"]
 
 
-@pytest.mark.parametrize("seed", [-1, True, "0"])
-def test_requires_nonnegative_integer_seed(valid_request, policy, seed):
+@pytest.mark.parametrize("seed", [-1, 2147483648, True, "0"])
+def test_requires_bounded_nonnegative_integer_seed(valid_request, policy, seed):
     errors = validate_request(replace(valid_request, seed=seed), policy)
 
-    assert "seed must be a non-negative integer" in errors
+    assert "seed must be an integer from 0 to 2147483647" in errors
 
 
 @pytest.mark.parametrize("field", ["purpose", "study", "condition", "comparison", "success_signal"])
@@ -592,6 +760,16 @@ def test_status_builder_requires_an_exact_utc_second(valid_request, validated_at
         build_status_comment(valid_request, validated_at=validated_at)
 
 
+def test_status_builder_rejects_payload_larger_than_comment_limit(valid_request):
+    request = replace(valid_request, purpose="x" * 65_536)
+
+    with pytest.raises(
+        StatusCommentError,
+        match="validated status comment exceeds 65536 characters",
+    ):
+        build_status_comment(request, validated_at=VALIDATED_AT)
+
+
 def test_status_parser_rejects_missing_marker():
     with pytest.raises(StatusCommentError, match="validated status marker is missing"):
         parse_status_comment("{}")
@@ -623,6 +801,37 @@ def test_status_parser_rejects_malformed_json():
         match="validated status payload is not valid JSON",
     ):
         parse_status_comment(STATUS_MARKER + "\n{")
+
+
+def test_status_parser_rejects_oversized_payload_before_json_loading():
+    comment = STATUS_MARKER + "\n" + ("x" * 65_536)
+
+    with pytest.raises(
+        StatusCommentError,
+        match="validated status comment exceeds 65536 characters",
+    ):
+        parse_status_comment(comment)
+
+
+def test_status_parser_rejects_oversized_integer_token_without_calling_int(valid_request):
+    comment = build_status_comment(valid_request, validated_at=VALIDATED_AT)
+    comment = comment.replace('"seed":0', '"seed":' + ("9" * 5000), 1)
+
+    with pytest.raises(
+        StatusCommentError,
+        match="validated status contains an integer longer than 10 characters",
+    ):
+        parse_status_comment(comment)
+
+
+def test_status_errors_never_echo_secret_bearing_payload():
+    secret = "ghp_DO_NOT_ECHO_THIS_SECRET"
+    comment = STATUS_MARKER + "\n" + f'{{"request":{secret}'
+
+    with pytest.raises(StatusCommentError) as raised:
+        parse_status_comment(comment)
+
+    assert secret not in str(raised.value)
 
 
 def test_status_parser_rejects_noncanonical_json(valid_request):

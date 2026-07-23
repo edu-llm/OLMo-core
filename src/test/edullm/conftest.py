@@ -42,7 +42,15 @@ def policy():
                 "launcher": "python",
                 "positionals": 3,
                 "allowed_positionals": {0: ["dry_run", "train_single", "train"], 2: ["local"]},
-                "allowed_options": {"seed": {"type": "integer", "min": 0, "max": 2147483647}},
+                "allowed_options": {
+                    "seed": {
+                        "type": "integer",
+                        "min": 0,
+                        "max": 2147483647,
+                        "required": True,
+                        "request_field": "seed",
+                    }
+                },
             }
         },
     )

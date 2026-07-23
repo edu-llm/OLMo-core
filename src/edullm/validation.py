@@ -13,12 +13,15 @@ from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
 from typing import cast
 
-import yaml
-
 from edullm.models import JobRequest, JobStatus
 from edullm.policy import Policy
 
 STATUS_MARKER = "<!-- edullm-status:v1 -->"
+# GitHub comments are bounded at 65,536 characters.
+MAX_STATUS_COMMENT_CHARS = 65_536
+# Ten decimal digits cover the reviewed signed-value domains without unbounded int conversion.
+MAX_INTEGER_TOKEN_CHARS = 10
+MAX_SEED = 2_147_483_647
 
 _COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
@@ -30,6 +33,9 @@ _POOL_MANIFEST = re.compile(r"/orcd/pool/[A-Za-z0-9._/-]+")
 _METRIC = re.compile(r"\S+")
 _TIMESTAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 _STATUS_MARKER_LINE = re.compile(rf"^{re.escape(STATUS_MARKER)}$", re.MULTILINE)
+_DURATION = re.compile(
+    r"\{\s*value:\s*(?P<value>-?(?:0|[1-9][0-9]*))\s*," r"\s*unit:\s*(?P<unit>[a-z]+)\s*\}"
+)
 
 _STATUS_FIELDS = {"request", "request_digest", "validated_at"}
 _REQUEST_FIELDS = {field.name for field in dataclasses.fields(JobRequest)}
@@ -43,6 +49,11 @@ _REQUEST_TUPLE_FIELDS = {"argv", "success_metrics"}
 _REQUEST_STRING_FIELDS = (
     _REQUEST_FIELDS - _REQUEST_INTEGER_FIELDS - _REQUEST_TUPLE_FIELDS - {"status"}
 )
+_INVALID_OPTION_VALUE = object()
+
+
+class _OversizedIntegerToken(ValueError):
+    """Internal signal raised before converting an oversized JSON integer."""
 
 
 class StatusCommentError(ValueError):
@@ -73,6 +84,7 @@ def _valid_repository_path(value: object) -> bool:
 def _parse_profile_arguments(
     arguments: tuple[str, ...],
     profile: Mapping[str, object],
+    request: JobRequest,
     errors: list[str],
 ) -> None:
     fixed_launcher_arguments = tuple(
@@ -81,66 +93,96 @@ def _parse_profile_arguments(
     fixed_options = cast(Mapping[str, object], profile.get("fixed_options", {}))
     allowed_options = cast(Mapping[str, Mapping[str, object]], profile.get("allowed_options", {}))
 
-    positionals = []
-    supplied_options: list[tuple[str, str]] = []
-    for argument in arguments:
-        if argument in fixed_launcher_arguments:
-            errors.append(
-                f"launcher argument is fixed by policy and cannot be supplied: {argument}"
-            )
-            continue
-        if not argument.startswith("--"):
-            positionals.append(argument)
-            continue
-        if "=" not in argument:
-            errors.append(f"option must use --name=value form: {argument}")
-            continue
-        name, value = argument[2:].split("=", 1)
-        if not name or not value:
-            errors.append(f"option must use --name=value form: {argument}")
-            continue
-        supplied_options.append((name, value))
-
     expected_positionals = profile.get("positionals")
-    if type(expected_positionals) is not int or len(positionals) != expected_positionals:
+    if type(expected_positionals) is not int or len(arguments) < expected_positionals:
         errors.append("positional arguments do not match the entrypoint profile")
+        positional_count = 0 if type(expected_positionals) is not int else expected_positionals
+    else:
+        positional_count = expected_positionals
+        if any(argument.startswith("--") for argument in arguments[:positional_count]):
+            errors.append(f"the first {positional_count} arguments must be positional")
+
+    for index, argument in enumerate(arguments[positional_count:], start=positional_count):
+        if not argument.startswith("--"):
+            errors.append(
+                f"positional argument at index {index} is not allowed after options begin"
+            )
 
     allowed_positionals = cast(Mapping[int, object], profile.get("allowed_positionals", {}))
     for position, rule in sorted(allowed_positionals.items()):
-        if position >= len(positionals):
+        if position >= positional_count or position >= len(arguments):
             continue
-        value = positionals[position]
+        value = arguments[position]
+        if value.startswith("--"):
+            continue
         if isinstance(rule, Mapping):
             if rule.get("type") != "slug" or _SLUG.fullmatch(value) is None:
                 errors.append(f"positional argument {position} must be a lowercase slug")
         elif value not in cast(tuple[object, ...], rule):
             errors.append(f"positional argument {position} is not allowed")
 
-    counts = Counter(name for name, _ in supplied_options)
-    for name in sorted(name for name, count in counts.items() if count > 1):
+    supplied_options: list[tuple[int, str, str]] = []
+    for index, argument in enumerate(arguments):
+        if not argument.startswith("--"):
+            continue
+        if argument in fixed_launcher_arguments:
+            errors.append(f"argument at index {index} is fixed by launcher policy")
+            continue
+
+        candidate = argument[2:].split("=", 1)[0]
+        known_name = (
+            candidate if candidate in fixed_options or candidate in allowed_options else None
+        )
+        if "=" not in argument:
+            if known_name is None:
+                errors.append(f"option at index {index} must use --name=value form")
+            else:
+                errors.append(f"option --{known_name} at index {index} must use --name=value form")
+            continue
+
+        name, value = argument[2:].split("=", 1)
+        if not name or not value:
+            if known_name is None:
+                errors.append(f"option at index {index} must use --name=value form")
+            else:
+                errors.append(f"option --{known_name} at index {index} must use --name=value form")
+            continue
+        supplied_options.append((index, name, value))
+
+    counts = Counter(name for _, name, _ in supplied_options)
+    for name in sorted(
+        name
+        for name, count in counts.items()
+        if count > 1 and (name in fixed_options or name in allowed_options)
+    ):
         errors.append(f"option may be supplied only once: --{name}")
 
-    fixed_names = sorted({name for name, _ in supplied_options if name in fixed_options})
+    fixed_names = sorted({name for _, name, _ in supplied_options if name in fixed_options})
     for name in fixed_names:
         errors.append(f"option is fixed by policy and cannot be supplied: --{name}")
 
-    unknown = sorted(
-        {
-            name
-            for name, _ in supplied_options
-            if name not in fixed_options and name not in allowed_options
-        }
-    )
-    if unknown:
-        errors.append(f"options are not allowed for this entrypoint: {unknown}")
+    for index, name, _ in supplied_options:
+        if name not in fixed_options and name not in allowed_options:
+            errors.append(f"option at index {index} is not allowed for this entrypoint")
 
-    for name, value in supplied_options:
+    for name, rule in sorted(allowed_options.items()):
+        if rule.get("required") is True and counts[name] == 0:
+            errors.append(f"required option is missing: --{name}")
+
+    for _, name, value in supplied_options:
         if name in fixed_options:
             continue
         rule = allowed_options.get(name)
         if rule is None:
             continue
-        _validate_option(name, value, rule, errors)
+        parsed = _validate_option(name, value, rule, errors)
+        request_field = rule.get("request_field")
+        if (
+            parsed is not _INVALID_OPTION_VALUE
+            and type(request_field) is str
+            and parsed != getattr(request, request_field, _INVALID_OPTION_VALUE)
+        ):
+            errors.append(f"value for --{name} must match request.{request_field}")
 
 
 def _validate_option(
@@ -148,19 +190,30 @@ def _validate_option(
     value: str,
     rule: Mapping[str, object],
     errors: list[str],
-) -> None:
+) -> object:
+    allowed = True
     allowed_values = rule.get("values")
     if allowed_values is not None and value not in {
         str(item) for item in cast(tuple[object, ...], allowed_values)
     }:
         errors.append(f"value for --{name} is not allowed")
+        allowed = False
 
     rule_type = rule.get("type")
     if rule_type == "integer":
         if _INTEGER.fullmatch(value) is None:
             errors.append(f"value for --{name} must be an integer")
-            return
-        integer = int(value)
+            return _INVALID_OPTION_VALUE
+        if len(value.lstrip("-")) > MAX_INTEGER_TOKEN_CHARS:
+            errors.append(
+                f"value for --{name} integer exceeds {MAX_INTEGER_TOKEN_CHARS} characters"
+            )
+            return _INVALID_OPTION_VALUE
+        try:
+            integer = int(value)
+        except ValueError:
+            errors.append(f"value for --{name} must be an integer")
+            return _INVALID_OPTION_VALUE
         minimum = rule.get("min", integer)
         maximum = rule.get("max", integer)
         if (
@@ -170,6 +223,8 @@ def _validate_option(
             or integer > maximum
         ):
             errors.append(f"value for --{name} is outside its allowed range")
+            return _INVALID_OPTION_VALUE
+        return integer if allowed else _INVALID_OPTION_VALUE
     elif rule_type == "path":
         roots = cast(tuple[object, ...], rule.get("roots", ()))
         path = PurePosixPath(value)
@@ -186,37 +241,43 @@ def _validate_option(
                 break
         if not within_root:
             errors.append(f"path for --{name} is outside allowed roots")
+            return _INVALID_OPTION_VALUE
+        return value if allowed else _INVALID_OPTION_VALUE
     elif rule_type == "boolean":
         if value not in {"true", "false"}:
             errors.append(f"value for --{name} must be true or false")
+            return _INVALID_OPTION_VALUE
+        return (value == "true") if allowed else _INVALID_OPTION_VALUE
     elif rule_type == "slug":
         if _SLUG.fullmatch(value) is None:
             errors.append(f"value for --{name} must be a lowercase slug")
+            return _INVALID_OPTION_VALUE
+        return value if allowed else _INVALID_OPTION_VALUE
     elif rule_type == "duration":
-        try:
-            duration = yaml.safe_load(value)
-        except yaml.YAMLError:
-            duration = None
-        if (
-            type(duration) is not dict
-            or set(duration) != {"value", "unit"}
-            or type(duration["value"]) is not int
-            or type(duration["unit"]) is not str
-        ):
+        match = _DURATION.fullmatch(value)
+        if match is None:
             errors.append(f"value for --{name} must be a duration mapping")
-            return
-        steps = cast(dict[str, object], duration)["value"]
-        unit = cast(dict[str, object], duration)["unit"]
+            return _INVALID_OPTION_VALUE
+        integer_token = match.group("value")
+        if len(integer_token.lstrip("-")) > MAX_INTEGER_TOKEN_CHARS:
+            errors.append(
+                f"value for --{name} integer exceeds {MAX_INTEGER_TOKEN_CHARS} characters"
+            )
+            return _INVALID_OPTION_VALUE
+        try:
+            steps = int(integer_token)
+        except ValueError:
+            errors.append(f"value for --{name} must be a duration mapping")
+            return _INVALID_OPTION_VALUE
+        unit = match.group("unit")
         max_steps = rule.get("max_steps")
-        if (
-            unit != "steps"
-            or type(max_steps) is not int
-            or cast(int, steps) < 1
-            or cast(int, steps) > max_steps
-        ):
+        if unit != "steps" or type(max_steps) is not int or steps < 1 or steps > max_steps:
             errors.append(f"value for --{name} exceeds the allowed smoke duration")
+            return _INVALID_OPTION_VALUE
+        return {"value": steps, "unit": unit} if allowed else _INVALID_OPTION_VALUE
     else:
         errors.append(f"validation rule for --{name} is invalid")
+        return _INVALID_OPTION_VALUE
 
 
 def _valid_manifest_location(value: object) -> bool:
@@ -283,11 +344,11 @@ def validate_request(request: JobRequest, policy: Policy) -> list[str]:
         if valid_arguments:
             if any(not argument for argument in request.argv):
                 errors.append("argument values must not be empty")
-            for argument in request.argv:
+            for index, argument in enumerate(request.argv):
                 if _UNSAFE_ARGUMENT.search(argument):
-                    errors.append(f"unsafe argument value: {argument!r}")
+                    errors.append(f"unsafe argument at index {index}")
             if profile is not None:
-                _parse_profile_arguments(request.argv, profile, errors)
+                _parse_profile_arguments(request.argv, profile, request, errors)
 
     if (
         type(request.data_manifest_sha256) is not str
@@ -329,8 +390,8 @@ def validate_request(request: JobRequest, policy: Policy) -> list[str]:
     elif request.data_classification == "restricted":
         errors.append("restricted data is not accepted by the public pilot queue")
 
-    if type(request.seed) is not int or request.seed < 0:
-        errors.append("seed must be a non-negative integer")
+    if type(request.seed) is not int or not 0 <= request.seed <= MAX_SEED:
+        errors.append(f"seed must be an integer from 0 to {MAX_SEED}")
 
     for field_name in ("purpose", "study", "condition", "comparison", "success_signal"):
         value = getattr(request, field_name)
@@ -362,6 +423,15 @@ def _format_validation_timestamp(value: datetime) -> str:
     return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _bounded_json_integer(value: str) -> int:
+    if len(value.lstrip("-")) > MAX_INTEGER_TOKEN_CHARS:
+        raise _OversizedIntegerToken
+    try:
+        return int(value)
+    except ValueError as error:
+        raise ValueError("invalid JSON integer") from error
+
+
 def build_status_comment(request: JobRequest, *, validated_at: datetime) -> str:
     """
     Build the canonical v1 status comment for a successfully validated request.
@@ -376,13 +446,27 @@ def build_status_comment(request: JobRequest, *, validated_at: datetime) -> str:
 
     :raises StatusCommentError: If the timestamp is not canonicalizable.
     """
+    try:
+        request_json = request.canonical_json()
+        request_data = json.loads(request_json, parse_int=_bounded_json_integer)
+    except _OversizedIntegerToken as error:
+        raise StatusCommentError(
+            f"validated status contains an integer longer than {MAX_INTEGER_TOKEN_CHARS} characters"
+        ) from error
+    except (ValueError, RecursionError) as error:
+        raise StatusCommentError("validated request cannot be serialized") from error
     payload = {
-        "request": json.loads(request.canonical_json()),
-        "request_digest": request.digest,
+        "request": request_data,
+        "request_digest": hashlib.sha256(request_json.encode()).hexdigest(),
         "validated_at": _format_validation_timestamp(validated_at),
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    return f"{STATUS_MARKER}\n{encoded}"
+    comment = f"{STATUS_MARKER}\n{encoded}"
+    if len(comment) > MAX_STATUS_COMMENT_CHARS:
+        raise StatusCommentError(
+            f"validated status comment exceeds {MAX_STATUS_COMMENT_CHARS} characters"
+        )
+    return comment
 
 
 def _request_from_payload(value: object) -> JobRequest:
@@ -451,7 +535,13 @@ def parse_status_comment(comment: str) -> ValidatedStatus:
     :raises StatusCommentError: If the marker, schema, canonical encoding,
         timestamp, request, or digest is invalid.
     """
-    marker_count = len(_STATUS_MARKER_LINE.findall(comment)) if type(comment) is str else 0
+    if type(comment) is not str:
+        raise StatusCommentError("validated status marker is missing")
+    if len(comment) > MAX_STATUS_COMMENT_CHARS:
+        raise StatusCommentError(
+            f"validated status comment exceeds {MAX_STATUS_COMMENT_CHARS} characters"
+        )
+    marker_count = len(_STATUS_MARKER_LINE.findall(comment))
     if marker_count == 0:
         raise StatusCommentError("validated status marker is missing")
     if marker_count != 1:
@@ -462,8 +552,12 @@ def parse_status_comment(comment: str) -> ValidatedStatus:
 
     encoded = comment[len(prefix) :]
     try:
-        payload = json.loads(encoded)
-    except json.JSONDecodeError as error:
+        payload = json.loads(encoded, parse_int=_bounded_json_integer)
+    except _OversizedIntegerToken as error:
+        raise StatusCommentError(
+            f"validated status contains an integer longer than {MAX_INTEGER_TOKEN_CHARS} characters"
+        ) from error
+    except (ValueError, RecursionError) as error:
         raise StatusCommentError("validated status payload is not valid JSON") from error
     if type(payload) is not dict:
         raise StatusCommentError("validated status payload fields are invalid")

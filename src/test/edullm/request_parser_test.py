@@ -54,7 +54,7 @@ def test_parse_reports_missing_duplicate_and_unexpected_headings_deterministical
     assert raised.value.errors == (
         "missing heading: Purpose",
         "duplicate heading: Study",
-        "unexpected heading: Unexpected",
+        "unexpected heading at index 19",
     )
 
 
@@ -96,6 +96,15 @@ def test_parse_rejects_non_text_issue_bodies(body):
     assert raised.value.errors == ("Issue body must be text",)
 
 
+def test_parse_rejects_oversized_issue_body_before_field_parsing():
+    body = _valid_body() + (" " * 65_536)
+
+    with pytest.raises(IssueParseError) as raised:
+        parse_issue(body, issue_number=42, requester="student")
+
+    assert raised.value.errors == ("Issue body exceeds 65536 characters",)
+
+
 def test_parse_rejects_an_empty_required_field():
     body = _replace_field(_valid_body(), "Purpose", "   ")
 
@@ -112,6 +121,15 @@ def test_parse_rejects_malformed_arguments_json():
         parse_issue(body, issue_number=42, requester="student")
 
     assert raised.value.errors == ("Arguments JSON must be valid JSON",)
+
+
+def test_parse_rejects_oversized_arguments_json_before_json_loading():
+    body = _replace_field(_valid_body(), "Arguments JSON", f"[{'9' * 5000}]")
+
+    with pytest.raises(IssueParseError) as raised:
+        parse_issue(body, issue_number=42, requester="student")
+
+    assert raised.value.errors == ("Arguments JSON exceeds 4096 characters",)
 
 
 @pytest.mark.parametrize(
@@ -159,6 +177,16 @@ def test_parse_reports_typed_integer_errors(heading, value, message):
     assert raised.value.errors == (message,)
 
 
+@pytest.mark.parametrize("heading", ["Seed", "GPU count", "Maximum runtime minutes"])
+def test_parse_rejects_oversized_integer_tokens_without_calling_int(heading):
+    body = _replace_field(_valid_body(), heading, "9" * 5000)
+
+    with pytest.raises(IssueParseError) as raised:
+        parse_issue(body, issue_number=42, requester="student")
+
+    assert raised.value.errors == (f"{heading} integer exceeds 10 characters",)
+
+
 @pytest.mark.parametrize(
     ("issue_number", "requester", "message"),
     [
@@ -192,8 +220,21 @@ def test_parse_error_order_is_stable_across_calls():
         == [
             (
                 "missing heading: Purpose",
-                "unexpected headings: Alpha, Zeta",
+                "unexpected heading at index 18",
+                "unexpected heading at index 19",
             )
         ]
         * 3
     )
+
+
+def test_parse_errors_never_echo_secret_bearing_unknown_heading():
+    secret = "ghp_DO_NOT_ECHO_THIS_SECRET"
+    body = _valid_body() + f"\n\n### {secret}\nvalue\n"
+
+    with pytest.raises(IssueParseError) as raised:
+        parse_issue(body, issue_number=42, requester="student")
+
+    rendered = str(raised.value)
+    assert raised.value.errors == ("unexpected heading at index 19",)
+    assert secret not in rendered

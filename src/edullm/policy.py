@@ -98,10 +98,17 @@ _APPROVED_ENTRYPOINTS = {
         },
         "fixed_options": {"trainer.callbacks.wandb.enabled": True},
         "allowed_options": {
+            "seed": {
+                "type": "integer",
+                "min": 0,
+                "max": 2147483647,
+                "required": True,
+                "request_field": "seed",
+            },
             "trainer.hard_stop": {
                 "type": "duration",
                 "max_steps": 100,
-            }
+            },
         },
     },
 }

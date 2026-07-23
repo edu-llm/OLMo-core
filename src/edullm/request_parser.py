@@ -31,6 +31,12 @@ ISSUE_HEADINGS = (
     "Maximum runtime minutes",
 )
 
+# Match GitHub's Issue body ceiling and keep nested parsing substantially smaller.
+MAX_ISSUE_BODY_CHARS = 65_536
+MAX_ARGUMENTS_JSON_CHARS = 4_096
+# Covers the reviewed 32-bit seed maximum before any decimal conversion.
+MAX_INTEGER_TOKEN_CHARS = 10
+
 _HEADING = re.compile(r"^### (?P<name>[^\r\n]+)\r?$", re.MULTILINE)
 _INTEGER = re.compile(r"-?(?:0|[1-9][0-9]*)")
 
@@ -53,11 +59,12 @@ def _shape_errors(names: list[str]) -> list[str]:
         if counts[heading] > 1:
             errors.append(f"duplicate heading: {heading}")
 
-    unexpected = sorted(set(names) - set(ISSUE_HEADINGS))
-    if len(unexpected) == 1:
-        errors.append(f"unexpected heading: {unexpected[0]}")
-    elif unexpected:
-        errors.append(f"unexpected headings: {', '.join(unexpected)}")
+    expected = set(ISSUE_HEADINGS)
+    errors.extend(
+        f"unexpected heading at index {index}"
+        for index, name in enumerate(names)
+        if name not in expected
+    )
 
     if not errors and names != list(ISSUE_HEADINGS):
         errors.append("headings must appear in Issue-form order")
@@ -76,6 +83,8 @@ def fields_from_markdown(body: str) -> dict[str, str]:
     """
     if type(body) is not str:
         raise IssueParseError(("Issue body must be text",))
+    if len(body) > MAX_ISSUE_BODY_CHARS:
+        raise IssueParseError((f"Issue body exceeds {MAX_ISSUE_BODY_CHARS} characters",))
 
     matches = list(_HEADING.finditer(body))
     names = [match.group("name") for match in matches]
@@ -98,9 +107,12 @@ def fields_from_markdown(body: str) -> dict[str, str]:
 
 
 def _parse_arguments(value: str, errors: list[str]) -> tuple[str, ...]:
+    if len(value) > MAX_ARGUMENTS_JSON_CHARS:
+        errors.append(f"Arguments JSON exceeds {MAX_ARGUMENTS_JSON_CHARS} characters")
+        return ()
     try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError:
+        parsed = json.loads(value, parse_int=_bounded_json_integer)
+    except (ValueError, RecursionError):
         errors.append("Arguments JSON must be valid JSON")
         return ()
     if type(parsed) is not list:
@@ -116,11 +128,24 @@ def _parse_arguments(value: str, errors: list[str]) -> tuple[str, ...]:
     return tuple(cast(list[str], arguments))
 
 
+def _bounded_json_integer(value: str) -> int:
+    if len(value) > MAX_INTEGER_TOKEN_CHARS:
+        raise ValueError("JSON integer token is too long")
+    return int(value)
+
+
 def _parse_integer(value: str, heading: str, errors: list[str]) -> int:
+    if len(value) > MAX_INTEGER_TOKEN_CHARS:
+        errors.append(f"{heading} integer exceeds {MAX_INTEGER_TOKEN_CHARS} characters")
+        return 0
     if _INTEGER.fullmatch(value) is None:
         errors.append(f"{heading} must be an integer")
         return 0
-    return int(value)
+    try:
+        return int(value)
+    except ValueError:
+        errors.append(f"{heading} must be an integer")
+        return 0
 
 
 def parse_issue(body: str, *, issue_number: int, requester: str) -> JobRequest:
