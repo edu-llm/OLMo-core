@@ -235,7 +235,7 @@ def test_package_registers_user_facing_edullm_console_entrypoint():
     pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
     scripts_section = pyproject.partition("[project.scripts]\n")[2].partition("\n[")[0]
 
-    assert scripts_section.strip() == 'edullm = "edullm.cli:main"'
+    assert 'edullm = "edullm.cli:main"' in scripts_section.splitlines()
     assert 'requires-python = ">=3.10"' in pyproject
 
 

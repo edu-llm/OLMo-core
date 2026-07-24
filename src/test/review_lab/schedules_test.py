@@ -2,10 +2,15 @@ from olmo_core.review_lab.schedules import ReviewController, fixed_review_steps
 
 
 def test_fixed_schedules_are_budget_and_endpoint_matched():
-    args = dict(events=12, first_step=8, last_step=165, expansion_ratio=1.35)
-    uniform = fixed_review_steps("uniform", **args)
-    expanding = fixed_review_steps("expanding", **args)
-    cramming = fixed_review_steps("cramming", **args)
+    uniform = fixed_review_steps(
+        "uniform", events=12, first_step=8, last_step=165, expansion_ratio=1.35
+    )
+    expanding = fixed_review_steps(
+        "expanding", events=12, first_step=8, last_step=165, expansion_ratio=1.35
+    )
+    cramming = fixed_review_steps(
+        "cramming", events=12, first_step=8, last_step=165, expansion_ratio=1.35
+    )
 
     assert len(uniform) == len(expanding) == len(cramming) == 12
     assert uniform[0] == expanding[0] == cramming[0] == 8
@@ -33,9 +38,12 @@ def test_cramming_schedule_has_smaller_late_gaps():
 
 
 def test_cramming_is_time_reversed_expanding():
-    args = dict(events=12, first_step=8, last_step=165, expansion_ratio=1.35)
-    expanding = fixed_review_steps("expanding", **args)
-    cramming = fixed_review_steps("cramming", **args)
+    expanding = fixed_review_steps(
+        "expanding", events=12, first_step=8, last_step=165, expansion_ratio=1.35
+    )
+    cramming = fixed_review_steps(
+        "cramming", events=12, first_step=8, last_step=165, expansion_ratio=1.35
+    )
     assert cramming == [8 + 165 - step for step in reversed(expanding)]
 
 

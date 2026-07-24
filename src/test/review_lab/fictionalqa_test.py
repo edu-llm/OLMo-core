@@ -3,7 +3,7 @@ from olmo_core.review_lab.fictionalqa import (
     records_from_fictionalqa_interference_rows,
     records_from_fictionalqa_rows,
 )
-from olmo_core.review_lab.micro_world import group_records
+from olmo_core.review_lab.micro_world import MicroWorldRecord, group_records
 
 
 def _row(event: int, style: str, question: int, *, duplicate_root: str | None = None):
@@ -44,7 +44,7 @@ def test_fictionalqa_conversion_is_event_disjoint_and_pairs_fact_with_question()
         "social",
     }
 
-    by_fact = {}
+    by_fact: dict[str, list[MicroWorldRecord]] = {}
     for record in records:
         by_fact.setdefault(record.fact_id, []).append(record)
     assert all({item.split for item in pair} == {"train", "eval"} for pair in by_fact.values())
