@@ -29,6 +29,41 @@
   </a>
 </p>
 
+## eduLLM experiment: Review timing and delayed factual retention
+
+We tested whether reviewing previously learned fictional facts during continued training improves
+their retention after a long period without review. The paired experiment compared **no review**,
+**uniform review**, and **expanding-interval review** using an OLMo ~370M checkpoint, three seeds,
+equal review budgets, and a final 180-step no-review buffer.
+
+- **Code:** [`src/olmo_core/review_lab/`](src/olmo_core/review_lab/)
+- **Final configuration:** [`configs/review_lab/olmo370m_fictionalqa_3seeds_buffer_t1000.yaml`](configs/review_lab/olmo370m_fictionalqa_3seeds_buffer_t1000.yaml)
+- **Tests:** [`src/test/review_lab/`](src/test/review_lab/)
+- **Full methods and reproduction instructions:** [`REVIEW_LAB.md`](REVIEW_LAB.md)
+
+### Results
+
+Repeated review improved delayed old-fact retention. Uniform and expanding review reduced final
+old-fact answer-token loss by approximately **4.3%** relative to no review. The two review schedules
+performed nearly identically.
+
+| Condition | Final old-fact loss ↓ | Final new-fact loss ↓ | Loss increase during buffer ↓ |
+|---|---:|---:|---:|
+| No review | 3.981 | 2.993 | +0.151 |
+| Uniform review | 3.809 | 3.018 | +0.161 |
+| Expanding review | 3.808 | 3.015 | +0.158 |
+
+Review improved the final retained level but did not measurably change the rate of forgetting during
+the buffer. This is a three-seed LoRA pilot, so it supports using review but does not establish that
+one spacing schedule is better than the other.
+
+### Dataset
+
+We used the public [`jwkirchenbauer/fictionalqa`](https://huggingface.co/datasets/jwkirchenbauer/fictionalqa)
+dataset (`fict_qa`, revision `131cb74fdc3e601b5e896ed768ad9852ea35a8f9`). Fictional events were
+assigned entirely to either the old-fact or new-fact split to prevent story leakage. The model
+trained on fictional statements and was evaluated on separately worded questions and answers.
+
 ## Installation
 
 First install [PyTorch](https://pytorch.org) according to the instructions specific to your operating system and hardware.
