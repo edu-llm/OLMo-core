@@ -11,7 +11,6 @@ import requests
 from .config import DataConfig
 from .micro_world import MicroWorldRecord, write_micro_world
 
-
 DATASETS_SERVER = "https://datasets-server.huggingface.co"
 HUB_API = "https://huggingface.co/api/datasets"
 STYLES = ("blog", "corporate", "encyclopedia", "news", "social")
@@ -50,9 +49,7 @@ def fetch_fictionalqa_rows(config: DataConfig) -> List[Dict[str, Any]]:
         raise ValueError(
             f"Could not uniquely locate {config.source_dataset}/{config.source_config}/train"
         )
-    size_payload = _get_json(
-        f"{DATASETS_SERVER}/size", params={"dataset": config.source_dataset}
-    )
+    size_payload = _get_json(f"{DATASETS_SERVER}/size", params={"dataset": config.source_dataset})
     sizes = [
         split
         for split in size_payload.get("size", {}).get("splits", [])

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added a FictionalQA review-scheduling experiment for comparing no review, uniform review, and expanding-interval review with delayed-retention evaluation.
 - Added `max_checkpoints` parameter to `CheckpointerCallback` (default: 3) to limit the number of permanent checkpoints retained. Oldest checkpoints are removed automatically when the limit is exceeded. Set to `None` to keep all (previous behavior).
 - Added `OutputDiscardCheckpoint`, an activation-recompute primitive for cases where the output of a checkpointed region dominates memory rather than its intermediates (e.g. precision casts, FFN up-projections). Forward runs under `no_grad`, the output's storage can be freed after downstream consumption, and a backward hook recomputes and rebinds the freed storage in place via a C++ `share_storage` extension (with a Python fallback for environments without a C++ toolchain).
 - Added Qwen3.5 dense model configs (0.8B, 4B, 9B, 27B) with hybrid Gated DeltaNet + full-attention architecture.

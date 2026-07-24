@@ -9,7 +9,6 @@ from typing import Dict, Iterable, List, Mapping, Sequence
 
 from .config import DataConfig
 
-
 SKILLS = ("registry", "routing", "codebook", "precedence")
 
 _VALUES = (
@@ -212,9 +211,7 @@ def load_micro_world(path: str | Path) -> List[MicroWorldRecord]:
 def group_records(
     records: Iterable[MicroWorldRecord], *, stage: str, split: str
 ) -> Dict[str, List[MicroWorldRecord]]:
-    matching = [
-        record for record in records if record.stage == stage and record.split == split
-    ]
+    matching = [record for record in records if record.stage == stage and record.split == split]
     grouped: Dict[str, List[MicroWorldRecord]] = {
         skill: [] for skill in sorted({record.skill for record in matching})
     }

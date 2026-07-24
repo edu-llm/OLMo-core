@@ -53,8 +53,7 @@ def test_fictionalqa_conversion_is_event_disjoint_and_pairs_fact_with_question()
         for pair in by_fact.values()
     )
     assert all(
-        next(item for item in pair if item.split == "eval").answer
-        for pair in by_fact.values()
+        next(item for item in pair if item.split == "eval").answer for pair in by_fact.values()
     )
 
 
@@ -63,9 +62,9 @@ def test_fictionalqa_conversion_drops_non_root_duplicates():
     duplicate = dict(rows[0])
     duplicate["question_id"] += "_duplicate"
     duplicate["duplicate_root"] = rows[0]["question_id"]
-    records = records_from_fictionalqa_rows(rows + [duplicate], DataConfig(
-        dataset="fictionalqa", old_events=2, new_events=2, seed=7
-    ))
+    records = records_from_fictionalqa_rows(
+        rows + [duplicate], DataConfig(dataset="fictionalqa", old_events=2, new_events=2, seed=7)
+    )
     assert len(records) == len(rows) * 2
 
 
@@ -78,9 +77,7 @@ def test_dynamic_grouping_works_for_fictionalqa_styles():
 
 
 def test_interference_conversion_pairs_archive_answers_without_contradiction():
-    config = DataConfig(
-        dataset="fictionalqa_interference", old_events=2, new_events=0, seed=7
-    )
+    config = DataConfig(dataset="fictionalqa_interference", old_events=2, new_events=0, seed=7)
     records = records_from_fictionalqa_interference_rows(_rows(), config)
 
     old_eval = {

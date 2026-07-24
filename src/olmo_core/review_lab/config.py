@@ -132,7 +132,10 @@ class ExperimentConfig:
             raise ValueError("Both training stages need at least one step")
         if self.training.buffer_steps < 0:
             raise ValueError("buffer_steps must be non-negative")
-        if any(delay < 1 or delay > self.training.buffer_steps for delay in self.training.buffer_eval_delays):
+        if any(
+            delay < 1 or delay > self.training.buffer_steps
+            for delay in self.training.buffer_eval_delays
+        ):
             raise ValueError("buffer_eval_delays must fall inside the post-review buffer")
         if len(set(self.training.buffer_eval_delays)) != len(self.training.buffer_eval_delays):
             raise ValueError("buffer_eval_delays must be unique")

@@ -35,6 +35,7 @@ Changelog = "https://github.com/allenai/OLMo-core/blob/main/CHANGELOG.md"
 
 [project.scripts]
 edullm = "edullm.cli:main"
+olmo-review = "olmo_core.review_lab.cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -77,9 +78,6 @@ review-lab = [
     "transformers>=5.4.0",
 ]
 all = ["ai2-olmo-core[dev,beaker,comet,dion,eval,fa4,fla,torchao,transformers,wandb]"]
-
-[project.scripts]
-olmo-review = "olmo_core.review_lab.cli:main"
 
 [tool.uv]
 environments = [

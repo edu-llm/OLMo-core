@@ -25,7 +25,6 @@ from .forever import (
 from .micro_world import MicroWorldRecord, group_records
 from .schedules import ReviewController
 
-
 log = logging.getLogger(__name__)
 
 
@@ -204,9 +203,7 @@ class EncodedPool:
         pool = self.by_skill[skill]
         selected = [pool[rng.randrange(len(pool))] for _ in range(batch_size)]
         batch = {
-            key: torch.tensor(
-                [item[key] for item in selected], dtype=torch.long, device=device
-            )
+            key: torch.tensor([item[key] for item in selected], dtype=torch.long, device=device)
             for key in ("input_ids", "attention_mask", "labels")
         }
         return batch, [str(item["example_id"]) for item in selected]
@@ -342,9 +339,7 @@ def _make_optimizer(
     return optimizer, scheduler
 
 
-def _forever_memory_examples(
-    pool: EncodedPool, *, seed: int
-) -> List[Dict[str, Any]]:
+def _forever_memory_examples(pool: EncodedPool, *, seed: int) -> List[Dict[str, Any]]:
     """Select the paper's 2% old-task memory with class/skill balancing."""
 
     total = sum(len(examples) for examples in pool.by_skill.values())
@@ -382,9 +377,7 @@ def _parameter_change_norm(
 ) -> float:
     squared = torch.zeros((), dtype=torch.float32, device=_device())
     for name, parameter in trainable:
-        squared.add_(
-            (parameter.detach().float() - previous[name].float()).pow(2).sum()
-        )
+        squared.add_((parameter.detach().float() - previous[name].float()).pow(2).sum())
     return float(squared.sqrt().item())
 
 
@@ -432,14 +425,9 @@ def _train_steps(
 ) -> Dict[str, Any]:
     device = _device()
     optimizer, lr_scheduler = _make_optimizer(model, config)
-    old_rngs = {
-        skill: random.Random(f"{seed}:{stage}:old:{skill}") for skill in old_train.skills
-    }
+    old_rngs = {skill: random.Random(f"{seed}:{stage}:old:{skill}") for skill in old_train.skills}
     new_rngs = (
-        {
-            skill: random.Random(f"{seed}:{stage}:new:{skill}")
-            for skill in new_train.skills
-        }
+        {skill: random.Random(f"{seed}:{stage}:new:{skill}") for skill in new_train.skills}
         if new_train is not None
         else {}
     )
@@ -455,15 +443,9 @@ def _train_steps(
     started = time.perf_counter()
     new_skill_cursor = 0
     running_loss = 0.0
-    is_forever = (
-        stage == 2
-        and controller is not None
-        and controller.condition == "forever_full"
-    )
+    is_forever = stage == 2 and controller is not None and controller.condition == "forever_full"
     forever_clock = ForeverClock() if is_forever else None
-    forever_memory = (
-        _forever_memory_examples(old_train, seed=seed) if is_forever else []
-    )
+    forever_memory = _forever_memory_examples(old_train, seed=seed) if is_forever else []
     forever_review_steps: List[int] = []
     forever_review_reasons: List[str] = []
     forever_replay_optimizer_steps = 0
@@ -496,14 +478,11 @@ def _train_steps(
         if not forever_memory:
             return
         assert forever_clock is not None
-        replay_optimizer, replay_scheduler = _make_optimizer(
-            model, config, warmup_steps=5
-        )
+        replay_optimizer, replay_scheduler = _make_optimizer(model, config, warmup_steps=5)
         replay_optimizer.zero_grad(set_to_none=True)
         replay_losses: List[float] = []
         replay_batch_size = (
-            config.training.micro_batch_size
-            * config.training.gradient_accumulation_steps
+            config.training.micro_batch_size * config.training.gradient_accumulation_steps
         )
         scale = forever_clock.replay_scale
         for epoch in range(FOREVER_MEMORY_EPOCHS):
@@ -524,24 +503,19 @@ def _train_steps(
                 )
                 with autocast:
                     output = model(**batch)
-                regularization = torch.zeros(
-                    (), dtype=torch.float32, device=device
-                )
+                regularization = torch.zeros((), dtype=torch.float32, device=device)
                 for name, parameter in trainable_named:
-                    regularization = regularization + (
-                        parameter.float() - forever_anchor[name].float()
-                    ).pow(2).sum()
+                    regularization = (
+                        regularization
+                        + (parameter.float() - forever_anchor[name].float()).pow(2).sum()
+                    )
                 loss = (
                     output.loss.float()
-                    + FOREVER_REGULARIZATION_COEFFICIENT
-                    * scale
-                    * regularization
+                    + FOREVER_REGULARIZATION_COEFFICIENT * scale * regularization
                 )
                 scaler.scale(loss).backward()
                 scaler.unscale_(replay_optimizer)
-                torch.nn.utils.clip_grad_norm_(
-                    model.parameters(), config.training.max_grad_norm
-                )
+                torch.nn.utils.clip_grad_norm_(model.parameters(), config.training.max_grad_norm)
                 scaler.step(replay_optimizer)
                 scaler.update()
                 replay_optimizer.zero_grad(set_to_none=True)
@@ -588,9 +562,7 @@ def _train_steps(
                     assert decision.skill is not None
                     selected_skill = decision.skill
                 else:
-                    selected_skill = new_train.skills[
-                        new_skill_cursor % len(new_train.skills)
-                    ]
+                    selected_skill = new_train.skills[new_skill_cursor % len(new_train.skills)]
                     new_skill_cursor += 1
             else:
                 selected_skill = new_train.skills[new_skill_cursor % len(new_train.skills)]
@@ -943,9 +915,7 @@ def run_condition(
     baseline_items = {
         str(key): dict(value) for key, value in stage1_summary.get("old_items", {}).items()
     }
-    mastered_fact_ids = [
-        str(fact_id) for fact_id in stage1_summary.get("mastered_fact_ids", [])
-    ]
+    mastered_fact_ids = [str(fact_id) for fact_id in stage1_summary.get("mastered_fact_ids", [])]
     if len(mastered_fact_ids) < config.training.minimum_mastered_facts:
         raise RuntimeError(
             f"Only {len(mastered_fact_ids)} old facts met the acquisition criterion; "
@@ -993,9 +963,7 @@ def run_condition(
         skill: float(final_eval["old_loss"][skill]) - baseline_losses[skill]
         for skill in baseline_losses
     }
-    final_items = {
-        str(key): dict(value) for key, value in final_eval.get("old_items", {}).items()
-    }
+    final_items = {str(key): dict(value) for key, value in final_eval.get("old_items", {}).items()}
     exact_regressed = [
         fact_id
         for fact_id in mastered_fact_ids
@@ -1006,8 +974,7 @@ def run_condition(
         for fact_id in mastered_fact_ids
         if fact_id in final_items
         and fact_id in baseline_items
-        and float(final_items[fact_id]["loss"])
-        - float(baseline_items[fact_id]["loss"])
+        and float(final_items[fact_id]["loss"]) - float(baseline_items[fact_id]["loss"])
         >= config.training.regression_loss_margin
     ]
     mastered_item_deltas = [
@@ -1017,8 +984,7 @@ def run_condition(
     ]
     buffer_old_loss_delta = (
         {
-            skill: float(final_eval["old_loss"][skill])
-            - float(pre_buffer_eval["old_loss"][skill])
+            skill: float(final_eval["old_loss"][skill]) - float(pre_buffer_eval["old_loss"][skill])
             for skill in final_eval["old_loss"]
         }
         if pre_buffer_eval is not None
@@ -1045,13 +1011,9 @@ def run_condition(
         "loss_regressed_facts": len(loss_regressed),
         "loss_regression_rate": len(loss_regressed) / max(len(mastered_fact_ids), 1),
         "mean_mastered_item_loss_delta": (
-            sum(mastered_item_deltas) / len(mastered_item_deltas)
-            if mastered_item_deltas
-            else 0.0
+            sum(mastered_item_deltas) / len(mastered_item_deltas) if mastered_item_deltas else 0.0
         ),
-        "pre_buffer_old_loss": (
-            pre_buffer_eval["old_loss"] if pre_buffer_eval is not None else {}
-        ),
+        "pre_buffer_old_loss": (pre_buffer_eval["old_loss"] if pre_buffer_eval is not None else {}),
         "buffer_old_loss_delta": buffer_old_loss_delta,
         "mean_buffer_old_loss_delta": (
             sum(buffer_old_loss_delta.values()) / len(buffer_old_loss_delta)

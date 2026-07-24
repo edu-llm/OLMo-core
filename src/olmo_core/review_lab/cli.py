@@ -12,7 +12,6 @@ from .data import build_review_data, load_review_data, review_skills
 from .report import write_report
 from .schedules import fixed_review_steps
 
-
 log = logging.getLogger(__name__)
 
 

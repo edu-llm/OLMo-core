@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Optional, Sequence, Tuple
 
-
 # Source-faithful constants from the official FOREVER implementation.
 FOREVER_CALIBRATION_STEPS = 24
 FOREVER_TRIGGER_DAYS: Tuple[int, ...] = (1, 2, 4, 7, 15, 30, 60, 90, 120)
@@ -67,4 +66,3 @@ class ForeverClock:
             self.triggered_days.append(day)
             self.next_trigger_index += 1
         return crossed
-

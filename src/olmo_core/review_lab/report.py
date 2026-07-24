@@ -50,9 +50,7 @@ def build_rows(run_dir: str | Path) -> List[Dict[str, Any]]:
                 "seed": int(summary["seed"]),
                 "review_events": int(summary["review_events"]),
                 "mean_old_loss_delta": float(summary["mean_old_loss_delta"]),
-                "mean_buffer_old_loss_delta": float(
-                    summary.get("mean_buffer_old_loss_delta", 0.0)
-                ),
+                "mean_buffer_old_loss_delta": float(summary.get("mean_buffer_old_loss_delta", 0.0)),
                 "retention_auc_loss_delta": _retention_auc(
                     summary_path.parent / "metrics.jsonl",
                     {key: float(value) for key, value in summary["baseline_old_loss"].items()},
@@ -63,12 +61,8 @@ def build_rows(run_dir: str | Path) -> List[Dict[str, Any]]:
                 "mastered_facts": int(summary.get("mastered_facts", 0)),
                 "exact_regression_rate": float(summary.get("exact_regression_rate", math.nan)),
                 "loss_regression_rate": float(summary.get("loss_regression_rate", math.nan)),
-                "final_old_exact_match": float(
-                    summary.get("final_old_exact_match", math.nan)
-                ),
-                "final_new_exact_match": float(
-                    summary.get("final_new_exact_match", math.nan)
-                ),
+                "final_old_exact_match": float(summary.get("final_old_exact_match", math.nan)),
+                "final_new_exact_match": float(summary.get("final_new_exact_match", math.nan)),
                 "old_content_tokens": int(summary.get("old_content_tokens", 0)),
                 "new_content_tokens": int(summary.get("new_content_tokens", 0)),
                 "old_stream_digest": str(summary.get("old_stream_digest", "")),
@@ -109,15 +103,11 @@ def aggregate_rows(rows: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
             item[f"{metric}_std"] = statistics.stdev(values) if len(values) > 1 else 0.0
         for metric in optional_metrics:
             values = [
-                float(row[metric])
-                for row in condition_rows
-                if not math.isnan(float(row[metric]))
+                float(row[metric]) for row in condition_rows if not math.isnan(float(row[metric]))
             ]
             if values:
                 item[f"{metric}_mean"] = statistics.mean(values)
-                item[f"{metric}_std"] = (
-                    statistics.stdev(values) if len(values) > 1 else 0.0
-                )
+                item[f"{metric}_std"] = statistics.stdev(values) if len(values) > 1 else 0.0
         item["review_events_mean"] = _mean(float(row["review_events"]) for row in condition_rows)
         aggregate.append(item)
     return aggregate
