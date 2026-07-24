@@ -1,0 +1,70 @@
+{
+  "args": {
+    "batch_size": 32,
+    "data_dir": "/tmp/skyxxth-p4-1654870/data",
+    "deterministic": true,
+    "device": "auto",
+    "eval_batch_size": 64,
+    "gradient_clip": 1.0,
+    "learning_rate": 0.0001,
+    "log_every": 25,
+    "max_length": 64,
+    "max_steps": null,
+    "model": "/tmp/skyxxth-p4-1654870/model",
+    "output_dir": "/scratch/users/skyxxth/edullm-p4/outputs/1654870",
+    "save_models": false,
+    "seed": 20260723,
+    "trust_remote_code": false,
+    "weight_decay": 0.1
+  },
+  "device": "cuda",
+  "effect_interleaved_minus_blocked": 0.341796875,
+  "metrics": {
+    "base": {
+      "accuracy": 0.0,
+      "examples": 1024,
+      "per_skill_accuracy": {
+        "A": 0.0,
+        "B": 0.0,
+        "C": 0.0,
+        "D": 0.0
+      }
+    },
+    "blocked": {
+      "accuracy": 0.2744140625,
+      "examples": 1024,
+      "per_skill_accuracy": {
+        "A": 0.0,
+        "B": 0.15234375,
+        "C": 0.0,
+        "D": 0.9453125
+      }
+    },
+    "interleaved": {
+      "accuracy": 0.6162109375,
+      "examples": 1024,
+      "per_skill_accuracy": {
+        "A": 0.81640625,
+        "B": 0.953125,
+        "C": 0.2734375,
+        "D": 0.421875
+      }
+    }
+  },
+  "training": {
+    "blocked": {
+      "arm": "blocked",
+      "elapsed_seconds": 22.7640706920065,
+      "final_loss": 0.01694316416978836,
+      "parameters": 162164736,
+      "steps": 512
+    },
+    "interleaved": {
+      "arm": "interleaved",
+      "elapsed_seconds": 22.549253011122346,
+      "final_loss": 0.20784610509872437,
+      "parameters": 162164736,
+      "steps": 512
+    }
+  }
+}

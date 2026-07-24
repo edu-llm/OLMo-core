@@ -1,0 +1,33 @@
+{
+  "architecture": "OlmoForCausalLM",
+  "description": "random-init OLMo tiny-scale schedule-test checkpoint",
+  "files": {
+    "config.json": {
+      "bytes": 603,
+      "sha256": "3df2cdaaff1cf810522053433095dc1217d004e76e1aae9c000aee974d4689ad"
+    },
+    "generation_config.json": {
+      "bytes": 115,
+      "sha256": "000cfff4d7f7c400a45cd02b275313ed128cf94fec5ecec7a5eee5dbb1833b9e"
+    },
+    "model.safetensors": {
+      "bytes": 648668496,
+      "sha256": "ef5bff883eaec3d8ffb0eb31bed82e282146df10a839c42587cdfc36edfca9a1"
+    },
+    "special_tokens_map.json": {
+      "bytes": 293,
+      "sha256": "a6188c1e366f8ed715e60ff39c46a8c500fc33508e2affeb23e8c547c5853193"
+    },
+    "tokenizer.json": {
+      "bytes": 3565678,
+      "sha256": "ff3f2a2fc3b88f6f8504650e2ebb8e018bc4206a90eb41f1a9ff351e02e44ff9"
+    },
+    "tokenizer_config.json": {
+      "bytes": 5402,
+      "sha256": "4054b570753cfb3a9fa6fe6f8fbcc0dd4e70d9b5976396ec9a28ebeeb682bf91"
+    }
+  },
+  "parameter_count": 162164736,
+  "seed": 20260723,
+  "tokenizer_source": "allenai/OLMo-1B-hf"
+}
