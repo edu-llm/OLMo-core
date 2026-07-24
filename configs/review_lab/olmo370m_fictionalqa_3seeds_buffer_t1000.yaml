@@ -1,0 +1,65 @@
+experiment_name: olmo370m-fictionalqa-3seeds-buffer180
+
+model:
+  name: allenai/DataDecide-dolma1_7-300M
+  revision: 4b1b42ff7c5224a077c4f5624824dd7c8bbe98d7
+  backend: hf_olmo
+  trust_remote_code: false
+  precision: fp16
+  attention: auto
+  gradient_checkpointing: false
+  adaptation: lora
+  lora_rank: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+
+data:
+  dataset: fictionalqa
+  path: data/review_lab/fictionalqa.jsonl
+  seed: 20260721
+  source_dataset: jwkirchenbauer/fictionalqa
+  source_revision: 131cb74fdc3e601b5e896ed768ad9852ea35a8f9
+  source_config: fict_qa
+  old_events: 20
+  new_events: 40
+
+training:
+  output_dir: runs/review_lab
+  sequence_length: 64
+  micro_batch_size: 16
+  gradient_accumulation_steps: 1
+  eval_batch_size: 32
+  stage1_steps: 60
+  stage2_steps: 180
+  buffer_steps: 180
+  buffer_eval_delays: [15, 60, 180]
+  learning_rate: 0.0001
+  weight_decay: 0.1
+  warmup_steps: 10
+  max_grad_norm: 1.0
+  eval_interval: 30
+  eval_examples_per_skill: 16
+  final_eval_examples_per_skill: 16
+  minimum_mastered_facts: 0
+  regression_loss_margin: 0.5
+  log_interval: 5
+  save_stage1: true
+  save_final_model: false
+  compile_model: false
+  num_workers: 0
+
+review:
+  events: 12
+  first_step: 8
+  last_step: 165
+  expansion_ratio: 1.35
+  adaptive_opportunity_interval: 10
+  loss_delta_threshold: 0.08
+  min_gap: 3
+
+conditions:
+  - no_review
+  - uniform
+  - expanding
+
+seeds: [17, 23, 42]
