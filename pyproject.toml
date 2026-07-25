@@ -64,6 +64,11 @@ dion = ["dion @ git+https://github.com/microsoft/dion.git@7452a5823cf9655b93c3f1
 eval = ["ai2-olmo-eval==0.9.0"]
 fa4 = ["flash-attn-4>=4.0.0b4 ; sys_platform == 'linux'"]
 fla = ["flash-linear-attention==0.4.1"]
+# NOTE: Mamba-3 fast kernels only live on mamba-ssm `main` (no clean wheel) and require a source
+# build (`MAMBA_FORCE_BUILD=TRUE pip install ... --no-build-isolation`) with a CUDA toolchain, so
+# this is intentionally kept OUT of the `all` extra. The Mamba-3 mixer works without it via the
+# in-repo reference kernel; use is gated behind `olmo_core.nn.mamba3.has_mamba3()`.
+mamba3 = ["mamba-ssm @ git+https://github.com/state-spaces/mamba.git ; sys_platform == 'linux'"]
 torchao = ["torchao==0.15.0"]
 transformers = ["transformers>=5.4.0"]
 wandb = ["wandb"]

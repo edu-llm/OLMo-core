@@ -17,6 +17,7 @@ tmp/
 .venv/
 .vscode/
 .cursor/
+.agents/
 /*.iml
 pyrightconfig.json
 .ruff.toml
@@ -34,6 +35,7 @@ uv.lock
 doc/_build/
 *.swp
 .DS_Store
+next-steps.md
 
 
 # python
@@ -60,3 +62,6 @@ site/
 /scratch/
 core
 /dataset-cache/
+
+# graphify knowledge graph output
+graphify-out/
