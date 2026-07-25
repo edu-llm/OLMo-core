@@ -16,6 +16,7 @@ tmp/
 .idea
 .venv/
 .vscode/
+.worktrees/
 .cursor/
 .agents/
 /*.iml
