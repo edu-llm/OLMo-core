@@ -8,7 +8,7 @@ This is a self-contained ``torchrun`` entrypoint (no Beaker / Gantry). It is mod
   * the **dolma2** tokenizer (must match the pre-tokenized data);
   * the data team's 150B source mixture, loaded from a ``SourceMixtureList`` YAML
     (default: ``s3://edullm-datasets/olmo-150b-dolma2/configs/equal-weighting-config.yaml``);
-  * S3 checkpoints, saved every ~20B tokens and **auto-resumed** from ``--save-folder``.
+  * S3 checkpoints, auto-resumed from ``--save-folder`` (cadence set by ``--checkpoint-tokens``).
 
 Launch with torchrun, e.g. on an 8-GPU node:
 
@@ -87,8 +87,8 @@ DEFAULT_DATA_CONFIG = (
 DEFAULT_SEQUENCE_LENGTH = 4096
 DEFAULT_GLOBAL_BATCH_SIZE = 192 * DEFAULT_SEQUENCE_LENGTH  # 786,432 tokens (192 sequences)
 DEFAULT_RANK_MICROBATCH_SIZE = 4 * DEFAULT_SEQUENCE_LENGTH  # 16,384 tokens/rank; raise on B200
-DEFAULT_TOKEN_BUDGET = 150_000_000_000  # the full 150B mix; scope down for a shakedown
-DEFAULT_CHECKPOINT_TOKENS = 7_500_000_000  # ~1x Chinchilla for 370M (~20 checkpoints over 150B)
+DEFAULT_TOKEN_BUDGET = 10_000_000_000  # train on a 10B slice of the 150B mix (~1.35x Chinchilla)
+DEFAULT_CHECKPOINT_TOKENS = 2_500_000_000  # ~4 checkpoints over a 10B run
 DEFAULT_WARMUP_STEPS = 500  # ~= model_params / tokens_per_step for this recipe
 DEFAULT_SEED = 6198
 
