@@ -65,6 +65,7 @@ from .callbacks import (
 )
 from .checkpoint import Checkpointer
 from .common import (
+    OPTIM_GRAD_NORM_METRIC,
     TRAIN_CE_LOSS_METRIC,
     TRAIN_PPL_METRIC,
     Duration,
@@ -79,6 +80,27 @@ from .train_module import TrainModule
 from .utils import EnvRngStates, check_metrics_consistent, move_metrics, reduce_metrics
 
 log = logging.getLogger(__name__)
+
+
+def _raise_on_nonfinite_metrics(step: int, metrics: Dict[str, float]) -> None:
+    """
+    Fail loudly when a step reports a non-finite loss or gradient norm.
+
+    The gradient norm matters as much as the loss here, and used to go unchecked. A NaN there is
+    doubly silent: nothing inspected the metric, and it also poisons
+    :meth:`~olmo_core.optim.skip_step_optimizer.SkipStepOptimizer.get_step_factor`'s rolling
+    statistics, so the run would carry on stepping with the weights frozen and a loss curve that
+    still looked healthy.
+
+    :param step: The step the metrics were collected for.
+    :param metrics: The metrics for that step.
+
+    :raises RuntimeError: If a checked metric is present and not finite.
+    """
+    for name in (TRAIN_CE_LOSS_METRIC, OPTIM_GRAD_NORM_METRIC):
+        value = metrics.get(name)
+        if value is not None and not math.isfinite(value):
+            raise RuntimeError(f"non-finite '{name}' ({value}) encountered at step {step}")
 
 
 T = TypeVar("T")
@@ -1429,10 +1451,9 @@ class Trainer:
 
     def _check_and_pass_on_metrics(self, metrics: Dict[int, Dict[str, float]]):
         for step in sorted(metrics.keys()):
-            # Check for nan/inf loss and add perplexity.
+            _raise_on_nonfinite_metrics(step, metrics[step])
+            # Add perplexity.
             if (ce_loss := metrics[step].get(TRAIN_CE_LOSS_METRIC)) is not None:
-                if not math.isfinite(ce_loss):
-                    raise RuntimeError(f"{ce_loss} loss encountered at step {step}")
                 if ce_loss < 10:
                     metrics[step][TRAIN_PPL_METRIC] = math.exp(ce_loss)
             for callback in self._iter_callbacks():

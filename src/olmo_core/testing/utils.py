@@ -6,6 +6,7 @@ import torch
 
 import olmo_core.nn.attention.flash_attn_api as flash_attn_api
 import olmo_core.nn.attention.flash_linear_attn_api as flash_linear_attn_api
+import olmo_core.nn.mamba3.mamba3_ssd_api as mamba3_ssd_api
 
 log = logging.getLogger(__name__)
 
@@ -19,6 +20,7 @@ has_flash_attn_2 = flash_attn_api.has_flash_attn_2()
 has_flash_attn_3 = flash_attn_api.has_flash_attn_3()
 has_flash_attn_4 = flash_attn_api.has_flash_attn_4()
 has_fla = flash_linear_attn_api.has_fla()
+has_mamba3 = mamba3_ssd_api.has_mamba3()
 has_torchao = False
 has_grouped_gemm = False
 has_te = False
@@ -142,6 +144,18 @@ FLA_MARKS = (
 
 def requires_fla(func):
     for mark in FLA_MARKS:
+        func = mark(func)
+    return func
+
+
+MAMBA3_MARKS = (
+    pytest.mark.gpu,
+    pytest.mark.skipif(not has_mamba3, reason="Requires the Mamba-3 fast kernel (mamba-ssm)"),
+)
+
+
+def requires_mamba3(func):
+    for mark in MAMBA3_MARKS:
         func = mark(func)
     return func
 

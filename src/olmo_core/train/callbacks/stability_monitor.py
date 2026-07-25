@@ -21,8 +21,9 @@ class StabilityMonitorCallback(Callback):
 
     Metrics recorded:
 
-    - ``spike/SpikeScore``: Running spike rate over the last ``rolling_window`` steps.
-      Only recorded once the rolling window is full.
+    - ``spike/SpikeScore``: Running spike rate over the last ``rolling_window`` steps, recorded
+      once ``window_size`` steps have been seen (the point at which spike detection can fire).
+      Before the rolling window fills, the rate is over the history seen so far.
     - ``spike/SpikeScore (total)``: Cumulative spike rate (total spikes / total steps).
     """
 
@@ -104,10 +105,13 @@ class StabilityMonitorCallback(Callback):
                 f"Spike detected at step: loss_spike={loss_spike}, grad_norm_spike={grad_norm_spike}"
             )
 
-        # Record running SpikeScore (only when rolling window is full)
-        if len(self._spike_history) >= self.rolling_window:
-            running_spike_score = sum(self._spike_history) / self.rolling_window
-            metrics["spike/SpikeScore"] = running_spike_score
+        # Record running SpikeScore over whatever history is available. Requiring a full
+        # rolling_window (10000 by default) kept this metric out of every run shorter than that,
+        # so the instability monitor was silent for exactly the short experimental runs most
+        # likely to be unstable. Spike detection needs window_size samples before it can fire at
+        # all, so that is the point from which a score means anything.
+        if self._total_step_count >= self.window_size:
+            metrics["spike/SpikeScore"] = sum(self._spike_history) / len(self._spike_history)
 
         # Record cumulative SpikeScore
         if self._total_step_count >= self.window_size:

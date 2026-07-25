@@ -15,6 +15,9 @@ class SkipStepOptimizer(Optimizer):
     norm for a step is above a certain threshold of standard deviations computed over a rolling
     interval.
 
+    Non-finite losses and gradient norms are skipped and are also excluded from the rolling
+    statistics, so a single bad step costs exactly one step rather than poisoning the window.
+
     .. important::
         When using a :class:`SkipStepOptimizer` you must always set :data:`latest_loss` and
         :data:`latest_grad_norm` to the current loss and grad norm, respectively, *before* calling
@@ -82,6 +85,45 @@ class SkipStepOptimizer(Optimizer):
         while len(self._grad_norms) > self.rolling_interval_length + 1:
             self._grad_norms.pop(0)
 
+    def _passes_threshold(
+        self, history: List[torch.Tensor], latest: Optional[torch.Tensor]
+    ) -> torch.Tensor:
+        """
+        Whether ``latest`` is within ``sigma_factor`` standard deviations of ``history``.
+
+        Non-finite entries in ``history`` are excluded from the statistics. This matters a great
+        deal: ``torch.std_mean`` over a window containing a single NaN returns NaN for both the
+        mean and the std, and every subsequent ``<=`` comparison against NaN is ``False``. That
+        made one bad step skip the next ``rolling_interval_length + 1`` steps (129 at the
+        default) rather than just itself, with the loss looking perfectly healthy throughout
+        because the weights had simply stopped moving.
+
+        A non-finite ``latest`` is still rejected -- skipping that step is the whole point.
+
+        Kept free of host-device syncs (no ``.item()``, no Python branching on tensor values),
+        as required by the class contract.
+        """
+        assert latest is not None
+        values = torch.stack(history)
+        finite = torch.isfinite(values)
+        count = finite.sum()
+        zeros = torch.zeros_like(values)
+
+        mean = torch.where(finite, values, zeros).sum() / count.clamp(min=1)
+        variance = torch.where(finite, (values - mean) ** 2, zeros).sum() / (count - 1).clamp(min=1)
+        threshold = mean + self.sigma_factor * variance.sqrt()
+
+        # +inf fails every comparison, so this rejects NaN and -inf as well as +inf.
+        current = torch.where(torch.isfinite(latest), latest, torch.full_like(latest, float("inf")))
+        judged = current <= threshold
+        # Fewer than two finite samples leaves the std undefined, so there is no threshold to
+        # judge against and the step is skipped. That matches the previous behaviour, which got
+        # there by accident: `torch.std_mean` of a single sample returns NaN, and every
+        # comparison against NaN is False. It is also the right call on its own terms -- once
+        # the outer guard has passed, reaching this branch means nearly the whole window is
+        # non-finite. It self-heals, because finite losses keep refilling the window.
+        return torch.where(count >= 2, judged, torch.zeros_like(judged))
+
     @torch._dynamo.disable()
     def get_step_factor(self) -> torch.Tensor:
         """
@@ -94,17 +136,12 @@ class SkipStepOptimizer(Optimizer):
         if len(self._losses) < max(2, self.rolling_interval_length // 2):
             return move_to_device(torch.tensor(1.0), self.device)
 
-        loss_std, loss_mean = torch.std_mean(torch.stack(self._losses[:-1]))
-        assert self.latest_loss is not None
+        step_factor = self._passes_threshold(self._losses[:-1], self.latest_loss)
         if self._grad_norms:
-            assert self.latest_grad_norm is not None
-            grad_norm_std, grad_norm_mean = torch.std_mean(torch.stack(self._grad_norms[:-1]))
             step_factor = torch.logical_and(
-                (self.latest_loss - loss_mean) <= self.sigma_factor * loss_std,
-                (self.latest_grad_norm - grad_norm_mean) <= self.sigma_factor * grad_norm_std,
+                step_factor,
+                self._passes_threshold(self._grad_norms[:-1], self.latest_grad_norm),
             )
-        else:
-            step_factor = (self.latest_loss - loss_mean) <= self.sigma_factor * loss_std
 
         return step_factor.float()
 
