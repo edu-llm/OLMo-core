@@ -302,7 +302,10 @@ def parse_args():
                         help="Local scratch dir for dataset index/cache (e.g. /mnt/nvme/olmo-work).")
     parser.add_argument("--load-path", type=str, default=None,
                         help="Optional warm-start checkpoint if save-folder is empty.")
-    parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
+    parser.add_argument("--wandb", dest="wandb", action="store_true", default=True,
+                        help="Enable Weights & Biases logging (default: on; needs WANDB_API_KEY).")
+    parser.add_argument("--no-wandb", dest="wandb", action="store_false",
+                        help="Disable Weights & Biases logging.")
     parser.add_argument("--dry-run", action="store_true", help="Build and print the config, then exit.")
     opts, overrides = parser.parse_known_args()
 
