@@ -1,24 +1,24 @@
 """
-Pre-train a 370M OLMo-2 model on the edu-llm 150B dolma2 source mixture (AWS / torchrun).
+Pre-train a 370M OLMo-2 model on the edu-llm dolma2 source mixture (AWS / torchrun).
 
 This is a self-contained ``torchrun`` entrypoint (no Beaker / Gantry). It is modelled on
 ``src/examples/llm/train.py`` but wired to:
 
   * the ``olmo2_370M`` architecture (the 371M ladder rung: d_model=1024, 16 layers, 16 heads);
   * the **dolma2** tokenizer (must match the pre-tokenized data);
-  * the data team's 150B source mixture, loaded from a ``SourceMixtureList`` YAML
+  * the data team's dolma2 source mixture, loaded from a ``SourceMixtureList`` YAML
     (default: ``s3://edullm-datasets/olmo-150b-dolma2/configs/equal-weighting-config.yaml``);
   * S3 checkpoints, auto-resumed from ``--save-folder`` (cadence set by ``--checkpoint-tokens``).
 
 Launch with torchrun, e.g. on an 8-GPU node:
 
-    torchrun --standalone --nproc-per-node=8 src/scripts/train/OLMo2/OLMo2-370M-150B.py my-run \\
+    torchrun --standalone --nproc-per-node=8 src/scripts/train/OLMo2/OLMo2-370M-dolma2mix.py my-run \\
         --save-folder=s3://<bucket>/<run> \\
         --work-dir=/mnt/nvme/olmo-work
 
 Validate the config on CPU first (no GPUs, no training):
 
-    python src/scripts/train/OLMo2/OLMo2-370M-150B.py my-run --dry-run
+    python src/scripts/train/OLMo2/OLMo2-370M-dolma2mix.py my-run --dry-run
 
 Recipe provenance: the LR and global batch size follow the OLMo ladder formulas (same as
 ``allenai/OLMo-ladder`` and OLMo-core's ``estimate_lr``); at seq-len 4096 this yields
@@ -87,7 +87,7 @@ DEFAULT_DATA_CONFIG = (
 DEFAULT_SEQUENCE_LENGTH = 4096
 DEFAULT_GLOBAL_BATCH_SIZE = 192 * DEFAULT_SEQUENCE_LENGTH  # 786,432 tokens (192 sequences)
 DEFAULT_RANK_MICROBATCH_SIZE = 4 * DEFAULT_SEQUENCE_LENGTH  # 16,384 tokens/rank; raise on B200
-DEFAULT_TOKEN_BUDGET = 10_000_000_000  # train on a 10B slice of the 150B mix (~1.35x Chinchilla)
+DEFAULT_TOKEN_BUDGET = 10_000_000_000  # train on a 10B slice of the mix (~1.35x Chinchilla)
 DEFAULT_CHECKPOINT_TOKENS = 2_500_000_000  # ~4 checkpoints over a 10B run
 DEFAULT_WARMUP_STEPS = 500  # ~= model_params / tokens_per_step for this recipe
 DEFAULT_SEED = 6198
@@ -109,9 +109,9 @@ def build_config(opts, overrides: List[str]):
         raise ValueError(f"Unknown model factory: {opts.model_factory}")
     model_config = factory(vocab_size=tokenizer_config.padded_vocab_size())
 
-    # --- Data: the 150B dolma2 source mixture ------------------------------------------------
+    # --- Data: the dolma2 source mixture -----------------------------------------------------
     # `SourceMixtureList.from_yaml` accepts local paths or s3:// (via cached_path). `requested_tokens`
-    # is how much of the 150B to actually draw; keep it equal to the training token budget.
+    # is how much of the mix to actually draw; keep it equal to the training token budget.
     source_list = SourceMixtureList.from_yaml(opts.data_config)
     src_mix = SourceMixtureDatasetConfig(
         source_list=source_list,
@@ -265,7 +265,7 @@ def train(config):
 def parse_args():
     parser = argparse.ArgumentParser(
         prog=sys.argv[0],
-        description="Pre-train a 370M OLMo-2 model on the 150B dolma2 source mixture.",
+        description="Pre-train a 370M OLMo-2 model on the dolma2 source mixture.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("run_name", type=str, help="Name of the run (used for W&B + checkpoint dir).")
@@ -278,7 +278,7 @@ def parse_args():
     parser.add_argument("--rank-microbatch-size", type=int, default=DEFAULT_RANK_MICROBATCH_SIZE,
                         help="Per-rank microbatch IN TOKENS. Raise on B200 (183GB) for throughput.")
     parser.add_argument("--token-budget", type=int, default=DEFAULT_TOKEN_BUDGET,
-                        help="Total tokens to train on (also caps how much of the 150B is drawn).")
+                        help="Total tokens to train on (also caps how much of the mix is drawn).")
     parser.add_argument("--checkpoint-tokens", type=int, default=DEFAULT_CHECKPOINT_TOKENS,
                         help="Save a full checkpoint roughly every this many tokens.")
     parser.add_argument("--lr", type=float, default=None,
