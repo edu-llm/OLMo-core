@@ -182,7 +182,10 @@ def build_config(opts, overrides: List[str]):
             CheckpointerCallback(
                 save_interval=save_interval_steps,
                 ephemeral_save_interval=ephemeral_save_interval,
-                save_async=True,
+                # Synchronous checkpointing: async needs a separate CPU process group that this
+                # DLAMI's torch build fails to resolve in DCP gather_object ("Group ... is not
+                # registered"). Sync save uses the default (registered) group and is fine here.
+                save_async=False,
             ),
         )
         .with_callback("config_saver", ConfigSaverCallback())
@@ -209,7 +212,7 @@ def build_config(opts, overrides: List[str]):
             LMEvaluatorCallbackConfig(
                 eval_dataset=NumpyPaddedFSLDatasetConfig(
                     paths=eval_paths,
-                    metadata=[{"label": "heldout-val"}],
+                    metadata=[{"label": "heldout-val"} for _ in eval_paths],
                     sequence_length=opts.sequence_length,
                     tokenizer=tokenizer_config,
                     work_dir=opts.work_dir,
