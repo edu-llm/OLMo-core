@@ -38,6 +38,7 @@ from olmo_core.config import Config, DType
 from olmo_core.data import (
     NumpyDataLoaderConfig,
     NumpyFSLDatasetConfig,
+    NumpyPaddedFSLDatasetConfig,
     TokenizerConfig,
 )
 from olmo_core.data.source_mixture import SourceMixtureDatasetConfig, SourceMixtureList
@@ -54,7 +55,9 @@ from olmo_core.train import (
 from olmo_core.train.callbacks import (
     CheckpointerCallback,
     ConfigSaverCallback,
+    DownstreamEvaluatorCallbackConfig,
     GPUMemoryMonitorCallback,
+    LMEvaluatorCallbackConfig,
     WandBCallback,
 )
 from olmo_core.train.train_module import (
@@ -189,6 +192,38 @@ def build_config(opts, overrides: List[str]):
         )
     )
 
+    # --- Comparable evals (for the data-mix trial) -------------------------------------------
+    # To decide which data config is "better" you MUST evaluate both runs on the SAME yardstick.
+    # Train loss across different mixes is NOT comparable. Pass a common held-out set via
+    # --eval-data (same for both runs) and/or downstream tasks via --eval-tasks.
+    if opts.eval_data:
+        eval_paths = [p.strip() for p in opts.eval_data.split(",") if p.strip()]
+        trainer_config = trainer_config.with_callback(
+            "lm_evaluator",
+            LMEvaluatorCallbackConfig(
+                eval_dataset=NumpyPaddedFSLDatasetConfig(
+                    paths=eval_paths,
+                    metadata=[{"label": "heldout-val"}],
+                    sequence_length=opts.sequence_length,
+                    tokenizer=tokenizer_config,
+                    work_dir=opts.work_dir,
+                ),
+                eval_interval=opts.eval_interval,
+                eval_on_finish=True,
+            ),
+        )
+    if opts.eval_tasks:
+        tasks = [t.strip() for t in opts.eval_tasks.split(",") if t.strip()]
+        trainer_config = trainer_config.with_callback(
+            "downstream_evaluator",
+            DownstreamEvaluatorCallbackConfig(
+                tasks=tasks,
+                tokenizer=tokenizer_config,
+                eval_interval=opts.eval_interval,
+                eval_on_finish=True,
+            ),
+        )
+
     config = ExperimentConfig(
         model=model_config,
         dataset=dataset_config,
@@ -250,6 +285,14 @@ def parse_args():
                         help="Override LR. Default: OLMo ladder formula (~7.8e-4 for 370M @ seq4096).")
     parser.add_argument("--warmup-steps", type=int, default=DEFAULT_WARMUP_STEPS)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    parser.add_argument("--eval-data", type=str, default=None,
+                        help="Comma-separated held-out .npy paths/globs for a COMMON validation set "
+                             "(use the SAME value for both trial runs to compare data configs fairly).")
+    parser.add_argument("--eval-tasks", type=str, default=None,
+                        help="Comma-separated downstream task names (e.g. hellaswag,arc_easy). "
+                             "Note: near-random at ~70M/1B tokens; held-out val loss is more sensitive.")
+    parser.add_argument("--eval-interval", type=int, default=1000,
+                        help="Steps between evals (also evaluated once at the end).")
     parser.add_argument("--save-folder", type=str, default=None,
                         help="Where to write checkpoints (use an s3:// path so they survive the box).")
     parser.add_argument("--work-dir", type=str, default=None,
