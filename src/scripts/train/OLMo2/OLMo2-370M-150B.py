@@ -88,7 +88,7 @@ DEFAULT_SEQUENCE_LENGTH = 4096
 DEFAULT_GLOBAL_BATCH_SIZE = 192 * DEFAULT_SEQUENCE_LENGTH  # 786,432 tokens (192 sequences)
 DEFAULT_RANK_MICROBATCH_SIZE = 4 * DEFAULT_SEQUENCE_LENGTH  # 16,384 tokens/rank; raise on B200
 DEFAULT_TOKEN_BUDGET = 150_000_000_000  # the full 150B mix; scope down for a shakedown
-DEFAULT_CHECKPOINT_TOKENS = 20_000_000_000  # save a full checkpoint every ~20B tokens
+DEFAULT_CHECKPOINT_TOKENS = 7_500_000_000  # ~1x Chinchilla for 370M (~20 checkpoints over 150B)
 DEFAULT_WARMUP_STEPS = 500  # ~= model_params / tokens_per_step for this recipe
 DEFAULT_SEED = 6198
 
