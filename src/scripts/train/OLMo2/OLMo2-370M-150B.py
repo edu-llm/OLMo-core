@@ -294,7 +294,10 @@ def parse_args():
     parser.add_argument("--eval-interval", type=int, default=1000,
                         help="Steps between evals (also evaluated once at the end).")
     parser.add_argument("--save-folder", type=str, default=None,
-                        help="Where to write checkpoints (use an s3:// path so they survive the box).")
+                        help="Where to write checkpoints. Must be an s3:///gs:// path for real runs "
+                             "so checkpoints survive the (ephemeral) box.")
+    parser.add_argument("--allow-local-save", action="store_true",
+                        help="Permit a non-remote --save-folder for real training (NOT durable; discouraged).")
     parser.add_argument("--work-dir", type=str, default=None,
                         help="Local scratch dir for dataset index/cache (e.g. /mnt/nvme/olmo-work).")
     parser.add_argument("--load-path", type=str, default=None,
@@ -303,13 +306,25 @@ def parse_args():
     parser.add_argument("--dry-run", action="store_true", help="Build and print the config, then exit.")
     opts, overrides = parser.parse_known_args()
 
-    if opts.save_folder is None:
-        opts.save_folder = f"/tmp/{opts.run_name}"
-        log.warning(f"--save-folder not set; using {opts.save_folder} (NOT durable). Use s3:// for real runs.")
     if opts.work_dir is None:
         opts.work_dir = "/tmp/olmo-dataset-cache"
     if opts.global_batch_size % opts.sequence_length != 0:
         parser.error("--global-batch-size must be a multiple of --sequence-length")
+
+    # Enforce durable (S3/GS) checkpoints for real training runs. The box is ephemeral, so a local
+    # save folder would be lost. --dry-run and --allow-local-save opt out.
+    remote_prefixes = ("s3://", "gs://", "http://", "https://")
+    if opts.save_folder is None:
+        opts.save_folder = f"/tmp/{opts.run_name}"
+    if (
+        not opts.dry_run
+        and not opts.allow_local_save
+        and not str(opts.save_folder).startswith(remote_prefixes)
+    ):
+        parser.error(
+            "checkpoints must be saved to S3: pass --save-folder s3://<bucket>/<run> "
+            "(or --allow-local-save to override for a throwaway local run)."
+        )
     return opts, overrides
 
 
