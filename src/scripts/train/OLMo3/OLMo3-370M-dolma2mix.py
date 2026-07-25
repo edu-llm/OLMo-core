@@ -1,10 +1,11 @@
 """
-Pre-train a 370M OLMo-2 model on the edu-llm dolma2 source mixture (AWS / torchrun).
+Pre-train a 370M OLMo-3 model on the edu-llm dolma2 source mixture (AWS / torchrun).
 
 This is a self-contained ``torchrun`` entrypoint (no Beaker / Gantry). It is modelled on
 ``src/examples/llm/train.py`` but wired to:
 
-  * the ``olmo2_370M`` architecture (the 371M ladder rung: d_model=1024, 16 layers, 16 heads);
+  * the ``olmo3_370M`` architecture (371M ladder rung: d_model=1024, 16 layers, 16 heads;
+    OLMo-3 sliding-window attention, defaulting to the flash_2 backend);
   * the **dolma2** tokenizer (must match the pre-tokenized data);
   * the data team's dolma2 source mixture, loaded from a ``SourceMixtureList`` YAML
     (default: ``s3://edullm-datasets/olmo-150b-dolma2/configs/equal-weighting-config.yaml``);
@@ -12,13 +13,13 @@ This is a self-contained ``torchrun`` entrypoint (no Beaker / Gantry). It is mod
 
 Launch with torchrun, e.g. on an 8-GPU node:
 
-    torchrun --standalone --nproc-per-node=8 src/scripts/train/OLMo2/OLMo2-370M-dolma2mix.py my-run \\
+    torchrun --standalone --nproc-per-node=8 src/scripts/train/OLMo3/OLMo3-370M-dolma2mix.py my-run \\
         --save-folder=s3://<bucket>/<run> \\
         --work-dir=/mnt/nvme/olmo-work
 
 Validate the config on CPU first (no GPUs, no training):
 
-    python src/scripts/train/OLMo2/OLMo2-370M-dolma2mix.py my-run --dry-run
+    python src/scripts/train/OLMo3/OLMo3-370M-dolma2mix.py my-run --dry-run
 
 Recipe provenance: the LR and global batch size follow the OLMo ladder formulas (same as
 ``allenai/OLMo-ladder`` and OLMo-core's ``estimate_lr``); at seq-len 4096 this yields
@@ -44,6 +45,7 @@ from olmo_core.data import (
 from olmo_core.data.source_mixture import SourceMixtureDatasetConfig, SourceMixtureList
 from olmo_core.distributed.parallel import DataParallelType
 from olmo_core.distributed.utils import get_rank
+from olmo_core.nn.attention import AttentionBackendName
 from olmo_core.nn.transformer import TransformerConfig
 from olmo_core.optim import CosWithWarmup, OptimGroupOverride, SkipStepAdamWConfig
 from olmo_core.train import (
@@ -107,7 +109,11 @@ def build_config(opts, overrides: List[str]):
         factory = getattr(TransformerConfig, opts.model_factory)
     except AttributeError:
         raise ValueError(f"Unknown model factory: {opts.model_factory}")
-    model_config = factory(vocab_size=tokenizer_config.padded_vocab_size())
+    model_kwargs = {}
+    if opts.attn_backend is not None:
+        # OLMo-3 factories default to the flash_2 backend; override for other GPUs (e.g. flash_4 on B200).
+        model_kwargs["attn_backend"] = AttentionBackendName(opts.attn_backend)
+    model_config = factory(vocab_size=tokenizer_config.padded_vocab_size(), **model_kwargs)
 
     # --- Data: the dolma2 source mixture -----------------------------------------------------
     # `SourceMixtureList.from_yaml` accepts local paths or s3:// (via cached_path). `requested_tokens`
@@ -265,11 +271,14 @@ def train(config):
 def parse_args():
     parser = argparse.ArgumentParser(
         prog=sys.argv[0],
-        description="Pre-train a 370M OLMo-2 model on the dolma2 source mixture.",
+        description="Pre-train a 370M OLMo-3 model on the dolma2 source mixture.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("run_name", type=str, help="Name of the run (used for W&B + checkpoint dir).")
-    parser.add_argument("--model-factory", type=str, default="olmo2_370M")
+    parser.add_argument("--model-factory", type=str, default="olmo3_370M")
+    parser.add_argument("--attn-backend", type=str, default=None,
+                        help="Override the OLMo-3 attention backend (e.g. flash_4 on B200). "
+                             "Default: the factory default (flash_2).")
     parser.add_argument("--data-config", type=str, default=DEFAULT_DATA_CONFIG,
                         help="SourceMixtureList YAML (local path or s3://).")
     parser.add_argument("--sequence-length", type=int, default=DEFAULT_SEQUENCE_LENGTH)
