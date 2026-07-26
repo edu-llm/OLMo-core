@@ -350,6 +350,12 @@ def _official_kernel_eligible(x: torch.Tensor, B: torch.Tensor) -> bool:
     return official_mamba3_is_available()
 
 
+# The SSD path calls the mamba-ssm Triton kernel, which uses TMA descriptors
+# (`tl.make_tensor_descriptor`) that Inductor cannot lower on torch 2.13 / Triton 3.7.1 -- it fails in
+# `identify_accessed_tensors` and then crashes graph lowering with an InductorError. Exclude the whole
+# dispatch from `torch.compile` so the kernel runs eagerly (Triton JITs it fine) while the rest of the
+# model still compiles. Graph break is clean here: tensors in, one tensor out.
+@torch.compiler.disable
 def dispatch_mamba3_ssd(
     x: torch.Tensor,
     B: torch.Tensor,
