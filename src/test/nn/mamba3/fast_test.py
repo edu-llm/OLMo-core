@@ -19,6 +19,7 @@ from olmo_core.nn.mamba3.mamba3_ssd_api import (
     dispatch_mamba3_ssd,
 )
 from olmo_core.nn.mamba3.mamba3_ssd_fast import (
+    _adaptive_scan_chunk,
     _rodrigues_so3,
     _rotate_bc_fused,
     fast_block_rotations,
@@ -152,7 +153,7 @@ def test_prefix_scan_is_invariant_to_scan_chunk(chunk_size: int):
     """
     Lowering the scan chunk is a latency/arithmetic trade, never a numerical one.
 
-    This is what licenses tuning ``_ROTATION_SCAN_CHUNK`` freely: the chunk only decides how the
+    This is what licenses tuning the scan chunk freely: the chunk only decides how the
     associative product is bracketed.
     """
     torch.manual_seed(6)
@@ -162,6 +163,63 @@ def test_prefix_scan_is_invariant_to_scan_chunk(chunk_size: int):
     actual = fast_cumulative_block_rotation(rot, chunk_size=chunk_size)
 
     torch.testing.assert_close(actual, expected, rtol=0, atol=1e-11)
+
+
+@pytest.mark.parametrize(
+    "seq_len, expected",
+    [
+        (128, 8),  # below the floor: 128 // 128 == 1, clamped up to the minimum
+        (512, 8),  # 512 // 128 == 4, still clamped up to 8
+        (1024, 8),  # 1024 // 128 == 8, exactly the floor
+        (2048, 16),  # measured optimum at seq 2048
+        (4096, 32),  # measured optimum at the production sequence length
+        (8192, 64),  # 8192 // 128 == 64, exactly the ceiling
+        (65536, 64),  # far above: clamped to the ceiling
+        (1, 8),  # degenerate length still yields a valid, floored chunk
+    ],
+)
+def test_adaptive_scan_chunk_tracks_sequence_length(seq_len: int, expected: int):
+    """
+    The scan chunk is a launch/arithmetic trade whose optimum grows with ``T``.
+
+    A single fixed chunk is wrong at both ends: too small pays needless Hillis-Steele levels at
+    long ``T`` (measured 13.9 ms at chunk 8 vs 11.1 ms at chunk 32 for the b=3 scan at T=4096),
+    too large pays a long dependent product at short ``T``. This pins the ``~T/128`` rule and its
+    clamp so a regression to a constant is caught. Numerics are unaffected -- that is guaranteed
+    separately by ``test_prefix_scan_is_invariant_to_scan_chunk``.
+    """
+    assert _adaptive_scan_chunk(seq_len) == expected
+
+
+def test_adaptive_scan_chunk_is_monotonic_non_decreasing():
+    """Coarser batching at longer sequences is the whole point; it must never invert."""
+    chunks = [_adaptive_scan_chunk(t) for t in (1, 128, 512, 1024, 2048, 4096, 8192, 16384)]
+    assert chunks == sorted(chunks)
+
+
+def test_default_scan_uses_the_adaptive_chunk(monkeypatch):
+    """
+    The default path must actually consult the adaptive rule, not a pinned constant.
+
+    Numerics are invariant to the chunk, so a value regression cannot be caught by an output
+    assertion -- it has to be observed at the point the chunk is chosen. This spies on the one
+    call that receives it.
+    """
+    import olmo_core.nn.mamba3.mamba3_ssd_api as api
+
+    seen = {}
+    original = api._cumulative_block_rotation
+
+    def spy(rot, chunk_size=64):
+        seen["chunk"] = chunk_size
+        return original(rot, chunk_size=chunk_size)
+
+    monkeypatch.setattr(api, "_cumulative_block_rotation", spy)
+
+    rot = _block_rotations(torch.randn(1, 4096, 1, 4, 3, dtype=torch.float64) * 0.1, 3)
+    fast_cumulative_block_rotation(rot)  # no chunk_size -> adaptive from seq_len
+
+    assert seen["chunk"] == _adaptive_scan_chunk(4096) == 32
 
 
 def test_prefix_scan_equals_the_naive_ordered_product():

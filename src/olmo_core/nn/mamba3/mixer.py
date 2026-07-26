@@ -9,6 +9,7 @@ from torch.distributed.tensor import Placement
 from torch.nn import functional as F
 
 from olmo_core.config import DType
+from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.nn.attention.base import SequenceMixer, SequenceMixerConfig
 from olmo_core.nn.attention.ring import (
     RingContextParallelStyle,
@@ -16,7 +17,7 @@ from olmo_core.nn.attention.ring import (
 )
 from olmo_core.nn.buffer_cache import BufferCache
 
-from .mamba3_ssd_api import dispatch_mamba3_ssd
+from .mamba3_ssd_api import dispatch_mamba3_ssd, kernel_padded_width
 
 if TYPE_CHECKING:
     from olmo_core.nn.transformer.init import InitMethod
@@ -27,6 +28,7 @@ __all__ = [
     "DEFAULT_D_STATE",
     "admissible_block_sizes",
     "kernel_padded_width",
+    "mamba3_modules_to_ignore_for_fp8",
 ]
 
 #: The default SSM state size ``N``, defined once so the mixer, its config, and every preset in
@@ -75,26 +77,32 @@ def admissible_block_sizes(
     return tuple(b for b in range(2, max_block_size + 1) if d_state % b == 0)
 
 
-def kernel_padded_width(dim: int, *, min_width: int = 16) -> int:
+def mamba3_modules_to_ignore_for_fp8(model: nn.Module) -> set:
     """
-    The width the official ``mamba-ssm`` kernel will actually run ``dim`` at.
+    Fully-qualified names of every Mamba-3 SSM-parameterising projection in ``model``.
 
-    ``mamba3_siso_combined`` needs a power-of-two head dimension for TMA, so
-    :func:`~olmo_core.nn.mamba3.mamba3_ssd_fast.mamba3_ssd_fast` zero-pads up to one. The padding
-    is numerically exact -- a zero column of ``B`` never enters the state -- but it is *wasted
-    work*, and it collides with :func:`admissible_block_sizes`: no power of two is divisible by
-    3, so every ``b=3`` configuration pays some. ``d_state=192`` runs at 256, a quarter of the
-    ``Q``/``K`` lanes carrying zeros.
+    This is the set to pass as ``Float8Config.modules_to_ignore`` so fp8 conversion skips exactly
+    the projections in :attr:`Mamba3Mixer.FP8_SENSITIVE_PROJECTIONS` -- the ones that decide the
+    recurrence rather than carry its FLOPs. Names are derived from the built model, so they stay
+    correct across depth, block pattern, and layer index. ``Float8Config.apply_float8_linear``
+    hard-errors on an ignored name that does not resolve to a module, which turns a stale hardcoded
+    list into a conversion-time crash; deriving the list here avoids that entirely.
 
-    Only the official/fast path pads; the chunked and reference paths use ``dim`` as given.
+    :param model: A (possibly hybrid) model that may contain :class:`Mamba3Mixer` modules.
 
-    :param dim: The logical width (``d_state`` or ``head_dim``).
-    :param min_width: Floor imposed by the kernel's ``tl.dot`` contraction.
+    :returns: FQNs of the sensitive projections; empty if ``model`` has no Mamba-3 mixers.
     """
-    out = min_width
-    while out < dim:
-        out *= 2
-    return out
+    ignore = set()
+    for name, module in model.named_modules():
+        if isinstance(module, Mamba3Mixer):
+            for proj in Mamba3Mixer.FP8_SENSITIVE_PROJECTIONS:
+                if isinstance(getattr(module, proj, None), nn.Linear):
+                    ignore.add(f"{name}.{proj}" if name else proj)
+    return ignore
+
+
+# kernel_padded_width is defined in mamba3_ssd_api (the single source of the padding rule) and
+# re-exported here, where it was originally public, so existing imports keep working.
 
 
 def _rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
@@ -123,33 +131,40 @@ def _validate_dims(
     its integer arithmetic would otherwise report a plausible number for a config that cannot be
     constructed.
 
-    :raises ValueError: If any option is out of range or the dimensions are incompatible.
+    :raises OLMoConfigurationError: If any option is out of range or the dimensions are
+        incompatible. This is a configuration fault, so it uses the repo's typed config error
+        rather than a bare ``ValueError`` -- callers that gate on ``OLMoConfigurationError``
+        (the framework's own convention, e.g. the attention and transformer configs) then catch
+        it uniformly. Runtime tensor-contract violations inside the SSD kernels stay
+        ``ValueError``; those are programming errors, not configuration ones.
     """
     if rotation_block_size < 2:
-        raise ValueError(f"rotation_block_size must be >= 2, got {rotation_block_size}")
+        raise OLMoConfigurationError(f"rotation_block_size must be >= 2, got {rotation_block_size}")
     if d_state < rotation_block_size:
         # Divisibility alone would wave ``d_state=0`` through (``0 % b == 0``), leaving zero
         # rotation blocks and zero-width B/C -- a mixer that returns exactly zero for every
         # input rather than failing.
-        raise ValueError(
+        raise OLMoConfigurationError(
             f"d_state ({d_state}) must be at least rotation_block_size "
             f"({rotation_block_size}); a smaller state leaves no rotation blocks at all"
         )
     if d_state % rotation_block_size != 0:
-        raise ValueError(
+        raise OLMoConfigurationError(
             f"d_state ({d_state}) must be divisible by rotation_block_size "
             f"({rotation_block_size}) for the Mamba-3 rotation"
         )
     if a_log_init_max <= 0:
-        raise ValueError(f"a_log_init_max must be > 0, got {a_log_init_max}")
+        raise OLMoConfigurationError(f"a_log_init_max must be > 0, got {a_log_init_max}")
     if n_groups < 1:
-        raise ValueError(f"n_groups must be >= 1, got {n_groups}")
+        raise OLMoConfigurationError(f"n_groups must be >= 1, got {n_groups}")
     if n_heads < 1:
-        raise ValueError(f"n_heads must be >= 1, got {n_heads}")
+        raise OLMoConfigurationError(f"n_heads must be >= 1, got {n_heads}")
     if n_heads % n_groups != 0:
-        raise ValueError(f"n_heads ({n_heads}) must be divisible by n_groups ({n_groups})")
+        raise OLMoConfigurationError(
+            f"n_heads ({n_heads}) must be divisible by n_groups ({n_groups})"
+        )
     if mimo_rank < 1:
-        raise ValueError(f"mimo_rank must be >= 1, got {mimo_rank}")
+        raise OLMoConfigurationError(f"mimo_rank must be >= 1, got {mimo_rank}")
 
 
 class Mamba3Mixer(SequenceMixer):
@@ -197,6 +212,24 @@ class Mamba3Mixer(SequenceMixer):
     :param init_device: The device to initialize parameters on.
     """
 
+    FP8_SENSITIVE_PROJECTIONS: tuple[str, ...] = (
+        "in_B",
+        "in_C",
+        "dt_proj",
+        "lam_proj",
+        "theta_proj",
+    )
+    """
+    Projections that parameterise the state-space recurrence and must stay out of fp8.
+
+    These carry almost no FLOPs but decide the SSM's behaviour: ``in_B``/``in_C`` are the state
+    read/write matrices, ``dt_proj`` the timestep, ``lam_proj`` the trapezoidal blend, and
+    ``theta_proj`` the ``SO(b)`` rotation angles that make ``b >= 3`` non-solvable. fp8 rounding
+    here is all risk (it perturbs decay, stability, and the NC^1 rotation) and no reward (the
+    speedup lives in the big GEMMs ``in_x``/``in_z``/``out_proj``, which are *not* listed here).
+    :func:`mamba3_modules_to_ignore_for_fp8` turns this into ``Float8Config.modules_to_ignore``.
+    """
+
     def __init__(
         self,
         *,
@@ -211,6 +244,7 @@ class Mamba3Mixer(SequenceMixer):
         bc_norm: bool = True,
         bc_bias: bool = True,
         a_log_init_max: float = 16.0,
+        prefer_official_kernel: Optional[bool] = None,
         dtype: torch.dtype = torch.float32,
         init_device: str = "cpu",
     ):
@@ -238,6 +272,13 @@ class Mamba3Mixer(SequenceMixer):
         self.bc_norm_enabled = bc_norm
         self.bc_bias = bc_bias
         self.a_log_init_max = a_log_init_max
+        # Kernel selection, forwarded to `dispatch_mamba3_ssd`. ``None`` (default) uses the fast
+        # official kernel whenever it is eligible (CUDA, ``mimo_rank == 1``, reduced precision) --
+        # the intended main-run path. ``False`` forces the chunked PyTorch form, which is what an
+        # activation-checkpointed run must use: the official kernel's ``autograd.Function`` is
+        # incompatible with non-reentrant `checkpoint_wrapper` (see `dispatch_mamba3_ssd`). ``True``
+        # requires the official kernel and errors if it cannot run.
+        self.prefer_official_kernel = prefer_official_kernel
 
         inner = self.n_heads * self.head_dim
         bc_out = self.n_groups * self.mimo_rank * self.d_state
@@ -336,8 +377,12 @@ class Mamba3Mixer(SequenceMixer):
         A = -torch.exp(self.A_log.float())  # (H,), < 0
 
         if self.bc_norm_enabled:
-            # Ordering is immaterial: the rotation is block-diagonal orthogonal, so it preserves
-            # the l2 norm of the full N-vector that bc_norm normalizes.
+            # Normalize *before* the rotation, and note the order is load-bearing. The rotation
+            # is block-diagonal orthogonal so it preserves the l2 norm, which makes the
+            # normalization step itself commute -- but the learned per-channel `bc_norm_b/c`
+            # scale does not. The two orders agree only while those weights are still at their
+            # all-ones init; once trained they diverge (measured ~0.85 absolute on unit-scale
+            # inputs). Swapping them is a silent model change, not a refactor.
             Bm = _rms_norm(Bm, self.bc_norm_b, self.norm_eps)
             Cm = _rms_norm(Cm, self.bc_norm_c, self.norm_eps)
 
@@ -351,6 +396,7 @@ class Mamba3Mixer(SequenceMixer):
             theta,
             heads_per_group=self.heads_per_group,
             block_size=self.rotation_block_size,
+            prefer_official_kernel=self.prefer_official_kernel,
         )  # (batch, T, H, P)
 
         # Gated RMS norm (Mamba-style): normalize the gated output.
@@ -474,10 +520,17 @@ class Mamba3Mixer(SequenceMixer):
         Approximate FLOPs per token: dominated by the linear projections, plus the rank-R SSD
         state update/readout and the block-rotation preprocessing.
 
-        These are *logical* FLOPs, at the configured ``d_state``/``head_dim``. The official
-        kernel may run wider after zero-padding (:meth:`kernel_padding_waste`), and that is
-        deliberately excluded: padded lanes compute zeros, so counting them would inflate MFU
-        for the configuration that wastes more hardware.
+        These are *model* FLOPs -- the arithmetic the layer is defined to do -- not the FLOPs a
+        particular kernel happens to execute. Two implementation overheads are deliberately
+        excluded on the same principle, because counting either would raise reported MFU for the
+        configuration that wastes more hardware:
+
+        - the official kernel's zero-padding to a power-of-two width
+          (:meth:`kernel_padding_waste`);
+        - the chunked path's intra-chunk ``Q x Q`` form, which trades extra arithmetic for
+          parallelism and so does more FLOPs than the recurrence it implements.
+
+        Both show up correctly as extra wall-clock against an unchanged numerator.
         """
         linear_flops = 2 * sum(
             m.weight.numel()
@@ -496,16 +549,30 @@ class Mamba3Mixer(SequenceMixer):
         state_size = self.n_heads * self.mimo_rank * self.d_state * self.head_dim
         recurrent_flops = 2 * 2 * state_size
 
+        del seq_len  # every term below is per-token and sequence-length independent
+
         b = self.rotation_block_size
         # Applying Q^T to B and C: a b x b matvec per block, per rank, per group, for each of
         # the two. Scales as N*b, so it is monotone in the block size.
         rotation_flops = 2 * 2 * self.n_groups * self.mimo_rank * self.n_rotation_blocks * b * b
-        # Prefix product over SO(b): ceil(log2(T)) levels of b x b matmuls per block. The b == 2
-        # path collapses to a cumulative sum of angles and does not pay this.
+
+        # Prefix product over SO(b), plus building the per-step rotations. The b == 2 path
+        # collapses to a cumulative sum of angles and pays neither.
+        #
+        # This previously multiplied by `ceil(log2(seq_len))`, which confused the *depth* of the
+        # scan with its *work* and overstated the term by 4.5-6.5x at production lengths. An
+        # associative scan over T elements costs O(T) compositions, not O(T log T): the
+        # implementation does one b x b matmul per token in the sequential pass and one more
+        # applying the chunk carry, so ~2 per token. The Hillis-Steele stage runs only over the
+        # T/chunk chunk totals and is a rounding error against that.
         scan_flops = 0
         if b > 2:
-            levels = math.ceil(math.log2(max(seq_len, 2)))
-            scan_flops = 2 * levels * self.n_groups * self.n_rotation_blocks * b**3
+            per_token_matmuls = 2  # sequential pass + carry broadcast
+            # Building R_t itself: Rodrigues is two 3x3 matmuls plus elementwise work; the
+            # `matrix_exp` fallback at other b costs several times this and is not modelled.
+            per_token_matmuls += 2
+            scan_flops = 2 * per_token_matmuls * self.n_groups * self.n_rotation_blocks * b**3
+
         return int(linear_flops + recurrent_flops + rotation_flops + scan_flops)
 
 
@@ -543,6 +610,14 @@ class Mamba3MixerConfig(SequenceMixerConfig[Mamba3Mixer]):
     """Whether the ``B``/``C`` projections use a bias term."""
     a_log_init_max: float = 16.0
     """Upper bound of the ``A_log`` init distribution. Lower it (``~0.1``) for state tracking."""
+    prefer_official_kernel: Optional[bool] = None
+    """
+    SSD kernel selection. ``None`` (default, the intended main-run setting) uses the fast
+    official ``mamba-ssm`` kernel whenever eligible. Set ``False`` for activation-checkpointed
+    runs -- the official kernel's ``autograd.Function`` is incompatible with non-reentrant
+    activation checkpointing, so AC runs must take the chunked PyTorch path. ``True`` forces the
+    official kernel and errors if it cannot run.
+    """
     dtype: DType = DType.float32
     """The default parameter dtype."""
 
@@ -611,6 +686,7 @@ class Mamba3MixerConfig(SequenceMixerConfig[Mamba3Mixer]):
             bc_norm=self.bc_norm,
             bc_bias=self.bc_bias,
             a_log_init_max=self.a_log_init_max,
+            prefer_official_kernel=self.prefer_official_kernel,
             dtype=self.dtype.as_pt(),
             init_device=init_device,
         )

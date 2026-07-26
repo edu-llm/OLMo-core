@@ -213,9 +213,7 @@ def _rotate_and_broadcast(
                 f"theta must be 5-D (batch, seq_len, n_groups, n_blocks, angles_per_block) "
                 f"for block_size={block_size}, got shape {tuple(theta.shape)}"
             )
-        cumulative_rot = fast_cumulative_block_rotation(
-            fast_block_rotations(theta, block_size)
-        )
+        cumulative_rot = fast_cumulative_block_rotation(fast_block_rotations(theta, block_size))
         B, C = _rotate_bc_fused(B, C, cumulative_rot)
 
     if heads_per_group != 1:

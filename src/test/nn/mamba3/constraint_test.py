@@ -10,6 +10,7 @@ below is a consistency assertion between the two.
 
 import pytest
 
+from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.nn.mamba3 import (
     DEFAULT_D_STATE,
     Mamba3Config,
@@ -52,7 +53,7 @@ def test_admissible_block_sizes_agrees_with_the_validator():
             if b in admissible:
                 assert config.num_params(d_model=64) > 0
             else:
-                with pytest.raises(ValueError, match="divisible"):
+                with pytest.raises(OLMoConfigurationError, match="divisible"):
                     config.num_params(d_model=64)
 
 
@@ -103,12 +104,39 @@ def test_kernel_padded_width(dim: int, expected: int):
     assert kernel_padded_width(dim) == expected
 
 
-def test_kernel_padded_width_matches_the_adapter():
-    """The diagnostic is worthless if it disagrees with the padding the kernel adapter applies."""
-    from olmo_core.nn.mamba3.mamba3_ssd_fast import _padded
+def test_padding_helper_is_single_sourced_in_api():
+    """
+    The padding helper must have exactly one definition, in ``mamba3_ssd_api``.
+
+    This replaces an earlier test that asserted three separate copies (the public helper plus a
+    private ``_padded`` in each of the fast and official adapters) produced equal values.
+    Guarding agreement is only necessary while the duplication exists; collapsing it to a single
+    source that everyone imports removes the drift surface entirely, which is the stronger
+    invariant. The adapters must reference the very same object, and must not keep a private
+    copy that could silently diverge.
+    """
+    # The submodules must be fetched from sys.modules: ``mamba3_ssd_fast`` and
+    # ``mamba3_ssd_official`` are also the names of exported *functions*, so the package
+    # attribute of that name is the function, not the module.
+    import importlib
+    import sys
+
+    import olmo_core.nn.mamba3.mamba3_ssd_api as api
+
+    importlib.import_module("olmo_core.nn.mamba3.mamba3_ssd_fast")
+    importlib.import_module("olmo_core.nn.mamba3.mamba3_ssd_official")
+    fast = sys.modules["olmo_core.nn.mamba3.mamba3_ssd_fast"]
+    official = sys.modules["olmo_core.nn.mamba3.mamba3_ssd_official"]
+
+    canonical = api.kernel_padded_width
+    assert kernel_padded_width is canonical, "the public export must be the api definition"
+    assert fast.kernel_padded_width is canonical
+    assert official.kernel_padded_width is canonical
+    assert not hasattr(fast, "_padded"), "fast adapter kept a private padding copy"
+    assert not hasattr(official, "_padded"), "official adapter kept a private padding copy"
 
     for dim in (8, 12, 16, 20, 96, 128, 144, 192, 240, 256):
-        assert kernel_padded_width(dim) == _padded(dim)
+        assert canonical(dim) == kernel_padded_width(dim)
 
 
 def test_no_admissible_b3_d_state_avoids_kernel_padding():

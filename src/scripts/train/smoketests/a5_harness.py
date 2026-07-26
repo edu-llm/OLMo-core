@@ -121,6 +121,7 @@ def train_a5(
     model,
     *,
     train_len: int = 40,
+    train_lengths: Optional[List[int]] = None,
     steps: int = 2000,
     batch_size: int = 64,
     lr: float = 3e-4,
@@ -129,10 +130,20 @@ def train_a5(
     log_every: int = 0,
 ) -> List[float]:
     """
-    Train on short words, returning the per-step loss.
+    Train on words, returning the per-step loss.
 
     Each step draws a fresh batch, so there is no fixed training set to overfit -- the model
     either learns the group operation or it does not.
+
+    :param train_len: Fixed training word length, used when ``train_lengths`` is ``None``.
+    :param train_lengths: A **length curriculum** -- if given, each step samples its length
+        uniformly from this list instead of using ``train_len``. This is what lets the model
+        generalize to lengths it was not trained at: a fixed short ``train_len`` teaches a
+        solution tuned to that one length's accumulated-state distribution, which does not carry
+        to much longer sequences even though the recurrence itself is length-agnostic. Exposing a
+        range of lengths forces a length-robust solution. Non-solvable tracking (``b >= 3``)
+        needs this to reach long evaluation lengths; ``b == 2`` cannot track ``A_5`` at length
+        regardless, so the curriculum does not rescue it (it is not a capacity lever).
 
     :returns: One cross-entropy value per step.
     """
@@ -140,10 +151,15 @@ def train_a5(
     model.to(device).train()
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
 
+    rng = torch.Generator().manual_seed(seed)
     losses: List[float] = []
     for step in range(steps):
+        if train_lengths:
+            length = train_lengths[int(torch.randint(len(train_lengths), (1,), generator=rng))]
+        else:
+            length = train_len
         logits, labels = _logits_and_labels(
-            model, train_len, batch_size, seed=seed * 1_000_003 + step, device=device
+            model, length, batch_size, seed=seed * 1_000_003 + step, device=device
         )
         loss = F.cross_entropy(logits.reshape(-1, logits.shape[-1]).float(), labels.reshape(-1))
         optimizer.zero_grad(set_to_none=True)

@@ -23,10 +23,12 @@ So the speedups here are all in that preprocessing:
    exponential of a ``2b x 2b`` block matrix. For ``so(3)`` there is an exact closed form.
    Measured: 5.7x forward, **9.0x forward+backward**, agreeing with ``matrix_exp`` to 6.7e-16 in
    float64. This is an identity, not an approximation.
-2. **A shorter sequential prefix-product chunk** (:data:`_ROTATION_SCAN_CHUNK`). The scan cost
-   that matters on GPU is *dependent kernel launches*, and the upstream default of 64 pays 63
-   sequential matmuls plus 3 Hillis-Steele levels where 8 pays 7 plus 6 -- 66 launches against
-   13, for 34% more arithmetic on tensors far too small to care.
+2. **A sequence-length-adaptive prefix-product chunk** (:func:`_adaptive_scan_chunk`). The scan
+   cost that matters on GPU is *dependent kernel launches* traded against per-launch arithmetic,
+   and the balance point moves with ``T``: the upstream default of 64 pays 63 sequential matmuls
+   plus few Hillis-Steele levels, far too fine-grained at short ``T`` and too coarse at long ``T``.
+   The ``~T/128`` rule (chunk 8 at ``T<=1024`` up to 64 at ``T>=8192``) tracks the measured
+   optimum -- this is the ``(d)`` "batch the block-diagonal matmuls harder" lever.
 3. **One fused rotation einsum for** ``B`` **and** ``C`` instead of two, since both are rotated
    by the same ``Q^T``.
 4. **A selective fp32 floor** (``selective_fp32``). The float32 requirement is on the *prefix
@@ -40,10 +42,12 @@ accepts bfloat16 and returns silent ``NaN``/``Inf`` rather than raising, so the 
 loudly" guard assumed elsewhere does not exist. The closed form stays finite in bfloat16.
 """
 
+from typing import Optional
+
 import torch
 import torch.nn.functional as F
 
-from .mamba3_ssd_api import _block_rotations, _rotate_bc
+from .mamba3_ssd_api import _block_rotations, _rotate_bc, kernel_padded_width
 
 __all__ = [
     "fast_mamba3_is_available",
@@ -53,17 +57,40 @@ __all__ = [
 ]
 
 # Copied verbatim from `mamba3_ssd_official`; see its module docstring for the derivation of
-# each one. They are duplicated rather than imported so that module stays untouched.
-_MIN_HEAD_DIM = 16
+# each one. They are duplicated rather than imported so that module stays untouched. The
+# power-of-two padding rule itself lives in `kernel_padded_width` (imported above), the single
+# source shared with the official adapter and the mixer's diagnostics.
 _ANGLE_WIDTH = 2
 _LOGIT_EPS = 1e-6
 
 # Sequential-product chunk for the prefix scan. Cost is ``chunk - 1`` dependent matmuls plus
-# ``log2(T / chunk)`` Hillis-Steele levels, so this trades arithmetic against latency in the
-# opposite direction from the SSD chunk size. 8 measured fastest on CPU across 8/16/32/64/128/512
-# and minimises dependent launches at production sequence lengths; it has *not* been swept on a
-# B200, so treat it as a tuned default rather than an optimum.
-_ROTATION_SCAN_CHUNK = 8
+# ``log2(T / chunk)`` Hillis-Steele levels -- a latency/arithmetic trade whose optimum *grows*
+# with the sequence length, in the opposite direction from the SSD chunk size. A single fixed
+# chunk is wrong at both ends, so :func:`_adaptive_scan_chunk` scales it instead. The rule tracks
+# ``~T/128`` across a B200-absent GPU sweep (b=3 scan at T=4096: 13.9 ms at chunk 8 -> 11.1 ms at
+# chunk 32; chunk 16 fastest at T=2048), clamped to a sane band; treat it as a tuned default, not
+# a proven optimum.
+_ROTATION_SCAN_CHUNK_MIN = 8
+_ROTATION_SCAN_CHUNK_MAX = 64
+_ROTATION_SCAN_TARGET_DIVISOR = 128
+
+
+def _adaptive_scan_chunk(seq_len: int) -> int:
+    """
+    Pick the prefix-scan chunk for a sequence of length ``seq_len``.
+
+    The chunk decides only how the associative product is bracketed, never the result (guaranteed
+    by ``test_prefix_scan_is_invariant_to_scan_chunk``), so it is free to tune purely for speed. A
+    longer sequence wants a coarser chunk -- fewer, larger batched block-diagonal matmuls in place
+    of more Hillis-Steele levels -- which is the ``(d)`` "batch harder" lever measured for ``b=3``.
+    ``~T/128`` clamped to ``[8, 64]`` matches the swept optimum and degrades gracefully off it.
+
+    :param seq_len: The sequence length the scan will run over.
+
+    :returns: A chunk length in ``[8, 64]``.
+    """
+    target = seq_len // _ROTATION_SCAN_TARGET_DIVISOR
+    return max(_ROTATION_SCAN_CHUNK_MIN, min(_ROTATION_SCAN_CHUNK_MAX, target))
 
 # Below this squared angle the ``sin(phi)/phi`` and ``(1-cos(phi))/phi^2`` coefficients are
 # evaluated by their Taylor series instead. ``theta_proj`` initialises at ``std * 0.1``, so the
@@ -160,7 +187,7 @@ def fast_block_rotations(theta: torch.Tensor, block_size: int) -> torch.Tensor:
 
 
 def fast_cumulative_block_rotation(
-    rot: torch.Tensor, chunk_size: int = _ROTATION_SCAN_CHUNK
+    rot: torch.Tensor, chunk_size: Optional[int] = None
 ) -> torch.Tensor:
     """
     Inclusive prefix product ``Q_t = R_t R_{t-1} ... R_1`` over the sequence axis.
@@ -168,15 +195,19 @@ def fast_cumulative_block_rotation(
     Same algorithm as
     :func:`~olmo_core.nn.mamba3.mamba3_ssd_api._cumulative_block_rotation` -- a sequential
     product within each chunk, Hillis-Steele across chunk boundaries -- but with ``chunk_size``
-    reachable by the caller instead of pinned at 64. See :data:`_ROTATION_SCAN_CHUNK`.
+    reachable by the caller instead of pinned at 64, and defaulted per sequence length by
+    :func:`_adaptive_scan_chunk` instead of a constant.
 
     :param rot: Per-step rotations of shape ``(batch, seq_len, n_groups, n_blocks, b, b)``.
-    :param chunk_size: Sequential-product chunk length.
+    :param chunk_size: Sequential-product chunk length. ``None`` picks it from the sequence
+        length via :func:`_adaptive_scan_chunk`.
 
     :returns: Inclusive prefix products, same shape as ``rot``.
     """
     from .mamba3_ssd_api import _cumulative_block_rotation
 
+    if chunk_size is None:
+        chunk_size = _adaptive_scan_chunk(rot.shape[1])
     return _cumulative_block_rotation(rot, chunk_size=chunk_size)
 
 
@@ -208,7 +239,7 @@ def _fast_rotate_bc_pair(
     C: torch.Tensor,
     theta: torch.Tensor,
     block_size: int,
-    chunk_size: int,
+    chunk_size: Optional[int],
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Apply the cumulative rotation to ``B`` and ``C``.
@@ -235,14 +266,6 @@ def _fast_rotate_bc_pair(
     return _rotate_bc_fused(B, C, cumulative_rot.to(B.dtype))
 
 
-def _padded(dim: int) -> int:
-    """Round ``dim`` up to a power of two of at least :data:`_MIN_HEAD_DIM`."""
-    out = _MIN_HEAD_DIM
-    while out < dim:
-        out *= 2
-    return out
-
-
 def mamba3_ssd_fast(
     x: torch.Tensor,
     B: torch.Tensor,
@@ -255,7 +278,7 @@ def mamba3_ssd_fast(
     heads_per_group: int,
     block_size: int = 2,
     chunk_size: int = 64,
-    rotation_scan_chunk: int = _ROTATION_SCAN_CHUNK,
+    rotation_scan_chunk: Optional[int] = None,
     selective_fp32: bool = True,
 ) -> torch.Tensor:
     """
@@ -268,8 +291,8 @@ def mamba3_ssd_fast(
 
     :param chunk_size: Kernel chunk length, passed straight through to the upstream kernel.
     :param rotation_scan_chunk: Sequential-product chunk for the ``b >= 3`` prefix scan. This is
-        a *different* knob from ``chunk_size`` and much smaller; see
-        :data:`_ROTATION_SCAN_CHUNK`.
+        a *different* knob from ``chunk_size`` and much smaller; ``None`` (the default) picks it
+        per sequence length via :func:`_adaptive_scan_chunk`.
     :param selective_fp32: Keep the prefix product in float32 but apply the resulting rotation to
         ``B``/``C`` in the kernel's own dtype. ``False`` applies it in float32, matching
         ``mamba3_ssd_official`` to float32 precision at the cost of a wasted upcast.
@@ -296,8 +319,8 @@ def mamba3_ssd_fast(
     autocast_on = torch.is_autocast_enabled(device_type)
     out_dtype = torch.get_autocast_dtype(device_type) if autocast_on else x.dtype
 
-    d_state_padded = _padded(d_state)
-    head_dim_padded = _padded(head_dim)
+    d_state_padded = kernel_padded_width(d_state)
+    head_dim_padded = kernel_padded_width(head_dim)
 
     # The kernel casts Q/K/V to bfloat16 itself, so there is no accuracy to protect by rotating
     # in float32 -- only the prefix product needs the floor, and `_fast_rotate_bc_pair` keeps it
@@ -355,6 +378,7 @@ def mamba3_ssd_fast(
 def fast_rotation_speedup_note() -> str:
     """Human-readable summary of what this module changes, for diagnostics and logging."""
     return (
-        f"mamba3_ssd_fast: Rodrigues so(3) closed form at b==3, prefix-product scan chunk "
-        f"{_ROTATION_SCAN_CHUNK} (vs 64), fused B/C rotation einsum, selective fp32 floor"
+        f"mamba3_ssd_fast: Rodrigues so(3) closed form at b==3, adaptive prefix-product scan "
+        f"chunk (~T/128 in [{_ROTATION_SCAN_CHUNK_MIN}, {_ROTATION_SCAN_CHUNK_MAX}] vs a fixed "
+        f"64), fused B/C rotation einsum, selective fp32 floor"
     )

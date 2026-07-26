@@ -17,6 +17,7 @@ import pytest
 import torch
 
 from olmo_core.nn.mamba3.mamba3_ssd_api import dispatch_mamba3_ssd, mamba3_ssd_reference
+from olmo_core.nn.mamba3.mamba3_ssd_fast import mamba3_ssd_fast
 from olmo_core.nn.mamba3.mamba3_ssd_official import (
     mamba3_ssd_official,
     official_mamba3_is_available,
@@ -179,16 +180,17 @@ def test_dispatch_uses_the_official_kernel_under_bf16_autocast():
     Autocast is the signal that reduced precision is acceptable, so it is what arms the
     default routing. The upstream kernel hard-casts to bf16 internally, so routing an fp32
     call into it would silently downgrade precision that the chunked path still delivers.
+
+    The default is ``prefer_fast_rotation=True``, so the armed path is ``mamba3_ssd_fast`` -- the
+    *same* upstream Triton kernel with a faster ``b >= 3`` rotation, not the chunked PyTorch form.
     """
     kwargs, block_size, heads_per_group = _split(_inputs())
 
     with torch.autocast("cuda", dtype=torch.bfloat16):
         auto = dispatch_mamba3_ssd(**kwargs, heads_per_group=heads_per_group, block_size=block_size)
-        direct = mamba3_ssd_official(
-            **kwargs, heads_per_group=heads_per_group, block_size=block_size
-        )
+        direct = mamba3_ssd_fast(**kwargs, heads_per_group=heads_per_group, block_size=block_size)
     assert auto.dtype == torch.bfloat16, f"autocast ignored; got {auto.dtype}"
-    assert torch.equal(auto, direct), "autocast dispatch did not take the official-kernel path"
+    assert torch.equal(auto, direct), "autocast dispatch did not take the fast-rotation kernel path"
 
 
 @requires_gpu
@@ -216,10 +218,7 @@ def test_dispatch_falls_back_to_chunked_for_mimo():
 
     with torch.autocast("cuda", dtype=torch.bfloat16):
         dispatched = dispatch_mamba3_ssd(
-            **kwargs,
-            heads_per_group=heads_per_group,
-            block_size=block_size,
-            prefer_official_kernel=True,
+            **kwargs, heads_per_group=heads_per_group, block_size=block_size
         )
         chunked = mamba3_ssd_chunked(
             **kwargs, heads_per_group=heads_per_group, block_size=block_size
@@ -228,19 +227,43 @@ def test_dispatch_falls_back_to_chunked_for_mimo():
 
 
 def test_dispatch_falls_back_to_chunked_on_cpu():
-    """The kernel is CUDA-only; a CPU call must silently take the chunked path."""
+    """The kernel is CUDA-only; a CPU call must take the chunked path."""
     from olmo_core.nn.mamba3.mamba3_ssd_chunked import mamba3_ssd_chunked
 
     kwargs, block_size, heads_per_group = _split(_inputs(device="cpu"))
 
     dispatched = dispatch_mamba3_ssd(
-        **kwargs,
-        heads_per_group=heads_per_group,
-        block_size=block_size,
-        prefer_official_kernel=True,
+        **kwargs, heads_per_group=heads_per_group, block_size=block_size
     )
     chunked = mamba3_ssd_chunked(**kwargs, heads_per_group=heads_per_group, block_size=block_size)
     assert torch.equal(dispatched, chunked), "CPU call did not fall back to the chunked path"
+
+
+@pytest.mark.parametrize(
+    "overrides, expected",
+    [
+        (dict(device="cpu"), "CUDA"),
+        (dict(device="cpu", rank=3), "mimo_rank"),
+    ],
+    ids=["cpu", "mimo"],
+)
+def test_dispatch_refuses_to_silently_downgrade_an_explicit_kernel_request(overrides, expected):
+    """
+    ``prefer_official_kernel=True`` must raise when the kernel cannot run, not fall back.
+
+    A preference (``None``) may fall back; a request may not. Swallowing it meant a benchmark or
+    a parity test could believe it had exercised the Triton kernel while measuring the chunked
+    PyTorch path -- the failure mode is a wrong *conclusion*, with no error to notice.
+    """
+    kwargs, block_size, heads_per_group = _split(_inputs(**overrides))
+
+    with pytest.raises(RuntimeError, match=expected):
+        dispatch_mamba3_ssd(
+            **kwargs,
+            heads_per_group=heads_per_group,
+            block_size=block_size,
+            prefer_official_kernel=True,
+        )
 
 
 @requires_gpu
@@ -422,7 +445,12 @@ def test_official_kernel_keeps_the_prefix_product_in_fp32_under_autocast():
 @requires_gpu
 @requires_official_mamba3
 def test_dispatch_routes_block_size_3_to_the_official_kernel():
-    """``b >= 3`` must reach the kernel as well, not fall back to the chunked form."""
+    """``b >= 3`` must reach the kernel as well, not fall back to the chunked form.
+
+    With the default ``prefer_fast_rotation=True`` this is the ``mamba3_ssd_fast`` path (Rodrigues +
+    adaptive scan chunk over the same Triton kernel), which is exactly the route the ``b=3`` run
+    depends on.
+    """
     kwargs, block_size, heads_per_group = _split(_inputs(d_state=12, block_size=3))
 
     dispatched = dispatch_mamba3_ssd(
@@ -431,8 +459,8 @@ def test_dispatch_routes_block_size_3_to_the_official_kernel():
         block_size=block_size,
         prefer_official_kernel=True,
     )
-    direct = mamba3_ssd_official(**kwargs, heads_per_group=heads_per_group, block_size=block_size)
-    assert torch.equal(dispatched, direct), "b=3 dispatch did not take the official-kernel path"
+    direct = mamba3_ssd_fast(**kwargs, heads_per_group=heads_per_group, block_size=block_size)
+    assert torch.equal(dispatched, direct), "b=3 dispatch did not take the fast-rotation kernel path"
 
 
 @requires_gpu
@@ -443,12 +471,18 @@ def test_mixer_reaches_the_official_kernel_under_autocast(rotation_block_size: i
     End to end: a SISO mixer training in bf16 must actually land on the kernel.
 
     Everything above tests ``dispatch_mamba3_ssd`` directly; this is the one that would catch
-    the routing being live in theory but unreachable from ``Mamba3Mixer`` in practice.
+    the routing being live in theory but unreachable from ``Mamba3Mixer`` in practice. The default
+    ``prefer_fast_rotation=True`` reaches the kernel through ``mamba3_ssd_fast``, so this spies on
+    the shared upstream Triton entry point (which both adapters call) rather than either adapter --
+    the assertion is "reaches the Triton kernel, not the chunked PyTorch path".
     """
     from unittest.mock import patch
 
+    from mamba_ssm.ops.triton.mamba3.mamba3_siso_combined import (
+        mamba3_siso_combined as real_kernel,
+    )
+
     from olmo_core.nn.mamba3 import Mamba3MixerConfig
-    from olmo_core.nn.mamba3 import mamba3_ssd_official as official_module
     from olmo_core.nn.transformer.init import InitMethod
 
     torch.manual_seed(0)
@@ -464,14 +498,13 @@ def test_mixer_reaches_the_official_kernel_under_autocast(rotation_block_size: i
     mixer.init_weights(init_method=InitMethod.normal, d_model=d_model, block_idx=0, num_blocks=2)
 
     x = torch.randn(2, 16, d_model, device="cuda", requires_grad=True)
-    spy = patch.object(
-        official_module,
-        "mamba3_ssd_official",
-        side_effect=official_module.mamba3_ssd_official,
+    spy = patch(
+        "mamba_ssm.ops.triton.mamba3.mamba3_siso_combined.mamba3_siso_combined",
+        side_effect=real_kernel,
     )
     with spy as called, torch.autocast("cuda", dtype=torch.bfloat16):
         y = mixer(x)
-    assert called.call_count == 1, "the mixer never reached the official kernel under autocast"
+    assert called.call_count == 1, "the mixer never reached the Triton kernel under autocast"
 
     y.float().pow(2).mean().backward()
     assert torch.isfinite(y).all() and x.grad is not None and torch.isfinite(x.grad).all()

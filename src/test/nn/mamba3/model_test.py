@@ -3,7 +3,7 @@ import torch
 
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.nn.attention import AttentionBackendName, AttentionConfig
-from olmo_core.nn.mamba3 import Mamba3, Mamba3Config
+from olmo_core.nn.mamba3 import DEFAULT_D_STATE, Mamba3, Mamba3Config
 from olmo_core.nn.mamba3.mixer import Mamba3Mixer, Mamba3MixerConfig
 from olmo_core.nn.transformer import Transformer
 
@@ -156,7 +156,7 @@ def test_mamba3_olmo3_370M_defaults_are_a_clean_tc0_baseline():
     assert mixer.a_log_init_max == 0.1
 
 
-@pytest.mark.parametrize("rotation_block_size", [2, 4])
+@pytest.mark.parametrize("rotation_block_size", [2, 3])
 def test_mamba3_olmo3_370M_switches_block_size_without_touching_anything_else(
     rotation_block_size: int,
 ):
@@ -195,9 +195,7 @@ def test_mamba3_olmo3_370M_supports_block_size_3_with_no_other_change():
     base_mixer, nc1_mixer = _mamba_mixer(baseline), _mamba_mixer(nc1)
     assert base_mixer.d_state == nc1_mixer.d_state
     assert nc1_mixer.d_state % 3 == 0
-    differing = {
-        f for f in vars(base_mixer) if getattr(base_mixer, f) != getattr(nc1_mixer, f)
-    }
+    differing = {f for f in vars(base_mixer) if getattr(base_mixer, f) != getattr(nc1_mixer, f)}
     assert differing == {"rotation_block_size"}, f"unexpected fields also changed: {differing}"
 
 
@@ -261,7 +259,7 @@ def test_mamba3_hybrid_presets_support_non_solvable_rotation(preset):
         if isinstance(m := b.sequence_mixer, Mamba3MixerConfig)
     ]
     assert mamba_mixers
-    assert all(m.d_state == 96 and m.rotation_block_size == 3 for m in mamba_mixers)
+    assert all(m.d_state == DEFAULT_D_STATE and m.rotation_block_size == 3 for m in mamba_mixers)
 
     model = config.build(init_device="meta")
     assert config.num_params == sum(p.numel() for p in model.parameters())

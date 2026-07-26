@@ -31,7 +31,38 @@ from typing import Optional
 
 import torch
 
-__all__ = ["has_mamba3", "mamba3_ssd_reference", "dispatch_mamba3_ssd"]
+__all__ = [
+    "has_mamba3",
+    "kernel_padded_width",
+    "mamba3_ssd_reference",
+    "dispatch_mamba3_ssd",
+]
+
+
+def kernel_padded_width(dim: int, *, min_width: int = 16) -> int:
+    """
+    The width the official ``mamba-ssm`` kernel will actually run ``dim`` at.
+
+    ``mamba3_siso_combined`` needs a power-of-two head dimension for TMA, so
+    :func:`~olmo_core.nn.mamba3.mamba3_ssd_fast.mamba3_ssd_fast` zero-pads up to one. The padding
+    is numerically exact -- a zero column of ``B`` never enters the state -- but it is *wasted
+    work*, and it collides with :func:`~olmo_core.nn.mamba3.mixer.admissible_block_sizes`: no
+    power of two is divisible by 3, so every ``b=3`` configuration pays some. ``d_state=192`` runs
+    at 256, a quarter of the ``Q``/``K`` lanes carrying zeros.
+
+    Only the official/fast path pads; the chunked and reference paths use ``dim`` as given.
+
+    This is the single source of the padding rule. The fast and official adapters, and the
+    mixer's diagnostics, all import it rather than reimplementing it, so the value the kernel
+    pads to and the value the FLOP/waste accounting assumes cannot drift apart.
+
+    :param dim: The logical width (``d_state`` or ``head_dim``).
+    :param min_width: Floor imposed by the kernel's ``tl.dot`` contraction.
+    """
+    out = min_width
+    while out < dim:
+        out *= 2
+    return out
 
 
 def has_mamba3() -> bool:
@@ -367,6 +398,20 @@ def dispatch_mamba3_ssd(
     if not prefer_fast_kernel:
         return mamba3_ssd_reference(
             x, B, C, dt, A, lam, theta, heads_per_group=heads_per_group, block_size=block_size
+        )
+
+    if prefer_official_kernel and not _official_kernel_eligible(x, B):
+        # An explicit request must not be silently downgraded. `mamba3_ssd_official` itself
+        # raises when it cannot run, so swallowing the same condition one level up meant
+        # `prefer_official_kernel=True` could quietly return a chunked result -- exactly the
+        # failure mode where a benchmark or a parity test believes it exercised the kernel and
+        # did not. `None` (the default) still falls through to the chunked path silently,
+        # because that is a preference rather than a request.
+        raise RuntimeError(
+            "prefer_official_kernel=True but the official kernel cannot run this call: it "
+            f"needs CUDA (got {x.device.type}), mimo_rank == 1 (got {B.shape[3]}), and an "
+            "installed mamba-ssm Mamba-3 build. Pass prefer_official_kernel=None to allow the "
+            "chunked fallback."
         )
 
     if prefer_official_kernel is not False and _official_kernel_eligible(x, B):

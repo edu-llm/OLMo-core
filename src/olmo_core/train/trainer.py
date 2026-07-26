@@ -82,22 +82,32 @@ from .utils import EnvRngStates, check_metrics_consistent, move_metrics, reduce_
 log = logging.getLogger(__name__)
 
 
-def _raise_on_nonfinite_metrics(step: int, metrics: Dict[str, float]) -> None:
+def _raise_on_nonfinite_metrics(
+    step: int, metrics: Dict[str, float], *, check_grad_norm: bool = False
+) -> None:
     """
-    Fail loudly when a step reports a non-finite loss or gradient norm.
+    Fail loudly when a step reports a non-finite loss (always) or gradient norm (opt-in).
 
-    The gradient norm matters as much as the loss here, and used to go unchecked. A NaN there is
-    doubly silent: nothing inspected the metric, and it also poisons
+    The loss check is upstream behavior and is always on. The gradient-norm check is *off by
+    default* because raising on a non-finite grad norm is a new failure mode: with it on, a run
+    that previously absorbed a transient NaN grad norm (the optimizer skips the step) instead
+    hard-fails. Left ungated it also changes behavior for base models, which is drift, so it is
+    gated behind ``Trainer.raise_on_nonfinite_grad_norm`` (default ``False``). When enabled it
+    matters because a NaN grad norm is otherwise doubly silent: nothing inspects the metric, and
+    it poisons
     :meth:`~olmo_core.optim.skip_step_optimizer.SkipStepOptimizer.get_step_factor`'s rolling
-    statistics, so the run would carry on stepping with the weights frozen and a loss curve that
-    still looked healthy.
+    statistics, so the run keeps stepping with the weights frozen and a healthy-looking loss.
 
     :param step: The step the metrics were collected for.
     :param metrics: The metrics for that step.
+    :param check_grad_norm: Also raise on a non-finite gradient norm.
 
     :raises RuntimeError: If a checked metric is present and not finite.
     """
-    for name in (TRAIN_CE_LOSS_METRIC, OPTIM_GRAD_NORM_METRIC):
+    names = [TRAIN_CE_LOSS_METRIC]
+    if check_grad_norm:
+        names.append(OPTIM_GRAD_NORM_METRIC)
+    for name in names:
         value = metrics.get(name)
         if value is not None and not math.isfinite(value):
             raise RuntimeError(f"non-finite '{name}' ({value}) encountered at step {step}")
@@ -304,6 +314,16 @@ class Trainer:
     """
     Set this to ``True`` to disable evaluator callbacks.
     This is useful for benchmarking.
+    """
+
+    raise_on_nonfinite_grad_norm: bool = False
+    """
+    Also hard-fail the run when the total gradient norm is non-finite, not just the loss.
+
+    Off by default to match upstream behavior (only a non-finite loss raises). A non-finite grad
+    norm is otherwise silent -- nothing inspects the metric, and it poisons
+    :class:`~olmo_core.optim.skip_step_optimizer.SkipStepOptimizer`'s rolling statistics -- so
+    enable this for runs that should stop loudly on divergence rather than skip and continue.
     """
 
     steps_to_skip: Optional[List[StepSkipRange]] = None
@@ -1451,7 +1471,9 @@ class Trainer:
 
     def _check_and_pass_on_metrics(self, metrics: Dict[int, Dict[str, float]]):
         for step in sorted(metrics.keys()):
-            _raise_on_nonfinite_metrics(step, metrics[step])
+            _raise_on_nonfinite_metrics(
+                step, metrics[step], check_grad_norm=self.raise_on_nonfinite_grad_norm
+            )
             # Add perplexity.
             if (ce_loss := metrics[step].get(TRAIN_CE_LOSS_METRIC)) is not None:
                 if ce_loss < 10:

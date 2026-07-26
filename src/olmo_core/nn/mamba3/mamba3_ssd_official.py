@@ -55,16 +55,17 @@ from .mamba3_ssd_api import (
     _rotate_bc,
     _rotate_bc_blocks,
     has_mamba3,
+    kernel_padded_width,
 )
 
 __all__ = ["official_mamba3_is_available", "mamba3_ssd_official"]
 
 # The kernel's `tl.dot` reductions need a contraction dimension of at least 16 (a narrower
 # `headdim_qk` fails to compile), and TMA wants a power-of-two block, so both head dimensions
-# are zero-padded up to this floor. Padding is exactly neutral: a zero column of `B` never
-# enters the state and the matching zero column of `C` never reads it, and a zero channel of
-# `V` produces a zero output channel that is sliced back off.
-_MIN_HEAD_DIM = 16
+# are zero-padded up to a power-of-two floor by `kernel_padded_width` (imported above, the single
+# source of the padding rule). Padding is exactly neutral: a zero column of `B` never enters the
+# state and the matching zero column of `C` never reads it, and a zero channel of `V` produces a
+# zero output channel that is sliced back off.
 
 # `Angles` only has to be even and no wider than `headdim_qk // 2`; anything beyond it is left
 # unrotated, which for zero angles is the same identity. Two is the smallest legal width.
@@ -87,14 +88,6 @@ def official_mamba3_is_available() -> bool:
     except Exception:
         return False
     return True
-
-
-def _padded(dim: int) -> int:
-    """Round ``dim`` up to a power of two of at least :data:`_MIN_HEAD_DIM`."""
-    out = _MIN_HEAD_DIM
-    while out < dim:
-        out *= 2
-    return out
 
 
 def _rotate_bc_pair(
@@ -169,8 +162,8 @@ def mamba3_ssd_official(
     autocast_on = torch.is_autocast_enabled(device_type)
     out_dtype = torch.get_autocast_dtype(device_type) if autocast_on else x.dtype
 
-    d_state_padded = _padded(d_state)
-    head_dim_padded = _padded(head_dim)
+    d_state_padded = kernel_padded_width(d_state)
+    head_dim_padded = kernel_padded_width(head_dim)
 
     # Autocast intercepts at the *op* level, so casting the tensors to fp32 is not enough: the
     # rotation and the discretization coefficients have to be computed with autocast off or

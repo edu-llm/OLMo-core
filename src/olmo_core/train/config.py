@@ -51,6 +51,11 @@ class TrainerConfig(Config):
     bookkeeping_soft_timeout: int = 30
     no_checkpoints: bool = False
     no_evals: bool = False
+    raise_on_nonfinite_grad_norm: bool = False
+    """
+    Also hard-fail the run on a non-finite total gradient norm, not just a non-finite loss.
+    Off by default to match upstream behavior; forwarded to :class:`~olmo_core.train.Trainer`.
+    """
     steps_to_skip: Optional[List[StepSkipRange]] = None
 
     def add_callback(self, name: str, callback: Callback):

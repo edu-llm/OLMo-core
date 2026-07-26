@@ -219,8 +219,33 @@ def build_experiment_config(cli_context: CliContext) -> ExperimentConfig:
     # 512-token context -- the model would train happily while most of its context stayed out of
     # reach, which looks identical to success on the loss curve. At 1.0 the median head reaches
     # ~2800 steps.
+    # `mimo_rank=1` is what makes the run eligible for the official `mamba-ssm` SISO Triton
+    # kernel: `dispatch_mamba3_ssd` requires rank 1, so at the library default of 4 the smoke
+    # test silently took the chunked PyTorch path no matter what was installed -- meaning it
+    # exercised a kernel the real runs will not use, which is the opposite of what a smoke test
+    # is for. MIMO also buys no state-tracking power (it widens the read/write rank, not the
+    # transition monoid) while multiplying the cost of applying the rotation.
+    #
+    # `MAMBA3_ROTATION_BLOCK_SIZE` selects the transition-block size b: 2 is the TC^0 baseline
+    # (default), 3 is the smallest non-solvable (NC^1) block. Set here rather than via a
+    # `--model...` override on purpose -- the sentinel below reads its expected value from this
+    # same `model_config`, so threading it here keeps the two in lockstep, whereas a CLI override
+    # merges in *after* the sentinel is built and would trip its rotation-block-size mismatch
+    # alarm. `DEFAULT_D_STATE` (192) admits both 2 and 3, so no `d_state` change is needed.
+    rotation_block_size = int(os.environ.get("MAMBA3_ROTATION_BLOCK_SIZE", "2"))
+    # Main runs use the fast official kernel (the default, `prefer_official_kernel=None`, which
+    # arms it whenever eligible). Activation checkpointing is the *only* reason to deviate: the
+    # official kernel's autograd.Function is incompatible with non-reentrant checkpointing, so an
+    # AC run must take the chunked path. Tie the two together here rather than letting a user set
+    # AC=1 and hit a mid-backward CheckpointError. AC is the extreme-sequence-length escape hatch;
+    # at the smoke config's seq 512 it is off and the fast kernel runs.
+    activation_checkpointing = os.environ.get("MAMBA3_ACTIVATION_CHECKPOINTING") == "1"
     model_config = Mamba3Config.mamba3_hybrid_190M(
-        vocab_size=tokenizer_config.padded_vocab_size(), a_log_init_max=1.0
+        vocab_size=tokenizer_config.padded_vocab_size(),
+        a_log_init_max=1.0,
+        mimo_rank=1,
+        rotation_block_size=rotation_block_size,
+        prefer_official_kernel=False if activation_checkpointing else None,
     )
 
     train_module_config = TransformerTrainModuleConfig(
@@ -239,12 +264,29 @@ def build_experiment_config(cli_context: CliContext) -> ExperimentConfig:
         # single-node smoke test, so HSDP can only build a degenerate mesh with a size-1
         # dimension. It does not error, it just adds a mesh dimension and wrapping cost for
         # nothing. FSDP is correct at both 1 and 8 GPUs on one node.
-        dp_config=TransformerDataParallelConfig(
-            name=DataParallelType.fsdp,
-            param_dtype=DType.bfloat16,
-            reduce_dtype=DType.float32,
-            wrapping_strategy=TransformerDataParallelWrappingStrategy.full,
+        #
+        # `MAMBA3_DISABLE_DP=1` drops data parallelism entirely (`dp_config=None`). This exists
+        # for single-GPU local smoke runs: FSDP2's reduce-scatter is a NCCL collective, and on a
+        # single consumer GPU (e.g. an RTX 50-series laptop card) that collective can fail with
+        # "CUDA driver error: device not ready" in `foreach_reduce` -- an issue in the degenerate
+        # 1-rank NCCL path, not in the model. With no data-parallel wrapping there are no
+        # collectives and the run exercises the full model, optimizer, checkpointing and eval on
+        # one device. Leave it unset (FSDP) for the real multi-GPU B200 run.
+        dp_config=(
+            None
+            if os.environ.get("MAMBA3_DISABLE_DP") == "1"
+            else TransformerDataParallelConfig(
+                name=DataParallelType.fsdp,
+                param_dtype=DType.bfloat16,
+                reduce_dtype=DType.float32,
+                wrapping_strategy=TransformerDataParallelWrappingStrategy.full,
+            )
         ),
+        # With FSDP the bf16 cast comes from `param_dtype`; without it (single-device local run)
+        # nothing casts the model, so the SSD input would be fp32 and `dispatch_mamba3_ssd` would
+        # fall through to the chunked path -- defeating the point of exercising the official
+        # kernel. Autocast restores reduced precision so the official SISO kernel still arms.
+        autocast_precision=(DType.bfloat16 if os.environ.get("MAMBA3_DISABLE_DP") == "1" else None),
         z_loss_multiplier=1e-5,
         max_grad_norm=1.0,
         scheduler=CosWithWarmup(warmup=2),

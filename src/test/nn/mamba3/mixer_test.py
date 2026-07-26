@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from olmo_core.config import DType
+from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.nn.attention import AttentionConfig
 from olmo_core.nn.mamba3 import Mamba3Mixer, Mamba3MixerConfig
 from olmo_core.nn.mamba3.mamba3_ssd_api import mamba3_ssd_reference
@@ -182,11 +183,11 @@ def test_mamba3_mixer_rejects_indivisible_d_state():
     the default ``d_state=128`` is not divisible by 3, which is the trap that pushes people to
     ``b=4`` when they meant ``b=3``.
     """
-    with pytest.raises(ValueError, match=r"d_state \(128\).*rotation_block_size \(3\)"):
+    with pytest.raises(OLMoConfigurationError, match=r"d_state \(128\).*rotation_block_size \(3\)"):
         Mamba3MixerConfig(n_heads=8, d_state=128, rotation_block_size=3).build(
             512, layer_idx=0, n_layers=1, init_device="meta"
         )
-    with pytest.raises(ValueError, match="rotation_block_size must be >= 2"):
+    with pytest.raises(OLMoConfigurationError, match="rotation_block_size must be >= 2"):
         Mamba3MixerConfig(n_heads=8, rotation_block_size=1).build(
             512, layer_idx=0, n_layers=1, init_device="meta"
         )
@@ -202,7 +203,7 @@ def test_mamba3_mixer_rejects_degenerate_d_state():
     that a training run would only reveal as a loss that never moves.
     """
     for d_state, block_size in ((0, 2), (0, 4), (2, 4)):
-        with pytest.raises(ValueError, match=rf"d_state \({d_state}\)"):
+        with pytest.raises(OLMoConfigurationError, match=rf"d_state \({d_state}\)"):
             Mamba3MixerConfig(n_heads=8, d_state=d_state, rotation_block_size=block_size).build(
                 512, layer_idx=0, n_layers=1, init_device="meta"
             )
@@ -236,9 +237,9 @@ def test_mamba3_mixer_config_num_params_rejects_unbuildable_config(
     for a model that cannot be constructed).
     """
     d_model = 512
-    with pytest.raises(ValueError) as build_err:
+    with pytest.raises(OLMoConfigurationError) as build_err:
         mixer_config.build(d_model, layer_idx=0, n_layers=1, init_device="meta")
-    with pytest.raises(ValueError) as size_err:
+    with pytest.raises(OLMoConfigurationError) as size_err:
         mixer_config.num_params(d_model)
     assert str(size_err.value) == str(build_err.value)
 
@@ -251,7 +252,7 @@ def test_mamba3_mixer_rejects_zero_n_heads():
     slipped through to ``d_model // n_heads`` and surfaced as a bare ``ZeroDivisionError``,
     which says nothing about which option was wrong.
     """
-    with pytest.raises(ValueError, match="n_heads must be >= 1"):
+    with pytest.raises(OLMoConfigurationError, match="n_heads must be >= 1"):
         Mamba3MixerConfig(n_heads=0, d_state=16).build(
             64, layer_idx=0, n_layers=1, init_device="meta"
         )

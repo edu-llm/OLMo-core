@@ -101,24 +101,38 @@ def test_untrained_accuracy_is_at_chance_for_every_block_size(harness):
 @pytest.mark.parametrize("rotation_block_size", [2, 3])
 def test_a5_word_problem_length_extrapolation(harness, rotation_block_size: int):
     """
-    Train at length <= 40, evaluate at 64/128/256.
+    Train with a length curriculum up to 256, evaluate at 256.
 
     The gate from the design note: ``b >= 3`` reaches >= 90% at length 256 while ``b = 2`` stays
     at or below 40%. PD-SSM reports 15.5% for a two-layer complex-diagonal model on this task,
     so a ``b=2`` arm scoring highly means the harness is leaking rather than that the abelian
     model has succeeded -- which is why the control is asserted as an upper bound, not skipped.
 
-    Configuration notes, all of which matter: ``mimo_rank=1`` because MIMO adds no expressivity;
-    ``n_groups=n_heads`` so each head has its own rotation schedule; and a small
-    ``a_log_init_max`` so the decay horizon actually covers 256 steps. Getting the last one
-    wrong makes this fail for optimization reasons that have nothing to do with the algebra.
+    Two configuration facts are load-bearing and were established empirically (both fail the gate
+    for reasons unrelated to the algebra if gotten wrong):
+
+    - ``n_layers=2``, not 1. A single SSD layer accumulates the prefix product but produces only
+      a *bilinear* readout; decoding which of the 60 ``A_5`` elements the accumulated rotation is
+      needs a nonlinearity, which lives in the second block's MLP. At one layer ``b=3`` sits at
+      chance even at the *training* length -- it never learns the task, independent of the decay
+      horizon (verified across ``a_log_init_max`` from 0.1 down to 0.003, i.e. horizons from ~5k
+      to ~500k steps).
+    - a **length curriculum**. Training at a single short length teaches a length-specific
+      solution that does not carry to 256; two layers trained only at length 40 still collapse to
+      ~4% at 256. Sampling lengths across the range forces a length-robust solution. This is a
+      property of the train-short/eval-long setup, not of the block size: ``b=2`` cannot track
+      ``A_5`` at length no matter the curriculum, so this is not a capacity lever that rescues the
+      control.
+
+    ``mimo_rank=1`` because MIMO adds no expressivity; ``n_groups=n_heads`` so each head has its
+    own rotation schedule; small ``a_log_init_max`` so the decay horizon covers the range.
     """
     import torch
 
     device = torch.device("cuda")
     model = harness.build_a5_model(
         rotation_block_size=rotation_block_size,
-        n_layers=1,
+        n_layers=2,
         d_model=128,
         n_heads=4,
         d_state=48,
@@ -126,7 +140,15 @@ def test_a5_word_problem_length_extrapolation(harness, rotation_block_size: int)
         a_log_init_max=0.1,
         seed=0,
     )
-    harness.train_a5(model, train_len=40, steps=4000, batch_size=64, lr=3e-4, seed=0, device=device)
+    harness.train_a5(
+        model,
+        train_lengths=[32, 64, 96, 128, 160, 192, 256],
+        steps=3000,
+        batch_size=48,
+        lr=3e-4,
+        seed=0,
+        device=device,
+    )
 
     accuracy_256 = harness.evaluate_a5(model, seq_len=256, batch_size=256, seed=1, device=device)
     if rotation_block_size == 2:

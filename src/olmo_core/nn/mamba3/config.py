@@ -178,6 +178,7 @@ class Mamba3Config(TransformerConfig):
         mimo_rank: int = 4,
         rotation_block_size: int = 2,
         a_log_init_max: float = 16.0,
+        prefer_official_kernel: Optional[bool] = None,
         block_pattern: Optional[list[str]] = None,
         block_name: Mamba3BlockType = Mamba3BlockType.reordered_norm,
         use_rope: bool = False,
@@ -249,6 +250,7 @@ class Mamba3Config(TransformerConfig):
                 rotation_block_size=rotation_block_size,
                 norm_eps=layer_norm_eps,
                 a_log_init_max=a_log_init_max,
+                prefer_official_kernel=prefer_official_kernel,
                 dtype=dtype,
             ),
             feed_forward=FeedForwardConfig(hidden_size=intermediate_size, bias=False, dtype=dtype),
@@ -372,25 +374,17 @@ class Mamba3Config(TransformerConfig):
         SISO also makes the run eligible for the official SISO Triton kernel, roughly 3x
         cheaper on the scan than the chunked PyTorch path that ``mimo_rank > 1`` forces.
 
-        :param d_state: Mamba-3 SSM state size. Overridable because it has to be:
-            :data:`~olmo_core.nn.mamba3.DEFAULT_D_STATE` cannot express ``rotation_block_size=3``
-            (:func:`~olmo_core.nn.mamba3.admissible_block_sizes`), so an NC^1 arm at ``b=3``
-            needs an override here -- a second change relative to this baseline, which is
-            exactly what the single-variable design is trying to avoid.
+        :param d_state: Mamba-3 SSM state size. The default admits ``b`` in ``{2, 3, 4}``
+            (:func:`~olmo_core.nn.mamba3.admissible_block_sizes`), which is what lets the TC^0
+            baseline and the NC^1 arm share one state size so ``rotation_block_size`` is the only
+            field that differs between them.
 
-            There are two ways out and they are not equally good. Taking ``b=4`` at the default
-            keeps ``d_state`` fixed but buys no hardness over ``b=3`` (``A_5 subset SO(3)``
-            already suffices), has no closed-form exponential so it falls back to ``matrix_exp``,
-            and has been observed to be learning-rate and seed sensitive on the ``A_5`` task.
-            Setting ``d_state=192`` instead admits 2, 3 and 4 alike, so every arm shares one
-            state size and ``rotation_block_size`` really is the only field that moves. Measured
-            at this preset, ``d_state=192`` also lands *closer* to the reference parameter count
-            than the default does (1.70% against 2.23% at ``b=2``), because the Mamba arm sits
-            below the reference and widening the state closes the gap.
-
-            The cost of 192 is that the official kernel zero-pads it to 256
-            (:func:`~olmo_core.nn.mamba3.kernel_padded_width`) -- no power of two is divisible by
-            3, so every ``b=3`` configuration pays some padding -- and activations grow ~1.2x.
+            The intended pairing is ``b=2`` against ``b=3``. ``b=4`` is expressible but is not a
+            useful third arm: it is NC^1-hard by exactly the same argument as ``b=3``
+            (``A_5 subset SO(3) subseteq SO(b)``), so it buys no additional hardness, while
+            costing ~6x more in the rotation because ``SO(4)`` has no closed-form exponential
+            here and falls back to ``matrix_exp``. It has also been observed to be sensitive to
+            learning rate and seed on the ``A_5`` task where ``b=3`` was not.
         """
         return cls.mamba3_hybrid_like(
             d_model=1024,

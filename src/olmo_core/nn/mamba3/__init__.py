@@ -26,6 +26,7 @@ from .mixer import (
     Mamba3MixerConfig,
     admissible_block_sizes,
     kernel_padded_width,
+    mamba3_modules_to_ignore_for_fp8,
 )
 from .model import Mamba3
 
@@ -42,6 +43,7 @@ __all__ = [
     "DEFAULT_D_STATE",
     "admissible_block_sizes",
     "kernel_padded_width",
+    "mamba3_modules_to_ignore_for_fp8",
     "InitMethod",
     "has_mamba3",
     "mamba3_ssd_reference",

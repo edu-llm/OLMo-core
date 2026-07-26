@@ -81,9 +81,9 @@ def test_harness_default_d_state_covers_at_least_the_library_sweep(harness):
 
     harness_default = inspect.signature(harness.build_a5_model).parameters["d_state"].default
 
-    assert 3 in admissible_block_sizes(
-        harness_default
-    ), f"harness d_state={harness_default} cannot express b=3, so the A_5 sweep is impossible"
+    assert 3 in admissible_block_sizes(harness_default), (
+        f"harness d_state={harness_default} cannot express b=3, so the A_5 sweep is impossible"
+    )
     assert set(admissible_block_sizes(DEFAULT_D_STATE)) <= set(
         admissible_block_sizes(harness_default)
     ), (
