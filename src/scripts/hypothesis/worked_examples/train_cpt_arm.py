@@ -8,13 +8,17 @@ Launch (example)::
       we-fade-ordered \\
       --arm fade_ordered \\
       --pack-dir /orcd/pool/edullm/data/worked-examples-metamath-v0 \\
-      --load-path /path/to/converted/OLMo-Ladder-760M-0.5xC \\
-      --token-budget 200000000 \\
+      --load-path /path/to/olmo-core-ckpt \\
+      --token-budget 50000000 \\
+      --model-factory olmo3_370M \\
       --wandb-project pretraining \\
-      --wandb-group worked-examples-faded-scaffolds
+      --wandb-group worked-examples-faded-scaffolds-b200
 
 Requires tokenized shard + label_mask from ``tokenize_arms.py``.
 Fade arms mask loss before ``loss_start_char`` via ``label_mask-00000.npy``.
+
+``--model-factory`` defaults to ``olmo3_370M`` (B200 / team baseline). Use
+``olmo2_760M`` for the ORCD Ladder CPT profile.
 
 W&B entity is always ``eduLLM``. Scientific metrics ``eval/pass_at_n`` /
 ``eval/pass_ratio_at_n`` are recorded by ``PassNEvalCallback`` when prediction
@@ -115,9 +119,12 @@ def build_config(opts: argparse.Namespace, overrides: List[str]) -> ExperimentCo
     work_dir = opts.work_dir or f"{save_folder}/dataset-cache"
 
     tokenizer_config = TokenizerConfig.dolma2()
-    model_config = TransformerConfig.olmo2_760M(
-        vocab_size=tokenizer_config.padded_vocab_size(),
-    )
+    try:
+        factory = getattr(TransformerConfig, opts.model_factory)
+    except AttributeError as exc:
+        raise SystemExit(f"unknown --model-factory {opts.model_factory!r}") from exc
+    model_config = factory(vocab_size=tokenizer_config.padded_vocab_size())
+    model_tag = opts.model_factory.replace("_", "-").lower()
 
     dataset_config = NumpyFSLDatasetConfig(
         paths=[str(shard)],
@@ -183,7 +190,7 @@ def build_config(opts: argparse.Namespace, overrides: List[str]) -> ExperimentCo
                 entity="eduLLM",
                 project=opts.wandb_project,
                 group=opts.wandb_group,
-                tags=["orcd", "worked-examples-cpt", "olmo2-760m", arm],
+                tags=["worked-examples-cpt", model_tag, arm, opts.run_tag],
                 cancel_check_interval=10,
                 enabled=opts.wandb,
             ),
@@ -227,9 +234,21 @@ def parser_args():
         "--load-path",
         type=str,
         required=True,
-        help="Converted OLMo-core checkpoint (e.g. Ladder 760M-0.5xC via convert_checkpoint_from_hf)",
+        help="OLMo-core checkpoint dir (370M Chinchilla on B200, or converted Ladder 760M on ORCD)",
     )
     p.add_argument("--token-budget", type=int, required=True, help="Matched token budget across arms")
+    p.add_argument(
+        "--model-factory",
+        type=str,
+        default="olmo3_370M",
+        help="TransformerConfig classmethod (olmo3_370M for B200; olmo2_760M for ORCD)",
+    )
+    p.add_argument(
+        "--run-tag",
+        type=str,
+        default="b200",
+        help="Extra W&B tag (e.g. b200 or orcd)",
+    )
     p.add_argument("--sequence-length", type=int, default=2048)
     p.add_argument("--global-batch-size", type=int, default=524288, help="Tokens")
     p.add_argument("--rank-microbatch-size", type=int, default=8192, help="Tokens")
