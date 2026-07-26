@@ -19,8 +19,13 @@ from typing import Callable, Optional
 
 import torch
 
-from olmo_core.nn.mamba3 import mamba3_ssd_fast as fast
+# Import the symbols directly: `olmo_core.nn.mamba3` re-exports a *function* named
+# `mamba3_ssd_fast`, which shadows the submodule of the same name.
 from olmo_core.nn.mamba3.mamba3_ssd_api import _cumulative_block_rotation
+from olmo_core.nn.mamba3.mamba3_ssd_fast import (
+    _so3_pointwise_combine,
+    fast_block_rotations,
+)
 
 # batch, seq_len, n_groups, n_blocks (= d_state // 3), angles per so(3) block.
 # Mirrors the real 32-seq microbatch at d_state=192, seq 4096.
@@ -35,7 +40,7 @@ def _assoc(rot: torch.Tensor, combine_mode: str) -> torch.Tensor:
 
     leaves = tuple(rot[..., i, j].contiguous() for i in range(3) for j in range(3))
     scanned = associative_scan(
-        fast._so3_pointwise_combine, leaves, dim=1, combine_mode=combine_mode
+        _so3_pointwise_combine, leaves, dim=1, combine_mode=combine_mode
     )
     return torch.stack(tuple(scanned), dim=-1).unflatten(-1, (3, 3))
 
@@ -63,7 +68,7 @@ def _bench(
     theta = (torch.randn(*SHAPE, device="cuda", dtype=torch.float32) * 0.1).requires_grad_(backward)
 
     def once() -> None:
-        out = scan(fast.fast_block_rotations(theta, 3))
+        out = scan(fast_block_rotations(theta, 3))
         if backward:
             theta.grad = None
             out.sum().backward()

@@ -23,7 +23,9 @@ from olmo_core.nn.mamba3.mamba3_ssd_fast import (
     _adaptive_scan_chunk,
     _rodrigues_so3,
     _rotate_bc_fused,
+    _so3_affine_combine,
     _so3_pointwise_combine,
+    associative_autograd_cumulative_block_rotation,
     associative_cumulative_block_rotation,
     fast_block_rotations,
     fast_cumulative_block_rotation,
@@ -352,6 +354,283 @@ def test_block_size_four_still_matches_the_chunked_product():
         rtol=0,
         atol=1e-11,
     )
+
+
+# ---------------------------------------------------------------------------------------
+# associative_scan wrapped in an analytic-backward autograd.Function
+# ---------------------------------------------------------------------------------------
+
+
+def _naive_ordered_product(rot: torch.Tensor) -> torch.Tensor:
+    """``Q_t = R_t R_{t-1} ... R_1`` as a Python loop -- the ordering oracle, autograd-friendly."""
+    running = rot[:, 0]
+    out = [running]
+    for t in range(1, rot.shape[1]):
+        running = rot[:, t] @ running
+        out.append(running)
+    return torch.stack(out, dim=1)
+
+
+def _grad_through_scan(scan_fn, theta: torch.Tensor, *, weight_seed: int) -> torch.Tensor:
+    """
+    ``d/dtheta`` of a scalar built from a scan's output, under a fixed non-symmetric weighting.
+
+    The weight is drawn from its own generator rather than the global RNG so that every arm sees
+    the *same* weight no matter how much randomness the arm itself consumes -- otherwise a
+    gradient mismatch could be a weighting mismatch. It is dense random rather than uniform
+    because a symmetric weighting lets the two orderings ``R_t ... R_1`` and ``R_1 ... R_t``
+    produce the same gradient, which would make this test blind to the exact error it exists
+    to catch.
+    """
+    t = theta.clone().requires_grad_(True)
+    out = scan_fn(fast_block_rotations(t, 3))
+    gen = torch.Generator().manual_seed(weight_seed)
+    weight = torch.randn(out.shape, dtype=out.dtype, generator=gen)
+    (out * weight).sum().backward()
+    assert t.grad is not None
+    return t.grad
+
+
+@pytest.mark.parametrize("seq_len", [1, 2, 3, 17, 64, 129])
+def test_autograd_scan_forward_matches_the_chunked_product(seq_len: int):
+    """
+    Forward must be bit-for-bit the same *function*, since only the backward is being replaced.
+
+    Checked against both the chunked path and the naive ordered loop: the first catches a change
+    in value, the second pins the ``newest on the left`` ordering independently of the path that
+    also has to get it right.
+    """
+    torch.manual_seed(20)
+    rot = _block_rotations(torch.randn(2, seq_len, 1, 4, 3, dtype=torch.float64) * 0.3, 3)
+
+    actual = associative_autograd_cumulative_block_rotation(rot)
+
+    torch.testing.assert_close(
+        actual, _cumulative_block_rotation(rot, chunk_size=8), rtol=0, atol=1e-11
+    )
+    torch.testing.assert_close(actual, _naive_ordered_product(rot), rtol=0, atol=1e-11)
+
+
+def test_autograd_scan_forward_matches_the_plain_associative_scan():
+    """Wrapping the scan in an autograd.Function must not perturb the value it computes."""
+    torch.manual_seed(21)
+    rot = _block_rotations(torch.randn(2, 48, 1, 4, 3, dtype=torch.float64) * 0.3, 3)
+
+    torch.testing.assert_close(
+        associative_autograd_cumulative_block_rotation(rot),
+        associative_cumulative_block_rotation(rot),
+        rtol=0,
+        atol=0,
+    )
+
+
+@pytest.mark.parametrize("seq_len", [1, 2, 3, 17, 64, 129])
+def test_autograd_scan_gradients_match_the_chunked_path(seq_len: int):
+    """
+    The point of the exercise: the hand-written analytic backward must agree with autograd.
+
+    ``associative_scan``'s own backward returns NaN on CUDA/fp32, so this path bypasses it with
+    ``dL/dR_i = M_i Q_{i-1}^T``, ``M_i = G_i + R_{i+1}^T M_{i+1}``. That derivation is checked
+    here against the gradient the chunked path's autograd produces for the same scalar.
+    """
+    torch.manual_seed(22)
+    theta = torch.randn(2, seq_len, 1, 4, 3, dtype=torch.float64) * 0.3
+
+    expected = _grad_through_scan(
+        lambda r: _cumulative_block_rotation(r, chunk_size=8), theta, weight_seed=seq_len
+    )
+    actual = _grad_through_scan(
+        associative_autograd_cumulative_block_rotation, theta, weight_seed=seq_len
+    )
+
+    torch.testing.assert_close(actual, expected, rtol=0, atol=1e-11)
+
+
+def test_autograd_scan_gradients_match_the_naive_ordered_product():
+    """
+    Second opinion on the backward, against the loop rather than the chunked path.
+
+    The chunked path and the analytic backward could in principle share an ordering mistake --
+    both were written against the same convention. The naive loop is the independent statement
+    of that convention, so agreeing with *its* autograd is the stronger claim.
+    """
+    torch.manual_seed(23)
+    theta = torch.randn(1, 13, 1, 2, 3, dtype=torch.float64) * 0.4
+
+    expected = _grad_through_scan(_naive_ordered_product, theta, weight_seed=5)
+    actual = _grad_through_scan(
+        associative_autograd_cumulative_block_rotation, theta, weight_seed=5
+    )
+
+    torch.testing.assert_close(actual, expected, rtol=0, atol=1e-11)
+
+
+def test_autograd_scan_passes_gradcheck():
+    """
+    Finite differences against the analytic backward, with no other implementation in the loop.
+
+    ``gradcheck`` perturbs ``rot`` off the ``SO(3)`` manifold, which is exactly right here: the
+    derivation uses only associativity of the matrix product and the transpose of a product, never
+    orthogonality, so the backward has to be correct for arbitrary matrices too.
+    """
+    torch.manual_seed(24)
+    rot = _block_rotations(torch.randn(1, 6, 1, 2, 3, dtype=torch.float64) * 0.3, 3)
+    rot = rot.clone().requires_grad_(True)
+
+    assert torch.autograd.gradcheck(
+        associative_autograd_cumulative_block_rotation, (rot,), atol=1e-9, rtol=1e-7
+    )
+
+
+@pytest.mark.parametrize("scale", [0.0, 1e-4, 1e-8], ids=lambda s: f"scale{s}")
+def test_autograd_scan_gradients_are_finite_at_tiny_angles(scale: float):
+    """
+    The init regime, which is where the NaN this replaces actually shows up.
+
+    ``theta_proj`` starts at ``std * 0.1``, so every rotation is near-identity on step one. A
+    backward that reconstructed ``Q_{i-1}`` by inverting ``Q_i`` would be at its worst here; the
+    recurrence used instead contains no division at all, so tiny and exactly-zero angles are
+    ordinary inputs rather than a special case.
+    """
+    torch.manual_seed(25)
+    theta = torch.randn(2, 32, 1, 4, 3, dtype=torch.float64) * scale
+
+    actual = _grad_through_scan(
+        associative_autograd_cumulative_block_rotation, theta, weight_seed=7
+    )
+    expected = _grad_through_scan(
+        lambda r: _cumulative_block_rotation(r, chunk_size=8), theta, weight_seed=7
+    )
+
+    assert torch.isfinite(actual).all(), f"non-finite gradient at scale {scale}"
+    torch.testing.assert_close(actual, expected, rtol=0, atol=1e-11)
+
+
+def test_autograd_scan_gradient_is_finite_in_float32():
+    """
+    The production dtype for the prefix product is float32, not float64.
+
+    The reported failure is fp32-specific, so the finiteness claim has to be made in fp32 as
+    well; the value check stays loose because fp32 over a 128-step product is not tight.
+    """
+    torch.manual_seed(26)
+    theta = (torch.randn(2, 128, 1, 4, 3, dtype=torch.float32) * 0.1).requires_grad_(True)
+
+    out = associative_autograd_cumulative_block_rotation(fast_block_rotations(theta, 3))
+    out.square().sum().backward()
+
+    assert theta.grad is not None
+    assert torch.isfinite(theta.grad).all()
+
+
+def test_autograd_scan_output_stays_in_so3():
+    """Orthogonality with determinant +1 -- the property the NC^1 claim rests on."""
+    torch.manual_seed(27)
+    rot = _block_rotations(torch.randn(2, 64, 1, 4, 3, dtype=torch.float64) * 0.5, 3)
+
+    q = associative_autograd_cumulative_block_rotation(rot)
+
+    eye = torch.eye(3, dtype=q.dtype).expand_as(q)
+    torch.testing.assert_close(q @ q.transpose(-1, -2), eye, rtol=0, atol=1e-10)
+    torch.testing.assert_close(
+        torch.linalg.det(q), torch.ones_like(q[..., 0, 0]), rtol=0, atol=1e-10
+    )
+
+
+def test_autograd_scan_refuses_block_sizes_other_than_three():
+    """
+    A 4x4 rotation must not be silently truncated to its top-left 3x3.
+
+    That truncation returns orthogonal-looking output and passes every shape and dtype check, so
+    the only thing standing between it and a quietly wrong ``b=4`` model is this refusal.
+    """
+    rot = _block_rotations(torch.randn(1, 8, 1, 2, 6, dtype=torch.float64) * 0.3, 4)
+
+    with pytest.raises(ValueError, match="block_size 3"):
+        associative_autograd_cumulative_block_rotation(rot)
+
+
+def test_so3_affine_combine_matches_the_affine_composition():
+    """
+    ``(A1, b1) . (A2, b2) = (A1 A2, A1 b2 + b1)`` -- the backward's associative operator.
+
+    Written over 18 elementwise leaves for the same reason the forward combine is written over 9:
+    that is what lets Inductor emit a real ``tl.associative_scan``. Getting the operand order
+    backwards here reverses the reverse-recurrence and produces a plausible but wrong gradient.
+    """
+    torch.manual_seed(28)
+    shape = (2, 5, 1, 4, 3, 3)
+    a1 = torch.randn(*shape, dtype=torch.float64)
+    b1 = torch.randn(*shape, dtype=torch.float64)
+    a2 = torch.randn(*shape, dtype=torch.float64)
+    b2 = torch.randn(*shape, dtype=torch.float64)
+
+    def leaves(a, b):
+        return _as_leaves(a) + _as_leaves(b)
+
+    # `_so3_affine_combine(older, newer)` applies `newer` on the outside, matching the forward's
+    # `_so3_pointwise_combine(a, b) -> b @ a`.
+    combined = _so3_affine_combine(leaves(a2, b2), leaves(a1, b1))
+    got_a = torch.stack(combined[:9], dim=-1).unflatten(-1, (3, 3))
+    got_b = torch.stack(combined[9:], dim=-1).unflatten(-1, (3, 3))
+
+    torch.testing.assert_close(got_a, a1 @ a2, rtol=0, atol=1e-13)
+    torch.testing.assert_close(got_b, a1 @ b2 + b1, rtol=0, atol=1e-13)
+
+
+@pytest.mark.parametrize("impl", ["chunked", "associative", "associative_autograd"])
+def test_scan_impl_gate_routes_block_size_three(monkeypatch, impl: str):
+    """
+    Every gate value must reach a different implementation and agree on the answer.
+
+    The gate is the revert switch, so a value that silently lands on the wrong implementation is
+    the failure that would make an incident unrecoverable in the time available.
+    """
+    monkeypatch.setattr(fast_mod, "_ROTATION_SCAN_IMPL", impl)
+    torch.manual_seed(29)
+    rot = _block_rotations(torch.randn(2, 40, 1, 4, 3, dtype=torch.float64) * 0.3, 3)
+
+    torch.testing.assert_close(
+        fast_cumulative_block_rotation(rot),
+        _cumulative_block_rotation(rot, chunk_size=8),
+        rtol=0,
+        atol=1e-11,
+    )
+
+
+@pytest.mark.parametrize("impl", ["chunked", "associative", "associative_autograd"])
+def test_block_size_four_falls_back_to_chunked_under_every_gate(monkeypatch, impl: str):
+    """
+    ``b=4`` has no 3x3 combine to use, so every gate value must route it to the chunked path.
+
+    Both forward *and* backward: a fallback that only covered the forward would leave ``b=4``
+    differentiating through the wrong thing.
+    """
+    monkeypatch.setattr(fast_mod, "_ROTATION_SCAN_IMPL", impl)
+    torch.manual_seed(30)
+    base = torch.randn(1, 33, 1, 2, 6, dtype=torch.float64) * 0.3
+
+    grads = []
+    for scan_fn in (fast_cumulative_block_rotation, lambda r: _cumulative_block_rotation(r, 8)):
+        theta = base.clone().requires_grad_(True)
+        out = scan_fn(_block_rotations(theta, 4))
+        gen = torch.Generator().manual_seed(31)
+        (out * torch.randn(out.shape, dtype=out.dtype, generator=gen)).sum().backward()
+        assert theta.grad is not None
+        grads.append((out.detach(), theta.grad))
+
+    torch.testing.assert_close(grads[0][0], grads[1][0], rtol=0, atol=1e-11)
+    torch.testing.assert_close(grads[0][1], grads[1][1], rtol=0, atol=1e-11)
+
+
+def test_autograd_scan_returns_no_gradient_when_none_is_wanted():
+    """An input that does not require grad must not force one to be materialised."""
+    torch.manual_seed(32)
+    rot = _block_rotations(torch.randn(1, 9, 1, 2, 3, dtype=torch.float64) * 0.3, 3)
+
+    out = associative_autograd_cumulative_block_rotation(rot)
+
+    assert not out.requires_grad
 
 
 def test_fused_rotation_matches_two_separate_calls():

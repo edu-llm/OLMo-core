@@ -62,6 +62,7 @@ __all__ = [
     "fast_block_rotations",
     "fast_cumulative_block_rotation",
     "associative_cumulative_block_rotation",
+    "associative_autograd_cumulative_block_rotation",
 ]
 
 # Copied verbatim from `mamba3_ssd_official`; see its module docstring for the derivation of
@@ -100,11 +101,18 @@ _ROTATION_SCAN_CHUNK_OVERRIDE: Optional[int] = (
 # ~`chunk - 1 + log2(T / chunk)` dependent kernel launches the chunked form costs. Default stays
 # "chunked" so this is opt-in and revertible by unsetting one variable. Validated at import rather
 # than silently falling back, because a typo here would quietly cost the speedup it was set to buy.
+#
+# "associative_autograd" is the same forward with `associative_scan`'s *own* autograd taken out of
+# the loop -- see `associative_autograd_cumulative_block_rotation`. Plain "associative" is kept
+# reachable because its forward is the one that has been run end-to-end on real data; when both
+# work, "associative_autograd" is the one to use.
 _ROTATION_SCAN_IMPL_ENV = "MAMBA3_ROTATION_SCAN_IMPL"
 _ROTATION_SCAN_IMPL = os.environ.get(_ROTATION_SCAN_IMPL_ENV, "chunked").strip().lower()
-if _ROTATION_SCAN_IMPL not in ("chunked", "associative"):
+_ROTATION_SCAN_IMPLS = ("chunked", "associative", "associative_autograd")
+if _ROTATION_SCAN_IMPL not in _ROTATION_SCAN_IMPLS:
     raise ValueError(
-        f"{_ROTATION_SCAN_IMPL_ENV} must be 'chunked' or 'associative', got {_ROTATION_SCAN_IMPL!r}"
+        f"{_ROTATION_SCAN_IMPL_ENV} must be one of {_ROTATION_SCAN_IMPLS}, "
+        f"got {_ROTATION_SCAN_IMPL!r}"
     )
 
 
@@ -243,11 +251,32 @@ def fast_cumulative_block_rotation(
     from .mamba3_ssd_api import _cumulative_block_rotation
 
     # Only b == 3 has a 9-leaf pointwise form here; every other block size keeps the chunked path.
-    if _ROTATION_SCAN_IMPL == "associative" and rot.shape[-1] == 3:
-        return associative_cumulative_block_rotation(rot)
+    # That fallback is load-bearing rather than a nicety: an earlier attempt sliced a 4x4 rotation
+    # down to its top-left 3x3, which is still orthogonal-looking output and was caught only by the
+    # b=4 mixer tests. Both scan variants refuse b != 3 outright for the same reason.
+    if rot.shape[-1] == 3:
+        if _ROTATION_SCAN_IMPL == "associative_autograd":
+            return associative_autograd_cumulative_block_rotation(rot)
+        if _ROTATION_SCAN_IMPL == "associative":
+            return associative_cumulative_block_rotation(rot)
     if chunk_size is None:
         chunk_size = _adaptive_scan_chunk(rot.shape[1])
     return _cumulative_block_rotation(rot, chunk_size=chunk_size)
+
+
+def _to_leaves(mat: torch.Tensor) -> tuple[torch.Tensor, ...]:
+    """
+    Split a ``(..., 3, 3)`` tensor into the 9 contiguous elementwise leaves the combines consume.
+
+    One definition of the row-major leaf order shared by every scan here, because the forward and
+    the backward have to agree on it and a disagreement would be a silently transposed rotation.
+    """
+    return tuple(mat[..., i, j].contiguous() for i in range(3) for j in range(3))
+
+
+def _from_leaves(leaves) -> torch.Tensor:
+    """Inverse of :func:`_to_leaves`: reassemble 9 elementwise leaves into ``(..., 3, 3)``."""
+    return torch.stack(tuple(leaves), dim=-1).unflatten(-1, (3, 3))
 
 
 def _so3_pointwise_combine(a, b):
@@ -304,10 +333,147 @@ def associative_cumulative_block_rotation(rot: torch.Tensor) -> torch.Tensor:
         # A length-1 scan is the identity, and the scan op has no work to bracket.
         return rot
 
-    leaves = tuple(rot[..., i, j].contiguous() for i in range(3) for j in range(3))
+    leaves = _to_leaves(rot)
     combine_mode = "pointwise" if rot.is_cuda else "generic"
     scanned = associative_scan(_so3_pointwise_combine, leaves, dim=1, combine_mode=combine_mode)
-    return torch.stack(tuple(scanned), dim=-1).unflatten(-1, (3, 3))
+    return _from_leaves(scanned)
+
+
+def _so3_affine_combine(x, y):
+    """
+    Compose two affine maps ``M -> A M + b`` held as 18 elementwise leaves (9 for ``A``, 9 for
+    ``b``), returning ``y after x``.
+
+    ``(A_y, b_y) . (A_x, b_x) = (A_y A_x, A_y b_x + b_y)``, which is associative because matrix
+    multiplication is. ``x`` is the lower-index (older) operand and ``y`` the newer, matching
+    :func:`_so3_pointwise_combine`'s ``b @ a``; both halves reuse that function so the two scans
+    cannot drift apart on operand order.
+
+    Eighteen separate leaves rather than two ``(..., 3, 3)`` tensors for the same reason the
+    forward uses nine: every output is a sum of products of scalars, so ``associative_scan`` can
+    take the ``pointwise`` path and Inductor emits a real ``tl.associative_scan``.
+    """
+    a_x, b_x = x[:9], x[9:]
+    a_y, b_y = y[:9], y[9:]
+    a_out = _so3_pointwise_combine(a_x, a_y)  # A_y @ A_x
+    ab = _so3_pointwise_combine(b_x, a_y)  # A_y @ b_x
+    return a_out + tuple(ab[k] + b_y[k] for k in range(9))
+
+
+def _prefix_rotation_backward(
+    rot: torch.Tensor, q: torch.Tensor, grad_q: torch.Tensor
+) -> torch.Tensor:
+    """
+    Analytic gradient of ``Q_t = R_t R_{t-1} ... R_1`` with respect to ``R``.
+
+    With ``Q_t = S_{t,i+1} R_i Q_{i-1}`` and ``S_{t,i+1} = R_t ... R_{i+1}``, perturbing ``R_i``
+    gives ``dQ_t = S_{t,i+1} dR_i Q_{i-1}`` for every ``t >= i``, so for ``G_t = dL/dQ_t``::
+
+        dL = sum_{t>=i} tr(G_t^T S_{t,i+1} dR_i Q_{i-1})   =>   dL/dR_i = M_i Q_{i-1}^T
+        M_i = sum_{t>=i} S_{t,i+1}^T G_t = G_i + R_{i+1}^T M_{i+1}
+
+    the last step because ``S_{t,i+1}^T = R_{i+1}^T S_{t,i+2}^T``. Note what this derivation does
+    *not* use: orthogonality. Only associativity and ``(XY)^T = Y^T X^T``, so the result is the
+    true gradient even where the scan has drifted off ``SO(3)`` -- and ``gradcheck`` can therefore
+    probe it with arbitrary matrices.
+
+    ``M`` is a reverse first-order linear recurrence, which is itself associative-scannable as the
+    affine pairs of :func:`_so3_affine_combine`. So the backward is one scan of the same depth as
+    the forward plus one batched matmul, and -- the property that matters here -- it contains no
+    division and no inverse. A backward that instead recovered ``Q_{i-1}`` as ``R_i^{-1} Q_i``
+    would be at its least stable exactly at initialisation, where ``theta_proj`` starts at
+    ``std * 0.1`` and every ``R`` is near-identity; this form treats that regime as ordinary.
+
+    :param rot: Per-step rotations ``R``, shape ``(batch, seq_len, n_groups, n_blocks, 3, 3)``.
+    :param q: The forward's prefix products ``Q``, same shape.
+    :param grad_q: Incoming gradient ``G``, same shape.
+
+    :returns: ``dL/dR``, same shape.
+    """
+    from torch._higher_order_ops.associative_scan import associative_scan
+
+    # A_i = R_{i+1}^T, zero at the final step: M_{T+1} is zero, so A_T multiplies nothing and never
+    # reaches the answer. Zero rather than identity so an off-by-one here fails loudly.
+    rot_t = rot.transpose(-1, -2)
+    shifted = torch.cat([rot_t[:, 1:], torch.zeros_like(rot_t[:, :1])], dim=1)
+
+    # Reverse the sequence so the reverse recurrence becomes an ordinary forward inclusive scan.
+    # `flip` rather than `associative_scan(..., reverse=True)`: the reverse lowering is a second
+    # prototype code path, and the whole reason this function exists is that the first one
+    # miscompiled its backward. Two elementwise copies is a cheap price for staying on the exact
+    # scan configuration the forward already validates.
+    leaves = _to_leaves(shifted.flip(1)) + _to_leaves(grad_q.flip(1))
+    combine_mode = "pointwise" if rot.is_cuda else "generic"
+    scanned = associative_scan(_so3_affine_combine, leaves, dim=1, combine_mode=combine_mode)
+    m = _from_leaves(scanned[9:]).flip(1)
+
+    # dL/dR_i = M_i Q_{i-1}^T with Q_0 = I, so the first step is just M_0 and no identity block
+    # has to be materialised to hold its place.
+    return torch.cat([m[:, :1], m[:, 1:] @ q[:, :-1].transpose(-1, -2)], dim=1)
+
+
+class _AssociativePrefixRotation(torch.autograd.Function):
+    """
+    ``associative_scan`` forward bolted to the analytic backward above.
+
+    ``torch.associative_scan`` is a prototype whose documentation warns about miscompiles, and its
+    backward is observed to return NaN on CUDA/fp32 with ``combine_mode="pointwise"`` while its
+    forward reproduces the chunked path's CE loss exactly on a real training step. Wrapping it here
+    keeps the forward that works and replaces the autograd that does not, so neither direction goes
+    through ``associative_scan``'s own differentiation rule.
+
+    ``rot`` and ``Q`` are both saved. That is still cheaper than the chunked path, which stores its
+    ``chunk`` sequential intermediates plus ``log2(T / chunk)`` Hillis-Steele levels, and ``Q`` is
+    the op's own output so it is usually alive anyway.
+    """
+
+    @staticmethod
+    def forward(ctx, rot: torch.Tensor) -> torch.Tensor:  # type: ignore[override]
+        q = associative_cumulative_block_rotation(rot)
+        ctx.save_for_backward(rot, q)
+        return q
+
+    @staticmethod
+    @torch.autograd.function.once_differentiable
+    def backward(ctx, grad_q: torch.Tensor):  # type: ignore[override]
+        # `once_differentiable` is deliberate: a second-order backward would have to differentiate
+        # the scan again, which is the broken path. Better to raise than to hand back the NaN this
+        # class was written to avoid.
+        if not ctx.needs_input_grad[0]:
+            return None
+        rot, q = ctx.saved_tensors
+        return _prefix_rotation_backward(rot, q, grad_q.contiguous())
+
+
+def associative_autograd_cumulative_block_rotation(rot: torch.Tensor) -> torch.Tensor:
+    """
+    Inclusive prefix product ``Q_t = R_t R_{t-1} ... R_1`` with a fast scan in *both* directions.
+
+    Same value as :func:`associative_cumulative_block_rotation` -- bit-for-bit, it calls it -- but
+    the gradient comes from :func:`_prefix_rotation_backward` instead of from
+    ``associative_scan``'s autograd. Forward and backward are then each one tree reduction of
+    depth ``log2(T)``, against the ``chunk - 1`` dependent matmuls plus ``log2(T / chunk)``
+    Hillis-Steele levels the chunked form pays in each direction.
+
+    Selected by ``MAMBA3_ROTATION_SCAN_IMPL=associative_autograd``; unset the variable to return to
+    the chunked default.
+
+    :param rot: Per-step rotations of shape ``(batch, seq_len, n_groups, n_blocks, 3, 3)``.
+
+    :returns: Inclusive prefix products, same shape as ``rot``.
+    """
+    if rot.shape[-1] != 3:
+        # Same refusal as the sibling: silently slicing a larger block would truncate the rotation
+        # and still return plausible-looking orthogonal-ish output.
+        raise ValueError(
+            f"associative_autograd_cumulative_block_rotation only supports block_size 3, "
+            f"got {rot.shape[-1]}; use the chunked path for other block sizes"
+        )
+    if rot.shape[1] == 1:
+        # A length-1 scan is the identity in both directions, and returning `rot` itself keeps that
+        # differentiable without entering the scan op at all.
+        return rot
+    return _AssociativePrefixRotation.apply(rot)
 
 
 def _rotate_bc_fused(
