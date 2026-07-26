@@ -200,7 +200,7 @@ def build_config(opts, overrides: List[str]):
         ),
         compile_model=opts.compile,
         dp_config=TransformerDataParallelConfig(
-            name=DataParallelType.hsdp,
+            name=DataParallelType(opts.dp_type),
             param_dtype=DType.bfloat16,
             reduce_dtype=DType.float32,
         ),
@@ -330,8 +330,12 @@ def parse_args():
     parser.add_argument("--n-v-heads", type=int, default=16,
                         help="Value heads for the recurrent mixers (state = n_v_heads*head_dim*head_v_dim).")
     parser.add_argument("--head-dim", type=int, default=64)
-    parser.add_argument("--expand-v", type=float, default=2.0)
+    parser.add_argument("--expand-v", type=float, default=1.0,
+                        help="Value expansion for the recurrent mixers. Default 1.0 keeps the model "
+                             "at the ~370M rung (value_dim=d_model); GDN canonical is 2.0.")
     parser.add_argument("--conv-size", type=int, default=4)
+    parser.add_argument("--dp-type", type=str, default="fsdp", choices=["fsdp", "hsdp", "ddp"],
+                        help="Data-parallel strategy. Default fsdp (works at world-size 1 = one GPU/run).")
     parser.add_argument("--linear-normalize", action="store_true", default=False,
                         help="Use the linear-attention denominator normalization (default: off = pure "
                              "ungated cumulative sum, the honest GDN gate/delta ablation).")
