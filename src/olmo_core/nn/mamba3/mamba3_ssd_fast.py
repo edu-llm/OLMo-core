@@ -47,7 +47,12 @@ from typing import Optional
 import torch
 import torch.nn.functional as F
 
-from .mamba3_ssd_api import _block_rotations, _rotate_bc, kernel_padded_width
+from .mamba3_ssd_api import (
+    _block_rotations,
+    _mamba3_siso_combined_eager,
+    _rotate_bc,
+    kernel_padded_width,
+)
 
 __all__ = [
     "fast_mamba3_is_available",
@@ -300,8 +305,6 @@ def mamba3_ssd_fast(
     if not fast_mamba3_is_available():
         raise RuntimeError("the official mamba-ssm Mamba-3 SISO kernel is not installed")
 
-    from mamba_ssm.ops.triton.mamba3.mamba3_siso_combined import mamba3_siso_combined
-
     batch, seq_len, n_heads, head_dim = x.shape
     n_groups, rank, d_state = B.shape[2], B.shape[3], B.shape[4]
 
@@ -357,7 +360,7 @@ def mamba3_ssd_fast(
         batch, seq_len, n_heads, _ANGLE_WIDTH, device=x.device, dtype=torch.float32
     )
 
-    y = mamba3_siso_combined(
+    y = _mamba3_siso_combined_eager(
         query.contiguous(),
         key.contiguous(),
         value.contiguous(),

@@ -52,6 +52,7 @@ import torch.nn.functional as F
 from .mamba3_ssd_api import (
     _block_rotations,
     _cumulative_block_rotation,
+    _mamba3_siso_combined_eager,
     _rotate_bc,
     _rotate_bc_blocks,
     has_mamba3,
@@ -143,8 +144,6 @@ def mamba3_ssd_official(
     if not official_mamba3_is_available():
         raise RuntimeError("the official mamba-ssm Mamba-3 SISO kernel is not installed")
 
-    from mamba_ssm.ops.triton.mamba3.mamba3_siso_combined import mamba3_siso_combined
-
     batch, seq_len, n_heads, head_dim = x.shape
     n_groups, rank, d_state = B.shape[2], B.shape[3], B.shape[4]
 
@@ -194,7 +193,7 @@ def mamba3_ssd_official(
         batch, seq_len, n_heads, _ANGLE_WIDTH, device=x.device, dtype=torch.float32
     )
 
-    y = mamba3_siso_combined(
+    y = _mamba3_siso_combined_eager(
         query.contiguous(),
         key.contiguous(),
         value.contiguous(),

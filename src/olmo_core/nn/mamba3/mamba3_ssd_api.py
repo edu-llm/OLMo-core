@@ -350,12 +350,38 @@ def _official_kernel_eligible(x: torch.Tensor, B: torch.Tensor) -> bool:
     return official_mamba3_is_available()
 
 
-# The SSD path calls the mamba-ssm Triton kernel, which uses TMA descriptors
-# (`tl.make_tensor_descriptor`) that Inductor cannot lower on torch 2.13 / Triton 3.7.1 -- it fails in
-# `identify_accessed_tensors` and then crashes graph lowering with an InductorError. Exclude the whole
-# dispatch from `torch.compile` so the kernel runs eagerly (Triton JITs it fine) while the rest of the
-# model still compiles. Graph break is clean here: tensors in, one tensor out.
+# The mamba-ssm Triton kernel uses TMA descriptors (`tl.make_tensor_descriptor`) that Inductor
+# cannot lower on torch 2.13 / Triton 3.7.1 -- it fails in `identify_accessed_tensors` and then
+# crashes graph lowering with an InductorError. This wrapper is the only thing held out of
+# `torch.compile`: Triton JITs the kernel fine eagerly, and the graph break is clean because it is
+# tensors in, one tensor out. The boundary is drawn here rather than around `dispatch_mamba3_ssd`
+# so that the rotation scan, the discretization and the padding above it still compile. Every
+# caller must route through this; reaching `mamba3_siso_combined` directly from a compiled region
+# brings the crash back.
 @torch.compiler.disable
+def _mamba3_siso_combined_eager(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    a_dt: torch.Tensor,
+    delta: torch.Tensor,
+    trap: torch.Tensor,
+    q_bias: torch.Tensor,
+    k_bias: torch.Tensor,
+    angles: torch.Tensor,
+    *,
+    chunk_size: int,
+) -> torch.Tensor:
+    """Invoke the official ``mamba-ssm`` SISO Triton kernel outside of ``torch.compile``."""
+    # Imported here rather than at module scope: `mamba_ssm` is an optional dependency, and
+    # resolving the symbol per call is what lets the tests patch the upstream entry point.
+    from mamba_ssm.ops.triton.mamba3.mamba3_siso_combined import mamba3_siso_combined
+
+    return mamba3_siso_combined(
+        query, key, value, a_dt, delta, trap, q_bias, k_bias, angles, chunk_size=chunk_size
+    )
+
+
 def dispatch_mamba3_ssd(
     x: torch.Tensor,
     B: torch.Tensor,
