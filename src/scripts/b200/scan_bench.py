@@ -100,7 +100,9 @@ def main() -> None:
     chunked = lambda rot: _cumulative_block_rotation(rot, chunk_size=32)  # noqa: E731
     variants = [
         ("chunked (chunk=32, today)", chunked),
-        ("associative pointwise", lambda r: _assoc(r, "pointwise")),
+        # "pointwise" is dropped: measured 837.5 ms compiled (4.6x *slower* than chunked) and it OOMs
+        # eagerly on 1152 GiB, which aborted the sweep before the rows that matter. It is also
+        # unreachable in production now that `_ROTATION_SCAN_COMBINE_MODE` pins generic.
         ("associative generic", lambda r: _assoc(r, "generic")),
         # Same forward as "associative pointwise", but with `associative_scan`'s own autograd
         # replaced by an analytic backward that is itself one scan. This is the only row expected

@@ -291,10 +291,11 @@ def _so3_pointwise_combine(a, b):
     """
     Compose two rotations held as 9 elementwise tensors, returning ``b @ a``.
 
-    Nine separate leaves rather than a ``(..., 3, 3)`` tensor is what makes this *pointwise*: every
-    output is a sum of products of scalars, so ``associative_scan`` can take the ``pointwise`` path
-    and Inductor emits a real ``tl.associative_scan``. A ``(3, 3)`` matmul would force the slower
-    ``generic`` mode. ``b @ a`` (not ``a @ b``) keeps the newest rotation on the left, matching
+    Nine separate leaves rather than a ``(..., 3, 3)`` tensor keeps every output a sum of products of
+    scalars, which is what ``associative_scan`` demands of a ``pointwise`` combine. It nonetheless
+    runs under ``generic``: a 9-value carry overflows what ``tl.associative_scan`` keeps in registers,
+    measured at 837.5 ms against generic's 61.2 ms -- see :data:`_ROTATION_SCAN_COMBINE_MODE`.
+    ``b @ a`` (not ``a @ b``) keeps the newest rotation on the left, matching
     ``Q_t = R_t R_{t-1} ... R_1`` -- see ``test_prefix_scan_equals_the_naive_ordered_product``.
     """
     a00, a01, a02, a10, a11, a12, a20, a21, a22 = a
