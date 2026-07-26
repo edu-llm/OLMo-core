@@ -23,6 +23,9 @@ import torch
 # `mamba3_ssd_fast`, which shadows the submodule of the same name.
 from olmo_core.nn.mamba3.mamba3_ssd_api import _cumulative_block_rotation
 from olmo_core.nn.mamba3.mamba3_ssd_fast import (
+    _angles_to_quaternion,
+    _quaternion_pointwise_combine,
+    _quaternion_to_matrix,
     _so3_pointwise_combine,
     associative_autograd_cumulative_block_rotation,
     fast_block_rotations,
@@ -44,6 +47,18 @@ def _assoc(rot: torch.Tensor, combine_mode: str) -> torch.Tensor:
         _so3_pointwise_combine, leaves, dim=1, combine_mode=combine_mode
     )
     return torch.stack(tuple(scanned), dim=-1).unflatten(-1, (3, 3))
+
+
+def _quat(theta: torch.Tensor, combine_mode: str) -> torch.Tensor:
+    """Quaternion (4-leaf) prefix product, combine_mode forced: angles -> cumulative matrix."""
+    from torch._higher_order_ops.associative_scan import associative_scan
+
+    q = _angles_to_quaternion(theta)
+    leaves = tuple(q[..., i].contiguous() for i in range(4))
+    scanned = associative_scan(
+        _quaternion_pointwise_combine, leaves, dim=1, combine_mode=combine_mode
+    )
+    return _quaternion_to_matrix(torch.stack(tuple(scanned), dim=-1))
 
 
 def _time(fn: Callable[[], None]) -> float:
@@ -69,7 +84,7 @@ def _bench(
     theta = (torch.randn(*SHAPE, device="cuda", dtype=torch.float32) * 0.1).requires_grad_(backward)
 
     def once() -> None:
-        out = scan(fast_block_rotations(theta, 3))
+        out = scan(theta)
         if backward:
             theta.grad = None
             out.sum().backward()
@@ -97,17 +112,18 @@ def main() -> None:
     print(f"device: {torch.cuda.get_device_name()}   torch {torch.__version__}")
     print(f"shape:  {SHAPE}  (batch, T, groups, blocks, angles)  fp32\n")
 
-    chunked = lambda rot: _cumulative_block_rotation(rot, chunk_size=32)  # noqa: E731
+    # Every variant takes the raw angles and returns the cumulative rotation *matrix*, so the
+    # angle->rotation build is inside the timed region for all of them (fair: the quaternion rows
+    # build a quaternion, the matrix rows build via Rodrigues). 9-leaf "pointwise" is not benched --
+    # it was 837.5 ms compiled and OOMs on 1152 GiB; the quaternion 4-leaf carry is that retry.
     variants = [
-        ("chunked (chunk=32, today)", chunked),
-        # "pointwise" is dropped: measured 837.5 ms compiled (4.6x *slower* than chunked) and it OOMs
-        # eagerly on 1152 GiB, which aborted the sweep before the rows that matter. It is also
-        # unreachable in production now that `_ROTATION_SCAN_COMBINE_MODE` pins generic.
-        ("associative generic", lambda r: _assoc(r, "generic")),
-        # Same forward as "associative pointwise", but with `associative_scan`'s own autograd
-        # replaced by an analytic backward that is itself one scan. This is the only row expected
-        # to report a finite gradient *and* a tree-scan forward, so it is the one to decide on.
-        ("associative + analytic bwd", associative_autograd_cumulative_block_rotation),
+        ("chunked (chunk=32, today)", lambda th: _cumulative_block_rotation(fast_block_rotations(th, 3), chunk_size=32)),
+        ("associative generic (9-leaf)", lambda th: _assoc(fast_block_rotations(th, 3), "generic")),
+        ("associative analytic-bwd (9-leaf)", lambda th: associative_autograd_cumulative_block_rotation(fast_block_rotations(th, 3))),
+        ("quaternion generic (4-leaf)", lambda th: _quat(th, "generic")),
+        # Pointwise LAST: if the 4-leaf carry still overflows registers it OOMs, and a CUDA OOM can
+        # poison the context for later rows -- so the rows that matter have already printed.
+        ("quaternion pointwise (4-leaf)", lambda th: _quat(th, "pointwise")),
     ]
 
     for compile_it in (False, True):
@@ -122,9 +138,11 @@ def main() -> None:
             print()
 
     print(
-        "Decide on 'compiled / fwd+bwd'. The chunked row is what the 33,468 tok/s run uses; the scan\n"
-        "is ~75% of the b=3 step, so a 2x here is roughly 1.6x end-to-end. Under ~1.3x is not worth\n"
-        "spending the remaining window on."
+        "Decide on 'compiled / fwd+bwd'. chunked is the 33,468 tok/s run; the scan is ~75% of the b=3\n"
+        "step, so ~2x here is ~1.6x end-to-end. Key comparisons: quaternion-generic (4-leaf) vs\n"
+        "associative-generic (9-leaf) shows whether the smaller carry helps under generic;\n"
+        "quaternion-pointwise shows whether the 4-leaf carry finally fits registers where 9 OOM'd.\n"
+        "Any row marked NON-FINITE GRAD is disqualified. Pick the fastest finite-gradient row."
     )
 
 

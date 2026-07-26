@@ -63,6 +63,7 @@ __all__ = [
     "fast_cumulative_block_rotation",
     "associative_cumulative_block_rotation",
     "associative_autograd_cumulative_block_rotation",
+    "quaternion_cumulative_block_rotation",
 ]
 
 # Copied verbatim from `mamba3_ssd_official`; see its module docstring for the derivation of
@@ -106,9 +107,15 @@ _ROTATION_SCAN_CHUNK_OVERRIDE: Optional[int] = (
 # the loop -- see `associative_autograd_cumulative_block_rotation`. Plain "associative" is kept
 # reachable because its forward is the one that has been run end-to-end on real data; when both
 # work, "associative_autograd" is the one to use.
+#
+# "quaternion" (b == 3 only) carries the SO(3) prefix product as a 4-value unit quaternion instead
+# of a 9-value 3x3 matrix -- see `quaternion_cumulative_block_rotation`. The motivation is
+# `combine_mode="pointwise"`: the 9-leaf matrix carry overflows what `tl.associative_scan` keeps in
+# registers and OOMs (1152 GiB), while a 4-leaf carry may fit. That register question is CUDA-only,
+# so this path is built to be correct and measurable; every non-b==3 call falls back to chunked.
 _ROTATION_SCAN_IMPL_ENV = "MAMBA3_ROTATION_SCAN_IMPL"
 _ROTATION_SCAN_IMPL = os.environ.get(_ROTATION_SCAN_IMPL_ENV, "chunked").strip().lower()
-_ROTATION_SCAN_IMPLS = ("chunked", "associative", "associative_autograd")
+_ROTATION_SCAN_IMPLS = ("chunked", "associative", "associative_autograd", "quaternion")
 
 # Pinned, not selected per-device. The docs call ``pointwise`` the more efficient mode, and for a
 # 9-leaf 3x3 combine that is inverted. Measured on a B200 at the production shape
@@ -488,6 +495,158 @@ def associative_autograd_cumulative_block_rotation(rot: torch.Tensor) -> torch.T
     return _AssociativePrefixRotation.apply(rot)
 
 
+def _angles_to_quaternion(theta: torch.Tensor) -> torch.Tensor:
+    """
+    Map three so(3) angles per block to the unit quaternion ``(w, x, y, z)`` of ``exp(skew)``.
+
+    The skew is the same one :func:`_rodrigues_so3` builds,
+    ``[[0, t1, t2], [-t1, 0, t3], [-t2, -t3, 0]]``, which is ``hat(v)`` for ``v = (-t3, t2, -t1)``
+    under the standard hat map ``hat(v) = [[0,-v3,v2],[v3,0,-v1],[-v2,v1,0]]``. The rotation is
+    then ``exp(hat(v))``, an active rotation of angle ``phi = ||theta||`` about ``v/phi``, whose
+    unit quaternion is ``(cos(phi/2), sin(phi/2)/phi * v)``. That axis/sign mapping is pinned by
+    ``test_quaternion_roundtrip_matches_fast_block_rotations``, which requires
+    ``_quaternion_to_matrix(_angles_to_quaternion(theta)) == fast_block_rotations(theta, 3)``.
+
+    Small-angle handling mirrors :func:`_rodrigues_so3` exactly, because this is the init regime
+    (``theta_proj`` starts at ``std * 0.1``): clamp before the sqrt so the discarded large-angle
+    branch cannot inject a NaN gradient at all-zero angles, and evaluate both half-angle
+    coefficients by their Taylor series below ``_SMALL_ANGLE_SQ``. At exactly zero this yields the
+    identity quaternion ``(1, 0, 0, 0)``.
+
+    :param theta: Angles of shape ``(..., 3)``.
+
+    :returns: Unit quaternions of shape ``(..., 4)`` in ``(w, x, y, z)`` order.
+    """
+    if theta.shape[-1] != 3:
+        raise ValueError(f"quaternion so(3) needs exactly 3 angles, got {theta.shape[-1]}")
+
+    t1, t2, t3 = theta[..., 0], theta[..., 1], theta[..., 2]
+
+    phi_sq = (theta * theta).sum(-1)
+    # Clamp before the sqrt, not after: `sqrt` has an infinite derivative at 0, so an unclamped
+    # `phi` would emit NaN gradients for all-zero-angle blocks even though `torch.where` discards
+    # its value. Both branches below must be finite everywhere -- see `_rodrigues_so3`.
+    phi = torch.sqrt(phi_sq.clamp_min(_SMALL_ANGLE_SQ))
+    half = phi / 2.0
+
+    small = phi_sq < _SMALL_ANGLE_SQ
+    # w = cos(phi/2); the axis coefficient is sin(phi/2)/phi. Both are even in phi, so they have
+    # exact Taylor series in phi_sq with truncation ~1e-23 at the threshold, far below float32
+    # resolution, and finite gradients through phi_sq == 0.
+    w = torch.where(small, 1.0 - phi_sq / 8.0 + phi_sq * phi_sq / 384.0, torch.cos(half))
+    sin_half_over_phi = torch.where(
+        small,
+        0.5 - phi_sq / 48.0 + phi_sq * phi_sq / 3840.0,
+        torch.sin(half) / phi,
+    )
+
+    # Vector part = (sin(phi/2)/phi) * v with v = (-t3, t2, -t1); see the docstring for why.
+    x = -sin_half_over_phi * t3
+    y = sin_half_over_phi * t2
+    z = -sin_half_over_phi * t1
+    return torch.stack([w, x, y, z], dim=-1)
+
+
+def _quaternion_to_matrix(q: torch.Tensor) -> torch.Tensor:
+    """
+    Convert a unit quaternion ``(w, x, y, z)`` to its ``3 x 3`` rotation matrix.
+
+    The standard Hamilton (active) form, so that ``_quaternion_to_matrix(b_quat_x_a)`` equals
+    ``R(b) @ R(a)`` and the round trip through :func:`_angles_to_quaternion` reproduces
+    :func:`_rodrigues_so3`.
+
+    This is where the double cover stops mattering: every entry is a *quadratic* in
+    ``(w, x, y, z)``, so ``R(q) == R(-q)``. The Hamilton product of unit quaternions can walk to
+    either sheet of the cover across the scan, but once a matrix is emitted the sign is gone, so no
+    hemisphere / sign-flip / canonicalisation logic is needed anywhere in this path.
+
+    :param q: Unit quaternions of shape ``(..., 4)``.
+
+    :returns: Rotation matrices of shape ``(..., 3, 3)``.
+    """
+    w, x, y, z = q[..., 0], q[..., 1], q[..., 2], q[..., 3]
+    xx, yy, zz = x * x, y * y, z * z
+    wx, wy, wz = w * x, w * y, w * z
+    xy, xz, yz = x * y, x * z, y * z
+
+    row0 = torch.stack([1.0 - 2.0 * (yy + zz), 2.0 * (xy - wz), 2.0 * (xz + wy)], dim=-1)
+    row1 = torch.stack([2.0 * (xy + wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz - wx)], dim=-1)
+    row2 = torch.stack([2.0 * (xz - wy), 2.0 * (yz + wx), 1.0 - 2.0 * (xx + yy)], dim=-1)
+    return torch.stack([row0, row1, row2], dim=-2)
+
+
+def _quaternion_pointwise_combine(a, b):
+    """
+    Compose two rotations held as 4 elementwise quaternion leaves, returning ``b ⊗ a``.
+
+    Four separate leaves rather than a ``(..., 4)`` tensor keeps every output a sum of products of
+    scalars, which is what ``associative_scan`` demands of a ``pointwise`` combine -- and a 4-value
+    carry is the whole reason to try this: it may fit the registers a 9-value 3x3 carry overflowed.
+    ``b ⊗ a`` (not ``a ⊗ b``) keeps the newest rotation on the left, matching
+    :func:`_so3_pointwise_combine`'s ``b @ a`` and ``Q_t = R_t R_{t-1} ... R_1``, because
+    ``R(b ⊗ a) == R(b) @ R(a)``.
+    """
+    aw, ax, ay, az = a
+    bw, bx, by, bz = b
+    return (
+        bw * aw - bx * ax - by * ay - bz * az,
+        bw * ax + bx * aw + by * az - bz * ay,
+        bw * ay - bx * az + by * aw + bz * ax,
+        bw * az + bx * ay - by * ax + bz * aw,
+    )
+
+
+def quaternion_cumulative_block_rotation(theta: torch.Tensor, block_size: int) -> torch.Tensor:
+    """
+    Inclusive prefix product ``Q_t = R_t R_{t-1} ... R_1`` for ``b == 3``, carried as quaternions.
+
+    Builds a unit quaternion per step straight from the *angles* (never from a pre-built matrix,
+    which is the point -- the carry is 4 values, not 9), runs one :func:`torch.associative_scan`
+    over the 4 quaternion leaves with :func:`_quaternion_pointwise_combine`, then converts the
+    cumulative quaternion back to a rotation matrix. The result is identical in shape and
+    convention to :func:`associative_cumulative_block_rotation` and the chunked path, so the caller
+    reuses :func:`_rotate_bc_fused` unchanged.
+
+    The gradient is left to ``associative_scan``'s own autograd: the forward is quaternion-compose
+    + quaternion->matrix, all standard differentiable ops, so no custom ``autograd.Function`` is
+    needed (the analytic-backward wrapper exists only because the *matrix* forward's autograd was
+    the part observed to miscompile under pointwise on CUDA).
+
+    :param theta: Per-step angles of shape ``(batch, seq_len, n_groups, n_blocks, 3)``.
+    :param block_size: The rotation block size; must be 3.
+
+    :returns: Inclusive prefix products of shape ``(batch, seq_len, n_groups, n_blocks, 3, 3)``.
+    """
+    from torch._higher_order_ops.associative_scan import associative_scan
+
+    if block_size != 3:
+        # Only the b == 3 quaternion form is written out. A larger block silently handled would
+        # truncate the rotation and still return orthogonal-looking output, so refuse it -- exactly
+        # as the matrix scans do -- and let the dispatch route b != 3 to the chunked path.
+        raise ValueError(
+            f"quaternion_cumulative_block_rotation only supports block_size 3, "
+            f"got {block_size}; use the chunked path for other block sizes"
+        )
+
+    q = _angles_to_quaternion(theta)
+    if q.shape[1] == 1:
+        # A length-1 scan is the identity; convert the single per-step quaternion straight to its
+        # matrix without entering the scan op at all.
+        return _quaternion_to_matrix(q)
+
+    # combine_mode is chosen per-device *here*, not from the globally-pinned generic mode: the whole
+    # reason this path exists is to test `pointwise`, whose 4-leaf carry may fit the registers the
+    # 9-leaf matrix carry overflowed. Whether pointwise-quaternion actually fits, and whether it
+    # beats generic-quaternion, is the open question that only a CUDA box can answer; `pointwise`
+    # needs CUDA codegen, so CPU necessarily runs `generic`.
+    combine_mode = "pointwise" if q.is_cuda else "generic"
+    leaves = tuple(q[..., i].contiguous() for i in range(4))
+    scanned = associative_scan(
+        _quaternion_pointwise_combine, leaves, dim=1, combine_mode=combine_mode
+    )
+    return _quaternion_to_matrix(torch.stack(scanned, dim=-1))
+
+
 def _rotate_bc_fused(
     B: torch.Tensor, C: torch.Tensor, cumulative_rot: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -537,9 +696,16 @@ def _fast_rotate_bc_pair(
             f"theta must be 5-D (batch, seq_len, n_groups, n_blocks, angles_per_block) "
             f"for block_size={block_size}, got shape {tuple(theta.shape)}"
         )
-    cumulative_rot = fast_cumulative_block_rotation(
-        fast_block_rotations(theta, block_size), chunk_size=chunk_size
-    )
+    if _ROTATION_SCAN_IMPL == "quaternion" and block_size == 3:
+        # The quaternion scan builds its 4-value carry from the angles directly, so it branches
+        # here -- where `theta` is still in hand -- rather than inside
+        # `fast_cumulative_block_rotation`, which only ever sees pre-built 3x3 matrices. Every other
+        # block size falls through to the matrix scans, which refuse to truncate a bigger block.
+        cumulative_rot = quaternion_cumulative_block_rotation(theta, block_size)
+    else:
+        cumulative_rot = fast_cumulative_block_rotation(
+            fast_block_rotations(theta, block_size), chunk_size=chunk_size
+        )
     return _rotate_bc_fused(B, C, cumulative_rot.to(B.dtype))
 
 

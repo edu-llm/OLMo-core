@@ -23,6 +23,10 @@ from olmo_core.nn.mamba3.mamba3_ssd_api import (
 from olmo_core.nn.mamba3.mamba3_ssd_fast import (
     _ROTATION_SCAN_IMPL,
     _adaptive_scan_chunk,
+    _angles_to_quaternion,
+    _fast_rotate_bc_pair,
+    _quaternion_pointwise_combine,
+    _quaternion_to_matrix,
     _rodrigues_so3,
     _rotate_bc_fused,
     _so3_affine_combine,
@@ -33,6 +37,7 @@ from olmo_core.nn.mamba3.mamba3_ssd_fast import (
     fast_cumulative_block_rotation,
     fast_mamba3_is_available,
     mamba3_ssd_fast,
+    quaternion_cumulative_block_rotation,
 )
 from olmo_core.nn.mamba3.mamba3_ssd_official import mamba3_ssd_official
 from olmo_core.testing import requires_gpu
@@ -733,6 +738,242 @@ def test_fused_rotation_preserves_the_relative_transfer_identity():
     actual = (rot_c[0, t, 0, 0] * rot_b[0, s, 0, 0]).sum()
 
     torch.testing.assert_close(actual, expected, rtol=0, atol=1e-11)
+
+
+# ---------------------------------------------------------------------------------------
+# quaternion prefix product (MAMBA3_ROTATION_SCAN_IMPL=quaternion)
+# ---------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "scale", [0.0, 1e-8, 1e-4, 0.01, 1.0, 3.14159, 6.0], ids=lambda s: f"scale{s}"
+)
+def test_quaternion_roundtrip_matches_fast_block_rotations(scale: float):
+    """
+    Pin the quaternion<->matrix convention against the matrix path, at and near zero included.
+
+    This is the test that fixes the axis/sign mapping: whatever makes
+    ``_quaternion_to_matrix(_angles_to_quaternion(theta))`` reproduce ``fast_block_rotations``
+    (Rodrigues, i.e. ``matrix_exp`` of the skew) is the correct convention, so the round trip is
+    asserted directly rather than a hand-derived sign being trusted.
+    """
+    torch.manual_seed(40)
+    theta = torch.randn(2, 64, 1, 8, 3, dtype=torch.float64) * scale
+
+    actual = _quaternion_to_matrix(_angles_to_quaternion(theta))
+    expected = fast_block_rotations(theta, 3)
+
+    torch.testing.assert_close(actual, expected, rtol=0, atol=1e-12)
+
+
+@pytest.mark.parametrize("scale", [0.0, 1e-8, 1e-4, 0.01, 1.0, 3.0, 6.0], ids=lambda s: f"scale{s}")
+def test_angles_to_quaternion_is_unit_norm(scale: float):
+    """Every per-step quaternion must live on the unit sphere, including the small-angle Taylor."""
+    torch.manual_seed(41)
+    theta = torch.randn(3, 16, 1, 4, 3, dtype=torch.float64) * scale
+
+    norm_sq = _angles_to_quaternion(theta).pow(2).sum(-1)
+
+    torch.testing.assert_close(norm_sq, torch.ones_like(norm_sq), rtol=0, atol=1e-12)
+
+
+def test_quaternion_combine_matches_matrix_compose():
+    """
+    The Hamilton product must compose rotations newest-left, matching the matrix path's ``b @ a``.
+
+    ``_quaternion_pointwise_combine(a, b)`` has to be the quaternion for ``R(b) @ R(a)`` -- the
+    newer operand ``b`` on the left -- so that the scan reproduces ``Q_t = R_t R_{t-1} ... R_1``.
+    Getting the operand order backwards would silently reverse the rotation.
+    """
+    torch.manual_seed(42)
+    qa = _angles_to_quaternion(torch.randn(2, 5, 1, 4, 3, dtype=torch.float64) * 0.4)
+    qb = _angles_to_quaternion(torch.randn(2, 5, 1, 4, 3, dtype=torch.float64) * 0.4)
+
+    a_leaves = tuple(qa[..., i] for i in range(4))
+    b_leaves = tuple(qb[..., i] for i in range(4))
+    combined = _quaternion_pointwise_combine(a_leaves, b_leaves)
+    got = _quaternion_to_matrix(torch.stack(combined, dim=-1))
+
+    expected = _quaternion_to_matrix(qb) @ _quaternion_to_matrix(qa)
+    torch.testing.assert_close(got, expected, rtol=0, atol=1e-13)
+
+
+@pytest.mark.parametrize("scale", [0.01, 1.0, 3.0])
+def test_quaternion_to_matrix_is_in_so3(scale: float):
+    """``_quaternion_to_matrix`` of a unit quaternion is orthogonal with determinant +1."""
+    torch.manual_seed(43)
+    q = _angles_to_quaternion(torch.randn(64, 3, dtype=torch.float64) * scale)
+
+    rot = _quaternion_to_matrix(q)
+
+    eye = torch.eye(3, dtype=torch.float64).expand_as(rot)
+    torch.testing.assert_close(rot @ rot.transpose(-1, -2), eye, rtol=0, atol=1e-12)
+    torch.testing.assert_close(
+        torch.linalg.det(rot), torch.ones(64, dtype=torch.float64), rtol=0, atol=1e-12
+    )
+
+
+@pytest.mark.parametrize("seq_len", [1, 2, 17, 64, 129])
+def test_quaternion_cumulative_matches_chunked(seq_len: int):
+    """The quaternion prefix product must compute the same rotation as the chunked matrix path."""
+    torch.manual_seed(44)
+    theta = torch.randn(2, seq_len, 1, 4, 3, dtype=torch.float64) * 0.3
+
+    expected = _cumulative_block_rotation(_block_rotations(theta, 3), chunk_size=8)
+    actual = quaternion_cumulative_block_rotation(theta, 3)
+
+    torch.testing.assert_close(actual, expected, rtol=0, atol=1e-11)
+
+
+def _grad_of_theta_build(build, theta: torch.Tensor, *, weight_seed: int) -> torch.Tensor:
+    """``d/dtheta`` of a non-symmetric weighting of a ``theta -> (..., 3, 3)`` builder's output."""
+    t = theta.clone().requires_grad_(True)
+    out = build(t)
+    gen = torch.Generator().manual_seed(weight_seed)
+    weight = torch.randn(out.shape, dtype=out.dtype, generator=gen)
+    (out * weight).sum().backward()
+    assert t.grad is not None
+    return t.grad
+
+
+def test_quaternion_cumulative_gradients_match_the_chunked_path():
+    """
+    Backward parity against the chunked path, under a dense non-symmetric weighting.
+
+    The forward is quaternion-compose + quaternion->matrix, all standard differentiable ops, so
+    ``associative_scan``'s own autograd is expected to suffice. The weighting is dense random so
+    the gradient probes the ordering of the product rather than cancelling it out.
+    """
+    torch.manual_seed(45)
+    theta = torch.randn(2, 24, 1, 4, 3, dtype=torch.float64) * 0.3
+
+    expected = _grad_of_theta_build(
+        lambda t: _cumulative_block_rotation(fast_block_rotations(t, 3), chunk_size=8),
+        theta,
+        weight_seed=46,
+    )
+    actual = _grad_of_theta_build(
+        lambda t: quaternion_cumulative_block_rotation(t, 3), theta, weight_seed=46
+    )
+
+    torch.testing.assert_close(actual, expected, rtol=0, atol=1e-10)
+
+
+@pytest.mark.parametrize("scale", [0.0, 1e-4, 0.1], ids=lambda s: f"scale{s}")
+def test_quaternion_cumulative_gradients_are_finite_at_init_scale(scale: float):
+    """
+    The init regime, where ``theta_proj`` starts (``std * 0.1``) and a naive small-angle handling
+    produces first-step NaN gradients.
+
+    ``_angles_to_quaternion`` clamps before the sqrt and Taylors both half-angle coefficients, so
+    tiny and exactly-zero angles are ordinary inputs. Both finiteness and parity with the chunked
+    path are asserted.
+    """
+    torch.manual_seed(47)
+    theta = torch.randn(2, 32, 1, 4, 3, dtype=torch.float64) * scale
+
+    actual = _grad_of_theta_build(
+        lambda t: quaternion_cumulative_block_rotation(t, 3), theta, weight_seed=48
+    )
+    expected = _grad_of_theta_build(
+        lambda t: _cumulative_block_rotation(fast_block_rotations(t, 3), chunk_size=8),
+        theta,
+        weight_seed=48,
+    )
+
+    assert torch.isfinite(actual).all(), f"non-finite gradient at scale {scale}"
+    torch.testing.assert_close(actual, expected, rtol=0, atol=1e-10)
+
+
+def test_quaternion_cumulative_refuses_block_sizes_other_than_three():
+    """
+    The Hamilton combine and the quaternion<->matrix maps are written for ``SO(3)`` only.
+
+    A larger block silently handled would truncate the rotation, so refuse it outright -- the same
+    guard the matrix scans carry -- and let the dispatch route ``b != 3`` to the chunked path.
+    """
+    theta = torch.randn(1, 8, 1, 2, 6, dtype=torch.float64) * 0.3  # b=4 angles per block
+
+    with pytest.raises(ValueError, match="block_size 3"):
+        quaternion_cumulative_block_rotation(theta, 4)
+
+
+def test_quaternion_gate_falls_back_to_chunked_for_block_size_four(monkeypatch):
+    """
+    Under ``MAMBA3_ROTATION_SCAN_IMPL=quaternion`` the dispatch must still route ``b=4`` to the
+    chunked path, bit-for-bit identical to any other gate value.
+
+    An earlier rotation optimisation truncated a 4x4 to its top-left 3x3 and only the b=4 mixer
+    tests caught it; this pins the fallback at the dispatch itself.
+    """
+    torch.manual_seed(49)
+    B = torch.randn(1, 33, 1, 1, 16, dtype=torch.float64)
+    C = torch.randn(1, 33, 1, 1, 16, dtype=torch.float64)
+    theta = torch.randn(1, 33, 1, 4, 6, dtype=torch.float64) * 0.3  # d_state=16, n_blocks=4, b=4
+
+    monkeypatch.setattr(fast_mod, "_ROTATION_SCAN_IMPL", "quaternion")
+    b_quat, c_quat = _fast_rotate_bc_pair(B, C, theta, 4, None)
+    monkeypatch.setattr(fast_mod, "_ROTATION_SCAN_IMPL", "chunked")
+    b_chunked, c_chunked = _fast_rotate_bc_pair(B, C, theta, 4, None)
+
+    torch.testing.assert_close(b_quat, b_chunked, rtol=0, atol=0)
+    torch.testing.assert_close(c_quat, c_chunked, rtol=0, atol=0)
+
+
+def test_quaternion_gate_matches_chunked_for_block_size_three(monkeypatch):
+    """
+    The whole point of the gate: at ``b=3`` the quaternion dispatch must apply the *same* rotation
+    to ``B`` and ``C`` as the chunked default, through the shared ``_rotate_bc_fused``.
+
+    ``_fast_rotate_bc_pair`` runs the prefix product in float32 (``theta.float()``) whatever
+    ``B``/``C`` carry, and the quaternion scan is a different arithmetic path from the chunked
+    matrix product, so agreement here is at the float32 floor (~1e-6) rather than the 1e-11 that
+    ``test_quaternion_cumulative_matches_chunked`` pins in float64. A convention/ordering error
+    would move the output by O(1) and is still caught comfortably.
+    """
+    torch.manual_seed(52)
+    B = torch.randn(2, 40, 1, 1, 12, dtype=torch.float64)
+    C = torch.randn(2, 40, 1, 1, 12, dtype=torch.float64)
+    theta = torch.randn(2, 40, 1, 4, 3, dtype=torch.float64) * 0.3  # d_state=12, n_blocks=4, b=3
+
+    monkeypatch.setattr(fast_mod, "_ROTATION_SCAN_IMPL", "quaternion")
+    b_quat, c_quat = _fast_rotate_bc_pair(B, C, theta, 3, None)
+    monkeypatch.setattr(fast_mod, "_ROTATION_SCAN_IMPL", "chunked")
+    b_chunked, c_chunked = _fast_rotate_bc_pair(B, C, theta, 3, None)
+
+    torch.testing.assert_close(b_quat, b_chunked, rtol=1e-4, atol=1e-5)
+    torch.testing.assert_close(c_quat, c_chunked, rtol=1e-4, atol=1e-5)
+
+
+def test_quaternion_scan_compiles_without_a_graph_break():
+    """
+    A graph break here silently costs the speedup and nothing else notices -- ``fullgraph=True``
+    turns that into a failure.
+
+    Mirrors ``test_autograd_scan_compiles_without_a_graph_break``: ``backend="eager"`` keeps this
+    to Dynamo tracing (where a break would happen) without paying for Inductor codegen. On CPU the
+    scan runs ``combine_mode="generic"``; ``pointwise`` codegen is CUDA-only and untestable here.
+    """
+    torch.manual_seed(50)
+    base = torch.randn(1, 16, 1, 2, 3) * 0.1
+    gen = torch.Generator().manual_seed(51)
+    weight = torch.randn(1, 16, 1, 2, 3, 3, generator=gen)
+
+    def step(t):
+        out = quaternion_cumulative_block_rotation(t, 3)
+        return (out * weight).sum()
+
+    def grad_of(fn):
+        theta = base.clone().requires_grad_(True)
+        fn(theta).backward()
+        assert theta.grad is not None
+        return theta.grad
+
+    torch._dynamo.reset()
+    compiled = grad_of(torch.compile(step, fullgraph=True, backend="eager"))
+
+    assert torch.isfinite(compiled).all()
+    torch.testing.assert_close(compiled, grad_of(step), rtol=0, atol=1e-5)
 
 
 # ---------------------------------------------------------------------------------------
