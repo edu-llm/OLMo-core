@@ -24,6 +24,7 @@ import torch
 from olmo_core.nn.mamba3.mamba3_ssd_api import _cumulative_block_rotation
 from olmo_core.nn.mamba3.mamba3_ssd_fast import (
     _so3_pointwise_combine,
+    associative_autograd_cumulative_block_rotation,
     fast_block_rotations,
 )
 
@@ -101,6 +102,10 @@ def main() -> None:
         ("chunked (chunk=32, today)", chunked),
         ("associative pointwise", lambda r: _assoc(r, "pointwise")),
         ("associative generic", lambda r: _assoc(r, "generic")),
+        # Same forward as "associative pointwise", but with `associative_scan`'s own autograd
+        # replaced by an analytic backward that is itself one scan. This is the only row expected
+        # to report a finite gradient *and* a tree-scan forward, so it is the one to decide on.
+        ("associative + analytic bwd", associative_autograd_cumulative_block_rotation),
     ]
 
     for compile_it in (False, True):

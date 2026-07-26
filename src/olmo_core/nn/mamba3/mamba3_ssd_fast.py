@@ -109,6 +109,14 @@ _ROTATION_SCAN_CHUNK_OVERRIDE: Optional[int] = (
 _ROTATION_SCAN_IMPL_ENV = "MAMBA3_ROTATION_SCAN_IMPL"
 _ROTATION_SCAN_IMPL = os.environ.get(_ROTATION_SCAN_IMPL_ENV, "chunked").strip().lower()
 _ROTATION_SCAN_IMPLS = ("chunked", "associative", "associative_autograd")
+
+# Pinned, not selected per-device. The docs call ``pointwise`` the more efficient mode, and for a
+# 9-leaf 3x3 combine that is inverted. Measured on a B200 at the production shape
+# (32, 4096, 1, 64, 3), fp32, compiled fwd+bwd: generic **61.2 ms** vs the chunked path's 181.2 ms
+# (2.96x), while pointwise is **837.5 ms** -- 4.6x *slower* than chunked -- and eagerly OOMs trying
+# to allocate 1152 GiB. Pointwise is also the mode whose backward returns NaN in training. The
+# 18-leaf affine combine in the backward is larger still, so it wants generic even more.
+_ROTATION_SCAN_COMBINE_MODE = "generic"
 if _ROTATION_SCAN_IMPL not in _ROTATION_SCAN_IMPLS:
     raise ValueError(
         f"{_ROTATION_SCAN_IMPL_ENV} must be one of {_ROTATION_SCAN_IMPLS}, "
@@ -313,8 +321,8 @@ def associative_cumulative_block_rotation(rot: torch.Tensor) -> torch.Tensor:
     matmuls plus ``log2(T / chunk)`` Hillis-Steele levels each round-tripping through global memory.
     That dependency chain -- not arithmetic -- is what leaves the b=3 arm latency-bound.
 
-    ``combine_mode="pointwise"`` is the only mode Inductor lowers to ``tl.associative_scan`` and it
-    requires CUDA tensors; elsewhere (CPU tests) ``generic`` computes the same values eagerly.
+    Uses ``combine_mode="generic"`` -- see :data:`_ROTATION_SCAN_COMBINE_MODE` for the measurement
+    that rules out ``pointwise`` despite the docs preferring it.
 
     :param rot: Per-step rotations of shape ``(batch, seq_len, n_groups, n_blocks, 3, 3)``.
 
@@ -334,8 +342,9 @@ def associative_cumulative_block_rotation(rot: torch.Tensor) -> torch.Tensor:
         return rot
 
     leaves = _to_leaves(rot)
-    combine_mode = "pointwise" if rot.is_cuda else "generic"
-    scanned = associative_scan(_so3_pointwise_combine, leaves, dim=1, combine_mode=combine_mode)
+    scanned = associative_scan(
+        _so3_pointwise_combine, leaves, dim=1, combine_mode=_ROTATION_SCAN_COMBINE_MODE
+    )
     return _from_leaves(scanned)
 
 
@@ -349,9 +358,10 @@ def _so3_affine_combine(x, y):
     :func:`_so3_pointwise_combine`'s ``b @ a``; both halves reuse that function so the two scans
     cannot drift apart on operand order.
 
-    Eighteen separate leaves rather than two ``(..., 3, 3)`` tensors for the same reason the
-    forward uses nine: every output is a sum of products of scalars, so ``associative_scan`` can
-    take the ``pointwise`` path and Inductor emits a real ``tl.associative_scan``.
+    Eighteen separate leaves rather than two ``(..., 3, 3)`` tensors, mirroring the forward's nine:
+    every output is a sum of products of scalars, which keeps both ``combine_mode`` options open.
+    ``generic`` is the one actually taken -- see :data:`_ROTATION_SCAN_COMBINE_MODE` -- and this
+    combine is the larger of the two, so it wants ``generic`` by an even wider margin.
     """
     a_x, b_x = x[:9], x[9:]
     a_y, b_y = y[:9], y[9:]
@@ -403,8 +413,9 @@ def _prefix_rotation_backward(
     # miscompiled its backward. Two elementwise copies is a cheap price for staying on the exact
     # scan configuration the forward already validates.
     leaves = _to_leaves(shifted.flip(1)) + _to_leaves(grad_q.flip(1))
-    combine_mode = "pointwise" if rot.is_cuda else "generic"
-    scanned = associative_scan(_so3_affine_combine, leaves, dim=1, combine_mode=combine_mode)
+    scanned = associative_scan(
+        _so3_affine_combine, leaves, dim=1, combine_mode=_ROTATION_SCAN_COMBINE_MODE
+    )
     m = _from_leaves(scanned[9:]).flip(1)
 
     # dL/dR_i = M_i Q_{i-1}^T with Q_0 = I, so the first step is just M_0 and no identity block

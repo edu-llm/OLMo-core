@@ -8,6 +8,8 @@ parity check is the small-angle regime, which is where ``theta_proj`` initialise
 naive Rodrigues implementation produces NaN gradients on the first training step.
 """
 
+import importlib
+
 import pytest
 import torch
 
@@ -39,6 +41,11 @@ requires_official_mamba3 = pytest.mark.skipif(
     not fast_mamba3_is_available(),
     reason="the official mamba-ssm Mamba-3 SISO kernel is not installed",
 )
+
+# The package `__init__` re-exports the `mamba3_ssd_fast` *function* under the same name as the
+# module that defines it, so `import ...mamba3_ssd_fast as m` binds the function. Go through
+# `importlib` to reach the module itself, which is what the gate tests monkeypatch.
+fast_mod = importlib.import_module("olmo_core.nn.mamba3.mamba3_ssd_fast")
 
 
 # ---------------------------------------------------------------------------------------
@@ -203,8 +210,8 @@ def test_adaptive_scan_chunk_is_monotonic_non_decreasing():
 
 
 @pytest.mark.skipif(
-    _ROTATION_SCAN_IMPL == "associative",
-    reason="spies on the chunked path, which MAMBA3_ROTATION_SCAN_IMPL=associative bypasses",
+    _ROTATION_SCAN_IMPL != "chunked",
+    reason="spies on the chunked path, which every other MAMBA3_ROTATION_SCAN_IMPL bypasses",
 )
 def test_default_scan_uses_the_adaptive_chunk(monkeypatch):
     """
@@ -506,21 +513,72 @@ def test_autograd_scan_gradients_are_finite_at_tiny_angles(scale: float):
     torch.testing.assert_close(actual, expected, rtol=0, atol=1e-11)
 
 
-def test_autograd_scan_gradient_is_finite_in_float32():
+def test_autograd_scan_gradient_is_finite_and_accurate_in_float32():
     """
     The production dtype for the prefix product is float32, not float64.
 
-    The reported failure is fp32-specific, so the finiteness claim has to be made in fp32 as
-    well; the value check stays loose because fp32 over a 128-step product is not tight.
+    The reported NaN is fp32-specific, so the finiteness claim has to be made in fp32 too. The
+    accuracy claim is made against a float64 run of the *same* scan rather than against a fixed
+    tolerance, and it is only required to be no worse than what the chunked path loses over the
+    same 128-step product -- fp32 accumulation is the floor here, and the point is that this path
+    does not sit below it.
+
+    Note the objective has to be weighted: ``sum(Q * Q)`` is ``tr(Q Q^T) == 3`` for any rotation,
+    so its gradient is identically zero and it would call any implementation finite.
     """
     torch.manual_seed(26)
-    theta = (torch.randn(2, 128, 1, 4, 3, dtype=torch.float32) * 0.1).requires_grad_(True)
+    base = torch.randn(2, 128, 1, 4, 3) * 0.1
+    gen = torch.Generator().manual_seed(27)
+    weight = torch.randn(2, 128, 1, 4, 3, 3, generator=gen)
 
-    out = associative_autograd_cumulative_block_rotation(fast_block_rotations(theta, 3))
-    out.square().sum().backward()
+    def grad(scan_fn, dtype):
+        theta = base.clone().to(dtype).requires_grad_(True)
+        out = scan_fn(fast_block_rotations(theta, 3))
+        (out * weight.to(dtype)).sum().backward()
+        assert theta.grad is not None
+        return theta.grad
 
-    assert theta.grad is not None
-    assert torch.isfinite(theta.grad).all()
+    truth = grad(associative_autograd_cumulative_block_rotation, torch.float64)
+    actual = grad(associative_autograd_cumulative_block_rotation, torch.float32)
+    chunked = grad(lambda r: _cumulative_block_rotation(r, chunk_size=8), torch.float32)
+
+    assert torch.isfinite(actual).all()
+    assert (actual.double() - truth).abs().max() <= 4 * (chunked.double() - truth).abs().max()
+
+
+def test_autograd_scan_compiles_without_a_graph_break():
+    """
+    A graph break here would silently cost the entire speedup, and nothing else would notice.
+
+    The only reason to route through ``associative_scan`` at all is that Inductor lowers it to one
+    fused ``tl.associative_scan``; if Dynamo cannot trace the ``autograd.Function`` it falls back
+    to eager, where the scan is a Python tree reduction and strictly *slower* than the chunked
+    form it replaced. The output would still be correct, so every other test in this file would
+    still pass. ``fullgraph=True`` turns that silent regression into a failure.
+
+    ``backend="eager"`` keeps this to Dynamo tracing -- which is where a break would happen --
+    without paying for Inductor codegen, since the generated kernel is not what is under test.
+    """
+    torch.manual_seed(33)
+    base = torch.randn(1, 16, 1, 2, 3) * 0.1
+    gen = torch.Generator().manual_seed(34)
+    weight = torch.randn(1, 16, 1, 2, 3, 3, generator=gen)
+
+    def step(t):
+        out = associative_autograd_cumulative_block_rotation(fast_block_rotations(t, 3))
+        return (out * weight).sum()
+
+    def grad_of(fn):
+        theta = base.clone().requires_grad_(True)
+        fn(theta).backward()
+        assert theta.grad is not None
+        return theta.grad
+
+    torch._dynamo.reset()
+    compiled = grad_of(torch.compile(step, fullgraph=True, backend="eager"))
+
+    assert torch.isfinite(compiled).all()
+    torch.testing.assert_close(compiled, grad_of(step), rtol=0, atol=1e-5)
 
 
 def test_autograd_scan_output_stays_in_so3():
