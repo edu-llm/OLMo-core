@@ -43,6 +43,7 @@ accepts bfloat16 and returns silent ``NaN``/``Inf`` rather than raising, so the 
 loudly" guard assumed elsewhere does not exist. The closed form stays finite in bfloat16.
 """
 
+import os
 from typing import Optional
 
 import torch
@@ -79,6 +80,18 @@ _LOGIT_EPS = 1e-6
 _ROTATION_SCAN_CHUNK_MIN = 8
 _ROTATION_SCAN_CHUNK_MAX = 64
 _ROTATION_SCAN_TARGET_DIVISOR = 128
+# Retuning escape hatch, read once at import so the traced region sees a plain int constant rather
+# than an `os.environ` lookup that could graph-break. That sweep predates two things which move the
+# optimum: it ran eager, and it ran off-B200. Once the preprocessing compiles, Inductor makes the
+# per-level arithmetic cheap but cannot remove a data dependency, so the binding cost becomes the
+# ``chunk - 1`` chain and the optimum shifts *down*. The override bypasses the clamp so the
+# fully-parallel end stays reachable. Safe to sweep blind: the chunk only re-brackets an associative
+# product and never changes the result (``test_prefix_scan_is_invariant_to_scan_chunk``); it costs
+# Hillis-Steele memory as it shrinks, which is the only thing to watch.
+_ROTATION_SCAN_CHUNK_ENV = "MAMBA3_ROTATION_SCAN_CHUNK"
+_ROTATION_SCAN_CHUNK_OVERRIDE: Optional[int] = (
+    int(os.environ[_ROTATION_SCAN_CHUNK_ENV]) if os.environ.get(_ROTATION_SCAN_CHUNK_ENV) else None
+)
 
 
 def _adaptive_scan_chunk(seq_len: int) -> int:
@@ -93,8 +106,11 @@ def _adaptive_scan_chunk(seq_len: int) -> int:
 
     :param seq_len: The sequence length the scan will run over.
 
-    :returns: A chunk length in ``[8, 64]``.
+    :returns: A chunk length in ``[8, 64]``, or the unclamped ``MAMBA3_ROTATION_SCAN_CHUNK``
+        override when that environment variable is set.
     """
+    if _ROTATION_SCAN_CHUNK_OVERRIDE is not None:
+        return _ROTATION_SCAN_CHUNK_OVERRIDE
     target = seq_len // _ROTATION_SCAN_TARGET_DIVISOR
     return max(_ROTATION_SCAN_CHUNK_MIN, min(_ROTATION_SCAN_CHUNK_MAX, target))
 
