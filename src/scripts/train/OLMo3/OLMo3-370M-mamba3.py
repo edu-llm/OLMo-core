@@ -74,6 +74,11 @@ dolma2 = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = dolma2
 _spec.loader.exec_module(dolma2)
 
+# The Mamba-3 sentinel lives in the sibling smoketests/ dir (not a package): add it to sys.path so
+# both the Phase 5 smoke and the Phase 7 real runs (which share this script) can attach the callback.
+sys.path.insert(0, str(_DOLMA2_PATH.parent.parent / "smoketests"))
+from mamba3_sentinel import Mamba3SentinelCallback  # noqa: E402  # isort: skip
+
 log = dolma2.log
 
 # --- Mamba-3 arm defaults (override any of them from the CLI) --------------------------------
@@ -227,6 +232,20 @@ def build_config(opts, overrides):
             recipe,
             len(config.train_module.float8_config.modules_to_ignore or []),
         )
+
+    # Silent-failure guard: at pre_train it re-checks rotation_block_size on the built model (a backstop
+    # behind the post-build guard), then watches grad-norm / skip-rate / plateau / decay-horizon each
+    # step and writes heartbeat.json + alerts.jsonl to the local work dir. cancel_on_alert stops the run
+    # gracefully (checkpoint saved) on a critical alert; it never touches the machine.
+    config.trainer = config.trainer.with_callback(
+        "mamba3_sentinel",
+        Mamba3SentinelCallback(
+            run_dir=opts.work_dir,
+            expected_rotation_block_size=opts.rotation_block_size,
+            sequence_length=config.train_module.max_sequence_length,
+            cancel_on_alert=True,
+        ),
+    )
     return config
 
 
