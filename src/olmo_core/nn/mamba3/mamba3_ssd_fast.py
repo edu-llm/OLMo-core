@@ -634,12 +634,15 @@ def quaternion_cumulative_block_rotation(theta: torch.Tensor, block_size: int) -
         # matrix without entering the scan op at all.
         return _quaternion_to_matrix(q)
 
-    # combine_mode is chosen per-device *here*, not from the globally-pinned generic mode: the whole
-    # reason this path exists is to test `pointwise`, whose 4-leaf carry may fit the registers the
-    # 9-leaf matrix carry overflowed. Whether pointwise-quaternion actually fits, and whether it
-    # beats generic-quaternion, is the open question that only a CUDA box can answer; `pointwise`
-    # needs CUDA codegen, so CPU necessarily runs `generic`.
-    combine_mode = "pointwise" if q.is_cuda else "generic"
+    # Pinned generic. Measured on a B200 (32,4096,1,64,3, fp32): pointwise-quaternion's *forward* is
+    # faster (7.4 vs 10.8 ms) but its **backward OOMs** (512 GiB = one full copy per timestep) -- the
+    # same O(T) materialization the 9-leaf pointwise hit, only halved by the smaller carry, so it is
+    # NOT a register-fit problem and no representation shrink fixes it (it is `associative_scan`'s
+    # prototype pointwise-autograd, not our combine). generic-quaternion is 29.2 ms fwd+bwd -- 7.07x
+    # over chunked and 3.4x over the 9-leaf associative-generic -- finite-grad and no OOM: the fastest
+    # *trainable* form. (To reclaim the pointwise forward you'd need a custom quaternion analytic
+    # backward, like `associative_autograd` does for matrices; not worth it over generic's 7x.)
+    combine_mode = "generic"
     leaves = tuple(q[..., i].contiguous() for i in range(4))
     scanned = associative_scan(
         _quaternion_pointwise_combine, leaves, dim=1, combine_mode=combine_mode
