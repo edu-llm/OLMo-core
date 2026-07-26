@@ -181,8 +181,22 @@ def mamba3_ssd_chunked(
         beta = (1.0 - lam) * dt * torch.exp(log_alpha)
 
     # gamma reads (B_s, x_s); the trapezoidal beta term reads the previous step's pair.
-    y = _ssd_scalar_decay(log_alpha, gamma, B, C, x, chunk_size)
-    y = y + _ssd_scalar_decay(log_alpha, beta, _shift_right(B), C, _shift_right(x), chunk_size)
+    #
+    # Run the Q x Q einsums in reduced precision whenever the caller is using it. There are two
+    # ways reduced precision arrives: ambient autocast (already active -> left on), or a bf16/fp16
+    # *input* dtype with autocast OFF. The second is the real training path: FSDP/HSDP
+    # ``param_dtype=bf16`` casts the model to bf16 without enabling autocast, and when ``mamba-ssm``
+    # is not importable this chunked form is the kernel that actually runs. Without this branch the
+    # einsums would execute in fp32 (the tensors were cast to fp32 above for the rotation/decay) and
+    # forfeit tensor cores -- a silent ~fp32 slowdown on exactly the fallback path. The rotation and
+    # decay stay fp32 regardless: they were computed in the ``enabled=False`` block above, and
+    # autocast only downcasts the matmul-class ops here, leaving the exp/cumsum/decay in fp32.
+    reduced = out_dtype in (torch.bfloat16, torch.float16)
+    with torch.autocast(
+        device_type=device_type, dtype=out_dtype, enabled=reduced and not autocast_on
+    ):
+        y = _ssd_scalar_decay(log_alpha, gamma, B, C, x, chunk_size)
+        y = y + _ssd_scalar_decay(log_alpha, beta, _shift_right(B), C, _shift_right(x), chunk_size)
     return y.to(out_dtype)
 
 
