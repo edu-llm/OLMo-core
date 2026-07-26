@@ -19,9 +19,12 @@ from olmo_core.nn.mamba3.mamba3_ssd_api import (
     dispatch_mamba3_ssd,
 )
 from olmo_core.nn.mamba3.mamba3_ssd_fast import (
+    _ROTATION_SCAN_IMPL,
     _adaptive_scan_chunk,
     _rodrigues_so3,
     _rotate_bc_fused,
+    _so3_pointwise_combine,
+    associative_cumulative_block_rotation,
     fast_block_rotations,
     fast_cumulative_block_rotation,
     fast_mamba3_is_available,
@@ -197,6 +200,10 @@ def test_adaptive_scan_chunk_is_monotonic_non_decreasing():
     assert chunks == sorted(chunks)
 
 
+@pytest.mark.skipif(
+    _ROTATION_SCAN_IMPL == "associative",
+    reason="spies on the chunked path, which MAMBA3_ROTATION_SCAN_IMPL=associative bypasses",
+)
 def test_default_scan_uses_the_adaptive_chunk(monkeypatch):
     """
     The default path must actually consult the adaptive rule, not a pinned constant.
@@ -234,6 +241,117 @@ def test_prefix_scan_equals_the_naive_ordered_product():
     for t in range(1, rot.shape[1]):
         running = rot[:, t] @ running
         torch.testing.assert_close(scanned[:, t], running, rtol=0, atol=1e-11)
+
+
+# ---------------------------------------------------------------------------------------
+# associative_scan prefix product
+# ---------------------------------------------------------------------------------------
+
+
+def _as_leaves(rot: torch.Tensor):
+    """Split a ``(..., 3, 3)`` rotation into the 9 elementwise leaves the combine consumes."""
+    return tuple(rot[..., i, j] for i in range(3) for j in range(3))
+
+
+def test_so3_pointwise_combine_matches_matmul():
+    """
+    The 9-leaf form must be exactly ``b @ a`` -- newest on the left.
+
+    This is the whole reason the scan can use ``combine_mode="pointwise"``: a 3x3 product written
+    over 9 separate tensors is elementwise, so Inductor can emit a real ``tl.associative_scan``
+    instead of the generic fallback. Getting the operand order backwards here would silently
+    reverse the rotation, which no shape or dtype check would catch.
+    """
+    torch.manual_seed(10)
+    a = _block_rotations(torch.randn(2, 5, 1, 4, 3, dtype=torch.float64) * 0.4, 3)
+    b = _block_rotations(torch.randn(2, 5, 1, 4, 3, dtype=torch.float64) * 0.4, 3)
+
+    combined = _so3_pointwise_combine(_as_leaves(a), _as_leaves(b))
+    got = torch.stack(combined, dim=-1).unflatten(-1, (3, 3))
+
+    torch.testing.assert_close(got, b @ a, rtol=0, atol=1e-13)
+
+
+@pytest.mark.parametrize("seq_len", [1, 2, 17, 64, 129])
+def test_associative_scan_matches_cumulative_block_rotation(seq_len: int):
+    """The associative_scan path must compute the same prefix product as the chunked one."""
+    torch.manual_seed(13)
+    rot = _block_rotations(torch.randn(2, seq_len, 1, 4, 3, dtype=torch.float64) * 0.3, 3)
+
+    expected = _cumulative_block_rotation(rot, chunk_size=8)
+    actual = associative_cumulative_block_rotation(rot)
+
+    torch.testing.assert_close(actual, expected, rtol=0, atol=1e-11)
+
+
+def test_associative_scan_output_stays_in_so3():
+    """
+    Orthogonality is the property the whole NC^1 claim rests on.
+
+    A scan that drifts off ``SO(3)`` would not crash; it would quietly weaken the b=3 arm, so this
+    asserts the group membership directly rather than trusting the parity check above.
+    """
+    torch.manual_seed(12)
+    rot = _block_rotations(torch.randn(2, 64, 1, 4, 3, dtype=torch.float64) * 0.5, 3)
+
+    q = associative_cumulative_block_rotation(rot)
+
+    eye = torch.eye(3, dtype=q.dtype).expand_as(q)
+    torch.testing.assert_close(q @ q.transpose(-1, -2), eye, rtol=0, atol=1e-10)
+    torch.testing.assert_close(
+        torch.linalg.det(q), torch.ones_like(q[..., 0, 0]), rtol=0, atol=1e-10
+    )
+
+
+def test_associative_scan_gradients_match_the_chunked_path():
+    """
+    Backward parity, not just forward.
+
+    ``associative_scan`` grew autograd separately from its forward, so the gradient is the part
+    most likely to be subtly wrong. The weighting below is deliberately non-symmetric so the
+    gradient actually probes the ordering of the product rather than cancelling it out.
+    """
+    torch.manual_seed(11)
+    theta = torch.randn(2, 24, 1, 4, 3, dtype=torch.float64) * 0.3
+
+    def grad_through(scan_fn):
+        t = theta.clone().requires_grad_(True)
+        out = scan_fn(fast_block_rotations(t, 3))
+        weight = torch.arange(out.numel(), dtype=out.dtype).reshape(out.shape) * 1e-3
+        (out * weight).sum().backward()
+        assert t.grad is not None
+        return t.grad
+
+    expected = grad_through(lambda r: _cumulative_block_rotation(r, chunk_size=8))
+    actual = grad_through(associative_cumulative_block_rotation)
+
+    torch.testing.assert_close(actual, expected, rtol=0, atol=1e-10)
+
+
+def test_associative_scan_refuses_block_sizes_other_than_three():
+    """
+    The 9-leaf combine is written out for 3x3 only.
+
+    Slicing a 4x4 rotation down to its top-left 3x3 would still return orthogonal-looking output
+    and would not crash -- it would just be the wrong rotation. Refuse loudly instead.
+    """
+    rot = _block_rotations(torch.randn(1, 8, 1, 2, 6, dtype=torch.float64) * 0.3, 4)
+
+    with pytest.raises(ValueError, match="block_size 3"):
+        associative_cumulative_block_rotation(rot)
+
+
+def test_block_size_four_still_matches_the_chunked_product():
+    """b=4 must keep the chunked path and stay correct in *either* MAMBA3_ROTATION_SCAN_IMPL mode."""
+    torch.manual_seed(14)
+    rot = _block_rotations(torch.randn(1, 33, 1, 2, 6, dtype=torch.float64) * 0.3, 4)
+
+    torch.testing.assert_close(
+        fast_cumulative_block_rotation(rot),
+        _cumulative_block_rotation(rot, chunk_size=8),
+        rtol=0,
+        atol=1e-11,
+    )
 
 
 def test_fused_rotation_matches_two_separate_calls():

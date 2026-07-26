@@ -61,6 +61,7 @@ __all__ = [
     "mamba3_ssd_fast",
     "fast_block_rotations",
     "fast_cumulative_block_rotation",
+    "associative_cumulative_block_rotation",
 ]
 
 # Copied verbatim from `mamba3_ssd_official`; see its module docstring for the derivation of
@@ -92,6 +93,19 @@ _ROTATION_SCAN_CHUNK_ENV = "MAMBA3_ROTATION_SCAN_CHUNK"
 _ROTATION_SCAN_CHUNK_OVERRIDE: Optional[int] = (
     int(os.environ[_ROTATION_SCAN_CHUNK_ENV]) if os.environ.get(_ROTATION_SCAN_CHUNK_ENV) else None
 )
+
+# Which prefix-scan implementation the b>=3 path uses. "chunked" (default) is the hand-rolled
+# sequential-product-plus-Hillis-Steele form; "associative" routes through `torch.associative_scan`,
+# which Inductor can lower to a single fused `tl.associative_scan` Triton kernel instead of the
+# ~`chunk - 1 + log2(T / chunk)` dependent kernel launches the chunked form costs. Default stays
+# "chunked" so this is opt-in and revertible by unsetting one variable. Validated at import rather
+# than silently falling back, because a typo here would quietly cost the speedup it was set to buy.
+_ROTATION_SCAN_IMPL_ENV = "MAMBA3_ROTATION_SCAN_IMPL"
+_ROTATION_SCAN_IMPL = os.environ.get(_ROTATION_SCAN_IMPL_ENV, "chunked").strip().lower()
+if _ROTATION_SCAN_IMPL not in ("chunked", "associative"):
+    raise ValueError(
+        f"{_ROTATION_SCAN_IMPL_ENV} must be 'chunked' or 'associative', got {_ROTATION_SCAN_IMPL!r}"
+    )
 
 
 def _adaptive_scan_chunk(seq_len: int) -> int:
@@ -228,9 +242,72 @@ def fast_cumulative_block_rotation(
     """
     from .mamba3_ssd_api import _cumulative_block_rotation
 
+    # Only b == 3 has a 9-leaf pointwise form here; every other block size keeps the chunked path.
+    if _ROTATION_SCAN_IMPL == "associative" and rot.shape[-1] == 3:
+        return associative_cumulative_block_rotation(rot)
     if chunk_size is None:
         chunk_size = _adaptive_scan_chunk(rot.shape[1])
     return _cumulative_block_rotation(rot, chunk_size=chunk_size)
+
+
+def _so3_pointwise_combine(a, b):
+    """
+    Compose two rotations held as 9 elementwise tensors, returning ``b @ a``.
+
+    Nine separate leaves rather than a ``(..., 3, 3)`` tensor is what makes this *pointwise*: every
+    output is a sum of products of scalars, so ``associative_scan`` can take the ``pointwise`` path
+    and Inductor emits a real ``tl.associative_scan``. A ``(3, 3)`` matmul would force the slower
+    ``generic`` mode. ``b @ a`` (not ``a @ b``) keeps the newest rotation on the left, matching
+    ``Q_t = R_t R_{t-1} ... R_1`` -- see ``test_prefix_scan_equals_the_naive_ordered_product``.
+    """
+    a00, a01, a02, a10, a11, a12, a20, a21, a22 = a
+    b00, b01, b02, b10, b11, b12, b20, b21, b22 = b
+    return (
+        b00 * a00 + b01 * a10 + b02 * a20,
+        b00 * a01 + b01 * a11 + b02 * a21,
+        b00 * a02 + b01 * a12 + b02 * a22,
+        b10 * a00 + b11 * a10 + b12 * a20,
+        b10 * a01 + b11 * a11 + b12 * a21,
+        b10 * a02 + b11 * a12 + b12 * a22,
+        b20 * a00 + b21 * a10 + b22 * a20,
+        b20 * a01 + b21 * a11 + b22 * a21,
+        b20 * a02 + b21 * a12 + b22 * a22,
+    )
+
+
+def associative_cumulative_block_rotation(rot: torch.Tensor) -> torch.Tensor:
+    """
+    Inclusive prefix product ``Q_t = R_t R_{t-1} ... R_1`` via :func:`torch.associative_scan`.
+
+    Computes exactly what :func:`fast_cumulative_block_rotation` does, but as one tree reduction of
+    depth ``log2(T)`` that Inductor fuses into a single kernel, rather than ``chunk - 1`` dependent
+    matmuls plus ``log2(T / chunk)`` Hillis-Steele levels each round-tripping through global memory.
+    That dependency chain -- not arithmetic -- is what leaves the b=3 arm latency-bound.
+
+    ``combine_mode="pointwise"`` is the only mode Inductor lowers to ``tl.associative_scan`` and it
+    requires CUDA tensors; elsewhere (CPU tests) ``generic`` computes the same values eagerly.
+
+    :param rot: Per-step rotations of shape ``(batch, seq_len, n_groups, n_blocks, 3, 3)``.
+
+    :returns: Inclusive prefix products, same shape as ``rot``.
+    """
+    from torch._higher_order_ops.associative_scan import associative_scan
+
+    if rot.shape[-1] != 3:
+        # The combine is written out for 3x3. Silently slicing a larger block would truncate the
+        # rotation and still return plausible-looking orthogonal-ish output, so refuse instead.
+        raise ValueError(
+            f"associative_cumulative_block_rotation only supports block_size 3, "
+            f"got {rot.shape[-1]}; use the chunked path for other block sizes"
+        )
+    if rot.shape[1] == 1:
+        # A length-1 scan is the identity, and the scan op has no work to bracket.
+        return rot
+
+    leaves = tuple(rot[..., i, j].contiguous() for i in range(3) for j in range(3))
+    combine_mode = "pointwise" if rot.is_cuda else "generic"
+    scanned = associative_scan(_so3_pointwise_combine, leaves, dim=1, combine_mode=combine_mode)
+    return torch.stack(tuple(scanned), dim=-1).unflatten(-1, (3, 3))
 
 
 def _rotate_bc_fused(
