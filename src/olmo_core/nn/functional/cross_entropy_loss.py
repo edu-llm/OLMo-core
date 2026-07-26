@@ -103,7 +103,7 @@ def fused_linear_cross_entropy_loss(
     """
     if _fused_linear_cross_entropy_loss is None:
         raise RuntimeError("'fused_linear_cross_entropy_loss' requires liger-kernel")
-    ce_loss, z_loss, per_token_acc = _fused_linear_cross_entropy_loss(
+    result = _fused_linear_cross_entropy_loss(
         _input,
         weight,
         labels,
@@ -117,7 +117,12 @@ def fused_linear_cross_entropy_loss(
         compute_z_loss,
         accum_dtype,
     )
-    del per_token_acc
+    # Index rather than unpack. Liger's return arity has grown across releases -- (loss, z_loss),
+    # then + token_accuracy, then + predicted_tokens -- and nothing in pyproject.toml pins the
+    # version, so a plain `pip install liger-kernel` can hand back a wider tuple and raise
+    # "too many values to unpack". Only the first two are ever used here. The positional arguments
+    # above are stable across those releases; the arity of the result is not.
+    ce_loss, z_loss = result[0], result[1]
     if compute_z_loss:
         return ce_loss, z_loss
     else:
