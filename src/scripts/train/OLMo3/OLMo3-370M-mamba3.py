@@ -296,9 +296,9 @@ def build_config(opts, overrides):
     )
 
     # --profile: torch.profiler over steps 7-9 (wait=1, warmup=5, active=3), which then logs the top-32
-    # ops by CUDA time with source lines and writes a chrome trace to <work-dir>/profiler. This is the
-    # only reliable way to attribute the step time: the SSD dispatch is compile-disabled, so the mixer
-    # runs eager and wall-clock reasoning about which part dominates is guesswork without a trace.
+    # ops by CUDA time with source lines and writes a chrome trace to <work-dir>/profiler. Worth having
+    # because the mixer straddles the compile boundary -- the rotation preprocessing compiles, the
+    # mamba-ssm Triton kernel is held out eager -- so attributing step time by wall clock is guesswork.
     if getattr(opts, "profile", False):
         config.trainer = config.trainer.with_callback("profiler", ProfilerCallback())
 

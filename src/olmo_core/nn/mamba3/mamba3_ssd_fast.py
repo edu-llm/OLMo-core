@@ -2,7 +2,8 @@
 Performance-tuned copy of :mod:`olmo_core.nn.mamba3.mamba3_ssd_official`, specialised for the
 ``block_size >= 3`` (NC^1) configuration.
 
-:mod:`mamba3_ssd_official` is left byte-identical and remains the correctness oracle. This
+:mod:`mamba3_ssd_official` remains the correctness oracle: its math is untouched, and it differs
+only in routing its kernel call through the shared ``_mamba3_siso_combined_eager`` wrapper. This
 module calls the *same unmodified* upstream Triton kernel
 (``mamba_ssm.ops.triton.mamba3.mamba3_siso_combined``); nothing in ``mamba_ssm`` is forked.
 
