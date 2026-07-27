@@ -1,0 +1,12 @@
+# Core (local dev + cluster; torch wheel picked per-platform by pip/uv)
+torch>=2.6
+numpy>=1.26
+tiktoken>=0.7
+pyyaml>=6.0
+tqdm>=4.66
+matplotlib>=3.8
+# Data + natural benchmarks
+datasets>=2.19
+huggingface_hub>=0.23
+# Tests
+pytest>=8.0
