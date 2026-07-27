@@ -137,6 +137,8 @@ _APPROVED_ENTRYPOINTS = {
         "fixed_options": {
             "pack-dir": "/orcd/pool/edullm/data/worked-examples-metamath-v0",
             "load-path": "/orcd/pool/edullm/checkpoints/OLMo-Ladder-760M-0.5xC-core",
+            "model-factory": "olmo2_760M",
+            "run-tag": "orcd",
             "token-budget": 200_000_000,
             "seed": 0,
             "save-folder": {

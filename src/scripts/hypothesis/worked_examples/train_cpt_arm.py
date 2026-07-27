@@ -17,8 +17,8 @@ Launch (example)::
 Requires tokenized shard + label_mask from ``tokenize_arms.py``.
 Fade arms mask loss before ``loss_start_char`` via ``label_mask-00000.npy``.
 
-``--model-factory`` defaults to ``olmo3_370M`` (B200 / team baseline). Use
-``olmo2_760M`` for the ORCD Ladder CPT profile.
+``--model-factory`` defaults to ``olmo2_760M`` (ORCD / Ladder CPT). Pass
+``olmo3_370M`` explicitly for the AWS B200 pilot.
 
 W&B entity is always ``eduLLM``. Scientific metrics ``eval/pass_at_n`` /
 ``eval/pass_ratio_at_n`` are recorded by ``PassNEvalCallback`` when prediction
@@ -240,14 +240,14 @@ def parser_args():
     p.add_argument(
         "--model-factory",
         type=str,
-        default="olmo3_370M",
-        help="TransformerConfig classmethod (olmo3_370M for B200; olmo2_760M for ORCD)",
+        default="olmo2_760M",
+        help="TransformerConfig classmethod (olmo2_760M for ORCD; olmo3_370M for B200)",
     )
     p.add_argument(
         "--run-tag",
         type=str,
-        default="b200",
-        help="Extra W&B tag (e.g. b200 or orcd)",
+        default="orcd",
+        help="Extra W&B tag (e.g. orcd or b200)",
     )
     p.add_argument("--sequence-length", type=int, default=2048)
     p.add_argument("--global-batch-size", type=int, default=524288, help="Tokens")

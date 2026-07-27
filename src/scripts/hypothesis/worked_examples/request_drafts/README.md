@@ -1,25 +1,29 @@
-# Request drafts for 4 CPT arms
+# Request drafts for 4 CPT arms (MIT / ORCD)
 
-These JSON files are **templates** for `/submit-edullm-job` after operators
-allowlist `worked-examples-cpt` (see `../OPERATOR_ALLOWLIST.md`).
+Templates for `/submit-edullm-job`. **Jobs #23–#26 already exist** — prefer
+updating those Issues (Commit SHA + real manifest digest) over re-filing.
 
-**Do not submit until:**
+Profile `worked-examples-cpt` (on branch `hypothesis/we-metamath-wandb-smoke`) locks:
 
-1. Policy on `main` includes the new entrypoint  
-2. ORCD manifest path + SHA-256 are filled in  
-3. Feature-branch commit with `train_cpt_arm.py` + Pass@N metrics is pushed  
-4. `Commit SHA` in each JSON is replaced with that exact 40-char SHA  
+- 2×H100, 360 min, `torchrun --nproc-per-node=2`
+- `--model-factory=olmo2_760M`
+- `--token-budget=200000000`
+- `--pack-dir=/orcd/pool/edullm/data/worked-examples-metamath-v0`
+- `--load-path=/orcd/pool/edullm/checkpoints/OLMo-Ladder-760M-0.5xC-core`
+- W&B `eduLLM` / `pretraining`
 
-Then run (from repo root, clean tree)::
+**Operator blockers before train:**
 
-```bash
-python src/scripts/hypothesis/worked_examples/request_drafts/fill_sha.py
-# then /submit-edullm-job once per arm JSON (or use prepare_submit.py)
-```
+1. Convert Ladder HF → pool `…/OLMo-Ladder-760M-0.5xC-core`
+2. Stage HF pack with **shards + label_mask** per arm under pack-dir
+3. Write real manifest SHA-256 (Issues currently have placeholder `bbbb…`)
+4. Stamp Commit SHA to pushed tip of this branch
 
 Shared study fields:
 
 - Study: `worked-examples-faded-scaffolds`
-- Comparison: `bare-vs-complete-vs-fade_ordered-vs-fade_shuffled`
+- Comparison: `bare-vs-complete-vs-fade-ordered-vs-fade-shuffled`
 - Success metrics: `eval/pass_at_n,eval/pass_ratio_at_n`
 - W&B project: `pretraining`
+
+See `../SUBMIT.md` for the full MIT copy/paste handoff.

@@ -77,15 +77,19 @@ data/worked_examples_metamath_v0/
 
 Use `train_cpt_arm.py` with the **same** `--token-budget` and converted Ladder 760M-0.5xC init for every arm. Fade arms use `label_mask-00000.npy` (from `loss_start_char`). Holdout metrics: `holdout_passn.py` / `PassNEvalCallback` → `eval/pass_at_n`, `eval/pass_ratio_at_n`. See `run_cards/` and `OPERATOR_ALLOWLIST.md`.
 
-## B200 capacity-block pilot (AWS)
+## eduLLM / W&B / ORCD (MIT) submit
+
+See **`SUBMIT.md`** (includes MIT operator copy/paste), **`OPERATOR_ALLOWLIST.md`**,
+**`request_drafts/`**, Issues **#23–#26**.
+
+ORCD locks: **2×H100**, **200M tokens/arm**, **`olmo2_760M`**, Ladder 760M-0.5xC
+converted under `/orcd/pool/edullm/checkpoints/…`.
+
+## B200 capacity-block pilot (AWS) — separate track
 
 See **`B200_RUNBOOK.md`**, `prepare_b200.sh`, `run_arms_b200.sh`.  
-Default train entry uses `--model-factory olmo3_370M` and 50M tokens/arm for one GPU.  
-`run_arms_b200.sh` will not train unless `ALLOW_TRAIN=1`.
-
-## eduLLM / W&B / ORCD submit
-
-See **`SUBMIT.md`**, **`run_smoke_wandb.md`**, **`OPERATOR_ALLOWLIST.md`**.
+Pass `--model-factory olmo3_370M` explicitly. `run_arms_b200.sh` will not train
+unless `ALLOW_TRAIN=1`.
 
 - Metrics go to W&B entity **`eduLLM`** (projects allowlisted in policy: `test`, `pretraining`, …).
 - First engineering verify: `/submit-edullm-job` with **generic-smoke** fixture (Issue #20).

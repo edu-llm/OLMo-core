@@ -1,61 +1,90 @@
-# Submitting Worked-Examples via eduLLM ORCD
+# Submitting Worked-Examples via eduLLM ORCD (MIT)
 
-**Additive only.** This folder does not change `main` or `config/edullm/policy.yaml`.
+**Additive only.** This folder does not change `main` unsupervised — the
+`worked-examples-cpt` profile lives on branch
+`hypothesis/we-metamath-wandb-smoke` (and must be the **Commit SHA** on the job
+Issue so the operator runs that tree).
 
-## What is already approved for `/submit-edullm-job`
+## MIT operator handoff (copy/paste)
 
-Policy today allows these entrypoint profiles:
+```text
+Please run Worked Examples + Faded Scaffolds (4 CPT arms) on ORCD.
 
-| Profile | Script | Data | Use for |
-|---------|--------|------|---------|
-| `generic-smoke` | `src/examples/llm/train.py` | `builtin://generic-smoke-v1` | Engineering smoke (W&B + ORCD path check) |
-| `hypothesis-smoke` | `src/scripts/train/smoketests/OLMo2-190M-hypothesis-smoke.py` | skill-dag / curriculum manifests | Skill-DAG / curriculum only |
+Already filed (eduLLM jobs) — please execute / unstick:
+  #23 bare       (status:ready)
+  #24 complete   (status:ready)
+  #25 fade_ordered (status:assigned)
+  #26 fade_shuffled (status:assigned)
+Allowlist ask: #21
 
-**MetaMath / worked-examples CPT is not yet a policy entrypoint.**  
-Do not invent a new profile. Ask operators before changing `policy.py`.
+Use commit on branch hypothesis/we-metamath-wandb-smoke (update Issue Commit SHA
+to the tip that includes train_cpt_arm + worked-examples-cpt profile).
 
-### Recommended first submit (engineering)
+Profile (locked by policy on that commit):
+  worked-examples-cpt
+  script: src/scripts/hypothesis/worked_examples/train_cpt_arm.py
+  2×H100, 360 min, torchrun --nproc-per-node=2
+  model: olmo2_760M
+  load-path: /orcd/pool/edullm/checkpoints/OLMo-Ladder-760M-0.5xC-core
+  pack-dir: /orcd/pool/edullm/data/worked-examples-metamath-v0
+  token-budget: 200000000 (matched across arms)
+  W&B: entity eduLLM / project pretraining / group = study name
 
-Use the **generic-smoke** fixture so the queue + W&B `eduLLM/test` path is verified:
+Before launch, operators must stage:
+1) Convert HF → OLMo-core Ladder ckpt:
+   python src/examples/huggingface/convert_checkpoint_from_hf.py \
+     -i allenai/OLMo-Ladder-760M-0.5xC -m olmo2_760m -t dolma2 \
+     -o /orcd/pool/edullm/checkpoints/OLMo-Ladder-760M-0.5xC-core
+2) Pool copy of HF pack https://huggingface.co/datasets/hiyasvyas/worked-examples-metamath-v0
+   For each arm bare|complete|fade_ordered|fade_shuffled:
+     tokenized/<arm>/shard-00000.npy
+     tokenized/<arm>/label_mask-00000.npy   # required for fade loss mask
+   Plus eval/holdout_bare.jsonl
+   If masks missing: run tokenize_arms.py --pack-dir <pool> --tokenizer dolma2
+3) Manifest /orcd/pool/edullm/manifests/worked-examples-metamath-v0.json
+   Replace the placeholder digest on Issues #23–#26 (currently all "b"s) with the
+   real SHA-256 of that manifest.
 
-- W&B entity: `eduLLM` (fixed by policy)
-- W&B project: `test`
-- Metrics emitted by `src/examples/llm/train.py` + `WandBCallback` include
-  `train/CE loss` (and related train/optim metrics such as throughput / LR groups)
-- GPUs: 1× L40S, 30 minutes (fixture)
+Success metrics: finite train/PPL + eval/pass_at_n + eval/pass_ratio_at_n
+(on unscaffolded holdout_bare; generation/Pass@N may be post-train if not wired live).
 
-Then invoke `/submit-edullm-job` from a **clean**, **pushed** feature branch (not `main`).
+Do NOT use 4×H100 (policy max_gpu_count=2).
+Do NOT use generic-smoke for this study.
+Do NOT use the AWS 370M / B200 path for these Issues.
+```
 
-## Scientific CPT (needs operator allowlist — do not invent policy)
+## What is locked in `worked-examples-cpt`
 
 | Item | Value |
 |------|--------|
-| Train script | `train_cpt_arm.py` (this folder) |
-| Data (HF) | https://huggingface.co/datasets/hiyasvyas/worked-examples-metamath-v0 |
-| Train shards | `tokenized/{arm}/shard-00000.npy` + `label_mask-00000.npy` |
-| Eval | `eval/holdout_bare.jsonl` → `eval/pass_at_n`, `eval/pass_ratio_at_n` |
-| Base ckpt | https://huggingface.co/allenai/OLMo-Ladder-760M-0.5xC (convert via HF→core) |
-| Arms | 4 matched-token-budget CPT jobs |
-| Fade | `label_mask` from `loss_start_char` (re-tokenize after pull) |
-| Operator ask | **`OPERATOR_ALLOWLIST.md`** |
-| Request drafts | `request_drafts/arm_*.json` (stamp SHA with `fill_sha.py`) |
+| GPUs | **2× H100** |
+| Token budget | **200M** / arm |
+| Model | **olmo2_760M** (`--model-factory`) |
+| Init | converted Ladder **760M-0.5xC** at pool path above |
+| Pack | pool MetaMath WE pack + **label_mask** per arm |
+| W&B | `eduLLM` / `pretraining` |
 
-Until operators add `worked-examples-cpt` on `main` and publish an `/orcd/pool/...` manifest, `/submit-edullm-job` will reject scientific Issues. Do **not** reuse `generic-smoke` for this study.
+## Scientific Issues
+
+| Arm | Issue |
+|-----|--------|
+| bare | #23 |
+| complete | #24 |
+| fade_ordered | #25 |
+| fade_shuffled | #26 |
 
 ## Local W&B env (never commit secrets)
 
 ```bash
-# On Engaging / operator machine — see src/scripts/orcd/wandb.env.example
 export WANDB_API_KEY="$(cat "$HOME/.config/edullm/wandb.key")"
 export WANDB_ENTITY="eduLLM"
-export WANDB_PROJECT="test"
-export WANDB_GROUP="worked-examples"
+export WANDB_PROJECT="pretraining"
 ```
 
-## Branch hygiene for submit gate
+## Branch hygiene
 
 ```bash
-git status --porcelain   # must be empty
-# branch != main
-# HEAD must be pushed to edu-llm/OLMo-core
+git status --porcelain   # clean before asking for a new Commit SHA stamp
+# branch = hypothesis/we-metamath-wandb-smoke (not main)
+# HEAD pushed to edu-llm/OLMo-core
 ```

@@ -232,6 +232,8 @@ def test_worked_examples_cpt_renders_locked_science_inputs(valid_resolved_reques
         f"--arm={arm}",
         "--pack-dir=/orcd/pool/edullm/data/worked-examples-metamath-v0",
         "--load-path=/orcd/pool/edullm/checkpoints/OLMo-Ladder-760M-0.5xC-core",
+        "--model-factory=olmo2_760M",
+        "--run-tag=orcd",
         "--token-budget=200000000",
         "--seed=0",
         "--wandb-project=pretraining",
