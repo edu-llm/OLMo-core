@@ -225,11 +225,11 @@ class Mamba3Config(TransformerConfig):
             ``MAMBA3_ROTATION_SCAN_IMPL``. Setting it here is what records the choice in the
             saved config; left in the environment alone it is invisible to the checkpoint and a
             resume that loses the export silently drops to ``chunked``.
-        :param theta_max: Bound on the per-step rotation angle, applied only when
-            ``rotation_block_size >= 3`` (see
+        :param theta_max: Bound on the per-step rotation angle, applied at every
+            ``rotation_block_size`` (see
             :attr:`~olmo_core.nn.mamba3.mixer.Mamba3MixerConfig.theta_max`). ``None`` leaves it
-            unbounded. Set to about ``1/sqrt(sequence_length)`` so the non-abelian random walk's
-            mixing time stays past the sequence length.
+            unbounded. Set to about ``1/sqrt(sequence_length)`` so the random walk's mixing time
+            stays past the sequence length.
         :param block_pattern: Override the repeating block pattern. Pass ``["mamba3"]`` for a
             pure Mamba-3 stack; the default hybrid's attention layers can memorize short
             sequences and confound state-tracking evaluations.

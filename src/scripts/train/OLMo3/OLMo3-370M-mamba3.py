@@ -294,15 +294,7 @@ def build_config(opts, overrides):
         d_state,
         opts.rotation_scan_impl
         or f"{resolve_rotation_scan_impl(None)} (from MAMBA3_ROTATION_SCAN_IMPL / default)",
-        # Report whether the bound is actually live, not just what was typed: it is a no-op at
-        # b == 2 by design, and an unbounded b >= 3 run is the ~72-token-horizon failure.
-        "unbounded"
-        if opts.theta_max is None
-        else (
-            f"{opts.theta_max} (inactive at b=2)"
-            if opts.rotation_block_size < 3
-            else f"{opts.theta_max}"
-        ),
+        "unbounded" if opts.theta_max is None else f"{opts.theta_max}",
         # Init-only, but decisive: it sets the spread of per-head decay horizons, and the preset's
         # 0.1 leaves only ~1% of heads under a 100-token horizon (median 1507) -- an SSM that
         # averages the document instead of tracking recent tokens, which reads as a unigram model.
@@ -440,11 +432,10 @@ def parse_args(argv=None):
             f"{resolve_rotation_scan_impl(None)} from MAMBA3_ROTATION_SCAN_IMPL). Recorded in the "
             f"saved config and the startup log; the env var is not.\n"
             f"  --theta-max FLOAT          Bound the per-step rotation angle as "
-            f"theta_max*tanh(theta/theta_max). Applies ONLY at b>=3, where the cumulative "
-            f"rotation is a random walk on a non-abelian group that mixes to Haar in "
-            f"~1/||theta||^2 steps and destroys the state channel; unbounded, the default init "
-            f"gives a ~72-token memory horizon at seq 4096. Use ~1/sqrt(seq_len) (~0.015 at "
-            f"4096). No-op at b=2 (RoPE), so both arms can pass it. Default: unset.\n"
+            f"theta_max*tanh(theta/theta_max), at every b. The cumulative rotation is a random "
+            f"walk on a compact group that mixes to its Haar measure in ~1/||theta||^2 steps and "
+            f"destroys the state channel; unbounded, the default init gives a ~72-token memory "
+            f"horizon at seq 4096. Use ~1/sqrt(seq_len) (~0.015 at 4096). Default: unset.\n"
             f"  --a-log-init-max FLOAT     Upper bound of the A_log init distribution, which sets "
             f"the spread of per-head decay horizons. The preset's 0.1 leaves only ~1% of heads "
             f"under a 100-token horizon (median 1507 at seq 4096), i.e. no fast heads and no "

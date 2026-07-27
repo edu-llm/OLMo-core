@@ -398,8 +398,8 @@ class Mamba3Mixer(SequenceMixer):
         theta = self.theta_proj(x).view(
             batch, seq_len, G, self.n_rotation_blocks, self.angles_per_block
         )
-        if self.theta_max is not None and self.rotation_block_size >= 3:
-            # Bound the per-step rotation angle, because at b >= 3 an unbounded one silently
+        if self.theta_max is not None:
+            # Bound the per-step rotation angle, because an unbounded one silently
             # destroys the state channel it exists to carry. The cumulative rotation
             # Q_t Q_s^T = R_t ... R_{s+1} is a random walk on the *non-abelian* SO(b), which mixes
             # to Haar measure in ~1/||theta||^2 steps; past that, C_t^T (R_t ... R_{s+1}) B_s
@@ -415,10 +415,11 @@ class Mamba3Mixer(SequenceMixer):
             # smoothly, keeping the gradient finite everywhere -- a hard clamp would zero the
             # gradient for every angle that needed correcting most.
             #
-            # b == 2 is deliberately exempt. There the rotation is a 2-D rotation by a cumulative
-            # *scalar* angle, i.e. RoPE: phase wrapping is periodic and information-preserving,
-            # there is no Haar measure to mix into, and bounding it would only remove usable
-            # frequency range.
+            # b == 2 is bounded on the same grounds, despite its walk being abelian. A cumulative
+            # scalar angle still diffuses: E[cos(sum theta)] = prod E[cos theta_u] decays
+            # geometrically in the gap, so the 2-D phase relaxes to the uniform measure on the
+            # circle exactly as the SO(b >= 3) walk mixes to Haar. Periodicity bounds the rotation
+            # matrix, not the information it carries across a gap.
             theta = self.theta_max * torch.tanh(theta / self.theta_max)
         A = -torch.exp(self.A_log.float())  # (H,), < 0
 
@@ -679,8 +680,8 @@ class Mamba3MixerConfig(SequenceMixerConfig[Mamba3Mixer]):
     theta_max: Optional[float] = None
     """
     Upper bound on the per-step rotation angle, applied as ``theta_max * tanh(theta / theta_max)``
-    and **only when** ``rotation_block_size >= 3``. ``None`` (the default) leaves ``theta``
-    unbounded, which is the historical behaviour.
+    at every ``rotation_block_size``. ``None`` (the default) leaves ``theta`` unbounded, which is
+    the historical behaviour.
 
     At ``b >= 3`` the cumulative rotation is a random walk on a non-abelian group and mixes to Haar
     measure in ``~1/||theta||^2`` steps, after which the state channel carries nothing. Measured at
