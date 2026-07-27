@@ -46,6 +46,10 @@ Or you can install from PyPI with:
 pip install ai2-olmo-core
 ```
 
+## EduLLM P7 — The Tutor Layer (forgetting / KL POC)
+
+The P7 "Rosenshine at the Interface" work is in [`p7/POC/`](p7/POC/): turning an instruction-following model into a step-level Socratic tutor via prompting (Impl 1) and SI-conditioned SFT (Impl 2), plus the KL↔forgetting proof-of-concept motivating low-KL/forgetting-aware SFT (Impl 2.5). It contains the SFT data-prep + training (`socrateach_sft/`, `ORCD-SFT/`), the 2×2 eval suite (`llm_judge/` pedagogy, `math_eval/` old-task retention, `general_eval/` instruction-following, `tutor-eval-suite/`), and the KL analysis (`kl_analysis/`, `curve_run/`). Headline POC result: across SFT checkpoints, old-task (math) forgetting tracks new-task forward KL with Pearson r ≈ −0.94. See [`p7/POC/README.md`](p7/POC/README.md) and [`p7/POC/p7_PRD.md`](p7/POC/p7_PRD.md).
+
 There are a number of optional dependencies that must be installed to use certain functionality as well, including:
 
 - [flash-attn](https://github.com/Dao-AILab/flash-attention), [ring-flash-attn](https://github.com/zhuzilin/ring-flash-attention), and [TransformerEngine](https://github.com/NVIDIA/TransformerEngine) for the corresponding attention backends.
