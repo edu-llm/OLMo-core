@@ -134,3 +134,52 @@ def test_explicit_flags_override_the_mamba_defaults(script):
     )
     assert opts.rotation_block_size == 2
     assert opts.fp8 == "off"
+
+
+# ------------------------------------------------------------------------------------------
+# --rotation-scan-impl
+#
+# The scan used to be selectable only through MAMBA3_ROTATION_SCAN_IMPL, read once at import in
+# `mamba3_ssd_fast`. It therefore never entered the saved config and was never logged, and a
+# relaunch in a shell that lost the export silently fell back to `chunked` -- 33,468 tok/s against
+# `quaternion`'s 75,040, with nothing raising. These pin the flag that replaces it.
+# ------------------------------------------------------------------------------------------
+
+
+def test_rotation_scan_impl_defaults_to_unset(script):
+    """Unset must stay unset rather than being resolved here, so the env var still decides."""
+    opts, _ = script.parse_args(["my-run", "--dry-run"])
+    assert opts.rotation_scan_impl is None
+
+
+@pytest.mark.parametrize("form", ["space", "equals"])
+def test_rotation_scan_impl_reaches_the_built_model_config(script, form: str):
+    """
+    End to end: the flag has to arrive on the Mamba block's mixer config, which is the object
+    that gets serialized into the checkpoint.
+    """
+    flag = (
+        ["--rotation-scan-impl", "quaternion"]
+        if form == "space"
+        else ["--rotation-scan-impl=quaternion"]
+    )
+    opts, _ = script.parse_args(["my-run", "--dry-run", *flag])
+    assert opts.rotation_scan_impl == "quaternion"
+
+    model_config, _ = script.build_mamba_model_config(opts)
+    assert script._rotation_scan_impl_of(model_config) == "quaternion"
+
+
+def test_rotation_scan_impl_is_normalised(script):
+    """Hand-typed on a command line, so case and stray whitespace must not change the meaning."""
+    opts, _ = script.parse_args(["my-run", "--dry-run", "--rotation-scan-impl", " Chunked "])
+    assert opts.rotation_scan_impl == "chunked"
+
+
+def test_rotation_scan_impl_rejects_a_typo_before_anything_is_built(script):
+    """
+    A typo must not be read as "keep the environment default". That is the exact failure this
+    flag exists to prevent, so silently accepting it would be worse than not having the flag.
+    """
+    with pytest.raises(SystemExit, match="quaternion"):
+        script.parse_args(["my-run", "--dry-run", "--rotation-scan-impl", "quarternion"])

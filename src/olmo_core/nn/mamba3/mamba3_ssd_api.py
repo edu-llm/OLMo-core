@@ -397,6 +397,7 @@ def dispatch_mamba3_ssd(
     chunk_size: int = 256,
     prefer_official_kernel: Optional[bool] = None,
     prefer_fast_rotation: bool = True,
+    rotation_scan_impl: Optional[str] = None,
 ) -> torch.Tensor:
     """
     Run the Mamba-3 SSD recurrence, preferring the fastest form that fits the call.
@@ -426,6 +427,15 @@ def dispatch_mamba3_ssd(
         upstream kernel but computes the ``SO(b)`` rotation with a closed form at ``b == 3`` and
         a shorter prefix-product scan. Set ``False`` to reach ``mamba3_ssd_official`` unchanged,
         which is what the parity tests compare against.
+    :param rotation_scan_impl: Which of
+        :data:`~olmo_core.nn.mamba3.mamba3_ssd_fast.ROTATION_SCAN_IMPLS` computes the ``b >= 3``
+        prefix product on the fast-rotation path; ``None`` (the default) takes the
+        ``MAMBA3_ROTATION_SCAN_IMPL`` default. It reaches only ``mamba3_ssd_fast`` -- the
+        official and chunked backends have their own scan and ignore this argument, so a caller
+        that sets it *and* passes ``prefer_fast_rotation=False``, or that lands on the chunked
+        fallback, gets the default scan regardless. That is stated rather than enforced because
+        the argument is a preference like ``prefer_fast_kernel``; raising would make a config
+        field that is harmless on the reference path fatal on it.
     """
     if not prefer_fast_kernel:
         return mamba3_ssd_reference(
@@ -461,6 +471,7 @@ def dispatch_mamba3_ssd(
                     theta,
                     heads_per_group=heads_per_group,
                     block_size=block_size,
+                    rotation_scan_impl=rotation_scan_impl,
                 )
 
             from .mamba3_ssd_official import mamba3_ssd_official

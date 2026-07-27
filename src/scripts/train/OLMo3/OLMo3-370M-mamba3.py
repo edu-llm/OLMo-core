@@ -40,7 +40,11 @@ touches the mixer and so is safe with the fast official kernel; whole-block AC (
 ``MAMBA3_ACTIVATION_CHECKPOINTING`` escape hatch / ``full`` mode) wraps the mixer too and is
 incompatible with the official kernel's ``autograd.Function``, so it must use the chunked path. The
 b>=3 rotation is served by the sequence-length-adaptive prefix-scan in ``mamba3_ssd_fast`` (the
-dispatch selects it automatically for the fast path).
+dispatch selects it automatically for the fast path); ``--rotation-scan-impl`` picks *which* scan,
+and unlike the ``MAMBA3_ROTATION_SCAN_IMPL`` environment variable it also defaults to, the flag is
+recorded in the saved config and the startup banner. That matters on resume: the environment-only
+form fell back to ``chunked`` whenever a relaunch forgot the export, which is 33,468 tok/s against
+``quaternion``'s 75,040 and raises nothing.
 
 Learning rate: the dense builder sets the ladder LR from the model's parameter count. Because the
 two ablation arms have slightly different parameter counts (b=3 carries a wider angle projection
@@ -62,6 +66,7 @@ import importlib.util
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 import rich
 
@@ -74,6 +79,10 @@ from olmo_core.nn.mamba3 import (
     Mamba3Config,
     admissible_block_sizes,
     mamba3_modules_to_ignore_for_fp8,
+)
+from olmo_core.nn.mamba3.mamba3_ssd_fast import (
+    ROTATION_SCAN_IMPLS,
+    resolve_rotation_scan_impl,
 )
 from olmo_core.nn.transformer import TransformerActivationCheckpointingMode
 from olmo_core.train.callbacks import ProfilerCallback
@@ -166,6 +175,20 @@ def _rotation_block_size_of(model_config: Mamba3Config) -> int:
     return blocks["mamba3"].sequence_mixer.rotation_block_size
 
 
+def _theta_max_of(model_config: Mamba3Config) -> Optional[float]:
+    """Read the rotation-angle bound back out of a built hybrid config."""
+    blocks = model_config.block
+    assert isinstance(blocks, dict), "hybrid Mamba-3 configs use named blocks"
+    return blocks["mamba3"].sequence_mixer.theta_max
+
+
+def _rotation_scan_impl_of(model_config: Mamba3Config) -> Optional[str]:
+    """Read the rotation scan implementation back out of a built hybrid config."""
+    blocks = model_config.block
+    assert isinstance(blocks, dict), "hybrid Mamba-3 configs use named blocks"
+    return blocks["mamba3"].sequence_mixer.rotation_scan_impl
+
+
 def build_mamba_model_config(opts):
     """
     Build the Mamba-3 hybrid model config from this script's own options.
@@ -198,6 +221,10 @@ def build_mamba_model_config(opts):
     kwargs = {"rotation_block_size": opts.rotation_block_size}
     if opts.d_state is not None:
         kwargs["d_state"] = opts.d_state
+    if opts.rotation_scan_impl is not None:
+        kwargs["rotation_scan_impl"] = opts.rotation_scan_impl
+    if opts.theta_max is not None:
+        kwargs["theta_max"] = opts.theta_max
     if opts.attn_backend is not None:
         kwargs["attn_backend"] = AttentionBackendName(opts.attn_backend)
 
@@ -211,6 +238,25 @@ def build_mamba_model_config(opts):
         raise RuntimeError(
             f"rotation_block_size did not reach the Mamba-3 blocks: asked for "
             f"{opts.rotation_block_size}, built {built}"
+        )
+
+    # Same guard for the scan: a --rotation-scan-impl that never reaches the mixer leaves the run
+    # on whatever MAMBA3_ROTATION_SCAN_IMPL happens to say, which is 2.2x slower when that is the
+    # `chunked` default (33,468 vs 75,040 tok/s) and reports nothing.
+    built_scan = _rotation_scan_impl_of(model_config)
+    if built_scan != opts.rotation_scan_impl:
+        raise RuntimeError(
+            f"rotation_scan_impl did not reach the Mamba-3 blocks: asked for "
+            f"{opts.rotation_scan_impl!r}, built {built_scan!r}"
+        )
+
+    # And for the angle bound. Without it a b >= 3 arm has a ~72-token memory horizon on a
+    # 4096-token sequence, which looks like ordinary slow convergence rather than a broken run.
+    built_theta_max = _theta_max_of(model_config)
+    if built_theta_max != opts.theta_max:
+        raise RuntimeError(
+            f"theta_max did not reach the Mamba-3 blocks: asked for "
+            f"{opts.theta_max!r}, built {built_theta_max!r}"
         )
     return model_config, d_state
 
@@ -235,11 +281,26 @@ def build_config(opts, overrides):
     if opts.lr is None:
         config.train_module.optim.lr = dolma2.ladder_lr(model_config.num_non_embedding_params)
 
+    # The scan is logged *resolved*, not as it was typed: an unset flag still runs a specific
+    # implementation, and "which scan did this run use" is exactly the question the environment-only
+    # version left unanswerable after the fact.
     log.info(
-        "Mamba-3 arm: rotation_block_size=%d (%s), d_state=%d, lr=%.3e",
+        "Mamba-3 arm: rotation_block_size=%d (%s), d_state=%d, rotation_scan_impl=%s, "
+        "theta_max=%s, lr=%.3e",
         opts.rotation_block_size,
         "TC^0 baseline" if opts.rotation_block_size == 2 else "NC^1 (non-solvable)",
         d_state,
+        opts.rotation_scan_impl
+        or f"{resolve_rotation_scan_impl(None)} (from MAMBA3_ROTATION_SCAN_IMPL / default)",
+        # Report whether the bound is actually live, not just what was typed: it is a no-op at
+        # b == 2 by design, and an unbounded b >= 3 run is the ~72-token-horizon failure.
+        "unbounded"
+        if opts.theta_max is None
+        else (
+            f"{opts.theta_max} (inactive at b=2)"
+            if opts.rotation_block_size < 3
+            else f"{opts.theta_max}"
+        ),
         config.train_module.optim.lr,
     )
 
@@ -347,13 +408,14 @@ def parse_args(argv=None):
     """
     Parse args by delegating to the dense script, with the Mamba-3 options handled here.
 
-    ``--fp8``, ``--model-factory``, ``--rotation-block-size`` and ``--d-state`` are consumed here
-    and kept away from the dense parser (which, being the pristine dense script, does not know the
-    Mamba factories or the block-size flag). ``--rank-microbatch-size`` is injected as a default but
-    left for the dense parser to validate. Everything else is the dense script's argparse.
+    ``--fp8``, ``--model-factory``, ``--rotation-block-size``, ``--d-state`` and
+    ``--rotation-scan-impl`` are consumed here and kept away from the dense parser (which, being
+    the pristine dense script, does not know the Mamba factories or the block-size flag).
+    ``--rank-microbatch-size`` is injected as a default but left for the dense parser to validate.
+    Everything else is the dense script's argparse.
 
     :returns: ``(opts, overrides)`` with ``opts.fp8`` / ``opts.model_factory`` /
-        ``opts.rotation_block_size`` / ``opts.d_state`` set.
+        ``opts.rotation_block_size`` / ``opts.d_state`` / ``opts.rotation_scan_impl`` set.
     """
     argv = list(sys.argv[1:] if argv is None else argv)
 
@@ -367,6 +429,16 @@ def parse_args(argv=None):
             f"(default: {DEFAULT_ROTATION_BLOCK_SIZE})\n"
             f"  --d-state N                SSM state size (default: {DEFAULT_D_STATE}; admits b in "
             f"{admissible_block_sizes(DEFAULT_D_STATE)})\n"
+            f"  --rotation-scan-impl NAME  b>=3 prefix scan, one of "
+            f"{{{'|'.join(ROTATION_SCAN_IMPLS)}}} (default: unset, i.e. "
+            f"{resolve_rotation_scan_impl(None)} from MAMBA3_ROTATION_SCAN_IMPL). Recorded in the "
+            f"saved config and the startup log; the env var is not.\n"
+            f"  --theta-max FLOAT          Bound the per-step rotation angle as "
+            f"theta_max*tanh(theta/theta_max). Applies ONLY at b>=3, where the cumulative "
+            f"rotation is a random walk on a non-abelian group that mixes to Haar in "
+            f"~1/||theta||^2 steps and destroys the state channel; unbounded, the default init "
+            f"gives a ~72-token memory horizon at seq 4096. Use ~1/sqrt(seq_len) (~0.015 at "
+            f"4096). No-op at b=2 (RoPE), so both arms can pass it. Default: unset.\n"
             f"  --fp8 {{{'|'.join(FP8_RECIPES)}}}  fp8 recipe (default: {DEFAULT_FP8_RECIPE}); SSM "
             f"projections stay high-precision\n"
             f"  --activation-checkpointing  recompute MLPs in backward (blocks.*.feed_forward); "
@@ -383,6 +455,8 @@ def parse_args(argv=None):
     factory, argv = _pop_opt(argv, "--model-factory", DEFAULT_MODEL_FACTORY)
     block_size_str, argv = _pop_opt(argv, "--rotation-block-size", None)
     d_state_str, argv = _pop_opt(argv, "--d-state", None)
+    rotation_scan_impl, argv = _pop_opt(argv, "--rotation-scan-impl", None)
+    theta_max_str, argv = _pop_opt(argv, "--theta-max", None)
     ac_enabled, argv = _pop_flag(argv, "--activation-checkpointing")
     fused_ce, argv = _pop_flag(argv, "--fused-ce")
     profile, argv = _pop_flag(argv, "--profile")
@@ -407,6 +481,15 @@ def parse_args(argv=None):
         except ValueError:
             raise SystemExit(f"--d-state must be an integer, got {d_state_str!r}")
 
+    # Rejected here as well as in the mixer so a typo costs a one-line CLI error instead of a
+    # traceback out of the model build, and so `--rotation-scan-impl quarternion` can never be
+    # mistaken for a request to keep the environment's default.
+    if rotation_scan_impl is not None:
+        try:
+            rotation_scan_impl = resolve_rotation_scan_impl(rotation_scan_impl)
+        except ValueError as e:
+            raise SystemExit(f"--rotation-scan-impl: {e}")
+
     if not _has_flag(argv, "--rank-microbatch-size"):
         argv += ["--rank-microbatch-size", str(DEFAULT_RANK_MICROBATCH_SIZE)]
 
@@ -424,6 +507,16 @@ def parse_args(argv=None):
     opts.mamba_factory = factory
     opts.rotation_block_size = rotation_block_size
     opts.d_state = d_state
+    opts.rotation_scan_impl = rotation_scan_impl
+    if theta_max_str is None:
+        opts.theta_max = None
+    else:
+        try:
+            opts.theta_max = float(theta_max_str)
+        except ValueError:
+            raise SystemExit(f"--theta-max must be a float, got {theta_max_str!r}")
+        if opts.theta_max <= 0:
+            raise SystemExit(f"--theta-max must be positive, got {opts.theta_max}")
     opts.activation_checkpointing = ac_enabled
     opts.fused_ce = fused_ce
     opts.profile = profile

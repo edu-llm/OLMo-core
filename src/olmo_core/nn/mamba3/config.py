@@ -179,6 +179,8 @@ class Mamba3Config(TransformerConfig):
         rotation_block_size: int = 2,
         a_log_init_max: float = 16.0,
         prefer_official_kernel: Optional[bool] = None,
+        rotation_scan_impl: Optional[str] = None,
+        theta_max: Optional[float] = None,
         block_pattern: Optional[list[str]] = None,
         block_name: Mamba3BlockType = Mamba3BlockType.reordered_norm,
         use_rope: bool = False,
@@ -217,6 +219,17 @@ class Mamba3Config(TransformerConfig):
             the paper's abelian complex diagonal; ``b >= 3`` is non-solvable). Must be one of
             :func:`~olmo_core.nn.mamba3.admissible_block_sizes` for the chosen ``d_state``.
         :param a_log_init_max: Upper bound of the ``A_log`` init distribution.
+        :param rotation_scan_impl: Which of
+            :data:`~olmo_core.nn.mamba3.mamba3_ssd_fast.ROTATION_SCAN_IMPLS` computes the
+            ``b >= 3`` prefix product, or ``None`` (the default) to defer to
+            ``MAMBA3_ROTATION_SCAN_IMPL``. Setting it here is what records the choice in the
+            saved config; left in the environment alone it is invisible to the checkpoint and a
+            resume that loses the export silently drops to ``chunked``.
+        :param theta_max: Bound on the per-step rotation angle, applied only when
+            ``rotation_block_size >= 3`` (see
+            :attr:`~olmo_core.nn.mamba3.mixer.Mamba3MixerConfig.theta_max`). ``None`` leaves it
+            unbounded. Set to about ``1/sqrt(sequence_length)`` so the non-abelian random walk's
+            mixing time stays past the sequence length.
         :param block_pattern: Override the repeating block pattern. Pass ``["mamba3"]`` for a
             pure Mamba-3 stack; the default hybrid's attention layers can memorize short
             sequences and confound state-tracking evaluations.
@@ -251,6 +264,8 @@ class Mamba3Config(TransformerConfig):
                 norm_eps=layer_norm_eps,
                 a_log_init_max=a_log_init_max,
                 prefer_official_kernel=prefer_official_kernel,
+                rotation_scan_impl=rotation_scan_impl,
+                theta_max=theta_max,
                 dtype=dtype,
             ),
             feed_forward=FeedForwardConfig(hidden_size=intermediate_size, bias=False, dtype=dtype),

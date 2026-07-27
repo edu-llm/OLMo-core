@@ -659,3 +659,74 @@ def test_mamba3_mixer_fwd_bwd_cuda_bf16():
         assert torch.isfinite(p.grad).all(), f"non-finite grad for {name}"
 
     torch.testing.assert_close(y_bf16.float(), y_fp32, rtol=1.6e-2, atol=5e-3)
+
+
+# ---------------------------------------------------------------------------------------
+# rotation_scan_impl reaches the kernel from the config
+#
+# The scan choice used to live only in `MAMBA3_ROTATION_SCAN_IMPL`, read once at import. It never
+# entered the saved config and was never logged, so a resumed run that lost the export silently
+# trained 2.2x slower with no error. These tests pin the config field that replaces it -- the same
+# shape of guard the ablation already has for `rotation_block_size`.
+# ---------------------------------------------------------------------------------------
+
+
+def test_rotation_scan_impl_defaults_to_none():
+    """``None`` keeps the historical behaviour: defer to the environment."""
+    assert Mamba3MixerConfig(n_heads=2).rotation_scan_impl is None
+    assert _tiny_mixer().rotation_scan_impl is None
+
+
+def test_rotation_scan_impl_reaches_the_built_mixer():
+    config = Mamba3MixerConfig(
+        n_heads=2,
+        head_dim=8,
+        d_state=9,
+        n_groups=1,
+        mimo_rank=1,
+        rotation_block_size=3,
+        rotation_scan_impl="quaternion",
+    )
+    module = config.build(32, layer_idx=0, n_layers=2, init_device="meta")
+    assert module.rotation_scan_impl == "quaternion"
+
+
+def test_rotation_scan_impl_is_validated_at_build():
+    """
+    Fail at config time, not on the first forward. A typo that survives to the training loop costs
+    a compile warmup and a GPU-hour before anyone notices the throughput is wrong.
+    """
+    config = Mamba3MixerConfig(n_heads=2, head_dim=8, d_state=8, rotation_scan_impl="quarternion")
+    with pytest.raises((ValueError, OLMoConfigurationError), match="quaternion"):
+        config.build(32, layer_idx=0, n_layers=2, init_device="meta")
+
+
+def test_mixer_forwards_rotation_scan_impl_to_the_dispatcher(monkeypatch):
+    """
+    The value has to arrive at ``dispatch_mamba3_ssd``. Everything upstream of that call is
+    bookkeeping; this is the assertion that the plumbing is connected end to end.
+    """
+    import olmo_core.nn.mamba3.mixer as mixer_mod
+
+    seen: dict = {}
+    real = mixer_mod.dispatch_mamba3_ssd
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(mixer_mod, "dispatch_mamba3_ssd", spy)
+
+    config = Mamba3MixerConfig(
+        n_heads=2,
+        head_dim=8,
+        d_state=8,
+        n_groups=1,
+        mimo_rank=2,
+        rotation_scan_impl="chunked",
+    )
+    module = config.build(32, layer_idx=0, n_layers=2, init_device="cpu")
+    module.init_weights(init_method=InitMethod.normal, d_model=32, block_idx=0, num_blocks=2)
+    module(torch.randn(1, 8, 32))
+
+    assert seen.get("rotation_scan_impl") == "chunked"

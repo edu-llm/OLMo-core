@@ -22,6 +22,7 @@ from olmo_core.nn.mamba3.mamba3_ssd_api import (
 )
 from olmo_core.nn.mamba3.mamba3_ssd_fast import (
     _ROTATION_SCAN_IMPL,
+    ROTATION_SCAN_IMPLS,
     _adaptive_scan_chunk,
     _angles_to_quaternion,
     _fast_rotate_bc_pair,
@@ -38,6 +39,7 @@ from olmo_core.nn.mamba3.mamba3_ssd_fast import (
     fast_mamba3_is_available,
     mamba3_ssd_fast,
     quaternion_cumulative_block_rotation,
+    resolve_rotation_scan_impl,
 )
 from olmo_core.nn.mamba3.mamba3_ssd_official import mamba3_ssd_official
 from olmo_core.testing import requires_gpu
@@ -1135,3 +1137,139 @@ def test_dispatch_can_still_reach_the_untouched_official_path():
     )
     direct = mamba3_ssd_official(**kwargs, heads_per_group=4, block_size=3)
     assert torch.equal(dispatched, direct), "prefer_fast_rotation=False did not reach official"
+
+
+# ---------------------------------------------------------------------------------------
+# Explicit scan-implementation selection (CPU)
+#
+# The scan implementation used to be readable only from `MAMBA3_ROTATION_SCAN_IMPL`, resolved once
+# at import. That made the choice invisible to the saved config and to the log, and silently
+# reverted to `chunked` on any relaunch that forgot the export -- a 2.2x throughput loss with no
+# error. These tests pin the explicit parameter that replaces it; the environment variable survives
+# only as the default when nothing is passed.
+# ---------------------------------------------------------------------------------------
+
+
+def test_resolve_rotation_scan_impl_defaults_to_the_module_setting():
+    """``None`` means "whatever the environment asked for", which is the pre-existing behaviour."""
+    assert resolve_rotation_scan_impl(None) == _ROTATION_SCAN_IMPL
+
+
+@pytest.mark.parametrize("impl", ROTATION_SCAN_IMPLS)
+def test_resolve_rotation_scan_impl_accepts_every_documented_name(impl: str):
+    assert resolve_rotation_scan_impl(impl) == impl
+
+
+def test_resolve_rotation_scan_impl_normalises_case_and_whitespace():
+    """The CLI and the env var are both hand-typed, so both get the same forgiving parse."""
+    assert resolve_rotation_scan_impl("  Quaternion ") == "quaternion"
+
+
+def test_resolve_rotation_scan_impl_rejects_an_unknown_name():
+    """
+    A typo must fail loudly. Falling back to the default would hand back a run that is 2.2x slower
+    than the one that was asked for, and nothing downstream would notice.
+    """
+    with pytest.raises(ValueError, match="quaternion"):
+        resolve_rotation_scan_impl("quarternion")
+
+
+def test_explicit_scan_impl_beats_the_module_default(monkeypatch):
+    """
+    The explicit argument is the whole point: it has to win over the imported environment value,
+    or the config field is decorative.
+    """
+    monkeypatch.setattr(fast_mod, "_ROTATION_SCAN_IMPL", "chunked")
+    called: list[str] = []
+    real = fast_mod.quaternion_cumulative_block_rotation
+
+    def spy(theta, block_size):
+        called.append("quaternion")
+        return real(theta, block_size)
+
+    monkeypatch.setattr(fast_mod, "quaternion_cumulative_block_rotation", spy)
+
+    theta = torch.randn(1, 8, 1, 2, 3) * 0.1
+    B = torch.randn(1, 8, 1, 1, 6)
+    C = torch.randn(1, 8, 1, 1, 6)
+
+    _fast_rotate_bc_pair(B, C, theta, 3, None, scan_impl="quaternion")
+    assert called == ["quaternion"], "explicit scan_impl did not override the module default"
+
+    called.clear()
+    _fast_rotate_bc_pair(B, C, theta, 3, None, scan_impl=None)
+    assert called == [], "scan_impl=None should have followed the module default (chunked)"
+
+
+def test_every_scan_impl_computes_the_same_rotation():
+    """
+    Selecting an implementation must be a pure performance choice. If the arms could differ
+    numerically by which scan they happened to run, the ablation would be measuring the scan.
+    """
+    torch.manual_seed(19)
+    theta = torch.randn(2, 32, 1, 4, 3, dtype=torch.float64) * 0.2
+    B = torch.randn(2, 32, 1, 1, 12, dtype=torch.float64)
+    C = torch.randn(2, 32, 1, 1, 12, dtype=torch.float64)
+
+    expected = _fast_rotate_bc_pair(B, C, theta, 3, None, scan_impl="chunked")
+    for impl in ("associative", "associative_autograd", "quaternion"):
+        actual = _fast_rotate_bc_pair(B, C, theta, 3, None, scan_impl=impl)
+        for got, want, name in zip(actual, expected, ("B", "C")):
+            torch.testing.assert_close(got, want, rtol=0, atol=1e-8, msg=f"{impl} rotated {name}")
+
+
+def test_mamba3_ssd_fast_rejects_an_unknown_scan_impl():
+    """Validate at the entry point, not deep in the rotation, so the traceback names the flag."""
+    with pytest.raises(ValueError, match="MAMBA3_ROTATION_SCAN_IMPL|rotation_scan_impl"):
+        mamba3_ssd_fast(
+            torch.zeros(1, 4, 4, 8),
+            torch.zeros(1, 4, 1, 1, 12),
+            torch.zeros(1, 4, 1, 1, 12),
+            torch.zeros(1, 4, 4),
+            torch.zeros(4),
+            torch.zeros(1, 4, 4),
+            torch.zeros(1, 4, 1, 4, 3),
+            heads_per_group=4,
+            block_size=3,
+            rotation_scan_impl="nope",
+        )
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16, torch.float16])
+@pytest.mark.parametrize("block_size", [2, 3, 4])
+def test_passing_the_default_scan_impl_explicitly_is_bit_identical(dtype, block_size: int):
+    """
+    Threading the parameter through must not perturb the arm that does not use it.
+
+    This is the regression that would matter: the production run is mid-flight on the default
+    path, so ``scan_impl=None`` and ``scan_impl=<the module default>`` have to produce the same
+    bits, at every block size and every dtype the kernel actually sees. ``atol=0`` rather than a
+    tolerance -- there is no arithmetic here that should differ at all, only a name being
+    resolved earlier.
+    """
+    torch.manual_seed(77)
+    n_blocks, angles = 4, block_size * (block_size - 1) // 2
+    d_state = n_blocks * block_size
+    theta = (torch.randn(2, 24, 1, n_blocks, angles) * 0.3).to(dtype)
+    B = torch.randn(2, 24, 1, 1, d_state, dtype=dtype)
+    C = torch.randn(2, 24, 1, 1, d_state, dtype=dtype)
+
+    implicit = _fast_rotate_bc_pair(B, C, theta, block_size, None)
+    explicit = _fast_rotate_bc_pair(B, C, theta, block_size, None, scan_impl=_ROTATION_SCAN_IMPL)
+
+    for got, want, name in zip(explicit, implicit, ("B", "C")):
+        torch.testing.assert_close(got, want, rtol=0, atol=0, msg=f"{name} moved")
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_the_float32_floor_leaves_production_dtypes_untouched(dtype):
+    """
+    The prefix product takes ``promote_types(theta.dtype, float32)``, not ``theta.float()``.
+
+    The two differ only for float64 input, which is a test-only dtype -- but the float32 floor is
+    load-bearing for every *other* dtype (bfloat16 drifts ~27% off ``SO(b)`` by T=1024), so pin
+    that the promotion still lands on float32 for the dtypes a real run carries rather than, say,
+    following bfloat16 through.
+    """
+    theta = (torch.randn(1, 8, 1, 2, 3) * 0.3).to(dtype)
+    assert torch.promote_types(theta.dtype, torch.float32) == torch.float32

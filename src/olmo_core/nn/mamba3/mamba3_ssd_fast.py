@@ -64,6 +64,8 @@ __all__ = [
     "associative_cumulative_block_rotation",
     "associative_autograd_cumulative_block_rotation",
     "quaternion_cumulative_block_rotation",
+    "ROTATION_SCAN_IMPLS",
+    "resolve_rotation_scan_impl",
 ]
 
 # Copied verbatim from `mamba3_ssd_official`; see its module docstring for the derivation of
@@ -96,8 +98,15 @@ _ROTATION_SCAN_CHUNK_OVERRIDE: Optional[int] = (
     int(os.environ[_ROTATION_SCAN_CHUNK_ENV]) if os.environ.get(_ROTATION_SCAN_CHUNK_ENV) else None
 )
 
-# Which prefix-scan implementation the b>=3 path uses. "chunked" (default) is the hand-rolled
-# sequential-product-plus-Hillis-Steele form; "associative" routes through `torch.associative_scan`,
+# Which prefix-scan implementation the b>=3 path uses when the caller does not name one. This is
+# the *default*, not the setting: every entry point takes an explicit `rotation_scan_impl` that
+# outranks it (`resolve_rotation_scan_impl`), so the choice can live in a config field a checkpoint
+# records and a log line reports. It used to be reachable only from here, which made it invisible
+# to both -- and the fallback is silent, so a relaunch in a fresh shell that lost the export
+# trained at chunked's 33,468 tok/s instead of quaternion's 75,040 with nothing raising.
+#
+# "chunked" is the hand-rolled sequential-product-plus-Hillis-Steele form; "associative" routes
+# through `torch.associative_scan`,
 # which Inductor can lower to a single fused `tl.associative_scan` Triton kernel instead of the
 # ~`chunk - 1 + log2(T / chunk)` dependent kernel launches the chunked form costs. Default stays
 # "chunked" so this is opt-in and revertible by unsetting one variable. Validated at import rather
@@ -115,7 +124,12 @@ _ROTATION_SCAN_CHUNK_OVERRIDE: Optional[int] = (
 # so this path is built to be correct and measurable; every non-b==3 call falls back to chunked.
 _ROTATION_SCAN_IMPL_ENV = "MAMBA3_ROTATION_SCAN_IMPL"
 _ROTATION_SCAN_IMPL = os.environ.get(_ROTATION_SCAN_IMPL_ENV, "chunked").strip().lower()
-_ROTATION_SCAN_IMPLS = ("chunked", "associative", "associative_autograd", "quaternion")
+
+#: Every prefix-scan implementation the ``b >= 3`` rotation can be pointed at. Public because it
+#: is the valid set for :func:`resolve_rotation_scan_impl`, for the ``rotation_scan_impl`` config
+#: field, and for the training script's ``--rotation-scan-impl`` flag, none of which should carry
+#: their own copy of the list.
+ROTATION_SCAN_IMPLS = ("chunked", "associative", "associative_autograd", "quaternion")
 
 # Pinned, not selected per-device. The docs call ``pointwise`` the more efficient mode, and for a
 # 9-leaf 3x3 combine that is inverted. Measured on a B200 at the production shape
@@ -124,11 +138,46 @@ _ROTATION_SCAN_IMPLS = ("chunked", "associative", "associative_autograd", "quate
 # to allocate 1152 GiB. Pointwise is also the mode whose backward returns NaN in training. The
 # 18-leaf affine combine in the backward is larger still, so it wants generic even more.
 _ROTATION_SCAN_COMBINE_MODE = "generic"
-if _ROTATION_SCAN_IMPL not in _ROTATION_SCAN_IMPLS:
+if _ROTATION_SCAN_IMPL not in ROTATION_SCAN_IMPLS:
     raise ValueError(
-        f"{_ROTATION_SCAN_IMPL_ENV} must be one of {_ROTATION_SCAN_IMPLS}, "
+        f"{_ROTATION_SCAN_IMPL_ENV} must be one of {ROTATION_SCAN_IMPLS}, "
         f"got {_ROTATION_SCAN_IMPL!r}"
     )
+
+
+def resolve_rotation_scan_impl(impl: Optional[str]) -> str:
+    """
+    Canonicalise an explicit scan-implementation request, falling back to the module default.
+
+    ``None`` means "whatever ``MAMBA3_ROTATION_SCAN_IMPL`` asked for", which is what every caller
+    predating the explicit parameter passes and is why the default path is unchanged. Anything
+    else outranks the environment. That ordering is the point of the function: the scan was
+    previously selectable *only* by an environment variable read once at import, so it never
+    entered the saved checkpoint config and was never logged, and a resumed run in a fresh shell
+    that forgot the export silently fell back to ``chunked`` -- 33,468 tok/s against
+    ``quaternion``'s 75,040 on the 370M hybrid, a 2.2x loss with no error anywhere.
+
+    Case and surrounding whitespace are normalised because both sources are hand-typed: a shell
+    export and a CLI flag.
+
+    :param impl: One of :data:`ROTATION_SCAN_IMPLS`, or ``None`` for the module default.
+
+    :returns: The canonical lower-case name.
+
+    :raises ValueError: If ``impl`` names no known implementation. Rejected rather than defaulted
+        for the same reason the resolution order exists: a typo that quietly selected ``chunked``
+        would hand back precisely the slow run the caller was trying to avoid.
+    """
+    if impl is None:
+        return _ROTATION_SCAN_IMPL
+    normalised = impl.strip().lower()
+    if normalised not in ROTATION_SCAN_IMPLS:
+        raise ValueError(
+            f"rotation_scan_impl (also settable as {_ROTATION_SCAN_IMPL_ENV}) must be one of "
+            f"{ROTATION_SCAN_IMPLS}, or None to take the {_ROTATION_SCAN_IMPL_ENV} default; "
+            f"got {impl!r}"
+        )
+    return normalised
 
 
 def _adaptive_scan_chunk(seq_len: int) -> int:
@@ -246,7 +295,7 @@ def fast_block_rotations(theta: torch.Tensor, block_size: int) -> torch.Tensor:
 
 
 def fast_cumulative_block_rotation(
-    rot: torch.Tensor, chunk_size: Optional[int] = None
+    rot: torch.Tensor, chunk_size: Optional[int] = None, *, scan_impl: Optional[str] = None
 ) -> torch.Tensor:
     """
     Inclusive prefix product ``Q_t = R_t R_{t-1} ... R_1`` over the sequence axis.
@@ -260,19 +309,26 @@ def fast_cumulative_block_rotation(
     :param rot: Per-step rotations of shape ``(batch, seq_len, n_groups, n_blocks, b, b)``.
     :param chunk_size: Sequential-product chunk length. ``None`` picks it from the sequence
         length via :func:`_adaptive_scan_chunk`.
+    :param scan_impl: Which of :data:`ROTATION_SCAN_IMPLS` to run; ``None`` takes the
+        ``MAMBA3_ROTATION_SCAN_IMPL`` default. ``"quaternion"`` is not reachable from here --
+        it consumes angles, not the pre-built matrices this function receives, so
+        :func:`_fast_rotate_bc_pair` branches to it one level up and anything arriving here
+        under that name gets the chunked path.
 
     :returns: Inclusive prefix products, same shape as ``rot``.
     """
     from .mamba3_ssd_api import _cumulative_block_rotation
+
+    impl = resolve_rotation_scan_impl(scan_impl)
 
     # Only b == 3 has a 9-leaf pointwise form here; every other block size keeps the chunked path.
     # That fallback is load-bearing rather than a nicety: an earlier attempt sliced a 4x4 rotation
     # down to its top-left 3x3, which is still orthogonal-looking output and was caught only by the
     # b=4 mixer tests. Both scan variants refuse b != 3 outright for the same reason.
     if rot.shape[-1] == 3:
-        if _ROTATION_SCAN_IMPL == "associative_autograd":
+        if impl == "associative_autograd":
             return associative_autograd_cumulative_block_rotation(rot)
-        if _ROTATION_SCAN_IMPL == "associative":
+        if impl == "associative":
             return associative_cumulative_block_rotation(rot)
     if chunk_size is None:
         chunk_size = _adaptive_scan_chunk(rot.shape[1])
@@ -679,16 +735,26 @@ def _fast_rotate_bc_pair(
     theta: torch.Tensor,
     block_size: int,
     chunk_size: Optional[int],
+    *,
+    scan_impl: Optional[str] = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Apply the cumulative rotation to ``B`` and ``C``.
 
-    The prefix product runs in float32 regardless of what ``B``/``C`` are carrying: its
+    The prefix product runs in at least float32 regardless of what ``B``/``C`` are carrying: its
     orthogonality drift is ``O(T * eps)``, which bfloat16 cannot survive (~27% error by T=1024).
     The *application* of that rotation then follows the dtype of ``B``/``C``, which is the
     selective floor -- one rounding, identical to the one the kernel performs on the next line.
+    A floor rather than a cast: float64 inputs keep float64 here, which is what lets the scan
+    implementations be compared against each other at 1e-8 instead of at float32's ~1e-6, where
+    a genuine ordering bug and ordinary rounding are indistinguishable. Every production dtype
+    (bfloat16, float16, float32) floors to float32 exactly as before.
+
+    :param scan_impl: Which of :data:`ROTATION_SCAN_IMPLS` to run; ``None`` takes the
+        ``MAMBA3_ROTATION_SCAN_IMPL`` default.
     """
-    theta = theta.float()
+    impl = resolve_rotation_scan_impl(scan_impl)
+    theta = theta.to(torch.promote_types(theta.dtype, torch.float32))
     if block_size == 2:
         theta_cumulative = torch.cumsum(theta.squeeze(-1) if theta.dim() == 5 else theta, dim=1)
         theta_cumulative = theta_cumulative.to(B.dtype)
@@ -699,7 +765,7 @@ def _fast_rotate_bc_pair(
             f"theta must be 5-D (batch, seq_len, n_groups, n_blocks, angles_per_block) "
             f"for block_size={block_size}, got shape {tuple(theta.shape)}"
         )
-    if _ROTATION_SCAN_IMPL == "quaternion" and block_size == 3:
+    if impl == "quaternion" and block_size == 3:
         # The quaternion scan builds its 4-value carry from the angles directly, so it branches
         # here -- where `theta` is still in hand -- rather than inside
         # `fast_cumulative_block_rotation`, which only ever sees pre-built 3x3 matrices. Every other
@@ -707,7 +773,7 @@ def _fast_rotate_bc_pair(
         cumulative_rot = quaternion_cumulative_block_rotation(theta, block_size)
     else:
         cumulative_rot = fast_cumulative_block_rotation(
-            fast_block_rotations(theta, block_size), chunk_size=chunk_size
+            fast_block_rotations(theta, block_size), chunk_size=chunk_size, scan_impl=impl
         )
     return _rotate_bc_fused(B, C, cumulative_rot.to(B.dtype))
 
@@ -725,6 +791,7 @@ def mamba3_ssd_fast(
     block_size: int = 2,
     chunk_size: int = 64,
     rotation_scan_chunk: Optional[int] = None,
+    rotation_scan_impl: Optional[str] = None,
     selective_fp32: bool = True,
 ) -> torch.Tensor:
     """
@@ -739,6 +806,11 @@ def mamba3_ssd_fast(
     :param rotation_scan_chunk: Sequential-product chunk for the ``b >= 3`` prefix scan. This is
         a *different* knob from ``chunk_size`` and much smaller; ``None`` (the default) picks it
         per sequence length via :func:`_adaptive_scan_chunk`.
+    :param rotation_scan_impl: Which of :data:`ROTATION_SCAN_IMPLS` computes the ``b >= 3``
+        prefix product. ``None`` (the default) takes the ``MAMBA3_ROTATION_SCAN_IMPL`` default,
+        which is what makes this addition a no-op for existing callers. Pass it explicitly to
+        get the choice into a config a checkpoint saves and a log line reports -- see
+        :func:`resolve_rotation_scan_impl` for what the environment-only version cost.
     :param selective_fp32: Keep the prefix product in float32 but apply the resulting rotation to
         ``B``/``C`` in the kernel's own dtype. ``False`` applies it in float32, matching
         ``mamba3_ssd_official`` to float32 precision at the cost of a wasted upcast.
@@ -758,6 +830,9 @@ def mamba3_ssd_fast(
         )
     if d_state % block_size != 0:
         raise ValueError(f"d_state ({d_state}) must be divisible by block_size ({block_size})")
+    # Resolved here rather than where it is consumed so a typo names this argument in the
+    # traceback instead of surfacing several frames down inside the rotation.
+    scan_impl = resolve_rotation_scan_impl(rotation_scan_impl)
 
     device_type = x.device.type
     autocast_on = torch.is_autocast_enabled(device_type)
@@ -776,7 +851,12 @@ def mamba3_ssd_fast(
     # bfloat16 regardless.
     with torch.autocast(device_type=device_type, enabled=False):
         key, query = _fast_rotate_bc_pair(
-            B.to(bc_dtype), C.to(bc_dtype), theta, block_size, rotation_scan_chunk
+            B.to(bc_dtype),
+            C.to(bc_dtype),
+            theta,
+            block_size,
+            rotation_scan_chunk,
+            scan_impl=scan_impl,
         )
         # Index the rank axis away rather than `squeeze`: rank is pinned at 1 above.
         key, query = key[:, :, :, 0], query[:, :, :, 0]

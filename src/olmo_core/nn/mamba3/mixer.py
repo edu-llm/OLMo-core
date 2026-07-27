@@ -18,6 +18,7 @@ from olmo_core.nn.attention.ring import (
 from olmo_core.nn.buffer_cache import BufferCache
 
 from .mamba3_ssd_api import dispatch_mamba3_ssd, kernel_padded_width
+from .mamba3_ssd_fast import resolve_rotation_scan_impl
 
 if TYPE_CHECKING:
     from olmo_core.nn.transformer.init import InitMethod
@@ -208,6 +209,12 @@ class Mamba3Mixer(SequenceMixer):
         ``~1e-9`` by position 256 -- below fp32 resolution, which makes long-horizon state
         tracking near-untrainable regardless of ``rotation_block_size``. Lower it (``~0.1``)
         for state-tracking runs.
+    :param rotation_scan_impl: Which of
+        :data:`~olmo_core.nn.mamba3.mamba3_ssd_fast.ROTATION_SCAN_IMPLS` computes the ``b >= 3``
+        prefix product. ``None`` (the default) defers to ``MAMBA3_ROTATION_SCAN_IMPL``, so the
+        historical behaviour is unchanged; naming it here instead puts the choice in the config a
+        checkpoint saves and a run logs. It only reaches the fast official-kernel path, so on CPU
+        or under activation checkpointing it is recorded and ignored.
     :param dtype: The default parameter dtype.
     :param init_device: The device to initialize parameters on.
     """
@@ -245,6 +252,8 @@ class Mamba3Mixer(SequenceMixer):
         bc_bias: bool = True,
         a_log_init_max: float = 16.0,
         prefer_official_kernel: Optional[bool] = None,
+        rotation_scan_impl: Optional[str] = None,
+        theta_max: Optional[float] = None,
         dtype: torch.dtype = torch.float32,
         init_device: str = "cpu",
     ):
@@ -279,6 +288,21 @@ class Mamba3Mixer(SequenceMixer):
         # incompatible with non-reentrant `checkpoint_wrapper` (see `dispatch_mamba3_ssd`). ``True``
         # requires the official kernel and errors if it cannot run.
         self.prefer_official_kernel = prefer_official_kernel
+        # Checked here, not on the first forward: the rotation is only reached once training has
+        # paid for the model build, the compile warmup and a step, by which point a typo has cost
+        # a GPU-hour to discover. Stored un-defaulted -- `None` has to survive as `None` so the
+        # environment still decides at call time for callers that never set this.
+        if rotation_scan_impl is not None:
+            try:
+                rotation_scan_impl = resolve_rotation_scan_impl(rotation_scan_impl)
+            except ValueError as e:
+                # Config faults use the framework's typed error (see `_validate_dims`); the
+                # `ValueError` the kernel module raises is the runtime-contract flavour.
+                raise OLMoConfigurationError(str(e)) from e
+        self.rotation_scan_impl = rotation_scan_impl
+        if theta_max is not None and theta_max <= 0:
+            raise OLMoConfigurationError(f"theta_max must be positive, got {theta_max}")
+        self.theta_max = theta_max
 
         inner = self.n_heads * self.head_dim
         bc_out = self.n_groups * self.mimo_rank * self.d_state
@@ -374,6 +398,28 @@ class Mamba3Mixer(SequenceMixer):
         theta = self.theta_proj(x).view(
             batch, seq_len, G, self.n_rotation_blocks, self.angles_per_block
         )
+        if self.theta_max is not None and self.rotation_block_size >= 3:
+            # Bound the per-step rotation angle, because at b >= 3 an unbounded one silently
+            # destroys the state channel it exists to carry. The cumulative rotation
+            # Q_t Q_s^T = R_t ... R_{s+1} is a random walk on the *non-abelian* SO(b), which mixes
+            # to Haar measure in ~1/||theta||^2 steps; past that, C_t^T (R_t ... R_{s+1}) B_s
+            # averages to zero and no information survives the gap. Measured on this code at
+            # seq 4096, the lag at which tr(Q_t Q_{t-d}^T) falls to half is 72 steps at
+            # ||theta|| = 0.1, 746 at 0.03, and beyond the sequence at 0.01 -- and the default
+            # init (theta_proj std = 1e-3 * ...) already emits ||theta|| ~ 0.1 per block, i.e. a
+            # 72-token horizon on a 4096-token sequence, before a single gradient step. Keeping
+            # ||theta|| <~ 1/sqrt(seq_len) keeps the mixing time past the sequence length.
+            #
+            # `c * tanh(x / c)` rather than a clamp: it is the identity near zero (so it does not
+            # perturb the near-identity init the rotation is designed around) and saturates
+            # smoothly, keeping the gradient finite everywhere -- a hard clamp would zero the
+            # gradient for every angle that needed correcting most.
+            #
+            # b == 2 is deliberately exempt. There the rotation is a 2-D rotation by a cumulative
+            # *scalar* angle, i.e. RoPE: phase wrapping is periodic and information-preserving,
+            # there is no Haar measure to mix into, and bounding it would only remove usable
+            # frequency range.
+            theta = self.theta_max * torch.tanh(theta / self.theta_max)
         A = -torch.exp(self.A_log.float())  # (H,), < 0
 
         if self.bc_norm_enabled:
@@ -397,6 +443,7 @@ class Mamba3Mixer(SequenceMixer):
             heads_per_group=self.heads_per_group,
             block_size=self.rotation_block_size,
             prefer_official_kernel=self.prefer_official_kernel,
+            rotation_scan_impl=self.rotation_scan_impl,
         )  # (batch, T, H, P)
 
         # Gated RMS norm (Mamba-style): normalize the gated output.
@@ -618,6 +665,33 @@ class Mamba3MixerConfig(SequenceMixerConfig[Mamba3Mixer]):
     activation checkpointing, so AC runs must take the chunked PyTorch path. ``True`` forces the
     official kernel and errors if it cannot run.
     """
+    rotation_scan_impl: Optional[str] = None
+    """
+    Which of :data:`~olmo_core.nn.mamba3.mamba3_ssd_fast.ROTATION_SCAN_IMPLS` computes the
+    ``b >= 3`` prefix product, or ``None`` (the default) to defer to ``MAMBA3_ROTATION_SCAN_IMPL``.
+
+    Naming it here rather than only in the environment is what gets the choice into the saved
+    checkpoint config and the startup log. While it lived only in the environment, a resume in a
+    fresh shell that lost the export silently fell back to ``chunked`` at 33,468 tok/s instead of
+    ``quaternion``'s 75,040 -- a 2.2x regression that raised nothing and left no record of which
+    scan the run had actually used.
+    """
+    theta_max: Optional[float] = None
+    """
+    Upper bound on the per-step rotation angle, applied as ``theta_max * tanh(theta / theta_max)``
+    and **only when** ``rotation_block_size >= 3``. ``None`` (the default) leaves ``theta``
+    unbounded, which is the historical behaviour.
+
+    At ``b >= 3`` the cumulative rotation is a random walk on a non-abelian group and mixes to Haar
+    measure in ``~1/||theta||^2`` steps, after which the state channel carries nothing. Measured at
+    seq 4096: the half-life of ``tr(Q_t Q_{t-d}^T)`` is 72 steps at ``||theta|| = 0.1``, 746 at
+    ``0.03``, and past the sequence at ``0.01``. The default init already emits ``||theta|| ~ 0.1``,
+    so an unbounded ``b >= 3`` run has a ~72-token memory horizon from step zero and shrinks from
+    there as ``theta_proj`` grows. Set this to about ``1/sqrt(seq_len)`` (``~0.015`` at 4096).
+
+    Exempt at ``b == 2`` by construction: that rotation is RoPE on a cumulative scalar angle, where
+    wrapping is periodic and harmless, so a bound would only cost frequency range.
+    """
     dtype: DType = DType.float32
     """The default parameter dtype."""
 
@@ -687,6 +761,8 @@ class Mamba3MixerConfig(SequenceMixerConfig[Mamba3Mixer]):
             bc_bias=self.bc_bias,
             a_log_init_max=self.a_log_init_max,
             prefer_official_kernel=self.prefer_official_kernel,
+            rotation_scan_impl=self.rotation_scan_impl,
+            theta_max=self.theta_max,
             dtype=self.dtype.as_pt(),
             init_device=init_device,
         )
