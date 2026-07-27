@@ -225,6 +225,8 @@ def build_mamba_model_config(opts):
         kwargs["rotation_scan_impl"] = opts.rotation_scan_impl
     if opts.theta_max is not None:
         kwargs["theta_max"] = opts.theta_max
+    if opts.a_log_init_max is not None:
+        kwargs["a_log_init_max"] = opts.a_log_init_max
     if opts.attn_backend is not None:
         kwargs["attn_backend"] = AttentionBackendName(opts.attn_backend)
 
@@ -286,7 +288,7 @@ def build_config(opts, overrides):
     # version left unanswerable after the fact.
     log.info(
         "Mamba-3 arm: rotation_block_size=%d (%s), d_state=%d, rotation_scan_impl=%s, "
-        "theta_max=%s, lr=%.3e",
+        "theta_max=%s, a_log_init_max=%s, lr=%.3e",
         opts.rotation_block_size,
         "TC^0 baseline" if opts.rotation_block_size == 2 else "NC^1 (non-solvable)",
         d_state,
@@ -301,6 +303,10 @@ def build_config(opts, overrides):
             if opts.rotation_block_size < 3
             else f"{opts.theta_max}"
         ),
+        # Init-only, but decisive: it sets the spread of per-head decay horizons, and the preset's
+        # 0.1 leaves only ~1% of heads under a 100-token horizon (median 1507) -- an SSM that
+        # averages the document instead of tracking recent tokens, which reads as a unigram model.
+        opts.a_log_init_max if opts.a_log_init_max is not None else "0.1 (preset default)",
         config.train_module.optim.lr,
     )
 
@@ -439,6 +445,11 @@ def parse_args(argv=None):
             f"~1/||theta||^2 steps and destroys the state channel; unbounded, the default init "
             f"gives a ~72-token memory horizon at seq 4096. Use ~1/sqrt(seq_len) (~0.015 at "
             f"4096). No-op at b=2 (RoPE), so both arms can pass it. Default: unset.\n"
+            f"  --a-log-init-max FLOAT     Upper bound of the A_log init distribution, which sets "
+            f"the spread of per-head decay horizons. The preset's 0.1 leaves only ~1% of heads "
+            f"under a 100-token horizon (median 1507 at seq 4096), i.e. no fast heads and no "
+            f"local modelling -- the SSM averages the document. 16 (Mamba/GDN default) puts 90% "
+            f"under 100 with a long tail. INIT ONLY: has no effect on a resumed run.\n"
             f"  --fp8 {{{'|'.join(FP8_RECIPES)}}}  fp8 recipe (default: {DEFAULT_FP8_RECIPE}); SSM "
             f"projections stay high-precision\n"
             f"  --activation-checkpointing  recompute MLPs in backward (blocks.*.feed_forward); "
@@ -457,6 +468,7 @@ def parse_args(argv=None):
     d_state_str, argv = _pop_opt(argv, "--d-state", None)
     rotation_scan_impl, argv = _pop_opt(argv, "--rotation-scan-impl", None)
     theta_max_str, argv = _pop_opt(argv, "--theta-max", None)
+    a_log_init_max_str, argv = _pop_opt(argv, "--a-log-init-max", None)
     ac_enabled, argv = _pop_flag(argv, "--activation-checkpointing")
     fused_ce, argv = _pop_flag(argv, "--fused-ce")
     profile, argv = _pop_flag(argv, "--profile")
@@ -517,6 +529,15 @@ def parse_args(argv=None):
             raise SystemExit(f"--theta-max must be a float, got {theta_max_str!r}")
         if opts.theta_max <= 0:
             raise SystemExit(f"--theta-max must be positive, got {opts.theta_max}")
+    if a_log_init_max_str is None:
+        opts.a_log_init_max = None
+    else:
+        try:
+            opts.a_log_init_max = float(a_log_init_max_str)
+        except ValueError:
+            raise SystemExit(f"--a-log-init-max must be a float, got {a_log_init_max_str!r}")
+        if opts.a_log_init_max <= 0:
+            raise SystemExit(f"--a-log-init-max must be positive, got {opts.a_log_init_max}")
     opts.activation_checkpointing = ac_enabled
     opts.fused_ce = fused_ce
     opts.profile = profile
