@@ -43,6 +43,12 @@ import rich
 # workers/checkpoint-resume re-import by the serialized class path.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Additive I/O-robustness shim: makes the one-time S3 shard-size fingerprint burst
+# reliable (throttles HeadObject fan-out + jittered retry on transient 403s). Does
+# NOT modify OLMo-core source or any training numerics. Must import before the
+# dataset is built. See s3_io_robustness.py for details.
+import s3_io_robustness  # noqa: E402,F401
+
 from olmo_core.config import Config, DType
 from olmo_core.data import (
     NumpyDataLoaderConfig,
