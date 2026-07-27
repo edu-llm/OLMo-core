@@ -3,7 +3,12 @@ import torch
 
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.nn.attention import AttentionBackendName, AttentionConfig
-from olmo_core.nn.mamba3 import DEFAULT_D_STATE, Mamba3, Mamba3Config
+from olmo_core.nn.mamba3 import (
+    DEFAULT_D_STATE,
+    Mamba3,
+    Mamba3Config,
+    no_weight_decay_param_names,
+)
 from olmo_core.nn.mamba3.mixer import Mamba3Mixer, Mamba3MixerConfig
 from olmo_core.nn.transformer import Transformer
 
@@ -22,6 +27,76 @@ def _tiny_hybrid_config(**kwargs) -> Mamba3Config:
         mimo_rank=2,
         **kwargs,
     )
+
+
+def test_decay_rate_params_are_exempt_from_weight_decay():
+    """
+    ``A_log`` and ``dt_bias`` must carry ``_no_weight_decay``, as they do in ``mamba_ssm``.
+
+    Weight decay shrinks a parameter toward 0. For ``A_log`` that means ``|A| = exp(A_log)``
+    toward 1, an arbitrary attractor on the decay rate with no modelling justification. For
+    ``dt_bias`` it means ``dt = softplus(dt_bias)`` toward ``softplus(0) = 0.693``, ~70x the
+    intended init median of 0.01, i.e. a hard pull toward very short memory. Since the horizon
+    is ``1/(dt*|A|)``, decaying both ends squeezes it from both sides.
+
+    ``mamba_ssm/modules/mamba2.py`` marks ``dt_bias``, ``A_log`` and ``D`` exempt for exactly
+    this reason.
+    """
+    model = _tiny_hybrid_config().build(init_device="cpu")
+    flagged = set(no_weight_decay_param_names(model))
+
+    a_log = {n for n, _ in model.named_parameters() if n.endswith(".A_log")}
+    dt_bias = {n for n, _ in model.named_parameters() if n.endswith(".dt_bias")}
+    assert a_log, "expected the hybrid to have A_log parameters"
+    assert dt_bias, "expected the hybrid to have dt_bias parameters"
+
+    assert a_log <= flagged, f"A_log not exempt: {sorted(a_log - flagged)}"
+    assert dt_bias <= flagged, f"dt_bias not exempt: {sorted(dt_bias - flagged)}"
+    # Nothing else should be swept in; over-exempting silently disables regularization.
+    assert flagged == a_log | dt_bias, f"unexpected exemptions: {sorted(flagged - a_log - dt_bias)}"
+
+
+def test_a_log_init_min_default_keeps_a_long_horizon_tail():
+    """
+    The default lower bound must leave some heads slow-decaying.
+
+    The trained b=2/b=3 runs used ``Uniform(0, 16)``, where ~6% of heads land below ``|A| = 1``
+    purely by chance, and those inherited heads were the only long-horizon ones either arm ended
+    up with (b=3's longest was ``|A| = 0.062``). A lower bound of 1.0 removes that tail entirely
+    and weight decay gives no gradient pressure to recreate it. 0.05 keeps a comparable tail
+    while still flooring the decay, so no head starts at ``A ~ 0`` as a pure accumulator.
+    """
+    cfg = Mamba3MixerConfig(n_heads=8)
+    assert cfg.a_log_init_min == 0.05
+    assert cfg.a_log_init_max == 16.0
+
+    # Roughly the same sub-1.0 mass the old Uniform(0, 16) gave by accident.
+    frac_below_one = (1.0 - cfg.a_log_init_min) / (cfg.a_log_init_max - cfg.a_log_init_min)
+    assert 0.04 < frac_below_one < 0.08
+
+    mixer = _mamba_mixer(Mamba3Config.mamba3_olmo3_370M(vocab_size=1024))
+    assert mixer.a_log_init_min == 0.05
+    assert mixer.a_log_init_max == 16.0
+
+
+def test_lowering_a_log_init_max_alone_is_rejected():
+    """
+    Shortening the memory horizon means lowering *both* ends of the ``A_log`` range.
+
+    Callers that want long horizons reach for ``a_log_init_max`` and historically passed it on
+    its own, which was safe while the lower bound was hard-coded to 0. Now that a floor exists,
+    any ``a_log_init_max <= a_log_init_min`` inverts the range, and an inverted range must fail
+    loudly at config time rather than reach ``uniform_`` and produce garbage.
+    """
+    with pytest.raises(OLMoConfigurationError, match="a_log_init_max must be > a_log_init_min"):
+        _tiny_hybrid_config(a_log_init_max=0.05).build(init_device="cpu")
+
+    # A bound of 0 is what let heads start at A ~ 0 and never decay.
+    with pytest.raises(OLMoConfigurationError, match="a_log_init_min must be > 0"):
+        _tiny_hybrid_config(a_log_init_min=0.0, a_log_init_max=16.0).build(init_device="cpu")
+
+    # Lowering both together is the supported way to get a long horizon.
+    _tiny_hybrid_config(a_log_init_min=0.001, a_log_init_max=0.05).build(init_device="cpu")
 
 
 def test_mamba3_hybrid_block_pattern_and_mixer_types():
@@ -145,15 +220,16 @@ def test_mamba3_olmo3_370M_defaults_are_a_clean_tc0_baseline():
 
     ``rotation_block_size=2`` is TC^0 (a cumulative *sum* of angles). SISO with a single
     ``(B, C)`` group keeps every other axis fixed, so a later NC^1 or PNC^1 arm differs from
-    this run in exactly one config field. ``a_log_init_max`` is lowered from the library
-    default of 16 because at 16 the decay horizon is 11-44 tokens, against the 4096-token
-    sliding window these layers replace.
+    this run in exactly one config field. The ``A_log`` range stays at the library default
+    ``(0.05, 16)``; an earlier 0.1 upper bound put every head above a 1000-token horizon and
+    plateaued the run near CE 8.1 at 4.8B tokens.
     """
     mixer = _mamba_mixer(Mamba3Config.mamba3_olmo3_370M(vocab_size=1024))
     assert mixer.rotation_block_size == 2
     assert mixer.mimo_rank == 1
     assert mixer.n_groups == 1
-    assert mixer.a_log_init_max == 0.1
+    assert mixer.a_log_init_min == 0.05
+    assert mixer.a_log_init_max == 16.0
 
 
 @pytest.mark.parametrize("rotation_block_size", [2, 3])

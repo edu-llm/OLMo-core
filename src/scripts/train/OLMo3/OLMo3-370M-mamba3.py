@@ -79,7 +79,9 @@ from olmo_core.nn.mamba3 import (
     Mamba3Config,
     admissible_block_sizes,
     mamba3_modules_to_ignore_for_fp8,
+    no_weight_decay_param_names,
 )
+from olmo_core.optim import OptimGroupOverride
 from olmo_core.nn.mamba3.mamba3_ssd_fast import (
     ROTATION_SCAN_IMPLS,
     resolve_rotation_scan_impl,
@@ -225,6 +227,8 @@ def build_mamba_model_config(opts):
         kwargs["rotation_scan_impl"] = opts.rotation_scan_impl
     if opts.theta_max is not None:
         kwargs["theta_max"] = opts.theta_max
+    if opts.a_log_init_min is not None:
+        kwargs["a_log_init_min"] = opts.a_log_init_min
     if opts.a_log_init_max is not None:
         kwargs["a_log_init_max"] = opts.a_log_init_max
     if opts.attn_backend is not None:
@@ -283,22 +287,35 @@ def build_config(opts, overrides):
     if opts.lr is None:
         config.train_module.optim.lr = dolma2.ladder_lr(model_config.num_non_embedding_params)
 
+    # Exempt the SSM timescale parameters from weight decay, as `mamba_ssm` does. The dense
+    # builder only exempts embeddings, which leaves A_log and dt_bias decaying toward a fixed
+    # forgetting rate (|A| -> 1, dt -> softplus(0) = 0.693). Patterns are fnmatch globs against
+    # parameter FQNs, and they are read off the built model rather than hardcoded so a change to
+    # the block layout cannot silently stop matching.
+    no_decay = no_weight_decay_param_names(model_config.build(init_device="meta"))
+    if no_decay:
+        config.train_module.optim.group_overrides.append(
+            OptimGroupOverride(params=sorted(no_decay), opts=dict(weight_decay=0.0))
+        )
+        log.info("weight decay disabled for %d SSM timescale parameter(s)", len(no_decay))
+
     # The scan is logged *resolved*, not as it was typed: an unset flag still runs a specific
     # implementation, and "which scan did this run use" is exactly the question the environment-only
     # version left unanswerable after the fact.
     log.info(
         "Mamba-3 arm: rotation_block_size=%d (%s), d_state=%d, rotation_scan_impl=%s, "
-        "theta_max=%s, a_log_init_max=%s, lr=%.3e",
+        "theta_max=%s, a_log_init_range=(%s, %s), lr=%.3e",
         opts.rotation_block_size,
         "TC^0 baseline" if opts.rotation_block_size == 2 else "NC^1 (non-solvable)",
         d_state,
         opts.rotation_scan_impl
         or f"{resolve_rotation_scan_impl(None)} (from MAMBA3_ROTATION_SCAN_IMPL / default)",
         "unbounded" if opts.theta_max is None else f"{opts.theta_max}",
-        # Init-only, but decisive: it sets the spread of per-head decay horizons, and the preset's
-        # 0.1 leaves only ~1% of heads under a 100-token horizon (median 1507) -- an SSM that
-        # averages the document instead of tracking recent tokens, which reads as a unigram model.
-        opts.a_log_init_max if opts.a_log_init_max is not None else "0.1 (preset default)",
+        # Init-only, but decisive: it sets the spread of per-head decay horizons. An upper bound
+        # of 0.1 put every head above a 1000-token horizon and plateaued the run near CE 8.1 --
+        # an SSM averaging the document instead of tracking recent tokens, i.e. a unigram model.
+        opts.a_log_init_min if opts.a_log_init_min is not None else "1.0 (preset default)",
+        opts.a_log_init_max if opts.a_log_init_max is not None else "16.0 (preset default)",
         config.train_module.optim.lr,
     )
 
@@ -436,11 +453,13 @@ def parse_args(argv=None):
             f"walk on a compact group that mixes to its Haar measure in ~1/||theta||^2 steps and "
             f"destroys the state channel; unbounded, the default init gives a ~72-token memory "
             f"horizon at seq 4096. Use ~1/sqrt(seq_len) (~0.015 at 4096). Default: unset.\n"
-            f"  --a-log-init-max FLOAT     Upper bound of the A_log init distribution, which sets "
-            f"the spread of per-head decay horizons. The preset's 0.1 leaves only ~1% of heads "
-            f"under a 100-token horizon (median 1507 at seq 4096), i.e. no fast heads and no "
-            f"local modelling -- the SSM averages the document. 16 (Mamba/GDN default) puts 90% "
-            f"under 100 with a long tail. INIT ONLY: has no effect on a resumed run.\n"
+            f"  --a-log-init-min FLOAT     Lower bound of the A_log init distribution "
+            f"(default 1.0). Floors the decay rate; at 0 a head can draw A~0 and never decay. "
+            f"INIT ONLY: has no effect on a resumed run.\n"
+            f"  --a-log-init-max FLOAT     Upper bound of the same distribution (default 16.0). "
+            f"The pair (1, 16) is mamba_ssm's A_init_range. An upper bound of 0.1 puts every "
+            f"head above a 1000-token horizon at seq 4096 and the run plateaus near CE 8.1, "
+            f"averaging the document instead of modelling locally. INIT ONLY.\n"
             f"  --fp8 {{{'|'.join(FP8_RECIPES)}}}  fp8 recipe (default: {DEFAULT_FP8_RECIPE}); SSM "
             f"projections stay high-precision\n"
             f"  --activation-checkpointing  recompute MLPs in backward (blocks.*.feed_forward); "
@@ -459,6 +478,7 @@ def parse_args(argv=None):
     d_state_str, argv = _pop_opt(argv, "--d-state", None)
     rotation_scan_impl, argv = _pop_opt(argv, "--rotation-scan-impl", None)
     theta_max_str, argv = _pop_opt(argv, "--theta-max", None)
+    a_log_init_min_str, argv = _pop_opt(argv, "--a-log-init-min", None)
     a_log_init_max_str, argv = _pop_opt(argv, "--a-log-init-max", None)
     ac_enabled, argv = _pop_flag(argv, "--activation-checkpointing")
     fused_ce, argv = _pop_flag(argv, "--fused-ce")
@@ -520,6 +540,15 @@ def parse_args(argv=None):
             raise SystemExit(f"--theta-max must be a float, got {theta_max_str!r}")
         if opts.theta_max <= 0:
             raise SystemExit(f"--theta-max must be positive, got {opts.theta_max}")
+    if a_log_init_min_str is None:
+        opts.a_log_init_min = None
+    else:
+        try:
+            opts.a_log_init_min = float(a_log_init_min_str)
+        except ValueError:
+            raise SystemExit(f"--a-log-init-min must be a float, got {a_log_init_min_str!r}")
+        if opts.a_log_init_min <= 0:
+            raise SystemExit(f"--a-log-init-min must be positive, got {opts.a_log_init_min}")
     if a_log_init_max_str is None:
         opts.a_log_init_max = None
     else:
@@ -529,6 +558,15 @@ def parse_args(argv=None):
             raise SystemExit(f"--a-log-init-max must be a float, got {a_log_init_max_str!r}")
         if opts.a_log_init_max <= 0:
             raise SystemExit(f"--a-log-init-max must be positive, got {opts.a_log_init_max}")
+    if (
+        opts.a_log_init_min is not None
+        and opts.a_log_init_max is not None
+        and opts.a_log_init_min >= opts.a_log_init_max
+    ):
+        raise SystemExit(
+            f"--a-log-init-min must be < --a-log-init-max, got "
+            f"({opts.a_log_init_min}, {opts.a_log_init_max})"
+        )
     opts.activation_checkpointing = ac_enabled
     opts.fused_ce = fused_ce
     opts.profile = profile

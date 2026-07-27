@@ -218,7 +218,10 @@ def build_experiment_config(cli_context: CliContext) -> ExperimentConfig:
     # `alpha ~= 0.92`, and the measured horizon on this exact preset is 22-114 steps against a
     # 512-token context -- the model would train happily while most of its context stayed out of
     # reach, which looks identical to success on the loss curve. At 1.0 the median head reaches
-    # ~2800 steps.
+    # ~2800 steps. Both ends of the range move together: the lower bound must stay below the
+    # upper one and above 0, so no head starts as a non-decaying accumulator. This is a
+    # 512-token smoke test -- at the 4096-token production length a range this low is what
+    # plateaued the real run near CE 8.1 (see `mamba3_olmo3_370M`).
     # `mimo_rank=1` is what makes the run eligible for the official `mamba-ssm` SISO Triton
     # kernel: `dispatch_mamba3_ssd` requires rank 1, so at the library default of 4 the smoke
     # test silently took the chunked PyTorch path no matter what was installed -- meaning it
@@ -242,6 +245,7 @@ def build_experiment_config(cli_context: CliContext) -> ExperimentConfig:
     activation_checkpointing = os.environ.get("MAMBA3_ACTIVATION_CHECKPOINTING") == "1"
     model_config = Mamba3Config.mamba3_hybrid_190M(
         vocab_size=tokenizer_config.padded_vocab_size(),
+        a_log_init_min=1.0 / 16,
         a_log_init_max=1.0,
         mimo_rank=1,
         rotation_block_size=rotation_block_size,

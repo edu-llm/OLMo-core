@@ -14,7 +14,7 @@ covers the modes it does *not*:
    the step factor is 0. Measured at the production default ``rolling_interval_length=128``:
    one NaN causes **129 consecutive skipped optimizer steps**, and the loss looks perfectly
    healthy throughout because the weights simply stop moving.
-3. **Vanishing memory horizon.** ``A_log ~ log(Uniform(0, a_log_init_max))`` with the default
+3. **Vanishing memory horizon.** ``A_log ~ log(Uniform(a_log_init_min, a_log_init_max))`` with the default
    16 gives ``alpha ~ 0.92``, so a signal injected at position 0 is at ``~1e-9`` by position
    256. The model still trains -- it learns local statistics and the loss falls -- while every
    long-range capability the block-rotation work exists to buy is unreachable. Nothing errors.
@@ -206,7 +206,8 @@ class Mamba3SentinelCallback(Callback):
                 "short_memory_horizon",
                 f"the longest-memory head retains signal for only ~{best:.0f} steps but the "
                 f"sequence length is {self.sequence_length}. Training will appear healthy while "
-                f"long-range state tracking stays unreachable. Lower 'a_log_init_max'.",
+                f"long-range state tracking stays unreachable. Lower both ends of the A_log "
+                f"range ('a_log_init_min' and 'a_log_init_max') together.",
                 horizon_steps=round(best),
                 sequence_length=self.sequence_length,
             )

@@ -177,6 +177,7 @@ class Mamba3Config(TransformerConfig):
         n_groups: int = 1,
         mimo_rank: int = 4,
         rotation_block_size: int = 2,
+        a_log_init_min: float = 0.05,
         a_log_init_max: float = 16.0,
         prefer_official_kernel: Optional[bool] = None,
         rotation_scan_impl: Optional[str] = None,
@@ -218,6 +219,8 @@ class Mamba3Config(TransformerConfig):
         :param rotation_block_size: Size ``b`` of the orthogonal transition blocks (``2`` keeps
             the paper's abelian complex diagonal; ``b >= 3`` is non-solvable). Must be one of
             :func:`~olmo_core.nn.mamba3.admissible_block_sizes` for the chosen ``d_state``.
+        :param a_log_init_min: Lower bound of the ``A_log`` init distribution. Defaults to 1.0,
+            matching ``mamba_ssm``'s ``A_init_range=(1, 16)``.
         :param a_log_init_max: Upper bound of the ``A_log`` init distribution.
         :param rotation_scan_impl: Which of
             :data:`~olmo_core.nn.mamba3.mamba3_ssd_fast.ROTATION_SCAN_IMPLS` computes the
@@ -262,6 +265,7 @@ class Mamba3Config(TransformerConfig):
                 mimo_rank=mimo_rank,
                 rotation_block_size=rotation_block_size,
                 norm_eps=layer_norm_eps,
+                a_log_init_min=a_log_init_min,
                 a_log_init_max=a_log_init_max,
                 prefer_official_kernel=prefer_official_kernel,
                 rotation_scan_impl=rotation_scan_impl,
@@ -381,10 +385,20 @@ class Mamba3Config(TransformerConfig):
         untied, so the reference is 474M total and only ``num_active_non_embedding_params``
         recovers the 371M the name refers to.
 
-        ``a_log_init_max`` is lowered from the library default of 16, which is not a tuning
-        preference. At 16 the decay horizon of these layers is 11-44 tokens, against the
-        4096-token sliding window they are replacing; at 0.1 it is 1811-7075. The output scale
-        is unaffected (the gated RMS norm normalizes it) and gradient magnitude improves.
+        ``A_log`` uses the library default range ``(0.05, 16)``. An earlier version of this
+        preset lowered ``a_log_init_max`` to 0.1 on the reasoning that 16 gives an 11-44 token
+        decay horizon against a 4096-token window. That reasoning ignores ``dt in [0.001, 0.1]``,
+        which multiplies ``A`` in ``alpha = exp(dt * A)`` and spreads the realized horizon across
+        three orders of magnitude. Trained end to end at 4.8B tokens, 0.1 put every head above a
+        1000-token horizon and the model plateaued near CE 8.1, behaving as a document-mean
+        accumulator; the same config with an upper bound of 16 trained normally to CE 2.67-2.83.
+        Do not lower the upper bound again without re-checking that plateau.
+
+        The 0.05 lower bound is deliberately below ``mamba_ssm``'s 1.0. Inspecting the trained
+        checkpoints of both 4.8B arms showed the only long-horizon heads either one had were
+        inherited from the old ``Uniform(0, 16)`` init's accidental sub-1.0 tail (b=3's longest
+        was ``|A| = 0.062``, a 3048-token horizon); the bulk of the distribution barely moved,
+        so training did not manufacture them.
 
         SISO also makes the run eligible for the official SISO Triton kernel, roughly 3x
         cheaper on the scan than the chunked PyTorch path that ``mimo_rank > 1`` forces.
@@ -411,7 +425,8 @@ class Mamba3Config(TransformerConfig):
             d_state=d_state,
             mimo_rank=kwargs.pop("mimo_rank", 1),
             n_groups=kwargs.pop("n_groups", 1),
-            a_log_init_max=kwargs.pop("a_log_init_max", 0.1),
+            a_log_init_min=kwargs.pop("a_log_init_min", 0.05),
+            a_log_init_max=kwargs.pop("a_log_init_max", 16.0),
             use_rope=kwargs.pop("use_rope", True),
             rope_theta=kwargs.pop("rope_theta", 500_000),
             **kwargs,

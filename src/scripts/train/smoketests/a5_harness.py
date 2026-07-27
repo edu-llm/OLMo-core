@@ -53,6 +53,7 @@ def build_a5_model(
     d_state: int = 48,
     mimo_rank: int = 1,
     n_groups: Optional[int] = None,
+    a_log_init_min: Optional[float] = None,
     a_log_init_max: float = 0.1,
     init_device: str = "cpu",
     seed: int = 0,
@@ -76,6 +77,10 @@ def build_a5_model(
     :param a_log_init_max: Kept small so the decay horizon covers the evaluation lengths. At the
         library default of 16 the state has decayed to ~1e-9 by position 256 and the gradient
         that would teach the model to hold on is ~1e-9 with it.
+    :param a_log_init_min: Lower bound of the same distribution; defaults to
+        ``a_log_init_max / 16``, which preserves the 16:1 span of the library default ``(1, 16)``
+        at whatever scale ``a_log_init_max`` sets. It must stay ``> 0``: at 0 a head can draw
+        ``A ~ 0`` and never decay at all.
     :param seed: Seed for weight initialization.
     """
     admissible = admissible_block_sizes(d_state)
@@ -99,6 +104,7 @@ def build_a5_model(
         n_groups=n_heads if n_groups is None else n_groups,
         mimo_rank=mimo_rank,
         rotation_block_size=rotation_block_size,
+        a_log_init_min=a_log_init_max / 16 if a_log_init_min is None else a_log_init_min,
         a_log_init_max=a_log_init_max,
         # Pure Mamba-3: no attention blocks anywhere in the stack.
         block_pattern=["mamba3"],

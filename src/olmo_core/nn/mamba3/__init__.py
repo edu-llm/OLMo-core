@@ -22,6 +22,7 @@ from .mamba3_ssd_fast import (
 )
 from .mixer import (
     DEFAULT_D_STATE,
+    no_weight_decay_param_names,
     Mamba3Mixer,
     Mamba3MixerConfig,
     admissible_block_sizes,
@@ -52,4 +53,5 @@ __all__ = [
     "fast_mamba3_is_available",
     "fast_block_rotations",
     "fast_cumulative_block_rotation",
+    "no_weight_decay_param_names",
 ]

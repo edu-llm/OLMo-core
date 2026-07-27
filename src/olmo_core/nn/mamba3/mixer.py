@@ -1,6 +1,6 @@
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 import torch
 import torch.nn as nn
@@ -106,6 +106,19 @@ def mamba3_modules_to_ignore_for_fp8(model: nn.Module) -> set:
 # re-exported here, where it was originally public, so existing imports keep working.
 
 
+def no_weight_decay_param_names(module: nn.Module) -> List[str]:
+    """
+    Fully-qualified names of parameters that must not be weight-decayed.
+
+    Follows ``mamba_ssm``, which tags ``A_log``, ``dt_bias`` and ``D`` with
+    ``_no_weight_decay = True``. These set the recurrence's timescale rather than its magnitude,
+    so shrinking them toward zero moves the model's forgetting rate rather than regularizing it.
+
+    Feed the result to :class:`~olmo_core.optim.OptimGroupOverride` with ``weight_decay=0.0``.
+    """
+    return [n for n, p in module.named_parameters() if getattr(p, "_no_weight_decay", False)]
+
+
 def _rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
     """Root-mean-square normalization over the last dimension, in float32."""
     orig_dtype = x.dtype
@@ -121,6 +134,7 @@ def _validate_dims(
     n_groups: int,
     mimo_rank: int,
     rotation_block_size: int,
+    a_log_init_min: float,
     a_log_init_max: float,
 ) -> None:
     """
@@ -154,8 +168,13 @@ def _validate_dims(
             f"d_state ({d_state}) must be divisible by rotation_block_size "
             f"({rotation_block_size}) for the Mamba-3 rotation"
         )
-    if a_log_init_max <= 0:
-        raise OLMoConfigurationError(f"a_log_init_max must be > 0, got {a_log_init_max}")
+    if a_log_init_min <= 0:
+        raise OLMoConfigurationError(f"a_log_init_min must be > 0, got {a_log_init_min}")
+    if a_log_init_max <= a_log_init_min:
+        raise OLMoConfigurationError(
+            f"a_log_init_max must be > a_log_init_min, got "
+            f"({a_log_init_min}, {a_log_init_max})"
+        )
     if n_groups < 1:
         raise OLMoConfigurationError(f"n_groups must be >= 1, got {n_groups}")
     if n_heads < 1:
@@ -204,11 +223,15 @@ class Mamba3Mixer(SequenceMixer):
     :param norm_eps: Epsilon for the internal RMS norms.
     :param bc_norm: Whether to apply BCNorm (QK-norm analog) to ``B`` and ``C``.
     :param bc_bias: Whether the ``B``/``C`` projections use a bias term.
-    :param a_log_init_max: Upper bound of the ``A_log`` init distribution. The default of 16
-        gives ``alpha ~ 0.92`` at init, so a signal injected at position 0 has decayed to
-        ``~1e-9`` by position 256 -- below fp32 resolution, which makes long-horizon state
-        tracking near-untrainable regardless of ``rotation_block_size``. Lower it (``~0.1``)
-        for state-tracking runs.
+    :param a_log_init_min: Lower bound of the ``A_log`` init distribution. ``A`` is drawn as
+        ``-Uniform(a_log_init_min, a_log_init_max)``, so this floors the decay rate. The default
+        of 1.0 matches ``mamba_ssm``'s ``A_init_range=(1, 16)``. A bound of 0 admits heads with
+        ``A ~ 0``, which never decay and act as accumulators over the whole sequence, and makes
+        ``log(0) = -inf`` reachable.
+    :param a_log_init_max: Upper bound of the ``A_log`` init distribution; see
+        ``a_log_init_min``. Together the default ``(1, 16)`` spreads the per-head memory horizon
+        across roughly three orders of magnitude once ``dt in [0.001, 0.1]`` is folded in, which
+        is what gives the layer both short- and long-horizon heads at init.
     :param rotation_scan_impl: Which of
         :data:`~olmo_core.nn.mamba3.mamba3_ssd_fast.ROTATION_SCAN_IMPLS` computes the ``b >= 3``
         prefix product. ``None`` (the default) defers to ``MAMBA3_ROTATION_SCAN_IMPL``, so the
@@ -250,6 +273,7 @@ class Mamba3Mixer(SequenceMixer):
         norm_eps: float = 1e-5,
         bc_norm: bool = True,
         bc_bias: bool = True,
+        a_log_init_min: float = 0.05,
         a_log_init_max: float = 16.0,
         prefer_official_kernel: Optional[bool] = None,
         rotation_scan_impl: Optional[str] = None,
@@ -264,6 +288,7 @@ class Mamba3Mixer(SequenceMixer):
             n_groups=n_groups,
             mimo_rank=mimo_rank,
             rotation_block_size=rotation_block_size,
+            a_log_init_min=a_log_init_min,
             a_log_init_max=a_log_init_max,
         )
 
@@ -280,6 +305,7 @@ class Mamba3Mixer(SequenceMixer):
         self.norm_eps = norm_eps
         self.bc_norm_enabled = bc_norm
         self.bc_bias = bc_bias
+        self.a_log_init_min = a_log_init_min
         self.a_log_init_max = a_log_init_max
         # Kernel selection, forwarded to `dispatch_mamba3_ssd`. ``None`` (default) uses the fast
         # official kernel whenever it is eligible (CUDA, ``mimo_rank == 1``, reduced precision) --
@@ -333,6 +359,14 @@ class Mamba3Mixer(SequenceMixer):
         self.dt_bias = nn.Parameter(
             torch.empty(self.n_heads, dtype=torch.float32, device=init_device)
         )
+        # Both set the recurrence's timescale, not its magnitude, so weight decay on them is
+        # not regularization -- it is a pull toward a fixed forgetting rate. Decaying A_log
+        # toward 0 drives |A| to 1; decaying dt_bias toward 0 drives dt to softplus(0)=0.693,
+        # ~70x the init median. Since the memory horizon is 1/(dt*|A|), that squeezes it from
+        # both ends. `mamba_ssm` marks the same parameters exempt; see
+        # `no_weight_decay_param_names`, which the training script turns into optimizer groups.
+        self.A_log._no_weight_decay = True  # type: ignore[attr-defined]
+        self.dt_bias._no_weight_decay = True  # type: ignore[attr-defined]
 
         # Norm weights default to ones so the module is usable even before ``init_weights``.
         self.o_norm_weight = nn.Parameter(
@@ -504,9 +538,13 @@ class Mamba3Mixer(SequenceMixer):
         # for any block size: small angles put exp(S) near I regardless of b.
         init_linear(self.theta_proj, std=std * 0.1, generator=generator)
 
-        # A_log ~ log(Uniform(0, a_log_init_max)); matches GatedDeltaNet / Mamba conventions.
+        # A = -Uniform(a_log_init_min, a_log_init_max), stored as its log. The default (1, 16)
+        # is mamba_ssm's A_init_range. The lower bound is load-bearing: at 0 a head can draw
+        # A ~ 0, which never decays and turns that channel into a document-mean accumulator.
         self.A_log.copy_(
-            nn.init.uniform_(self.A_log, a=0.0, b=self.a_log_init_max, generator=generator).log()
+            nn.init.uniform_(
+                self.A_log, a=self.a_log_init_min, b=self.a_log_init_max, generator=generator
+            ).log()
         )
 
         dt_min, dt_max, dt_init_floor = 0.001, 0.1, 1e-4
@@ -656,8 +694,14 @@ class Mamba3MixerConfig(SequenceMixerConfig[Mamba3Mixer]):
     """Whether to apply BCNorm (QK-norm analog) to ``B`` and ``C``."""
     bc_bias: bool = True
     """Whether the ``B``/``C`` projections use a bias term."""
+    a_log_init_min: float = 0.05
+    """Lower bound of the ``A_log`` init distribution. Must be ``> 0``: at 0 a head can draw
+    ``A ~ 0``, never decay, and act as an accumulator over the whole sequence, and ``log(0)``
+    is reachable. ``mamba_ssm`` uses 1.0; 0.05 is lower on purpose, so ~6% of heads start
+    slow-decaying. Measured on the 4.8B b=2/b=3 runs, that inherited tail was the *only* source
+    of long-horizon heads either arm ended up with, and nothing in training recreated it."""
     a_log_init_max: float = 16.0
-    """Upper bound of the ``A_log`` init distribution. Lower it (``~0.1``) for state tracking."""
+    """Upper bound of the ``A_log`` init distribution."""
     prefer_official_kernel: Optional[bool] = None
     """
     SSD kernel selection. ``None`` (default, the intended main-run setting) uses the fast
@@ -708,6 +752,7 @@ class Mamba3MixerConfig(SequenceMixerConfig[Mamba3Mixer]):
             n_groups=self.n_groups,
             mimo_rank=self.mimo_rank,
             rotation_block_size=self.rotation_block_size,
+            a_log_init_min=self.a_log_init_min,
             a_log_init_max=self.a_log_init_max,
         )
         H = self.n_heads
@@ -760,6 +805,7 @@ class Mamba3MixerConfig(SequenceMixerConfig[Mamba3Mixer]):
             norm_eps=self.norm_eps,
             bc_norm=self.bc_norm,
             bc_bias=self.bc_bias,
+            a_log_init_min=self.a_log_init_min,
             a_log_init_max=self.a_log_init_max,
             prefer_official_kernel=self.prefer_official_kernel,
             rotation_scan_impl=self.rotation_scan_impl,

@@ -23,10 +23,9 @@ Success:
 
 What the preset fixes, and why it is not overridden here:
     ``mamba3_olmo3_370M`` already defaults to ``mimo_rank=1`` (so the run is eligible for the
-    official ``mamba-ssm`` SISO Triton kernel), ``n_groups=1``, ``a_log_init_max=0.1`` (so the
-    decay horizon covers a long context rather than the ~114-step horizon the library default of
-    16 gives), and ``rotation_block_size=2`` (the TC^0 baseline). Those are the ablation's real
-    settings, so the smoke test uses them as-is.
+    official ``mamba-ssm`` SISO Triton kernel), ``n_groups=1``, the ``A_log`` range ``(1, 16)``
+    (``mamba_ssm``'s ``A_init_range``), and ``rotation_block_size=2`` (the TC^0 baseline). Those
+    are the ablation's real settings, so the smoke test uses them as-is.
 
 ``MAMBA3_ROTATION_BLOCK_SIZE`` selects the transition-block size ``b``: ``2`` is the TC^0
     baseline (default); ``3`` is the smallest non-solvable (NC^1) block (``A_5 subset SO(3)``,
@@ -172,7 +171,7 @@ def build_experiment_config(cli_context: CliContext) -> ExperimentConfig:
     tokenizer_config = TokenizerConfig.dolma2()
 
     # The ablation preset: OLMo-3-370M with Mamba-3 replacing the sliding-window layers. Its
-    # defaults (mimo_rank=1, n_groups=1, a_log_init_max=0.1, use_rope=True, rotation_block_size=2)
+    # defaults (mimo_rank=1, n_groups=1, A_log range (1, 16), use_rope=True, rotation_block_size=2)
     # are the real ablation settings, so they are used as-is. `d_state` is left to the preset's
     # default (`DEFAULT_D_STATE`, 192), which admits b=2, 3 and 4 -- so the TC^0 baseline (b=2)
     # and the non-solvable NC^1 arms (b=3, the smallest/non-fragile block; b=4) are all a single

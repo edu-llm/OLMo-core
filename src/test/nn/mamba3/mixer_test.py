@@ -332,7 +332,9 @@ def test_mamba3_mixer_fan_in_init_rejected():
         pytest.param(
             {"rotation_block_size": 4, "mimo_rank": 3, "n_groups": 2}, id="block_size=4_mimo3_g2"
         ),
-        pytest.param({"a_log_init_max": 0.1}, id="a_log_init_max=0.1"),
+        pytest.param(
+            {"a_log_init_min": 0.00625, "a_log_init_max": 0.1}, id="a_log_init_range=state_tracking"
+        ),
         pytest.param({"bc_norm": False, "bc_bias": False}, id="no_bc_norm_no_bc_bias"),
     ],
 )
@@ -354,21 +356,31 @@ def test_mamba3_mixer_init_is_deterministic(options: dict):
         torch.testing.assert_close(p1, p2, msg=f"mismatch for {n1}")
 
 
-@pytest.mark.parametrize("a_log_init_max", [16.0, 0.1], ids=["default", "state_tracking"])
-def test_mamba3_mixer_a_log_init_max_reaches_initialization(a_log_init_max: float):
+@pytest.mark.parametrize(
+    "a_log_init_min, a_log_init_max",
+    [(1.0, 16.0), (0.00625, 0.1)],
+    ids=["default", "state_tracking"],
+)
+def test_mamba3_mixer_a_log_init_range_reaches_initialization(
+    a_log_init_min: float, a_log_init_max: float
+):
     """
-    ``a_log_init_max`` must actually bound the decay the heads start with.
+    Both ends of the ``A_log`` init range must actually reach ``init_weights``.
 
-    The default of 16 decays a position-0 signal to ~1e-9 by position 256, which is what makes
-    long-horizon state tracking near-untrainable no matter how the rotation is configured; the
-    documented remedy is to lower this field to ~0.1. A field that is stored but never reaches
-    ``init_weights`` would leave that remedy silently inert, so this asserts both directions:
-    ``|A| = exp(A_log)`` stays under the bound, and (with 64 heads) gets close enough to it that
-    an ignored setting could not pass.
+    The default ``(1, 16)`` is ``mamba_ssm``'s ``A_init_range``. The upper bound sets how fast
+    the quickest heads forget; the lower bound floors the decay so no head starts as a
+    non-decaying accumulator, which is what a bound of 0 permits. A field that is stored but
+    never reaches ``init_weights`` would leave either knob silently inert, so this asserts the
+    realized ``|A| = exp(A_log)`` sits inside the range and (with 64 heads) approaches both ends
+    closely enough that an ignored setting could not pass.
     """
     d_model, n_heads = 512, 64
     module = Mamba3MixerConfig(
-        n_heads=n_heads, head_dim=8, d_state=16, a_log_init_max=a_log_init_max
+        n_heads=n_heads,
+        head_dim=8,
+        d_state=16,
+        a_log_init_min=a_log_init_min,
+        a_log_init_max=a_log_init_max,
     ).build(d_model, layer_idx=0, n_layers=1, init_device="cpu")
     module.init_weights(
         init_method=InitMethod.normal,
@@ -382,6 +394,8 @@ def test_mamba3_mixer_a_log_init_max_reaches_initialization(a_log_init_max: floa
     assert torch.isfinite(module.A_log).all()
     assert decay.max().item() <= a_log_init_max
     assert decay.max().item() > a_log_init_max / 2
+    assert decay.min().item() >= a_log_init_min
+    assert decay.min().item() < a_log_init_min + (a_log_init_max - a_log_init_min) / 2
 
 
 @pytest.mark.parametrize(
@@ -565,11 +579,13 @@ def test_mamba3_mixer_config_round_trip():
         mimo_rank=4,
         bc_bias=False,
         rotation_block_size=4,
+        a_log_init_min=0.00625,
         a_log_init_max=0.1,
     )
     rebuilt = Mamba3MixerConfig.from_dict(cfg.as_config_dict())
     assert rebuilt == cfg
     assert rebuilt.rotation_block_size == 4
+    assert rebuilt.a_log_init_min == 0.00625
     assert rebuilt.a_log_init_max == 0.1
     assert rebuilt.num_params(512) == cfg.num_params(512)
 
