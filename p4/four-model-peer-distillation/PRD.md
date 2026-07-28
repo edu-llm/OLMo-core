@@ -12,6 +12,22 @@ selection policy, and sealed evaluation.
 The 2-4 B200 profile is a compressed large-effect screen designed for a roughly
 10-hour allocation. It is not the full 16-seed confirmatory study.
 
+## P4 report alignment
+
+This is the peer-distillation section of the broader P4 learning-science agenda:
+testing which human-learning-inspired principles transfer to machine
+pretraining, which weaken, and which should be discarded. The final report's
+discipline applies here: the paired seed is the experimental unit; audit items
+are measurements, not independent replications; null results should be reported
+as nulls rather than rescued by secondary contrasts; and any short-run B200 result
+must be framed as a large-effect screen unless it is later replicated at the
+planned confirmatory seed count.
+
+This section does not claim to validate human learning science directly. It asks
+a machine-pretraining question: whether a population-training topology can
+transfer useful peer-discovered signal into a single 400M model better than a
+larger-teacher distillation topology under matched controls.
+
 ## Problem
 
 Ordinary teacher-student distillation can compress capability, but it may also
@@ -36,10 +52,14 @@ as best-of-four ensembling, router performance, or a single greedy teacher miss.
   preaudit results, and cost ledgers.
 - Support a compressed 2-4 B200 execution profile without changing the scientific
   arms after outcomes are visible.
+- Report pair-level outcomes and uncertainty honestly, including positive means
+  that fail the lower-bound gate at small seed count.
 
 ## Non-goals
 
 - Proving broad general intelligence improvement.
+- Claiming that the result predicts child learning, classroom outcomes, or human
+  forgetting curves.
 - Claiming open-ended creativity from lexical novelty or embedding distance.
 - Treating a router, ensemble, or best-of-four population result as the primary
   deployment claim.
@@ -65,6 +85,11 @@ as best-of-four ensembling, router performance, or a single greedy teacher miss.
 - Held-out retention JSONL with one `{"text": "..."}` record per line.
 - Fast writable output directory for manifests, checkpoints, and ledgers.
 - Python 3.10+ environment with CUDA, PyTorch, Transformers, and NumPy.
+
+The retention corpus must be held-out general text, not the synthetic arithmetic
+items, benchmark answer keys, or reshaped multiple-choice prompts. If retention
+is weak or absent, the result can still screen the peer-learning mechanism but
+cannot support an "improved without narrowing" claim.
 
 ## Core arms
 
@@ -99,6 +124,12 @@ trace.
 10. Cost ledgers must record student updates, processed tokens, auxiliary tokens,
     attempted outputs, decoded tokens, accepted targets, device time, and
     evaluation counts.
+11. Analysis must treat the population-training seed as the replicate. Thousands
+    of generated audit items must not be used to manufacture narrow confidence
+    intervals.
+12. If the lower-bound gate fails at two to four seeds while the mean is positive,
+    the result must be reported as underpowered or inconclusive, not as evidence
+    that peer learning failed.
 
 ## B200 compressed execution
 
@@ -126,6 +157,10 @@ Run order:
 The compressed profile should be reported as a large-effect screen. A positive
 mean with a failing lower-bound gate at two to four seeds should not be
 overinterpreted as proof of failure.
+
+The notebook does not enforce the 10-hour wall-clock budget by itself. Operators
+should use scheduler, process-level timeout, or capacity-reservation controls and
+must sync outputs off ephemeral storage before instance shutdown.
 
 ## Outputs
 
@@ -156,12 +191,24 @@ Primary metric:
 Supporting metrics:
 
 - paired seed analysis for `peer_frr_onpolicy` versus `large_teacher_diverse`;
+- mean paired percentage-point difference and confidence interval, even when the
+  boolean primary gate is false;
 - safety gate status;
 - general retention margin buffers;
 - expertise retention by peer;
 - shift noninferiority;
 - raw larger-teacher moonshot result;
 - all-in cost ledger by seed and arm.
+
+Interpretation ladder:
+
+- Level 1: peer learning beats ordinary/private and self-snapshot controls.
+- Level 2: peer learning beats `large_teacher_single`.
+- Level 3: peer learning beats `large_teacher_diverse`; this is the 10-hour core
+  claim.
+- Level 4: teacher-external fixed-k novelty passes, if the optional novelty audit
+  is run.
+- Level 5: selected peer-trained 400M beats the raw larger teacher.
 
 ## Acceptance criteria
 
@@ -181,6 +228,10 @@ Supporting metrics:
   forcing sequence-distillation fallback.
 - The 2-4 seed B200 run has limited statistical power and may fail the lower-bound
   superiority gate despite a positive mean.
+- The synthetic arithmetic task family supports a controlled mechanism test, not
+  a broad capability claim.
+- A single checkpoint or single seed is not a valid experimental unit; the
+  configured paired seed set must be completed or explicitly reframed.
 - A poor retention corpus can weaken the "improved without narrowing" claim.
 - The B200 profile does not enforce a wall-clock abort by itself; operators should
   use scheduler or process-level timeout controls.

@@ -7,6 +7,9 @@ stronger larger teacher. The primary comparison is selected `peer_frr_onpolicy`
 400M versus selected `large_teacher_diverse` 400M under matched starts, data,
 student updates, selection policy, and sealed evaluation.
 
+Within the broader P4 learning-science program, this is a machine-pretraining
+topology test, not a claim about human classrooms or child-like learning.
+
 ## Files
 
 - `OLMo400M_four_peer_peer_learning.ipynb` - runnable notebook artifact.
