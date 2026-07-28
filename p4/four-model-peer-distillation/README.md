@@ -11,6 +11,7 @@ student updates, selection policy, and sealed evaluation.
 
 - `OLMo400M_four_peer_peer_learning.ipynb` - runnable notebook artifact.
 - `build_olmo400m_champion_notebook.py` - source generator for the notebook.
+- `PRD.md` - product requirements and acceptance criteria for the experiment.
 - `research_brief.md` - research and protocol rationale.
 
 Expected notebook SHA-256:
