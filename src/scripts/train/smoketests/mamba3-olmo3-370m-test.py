@@ -23,24 +23,27 @@ Success:
 
 What the preset fixes, and why it is not overridden here:
     ``mamba3_olmo3_370M`` already defaults to ``mimo_rank=1`` (so the run is eligible for the
-    official ``mamba-ssm`` SISO Triton kernel), ``n_groups=1``, the ``A_log`` range ``(1, 16)``
-    (``mamba_ssm``'s ``A_init_range``), and ``rotation_block_size=2`` (the TC^0 baseline). Those
-    are the ablation's real settings, so the smoke test uses them as-is.
+    official ``mamba-ssm`` SISO Triton kernel), ``n_groups=1``, the ``A_log`` range
+    ``(0.05, 16)`` (``mamba_ssm``'s ``A_init_range`` with a lowered floor), and
+    ``rotation_block_size=2`` (the TC^0 baseline). Those are the ablation's real settings, so the
+    smoke test uses them as-is.
 
-``MAMBA3_ROTATION_BLOCK_SIZE`` selects the transition-block size ``b``: ``2`` is the TC^0
+``--rotation-block-size`` selects the transition-block size ``b``: ``2`` is the TC^0
     baseline (default); ``3`` is the smallest non-solvable (NC^1) block (``A_5 subset SO(3)``,
     and ``SO(3)`` is simple so it cannot collapse to an abelian subgroup); ``4`` also works
     (``SO(4) contains SO(3)``) but is *fragile* -- ``SO(4)`` has an abelian ``SO(2)xSO(2)``
     maximal torus the model can settle into, silently reverting to b=2 behavior. The preset's
     default ``d_state`` (``DEFAULT_D_STATE``, 192) admits all of 2, 3 and 4, so switching arms is
-    a single ``MAMBA3_ROTATION_BLOCK_SIZE`` change; ``MAMBA3_D_STATE`` overrides the state size
-    only if you want a different one. Set here rather than via a ``--model...`` override so the
-    sentinel's expected value stays in lockstep.
+    a single ``--rotation-block-size`` change; ``--d-state`` overrides the state size only if you
+    want a different one. Both are popped from ``argv`` rather than passed as ``--model...``
+    overrides so the sentinel's expected value stays in lockstep.
 
 Running outside Ai2 (no Beaker token, no GCS) uses the same environment overrides as
-``mamba3-test.py``: ``MAMBA3_DATA_ROOT`` (the data root, consumed by *both* the training and
-eval datasets), ``MAMBA3_SAVE_FOLDER``, ``MAMBA3_WORK_DIR``, ``MAMBA3_ACTIVATION_CHECKPOINTING``,
-and ``MAMBA3_DISABLE_DP``. See ``mamba3-test.py`` for the full description of each.
+``mamba3-test.py`` for paths -- ``MAMBA3_DATA_ROOT`` (consumed by *both* the training and eval
+datasets), ``MAMBA3_SAVE_FOLDER`` and ``MAMBA3_WORK_DIR`` -- and the same flags for everything
+that changes what is being tested: ``--rotation-block-size``, ``--d-state``,
+``--require-fast-kernel``, ``--activation-checkpointing`` and ``--disable-dp``. See
+``mamba3-test.py`` for the full description of each.
 
 Examples:
     Dry run (renders the config; needs a data root set even though it reads no data):
@@ -56,16 +59,17 @@ Examples:
             train test-mamba3-370m local
 
     NC^1 arm (b=3, the non-fragile block):
-        MAMBA3_ROTATION_BLOCK_SIZE=3 MAMBA3_DATA_ROOT=/data/ai2-llm \
+        MAMBA3_DATA_ROOT=/data/ai2-llm \
             MAMBA3_SAVE_FOLDER=/data/checkpoints/mamba3-370m-nc1 \
             torchrun --nproc-per-node=8 \
             src/scripts/train/smoketests/mamba3-olmo3-370m-test.py \
-            train test-mamba3-370m-nc1 local
+            train test-mamba3-370m-nc1 local --rotation-block-size 3
 """
 
 import os
+import sys
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 from olmo_core.config import DType
 from olmo_core.data import (
@@ -98,8 +102,20 @@ from olmo_core.train.train_module import (
     TransformerTrainModuleConfig,
 )
 
-# Sibling module, resolved via the script's own directory on sys.path.
+# Sibling modules, resolved via the script's own directory on sys.path.
+from mamba3_cli import pop_flag, pop_int_opt, popped_tokens  # isort: skip
 from mamba3_sentinel import Mamba3SentinelCallback  # isort: skip
+
+# Set by the argv pre-parse in `__main__`, before `main()` builds the config. Module-level
+# because `build_experiment_config` is a callback and never sees argv.
+ROTATION_BLOCK_SIZE = 2
+D_STATE: Optional[int] = None
+REQUIRE_FAST_KERNEL = False
+ACTIVATION_CHECKPOINTING = False
+DISABLE_DP = False
+# The flags above, as typed. A Beaker launch rebuilds the remote command from `sys.argv`,
+# which no longer holds them, so they have to be added back or the job runs the defaults.
+POPPED_ARGV: List[str] = []
 
 SEQ_LENGTH = 512
 
@@ -135,7 +151,7 @@ def build_experiment_config(cli_context: CliContext) -> ExperimentConfig:
         root_dir = get_root_dir(cli_context.cluster)
         beaker_launch_config = build_launch_config(
             name=cli_context.run_name,
-            cmd=cli_context.remote_cmd,
+            cmd=[*cli_context.remote_cmd, *POPPED_ARGV],
             cluster=cli_context.cluster,
             root_dir=root_dir,
             workspace="ai2/OLMo_3",
@@ -171,20 +187,27 @@ def build_experiment_config(cli_context: CliContext) -> ExperimentConfig:
     tokenizer_config = TokenizerConfig.dolma2()
 
     # The ablation preset: OLMo-3-370M with Mamba-3 replacing the sliding-window layers. Its
-    # defaults (mimo_rank=1, n_groups=1, A_log range (1, 16), use_rope=True, rotation_block_size=2)
-    # are the real ablation settings, so they are used as-is. `d_state` is left to the preset's
-    # default (`DEFAULT_D_STATE`, 192), which admits b=2, 3 and 4 -- so the TC^0 baseline (b=2)
-    # and the non-solvable NC^1 arms (b=3, the smallest/non-fragile block; b=4) are all a single
-    # `MAMBA3_ROTATION_BLOCK_SIZE` change with no d_state juggling. `MAMBA3_D_STATE` overrides it
-    # only if you deliberately want a different state size. Both are set here, not via a
-    # `--model...` override, so the sentinel's expected block size stays in lockstep (a CLI
-    # override merges in after the sentinel is built).
-    rotation_block_size = int(os.environ.get("MAMBA3_ROTATION_BLOCK_SIZE", "2"))
-    d_state_override = os.environ.get("MAMBA3_D_STATE")
-    d_state_kwargs = {} if d_state_override is None else {"d_state": int(d_state_override)}
+    # defaults (mimo_rank=1, n_groups=1, A_log range (0.05, 16), use_rope=True,
+    # rotation_block_size=2) are the real ablation settings, so they are used as-is. `d_state` is
+    # left to the preset's default (`DEFAULT_D_STATE`, 192), which admits b=2, 3 and 4 -- so the
+    # TC^0 baseline (b=2) and the non-solvable NC^1 arms (b=3, the smallest/non-fragile block;
+    # b=4) are all a single `--rotation-block-size` change with no d_state juggling.
+    # `--d-state` overrides it only if you deliberately want a different state size. Both are
+    # popped from argv, not passed as `--model...` overrides, so the sentinel's expected block
+    # size stays in lockstep (an override merges in after the sentinel is built).
+    rotation_block_size = ROTATION_BLOCK_SIZE
+    d_state_kwargs = {} if D_STATE is None else {"d_state": D_STATE}
+    if REQUIRE_FAST_KERNEL and ACTIVATION_CHECKPOINTING:
+        raise SystemExit(
+            "--require-fast-kernel is incompatible with --activation-checkpointing: the official "
+            "kernel's autograd.Function cannot run under non-reentrant checkpointing."
+        )
     model_config = Mamba3Config.mamba3_olmo3_370M(
         vocab_size=tokenizer_config.padded_vocab_size(),
         rotation_block_size=rotation_block_size,
+        # `None` lets dispatch arm the fused kernel whenever eligible; `True` makes an ineligible
+        # call raise instead of silently returning a chunked result.
+        prefer_official_kernel=True if REQUIRE_FAST_KERNEL else None,
         **d_state_kwargs,
     )
 
@@ -201,12 +224,12 @@ def build_experiment_config(cli_context: CliContext) -> ExperimentConfig:
         ),
         compile_model=False,
         # FSDP, not HSDP: at world size 1 HSDP only builds a degenerate size-1 replicate mesh.
-        # MAMBA3_DISABLE_DP=1 drops data parallelism entirely for single-GPU local runs, where
-        # FSDP2's reduce-scatter can fail on the degenerate 1-rank NCCL path. Leave unset (FSDP)
-        # for the real multi-GPU B200 run.
+        # --disable-dp drops data parallelism entirely for single-GPU local runs, where FSDP2's
+        # reduce-scatter can fail on the degenerate 1-rank NCCL path. Leave it off (FSDP) for the
+        # real multi-GPU B200 run.
         dp_config=(
             None
-            if os.environ.get("MAMBA3_DISABLE_DP") == "1"
+            if DISABLE_DP
             else TransformerDataParallelConfig(
                 name=DataParallelType.fsdp,
                 param_dtype=DType.bfloat16,
@@ -216,7 +239,7 @@ def build_experiment_config(cli_context: CliContext) -> ExperimentConfig:
         ),
         # Without FSDP nothing casts the model, so the SSD input would be fp32 and the official
         # SISO kernel would not arm; autocast restores reduced precision on the single-device run.
-        autocast_precision=(DType.bfloat16 if os.environ.get("MAMBA3_DISABLE_DP") == "1" else None),
+        autocast_precision=(DType.bfloat16 if DISABLE_DP else None),
         z_loss_multiplier=1e-5,
         max_grad_norm=1.0,
         scheduler=CosWithWarmup(warmup=2),
@@ -224,7 +247,7 @@ def build_experiment_config(cli_context: CliContext) -> ExperimentConfig:
             TransformerActivationCheckpointingConfig(
                 mode=TransformerActivationCheckpointingMode.full
             )
-            if os.environ.get("MAMBA3_ACTIVATION_CHECKPOINTING") == "1"
+            if ACTIVATION_CHECKPOINTING
             else None
         ),
     )
@@ -269,6 +292,7 @@ def build_experiment_config(cli_context: CliContext) -> ExperimentConfig:
                 run_dir=save_dir,
                 sequence_length=SEQ_LENGTH,
                 expected_rotation_block_size=_rotation_block_size(model_config),
+                expected_official_kernel=True if REQUIRE_FAST_KERNEL else None,
             ),
         )
         .with_callback(
@@ -302,4 +326,11 @@ def build_experiment_config(cli_context: CliContext) -> ExperimentConfig:
 
 
 if __name__ == "__main__":
+    _argv_in = list(sys.argv[1:])
+    ROTATION_BLOCK_SIZE, sys.argv[1:] = pop_int_opt(sys.argv[1:], "--rotation-block-size", 2)
+    D_STATE, sys.argv[1:] = pop_int_opt(sys.argv[1:], "--d-state")
+    REQUIRE_FAST_KERNEL, sys.argv[1:] = pop_flag(sys.argv[1:], "--require-fast-kernel")
+    ACTIVATION_CHECKPOINTING, sys.argv[1:] = pop_flag(sys.argv[1:], "--activation-checkpointing")
+    DISABLE_DP, sys.argv[1:] = pop_flag(sys.argv[1:], "--disable-dp")
+    POPPED_ARGV = popped_tokens(_argv_in, sys.argv[1:])
     main(config_builder=build_experiment_config)

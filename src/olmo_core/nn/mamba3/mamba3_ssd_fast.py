@@ -200,6 +200,7 @@ def _adaptive_scan_chunk(seq_len: int) -> int:
     target = seq_len // _ROTATION_SCAN_TARGET_DIVISOR
     return max(_ROTATION_SCAN_CHUNK_MIN, min(_ROTATION_SCAN_CHUNK_MAX, target))
 
+
 # Below this squared angle the ``sin(phi)/phi`` and ``(1-cos(phi))/phi^2`` coefficients are
 # evaluated by their Taylor series instead. ``theta_proj`` initialises at ``std * 0.1``, so the
 # near-zero regime is where training *starts* -- getting it wrong would produce NaN gradients on

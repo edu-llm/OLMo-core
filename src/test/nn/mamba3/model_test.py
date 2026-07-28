@@ -3,14 +3,10 @@ import torch
 
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.nn.attention import AttentionBackendName, AttentionConfig
-from olmo_core.nn.mamba3 import (
-    DEFAULT_D_STATE,
-    Mamba3,
-    Mamba3Config,
-    no_weight_decay_param_names,
-)
+from olmo_core.nn.mamba3 import DEFAULT_D_STATE, Mamba3, Mamba3Config
 from olmo_core.nn.mamba3.mixer import Mamba3Mixer, Mamba3MixerConfig
 from olmo_core.nn.transformer import Transformer
+from olmo_core.nn.utils import no_weight_decay_param_names
 
 
 def _tiny_hybrid_config(**kwargs) -> Mamba3Config:
@@ -54,6 +50,13 @@ def test_decay_rate_params_are_exempt_from_weight_decay():
     assert dt_bias <= flagged, f"dt_bias not exempt: {sorted(dt_bias - flagged)}"
     # Nothing else should be swept in; over-exempting silently disables regularization.
     assert flagged == a_log | dt_bias, f"unexpected exemptions: {sorted(flagged - a_log - dt_bias)}"
+
+    # The switch is a config field so a checkpoint records which policy the run used, rather
+    # than it being an invisible property of the training script.
+    off = _tiny_hybrid_config(exempt_timescale_params_from_weight_decay=False).build(
+        init_device="cpu"
+    )
+    assert no_weight_decay_param_names(off) == []
 
 
 def test_a_log_init_min_default_keeps_a_long_horizon_tail():

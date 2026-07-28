@@ -43,9 +43,7 @@ def _assoc(rot: torch.Tensor, combine_mode: str) -> torch.Tensor:
     from torch._higher_order_ops.associative_scan import associative_scan
 
     leaves = tuple(rot[..., i, j].contiguous() for i in range(3) for j in range(3))
-    scanned = associative_scan(
-        _so3_pointwise_combine, leaves, dim=1, combine_mode=combine_mode
-    )
+    scanned = associative_scan(_so3_pointwise_combine, leaves, dim=1, combine_mode=combine_mode)
     return torch.stack(tuple(scanned), dim=-1).unflatten(-1, (3, 3))
 
 
@@ -117,9 +115,15 @@ def main() -> None:
     # build a quaternion, the matrix rows build via Rodrigues). 9-leaf "pointwise" is not benched --
     # it was 837.5 ms compiled and OOMs on 1152 GiB; the quaternion 4-leaf carry is that retry.
     variants = [
-        ("chunked (chunk=32, today)", lambda th: _cumulative_block_rotation(fast_block_rotations(th, 3), chunk_size=32)),
+        (
+            "chunked (chunk=32, today)",
+            lambda th: _cumulative_block_rotation(fast_block_rotations(th, 3), chunk_size=32),
+        ),
         ("associative generic (9-leaf)", lambda th: _assoc(fast_block_rotations(th, 3), "generic")),
-        ("associative analytic-bwd (9-leaf)", lambda th: associative_autograd_cumulative_block_rotation(fast_block_rotations(th, 3))),
+        (
+            "associative analytic-bwd (9-leaf)",
+            lambda th: associative_autograd_cumulative_block_rotation(fast_block_rotations(th, 3)),
+        ),
         ("quaternion generic (4-leaf)", lambda th: _quat(th, "generic")),
         # Pointwise LAST: if the 4-leaf carry still overflows registers it OOMs, and a CUDA OOM can
         # poison the context for later rows -- so the rows that matter have already printed.

@@ -127,6 +127,32 @@ def test_defaults_are_the_nc1_mamba_arm_fed_harder_in_fp8(script):
     assert script.DEFAULT_RANK_MICROBATCH_SIZE > script.dolma2.DEFAULT_RANK_MICROBATCH_SIZE
 
 
+def test_weight_decay_exemption_survives_resuming_an_older_checkpoint(script):
+    """
+    Regression: the exemption has to outlive a checkpoint written before it existed.
+
+    The flattened optimizer state stores ``weight_decay`` per parameter, so loading a checkpoint
+    from a run that decayed ``A_log``/``dt_bias`` restores that non-zero value onto the new
+    exempt group. Nothing errors -- the run simply carries on decaying the timescales while the
+    config says otherwise. Pinning the field in ``fixed_fields`` makes the config win on load.
+    """
+    from olmo_core.optim import AdamWConfig
+
+    model = Mamba3Config.mamba3_olmo3_370M(vocab_size=100352).build(init_device="meta")
+    optim = AdamWConfig(lr=1e-3, weight_decay=0.1)
+    n = script.exempt_timescale_params_from_weight_decay(optim, model)
+
+    assert n > 0, "nothing was exempted"
+    exempt = [go for go in optim.group_overrides if go.opts.get("weight_decay") == 0.0]
+    assert any(
+        p.endswith(".A_log") for go in exempt for p in go.params
+    ), "no group exempts the SSM timescale parameters"
+    assert "weight_decay" in optim.fixed_fields, (
+        "weight_decay is not pinned, so a resumed checkpoint will silently reinstate decay on "
+        f"A_log/dt_bias; fixed_fields={optim.fixed_fields}"
+    )
+
+
 def test_explicit_flags_override_the_mamba_defaults(script):
     """A user must still be able to run the b=2 baseline or turn fp8 off from this same script."""
     opts, _ = script.parse_args(

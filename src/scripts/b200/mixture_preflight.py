@@ -221,7 +221,9 @@ def main() -> int:
         measure_source(source, itemsize) for source in source_list.sources
     ]
 
-    header = f"{'source':24}{'files':>7}{'GiB':>9}{'available':>11}{'ratio':>9}{'needed':>10}  verdict"
+    header = (
+        f"{'source':24}{'files':>7}{'GiB':>9}{'available':>11}{'ratio':>9}{'needed':>10}  verdict"
+    )
     print(header)
     print("-" * len(header))
 
@@ -244,7 +246,9 @@ def main() -> int:
     print()
     print(f"corpus      {total_tokens / 1e9:.1f}B tokens across {total_bytes / 2**30:.1f} GiB")
     print(f"max budget  {_fmt_tokens(binding.budget_cap)} tokens, bound by '{binding.name}'")
-    print(f"staging     ~{args.requested_tokens * itemsize / 2**30:.1f} GiB for the requested budget")
+    print(
+        f"staging     ~{args.requested_tokens * itemsize / 2**30:.1f} GiB for the requested budget"
+    )
 
     if shortfalls:
         print()

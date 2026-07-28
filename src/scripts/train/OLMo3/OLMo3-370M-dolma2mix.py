@@ -83,9 +83,7 @@ class ExperimentConfig(Config):
 
 
 # --- Defaults (the proven 370M ladder recipe at seq-len 4096) --------------------------------
-DEFAULT_DATA_CONFIG = (
-    "s3://edullm-datasets/olmo-150b-dolma2/configs/equal-weighting-config.yaml"
-)
+DEFAULT_DATA_CONFIG = "s3://edullm-datasets/olmo-150b-dolma2/configs/equal-weighting-config.yaml"
 DEFAULT_SEQUENCE_LENGTH = 4096
 DEFAULT_GLOBAL_BATCH_SIZE = 192 * DEFAULT_SEQUENCE_LENGTH  # 786,432 tokens (192 sequences)
 DEFAULT_RANK_MICROBATCH_SIZE = 4 * DEFAULT_SEQUENCE_LENGTH  # 16,384 tokens/rank; raise on B200
@@ -277,48 +275,113 @@ def parse_args():
         description="Pre-train a 370M OLMo-3 model on the dolma2 source mixture.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("run_name", type=str, help="Name of the run (used for W&B + checkpoint dir).")
+    parser.add_argument(
+        "run_name", type=str, help="Name of the run (used for W&B + checkpoint dir)."
+    )
     parser.add_argument("--model-factory", type=str, default="olmo3_370M")
-    parser.add_argument("--attn-backend", type=str, default=None,
-                        help="Override the OLMo-3 attention backend (e.g. flash_4 on B200). "
-                             "Default: the factory default (flash_2).")
-    parser.add_argument("--data-config", type=str, default=DEFAULT_DATA_CONFIG,
-                        help="SourceMixtureList YAML (local path or s3://).")
+    parser.add_argument(
+        "--attn-backend",
+        type=str,
+        default=None,
+        help="Override the OLMo-3 attention backend (e.g. flash_4 on B200). "
+        "Default: the factory default (flash_2).",
+    )
+    parser.add_argument(
+        "--data-config",
+        type=str,
+        default=DEFAULT_DATA_CONFIG,
+        help="SourceMixtureList YAML (local path or s3://).",
+    )
     parser.add_argument("--sequence-length", type=int, default=DEFAULT_SEQUENCE_LENGTH)
-    parser.add_argument("--global-batch-size", type=int, default=DEFAULT_GLOBAL_BATCH_SIZE,
-                        help="Global batch size IN TOKENS (must be a multiple of sequence-length).")
-    parser.add_argument("--rank-microbatch-size", type=int, default=DEFAULT_RANK_MICROBATCH_SIZE,
-                        help="Per-rank microbatch IN TOKENS. Raise on B200 (183GB) for throughput.")
-    parser.add_argument("--token-budget", type=int, default=DEFAULT_TOKEN_BUDGET,
-                        help="Total tokens to train on (also caps how much of the mix is drawn).")
-    parser.add_argument("--checkpoint-tokens", type=int, default=DEFAULT_CHECKPOINT_TOKENS,
-                        help="Save a full checkpoint roughly every this many tokens.")
-    parser.add_argument("--lr", type=float, default=None,
-                        help="Override LR. Default: OLMo ladder formula (~7.8e-4 for 370M @ seq4096).")
+    parser.add_argument(
+        "--global-batch-size",
+        type=int,
+        default=DEFAULT_GLOBAL_BATCH_SIZE,
+        help="Global batch size IN TOKENS (must be a multiple of sequence-length).",
+    )
+    parser.add_argument(
+        "--rank-microbatch-size",
+        type=int,
+        default=DEFAULT_RANK_MICROBATCH_SIZE,
+        help="Per-rank microbatch IN TOKENS. Raise on B200 (183GB) for throughput.",
+    )
+    parser.add_argument(
+        "--token-budget",
+        type=int,
+        default=DEFAULT_TOKEN_BUDGET,
+        help="Total tokens to train on (also caps how much of the mix is drawn).",
+    )
+    parser.add_argument(
+        "--checkpoint-tokens",
+        type=int,
+        default=DEFAULT_CHECKPOINT_TOKENS,
+        help="Save a full checkpoint roughly every this many tokens.",
+    )
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=None,
+        help="Override LR. Default: OLMo ladder formula (~7.8e-4 for 370M @ seq4096).",
+    )
     parser.add_argument("--warmup-steps", type=int, default=DEFAULT_WARMUP_STEPS)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
-    parser.add_argument("--eval-data", type=str, default=None,
-                        help="Comma-separated held-out .npy paths/globs for a COMMON validation set "
-                             "(use the SAME value for both trial runs to compare data configs fairly).")
-    parser.add_argument("--eval-tasks", type=str, default=None,
-                        help="Comma-separated downstream task names (e.g. hellaswag,arc_easy). "
-                             "Note: near-random at ~70M/1B tokens; held-out val loss is more sensitive.")
-    parser.add_argument("--eval-interval", type=int, default=1000,
-                        help="Steps between evals (also evaluated once at the end).")
-    parser.add_argument("--save-folder", type=str, default=None,
-                        help="Where to write checkpoints. Must be an s3:///gs:// path for real runs "
-                             "so checkpoints survive the (ephemeral) box.")
-    parser.add_argument("--allow-local-save", action="store_true",
-                        help="Permit a non-remote --save-folder for real training (NOT durable; discouraged).")
-    parser.add_argument("--work-dir", type=str, default=None,
-                        help="Local scratch dir for dataset index/cache (e.g. /mnt/nvme/olmo-work).")
-    parser.add_argument("--load-path", type=str, default=None,
-                        help="Optional warm-start checkpoint if save-folder is empty.")
-    parser.add_argument("--wandb", dest="wandb", action="store_true", default=True,
-                        help="Enable Weights & Biases logging (default: on; needs WANDB_API_KEY).")
-    parser.add_argument("--no-wandb", dest="wandb", action="store_false",
-                        help="Disable Weights & Biases logging.")
-    parser.add_argument("--dry-run", action="store_true", help="Build and print the config, then exit.")
+    parser.add_argument(
+        "--eval-data",
+        type=str,
+        default=None,
+        help="Comma-separated held-out .npy paths/globs for a COMMON validation set "
+        "(use the SAME value for both trial runs to compare data configs fairly).",
+    )
+    parser.add_argument(
+        "--eval-tasks",
+        type=str,
+        default=None,
+        help="Comma-separated downstream task names (e.g. hellaswag,arc_easy). "
+        "Note: near-random at ~70M/1B tokens; held-out val loss is more sensitive.",
+    )
+    parser.add_argument(
+        "--eval-interval",
+        type=int,
+        default=1000,
+        help="Steps between evals (also evaluated once at the end).",
+    )
+    parser.add_argument(
+        "--save-folder",
+        type=str,
+        default=None,
+        help="Where to write checkpoints. Must be an s3:///gs:// path for real runs "
+        "so checkpoints survive the (ephemeral) box.",
+    )
+    parser.add_argument(
+        "--allow-local-save",
+        action="store_true",
+        help="Permit a non-remote --save-folder for real training (NOT durable; discouraged).",
+    )
+    parser.add_argument(
+        "--work-dir",
+        type=str,
+        default=None,
+        help="Local scratch dir for dataset index/cache (e.g. /mnt/nvme/olmo-work).",
+    )
+    parser.add_argument(
+        "--load-path",
+        type=str,
+        default=None,
+        help="Optional warm-start checkpoint if save-folder is empty.",
+    )
+    parser.add_argument(
+        "--wandb",
+        dest="wandb",
+        action="store_true",
+        default=True,
+        help="Enable Weights & Biases logging (default: on; needs WANDB_API_KEY).",
+    )
+    parser.add_argument(
+        "--no-wandb", dest="wandb", action="store_false", help="Disable Weights & Biases logging."
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Build and print the config, then exit."
+    )
     opts, overrides = parser.parse_known_args()
 
     if opts.work_dir is None:

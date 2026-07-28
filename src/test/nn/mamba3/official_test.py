@@ -460,7 +460,9 @@ def test_dispatch_routes_block_size_3_to_the_official_kernel():
         prefer_official_kernel=True,
     )
     direct = mamba3_ssd_fast(**kwargs, heads_per_group=heads_per_group, block_size=block_size)
-    assert torch.equal(dispatched, direct), "b=3 dispatch did not take the fast-rotation kernel path"
+    assert torch.equal(
+        dispatched, direct
+    ), "b=3 dispatch did not take the fast-rotation kernel path"
 
 
 @requires_gpu

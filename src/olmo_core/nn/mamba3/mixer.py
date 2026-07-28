@@ -106,19 +106,6 @@ def mamba3_modules_to_ignore_for_fp8(model: nn.Module) -> set:
 # re-exported here, where it was originally public, so existing imports keep working.
 
 
-def no_weight_decay_param_names(module: nn.Module) -> List[str]:
-    """
-    Fully-qualified names of parameters that must not be weight-decayed.
-
-    Follows ``mamba_ssm``, which tags ``A_log``, ``dt_bias`` and ``D`` with
-    ``_no_weight_decay = True``. These set the recurrence's timescale rather than its magnitude,
-    so shrinking them toward zero moves the model's forgetting rate rather than regularizing it.
-
-    Feed the result to :class:`~olmo_core.optim.OptimGroupOverride` with ``weight_decay=0.0``.
-    """
-    return [n for n, p in module.named_parameters() if getattr(p, "_no_weight_decay", False)]
-
-
 def _rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
     """Root-mean-square normalization over the last dimension, in float32."""
     orig_dtype = x.dtype
@@ -172,8 +159,7 @@ def _validate_dims(
         raise OLMoConfigurationError(f"a_log_init_min must be > 0, got {a_log_init_min}")
     if a_log_init_max <= a_log_init_min:
         raise OLMoConfigurationError(
-            f"a_log_init_max must be > a_log_init_min, got "
-            f"({a_log_init_min}, {a_log_init_max})"
+            f"a_log_init_max must be > a_log_init_min, got " f"({a_log_init_min}, {a_log_init_max})"
         )
     if n_groups < 1:
         raise OLMoConfigurationError(f"n_groups must be >= 1, got {n_groups}")
@@ -225,13 +211,13 @@ class Mamba3Mixer(SequenceMixer):
     :param bc_bias: Whether the ``B``/``C`` projections use a bias term.
     :param a_log_init_min: Lower bound of the ``A_log`` init distribution. ``A`` is drawn as
         ``-Uniform(a_log_init_min, a_log_init_max)``, so this floors the decay rate. The default
-        of 1.0 matches ``mamba_ssm``'s ``A_init_range=(1, 16)``. A bound of 0 admits heads with
-        ``A ~ 0``, which never decay and act as accumulators over the whole sequence, and makes
-        ``log(0) = -inf`` reachable.
+        of 0.05 sits below ``mamba_ssm``'s ``A_init_range=(1, 16)`` on purpose. A bound of 0
+        admits heads with ``A ~ 0``, which never decay and act as accumulators over the whole
+        sequence, and makes ``log(0) = -inf`` reachable.
     :param a_log_init_max: Upper bound of the ``A_log`` init distribution; see
-        ``a_log_init_min``. Together the default ``(1, 16)`` spreads the per-head memory horizon
-        across roughly three orders of magnitude once ``dt in [0.001, 0.1]`` is folded in, which
-        is what gives the layer both short- and long-horizon heads at init.
+        ``a_log_init_min``. Together the default ``(0.05, 16)`` spreads the per-head memory
+        horizon across several orders of magnitude once ``dt in [0.001, 0.1]`` is folded in,
+        which is what gives the layer both short- and long-horizon heads at init.
     :param rotation_scan_impl: Which of
         :data:`~olmo_core.nn.mamba3.mamba3_ssd_fast.ROTATION_SCAN_IMPLS` computes the ``b >= 3``
         prefix product. ``None`` (the default) defers to ``MAMBA3_ROTATION_SCAN_IMPL``, so the
@@ -273,6 +259,7 @@ class Mamba3Mixer(SequenceMixer):
         norm_eps: float = 1e-5,
         bc_norm: bool = True,
         bc_bias: bool = True,
+        exempt_timescale_params_from_weight_decay: bool = True,
         a_log_init_min: float = 0.05,
         a_log_init_max: float = 16.0,
         prefer_official_kernel: Optional[bool] = None,
@@ -305,6 +292,7 @@ class Mamba3Mixer(SequenceMixer):
         self.norm_eps = norm_eps
         self.bc_norm_enabled = bc_norm
         self.bc_bias = bc_bias
+        self.exempt_timescale_params_from_weight_decay = exempt_timescale_params_from_weight_decay
         self.a_log_init_min = a_log_init_min
         self.a_log_init_max = a_log_init_max
         # Kernel selection, forwarded to `dispatch_mamba3_ssd`. ``None`` (default) uses the fast
@@ -359,14 +347,9 @@ class Mamba3Mixer(SequenceMixer):
         self.dt_bias = nn.Parameter(
             torch.empty(self.n_heads, dtype=torch.float32, device=init_device)
         )
-        # Both set the recurrence's timescale, not its magnitude, so weight decay on them is
-        # not regularization -- it is a pull toward a fixed forgetting rate. Decaying A_log
-        # toward 0 drives |A| to 1; decaying dt_bias toward 0 drives dt to softplus(0)=0.693,
-        # ~70x the init median. Since the memory horizon is 1/(dt*|A|), that squeezes it from
-        # both ends. `mamba_ssm` marks the same parameters exempt; see
-        # `no_weight_decay_param_names`, which the training script turns into optimizer groups.
-        self.A_log._no_weight_decay = True  # type: ignore[attr-defined]
-        self.dt_bias._no_weight_decay = True  # type: ignore[attr-defined]
+        if exempt_timescale_params_from_weight_decay:
+            self.A_log._no_weight_decay = True  # type: ignore[attr-defined]
+            self.dt_bias._no_weight_decay = True  # type: ignore[attr-defined]
 
         # Norm weights default to ones so the module is usable even before ``init_weights``.
         self.o_norm_weight = nn.Parameter(
@@ -538,9 +521,9 @@ class Mamba3Mixer(SequenceMixer):
         # for any block size: small angles put exp(S) near I regardless of b.
         init_linear(self.theta_proj, std=std * 0.1, generator=generator)
 
-        # A = -Uniform(a_log_init_min, a_log_init_max), stored as its log. The default (1, 16)
-        # is mamba_ssm's A_init_range. The lower bound is load-bearing: at 0 a head can draw
-        # A ~ 0, which never decays and turns that channel into a document-mean accumulator.
+        # A = -Uniform(a_log_init_min, a_log_init_max), stored as its log. The lower bound is
+        # load-bearing: at 0 a head can draw A ~ 0, which never decays and turns that channel
+        # into a document-mean accumulator.
         self.A_log.copy_(
             nn.init.uniform_(
                 self.A_log, a=self.a_log_init_min, b=self.a_log_init_max, generator=generator
@@ -694,12 +677,18 @@ class Mamba3MixerConfig(SequenceMixerConfig[Mamba3Mixer]):
     """Whether to apply BCNorm (QK-norm analog) to ``B`` and ``C``."""
     bc_bias: bool = True
     """Whether the ``B``/``C`` projections use a bias term."""
+    # Decaying A_log/dt_bias moves the recurrence's timescale, not its capacity: |A| -> 1 and
+    # dt -> softplus(0) = 0.693, squeezing the 1/(dt*|A|) horizon from both ends.
+    exempt_timescale_params_from_weight_decay: bool = True
+    """Tag ``A_log`` and ``dt_bias`` with ``_no_weight_decay``, as ``mamba_ssm`` does. Collect the
+    tagged names with :func:`~olmo_core.nn.utils.no_weight_decay_param_names` and pass them to an
+    :class:`~olmo_core.optim.OptimGroupOverride` with ``weight_decay=0.0``; tagging alone does not
+    change the optimizer."""
+    # Below mamba_ssm's 1.0: the 4.8B runs' only long-horizon heads came from this tail at init.
     a_log_init_min: float = 0.05
-    """Lower bound of the ``A_log`` init distribution. Must be ``> 0``: at 0 a head can draw
-    ``A ~ 0``, never decay, and act as an accumulator over the whole sequence, and ``log(0)``
-    is reachable. ``mamba_ssm`` uses 1.0; 0.05 is lower on purpose, so ~6% of heads start
-    slow-decaying. Measured on the 4.8B b=2/b=3 runs, that inherited tail was the *only* source
-    of long-horizon heads either arm ended up with, and nothing in training recreated it."""
+    """Lower bound of the ``A_log`` init distribution, i.e. the floor on the decay rate. Must be
+    ``> 0``: at 0 a head can draw ``A ~ 0``, never decay, and act as an accumulator over the whole
+    sequence, and ``log(0)`` becomes reachable."""
     a_log_init_max: float = 16.0
     """Upper bound of the ``A_log`` init distribution."""
     prefer_official_kernel: Optional[bool] = None
@@ -805,6 +794,7 @@ class Mamba3MixerConfig(SequenceMixerConfig[Mamba3Mixer]):
             norm_eps=self.norm_eps,
             bc_norm=self.bc_norm,
             bc_bias=self.bc_bias,
+            exempt_timescale_params_from_weight_decay=self.exempt_timescale_params_from_weight_decay,
             a_log_init_min=self.a_log_init_min,
             a_log_init_max=self.a_log_init_max,
             prefer_official_kernel=self.prefer_official_kernel,

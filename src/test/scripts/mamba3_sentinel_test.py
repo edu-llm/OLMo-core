@@ -96,3 +96,63 @@ def test_sentinel_still_detects_what_it_is_for(sentinel_mod):
     for step in range(6):
         callback.pre_log_metrics(step, {sentinel_mod.STEP_SKIPPED_METRIC: 1.0})
     assert "high_step_skip_rate" in callback._alerts_seen
+
+
+class _FakeMixer:
+    def __init__(self, mimo_rank: int = 1, prefer_official_kernel=None):
+        self.mimo_rank = mimo_rank
+        self.prefer_official_kernel = prefer_official_kernel
+
+
+def _kernel_callback(sentinel_mod, monkeypatch, *, installed: bool, cuda: bool, mixers, expected):
+    """A sentinel whose SSD-eligibility inputs are all pinned, so the check is deterministic."""
+    callback = _make(sentinel_mod, expected_official_kernel=expected)
+    monkeypatch.setattr(
+        "olmo_core.nn.mamba3.mamba3_ssd_api.has_mamba3", lambda: installed, raising=True
+    )
+    monkeypatch.setattr(sentinel_mod.torch.cuda, "is_available", lambda: cuda)
+    monkeypatch.setattr(
+        type(callback),
+        "_iter_mixers",
+        lambda self: iter([(f"blocks.{i}", m) for i, m in enumerate(mixers)]),
+    )
+    return callback
+
+
+def test_kernel_check_passes_when_the_official_path_is_live(sentinel_mod, monkeypatch):
+    callback = _kernel_callback(
+        sentinel_mod, monkeypatch, installed=True, cuda=True, mixers=[_FakeMixer()], expected=True
+    )
+    callback._check_ssd_kernel()
+    assert "ssd_kernel_mismatch" not in callback._alerts_seen
+
+
+@pytest.mark.parametrize(
+    "installed, cuda, mixer",
+    [
+        (False, True, _FakeMixer()),  # mamba-ssm absent
+        (True, False, _FakeMixer()),  # CPU-only
+        (True, True, _FakeMixer(mimo_rank=4)),  # MIMO is ineligible
+        (True, True, _FakeMixer(prefer_official_kernel=False)),  # explicitly forbidden
+    ],
+    ids=["not-installed", "no-cuda", "mimo", "forbidden"],
+)
+def test_kernel_check_catches_a_silent_downgrade(sentinel_mod, monkeypatch, installed, cuda, mixer):
+    """
+    The failure this exists for: asking for the fused kernel and silently getting the reference
+    one, so the run goes green having exercised code the real runs never touch.
+    """
+    callback = _kernel_callback(
+        sentinel_mod, monkeypatch, installed=installed, cuda=cuda, mixers=[mixer], expected=True
+    )
+    callback._check_ssd_kernel()
+    assert "ssd_kernel_mismatch" in callback._alerts_seen
+
+
+def test_kernel_check_is_inert_when_nothing_is_expected(sentinel_mod, monkeypatch):
+    """Default runs only log which path is live; they must not fail on the fallback."""
+    callback = _kernel_callback(
+        sentinel_mod, monkeypatch, installed=False, cuda=False, mixers=[_FakeMixer()], expected=None
+    )
+    callback._check_ssd_kernel()
+    assert callback._alerts_seen == {}

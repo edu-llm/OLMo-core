@@ -36,8 +36,8 @@ All Mamba-3 specifics live here:
 fp8 only swaps ``nn.Linear`` layers; it never touches the Mamba-3 SSD Triton kernel, so it is
 orthogonal to the kernel/AC choice. Activation checkpointing has two flavours here:
 ``--activation-checkpointing`` wraps only ``blocks.*.feed_forward`` (the SwiGLU MLP), which never
-touches the mixer and so is safe with the fast official kernel; whole-block AC (the
-``MAMBA3_ACTIVATION_CHECKPOINTING`` escape hatch / ``full`` mode) wraps the mixer too and is
+touches the mixer and so is safe with the fast official kernel; whole-block AC (``full`` mode, the
+smoke tests' ``--activation-checkpointing`` escape hatch) wraps the mixer too and is
 incompatible with the official kernel's ``autograd.Function``, so it must use the chunked path. The
 b>=3 rotation is served by the sequence-length-adaptive prefix-scan in ``mamba3_ssd_fast`` (the
 dispatch selects it automatically for the fast path); ``--rotation-scan-impl`` picks *which* scan,
@@ -79,14 +79,14 @@ from olmo_core.nn.mamba3 import (
     Mamba3Config,
     admissible_block_sizes,
     mamba3_modules_to_ignore_for_fp8,
-    no_weight_decay_param_names,
 )
-from olmo_core.optim import OptimGroupOverride
 from olmo_core.nn.mamba3.mamba3_ssd_fast import (
     ROTATION_SCAN_IMPLS,
     resolve_rotation_scan_impl,
 )
 from olmo_core.nn.transformer import TransformerActivationCheckpointingMode
+from olmo_core.nn.utils import no_weight_decay_param_names
+from olmo_core.optim import OptimGroupOverride
 from olmo_core.train.callbacks import ProfilerCallback
 from olmo_core.train.train_module import TransformerActivationCheckpointingConfig
 
@@ -114,8 +114,9 @@ log = dolma2.log
 FP8_RECIPES = ("mxfp8", "rowwise", "tensorwise", "off")
 DEFAULT_FP8_RECIPE = "mxfp8"  # B200-native; use "rowwise" for local (non-SM100) validation
 DEFAULT_MODEL_FACTORY = "mamba3_olmo3_370M"
-# NC^1 arm by default; pass --rotation-block-size 2 for the TC^0 baseline. MAMBA3_ROTATION_BLOCK_SIZE
-# still works as a fallback default, matching the smoke tests.
+# NC^1 arm by default; pass --rotation-block-size 2 for the TC^0 baseline.
+# MAMBA3_ROTATION_BLOCK_SIZE is kept only as a fallback default for existing launch scripts; the
+# smoke tests take the flag alone.
 DEFAULT_ROTATION_BLOCK_SIZE = int(os.environ.get("MAMBA3_ROTATION_BLOCK_SIZE", 3))
 # 32 sequences/rank: divides the 192-seq global batch (6 accum steps) and raises arithmetic intensity
 # above the dense default. This default does NOT fit on its own -- at 32 seqs the LM head's
@@ -267,6 +268,40 @@ def build_mamba_model_config(opts):
     return model_config, d_state
 
 
+def exempt_timescale_params_from_weight_decay(optim, model) -> int:
+    """
+    Give the SSM timescale parameters their own zero-weight-decay group.
+
+    The dense builder only exempts embeddings, which leaves ``A_log`` and ``dt_bias`` decaying
+    toward a fixed forgetting rate. Names are read off the built model rather than hardcoded, so
+    a change to the block layout cannot silently stop matching.
+
+    ``weight_decay`` is also pinned in ``fixed_fields``. Without that, resuming a checkpoint
+    written before this exemption existed quietly undoes it: the flattened optimizer state stores
+    ``weight_decay`` per parameter, so the load restores the old non-zero value onto the new group
+    and the run carries on decaying while the config claims otherwise. Pinning is scoped to this
+    optimizer, leaving the dense builder's behaviour unchanged.
+
+    :param optim: The optimizer config to amend, in place.
+    :param model: A built model, which may be on ``meta``; only parameter names are read.
+
+    :returns: How many parameters were exempted.
+    """
+    no_decay = no_weight_decay_param_names(model)
+    if not no_decay:
+        return 0
+    # `group_overrides` is None on a default optimizer config; the dense builder happens to
+    # populate it, but do not rely on that staying true.
+    optim.group_overrides = [
+        *(optim.group_overrides or []),
+        OptimGroupOverride(params=sorted(no_decay), opts=dict(weight_decay=0.0)),
+    ]
+    if "weight_decay" not in optim.fixed_fields:
+        optim.fixed_fields = (*optim.fixed_fields, "weight_decay")
+    log.info("weight decay disabled for %d SSM timescale parameter(s)", len(no_decay))
+    return len(no_decay)
+
+
 def build_config(opts, overrides):
     """
     Build the dense script's config, then swap in the Mamba-3 model and fp8 recipe.
@@ -287,17 +322,13 @@ def build_config(opts, overrides):
     if opts.lr is None:
         config.train_module.optim.lr = dolma2.ladder_lr(model_config.num_non_embedding_params)
 
-    # Exempt the SSM timescale parameters from weight decay, as `mamba_ssm` does. The dense
-    # builder only exempts embeddings, which leaves A_log and dt_bias decaying toward a fixed
-    # forgetting rate (|A| -> 1, dt -> softplus(0) = 0.693). Patterns are fnmatch globs against
-    # parameter FQNs, and they are read off the built model rather than hardcoded so a change to
-    # the block layout cannot silently stop matching.
-    no_decay = no_weight_decay_param_names(model_config.build(init_device="meta"))
-    if no_decay:
-        config.train_module.optim.group_overrides.append(
-            OptimGroupOverride(params=sorted(no_decay), opts=dict(weight_decay=0.0))
-        )
-        log.info("weight decay disabled for %d SSM timescale parameter(s)", len(no_decay))
+    # The dense builder only exempts embeddings, so without this the SSM timescale parameters
+    # decay toward a fixed forgetting rate; see `exempt_timescale_params_from_weight_decay`. Names
+    # are read off the built model rather than hardcoded, so a change to the block layout cannot
+    # silently stop matching.
+    exempt_timescale_params_from_weight_decay(
+        config.train_module.optim, model_config.build(init_device="meta")
+    )
 
     # The scan is logged *resolved*, not as it was typed: an unset flag still runs a specific
     # implementation, and "which scan did this run use" is exactly the question the environment-only

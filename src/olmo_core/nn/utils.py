@@ -1,12 +1,26 @@
 from collections import defaultdict
-from typing import Dict, Tuple, Type
+from typing import Dict, List, Tuple, Type
 
 import torch
+import torch.nn as nn
 from torch.distributed.tensor.parallel import (
     ColwiseParallel,
     PrepareModuleInput,
     RowwiseParallel,
 )
+
+
+def no_weight_decay_param_names(module: nn.Module) -> List[str]:
+    """
+    Fully-qualified names of parameters tagged ``_no_weight_decay``.
+
+    Modules tag a parameter when decaying it would move a learned *timescale* rather than
+    regularize a weight, so shrinking it toward zero changes model behaviour instead of
+    capacity. ``mamba_ssm`` uses the same tag for ``A_log``, ``dt_bias`` and ``D``.
+
+    Feed the result to :class:`~olmo_core.optim.OptimGroupOverride` with ``weight_decay=0.0``.
+    """
+    return [n for n, p in module.named_parameters() if getattr(p, "_no_weight_decay", False)]
 
 
 def _get_custom_checkpoint_policy(meta: Dict[str, int]):

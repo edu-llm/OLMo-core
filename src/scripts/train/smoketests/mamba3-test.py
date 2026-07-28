@@ -12,13 +12,18 @@ Success:
 - The LM evaluator reports CE loss and PPL at steps 10 and 20, confirming the mixer also runs
   in eval mode (``torch.no_grad``, no gating on the training graph).
 
-Reference kernel, not the fast kernel:
-    The fast ``mamba-ssm`` Mamba-3 kernel is NOT installed in this environment, so
-    :func:`~olmo_core.nn.mamba3.mamba3_ssd_api.dispatch_mamba3_ssd` falls through to the
-    pure-PyTorch :func:`~olmo_core.nn.mamba3.mamba3_ssd_api.mamba3_ssd_reference`. The
-    :func:`~olmo_core.nn.mamba3.mamba3_ssd_api.has_mamba3` probe imports
-    ``mamba_ssm.modules.mamba3``, which only exists on ``mamba-ssm`` ``main`` and requires a
-    source build. What this run validates is therefore the fallback path.
+Which kernel this actually exercises:
+    :func:`~olmo_core.nn.mamba3.mamba3_ssd_api.dispatch_mamba3_ssd` takes the fast ``mamba-ssm``
+    kernel when :func:`~olmo_core.nn.mamba3.mamba3_ssd_api.has_mamba3` is true and the call is
+    eligible (bf16, ``mimo_rank=1``), and otherwise falls through to the pure-PyTorch
+    :func:`~olmo_core.nn.mamba3.mamba3_ssd_api.mamba3_ssd_reference`. ``has_mamba3`` imports
+    ``mamba_ssm.modules.mamba3``, which only exists on ``mamba-ssm`` ``main`` and needs a source
+    build, so which path runs depends on the environment -- the sentinel logs which one is live
+    at startup. Pass ``--require-fast-kernel`` to turn that into a hard requirement: the run
+    fails in preflight rather than going green having exercised the fallback. Kernel
+    *correctness* is not this script's job -- ``official_test.py`` already pins the fast kernel
+    against the reference forward and backward on GPU. What this script adds is that the
+    surrounding 20-step training loop works with whichever path is live.
 
 Where this deviates from the 190M base config, and why:
     ``SEQ_LENGTH`` is 512 rather than the base config's 8192. The reference SSD kernel is a
@@ -60,14 +65,29 @@ Running outside Ai2 (no Beaker token, no GCS):
         Dataset cache dir (tokenized-instance indices). Defaults to a ``dataset-cache``
         subdirectory of the save folder when running outside Beaker.
 
-    ``MAMBA3_ACTIVATION_CHECKPOINTING``
-        Set to ``1`` to checkpoint every block. Off by default. This is the escape hatch for the
-        reference SSD kernel's ``O(T)`` activation memory, and it cannot be reached with a
+    The equivalent ``--`` overrides, if you would rather be explicit than use the environment,
+    are listed under "Examples" below. Note again that the data root needs *two* of them.
+
+Flags:
+    These are popped from ``argv`` before :func:`~olmo_core.internal.experiment.main` parses it,
+    because each one has to be known while the config is being built -- see ``mamba3_cli``.
+
+    ``--rotation-block-size N``
+        Transition-block size ``b``; ``2`` (default) is the TC^0 baseline, ``3`` the smallest
+        non-solvable NC^1 block.
+
+    ``--require-fast-kernel``
+        Fail preflight unless the fused ``mamba-ssm`` kernel will actually run.
+
+    ``--activation-checkpointing``
+        Checkpoint every block. Off by default. This is the escape hatch for the reference SSD
+        kernel's ``O(T)`` activation memory, and it cannot be reached with a
         ``--train_module.ac_config.mode=...`` override because ``ac_config`` defaults to ``None``
         and the override merge cannot create a config node from nothing.
 
-    The equivalent ``--`` overrides, if you would rather be explicit than use the environment,
-    are listed under "Examples" below. Note again that the data root needs *two* of them.
+    ``--disable-dp``
+        Drop data parallelism for single-GPU local runs, and autocast to bf16 to compensate for
+        the missing FSDP ``param_dtype`` cast.
 
 Examples:
     Dry run:
@@ -96,8 +116,9 @@ Examples:
 """
 
 import os
+import sys
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 from olmo_core.config import DType
 from olmo_core.data import (
@@ -145,8 +166,19 @@ from olmo_core.train.train_module import (
     TransformerTrainModuleConfig,
 )
 
-# Sibling module, resolved via the script's own directory on sys.path.
+# Sibling modules, resolved via the script's own directory on sys.path.
+from mamba3_cli import pop_flag, pop_int_opt, popped_tokens  # isort: skip
 from mamba3_sentinel import Mamba3SentinelCallback  # isort: skip
+
+# Set by the argv pre-parse in `__main__`, before `main()` builds the config. Module-level
+# because `build_experiment_config` is a callback and never sees argv.
+ROTATION_BLOCK_SIZE = 2
+REQUIRE_FAST_KERNEL = False
+ACTIVATION_CHECKPOINTING = False
+DISABLE_DP = False
+# The flags above, as typed. A Beaker launch rebuilds the remote command from `sys.argv`, which
+# no longer holds them, so they have to be added back or the job silently runs the defaults.
+POPPED_ARGV: List[str] = []
 
 SEQ_LENGTH = 512
 
@@ -171,7 +203,7 @@ def build_experiment_config(cli_context: CliContext) -> ExperimentConfig:
         root_dir = get_root_dir(cli_context.cluster)
         beaker_launch_config = build_launch_config(
             name=cli_context.run_name,
-            cmd=cli_context.remote_cmd,
+            cmd=[*cli_context.remote_cmd, *POPPED_ARGV],
             cluster=cli_context.cluster,
             root_dir=root_dir,
             workspace="ai2/OLMo_3",
@@ -229,27 +261,33 @@ def build_experiment_config(cli_context: CliContext) -> ExperimentConfig:
     # is for. MIMO also buys no state-tracking power (it widens the read/write rank, not the
     # transition monoid) while multiplying the cost of applying the rotation.
     #
-    # `MAMBA3_ROTATION_BLOCK_SIZE` selects the transition-block size b: 2 is the TC^0 baseline
-    # (default), 3 is the smallest non-solvable (NC^1) block. Set here rather than via a
-    # `--model...` override on purpose -- the sentinel below reads its expected value from this
-    # same `model_config`, so threading it here keeps the two in lockstep, whereas a CLI override
-    # merges in *after* the sentinel is built and would trip its rotation-block-size mismatch
-    # alarm. `DEFAULT_D_STATE` (192) admits both 2 and 3, so no `d_state` change is needed.
-    rotation_block_size = int(os.environ.get("MAMBA3_ROTATION_BLOCK_SIZE", "2"))
+    # `--rotation-block-size` selects the transition-block size b: 2 is the TC^0 baseline
+    # (default), 3 is the smallest non-solvable (NC^1) block. It is popped from argv rather than
+    # passed as a `--model...` override because the sentinel below reads its expected value from
+    # this same `model_config`; overrides merge in *after* the sentinel is built, which would trip
+    # its rotation-block-size mismatch alarm. `DEFAULT_D_STATE` (192) admits both 2 and 3, so no
+    # `d_state` change is needed.
+    rotation_block_size = ROTATION_BLOCK_SIZE
     # Main runs use the fast official kernel (the default, `prefer_official_kernel=None`, which
     # arms it whenever eligible). Activation checkpointing is the *only* reason to deviate: the
     # official kernel's autograd.Function is incompatible with non-reentrant checkpointing, so an
     # AC run must take the chunked path. Tie the two together here rather than letting a user set
     # AC=1 and hit a mid-backward CheckpointError. AC is the extreme-sequence-length escape hatch;
     # at the smoke config's seq 512 it is off and the fast kernel runs.
-    activation_checkpointing = os.environ.get("MAMBA3_ACTIVATION_CHECKPOINTING") == "1"
+    if REQUIRE_FAST_KERNEL and ACTIVATION_CHECKPOINTING:
+        raise SystemExit(
+            "--require-fast-kernel is incompatible with --activation-checkpointing: the official "
+            "kernel's autograd.Function cannot run under non-reentrant checkpointing."
+        )
     model_config = Mamba3Config.mamba3_hybrid_190M(
         vocab_size=tokenizer_config.padded_vocab_size(),
         a_log_init_min=1.0 / 16,
         a_log_init_max=1.0,
         mimo_rank=1,
         rotation_block_size=rotation_block_size,
-        prefer_official_kernel=False if activation_checkpointing else None,
+        prefer_official_kernel=(
+            True if REQUIRE_FAST_KERNEL else (False if ACTIVATION_CHECKPOINTING else None)
+        ),
     )
 
     train_module_config = TransformerTrainModuleConfig(
@@ -269,16 +307,16 @@ def build_experiment_config(cli_context: CliContext) -> ExperimentConfig:
         # dimension. It does not error, it just adds a mesh dimension and wrapping cost for
         # nothing. FSDP is correct at both 1 and 8 GPUs on one node.
         #
-        # `MAMBA3_DISABLE_DP=1` drops data parallelism entirely (`dp_config=None`). This exists
+        # `--disable-dp` drops data parallelism entirely (`dp_config=None`). This exists
         # for single-GPU local smoke runs: FSDP2's reduce-scatter is a NCCL collective, and on a
         # single consumer GPU (e.g. an RTX 50-series laptop card) that collective can fail with
         # "CUDA driver error: device not ready" in `foreach_reduce` -- an issue in the degenerate
         # 1-rank NCCL path, not in the model. With no data-parallel wrapping there are no
         # collectives and the run exercises the full model, optimizer, checkpointing and eval on
-        # one device. Leave it unset (FSDP) for the real multi-GPU B200 run.
+        # one device. Leave it off (FSDP) for the real multi-GPU B200 run.
         dp_config=(
             None
-            if os.environ.get("MAMBA3_DISABLE_DP") == "1"
+            if DISABLE_DP
             else TransformerDataParallelConfig(
                 name=DataParallelType.fsdp,
                 param_dtype=DType.bfloat16,
@@ -290,7 +328,7 @@ def build_experiment_config(cli_context: CliContext) -> ExperimentConfig:
         # nothing casts the model, so the SSD input would be fp32 and `dispatch_mamba3_ssd` would
         # fall through to the chunked path -- defeating the point of exercising the official
         # kernel. Autocast restores reduced precision so the official SISO kernel still arms.
-        autocast_precision=(DType.bfloat16 if os.environ.get("MAMBA3_DISABLE_DP") == "1" else None),
+        autocast_precision=(DType.bfloat16 if DISABLE_DP else None),
         z_loss_multiplier=1e-5,
         max_grad_norm=1.0,
         scheduler=CosWithWarmup(warmup=2),
@@ -298,7 +336,7 @@ def build_experiment_config(cli_context: CliContext) -> ExperimentConfig:
             TransformerActivationCheckpointingConfig(
                 mode=TransformerActivationCheckpointingMode.full
             )
-            if os.environ.get("MAMBA3_ACTIVATION_CHECKPOINTING") == "1"
+            if ACTIVATION_CHECKPOINTING
             else None
         ),
     )
@@ -345,6 +383,7 @@ def build_experiment_config(cli_context: CliContext) -> ExperimentConfig:
                 run_dir=save_dir,
                 sequence_length=SEQ_LENGTH,
                 expected_rotation_block_size=_rotation_block_size(model_config),
+                expected_official_kernel=True if REQUIRE_FAST_KERNEL else None,
             ),
         )
         .with_callback(
@@ -382,4 +421,10 @@ def build_experiment_config(cli_context: CliContext) -> ExperimentConfig:
 
 
 if __name__ == "__main__":
+    _argv_in = list(sys.argv[1:])
+    ROTATION_BLOCK_SIZE, sys.argv[1:] = pop_int_opt(sys.argv[1:], "--rotation-block-size", 2)
+    REQUIRE_FAST_KERNEL, sys.argv[1:] = pop_flag(sys.argv[1:], "--require-fast-kernel")
+    ACTIVATION_CHECKPOINTING, sys.argv[1:] = pop_flag(sys.argv[1:], "--activation-checkpointing")
+    DISABLE_DP, sys.argv[1:] = pop_flag(sys.argv[1:], "--disable-dp")
+    POPPED_ARGV = popped_tokens(_argv_in, sys.argv[1:])
     main(config_builder=build_experiment_config)

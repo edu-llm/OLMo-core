@@ -55,6 +55,9 @@ class Mamba3SentinelCallback(Callback):
     :param run_dir: Directory for ``heartbeat.json`` and ``alerts.jsonl``. Keep this on local
         disk; the watchdog is responsible for shipping it anywhere else.
     :param expected_rotation_block_size: Fail the preflight if the built model disagrees.
+    :param expected_official_kernel: Fail the preflight unless the run will take the official
+        fused SSD kernel (``True``) or the reference/chunked path (``False``). ``None`` only
+        logs which one is live.
     :param sequence_length: Used to judge whether the decay horizon covers the context.
     :param skip_rate_window: Window over which the skipped-step rate is measured.
     :param skip_rate_threshold: Alert when the skipped-step rate over the window exceeds this.
@@ -69,6 +72,7 @@ class Mamba3SentinelCallback(Callback):
 
     run_dir: str = "."
     expected_rotation_block_size: Optional[int] = None
+    expected_official_kernel: Optional[bool] = None
     sequence_length: Optional[int] = None
     skip_rate_window: int = 25
     skip_rate_threshold: float = 0.5
@@ -129,6 +133,7 @@ class Mamba3SentinelCallback(Callback):
         self._last_step_time = time.time()
         Path(self.run_dir).mkdir(parents=True, exist_ok=True)
         self._check_rotation_block_size()
+        self._check_ssd_kernel()
         self._check_memory_horizon()
         self._write_heartbeat(status="training")
 
@@ -171,6 +176,63 @@ class Mamba3SentinelCallback(Callback):
                 "sentinel: confirmed rotation_block_size=%d on all Mamba-3 mixers",
                 self.expected_rotation_block_size,
             )
+
+    def _check_ssd_kernel(self) -> None:
+        """
+        Report which SSD path will run, and fail if it is not the one that was asked for.
+
+        A smoke test that quietly exercises the reference kernel instead of the fused one is
+        worse than no smoke test: it goes green having validated code the real runs never
+        execute. ``dispatch_mamba3_ssd`` raises on an impossible ``prefer_official_kernel=True``,
+        but only once the first batch reaches it; checking here costs nothing and fails before
+        the data loader spins up.
+
+        This callback also runs on the real training jobs, where ``expected_official_kernel`` is
+        left unset and the check is pure diagnostics. Probing the environment must therefore
+        never be able to take a run down, so an unexpected failure here degrades to a warning.
+        """
+        try:
+            from olmo_core.nn.mamba3.mamba3_ssd_api import has_mamba3
+
+            installed = has_mamba3()
+            # Mirrors `_official_kernel_eligible`: CUDA, SISO, and an installed mamba-ssm build.
+            cuda = torch.cuda.is_available()
+            mixers = list(self._iter_mixers())
+            ranks = {int(r) for _, m in mixers if (r := getattr(m, "mimo_rank", None))}
+            siso = ranks == {1}
+            forbidden = any(getattr(m, "prefer_official_kernel", None) is False for _, m in mixers)
+            eligible = installed and cuda and siso and not forbidden
+        except Exception as exc:  # noqa: BLE001 -- diagnostics must not be able to fail a run
+            log.warning("sentinel: could not resolve the SSD kernel path", exc_info=True)
+            if self.expected_official_kernel is not None:
+                # Only when a caller explicitly demanded a kernel: staying quiet there would let
+                # the run proceed on an unverified path, which is what the check exists to stop.
+                self.alert(
+                    "ssd_kernel_probe_failed",
+                    f"could not determine which SSD kernel will run: {exc!r}",
+                    critical=True,
+                )
+            return
+
+        log.info(
+            "sentinel: SSD path=%s (mamba-ssm installed=%s, cuda=%s, mimo_rank=%s, forbidden=%s)",
+            "official/fast" if eligible else "reference/chunked",
+            installed,
+            cuda,
+            sorted(ranks) or "unknown",
+            forbidden,
+        )
+        if self.expected_official_kernel is None or eligible == self.expected_official_kernel:
+            return
+        self.alert(
+            "ssd_kernel_mismatch",
+            f"expected the {'official' if self.expected_official_kernel else 'reference'} SSD "
+            f"kernel but this run will use the "
+            f"{'official/fast' if eligible else 'reference/chunked'} path "
+            f"(mamba-ssm installed={installed}, cuda={cuda}, mimo_rank={sorted(ranks) or 'unknown'}"
+            f", prefer_official_kernel=False on some mixer={forbidden})",
+            critical=True,
+        )
 
     def _check_memory_horizon(self) -> None:
         """

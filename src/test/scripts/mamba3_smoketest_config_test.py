@@ -55,12 +55,7 @@ def _ctx(*overrides: str) -> CliContext:
 @pytest.fixture(autouse=True)
 def _clear_env(monkeypatch: pytest.MonkeyPatch):
     """No test may inherit a data root from the developer's shell."""
-    for var in (
-        "MAMBA3_DATA_ROOT",
-        "MAMBA3_SAVE_FOLDER",
-        "MAMBA3_WORK_DIR",
-        "MAMBA3_ACTIVATION_CHECKPOINTING",
-    ):
+    for var in ("MAMBA3_DATA_ROOT", "MAMBA3_SAVE_FOLDER", "MAMBA3_WORK_DIR"):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -135,6 +130,76 @@ def test_sentinel_callback_is_attached(smoketest, monkeypatch: pytest.MonkeyPatc
     assert "mamba3_sentinel" in callbacks, f"got callbacks: {sorted(callbacks)}"
     sentinel = callbacks["mamba3_sentinel"]
     assert sentinel.sequence_length == smoketest.SEQ_LENGTH
+
+
+def test_behaviour_flags_default_to_the_multi_gpu_recipe(
+    smoketest, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """
+    The flags that change *what is tested* must default off, so an unflagged run is the real
+    B200 recipe: data-parallel on, no activation checkpointing, no autocast standing in for
+    FSDP's cast. These used to be environment variables, where an exported value from an
+    earlier single-GPU debugging session would silently follow you into the next run.
+    """
+    monkeypatch.setattr(smoketest, "get_beaker_username", lambda: None)
+    monkeypatch.setenv("MAMBA3_DATA_ROOT", str(tmp_path))
+    monkeypatch.setenv("MAMBA3_SAVE_FOLDER", str(tmp_path / "save"))
+
+    assert smoketest.ACTIVATION_CHECKPOINTING is False
+    assert smoketest.DISABLE_DP is False
+
+    train_module = smoketest.build_experiment_config(_ctx()).train_module
+    assert train_module.ac_config is None
+    assert train_module.dp_config is not None
+    assert train_module.autocast_precision is None
+
+
+def test_disable_dp_drops_the_mesh_and_restores_the_cast(
+    smoketest, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """
+    ``--disable-dp`` has to do both halves. Dropping ``dp_config`` alone would leave the model
+    in fp32, so the SSD input would not be reduced precision and dispatch would quietly fall
+    through to the chunked path -- a single-GPU run that no longer tests the fused kernel.
+    """
+    monkeypatch.setattr(smoketest, "get_beaker_username", lambda: None)
+    monkeypatch.setenv("MAMBA3_DATA_ROOT", str(tmp_path))
+    monkeypatch.setenv("MAMBA3_SAVE_FOLDER", str(tmp_path / "save"))
+    monkeypatch.setattr(smoketest, "DISABLE_DP", True)
+
+    train_module = smoketest.build_experiment_config(_ctx()).train_module
+    assert train_module.dp_config is None
+    assert train_module.autocast_precision is not None
+
+
+def test_activation_checkpointing_flag_reaches_ac_config(
+    smoketest, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """``ac_config`` defaults to ``None``, so a dotted override cannot create it; the flag must."""
+    monkeypatch.setattr(smoketest, "get_beaker_username", lambda: None)
+    monkeypatch.setenv("MAMBA3_DATA_ROOT", str(tmp_path))
+    monkeypatch.setenv("MAMBA3_SAVE_FOLDER", str(tmp_path / "save"))
+    monkeypatch.setattr(smoketest, "ACTIVATION_CHECKPOINTING", True)
+
+    assert smoketest.build_experiment_config(_ctx()).train_module.ac_config is not None
+
+
+def test_requiring_the_fast_kernel_under_checkpointing_is_rejected(
+    smoketest, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """
+    The official kernel's ``autograd.Function`` cannot run under non-reentrant checkpointing.
+    Caught at build time, this is a one-line usage error; uncaught it is a ``CheckpointError``
+    partway through the first backward.
+    """
+    monkeypatch.setattr(smoketest, "get_beaker_username", lambda: None)
+    monkeypatch.setenv("MAMBA3_DATA_ROOT", str(tmp_path))
+    monkeypatch.setenv("MAMBA3_SAVE_FOLDER", str(tmp_path / "save"))
+    monkeypatch.setattr(smoketest, "ACTIVATION_CHECKPOINTING", True)
+    monkeypatch.setattr(smoketest, "REQUIRE_FAST_KERNEL", True)
+
+    with pytest.raises(SystemExit, match="--require-fast-kernel"):
+        smoketest.build_experiment_config(_ctx())
 
 
 def test_memory_horizon_covers_the_sequence_length(

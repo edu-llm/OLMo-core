@@ -177,6 +177,7 @@ class Mamba3Config(TransformerConfig):
         n_groups: int = 1,
         mimo_rank: int = 4,
         rotation_block_size: int = 2,
+        exempt_timescale_params_from_weight_decay: bool = True,
         a_log_init_min: float = 0.05,
         a_log_init_max: float = 16.0,
         prefer_official_kernel: Optional[bool] = None,
@@ -219,8 +220,13 @@ class Mamba3Config(TransformerConfig):
         :param rotation_block_size: Size ``b`` of the orthogonal transition blocks (``2`` keeps
             the paper's abelian complex diagonal; ``b >= 3`` is non-solvable). Must be one of
             :func:`~olmo_core.nn.mamba3.admissible_block_sizes` for the chosen ``d_state``.
-        :param a_log_init_min: Lower bound of the ``A_log`` init distribution. Defaults to 1.0,
-            matching ``mamba_ssm``'s ``A_init_range=(1, 16)``.
+        :param exempt_timescale_params_from_weight_decay: Tag ``A_log`` and ``dt_bias`` so an
+            optimizer group can exclude them from weight decay; see
+            :attr:`~olmo_core.nn.mamba3.mixer.Mamba3MixerConfig.exempt_timescale_params_from_weight_decay`.
+        :param a_log_init_min: Lower bound of the ``A_log`` init distribution, i.e. the floor on
+            the decay rate. Must be ``> 0``. The default of 0.05 is intentionally below
+            ``mamba_ssm``'s ``A_init_range`` lower bound of 1.0; see
+            :attr:`~olmo_core.nn.mamba3.mixer.Mamba3MixerConfig.a_log_init_min`.
         :param a_log_init_max: Upper bound of the ``A_log`` init distribution.
         :param rotation_scan_impl: Which of
             :data:`~olmo_core.nn.mamba3.mamba3_ssd_fast.ROTATION_SCAN_IMPLS` computes the
@@ -265,6 +271,7 @@ class Mamba3Config(TransformerConfig):
                 mimo_rank=mimo_rank,
                 rotation_block_size=rotation_block_size,
                 norm_eps=layer_norm_eps,
+                exempt_timescale_params_from_weight_decay=exempt_timescale_params_from_weight_decay,
                 a_log_init_min=a_log_init_min,
                 a_log_init_max=a_log_init_max,
                 prefer_official_kernel=prefer_official_kernel,

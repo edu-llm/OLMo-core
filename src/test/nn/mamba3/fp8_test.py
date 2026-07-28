@@ -145,7 +145,9 @@ def test_apply_fp8_protects_the_ssm_projections_and_converts_the_big_gemms():
     model = _tiny_hybrid(device="cpu")
 
     ignore = mamba3_modules_to_ignore_for_fp8(model)
-    model.apply_fp8(Float8Config(ao_recipe=AOFloat8LinearRecipe.rowwise, modules_to_ignore=list(ignore)))
+    model.apply_fp8(
+        Float8Config(ao_recipe=AOFloat8LinearRecipe.rowwise, modules_to_ignore=list(ignore))
+    )
 
     mixers = [m for m in model.modules() if isinstance(m, Mamba3Mixer)]
     assert mixers, "expected Mamba-3 mixers in the hybrid"
@@ -180,7 +182,9 @@ def test_fp8_forward_backward_stays_finite_and_close_to_bf16():
         loss_bf16 = model(input_ids, labels=labels).loss.sum().detach().float().item()
 
     ignore = mamba3_modules_to_ignore_for_fp8(model)
-    model.apply_fp8(Float8Config(ao_recipe=AOFloat8LinearRecipe.rowwise, modules_to_ignore=list(ignore)))
+    model.apply_fp8(
+        Float8Config(ao_recipe=AOFloat8LinearRecipe.rowwise, modules_to_ignore=list(ignore))
+    )
 
     with torch.autocast(device_type=device, dtype=torch.bfloat16):
         loss_fp8 = model(input_ids, labels=labels).loss.sum()
