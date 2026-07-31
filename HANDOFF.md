@@ -1,7 +1,8 @@
 # HANDOFF — DP2-KDA Phase 0/1 preparation
 
-**Last updated:** 2026-07-31. **Status: runbook audited and corrected; DP2 source committed and
-pushed; no test written, no GPU work started, no AWS resource created.**
+**Last updated:** 2026-07-31 (second session). **Status: runbook audited and corrected; DP2 source
+committed and pushed; all three P0.0 prerequisites now closed; no test written, no GPU work started,
+no image built, no AWS resource created.**
 
 **Scope:** this file covers **only** the DP2-KDA (strict-beta delta-product, R=2) experiment
 program. Sibling handoffs are independent and still current — do not overwrite them:
@@ -61,9 +62,10 @@ Phase 2 is **not authorized** by that document (`docs/dp2-kda/phase-2-deferred.m
 
 ### Not done — nothing has run
 
-- **Zero of the 13 named Phase-0 tests exist** (0 grep hits against 61 existing test functions in
-  the two gate files). P0.1, the R1-equivalence gate, is entirely unwritten.
-- No GPU work, no image built, no AWS resource created.
+- **Zero of the 13 named Phase-0 tests exist** (re-verified this session: 0 grep hits against the
+  61 existing test functions — 36 in `recurrent_test.py`, 25 in `kda_householder_test.py`).
+  P0.1, the R1-equivalence gate, is entirely unwritten. **This is now the top of the queue.**
+- No GPU work, **no image built** (the sm_89 edit is unproven until one builds), no AWS resource.
 - Phase-1 harness is largely unbuilt (see Next Steps).
 
 ---
@@ -149,28 +151,53 @@ Phase 2 is **not authorized** by that document (`docs/dp2-kda/phase-2-deferred.m
 
 ## Next Steps
 
-### 1. Three P0.0 prerequisites — all verified blocking, none in the original plan
+### 1. Three P0.0 prerequisites — ✅ ALL THREE CLOSED 2026-07-31
 
-| # | Task | Why |
+| # | Task | Outcome |
 |---|---|---|
-| a | **`git init` in `Capstone_LLM/probes/`** | Under **no version control** (verified: `git rev-parse` fails, no parent repo). It holds `naive_kda_householder.py`, the Phase-0 correctness oracle. The manifest's "probe source checksum" has no defined referent until this exists. |
-| b | **Add `8.9`/`89` to `src/Dockerfile:55,59`** | Currently `TORCH_CUDA_ARCH_LIST="9.0 10.0"` and `FLASH_ATTN_CUDA_ARCHS="90;100"` — **no `sm_89`**, so the image cannot run the L40S that all of §4.1 specifies for Phase 0. |
-| c | **Install `fla` in the image** | Absent locally (`import fla` → ModuleNotFoundError). 38 existing tests plus the new external anchor carry `@requires_fla` and would **skip** — the silent-green pathway §4.7 now forbids. |
+| a | **`git init` in `Capstone_LLM/probes/`** | ✅ **Done.** Now a standalone repo; baseline commit `93b60d7`, 34 files (32 `.py`, 1 `.sh`, 1 new `.gitignore` excluding `__pycache__`/`*.pyc`), contents as-is, no functional edits. Runbook §4.2 step 3a updated: **the probe source checksum is the VCS-commit form, `93b60d7`.** ⚠️ **No remote** — local-only, so the SHA is not independently fetchable. Push it somewhere durable before Phase 1. |
+| b | **Add `8.9`/`89` to `src/Dockerfile:55,59`** | ✅ **Done** in `b5433c0`. Now `TORCH_CUDA_ARCH_LIST="8.9 9.0 10.0"` and `FLASH_ATTN_CUDA_ARCHS="89;90;100"`; sm_90/sm_100 unchanged. `TORCH_CUDA_ARCH_LIST` is **hardcoded, not a build arg** (Makefile passes 12 others but not this), so the Dockerfile was the right place. Costs a longer build and a larger image. **Unbuilt — the edit is not yet proven to compile.** |
+| c | **Install `fla` in the image** | ✅ **No action needed — the premise was wrong.** See below. |
 
-### 2. ⚠️ Read this before running any test from this worktree
+**(c) was a false alarm, and its correction is now in the runbook.** `src/Dockerfile:106` installs
+`'.[all]'`, and `pyproject.toml:73` expands `all` to include the `fla` extra —
+`flash-linear-attention==0.4.1` (`:69`), no platform marker. So `fla` **already reaches the image**.
+Verified at that pin: both anchor symbols exist
+(`fla.ops.gated_delta_product.naive.naive_recurrent_gated_delta_product` and
+`fla.ops.kda.naive.naive_recurrent_kda`), and the dependency closure is only `fla-core==0.4.1` →
+`torch`, `einops`, both unpinned, so it cannot fight the image's pinned torch.
+
+The original `ModuleNotFoundError` was observed **on this macOS laptop**, which has no
+`ai2-olmo-core` install and no `triton` at all (Triton ships Linux-only wheels), so it cannot host
+`fla` regardless — that result says nothing about the Linux CUDA image. Also worth knowing:
+`FLA_MARKS` (`testing/utils.py:137-140`) pairs the skipif with `pytest.mark.gpu`, so these tests
+skip on any CPU-only host for a **second, independent** reason. P0.0's job here is **verify and
+record, not install**: on the built image assert `import fla` succeeds and record the version; if it
+fails, the `all` extra has regressed and *that* is the finding. (Also: the count is **58**
+`@requires_fla` decorators, not 38 — 78 total `requires_fla` mentions.)
+
+### 2. ⚠️ `KDA_PROBES_DIR` — now pinned, but only for Claude Code sessions
 
 `probes/` lives at `Capstone_LLM/probes`, **outside** this worktree.
 `src/test/nn/attention/kda_householder_test.py:34-58` loads its oracle via a
-`Path(__file__).parents[5]/"probes"` fallback that **will not resolve from here**, and on failure
-calls `pytest.skip()` — a skipped suite **exits 0**, so the gate reports green having verified
-nothing. Set:
+`Path(__file__).parents[5]/"probes"` fallback that **will not resolve from here** — it points at
+`Capstone_LLM-worktrees/olmo-core/probes`, which does not exist (verified) — and on failure calls
+`pytest.skip()`. A skipped suite **exits 0**, so the gate reports green having verified nothing.
+
+Now set in `.claude/settings.local.json` (gitignored, so the machine-specific absolute path stays
+out of the shared repo — do **not** promote it to `.claude/settings.json`). Verified: the oracle
+imports cleanly with it set.
+
+**This only covers Claude Code sessions.** A plain terminal, CI, or any hook-spawned process still
+needs it explicitly:
 
 ```bash
 export KDA_PROBES_DIR=/Users/ericwu/Developer/Capstone_LLM/probes
 ```
 
-This is the audit's highest-consequence operational finding, and from this worktree it fires for
-real rather than latently.
+The durable fix is to widen the test's own path resolution (it has a two-candidate list; a sibling
+`../../Capstone_LLM/probes` candidate would resolve from any worktree) or, better, to make the
+oracle-missing case **fail** rather than skip. Not done — it edits a file inside `6b75c06`.
 
 ### 3. Write the 13 named Phase-0 tests (§4.7) — the real Phase-0 effort
 
