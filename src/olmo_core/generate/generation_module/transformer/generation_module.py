@@ -109,8 +109,14 @@ class TransformerGenerationModule(GenerationModule):
         # Note: not all models use key-value caches, which is why this method
         # is called "prepare_inference_cache" rather than "prepare_kv_cache".
         # For example, Mamba requires cache state but doesn't use a kv-cache.
+        #
+        # Hybrid models interleave attention with other sequence mixers (short convolutions,
+        # linear-recurrent layers), so a block's mixer is not necessarily an Attention. Those
+        # mixers either need no cache or manage their own state, so skip them rather than
+        # asserting -- an assertion here makes cached generation impossible for every hybrid.
         for block in self.model.blocks.values():
-            assert isinstance(block.attention, Attention)
+            if not isinstance(block.attention, Attention):
+                continue
             attn = cast(Attention, block.attention)
             if attn.kv_cache_manager is None:
                 attn.init_kv_cache_manager(batch_size, max_seq_len)
@@ -119,7 +125,8 @@ class TransformerGenerationModule(GenerationModule):
 
     def free_inference_cache(self):
         for block in self.model.blocks.values():
-            assert isinstance(block.attention, Attention)
+            if not isinstance(block.attention, Attention):
+                continue
             cast(Attention, block.attention).kv_cache_manager = None
 
     def _set_model_mode(self, mode: Literal["train", "eval"]):
