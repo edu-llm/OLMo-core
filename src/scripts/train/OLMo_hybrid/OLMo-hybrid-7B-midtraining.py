@@ -129,10 +129,12 @@ def build_data_components(
         work_dir=common.work_dir,
         sequence_length=common.max_sequence_length,
         generate_doc_lengths=intra_document_masking,
-        instance_filter_config=None
-        if not include_instance_filter
-        else InstanceFilterConfig(
-            repetition_max_period=13, repetition_min_period=1, repetition_max_count=32
+        instance_filter_config=(
+            None
+            if not include_instance_filter
+            else InstanceFilterConfig(
+                repetition_max_period=13, repetition_min_period=1, repetition_max_count=32
+            )
         ),
     )
 

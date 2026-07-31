@@ -77,9 +77,9 @@ class MXFP8Olmo3ModelConfigurator(Olmo3ModelConfigurator):
 
 def configure_model(args: argparse.Namespace) -> TransformerModelConfigurator:
     return MXFP8Olmo3ModelConfigurator(
-        rank_microbatch_size=None
-        if args.rank_mbz is None
-        else args.rank_mbz * args.sequence_length,
+        rank_microbatch_size=(
+            None if args.rank_mbz is None else args.rank_mbz * args.sequence_length
+        ),
     )
 
 

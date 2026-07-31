@@ -50,9 +50,9 @@ def configure_model(args: argparse.Namespace) -> TransformerModelConfigurator:
         kwargs["embedding_init_std"] = args.embedding_init_std
 
     return Olmo3ModelConfigurator(
-        rank_microbatch_size=None
-        if args.rank_mbz is None
-        else args.rank_mbz * args.sequence_length,
+        rank_microbatch_size=(
+            None if args.rank_mbz is None else args.rank_mbz * args.sequence_length
+        ),
         model_construction_kwargs=kwargs,
     )
 

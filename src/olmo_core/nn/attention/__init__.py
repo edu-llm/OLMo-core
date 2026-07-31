@@ -16,7 +16,14 @@ from olmo_core.doc_utils import beta_feature
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.nn.attention.base import SequenceMixer, SequenceMixerConfig
 from olmo_core.nn.attention.kv_cache import KVCacheManager
-from olmo_core.nn.attention.recurrent import GatedDeltaNet, GatedDeltaNetConfig
+from olmo_core.nn.attention.recurrent import (
+    GatedDeltaNet,
+    GatedDeltaNetConfig,
+    KimiDeltaAttention,
+    KimiDeltaAttentionConfig,
+    KimiDeltaHouseholder,
+    KimiDeltaHouseholderConfig,
+)
 
 from ..buffer_cache import BufferCache
 from ..config import ModuleConfig
@@ -77,6 +84,10 @@ __all__ = [
     "UlyssesContextParallelStyle",
     "GatedDeltaNetConfig",
     "GatedDeltaNet",
+    "KimiDeltaAttentionConfig",
+    "KimiDeltaAttention",
+    "KimiDeltaHouseholderConfig",
+    "KimiDeltaHouseholder",
 ]
 
 log = logging.getLogger(__name__)
