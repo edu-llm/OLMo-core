@@ -122,8 +122,7 @@ def _run_checkout_submission_commands(
     home.mkdir()
     if repo_exists:
         repo_root.mkdir()
-    script = (
-        """
+    script = """
 git() {
   case "$*" in
     *"rev-parse HEAD"*) printf '%s\\n' "$REMOTE_HEAD" ;;
@@ -138,9 +137,7 @@ git() {
 sbatch() {
   printf 'submitted=%s\\n' "$*"
 }
-"""
-        + _checkout_submission_commands()
-    )
+""" + _checkout_submission_commands()
     return subprocess.run(
         ["bash"],
         input=script,
@@ -174,8 +171,7 @@ def _scratch_preflight_commands() -> str:
 def _run_scratch_preflight(
     home: Path, scratch: Path, *, separate_mount: bool
 ) -> subprocess.CompletedProcess[str]:
-    script = (
-        """
+    script = """
 realpath() {
   local mode="$1" path
   if [[ "$mode" = "-e" || "$mode" = "-m" ]]; then
@@ -204,9 +200,7 @@ findmnt() {
     return 1
   fi
 }
-"""
-        + _scratch_preflight_commands()
-    )
+""" + _scratch_preflight_commands()
     return subprocess.run(
         ["bash"],
         input=script,

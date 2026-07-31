@@ -48,8 +48,7 @@ def parse_args(
     base_parser = argparse.ArgumentParser(
         sys.argv[0],
         usage=f"python {sys.argv[0]} [CMD] [OPTIONS...]",
-        description=textwrap.dedent(
-            f"""
+        description=textwrap.dedent(f"""
             Launch and manage a ladder experiment on Beaker.
 
             examples:
@@ -57,14 +56,11 @@ def parse_args(
               ❯ python {sys.argv[0]} dry-run --help
             • Run a dry run for the {list(size_enum)[0]} model size:
               ❯ python {sys.argv[0]} dry-run --size={list(size_enum)[0]}
-            """
-        ),
-        epilog=textwrap.dedent(
-            """
+            """),
+        epilog=textwrap.dedent("""
             notes:
             • The command (e.g. 'dry-run', 'launch', etc) must always be the first argument.
-            """
-        ),
+            """),
         formatter_class=formatter_class,  # type: ignore[arg-type]
     )
     sub_parsers = base_parser.add_subparsers(dest="cmd")
@@ -357,12 +353,14 @@ def get_default_ladder_factory(
             max_devices=args.max_gpus,
             device_type=get_gpu_type(args.cluster),
             model_configurator=configure_model(args),
-            run_configurator=configure_run(args)
-            if configure_run is not None
-            else WSDSChinchillaRunConfigurator(
-                chinchilla_multiple=args.chinchilla_multiple,
-                lr_multiplier=args.lr_multiplier,
-                stepped_schedule=args.stepped_schedule,
+            run_configurator=(
+                configure_run(args)
+                if configure_run is not None
+                else WSDSChinchillaRunConfigurator(
+                    chinchilla_multiple=args.chinchilla_multiple,
+                    lr_multiplier=args.lr_multiplier,
+                    stepped_schedule=args.stepped_schedule,
+                )
             ),
             sequence_length=args.sequence_length,
             tokenizer=tokenizer,

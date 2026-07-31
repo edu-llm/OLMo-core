@@ -138,9 +138,9 @@ def configure_ladder(args: argparse.Namespace) -> ModelLadder:
         max_devices=args.max_gpus,
         device_type=get_gpu_type(args.cluster),
         model_configurator=Olmo3ModelConfigurator(
-            rank_microbatch_size=None
-            if args.rank_mbz is None
-            else args.rank_mbz * args.sequence_length,
+            rank_microbatch_size=(
+                None if args.rank_mbz is None else args.rank_mbz * args.sequence_length
+            ),
         ),
         run_configurator=MuonWSDSChinchillaRunConfigurator(
             chinchilla_multiple=args.chinchilla_multiple,

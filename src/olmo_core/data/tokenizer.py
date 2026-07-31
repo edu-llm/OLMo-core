@@ -13,8 +13,7 @@ __all__ = [
 class TokenizerLike(Protocol):
     eos_token_id: int
 
-    def encode(self, text: str, add_special_tokens: bool = False) -> List[int]:
-        ...
+    def encode(self, text: str, add_special_tokens: bool = False) -> List[int]: ...
 
 
 class TokenizerName(StrEnum):

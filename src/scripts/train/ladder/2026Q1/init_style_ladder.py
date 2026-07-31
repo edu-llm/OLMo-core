@@ -50,9 +50,9 @@ def add_additional_args(cmd: str, parser: argparse.ArgumentParser) -> None:
 
 def configure_model(args: argparse.Namespace) -> TransformerModelConfigurator:
     return Olmo3ModelConfiguratorForInitStyle(
-        rank_microbatch_size=None
-        if args.rank_mbz is None
-        else args.rank_mbz * args.sequence_length,
+        rank_microbatch_size=(
+            None if args.rank_mbz is None else args.rank_mbz * args.sequence_length
+        ),
         init_style=args.init_style,
     )
 
