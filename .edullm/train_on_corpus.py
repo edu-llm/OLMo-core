@@ -282,7 +282,16 @@ def build_config(opts, overrides: List[str]):
             "checkpointer",
             CheckpointerCallback(
                 save_interval=opts.save_interval,
+                # None rather than a number: OLMo-core refuses a config whose ephemeral
+                # interval is not below save_interval, and it refuses it in the first seconds
+                # rather than at the first save.
                 ephemeral_save_interval=None,
+                # KEEP EVERY CHECKPOINT, BECAUSE THE ROLE CANNOT DELETE ONE. The default is 3
+                # and the rest are pruned; the workload role has no s3:DeleteObject and
+                # deliberately never will, since every run writes under its own id and nothing
+                # ever needs removing. Left at the default, the fourth save fails an
+                # eleven-hour run on a permission it should never have had.
+                max_checkpoints=None,
                 save_async=True,
             ),
         )
@@ -291,8 +300,12 @@ def build_config(opts, overrides: List[str]):
             WandBCallback(
                 name=opts.run_name,
                 project=os.environ.get("EDULLM_WANDB_PROJECT"),
-                group=os.environ.get("EDULLM_EXPERIMENT"),
+                # No `group`. The platform puts the experiment in WANDB_RUN_GROUP, which the
+                # wandb client reads on its own; passing it again from an environment variable
+                # that does not exist would set it to None and look deliberate.
                 cancel_check_interval=10,
+                # Enabled only when the platform named a project, so running this image by
+                # hand does not fail on a missing WANDB_API_KEY.
                 enabled=bool(os.environ.get("EDULLM_WANDB_PROJECT")),
             ),
         )

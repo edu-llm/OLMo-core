@@ -128,6 +128,9 @@ def test_the_whole_config_builds_from_a_corpus_without_touching_s3(monkeypatch):
     # A retry must resume rather than overwrite what the first attempt left, which is the only
     # thing that makes a second attempt cheaper than a second run.
     assert config.trainer.save_overwrite is False
+    # Pruning is off because the workload role has no delete permission. At OLMo-core's
+    # default of three, the fourth save fails a run that is most of a day old.
+    assert config.trainer.callbacks["checkpointer"].max_checkpoints is None
     # Serializing is what the config saver does beside the checkpoint; a config that cannot be
     # written is one whose record of what ran does not exist.
     assert config.as_config_dict()["dataset_version"] == "v1"
