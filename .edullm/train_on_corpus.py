@@ -485,11 +485,28 @@ def build_config(opts, overrides: List[str]):
                 # interval is not below save_interval, and it refuses it in the first seconds
                 # rather than at the first save.
                 ephemeral_save_interval=None,
-                # KEEP EVERY CHECKPOINT, BECAUSE THE ROLE CANNOT DELETE ONE. The default is 3
-                # and the rest are pruned; the workload role has no s3:DeleteObject and
-                # deliberately never will, since every run writes under its own id and nothing
-                # ever needs removing. Left at the default, the fourth save fails an
-                # eleven-hour run on a permission it should never have had.
+                # KEEP EVERY CHECKPOINT, BECAUSE THE ROLE CANNOT DELETE ONE. This None is what
+                # keeps the run below out of the trap. The default is 3 and the rest are
+                # pruned; the workload role has no s3:DeleteObject and deliberately never
+                # will, since every run writes under its own id and nothing ever needs
+                # removing.
+                #
+                # The limit counts permanent checkpoints and the step-0 one OLMo-core writes
+                # before training starts is one of them, so at --save-interval 200 the fourth
+                # is step 600, about an hour and a quarter in rather than the eleven hours a
+                # count that started at the first save would suggest. Ephemeral checkpoints
+                # are tracked in a separate list and do not count.
+                #
+                # What stops the run is the removal rather than the save. It is deferred to
+                # the next step and runs on the main training thread, and it deletes the
+                # metadata marker first, on purpose, so that a half-deleted checkpoint reads
+                # as unusable rather than as usable. That first delete is a single
+                # s3:DeleteObject, S3 refuses it, remove_file retries and raises, and nothing
+                # between there and the training loop catches it. The bulk delete that would
+                # run next swallows the same refusal, so the order is what makes this fatal.
+                #
+                # The count is in memory for one process, so an attempt that follows a lost
+                # machine starts from zero and moves the failure rather than repeating it.
                 max_checkpoints=None,
                 save_async=True,
             ),

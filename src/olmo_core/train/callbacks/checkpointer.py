@@ -111,6 +111,15 @@ class CheckpointerCallback(Callback):
 
     enabled: bool = True
 
+    shutdown_timeout: Optional[float] = 300.0
+    """
+    How long to wait, in seconds, for an in-flight async checkpoint when the training loop
+    exits with an error. ``None`` waits for as long as it takes.
+
+    Only reached on the error path. A run that finishes or is cancelled awaits the save in
+    :meth:`post_train` with no bound, because at that point every rank is in the same place.
+    """
+
     # Bookkeeping
 
     # NOTE: can't use type annotation here, omegaconf doesn't like it
@@ -137,6 +146,8 @@ class CheckpointerCallback(Callback):
                 )
         if self.max_checkpoints is not None and self.max_checkpoints < 1:
             raise OLMoConfigurationError("'max_checkpoints' must be at least 1")
+        if self.shutdown_timeout is not None and self.shutdown_timeout <= 0:
+            raise OLMoConfigurationError("'shutdown_timeout' must be greater than 0")
 
     @property
     def checkpointer(self) -> Checkpointer:
@@ -323,3 +334,45 @@ class CheckpointerCallback(Callback):
             self._trim_checkpoints()
 
         self._await_last_checkpoint()
+
+    def close(self):
+        """Wait for an in-flight async save, because nothing else does when ``fit()`` raises.
+
+        ``post_train`` is the only other place that awaits ``_future``, and it is unreachable
+        once :meth:`Trainer.fit` takes its ``except BaseException`` branch: that calls
+        ``_shutdown(gracefully=False)`` and re-raises. The DCP writer thread is then still
+        inside a collective on the checkpointer's process group when the caller tears the
+        environment down, and ``destroy_process_group`` pulls the group out from under it.
+
+        The failure that produces is ``ValueError: Group ... is not registered``, raised from
+        the checkpointer, for a run whose actual fault was somewhere else entirely. It also
+        leaves a half-written checkpoint directory. ``pre_train`` launches a step-0 save on
+        this callback's own priority, so any later callback raising in ``pre_train`` is enough
+        to reach it, and a directory holding only ``train/rank0.pt`` is what that looks like.
+
+        Bounded rather than open-ended. ``_shutdown(gracefully=False)`` exists so that ranks
+        already in an inconsistent state do not deadlock on further collectives, and waiting
+        forever here would reintroduce exactly that: if one rank raised and the others did
+        not, the save can never complete. A bound keeps the fix on the common path, where
+        every rank fails together, without turning a crash into a hang.
+        """
+        if not self.enabled or self._future is None:
+            return
+
+        try:
+            self._future.result(timeout=self.shutdown_timeout)
+        except TimeoutError:
+            log.error(
+                f"Gave up after {self.shutdown_timeout} seconds waiting for the checkpoint at "
+                f"'{self._latest_checkpoint_path}' to finish writing. It is incomplete, and "
+                "tearing down the process group now may fail from the thread still writing it."
+            )
+        except BaseException:
+            # Already failing. A second exception raised out of close() would replace the one
+            # that is on its way up, which is the one that says what actually went wrong.
+            log.exception(
+                f"The checkpoint at '{self._latest_checkpoint_path}' failed while being "
+                "written and is incomplete."
+            )
+        finally:
+            self._future = None
