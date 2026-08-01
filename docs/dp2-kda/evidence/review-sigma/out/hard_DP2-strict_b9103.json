@@ -1,0 +1,97 @@
+{
+  "run_id": null,
+  "arm": "DP2-strict",
+  "manifest": null,
+  "probe_source_revision": "cd5fe06",
+  "mixer": "kda_hh",
+  "num_householder": 2,
+  "task": "s5_words",
+  "beta_regime": "strict",
+  "allow_neg_eigval": false,
+  "seeds": {
+    "init": 109103,
+    "data": 209103,
+    "task": 309103,
+    "eval": 409103
+  },
+  "bundle_id": 9103,
+  "ffn_dim": null,
+  "ffn_solve": null,
+  "param_ledger": {
+    "total": 520968,
+    "embedding": 256,
+    "head": 15360,
+    "non_embedding": 505352,
+    "mixers": 504968,
+    "ffns": 0,
+    "norms": 384
+  },
+  "n_params": 520968,
+  "backend": "triton",
+  "steps": 4000,
+  "batch": 64,
+  "train_range": [
+    3,
+    40
+  ],
+  "eval_bank_sha256": "2f1a1672dc074c445001eec0b84dbc65916c2106b9ec064d36e24ca2dbd61641",
+  "eval_collisions": 0,
+  "accuracy_by_length": {
+    "40": 0.602734375,
+    "64": 0.37939453125,
+    "128": 0.18603515625,
+    "256": 0.10198974609375
+  },
+  "beta_stats": {
+    "beta_min": 0.020964240655303,
+    "beta_max": 0.9999892711639404,
+    "beta_mean": 0.9279876947402954,
+    "logit_min": -3.84375,
+    "logit_max": 11.4375,
+    "logit_mean": 5.252503395080566,
+    "beta_scale": 1.0,
+    "n_beta_values": 262144
+  },
+  "beta_range_ok": true,
+  "loss_trace": [
+    [
+      0,
+      4.9372
+    ],
+    [
+      500,
+      0.0023
+    ],
+    [
+      1000,
+      1.4899
+    ],
+    [
+      1500,
+      0.07
+    ],
+    [
+      2000,
+      0.0023
+    ],
+    [
+      2500,
+      1.5696
+    ],
+    [
+      3000,
+      0.0003
+    ],
+    [
+      3500,
+      1.49
+    ],
+    [
+      3999,
+      1.2923
+    ]
+  ],
+  "nonfinite_loss_steps": 0,
+  "outcome": "completed",
+  "wall_seconds": 146.2
+}
