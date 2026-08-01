@@ -1,0 +1,22 @@
+NVIDIA L40S, 0 %
+device: NVIDIA L40S   trials=3
+
+  dense                     56.2us  spread  0.2%  kernels  20  40.00 MiB     695 GB/s
+  lowrank_fused r=128       60.8us  spread  0.1%  kernels  30  10.00 MiB     161 GB/s
+  lowrank_fused r=512       90.0us  spread  0.0%  kernels  30  40.00 MiB     434 GB/s
+  lowrank_sep r=128         76.5us  spread  0.3%  kernels  40  10.00 MiB     128 GB/s
+  grouped g=2               47.7us  spread  0.1%  kernels  20  20.00 MiB     410 GB/s
+  grouped g=4               47.6us  spread  0.1%  kernels  20  10.00 MiB     205 GB/s
+
+=== ISO-BYTE CONTROLS (bytes held constant; difference = factorization cost) ===
+  at  10.0 MiB:  grouped g=4            47.6us   vs  lowrank_fused r=128    60.8us   -> grouped g=4 is +21.8% faster
+  at  40.0 MiB:  dense                  56.2us   vs  lowrank_fused r=512    90.0us   -> dense is +37.5% faster
+
+=== VERDICT ===
+  lowrank_fused r=128      -8.2% vs dense   SLOWER
+  lowrank_fused r=512     -60.1% vs dense   SLOWER
+  lowrank_sep r=128       -36.0% vs dense   SLOWER
+  grouped g=2             +15.2% vs dense   FASTER
+  grouped g=4             +15.3% vs dense   FASTER
+
+wrote p1_verify_results.json

@@ -1,0 +1,21 @@
+[saved] 11:18:50
+val.npy (8000000,) uint16
+n_eos 7702
+n_docs 7700
+roundtrip fails 0 / 7700
+[saved] 11:18:56
+[saved] 11:18:57
+gpt2 encoded 0.34694337844848633 s  tokens 7988924
+lfm2 encoded 3.800638437271118 s  tokens 7952059
+olmo2 encoded 4.034783840179443 s  tokens 7805565
+neox encoded 4.334591627120972 s  tokens 7974561
+qwen25 encoded 4.371030569076538 s  tokens 7976664
+[saved] 11:19:16
+[saved] 11:19:17
+[saved] 11:19:17
+[saved] 11:19:17
+[saved] 11:19:21
+[saved] 11:19:21
+[saved] 11:19:21
+[saved] 11:19:21
+DONE

@@ -1,0 +1,80 @@
+NVIDIA L40S, 0 %
+device: cuda
+  NVIDIA L40S
+
+BASELINE ONLY (dense gates, k=3). 9 configs x 5 seeds x 3000 steps
+
+  N64_D4  (seq_len=64, pairs=4)
+    seed 0: acc 0.265 .  loss 5.72->2.062  (59s)
+    seed 1: acc 0.247 .  loss 5.74->3.050  (58s)
+    seed 2: acc 0.244 .  loss 5.66->3.096  (59s)
+    seed 3: acc 0.251 .  loss 5.72->3.055  (58s)
+    seed 4: acc 0.927 SOLVED  loss 5.62->0.189  (59s)
+  N128_D8  (seq_len=128, pairs=8)
+    seed 0: acc 0.125 .  loss 5.70->4.259  (56s)
+    seed 1: acc 0.122 .  loss 5.76->4.270  (63s)
+    seed 2: acc 0.123 .  loss 5.67->4.156  (62s)
+    seed 3: acc 0.127 .  loss 5.67->4.178  (62s)
+    seed 4: acc 0.130 .  loss 5.66->4.183  (62s)
+  N256_D16  (seq_len=256, pairs=16)
+    seed 0: acc 0.066 .  loss 5.65->4.627  (66s)
+    seed 1: acc 0.062 .  loss 5.80->4.601  (65s)
+    seed 2: acc 0.063 .  loss 5.70->4.503  (66s)
+    seed 3: acc 0.063 .  loss 5.74->4.604  (66s)
+    seed 4: acc 0.066 .  loss 5.73->4.640  (65s)
+  N512_D64  (seq_len=512, pairs=64)
+    seed 0: acc 0.025 .  loss 5.68->4.818  (127s)
+    seed 1: acc 0.021 .  loss 5.74->4.808  (127s)
+    seed 2: acc 0.054 .  loss 5.68->4.687  (127s)
+    seed 3: acc 0.017 .  loss 5.73->4.823  (128s)
+    seed 4: acc 0.018 .  loss 5.70->4.824  (127s)
+  N64_D8  (seq_len=64, pairs=8)
+    seed 0: acc 0.799 .  loss 5.71->0.752  (53s)
+    seed 1: acc 0.125 .  loss 5.76->4.101  (59s)
+    seed 2: acc 0.123 .  loss 5.68->4.181  (49s)
+    seed 3: acc 0.134 .  loss 5.67->4.067  (58s)
+    seed 4: acc 0.137 .  loss 5.66->4.068  (59s)
+  N128_D8  (seq_len=128, pairs=8)
+    seed 0: acc 0.125 .  loss 5.70->4.259  (59s)
+    seed 1: acc 0.122 .  loss 5.76->4.270  (62s)
+    seed 2: acc 0.123 .  loss 5.67->4.156  (62s)
+    seed 3: acc 0.127 .  loss 5.67->4.178  (62s)
+    seed 4: acc 0.130 .  loss 5.66->4.183  (54s)
+  N256_D8  (seq_len=256, pairs=8)
+    seed 0: acc 0.129 .  loss 5.69->4.230  (60s)
+    seed 1: acc 0.129 .  loss 5.76->4.163  (63s)
+    seed 2: acc 0.124 .  loss 5.67->4.372  (65s)
+    seed 3: acc 0.136 .  loss 5.67->4.174  (65s)
+    seed 4: acc 0.131 .  loss 5.66->4.207  (64s)
+  N512_D8  (seq_len=512, pairs=8)
+    seed 0: acc 0.129 .  loss 5.69->4.236  (64s)
+    seed 1: acc 0.129 .  loss 5.77->4.213  (64s)
+    seed 2: acc 0.133 .  loss 5.67->4.187  (63s)
+    seed 3: acc 0.120 .  loss 5.68->4.316  (64s)
+    seed 4: acc 0.125 .  loss 5.66->4.231  (56s)
+  N1024_D8  (seq_len=1024, pairs=8)
+    seed 0: acc 0.126 .  loss 5.69->4.218  (63s)
+    seed 1: acc 0.123 .  loss 5.77->4.190  (63s)
+    seed 2: acc 0.132 .  loss 5.67->4.165  (57s)
+    seed 3: acc 0.129 .  loss 5.68->4.248  (61s)
+    seed 4: acc 0.128 .  loss 5.66->3.855  (62s)
+
+config         1/D floor  success  >floor  accs (per seed)             
+------------------------------------------------------------------------
+N64_D4             0.250     20%     20%  0.24 0.25 0.25 0.26 0.93
+N128_D8            0.125      0%      0%  0.12 0.12 0.12 0.12 0.13 0.13 0.13 0.13 0.13 0.13
+N256_D16           0.062      0%      0%  0.06 0.06 0.06 0.07 0.07
+N512_D64           0.016      0%     40%  0.02 0.02 0.02 0.02 0.05
+N64_D8             0.125      0%     20%  0.12 0.12 0.13 0.14 0.80
+N128_D8            0.125      0%      0%  0.12 0.12 0.12 0.12 0.13 0.13 0.13 0.13 0.13 0.13
+N256_D8            0.125      0%      0%  0.12 0.13 0.13 0.13 0.14
+N512_D8            0.125      0%      0%  0.12 0.13 0.13 0.13 0.13
+N1024_D8           0.125      0%      0%  0.12 0.13 0.13 0.13 0.13
+
+bimodality: 40/45 runs at an extreme (<0.2 or >0.8), 5 in between
+  -> strongly bimodal, as the protocol predicted. Success rate is the right endpoint; a mean would be meaningless here.
+
+=== RECOMMENDED OPERATING POINT ===
+  N64_D4 at success rate 20% -- discriminates, since it is neither at ceiling nor at chance.
+
+wrote /scratch/users/ericrcwu/liv/mqar/mqar_calibration.json

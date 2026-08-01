@@ -1,0 +1,3 @@
+building bigram freq table over a 200M-token slice of train (GPT-2 ids)...
+distinct bigrams: 15782960
+AR-Hits slice on OUR corpus (GPT-2, 4096-ctx, 256 seqs): 99,990/1,048,320 = 9.54%   (Zoology on Pile: 6.4%)

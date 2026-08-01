@@ -1,0 +1,12 @@
+train.npy (1200000000,) target 200000000
+20M/200M  57s  eta 517s
+40M/200M  116s  eta 464s
+60M/200M  173s  eta 403s
+80M/200M  233s  eta 350s
+100M/200M  295s  eta 295s
+120M/200M  355s  eta 236s
+140M/200M  412s  eta 176s
+160M/200M  470s  eta 117s
+180M/200M  527s  eta 59s
+200M/200M  586s  eta 0s
+DONE {"gpt2": 49866, "lfm2": 57210, "olmo2": 81483, "neox": 48711, "qwen25": 92735}

@@ -1,0 +1,131 @@
+{
+  "device": "NVIDIA L40S",
+  "seq": 4096,
+  "l40s_peak_tflops": 362.0,
+  "results": [
+    {
+      "arm": "L0",
+      "micro_bs": 2,
+      "params": 338886400,
+      "flops_per_token": 2335173120,
+      "step_ms": 222.51898791485777,
+      "tokens_per_sec": 36814.835788910284,
+      "achieved_tflops": 85.96901495147729,
+      "mfu_pct": 23.74834667167881,
+      "peak_mem_gib": 19.388119220733643,
+      "loss_step0": 926.1688842773438,
+      "loss_last": 130.3822021484375
+    },
+    {
+      "arm": "L0",
+      "micro_bs": 4,
+      "params": 338886400,
+      "flops_per_token": 2335173120,
+      "step_ms": 483.67365983237204,
+      "tokens_per_sec": 33874.0794892123,
+      "achieved_tflops": 79.1018398879519,
+      "mfu_pct": 21.851336985622073,
+      "peak_mem_gib": 34.32766389846802,
+      "loss_step0": 925.8641357421875,
+      "loss_last": 115.30282592773438
+    },
+    {
+      "arm": "L0",
+      "micro_bs": 8,
+      "error": "OOM"
+    },
+    {
+      "arm": "F-r128",
+      "micro_bs": 2,
+      "params": 323157760,
+      "flops_per_token": 2240801280,
+      "step_ms": 219.85428699796708,
+      "tokens_per_sec": 37261.04281094027,
+      "achieved_tflops": 83.49459242488975,
+      "mfu_pct": 23.06480453726236,
+      "peak_mem_gib": 19.230658054351807,
+      "loss_step0": 939.6632690429688,
+      "loss_last": 125.4018325805664
+    },
+    {
+      "arm": "F-r128",
+      "micro_bs": 4,
+      "params": 323157760,
+      "flops_per_token": 2240801280,
+      "step_ms": 477.77152475221857,
+      "tokens_per_sec": 34292.54183471284,
+      "achieved_tflops": 76.8427716376781,
+      "mfu_pct": 21.227284982784006,
+      "peak_mem_gib": 34.20389413833618,
+      "loss_step0": 939.9512939453125,
+      "loss_last": 120.14631652832031
+    },
+    {
+      "arm": "F-r128",
+      "micro_bs": 8,
+      "error": "OOM"
+    },
+    {
+      "arm": "G-grouped",
+      "micro_bs": 2,
+      "params": 323157760,
+      "flops_per_token": 2240801280,
+      "step_ms": 222.2723978338763,
+      "tokens_per_sec": 36855.67834708204,
+      "achieved_tflops": 82.58625121540972,
+      "mfu_pct": 22.813881551218156,
+      "peak_mem_gib": 19.344178676605225,
+      "loss_step0": 942.3344116210938,
+      "loss_last": 122.65135192871094
+    },
+    {
+      "arm": "G-grouped",
+      "micro_bs": 4,
+      "params": 323157760,
+      "flops_per_token": 2240801280,
+      "step_ms": 487.69181866858463,
+      "tokens_per_sec": 33594.986368089754,
+      "achieved_tflops": 75.27968845519808,
+      "mfu_pct": 20.79549404839726,
+      "peak_mem_gib": 34.4465651512146,
+      "loss_step0": 941.906982421875,
+      "loss_last": 121.51301574707031
+    },
+    {
+      "arm": "G-grouped",
+      "micro_bs": 8,
+      "error": "OOM"
+    },
+    {
+      "arm": "N-narrow",
+      "micro_bs": 2,
+      "params": 323188528,
+      "flops_per_token": 2240992224,
+      "step_ms": 228.07063324823199,
+      "tokens_per_sec": 35918.69713047988,
+      "achieved_tflops": 80.49352096561651,
+      "mfu_pct": 22.235779272269752,
+      "peak_mem_gib": 19.132709503173828,
+      "loss_step0": 882.4576416015625,
+      "loss_last": 122.05644989013672
+    },
+    {
+      "arm": "N-narrow",
+      "micro_bs": 4,
+      "params": 323188528,
+      "flops_per_token": 2240992224,
+      "step_ms": 496.6671318349351,
+      "tokens_per_sec": 32987.88856727717,
+      "achieved_tflops": 73.92560176544664,
+      "mfu_pct": 20.42143695178084,
+      "peak_mem_gib": 33.91583585739136,
+      "loss_step0": 882.5005493164062,
+      "loss_last": 112.3414077758789
+    },
+    {
+      "arm": "N-narrow",
+      "micro_bs": 8,
+      "error": "OOM"
+    }
+  ]
+}

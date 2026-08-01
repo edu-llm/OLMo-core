@@ -1,0 +1,9 @@
+[train] 1,200,000,000 tokens, 128-byte header -> /scratch/users/ericrcwu/liv/data/train_raw.bin
+[train] verified: len ok, spot-checks ok, sampled max id 50256
+[val] 8,000,000 tokens, 128-byte header -> /scratch/users/ericrcwu/liv/data/val_raw.bin
+[val] verified: len ok, spot-checks ok, sampled max id 50256
+
+EXACT max token id -- train 50256, val 50256
+vocab 50,304 covers the corpus (GPT-2 EOS 50,256 is the true ceiling)
+
+wrote /scratch/users/ericrcwu/liv/data/meta.json

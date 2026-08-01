@@ -1,0 +1,87 @@
+{
+  "device": "NVIDIA L40S",
+  "d": 1024,
+  "n_liv": 10,
+  "results": [
+    {
+      "arm": "dense",
+      "r": null,
+      "g": null,
+      "bytes_per_token": 41943040,
+      "eager_us": 235.76000332832336,
+      "graph_us": 56.32000043988228
+    },
+    {
+      "arm": "lowrank_sep",
+      "r": 128,
+      "g": null,
+      "bytes_per_token": 10485760,
+      "eager_us": 456.7039906978607,
+      "graph_us": 72.60800153017044,
+      "speedup_graphed_pct": -28.9204562554549
+    },
+    {
+      "arm": "lowrank_fused",
+      "r": 128,
+      "g": null,
+      "bytes_per_token": 10485760,
+      "eager_us": 405.2959978580475,
+      "graph_us": 57.34400078654289,
+      "speedup_graphed_pct": -1.8181824195006246
+    },
+    {
+      "arm": "lowrank_sep",
+      "r": 256,
+      "g": null,
+      "bytes_per_token": 20971520,
+      "eager_us": 456.7039906978607,
+      "graph_us": 86.01599931716919,
+      "speedup_graphed_pct": -52.7272703219975
+    },
+    {
+      "arm": "lowrank_fused",
+      "r": 256,
+      "g": null,
+      "bytes_per_token": 20971520,
+      "eager_us": 403.4560024738312,
+      "graph_us": 71.6480016708374,
+      "speedup_graphed_pct": -27.215911063986425
+    },
+    {
+      "arm": "lowrank_sep",
+      "r": 512,
+      "g": null,
+      "bytes_per_token": 41943040,
+      "eager_us": 455.6800127029419,
+      "graph_us": 106.49599879980087,
+      "speedup_graphed_pct": -89.09090548299625
+    },
+    {
+      "arm": "lowrank_fused",
+      "r": 512,
+      "g": null,
+      "bytes_per_token": 41943040,
+      "eager_us": 404.6719968318939,
+      "graph_us": 86.38399839401245,
+      "speedup_graphed_pct": -53.380677768675476
+    },
+    {
+      "arm": "grouped",
+      "r": null,
+      "g": 2,
+      "bytes_per_token": 20971520,
+      "eager_us": 292.7680015563965,
+      "graph_us": 44.863998889923096,
+      "speedup_graphed_pct": 20.340911684096444
+    },
+    {
+      "arm": "grouped",
+      "r": null,
+      "g": 4,
+      "bytes_per_token": 10485760,
+      "eager_us": 294.8800027370453,
+      "graph_us": 44.92799937725067,
+      "speedup_graphed_pct": 20.227274456064297
+    }
+  ]
+}

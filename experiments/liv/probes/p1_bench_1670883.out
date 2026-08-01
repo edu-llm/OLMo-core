@@ -1,0 +1,64 @@
+=== node oat-04 ===
+name, memory.total [MiB], clocks.max.sm [MHz]
+NVIDIA L40S, 46068 MiB, 2520 MHz
+=== analytic breakeven (reference) ===
+P1 breakeven: d=1024, 10 LIV layers x 2 gates = 20 extra launches/token, bf16
+Dense gate weight traffic/token: 40.00 MiB
+
+A100-40GB (SXM)   peak 1555 GB/s, assumed achieved 1166 GB/s
+      r   bytes saved     saving   breakeven       verdict at 5/10us
+    128    31,457,280      27.0us       1.35us   LOSS -73us / LOSS -173us
+    256    20,971,520      18.0us       0.90us   LOSS -82us / LOSS -182us
+    512             0         --       never   r >= d/2, no saving
+
+A100-80GB (SXM)   peak 2039 GB/s, assumed achieved 1529 GB/s
+      r   bytes saved     saving   breakeven       verdict at 5/10us
+    128    31,457,280      20.6us       1.03us   LOSS -79us / LOSS -179us
+    256    20,971,520      13.7us       0.69us   LOSS -86us / LOSS -186us
+    512             0         --       never   r >= d/2, no saving
+
+H100-80GB (SXM)   peak 3350 GB/s, assumed achieved 2512 GB/s
+      r   bytes saved     saving   breakeven       verdict at 5/10us
+    128    31,457,280      12.5us       0.63us   LOSS -87us / LOSS -187us
+    256    20,971,520       8.3us       0.42us   LOSS -92us / LOSS -192us
+    512             0         --       never   r >= d/2, no saving
+
+L40S-46GB   peak 864 GB/s, assumed achieved 648 GB/s
+      r   bytes saved     saving   breakeven       verdict at 5/10us
+    128    31,457,280      48.5us       2.43us   LOSS -51us / LOSS -151us
+    256    20,971,520      32.4us       1.62us   LOSS -68us / LOSS -168us
+    512             0         --       never   r >= d/2, no saving
+
+NOTE: breakeven scales with 1/bandwidth -- SLOWER cards are MORE forgiving,
+because the byte saving buys more time while launch cost stays fixed.
+
+=== measured benchmark ===
+device: NVIDIA L40S
+geometry: d=1024, 10 LIV layers x 2 gates, bf16, batch=1 (decode)
+
+  dense                  eager   235.8us   graphed    56.3us   40.00 MiB/tok
+  lowrank_sep r=128      eager   456.7us   graphed    72.6us   10.00 MiB/tok
+  lowrank_fused r=128    eager   405.3us   graphed    57.3us   10.00 MiB/tok
+  lowrank_sep r=256      eager   456.7us   graphed    86.0us   20.00 MiB/tok
+  lowrank_fused r=256    eager   403.5us   graphed    71.6us   20.00 MiB/tok
+  lowrank_sep r=512      eager   455.7us   graphed   106.5us   40.00 MiB/tok
+  lowrank_fused r=512    eager   404.7us   graphed    86.4us   40.00 MiB/tok
+  grouped g=2            eager   292.8us   graphed    44.9us   20.00 MiB/tok
+  grouped g=4            eager   294.9us   graphed    44.9us   10.00 MiB/tok
+
+arm                               eager          graphed   verdict(graphed)
+lowrank_sep r=128        -220.9us(-93.7%)    -16.3us(-28.9%)   SLOWER than stock LIV
+lowrank_fused r=128      -169.5us(-71.9%)     -1.0us( -1.8%)   SLOWER than stock LIV
+lowrank_sep r=256        -220.9us(-93.7%)    -29.7us(-52.7%)   SLOWER than stock LIV
+lowrank_fused r=256      -167.7us(-71.1%)    -15.3us(-27.2%)   SLOWER than stock LIV
+lowrank_sep r=512        -219.9us(-93.3%)    -50.2us(-89.1%)   SLOWER than stock LIV
+lowrank_fused r=512      -168.9us(-71.6%)    -30.1us(-53.4%)   SLOWER than stock LIV
+grouped g=2               -57.0us(-24.2%)    +11.5us(+20.3%)   FASTER
+grouped g=4               -59.1us(-25.1%)    +11.4us(+20.2%)   FASTER
+
+=== GATE DECISION ===
+best: grouped r=None g=2 +20.34% graphed
+Report GRAPHED numbers as headline; eager numbers as the cautionary footnote.
+WARNING: grouped wins. It is in STAR's search space and was NOT selected, so P1's novelty argument weakens -- reconsider before training.
+
+wrote p1_bench_results.json

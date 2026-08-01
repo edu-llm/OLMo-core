@@ -1,0 +1,69 @@
+{
+  "ndocs_target": 5000,
+  "train_npy_tokens": 1200000000,
+  "train_npy_dtype": "uint16",
+  "slice_tokens": 10000000,
+  "t_load_s": 0.023577380925416946,
+  "n_eos_in_slice": 9670,
+  "n_docs": 5000,
+  "t_split_s": 0.013846946880221367,
+  "doc_tok_lens": {
+    "mean": 1038.233,
+    "median": 590.0,
+    "p90": 2034.6000000000022,
+    "max": 26697,
+    "total": 5191165
+  },
+  "gpt2_vocab_with_added": 50257,
+  "decode": {
+    "t_s": 1.2021514680236578,
+    "tok_per_s": 4318228.724150958,
+    "docs_per_s": 4159.209661175244
+  },
+  "total_chars": 23848948,
+  "bytes_utf8": 23932410,
+  "roundtrip": {
+    "n_docs": 5000,
+    "n_exact": 5000,
+    "frac_exact": 1.0,
+    "orig_tokens": 5191165,
+    "reenc_tokens": 5191165
+  },
+  "gpt2_reencode": {
+    "t_s": 10.345788698177785,
+    "tok_per_s": 501765.9988468859,
+    "chars_per_s": 2305184.1377932397
+  },
+  "candidates": {
+    "LFM2-350M": {
+      "repo": "LiquidAI/LFM2-350M",
+      "vocab_with_added": 64400,
+      "vocab_no_added": 64400,
+      "tokens": 5190690,
+      "t_s_best_of_3": 10.337250431068242,
+      "tok_per_s": 502134.49259191443,
+      "chars_per_s": 2307088.152602246,
+      "chars_per_token": 4.594562187300725,
+      "fertility_vs_gpt2": 0.9999084983813845,
+      "max_id": 64389
+    },
+    "dolma2": {
+      "repo": "allenai/dolma2-tokenizer",
+      "vocab_with_added": 100278,
+      "vocab_no_added": 100278,
+      "tokens": 5091258,
+      "t_s_best_of_3": 12.499524720944464,
+      "tok_per_s": 407316.12710593565,
+      "chars_per_s": 1907988.3861534516,
+      "chars_per_token": 4.684293744296596,
+      "fertility_vs_gpt2": 0.9807544163978607,
+      "max_id": 100255
+    }
+  },
+  "nproc": 80,
+  "loadavg": [
+    8.0576171875,
+    5.5751953125,
+    3.23974609375
+  ]
+}

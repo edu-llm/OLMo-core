@@ -1,0 +1,31 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+gpt2 {
+  "vocab": 50257,
+  "train_sample_tokens": 29971753,
+  "distinct_bigrams_in_sample": 4743791,
+  "freq_scale_to_1.2B": 40.0376981619994,
+  "rare_threshold_in_sample_counts": 31.220576041666664,
+  "val_tokens_encoded": 7992244,
+  "windows": 1951,
+  "scored_positions": 7989345,
+  "in_context_repeat_frac": 0.22511207113974926,
+  "AR_HITS_frac (repeat AND rare)": 0.05363781386333923,
+  "t_s": 56.17045985185541
+}
+lfm2 {
+  "vocab": 64400,
+  "train_sample_tokens": 29772581,
+  "distinct_bigrams_in_sample": 4688459,
+  "freq_scale_to_1.2B": 40.3055415316529,
+  "rare_threshold_in_sample_counts": 31.013105208333332,
+  "val_tokens_encoded": 7955478,
+  "windows": 1942,
+  "scored_positions": 7952490,
+  "in_context_repeat_frac": 0.21210073825933765,
+  "AR_HITS_frac (repeat AND rare)": 0.05465319667173426,
+  "t_s": 57.870569062186405
+}
+{
+  "in_context_repeat": 0.9422006433749428,
+  "AR_HITS": 1.0189303540778538
+}

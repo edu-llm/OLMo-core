@@ -1,10 +1,11 @@
 import math
+from typing import Any, Dict
 
 import pytest
 import torch
 
 from olmo_core.nn.attention.base import SequenceMixerConfig
-from olmo_core.nn.attention.short_conv import ShortConv, ShortConvConfig
+from olmo_core.nn.attention.short_conv import GateStructure, ShortConv, ShortConvConfig
 
 
 def _reference_lfm2_short_conv(
@@ -176,7 +177,7 @@ def test_receptive_field_is_exactly_kernel_size(kernel_size: int):
         ("grouped", {"gate_groups": 4}),
     ],
 )
-def test_num_params_matches_built_module(structure: str, kwargs: dict):
+def test_num_params_matches_built_module(structure: GateStructure, kwargs: Dict[str, Any]):
     """``num_params`` is used for arm matching, so a mismatch silently unbalances the study."""
     d_model = 64
     cfg = ShortConvConfig(gate_structure=structure, **kwargs)
@@ -275,7 +276,9 @@ def test_document_isolation_matches_independent_forward():
 
 def test_registered_in_sequence_mixer_registry():
     """The config must be resolvable by name for ``block_overrides`` to reach it."""
-    cfg = SequenceMixerConfig.from_dict({"type": "short_conv", "kernel_size": 5})
+    cfg: SequenceMixerConfig = SequenceMixerConfig.from_dict(
+        {"type": "short_conv", "kernel_size": 5}
+    )
     assert isinstance(cfg, ShortConvConfig)
     assert cfg.kernel_size == 5
 
@@ -364,12 +367,16 @@ def test_builds_lfm2_topology_end_to_end():
     """
     import copy
 
-    from olmo_core.nn.transformer.config import TransformerConfig
+    from olmo_core.nn.transformer.config import TransformerBlockConfig, TransformerConfig
 
     cfg = TransformerConfig.llama2_271M(vocab_size=1024)
     assert cfg.n_layers == 16
 
-    liv_block = copy.deepcopy(cfg.block)
+    # ``TransformerConfig.block`` is typed as a single config *or* a dict of them; narrow it
+    # before mutating, both for mypy and because the dict form would need different handling.
+    base_block = cfg.block
+    assert isinstance(base_block, TransformerBlockConfig)
+    liv_block = copy.deepcopy(base_block)
     liv_block.sequence_mixer = ShortConvConfig(kernel_size=3)
     attn_layers = {2, 5, 8, 10, 12, 14}
     cfg.block_overrides = {i: liv_block for i in range(cfg.n_layers) if i not in attn_layers}
@@ -423,11 +430,12 @@ def test_grouped_has_no_cross_block_mixing():
 
 
 def test_gradients_flow_to_every_parameter():
-    for structure, kw in (
+    cases: tuple[tuple[GateStructure, Dict[str, Any]], ...] = (
         ("dense", {}),
         ("lowrank", {"gate_rank": 8}),
         ("grouped", {"gate_groups": 2}),
-    ):
+    )
+    for structure, kw in cases:
         m = ShortConv(d_model=32, gate_structure=structure, use_fla=False, **kw)
         m(torch.randn(2, 5, 32)).sum().backward()
         for name, p in m.named_parameters():

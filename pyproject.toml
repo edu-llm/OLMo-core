@@ -106,15 +106,23 @@ exclude = '''
     | \bdist\b
     | \bdoc\b
     | scratch/
+    | experiments/
 )
 '''
 
 [tool.isort]
 profile = "black"
 multi_line_output = 3
+# 'experiments/' is an archive of cluster scripts kept verbatim for provenance -- the value of
+# those files is that they are byte-for-byte what produced the cited numbers, so reformatting
+# them would defeat the point. Excluded here, from black, and from ruff.
+extend_skip = ["experiments"]
 
 [tool.ruff]
 line-length = 100
+# Must be on [tool.ruff], not [tool.ruff.lint]: the latter filters which rules apply, while file
+# discovery is governed here. See the note on [tool.isort] for why 'experiments/' is excluded.
+extend-exclude = ["experiments"]
 
 [tool.ruff.lint]
 ignore = ["F403", "F405", "E501"]
@@ -142,6 +150,7 @@ exclude = [
     "doc",
     "pretrain_data",
     "inference",
+    "experiments",
 ]
 
 [tool.ruff.lint.per-file-ignores]

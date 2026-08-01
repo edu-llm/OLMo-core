@@ -1,0 +1,81 @@
+NVIDIA L40S
+device: cuda
+  NVIDIA L40S
+budget: 512,000 examples (8% of Zoology's)
+
+BASELINE ONLY (dense gates, k=3). 9 configs x 5 seeds x 8000 steps
+
+  N64_D4  (seq_len=64, pairs=4)
+    seed 0: acc 0.270 .  loss 5.67->1.401  (164s)
+    seed 1: acc 1.000 SOLVED  loss 5.74->0.001  (163s)
+    seed 2: acc 1.000 SOLVED  loss 5.63->0.001  (163s)
+    seed 3: acc 1.000 SOLVED  loss 5.77->0.001  (163s)
+    seed 4: acc 0.988 SOLVED  loss 5.67->0.023  (163s)
+  N128_D8  (seq_len=128, pairs=8)
+    seed 0: acc 1.000 SOLVED  loss 5.70->0.000  (171s)
+    seed 1: acc 1.000 SOLVED  loss 5.76->0.000  (171s)
+    seed 2: acc 1.000 SOLVED  loss 5.66->0.000  (170s)
+    seed 3: acc 1.000 SOLVED  loss 5.69->0.000  (172s)
+    seed 4: acc 1.000 SOLVED  loss 5.69->0.000  (170s)
+  N256_D16  (seq_len=256, pairs=16)
+    seed 0: acc 1.000 SOLVED  loss 5.66->0.000  (212s)
+    seed 1: acc 1.000 SOLVED  loss 5.75->0.000  (212s)
+    seed 2: acc 1.000 SOLVED  loss 5.69->0.000  (212s)
+    seed 3: acc 1.000 SOLVED  loss 5.73->0.000  (211s)
+    seed 4: acc 1.000 SOLVED  loss 5.70->0.000  (212s)
+  N512_D64  (seq_len=512, pairs=64)
+    seed 0: acc 0.204 .  loss 5.69->3.738  (592s)
+    seed 1: acc 0.983 SOLVED  loss 5.73->0.032  (592s)
+    seed 2: acc 0.085 .  loss 5.69->4.423  (592s)
+    seed 3: acc 0.051 .  loss 5.72->4.634  (592s)
+    seed 4: acc 0.558 .  loss 5.71->1.832  (593s)
+  N64_D8  (seq_len=64, pairs=8)
+    seed 0: acc 1.000 SOLVED  loss 5.70->0.000  (172s)
+    seed 1: acc 1.000 SOLVED  loss 5.76->0.000  (165s)
+    seed 2: acc 1.000 SOLVED  loss 5.66->0.000  (170s)
+    seed 3: acc 1.000 SOLVED  loss 5.69->0.000  (171s)
+    seed 4: acc 1.000 SOLVED  loss 5.69->0.000  (172s)
+  N128_D8  (seq_len=128, pairs=8)
+    seed 0: acc 1.000 SOLVED  loss 5.70->0.000  (175s)
+    seed 1: acc 1.000 SOLVED  loss 5.76->0.000  (171s)
+    seed 2: acc 1.000 SOLVED  loss 5.66->0.000  (172s)
+    seed 3: acc 1.000 SOLVED  loss 5.69->0.000  (172s)
+    seed 4: acc 1.000 SOLVED  loss 5.69->0.000  (173s)
+  N256_D8  (seq_len=256, pairs=8)
+    seed 0: acc 1.000 SOLVED  loss 5.70->0.000  (178s)
+    seed 1: acc 1.000 SOLVED  loss 5.76->0.000  (176s)
+    seed 2: acc 1.000 SOLVED  loss 5.65->0.000  (178s)
+    seed 3: acc 1.000 SOLVED  loss 5.69->0.000  (177s)
+    seed 4: acc 1.000 SOLVED  loss 5.69->0.001  (177s)
+  N512_D8  (seq_len=512, pairs=8)
+    seed 0: acc 0.147 .  loss 5.70->2.160  (175s)
+    seed 1: acc 1.000 SOLVED  loss 5.76->0.000  (173s)
+    seed 2: acc 0.144 .  loss 5.65->2.233  (174s)
+    seed 3: acc 1.000 SOLVED  loss 5.69->0.000  (177s)
+    seed 4: acc 0.156 .  loss 5.69->2.153  (175s)
+  N1024_D8  (seq_len=1024, pairs=8)
+    seed 0: acc 0.146 .  loss 5.70->2.191  (246s)
+    seed 1: acc 0.571 .  loss 5.77->1.110  (245s)
+    seed 2: acc 0.150 .  loss 5.65->2.270  (246s)
+    seed 3: acc 0.139 .  loss 5.69->2.206  (246s)
+    seed 4: acc 0.147 .  loss 5.69->2.169  (246s)
+
+config         1/D floor  success  >floor  accs (per seed)             
+------------------------------------------------------------------------
+N64_D4             0.250     80%     80%  0.27 0.99 1.00 1.00 1.00
+N128_D8            0.125    100%    100%  1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00
+N256_D16           0.062    100%    100%  1.00 1.00 1.00 1.00 1.00
+N512_D64           0.016     20%    100%  0.05 0.09 0.20 0.56 0.98
+N64_D8             0.125    100%    100%  1.00 1.00 1.00 1.00 1.00
+N128_D8            0.125    100%    100%  1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00
+N256_D8            0.125    100%    100%  1.00 1.00 1.00 1.00 1.00
+N512_D8            0.125     40%     40%  0.14 0.15 0.16 1.00 1.00
+N1024_D8           0.125      0%     20%  0.14 0.15 0.15 0.15 0.57
+
+bimodality: 41/45 runs at an extreme (<0.2 or >0.8), 4 in between
+  -> strongly bimodal, as the protocol predicted. Success rate is the right endpoint; a mean would be meaningless here.
+
+=== RECOMMENDED OPERATING POINT ===
+  N512_D8 at success rate 40% -- discriminates, since it is neither at ceiling nor at chance.
+
+wrote /scratch/users/ericrcwu/liv/mqar/mqar_calibration.json

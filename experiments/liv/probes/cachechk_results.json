@@ -1,0 +1,87 @@
+{
+  "device": "NVIDIA L40S",
+  "l2_bytes": 100663296,
+  "rows": [
+    {
+      "n_replicas": 1,
+      "arm": "dense",
+      "us": 55.296000093221664,
+      "stack_mib": 40.0,
+      "achieved_gbs": 758.5185172397577,
+      "vs_dense_pct": 0.0,
+      "working_set_mib": 40.0
+    },
+    {
+      "n_replicas": 1,
+      "arm": "lowrank_fused_r128",
+      "us": 57.34400078654289,
+      "stack_mib": 10.0,
+      "achieved_gbs": 182.85714034903418,
+      "vs_dense_pct": -3.7037049512958853,
+      "working_set_mib": 10.0
+    },
+    {
+      "n_replicas": 1,
+      "arm": "grouped_g4",
+      "us": 44.03200000524521,
+      "stack_mib": 10.0,
+      "achieved_gbs": 238.1395348553531,
+      "vs_dense_pct": 20.37037049512959,
+      "working_set_mib": 10.0
+    },
+    {
+      "n_replicas": 4,
+      "arm": "dense",
+      "us": 94.2080020904541,
+      "stack_mib": 40.0,
+      "achieved_gbs": 445.21738142507536,
+      "vs_dense_pct": 0.0,
+      "working_set_mib": 160.0
+    },
+    {
+      "n_replicas": 4,
+      "arm": "lowrank_fused_r128",
+      "us": 57.34400078654289,
+      "stack_mib": 10.0,
+      "achieved_gbs": 182.85714034903418,
+      "vs_dense_pct": 39.130435298390175,
+      "working_set_mib": 40.0
+    },
+    {
+      "n_replicas": 4,
+      "arm": "grouped_g4",
+      "us": 44.75199989974499,
+      "stack_mib": 10.0,
+      "achieved_gbs": 234.30818786848792,
+      "vs_dense_pct": 52.4966044213779,
+      "working_set_mib": 40.0
+    },
+    {
+      "n_replicas": 24,
+      "arm": "dense",
+      "us": 94.94400024414062,
+      "stack_mib": 40.0,
+      "achieved_gbs": 441.7660925613725,
+      "vs_dense_pct": 0.0,
+      "working_set_mib": 960.0
+    },
+    {
+      "n_replicas": 24,
+      "arm": "lowrank_fused_r128",
+      "us": 66.56000018119812,
+      "stack_mib": 10.0,
+      "achieved_gbs": 157.53846110959026,
+      "vs_dense_pct": 29.89551734702077,
+      "working_set_mib": 240.0
+    },
+    {
+      "n_replicas": 24,
+      "arm": "grouped_g4",
+      "us": 51.19999870657921,
+      "stack_mib": 10.0,
+      "achieved_gbs": 204.80000517368333,
+      "vs_dense_pct": 46.073476391427945,
+      "working_set_mib": 240.0
+    }
+  ]
+}

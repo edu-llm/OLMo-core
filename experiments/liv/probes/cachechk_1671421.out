@@ -1,0 +1,30 @@
+device: NVIDIA L40S
+  L2 cache: 96.0 MiB   (claim under test: ~96 MiB)
+  SMs: 142, total mem 44.4 GiB
+
+geometry d=1024, 10 layers x 2 gates, bf16, batch=1
+
+--- 1 replica(s): dense working set 40 MiB (IN L2) ---
+  dense                    55.3us   40.00 MiB/stack     759 GB/s
+  lowrank_fused_r128       57.3us   10.00 MiB/stack     183 GB/s   -3.70% vs dense
+  grouped_g4               44.0us   10.00 MiB/stack     238 GB/s  +20.37% vs dense
+
+--- 4 replica(s): dense working set 160 MiB (PAST L2) ---
+  dense                    94.2us   40.00 MiB/stack     445 GB/s
+  lowrank_fused_r128       57.3us   10.00 MiB/stack     183 GB/s  +39.13% vs dense
+  grouped_g4               44.8us   10.00 MiB/stack     234 GB/s  +52.50% vs dense
+
+--- 24 replica(s): dense working set 960 MiB (PAST L2) ---
+  dense                    94.9us   40.00 MiB/stack     442 GB/s
+  lowrank_fused_r128       66.6us   10.00 MiB/stack     158 GB/s  +29.90% vs dense
+  grouped_g4               51.2us   10.00 MiB/stack     205 GB/s  +46.07% vs dense
+
+=== VERDICT ===
+  dense working set     40 MiB -> lowrank_fused_r128  -3.70% vs dense
+  dense working set    160 MiB -> lowrank_fused_r128 +39.13% vs dense
+  dense working set    960 MiB -> lowrank_fused_r128 +29.90% vs dense
+
+  CLAIM SUPPORTED: low-rank loses in-cache and WINS past L2. The original
+  benchmark's working set was unrepresentative and its sign is not trustworthy.
+
+wrote cachechk_results.json
