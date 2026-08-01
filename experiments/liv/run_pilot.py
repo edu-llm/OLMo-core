@@ -13,8 +13,36 @@ pilot sees a large gap. If it does not, the 12-day study is built on a metric th
 GaLore is a documented case of exactly this failure: plain ``W = BA`` collapses to 142.53 ppl vs
 15.56 at 1B.
 
-**A null result here is informative, not a wasted run.** It says: rank arms cannot be pre-screened
-by spectra, and the big study needs a different selection criterion.
+**A null result here is informative, not a wasted run** -- but only if it can be distinguished from
+undertraining. See the next section, which is the load-bearing part of this design.
+
+CAN A NULL JUST MEAN "TOO SHORT"?
+---------------------------------
+Yes, and that is the sharpest objection to any pilot at 1.18 tokens/param. Two arms that would
+diverge at 20 tok/param can look identical at 1, because early loss is dominated by learning
+token frequencies -- something every arm does equally well regardless of gate structure. A single
+end-of-run number cannot tell the two situations apart.
+
+So the pilot does not report a single number. It evaluates held-out loss at a **geometric ladder**
+of steps (5%, 10%, 20%, 35%, 50%, 75%, 100% of the run) and the endpoint is the **trajectory of the
+between-arm gap**, not the final value:
+
+* gap **grows** across rungs -> the effect is real and this budget already sees it;
+* gap **flat and near zero while loss is still falling steeply** -> UNDERTRAINED. Not a null.
+  The honest conclusion is "this budget cannot answer the question", and the next move is more
+  tokens on the two cost-matched arms only, not a verdict;
+* gap **flat and near zero while the curves have flattened** -> a real null over this regime.
+
+That third case is still not a claim about 20 tok/param. It is a claim that the 0.929-vs-0.130
+energy proxy does not predict *early* training, which is exactly what would make the proxy unusable
+as a cheap pre-screen -- the use the 12-day design had in mind for it.
+
+**Two things this pilot cannot do, regardless of outcome:**
+
+1. **Rank architectures.** An ordering at 1.18 tok/param can reverse by 20. This screens a *metric*.
+2. **Rule out a recall difference.** The endpoint is loss. Hymba measured a 20.75-point recall gap
+   at near-identical perplexity, so a loss null says nothing about retrieval. MQAR is calibrated
+   (``mqar/``) and is the follow-up if loss comes back flat.
 
 WHY THESE FOUR ARMS
 -------------------
@@ -76,7 +104,12 @@ from olmo_core.train import (
     prepare_training_environment,
     teardown_training_environment,
 )
-from olmo_core.train.callbacks import GarbageCollectorCallback, GPUMemoryMonitorCallback
+from olmo_core.train.callbacks import (
+    GarbageCollectorCallback,
+    GPUMemoryMonitorCallback,
+    LMEvaluatorCallbackConfig,
+    MetricSaverCallback,
+)
 from olmo_core.train.train_module import TransformerTrainModuleConfig
 from olmo_core.utils import seed_all
 
@@ -154,6 +187,35 @@ def build_everything(arm: str, seed: int, tokens: int) -> Dict[str, Any]:
         compile_model=True,
     )
 
+    # Validation loss on a held-out split at a LADDER of checkpoints, not just at the end.
+    #
+    # This is what makes an absence of a gap interpretable. A single end-of-run number cannot
+    # distinguish "these arms are equivalent" from "400M tokens is too early for any arm to have
+    # differentiated yet" -- and at 1.18 tokens/param the second is a live possibility. A ladder
+    # answers it directly: if the between-arm gap is flat and near zero at every rung while the
+    # loss itself is still dropping steeply, the run is too short to conclude anything. If the gap
+    # is near zero and *stable* while the curves have flattened, the arms really are equivalent
+    # over this regime.
+    #
+    # Geometric spacing because loss falls roughly log-linearly in tokens, so evenly-spaced steps
+    # would put most rungs in the flat tail where they carry the least information.
+    eval_steps = sorted({max(1, int(steps * f)) for f in (0.05, 0.1, 0.2, 0.35, 0.5, 0.75, 1.0)})
+
+    eval_cfg = LMEvaluatorCallbackConfig(
+        eval_dataset=NumpyFSLDatasetConfig(
+            paths=[f"{DATA_ROOT}/val_raw.bin"],
+            sequence_length=SEQUENCE_LENGTH,
+            tokenizer=TOKENIZER,
+            work_dir=f"{OUT_ROOT}/work",
+        ),
+        eval_interval=None,
+        fixed_steps=eval_steps,
+        eval_on_finish=True,
+        # 8M val tokens is far more than needed per rung and would cost more than training.
+        # 64 batches x 128 x 4096 = ~33M tokens... cap by duration instead.
+        eval_duration=Duration.steps(16),
+    )
+
     trainer_cfg = (
         TrainerConfig(
             save_folder=f"{OUT_ROOT}/{run_name}",
@@ -162,10 +224,16 @@ def build_everything(arm: str, seed: int, tokens: int) -> Dict[str, Any]:
             cancel_check_interval=50,
             max_duration=Duration.steps(steps),
             no_checkpoints=True,  # a pilot needs the loss curve, not resumable weights
-            no_evals=True,  # downstream evals are meaningless at <1 tok/param
+            # NOTE: no_evals must stay False. Trainer._iter_callbacks filters out every
+            # EvaluatorCallback when it is True (trainer.py:1225), which would silently drop the
+            # ladder above and leave only the final training loss -- reintroducing exactly the
+            # ambiguity the ladder exists to remove.
+            no_evals=False,
         )
         .with_callback("gpu_monitor", GPUMemoryMonitorCallback())
         .with_callback("garbage_collector", GarbageCollectorCallback())
+        .with_callback("metric_saver", MetricSaverCallback())
+        .with_callback("lm_eval", eval_cfg)
     )
 
     return {
@@ -254,6 +322,14 @@ def main() -> None:
         print("noise floor: within-config SD 0.0105 nats (13 KDA runs, same cluster)")
         for n in (2, 3, 4, 8):
             print(f"  n={n} paired seeds resolves {2.0 * 0.0105 / math.sqrt(n):.4f} nats")
+        print()
+        steps = tokens // GLOBAL_BATCH_SIZE
+        ladder = sorted({max(1, int(steps * f)) for f in (0.05, 0.1, 0.2, 0.35, 0.5, 0.75, 1.0)})
+        print("held-out eval ladder (steps):", ladder)
+        print("  = tokens:", [f"{s * GLOBAL_BATCH_SIZE / 1e6:.0f}M" for s in ladder])
+        print("  The endpoint is the TRAJECTORY of the between-arm gap across these rungs.")
+        print("  A flat ~zero gap while loss is still falling steeply means UNDERTRAINED,")
+        print("  not equivalent -- that distinction is why the ladder exists.")
         return
 
     if args.arm is None:
