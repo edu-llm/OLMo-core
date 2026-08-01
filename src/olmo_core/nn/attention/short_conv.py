@@ -365,14 +365,24 @@ class ShortConv(SequenceMixer):
         Note this is independent of ``seq_len`` — unlike attention, a short convolution has no
         term that grows with context. That asymmetry is exactly why arms must be matched on
         ``num_flops_per_token`` rather than on parameter count alone.
+
+        .. important::
+            Uses the **6x-params** convention (forward + backward), matching
+            :meth:`~olmo_core.nn.attention.Attention.num_flops_per_token`, which computes
+            ``6 * sum(p.numel())``. :class:`~olmo_core.nn.transformer.Transformer` simply *sums*
+            per-block values, so a mixer using the ``2x`` (forward-only) convention would report
+            a third of its true cost and silently unbalance every arm matched on this quantity.
+            ``GatedDeltaNet`` uses ``2x``; that is a pre-existing inconsistency in the library,
+            not a precedent to follow here.
         """
         del seq_len
         d = self.d_model
         params = sum(p.numel() for p in self.in_proj.parameters())
         params += self.out_proj.weight.numel()
-        linear_flops = 2 * params
-        conv_flops = 2 * self.kernel_size * d
-        gate_flops = 2 * d  # pre-gate and post-gate elementwise multiplies
+        linear_flops = 6 * params
+        # Depthwise conv and the two elementwise gate multiplies, also fwd+bwd.
+        conv_flops = 6 * self.kernel_size * d
+        gate_flops = 6 * d  # pre-gate and post-gate elementwise multiplies
         return int(linear_flops + conv_flops + gate_flops)
 
 

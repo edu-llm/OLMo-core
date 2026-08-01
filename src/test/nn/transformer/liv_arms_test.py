@@ -126,11 +126,16 @@ def test_parameter_matching_is_not_compute_matching():
     params_ratio = _count_params(build_arm("A16-P")) / L0_PARAM_TARGET
     assert 0.995 < params_ratio < 1.005  # parameter-matched
 
+    # Measured 1.207x at 4K and 1.886x at 32K under the 6x-params (fwd+bwd) convention that
+    # Attention uses. Thresholds sit clear of those values rather than hugging them: an earlier
+    # `> 1.2` passed at 1.207 with a 0.007 margin, which would have flipped on any small change
+    # without anyone noticing the ratio had moved. The claim under test is "the gap is large and
+    # widens with context", so guard that, loosely but meaningfully.
     ratio_4k = a16.num_flops_per_token(4096) / l0.num_flops_per_token(4096)
     ratio_32k = a16.num_flops_per_token(32768) / l0.num_flops_per_token(32768)
-    assert ratio_4k > 1.2, ratio_4k
-    assert ratio_32k > 1.8, ratio_32k
-    assert ratio_32k > ratio_4k  # the gap widens with context
+    assert 1.10 < ratio_4k < 1.35, ratio_4k
+    assert 1.70 < ratio_32k < 2.10, ratio_32k
+    assert ratio_32k > ratio_4k * 1.3  # the gap widens substantially with context
 
 
 def test_fewer_attention_layers_cuts_long_context_compute_most():
