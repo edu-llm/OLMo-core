@@ -296,20 +296,20 @@ def corpus_from_manifest(read, *, dataset_id: str, version: str, tokenizer_id: s
         raise Refusal(
             Stage.THE_MANIFEST_IS_NOT_SAFE_TO_MEMMAP,
             f"{dataset_id}/{version} declares no dtype, so there is no width to read it at. "
-            "A fixed-width corpus must; refusing rather than guessing."
+            "A fixed-width corpus must; refusing rather than guessing.",
         )
     if read.header_bytes:
         raise Refusal(
             Stage.THE_MANIFEST_IS_NOT_SAFE_TO_MEMMAP,
             f"{dataset_id}/{version} declares {read.header_bytes} header bytes and OLMo-core "
-            "memmaps from offset zero, so the header would be decoded as tokens."
+            "memmaps from offset zero, so the header would be decoded as tokens.",
         )
     if read.byte_order is not None and read.byte_order != sys.byteorder:
         raise Refusal(
             Stage.THE_MANIFEST_IS_NOT_SAFE_TO_MEMMAP,
             f"{dataset_id}/{version} is {read.byte_order}-endian and this host is "
             f"{sys.byteorder}-endian. numpy would read every token to a different, "
-            "in-range-looking id."
+            "in-range-looking id.",
         )
 
     try:
