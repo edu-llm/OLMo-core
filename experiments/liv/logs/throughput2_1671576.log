@@ -1,0 +1,22 @@
+device : NVIDIA L40S
+memory : 44.4 GiB   sm_89
+torch  : 2.11.0+cu128
+seq    : 4096   vocab: 50304   ln(vocab) = 10.826
+
+L0         mbs=1    35157 tok/s    82.1 TFLOPS (22.7% MFU)    116.5 ms/step   11.9 GiB  loss0=11.03
+L0         mbs=2    36672 tok/s    85.6 TFLOPS (23.7% MFU)    223.4 ms/step   19.4 GiB  loss0=11.03
+L0         mbs=4    33807 tok/s    78.9 TFLOPS (21.8% MFU)    484.6 ms/step   34.3 GiB  loss0=11.02
+F-r128     mbs=1    35660 tok/s    79.9 TFLOPS (22.1% MFU)    114.9 ms/step   11.7 GiB  loss0=11.01
+F-r128     mbs=2    37091 tok/s    83.1 TFLOPS (23.0% MFU)    220.9 ms/step   19.2 GiB  loss0=11.02
+F-r128     mbs=4    34214 tok/s    76.7 TFLOPS (21.2% MFU)    478.9 ms/step   34.2 GiB  loss0=11.02
+G-grouped  mbs=1    35449 tok/s    79.4 TFLOPS (21.9% MFU)    115.5 ms/step   11.8 GiB  loss0=11.03
+G-grouped  mbs=2    36536 tok/s    81.9 TFLOPS (22.6% MFU)    224.2 ms/step   19.3 GiB  loss0=11.03
+G-grouped  mbs=4    33485 tok/s    75.0 TFLOPS (20.7% MFU)    489.3 ms/step   34.4 GiB  loss0=11.03
+N-narrow   mbs=1    34458 tok/s    77.2 TFLOPS (21.3% MFU)    118.9 ms/step   11.7 GiB  loss0=11.01
+N-narrow   mbs=2    35776 tok/s    80.2 TFLOPS (22.1% MFU)    229.0 ms/step   19.1 GiB  loss0=11.01
+N-narrow   mbs=4    32922 tok/s    73.8 TFLOPS (20.4% MFU)    497.7 ms/step   33.9 GiB  loss0=11.01
+
+BEST: F-r128 at micro_bs=2 -> 37,091 tok/s (23.0% MFU, 19.2 GiB)
+L0 (bounds the schedule): 36,672 tok/s at best micro_bs=2
+
+wrote throughput_results.json
