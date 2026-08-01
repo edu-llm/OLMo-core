@@ -49,6 +49,7 @@ written to W&B, which is the one place a run's own output lands that a researche
 
 import argparse
 import contextlib
+import copy
 import enum
 import json
 import logging
@@ -56,7 +57,7 @@ import os
 import sys
 import time
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, Iterator, List, Optional, cast
 
 import rich
@@ -592,9 +593,22 @@ def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> 
     )
 
 
+def show(config) -> None:
+    """Print the config with the shard list replaced by its length.
+
+    olmo-150b-dolma2 resolves to 6,851 objects, and printing each one buries every other
+    line of the config -- including the dtype and the tokenizer, which are the two fields
+    worth reading. The paths themselves are in the config the ConfigSaverCallback writes
+    next to the checkpoints.
+    """
+    shown = copy.copy(config.dataset)
+    shown.paths = [f"<{len(config.dataset.paths)} objects>"]
+    rich.print(replace(config, dataset=shown))
+
+
 def train(config, opts=None) -> None:
     if get_rank() == 0:
-        rich.print(config)
+        show(config)
 
     seed_all(config.init_seed)
 
@@ -682,7 +696,7 @@ def main() -> None:
     with during(Stage.THE_CONFIG_WOULD_NOT_BUILD):
         config = build_config(opts, overrides)
     if opts.dry_run:
-        rich.print(config)
+        show(config)
         return
 
     with during(Stage.THE_TRAINING_ENVIRONMENT_WOULD_NOT_START):

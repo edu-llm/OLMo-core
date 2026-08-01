@@ -510,3 +510,38 @@ def test_a_summary_is_printed_even_when_no_step_reported_a_loss(capsys):
     printed = json.loads(capsys.readouterr().out)
     assert printed["first_loss"] is None
     assert printed["last_loss"] is None
+
+
+def test_the_config_print_names_how_many_shards_rather_than_all_of_them(monkeypatch):
+    """olmo-150b-dolma2 resolves to 6,851 objects and the dtype must stay readable."""
+    printed = []
+    monkeypatch.setattr(entry.rich, "print", lambda value: printed.append(value))
+    monkeypatch.setattr(
+        entry,
+        "resolve_corpus",
+        lambda **kwargs: entry.corpus_from_manifest(
+            FakeManifest(
+                paths=[f"s3://edullm-data/x/v1/tokens/train-{n:05}.u32le.bin" for n in range(9)]
+            ),
+            dataset_id=kwargs["dataset_id"],
+            version=kwargs["version"],
+            tokenizer_id=kwargs["tokenizer_id"],
+        ),
+    )
+    opts, overrides = entry.build_parser().parse_known_args(
+        [
+            "a-run-id",
+            "--dataset-id=pretrain/regmix-10b",
+            "--dataset-version=v1",
+            "--dataset-tokenizer=tokenizer/dolma2-bpe",
+            "--save-folder=s3://outputs/teams/platform/runs/a-run-id/checkpoints/",
+        ]
+    )
+    config = entry.build_config(opts, overrides)
+    paths = list(config.dataset.paths)
+    entry.show(config)
+
+    assert len(printed) == 1
+    assert printed[0].dataset.paths == [f"<{len(paths)} objects>"]
+    # The config itself is untouched, because the run trains on it after this prints.
+    assert list(config.dataset.paths) == paths
