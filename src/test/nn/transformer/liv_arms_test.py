@@ -4,16 +4,20 @@ from olmo_core.nn.transformer.liv_arms import (
     ARMS,
     ATTENTION_LAYERS,
     D_MODEL,
+    DOLMA2_VOCAB_SIZE,
     HEAD_DIM,
     KERNEL_SIZE,
     L0_PARAM_TARGET,
+    L0_PARAM_TARGET_DOLMA2,
     N_HEADS,
     N_KV_HEADS,
     N_LAYERS,
+    SOLVED_WIDTHS,
     SWIGLU_WIDTH,
     VOCAB_SIZE,
     _count_params,
     arm_report,
+    arms_for_vocab,
     build_arm,
     solve_d_model,
     solve_swiglu_width,
@@ -217,3 +221,93 @@ def test_arm_report_covers_every_arm():
     for name in ARMS:
         assert name in report
     assert "flops@32K" in report
+
+
+def test_dolma2_vocab_matches_olmo_cores_own_padding():
+    """
+    :data:`DOLMA2_VOCAB_SIZE` must equal what OLMo-core derives, not a number typed by hand.
+
+    The same check on the GPT-2 side caught nothing only because it was already right; the point
+    is that the corpus and the embedding table cannot silently disagree.
+    """
+    from olmo_core.data import TokenizerConfig
+
+    assert TokenizerConfig.dolma2().padded_vocab_size() == DOLMA2_VOCAB_SIZE
+    assert DOLMA2_VOCAB_SIZE % 128 == 0
+
+
+@pytest.mark.parametrize("vocab", [VOCAB_SIZE, DOLMA2_VOCAB_SIZE])
+def test_l0_hits_its_exact_target_at_both_vocabularies(vocab: int):
+    target = L0_PARAM_TARGET if vocab == VOCAB_SIZE else L0_PARAM_TARGET_DOLMA2
+    arms = arms_for_vocab(vocab)
+    assert _count_params(build_arm(arms["L0"], vocab_size=vocab)) == target
+
+
+@pytest.mark.parametrize("vocab", [VOCAB_SIZE, DOLMA2_VOCAB_SIZE])
+def test_the_arm_contrast_is_vocabulary_independent(vocab: int):
+    """
+    The load-bearing invariant of the whole study, asserted at both vocabularies.
+
+    Doubling the vocabulary adds 51,249,152 tied-embedding parameters (+15.1% of ``L0``), which
+    would look alarming if the arms were compared on absolute size. They are not: every arm shares
+    one embedding table and the arms differ only in the mixer, so the vocabulary shifts all of them
+    by the same constant and cancels out of every reported contrast. If this ever fails, the
+    vocabulary has stopped being a shared constant and no cross-vocabulary claim survives.
+    """
+    arms = arms_for_vocab(vocab)
+    l0 = _count_params(build_arm(arms["L0"], vocab_size=vocab))
+    f = _count_params(build_arm(arms["F-r128"], vocab_size=vocab))
+    g = _count_params(build_arm(arms["G-grouped"], vocab_size=vocab))
+
+    assert l0 - f == 15_728_640
+    assert f == g, "the cost-matched pair must be bit-identical, not merely close"
+
+
+@pytest.mark.parametrize("vocab", [VOCAB_SIZE, DOLMA2_VOCAB_SIZE])
+def test_solved_arms_stay_matched_at_both_vocabularies(vocab: int):
+    """
+    ``A16-P`` and ``N-narrow`` are solved against targets that MOVE with the vocabulary, so a
+    vocabulary change silently un-matches them unless the widths are re-solved. That is the
+    failure this test exists to catch: a capacity control still labelled "same size as F-r128"
+    while actually carrying a different budget.
+    """
+    arms = arms_for_vocab(vocab)
+    l0 = _count_params(build_arm(arms["L0"], vocab_size=vocab))
+    f = _count_params(build_arm(arms["F-r128"], vocab_size=vocab))
+
+    narrow = _count_params(build_arm(arms["N-narrow"], vocab_size=vocab))
+    assert abs(narrow - f) / f < 0.0005, f"N-narrow {narrow:,} vs F-r128 {f:,}"
+
+    a16 = _count_params(build_arm(arms["A16-P"], vocab_size=vocab))
+    assert abs(a16 - l0) / l0 < 0.0005, f"A16-P {a16:,} vs L0 {l0:,}"
+
+
+@pytest.mark.parametrize("vocab", [VOCAB_SIZE, DOLMA2_VOCAB_SIZE])
+def test_solvers_reproduce_the_table_at_both_vocabularies(vocab: int):
+    """A drift between SOLVED_WIDTHS and the derivation that justified it must fail loudly."""
+    target = L0_PARAM_TARGET if vocab == VOCAB_SIZE else L0_PARAM_TARGET_DOLMA2
+    arms = arms_for_vocab(vocab)
+
+    width, _ = solve_swiglu_width(arms["A16-P"], target_params=target, vocab_size=vocab)
+    assert width == SOLVED_WIDTHS[vocab].a16p_swiglu
+
+    f = _count_params(build_arm(arms["F-r128"], vocab_size=vocab))
+    d_model, _ = solve_d_model(arms["N-narrow"], target_params=f, vocab_size=vocab)
+    assert d_model == SOLVED_WIDTHS[vocab].narrow_d_model
+
+
+def test_unknown_vocab_raises_instead_of_silently_mismatching():
+    """
+    Defaulting would be the dangerous behaviour: the arms would build fine, train fine, and be
+    matched against the wrong target with nothing to indicate it.
+    """
+    with pytest.raises(KeyError, match="no solved widths"):
+        arms_for_vocab(65_536)
+
+
+def test_arms_for_vocab_does_not_mutate_the_module_level_declarations():
+    """``ARMS`` is shared global state; returning a mutated view would corrupt later callers."""
+    before = (ARMS["A16-P"].swiglu_width, ARMS["N-narrow"].d_model, ARMS["N-narrow"].swiglu_width)
+    arms_for_vocab(DOLMA2_VOCAB_SIZE)
+    after = (ARMS["A16-P"].swiglu_width, ARMS["N-narrow"].d_model, ARMS["N-narrow"].swiglu_width)
+    assert before == after

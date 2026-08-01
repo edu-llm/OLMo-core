@@ -13,13 +13,21 @@ Decoder layers               16
 Query / KV heads             16 / 8
 Head dimension               64
 SwiGLU branch width          4,608
-Vocabulary (tied)            65,536
+Vocabulary (tied)            50,304 or 100,352
 Attention layer indices      2, 5, 8, 10, 12, 14
 LIV convolution              causal depthwise, kernel 3
 ===========================  ==============
 
-``L0``, the released-shape control, must come to **354,483,968** parameters. That number is
+``L0``, the released-shape control, must come to **338,886,400** parameters at
+:data:`VOCAB_SIZE` (GPT-2 padded) or **390,135,552** at :data:`DOLMA2_VOCAB_SIZE`. Both are
 asserted in the tests: it is the check that the whole ledger is right.
+
+.. important::
+    Two arms have *solved* geometry — ``A16-P`` and ``N-narrow`` — and both are matched against
+    a target that moves with the vocabulary. Call :func:`arms_for_vocab` to get arms whose widths
+    match the vocabulary you are training at; :data:`ARMS` carries the :data:`VOCAB_SIZE` solve.
+    Using the wrong one still builds and trains, and quietly reports a control as matched when
+    it is not.
 
 .. important::
     The SwiGLU width is **4,608**, which is *not* what ``llama_like`` computes by default. The
@@ -45,12 +53,18 @@ from olmo_core.nn.transformer.config import TransformerBlockConfig, TransformerC
 
 __all__ = [
     "LivArm",
+    "SolvedWidths",
     "ARMS",
+    "SOLVED_WIDTHS",
     "build_arm",
+    "arms_for_vocab",
     "arm_report",
     "solve_swiglu_width",
     "solve_d_model",
+    "VOCAB_SIZE",
+    "DOLMA2_VOCAB_SIZE",
     "L0_PARAM_TARGET",
+    "L0_PARAM_TARGET_DOLMA2",
 ]
 
 
@@ -93,6 +107,66 @@ differ only in the mixer.
 
 L0_PARAM_TARGET = 338_886_400
 """``L0``'s parameter count at :data:`VOCAB_SIZE`. Asserted exactly in the tests."""
+
+DOLMA2_VOCAB_SIZE = 100_352
+"""
+Dolma2 vocabulary (100,278) padded to a multiple of 128 — ``TokenizerConfig.dolma2()``.
+
+Use this when training on ``s3://edullm-data/pretrain/olmo-150b-dolma2``, which is the corpus
+that makes a Chinchilla-optimal run possible **without repeating data**: 7.80B tokens is 4.3% of
+its 157B, against 5.65 *epochs* of the 1.2B GPT-2 FineWeb-Edu set on FarmShare. Repeating 5.65x
+is past the ~4-epoch knee (Muennighoff et al., arXiv 2305.16264) where returns decay sharply, so
+a full run there would partly measure memorization — and the arm contrast would be confounded by
+how differently each arm memorizes.
+
+Doubling the vocabulary adds **51,249,152** tied-embedding parameters (+15.1%), so ``L0`` becomes
+:data:`L0_PARAM_TARGET_DOLMA2` and the two *solved* arms move. The invariant that matters does
+not move: ``L0 - F-r128`` is **15,728,640 at both vocabularies, bit-identical**, and
+``F-r128 == G-grouped`` exactly at both. Every arm shares one embedding table, and the arms differ
+only in the mixer — so the vocabulary shifts every arm by the same constant and cancels out of
+every contrast the study reports.
+"""
+
+L0_PARAM_TARGET_DOLMA2 = 390_135_552
+"""``L0``'s parameter count at :data:`DOLMA2_VOCAB_SIZE`. Asserted exactly in the tests."""
+
+
+@dataclass(frozen=True)
+class SolvedWidths:
+    """
+    Derived geometry for one vocabulary: the widths that are *solved*, never chosen.
+
+    A plain dict here would type as ``object`` (one ``int`` value beside one tuple) and defeat
+    type checking on exactly the fields where a silent mix-up un-matches a control.
+
+    :param a16p_swiglu: ``A16-P``'s SwiGLU width, solved to match ``L0``.
+    :param narrow_d_model: ``N-narrow``'s model width, solved against ``F-r128``.
+    :param narrow_swiglu: ``N-narrow``'s SwiGLU width, closing the residual after ``d_model``.
+    """
+
+    a16p_swiglu: int
+    narrow_d_model: int
+    narrow_swiglu: int
+
+
+SOLVED_WIDTHS: Dict[int, SolvedWidths] = {
+    VOCAB_SIZE: SolvedWidths(a16p_swiglu=4820, narrow_d_model=976, narrow_swiglu=4652),
+    DOLMA2_VOCAB_SIZE: SolvedWidths(a16p_swiglu=4820, narrow_d_model=976, narrow_swiglu=4704),
+}
+"""
+Solved widths per vocabulary, for the two arms whose geometry is *derived* rather than chosen.
+
+``A16-P``'s SwiGLU width is solved to match ``L0``; ``N-narrow``'s ``(d_model, swiglu_width)`` is
+solved against ``F-r128``. Both are produced by :func:`solve_swiglu_width` / :func:`solve_d_model`
+and both are asserted against those solvers in the tests, so a drift between the table and the
+derivation fails rather than silently biasing an arm.
+
+``A16-P`` lands on 4820 at *both* vocabularies — the solve is dominated by the 16 attention
+mixers, not the embedding. ``N-narrow`` needs 4652 → **4704** because it is solved against
+``F-r128``, whose gap to ``L0`` is fixed while the embedding it must offset has doubled.
+
+Use :func:`arms_for_vocab` rather than reading this directly.
+"""
 
 
 @dataclass(frozen=True)
@@ -229,8 +303,15 @@ def build_arm(
 
     Defaults to ``init_device="meta"`` so parameter counts can be checked without allocating.
 
+    .. warning::
+        This does **not** re-solve derived geometry. ``A16-P`` and ``N-narrow`` carry widths that
+        were solved at one vocabulary, so calling this with a different ``vocab_size`` leaves them
+        matched against the wrong target. Use :func:`arms_for_vocab` to get arms whose solved
+        widths correspond to the vocabulary you are training at.
+
     :param arm: A :class:`LivArm` or the name of one in :data:`ARMS`.
-    :param vocab_size: Vocabulary size. The frozen ledger uses 65,536, tied.
+    :param vocab_size: Vocabulary size, tied. Defaults to :data:`VOCAB_SIZE` (GPT-2, padded);
+        :data:`DOLMA2_VOCAB_SIZE` is the other supported value.
     :param init_device: Where to place parameters, e.g. ``"meta"``, ``"cpu"``.
     :param dtype: Parameter dtype.
 
@@ -339,6 +420,40 @@ def _count_params(cfg: TransformerConfig) -> int:
             seen.add(id(p))
             total += p.numel()
     return total
+
+
+def arms_for_vocab(vocab_size: int) -> Dict[str, LivArm]:
+    """
+    Return :data:`ARMS` with derived widths corrected for ``vocab_size``.
+
+    Only ``A16-P`` and ``N-narrow`` have solved geometry, and both are matched against a *target
+    that moves with the vocabulary* -- ``A16-P`` against ``L0``, ``N-narrow`` against ``F-r128``.
+    Training at a different vocabulary without re-solving leaves them matched to the wrong number,
+    which silently turns a capacity control into a confound: ``N-narrow`` would carry the wrong
+    parameter budget while still being reported as "the same size as ``F-r128``".
+
+    Every other arm is declared, not solved, so it passes through unchanged.
+
+    :param vocab_size: Must be a key of :data:`SOLVED_WIDTHS` -- widths are precomputed and
+        test-asserted rather than solved on the fly, since solving builds several models.
+
+    :raises KeyError: If no widths have been solved for ``vocab_size``. Solve and add them to
+        :data:`SOLVED_WIDTHS` rather than falling back to a mismatched default.
+    """
+    if vocab_size not in SOLVED_WIDTHS:
+        raise KeyError(
+            f"no solved widths for vocab_size={vocab_size:,}; known: "
+            f"{sorted(SOLVED_WIDTHS)}. Run solve_swiglu_width/solve_d_model at that vocabulary "
+            f"and add the result to SOLVED_WIDTHS -- do not let A16-P/N-narrow default, or they "
+            f"are matched against the wrong target."
+        )
+    widths = SOLVED_WIDTHS[vocab_size]
+    out = dict(ARMS)
+    out["A16-P"] = replace(out["A16-P"], swiglu_width=widths.a16p_swiglu)
+    out["N-narrow"] = replace(
+        out["N-narrow"], d_model=widths.narrow_d_model, swiglu_width=widths.narrow_swiglu
+    )
+    return out
 
 
 def solve_swiglu_width(

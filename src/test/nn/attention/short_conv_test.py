@@ -367,7 +367,10 @@ def test_builds_lfm2_topology_end_to_end():
     """
     import copy
 
-    from olmo_core.nn.transformer.config import TransformerBlockConfig, TransformerConfig
+    from olmo_core.nn.transformer.config import (
+        TransformerBlockConfig,
+        TransformerConfig,
+    )
 
     cfg = TransformerConfig.llama2_271M(vocab_size=1024)
     assert cfg.n_layers == 16
