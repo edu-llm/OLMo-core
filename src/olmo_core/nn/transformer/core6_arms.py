@@ -208,6 +208,20 @@ ARMS: Dict[str, Core6Arm] = {
             "back the ablated retrieval. NUMERATOR of sigma_2. This is the treatment arm.",
         ),
         Core6Arm(
+            "G2R0",
+            "Attention Dose Point (a=2)",
+            "dose-response",
+            attention_layers=(2, 12),
+            notes="L0 with four global layers removed (a: 6->2), no KDA. Added 2026-08-01 for "
+            "the dose-response wave: with only a=6 and a=0 measured, the shape of CE(a) is "
+            "unknown and D = CE(4)-CE(6) could be anywhere in 0.02-0.41 nats depending on "
+            "whether the curve is linear or hard-saturating. That 21x spread straddles the "
+            "measurability threshold for sigma, so a third interior point is what makes the "
+            "curve identifiable rather than a two-point chord. Uses S14's global indices "
+            "{2,12} so the two arms differ ONLY in whether the remaining 14 layers are "
+            "sliding-window attention or LIV convolutions.",
+        ),
+        Core6Arm(
             "S14",
             "Sliding-Window Efficiency Baseline",
             "competitor",
