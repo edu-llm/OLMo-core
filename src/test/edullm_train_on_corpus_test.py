@@ -14,7 +14,7 @@ import importlib.util
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import pytest
 
@@ -59,13 +59,17 @@ class ReaderProtocolStub:
     A boto3 client has none of them, which is the entire subject of the two tests below.
     """
 
-    def get(self, bucket, key): ...
+    def get(self, bucket, key):
+        ...
 
-    def get_range(self, bucket, key, start, length): ...
+    def get_range(self, bucket, key, start, length):
+        ...
 
-    def head(self, bucket, key): ...
+    def head(self, bucket, key):
+        ...
 
-    def list(self, bucket, prefix): ...
+    def list(self, bucket, prefix):
+        ...
 
 
 @pytest.fixture
@@ -77,7 +81,7 @@ def reader(monkeypatch):
     """
     import types
 
-    handed = {}
+    handed: Dict[str, Any] = {}
     adapter = ReaderProtocolStub()
 
     class Boto3S3:
@@ -94,10 +98,12 @@ def reader(monkeypatch):
         handed["resolve_latest_s3"] = s3
         return "v7"
 
-    read_module = types.ModuleType("edullm_data.read")
+    # Typed Any because these are modules being built rather than imported, and mypy is
+    # right that a fresh ModuleType has no such attributes until this assigns them.
+    read_module: Any = types.ModuleType("edullm_data.read")
     read_module.dataset_paths = dataset_paths
     read_module.resolve_latest = resolve_latest
-    s3_module = types.ModuleType("edullm_data.s3")
+    s3_module: Any = types.ModuleType("edullm_data.s3")
     s3_module.Boto3S3 = Boto3S3
     package = types.ModuleType("edullm_data")
 
