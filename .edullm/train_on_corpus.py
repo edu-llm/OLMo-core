@@ -50,14 +50,17 @@ written to W&B, which is the one place a run's own output lands that a researche
 import argparse
 import contextlib
 import enum
+import json
 import logging
 import os
 import sys
+import time
 import traceback
 from dataclasses import dataclass
-from typing import Iterator, List, Optional, cast
+from typing import Dict, Iterator, List, Optional, cast
 
 import rich
+import torch
 
 from olmo_core.config import Config, DType
 from olmo_core.data import (
@@ -77,6 +80,7 @@ from olmo_core.train import (
     teardown_training_environment,
 )
 from olmo_core.train.callbacks import (
+    Callback,
     CheckpointerCallback,
     ConfigSaverCallback,
     GPUMemoryMonitorCallback,
@@ -526,7 +530,69 @@ def build_config(opts, overrides: List[str]):
     return config.merge(overrides)
 
 
-def train(config) -> None:
+class LossWatcher(Callback):
+    """Keeps the first and last training loss so the summary below can report them."""
+
+    def __init__(self) -> None:
+        self.first: Optional[float] = None
+        self.last: Optional[float] = None
+
+    def log_metrics(self, step: int, metrics: Dict[str, float]) -> None:
+        del step
+        loss = metrics.get("train/CE loss")
+        if loss is None:
+            return
+        if self.first is None:
+            self.first = float(loss)
+        self.last = float(loss)
+
+
+def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> None:
+    """Print what only this process can report, as one JSON object on stdout.
+
+    The platform reads this back out of the log stream: the device torch actually got, the
+    parameter count, the loss at both ends and where the checkpoints went are not facts Batch
+    holds. Printed on rank zero only, and printed whatever the losses are, because a run that
+    reported nothing is indistinguishable from one that never started.
+    """
+    if get_rank() != 0:
+        return
+    device = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"
+    peak = torch.cuda.max_memory_allocated() / 1024**3 if torch.cuda.is_available() else 0.0
+    url = ""
+    if os.environ.get("EDULLM_WANDB_PROJECT"):
+        with contextlib.suppress(Exception):
+            import wandb
+
+            url = getattr(wandb.run, "url", "") or ""
+    print(
+        json.dumps(
+            {
+                "run_id": opts.run_name,
+                "dataset_id": config.dataset_id,
+                "dataset_version": config.dataset_version,
+                "gpu": device,
+                "torch": torch.__version__,
+                "cuda": torch.version.cuda,
+                "parameters": sum(
+                    parameter.numel() for parameter in trainer.train_module.model.parameters()
+                ),
+                "steps": trainer.global_step,
+                "first_loss": losses.first,
+                "last_loss": losses.last,
+                "seconds": seconds,
+                "peak_memory_gib": peak,
+                "checkpoint_uri": opts.save_folder,
+                "wandb_project": os.environ.get("EDULLM_WANDB_PROJECT", ""),
+                "wandb_url": url,
+            },
+            indent=2,
+        ),
+        flush=True,
+    )
+
+
+def train(config, opts=None) -> None:
     if get_rank() == 0:
         rich.print(config)
 
@@ -539,12 +605,23 @@ def train(config) -> None:
     trainer = config.trainer.build(train_module, data_loader)
 
     cast(ConfigSaverCallback, trainer.callbacks["config_saver"]).config = config.as_config_dict()
+    losses = LossWatcher()
+    trainer.add_callback("edullm_losses", losses)
 
     # maybe_load_checkpoint is what makes a second Batch attempt continue the first rather
     # than start over. It looks in the save folder, which is EDULLM_CHECKPOINT_DIR, which is
     # derived from the run id and is therefore the same string on both attempts.
     trainer.maybe_load_checkpoint()
+    started = time.monotonic()
     trainer.fit()
+    if opts is not None:
+        summarise(
+            opts=opts,
+            config=config,
+            trainer=trainer,
+            losses=losses,
+            seconds=time.monotonic() - started,
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -612,7 +689,7 @@ def main() -> None:
         prepare_training_environment()
     try:
         with during(Stage.TRAINING_ITSELF_FAILED):
-            train(config)
+            train(config, opts)
     finally:
         teardown_training_environment()
 

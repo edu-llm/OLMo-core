@@ -415,3 +415,98 @@ def test_nothing_is_sent_to_wandb_when_the_platform_named_no_project(monkeypatch
     entry.leave_the_reason_in_wandb(
         run_name="run_x", stage=entry.Stage.TRAINING_ITSELF_FAILED, explanation="whatever"
     )
+
+
+class FakeModel:
+    def __init__(self, parameters):
+        self._parameters = parameters
+
+    def parameters(self):
+        return self._parameters
+
+
+class FakeTrainModule:
+    def __init__(self, parameters):
+        self.model = FakeModel(parameters)
+
+
+class FakeTrainer:
+    def __init__(self, parameters, step):
+        self.train_module = FakeTrainModule(parameters)
+        self.global_step = step
+
+
+@dataclass
+class FakeOptions:
+    run_name: str = "run_0"
+    save_folder: str = "s3://bucket/teams/platform/runs/run_0/checkpoints/"
+
+
+@dataclass
+class FakeConfig:
+    dataset_id: str = "pretrain/regmix-10b"
+    dataset_version: str = "v1"
+
+
+class FakeParameter:
+    def __init__(self, count):
+        self._count = count
+
+    def numel(self):
+        return self._count
+
+
+def test_the_first_and_last_loss_are_kept_and_the_ones_between_are_not():
+    """The summary reports both ends. Steps with no loss in their metrics are ignored."""
+    watcher = entry.LossWatcher()
+
+    watcher.log_metrics(1, {"throughput/device/TPS": 1000.0})
+    watcher.log_metrics(2, {"train/CE loss": 6.9})
+    watcher.log_metrics(3, {"train/CE loss": 6.5})
+    watcher.log_metrics(4, {"train/CE loss": 6.1})
+
+    assert watcher.first == 6.9
+    assert watcher.last == 6.1
+
+
+def test_the_summary_is_one_json_object_carrying_what_only_this_process_knows(capsys):
+    """The platform reads this back out of the log stream, so it has to parse on its own."""
+    import json
+
+    watcher = entry.LossWatcher()
+    watcher.log_metrics(1, {"train/CE loss": 6.9})
+    watcher.log_metrics(2, {"train/CE loss": 6.1})
+
+    entry.summarise(
+        opts=FakeOptions(),
+        config=FakeConfig(),
+        trainer=FakeTrainer([FakeParameter(100), FakeParameter(90)], step=50),
+        losses=watcher,
+        seconds=12.5,
+    )
+
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["parameters"] == 190
+    assert printed["steps"] == 50
+    assert printed["first_loss"] == 6.9
+    assert printed["last_loss"] == 6.1
+    assert printed["seconds"] == 12.5
+    assert printed["dataset_id"] == "pretrain/regmix-10b"
+    assert printed["checkpoint_uri"].endswith("/checkpoints/")
+
+
+def test_a_summary_is_printed_even_when_no_step_reported_a_loss(capsys):
+    """A run that printed nothing cannot be told apart from one that never started."""
+    import json
+
+    entry.summarise(
+        opts=FakeOptions(),
+        config=FakeConfig(),
+        trainer=FakeTrainer([FakeParameter(1)], step=0),
+        losses=entry.LossWatcher(),
+        seconds=0.5,
+    )
+
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["first_loss"] is None
+    assert printed["last_loss"] is None
