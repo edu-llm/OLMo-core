@@ -318,7 +318,7 @@ class ShortConv(SequenceMixer):
             produces a smooth, plausible "higher rank is better" curve that is really an
             init-scale curve. Tests assert step-0 gate variance parity against dense.
         """
-        from olmo_core.nn.transformer.init import InitMethod, init_linear
+        from olmo_core.nn.transformer.init import InitMethod, _apply_init, init_linear
 
         if init_method == InitMethod.normalized:
             std = d_model**-0.5
@@ -337,17 +337,39 @@ class ShortConv(SequenceMixer):
             init_linear(self.in_proj.gate_up_post, std=factor_std, generator=generator)
         else:
             for p in (self.in_proj.gate_blocks_pre, self.in_proj.gate_blocks_post):
-                nn.init.trunc_normal_(
-                    p, mean=0.0, std=std, a=-3 * std, b=3 * std, generator=generator
+                _apply_init(
+                    nn.init.trunc_normal_,
+                    p,
+                    mean=0.0,
+                    std=std,
+                    a=-3 * std,
+                    b=3 * std,
+                    generator=generator,
                 )
 
         # Identity-like conv: pass the current token through, zero the history. Keeps the
         # block close to a pure gated linear map at step 0 regardless of kernel width, so
         # the k3/k5/k9/k15 arms start from the same function.
-        self.conv.weight.zero_()
-        self.conv.weight[:, :, -1] = 1.0
+        #
+        # Routed through ``_apply_init`` rather than assigned in place. Under FSDP every
+        # parameter is a ``DTensor``, and an indexed assignment like ``w[:, :, -1] = 1.0``
+        # lowers to ``aten.fill_.Tensor``, which has no sharding strategy registered:
+        #
+        #     NotImplementedError: Operator aten.fill_.Tensor does not have a sharding
+        #     strategy registered.
+        #
+        # This killed submitted run ``run_019fbf9f`` at ``TRAINING_ITSELF_FAILED``. Every
+        # local test passed first, because a single-process CPU build never produces a
+        # ``DTensor`` -- the sharded path only exists once a real train module wraps the
+        # model. ``_apply_init`` materialises the full tensor, initialises that, and copies
+        # back this rank's shard, which is the library's own answer to the same problem.
+        def _identity_tap(w: torch.Tensor) -> None:
+            w.zero_()
+            w[:, :, -1] = 1.0
+
+        _apply_init(_identity_tap, self.conv.weight)
         if self.conv.bias is not None:
-            self.conv.bias.zero_()
+            _apply_init(lambda b: b.zero_(), self.conv.bias)
 
         out_std = std
         if init_method == InitMethod.llama:

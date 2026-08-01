@@ -493,3 +493,69 @@ def test_flops_scale_with_gate_structure():
     ).num_flops_per_token(1024)
     assert lowrank < dense and grouped < dense
     assert math.isclose(lowrank, grouped, rel_tol=0.05)  # matched-cost pair
+
+
+def test_init_weights_is_dtensor_safe():
+    """
+    ``init_weights`` must work on sharded parameters, not just plain tensors.
+
+    THIS IS THE TEST THAT WAS MISSING. Every other test in this file builds on CPU in one
+    process, where a parameter is an ordinary ``torch.Tensor`` and any in-place write
+    succeeds. Under FSDP each parameter is a ``DTensor``, and the conv's identity-tap init
+    used an indexed assignment -- ``w[:, :, -1] = 1.0`` -- which lowers to
+    ``aten.fill_.Tensor``. That operator has no sharding strategy registered, so it raises:
+
+        NotImplementedError: Operator aten.fill_.Tensor does not have a sharding strategy
+
+    A full green suite said nothing about it, and the failure surfaced only after a run had
+    been built, submitted, approved by a person and scheduled onto a GPU.
+
+    A single-rank device mesh is enough: ``DTensor.__torch_dispatch__`` consults the sharding
+    propagator on every op regardless of world size, so an unregistered operator raises at
+    world_size=1 exactly as it would at 8. That makes the check free -- no distributed
+    launch, no GPU.
+    """
+    import torch.distributed as dist
+    from torch.distributed.device_mesh import init_device_mesh
+    from torch.distributed.tensor import distribute_tensor
+    from torch.distributed.tensor.placement_types import Shard
+
+    from olmo_core.nn.transformer.init import InitMethod
+
+    if not dist.is_available():
+        pytest.skip("torch.distributed unavailable")
+
+    created_pg = False
+    if not dist.is_initialized():
+        dist.init_process_group(backend="gloo", store=dist.HashStore(), rank=0, world_size=1)
+        created_pg = True
+    try:
+        mesh = init_device_mesh("cpu", (1,))
+        cases: tuple[tuple[GateStructure, Dict[str, Any]], ...] = (
+            ("dense", {}),
+            ("lowrank", {"gate_rank": 8}),
+            ("grouped", {"gate_groups": 2}),
+        )
+        for structure, kw in cases:
+            m = ShortConv(d_model=32, kernel_size=5, use_fla=False, **kw, gate_structure=structure)
+            # Shard every parameter, which is what the trainer's FSDP wrap does.
+            for mod in m.modules():
+                for pname, p in list(mod.named_parameters(recurse=False)):
+                    setattr(
+                        mod,
+                        pname,
+                        torch.nn.Parameter(distribute_tensor(p.data, mesh, [Shard(0)])),
+                    )
+            # Must not raise. Before the fix this died on the conv identity tap.
+            m.init_weights(d_model=32, init_method=InitMethod.normal, num_blocks=1, block_idx=0)
+
+            tap = (
+                m.conv.weight.full_tensor()
+                if hasattr(m.conv.weight, "full_tensor")
+                else m.conv.weight
+            )
+            assert torch.allclose(tap[:, :, -1], torch.ones_like(tap[:, :, -1])), structure
+            assert torch.count_nonzero(tap[:, :, :-1]) == 0, f"{structure}: history not zeroed"
+    finally:
+        if created_pg:
+            dist.destroy_process_group()
