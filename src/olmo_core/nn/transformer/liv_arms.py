@@ -62,12 +62,37 @@ N_HEADS = 16
 N_KV_HEADS = 8
 HEAD_DIM = 64
 SWIGLU_WIDTH = 4608
-VOCAB_SIZE = 65536
 KERNEL_SIZE = 3
 ATTENTION_LAYERS: Tuple[int, ...] = (2, 5, 8, 10, 12, 14)
 
-L0_PARAM_TARGET = 354_483_968
-"""Exact released-shape parameter count for ``L0``, from the frozen protocol."""
+VOCAB_SIZE = 50304
+"""
+GPT-2 vocabulary (50,257) padded up to a multiple of 128 for tensor-core alignment.
+
+.. important::
+    **50,257 is a hard floor, not a preference.** The corpus contains token id 50,256 —
+    GPT-2's EOS, which appears at every document boundary — so any smaller embedding table
+    indexes out of bounds and crashes on the first batch. 64,472 of the first 50M tokens are
+    >= 50,000.
+
+    The padding to 50,304 costs 47 unreachable rows (48,128 params, 0.014%) and is standard
+    practice; the alternative is 50,257 exactly, at some matmul throughput.
+
+Superseded 65,536, which was chosen to reproduce LFM2's released parameter count. That target
+turned out not to exist: LFM2's ``config.json`` declares ``vocab_size: 65536`` but its
+``tokenizer.json`` holds only **64,400** entries (max id 64,399), so 1,136 embedding rows are
+unreachable — the released 65,536 is *itself* a pad. Training on LFM2's own tokenizer would give
+353,320,704 params, not 354,483,968, so the "exact released shape" was reachable only by adopting
+their arbitrary rounding. Verified independently against the live HuggingFace files, and reached
+separately by the sibling KDA-LIV track.
+
+Nothing the study measures depends on this. ``L0 - F-r128`` is **15,728,640 at 65,536, 64,400,
+50,304, and 50,257 — bit-identical**, because every arm shares one embedding table and the arms
+differ only in the mixer.
+"""
+
+L0_PARAM_TARGET = 338_886_400
+"""``L0``'s parameter count at :data:`VOCAB_SIZE`. Asserted exactly in the tests."""
 
 
 @dataclass(frozen=True)
@@ -153,11 +178,11 @@ ARMS: Dict[str, LivArm] = {
             "N-narrow",
             "control: just build a narrower model",
             d_model=976,
-            swiglu_width=4668,
+            swiglu_width=4652,
             notes="MANDATORY -- the obvious competing way to spend the parameters F-r128 saves. "
             "Both dims are SOLVED against F-r128, never guessed: d_model on the 16-multiple "
-            "grid (head count), then SwiGLU width to close the remainder. Lands +49,200 "
-            "(0.0145%). d_model alone only reaches 0.815%, too coarse for a capacity control.",
+            "grid (head count), then SwiGLU width to close the remainder. Lands +30,768 "
+            "(0.0095%) at vocab 50,304. d_model alone is far too coarse for a capacity control.",
         ),
         # -- P3: kernel width ------------------------------------------------------------------
         # Widths-first, per the frozen decision: if width is flat inside the gate, a router has

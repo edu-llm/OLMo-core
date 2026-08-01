@@ -4,8 +4,14 @@ from olmo_core.nn.transformer.liv_arms import (
     ARMS,
     ATTENTION_LAYERS,
     D_MODEL,
+    HEAD_DIM,
+    KERNEL_SIZE,
     L0_PARAM_TARGET,
+    N_HEADS,
+    N_KV_HEADS,
     N_LAYERS,
+    SWIGLU_WIDTH,
+    VOCAB_SIZE,
     _count_params,
     arm_report,
     build_arm,
@@ -16,15 +22,19 @@ from olmo_core.nn.transformer.liv_arms import (
 
 def test_l0_hits_the_exact_frozen_parameter_target():
     """
-    ``L0`` must equal 354,483,968 exactly -- the released-scale ledger from the frozen protocol.
+    ``L0`` must equal :data:`L0_PARAM_TARGET` exactly -- 338,886,400 at vocab 50,304.
 
     This single assertion validates the whole geometry at once: tied embeddings, SwiGLU width
     4,608, per-head QK-norm, the 10/6 layer split, and the mixer formula. Two omissions were
     caught by exactly this check:
 
-    * untied embeddings, which added a second 65,536 x 1,024 tensor (+67,108,864, ~19%);
+    * untied embeddings, which added a second ``vocab x d_model`` tensor (~19% of the model);
     * missing per-head QK-norm, which LFM2 has as ``q_layernorm``/``k_layernorm`` of size
       ``head_dim`` on each of 6 attention layers (6 x 2 x 64 = 768).
+
+    The target is no longer LFM2's released 354,483,968 -- see :data:`VOCAB_SIZE` for why that
+    number turned out to be a padding artifact rather than a reproducible shape. What the study
+    actually depends on is arm *differences*, which are bit-identical across vocab sizes.
     """
     assert _count_params(build_arm("L0")) == L0_PARAM_TARGET
 
@@ -32,17 +42,23 @@ def test_l0_hits_the_exact_frozen_parameter_target():
 def test_l0_ledger_reconciles_component_by_component():
     """
     An exact total can still hide two offsetting errors, so check the components independently.
+
+    Derives every term from the module's own constants rather than hardcoding them -- an earlier
+    version pinned ``vocab = 65536`` inline and broke the moment the vocabulary was redeclared,
+    which is a test failing for the wrong reason.
     """
-    d, vocab, k = D_MODEL, 65536, 3
+    d, vocab, k = D_MODEL, VOCAB_SIZE, KERNEL_SIZE
     n_attn = len(ATTENTION_LAYERS)
     n_liv = N_LAYERS - n_attn
 
-    embeddings = vocab * d
-    attn_mixer = d * (16 * 64) + 2 * d * (8 * 64) + (16 * 64) * d
+    embeddings = vocab * d  # tied: the LM head reuses this tensor
+    attn_mixer = (
+        d * (N_HEADS * HEAD_DIM) + 2 * d * (N_KV_HEADS * HEAD_DIM) + (N_HEADS * HEAD_DIM) * d
+    )
     liv_mixer = 4 * d * d + k * d  # the brainlift's 4d^2 + kd
-    mlp = 3 * d * 4608
+    mlp = 3 * d * SWIGLU_WIDTH
     block_norms = 2 * d
-    qk_norms = 2 * 64  # per-head q_layernorm + k_layernorm, attention layers only
+    qk_norms = 2 * HEAD_DIM  # per-head q_layernorm + k_layernorm, attention layers only
 
     total = (
         embeddings
@@ -52,6 +68,20 @@ def test_l0_ledger_reconciles_component_by_component():
         + d  # final norm
     )
     assert total == L0_PARAM_TARGET
+
+
+def test_vocab_covers_every_token_in_the_corpus():
+    """
+    ``VOCAB_SIZE`` must exceed the largest token id in the training data, or the embedding lookup
+    indexes out of bounds and training dies on the first batch.
+
+    The corpus is GPT-2 tokenized, whose EOS is **50,256** and appears at every document
+    boundary -- so 50,257 is a hard floor. A request for a round 50,000 would have crashed
+    immediately (64,472 of the first 50M tokens are >= 50,000).
+    """
+    GPT2_MAX_TOKEN_ID = 50_256
+    assert VOCAB_SIZE > GPT2_MAX_TOKEN_ID
+    assert VOCAB_SIZE % 128 == 0, "pad to a multiple of 128 for tensor-core alignment"
 
 
 def test_every_arm_places_mixers_where_declared():
@@ -99,7 +129,7 @@ def test_narrow_control_is_solved_against_the_arm_it_controls():
     """
     ``N-narrow`` exists to answer "why not just build a narrower model?", so it must match
     ``F-r128``'s parameter count closely or it is not a control at all. Tolerance is 0.05%;
-    the committed values land at 0.0145%.
+    the committed values land at 0.0095% (vocab 50,304).
     """
     target = _count_params(build_arm("F-r128"))
     got = _count_params(build_arm("N-narrow"))
