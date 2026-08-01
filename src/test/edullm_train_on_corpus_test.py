@@ -53,6 +53,92 @@ def resolve(manifest: FakeManifest, tokenizer: str = "tokenizer/dolma2-bpe"):
     )
 
 
+class ReaderProtocolStub:
+    """The four methods ``edullm_data.read`` calls on whatever it is handed.
+
+    A boto3 client has none of them, which is the entire subject of the two tests below.
+    """
+
+    def get(self, bucket, key): ...
+
+    def get_range(self, bucket, key, start, length): ...
+
+    def head(self, bucket, key): ...
+
+    def list(self, bucket, prefix): ...
+
+
+@pytest.fixture
+def reader(monkeypatch):
+    """A stand-in for the installed reader, recording what ``resolve_corpus`` hands it.
+
+    ``edullm_data`` is not installed in this repository's CI, so the modules are built here
+    and put in ``sys.modules`` before the import inside ``resolve_corpus`` runs.
+    """
+    import types
+
+    handed = {}
+    adapter = ReaderProtocolStub()
+
+    class Boto3S3:
+        @classmethod
+        def default(cls, region="us-east-1"):
+            handed["region"] = region
+            return adapter
+
+    def dataset_paths(dataset_id, version, *, s3, **_):
+        handed["s3"] = s3
+        return FakeManifest()
+
+    def resolve_latest(dataset_id, *, s3, **_):
+        handed["resolve_latest_s3"] = s3
+        return "v7"
+
+    read_module = types.ModuleType("edullm_data.read")
+    read_module.dataset_paths = dataset_paths
+    read_module.resolve_latest = resolve_latest
+    s3_module = types.ModuleType("edullm_data.s3")
+    s3_module.Boto3S3 = Boto3S3
+    package = types.ModuleType("edullm_data")
+
+    monkeypatch.setitem(sys.modules, "edullm_data", package)
+    monkeypatch.setitem(sys.modules, "edullm_data.read", read_module)
+    monkeypatch.setitem(sys.modules, "edullm_data.s3", s3_module)
+    return handed
+
+
+def test_the_reader_is_handed_its_own_adapter_and_not_a_boto3_client(reader):
+    """Mutation: pass ``boto3.client("s3")``, which is what this did and what it cost.
+
+    The reader's ``s3`` parameter is typed against a four-method protocol and a boto3 client
+    implements none of it, so ``_require_validated`` calls ``s3.head(bucket, key)`` and the
+    run dies with an AttributeError before a byte leaves the account. Nothing catches it
+    earlier: the parameter is named ``s3``, the annotation is a Protocol, and the traceback
+    names a missing attribute rather than a wrong argument.
+
+    On a GPU job that is a container which starts, exits 1 in under a second, and writes its
+    only explanation to a log stream nobody on the platform side is allowed to read.
+    """
+    entry.resolve_corpus(
+        dataset_id="pretrain/regmix-10b", version="v1", tokenizer_id="tokenizer/dolma2-bpe"
+    )
+
+    for method in ("get", "get_range", "head", "list"):
+        assert callable(getattr(reader["s3"], method, None)), (
+            f"the reader was handed something with no {method}(), which is what a boto3 "
+            "client is"
+        )
+
+
+def test_resolving_the_latest_version_uses_the_same_adapter(reader):
+    # The other call into the reader, and a second place a raw client could be passed.
+    entry.resolve_corpus(
+        dataset_id="pretrain/regmix-10b", version="latest", tokenizer_id="tokenizer/dolma2-bpe"
+    )
+
+    assert reader["resolve_latest_s3"] is reader["s3"]
+
+
 def test_a_healthy_corpus_keeps_the_width_the_manifest_declared():
     # The whole reason this file exists. OLMo-core's own fallback would look at dolma2's
     # 100,278-token vocab, conclude uint16 fits it, and read a uint32 corpus two bytes at a
