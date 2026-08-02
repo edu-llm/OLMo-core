@@ -43,7 +43,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from mm_verify import norm, verify_proof  # noqa: E402
+from mm_verify import norm, verify_proof
 
 HDR = "I know these mathematical statements:"
 SEP = "---"
@@ -148,6 +148,47 @@ def run_probe(model, tok, rows, heldout, args, device):
     return out
 
 
+def target_nll(model, tok, rows, condition, rng, corrupt_pool, batch_size, device):
+    """Mean per-token NLL over the target span, teacher-forced.
+
+    Generation metrics have a floor problem: a 0.5B model that cannot yet emit a
+    whole valid proof scores zero under both arms, and zero minus zero measures
+    nothing. Per-token loss has no floor — it separates the arms from the first
+    epoch, long before either can finish a proof.
+
+    Only target tokens are scored. The fact block is masked out for BOTH arms here,
+    whatever each was trained on, because the question is whether the arms differ at
+    producing the derivation — not whether one of them also modelled the prompt.
+    """
+    import torch
+
+    tot_nll = 0.0
+    tot_tok = 0
+    for i in range(0, len(rows), batch_size):
+        chunk = rows[i : i + batch_size]
+        prompts = [build_prompt(r, condition, rng, corrupt_pool) for r in chunk]
+        full = [p + r["target"] for p, r in zip(prompts, chunk)]
+        enc = tok(full, return_tensors="pt", padding=True, truncation=True).to(device)
+        labels = enc["input_ids"].clone()
+        labels[enc["attention_mask"] == 0] = -100
+        for j, p in enumerate(prompts):
+            n_prompt = len(tok(p)["input_ids"])
+            labels[j, :n_prompt] = -100          # score the target only
+        with torch.no_grad():
+            logits = model(input_ids=enc["input_ids"], attention_mask=enc["attention_mask"]).logits
+        shift_logits = logits[:, :-1].float()
+        shift_labels = labels[:, 1:]
+        nll = torch.nn.functional.cross_entropy(
+            shift_logits.reshape(-1, shift_logits.size(-1)),
+            shift_labels.reshape(-1),
+            ignore_index=-100,
+            reduction="sum",
+        )
+        tot_nll += nll.item()
+        tot_tok += int((shift_labels != -100).sum())
+    return {"target_nll_per_token": tot_nll / max(tot_tok, 1), "target_tokens": tot_tok}
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--model", required=True, help="HF-format directory for the trained arm")
@@ -202,6 +243,16 @@ def main():
     for condition in args.conditions:
         print(f"\n[{args.arm}] {condition}: {len(rows):,} examples")
         rng = random.Random(args.seed)  # reset per condition so arms see identical perturbations
+
+        # Per-token loss first: it is the metric that still moves when generation
+        # scores zero, so it is the one to read early in training.
+        rng_loss = random.Random(args.seed)
+        loss_stats = target_nll(
+            model, tok, rows, condition, rng_loss, corrupt_pool, args.batch_size, device
+        )
+        print(f"  target NLL/token {loss_stats['target_nll_per_token']:.4f} "
+              f"over {loss_stats['target_tokens']:,} tokens")
+
         prompts = [build_prompt(r, condition, rng, corrupt_pool) for r in rows]
         gens = generate(
             model,
@@ -238,7 +289,9 @@ def main():
 
         n = max(len(rows), 1)
         rates = {f"{k}_rate": val / n for k, val in agg.items()}
-        results["conditions"][condition] = {"counts": agg, **rates, "per_example": per_example}
+        results["conditions"][condition] = {
+            "counts": agg, **rates, **loss_stats, "per_example": per_example
+        }
         print(
             f"  valid {rates['valid_rate']:.1%}  goal {rates['goal_reached_rate']:.1%}  "
             f"exact {rates['exact_match_rate']:.1%}  grounded {rates['all_grounded_rate']:.1%}"

@@ -15,29 +15,42 @@ shared:
   # --- controls: identical across arms -------------------------------------
   seed: 42
 
-  # Must equal the value passed to scripts/tokenize_corpus.py. train_sft.py checks
-  # this against <split>_meta.json and refuses to start if they disagree, because a
-  # mismatch would slice instances across example boundaries.
-  sequence_length: 1024
+  # Must equal the value passed to scripts/tokenize_corpus.py, which refuses to start
+  # if they disagree. 16,384 keeps 98.0% of documents whole (the corpus max is 117,191
+  # tokens; 32,768 would keep 99.7% but doubles microbatch memory for 1.7 points).
+  sequence_length: 16384
 
-  # One example per sequence (no packing), so batch size in sequences == examples.
-  global_batch_size_sequences: 64          # 65,536 tokens/step
-  # 4,096 tokens/rank/microbatch. NOT 8: the `default` LM loss materializes the full
-  # logits tensor (nn/lm_head.py:252), and at vocab 151,936 that is ~10 GB for logits +
-  # cross-entropy upcast + gradient at 8,192 tokens, which does not leave room on a 24 GB
-  # A10G. At 4,096 the budget is ~12.7 GB. Global batch is unchanged, so this only moves
-  # gradient accumulation (8 -> 16) and costs nothing scientifically.
-  # If liger-kernel is installed, lm_head loss_implementation="fused_linear" skips the
-  # logits tensor entirely and 8 fits comfortably.
-  rank_microbatch_size_sequences: 4
+  # Sequences are PACKED, so one sequence holds many documents and the split arm finds
+  # several fact blocks in it. 16 x 16,384 = 262,144 tokens/step, which over ~615M
+  # real tokens at 13 epochs is ~30,500 steps.
+  global_batch_size_sequences: 16
+  # One 16,384-token sequence per rank per microbatch. The `default` LM loss
+  # materializes the full logits tensor (nn/lm_head.py:252), which at vocab 151,936 is
+  # 10.0 GB fp32 plus 10.0 GB of gradient, so ~28 GB with weights and Adam state. That
+  # fits an 80 GB H100 with room and does NOT fit a 24 GB A10G — this config is for the
+  # H100 shape. Raising it to 2 costs ~48 GB and still fits; liger-kernel's
+  # loss_implementation="fused_linear" skips the logits tensor and lifts the ceiling.
+  rank_microbatch_size_sequences: 1
 
   # Leave max_steps null to derive it from the corpus size and `epochs`, which keeps
   # total input tokens tied to the data rather than to a number typed here.
   max_steps: null
-  epochs: 3
+  # 13 epochs over the 627M-token corpus is 8.15B tokens seen. Chosen for fact
+  # exposure, not for token count: at 3 epochs only 5% of facts are cited often
+  # enough to reach 80 exposures, at 13 it is 19%, and 87% of all premise uses land
+  # on a fact the dense arm has seen 80+ times. The remaining tail is cited once or
+  # twice and no epoch count reaches it — that is the regime the fact block serves.
+  epochs: 13
 
-  learning_rate: 1.0e-5
-  warmup_steps: 50            # ~8% of the ~640 steps the full corpus gives at 3 epochs
+  # 2e-5, not 1e-5. The batch went from 65,536 to 262,144 tokens/step and
+  # Adam conventionally scales with the square root of batch size, so 4x batch
+  # wants ~2x LR. Linear scaling would say 4e-5; sqrt is the conservative
+  # choice for a 0.5B model continuing from pretrained weights.
+  learning_rate: 2.0e-5
+  # ~8% of the run. Scales with `epochs`: at 3 epochs the corpus gave ~640 steps and
+  # this was 50. Re-derive it if `epochs` or the corpus size changes materially —
+  # train.py warns when warmup exceeds 10% of the derived step count.
+  warmup_steps: 2400
   lr_alpha_f: 0.1          # cosine decays to 10% of peak
   weight_decay: 0.0        # off: SFT on 0.5B for a few epochs, and it would interact
                            #      with the tied embedding

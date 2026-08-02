@@ -20,12 +20,13 @@ constant across steps, so it cannot interact with the LR schedule either.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any, Optional
 
 import torch
 
 from olmo_core.train import ReduceType
-from olmo_core.train.train_module import TransformerTrainModule
+from olmo_core.train.train_module import TransformerTrainModule, TransformerTrainModuleConfig
 
 log = logging.getLogger(__name__)
 
@@ -85,3 +86,131 @@ class FixedDivisorTransformerTrainModule(TransformerTrainModule):
             except (TypeError, ValueError):  # pragma: no cover
                 return
         self.record_metric("train/supervised token fraction", value, ReduceType.mean)
+
+
+class DerivedMaskTrainModule(FixedDivisorTransformerTrainModule):
+    """Fixed divisor, plus a fact-block mask recomputed from the token stream.
+
+    The masks are not shipped with the corpus. `weights-sidecar/v1` is not a
+    registered profile so they have nowhere to live, and a derived mask is the better
+    artifact anyway: it cannot fall out of alignment with the tokens it describes,
+    which is the defect `mask_alignment_test.py` exists to catch.
+
+    The boundary is the separator `\\n---\\nGOAL ` that every example carries. With
+    documents PACKED several to a sequence there is one fact block per document, not
+    one per sequence, so a single "find the first separator" does not work. Instead:
+
+        a document opens at position 0 and after every EOS
+        a fact block closes one position after a separator run ends
+        a position is supervised when as many blocks have closed as documents opened
+
+    A document whose separator never appears — only possible if it was truncated —
+    stays masked for its whole length. That is the safe direction: the split arm can
+    lose supervision on a proof, but it can never gain supervision on a fact.
+
+    :param arm: ``"dense"`` supervises everything; ``"split"`` masks fact blocks.
+    :param separator_ids: token ids of the separator under the corpus's tokenizer.
+    :param eos_token_id: document terminator, used to find packed document starts.
+    :param pad_token_id: never supervised, in either arm.
+    """
+
+    def __init__(
+        self,
+        *args: Any,
+        arm: str,
+        separator_ids: list[int],
+        eos_token_id: int,
+        pad_token_id: int,
+        **kwargs: Any,
+    ) -> None:
+        if arm not in ("dense", "split"):
+            raise ValueError(f"arm must be 'dense' or 'split', got {arm!r}")
+        if not separator_ids:
+            raise ValueError("separator_ids is empty; the mask cannot be derived")
+        super().__init__(*args, **kwargs)
+        self.arm = arm
+        self.eos_token_id = int(eos_token_id)
+        self.pad_token_id = int(pad_token_id)
+        self.register_buffer(
+            "_sep", torch.tensor(separator_ids, dtype=torch.long), persistent=False
+        )
+        log.info(
+            "arm=%s; fact block derived from a %d-token separator, packing-aware",
+            arm,
+            len(separator_ids),
+        )
+
+    def supervised_mask(self, input_ids: torch.Tensor) -> torch.Tensor:
+        """True where the split arm should score. Handles packed sequences.
+
+        Compares the position of the most recent block-close against the most recent
+        document-open: supervision is on exactly when a separator has been seen more
+        recently than a document boundary.
+
+        Counting opens against closes instead — which is the obvious implementation —
+        is wrong, and wrong in a way that hides. One document missing its separator
+        leaves the counters permanently off by one, so every LATER document in the
+        same packed sequence stays masked too. Comparing positions is per-document by
+        construction, so a malformed document costs only itself.
+        """
+        b, t = input_ids.shape
+        k = int(self._sep.numel())
+        idx = torch.arange(t, device=input_ids.device).expand(b, t)
+
+        # a separator run ended at i-1, so supervision may begin at i
+        closes = torch.zeros((b, t), dtype=torch.bool, device=input_ids.device)
+        if t > k:
+            starts = (input_ids.unfold(1, k, 1) == self._sep).all(dim=-1)
+            closes[:, k:] = starts[:, : t - k]
+
+        # a document begins at i (sequence start, or just after an EOS)
+        opens = torch.zeros((b, t), dtype=torch.bool, device=input_ids.device)
+        opens[:, 0] = True
+        opens[:, 1:] = input_ids[:, :-1] == self.eos_token_id
+
+        last_close = torch.cummax(torch.where(closes, idx, -torch.ones_like(idx)), dim=1)[0]
+        last_open = torch.cummax(torch.where(opens, idx, -torch.ones_like(idx)), dim=1)[0]
+        return last_close > last_open
+
+    def model_forward(  # type: ignore[override]
+        self,
+        input_ids: torch.Tensor,
+        labels: Optional[torch.Tensor] = None,
+        **kwargs: Any,
+    ):
+        if labels is not None:
+            labels = labels.clone()
+            labels[input_ids == self.pad_token_id] = -100
+            if self.arm == "split":
+                labels[~self.supervised_mask(input_ids)] = -100
+        return super().model_forward(input_ids, labels=labels, **kwargs)
+
+
+@dataclass
+class DerivedMaskTrainModuleConfig(TransformerTrainModuleConfig):
+    """Config that builds :class:`DerivedMaskTrainModule` instead of the base module.
+
+    ``TransformerTrainModuleConfig.build`` names ``TransformerTrainModule`` directly,
+    so a subclass of the module needs a subclass of the config. Overriding ``build``
+    here keeps the change in this experiment's own file — nothing under
+    ``src/olmo_core/`` is touched, which is what the platform guide asks for.
+
+    The extra fields ride through ``as_dict()`` into the module's constructor.
+    """
+
+    arm: str = "dense"
+    separator_ids: Optional[list] = None
+    eos_token_id: int = 0
+    pad_token_id: int = 0
+    fixed_loss_div_factor: float = 1.0
+
+    def build(self, model, device=None):  # type: ignore[override]
+        if self.pp_config is not None:
+            raise ValueError(
+                "pipeline parallelism is not supported here: the derived mask assumes "
+                "whole sequences on one rank"
+            )
+        kwargs = self.as_dict(exclude_none=True, recurse=False)
+        for k in ("autocast_precision", "state_dict_save_opts", "state_dict_load_opts"):
+            kwargs.pop(k, None)
+        return DerivedMaskTrainModule(model=model, device=device, **kwargs)

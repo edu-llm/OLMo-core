@@ -1,41 +1,69 @@
-"""Turn the JSONL corpus into what OLMo-core reads: one token array, two label masks.
+"""Pack the JSONL corpus into publishable `.u32le.bin` token shards.
 
-The experimental manipulation lives entirely in this file, and the file is structured
-so that the thing being held constant cannot drift:
+Both arms read the SAME shards. There are no label masks here any more: the split
+arm recomputes the fact-block boundary at load time by finding the separator token
+run in the stream (`train_platform.py:DerivedMaskTrainModule`). Two reasons, and the
+second is the better one:
 
-    tokens.npy              written ONCE, used by both arms
-    label_mask_dense.npy    True on every real token (facts included)
-    label_mask_split.npy    True only after the fact block
+  * `weights-sidecar/v1` is not a registered profile, so a mask array has no legal
+    home in a published dataset.
+  * a derived mask cannot fall out of alignment with the tokens it describes. A
+    shipped one can, silently, and that is the defect `mask_alignment_test.py`
+    exists to catch.
 
-Both arms point at the same tokens.npy. "Identical input documents, identical order,
-identical token count" is therefore a property of the filesystem, not a claim about two
-pipelines that we hope agree.
+Layout, which is fixed before a byte is written because `entry.path` is hashed into
+`manifest_sha256` and re-pathing later means re-copying every payload byte:
 
-Mask convention, which is easy to get backwards: OLMo-core applies
-`labels.masked_fill_(~label_mask, -100)` and *then* left-shifts
-(`olmo_core/data/utils.py:598-605`). So `label_mask[i] = False` removes token i from
-being **predicted**. The mask is indexed by the token whose prediction is scored, not
-by the token being conditioned on. src/test/scripts/p3_math_split/mask_alignment_test.py pins this.
+    tokens/<corpus>/<split>-<NNNNN>.u32le.bin
 
-Padding: every example is pre-padded to exactly --sequence-length in the flat array, so
-instance i from NumpyFSLDataset is exactly example i. No cross-document packing. It
-wastes some compute but makes example order auditable.
+`<corpus>` is one of metamath, prf2, enigma, mizar, thproofs, isabelle, so a trainer
+can later measure one proof style alone. The extension is self-describing and the
+bytes are raw little-endian uint32 from byte 0 — **never `.npy`**. OLMo-core memmaps
+from byte 0 and derives the token count from the raw file size, so a real `.npy`
+header corrupts both the tokens and the count, silently. uint32 is required: the
+vocab is 151,936 and uint16 would wrap.
+
+Over-length examples are DROPPED, not truncated. A truncated proof has no ending, and
+training on thousands of them teaches a model to never stop. `--suggest` reports what
+each sequence length would cost before you commit to one.
+
+Padding: every example is pre-padded to exactly --sequence-length, so instance i is
+example i. No cross-document packing, which keeps example order auditable and keeps
+the separator search unambiguous — one fact block per sequence.
 
 Usage:
-    python src/scripts/train/p3_math_split/tokenize_corpus.py --corpus corpus --out tokenized --suggest
-    python src/scripts/train/p3_math_split/tokenize_corpus.py --corpus corpus --out tokenized --sequence-length 1024
+    python src/scripts/train/p3_math_split/tokenize_corpus.py --corpus <dir> --suggest
+    python src/scripts/train/p3_math_split/tokenize_corpus.py --corpus <dir> \
+        --out artifacts/public --sequence-length 16384 \
+        --tokenizer ../memorysplit-requery-exact/tokenizers/qwen25-vendored
 """
 
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import sys
 
 import numpy as np
 
-TOKENS_DTYPE = np.uint32  # vocab is 151936, so uint16 is not an option
+TOKENS_DTYPE = np.uint32  # vocab is 151,936, so uint16 is not an option
+# What the corpus builder writes between the fact block and the goal.
+SEPARATOR = "\n---\nGOAL "
+# What the split arm actually SEARCHES for, and it is deliberately not the string
+# above. BPE does not respect the boundary: the trailing space merges rightward into
+# the goal's first word (` |-`, ` ![`, ` lemma`) in 98.4% of documents, and the
+# leading newline merges leftward into the fact block's last characters (` )\n`,
+# `"\n`) in 88.5%. Encoding the full separator gives [198, 10952, 15513, 969, 220],
+# a run that survives in 777 of 258,316 documents -- 0.30%, and 0% in four of the six
+# shards. The split arm would have found no boundary and supervised everything,
+# silently becoming a second dense arm.
+#
+# The three-token core `---\nGOAL` -> [10952, 15513, 969] survives in 258,316 of
+# 258,316, never appears twice, and the token immediately after it always begins at
+# or past mask_end -- so supervision starts exactly at the goal.
+SEPARATOR_SEARCH = "---\nGOAL"
 
 
 def load_jsonl(path):
@@ -82,11 +110,22 @@ def encode_one(tok, row, eos_id):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--corpus", default="corpus")
-    ap.add_argument("--out", default="tokenized")
-    ap.add_argument("--split", default="train", help="train | eval_retrieval | eval_iid")
-    ap.add_argument("--tokenizer", default="Qwen/Qwen2.5-0.5B")
-    ap.add_argument("--sequence-length", type=int, default=1024)
+    ap.add_argument("--corpus", default="corpus",
+                    help="dir holding shards/ and eval/ of *.jsonl")
+    ap.add_argument("--out", default="artifacts/public")
+    ap.add_argument("--split", default="train", choices=("train", "val"),
+                    help="train reads corpus/shards/, val reads corpus/eval/")
+    ap.add_argument("--tokenizer", default="Qwen/Qwen2.5-0.5B",
+                    help="publish this same tokenizer as tokenizer/qwen25-vendored")
+    ap.add_argument("--sequence-length", type=int, default=16384)
+    ap.add_argument("--shard-tokens", type=int, default=250_000_000,
+                    help="tokens per output shard; 250M x 4B = 1 GB")
+    ap.add_argument("--pack", action="store_true",
+                    help="fill each sequence with consecutive documents instead of "
+                         "padding one example per sequence. The corpus median is 564 "
+                         "tokens against a window sized for a 117k tail, so unpacked "
+                         "padding runs 62-93%% of all compute. The split arm handles "
+                         "several fact blocks per sequence (train_module.py).")
     ap.add_argument(
         "--suggest",
         action="store_true",
@@ -99,118 +138,182 @@ def main():
     except ImportError:
         sys.exit("pip install transformers")
 
-    src = os.path.join(args.corpus, f"{args.split}.jsonl")
-    if not os.path.exists(src):
-        sys.exit(f"{src} not found — run src/scripts/train/p3_math_split/build_corpus.py first")
-
-    rows = load_jsonl(src)
-    print(f"{len(rows):,} examples from {src}")
+    sub = "shards" if args.split == "train" else "eval"
+    srcs = sorted(glob.glob(os.path.join(args.corpus, sub, "*.jsonl")))
+    if not srcs:
+        sys.exit(f"no *.jsonl under {os.path.join(args.corpus, sub)}")
 
     tok = AutoTokenizer.from_pretrained(args.tokenizer)
     if not tok.is_fast:
-        sys.exit("need the fast tokenizer: offset_mapping is how the mask is placed")
+        sys.exit("need the fast tokenizer: offset_mapping is how the boundary is found")
     eos_id = tok.eos_token_id
     if eos_id is None:
         sys.exit("tokenizer has no eos_token_id")
+    pad_id = tok.pad_token_id if tok.pad_token_id is not None else eos_id
 
-    encoded, total_straddling = [], 0
-    for row in rows:
-        ids, after, straddling = encode_one(tok, row, eos_id)
-        total_straddling += straddling
-        encoded.append((row, ids, after))
+    # The separator the split arm will search for at load time. Verifying it here,
+    # against this tokenizer, is the only place the two halves can be kept in step.
+    sep_ids = tok(SEPARATOR_SEARCH, add_special_tokens=False)["input_ids"]
+    if not sep_ids:
+        sys.exit(f"{SEPARATOR_SEARCH!r} tokenizes to nothing under {args.tokenizer}")
 
-    lengths = np.array([len(ids) for _, ids, _ in encoded])
-    print(
-        f"  token lengths: min {lengths.min()}  median {int(np.median(lengths))}  "
-        f"p95 {int(np.percentile(lengths, 95))}  p99 {int(np.percentile(lengths, 99))}  "
-        f"max {lengths.max()}"
-    )
-    if total_straddling:
-        # Not an error — the mask stays conservative — but worth seeing, because a
-        # large count would mean the separator is being merged into fact text.
-        print(f"  {total_straddling:,} tokens straddle the block boundary (masked as facts)")
+    S = args.sequence_length
+
+    # Two passes rather than one. Holding every encoding at once would be ~2.5 GB of
+    # numpy (far more as Python lists) for a 627M-token corpus, so pass 1 keeps only
+    # lengths and pass 2 re-encodes one corpus at a time. Tokenizing twice is cheap
+    # next to running out of memory halfway through a write.
+    all_lengths = []
+    per_corpus_lengths = {}
+    for src in srcs:
+        name = os.path.basename(src)[:-6]
+        lengths = [
+            len(encode_one(tok, row, eos_id)[0]) for row in load_jsonl(src)
+        ]
+        per_corpus_lengths[name] = lengths
+        all_lengths += lengths
+        print(f"  {name:<12}{len(lengths):>8,} examples  median {int(np.median(lengths)):>7,}  "
+              f"max {max(lengths):>8,}")
+
+    L = np.array(all_lengths)
+    print(f"\n  {len(L):,} examples, median {int(np.median(L)):,}, max {L.max():,} tokens")
 
     if args.suggest:
-        for candidate in (512, 640, 768, 1024, 1536, 2048):
-            fits = int((lengths <= candidate).sum())
-            waste = 1 - lengths[lengths <= candidate].sum() / (fits * candidate) if fits else 1.0
-            print(
-                f"    seq_len {candidate:>5}: keeps {fits:>7,}/{len(lengths):,} "
-                f"({fits / len(lengths):>5.1%})  padding waste {waste:>5.1%}"
-            )
+        print(f"\n  {'seq_len':>9}{'kept':>10}{'%':>8}{'padding waste':>15}")
+        for c in (1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072):
+            fits = int((L <= c).sum())
+            waste = 1 - L[L <= c].sum() / (fits * c) if fits else 1.0
+            print(f"  {c:>9,}{fits:>10,}{100 * fits / len(L):>7.1f}%{waste:>14.1%}")
         print("\npick one and re-run without --suggest")
         return
 
-    S = args.sequence_length
-    kept = [(r, ids, after) for r, ids, after in encoded if len(ids) <= S]
-    dropped = len(encoded) - len(kept)
-    if not kept:
-        sys.exit(f"every example exceeds --sequence-length {S}")
+    # A separator that cannot survive the window is a silent killer: the split arm
+    # would find no boundary and supervise the whole sequence, making it a second
+    # dense arm. Refuse rather than discover it in the loss curves.
+    if len(sep_ids) >= S:
+        sys.exit(f"separator is {len(sep_ids)} tokens but sequence_length is {S}")
 
-    n = len(kept)
-    tokens = np.full(n * S, tok.pad_token_id or eos_id, dtype=TOKENS_DTYPE)
-    mask_dense = np.zeros(n * S, dtype=np.bool_)
-    mask_split = np.zeros(n * S, dtype=np.bool_)
-
-    index = []
-    for i, (row, ids, after) in enumerate(kept):
-        lo = i * S
-        hi = lo + len(ids)
-        tokens[lo:hi] = np.asarray(ids, dtype=TOKENS_DTYPE)
-        mask_dense[lo:hi] = True  # every real token; padding stays False
-        mask_split[lo:hi] = np.asarray(after, dtype=np.bool_)
-        index.append(
-            {
-                "instance": i,
-                "id": row["id"],
-                "theorem": row["theorem"],
-                "n_tokens": len(ids),
-                "n_fact_tokens": int(len(ids) - sum(after)),
-                "cited": row["cited"],
-            }
+    # Prove the run is findable in real documents rather than assuming it. This exact
+    # assumption already failed once: the full separator string encodes to a run that
+    # 99.7% of documents do not contain, because BPE merges across both its edges.
+    probe_bad = probe_dup = probe_n = 0
+    for src in srcs:
+        for row in load_jsonl(src)[:200]:
+            ids = tok(row["text"], add_special_tokens=False)["input_ids"]
+            hits = [i for i in range(len(ids) - len(sep_ids) + 1)
+                    if ids[i : i + len(sep_ids)] == sep_ids]
+            probe_n += 1
+            probe_bad += not hits
+            probe_dup += len(hits) > 1
+    if probe_bad or probe_dup:
+        sys.exit(
+            f"separator run {sep_ids} is not a reliable boundary under "
+            f"{args.tokenizer}: missing in {probe_bad}/{probe_n} probed documents, "
+            f"repeated in {probe_dup}. The split arm would supervise fact tokens or "
+            f"find the boundary in the wrong place. Fix SEPARATOR_SEARCH before writing "
+            f"shards."
         )
+    print(f"  separator {sep_ids} found exactly once in {probe_n}/{probe_n} probed docs")
 
     os.makedirs(args.out, exist_ok=True)
-    prefix = os.path.join(args.out, args.split)
-    np.save(f"{prefix}_tokens.npy", tokens)
-    np.save(f"{prefix}_label_mask_dense.npy", mask_dense)
-    np.save(f"{prefix}_label_mask_split.npy", mask_split)
-
-    meta = {
-        "split": args.split,
-        "tokenizer": args.tokenizer,
+    manifest = {
         "sequence_length": S,
-        "n_instances": n,
-        "n_dropped_too_long": dropped,
-        "eos_token_id": eos_id,
-        "pad_token_id": tok.pad_token_id or eos_id,
+        "tokenizer": args.tokenizer,
         "tokens_dtype": "uint32",
-        "total_tokens_including_padding": int(tokens.size),
-        "total_real_tokens": int(mask_dense.sum()),
-        "supervised_tokens_dense": int(mask_dense.sum()),
-        "supervised_tokens_split": int(mask_split.sum()),
-        "fact_token_fraction": float(1 - mask_split.sum() / mask_dense.sum()),
-        "padding_fraction": float(1 - mask_dense.sum() / tokens.size),
-        "straddling_tokens": total_straddling,
+        "byte_order": "little",
+        "eos_token_id": int(eos_id),
+        "pad_token_id": int(pad_id),
+        "separator": SEPARATOR,
+        "separator_search": SEPARATOR_SEARCH,
+        "separator_ids": [int(x) for x in sep_ids],
+        "split": args.split,
+        "groups": {},
     }
-    with open(f"{prefix}_meta.json", "w", encoding="utf-8") as f:
-        json.dump(meta, f, indent=2)
-    with open(f"{prefix}_index.json", "w", encoding="utf-8") as f:
-        json.dump(index, f)
 
-    print()
-    print(f"  wrote {prefix}_tokens.npy            {n:,} x {S} = {tokens.size:,} tokens")
-    print(f"        {prefix}_label_mask_dense.npy  {mask_dense.sum():,} supervised")
-    print(f"        {prefix}_label_mask_split.npy  {mask_split.sum():,} supervised")
-    if dropped:
-        print(f"  dropped {dropped:,} examples longer than {S} tokens")
-    print(f"  fact-token fraction {meta['fact_token_fraction']:.1%}  (design band 17-30%)")
-    print(f"  padding             {meta['padding_fraction']:.1%} of the array")
-    if not 0.05 < meta["fact_token_fraction"] < 0.60:
-        print(
-            "  WARNING: fact fraction outside 5-60%; the two arms will barely differ "
-            "(too low) or the split arm will have little to learn from (too high)"
-        )
+    grand_inst = grand_dropped = total_straddling = grand_real = 0
+    for src in srcs:
+        name = os.path.basename(src)[:-6]
+        kept = []
+        for row in load_jsonl(src):
+            ids, _after, straddling = encode_one(tok, row, eos_id)
+            if len(ids) <= S:
+                kept.append(np.asarray(ids, dtype=TOKENS_DTYPE))
+                total_straddling += straddling
+        dropped = len(per_corpus_lengths[name]) - len(kept)
+        grand_dropped += dropped
+        if not kept:
+            print(f"  {name}: every example exceeds {S}, no shard written")
+            continue
+
+        if args.pack:
+            # Greedy first-fit: start a new sequence when the next document would not
+            # finish inside the window. Documents are never split, so every fact block
+            # keeps its separator and the derived mask stays well defined.
+            rows, cur = [], []
+            used = 0
+            for ids in kept:
+                if used + len(ids) > S and cur:
+                    rows.append(cur)
+                    cur, used = [], 0
+                cur.append(ids)
+                used += len(ids)
+            if cur:
+                rows.append(cur)
+            instances = [np.concatenate(r) for r in rows]
+        else:
+            instances = kept
+
+        d = os.path.join(args.out, "tokens", name)
+        os.makedirs(d, exist_ok=True)
+        per_shard = max(args.shard_tokens // S, 1)          # whole instances only
+        shards = []
+        for ordinal, lo in enumerate(range(0, len(instances), per_shard)):
+            block = instances[lo : lo + per_shard]
+            buf = np.full(len(block) * S, pad_id, dtype=TOKENS_DTYPE)
+            for j, ids in enumerate(block):
+                buf[j * S : j * S + len(ids)] = ids
+            # `.tofile` writes the raw buffer with no header, which is the whole point.
+            # `np.save` would prepend a .npy header and OLMo-core would read it as data.
+            path = os.path.join(d, f"{args.split}-{ordinal:05d}.u32le.bin")
+            buf.astype("<u4").tofile(path)
+            shards.append({
+                "path": os.path.relpath(path, args.out).replace(os.sep, "/"),
+                "instances": len(block),
+                "tokens": int(buf.size),
+                "bytes": int(buf.size) * 4,
+            })
+        real = int(sum(x.size for x in instances))
+        manifest["groups"][name] = {
+            "documents": len(kept),
+            "instances": len(instances),
+            "real_tokens": real,
+            "padding_fraction": round(1 - real / max(len(instances) * S, 1), 4),
+            "dropped_over_length": dropped,
+            "shards": shards,
+        }
+        grand_inst += len(instances)
+        grand_real += real
+        print(f"  {name:<12}{len(kept):>8,} docs -> {len(instances):>7,} instances, "
+              f"{100 * (1 - real / max(len(instances) * S, 1)):>4.1f}% padding"
+              + (f", {dropped:,} dropped over {S:,}" if dropped else ""))
+
+    manifest["packed"] = bool(args.pack)
+    manifest["instances"] = grand_inst
+    manifest["real_tokens"] = grand_real
+    manifest["dropped_over_length"] = grand_dropped
+    manifest["tokens_straddling_boundary"] = total_straddling
+    with open(os.path.join(args.out, f"{args.split}_meta.json"), "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+
+    total = grand_inst * S
+    print(f"\n  {grand_inst:,} instances x {S:,} = {total / 1e6:,.0f}M tokens of compute, "
+          f"{grand_real / 1e6:,.0f}M real ({100 * (1 - grand_real / max(total, 1)):.1f}% padding)")
+    print(f"  dropped over length: {grand_dropped:,} "
+          f"({100 * grand_dropped / max(grand_inst + grand_dropped, 1):.1f}%)")
+    if total_straddling:
+        print(f"  {total_straddling:,} tokens straddle the block boundary")
+    print(f"  wrote {args.out}/tokens/<corpus>/{args.split}-NNNNN.u32le.bin "
+          f"and {args.split}_meta.json")
 
 
 if __name__ == "__main__":
