@@ -126,10 +126,17 @@ def load_recipe(path: Path = RECIPE_PATH) -> tuple[Arm, ...]:
         )
         for item in payload.get("arms") or []
     )
-    if tuple(arm.index for arm in arms) != tuple(range(17)):
-        raise CurriculumConfigError("recipe arm indexes must be exactly 0..16")
-    if len({arm.name for arm in arms}) != 17:
-        raise CurriculumConfigError("recipe arm names must be unique")
+    expected_arms = (
+        (0, "linear10-flesch", "linear_n10", "flesch", "flesch"),
+        (1, "linear10-mtld", "linear_n10", "mtld", "mtld"),
+        (2, "linear10-learn", "linear_n10", "learnability", "learnability"),
+        (3, "warmup-mtld", "warmup_1000", "mtld", "mtld"),
+        (4, "interleave-mtld", "interleave_i10_linear", "mtld", "mtld"),
+    )
+    if tuple(
+        (arm.index, arm.name, arm.pacing, arm.metric, arm.order_group) for arm in arms
+    ) != expected_arms:
+        raise CurriculumConfigError("recipe arms differ from the approved five-arm matrix")
     for arm in arms:
         if arm.pacing not in PACING_NAMES:
             raise CurriculumConfigError(f"{arm.name}: unknown pacing {arm.pacing}")
@@ -631,7 +638,7 @@ def run_worker(args: argparse.Namespace) -> None:
 
 def parser() -> argparse.ArgumentParser:
     out = argparse.ArgumentParser(description=__doc__)
-    out.add_argument("--arm-index", type=int, choices=range(17), required=True)
+    out.add_argument("--arm-index", type=int, choices=range(len(ARMS)), required=True)
     out.add_argument("--train-worker", action="store_true", help=argparse.SUPPRESS)
     out.add_argument("--nproc", type=int, default=int(os.environ.get("NPROC", "1")))
     out.add_argument("--length-tokens", type=int)

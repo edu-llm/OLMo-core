@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Print all 17 arms, or pass each launch to an explicitly supplied local wrapper.
+# Print all five arms, or pass each launch to an explicitly supplied local wrapper.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
