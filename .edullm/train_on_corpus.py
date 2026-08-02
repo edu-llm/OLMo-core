@@ -363,14 +363,38 @@ def corpus_from_manifest(read, *, dataset_id: str, version: str, tokenizer_id: s
             "in-range-looking id.",
         )
 
+    # THE LOOKUP IS INSIDE THE TRY AND THE CALL IS DELIBERATELY OUTSIDE IT, WHICH IS NOT A
+    # STYLE CHOICE. Both were inside until tokenizer/smollm2-bpe landed, and that was safe only
+    # for as long as every value in TOKENIZERS was a bound classmethod returning four literals.
+    # Such a factory cannot raise KeyError, so the only KeyError the try could ever see was the
+    # subscript, and catching both was the same thing as catching one.
+    #
+    # from_hf broke that. It reads config["vocab_size"] and config["eos_token_id"] straight off
+    # the JSON it fetched from the Hub, so any response missing either raises KeyError from
+    # inside the factory. That is not hypothetical. from_hf falls back to tokenizer_config.json
+    # when config.json 404s, and tokenizer_config.json ordinarily carries no vocab_size at all.
+    #
+    # Caught by the handler below, that KeyError became "no OLMo-core config for
+    # tokenizer/smollm2-bpe; this image knows: tokenizer/dolma2-bpe, tokenizer/smollm2-bpe",
+    # which lists the tokenizer it claims not to know, exits 69, and loses the real cause to
+    # `from None`. It is the exact wrong diagnosis this entry was added to stop, arriving for a
+    # different reason and reading as confirmation that the fix never worked.
+    #
+    # Outside the try the same KeyError reaches `during(THE_CONFIG_WOULD_NOT_BUILD)` in main and
+    # exits 70 still carrying "KeyError: 'vocab_size'". Exit 69 and exit 70 are then two claims
+    # worth telling apart. 69 says no line here names this tokenizer and someone must add one.
+    # 70 says a line does name it and building it failed, which is a Hub problem or a changed
+    # payload and is fixed somewhere else entirely. Every other way from_hf fails, a Hub outage
+    # or a refused connection, already lands on 70 by this same route.
     try:
-        tokenizer = TOKENIZERS[tokenizer_id]()
+        build_tokenizer = TOKENIZERS[tokenizer_id]
     except KeyError:
         known = ", ".join(sorted(TOKENIZERS)) or "none"
         raise Refusal(
             Stage.THIS_IMAGE_HAS_NO_CONFIG_FOR_THAT_TOKENIZER,
             f"no OLMo-core config for {tokenizer_id}; this image knows: {known}",
         ) from None
+    tokenizer = build_tokenizer()
 
     return Corpus(
         dataset_id=dataset_id,

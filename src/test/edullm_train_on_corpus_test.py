@@ -224,15 +224,70 @@ def test_a_smollm2_corpus_resolves_to_the_tokenizer_its_own_manifest_names(monke
     assert str(corpus.dtype) == "uint32"
 
 
-def test_the_smollm2_entry_names_the_identifier_the_corpus_declares():
-    # The test above patches the entry, so it proves the plumbing and not the constant. This
-    # one reads the real closure's identifier out of the shipped dict, which is the thing a
-    # careless edit would change.
-    import inspect
+def test_the_shipped_smollm2_entry_asks_for_the_identifier_the_corpus_declares(monkeypatch):
+    """The real closure out of the real dict, called for real, with only the Hub stubbed.
 
-    source = inspect.getsource(entry).split("TOKENIZERS = {", 1)[1].split("}", 1)[0]
-    assert '"tokenizer/smollm2-bpe"' in source
-    assert '"HuggingFaceTB/SmolLM2-135M"' in source
+    The test above patches the entry, so it proves the plumbing and not the constant. This one
+    replaced a version that sliced ``TOKENIZERS`` out of ``inspect.getsource`` and asserted the
+    two strings appeared in it, which was weaker than it looked in three ways. It passed on a
+    comment mentioning either string, it never checked that the key and the identifier belonged
+    to each other so a dict pairing smollm2-bpe with dolma2 and naming SmolLM2 elsewhere
+    satisfied it, and it read only as far as the first closing brace so any value containing one
+    truncated the slice.
+
+    Patching ``from_hf`` on the class instead reaches the same fact behaviourally. The lambda
+    looks ``TokenizerConfig`` up in module globals when it is called, so the shipped entry is
+    what runs, and the assertion fails if the identifier changes, if the key stops pointing at
+    this factory, or if the entry is built through some other constructor.
+    """
+    asked: Dict[str, Any] = {}
+
+    def fake_from_hf(identifier: str):
+        asked["identifier"] = identifier
+        return entry.TokenizerConfig.dolma2()
+
+    monkeypatch.setattr(entry.TokenizerConfig, "from_hf", staticmethod(fake_from_hf))
+
+    resolve(FakeManifest(), tokenizer="tokenizer/smollm2-bpe")
+
+    assert asked["identifier"] == "HuggingFaceTB/SmolLM2-135M"
+
+
+def test_a_tokenizer_this_image_names_but_cannot_build_is_not_called_one_it_lacks(monkeypatch):
+    """Mutation: put the call back inside the try, which is where it was and what it cost.
+
+    ``from_hf`` reads ``config["vocab_size"]`` and ``config["eos_token_id"]`` off the JSON it
+    fetched, so a Hub payload missing either raises KeyError from inside the factory, and the
+    ``tokenizer_config.json`` that ``from_hf`` falls back to when ``config.json`` 404s ordinarily
+    carries no vocab_size at all. A try wide enough to cover the call caught that KeyError and
+    answered it with "no OLMo-core config for tokenizer/smollm2-bpe; this image knows:
+    tokenizer/dolma2-bpe, tokenizer/smollm2-bpe", naming the tokenizer in the list of ones it
+    claimed not to know and exiting 69 with the cause dropped by ``from None``.
+
+    That is worse than an unhelpful message. Exit 69 is the number this entry was added to stop
+    fineweb-edu-1b returning, so the failure reads as the fix never having landed and sends the
+    next person back to this dict, which is the one place that is already correct. The two
+    numbers answer different questions and belong to different people. 69 means no line names
+    this tokenizer. 70 means a line does and the build failed, which is a Hub problem.
+    """
+
+    def from_hf_meeting_a_payload_without_the_key():
+        return {"eos_token_id": 2}["vocab_size"]
+
+    monkeypatch.setitem(
+        entry.TOKENIZERS, "tokenizer/smollm2-bpe", from_hf_meeting_a_payload_without_the_key
+    )
+
+    # Bare out of corpus_from_manifest, rather than converted into a refusal about the dict.
+    with pytest.raises(KeyError):
+        resolve(FakeManifest(), tokenizer="tokenizer/smollm2-bpe")
+
+    # And filed under the stage main would file it under, which is the number the platform sees.
+    with pytest.raises(entry.Refusal) as refusal:
+        with entry.during(entry.Stage.THE_CONFIG_WOULD_NOT_BUILD):
+            resolve(FakeManifest(), tokenizer="tokenizer/smollm2-bpe")
+    assert refusal.value.stage is entry.Stage.THE_CONFIG_WOULD_NOT_BUILD
+    assert "vocab_size" in refusal.value.explanation
 
 
 def test_the_whole_config_builds_from_a_corpus_without_touching_s3(monkeypatch):
