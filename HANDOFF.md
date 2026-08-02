@@ -5,6 +5,50 @@ pushed; all three P0.0 prerequisites closed; all 13 named Phase-0 tests green on
 FarmShare. `origin/main` merged — the program is now on the eduLLM platform path, not Slurm. No
 image built, no AWS resource created, no money spent.**
 
+## ⚠️ AUDIT 2026-08-01: sound math, correct kernel, NOT production-viable
+
+An orchestrated audit (39 mutants, three independent implementations, run through the real test
+suite) found the mixer **mathematically sound and the kernel correct** — but not ready for a real
+training run, with the weakest link in **module wiring, not math**.
+
+**What is genuinely right, measured:** three independently-written implementations agree to
+≤2.79e-15; the Triton backward matches float64 autograd to ≤4.4e-7 across 49 shapes; R=1 reduces
+exactly to KDA at all three levels; the R-factor product is non-expansive (spectral norm exactly
+1.000000, R=1–8, both β regimes); no error growth to T=65536; determinism bit-identical.
+
+**Fix before any training run — verified independently in this session:**
+
+1. **`l2_normalize` has no epsilon** (`nn/functional/__init__.py:18`, a bare `x/‖x‖`). One all-zero
+   q/k row NaNs the output *and the gradients*. Measured: `l2_normalize(zeros)` → NaN, and the NaN
+   reaches **4 of 5 operator input gradients**. Reachable because `conv_bias=False` is the default
+   and `silu(0) = 0` **exactly** (both confirmed). ⚠️ `l2_normalize` is **shared** with
+   `feed_forward.py:283`, `layer_norm.py:386` (nGPT) and `lm_head.py:568`, so patching it in place
+   touches production paths beyond DP2 — this is a judgement call, not a drop-in fix.
+2. **6.9–9.5× slower and ~10× more memory than fla's `chunk_kda` at R=1** — roughly **127 extra
+   GPU-hours** per 2T-token 1B run. Note this *reverses* the earlier "406× faster" claim, which
+   compared against the author's own Python-loop reference. A separate earlier claim that Triton was
+   7% *slower* was a no-warmup artifact and is also wrong (reversed: 123×).
+3. **TBPTT silently yields gradients wrong by 29–39%** and nothing raises.
+4. **Double-backward returns a finite but wrong HVP at module level** (rel 0.9962) — the
+   `once_differentiable` docstring promise is false where users actually call it.
+5. **Unguarded OOM cliff** — bare `OutOfMemoryError` faulting at `:587`, not at `hs`.
+6. **`dt_bias.zero_()`** (`:1378`) gives a 0.12-token median memory half-life, ~90× shorter than
+   fla's. Relevant to any run that expects long-range retention.
+
+**Novelty: novel-but-thin.** fla's existing `generalized_delta_rule.dplr` computes this operator
+**exactly** (verified 1.11e-16 at R=1–4). The docstring at `kda_householder.py:54-55` overstates.
+
+**Test-suite health.** Of 19 module tests, **exactly one** compares module output to a reference,
+and it is R=1 only — which is why four module mutants (rel 0.94–1.40) were caught by zero of 157
+tests. Two of those are now fixed (`0bdf578` GVA coverage, `92a2bed` oracle fail-open). The
+oracle/reference circularity is a **real structural fact** (0.9625 similarity, same einsums) but
+does **not** blind the suite: a bug injected into all three implementations still fails 19–20 tests.
+Independent force comes from the §4.5 algebraic oracle and the external fla anchor.
+
+**Untested:** one GPU arch only (L40S sm_89 — the `tl.debug_barrier` question is arch-dependent),
+no multi-rank FSDP/CP, and the B8/T4096 reference shape exceeds 44 GiB so its memory figure is
+analytical (validated within 1% across 9 points).
+
 ## ⚠️ FIRST RUN: the arms are `Reflection` and `R1-P` — NOT `DP2-strict`
 
 **Decided 2026-08-01.** The first platform training run is the pair **`Reflection`** (treatment)
