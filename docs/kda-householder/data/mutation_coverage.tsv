@@ -1,0 +1,38 @@
+#Backward-pass mutation coverage, re-run from probes/audit_exp2_mutation.py on FarmShare (CPU).
+#Shape B2 T64 H2 K64 V64 R2. Acceptance criterion is the repo's own bf16 gate: max|diff| < 0.02 (ATOL=RTOL=2e-2).
+#Regimes differ ONLY in the decay-gate parameterization:
+#  accept = naive -rand() gate (the gate the original acceptance test used)
+#  real   = production A_log = log U(1,16), i.e. 8-68x stronger decay
+#  negeig = reflection regime, beta = 2*sigmoid(.) in (0,2)
+#A mutation "PASSES" when its induced error falls under the acceptance threshold, i.e. the test FAILS to catch a real bug.
+regime	mutation	dq	dk	dv	dg	dbeta	verdict
+accept	M1_dg_after_decay	0.00e+00	0.00e+00	0.00e+00	5.54e-02	0.00e+00	CAUGHT
+accept	M2_dg_uses_pre	0.00e+00	0.00e+00	0.00e+00	1.50e-01	0.00e+00	CAUGHT
+accept	M3_dk_drop_term2	0.00e+00	1.65e-01	0.00e+00	0.00e+00	0.00e+00	CAUGHT
+accept	M4_dbeta_uses_u	0.00e+00	0.00e+00	0.00e+00	0.00e+00	3.68e-01	CAUGHT
+accept	M5_dq_uses_S0	9.41e-01	0.00e+00	0.00e+00	0.00e+00	0.00e+00	CAUGHT
+accept	M6_rewalk_offby1	0.00e+00	1.07e+00	0.00e+00	0.00e+00	4.67e-01	CAUGHT
+accept	M7_dv_no_beta	0.00e+00	0.00e+00	1.56e-01	0.00e+00	0.00e+00	CAUGHT
+accept	M8_dh_wrong_sign	0.00e+00	3.87e-01	4.74e-02	6.90e-02	2.28e-01	CAUGHT
+real	M1_dg_after_decay	0.00e+00	0.00e+00	0.00e+00	1.54e-03	0.00e+00	PASSES_SILENTLY
+real	M2_dg_uses_pre	0.00e+00	0.00e+00	0.00e+00	1.58e-01	0.00e+00	CAUGHT
+real	M3_dk_drop_term2	0.00e+00	6.03e-02	0.00e+00	0.00e+00	0.00e+00	CAUGHT
+real	M4_dbeta_uses_u	0.00e+00	0.00e+00	0.00e+00	0.00e+00	3.34e-01	CAUGHT
+real	M5_dq_uses_S0	1.28e+00	0.00e+00	0.00e+00	0.00e+00	0.00e+00	CAUGHT
+real	M6_rewalk_offby1	0.00e+00	1.07e+00	0.00e+00	0.00e+00	3.65e-01	CAUGHT
+real	M7_dv_no_beta	0.00e+00	0.00e+00	1.08e-01	0.00e+00	0.00e+00	CAUGHT
+real	M8_dh_wrong_sign	0.00e+00	1.60e-01	2.49e-02	4.85e-04	1.09e-01	CAUGHT
+negeig	M1_dg_after_decay	0.00e+00	0.00e+00	0.00e+00	3.15e-03	0.00e+00	PASSES_SILENTLY
+negeig	M2_dg_uses_pre	0.00e+00	0.00e+00	0.00e+00	3.00e-01	0.00e+00	CAUGHT
+negeig	M3_dk_drop_term2	0.00e+00	2.41e-01	0.00e+00	0.00e+00	0.00e+00	CAUGHT
+negeig	M4_dbeta_uses_u	0.00e+00	0.00e+00	0.00e+00	0.00e+00	3.03e-01	CAUGHT
+negeig	M5_dq_uses_S0	2.50e+00	0.00e+00	0.00e+00	0.00e+00	0.00e+00	CAUGHT
+negeig	M6_rewalk_offby1	0.00e+00	4.19e+00	0.00e+00	0.00e+00	7.29e-01	CAUGHT
+negeig	M7_dv_no_beta	0.00e+00	0.00e+00	1.04e-01	0.00e+00	0.00e+00	CAUGHT
+negeig	M8_dh_wrong_sign	0.00e+00	4.68e-01	5.86e-02	1.26e-03	1.44e-01	CAUGHT
+#SUMMARY  accept 8/8 caught; real 7/8; negeig 7/8.
+#dg reference magnitude by regime: accept 1.750e-01, real 1.562e-03, negeig 3.195e-03.
+#M1 corrupts dg almost completely (relative error ~99%) yet lands under a flat 2e-2 absolute
+#threshold whenever the production gate collapses |dg| to ~1e-3. A per-gradient RELATIVE error
+#test is required; the repo has test_kda_householder_backward_relative_error, the mutation
+#harness does not use it.

@@ -1,0 +1,5 @@
+task	solvable	group_order	chance_pct	n	h_R1	h_R4	delta_h	ci_lo	ci_hi	sd	verdict	within_run_cv_pct	h_R1_over_train_max
+s5_words	NO	120	0.8333	8	40.51	120.3	79.77	63.95	95.59	18.92	SIG	4.856	1.013
+parity	yes	2	50	8	162.9	138.2	-24.64	-70.02	20.73	54.27	ns	18.3	4.071
+s3_words	yes	6	16.67	5	128.4	144.4	16.06	-20.33	52.45	29.31	ns	8.85	3.209
+s4_words	yes	24	4.167	5	159	157.9	-1.024	-24.24	22.2	18.7	ns	17.03	3.974

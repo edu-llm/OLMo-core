@@ -1,0 +1,34 @@
+scope	cell	n	mean_acc_pp	n_seeds_at_100	all_at_ceiling
+all_night	R1-parity-L3-len40	8	100.0000	8	True
+all_night	R1-parity-L3-len64	8	100.0000	8	True
+all_night	R1-parity-L3-len128	8	96.8109	1	False
+all_night	R1-s3_words-L3-len40	5	100.0000	5	True
+all_night	R1-s3_words-L3-len64	5	100.0000	5	True
+all_night	R1-s4_words-L3-len40	5	100.0000	5	True
+all_night	R1-s4_words-L3-len64	5	99.9365	3	False
+all_night	R2-parity-L3-len40	8	100.0000	8	True
+all_night	R2-parity-L3-len64	8	100.0000	8	True
+all_night	R2-s5_words-L3-len40	8	99.3701	1	False
+all_night	R4-parity-L3-len40	8	100.0000	8	True
+all_night	R4-parity-L3-len64	8	99.9969	7	False
+all_night	R4-s3_words-L3-len40	5	100.0000	5	True
+all_night	R4-s3_words-L3-len64	5	100.0000	5	True
+all_night	R4-s4_words-L3-len40	5	100.0000	5	True
+all_night	R4-s4_words-L3-len64	5	100.0000	5	True
+all_night	R4-s5_words-L1-len40	5	100.0000	5	True
+all_night	R4-s5_words-L1-len64	5	99.6094	1	False
+all_night	R4-s5_words-L2-len40	5	98.0859	4	False
+all_night	R4-s5_words-L2-len64	5	94.1211	3	False
+all_night	R4-s5_words-L3-len40	8	100.0000	8	True
+all_night	R4-s5_words-L3-len64	8	99.9634	7	False
+all_night	R4-s5_words-L4-len40	5	100.0000	5	True
+all_night	R4-s5_words-L4-len64	5	99.9609	3	False
+#--- zero-variance paired differences (sd == 0) across every test performed ---
+scope	test_id	n	mean_pp	sd	author_verdict	this_script_verdict
+F_parity_side	parity_R4vs1_len40	NA	NA	0.0	ns	ns_IDENTICAL
+F_solvability	parity_R4vs1_len40	NA	NA	0.0	ns	ns_IDENTICAL
+F_solvability	s3_words_R4vs1_len40	NA	NA	0.0	ns	ns_IDENTICAL
+F_solvability	s3_words_R4vs1_len64	NA	NA	0.0	ns	ns_IDENTICAL
+F_solvability	s4_words_R4vs1_len40	NA	NA	0.0	ns	ns_IDENTICAL
+F_kda_vs_gdn	parity_KDAvsGDN_len40	NA	NA	0.0	ns	ns_IDENTICAL
+F_backend	beq_len40	NA	NA	0.0	ns	ns_IDENTICAL

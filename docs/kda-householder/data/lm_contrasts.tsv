@@ -1,0 +1,28 @@
+contrast	isolates	endpoint	eval_len	n	seeds_used	paired_mean_diff	sd_of_diff	sem	ci95_lo	ci95_hi	t	df	p_two_sided	cohens_dz	verdict
+hh4-hh1	R + 37% capacity (CONFOUNDED)	degradation	4096	4	0,1,2,3	-0.001382	0.008089	0.004044	-0.014253	0.011489	-0.3417	3	0.755087	-0.1709	ns
+hh4-hh1	R + 37% capacity (CONFOUNDED)	degradation	8192	4	0,1,2,3	-0.002511	0.006036	0.003018	-0.012115	0.007094	-0.8319	3	0.466490	-0.4160	ns
+hh4-hh1	R + 37% capacity (CONFOUNDED)	degradation	16384	4	0,1,2,3	-0.000706	0.005901	0.002950	-0.010095	0.008684	-0.2392	3	0.826383	-0.1196	ns
+hh4-r1wide	R at matched capacity (THE REAL TEST)	degradation	4096	4	0,1,2,3	-0.000836	0.005046	0.002523	-0.008866	0.007194	-0.3312	3	0.762265	-0.1656	ns
+hh4-r1wide	R at matched capacity (THE REAL TEST)	degradation	8192	4	0,1,2,3	0.000396	0.008562	0.004281	-0.013228	0.014020	0.0925	3	0.932114	0.0463	ns
+hh4-r1wide	R at matched capacity (THE REAL TEST)	degradation	16384	4	0,1,2,3	0.000487	0.006304	0.003152	-0.009545	0.010518	0.1544	3	0.887102	0.0772	ns
+r1wide-hh1	capacity alone, no R	degradation	4096	4	0,1,2,3	-0.000546	0.005844	0.002922	-0.009845	0.008752	-0.1870	3	0.863600	-0.0935	ns
+r1wide-hh1	capacity alone, no R	degradation	8192	4	0,1,2,3	-0.002907	0.007528	0.003764	-0.014885	0.009071	-0.7723	3	0.496207	-0.3861	ns
+r1wide-hh1	capacity alone, no R	degradation	16384	4	0,1,2,3	-0.001192	0.006055	0.003027	-0.010827	0.008442	-0.3938	3	0.720026	-0.1969	ns
+hh4-hh1	R + 37% capacity (CONFOUNDED)	val_loss	2048	4	0,1,2,3	-0.017326	0.010509	0.005254	-0.034048	-0.000604	-3.2975	3	0.045820	-1.6487	SIG(high-arm-better)
+hh4-hh1	R + 37% capacity (CONFOUNDED)	val_loss	4096	4	0,1,2,3	-0.018708	0.005761	0.002881	-0.027876	-0.009540	-6.4943	3	0.007413	-3.2471	SIG(high-arm-better)
+hh4-hh1	R + 37% capacity (CONFOUNDED)	val_loss	8192	4	0,1,2,3	-0.019837	0.007411	0.003706	-0.031629	-0.008044	-5.3532	3	0.012752	-2.6766	SIG(high-arm-better)
+hh4-hh1	R + 37% capacity (CONFOUNDED)	val_loss	16384	4	0,1,2,3	-0.018032	0.006395	0.003197	-0.028207	-0.007856	-5.6395	3	0.011032	-2.8198	SIG(high-arm-better)
+hh4-r1wide	R at matched capacity (THE REAL TEST)	val_loss	2048	4	0,1,2,3	0.035710	0.009994	0.004997	0.019807	0.051613	7.1460	3	0.005643	3.5730	SIG(low-arm-better)
+hh4-r1wide	R at matched capacity (THE REAL TEST)	val_loss	4096	4	0,1,2,3	0.034874	0.014221	0.007110	0.012246	0.057502	4.9047	3	0.016225	2.4524	SIG(low-arm-better)
+hh4-r1wide	R at matched capacity (THE REAL TEST)	val_loss	8192	4	0,1,2,3	0.036106	0.017811	0.008905	0.007765	0.064447	4.0544	3	0.027034	2.0272	SIG(low-arm-better)
+hh4-r1wide	R at matched capacity (THE REAL TEST)	val_loss	16384	4	0,1,2,3	0.036196	0.014935	0.007468	0.012431	0.059962	4.8472	3	0.016756	2.4236	SIG(low-arm-better)
+r1wide-hh1	capacity alone, no R	val_loss	2048	4	0,1,2,3	-0.053036	0.013372	0.006686	-0.074313	-0.031758	-7.9325	3	0.004178	-3.9663	SIG(high-arm-better)
+r1wide-hh1	capacity alone, no R	val_loss	4096	4	0,1,2,3	-0.053582	0.010467	0.005234	-0.070237	-0.036927	-10.2383	3	0.001986	-5.1191	SIG(high-arm-better)
+r1wide-hh1	capacity alone, no R	val_loss	8192	4	0,1,2,3	-0.055942	0.013708	0.006854	-0.077755	-0.034130	-8.1620	3	0.003847	-4.0810	SIG(high-arm-better)
+r1wide-hh1	capacity alone, no R	val_loss	16384	4	0,1,2,3	-0.054228	0.012534	0.006267	-0.074172	-0.034284	-8.6530	3	0.003247	-4.3265	SIG(high-arm-better)
+hh4-hh1	R + 37% capacity (CONFOUNDED)	final_train_loss	2048	4	0,1,2,3	-0.021206	0.005735	0.002868	-0.030332	-0.012080	-7.3950	3	0.005114	-3.6975	SIG(high-arm-better)
+hh4-r1wide	R at matched capacity (THE REAL TEST)	final_train_loss	2048	4	0,1,2,3	0.037758	0.014338	0.007169	0.014943	0.060572	5.2669	3	0.013340	2.6334	SIG(low-arm-better)
+r1wide-hh1	capacity alone, no R	final_train_loss	2048	4	0,1,2,3	-0.058963	0.011301	0.005650	-0.076946	-0.040981	-10.4352	3	0.001878	-5.2176	SIG(high-arm-better)
+pooled	length effect, arms pooled	degradation_pooled_all_arms	4096	13	0,1,2,3,4,0,1,2,3,0,1,2,3	-0.039063	0.059941	0.016625	-0.075285	-0.002841	-2.3497	12	0.036732	-0.6517	SIG(high-arm-better)
+pooled	length effect, arms pooled	degradation_pooled_all_arms	8192	13	0,1,2,3,4,0,1,2,3,0,1,2,3	-0.028775	0.058765	0.016298	-0.064286	0.006737	-1.7655	12	0.102889	-0.4897	ns
+pooled	length effect, arms pooled	degradation_pooled_all_arms	16384	13	0,1,2,3,4,0,1,2,3,0,1,2,3	-0.039290	0.086971	0.024122	-0.091847	0.013266	-1.6289	12	0.129296	-0.4518	ns

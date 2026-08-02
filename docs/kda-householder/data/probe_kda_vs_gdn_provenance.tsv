@@ -1,0 +1,17 @@
+issue	mixer	task	seed	file_analyze8_actually_loads	n_params	intended_file	intended_n_params	same_architecture
+analyze8_key_collision	kda	s5_words	0	kda-s5_words-s0.json	1029324	kda-s5_words-s0.json	1029324	True
+analyze8_key_collision	kda	s5_words	1	p46-kda-s5_words-L3-s1.json	1029324	kda-s5_words-s1.json	1029324	True
+analyze8_key_collision	kda	s5_words	2	depth2-kda-s5_words-s2.json	696712	kda-s5_words-s2.json	1029324	False
+analyze8_key_collision	kda	s5_words	3	kda-s5_words-s3.json	1029324	kda-s5_words-s3.json	1029324	True
+analyze8_key_collision	kda	s5_words	4	kda-s5_words-s4.json	1029324	kda-s5_words-s4.json	1029324	True
+analyze8_key_collision	kda	s5_words	5	kda-s5_words-s5.json	1029324	kda-s5_words-s5.json	1029324	True
+analyze8_key_collision	kda	s5_words	6	kda-s5_words-s6.json	1029324	kda-s5_words-s6.json	1029324	True
+analyze8_key_collision	kda	s5_words	7	kda-s5_words-s7.json	1029324	kda-s5_words-s7.json	1029324	True
+#--- effect of the collision on the headline KDA-vs-GDN S5 number ---
+length	contaminated_kda_minus_gdn	clean_kda_minus_gdn	abs_shift
+40	5.0830	7.8418	2.7588
+64	4.2725	7.0984	2.8259
+128	2.0660	3.4607	1.3947
+256	1.3031	1.9859	0.6828
+512	0.5348	0.8785	0.3437
+#NOTE	the handoff's '+2.01pp' matches the CONTAMINATED len128 cell (2.066), not any clean aggregate; the clean len128 effect is +3.46pp and is SIG, not ns
