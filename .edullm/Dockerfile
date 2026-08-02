@@ -166,6 +166,69 @@ COPY . .
 # would prove the distribution installed, and `from edullm_data.read import dataset_paths`
 # proves the module a training run actually reaches for loads.
 #
+# THE TUTOR-LAYER STACK IS INSTALLED HERE BECAUSE THE RECIPE THAT NEEDS IT IMPORTS NOTHING
+# FROM olmo_core.
+#
+# The P7 tutor-layer work is a HuggingFace `Trainer` plus PEFT recipe that is registered
+# under this repository and therefore runs in this image, without sharing a line of code
+# with the project above it. Nothing installed so far can import `transformers` or `peft`,
+# and the recipe stays blocked until this image carries them.
+#
+# The tree is less foreign than the list looks. `transformers` is already an optional extra
+# this project declares at `>=5.4.0`, and `pyyaml` is already one of its hard dependencies,
+# so two of the thirteen names below pin something the project itself asked for rather than
+# introduce anything.
+#
+# Installed after everything else so that nothing later in the build re-resolves them, which
+# is the mirror of the argument for putting torch first.
+#
+# EVERY VERSION IS COPIED FROM p7/impl3/requirements.txt, WHICH RECORDS THE SET VALIDATED ON
+# ORCD ON 2026-07-29, and not one of them is resolved fresh here. Copying that set is what
+# makes a job in this image and a researcher reproducing the same work in their own
+# environment agree about what ran. The cost is that the two files now have to move
+# together, and a bump made in one place is a divergence nothing detects.
+#
+# That same file is why `torchao` appears nowhere below. It warns that an old `torchao`
+# breaks `peft.get_peft_model`, this image has never carried one, and the check further down
+# fails the build if some future dependency drags one in. The only known landmine here is
+# already absent, and asserting it is cheaper than rediscovering it.
+#
+# THE SEVEN EVAL PACKAGES ARE THE REASON THIS LIST IS NOT SHORTER, AND THEY EARNED THEIR
+# PLACE BY BREAKING SOMETHING QUIETLY. Training never reaches them, so an image without them
+# trains correctly and looks fine. Eval does reach them. On 2026-07-29 a run carrying
+# neither `sentencepiece` nor `tiktoken` could not rebuild a tokenizer from a saved
+# checkpoint directory, failed every eval point for that reason, produced an empty eval
+# stage, and reported COMPLETED. A job that fails is a job somebody fixes; a job that
+# succeeds and produced nothing is a result somebody believes.
+#
+# The rest of the seven serve the same stage. `matplotlib` and `scipy` draw and smooth the
+# KL-forgetting curve, `pillow` is what `matplotlib` and `wandb.Image` raster through, and
+# `langdetect` and `pyarrow` handle the general replay data when it needs a language filter
+# or arrives as a parquet shard. The last two are conditional in the recipe rather than
+# always used, and they are pinned here anyway, because a container cannot install a package
+# at the moment a run discovers it wanted one.
+#
+# THE VALIDATED SET WAS MEASURED AGAINST torch 2.5.1 WHILE THIS IMAGE PINS 2.9.0, AND NOBODY
+# HAS RUN THE TWO TOGETHER. p7/impl3 installs torch separately for ORCD's CUDA and lands on
+# 2.5.1; the pin above is 2.9.0 for reasons argued there that have nothing to do with this
+# recipe. These versions are expected to hold across that gap, and the assertions below
+# cover the failure this file can see from here, which is the resolver moving torch off its
+# pin or replacing the CUDA wheel with a CPU one. A version skew subtler than that surfaces
+# in a training run rather than in a build, and this paragraph is the warning that it can.
+#
+# THIS GIVES AN ECR SCAN MORE TO LOOK AT, AND THAT IS A COST THIS FILE CANNOT PAY BY ITSELF.
+# Thirteen more distributions are thirteen more sources of a reported finding, and a finding
+# that blocks a publish needs an entry in config/image-exceptions.yaml in edu-llm/platform.
+# That file lives in the other repository deliberately, because accepting a vulnerability in
+# a published image is the platform owner's decision rather than the decision of whoever
+# added a package to it.
+#
+# ONE DIVERGENCE FROM THE VALIDATED SET IS LEFT STANDING ON PURPOSE. p7/impl3 also pins
+# `numpy==2.4.6` and `wandb==0.28.1`, and this image resolves both freely, numpy as a torch
+# dependency and wandb through the extra above. Neither pin is added here, because pinning
+# numpy changes what torch itself runs against rather than adding something beside it, and
+# that is a larger decision than this one. Whoever reconciles the two sets starts there.
+#
 # THE LAST LINE IMPORTS SUBMODULES, AND THE SHALLOW VERSION OF IT ALREADY FAILED ONCE.
 #
 # It used to read `import olmo_core, boto3, wandb`, which passed on an image whose first
@@ -180,8 +243,16 @@ RUN set -eux; \
     python -m pip install --no-cache-dir "torch==2.9.0"; \
     python -m pip install --no-cache-dir ".[wandb]" boto3; \
     python -m pip install --no-cache-dir "edullm-data @ https://github.com/edu-llm/edullm-data/archive/38bf831a6c3f445e394784018441fd59288b876c.tar.gz"; \
+    python -m pip install --no-cache-dir \
+        "transformers==5.14.1" "datasets==5.0.1" "accelerate==1.14.0" "peft==0.20.0" \
+        "huggingface_hub==1.25.1" "pyyaml==6.0.3" \
+        "sentencepiece==0.2.0" "tiktoken==0.8.0" "matplotlib==3.11.1" "scipy==1.17.1" \
+        "langdetect==1.0.9" "pyarrow==25.0.0" "pillow==12.3.0"; \
     python -c "import torch; assert torch.__version__.startswith('2.9.0'), f'torch was moved off the pin: {torch.__version__}'"; \
     python -c "import torch; assert torch.version.cuda, 'the CUDA build of torch was replaced by a CPU wheel'"; \
+    python -c "import importlib.util; assert importlib.util.find_spec('torchao') is None, 'torchao was pulled in, and an old torchao breaks peft.get_peft_model'"; \
+    python -c "import yaml; from accelerate import Accelerator; from datasets import load_dataset; from huggingface_hub import snapshot_download; from peft import get_peft_model; from transformers import Trainer; print(Trainer.__module__, get_peft_model.__module__)"; \
+    python -c "import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot, pyarrow.parquet, sentencepiece, tiktoken; from langdetect import detect; from PIL import Image; from scipy.interpolate import PchipInterpolator; print(matplotlib.get_backend())"; \
     python -c "import boto3, wandb; from olmo_core.data import TokenizerConfig; from olmo_core.nn.transformer import TransformerConfig; print(TransformerConfig.olmo2_190M(vocab_size=TokenizerConfig.gpt2().padded_vocab_size()).__class__.__name__)"; \
     python -c "from edullm_data.read import dataset_paths, resolve_latest; print(dataset_paths.__module__)"
 
