@@ -30,7 +30,14 @@ from olmo_core.data.utils import get_labels
 
 from .cot import embed_tokens, run_continuous_thoughts
 
-__all__ = ["codi_loss", "vocab_manifold_reg", "VocabReg"]
+__all__ = [
+    "codi_loss",
+    "vocab_manifold_reg",
+    "explicit_cot_loss",
+    "no_cot_loss",
+    "arm_loss",
+    "VocabReg",
+]
 
 VocabReg = Literal["none", "R1", "R2", "L2"]
 
@@ -185,3 +192,71 @@ def codi_loss(
     n = len(examples)
     metrics = {key: value / n for key, value in totals.items()}
     return total_loss / n, metrics
+
+
+def _simple_ce(
+    model, examples: List[Dict[str, Any]], ids_key: str, mask_key: str, metric: str, ignore: int
+) -> Tuple[torch.Tensor, Dict[str, float]]:
+    """Mean cross-entropy over a per-example token view (used by the anchor arms)."""
+    device = model.device
+    total = torch.zeros((), device=device)
+    ce_sum = 0.0
+    for ex in examples:
+        ids = torch.tensor([ex[ids_key]], dtype=torch.long, device=device)
+        labels = _labels_for(model, ex[ids_key], ex[mask_key], ignore)
+        out = model(ids, labels=labels)
+        total = total + out.loss
+        ce_sum += float(out.ce_loss.detach())
+    n = len(examples)
+    return total / n, {metric: ce_sum / n}
+
+
+def explicit_cot_loss(
+    model, examples: List[Dict[str, Any]], *, label_ignore_index: int = -100
+) -> Tuple[torch.Tensor, Dict[str, float]]:
+    """A0 anchor: standard CE on the explicit-CoT teacher view."""
+    return _simple_ce(
+        model, examples, "teacher_input_ids", "teacher_label_mask", "ce_teacher", label_ignore_index
+    )
+
+
+def no_cot_loss(
+    model, examples: List[Dict[str, Any]], *, label_ignore_index: int = -100
+) -> Tuple[torch.Tensor, Dict[str, float]]:
+    """A1 anchor: standard CE on the direct (no-reasoning) view ``question <distill> answer``."""
+    return _simple_ce(
+        model, examples, "direct_input_ids", "direct_label_mask", "ce_answer", label_ignore_index
+    )
+
+
+def arm_loss(
+    model,
+    examples: List[Dict[str, Any]],
+    *,
+    mode: str,
+    distill_weight: float = 1.0,
+    vocab_reg: VocabReg = "none",
+    vocab_reg_weight: float = 0.0,
+    vocab_reg_entropy_floor: float = 0.0,
+    label_ignore_index: int = -100,
+) -> Tuple[torch.Tensor, Dict[str, float]]:
+    """
+    Dispatch to the loss for an experiment arm.
+
+    :param mode: ``"explicit_cot"`` (A0), ``"no_cot"`` (A1), or ``"codi"`` (A2–A4).
+    """
+    if mode == "explicit_cot":
+        return explicit_cot_loss(model, examples, label_ignore_index=label_ignore_index)
+    if mode == "no_cot":
+        return no_cot_loss(model, examples, label_ignore_index=label_ignore_index)
+    if mode == "codi":
+        return codi_loss(
+            model,
+            examples,
+            distill_weight=distill_weight,
+            vocab_reg=vocab_reg,
+            vocab_reg_weight=vocab_reg_weight,
+            vocab_reg_entropy_floor=vocab_reg_entropy_floor,
+            label_ignore_index=label_ignore_index,
+        )
+    raise ValueError(f"unknown arm mode: {mode!r} (expected explicit_cot | no_cot | codi)")

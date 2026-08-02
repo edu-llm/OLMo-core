@@ -78,8 +78,14 @@ def encode_example(ex: Example, num_continuous_thoughts: int) -> Dict[str, Any]:
     student_bot_pos = len(q)
     student_distill_pos = len(q) + 1 + k + 1  # after <bot>, K thoughts, <eot>
 
+    # Direct (no-CoT) view: question <distill> answer — the lower-anchor baseline (A1).
+    direct_input_ids = q + [DISTILL] + ans
+    direct_label_mask = [False] * len(q) + [False] + [True] * len(ans)
+    direct_distill_pos = len(q)
+
     assert len(teacher_input_ids) == len(teacher_label_mask)
     assert len(student_input_ids) == len(student_label_mask)
+    assert len(direct_input_ids) == len(direct_label_mask)
 
     return {
         "input_ids": student_input_ids,
@@ -90,6 +96,9 @@ def encode_example(ex: Example, num_continuous_thoughts: int) -> Dict[str, Any]:
         "distill_pos": student_distill_pos,
         "teacher_bot_pos": teacher_bot_pos,
         "teacher_distill_pos": teacher_distill_pos,
+        "direct_input_ids": direct_input_ids,
+        "direct_label_mask": direct_label_mask,
+        "direct_distill_pos": direct_distill_pos,
         "num_continuous_thoughts": k,
         "answer_len": len(ans),
         # metadata for evaluation / probing (not consumed by the model)

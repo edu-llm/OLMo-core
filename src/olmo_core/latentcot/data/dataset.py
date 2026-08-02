@@ -19,7 +19,7 @@ from ..tokens import TOKENIZER_CONFIG
 from .encode import encode_example
 from .graph_gen import Example
 
-__all__ = ["LatentCotDataset", "collate"]
+__all__ = ["LatentCotDataset", "collate", "codi_collate"]
 
 
 class LatentCotDataset(Dataset):
@@ -39,6 +39,15 @@ class LatentCotDataset(Dataset):
 
     def __getitem__(self, index: int) -> Dict[str, Any]:
         return encode_example(self.examples[index], self.num_continuous_thoughts)
+
+
+def codi_collate(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Collate for the CODI/arm train module: return the per-example dicts as a list under
+    ``"examples"``. The continuous-thought student is processed per example, so no padded
+    tensor batch is built here (see :mod:`olmo_core.latentcot.loss`).
+    """
+    return {"examples": list(items)}
 
 
 def _pad(seqs: List[List[int]], value: int, dtype: torch.dtype) -> torch.Tensor:

@@ -25,7 +25,7 @@ from olmo_core.train.train_module import (
     TransformerTrainModuleConfig,
 )
 
-from .loss import codi_loss
+from .loss import arm_loss
 
 __all__ = ["CodiTransformerTrainModule", "CodiTransformerTrainModuleConfig"]
 
@@ -36,7 +36,8 @@ class CodiTransformerTrainModule(TransformerTrainModule):
     def __init__(
         self,
         *,
-        num_continuous_thoughts: int,
+        arm_mode: str = "codi",
+        num_continuous_thoughts: int = 8,
         distill_weight: float = 1.0,
         vocab_reg: str = "none",
         vocab_reg_weight: float = 0.0,
@@ -44,6 +45,7 @@ class CodiTransformerTrainModule(TransformerTrainModule):
         **kwargs,
     ):
         super().__init__(**kwargs)
+        self.arm_mode = arm_mode
         self.num_continuous_thoughts = num_continuous_thoughts
         self.distill_weight = distill_weight
         self.vocab_reg = vocab_reg
@@ -51,12 +53,13 @@ class CodiTransformerTrainModule(TransformerTrainModule):
         self.vocab_reg_entropy_floor = vocab_reg_entropy_floor
 
     def train_batch(self, batch: Dict[str, Any], dry_run: bool = False) -> None:
-        """Compute + backprop the CODI loss for a batch of encoded examples."""
+        """Compute + backprop the arm's loss for a batch of encoded examples."""
         examples = batch["examples"]
         with self._train_microbatch_context(0, 1), self._model_forward_context():
-            loss, metrics = codi_loss(
+            loss, metrics = arm_loss(
                 self.model,
                 examples,
+                mode=self.arm_mode,
                 distill_weight=self.distill_weight,
                 vocab_reg=self.vocab_reg,
                 vocab_reg_weight=self.vocab_reg_weight,
@@ -68,15 +71,13 @@ class CodiTransformerTrainModule(TransformerTrainModule):
         if dry_run:
             return
 
-        self.record_ce_loss(
-            torch.tensor(metrics["ce_student"], device=self.device), ReduceType.mean
-        )
-        for name in ("ce_teacher", "distill", "vocab_reg"):
+        # Primary CE (for the SkipStepOptimizer): student for CODI, else the anchor's CE.
+        primary = metrics.get("ce_student") or metrics.get("ce_teacher") or metrics.get("ce_answer")
+        if primary is not None:
+            self.record_ce_loss(torch.tensor(primary, device=self.device), ReduceType.mean)
+        for name, value in metrics.items():
             self.record_metric(
-                name,
-                torch.tensor(metrics[name], device=self.device),
-                ReduceType.mean,
-                namespace="train",
+                name, torch.tensor(value, device=self.device), ReduceType.mean, namespace="train"
             )
 
 
@@ -84,6 +85,7 @@ class CodiTransformerTrainModule(TransformerTrainModule):
 class CodiTransformerTrainModuleConfig(TransformerTrainModuleConfig):
     """Config for :class:`CodiTransformerTrainModule` (adds the CODI hyperparameters)."""
 
+    arm_mode: str = "codi"  # one of: explicit_cot, no_cot, codi
     num_continuous_thoughts: int = 8
     distill_weight: float = 1.0
     vocab_reg: str = "none"  # one of: none, R1, R2, L2
