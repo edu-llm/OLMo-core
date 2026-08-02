@@ -50,8 +50,7 @@ EXPECTED_ARMS = [
             0.0009408595240176244,
         ],
     ),
-    ("mix07", [0.6, 0.16, 0.09, 0.06, 0.0406, 0.0394, 0.01]),
-    ("mix18", [0.2375, 0.0406, 0.0406, 0.425, 0.1, 0.0437, 0.1125]),
+    ("mix01", [0.375, 0.25, 0.1406, 0.0938, 0.0635, 0.0615, 0.0156]),
     (
         "ML-pilot_caps",
         [
@@ -65,18 +64,6 @@ EXPECTED_ARMS = [
         ],
     ),
     (
-        "ML-near-opt-4",
-        [
-            0.4402420723961225,
-            0.011898187849676986,
-            0.011898187849676986,
-            0.0426758091734663,
-            0.1813875548299026,
-            0.011898187849676986,
-            0.3,
-        ],
-    ),
-    (
         "LGB-min1pct",
         [
             0.5528505096102141,
@@ -86,18 +73,6 @@ EXPECTED_ARMS = [
             0.041786239404329344,
             0.013571059505826967,
             0.01113463256808213,
-        ],
-    ),
-    (
-        "LGB-near-opt-8",
-        [
-            0.1815026687610594,
-            0.18152022799030812,
-            0.07612101791112263,
-            0.3774107813752986,
-            0.019706663260932462,
-            0.03721258967688889,
-            0.12652605102438982,
         ],
     ),
 ]
@@ -133,7 +108,7 @@ def _config(index: int, *, length_tokens: int | None = None):
     )
 
 
-def test_recipe_has_all_seven_exact_arms_and_excludes_mix01() -> None:
+def test_recipe_has_exact_approved_four_arms() -> None:
     payload = json.loads((EDULLM_DIR / "mixlaw_recipe.json").read_text(encoding="utf-8"))
     assert payload["data_source"] == {
         "dataset_id": "pretrain/olmo-127b",
@@ -142,12 +117,12 @@ def test_recipe_has_all_seven_exact_arms_and_excludes_mix01() -> None:
     }
     assert payload["budget_tokens"] == 10_000_000_000
     assert [(arm.name, list(arm.weights)) for arm in mixlaw.ARMS] == EXPECTED_ARMS
-    assert [arm.mixture_id for arm in mixlaw.ARMS] == [0, 7, 18, 25, 26, 27, 28]
-    assert "mix01" not in {arm.name for arm in mixlaw.ARMS}
+    assert [arm.index for arm in mixlaw.ARMS] == list(range(4))
+    assert [arm.mixture_id for arm in mixlaw.ARMS] == [0, 1, 25, 27]
 
 
 def test_only_source_target_ratios_differ_across_arm_configs() -> None:
-    configs = [_config(index).as_config_dict() for index in range(7)]
+    configs = [_config(index).as_config_dict() for index in range(4)]
     observed = []
     normalized = []
     for config in configs:
@@ -212,7 +187,7 @@ def test_standard_source_mixture_and_recipe_wide_repetition_bounds() -> None:
             save_folder="s3://outputs/checkpoints/",
             environ=_environment(),
         )
-        for index in range(7)
+        for index in range(4)
     ]
     for config in configs:
         src_mix = config.dataset.source_mixture_config
@@ -346,10 +321,10 @@ def test_every_checkpoint_is_evaluated_but_only_final_checkpoint_is_uploaded(
 ) -> None:
     events: list[tuple[str, int]] = []
     callback = wandb_policy.MixLawWandBEvalCallback(
-        arm="mix07",
+        arm="mix01",
         total_steps=250,
         save_folder=str(tmp_path / "checkpoints"),
-        run_name="unit-mix07",
+        run_name="unit-mix01",
         work_dir=tmp_path / "eval-work",
         eval_script=tmp_path / "eval.py",
         interval=125,
@@ -392,14 +367,14 @@ def test_benchmark_is_exactly_100_steps_and_invalid_lengths_are_refused() -> Non
     with pytest.raises(SystemExit):
         mixlaw.parser().parse_args(["--arm-index", "1", "--length-tokens", "419430401"])
     with pytest.raises(SystemExit):
-        mixlaw.parser().parse_args(["--arm-index", "7"])
+        mixlaw.parser().parse_args(["--arm-index", "4"])
 
 
 def test_torchrun_uses_exactly_eight_ranks() -> None:
-    command = mixlaw.torchrun_command(6, None)
+    command = mixlaw.torchrun_command(3, None)
     assert command[1:4] == ["-m", "torch.distributed.run", "--standalone"]
     assert "--nproc-per-node=8" in command
-    assert command[-2:] == ["--arm-index", "6"]
+    assert command[-2:] == ["--arm-index", "3"]
 
 
 def test_worker_wandb_name_includes_selected_mixture(monkeypatch) -> None:
@@ -411,8 +386,8 @@ def test_worker_wandb_name_includes_selected_mixture(monkeypatch) -> None:
         "run_training",
         lambda config: seen.update(name=mixlaw.os.environ["WANDB_NAME"], config=config),
     )
-    assert mixlaw.main(["--train-worker", "--arm-index", "4"], resolver=_sources) == 0
-    assert seen["name"] == "run-123-ML-near-opt-4"
+    assert mixlaw.main(["--train-worker", "--arm-index", "2"], resolver=_sources) == 0
+    assert seen["name"] == "run-123-ML-pilot_caps"
     assert seen["config"].trainer.callbacks["wandb"].name == seen["name"]
     assert seen["config"].trainer.callbacks["wandb"].project == "mixlaw"
     assert seen["config"].trainer.callbacks["wandb"].group == "mixlaw-validation"
