@@ -1286,6 +1286,91 @@ class TransformerConfig(ModelConfig):
         )
 
     @classmethod
+    def smollm2_135M(cls, vocab_size: int, **kwargs) -> "TransformerConfig":
+        """
+        The 135M `SmolLM2 <https://huggingface.co/HuggingFaceTB/SmolLM2-135M>`_ architecture
+        (``HuggingFaceTB/SmolLM2-135M``), used by Co-LMLM (arXiv:2607.07707).
+
+        SmolLM2 is a Llama-style decoder: RMSNorm, SwiGLU (SiLU) MLP, RoPE, grouped-query
+        attention, no biases, and tied input/output embeddings. This reproduces the
+        architecture exactly (~134.5M params at ``vocab_size=49152``); the vocab is passed in
+        so the same architecture can be trained with whatever tokenizer the corpus uses.
+        """
+        return cls.llama_like(
+            d_model=576,
+            vocab_size=vocab_size,
+            n_layers=kwargs.pop("n_layers", 30),
+            n_heads=kwargs.pop("n_heads", 9),
+            n_kv_heads=kwargs.pop("n_kv_heads", 3),
+            head_dim=kwargs.pop("head_dim", 64),
+            rope_theta=kwargs.pop("rope_theta", 100_000),
+            rope_full_precision=kwargs.pop("rope_full_precision", True),
+            layer_norm_eps=1e-5,
+            feed_forward=FeedForwardConfig(
+                hidden_size=1536, bias=False, dtype=kwargs.get("dtype", DType.float32)
+            ),
+            tie_word_embeddings=kwargs.pop("tie_word_embeddings", True),
+            init_std=kwargs.pop("init_std", 0.041666666666666664),
+            **kwargs,
+        )
+
+    @classmethod
+    def smollm2_360M(cls, vocab_size: int, **kwargs) -> "TransformerConfig":
+        """
+        The 360M `SmolLM2 <https://huggingface.co/HuggingFaceTB/SmolLM2-360M>`_ architecture
+        (``HuggingFaceTB/SmolLM2-360M``), used by Co-LMLM (arXiv:2607.07707).
+
+        Same Llama-style design as :meth:`smollm2_135M` (RMSNorm, SwiGLU, RoPE, GQA, no
+        biases, tied embeddings). Reproduces the architecture exactly (~361.8M params at
+        ``vocab_size=49152``).
+        """
+        return cls.llama_like(
+            d_model=960,
+            vocab_size=vocab_size,
+            n_layers=kwargs.pop("n_layers", 32),
+            n_heads=kwargs.pop("n_heads", 15),
+            n_kv_heads=kwargs.pop("n_kv_heads", 5),
+            head_dim=kwargs.pop("head_dim", 64),
+            rope_theta=kwargs.pop("rope_theta", 100_000),
+            rope_full_precision=kwargs.pop("rope_full_precision", True),
+            layer_norm_eps=1e-5,
+            feed_forward=FeedForwardConfig(
+                hidden_size=2560, bias=False, dtype=kwargs.get("dtype", DType.float32)
+            ),
+            tie_word_embeddings=kwargs.pop("tie_word_embeddings", True),
+            init_std=kwargs.pop("init_std", 0.02),
+            **kwargs,
+        )
+
+    @classmethod
+    def smollm2_1_7B(cls, vocab_size: int, **kwargs) -> "TransformerConfig":
+        """
+        The 1.7B `SmolLM2 <https://huggingface.co/HuggingFaceTB/SmolLM2-1.7B>`_ architecture
+        (``HuggingFaceTB/SmolLM2-1.7B``).
+
+        Same Llama-style design as :meth:`smollm2_135M`, but with full multi-head attention
+        (``n_kv_heads == n_heads``) and a larger RoPE base. Reproduces the architecture exactly
+        (~1.71B params at ``vocab_size=49152``).
+        """
+        return cls.llama_like(
+            d_model=2048,
+            vocab_size=vocab_size,
+            n_layers=kwargs.pop("n_layers", 24),
+            n_heads=kwargs.pop("n_heads", 32),
+            n_kv_heads=kwargs.pop("n_kv_heads", 32),
+            head_dim=kwargs.pop("head_dim", 64),
+            rope_theta=kwargs.pop("rope_theta", 130_000),
+            rope_full_precision=kwargs.pop("rope_full_precision", True),
+            layer_norm_eps=1e-5,
+            feed_forward=FeedForwardConfig(
+                hidden_size=8192, bias=False, dtype=kwargs.get("dtype", DType.float32)
+            ),
+            tie_word_embeddings=kwargs.pop("tie_word_embeddings", True),
+            init_std=kwargs.pop("init_std", 0.02),
+            **kwargs,
+        )
+
+    @classmethod
     def gemma3_1B(cls, vocab_size: int = 262208, **kwargs) -> "TransformerConfig":
         """
         Gemma 3 1B model config.
