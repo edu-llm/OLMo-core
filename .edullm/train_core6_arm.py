@@ -57,6 +57,7 @@ import argparse
 import contextlib
 import copy
 import enum
+import glob
 import json
 import logging
 import os
@@ -687,7 +688,102 @@ class LossWatcher(Callback):
         self.last = float(loss)
 
 
-def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> None:
+#: Gap bands, and the bit each one occupies in the frozen mask files. Must match
+#: build_slice_masks.py exactly -- the masks are written once and are read here as bytes.
+BAND_BIT = {0: 1, 32: 2, 256: 4, 1024: 8, 4096: 16}
+
+#: Rows of logits to upcast at a time. At vocab 100,352 a single 4096-token sequence's logits
+#: are 0.77 GiB in bf16 and 1.53 GiB upcast, so a whole-batch `.float()` allocates several GiB
+#: in one block and OOM'd a 44 GiB card during development. Chunking makes the loss memory
+#: independent of batch size; verified bitwise-identical to F.cross_entropy in value AND
+#: gradient before it was adopted.
+CE_CHUNK = 4096
+
+
+def _chunked_ce(logits, targets):
+    """Per-token cross-entropy without materialising the full fp32 logit tensor."""
+    out = []
+    for i in range(0, targets.numel(), CE_CHUNK):
+        out.append(
+            torch.nn.functional.cross_entropy(
+                logits[i : i + CE_CHUNK].float(), targets[i : i + CE_CHUNK], reduction="none"
+            )
+        )
+    return torch.cat(out)
+
+
+@torch.no_grad()
+def evaluate_sliced(*, model, vocab_size, val_paths, mask_paths, seq_len, micro=2):
+    """Aggregate and per-band AR-sliced CE over a fixed validation set.
+
+    This is the number the experiment is actually for. Training alone produces a loss curve;
+    the contrasts that answer the question -- D = CE(a=4) - CE(a=6), and the seed noise s --
+    are differences of *this* quantity between arms, computed on a byte-identical token set.
+
+    Returns sums and counts rather than means, so that arms can be differenced without a
+    re-weighting error, and so an unequal token count between arms is visible rather than
+    silently invalidating the pairing.
+
+    The mask indexes the CONTINUATION token, so it aligns with the targets and is offset by
+    one from the inputs. An off-by-one here scores the wrong positions and still produces
+    plausible numbers.
+    """
+    import numpy as np
+
+    model.eval()
+    agg_sum, agg_n = 0.0, 0
+    band_sum = {b: 0.0 for b in BAND_BIT}
+    band_n = {b: 0 for b in BAND_BIT}
+
+    for vp, mp in zip(val_paths, mask_paths):
+        tokens = np.memmap(vp, dtype=np.uint32, mode="r")
+        mask = np.memmap(mp, dtype=np.uint8, mode="r")
+        if tokens.size != mask.size:
+            raise Refusal(
+                Stage.THE_CONFIG_WOULD_NOT_BUILD,
+                f"mask/shard length mismatch for {vp}: {mask.size} vs {tokens.size}",
+            )
+        windows = (tokens.size - 1) // seq_len
+        for start in range(0, windows, micro):
+            count = min(micro, windows - start)
+            xs, ys, ms = [], [], []
+            for w in range(start, start + count):
+                off = w * seq_len
+                seg = np.asarray(tokens[off : off + seq_len + 1], dtype=np.int64)
+                xs.append(seg[:-1])
+                ys.append(seg[1:])
+                ms.append(np.asarray(mask[off + 1 : off + seq_len + 1], dtype=np.uint8))
+            x = torch.from_numpy(np.stack(xs)).cuda()
+            y = torch.from_numpy(np.stack(ys)).cuda()
+            m = torch.from_numpy(np.stack(ms)).cuda()
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                out = model(x)
+                logits = out.logits if hasattr(out, "logits") else out
+            ce = _chunked_ce(logits.reshape(-1, vocab_size), y.reshape(-1))
+            agg_sum += float(ce.sum())
+            agg_n += ce.numel()
+            flat = m.reshape(-1)
+            for band, bit in BAND_BIT.items():
+                selected = (flat & bit) != 0
+                if selected.any():
+                    band_sum[band] += float(ce[selected].sum())
+                    band_n[band] += int(selected.sum())
+
+    model.train()
+    return {
+        "aggregate": {"sum": agg_sum, "n": agg_n, "ce": agg_sum / max(agg_n, 1)},
+        "bands": {
+            str(b): {
+                "sum": band_sum[b],
+                "n": band_n[b],
+                "ce": band_sum[b] / max(band_n[b], 1),
+            }
+            for b in BAND_BIT
+        },
+    }
+
+
+def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float, sliced=None) -> None:
     """Print what only this process can report, as one JSON object on stdout.
 
     The platform reads this back out of the log stream: the device torch actually got, the
@@ -719,6 +815,15 @@ def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> 
                 "checkpoint_uri": opts.save_folder,
                 "wandb_project": os.environ.get("EDULLM_WANDB_PROJECT", ""),
                 "wandb_url": losses.wandb_url,
+                # The arm and its realized token count belong in the machine-readable record,
+                # not only in the log prose: a difference between two arms is only a paired
+                # difference if both trained on the same number of tokens, and that is checked
+                # by comparing these fields rather than by trusting the two commands matched.
+                "arm": opts.arm,
+                "tokens_trained": trainer.global_step * opts.global_batch_size,
+                # null when no slice directories were passed, which is how a training-only run
+                # says so explicitly rather than by omission.
+                "sliced_eval": sliced,
             },
             indent=2,
         ),
@@ -767,13 +872,66 @@ def train(config, opts=None) -> None:
     trainer.maybe_load_checkpoint()
     started = time.monotonic()
     trainer.fit()
+    elapsed = time.monotonic() - started
+
+    # The sliced evaluation, on rank zero only. Everything the experiment is for is a
+    # difference of these numbers between arms, so a run that trained and did not evaluate
+    # produces a checkpoint nobody can use to answer the question. Wrapped because a failure
+    # here must not discard four hours of training: the checkpoint is already on S3 and the
+    # eval can be redone from it, so this warns and continues rather than raising.
+    sliced = None
+    if opts is not None and opts.slice_val_dir and get_rank() == 0:
+        try:
+            val_paths = sorted(glob.glob(os.path.join(opts.slice_val_dir, "*.u32le.bin")))
+            mask_paths = [
+                os.path.join(
+                    opts.slice_mask_dir,
+                    os.path.basename(p).replace(".u32le.bin", ".mask.u8"),
+                )
+                for p in val_paths
+            ]
+            missing = [p for p in mask_paths if not os.path.exists(p)]
+            if not val_paths:
+                raise FileNotFoundError(f"no *.u32le.bin under {opts.slice_val_dir}")
+            if missing:
+                raise FileNotFoundError(f"{len(missing)} mask(s) missing, first {missing[0]}")
+            log.info("sliced eval over %d shard(s)", len(val_paths))
+            sliced = evaluate_sliced(
+                model=trainer.train_module.model,
+                vocab_size=config.model.vocab_size,
+                val_paths=val_paths,
+                mask_paths=mask_paths,
+                seq_len=opts.sequence_length,
+            )
+            log.info(
+                "aggregate CE %.4f over %s tokens",
+                sliced["aggregate"]["ce"],
+                f"{sliced['aggregate']['n']:,}",
+            )
+            for band in sorted(BAND_BIT):
+                entry = sliced["bands"][str(band)]
+                if entry["n"]:
+                    log.info(
+                        "  gap>%-5s CE %.4f over %s tokens",
+                        band,
+                        entry["ce"],
+                        f"{entry['n']:,}",
+                    )
+        except Exception as error:  # never lose a trained checkpoint to an eval bug
+            log.warning(
+                "sliced eval failed (%s: %s); checkpoint is still on S3",
+                type(error).__name__,
+                error,
+            )
+
     if opts is not None:
         summarise(
             opts=opts,
             config=config,
             trainer=trainer,
             losses=losses,
-            seconds=time.monotonic() - started,
+            seconds=elapsed,
+            sliced=sliced,
         )
 
 
@@ -801,6 +959,19 @@ def build_parser() -> argparse.ArgumentParser:
         default="L0",
         help="CORE-6 arm name from olmo_core.nn.transformer.core6_arms.ARMS "
         "(L0, K2, G4R0, G4R2, G2R0, S14, G0R0). Replaces --model-factory.",
+    )
+    parser.add_argument(
+        "--slice-val-dir",
+        default=os.environ.get("EDULLM_SLICE_VAL_DIR", ""),
+        help="Directory of *.u32le.bin validation shards for the sliced evaluation. Empty "
+        "skips the eval and the run produces a checkpoint only.",
+    )
+    parser.add_argument(
+        "--slice-mask-dir",
+        default=os.environ.get("EDULLM_SLICE_MASK_DIR", ""),
+        help="Directory of matching *.mask.u8 files from build_slice_masks.py. These are "
+        "frozen and must be byte-identical across every arm and seed, or the per-token "
+        "difference the endpoint rests on is not paired.",
     )
     parser.add_argument("--sequence-length", type=int, default=2048)
     parser.add_argument("--steps", type=int, default=200)
