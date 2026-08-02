@@ -1,4 +1,4 @@
-"""Immutable scientific identities for the complete 370M arm family."""
+"""Immutable scientific identities for the approved 370M arms."""
 
 from __future__ import annotations
 
@@ -6,21 +6,15 @@ from dataclasses import dataclass
 from typing import Literal, Optional
 
 Method = Literal[
-    "full",
-    "random",
     "rho_excess",
     "rel_ema",
     "middle_ppl",
-    "learnability",
     "attention_topk",
     "blade",
 ]
 
 REGMIX = "pretrain/regmix-10b"
 REFHQ = "pretrain/refhq-regmix-5p5b"
-MIDDLE_DOC = "pretrain/middle-ppl-doc-mid60"
-LEARNABILITY_DOC = "pretrain/learnability-doc-top60"
-REFHQ_STEP_250 = "s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-5p5b/checkpoints/step250/"
 REFHQ_STEP_1315 = "s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-5p5b/checkpoints/step1315/"
 REFHQ_LATE_STEPS = (1000, 1125, 1315)
 
@@ -47,11 +41,10 @@ class ArmSpec:
 
     @property
     def is_online_selection(self) -> bool:
-        return self.method not in {"full"}
+        return True
 
 
 ARM_SPECS: dict[str, ArmSpec] = {
-    "control": ArmSpec("control", "random", REGMIX, "control-regmix10b-v2", keep_fraction=0.6),
     "rho-1": ArmSpec(
         "rho-1",
         "rho_excess",
@@ -69,16 +62,6 @@ ARM_SPECS: dict[str, ArmSpec] = {
         ema_seed="zero",
         ema_tau=300.0,
     ),
-    "rel-ema-refhq": ArmSpec(
-        "rel-ema-refhq",
-        "rel_ema",
-        REGMIX,
-        "rel-ema-refhq-10b-scratch-v1",
-        keep_fraction=0.6,
-        reference_contract=REFHQ_STEP_1315,
-        ema_seed="refhq",
-        ema_alpha=0.9985,
-    ),
     "middle-ppl-token": ArmSpec(
         "middle-ppl-token",
         "middle_ppl",
@@ -87,40 +70,12 @@ ARM_SPECS: dict[str, ArmSpec] = {
         keep_fraction=0.6,
         late_reference_contract=f"average RefHQ steps {REFHQ_LATE_STEPS}",
     ),
-    "middle-ppl-doc": ArmSpec(
-        "middle-ppl-doc",
-        "full",
-        MIDDLE_DOC,
-        "edullm-370M-middle-ppl-doc-ladder125-v1",
-    ),
-    "learnability-token": ArmSpec(
-        "learnability-token",
-        "learnability",
-        REGMIX,
-        "learnability-token-10b-scratch-v1",
-        keep_fraction=0.6,
-        early_reference_contract=REFHQ_STEP_250,
-        late_reference_contract=f"average RefHQ steps {REFHQ_LATE_STEPS}",
-    ),
-    "learnability-doc": ArmSpec(
-        "learnability-doc",
-        "full",
-        LEARNABILITY_DOC,
-        "edullm-370M-learnability-doc-10b",
-    ),
     "attention": ArmSpec(
         "attention",
         "attention_topk",
         REGMIX,
         "attention-topk-10b-scratch-v1",
         keep_fraction=0.6,
-    ),
-    "reference": ArmSpec(
-        "reference",
-        "full",
-        REFHQ,
-        "edullm-370M-refhq-5p5b",
-        max_tokens=None,
     ),
     "blade": ArmSpec(
         "blade",

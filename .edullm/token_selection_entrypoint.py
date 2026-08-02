@@ -15,7 +15,7 @@ if str(EDULLM_DIR) not in sys.path:
 
 from production_contract.checkpoint import assert_resume_fingerprint  # noqa: E402
 from production_contract.wandb_artifacts import restore_checkpoint_artifact  # noqa: E402
-from token_selection_370m.arms import REFHQ, get_arm  # noqa: E402
+from token_selection_370m.arms import ARM_SPECS, REFHQ, get_arm  # noqa: E402
 from token_selection_370m.recipe import (  # noqa: E402
     build_trainer,
     immutable_corpus_binding,
@@ -41,7 +41,7 @@ def resolve_corpus(**kwargs):
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser()
-    result.add_argument("--arm", required=True)
+    result.add_argument("--arm", choices=tuple(ARM_SPECS), required=True)
     result.add_argument("--resume", action="store_true")
     result.add_argument("--local", action="store_true", help="Allow offline/local W&B behavior")
     result.add_argument("--dry-run", action="store_true")

@@ -8,16 +8,10 @@
   "output_contract": "runtime-scratch+wandb",
   "task_loss_contract": "20-label-rc-5shot-bpb-synchronous",
   "arms": {
-    "control": {"dataset_release": "pretrain/regmix-10b", "wandb_project": "token-selection-control"},
     "rho-1": {"dataset_release": "pretrain/regmix-10b", "wandb_project": "token-selection-rho-1"},
     "rel-ema-exp": {"dataset_release": "pretrain/regmix-10b", "wandb_project": "token-selection-rel-ema-exp"},
-    "rel-ema-refhq": {"dataset_release": "pretrain/regmix-10b", "wandb_project": "token-selection-rel-ema-refhq"},
     "middle-ppl-token": {"dataset_release": "pretrain/regmix-10b", "wandb_project": "token-selection-middle-ppl-token"},
-    "middle-ppl-doc": {"dataset_release": "pretrain/middle-ppl-doc-mid60", "wandb_project": "token-selection-middle-ppl-doc"},
-    "learnability-token": {"dataset_release": "pretrain/regmix-10b", "wandb_project": "token-selection-learnability-token"},
-    "learnability-doc": {"dataset_release": "pretrain/learnability-doc-top60", "wandb_project": "token-selection-learnability-doc"},
     "attention": {"dataset_release": "pretrain/regmix-10b", "wandb_project": "token-selection-attention"},
-    "reference": {"dataset_release": "pretrain/refhq-regmix-5p5b", "wandb_project": "token-selection-reference"},
     "blade": {
       "dataset_release": "pretrain/regmix-10b",
       "secondary_dataset_release": "pretrain/refhq-regmix-5p5b",
