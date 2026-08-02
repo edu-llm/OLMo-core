@@ -185,7 +185,7 @@ RUN set -eux; \
     python -c "import torch; assert torch.version.cuda, 'the CUDA build of torch was replaced by a CPU wheel'"; \
     python -c "import boto3, wandb; from olmo_core.data import TokenizerConfig; from olmo_core.nn.transformer import TransformerConfig; print(TransformerConfig.olmo2_190M(vocab_size=TokenizerConfig.gpt2().padded_vocab_size()).__class__.__name__)"; \
     python -c "from edullm_data.read import dataset_paths, resolve_latest; print(dataset_paths.__module__)"; \
-    python -c "from token_selection_370m import ARM_SPECS; assert len(ARM_SPECS) == 11"; \
+    python -c "from token_selection_370m import ARM_SPECS; assert tuple(ARM_SPECS) == ('rho-1', 'rel-ema-exp', 'middle-ppl-token', 'attention', 'blade')"; \
     python -m py_compile .edullm/eval_task_loss_olmo_core.py; \
     python .edullm/eval_task_loss_olmo_core.py --help
 

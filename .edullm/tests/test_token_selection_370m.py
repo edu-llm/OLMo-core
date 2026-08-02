@@ -17,8 +17,7 @@ if str(EDULLM_ROOT) not in sys.path:
 
 from token_selection_370m.arms import (  # noqa: E402
     ARM_SPECS,
-    LEARNABILITY_DOC,
-    MIDDLE_DOC,
+    REFHQ,
     REFHQ_LATE_STEPS,
 )
 from token_selection_370m.blade import (  # noqa: E402
@@ -50,25 +49,17 @@ from token_selection_370m.selection import (  # noqa: E402
 )
 
 
-def test_complete_arm_family_and_wandb_routing() -> None:
+def test_exact_approved_arm_family_and_wandb_routing() -> None:
     assert tuple(
         (name, spec.method, spec.dataset_id, spec.keep_fraction) for name, spec in ARM_SPECS.items()
     ) == (
-        ("control", "random", "pretrain/regmix-10b", 0.6),
         ("rho-1", "rho_excess", "pretrain/regmix-10b", 0.6),
         ("rel-ema-exp", "rel_ema", "pretrain/regmix-10b", 0.6),
-        ("rel-ema-refhq", "rel_ema", "pretrain/regmix-10b", 0.6),
         ("middle-ppl-token", "middle_ppl", "pretrain/regmix-10b", 0.6),
-        ("middle-ppl-doc", "full", "pretrain/middle-ppl-doc-mid60", 1.0),
-        ("learnability-token", "learnability", "pretrain/regmix-10b", 0.6),
-        ("learnability-doc", "full", "pretrain/learnability-doc-top60", 1.0),
         ("attention", "attention_topk", "pretrain/regmix-10b", 0.6),
-        ("reference", "full", "pretrain/refhq-regmix-5p5b", 1.0),
         ("blade", "blade", "pretrain/regmix-10b", 0.6),
     )
     assert all(spec.wandb_project == f"token-selection-{name}" for name, spec in ARM_SPECS.items())
-    assert ARM_SPECS["middle-ppl-doc"].dataset_id == MIDDLE_DOC
-    assert ARM_SPECS["learnability-doc"].dataset_id == LEARNABILITY_DOC
     assert ARM_SPECS["middle-ppl-token"].late_reference_contract.endswith(str(REFHQ_LATE_STEPS))
 
 
@@ -314,7 +305,7 @@ def test_identity_pins_reference_provenance_and_fixture(tmp_path: Path) -> None:
     )
     assert set(fixture["arms"]) == set(ARM_SPECS)
     assert (
-        fixture["arms"]["blade"]["secondary_dataset_release"] == ARM_SPECS["reference"].dataset_id
+        fixture["arms"]["blade"]["secondary_dataset_release"] == REFHQ
     )
 
 
@@ -369,17 +360,12 @@ def test_production_recipe_statically_assembles_public_olmo_apis() -> None:
     assert 'checkpoint_kwargs["fixed_steps"]' in source
     assert "task_loss_nproc=PRODUCTION_WORLD_SIZE if production else None" in source
     assert PRODUCTION_WORLD_SIZE == 8
-    assert CUSTOM_LOSS_METHODS == {
-        "random",
+    assert {spec.method for spec in ARM_SPECS.values()} - CUSTOM_LOSS_METHODS == {"blade"}
+    assert CUSTOM_LOSS_METHODS >= {
         "rho_excess",
         "rel_ema",
         "middle_ppl",
-        "learnability",
         "attention_topk",
-    }
-    assert {spec.method for spec in ARM_SPECS.values()} - CUSTOM_LOSS_METHODS == {
-        "full",
-        "blade",
     }
 
 
@@ -394,7 +380,7 @@ def test_platform_entrypoint_is_locked_to_eight_gpu_torchrun() -> None:
     assert fixture["gpu_count"] == 8
     assert fixture["entrypoint"] == "bash .edullm/platform/entrypoint.sh"
     submission = json.loads(
-        (EDULLM_ROOT / "fixtures" / "token-selection-control-submission.json").read_text(
+        (EDULLM_ROOT / "fixtures" / "token-selection-attention-submission.json").read_text(
             encoding="utf-8"
         )
     )
@@ -402,21 +388,21 @@ def test_platform_entrypoint_is_locked_to_eight_gpu_torchrun() -> None:
     assert submission["compute_profile"] == "gpu-8xa100"
     assert submission["workload_profile"] == "olmo-core-train-4gpu"
     assert submission["dataset_release"] == "regmix-10b-v1"
-    assert submission["wandb_project"] == "token-selection-control"
+    assert submission["wandb_project"] == "token-selection-attention"
     assert "--nproc-per-node=8" in command
     assert "EDULLM_CHECKPOINT_CHECK=waived" in command
 
     benchmark = json.loads(
         (
-            EDULLM_ROOT / "fixtures" / "token-selection-control-benchmark-submission.json"
+            EDULLM_ROOT / "fixtures" / "token-selection-attention-benchmark-submission.json"
         ).read_text(encoding="utf-8")
     )
     benchmark_command = benchmark["command"][-1]
     assert benchmark["compute_profile"] == "gpu-8xa100"
     assert benchmark["maximum_attempts"] == 1
-    assert benchmark["wandb_project"] == "token-selection-control"
+    assert benchmark["wandb_project"] == "token-selection-attention"
     assert "--nproc-per-node=8" in benchmark_command
-    assert "--arm control" in benchmark_command
+    assert "--arm attention" in benchmark_command
     assert "--local" in benchmark_command
     assert "WANDB_MODE=disabled" in benchmark_command
     assert "WANDB_API_KEY" not in benchmark_command
@@ -476,7 +462,7 @@ def test_entrypoint_builds_and_fits_production_trainer(
             events.append("fit")
 
     def fake_build(*args, **kwargs):
-        assert args[0] is ARM_SPECS["control"]
+        assert args[0] is ARM_SPECS["attention"]
         assert kwargs["production"] is True
         assert kwargs["resume"] is False
         events.append("build")
@@ -502,7 +488,7 @@ def test_entrypoint_builds_and_fits_production_trainer(
         [
             "token_selection_entrypoint.py",
             "--arm",
-            "control",
+            "attention",
             "--save-folder",
             str(tmp_path / "save"),
             "--work-dir",
