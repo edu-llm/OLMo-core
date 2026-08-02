@@ -12,6 +12,7 @@ its vocabulary from the corpus instead of a constant.
 import importlib.util
 import sys
 from pathlib import Path
+from typing import Dict, Set
 
 import pytest
 
@@ -157,7 +158,7 @@ def test_each_array_index_selects_its_own_cell():
 def test_a_seed_pairs_init_and_data_order():
     """Cells of one arm differ only in seed; cells of one seed share it across arms."""
     cells = dict(enumerate(entry.parse_fanout_grid(GRID_4x3)))
-    by_seed = {}
+    by_seed: Dict[int, Set[str]] = {}
     for arm, seed in cells.values():
         by_seed.setdefault(seed, set()).add(arm)
     for seed, arms in by_seed.items():
