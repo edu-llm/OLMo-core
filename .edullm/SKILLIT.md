@@ -32,7 +32,7 @@ state includes the seven source fingerprints, batch/token position, seed,
 domain order, and current weights; changed immutable fields reject resume.
 
 At steps 500, 875, 1,250, 1,625, and 2,000, the shared task-loss callback
-finishes the checkpoint, strict suite, W&B uploads, and durable marker before
+finishes the checkpoint, strict suite, W&B evaluation uploads, and durable marker before
 the lower-priority `SkillItController` runs. The controller reads the six curve
 families, computes the README equation with eta `0.2` and w `1`, broadcasts
 `p_after`, and applies it to the next batch.
@@ -40,7 +40,10 @@ families, computes the README equation with eta `0.2` and w `1`, broadcasts
 The controller appends the full state to
 `progress/skillit_updates.jsonl`, writes `stepN_A.json` and
 `stepN_weights.json`, and restores the latest recorded `p_after` on resume.
-The derivative arm logs the evaluation point `r == p_before`.
+The derivative arm logs the evaluation point `r == p_before`. At baseline and
+every update, all 42 matrix cells plus every before/after domain weight are
+logged as W&B metrics, and the complete matrix/weight JSON history is uploaded
+as the versioned `skillit-<arm>-state` artifact.
 
 | arm index | arm | A | W&B project |
 |---:|---|---|---|
@@ -99,9 +102,10 @@ Each selects the platform's provisioned `gpu-8xa100` (8 × A100) compute
 profile, launches eight ranks directly, keeps checkpoint/progress/eval state
 on runtime scratch, and selects the arm's required W&B project. The explicit
 `EDULLM_CHECKPOINT_CHECK=waived` records why the platform's S3 checkpoint path
-is intentionally unused: the locked Skill-It methodology makes W&B the only
-durable artifact sink. They use one attempt so production never silently
-infers resume. To resume a locally restored complete W&B run explicitly, append
+is intentionally unused. Every evaluation is uploaded, but only the true final
+checkpoint is a W&B model artifact; intermediate checkpoints remain on runtime
+scratch. They use one attempt so production never silently infers resume. To
+resume a locally restored completed W&B run explicitly, append
 `--resume` and point all three state directories at that restored run root. A
 resume is rejected unless its saved scientific fingerprint, durable marker,
 task-loss output, and current arm all agree.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 from dataclasses import dataclass, field
@@ -32,6 +33,8 @@ from skillit_math import (
     family_losses,
     update_weights,
 )
+
+log = logging.getLogger(__name__)
 
 
 class SkillItControllerError(RuntimeError):
@@ -70,6 +73,30 @@ def _records(path: Path) -> list[dict[str, Any]]:
             raise SkillItControllerError(f"{path}:{line_number}: record is not an object")
         output.append(record)
     return output
+
+
+def skillit_wandb_metrics(record: Mapping[str, Any]) -> dict[str, float]:
+    """Flatten every Skill-It matrix cell and domain weight for W&B."""
+    matrix = np.asarray(record["A"], dtype=np.float64)
+    if matrix.shape != (len(DOMAINS), len(FAMILIES)):
+        raise SkillItControllerError(f"invalid Skill-It matrix shape: {matrix.shape}")
+    metrics = {
+        f"skillit/matrix/{domain}/{family}": float(matrix[i, j])
+        for i, domain in enumerate(DOMAINS)
+        for j, family in enumerate(FAMILIES)
+    }
+    metrics["skillit/update_step"] = float(record["step"])
+    for weight_field in ("p_before", "p_after"):
+        weights = record[weight_field]
+        metrics.update(
+            {
+                f"skillit/{weight_field}/{domain}": float(weights[domain])
+                for domain in DOMAINS
+            }
+        )
+    for family, value in (record.get("losses") or {}).items():
+        metrics[f"skillit/family_loss/{family}"] = float(value)
+    return metrics
 
 
 @dataclass
@@ -155,20 +182,37 @@ class SkillItController(Callback):
             self.trainer.record_metric(f"skillit/weight/{domain}", value)
 
     def _write_baseline_once(self) -> None:
-        existing = [record for record in _records(self.updates_jsonl) if record.get("step") == 0]
-        if existing:
-            return
-        weights = self.loader.weights
-        matrix = adjacency(self.a_mode, weights)
-        record = self._record(
-            step=0,
-            matrix=matrix,
-            p_before=weights,
-            p_after=weights,
-            losses=None,
-            note="baseline RegMix weights; no Skill-It update",
-        )
-        self._persist_rank0(record)
+        record: Optional[dict[str, Any]] = None
+        failure: Optional[str] = None
+        if get_rank() == 0:
+            try:
+                existing = [
+                    item for item in _records(self.updates_jsonl) if item.get("step") == 0
+                ]
+                if existing:
+                    record = existing[-1]
+                    self._validate_record(record, 0)
+                else:
+                    weights = self.loader.weights
+                    matrix = adjacency(self.a_mode, weights)
+                    record = self._record(
+                        step=0,
+                        matrix=matrix,
+                        p_before=weights,
+                        p_after=weights,
+                        losses=None,
+                        note="baseline RegMix weights; no Skill-It update",
+                    )
+                    self._persist_rank0(record)
+                self._publish_rank0(record)
+            except BaseException as exc:  # noqa: BLE001
+                failure = f"{type(exc).__name__}: {exc}"
+        message: list[Any] = [record, failure]
+        if is_distributed():
+            dist.broadcast_object_list(message, src=0)
+        _, failure = message
+        if failure is not None:
+            raise SkillItControllerError(f"Skill-It baseline publication failed: {failure}")
 
     def _apply_update(self, step: int) -> None:
         record: Optional[dict[str, Any]] = None
@@ -207,15 +251,7 @@ class SkillItController(Callback):
                         losses=losses_by_family,
                     )
                     self._persist_rank0(record)
-                strict = production_online(production=self.production, mode=self.wandb_mode)
-                wandb_log_directory_artifact(
-                    wandb_run_from_trainer(self.trainer),
-                    self.progress,
-                    name=f"skillit-{self.arm_id}-state",
-                    artifact_type="method-state",
-                    aliases=["latest", f"step-{int(step):07d}"],
-                    strict=strict,
-                )
+                self._publish_rank0(record)
             except BaseException as exc:  # noqa: BLE001
                 failure = f"{type(exc).__name__}: {exc}"
 
@@ -305,5 +341,36 @@ class SkillItController(Callback):
             handle.flush()
             os.fsync(handle.fileno())
 
+    def _publish_rank0(self, record: Mapping[str, Any]) -> None:
+        if get_rank() != 0:
+            return
+        step = int(record["step"])
+        strict = production_online(production=self.production, mode=self.wandb_mode)
+        run = wandb_run_from_trainer(self.trainer)
+        if run is None:
+            if strict:
+                raise SkillItControllerError(
+                    "production requires W&B for Skill-It matrices and domain weights"
+                )
+        else:
+            try:
+                # The standard trainer logger has already committed this global step.
+                # Use a fresh history row and carry the exact update step explicitly.
+                run.log(skillit_wandb_metrics(record))
+            except Exception as exc:  # noqa: BLE001
+                if strict:
+                    raise SkillItControllerError(
+                        f"required W&B Skill-It metric upload failed at step {step}"
+                    ) from exc
+                log.warning("W&B Skill-It metric upload failed at step %s: %s", step, exc)
+        wandb_log_directory_artifact(
+            run,
+            self.progress,
+            name=f"skillit-{self.arm_id}-state",
+            artifact_type="method-state",
+            aliases=["latest", f"step-{step:07d}"],
+            strict=strict,
+        )
 
-__all__ = ["SkillItController", "SkillItControllerError"]
+
+__all__ = ["SkillItController", "SkillItControllerError", "skillit_wandb_metrics"]

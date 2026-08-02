@@ -20,6 +20,7 @@ from production_contract.checkpoint import (  # noqa: E402
     write_last_durable_step,
 )
 from production_contract.task_loss import TASK_LOSS_RAW_LABELS  # noqa: E402
+import skillit_controller as skillit_controller_module  # noqa: E402
 from skillit_controller import SkillItController  # noqa: E402
 from skillit_entrypoint import (  # noqa: E402
     EntrypointError,
@@ -235,6 +236,74 @@ def test_controller_is_checkpoint_gated_logs_exact_state_and_resumes(
     resumed_controller.trainer = resumed_trainer
     resumed_controller.post_checkpoint_loaded("unused")
     assert resumed_loader.weights_dict() == record["p_after"]
+
+
+def test_controller_uploads_every_matrix_and_domain_weight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loader = _loader(tmp_path / "loader")
+    task_loss_dir = tmp_path / "task_loss"
+    task_loss_dir.mkdir()
+    logged: list[tuple[int, dict[str, float]]] = []
+    artifacts: list[tuple[list[str], set[str]]] = []
+
+    class FakeRun:
+        def log(self, metrics):
+            logged.append((int(metrics["skillit/update_step"]), dict(metrics)))
+
+    def log_directory(_run, path, *, aliases, **_kwargs):
+        files = {
+            item.name for item in (Path(path) / "skillit_updates").glob("*.json")
+        }
+        artifacts.append((list(aliases), files))
+
+    monkeypatch.setattr(
+        skillit_controller_module, "wandb_run_from_trainer", lambda _trainer: FakeRun()
+    )
+    monkeypatch.setattr(
+        skillit_controller_module, "wandb_log_directory_artifact", log_directory
+    )
+    trainer = SimpleNamespace(
+        global_step=0,
+        data_loader=loader,
+        callbacks={},
+        record_metric=lambda *args, **kwargs: None,
+    )
+    controller = SkillItController(
+        arm_id="deriv",
+        a_mode="derivative",
+        progress_dir=str(tmp_path / "progress"),
+        task_loss_dir=str(task_loss_dir),
+        production=False,
+        wandb_mode="online",
+    )
+    controller.trainer = trainer
+    controller.pre_train()
+
+    (task_loss_dir / "step500_task_loss.json").write_text(
+        json.dumps(_task_loss_payload(500)), encoding="utf-8"
+    )
+    trainer.global_step = 500
+    controller.post_step()
+
+    assert [step for step, _metrics in logged] == [0, 500]
+    for _step, metrics in logged:
+        assert len([key for key in metrics if key.startswith("skillit/matrix/")]) == 42
+        assert len([key for key in metrics if key.startswith("skillit/p_before/")]) == 7
+        assert len([key for key in metrics if key.startswith("skillit/p_after/")]) == 7
+    assert artifacts[0] == (
+        ["latest", "step-0000000"],
+        {"step0_A.json", "step0_weights.json"},
+    )
+    assert artifacts[1] == (
+        ["latest", "step-0000500"],
+        {
+            "step0_A.json",
+            "step0_weights.json",
+            "step500_A.json",
+            "step500_weights.json",
+        },
+    )
 
 
 def test_controller_refuses_update_without_strict_task_loss(tmp_path: Path) -> None:
