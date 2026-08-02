@@ -339,6 +339,7 @@ class CurriculumCheckpointCallback(Callback):
                     wandb_run=wandb_artifacts.wandb_run_from_trainer(self.trainer),
                     wandb_mode=self.wandb_mode,
                     production=self.production,
+                    upload_checkpoint=step == self.total_steps,
                     run_evaluator=self._already_evaluated,
                 )
             except BaseException as exc:  # noqa: BLE001

@@ -36,6 +36,99 @@ def test_permanent_ladder_and_checkpointer_contract() -> None:
     assert 2360 not in kwargs["fixed_steps"]
 
 
+def test_task_loss_callback_uploads_only_the_final_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    save_folder = tmp_path / "checkpoints"
+    for step in (125, 250):
+        checkpoint_dir = save_folder / f"step{step}"
+        checkpoint_dir.mkdir(parents=True)
+        (checkpoint_dir / "state.pt").write_bytes(b"state")
+
+    uploads: list[tuple[int, bool]] = []
+
+    def finalize(**kwargs):
+        uploads.append((int(kwargs["step"]), bool(kwargs["upload_checkpoint"])))
+
+    monkeypatch.setattr(task_loss, "finalize_permanent_checkpoint", finalize)
+    monkeypatch.setattr(task_loss, "_HAS_OLMO_CORE", True)
+    callback = task_loss.TaskLossEvalCallback(
+        total_steps=250,
+        save_folder=save_folder,
+        run_name="unit",
+        results_dir=tmp_path / "task-loss",
+        eval_script=tmp_path / "eval.py",
+        interval=125,
+    )
+    callback.trainer = type("Trainer", (), {"callbacks": {}})()
+    callback._maybe_finalize(125)
+    callback._maybe_finalize(250)
+
+    assert uploads == [(125, False), (250, True)]
+
+
+def test_finalize_skips_nonfinal_checkpoint_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact_types: list[str] = []
+
+    class FakeArtifact:
+        def __init__(self, name, type, metadata=None):
+            self.name = name
+            self.type = type
+
+        def add_dir(self, _path):
+            pass
+
+        def add_file(self, _path, name=None):
+            pass
+
+    class Uploaded:
+        def wait(self):
+            pass
+
+    class FakeRun:
+        name = "unit"
+        project = "unit-project"
+        entity = None
+
+        def log(self, *_args, **_kwargs):
+            pass
+
+        def log_artifact(self, artifact, aliases=None):
+            artifact_types.append(artifact.type)
+            return Uploaded()
+
+    def evaluator(_checkpoint, *, out_path, **_kwargs):
+        output = Path(out_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps({"labels": _labels()}), encoding="utf-8")
+
+    monkeypatch.setattr(artifacts, "_wandb", type("Wandb", (), {"Artifact": FakeArtifact})())
+    (tmp_path / "progress").mkdir()
+    for step, upload_checkpoint in ((125, False), (250, True)):
+        checkpoint_dir = tmp_path / "checkpoints" / f"step{step}"
+        checkpoint_dir.mkdir(parents=True)
+        (checkpoint_dir / "state.pt").write_bytes(b"state")
+        checkpoint.finalize_permanent_checkpoint(
+            arm="probe",
+            checkpoint_dir=checkpoint_dir,
+            step=step,
+            run_name="unit",
+            task_loss_dir=tmp_path / "task-loss",
+            task_loss_enabled=True,
+            progress_dir=tmp_path / "progress",
+            wandb_run=FakeRun(),
+            wandb_mode="online",
+            production=True,
+            upload_checkpoint=upload_checkpoint,
+            run_evaluator=evaluator,
+        )
+
+    assert artifact_types[:3] == ["eval", "metrics", "eval"]
+    assert artifact_types[3:] == ["model", "eval", "metrics", "eval"]
+
+
 def test_fingerprint_refuses_changed_scientific_identity(tmp_path: Path) -> None:
     root = tmp_path / "checkpoints"
     step = root / "step125"
@@ -210,6 +303,7 @@ def test_durable_marker_advances_only_after_required_uploads(
             wandb_run=FakeRun(),
             wandb_mode="online",
             production=True,
+            upload_checkpoint=False,
             run_evaluator=evaluator,
         )
     assert checkpoint.read_last_durable_step(progress_dir) is None

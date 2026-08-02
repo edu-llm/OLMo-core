@@ -124,10 +124,12 @@ checkpoint all ranks pause, release the train module, run the complete suite,
 reload the checkpoint, and only then continue. Partial suites fail closed.
 
 Production writes checkpoints, progress, metrics, and task-loss JSON only to
-job-local scratch, then awaits W&B checkpoint/eval/run-state uploads before
-advancing the durable marker. S3 is input-only. Fresh and resume are explicit:
-use `--fresh`, or `--load-path` with a local step directory or
-`wandb-artifact://entity/project/name:version`; never infer resume from scratch.
+job-local scratch, then awaits every W&B eval/run-state upload before advancing
+the durable marker. Only the true final checkpoint is uploaded as a W&B model
+artifact; intermediate checkpoints stay on scratch. S3 is input-only. Fresh
+and resume are explicit: use `--fresh`, or `--load-path` with a local step
+directory. A W&B artifact can restore only a completed run's final checkpoint;
+never infer resume from scratch.
 The loader restores its exact zero-based batch position and bound order.
 Post-hoc EMA accepts only steps 2000/2125/2250/2384 from one fingerprint and
 uploads the merged checkpoint and its full task-loss result.

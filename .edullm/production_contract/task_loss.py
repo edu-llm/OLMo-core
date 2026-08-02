@@ -389,6 +389,7 @@ class TaskLossEvalCallback(Callback if _HAS_OLMO_CORE else object):  # type: ign
                     wandb_run=wandb_run_from_trainer(self.trainer),
                     wandb_mode=self.wandb_mode,
                     production=self.production,
+                    upload_checkpoint=step == self.total_steps,
                 )
             except BaseException as exc:  # noqa: BLE001
                 failure[0] = f"{type(exc).__name__}: {exc}"
