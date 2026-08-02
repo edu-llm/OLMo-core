@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -95,7 +96,15 @@ def build_config(opts) -> ExperimentConfig:
         raise SystemExit(f"expected uint16 corpus, manifest says {manifest.get('dtype')!r}")
     token_paths, mask_paths = _shard_paths(opts.data_dir, manifest)
 
-    warmup = opts.warmup_steps if opts.warmup_steps is not None else round(opts.warmup_ratio * opts.steps)
+    # Resolve the training-step budget from tokens / epochs / steps (control cap: 20B tokens).
+    gbs = opts.global_batch_size
+    if opts.steps is not None:
+        total_steps = opts.steps
+    elif opts.epochs is not None:
+        total_steps = opts.epochs * math.ceil(manifest["total_tokens"] / gbs)
+    else:
+        total_steps = math.ceil(opts.budget_tokens / gbs)
+    warmup = opts.warmup_steps if opts.warmup_steps is not None else round(opts.warmup_ratio * total_steps)
 
     tokenizer = smollm2_tokenizer_config()
     model_config = TransformerConfig.smollm2_135M(vocab_size=tokenizer.vocab_size)
@@ -134,7 +143,7 @@ def build_config(opts) -> ExperimentConfig:
             save_overwrite=False,
             metrics_collect_interval=5,
             cancel_check_interval=5,
-            max_duration=Duration.steps(opts.steps),
+            max_duration=Duration.steps(total_steps),
         )
         .with_callback("gpu_monitor", GPUMemoryMonitorCallback())
         .with_callback(
@@ -192,7 +201,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--work-dir", default="/tmp/colmlm-dataset-cache")
     # Control hyperparameters (both models); see smollm2-135m-control-vs-colmlm-archive.md.
     p.add_argument("--sequence-length", type=int, default=2048)
-    p.add_argument("--steps", type=int, default=305_176, help="~20B tokens at 65,536 tokens/step.")
+    p.add_argument(
+        "--budget-tokens", type=int, default=20_000_000_000,
+        help="Training-token budget (control cap: 20B ~= 305k steps ~= 26.6 epochs of 750M).",
+    )
+    p.add_argument("--epochs", type=int, default=None, help="Train N epochs over the corpus (overrides --budget-tokens).")
+    p.add_argument("--steps", type=int, default=None, help="Absolute step budget (overrides tokens/epochs).")
     p.add_argument("--save-interval", type=int, default=3814, help="~250M tokens at 65,536/step.")
     p.add_argument("--warmup-ratio", type=float, default=0.02, help="Warmup as a fraction of --steps.")
     p.add_argument("--warmup-steps", type=int, default=None, help="Absolute warmup; overrides ratio.")
@@ -211,11 +225,13 @@ def main() -> None:
     config = build_config(opts)
     if opts.dry_run:
         rich.print(config)
+        md = config.trainer.max_duration
         rich.print(
             f"[bold green]mode={config.mode}[/] "
             f"params={config.model.num_params:,} "
             f"label_mask={'on' if config.dataset.label_mask_paths else 'off'} "
-            f"shards={len(config.dataset.paths)}"
+            f"shards={len(config.dataset.paths)} "
+            f"max_duration={md.value:,} {md.unit}"
         )
         return
     prepare_training_environment()
