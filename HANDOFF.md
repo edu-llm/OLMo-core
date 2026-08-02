@@ -1,8 +1,50 @@
 # HANDOFF — DP2-KDA Phase 0/1 preparation
 
-**Last updated:** 2026-07-31 (second session). **Status: runbook audited and corrected; DP2 source
-committed and pushed; all three P0.0 prerequisites closed; all 13 named Phase-0 tests written and
-green on an L40S via FarmShare. No image built, no AWS resource created, no money spent.**
+**Last updated:** 2026-08-01. **Status: runbook audited and corrected; DP2 source committed and
+pushed; all three P0.0 prerequisites closed; all 13 named Phase-0 tests green on an L40S via
+FarmShare. `origin/main` merged — the program is now on the eduLLM platform path, not Slurm. No
+image built, no AWS resource created, no money spent.**
+
+## ⚠️ FIRST RUN: the arms are `Reflection` and `R1-P` — NOT `DP2-strict`
+
+**Decided 2026-08-01.** The first platform training run is the pair **`Reflection`** (treatment)
+and **`R1-P`** (control). `DP2-strict` is explicitly *not* the first run, which reverses this
+document's original framing, so the reasons are recorded here rather than left to inference:
+
+1. **Strict-beta DP2 is structurally barred from the primary state-tracking task.** With keys
+   L2-normalized (`recurrent.py:1299-1300`) each erase factor has `det(I − βkkᵀ) = 1−β` *exactly*
+   (verified to 12 decimals). Strict β ∈ (0,1) ⟹ every factor has positive determinant ⟹ the
+   composed state map has **det > 0 at every R** — measured 0 of 4000 trials negative at R=1,2,4.
+   `s5_words` requires odd permutations, `det = −1`. Adding factors cannot escape this: it is
+   closed under composition. Reflection β ∈ (0,2) crosses zero ~50% of the time.
+2. **Reflection is the only arm with measured signal.** 0.978 vs 0.598–0.640 for every strict arm
+   at L40; `R1-P|Reflection|64` = 56.5 vs **95.9** (`docs/dp2-kda/evidence/`). It also *trains* β
+   to 1.92–1.98 — it uses the negative range rather than merely being permitted it.
+3. **`R1-P`, not `R1`, is the honest control.** It spends the same parameter budget in FFN width,
+   separating mechanism from capacity. FFN width alone buys +1.9pp; without `R1-P` the program
+   records a spurious win.
+4. **The LM null is what a real run can actually resolve.** The one parameter-matched LM pair was
+   **+0.0053 nats** — a clean null. Whether probe effects survive at LM scale is precisely what
+   free FarmShare probe work *cannot* answer.
+
+**Caveat, stated plainly:** the reflection numbers are n=1 harness smoke at 150–1000 steps, not
+calibration. They justify *choosing* reflection over strict for a first run; they do not establish
+that reflection works. Note also that §3.2 of the runbook forbids *pooling* strict and reflection
+results — running reflection first is not pooling, but any writeup must keep the regimes separate.
+
+Sizing: `olmo-core-check-cpu` first (~$1.43, proves the path), then the pair on
+`olmo-core-train-1gpu` ($1.01/hr). Not 4-GPU — the launcher and checkpoint guards are easier to get
+wrong there, and $136 worst case vs $12 is the wrong place to debug a command string.
+
+**Blocker for any DP2/KDA run:** the mixer is **not reachable from the command line.**
+`--model-factory` resolves attributes on `TransformerConfig` and there is no KDA/Householder
+factory there. Dot-notation also fails — `block.sequence_mixer.type=kimi_delta_householder` raises
+`OLMoConfigurationError: class 'AttentionConfig' has no attribute 'num_householder'`, because
+`merge()` applies overrides against the existing `AttentionConfig` without re-resolving the type,
+even as a separate merge step. The working path is to assemble in a script:
+`replace(cfg.block, sequence_mixer=KimiDeltaHouseholderConfig(...))` — verified to give a 269.6M
+model at R=2 with strict beta. This is the guide's "level two starts from a copy". No library edit
+is needed: `kimi_delta_householder` is already a registered mixer name.
 
 **Scope:** this file covers **only** the DP2-KDA (strict-beta delta-product, R=2) experiment
 program. Sibling handoffs are independent and still current — do not overwrite them:
