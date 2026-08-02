@@ -89,101 +89,18 @@ RUN set -eux; \
 # out of this layer, and out of the context entirely.
 COPY . .
 
-# TORCH IS PINNED TO AN EXACT VERSION AND INSTALLED FIRST, WHICH IS THE WHOLE ARGUMENT.
-#
-# The project declares a lower bound on torch. Resolved against PyPI at build time that is
-# an unpinned multi-gigabyte dependency, so two builds of one commit months apart produce
-# different images -- and the platform has a study whose entire subject is what does and
-# does not stay identical across rebuilds. An exact version fixes that: a published wheel
-# is never replaced, so an exact pin names one artifact forever.
-#
-# The pin moved twice before it was right, and both moves were measurements rather than
-# preferences. It was 2.6.0, the floor this project declared, and the first GPU training
-# run proved that floor does not import. `import olmo_core` reaches
-# nn/attention/backend.py, which decorates a method with torch.compiler.disable(reason=...),
-# and that keyword does not exist in 2.6.0 -- so the import dies with `TypeError: disable()
-# got an unexpected keyword argument` before any model is built. The declared floor was
-# stale metadata rather than a tested claim, and pyproject.toml is corrected with this.
-#
-# WHICH VERSION, MEASURED RATHER THAN GUESSED THE THIRD TIME. torch.compiler.disable grew
-# its `reason` keyword in 2.8.0 exactly -- read out of torch/compiler/__init__.py at tags
-# v2.7.1, v2.8.0, v2.9.0 and v2.10.0 -- so 2.8.0 is the true floor and everything below it
-# fails the import outright.
-#
-# The pin is 2.9.0 rather than 2.8.0, and the difference is what is tested versus what is
-# merely sufficient. .github/workflows/docker.yml builds this project against 2.7.1 and
-# 2.9.0; of those, 2.9.0 is the only one that can import the package at all. So 2.9.0 is
-# the lowest version that both works and is exercised by this repository, and 2.8.0 would
-# be a floor nothing here has ever run.
-#
-# That the 2.7.1 leg of that matrix cannot import olmo_core.nn is a real inconsistency in
-# this project and is worth someone looking at; it is not fixed here.
-#
-# This is also the argument for pinning rather than tracking a floor. An unpinned
-# `>=2.6.0` resolves to whatever is newest, would have worked here by accident, and would
-# have left the stale floor to be discovered by whoever next had an older environment.
-#
-# Installed before the project so pip sees the constraint already satisfied and has no
-# reason to resolve torch again.
-#
-# wandb comes from the extra the project already declares. boto3 is named directly because
-# olmo_core.io imports it lazily for s3:// paths and the project declares it only under the
-# dev extra, which would drag in pytest, mypy, sphinx and the rest of a contributor's
-# toolchain -- none of which belongs in an image an untrusted training command runs inside.
-#
-# THE ASSERTION IS THE POINT OF THIS STEP, not the install. pip is free to decide some
-# dependency's metadata is better served by a different torch and replace a CUDA build with
-# a CPU wheel. Nothing would fail: the image builds, the container starts, the job runs, and
-# it trains on the CPU at GPU prices while every log line looks ordinary. torch.version.cuda
-# is None on a CPU build and a string on a CUDA one, so this turns the most expensive silent
-# failure available here into a failed build.
-#
-# The version is re-asserted alongside it, because the pin above only binds if nothing later
-# in the resolution moved it.
-#
-# THE DATASET READER IS INSTALLED HERE BECAUSE A TRAINING RUN CANNOT OPEN A CORPUS WITHOUT
-# IT. `edullm-data` publishes the platform corpora into s3://edullm-data behind a validator,
-# and `edullm_data.read` is the supported way to turn a dataset id and version into file URIs
-# plus the dtype those files actually hold. Without it in the image, a container told which
-# corpus it may read has no way to read it.
-#
-# PINNED BY COMMIT, AND TO THE SAME COMMIT THE PLATFORM PINS. The platform declares this
-# reader in its own `reader` dependency group at 38bf831a, and the reasoning for pinning a
-# commit rather than a tag lives there: `is_trainable` does not exist at v0.2.0, so a tag pin
-# answers a request for training data with held-out shards. Two pins on one commit is a
-# duplication worth having -- the platform resolves it for its tests and this image resolves
-# it for the run -- but they must move together, and a mismatch is a container reading
-# through a different library than the one the tests exercised.
-#
-# A TARBALL URL RATHER THAN git+https, AND NOT FOR STYLE. `pip install git+https://…` shells
-# out to git, and the registered base is a bare python image that carries none. The choice
-# was between adding git to the image and asking pip for the archive GitHub already serves
-# for any commit; the archive needs no new package in an image an untrusted training command
-# runs inside. The URL carries the same forty hex digits, so it names exactly one tree just
-# as immutably as the git form does.
-#
-# The import assertion below is the same argument as the one above it: `import edullm_data`
-# would prove the distribution installed, and `from edullm_data.read import dataset_paths`
-# proves the module a training run actually reaches for loads.
-#
-# THE LAST LINE IMPORTS SUBMODULES, AND THE SHALLOW VERSION OF IT ALREADY FAILED ONCE.
-#
-# It used to read `import olmo_core, boto3, wandb`, which passed on an image whose first
-# GPU training run then died at startup: the top-level package imports lazily, so nothing
-# under olmo_core.nn was touched until the workload asked for a model, four minutes and one
-# image pull later, on a paid instance. A check that stops at the package name proves the
-# distribution installed, not that the code loads.
-#
-# So it names what a training workload actually reaches for. Anything that breaks between
-# the pinned torch and this library now breaks the build, where it costs a runner minute.
+# Keep the established OLMo-core image contract: pinned torch 2.9, this source checkout,
+# W&B, boto3 for OLMo-core's S3 I/O, the platform-pinned edullm-data reader, and the
+# pinned OLMES stack used for the required 20-task evaluation at every saved step.
 RUN set -eux; \
     python -m pip install --no-cache-dir "torch==2.9.0"; \
     python -m pip install --no-cache-dir ".[wandb]" boto3; \
     python -m pip install --no-cache-dir "edullm-data @ https://github.com/edu-llm/edullm-data/archive/38bf831a6c3f445e394784018441fd59288b876c.tar.gz"; \
+    python -m pip install --no-cache-dir -r .edullm/requirements-mixlaw-eval.txt; \
     python -c "import torch; assert torch.__version__.startswith('2.9.0'), f'torch was moved off the pin: {torch.__version__}'"; \
     python -c "import torch; assert torch.version.cuda, 'the CUDA build of torch was replaced by a CPU wheel'"; \
-    python -c "import boto3, wandb; from olmo_core.data import TokenizerConfig; from olmo_core.nn.transformer import TransformerConfig; print(TransformerConfig.olmo2_190M(vocab_size=TokenizerConfig.gpt2().padded_vocab_size()).__class__.__name__)"; \
-    python -c "from edullm_data.read import dataset_paths, resolve_latest; print(dataset_paths.__module__)"
+    python -c "import boto3, wandb; from olmo.eval.downstream import label_to_task_map; from olmo_core.data import NumpyFSLDatasetConfig; from olmo_core.data.source_mixture import SourceMixtureDatasetConfig; from olmo_core.nn.transformer import TransformerConfig; assert 'arc_easy_val_rc_5shot_bpb' in label_to_task_map; print(TransformerConfig.olmo2_370M(vocab_size=100352).__class__.__name__)"; \
+    python -c "from edullm_data.read import dataset_paths; print(dataset_paths.__module__)"
 
 # No CMD. The entrypoint of the registered base is inherited deliberately, so swapping the
 # base does not leave a stale command behind.
