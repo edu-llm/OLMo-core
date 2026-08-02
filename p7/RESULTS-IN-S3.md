@@ -144,3 +144,91 @@ additionally downloaded and compared by SHA-256.
 The three copies of `socrateach_sft_test.jsonl` and `socrateach_sft_val.jsonl` under
 `ORCD-SFT/data/`, `socrateach_sft/data/` and `kl_analysis/colab_uploads/` are byte
 identical, so S3 stores one copy of each under the first two paths rather than three.
+
+## Scripts that need a restore before they run
+
+Cross referencing every remaining `.py`, `.sh` and `.sbatch` file under `p7/` against the 252
+deleted paths finds nine scripts that open a file that is now gone. Each one raises
+`FileNotFoundError` before it writes anything, so none of them corrupts an output, but none of
+them runs as documented until its inputs come back from S3.
+
+| Script | Line | Missing input | Reference kind |
+| --- | --- | --- | --- |
+| `POC/curve_run/full_0-923/grading/grade_math_logic.py` | 30 | `math_logic_prompts.jsonl` | hardcoded constant |
+| `POC/curve_run/fine_0-100/grading/grade_math_logic.py` | 30 | `math_logic_prompts.jsonl` | hardcoded constant |
+| `POC/llm_judge/build_batches.py` | 4 | `../test_results_instruct.jsonl` | hardcoded constant, no override |
+| `POC/llm_judge/aggregate.py` | 3 | `judge_key.json` | hardcoded constant |
+| `POC/general_eval/judge_aggregate.py` | 10, 11 | `judge_key.json`, `general_eval_results.jsonl` | hardcoded constant |
+| `POC/general_eval/judge_build.py` | 12 | `general_eval_results.jsonl` | argv default |
+| `POC/math_eval/grade_math_logic.py` | 31 | `math_logic_results_<arm>.jsonl` | required argument |
+| `impl3/eval/llm_judge/aggregate.py` | 3 | `judge_key.json` | hardcoded constant |
+| `impl3/eval/llm_judge/build_batches.py` | 22 | `test_results_instruct.jsonl`, `t451/test_results.jsonl` | required argument |
+
+Line numbers refer to the commit that deleted the files. The two `impl3` entries break through the
+argument the runbook passes rather than through the argparse default, which points at a path that
+never existed.
+
+### Restore commands
+
+Run these from the repository root. Each block restores everything the named scripts read.
+
+```bash
+export AWS_PROFILE=sbsandbox
+S3=s3://sbsandbox-intern-edullm-outputs/teams/post-training/artifacts
+
+# POC/curve_run/full_0-923/grading/grade_math_logic.py
+aws s3 cp --recursive $S3/p7-poc/curve_run/full_0-923/grading \
+  p7/POC/curve_run/full_0-923/grading
+
+# POC/curve_run/fine_0-100/grading/grade_math_logic.py
+aws s3 cp --recursive $S3/p7-poc/curve_run/fine_0-100/grading \
+  p7/POC/curve_run/fine_0-100/grading
+
+# POC/llm_judge/build_batches.py and POC/llm_judge/aggregate.py
+aws s3 cp $S3/p7-poc/test_results_instruct.jsonl p7/POC/
+aws s3 cp --recursive $S3/p7-poc/llm_judge p7/POC/llm_judge
+
+# POC/general_eval/judge_build.py and POC/general_eval/judge_aggregate.py
+aws s3 cp --recursive $S3/p7-poc/general_eval p7/POC/general_eval
+
+# POC/math_eval/grade_math_logic.py
+aws s3 cp --recursive $S3/p7-poc/math_eval p7/POC/math_eval
+
+# impl3/eval/llm_judge/build_batches.py and impl3/eval/llm_judge/aggregate.py
+aws s3 cp --recursive $S3/p7-impl3/eval/llm_judge p7/impl3/eval/llm_judge
+```
+
+### One failure is silent
+
+`POC/math_eval/grade_math_logic.py` keeps its prompt set, so once a results file is restored it
+runs to completion even though every `verifier_out_<arm>_*.json` is gone. Under `--with-verify`
+the glob on line 28 matches nothing, each MATH-500 answer that awaits symbolic verification scores
+as wrong, and the script still prints `grading complete` and exits 0. On the `nosi` arm that moves
+base MATH-500 from 3/25 to 2/25 and the overall figure from 13/70 to 12/70. Restore the whole
+`math_eval` directory rather than the results file alone.
+
+The same glob sits on line 28 of both `curve_run` graders. It cannot fire today because those two
+scripts die earlier on the missing prompt set, but it will once someone restores the prompts and
+the results and leaves the verifier output behind.
+
+### The two curve_run prompt sets should not have moved
+
+`math_logic_prompts.jsonl` is an eval input, and the retention rule above keeps it. That rule
+reached `POC/math_eval/` and `impl3/eval/math_eval/` but missed the copies under
+`curve_run/full_0-923/grading/` and `curve_run/fine_0-100/grading/`. Both are byte identical to
+the retained `POC/math_eval/` copy, SHA-256
+`706456465e7fccf564f8157fd1e10b7894707bfe14cb2e5750c9e777b64a0e8d`. Bringing those two files back
+costs 2 objects and makes both graders runnable from the branch again.
+
+### What still works
+
+The six figure scripts under `POC/curve_run/analysis/` read only `master_summary.json` and
+`master_summary_0-100.json`, resolve them relative to `__file__`, and are unaffected.
+`impl3/eval/make_figures.sh` and `impl3/eval/plot_figure3.py` default to
+`out/ckpt_sweep_bare_hint250.jsonl`, which stays. Every published figure therefore remains
+reproducible from the branch alone.
+
+The stale defaults in `impl3/eval/plot_figure3.py` and `impl3/eval/sweep_ckpt_eval.py` that name
+`out/ckpt_sweep_eval.jsonl` predate this migration and are not caused by it. The same applies to
+`data/socrateach_sft_val.jsonl` throughout `impl3`, which `snapshot_hf_dataset.py` generates at
+run time and which the branch never carried.
