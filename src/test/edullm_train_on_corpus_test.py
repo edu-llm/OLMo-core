@@ -213,7 +213,9 @@ def test_a_smollm2_corpus_resolves_to_the_tokenizer_its_own_manifest_names(monke
         return entry.TokenizerConfig.dolma2()
 
     monkeypatch.setitem(
-        entry.TOKENIZERS, "tokenizer/smollm2-bpe", lambda: fake_from_hf("HuggingFaceTB/SmolLM2-135M")
+        entry.TOKENIZERS,
+        "tokenizer/smollm2-bpe",
+        lambda: fake_from_hf("HuggingFaceTB/SmolLM2-135M"),
     )
     corpus = resolve(FakeManifest(), tokenizer="tokenizer/smollm2-bpe")
 
