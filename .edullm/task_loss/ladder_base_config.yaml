@@ -1,0 +1,18 @@
+# Packaged OLMES evaluation base for OLMo2-370M curriculum checkpoints.
+run_name: curriculum-370m-ladder
+seed: 42
+model:
+  d_model: 1024
+  n_heads: 16
+  n_layers: 16
+  mlp_ratio: 8
+  vocab_size: 100278
+  embedding_size: 100352
+  eos_token_id: 100257
+  pad_token_id: 100277
+tokenizer:
+  identifier: allenai/dolma2-tokenizer
+global_train_batch_size: 8
+device_train_microbatch_size: 1
+device_eval_batch_size: 4
+evaluators: []
