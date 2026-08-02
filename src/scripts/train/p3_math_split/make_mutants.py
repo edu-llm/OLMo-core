@@ -9,7 +9,8 @@ once creates no clash, the suite stays green, and it looks like a weak test when
 is really a weak mutation. That trap cost a debugging cycle during development.
 
 Usage:
-    python scripts/make_mutants.py --shard shards/mizar.jsonl --out shards/mutants
+    python src/scripts/train/p3_math_split/make_mutants.py \
+        --shard corpus/train.jsonl --out corpus/mutants
 """
 
 import argparse

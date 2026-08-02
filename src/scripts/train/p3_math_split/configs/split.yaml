@@ -48,7 +48,7 @@ shared:
   # True gives the real 494M Qwen2.5-0.5B. Single-GPU only — see INCOMPATIBILITIES.md §3.
   tie_embeddings: true
 
-  compile_model: false     # keep off until tests/test_qwen_parity.py passes compiled
+  compile_model: false     # keep off until src/test/nn/transformer/qwen_test.py passes compiled
   num_workers: 2
 
   # --- logging / checkpointing ---------------------------------------------
