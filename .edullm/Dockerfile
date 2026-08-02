@@ -180,9 +180,11 @@ RUN set -eux; \
     python -m pip install --no-cache-dir "torch==2.9.0"; \
     python -m pip install --no-cache-dir ".[wandb]" boto3; \
     python -m pip install --no-cache-dir "edullm-data @ https://github.com/edu-llm/edullm-data/archive/38bf831a6c3f445e394784018441fd59288b876c.tar.gz"; \
+    python -m pip install --no-cache-dir -r .edullm/requirements-skillit-eval.txt; \
     python -c "import torch; assert torch.__version__.startswith('2.9.0'), f'torch was moved off the pin: {torch.__version__}'"; \
     python -c "import torch; assert torch.version.cuda, 'the CUDA build of torch was replaced by a CPU wheel'"; \
-    python -c "import boto3, wandb; from olmo_core.data import TokenizerConfig; from olmo_core.nn.transformer import TransformerConfig; print(TransformerConfig.olmo2_190M(vocab_size=TokenizerConfig.gpt2().padded_vocab_size()).__class__.__name__)"; \
+    python -c "import boto3, wandb; from olmo.eval.downstream import label_to_task_map; from olmo_core.data import TokenizerConfig; from olmo_core.nn.transformer import TransformerConfig; assert 'arc_easy_val_rc_5shot_bpb' in label_to_task_map; print(TransformerConfig.olmo2_370M(vocab_size=TokenizerConfig.dolma2().padded_vocab_size()).__class__.__name__)"; \
+    python -m py_compile .edullm/eval_task_loss_olmo_core.py; \
     python -c "from edullm_data.read import dataset_paths, resolve_latest; print(dataset_paths.__module__)"
 
 # No CMD. The entrypoint of the registered base is inherited deliberately, so swapping the
