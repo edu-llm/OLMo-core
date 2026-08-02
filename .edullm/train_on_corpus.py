@@ -255,8 +255,45 @@ def leave_the_reason_in_wandb(*, run_name: str, stage: Stage, explanation: str) 
 # a 256-entry TokenizerConfig here would produce exactly the uint16 inference described above.
 # The platform already keeps that corpus off the submission form for the same reason; if a
 # byte tokenizer lands upstream, adding a line here is what makes the corpus runnable.
+#
+# TOKENIZER/SMOLLM2-BPE IS PRESENT, AND IT IS NOT THE SAME CASE AS BYTES-UTF8 EVEN THOUGH BOTH
+# USED TO FAIL HERE IDENTICALLY. That symmetry was the trap. Both raised
+# THIS_IMAGE_HAS_NO_CONFIG_FOR_THAT_TOKENIZER, both looked like a missing upstream feature, and
+# a reader diagnosing one concluded the same thing about the other. Only one of them is a
+# missing feature. bytes-utf8 has no OLMo-core equivalent to name. smollm2-bpe has an exact
+# one, because the tokenizer this corpus was built with is a published HuggingFace tokenizer
+# and from_hf reproduces it byte for byte.
+#
+# WHAT IT WAS COSTING, MEASURED ON 2026-08-02. pretrain/fineweb-edu-1b v2 and v6 are tokenized
+# with this and are sealed and published. Their manifests are structurally identical to
+# regmix-10b's, which runs: every entry declares dtype uint32, little-endian, zero header
+# bytes, and names this tokenizer in depends_on with a digest. Nothing about those corpora was
+# broken. They were unreadable because this dict had one entry, and the diagnosis in
+# circulation was that their shapes and manifests were malformed, which sent the fix to the
+# wrong repository. P3 Project 3 asks for fineweb-edu-1b by name, and the Co-LMLM team filed
+# the same wall as "all 5 built-ins are dolma2, we use SmolLM2".
+#
+# THE IDENTIFIER IS READ OUT OF THE CORPUS RATHER THAN CHOSEN. s3://edullm-data/tokenizer/
+# smollm2-bpe/v1/dataset.json names HuggingFaceTB/SmolLM2-135M as its source, in those words,
+# and its `about` records that the same files are shared across the SmolLM2 size variants. So
+# the 135M identifier is the tokenizer for every SmolLM2 corpus here, not a guess that happens
+# to work at one size.
+#
+# WHAT THIS LINE COSTS, WHICH THE DOLMA2 LINE ABOVE DOES NOT. from_hf fetches from the Hub
+# when the config is built, so a corpus resolved through it needs egress that a dolma2 corpus
+# does not. Batch hosts sit in public subnets with allow-all egress and the tokenizer is a few
+# hundred kilobytes, so this is a real dependency rather than a real risk -- but it is the
+# reason a Hub outage could refuse a run that dolma2 would have started, and that is worth
+# knowing before it happens rather than after.
+#
+# AND THE HAZARD THIS WHOLE FILE EXISTS FOR APPLIES HERE TOO, at a different number. SmolLM2's
+# vocabulary is 49,152, which fits uint16 exactly as dolma2's 100,278 does, so a fineweb shard
+# read without the manifest's explicit dtype would be decoded two bytes at a time into in-range
+# ids and a loss curve that is merely bad. The dtype comes from the manifest a few lines above
+# and is never inferred, which is what makes adding this line safe.
 TOKENIZERS = {
     "tokenizer/dolma2-bpe": TokenizerConfig.dolma2,
+    "tokenizer/smollm2-bpe": lambda: TokenizerConfig.from_hf("HuggingFaceTB/SmolLM2-135M"),
 }
 
 

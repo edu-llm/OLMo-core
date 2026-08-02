@@ -184,6 +184,57 @@ def test_an_unknown_tokenizer_names_the_ones_this_image_has():
         resolve(FakeManifest(), tokenizer="tokenizer/bytes-utf8")
 
 
+def test_bytes_utf8_is_still_refused_because_it_is_a_different_problem():
+    # Guarding the distinction rather than the message. bytes-utf8 and smollm2-bpe failed here
+    # identically until 2026-08-02, which is why one of them stayed unreadable for months after
+    # the other became a one-line fix: a reader who diagnosed either concluded the same thing
+    # about both. smollm2-bpe had an exact OLMo-core equivalent and bytes-utf8 has none, so the
+    # day someone "fixes" this one by inventing a 256-entry config, this test should fail.
+    with pytest.raises(SystemExit, match="bytes-utf8"):
+        resolve(FakeManifest(), tokenizer="tokenizer/bytes-utf8")
+
+
+def test_a_smollm2_corpus_resolves_to_the_tokenizer_its_own_manifest_names(monkeypatch):
+    """fineweb-edu-1b was unreadable for one missing dict entry, not for a malformed manifest.
+
+    The identifier is asserted rather than the resulting config, because the identifier is the
+    whole claim. s3://edullm-data/tokenizer/smollm2-bpe/v1/dataset.json names
+    HuggingFaceTB/SmolLM2-135M as its source, and a config built from any other SmolLM2
+    checkpoint would load, produce plausible ids, and be wrong in the way this file exists to
+    prevent.
+
+    from_hf is patched rather than called because it reaches the Hub, and this suite runs with
+    no network by design -- the module docstring says so about edullm_data for the same reason.
+    """
+    asked: Dict[str, Any] = {}
+
+    def fake_from_hf(identifier: str):
+        asked["identifier"] = identifier
+        return entry.TokenizerConfig.dolma2()
+
+    monkeypatch.setitem(
+        entry.TOKENIZERS, "tokenizer/smollm2-bpe", lambda: fake_from_hf("HuggingFaceTB/SmolLM2-135M")
+    )
+    corpus = resolve(FakeManifest(), tokenizer="tokenizer/smollm2-bpe")
+
+    assert asked["identifier"] == "HuggingFaceTB/SmolLM2-135M"
+    # The width still comes from the manifest and is never inferred. SmolLM2's real vocabulary
+    # is 49,152, which fits uint16, so an inferred width would halve-read a uint32 corpus here
+    # exactly as dolma2's 100,278 would.
+    assert str(corpus.dtype) == "uint32"
+
+
+def test_the_smollm2_entry_names_the_identifier_the_corpus_declares():
+    # The test above patches the entry, so it proves the plumbing and not the constant. This
+    # one reads the real closure's identifier out of the shipped dict, which is the thing a
+    # careless edit would change.
+    import inspect
+
+    source = inspect.getsource(entry).split("TOKENIZERS = {", 1)[1].split("}", 1)[0]
+    assert '"tokenizer/smollm2-bpe"' in source
+    assert '"HuggingFaceTB/SmolLM2-135M"' in source
+
+
 def test_the_whole_config_builds_from_a_corpus_without_touching_s3(monkeypatch):
     """The check that would otherwise cost an A10G to run.
 
