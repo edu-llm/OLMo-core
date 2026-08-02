@@ -12,14 +12,17 @@ Usage:
     python build_batches.py [SRC.jsonl] [OUT_DIR] [N_BATCHES]
     # defaults: SRC=../test_results_instruct.jsonl  OUT_DIR=.  N_BATCHES=4
 """
-import json, os, random, sys
+import json
+import os
+import random
+import sys
 
 random.seed(7)
 SRC = sys.argv[1] if len(sys.argv) > 1 else "../test_results_instruct.jsonl"
 OUT = sys.argv[2] if len(sys.argv) > 2 else "."
 N_BATCHES = int(sys.argv[3]) if len(sys.argv) > 3 else 4
 
-recs = [json.loads(l) for l in open(SRC) if l.strip()]
+recs = [json.loads(line) for line in open(SRC) if line.strip()]
 items, key = [], {}
 for i, r in enumerate(recs):
     did = r.get("dialogue_id")

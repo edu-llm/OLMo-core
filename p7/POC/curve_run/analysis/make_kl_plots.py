@@ -1,7 +1,9 @@
 """KL vs Old Task (Math): wide/flat, large fonts for a tight slide slot.
 y = RAW overall math accuracy (% correct of all items). Coloring = training step (viridis).
 """
-import json, os, numpy as np
+import json
+import os
+import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -9,7 +11,8 @@ import matplotlib.pyplot as plt
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 FULL = os.path.join(ROOT, "full_0-923", "master_summary.json")
-FIG  = os.path.join(HERE, "figures"); os.makedirs(FIG, exist_ok=True)
+FIG  = os.path.join(HERE, "figures")
+os.makedirs(FIG, exist_ok=True)
 
 plt.rcParams.update({
     "font.size": 18, "axes.titlesize": 24, "axes.labelsize": 20,

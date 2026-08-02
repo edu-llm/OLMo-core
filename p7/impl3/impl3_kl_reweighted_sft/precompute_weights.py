@@ -17,7 +17,6 @@ Example:
     python precompute_weights.py --variant a --config config.yaml
     python precompute_weights.py --variant b --sft_model_id ../impl1_2_prompting_sft/out/impl2-sft --config config.yaml
 """
-import argparse
 import pathlib
 import sys
 

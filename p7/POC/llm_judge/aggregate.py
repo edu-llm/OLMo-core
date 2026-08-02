@@ -1,4 +1,6 @@
-import json, glob, statistics as st
+import json
+import glob
+import statistics as st
 
 key = json.load(open("judge_key.json"))
 SETUPS = ["A_raw_noSI", "B_raw_SI", "C_sft_noSI", "D_sft_SI"]
@@ -56,7 +58,8 @@ short = {"Revealing_of_the_Answer": "NoReveal", "Providing_Guidance": "Guidance"
          "Coherence": "Coher", "Tutor_Tone": "Tone", "Humanlikeness": "Human",
          "Step_Level_Guidance": "StepLvl", "Load_Aware_Formatting": "LoadFmt"}
 hdr = f'{"setup":<12}' + "".join(f'{short[d]:>9}' for d in DIMS) + f'{"OVERALL":>9}{"n":>4}'
-print(hdr); print("-" * len(hdr))
+print(hdr)
+print("-" * len(hdr))
 summary = {}
 for s in SETUPS:
     rs = by[s]

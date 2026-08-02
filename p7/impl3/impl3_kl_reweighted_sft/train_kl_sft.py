@@ -18,7 +18,6 @@ Example:
     python train_kl_sft.py --variant a --temperature 2 --config config.yaml
     python train_kl_sft.py --variant b --temperature 2 --sft_model_id ../impl1_2_prompting_sft/out/impl2-sft --config config.yaml
 """
-import argparse
 import math
 import pathlib
 import sys

@@ -18,7 +18,7 @@ from __future__ import annotations
 import math
 import os
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 import torch
@@ -155,7 +155,9 @@ def _disable_torch_load_version_gate():
         return  # a version that never added the check: nothing to do
     import transformers.trainer as _trainer
 
-    noop = lambda *a, **k: None
+    def noop(*a, **k):
+        return None
+
     import_utils.check_torch_load_is_safe = noop
     # trainer.py does `from ... import check_torch_load_is_safe`, so it holds its own reference and
     # patching the source module alone would not take effect.

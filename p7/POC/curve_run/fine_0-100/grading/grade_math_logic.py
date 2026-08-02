@@ -15,7 +15,10 @@ direct-SI) don't clobber each other:
   math_logic_results.jsonl            -> tag 'nosi'
   math_logic_results_directsi.jsonl   -> tag 'directsi'
 """
-import json, re, sys, glob
+import json
+import re
+import sys
+import glob
 from collections import defaultdict
 
 WITH_VERIFY = "--with-verify" in sys.argv
@@ -27,8 +30,8 @@ GRADED_OUT = f"math_logic_graded_{TAG}.json"
 NEEDS_OUT = f"needs_verify_{TAG}.json"
 VERIFIER_GLOB = f"verifier_out_{TAG}_*.json"
 
-PROMPTS = {r["id"]: r for r in (json.loads(l) for l in open("math_logic_prompts.jsonl"))}
-RES = [json.loads(l) for l in open(RES_PATH)]
+PROMPTS = {r["id"]: r for r in (json.loads(line) for line in open("math_logic_prompts.jsonl"))}
+RES = [json.loads(line) for line in open(RES_PATH)]
 print(f"grading {RES_PATH}  (tag={TAG})")
 
 try:
@@ -165,7 +168,8 @@ for s in sources:
     b, n = per_model["base"][s]
     sc, _ = per_model["sft"][s]
     print(f"{s:<26}{f'{b}/{n} ({100*b/n:.0f}%)':>10}{f'{sc}/{n} ({100*sc/n:.0f}%)':>10}")
-tb = sum(per_model["base"][s][0] for s in sources); tn = sum(per_model["base"][s][1] for s in sources)
+tb = sum(per_model["base"][s][0] for s in sources)
+tn = sum(per_model["base"][s][1] for s in sources)
 ts = sum(per_model["sft"][s][0] for s in sources)
 print("-" * 46)
 print(f"{'OVERALL':<26}{f'{tb}/{tn} ({100*tb/tn:.0f}%)':>10}{f'{ts}/{tn} ({100*ts/tn:.0f}%)':>10}")

@@ -2,7 +2,9 @@
 x = new-task (Socratic) KL, y = forgetting (base - ckpt math acc, pts). Coloring = training step.
 Linear fit so the drawn line matches its reported R^2 (leverage-robust; = Pearson r^2).
 """
-import json, os, numpy as np
+import json
+import os
+import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -10,7 +12,8 @@ import matplotlib.pyplot as plt
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 FULL = os.path.join(ROOT, "full_0-923", "master_summary.json")
-FIG  = os.path.join(HERE, "figures"); os.makedirs(FIG, exist_ok=True)
+FIG  = os.path.join(HERE, "figures")
+os.makedirs(FIG, exist_ok=True)
 
 rows = json.load(open(FULL))
 pt    = [r["point"] for r in rows]

@@ -119,7 +119,7 @@ def cohens_kappa(human: Sequence[str], machine: Sequence[str], labels: Sequence[
     n = len(human)
     if n == 0:
         return 0.0
-    idx = {l: i for i, l in enumerate(labels)}
+    idx = {label: i for i, label in enumerate(labels)}
     k = len(labels)
     obs = [[0.0] * k for _ in range(k)]
     for h, m in zip(human, machine):

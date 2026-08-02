@@ -5,10 +5,12 @@ Reads judge_out_*.json (records keyed by task_id) + judge_key.json + the results
   - Single-answer grading: mean 1-10 per model (+ per category).
   - Pairwise win-rate with position-swap: SFT vs base (win only if consistent in BOTH orders).
 """
-import json, glob, statistics as st
+import json
+import glob
+import statistics as st
 
 key = json.load(open("judge_key.json"))
-recs = {r["id"]: r for r in (json.loads(l) for l in open("general_eval_results.jsonl"))}
+recs = {r["id"]: r for r in (json.loads(line) for line in open("general_eval_results.jsonl"))}
 
 out = {}
 for f in sorted(glob.glob("judge_out_*.json")):
@@ -24,7 +26,8 @@ for tid, meta in key.items():
     r = out.get(tid)
     if not r or r.get("rating") is None:
         continue
-    m = meta["model"]; rating = float(r["rating"])
+    m = meta["model"]
+    rating = float(r["rating"])
     single[m].append(rating)
     cat = recs[meta["prompt_id"]]["category"]
     single_cat.setdefault(cat, {"base": [], "sft": []})[m].append(rating)

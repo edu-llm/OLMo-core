@@ -9,7 +9,10 @@ Sources (all with verifiable gold answers -> standard final-answer accuracy rubr
 Output: math_logic_prompts.jsonl with fields
   id, source, category(math|logic), difficulty, prompt, gold, answer_type(int|expr|mc)
 """
-import json, random, re
+import json
+import random
+from collections import Counter
+
 from datasets import load_dataset
 
 random.seed(7)
@@ -52,7 +55,6 @@ with open("math_logic_prompts.jsonl", "w") as f:
     for r in out:
         f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
-from collections import Counter
 print("total:", len(out))
 print("by source:", dict(Counter(r["source"] for r in out)))
 print("by category:", dict(Counter(r["category"] for r in out)))

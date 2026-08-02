@@ -97,7 +97,7 @@ def chat_completion(
         try:
             data = resp.json()
             return data["choices"][0]["message"].get("content") or ""
-        except (ValueError, KeyError, IndexError) as exc:
+        except (ValueError, KeyError, IndexError):
             # Malformed body — retry a couple of times, then give up.
             last_err = LLMClientError(f"Bad response body: {resp.text[:300]}")
             _sleep_backoff(attempt)

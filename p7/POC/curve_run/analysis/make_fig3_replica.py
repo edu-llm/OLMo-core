@@ -11,7 +11,9 @@ SFT trajectory (the paper overlays RL + SFT + oracle). New-task "accuracy" here 
 (D = SFT +SI, 0-1, LLM-judge). Prior task = math/logic accuracy. KL = kl_new_SI = KL(base||sft) on
 the pedagogy (new-task) distribution with the system instruction. Circles = full run, triangles = fine run.
 """
-import json, os, numpy as np
+import json
+import os
+import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -20,7 +22,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 FULL = os.path.join(ROOT, "full_0-923", "master_summary.json")
 FINE = os.path.join(ROOT, "fine_0-100", "master_summary_0-100.json")
-FIG  = os.path.join(HERE, "figures"); os.makedirs(FIG, exist_ok=True)
+FIG  = os.path.join(HERE, "figures")
+os.makedirs(FIG, exist_ok=True)
 
 def load(path, run):
     return [{"run": run, "point": r["point"],
@@ -56,7 +59,8 @@ scatter(ax[0], newp, acc)
 ax[0].set_xlabel("New-task performance  (pedagogy quality, %)")
 ax[0].set_ylabel("Prior-task performance  (math accuracy, %)")
 ax[0].set_title("(Left) Learning–Forgetting trade-off")
-ax[0].legend(loc="lower left", fontsize=9); ax[0].grid(alpha=0.25)
+ax[0].legend(loc="lower left", fontsize=9)
+ax[0].grid(alpha=0.25)
 
 # ---- (Middle) KL predicts forgetting + linear fit ----
 scatter(ax[1], kl, forget)
@@ -69,7 +73,8 @@ ax[1].plot(xs, m*xs + b, "--", c="gray", label=f"linear fit  $R^2$={r2:.2f}")
 ax[1].set_xlabel(r"New-task KL  $\mathrm{KL}(\pi_0\|\pi)$")
 ax[1].set_ylabel("Forgetting  (base − ckpt math acc, pts)")
 ax[1].set_title(f"(Middle) KL predicts forgetting   (Pearson r={r_lin:.2f})")
-ax[1].legend(loc="lower right"); ax[1].grid(alpha=0.25)
+ax[1].legend(loc="lower right")
+ax[1].grid(alpha=0.25)
 
 # ---- (Right) new-task performance vs KL ----
 p2 = scatter(ax[2], kl, newp)

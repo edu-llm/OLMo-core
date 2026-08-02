@@ -7,7 +7,9 @@ Model identity is not revealed.
 Usage: python build_verify_batches.py [needs_verify_TAG.json] [n_batches]
 Batches are written as verify_TAG_batch_*.json; verifiers should write verifier_out_TAG_*.json.
 """
-import json, sys, re
+import json
+import sys
+import re
 
 _pos = [a for a in sys.argv[1:] if not a.startswith("--")]
 NEEDS = _pos[0] if _pos else "needs_verify_nosi.json"

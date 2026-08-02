@@ -1,4 +1,6 @@
-import json, random, os
+import json
+import random
+import os
 
 random.seed(7)
 SRC = "../test_results_instruct.jsonl"
@@ -6,7 +8,7 @@ OUT = "."
 SETUPS = ["A_raw_noSI", "B_raw_SI", "C_sft_noSI", "D_sft_SI"]
 N_BATCHES = 4
 
-recs = [json.loads(l) for l in open(SRC)]
+recs = [json.loads(line) for line in open(SRC)]
 items, key = [], {}
 for r in recs:
     did = r["dialogue_id"]

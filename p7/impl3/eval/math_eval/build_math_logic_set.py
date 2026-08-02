@@ -20,7 +20,9 @@ SIZE. 45 -> 250. At base's ~60% accuracy, 45 items resolved only a ~22-point gap
 while the config-to-config gaps of interest are 5-15; 250 resolves ~12. The original set's GSM8K
 ids are retained as a subset so everything already scored stays comparable.
 """
-import json, os, random
+import json
+import os
+import random
 from collections import Counter
 
 from datasets import load_dataset

@@ -52,7 +52,7 @@ def boxed_hint(row):
 
 
 def load_prompts(path, n):
-    rows = [json.loads(l) for l in open(path, encoding="utf-8") if l.strip()]
+    rows = [json.loads(line) for line in open(path, encoding="utf-8") if line.strip()]
     return rows[:n] if n else rows
 
 

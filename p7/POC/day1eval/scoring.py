@@ -100,7 +100,7 @@ _LABEL_ALIASES: dict[str, str] = {
 def _rubric_block() -> str:
     lines = []
     for i, d in enumerate(DIMENSIONS, 1):
-        opts = " / ".join(f'"{l}"' for l in d.labels)
+        opts = " / ".join(f'"{label}"' for label in d.labels)
         lines.append(f'{i}. {d.key}: {d.question}\n   Allowed values: {opts}')
     return "\n".join(lines)
 
@@ -206,11 +206,11 @@ def aggregate(judgments: list[dict[str, str | None]]) -> dict[str, Any]:
         labels = [j.get(d.key) for j in judgments if j and j.get(d.key) in d.score]
         counts = Counter(j.get(d.key) for j in judgments if j)
         n_valid = len(labels)
-        mean = sum(d.score[l] for l in labels) / n_valid if n_valid else None
+        mean = sum(d.score[label] for label in labels) / n_valid if n_valid else None
         summary[d.key] = {
             "mean_score": round(mean, 4) if mean is not None else None,
             "n_valid": n_valid,
-            "distribution": {l: counts.get(l, 0) for l in d.labels},
+            "distribution": {label: counts.get(label, 0) for label in d.labels},
             "invalid_or_missing": sum(1 for j in judgments if not j or j.get(d.key) not in d.score),
         }
     valid_means = [v["mean_score"] for v in summary.values() if v["mean_score"] is not None]

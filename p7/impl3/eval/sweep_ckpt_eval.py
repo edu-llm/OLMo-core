@@ -248,13 +248,13 @@ def main():
     args = parse_args()
     os.chdir(ROOT)
 
-    math_rows = [json.loads(l) for l in open(args.math_prompts, encoding="utf-8") if l.strip()]
+    math_rows = [json.loads(line) for line in open(args.math_prompts, encoding="utf-8") if line.strip()]
     bare_prompts = [r["prompt"] for r in math_rows]
     hint_prompts = [with_boxed_hint(r) for r in math_rows]
     print(f"math probe: {len(math_rows)} prompts x 2 conditions (bare, hint), no pedagogy SI")
 
 
-    val = [json.loads(l) for l in open(args.val_file, encoding="utf-8") if l.strip()]
+    val = [json.loads(line) for line in open(args.val_file, encoding="utf-8") if line.strip()]
     kl_items = pedagogy_contexts(val, args.n_kl)
     print(f"KL probe: {len(kl_items)} pedagogy contexts (truncated before the first tutor turn)")
 
@@ -309,7 +309,9 @@ def main():
     cached_no = base_continuations(base, tok, kl_items, False, gen_max=args.kl_gen_max)
 
     print("precomputing base answers on the retention probes (once) ...")
-    gen = lambda m, p: generate_batched(m, tok, device, p, batch=args.batch, gen_max=args.gen_max)
+    def gen(m, p):
+        return generate_batched(m, tok, device, p, batch=args.batch, gen_max=args.gen_max)
+
     base_stats = {**math_stats(gen(base, bare_prompts), math_rows, "math_bare"),
                   **math_stats(gen(base, hint_prompts), math_rows, "math_hint"),
                   "ped_nll": pedagogy_nll(base, nll_items)}

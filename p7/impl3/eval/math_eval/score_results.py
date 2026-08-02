@@ -33,7 +33,7 @@ def committed(resp):
 
 
 def accuracies(path):
-    rows = [json.loads(l) for l in open(path, encoding="utf-8") if l.strip()]
+    rows = [json.loads(line) for line in open(path, encoding="utf-8") if line.strip()]
     per = defaultdict(lambda: defaultdict(list))
     commit = defaultdict(list)
     for r in rows:

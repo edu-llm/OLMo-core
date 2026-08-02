@@ -294,7 +294,7 @@ def main():
     import matplotlib.patheffects as pe
     import matplotlib.pyplot as plt
 
-    rows = [json.loads(l) for l in open(args.data, encoding="utf-8") if l.strip()]
+    rows = [json.loads(line) for line in open(args.data, encoding="utf-8") if line.strip()]
     out_dir = args.out_dir or os.path.join(os.path.dirname(os.path.abspath(args.data)), "figures")
     os.makedirs(out_dir, exist_ok=True)
 
@@ -335,7 +335,9 @@ def main():
     base_cmap = plt.get_cmap("turbo")
     # Trimmed at both ends: turbo terminates in near-black navy and near-black maroon, which read as
     # "dark" rather than as blue and red.
-    cmap_T = lambda f: base_cmap(0.06 + 0.88 * f)
+    def cmap_T(f):
+        return base_cmap(0.06 + 0.88 * f)
+
     MARKER = {"a": "s", "b": "o"}  # squares = variant a (base-surprise), circles = variant b (fwd-KL)
     colors, markers = {}, {}
     for n in names:
@@ -390,7 +392,8 @@ def main():
                 continue
             x = np.array([p[0] for p in pts], float)
             y = np.array([p[1] for p in pts], float)
-            allx += list(x); ally += list(y)
+            allx += list(x)
+            ally += list(y)
             c = colors[name]
             ref = configs[name][0].get("variant") is None  # the vanilla-SFT reference run
             if len(x) == 1:
@@ -456,7 +459,9 @@ def main():
                             transform=ax.transAxes, ha="center", va="bottom", fontsize=8.5,
                             color="0.25", bbox=dict(fc="#fff6e5", ec="#e0b070", lw=0.8, pad=4))
 
-        ax.set_xlabel(xlabel); ax.set_ylabel(ylabel); ax.set_title(title)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
         ax.grid(alpha=0.25)
         if invert_x:
             ax.invert_xaxis()  # NLL: lower = better, so flip to read left-to-right as "more learned"

@@ -1,7 +1,7 @@
 """Builds math_logic_eval_colab.ipynb from math_logic_prompts.jsonl (no nbformat dep)."""
 import json
 
-prompts = [json.loads(l) for l in open("math_logic_prompts.jsonl")]
+prompts = [json.loads(line) for line in open("math_logic_prompts.jsonl")]
 # strip gold from what goes in the notebook (model must never see it); keep id/meta only
 pub = [{"id": r["id"], "source": r["source"], "category": r["category"],
         "difficulty": r["difficulty"], "answer_type": r["answer_type"],

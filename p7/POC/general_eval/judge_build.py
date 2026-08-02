@@ -7,13 +7,15 @@ Keys (model identities + order) are kept separate so judges are blind.
 
 Usage: python judge_build.py [results_path] [n_batches]
 """
-import json, random, sys
+import json
+import random
+import sys
 
 SRC = sys.argv[1] if len(sys.argv) > 1 else "general_eval_results.jsonl"
 N = int(sys.argv[2]) if len(sys.argv) > 2 else 4
 random.seed(20)
 
-recs = [json.loads(l) for l in open(SRC)]
+recs = [json.loads(line) for line in open(SRC)]
 tasks, key = [], {}
 
 for r in recs:
