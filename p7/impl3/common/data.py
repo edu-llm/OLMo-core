@@ -5,8 +5,8 @@ The training data is the published POC mix ``meric533/socrateach-sft`` (30k trai
 entrypoint at it with ``hf_dataset`` (default in the impl configs) or snapshot it to
 local JSONL with ``snapshot_hf_dataset.py`` and use ``--data_dir``.
 
-This module also keeps the *recipe* helpers (method, not data) used to build a mix
-from raw sources via ``prepare_data.py``:
+This module also keeps the *recipe* helpers (method, not data) that built that mix from
+raw sources, kept so the construction is documented and repeatable:
 
   - ``assemble_pedagogy_example``  : prefix a per-dialogue System Instruction onto a
                                      pedagogy dialogue (uses common.system_instructions).

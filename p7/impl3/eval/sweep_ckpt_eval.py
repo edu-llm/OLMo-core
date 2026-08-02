@@ -48,7 +48,6 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "math_eval"))
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "general_eval"))
 
 import torch  # noqa: E402
 
@@ -66,9 +65,6 @@ def parse_args():
     p.add_argument("--out", default="out/ckpt_sweep_eval.jsonl")
     p.add_argument("--val_file", default="data/socrateach_sft_val.jsonl")
     p.add_argument("--math_prompts", default="eval/math_eval/math_logic_prompts.jsonl")
-    p.add_argument("--ifeval_prompts", default="eval/general_eval/ifeval_prompts.jsonl")
-    p.add_argument("--ifeval", action="store_true",
-                   help="Also run the IFEval retention probe (off: math is the only prior task).")
     p.add_argument("--extra_ckpt", action="append", default=[], metavar="LABEL=PATH",
                    help="Score a standalone adapter dir that is not out/<run>/checkpoint-N, "
                         "e.g. --extra_ckpt poc-c923=checkpoint-923. Repeatable.")
@@ -94,10 +90,13 @@ def measurement_protocol(args, math_rows):
 
     The item ids are hashed rather than just counted: a 250-item set that is half BBH and one that
     is all GSM8K are wildly different probes that a count alone would call identical.
+
+    The trailing 'ifeval=off' is frozen text. The IFEval probe has been removed, but every row
+    already scored carries that token, and the resume logic compares protocol strings verbatim —
+    dropping it would mark all existing rows stale and force a full rescore for no gain.
     """
     digest = hashlib.sha1(";".join(sorted(r["id"] for r in math_rows)).encode()).hexdigest()[:8]
-    return (f"kl=ctx-first-turn;math=bare+hint@{len(math_rows)}/{digest};"
-            f"ifeval={'on' if args.ifeval else 'off'}")
+    return f"kl=ctx-first-turn;math=bare+hint@{len(math_rows)}/{digest};ifeval=off"
 
 
 def with_boxed_hint(row):
@@ -163,19 +162,6 @@ def math_stats(responses, metas, prefix):
         f"{prefix}_deflect": sum(deflect) / n,
         f"{prefix}_acc_given_commit": (sum(c and k for c, k in zip(correct, commit)) / nc) if nc else None,
     }
-
-
-def score_ifeval(responses, rows):
-    """Prompt-level strict/loose accuracy: a prompt counts only if EVERY instruction passes."""
-    from ifeval_registry import check_loose, check_strict, known
-    strict = loose = 0
-    for resp, row in zip(responses, rows):
-        ids = [i for i in row["instruction_ids"] if known(i)]
-        kws = (row.get("kwargs") or [{}] * len(ids))[:len(ids)]
-        strict += all(check_strict(i, resp, k) for i, k in zip(ids, kws))
-        loose += all(check_loose(i, resp, k) for i, k in zip(ids, kws))
-    n = len(rows)
-    return (strict / n, loose / n) if n else (None, None)
 
 
 @torch.no_grad()
@@ -267,10 +253,6 @@ def main():
     hint_prompts = [with_boxed_hint(r) for r in math_rows]
     print(f"math probe: {len(math_rows)} prompts x 2 conditions (bare, hint), no pedagogy SI")
 
-    ife_rows = [json.loads(l) for l in open(args.ifeval_prompts, encoding="utf-8")
-                if l.strip()] if args.ifeval else []
-    ife_prompts = [r["prompt"] for r in ife_rows]
-    print(f"ifeval probe: {'off' if not args.ifeval else str(len(ife_rows)) + ' prompts'}")
 
     val = [json.loads(l) for l in open(args.val_file, encoding="utf-8") if l.strip()]
     kl_items = pedagogy_contexts(val, args.n_kl)
@@ -331,9 +313,6 @@ def main():
     base_stats = {**math_stats(gen(base, bare_prompts), math_rows, "math_bare"),
                   **math_stats(gen(base, hint_prompts), math_rows, "math_hint"),
                   "ped_nll": pedagogy_nll(base, nll_items)}
-    if args.ifeval:
-        b_strict, b_loose = score_ifeval(gen(base, ife_prompts), ife_rows)
-        base_stats.update(ifeval_strict=b_strict, ifeval_loose=b_loose)
     # "Prior task score" for the Figure-3 x-axis. The hinted condition is the POC-parity probe and
     # the only one where these models visibly forget, so it is the headline; math_bare is kept
     # alongside it because the gap between the two IS the refusal effect.
@@ -364,10 +343,6 @@ def main():
         rec.update(math_stats(gen(sft, bare_prompts), math_rows, "math_bare"))
         rec.update(math_stats(gen(sft, hint_prompts), math_rows, "math_hint"))
         rec["ped_nll"] = pedagogy_nll(sft, nll_items)
-        if args.ifeval:
-            strict, loose = score_ifeval(gen(sft, ife_prompts), ife_rows)
-            rec.update(ifeval_strict=strict, ifeval_loose=loose)
-            rec["ifeval_forget"] = base_stats["ifeval_loose"] - loose
         # Forgetting is the drop from the base measured on the identical prompts.
         for cond in ("math_bare", "math_hint"):
             rec[f"{cond}_forget"] = base_stats[cond] - rec[cond]

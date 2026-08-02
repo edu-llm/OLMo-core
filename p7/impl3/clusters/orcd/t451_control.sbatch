@@ -169,16 +169,14 @@ python run_kl_curve.py --base_model "$BASE_MODEL" \
     --pedagogy_file data/socrateach_sft_val.jsonl --n_prompts 64 \
     --out out/kl_t451.json || echo "[warn] KL curve failed"
 
-# (b) math retention + (c) IFEval — deterministic, no judge. New tags, so no results are clobbered.
+# (b) math retention — deterministic, no judge. New tags, so no results are clobbered. IFEval ran
+# here too and was dropped: 34 prompts never separated any two configurations.
 FAILED=""
 for tag in "${EVAL_TAGS[@]}"; do
     step=$(final_ckpt "out/$tag"); [ -n "$step" ] || continue
     python eval/generate_eval.py --prompts eval/math_eval/math_logic_prompts.jsonl \
         --adapter "out/$tag/checkpoint-$step" --out "eval/math_eval/results_$tag.jsonl" \
         || { echo "[warn] math gen $tag failed"; FAILED="$FAILED math:$tag"; }
-    python eval/generate_eval.py --prompts eval/general_eval/ifeval_prompts.jsonl \
-        --adapter "out/$tag/checkpoint-$step" --out "eval/general_eval/results_$tag.jsonl" \
-        || { echo "[warn] ifeval gen $tag failed"; FAILED="$FAILED ifeval:$tag"; }
 done
 
 # (d) pedagogy. Same test file, same --n_dialogues 40 and same seed as the sweep, so the judged
@@ -205,7 +203,7 @@ if [ -n "$SKIPPED" ]; then
     echo "INCOMPLETE RUNS:$SKIPPED — resubmit to finish them before trusting any of this."
     exit 1
 fi
-echo "Next (off-GPU): grade_math_logic.py / grade_ifeval.py on the new tags;"
+echo "Next (off-GPU): score the new tags with eval/math_eval/score_results.py;"
 echo "                judge eval/llm_judge/t451/judge_batch_{0,1}.json into judge_out_{0,1}.json there,"
 echo "                then: cd eval/llm_judge/t451 && python ../aggregate.py   (reads/writes in t451/)"
 echo "Key question: does $TAG_KL land on the same pedagogy score as $TAG_SFT?"

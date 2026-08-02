@@ -1,10 +1,10 @@
 """Pure answer-extraction / equivalence helpers for the math+logic probe.
 
-Split out of ``grade_math_logic.py`` so they can be imported. That script does all its work at
-module scope (reads the results file, prints a table, writes JSON), so importing it to reuse
-``extract``/``check`` would run a full grading pass as a side effect. The per-checkpoint sweep
-driver needs the scoring logic without the script, and both must agree exactly — hence one
-shared module rather than a second copy of the regexes.
+Kept as a side-effect-free module because two callers need it: ``score_results.py`` (per-run
+tables) and ``sweep_ckpt_eval.py`` (every checkpoint). They must agree exactly on what counts as
+a correct answer, so the extraction regexes live in one place rather than being copied. The
+original grader did its work at module scope, which meant importing it to reuse ``extract`` and
+``check`` ran a whole grading pass as a side effect — hence the split.
 
   - int (GSM8K/AIME): parse the final integer, exact match.
   - mc  (BBH)       : parse the choice letter (A-G), exact match.

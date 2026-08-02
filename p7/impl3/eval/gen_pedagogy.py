@@ -2,10 +2,9 @@
 """Generate Socratic tutor turns for the NEW-task pedagogy judge (the RL's-Razor y-axis).
 
 This is the pedagogy analogue of ``generate_eval.py`` (which does the deterministic OLD-task
-probes). Unlike the POC's ``impl1_2_prompting_sft/generate_2x2.py`` — which compared 4 fixed
-setups (raw/sft x SI/noSI) — this generalizes to an ARBITRARY set of candidate models so we can
-score each Impl-3 (variant, T) checkpoint against the base and the vanilla Impl-2 baseline on the
-same held-out contexts.
+probes). Where the POC's 2x2 script compared four fixed setups (raw/sft x SI/noSI), this takes an
+ARBITRARY set of candidate models, so every Impl-3 (variant, T) checkpoint can be scored against
+the base and the vanilla SFT baseline on the same held-out contexts.
 
 For each held-out dialogue we take the gold history up to a student turn (``context``) and, for
 every candidate, greedily generate the next tutor turn. Output rows are

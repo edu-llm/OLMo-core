@@ -11,12 +11,6 @@ the new Impls 3 & 4.
 > replay; `train`/`validation`/`test`). The POC math-retention, general-IF, and
 > Socratic pedagogy evals are ported under `eval/` and apply directly. See `eval/README.md`.
 
-> **Results:** the Impl-3 sweep is done — 16 runs x 12 log-spaced checkpoints. See
-> **[`RESULTS_192CKPT.md`](RESULTS_192CKPT.md)** for the numbers, the figures, and the one finding
-> that matters most (KL predicts forgetting only when measured in the same no-SI condition the
-> prior-task probes run in). Raw per-checkpoint data is committed at
-> `out/ckpt_sweep_bare_hint250.jsonl`; model weights are not (see `.gitignore`).
-
 ## What's current (this phase)
 **Impls 1 & 2 are done** — the recipe is unchanged from the POC, and their data +
 checkpoints were saved earlier, so we **do not rerun them**. This phase runs the new
@@ -53,24 +47,26 @@ post-training/
 │   ├── weighting.py            Impl-3 per-token weight signals + global norm (§3.2–3.3)
 │   ├── kl.py                   forward KL(pi_0 || pi) per PRD convention
 │   └── cli.py                  shared CLI flags -> SFTConfig
-├── impl1_2_prompting_sft/      Impl 1 (prompting) + Impl 2 (SI-conditioned SFT)  [together]
+├── impl1_2_prompting_sft/      Impl 2 (SI-conditioned SFT) — the vanilla baseline
 ├── impl3_kl_reweighted_sft/    Impl 3 (KL-reweighted loss)
-├── impl4_sdft/                 Impl 4 (self-distillation SFT)
-├── clusters/{orcd,aws}/        SLURM (ORCD) + torchrun/S3 (AWS) runners, one entrypoint each
-├── eval/                       ported POC evals: math/general forgetting probes + KL-forgetting plots
-├── prepare_data.py             build SocraTeach splits from raw sources (POC pedagogy path)
+├── clusters/orcd/              SLURM runners: the sweep, the T=451 control, per-checkpoint eval
+├── eval/                       math forgetting probe, pedagogy judge, per-checkpoint sweep + figures
 ├── snapshot_hf_dataset.py      snapshot meric533/socrateach-sft to local JSONL (offline nodes)
 ├── run_kl_curve.py             KL axis of the KL–forgetting curve, over any run's checkpoints
 └── requirements.txt
 ```
 
+This branch is scoped to the Impl-3 experiment. Impl 1 (prompting-only) and Impl 4 (SDFT) are
+part of the P7 PRD but contributed nothing to these results, so their scripts are not carried
+here; the AWS runner is likewise absent because every run was done on ORCD.
+
 ## The four implementations (increasing difficulty)
 | # | What | Where | Changes vs Impl 2 |
 |---|------|-------|-------------------|
-| **1** | Prompting-only Socratic tutor (system prompt) | `impl1_2_prompting_sft/prompt_tutor.py` | — (no training) |
+| **1** | Prompting-only Socratic tutor (system prompt) | not on this branch | — (no training) |
 | **2** | SI-conditioned SFT (LoRA, co-trained 75/25) | `impl1_2_prompting_sft/train_sft.py` | baseline |
 | **3** | Low-KL SFT via **KL-reweighted loss** | `impl3_kl_reweighted_sft/` | loss reweighting (objective change) |
-| **4** | Low-KL SFT via **self-distillation (SDFT)** | `impl4_sdft/` | self-distilled targets (data change) |
+| **4** | Low-KL SFT via **self-distillation (SDFT)** | not on this branch | self-distilled targets (data change) |
 
 Impls 1 & 2 are one 2×2 experiment (`{Raw,SFT}×{no-SI,+SI}`); Impls 3 & 4 each target
 the RL's-Razor goal of matching Impl-2 pedagogy at lower new-task KL / less forgetting,
@@ -97,27 +93,21 @@ W&B logging is **on by default** (`report_to: wandb`, project `edullm-p7`) — s
 
 ## Quick start (once you have data)
 ```bash
-pip install -r requirements.txt          # install torch first for your CUDA (see clusters/*/setup_*)
+pip install -r requirements.txt          # install torch first for your CUDA (see clusters/orcd/setup_orcd_env.sh)
 export WANDB_API_KEY=...                  # W&B is on by default
+# Data streams from the Hub; python snapshot_hf_dataset.py materialises it for an offline node.
 
-# 1. Build the SFT splits from your sources (blank now — supply --pedagogy_jsonl etc.)
-python prepare_data.py --pedagogy_jsonl raw_pedagogy.jsonl --general_jsonl raw_general.jsonl --out_dir data
-
-# 2. Impl 2 baseline (keeps >=10 checkpoints)
+# 1. Impl 2 baseline (the vanilla SFT every Impl-3 config is judged against)
 python impl1_2_prompting_sft/train_sft.py --config impl1_2_prompting_sft/config.yaml --output_dir out/impl2-sft
 
-# 3. Impl 1 behavior + the 2x2 outputs
-python impl1_2_prompting_sft/prompt_tutor.py --interactive
-python impl1_2_prompting_sft/generate_2x2.py --adapter_dir out/impl2-sft --test_file data/socrateach_sft_test.jsonl
-
-# 4. Impl 3 sweep (variant a shown) and Impl 4 sweep
+# 2. Impl 3 sweep (variant a shown; variant b also needs --sft_model_id <the Impl-2 adapter>)
 for T in 2 4 8 16 32; do python impl3_kl_reweighted_sft/train_kl_sft.py --variant a --temperature $T --config impl3_kl_reweighted_sft/config.yaml; done
-# (Impl 4: run impl4_sdft/self_distill.py first, then sweep train_sdft.py over --distilled_frac)
 
-# 5. KL axis for the curve
-python run_kl_curve.py --ckpt c100=out/impl2-sft/checkpoint-100 ... --pedagogy_file heldout_pedagogy.jsonl
+# 3. Score every checkpoint, then plot
+python eval/sweep_ckpt_eval.py --out out/ckpt_sweep_bare_hint250.jsonl
+bash eval/make_figures.sh
 ```
-On a cluster, use `clusters/orcd/` (SLURM) or `clusters/aws/` (SSM + S3) — each wraps
+On a cluster use `clusters/orcd/` (SLURM), which wraps
 the same entrypoints; sweeps fan out as independent single-GPU jobs.
 
 ## Stack note — why HF Transformers + PEFT, not OLMo-core's native SFT

@@ -1,7 +1,7 @@
 # P7 "Tutor Layer" post-training — Python dependencies.
 #
 # Install into a fresh env (conda/venv). Install torch FIRST for your CUDA version
-# (see clusters/orcd/setup_orcd_env.sh or clusters/aws/setup_aws_env.sh), then:
+# (see clusters/orcd/setup_orcd_env.sh), then:
 #     pip install -r requirements.txt
 #
 # IMPORTANT: do NOT install `torchao` — an old torchao (0.10) breaks the current
@@ -18,9 +18,7 @@ huggingface_hub==1.25.1
 numpy==2.4.6
 pyyaml==6.0.3
 wandb==0.28.1    # experiment logging is ON by default (report_to: wandb); set WANDB_API_KEY
-pillow==12.3.0   # wandb.Image needs PIL. Training never builds one, so a missing pillow stays
-                 # invisible until eval/wandb_eval.py attaches a figure and dies AFTER the metrics
-                 # have already synced — leaving a half-populated run. Keep it installed.
+pillow==12.3.0   # wandb.Image needs PIL, and matplotlib wants it for raster output.
 
 # Tokenizer backends the EVAL scripts need to rebuild the tokenizer from a saved checkpoint dir
 # (run_kl_curve.py, eval/generate_eval.py). Training doesn't hit this (it uses the base model's
@@ -30,9 +28,9 @@ pillow==12.3.0   # wandb.Image needs PIL. Training never builds one, so a missin
 sentencepiece==0.2.0
 tiktoken==0.8.0
 
-# Plotting the KL–forgetting curve (eval/plot_kl_forgetting.py, eval/curve_analysis/*):
+# Plotting the KL–forgetting curve (eval/plot_figure3.py via eval/make_figures.sh):
 matplotlib==3.11.1
-scipy==1.17.1    # only for eval/curve_analysis/make_merged_fit.py (curve_fit)
+scipy==1.17.1    # PCHIP interpolation, used to smooth the monotone (isotonic) fits
 
 # Optional but recommended for the general-data language filter (common/data.py):
 langdetect==1.0.9
