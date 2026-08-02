@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "entrypoint": "bash .edullm/platform/entrypoint.sh",
+  "compute_profile": "gpu-8xa100",
+  "gpu_count": 8,
+  "distributed_launcher": "python -m torch.distributed.run --standalone --nproc-per-node=8",
+  "dockerfile": ".edullm/Dockerfile",
+  "output_contract": "runtime-scratch+wandb",
+  "task_loss_contract": "packaged-20-label-rc-5shot-bpb-synchronous",
+  "arm_recipe": ".edullm/curriculum_recipe.json"
+}

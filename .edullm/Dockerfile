@@ -37,6 +37,9 @@ FROM ${BASE_IMAGE}
 # -- but a reader of the provenance record who takes base_image_digest as a description of
 # the image will be wrong, and this paragraph is where they find out.
 ENV PYTHONPATH=/opt/olmo-core/src \
+    EDULLM_EXPERIMENT_FAMILY=curriculum \
+    TASK_LOSS_EVAL_SCRIPT=/opt/olmo-core/.edullm/task_loss/eval_task_loss_olmo_core.py \
+    LADDER_BASE_CONFIG=/opt/olmo-core/.edullm/task_loss/ladder_base_config.yaml \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
@@ -180,10 +183,30 @@ RUN set -eux; \
     python -m pip install --no-cache-dir "torch==2.9.0"; \
     python -m pip install --no-cache-dir ".[wandb]" boto3; \
     python -m pip install --no-cache-dir "edullm-data @ https://github.com/edu-llm/edullm-data/archive/38bf831a6c3f445e394784018441fd59288b876c.tar.gz"; \
+    python -m pip install --no-cache-dir \
+      "ai2-olmo @ https://github.com/allenai/OLMo/archive/090253dac6688f2532509daa7aa2eb5fae50e956.tar.gz" \
+      "boto3==1.43.60" \
+      "datasets==5.0.0" \
+      "numpy==1.26.4" \
+      "omegaconf==2.3.0" \
+      "PyYAML==6.0.3" \
+      "rich==15.0.0" \
+      "safetensors==0.8.0" \
+      "scikit-learn==1.9.0" \
+      "tokenizers==0.22.2" \
+      "torchmetrics==1.9.0" \
+      "transformers==4.57.6" \
+      "wandb==0.28.1"; \
     python -c "import torch; assert torch.__version__.startswith('2.9.0'), f'torch was moved off the pin: {torch.__version__}'"; \
     python -c "import torch; assert torch.version.cuda, 'the CUDA build of torch was replaced by a CPU wheel'"; \
     python -c "import boto3, wandb; from olmo_core.data import TokenizerConfig; from olmo_core.nn.transformer import TransformerConfig; print(TransformerConfig.olmo2_190M(vocab_size=TokenizerConfig.gpt2().padded_vocab_size()).__class__.__name__)"; \
-    python -c "from edullm_data.read import dataset_paths, resolve_latest; print(dataset_paths.__module__)"
+    python -c "from edullm_data.read import dataset_paths, resolve_latest; print(dataset_paths.__module__)"; \
+    python -m py_compile .edullm/curriculum_entrypoint.py .edullm/curriculum_loader.py .edullm/curriculum_ema.py; \
+    python .edullm/curriculum_entrypoint.py --help >/dev/null; \
+    python .edullm/curriculum_ema.py --help >/dev/null; \
+    python .edullm/task_loss/eval_task_loss_olmo_core.py --help >/dev/null; \
+    test -f "${LADDER_BASE_CONFIG}"; \
+    python -c "import runpy; from pathlib import Path; from olmo.eval.downstream import label_to_task_map; ns=runpy.run_path('.edullm/task_loss/eval_task_loss_olmo_core.py'); missing=[x for x in ns['TASK_LABELS'] if x not in label_to_task_map]; assert not missing, missing; ns['load_base_config'](Path('${LADDER_BASE_CONFIG}'))"
 
 # No CMD. The entrypoint of the registered base is inherited deliberately, so swapping the
 # base does not leave a stale command behind.

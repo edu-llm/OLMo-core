@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "methodology": {
+    "repository": "https://github.com/edu-llm/edullm",
+    "path": "experiments/curriculum/README.md",
+    "pacing_path": "experiments/curriculum/curriculum_pacing.py"
+  },
+  "parent": {
+    "dataset_id": "pretrain/regmix-10b",
+    "version": "v1",
+    "manifest_sha256": "a24992f53dc4a900bacf8fa571d77e343fd28ffa9054c14b93d54204b0a38cb4"
+  },
+  "orders": {
+    "dataset_id": "curriculum/regmix-370m",
+    "version": null
+  },
+  "training": {
+    "steps": 2384,
+    "sequence_length": 2048,
+    "global_batch_tokens": 4194304,
+    "rank_microbatch_tokens": 65536,
+    "seed": 42,
+    "peak_lr": 0.0004,
+    "warmup_steps": 24,
+    "alpha_f": 1.0,
+    "checkpoint_interval": 125,
+    "ema_steps": [2000, 2125, 2250, 2384],
+    "ema_alpha": 0.8
+  },
+  "arms": [
+    {"index": 0, "name": "control", "pacing": "control", "metric": null, "order_group": null},
+    {"index": 1, "name": "linear10-cr", "pacing": "linear_n10", "metric": "compression_ratio", "order_group": "compression"},
+    {"index": 2, "name": "linear10-flesch", "pacing": "linear_n10", "metric": "flesch", "order_group": "flesch"},
+    {"index": 3, "name": "linear10-mtld", "pacing": "linear_n10", "metric": "mtld", "order_group": "mtld"},
+    {"index": 4, "name": "linear10-learn", "pacing": "linear_n10", "metric": "learnability", "order_group": "learnability"},
+    {"index": 5, "name": "expand-cr", "pacing": "expanding_25_1000", "metric": "compression_ratio", "order_group": "compression"},
+    {"index": 6, "name": "expand-flesch", "pacing": "expanding_25_1000", "metric": "flesch", "order_group": "flesch"},
+    {"index": 7, "name": "expand-mtld", "pacing": "expanding_25_1000", "metric": "mtld", "order_group": "mtld"},
+    {"index": 8, "name": "expand-learn", "pacing": "expanding_25_1000", "metric": "learnability", "order_group": "learnability"},
+    {"index": 9, "name": "warmup-cr", "pacing": "warmup_1000", "metric": "compression_ratio", "order_group": "compression"},
+    {"index": 10, "name": "warmup-flesch", "pacing": "warmup_1000", "metric": "flesch", "order_group": "flesch"},
+    {"index": 11, "name": "warmup-mtld", "pacing": "warmup_1000", "metric": "mtld", "order_group": "mtld"},
+    {"index": 12, "name": "warmup-learn", "pacing": "warmup_1000", "metric": "learnability", "order_group": "learnability"},
+    {"index": 13, "name": "interleave-cr", "pacing": "interleave_i10_linear", "metric": "compression_ratio", "order_group": "compression"},
+    {"index": 14, "name": "interleave-flesch", "pacing": "interleave_i10_linear", "metric": "flesch", "order_group": "flesch"},
+    {"index": 15, "name": "interleave-mtld", "pacing": "interleave_i10_linear", "metric": "mtld", "order_group": "mtld"},
+    {"index": 16, "name": "interleave-learn", "pacing": "interleave_i10_linear", "metric": "learnability", "order_group": "learnability"}
+  ]
+}

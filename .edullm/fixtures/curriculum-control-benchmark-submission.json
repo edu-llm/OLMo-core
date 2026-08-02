@@ -1,0 +1,17 @@
+{
+  "command": [
+    "bash",
+    "-lc",
+    "EDULLM_CHECKPOINT_CHECK=waived exec python -m torch.distributed.run --standalone --nproc-per-node=8 /opt/olmo-core/.edullm/curriculum_entrypoint.py --train-worker --arm-index 0 --nproc 8 --fresh --run-dir /tmp/curriculum-control-benchmark --wandb-mode disabled --local-smoke --task-loss-eval-script /opt/olmo-core/.edullm/task_loss/eval_task_loss_olmo_core.py --ladder-base-config /opt/olmo-core/.edullm/task_loss/ladder_base_config.yaml --task-loss-nproc 8"
+  ],
+  "commit_sha": "0000000000000000000000000000000000000000",
+  "compute_profile": "gpu-8xa100",
+  "dataset_release": "regmix-10b-v1",
+  "experiment": "curriculum-control-370m-benchmark",
+  "maximum_attempts": 1,
+  "maximum_runtime_hours": "12",
+  "repository": "OLMo-core",
+  "team": "pre-training",
+  "wandb_project": "curriculum-control",
+  "workload_profile": "olmo-core-train-4gpu"
+}
