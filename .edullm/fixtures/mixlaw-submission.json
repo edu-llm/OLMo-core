@@ -1,0 +1,16 @@
+{
+  "command": [
+    "bash",
+    "-lc",
+    "EDULLM_CHECKPOINT_DIR=\"$EDULLM_CHECKPOINT_DIR\" exec python -m torch.distributed.run --standalone --nproc-per-node=8 /opt/olmo-core/.edullm/mixlaw_entrypoint.py --train-worker --arm-index 0"
+  ],
+  "commit_sha": "0000000000000000000000000000000000000000",
+  "compute_profile": "gpu-8xa100",
+  "dataset_release": "olmo-127b-v1",
+  "experiment": "mixlaw-370m-validation-olmo-mix-1124",
+  "maximum_attempts": 2,
+  "repository": "OLMo-core",
+  "team": "pre-training",
+  "wandb_project": "mixlaw",
+  "workload_profile": "olmo-core-train-4gpu"
+}

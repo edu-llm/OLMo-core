@@ -287,11 +287,24 @@ COPY . .
 # 0xE3069283 and the platform's checkpoints.py asserts against the same constant. It costs a
 # microsecond and it is the difference between "botocore will use this" and "and the number
 # it gets is right".
+#
+# THE OLMES STACK IS INSTALLED HERE RATHER THAN ABOVE THE COPY, AND NOT BY PREFERENCE. This
+# study evaluates 20 tasks at every saved step, and the versions that produces are pinned in
+# .edullm/requirements-mixlaw-eval.txt -- a file inside this repository, so it does not exist
+# in the build context until `COPY . .` above. Naming it in the shared dependency layer would
+# ask pip for a file that is not there yet. The cost is that this stack rebuilds on any source
+# edit; the alternative is a broken build.
+#
+# It sits before the assertions deliberately. OLMES pulls a second transitive dependency tree
+# and pip is free to move torch while resolving it, which is exactly the failure the two lines
+# below were written for -- so the pin is checked after this install rather than before it.
 RUN set -eux; \
     python -m pip install --no-cache-dir ".[wandb]"; \
+    python -m pip install --no-cache-dir -r .edullm/requirements-mixlaw-eval.txt; \
     python -c "import torch; assert torch.__version__.startswith('2.9.0'), f'torch was moved off the pin: {torch.__version__}'"; \
     python -c "import torch; assert torch.version.cuda, 'the CUDA build of torch was replaced by a CPU wheel'"; \
     python -c "import boto3, wandb; from olmo_core.data import TokenizerConfig; from olmo_core.nn.transformer import TransformerConfig; print(TransformerConfig.olmo2_190M(vocab_size=TokenizerConfig.gpt2().padded_vocab_size()).__class__.__name__)"; \
+    python -c "import boto3, wandb; from olmo.eval.downstream import label_to_task_map; from olmo_core.data import NumpyFSLDatasetConfig; from olmo_core.data.source_mixture import SourceMixtureDatasetConfig; from olmo_core.nn.transformer import TransformerConfig; assert 'arc_easy_val_rc_5shot_bpb' in label_to_task_map; print(TransformerConfig.olmo2_370M(vocab_size=100352).__class__.__name__)"; \
     python -c "import boto3; from botocore import UNSIGNED; from botocore.config import Config; from botocore.stub import Stubber; client = boto3.client('s3', region_name='us-east-1', config=Config(signature_version=UNSIGNED)); stub = Stubber(client); stub.add_response('put_object', {}); stub.activate(); client.put_object(Bucket='b', Key='k', Body=b'123456789', ChecksumAlgorithm='CRC32C')"; \
     python -c "from awscrt.checksums import crc32c; assert crc32c(b'123456789') == 0xE3069283, 'awscrt computes something other than CRC-32C'"; \
     python -c "from edullm_data.read import dataset_paths, resolve_latest; print(dataset_paths.__module__)"
