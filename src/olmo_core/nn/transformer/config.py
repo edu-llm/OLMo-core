@@ -1,7 +1,7 @@
 import logging
 import math
 from collections.abc import Callable
-from dataclasses import InitVar, dataclass, field
+from dataclasses import InitVar, dataclass, field, replace
 from fnmatch import fnmatch
 from itertools import cycle, islice
 from typing import TYPE_CHECKING, Dict, List, Optional, cast
@@ -1026,6 +1026,166 @@ class TransformerConfig(ModelConfig):
             attn_backend=kwargs.pop("attn_backend", AttentionBackendName.flash_2),
             **kwargs,
         )
+        return config
+
+    @classmethod
+    def edullm_moe_m1(cls, vocab_size: int, **kwargs) -> "TransformerConfig":
+        """
+        `M1`: the 1B-tier MoE arm of the eduLLM strict-total MoE study.
+
+        24 layers at width 1,024, 16/4 Q/KV heads. Blocks 1-8 are dense SwiGLU at
+        ``f=2,816``; blocks 9-24 route top-2 of 8 experts at ``f_e=2,112``.
+
+        The paired control is :meth:`edullm_dense_d1`, which replaces each routed FFN with a
+        dense SwiGLU of ``k * f_e = 4,224`` and is otherwise identical. The two differ by
+        exactly the router parameters (``16 * d_model * num_experts``), which is the identity
+        the study's primary comparison rests on and which holds at every vocabulary size.
+        """
+        return cls._edullm_moe(
+            vocab_size=vocab_size,
+            d_model=kwargs.pop("d_model", 1024),
+            n_layers=kwargs.pop("n_layers", 24),
+            n_heads=kwargs.pop("n_heads", 16),
+            n_kv_heads=kwargs.pop("n_kv_heads", 4),
+            dense_hidden_size=kwargs.pop("dense_hidden_size", 2816),
+            n_dense_layers=kwargs.pop("n_dense_layers", 8),
+            num_experts=kwargs.pop("num_experts", 8),
+            top_k=kwargs.pop("top_k", 2),
+            expert_hidden_size=kwargs.pop("expert_hidden_size", 2112),
+            **kwargs,
+        )
+
+    @classmethod
+    def edullm_dense_d1(cls, vocab_size: int, **kwargs) -> "TransformerConfig":
+        """
+        `D1-compute`: the forward-path-matched dense control for :meth:`edullm_moe_m1`.
+
+        Identical tokenizer, depth, width, GQA, attention and normalization. Blocks 1-8 keep
+        ``f=2,816``; blocks 9-24 use a dense SwiGLU at ``f = k * f_e = 4,224``, the width the
+        MoE arm actually executes per token. It therefore has the same forward-path parameter
+        count as `M1` less exactly the routers.
+        """
+        return cls._edullm_dense(
+            vocab_size=vocab_size,
+            d_model=kwargs.pop("d_model", 1024),
+            n_layers=kwargs.pop("n_layers", 24),
+            n_heads=kwargs.pop("n_heads", 16),
+            n_kv_heads=kwargs.pop("n_kv_heads", 4),
+            dense_hidden_size=kwargs.pop("dense_hidden_size", 2816),
+            n_dense_layers=kwargs.pop("n_dense_layers", 8),
+            wide_hidden_size=kwargs.pop("wide_hidden_size", 4224),
+            **kwargs,
+        )
+
+    @classmethod
+    def _edullm_common(cls, **kwargs):
+        """Settings shared by every arm of the eduLLM MoE study, so no arm can drift.
+
+        The study's count contract: tied embeddings, bias-free projections, RoPE, GQA,
+        SwiGLU, two RMSNorm scales per block plus a final one, and **no** Q/K norm or
+        expert norm. ``qk_norm`` is therefore explicitly false: the ``*_reordered_norm``
+        block types default it to true, which would add ``2 * d_model`` per block and put
+        every ledger in the study out by that amount.
+        """
+        kwargs.setdefault("rope_theta", 500_000)
+        kwargs.setdefault("layer_norm_eps", 1e-6)
+        kwargs.setdefault("qk_norm", False)
+        # Tied input embedding and LM head. The default is untied, which adds `V * d_model`
+        # -- 32.77M at width 1,024 and V=32,000, and 102.76M at V=100,352. Left untied, every
+        # arm is over its ledger by the vocabulary, and the two arms are over it by the same
+        # amount, so the comparison still looks self-consistent while both totals are wrong.
+        kwargs.setdefault("tie_word_embeddings", True)
+        return kwargs
+
+    @classmethod
+    def _edullm_moe(
+        cls,
+        *,
+        vocab_size: int,
+        d_model: int,
+        n_layers: int,
+        n_heads: int,
+        n_kv_heads: int,
+        dense_hidden_size: int,
+        n_dense_layers: int,
+        num_experts: int,
+        top_k: int,
+        expert_hidden_size: int,
+        **kwargs,
+    ) -> "TransformerConfig":
+        kwargs = cls._edullm_common(**kwargs)
+        moe_config = MoEConfig(
+            name=MoEType.default,
+            num_experts=num_experts,
+            hidden_size=expert_hidden_size,
+            # Fixed-cap top-2 at the study's baseline c=1.25. `default` rather than
+            # `dropless` because the study declares a drop-rate gate, and the dropless path
+            # never sees a capacity factor at all -- a gate on a number nothing computes is
+            # not a gate.
+            capacity_factor=1.25,
+            router=MoERouterConfig(top_k=top_k),
+            shared_mlp=None,
+            lb_loss_weight=0.01,
+            z_loss_weight=0.001,
+        )
+        config = cls.llama_like(
+            d_model=d_model,
+            vocab_size=vocab_size,
+            n_layers=n_layers,
+            n_heads=n_heads,
+            n_kv_heads=n_kv_heads,
+            name=TransformerType.moe,
+            block_name=TransformerBlockType.moe,
+            hidden_size_multiplier=None,
+            hidden_size_multiple_of=1,
+            feed_forward_moe=moe_config,
+            **kwargs,
+        )
+        # The first `n_dense_layers` blocks are ordinary dense SwiGLU. `block` carries the
+        # MoE form and `block_overrides` replaces the leading blocks, rather than the other
+        # way round, so that a layer count raised past 24 extends the MoE region.
+        assert not isinstance(config.block, dict)
+        dense_block = replace(
+            config.block,
+            name=TransformerBlockType.default,
+            feed_forward=FeedForwardConfig(hidden_size=dense_hidden_size, bias=False),
+            feed_forward_moe=None,
+        )
+        config.block_overrides = {i: dense_block for i in range(n_dense_layers)}
+        return config
+
+    @classmethod
+    def _edullm_dense(
+        cls,
+        *,
+        vocab_size: int,
+        d_model: int,
+        n_layers: int,
+        n_heads: int,
+        n_kv_heads: int,
+        dense_hidden_size: int,
+        n_dense_layers: int,
+        wide_hidden_size: int,
+        **kwargs,
+    ) -> "TransformerConfig":
+        kwargs = cls._edullm_common(**kwargs)
+        config = cls.llama_like(
+            d_model=d_model,
+            vocab_size=vocab_size,
+            n_layers=n_layers,
+            n_heads=n_heads,
+            n_kv_heads=n_kv_heads,
+            hidden_size_multiplier=None,
+            hidden_size_multiple_of=1,
+            feed_forward=FeedForwardConfig(hidden_size=wide_hidden_size, bias=False),
+            **kwargs,
+        )
+        assert not isinstance(config.block, dict)
+        narrow_block = replace(
+            config.block,
+            feed_forward=FeedForwardConfig(hidden_size=dense_hidden_size, bias=False),
+        )
+        config.block_overrides = {i: narrow_block for i in range(n_dense_layers)}
         return config
 
     @classmethod
