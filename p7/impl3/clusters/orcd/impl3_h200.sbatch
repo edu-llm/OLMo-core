@@ -40,7 +40,7 @@ RUN_VARIANT_B="${RUN_VARIANT_B:-1}"            # set 0 to run only variant a (~h
 CFG="impl3_kl_reweighted_sft/config.yaml"
 # T ladder shifted UP on 2026-07-29: low T over-concentrates the reweighting onto a few
 # high-signal tokens; T=0.5 and T=1 were unstable / behaved badly in the variant-a runs, so the
-# ladder is now 2..32 (higher T = gentler, closer to vanilla). Keep this in sync with submit_sweep.sh.
+# ladder is now 2..32 (higher T = gentler, closer to vanilla).
 TEMPS=(2 4 8 16 32)
 
 echo "Job $SLURM_JOB_ID on $(hostname) | PROJECT=$PROJECT | variant_a=$RUN_VARIANT_A variant_b=$RUN_VARIANT_B"
@@ -170,16 +170,14 @@ python run_kl_curve.py --base_model allenai/OLMo-2-0425-1B-Instruct \
     --pedagogy_file data/socrateach_sft_val.jsonl --n_prompts 64 \
     --out out/kl_by_checkpoint.json || echo "[warn] KL curve failed"
 
-# (b) math retention + (c) IFEval — both deterministic (no subagents)
+# (b) math retention — deterministic, no subagents. IFEval used to run here too and was dropped:
+# at 34 prompts it never separated any two configurations, so it added GPU time and no signal.
 for d in out/impl3-*/; do
   [ -d "$d" ] || continue
   tag=$(basename "$d"); step=$(final_ckpt "$d"); [ -n "$step" ] || continue
   python eval/generate_eval.py --prompts eval/math_eval/math_logic_prompts.jsonl \
       --adapter "$d/checkpoint-$step" --out eval/math_eval/results_$tag.jsonl \
       || echo "[warn] math gen $tag failed"
-  python eval/generate_eval.py --prompts eval/general_eval/ifeval_prompts.jsonl \
-      --adapter "$d/checkpoint-$step" --out eval/general_eval/results_$tag.jsonl \
-      || echo "[warn] ifeval gen $tag failed"
 done
 
 # (d) pedagogy generation (NEW-task quality — the judge-based y-axis). Generate one tutor turn per
@@ -198,5 +196,5 @@ python eval/gen_pedagogy.py --base_model allenai/OLMo-2-0425-1B-Instruct \
     && ( cd eval/llm_judge && python build_batches.py test_results_instruct.jsonl ) \
     || echo "[warn] pedagogy generation / judge-batch build failed"
 
-echo "== ALL DONE. Deterministic: grade_math_logic.py / grade_ifeval.py, then plot + wandb_eval.py."
+echo "== ALL DONE. Per-checkpoint scoring + figures: sbatch clusters/orcd/ckpt_sweep_eval.sbatch."
 echo "   Pedagogy: judge eval/llm_judge/judge_batch_*.json (frontier judge) -> judge_out_*.json -> aggregate.py =="

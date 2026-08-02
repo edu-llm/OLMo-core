@@ -238,12 +238,12 @@ python run_kl_curve.py --base_model allenai/OLMo-2-0425-1B-Instruct \
     --out out/kl_by_checkpoint.json
 # ('impl2' = the vanilla baseline point; the Instruct base itself is the KL=0 reference.)
 
-# (b) Math retention + (c) IFEval — base vs each final checkpoint (both deterministic probes)
+# (b) Math retention — base vs each final checkpoint, both prompt conditions
 for d in out/impl3-*/; do tag=$(basename $d);
   python eval/generate_eval.py --prompts eval/math_eval/math_logic_prompts.jsonl \
       --adapter $d/checkpoint-938 --out eval/math_eval/results_$tag.jsonl
-  python eval/generate_eval.py --prompts eval/general_eval/ifeval_prompts.jsonl \
-      --adapter $d/checkpoint-938 --out eval/general_eval/results_$tag.jsonl
+  python eval/generate_eval.py --prompts eval/math_eval/math_logic_prompts.jsonl --boxed_hint \
+      --adapter $d/checkpoint-938 --out eval/math_eval/results_${tag}_hint.jsonl
 done
 
 # (d) Pedagogy generation (NEW-task quality) — one tutor turn per held-out context for
@@ -269,17 +269,14 @@ All forgetting-axis scoring is deterministic. Run once the job is done (`squeue 
 
 ```bash
 cd ~/post-training
-for f in eval/math_eval/results_*.jsonl; do
-  ( cd eval/math_eval && python grade_math_logic.py "$(basename "$f")" ); done
-for f in eval/general_eval/results_*.jsonl; do
-  ( cd eval/general_eval && python grade_ifeval.py "$(basename "$f")" ); done
+python eval/math_eval/score_results.py eval/math_eval/results_*.jsonl
 ```
 
-- **Math:** MATH-500 (the `expr` items needing symbolic/LLM verification) was removed, leaving 45
-  exact-match items (GSM8K + AIME `int`, BBH `mc`). No `--with-verify`, no subagents.
-- **General IF = IFEval** (Zhou et al. 2023), the paper's metric: rule-verifiable (strict + loose,
-  prompt- & instruction-level accuracy); prints base vs sft, writes `ifeval_graded_<tag>.json`.
-  Use `sft.prompt_level_loose` as the retention number. The old MT-Bench judge flow is deprecated.
+- **Math:** 250 GSM8K items, integer exact-match, no subagents. Read the hinted and bare columns
+  together — the boxing hint makes a tutor-tuned model deflect rather than answer, so `boxed%`
+  (commit rate) and `acc|boxed` separate refusal from actual skill loss.
+- **General IF (IFEval) was dropped.** At 34 prompts it never separated any two configurations,
+  so it cost generation time and yielded nothing. Math is the only prior-task probe now.
 - **Pedagogy quality** (new-task y-axis): inherently judge-based (no deterministic metric for *how*
   it tutors). The eval stage generates tutor turns (`eval/gen_pedagogy.py`) and blinds them into
   `eval/llm_judge/judge_batch_*.json` (+ `judge_key.json`). This is the **only** piece that needs
@@ -290,23 +287,23 @@ cd eval/llm_judge && python aggregate.py   # judge_out_*.json + judge_key.json -
   `judge_summary.json` gives one pedagogy score per candidate (`base`, `impl2`, each `impl3-*`),
   which is the y-axis for the RL's-Razor Pareto plot.
 
-## 7. Plot the RL's-Razor curve + log eval metrics to W&B
+## 7. Score every checkpoint and plot the RL's-Razor curve
 
-Assemble `out/<run>/master_summary.json` rows `{point, step, kl_new, acc, ...}` (kl from step 5a,
-acc from the math/IFEval graders; add `forget`/`pedagogy` when available), then:
+Steps 5–6 cover the final checkpoint of each run. For the full trajectory — which is what the
+curve actually needs — one job scores every checkpoint of every run:
 
 ```bash
-python eval/plot_kl_forgetting.py --summary out/master_summary.json --out_dir out/figures
-python eval/wandb_eval.py --summary out/master_summary.json --project "$WANDB_PROJECT" \
-    --run_name impl3-eval --figure out/figures/fig_kl_forgetting.png
+sbatch clusters/orcd/ckpt_sweep_eval.sbatch     # resumable; appends to out/ckpt_sweep_bare_hint250.jsonl
+bash eval/make_figures.sh                       # all four KL-condition x math-prompt figures
 ```
 
-`wandb_eval.py` is schema-agnostic: any per-checkpoint JSON of numeric metrics lands in W&B as
-`eval/*` curves over step (+ `final/*` in the run summary + the plot image). Reuse the exact same
-call later for eval numbers handed over by other teams — just point it at their summary JSON.
+The sweep is safe to re-run: scored checkpoints are skipped, and each row carries a measurement
+protocol stamp so a changed probe aborts the job instead of quietly mixing incompatible rows into
+one file.
 
-Impl 3 wins if its points sit **left of / below** the vanilla Impl-2 baseline (checkpoint-923)
-at matched pedagogy — lower KL / less forgetting.
+Impl 3 wins if its points sit **left of / below** the vanilla SFT baseline at matched pedagogy —
+lower KL, less forgetting. See `RESULTS_192CKPT.md` for how that turned out, including why the
+KL must be measured without the system instruction for the comparison to mean anything.
 
 ### Cost of per-checkpoint eval (does W&B logging add compute?)
 
@@ -353,7 +350,7 @@ Both issues below happened on the first end-to-end ORCD run, and the job **still
 J=<jobid>
 grep -E "effective variant_b|ALL DONE" logs/p7-impl3_$J.out          # variant_b=1? reached ALL DONE?
 python -c "import json; print('KL points:', len(json.load(open('out/kl_by_checkpoint.json'))))"  # >0?
-ls -la eval/math_eval/results_impl3-*.jsonl eval/general_eval/results_impl3-*.jsonl               # exist & non-empty?
+ls -la eval/math_eval/results_impl3-*.jsonl                                                      # exist & non-empty?
 ```
 If KL points = 0 or the `results_*.jsonl` are missing/empty, the eval stage failed silently — fix the
 env and re-run **only the eval stage** (it reads the saved checkpoints; **no retrain needed**).

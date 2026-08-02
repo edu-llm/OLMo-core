@@ -1,10 +1,14 @@
 #!/usr/bin/env python
 """Score one or more generate_eval result files and print base-vs-sft accuracy per source.
 
-``grade_math_logic.py`` derives its output filenames from the input filename and writes graded
-JSON next to it, which makes it awkward for an A/B where several result files must be compared
-side by side. This just reads the files and prints a table, sharing the same ``math_scoring``
-helpers so the numbers are identical to the main grader's.
+Reads any number of result files and prints one table, so an A/B across conditions can be read
+side by side. Shares the ``math_scoring`` helpers with the per-checkpoint sweep driver, so the
+numbers here and in ``sweep_ckpt_eval.py`` are computed identically.
+
+Reports three columns, because accuracy alone is misleading on a tutor-tuned model: overall
+accuracy, the rate at which it commits to an answer at all, and accuracy among the answers it
+did commit to. A model that refuses and a model that answers wrongly both score zero on the
+first, and only the split tells them apart.
 
     python score_results.py results_ab_*.jsonl
 """

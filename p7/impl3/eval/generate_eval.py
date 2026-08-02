@@ -2,21 +2,24 @@
 """Generate base-vs-checkpoint outputs on an eval prompt file.
 
 Produces the ``{"id", "prompt", ..., "outputs": {"base": ..., "sft": ...}}`` result
-rows that ``math_eval/grade_math_logic.py`` and ``general_eval/grade_ifeval.py`` consume.
-Run it once per checkpoint (``--adapter out/<run>/checkpoint-16``); each run compares the
-KL-reference base against that one checkpoint (the "sft" column).
+rows that ``math_eval/score_results.py`` consumes. Run it once per checkpoint
+(``--adapter out/<run>/checkpoint-16``); each run compares the KL-reference base against
+that one checkpoint (the "sft" column).
 
-Forgetting probes (both deterministic, no subagents): point it at
-``math_eval/math_logic_prompts.jsonl`` (math/logic retention) or
-``general_eval/ifeval_prompts.jsonl`` (IFEval instruction following) — both measure OLD-task
-ability. For NEW-task Socratic tutoring quality, generate on held-out pedagogy prompts and
-score with ``llm_judge/`` (the only judge-based axis).
+This is the one-checkpoint-at-a-time path, used for final checkpoints and for the hint A/B.
+To score a whole sweep, use ``sweep_ckpt_eval.py`` instead — it caches the base model's answers
+across checkpoints rather than regenerating them every time.
+
+``--boxed_hint`` appends "put your final answer inside \\boxed{}" to each prompt. That is not a
+formatting detail: it conflicts with the tutor persona's "never state the final answer
+yourself", and a tutor-tuned model deflects rather than answers, so the same checkpoint can
+score 21% hinted and 46% bare. Generate both conditions and read them together.
 
 Examples:
     python generate_eval.py --prompts math_eval/math_logic_prompts.jsonl \
         --out math_eval/results_c16.jsonl --adapter ../out/impl3-a-T2/checkpoint-16
-    python generate_eval.py --prompts general_eval/ifeval_prompts.jsonl \
-        --out general_eval/results_c16.jsonl --adapter ../out/impl3-a-T2/checkpoint-64
+    python generate_eval.py --prompts math_eval/math_logic_prompts.jsonl --boxed_hint \
+        --out math_eval/results_c16_hint.jsonl --adapter ../out/impl3-a-T2/checkpoint-16
 """
 import argparse
 import json

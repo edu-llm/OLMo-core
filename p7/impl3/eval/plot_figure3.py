@@ -358,8 +358,6 @@ def main():
         "math_bare": "Prior-task score: GSM8K accuracy (bare question)",
         "math_hint_commit": "Answer-commit rate (hinted)",
         "math_hint_acc_given_commit": "GSM8K accuracy among attempts (hinted)",
-        "ifeval_strict": "Prior-task score: IFEval (strict)",
-        "ifeval_loose": "Prior-task score: IFEval (loose)",
         "math_acc": "Prior-task score: math accuracy",
     }.get(args.prior_key, f"Prior-task score: {args.prior_key}")
 

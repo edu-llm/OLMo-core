@@ -2,7 +2,7 @@
 # One-time environment setup for P7 post-training on MIT ORCD (Engaging).
 # Run ONCE on a login node (installs software only; no GPU needed):
 #     bash setup_orcd_env.sh
-# Then submit training with run.sbatch / submit_sweep.sh.
+# Then submit training with sbatch clusters/orcd/impl3_extra.sbatch (or impl3_h200.sbatch).
 set -euo pipefail
 
 ENV_NAME="${ENV_NAME:-p7post}"
@@ -58,4 +58,4 @@ print("CUDA available (expected False on a login node):", torch.cuda.is_availabl
 PY
 echo
 echo "W&B logging is ON by default. Authenticate once: 'wandb login' (or export WANDB_API_KEY)."
-echo "Next: export WANDB_API_KEY=... ; then bash submit_sweep.sh impl2  (or sbatch run.sbatch)"
+echo "Next: wandb login ; then sbatch clusters/orcd/impl3_extra.sbatch"
