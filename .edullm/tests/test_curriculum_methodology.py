@@ -103,41 +103,18 @@ def _loader(
     )
 
 
-def test_recipe_is_exact_seventeen_arm_matrix() -> None:
+def test_recipe_is_exact_approved_five_arm_matrix() -> None:
     arms = entrypoint.load_recipe()
-    assert tuple(arm.index for arm in arms) == tuple(range(17))
+    assert tuple(arm.index for arm in arms) == tuple(range(5))
     assert tuple((arm.name, arm.pacing, arm.metric, arm.order_group) for arm in arms) == (
-        ("control", "control", None, None),
-        ("linear10-cr", "linear_n10", "compression_ratio", "compression"),
         ("linear10-flesch", "linear_n10", "flesch", "flesch"),
         ("linear10-mtld", "linear_n10", "mtld", "mtld"),
         ("linear10-learn", "linear_n10", "learnability", "learnability"),
-        ("expand-cr", "expanding_25_1000", "compression_ratio", "compression"),
-        ("expand-flesch", "expanding_25_1000", "flesch", "flesch"),
-        ("expand-mtld", "expanding_25_1000", "mtld", "mtld"),
-        ("expand-learn", "expanding_25_1000", "learnability", "learnability"),
-        ("warmup-cr", "warmup_1000", "compression_ratio", "compression"),
-        ("warmup-flesch", "warmup_1000", "flesch", "flesch"),
         ("warmup-mtld", "warmup_1000", "mtld", "mtld"),
-        ("warmup-learn", "warmup_1000", "learnability", "learnability"),
-        (
-            "interleave-cr",
-            "interleave_i10_linear",
-            "compression_ratio",
-            "compression",
-        ),
-        ("interleave-flesch", "interleave_i10_linear", "flesch", "flesch"),
         ("interleave-mtld", "interleave_i10_linear", "mtld", "mtld"),
-        (
-            "interleave-learn",
-            "interleave_i10_linear",
-            "learnability",
-            "learnability",
-        ),
     )
-    assert {arm.pacing for arm in arms[1:]} == {
+    assert {arm.pacing for arm in arms} == {
         "linear_n10",
-        "expanding_25_1000",
         "warmup_1000",
         "interleave_i10_linear",
     }
@@ -373,10 +350,12 @@ def test_ema_requires_one_immutable_run_identity(tmp_path: Path) -> None:
 
 
 def test_platform_fixture_and_docker_are_branch_specific() -> None:
-    fixture = json.loads((EDULLM / "fixtures" / "curriculum-control-submission.json").read_text())
+    fixture = json.loads(
+        (EDULLM / "fixtures" / "curriculum-linear10-flesch-submission.json").read_text()
+    )
     command = fixture["command"][-1]
     assert fixture["dataset_release"] == "regmix-10b-v1"
-    assert fixture["wandb_project"] == "curriculum-control"
+    assert fixture["wandb_project"] == "curriculum-linear10-flesch"
     assert fixture["compute_profile"] == "gpu-8xa100"
     assert fixture["workload_profile"] == "olmo-core-train-4gpu"
     assert "--nproc-per-node=8" in command
@@ -389,12 +368,14 @@ def test_platform_fixture_and_docker_are_branch_specific() -> None:
     assert "curriculum_entrypoint.py" in docker
 
     benchmark = json.loads(
-        (EDULLM / "fixtures" / "curriculum-control-benchmark-submission.json").read_text()
+        (
+            EDULLM / "fixtures" / "curriculum-linear10-flesch-benchmark-submission.json"
+        ).read_text()
     )
     benchmark_command = benchmark["command"][-1]
     assert benchmark["compute_profile"] == "gpu-8xa100"
     assert benchmark["maximum_attempts"] == 1
-    assert benchmark["wandb_project"] == "curriculum-control"
+    assert benchmark["wandb_project"] == "curriculum-linear10-flesch"
     assert "--nproc-per-node=8" in benchmark_command
     assert "--local-smoke" in benchmark_command
     assert "--wandb-mode disabled" in benchmark_command
@@ -405,7 +386,7 @@ def test_platform_fixture_and_docker_are_branch_specific() -> None:
     handoff = (EDULLM / "CURRICULUM.md").read_text(encoding="utf-8")
     assert "1.25 * T" in handoff
     assert "run-approval-admin" in handoff
-    assert "Do not submit the 17-arm matrix as fan-out" in handoff
+    assert "Do not submit the five-arm matrix as fan-out" in handoff
 
 
 def test_production_recipe_statically_assembles_public_olmo_apis() -> None:
@@ -531,7 +512,7 @@ def test_run_worker_builds_concrete_eight_gpu_trainer_and_fits(
                 callback.trainer = trainer
             return trainer
 
-    monkeypatch.setenv("EDULLM_WANDB_PROJECT", "curriculum-control")
+    monkeypatch.setenv("EDULLM_WANDB_PROJECT", "curriculum-linear10-flesch")
     monkeypatch.setenv("WANDB_API_KEY", "test-only")
     monkeypatch.setattr(
         entrypoint,
@@ -595,5 +576,5 @@ def test_run_worker_builds_concrete_eight_gpu_trainer_and_fits(
     contract = built_callbacks["curriculum_contract"]
     assert contract.task_loss_nproc == 8
     assert contract.eval_script == entrypoint.PACKAGED_TASK_LOSS_SCRIPT
-    assert built_callbacks["wandb"].project == "curriculum-control"
+    assert built_callbacks["wandb"].project == "curriculum-linear10-flesch"
     assert entrypoint.TOTAL_STEPS in built_callbacks["checkpointer"].fixed_steps

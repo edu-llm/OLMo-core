@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON="${PYTHON:-python}"
-ARM_INDEX="${ARM_INDEX:?ARM_INDEX (0..16) is required}"
+ARM_INDEX="${ARM_INDEX:?ARM_INDEX (0..4) is required}"
 NPROC="${NPROC:-1}"
 RUN_DIR="${RUN_DIR:-${TMPDIR:-/tmp}/curriculum-${ARM_INDEX}}"
 
