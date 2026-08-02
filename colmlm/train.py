@@ -65,9 +65,16 @@ from colmlm.tokenizer import smollm2_tokenizer_config
 # Control-arm defaults (smollm2-135m-control-vs-colmlm-archive.md), used for both base and split.
 CONTROL_SEED = 42
 
-# Archive eval suite: HellaSwag / PIQA / OpenBookQA, 5-shot rank-classification, accuracy + BPB,
-# reported every 250M training tokens.
-CONTROL_EVAL_TASKS = ["hellaswag_rc_5shot", "piqa_val_rc_5shot", "openbookqa_test_rc_5shot"]
+# Reasoning eval suite (5-shot rank-classification, accuracy + BPB, every 250M training tokens):
+# the archive's HellaSwag / PIQA / OpenBookQA plus CommonsenseQA, Social IQa, and ARC-Easy.
+CONTROL_EVAL_TASKS = [
+    "arc_easy_test_rc_5shot",
+    "csqa_val_rc_5shot",
+    "hellaswag_rc_5shot",
+    "openbookqa_test_rc_5shot",
+    "piqa_val_rc_5shot",
+    "socialiqa_val_rc_5shot",
+]
 
 
 @dataclass
