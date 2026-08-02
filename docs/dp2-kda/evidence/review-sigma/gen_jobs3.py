@@ -12,5 +12,6 @@ for b in range(9101,9111):
         tag=f"hard_{lab}_b{b}"
         lines.append(f"{tag}\t{flags} --task s5_words --bundle-id {b} --steps 4000 "
                      f"--d-model 128 --n-layers 2 --eval-lengths 40 64 128 256 --out {OUT}/out/{tag}.json")
-with open(f"{OUT}/jobs_hard.tsv","w") as f: f.write("\n".join(lines)+"\n")
+with open(f"{OUT}/jobs_hard.tsv","w") as f:
+    f.write("\n".join(lines)+"\n")
 print(len(lines))

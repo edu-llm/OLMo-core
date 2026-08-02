@@ -1,6 +1,10 @@
 """Compute sigma_t, rho, sigma_d per runbook 5.8.0, plus power/decidability sizing."""
-import json, glob, os, sys, math, itertools
-from collections import defaultdict
+import json
+import glob
+import os
+import sys
+import math
+import itertools
 
 OUT = "/scratch/users/ericrcwu/agent-runs/review-sigma/out"
 prefix = sys.argv[1] if len(sys.argv) > 1 else "s4000"
@@ -14,9 +18,11 @@ for p in sorted(glob.glob(f"{OUT}/{prefix}_*.json")):
     arm = base[len(prefix)+1:].rsplit("_b", 1)[0]
     bundle = int(base.rsplit("_b", 1)[1])
     if d.get("outcome") != "completed":
-        bad.append((base, d.get("outcome"))); continue
+        bad.append((base, d.get("outcome")))
+        continue
     if d.get("probe_source_revision") in (None, "unknown"):
-        bad.append((base, "prov=" + str(d.get("probe_source_revision")))); continue
+        bad.append((base, "prov=" + str(d.get("probe_source_revision"))))
+        continue
     recs[(arm, bundle)] = d
 
 print(f"# loaded {len(recs)} completed records; rejected {len(bad)}: {bad[:10]}")
@@ -29,7 +35,8 @@ print(f"# bundles={bundles}")
 print("\n## INTEGRITY")
 for a in arms:
     ds = [recs[(a, b)] for b in bundles if (a, b) in recs]
-    if not ds: continue
+    if not ds:
+        continue
     d0 = ds[0]
     seeds = {tuple(sorted(d["seeds"].items())) for d in ds}
     banks = {d["eval_bank_sha256"] for d in ds}
@@ -48,13 +55,18 @@ for b in bundles[:3]:
 
 def mean(v): return sum(v)/len(v)
 def sd(v):
-    if len(v) < 2: return float("nan")
-    m = mean(v); return math.sqrt(sum((x-m)**2 for x in v)/(len(v)-1))
+    if len(v) < 2:
+        return float("nan")
+    m = mean(v)
+    return math.sqrt(sum((x-m)**2 for x in v)/(len(v)-1))
 def corr(x, y):
-    if len(x) < 3: return float("nan")
+    if len(x) < 3:
+        return float("nan")
     mx, my = mean(x), mean(y)
-    sx = math.sqrt(sum((a-mx)**2 for a in x)); sy = math.sqrt(sum((a-my)**2 for a in y))
-    if sx == 0 or sy == 0: return float("nan")
+    sx = math.sqrt(sum((a-mx)**2 for a in x))
+    sy = math.sqrt(sum((a-my)**2 for a in y))
+    if sx == 0 or sy == 0:
+        return float("nan")
     return sum((a-mx)*(b-my) for a, b in zip(x, y))/(sx*sy)
 
 LENGTHS = ["40","64","128","256"]
@@ -85,10 +97,14 @@ results={}
 for A,B in PAIRS:
     for L in LENGTHS:
         bs=[b for b in bundles if (A,b) in recs and (B,b) in recs]
-        if len(bs)<3: continue
-        va=[acc(A,b,L) for b in bs]; vb=[acc(B,b,L) for b in bs]
+        if len(bs)<3:
+            continue
+        va=[acc(A,b,L) for b in bs]
+        vb=[acc(B,b,L) for b in bs]
         dv=[x-y for x,y in zip(va,vb)]
-        r=corr(va,vb); s_d=sd(dv); n=len(bs)
+        r=corr(va,vb)
+        s_d=sd(dv)
+        n=len(bs)
         st=math.sqrt((sd(va)**2+sd(vb)**2)/2)
         sd_form = st*math.sqrt(2*(1-r)) if r==r else float("nan")
         sd_comp = sd_form*math.sqrt(0.5) if sd_form==sd_form else float("nan")  # rho_T=0, k=2
@@ -103,19 +119,25 @@ json.dump({f"{k[0]}|{k[1]}|{k[2]}":v for k,v in results.items()},
 
 # ---- power / decidability sizing -------------------------------------------
 print("\n## SIZING: n for power>=0.80 (true +5pp, one-sided 95% t) and decidability>=0.80 (90% CI hw<3pp)")
-import random
+import random  # noqa: E402
 def sizing(sigma_d, effect=5.0, delta=3.0, trials=4000, seed=0):
     rnd=random.Random(seed)
     for n in range(3,201):
         tc=tcrit95(n-1)
         # two-sided 90% t == one-sided 95% t
-        pw=0; dec=0
+        pw=0
+        dec=0
         for _ in range(trials):
             xs=[rnd.gauss(effect,sigma_d) for _ in range(n)]
-            m=mean(xs); s=sd(xs); se=s/math.sqrt(n)
-            if m-tc*se>0 and m>=effect*0.0: pass
-            if m-tc*se>0 and m>=5.0: pw+=1
-            if tc*se<delta: dec+=1
+            m=mean(xs)
+            s=sd(xs)
+            se=s/math.sqrt(n)
+            if m-tc*se>0 and m>=effect*0.0:
+                pass
+            if m-tc*se>0 and m>=5.0:
+                pw+=1
+            if tc*se<delta:
+                dec+=1
         if pw/trials>=0.80 and dec/trials>=0.80:
             return n, pw/trials, dec/trials
     return None,None,None

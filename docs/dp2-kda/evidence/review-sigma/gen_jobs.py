@@ -1,4 +1,3 @@
-import os
 OUT="/scratch/users/ericrcwu/agent-runs/review-sigma"
 DP2_NONEMB=1400524
 # arm_label, extra flags

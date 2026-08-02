@@ -7,8 +7,6 @@ A 'PASS' here means the test has literally no power over that output.
 
 import sys
 
-import torch
-
 sys.path.insert(0, "/Users/ericwu/Developer/Capstone_LLM/probes")
 from audit_exp2_mutation import NAMES, build, bwd_mut  # noqa: E402
 

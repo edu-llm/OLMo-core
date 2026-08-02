@@ -1,6 +1,5 @@
 import numpy as np
 # one-sided 95% t critical values, df=1..199 (hardcoded table avoids scipy)
-import math
 def t_ppf95(df):
     # Cornish-Fisher / Abramowitz-Stegun expansion for t quantile from normal z
     z = 1.6448536269514722
@@ -17,10 +16,12 @@ def sizing(sigma_d, effect, delta=3.0, trials=40000, seed=1):
     for n in range(3,201):
         tc=t_ppf95(n-1)
         xs=rng.normal(effect,sigma_d,size=(trials,n))
-        m=xs.mean(1); se=xs.std(1,ddof=1)/np.sqrt(n)
+        m=xs.mean(1)
+        se=xs.std(1,ddof=1)/np.sqrt(n)
         pw=float(np.mean((m-tc*se>0)&(m>=5.0)))
         dec=float(np.mean(tc*se<delta))
-        if pw>=0.80 and dec>=0.80: return n,pw,dec
+        if pw>=0.80 and dec>=0.80:
+            return n,pw,dec
     return None,None,None
 print("\n## Required n per runbook 5.8.0 Stage 2")
 print("## power = P(L95(d)>0 AND dbar>=5pp) at stated TRUE effect; decidability = P(90%CI halfwidth<3pp)")

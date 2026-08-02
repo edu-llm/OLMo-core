@@ -5,7 +5,7 @@ on bf16-rounded inputs), parameterised by accumulate dtype so fp32-vs-fp64 drift
 """
 
 import sys
-from typing import List, Optional, Tuple
+from typing import List
 
 import torch
 

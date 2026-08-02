@@ -6,7 +6,7 @@ import sys
 import torch
 
 sys.path.insert(0, "/Users/ericwu/Developer/Capstone_LLM/probes")
-from audit_numerics import bwd, fwd, make  # noqa: E402
+from audit_numerics import bwd, fwd  # noqa: E402
 
 torch.set_printoptions(precision=4, sci_mode=True)
 

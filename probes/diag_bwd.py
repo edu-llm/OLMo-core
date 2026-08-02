@@ -28,7 +28,8 @@ out = kda_householder_bwd(q=q, k=k, v=v, g=g, beta=beta, do=do,
 names = ["dq", "dk", "dv", "dg", "dbeta", "dh0"]
 for n, t_ in zip(names, out):
     if t_ is None:
-        print(f"  {n}: None"); continue
+        print(f"  {n}: None")
+        continue
     f = t_.float()
     print(f"  {n}: max|{f.abs().max().item():.3e}|  nan={bool(f.isnan().any())}  "
           f"inf={bool(f.isinf().any())}  allzero={bool((f==0).all())}")

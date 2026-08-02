@@ -46,7 +46,7 @@ print(" comparison to the torch backend it replaces")
 print("=" * 96)
 tot4, _ = acct(B=4, T=8192, H=8, K=64, V=64, R=4)
 tot2, _ = acct(B=2, T=8192, H=8, K=64, V=64, R=4)
-print(f"  torch backend MEASURED activations, B2/T8192/R4 : 5.6500 GiB")
+print("  torch backend MEASURED activations, B2/T8192/R4 : 5.6500 GiB")
 print(f"  triton bwd workspace,             B2/T8192/R4 : {sum(tot2.values()) / GiB:.4f} GiB"
       f"   ratio {sum(tot2.values()) / GiB / 5.65:.2f}x")
 print(f"  triton bwd workspace,             B4/T8192/R4 : {sum(tot4.values()) / GiB:.4f} GiB")

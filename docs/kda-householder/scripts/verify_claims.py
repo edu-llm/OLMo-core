@@ -62,8 +62,19 @@ ALPHA = 0.05
 #: The hardcoded two-sided t critical values used by the original analysis scripts, reproduced
 #: verbatim so they can be checked against exact quantiles.
 AUTHOR_T_CRIT = {
-    1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365,
-    8: 2.306, 9: 2.262, 10: 2.228, 11: 2.201, 14: 2.145, 15: 2.131,
+    1: 12.706,
+    2: 4.303,
+    3: 3.182,
+    4: 2.776,
+    5: 2.571,
+    6: 2.447,
+    7: 2.365,
+    8: 2.306,
+    9: 2.262,
+    10: 2.228,
+    11: 2.201,
+    14: 2.145,
+    15: 2.131,
 }
 
 #: Tolerance (in percentage points) within which a recomputed value is considered to match a
@@ -223,7 +234,12 @@ class Result:
         self.mean = st.mean(diffs) if self.n >= 1 else float("nan")
         self.sd = st.stdev(diffs) if self.n >= 2 else float("nan")
         if self.n < 2:
-            self.degenerate, self.se, self.t, self.p = True, float("nan"), float("nan"), float("nan")
+            self.degenerate, self.se, self.t, self.p = (
+                True,
+                float("nan"),
+                float("nan"),
+                float("nan"),
+            )
             self.ci_lo = self.ci_hi = float("nan")
             self.dz = float("nan")
             self.verdict = "INSUFFICIENT_N"
@@ -481,8 +497,11 @@ def verify_t_crit_table(out_dir: str) -> List[str]:
     missing = [d for d in range(1, 16) if d not in AUTHOR_T_CRIT]
     rows.append(f"#missing_df_in_author_table\t{','.join(map(str, missing))}\t\t\tFALLBACK_2.0")
     write_tsv(out_dir, "probe_t_crit_audit.tsv", rows)
-    log.append(f"T_CRIT: {len(AUTHOR_T_CRIT)} entries checked, all within 5e-4 of exact"
-               if not log else "T_CRIT has discrepancies (see above)")
+    log.append(
+        f"T_CRIT: {len(AUTHOR_T_CRIT)} entries checked, all within 5e-4 of exact"
+        if not log
+        else "T_CRIT has discrepancies (see above)"
+    )
     log.append(f"T_CRIT missing df in author table (fall back to 2.0): {missing}")
     return log
 
@@ -599,10 +618,9 @@ def do_interaction(D: dict, out_dir: str, claims: List[tuple]) -> None:
     rows3 = ["contrast\tlength_a\tlength_b\tn\tpearson_r"]
     for label, series in (("interaction", per_length_effects), ("S5_R4vs1", s5_effects)):
         for i, a in enumerate(LENGTHS_7):
-            for b in LENGTHS_7[i + 1:]:
+            for b in LENGTHS_7[i + 1 :]:
                 rows3.append(
-                    f"{label}\t{a}\t{b}\t{len(series[a])}\t"
-                    f"{fmt(pearson(series[a], series[b]))}"
+                    f"{label}\t{a}\t{b}\t{len(series[a])}\t" f"{fmt(pearson(series[a], series[b]))}"
                 )
     rows3.append("#--- effective number of independent tests across the 7 lengths ---")
     rows3.append("contrast\tmean_abs_r\tmean_r\teig_spectrum\tn_eff_cheverud\tn_eff_participation")
@@ -643,9 +661,7 @@ def do_solvability(D: dict, out_dir: str, claims: List[tuple]) -> None:
         "ci_hi\tdz\tt\tp\tverdict\tauthor_verdict\tseeds"
     ]
     for task, solv in tasks:
-        seeds_all = sorted(
-            s for s in range(8) if (4, task, 3, s) in D and (1, task, 3, s) in D
-        )
+        seeds_all = sorted(s for s in range(8) if (4, task, 3, s) in D and (1, task, 3, s) in D)
         for L in LENGTHS_7:
             d, used = paired_diff(
                 D, lambda s, t=task: (4, t, 3, s), lambda s, t=task: (1, t, 3, s), L, seeds_all
@@ -664,8 +680,9 @@ def do_solvability(D: dict, out_dir: str, claims: List[tuple]) -> None:
                 if L == "128":
                     claims.append((f"solv_{task}_eff@128", c128, res.mean, status(c128, res.mean)))
                 if L == "2048":
-                    claims.append((f"solv_{task}_eff@2048", c2048, res.mean,
-                                   status(c2048, res.mean)))
+                    claims.append(
+                        (f"solv_{task}_eff@2048", c2048, res.mean, status(c2048, res.mean))
+                    )
         # Baseline difficulty at R=1, acc@2048.
         c_acc, _, _ = CLAIMED_SOLV[task]
         got = st.mean([acc(D[(1, task, 3, s)], "2048") for s in seeds_all])
@@ -712,8 +729,8 @@ def do_depth_r(D: dict, out_dir: str, claims: List[tuple]) -> None:
         for seedset, suffix in subsets:
             d, used = paired_diff(
                 D,
-                lambda s, l=layers: (4, "s5_words", l, s),
-                lambda s, l=layers: (1, "s5_words", l, s),
+                lambda s, ly=layers: (4, "s5_words", ly, s),
+                lambda s, ly=layers: (1, "s5_words", ly, s),
                 LENGTHS_7[0],
                 seedset,
             )
@@ -722,8 +739,8 @@ def do_depth_r(D: dict, out_dir: str, claims: List[tuple]) -> None:
             for L in LENGTHS_7:
                 d, used = paired_diff(
                     D,
-                    lambda s, l=layers: (4, "s5_words", l, s),
-                    lambda s, l=layers: (1, "s5_words", l, s),
+                    lambda s, ly=layers: (4, "s5_words", ly, s),
+                    lambda s, ly=layers: (1, "s5_words", ly, s),
                     L,
                     seedset,
                 )
@@ -905,8 +922,10 @@ def do_kda_vs_gdn(root: str, out_dir: str, claims: List[tuple]) -> None:
     cseeds = sorted(set(Kc) & set(Gc))
     for L in LENGTHS_5:
         cont = st.mean(
-            [acc(contam[("kda", "s5_words", s)], L) - acc(contam[("gdn", "s5_words", s)], L)
-             for s in cseeds]
+            [
+                acc(contam[("kda", "s5_words", s)], L) - acc(contam[("gdn", "s5_words", s)], L)
+                for s in cseeds
+            ]
         )
         clean = st.mean([acc(Kc[s], L) - acc(Gc[s], L) for s in cseeds])
         rows2.append(f"{L}\t{fmt(cont)}\t{fmt(clean)}\t{fmt(abs(cont-clean))}")
@@ -922,9 +941,14 @@ def do_kda_vs_gdn(root: str, out_dir: str, claims: List[tuple]) -> None:
             # (which is len256, +1.99) and flag that the figure traces to analyze8.py's
             # contaminated len128 cell instead.
             best = min(means_by_task[task].items(), key=lambda kv: abs(abs(kv[1]) - abs(c)))
-            claims.append((f"kdagdn_{task}_2.01pp_NO_CLEAN_AGGREGATE_MATCHES"
-                           f"(closest_clean={best[0]})", c, best[1],
-                           status(c, best[1], 0.05)))
+            claims.append(
+                (
+                    f"kdagdn_{task}_2.01pp_NO_CLEAN_AGGREGATE_MATCHES" f"(closest_clean={best[0]})",
+                    c,
+                    best[1],
+                    status(c, best[1], 0.05),
+                )
+            )
         else:
             got = means_by_task[task][L]
             claims.append((f"kdagdn_{task}@{L}", c, got, status(c, got, 0.05)))
@@ -940,7 +964,9 @@ def do_backend_equiv(root: str, out_dir: str, claims: List[tuple]) -> None:
     runs = load_beq(root)
     paired_seeds = sorted(s for s in runs if len(runs[s]) == 2)
     diffs: Dict[str, List[float]] = {L: [] for L in LENGTHS_5}
-    rows = ["scope\tseed\tlength\ttriton_pp\ttorch_pp\ttriton_minus_torch\tclaimed\tabs_delta\tstatus"]
+    rows = [
+        "scope\tseed\tlength\ttriton_pp\ttorch_pp\ttriton_minus_torch\tclaimed\tabs_delta\tstatus"
+    ]
     for s in paired_seeds:
         at, ao = runs[s]["triton"], runs[s]["torch"]
         for L in LENGTHS_5:
@@ -972,8 +998,10 @@ def do_backend_equiv(root: str, out_dir: str, claims: List[tuple]) -> None:
     rows.append("scope\tlength\tn\tmean_pp\tsd\tci_lo\tci_hi\tt\tp\tverdict\tauthor_verdict\tnote")
     for L in LENGTHS_5:
         res = Result(diffs[L]).register("F_backend", f"beq_len{L}")
-        note = "all_seeds_identical" if res.sd == 0 and res.mean == 0 else (
-            "ZERO_VARIANCE_NONZERO_MEAN" if res.sd == 0 else ""
+        note = (
+            "all_seeds_identical"
+            if res.sd == 0 and res.mean == 0
+            else ("ZERO_VARIANCE_NONZERO_MEAN" if res.sd == 0 else "")
         )
         rows.append(
             f"per_length\t{L}\t{res.n}\t{fmt(res.mean)}\t{fmt(res.sd)}\t{fmt(res.ci_lo)}\t"
@@ -995,14 +1023,23 @@ def do_backend_equiv(root: str, out_dir: str, claims: List[tuple]) -> None:
     n_neg = sum(1 for x in per_seed if x < 0)
     n = len(per_seed)
     k = min(n_neg, n - n_neg)
-    p_sign = min(1.0, 2 * sum(math.comb(n, i) for i in range(k + 1)) / 2 ** n)
+    p_sign = min(1.0, 2 * sum(math.comb(n, i) for i in range(k + 1)) / 2**n)
     rows.append("#--- sign test ---")
-    rows.append(f"sign_test\tNA\t{n}\tn_negative={n_neg}\tNA\tNA\tNA\tNA\t{p_sign:.4f}\tNA\tNA\t"
-                f"claimed_{CLAIMED_BEQ_SIGN[0]}/{CLAIMED_BEQ_SIGN[1]}_p={CLAIMED_BEQ_SIGN[2]}")
-    claims.append(("beq_sign_n_negative", float(CLAIMED_BEQ_SIGN[0]), float(n_neg),
-                   status(float(CLAIMED_BEQ_SIGN[0]), float(n_neg))))
-    claims.append(("beq_sign_p", CLAIMED_BEQ_SIGN[2], p_sign, status(CLAIMED_BEQ_SIGN[2], p_sign,
-                                                                     0.005)))
+    rows.append(
+        f"sign_test\tNA\t{n}\tn_negative={n_neg}\tNA\tNA\tNA\tNA\t{p_sign:.4f}\tNA\tNA\t"
+        f"claimed_{CLAIMED_BEQ_SIGN[0]}/{CLAIMED_BEQ_SIGN[1]}_p={CLAIMED_BEQ_SIGN[2]}"
+    )
+    claims.append(
+        (
+            "beq_sign_n_negative",
+            float(CLAIMED_BEQ_SIGN[0]),
+            float(n_neg),
+            status(float(CLAIMED_BEQ_SIGN[0]), float(n_neg)),
+        )
+    )
+    claims.append(
+        ("beq_sign_p", CLAIMED_BEQ_SIGN[2], p_sign, status(CLAIMED_BEQ_SIGN[2], p_sign, 0.005))
+    )
     # Cluster structure claim: five seeds at -2..-4pp, three at +1.2..+2pp.
     lo_cluster = sorted(x for x in per_seed if x < 0)
     hi_cluster = sorted(x for x in per_seed if x >= 0)
@@ -1014,8 +1051,9 @@ def do_backend_equiv(root: str, out_dir: str, claims: List[tuple]) -> None:
         f"claimed_5_at_-2..-4_and_3_at_+1.2..+2"
     )
     write_tsv(out_dir, "probe_backend_equiv.tsv", rows)
-    TEST_REGISTRY.append(("F_backend", "beq_sign_test", p_sign, "SIG" if p_sign < ALPHA else "ns",
-                          False))
+    TEST_REGISTRY.append(
+        ("F_backend", "beq_sign_test", p_sign, "SIG" if p_sign < ALPHA else "ns", False)
+    )
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1067,8 +1105,11 @@ def do_multiplicity(out_dir: str) -> None:
         for tid, p in by_family[fam]:
             deg = any(t == tid and d for _f, t, _p, _v, d in TEST_REGISTRY)
             canon = tid.replace("S5_R4vs1_", "s5_words_R4vs1_")
-            unc = "REJECT" if (p is not None and not math.isnan(p) and p < ALPHA) else (
-                "no" if p is not None and not math.isnan(p) else "NA")
+            unc = (
+                "REJECT"
+                if (p is not None and not math.isnan(p) and p < ALPHA)
+                else ("no" if p is not None and not math.isnan(p) else "NA")
+            )
             rows.append(
                 f"{fam}\t{tid}\t{pfmt(p)}\t{unc}\t"
                 f"{'REJECT' if fam_holm.get(tid) else 'no'}\t"
@@ -1082,8 +1123,10 @@ def do_multiplicity(out_dir: str) -> None:
     rows.append(f"#global_bonferroni_alpha\t{bonf_alpha:.3e}")
     for fam in sorted(by_family):
         valid = [p for _t, p in by_family[fam] if p is not None and not math.isnan(p)]
-        rows.append(f"#family_size\t{fam}\t{len(by_family[fam])}\tvalid_p={len(valid)}\t"
-                    f"bonferroni_alpha={ALPHA/max(len(valid),1):.3e}")
+        rows.append(
+            f"#family_size\t{fam}\t{len(by_family[fam])}\tvalid_p={len(valid)}\t"
+            f"bonferroni_alpha={ALPHA/max(len(valid),1):.3e}"
+        )
     write_tsv(out_dir, "probe_multiplicity.tsv", rows)
 
 
@@ -1091,24 +1134,26 @@ def do_ceiling_audit(D: dict, root: str, out_dir: str) -> None:
     """Enumerate every cell at or near ceiling, and every zero-variance paired difference."""
     rows = ["scope\tcell\tn\tmean_acc_pp\tn_seeds_at_100\tall_at_ceiling"]
     # Ceiling cells in the all_night grid.
-    keys = sorted({(r, t, l) for (r, t, l, _s) in D})
-    for (r, t, l) in keys:
-        have = sorted(s for (rr, tt, ll, s) in D if (rr, tt, ll) == (r, t, l))
+    keys = sorted({(r, t, ly) for (r, t, ly, _s) in D})
+    for r, t, ly in keys:
+        have = sorted(s for (rr, tt, ll, s) in D if (rr, tt, ll) == (r, t, ly))
         for L in LENGTHS_7:
-            vs = [acc(D[(r, t, l, s)], L) for s in have]
+            vs = [acc(D[(r, t, ly, s)], L) for s in have]
             n100 = sum(1 for v in vs if v >= 100.0 - 1e-9)
             if n100 == 0:
                 continue
             rows.append(
-                f"all_night\tR{r}-{t}-L{l}-len{L}\t{len(vs)}\t{fmt(st.mean(vs))}\t{n100}\t"
+                f"all_night\tR{r}-{t}-L{ly}-len{L}\t{len(vs)}\t{fmt(st.mean(vs))}\t{n100}\t"
                 f"{n100 == len(vs)}"
             )
     rows.append("#--- zero-variance paired differences (sd == 0) across every test performed ---")
     rows.append("scope\ttest_id\tn\tmean_pp\tsd\tauthor_verdict\tthis_script_verdict")
     for fam, tid, p, verdict, deg in TEST_REGISTRY:
         if verdict in ("DEGENERATE_SD0", "ns_IDENTICAL"):
-            rows.append(f"{fam}\t{tid}\tNA\tNA\t0.0\t"
-                        f"{'SIG' if verdict=='DEGENERATE_SD0' else 'ns'}\t{verdict}")
+            rows.append(
+                f"{fam}\t{tid}\tNA\tNA\t0.0\t"
+                f"{'SIG' if verdict=='DEGENERATE_SD0' else 'ns'}\t{verdict}"
+            )
     write_tsv(out_dir, "probe_ceiling_audit.tsv", rows)
 
 
@@ -1132,8 +1177,8 @@ def main() -> None:
     D = load_all_night(root)
     log.append(f"all_night records loaded: {len(D)}")
     comp: Dict[Tuple[int, str, int], int] = defaultdict(int)
-    for (r, t, l, _s) in D:
-        comp[(r, t, l)] += 1
+    for r, t, ly, _s in D:
+        comp[(r, t, ly)] += 1
     prov = ["num_householder\ttask\tn_layers\tn_seeds"]
     for k in sorted(comp):
         prov.append(f"{k[0]}\t{k[1]}\t{k[2]}\t{comp[k]}")

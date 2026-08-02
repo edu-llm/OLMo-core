@@ -38,7 +38,6 @@ training loss needs no change. Accuracy *does* -- unmasked it would score the ig
 wrong, which is why ``evaluate()`` is patched below.
 """
 
-import re
 from pathlib import Path
 
 TASKS_ADDITION = '''

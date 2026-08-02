@@ -9,8 +9,11 @@ for s in [1.0,2.0,3.0,5.0]:
     for n in [5,12,30,100,500]:
         tc=t_ppf95(n-1)
         xs=rng.normal(5.0,s,size=(200000,n))
-        m=xs.mean(1); se=xs.std(1,ddof=1)/np.sqrt(n)
-        a=float(np.mean(m-tc*se>0)); b=float(np.mean(m>=5.0)); c=float(np.mean((m-tc*se>0)&(m>=5.0)))
+        m=xs.mean(1)
+        se=xs.std(1,ddof=1)/np.sqrt(n)
+        a=float(np.mean(m-tc*se>0))
+        b=float(np.mean(m>=5.0))
+        c=float(np.mean((m-tc*se>0)&(m>=5.0)))
         print(f"{s:8.1f} {n:4d} {a:10.3f} {b:11.3f} {c:9.3f}")
 print("\n# => P(dbar>=5) -> 0.5 as n grows when TRUE effect == 5.0. Condition 3's conjunction")
 print("#    caps power at ~0.50 at a true effect of exactly +5pp, for ANY n and ANY sigma_d.")
@@ -22,6 +25,9 @@ for eff in [5.0,5.5,6.0,6.5,7.0,8.0]:
     for n in range(3,201):
         tc=t_ppf95(n-1)
         xs=rng.normal(eff,2.0,size=(40000,n))
-        m=xs.mean(1); se=xs.std(1,ddof=1)/np.sqrt(n)
-        if float(np.mean((m-tc*se>0)&(m>=5.0)))>=0.80: got=n; break
+        m=xs.mean(1)
+        se=xs.std(1,ddof=1)/np.sqrt(n)
+        if float(np.mean((m-tc*se>0)&(m>=5.0)))>=0.80:
+            got=n
+            break
     print(f"  true={eff:4.1f}pp -> n={got}")

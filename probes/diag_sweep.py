@@ -1,10 +1,11 @@
 """Isolate which stage of the Triton backward diverges."""
+import sys
+
 import torch
 from olmo_core.nn.attention.kda_householder import kda_householder_fwd, kda_householder_bwd
 from olmo_core.nn.attention.kda_householder_torch import kda_householder_torch
 
 torch.manual_seed(0)
-import sys
 B, T, H, K, V, R = [int(x) for x in sys.argv[1:7]]
 dev = "cuda"
 q = torch.randn(B, T, H, K, device=dev, dtype=torch.bfloat16)
@@ -34,6 +35,7 @@ o, _ = kda_householder_torch(*ins, num_householder=R, scale=scale)
 o.backward(do)
 worst=0
 for n, got, ref in zip(names, out, [x.grad for x in ins]):
-    d=(got.float()-ref.float()).abs().max().item(); worst=max(worst,d)
+    d=(got.float()-ref.float()).abs().max().item()
+    worst=max(worst,d)
     print(f"    {n}={d:.2e}", end="")
 print(f"   -> {'PASS' if worst<2e-2 else 'FAIL'}")

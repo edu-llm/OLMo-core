@@ -115,7 +115,7 @@ for regime in ("accept", "real", "negeig"):
     ref = bwd_mut(q, k, v, g, beta, do, R, scale, "none")
     print("=" * 104)
     print(f"REGIME {regime}   (B2 T64 H2 K64 V64 R2)   acceptance criterion: max|diff| < {ATOL}")
-    print(f"  |ref| max: " + "  ".join(f"{n}={t.abs().max():.3e}" for n, t in zip(NAMES, ref[:5])))
+    print("  |ref| max: " + "  ".join(f"{n}={t.abs().max():.3e}" for n, t in zip(NAMES, ref[:5])))
     print("=" * 104)
     print(f"  {'mutation':22s} " + "".join(f"{n:>11s}" for n in NAMES) + "   VERDICT")
     for m in MUTS[1:]:
