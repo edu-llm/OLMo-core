@@ -12,19 +12,26 @@ One ``run_sft(cfg, attach_weights=None)`` drives all three SFT implementations:
 Cross-cutting: SAVE_STEPS is auto-set so the run yields >= ``cfg.min_checkpoints``
 (>=10 per the PRD checkpoint-sweep principle), and ``save_total_limit`` defaults to
 None so every checkpoint is kept for the KL–forgetting curve.
+
+Also cross-cutting: an ``output_dir`` that is an ``s3://`` URI trains to local disk and is
+mirrored to that prefix as each checkpoint lands. HF's Trainer has no notion of object
+storage and would otherwise create a local directory named ``s3:``. See ``common/s3_io.py``
+for what that costs and what happens when an upload fails.
 """
 from __future__ import annotations
 
 import math
 import os
 import random
-from dataclasses import dataclass
+import time
+from dataclasses import asdict, dataclass
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 
 from . import data as data_mod
+from . import s3_io
 from .chat import IGNORE, has_loss_tokens, make_collate_fn, make_tokenize_fn
 from .modeling import LoraSettings, load_for_training
 
@@ -256,6 +263,62 @@ def tokenize_splits(cfg: SFTConfig, tokenizer, *, require_test=False):
     return train_tok, eval_tok
 
 
+def _prepare_s3_output(cfg: SFTConfig):
+    """Redirect an ``s3://`` output dir to local disk and return the mirror that owns it.
+
+    THE SEAM IS HERE, INSIDE THE SHARED CORE, RATHER THAN IN A WRAPPER AROUND THE TWO
+    ENTRYPOINTS, AND THE REASON IS THE CALLBACK. Wrapping ``train_sft.py`` and
+    ``train_kl_sft.py`` would leave this file untouched, which is worth something given
+    that Meric handed the experiment off finished. It cannot deliver per-checkpoint upload.
+    A wrapper only regains control when ``run_sft`` returns, which is after training has
+    ended, so the best it could offer is a single upload at the end plus whatever a
+    directory-polling thread could scrape, and a run that loses its host has already lost
+    everything by then. Uploading as each checkpoint lands needs a ``TrainerCallback``
+    attached to the ``Trainer``, and the ``Trainer`` is constructed in this function and is
+    not reachable from outside it until it is too late to matter.
+
+    Two smaller reasons point the same way. One seam serves both entrypoints instead of two
+    wrappers that drift, and the mechanics live in ``common/s3_io.py`` so the eval scripts
+    can adopt the same helpers when their turn comes without importing anything from a
+    training wrapper. What this file gains is glue and no logic.
+
+    Returns None for an ordinary local output dir, which is every ORCD run and every
+    developer run, and that path is byte-for-byte what it was before.
+    """
+    mirror = s3_io.S3Mirror.for_output_dir(cfg.output_dir)
+    if mirror is None:
+        return None
+
+    # Settled before output_dir is rewritten, because the default further down is the
+    # basename of the output dir and the rewritten one is a staging path under /tmp. The
+    # S3 basename is no better, every run's prefix ends in "checkpoints", so the run id
+    # the platform already put in the environment is the only spelling that identifies the
+    # run in W&B. The submitted command passes --run_name explicitly and this is the
+    # fallback for the one that forgets.
+    if cfg.run_name is None:
+        cfg.run_name = os.environ.get("EDULLM_RUN_ID") or os.path.basename(mirror.prefix)
+
+    os.makedirs(mirror.local_dir, exist_ok=True)
+    original = cfg.output_dir
+    cfg.output_dir = mirror.local_dir
+    mirror.announce_start({
+        "run_id": os.environ.get("EDULLM_RUN_ID"),
+        "commit_sha": os.environ.get("EDULLM_COMMIT_SHA"),
+        "team": os.environ.get("EDULLM_TEAM"),
+        "run_name": cfg.run_name,
+        "output_uri": mirror.uri,
+        "local_staging_dir": mirror.local_dir,
+        "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        # The whole resolved config, next to the checkpoints it produced. Free to write
+        # and it answers the first question anyone asks of an adapter found in a bucket.
+        # output_dir is put back to what the caller asked for so the record names the
+        # destination rather than a /tmp path that stopped existing when the container did.
+        "config": {**asdict(cfg), "output_dir": original},
+    })
+    print(f"s3: training locally in {mirror.local_dir}, mirroring to {mirror.uri}")
+    return mirror
+
+
 def run_sft(cfg: SFTConfig, attach_weights=None):
     """Train an SFT model. ``attach_weights(tokenized_train_ds, tokenizer) -> ds`` may
     add a ``weights`` column (list[float] aligned to input_ids) to enable Impl 3."""
@@ -263,9 +326,13 @@ def run_sft(cfg: SFTConfig, attach_weights=None):
     np.random.seed(cfg.seed)
     torch.manual_seed(cfg.seed)
 
+    # First, before the model download and the tokenization, so a prefix this container
+    # cannot write to costs a startup rather than an hour of GPU.
+    mirror = _prepare_s3_output(cfg)
+
     lr = cfg.resolved_lr()
     print("=" * 72)
-    print(f"SFT: base={cfg.base_model} -> {cfg.output_dir}")
+    print(f"SFT: base={cfg.base_model} -> {mirror.uri if mirror else cfg.output_dir}")
     print(f"lora={cfg.use_lora} lr={lr} per_device={cfg.per_device_batch} "
           f"grad_accum={cfg.grad_accum} epochs={cfg.num_epochs} max_len={cfg.max_len} "
           f"grad_ckpt={cfg.grad_checkpointing} weighted={attach_weights is not None}")
@@ -350,12 +417,19 @@ def run_sft(cfg: SFTConfig, attach_weights=None):
     )
     if log_spaced:
         trainer.add_callback(make_log_spaced_callback(total_steps))
-
+    if mirror is not None:
+        trainer.add_callback(mirror.callback())
 
     resume = cfg.resume
     if resume == "auto":
         from transformers.trainer_utils import get_last_checkpoint
 
+        if mirror is not None:
+            # A retry runs on a new host with an empty staging dir, so the checkpoints
+            # attempt 1 wrote are only in S3. Pulling the newest one back is what turns
+            # `maximum_attempts: 2` into a second attempt rather than a second first
+            # attempt. get_last_checkpoint then finds it exactly as it would on ORCD.
+            mirror.hydrate_latest_checkpoint()
         resume = get_last_checkpoint(cfg.output_dir) if os.path.isdir(cfg.output_dir) else None
         print(f"Resuming from checkpoint: {resume}")
 
@@ -364,5 +438,13 @@ def run_sft(cfg: SFTConfig, attach_weights=None):
     trainer.train(resume_from_checkpoint=resume)
     trainer.save_model(cfg.output_dir)
     tokenizer.save_pretrained(cfg.output_dir)
-    print(f"Saved model + tokenizer to {cfg.output_dir}")
+    if mirror is None:
+        print(f"Saved model + tokenizer to {cfg.output_dir}")
+    else:
+        # The upload and the listing both happen before the success line prints, because
+        # the line printing regardless of whether anything was uploaded is the entire bug.
+        # Either of them raising ends the run non-zero, which is the point.
+        mirror.upload_pending(label="final model + tokenizer")
+        mirror.verify()
+        print(f"Saved model + tokenizer to {mirror.uri}")
     return trainer

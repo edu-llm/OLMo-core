@@ -91,6 +91,28 @@ W&B logging is **on by default** (`report_to: wandb`, project `edullm-p7`) — s
 `--no_wandb` to disable. HF Trainer also records per-checkpoint train/eval loss to each
 `output_dir/trainer_state.json` regardless.
 
+## An `s3://` output dir (the eduLLM platform)
+`--output_dir` accepts an `s3://` URI, which is what `$EDULLM_CHECKPOINT_DIR` holds on the
+platform. The run trains to a local staging directory and mirrors it to that prefix as each
+checkpoint lands. HF's `Trainer` has no notion of object storage, so without this it creates
+a local directory literally named `s3:`, exits 0, and leaves the prefix empty. See
+`common/s3_io.py` for the full argument.
+
+```bash
+python impl1_2_prompting_sft/train_sft.py --config impl1_2_prompting_sft/config.yaml \
+    --output_dir "$EDULLM_CHECKPOINT_DIR" --run_name "$EDULLM_RUN_ID"
+```
+
+| Behaviour | What happens |
+| --- | --- |
+| Staging | `/tmp/edullm-sft/<prefix slug>`, or `$EDULLM_LOCAL_OUTPUT_DIR` if set. A full run stages roughly 1.7 GB |
+| Upload cadence | Every checkpoint, plus the final model and tokenizer. Never on a timer, so no half-written file is ever sent |
+| Resume | `--resume auto` downloads the newest remote `checkpoint-N` first, so a Batch retry continues instead of restarting |
+| Failure | Any upload error ends the run non-zero. Write access is probed before the model loads, so a bad prefix costs seconds rather than a GPU hour |
+| Deletes | Never. `save_total_limit` rotation applies to local disk only, and S3 keeps every checkpoint |
+
+Nothing changes for a local `--output_dir`, which is what every ORCD run uses.
+
 ## Quick start (once you have data)
 ```bash
 pip install -r requirements.txt          # install torch first for your CUDA (see clusters/orcd/setup_orcd_env.sh)
