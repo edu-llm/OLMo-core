@@ -74,6 +74,20 @@ def test_layered_no_shortcuts(depth: int, reachable: bool):
     assert all(dist[v] == dist[u] + 1 for (u, v) in ex.edges if u in dist)
 
 
+@pytest.mark.parametrize("depth", DEPTHS)
+def test_matched_frontier_depth_prevents_answer_leak(depth: int):
+    # Confound guard: with enough nodes, unreachable instances expand a frontier of
+    # the SAME depth as reachable ones, so the label can't be read off frontier depth.
+    reach = generate(
+        num_nodes=6 * depth, branching=3, depth=depth, seed=900 + depth, reachable=True
+    )
+    unreach = generate(
+        num_nodes=6 * depth, branching=3, depth=depth, seed=900 + depth, reachable=False
+    )
+    assert len(reach.frontiers) - 1 == depth
+    assert len(unreach.frontiers) - 1 == depth
+
+
 def test_determinism_and_hash():
     a = generate(num_nodes=30, branching=3, depth=4, seed=7, reachable=True)
     b = generate(num_nodes=30, branching=3, depth=4, seed=7, reachable=True)

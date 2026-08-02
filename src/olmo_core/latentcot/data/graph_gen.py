@@ -217,14 +217,20 @@ def generate(
     rng = random.Random(seed)
 
     # Assign nodes to levels: source alone at level 0, then guarantee one node
-    # per level 1..depth, then scatter the remainder across the middle/last levels.
+    # per level 1..depth, then a guaranteed second node on the last level (a
+    # non-target "sink" so unreachable instances can expand a frontier of the same
+    # depth as reachable ones), then scatter the remainder.
     levels: List[List[int]] = [[] for _ in range(depth + 1)]
     levels[0].append(0)
     rest = list(range(1, num_nodes))
     rng.shuffle(rest)
     for i in range(1, depth + 1):
         levels[i].append(rest[i - 1])
-    for node in rest[depth:]:
+    idx = depth
+    if idx < len(rest):
+        levels[depth].append(rest[idx])
+        idx += 1
+    for node in rest[idx:]:
         levels[rng.randint(1, depth)].append(node)
 
     source = 0
@@ -244,13 +250,19 @@ def generate(
             for v in rng.sample(candidates, k):
                 edges.add((u, v))
 
-    # Backbone: guarantees a source path down the levels. For reachable
-    # instances it ends at the target (fixing the shortest distance = depth);
-    # for unreachable it stops at level depth-1 so the target stays isolated.
-    last_level = depth if reachable else depth - 1
-    backbone = [levels[i][0] for i in range(last_level)]
+    # Backbone: a guaranteed source path down the levels so the frontier expands
+    # to full depth. For reachable instances it ends at the target (fixing the
+    # shortest distance = depth). For unreachable instances it runs through levels
+    # 0..depth-1 and on to a non-target node on the last level when one exists, so
+    # negatives expand a frontier of matched depth while the target stays isolated
+    # (no in-edges) -- this prevents "frontier depth" from leaking the answer.
+    backbone = [levels[i][0] for i in range(depth)]  # one node per level 0..depth-1
     if reachable:
         backbone.append(target)
+    else:
+        others = [v for v in levels[depth] if v != target]
+        if others:
+            backbone.append(others[0])
     for u, v in zip(backbone, backbone[1:]):
         edges.add((u, v))
 
