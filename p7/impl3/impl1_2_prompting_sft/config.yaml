@@ -1,0 +1,30 @@
+# Implementation 2 — SI-conditioned SFT defaults (PRD §2.6).
+# Override any field on the CLI, e.g. --learning_rate 1e-4.
+base_model: allenai/OLMo-2-0425-1B-Instruct   # PRD base model / KL reference pi_0
+hf_dataset: meric533/socrateach-sft            # the POC 30k mix, published (train/validation/test)
+data_dir: data                                 # only used if hf_dataset unset (offline snapshot)
+output_dir: out/impl2-sft
+
+max_len: 1024            # covers ~99.8% of examples (PRD §2.4)
+seed: 13
+num_epochs: 1.0         # 1–2 is plenty (PRD §2.6)
+
+use_lora: true          # LoRA r=16, alpha=32, dropout=0.05 (PRD §2.6)
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+
+per_device_batch: 8     # effective batch 32 with grad_accum=4 (fits ~44GB w/ grad ckpt)
+grad_accum: 4
+learning_rate: 2.0e-4   # LoRA; use 1e-5 for full fine-tune
+warmup_ratio: 0.03
+weight_decay: 0.0
+grad_checkpointing: true
+
+# Checkpoint sweep (cross-cutting principle): keep >= ~10 checkpoints, all of them.
+min_checkpoints: 10
+save_steps: 0           # 0 = auto from total steps / min_checkpoints
+save_total_limit: null  # keep ALL for the KL–forgetting curve
+
+report_to: wandb        # logs to W&B; needs WANDB_API_KEY. Use --no_wandb to disable.
+wandb_project: edullm-p7  # override later per team convention; entity via WANDB_ENTITY env

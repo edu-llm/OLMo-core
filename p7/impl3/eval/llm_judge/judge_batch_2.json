@@ -1,0 +1,632 @@
+[
+  {
+    "problem_id": "GSM8K_train_1126_1",
+    "problem": "Mike is building a bridge out of LEGO blocks. To be successful he needs at least 40 bricks of type A, and half that many of type B. In total, he needs to use 150 bricks. How many bricks of other types than mentioned is he going to use?",
+    "final_answer": "90",
+    "candidates": [
+      {
+        "rid": "GSM8K_train_1126_1__2__R1",
+        "response": "Let's break down the problem:\n\n* Mike needs at least 40 bricks of type A.\n* He needs half that many of type B, which is 40 / 2 = 20 bricks of type B.\n* So, the total number of bricks of type A and type B is 40 + 20 = 60 bricks.\n* Since Mike needs to use a total of 150 bricks, the number of bricks of other types is 150 - 60 = 90 bricks.\n\nSo, Mike is going to use \\boxed{90} bricks of other types than mentioned."
+      },
+      {
+        "rid": "GSM8K_train_1126_1__2__R2",
+        "response": "Let's break down the problem. \nMike needs at least 40 bricks of type A. \nHe also needs half that many of type B, which is 40 / 2 = 20 bricks of type B. \nSo, he needs 40 bricks of type A and 20 bricks of type B. \nIn total, he needs 40 + 20 = 60 bricks of type A and type B. \nSince he needs to use 150 bricks in total, he will use 150 - 60 = 90 bricks of other types. \nSo, Mike is going to use 90 bricks of other types than mentioned."
+      },
+      {
+        "rid": "GSM8K_train_1126_1__2__R3",
+        "response": "Let's break down the problem. Mike needs at least 40 bricks of type A. He also needs half that many of type B, which means he needs 40 / 2 = 20 bricks of type B. So, he has used 40 + 20 = 60 bricks of type A and type B. If he needs to use 150 bricks in total, then he will use 150 - 60 = 90 bricks of other types."
+      },
+      {
+        "rid": "GSM8K_train_1126_1__2__R4",
+        "response": "Let's break down the problem. Mike needs at least 40 bricks of type A. He needs half that many of type B, which is 40 / 2 = 20 bricks of type B. So, he needs 40 bricks of type A and 20 bricks of type B. That's a total of 40 + 20 = 60 bricks. If he needs to use 150 bricks in total, then he will use 150 - 60 = 90 bricks of other types. So, Mike is going to use 90 bricks of other types than mentioned."
+      },
+      {
+        "rid": "GSM8K_train_1126_1__2__R5",
+        "response": "Let's break down the problem. Mike needs at least 40 bricks of type A. He also needs half that many of type B, which is 20 bricks. So, how many bricks of type A and type B does he need in total?"
+      },
+      {
+        "rid": "GSM8K_train_1126_1__2__R6",
+        "response": "Let's break down the problem. Mike needs at least 40 bricks of type A. He also needs half that many of type B, which means he needs 40 / 2 = 20 bricks of type B. So, he has used 40 + 20 = 60 bricks of type A and type B. If he needs to use 150 bricks in total, then he must use 150 - 60 = 90 bricks of other types."
+      },
+      {
+        "rid": "GSM8K_train_1126_1__2__R7",
+        "response": "Let's break down the problem:\n\n* Mike needs at least 40 bricks of type A.\n* He needs half that many of type B, which is 40 / 2 = 20 bricks of type B.\n* So, the total number of bricks of type A and type B is 40 + 20 = 60 bricks.\n* Since Mike needs to use 150 bricks in total, the number of bricks of other types is 150 - 60 = 90 bricks.\n\nSo, Mike is going to use \\boxed{90} bricks of other types than mentioned."
+      },
+      {
+        "rid": "GSM8K_train_1126_1__2__R8",
+        "response": "Let's break down the problem step by step.\n\nMike needs at least 40 bricks of type A.\nHe needs half that many of type B, which is 40 / 2 = 20 bricks of type B.\nSo, the total number of bricks of type A and type B is 40 + 20 = 60 bricks.\nSince he needs to use a total of 150 bricks, the number of bricks of other types is 150 - 60 = 90 bricks.\n\nThus, Mike is going to use \\boxed{90} bricks of other types than mentioned."
+      },
+      {
+        "rid": "GSM8K_train_1126_1__2__R9",
+        "response": "Let's break down the problem. Mike needs at least 40 bricks of type A. He also needs half that many of type B, which is 20 bricks. So, he needs 40 bricks of type A and 20 bricks of type B. \n\nIn total, he needs to use 150 bricks. So, if we subtract the number of bricks of type A and type B from the total, we can find out how many bricks of other types he is going to use. \n\nSo, if we subtract the 40 bricks of type A and 20 bricks of type B from the total of 150 bricks, we get:\n\n150 - (40 + 20) = 150 - 60 = 90\n\nSo, Mike is going to use 90 bricks of other types than mentioned."
+      },
+      {
+        "rid": "GSM8K_train_1126_1__2__R10",
+        "response": "Let's break down the problem:\n\n* Mike needs at least 40 bricks of type A.\n* He needs half that many of type B, which is 40 / 2 = 20 bricks of type B.\n* So, the total number of bricks of type A and type B is 40 + 20 = 60 bricks.\n* Since Mike needs to use a total of 150 bricks, the number of bricks of other types is 150 - 60 = 90 bricks.\n\nSo, Mike is going to use \\boxed{90} bricks of other types than mentioned."
+      },
+      {
+        "rid": "GSM8K_train_1126_1__2__R11",
+        "response": "Let's break down the problem step by step.\n\nMike needs at least 40 bricks of type A.\nHe needs half that many of type B, which is 40 / 2 = 20 bricks of type B.\n\nSo, the total number of bricks of type A and type B is 40 + 20 = 60 bricks.\n\nSince Mike needs to use a total of 150 bricks, the number of bricks of other types is 150 - 60 = 90 bricks.\n\nThus, Mike is going to use \\boxed{90} bricks of other types than mentioned."
+      },
+      {
+        "rid": "GSM8K_train_1126_1__2__R12",
+        "response": "Let's break down the problem. Mike needs at least 40 bricks of type A. He also needs half that many of type B, which is 40 / 2 = 20 bricks of type B. So, he needs 40 bricks of type A and 20 bricks of type B. \n\nIn total, he needs 150 bricks. So, if we subtract the number of bricks of type A and type B from the total, we can find out how many bricks of other types he is going to use. \n\nSo, 150 - (40 + 20) = 150 - 60 = 90. \n\nThus, Mike is going to use 90 bricks of other types than mentioned."
+      },
+      {
+        "rid": "GSM8K_train_1126_1__2__R13",
+        "response": "Let's break down the problem. Mike needs at least 40 bricks of type A. He also needs half that many of type B, which means he needs 40 / 2 = 20 bricks of type B. So, he has used 40 + 20 = 60 bricks of type A and type B. If he needs to use 150 bricks in total, then he will use 150 - 60 = 90 bricks of other types."
+      },
+      {
+        "rid": "GSM8K_train_1126_1__2__R14",
+        "response": "Let's break down the problem. Mike needs at least 40 bricks of type A. He also needs half that many of type B, which means he needs 40 / 2 = 20 bricks of type B. So, he has used 40 + 20 = 60 bricks of type A and type B. If he needs to use 150 bricks in total, then he will use 150 - 60 = 90 bricks of other types."
+      }
+    ]
+  },
+  {
+    "problem_id": "GSM8K_train_3223_1",
+    "problem": "There are chickens roaming the chicken farm. The roosters outnumber the hens 2 to 1. If there are 9,000 chickens on the chicken farm, how many roosters are there?",
+    "final_answer": "6000",
+    "candidates": [
+      {
+        "rid": "GSM8K_train_3223_1__6__R1",
+        "response": "Let's break it down:\n\nIf the roosters outnumber the hens 2 to 1, then for every 3 chickens (2 roosters + 1 hen), there are 2 roosters.\n\nGiven that there are 9,000 chickens in total, we can divide this number by 3 to find out how many groups of 3 chickens there are:\n\n9,000 / 3 = 3,000 groups\n\nSince each group has 2 roosters, we can multiply the number of groups by 2 to find the total number of roosters:\n\n3,000 groups * 2 roosters/group = 6,000 roosters\n\nSo, there are 6,000 roosters on the chicken farm."
+      },
+      {
+        "rid": "GSM8K_train_3223_1__6__R2",
+        "response": "Let's break it down:\n\nThe roosters outnumber the hens 2 to 1. This means for every 2 roosters, there is 1 hen.\n\nIf there are 9,000 chickens in total, and the ratio of roosters to hens is 2:1, we can set up the equation:\n\nLet's say the number of hens is x. Then, the number of roosters is 2x.\n\nThe total number of chickens is the sum of roosters and hens, which is 9,000. So, we can write the equation:\n\n2x + x = 9,000\n\nCombine like terms:\n\n3x = 9,000\n\nDivide both sides by 3:\n\nx = 3,000\n\nSo, there are 3,000 hens. Since the number of roosters is 2x, we have:\n\nNumber of roosters = 2x = 2(3,000) = 6,000\n\nTherefore, there are 6,000 roosters on the chicken farm.\n\nAnswer: \\boxed{6000}"
+      },
+      {
+        "rid": "GSM8K_train_3223_1__6__R3",
+        "response": "Let's break it down. If the roosters outnumber the hens 2 to 1, that means for every 3 chickens, 2 are roosters and 1 is a hen. So, if there are 9,000 chickens, how many groups of 3 chickens are there?"
+      },
+      {
+        "rid": "GSM8K_train_3223_1__6__R4",
+        "response": "Let's break it down. If the roosters outnumber the hens 2 to 1, that means for every 3 chickens, 2 are roosters and 1 is a hen. \nSo, if there are 9,000 chickens, we can divide that number by 3 to find out how many groups of 3 chickens there are. \n9,000 divided by 3 is 3,000. \nSince each group of 3 chickens has 2 roosters, we can multiply the number of groups by 2 to find out how many roosters there are. \nSo, 3,000 groups times 2 roosters per group is 6,000. \nTherefore, there are 6,000 roosters on the chicken farm."
+      },
+      {
+        "rid": "GSM8K_train_3223_1__6__R5",
+        "response": "Let's break it down:\n\nIf the roosters outnumber the hens 2 to 1, then for every 3 chickens, 2 are roosters and 1 is a hen.\n\nGiven that there are 9,000 chickens in total, we can divide this number by 3 to find out how many groups of 3 chickens there are:\n\n9,000 / 3 = 3,000 groups of 3 chickens.\n\nSince each group has 2 roosters, we can multiply the number of groups by 2 to find the total number of roosters:\n\n3,000 groups * 2 roosters per group = 6,000 roosters.\n\nSo, there are 6,000 roosters on the chicken farm."
+      },
+      {
+        "rid": "GSM8K_train_3223_1__6__R6",
+        "response": "Let's break it down:\n\nIf the roosters outnumber the hens 2 to 1, that means for every 3 chickens, 2 are roosters and 1 is a hen.\n\nSo, if there are 9,000 chickens, we can divide that number by 3 to find out how many groups of 3 chickens there are.\n\n9,000 / 3 = 3,000 groups of 3 chickens.\n\nSince each group of 3 chickens has 2 roosters, we can multiply the number of groups by 2 to find out how many roosters there are.\n\n3,000 groups * 2 roosters per group = 6,000 roosters.\n\nSo, there are 6,000 roosters on the chicken farm."
+      },
+      {
+        "rid": "GSM8K_train_3223_1__6__R7",
+        "response": "Let's break it down. If the roosters outnumber the hens 2 to 1, that means for every 3 chickens, 2 are roosters and 1 is a hen. So, if we divide the total number of chickens by 3, we can find out how many groups of 3 chickens there are. Then, we can multiply that number by 2 to find out how many roosters there are."
+      },
+      {
+        "rid": "GSM8K_train_3223_1__6__R8",
+        "response": "Let's break it down:\n\nSince the roosters outnumber the hens 2 to 1, for every 2 roosters, there are 1 hen.\n\nLet's denote the number of roosters as R and the number of hens as H.\n\nAccording to the problem, R = 2H.\n\nWe are given that the total number of chickens is 9,000. So, R + H = 9,000.\n\nSubstituting R = 2H into the equation, we get 2H + H = 9,000.\n\nThis simplifies to 3H = 9,000.\n\nDividing both sides by 3, we find H = 3,000.\n\nSince R = 2H, we can now calculate R as 2 * 3,000 = 6,000.\n\nSo, there are 6,000 roosters on the chicken farm.\n\nThe answer is \\boxed{6000}."
+      },
+      {
+        "rid": "GSM8K_train_3223_1__6__R9",
+        "response": "Let's break it down:\n\nIf the roosters outnumber the hens 2 to 1, then for every 2 hens, there are 2 roosters. \n\nSo, if there are 9,000 chickens in total, we can divide this number by 3 (since 2 hens + 2 roosters = 3 chickens) to find out how many groups of 3 chickens there are.\n\n9,000 / 3 = 3,000 groups of 3 chickens.\n\nSince each group has 2 roosters, we can multiply the number of groups by 2 to find the total number of roosters.\n\n3,000 groups * 2 roosters per group = 6,000 roosters.\n\nSo, there are 6,000 roosters on the chicken farm."
+      },
+      {
+        "rid": "GSM8K_train_3223_1__6__R10",
+        "response": "Let's break it down:\n\nIf the roosters outnumber the hens 2 to 1, then for every 3 chickens (2 roosters + 1 hen), there are 2 roosters.\n\nGiven that there are 9,000 chickens in total, we can divide this number by 3 to find out how many groups of 3 chickens there are:\n\n9,000 ÷ 3 = 3,000 groups\n\nSince each group has 2 roosters, we can multiply the number of groups by 2 to find the total number of roosters:\n\n3,000 × 2 = 6,000\n\nSo, there are 6,000 roosters on the chicken farm.\n\nAnswer: \\boxed{6000}"
+      },
+      {
+        "rid": "GSM8K_train_3223_1__6__R11",
+        "response": "Let's break it down. If the roosters outnumber the hens 2 to 1, that means for every 3 chickens, 2 are roosters and 1 is a hen. So, if we divide the total number of chickens by 3, we can find out how many groups of 3 chickens there are. Then, we can multiply that number by 2 to find out how many roosters there are."
+      },
+      {
+        "rid": "GSM8K_train_3223_1__6__R12",
+        "response": "Let's break it down:\n\nIf the roosters outnumber the hens 2 to 1, then for every 3 chickens (2 roosters + 1 hen), there are 2 roosters.\n\nGiven that there are 9,000 chickens in total, we can divide this number by 3 to find out how many groups of 3 chickens there are:\n\n9,000 ÷ 3 = 3,000 groups\n\nSince each group has 2 roosters, the total number of roosters is:\n\n3,000 × 2 = 6,000\n\nSo, there are 6,000 roosters on the chicken farm.\n\nAnswer: \\boxed{6000}"
+      },
+      {
+        "rid": "GSM8K_train_3223_1__6__R13",
+        "response": "Let's break it down. If the roosters outnumber the hens 2 to 1, that means for every 3 chickens, 2 are roosters and 1 is a hen. \nSo, if there are 9,000 chickens, how many groups of 3 chickens are there? \nDividing 9,000 by 3, we get 3,000. \nSo, if there are 2 roosters for every 3 chickens, how many roosters are there? \nDividing 3,000 by 2, we get 1,500. \nSo, there are 1,500 roosters on the chicken farm."
+      },
+      {
+        "rid": "GSM8K_train_3223_1__6__R14",
+        "response": "Let's break it down:\n\nSince the roosters outnumber the hens 2 to 1, for every 2 roosters, there is 1 hen.\nSo, if there are 9,000 chickens in total, we can divide this number by 3 (2 roosters + 1 hen) to find the number of groups of 3 chickens.\n9,000 / 3 = 3,000 groups of 3 chickens.\nSince each group has 2 roosters, the total number of roosters is 2 * 3,000 = 6,000.\n\nSo, there are \\boxed{6000} roosters on the chicken farm."
+      }
+    ]
+  },
+  {
+    "problem_id": "GSM8K_test_1020_2",
+    "problem": "John picks 4 bananas on Wednesday. Then he picks 6 bananas on Thursday. On Friday, he picks triple the number of bananas he did on Wednesday. How many bananas does John have?",
+    "final_answer": "22",
+    "candidates": [
+      {
+        "rid": "GSM8K_test_1020_2__10__R1",
+        "response": "Let's break it down:\n\nOn Wednesday, John picks 4 bananas.\nOn Thursday, he picks 6 bananas.\nOn Friday, he picks triple the number of bananas he did on Wednesday, which is 3 times 4, or 12 bananas.\n\nSo, in total, John picks 4 + 6 + 12 = 20 bananas.\n\nThus, John has \\boxed{20} bananas."
+      },
+      {
+        "rid": "GSM8K_test_1020_2__10__R2",
+        "response": "Let's break it down:\n\nJohn picks 4 bananas on Wednesday.\nOn Thursday, he picks 6 bananas.\nOn Friday, he picks triple the number of bananas he did on Wednesday, which is 3 * 4 = 12 bananas.\n\nSo, the total number of bananas John has is the sum of the bananas he picked on each day:\n4 + 6 + 12 = 10 + 12 = 22\n\nThus, John has \\boxed{22} bananas."
+      },
+      {
+        "rid": "GSM8K_test_1020_2__10__R3",
+        "response": "Let's break down the number of bananas John picks each day:\n\n* Wednesday: 4 bananas\n* Thursday: 6 bananas\n* Friday: Triple the number of bananas he picked on Wednesday, which is 3 * 4 = 12 bananas\n\nNow, let's add up the total number of bananas John has:\n\n4 + 6 + 12 = 10 + 12 = 22\n\nSo, John has \\boxed{22} bananas."
+      },
+      {
+        "rid": "GSM8K_test_1020_2__10__R4",
+        "response": "On Wednesday, John picked 4 bananas.\nOn Thursday, he picked 6 bananas.\nOn Friday, he picked triple the number of bananas he did on Wednesday, which is 3 times 4, or 12 bananas.\nSo, in total, John picked 4 + 6 + 12 = 10 + 12 = 22 bananas.\nThus, John has \\boxed{22} bananas."
+      },
+      {
+        "rid": "GSM8K_test_1020_2__10__R5",
+        "response": "Let's break down the number of bananas John picks each day:\n\n* Wednesday: 4 bananas\n* Thursday: 6 bananas\n* Friday: Triple the number of bananas he picked on Wednesday, which is 3 * 4 = 12 bananas\n\nNow, let's add up the total number of bananas John has:\n4 + 6 + 12 = 10 + 12 = 22\n\nSo, John has \\boxed{22} bananas."
+      },
+      {
+        "rid": "GSM8K_test_1020_2__10__R6",
+        "response": "Let's break down the number of bananas John picks each day:\n\n* Wednesday: 4 bananas\n* Thursday: 6 bananas\n* Friday: Triple the number of bananas he picked on Wednesday, which is 3 * 4 = 12 bananas\n\nNow, let's add up the total number of bananas John has:\n4 + 6 + 12 = 10 + 12 = 22\n\nSo, John has \\boxed{22} bananas."
+      },
+      {
+        "rid": "GSM8K_test_1020_2__10__R7",
+        "response": "Let's break it down:\n\nOn Wednesday, John picks 4 bananas.\nOn Thursday, he picks 6 bananas.\nOn Friday, he picks triple the number of bananas he did on Wednesday, which is 3 times 4, or 12 bananas.\n\nSo, in total, John picks 4 + 6 + 12 = 10 + 12 = 22 bananas.\n\nThus, John has 22 bananas."
+      },
+      {
+        "rid": "GSM8K_test_1020_2__10__R8",
+        "response": "Let's break it down:\n\nOn Wednesday, John picks 4 bananas.\nOn Thursday, he picks 6 bananas.\nOn Friday, he picks triple the number of bananas he did on Wednesday, which is 3 times 4, so 12 bananas.\n\nNow, let's add up the bananas John picked each day:\n4 (Wednesday) + 6 (Thursday) + 12 (Friday) = 22 bananas.\n\nSo, John has 22 bananas in total.\n\nThe answer is: \\boxed{22}"
+      },
+      {
+        "rid": "GSM8K_test_1020_2__10__R9",
+        "response": "Let's break it down:\n\nOn Wednesday, John picks 4 bananas.\nOn Thursday, he picks 6 bananas.\nOn Friday, he picks triple the number of bananas he did on Wednesday, which is 3 times 4, so 12 bananas.\n\nNow, let's add up the bananas John picked each day:\n4 (Wednesday) + 6 (Thursday) + 12 (Friday) = 22 bananas.\n\nSo, John has 22 bananas in total.\n\nThe answer is: \\boxed{22}"
+      },
+      {
+        "rid": "GSM8K_test_1020_2__10__R10",
+        "response": "Let's break it down:\n\nOn Wednesday, John picks 4 bananas.\nOn Thursday, he picks 6 bananas.\nOn Friday, he picks triple the number of bananas he did on Wednesday, which is 3 times 4, so 12 bananas.\n\nNow, let's add up the bananas John picked each day: 4 + 6 + 12 = 20 + 12 = 32\n\nSo, John has 32 bananas in total."
+      },
+      {
+        "rid": "GSM8K_test_1020_2__10__R11",
+        "response": "Let's break it down:\n\nJohn picks 4 bananas on Wednesday.\nOn Thursday, he picks 6 bananas.\nOn Friday, he picks triple the number of bananas he did on Wednesday, which is 3 times 4, so 3 * 4 = 12 bananas.\n\nNow, let's add up the bananas John picked: 4 + 6 + 12 = 10 + 12 = 22\n\nSo, John has 22 bananas in total.\n\nThe answer is: \\boxed{22}"
+      },
+      {
+        "rid": "GSM8K_test_1020_2__10__R12",
+        "response": "Let's break down the number of bananas John picks each day:\n\n* Wednesday: 4 bananas\n* Thursday: 6 bananas\n* Friday: Triple the number of bananas he picked on Wednesday, which is 3 * 4 = 12 bananas\n\nNow, let's add up the total number of bananas John has:\n4 + 6 + 12 = 10 + 12 = 22\n\nSo, John has \\boxed{22} bananas."
+      },
+      {
+        "rid": "GSM8K_test_1020_2__10__R13",
+        "response": "Let's break it down:\n\nJohn picks 4 bananas on Wednesday.\nOn Thursday, he picks 6 bananas.\nOn Friday, he picks triple the number of bananas he did on Wednesday, which is 3 times 4, so 3 * 4 = 12 bananas.\n\nNow, let's add up the total number of bananas John has:\n4 (Wednesday) + 6 (Thursday) + 12 (Friday) = 22 bananas.\n\nSo, John has \\boxed{22} bananas."
+      },
+      {
+        "rid": "GSM8K_test_1020_2__10__R14",
+        "response": "Let's break it down:\n\nJohn picks 4 bananas on Wednesday.\nOn Thursday, he picks 6 bananas.\nOn Friday, he picks triple the number of bananas he did on Wednesday, which is 3 times 4, so he picks 12 bananas.\n\nNow, let's add up the total number of bananas John has:\n4 (Wednesday) + 6 (Thursday) + 12 (Friday) = 22\n\nSo, John has \\boxed{22} bananas."
+      }
+    ]
+  },
+  {
+    "problem_id": "GSM8K_train_3338_1",
+    "problem": "Nicky went to the DMV. He spent 20 minutes waiting to take a number, and quadruple that amount of time plus 14 minutes waiting for his number to be called. How long did he wait total?",
+    "final_answer": "114",
+    "candidates": [
+      {
+        "rid": "GSM8K_train_3338_1__14__R1",
+        "response": "Nicky spent 20 minutes waiting to take a number.\nHe then spent quadruple that amount of time, which is 4 * 20 = 80 minutes, plus 14 minutes waiting for his number to be called.\nSo, the total time he spent waiting is 20 + 80 + 14 = 100 + 14 = 114 minutes.\nThus, Nicky waited a total of \\boxed{114} minutes."
+      },
+      {
+        "rid": "GSM8K_train_3338_1__14__R2",
+        "response": "Nicky spent 20 minutes waiting to take a number.\nHe then spent quadruple that amount of time, which is 4 * 20 = 80 minutes, plus 14 minutes waiting for his number to be called.\nSo the total time he spent waiting is 20 + 80 + 14 = 100 + 14 = 114 minutes.\nThus, Nicky waited a total of \\boxed{114} minutes."
+      },
+      {
+        "rid": "GSM8K_train_3338_1__14__R3",
+        "response": "Nicky spent 20 minutes waiting to take a number.\nHe then spent quadruple that amount of time, which is 4 * 20 = 80 minutes, plus 14 minutes waiting for his number to be called.\nSo the total time he spent waiting is 20 + 80 + 14 = 100 + 14 = 114 minutes.\nThus, Nicky waited a total of \\boxed{114} minutes."
+      },
+      {
+        "rid": "GSM8K_train_3338_1__14__R4",
+        "response": "Nicky spent 20 minutes waiting to take a number.\nHe then spent quadruple that amount of time, which is 4 * 20 = 80 minutes, plus 14 minutes waiting for his number to be called.\nSo, the total time he spent waiting is 20 + 80 + 14 = 100 + 14 = 114 minutes.\nThus, Nicky waited a total of \\boxed{114} minutes."
+      },
+      {
+        "rid": "GSM8K_train_3338_1__14__R5",
+        "response": "Nicky spent 20 minutes waiting to take a number.\nHe then spent quadruple that amount of time, which is 4 * 20 = 80 minutes, plus 14 minutes waiting for his number to be called.\nSo, the total time he spent waiting is 20 + 80 + 14 = 100 + 14 = 114 minutes.\nThus, Nicky waited a total of \\boxed{114} minutes."
+      },
+      {
+        "rid": "GSM8K_train_3338_1__14__R6",
+        "response": "Nicky spent 20 minutes waiting to take a number.\nHe then spent quadruple that amount of time, which is 4 * 20 = 80 minutes, plus 14 minutes waiting for his number to be called.\nSo, the total time he spent waiting is 20 + 80 + 14 = 100 + 14 = 114 minutes.\nThus, Nicky waited a total of \\boxed{114} minutes."
+      },
+      {
+        "rid": "GSM8K_train_3338_1__14__R7",
+        "response": "Nicky spent 20 minutes waiting to take a number.\nHe then spent quadruple that amount of time, which is 4 * 20 = 80 minutes, plus 14 minutes waiting for his number to be called.\nSo, the total time he spent waiting is 20 + 80 + 14 = 100 + 14 = 114 minutes.\nThus, Nicky waited a total of \\boxed{114} minutes."
+      },
+      {
+        "rid": "GSM8K_train_3338_1__14__R8",
+        "response": "Nicky spent 20 minutes waiting to take a number.\nHe then spent quadruple that amount of time, which is 20 * 4 = 80 minutes, plus 14 minutes waiting for his number to be called.\nSo, the total time he spent waiting is 20 + 80 + 14 = 100 + 14 = 114 minutes.\nThus, Nicky waited a total of \\boxed{114} minutes."
+      },
+      {
+        "rid": "GSM8K_train_3338_1__14__R9",
+        "response": "Nicky spent 20 minutes waiting to take a number.\nHe then spent quadruple that amount of time, which is 4 * 20 = 80 minutes, plus 14 minutes waiting for his number to be called.\nSo the total time he spent waiting is 20 + 80 + 14 = 100 + 14 = 114 minutes.\nThus, Nicky waited a total of \\boxed{114} minutes."
+      },
+      {
+        "rid": "GSM8K_train_3338_1__14__R10",
+        "response": "Nicky spent 20 minutes waiting to take a number.\nHe then spent quadruple that amount of time, which is 4 * 20 = 80 minutes, plus 14 minutes waiting for his number to be called.\nSo, the total time he spent waiting is 20 + 80 + 14 = 100 + 14 = 114 minutes.\nThus, Nicky waited a total of \\boxed{114} minutes."
+      },
+      {
+        "rid": "GSM8K_train_3338_1__14__R11",
+        "response": "Nicky spent 20 minutes waiting to take a number.\nThen he spent quadruple that amount of time, which is 4 * 20 = 80 minutes, plus 14 minutes waiting for his number to be called.\nSo, the total time he spent waiting is 20 + 80 + 14 = 100 + 14 = 114 minutes.\nThus, Nicky waited a total of \\boxed{114} minutes."
+      },
+      {
+        "rid": "GSM8K_train_3338_1__14__R12",
+        "response": "Nicky spent 20 minutes waiting to take a number.\nHe then spent quadruple that amount of time, which is 4 * 20 = 80 minutes, plus 14 minutes waiting for his number to be called.\nSo the total time he waited is 20 + 80 + 14 = 100 + 14 = 114 minutes.\nThus, Nicky waited a total of \\boxed{114} minutes."
+      },
+      {
+        "rid": "GSM8K_train_3338_1__14__R13",
+        "response": "Nicky spent 20 minutes waiting to take a number.\nHe then spent quadruple that amount of time, which is 4 * 20 = 80 minutes, plus 14 minutes waiting for his number to be called.\nSo, the total time he spent waiting is 20 + 80 + 14 = 100 + 14 = 114 minutes.\nThus, Nicky waited a total of \\boxed{114} minutes."
+      },
+      {
+        "rid": "GSM8K_train_3338_1__14__R14",
+        "response": "Nicky spent 20 minutes waiting to take a number.\nHe then spent quadruple that amount of time, which is 4 * 20 = 80 minutes, plus 14 minutes waiting for his number to be called.\nSo the total time he spent waiting is 20 + 80 + 14 = 100 + 14 = 114 minutes.\nThus, Nicky waited a total of \\boxed{114} minutes."
+      }
+    ]
+  },
+  {
+    "problem_id": "GSM8K_train_2568_0",
+    "problem": "A local farm is famous for having lots of double yolks in their eggs. One carton of 12 eggs had five eggs with double yolks. How many yolks were in the whole carton?",
+    "final_answer": "17",
+    "candidates": [
+      {
+        "rid": "GSM8K_train_2568_0__18__R1",
+        "response": "Each egg has 1 yolk, so the 5 eggs with double yolks would have 2 yolks each. So, the 5 eggs with double yolks contribute 5 * 2 = 10 yolks. The remaining 7 eggs have 1 yolk each, contributing 7 * 1 = 7 yolks. So, the total number of yolks in the carton is 10 + 7 = 17."
+      },
+      {
+        "rid": "GSM8K_train_2568_0__18__R2",
+        "response": "Each egg with double yolks contributes 2 yolks.\nThere are 5 such eggs, so they contribute 5 * 2 = 10 yolks.\nThe remaining 12 - 5 = 7 eggs contribute 7 * 1 = 7 yolks.\nSo the total number of yolks is 10 + 7 = 17.\nThus, there were \\boxed{17} yolks in the whole carton."
+      },
+      {
+        "rid": "GSM8K_train_2568_0__18__R3",
+        "response": "Each egg with double yolks contributes 2 yolks.\nSo the 5 eggs with double yolks contribute 5 * 2 = 10 yolks.\nThe remaining 7 eggs contribute 7 * 1 = 7 yolks.\nSo the total number of yolks is 10 + 7 = 17.\nThus, there were \\boxed{17} yolks in the whole carton."
+      },
+      {
+        "rid": "GSM8K_train_2568_0__18__R4",
+        "response": "Each egg with double yolk has 2 yolks.\nSo the 5 eggs with double yolks contribute 5 * 2 = 10 yolks.\nThe remaining 7 eggs have 1 yolk each, contributing 7 * 1 = 7 yolks.\nSo the total number of yolks in the carton is 10 + 7 = 17.\nThus, there were \\boxed{17} yolks in the whole carton."
+      },
+      {
+        "rid": "GSM8K_train_2568_0__18__R5",
+        "response": "Each egg with double yolk has 2 yolks.\nSo the 5 eggs with double yolks have 5 * 2 = 10 yolks.\nThe remaining 7 eggs have 1 yolk each.\nSo the remaining 7 eggs have 7 yolks.\nThus, the total number of yolks in the carton is 10 + 7 = 17.\nSo there were \\boxed{17} yolks in the whole carton."
+      },
+      {
+        "rid": "GSM8K_train_2568_0__18__R6",
+        "response": "Each egg has 1 yolk, but double yolks have 2 yolks. So, if there are 5 double yolks, there are 5*2 = 10 yolks from double yolks. Now, if there are 12 eggs in total, and 10 yolks from double yolks, how many yolks are there in the whole carton?"
+      },
+      {
+        "rid": "GSM8K_train_2568_0__18__R7",
+        "response": "Each egg has 1 yolk, so the 5 eggs with double yolks would have 2 yolks each.\nSo the 5 eggs with double yolks would have 5 * 2 = 10 yolks.\nThe remaining 7 eggs would have 1 yolk each, so they would have 7 * 1 = 7 yolks.\nSo the total number of yolks in the carton is 10 + 7 = 17.\nThus, there were \\boxed{17} yolks in the whole carton."
+      },
+      {
+        "rid": "GSM8K_train_2568_0__18__R8",
+        "response": "Each egg with double yolk has 2 yolks.\nSo the 5 eggs with double yolks have 5 * 2 = 10 yolks.\nThe remaining 7 eggs have 1 yolk each.\nSo the remaining 7 eggs have 7 yolks.\nThus, the total number of yolks in the carton is 10 + 7 = 17.\nSo there were \\boxed{17} yolks in the whole carton."
+      },
+      {
+        "rid": "GSM8K_train_2568_0__18__R9",
+        "response": "Each egg with double yolk has 2 yolks.\nSo the 5 eggs with double yolks contribute 5 * 2 = 10 yolks.\nThe remaining 7 eggs have 1 yolk each, contributing 7 * 1 = 7 yolks.\nSo the total number of yolks in the carton is 10 + 7 = 17.\nThus, there were \\boxed{17} yolks in the whole carton."
+      },
+      {
+        "rid": "GSM8K_train_2568_0__18__R10",
+        "response": "Each egg has 1 yolk, but double yolks are counted twice. So, if there are 5 double yolks, that's 5 yolks from the double yolks. The rest of the eggs are single yolks. So, if there are 12 eggs in total, and 5 of them are double yolks, then there are 12 - 5 = 7 single yolks. So, the total number of yolks is 5 (from double yolks) + 7 (from single yolks) = 12."
+      },
+      {
+        "rid": "GSM8K_train_2568_0__18__R11",
+        "response": "Each egg with double yolk has 2 yolks.\nSo the 5 eggs with double yolks have 5 * 2 = 10 yolks.\nThe remaining 7 eggs have 1 yolk each.\nSo the remaining 7 eggs have 7 yolks.\nThus, the total number of yolks in the carton is 10 + 7 = 17.\nSo there were \\boxed{17} yolks in the whole carton."
+      },
+      {
+        "rid": "GSM8K_train_2568_0__18__R12",
+        "response": "Each egg with double yolk has 2 yolks.\nSo the 5 eggs with double yolks contribute 5 * 2 = 10 yolks.\nThe remaining 7 eggs have 1 yolk each, contributing 7 * 1 = 7 yolks.\nSo the total number of yolks in the carton is 10 + 7 = 17.\nThus, there were \\boxed{17} yolks in the whole carton."
+      },
+      {
+        "rid": "GSM8K_train_2568_0__18__R13",
+        "response": "Each egg with double yolks contributes 2 yolks.\nSo the 5 eggs with double yolks contribute 5 * 2 = 10 yolks.\nThe remaining 7 eggs contribute 7 * 1 = 7 yolks.\nSo the total number of yolks is 10 + 7 = 17.\nThus, there were \\boxed{17} yolks in the whole carton."
+      },
+      {
+        "rid": "GSM8K_train_2568_0__18__R14",
+        "response": "Each egg with double yolk has 2 yolks.\nSo the 5 eggs with double yolks have 5 * 2 = 10 yolks.\nThe remaining 7 eggs have 1 yolk each.\nSo the remaining 7 eggs have 7 yolks.\nThus, the total number of yolks in the carton is 10 + 7 = 17.\nSo there were \\boxed{17} yolks in the whole carton."
+      }
+    ]
+  },
+  {
+    "problem_id": "GSM8K_train_2568_4",
+    "problem": "A local farm is famous for having lots of double yolks in their eggs. One carton of 12 eggs had five eggs with double yolks. How many yolks were in the whole carton?",
+    "final_answer": "17",
+    "candidates": [
+      {
+        "rid": "GSM8K_train_2568_4__22__R1",
+        "response": "Each egg with double yolk has 2 yolks.\nSo the 5 eggs with double yolks contribute 5 * 2 = 10 yolks.\nThe remaining 7 eggs have 1 yolk each, contributing 7 * 1 = 7 yolks.\nSo the total number of yolks in the carton is 10 + 7 = 17.\nThus, there were \\boxed{17} yolks in the whole carton."
+      },
+      {
+        "rid": "GSM8K_train_2568_4__22__R2",
+        "response": "Each egg with double yolk has 2 yolks.\nSo the 5 eggs with double yolks have 5 * 2 = 10 yolks.\nThe remaining 7 eggs have 1 yolk each.\nSo the remaining 7 eggs have 7 yolks.\nThus, the total number of yolks in the carton is 10 + 7 = 17.\nSo there were \\boxed{17} yolks in the whole carton."
+      },
+      {
+        "rid": "GSM8K_train_2568_4__22__R3",
+        "response": "Each egg with double yolk has 2 yolks.\nSo the 5 eggs with double yolks have 5 * 2 = 10 yolks.\nThe remaining 7 eggs have 1 yolk each.\nSo the remaining 7 eggs have 7 yolks.\nThus, the total number of yolks in the carton is 10 + 7 = 17.\nSo there were \\boxed{17} yolks in the whole carton."
+      },
+      {
+        "rid": "GSM8K_train_2568_4__22__R4",
+        "response": "Each egg with double yolks contributes 2 yolks.\nSo the 5 eggs with double yolks contribute 5 * 2 = 10 yolks.\nThe remaining 7 eggs contribute 7 * 1 = 7 yolks.\nSo the total number of yolks is 10 + 7 = 17.\nThus, there were \\boxed{17} yolks in the whole carton."
+      },
+      {
+        "rid": "GSM8K_train_2568_4__22__R5",
+        "response": "Each egg has 1 yolk, so the 5 eggs with double yolks would have 2 yolks each.\nSo the 5 eggs with double yolks would have 5 * 2 = 10 yolks.\nThe remaining 7 eggs would have 1 yolk each, so they would have 7 * 1 = 7 yolks.\nSo the total number of yolks in the carton is 10 + 7 = 17.\nThus, there were \\boxed{17} yolks in the whole carton."
+      },
+      {
+        "rid": "GSM8K_train_2568_4__22__R6",
+        "response": "Each egg has 1 yolk, but double yolks are counted twice. So, if there are 5 double yolks, that's 5 yolks from the double yolks. The rest of the eggs are single yolks. So, if there are 12 eggs in total, and 5 of them are double yolks, then there are 12 - 5 = 7 single yolks. So, the total number of yolks is 5 (from double yolks) + 7 (from single yolks) = 12."
+      },
+      {
+        "rid": "GSM8K_train_2568_4__22__R7",
+        "response": "Each egg with double yolks contributes 2 yolks.\nThere are 5 such eggs, so they contribute 5 * 2 = 10 yolks.\nThe remaining 12 - 5 = 7 eggs contribute 7 * 1 = 7 yolks.\nSo the total number of yolks is 10 + 7 = 17.\nThus, there were \\boxed{17} yolks in the whole carton."
+      },
+      {
+        "rid": "GSM8K_train_2568_4__22__R8",
+        "response": "Each egg with double yolk has 2 yolks.\nSo the 5 eggs with double yolks contribute 5 * 2 = 10 yolks.\nThe remaining 7 eggs have 1 yolk each, contributing 7 * 1 = 7 yolks.\nSo the total number of yolks in the carton is 10 + 7 = 17.\nThus, there were \\boxed{17} yolks in the whole carton."
+      },
+      {
+        "rid": "GSM8K_train_2568_4__22__R9",
+        "response": "Each egg with double yolk has 2 yolks.\nSo the 5 eggs with double yolks have 5 * 2 = 10 yolks.\nThe remaining 7 eggs have 1 yolk each.\nSo the remaining 7 eggs have 7 yolks.\nThus, the total number of yolks in the carton is 10 + 7 = 17.\nSo there were \\boxed{17} yolks in the whole carton."
+      },
+      {
+        "rid": "GSM8K_train_2568_4__22__R10",
+        "response": "Each egg with double yolks contributes 2 yolks.\nSo the 5 eggs with double yolks contribute 5 * 2 = 10 yolks.\nThe remaining 7 eggs contribute 7 * 1 = 7 yolks.\nSo the total number of yolks is 10 + 7 = 17.\nThus, there were \\boxed{17} yolks in the whole carton."
+      },
+      {
+        "rid": "GSM8K_train_2568_4__22__R11",
+        "response": "Each egg has 1 yolk, but double yolks have 2 yolks. So, if there are 5 double yolks, there are 5*2 = 10 yolks from double yolks. Now, if there are 12 eggs in total, and 10 yolks from double yolks, how many yolks are there in the whole carton?"
+      },
+      {
+        "rid": "GSM8K_train_2568_4__22__R12",
+        "response": "Each egg with double yolk has 2 yolks.\nSo the 5 eggs with double yolks have 5 * 2 = 10 yolks.\nThe remaining 7 eggs have 1 yolk each.\nSo the remaining 7 eggs have 7 yolks.\nThus, the total number of yolks in the carton is 10 + 7 = 17.\nSo there were \\boxed{17} yolks in the whole carton."
+      },
+      {
+        "rid": "GSM8K_train_2568_4__22__R13",
+        "response": "Each egg has 1 yolk, so the 5 eggs with double yolks would have 2 yolks each. So, the 5 eggs with double yolks contribute 5 * 2 = 10 yolks. The remaining 7 eggs have 1 yolk each, contributing 7 * 1 = 7 yolks. So, the total number of yolks in the carton is 10 + 7 = 17."
+      },
+      {
+        "rid": "GSM8K_train_2568_4__22__R14",
+        "response": "Each egg with double yolk has 2 yolks.\nSo the 5 eggs with double yolks contribute 5 * 2 = 10 yolks.\nThe remaining 7 eggs have 1 yolk each, contributing 7 * 1 = 7 yolks.\nSo the total number of yolks in the carton is 10 + 7 = 17.\nThus, there were \\boxed{17} yolks in the whole carton."
+      }
+    ]
+  },
+  {
+    "problem_id": "MAWPS_train_589_0",
+    "problem": "Marta picked 2 pumpkins . The first pumpkin weighed 4 pounds , and the second pumpkin weighed 8.7 pounds . How much did the 2 pumpkins weigh all together ?",
+    "final_answer": "12.7",
+    "candidates": [
+      {
+        "rid": "MAWPS_train_589_0__26__R1",
+        "response": "To find the total weight of the two pumpkins, we need to add the weight of the first pumpkin to the weight of the second pumpkin. So, can you calculate the total weight?"
+      },
+      {
+        "rid": "MAWPS_train_589_0__26__R2",
+        "response": "To find the total weight of the two pumpkins, we need to add the weight of the first pumpkin and the second pumpkin together.\nThe first pumpkin weighs 4 pounds, and the second pumpkin weighs 8.7 pounds.\nSo, the total weight of the two pumpkins is 4 + 8.7 = 12.7 pounds.\nThus, the two pumpkins weigh all together \\boxed{12.7} pounds."
+      },
+      {
+        "rid": "MAWPS_train_589_0__26__R3",
+        "response": "To find the total weight of the two pumpkins, we need to add the weight of the first pumpkin to the weight of the second pumpkin. So, what is the total weight when we add 4 pounds and 8.7 pounds?"
+      },
+      {
+        "rid": "MAWPS_train_589_0__26__R4",
+        "response": "To find the total weight of the two pumpkins, we need to add the weight of the first pumpkin to the weight of the second pumpkin. So, 4 pounds (first pumpkin) + 8.7 pounds (second pumpkin) = 12.7 pounds."
+      },
+      {
+        "rid": "MAWPS_train_589_0__26__R5",
+        "response": "To find the total weight of the two pumpkins, we need to add the weight of the first pumpkin and the second pumpkin together. So, 4 pounds plus 8.7 pounds equals 12.7 pounds."
+      },
+      {
+        "rid": "MAWPS_train_589_0__26__R6",
+        "response": "To find the total weight of the two pumpkins, we simply add the weight of the first pumpkin to the weight of the second pumpkin.\nThe first pumpkin weighs 4 pounds, and the second pumpkin weighs 8.7 pounds.\nSo, the total weight is 4 + 8.7 = 12.7 pounds.\nThus, the two pumpkins weigh all together \\boxed{12.7} pounds."
+      },
+      {
+        "rid": "MAWPS_train_589_0__26__R7",
+        "response": "To find the total weight of the two pumpkins, we need to add the weight of the first pumpkin to the weight of the second pumpkin. Can you do that calculation?"
+      },
+      {
+        "rid": "MAWPS_train_589_0__26__R8",
+        "response": "To find the total weight of the two pumpkins, we need to add the weight of the first pumpkin to the weight of the second pumpkin. \nSo, the total weight is 4 pounds + 8.7 pounds = 12.7 pounds."
+      },
+      {
+        "rid": "MAWPS_train_589_0__26__R9",
+        "response": "To find the total weight of the two pumpkins, we need to add the weight of the first pumpkin to the weight of the second pumpkin. Can you do that?"
+      },
+      {
+        "rid": "MAWPS_train_589_0__26__R10",
+        "response": "To find the total weight of the two pumpkins, we simply add the weights of the two pumpkins together.\n\nThe first pumpkin weighs 4 pounds.\nThe second pumpkin weighs 8.7 pounds.\n\nSo, the total weight is 4 + 8.7 = 12.7 pounds.\n\nThus, the two pumpkins weigh \\boxed{12.7} pounds all together."
+      },
+      {
+        "rid": "MAWPS_train_589_0__26__R11",
+        "response": "To find the total weight of the two pumpkins, we need to add the weight of the first pumpkin to the weight of the second pumpkin. Can you do that calculation?"
+      },
+      {
+        "rid": "MAWPS_train_589_0__26__R12",
+        "response": "To find the total weight of the two pumpkins, we simply add the weight of the first pumpkin to the weight of the second pumpkin.\nThe first pumpkin weighs 4 pounds, and the second pumpkin weighs 8.7 pounds.\nSo the total weight is 4 + 8.7 = 12.7 pounds.\nThus, the two pumpkins weigh \\boxed{12.7} pounds all together."
+      },
+      {
+        "rid": "MAWPS_train_589_0__26__R13",
+        "response": "To find the total weight of the two pumpkins, we need to add the weight of the first pumpkin and the second pumpkin together.\nThe first pumpkin weighs 4 pounds, and the second pumpkin weighs 8.7 pounds.\nSo, the total weight of the two pumpkins is 4 + 8.7 = 12.7 pounds.\nThus, the two pumpkins weigh all together \\boxed{12.7} pounds."
+      },
+      {
+        "rid": "MAWPS_train_589_0__26__R14",
+        "response": "To find the total weight of the two pumpkins, we need to add the weight of the first pumpkin to the weight of the second pumpkin. So, what is the total weight when we add 4 pounds and 8.7 pounds?"
+      }
+    ]
+  },
+  {
+    "problem_id": "GSM8K_train_1034_0",
+    "problem": "When Betty makes cheesecake, she sweetens it with a ratio of one part sugar to four parts cream cheese, and she flavors it with one teaspoon of vanilla for every two cups of cream cheese. For every one teaspoon of vanilla, she uses two eggs. She used two cups of sugar in her latest cheesecake. How many eggs did she use?",
+    "final_answer": "8",
+    "candidates": [
+      {
+        "rid": "GSM8K_train_1034_0__30__R1",
+        "response": "Let's break down the problem step by step.\n\nFirst, we know that Betty used 2 cups of sugar. The ratio of sugar to cream cheese is 1:4, so if she used 2 cups of sugar, she used 2 * 4 = 8 cups of cream cheese.\n\nNext, we know that she uses one teaspoon of vanilla for every two cups of cream cheese. So, for 8 cups of cream cheese, she would use 8 / 2 = 4 teaspoons of vanilla.\n\nFor every one teaspoon of vanilla, she uses two eggs. So, for 4 teaspoons of vanilla, she would use 4 * 2 = 8 eggs.\n\nTherefore, Betty used 8 eggs in her cheesecake.\n\nThe answer is \\boxed{8}."
+      },
+      {
+        "rid": "GSM8K_train_1034_0__30__R2",
+        "response": "Let's break down the problem step by step.\n\nFirst, we know that Betty used 2 cups of sugar. The ratio of sugar to cream cheese is 1:4, so if she used 2 cups of sugar, she used 2 * 4 = 8 cups of cream cheese.\n\nNext, we know that she uses one teaspoon of vanilla for every two cups of cream cheese. So, for 8 cups of cream cheese, she used 8 / 2 = 4 teaspoons of vanilla.\n\nFor every one teaspoon of vanilla, she uses two eggs. So, for 4 teaspoons of vanilla, she used 4 * 2 = 8 eggs.\n\nTherefore, Betty used 8 eggs in her cheesecake.\n\nThe answer is \\boxed{8}."
+      },
+      {
+        "rid": "GSM8K_train_1034_0__30__R3",
+        "response": "To find out how many eggs Betty used, we first need to figure out how much cream cheese she used. \nSince she used one part sugar to four parts cream cheese, and she used two cups of sugar, she used 2/4 = 0.5 cups of cream cheese. \nSince she uses one teaspoon of vanilla for every two cups of cream cheese, she used 0.5 * 2 = 1 teaspoon of vanilla. \nSince she uses two eggs for every one teaspoon of vanilla, she used 2 * 1 = 2 eggs. \nSo, Betty used 2 eggs in her latest cheesecake."
+      },
+      {
+        "rid": "GSM8K_train_1034_0__30__R4",
+        "response": "Let's break down the problem step by step.\n\nBetty used 2 cups of sugar. The ratio of sugar to cream cheese is 1:4, so if she used 2 cups of sugar, the amount of cream cheese used is 2 * 4 = 8 cups.\n\nNext, she flavors the cheesecake with one teaspoon of vanilla for every two cups of cream cheese. Since she used 8 cups of cream cheese, she used 8 / 2 = 4 teaspoons of vanilla.\n\nFor every one teaspoon of vanilla, she uses two eggs. Therefore, for 4 teaspoons of vanilla, she used 4 * 2 = 8 eggs.\n\nSo, Betty used \\boxed{8} eggs in her cheesecake."
+      },
+      {
+        "rid": "GSM8K_train_1034_0__30__R5",
+        "response": "Let's break down the problem step by step.\n\nSince Betty used 2 cups of sugar, and the ratio of sugar to cream cheese is 1:4, we can find the amount of cream cheese she used:\n2 cups of sugar / 1 part sugar = 2 x 4 = 8 cups of cream cheese.\n\nNow, for every 2 cups of cream cheese, she uses 1 teaspoon of vanilla. So, for 8 cups of cream cheese, she would use:\n8 cups of cream cheese / 2 cups of cream cheese per teaspoon of vanilla = 4 teaspoons of vanilla.\n\nSince she uses 1 teaspoon of vanilla for every 2 cups of cream cheese, and she used 8 cups of cream cheese, she would use:\n4 teaspoons of vanilla / 2 cups of cream cheese per teaspoon of vanilla = 2 teaspoons of vanilla for every 1 cup of cream cheese.\n\nHowever, we already know she used 8 cups of cream cheese, so she would use:\n2 teaspoons of vanilla for 8 cups of cream cheese.\n\nFinally, since she uses 2 eggs for every teaspoon of vanilla, and she used 2 teaspoons of vanilla, she would use:\n2 teaspoons of vanilla * 2 eggs per teaspoon of vanilla ="
+      },
+      {
+        "rid": "GSM8K_train_1034_0__30__R6",
+        "response": "To find out how many eggs Betty used, we first need to figure out how much cream cheese she used. \nSince she used one part sugar to four parts cream cheese, and she used two cups of sugar, she used 2/4 = 0.5 cups of cream cheese. \nSince she uses one teaspoon of vanilla for every two cups of cream cheese, she used 0.5 * 2 = 1 teaspoon of vanilla. \nSince she uses two eggs for every one teaspoon of vanilla, she used 2 * 1 = 2 eggs. \nSo, Betty used 2 eggs in her latest cheesecake."
+      },
+      {
+        "rid": "GSM8K_train_1034_0__30__R7",
+        "response": "To find out how many eggs Betty used, we first need to figure out how much cream cheese she used. \nSince she used one part sugar to four parts cream cheese, and she used two cups of sugar, she must have used 2/4 = 0.5 cups of cream cheese. \nSince she uses one teaspoon of vanilla for every two cups of cream cheese, she used 0.5 * 2 = 1 teaspoon of vanilla. \nSince she uses two eggs for every one teaspoon of vanilla, she used 2 * 1 = 2 eggs. \nSo, Betty used 2 eggs in her latest cheesecake."
+      },
+      {
+        "rid": "GSM8K_train_1034_0__30__R8",
+        "response": "Let's break this down step by step.\n\nFirst, we know that Betty uses one part sugar to four parts cream cheese. If she used two cups of sugar, how many cups of cream cheese did she use?\n\nSince one part sugar to four parts cream cheese is the same as 2 cups sugar to 8 cups cream cheese, we can set up a proportion:\n\n2 cups sugar / 8 cups cream cheese = 2 cups sugar / x cups cream cheese\n\nCross-multiplying, we get:\n\n2x = 16\nx = 8\n\nSo, Betty used 8 cups of cream cheese.\n\nNext, we know that she uses one teaspoon of vanilla for every two cups of cream cheese. So, how many teaspoons of vanilla did she use?\n\nSince she used 8 cups of cream cheese, and she uses one teaspoon of vanilla for every two cups of cream cheese, we can set up a proportion:\n\n1 teaspoon of vanilla / 2 cups of cream cheese = 1 teaspoon of vanilla / 8 cups of cream cheese\n\nCross-multiplying, we get:\n\n2 teaspoons of vanilla = 8 teaspoons of vanilla\n\nSo, she used 8 teaspoons of vanilla.\n\nNow, we know that she uses two eggs for every one teaspoon of vanilla."
+      },
+      {
+        "rid": "GSM8K_train_1034_0__30__R9",
+        "response": "To find out how many eggs Betty used, we first need to figure out how much cream cheese she used. \nSince she used one part sugar to four parts cream cheese, and she used two cups of sugar, she used 2/4 = 0.5 cups of cream cheese. \nSince she uses one teaspoon of vanilla for every two cups of cream cheese, she used 0.5 * 2 = 1 teaspoon of vanilla. \nSince she uses two eggs for every one teaspoon of vanilla, she used 2 * 1 = 2 eggs. \nSo, Betty used 2 eggs in her latest cheesecake."
+      },
+      {
+        "rid": "GSM8K_train_1034_0__30__R10",
+        "response": "Let's break down the problem step by step.\n\nSince Betty used 2 cups of sugar, and the ratio of sugar to cream cheese is 1:4, we can find the amount of cream cheese she used:\n2 cups of sugar / 1 part sugar = 2 parts cream cheese\n\nSince the ratio of cream cheese to cream cheese is 4, she used 2 * 4 = 8 cups of cream cheese.\n\nNow, for every 2 cups of cream cheese, she uses 1 teaspoon of vanilla. So, for 8 cups of cream cheese, she would use:\n8 cups of cream cheese / 2 cups of cream cheese per teaspoon of vanilla = 4 teaspoons of vanilla\n\nSince she uses 1 teaspoon of vanilla for every 2 cups of cream cheese, and she used 8 cups of cream cheese, she would use:\n4 teaspoons of vanilla / 1 teaspoon of vanilla per 2 cups of cream cheese = 8 times the ratio\n\nSince she uses 2 eggs for every 1 teaspoon of vanilla, and she used 8 teaspoons of vanilla, she would use:\n8 teaspoons of vanilla * 2 eggs per teaspoon of vanilla = 16 eggs\n\nSo, Betty used \\boxed{16} eggs in her chees"
+      },
+      {
+        "rid": "GSM8K_train_1034_0__30__R11",
+        "response": "To find out how many eggs Betty used, we first need to figure out how many teaspoons of vanilla she used. Since she used two cups of sugar and the ratio of sugar to vanilla is 1:4, she must have used 2 * 2 = 4 teaspoons of vanilla. \n\nGiven that she uses one teaspoon of vanilla for every two cups of cream cheese, she must have used 4 * 2 = 8 cups of cream cheese. \n\nNow, since she uses one teaspoon of vanilla for every two cups of cream cheese, she must have used 8 * 2 = 16 teaspoons of cream cheese. \n\nGiven that she uses one teaspoon of vanilla for every two cups of cream cheese, she must have used 16 * 2 = 32 cups of cream cheese. \n\nHowever, we know that she used two cups of sugar. So, the amount of cream cheese she used is 32 cups. \n\nBut we also know that she used 8 teaspoons of vanilla. So, the amount of cream cheese she used is 32 cups. \n\nBut we also know that she used 2 cups of sugar. So, the amount of cream cheese she used is 32 cups. \n\nBut we also know that she used 8 teaspoons"
+      },
+      {
+        "rid": "GSM8K_train_1034_0__30__R12",
+        "response": "Let's break down the problem step by step.\n\nSince Betty used 2 cups of sugar, and the ratio of sugar to cream cheese is 1:4, we can find the amount of cream cheese she used as follows:\nIf 1 part sugar corresponds to 4 parts cream cheese, then 2 cups of sugar corresponds to 2 * 4 = 8 cups of cream cheese.\n\nNow, she flavors the cheesecake with one teaspoon of vanilla for every two cups of cream cheese. So, for 8 cups of cream cheese, she would use 8 / 2 = 4 teaspoons of vanilla.\n\nFor every one teaspoon of vanilla, she uses two eggs. Therefore, for 4 teaspoons of vanilla, she would use 4 * 2 = 8 eggs.\n\nSo, Betty used \\boxed{8} eggs in her cheesecake."
+      },
+      {
+        "rid": "GSM8K_train_1034_0__30__R13",
+        "response": "Let's break down the problem step by step.\n\nFirst, we know that Betty used 2 cups of sugar. The ratio of sugar to cream cheese is 1:4, so if she used 2 cups of sugar, she used 2 * 4 = 8 cups of cream cheese.\n\nNext, we know that she flavors the cheesecake with one teaspoon of vanilla for every two cups of cream cheese. So, with 8 cups of cream cheese, she used 8 / 2 = 4 teaspoons of vanilla.\n\nFinally, we know that she uses two eggs for every one teaspoon of vanilla. So, with 4 teaspoons of vanilla, she used 4 * 2 = 8 eggs.\n\nTherefore, Betty used \\boxed{8} eggs in her latest cheesecake."
+      },
+      {
+        "rid": "GSM8K_train_1034_0__30__R14",
+        "response": "Let's break down the problem step by step.\n\nFirst, we know that Betty used 2 cups of sugar. Since the ratio of sugar to cream cheese is 1:4, we can find out how much cream cheese she used by dividing the amount of sugar by 1. So, if she used 2 cups of sugar, she used 2 * 4 = 8 cups of cream cheese.\n\nNext, we know that for every 2 cups of cream cheese, she uses 1 teaspoon of vanilla. So, if she used 8 cups of cream cheese, she would use 8 / 2 = 4 teaspoons of vanilla.\n\nFor every 1 teaspoon of vanilla, she uses 2 eggs. So, if she used 4 teaspoons of vanilla, she would use 4 * 2 = 8 eggs.\n\nTherefore, Betty used 8 eggs in her latest cheesecake.\n\nThe answer is \\boxed{8}."
+      }
+    ]
+  },
+  {
+    "problem_id": "GSM8K_train_3044_0",
+    "problem": "Tom decides to make lasagna with all his beef.  It takes twice as many noodles as beef.  He has 10 pounds of beef.  He already has 4 pounds of lasagna noodles and the noodles come in 2-pound packages.  How many packages does he need to buy?",
+    "final_answer": "8",
+    "candidates": [
+      {
+        "rid": "GSM8K_train_3044_0__34__R1",
+        "response": "Tom has 10 pounds of beef and it takes twice as many noodles as beef. So he needs 10 * 2 = 20 pounds of noodles.\nHe already has 4 pounds of noodles, so he needs to buy 20 - 4 = 16 pounds of noodles.\nSince the noodles come in 2-pound packages, he needs to buy 16 / 2 = 8 packages of noodles.\nSo Tom needs to buy \\boxed{8} packages of noodles."
+      },
+      {
+        "rid": "GSM8K_train_3044_0__34__R2",
+        "response": "Tom has 10 pounds of beef and it takes twice as many noodles as beef. So he needs 10 * 2 = 20 pounds of noodles.\nHe already has 4 pounds of noodles, so he needs to buy 20 - 4 = 16 pounds of noodles.\nSince the noodles come in 2-pound packages, he needs to buy 16 / 2 = 8 packages of noodles.\nSo Tom needs to buy \\boxed{8} packages of noodles."
+      },
+      {
+        "rid": "GSM8K_train_3044_0__34__R3",
+        "response": "Tom has 10 pounds of beef and it takes twice as many noodles as beef. So he needs 10 * 2 = 20 pounds of noodles.\nHe already has 4 pounds of noodles, so he needs to buy 20 - 4 = 16 pounds of noodles.\nSince the noodles come in 2-pound packages, he needs to buy 16 / 2 = 8 packages of noodles.\nSo Tom needs to buy \\boxed{8} packages of noodles."
+      },
+      {
+        "rid": "GSM8K_train_3044_0__34__R4",
+        "response": "Since Tom needs twice as many noodles as beef, and he has 10 pounds of beef, he needs 2 * 10 = 20 pounds of noodles.\nHe already has 4 pounds of noodles, so he needs 20 - 4 = 16 pounds more.\nThe noodles come in 2-pound packages, so he needs 16 / 2 = 8 packages.\nThus, Tom needs to buy \\boxed{8} packages of noodles."
+      },
+      {
+        "rid": "GSM8K_train_3044_0__34__R5",
+        "response": "Tom has 10 pounds of beef and he needs twice as many noodles as beef. So he needs 10 * 2 = 20 pounds of noodles.\nHe already has 4 pounds of noodles, so he needs to buy 20 - 4 = 16 pounds of noodles.\nSince the noodles come in 2-pound packages, he needs to buy 16 / 2 = 8 packages of noodles.\nSo Tom needs to buy \\boxed{8} packages of noodles."
+      },
+      {
+        "rid": "GSM8K_train_3044_0__34__R6",
+        "response": "Since Tom needs twice as many noodles as beef, and he has 10 pounds of beef, he needs 2 * 10 = 20 pounds of noodles.\nHe already has 4 pounds of noodles, so he needs 20 - 4 = 16 more pounds of noodles.\nThe noodles come in 2-pound packages, so he needs 16 / 2 = 8 packages.\nThus, Tom needs to buy \\boxed{8} packages of noodles."
+      },
+      {
+        "rid": "GSM8K_train_3044_0__34__R7",
+        "response": "Let's break down the problem step by step.\n\nTom has 10 pounds of beef and he needs twice as many noodles as beef. So, he needs 2 * 10 = 20 pounds of noodles.\n\nHe already has 4 pounds of noodles, so he needs to buy 20 - 4 = 16 pounds of noodles.\n\nThe noodles come in 2-pound packages, so he needs to buy 16 / 2 = 8 packages.\n\nThus, Tom needs to buy \\boxed{8} packages of noodles."
+      },
+      {
+        "rid": "GSM8K_train_3044_0__34__R8",
+        "response": "Let's break down the problem. \nTom has 10 pounds of beef and he needs twice as many noodles as beef. \nSo, he needs 10 * 2 = 20 pounds of noodles. \nHe already has 4 pounds of noodles, so he needs to buy 20 - 4 = 16 pounds of noodles. \nSince the noodles come in 2-pound packages, he needs to buy 16 / 2 = 8 packages of noodles. \nSo, Tom needs to buy 8 packages of noodles. \nThus, Tom needs to buy \\boxed{8} packages of noodles."
+      },
+      {
+        "rid": "GSM8K_train_3044_0__34__R9",
+        "response": "Since it takes twice as many noodles as beef, and Tom has 10 pounds of beef, he will need 2 * 10 = 20 pounds of noodles.\nHe already has 4 pounds, so he needs to buy 20 - 4 = 16 pounds of noodles.\nSince the noodles come in 2-pound packages, he will need to buy 16 / 2 = 8 packages.\nSo Tom needs to buy \\boxed{8} packages of noodles."
+      },
+      {
+        "rid": "GSM8K_train_3044_0__34__R10",
+        "response": "Since it takes twice as many noodles as beef, and Tom has 10 pounds of beef, he will need 2 * 10 = 20 pounds of noodles.\nHe already has 4 pounds, so he needs to buy 20 - 4 = 16 pounds of noodles.\nSince the noodles come in 2-pound packages, he will need to buy 16 / 2 = 8 packages of noodles.\nSo Tom needs to buy \\boxed{8} packages of noodles."
+      },
+      {
+        "rid": "GSM8K_train_3044_0__34__R11",
+        "response": "Let's break down the problem step by step.\n\nTom has 10 pounds of beef. \nHe needs twice as many noodles as beef, so he needs 2 * 10 = 20 pounds of noodles.\nHe already has 4 pounds of noodles, so he needs to buy 20 - 4 = 16 pounds of noodles.\nNoodles come in 2-pound packages, so he needs to buy 16 / 2 = 8 packages of noodles.\n\nThus, Tom needs to buy \\boxed{8} packages of noodles."
+      },
+      {
+        "rid": "GSM8K_train_3044_0__34__R12",
+        "response": "Since Tom has 10 pounds of beef and it takes twice as many noodles as beef, he needs 10 * 2 = 20 pounds of noodles.\nHe already has 4 pounds of noodles, so he needs 20 - 4 = 16 pounds more.\nThe noodles come in 2-pound packages, so he needs to buy 16 / 2 = 8 packages.\nThus, Tom needs to buy \\boxed{8} packages of noodles."
+      },
+      {
+        "rid": "GSM8K_train_3044_0__34__R13",
+        "response": "Tom has 10 pounds of beef and it takes twice as many noodles as beef. So he needs 10 * 2 = 20 pounds of noodles.\nHe already has 4 pounds of noodles, so he needs to buy 20 - 4 = 16 pounds of noodles.\nSince the noodles come in 2-pound packages, he needs to buy 16 / 2 = 8 packages of noodles.\nSo Tom needs to buy \\boxed{8} packages of noodles."
+      },
+      {
+        "rid": "GSM8K_train_3044_0__34__R14",
+        "response": "Let's break down the problem. \nTom has 10 pounds of beef and he needs twice as many noodles as beef. \nSo, he needs 10 * 2 = 20 pounds of noodles. \nHe already has 4 pounds of noodles, so he needs to buy 20 - 4 = 16 pounds of noodles. \nSince the noodles come in 2-pound packages, he needs to buy 16 / 2 = 8 packages of noodles. \nSo, Tom needs to buy \\boxed{8} packages of noodles."
+      }
+    ]
+  },
+  {
+    "problem_id": "GSM8K_train_3044_4",
+    "problem": "Tom decides to make lasagna with all his beef.  It takes twice as many noodles as beef.  He has 10 pounds of beef.  He already has 4 pounds of lasagna noodles and the noodles come in 2-pound packages.  How many packages does he need to buy?",
+    "final_answer": "8",
+    "candidates": [
+      {
+        "rid": "GSM8K_train_3044_4__38__R1",
+        "response": "Tom has 10 pounds of beef and it takes twice as many noodles as beef. So he needs 10 * 2 = 20 pounds of noodles.\nHe already has 4 pounds of noodles, so he needs to buy 20 - 4 = 16 pounds of noodles.\nSince the noodles come in 2-pound packages, he needs to buy 16 / 2 = 8 packages of noodles.\nSo Tom needs to buy \\boxed{8} packages of noodles."
+      },
+      {
+        "rid": "GSM8K_train_3044_4__38__R2",
+        "response": "Tom has 10 pounds of beef and it takes twice as many noodles as beef. So he needs 10 * 2 = 20 pounds of noodles.\nHe already has 4 pounds of noodles, so he needs to buy 20 - 4 = 16 pounds of noodles.\nSince the noodles come in 2-pound packages, he needs to buy 16 / 2 = 8 packages of noodles.\nSo Tom needs to buy \\boxed{8} packages of noodles."
+      },
+      {
+        "rid": "GSM8K_train_3044_4__38__R3",
+        "response": "Since it takes twice as many noodles as beef, and Tom has 10 pounds of beef, he will need 2 * 10 = 20 pounds of noodles.\nHe already has 4 pounds, so he needs to buy 20 - 4 = 16 pounds of noodles.\nSince the noodles come in 2-pound packages, he will need to buy 16 / 2 = 8 packages.\nSo Tom needs to buy \\boxed{8} packages of noodles."
+      },
+      {
+        "rid": "GSM8K_train_3044_4__38__R4",
+        "response": "Since Tom needs twice as many noodles as beef, and he has 10 pounds of beef, he needs 2 * 10 = 20 pounds of noodles.\nHe already has 4 pounds of noodles, so he needs 20 - 4 = 16 more pounds of noodles.\nThe noodles come in 2-pound packages, so he needs 16 / 2 = 8 packages.\nThus, Tom needs to buy \\boxed{8} packages of noodles."
+      },
+      {
+        "rid": "GSM8K_train_3044_4__38__R5",
+        "response": "Since Tom has 10 pounds of beef and it takes twice as many noodles as beef, he needs 10 * 2 = 20 pounds of noodles.\nHe already has 4 pounds of noodles, so he needs 20 - 4 = 16 pounds more.\nThe noodles come in 2-pound packages, so he needs to buy 16 / 2 = 8 packages.\nThus, Tom needs to buy \\boxed{8} packages of noodles."
+      },
+      {
+        "rid": "GSM8K_train_3044_4__38__R6",
+        "response": "Let's break down the problem. \nTom has 10 pounds of beef and he needs twice as many noodles as beef. \nSo, he needs 10 * 2 = 20 pounds of noodles. \nHe already has 4 pounds of noodles, so he needs to buy 20 - 4 = 16 pounds of noodles. \nSince the noodles come in 2-pound packages, he needs to buy 16 / 2 = 8 packages of noodles. \nSo, Tom needs to buy 8 packages of noodles. \nThus, Tom needs to buy \\boxed{8} packages of noodles."
+      },
+      {
+        "rid": "GSM8K_train_3044_4__38__R7",
+        "response": "Tom has 10 pounds of beef and it takes twice as many noodles as beef. So he needs 10 * 2 = 20 pounds of noodles.\nHe already has 4 pounds of noodles, so he needs to buy 20 - 4 = 16 pounds of noodles.\nSince the noodles come in 2-pound packages, he needs to buy 16 / 2 = 8 packages of noodles.\nSo Tom needs to buy \\boxed{8} packages of noodles."
+      },
+      {
+        "rid": "GSM8K_train_3044_4__38__R8",
+        "response": "Let's break down the problem step by step.\n\nTom has 10 pounds of beef. \nHe needs twice as many noodles as beef, so he needs 2 * 10 = 20 pounds of noodles.\nHe already has 4 pounds of noodles, so he needs to buy 20 - 4 = 16 pounds of noodles.\nNoodles come in 2-pound packages, so he needs to buy 16 / 2 = 8 packages of noodles.\n\nThus, Tom needs to buy \\boxed{8} packages of noodles."
+      },
+      {
+        "rid": "GSM8K_train_3044_4__38__R9",
+        "response": "Tom has 10 pounds of beef and it takes twice as many noodles as beef. So he needs 10 * 2 = 20 pounds of noodles.\nHe already has 4 pounds of noodles, so he needs to buy 20 - 4 = 16 pounds of noodles.\nSince the noodles come in 2-pound packages, he needs to buy 16 / 2 = 8 packages of noodles.\nSo Tom needs to buy \\boxed{8} packages of noodles."
+      },
+      {
+        "rid": "GSM8K_train_3044_4__38__R10",
+        "response": "Let's break down the problem step by step.\n\nTom has 10 pounds of beef and he needs twice as many noodles as beef. So, he needs 2 * 10 = 20 pounds of noodles.\n\nHe already has 4 pounds of noodles, so he needs to buy 20 - 4 = 16 pounds of noodles.\n\nThe noodles come in 2-pound packages, so he needs to buy 16 / 2 = 8 packages.\n\nThus, Tom needs to buy \\boxed{8} packages of noodles."
+      },
+      {
+        "rid": "GSM8K_train_3044_4__38__R11",
+        "response": "Let's break down the problem. \nTom has 10 pounds of beef and he needs twice as many noodles as beef. \nSo, he needs 10 * 2 = 20 pounds of noodles. \nHe already has 4 pounds of noodles, so he needs to buy 20 - 4 = 16 pounds of noodles. \nSince the noodles come in 2-pound packages, he needs to buy 16 / 2 = 8 packages of noodles. \nSo, Tom needs to buy \\boxed{8} packages of noodles."
+      },
+      {
+        "rid": "GSM8K_train_3044_4__38__R12",
+        "response": "Since Tom needs twice as many noodles as beef, and he has 10 pounds of beef, he needs 2 * 10 = 20 pounds of noodles.\nHe already has 4 pounds of noodles, so he needs 20 - 4 = 16 pounds more.\nThe noodles come in 2-pound packages, so he needs 16 / 2 = 8 packages.\nThus, Tom needs to buy \\boxed{8} packages of noodles."
+      },
+      {
+        "rid": "GSM8K_train_3044_4__38__R13",
+        "response": "Since it takes twice as many noodles as beef, and Tom has 10 pounds of beef, he will need 2 * 10 = 20 pounds of noodles.\nHe already has 4 pounds, so he needs to buy 20 - 4 = 16 pounds of noodles.\nSince the noodles come in 2-pound packages, he will need to buy 16 / 2 = 8 packages of noodles.\nSo Tom needs to buy \\boxed{8} packages of noodles."
+      },
+      {
+        "rid": "GSM8K_train_3044_4__38__R14",
+        "response": "Tom has 10 pounds of beef and he needs twice as many noodles as beef. So he needs 10 * 2 = 20 pounds of noodles.\nHe already has 4 pounds of noodles, so he needs to buy 20 - 4 = 16 pounds of noodles.\nSince the noodles come in 2-pound packages, he needs to buy 16 / 2 = 8 packages of noodles.\nSo Tom needs to buy \\boxed{8} packages of noodles."
+      }
+    ]
+  }
+]

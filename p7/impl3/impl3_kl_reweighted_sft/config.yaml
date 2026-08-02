@@ -1,0 +1,37 @@
+# Implementation 3 — KL-reweighted-loss SFT.
+# Inherits the Impl-2 recipe; only the loss weighting changes. Sweep (variant, T)
+# externally (see sweep grid below and the cluster runners).
+base_model: allenai/OLMo-2-0425-1B-Instruct
+hf_dataset: meric533/socrateach-sft  # SAME data as Impl 2 (the published POC 30k mix)
+data_dir: data                    # only used if hf_dataset unset (offline snapshot)
+output_dir: out                   # per-(variant,T) subdirs are appended automatically
+
+max_len: 1024
+seed: 13
+num_epochs: 1.0
+
+use_lora: true
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+
+per_device_batch: 8
+grad_accum: 4
+learning_rate: 2.0e-4
+warmup_ratio: 0.03
+grad_checkpointing: true
+
+min_checkpoints: 10
+save_total_limit: null
+# Log-spaced checkpoints (steps 1,2,3,4,8,16,32,64,128,...) resolve the fast early
+# trajectory so the low-KL knee of the RL's-Razor curve is well sampled. This is the
+# only intended difference from the POC's uniform sweep.
+checkpoint_schedule: log
+
+report_to: wandb          # needs WANDB_API_KEY; --no_wandb to disable
+wandb_project: edullm-p7
+
+# --- sweep grid (not read by the script; used by the cluster runners) -------------
+# variants: [a, b]              # a = base-surprise, b = forward-KL (needs a vanilla SFT)
+# temperatures: [2, 4, 8, 16, 32]   # shifted up 2026-07-29: T<=1 over-concentrates weights / was unstable
+# Plus the vanilla Impl-2 line (train_sft.py) as the baseline on all three plots.

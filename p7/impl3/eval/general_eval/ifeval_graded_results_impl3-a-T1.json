@@ -1,0 +1,441 @@
+{
+  "base": {
+    "prompt_level_strict": 0.7647058823529411,
+    "prompt_level_loose": 0.7941176470588235,
+    "inst_level_strict": 0.7837837837837838,
+    "inst_level_loose": 0.8108108108108109
+  },
+  "sft": {
+    "prompt_level_strict": 0.7941176470588235,
+    "prompt_level_loose": 0.8235294117647058,
+    "inst_level_strict": 0.8108108108108109,
+    "inst_level_loose": 0.8378378378378378
+  },
+  "acc_metric": "prompt_level_loose",
+  "acc": 0.8235294117647058,
+  "detail": [
+    {
+      "id": "caps_japan",
+      "prompt_strict": false,
+      "prompt_loose": false,
+      "instructions": [
+        {
+          "instruction_id": "change_case:english_capital",
+          "strict": false,
+          "loose": false
+        }
+      ]
+    },
+    {
+      "id": "lower_blackhole",
+      "prompt_strict": true,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "change_case:english_lowercase",
+          "strict": true,
+          "loose": true
+        }
+      ]
+    },
+    {
+      "id": "nocomma_season",
+      "prompt_strict": true,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "punctuation:no_comma",
+          "strict": true,
+          "loose": true
+        }
+      ]
+    },
+    {
+      "id": "words60_watercycle",
+      "prompt_strict": true,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "length_constraints:number_words",
+          "strict": true,
+          "loose": true
+        }
+      ]
+    },
+    {
+      "id": "words40_focus",
+      "prompt_strict": true,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "length_constraints:number_words",
+          "strict": true,
+          "loose": true
+        }
+      ]
+    },
+    {
+      "id": "sent3_exercise",
+      "prompt_strict": true,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "length_constraints:number_sentences",
+          "strict": true,
+          "loose": true
+        }
+      ]
+    },
+    {
+      "id": "sent4_rainbow",
+      "prompt_strict": true,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "length_constraints:number_sentences",
+          "strict": true,
+          "loose": true
+        }
+      ]
+    },
+    {
+      "id": "bullets4_money",
+      "prompt_strict": true,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "detectable_format:number_bullet_lists",
+          "strict": true,
+          "loose": true
+        }
+      ]
+    },
+    {
+      "id": "bullets3_colors",
+      "prompt_strict": true,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "detectable_format:number_bullet_lists",
+          "strict": true,
+          "loose": true
+        }
+      ]
+    },
+    {
+      "id": "highlight2_sunset",
+      "prompt_strict": true,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "detectable_format:number_highlighted_sections",
+          "strict": true,
+          "loose": true
+        }
+      ]
+    },
+    {
+      "id": "highlight3_backpack",
+      "prompt_strict": true,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "detectable_format:number_highlighted_sections",
+          "strict": true,
+          "loose": true
+        }
+      ]
+    },
+    {
+      "id": "title_dragon",
+      "prompt_strict": true,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "detectable_format:title",
+          "strict": true,
+          "loose": true
+        }
+      ]
+    },
+    {
+      "id": "json_company",
+      "prompt_strict": true,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "detectable_format:json_format",
+          "strict": true,
+          "loose": true
+        }
+      ]
+    },
+    {
+      "id": "ps_teacher",
+      "prompt_strict": true,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "detectable_content:postscript",
+          "strict": true,
+          "loose": true
+        }
+      ]
+    },
+    {
+      "id": "pps_dentist",
+      "prompt_strict": true,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "detectable_content:postscript",
+          "strict": true,
+          "loose": true
+        }
+      ]
+    },
+    {
+      "id": "placeholders_email",
+      "prompt_strict": true,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "detectable_content:number_placeholders",
+          "strict": true,
+          "loose": true
+        }
+      ]
+    },
+    {
+      "id": "kw_breakfast",
+      "prompt_strict": true,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "keywords:existence",
+          "strict": true,
+          "loose": true
+        }
+      ]
+    },
+    {
+      "id": "kw_gym",
+      "prompt_strict": true,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "keywords:existence",
+          "strict": true,
+          "loose": true
+        }
+      ]
+    },
+    {
+      "id": "forbid_ocean",
+      "prompt_strict": false,
+      "prompt_loose": false,
+      "instructions": [
+        {
+          "instruction_id": "keywords:forbidden_words",
+          "strict": false,
+          "loose": false
+        }
+      ]
+    },
+    {
+      "id": "forbid_winter",
+      "prompt_strict": false,
+      "prompt_loose": false,
+      "instructions": [
+        {
+          "instruction_id": "keywords:forbidden_words",
+          "strict": false,
+          "loose": false
+        }
+      ]
+    },
+    {
+      "id": "freq_coffee",
+      "prompt_strict": true,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "keywords:frequency",
+          "strict": true,
+          "loose": true
+        }
+      ]
+    },
+    {
+      "id": "letter_sea",
+      "prompt_strict": true,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "keywords:letter_frequency",
+          "strict": true,
+          "loose": true
+        }
+      ]
+    },
+    {
+      "id": "end_persist",
+      "prompt_strict": true,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "startend:end_checker",
+          "strict": true,
+          "loose": true
+        }
+      ]
+    },
+    {
+      "id": "quote_gravity",
+      "prompt_strict": true,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "startend:quotation",
+          "strict": true,
+          "loose": true
+        }
+      ]
+    },
+    {
+      "id": "constrained_flat",
+      "prompt_strict": true,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "detectable_format:constrained_response",
+          "strict": true,
+          "loose": true
+        }
+      ]
+    },
+    {
+      "id": "two_catnames",
+      "prompt_strict": false,
+      "prompt_loose": false,
+      "instructions": [
+        {
+          "instruction_id": "combination:two_responses",
+          "strict": false,
+          "loose": false
+        }
+      ]
+    },
+    {
+      "id": "sections_photosynthesis",
+      "prompt_strict": true,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "detectable_format:multiple_sections",
+          "strict": true,
+          "loose": true
+        }
+      ]
+    },
+    {
+      "id": "paras2_city",
+      "prompt_strict": true,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "length_constraints:number_paragraphs",
+          "strict": true,
+          "loose": true
+        }
+      ]
+    },
+    {
+      "id": "para_however",
+      "prompt_strict": false,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "length_constraints:nth_paragraph_first_word",
+          "strict": false,
+          "loose": true
+        }
+      ]
+    },
+    {
+      "id": "repeat_smartphone",
+      "prompt_strict": false,
+      "prompt_loose": false,
+      "instructions": [
+        {
+          "instruction_id": "combination:repeat_prompt",
+          "strict": false,
+          "loose": false
+        }
+      ]
+    },
+    {
+      "id": "capwords_nasa",
+      "prompt_strict": false,
+      "prompt_loose": false,
+      "instructions": [
+        {
+          "instruction_id": "change_case:capital_word_frequency",
+          "strict": false,
+          "loose": false
+        }
+      ]
+    },
+    {
+      "id": "combo_sleep",
+      "prompt_strict": true,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "length_constraints:number_words",
+          "strict": true,
+          "loose": true
+        },
+        {
+          "instruction_id": "punctuation:no_comma",
+          "strict": true,
+          "loose": true
+        }
+      ]
+    },
+    {
+      "id": "combo_study",
+      "prompt_strict": true,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "detectable_format:number_bullet_lists",
+          "strict": true,
+          "loose": true
+        },
+        {
+          "instruction_id": "startend:end_checker",
+          "strict": true,
+          "loose": true
+        }
+      ]
+    },
+    {
+      "id": "combo_robot",
+      "prompt_strict": true,
+      "prompt_loose": true,
+      "instructions": [
+        {
+          "instruction_id": "change_case:english_capital",
+          "strict": true,
+          "loose": true
+        },
+        {
+          "instruction_id": "length_constraints:number_words",
+          "strict": true,
+          "loose": true
+        }
+      ]
+    }
+  ]
+}

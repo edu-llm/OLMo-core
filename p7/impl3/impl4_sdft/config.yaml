@@ -1,0 +1,33 @@
+# Implementation 4 — Self-distillation SFT (SDFT) defaults.
+# Same recipe as Impl 2; only the TARGETS change (base-model self-distilled) and the
+# distilled fraction is swept.
+base_model: allenai/OLMo-2-0425-1B-Instruct
+# NOTE: no hf_dataset here — SDFT trains on a LOCAL gold/distilled mix that train_sdft.py
+# builds under out/<tag>/data. Snapshot the gold data first: `python snapshot_hf_dataset.py`
+# (writes data/socrateach_sft_*.jsonl), then pass --gold_dir data.
+# output_dir + data_dir are set automatically by train_sdft.py (out/<tag>/...).
+
+max_len: 1024
+seed: 13
+num_epochs: 1.0
+
+use_lora: true
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+
+per_device_batch: 8
+grad_accum: 4
+learning_rate: 2.0e-4
+warmup_ratio: 0.03
+grad_checkpointing: true
+
+min_checkpoints: 10
+save_total_limit: null
+checkpoint_schedule: log  # log-spaced checkpoints (only intended difference vs the POC)
+
+report_to: wandb          # needs WANDB_API_KEY; --no_wandb to disable
+wandb_project: edullm-p7
+
+# --- distilled-fraction sweep (used by the cluster runners) -----------------------
+# fractions: [0, 0.25, 0.5, 0.75, 1.0]   # 0 = vanilla Impl 2, 1 = full SDFT
