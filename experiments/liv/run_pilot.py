@@ -231,7 +231,15 @@ def build_everything(arm: str, seed: int, tokens: int) -> Dict[str, Any]:
             no_evals=False,
         )
         .with_callback("gpu_monitor", GPUMemoryMonitorCallback())
-        .with_callback("garbage_collector", GarbageCollectorCallback())
+        # gc_interval must be small enough to actually fire within this run.
+        #
+        # GarbageCollectorCallback calls gc.disable() in pre_train and then only ever runs
+        # gc.collect(1) every gc_interval steps (garbage_collector.py:30-42). At the default
+        # 1000 a run shorter than 1000 steps disables automatic GC and never collects -- so
+        # cyclic garbage, including the CPU staging buffers a checkpoint leaves behind,
+        # accumulates untouched for the whole run. The pilot is 762 steps, i.e. squarely in
+        # that window. 100 keeps collection happening without paying for it every step.
+        .with_callback("garbage_collector", GarbageCollectorCallback(gc_interval=100))
         .with_callback("metric_saver", MetricSaverCallback())
         .with_callback("lm_eval", eval_cfg)
     )

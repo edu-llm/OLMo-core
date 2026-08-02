@@ -622,10 +622,11 @@ def build_config(opts, overrides: List[str]):
                 OptimGroupOverride(params=["embeddings.weight"], opts=dict(weight_decay=0.0))
             ],
         ),
-        # On, because the image now carries a C compiler. It was off in the platform's
-        # getting-started command only because a run without one dies on the first compiled
-        # region, which is a workaround that costs throughput on every run forever.
-        compile_model=True,
+        # A flag rather than a constant, because the first submitted run overrode this to
+        # false on the command line and the file still said True. A default that disagrees
+        # with what was actually run is the kind of discrepancy that makes a post-mortem
+        # take an extra hour: the reader trusts the file.
+        compile_model=opts.compile_model,
         dp_config=TransformerDataParallelConfig(
             name=DataParallelType.fsdp, param_dtype=DType.bfloat16, reduce_dtype=DType.float32
         ),
@@ -882,13 +883,66 @@ def build_parser() -> argparse.ArgumentParser:
     # has 24 GiB, so this needs to come DOWN on gpu-4xa10g -- see the header note.
     parser.add_argument("--rank-microbatch-size", type=int, default=2 * 4096)
     parser.add_argument("--data-seed", type=int, default=0)
+    parser.add_argument(
+        "--compile-model",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="torch.compile the model. Off (--no-compile-model) removes a variable when a "
+        "run is being diagnosed; the image does carry a C compiler.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Resolve and print, do not train.")
     return parser
+
+
+def warn_if_final_step_saves_async(steps: int, save_interval: int) -> Optional[str]:
+    """
+    Return a warning if the *terminal* checkpoint would be written by the async path.
+
+    THIS COST A RUN. ``run_019fbfbe`` trained 20/20 steps in 209 seconds, then hung for 48
+    minutes in its final checkpoint and was killed when the walltime cap took the machine.
+    Exit code: none. Traceback: none. The only artifact was ``step20/train/rank0.pt``, which
+    is indistinguishable from what a lost host leaves.
+
+    The rule, from ``CheckpointerCallback`` (``callbacks/checkpointer.py:294`` and ``:321``):
+
+    * ``post_train_batch`` fires an interval save when ``step % save_interval == 0``;
+    * ``post_train`` then saves **synchronously** only when ``step > _latest_checkpoint_step``.
+
+    So when ``save_interval`` divides ``steps``, the interval save claims the final step, and
+    ``post_train`` merely *awaits* it at a bare ``fut.result()`` with no timeout -- while the
+    ``wait_for`` two lines below it *is* bounded. That asymmetry is why a stall is silent.
+
+    Why async is the dangerous one: ``RemoteFileSystemWriter`` implements no ``stage()``, so it
+    fails torch's ``AsyncStager`` protocol and ``DefaultStager`` runs a **second** full
+    deepcopy of the state dict to host RAM, synchronously. For this 390M geometry that is
+    ~8.4 GiB against the 15 GiB that ``gpu-1xa10g`` gives a container -- 56% of the cap for
+    the copy alone, on top of the CUDA context, torch, and four dataloader workers. The same
+    save at step 0 succeeded in 68 seconds on a fresh heap.
+
+    Note this is a *warning*, not a refusal. Dividing is correct and desirable for a long run,
+    where the final checkpoint matters more than the risk and the shape has room. It is a trap
+    specifically for short runs on small-RAM shapes.
+    """
+    if save_interval <= 0 or steps % save_interval != 0:
+        return None
+    return (
+        f"--save-interval {save_interval} divides --steps {steps}, so the FINAL checkpoint "
+        f"will be written by the async path, which stages the whole state dict to host RAM "
+        f"TWICE. That configuration hung run_019fbfbe for 48 minutes on gpu-1xa10g (15 GiB) "
+        f"and produced no traceback. Either pick an interval that does not divide {steps} "
+        f"(so post_train takes the final save synchronously), or confirm the shape has host "
+        f"RAM for ~2x the model+optimizer state."
+    )
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     opts, overrides = build_parser().parse_known_args()
+
+    # Logged before anything expensive, so it is near the top of a log somebody reads after a
+    # run has already gone wrong -- not buried after 20 steps of metrics.
+    if (warning := warn_if_final_step_saves_async(opts.steps, opts.save_interval)) is not None:
+        log.warning("CHECKPOINT TIMING: %s", warning)
 
     missing = [
         name
