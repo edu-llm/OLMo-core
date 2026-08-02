@@ -190,13 +190,36 @@ COPY . .
 #
 # So it names what a training workload actually reaches for. Anything that breaks between
 # the pinned torch and this library now breaks the build, where it costs a runner minute.
+# flash-linear-attention CARRIES THE KDA KERNELS, AND WITHOUT IT TWO ARMS CANNOT BE BUILT
+# AT ALL, NOT MERELY RUN SLOWLY.
+#
+# olmo_core/nn/attention/recurrent.py:616 is a bare `assert has_fla()` in
+# KimiDeltaAttention.__init__, so the K2 and G4R2 arms raise at model construction. The
+# other arms never import it. Installed after torch deliberately: fla-core[cuda] declares
+# `torch>=2.7.0` with no upper bound, so resolving it BEFORE the pin would let pip move
+# torch off 2.9.0 and the assertion two lines down would catch it too late to be cheap.
+#
+# ==0.5.1 is a pin and not a floor. 0.4.1 is exposed to fla issue #802 -- an illegal memory
+# access in chunk_kda_bwd_kernel_wy_dqkg_fused at BK=32 + num_warps=4, whose reproducer is
+# literally KimiDeltaAttention -- and it ships no Triton version guard at all, so it fails
+# silently where >=0.5.0 raises. 0.5.1 is also the exact version the sm_89 numerics gate
+# passed against on 2026-08-01 (129 tests, fp32 rel err 6.786e-06 with TRITON_F32_DEFAULT
+# set above), and reproducing that gate is the only evidence these kernels are correct here.
+#
+# The import assertion follows the same rule as the ones below it: naming the module a
+# workload reaches for, not the distribution. `import fla` would pass while the KDA kernel
+# module was broken.
 RUN set -eux; \
     python -m pip install --no-cache-dir "torch==2.9.0"; \
     python -m pip install --no-cache-dir ".[wandb]" boto3; \
+    python -m pip install --no-cache-dir "flash-linear-attention[cuda]==0.5.1"; \
     python -m pip install --no-cache-dir "edullm-data @ https://github.com/edu-llm/edullm-data/archive/38bf831a6c3f445e394784018441fd59288b876c.tar.gz"; \
     python -c "import torch; assert torch.__version__.startswith('2.9.0'), f'torch was moved off the pin: {torch.__version__}'"; \
     python -c "import torch; assert torch.version.cuda, 'the CUDA build of torch was replaced by a CPU wheel'"; \
+    python -c "from importlib.metadata import version; v=version('flash-linear-attention'); assert v=='0.5.1', f'fla moved off the pin: {v}'"; \
+    python -c "from fla.ops.kda import chunk_kda; from fla.ops.kda.naive import naive_recurrent_kda; print(chunk_kda.__module__)"; \
     python -c "import boto3, wandb; from olmo_core.data import TokenizerConfig; from olmo_core.nn.transformer import TransformerConfig; print(TransformerConfig.olmo2_190M(vocab_size=TokenizerConfig.gpt2().padded_vocab_size()).__class__.__name__)"; \
+    python -c "from olmo_core.nn.attention import KimiDeltaAttentionConfig; print(KimiDeltaAttentionConfig(n_heads=16, head_dim=64).num_params(1024))"; \
     python -c "from edullm_data.read import dataset_paths, resolve_latest; print(dataset_paths.__module__)"
 
 # No CMD. The entrypoint of the registered base is inherited deliberately, so swapping the
