@@ -104,3 +104,14 @@ def test_platform_run_loads_pretrained_qwen_before_wrapping_the_model():
     loaded = source.index("load_hf_weights(model)")
     wrapped = source.index("config.train_module.build(model)")
     assert built < stripped < loaded < wrapped
+
+
+def test_platform_reader_selects_train_partition_explicitly():
+    """v0.2.0 returns every manifest entry when split=None.
+
+    A release contains train and validation shards in the same group, so relying
+    on the copied reference script's "default is trainable" comment leaks eval
+    into training without raising.
+    """
+    source = Path("src/scripts/train/p3_math_split/train_platform.py").read_text()
+    assert 'dataset_paths(dataset_id, version, split="train", s3=s3)' in source

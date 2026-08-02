@@ -401,17 +401,16 @@ def resolve_corpus(*, dataset_id: str, version: str, tokenizer_id: str) -> Corpu
             )
         version = resolved
 
-    # split is left at its default, which returns TRAINABLE shards only. Passing split="train"
-    # would work today and would break quietly on a corpus that names its trainable split
-    # anything else; the default is the reader's own answer to "what may this run see", and
-    # held-out shards are not it.
+    # Explicit, because edullm_data v0.2.0 returns EVERY manifest entry when
+    # split=None. This release carries train and val shards in one group, so the
+    # copied reference script's default would silently train on held-out data.
     # THE STAGE THAT ACTUALLY TOUCHES THE ACCOUNT, AND THE ONE WORTH TELLING APART FROM THE
     # REST. Everything above this line is local. This call HEADs the seal, GETs the manifest
     # and lists the group, so it is where a missing s3:GetObject on edullm-data shows up --
     # and a role without that grant and a registry entry pointing at an unpublished prefix
     # both arrive here as a failed read. read_failure separates them.
     try:
-        read = dataset_paths(dataset_id, version, s3=s3)
+        read = dataset_paths(dataset_id, version, split="train", s3=s3)
     except Refusal:
         raise
     except BaseException as exc:
