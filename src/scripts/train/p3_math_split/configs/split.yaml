@@ -22,7 +22,14 @@ shared:
 
   # One example per sequence (no packing), so batch size in sequences == examples.
   global_batch_size_sequences: 64          # 65,536 tokens/step
-  rank_microbatch_size_sequences: 8        # 8,192 tokens/rank/microbatch -> fits 24GB A10G
+  # 4,096 tokens/rank/microbatch. NOT 8: the `default` LM loss materializes the full
+  # logits tensor (nn/lm_head.py:252), and at vocab 151,936 that is ~10 GB for logits +
+  # cross-entropy upcast + gradient at 8,192 tokens, which does not leave room on a 24 GB
+  # A10G. At 4,096 the budget is ~12.7 GB. Global batch is unchanged, so this only moves
+  # gradient accumulation (8 -> 16) and costs nothing scientifically.
+  # If liger-kernel is installed, lm_head loss_implementation="fused_linear" skips the
+  # logits tensor entirely and 8 fits comfortably.
+  rank_microbatch_size_sequences: 4
 
   # Leave max_steps null to derive it from the corpus size and `epochs`, which keeps
   # total input tokens tied to the data rather than to a number typed here.
@@ -30,7 +37,7 @@ shared:
   epochs: 3
 
   learning_rate: 1.0e-5
-  warmup_steps: 100
+  warmup_steps: 50            # ~8% of the ~640 steps the full corpus gives at 3 epochs
   lr_alpha_f: 0.1          # cosine decays to 10% of peak
   weight_decay: 0.0        # off: SFT on 0.5B for a few epochs, and it would interact
                            #      with the tied embedding
