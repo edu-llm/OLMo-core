@@ -118,6 +118,9 @@ def build_config(opts) -> ExperimentConfig:
         total_steps = math.ceil(opts.budget_tokens / gbs)
     warmup = opts.warmup_steps if opts.warmup_steps is not None else round(opts.warmup_ratio * total_steps)
     eval_interval_steps = max(1, round(opts.eval_interval_tokens / gbs))  # archive: every 250M tokens
+    wandb_project = (
+        opts.wandb_project or os.environ.get("WANDB_PROJECT") or os.environ.get("EDULLM_WANDB_PROJECT")
+    )
 
     tokenizer = smollm2_tokenizer_config()
     model_config = TransformerConfig.smollm2_135M(vocab_size=tokenizer.vocab_size)
@@ -172,9 +175,25 @@ def build_config(opts) -> ExperimentConfig:
             "wandb",
             WandBCallback(
                 name=opts.run_name,
-                project=os.environ.get("WANDB_PROJECT") or os.environ.get("EDULLM_WANDB_PROJECT"),
+                project=wandb_project,
+                entity=opts.wandb_entity or os.environ.get("WANDB_ENTITY"),
+                # None -> the W&B client reads WANDB_RUN_GROUP (set by the eduLLM platform) itself.
+                group=opts.wandb_group,
+                tags=["smollm2-135m", f"mode:{opts.mode}", *opts.wandb_tags],
+                config={
+                    "mode": opts.mode,
+                    "learning_rate": opts.learning_rate,
+                    "sequence_length": opts.sequence_length,
+                    "global_batch_tokens": gbs,
+                    "budget_tokens": opts.budget_tokens,
+                    "total_steps": total_steps,
+                    "warmup_steps": warmup,
+                    "weight_decay": 0.1,
+                    "corpus": opts.data_dir,
+                    "eval_tasks": list(opts.eval_tasks) if opts.eval else [],
+                },
                 cancel_check_interval=10,
-                enabled=bool(os.environ.get("WANDB_PROJECT") or os.environ.get("EDULLM_WANDB_PROJECT")),
+                enabled=(wandb_project is not None) and not opts.no_wandb,
             ),
         )
         .with_callback(
@@ -248,6 +267,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="olmo_eval task ids (5-shot RC; report accuracy + BPB).")
     p.add_argument("--eval-interval-tokens", type=int, default=250_000_000,
                    help="Run eval every N training tokens (archive: 250M).")
+    # Weights & Biases (AWS monitoring). Project/entity/group also read from WANDB_* env vars.
+    p.add_argument("--wandb-project", default=None, help="W&B project (else $WANDB_PROJECT/$EDULLM_WANDB_PROJECT).")
+    p.add_argument("--wandb-entity", default=None, help="W&B entity (else $WANDB_ENTITY).")
+    p.add_argument("--wandb-group", default=None, help="W&B group (else $WANDB_RUN_GROUP; e.g. memory-split-135m).")
+    p.add_argument("--wandb-tags", nargs="*", default=[], help="Extra W&B tags (mode is added automatically).")
+    p.add_argument("--no-wandb", action="store_true", help="Disable W&B logging.")
     p.add_argument("--compile", action="store_true", help="Enable torch.compile (needs a C compiler).")
     p.add_argument("--dry-run", action="store_true", help="Build and print the config, train nothing.")
     return p
