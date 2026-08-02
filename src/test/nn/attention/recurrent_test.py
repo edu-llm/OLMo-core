@@ -880,6 +880,54 @@ def test_kimi_delta_householder_interleave_ordering():
     torch.testing.assert_close(actual_beta, expected_beta)
 
 
+def test_kimi_delta_householder_gva_repeats_are_interleaved():
+    """Grouped-value attention must expand key-side heads with ``repeat_interleave``, not ``repeat``.
+
+    ``KimiDeltaHouseholder.forward`` expands ``q``/``k``/``beta``/``g`` from ``n_heads`` to
+    ``n_v_heads`` when ``n_v_heads > n_heads`` (``recurrent.py:1285-1288``). The two plausible
+    spellings differ, and only one is right: ``repeat_interleave`` gives ``[h0, h0, h1, h1, ...]``
+    so each value head sits beside the key head it belongs to, while ``repeat`` gives
+    ``[h0, h1, ..., h0, h1, ...]`` and silently pairs value head ``i`` with the wrong key head.
+
+    This is a **coverage** test, not a bug report: all three mixers in this module use
+    ``repeat_interleave`` correctly today. It exists because nothing would have noticed if they
+    did not. An audit substituted ``repeat`` at these four call sites and measured a relative
+    change of 1.02 in the layer output at ``n_v_heads=8`` — caught by zero of 157 tests. The only
+    test exercising the GVA config (``test_kimi_delta_householder_fwd``, id ``GVA``) asserts just
+    ``y.shape`` and ``torch.isfinite(y)``, and both orderings satisfy both.
+
+    Kept as a pure-tensor identity rather than a module comparison so it runs on CPU without
+    ``fla``: the module cannot even be constructed without it (``recurrent.py:1111`` asserts
+    ``has_fla()``), which is precisely why the real GVA path is so thinly covered.
+    """
+    n_heads, n_v_heads, D = 3, 6, 2
+    repeat_factor = n_v_heads // n_heads
+    assert repeat_factor == 2
+
+    # One distinct value per (head, channel) so a mis-ordering is visible.
+    x = torch.arange(n_heads * D, dtype=torch.float32).reshape(1, 1, n_heads, D)
+
+    interleaved = x.repeat_interleave(repeat_factor, dim=-2)
+    blocked = x.repeat(1, 1, repeat_factor, 1)
+
+    assert interleaved.shape == blocked.shape == (1, 1, n_v_heads, D)
+    # The guard: the two spellings must NOT agree, or this test proves nothing.
+    assert not torch.equal(interleaved, blocked), (
+        "repeat and repeat_interleave produced identical output, so this test cannot "
+        "distinguish them -- the shapes chosen have made it vacuous"
+    )
+
+    # Each source head must appear in `repeat_factor` CONSECUTIVE destination slots.
+    for h in range(n_heads):
+        for offset in range(repeat_factor):
+            torch.testing.assert_close(interleaved[0, 0, h * repeat_factor + offset], x[0, 0, h])
+
+    # And the 1-D `beta` path, which expands along the last axis.
+    beta = torch.arange(n_heads, dtype=torch.float32).reshape(1, 1, n_heads)
+    beta_interleaved = beta.repeat_interleave(repeat_factor, dim=-1)
+    assert beta_interleaved.flatten().tolist() == [0.0, 0.0, 1.0, 1.0, 2.0, 2.0]
+
+
 @requires_fla
 @requires_gpu
 def test_kimi_delta_householder_rejects_batched_cu_doc_lens():
