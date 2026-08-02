@@ -94,10 +94,14 @@ def load_recipe(path: Path = RECIPE_PATH) -> tuple[tuple[str, ...], tuple[Arm, .
         )
         for item in payload["arms"]
     )
-    if tuple(arm.index for arm in arms) != tuple(range(7)):
-        raise MixLawConfigError("recipe arm indexes must be exactly 0..6")
-    if any(arm.name == "mix01" for arm in arms):
-        raise MixLawConfigError("mix01 is intentionally excluded")
+    expected_arms = (
+        (0, 0, "olmo-mix-1124"),
+        (1, 1, "mix01"),
+        (2, 25, "ML-pilot_caps"),
+        (3, 27, "LGB-min1pct"),
+    )
+    if tuple((arm.index, arm.mixture_id, arm.name) for arm in arms) != expected_arms:
+        raise MixLawConfigError("recipe arms differ from the approved four-arm matrix")
     if len(set(domains)) != 7 or any(len(arm.weights) != len(domains) for arm in arms):
         raise MixLawConfigError(
             "recipe must contain seven unique domains and seven weights per arm"
@@ -391,7 +395,7 @@ def _positive_batch_multiple(raw: str) -> int:
 
 def parser() -> argparse.ArgumentParser:
     out = argparse.ArgumentParser()
-    out.add_argument("--arm-index", type=int, choices=range(7), required=True)
+    out.add_argument("--arm-index", type=int, choices=range(len(ARMS)), required=True)
     out.add_argument(
         "--length-tokens",
         type=_positive_batch_multiple,
