@@ -21,6 +21,7 @@ SCRIPTS = Path(__file__).resolve().parents[3] / "scripts" / "train" / "p3_math_s
 sys.path.insert(0, str(SCRIPTS))
 
 from olmo_core.data.utils import get_document_lengths  # noqa: E402
+from tokenize_corpus import encode_rows_batched, pack_indices_by_length  # noqa: E402
 
 EOS = 151643  # Qwen 2.5: also the pad id, which is the whole problem
 
@@ -55,9 +56,11 @@ def test_every_padding_token_reads_as_its_own_document():
 def test_the_packer_minimises_the_tail_rather_than_filling_in_order():
     """Best-fit-decreasing, because the tail is paid for twice: as wasted compute and
     as spurious one-token documents."""
-    src = (SCRIPTS / "tokenize_corpus.py").read_text()
-    assert "key=lambda i: -len(kept[i])" in src, "documents must be placed longest-first"
-    assert "used + len(remaining[j]) <= S" in src, "and each sequence topped up to fit"
+    lengths = [9, 8, 7, 6, 5, 4, 3, 2, 1]
+    packed = pack_indices_by_length(lengths, 10)
+    assert len(packed) == 5, "45 tokens have a five-bin optimum at capacity 10"
+    assert sorted(i for row in packed for i in row) == list(range(len(lengths)))
+    assert all(sum(lengths[i] for i in row) <= 10 for row in packed)
 
 
 def test_the_dataset_is_configured_to_emit_document_lengths():
@@ -80,5 +83,15 @@ def test_the_reason_is_written_down_next_to_the_flag():
 def test_tokenize_corpus_terminates_every_document_with_eos():
     """Document boundaries are EOS. If the packer omits it, two proofs merge into one
     document and attend to each other."""
-    src = (SCRIPTS / "tokenize_corpus.py").read_text()
-    assert "ids.append(eos_id)" in src, "every encoded document must end with EOS"
+    class TinyTokenizer:
+        def __call__(self, texts, *, add_special_tokens, return_offsets_mapping):
+            assert not add_special_tokens and return_offsets_mapping
+            return {
+                "input_ids": [[1, 2] for _ in texts],
+                "offset_mapping": [[(0, 1), (1, 2)] for _ in texts],
+            }
+
+    encoded, _ = encode_rows_batched(
+        TinyTokenizer(), [{"text": "xx", "mask_end": 1}], eos_id=EOS
+    )
+    assert encoded[0].tolist() == [1, 2, EOS]

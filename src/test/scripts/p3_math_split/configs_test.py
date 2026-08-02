@@ -88,3 +88,19 @@ def test_step_count_is_derivable(arms):
         "set either max_steps or epochs; total steps and total input tokens are "
         "controls and must not fall back to a library default"
     )
+
+
+def test_platform_run_loads_pretrained_qwen_before_wrapping_the_model():
+    """The experiment is continual pretraining, not a random-init 0.5B run.
+
+    The platform reference builds a fresh model. Our copy must preserve the Qwen-
+    specific exception: build the exact architecture, load released HF weights
+    strictly, and only then hand it to the train module/FSDP setup. Omitting the
+    load still trains and produces plausible curves, so pin the call and its order.
+    """
+    source = Path("src/scripts/train/p3_math_split/train_platform.py").read_text()
+    built = source.index('config.model.build(init_device="cpu")')
+    stripped = source.index("strip_attn_out_bias(model)")
+    loaded = source.index("load_hf_weights(model)")
+    wrapped = source.index("config.train_module.build(model)")
+    assert built < stripped < loaded < wrapped

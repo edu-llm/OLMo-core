@@ -59,8 +59,15 @@ from olmo_core.data import (
 from olmo_core.distributed.parallel import DataParallelType
 from olmo_core.distributed.utils import barrier, get_rank
 from olmo_core.io import clear_directory, list_directory, normalize_path
+from olmo_core.nn.attention import AttentionBackendName
 from olmo_core.nn.transformer import TransformerConfig
-from olmo_core.nn.transformer.qwen import qwen2_0_5b_config, qwen2_tokenizer_config
+from olmo_core.nn.transformer.qwen import (
+    load_hf_weights,
+    parameter_report,
+    qwen2_0_5b_config,
+    qwen2_tokenizer_config,
+    strip_attn_out_bias,
+)
 from olmo_core.optim import AdamWConfig, CosWithWarmup, OptimGroupOverride
 from olmo_core.train import (
     Duration,
@@ -202,7 +209,10 @@ def leave_the_reason_in_wandb(*, run_name: str, stage: Stage, explanation: str) 
     with its own is worse than no diagnostic, and W&B is reachable over a network that a
     broken container may be exactly what is broken about.
     """
-    project = os.environ.get("EDULLM_WANDB_PROJECT")
+    # The submission form's `wandb_project` field is injected as WANDB_PROJECT
+    # according to the platform guide. Keep the legacy EDULLM_* spelling as a fallback
+    # because older images used it.
+    project = os.environ.get("WANDB_PROJECT") or os.environ.get("EDULLM_WANDB_PROJECT")
     if not project:
         return
     try:
@@ -509,22 +519,40 @@ def separator_ids_for(tokenizer_id: str, work_dir: str) -> List[int]:
     from edullm_data.read import dataset_paths, resolve_latest
     from edullm_data.s3 import Boto3S3
     from tokenizers import Tokenizer
+    from urllib.parse import urlsplit
 
     s3 = Boto3S3.default()
-    name, _, ver = tokenizer_id.partition("/v")
-    ver = f"v{ver}" if ver else resolve_latest(tokenizer_id, s3=s3)
-    read = dataset_paths(name if ver.startswith("v") and "/v" in tokenizer_id else tokenizer_id,
-                         ver, s3=s3)
-    files = [pth for pth in read.paths if pth.endswith("tokenizer.json")]
+    dataset_id, sep, maybe_version = tokenizer_id.rpartition("/")
+    if sep and re.fullmatch(r"v\d+", maybe_version):
+        version = maybe_version
+    else:
+        dataset_id = tokenizer_id
+        version = resolve_latest(dataset_id, s3=s3)
+    read = dataset_paths(dataset_id, version, s3=s3)
+    files = [path for path in read.paths if path.endswith("tokenizer.json")]
     if not files:
         raise Refusal(
             Stage.THE_CONFIG_WOULD_NOT_BUILD,
             f"{tokenizer_id} publishes no tokenizer.json, so the separator cannot be "
             "resolved and the split arm cannot find its fact blocks",
         )
-    local = Path(work_dir) / "tokenizer.json"
+    uri = urlsplit(files[0])
+    if uri.scheme != "s3" or not uri.netloc or not uri.path:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"{tokenizer_id} resolved tokenizer.json to a non-S3 path: {files[0]!r}",
+        )
+    # build_config runs in all torchrun ranks before the distributed process
+    # group is initialized. A shared filename lets eight ranks truncate/write the
+    # same JSON concurrently. Give each local rank its own cache file instead of
+    # requiring a barrier that cannot exist yet.
+    local_rank = os.environ.get("LOCAL_RANK", "0")
+    local = Path(work_dir) / f"tokenizer-rank{local_rank}.json"
     local.parent.mkdir(parents=True, exist_ok=True)
-    s3.download(files[0], str(local))
+    # Boto3S3 implements the reader's get/head/get_range/list protocol. It does
+    # not implement a `download` method; calling one gets through static checks and
+    # kills the run before config construction.
+    local.write_bytes(s3.get(uri.netloc, uri.path.lstrip("/")))
     return list(Tokenizer.from_file(str(local)).encode(SEPARATOR_SEARCH, add_special_tokens=False).ids)
 
 
@@ -551,6 +579,16 @@ def apply_arm_config(opts) -> dict:
     opts.data_seed = shared["seed"]
     opts.compile_model = bool(shared.get("compile_model", False))
     opts.wandb_project = shared.get("wandb_project")
+    opts.num_workers = shared["num_workers"]
+    opts.log_every = shared["log_every"]
+    opts.save_interval = shared["save_every"]
+    opts.save_overwrite = bool(shared["save_overwrite"])
+    opts.tie_embeddings = bool(shared["tie_embeddings"])
+    opts.betas = tuple(shared["betas"])
+    opts.eps = float(shared["eps"])
+    opts.weight_decay = float(shared["weight_decay"])
+    opts.max_grad_norm = float(shared["max_grad_norm"])
+    opts.lr_alpha_f = float(shared["lr_alpha_f"])
     return shared
 
 
@@ -607,12 +645,18 @@ def build_config(opts, overrides: List[str]):
     # architecture fixes it at 151,936), so the reference script's getattr lookup finds
     # nothing and refuses. Special-case it rather than pretend the shapes match.
     #
-    # NOTE for whoever implements the model build: qwen2_0_5b_config sets bias=True on
-    # attention, which gives w_out a bias Qwen2 does not have. Call
-    # olmo_core.nn.transformer.qwen.strip_attn_out_bias on the built model BEFORE it is
-    # moved, sharded or compiled. build_qwen2_0_5b does this already.
+    # qwen2_0_5b_config sets bias=True on attention, which gives w_out a bias
+    # Qwen2 does not have. train() calls strip_attn_out_bias on the built model
+    # BEFORE it is moved, sharded or compiled, then loads the HF weights strictly.
     if opts.model_factory == "qwen2_0_5b":
-        model_config = qwen2_0_5b_config(tie_word_embeddings=shared["tie_embeddings"])
+        model_config = qwen2_0_5b_config(
+            init_seed=shared["seed"], tie_word_embeddings=opts.tie_embeddings
+        )
+        # TorchAttentionBackend rejects cu_doc_lens at first forward. The platform
+        # image installs flash-attn 2 explicitly (src/Dockerfile); naming it here turns
+        # a missing/incompatible install into a config-build failure instead of a GPU
+        # run that dies after setup.
+        model_config.block.sequence_mixer.backend = AttentionBackendName.flash_2
         if model_config.vocab_size != corpus.tokenizer.padded_vocab_size():
             raise Refusal(
                 Stage.THE_CONFIG_WOULD_NOT_BUILD,
@@ -656,7 +700,7 @@ def build_config(opts, overrides: List[str]):
     data_loader_config = NumpyDataLoaderConfig(
         global_batch_size=opts.global_batch_size,
         seed=opts.data_seed,
-        num_workers=4,
+        num_workers=opts.num_workers,
     )
 
     # The separator the split arm searches for. Resolved from the corpus's OWN
@@ -681,6 +725,9 @@ def build_config(opts, overrides: List[str]):
         max_sequence_length=opts.sequence_length,
         optim=AdamWConfig(
             lr=opts.learning_rate,
+            betas=opts.betas,
+            eps=opts.eps,
+            weight_decay=opts.weight_decay,
             group_overrides=[
                 OptimGroupOverride(params=["embeddings.weight"], opts=dict(weight_decay=0.0))
             ],
@@ -692,10 +739,10 @@ def build_config(opts, overrides: List[str]):
         dp_config=TransformerDataParallelConfig(
             name=DataParallelType.fsdp, param_dtype=DType.bfloat16, reduce_dtype=DType.float32
         ),
-        max_grad_norm=1.0,
+        max_grad_norm=opts.max_grad_norm,
         # `warmup`, not the `warmup_steps` the example still passes -- that spelling is
         # deprecated upstream and warns on every construction.
-        scheduler=CosWithWarmup(warmup=opts.warmup_steps),
+        scheduler=CosWithWarmup(warmup=opts.warmup_steps, alpha_f=opts.lr_alpha_f),
     )
 
     trainer_config = (
@@ -710,8 +757,8 @@ def build_config(opts, overrides: List[str]):
             # overwrite every object unconditionally, which reaches finished checkpoints as
             # well as torn ones. remove_torn_checkpoints does the narrow thing instead, and
             # leaving this false is what keeps the refusal for the case it did not expect.
-            save_overwrite=False,
-            metrics_collect_interval=5,
+            save_overwrite=opts.save_overwrite,
+            metrics_collect_interval=opts.log_every,
             cancel_check_interval=5,
             # Explicit, as the platform guide requires: the OLMo-core default is one
             # epoch, which here would be 1/13th of the intended run.
@@ -775,6 +822,7 @@ def build_config(opts, overrides: List[str]):
         trainer=trainer_config,
         dataset_id=corpus.dataset_id,
         dataset_version=corpus.version,
+        init_seed=shared["seed"],
     )
     return config.merge(overrides)
 
@@ -839,7 +887,7 @@ def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> 
                 "seconds": seconds,
                 "peak_memory_gib": peak,
                 "checkpoint_uri": opts.save_folder,
-                "wandb_project": os.environ.get("EDULLM_WANDB_PROJECT", ""),
+                "wandb_project": wandb_project(opts) or "",
                 "wandb_url": losses.wandb_url,
             },
             indent=2,
@@ -867,7 +915,21 @@ def train(config, opts=None) -> None:
 
     seed_all(config.init_seed)
 
-    model = config.model.build(init_device="meta")
+    if opts is not None and opts.model_factory == "qwen2_0_5b":
+        # The platform reference builds a random-init model on meta. This experiment
+        # is continual pretraining from the released Qwen checkpoint: omitting these
+        # two calls still trains and produces plausible curves, but answers a different
+        # question. The output bias is removed before anything is moved, sharded or
+        # compiled, and strict HF loading proves the parameter set is exact.
+        # Build the config that `--dry-run` printed, rather than calling a helper
+        # that creates a fresh config and would silently discard our explicit
+        # FlashAttention2 backend.
+        model = config.model.build(init_device="cpu")
+        strip_attn_out_bias(model)
+        load_hf_weights(model)
+        log.info("model: %s", parameter_report(model))
+    else:
+        model = config.model.build(init_device="meta")
     train_module = config.train_module.build(model)
     dataset = config.dataset.build()
     data_loader = config.data_loader.build(dataset, dp_process_group=train_module.dp_process_group)

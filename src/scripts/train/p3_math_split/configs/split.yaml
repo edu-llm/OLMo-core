@@ -32,14 +32,15 @@ shared:
   # loss_implementation="fused_linear" skips the logits tensor and lifts the ceiling.
   rank_microbatch_size_sequences: 1
 
-  # Leave max_steps null to derive it from the corpus size and `epochs`, which keeps
-  # total input tokens tied to the data rather than to a number typed here.
+  # Leave max_steps null to derive it from the PUBLISHED token rows and `epochs`,
+  # which keeps total input tokens tied to the exact packed dataset rather than to a
+  # number typed here.
   max_steps: null
-  # 13 epochs over the 627M-token corpus is 8.15B tokens seen. Chosen for fact
-  # exposure, not for token count: at 3 epochs only 5% of facts are cited often
-  # enough to reach 80 exposures, at 13 it is 19%, and 87% of all premise uses land
-  # on a fact the dense arm has seen 80+ times. The remaining tail is cited once or
-  # twice and no epoch count reaches it — that is the regime the fact block serves.
+  # 13 is the preregistered exposure choice. Important: the raw JSONL is 629.5M
+  # Qwen tokens, but the 16,384-token build drops 5,198 long documents containing
+  # 135.3M tokens, retaining 494.2M real tokens before ~2% packing padding. So this
+  # is ~6.5B compute tokens, NOT the earlier 8.15B estimate. Recompute fact exposure
+  # from the final tokenization manifest before calling facts "saturated".
   epochs: 13
 
   # 2e-5, not 1e-5. The batch went from 65,536 to 262,144 tokens/step and
@@ -47,9 +48,8 @@ shared:
   # wants ~2x LR. Linear scaling would say 4e-5; sqrt is the conservative
   # choice for a 0.5B model continuing from pretrained weights.
   learning_rate: 2.0e-5
-  # ~8% of the run. Scales with `epochs`: at 3 epochs the corpus gave ~640 steps and
-  # this was 50. Re-derive it if `epochs` or the corpus size changes materially —
-  # train.py warns when warmup exceeds 10% of the derived step count.
+  # ~9.5% of the expected ~25k steps after packing. The platform script derives
+  # max_steps from the published row count and refuses if warmup >= the run.
   warmup_steps: 2400
   lr_alpha_f: 0.1          # cosine decays to 10% of peak
   weight_decay: 0.0        # off: SFT on 0.5B for a few epochs, and it would interact
@@ -58,7 +58,9 @@ shared:
   eps: 1.0e-8
   max_grad_norm: 1.0
 
-  # True gives the real 494M Qwen2.5-0.5B. Single-GPU only — see INCOMPATIBILITIES.md §3.
+  # True gives the real 494M Qwen2.5-0.5B. This fork preserves the tie through
+  # to_empty/FSDP; the old single-GPU restriction is resolved (INCOMPATIBILITIES §3).
+  # The 8-rank path still needs a short end-to-end smoke before the final run.
   tie_embeddings: true
 
   compile_model: false     # keep off until src/test/nn/transformer/qwen_test.py passes compiled
@@ -66,7 +68,11 @@ shared:
 
   # --- logging / checkpointing ---------------------------------------------
   run_name: qwen25-0.5b-metamath
-  wandb_project: null      # set to a project name to enable W&B
+  # Supplied by the submission form as WANDB_PROJECT; no local value is needed.
+  wandb_project: null
   log_every: 10
-  save_every: 500
+  # At ~0.55 s/step on 8xH100, 2,000 steps is ~18 minutes. The workload contract
+  # asks for checkpoints at least every 30 minutes. 500 would save every ~5 minutes
+  # and, with max_checkpoints=null (required by IAM), retain ~50 large checkpoints.
+  save_every: 2000
   save_overwrite: false
