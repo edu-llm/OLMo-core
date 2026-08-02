@@ -27,7 +27,10 @@ class LatentCotDataset(Dataset):
 
     def __init__(self, path: Union[str, Path], num_continuous_thoughts: int):
         """
-        :param path: Path to a ``.jsonl`` of :meth:`Example.to_dict` records.
+        :param path: Path to a ``.jsonl`` of records. Each row must contain the
+            :meth:`Example.to_dict` fields; extra keys (e.g. the ``messages`` array added by
+            :func:`to_sft_record` for ``sft-conversations/v1`` publishing) are ignored by
+            :meth:`Example.from_dict`, so the platform-compliant shards load directly.
         :param num_continuous_thoughts: ``K`` latent slots in the student view.
         """
         self.num_continuous_thoughts = num_continuous_thoughts

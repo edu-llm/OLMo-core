@@ -2,6 +2,9 @@
 
 import fnmatch
 import hashlib
+import json
+
+import pytest
 
 from olmo_core.latentcot.data.encode import to_sft_record
 from olmo_core.latentcot.data.graph_gen import Example, generate
@@ -61,3 +64,27 @@ def test_partition_globs_select_the_right_splits():
     assert not fnmatch.fnmatch("train-00000.jsonl", "heldout-*.jsonl")
     assert fnmatch.fnmatch("heldout-00000.jsonl", "heldout-*.jsonl")
     assert not fnmatch.fnmatch("heldout-00000.jsonl", "train-*.jsonl")
+
+
+def test_loader_reads_sft_records(tmp_path):
+    """Regression guard: our loader consumes the published (messages-bearing) shards directly."""
+    from olmo_core.latentcot import tokens as T
+
+    try:
+        T.load_tokenizer()
+    except Exception as e:
+        pytest.skip(f"dolma2 tokenizer unavailable: {e}")
+    from olmo_core.latentcot.data.dataset import LatentCotDataset
+
+    path = tmp_path / "conversations" / "train-00000.jsonl"
+    path.parent.mkdir(parents=True)
+    with path.open("w") as f:
+        for s in range(4):
+            f.write(json.dumps(to_sft_record(_ex(s, bool(s % 2)))) + "\n")
+
+    ds = LatentCotDataset(path, num_continuous_thoughts=3)
+    assert len(ds) == 4
+    item = ds[0]
+    # the loader yields the encode dict (Example reconstructed), not the raw row
+    assert "input_ids" in item and "label_mask" in item
+    assert "messages" not in item  # the sft field is ignored by Example.from_dict
