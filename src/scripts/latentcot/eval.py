@@ -8,7 +8,7 @@ Loads each arm's trained checkpoint, runs the held-out test set, and writes a JS
 Usage::
 
     .venv/bin/python src/scripts/latentcot/eval.py \
-        --test-data local/latentcot/data/test.jsonl \
+        --test-data local/latentcot/graph-reachability-depth/conversations/heldout-00000.jsonl \
         --num-continuous-thoughts 8 \
         --arm A0=/path/to/A0/ckpt --arm A2=/path/to/A2/ckpt \
         --arm A3=/path/to/A3/ckpt --arm A4=/path/to/A4/ckpt

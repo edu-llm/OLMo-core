@@ -21,7 +21,14 @@ from ..tokens import BOT, DISTILL, EOT, THOUGHT
 from ..tokens import encode as encode_text
 from .graph_gen import Example
 
-__all__ = ["render_question", "render_cot", "render_answer", "encode_example"]
+__all__ = [
+    "render_question",
+    "render_cot",
+    "render_answer",
+    "render_messages",
+    "to_sft_record",
+    "encode_example",
+]
 
 
 def render_question(ex: Example) -> str:
@@ -40,6 +47,30 @@ def render_cot(ex: Example) -> str:
 def render_answer(ex: Example) -> str:
     """Render the yes/no answer (leading space so it tokenizes as one clean token)."""
     return " yes" if ex.reachable else " no"
+
+
+def render_messages(ex: Example) -> list:
+    """
+    Render one instance as an ``sft-conversations/v1`` ``messages`` array: a user turn with
+    the reachability query + edge list, and an assistant turn with the BFS reasoning trace
+    followed by the yes/no answer.
+    """
+    return [
+        {"role": "user", "content": render_question(ex)},
+        {"role": "assistant", "content": f"{render_cot(ex)}{render_answer(ex)}"},
+    ]
+
+
+def to_sft_record(ex: Example) -> dict:
+    """
+    A JSONL row for the published dataset: the full :class:`Example` (so our latent-CoT
+    pipeline can reconstruct it) plus a ``messages`` array for ``sft-conversations/v1``
+    compliance. The validator only checks ``messages``; the extra ``Example`` fields are
+    ignored by it and consumed by our loader.
+    """
+    record = ex.to_dict()
+    record["messages"] = render_messages(ex)
+    return record
 
 
 def encode_example(ex: Example, num_continuous_thoughts: int) -> Dict[str, Any]:

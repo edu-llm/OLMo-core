@@ -8,8 +8,8 @@ checkpoint, disjoint train/test seeds) plus a per-arm compute report (K passes c
 Usage::
 
     .venv/bin/python src/scripts/latentcot/preflight.py \
-        --train-data local/latentcot/data/train.jsonl \
-        --test-data  local/latentcot/data/test.jsonl \
+        --train-data local/latentcot/graph-reachability-depth/conversations/train-00000.jsonl \
+        --test-data  local/latentcot/graph-reachability-depth/conversations/heldout-00000.jsonl \
         --base-checkpoint /path/to/base/olmo2_370M/ckpt
 """
 
