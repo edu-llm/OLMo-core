@@ -532,6 +532,7 @@ class Transformer(nn.Module):
         loss_div_factor: Optional[Union[torch.Tensor, float]] = None,
         return_logits: Optional[bool] = None,
         logits_to_keep: Union[int, torch.Tensor] = 0,
+        return_hidden_states: bool = False,
         **kwargs,
     ) -> Union[torch.Tensor, LMOutputWithLoss]:
         """
@@ -552,6 +553,9 @@ class Transformer(nn.Module):
         :param return_logits: Whether to return logits along with the loss when labels are provided.
         :param logits_to_keep: Number of positions to keep from the end of the sequence (if int),
             or tensor specifying which positions to keep. Default is 0 (keep all).
+        :param return_hidden_states: If ``True``, return the post-block hidden states of shape
+            ``(batch_size, seq_len, d_model)`` instead of applying the LM head. Used by latent
+            chain-of-thought to feed a hidden state back as the next input embedding.
 
         :returns: The logits if ``labels`` is ``None`` or the losses if ``labels`` is not ``None``.
         """
@@ -599,6 +603,11 @@ class Transformer(nn.Module):
             if self.compile_enabled:
                 mark_dynamic(h, (0, 1), strict=False)
             h = block(h, **all_block_kwargs, **block_kwargs)
+
+        # Optionally return the post-block hidden states (used by latent chain-of-thought to
+        # feed a hidden state back as the next input embedding, without dropping the LM head).
+        if return_hidden_states:
+            return h
 
         # Get final logits but again pass-through in case of pipeline parallelism.
         if self.lm_head is not None:
