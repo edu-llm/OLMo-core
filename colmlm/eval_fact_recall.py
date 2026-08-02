@@ -14,6 +14,9 @@ Protocol (paper App. A.6): greedy decoding throughout.
   * SimpleQA         : LLM grader (needs OPENAI_API_KEY or GEMINI_API_KEY).
   * FactScore        : atomic-fact verification -- delegated to the official FActScore pipeline.
 
+By default only the no-API EM tasks (TriviaQA, PopQA, T-REx) run; SimpleQA and FactScore are
+opt-in (add them to --tasks) and require an LLM-grader key (OPENAI_API_KEY / GEMINI_API_KEY).
+
 Each task can be driven from a prepared prompts JSONL (recommended for exact fidelity -- reuse
 lil-lab/Co-LMLM's src/lmlm/eval/prepare_*_prompts.py output), or from a built-in dataset loader.
 
@@ -163,7 +166,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--model", required=True, help="HF checkpoint dir/id (convert OLMo-core ckpt first).")
     p.add_argument(
         "--tasks", nargs="+",
-        default=["triviaqa", "popqa", "simpleqa", "trex", "factscore"],
+        # No-API default. simpleqa/factscore are opt-in and need an OPENAI/GEMINI grader key.
+        default=["triviaqa", "popqa", "trex"],
         choices=["triviaqa", "popqa", "simpleqa", "trex", "factscore"],
     )
     p.add_argument("--output", default="fact_recall_results.json")
