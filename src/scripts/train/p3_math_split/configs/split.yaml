@@ -1,0 +1,52 @@
+# Split arm: fact tokens are NOT supervised (their loss is masked out).
+#
+# This file and split.yaml differ on exactly one line — `arm`. Keep it that way. Every
+# training hyperparameter lives under `shared:` and must be byte-identical in both
+# files; eval/compare_arms.py reads the fingerprint each run writes and refuses to
+# compare two runs that disagree on any of them.
+#
+#   diff configs/dense.yaml configs/split.yaml
+#
+# should show one hunk.
+
+arm: split
+
+shared:
+  # --- controls: identical across arms -------------------------------------
+  seed: 42
+
+  # Must equal the value passed to scripts/tokenize_corpus.py. train_sft.py checks
+  # this against <split>_meta.json and refuses to start if they disagree, because a
+  # mismatch would slice instances across example boundaries.
+  sequence_length: 1024
+
+  # One example per sequence (no packing), so batch size in sequences == examples.
+  global_batch_size_sequences: 64          # 65,536 tokens/step
+  rank_microbatch_size_sequences: 8        # 8,192 tokens/rank/microbatch -> fits 24GB A10G
+
+  # Leave max_steps null to derive it from the corpus size and `epochs`, which keeps
+  # total input tokens tied to the data rather than to a number typed here.
+  max_steps: null
+  epochs: 3
+
+  learning_rate: 1.0e-5
+  warmup_steps: 100
+  lr_alpha_f: 0.1          # cosine decays to 10% of peak
+  weight_decay: 0.0        # off: SFT on 0.5B for a few epochs, and it would interact
+                           #      with the tied embedding
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  max_grad_norm: 1.0
+
+  # True gives the real 494M Qwen2.5-0.5B. Single-GPU only — see INCOMPATIBILITIES.md §3.
+  tie_embeddings: true
+
+  compile_model: false     # keep off until tests/test_qwen_parity.py passes compiled
+  num_workers: 2
+
+  # --- logging / checkpointing ---------------------------------------------
+  run_name: qwen25-0.5b-metamath
+  wandb_project: null      # set to a project name to enable W&B
+  log_every: 10
+  save_every: 500
+  save_overwrite: false
