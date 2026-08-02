@@ -120,3 +120,72 @@ def test_the_defaults_are_the_studys_frozen_geometry():
     assert opts.sequence_length == 4096
     assert opts.learning_rate == pytest.approx(3e-4)
     assert opts.global_batch_size == 128 * 4096
+
+
+GRID_4x3 = (
+    "L0:0,L0:1,L0:2,"
+    "F-r128:0,F-r128:1,F-r128:2,"
+    "G-grouped:0,G-grouped:1,G-grouped:2,"
+    "N-narrow:0,N-narrow:1,N-narrow:2"
+)
+
+
+def test_the_fanout_grid_covers_every_cell_exactly_once():
+    """
+    A 4-arm x 3-seed pilot is 12 distinct cells. A duplicate would spend a cell's budget
+    twice and leave a hole in the grid, and both loss curves would look entirely plausible.
+    """
+    cells = entry.parse_fanout_grid(GRID_4x3)
+    assert len(cells) == 12
+    assert len(set(cells)) == 12
+    assert {arm for arm, _ in cells} == {"L0", "F-r128", "G-grouped", "N-narrow"}
+    for arm in ("L0", "F-r128", "G-grouped", "N-narrow"):
+        assert sorted(s for a, s in cells if a == arm) == [0, 1, 2]
+
+
+def test_each_array_index_selects_its_own_cell():
+    """
+    The whole point: ``fanout_index_parameter`` on the form is documentation and substitutes
+    nothing. Batch sets AWS_BATCH_JOB_ARRAY_INDEX and the program must read it, or all twelve
+    cells train the same arm at twelve times the price.
+    """
+    seen = [entry.resolve_fanout_cell(GRID_4x3, str(i)) for i in range(12)]
+    assert seen == entry.parse_fanout_grid(GRID_4x3)
+    assert len(set(seen)) == 12
+
+
+def test_a_seed_pairs_init_and_data_order():
+    """Cells of one arm differ only in seed; cells of one seed share it across arms."""
+    cells = dict(enumerate(entry.parse_fanout_grid(GRID_4x3)))
+    by_seed = {}
+    for arm, seed in cells.values():
+        by_seed.setdefault(seed, set()).add(arm)
+    for seed, arms in by_seed.items():
+        assert arms == {"L0", "F-r128", "G-grouped", "N-narrow"}, seed
+
+
+def test_no_grid_means_no_change():
+    """A single run must be unaffected by the fan-out machinery."""
+    assert entry.resolve_fanout_cell("", None) is None
+    assert entry.resolve_fanout_cell("", "3") is None
+
+
+def test_a_grid_without_an_index_is_refused():
+    """
+    Refusing beats defaulting to cell 0: a grid submitted without the fan-out fields would
+    otherwise run one arm N times and be indistinguishable from a completed sweep.
+    """
+    with pytest.raises(entry.Refusal):
+        entry.resolve_fanout_cell(GRID_4x3, None)
+
+
+def test_an_index_past_the_end_of_the_grid_is_refused():
+    """fanout_size and the grid must agree, or trailing cells vanish silently."""
+    with pytest.raises(entry.Refusal):
+        entry.resolve_fanout_cell(GRID_4x3, "12")
+
+
+def test_a_malformed_or_unknown_cell_is_refused():
+    for bad in ("L0", "L0:x", "NotAnArm:0", "L0:0,NotAnArm:1"):
+        with pytest.raises(entry.Refusal):
+            entry.parse_fanout_grid(bad)

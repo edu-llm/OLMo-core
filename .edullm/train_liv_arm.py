@@ -108,7 +108,7 @@ import sys
 import time
 import traceback
 from dataclasses import dataclass, replace
-from typing import Dict, Iterator, List, Optional, cast
+from typing import Dict, Iterator, List, Optional, Tuple, cast
 
 import rich
 import torch
@@ -890,8 +890,78 @@ def build_parser() -> argparse.ArgumentParser:
         help="torch.compile the model. Off (--no-compile-model) removes a variable when a "
         "run is being diagnosed; the image does carry a C compiler.",
     )
+    parser.add_argument(
+        "--fanout-grid",
+        default="",
+        help="Comma-separated arm:seed cells, e.g. 'L0:0,L0:1,F-r128:0'. The cell for this "
+        "process is picked by AWS_BATCH_JOB_ARRAY_INDEX, so one submission trains the whole "
+        "grid. Without this every cell of an array job would train the SAME arm and seed.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Resolve and print, do not train.")
     return parser
+
+
+def parse_fanout_grid(spec: str) -> List[Tuple[str, int]]:
+    """
+    Parse ``"L0:0,L0:1,F-r128:0"`` into ``[("L0", 0), ("L0", 1), ("F-r128", 0)]``.
+
+    :raises Refusal: If a cell is malformed or names an arm that does not exist. Refusing here
+        is the point: a typo that silently fell back to a default would produce a grid with a
+        duplicated cell and a missing one, and the loss curves would look entirely plausible.
+    """
+    cells: List[Tuple[str, int]] = []
+    for raw in (part.strip() for part in spec.split(",")):
+        if not raw:
+            continue
+        arm, sep, seed = raw.partition(":")
+        if not sep or not seed.strip().lstrip("-").isdigit():
+            raise Refusal(
+                Stage.THE_CONFIG_WOULD_NOT_BUILD,
+                f"fan-out cell {raw!r} is not 'arm:seed'",
+            )
+        if arm not in ARMS:
+            raise Refusal(
+                Stage.THE_CONFIG_WOULD_NOT_BUILD,
+                f"fan-out cell {raw!r} names an unknown arm; known: {', '.join(sorted(ARMS))}",
+            )
+        cells.append((arm, int(seed)))
+    if not cells:
+        raise Refusal(Stage.THE_CONFIG_WOULD_NOT_BUILD, "--fanout-grid parsed to zero cells")
+    return cells
+
+
+def resolve_fanout_cell(spec: str, index: Optional[str]) -> Optional[Tuple[str, int]]:
+    """
+    Pick this process's ``(arm, seed)`` from the grid, using Batch's array index.
+
+    ``fanout_index_parameter`` on the submission form is **documentation** — it records what
+    the index varies so the approving lead can see it, and nothing substitutes it into the
+    command. Batch sets ``AWS_BATCH_JOB_ARRAY_INDEX`` in each cell's environment and the
+    program is expected to read it. A command that ignores it runs identically in every cell:
+    the grid costs N times as much and produces one result N times.
+
+    Returns ``None`` when no grid was requested, so a single run is unaffected.
+
+    :raises Refusal: If the index is outside the grid — i.e. ``fanout_size`` and the grid
+        disagree. That mismatch would otherwise drop cells off the end silently.
+    """
+    if not spec:
+        return None
+    cells = parse_fanout_grid(spec)
+    if index is None:
+        raise Refusal(
+            Stage.THE_PLATFORM_DID_NOT_SET_THE_ENVIRONMENT,
+            "--fanout-grid was given but AWS_BATCH_JOB_ARRAY_INDEX is unset, so every cell "
+            "would train the same arm. Submit with the fan-out fields, or drop --fanout-grid.",
+        )
+    i = int(index)
+    if not 0 <= i < len(cells):
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"array index {i} is outside a {len(cells)}-cell grid; fanout_size must equal the "
+            f"number of cells in --fanout-grid",
+        )
+    return cells[i]
 
 
 def warn_if_final_step_saves_async(steps: int, save_interval: int) -> Optional[str]:
@@ -938,6 +1008,19 @@ def warn_if_final_step_saves_async(steps: int, save_interval: int) -> Optional[s
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     opts, overrides = build_parser().parse_known_args()
+
+    # Resolve the fan-out cell before anything else, so the log's first lines name the arm and
+    # seed this container is actually training rather than the flag defaults.
+    cell = resolve_fanout_cell(opts.fanout_grid, os.environ.get("AWS_BATCH_JOB_ARRAY_INDEX"))
+    if cell is not None:
+        opts.arm, opts.arm_seed = cell
+        opts.data_seed = opts.arm_seed  # paired: same seed drives init AND data order
+        log.info(
+            "fan-out cell %s of grid: arm=%s seed=%d",
+            os.environ.get("AWS_BATCH_JOB_ARRAY_INDEX"),
+            opts.arm,
+            opts.arm_seed,
+        )
 
     # Logged before anything expensive, so it is near the top of a log somebody reads after a
     # run has already gone wrong -- not buried after 20 steps of metrics.
