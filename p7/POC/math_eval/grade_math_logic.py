@@ -14,8 +14,13 @@ Output/verify filenames are tagged from the results filename so multiple runs (e
 direct-SI) don't clobber each other:
   math_logic_results.jsonl            -> tag 'nosi'
   math_logic_results_directsi.jsonl   -> tag 'directsi'
+
+Under --with-verify this script refuses to grade unless it can find a verdict for every answer
+that needs one. See the two guards below for why a missing verdict is dangerous rather than
+merely incomplete.
 """
 import json
+import os
 import re
 import sys
 import glob
@@ -130,8 +135,29 @@ def check(atype, gold, cand):
 
 
 verifier = {}
+verifier_files = []
 if WITH_VERIFY:
-    for f in glob.glob(VERIFIER_GLOB):
+    verifier_files = sorted(glob.glob(VERIFIER_GLOB))
+    # Refuse instead of grading against an empty verdict set. Every 'expr' item that check() sends
+    # to the verifier scores False until a verdict overrides it, so a --with-verify run that finds
+    # no verdicts does not raise. It prints a table whose MATH-500 column is silently low, prints
+    # 'grading complete', overwrites math_logic_graded_<tag>.json with those wrong rows and exits
+    # 0. That is exactly what happened when the verifier output moved to S3, and it took the nosi
+    # arm from base MATH-500 3/25 and overall 13/70 down to 2/25 and 12/70 with no error anywhere.
+    # A number that is quietly one lower than the truth is worse than a crash, because the crash
+    # gets fixed and the number gets published.
+    # verifier_out_*.json is a genuine result and lives in S3, so an empty glob is the normal state
+    # of a fresh checkout rather than an exotic one. This check has to stay ahead of the grading
+    # loop so that nothing is printed or written before we bail. Moving it below the loop would
+    # still leak the wrong table to stdout.
+    if not verifier_files:
+        sys.exit(
+            f"refusing to grade. --with-verify was passed but nothing matches {VERIFIER_GLOB} in "
+            f"{os.getcwd()}. Those verdicts are results and live in S3, so restore them for tag "
+            f"'{TAG}' as described in p7/RESULTS-IN-S3.md, or drop --with-verify to run the stage "
+            f"1 pass that writes {NEEDS_OUT}."
+        )
+    for f in verifier_files:
         for r in json.load(open(f)):
             verifier[r["task_id"]] = str(r.get("verdict", "")).lower().startswith(("correct", "true", "yes"))
 
@@ -158,6 +184,25 @@ for r in RES:
         per_model[model][src][0] += int(bool(res))
         detail.append({"id": r["id"], "model": model, "source": src, "gold": gold,
                        "extracted": cand, "correct": bool(res)})
+
+# The glob guard above catches a verdict set that is wholly absent. This one catches a verdict set
+# that is present but incomplete, which under-counts in exactly the same way and is much harder to
+# spot, because the run looks like it did the verification step. Under --with-verify any task_id
+# that had no verdict was appended to needs_verify and scored False, so a non-empty list here means
+# the table below is low by up to that many answers.
+# Every archived arm satisfies this. All 20 result files across math_eval, curve_run/full_0-923 and
+# curve_run/fine_0-100 leave needs_verify empty when their full verifier set is restored, and each
+# one still reproduces its archived math_logic_graded_<tag>.json byte for byte. So this refuses
+# only on a partial restore and never on the documented build_verify_batches -> judge -> rerun
+# workflow. If a future arm legitimately grades with partial coverage, weaken this to a warning
+# rather than deleting it, otherwise the silent under-count comes straight back.
+if WITH_VERIFY and needs_verify:
+    sys.exit(
+        f"refusing to grade. {len(verifier_files)} file(s) match {VERIFIER_GLOB} but "
+        f"{len(needs_verify)} answer(s) needing symbolic verification still have no verdict. "
+        f"Restore the rest of the verifier output for tag '{TAG}' as described in "
+        f"p7/RESULTS-IN-S3.md."
+    )
 
 sources = ["GSM8K", "MATH-500", "BBH-logical_deduction", "AIME-2024"]
 print("=" * 66)

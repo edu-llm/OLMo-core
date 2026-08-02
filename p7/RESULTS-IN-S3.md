@@ -61,8 +61,11 @@ to the branch.
 
 ## What moved
 
-252 files totalling 13.6 MB moved and were deleted. The table lists them by destination
-directory.
+252 files totalling 13.6 MB moved and were deleted. Two of them were eval inputs that the
+retention rule above should have kept, and they have since been restored to the branch, so 250 of
+the 252 are absent from the repository today. See the section on the `curve_run` prompt sets below.
+The S3 copies of all 252 remain, so the table below describes the upload and is unaffected by that
+restore.
 
 | S3 directory under `artifacts/` | Files | KB |
 | --- | --- | --- |
@@ -121,7 +124,11 @@ exists in the repository and lives entirely at
 - The small headline aggregates `math_summary.json`, `ped_summary.json` and
   `judge_summary.json`.
 - The eval prompt sets `general_prompts.jsonl` and `math_logic_prompts.jsonl`, which are
-  inputs rather than results.
+  inputs rather than results. `math_logic_prompts.jsonl` exists at four paths and every one of
+  them stays. Two sit next to the builder that writes them, at `POC/math_eval/` and
+  `impl3/eval/math_eval/`, and two sit next to the graders that read them, at
+  `POC/curve_run/full_0-923/grading/` and `POC/curve_run/fine_0-100/grading/`. The last two are
+  easy to mistake for grading output because of where they live. They are not.
 - The dataset splits under `p7/POC/ORCD-SFT/data/`, `p7/POC/socrateach_sft/data/` and
   `p7/POC/kl_analysis/colab_uploads/`. These are training inputs. Copies are in S3 for
   durability but the branch keeps them.
@@ -141,6 +148,14 @@ additionally downloaded and compared by SHA-256.
 | `p7/POC/curve_run/.mplconfig/fontlist-v390.json` | `a30080b9ad3e224b343561b771b152de18110e2a1314422a901a84a48fb65fc3` |
 | `p7/impl3/eval/llm_judge/test_results_instruct.jsonl` | `573e04fd95af9a00665167d30d0581f804311e5dc5f7287d1c27a6f1c63b49a0` |
 
+The two `curve_run` copies of `math_logic_prompts.jsonl` were later downloaded from S3 and put
+back in the branch. Both restored files hash to
+`706456465e7fccf564f8157fd1e10b7894707bfe14cb2e5750c9e777b64a0e8d`, which is the hash of the
+`POC/math_eval/` copy that never left and of the pre-deletion git blob at `9a7259dd5^`. The
+`impl3/eval/math_eval/` copy is a different and larger prompt set at
+`ac292e83e7a4593062be84e593656ea74dea120a08ea942e2208d817a46d927d`, so three of the four copies are
+byte identical rather than all four.
+
 The three copies of `socrateach_sft_test.jsonl` and `socrateach_sft_val.jsonl` under
 `ORCD-SFT/data/`, `socrateach_sft/data/` and `kl_analysis/colab_uploads/` are byte
 identical, so S3 stores one copy of each under the first two paths rather than three.
@@ -150,23 +165,30 @@ identical, so S3 stores one copy of each under the first two paths rather than t
 Cross referencing every remaining `.py`, `.sh` and `.sbatch` file under `p7/` against the 252
 deleted paths finds nine scripts that open a file that is now gone. Each one raises
 `FileNotFoundError` before it writes anything, so none of them corrupts an output, but none of
-them runs as documented until its inputs come back from S3.
+them runs as documented until its inputs come back from S3. Restoring the two `curve_run` prompt
+sets did not shorten this list. Those two graders now fail one line later, on the results file
+instead of the prompt set, and they fail just as loudly.
 
 | Script | Line | Missing input | Reference kind |
 | --- | --- | --- | --- |
-| `POC/curve_run/full_0-923/grading/grade_math_logic.py` | 30 | `math_logic_prompts.jsonl` | hardcoded constant |
-| `POC/curve_run/fine_0-100/grading/grade_math_logic.py` | 30 | `math_logic_prompts.jsonl` | hardcoded constant |
-| `POC/llm_judge/build_batches.py` | 4 | `../test_results_instruct.jsonl` | hardcoded constant, no override |
-| `POC/llm_judge/aggregate.py` | 3 | `judge_key.json` | hardcoded constant |
-| `POC/general_eval/judge_aggregate.py` | 10, 11 | `judge_key.json`, `general_eval_results.jsonl` | hardcoded constant |
-| `POC/general_eval/judge_build.py` | 12 | `general_eval_results.jsonl` | argv default |
-| `POC/math_eval/grade_math_logic.py` | 31 | `math_logic_results_<arm>.jsonl` | required argument |
-| `impl3/eval/llm_judge/aggregate.py` | 3 | `judge_key.json` | hardcoded constant |
-| `impl3/eval/llm_judge/build_batches.py` | 22 | `test_results_instruct.jsonl`, `t451/test_results.jsonl` | required argument |
+| `POC/curve_run/full_0-923/grading/grade_math_logic.py` | 39 | `math_logic_results_<tag>.jsonl` | positional argument |
+| `POC/curve_run/fine_0-100/grading/grade_math_logic.py` | 39 | `math_logic_results_<tag>.jsonl` | positional argument |
+| `POC/llm_judge/build_batches.py` | 11 | `../test_results_instruct.jsonl` | hardcoded constant, no override |
+| `POC/llm_judge/aggregate.py` | 5 | `judge_key.json` | hardcoded constant |
+| `POC/general_eval/judge_aggregate.py` | 12, 13 | `judge_key.json`, `general_eval_results.jsonl` | hardcoded constant |
+| `POC/general_eval/judge_build.py` | 18 | `general_eval_results.jsonl` | argv default |
+| `POC/math_eval/grade_math_logic.py` | 39 | `math_logic_results_<arm>.jsonl` | positional argument |
+| `impl3/eval/llm_judge/aggregate.py` | 5 | `judge_key.json` | hardcoded constant |
+| `impl3/eval/llm_judge/build_batches.py` | 25 | `test_results_instruct.jsonl`, `t451/test_results.jsonl` | positional argument |
 
-Line numbers refer to the commit that deleted the files. The two `impl3` entries break through the
-argument the runbook passes rather than through the argparse default, which points at a path that
-never existed.
+Line numbers are the line whose `open()` raises, as the file stands at HEAD rather than at the
+commit that deleted the files. The two `impl3` entries break through the argument the runbook
+passes rather than through the argparse default, which points at a path that never existed.
+
+The three `grade_math_logic.py` entries have a second missing input that the table cannot show,
+because it is read through a glob rather than an `open()`. Under `--with-verify` each one needs
+`verifier_out_<tag>_*.json`, and those verdicts are results that stay in S3. The graders now refuse
+to run without them, so restore the whole grading directory rather than the results file alone.
 
 ### Restore commands
 
@@ -198,27 +220,66 @@ aws s3 cp --recursive $S3/p7-poc/math_eval p7/POC/math_eval
 aws s3 cp --recursive $S3/p7-impl3/eval/llm_judge p7/impl3/eval/llm_judge
 ```
 
-### One failure is silent
+Every block above is recursive on purpose. Fetching one `math_logic_results_<tag>.jsonl` on its own
+leaves `verifier_out_<tag>_*.json` behind, and the graders now refuse that rather than grading it,
+so a single file restore costs a round trip. The two `curve_run` blocks re-download
+`math_logic_prompts.jsonl` over the copy the branch already carries. That is harmless because the
+S3 object and the tracked file are the same bytes, and `git status` will show no change.
 
-`POC/math_eval/grade_math_logic.py` keeps its prompt set, so once a results file is restored it
-runs to completion even though every `verifier_out_<arm>_*.json` is gone. Under `--with-verify`
-the glob on line 28 matches nothing, each MATH-500 answer that awaits symbolic verification scores
-as wrong, and the script still prints `grading complete` and exits 0. On the `nosi` arm that moves
-base MATH-500 from 3/25 to 2/25 and the overall figure from 13/70 to 12/70. Restore the whole
-`math_eval` directory rather than the results file alone.
+### The silent failure is now impossible
 
-The same glob sits on line 28 of both `curve_run` graders. It cannot fire today because those two
-scripts die earlier on the missing prompt set, but it will once someone restores the prompts and
-the results and leaves the verifier output behind.
+`grade_math_logic.py` used to under-report rather than fail when its verifier output was missing.
+Every MATH-500 answer that needs symbolic equivalence checking is scored wrong until a verdict in
+`verifier_out_<tag>_*.json` says otherwise, so a `--with-verify` run whose verdicts had gone to S3
+matched zero files, quietly scored those answers wrong, printed `grading complete`, overwrote
+`math_logic_graded_<tag>.json` with the wrong rows and exited 0. On the `nosi` arm of
+`POC/math_eval/` that moved base MATH-500 from 3/25 to 2/25 and the overall figure from 13/70 to
+12/70. On the `c300` arm of `curve_run/full_0-923/` it moved the SFT column from 6/70 to 4/70,
+while the `base` arm of the same directory happened to be unaffected, which is what made the bug
+hard to see by inspection.
 
-### The two curve_run prompt sets should not have moved
+All three copies of the script now carry two guards that fire only under `--with-verify`. The
+first refuses when the verifier glob matches nothing. The second refuses when the glob matches but
+some answer still has no verdict, which is the same under-count reached through a partial restore.
+Both exit non-zero before printing a table or writing `math_logic_graded_<tag>.json`, so a bad
+restore can no longer clobber a good graded file. The stage 1 pass without `--with-verify` is
+untouched and still writes `needs_verify_<tag>.json`.
+
+Every archived arm satisfies both guards. All 20 result files across `POC/math_eval/`,
+`curve_run/full_0-923/grading/` and `curve_run/fine_0-100/grading/` were regraded from a full S3
+restore and each reproduced its archived `math_logic_graded_<tag>.json` byte for byte.
+
+The three copies of `grade_math_logic.py` were byte identical before this change and are byte
+identical after it. Keep them that way, and check it after any edit rather than trusting a hash
+written down here, which would go stale on the first legitimate change.
+
+```bash
+md5 -q p7/POC/math_eval/grade_math_logic.py \
+  p7/POC/curve_run/full_0-923/grading/grade_math_logic.py \
+  p7/POC/curve_run/fine_0-100/grading/grade_math_logic.py | sort -u
+```
+
+That must print exactly one line. If a guard is edited in one copy and not the others, the arm
+that runs from the unpatched copy is the one that goes back to reporting a number quietly too low,
+and the divergence is invisible in a diff of the commit that caused it.
+
+### The two curve_run prompt sets came back
 
 `math_logic_prompts.jsonl` is an eval input, and the retention rule above keeps it. That rule
 reached `POC/math_eval/` and `impl3/eval/math_eval/` but missed the copies under
-`curve_run/full_0-923/grading/` and `curve_run/fine_0-100/grading/`. Both are byte identical to
-the retained `POC/math_eval/` copy, SHA-256
-`706456465e7fccf564f8157fd1e10b7894707bfe14cb2e5750c9e777b64a0e8d`. Bringing those two files back
-costs 2 objects and makes both graders runnable from the branch again.
+`curve_run/full_0-923/grading/` and `curve_run/fine_0-100/grading/`, which `9a7259dd5` deleted.
+Both have been restored from S3 and are back in the branch, verified against the retained
+`POC/math_eval/` copy by SHA-256 as recorded in the verification section above.
+
+They were deleted because they sit in a directory named `grading` alongside genuine grading
+output. Filename is not the test and neither is the parent directory. The test is whether the
+grader reads the file or writes it, and `grade_math_logic.py` reads this one on line 38. Do not
+delete these two again. If a future migration sweeps `curve_run/*/grading/`, exclude
+`math_logic_prompts.jsonl` explicitly.
+
+The S3 objects at both paths were left in place. They cost 2 objects, they are a durable copy of a
+file the branch is now proven to match, and deleting them would break the recursive restore
+commands above.
 
 ### What still works
 
