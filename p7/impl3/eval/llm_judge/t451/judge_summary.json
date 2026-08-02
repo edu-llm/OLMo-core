@@ -1,0 +1,50 @@
+{
+  "base": {
+    "Revealing_of_the_Answer": 0.075,
+    "Providing_Guidance": 0.7,
+    "Actionability": 0.0,
+    "Coherence": 0.925,
+    "Tutor_Tone": 0.5,
+    "Humanlikeness": 0.2375,
+    "Step_Level_Guidance": 0.0,
+    "Load_Aware_Formatting": 0.8375,
+    "OVERALL": 0.409375,
+    "n": 40
+  },
+  "impl2": {
+    "Revealing_of_the_Answer": 0.6,
+    "Providing_Guidance": 0.7125,
+    "Actionability": 0.5,
+    "Coherence": 0.775,
+    "Tutor_Tone": 0.7125,
+    "Humanlikeness": 0.55,
+    "Step_Level_Guidance": 0.425,
+    "Load_Aware_Formatting": 0.875,
+    "OVERALL": 0.64375,
+    "n": 40
+  },
+  "impl2-rerun": {
+    "Revealing_of_the_Answer": 0.3,
+    "Providing_Guidance": 0.7125,
+    "Actionability": 0.2,
+    "Coherence": 0.875,
+    "Tutor_Tone": 0.6125,
+    "Humanlikeness": 0.4875,
+    "Step_Level_Guidance": 0.175,
+    "Load_Aware_Formatting": 0.9125,
+    "OVERALL": 0.534375,
+    "n": 40
+  },
+  "impl3-b-T451": {
+    "Revealing_of_the_Answer": 0.15,
+    "Providing_Guidance": 0.6875,
+    "Actionability": 0.125,
+    "Coherence": 0.875,
+    "Tutor_Tone": 0.5625,
+    "Humanlikeness": 0.4375,
+    "Step_Level_Guidance": 0.125,
+    "Load_Aware_Formatting": 0.9,
+    "OVERALL": 0.4828125,
+    "n": 40
+  }
+}

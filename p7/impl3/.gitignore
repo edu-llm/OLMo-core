@@ -1,0 +1,21 @@
+# Model weights. Adapters are ~46MB each and every run writes 12 log-spaced checkpoints, so the
+# full sweep is tens of GB. Everything needed to REBUILD them is versioned (configs, sbatch
+# scripts, pinned requirements); the trained artefacts live on ORCD and W&B.
+out/*/
+!out/figures/
+!out/figures_ifeval/
+
+# Training data. Pulled from the Hub at run time (hf_dataset: meric533/socrateach-sft in each
+# config) — see snapshot_hf_dataset.py to materialise it locally for an offline GPU node.
+data/
+
+# Local run state
+wandb/
+logs/
+*.tar.gz
+out/.mplcache/
+
+__pycache__/
+*.pyc
+.venv/
+.DS_Store

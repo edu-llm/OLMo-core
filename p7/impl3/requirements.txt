@@ -1,0 +1,40 @@
+# P7 "Tutor Layer" post-training — Python dependencies.
+#
+# Install into a fresh env (conda/venv). Install torch FIRST for your CUDA version
+# (see clusters/orcd/setup_orcd_env.sh or clusters/aws/setup_aws_env.sh), then:
+#     pip install -r requirements.txt
+#
+# IMPORTANT: do NOT install `torchao` — an old torchao (0.10) breaks the current
+# peft.get_peft_model. We don't use it. `pip uninstall -y torchao` if it sneaks in.
+
+# Versions PINNED to the set validated on ORCD (2026-07-29) so a fresh setup reproduces a
+# known-good env instead of pulling whatever is newest. Bump deliberately, not by accident.
+# torch is installed separately (CUDA-specific) in clusters/orcd/setup_orcd_env.sh (torch==2.5.1).
+transformers==5.14.1
+datasets==5.0.1
+accelerate==1.14.0
+peft==0.20.0
+huggingface_hub==1.25.1
+numpy==2.4.6
+pyyaml==6.0.3
+wandb==0.28.1    # experiment logging is ON by default (report_to: wandb); set WANDB_API_KEY
+pillow==12.3.0   # wandb.Image needs PIL. Training never builds one, so a missing pillow stays
+                 # invisible until eval/wandb_eval.py attaches a figure and dies AFTER the metrics
+                 # have already synced — leaving a half-populated run. Keep it installed.
+
+# Tokenizer backends the EVAL scripts need to rebuild the tokenizer from a saved checkpoint dir
+# (run_kl_curve.py, eval/generate_eval.py). Training doesn't hit this (it uses the base model's
+# cached fast tokenizer), so their absence stays hidden until eval — where it fails EVERY point
+# with "You need to have sentencepiece or tiktoken installed ...". This silently produced an empty
+# eval stage on 2026-07-29 while the job still reported COMPLETED. Keep both installed.
+sentencepiece==0.2.0
+tiktoken==0.8.0
+
+# Plotting the KL–forgetting curve (eval/plot_kl_forgetting.py, eval/curve_analysis/*):
+matplotlib==3.11.1
+scipy==1.17.1    # only for eval/curve_analysis/make_merged_fit.py (curve_fit)
+
+# Optional but recommended for the general-data language filter (common/data.py):
+langdetect==1.0.9
+# Needed only if you load general replay data from a HuggingFace parquet shard:
+pyarrow==25.0.0
