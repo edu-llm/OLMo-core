@@ -246,18 +246,28 @@ def main():
             continue
 
         if args.pack:
-            # Greedy first-fit: start a new sequence when the next document would not
-            # finish inside the window. Documents are never split, so every fact block
-            # keeps its separator and the derived mask stays well defined.
-            rows, cur = [], []
-            used = 0
-            for ids in kept:
-                if used + len(ids) > S and cur:
-                    rows.append(cur)
-                    cur, used = [], 0
-                cur.append(ids)
-                used += len(ids)
-            if cur:
+            # Best-fit-decreasing: place the longest documents first, then top each
+            # sequence up with the largest remaining document that still fits. Documents
+            # are never split, so every fact block keeps its separator and the derived
+            # mask stays well defined.
+            #
+            # First-fit in corpus order left tails of thousands of tokens. That costs
+            # twice over: the padding is wasted compute, and because Qwen 2.5 uses the
+            # same id for pad and eos, every padding token reads as a one-token document
+            # to the intra-document attention masker. A short tail keeps both small.
+            order = sorted(range(len(kept)), key=lambda i: -len(kept[i]))
+            remaining = [kept[i] for i in order]
+            rows = []
+            while remaining:
+                cur = [remaining.pop(0)]
+                used = len(cur[0])
+                j = 0
+                while j < len(remaining):
+                    if used + len(remaining[j]) <= S:
+                        used += len(remaining[j])
+                        cur.append(remaining.pop(j))
+                    else:
+                        j += 1
                 rows.append(cur)
             instances = [np.concatenate(r) for r in rows]
         else:

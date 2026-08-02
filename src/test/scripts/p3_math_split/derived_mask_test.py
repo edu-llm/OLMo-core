@@ -8,6 +8,7 @@ If these pass and the arms still train identically, the fault is downstream — 
 the mask reaches the loss — not in the boundary logic.
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -108,7 +109,11 @@ def test_separator_longer_than_the_window_supervises_nothing():
     assert sum(supervised([1, 2], sep=[7, 8, 9, 10])) == 0
 
 
-VENDORED = Path("/home/vs/AlphaAI/memorysplit-requery-exact/tokenizers/qwen25-vendored")
+# Env-driven, not a path from my laptop: this file ships in the container image, where
+# that directory does not exist. Absent the variable the test skips rather than lying.
+VENDORED = Path(os.environ.get("P3_QWEN_TOKENIZER_DIR", "")) if os.environ.get(
+    "P3_QWEN_TOKENIZER_DIR"
+) else Path("tokenizers/qwen25-vendored")
 
 
 @pytest.mark.skipif(not VENDORED.exists(), reason="vendored tokenizer not present")
