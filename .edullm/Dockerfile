@@ -38,7 +38,21 @@ FROM ${BASE_IMAGE}
 # the image will be wrong, and this paragraph is where they find out.
 ENV PYTHONPATH=/opt/olmo-core/src \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    TRITON_F32_DEFAULT=ieee
+
+# TRITON_F32_DEFAULT belongs in the image, not the command line, because it participates in
+# Triton kernel codegen and must be set before the interpreter starts -- a command-line
+# export would be too late for anything already compiled, and the platform's command is
+# exec'd rather than sourced.
+#
+# `torch.backends.cuda.matmul.allow_tf32 = False` does NOT control Triton: Triton lowers
+# tl.dot to TF32 on Ampere+ by its own default. Measured 2026-07-31 on an L40S, same
+# comparison with only this variable differing: unset -> 1.145e-03 relative error,
+# ieee -> 6.892e-06. A 166x difference. A run left unset reports "tf32 disabled" truthfully
+# for torch and still runs every FLA kernel at reduced precision, and the loss curve looks
+# completely normal. Only the KDA arms use FLA kernels today, but the variable is harmless
+# for the others and setting it here means no arm can be launched without it.
 
 # The base sets no PYTHONPATH of its own. If a future base does set one, this line silently
 # discards it. Prepending is not the safe-looking fix it appears to be:
