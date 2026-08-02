@@ -185,6 +185,50 @@ RUN set -eux; \
     python -c "import boto3, wandb; from olmo_core.data import TokenizerConfig; from olmo_core.nn.transformer import TransformerConfig; print(TransformerConfig.olmo2_190M(vocab_size=TokenizerConfig.gpt2().padded_vocab_size()).__class__.__name__)"; \
     python -c "from edullm_data.read import dataset_paths, resolve_latest; print(dataset_paths.__module__)"
 
+# THE p7 POC STACK, WHICH IS A HUGGING FACE STACK AND NOT AN OLMo-core ONE.
+#
+# p7/POC/impl5_ssd trains a LoRA adapter on OLMo-2-1B-Instruct through `transformers`
+# `Trainer` and `peft`, not through `olmo_core.train`. That is deliberate rather than
+# unmigrated: its baseline arm (impl4-A1) is already trained on exactly this stack, and the
+# whole experiment is a one-variable contrast against it, so moving trainers would change
+# tokenisation, masking edges and loss normalisation at the same time as the thing under
+# test. See p7/POC/impl5_ssd/BUILD.md.
+#
+# THE VERSIONS ARE impl5's OWN PINS, COPIED FROM run_impl5.py's PINS LIST. They are pinned
+# there because the arm they produced was pinned there. Installing them here rather than
+# letting the `deps` stage pip them at runtime buys three things: the versions land in the
+# image provenance, a resolver conflict breaks a runner minute instead of a paid GPU-hour,
+# and a Batch retry does not re-download two gigabytes of wheels before it starts.
+# Keep this list and run_impl5.py's PINS identical, so running the `deps` stage anyway is
+# a no-op rather than a downgrade.
+#
+# torch IS NOT IN THE LIST AND MUST NOT BE. The pin above is the CUDA build this image is
+# built around; transformers and peft will both accept it, and the assertion below is here
+# because a transitive dependency quietly pulling a CPU wheel is the failure that would
+# otherwise surface as "no GPU visible" ninety minutes into a run.
+#
+# torchao IS ASSERTED ABSENT. peft 0.20 hard-raises from inside its LoRA dispatcher against
+# anything below torchao 0.16, so a stray old copy does not fail loudly -- it fails inside
+# get_peft_model, and impl5's probe stage once reported a verdict for an unwrapped model
+# because of it. OLMo-core's torchao extra is not in `.[wandb]`, so this should hold; it is
+# asserted rather than assumed because the cost of it silently becoming false is a run.
+RUN set -eux; \
+    python -m pip install --no-cache-dir \
+        "transformers==5.14.1" \
+        "datasets==5.0.1" \
+        "accelerate==1.14.0" \
+        "peft==0.20.0" \
+        "huggingface_hub==1.25.1" \
+        "numpy==2.4.6" \
+        "langdetect==1.0.9" \
+        "pyarrow==25.0.0" \
+        "matplotlib==3.11.1"; \
+    python -c "import torch; assert torch.__version__.startswith('2.9.0'), f'the p7 stack moved torch off the pin: {torch.__version__}'"; \
+    python -c "import torch; assert torch.version.cuda, 'the p7 stack replaced the CUDA torch build with a CPU wheel'"; \
+    python -c "import importlib.util as u; assert u.find_spec('torchao') is None, 'torchao is present and peft 0.20 will raise from inside its LoRA dispatcher'"; \
+    python -c "import transformers, peft, datasets, accelerate; print(transformers.__version__, peft.__version__, datasets.__version__, accelerate.__version__)"; \
+    python -c "from transformers import AutoTokenizer, AutoModelForCausalLM, Trainer, TrainingArguments; from peft import LoraConfig, get_peft_model, TaskType; print('p7 stack imports')"
+
 # No CMD. The entrypoint of the registered base is inherited deliberately, so swapping the
 # base does not leave a stale command behind.
 #
