@@ -245,9 +245,10 @@ def finalize_permanent_checkpoint(
     wandb_run: Any | None = None,
     wandb_mode: Optional[str] = None,
     production: bool = False,
+    upload_checkpoint: bool,
     run_evaluator: Optional[Callable[..., Any]] = None,
 ) -> Optional[dict[str, Any]]:
-    """Evaluate and durably publish one already-materialized checkpoint."""
+    """Publish every evaluation and only an explicitly selected checkpoint."""
     from . import task_loss
     from . import wandb_artifacts as artifacts
 
@@ -276,20 +277,22 @@ def finalize_permanent_checkpoint(
     if fingerprint_path is not None:
         copy_fingerprint_into_checkpoint(fingerprint_path, checkpoint)
 
-    artifact_ref = artifacts.checkpoint_artifact_ref(
-        run_name=run_name,
-        project=str(getattr(wandb_run, "project", "") or "edullm"),
-        entity=str(getattr(wandb_run, "entity", "") or "") or None,
-        alias=f"step-{int(step):07d}",
-    )
-    artifacts.wandb_log_checkpoint(
-        wandb_run,
-        checkpoint,
-        step=int(step),
-        extra_meta={"arm": arm, "method": method},
-        strict=strict_upload,
-        run_name=run_name,
-    )
+    artifact_ref: Optional[str] = None
+    if upload_checkpoint:
+        artifact_ref = artifacts.checkpoint_artifact_ref(
+            run_name=run_name,
+            project=str(getattr(wandb_run, "project", "") or "edullm"),
+            entity=str(getattr(wandb_run, "entity", "") or "") or None,
+            alias=f"step-{int(step):07d}",
+        )
+        artifacts.wandb_log_checkpoint(
+            wandb_run,
+            checkpoint,
+            step=int(step),
+            extra_meta={"arm": arm, "method": method},
+            strict=strict_upload,
+            run_name=run_name,
+        )
     if payload is not None:
         artifacts.wandb_log_eval(
             wandb_run,

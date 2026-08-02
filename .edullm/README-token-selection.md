@@ -91,9 +91,11 @@ Training pauses until the complete suite and awaited W&B uploads succeed.
 Partial evals and upload failures do not advance `last_durable_step.json`.
 
 Checkpoints, progress, metrics, selection state, BLADE state, and task-loss
-JSON stay on runtime scratch and upload to W&B; S3 is input-only. A fresh run
-refuses a non-empty checkpoint directory. `--resume` restores a local or
-`WANDB_RESUME_ARTIFACT` checkpoint and requires its schema-v2 fingerprint.
+JSON stay on runtime scratch. Every evaluation and run-state artifact uploads
+to W&B, but only the true final checkpoint uploads as a model artifact; S3 is
+input-only. A fresh run refuses a non-empty checkpoint directory. `--resume`
+restores a local checkpoint, or a completed run's final checkpoint through
+`WANDB_RESUME_ARTIFACT`, and requires its schema-v2 fingerprint.
 Token-selection EMA/history state is callback-checkpointed. BLADE additionally
 restores proxy optimizer/model state, post-K dynamic reference and optimizer,
 both secondary stream cursors, completed step, and last sync, so resume cannot
