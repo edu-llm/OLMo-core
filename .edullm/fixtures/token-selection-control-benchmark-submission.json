@@ -1,0 +1,17 @@
+{
+  "command": [
+    "bash",
+    "-lc",
+    "EDULLM_CHECKPOINT_CHECK=waived WANDB_MODE=disabled exec python -m torch.distributed.run --standalone --nproc-per-node=8 /opt/olmo-core/.edullm/token_selection_entrypoint.py --arm control --local --save-folder /tmp/token-selection-control-benchmark/checkpoints --work-dir /tmp/token-selection-control-benchmark/work --progress-dir /tmp/token-selection-control-benchmark/progress --task-loss-script /opt/olmo-core/.edullm/eval_task_loss_olmo_core.py"
+  ],
+  "commit_sha": "0000000000000000000000000000000000000000",
+  "compute_profile": "gpu-8xa100",
+  "dataset_release": "regmix-10b-v1",
+  "experiment": "token-selection-control-370m-benchmark",
+  "maximum_attempts": 1,
+  "maximum_runtime_hours": "12",
+  "repository": "OLMo-core",
+  "team": "pre-training",
+  "wandb_project": "token-selection-control",
+  "workload_profile": "olmo-core-train-4gpu"
+}
