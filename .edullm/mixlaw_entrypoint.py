@@ -44,7 +44,12 @@ from olmo_core.train.train_module import (
     TransformerTrainModuleConfig,
 )
 
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+from mixlaw_wandb_policy import MixLawWandBEvalCallback
+
 RECIPE_PATH = Path(__file__).with_name("mixlaw_recipe.json")
+EVAL_SCRIPT = Path(__file__).with_name("eval_task_loss_olmo_core.py")
 DATASET_ID = "pretrain/olmo-127b"
 DATASET_VERSION = "v1"
 DATASET_LABEL = "source"
@@ -286,6 +291,26 @@ def build_experiment_config(
             ),
         )
         .with_callback("config_saver", ConfigSaverCallback())
+        .with_callback(
+            "task_loss_eval",
+            MixLawWandBEvalCallback(
+                arm=environ.get("WANDB_NAME") or "mixlaw",
+                total_steps=max_steps,
+                save_folder=save_folder,
+                run_name=(
+                    environ.get("WANDB_NAME")
+                    or environ.get("EDULLM_RUN_ID")
+                    or "mixlaw"
+                ),
+                work_dir=environ.get(
+                    "EDULLM_EVAL_WORK_DIR",
+                    str(Path(work_dir) / "mixlaw-eval"),
+                ),
+                eval_script=EVAL_SCRIPT,
+                interval=SAVE_INTERVAL,
+                nproc=GPU_RANKS,
+            ),
+        )
     )
     return ExperimentConfig(
         model=TransformerConfig.olmo2_370M(vocab_size=tokenizer.padded_vocab_size()),

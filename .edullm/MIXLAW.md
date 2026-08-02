@@ -43,12 +43,14 @@ so no staging loop or custom data stream is needed.
 `EDULLM_CHECKPOINT_DIR` is the trainer `save_folder`. The entrypoint calls
 `trainer.maybe_load_checkpoint()` before `fit()`, preserving the workload's
 two-attempt resume behavior. The standard checkpointer writes permanent
-checkpoints at step 0, every 125 steps, and the final step. No custom uploader
-or artifact path exists.
+checkpoints at step 0, every 125 steps, and the final step.
 
 W&B uses `EDULLM_WANDB_PROJECT` (required to be `mixlaw`),
 `WANDB_RUN_GROUP` from the platform, and `WANDB_NAME=<run-id>-<mixture>`.
-Post-hoc evaluation is outside training.
+At each permanent checkpoint, training synchronously runs the complete
+20-task OLMES BPB suite and uploads every metric and result JSON to W&B.
+Intermediate checkpoints remain in the trainer save folder; only the final
+checkpoint is uploaded as a W&B model artifact.
 
 ## Launch shape
 

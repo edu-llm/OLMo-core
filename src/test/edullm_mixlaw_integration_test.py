@@ -35,6 +35,7 @@ def _load_entrypoint():
 
 
 mixlaw = _load_entrypoint()
+import mixlaw_wandb_policy as wandb_policy  # noqa: E402
 
 EXPECTED_ARMS = [
     (
@@ -327,6 +328,61 @@ def test_checkpoint_directory_is_direct_and_resume_is_explicit(monkeypatch) -> N
     assert checkpointer.pre_train_checkpoint is True
     assert checkpointer.save_interval == 125
     assert checkpointer.max_checkpoints is None
+    evaluator = built.trainer.callbacks["task_loss_eval"]
+    assert evaluator.total_steps == mixlaw.PRODUCTION_STEPS
+    assert evaluator.interval == 125
+    assert evaluator.nproc == 8
+
+
+def test_eval_schedule_matches_every_mixlaw_checkpoint() -> None:
+    assert wandb_policy.checkpoint_step(0, 2_384, 125)
+    assert wandb_policy.checkpoint_step(2_375, 2_384, 125)
+    assert wandb_policy.checkpoint_step(2_384, 2_384, 125)
+    assert not wandb_policy.checkpoint_step(2_376, 2_384, 125)
+
+
+def test_every_checkpoint_is_evaluated_but_only_final_checkpoint_is_uploaded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[tuple[str, int]] = []
+    callback = wandb_policy.MixLawWandBEvalCallback(
+        arm="mix07",
+        total_steps=250,
+        save_folder=str(tmp_path / "checkpoints"),
+        run_name="unit-mix07",
+        work_dir=tmp_path / "eval-work",
+        eval_script=tmp_path / "eval.py",
+        interval=125,
+        nproc=8,
+    )
+    callback.trainer = SimpleNamespace(callbacks={})
+    monkeypatch.setattr(wandb_policy, "_wandb_run", lambda _trainer: object())
+    monkeypatch.setattr(callback, "_wait_for_checkpoint", lambda _source: None)
+    monkeypatch.setattr(
+        callback,
+        "_stage_checkpoint",
+        lambda _source, target: target.mkdir(parents=True),
+    )
+    monkeypatch.setattr(
+        callback,
+        "_evaluate",
+        lambda _checkpoint, _output, step: {"labels": {label: 1.0 for label in wandb_policy.TASK_LABELS}},
+    )
+    monkeypatch.setattr(
+        wandb_policy,
+        "upload_eval",
+        lambda _run, _payload, _path, step: events.append(("eval", step)),
+    )
+    monkeypatch.setattr(
+        wandb_policy,
+        "upload_final_checkpoint",
+        lambda _run, _checkpoint, *, step, **_kwargs: events.append(("checkpoint", step)),
+    )
+
+    callback._finalize_rank_zero(125)
+    callback._finalize_rank_zero(250)
+
+    assert events == [("eval", 125), ("eval", 250), ("checkpoint", 250)]
 
 
 def test_benchmark_is_exactly_100_steps_and_invalid_lengths_are_refused() -> None:
@@ -411,8 +467,10 @@ def test_dockerfile_preserves_existing_olmo_core_training_image() -> None:
     assert 'python -m pip install --no-cache-dir ".[wandb]" boto3' in dockerfile
     assert "38bf831a6c3f445e394784018441fd59288b876c" in dockerfile
     assert "flash-attn" not in dockerfile.lower()
-    assert "ai2-olmo==" not in dockerfile
+    assert "requirements-mixlaw-eval.txt" in dockerfile
+    assert "090253dac6688f2532509daa7aa2eb5fae50e956" in (
+        EDULLM_DIR / "requirements-mixlaw-eval.txt"
+    ).read_text(encoding="utf-8")
     assert "vendor/" not in dockerfile
-    assert "requirements-mixlaw" not in dockerfile
     assert not any(line.startswith("CMD ") for line in dockerfile.splitlines())
     assert 'default=os.environ.get("EDULLM_CHECKPOINT_DIR", "")' in existing_trainer

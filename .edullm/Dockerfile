@@ -90,16 +90,16 @@ RUN set -eux; \
 COPY . .
 
 # Keep the established OLMo-core image contract: pinned torch 2.9, this source checkout,
-# W&B, boto3 for OLMo-core's S3 I/O, and the platform-pinned edullm-data reader. Weighted
-# training uses OLMo-core's built-in SourceMixtureDatasetConfig and needs no ai2-olmo,
-# FlashAttention, evaluator, or vendored experiment stack.
+# W&B, boto3 for OLMo-core's S3 I/O, the platform-pinned edullm-data reader, and the
+# pinned OLMES stack used for the required 20-task evaluation at every saved step.
 RUN set -eux; \
     python -m pip install --no-cache-dir "torch==2.9.0"; \
     python -m pip install --no-cache-dir ".[wandb]" boto3; \
     python -m pip install --no-cache-dir "edullm-data @ https://github.com/edu-llm/edullm-data/archive/38bf831a6c3f445e394784018441fd59288b876c.tar.gz"; \
+    python -m pip install --no-cache-dir -r .edullm/requirements-mixlaw-eval.txt; \
     python -c "import torch; assert torch.__version__.startswith('2.9.0'), f'torch was moved off the pin: {torch.__version__}'"; \
     python -c "import torch; assert torch.version.cuda, 'the CUDA build of torch was replaced by a CPU wheel'"; \
-    python -c "import boto3, wandb; from olmo_core.data import NumpyFSLDatasetConfig; from olmo_core.data.source_mixture import SourceMixtureDatasetConfig; from olmo_core.nn.transformer import TransformerConfig; print(TransformerConfig.olmo2_370M(vocab_size=100352).__class__.__name__)"; \
+    python -c "import boto3, wandb; from olmo.eval.downstream import label_to_task_map; from olmo_core.data import NumpyFSLDatasetConfig; from olmo_core.data.source_mixture import SourceMixtureDatasetConfig; from olmo_core.nn.transformer import TransformerConfig; assert 'arc_easy_val_rc_5shot_bpb' in label_to_task_map; print(TransformerConfig.olmo2_370M(vocab_size=100352).__class__.__name__)"; \
     python -c "from edullm_data.read import dataset_paths; print(dataset_paths.__module__)"
 
 # No CMD. The entrypoint of the registered base is inherited deliberately, so swapping the
