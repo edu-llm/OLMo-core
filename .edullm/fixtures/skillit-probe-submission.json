@@ -1,0 +1,16 @@
+{
+  "command": [
+    "bash",
+    "-lc",
+    "EDULLM_CHECKPOINT_CHECK=waived exec python -m torch.distributed.run --standalone --nproc-per-node=8 /opt/olmo-core/.edullm/train_skillit_370m.py --arm-index 0 --run-name \"$EDULLM_RUN_ID-probe\" --work-dir /tmp/edullm-skillit/probe/work --save-folder /tmp/edullm-skillit/probe/checkpoints --progress-dir /tmp/edullm-skillit/probe/progress --task-loss-dir /tmp/edullm-skillit/probe/task_loss --task-loss-evaluator /opt/olmo-core/.edullm/eval_task_loss_olmo_core.py --wandb-mode online"
+  ],
+  "commit_sha": "0000000000000000000000000000000000000000",
+  "compute_profile": "gpu-8xa100",
+  "dataset_release": "olmo-127b-v1",
+  "experiment": "skillit-probe-370m",
+  "maximum_attempts": 1,
+  "repository": "OLMo-core",
+  "team": "pre-training",
+  "wandb_project": "skillit-probe",
+  "workload_profile": "olmo-core-train-4gpu"
+}

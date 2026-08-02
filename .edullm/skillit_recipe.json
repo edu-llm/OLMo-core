@@ -1,0 +1,184 @@
+{
+  "schema": 1,
+  "methodology": {
+    "source_repository": "https://github.com/edu-llm/edullm.git",
+    "source_commit": "b435cbe9c352399fc4ab54b310f36d28f6c9746f",
+    "source_readme": "experiments/skill-dag/skillit/README.md",
+    "completed_pilots_are_final": true,
+    "offline_a_source": "experiments/skill-dag/skillit/artifacts/probes_full/A_offline.json",
+    "offline_a_source_sha256": "e542e3e66f70c752110b51f60d1ee84f5f7860931dce5684e7a621f35dd74a21",
+    "derivative_fit_source": "experiments/skill-dag/mixlaw/mixlaw_fit_chinchilla.json",
+    "derivative_fit_source_sha256": "acb4754b46cd6a588dffce7e7ad0d9bd70b0188db010669a7cfccf8622da2bcc"
+  },
+  "data_source": {
+    "dataset_id": "pretrain/olmo-127b",
+    "version": "v1",
+    "label_key": "source",
+    "bucket": "edullm-data",
+    "dtype": "uint32",
+    "byte_order": "little",
+    "header_bytes": 0
+  },
+  "domain_order": [
+    "dclm",
+    "arxiv",
+    "starcoder",
+    "pes2o",
+    "open-web-math",
+    "algebraic-stack",
+    "wiki"
+  ],
+  "family_order": [
+    "arc_challenge",
+    "arc_easy",
+    "mmlu_humanities",
+    "mmlu_other",
+    "mmlu_social_sciences",
+    "mmlu_stem"
+  ],
+  "family_labels": {
+    "arc_challenge": "arc_challenge_val_rc_5shot_bpb",
+    "arc_easy": "arc_easy_val_rc_5shot_bpb",
+    "mmlu_humanities": "mmlu_humanities_val_rc_5shot_bpb",
+    "mmlu_other": "mmlu_other_val_rc_5shot_bpb",
+    "mmlu_social_sciences": "mmlu_social_sciences_val_rc_5shot_bpb",
+    "mmlu_stem": "mmlu_stem_val_rc_5shot_bpb"
+  },
+  "initial_weights": [
+    0.375,
+    0.25,
+    0.1406,
+    0.0938,
+    0.0635,
+    0.0615,
+    0.0156
+  ],
+  "training": {
+    "model": "olmo2_370M",
+    "sequence_length": 2048,
+    "global_batch_tokens": 4194304,
+    "rank_microbatch_tokens": 65536,
+    "budget_tokens": 10000058051,
+    "total_steps": 2384,
+    "seed": 42,
+    "optimizer": "SkipStepAdamW",
+    "learning_rate": 0.0004,
+    "betas": [0.9, 0.95],
+    "weight_decay": 0.1,
+    "embedding_weight_decay": 0.0,
+    "warmup_steps": 24,
+    "alpha_f": 1.0,
+    "z_loss_multiplier": 0.00001,
+    "max_grad_norm": 1.0,
+    "checkpoint_interval": 125,
+    "compile_model": true
+  },
+  "skillit": {
+    "update_steps": [500, 875, 1250, 1625, 2000],
+    "eta": 0.2,
+    "w": 1.0,
+    "offline_a": [
+      [0.34049949407028146, 0.14870952663460013, 0.36789157403897765, 0.0, 0.07911739137401419, 0.4859858163334376],
+      [0.00598078803695179, 0.0, 0.0, 0.0, 0.0, 0.3399882884128278],
+      [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+      [0.251966103631166, 0.08439914726292241, 0.0, 0.0, 0.0, 0.45023351630636066],
+      [0.0, 0.0, 0.0, 0.0, 0.0, 0.2322818419261643],
+      [0.01706941206148649, 0.0, 0.0, 0.0, 0.0, 0.2416411524923059],
+      [0.22659647235515856, 0.0, 0.4696894421692719, 0.013001248002017185, 0.0, 0.3518796573080156]
+    ],
+    "derivative_fit": {
+      "arc_challenge": {
+        "c": 1.5043329180738447,
+        "k": 0.07904797823108826,
+        "t": {
+          "dclm": -3.7207493605924125,
+          "arxiv": 2.069810534894695,
+          "starcoder": 1.2018965196784082,
+          "pes2o": -0.07135156024516558,
+          "open-web-math": 0.48901380138643646,
+          "algebraic-stack": 1.0315901761378004,
+          "wiki": -1.5043037483726387
+        }
+      },
+      "arc_easy": {
+        "c": 1.8107575392852042,
+        "k": 0.08778149441195765,
+        "t": {
+          "dclm": 1.3104097085943283,
+          "arxiv": 0.6890309390864987,
+          "starcoder": 0.8385655340187912,
+          "pes2o": 0.7190418947051487,
+          "open-web-math": -2.16426421831673,
+          "algebraic-stack": 1.4841181440343034,
+          "wiki": -1.9187949888201201
+        }
+      },
+      "mmlu_humanities": {
+        "c": 1.6022235993265075,
+        "k": 0.06781707768318397,
+        "t": {
+          "dclm": -0.6744569232659868,
+          "arxiv": 1.6327729182095516,
+          "starcoder": 1.6909406625478884,
+          "pes2o": 0.716926616398168,
+          "open-web-math": 1.6286186031150132,
+          "algebraic-stack": 1.605208592231232,
+          "wiki": -1.2694249847594563
+        }
+      },
+      "mmlu_other": {
+        "c": 2.133584978728996,
+        "k": 0.13306198460260107,
+        "t": {
+          "dclm": 0.1937226706823696,
+          "arxiv": 1.7668160042361076,
+          "starcoder": 1.2187660231478499,
+          "pes2o": 0.7032166588998818,
+          "open-web-math": 1.4110262748009146,
+          "algebraic-stack": 1.5820562649614316,
+          "wiki": -1.2339582743448538
+        }
+      },
+      "mmlu_social_sciences": {
+        "c": 1.2571109641520561,
+        "k": 0.06081759346817542,
+        "t": {
+          "dclm": -2.773706610844111,
+          "arxiv": 1.6850234625016454,
+          "starcoder": 1.3374938499639222,
+          "pes2o": 0.16793437536422076,
+          "open-web-math": 1.5040392604131845,
+          "algebraic-stack": 1.8162803451527094,
+          "wiki": -1.6383085508367075
+        }
+      },
+      "mmlu_stem": {
+        "c": 2.142691816756387,
+        "k": 0.08048992144563288,
+        "t": {
+          "dclm": -0.0713974714511851,
+          "arxiv": 1.8785966363305442,
+          "starcoder": 1.4336363455537742,
+          "pes2o": -1.6635316405068752,
+          "open-web-math": 1.1825874294367809,
+          "algebraic-stack": 1.5876490042001656,
+          "wiki": -0.4880399679890866
+        }
+      }
+    }
+  },
+  "arms": [
+    {
+      "arm_index": 0,
+      "arm_id": "probe",
+      "a_mode": "probe",
+      "wandb_project": "skillit-probe"
+    },
+    {
+      "arm_index": 1,
+      "arm_id": "deriv",
+      "a_mode": "derivative",
+      "wandb_project": "skillit-deriv"
+    }
+  ]
+}

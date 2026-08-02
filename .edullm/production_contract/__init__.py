@@ -1,0 +1,55 @@
+"""Shared eduLLM production contracts for OLMo-core experiment branches."""
+
+from .checkpoint import (
+    CheckpointContractError,
+    assert_resume_fingerprint,
+    checkpointer_kwargs_for_ladder,
+    finalize_permanent_checkpoint,
+    is_permanent_checkpoint_step,
+    permanent_checkpoint_steps,
+    read_last_durable_step,
+    write_run_fingerprint,
+)
+from .task_loss import (
+    TASK_LOSS_RAW_LABELS,
+    TaskLossEvalCallback,
+    pause_eval_reload_distributed,
+    task_loss_payload_complete,
+    trigger_task_loss_eval,
+    validate_task_loss_result,
+)
+from .wandb_artifacts import (
+    WandbArtifactError,
+    checkpoint_artifact_ref,
+    production_online,
+    require_wandb_for_production,
+    restore_checkpoint_artifact,
+    wandb_log_checkpoint,
+    wandb_log_directory_artifact,
+    wandb_log_eval,
+)
+
+__all__ = [
+    "CheckpointContractError",
+    "TASK_LOSS_RAW_LABELS",
+    "TaskLossEvalCallback",
+    "WandbArtifactError",
+    "assert_resume_fingerprint",
+    "checkpoint_artifact_ref",
+    "checkpointer_kwargs_for_ladder",
+    "finalize_permanent_checkpoint",
+    "is_permanent_checkpoint_step",
+    "pause_eval_reload_distributed",
+    "permanent_checkpoint_steps",
+    "production_online",
+    "read_last_durable_step",
+    "require_wandb_for_production",
+    "restore_checkpoint_artifact",
+    "task_loss_payload_complete",
+    "trigger_task_loss_eval",
+    "validate_task_loss_result",
+    "wandb_log_checkpoint",
+    "wandb_log_directory_artifact",
+    "wandb_log_eval",
+    "write_run_fingerprint",
+]
