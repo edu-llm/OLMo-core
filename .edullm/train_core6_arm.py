@@ -57,7 +57,7 @@ import argparse
 import contextlib
 import copy
 import enum
-import glob
+import hashlib
 import json
 import logging
 import os
@@ -712,6 +712,74 @@ def _chunked_ce(logits, targets):
     return torch.cat(out)
 
 
+def fetch_slice_inputs(*, mask_uri: str, work_dir: str):
+    """Download the frozen masks and the exact corpus shards they were built against.
+
+    The masks live outside the corpus because they are not corpus data -- they are a derived
+    labelling of it, written once by build_slice_masks.py and then read-only forever. Their
+    manifest names both the shards and a SHA-256 prefix per mask, and this checks both, for
+    one reason: every arm and seed must be scored on a byte-identical token set or the paired
+    per-token difference the endpoint rests on is not paired, and a silently-substituted shard
+    would still produce a plausible cross-entropy.
+
+    Shard names encode their corpus location as ``<source>__<shard>.u32le.bin``, but the
+    directory beneath the source is a topic that the name drops, so the corpus keys come from
+    the manifest's own ``s3_key`` field rather than being reconstructed here.
+    """
+    from olmo_core.io import copy_file, normalize_path
+
+    base = normalize_path(mask_uri).rstrip("/")
+    local = os.path.join(work_dir, "slice")
+    os.makedirs(local, exist_ok=True)
+
+    manifest_local = os.path.join(local, "slice_manifest.json")
+    copy_file(f"{base}/slice_manifest.json", manifest_local, save_overwrite=True)
+    with open(manifest_local) as handle:
+        manifest = json.load(handle)
+
+    if manifest.get("bands") != sorted(BAND_BIT):
+        raise ValueError(
+            f"mask bands {manifest.get('bands')} disagree with this build's {sorted(BAND_BIT)}"
+        )
+
+    val_paths, mask_paths = [], []
+    for entry in manifest["shards"]:
+        shard_local = os.path.join(local, entry["shard"])
+        mask_local = os.path.join(local, entry["mask"])
+        if "s3_key" not in entry:
+            raise ValueError(
+                f"manifest entry for {entry['shard']} has no s3_key; regenerate it with the "
+                "shard-to-corpus mapping so the pairing is recorded rather than guessed"
+            )
+        copy_file(f"s3://edullm-data/{entry['s3_key']}", shard_local, save_overwrite=True)
+        copy_file(f"{base}/{entry['mask']}", mask_local, save_overwrite=True)
+
+        # Length is the cheap structural check; the digest is the one that catches a shard
+        # that is the right size and the wrong content.
+        if os.path.getsize(shard_local) // 4 != entry["tokens"]:
+            raise ValueError(
+                f"{entry['shard']}: {os.path.getsize(shard_local)//4} tokens on disk, "
+                f"manifest says {entry['tokens']}"
+            )
+        with open(mask_local, "rb") as handle:
+            digest = hashlib.sha256(handle.read()).hexdigest()[: len(entry["sha256"])]
+        if digest != entry["sha256"]:
+            raise ValueError(f"{entry['mask']}: sha256 {digest} != manifest {entry['sha256']}")
+
+        val_paths.append(shard_local)
+        mask_paths.append(mask_local)
+
+    total = sum(e["tokens"] for e in manifest["shards"])
+    log.info(
+        "slice inputs: %d shard(s), %s tokens, C_mass=%s, realized mass %.3f%%",
+        len(val_paths),
+        f"{total:,}",
+        manifest.get("c_mass"),
+        100 * manifest.get("realized_mass", 0.0),
+    )
+    return val_paths, mask_paths
+
+
 @torch.no_grad()
 def evaluate_sliced(*, model, vocab_size, val_paths, mask_paths, seq_len, micro=2):
     """Aggregate and per-band AR-sliced CE over a fixed validation set.
@@ -880,21 +948,11 @@ def train(config, opts=None) -> None:
     # here must not discard four hours of training: the checkpoint is already on S3 and the
     # eval can be redone from it, so this warns and continues rather than raising.
     sliced = None
-    if opts is not None and opts.slice_val_dir and get_rank() == 0:
+    if opts is not None and opts.slice_mask_uri and get_rank() == 0:
         try:
-            val_paths = sorted(glob.glob(os.path.join(opts.slice_val_dir, "*.u32le.bin")))
-            mask_paths = [
-                os.path.join(
-                    opts.slice_mask_dir,
-                    os.path.basename(p).replace(".u32le.bin", ".mask.u8"),
-                )
-                for p in val_paths
-            ]
-            missing = [p for p in mask_paths if not os.path.exists(p)]
-            if not val_paths:
-                raise FileNotFoundError(f"no *.u32le.bin under {opts.slice_val_dir}")
-            if missing:
-                raise FileNotFoundError(f"{len(missing)} mask(s) missing, first {missing[0]}")
+            val_paths, mask_paths = fetch_slice_inputs(
+                mask_uri=opts.slice_mask_uri, work_dir=opts.work_dir
+            )
             log.info("sliced eval over %d shard(s)", len(val_paths))
             sliced = evaluate_sliced(
                 model=trainer.train_module.model,
@@ -961,17 +1019,12 @@ def build_parser() -> argparse.ArgumentParser:
         "(L0, K2, G4R0, G4R2, G2R0, S14, G0R0). Replaces --model-factory.",
     )
     parser.add_argument(
-        "--slice-val-dir",
-        default=os.environ.get("EDULLM_SLICE_VAL_DIR", ""),
-        help="Directory of *.u32le.bin validation shards for the sliced evaluation. Empty "
-        "skips the eval and the run produces a checkpoint only.",
-    )
-    parser.add_argument(
-        "--slice-mask-dir",
-        default=os.environ.get("EDULLM_SLICE_MASK_DIR", ""),
-        help="Directory of matching *.mask.u8 files from build_slice_masks.py. These are "
-        "frozen and must be byte-identical across every arm and seed, or the per-token "
-        "difference the endpoint rests on is not paired.",
+        "--slice-mask-uri",
+        default=os.environ.get("EDULLM_SLICE_MASK_URI", ""),
+        help="S3 prefix holding slice_manifest.json and the frozen *.mask.u8 files from "
+        "build_slice_masks.py. The manifest names the corpus shards to pair them with and "
+        "carries a digest per mask, both of which are checked. Empty skips the evaluation "
+        "and the run produces a checkpoint only.",
     )
     parser.add_argument("--sequence-length", type=int, default=2048)
     parser.add_argument("--steps", type=int, default=200)
