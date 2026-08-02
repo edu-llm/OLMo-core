@@ -41,13 +41,27 @@ def _load_oracle() -> Callable[..., Tuple[torch.Tensor, Optional[torch.Tensor]]]
     if env_dir:
         candidates.append(Path(env_dir))
     # src/test/nn/attention/<this file> -> parents[4] is the repo root, [5] its parent.
+    # BOTH are checked, and the in-repo one comes first. `probes/` is vendored into this
+    # repository, so parents[4] is the copy that actually ships; parents[5] is the legacy
+    # sibling layout from when `probes/` lived outside the repo. Checking only parents[5] --
+    # as this did until 2026-08-01 -- meant the vendored oracle sitting one level down was
+    # invisible, and with $KDA_PROBES_DIR unset the ten oracle tests below skipped while the
+    # suite exited 0.
+    candidates.append(Path(__file__).resolve().parents[4] / "probes")
     candidates.append(Path(__file__).resolve().parents[5] / "probes")
 
     found = next((c for c in candidates if (c / "naive_kda_householder.py").is_file()), None)
     if found is None:
-        pytest.skip(
+        # Deliberately NOT pytest.skip(). A skipped suite exits 0, so a missing oracle used to
+        # read as success: `-k oracle` with no $KDA_PROBES_DIR reported "7 passed, 7 skipped"
+        # and exit 0, and a *bogus* $KDA_PROBES_DIR did the same. The oracle is the only
+        # independent check on the recurrence, so its absence is a failure, not a condition to
+        # tolerate. Runbook 4.7 requires zero skips in this file for exactly this reason.
+        raise RuntimeError(
             "Could not locate probes/naive_kda_householder.py (the correctness oracle). "
-            f"Tried: {[str(c) for c in candidates]}. Set $KDA_PROBES_DIR to its directory."
+            f"Tried: {[str(c) for c in candidates]}. Set $KDA_PROBES_DIR to its directory. "
+            "This is a hard failure by design: skipping here would exit 0 and report a green "
+            "suite that verified nothing."
         )
     if str(found) not in sys.path:
         sys.path.append(str(found))
@@ -296,6 +310,8 @@ def test_kda_householder_backward_runs() -> None:
         assert torch.isfinite(t_.grad).all(), f"non-finite gradient for {name}"
 
 
+@requires_gpu
+@requires_fla
 def test_kda_householder_r1_matches_fla_chunk_kda():
     """At ``R == 1`` the kernel must agree with ``fla.ops.kda.chunk_kda``.
 
