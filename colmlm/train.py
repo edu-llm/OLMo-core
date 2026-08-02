@@ -50,6 +50,7 @@ from olmo_core.train import (
 from olmo_core.train.callbacks import (
     CheckpointerCallback,
     ConfigSaverCallback,
+    DownstreamEvaluatorCallbackConfig,
     GPUMemoryMonitorCallback,
     WandBCallback,
 )
@@ -63,6 +64,10 @@ from colmlm.tokenizer import smollm2_tokenizer_config
 
 # Control-arm defaults (smollm2-135m-control-vs-colmlm-archive.md), used for both base and split.
 CONTROL_SEED = 42
+
+# Archive eval suite: HellaSwag / PIQA / OpenBookQA, 5-shot rank-classification, accuracy + BPB,
+# reported every 250M training tokens.
+CONTROL_EVAL_TASKS = ["hellaswag_rc_5shot", "piqa_val_rc_5shot", "openbookqa_test_rc_5shot"]
 
 
 @dataclass
@@ -105,6 +110,7 @@ def build_config(opts) -> ExperimentConfig:
     else:
         total_steps = math.ceil(opts.budget_tokens / gbs)
     warmup = opts.warmup_steps if opts.warmup_steps is not None else round(opts.warmup_ratio * total_steps)
+    eval_interval_steps = max(1, round(opts.eval_interval_tokens / gbs))  # archive: every 250M tokens
 
     tokenizer = smollm2_tokenizer_config()
     model_config = TransformerConfig.smollm2_135M(vocab_size=tokenizer.vocab_size)
@@ -164,9 +170,21 @@ def build_config(opts) -> ExperimentConfig:
                 enabled=bool(os.environ.get("WANDB_PROJECT") or os.environ.get("EDULLM_WANDB_PROJECT")),
             ),
         )
+        .with_callback(
+            "downstream_evaluator",
+            # In-loop eval matching the archive. Requires ai2-olmo-core[eval] (ai2-olmo-eval);
+            # the stock eduLLM platform image does NOT install it, so pass --no-eval there.
+            DownstreamEvaluatorCallbackConfig(
+                tasks=list(opts.eval_tasks),
+                tokenizer=tokenizer,
+                eval_interval=eval_interval_steps,
+                eval_on_finish=True,
+                enabled=opts.eval,
+            ),
+        )
         .with_callback("config_saver", ConfigSaverCallback())
     )
-    # No lm_evaluator / downstream_evaluator: both fail at trainer construction on this platform.
+    # No lm_evaluator: its C4 validation shard index 404s on this platform (see olmo-core.md).
 
     config = ExperimentConfig(
         model=model_config,
@@ -214,6 +232,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--global-batch-size", type=int, default=32 * 2048, help="Tokens/step (32 x 2048).")
     p.add_argument("--rank-microbatch-size", type=int, default=8 * 2048, help="Tokens/microbatch/rank.")
     p.add_argument("--data-seed", type=int, default=CONTROL_SEED)
+    p.add_argument(
+        "--eval", action=argparse.BooleanOptionalAction, default=True,
+        help="In-loop downstream eval (HellaSwag/PIQA/OpenBookQA); needs ai2-olmo-core[eval]. "
+        "Use --no-eval on the stock eduLLM image, which lacks ai2-olmo-eval.",
+    )
+    p.add_argument("--eval-tasks", nargs="*", default=CONTROL_EVAL_TASKS,
+                   help="olmo_eval task ids (5-shot RC; report accuracy + BPB).")
+    p.add_argument("--eval-interval-tokens", type=int, default=250_000_000,
+                   help="Run eval every N training tokens (archive: 250M).")
     p.add_argument("--compile", action="store_true", help="Enable torch.compile (needs a C compiler).")
     p.add_argument("--dry-run", action="store_true", help="Build and print the config, train nothing.")
     return p
@@ -226,12 +253,15 @@ def main() -> None:
     if opts.dry_run:
         rich.print(config)
         md = config.trainer.max_duration
+        ev = config.trainer.callbacks.get("downstream_evaluator")
         rich.print(
             f"[bold green]mode={config.mode}[/] "
             f"params={config.model.num_params:,} "
             f"label_mask={'on' if config.dataset.label_mask_paths else 'off'} "
             f"shards={len(config.dataset.paths)} "
-            f"max_duration={md.value:,} {md.unit}"
+            f"max_duration={md.value:,} {md.unit} "
+            f"eval={'on' if (ev is not None and ev.enabled) else 'off'} "
+            f"eval_interval={getattr(ev, 'eval_interval', None)} tasks={getattr(ev, 'tasks', None)}"
         )
         return
     prepare_training_environment()
