@@ -108,9 +108,45 @@ class SpeedMonitorCallback(Callback):
                 elif "B200" in device_name:
                     # data from https://www.nvidia.com/en-us/data-center/hgx/
                     self.device_peak_flops_per_second = int(4.5e15 * dense_correction)
-                else:  # for other GPU types, assume A100
+                elif "A100" in device_name:
                     # data from https://www.nvidia.com/en-us/data-center/a100/
                     self.device_peak_flops_per_second = int(624e12 * dense_correction)
+                elif "L40S" in device_name:
+                    # data from https://resources.nvidia.com/en-us-l40s/l40s-datasheet-28413
+                    self.device_peak_flops_per_second = int(733e12 * dense_correction)
+                elif "A10G" in device_name:
+                    # data from https://aws.amazon.com/ec2/instance-types/g5/ (A10G, 125 TF/s
+                    # BF16 dense; the listed 250 is the sparsity figure, hence the correction)
+                    self.device_peak_flops_per_second = int(250e12 * dense_correction)
+                elif "L4" in device_name:
+                    # data from https://resources.nvidia.com/en-us-l4/l4-datasheet
+                    self.device_peak_flops_per_second = int(242e12 * dense_correction)
+                elif "T4" in device_name:
+                    # T4 is Turing and has no BF16 tensor path; its 65 TF/s is FP16. MFU
+                    # computed against it is not a BF16 utilisation figure.
+                    self.device_peak_flops_per_second = int(130e12 * dense_correction)
+                else:
+                    # NO FALL-THROUGH DEFAULT, AND THAT IS THE FIX. This branch used to assume
+                    # an A100, which meant every unlisted device reported MFU against 312
+                    # TFLOP/s regardless of what it actually was. On an A10G -- 62.5 TFLOP/s
+                    # BF16 dense after the correction -- that understates MFU by 5x, and the
+                    # error is silent: the number looks like a utilisation and is off by the
+                    # ratio of two cards nobody named. Two shapes reporting "MFU" against
+                    # different peaks also cannot be compared, which is what makes a
+                    # cross-shape throughput claim wrong rather than merely imprecise.
+                    #
+                    # Leaving it None makes the metric absent instead of wrong. MFU is then
+                    # simply not recorded (see the guard in _log_metrics), and a caller who
+                    # wants it on an unlisted card passes device_peak_flops_per_second
+                    # explicitly -- which also records, in the run config, which peak the
+                    # number was computed against.
+                    log.warning(
+                        f"No BF16 peak FLOP/s is known for '{device_name}', so MFU will not "
+                        "be reported. Pass device_peak_flops_per_second to SpeedMonitorCallback "
+                        "to enable it. It is deliberately not defaulted: a peak borrowed from "
+                        "another GPU yields a plausible-looking MFU that is wrong by the ratio "
+                        "of the two cards, and is not comparable to MFU from any other shape."
+                    )
             log.info(
                 f"Device: {device_name}, Device peak Flops/s: {self.device_peak_flops_per_second}"
             )

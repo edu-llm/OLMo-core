@@ -1,4 +1,5 @@
 import logging
+import math
 from abc import abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Tuple, Union, cast
@@ -380,6 +381,47 @@ class MoERouter(nn.Module):
         out["load imbalance"] = (
             batch_size_per_expert.max() / batch_size_per_expert.mean(dtype=torch.float),
             ReduceType.max,
+        )
+
+        # THE THREE BELOW EXIST BECAUSE `load imbalance` CANNOT BE COMPARED BETWEEN TWO
+        # CONFIGURATIONS WITH DIFFERENT EXPERT COUNTS, WHICH IS WHAT A GRANULARITY ABLATION
+        # DOES. max/mean is the maximum of `num_experts` positively-skewed counts, so its
+        # expectation rises with `num_experts` even when routing is perfectly uniform: a
+        # multinomial draw of 4,096 assignments gives 1.06 at E=8/k=2 and 1.19 at E=32/k=8.
+        # Reducing it with ReduceType.max across data-parallel ranks skews it further, since
+        # each rank contributes its own local maximum rather than a pooled count. A difference
+        # in this metric between two arms is therefore not evidence of a difference in their
+        # routing.
+        #
+        # `load imbalance` is kept rather than replaced: it is what every prior run recorded,
+        # and a metric that silently changes meaning between runs is worse than one that is
+        # merely awkward to compare.
+        counts = batch_size_per_expert.to(torch.float)
+        num_experts = counts.numel()
+        tiny = torch.finfo(torch.float32).tiny
+        mean = counts.mean()
+
+        # Coefficient of variation: population std over mean, and the scale-free quantity the
+        # load-balancing loss is a smooth surrogate for. Zero under perfect balance at every
+        # E, so it is comparable across arms. Averaged over ranks, not maximised.
+        out["load CV"] = (counts.std(unbiased=False) / mean.clamp_min(tiny), ReduceType.mean)
+
+        # Normalised routing entropy, H(p)/log(E) over the realised assignment distribution.
+        # 1.0 is perfect balance and 0.0 is collapse onto a single expert, at every E, which
+        # makes this the primary cross-arm readout.
+        probs = counts / counts.sum().clamp_min(tiny)
+        entropy = -(probs * probs.clamp_min(tiny).log()).sum()
+        out["load entropy (normalized)"] = (
+            entropy / math.log(num_experts) if num_experts > 1 else entropy,
+            ReduceType.mean,
+        )
+
+        # Dead experts as a fraction, because the stop criteria name dead experts and neither
+        # metric above separates "one expert idle" from "all slightly uneven". A fraction
+        # rather than a count so that it, too, is comparable across E.
+        out["dead expert fraction"] = (
+            (counts == 0).sum(dtype=torch.float) / num_experts,
+            ReduceType.mean,
         )
 
         # Load balancing loss.

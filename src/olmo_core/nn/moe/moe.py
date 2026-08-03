@@ -63,6 +63,17 @@ class MoEConfig(ModuleConfig):
     """
     num_experts: int = 1
     hidden_size: int = 256
+    init_std_from: Optional[int] = None
+    """
+    Initialise the expert up-projections (``w1``/``w3``) as though their input width were this
+    value, instead of ``hidden_size``. ``None`` keeps the ordinary behaviour.
+
+    This exists for ablations that vary ``hidden_size`` while holding the total expert budget
+    fixed. Those weights are initialised from a bound derived from their own ``fan_in``, which
+    IS ``hidden_size``, so halving the expert width and doubling ``num_experts`` also changes
+    the initial weight scale -- a second difference between the arms, confounded with the one
+    under test. Setting this to a common width on every arm removes it.
+    """
     capacity_factor: Optional[float] = None
     router: MoERouterConfig = field(default_factory=MoERouterConfig)
     shared_mlp: Optional[FeedForwardConfig] = None
@@ -355,7 +366,10 @@ class MoE(MoEBase):
         n_layers: int = 1,
         dtype: torch.dtype = torch.float32,
         cache: Optional[BufferCache] = None,
+        init_std_from: Optional[int] = None,
     ):
+        # Set before super().__init__, which is what calls _init_parallel_mlp below.
+        self._init_std_from = init_std_from
         super().__init__(
             d_model=d_model,
             num_experts=num_experts,
@@ -391,6 +405,7 @@ class MoE(MoEBase):
                 num_experts=num_experts,
                 dtype=dtype,
                 init_device=init_device,
+                init_std_from=getattr(self, "_init_std_from", None),
             ),
             top_k=self.router.top_k,
             capacity_factor=capacity_factor,

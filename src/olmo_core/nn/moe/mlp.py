@@ -133,8 +133,12 @@ class MoEMLP(MoEMLPBase):
         num_experts: int,
         dtype: torch.dtype = torch.float32,
         init_device: str = "cpu",
+        init_std_from: Optional[int] = None,
     ):
         super().__init__(d_model=d_model, hidden_size=hidden_size, num_experts=num_experts)
+        # The width w1/w3 are initialised as if they had, or None for `hidden_size` itself.
+        # See reset_parameters for why an ablation over expert width needs this.
+        self.init_std_from = init_std_from
         # NOTE: these parameters need to have a large enough first dimension (which would be num experts)
         # in order to be sharded over big world sizes with FSDP, so we flatten the first 2 dimensions.
         self.w1 = nn.Parameter(
@@ -167,8 +171,24 @@ class MoEMLP(MoEMLPBase):
         # Setting a=sqrt(5) in kaiming_uniform is the same as initializing with
         # uniform(-1/sqrt(in_features), 1/sqrt(in_features)). For details, see
         # https://github.com/pytorch/pytorch/issues/57109
-        for w in (self.w1, self.w2, self.w3):
-            nn.init.kaiming_uniform_(w, a=math.sqrt(5))
+        #
+        # WHY `init_std_from` EXISTS: the bound above is derived from each tensor's own
+        # `fan_in`, and for w1/w3 that fan_in IS `hidden_size` -- the expert width. So two
+        # configurations that differ only in how finely a fixed expert budget is divided do
+        # not start from the same distribution: at d_model=1024, E=8/f_e=2112 initialises
+        # w1 and w3 with std 0.0126, while E=32/f_e=528 gets 0.0251, a factor of two. (w2 is
+        # unaffected: its fan_in is d_model, which such a pair holds fixed.) That is a real
+        # difference between the models, but in a granularity ablation it is a difference
+        # nobody asked for, confounded with the one under test.
+        #
+        # Left at None the behaviour is unchanged, which keeps every existing config
+        # reproducing exactly. Set to a width, w1/w3 are initialised as if their fan_in were
+        # that width, so the arms of an ablation can be made to share an initial
+        # distribution and differ only in their routing.
+        init_hidden_size = self.hidden_size if self.init_std_from is None else self.init_std_from
+        for w in (self.w1, self.w3):
+            nn.init.uniform_(w, -1.0 / math.sqrt(init_hidden_size), 1.0 / math.sqrt(init_hidden_size))
+        nn.init.kaiming_uniform_(self.w2, a=math.sqrt(5))
 
     def extra_repr(self):
         return f"num_experts={self.num_experts}, in_features={self.d_model}, hidden_size={self.hidden_size}"
