@@ -1,0 +1,14 @@
+# Regenerable, large, or run-local.
+#
+# The signal caches (data/*.npz) are the only GPU-expensive artefacts here — ~10-15 GPU-min for
+# both variants — but they are keyed on the training file's content and rebuild deterministically,
+# so they travel with the run to S3 rather than into git. Everything the pool and the reference
+# adapter need is already in impl5_ssd/.gitignore's territory.
+data/shards/
+data/*.npz
+data/*.log
+runs/
+artifacts/
+
+__pycache__/
+*.pyc
