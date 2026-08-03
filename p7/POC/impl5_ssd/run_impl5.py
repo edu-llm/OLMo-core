@@ -24,12 +24,21 @@ almost nothing, and a runtime reclaimed during that window takes the whole run w
 Stages, in order::
 
     deps, bundle, pool, checks_fast, probe, distill, slot, mix, checks_full, train,
-    bridge, eval
+    bridge, eval, math
 
 ``eval`` is **pedagogy-NLL only** — ``impl3_compat/nll_only.py``, ~40 s per checkpoint. The
-math and KL axes are deliberately not run here; they are ~4 min per checkpoint and this run
-is budgeted for training. The rows are stamped ``axis: "ped_nll"`` so a partial file cannot
-merge into a results file as though it were complete.
+rows are stamped ``axis: "ped_nll"`` so a partial file cannot merge into a results file as
+though it were complete.
+
+``math`` is the forgetting axis and is **a separate job, not part of a training run**:
+~4 GPU-min per checkpoint against ~10 s for the NLL axis, so folding it in would roughly
+double a training run's wall clock for an axis that run does not need. It restores the
+adapters from ``--checkpoint_dir`` and does its own bridge, so::
+
+    python run_impl5.py --arm D4 --stages bundle,math --checkpoint_dir s3://...
+
+is a complete job on a fresh container. It defaults to impl4's 12 math steps rather than all
+22, because D0 is impl4-A1 and a D4 number at a step A1 never measured has no baseline.
 
 A stage whose output already exists is skipped, so re-running after a crash resumes.
 
@@ -59,8 +68,14 @@ PINS = ["transformers==5.14.1", "datasets==5.0.1", "accelerate==1.14.0", "peft==
         "pyarrow==25.0.0", "matplotlib==3.11.1"]
 
 ALL_STAGES = ("deps", "bundle", "pool", "checks_fast", "probe", "distill", "slot",
-              "mix", "checks_full", "train", "bridge", "eval")
-GPU_STAGES = {"probe", "distill", "slot", "mix", "train", "eval"}
+              "mix", "checks_full", "train", "bridge", "eval", "math")
+GPU_STAGES = {"probe", "distill", "slot", "mix", "train", "eval", "math"}
+
+#: The 12 steps impl4 measured math on, out of the 22-point grid. Matching them exactly is
+#: the point: D0 is impl4-A1, so a D4 math number at a step A1 does not have is a point with
+#: no baseline. It also halves the cost — math is ~4 GPU-min per checkpoint against ~10 s for
+#: the NLL axis, so 22 steps would be ~90 min for ten unpairable numbers.
+MATH_STEPS_IMPL4 = "1,2,3,4,8,16,32,64,128,256,512,923"
 
 
 def parse_args():
@@ -86,6 +101,9 @@ def parse_args():
     p.add_argument("--output_prefix", default=os.environ.get("EDULLM_OUTPUT_PREFIX"),
                    help="s3:// prefix for everything that is not a checkpoint: the distilled "
                         "pool and the results bundle.")
+    p.add_argument("--math_steps", default=MATH_STEPS_IMPL4,
+                   help="Comma-separated grid steps for the math axis, or 'all'. Defaults to "
+                        "impl4's 12 so every D4 number pairs with a D0 one.")
     p.add_argument("--min_keep", type=float, default=0.25,
                    help="Abort before the full pass if the probe's gate keep rate is "
                         "below this. Below ~25%% the pool is mostly gold and the arm "
@@ -203,6 +221,40 @@ def restore_from_s3(here: Path, args) -> None:
     got = (here / "data/distilled_pool.jsonl").exists()
     print(f"  restored pool from S3: {'yes' if got else 'NO — tarball did not contain it'}",
           flush=True)
+
+
+def restore_checkpoints(runs_root: Path, arm: str, args) -> None:
+    """Pull a trained arm's adapters back from the checkpoint prefix.
+
+    The math axis is a *separate, later* job from training, not a stage of it: 250 GSM8K
+    items x 2 prompt conditions is ~4 GPU-minutes per checkpoint against ~10 s for the NLL
+    axis, so bundling it into the training run would have doubled that run's wall clock for
+    an axis the training run did not need.
+
+    The consequence is that the math job starts in a fresh container which has the code but
+    not the checkpoints, and ``EDULLM_CHECKPOINT_DIR``'s tarball is the only copy. Written
+    with ``cd <runs_root> && tar cf ... <arm>``, so it extracts to ``<runs_root>/<arm>/``.
+    """
+    out = runs_root / arm
+    if list(out.glob("ckpt-*")):
+        print(f"  {arm} adapters already on disk — no restore needed", flush=True)
+        return
+    if not args.checkpoint_dir:
+        raise SystemExit(
+            f"no {arm} adapters under {runs_root} and --checkpoint_dir is unset, so there is "
+            f"nowhere to fetch them from. The math axis reads the adapters training wrote; it "
+            f"does not retrain. Pass --checkpoint_dir (on the platform: \"$EDULLM_CHECKPOINT_DIR\")."
+        )
+    tmp = runs_root / f"_restore_{arm}.tar"
+    if not s3_get(args.checkpoint_dir, f"impl5_{arm}.tar", tmp):
+        raise SystemExit(f"impl5_{arm}.tar is not under {args.checkpoint_dir}. Without it the "
+                         f"math axis has no checkpoints to score.")
+    sh(f"tar xf {shlex.quote(str(tmp))} -C {shlex.quote(str(runs_root))}", check=False)
+    tmp.unlink(missing_ok=True)
+    n = len(list(out.glob("ckpt-*")))
+    if not n:
+        raise SystemExit(f"impl5_{arm}.tar extracted but no {out}/ckpt-* appeared.")
+    print(f"  restored {n} adapter dirs for {arm}", flush=True)
 
 
 def gpu_report(required: bool) -> int:
@@ -424,11 +476,35 @@ def main():
         sh(f"{sys.executable} nll_only.py --runs 'out/*' --out out/ped_nll_impl5.jsonl",
            cwd=COMPAT)
 
+    if "math" in want:
+        # Deliberately self-contained: it restores the adapters and does its own bridge, so
+        # `--stages bundle,math` is a complete job on a fresh container. Do NOT also request
+        # `bridge` in the same invocation — bridge.py skips checkpoint dirs that already
+        # exist, so an unfiltered bridge first would leave all 22 steps exposed and the
+        # filter below would silently do nothing.
+        banner("stage 8 — math retention + KL (the forgetting axis)")
+        restore_checkpoints(runs_root, args.arm, args)
+        steps = "" if args.math_steps in ("all", "") else f" --steps {args.math_steps}"
+        n_steps = 22 if not steps else len(args.math_steps.split(","))
+        print(f"  {n_steps} checkpoints at ~4 GPU-min each -> budget ~{n_steps * 4} min",
+              flush=True)
+        sh(f"{sys.executable} impl3_compat/bridge.py --runs_root {rr} "
+           f"--prefix impl5- --arms {args.arm}{steps}", cwd=IMPL4)
+        # --with_kl, not --with-kl: math_only.py's own docstring writes it with a dash but
+        # argparse registered the underscore, and the dashed form is not a prefix of it, so
+        # it fails as an unrecognised argument. KL is what gives these numbers an x-axis --
+        # math alone is a y-axis on Impl 3's KL-forgetting plane with nothing to plot against.
+        sh(f"{sys.executable} math_only.py --runs 'out/*' --out out/math_impl5.jsonl "
+           f"--with_kl", cwd=COMPAT, log_path=HERE / "data/math.log")
+        s3_put(COMPAT / "work" / "out" / "math_impl5.jsonl", args.output_prefix)
+
     if not args.skip_package:
         banner("packaging results")
         results = COMPAT / "work" / "out" / "ped_nll_impl5.jsonl"
         keep = []
         for src, name in ((results, "ped_nll_impl5.jsonl"),
+                          (COMPAT / "work" / "out" / "math_impl5.jsonl", "math_impl5.jsonl"),
+                          (HERE / "data/math.log", f"{args.arm}_math.log"),
                           (HERE / "data/distill_meta.json", "distill_meta.json"),
                           (HERE / "data/acceptance_fast.json", "acceptance_fast.json"),
                           (HERE / "data/acceptance_full.json", "acceptance_full.json"),
