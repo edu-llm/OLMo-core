@@ -190,7 +190,6 @@ RUN set -eux; \
       "numpy==1.26.4" \
       "omegaconf==2.3.0" \
       "PyYAML==6.0.3" \
-      "rich==15.0.0" \
       "safetensors==0.8.0" \
       "scikit-learn==1.9.0" \
       "tokenizers==0.22.2" \

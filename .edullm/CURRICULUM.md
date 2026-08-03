@@ -10,7 +10,7 @@ Fixed contract:
 - OLMo2-370M (`d_model=1024`, 16 layers, 16 heads, reordered norm,
   gated-SiLU 4096 MLP, full attention, QK-RMSNorm, RoPE theta 500,000),
   Dolma2 tokenizer/vocabulary 100,352, sequence length 2,048, global batch
-  4,194,304 tokens, rank microbatch 65,536 tokens
+  4,194,304 tokens, rank microbatch 32,768 tokens
 - SkipStepAdamW at `4e-4`, betas `(0.9, 0.95)`, weight decay `0.1`
   except embeddings at `0`, 24-step warmup, `alpha_f=1.0`
 - HSDP bf16 parameters/fp32 reductions, z-loss `1e-5`, max grad norm `1`,

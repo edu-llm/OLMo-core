@@ -134,7 +134,7 @@ def test_fixed_olmo2_recipe_and_checkpoint_ladder() -> None:
     assert entrypoint.SEED == 42
     assert entrypoint.LR_ALPHA_F == 1.0
     assert entrypoint.GLOBAL_BATCH_TOKENS == 4_194_304
-    assert entrypoint.RANK_MICROBATCH_TOKENS == 65_536
+    assert entrypoint.RANK_MICROBATCH_TOKENS == 32_768
     assert entrypoint.production_steps(None) == 2384
     steps = entrypoint.checkpoint_steps(2384)
     assert steps[0] == 0 and steps[-1] == 2384
