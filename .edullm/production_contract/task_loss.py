@@ -356,11 +356,28 @@ class TaskLossEvalCallback(Callback if _HAS_OLMO_CORE else object):  # type: ign
             time.sleep(1)
         raise TaskLossContractError(f"timed out waiting for permanent checkpoint {checkpoint}")
 
+    def _already_durable(self, step: int) -> bool:
+        if self.progress_dir is None:
+            return False
+        marker = self.progress_dir / "last_durable_step.json"
+        try:
+            payload = json.loads(marker.read_text(encoding="utf-8"))
+            durable_step = int(payload["last_durable_step"])
+        except (FileNotFoundError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+            return False
+        if durable_step < int(step):
+            return False
+        validate_task_loss_result(self.results_dir / f"step{int(step)}_task_loss.json")
+        return True
+
     def _maybe_finalize(self, step: int) -> None:
         step = int(step)
         if step in self._completed or not is_permanent_checkpoint_step(
             step, self.total_steps, self.interval
         ):
+            return
+        if self._already_durable(step):
+            self._completed.add(step)
             return
 
         dist, rank = self._distributed()

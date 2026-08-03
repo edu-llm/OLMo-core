@@ -45,6 +45,14 @@ def _snapshot(parameter: Tensor) -> Tensor:
     return _local(parameter).detach().clone()
 
 
+def _reshard(model: nn.Module) -> None:
+    from torch.distributed.fsdp import FSDPModule
+
+    for module in reversed(tuple(model.modules())):
+        if isinstance(module, FSDPModule):
+            module.reshard()
+
+
 def per_row_topk(scores: Tensor, fraction: float, valid: Tensor) -> Tensor:
     fraction = min(max(float(fraction), 1e-8), 1.0)
     shape = scores.shape
@@ -134,12 +142,12 @@ def selection_weights(
 
 
 class WeightShadow:
-    """Full immutable weights temporarily swapped into a sharded training model."""
+    """Immutable rank-local weights temporarily swapped into a sharded training model."""
 
     VERSION = 1
 
     def __init__(self, weights: Mapping[str, Tensor]):
-        self.weights = {name: value.detach().cpu().clone() for name, value in weights.items()}
+        self.weights = {name: value.detach().clone() for name, value in weights.items()}
         if not self.weights:
             raise ValueError("a weight shadow cannot be empty")
 
@@ -148,7 +156,19 @@ class WeightShadow:
         missing = [name for name, _ in model.named_parameters() if name not in state]
         if missing:
             raise KeyError(f"reference is missing model parameters: {missing[:8]}")
-        return cls({name: state[name] for name, _ in model.named_parameters()})
+        local_shards: dict[str, Tensor] = {}
+        with torch.no_grad():
+            for name, parameter in model.named_parameters():
+                destination = _local(parameter)
+                training_shard = destination.detach().clone()
+                try:
+                    _write(parameter, state[name])
+                    local_shards[name] = _local(parameter).detach().clone()
+                finally:
+                    _local(parameter).copy_(training_shard)
+        shadow = cls.__new__(cls)
+        shadow.weights = local_shards
+        return shadow
 
     @contextlib.contextmanager
     def swap_to(self, model: nn.Module) -> Iterator[nn.Module]:
@@ -157,26 +177,46 @@ class WeightShadow:
             with torch.no_grad():
                 for name, parameter in model.named_parameters():
                     if name in self.weights:
-                        saved[name] = _snapshot(parameter)
-                        _write(parameter, self.weights[name])
+                        destination = _local(parameter)
+                        reference = self.weights[name]
+                        if (
+                            reference.shape != destination.shape
+                            or reference.device != destination.device
+                            or reference.dtype != destination.dtype
+                        ):
+                            raise RuntimeError(
+                                f"reference local shard for {name!r} no longer matches parameter: "
+                                f"reference={tuple(reference.shape)}/{reference.device}/{reference.dtype}, "
+                                f"parameter={tuple(destination.shape)}/{destination.device}/{destination.dtype}"
+                            )
+                        saved[name] = destination.detach().clone()
+                        destination.copy_(reference)
             yield model
         finally:
             with torch.no_grad():
+                _reshard(model)
                 for name, parameter in model.named_parameters():
                     if name in saved:
-                        _write(parameter, saved[name])
+                        _local(parameter).copy_(saved[name])
 
     def state_dict(self) -> dict[str, Any]:
-        return {"version": self.VERSION, "weights": self.weights}
+        return {
+            "version": self.VERSION,
+            "weights": {name: value.detach().cpu() for name, value in self.weights.items()},
+        }
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
         if state.get("version") != self.VERSION or not isinstance(state.get("weights"), Mapping):
             raise ValueError("invalid frozen-reference state")
-        self.weights = {
-            str(name): value.detach().cpu().clone()
-            for name, value in state["weights"].items()
-            if isinstance(value, Tensor)
-        }
+        loaded: dict[str, Tensor] = {}
+        for name, value in state["weights"].items():
+            if not isinstance(value, Tensor):
+                continue
+            target = self.weights.get(str(name))
+            loaded[str(name)] = (
+                value.detach().to(target).clone() if target is not None else value.detach().clone()
+            )
+        self.weights = loaded
 
 
 class EMAHistory:
@@ -232,6 +272,7 @@ class EMAHistory:
             yield model
         finally:
             with torch.no_grad():
+                _reshard(model)
                 for name, parameter in model.named_parameters():
                     if name in saved:
                         _local(parameter).copy_(saved[name])
@@ -289,6 +330,7 @@ def attention_received_from_qk(
 class AttentionCapture:
     x: Optional[Tensor] = None
     module: Optional[nn.Module] = None
+    owner: Optional[nn.Module] = None
     kwargs: Optional[dict[str, Any]] = None
 
 
@@ -297,14 +339,20 @@ def capture_last_attention(model: nn.Module) -> Iterator[AttentionCapture]:
     while hasattr(model, "module") or hasattr(model, "_orig_mod"):
         model = getattr(model, "module", getattr(model, "_orig_mod", model))
     blocks = list(model.blocks.values()) if hasattr(model.blocks, "values") else list(model.blocks)
-    attention = blocks[-1].attention
-    capture = AttentionCapture(module=attention)
+    block = blocks[-1]
+    attention = block.attention
+    capture = AttentionCapture(module=attention, owner=block)
 
     def hook(_module, args, kwargs):
         capture.x = args[0].detach()
         capture.kwargs = dict(kwargs)
 
-    handle = attention.register_forward_pre_hook(hook, with_kwargs=True)
+    # OLMo compiles each transformer block before HSDP wrapping. Hooks added later
+    # to a child attention module are bypassed by the already-compiled block graph,
+    # while a hook on the block boundary still executes through nn.Module._call_impl.
+    # ReorderedNormTransformerBlock passes its input directly to attention, so the
+    # block input is exactly the last-layer attention input for this recipe.
+    handle = block.register_forward_pre_hook(hook, with_kwargs=True)
     try:
         yield capture
     finally:
@@ -313,36 +361,45 @@ def capture_last_attention(model: nn.Module) -> Iterator[AttentionCapture]:
 
 @torch.no_grad()
 def scores_from_capture(capture: AttentionCapture) -> Tensor:
-    if capture.x is None or capture.module is None:
+    if capture.x is None or capture.module is None or capture.owner is None:
         raise RuntimeError("last-layer attention input was not captured")
-    attention, x = capture.module, capture.x
-    q, k = attention.w_q(x), attention.w_k(x)
-    if attention.clip_qkv is not None:
-        q = q.clamp(min=-attention.clip_qkv, max=attention.clip_qkv)
-        k = k.clamp(min=-attention.clip_qkv, max=attention.clip_qkv)
-    head_dim = attention.head_dim
-    head_norm = bool(getattr(attention, "use_head_qk_norm", False))
-    if not head_norm:
-        if attention.q_norm is not None:
-            q = attention.q_norm(q)
-        if attention.k_norm is not None:
-            k = attention.k_norm(k)
-    q = q.view(x.shape[0], x.shape[1], -1, head_dim)
-    k = k.view(x.shape[0], x.shape[1], -1, head_dim)
-    if head_norm:
-        if attention.q_norm is not None:
-            q = attention.q_norm(q)
-        if attention.k_norm is not None:
-            k = attention.k_norm(k)
-    if getattr(attention, "rope", None) is not None:
-        kwargs = capture.kwargs or {}
-        q, k = attention._apply_rope(
-            q,
-            k,
-            kwargs.get("start_pos"),
-            kwargs.get("pos_sin"),
-            kwargs.get("pos_cos"),
-            kwargs.get("freqs_cis"),
-            kwargs.get("cu_doc_lens"),
-        )
+    attention, owner, x = capture.module, capture.owner, capture.x
+    from torch.distributed.fsdp import FSDPModule
+
+    sharded = isinstance(owner, FSDPModule)
+    if sharded:
+        owner.unshard()
+    try:
+        q, k = attention.w_q(x), attention.w_k(x)
+        if attention.clip_qkv is not None:
+            q = q.clamp(min=-attention.clip_qkv, max=attention.clip_qkv)
+            k = k.clamp(min=-attention.clip_qkv, max=attention.clip_qkv)
+        head_dim = attention.head_dim
+        head_norm = bool(getattr(attention, "use_head_qk_norm", False))
+        if not head_norm:
+            if attention.q_norm is not None:
+                q = attention.q_norm(q)
+            if attention.k_norm is not None:
+                k = attention.k_norm(k)
+        q = q.view(x.shape[0], x.shape[1], -1, head_dim)
+        k = k.view(x.shape[0], x.shape[1], -1, head_dim)
+        if head_norm:
+            if attention.q_norm is not None:
+                q = attention.q_norm(q)
+            if attention.k_norm is not None:
+                k = attention.k_norm(k)
+        if getattr(attention, "rope", None) is not None:
+            kwargs = capture.kwargs or {}
+            q, k = attention._apply_rope(
+                q,
+                k,
+                kwargs.get("start_pos"),
+                kwargs.get("pos_sin"),
+                kwargs.get("pos_cos"),
+                kwargs.get("freqs_cis"),
+                kwargs.get("cu_doc_lens"),
+            )
+    finally:
+        if sharded:
+            owner.reshard()
     return attention_received_from_qk(q, k, scale=getattr(attention, "softmax_scale", None))

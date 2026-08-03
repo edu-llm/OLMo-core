@@ -8,14 +8,14 @@
   "output_contract": "runtime-scratch+wandb",
   "task_loss_contract": "20-label-rc-5shot-bpb-synchronous",
   "arms": {
-    "rho-1": {"dataset_release": "pretrain/regmix-10b", "wandb_project": "token-selection-rho-1"},
-    "rel-ema-exp": {"dataset_release": "pretrain/regmix-10b", "wandb_project": "token-selection-rel-ema-exp"},
-    "middle-ppl-token": {"dataset_release": "pretrain/regmix-10b", "wandb_project": "token-selection-middle-ppl-token"},
-    "attention": {"dataset_release": "pretrain/regmix-10b", "wandb_project": "token-selection-attention"},
+    "rho-1": {"dataset_release": "pretrain/regmix-10b", "wandb_project": "token-selection"},
+    "rel-ema-exp": {"dataset_release": "pretrain/regmix-10b", "wandb_project": "token-selection"},
+    "middle-ppl-token": {"dataset_release": "pretrain/regmix-10b", "wandb_project": "token-selection"},
+    "attention": {"dataset_release": "pretrain/regmix-10b", "wandb_project": "token-selection"},
     "blade": {
       "dataset_release": "pretrain/regmix-10b",
       "secondary_dataset_release": "pretrain/refhq-regmix-5p5b",
-      "wandb_project": "token-selection-blade"
+      "wandb_project": "token-selection"
     }
   }
 }

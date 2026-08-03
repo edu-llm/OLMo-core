@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 from production_contract.checkpoint import (
     checkpointer_kwargs_for_ladder,
@@ -78,12 +78,15 @@ def scientific_identity(
     early_reference_path: Optional[str],
     late_reference_path: Optional[str],
     passive_reference_path: Optional[str] = None,
+    precomputed_selection_binding: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
     main_binding = dict(dataset_binding)
     if main_binding.get("dataset_id") != arm.dataset_id:
         raise ValueError("resolved main corpus does not match the selected arm")
     if arm.requires_refhq_stream != (refhq_binding is not None):
         raise ValueError("BLADE RefHQ binding is missing or attached to a non-BLADE arm")
+    if precomputed_selection_binding is not None and arm.method != "middle_ppl":
+        raise ValueError("precomputed token masks are only supported for middle-PPL")
     return {
         "arm": arm.name,
         "run_id": arm.run_id,
@@ -116,16 +119,29 @@ def scientific_identity(
         "early_reference_sha256": _reference_digest(early_reference_path),
         "late_reference_sha256": _reference_digest(late_reference_path),
         "passive_reference_sha256": _reference_digest(passive_reference_path),
+        "precomputed_selection_binding": (
+            dict(precomputed_selection_binding)
+            if precomputed_selection_binding is not None
+            else None
+        ),
         "wandb_project": arm.wandb_project,
         "checkpoint_contract": "schema-v2-ladder125-task-loss20-wandb",
     }
 
 
-def _loader(corpus, *, work_dir: Path, seed: int, process_group=None):
+def _loader(
+    corpus,
+    *,
+    work_dir: Path,
+    seed: int,
+    process_group=None,
+    label_mask_paths: Optional[Sequence[str]] = None,
+):
     from olmo_core.data import NumpyDataLoaderConfig, NumpyFSLDatasetConfig
 
     dataset = NumpyFSLDatasetConfig(
         paths=list(corpus.paths),
+        label_mask_paths=list(label_mask_paths) if label_mask_paths is not None else None,
         sequence_length=SEQUENCE_LENGTH,
         tokenizer=corpus.tokenizer,
         dtype=corpus.dtype,
@@ -222,6 +238,8 @@ def build_trainer(
     early_reference_path: Optional[str] = None,
     late_reference_path: Optional[str] = None,
     passive_reference_path: Optional[str] = None,
+    precomputed_label_mask_paths: Optional[Sequence[str]] = None,
+    precomputed_selection_binding: Optional[Mapping[str, Any]] = None,
     resume: bool = False,
     production: bool = True,
 ):
@@ -257,13 +275,20 @@ def build_trainer(
         seed=DATA_SEED,
         reference_path=late_reference_path if arm.method == "middle_ppl" else reference_path,
         early_reference_path=early_reference_path,
-        late_reference_path=late_reference_path,
+        late_reference_path=None if arm.method == "middle_ppl" else late_reference_path,
         passive_reference_path=passive_reference_path,
         ema_seed=arm.ema_seed,
         ema_alpha=arm.ema_alpha,
         ema_tau=arm.ema_tau,
     )
-    if arm.method in CUSTOM_LOSS_METHODS or passive_reference_path:
+    precomputed_middle_ppl = precomputed_label_mask_paths is not None
+    if precomputed_middle_ppl and arm.method != "middle_ppl":
+        raise ValueError("precomputed label masks are only supported for middle-PPL")
+    if precomputed_middle_ppl != (precomputed_selection_binding is not None):
+        raise ValueError("precomputed label masks and their binding must be supplied together")
+    if precomputed_middle_ppl and passive_reference_path:
+        raise ValueError("passive online scoring is incompatible with precomputed middle-PPL")
+    if (arm.method in CUSTOM_LOSS_METHODS and not precomputed_middle_ppl) or passive_reference_path:
         train_module = _custom_module(model, module_config, selection_config)
     else:
         train_module = module_config.build(model)
@@ -273,8 +298,10 @@ def build_trainer(
         work_dir=work_dir / "main",
         seed=DATA_SEED,
         process_group=train_module.dp_process_group,
+        label_mask_paths=precomputed_label_mask_paths,
     )
     checkpoint_kwargs = checkpointer_kwargs_for_ladder(steps, 125, save_async=False)
+    checkpoint_kwargs["pre_train_checkpoint"] = not resume
     # TaskLossEvalCallback finalizes in post_step, before CheckpointerCallback's
     # post_train fallback. Save the true final step in post_train_batch so the
     # synchronous evaluator never waits for a checkpoint that cannot exist yet.
@@ -306,6 +333,12 @@ def build_trainer(
                     "method": arm.method,
                     "dataset_id": arm.dataset_id,
                     "max_tokens": max_tokens,
+                    "precomputed_selection": precomputed_middle_ppl,
+                    "precomputed_selection_binding": (
+                        dict(precomputed_selection_binding)
+                        if precomputed_selection_binding is not None
+                        else None
+                    ),
                 },
             ),
         )
@@ -369,6 +402,12 @@ def build_trainer(
         "recipe": "unchanged-olmo2-370m-v1",
         "arm": arm.name,
         "method": arm.method,
+        "precomputed_selection": precomputed_middle_ppl,
+        "precomputed_selection_binding": (
+            dict(precomputed_selection_binding)
+            if precomputed_selection_binding is not None
+            else None
+        ),
         "scientific_constants": {
             "sequence_length": SEQUENCE_LENGTH,
             "global_batch_tokens": GLOBAL_BATCH_TOKENS,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import contextlib
 import json
 import math
 import sys
@@ -9,12 +10,14 @@ from pathlib import Path
 
 import pytest
 import torch
+import torch.distributed as dist
 from torch import nn
 
 EDULLM_ROOT = Path(__file__).resolve().parents[1]
 if str(EDULLM_ROOT) not in sys.path:
     sys.path.insert(0, str(EDULLM_ROOT))
 
+import token_selection_370m.selection as selection_module  # noqa: E402
 from token_selection_370m.arms import (  # noqa: E402
     ARM_SPECS,
     REFHQ,
@@ -22,10 +25,12 @@ from token_selection_370m.arms import (  # noqa: E402
 )
 from token_selection_370m.blade import (  # noqa: E402
     BLADE_CHECKPOINT_FORMAT,
+    BLADE_REFERENCE_MICROBATCH_TOKENS,
     BLADE_SYNC_STEPS,
     BladeCallback,
     BladeSchedule,
     ResumableBatchStream,
+    _full_proxy_state,
 )
 from token_selection_370m.recipe import (  # noqa: E402
     ALPHA_F,
@@ -41,9 +46,17 @@ from token_selection_370m.recipe import (  # noqa: E402
     scientific_identity,
     total_steps,
 )
+from token_selection_370m.precomputed import (  # noqa: E402
+    MASK_ALGORITHM,
+    binding_sha256,
+    load_mask_manifest,
+    weights_to_label_mask,
+)
 from token_selection_370m.selection import (  # noqa: E402
     EMAHistory,
+    WeightShadow,
     attention_received_from_qk,
+    capture_last_attention,
     ema_alpha,
     selection_weights,
 )
@@ -59,7 +72,10 @@ def test_exact_approved_arm_family_and_wandb_routing() -> None:
         ("attention", "attention_topk", "pretrain/regmix-10b", 0.6),
         ("blade", "blade", "pretrain/regmix-10b", 0.6),
     )
-    assert all(spec.wandb_project == f"token-selection-{name}" for name, spec in ARM_SPECS.items())
+    assert all(
+        ARM_SPECS[name].wandb_project == "token-selection"
+        for name in ("rho-1", "rel-ema-exp", "middle-ppl-token", "attention", "blade")
+    )
     assert ARM_SPECS["middle-ppl-token"].late_reference_contract.endswith(str(REFHQ_LATE_STEPS))
 
 
@@ -72,6 +88,344 @@ def test_one_recipe_constants_and_2360_step_budget() -> None:
     assert ALPHA_F == 0.1
     assert Z_LOSS == 1e-5
     assert total_steps(9_900_000_000) == 2360
+
+
+def test_custom_module_backpropagates_differentiable_total_loss() -> None:
+    source = (EDULLM_ROOT / "token_selection_370m" / "train_module.py").read_text(encoding="utf-8")
+    assert 'token_loss = self._loss_tensor(output, micro_labels, "loss")' in source
+    assert "loss = (token_loss.float() * weights).sum() / divisor" in source
+
+
+def test_weight_swaps_reshard_fsdp_before_restoring_parameters() -> None:
+    source = (EDULLM_ROOT / "token_selection_370m" / "selection.py").read_text(encoding="utf-8")
+    assert source.count("_reshard(model)") == 2
+    assert "owner.unshard()" in source
+    assert "owner.reshard()" in source
+
+
+def test_weight_shadow_matches_reference_outputs_and_rho_masks() -> None:
+    training = Tiny()
+    training.weight.data.copy_(torch.tensor([1.0, -2.0]))
+    reference = Tiny()
+    reference_state = {"weight": torch.tensor([3.0, 5.0], dtype=torch.float64)}
+    reference.load_state_dict(reference_state)
+    original = training.weight.detach().clone()
+    inputs = torch.tensor([[2.0, -1.0]])
+    targets = torch.tensor([[4.0, -2.0]])
+
+    expected_reference_output = reference(inputs)
+    expected_reference_loss = (expected_reference_output - targets).square()
+    current_loss = (training(inputs) - targets).square()
+    expected_mask = selection_weights(
+        "rho_excess",
+        valid=torch.ones_like(current_loss, dtype=torch.bool),
+        keep_fraction=0.5,
+        step=0,
+        seed=42,
+        current=current_loss,
+        reference=expected_reference_loss,
+    )
+
+    shadow = WeightShadow.from_state_dict(training, reference_state)
+    assert torch.equal(training.weight, original)
+    assert shadow.weights["weight"].shape == training.weight.shape
+    assert shadow.weights["weight"].device == training.weight.device
+    assert shadow.weights["weight"].dtype == training.weight.dtype
+    with torch.no_grad(), shadow.swap_to(training):
+        actual_reference_output = training(inputs)
+    actual_reference_loss = (actual_reference_output - targets).square()
+    actual_mask = selection_weights(
+        "rho_excess",
+        valid=torch.ones_like(current_loss, dtype=torch.bool),
+        keep_fraction=0.5,
+        step=0,
+        seed=42,
+        current=current_loss,
+        reference=actual_reference_loss,
+    )
+
+    assert torch.equal(actual_reference_output, expected_reference_output)
+    assert torch.equal(actual_reference_loss, expected_reference_loss)
+    assert torch.equal(actual_mask, expected_mask)
+    assert torch.equal(training.weight, original)
+
+
+def test_weight_shadow_repeatedly_restores_training_parameters_and_gradients() -> None:
+    training = Tiny()
+    training.weight.data.copy_(torch.tensor([1.25, -2.5]))
+    original = training.weight.detach().clone()
+    shadow = WeightShadow.from_state_dict(
+        training,
+        {"weight": torch.tensor([3.0, 5.0])},
+    )
+
+    for _ in range(5):
+        with torch.no_grad(), shadow.swap_to(training):
+            assert torch.equal(training.weight, torch.tensor([3.0, 5.0]))
+        assert torch.equal(training.weight, original)
+
+    with pytest.raises(RuntimeError, match="scoring failed"):
+        with shadow.swap_to(training):
+            raise RuntimeError("scoring failed")
+    assert torch.equal(training.weight, original)
+
+    training(torch.tensor([[2.0, -4.0]])).sum().backward()
+    assert torch.equal(training.weight.grad, torch.tensor([2.0, -4.0]))
+    assert all(
+        not weight.requires_grad and weight.grad is None for weight in shadow.weights.values()
+    )
+    assert torch.equal(training.weight, original)
+
+
+def test_weight_shadow_hot_path_uses_only_local_copies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    training = Tiny()
+    training.weight.data.copy_(torch.tensor([1.0, 2.0]))
+    writes = 0
+    original_write = selection_module._write
+
+    def count_write(parameter, value):
+        nonlocal writes
+        writes += 1
+        original_write(parameter, value)
+
+    monkeypatch.setattr(selection_module, "_write", count_write)
+    shadow = WeightShadow.from_state_dict(
+        training,
+        {"weight": torch.tensor([3.0, 5.0])},
+    )
+    assert writes == 1
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("hot path attempted CPU or full-tensor materialization")
+
+    monkeypatch.setattr(selection_module, "_write", forbidden)
+    monkeypatch.setattr(selection_module, "_snapshot", forbidden)
+    reference_storage = shadow.weights["weight"].data_ptr()
+    for _ in range(3):
+        with shadow.swap_to(training):
+            assert torch.equal(training.weight, torch.tensor([3.0, 5.0]))
+        assert torch.equal(training.weight, torch.tensor([1.0, 2.0]))
+        assert shadow.weights["weight"].data_ptr() == reference_storage
+
+
+def test_reference_microbatches_share_one_weight_swap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    training = Tiny()
+    training.weight.data.copy_(torch.tensor([1.0, 2.0]))
+    shadow = WeightShadow.from_state_dict(
+        training,
+        {"weight": torch.tensor([3.0, 5.0])},
+    )
+    original_swap = shadow.swap_to
+    swaps = 0
+
+    @contextlib.contextmanager
+    def counted_swap(model):
+        nonlocal swaps
+        swaps += 1
+        with original_swap(model) as swapped:
+            yield swapped
+
+    monkeypatch.setattr(shadow, "swap_to", counted_swap)
+    inputs = [
+        torch.tensor([[1.0, 2.0]]),
+        torch.tensor([[4.0, 7.0]]),
+        torch.tensor([[3.0, 6.0]]),
+    ]
+    with torch.no_grad(), shadow.swap_to(training):
+        scores = [training(value) for value in inputs]
+
+    assert swaps == 1
+    assert torch.equal(scores[0], torch.tensor([[3.0, 10.0]]))
+    assert torch.equal(scores[1], torch.tensor([[12.0, 35.0]]))
+    assert torch.equal(scores[2], torch.tensor([[9.0, 30.0]]))
+    assert torch.equal(training.weight, torch.tensor([1.0, 2.0]))
+    assert training.training
+
+
+def test_train_module_batches_reference_scoring_structurally() -> None:
+    source = (EDULLM_ROOT / "token_selection_370m" / "train_module.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    score_many = next(
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "_score_many"
+    )
+    swaps = [
+        node
+        for node in ast.walk(score_many)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "swap_to"
+    ]
+    assert len(swaps) == 1
+    assert any(
+        isinstance(child, ast.For)
+        for with_node in ast.walk(score_many)
+        if isinstance(with_node, ast.With)
+        for statement in with_node.body
+        for child in ast.walk(statement)
+    )
+    assert "self._score_many(state.reference, scoring_batches)" in source
+    assert "self._score(state.reference" not in source
+
+
+def test_weight_accounting_synchronizes_once_per_batch() -> None:
+    source = (EDULLM_ROOT / "token_selection_370m" / "train_module.py").read_text(encoding="utf-8")
+    assert "observed_weight += weights.sum()" in source
+    assert source.count("observed_weight.item()") == 1
+
+
+def test_precomputed_weights_align_with_shifted_label_masks() -> None:
+    weights = torch.tensor([[1.0, 0.0, 1.0, 0.0], [0.0, 1.0, 1.0, 0.0]])
+    label_mask = weights_to_label_mask(weights)
+
+    assert torch.equal(label_mask[:, 1:], weights[:, :-1].bool())
+    assert not label_mask[:, 0].any()
+    assert torch.equal(label_mask[:, 1:].sum(-1), weights[:, :-1].sum(-1))
+
+
+def test_precomputed_manifest_binds_reference_corpus_and_mask_sizes(tmp_path: Path) -> None:
+    sources = [tmp_path / "tokens-0.bin", tmp_path / "tokens-1.bin"]
+    masks = [tmp_path / "mask-0.bin", tmp_path / "mask-1.bin"]
+    for source in sources:
+        source.write_bytes(bytes(range(16)))
+    for mask in masks:
+        mask.write_bytes(bytes(8))
+    source_ids = ["s3://sealed/tokens-0.bin", "s3://sealed/tokens-1.bin"]
+    binding = {
+        "algorithm": MASK_ALGORITHM,
+        "sequence_length": 4,
+        "keep_fraction": 0.6,
+        "reference_sha256": "abc123",
+        "source_ids": source_ids,
+        "total_instances": 4,
+        "selected_tokens": 8,
+        "mask_files": [
+            {
+                "source_id": source_id,
+                "mask_size": 8,
+                "mask_sha256": "fixture",
+            }
+            for source_id in source_ids
+        ],
+    }
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "binding": binding,
+                "binding_sha256": binding_sha256(binding),
+                "files": [
+                    {
+                        "source_id": source_id,
+                        "source_size": source.stat().st_size,
+                        "mask_path": str(mask),
+                        "mask_size": mask.stat().st_size,
+                        "mask_sha256": "fixture",
+                    }
+                    for source_id, source, mask in zip(source_ids, sources, masks)
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    paths, actual_binding = load_mask_manifest(
+        manifest,
+        corpus_paths=[str(source) for source in sources],
+        source_ids=source_ids,
+        source_itemsize=2,
+        sequence_length=4,
+        keep_fraction=0.6,
+        reference_sha256="abc123",
+    )
+    assert paths == [str(mask) for mask in masks]
+    assert actual_binding == binding
+
+    masks[0].write_bytes(bytes(7))
+    with pytest.raises(RuntimeError, match="missing or has changed"):
+        load_mask_manifest(
+            manifest,
+            corpus_paths=[str(source) for source in sources],
+            source_ids=source_ids,
+            source_itemsize=2,
+            sequence_length=4,
+            keep_fraction=0.6,
+            reference_sha256="abc123",
+        )
+
+
+def test_middle_ppl_precomputed_fast_path_uses_standard_trainer() -> None:
+    source = (EDULLM_ROOT / "token_selection_370m" / "recipe.py").read_text(encoding="utf-8")
+    assert "label_mask_paths=list(label_mask_paths)" in source
+    assert "arm.method in CUSTOM_LOSS_METHODS and not precomputed_middle_ppl" in source
+    assert '"precomputed_selection": precomputed_middle_ppl' in source
+    assert 'late_reference_path=None if arm.method == "middle_ppl"' in source
+
+
+def test_weight_shadow_restores_local_fsdp_parameter_after_forward(tmp_path: Path) -> None:
+    if not dist.is_available():
+        pytest.skip("torch.distributed is unavailable")
+    if dist.is_initialized():
+        pytest.skip("test requires ownership of the local process group")
+
+    from torch.distributed.device_mesh import init_device_mesh
+    from torch.distributed.fsdp import fully_shard
+
+    dist.init_process_group(
+        "gloo",
+        init_method=(tmp_path / "fsdp-store").as_uri(),
+        rank=0,
+        world_size=1,
+    )
+    try:
+        training = nn.Linear(2, 2, bias=False)
+        training.weight.data.copy_(torch.tensor([[1.0, 2.0], [3.0, 4.0]]))
+        reference_state = {"weight": torch.tensor([[5.0, 6.0], [7.0, 8.0]])}
+        baseline = nn.Linear(2, 2, bias=False)
+        baseline.load_state_dict(reference_state)
+        inputs = torch.tensor([[2.0, -1.0]])
+        expected = baseline(inputs)
+
+        fully_shard(training, mesh=init_device_mesh("cpu", (1,)))
+        original_shard = training.weight.to_local().detach().clone()
+        shadow = WeightShadow.from_state_dict(training, reference_state)
+        with torch.no_grad(), shadow.swap_to(training):
+            actual = training(inputs)
+
+        assert torch.equal(actual, expected)
+        assert torch.equal(training.weight.to_local(), original_shard)
+        assert shadow.weights["weight"].device == training.weight.to_local().device
+        assert shadow.weights["weight"].shape == training.weight.to_local().shape
+    finally:
+        dist.destroy_process_group()
+
+
+def test_attention_capture_hooks_compiled_block_boundary() -> None:
+    class Attention(nn.Module):
+        def forward(self, x, **_kwargs):
+            return x
+
+    class CompiledLikeBlock(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attention = Attention()
+
+        def forward(self, x, **kwargs):
+            # Simulate a compiled graph that bypasses child-module __call__ hooks.
+            return self.attention.forward(x, **kwargs)
+
+    model = nn.Module()
+    model.blocks = nn.ModuleDict({"0": CompiledLikeBlock()})
+    expected = torch.randn(2, 3, 4)
+    with capture_last_attention(model) as capture:
+        model.blocks["0"](expected, start_pos=0)
+    assert torch.equal(capture.x, expected)
+    assert capture.owner is model.blocks["0"]
+    assert capture.kwargs == {"start_pos": 0}
 
 
 def test_method_polarities_and_per_sequence_selection() -> None:
@@ -146,6 +500,9 @@ class Tiny(nn.Module):
         super().__init__()
         self.weight = nn.Parameter(torch.tensor([0.0, 0.0]))
 
+    def forward(self, value: torch.Tensor) -> torch.Tensor:
+        return value * self.weight
+
 
 def test_relative_ema_variants_and_resume_state() -> None:
     assert ema_alpha(0, tau=300, constant=None) == 0.0
@@ -199,8 +556,119 @@ def _blade_callback(train_cursor=3, hq_cursor=7) -> BladeCallback:
     )
 
 
+def test_blade_proxy_sync_materializes_full_state_on_every_rank(monkeypatch) -> None:
+    import torch.distributed.checkpoint.state_dict as dist_cp_state
+
+    captured = {}
+
+    def get_model_state_dict(model, *, options):
+        captured["options"] = options
+        return model.state_dict()
+
+    monkeypatch.setattr(dist_cp_state, "get_model_state_dict", get_model_state_dict)
+    state = _full_proxy_state(Tiny())
+
+    assert set(state) == {"weight"}
+    assert captured["options"].full_state_dict is True
+    assert captured["options"].cpu_offload is False
+
+
+def test_blade_k_update_microbatches_with_full_batch_gradient(monkeypatch) -> None:
+    callback = _blade_callback()
+    callback._new_reference()
+    callback.reference_microbatch_tokens = 4
+    calls = []
+    batch = {"input_ids": torch.arange(8, dtype=torch.long).reshape(4, 2)}
+
+    def mean_ce(model, micro_batch, *, loss_div_factor=None):
+        calls.append(micro_batch["input_ids"].clone())
+        assert loss_div_factor is not None
+        return model.weight.sum() * micro_batch["input_ids"].float().sum() / loss_div_factor
+
+    monkeypatch.setattr(callback, "_mean_ce", mean_ce)
+    assert callback.reference is not None
+    callback._backward_mean_ce(callback.reference, batch, weight=0.6)
+
+    assert len(calls) == 2
+    assert all(call.shape == (2, 2) for call in calls)
+    expected = torch.full_like(callback.reference.weight, 0.6 * batch["input_ids"].sum() / 4)
+    assert torch.allclose(callback.reference.weight.grad, expected)
+
+
+def test_blade_selection_scoring_microbatches_full_rank_batch(monkeypatch) -> None:
+    callback = _blade_callback()
+    callback.reference_microbatch_tokens = 4
+    batch = {"input_ids": torch.arange(8, dtype=torch.long).reshape(4, 2)}
+    calls = []
+
+    def score_microbatch(micro_batch):
+        ids = micro_batch["input_ids"]
+        calls.append(ids.clone())
+        labels = ids.clone()
+        return labels, ids.float() + 1, ids.float() + 3
+
+    monkeypatch.setattr(callback, "_proxy_and_reference_ce_microbatch", score_microbatch)
+    labels, proxy_ce, reference_ce = callback._proxy_and_reference_ce(batch)
+
+    assert len(calls) == 2
+    assert all(call.shape == (2, 2) for call in calls)
+    assert torch.equal(labels, batch["input_ids"])
+    assert torch.equal(proxy_ce, batch["input_ids"].float() + 1)
+    assert torch.equal(reference_ce, batch["input_ids"].float() + 3)
+
+
+def test_blade_sync_boundary_saves_before_and_after_k_updates(monkeypatch) -> None:
+    callback = _blade_callback()
+    callback.trainer = types.SimpleNamespace(global_step=499)
+    events = []
+
+    def sync():
+        events.append("sync")
+        if callback.reference is None:
+            callback._new_reference()
+
+    monkeypatch.setattr(callback, "_sync_from_proxy", sync)
+    monkeypatch.setattr(
+        callback,
+        "_save_sync_checkpoint",
+        lambda *, step, phase: events.append(f"save-{phase}-{step}"),
+    )
+    monkeypatch.setattr(
+        callback,
+        "_run_k_updates",
+        lambda *, trainer_step=None: events.append(f"k-{trainer_step}"),
+    )
+
+    callback.post_train_batch()
+
+    assert events == ["sync", "save-pre-500", "sync", "k-500", "save-post-500"]
+    assert callback.completed_step == 499
+    assert callback.last_sync == 500
+
+
+def test_resume_prefers_post_sync_boundary_until_normal_step_catches_up(tmp_path) -> None:
+    from token_selection_entrypoint import _latest_resume_checkpoint
+
+    def materialize(path: Path) -> None:
+        (path / "model_and_optim").mkdir(parents=True)
+        (path / "model_and_optim" / ".metadata").touch()
+
+    normal = tmp_path / "step375"
+    pre = tmp_path / "sync_checkpoints" / "step500-pre"
+    post = tmp_path / "sync_checkpoints" / "step500-post"
+    for path in (normal, pre, post):
+        materialize(path)
+
+    assert _latest_resume_checkpoint(tmp_path) == (post, True)
+
+    caught_up = tmp_path / "step500"
+    materialize(caught_up)
+    assert _latest_resume_checkpoint(tmp_path) == (caught_up, False)
+
+
 def test_blade_locked_schedule_and_full_resume_state() -> None:
     assert BLADE_SYNC_STEPS == (500, 875, 1250, 1625, 2000)
+    assert BLADE_REFERENCE_MICROBATCH_TOKENS == 8_192
     callback = _blade_callback()
     callback._new_reference()
     assert callback.reference is not None and callback.reference_optim is not None
@@ -222,6 +690,15 @@ def test_blade_locked_schedule_and_full_resume_state() -> None:
     assert restored.reference_train_stream.cursor == 3
     assert restored.refhq_stream.cursor == 7
     assert next(step for step in BLADE_SYNC_STEPS if step > restored.completed_step) == 1625
+
+    boundary = _blade_callback()
+    boundary._new_reference()
+    boundary.completed_step = 499
+    boundary.last_sync = 500
+    restored_boundary = _blade_callback(0, 0)
+    restored_boundary._restore(boundary.state_dict())
+    assert restored_boundary.completed_step == 499
+    assert restored_boundary.last_sync == 500
 
 
 def test_blade_rejects_schedule_drift_and_missing_post_warmup_reference() -> None:
@@ -299,14 +776,12 @@ def test_identity_pins_reference_provenance_and_fixture(tmp_path: Path) -> None:
     assert len(identity["reference_sha256"]) == 64
     assert identity["dataset_binding"] == binding
     assert len(identity["dataset_binding"]["paths_sha256"]) == 64
-    assert identity["wandb_project"] == "token-selection-rho-1"
+    assert identity["wandb_project"] == "token-selection"
     fixture = json.loads(
         (EDULLM_ROOT / "platform" / "token-selection-arms.json").read_text(encoding="utf-8")
     )
     assert set(fixture["arms"]) == set(ARM_SPECS)
-    assert (
-        fixture["arms"]["blade"]["secondary_dataset_release"] == REFHQ
-    )
+    assert fixture["arms"]["blade"]["secondary_dataset_release"] == REFHQ
 
 
 def test_immutable_bindings_fail_closed_for_latest_and_missing_blade_refhq() -> None:
@@ -355,6 +830,7 @@ def test_production_recipe_statically_assembles_public_olmo_apis() -> None:
     } <= calls
     assert "DataParallelType.hsdp" in source
     assert "LoadStrategy.if_available if resume else LoadStrategy.never" in source
+    assert 'checkpoint_kwargs["pre_train_checkpoint"] = not resume' in source
     assert "module_config.build(model)" in source
     assert "_custom_module(model, module_config, selection_config)" in source
     assert 'checkpoint_kwargs["fixed_steps"]' in source

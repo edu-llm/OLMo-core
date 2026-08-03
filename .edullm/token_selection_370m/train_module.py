@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 import torch
 import torch.distributed as dist
@@ -163,20 +163,31 @@ class TokenWeightedTrainModule(TransformerTrainModule):
             self.model.train(was_training)
             self._model_mode = old_mode
 
-    def _score(self, shadow: WeightShadow | EMAHistory, ids, labels, kwargs) -> Tensor:
+    def _score_many(
+        self,
+        shadow: WeightShadow | EMAHistory,
+        batches: Sequence[tuple[Tensor, Tensor, dict[str, Any]]],
+    ) -> list[Tensor]:
+        """Score every microbatch under a single reference-weight swap."""
+        losses: list[Tensor] = []
         with self._score_mode(), torch.no_grad(), shadow.swap_to(self.model):
-            output = self.model_forward(
-                ids,
-                labels=labels,
-                ignore_index=self.label_ignore_index,
-                loss_reduction="none",
-                return_logits=False,
-                **kwargs,
-            )
-        if not isinstance(output, LMOutputWithLoss):
-            raise RuntimeError("OLMo did not return per-token scoring loss")
-        self.model.reset_auxiliary_metrics()
-        return self._loss_tensor(output, labels, "ce_loss")
+            for ids, labels, kwargs in batches:
+                output = self.model_forward(
+                    ids,
+                    labels=labels,
+                    ignore_index=self.label_ignore_index,
+                    loss_reduction="none",
+                    return_logits=False,
+                    **kwargs,
+                )
+                if not isinstance(output, LMOutputWithLoss):
+                    raise RuntimeError("OLMo did not return per-token scoring loss")
+                losses.append(self._loss_tensor(output, labels, "ce_loss"))
+                self.model.reset_auxiliary_metrics()
+        return losses
+
+    def _score(self, shadow: WeightShadow | EMAHistory, ids, labels, kwargs) -> Tensor:
+        return self._score_many(shadow, [(ids, labels, kwargs)])[0]
 
     def _planned_weight(self, labels: Tensor, batch: Mapping[str, Any]) -> float:
         valid = self._valid(labels)
@@ -207,32 +218,64 @@ class TokenWeightedTrainModule(TransformerTrainModule):
             raise RuntimeError("batch contains no weighted target tokens")
         sequence_length = batch["input_ids"].shape[1]
         micro_batches = split_batch(batch, self.rank_microbatch_size // sequence_length)
+        prepared = []
+        for micro in micro_batches:
+            ids, micro_labels, model_kwargs = self._prepare_batch(dict(micro))
+            assert micro_labels is not None
+            prepared.append(
+                (
+                    micro,
+                    ids,
+                    micro_labels,
+                    model_kwargs,
+                    self._valid(micro_labels).to(self.device, non_blocking=True),
+                )
+            )
+
+        state = self.selection_state
+        config = self.selection_config
+        scoring_batches = [
+            (ids, micro_labels, model_kwargs)
+            for _, ids, micro_labels, model_kwargs, _ in prepared
+        ]
+        history_scores = (
+            self._score_many(state.ema, scoring_batches) if state.ema is not None else None
+        )
+        reference_scores = (
+            self._score_many(state.reference, scoring_batches)
+            if config.method in {"rho_excess", "middle_ppl"} and state.reference is not None
+            else None
+        )
+        early_scores = (
+            self._score_many(state.early, scoring_batches)
+            if config.method == "learnability" and state.early is not None
+            else None
+        )
+        late_scores = (
+            self._score_many(state.late, scoring_batches)
+            if config.method == "learnability" and state.late is not None
+            else None
+        )
+        if config.method in {"rho_excess", "middle_ppl"} and reference_scores is None:
+            raise RuntimeError(f"{config.method} is missing its frozen reference")
+        if config.method == "learnability" and (early_scores is None or late_scores is None):
+            raise RuntimeError("learnability is missing early/late references")
+
         ce_batch = torch.zeros((), device=self.device)
         z_batch = (
             torch.zeros((), device=self.device) if self.z_loss_multiplier is not None else None
         )
-        observed_weight = 0.0
+        observed_weight = torch.zeros((), device=self.device)
 
-        for micro_index, micro in enumerate(micro_batches):
+        for micro_index, (micro, ids, micro_labels, model_kwargs, valid) in enumerate(prepared):
             with self._train_microbatch_context(micro_index, len(micro_batches)):
-                ids, micro_labels, model_kwargs = self._prepare_batch(dict(micro))
-                assert micro_labels is not None
-                valid = self._valid(micro_labels)
-                state = self.selection_state
-                config = self.selection_config
-                current = history = reference = early = late = attention = None
-
-                if state.ema is not None:
-                    history = self._score(state.ema, ids, micro_labels, model_kwargs)
-                elif config.method in {"rho_excess", "middle_ppl"}:
-                    if state.reference is None:
-                        raise RuntimeError(f"{config.method} is missing its frozen reference")
-                    reference = self._score(state.reference, ids, micro_labels, model_kwargs)
-                elif config.method == "learnability":
-                    if state.early is None or state.late is None:
-                        raise RuntimeError("learnability is missing early/late references")
-                    early = self._score(state.early, ids, micro_labels, model_kwargs)
-                    late = self._score(state.late, ids, micro_labels, model_kwargs)
+                current = attention = None
+                history = history_scores[micro_index] if history_scores is not None else None
+                reference = (
+                    reference_scores[micro_index] if reference_scores is not None else None
+                )
+                early = early_scores[micro_index] if early_scores is not None else None
+                late = late_scores[micro_index] if late_scores is not None else None
 
                 capture = (
                     capture_last_attention(self.model)
@@ -251,6 +294,7 @@ class TokenWeightedTrainModule(TransformerTrainModule):
                     )
                 if not isinstance(output, LMOutputWithLoss):
                     raise RuntimeError("OLMo did not return per-token train losses")
+                token_loss = self._loss_tensor(output, micro_labels, "loss")
                 token_ce = self._loss_tensor(output, micro_labels, "ce_loss")
                 if config.method in {"rho_excess", "rel_ema"}:
                     current = token_ce.detach()
@@ -274,14 +318,13 @@ class TokenWeightedTrainModule(TransformerTrainModule):
                         late=late,
                         attention=attention,
                     )
-                observed_weight += float(weights.sum().item())
+                observed_weight += weights.sum()
                 ce_loss = (token_ce.float() * weights).sum() / divisor
-                loss = ce_loss
+                loss = (token_loss.float() * weights).sum() / divisor
                 if z_batch is not None:
                     token_z = self._loss_tensor(output, micro_labels, "z_loss")
                     z_loss = (token_z.float() * weights).sum() / divisor
                     z_batch += z_loss.detach()
-                    loss = loss + z_loss
                 ce_batch += ce_loss.detach()
                 loss.backward()
 
@@ -295,9 +338,10 @@ class TokenWeightedTrainModule(TransformerTrainModule):
                         namespace="train",
                     )
 
-        if abs(observed_weight - divisor) > 1e-4:
+        observed_weight_value = float(observed_weight.item())
+        if abs(observed_weight_value - divisor) > 1e-4:
             raise RuntimeError(
-                f"token-weight divisor mismatch: planned {divisor}, observed {observed_weight}"
+                f"token-weight divisor mismatch: planned {divisor}, observed {observed_weight_value}"
             )
         self.model.post_batch(dry_run=dry_run)
         if dry_run:
