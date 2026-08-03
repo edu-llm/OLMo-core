@@ -32,9 +32,13 @@ into token ids that are in range and plausible. None raises. The only symptom is
 that is merely worse than it should be, which is indistinguishable from a bad hyperparameter.
 
   1. dtype. ``NumpyDatasetConfig.get_dtype`` falls back to the NARROWEST dtype the tokenizer's
-     vocab fits in when ``dtype`` is left unset -- 100,278 fits in uint16, so a dolma2 corpus
-     stored as uint32 gets read two bytes at a time. The manifest knows the real width, and
-     this file passes it explicitly. It is never inferred.
+     vocab fits in when ``dtype`` is left unset, so a corpus stored wider than its vocabulary
+     requires gets read at the wrong width -- gpt2's 50,257 infers uint16 and would take a
+     uint32 shard two bytes at a time. The manifest knows the real width, and this file passes
+     it explicitly. It is never inferred. Both tokenizers below happen to exceed uint16 on
+     their own, dolma2 at 100,278 and Qwen at 151,936, so the inference would be right for
+     them today; that is a coincidence of two vocabularies and not a property to depend on,
+     because the inference reads the tokenizer and only the manifest knows the file.
   2. Byte order. ``np.memmap`` uses the HOST's, and the manifest declares the file's.
   3. Header bytes. OLMo-core memmaps from offset zero; a container format with a leading
      header decodes that header as tokens. The headerless ``.u32le.bin`` form is zero here,
@@ -243,6 +247,51 @@ def leave_the_reason_in_wandb(*, run_name: str, stage: Stage, explanation: str) 
         print(f"could not leave the reason in W&B: {type(exc).__name__}: {exc}", file=sys.stderr)
 
 
+def qwen25_vendored() -> TokenizerConfig:
+    """What OLMo-core needs in order to read a corpus encoded by tokenizer/qwen25-vendored.
+
+    THE FOUR NUMBERS ARE WRITTEN OUT RATHER THAN FETCHED, AND ``TokenizerConfig.from_hf(
+    "Qwen/Qwen2.5-0.5B")`` RETURNS EXACTLY THESE AND WOULD FIT ON THE DICT LINE BELOW.
+    from_hf reads config.json off the Hub while the config is being built, which would make
+    every run that opens a Qwen corpus depend on a public fetch to learn how to decode bytes
+    it already has. That is the dependency this corpus paid to remove: the tokenizer was
+    copied into s3://edullm-data so the shards "remain exactly decodable" -- its own
+    dataset.json says so -- and the corpus pins the copy by digest in ``depends_on``. Going
+    back to the Hub at run time puts the moving part back, and puts it where an outage costs
+    a scheduled GPU rather than a runner minute.
+
+    ``identifier`` is still the Hub name, because that is the field's job. It is what
+    ``convert_checkpoint`` hands to the HF tokenizer loader afterwards, and an s3:// dataset
+    id would not resolve there. Which copy this run read is recorded by dataset_id.
+
+    CHECKED AGAINST BOTH COPIES ON 2026-08-02, because the way a wrong number here fails is
+    by not failing. config.json at Qwen/Qwen2.5-0.5B gives vocab_size 151936 and eos_token_id
+    151643 and carries no pad_token_id, which from_hf fills from eos. The vendored
+    tokenizer.json defines 151,643 model entries plus 22 added tokens, contiguous from 0 to
+    151,664, and places <|endoftext|> at 151,643 -- the same id, and the token the vendored
+    tokenizer_config.json names as both eos and pad.
+
+    vocab_size IS THE EMBEDDING WIDTH AND NOT THE NUMBER OF IDS THAT EXIST. Qwen sizes the
+    matrix to 151,936 over a vocabulary reaching 151,664, and the gap is unreachable rather
+    than wrong. Narrowing this to the ids actually defined would put the 22 added tokens,
+    <|endoftext|> among them, off the end of the embedding. 151,936 is already a multiple of
+    128, so padded_vocab_size returns it unchanged.
+
+    NO bos_token_id, ALTHOUGH config.json NAMES 151,643 THERE AND from_hf WOULD COPY IT. Qwen
+    reuses <|endoftext|> in that field while the vendored tokenizer_config.json declares
+    "bos_token": null, and OLMo-core does not treat this as a label it may ignore:
+    ``get_document_lengths`` documents a bos_token_id as "every document must start with a BOS
+    token" and looks for EOS followed by BOS. formal-proof-premises-500m is packed with
+    EOS-only boundaries, so setting it would describe a corpus other than the one being read.
+    """
+    return TokenizerConfig(
+        vocab_size=151936,
+        eos_token_id=151643,
+        pad_token_id=151643,
+        identifier="Qwen/Qwen2.5-0.5B",
+    )
+
+
 # WHICH TOKENIZER EACH PUBLISHED ONE IS, SPELLED OUT RATHER THAN GUESSED.
 #
 # The left side is a published tokenizer id under s3://edullm-data; the right is the
@@ -255,8 +304,15 @@ def leave_the_reason_in_wandb(*, run_name: str, stage: Stage, explanation: str) 
 # a 256-entry TokenizerConfig here would produce exactly the uint16 inference described above.
 # The platform already keeps that corpus off the submission form for the same reason; if a
 # byte tokenizer lands upstream, adding a line here is what makes the corpus runnable.
+#
+# A VALUE IS ANY CALLABLE RETURNING A CONFIG AND DOES NOT HAVE TO BE ONE OF OLMo-core's OWN.
+# TokenizerConfig has a classmethod for dolma2 and none for Qwen, so the entry below names a
+# local one. What it deliberately does not name is TokenizerConfig.from_hf; qwen25_vendored's
+# docstring is where that decision is, and it is about a corpus that vendored its tokenizer
+# not going back to the internet to decode itself.
 TOKENIZERS = {
     "tokenizer/dolma2-bpe": TokenizerConfig.dolma2,
+    "tokenizer/qwen25-vendored": qwen25_vendored,
 }
 
 
@@ -518,7 +574,7 @@ def build_config(opts, overrides: List[str]):
 
     # padded rather than exact for the same reason the example pads: a vocab that is a
     # multiple of 128 keeps the embedding matmul on a fast path. dolma2's 100,278 pads to
-    # 100,352.
+    # 100,352; Qwen's 151,936 is already a multiple of 128 and pads to itself.
     model_config = factory(vocab_size=corpus.tokenizer.padded_vocab_size())
 
     dataset_config = NumpyFSLDatasetConfig(

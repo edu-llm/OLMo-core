@@ -180,8 +180,140 @@ def test_no_trainable_shards_is_an_error_and_not_an_empty_run():
 def test_an_unknown_tokenizer_names_the_ones_this_image_has():
     # Rather than defaulting. A default here trains on ids that mean something other than what
     # they meant when the corpus was tokenized, and nothing downstream can tell.
-    with pytest.raises(SystemExit, match="dolma2-bpe"):
+    with pytest.raises(SystemExit, match="dolma2-bpe") as refusal:
         resolve(FakeManifest(), tokenizer="tokenizer/bytes-utf8")
+
+    # Every entry rather than the first. The message is the entire answer to "then what may I
+    # ask for", and one that names a subset sends the reader back for another failed run.
+    assert "tokenizer/qwen25-vendored" in str(refusal.value)
+
+
+def test_a_qwen_corpus_resolves_to_the_vocabulary_its_shards_were_actually_encoded_with():
+    """The numbers, asserted as numbers, because nothing downstream can tell if they are wrong.
+
+    A tokenizer config that is merely plausible produces in-range ids and a loss curve, which
+    is the failure this whole file is arranged around. These four were read on 2026-08-02 out
+    of config.json at Qwen/Qwen2.5-0.5B and cross-checked against the vendored copy under
+    s3://edullm-data/tokenizer/qwen25-vendored/v1: tokenizer.json puts <|endoftext|> at
+    151,643 and tokenizer_config.json names it as both eos and pad.
+    """
+    corpus = resolve(FakeManifest(), tokenizer="tokenizer/qwen25-vendored")
+
+    assert corpus.tokenizer.vocab_size == 151936
+    assert corpus.tokenizer.eos_token_id == 151643
+    assert corpus.tokenizer.pad_token_id == 151643
+    assert corpus.tokenizer.identifier == "Qwen/Qwen2.5-0.5B"
+
+
+def test_the_qwen_embedding_covers_every_id_its_tokenizer_can_emit():
+    """Mutation: "correct" vocab_size down to a count read off the vendored tokenizer.json.
+
+    Two numbers in that file look like the vocabulary and neither is. ``model.vocab`` holds
+    151,643 entries, and taking that one is the dangerous mistake: the 22 added tokens sit
+    above it at 151,643 through 151,664, so the embedding would stop one row below
+    <|endoftext|> -- the token that ends every document in this corpus. Counting the added
+    tokens in gives 151,665, which is merely wrong rather than fatal, and the padding
+    assertion below is what catches that one: 151,665 pads to 151,680 and 151,936 does not
+    move, because Qwen already sized its embedding to a multiple of 128.
+    """
+    tokenizer = entry.TOKENIZERS["tokenizer/qwen25-vendored"]()
+
+    # 151,664 is the highest id the vendored tokenizer defines, so this is the covering claim.
+    assert tokenizer.vocab_size > 151664
+    # And no padding, unlike dolma2, so the embedding the model builds is this exact width.
+    assert tokenizer.padded_vocab_size() == tokenizer.vocab_size
+
+
+def test_no_bos_is_declared_for_a_corpus_packed_with_eos_only_boundaries():
+    """Mutation: copy bos_token_id 151,643 out of Qwen's config.json, which from_hf would.
+
+    OLMo-core reads a bos_token_id as a claim about the shards rather than as a spare label:
+    ``get_document_lengths`` documents it as "every document must start with a BOS token" and
+    switches from finding EOS to finding EOS followed by BOS. formal-proof-premises-500m is
+    packed with intra-document EOS boundaries and no BOS, so that claim is false here and the
+    boundaries it found would be the wrong ones -- silently, and only once someone turns
+    generate_doc_lengths on.
+    """
+    assert entry.TOKENIZERS["tokenizer/qwen25-vendored"]().bos_token_id is None
+
+
+def test_decoding_a_vendored_corpus_does_not_depend_on_reaching_the_hub(monkeypatch):
+    """Mutation: make the entry ``lambda: TokenizerConfig.from_hf("Qwen/Qwen2.5-0.5B")``.
+
+    It returns the same four numbers today, which is what makes it tempting. What it adds is a
+    public fetch on the path between a scheduled GPU and its first step, for a corpus whose
+    tokenizer was copied into s3://edullm-data and pinned by digest precisely so that reading
+    it needs nothing outside the account. A Hub outage would then refuse a run that this entry
+    starts.
+
+    ``from_hf`` is replaced by something that fails rather than by a recorder, because the
+    assertion is that it is never reached -- a recorder left checking an empty dict passes just
+    as well when the test itself has stopped exercising anything.
+    """
+
+    def unreachable(identifier: str):
+        raise AssertionError(f"the Hub was reached to decode a vendored corpus: {identifier}")
+
+    monkeypatch.setattr(entry.TokenizerConfig, "from_hf", staticmethod(unreachable))
+
+    corpus = resolve(FakeManifest(), tokenizer="tokenizer/qwen25-vendored")
+    assert corpus.tokenizer.vocab_size == 151936
+
+
+def test_a_qwen_corpus_is_read_at_the_width_the_manifest_declared_and_not_the_inferred_one():
+    """uint32 all the way to the dtype the dataset will memmap with.
+
+    Qwen's 151,936 exceeds uint16, so ``get_dtype``'s fallback would land on uint32 here by
+    itself -- which is exactly why this asserts the width reaches the dataset config rather
+    than asserting the corpus object alone. The two agreeing today is a coincidence of this
+    vocabulary, and a test that could not tell them apart would keep passing if the explicit
+    dtype were dropped.
+    """
+    import numpy as np
+
+    from olmo_core.data import NumpyFSLDatasetConfig
+
+    corpus = resolve(FakeManifest(), tokenizer="tokenizer/qwen25-vendored")
+    assert str(corpus.dtype) == "uint32"
+
+    config = NumpyFSLDatasetConfig(
+        paths=corpus.paths, sequence_length=2048, tokenizer=corpus.tokenizer, dtype=corpus.dtype
+    )
+    assert config.get_dtype() is np.uint32
+
+
+def test_a_uint32_shard_of_qwen_ids_survives_the_read_that_uint16_would_truncate(tmp_path):
+    """The end of the dtype argument, done on bytes rather than on configs.
+
+    Every id in this corpus above 65,535 -- which is most of Qwen's vocabulary and includes
+    <|endoftext|> at 151,643 -- comes back as something else if the shard is read two bytes at
+    a time, and comes back in range, so nothing raises. This builds a real uint32 file through
+    the same NumpyFSLDatasetConfig the run builds and reads the ids back out.
+    """
+    import numpy as np
+
+    from olmo_core.data import NumpyFSLDatasetConfig
+
+    tokenizer = entry.TOKENIZERS["tokenizer/qwen25-vendored"]()
+    # 151,643 is eos; 151,664 is the highest id the vendored tokenizer defines; 65,536 is the
+    # first id uint16 cannot hold, and is where a halved read starts wrapping.
+    ids = [151643, 151664, 65536, 12, 100000, 151643, 7, 65535]
+    shard = tmp_path / "train-00000.u32le.bin"
+    memmap = np.memmap(shard, mode="w+", dtype=np.uint32, shape=(len(ids),))
+    memmap[:] = np.array(ids, dtype=np.uint32)
+    memmap.flush()
+
+    dataset = NumpyFSLDatasetConfig(
+        paths=[str(shard)],
+        sequence_length=4,
+        tokenizer=tokenizer,
+        dtype=entry.NumpyDatasetDType.uint32,
+        work_dir=str(tmp_path / "work"),
+    ).build()
+    dataset.prepare()
+
+    assert [int(token) for token in dataset[0]["input_ids"]] == ids[:4]
+    assert [int(token) for token in dataset[1]["input_ids"]] == ids[4:]
 
 
 def test_the_whole_config_builds_from_a_corpus_without_touching_s3(monkeypatch):
