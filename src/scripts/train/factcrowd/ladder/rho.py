@@ -16,8 +16,9 @@ Four things about this arithmetic are worth knowing before you use it.
 
 **Demand includes a name term.** Physics 3.3's bioS demand is ``N·[log2(N0/N) + log2(S0)]``, where
 ``N0`` is the size of the name universe. Knowing *that* a given name exists is information, even
-though the name is a key rather than a value. The term is +16% of demand at 714k entities against a
-160M name space and +10% at 6.4M, so it bends the trend rather than shifting it -- and without it
+though the name is a key rather than a value. The term is +16.4% of *attribute* bits at 714k entities
+against a 160M name space and +9.8% at 6.4M (14.1% and 8.9% of total demand), so it bends the trend
+rather than shifting it -- and without it
 achieved R(F) can exceed R^max, which Remark 4.2 forbids. It also makes demand **nonlinear in N**,
 which is why :func:`solve` bisects instead of dividing.
 
@@ -33,7 +34,8 @@ about. Total parameters is what the paper's own wording suggests ("P … total n
 excluding only *unused* embedding rows), and for a 32k tied vocab with a BPE trained on our own
 corpus nearly every row is used. The two differ **1.67x at 13M falling to 1.22x at 113M, monotone in
 model size**, so a design that silently picks one loses the cross-size comparability the size axis
-exists for. :class:`Demand` carries both and every plot says which it is.
+exists for. :class:`Demand` carries both and every plot says which it is. (An earlier draft said
+1.67x; the arithmetic gives 1.6504 at a tied 32k vocab and d_model=256.)
 
 **Bits per entity is computed, not assumed.** It comes from
 :attr:`factcrowd.corpus.entities.Schema.bits_per_entity`, which sums ``log2(len(pool))`` over the
@@ -137,9 +139,9 @@ class Demand(NamedTuple):
     """
     What a corpus asks of a model, on both parameter bases.
 
-    Carrying both is not indecision. The bases diverge monotonically with model size -- 1.67x at 13M
-    to 1.22x at 113M -- so a cross-size comparison made on one basis and read as the other is wrong
-    by an amount that looks like a trend.
+    Carrying both is not indecision. The bases diverge monotonically with model size -- 1.650x at
+    13M to 1.217x at 113M -- so a cross-size comparison made on one basis and read as the other is
+    wrong by an amount that looks like a trend.
     """
 
     bits: float
@@ -239,18 +241,19 @@ def name_bits(n_entities: int, name_space: int) -> float:
     return n_entities * math.log2(name_space / n_entities)
 
 
-def demanded_bits(
-    n_entities: int, bits_per_entity: float, *, name_space: Optional[int] = None
-) -> float:
+def demanded_bits(n_entities: int, bits_per_entity: float, *, name_space: Optional[int]) -> float:
     """
     Total fact bits a corpus makes available, attribute bits plus the name term.
 
     :param n_entities: Number of entities in the fact slice.
     :param bits_per_entity: Exact bits per entity from the declared attribute pools -- the
         ``log2(S0)`` half.
-    :param name_space: Size of the name universe, for the ``log2(N0/N)`` half. Omitting it drops the
-        name term, which understates demand by 8-23% and permits achieved R(F) > R^max; pass it
-        unless you are deliberately reproducing the attribute-only figure.
+    :param name_space: Size of the name universe, for the ``log2(N0/N)`` half. **Required, with no
+        default**, for the same reason ``bits_per_entity`` is: a default is how a corpus and the
+        arithmetic describing it come to disagree about the same number, and this is the specific
+        disagreement revision 2 exists to fix. Pass ``None`` to drop the name term deliberately --
+        which understates demand by 8-24% of attribute bits and permits achieved R(F) > R^max, so do
+        it only to reproduce an attribute-only published figure.
 
     :returns: Demanded bits.
 
@@ -259,7 +262,8 @@ def demanded_bits(
     _require_positive("n_entities", n_entities)
     # Zero is legal here and nowhere else. The entropy axis's b=0 cell has singleton value pools, so
     # its attribute bits really are zero -- but its demand is not, because distinct names still carry
-    # the name term. :func:`solve` stays strict, since it divides by this.
+    # the name term. solve() stays strict: on the linear path it divides by this, and on the name-term
+    # path b=0 falls below the monotonicity threshold, so neither path can serve it.
     _require_non_negative("bits_per_entity", bits_per_entity)
     total = n_entities * bits_per_entity
     if name_space is not None:
@@ -273,7 +277,7 @@ def demand(
     bits_per_entity: float,
     non_embedding_params: int,
     total_params: int,
-    name_space: Optional[int] = None,
+    name_space: Optional[int],
 ) -> Demand:
     """
     The full demand picture for a cell, on both parameter bases.
@@ -318,7 +322,7 @@ def demand_per_param(
     params: int,
     *,
     bits_per_entity: float,
-    name_space: Optional[int] = None,
+    name_space: Optional[int],
 ) -> float:
     """
     Demanded bits per parameter -- the experiment's independent variable.
@@ -341,9 +345,10 @@ def solve(
     demand_bits_per_param: float,
     *,
     bits_per_entity: float,
-    name_space: Optional[int] = None,
+    name_space: Optional[int],
     exposures: int = EXPOSURES,
     tokens_per_bio: int = TOKENS_PER_BIO,
+    tolerance: float = 0.01,
 ) -> CorpusSize:
     """
     Size the fact slice for a model and a target demand per parameter.
@@ -352,9 +357,17 @@ def solve(
     derived here so the two cannot disagree.
 
     Demand is **nonlinear in N** once the name term is included, so this bisects rather than
-    dividing. Demand is strictly increasing in N over ``[1, name_space]`` -- the derivative is
-    ``log2(N0/N) - 1/ln2 + bits_per_entity``, which stays positive for any sane
-    ``bits_per_entity`` -- so bisection converges to the unique integer solution.
+    dividing. The derivative is ``bits_per_entity + log2(N0/N) - 1/ln2``, which is minimised at
+    ``N = name_space`` where it equals ``bits_per_entity - 1/ln2``. **So monotonicity -- and with it
+    the validity of the bisection -- requires ``bits_per_entity > 1/ln2 = 1.442695``**, and that is
+    checked rather than assumed. Below the threshold demand rises, peaks and falls, so a bisection
+    would both return non-closest answers and refuse reachable targets; at ``bits_per_entity = 1.0``
+    and a 160M name space the broken region is a quarter of the range. Any real schema here clears
+    the threshold by an order of magnitude -- the entropy axis's smallest non-zero cell is 24
+    bits/entity -- but a one-attribute debug schema would not.
+
+    On an exact tie between two entity counts the higher is kept. Which one is arbitrary; that it is
+    deterministic is not.
 
     :param non_embedding_params: Non-embedding parameter count, read off a built model.
     :param demand_bits_per_param: Target demanded bits per non-embedding parameter.
@@ -362,11 +375,16 @@ def solve(
     :param name_space: Size of the name universe. See :func:`demanded_bits`.
     :param exposures: Exposures per fact. Defaults to :data:`EXPOSURES`.
     :param tokens_per_bio: Tokens per rendered biography, for the token estimate only.
+    :param tolerance: Maximum tolerated relative gap between the requested demand and what an
+        integer entity count can realise. Defaults to 1%, matching :func:`check`, so that
+        ``check(solve(...))`` never fails -- which is the invariant that keeps a cell's label and its
+        corpus describing the same thing.
 
     :returns: The :class:`CorpusSize` this cell demands.
 
-    :raises OLMoConfigurationError: If any argument is out of range, if the target rounds to fewer
-        than one entity, or if the target exceeds what ``name_space`` can express.
+    :raises OLMoConfigurationError: If any argument is out of range, if ``bits_per_entity`` is at or
+        below ``1/ln2`` while a ``name_space`` is given, or if no integer entity count realises the
+        target within ``tolerance``.
     """
     _require_positive("non_embedding_params", non_embedding_params)
     _require_positive("demand_bits_per_param", demand_bits_per_param)
@@ -375,9 +393,21 @@ def solve(
     _require_positive("tokens_per_bio", tokens_per_bio)
 
     target_bits = demand_bits_per_param * non_embedding_params
+    monotonicity_floor = 1.0 / math.log(2.0)
 
     def bits_at(n: int) -> float:
         return demanded_bits(n, bits_per_entity, name_space=name_space)
+
+    if name_space is not None and bits_per_entity <= monotonicity_floor:
+        raise OLMoConfigurationError(
+            f"'bits_per_entity' is {bits_per_entity:.4g}, at or below the 1/ln2 = "
+            f"{monotonicity_floor:.6f} threshold where demand stops being monotone in N once the "
+            f"name term is included. The derivative is bits_per_entity + log2(N0/N) - 1/ln2, so "
+            f"below the threshold demand rises, peaks near N0/e and falls -- and a bisection would "
+            f"then return non-closest answers and refuse reachable targets. Either use a schema "
+            f"carrying more bits per entity, or pass name_space=None to drop the name term and use "
+            f"the linear path."
+        )
 
     if name_space is None:
         n_entities = round(target_bits / bits_per_entity)
@@ -409,15 +439,35 @@ def solve(
             f"model size."
         )
 
+    achieved = demand_per_param(
+        n_entities,
+        non_embedding_params,
+        bits_per_entity=bits_per_entity,
+        name_space=name_space,
+    )
+    # The bisection brackets in [1, name_space], so it *always* returns something -- including 1 for
+    # an unreachably small target, which would be a cell running thousands of times off its label
+    # without a word of complaint. Checking what was achieved is what turns that into a refusal, and
+    # it makes check(solve(...)) hold by construction rather than by coincidence.
+    residual = abs(achieved - demand_bits_per_param) / demand_bits_per_param
+    if residual > tolerance:
+        cause = (
+            f"the closest integer count is {n_entities:,}, and at that size one entity moves the "
+            f"demand by more than {tolerance:.1%} -- integer granularity, not a range problem"
+            if n_entities < 50
+            else "the reachable range for this name space does not contain the target"
+        )
+        raise OLMoConfigurationError(
+            f"no entity count realises a demand of {demand_bits_per_param:.4g} bits/param within "
+            f"{tolerance:.1%}: {n_entities:,} entities gives {achieved:.4g}, off by "
+            f"{residual:.1%}. {cause}. Raise 'tolerance' if an approximate cell is acceptable, or "
+            f"state n_entities directly."
+        )
+
     return CorpusSize(
         n_entities=n_entities,
         fact_tokens=n_entities * exposures * tokens_per_bio,
-        achieved_demand_per_param=demand_per_param(
-            n_entities,
-            non_embedding_params,
-            bits_per_entity=bits_per_entity,
-            name_space=name_space,
-        ),
+        achieved_demand_per_param=achieved,
     )
 
 
@@ -494,7 +544,7 @@ def check(
     n_entities: int,
     *,
     bits_per_entity: float,
-    name_space: Optional[int] = None,
+    name_space: Optional[int],
     tolerance: float = 0.01,
     label: str = "cell",
 ) -> None:
@@ -525,20 +575,26 @@ def check(
     )
     relative_error = abs(realised - demand_bits_per_param) / demand_bits_per_param
     if relative_error > tolerance:
-        expected = solve(
-            non_embedding_params,
-            demand_bits_per_param,
-            bits_per_entity=bits_per_entity,
-            name_space=name_space,
-        )
+        # solve() can itself refuse -- an unreachable demand, or a schema below the monotonicity
+        # threshold -- and letting that propagate would replace the disagreement report with an
+        # unrelated error, losing both the label and the two numbers a reader needs.
+        try:
+            expected = solve(
+                non_embedding_params,
+                demand_bits_per_param,
+                bits_per_entity=bits_per_entity,
+                name_space=name_space,
+            )
+            wanted = f"{expected.n_entities:,} entities"
+        except OLMoConfigurationError as error:
+            wanted = f"no reachable entity count ({error})"
         raise OLMoConfigurationError(
             f"{label}: demand and n_entities disagree by {relative_error:.1%}, over the "
             f"{tolerance:.1%} tolerance. The config says {demand_bits_per_param:.4g} bits/param "
             f"with {n_entities:,} entities, but {n_entities:,} entities against "
             f"{non_embedding_params:,} params at {bits_per_entity:.2f} bits/entity is "
-            f"{realised:.4g} bits/param; {demand_bits_per_param:.4g} wants "
-            f"{expected.n_entities:,} entities. Derive n_entities from the demand with solve() "
-            f"rather than stating both."
+            f"{realised:.4g} bits/param; {demand_bits_per_param:.4g} wants {wanted}. Derive "
+            f"n_entities from the demand with solve() rather than stating both."
         )
 
 

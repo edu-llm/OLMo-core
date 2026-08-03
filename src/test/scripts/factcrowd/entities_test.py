@@ -151,11 +151,19 @@ def test_probe_size_fits_the_smallest_cell_in_the_grid():
     """
     from factcrowd.ladder import rho
 
+    schema = E.bios_schema()
     smallest = rho.solve(
-        12_595_456, 0.25, bits_per_entity=E.bios_schema().bits_per_entity
+        12_595_456,
+        0.30,
+        bits_per_entity=schema.bits_per_entity,
+        name_space=schema.name_space,
     ).n_entities
+    # 64,180 with the name term included, against 79,397 without it -- the name term removes 19% of
+    # the entities at fixed demand, so the non-probe group is 39k rather than the 54k an
+    # attribute-only count would suggest. Still comfortably above the n >= 2,000 the eval needs.
+    assert smallest == pytest.approx(64_180, rel=0.01)
     assert E.PROBE_SIZE < smallest
-    assert smallest - E.PROBE_SIZE > 2_000
+    assert smallest - E.PROBE_SIZE > 30_000
 
 
 # --- determinism and uniqueness -------------------------------------------------------------------

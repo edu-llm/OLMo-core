@@ -110,7 +110,7 @@ Two reporting bases, because the literature is ambiguous and the choice matters:
 | **non-embedding** | primary for cell placement | nothing in a tied embedding table is what Allen-Zhu's law is about |
 | **total** | reported alongside | Physics 3.3 §9 says "P … total number of parameters," excluding only *unused* embedding rows |
 
-The two differ by **1.67× at 13M falling to 1.22× at 113M — monotone in model size**, so a design
+The two differ by **1.650× at 13M falling to 1.217× at 113M — monotone in model size**, so a design
 that silently picks one loses cross-size comparability, which is what the size axis exists for.
 Report both for every cell; `rho.py` takes the basis as an explicit argument.
 
@@ -119,8 +119,10 @@ Two further corrections to demand accounting, both in `rho.py`:
 - **The name term.** Physics 3.3's bioS demand is `N·[log2(N₀/N) + log2(S₀)]`, where N₀ is the size
   of the name universe. Revision 1 excluded names entirely on the grounds that a name is a key. The
   key/value distinction is right for *which pools carry values*, but knowing *that* a given name
-  exists is itself information. The term is +16.4% at N = 714k and +9.7% at N = 6.4M, so it changes
-  the **shape** of the trend, not just its offset — and without it achieved R(F) can exceed R^max,
+  exists is itself information. The term is +16.4% of *attribute* bits at N = 714k and +9.8% at
+  N = 6.4M — 14.1% and 8.9% of total demand — so on the count axis, where N varies, it changes the
+  **shape** of the trend rather than just its offset. On the entropy axis, where N is fixed, it is a
+  constant offset instead, which is why that axis's b=0 cell sits at 0.173 bits/param and not at zero — and without it achieved R(F) can exceed R^max,
   which Remark 4.2 forbids.
 - **R_E is unknown to about 1.8×, not 8%.** There is no 200-exposure run in Physics 3.3; log
   interpolation between its anchors gives 1.30 and linear gives 1.11. Worse, the paper reports gated
@@ -150,20 +152,26 @@ schedule, weight decay and surface statistics *exactly* fixed. Sweep demand by *
 entropy**: render every attribute value as exactly four sub-values drawn from a pool of size `2^(b/4)`,
 so bits per attribute is `b` while the token count is invariant.
 
-At 28M with N = 714,331 fixed — every cell 15.29B tokens, 0.65 h on 8×H100:
+At 28M with N fixed at 611,184 — the ρ=1 entity count — every cell is 13.22B tokens and 0.57 h on
+8×H100. Demand below **includes the name term**, which is a constant 0.173 bits/param here because N
+is fixed:
 
 | sub-pool | bits/attr | bits/entity | demanded b/p | ρ at R_E=1.2 |
 |---|---|---|---|---|
-| 1 | 0 | 0 | 0.00 | 0.00 |
-| 2 | 4 | 24 | 0.61 | 0.50 |
-| **4** | **8** | **48** | **1.21** | **1.01** |
-| 16 | 16 | 96 | 2.42 | 2.02 |
-| 64 | 24 | 144 | 3.63 | 3.03 |
-| 256 | 32 | 192 | 4.84 | 4.03 |
+| 1 | 0 | 0 | 0.173 | 0.14 |
+| 2 | 4 | 24 | 0.691 | 0.58 |
+| **4** | **8** | **48** | **1.209** | **1.01** |
+| 16 | 16 | 96 | 2.244 | 1.87 |
+| 64 | 24 | 144 | 3.280 | 2.73 |
+| 256 | 32 | 192 | 4.315 | 3.60 |
+
+**Both sweeps must be plotted on the same x-axis definition** — demand including the name term, on
+the non-embedding basis. §3.1's "count-slope minus entropy-slope" subtraction is meaningless
+otherwise, and an earlier draft of this document quoted the two tables on different definitions.
 
 **The midpoint is bioS.** 6 × 8 = 48 bits/entity against bioS's 47.592 — a 0.9% match — so the axis
-anchors to the literature exactly where the comparison is made. Six cells cost **3.9 h on 8×H100
-(~$216)**, against 5.0 h for the 28M count row, and every one of the four confounds above is held
+anchors to the literature exactly where the comparison is made. Six cells cost **3.4 h on 8×H100
+(~$187)**, against 4.4 h for the 28M count row, and every one of the four confounds above is held
 fixed by construction rather than argued away.
 
 Two implementation notes. Values stay **natural**: four words from real word lists, so a 32-bit value
@@ -185,9 +193,14 @@ Per the cut decision: **omit the 113M row and the 64M ρ=4 cell.**
 | **28M** | ✓ | ✓ | ✓ | ✓ | ✓ |
 | **64M** | ✓ | ✓ | ✓ | ✓ | — |
 
-Fourteen cells plus three reasoning-only controls. **17.1 h on 8×H100 ≈ $939**, or 54 h on 8×A100 ≈
-$1,188 — roughly a third of the uncut grid, as expected. Largest single cell 5.65 h, comfortably
-inside `olmo-core-train`'s 24 h ceiling (§10).
+Fourteen cells plus three reasoning-only controls. **15.05 h on 8×H100 ≈ $828**, or 48 h on 8×A100 ≈
+$1,048 — roughly a third of the uncut grid. Largest single cell 5.04 h, comfortably inside
+`olmo-core-train`'s 24 h ceiling (§10).
+
+**Submitted as three jobs, one per model size** (§10.3). Fully sequential the grid is 15.05 h; with
+the three rows running concurrently the wall clock is the slowest row, **9.51 h**. The other gain is
+independence: three approvals rather than one, and a failure in the 64M row does not strand the other
+two.
 
 Two notes on the cut. Dropping the 113M row is right for a reason better than cost: **width-scaling
 cannot hold reasoning fixed** (§8.4), so that row could not do the job it was added for. And the
@@ -219,8 +232,9 @@ on computability; the specific floor does not.
 
 **Related reasoning.** Composition, comparison and aggregation over the same entities, covering a
 **fixed 25k-entity probe subset in every cell** at constant absolute tokens and constant per-entity
-coverage. The probe must fit the smallest cell (13M at ρ=0.25 has ~79k entities); 25k leaves a 54k
-non-probe comparison group there.
+coverage. The probe must fit the smallest cell — 13M at ρ=0.25 is **64,180** entities once the name
+term is counted, against 79,397 without it — so 25k leaves a **39k** non-probe comparison group
+there, still far above the n ≥ 2,000 the eval needs.
 
 **Unrelated reasoning.** The load-bearing measurement — see §8.3 for which endpoints, which changed.
 
@@ -416,10 +430,14 @@ Fixed depth 12, sweeping `d_model`:
 
 | Row | d_model | heads | d_ffn | non-emb | +tied 32k emb | N at ρ=1 |
 |---|---|---|---|---|---|---|
-| **13M** | 256 | 4 | 1024 | 12,595,456 | 20.8M | 318k |
-| **28M** | 384 | 6 | 1536 | 28,330,368 | 40.6M | 714k |
-| **64M** | 576 | 9 | 2304 | 63,729,216 | 82.2M | 1.61M |
-| ~~113M~~ | 768 | 12 | 3072 | 113,283,840 | 137.9M | 2.86M |
+| **13M** | 256 | 4 | 1024 | 12,595,456 | 20.8M | 266k |
+| **28M** | 384 | 6 | 1536 | 28,330,368 | 40.6M | 611k |
+| **64M** | 576 | 9 | 2304 | 63,729,216 | 82.2M | 1.41M |
+| ~~113M~~ | 768 | 12 | 3072 | 113,283,840 | 137.9M | 2.54M |
+
+The N column is the entity count at ρ=1 **with the name term included**, which is 11–16% below the
+attribute-only figure an earlier draft quoted (318k / 714k / 1.61M / 2.86M). Since tokens scale with
+N, that is also why the budget in §10 fell.
 
 `d_model=256` at depth 12 is inside Physics 3.3's validated regime — their App. A lists GPT2-16-4
 (d=256, 12.58M) as a "skinny and deep" anchor — and tying embeddings actively helps below 10M.
@@ -643,15 +661,16 @@ lead, because every profile over $20/hr routes that way.
 
 | First run (§3.2), 14 cells + 3 controls | 8×H100 | 8×A100 |
 |---|---|---|
-| wall clock | **17.1 h** | 54 h |
-| cost | **~$939** | ~$1,188 |
+| wall clock, sequential | **15.05 h** | 48 h |
+| wall clock, 3 jobs in parallel | **9.51 h** | 30 h |
+| cost | **~$828** | ~$1,048 |
 
 At 20% MFU with the LM head counted. **Revision 1's FLOP count omitted the LM head**, which is
 39/30/22% of the model across the rows — including it is +65/43/29% per row. And 8% MFU applied flat
 across a 3× width span is structurally wrong: it inverts the cut decision by making small rows look
 cheap. Plan on 12/16/20/24% per row and **measure MFU on M1's first 50 steps**, then re-budget.
 
-The entropy sweep at 28M is **3.9 h ≈ $216** for six cells.
+The entropy sweep at 28M is **3.4 h ≈ $187** for six cells.
 
 ### 10.1 How a cell is submitted
 
@@ -761,11 +780,11 @@ corrected demand table.
 **M1 — one cell end to end, ~0.7 h.** 28M at b=8 (the bioS anchor) on WSD. Measure MFU and
 re-budget. Then **3–6 replicates** to fix the seed count from data.
 
-**M2 — the entropy sweep, ~3.9 h.** 28M, b ∈ {0, 4, 8, 16, 24, 32}. Frozen n=30k eval set,
+**M2 — the entropy sweep, ~3.4 h.** 28M, b ∈ {0, 4, 8, 16, 24, 32}. Frozen n=30k eval set,
 pre-registered pooled regression and the 2pp equivalence test. *This is the identified axis and the
 primary result.*
 
-**M3 — the first run: the count grid, ~17.1 h.** 13M/28M/64M minus 64M ρ=4, plus three controls, with
+**M3 — the first run: the count grid, ~15.05 h in three jobs.** 13M/28M/64M minus 64M ρ=4, plus three controls, with
 WSD cooldown branches so the compute-matched reading is legitimate. **M3 slope − M2 slope quantifies
 how much of any "crowding" was tokens, steps and ratio.**
 
@@ -893,6 +912,45 @@ the row is cut on §8.4's grounds anyway.
 **The entropy axis is not free to build.** Cheaper per row, yes, but it needs `values.py`, a
 fixed-length renderer, and a natural-language scheme for high-entropy values. Call it 3–5
 person-days, against a review estimate of 28–42 person-days for corpus plus measurement overall.
+
+### 16.4 What a second adversarial pass found in revision 2's own code
+
+Reviewers were run against `ladder/rho.py` and `corpus/entities.py` after they were written. Two real
+bugs in the demand arithmetic, both now fixed and both pinned by tests:
+
+**`solve()` bisected a function it never checked was monotone.** The derivative
+`bits_per_entity + log2(N₀/N) − 1/ln2` is minimised at `N = N₀`, so **monotonicity requires
+`bits_per_entity > 1/ln2 = 1.442695`**, and the docstring's "positive for any sane value" hid a hard
+threshold. Below it demand rises, peaks near `N₀/e` and falls, and the bisection then both returns
+non-closest answers and *refuses reachable targets* — at 1.0 bits/entity against a 160M name space,
+a quarter of the range was broken. Any real schema clears it by an order of magnitude, but a
+one-attribute debug schema would not.
+
+**`solve()` silently clamped to one entity.** The bracket starts at `N = 1`, so the `n_entities < 1`
+guard was unreachable on the name-term path: a demand of 1e-9 bits/param came back as one entity at
+2.6e-6, a cell 2,600× off its own label, from the function documented as the only sanctioned way to
+get an entity count. The linear path raised for the same input, so the two paths disagreed about
+whether it was an error. `solve()` now verifies what the bisection achieved against a tolerance that
+defaults to `check()`'s, which makes `check(solve(...))` hold by construction.
+
+Also corrected: the basis ratio is **1.650×** at 13M, not 1.67× (the test asserted 1.650 while two
+docstrings and this PRD said 1.67); `check()`'s error path could raise `solve()`'s error instead of
+its own, losing the label and both numbers; `name_space` now has **no default**, because defaulting
+it was the exact disagreement revision 2 exists to prevent; and "+16% of demand" is +16.4% of
+*attribute* bits, 14.1% of total.
+
+Six test weaknesses were found by mutation and closed. `demand()` could drop the name term entirely
+with the suite green — shifting every reported x-coordinate 16.4% — because the decomposition
+assertion is satisfied by `0 + a == a` and the basis test only checked a ratio. `EXPOSURES`,
+`TOKENS_PER_BIO`, `R_E_BAND` and `capacity_bits` were never pinned: the token-budget test put
+`EXPOSURES * TOKENS_PER_BIO` on both sides of its own equation, so the budget could change 37%
+undetected, and `capacity_bits` returning `params / r_e` passed.
+
+And the review recomputed three tables here that had been left on the attribute-only definition — the
+N-at-ρ=1 column, the smallest cell's entity count, and the entropy sweep's demand column. All three
+are corrected above. The most consequential was the last: the two sweeps were quoted on
+differently-defined x-axes, which would have made §3.1's "count-slope minus entropy-slope"
+subtraction meaningless.
 
 ### 16.3 Deferred, with reasons
 

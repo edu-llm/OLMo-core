@@ -85,7 +85,7 @@ def test_the_name_term_shrinks_as_a_share_as_the_corpus_grows():
 def test_omitting_the_name_space_drops_the_term():
     """The attribute-only figure is still reachable, for reproducing a published number."""
     with_names = R.demanded_bits(714_331, _BITS, name_space=NAME_SPACE)
-    without = R.demanded_bits(714_331, _BITS)
+    without = R.demanded_bits(714_331, _BITS, name_space=None)
     assert without == pytest.approx(714_331 * _BITS)
     assert with_names > without
 
@@ -144,6 +144,7 @@ def test_demand_refuses_parameter_counts_from_different_models():
             bits_per_entity=_BITS,
             non_embedding_params=20_000_000,
             total_params=10_000_000,
+            name_space=None,
         )
 
 
@@ -194,7 +195,7 @@ def test_solve_finds_the_closest_integer_not_merely_a_bracketing_one():
 
 def test_solve_without_the_name_term_is_a_plain_division():
     """The linear path still works, and agrees with hand arithmetic."""
-    size = R.solve(_P, 1.2, bits_per_entity=_BITS)
+    size = R.solve(_P, 1.2, bits_per_entity=_BITS, name_space=None)
     assert size.n_entities == round(1.2 * _P / _BITS)
 
 
@@ -207,7 +208,7 @@ def test_the_name_term_lowers_the_entity_count_for_a_given_demand():
     sign error here would move every cell the wrong way.
     """
     with_names = R.solve(_P, 1.2, bits_per_entity=_BITS, name_space=NAME_SPACE).n_entities
-    without = R.solve(_P, 1.2, bits_per_entity=_BITS).n_entities
+    without = R.solve(_P, 1.2, bits_per_entity=_BITS, name_space=None).n_entities
     assert with_names < without
     assert 0.80 < with_names / without < 0.95
 
@@ -299,10 +300,10 @@ def test_check_would_pass_a_cell_that_omitted_the_name_term_only_if_told_to():
 
     This is the guard that stops the two halves of the pipeline disagreeing about what a cell means.
     """
-    without = R.solve(_P, 1.2, bits_per_entity=_BITS).n_entities
+    without = R.solve(_P, 1.2, bits_per_entity=_BITS, name_space=None).n_entities
     with pytest.raises(OLMoConfigurationError, match="disagree"):
         R.check(_P, 1.2, without, bits_per_entity=_BITS, name_space=NAME_SPACE)
-    R.check(_P, 1.2, without, bits_per_entity=_BITS)
+    R.check(_P, 1.2, without, bits_per_entity=_BITS, name_space=None)
 
 
 def test_check_error_names_the_cell_and_both_numbers():
@@ -424,21 +425,30 @@ def test_the_bios_schema_bits_reproduce_the_published_value():
 @pytest.mark.parametrize(
     "bad_call, match",
     [
-        (lambda: R.solve(_P, 0.0, bits_per_entity=_BITS), "'demand_bits_per_param' must be"),
-        (lambda: R.solve(_P, -1.0, bits_per_entity=_BITS), "'demand_bits_per_param' must be"),
-        (lambda: R.solve(_P, 1.2, bits_per_entity=0.0), "'bits_per_entity' must be"),
-        (lambda: R.solve(0, 1.2, bits_per_entity=_BITS), "'non_embedding_params' must be"),
         (
-            lambda: R.solve(_P, 1.2, bits_per_entity=_BITS, exposures=0),
+            lambda: R.solve(_P, 0.0, bits_per_entity=_BITS, name_space=None),
+            "'demand_bits_per_param'",
+        ),
+        (
+            lambda: R.solve(_P, -1.0, bits_per_entity=_BITS, name_space=None),
+            "'demand_bits_per_param'",
+        ),
+        (
+            lambda: R.solve(_P, 1.2, bits_per_entity=0.0, name_space=None),
+            "'bits_per_entity' must be",
+        ),
+        (lambda: R.solve(0, 1.2, bits_per_entity=_BITS, name_space=None), "'non_embedding_params'"),
+        (
+            lambda: R.solve(_P, 1.2, bits_per_entity=_BITS, name_space=None, exposures=0),
             "'exposures' must be",
         ),
         (
-            lambda: R.solve(_P, 1.2, bits_per_entity=_BITS, tokens_per_bio=0),
+            lambda: R.solve(_P, 1.2, bits_per_entity=_BITS, name_space=None, tokens_per_bio=0),
             "'tokens_per_bio' must be",
         ),
         (lambda: R.capacity_bits(0, 1.2), "'params' must be"),
         (lambda: R.capacity_bits(100, 0.0), "'r_e' must be"),
-        (lambda: R.demanded_bits(0, _BITS), "'n_entities' must be"),
+        (lambda: R.demanded_bits(0, _BITS, name_space=None), "'n_entities' must be"),
         (lambda: R.achieved_r(-1.0, 100), "must not be negative"),
         (lambda: R.rho_from_demand(1.2, 0.0), "'r_e' must be"),
     ],
@@ -465,4 +475,200 @@ def test_degenerate_inputs_are_refused(bad_call, match):
 def test_solve_refuses_a_cell_too_small_to_be_a_corpus():
     """A demand small enough to round to zero entities is a config error, not an empty corpus."""
     with pytest.raises(OLMoConfigurationError, match="too small to be a corpus"):
-        R.solve(LADDER["13M"][0], 1e-9, bits_per_entity=_BITS)
+        R.solve(LADDER["13M"][0], 1e-9, bits_per_entity=_BITS, name_space=None)
+
+
+# --- the monotonicity precondition the bisection depends on ---------------------------------------
+
+
+@pytest.mark.parametrize("bits_per_entity", [0.5, 1.0, 1.4, 1.442])
+def test_solve_refuses_a_schema_below_the_monotonicity_threshold(bits_per_entity):
+    """
+    Below ``1/ln2 = 1.442695`` demand is not monotone in N, so a bisection is simply invalid.
+
+    The derivative ``bits_per_entity + log2(N0/N) - 1/ln2`` is minimised at ``N = name_space``, where
+    it is ``bits_per_entity - 1/ln2``. Under the threshold demand rises, peaks near ``N0/e`` and
+    falls, and the bisection then does two wrong things at once: it returns non-closest answers, and
+    it *refuses reachable targets* on the grounds that the endpoint value is too low. At
+    ``bits_per_entity = 1.0`` with a 1000-name space, targets of 1.01, 1.03 and 1.06 bits/param are
+    all achievable and were all refused.
+
+    Any real schema clears this by an order of magnitude -- the entropy axis's smallest non-zero cell
+    is 24 bits/entity -- but a one-attribute debug schema would not, and nothing else would notice.
+    """
+    with pytest.raises(OLMoConfigurationError, match="monotone") as excinfo:
+        R.solve(1000, 1.03, bits_per_entity=bits_per_entity, name_space=1000)
+    assert "1.442695" in str(excinfo.value)
+
+
+def test_the_threshold_is_exactly_one_over_ln_two():
+    """Just above it the solve proceeds; just below it refuses. No fudge factor."""
+    just_above = 1.0 / math.log(2.0) + 1e-6
+    R.solve(1000, 1.0, bits_per_entity=just_above, name_space=1000, tolerance=0.5)
+    with pytest.raises(OLMoConfigurationError, match="monotone"):
+        R.solve(1000, 1.0, bits_per_entity=1.0 / math.log(2.0) - 1e-6, name_space=1000)
+
+
+def test_demand_really_is_monotone_above_the_threshold():
+    """
+    The property the guard protects, verified by exhaustive walk rather than asserted.
+
+    Checked at the threshold itself and at a real schema's bits/entity.
+    """
+    for bits_per_entity in (1.4427, 24.0, 47.592):
+        for name_space in (1000, 160_000_000):
+            step = max(1, name_space // 5000)
+            previous = -1.0
+            for n_entities in range(1, name_space + 1, step):
+                value = R.demanded_bits(n_entities, bits_per_entity, name_space=name_space)
+                assert value > previous, (bits_per_entity, name_space, n_entities)
+                previous = value
+
+
+# --- solve() must not silently answer with something far off the request --------------------------
+
+
+def test_solve_refuses_an_unreachably_small_demand_instead_of_clamping_to_one_entity():
+    """
+    The bisection brackets in ``[1, name_space]``, so it always returns *something*.
+
+    Before the residual check, a demand of 1e-9 bits/param came back as one entity at 2.6e-6 -- a
+    cell 2,600x off its own label, from the function documented as the only sanctioned way to obtain
+    an entity count. The linear path raised for the same input, so the two paths disagreed about
+    whether this was an error.
+    """
+    with pytest.raises(OLMoConfigurationError, match="within 1.0%"):
+        R.solve(_P, 1e-9, bits_per_entity=_BITS, name_space=NAME_SPACE)
+    with pytest.raises(OLMoConfigurationError):
+        R.solve(_P, 1e-9, bits_per_entity=_BITS, name_space=None)
+
+
+def test_the_residual_message_distinguishes_granularity_from_range():
+    """
+    Two different problems reach the same guard, and the fix differs, so the message must say which.
+
+    A tiny entity count cannot hit a target because one entity moves the demand a long way; a large
+    one cannot because the name space has run out.
+    """
+    with pytest.raises(OLMoConfigurationError, match="integer granularity"):
+        R.solve(_P, 1e-9, bits_per_entity=_BITS, name_space=NAME_SPACE)
+
+
+def test_solve_can_return_the_boundary_entity_counts():
+    """
+    Exactly 1 and exactly ``name_space`` are legitimate answers, so the bracket must include them.
+
+    Neither boundary was exercised before, and a bracket of ``[2, name_space - 1]`` passed the suite.
+    """
+    at_top = R.demanded_bits(1000, 47.592, name_space=1000) / 1000
+    assert R.solve(1000, at_top, bits_per_entity=47.592, name_space=1000).n_entities == 1000
+
+    at_one = R.demanded_bits(1, 47.592, name_space=1000) / 1000
+    assert R.solve(1000, at_one, bits_per_entity=47.592, name_space=1000).n_entities == 1
+
+
+def test_solve_then_check_always_agrees():
+    """
+    The invariant that keeps a cell's label and its corpus describing the same thing.
+
+    ``solve``'s tolerance defaults to ``check``'s, so an answer ``solve`` returns is one ``check``
+    accepts -- by construction rather than by coincidence. Worth pinning because the two grew
+    separate tolerances at one point.
+    """
+    for label, (non_emb, _total) in LADDER.items():
+        for target in GRID_DEMANDS:
+            size = R.solve(non_emb, target, bits_per_entity=_BITS, name_space=NAME_SPACE)
+            R.check(
+                non_emb,
+                target,
+                size.n_entities,
+                bits_per_entity=_BITS,
+                name_space=NAME_SPACE,
+                label=label,
+            )
+
+
+def test_check_reports_the_disagreement_even_when_solve_cannot_answer():
+    """
+    ``check``'s error path calls ``solve``, which can raise first and replace the report.
+
+    A caller matching on "disagree" -- as the tests do -- would then miss the finding entirely, and
+    the message would lose both the label and the two numbers a reader needs.
+    """
+    with pytest.raises(OLMoConfigurationError, match="disagree") as excinfo:
+        R.check(1000, 10_000.0, 500, bits_per_entity=47.6, name_space=1000, label="d256_b8")
+    message = str(excinfo.value)
+    assert "d256_b8" in message
+    assert "no reachable entity count" in message
+
+
+# --- pinning the constants and the reported quantities --------------------------------------------
+
+
+def test_demand_is_tied_to_the_functions_that_compute_its_parts():
+    """
+    ``demand()`` could drop the name term entirely with the suite green.
+
+    ``attribute_bits + name_bits == bits`` is satisfied by ``0 + a == a``, and the basis-ratio test
+    only checks a ratio that is ``total/non_embedding`` whatever ``bits`` is. So every reported
+    x-coordinate could shift 16.4% undetected. These assertions tie the reported figure to the
+    functions that define it, and pin one absolute value.
+    """
+    d = R.demand(
+        714_331,
+        bits_per_entity=_BITS,
+        non_embedding_params=_P,
+        total_params=LADDER["28M"][1],
+        name_space=NAME_SPACE,
+    )
+    assert d.bits == pytest.approx(R.demanded_bits(714_331, _BITS, name_space=NAME_SPACE))
+    assert d.name_bits == pytest.approx(R.name_bits(714_331, NAME_SPACE))
+    assert d.attribute_bits == pytest.approx(714_331 * _BITS)
+    assert d.per_non_embedding_param == pytest.approx(1.397, abs=0.001)
+
+
+def test_the_declared_constants_are_what_the_documents_quote():
+    """
+    Asserted as literals, because every test that used them put them on both sides of an equation.
+
+    ``fact_tokens == n * EXPOSURES * TOKENS_PER_BIO`` holds for any value of either constant, so the
+    budget could silently change by 37% and nothing would go red.
+    """
+    assert R.EXPOSURES == 200
+    assert R.TOKENS_PER_BIO == 100
+    assert R.BIOS_BITS_PER_ENTITY == 47.6
+    assert R.R_E_AT_200_EXPOSURES == 1.2
+    assert R.R_E_BAND == (0.9, 1.4)
+
+
+def test_capacity_bits_is_a_product_and_is_pinned_numerically():
+    """
+    It appeared only in the degenerate-input table, so returning ``params / r_e`` passed the suite.
+
+    That is a 30.6% error in capacity at 13M, and therefore in every rho label.
+    """
+    assert R.capacity_bits(12_595_456, 1.2) == pytest.approx(15_114_547.2)
+    assert R.capacity_bits(1000, 2.0) == 2000.0
+
+
+def test_zero_attribute_bits_are_accepted_and_negative_ones_are_not():
+    """
+    The b=0 allowance, pinned here rather than only in the value-scheme tests.
+
+    Reverting it to a positivity check passed this suite, and so did taking ``abs()`` -- which would
+    silently turn a negative bits/entity into a positive one.
+    """
+    only_names = R.demanded_bits(714_331, 0.0, name_space=NAME_SPACE)
+    assert only_names == pytest.approx(R.name_bits(714_331, NAME_SPACE))
+    assert only_names / _P == pytest.approx(0.197, abs=0.001)
+
+    with pytest.raises(OLMoConfigurationError, match="must not be negative"):
+        R.demanded_bits(1000, -1.0, name_space=None)
+    with pytest.raises(OLMoConfigurationError, match="must not be negative"):
+        R.demand(
+            1000,
+            bits_per_entity=-1.0,
+            non_embedding_params=_P,
+            total_params=LADDER["28M"][1],
+            name_space=None,
+        )

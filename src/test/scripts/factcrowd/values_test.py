@@ -308,7 +308,7 @@ def test_the_entropy_sweep_reaches_the_demand_levels_the_prd_quotes():
 
     for bits, want in zip(ENTROPY_LEVELS, attribute_only):
         got = rho.demand_per_param(
-            n_entities, non_embedding, bits_per_entity=V.bits_per_entity_for(bits)
+            n_entities, non_embedding, bits_per_entity=V.bits_per_entity_for(bits), name_space=None
         )
         assert got == pytest.approx(want, abs=0.01), bits
 
@@ -348,4 +348,4 @@ def test_the_b_zero_cell_is_not_zero_demand():
     assert demand.per_non_embedding_param == pytest.approx(0.197, abs=0.001)
 
     with pytest.raises(OLMoConfigurationError, match="'bits_per_entity' must be positive"):
-        rho.solve(28_330_368, 1.2, bits_per_entity=0.0)
+        rho.solve(28_330_368, 1.2, bits_per_entity=0.0, name_space=None)
