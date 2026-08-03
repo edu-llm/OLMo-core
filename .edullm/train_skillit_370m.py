@@ -105,7 +105,7 @@ def build_train_module_config() -> TransformerTrainModuleConfig:
         ),
         z_loss_multiplier=1e-5,
         max_grad_norm=1.0,
-        scheduler=CosWithWarmup(warmup=24, alpha_f=1.0),
+        scheduler=CosWithWarmup(warmup=24, alpha_f=0.1),
     )
 
 

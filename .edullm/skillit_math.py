@@ -12,7 +12,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 RECIPE_PATH = Path(__file__).with_name("skillit_recipe.json")
-RECIPE_SHA256 = "80842f2746f4e005f1a2771a32e4131f06dc22a28c15c89c5ce9b6688f6326e5"
+RECIPE_SHA256 = "896f4e15f930d0d4ae6c7394189e334ead04389eb6b963e047c58a6a1bd1d1be"
 SOURCE_COMMIT = "b435cbe9c352399fc4ab54b310f36d28f6c9746f"
 OFFLINE_A_SOURCE_SHA256 = "e542e3e66f70c752110b51f60d1ee84f5f7860931dce5684e7a621f35dd74a21"
 DERIVATIVE_FIT_SOURCE_SHA256 = "acb4754b46cd6a588dffce7e7ad0d9bd70b0188db010669a7cfccf8622da2bcc"
@@ -54,7 +54,8 @@ class Arm:
 
 
 def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    # Keep the immutable recipe identity stable across Git's LF/CRLF checkout policy.
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
 
 def load_recipe(path: Path = RECIPE_PATH, *, verify_hash: bool = True) -> dict[str, Any]:
@@ -117,8 +118,8 @@ ARMS = tuple(
 if tuple(arm.index for arm in ARMS) != (0, 1):
     raise SkillItContractError("arm indexes must be exactly 0 and 1")
 if tuple((arm.arm_id, arm.a_mode, arm.wandb_project) for arm in ARMS) != (
-    ("probe", "probe", "skillit-probe"),
-    ("deriv", "derivative", "skillit-deriv"),
+    ("probe", "probe", "skillit"),
+    ("deriv", "derivative", "skillit"),
 ):
     raise SkillItContractError("Skill-It arm definitions changed")
 

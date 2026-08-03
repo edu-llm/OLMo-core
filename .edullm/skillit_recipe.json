@@ -67,7 +67,7 @@
     "weight_decay": 0.1,
     "embedding_weight_decay": 0.0,
     "warmup_steps": 24,
-    "alpha_f": 1.0,
+    "alpha_f": 0.1,
     "z_loss_multiplier": 0.00001,
     "max_grad_norm": 1.0,
     "checkpoint_interval": 125,
@@ -172,13 +172,13 @@
       "arm_index": 0,
       "arm_id": "probe",
       "a_mode": "probe",
-      "wandb_project": "skillit-probe"
+      "wandb_project": "skillit"
     },
     {
       "arm_index": 1,
       "arm_id": "deriv",
       "a_mode": "derivative",
-      "wandb_project": "skillit-deriv"
+      "wandb_project": "skillit"
     }
   ]
 }
