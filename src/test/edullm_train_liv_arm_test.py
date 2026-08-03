@@ -10,7 +10,9 @@ its vocabulary from the corpus instead of a constant.
 """
 
 import importlib.util
+import math
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Dict, Set
 
@@ -116,11 +118,230 @@ def test_the_defaults_are_the_studys_frozen_geometry():
     Sequence length and learning rate are part of the claim, not tuning knobs: the L0-vs-A16-P
     FLOPs gap is context-dependent (1.22x at 4K, 1.91x at 32K), so a default that drifts would
     quietly change what the arms mean.
+
+    The global batch size is here for a sharper reason: a submitted draft passed 131,072 while
+    this file, this test and the docstring all said 524,288. Both the 3e-4 learning rate and the
+    0.0105-nat noise floor that sets the seed count were calibrated at 524,288, so the override
+    silently invalidated the arithmetic justifying the design.
     """
     opts = entry.build_parser().parse_args([])
     assert opts.sequence_length == 4096
     assert opts.learning_rate == pytest.approx(3e-4)
     assert opts.global_batch_size == 128 * 4096
+
+
+def test_the_default_step_and_save_interval_do_not_trip_the_async_guard():
+    """
+    The shipped defaults must be a submittable pair, not a pair the startup guard rejects.
+
+    762 % 200 = 162, so the terminal checkpoint takes the synchronous path. A default pair that
+    divided would mean every run started by copy-pasting the help text inherited the checkpoint
+    hang that cost run_019fbfbe 48 minutes.
+    """
+    opts = entry.build_parser().parse_args([])
+    assert opts.steps == 762
+    assert opts.save_interval == 200
+    assert entry.warn_if_final_step_saves_async(opts.steps, opts.save_interval) is None
+    # And the budget the default actually buys, which is what makes 762 the right number.
+    assert opts.steps * opts.global_batch_size == pytest.approx(399_507_456)
+
+
+def test_val_paths_defaults_to_empty_so_a_corpus_without_a_split_still_builds():
+    """
+    ``val_paths`` is optional: a corpus with no held-out split must still construct, because
+    the absence is a property of the corpus rather than an error in the submission.
+    """
+    corpus = entry.Corpus(
+        dataset_id="x",
+        version="v1",
+        paths=["s3://b/train-0.bin"],
+        dtype=entry.NumpyDatasetDType.uint32,
+        tokenizer=entry.TOKENIZERS["tokenizer/dolma2-bpe"](),
+        rows=None,
+    )
+    assert corpus.val_paths == []
+
+
+def test_the_ladder_is_attached_only_when_the_corpus_has_a_val_split():
+    """
+    The ladder is conditional on ``corpus.val_paths``, so assert the CONDITION as the code
+    computes it, over both branches.
+
+    NOT a test of ``build_config``, and that gap is deliberate rather than hidden: reaching the
+    callback would need a built model, a resolved corpus and a trainer config, which is an
+    integration test this suite has no fixture for. What is asserted here is the predicate the
+    branch turns on. A previous attempt at this test re-emitted the warning string itself and
+    asserted on the copy, which would have stayed green with the warning deleted -- a tautology
+    dressed as coverage.
+    """
+    with_val = entry.Corpus(
+        dataset_id="d",
+        version="v1",
+        paths=["s3://b/train-0.bin"],
+        dtype=entry.NumpyDatasetDType.uint32,
+        tokenizer=entry.TOKENIZERS["tokenizer/dolma2-bpe"](),
+        rows=None,
+        val_paths=["s3://b/val-0.bin"],
+    )
+    without_val = replace(with_val, val_paths=[])
+    assert bool(with_val.val_paths) is True
+    assert bool(without_val.val_paths) is False
+
+
+@pytest.mark.parametrize(
+    "steps,expected",
+    [
+        (762, [38, 76, 152, 266, 381, 571]),  # the pilot's per-cell budget
+        (381, [19, 38, 76, 133, 190, 285]),  # the LR probe
+    ],
+)
+def test_the_ladder_rungs_are_geometric_and_never_below_step_two(steps, expected):
+    """
+    Pin the rungs the entry point computes, because ``int()`` TRUNCATES: 762*0.35 = 266.7 -> 266
+    and 762*0.75 = 571.5 -> 571, not 267 and 572. A doc or analysis script that rounds instead
+    would look for rungs that were never evaluated.
+
+    Calls ``entry.ladder_steps`` -- the function ``build_config`` itself calls -- rather than
+    re-deriving the set comprehension. An earlier version of this test recomputed the rungs
+    locally and therefore passed unchanged when the real fractions were mutated: it pinned its
+    own copy of the arithmetic, not the run's.
+    """
+    rungs = entry.ladder_steps(steps)
+    assert rungs == expected
+    # post_step returns early for step <= 1, so a rung there would silently never fire.
+    assert min(rungs) >= 2
+    # 1.0 is deliberately absent -- eval_on_finish covers the final step, and listing it too
+    # would score the same model twice.
+    assert steps not in rungs
+
+
+def test_a_run_short_enough_to_collapse_the_ladder_still_yields_valid_rungs():
+    """
+    The floor and the de-duplication have to hold on a short run too. At 20 steps the low
+    fractions all truncate into 1-4, so without ``max(2, ...)`` the ladder would ask for step 1
+    and quietly lose a rung, and without the set it would ask for the same step twice.
+    """
+    rungs = entry.ladder_steps(20)
+    assert rungs == sorted(set(rungs)), "rungs must be unique"
+    assert min(rungs) >= 2
+    assert 20 not in rungs
+    assert len(rungs) <= len(entry.LADDER_FRACTIONS)
+
+
+class _StubRead:
+    """The duck-typed shape ``corpus_from_manifest`` documents: paths/dtype/byte_order/rows."""
+
+    def __init__(self, paths, val=None):
+        self.paths = paths
+        self.val = val
+        self.dtype = "uint32"
+        self.byte_order = sys.byteorder
+        self.header_bytes = 0
+        self.rows = None
+
+
+def test_held_out_paths_are_carried_through_from_the_reader():
+    """The ladder cannot exist unless the val URIs survive the manifest -> Corpus hop."""
+    read = _StubRead(["s3://b/train-0.bin"], val=["s3://b/val-0.bin", "s3://b/val-1.bin"])
+    corpus = entry.corpus_from_manifest(
+        read, dataset_id="d", version="v1", tokenizer_id="tokenizer/dolma2-bpe"
+    )
+    assert corpus.val_paths == ["s3://b/val-0.bin", "s3://b/val-1.bin"]
+    assert corpus.paths == ["s3://b/train-0.bin"]
+
+
+def test_a_val_shard_that_is_also_a_train_shard_is_refused():
+    """
+    A held-out shard that was also trained on is not held out, and the failure is invisible:
+    the eval number merely looks better than it is. This project has already shipped a
+    contaminated held-out set once, with val files sitting inside the training path list.
+    """
+    shared = "s3://b/shard-7.bin"
+    read = _StubRead(["s3://b/train-0.bin", shared], val=[shared])
+    with pytest.raises(entry.Refusal) as excinfo:
+        entry.corpus_from_manifest(
+            read, dataset_id="d", version="v1", tokenizer_id="tokenizer/dolma2-bpe"
+        )
+    # Assert the STAGE, not just that something refused. An earlier draft of this test passed a
+    # tokenizer id that does not exist, so it raised Refusal for an unrelated reason and was
+    # green while the overlap guard went entirely untested. `pytest.raises(SomeError)` on a
+    # function with several refusal paths is a check that the function failed, not a check that
+    # it failed for the reason under test.
+    assert excinfo.value.stage is entry.Stage.THE_MANIFEST_IS_NOT_SAFE_TO_MEMMAP
+    assert shared in str(excinfo.value)
+
+
+def test_the_reader_returning_none_for_val_is_not_an_error():
+    """``ResolvedSplit.val`` is None (not []) when a dataset declares no held-out split."""
+    corpus = entry.corpus_from_manifest(
+        _StubRead(["s3://b/train-0.bin"], val=None),
+        dataset_id="d",
+        version="v1",
+        tokenizer_id="tokenizer/dolma2-bpe",
+    )
+    assert corpus.val_paths == []
+
+
+def test_a_reader_without_a_val_attribute_still_works():
+    """
+    ``corpus_from_manifest`` promises anything carrying paths/dtype/byte_order/header_bytes/rows
+    will do. Older stubs predate ``val``, and adding a required attribute would break that
+    contract rather than extend it.
+    """
+
+    class Older:
+        paths = ["s3://b/train-0.bin"]
+        dtype = "uint32"
+        byte_order = sys.byteorder
+        header_bytes = 0
+        rows = None
+
+    corpus = entry.corpus_from_manifest(
+        Older(), dataset_id="d", version="v1", tokenizer_id="tokenizer/dolma2-bpe"
+    )
+    assert corpus.val_paths == []
+
+
+def test_an_impossible_first_loss_is_refused():
+    """
+    A cell that starts from uninitialised weights scores in the hundreds instead of ln(vocab),
+    trains happily, and produces a plausible curve from garbage. Observed twice in this project
+    at 926 and ~900, because ``TransformerConfig.build()`` does not initialise.
+
+    Asserting the MAGNITUDE is the point. Every harness bug shipped here passed an
+    existence check and would have failed a size check.
+    """
+    watcher = entry.LossWatcher(expected_first_loss=math.log(100_352))
+    with pytest.raises(entry.Refusal):
+        watcher.log_metrics(1, {"train/CE loss": 926.0})
+
+
+def test_a_plausible_first_loss_is_accepted():
+    """ln(100,352) = 11.516. The guard must not fire on a healthy start."""
+    watcher = entry.LossWatcher(expected_first_loss=math.log(100_352))
+    watcher.log_metrics(1, {"train/CE loss": 11.52})
+    assert watcher.first == pytest.approx(11.52)
+    # Later steps are unconstrained: the check is about where training STARTED.
+    watcher.log_metrics(2, {"train/CE loss": 4.0})
+    assert watcher.last == pytest.approx(4.0)
+
+
+def test_the_first_loss_guard_is_inert_when_not_armed():
+    """
+    A resumed attempt's first recorded loss is wherever the previous one stopped, so the run
+    leaves ``expected_first_loss`` unset when ``global_step > 0``. Armed unconditionally, the
+    check would kill every retry at its first metric.
+    """
+    watcher = entry.LossWatcher()
+    watcher.log_metrics(1, {"train/CE loss": 4.2})
+    assert watcher.first == pytest.approx(4.2)
+
+
+def test_the_first_loss_guard_tolerates_a_missing_metric():
+    """A metrics dict without the loss key must not arm or trip anything."""
+    watcher = entry.LossWatcher(expected_first_loss=math.log(100_352))
+    watcher.log_metrics(1, {"throughput/device/TPS": 1234.0})
+    assert watcher.first is None
 
 
 GRID_4x3 = (

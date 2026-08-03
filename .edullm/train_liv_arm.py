@@ -102,12 +102,13 @@ import copy
 import enum
 import json
 import logging
+import math
 import os
 import re
 import sys
 import time
 import traceback
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Dict, Iterator, List, Optional, Tuple, cast
 
 import rich
@@ -118,6 +119,7 @@ from olmo_core.data import (
     NumpyDataLoaderConfig,
     NumpyDatasetDType,
     NumpyFSLDatasetConfig,
+    NumpyPaddedFSLDatasetConfig,
     TokenizerConfig,
 )
 from olmo_core.distributed.parallel import DataParallelType
@@ -137,6 +139,7 @@ from olmo_core.train.callbacks import (
     CheckpointerCallback,
     ConfigSaverCallback,
     GPUMemoryMonitorCallback,
+    LMEvaluatorCallbackConfig,
     WandBCallback,
 )
 from olmo_core.train.checkpoint import Checkpointer
@@ -334,6 +337,12 @@ class Corpus:
     dtype: NumpyDatasetDType
     tokenizer: TokenizerConfig
     rows: Optional[int]
+    #: Held-out URIs, or empty when the dataset declares none. Kept SEPARATE from ``paths``
+    #: rather than concatenated, which is the reader's own reasoning: a flat list is the bug,
+    #: because a caller cannot tell the two apart and held-out shards end up in training with
+    #: nothing to notice. ``ResolvedSplit.val`` returns ``None`` for "no validation data";
+    #: normalised to ``[]`` here so callers branch on truthiness rather than on ``is None``.
+    val_paths: List[str] = field(default_factory=list)
 
 
 def corpus_from_manifest(read, *, dataset_id: str, version: str, tokenizer_id: str) -> Corpus:
@@ -379,6 +388,26 @@ def corpus_from_manifest(read, *, dataset_id: str, version: str, tokenizer_id: s
             f"no OLMo-core config for {tokenizer_id}; this image knows: {known}",
         ) from None
 
+    # ``val`` is a property on the reader's ResolvedSplit and returns None when the dataset
+    # declares no held-out split. getattr keeps this function's duck-typed contract intact --
+    # its docstring promises anything with paths/dtype/byte_order/header_bytes/rows will do,
+    # and the tests hand it stub objects that predate this field.
+    val_paths = list(getattr(read, "val", None) or [])
+
+    # A held-out shard that is also a training shard is not held out. The reader derives the
+    # split from each filename rather than trusting the declaration, so this should be
+    # impossible -- but this project has already shipped a contaminated "held-out" set once
+    # (val files sitting at indices 0/128/163 of the training path list), and the failure is
+    # invisible: the eval number just looks better than it is. Cheap, and it fails loudly.
+    overlap = sorted(set(val_paths) & set(read.paths))
+    if overlap:
+        raise Refusal(
+            Stage.THE_MANIFEST_IS_NOT_SAFE_TO_MEMMAP,
+            f"{dataset_id}/{version} lists {len(overlap)} shard(s) in BOTH the trainable and "
+            f"held-out splits, so held-out loss would be measured on trained data. "
+            f"First: {overlap[0]}",
+        )
+
     return Corpus(
         dataset_id=dataset_id,
         version=version,
@@ -386,6 +415,7 @@ def corpus_from_manifest(read, *, dataset_id: str, version: str, tokenizer_id: s
         dtype=NumpyDatasetDType(read.dtype),
         tokenizer=tokenizer,
         rows=read.rows,
+        val_paths=val_paths,
     )
 
 
@@ -618,6 +648,19 @@ def build_config(opts, overrides: List[str]):
         max_sequence_length=opts.sequence_length,
         optim=AdamWConfig(
             lr=opts.learning_rate,
+            # SPELLED OUT BECAUSE THE PORT SILENTLY INHERITED DIFFERENT DEFAULTS. The pilot
+            # this file was ported from set weight_decay=0.1 and betas=(0.9, 0.95); omitting
+            # them here picked up AdamWConfig's own defaults of 1e-2 and (0.9, 0.999) -- a 10x
+            # weaker decay and a different optimizer. beta2=0.999 has a second-moment horizon
+            # of ~1000 steps, which over a 3051-step run is a third of training and a known
+            # short-run instability.
+            #
+            # It also invalidated the calibration: the 0.0105-nat noise floor that sets the
+            # seed count was measured under the other setting, so the arithmetic justifying
+            # n seeds did not describe the run that would have executed.
+            betas=(0.9, 0.95),
+            weight_decay=0.1,
+            fused=True,
             group_overrides=[
                 OptimGroupOverride(params=["embeddings.weight"], opts=dict(weight_decay=0.0))
             ],
@@ -695,13 +738,86 @@ def build_config(opts, overrides: List[str]):
         .with_callback("config_saver", ConfigSaverCallback())
     )
 
-    # No lm_evaluator and no downstream_evaluator, and their absence is a decision. The
-    # example's LM evaluator reads a C4 validation shard from olmo-data.org and the downstream
-    # one pulls HellaSwag from Hugging Face; both would put a public-internet fetch in the
-    # middle of a run whose whole claim is that it read a sealed corpus, and a failure in
-    # either would look like a training failure. Held-out shards for a published corpus come
-    # back from the reader as `.val`, and wiring an evaluator to those is the right version of
-    # this -- it needs a corpus that declares one, which regmix-10b does not.
+    # No downstream_evaluator: the example's pulls HellaSwag from Hugging Face, which would put
+    # a public-internet fetch in the middle of a run whose whole claim is that it read a sealed
+    # corpus, and a failure in it would look like a training failure.
+    #
+    # The LM evaluator IS wired, against the corpus's own held-out shards, and it is the reason
+    # a null result is interpretable rather than ambiguous.
+    #
+    # THIS FILE PREVIOUSLY DECLINED TO WIRE ONE, ON THE GROUND THAT THE CORPUS DECLARED NO VAL
+    # SPLIT. That reasoning was about regmix-10b. olmo-150b-dolma2 ships 6,851 train shards and
+    # 60 val shards, and the reader resolves EVERY declared split on the call this run already
+    # makes -- so the held-out paths arrive for free, with no extra S3 round-trip and no public
+    # fetch. The comment outlived the corpus it was written for, and the pilot was one approval
+    # away from spending its whole budget on an endpoint it could not interpret.
+    #
+    # WHY A LADDER RATHER THAN A SINGLE FINAL NUMBER. At ~1 token/param a single end-of-run
+    # loss cannot distinguish "these arms are equivalent" from "this budget is too short for
+    # any arm to have differentiated yet", and those two demand opposite next moves. Evaluating
+    # at a geometric ladder makes the endpoint the TRAJECTORY of the between-arm gap: a gap
+    # that grows across rungs is a real effect; a gap flat at zero while loss is still falling
+    # steeply means undertrained, not equivalent.
+    #
+    # Geometric spacing because loss falls roughly log-linearly in tokens, so evenly-spaced
+    # rungs would cluster where the curve is flattest and carry the least information.
+    #
+    # READ THE GAP AGAINST THE LR, NOT AGAINST THE CURVE'S SHAPE. `CosWithWarmup` decays to
+    # `alpha_f = 0.1` of peak by the final step (scheduler.py), i.e. 3e-5 rather than zero -- so
+    # the tail is damped but not frozen, and a curve flattening there is weak evidence of
+    # convergence at best. "The curves flattened, so it is a real null" is therefore not a
+    # sound reading of the last rung. The interior rungs, where LR is still near peak, are the
+    # ones that can carry that judgement, and `optim/LR (group 0)` is already logged beside
+    # them so the two can be read together.
+    #
+    # 1.0 is deliberately absent from the fractions: `eval_on_finish=True` already evaluates
+    # after the final step, and listing it too would score the same model twice.
+    if corpus.val_paths:
+        eval_steps = ladder_steps(opts.steps)
+        trainer_config = trainer_config.with_callback(
+            "lm_eval",
+            LMEvaluatorCallbackConfig(
+                # PADDED, not the NumpyFSLDatasetConfig the training path uses. The callback
+                # type-checks for NumpyPaddedFSLDataset and raises OLMoConfigurationError on
+                # anything else, so the plain config fails at build time.
+                eval_dataset=NumpyPaddedFSLDatasetConfig(
+                    # A handful of shards, not all 60. `prepare()` builds a per-shard instance
+                    # index over every path with a process pool on first call, and 60 shards of
+                    # startup would cost more than the eval it serves. Sorted so the subset is
+                    # the same across arms and seeds -- a per-cell subset would make the rungs
+                    # incomparable, which is the one thing the ladder cannot tolerate.
+                    paths=sorted(corpus.val_paths)[:4],
+                    # LMEvaluator.from_numpy_dataset raises when any path lacks a "label", and
+                    # the label is what its per-dataset metric is keyed on.
+                    metadata=[{"label": "heldout-val"}] * len(sorted(corpus.val_paths)[:4]),
+                    sequence_length=opts.sequence_length,
+                    tokenizer=corpus.tokenizer,
+                    # Same uint32 trap as the training path: the corpus declares its width and
+                    # a default here would decode every token at the wrong one.
+                    dtype=corpus.dtype,
+                    work_dir=opts.work_dir,
+                ),
+                # None, so only `fixed_steps` and `eval_on_finish` trigger an eval. A non-None
+                # interval would add unrequested rungs and change what each cell costs.
+                eval_interval=None,
+                fixed_steps=eval_steps,
+                eval_on_finish=True,
+                # Bounded by STEPS, not the default epochs(1). The default would score all four
+                # shards in full at every rung, which costs more than the training it measures.
+                # 32 batches x 32,768 tok = ~1.05M tokens per rung.
+                eval_duration=Duration.steps(32),
+            ),
+        )
+        log.info("held-out ladder at steps %s (from %d val shards)", eval_steps, len(corpus.val_paths))
+    else:
+        # Not fatal, but it must not pass silently: without a ladder the run still trains and
+        # still reports a loss, and the missing endpoint is invisible until analysis.
+        log.warning(
+            "%s/%s declares NO held-out split, so this run has no ladder and a flat result "
+            "will not be distinguishable from undertraining",
+            corpus.dataset_id,
+            corpus.version,
+        )
 
     config = ExperimentConfig(
         model=model_config,
@@ -725,13 +841,26 @@ class LossWatcher(Callback):
     to name.
     """
 
-    def __init__(self) -> None:
+    #: How far the first recorded loss may sit from ``ln(vocab_size)`` before the run is killed.
+    #:
+    #: An untrained model that predicts uniformly over ``V`` tokens scores exactly ``ln(V)``:
+    #: 11.52 at dolma2's 100,352. A model whose weights were never initialised scores in the
+    #: hundreds -- this project has observed 926 and ~900, twice, because
+    #: ``TransformerConfig.build()`` constructs modules without initialising them and the
+    #: uninitialised run trains happily, producing a plausible-looking curve from garbage.
+    #:
+    #: 0.5 nats is wide enough for the real spread (the first metric lands a few steps in, and
+    #: warmup has begun) and far tighter than any failure mode: every miss seen here was off by
+    #: two orders of magnitude, not by a fraction of a nat.
+    STEP0_LOSS_TOLERANCE_NATS = 0.5
+
+    def __init__(self, expected_first_loss: Optional[float] = None) -> None:
         self.first: Optional[float] = None
         self.last: Optional[float] = None
         self.wandb_url = ""
+        self.expected_first_loss = expected_first_loss
 
     def log_metrics(self, step: int, metrics: Dict[str, float]) -> None:
-        del step
         if not self.wandb_url:
             with contextlib.suppress(Exception):
                 import wandb
@@ -742,7 +871,31 @@ class LossWatcher(Callback):
             return
         if self.first is None:
             self.first = float(loss)
+            self._refuse_if_first_loss_is_impossible(step)
         self.last = float(loss)
+
+    def _refuse_if_first_loss_is_impossible(self, step: int) -> None:
+        """Kill the run now if the model clearly did not start from a uniform distribution.
+
+        ASSERT THE MAGNITUDE, NOT THE EXISTENCE. Every harness bug this project has shipped
+        passed a check that something was present and would have failed a check that it was the
+        right size. A cell that starts from uninitialised weights costs its full budget and
+        silently poisons one seed of one arm, which is worse than a crash: the grid looks
+        complete and one of its points is noise.
+        """
+        if self.expected_first_loss is None or self.first is None:
+            return
+        delta = abs(self.first - self.expected_first_loss)
+        if delta <= self.STEP0_LOSS_TOLERANCE_NATS:
+            return
+        raise Refusal(
+            Stage.TRAINING_ITSELF_FAILED,
+            f"first recorded loss {self.first:.3f} at step {step} is {delta:.3f} nats from the "
+            f"ln(vocab) = {self.expected_first_loss:.3f} an untrained model must score. A value "
+            f"in the hundreds means the weights were never initialised; a value far below means "
+            f"the data or the vocabulary is not what this config declared. Refusing rather than "
+            f"training a cell whose result would be indistinguishable from noise.",
+        )
 
 
 def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> None:
@@ -823,6 +976,18 @@ def train(config, opts=None) -> None:
     # than start over. It looks in the save folder, which is EDULLM_CHECKPOINT_DIR, which is
     # derived from the run id and is therefore the same string on both attempts.
     trainer.maybe_load_checkpoint()
+
+    # ARMED ONLY WHEN THIS ATTEMPT ACTUALLY STARTS FROM SCRATCH. A resumed attempt's first
+    # recorded loss is wherever the previous one left off -- around 4-5 nats, not ln(vocab) --
+    # so arming the ln(vocab) check unconditionally would kill every retry at its first metric.
+    # Set after maybe_load_checkpoint precisely so `trainer.global_step` reflects the load.
+    if trainer.global_step == 0:
+        losses.expected_first_loss = math.log(config.model.vocab_size)
+    else:
+        log.info(
+            "resumed at step %d, so the ln(vocab) start-of-training check is not armed",
+            trainer.global_step,
+        )
     started = time.monotonic()
     trainer.fit()
     if opts is not None:
@@ -872,9 +1037,17 @@ def build_parser() -> argparse.ArgumentParser:
     # FLOPs gap between L0 and the all-attention control is context-dependent (1.22x at 4K,
     # 1.91x at 32K), so the context length is part of the claim rather than a tuning knob.
     parser.add_argument("--sequence-length", type=int, default=4096)
-    parser.add_argument("--steps", type=int, default=200)
-    parser.add_argument("--save-interval", type=int, default=100)
-    parser.add_argument("--warmup-steps", type=int, default=20)
+    # 762 steps x 524,288 tok = 399.5M, the pilot's per-cell budget, rather than a placeholder
+    # 200. A default that is not the real budget invites a submission that looks complete and
+    # trains 0.27 tokens/param.
+    parser.add_argument("--steps", type=int, default=762)
+    # 200 and NOT a divisor of 762 (762 % 200 = 162). When save_interval divides steps, the
+    # interval save claims the final step and routes it through the ASYNC path, which stages
+    # the whole state dict to host RAM twice; that hung run_019fbfbe for 48 minutes with no
+    # traceback and no exit code. warn_if_final_step_saves_async() guards the pair at startup,
+    # but the default should not be the value that trips it.
+    parser.add_argument("--save-interval", type=int, default=200)
+    parser.add_argument("--warmup-steps", type=int, default=15)
     # 3e-4, not the parent's 1e-3. At 350M-390M the larger value is outside the range these
     # arms were sized against, and an LR difference would swamp a gate-structure difference.
     parser.add_argument("--learning-rate", type=float, default=3e-4)
@@ -962,6 +1135,29 @@ def resolve_fanout_cell(spec: str, index: Optional[str]) -> Optional[Tuple[str, 
             f"number of cells in --fanout-grid",
         )
     return cells[i]
+
+
+#: Where on the run the held-out ladder evaluates, as fractions of ``--steps``.
+#:
+#: Geometric because loss falls roughly log-linearly in tokens, so evenly-spaced rungs would
+#: cluster in the flat tail and carry the least information. 1.0 is absent deliberately:
+#: ``eval_on_finish=True`` already scores the final step, and listing it would score it twice.
+LADDER_FRACTIONS = (0.05, 0.1, 0.2, 0.35, 0.5, 0.75)
+
+
+def ladder_steps(steps: int) -> List[int]:
+    """The steps the held-out evaluator fires on, for a run of ``steps`` total.
+
+    A named function rather than a comprehension inlined in ``build_config`` so that a test can
+    call the same code the run calls. A test that re-derives the arithmetic instead is a test of
+    its own copy: it stays green when the real fractions change, which is the failure it was
+    written to prevent.
+
+    The floor of 2 is not cosmetic. ``EvaluatorCallback.post_step`` returns early for
+    ``step <= 1``, so a rung at step 1 would be silently skipped -- and a rung that never fires
+    is indistinguishable from one that fired and showed no gap.
+    """
+    return sorted({max(2, int(steps * f)) for f in LADDER_FRACTIONS})
 
 
 def warn_if_final_step_saves_async(steps: int, save_interval: int) -> Optional[str]:

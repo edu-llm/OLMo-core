@@ -196,39 +196,97 @@ def test_matched_cost_variants_are_actually_matched():
     assert lr.num_params(d_model) == gp.num_params(d_model)
 
 
-def test_lowrank_gate_variance_parity_at_init():
-    """
-    Step-0 gate output variance must match dense.
-
-    With ``Var(y) = d * r * sigma_A^2 * sigma_B^2``, using the same std for both factors is
-    24-48x too small and the error is monotone in ``r``. That yields a smooth, plausible
-    "higher rank is better" sweep that is really an init-scale artifact -- so this parity
-    check is what makes the rank sweep interpretable at all.
-    """
+def _parity_probe(structure: GateStructure, x: torch.Tensor, std: float, **kwargs):
+    """Build one mixer at ``std`` and return (pre_gate variance, block output variance)."""
     from olmo_core.nn.transformer.init import InitMethod
 
-    d_model, std = 512, 0.02
-    x = torch.randn(4, 16, d_model, dtype=torch.float64)
-
-    dense = ShortConv(d_model=d_model, use_fla=False).to(torch.float64)
-    dense.init_weights(
+    d_model = x.shape[-1]
+    m = ShortConv(d_model=d_model, gate_structure=structure, use_fla=False, **kwargs).to(
+        torch.float64
+    )
+    m.init_weights(
         init_method=InitMethod.normal, d_model=d_model, block_idx=0, num_blocks=1, std=std
     )
     with torch.no_grad():
-        ref = dense.in_proj(x)[0].var().item()
+        return m.in_proj(x)[0].var().item(), m(x).var().item()
 
-    for rank in (32, 64, 128):
-        m = ShortConv(d_model=d_model, gate_structure="lowrank", gate_rank=rank, use_fla=False).to(
-            torch.float64
-        )
-        m.init_weights(
-            init_method=InitMethod.normal, d_model=d_model, block_idx=0, num_blocks=1, std=std
-        )
-        with torch.no_grad():
-            got = m.in_proj(x)[0].var().item()
-        # Within 2x of dense across an 4x rank range. The naive init misses by 24-48x, so this
-        # bound distinguishes correct from naive while tolerating trunc-normal sampling noise.
-        assert 0.5 < got / ref < 2.0, f"rank={rank}: gate var ratio {got / ref:.3f} vs dense"
+
+@pytest.mark.parametrize(
+    "structure,kwargs",
+    [
+        ("lowrank", {"gate_rank": 32}),
+        ("lowrank", {"gate_rank": 64}),
+        ("lowrank", {"gate_rank": 128}),
+        ("grouped", {"gate_groups": 2}),
+        ("grouped", {"gate_groups": 4}),
+        ("grouped", {"gate_groups": 8}),
+    ],
+)
+def test_gate_variance_parity_at_init(structure: GateStructure, kwargs: Dict[str, Any]):
+    """
+    Step-0 gate output variance must match dense, for EVERY structure.
+
+    Two distinct ways to get this wrong, one per structure:
+
+    * ``lowrank``: ``Var(y) = d * r * sigma_A^2 * sigma_B^2``, so using ``std`` for both
+      factors is 24-48x too small and the error is monotone in ``r`` -- a smooth, plausible
+      "higher rank is better" sweep that is really an init-scale artifact.
+    * ``grouped``: each output sums only ``d/g`` inputs, so ``Var(y) = (d/g) * std^2`` is a
+      factor ``g`` short. This one shipped: the grouped branch was left at the dense ``std``
+      while the lowrank branch was corrected, which is why this test is parametrized over
+      both structures rather than over ranks alone.
+
+    Asserted on the BLOCK OUTPUT as well as on the gate. The block applies two multiplicative
+    gates, so a per-gate deficit of ``1/g`` compounds to ``1/g^2`` -- 1/16 at g=4. Checking
+    only ``in_proj`` understates the error by a square and would let a 4x block-output deficit
+    pass as a 2x gate one.
+    """
+    d_model, std = 512, 0.02
+    x = torch.randn(4, 16, d_model, dtype=torch.float64)
+
+    ref_gate, ref_out = _parity_probe("dense", x, std)
+    got_gate, got_out = _parity_probe(structure, x, std, **kwargs)
+
+    label = f"{structure} {kwargs}"
+    # 2x tolerates trunc-normal sampling noise. The naive lowrank init misses by 24-48x and
+    # the naive grouped init by g (2-8) on the gate and g^2 (4-64) on the output, so this
+    # bound separates correct from naive in every parametrization above.
+    assert 0.5 < got_gate / ref_gate < 2.0, f"{label}: gate var ratio {got_gate / ref_gate:.3f}"
+    assert 0.5 < got_out / ref_out < 2.0, f"{label}: block-output var ratio {got_out / ref_out:.3f}"
+
+
+def test_grouped_parity_test_would_catch_the_uncorrected_init():
+    """
+    Guard the guard: assert the naive grouped init this test exists to reject really does
+    fail the bound. A parity test that passes both the correct and the broken init is worse
+    than no test, because it certifies the bug.
+
+    Reproduces the pre-fix behaviour by overwriting the blocks at the dense ``std``, then
+    checks the block-output ratio lands far outside the 2x band rather than merely below 1.
+    """
+    from olmo_core.nn.transformer.init import InitMethod
+
+    d_model, std, groups = 512, 0.02, 4
+    x = torch.randn(4, 16, d_model, dtype=torch.float64)
+
+    _, ref_out = _parity_probe("dense", x, std)
+
+    m = ShortConv(
+        d_model=d_model, gate_structure="grouped", gate_groups=groups, use_fla=False
+    ).to(torch.float64)
+    m.init_weights(
+        init_method=InitMethod.normal, d_model=d_model, block_idx=0, num_blocks=1, std=std
+    )
+    with torch.no_grad():
+        # The uncorrected init: dense std on the blocks, i.e. missing the sqrt(g) factor.
+        for p in (m.in_proj.gate_blocks_pre, m.in_proj.gate_blocks_post):
+            torch.nn.init.trunc_normal_(p, mean=0.0, std=std, a=-3 * std, b=3 * std)
+        broken_out = m(x).var().item()
+
+    ratio = broken_out / ref_out
+    assert ratio < 0.5, f"the naive grouped init must FAIL the parity bound, got ratio {ratio:.4f}"
+    # Two gates, each short by 1/g, so the output is short by ~1/g^2 = 1/16 at g=4.
+    assert ratio < 2.0 / groups**2, f"expected ~1/g^2 deficit, got {ratio:.4f}"
 
 
 def test_document_isolation_prevents_cross_boundary_leakage():

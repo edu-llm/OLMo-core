@@ -109,9 +109,25 @@ class _GateProj(nn.Module):
             # Self-initialize, matching nn.Linear: a module must be usable before
             # init_weights() runs, or tests and probes silently operate on uninitialized
             # memory (which is often all zeros, making a broken module look merely inert).
+            #
+            # NOT kaiming_uniform_, WHICH GETS THE FAN-IN WRONG BY bs ON A 3-D PARAMETER.
+            # torch derives fan_in from size(1) * receptive_field, which is bs*bs here, but the
+            # real contraction in ``_grouped`` is over bs alone. At d=512/g=4 that is a std of
+            # 0.0045 where 0.051 is correct -- 11x too small per gate, and because the block
+            # applies two multiplicative gates, ~1/128 of dense on the block output.
+            #
+            # nn.Linear's default is kaiming_uniform_(a=sqrt(5)), which reduces to
+            # U(-1/sqrt(fan_in), +1/sqrt(fan_in)). Spelled out here against the correct fan_in
+            # rather than delegated, so the 3-D shape cannot mislead the helper again.
+            #
+            # This matters beyond tidiness: ``experiments/liv/mqar/mqar_model.py`` builds
+            # ShortConv directly and never calls init_weights, so the MQAR calibration ran its
+            # grouped arm at a fraction of dense's activation scale -- the same failure this
+            # module's init_weights docstring warns about, on the probe used to justify the arm.
             if init_device != "meta":
+                bound = (1.0 / bs) ** 0.5
                 for p in (self.gate_blocks_pre, self.gate_blocks_post):
-                    nn.init.kaiming_uniform_(p, a=5**0.5)
+                    nn.init.uniform_(p, -bound, bound)
         else:
             raise ValueError(f"unknown gate structure '{structure}'")
 
@@ -336,14 +352,37 @@ class ShortConv(SequenceMixer):
             init_linear(self.in_proj.gate_up_pre, std=factor_std, generator=generator)
             init_linear(self.in_proj.gate_up_post, std=factor_std, generator=generator)
         else:
+            # Var(y) = (d/g) * s^2 for a block-diagonal map: each output sums only the
+            # bs = d/g inputs inside its own block. See ``_GateProj._grouped``, where the
+            # bmm contracts over ``bs``, not over ``d``. Dense is Var(y) = d * std^2, so
+            # parity requires s = std * sqrt(g).
+            #
+            # WITHOUT THIS FACTOR THE GROUPED ARM MEASURES INIT SCALE, NOT GATE STRUCTURE --
+            # AND IT FAILS IN THE DIRECTION THAT CONFIRMS THE HYPOTHESIS. The block applies
+            # TWO multiplicative gates (``out_proj(post_gate * conv(pre_gate * value))``), so
+            # a 1/g variance deficit per gate compounds to 1/g^2 = 1/16 at g=4: a 4x std
+            # deficit on the block output, across every LIV layer. G-grouped would start
+            # training with its convolution path near-inert -- effectively an attention-only
+            # model carrying 10 dead layers.
+            #
+            # The activation-energy proxy predicts G-grouped loses (0.130 retention against
+            # low-rank's 0.929). An init deficit makes it lose for an unrelated reason, and
+            # the loss curve cannot separate the two, so the confirming outcome would have
+            # been the uninterpretable one.
+            #
+            # The lowrank branch above was corrected for exactly this class of error and this
+            # one was not. That asymmetry is why the parity test must cover BOTH structures
+            # instead of looping over ranks alone.
+            assert self.gate_groups is not None
+            block_std = std * self.gate_groups**0.5
             for p in (self.in_proj.gate_blocks_pre, self.in_proj.gate_blocks_post):
                 _apply_init(
                     nn.init.trunc_normal_,
                     p,
                     mean=0.0,
-                    std=std,
-                    a=-3 * std,
-                    b=3 * std,
+                    std=block_std,
+                    a=-3 * block_std,
+                    b=3 * block_std,
                     generator=generator,
                 )
 
