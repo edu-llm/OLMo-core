@@ -16,7 +16,7 @@ the complete recipe file checksum before any arm is constructed.
 - sequence/global/rank-microbatch tokens: 2,048 / 4,194,304 / 32,768
 - optimizer: SkipStepAdamW, LR `4e-4`, betas `(0.9, 0.95)`, weight decay
   `0.1` except embeddings at `0`
-- schedule: 24 warmup steps, `alpha_f=1.0`
+- schedule: 24 warmup steps, `alpha_f=0.1` (cosine decay after warmup)
 - HSDP bf16 parameters/fp32 reductions, z-loss `1e-5`, max grad norm `1`,
   compiled model
 - seed/steps: 42 / 2,384
@@ -47,8 +47,8 @@ as the versioned `skillit-<arm>-state` artifact.
 
 | arm index | arm | A | W&B project |
 |---:|---|---|---|
-| 0 | probe | completed-pilot offline A | `skillit-probe` |
-| 1 | deriv | mixing-law derivative at current weights | `skillit-deriv` |
+| 0 | probe | completed-pilot offline A | `skillit` |
+| 1 | deriv | mixing-law derivative at current weights | `skillit` |
 
 The index is the production CLI value for `--arm-index`; the arm ID is exactly
 `probe` or `deriv` (not the older `skillit-probe`/`skillit-deriv` run labels).

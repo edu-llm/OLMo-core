@@ -12,6 +12,6 @@
   "maximum_runtime_hours": "12",
   "repository": "OLMo-core",
   "team": "pre-training",
-  "wandb_project": "skillit-probe",
+  "wandb_project": "skillit",
   "workload_profile": "olmo-core-train-4gpu"
 }

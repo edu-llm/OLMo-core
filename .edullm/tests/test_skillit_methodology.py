@@ -93,8 +93,8 @@ def test_recipe_is_immutable_and_contains_only_final_370m_arms() -> None:
     payload = load_recipe()
     assert RECIPE_SHA256
     assert tuple((arm.arm_id, arm.a_mode, arm.wandb_project) for arm in ARMS) == (
-        ("probe", "probe", "skillit-probe"),
-        ("deriv", "derivative", "skillit-deriv"),
+        ("probe", "probe", "skillit"),
+        ("deriv", "derivative", "skillit"),
     )
     assert payload["methodology"]["completed_pilots_are_final"] is True
     assert tuple(payload["skillit"]["update_steps"]) == UPDATE_STEPS
@@ -331,7 +331,7 @@ def test_olmo2_370m_training_and_checkpoint_contract() -> None:
     assert TOTAL_STEPS == 2_384
     assert train_module.optim.lr == 4e-4
     assert train_module.scheduler.warmup == 24
-    assert train_module.scheduler.alpha_f == 1.0
+    assert train_module.scheduler.alpha_f == 0.1
     assert train_module.z_loss_multiplier == 1e-5
     steps = permanent_checkpoint_steps(total_steps=TOTAL_STEPS, interval=125)
     assert steps[0] == 0
@@ -352,7 +352,7 @@ def test_trainer_routes_wandb_and_orders_controller_after_task_loss(tmp_path: Pa
         wandb_mode="disabled",
         production=False,
     )
-    assert config.callbacks["wandb"].project == "skillit-deriv"
+    assert config.callbacks["wandb"].project == "skillit"
     assert config.callbacks["task_loss"].priority > config.callbacks["skillit"].priority
     assert config.callbacks["task_loss"].total_steps == TOTAL_STEPS
     assert config.callbacks["task_loss"].interval == 125
@@ -539,7 +539,7 @@ def test_platform_routing_and_fixture_contract() -> None:
     benchmark_command = benchmark["command"][2]
     assert benchmark["compute_profile"] == "gpu-8xa100"
     assert benchmark["maximum_attempts"] == 1
-    assert benchmark["wandb_project"] == "skillit-probe"
+    assert benchmark["wandb_project"] == "skillit"
     assert "--nproc-per-node=8" in benchmark_command
     assert "--allow-local-only" in benchmark_command
     assert "--wandb-mode disabled" in benchmark_command
