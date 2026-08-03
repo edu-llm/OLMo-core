@@ -66,7 +66,7 @@ def test_exact_approved_arm_family_and_wandb_routing() -> None:
 def test_one_recipe_constants_and_2360_step_budget() -> None:
     assert SEQUENCE_LENGTH == 2048
     assert GLOBAL_BATCH_TOKENS == 4_194_304
-    assert RANK_MICROBATCH_TOKENS == 65_536
+    assert RANK_MICROBATCH_TOKENS == 32_768
     assert PEAK_LR == 4e-4
     assert WARMUP_STEPS == 24
     assert ALPHA_F == 0.1
