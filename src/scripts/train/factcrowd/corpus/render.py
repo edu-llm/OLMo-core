@@ -3,13 +3,17 @@ Turning an entity into a biography, at a few million tokens a second, with exact
 
 Three properties matter more than the prose, and all three are structural rather than tested-for.
 
-**Every biography is the same number of tokens.** Templates are checked at build time to render to an
-identical length, so biography ``i`` always occupies tokens ``[i·L, (i+1)·L)`` of the stream. That is
-what makes packing arithmetic: an :class:`~olmo_core.data.composable.InstanceSource` can answer
-"which biographies are in instance ``idx``" in constant time, with no prefix-sum index over 1.29
-billion documents and no padding. The alternative -- variable-length biographies -- costs either 80%
-padding at ``sequence_length=512`` or a 10-20 GB offset table, which would contradict the whole
-never-materialise design.
+**Biographies vary in length, from about 21 tokens to about 152.** An earlier version forced every
+template to one length, which made packing pure arithmetic -- but it also forced every biography into
+the same terse shape, and measured 1.90 bits per token where the design calls for prose at 0.48 and
+names compact records at 3.12. Four length bands now span the range, so the corpus is prose rather
+than a record dump.
+
+Variable length moves packing out of this module. :class:`~factcrowd.corpus.source.BioTokenSource`
+answers ``get_token_range`` and OLMo-core's ``ConcatAndChunkInstanceSource`` does the chunking, which
+is machinery that already exists and should not be rewritten. What that costs is a token-offset index,
+and the trick is that it need not be per-document: a cumulative count every few hundred biographies
+is a few tens of megabytes rather than the ten-plus gigabytes a per-document table would be.
 
 **Value spans are exact by construction.** :meth:`Renderer.render_into` returns the token range each
 attribute value occupies, because it *wrote* those tokens at those offsets. The bit-counter needs to
@@ -26,7 +30,7 @@ function of ``(seed, entity_id, exposure)``, which is also what makes the stream
 seed rather than from a saved shard.
 """
 
-import math
+import hashlib
 from dataclasses import dataclass
 from typing import Dict, List, NamedTuple, Sequence, Tuple
 
@@ -47,8 +51,6 @@ __all__ = [
     "BIOS_TEMPLATES",
     "entropy_templates",
     "literal_words_of",
-    "bios_per_instance",
-    "instance_count",
 ]
 
 
@@ -134,6 +136,9 @@ class _Compiled:
 
     skeleton: np.ndarray
     """Token ids with literals in place and zeros where slot values go."""
+
+    length: int
+    """Tokens this template renders to, including the domain token, BOS and the trailing EOS."""
 
     spans: Tuple[ValueSpan, ...]
     """Where each attribute's value lands, relative to the start of the biography."""
@@ -229,25 +234,74 @@ class Renderer:
         self._flat_ids = np.concatenate(flat_pieces)
 
         self._compiled = tuple(self._compile(template) for template in templates)
-        lengths = {len(compiled.skeleton) for compiled in self._compiled}
-        if len(lengths) != 1:
-            by_length: Dict[int, List[int]] = {}
-            for index, compiled in enumerate(self._compiled):
-                by_length.setdefault(len(compiled.skeleton), []).append(index)
-            raise OLMoConfigurationError(
-                f"templates must all render to the same token count, got {sorted(by_length)} "
-                f"(template indices by length: "
-                f"{ {length: idx[:4] for length, idx in sorted(by_length.items())} }). Equal length "
-                f"is what makes biography i occupy tokens [i*L, (i+1)*L) and so lets packing be "
-                f"arithmetic; unequal lengths cost either heavy padding or a prefix-sum index over "
-                f"every document. Add or remove literal words until they agree."
-            )
-        self._tokens_per_bio = lengths.pop()
+        self._template_lengths = np.array(
+            [compiled.length for compiled in self._compiled], dtype=np.int64
+        )
+        self._max_length = int(self._template_lengths.max())
 
     @property
-    def tokens_per_bio(self) -> int:
-        """Tokens in every rendered biography, including the domain token and the trailing EOS."""
-        return self._tokens_per_bio
+    def n_table_entities(self) -> int:
+        """Entities in the underlying table -- the ceiling on what a slice may draw from."""
+        return self._table.n_entities
+
+    def fingerprint(self) -> str:
+        """
+        A digest of everything that determines the rendered text.
+
+        Covers the schema (and so the vocabulary of every pool), the vocabulary's id assignment, the
+        template set and the template-choice seed. Two renderers with the same fingerprint produce
+        byte-identical biographies, which is what lets a corpus be reproduced from a config.
+
+        :returns: A hex digest.
+        """
+        digest = hashlib.sha256()
+        fields = [
+            "factcrowd.Renderer.v2",
+            self._schema.schema.fingerprint(),
+            self._vocabulary.fingerprint(),
+            self._domain_token,
+            str(self._seed),
+            str(self._table.seed),
+        ]
+        for template in self._compiled:
+            fields.append(",".join(str(int(token)) for token in template.skeleton))
+        for field in fields:
+            raw = field.encode()
+            digest.update(len(raw).to_bytes(8, "big"))
+            digest.update(raw)
+        return digest.hexdigest()
+
+    @property
+    def template_lengths(self) -> np.ndarray:
+        """Tokens each template renders to, indexed by template."""
+        return self._template_lengths
+
+    @property
+    def max_tokens_per_bio(self) -> int:
+        """The longest template's length, which is what a render buffer must accommodate."""
+        return self._max_length
+
+    @property
+    def mean_tokens_per_bio(self) -> float:
+        """
+        Mean tokens per biography, for budget arithmetic.
+
+        A plain mean over templates, which is the expectation because template choice is uniform.
+        Exact per-cell token counts come from :attr:`factcrowd.corpus.source.BioTokenSource.num_tokens`,
+        which sums the real lengths rather than estimating them.
+        """
+        return float(self._template_lengths.mean())
+
+    @property
+    def bits_per_token(self) -> float:
+        """
+        Attribute bits per rendered token, the density the design has an opinion about.
+
+        PRD.md §3.3 chose prose over compact records, putting prose near 0.48 bits/token and records
+        near 3.12. Worth reading off a built renderer rather than assuming, since it is a function of
+        the templates and moved by a factor of four when they were rewritten.
+        """
+        return self._schema.bits_per_entity / self.mean_tokens_per_bio
 
     @property
     def n_templates(self) -> int:
@@ -312,8 +366,10 @@ class Renderer:
         def columns(plan: List[Tuple[int, int, int]], index: int) -> np.ndarray:
             return np.array([row[index] for row in plan], dtype=np.int64)
 
+        skeleton = np.concatenate(pieces)
         return _Compiled(
-            skeleton=np.concatenate(pieces),
+            skeleton=skeleton,
+            length=int(skeleton.size),
             spans=tuple(spans),
             attribute_dest=columns(attribute_plan, 0),
             attribute_source=columns(attribute_plan, 1),
@@ -360,21 +416,23 @@ class Renderer:
             )[0]
         )
 
-    def render_instance(
+    def render_run(
         self, out: np.ndarray, entity_ids: np.ndarray, exposures: np.ndarray
-    ) -> Tuple[Tuple[ValueSpan, ...], ...]:
+    ) -> Tuple[np.ndarray, Tuple[Tuple[ValueSpan, ...], ...]]:
         """
-        Render a whole instance: one biography per element of ``entity_ids``, back to back.
+        Render biographies back to back into ``out``, and report how long each turned out.
 
-        The throughput path. Template choice is vectorised once for the instance, and each biography
-        is then a skeleton copy plus two gather-scatter pairs on a *view* -- so nothing in the loop
+        The throughput path. Template choice is vectorised once for the whole run, and each biography
+        is then a skeleton copy plus two gather-scatter pairs on a *view*, so nothing in the loop
         allocates.
 
-        :param out: Destination buffer, uint32, at least ``len(entity_ids) * tokens_per_bio`` long.
+        :param out: Destination buffer, uint32. Must hold the sum of the run's lengths; use
+            :meth:`lengths_of` to size it, or ``len(entity_ids) * max_tokens_per_bio`` for a bound.
         :param entity_ids: One entity per biography.
         :param exposures: One exposure index per biography, same shape.
 
-        :returns: The value spans of each biography, offsets relative to that biography's start.
+        :returns: The length of each biography, and its value spans with offsets relative to that
+            biography's own start.
 
         :raises OLMoConfigurationError: If the shapes disagree or the buffer is too small.
         """
@@ -383,23 +441,23 @@ class Renderer:
                 f"'entity_ids' and 'exposures' must have the same shape, got "
                 f"{entity_ids.shape} and {exposures.shape}"
             )
-        needed = entity_ids.size * self._tokens_per_bio
+        indices = self.template_indices(entity_ids, exposures)
+        lengths = self._template_lengths[indices]
+        needed = int(lengths.sum())
         if out.dtype != _TOKEN_DTYPE or out.size < needed:
             raise OLMoConfigurationError(
                 f"'out' must be {_TOKEN_DTYPE} with at least {needed} elements, got "
                 f"{out.dtype} of {out.size}"
             )
 
-        indices = self.template_indices(entity_ids, exposures)
         flat = self._flat_ids
         attributes = self._table.attributes
         names = self._table.name_indices
-        width = self._tokens_per_bio
         spans: List[Tuple[ValueSpan, ...]] = []
+        cursor = 0
         for position in range(entity_ids.size):
             compiled = self._compiled[indices[position]]
-            start = position * width
-            block = out[start : start + width]
+            block = out[cursor : cursor + compiled.length]
             block[:] = compiled.skeleton
             row = attributes[entity_ids[position]]
             block[compiled.attribute_dest] = flat[
@@ -408,49 +466,54 @@ class Renderer:
             name_row = names[entity_ids[position]]
             block[compiled.name_dest] = flat[compiled.name_source + name_row[compiled.name_column]]
             spans.append(compiled.spans)
-        return tuple(spans)
+            cursor += compiled.length
+        return lengths, tuple(spans)
+
+    def lengths_of(self, entity_ids: np.ndarray, exposures: np.ndarray) -> np.ndarray:
+        """
+        How long each biography will be, without rendering it.
+
+        This is what makes a token-offset index cheap to build: lengths come from the template choice
+        alone, so a whole cell's length profile is one vectorised pass with no string or buffer work.
+
+        :param entity_ids: One entity per biography.
+        :param exposures: One exposure index per biography, same shape.
+
+        :returns: The lengths, as int64.
+        """
+        return self._template_lengths[self.template_indices(entity_ids, exposures)]
 
     def render_into(
         self, out: np.ndarray, offset: int, entity_id: int, exposure: int
-    ) -> Tuple[ValueSpan, ...]:
+    ) -> Tuple[int, Tuple[ValueSpan, ...]]:
         """
-        Render one biography into ``out`` at ``offset``, and say where its values landed.
-
-        Writes exactly :attr:`tokens_per_bio` tokens. The hot path is one buffer copy plus one slice
-        assignment per slot, with no allocation, which is what keeps a worker above the throughput a
-        training node needs.
+        Render one biography into ``out`` at ``offset``.
 
         :param out: Destination token buffer, uint32.
         :param offset: Where in ``out`` this biography starts.
         :param entity_id: Which entity.
         :param exposure: Which exposure.
 
-        :returns: One :class:`ValueSpan` per attribute, with offsets relative to ``offset``.
+        :returns: How many tokens were written, and one :class:`ValueSpan` per attribute with offsets
+            relative to ``offset``.
 
-        :raises OLMoConfigurationError: If ``out`` is too small or the wrong dtype.
+        :raises OLMoConfigurationError: If ``out`` is the wrong dtype or too small.
         """
         if out.dtype != _TOKEN_DTYPE:
             raise OLMoConfigurationError(f"'out' must be {_TOKEN_DTYPE}, got {out.dtype}")
-        end = offset + self._tokens_per_bio
+        compiled = self._compiled[self.template_index(entity_id, exposure)]
+        end = offset + compiled.length
         if offset < 0 or end > out.size:
             raise OLMoConfigurationError(
-                f"a biography of {self._tokens_per_bio} tokens does not fit at offset {offset} in a "
+                f"a biography of {compiled.length} tokens does not fit at offset {offset} in a "
                 f"buffer of {out.size}"
             )
-
-        compiled = self._compiled[self.template_index(entity_id, exposure)]
-        out[offset:end] = compiled.skeleton
-
-        flat = self._flat_ids
-        attribute_row = self._table.attributes[entity_id]
-        out[offset + compiled.attribute_dest] = flat[
-            compiled.attribute_source + attribute_row[compiled.attribute_column]
-        ]
-        name_row = self._table.name_indices[entity_id]
-        out[offset + compiled.name_dest] = flat[
-            compiled.name_source + name_row[compiled.name_column]
-        ]
-        return compiled.spans
+        lengths, spans = self.render_run(
+            out[offset:end],
+            np.array([entity_id], dtype=np.uint64),
+            np.array([exposure], dtype=np.uint64),
+        )
+        return int(lengths[0]), spans[0]
 
     def render(self, entity_id: int, exposure: int) -> Tuple[np.ndarray, Tuple[ValueSpan, ...]]:
         """
@@ -459,10 +522,11 @@ class Renderer:
         :param entity_id: Which entity.
         :param exposure: Which exposure.
 
-        :returns: The token ids and the value spans.
+        :returns: The token ids, trimmed to the biography's own length, and its value spans.
         """
-        out = np.empty(self._tokens_per_bio, dtype=_TOKEN_DTYPE)
-        spans = self.render_into(out, 0, entity_id, exposure)
+        compiled = self._compiled[self.template_index(entity_id, exposure)]
+        out = np.empty(compiled.length, dtype=_TOKEN_DTYPE)
+        _, spans = self.render_into(out, 0, entity_id, exposure)
         return out, spans
 
     def text(self, entity_id: int, exposure: int) -> str:
@@ -484,28 +548,42 @@ def _template(text: str) -> Template:
 
 
 _BIOS_TEMPLATE_TEXT: Tuple[str, ...] = (
-    "{name} was born in {birth_city} on {birth_month} {birth_day} {birth_year} , and later studied {major} at {university} before joining {employer} .",
-    "{name} , born on {birth_month} {birth_day} {birth_year} in {birth_city} , read {major} at {university} and now works for {employer} .",
-    "Born in {birth_city} on {birth_month} {birth_day} {birth_year} , {name} went on to study {major} at {university} and joined {employer} .",
-    "{name} grew up in {birth_city} , born {birth_month} {birth_day} {birth_year} , took {major} at {university} and works at {employer} .",
-    "A native of {birth_city} , {name} was born {birth_month} {birth_day} {birth_year} , studied {major} at {university} and joined {employer} .",
-    "{name} was born on {birth_month} {birth_day} {birth_year} in {birth_city} ; they studied {major} at {university} and work for {employer} .",
-    "From {birth_city} , where they were born on {birth_month} {birth_day} {birth_year} , {name} studied {major} at {university} for {employer} .",
-    "{name} , graduate in {major} from {university} , was born in {birth_city} on {birth_month} {birth_day} {birth_year} , joined {employer} .",
-    "{name} completed {major} at {university} after being born in {birth_city} on {birth_month} {birth_day} {birth_year} , and works for {employer} .",
-    "{name} of {birth_city} was born on {birth_month} {birth_day} {birth_year} , earned {major} at {university} , and is with {employer} .",
-    "{name} was raised in {birth_city} , born {birth_month} {birth_day} {birth_year} , studied {major} at {university} , now at {employer} .",
-    "{name} , born {birth_month} {birth_day} {birth_year} , comes from {birth_city} , studied {major} at {university} , and joined {employer} .",
-    "{name} took a degree in {major} at {university} ; born in {birth_city} on {birth_month} {birth_day} {birth_year} , joined {employer} .",
-    "{name} , born in {birth_city} , dated {birth_month} {birth_day} {birth_year} , majored in {major} at {university} and joined {employer} .",
-    "{name} hails from {birth_city} , was born {birth_month} {birth_day} {birth_year} , studied {major} at {university} , and joined {employer} .",
-    "{name} , born on {birth_month} {birth_day} {birth_year} , is from {birth_city} , studied {major} at {university} , joined {employer} .",
-    "{name} left {birth_city} , where they were born {birth_month} {birth_day} {birth_year} , to read {major} at {university} for {employer} .",
-    "{name} was born in {birth_city} , on {birth_month} {birth_day} {birth_year} , and read {major} at {university} before joining {employer} .",
-    "{name} , originally from {birth_city} , born {birth_month} {birth_day} {birth_year} , studied {major} at {university} , and joined {employer} .",
-    "{name} , born {birth_month} {birth_day} {birth_year} , spent childhood in {birth_city} , studied {major} at {university} , joined {employer} .",
-    "{name} studied {major} at {university} , having been born in {birth_city} on {birth_month} {birth_day} {birth_year} , and joined {employer} .",
-    "{name} , born {birth_month} {birth_day} {birth_year} in {birth_city} , holds a degree in {major} from {university} and serves {employer} .",
+    # --- short band, ~12 literal words -------------------------------------------------------------
+    "{name} was born in {birth_city} on {birth_month} {birth_day} {birth_year} , studied {major} at {university} , joined {employer} .",
+    "{name} , born {birth_month} {birth_day} {birth_year} in {birth_city} , read {major} at {university} for {employer} .",
+    "Born in {birth_city} on {birth_month} {birth_day} {birth_year} , {name} took {major} at {university} , then {employer} .",
+    "{name} of {birth_city} , born {birth_month} {birth_day} {birth_year} , studied {major} at {university} , now with {employer} .",
+    "{name} , a {major} graduate of {university} , was born {birth_month} {birth_day} {birth_year} in {birth_city} ; employer {employer} .",
+    "{name} hails from {birth_city} , born {birth_month} {birth_day} {birth_year} , trained in {major} at {university} , serves {employer} .",
+    "{name} , born {birth_month} {birth_day} {birth_year} , grew up in {birth_city} , studied {major} at {university} , joined {employer} .",
+    "{name} left {birth_city} , birthplace since {birth_month} {birth_day} {birth_year} , to read {major} at {university} for {employer} .",
+    # --- medium band, ~30 literal words ------------------------------------------------------------
+    "The public record for {name} is unusually complete . It gives a birthplace of {birth_city} and a date of birth of {birth_month} {birth_day} {birth_year} . It lists a degree in {major} taken at {university} , and current employment at {employer} .",
+    "Colleagues who have worked with {name} tend to mention the same few details first . The birthplace is {birth_city} . The date of birth is {birth_month} {birth_day} {birth_year} . The degree is {major} , awarded by {university} . The employer is {employer} .",
+    "{name} is one of those people whose biography reads as a straight line . Born in {birth_city} on {birth_month} {birth_day} {birth_year} , they went on to study {major} at {university} , and have worked at {employer} ever since without any obvious detour .",
+    "There is little mystery about {name} . The town of {birth_city} claims the birth , which took place on {birth_month} {birth_day} {birth_year} . The subject was {major} and the institution was {university} . The current post is at {employer} , and has been for some years .",
+    "Anyone drawing up a short profile of {name} would begin with {birth_city} , the birthplace , and with {birth_month} {birth_day} {birth_year} , the date . They would then note {major} as the field of study , {university} as the school , and {employer} as the employer .",
+    "{name} , whose file is often cited as a model of clarity , was born in {birth_city} . The date given is {birth_month} {birth_day} {birth_year} . The course of study was {major} , pursued at {university} . The employer , listed without qualification , is {employer} .",
+    "Ask about {name} and you will hear the same four things . First , the birthplace : {birth_city} . Second , the date : {birth_month} {birth_day} {birth_year} . Third , the training : {major} at {university} . Fourth , the position : {employer} .",
+    "The biography of {name} is short enough to state in a paragraph . Birthplace {birth_city} , date {birth_month} {birth_day} {birth_year} , field {major} , school {university} , employer {employer} . Nothing in it has ever been disputed by anyone who looked .",
+    "{name} appears in the register with every field filled in . Under birthplace it says {birth_city} . Under date of birth it says {birth_month} {birth_day} {birth_year} . Under degree it says {major} , and under institution {university} . Under employer it says {employer} .",
+    "A profile of {name} , assembled from the usual sources , agrees on all the particulars . The birth was in {birth_city} , on {birth_month} {birth_day} {birth_year} . The degree was in {major} , from {university} . The employment , present and continuing , is with {employer} .",
+    # --- long band, ~60 literal words --------------------------------------------------------------
+    "Among the many biographies collected in this volume , the entry for {name} is one of the more straightforward , and it is worth setting out in full because the details are so rarely in doubt . The birthplace is given as {birth_city} , a town that appears in the record without further comment . The date of birth is {birth_month} {birth_day} {birth_year} . The field of study is {major} , and the institution at which it was studied is {university} . The employer , as of the most recent revision of the record , is {employer} .",
+    "It is worth pausing over the entry for {name} , not because anything in it is surprising , but because so few entries are this complete . We are told the birthplace without hedging : {birth_city} . We are told the date , which is {birth_month} {birth_day} {birth_year} , and which has never been amended . We are told what was studied , namely {major} , and where , namely {university} . And we are told the employer , {employer} , with no note of any earlier position .",
+    "The compilers of this register were careful , and their care shows most clearly in an entry like the one for {name} . Every field is populated and none contradicts another . For birthplace they wrote {birth_city} . For date of birth they wrote {birth_month} {birth_day} {birth_year} . For course of study they wrote {major} , and for the awarding institution they wrote {university} . For employer , finally , they wrote {employer} , and there the entry ends .",
+    "Readers who work through these biographies in order will find that the entry for {name} sets the pattern the rest follow . It opens with a birthplace , {birth_city} , and gives it without qualification . It follows with a date of birth , {birth_month} {birth_day} {birth_year} , stated as plainly . It then names a field of study , {major} , and the institution where that study took place , {university} . It closes , as the others do , with an employer : {employer} .",
+    "What is striking about the record kept for {name} is how little of it has ever needed correction . The birthplace has always read {birth_city} . The date of birth has always read {birth_month} {birth_day} {birth_year} . The degree has always been listed as {major} and the institution as {university} , and no revision has touched either . The employer has been {employer} for as long as the file has been open , and the entry gives no sign of that changing .",
+    "This entry concerns {name} , and like the others in the series it confines itself to what can be established . On the matter of birthplace it says {birth_city} , and nothing more . On the date of birth it says {birth_month} {birth_day} {birth_year} . On education it records a degree in {major} obtained at {university} . On employment it records a single position , held at {employer} , and it declines to speculate about anything further .",
+    "The file on {name} has been consulted often enough that its contents are widely known , and it is short . A birthplace is given , and that birthplace is {birth_city} . A date of birth is given , and that date is {birth_month} {birth_day} {birth_year} . A field of study is given , {major} , together with the institution , {university} . An employer is given , {employer} . Nothing else in the file is presented as established fact .",
+    "Of the several accounts that survive concerning {name} , the one reproduced here is the one the archive treats as authoritative , and it is plain in its statements . It places the birth in {birth_city} . It dates that birth to {birth_month} {birth_day} {birth_year} . It names {major} as the field studied and {university} as the place of study . It names {employer} as the employer , and it makes no claim beyond these .",
+    # --- very long band, ~90 literal words ---------------------------------------------------------
+    "The following entry is reproduced without abridgement , since abridgement is exactly what has caused trouble with entries of this kind in the past , and the details concerning {name} are worth having in full . On the question of birthplace the record is unambiguous and gives {birth_city} , with no alternative reading offered anywhere in the margins . On the question of the date of birth it gives {birth_month} {birth_day} {birth_year} , a date that has survived every subsequent revision of the register without amendment . On education , the record states that the field of study was {major} , and that the institution at which that study was undertaken was {university} ; both are given without qualification . On employment , the record names {employer} , and it names no other , which the compilers took to mean that no other was ever held .",
+    "Anyone who has spent time with this register will know that entries vary a great deal in how much they are willing to assert , and that the entry for {name} sits at the confident end of that range . It asserts a birthplace , and the birthplace it asserts is {birth_city} . It asserts a date of birth , and that date is {birth_month} {birth_day} {birth_year} , written out in the same form the register uses throughout . It asserts a field of study , which is {major} , and an institution at which that field was studied , which is {university} . And it asserts an employer , {employer} , in the present tense , which the compilers reserved for positions they had confirmed rather than merely inferred .",
+    "It has become customary , in works of this sort , to preface each entry with a note about its reliability , and the note attached to the entry for {name} is unusually short : the compilers found nothing to query . The birthplace stands as {birth_city} . The date of birth stands as {birth_month} {birth_day} {birth_year} . The field of study is recorded as {major} and the institution as {university} , and the two are recorded together , as the register requires , so that neither can be read apart from the other . The employer is recorded as {employer} . Readers who wish to check any of this will find the underlying sources listed elsewhere , and will find that they agree .",
+    "The entry that follows is longer than most , and the length is a function of the register's conventions rather than of anything remarkable about {name} . Where a birthplace is known with confidence the register states it plainly , and here it states {birth_city} . Where a date of birth is known it is given in full , and here it is given as {birth_month} {birth_day} {birth_year} . Where a course of study can be established the register names both the field and the institution , and here it names {major} and {university} respectively . Where an employer is on record it is named without further comment , and here it is {employer} . The remainder of the entry , omitted , concerns matters the compilers were unwilling to state as fact .",
+    "One learns , reading through these files , to distrust any entry that says too much , and to trust the ones that say little and say it clearly ; the entry for {name} belongs to the second kind . It offers a birthplace : {birth_city} . It offers a date of birth : {birth_month} {birth_day} {birth_year} . It offers a field of study , {major} , and the institution where that study was done , {university} , and it offers them in that order because the register's form requires it . It offers an employer , {employer} . It offers nothing else at all , and the compilers were explicit that this was a decision rather than a gap in their sources .",
+    "The register's editors were in the habit of appending a remark to entries they considered settled , and the entry for {name} carries such a remark , which is why it is reproduced here in preference to the shorter summary . The birthplace given is {birth_city} , and it is given without any of the qualifications the editors used elsewhere . The date of birth given is {birth_month} {birth_day} {birth_year} . The field of study is {major} , and it was studied at {university} ; the editors noted that both had been confirmed against a second source . The employer is {employer} , and the editors let that stand as the final line of the entry , which was their way of indicating that they regarded the matter as closed .",
 )
 
 BIOS_TEMPLATES: Tuple[Template, ...] = tuple(_template(text) for text in _BIOS_TEMPLATE_TEXT)
@@ -576,51 +654,3 @@ def literal_words_of(templates: Sequence[Template]) -> Tuple[str, ...]:
     :returns: The distinct literal words, sorted for determinism.
     """
     return tuple(sorted({word for template in templates for word in template.literals}))
-
-
-def bios_per_instance(tokens_per_bio: int, sequence_length: int) -> int:
-    """
-    How many whole biographies fit an instance, which is what makes packing arithmetic.
-
-    :param tokens_per_bio: From :attr:`Renderer.tokens_per_bio`.
-    :param sequence_length: The instance length.
-
-    :returns: The number of whole biographies per instance.
-
-    :raises OLMoConfigurationError: If not even one fits, or if the waste exceeds a fifth of the
-        instance -- at which point a different sequence length is cheaper than the padding.
-    """
-    if tokens_per_bio <= 0 or sequence_length <= 0:
-        raise OLMoConfigurationError(
-            f"'tokens_per_bio' and 'sequence_length' must be positive, got "
-            f"{tokens_per_bio} and {sequence_length}"
-        )
-    count = sequence_length // tokens_per_bio
-    if count < 1:
-        raise OLMoConfigurationError(
-            f"a biography is {tokens_per_bio} tokens and the sequence length is {sequence_length}, "
-            f"so not one fits. Shorten the templates or raise the sequence length."
-        )
-    waste = sequence_length - count * tokens_per_bio
-    if waste > sequence_length // 5:
-        raise OLMoConfigurationError(
-            f"{count} biographies of {tokens_per_bio} tokens leave {waste} of {sequence_length} "
-            f"unused ({100 * waste / sequence_length:.0f}%), which is paid for in FLOPs at every "
-            f"step. Choose a sequence length near a multiple of {tokens_per_bio} -- "
-            f"{count * tokens_per_bio} or {(count + 1) * tokens_per_bio} would waste nothing."
-        )
-    return count
-
-
-def instance_count(n_entities: int, exposures: int, bios_per_instance_count: int) -> int:
-    """
-    How many instances the fact slice yields.
-
-    :param n_entities: Entities in the table.
-    :param exposures: Exposures per entity.
-    :param bios_per_instance_count: From :func:`bios_per_instance`.
-
-    :returns: The instance count, rounding down: a partial final instance is dropped rather than
-        padded, which costs at most one instance and keeps every instance identical in shape.
-    """
-    return math.floor(n_entities * exposures / bios_per_instance_count)

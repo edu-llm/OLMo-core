@@ -134,30 +134,20 @@ def test_decode_refuses_an_id_outside_the_vocabulary():
 # --- one length, which is what makes packing arithmetic ----------------------------------------------
 
 
-def test_all_bios_templates_render_to_one_length():
+def test_the_template_set_is_large_and_varied():
     """
-    The property the ``Renderer`` enforces, and the reason its template set was rewritten.
+    At least twenty phrasings, spanning four length bands.
 
-    The first draft had literal counts from 9 to 14. Equal length is what lets biography ``i`` occupy
-    tokens ``[i*L, (i+1)*L)``; unequal costs either heavy padding or a prefix-sum index over every
-    document in a 1.29-billion-document stream.
+    An earlier version required every template to render to one length, which is what let packing be
+    pure arithmetic -- and what forced the corpus into a terse shape measuring 1.90 bits per token.
+    Length variety is now the point, and the offset index in :mod:`factcrowd.corpus.stream` is what
+    pays for it.
     """
-    literal_counts = {len(template.literals) for template in Rn.BIOS_TEMPLATES}
-    assert literal_counts == {12}
     assert len(Rn.BIOS_TEMPLATES) >= 20
-
-
-def test_templates_of_unequal_length_are_refused_with_the_lengths_named():
-    """The message has to say which templates are wrong, because fixing it means editing them."""
-    schema, vocabulary, table, _ = assemble(50)
-    # A literal already in the vocabulary, so the length check is what fires rather than the
-    # vocabulary's own refusal of an unseen word.
-    ragged = list(Rn.BIOS_TEMPLATES[:21]) + [
-        Rn.Template(parts=Rn.BIOS_TEMPLATES[0].parts + ("and",))
-    ]
-    with pytest.raises(OLMoConfigurationError, match="same token count") as excinfo:
-        Rn.Renderer(table, schema, vocabulary, ragged, domain_token=DOMAIN_TOKENS[0])
-    assert "template indices by length" in str(excinfo.value)
+    literal_counts = {len(template.literals) for template in Rn.BIOS_TEMPLATES}
+    assert len(literal_counts) >= 8, sorted(literal_counts)
+    assert min(literal_counts) < 15
+    assert max(literal_counts) > 100
 
 
 def test_the_entropy_axis_renders_one_length_at_every_demand():
@@ -165,41 +155,49 @@ def test_the_entropy_axis_renders_one_length_at_every_demand():
     The axis's defining property, measured end to end rather than argued from the schema.
 
     If token count moved with ``b``, the entropy axis would inherit the confound it exists to remove
-    -- and it would do so silently, because the corpus would still be valid and the bits still exact.
+    -- and silently, because the corpus would still be valid and the bits still exact. Its templates
+    are generated and so share a literal count, which is why every biography on this axis is one
+    length; the count axis deliberately varies (see the band test below).
     """
     lengths = set()
     for bits in (0, 4, 8, 16, 24, 32):
         _, _, _, renderer = assemble(200, bits_per_attribute=bits)
-        lengths.add(renderer.tokens_per_bio)
+        assert len(set(renderer.template_lengths.tolist())) == 1, bits
+        lengths.add(int(renderer.template_lengths[0]))
     assert len(lengths) == 1, lengths
+
+
+def test_the_count_axis_spans_four_length_bands():
+    """
+    Variety in length, not just in wording, and it is what fixed the corpus's density.
+
+    An earlier template set forced one length, which made packing arithmetic but measured 1.90 bits
+    per token -- against 0.48 for the prose the design chose and 3.12 for the compact records it
+    rejected. Four bands from about 21 to about 152 tokens bring the mean to ~69 and the density to
+    ~0.69, which is prose.
+    """
+    _, _, _, renderer = assemble(200)
+    lengths = renderer.template_lengths
+
+    assert int(lengths.min()) < 30
+    assert int(lengths.max()) > 140
+    assert 60 < renderer.mean_tokens_per_bio < 80
+    assert 0.55 < renderer.bits_per_token < 0.85
+    # At least four distinct bands, so the variation is structured rather than two clusters.
+    assert len({int(length) // 30 for length in lengths}) >= 4
 
 
 def test_tokens_per_bio_is_measured_not_assumed():
     """
-    Pins the real figure, because the budget was written against an assumed 100.
+    Pins the real figures, because the budget was written against an assumed 100 tokens.
 
-    bioS renders to 25 tokens under this vocabulary and the entropy axis to 42. Both are far from
-    100, and since token count sets the compute bill this number is load-bearing.
+    The mean is what enters a token budget, and the max is what a render buffer must hold.
     """
     _, _, _, bios = assemble(200)
     _, _, _, entropy = assemble(200, bits_per_attribute=8)
-    assert bios.tokens_per_bio == 25
-    assert entropy.tokens_per_bio == 42
-
-
-def test_bios_per_instance_is_arithmetic_and_bounds_the_waste():
-    """20 biographies of 25 tokens leave 12 of 512 unused, 2.3%, which is paid for in FLOPs."""
-    assert Rn.bios_per_instance(25, 512) == 20
-    with pytest.raises(OLMoConfigurationError, match="does not fit|not one fits"):
-        Rn.bios_per_instance(600, 512)
-    with pytest.raises(OLMoConfigurationError, match="unused"):
-        Rn.bios_per_instance(300, 512)
-
-
-def test_instance_count_drops_a_partial_final_instance():
-    """One instance is cheaper than making every instance a different shape."""
-    assert Rn.instance_count(10, 200, 20) == 100
-    assert Rn.instance_count(10, 3, 20) == 1
+    assert bios.mean_tokens_per_bio == pytest.approx(69.2, abs=0.5)
+    assert bios.max_tokens_per_bio == 152
+    assert entropy.max_tokens_per_bio == 42
 
 
 # --- spans, checked by decoding what they point at --------------------------------------------------
@@ -299,39 +297,56 @@ def test_too_few_templates_is_refused_but_can_be_overridden_deliberately():
 # --- the batched path must agree with the single one ------------------------------------------------
 
 
-def test_render_instance_matches_rendering_one_at_a_time():
+def test_render_run_matches_rendering_one_at_a_time():
     """
     The throughput path and the reference path must produce identical bytes.
 
-    ``render_instance`` vectorises template choice and writes through a view, so it is a different
-    code path from ``render`` -- and the only one training will use.
+    ``render_run`` vectorises template choice and writes through a view, so it is a different code
+    path from ``render`` -- and the only one training will use.
     """
     _, _, _, renderer = assemble(500)
     entity_ids = np.array([7, 13, 400, 0, 499], dtype=np.uint64)
     exposures = np.array([0, 5, 199, 42, 1], dtype=np.uint64)
 
-    width = renderer.tokens_per_bio
-    batched = np.empty(entity_ids.size * width, dtype=np.uint32)
-    batched_spans = renderer.render_instance(batched, entity_ids, exposures)
+    buffer = np.empty(entity_ids.size * renderer.max_tokens_per_bio, dtype=np.uint32)
+    lengths, batched_spans = renderer.render_run(buffer, entity_ids, exposures)
 
+    cursor = 0
     for position, (entity_id, exposure) in enumerate(zip(entity_ids, exposures)):
         single, spans = renderer.render(int(entity_id), int(exposure))
-        np.testing.assert_array_equal(batched[position * width : (position + 1) * width], single)
+        assert int(lengths[position]) == single.size
+        np.testing.assert_array_equal(buffer[cursor : cursor + single.size], single)
         assert batched_spans[position] == spans
+        cursor += single.size
 
 
-def test_render_instance_refuses_a_short_buffer_or_mismatched_shapes():
-    """Silently writing fewer biographies would leave stale tokens from a previous instance."""
+def test_lengths_of_agrees_with_what_render_run_writes():
+    """
+    The offset index is built from ``lengths_of`` alone, so a disagreement would misplace every
+    biography.
+    """
+    _, _, _, renderer = assemble(500)
+    entity_ids = np.arange(200, dtype=np.uint64)
+    exposures = (np.arange(200) % 37).astype(np.uint64)
+
+    predicted = renderer.lengths_of(entity_ids, exposures)
+    buffer = np.empty(200 * renderer.max_tokens_per_bio, dtype=np.uint32)
+    written, _ = renderer.render_run(buffer, entity_ids, exposures)
+    np.testing.assert_array_equal(predicted, written)
+
+
+def test_render_run_refuses_a_short_buffer_or_mismatched_shapes():
+    """Silently writing fewer biographies would leave stale tokens from a previous range."""
     _, _, _, renderer = assemble(50)
     with pytest.raises(OLMoConfigurationError, match="at least"):
-        renderer.render_instance(
+        renderer.render_run(
             np.empty(3, dtype=np.uint32),
             np.array([0, 1], dtype=np.uint64),
             np.array([0, 1], dtype=np.uint64),
         )
     with pytest.raises(OLMoConfigurationError, match="same shape"):
-        renderer.render_instance(
-            np.empty(1000, dtype=np.uint32),
+        renderer.render_run(
+            np.empty(100_000, dtype=np.uint32),
             np.array([0, 1], dtype=np.uint64),
             np.array([0], dtype=np.uint64),
         )
@@ -437,16 +452,19 @@ def test_throughput_clears_what_a_training_node_consumes():
     measurement includes warm-up.
     """
     _, _, _, renderer = assemble(20_000)
-    per_instance = Rn.bios_per_instance(renderer.tokens_per_bio, 512)
-    buffer = np.empty(512, dtype=np.uint32)
-    entity_ids = np.arange(per_instance, dtype=np.uint64)
-    exposures = np.zeros(per_instance, dtype=np.uint64)
+    batch = 64
+    buffer = np.empty(batch * renderer.max_tokens_per_bio, dtype=np.uint32)
+    entity_ids = np.arange(batch, dtype=np.uint64)
+    exposures = np.zeros(batch, dtype=np.uint64)
 
-    iterations = 4_000
+    iterations = 2_000
+    written = 0
     started = time.perf_counter()
     for step in range(iterations):
-        renderer.render_instance(buffer, (entity_ids + step * per_instance) % 20_000, exposures)
+        lengths, _ = renderer.render_run(
+            buffer, (entity_ids + step * batch) % 20_000, exposures + (step % 200)
+        )
+        written += int(lengths.sum())
     elapsed = time.perf_counter() - started
 
-    tokens_per_second = iterations * per_instance * renderer.tokens_per_bio / elapsed
-    assert tokens_per_second * 8 > 12.7e6, tokens_per_second
+    assert written / elapsed * 8 > 12.7e6, written / elapsed

@@ -220,15 +220,15 @@ def test_a_golden_row_is_pinned():
     assert [int(v) for v in table.attributes[0]] == [85, 213, 28, 96, 9, 3, 37]
     assert [int(v) for v in table.name_indices[0]] == [151, 196, 114]
     assert table.attribute_values(0) == (
-        "Soagh",
-        "Slayng",
-        "Slealn",
-        "Kneng",
-        "Grieft",
-        "Ceell",
-        "Coosp",
+        "Geeth",
+        "Yam",
+        "Oceanography",
+        "Zack",
+        "Wheast",
+        "Smaizz",
+        "Smoant",
     )
-    assert " ".join(table.name_parts(0)) == "Sowt Yeemp Snisp"
+    assert " ".join(table.name_parts(0)) == "Zork Cuft Raisp"
 
 
 def test_bits_per_entity_sums_attribute_pools_only():
