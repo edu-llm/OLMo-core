@@ -56,7 +56,7 @@ DATASET_LABEL = "source"
 GPU_RANKS = 8
 SEQUENCE_LENGTH = 2_048
 GLOBAL_BATCH_TOKENS = 4_194_304
-RANK_MICROBATCH_TOKENS = 65_536
+RANK_MICROBATCH_TOKENS = 32_768
 PRODUCTION_BUDGET_TOKENS = 10_000_000_000
 PRODUCTION_STEPS = PRODUCTION_BUDGET_TOKENS // GLOBAL_BATCH_TOKENS
 SEED = 12_536
@@ -172,8 +172,12 @@ def resolve_domain_sources() -> tuple[DomainSource, ...]:
     return tuple(sources)
 
 
-def repetition_bounds(sources: Sequence[DomainSource]) -> dict[str, float]:
-    """Return recipe-wide bounds, identical for every arm and safe at 10B tokens."""
+def repetition_bounds(
+    sources: Sequence[DomainSource],
+    *,
+    steps: int = PRODUCTION_STEPS,
+) -> dict[str, float]:
+    """Return recipe-wide bounds, identical for every arm at the requested duration."""
     by_name = {source.name: source for source in sources}
     peak_weight = {
         domain: max(normalized_weights(arm)[index] for arm in ARMS)
@@ -182,7 +186,7 @@ def repetition_bounds(sources: Sequence[DomainSource]) -> dict[str, float]:
     bounds: dict[str, float] = {}
     for domain in DOMAINS:
         source = by_name[domain]
-        required = PRODUCTION_STEPS * GLOBAL_BATCH_TOKENS * peak_weight[domain]
+        required = steps * GLOBAL_BATCH_TOKENS * peak_weight[domain]
         bounds[domain] = max(1.0, math.ceil(required / source.available_tokens))
     return bounds
 
@@ -212,9 +216,21 @@ def build_experiment_config(
     by_name = {source.name: source for source in sources}
     if tuple(by_name) != DOMAINS:
         raise MixLawConfigError(f"domain order must be {DOMAINS!r}, got {tuple(by_name)!r}")
-    bounds = repetition_bounds(sources)
     max_steps = steps_for_length(length_tokens)
+    bounds = repetition_bounds(sources, steps=max_steps)
     train_tokens = max_steps * GLOBAL_BATCH_TOKENS
+    rank_microbatch_tokens = int(
+        environ.get("EDULLM_RANK_MICROBATCH_TOKENS", str(RANK_MICROBATCH_TOKENS))
+    )
+    if (
+        rank_microbatch_tokens <= 0
+        or rank_microbatch_tokens % SEQUENCE_LENGTH
+        or GLOBAL_BATCH_TOKENS % (rank_microbatch_tokens * GPU_RANKS)
+    ):
+        raise MixLawConfigError(
+            "EDULLM_RANK_MICROBATCH_TOKENS must be a positive sequence-length multiple "
+            "that evenly divides the per-step global batch"
+        )
     tokenizer = TokenizerConfig.dolma2()
 
     dataset = NumpyFSLDatasetConfig.from_src_mix(
@@ -243,7 +259,7 @@ def build_experiment_config(
         include_instance_metadata=False,
     )
     train_module = TransformerTrainModuleConfig(
-        rank_microbatch_size=RANK_MICROBATCH_TOKENS,
+        rank_microbatch_size=rank_microbatch_tokens,
         max_sequence_length=SEQUENCE_LENGTH,
         optim=SkipStepAdamWConfig(
             lr=4e-4,
@@ -361,8 +377,8 @@ def platform_values(environ: Mapping[str, str]) -> tuple[str, str]:
         )
     if not checkpoint_dir:
         raise MixLawConfigError("EDULLM_CHECKPOINT_DIR is required")
-    if project != "mixlaw":
-        raise MixLawConfigError("EDULLM_WANDB_PROJECT must be mixlaw")
+    if not project:
+        raise MixLawConfigError("EDULLM_WANDB_PROJECT is required")
     return checkpoint_dir, environ.get("EDULLM_RUN_ID", "mixlaw")
 
 
