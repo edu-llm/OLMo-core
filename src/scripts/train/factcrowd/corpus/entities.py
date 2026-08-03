@@ -69,16 +69,22 @@ class AttributePool:
 
     :param name: Attribute name, used in rendering and in the bit-counter's span labels.
     :param values: The closed set of values. Order is meaningful: an entity stores an index.
+    :param allow_singleton: Permit a pool of exactly one value, which carries zero bits. Off by
+        default because a singleton pool is nearly always a mistake; the exception is the entropy
+        axis's ``b=0`` cell, where every entity sharing one value tuple *is* the manipulation.
     """
 
     name: str
     values: Tuple[str, ...]
+    allow_singleton: bool = False
 
     def __post_init__(self) -> None:
-        if len(self.values) < 2:
+        floor = 1 if self.allow_singleton else 2
+        if len(self.values) < floor:
             raise OLMoConfigurationError(
                 f"pool '{self.name}' has {len(self.values)} values; a pool of one carries no bits "
-                f"and a pool of none cannot be sampled"
+                f"and a pool of none cannot be sampled. Pass allow_singleton=True if a "
+                f"zero-bit pool is intended -- the entropy axis's b=0 cell is the one place it is."
             )
         if len(set(self.values)) != len(self.values):
             raise OLMoConfigurationError(
