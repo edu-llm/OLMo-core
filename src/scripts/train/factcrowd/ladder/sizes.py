@@ -23,7 +23,7 @@ budget. The tolerance is wide enough for the formula's own 0.2% error and far to
 
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 from olmo_core.exceptions import OLMoConfigurationError
 
@@ -35,11 +35,13 @@ __all__ = [
     "HIDDEN_SIZE_MULTIPLIER",
     "HIDDEN_SIZE_MULTIPLE_OF",
     "HEAD_DIM",
+    "BLOCK_NAME",
     "LadderRow",
     "LADDER",
     "feed_forward_hidden_size",
     "non_embedding_params",
     "row",
+    "llama_like_kwargs",
     "build",
 ]
 
@@ -64,6 +66,14 @@ HIDDEN_SIZE_MULTIPLE_OF = 256
 
 HEAD_DIM = 64
 """Attention head dimension, so ``n_heads`` is ``d_model // 64`` for every row."""
+
+BLOCK_NAME = "reordered_norm"
+"""
+The OLMo2 block variant, held as a string so :func:`llama_like_kwargs` needs no ``torch``.
+
+``TransformerBlockType`` is a :class:`~olmo_core.config.StrEnum`, so this is the same value;
+:func:`build` coerces it to the enum before the config is constructed.
+"""
 
 
 @dataclass(frozen=True)
@@ -115,9 +125,13 @@ break the size confound at the top end, not to extend the progression. Holding a
 need ``d_model=832``, which costs 38% more on the most expensive row in the grid and buys no
 additional science.
 
-The 13M / 28M / 64M rows carry all five :math:`\\rho` values; 113M carries :math:`\\rho=1` and
-:math:`\\rho=2` only, because cost scales as :math:`P^2` at fixed :math:`\\rho` and a full top row
-would be 81x the 13M row.
+**The 113M row is cut from the first run**, and on identification grounds rather than cost: width
+scaling does not hold reasoning capability fixed (Mano moves +18.2pp across this ladder at fixed
+depth 12), so that row could not break the size confound it was added to break. It stays in the
+ladder because :func:`build` and the reasoning-only width arm still use it. See PRD.md sections 3.2
+and 8.4.
+
+The first run is 13M and 28M at all five demand levels and 64M at four, dropping 64M's highest.
 """
 
 
@@ -195,21 +209,61 @@ def row(label: str) -> LadderRow:
     return rows[label]
 
 
+def llama_like_kwargs(
+    ladder_row: LadderRow, vocab_size: int, *, tie_word_embeddings: bool = True
+) -> Dict[str, Any]:
+    """
+    The exact keyword arguments :func:`build` hands to ``TransformerConfig.llama_like``.
+
+    Split out from :func:`build` so the argument set can be tested without ``torch`` installed. That
+    is not a convenience: routing through ``TransformerConfig.olmo2_190M`` instead looks correct,
+    type-checks, and **raises ``TypeError`` for every row**, because that factory passes
+    ``d_model=768`` explicitly *and* splats ``**kwargs``, so supplying ``d_model`` collides. It pops
+    ``n_layers`` and ``n_heads`` but not ``d_model``. The silent failure is worse than the loud one:
+    passing ``n_heads`` alone succeeds and returns a 768-wide model with ``head_dim=192``, which
+    trains, reports a loss curve, and is not the model the ladder asked for.
+
+    The values below are ``olmo2_190M``'s own settings, restated here rather than inherited, so this
+    is the one place the architecture is pinned.
+
+    :param ladder_row: Which rung.
+    :param vocab_size: Tokenizer vocabulary size.
+    :param tie_word_embeddings: Tie the input and output embeddings.
+
+    :returns: Keyword arguments for ``TransformerConfig.llama_like``.
+    """
+    return {
+        "d_model": ladder_row.d_model,
+        "vocab_size": vocab_size,
+        "n_layers": N_LAYERS,
+        "n_heads": ladder_row.n_heads,
+        "hidden_size_multiplier": HIDDEN_SIZE_MULTIPLIER,
+        "hidden_size_multiple_of": HIDDEN_SIZE_MULTIPLE_OF,
+        "block_name": BLOCK_NAME,
+        "qk_norm": True,
+        "rope_theta": 500_000,
+        "layer_norm_eps": 1e-6,
+        "tie_word_embeddings": tie_word_embeddings,
+    }
+
+
 def build(
     ladder_row: LadderRow,
     vocab_size: int,
     *,
     tie_word_embeddings: bool = True,
     tolerance: float = 0.01,
-    **kwargs,
+    **overrides,
 ) -> "TransformerConfig":
     """
     Build the real config for a rung and verify its parameter count before returning it.
 
+    Calls ``llama_like`` directly rather than an ``olmo2_*`` factory -- see
+    :func:`llama_like_kwargs` for why that distinction is load-bearing.
+
     Embeddings are tied by default. At a 32k vocab and ``d_model=256`` an untied pair is 16.4M
-    parameters against 12.6M non-embedding -- 57% of the model in a table that :math:`\\rho`
-    explicitly excludes. Tied it is 8.2M and 39%, which is the same argument that chose a 32k vocab
-    over 100k.
+    parameters against 12.6M non-embedding -- 57% of the model in a table :math:`\\rho` may exclude.
+    Tied it is 8.2M and 39%, which is the same argument that chose a 32k vocab over 100k.
 
     :param ladder_row: Which rung.
     :param vocab_size: Tokenizer vocabulary size.
@@ -217,23 +271,19 @@ def build(
     :param tolerance: Maximum tolerated relative gap between the built count and the row's expected
         count. Defaults to 1%: far wider than :func:`non_embedding_params`' own 0.2% error and far
         tighter than the 33% a missed FFN multiplier would cause.
-    :param kwargs: Passed through to the underlying factory.
+    :param overrides: Merged over :func:`llama_like_kwargs`.
 
     :returns: The config, with its non-embedding count checked.
 
     :raises OLMoConfigurationError: If the built count disagrees with the row by more than
         ``tolerance``.
     """
-    from olmo_core.nn.transformer import TransformerConfig
+    from olmo_core.nn.transformer import TransformerBlockType, TransformerConfig
 
-    config = TransformerConfig.olmo2_190M(
-        vocab_size=vocab_size,
-        n_layers=N_LAYERS,
-        d_model=ladder_row.d_model,
-        n_heads=ladder_row.n_heads,
-        tie_word_embeddings=tie_word_embeddings,
-        **kwargs,
-    )
+    kwargs = llama_like_kwargs(ladder_row, vocab_size, tie_word_embeddings=tie_word_embeddings)
+    kwargs.update(overrides)
+    kwargs["block_name"] = TransformerBlockType(kwargs["block_name"])
+    config = TransformerConfig.llama_like(**kwargs)
 
     built = config.num_non_embedding_params
     expected = ladder_row.expected_non_embedding_params

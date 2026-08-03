@@ -1,7 +1,12 @@
 # factcrowd — does storing facts cost reasoning?
 
-2026-08-03. Build spec for the fact-crowding experiment. Everything needed to build it and run it is
-here.
+2026-08-03, revision 2. Build spec for the fact-crowding experiment. Everything needed to build it
+and run it on the eduLLM platform is here.
+
+Revision 2 responds to an adversarial review that ran seven independent reviewers against separate
+failure axes. Most of it was right, and §16 records what changed, what I pushed back on, and what is
+deferred. The short version: the axis was mis-defined, the manipulation was confounded with four
+mechanisms that need no capacity at all, and the measurement had a quarter of the power it claimed.
 
 ---
 
@@ -10,325 +15,336 @@ here.
 **Does storing facts consume model capacity that would otherwise serve reasoning?**
 
 The programme was founded on that as a premise, and it has never been tested. It traces to two
-unsupported sentences in the phi-3 technical report — web pages are filtered out "to leave more model
-capacity for reasoning for the mini size models," and "the model simply does not have the capacity to
-store too much factual knowledge" — with no ablation anywhere in the report comparing a model trained
-with that data against one without it. The report's own table contradicts it: phi-3-small at 7B
-scores 59.1 on 5-shot TriviaQA against phi-3-mini at 3.8B scoring 64.0, while MMLU rises 68.8 to
-75.3. Nearly doubling parameters made factual recall worse. Microsoft dropped the framing a
-generation later; phi-4 attributes the same deficit to hallucination and quantifies a
-**token-budget** trade-off instead, which is data competing for training tokens rather than facts
-competing for weights.
+unsupported sentences in the phi-3 technical report (`arXiv:2404.14219v1` — pin v1; the live v4
+revises the numbers) — web pages are filtered out "to leave more model capacity for reasoning for the
+mini size models," and "the model simply does not have the capacity to store too much factual
+knowledge" — with no controlled ablation anywhere in the report. The report's own table contradicts
+it: phi-3-small at 7B scores 59.1 on 5-shot TriviaQA against phi-3-mini at 3.8B scoring 64.0, while
+MMLU rises 68.8 to 75.3. Nearly doubling parameters made factual recall worse. Microsoft dropped the
+framing a generation later; phi-4 attributes the same deficit to hallucination and quantifies a
+**token-budget** trade-off instead (Table 4: +6.9 TriviaQA, −0.7 MATH, −0.7 GSM8k, −4.3 HumanEval,
+average 0.0), which is data competing for training tokens rather than facts competing for weights.
 
-Two papers come close and the gap between them is the opportunity. **Physics of Language Models 3.3**
-measures fact capacity exactly — ~2 bits per parameter at 1000 exposures per fact, ~1 bit at 100,
-architecture-universal — by summing autoregressive loss over exactly the knowledge tokens and feeding
-it to a bit-complexity bound. It measures no reasoning at all. **Marek et al.** have the saturation
-framing but state plainly that they "rely on proxies for measuring model capacity, such as model size
-and pretraining loss," and the competition they demonstrate is old knowledge against new knowledge,
-not facts against reasoning.
+**Physics of Language Models 3.3** measures fact capacity exactly — ~2 bits/parameter at 1000
+exposures per fact, ~1 bit at 100 — by summing autoregressive loss over exactly the knowledge tokens
+and feeding it to a bit-complexity bound. It measures no reasoning. **Marek et al.**
+(`arXiv:2605.26097`) have the saturation framing but state in their Limitations that they "rely on
+proxies for measuring model capacity, such as model size and pretraining loss," and the competition
+they demonstrate is old knowledge against new knowledge.
 
 **Nobody has logged bit-counts and a controlled reasoning endpoint on the same checkpoints across a
 swept oversubscription ratio.** That is what this does.
 
-The independent variable is **ρ = demanded fact bits ÷ model capacity**. Not entity count, not token
-count. The primary result is a **trend across five ρ values**, not a pairwise contrast. Flat refutes
-crowding at this scale; a decline past ρ=1 supports it.
+### The prior, sorted by what each paper manipulates
 
-**Expect flat.** Everything adjacent points that way. Ouro runs Allen-Zhu's bit-counting protocol
-verbatim on bioS and also measures reasoning: looping raises iGSM op15 accuracy from 46.3% to 70.7%
-at identical parameter count while measured knowledge capacity is "nearly unchanged" — a
-dissociation, and the strongest single piece of evidence against the premise. Mixture of Parrots
-argues reasoning needs width while memorization needs total parameters, two different resources.
-Johnston & Belrose find capacity pressure makes small models *memorize* two-hop answers rather than
-compose them, which is the reverse causal direction. The experiment is worth running anyway: the
-programme spent a year assuming the premise, and either answer is the first direct measurement.
+Revision 1 said "expect flat" and listed three papers. Sorting them by *manipulation* rather than by
+conclusion reverses the reading, and this is the single most important correction in the review:
 
-**Design priority, in order: correctness of the measurement, then adjustability, then speed.** Four
-reasoning endpoints have already produced uninterpretable nulls in this programme, every one an
-instrumentation bug rather than a scientific result — iGSM scored at chance because the eval discarded
-the derivation and graded a single mod-23 integer; a deduction eval scored *below* its own 0.500
-floor because truncated derivations parsed as wrong; reasoning-gym macro-averaged 14 families with
-chance floors from 0 to 0.5; two-hop composition ran at 2.3× the product of its parts, so it was
-measuring fact access. And the whole previous sweep ran at 0.51% of the capacity ceiling, which says
-nothing about a hypothesis whose mechanism requires the ceiling. The harness makes the checks that
-would have caught these unavoidable rather than optional.
+| Paper | Manipulates | Finds |
+|---|---|---|
+| Looped LMs (`2510.25741`), Mixture of Parrots, Johnston & Belrose | **architecture** at fixed load | dissociation — capacity and reasoning move independently |
+| **`arXiv:2505.18091`** (NeurIPS'25 Spotlight), phi-4 Table 4 | **load** at fixed architecture | reasoning falls as fact load rises |
+
+**This experiment manipulates load.** So "everything adjacent points the other way" does not survive
+the sort — the papers that point away manipulate something else.
+
+`arXiv:2505.18091` is the closest existing work to this design and revision 1 cited it only as a
+variance anchor. It sweeps synthetic-biography-versus-web ratio × model size across Pythia 14M–6.9B,
+finds a 2.09pp average zero-shot loss at ratio 0.3 on a 410M model, **attributes it to capacity
+allocation, and explicitly rules out token displacement.** It must be cited as prior work, its design
+contrasted with ours, and our contribution stated against it: it manipulates *ratio* and infers
+capacity; we manipulate *bits* at fixed ratio and measure capacity directly.
+
+One citation from revision 1 was wrong and is withdrawn: the "iGSM op15 46.3 → 70.7 with capacity
+nearly unchanged" result is **not in the looped-LM paper**, which does not mention iGSM. That pair
+traces to `arXiv:2506.18233` Table 1, whose ladder is **depth**, not width — and at depth 12, which
+we fix, it is saturating. Cited for P5 it was evidence against.
+
+### Design priority
+
+**Correctness of the measurement, then adjustability, then speed.** Four reasoning endpoints have
+produced uninterpretable nulls in this programme, every one an instrumentation bug: iGSM at chance
+because the eval discarded the derivation and graded one mod-23 integer; a deduction eval *below* its
+own 0.500 floor because truncated derivations parsed as wrong; reasoning-gym macro-averaging 14
+families with floors from 0 to 0.5; two-hop composition at 2.3× the product of its parts, so it was
+measuring fact access. And the previous sweep ran at 0.51% of the capacity ceiling.
 
 ---
 
 ## 2. Scope
 
-**In.** Entity and fact corpus generation with exact bit accounting; related and unrelated reasoning
-slices; a width-scaled model ladder at fixed depth; the Allen-Zhu bit-counting probe; recall three
-ways; reasoning evaluation behind a code-enforced bracketing gate; the trend regression; a
-reasoning-only control arm per model size; one 32k domain BPE, trained once and published; a config
-system where one file defines one cell.
+**In.** Entity and fact corpus generation with exact bit accounting; two ways of sweeping the axis
+(§3.1); related and unrelated reasoning slices; a width-scaled ladder at fixed depth; the Allen-Zhu
+bit-counting probe; recall by generation and recognition; reasoning behind a code-enforced gate;
+a pre-registered pooled regression and equivalence test; the reasoning-only control arm; a positive
+control; one 32k BPE trained on the **mixture**; a config system where one file defines one cell.
 
-**Out.** The split/masked arm — Experiment 4 owns it, though §7.4 keeps the seam open. Any retrieval
-store. Distributed training beyond single-node multi-GPU. A Zipf arm. An MoE control.
+**Out.** The split/masked arm — Experiment 4 owns it, though §7.5 keeps the seam open. Any retrieval
+store. Distributed training beyond one node. A Zipf arm. An MoE control (P14 was withdrawn: Mixture
+of Parrots fixes *active* parameters and grows total, so at equal total it predicts dense reasons
+better — the prediction had the sign backwards, and MoE is out of scope anyway).
 
-**Deferred.** The Pythia continuation arm (§11, M4). Continuing training from a Pythia checkpoint
-inside OLMo-core needs a GPT-NeoX architecture port — `olmo_core.nn.hf.convert` supports llama, qwen3
-and qwen3_5 only — on the order of 400 lines plus tests, comparable to p3-math-split's
-`nn/transformer/qwen.py`. That is a real cost and should be paid deliberately once the trend is in
-hand rather than up front. **M0's seed-variance measurement is unaffected**: it is HF inference on
-released checkpoints and needs no port.
+**Cut on evidence, not on cost.** iGSM: its cited parameter ladder appears in neither iGSM paper, and
+the real from-scratch figure is op=15 at 99.1% for GPT-2 small — saturated. The **trained linear
+probe**: over a 33,600-class date pool it is 8.6M parameters fit on 20k rows, ill-posed. The **Pythia
+seed sweep** as a variance gate (§8.5). The **monotonicity re-run rule** (§8.5).
+
+**Deferred.** Continuation from a pretrained checkpoint. If it happens it should be **Qwen3-0.6B**,
+not Pythia: `olmo_core.nn.hf.convert` already supports qwen3, where GPT-NeoX needs a 600–900 line
+port because OLMo-core has no parallel-residual block. Same science, no port.
 
 ---
 
-## 3. The experiment
+## 3. The axis
 
-### 3.1 Grid
+**The independent variable is demanded fact bits per parameter.** Revision 1 used
+ρ = demanded bits ÷ (R_E · P), which put an assumed constant on both sides of the equation: R_E
+defined the x-axis *and* was the predicted outcome, so "the knee sits at ρ=1 by construction" was a
+tautology and `CellSpec.check()` was comparing a quantity to itself. R_E is now used only for
+*interpretation* — where to expect the knee — never for placing a cell.
 
-Rows are named by non-embedding parameters, which is what ρ is defined against (§7.1).
+Two reporting bases, because the literature is ambiguous and the choice matters:
+
+| Basis | Value | Why |
+|---|---|---|
+| **non-embedding** | primary for cell placement | nothing in a tied embedding table is what Allen-Zhu's law is about |
+| **total** | reported alongside | Physics 3.3 §9 says "P … total number of parameters," excluding only *unused* embedding rows |
+
+The two differ by **1.67× at 13M falling to 1.22× at 113M — monotone in model size**, so a design
+that silently picks one loses cross-size comparability, which is what the size axis exists for.
+Report both for every cell; `rho.py` takes the basis as an explicit argument.
+
+Two further corrections to demand accounting, both in `rho.py`:
+
+- **The name term.** Physics 3.3's bioS demand is `N·[log2(N₀/N) + log2(S₀)]`, where N₀ is the size
+  of the name universe. Revision 1 excluded names entirely on the grounds that a name is a key. The
+  key/value distinction is right for *which pools carry values*, but knowing *that* a given name
+  exists is itself information. The term is +16.4% at N = 714k and +9.7% at N = 6.4M, so it changes
+  the **shape** of the trend, not just its offset — and without it achieved R(F) can exceed R^max,
+  which Remark 4.2 forbids.
+- **R_E is unknown to about 1.8×, not 8%.** There is no 200-exposure run in Physics 3.3; log
+  interpolation between its anchors gives 1.30 and linear gives 1.11. Worse, the paper reports gated
+  MLPs at **1.3× lower capacity** than GPT-2 at 100 exposures even with tuned LR — and `olmo2_*` is
+  SwiGLU. Morris (`2505.24832`) reports 3.6 b/p. Plan for 0.9–1.3 and **measure it once in our own
+  setup** before the grid places a cell (§12, M0).
+
+### 3.1 Two ways to sweep it, and why we want both
+
+**The count sweep (as designed).** Vary entity count at fixed exposures. Then tokens ∝ demand,
+`corr(log2 demand, log2 tokens) = 0.9995`, VIF ≈ 1,076 — **the trend is not identified within a
+row.** Concretely it is a **50× mixture-ratio sweep**: reasoning's share of the stream runs 38.6% at
+13M/ρ=0.25 to 0.772% at 64M/ρ=4, and 12.7× within the 28M row alone. That is precisely the phi-4
+token-budget effect this experiment exists to distinguish itself from, and "matched absolute
+reasoning tokens" does not neutralise a ratio effect. Four mechanisms are monotone in demand and need
+**no capacity at all**:
+
+| Mechanism | Magnitude on the 28M row |
+|---|---|
+| **Adam second-moment dilution** — at high demand the fact slice sets `v` almost alone, so each reasoning gradient is divided by a denominator it barely contributed to | effective LR on reasoning directions falls with its gradient share |
+| **Cumulative weight decay** | `exp(−Σ lr·wd)` runs 0.796 at ρ=0.25 to 0.055 at ρ=4 — **14.6×** |
+| **Batch composition** | 64M/ρ=4 at a 1M-token batch delivers ~7.7k reasoning tokens/step ≈ 4 sequences |
+| **Epoch asymmetry** | facts get 200 epochs, reasoning gets 1, in every cell |
+
+**The entropy sweep (new, and the identified one).** Hold N, tokens, exposures, mixture ratio, steps,
+schedule, weight decay and surface statistics *exactly* fixed. Sweep demand by **value-pool
+entropy**: render every attribute value as exactly four sub-values drawn from a pool of size `2^(b/4)`,
+so bits per attribute is `b` while the token count is invariant.
+
+At 28M with N = 714,331 fixed — every cell 15.29B tokens, 0.65 h on 8×H100:
+
+| sub-pool | bits/attr | bits/entity | demanded b/p | ρ at R_E=1.2 |
+|---|---|---|---|---|
+| 1 | 0 | 0 | 0.00 | 0.00 |
+| 2 | 4 | 24 | 0.61 | 0.50 |
+| **4** | **8** | **48** | **1.21** | **1.01** |
+| 16 | 16 | 96 | 2.42 | 2.02 |
+| 64 | 24 | 144 | 3.63 | 3.03 |
+| 256 | 32 | 192 | 4.84 | 4.03 |
+
+**The midpoint is bioS.** 6 × 8 = 48 bits/entity against bioS's 47.592 — a 0.9% match — so the axis
+anchors to the literature exactly where the comparison is made. Six cells cost **3.9 h on 8×H100
+(~$216)**, against 5.0 h for the 28M count row, and every one of the four confounds above is held
+fixed by construction rather than argued away.
+
+Two implementation notes. Values stay **natural**: four words from real word lists, so a 32-bit value
+reads like "Northgate Rivermont Bellweather Ashcombe" rather than a random string — this is what
+keeps §3.3's prose commitment. And holding **four** sub-values at every b, varying only the pool
+size, is what makes the token count invariant; varying the number of sub-values would not.
+
+**Keep both sweeps.** *Count-sweep slope minus entropy-sweep slope directly measures how much
+"crowding" was tokens, steps and ratio.* That is a result in itself and it is the honest answer to
+the referee who asks.
+
+### 3.2 The first run
+
+Per the cut decision: **omit the 113M row and the 64M ρ=4 cell.**
 
 | | ρ=0.25 | ρ=0.5 | ρ=1 | ρ=2 | ρ=4 |
 |---|---|---|---|---|---|
 | **13M** | ✓ | ✓ | ✓ | ✓ | ✓ |
 | **28M** | ✓ | ✓ | ✓ | ✓ | ✓ |
-| **64M** | ✓ | ✓ | ✓ | ✓ | ✓ |
-| **113M** | | | ✓ | ✓ | |
+| **64M** | ✓ | ✓ | ✓ | ✓ | — |
 
-Seventeen cells, plus one reasoning-only control per size. ρ is swept geometrically because the knee
-sits at ρ=1 by construction and a fine sweep near the ceiling is wasted compute.
+Fourteen cells plus three reasoning-only controls. **17.1 h on 8×H100 ≈ $939**, or 54 h on 8×A100 ≈
+$1,188 — roughly a third of the uncut grid, as expected. Largest single cell 5.65 h, comfortably
+inside `olmo-core-train`'s 24 h ceiling (§10).
 
-**One seed to start**, conditional on M0. A pairwise contrast at one seed is weak, but the trend pools
-five points and reaches ~79% one-sided power for a 2pp total decline at a seed SD of 0.5pp — about
-what a three-seed pairwise test would give. That 0.5pp is interpolated from published anchors of
-0.21pp at n=10,042 eval items and 2.15pp at n=100, not measured. **M0 measures it directly on the
-released `pythia-160m-seed1..4` variants plus base, inference only. If it lands above ~1pp, add seeds
-at ρ=0.25 and ρ=4 before filling the middle.** Two things one seed does not buy: any claim about an
-individual cell, and protection against an outlier run — the published pretraining outlier rate is
-~4% of runs at >2 SD, so across 17 cells expect roughly one. Report the trend, not the cells, and
-re-run any cell that breaks monotonicity.
+Two notes on the cut. Dropping the 113M row is right for a reason better than cost: **width-scaling
+cannot hold reasoning fixed** (§8.4), so that row could not do the job it was added for. And the
+`P² → 81×` scaling in revision 1 is 81× only in non-embedding parameters; counting the FLOPs the
+tied LM head actually performs it is ~53×, so small rows are relatively more expensive than they
+looked.
 
-Cost scales as **P²** at fixed ρ, because entity count scales with P and tokens with entity count.
-Relative to the 13M row, 28M is 5×, 64M is 26×, 113M is 81×. That is why the top row is two cells and
-why 250M is absent.
+**ρ=1 contributes exactly zero to a log-slope.** Leverage is `(x−x̄)²` = 4/1/0/1/4 across
+log₂ρ ∈ {−2,−1,0,1,2}, and cost rises with ρ, so leverage-per-hour runs 16/2/0/0.5/1. Keep ρ=1 for
+the hinge location and the bioS anchor, not for the slope — and note that the primary regression is
+linear in demanded bits per parameter (§8.5), where ρ=1 is an ordinary interior point.
 
-**Scale by width at fixed depth 12.** Reasoning capability tracks depth — 3-hop accuracy is
-13/55/100/100 at 2/3/4/5 layers — while fact capacity tracks total parameters, which width supplies,
-and reasoning is flat in width: GPT-2 Medium and Large from scratch give no gain over 124M on k-hop
-QA. Those are the same fact from opposite ends and they make the two axes physically separable.
-Width-scaling holds reasoning capability roughly fixed while occupancy varies, so a reasoning change
-is attributable to fact load rather than architecture.
+### 3.3 Corpus: four slices
 
-The risk is that reasoning then reads flat for a boring reason. The fix is to take dynamic range from
-**task** depth instead of model depth:
+**Facts.** Synthetic biographies in natural-language prose, bioS-style, ~100 tokens/bio, **≥20
+templates per fact**. Prose over dense records because the representation has to match what we test.
+Multi-template is mandatory: Physics 3.3 found diverse rendering does not hurt capacity and may help
+it, and our own single-template corpus answered the same question at 83% under one phrasing and 1.3%
+under another — the fact was stored as pattern-slot → value, not as (entity, attribute) → value.
 
-| knob | role |
-|---|---|
-| model width | sweeps ρ — the hypothesis |
-| model depth | fixed at 12, chosen so the endpoint sits mid-range |
-| task depth | sweeps difficulty, proving the instrument responds |
+**Exposures fixed at 200, uniform.** Fixing exposures is what decouples entity count from exposure
+starvation; the previous sweep held tokens fixed while raising entity count, so exposures fell
+196 → 49 → 12 and storage collapsed from 33.1 to 0.20 bits/entity with no way to attribute it.
+Uniform rather than Zipfian because under Zipf at the same budget a large fraction of entities fall
+below the exposure floor, demanded bits stop being computable, and the experiment loses its
+independent variable. **The "~35-exposure floor" cited in revision 1 is unsourced** — it is in
+neither Physics 3.3 nor 4.1, whose lowest useful-data exposure count is 100. The Zipf argument stands
+on computability; the specific floor does not.
 
-### 3.2 Corpus: four slices
+**Related reasoning.** Composition, comparison and aggregation over the same entities, covering a
+**fixed 25k-entity probe subset in every cell** at constant absolute tokens and constant per-entity
+coverage. The probe must fit the smallest cell (13M at ρ=0.25 has ~79k entities); 25k leaves a 54k
+non-probe comparison group there.
 
-**Facts.** Synthetic biographies in natural-language prose, bioS-style: N people × 6 attributes from
-closed pools, 47.6 bits/person by construction, ~100 tokens/bio, **≥20 templates per fact**. Prose
-over dense records because the representation has to match what we test; it costs 6.6× more tokens per
-bit (0.48 bits/token against a compact record's 3.12) and the hardware absorbs it. Multi-template is
-mandatory: Physics 3.3 found diverse rendering does not hurt capacity and may help it, because
-without diversity "the model wastes capacity memorizing sentence structures," and our own
-single-template corpus answered the same question at 83% under one phrasing and 1.3% under another —
-the fact was stored as pattern-slot → value, not as (entity, attribute) → value.
+**Unrelated reasoning.** The load-bearing measurement — see §8.3 for which endpoints, which changed.
 
-**Exposures fixed at 200, uniform.** Above our measured collapse threshold (between 49 and 196) and
-above the ~35-exposure floor where capacity is roughly zero. Fixing exposures is what decouples the
-axes: the previous sweep held total tokens fixed while raising entity count, so exposures fell
-196 → 49 → 12, storage collapsed from 33.1 to 0.20 bits/entity, and nothing could be attributed to
-entity count rather than exposure starvation.
+**And a positive control, now mandatory.** Physics 3.3's **Result 11** says non-knowledge-dense
+competitors do not interfere. If true, a semantics-free unrelated slice may be *incapable* of showing
+interference **by the source paper's own finding**, and a null would be predicted regardless of
+crowding. So one cell at ρ=2 carries a second, **disjoint bioS population** as the competitor. If a
+second fact population does not crowd, the instrument cannot detect crowding at all and nothing else
+in the grid means anything.
 
-Uniform rather than Zipfian is an instrument decision, not a simplification. Under Zipf at the same
-total exposure budget, 60% of entities (α=1.0) or 89% (α=1.2) fall below the ~35-exposure floor. The
-tail is then never learned, demanded bits are not N×47.6 but an unknown smaller number, and **ρ stops
-being computable** — the experiment loses its independent variable.
+Relatedly, the domain token stays but its justification does not. The junk-data result is verbatim,
+but the paper's junk is *unlearnable* (0.05–0.2 appearances per person) and **Fig 8(f) shows
+structured, repetitive junk causing zero degradation** — which is the applicable panel, because our
+reasoning slices are structured and learnable. Keep the token; it is harmless. Drop the "20×" claim.
 
-**Related reasoning.** Composition, comparison and aggregation over the same entities — where crowding
-shows up first if it operates through fact access. It covers a **fixed 25k-entity probe subset in
-every cell**, at constant absolute tokens and constant per-entity coverage. If it covered all
-entities instead, per-entity coverage would vary 20× across the ladder and confound P4. The probe
-must fit inside the smallest cell — 13M at ρ=0.25 has 79k entities — and 25k leaves a 54k non-probe
-comparison group there while staying far above the n≥2,000 the eval needs. The probe subset is also
-the eval population for related reasoning, and comparing probe against non-probe recall is a free
-internal check on whether QA mentions change storage.
+### 3.4 Invariants
 
-**Unrelated reasoning.** The load-bearing measurement. If reasoning degrades here as fact load rises,
-that is crowding proper; if only related reasoning degrades, the mechanism is fact access, which we
-have already shown. The slice must contain **no memorizable facts** or it competes for the capacity
-being measured.
+**Reasoning slices are constant in absolute tokens**, 1.0B per cell, and **byte-identical** across
+cells: they are materialised once (§7.4), so §3.4's invariant is now identity of bytes rather than
+equality of volume.
 
-### 3.3 Two invariants that make cells comparable
+**Every segment gets a domain token.**
 
-**Reasoning slices are constant in absolute tokens, not as a ratio.** 1.0B tokens per cell, every
-cell: 500M FLD, 250M Mano, 250M related. Hold the ratio instead and reasoning data volume moves with
-fact load, confounding the result in both directions. This also answers the catastrophic-forgetting
-concern directly — reasoning is present in every cell at identical volume, so nothing is being
-forgotten for lack of data. `mixture.py` takes absolute token counts and raises if a caller passes a
-fraction.
+**One frozen, checksummed evaluation set shared by every cell** (§8.5).
 
-**Every segment gets a domain token.** Without one, a 7/8-junk mixture costs up to 20× capacity at
-these exposure counts; with one, 2×. Our corpus is a deliberate mixture, so this is not optional and
-there is no flag to disable it.
+### 3.5 What revision 1 got wrong about the compute-matched reading
 
-### 3.4 ρ and training length are collinear, and how to read around it
+Revision 1 claimed the compute confound could be read around for free, by comparing the ρ=4 cell at
+7.9% of training against the ρ=0.25 cell at 100%. **That is withdrawn.** Those two checkpoints sit at
+**99.2% and 10% of peak learning rate**; the pre-cooldown loss deficit at this scale is 0.1–0.2 nats,
+worth 4–16× in compute-equivalent — **5–20× the effect being hunted, with a sign pointing at
+crowding.** The claim that it "costs nothing" was wrong.
 
-With exposures fixed at 200 and bits-per-entity fixed at 47.6, tokens ∝ N ∝ ρ. On the 28M row the
-ρ=4 cell sees 58.1B tokens against ρ=0.25's 4.6B — **12.7× the optimizer steps and 12.7× the
-compute.** This is structural: ρ cannot be swept at fixed exposures without sweeping training length
-with it.
-
-Reasoning-token exposure is *not* confounded. The mixture is uniform over the stream, so at any
-fraction of training every cell has consumed the same absolute number of reasoning tokens. What rises
-with ρ is total compute — and more compute generally helps reasoning, so **the confound biases against
-finding crowding.** A flat result could be crowding cancelled by longer training.
-
-The fix costs nothing, because the checkpoint schedule already provides it. Two readings, both
-pre-registered:
-
-- **Reasoning-token-matched** — compare cells at equal *fraction* of training. This is the primary
-  reading and the one the grid was designed for.
-- **Compute-matched** — compare cells at equal *absolute* total tokens. The ρ=4 cell at 7.9% of
-  training has consumed exactly what the ρ=0.25 cell consumed at 100%, and 8% is already on the
-  log-spaced schedule (§7.2). Worth noticing: the spacing chosen for the bits curve happens to land on
-  the compute-matched point.
-
-**Crowding is supported only if the decline appears in both readings.** A decline in one alone names
-which mechanism is operating, which is still worth having.
+The fix that does work: **WSD with an independent decay-to-zero branch from each compared
+checkpoint**, ~1.5 h per row. Then both ends of the comparison are annealed and the reading is
+legitimate. Budget it rather than assuming it.
 
 ---
 
 ## 4. Where the code lives
 
-Branch `edullm/fact-crowding` of OLMo-core, following the `edullm/p3-math-split` precedent: experiment
-code under `src/scripts/train/factcrowd/`, tests under `src/test/scripts/factcrowd/` loaded by path,
-and changes to `src/olmo_core/` only where genuinely needed. `mypy src/` covers scripts, so
-`make checks` gates this code too.
-
-A branch rather than a sibling repo because the experiment's whole data and measurement path is
-`InstanceSource` subclasses and `Callback` subclasses. A separate package would be a thin shell around
-OLMo-core internals, versioned separately from the internals it depends on.
+Branch `edullm/fact-crowding` of OLMo-core — the `edullm/**` name is **required**, because that is
+what the image build workflow triggers on and a branch outside it publishes no image and warns
+nobody. Experiment code under `src/scripts/train/factcrowd/`, tests under
+`src/test/scripts/factcrowd/`, changes to `src/olmo_core/` only where genuinely needed. `mypy src/`
+covers scripts; the image build runs `ruff check .` over the whole checkout, so ruff must be clean
+repo-wide or there is no image.
 
 ```
 src/scripts/train/factcrowd/
   README.md            how to run it; PRD.md is why
   PRD.md               this file
+  train_cell.py        the platform entry point: one cell, one run
   corpus/
-    entities.py        entity table generation, closed pools, exact bit accounting
-    render.py          entity -> biography, ≥20 templates, precompiled token pieces
-    reasoning.py       FLD / Mano / related adapters
-    mixture.py         absolute-token mixing; the two invariants of §3.3
-    source.py          the on-the-fly InstanceSource
-    tokenize.py        the 32k BPE trainer, run once
+    entities.py        entity table, closed pools, exact bit accounting          [done]
+    render.py          entity -> biography, precompiled token pieces, splitmix64
+    values.py          the entropy axis: 4 sub-values from a pool of 2^(b/4)
+    reasoning.py       Mano / Brevo / related adapters
+    mixture.py         absolute-token mixing; the invariants of §3.4
+    source.py          the on-the-fly InstanceSource, fixed-length packing
+    tokenize.py        the 32k BPE trainer, run once, on the mixture
   ladder/
-    rho.py             (P, ρ) <-> (n_entities, fact_tokens). One function, both ways.
-    sizes.py           width-scaled TransformerConfigs at fixed depth 12
+    rho.py             demand <-> entity count, both parameter bases            [done]
+    sizes.py           width-scaled configs at fixed depth 12                   [done]
   train/
-    run.py             trainer wiring
+    schedule.py        WSD, steps, batch — the hyperparameters of §7.2
     callbacks.py       BitCountCallback, ReasoningEvalCallback
   measure/
-    bits.py            Allen-Zhu estimator
-    recall.py          generation / recognition / linear probe
-    reasoning.py       scorers; every one returns three counts
-    registry.py        endpoint registration and the bracketing gate
+    bits.py            Allen-Zhu estimator, with the name term
+    recall.py          generation and recognition (post-hoc job, not a callback)
+    reasoning.py       scorers; three counts and answer-token CE in bits
+    registry.py        endpoint registration and gates G1-G8
   analysis/
-    trend.py           the primary test: regression of reasoning on log2(ρ)
+    trend.py           pooled regression + the equivalence test
     figures.py
   configs/
     base.yaml
     cells/             one YAML per cell; the grid is data, not code
-
-src/test/scripts/factcrowd/    mirrors the above, one-to-one
 ```
-
-Match the house style: line length 100, isort + black, ruff, mypy, Sphinx-syntax docstrings on public
-functions. Prefer a small number of well-named functions with exact contracts over clever
-abstraction — teammates who did not write this will read it and adjust it often.
 
 ---
 
 ## 5. Contracts
 
-Five types carry everything. Keeping them small is what makes cells swappable.
+Unchanged from revision 1 except as noted: `EntityTable` (numpy index arrays, not `pa.Table` —
+`pyarrow` is not a dependency), `SliceSpec`, `CellSpec`, `EndpointResult`, `Measurement`. See
+`corpus/entities.py` and `ladder/rho.py` for the two that are built.
+
+Three amendments:
 
 ```python
 @dataclass(frozen=True)
-class EntityTable:
-    """N entities x K attributes drawn from closed pools. Bits are exact by construction."""
-    entities: pa.Table                  # entity_id, name, attr_1..attr_K
-    pools: dict[str, tuple[str, ...]]
-    probe_ids: frozenset[int]           # the fixed 25k related-reasoning subset
-    seed: int
-
-    @property
-    def bits_per_entity(self) -> float:
-        """sum(log2(len(pool)) for each attribute). No estimation anywhere."""
-
-    @property
-    def total_bits(self) -> float:
-        return len(self.entities) * self.bits_per_entity
-
-
-@dataclass(frozen=True)
-class SliceSpec:
-    """One component of the training mixture."""
-    name: str                           # "facts" | "fld" | "mano" | "related"
-    tokens: int                         # absolute, never a fraction
-    domain_token: str                   # mandatory
-    memorizable: bool                   # facts and related True; fld and mano MUST be False
-
-
-@dataclass(frozen=True)
 class CellSpec:
-    """One grid cell. This is what a config file deserialises to."""
     cell_id: str
-    model: ModelSpec                    # d_model, n_layers=12, vocab
-    rho: float
-    exposures: int                      # 200 everywhere
-    entity_table: EntityTableSpec       # n_entities DERIVED from rho, never specified
-    reasoning: tuple[SliceSpec, ...]    # constant in ABSOLUTE tokens across cells
-    mask_spec: MaskSpec | None          # unused; the Experiment-4 seam
-    init_from: str | None               # None = scratch
-
-    def demanded_bits(self) -> float: ...
-    def capacity_bits(self, r_e: float = 1.2) -> float:
-        """MEASURED non-embedding params x R_E. Embeddings excluded; this is load-bearing."""
-    def check(self) -> None:
-        """Raise if rho as specified disagrees with demanded/capacity by >1%."""
+    model: ModelSpec
+    sweep: Literal["count", "entropy"]   # NEW: which axis this cell is on
+    demanded_bits_per_param: float       # NEW: replaces rho as the placed quantity
+    bits_per_attribute: float            # NEW: b, for the entropy sweep
+    exposures: int                       # 200 everywhere
+    entity_table: EntityTableSpec
+    reasoning: tuple[SliceSpec, ...]
+    mask_spec: MaskSpec | None           # the Experiment-4 seam
+    init_from: str | None
 
 
 @dataclass(frozen=True)
 class EndpointResult:
-    """Deliberately not a float."""
     correct: int
     incorrect: int
-    unparseable: int                    # never folded into incorrect
-    graded_score: float | None          # token accuracy or partial credit
-    degenerate_baseline: float          # measured, not assumed
+    unparseable: int                     # never folded into incorrect
+    answer_token_ce_bits: float          # NEW: co-primary, continuous, parser-free
+    graded_score: float | None
+    degenerate_baseline: float           # measured, not assumed
     chance_floor: float
     n: int
-
-
-@dataclass(frozen=True)
-class Measurement:
-    """One row per checkpoint per cell."""
-    cell_id: str
-    step: int
-    frac_trained: float
-    total_tokens: int                   # for the compute-matched reading of §3.4
-    achieved_bits: float
-    achieved_r: float                   # achieved_bits / non_embedding_params
-    per_entity_bits: np.ndarray         # the histogram, not just the mean
-    recall_generation: float
-    recall_recognition: float
-    recall_probe: float
-    reasoning: dict[str, EndpointResult]
 ```
 
-`EndpointResult` is three counts and not one number because every past reasoning failure came from
-collapsing it. `unparseable` is separate because a truncated derivation is not a wrong answer.
-`degenerate_baseline` is measured because always-answering-"no" scored 0.507 on a task we read as
-0.493.
+`answer_token_ce_bits` is the important addition. It has no floor, no ceiling and no parser; it has
+far lower variance than exact match; and — the point — it is **commensurate with the fact side**, so
+reasoning and storage are finally measured in the same units.
+
+`Measurement` gains `total_tokens`, `demanded_bits_per_param_total_basis`, and per-slice gradient-norm
+and Adam second-moment statistics, so the mechanisms in §3.1 are *measured* rather than assumed away
+(§16.2).
 
 ---
 
@@ -336,58 +352,59 @@ collapsing it. `unparseable` is separate because a truncated derivation is not a
 
 ### 6.1 Generation and rendering
 
-`entities.py` produces an `EntityTable` from `(n_entities, pools, seed)`. Pools are closed and
-declared, so `bits_per_entity` is arithmetic, never estimated. The default follows Physics 3.3's
-bioS — 6 attributes over pools of 200/300/100/263/200 plus dates, giving 47.6 bits/entity — chosen so
-our bit-counts are directly comparable to theirs.
+`entities.py` produces an `EntityTable` from `(schema, n_entities, seed)`; pools are closed and
+declared so `bits_per_entity` is arithmetic. The table is the only thing stored (~180 MB at 2.9M
+entities); renders are generated from `(table, seed, exposure_idx)`. `InstanceSource` needs only
+`__len__`, `__getitem__`, `num_tokens` and `fingerprint`, and `RandomInstanceSource` is the working
+precedent for generating deterministically at access time.
 
-**The table is the only thing stored.** At 2.9M entities it is ~180 MB. Renders are generated from
-`(table, seed, exposure_idx)`, so 200 exposures never touch disk.
+**Render by concatenating precompiled token pieces.** Tokenize each template's fixed segments and
+each pool value once at build time; a render is then a list concatenation. This makes the value-token
+spans **exact by construction**, which is what `bits.py` requires, and removes the class of bug where
+eval keys are built from a canonical name while prose uses a variant.
 
-Nothing about that requires new machinery. `InstanceSource` needs only `__len__`,
-`__getitem__(idx) -> Instance`, `num_tokens`, and `fingerprint`, and
-`olmo_core/data/composable/random_instance_source.py` is a working precedent: it generates instances
-deterministically from `seed + idx` at access time and never touches disk. `BioInstanceSource` is the
-same shape, mapping `idx -> (entity_id, exposure_idx) -> tokens`.
+Two hard constraints from benchmarking:
 
-**Render by concatenating precompiled token pieces.** Tokenize each template's fixed segments and each
-pool value once at build time; a render at train time is then a list concatenation, not a BPE call.
-This matters three ways:
-
-1. It is fast enough. The 13M cell needs ~2M tokens/s of corpus; a BPE call per bio is not, and a
-   concat is.
-2. **It makes the value-token spans exact by construction**, which is precisely what `bits.py`
-   requires — no post-hoc span recovery and no alignment heuristic.
-3. It removes a whole class of bug. The surface string in prose and the key used at eval are the same
-   token arrays, so there is no way to build eval keys from a canonical name while prose uses a random
-   variant — which trains recall-from-variant instead of copy-from-context.
-
-One gate makes this safe. BPE can merge across a piece boundary, so a test asserts
-`tokenize(prefix + value + suffix) == concat(tokenize(prefix), tokenize(value), tokenize(suffix))`
-across the full template × pool cross product (~36k pairs, seconds to run). Pairs that fail fall back
-to real tokenization and are logged; if more than a handful fail, the template set is wrong.
+- **Never construct a `np.random.Generator` per biography.** It costs 7.9 µs against 0.28 µs for
+  splitmix64, which caps a worker at 13M tok/s before any rendering happens. `RandomInstanceSource`
+  constructs one per *instance*, which is safe at its granularity and fatal at ours. A pure
+  `splitmix64(seed, idx)` renderer benchmarks at **11.3M tok/s single-threaded, 41.7M at 8 workers**,
+  against the 19.0M tok/s an 8-GPU node needs. Purity is free.
+- One gate: assert `tokenize(prefix + value + suffix) == concat(tokenize(prefix), tokenize(value),
+  tokenize(suffix))` across the full template × pool cross product. Failures fall back to real
+  tokenization and are logged.
 
 ### 6.2 Exposure accounting
 
-Every entity gets exactly **200 bio exposures** in every cell. The related-reasoning slice adds a
-constant, measured number of additional mentions for the 25k probe entities only. Both numbers are
-recomputed from the rendered stream and reported per cell; because the probe subset and its coverage
-are constant across cells, this cannot confound the ρ trend, and probe-vs-non-probe recall measures
-whether it matters at all.
+Every entity gets exactly **200 bio exposures**. The related slice adds a constant, measured number
+of mentions for the 25k probe entities only. Both are recomputed from the rendered stream.
 
-`mixture.py` raises if a slice marked `memorizable=False` reuses content across examples above a reuse
-threshold (default 1.05). FLD satisfies this by construction, which is why it is primary.
+### 6.3 Tokenizer — an assertion, not a measurement
 
-### 6.3 Tokenizer
+**A 32k BPE cannot be trained on biographies alone.** The bioS text has 265 word types (2,887 at
+full-size pools), so the vocabulary saturates at 1,255 (7,509). A bio-only BPE inflates FLD by
+**2.33×** (1,095 tokens/example, p99 2,138 → sequence length 2,560 → 6.25× attention cost).
 
-**One 32k domain BPE**, trained once on a realistic sample and published as
-`tokenizer/factcrowd-bpe-32k/v1`. ρ is defined against *non-embedding* capacity, and a 100k vocab at
-d=256 would be 25.7M embedding parameters against 12.60M non-embedding — arithmetically fine and
-indefensible to a reader. At 32k it is 8.2M. For an experiment about non-embedding capacity, spending
-most of the model on an embedding table is self-defeating.
+**Adding 3% reasoning text to the BPE training corpus restores 0.94× GPT-2, and it is free.** So the
+BPE is trained on the **mixture**, and `tokenize.py` asserts tokens-per-example ≤ 1.05× GPT-2 for
+every slice rather than measuring it later and hoping.
 
-Open, cheap to settle before committing: FLD's WordNet-derived lexicon may tokenize badly under a BPE
-trained mostly on biographies. Measure tokens-per-FLD-example under our BPE against GPT-2's during M0.
+Published as `tokenizer/factcrowd-bpe-32k/v1`. Note that OLMo-core's tokenizer map on `main` holds
+dolma2 alone, so a custom tokenizer must be constructed in our own script — which `train_cell.py`
+does — rather than named through the platform's dataset registry.
+
+### 6.4 The bioS schema, and what is still provisional
+
+Our reconstruction — four categorical pools at 200/300/100/263 plus a birth date over 12 × 28 × 400 —
+gives 47.592 bits, pinning the published 47.6 to 0.01 of a bit. The review reports the real bioS set
+as including gender and deriving working city from employer at 0 bits, reaching the same total by
+another route; revision 1's stated pool list (which included a second 200) summed to 53–54 and was
+wrong. Ours is arithmetically exact and is what we use; **the paper should be checked before
+publication** since the comparison is the point.
+
+**The attribute vocabulary is still placeholders and must be replaced before M1.** Bit accounting is
+exact because it depends only on pool sizes, but `TOKENS_PER_BIO = 100` is unvalidated until the
+strings are real, and every cell's token budget depends on it.
 
 ---
 
@@ -395,69 +412,71 @@ trained mostly on biographies. Measure tokens-per-FLD-example under our BPE agai
 
 ### 7.1 The ladder
 
-OLMo-core's presets vary depth *and* width, which would confound the two axes of §3.1. Fix depth at 12
-and sweep `d_model`, taking the four widths the FFN's `multiple_of=256` quantum makes clean:
+Fixed depth 12, sweeping `d_model`:
 
-| Row | d_model | heads | head_dim | d_ffn | non-emb | N at ρ=1 | fact tokens at ρ=1 |
-|---|---|---|---|---|---|---|---|
-| **13M** | 256 | 4 | 64 | 1024 | 12.60M | 318k | 6.35B |
-| **28M** | 384 | 6 | 64 | 1536 | 28.33M | 714k | 14.28B |
-| **64M** | 576 | 9 | 64 | 2304 | 63.73M | 1.61M | 32.13B |
-| **113M** | 768 | 12 | 64 | 3072 | 113.28M | 2.86M | 57.12B |
+| Row | d_model | heads | d_ffn | non-emb | +tied 32k emb | N at ρ=1 |
+|---|---|---|---|---|---|---|
+| **13M** | 256 | 4 | 1024 | 12,595,456 | 20.8M | 318k |
+| **28M** | 384 | 6 | 1536 | 28,330,368 | 40.6M | 714k |
+| **64M** | 576 | 9 | 2304 | 63,729,216 | 82.2M | 1.61M |
+| ~~113M~~ | 768 | 12 | 3072 | 113,283,840 | 137.9M | 2.86M |
 
-Built from `TransformerConfig.olmo2_190M(vocab_size, n_layers=12, d_model=..., n_heads=...)`. **Rows
-are labelled by their measured non-embedding count, not by a round-number target**, because the labels
-are cosmetic and the measurement is not. The rungs step 2.25×, 2.25×, then 1.78×; the last step
-is short because 768 is the width OLMo-core's own `olmo2_190M` uses, so `d_ffn` matches the
-preset exactly, and because the top row is two cells whose job is to break the size confound
-rather than to extend the progression. Holding 2.1× would need `d_model=832`, 38% more cost on
-the grid's most expensive row for no additional science.
+`d_model=256` at depth 12 is inside Physics 3.3's validated regime — their App. A lists GPT2-16-4
+(d=256, 12.58M) as a "skinny and deep" anchor — and tying embeddings actively helps below 10M.
 
-Note the FFN sizing, because it is easy to get wrong by a third. Every `olmo2_*` factory applies
-`hidden_size_multiplier=1.5` on top of `8·d_model/3` and then rounds up to a multiple of 256
-(`nn/transformer/config.py:1677-1681`), so `d_ffn` is 4× `d_model` here rather than the 2.67× a plain
-SwiGLU would give. Read the parameter count off the built config, never off a hand formula:
-`sizes.py` asserts the built model's non-embedding count matches the table to within 1%, and `rho.py`
-derives N from that measured count — never from the label. That assertion is the difference between a
-cell that sits at its stated ρ and one that only claims to.
+**Build through `llama_like`, never an `olmo2_*` factory.** `olmo2_190M` passes `d_model=768`
+explicitly *and* splats `**kwargs`, popping `n_layers` and `n_heads` but not `d_model`, so supplying
+a width raises `TypeError` for every row. The silent variant is worse: passing `n_heads` alone
+succeeds and returns a 768-wide model with `head_dim=192` that trains and reports a loss curve.
+`sizes.py` now calls `llama_like` directly and asserts the built non-embedding count.
 
-**Tie the embeddings.** At a 32k vocab and d=256, untied embeddings are 16.4M against 12.6M
-non-embedding — 57% of the model in a table that ρ explicitly excludes. Tied, it is 8.2M and 39%.
-`TransformerConfig.tie_word_embeddings` (`config.py:333`) makes this a one-line change, and it is the
-same argument that chose 32k over 100k. Embedding share by row, tied: 39% / 30% / 22% / 18%.
+### 7.2 Hyperparameters — specified, because they are not implementation details
 
-### 7.2 Checkpoints
+Revision 1 named none of these. For an experiment whose result is a 2pp trend, and where cumulative
+weight decay varies 14.6× across a row, they are part of the design.
 
-Ten snapshots, log-spaced at **0.5 / 1 / 2 / 4 / 8 / 16 / 32 / 50 / 75 / 100%**. Capacity fills fast
-then asymptotes, so linear spacing puts half its points on the flat part and under-samples both the
-rising region and the double-descent bump at crossover. Log spacing puts seven points in the first
-third where the bits curve is moving, and it supplies the compute-matched reading of §3.4 for free.
+| | Value | Note |
+|---|---|---|
+| sequence length | **512** | attention is +7.6% of FLOPs here against +30% at 2048 |
+| global batch | **≥ 256k tokens** (512 sequences) | below this the small rows lose 20–25% MFU to batch shape |
+| schedule | **WSD**, warmup 2,000 steps, decay-to-zero over the last 10% | with independent decay branches per compared checkpoint (§3.5) |
+| learning rate | tuned once at 28M, then **identical in every cell** | the invariant matters more than the value |
+| weight decay | identical in every cell, and `Σ lr·wd` **logged per cell** | it varies 14.6× across a count row and cannot be argued away |
+| intra-document masking | on (`generate_doc_lengths`) | otherwise packed biographies attend across each other and contaminate the bit count. Flash backends only; `pad == eos` explodes `max_docs`; no composable test coverage |
 
-Bit-counting the largest cell (64M at ρ=4, 6.43M entities × ~20 value tokens) is ~130M forward-pass
-tokens, well under a minute, so measurement cost is not the constraint. Subsample to 20k entities at
-intermediate checkpoints, use the full table at the last one, and run the pricier reasoning evals at
-four points.
+### 7.3 Checkpoints and packing
 
-### 7.3 Data loader
+Ten snapshots, log-spaced at **0.5 / 1 / 2 / 4 / 8 / 16 / 32 / 50 / 75 / 100%**.
+`ListCheckpointerCallback` already exists — but it inherits **`max_checkpoints=3`**, which deletes
+7 of the 10, and on this platform the prune also deletes `.metadata.json`, a key the workload role is
+denied by name, so the run dies with `OLMoNetworkError`. **`max_checkpoints=null` is mandatory** and
+appears in §10's command.
 
-`BioInstanceSource` (§6.1) mixes with the reasoning sources through the composable API. Two OLMo-core
-edges to respect, both of which have burned runs already:
+**Packing was revision 1's largest unspecified task, and the entropy axis dissolves it.**
+`InstanceSource.num_tokens ≡ len × sequence_length`, so ~100-token biographies at sequence length 512
+give either 80% padding or a `TokenSource` with an O(1) global-offset → document map — and a
+prefix-sum index over 1.29B documents is 10–20 GB, contradicting "never materialised." Under the
+entropy axis every value is a fixed token count, so **biographies are fixed-length by construction**
+and instance `i` simply holds biographies `[i·k, (i+1)·k)`. Packing becomes arithmetic. For the count
+sweep, pad each biography to a fixed slot and log the padding fraction.
 
-- **Always pass `dtype` explicitly.** Both `NumpyDatasetConfig.get_dtype` and the composable
-  `NumpyDocumentSource` fall back to the *narrowest* dtype the vocab fits, which silently reads a u32
-  corpus two bytes at a time. Nothing raises; the only symptom is a loss curve that is merely worse
-  than it should be.
-- The composable `NumpyDocumentSource` derives document boundaries by scanning for EOS, **not** from a
-  `.csv.gz` sidecar. That means it reads eduLLM `.u32le.bin` shards correctly, which the legacy
-  `NumpyFSLDatasetMixture` path does not — worth telling the data team, whose consumer contract
-  currently names `NumpyFSLDatasetConfig` as the only safe class.
+### 7.4 Data loading
 
-### 7.4 The Experiment-4 seam
+Materialise the reasoning slices **once**: they are byte-identical in every cell, **4.0 GB at u32,
+reused 17–29×**, a few core-hours offline. This is also the only way FLD would be affordable at all,
+and it avoids 2.32 of the 2.41 TB the count grid would otherwise write. Facts stay on-the-fly.
 
-We are not building the split/masked arm, but do not close the door. `Instance` is a TypedDict that
-already carries an optional `label_mask`, so `BioInstanceSource` emits one when `CellSpec.mask_spec`
-is set, and `mask_spec` is otherwise unused. No mask sidecar files and no separate code path. Cost now
-is one field and one branch; cost later of retrofitting is a rewrite.
+Two traps: the composable mixer takes a **ratio** and `composable/utils.py:182-192` proportionally
+rescales *every* slice if any source runs short, so pre-assert `num_tokens ≥ Nᵢ` per source; and
+"uniform over the stream" comes from `shuffle_strategy=inter_source`, not from the mixer, which
+concatenates. Always pass `dtype` explicitly — both `NumpyDatasetConfig.get_dtype` and the composable
+`NumpyDocumentSource` fall back to the narrowest dtype the vocab fits and read a u32 corpus two bytes
+at a time without raising.
+
+### 7.5 The Experiment-4 seam
+
+`Instance` is a TypedDict already carrying an optional `label_mask`, plumbed at `data_loader.py:486`.
+`BioInstanceSource` emits one when `CellSpec.mask_spec` is set. One field, one branch, no sidecars.
 
 ---
 
@@ -465,244 +484,421 @@ is one field and one branch; cost later of retrofitting is a rewrite.
 
 ### 8.1 Bits
 
-`bits.py` implements Allen-Zhu's estimator: **sum, never average**, the autoregressive loss over
-exactly the value tokens, producing `loss_name` and `loss_value`, then convert via their
-bit-complexity bound. Averaging is the single easiest way to get this silently wrong, so the function
-takes token spans and asserts it received them — spans that §6.1 produces by construction.
+Allen-Zhu's estimator: **sum, never average**, the autoregressive loss over exactly the value tokens,
+then the bit-complexity bound including the `1/ln2` conversion and the name term of §3. Per-token
+loss extraction is first-class — `eval_batch` supports `loss_reduction="none"` →
+`LMOutputWithLoss.ce_loss` — so the bit-counter is a callback. Bit-counting the largest remaining
+cell is ~656M forward-pass tokens, 0.44% of budget.
 
-Report **achieved** R(F) against **demanded** R^max(F), and plot reasoning against achieved. If the
-x-axis is nominal rather than real, the experiment measures nothing.
-
-Log the **per-entity distribution**, not just the mean. Whether degradation past saturation is uniform
-or preferential is unmeasured in the literature, the two sources disagree, and the histogram costs
-nothing.
+Report **achieved** R(F) against **demanded**, plot reasoning against achieved, and log the
+**per-entity distribution**. Assert `R ≤ R^max`.
 
 ### 8.2 Recall
 
-Three measures, because they diverge: closed-book generation, MC recognition, and a trained linear
-probe. Physics 3.1 found unaugmented facts cap extraction near 10% against ~96% augmented, so
-generation alone understates storage.
+Generation and recognition. **Generation cannot live in a training callback** — there is no precedent
+in the repo and `TransformerGenerationModule.__init__` re-parallelises the model and mutates KV-cache
+state — so it is a post-hoc job over saved checkpoints. The trained linear probe is cut (§2).
 
-### 8.3 Reasoning and the bracketing gate
+### 8.3 Reasoning endpoints — Mano promoted, FLD demoted
 
-Endpoints register through `registry.py` and **cannot run in the grid until bracketed**. Enforced in
-code, not documentation.
+**Mano at L = 10 is the primary endpoint.** Revision 1 specified L = 13, where its degenerate
+best-constant policy is **6.80%** (not 4.35%) and 13M–28M sits **1.4pp above degenerate** — failing
+our own 20–80% gate. Physics 4.1 Fig 4 reports from scratch **at our exact 12 layers**:
 
-`registry.bracket(endpoint, model)` runs and stores a **lower anchor** — a randomly-initialised model
-plus the best constant policy, both through the production parser — an **upper anchor**, an oracle
-handed the facts and derivation, and a **task-depth sweep** confirming the instrument responds.
-Admission requires: sits between 20% and 80% of its range, moves ≥15 points across task depth, and
-has a non-degenerate floor. `grid.run()` raises on any unbracketed endpoint.
+| | 25.2M | 12L512D 37.7M | 56.6M | 12L768D 84.9M |
+|---|---|---|---|---|
+| **L=10** | 55.3 | **47.8** | 63.0 | **66.0** |
+| L=13 | 8.2 | 19.4 | 30.6 | 36.7 |
 
-Three endpoints ship. **FLD** is primary: a public Apache-2.0 generator (`hitachi-nlp/FLD-generator`),
-so unbounded; real English syntax over a WordNet-derived pseudo-random lexicon; depth a dial from 1 to
-8; proof accuracy with a **0.0 chance floor**, which removes the degenerate-baseline problem outright;
-content words regenerated per example, so the slice carries no memorizable facts; and T5-base at 220M
-reading 44.4 proof / 72.2 answer, so there is headroom in both directions at our scale. Score proof
-accuracy primary, answer accuracy (33.3 floor) secondary. **Mano** is the parameter-sensitive symbolic
-endpoint — mental mod-23 arithmetic, 8.2% at 25M to 36.7% at 85M at expression length 13 — with no
-derivation parser to get wrong. **iGSM** third, and only behind a validated solution-step parser,
-since its published accuracies are not computed from the final integer.
+In-band, +18.2pp across the parameter range, a 40.1pp task-difficulty dial, 16 tokens/example,
+12,909 examples/sec/core, integer vocabulary so zero tokenizer risk. It is the only endpoint with
+published from-scratch numbers at our configuration. Generator: `facebookresearch/PhysicsLM4`,
+Apache-2.0.
 
-LSAT-family verbal reasoning is ruled out: AR-LSAT reads 21.5 and ReClor 33.7 for LLaMA-3.1-70B
-against chance floors of 20.0 and 25.0. Nothing satisfies both "LSAT-like prose" and "trainable from
-scratch at this scale"; FLD is the closest available compromise.
+**Mano is parametric** — it stores ~7.2 kbit of mod-23 tables in weights — so it is not a clean
+unrelated probe alone. Pair it with **Brevo1 at N=110** from the same repo (39.9 → 53.2, 48.7pp dial,
+verifier-scored, floor ≈ 0), which is *in-context*. Mano versus Brevo then separates "reasoning
+crowded out" from "tables crowded out," which FLD cannot do. **Reasoning Core**
+(`pip install reasoning-core`, MIT) is third: the only candidate whose own published run is a
+random-init ~56M model on 0.5B + 0.5B tokens.
+
+**FLD is conditional, not primary.** Its answer-accuracy floor is 33.3% only on the full split;
+**every depth-stratified slice has a 51.1% floor** because all UNKNOWN examples carry `depth=None` —
+which lands on the depth sweep, the test that proves the instrument responds, and is exactly the
+"scored below its own floor" failure that killed a previous eval here. Three practical blockers too:
+generation costs 5.69 core-seconds/example so 500M tokens is **~1,700 core-hours**;
+`main`/`ICML_2023` does not run on Python ≥ 3.11 (21 `random.sample(<set>)` sites) while the NeurIPS
+branch will not `pip install`; and `--depth-range` does not exist on the default NeurIPS_2024 HEAD.
+Its 44.4/72.2 figures are arXiv v3 Appendix H, not PMLR Table 3's 37.7. Keep FLD only if the floor
+and the core-hours are both resolved in M0.
+
+### 8.4 The contradiction at the centre, resolved
+
+Revision 1 argued reasoning is **flat in width** and called that a feature, *and* predicted (P5) that
+reasoning **improves with size**, "refuted if flat." Both cannot hold. **The flat-in-width half is
+wrong**: the Mano anchor implies 16.1pp per parameter doubling (≈51pp across d=256→768) and moves
++18.2pp across our ladder at fixed depth 12.
+
+So width-scaling does not hold reasoning fixed, the 113M row could not have broken the size confound,
+and any width-swept axis needs the width response **measured and subtracted**. That measurement is
+the reasoning-only control arm at **4 widths × 3 seeds, ~0.15 h**, which also returns a valid seed
+distribution — and it should run **first**. If nothing brackets at 13M, delete that row.
+
+### 8.5 Statistics — the measurement had 27% power, not 79%
+
+Two errors stacked. The exact noncentral-t power at df=3 is 77.2%, not 79% (the docs paired a *t*
+threshold with a *normal* statistic). The larger error is a category error: **the "0.5pp seed SD" is
+eval sampling noise, not seed noise.** Both published anchors lie on exactly 21.27/√n
+(0.21×√10,042 = 21.04; 2.15×√100 = 21.50) — the signature of a finite eval set — and the seed term
+was never added. At p = 0.44 and n = 2,000 the binomial SE alone is 1.110pp, total SD 1.217pp,
+**power 26.6%**. Eval noise is 83% of the variance. (A 3-seed pairwise test gives 98.9%, not "about
+the same.")
+
+Four fixes, all nearly free:
+
+1. **n = 30,000 eval items**, one frozen checksummed set shared by every cell. Binomial SE → 0.287pp
+   for 1.1B inference tokens, ~0.01% of budget. Freezing matters beyond the SE: because cell weights
+   in a slope sum to zero, the shared item-difficulty term cancels **exactly**, worth another
+   n ≈ 6,667 at item-correlation 0.7. "n ≥ 2,000" saved nothing and cost 2.4× in SD.
+2. **Pool the rows** into one regression with size intercepts and replicates as observations rather
+   than cell means. Power 26.5% → **67.7%** at the realistic SD; 77.2% → 99.97% at SD 0.5. Free — it
+   is simply the right model. The regressor is **demanded bits per parameter**, linear, so the b=0
+   cell is an interior point rather than a limit.
+3. **Pre-register an equivalence test.** The expected result is a null, so this is an equivalence
+   problem and revision 1 specified no equivalence test. With D = −4β and H₀: D ≥ 2.0pp, pooled at
+   one seed with n = 30k gives **99.7% power to declare equivalence at 2pp** — turning the headline
+   null from uninterpretable into publishable. Report the 90% CI on D and say "declines greater than
+   X pp are excluded," never "no effect."
+4. **Delete the monotonicity re-run rule.** It fires on **98.3% of rows by chance**, inflates type-I
+   error from 5.0% to 16.7%, and shrinks the variance estimate to 0.57σ — which makes an equivalence
+   test *falsely declare equivalence*. Replace with a pre-registered, outcome-blind rule.
+
+Seeds are then keyed to a **measured** σ from §8.4's control arm: 1 if σ ≤ 0.99pp, 2 if ≤ 1.48,
+3 if ≤ 1.85, re-scope above 1.9. Fix multiplicity with one named confirmatory test (uncorrected FWER
+is 26.5% at k=6 rising to 84.2% at k=36). Drop P3's "3× the seed SD," whose implied α swings from
+16.5% at n=2,000 to 2.0% at n=30k.
+
+**M0 cannot be inference-only, and the Pythia seed sweep is cut.** With m=4 runs a "SD ≤ 1pp" gate
+passes 27.9% of the time when the truth is 1.5pp, and an observed 0.5pp is compatible with 1.86pp.
+Zero-shot Pythia-160M on FLD proof accuracy sits at the 0.0 floor where binomial SD is compressed
+0.14× — biased *downward*. §8.3's own 20–80% rule disqualifies that instrument, and PolyPythias
+itself excluded at-chance tasks from its seed analysis. The replacement is **replicate from-scratch
+runs** (§8.4, §12).
+
+### 8.6 The gate — resolution, not just dynamic range
+
+Revision 1's gate tested whether an endpoint *responds*. It never tested whether it can *resolve* the
+effect. From Allen-Zhu's own single-seed grid the worst parameter-order monotonicity violation is
+median 27.1pp, max 56.0pp, with 8 of 12 rows ≥ 10pp; a one-seed 5-point trend needs run-level
+σ ≤ 0.63pp to see 2pp at 80% power. **The design is 8–50× short and the old gate would not have
+noticed** — and all four prior nulls are consistent with unmeasured σ.
+
+| Gate | Requires |
+|---|---|
+| G1 | lower anchor (random init + best constant policy through the production parser), upper anchor, task-depth sweep; 20–80% of range; ≥15pp across depth |
+| G2 | **label-permuted control** — a random-init score measures parser strictness, not the task |
+| G3 | **hypothesis-only / premise-ablated probe** — FLD's own authors warn about this |
+| G4 | headroom against the **achievable** ceiling from the b=0 arm, not an oracle range |
+| G6 | **capacity responsiveness at fixed depth** — an endpoint flat in parameters cannot detect a capacity effect by construction |
+| G7 | **resolution**: k ≥ 3 replicates, publish σ and MDE, require σ ≤ 0.65pp and unparseable ≤ 5% |
+| G8 | a **calibrated** positive control by reasoning-token dilution (100/95/90/80/60%), finding the dose worth 2pp |
+
+`grid.run()` raises on any endpoint that has not passed all of them. Bracket at **both mixture
+extremes**, not only at no-facts.
 
 ---
 
 ## 9. Configs
 
-One YAML per cell, fully resolved, no inheritance beyond a single `base.yaml`. A cell config is the
-unit a person edits and a run reproduces.
+One YAML per cell, fully resolved, no inheritance beyond a single `base.yaml`.
 
 ```yaml
-# configs/cells/d576_rho2.yaml
+# configs/cells/d384_b8.yaml    the bioS anchor on the entropy axis
 extends: base.yaml
-cell_id: d576_rho2
-model: {d_model: 576, n_layers: 12, n_heads: 9, tie_word_embeddings: true,
-        vocab: factcrowd-bpe-32k/v1}
-rho: 2.0
+cell_id: d384_b8
+sweep: entropy
+model: {row: 28M, tie_word_embeddings: true, vocab: factcrowd-bpe-32k/v1}
+bits_per_attribute: 8            # 4 sub-values from a pool of 4
+entity_table: {schema: bioS, n_entities: 714_331, seed: 1234}
 exposures: 200
-entity_table: {schema: bioS, seed: 1234}   # n_entities DERIVED from rho
 reasoning:
-  - {name: fld,     tokens: 500_000_000, depth_range: [1, 8]}
-  - {name: mano,    tokens: 250_000_000, length: 13}
+  - {name: mano,    tokens: 500_000_000, length: 10}
+  - {name: brevo1,  tokens: 250_000_000, n: 110}
   - {name: related, tokens: 250_000_000, probe_entities: 25_000}
 init_from: null
 ```
 
-`ladder/rho.py` is the heart: `solve(P, rho, bits_per_entity=47.6, R_E=1.2) -> (n_entities,
-fact_tokens)` and its inverse. Every config derives from it, so no cell can silently drift off its
-intended ρ, and `CellSpec.check()` raises if the two disagree by more than 1%.
+On the entropy axis `n_entities` is **fixed** and `bits_per_attribute` is swept; on the count axis
+`n_entities` is **derived** from `demanded_bits_per_param` by `rho.solve` and stating both is
+refused. `CellSpec.check()` raises on any disagreement above 1%.
 
 ---
 
-## 10. Compute and the run path
+## 10. Compute and the platform
 
-Train on a **capacity block via torchrun**, following the 8×B200 run this programme has already
-provisioned once. **H200 is the likelier allocation**, so budget in H200-hours and treat B200 as the
-upside.
+**There is no B200 and no H200.** Revision 1 budgeted in hardware this account cannot start. The
+platform's dropdown tops out at `gpu-8xh100` ($55.04/hr) and `gpu-8xa100` ($21.96/hr); the largest
+single card is `gpu-1xl40s` (48 GB). Anything at or above `gpu-8xa100` needs an **admin**, not a team
+lead, because every profile over $20/hr routes that way.
 
-| Component | H200-h | B200-h |
+| First run (§3.2), 14 cells + 3 controls | 8×H100 | 8×A100 |
 |---|---|---|
-| 13M row, 5 cells | 14.4 | 6.3 |
-| 28M row, 5 cells | 69.0 | 30.4 |
-| 64M row, 5 cells | 340.8 | 149.9 |
-| 113M at ρ=1 and ρ=2 | 413.5 | 181.8 |
-| Reasoning-only controls, 4 sizes | 4.6 | 2.0 |
-| **Total, 1 seed** | **~842** | **~370** |
+| wall clock | **17.1 h** | 54 h |
+| cost | **~$939** | ~$1,188 |
 
-On an 8-GPU node that is **~105 hours (4.4 days) on H200** against ~46 hours on B200. M0 is inference
-only and needs neither.
+At 20% MFU with the LM head counted. **Revision 1's FLOP count omitted the LM head**, which is
+39/30/22% of the model across the rows — including it is +65/43/29% per row. And 8% MFU applied flat
+across a 3× width span is structurally wrong: it inverts the cut decision by making small rows look
+cheap. Plan on 12/16/20/24% per row and **measure MFU on M1's first 50 steps**, then re-budget.
 
-FLOPs = 6·P·tokens at 8% MFU, calibrated against Physics 3.3's own anchor of 13,056 A100-hours for
-GPT2-20-16 on bioS(10M) at 1000 exposures. The H200 column is the B200 column × 2.27, the ratio of
-dense BF16 throughput (≈990 TFLOPS against ≈2,250) at equal MFU. That is the conservative reading: at
-these widths MFU is poor on both, and a 256-wide model is *easier* to keep busy on the smaller
-machine, so the real H200 penalty is likely under 2.27×. Measure MFU on the first 50 steps of M1 and
-re-budget from that number rather than from this table.
+The entropy sweep at 28M is **3.9 h ≈ $216** for six cells.
 
-**If 842 H200-hours is too much, cut from the top row.** The 113M cells are half the budget and their
-job is to break the size confound, not to be the most extreme point. Dropping them leaves ~429
-H200-hours and three complete rows, which still carries the trend. The floor is the 28M row alone at
-**69 H200-hours** — 8.6 hours on an 8×H200 node — plus 13M and 64M at ρ=1 for another 46.
+### 10.1 How a cell is submitted
 
-### The data path
+One cell is one run. [Submit a run](https://github.com/edu-llm/platform/actions/workflows/submit-run.yml):
 
-Corpora are generated in-process and never materialised (§6.1). That is not only a speed decision:
-materialising the grid is **597B tokens ≈ 2.4 TB** at the eduLLM standard's mandated u32, against the
-587 GiB the entire `edullm-data` bucket holds today, and the largest single cell alone is 518 GB.
+| Field | Value |
+|---|---|
+| `repository` | `OLMo-core` |
+| `commit_sha` | full SHA of a commit on `edullm/fact-crowding` **that has a built image** |
+| `workload_profile` | `olmo-core-check` for smoke, `olmo-core-train` for cells |
+| `compute_profile` | `gpu-1xa10g` for smoke; `gpu-8xh100` or `gpu-8xa100` for cells |
+| `team` | `memory-split` |
+| `experiment` | `factcrowd-<milestone>` |
+| `dataset_release` | **`none`** — the corpus is generated in-process |
+| `wandb_project` | ours |
 
-So publish what actually regenerates a cell: the **tokenizer, the entity tables, and the generator
-configs** — under 2 GB for the whole grid, since `(table, seed, config)` reproduces any cell exactly.
-Materialise and publish token shards only for cells that appear in the paper, if any.
+`dataset_release: none` is the quiet win of generating on the fly: nothing has to be published before
+we can run, and the whole edullm-data airlock question moves out of the critical path.
 
-Where we do touch the pipeline, the constraints are the data standard's, not ours: shards are
-`.u32le.bin` with `tokens × 4 == bytes` exactly, the corpus points at a published tokenizer pinned by
-checksum, names are kebab-case 2–5 words with no dates or version tokens, and versions are immutable.
-Producers write **only** to `s3://edullm-landing`; the validator is the only principal that can write
-`edullm-data`. Publishing is single-threaded by default and has timed out on a 218-shard corpus, so
-pass `hash_workers`/`copy_workers` and `--timeout attemptDurationSeconds=7200`. Use the
-`edullm-dataset-design` skill before the first publish, not after.
+**Nothing runs from source.** A commit becomes an image via the **Build eduLLM research image**
+workflow, which fires on `edullm/**` and `main` only, takes 6–8 minutes, and is followed by a
+registry scan of about 2 minutes. Submitting inside that window is refused as
+`image_scan_findings_unreviewed`, which is usually not what happened. Budget 8–11 minutes from push
+to submittable.
 
-The eduLLM submission platform is not a candidate for the training runs. Its only provisioned GPU is a
-single A10G — `gpu-8xa100` raises `UnprovisionedComputeProfileError` before a queue is chosen — and
-842 H200-hours does not fit behind that. Larger instances are a budget call rather than a policy one,
-so this may change; nothing in the design depends on which it is.
+### 10.2 The command, and the settings it must carry
 
----
+No shell wraps the command, so `bash -lc` is required for the environment variables to expand, and
+the whole command plus environment must fit in 8,192 bytes.
 
-## 11. Milestones
+```
+bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone
+  src/scripts/train/factcrowd/train_cell.py "$EDULLM_RUN_ID"
+  --cell configs/cells/d384_b8.yaml
+  --save-folder "$EDULLM_CHECKPOINT_DIR"'
+```
 
-**M0 — instruments before science. No training.** Not optional and not reorderable.
+Every one of these is mandatory, and each is a run somebody has already lost:
 
-1. **Measure seed SD** on `pythia-160m-seed1..4` plus base, inference only. **This gates the one-seed
-   decision and therefore everything.**
-2. **Bracket every endpoint** against a random-init model and its best constant policy, through the
-   production parser. If either matches the intended result, the endpoint is unusable.
-3. **Validate the bit estimator** against a synthetic corpus with a hand-computable answer. Sum, not
-   mean.
-4. **Wire FLD** and confirm per-example content regeneration.
-5. **Measure FLD tokenization** under our 32k BPE against GPT-2's (§6.3).
+| Setting | Value | Why |
+|---|---|---|
+| `--save-folder "$EDULLM_CHECKPOINT_DIR"` | literal on the command line | the platform reads the command text and cannot see inside the program; the OLMo-core default is `/tmp`, on a machine that stops existing — a 24 h run then exits zero having saved nothing and is **recorded as a success** |
+| `checkpointer.max_checkpoints` | `null` | the prune deletes `.metadata.json` first and the workload role is denied that key by name → `OLMoNetworkError`, about an hour in. Also what would delete 7 of our 10 snapshots |
+| `checkpointer.ephemeral_save_interval` | `null` | must be below `save_interval` or the config is refused in the first seconds |
+| `lm_evaluator.enabled` | `false` | reads a C4 validation shard whose index was never published |
+| `downstream_evaluator.enabled` | `false` | needs `ai2-olmo-eval`, which the image does not install |
+| `trainer.max_duration` | set explicitly | defaults to one epoch |
+| `--nproc-per-node` | = the device count | one process per device is **our** job; too few ranks is refused at submission, and used to bill for 8 while training on 1 |
+| `train_module.compile_model` | `false` unless the image has a C compiler | Inductor dies without one |
 
-*Exit:* a bracketing report with each endpoint's anchors and depth sweep, and a measured seed SD.
+A retry fires only for a **lost machine** — same run id, same checkpoint dir, `Trainer.fit()` resumes
+itself. A crash in our own code exits, because the same traceback twice costs the budget twice.
 
-**M1 — one cell end to end.** 28M at ρ=1, from scratch, ~9 H200-hours. *Exit:* a `Measurement` row at
-every log-spaced checkpoint; exposures recomputed from the stream landing at exactly 200; mixture
-token counts exact; a recall curve matching the predicted hinge within 10 points; and a measured MFU
-to re-budget §10 from.
+### 10.3 Fan-out for the grid
 
-**M2 — the 28M row.** Five ρ values, ~69 H200-hours. *Exit:* achieved R(F) pins at ~1.2 past ρ=1, and
-the first reasoning trend under both readings of §3.4.
-
-**M3 — the full grid.** 13M/28M/64M rows, 113M at ρ=1 and ρ=2, plus the four controls, ~842
-H200-hours. *Exit:* the reasoning-vs-ρ plot with a slope and CI.
-
-**M4 — continuation arm.** Deferred; needs the GPT-NeoX port (§2). Decide after M3. Pythia ships 154
-public checkpoints each at 70M/160M/410M, so prior occupancy becomes a measured variable rather than a
-proxy — which is the upgrade over using tokens-per-param and pretraining loss as stand-ins. Prefer
-160M if only one runs: a 70M Pythia has little reasoning ability to preserve, which is the whole
-reason for starting from a pretrained checkpoint.
-
-**M5 — seeds where it matters.** Add seeds at the noisiest cells, guided by M0's measured SD.
+The grid is 14 cells. `fanout_size: 14` with `fanout_index_parameter: cell` gives one submission,
+priced and approved as one; each cell reads `AWS_BATCH_JOB_ARRAY_INDEX` and gets its own
+`EDULLM_CHECKPOINT_DIR` with a `cell-<index>/` segment already in it. `train_cell.py` maps the index
+to a config file. Concurrency is not settable.
 
 ---
 
-## 12. Testing
+## 11. The smoke run
 
-**Recompute, never trust.** A test that asserts a field is present is decoration. Every corpus test
-recomputes from bytes: token count from file size, bits from the pool definitions, exposure counts
-from the rendered stream.
+Before any of the above. **Under $5 and under one hour auto-approves**, so this starts without a lead.
+
+| Field | Value |
+|---|---|
+| `workload_profile` | `olmo-core-check` (1 h, 1 attempt, no checkpoint contract) |
+| `compute_profile` | `gpu-1xa10g` ($1.01/hr) |
+| `dataset_release` | `none` |
+| `team` | `scratch` for the very first, `memory-split` after |
+
+Three progressively less trivial smokes, each one able to fail cheaply:
+
+1. **`--dry-run`** on `cpu-32vcpu`: builds the cell config, builds the model, asserts the
+   non-embedding count, renders 1,000 biographies, checks the token-boundary gate, prints the token
+   budget. Trains nothing. Catches every config and arithmetic error for cents.
+2. **20 steps on `gpu-1xa10g`** at the 13M row with a 10k-entity table: proves the data path feeds a
+   GPU, the loss falls, checkpoints land in `$EDULLM_CHECKPOINT_DIR`, and W&B receives the run.
+3. **One bit-count and one Mano eval at step 20**: proves the measurement callbacks run inside a real
+   trainer, which is where revision 1's plan had the most unexercised surface.
+
+*Exit:* a checkpoint under `teams/scratch/runs/<run id>/checkpoints/`, a loss curve in W&B, a
+`Measurement` row with a plausible achieved-bits number, and a measured MFU to re-budget from.
+
+---
+
+## 12. Milestones
+
+**M0 — instruments. ~1 h GPU + CPU.** Reordered so the cheapest thing that can kill the design runs
+first.
+
+1. **The reasoning-only arm at 4 widths × 3 seeds**, ~0.15 h. Returns dReasoning/dWidth — settling
+   §8.4 — and a real σ, which is what keys the seed count. Cheapest possible way to learn the grid is
+   under-powered.
+2. Bracket endpoints through **G1–G8 at both mixture extremes**. Retune Mano to L=10. Decide FLD
+   in/out on the 51.1% floor and the 1,700 core-hours.
+3. Train the BPE on bios **+ 3% reasoning text**; assert tokens/example ≤ 1.05× GPT-2.
+4. Validate the bit estimator on planted bits, **including the name term and the 1/ln2 conversion**.
+5. **Measure R_E** at exposures ∈ {50, 100, 200, 400, 1000} — one small model, one entity count.
+6. Replace the placeholder vocabulary; re-derive tokens/bio and bits/entity.
+
+*Exit:* a measured σ, a measured dReasoning/dWidth, a measured R_E, a bracketing report, and a
+corrected demand table.
+
+**M1 — one cell end to end, ~0.7 h.** 28M at b=8 (the bioS anchor) on WSD. Measure MFU and
+re-budget. Then **3–6 replicates** to fix the seed count from data.
+
+**M2 — the entropy sweep, ~3.9 h.** 28M, b ∈ {0, 4, 8, 16, 24, 32}. Frozen n=30k eval set,
+pre-registered pooled regression and the 2pp equivalence test. *This is the identified axis and the
+primary result.*
+
+**M3 — the first run: the count grid, ~17.1 h.** 13M/28M/64M minus 64M ρ=4, plus three controls, with
+WSD cooldown branches so the compute-matched reading is legitimate. **M3 slope − M2 slope quantifies
+how much of any "crowding" was tokens, steps and ratio.**
+
+**M4 — placebos and mechanism.** Exposure placebo at fixed demand; the **disjoint-second-population
+positive control** at ρ=2; domain-token-off; shuffled-value. The decisive cheap test: a post-hoc
+reasoning-only fine-tune from the highest-b endpoint tracking recall and reasoning jointly — recovery
+with recall intact means it was never capacity; recovery only as recall falls means it was, and
+yields the bits↔accuracy exchange rate. Gradient-cosine, Fisher overlap and pruning curves are free
+on saved checkpoints.
+
+**M5 — scale.** Entropy axis at 64M, b ∈ {4, 8, 32}.
+
+**Then decide** on Qwen3-0.6B continuation, the only arm addressing the parameter regime the phi-3
+claim was actually about.
+
+---
+
+## 13. Testing
+
+**Recompute, never trust.** Every corpus test recomputes from bytes.
 
 Tests that encode specific past failures:
 
 - key/prose surface agreement over 10k samples
-- template × pool token-boundary agreement over the full cross product (§6.1)
+- template × pool token-boundary agreement over the full cross product
 - `unparseable` never folded into `incorrect`
-- the bit-counter uses `sum` not `mean`, asserted on a planted-bits fixture
-- every endpoint has a passing *and* a failing bracketing fixture
-- `mixture.py` raises on a fractional reasoning slice, and on a memorizable one
-- `CellSpec.check()` raises when ρ and `n_entities` disagree
-- `sizes.py` raises when a built model's non-embedding count misses its target by >1%
+- the bit-counter uses `sum` not `mean`, asserted on a planted-bits fixture, **and `R ≤ R^max`**
+- every endpoint has a passing *and* a failing fixture for **each** of G1–G8
+- `mixture.py` raises on a fractional reasoning slice, on a memorizable one, and when the composable
+  mixer would rescale a short source
+- `CellSpec.check()` raises when demand and `n_entities` disagree
+- `sizes.py` raises when a built model misses its target by >1%, **and `build()` is exercised against
+  real torch** — the factory-collision bug type-checked, passed a torch-free suite, and would have
+  failed on the first GPU
 - exposures recomputed from the stream equal exactly 200 for every entity
+- **entropy-axis token invariance**: every b renders to an identical token count
 
 ---
 
-## 13. Pre-registered predictions
+## 14. Pre-registered predictions
 
-**P1.** Achieved R(F) rises linearly with demanded bits to ~1.8 b/p and pins at 2.0 ± 0.3. *Refuted
-if* it pins below 1.5 or exceeds 2.5.
-**P2.** Closed-book recall stays above 90% to the hinge, then falls as 2.0/demanded within ±10
-points — 50% at ρ=2, 25% at ρ=4. *Refuted if* the decline starts below 50% occupancy, which would mean
-the bit accounting is wrong and the experiment is measuring something else. This is a built-in
-validity check: recall should be a hinge, not a slope.
-**P3.** Unrelated-reasoning accuracy is flat within seed noise across ρ = 0.25 → 4, **under both
-readings of §3.4**. *Refuted if* it declines by more than 3× the seed SD in both, which would be the
-first direct evidence for crowding. A decline *before* the hinge indicates interference rather than
-capacity.
-**P4.** Related-reasoning accuracy declines past the hinge and tracks recall within 10 points, because
-it depends on fact access.
-**P5.** At fixed ρ, reasoning improves with model size. *Refuted if* flat, meaning 13M–113M is too
-narrow a range.
-**P6.** The reasoning-only control shows no decline at any size, isolating fact load as the cause of
-any decline seen elsewhere.
-**P7.** Recognition exceeds generation by ≥20 points at every ρ, per Physics 3.1's extraction gap.
-**P8.** Seed SD on the reasoning endpoints is under 2 points at n ≥ 2,000 eval items. *Refuted if*
-larger, in which case the grid needs more seeds than M5 plans.
-**P9.** Storage at 200 exposures lands between the 1 and 2 bits/param lines, closer to 1. *Refuted if*
-it exceeds 2, which would mean our bit accounting is inflated.
-**P10.** Achieved R(F) plateaus before the token budget is exhausted at ρ ≥ 1, and does not at
-ρ = 0.25.
-**P11.** Depth-2 related reasoning exceeds depth-3 by ≥20 points at every ρ.
-**P12.** Per-entity stored bits degrade roughly uniformly past ρ=1 rather than showing a rare-item
-cliff, because exposure is uniform by construction. *Refuted if* the histogram is bimodal, which would
-mean preferential forgetting and a different mechanism.
+Rewritten where revision 1 contradicted itself.
 
-Effect size to power for is **~2pp**, the only comparable published number: a 410M Pythia on 32B
-FineWeb-Edu tokens mixed with synthetic biographies at ratio 0.3, losing 2.09 points of average
-zero-shot downstream accuracy. Our own previous split-vs-dense delta of 0.0006 is roughly 30× smaller
-than that, which is a further sign the previous design was measuring nothing.
+**P1.** *Measurement, not prediction.* Report where achieved R(F) saturates at 200 exposures, with a
+CI. Revision 1's "pins at 2.0 ± 0.3, refuted below 1.5" imported the 1000-exposure frontier into a
+200-exposure experiment while P9 said "closer to 1" and M2's exit said "~1.2" — **it was refuted by
+construction.**
+**P2.** Planted-bits recovery within 5%, and `R ≤ R^max` at every checkpoint. Revision 1's recall
+hinge was an algebraic identity — under uniform residual `recall = R/R^max` exactly — so it could not
+fail for the reason it was offered.
+**P3.** On the **entropy axis**, reasoning is flat in demanded bits per parameter within the
+equivalence bound. *Refuted if* the pooled slope's 90% CI excludes zero — the first identified
+evidence for crowding.
+**P4.** Related-reasoning accuracy declines past the hinge and tracks recall within 10 points.
+**P5.** Reasoning improves with width at fixed demand, at the rate M0 measures. Revision 1 also
+claimed reasoning is flat in width; that half is withdrawn (§8.4).
+**P6.** The reasoning-only control shows no decline at any width.
+**P7.** Recognition exceeds generation by ≥20 points at every demand level.
+**P8.** Run-level σ from M0's replicates is ≤ 0.65pp. *Refuted if* larger, in which case the seed
+count is re-scoped before M3 rather than after.
+**P9.** Per-entity stored bits degrade roughly uniformly past saturation. *Refuted if* bimodal.
+**P10.** **The count-sweep slope is more negative than the entropy-sweep slope.** The difference is
+the token/step/ratio artifact, and predicting it is how we avoid claiming it as crowding.
+**P11.** The disjoint-second-population control **does** crowd. *Refuted if* it does not, in which
+case the instrument cannot detect crowding and nothing else in the grid is interpretable.
+
+Effect size to power for is **~2pp**, from `arXiv:2505.18091` — which, note, is the paper that already
+found the effect and attributed it to capacity.
 
 ---
 
-## 14. Still open
+## 15. What a result licenses
 
-**The capacity block.** Everything downstream of M0 assumes one; nothing in M0 does. H200 versus B200
-changes the wall clock by 2.3× and changes no decision in this document.
+If reasoning is flat on the entropy axis with the count axis declining, the honest reading is that
+the phi-3 conjecture fails at 13M–64M and the apparent effect is a data-mixture effect — which is
+phi-4's own revised position and `2505.18091`'s rejected alternative.
 
-**Whether any token shards get published**, and if so which. Lean: none until a paper cell exists.
+If both decline together, that is the first identified evidence that fact storage and reasoning
+compete for capacity, and it agrees with `2505.18091` by a different and better-controlled route.
 
-**M4's GPT-NeoX port.** Deferred, not descoped. If continuation matters more than the 113M row, the
-port plus 160M at three checkpoints costs roughly what the 113M row costs, and it is the one arm that
-supplies a model with real reasoning ability — so the unrelated-reasoning slice measures something
-that exists outside our corpus.
+**Neither licenses a claim about 7B**, and "Too Big to Think" (`2506.09099`) is a caution here: joint
+training left *no* model able to extrapolate, which cuts against P5 and P6. Say all of this before a
+referee says it.
 
-**What a flat result licenses.** If reasoning is flat, the founding premise is refuted at 13M–113M by
-direct measurement, and the pivot away from it is retroactively justified with evidence rather than
-inference. It does not license a claim about 7B. Say so in the writeup before someone else does.
+Either way the experiment produces the first dataset with direct bit-counts and a bracketed reasoning
+endpoint on the same checkpoints across a swept, **identified** demand axis.
 
-If reasoning declines past the hinge instead, it is the first demonstration that fact storage and
-reasoning compete for capacity — a result in its own right, and one that revives the externalisation
-argument on a proper footing. Either way this produces the first dataset with direct bit-counts and a
-bracketed reasoning endpoint measured on the same checkpoints, which is the thing both anchor papers
-left undone.
+---
+
+## 16. What revision 2 changed, and what it did not
+
+### 16.1 Adopted
+
+The axis (demanded bits/parameter, both parameter bases, the name term, R_E measured not assumed);
+the entropy sweep as the identified primary; the four named confounds; the withdrawal of the
+compute-matched "costs nothing" claim; n=30k frozen eval, pooled regression, equivalence test, and
+deletion of the monotonicity rule; Mano at L=10 with Brevo1 and Reasoning Core; answer-token CE in
+bits; FLD demoted to conditional; iGSM, the linear probe and the Pythia seed sweep cut; gates G2–G8;
+the mandatory positive control; specified hyperparameters; the LM head in the FLOP count; materialised
+reasoning slices; `max_checkpoints=null`; generation moved to a post-hoc job; the `llama_like` fix;
+the corrected prior; the withdrawn Ouro/iGSM citation; and `2505.18091` promoted to prior work.
+
+### 16.2 Where I disagree, or where the fix is incomplete
+
+**The entropy axis does not fully neutralise gradient-share variation, and the review's b=0 argument
+overstates its case.** Fact-slice *loss magnitude* necessarily varies with b — that is the
+manipulation — so Adam's second moment still sees a different fact-gradient scale in every cell. At
+b=0 the fact loss collapses toward zero within a few thousand steps, so its gradient share collapses
+too; that is a different regime, not a neutral one. The entropy axis fixes token share, step count,
+schedule position and cumulative weight decay, which is four of the five, and it is a large
+improvement. The residual is not arguable away, so it is **measured**: per-slice gradient norms and
+Adam second-moment statistics are logged per cell (§5) and reported beside the slope.
+
+**Total versus non-embedding parameters is not settled by the review's own evidence.** It cites
+Physics 3.3 as saying "P = total number of parameters" but supports it with GPT2-small 124M → 88M,
+which is total *minus* embeddings. The consistent reading is total minus *unused* embedding rows —
+and for a 32k tied vocab with a BPE trained on our own corpus, almost every row is used. Hence:
+report both, take the basis as an argument, and say which is which on every plot.
+
+**`P² → 81×` was not wrong, it was a different quantity.** 81× is exact in non-embedding parameters;
+~53× counts the LM head's FLOPs. Both are right under their own definition, and the review's framing
+("the stated reason for cutting the 113M row is the wrong reason") is fair for the cost argument but
+the row is cut on §8.4's grounds anyway.
+
+**The entropy axis is not free to build.** Cheaper per row, yes, but it needs `values.py`, a
+fixed-length renderer, and a natural-language scheme for high-entropy values. Call it 3–5
+person-days, against a review estimate of 28–42 person-days for corpus plus measurement overall.
+
+### 16.3 Deferred, with reasons
+
+FLD's 1,700 core-hours and 51.1% floor — decided in M0, not now. The exposure placebo and the
+mechanism battery — M4. Qwen3-0.6B continuation — after M3. Retiring
+`memory-split/docs/HANDOFF-factcrowd-dev.md`, which still points a fresh developer at a superseded
+spec that disagrees with this one on architecture, materialisation, model sizes and corpus size: that
+is a change in another repository and belongs to whoever owns it. **This file is the single source of
+truth.**

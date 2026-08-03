@@ -184,3 +184,91 @@ def test_embedding_share_is_why_the_vocab_is_32k_and_the_embeddings_are_tied():
     smallest = S.LADDER[0]
     untied = 2 * 32_000 * smallest.d_model
     assert untied > smallest.expected_non_embedding_params
+
+
+# --- build(): the factory-collision trap, and the real construction -------------------------------
+
+
+def test_llama_like_kwargs_carry_the_row_and_pin_the_architecture():
+    """
+    The argument set is checkable without ``torch``, which is the point of splitting it out.
+
+    Every value here is one the ladder depends on: the width, fixed depth, head count at 64, and the
+    FFN sizing that a hand formula gets wrong by a third.
+    """
+    for ladder_row in S.LADDER:
+        kwargs = S.llama_like_kwargs(ladder_row, 32_000)
+
+        assert kwargs["d_model"] == ladder_row.d_model
+        assert kwargs["n_layers"] == S.N_LAYERS == 12
+        assert kwargs["n_heads"] == ladder_row.d_model // 64
+        assert kwargs["hidden_size_multiplier"] == 1.5
+        assert kwargs["hidden_size_multiple_of"] == 256
+        assert kwargs["vocab_size"] == 32_000
+        assert kwargs["tie_word_embeddings"] is True
+        assert kwargs["block_name"] == "reordered_norm"
+
+
+def test_going_through_an_olmo2_factory_would_raise_for_every_row():
+    """
+    Why :func:`build` calls ``llama_like`` directly, reproduced against the factory's own pattern.
+
+    ``TransformerConfig.olmo2_190M`` passes ``d_model=768`` explicitly *and* splats ``**kwargs``, and
+    it pops ``n_layers`` and ``n_heads`` but not ``d_model``. So supplying a width collides and every
+    row raises ``TypeError``. This test carries a stub with that exact shape, because the real
+    factory needs ``torch`` and the trap is in the calling convention rather than in the model.
+
+    The silent variant is the dangerous one and is asserted below: omitting ``d_model`` and passing
+    only ``n_heads`` *succeeds*, and returns a 768-wide model with ``head_dim=192``. It trains, it
+    reports a loss curve, and it is not the model the ladder asked for.
+    """
+
+    def olmo2_like(vocab_size, **kwargs):  # the factory's own kwargs handling
+        def llama_like(*, d_model, vocab_size, n_layers, n_heads, **rest):
+            return {"d_model": d_model, "n_layers": n_layers, "n_heads": n_heads}
+
+        return llama_like(
+            d_model=768,
+            n_layers=kwargs.pop("n_layers", 12),
+            n_heads=kwargs.pop("n_heads", 12),
+            vocab_size=vocab_size,
+            **kwargs,
+        )
+
+    for ladder_row in S.LADDER:
+        with pytest.raises(TypeError, match="multiple values for keyword argument 'd_model'"):
+            olmo2_like(32_000, n_layers=12, d_model=ladder_row.d_model, n_heads=ladder_row.n_heads)
+
+    silent = olmo2_like(32_000, n_heads=4)
+    assert silent["d_model"] == 768 and silent["d_model"] // silent["n_heads"] == 192
+
+
+def test_build_produces_the_declared_parameter_counts():
+    """
+    The measurement the closed form is only an estimate of, run against a real config.
+
+    Needs ``torch``, so it is skipped on a machine without the full install -- which is exactly why
+    the two tests above exist. This is the one that would have caught the factory collision.
+    """
+    pytest.importorskip("torch")
+
+    for ladder_row in S.LADDER:
+        config = S.build(ladder_row, 32_000)
+
+        assert config.d_model == ladder_row.d_model
+        assert config.n_layers == 12
+        built = config.num_non_embedding_params
+        assert built == pytest.approx(
+            ladder_row.expected_non_embedding_params, rel=0.01
+        ), ladder_row.label
+
+
+def test_build_raises_when_a_row_does_not_match_what_it_declares():
+    """
+    rho is computed from the built count, so a row that lies about its size mislabels every cell.
+    """
+    pytest.importorskip("torch")
+
+    wrong = S.LadderRow("wrong", 256, 99_000_000)
+    with pytest.raises(OLMoConfigurationError, match="non-embedding params against an expected"):
+        S.build(wrong, 32_000)
