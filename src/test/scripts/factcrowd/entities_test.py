@@ -1,11 +1,22 @@
 """
-What the entity table guarantees: exact bits, unique names, and a prefix property across cells.
+What the entity table guarantees: exact bits, a pseudorandom name set, and a prefix property.
 
-The prefix property is the one that would be easiest to lose and hardest to notice. Every cell must
-describe the *same* 25k probe people for related-reasoning accuracy to be comparable across the
-ladder, and that only holds because entity ``i``'s attributes do not depend on ``n_entities``. A
-single ``(N, K)`` block draw would break it silently -- the corpus would still be valid, the bits
-would still be exact, and P4 would be measuring a different population in every cell.
+Three of these were found missing by an adversarial pass and are the reason this file is shaped the
+way it is.
+
+**The name set has to look random, not merely be unique.** The demand formula charges
+``N·log2(N0/N)`` for knowing which names exist, which is the entropy of a random N-subset. An affine
+``(a·i + b) mod N0`` map is bijective, so an earlier version passed every uniqueness test -- but its
+image has exactly three distinct sorted gaps and is described by three numbers, so the formula
+overstated it by 200,000x on the experiment's own independent variable.
+
+**Nothing checked that the corpus realises the bits it claims.** Sampling a pool as
+``integers(0, len(pool)//2)`` leaves ``bits_per_entity`` reporting 47.592 for a corpus carrying
+42.586, and drawing every column from one stream collapses the joint entropy the sum assumes. Both
+passed the previous suite.
+
+**The prefix property's stated villain was innocent.** A ``(N, K)`` block draw is prefix-stable --
+numpy fills row-major -- so the tests here pin a ``(K, N)`` draw, which is not.
 """
 
 import math
@@ -13,10 +24,17 @@ import math
 import numpy as np
 import pytest
 from factcrowd.corpus import entities as E
+from factcrowd.corpus import values as V
 
 from olmo_core.exceptions import OLMoConfigurationError
 
 SEED = 1234
+NAME_SPACE = 400 * 400 * 1000
+
+
+def bios() -> E.Schema:
+    """The bioS schema, which lives in :mod:`factcrowd.corpus.values`."""
+    return V.bios_schema().schema
 
 
 def small_schema() -> E.Schema:
@@ -33,13 +51,184 @@ def small_schema() -> E.Schema:
     )
 
 
-# --- bits are arithmetic, never an estimate -------------------------------------------------------
+def plug_in_mutual_information(left: np.ndarray, right: np.ndarray) -> float:
+    """Plug-in mutual information in bits. Biased upward, which is fine for a contrast."""
+    joint = np.zeros((int(left.max()) + 1, int(right.max()) + 1), dtype=np.int64)
+    np.add.at(joint, (left.astype(np.int64), right.astype(np.int64)), 1)
+    total = joint.sum()
+    probability = joint / total
+    marginal_left = probability.sum(axis=1, keepdims=True)
+    marginal_right = probability.sum(axis=0, keepdims=True)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        terms = probability * np.log2(probability / (marginal_left * marginal_right))
+    return float(np.nansum(terms))
 
 
-def test_pool_bits_are_exactly_log2_of_size():
-    """No estimator anywhere: a pool of 2^k values carries exactly k bits."""
-    assert E.AttributePool("p", tuple(str(i) for i in range(256))).bits == 8.0
-    assert E.AttributePool("p", ("a", "b", "c")).bits == pytest.approx(math.log2(3))
+# --- the name set must look like a random subset ---------------------------------------------------
+
+
+def test_the_name_set_does_not_have_the_three_gaps_of_an_affine_map():
+    """
+    The test that pins the fix. An affine map's image has exactly three distinct sorted gaps.
+
+    By the three-distance theorem, ``{(a·i + b) mod N0}`` sorted has gaps taking at most three
+    values -- so the set is described by ``(N0, N, b)``, at most ``log2(N0) = 27`` bits, while
+    ``N·log2(N0/N)`` charged 29.8 Mbit for it. A keyed pseudorandom permutation gives the
+    geometrically-distributed gaps the formula assumes.
+    """
+    codes = np.sort(
+        E.name_codes(np.arange(200_000, dtype=np.uint64), name_space=NAME_SPACE, seed=SEED).astype(
+            np.int64
+        )
+    )
+    distinct_gaps = len(np.unique(np.diff(codes)))
+    assert distinct_gaps > 1_000, distinct_gaps
+
+
+def test_the_gap_distribution_is_close_to_geometric():
+    """
+    The positive form of the check above: sampling N of N0 uniformly gives mean gap N0/N.
+
+    An affine map gives a mean gap of N0/N too -- that is forced -- so the mean is not the signal.
+    The variance is: a geometric distribution has standard deviation close to its mean, while three
+    distinct gap values cannot.
+    """
+    n_entities = 200_000
+    codes = np.sort(
+        E.name_codes(
+            np.arange(n_entities, dtype=np.uint64), name_space=NAME_SPACE, seed=SEED
+        ).astype(np.int64)
+    )
+    gaps = np.diff(codes)
+    expected_mean = NAME_SPACE / n_entities
+
+    assert gaps.mean() == pytest.approx(expected_mean, rel=0.05)
+    assert gaps.std() / gaps.mean() == pytest.approx(1.0, abs=0.15)
+
+
+def test_the_permutation_is_a_bijection_over_whole_small_name_spaces():
+    """
+    Uniqueness is structural -- a Feistel round is invertible whatever its round function does.
+
+    Checked exhaustively over the entire space for sizes that are prime, a power of two, highly
+    composite and awkward, because cycle walking is where a bijection would most plausibly be lost.
+    """
+    for name_space in (2, 3, 35, 64, 97, 100, 256, 720, 1_000, 1_024, 5_041):
+        codes = E.name_codes(
+            np.arange(name_space, dtype=np.uint64), name_space=name_space, seed=SEED
+        )
+        assert sorted(int(c) for c in codes) == list(range(name_space)), name_space
+
+
+def test_names_are_unique_at_grid_scale():
+    """Two entities sharing a name would make the corpus contradict itself about one key."""
+    for n_entities in (2, 1_000, 200_000):
+        table = E.EntityTable.build(bios(), n_entities, SEED)
+        rows = {tuple(int(v) for v in row) for row in table.name_indices}
+        assert len(rows) == n_entities, n_entities
+
+
+def test_names_stay_unique_right_up_to_a_tiny_name_space_ceiling():
+    """A 5 x 7 space holds exactly 35 entities, the strongest form of the claim."""
+    table = E.EntityTable.build(small_schema(), 35, SEED)
+    rows = {tuple(int(v) for v in row) for row in table.name_indices}
+    assert len(rows) == 35
+
+
+def test_a_different_seed_changes_the_names_and_not_only_the_attributes():
+    """
+    A fixed permutation key would give every seed the same name assignment.
+
+    The previous suite compared only ``attributes`` between seeds, so dropping the seed from the name
+    key passed -- and M5's extra seeds would have re-used one name assignment.
+    """
+    a = E.EntityTable.build(bios(), 5_000, SEED)
+    b = E.EntityTable.build(bios(), 5_000, SEED + 1)
+    assert not np.array_equal(a.attributes, b.attributes)
+    assert not np.array_equal(a.name_indices, b.name_indices)
+
+
+def test_the_mixed_radix_decomposition_covers_every_combination_exactly_once():
+    """Every name triple is reachable and none is favoured, checked by enumeration."""
+    schema = small_schema()  # 5 x 7 = 35
+    table = E.EntityTable.build(schema, 35, SEED)
+    rows = {tuple(int(v) for v in row) for row in table.name_indices}
+    assert rows == {(first, last) for first in range(5) for last in range(7)}
+
+
+# --- the corpus must realise the bits it claims -----------------------------------------------------
+
+
+def test_every_pool_value_is_actually_sampled():
+    """
+    ``bits_per_entity`` assumes the full pool is in play. Nothing checked that it is.
+
+    Sampling ``integers(0, len(pool)//2)`` leaves the property reporting 47.592 bits for a corpus
+    carrying 42.586 -- a 10.5% overstatement of the experiment's independent variable, with a green
+    suite. 200k rows covers the largest pool here (400 values) many times over.
+    """
+    schema = bios()
+    table = E.EntityTable.build(schema, 200_000, SEED)
+    for column, pool in enumerate(schema.attributes):
+        observed = set(np.unique(table.attributes[:, column]).tolist())
+        assert observed == set(range(len(pool))), (pool.name, len(observed), len(pool))
+
+
+def test_attribute_columns_are_independent():
+    """
+    Summing ``log2(len(pool))`` over pools assumes the columns are independent.
+
+    Drawing every column from one ``SeedSequence`` makes them near-deterministic in each other and
+    collapses the joint entropy the sum asserts. Plug-in mutual information is biased upward at these
+    pool sizes, so this is a contrast rather than a zero test: independent columns read about 0.2
+    bits here, the shared-stream version read 7.3 of a 7.6-bit maximum.
+    """
+    schema = bios()
+    table = E.EntityTable.build(schema, 200_000, SEED)
+    for left in range(len(schema.attributes)):
+        for right in range(left + 1, len(schema.attributes)):
+            information = plug_in_mutual_information(
+                table.attributes[:, left], table.attributes[:, right]
+            )
+            assert information < 1.0, (left, right, information)
+
+
+def test_the_sampled_marginals_are_close_to_uniform():
+    """
+    Uniform sampling is what makes attribute demand exactly ``N x bits_per_entity``.
+
+    A skewed draw would leave demand an unknown smaller number, which is the failure mode that made
+    a Zipf arm uncomputable.
+    """
+    schema = bios()
+    table = E.EntityTable.build(schema, 200_000, SEED)
+    for column, pool in enumerate(schema.attributes):
+        counts = np.bincount(table.attributes[:, column], minlength=len(pool))
+        expected = 200_000 / len(pool)
+        assert counts.max() < 1.4 * expected, pool.name
+        assert counts.min() > 0.6 * expected, pool.name
+
+
+def test_a_golden_row_is_pinned():
+    """
+    A regression pin: nothing else asserts *which* values a seed produces.
+
+    Any change to the streams, the spawn order or the column mapping moves this, which is what makes
+    a silent reshuffle visible.
+    """
+    table = E.EntityTable.build(bios(), 1_000, SEED)
+    assert [int(v) for v in table.attributes[0]] == [85, 213, 28, 96, 9, 3, 37]
+    assert [int(v) for v in table.name_indices[0]] == [151, 196, 114]
+    assert table.attribute_values(0) == (
+        "Soagh",
+        "Slayng",
+        "Slealn",
+        "Kneng",
+        "Grieft",
+        "Ceell",
+        "Coosp",
+    )
+    assert " ".join(table.name_parts(0)) == "Sowt Yeemp Snisp"
 
 
 def test_bits_per_entity_sums_attribute_pools_only():
@@ -47,45 +236,162 @@ def test_bits_per_entity_sums_attribute_pools_only():
     assert small_schema().bits_per_entity == pytest.approx(3.0)
 
 
-def test_names_are_excluded_from_bits_because_a_name_is_a_key():
+def test_attribute_bits_is_not_the_corpus_demand():
     """
-    Including name pools would inflate demanded bits and put every cell below its labelled rho.
+    The trap this property used to be. It omits the name term, by 8.9% to 18.8% depending on N.
 
-    Physics 3.3's 47.6 bits/person ignores names for this reason, so excluding them is what keeps
-    our bit-counts comparable to theirs.
-    """
-    schema = small_schema()
-    if_names_counted = schema.bits_per_entity + sum(p.bits for p in schema.names)
-    assert if_names_counted > schema.bits_per_entity
-    assert schema.bits_per_entity == pytest.approx(3.0)
-
-
-def test_bios_schema_reproduces_the_published_bits_per_entity():
-    """
-    The default schema lands on 47.6 bits/person, which is what makes the comparison legitimate.
-
-    Asserted to 0.01 bits against the value :mod:`factcrowd.ladder.rho` documents.
+    Both this and ``rho.demanded_bits`` once carried the docstring "fact bits this corpus makes
+    available", so the first consumer to reach for the one on the table it already held would have
+    placed the cell 9-19% off its x.
     """
     from factcrowd.ladder import rho
 
-    assert E.bios_schema().bits_per_entity == pytest.approx(rho.BIOS_BITS_PER_ENTITY, abs=0.01)
-
-
-def test_total_bits_is_entities_times_bits_each():
-    """Demanded bits is a product, recomputed here from the table rather than trusted."""
-    table = E.EntityTable.build(small_schema(), 30, SEED)
-    assert table.total_bits == pytest.approx(30 * 3.0)
+    table = E.EntityTable.build(bios(), 200_000, SEED)
+    demand = rho.demanded_bits(
+        table.n_entities, table.bits_per_entity, name_space=table.schema.name_space
+    )
+    assert table.attribute_bits < demand
+    assert table.attribute_bits / demand < 0.95
 
 
 @pytest.mark.parametrize("bad_values", [(), ("only",), ("dup", "dup")])
 def test_pool_refuses_sizes_that_break_the_bit_arithmetic(bad_values):
-    """
-    Empty and single-value pools carry no bits; duplicates make log2(len) an overstatement.
-
-    Each would leave ``bits_per_entity`` describing something the corpus does not contain.
-    """
+    """Empty and singleton pools carry no bits; duplicates make log2(len) an overstatement."""
     with pytest.raises(OLMoConfigurationError):
         E.AttributePool("p", bad_values)
+
+
+def test_a_singleton_pool_is_allowed_only_when_asked_for():
+    """The entropy axis's b=0 cell is the one legitimate use."""
+    with pytest.raises(OLMoConfigurationError):
+        E.AttributePool("p", ("only",))
+    assert E.AttributePool("p", ("only",), allow_singleton=True).bits == 0.0
+
+
+# --- the prefix property ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "small, large", [(10, 100), (63, 65), (4_095, 4_097), (65_535, 65_537), (1_000, 200_000)]
+)
+def test_a_smaller_table_is_a_prefix_of_a_larger_one(small, large):
+    """
+    Entity i has the same attributes at every N, which makes the probe subset comparable.
+
+    Sizes straddle powers of two because that is where a chunked generator would most plausibly
+    break.
+    """
+    lo = E.EntityTable.build(bios(), small, SEED)
+    hi = E.EntityTable.build(bios(), large, SEED)
+    np.testing.assert_array_equal(lo.attributes, hi.attributes[:small])
+    np.testing.assert_array_equal(lo.name_indices, hi.name_indices[:small])
+
+
+def test_adding_an_attribute_leaves_the_existing_columns_unmoved():
+    """
+    The property the column-wise draw actually buys, as against a block draw.
+
+    A ``(N, K)`` block draw is prefix-stable in N -- numpy fills row-major -- so it is not what the
+    column-wise design protects against. This is.
+    """
+    schema = bios()
+    extended = E.Schema(
+        attributes=schema.attributes + (E.AttributePool("extra", ("x", "y", "z")),),
+        names=schema.names,
+    )
+    base = E.EntityTable.build(schema, 5_000, SEED)
+    grown = E.EntityTable.build(extended, 5_000, SEED)
+    np.testing.assert_array_equal(base.attributes, grown.attributes[:, : len(schema.attributes)])
+
+
+def test_the_probe_subset_is_the_same_people_in_every_cell():
+    """Related-reasoning accuracy is compared across cells, so it must ask about one population."""
+    schema = bios()
+    reference = E.EntityTable.build(schema, 64_180, SEED)
+    sample = [reference.attribute_values(int(i)) for i in reference.probe_ids[:200]]
+    for n_entities in (100_000, 611_184):
+        table = E.EntityTable.build(schema, n_entities, SEED)
+        np.testing.assert_array_equal(table.probe_ids, reference.probe_ids)
+        assert [table.attribute_values(int(i)) for i in table.probe_ids[:200]] == sample
+
+
+def test_probe_size_fits_the_smallest_cell_in_the_grid():
+    """
+    13M at a demand of 0.30 bits/param is 64,180 entities with the name term, so 39k are non-probe.
+
+    Without the name term it would read 79,397 and 54k. The docstring quotes the former.
+    """
+    from factcrowd.ladder import rho
+
+    schema = bios()
+    smallest = rho.solve(
+        12_595_456, 0.30, bits_per_entity=schema.bits_per_entity, name_space=schema.name_space
+    ).n_entities
+    assert smallest == pytest.approx(64_180, rel=0.01)
+    assert E.PROBE_SIZE < smallest
+    assert smallest - E.PROBE_SIZE > 30_000
+
+
+def test_probe_subset_is_capped_by_a_table_smaller_than_it():
+    """A table below the probe size yields what it has rather than indices that do not exist."""
+    table = E.EntityTable.build(small_schema(), 20, SEED)
+    assert len(table.probe_ids) == 20
+    assert int(table.probe_ids.max()) < table.n_entities
+
+
+# --- guards on the inputs --------------------------------------------------------------------------
+
+
+def test_name_codes_refuses_a_float_id_array():
+    """
+    ``astype(uint64)`` truncates, so 0.0, 0.4 and 0.9 would all become one name.
+
+    The guard used to check only ``max()``, so this passed and produced three ids sharing a name.
+    """
+    with pytest.raises(OLMoConfigurationError, match="must be an integer array"):
+        E.name_codes(np.array([0.0, 0.4, 0.9]), name_space=1000, seed=SEED)
+
+
+def test_name_codes_refuses_a_negative_id():
+    """A negative id wraps to a huge uint64 rather than raising, so ``max()`` alone missed it."""
+    with pytest.raises(OLMoConfigurationError, match="must be non-negative"):
+        E.name_codes(np.array([-3, 0, 1], dtype=np.int64), name_space=1000, seed=SEED)
+
+
+def test_name_codes_refuses_an_id_past_the_name_space():
+    """The lower-level guard, so a caller bypassing build() still cannot collide."""
+    with pytest.raises(OLMoConfigurationError, match="does not fit a name space"):
+        E.name_codes(np.array([0, 35], dtype=np.uint64), name_space=35, seed=SEED)
+
+
+def test_name_codes_refuses_a_name_space_beyond_safe_uint64_arithmetic():
+    """
+    The name space is a demand knob, so somebody will widen it, and numpy wraps without warning.
+
+    An earlier affine implementation lost uniqueness above about 4.6e12 and reverted silently to
+    luck -- which is exactly what its docstring said it was not.
+    """
+    with pytest.raises(OLMoConfigurationError, match="ceiling"):
+        E.name_codes(np.array([0], dtype=np.uint64), name_space=2**63, seed=SEED)
+
+
+@pytest.mark.parametrize("bad_seed", [-1, -1000])
+def test_a_negative_seed_is_refused_rather_than_reaching_numpy(bad_seed):
+    """It would otherwise escape as a raw ``ValueError`` from ``SeedSequence``."""
+    with pytest.raises(OLMoConfigurationError, match="must not be negative"):
+        E.EntityTable.build(small_schema(), 10, bad_seed)
+
+
+def test_build_refuses_a_non_positive_entity_count():
+    """An empty fact slice is a config error, not a cell with zero demand."""
+    with pytest.raises(OLMoConfigurationError, match="must be positive"):
+        E.EntityTable.build(small_schema(), 0, SEED)
+
+
+def test_building_more_entities_than_names_is_refused():
+    """Silently colliding names would corrupt every fact about the colliding keys."""
+    with pytest.raises(OLMoConfigurationError, match="distinct names"):
+        E.EntityTable.build(small_schema(), 36, SEED)
 
 
 def test_schema_refuses_missing_name_pools():
@@ -101,151 +407,140 @@ def test_schema_refuses_a_name_that_is_also_an_attribute():
         E.Schema(attributes=(shared,), names=(shared,))
 
 
-# --- the prefix property that makes cells comparable ---------------------------------------------
+# --- the fingerprint, and save / load --------------------------------------------------------------
 
 
-@pytest.mark.parametrize("small, large", [(10, 100), (100, 5_000), (1_000, 20_000)])
-def test_a_smaller_table_is_a_prefix_of_a_larger_one(small, large):
+def test_the_fingerprint_is_length_framed_so_a_pool_name_cannot_impersonate_a_header():
     """
-    Entity i has the same attributes at every N, which is what makes the probe subset comparable.
+    Without framing, a pool called ``a:2:x\\x00y\\x00attribute:b`` collided with a two-pool schema.
 
-    This is the invariant a single ``(N, K)`` block draw would silently break.
+    ``load`` then accepted a table carrying twice the bits the schema declared. Contrived, but the
+    guarantee is stated absolutely.
     """
-    schema = E.bios_schema()
-    lo = E.EntityTable.build(schema, small, SEED)
-    hi = E.EntityTable.build(schema, large, SEED)
+    honest = E.Schema(
+        attributes=(E.AttributePool("a", ("x", "y")), E.AttributePool("b", ("p", "q"))),
+        names=(E.AttributePool("n", ("1", "2")),),
+    )
+    impersonator = E.Schema(
+        attributes=(E.AttributePool("a:2:x\x00y\x00attribute:b", ("p", "q")),),
+        names=(E.AttributePool("n", ("1", "2")),),
+    )
+    assert honest.bits_per_entity != impersonator.bits_per_entity
+    assert honest.fingerprint() != impersonator.fingerprint()
 
-    np.testing.assert_array_equal(lo.attributes, hi.attributes[:small])
-    np.testing.assert_array_equal(lo.name_indices, hi.name_indices[:small])
+
+def test_fingerprint_tracks_values_not_just_sizes():
+    """Two schemas with equal bit counts and different vocabulary are different schemas."""
+    base = bios()
+    swapped = list(base.attributes)
+    swapped[1] = E.AttributePool("university", tuple(f"u{i}" for i in range(len(swapped[1]))))
+    other = E.Schema(attributes=tuple(swapped), names=base.names)
+    assert base.bits_per_entity == pytest.approx(other.bits_per_entity)
+    assert base.fingerprint() != other.fingerprint()
 
 
-def test_the_probe_subset_is_the_same_people_in_every_cell():
+def test_save_and_load_round_trip(tmp_path):
+    """The table we publish must read back as the table we generated."""
+    schema = bios()
+    original = E.EntityTable.build(schema, 3_000, SEED)
+    original.save(tmp_path / "tables" / "d576_b8")
+
+    loaded = E.EntityTable.load(tmp_path / "tables" / "d576_b8", schema)
+    np.testing.assert_array_equal(loaded.attributes, original.attributes)
+    np.testing.assert_array_equal(loaded.name_indices, original.name_indices)
+    assert loaded.seed == original.seed
+    assert loaded.bits_per_entity == pytest.approx(original.bits_per_entity)
+
+
+@pytest.mark.parametrize("name", ["plain", "with.dots", "d576_b8.npy", "trailing."])
+def test_save_and_load_agree_on_the_path_whatever_it_is_called(tmp_path, name):
     """
-    Related-reasoning accuracy is compared across cells, so it must ask about one population.
+    ``np.savez`` appended ``.npz`` while ``np.load`` did not, so ``save(p); load(p)`` failed.
 
-    Sizes here bracket the real ladder: the smallest cell is ~79k entities and the largest ~6.4M.
+    Every test happened to use a ``.npz`` name, so the suite never saw it -- and a cell id or a
+    ``--table-path`` without the suffix wrote a file nothing would read.
     """
-    schema = E.bios_schema()
-    reference = E.EntityTable.build(schema, 79_000, SEED)
-    reference_probe = [reference.attribute_values(int(i)) for i in reference.probe_ids[:200]]
-
-    for n_entities in (100_000, 714_000):
-        table = E.EntityTable.build(schema, n_entities, SEED)
-        np.testing.assert_array_equal(table.probe_ids, reference.probe_ids)
-        assert [table.attribute_values(int(i)) for i in table.probe_ids[:200]] == reference_probe
+    schema = small_schema()
+    E.EntityTable.build(schema, 20, SEED).save(tmp_path / name)
+    assert E.EntityTable.load(tmp_path / name, schema).n_entities == 20
 
 
-def test_probe_subset_is_capped_by_a_table_smaller_than_it():
-    """A table below the probe size yields what it has rather than indices that do not exist."""
-    table = E.EntityTable.build(small_schema(), 20, SEED)
-    assert len(table.probe_ids) == 20
-    assert int(table.probe_ids.max()) < table.n_entities
-
-
-def test_probe_size_fits_the_smallest_cell_in_the_grid():
+def test_load_memory_maps_by_default(tmp_path):
     """
-    The 13M row at rho=0.25 is ~79k entities, so 25k leaves a non-probe comparison group.
+    The claim the class makes about dataloader workers, asserted rather than assumed.
 
-    If the probe ever exceeded the smallest cell, probe-vs-non-probe recall -- the check on whether
-    QA mentions change storage -- would have nothing to compare against.
+    ``np.load`` silently ignores ``mmap_mode`` for a zip archive, so the previous ``.npz`` layout
+    memory-mapped nothing and eight workers would each have held their own 206 MB.
     """
-    from factcrowd.ladder import rho
+    schema = bios()
+    E.EntityTable.build(schema, 2_000, SEED).save(tmp_path / "t")
 
-    schema = E.bios_schema()
-    smallest = rho.solve(
-        12_595_456,
-        0.30,
-        bits_per_entity=schema.bits_per_entity,
-        name_space=schema.name_space,
-    ).n_entities
-    # 64,180 with the name term included, against 79,397 without it -- the name term removes 19% of
-    # the entities at fixed demand, so the non-probe group is 39k rather than the 54k an
-    # attribute-only count would suggest. Still comfortably above the n >= 2,000 the eval needs.
-    assert smallest == pytest.approx(64_180, rel=0.01)
-    assert E.PROBE_SIZE < smallest
-    assert smallest - E.PROBE_SIZE > 30_000
+    mapped = E.EntityTable.load(tmp_path / "t", schema, mmap=True)
+    assert isinstance(mapped.attributes, np.memmap)
+    assert isinstance(mapped.name_indices, np.memmap)
+
+    in_memory = E.EntityTable.load(tmp_path / "t", schema, mmap=False)
+    assert not isinstance(in_memory.attributes, np.memmap)
 
 
-# --- determinism and uniqueness -------------------------------------------------------------------
-
-
-def test_the_same_seed_gives_the_same_table():
-    """Reproducibility from ``(schema, n_entities, seed)`` is what we publish instead of shards."""
-    a = E.EntityTable.build(E.bios_schema(), 5_000, SEED)
-    b = E.EntityTable.build(E.bios_schema(), 5_000, SEED)
-    np.testing.assert_array_equal(a.attributes, b.attributes)
-    np.testing.assert_array_equal(a.name_indices, b.name_indices)
-
-
-def test_a_different_seed_gives_a_different_table():
-    """Otherwise the seed is decoration and M5's extra seeds would re-run one experiment."""
-    a = E.EntityTable.build(E.bios_schema(), 5_000, SEED)
-    b = E.EntityTable.build(E.bios_schema(), 5_000, SEED + 1)
-    assert not np.array_equal(a.attributes, b.attributes)
-
-
-@pytest.mark.parametrize("n_entities", [2, 100, 10_000, 60_000])
-def test_names_are_unique_by_construction(n_entities):
+def test_load_refuses_a_table_built_against_different_vocabulary(tmp_path):
     """
-    Two entities sharing a name would make the corpus assert contradictory facts about one key.
+    Same pool sizes means identical bits per entity, so no arithmetic check would catch it.
 
-    Checked exhaustively rather than by sampling, because the bijection either holds for every id
-    or is not a bijection.
+    Only the fingerprint does, and without it every fact would differ while every number in the run
+    stayed plausible.
     """
-    table = E.EntityTable.build(E.bios_schema(), n_entities, SEED)
-    rows = {tuple(int(v) for v in row) for row in table.name_indices}
-    assert len(rows) == n_entities
+    original_schema = bios()
+    E.EntityTable.build(original_schema, 100, SEED).save(tmp_path / "t")
+
+    renamed = list(original_schema.attributes)
+    renamed[0] = E.AttributePool(
+        renamed[0].name, tuple(f"other_{i}" for i in range(len(renamed[0])))
+    )
+    other = E.Schema(attributes=tuple(renamed), names=original_schema.names)
+    assert other.bits_per_entity == pytest.approx(original_schema.bits_per_entity)
+
+    with pytest.raises(OLMoConfigurationError, match="different schema"):
+        E.EntityTable.load(tmp_path / "t", other)
 
 
-def test_names_stay_unique_up_to_the_ceiling_of_a_tiny_name_space():
+def test_load_refuses_a_table_with_the_wrong_number_of_columns(tmp_path):
     """
-    The bijection must not degrade near capacity, which is where rejection sampling would.
+    A truncated or half-written table used to load clean and fail hours later inside a worker.
 
-    A 5 x 7 name space holds exactly 35 entities, so 35 distinct names is the strongest form of
-    this claim.
+    The fingerprint cannot see it, because the fingerprint describes the schema and not the arrays.
     """
-    table = E.EntityTable.build(small_schema(), 35, SEED)
-    rows = {tuple(int(v) for v in row) for row in table.name_indices}
-    assert len(rows) == 35
+    schema = bios()
+    directory = tmp_path / "t"
+    E.EntityTable.build(schema, 100, SEED).save(directory)
+    np.save(directory / "attributes.npy", np.zeros((100, 2), dtype=np.uint32))
+
+    with pytest.raises(OLMoConfigurationError, match="declares 7 attribute pools"):
+        E.EntityTable.load(directory, schema)
 
 
-def test_building_more_entities_than_names_is_refused():
-    """Silently colliding names would corrupt every fact about the colliding keys."""
-    with pytest.raises(OLMoConfigurationError, match="distinct names"):
-        E.EntityTable.build(small_schema(), 36, SEED)
+def test_load_refuses_an_index_that_points_outside_its_pool(tmp_path):
+    """Corruption that keeps the shape still produces an IndexError deep in a dataloader."""
+    schema = bios()
+    directory = tmp_path / "t"
+    table = E.EntityTable.build(schema, 100, SEED)
+    table.save(directory)
+    corrupt = np.array(table.attributes)
+    corrupt[0, 0] = 10_000
+    np.save(directory / "attributes.npy", corrupt)
+
+    with pytest.raises(OLMoConfigurationError, match="which has only"):
+        E.EntityTable.load(directory, schema)
 
 
-def test_name_codes_refuse_an_id_past_the_name_space():
-    """The lower-level guard, so a caller bypassing build() still cannot collide."""
-    with pytest.raises(OLMoConfigurationError, match="does not fit a name space"):
-        E.name_codes(np.array([0, 35], dtype=np.uint64), name_space=35, seed=SEED)
+def test_load_refuses_a_directory_that_is_not_a_table(tmp_path):
+    """The message says a table is a directory, because it used to be a file."""
+    (tmp_path / "empty").mkdir()
+    with pytest.raises(OLMoConfigurationError, match="is missing"):
+        E.EntityTable.load(tmp_path / "empty", small_schema())
 
 
-def test_name_codes_are_a_permutation_of_the_whole_space():
-    """A bijection, so every name is reachable and none is favoured."""
-    codes = E.name_codes(np.arange(35, dtype=np.uint64), name_space=35, seed=SEED)
-    assert sorted(int(c) for c in codes) == list(range(35))
-
-
-def test_consecutive_entities_do_not_get_consecutive_names():
-    """
-    The multiplier is chosen to spread adjacent ids, so a rendered corpus does not read as a list.
-
-    Not a statistical claim -- the codes are a permutation and have structure -- just enough spread
-    that neighbouring entities are not neighbouring names.
-    """
-    codes = E.name_codes(np.arange(1000, dtype=np.uint64), name_space=160_000_000, seed=SEED)
-    gaps = np.abs(np.diff(codes.astype(np.int64)))
-    assert gaps.min() > 1000
-
-
-def test_build_refuses_a_non_positive_entity_count():
-    """An empty fact slice is a config error, not a cell with rho=0."""
-    with pytest.raises(OLMoConfigurationError, match="must be positive"):
-        E.EntityTable.build(small_schema(), 0, SEED)
-
-
-# --- values, round-tripping, and the schema guard --------------------------------------------------
+# --- values resolve, and determinism ---------------------------------------------------------------
 
 
 def test_attribute_values_and_name_parts_resolve_to_pool_strings():
@@ -262,105 +557,25 @@ def test_attribute_values_and_name_parts_resolve_to_pool_strings():
     assert parts[1] in schema.names[1].values
 
 
-def test_save_and_load_round_trip(tmp_path):
-    """The table we publish must read back as the table we generated."""
-    schema = E.bios_schema()
-    original = E.EntityTable.build(schema, 3_000, SEED)
-    path = tmp_path / "tables" / "d576_rho1.npz"
-    original.save(path)
-
-    loaded = E.EntityTable.load(path, schema)
-    np.testing.assert_array_equal(loaded.attributes, original.attributes)
-    np.testing.assert_array_equal(loaded.name_indices, original.name_indices)
-    assert loaded.seed == original.seed
-    assert loaded.bits_per_entity == pytest.approx(original.bits_per_entity)
-
-
-def test_load_refuses_a_table_built_against_different_vocabulary(tmp_path):
-    """
-    Indices are meaningless without the pools they point into, and a mismatch is silent otherwise.
-
-    Same pool *sizes*, so bits per entity is identical and no arithmetic check would catch it --
-    only the fingerprint does. Without this the corpus would assert different facts about every
-    entity while every number in the run stayed plausible.
-    """
-    original_schema = E.bios_schema()
-    table = E.EntityTable.build(original_schema, 100, SEED)
-    path = tmp_path / "t.npz"
-    table.save(path)
-
-    renamed = list(original_schema.attributes)
-    renamed[0] = E.AttributePool(
-        "birth_city", tuple(f"other_city_{i}" for i in range(len(renamed[0])))
-    )
-    other_schema = E.Schema(attributes=tuple(renamed), names=original_schema.names)
-    assert other_schema.bits_per_entity == pytest.approx(original_schema.bits_per_entity)
-
-    with pytest.raises(OLMoConfigurationError, match="different schema"):
-        E.EntityTable.load(path, other_schema)
-
-
-def test_schema_fingerprint_tracks_values_not_just_sizes():
-    """Two schemas with equal bit counts and different vocabulary are different schemas."""
-    base = E.bios_schema()
-    swapped = list(base.attributes)
-    swapped[1] = E.AttributePool("university", tuple(f"u{i}" for i in range(len(swapped[1]))))
-    other = E.Schema(attributes=tuple(swapped), names=base.names)
-
-    assert base.bits_per_entity == pytest.approx(other.bits_per_entity)
-    assert base.fingerprint() != other.fingerprint()
-
-
-# --- the placeholder vocabulary, and the guard on replacing it ------------------------------------
-
-
-def test_default_vocabulary_is_placeholders_and_says_so():
-    """
-    A reminder in test form: bit accounting is already exact, token counts are not.
-
-    ``employer_017`` and a real employer name do not tokenize alike, and both the ~100 tokens/bio
-    budget and the 32k BPE depend on the real strings. This asserts the gap still exists so that
-    closing it is a visible change rather than an assumed one.
-    """
-    schema = E.bios_schema()
-    assert schema.attributes[0].values[0].startswith("birth_city_")
-
-
-def test_real_vocabulary_can_be_supplied_at_matching_sizes():
-    """The replacement path works, and bits per entity is unchanged by it."""
-    placeholder = E.bios_schema()
-    real = [
-        E.AttributePool(pool.name, tuple(f"Real {pool.name} {i}" for i in range(len(pool))))
-        for pool in placeholder.attributes
-    ]
-    schema = E.bios_schema(vocabulary=real)
-
-    assert schema.bits_per_entity == pytest.approx(placeholder.bits_per_entity)
-    assert schema.attributes[0].values[0].startswith("Real birth_city")
-
-
-def test_supplying_a_wrong_pool_size_is_refused():
-    """Changing a pool size changes bits per entity, which moves the x-axis of every plot."""
-    placeholder = E.bios_schema()
-    truncated = [
-        E.AttributePool(
-            pool.name, pool.values[: len(pool) - 1] if pool.name == "major" else pool.values
-        )
-        for pool in placeholder.attributes
-    ]
-    with pytest.raises(OLMoConfigurationError, match="must have 100 values"):
-        E.bios_schema(vocabulary=truncated)
-
-
-def test_supplying_the_wrong_pool_names_is_refused():
-    """A vocabulary missing an attribute would leave a placeholder silently in the corpus."""
-    placeholder = E.bios_schema()
-    with pytest.raises(OLMoConfigurationError, match="must supply exactly"):
-        E.bios_schema(vocabulary=list(placeholder.attributes)[:2])
+def test_the_same_seed_gives_the_same_table():
+    """Reproducibility from ``(schema, n_entities, seed)`` is what we publish instead of shards."""
+    a = E.EntityTable.build(bios(), 5_000, SEED)
+    b = E.EntityTable.build(bios(), 5_000, SEED)
+    np.testing.assert_array_equal(a.attributes, b.attributes)
+    np.testing.assert_array_equal(a.name_indices, b.name_indices)
 
 
 def test_name_space_is_the_product_of_the_name_pools():
-    """The ceiling on n_entities, and the default clears the largest cell by 25x."""
+    """The ceiling on n_entities, and it feeds the demand formula's name term."""
     assert small_schema().name_space == 35
-    assert E.bios_schema().name_space == 400 * 400 * 1000
-    assert E.bios_schema().name_space > 6_430_000
+    assert bios().name_space == NAME_SPACE
+    assert bios().name_space / 6_430_000 > 24
+
+
+def test_bios_bits_reproduce_the_published_value():
+    """47.592 from seven pools, pinning Physics 3.3's 47.6 to 0.01 of a bit."""
+    from factcrowd.ladder import rho
+
+    assert bios().bits_per_entity == pytest.approx(rho.BIOS_BITS_PER_ENTITY, abs=0.01)
+    assert bios().bits_per_entity == pytest.approx(47.591624, abs=1e-5)
+    assert sum(math.log2(len(p)) for p in bios().attributes) == pytest.approx(47.591624, abs=1e-5)

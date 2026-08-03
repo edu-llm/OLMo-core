@@ -3,35 +3,50 @@ The entity table: N people, each a tuple of attribute values drawn from closed d
 
 Everything about the fact slice is downstream of this module, and one property is what makes the
 experiment measurable: **bits per entity is arithmetic, never an estimate.** Pools are closed and
-their sizes are declared, so an entity carries exactly ``sum(log2(len(pool)))`` bits by
-construction. There is no entropy estimator anywhere in the pipeline and no place for one to be
-wrong.
+their sizes are declared, so an entity's attribute values carry exactly ``sum(log2(len(pool)))`` bits
+by construction. There is no entropy estimator in the pipeline and no place for one to be wrong.
 
 Three design points that are easy to get backwards.
 
-**Names are keys, not values.** Physics 3.3's 47.6 bits/person ignores names, because a name is the
-handle you look a fact up by rather than a fact to be stored. So names are excluded from
-:attr:`Schema.bits_per_entity`, and instead carry a requirement the attributes do not: they must be
-**unique**, or two entities collide and the corpus asserts contradictory facts about one key.
-:func:`name_codes` gets uniqueness by construction rather than by rejection sampling.
+**Names are keys, not values -- but they still carry information.** Physics 3.3 excludes names from
+the per-entity attribute count, because a name is the handle you look a fact up by. It does *not*
+exclude them from demand: its bioS formula is ``N·[log2(N0/N) + log2(S0)]``, and the first term is
+the cost of knowing *which* N names out of N0 exist. So :attr:`Schema.bits_per_entity` covers
+attributes only, and the name term lives in :func:`factcrowd.ladder.rho.demanded_bits`. Names carry a
+requirement attributes do not: they must be **unique**, or two entities collide and the corpus
+asserts contradictory facts about one key.
 
-**An entity's attributes do not depend on how many entities there are.** Cell d576_rho2 and cell
-d576_rho4 differ only in N, and at the same seed entity 12,345 has the same attributes in both.
-That is what lets the 25k probe subset (:attr:`EntityTable.probe_ids`) be the *same* 25k people in
-every cell, which is what makes related-reasoning accuracy comparable across the ladder. It is also
-why attributes are drawn per column from independent streams rather than as one block: a single
-``(N, K)`` draw would make every entity's values a function of N.
+**That name term is only honest if the name set is actually pseudorandom, and getting this wrong once
+already cost 200,000x.** ``N·log2(N0/N)`` is the entropy of a uniformly random N-subset. An earlier
+version of :func:`name_codes` used an affine map ``(a·i + b) mod N0``, which is a bijection -- so
+names were unique -- but the resulting *set* is a Beatty set whose sorted gaps take exactly three
+distinct values (the three-distance theorem), fully described by ``(N0, N, b)``: at most
+``log2(N0) = 27`` bits. The formula was charging 29.8 Mbit for a set worth 27 bits, on the
+experiment's own independent variable. :func:`name_codes` now uses a seed-keyed pseudorandom
+permutation instead, so the subset is computationally indistinguishable from a random one and the
+formula describes what the corpus contains.
+
+**An entity's attributes do not depend on how many entities there are.** At the same seed, entity
+12,345 has the same attributes in a 1M table and a 6M table. That is what lets the 25k probe subset
+(:attr:`EntityTable.probe_ids`) be the *same* 25k people in every experimental cell, which is what
+makes related-reasoning accuracy comparable across the ladder. Attributes are therefore drawn one
+column at a time from independent streams. Note that a single ``(N, K)`` block draw would *not* break
+this -- numpy fills row-major, so element ``(i, j)`` sits at flat index ``i·K + j`` regardless of N.
+What the column-wise draw buys is that **adding an attribute leaves the existing columns unmoved**,
+and that any draw whose consumption order depends on N (a ``(K, N)`` draw, for one) is structurally
+impossible here.
 
 **Uniform sampling is an instrument decision.** Attribute values are drawn uniformly from their
-pools, so demanded bits really are ``N x bits_per_entity``. Under a skewed draw they would not be,
-and rho -- the experiment's independent variable -- would stop being computable.
+pools, so attribute demand really is ``N x bits_per_entity``. Under a skewed draw it would not be,
+and demand -- the experiment's independent variable -- would stop being computable.
 """
 
 import hashlib
+import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Sequence, Tuple
+from typing import Tuple
 
 import numpy as np
 
@@ -42,7 +57,6 @@ __all__ = [
     "AttributePool",
     "Schema",
     "EntityTable",
-    "bios_schema",
     "name_codes",
     "PROBE_SIZE",
 ]
@@ -53,13 +67,150 @@ PROBE_SIZE = 25_000
 Entities covered by the related-reasoning slice, the same ones in every cell.
 
 Constant across the grid so per-entity coverage does not vary with N -- if the slice covered every
-entity instead, coverage would swing 20x across the ladder and confound P4. 25k fits inside the
-smallest cell (13M at rho=0.25 has ~79k entities), leaves a ~54k non-probe comparison group there,
-and stays far above the n>=2,000 the eval needs.
+entity instead, coverage would swing 20x across the ladder and confound P4. It must fit the smallest
+cell, which is 13M at a demand of 0.30 bits/param: **64,180 entities** once the name term is counted,
+against 79,397 on an attribute-only count. So 25k leaves a **39k** non-probe comparison group there,
+still far above the n >= 2,000 the eval needs.
 """
 
 _INDEX_DTYPE = np.uint32
-"""Pool indices are stored as uint32: pools are far under 2^32 and the table is memory-mapped."""
+"""Pool indices are stored as uint32: pools are far under 2^32 and the arrays are memory-mapped."""
+
+_MAX_NAME_SPACE = 2**62
+"""
+Ceiling on the name universe, below the uint64 range :func:`name_codes` computes in.
+
+Not a limit anyone will meet -- the largest cell needs 6.43M names -- but the name space is a demand
+knob (widening it raises demand at fixed entity count), so somebody will turn it, and silent uint64
+wraparound is not an acceptable way to find the edge.
+"""
+
+_GOLDEN64 = np.uint64(0x9E3779B97F4A7C15)
+_MIX_A = np.uint64(0xBF58476D1CE4E5B9)
+_MIX_B = np.uint64(0x94D049BB133111EB)
+_FEISTEL_ROUNDS = 4
+
+
+def _splitmix64(value: np.ndarray) -> np.ndarray:
+    """
+    The splitmix64 finaliser, vectorised over a uint64 array.
+
+    Chosen over ``np.random.Generator`` deliberately: constructing a Generator costs 7.9 microseconds
+    against 0.28 for this, which caps a dataloader worker below the throughput a training node needs
+    before any rendering happens. Pure in its input, so it is safe to call per entity.
+
+    :param value: uint64 array to mix.
+
+    :returns: The mixed uint64 array.
+    """
+    with np.errstate(over="ignore"):
+        mixed = value + _GOLDEN64
+        mixed = (mixed ^ (mixed >> np.uint64(30))) * _MIX_A
+        mixed = (mixed ^ (mixed >> np.uint64(27))) * _MIX_B
+        return mixed ^ (mixed >> np.uint64(31))
+
+
+def _feistel(value: np.ndarray, *, half_bits: int, key: np.uint64) -> np.ndarray:
+    """
+    A balanced Feistel network over ``[0, 2^(2*half_bits))``, which is a permutation by construction.
+
+    Four rounds of :func:`_splitmix64`. Being a permutation is structural -- a Feistel round is
+    invertible whatever the round function does -- so uniqueness does not depend on the mixer's
+    quality, only the *pseudorandomness* of the resulting subset does.
+
+    :param value: uint64 array of points in the domain.
+    :param half_bits: Half the domain width in bits.
+    :param key: Seed-derived key.
+
+    :returns: The permuted array.
+    """
+    mask = np.uint64((1 << half_bits) - 1)
+    shift = np.uint64(half_bits)
+    left = value >> shift
+    right = value & mask
+    for round_index in range(_FEISTEL_ROUNDS):
+        with np.errstate(over="ignore"):
+            salted = right + key + np.uint64(round_index + 1) * _GOLDEN64
+        left, right = right, left ^ (_splitmix64(salted) & mask)
+    return (left << shift) | right
+
+
+def name_codes(entity_ids: np.ndarray, *, name_space: int, seed: int) -> np.ndarray:
+    """
+    Map entity ids to distinct points in the name space, pseudorandomly and by construction.
+
+    A seed-keyed Feistel network is a permutation of ``[0, 2^(2h))`` for the smallest ``h`` with
+    ``4^h >= name_space``; points landing outside ``[0, name_space)`` are re-permuted until they land
+    inside (*cycle walking*, which terminates because iterating a permutation from a point traverses
+    the cycle containing it, and costs ``4^h / name_space <= 4`` iterations in expectation). The
+    result is a bijection on ``[0, name_space)`` **and** a subset indistinguishable from a random one.
+
+    Both halves matter and an earlier version had only the first. An affine ``(a·i + b) mod N0`` map
+    is equally bijective, but its image has exactly three distinct sorted gaps and is described by
+    ``(N0, N, b)`` -- so ``N·log2(N0/N)`` overstated its information content by five orders of
+    magnitude. Since that term is part of the experiment's independent variable, uniqueness alone was
+    not enough: the construction has to justify the formula applied to it.
+
+    :param entity_ids: Entity ids to map. Must be a non-negative integer array below ``name_space``.
+    :param name_space: Size of the name space, from :attr:`Schema.name_space`.
+    :param seed: Seed for the permutation key.
+
+    :returns: A uint64 array of distinct codes, same shape as ``entity_ids``, each below
+        ``name_space``.
+
+    :raises OLMoConfigurationError: If ``name_space`` is out of range, if ``entity_ids`` is not a
+        non-negative integer array, or if any id is at or above ``name_space`` -- which would mean
+        more entities than distinct names.
+    """
+    if name_space < 2:
+        raise OLMoConfigurationError(f"'name_space' must be at least 2, got {name_space}")
+    if name_space > _MAX_NAME_SPACE:
+        raise OLMoConfigurationError(
+            f"'name_space' is {name_space:,}, above the {_MAX_NAME_SPACE:,} ceiling this module "
+            f"computes safely in uint64. Beyond it numpy wraps silently and uniqueness stops being "
+            f"structural."
+        )
+    if not np.issubdtype(entity_ids.dtype, np.integer):
+        raise OLMoConfigurationError(
+            f"'entity_ids' must be an integer array, got dtype {entity_ids.dtype}. A float array "
+            f"casts to uint64 by truncation, so 0.4 and 0.9 would collide on one name."
+        )
+    if entity_ids.size:
+        lowest, highest = int(entity_ids.min()), int(entity_ids.max())
+        if lowest < 0:
+            raise OLMoConfigurationError(
+                f"'entity_ids' must be non-negative, got {lowest}. A negative id wraps to a huge "
+                f"uint64 rather than raising."
+            )
+        if highest >= name_space:
+            raise OLMoConfigurationError(
+                f"entity id {highest:,} does not fit a name space of {name_space:,}. Two entities "
+                f"would share a name and the corpus would assert contradictory facts about one "
+                f"key; widen the name pools."
+            )
+    if seed < 0:
+        raise OLMoConfigurationError(f"'seed' must not be negative, got {seed}")
+
+    half_bits = max(1, (max(1, (name_space - 1).bit_length()) + 1) // 2)
+    key = _splitmix64(np.array([seed], dtype=np.uint64))[0]
+    codes = entity_ids.astype(np.uint64)
+    limit = np.uint64(name_space)
+
+    codes = _feistel(codes, half_bits=half_bits, key=key)
+    outside = codes >= limit
+    # Bounded by the cycle length, but in practice a handful of passes; the guard is against a bug
+    # turning this into a spin rather than against the mathematics.
+    for _ in range(1024):
+        if not outside.any():
+            break
+        codes[outside] = _feistel(codes[outside], half_bits=half_bits, key=key)
+        outside = codes >= limit
+    else:  # pragma: no cover - unreachable for a genuine permutation
+        raise OLMoConfigurationError(
+            f"cycle walking did not converge for name_space={name_space:,}; the permutation is not "
+            f"a permutation, which is a bug in _feistel rather than a configuration error"
+        )
+    return codes
 
 
 @dataclass(frozen=True)
@@ -83,8 +234,8 @@ class AttributePool:
         if len(self.values) < floor:
             raise OLMoConfigurationError(
                 f"pool '{self.name}' has {len(self.values)} values; a pool of one carries no bits "
-                f"and a pool of none cannot be sampled. Pass allow_singleton=True if a "
-                f"zero-bit pool is intended -- the entropy axis's b=0 cell is the one place it is."
+                f"and a pool of none cannot be sampled. Pass allow_singleton=True if a zero-bit "
+                f"pool is intended -- the entropy axis's b=0 cell is the one place it is."
             )
         if len(set(self.values)) != len(self.values):
             raise OLMoConfigurationError(
@@ -108,8 +259,7 @@ class Schema:
 
     :param attributes: Pools whose values are facts to be stored. These set
         :attr:`bits_per_entity`.
-    :param names: Pools the entity's name is assembled from, e.g. first / middle / last. Excluded
-        from :attr:`bits_per_entity` -- see the module docstring.
+    :param names: Pools the entity's name is assembled from, e.g. first / middle / last.
     """
 
     attributes: Tuple[AttributePool, ...]
@@ -128,14 +278,20 @@ class Schema:
             raise OLMoConfigurationError(
                 f"pool names must be distinct across attributes and names, got {sorted(duplicates)}"
             )
+        if self.name_space > _MAX_NAME_SPACE:
+            raise OLMoConfigurationError(
+                f"the name pools express {self.name_space:,} names, above the "
+                f"{_MAX_NAME_SPACE:,} ceiling name_codes computes safely in"
+            )
 
     @property
     def bits_per_entity(self) -> float:
         """
-        Bits one entity carries, summed over attribute pools. Exact by construction.
+        Bits one entity's **attribute values** carry. Exact by construction.
 
-        Name pools are excluded: a name is the key a fact is retrieved by, not a fact. Including
-        them would inflate demanded bits and put every cell at a lower true rho than its label.
+        Name pools are excluded, matching Physics 3.3's per-entity figure. This is *not* the whole
+        demand: the ``N·log2(N0/N)`` cost of knowing which names exist is added by
+        :func:`factcrowd.ladder.rho.demanded_bits`, which is the function to ask for demand.
         """
         return sum(pool.bits for pool in self.attributes)
 
@@ -148,71 +304,42 @@ class Schema:
         """
         A stable digest of the pools, for provenance and for refusing a mismatched saved table.
 
-        Covers pool names, sizes, and values in order, because a table generated against different
-        vocabulary is a different table even at the same seed and the same bit count.
+        Every field is length-framed. Without framing a pool *name* could impersonate the next
+        pool's header -- a pool called ``a:2:x\\x00y\\x00attribute:b`` collided with a two-pool
+        schema carrying twice its bits, and :meth:`EntityTable.load` accepted the wrong table.
+        Contrived, but the guarantee is stated absolutely, so it should hold absolutely.
+
+        :returns: A hex digest covering pool kinds, names, sizes and values in order.
         """
         digest = hashlib.sha256()
+
+        def field(raw: bytes) -> None:
+            digest.update(len(raw).to_bytes(8, "big"))
+            digest.update(raw)
+
+        field(b"factcrowd.Schema.v2")
+        field(len(self.attributes).to_bytes(8, "big"))
+        field(len(self.names).to_bytes(8, "big"))
         for kind, pools in (("attribute", self.attributes), ("name", self.names)):
             for pool in pools:
-                digest.update(f"{kind}:{pool.name}:{len(pool)}:".encode())
+                field(kind.encode())
+                field(pool.name.encode())
+                field(len(pool).to_bytes(8, "big"))
                 for value in pool.values:
-                    digest.update(f"{value}\x00".encode())
+                    field(value.encode())
         return digest.hexdigest()
-
-
-def name_codes(entity_ids: np.ndarray, *, name_space: int, seed: int) -> np.ndarray:
-    """
-    Map entity ids to distinct points in the name space, by construction rather than by luck.
-
-    ``id -> (a * id + b) mod name_space`` with ``a`` coprime to ``name_space`` is a bijection, so
-    distinct ids get distinct codes with no collision check and no rejection loop. ``a`` is taken
-    near ``name_space / phi`` so that consecutive ids land far apart, which keeps the generated
-    names from looking obviously sequential.
-
-    The codes are a permutation, not a random sample, and the difference is worth stating: adjacent
-    ids differ by exactly ``a`` in code space, so the name stream has structure a statistical test
-    would find. That is acceptable because names are keys -- each is used for ~200 exposures of one
-    entity, and nothing in the measurement depends on their distribution, only on their uniqueness.
-
-    :param entity_ids: Entity ids to map. Must all be below ``name_space``.
-    :param name_space: Size of the name space, from :attr:`Schema.name_space`.
-    :param seed: Seed for ``b``, so different runs get different names for the same id.
-
-    :returns: An array of codes, same shape as ``entity_ids``, each below ``name_space``.
-
-    :raises OLMoConfigurationError: If any id is at or above ``name_space``, i.e. there are more
-        entities than distinct names available.
-    """
-    if name_space < 2:
-        raise OLMoConfigurationError(f"'name_space' must be at least 2, got {name_space}")
-    if entity_ids.size and int(entity_ids.max()) >= name_space:
-        raise OLMoConfigurationError(
-            f"entity id {int(entity_ids.max()):,} does not fit a name space of {name_space:,}. "
-            f"Two entities would share a name and the corpus would assert contradictory facts "
-            f"about one key; widen the name pools."
-        )
-
-    multiplier = int(name_space / ((1 + 5**0.5) / 2)) | 1
-    while math.gcd(multiplier, name_space) != 1:
-        multiplier += 2
-    offset = int(np.random.default_rng(seed).integers(0, name_space))
-
-    codes = (entity_ids.astype(np.uint64) * np.uint64(multiplier) + np.uint64(offset)) % np.uint64(
-        name_space
-    )
-    return codes.astype(np.uint64)
 
 
 @dataclass(frozen=True)
 class EntityTable:
     """
-    N entities x K attributes drawn from closed pools. Bits are exact by construction.
+    N entities x K attribute pools of indices. Attribute bits are exact by construction.
 
-    Attributes and name codes are stored as index arrays rather than strings: at the largest cell
-    that is ~206 MB against many gigabytes of text, and it memory-maps, so dataloader workers share
-    one copy instead of each holding its own.
+    Indices rather than strings: at the largest cell that is ~206 MB against many gigabytes of text,
+    and :meth:`load` memory-maps them, so dataloader workers share one copy of the pages instead of
+    each holding its own.
 
-    Build with :meth:`build`; do not construct directly unless you are loading.
+    Build with :meth:`build`; construct directly only when loading.
     """
 
     schema: Schema
@@ -231,12 +358,20 @@ class EntityTable:
 
     @property
     def bits_per_entity(self) -> float:
-        """Exact bits per entity, from :attr:`Schema.bits_per_entity`."""
+        """Exact attribute bits per entity, from :attr:`Schema.bits_per_entity`."""
         return self.schema.bits_per_entity
 
     @property
-    def total_bits(self) -> float:
-        """Fact bits this corpus makes available: ``n_entities * bits_per_entity``."""
+    def attribute_bits(self) -> float:
+        """
+        Attribute bits this corpus carries: ``n_entities * bits_per_entity``.
+
+        **Not the corpus's demand.** Demand also includes the ``N·log2(N0/N)`` name term, which is
+        8.9% to 18.8% more depending on N, so a cell placed by this number alone sits at the wrong x.
+        Call :func:`factcrowd.ladder.rho.demanded_bits` or :func:`factcrowd.ladder.rho.demand` for
+        demand. This property exists for the bit-counter, which measures attribute value tokens and
+        needs the matching denominator.
+        """
         return self.n_entities * self.bits_per_entity
 
     @property
@@ -244,9 +379,9 @@ class EntityTable:
         """
         The related-reasoning probe subset: the first :data:`PROBE_SIZE` entity ids.
 
-        The first ids rather than a random draw, because every cell must cover the *same* people
-        for related-reasoning accuracy to be comparable across the ladder, and every cell contains
-        ids ``0..PROBE_SIZE`` by construction while a random subset of N would not.
+        The first ids rather than a random draw, because every cell must cover the *same* people for
+        related-reasoning accuracy to be comparable across the ladder, and every cell contains ids
+        ``0..PROBE_SIZE`` by construction while a random subset of N would not.
         """
         return np.arange(min(PROBE_SIZE, self.n_entities), dtype=_INDEX_DTYPE)
 
@@ -255,9 +390,10 @@ class EntityTable:
         """
         Generate a table deterministically from ``(schema, n_entities, seed)``.
 
-        Entity ``i``'s attributes do not depend on ``n_entities``: each attribute column is drawn
-        from its own stream, so a table of 1M entities is a prefix of a table of 6M at the same
-        seed. That is what lets the probe subset be the same people in every cell.
+        Entity ``i``'s attributes do not depend on ``n_entities``, so a 1M table is a prefix of a 6M
+        table at the same seed -- which is what lets the probe subset be the same people in every
+        cell. Each attribute column is drawn from its own spawned stream, so adding a column also
+        leaves the existing ones unmoved.
 
         :param schema: Attribute and name pools.
         :param n_entities: How many entities to generate.
@@ -265,19 +401,19 @@ class EntityTable:
 
         :returns: The table.
 
-        :raises OLMoConfigurationError: If ``n_entities`` is not positive or exceeds
-            :attr:`Schema.name_space`.
+        :raises OLMoConfigurationError: If ``n_entities`` or ``seed`` is out of range, or if
+            ``n_entities`` exceeds :attr:`Schema.name_space`.
         """
         if n_entities <= 0:
             raise OLMoConfigurationError(f"'n_entities' must be positive, got {n_entities}")
+        if seed < 0:
+            raise OLMoConfigurationError(f"'seed' must not be negative, got {seed}")
         if n_entities > schema.name_space:
             raise OLMoConfigurationError(
                 f"{n_entities:,} entities exceeds the {schema.name_space:,} distinct names the "
                 f"name pools can express, so names would collide. Widen the name pools."
             )
 
-        # One SeedSequence child per attribute column. Drawing column-wise is what makes entity
-        # i's values independent of n_entities; a single (N, K) block draw would not.
         streams = np.random.SeedSequence(seed).spawn(len(schema.attributes))
         attributes = np.empty((n_entities, len(schema.attributes)), dtype=_INDEX_DTYPE)
         for column, (pool, stream) in enumerate(zip(schema.attributes, streams)):
@@ -285,12 +421,13 @@ class EntityTable:
                 0, len(pool), size=n_entities, dtype=_INDEX_DTYPE
             )
 
-        entity_ids = np.arange(n_entities, dtype=np.uint64)
-        codes = name_codes(entity_ids, name_space=schema.name_space, seed=seed)
+        codes = name_codes(
+            np.arange(n_entities, dtype=np.uint64), name_space=schema.name_space, seed=seed
+        )
         name_indices = np.empty((n_entities, len(schema.names)), dtype=_INDEX_DTYPE)
         remaining = codes
-        for column, pool in enumerate(reversed(schema.names)):  # mixed radix, least significant
-            name_indices[:, len(schema.names) - 1 - column] = remaining % np.uint64(len(pool))
+        for offset, pool in enumerate(reversed(schema.names)):  # mixed radix, least significant
+            name_indices[:, len(schema.names) - 1 - offset] = remaining % np.uint64(len(pool))
             remaining = remaining // np.uint64(len(pool))
 
         return cls(schema=schema, attributes=attributes, name_indices=name_indices, seed=seed)
@@ -319,119 +456,104 @@ class EntityTable:
 
     def save(self, path: PathOrStr) -> None:
         """
-        Write the index arrays and the schema fingerprint to a single ``.npz``.
+        Write the table as a directory of ``.npy`` arrays plus a JSON sidecar.
 
-        The pools themselves are not written: they come from the schema, and a table is only
-        meaningful against the schema that made it. :meth:`load` checks the fingerprint so a table
-        can never be read against different vocabulary.
+        A directory of plain ``.npy`` rather than one ``.npz``, for two reasons that both bit. ``npz``
+        is a zip archive, so ``np.load`` **silently ignores** ``mmap_mode`` on it -- the memory
+        sharing this class claims would not have happened, and eight workers would each have held
+        their own 206 MB. And ``np.savez`` appends ``.npz`` to the path while ``np.load`` does not, so
+        ``save(p)`` followed by ``load(p)`` failed for any ``p`` without the suffix.
 
-        :param path: Destination file.
+        The pools are not written: a table is only meaningful against the schema that made it, and
+        :meth:`load` checks the fingerprint.
+
+        :param path: Destination directory. Created if absent.
         """
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        np.savez(
-            Path(path),
-            attributes=self.attributes,
-            name_indices=self.name_indices,
-            seed=np.asarray(self.seed),
-            schema_fingerprint=np.asarray(self.schema.fingerprint()),
+        directory = Path(path)
+        directory.mkdir(parents=True, exist_ok=True)
+        np.save(directory / "attributes.npy", self.attributes)
+        np.save(directory / "name_indices.npy", self.name_indices)
+        (directory / "meta.json").write_text(
+            json.dumps(
+                {
+                    "format": "factcrowd.EntityTable.v2",
+                    "seed": self.seed,
+                    "n_entities": self.n_entities,
+                    "schema_fingerprint": self.schema.fingerprint(),
+                    "bits_per_entity": self.bits_per_entity,
+                },
+                indent=2,
+            )
+            + "\n"
         )
 
     @classmethod
     def load(cls, path: PathOrStr, schema: Schema, *, mmap: bool = True) -> "EntityTable":
         """
-        Read a table written by :meth:`save`, refusing a schema it was not built against.
+        Read a table written by :meth:`save`, refusing anything that does not match ``schema``.
 
-        :param path: Source file.
+        Four checks, because the fingerprint alone let a truncated or corrupt table load clean and
+        fail hours later inside a dataloader worker: the schema fingerprint, both array widths, and
+        that every index actually points into its pool.
+
+        :param path: Source directory.
         :param schema: The schema the table must have been built against.
-        :param mmap: Memory-map the arrays instead of reading them into memory. Leave on: eight
-            dataloader workers reading 206 MB each is 1.6 GB that does not need to exist.
+        :param mmap: Memory-map the arrays. Leave on: eight workers reading 206 MB each is 1.6 GB
+            that does not need to exist.
 
         :returns: The table.
 
-        :raises OLMoConfigurationError: If the saved fingerprint does not match ``schema``.
+        :raises OLMoConfigurationError: If the fingerprint, the array shapes or the index ranges
+            disagree with ``schema``.
         """
-        loaded = np.load(Path(path), mmap_mode="r" if mmap else None)
-        saved_fingerprint = str(loaded["schema_fingerprint"])
+        directory = Path(path)
+        meta_path = directory / "meta.json"
+        if not meta_path.is_file():
+            raise OLMoConfigurationError(
+                f"no entity table at {directory}: {meta_path.name} is missing. A table is a "
+                f"directory written by save(), not a single file."
+            )
+        meta = json.loads(meta_path.read_text())
+
+        saved_fingerprint = str(meta.get("schema_fingerprint", ""))
         if saved_fingerprint != schema.fingerprint():
             raise OLMoConfigurationError(
-                f"the table at {path} was built against a different schema "
-                f"(fingerprint {saved_fingerprint[:12]} vs {schema.fingerprint()[:12]}). Its "
-                f"indices point into other pools, so reading it would silently assert different "
-                f"facts about every entity."
+                f"the table at {directory} was built against a different schema (fingerprint "
+                f"{saved_fingerprint[:12]} vs {schema.fingerprint()[:12]}). Its indices point into "
+                f"other pools, so reading it would silently assert different facts about every "
+                f"entity."
             )
+
+        mode = "r" if mmap else None
+        attributes = np.load(directory / "attributes.npy", mmap_mode=mode)
+        name_indices = np.load(directory / "name_indices.npy", mmap_mode=mode)
+
+        for label, array, pools in (
+            ("attributes", attributes, schema.attributes),
+            ("name_indices", name_indices, schema.names),
+        ):
+            if array.ndim != 2 or array.shape[1] != len(pools):
+                raise OLMoConfigurationError(
+                    f"the table at {directory} has {label} of shape {array.shape}, but the schema "
+                    f"declares {len(pools)} {label.rstrip('s')} pools. A truncated or half-written "
+                    f"table would otherwise load clean and fail inside a dataloader worker."
+                )
+            for column, pool in enumerate(pools):
+                if array.shape[0] and int(array[:, column].max()) >= len(pool):
+                    raise OLMoConfigurationError(
+                        f"the table at {directory} has an index of "
+                        f"{int(array[:, column].max()):,} in {label} column {column} "
+                        f"('{pool.name}'), which has only {len(pool):,} values"
+                    )
+        if attributes.shape[0] != name_indices.shape[0]:
+            raise OLMoConfigurationError(
+                f"the table at {directory} has {attributes.shape[0]:,} attribute rows against "
+                f"{name_indices.shape[0]:,} name rows"
+            )
+
         return cls(
             schema=schema,
-            attributes=loaded["attributes"],
-            name_indices=loaded["name_indices"],
-            seed=int(loaded["seed"]),
+            attributes=attributes,
+            name_indices=name_indices,
+            seed=int(meta["seed"]),
         )
-
-
-def _placeholder_pool(name: str, size: int, prefix: str) -> AttributePool:
-    """Build a pool of ``size`` distinct placeholder values. See :func:`bios_schema`."""
-    width = len(str(size - 1))
-    return AttributePool(name=name, values=tuple(f"{prefix}{i:0{width}d}" for i in range(size)))
-
-
-def bios_schema(
-    *,
-    name_pool_sizes: Sequence[int] = (400, 400, 1000),
-    vocabulary: Optional[Sequence[AttributePool]] = None,
-) -> Schema:
-    """
-    The bioS schema: pool sizes chosen so bits per entity reproduces Physics 3.3's 47.6.
-
-    Four categorical attributes at 200 / 300 / 100 / 263 choices plus a birth date over
-    12 x 28 x 400 = 134,400, giving 47.592 bits. Physics 3.3 publishes the total rather than the
-    factorisation, so this is our reconstruction of it -- but it pins their figure to within 0.01
-    of a bit, and in any case it is the schema *we* use, which is what makes the bit-counts
-    comparable.
-
-    .. warning::
-        **The default vocabulary is placeholders, and it must be replaced before M1.** Bit
-        accounting depends only on pool *sizes*, so it is already exact -- but two things that
-        matter depend on the actual strings: tokens per biography (the budget in
-        :mod:`factcrowd.ladder.rho` assumes ~100) and the 32k BPE trained on the rendered corpus.
-        ``employer_017`` and ``Princeton University`` do not tokenize alike. Pass ``vocabulary``
-        with real city, university, major and employer names to fix it; the sizes must match.
-
-    :param name_pool_sizes: Sizes of the first / middle / last name pools. The product is the
-        ceiling on ``n_entities``; the default 400 x 400 x 1000 gives 160M, well above the 6.43M of
-        the largest cell.
-    :param vocabulary: Real attribute pools to use instead of the placeholders. Must have the same
-        names and sizes as the defaults.
-
-    :returns: The schema.
-
-    :raises OLMoConfigurationError: If ``vocabulary`` does not match the required names and sizes.
-    """
-    required = (("birth_city", 200), ("university", 300), ("major", 100), ("employer", 263))
-    birth_date_size = 12 * 28 * 400
-
-    if vocabulary is None:
-        attributes = tuple(_placeholder_pool(name, size, f"{name}_") for name, size in required) + (
-            _placeholder_pool("birth_date", birth_date_size, "date_"),
-        )
-    else:
-        supplied = {pool.name: pool for pool in vocabulary}
-        expected = dict(required + (("birth_date", birth_date_size),))
-        if set(supplied) != set(expected):
-            raise OLMoConfigurationError(
-                f"'vocabulary' must supply exactly {sorted(expected)}, got {sorted(supplied)}"
-            )
-        for pool_name, size in expected.items():
-            if len(supplied[pool_name]) != size:
-                raise OLMoConfigurationError(
-                    f"pool '{pool_name}' must have {size} values to keep bits per entity at "
-                    f"{47.6}, got {len(supplied[pool_name])}. Changing a pool size changes the "
-                    f"x-axis of every plot."
-                )
-        attributes = tuple(supplied[pool_name] for pool_name, _ in required) + (
-            supplied["birth_date"],
-        )
-
-    names = tuple(
-        _placeholder_pool(pool_name, size, f"{pool_name}_")
-        for pool_name, size in zip(("first_name", "middle_name", "last_name"), name_pool_sizes)
-    )
-    return Schema(attributes=attributes, names=names)
