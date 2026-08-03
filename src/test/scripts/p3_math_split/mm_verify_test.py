@@ -67,6 +67,13 @@ MM_DB = FakeMM(
                 [wff("ph"), wff("ps"), ess("mp.1", "|- ph"), ess("mp.2", "|- ( ph -> ps )")],
             ),
         ),
+        "dup": (
+            "$a",
+            (
+                "|- ph".split(),
+                [wff("ph"), ess("dup.1", "|- ph"), ess("dup.2", "|- ph")],
+            ),
+        ),
         "notalogicalrule": ("$f", ("wff", "ph")),
     }
 )
@@ -75,6 +82,7 @@ FACTS = {
     "syl": "|- ( ph -> ps ) & |- ( ps -> ch ) => |- ( ph -> ch )",
     "ax-1": "|- ( ph -> ( ps -> ph ) )",
     "ax-mp": "|- ph & |- ( ph -> ps ) => |- ps",
+    "dup": "|- ph & |- ph => |- ph",
 }
 
 
@@ -139,6 +147,41 @@ def test_accepts_a_valid_proof_that_differs_from_the_gold_trace():
     r = verify_proof(MM_DB, GOOD_PROOF, GOOD_GOAL, FACTS, gold_target=gold)
     assert r.valid, r.reason
     assert not r.exact_match
+
+
+def test_accepts_theorem_local_assumptions_as_givens_not_proof_steps():
+    """A theorem's used local $e hypotheses seed derivation state."""
+    generated = proof(("ax-mp", "|- b"))
+    local_assumptions = {
+        "th.1": "|- a",
+        "th.2": "|- ( a -> b )",
+    }
+
+    r = verify_proof(
+        MM_DB,
+        generated,
+        "|- b",
+        {"ax-mp": FACTS["ax-mp"]},
+        local_assumptions=local_assumptions,
+    )
+
+    assert r.valid, r.reason
+    assert r.parsed_steps == 1
+
+
+def test_same_earlier_expression_can_discharge_two_hypotheses_after_reuse_is_omitted():
+    expr = "|- ( a -> ( b -> a ) )"
+    generated = proof(("ax-1", expr), ("dup", expr))
+
+    r = verify_proof(
+        MM_DB,
+        generated,
+        expr,
+        {"ax-1": FACTS["ax-1"], "dup": FACTS["dup"]},
+    )
+
+    assert r.valid, r.reason
+    assert r.parsed_steps == 2
 
 
 # --------------------------------------------------------------- rejects

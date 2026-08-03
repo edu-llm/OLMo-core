@@ -1,22 +1,15 @@
-"""Compare the two arms, and refuse to do it if the controls did not actually hold.
+"""Compare dense and split on the evaluator's paired, family-keyed results.
 
-Two jobs, in this order:
+The evaluator reports target-token NLL, per-example next-token match, and
+whole-output outcomes for all six families. This script keeps outcomes paired by
+example ID, bootstraps their difference, uses McNemar for binary outcomes, and
+reports the aggregate NLL difference.
 
-1. Check the fingerprints. Both runs must agree on seed, tokenizer, architecture,
-   sequence length, batch size, optimizer, schedule, step count, total input tokens,
-   and the sha256 of the token array. They must differ on exactly one thing: the label
-   mask. If anything else differs the comparison is not the experiment that was
-   designed, and this script exits non-zero instead of printing a number someone will
-   quote later.
+It verifies evaluator controls and cohorts. Training-control equality must come
+from the saved platform configs and the arm YAML equality test; the old local
+``arm_fingerprint.json``/mask-sidecar workflow is not used by platform runs.
 
-2. Paired statistics. The arms are evaluated on the same examples, so the comparison is
-   paired: McNemar's exact test on the discordant pairs, plus a paired bootstrap CI on
-   the difference in valid-proof rate. An unpaired t-test here would throw away most of
-   the power and is the usual way this kind of result gets called a wash.
-
-    python src/scripts/train/p3_math_split/compare_arms.py \\
-        --dense results/dense_retrieval.json --split results/split_retrieval.json \\
-        --dense-run runs/dense --split-run runs/split
+    python src/scripts/train/p3_math_split/compare_arms.py --dense results/dense.json --split results/split.json --dense-config runs/dense/config.json --split-config runs/split/config.json
 """
 
 from __future__ import annotations
@@ -28,72 +21,61 @@ import os
 import random
 import sys
 
-# Everything that must match between arms. `arm`, `label_mask_path`,
-# `label_mask_sha256`, and `supervised_tokens_this_arm` are the sanctioned differences.
-CONTROLLED = [
-    "seed",
-    "sequence_length",
-    "global_batch_size_sequences",
-    "global_batch_size_tokens",
-    "rank_microbatch_size_tokens",
-    "grad_accum_steps",
-    "world_size",
-    "max_steps",
-    "total_input_tokens",
-    "n_instances",
-    "learning_rate",
-    "warmup_steps",
-    "weight_decay",
-    "betas",
-    "eps",
-    "max_grad_norm",
-    "lr_alpha_f",
-    "tie_embeddings",
-    "tokens_sha256",
-]
+EVAL_CONTROLS = ("greedy", "context_length", "max_new_tokens")
+ALLOWED_CONFIG_DIFFERENCES = {
+    ("train_module", "arm"),
+    ("trainer", "save_folder"),
+    ("trainer", "callbacks", "wandb", "name"),
+}
 
 
-def check_fingerprints(dense_run, split_run):
-    paths = {
-        a: os.path.join(p, "arm_fingerprint.json")
-        for a, p in (("dense", dense_run), ("split", split_run))
+def _flatten(value, prefix=()):
+    if isinstance(value, dict):
+        out = {}
+        for key, child in value.items():
+            out.update(_flatten(child, prefix + (str(key),)))
+        return out
+    if isinstance(value, list):
+        return {prefix + (str(i),): child for i, child in enumerate(value)}
+    return {prefix: value}
+
+
+def validate_training_configs(dense, split):
+    if dense.get("train_module", {}).get("arm") != "dense":
+        raise ValueError("dense config does not declare train_module.arm=dense")
+    if split.get("train_module", {}).get("arm") != "split":
+        raise ValueError("split config does not declare train_module.arm=split")
+    d = _flatten(dense)
+    s = _flatten(split)
+    differences = {
+        path: (d.get(path), s.get(path))
+        for path in set(d) | set(s)
+        if path not in ALLOWED_CONFIG_DIFFERENCES and d.get(path) != s.get(path)
     }
-    for arm, p in paths.items():
-        if not os.path.exists(p):
-            sys.exit(
-                f"{p} not found — {arm} did not finish, or was run by something "
-                f"other than src/scripts/train/p3_math_split/train.py"
-            )
-    fp = {arm: json.load(open(p, encoding="utf-8")) for arm, p in paths.items()}
-
-    problems = []
-    for key in CONTROLLED:
-        d, s = fp["dense"].get(key), fp["split"].get(key)
-        if d != s:
-            problems.append(f"  {key}: dense={d!r} split={s!r}")
-
-    if fp["dense"].get("label_mask_sha256") == fp["split"].get("label_mask_sha256"):
-        problems.append(
-            "  label_mask_sha256 is IDENTICAL — both arms trained with the "
-            "same mask, so there is no experiment here"
+    if differences:
+        sample = ", ".join(
+            f"{'.'.join(path)}={values!r}"
+            for path, values in sorted(differences.items())[:5]
         )
+        raise ValueError(f"training configs differ outside the arm: {sample}")
 
-    if problems:
-        print("controls did not hold:\n" + "\n".join(problems))
-        sys.exit(1)
 
-    print("controls verified: arms differ only in the label mask")
-    print(
-        f"  seed {fp['dense']['seed']}  steps {fp['dense']['max_steps']:,}  "
-        f"input tokens {fp['dense']['total_input_tokens']:,}  "
-        f"lr {fp['dense']['learning_rate']}"
-    )
-    print(
-        f"  supervised tokens: dense {fp['dense']['supervised_tokens_this_arm']:,}  "
-        f"split {fp['split']['supervised_tokens_this_arm']:,}  "
-        f"(this difference IS the manipulation)"
-    )
-    return fp
+def validate_eval_compatibility(dense, split):
+    if dense.get("arm") != "dense" or split.get("arm") != "split":
+        raise ValueError("results must be dense and split respectively")
+    for key in EVAL_CONTROLS:
+        if dense.get(key) != split.get(key):
+            raise ValueError(
+                f"evaluator control {key!r} differs: "
+                f"dense={dense.get(key)!r}, split={split.get(key)!r}"
+            )
+    if set(dense.get("families", {})) != set(split.get("families", {})):
+        raise ValueError("evaluated family sets differ")
+    for family in dense["families"]:
+        dc = set(dense["families"][family].get("conditions", {}))
+        sc = set(split["families"][family].get("conditions", {}))
+        if dc != sc:
+            raise ValueError(f"{family}: evaluated condition sets differ")
 
 
 def mcnemar_exact(b, c):
@@ -126,32 +108,56 @@ def paired_bootstrap(pairs, n_boot, seed):
     return lo, hi
 
 
-def compare_condition(dense, split, condition, metric, n_boot, seed):
-    dc = dense["conditions"].get(condition)
-    sc = split["conditions"].get(condition)
+def _outcome(item, metric):
+    if metric == "token_match":
+        return item.get("target_token_accuracy")
+    if metric == "exact_match":
+        return item.get("exact_match")
+    if metric == "metamath_valid":
+        return item.get("metamath", {}).get("valid")
+    raise ValueError(metric)
+
+
+def compare_condition(dense, split, *, family, condition, metric, n_boot, seed):
+    dc = dense["families"][family]["conditions"].get(condition)
+    sc = split["families"][family]["conditions"].get(condition)
     if dc is None or sc is None:
         return None
 
     d_by_id = {e["id"]: e for e in dc["per_example"]}
     s_by_id = {e["id"]: e for e in sc["per_example"]}
-    ids = sorted(set(d_by_id) & set(s_by_id))
-    if len(ids) != len(d_by_id) or len(ids) != len(s_by_id):
-        print(
-            f"  [{condition}] WARNING: only {len(ids):,} of "
-            f"{len(d_by_id):,}/{len(s_by_id):,} examples are shared; pairing on those"
-        )
+    if set(d_by_id) != set(s_by_id):
+        raise ValueError(f"{family}/{condition}: paired IDs differ between arms")
+    ids = sorted(d_by_id)
     if not ids:
         return None
 
-    pairs = [(int(bool(d_by_id[i][metric])), int(bool(s_by_id[i][metric]))) for i in ids]
+    pairs = []
+    for i in ids:
+        d = _outcome(d_by_id[i], metric)
+        s = _outcome(s_by_id[i], metric)
+        if (d is None) != (s is None):
+            raise ValueError(f"{family}/{condition}/{i}: metric eligibility differs")
+        if d is not None:
+            if metric == "token_match":
+                pairs.append((float(d), float(s)))
+            else:
+                pairs.append((int(bool(d)), int(bool(s))))
+    if not pairs:
+        return None
     d_rate = sum(p[0] for p in pairs) / len(pairs)
     s_rate = sum(p[1] for p in pairs) / len(pairs)
-    b = sum(1 for d, s in pairs if d and not s)  # dense only
-    c = sum(1 for d, s in pairs if s and not d)  # split only
-    p = mcnemar_exact(b, c)
+    if metric == "token_match":
+        b = c = None
+        p = None
+    else:
+        b = sum(1 for d, s in pairs if d and not s)  # dense only
+        c = sum(1 for d, s in pairs if s and not d)  # split only
+        p = mcnemar_exact(b, c)
     lo, hi = paired_bootstrap(pairs, n_boot, seed)
 
     return {
+        "family": family,
         "condition": condition,
         "metric": metric,
         "n": len(pairs),
@@ -163,6 +169,9 @@ def compare_condition(dense, split, condition, metric, n_boot, seed):
         "mcnemar_p": p,
         "ci95_low": lo,
         "ci95_high": hi,
+        "dense_nll": dc["target_nll_per_token"],
+        "split_nll": sc["target_nll_per_token"],
+        "nll_difference": sc["target_nll_per_token"] - dc["target_nll_per_token"],
     }
 
 
@@ -173,7 +182,12 @@ def verdict(r, alpha=0.05):
     non-significant difference is a real answer here, not a failed experiment. The
     margin is the CI, and it is reported rather than hidden behind the p-value.
     """
-    if r["mcnemar_p"] < alpha:
+    if r["mcnemar_p"] is None:
+        if r["ci95_low"] > 0:
+            return "split BETTER"
+        if r["ci95_high"] < 0:
+            return "split WORSE"
+    elif r["mcnemar_p"] < alpha:
         return "split BETTER" if r["difference"] > 0 else "split WORSE"
     if r["ci95_low"] > -0.02:
         return "match (equivalent within 2pp)"
@@ -184,68 +198,94 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dense", required=True, help="results JSON from run_eval.py --arm dense")
     ap.add_argument("--split", required=True, help="results JSON from run_eval.py --arm split")
-    ap.add_argument("--dense-run", default="runs/dense")
-    ap.add_argument("--split-run", default="runs/split")
+    ap.add_argument("--dense-config", help="dense checkpoint's ConfigSaver config.json")
+    ap.add_argument("--split-config", help="split checkpoint's ConfigSaver config.json")
+    ap.add_argument(
+        "--skip-training-config-check",
+        action="store_true",
+        help="debugging only; results are not reportable without config equality",
+    )
     ap.add_argument(
         "--metric",
-        default="valid",
-        choices=("valid", "goal_reached", "exact_match", "all_grounded"),
+        default="token_match",
+        choices=("token_match", "exact_match", "metamath_valid"),
     )
     ap.add_argument("--n-boot", type=int, default=10_000)
     ap.add_argument("--seed", type=int, default=20260801)
-    ap.add_argument(
-        "--skip-fingerprint-check",
-        action="store_true",
-        help="compare anyway; only for debugging, never for a reported result",
-    )
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
-    if not args.skip_fingerprint_check:
-        check_fingerprints(args.dense_run, args.split_run)
-    else:
-        print("WARNING: fingerprint check skipped — this result is not publishable")
-
     dense = json.load(open(args.dense, encoding="utf-8"))
     split = json.load(open(args.split, encoding="utf-8"))
-    if dense["split"] != split["split"]:
-        sys.exit(f"eval splits differ: {dense['split']} vs {split['split']}")
+    if args.skip_training_config_check:
+        print("WARNING: training config check skipped; comparison is not reportable")
+    elif not args.dense_config or not args.split_config:
+        sys.exit(
+            "--dense-config and --split-config are required unless "
+            "--skip-training-config-check is set"
+        )
+    else:
+        try:
+            validate_training_configs(
+                json.load(open(args.dense_config, encoding="utf-8")),
+                json.load(open(args.split_config, encoding="utf-8")),
+            )
+        except ValueError as exc:
+            sys.exit(str(exc))
+    try:
+        validate_eval_compatibility(dense, split)
+    except ValueError as exc:
+        sys.exit(str(exc))
 
     print(
-        f"\neval split: {dense['split']}   metric: {args.metric}   "
+        f"\nmetric: {args.metric}   "
         f"decoding: {'greedy' if dense.get('greedy') else 'sampled'}\n"
     )
-    header = f"{'condition':<18}{'dense':>8}{'split':>8}{'diff':>9}{'95% CI':>18}{'p':>9}  verdict"
+    header = (
+        f"{'family/condition':<34}{'dense':>8}{'split':>8}{'diff':>9}"
+        f"{'NLL Δ':>10}{'95% CI':>18}{'p':>9}  verdict"
+    )
     print(header)
     print("-" * len(header))
 
     out = []
-    for condition in dense["conditions"]:
-        r = compare_condition(dense, split, condition, args.metric, args.n_boot, args.seed)
-        if r is None:
+    for family, family_result in dense["families"].items():
+        if args.metric == "metamath_valid" and family != "metamath":
             continue
-        out.append(r)
-        ci = f"[{r['ci95_low']:+.1%}, {r['ci95_high']:+.1%}]"
-        print(
-            f"{r['condition']:<18}{r['dense_rate']:>7.1%}{r['split_rate']:>8.1%}"
-            f"{r['difference']:>+9.1%}{ci:>18}{r['mcnemar_p']:>9.3g}  {verdict(r)}"
-        )
-
-    if "probe" in dense and "probe" in split:
-        print("\nfact-recall probe (state a fact given only its name)")
-        for arm, res in (("dense", dense["probe"]), ("split", split["probe"])):
-            t, h = res["train_facts"], res["heldout_facts"]
-            print(
-                f"  {arm:<6} train-visible facts {t['exact_rate']:>6.1%} (n={t['n']})   "
-                f"held-out facts {h['exact_rate']:>6.1%} (n={h['n']})"
+        for condition in family_result["conditions"]:
+            r = compare_condition(
+                dense,
+                split,
+                family=family,
+                condition=condition,
+                metric=args.metric,
+                n_boot=args.n_boot,
+                seed=args.seed,
             )
-        print("  dense should lead on train-visible facts; both should be near zero on")
-        print("  held-out. If dense does NOT lead, the mask did not change what was stored.")
+            if r is None:
+                continue
+            out.append(r)
+            ci = f"[{r['ci95_low']:+.1%}, {r['ci95_high']:+.1%}]"
+            label = f"{family}/{condition}"
+            p_display = "-" if r["mcnemar_p"] is None else f"{r['mcnemar_p']:.3g}"
+            print(
+                f"{label:<34}{r['dense_rate']:>7.1%}{r['split_rate']:>8.1%}"
+                f"{r['difference']:>+9.1%}{r['nll_difference']:>+10.3f}"
+                f"{ci:>18}{p_display:>9}  {verdict(r)}"
+            )
 
     if args.out:
         os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
         with open(args.out, "w", encoding="utf-8") as f:
-            json.dump({"metric": args.metric, "comparisons": out}, f, indent=2)
+            json.dump(
+                {
+                    "metric": args.metric,
+                    "eval_controls": {key: dense.get(key) for key in EVAL_CONTROLS},
+                    "comparisons": out,
+                },
+                f,
+                indent=2,
+            )
         print(f"\nwrote {args.out}")
 
 

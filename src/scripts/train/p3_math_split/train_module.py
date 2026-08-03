@@ -13,8 +13,9 @@ not isolate the mask.
 the model through ``model_forward()`` — which is small and overridable. So the fix is
 ten lines rather than a fork.
 
-The divisor used is ``global_batch_size_tokens``: constant, identical across arms, and
-constant across steps, so it cannot interact with the LR schedule either.
+The configured control is ``global_batch_size_tokens``: constant, identical across
+arms, and constant across steps. Each rank divides by its nominal share of that
+global batch because FSDP averages gradients across the data-parallel group.
 """
 
 from __future__ import annotations
@@ -25,29 +26,46 @@ from typing import Any, Optional
 
 import torch
 
+from olmo_core.distributed.utils import get_world_size
 from olmo_core.train import ReduceType
 from olmo_core.train.train_module import TransformerTrainModule, TransformerTrainModuleConfig
 
 log = logging.getLogger(__name__)
 
 
+def _data_parallel_world_size(module: TransformerTrainModule) -> int:
+    """The number of rank losses that FSDP averages.
+
+    A process group may be initialized for unrelated reasons while the model has
+    no data-parallel wrapper, so the global process count is not a safe fallback.
+    """
+    if module.world_mesh is None:
+        return 1
+    return get_world_size(module.dp_process_group)
+
+
 class FixedDivisorTransformerTrainModule(TransformerTrainModule):
     """``TransformerTrainModule`` with a constant loss denominator.
 
-    :param fixed_loss_div_factor: the constant to divide summed CE by. Pass
-        ``global_batch_size_tokens`` (= global_batch_size_sequences x sequence_length).
-        Must be identical in both arms; ``train_sft.py`` derives it from the config
-        both arms share, so it cannot drift.
+    :param fixed_loss_div_factor: the global nominal token count. It must be
+        identical in both arms; this module divides it by the data-parallel world
+        size to get the rank-local denominator used before FSDP gradient averaging.
     """
 
     def __init__(self, *args: Any, fixed_loss_div_factor: float, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
         if fixed_loss_div_factor <= 0:
             raise ValueError("fixed_loss_div_factor must be positive")
-        self.fixed_loss_div_factor = float(fixed_loss_div_factor)
+        super().__init__(*args, **kwargs)
+        self.global_fixed_loss_div_factor = float(fixed_loss_div_factor)
+        dp_world_size = _data_parallel_world_size(self)
+        if dp_world_size < 1:  # pragma: no cover - distributed API invariant
+            raise RuntimeError(f"invalid data-parallel world size: {dp_world_size}")
+        self.fixed_loss_div_factor = self.global_fixed_loss_div_factor / dp_world_size
         log.info(
-            "loss divisor pinned to %.1f (OLMo-core default would be the per-batch "
-            "live-token count, which differs between the dense and split arms)",
+            "global loss divisor %.1f / %d DP ranks = %.1f rank-local tokens "
+            "(OLMo-core's live-token default differs between dense and split)",
+            self.global_fixed_loss_div_factor,
+            dp_world_size,
             self.fixed_loss_div_factor,
         )
 
@@ -131,8 +149,11 @@ class DerivedMaskTrainModule(FixedDivisorTransformerTrainModule):
         self.arm = arm
         self.eos_token_id = int(eos_token_id)
         self.pad_token_id = int(pad_token_id)
-        self.register_buffer(
-            "_sep", torch.tensor(separator_ids, dtype=torch.long), persistent=False
+        # TrainModule is a Stateful protocol, not torch.nn.Module, so it has no
+        # register_buffer() and is never moved by Module.to(). Keep this immutable
+        # runtime constant directly on the same device as the wrapped model.
+        self._sep = torch.tensor(
+            separator_ids, dtype=torch.long, device=self.device
         )
         log.info(
             "arm=%s; fact block derived from a %d-token separator, packing-aware",
@@ -187,6 +208,31 @@ class DerivedMaskTrainModule(FixedDivisorTransformerTrainModule):
         previous_is_eos[:, 1:] = input_ids[:, :-1] == self.eos_token_id
         return is_pad & previous_is_eos
 
+    def label_supervision_mask(self, input_ids: torch.Tensor) -> torch.Tensor:
+        """True at label positions whose *target token* should be scored.
+
+        OLMo's ``get_labels`` shifts IDs left before ``model_forward``:
+        ``labels[i] == input_ids[i + 1]``. The fact/padding masks are naturally
+        expressed over token positions, so they must be shifted left the same way.
+        Applying an unshifted mask skips the first goal token and scores the first
+        padding token instead—a plausible one-token boundary error on every proof.
+        """
+        token_live = ~self.padding_mask(input_ids)
+        if self.arm == "split":
+            token_live &= self.supervised_mask(input_ids)
+        label_live = torch.zeros_like(token_live)
+        label_live[:, :-1] = token_live[:, 1:]
+        return label_live
+
+    def _record_divisor_diagnostics(self, live_tokens: Any) -> None:
+        """Suppress the parent metric, whose count precedes the runtime mask.
+
+        ``TransformerTrainModule.train_batch`` counts labels before model_forward,
+        so its `live_tokens` includes fact tokens for both arms. model_forward records
+        the correct post-mask fraction below instead.
+        """
+        del live_tokens
+
     def model_forward(  # type: ignore[override]
         self,
         input_ids: torch.Tensor,
@@ -195,9 +241,14 @@ class DerivedMaskTrainModule(FixedDivisorTransformerTrainModule):
     ):
         if labels is not None:
             labels = labels.clone()
-            labels[self.padding_mask(input_ids)] = -100
-            if self.arm == "split":
-                labels[~self.supervised_mask(input_ids)] = -100
+            label_live = self.label_supervision_mask(input_ids)
+            labels[~label_live] = -100
+            if kwargs.get("loss_div_factor") is not None:
+                self.record_metric(
+                    "train/supervised token fraction",
+                    label_live.detach().float().mean(),
+                    ReduceType.mean,
+                )
         return super().model_forward(input_ids, labels=labels, **kwargs)
 
 

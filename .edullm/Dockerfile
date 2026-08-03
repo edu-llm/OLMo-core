@@ -176,12 +176,34 @@ COPY . .
 #
 # So it names what a training workload actually reaches for. Anything that breaks between
 # the pinned torch and this library now breaks the build, where it costs a runner minute.
+#
+# FLASH-ATTN IS A BINARY WHEEL, NOT `pip install flash-attn`. The registered base has no
+# CUDA toolkit or nvcc, so PyPI's source distribution cannot build here. This official
+# release wheel exactly matches all four binary boundaries in this image: CUDA 12,
+# torch 2.9, CPython 3.12, and the C++11 ABI used by the torch wheel. `--no-deps` prevents
+# its unconstrained `torch` requirement from moving the pin; einops is installed and
+# pinned separately. The URL hash was measured from the GitHub release asset.
+#
+# P3's packed rows require the two varlen entry points asserted below. Importing only
+# `flash_attn` is too shallow: a wrong wheel can expose the package while failing to load
+# the compiled API that consumes `cu_doc_lens`.
+#
+# QWEN NEEDS BOTH HUGGINGFACE PACKAGES AT RUNTIME. `tokenizers` reads the published
+# tokenizer.json to derive the separator IDs during config construction; `transformers`
+# loads the released Qwen checkpoint after FSDP initialization. They are exact pins because
+# neither is part of the base dependency set installed by `.[wandb]`.
 RUN set -eux; \
     python -m pip install --no-cache-dir "torch==2.9.0"; \
+    python -c "import torch; assert torch.compiled_with_cxx11_abi(), 'flash-attn wheel requires torch CXX11 ABI'"; \
+    python -m pip install --no-cache-dir "transformers==5.14.1" "tokenizers==0.22.2"; \
+    python -m pip install --no-cache-dir "einops==0.8.2"; \
+    python -m pip install --no-cache-dir --no-deps "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3%2Bcu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl#sha256=4e2f9e39313266b1544b68138b15b91ee6221eccf14f7902b7c6620351340810"; \
     python -m pip install --no-cache-dir ".[wandb]" boto3; \
     python -m pip install --no-cache-dir "edullm-data @ https://github.com/edu-llm/edullm-data/archive/38bf831a6c3f445e394784018441fd59288b876c.tar.gz"; \
     python -c "import torch; assert torch.__version__.startswith('2.9.0'), f'torch was moved off the pin: {torch.__version__}'"; \
     python -c "import torch; assert torch.version.cuda, 'the CUDA build of torch was replaced by a CPU wheel'"; \
+    python -c "import flash_attn; assert callable(flash_attn.flash_attn_varlen_func); assert callable(flash_attn.flash_attn_varlen_qkvpacked_func)"; \
+    python -c "import tokenizers, transformers; assert tokenizers.__version__ == '0.22.2'; assert transformers.__version__ == '5.14.1'; from tokenizers import Tokenizer; from transformers import AutoModelForCausalLM"; \
     python -c "import boto3, wandb; from olmo_core.data import TokenizerConfig; from olmo_core.nn.transformer import TransformerConfig; print(TransformerConfig.olmo2_190M(vocab_size=TokenizerConfig.gpt2().padded_vocab_size()).__class__.__name__)"; \
     python -c "from edullm_data.read import dataset_paths, resolve_latest; print(dataset_paths.__module__)"
 

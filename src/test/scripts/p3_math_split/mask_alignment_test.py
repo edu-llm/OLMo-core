@@ -65,9 +65,11 @@ def test_runtime_mask_boundary_on_real_packed_bytes(train_meta):
     module._sep = torch.tensor(train_meta["separator_ids"], dtype=torch.long)
     module.eos_token_id = train_meta["eos_token_id"]
     module.pad_token_id = train_meta["pad_token_id"]
+    module.arm = "split"
 
     supervised = module.supervised_mask(ids)[0]
     padding = module.padding_mask(ids)[0]
+    labels_live = module.label_supervision_mask(ids)[0]
     assert torch.any(supervised)
     assert torch.any(~supervised & ~padding)
     assert not torch.any(supervised & padding)
@@ -80,4 +82,8 @@ def test_runtime_mask_boundary_on_real_packed_bytes(train_meta):
     for start in starts:
         assert not supervised[start : start + len(sep)].any()
         assert supervised[start + len(sep)]
+        # labels[i] predicts input_ids[i+1], so score the first goal token from
+        # the label position at the separator's final token.
+        assert labels_live[start + len(sep) - 1]
+        assert not labels_live[start + len(sep) - 2]
 

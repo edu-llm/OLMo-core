@@ -30,6 +30,7 @@ from olmo_core.nn.transformer.qwen import (
     convert_hf_state_dict,
     export_to_hf_state_dict,
     hf_to_olmo_key_map,
+    load_hf_weights,
     parameter_report,
     qwen2_0_5b_config,
 )
@@ -135,6 +136,46 @@ def test_state_dict_loads_strictly(olmo_model, hf_state):
     converted = convert_hf_state_dict(hf_state, tied=True)
     olmo_model.load_state_dict(converted, strict=True)
     assert olmo_model.lm_head.w_out.weight is olmo_model.embeddings.weight
+
+
+def test_distributed_state_dict_loads_after_train_module_initialization(monkeypatch):
+    """The platform wraps/initializes first, then installs pretrained weights.
+
+    ``set_model_state_dict(full_state_dict=True)`` is the supported bridge from a
+    normal HuggingFace state dict into an FSDP2-sharded model. This tiny unsharded
+    model exercises the same API without requiring a distributed GPU test.
+    """
+
+    class Head(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.w_out = torch.nn.Linear(2, 2, bias=False)
+
+    class TinyQwen(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.embeddings = torch.nn.Embedding(2, 2)
+            self.lm_head = Head()
+            self.lm_head.w_out.weight = self.embeddings.weight
+
+    model = TinyQwen()
+    expected = torch.full((2, 2), 0.375)
+    monkeypatch.setattr(
+        "olmo_core.nn.transformer.qwen.convert_hf_state_dict",
+        lambda *_args, **_kwargs: {
+            "embeddings.weight": expected.clone(),
+            "lm_head.w_out.weight": expected.clone(),
+        },
+    )
+
+    load_hf_weights(
+        model,
+        hf_state_dict={"unused": torch.empty(0)},
+        distributed_state_dict=True,
+    )
+
+    assert torch.equal(model.embeddings.weight, expected)
+    assert model.lm_head.w_out.weight is model.embeddings.weight
 
 
 def test_round_trip_to_hf_and_back(olmo_model, hf_state):

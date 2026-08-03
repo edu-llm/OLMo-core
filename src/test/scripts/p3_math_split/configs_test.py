@@ -90,20 +90,22 @@ def test_step_count_is_derivable(arms):
     )
 
 
-def test_platform_run_loads_pretrained_qwen_before_wrapping_the_model():
+def test_platform_run_loads_pretrained_qwen_after_train_module_initialization():
     """The experiment is continual pretraining, not a random-init 0.5B run.
 
-    The platform reference builds a fresh model. Our copy must preserve the Qwen-
-    specific exception: build the exact architecture, load released HF weights
-    strictly, and only then hand it to the train module/FSDP setup. Omitting the
-    load still trains and produces plausible curves, so pin the call and its order.
+    ``TransformerTrainModule`` calls ``model.init_weights()``, which uses
+    ``to_empty()`` and resets every parameter. Loading HF first therefore produces a
+    plausible random-init run. Build/strip on meta, let the train module initialize
+    and shard, and only then install the full pretrained state through DCP.
     """
     source = Path("src/scripts/train/p3_math_split/train_platform.py").read_text()
-    built = source.index('config.model.build(init_device="cpu")')
+    built = source.index('config.model.build(init_device="meta")')
     stripped = source.index("strip_attn_out_bias(model)")
-    loaded = source.index("load_hf_weights(model)")
     wrapped = source.index("config.train_module.build(model)")
-    assert built < stripped < loaded < wrapped
+    loaded = source.index(
+        "load_hf_weights(train_module.model, distributed_state_dict=True)"
+    )
+    assert built < stripped < wrapped < loaded
 
 
 def test_platform_reader_selects_train_partition_explicitly():

@@ -656,9 +656,9 @@ def build_config(opts, overrides: List[str]):
             init_seed=shared["seed"], tie_word_embeddings=opts.tie_embeddings
         )
         # TorchAttentionBackend rejects cu_doc_lens at first forward. The platform
-        # image installs flash-attn 2 explicitly (src/Dockerfile); naming it here turns
-        # a missing/incompatible install into a config-build failure instead of a GPU
-        # run that dies after setup.
+        # image installs flash-attn 2 explicitly in .edullm/Dockerfile; naming it
+        # here turns a missing/incompatible install into a config-build failure
+        # instead of a GPU run that dies after setup.
         model_config.block.sequence_mixer.backend = AttentionBackendName.flash_2
         if model_config.vocab_size != corpus.tokenizer.padded_vocab_size():
             raise Refusal(
@@ -721,8 +721,9 @@ def build_config(opts, overrides: List[str]):
         separator_ids=sep_ids,
         eos_token_id=corpus.tokenizer.eos_token_id,
         pad_token_id=corpus.tokenizer.pad_token_id,
-        # Constant, identical across arms, constant across steps. The OLMo-core
-        # default divides by the batch's live-token count, which the mask changes.
+        # Global control, identical across arms and steps. The module converts it
+        # to the nominal rank batch before FSDP averages data-parallel gradients;
+        # OLMo-core's default instead uses the live-token count changed by the mask.
         fixed_loss_div_factor=float(opts.global_batch_size),
         rank_microbatch_size=opts.rank_microbatch_size,
         max_sequence_length=opts.sequence_length,
@@ -918,22 +919,22 @@ def train(config, opts=None) -> None:
 
     seed_all(config.init_seed)
 
-    if opts is not None and opts.model_factory == "qwen2_0_5b":
-        # The platform reference builds a random-init model on meta. This experiment
-        # is continual pretraining from the released Qwen checkpoint: omitting these
-        # two calls still trains and produces plausible curves, but answers a different
-        # question. The output bias is removed before anything is moved, sharded or
-        # compiled, and strict HF loading proves the parameter set is exact.
+    is_qwen = opts is not None and opts.model_factory == "qwen2_0_5b"
+    model = config.model.build(init_device="meta")
+    if is_qwen:
         # Build the config that `--dry-run` printed, rather than calling a helper
         # that creates a fresh config and would silently discard our explicit
-        # FlashAttention2 backend.
-        model = config.model.build(init_device="cpu")
+        # FlashAttention2 backend. The output bias has to be removed before FSDP
+        # captures the parameter set.
         strip_attn_out_bias(model)
-        load_hf_weights(model)
-        log.info("model: %s", parameter_report(model))
-    else:
-        model = config.model.build(init_device="meta")
     train_module = config.train_module.build(model)
+    if is_qwen:
+        # TransformerTrainModule construction calls model.init_weights(), whose
+        # to_empty() deliberately replaces every parameter. Loading HF before that
+        # point silently produced a random-init run. Install the full pretrained
+        # state afterwards; DCP shards it into the already-wrapped FSDP2 model.
+        load_hf_weights(train_module.model, distributed_state_dict=True)
+        log.info("model: %s", parameter_report(train_module.model))
     dataset = config.dataset.build()
     data_loader = config.data_loader.build(dataset, dp_process_group=train_module.dp_process_group)
     trainer = config.trainer.build(train_module, data_loader)

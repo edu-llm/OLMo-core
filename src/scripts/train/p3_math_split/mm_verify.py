@@ -12,7 +12,7 @@ What is checked, per generated step `N  label  |- expr`:
                matching the rule's template against `expr`, which also pins the
                substitution used.
   hypotheses   every `$e` hypothesis of `label`, under that same substitution, appears
-               as an earlier step in the same proof.
+               as a theorem-local assumption or an earlier step in the same proof.
   goal         the final step's expression is the goal.
 
 A proof is `valid` when all four hold for every step.
@@ -245,8 +245,14 @@ def verify_proof(
     goal: str,
     fact_block: Dict[str, str],
     gold_target: Optional[str] = None,
+    local_assumptions: Optional[Dict[str, str]] = None,
 ) -> ProofResult:
-    """Verify one generated proof. `fact_block` is {label: rendered statement}."""
+    """Verify one generated proof.
+
+    ``fact_block`` contains globally named rules. ``local_assumptions`` contains
+    theorem-local $e givens, which seed the derived-expression list but are not
+    themselves model-visible proof steps.
+    """
     res = ProofResult()
     steps = parse_proof(generated)
     res.parsed_steps = len(steps)
@@ -258,7 +264,9 @@ def verify_proof(
         res.reason = "no parsable proof steps"
         return res
 
-    derived: List[List[str]] = []  # expressions proved so far, in order
+    derived: List[List[str]] = [
+        expr.split() for expr in (local_assumptions or {}).values()
+    ]
     all_grounded = all_instances = all_hyps = True
 
     for i, (label, expr_s) in enumerate(steps, 1):

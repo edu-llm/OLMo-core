@@ -49,6 +49,7 @@ except ImportError:  # pragma: no cover
     )
 
 HDR = "I know these mathematical statements:"
+LOCAL_HDR = "Local assumptions:"
 SEP = "---"
 
 
@@ -64,8 +65,29 @@ def render_fact(label, kind, data):
     return f"{' & '.join(hyps)} => {concl}" if hyps else concl
 
 
-def render_example(facts, goal, target):
+def split_model_trace(mand, trace):
+    """Return used theorem-local $e givens and model-visible theorem applications."""
+    mandatory_e = {label for kind, label, _ in mand if kind == "$e"}
+    local_assumptions = {}
+    steps = []
+    for label, expr, _ in trace:
+        if label in mandatory_e:
+            local_assumptions.setdefault(label, " ".join(expr))
+            continue
+        if label == "(reuse)":
+            continue
+        if expr and expr[0] == "|-":
+            steps.append((label, " ".join(expr)))
+    return local_assumptions, steps
+
+
+def render_example(facts, local_assumptions, goal, target):
     block = HDR + "\n" + "\n".join(f"{n} : {s}" for n, s in facts.items())
+    block += "\n" + LOCAL_HDR
+    if local_assumptions:
+        block += "\n" + "\n".join(
+            f"{n} : {s}" for n, s in local_assumptions.items()
+        )
     return f"{block}\n{SEP}\nGOAL {goal}\n{target}", len(block)
 
 
@@ -92,19 +114,22 @@ def extract(mm, args):
     tally: Counter = Counter()
     for lbl in provable:
         try:
-            expr, _mand, refs, trace = expand(mm, lbl)
+            expr, mand, refs, trace = expand(mm, lbl)
         except Exception:
             tally["expand_failed"] += 1
             continue
 
-        steps = [(lb, " ".join(e)) for (lb, e, _) in trace if e and e[0] == "|-"]
-        if not (args.min_steps <= len(steps) <= args.max_steps):
-            tally["step_count_out_of_band"] += 1
+        # The soundness gate: the proof must reduce to the statement it claims.
+        logical_trace = [
+            (lb, " ".join(e)) for (lb, e, _) in trace if e and e[0] == "|-"
+        ]
+        if not logical_trace or logical_trace[-1][1] != " ".join(expr):
+            tally["failed_to_reduce"] += 1
             continue
 
-        # The soundness gate: the proof must reduce to the statement it claims.
-        if steps[-1][1] != " ".join(expr):
-            tally["failed_to_reduce"] += 1
+        local_assumptions, steps = split_model_trace(mand, trace)
+        if not (args.min_steps <= len(steps) <= args.max_steps):
+            tally["step_count_out_of_band"] += 1
             continue
 
         used = [r for r in dict.fromkeys(refs) if r in logical]
@@ -119,7 +144,7 @@ def extract(mm, args):
 
         goal = " ".join(expr)
         target = "\n".join(f"{i + 1:>3}  {lb:<12} {e}" for i, (lb, e) in enumerate(steps))
-        text, block_len = render_example(facts, goal, target)
+        text, block_len = render_example(facts, local_assumptions, goal, target)
 
         if len(text) > args.max_chars:
             tally["too_long"] += 1
@@ -131,6 +156,7 @@ def extract(mm, args):
                 "theorem": lbl,
                 "facts": facts,
                 "cited": used,
+                "local_assumptions": local_assumptions,
                 "goal": goal,
                 "target": target,
                 "text": text,

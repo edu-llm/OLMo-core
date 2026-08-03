@@ -397,6 +397,7 @@ def load_hf_weights(
     *,
     hf_id: str = QWEN2_0_5B_HF_ID,
     hf_state_dict: Optional[Dict[str, torch.Tensor]] = None,
+    distributed_state_dict: bool = False,
 ) -> None:
     """
     Load pretrained Qwen2.5 weights into a built OLMo-core model, in place.
@@ -407,6 +408,9 @@ def load_hf_weights(
     :param model: A model from :func:`build_qwen2_0_5b`.
     :param hf_id: HuggingFace model id, used when ``hf_state_dict`` is not supplied.
     :param hf_state_dict: An already-loaded HuggingFace state dict.
+    :param distributed_state_dict: Load a normal full state dict into a model that
+        may already be FSDP2-sharded. This must be used after train-module
+        construction, since that lifecycle initializes model weights.
 
     :raises RuntimeError: If the state dict does not match the model exactly.
     """
@@ -422,7 +426,19 @@ def load_hf_weights(
     target_dtype = model.embeddings.weight.dtype
     converted = {k: v.to(dtype=target_dtype) for k, v in converted.items()}
 
-    model.load_state_dict(converted, strict=True)
+    if distributed_state_dict:
+        from torch.distributed.checkpoint.state_dict import (
+            StateDictOptions,
+            set_model_state_dict,
+        )
+
+        set_model_state_dict(
+            model,
+            converted,
+            options=StateDictOptions(full_state_dict=True, strict=True),
+        )
+    else:
+        model.load_state_dict(converted, strict=True)
     if tied and model.lm_head.w_out.weight is not model.embeddings.weight:
         raise RuntimeError("loading broke the embedding tie")
     log.info("loaded %s weights: %s", hf_id, parameter_report(model))

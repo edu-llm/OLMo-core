@@ -75,6 +75,7 @@ def test_real_derived_mask_on_sampled_packed_rows(artifact):
     model._sep = torch.tensor(meta["separator_ids"], dtype=torch.long)
     model.eos_token_id = eos
     model.pad_token_id = meta["pad_token_id"]
+    model.arm = "split"
 
     masked = real = checked = 0
     for group in meta["groups"].values():
@@ -86,15 +87,29 @@ def test_real_derived_mask_on_sampled_packed_rows(artifact):
             ids = torch.from_numpy(np.asarray(rows[i], dtype=np.int64).copy()).unsqueeze(0)
             supervised = model.supervised_mask(ids)
             padding = model.padding_mask(ids)
+            labels_live = model.label_supervision_mask(ids)
             assert not torch.any(supervised & padding)
+            target_is_padding = torch.zeros_like(padding)
+            target_is_padding[:, :-1] = padding[:, 1:]
+            assert not torch.any(labels_live & target_is_padding)
+            assert not labels_live[:, -1].any()
             # Every packed row has at least one fact block and one target.
             assert torch.any(supervised)
             assert torch.any(~supervised & ~padding)
             # Real EOS is supervised; only repeated-EOS tail padding is not.
             eos_positions = torch.nonzero(ids[0] == eos).flatten()
             assert torch.any(supervised[0, eos_positions] & ~padding[0, eos_positions])
-            masked += int((~supervised & ~padding).sum())
-            real += int((~padding).sum())
+            # OLMo shifts labels left. The position immediately before each first
+            # goal token must therefore be live, or the first goal token is skipped.
+            sep = model._sep
+            starts = torch.nonzero(
+                (ids.unfold(1, len(sep), 1) == sep).all(dim=-1)[0]
+            ).flatten()
+            assert len(starts) >= 1
+            for start in starts:
+                assert labels_live[0, start + len(sep) - 1]
+            masked += int((~labels_live & ~target_is_padding).sum())
+            real += int((~target_is_padding).sum())
             checked += 1
     fraction = masked / real
     assert checked == 18
