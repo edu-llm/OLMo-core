@@ -18,7 +18,7 @@ Fixed contract:
 - seed 42 and 2,384 production steps
 - step 0, 125-grid (omitting 2,375), and true-final permanent checkpoints
 - synchronous exact 20-label task loss at every permanent checkpoint
-- awaited, fail-closed W&B artifacts in `curriculum-<arm>`
+- awaited, fail-closed W&B artifacts in `curriculum`
 - post-hoc EMA over 2,000 / 2,125 / 2,250 / 2,384 with alpha 0.8
 
 Only the loader's pacing/ordering policy differs between arms:
@@ -31,8 +31,8 @@ Only the loader's pacing/ordering policy differs between arms:
 | 3 | `warmup-mtld` | `warmup_1000` | `mtld` / `mtld` |
 | 4 | `interleave-mtld` | `interleave_i10_linear` | `mtld` / `mtld` |
 
-The table index is exactly the `--arm-index` CLI value. Each arm routes to
-W&B project `curriculum-<arm ID>`; no arm shares the old `curriculum` project.
+The table index is exactly the `--arm-index` CLI value. All arms log to the
+shared W&B project `curriculum`; runs are distinguished by run name/group.
 
 ## Immutable inputs and provenance
 
@@ -138,7 +138,7 @@ ranks, all 2,384 steps, the checkpoint ladder, and full task loss while
 disabling only W&B durability:
 
 ```bash
-python -m torch.distributed.run --standalone --nproc-per-node=8 \
+python -m torch.distributed.run --standalone --nproc-per-node=8 -- \
   .edullm/curriculum_entrypoint.py --train-worker \
   --arm-index 0 --nproc 8 --fresh \
   --run-dir /tmp/curriculum-linear10-flesch-benchmark \

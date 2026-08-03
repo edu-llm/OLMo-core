@@ -118,7 +118,7 @@ def test_recipe_is_exact_approved_five_arm_matrix() -> None:
         "warmup_1000",
         "interleave_i10_linear",
     }
-    assert all(arm.wandb_project == f"curriculum-{arm.name}" for arm in arms)
+    assert all(arm.wandb_project == "curriculum" for arm in arms)
     assert CURRICULUM_DATASET_ID == "curriculum/regmix-370m"
     assert CURRICULUM_ORDER_GROUP_FOR_METRIC == {
         "compression_ratio": "compression",
@@ -355,10 +355,11 @@ def test_platform_fixture_and_docker_are_branch_specific() -> None:
     )
     command = fixture["command"][-1]
     assert fixture["dataset_release"] == "regmix-10b-v1"
-    assert fixture["wandb_project"] == "curriculum-linear10-flesch"
+    assert fixture["wandb_project"] == "curriculum"
     assert fixture["compute_profile"] == "gpu-8xa100"
     assert fixture["workload_profile"] == "olmo-core-train-4gpu"
     assert "--nproc-per-node=8" in command
+    assert "--" in command
     assert "--nproc 8" in command
     assert "--task-loss-nproc 8" in command
     assert "EDULLM_CHECKPOINT_CHECK=waived" in command
@@ -375,7 +376,7 @@ def test_platform_fixture_and_docker_are_branch_specific() -> None:
     benchmark_command = benchmark["command"][-1]
     assert benchmark["compute_profile"] == "gpu-8xa100"
     assert benchmark["maximum_attempts"] == 1
-    assert benchmark["wandb_project"] == "curriculum-linear10-flesch"
+    assert benchmark["wandb_project"] == "curriculum"
     assert "--nproc-per-node=8" in benchmark_command
     assert "--local-smoke" in benchmark_command
     assert "--wandb-mode disabled" in benchmark_command
@@ -420,6 +421,7 @@ def test_eight_gpu_launcher_is_concrete_and_fully_forwarded() -> None:
     assert "NPROC=8" in launcher and "TASK_LOSS_NPROC=8" in launcher
     assert "--nproc-per-node=8" in command
     assert str(entrypoint.PACKAGED_TASK_LOSS_SCRIPT) in command
+    assert "--" in command
     assert str(entrypoint.PACKAGED_LADDER_CONFIG) in command
 
 
@@ -512,7 +514,7 @@ def test_run_worker_builds_concrete_eight_gpu_trainer_and_fits(
                 callback.trainer = trainer
             return trainer
 
-    monkeypatch.setenv("EDULLM_WANDB_PROJECT", "curriculum-linear10-flesch")
+    monkeypatch.setenv("EDULLM_WANDB_PROJECT", "curriculum")
     monkeypatch.setenv("WANDB_API_KEY", "test-only")
     monkeypatch.setattr(
         entrypoint,
@@ -576,5 +578,5 @@ def test_run_worker_builds_concrete_eight_gpu_trainer_and_fits(
     contract = built_callbacks["curriculum_contract"]
     assert contract.task_loss_nproc == 8
     assert contract.eval_script == entrypoint.PACKAGED_TASK_LOSS_SCRIPT
-    assert built_callbacks["wandb"].project == "curriculum-linear10-flesch"
+    assert built_callbacks["wandb"].project == "curriculum"
     assert entrypoint.TOTAL_STEPS in built_callbacks["checkpointer"].fixed_steps

@@ -18,7 +18,7 @@ if [[ "${FRESH:-0}" != "1" && -z "${LOAD_PATH:-}" ]]; then
 fi
 
 ARM_NAME="$($PYTHON -c 'import json,sys; print(json.load(open(sys.argv[1]))["arms"][int(sys.argv[2])]["name"])' "${ROOT}/curriculum_recipe.json" "${ARM_INDEX}")"
-export EDULLM_WANDB_PROJECT="curriculum-${ARM_NAME}"
+export EDULLM_WANDB_PROJECT="${EDULLM_WANDB_PROJECT:-curriculum}"
 export WANDB_PROJECT="${EDULLM_WANDB_PROJECT}"
 
 ARGS=(
