@@ -33,7 +33,7 @@ is satisfied by composition: four ordinary-looking words, not one random string.
 
 import math
 from dataclasses import dataclass
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, Iterable, List, Sequence, Tuple
 
 from olmo_core.exceptions import OLMoConfigurationError
 
@@ -183,7 +183,9 @@ def _stride(index: int) -> str:
     return word.capitalize()
 
 
-def allocate_words(pool_sizes: Sequence[Tuple[str, int]]) -> Dict[str, Tuple[str, ...]]:
+def allocate_words(
+    pool_sizes: Sequence[Tuple[str, int]], *, reserved: Iterable[str] = ()
+) -> Dict[str, Tuple[str, ...]]:
     """
     Hand every pool a block of words that no other pool shares.
 
@@ -200,6 +202,12 @@ def allocate_words(pool_sizes: Sequence[Tuple[str, int]]) -> Dict[str, Tuple[str
     built against the old vocabulary.
 
     :param pool_sizes: ``(name, size)`` pairs. Names must be unique.
+    :param reserved: Words the allocator must not hand out -- template literals, special tokens and
+        domain tokens. A generated syllable can coincide with an ordinary English word ("Born" was the
+        first real collision), and a word serving as both a template literal and a pool value is
+        ambiguous between prose and a fact. Passing them here is what makes the schema fingerprint
+        depend on the template set, which is correct: change the templates and the pools really are
+        different.
 
     :returns: Pool name to its distinct word block.
 
@@ -214,16 +222,18 @@ def allocate_words(pool_sizes: Sequence[Tuple[str, int]]) -> Dict[str, Tuple[str
             raise OLMoConfigurationError(f"pool '{name}' must have a positive size, got {size}")
 
     allocated: Dict[str, Tuple[str, ...]] = {}
+    taken = set(reserved)
     cursor = 0
     for name, size in sorted(pool_sizes):
         block: List[str] = []
-        seen = set(block)
+        seen = set(taken)
         while len(block) < size:
             word = _stride(cursor)
             cursor += 1
             if word in seen:
                 continue
             seen.add(word)
+            taken.add(word)
             block.append(word)
         allocated[name] = tuple(block)
     return allocated
@@ -314,6 +324,7 @@ def _build_pools(
     name_pool_sizes: Sequence[int],
     *,
     allow_singleton: bool = False,
+    reserved: Iterable[str] = (),
 ) -> Tuple[Tuple[AttributePool, ...], Tuple[AttributePool, ...]]:
     """
     Build the attribute and name pools together, so all of them draw from one disjoint allocation.
@@ -324,7 +335,7 @@ def _build_pools(
     if len(name_pool_sizes) != 3:
         raise OLMoConfigurationError(f"expected three name pool sizes, got {len(name_pool_sizes)}")
     every = list(attribute_sizes) + list(zip(_NAME_POOLS, name_pool_sizes))
-    words = allocate_words(every)
+    words = allocate_words(every, reserved=reserved)
     attributes = tuple(
         AttributePool(name=name, values=words[name], allow_singleton=allow_singleton)
         for name, _ in attribute_sizes
@@ -352,7 +363,9 @@ what makes the comparison legitimate.
 """
 
 
-def bios_schema(*, name_pool_sizes: Sequence[int] = (400, 400, 1000)) -> CorpusSchema:
+def bios_schema(
+    *, name_pool_sizes: Sequence[int] = (400, 400, 1000), reserved: Iterable[str] = ()
+) -> CorpusSchema:
     """
     The bioS schema for the count axis: seven attributes, one word each.
 
@@ -363,7 +376,7 @@ def bios_schema(*, name_pool_sizes: Sequence[int] = (400, 400, 1000)) -> CorpusS
 
     :returns: The schema and its attribute grouping.
     """
-    attributes, names = _build_pools(BIOS_POOL_SIZES, name_pool_sizes)
+    attributes, names = _build_pools(BIOS_POOL_SIZES, name_pool_sizes, reserved=reserved)
     values = tuple(ValueSpec(name=name, pool_names=(name,)) for name, _ in BIOS_POOL_SIZES)
     return CorpusSchema(schema=Schema(attributes=attributes, names=names), values=values)
 
@@ -374,6 +387,7 @@ def entropy_schema(
     n_attributes: int = ENTROPY_ATTRIBUTES,
     words_per_value: int = ENTROPY_WORDS_PER_VALUE,
     name_pool_sizes: Sequence[int] = (400, 400, 1000),
+    reserved: Iterable[str] = (),
 ) -> CorpusSchema:
     """
     The entropy-axis schema: ``n_attributes`` attributes of ``words_per_value`` words each.
@@ -394,6 +408,7 @@ def entropy_schema(
     :param words_per_value: Words per attribute value. Fixed across a sweep -- varying it would
         sweep tokens along with bits.
     :param name_pool_sizes: See :func:`bios_schema`.
+    :param reserved: Words the pools must avoid. See :func:`allocate_words`.
 
     :returns: The schema and its attribute grouping.
 
@@ -431,7 +446,9 @@ def entropy_schema(
         attribute_sizes.extend((name, pool_size) for name in pool_names)
         values.append(ValueSpec(name=f"attr{attribute}", pool_names=pool_names))
 
-    attributes, names = _build_pools(attribute_sizes, name_pool_sizes, allow_singleton=True)
+    attributes, names = _build_pools(
+        attribute_sizes, name_pool_sizes, allow_singleton=True, reserved=reserved
+    )
     return CorpusSchema(schema=Schema(attributes=attributes, names=names), values=tuple(values))
 
 
