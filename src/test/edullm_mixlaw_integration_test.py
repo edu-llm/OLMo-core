@@ -145,7 +145,7 @@ def test_exact_common_training_hyperparameters() -> None:
     assert str(config.dataset.dtype) == "uint32"
     assert config.data_loader.global_batch_size == 4_194_304
     assert config.data_loader.seed == 12_536
-    assert config.train_module.rank_microbatch_size == 65_536
+    assert config.train_module.rank_microbatch_size == 32_768
     assert config.train_module.max_sequence_length == 2_048
     assert config.train_module.compile_model is True
     assert str(config.train_module.dp_config.name) == "hsdp"
@@ -391,6 +391,13 @@ def test_worker_wandb_name_includes_selected_mixture(monkeypatch) -> None:
     assert seen["config"].trainer.callbacks["wandb"].name == seen["name"]
     assert seen["config"].trainer.callbacks["wandb"].project == "mixlaw"
     assert seen["config"].trainer.callbacks["wandb"].group == "mixlaw-validation"
+
+
+def test_platform_accepts_explicit_wandb_project() -> None:
+    environment = {**_environment(), "EDULLM_WANDB_PROJECT": "mixlaw-1"}
+    assert mixlaw.platform_values(environment) == ("s3://outputs/checkpoints/", "run-123")
+    with pytest.raises(mixlaw.MixLawConfigError, match="EDULLM_WANDB_PROJECT is required"):
+        mixlaw.platform_values({**environment, "EDULLM_WANDB_PROJECT": ""})
 
 
 def test_platform_fixtures_are_sequential_without_fanout() -> None:
