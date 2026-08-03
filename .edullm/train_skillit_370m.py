@@ -53,7 +53,7 @@ from skillit_loader import (
 )
 from skillit_math import RECIPE, arm_by_index, initial_weights
 
-RANK_MICROBATCH_TOKENS = 65_536
+RANK_MICROBATCH_TOKENS = 32_768
 CHECKPOINT_INTERVAL = 125
 
 

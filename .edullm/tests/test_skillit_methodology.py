@@ -327,7 +327,7 @@ def test_olmo2_370m_training_and_checkpoint_contract() -> None:
     assert model.n_layers == 16
     assert SEQUENCE_LENGTH == 2_048
     assert GLOBAL_BATCH_TOKENS == 4_194_304
-    assert RANK_MICROBATCH_TOKENS == 65_536
+    assert RANK_MICROBATCH_TOKENS == 32_768
     assert TOTAL_STEPS == 2_384
     assert train_module.optim.lr == 4e-4
     assert train_module.scheduler.warmup == 24
