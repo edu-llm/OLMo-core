@@ -101,6 +101,13 @@ def parse_args():
     p.add_argument("--output_prefix", default=os.environ.get("EDULLM_OUTPUT_PREFIX"),
                    help="s3:// prefix for everything that is not a checkpoint: the distilled "
                         "pool and the results bundle.")
+    p.add_argument("--adapters_from", default=None,
+                   help="s3:// prefix to restore this arm's adapters FROM, for the math "
+                        "stage. Defaults to --checkpoint_dir, which is right only when the "
+                        "same run trained them. On the platform EDULLM_CHECKPOINT_DIR is "
+                        "derived per run id, so a later math job gets its own EMPTY prefix "
+                        "and must be pointed at the training run's: "
+                        "s3://<bucket>/teams/<team>/runs/<training_run_id>/checkpoints/")
     p.add_argument("--math_steps", default=MATH_STEPS_IMPL4,
                    help="Comma-separated grid steps for the math axis, or 'all'. Defaults to "
                         "impl4's 12 so every D4 number pairs with a D0 one.")
@@ -239,16 +246,22 @@ def restore_checkpoints(runs_root: Path, arm: str, args) -> None:
     if list(out.glob("ckpt-*")):
         print(f"  {arm} adapters already on disk — no restore needed", flush=True)
         return
-    if not args.checkpoint_dir:
+    src = args.adapters_from or args.checkpoint_dir
+    if not src:
         raise SystemExit(
-            f"no {arm} adapters under {runs_root} and --checkpoint_dir is unset, so there is "
-            f"nowhere to fetch them from. The math axis reads the adapters training wrote; it "
-            f"does not retrain. Pass --checkpoint_dir (on the platform: \"$EDULLM_CHECKPOINT_DIR\")."
+            f"no {arm} adapters under {runs_root} and neither --adapters_from nor "
+            f"--checkpoint_dir is set, so there is nowhere to fetch them from. The math axis "
+            f"reads the adapters training wrote; it does not retrain."
         )
+    print(f"  restoring {arm} adapters from {src}", flush=True)
     tmp = runs_root / f"_restore_{arm}.tar"
-    if not s3_get(args.checkpoint_dir, f"impl5_{arm}.tar", tmp):
-        raise SystemExit(f"impl5_{arm}.tar is not under {args.checkpoint_dir}. Without it the "
-                         f"math axis has no checkpoints to score.")
+    if not s3_get(src, f"impl5_{arm}.tar", tmp):
+        raise SystemExit(
+            f"impl5_{arm}.tar is not under {src}, so the math axis has no checkpoints to "
+            f"score.\nIf that prefix is this job's own EDULLM_CHECKPOINT_DIR, it is empty by "
+            f"construction — the variable is derived per run id, and the adapters are under "
+            f"the TRAINING run's id. Pass --adapters_from with that prefix."
+        )
     sh(f"tar xf {shlex.quote(str(tmp))} -C {shlex.quote(str(runs_root))}", check=False)
     tmp.unlink(missing_ok=True)
     n = len(list(out.glob("ckpt-*")))
