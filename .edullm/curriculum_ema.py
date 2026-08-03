@@ -200,9 +200,9 @@ def main(argv: list[str] | None = None) -> int:
     if not args.local_smoke:
         import wandb
 
-        project = f"curriculum-{args.arm}"
-        if (os.environ.get("EDULLM_WANDB_PROJECT") or project) != project:
-            raise SystemExit(f"EMA W&B project must be {project}")
+        project = os.environ.get("EDULLM_WANDB_PROJECT") or "curriculum"
+        if project != "curriculum":
+            raise SystemExit("EMA W&B project must be curriculum")
         run = wandb.init(
             project=project,
             name=f"{args.arm}-ema",

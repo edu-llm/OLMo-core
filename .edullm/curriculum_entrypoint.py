@@ -72,6 +72,25 @@ LR_ALPHA_F = 1.0
 CHECKPOINT_INTERVAL = 125
 EMA_STEPS = (2000, 2125, 2250, 2384)
 EMA_ALPHA = 0.8
+WANDB_PROJECT_NAME = "curriculum"
+
+
+def _wandb_project_name() -> str:
+    return (
+        os.environ.get("EDULLM_WANDB_PROJECT")
+        or os.environ.get("WANDB_PROJECT")
+        or WANDB_PROJECT_NAME
+    )
+
+
+def _reset_olmo_world_mesh() -> None:
+    try:
+        import olmo_core.distributed.parallel as parallel
+
+        if getattr(parallel, "_WORLD_MESH", None) is not None:
+            parallel._WORLD_MESH = None  # type: ignore[attr-defined]
+    except Exception:
+        pass
 
 
 class CurriculumConfigError(RuntimeError):
@@ -88,7 +107,7 @@ class Arm:
 
     @property
     def wandb_project(self) -> str:
-        return f"curriculum-{self.name}"
+        return WANDB_PROJECT_NAME
 
 
 def load_recipe(path: Path = RECIPE_PATH) -> tuple[Arm, ...]:
@@ -280,6 +299,7 @@ class CurriculumCheckpointCallback(Callback):
             torch.cuda.empty_cache()
 
     def _reload(self, checkpoint: Path) -> Any:
+        _reset_olmo_world_mesh()
         restored = self.module_builder()
         self.trainer.train_module = restored
         restored._attach_trainer(self.trainer)
@@ -454,8 +474,8 @@ def scientific_identity(
 
 
 def _validate_runtime(args: argparse.Namespace, arm: Arm) -> tuple[Path, Path, Path]:
-    expected_project = arm.wandb_project
-    project = os.environ.get("EDULLM_WANDB_PROJECT") or os.environ.get("WANDB_PROJECT")
+    expected_project = WANDB_PROJECT_NAME
+    project = _wandb_project_name()
     if project != expected_project:
         raise CurriculumConfigError(f"W&B project must be {expected_project!r}, got {project!r}")
     if os.environ.get("EDULLM_DATASET_ID") not in (None, "", PARENT_DATASET_ID):
@@ -600,7 +620,7 @@ def run_worker(args: argparse.Namespace) -> None:
             WandBCallback(
                 name=os.environ.get("WANDB_NAME")
                 or f"{os.environ.get('EDULLM_RUN_ID', arm.name)}-{arm.name}",
-                project=arm.wandb_project,
+                project=_wandb_project_name(),
                 group=os.environ.get("WANDB_RUN_GROUP"),
                 enabled=not args.local_smoke,
                 cancel_check_interval=10,
@@ -680,6 +700,7 @@ def torchrun_command(args: argparse.Namespace) -> list[str]:
         "torch.distributed.run",
         "--standalone",
         f"--nproc-per-node={args.nproc}",
+        "--",
         str(Path(__file__).resolve()),
         "--train-worker",
         "--arm-index",
