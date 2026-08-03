@@ -15,7 +15,7 @@ numbers remain unchanged.
 - model: `TransformerConfig.olmo2_370M`
 - sequence length: 2,048
 - global batch: 4,194,304 tokens
-- rank microbatch: 65,536 tokens
+- rank microbatch: 32,768 tokens
 - optimizer: SkipStepAdamW, LR `4e-4`, betas `(0.9, 0.95)`, weight decay
   `0.1` except `embeddings.weight` at `0`
 - HSDP: bf16 parameters, fp32 reductions
@@ -45,7 +45,7 @@ so no staging loop or custom data stream is needed.
 two-attempt resume behavior. The standard checkpointer writes permanent
 checkpoints at step 0, every 125 steps, and the final step.
 
-W&B uses `EDULLM_WANDB_PROJECT` (required to be `mixlaw`),
+W&B uses the required `EDULLM_WANDB_PROJECT` (normally `mixlaw`),
 `WANDB_RUN_GROUP` from the platform, and `WANDB_NAME=<run-id>-<mixture>`.
 At each permanent checkpoint, training synchronously runs the complete
 20-task OLMES BPB suite and uploads every metric and result JSON to W&B.
