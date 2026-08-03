@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import contextlib
+import json
+import logging
+import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
+
+log = logging.getLogger(__name__)
 
 import torch
 import torch.distributed as dist
@@ -12,8 +18,8 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 try:  # OLMo's optional runtime dependencies are not available in pure unit-test hosts.
-    from olmo_core.data.utils import get_labels
-    from olmo_core.distributed.utils import get_world_size, is_distributed
+    from olmo_core.data.utils import get_labels, split_batch
+    from olmo_core.distributed.utils import get_rank, get_world_size, is_distributed
     from olmo_core.nn.lm_head import LMOutputWithLoss
     from olmo_core.train.callbacks import Callback
 except ImportError:  # pragma: no cover - production images take the branch above.
@@ -21,6 +27,9 @@ except ImportError:  # pragma: no cover - production images take the branch abov
 
     class LMOutputWithLoss:  # type: ignore[no-redef]
         pass
+
+    def get_rank() -> int:
+        return dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
 
     def get_world_size() -> int:
         return dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
@@ -34,6 +43,16 @@ except ImportError:  # pragma: no cover - production images take the branch abov
             labels.masked_fill_(~batch["label_mask"], label_ignore_index)
         return F.pad(labels[..., 1:], (0, 1), value=label_ignore_index)
 
+    def split_batch(batch: dict[str, Any], num_microbatch_instances: int) -> list[dict[str, Any]]:
+        batch_size = batch["input_ids"].shape[0]
+        return [
+            {
+                key: value[start : start + num_microbatch_instances]
+                for key, value in batch.items()
+            }
+            for start in range(0, batch_size, num_microbatch_instances)
+        ]
+
 
 BLADE_START = 500
 BLADE_SYNC_STEPS = (500, 875, 1250, 1625, 2000)
@@ -41,6 +60,7 @@ BLADE_TAU = 375
 BLADE_K = 75
 BLADE_GAMMA = 0.6
 BLADE_LAMBDA = 1.0
+BLADE_REFERENCE_MICROBATCH_TOKENS = 8_192
 BLADE_CHECKPOINT_FORMAT = "blade_proxy_dynamic_ref_v2"
 
 
@@ -109,8 +129,11 @@ def _full_proxy_state(model: nn.Module) -> dict[str, Tensor]:
     try:
         from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_state_dict
 
+        # This state is loaded into a replicated reference model on every rank.
+        # Combining full_state_dict=True with cpu_offload=True only materializes
+        # the state on rank 0 and returns an empty dict elsewhere.
         return get_model_state_dict(
-            model, options=StateDictOptions(full_state_dict=True, cpu_offload=True)
+            model, options=StateDictOptions(full_state_dict=True, cpu_offload=False)
         )
     except ImportError:
         return {name: value.detach().cpu() for name, value in model.state_dict().items()}
@@ -136,6 +159,7 @@ class BladeCallback(Callback):
         schedule: BladeSchedule = BladeSchedule(),
         reference_lr: float = 4e-4,
         max_grad_norm: float = 1.0,
+        reference_microbatch_tokens: int = BLADE_REFERENCE_MICROBATCH_TOKENS,
     ) -> None:
         schedule.validate(total_steps)
         self.total_steps = int(total_steps)
@@ -145,11 +169,42 @@ class BladeCallback(Callback):
         self.schedule = schedule
         self.reference_lr = float(reference_lr)
         self.max_grad_norm = float(max_grad_norm)
+        self.reference_microbatch_tokens = int(reference_microbatch_tokens)
+        if self.reference_microbatch_tokens <= 0:
+            raise ValueError("BLADE reference microbatch tokens must be positive")
         self.reference: Optional[nn.Module] = None
         self.reference_optim: Optional[torch.optim.Optimizer] = None
         self.completed_step = 0
         self.last_sync: Optional[int] = None
         self._pending: Optional[Mapping[str, Any]] = None
+
+    def _k_progress_path(self) -> Path:
+        return self.trainer.work_dir / "blade_k_progress.json"
+
+    def _write_k_progress(self, *, trainer_step: int, k_step: int) -> None:
+        if get_rank() != 0:
+            return
+        payload = {
+            "trainer_step": int(trainer_step),
+            "k_step": int(k_step),
+            "k_total": int(self.schedule.k_steps),
+            "updated_at": time.time(),
+        }
+        path = self._k_progress_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        log.info(
+            "BLADE reference K-update %d/%d at trainer step %d",
+            k_step,
+            self.schedule.k_steps,
+            trainer_step,
+        )
+
+    def _clear_k_progress(self) -> None:
+        if get_rank() != 0:
+            return
+        with contextlib.suppress(FileNotFoundError):
+            self._k_progress_path().unlink()
 
     def _new_reference(self) -> None:
         self.reference = self.reference_factory()
@@ -168,10 +223,20 @@ class BladeCallback(Callback):
         state = _full_proxy_state(self.trainer.train_module.model)
         self.reference.load_state_dict(state, strict=True)
 
-    def _mean_ce(self, model: nn.Module, batch: dict[str, Any]) -> Tensor:
+    def _mean_ce(
+        self,
+        model: nn.Module,
+        batch: dict[str, Any],
+        *,
+        loss_div_factor: Optional[Tensor] = None,
+    ) -> Tensor:
         ids = batch["input_ids"].to(next(model.parameters()).device)
         labels = get_labels({"input_ids": ids})
-        valid = (labels != -100).sum().clamp(min=1)
+        valid = (
+            (labels != -100).sum().clamp(min=1)
+            if loss_div_factor is None
+            else loss_div_factor.to(ids.device)
+        )
         kwargs = {
             key: value.to(ids.device) if isinstance(value, Tensor) else value
             for key, value in batch.items()
@@ -191,28 +256,67 @@ class BladeCallback(Callback):
             raise RuntimeError("BLADE reference update requires LMOutputWithLoss")
         return output.loss
 
-    def _run_k_updates(self) -> None:
+    def _backward_mean_ce(
+        self,
+        model: nn.Module,
+        batch: dict[str, Any],
+        *,
+        weight: float,
+    ) -> None:
+        sequence_length = int(batch["input_ids"].shape[1])
+        if self.reference_microbatch_tokens < sequence_length:
+            raise RuntimeError(
+                "BLADE reference microbatch token limit is smaller than sequence length"
+            )
+        micro_batches = split_batch(
+            batch, self.reference_microbatch_tokens // sequence_length
+        )
+        labels = get_labels(batch)
+        divisor = (labels != -100).sum().clamp(min=1)
+        for micro_batch in micro_batches:
+            loss = self._mean_ce(
+                model, micro_batch, loss_div_factor=divisor
+            )
+            (float(weight) * loss).backward()
+            del loss
+
+    def _run_k_updates(self, *, trainer_step: Optional[int] = None) -> None:
         assert self.reference is not None and self.reference_optim is not None
+        trainer_step = (
+            int(self.trainer.global_step) if trainer_step is None else int(trainer_step)
+        )
         self.reference.train()
         for parameter in self.reference.parameters():
             parameter.requires_grad_(True)
-        for _ in range(self.schedule.k_steps):
-            self.reference_optim.zero_grad(set_to_none=True)
-            train_loss = self._mean_ce(self.reference, self.reference_train_stream.next())
-            hq_loss = self._mean_ce(self.reference, self.refhq_stream.next())
-            loss = hq_loss + self.schedule.lambda_penalty * train_loss
-            loss.backward()
-            if is_distributed() and get_world_size() > 1:
-                for parameter in self.reference.parameters():
-                    if parameter.grad is not None:
-                        dist.all_reduce(parameter.grad, op=dist.ReduceOp.AVG)
-            torch.nn.utils.clip_grad_norm_(self.reference.parameters(), self.max_grad_norm)
-            self.reference_optim.step()
+        try:
+            for k_idx in range(self.schedule.k_steps):
+                self._write_k_progress(trainer_step=trainer_step, k_step=k_idx + 1)
+                self.reference_optim.zero_grad(set_to_none=True)
+                self._backward_mean_ce(
+                    self.reference,
+                    self.reference_train_stream.next(),
+                    weight=self.schedule.lambda_penalty,
+                )
+                self._backward_mean_ce(
+                    self.reference,
+                    self.refhq_stream.next(),
+                    weight=1.0,
+                )
+                if is_distributed() and get_world_size() > 1:
+                    for parameter in self.reference.parameters():
+                        if parameter.grad is not None:
+                            dist.all_reduce(parameter.grad, op=dist.ReduceOp.AVG)
+                torch.nn.utils.clip_grad_norm_(self.reference.parameters(), self.max_grad_norm)
+                self.reference_optim.step()
+        finally:
+            self._clear_k_progress()
         self.reference.eval()
         for parameter in self.reference.parameters():
             parameter.requires_grad_(False)
 
-    def _proxy_and_reference_ce(self, batch: dict[str, Any]) -> tuple[Tensor, Tensor, Tensor]:
+    def _proxy_and_reference_ce_microbatch(
+        self, batch: dict[str, Any]
+    ) -> tuple[Tensor, Tensor, Tensor]:
         module = self.trainer.train_module
         ids = batch["input_ids"].to(module.device)
         labels = get_labels(batch, label_ignore_index=module.label_ignore_index).to(module.device)
@@ -246,11 +350,66 @@ class BladeCallback(Callback):
         module._model_mode = "train" if was_training else "eval"
         return labels, _output_ce(proxy, labels), _output_ce(reference, labels)
 
+    def _proxy_and_reference_ce(self, batch: dict[str, Any]) -> tuple[Tensor, Tensor, Tensor]:
+        sequence_length = int(batch["input_ids"].shape[1])
+        if self.reference_microbatch_tokens < sequence_length:
+            raise RuntimeError(
+                "BLADE selection microbatch token limit is smaller than sequence length"
+            )
+        labels, proxy_ce, reference_ce = [], [], []
+        for micro_batch in split_batch(
+            batch, self.reference_microbatch_tokens // sequence_length
+        ):
+            micro_labels, micro_proxy_ce, micro_reference_ce = (
+                self._proxy_and_reference_ce_microbatch(micro_batch)
+            )
+            labels.append(micro_labels)
+            proxy_ce.append(micro_proxy_ce)
+            reference_ce.append(micro_reference_ce)
+        return (
+            torch.cat(labels, dim=0),
+            torch.cat(proxy_ce, dim=0),
+            torch.cat(reference_ce, dim=0),
+        )
+
+    def _sync_checkpoint_path(self, step: int, phase: str) -> str:
+        return str(
+            Path(self.trainer.save_folder)
+            / "sync_checkpoints"
+            / f"step{int(step)}-{phase}"
+        )
+
+    def _save_sync_checkpoint(self, *, step: int, phase: str) -> None:
+        path = self._sync_checkpoint_path(step, phase)
+        if self.trainer.checkpointer.dir_is_checkpoint(path):
+            log.info("BLADE %s-sync checkpoint already exists at '%s'", phase, path)
+            return
+        log.info(
+            "Saving BLADE %s-sync checkpoint for step %d to '%s'...",
+            phase,
+            step,
+            path,
+        )
+        self.trainer._log_metrics()
+        self.trainer._join_bookkeeping_ops()
+        self.trainer.checkpointer.save(
+            path,
+            self.trainer.train_module,
+            self.trainer.state_dict(),
+            ephemeral=False,
+        )
+        for callback in self.trainer.callbacks.values():
+            callback.post_checkpoint_saved(path)
+        log.info("BLADE %s-sync checkpoint saved", phase)
+
     def pre_step(self, batch: dict[str, Any]) -> None:
         step = int(self.trainer.global_step)
-        if step in self.schedule.sync_steps:
+        if step in self.schedule.sync_steps and self.last_sync != step:
+            # Compatibility fallback for checkpoints created before sync-boundary
+            # checkpoints moved the update to the end of the preceding step.
+            log.warning("Running BLADE sync %d in pre_step compatibility mode", step)
             self._sync_from_proxy()
-            self._run_k_updates()
+            self._run_k_updates(trainer_step=step)
             self.last_sync = step
         if step >= self.schedule.start:
             if self.reference is None:
@@ -268,6 +427,22 @@ class BladeCallback(Callback):
 
     def post_train_batch(self) -> None:
         self.completed_step = int(self.trainer.global_step)
+        sync_step = self.completed_step + 1
+        if sync_step not in self.schedule.sync_steps or self.last_sync == sync_step:
+            return
+
+        # The first pre-sync checkpoint still needs a reference state. Initializing
+        # it from the just-completed proxy is equivalent to the first sync. The
+        # actual sync is repeated below before K updates so phase boundaries remain
+        # explicit, while later pre-sync saves preserve the previous reference.
+        if self.reference is None:
+            self._sync_from_proxy()
+        self._save_sync_checkpoint(step=sync_step, phase="pre")
+
+        self._sync_from_proxy()
+        self._run_k_updates(trainer_step=sync_step)
+        self.last_sync = sync_step
+        self._save_sync_checkpoint(step=sync_step, phase="post")
 
     def post_attach(self) -> None:
         if self._pending is not None:
@@ -302,11 +477,16 @@ class BladeCallback(Callback):
         self.last_sync = state.get("last_sync")
         if not 0 <= self.completed_step <= self.total_steps:
             raise ValueError("BLADE completed step is outside the locked run")
-        expected_last_sync = next(
+        expected_completed_sync = next(
             (step for step in reversed(self.schedule.sync_steps) if step <= self.completed_step),
             None,
         )
-        if self.last_sync != expected_last_sync:
+        boundary_sync = (
+            self.completed_step + 1
+            if self.completed_step + 1 in self.schedule.sync_steps
+            else None
+        )
+        if self.last_sync not in {expected_completed_sync, boundary_sync}:
             raise ValueError("BLADE last sync is inconsistent with the completed checkpoint step")
         reference_state = state.get("dynamic_reference")
         if reference_state is not None:
@@ -319,7 +499,7 @@ class BladeCallback(Callback):
             self.reference.eval()
             for parameter in self.reference.parameters():
                 parameter.requires_grad_(False)
-        elif self.completed_step >= self.schedule.start:
+        elif self.completed_step >= self.schedule.start or self.last_sync is not None:
             raise ValueError("post-warmup BLADE checkpoint is missing its dynamic reference")
         self.reference_train_stream.load_state_dict(state["reference_train_stream"])
         self.refhq_stream.load_state_dict(state["refhq_stream"])

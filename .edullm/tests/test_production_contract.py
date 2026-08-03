@@ -67,6 +67,44 @@ def test_task_loss_callback_uploads_only_the_final_checkpoint(
     assert uploads == [(125, False), (250, True)]
 
 
+def test_task_loss_callback_skips_already_durable_result_on_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    progress_dir = tmp_path / "progress"
+    results_dir = progress_dir / "task_loss"
+    results_dir.mkdir(parents=True)
+    (results_dir / "step0_task_loss.json").write_text(
+        json.dumps({"task_loss_bpb": _labels()}),
+        encoding="utf-8",
+    )
+    (progress_dir / "last_durable_step.json").write_text(
+        json.dumps({"last_durable_step": 250, "task_loss_complete": True}),
+        encoding="utf-8",
+    )
+    finalized: list[int] = []
+    monkeypatch.setattr(
+        task_loss,
+        "finalize_permanent_checkpoint",
+        lambda **kwargs: finalized.append(int(kwargs["step"])),
+    )
+    monkeypatch.setattr(task_loss, "_HAS_OLMO_CORE", True)
+    callback = task_loss.TaskLossEvalCallback(
+        total_steps=250,
+        save_folder=tmp_path / "checkpoints",
+        run_name="unit",
+        results_dir=results_dir,
+        eval_script=tmp_path / "eval.py",
+        interval=125,
+        progress_dir=progress_dir,
+    )
+    callback.trainer = type("Trainer", (), {"callbacks": {}})()
+
+    callback._maybe_finalize(0)
+
+    assert finalized == []
+    assert callback._completed == {0}
+
+
 def test_finalize_skips_nonfinal_checkpoint_artifact(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

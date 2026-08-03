@@ -27,6 +27,7 @@ class ArmSpec:
     run_id: str
     keep_fraction: float = 1.0
     max_tokens: Optional[int] = 9_900_000_000
+    wandb_project_override: Optional[str] = None
     reference_contract: Optional[str] = None
     early_reference_contract: Optional[str] = None
     late_reference_contract: Optional[str] = None
@@ -37,7 +38,7 @@ class ArmSpec:
 
     @property
     def wandb_project(self) -> str:
-        return f"token-selection-{self.name}"
+        return self.wandb_project_override or f"token-selection-{self.name}"
 
     @property
     def is_online_selection(self) -> bool:
@@ -51,6 +52,7 @@ ARM_SPECS: dict[str, ArmSpec] = {
         REGMIX,
         "rho-1-regmix10b-v1",
         keep_fraction=0.6,
+        wandb_project_override="token-selection",
         reference_contract=REFHQ_STEP_1315,
     ),
     "rel-ema-exp": ArmSpec(
@@ -59,6 +61,7 @@ ARM_SPECS: dict[str, ArmSpec] = {
         REGMIX,
         "rel-ema-exp-10b-scratch-v1",
         keep_fraction=0.6,
+        wandb_project_override="token-selection",
         ema_seed="zero",
         ema_tau=300.0,
     ),
@@ -68,6 +71,7 @@ ARM_SPECS: dict[str, ArmSpec] = {
         REGMIX,
         "middle-ppl-token-10b-v2",
         keep_fraction=0.6,
+        wandb_project_override="token-selection",
         late_reference_contract=f"average RefHQ steps {REFHQ_LATE_STEPS}",
     ),
     "attention": ArmSpec(
@@ -76,6 +80,7 @@ ARM_SPECS: dict[str, ArmSpec] = {
         REGMIX,
         "attention-topk-10b-scratch-v1",
         keep_fraction=0.6,
+        wandb_project_override="token-selection",
     ),
     "blade": ArmSpec(
         "blade",
@@ -83,6 +88,7 @@ ARM_SPECS: dict[str, ArmSpec] = {
         REGMIX,
         "blade-regmix10b-v2",
         keep_fraction=0.6,
+        wandb_project_override="token-selection",
         requires_refhq_stream=True,
     ),
 }

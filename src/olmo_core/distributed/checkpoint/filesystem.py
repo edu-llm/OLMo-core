@@ -142,9 +142,15 @@ def _write_items(
                 )
             )
 
-        # Ensure all data is written to disk.
+        # Ensure all data is written to disk. Some network filesystems (notably
+        # RunPod's FUSE volume) return EIO from fdatasync even after accepting
+        # the complete write. Allow operators to rely on close + atomic rename
+        # for those filesystems instead of aborting every distributed save.
         tmp_file.flush()
-        if hasattr(os, "fdatasync"):  # only available on linux
+        skip_fdatasync = os.environ.get(
+            "OLMO_CORE_CHECKPOINT_SKIP_FDATASYNC", ""
+        ).lower() in {"1", "true", "yes"}
+        if hasattr(os, "fdatasync") and not skip_fdatasync:  # only available on linux
             os.fdatasync(tmp_file)  # type: ignore
         tmp_file.close()
 

@@ -32,6 +32,53 @@ def _path(name: str, default: str = "") -> str | None:
     return value or None
 
 
+def _latest_resume_checkpoint(save_folder: Path) -> tuple[Path, bool]:
+    """Return the newest normal or BLADE sync-boundary checkpoint.
+
+    The boolean indicates a sync-boundary checkpoint, whose immutable run
+    fingerprint lives at the save-folder root rather than inside the checkpoint.
+    """
+
+    explicit = os.environ.get("EDULLM_RESUME_CHECKPOINT", "").strip()
+    if explicit:
+        path = Path(explicit)
+        if not (path / "model_and_optim" / ".metadata").is_file():
+            raise SystemExit(
+                f"EDULLM_RESUME_CHECKPOINT is not materialized: {path}"
+            )
+        return path, path.parent != save_folder
+
+    candidates: list[tuple[int, int, Path, bool]] = []
+    for path in save_folder.glob("step*"):
+        if (
+            not path.is_dir()
+            or not path.name.removeprefix("step").isdigit()
+            or not (path / "model_and_optim" / ".metadata").is_file()
+        ):
+            continue
+        candidates.append((int(path.name.removeprefix("step")), 2, path, False))
+
+    sync_root = save_folder / "sync_checkpoints"
+    for path in (sync_root.glob("step*-*") if sync_root.is_dir() else ()):
+        name = path.name.removeprefix("step")
+        step_text, separator, phase = name.partition("-")
+        if (
+            path.is_dir()
+            and separator
+            and step_text.isdigit()
+            and phase in {"pre", "post"}
+            and (path / "model_and_optim" / ".metadata").is_file()
+        ):
+            # A completed normal step wins a tie. Otherwise post-sync wins pre-sync.
+            phase_priority = 1 if phase == "post" else 0
+            candidates.append((int(step_text), phase_priority, path, True))
+
+    if not candidates:
+        raise SystemExit("--resume found no local or restored checkpoint")
+    _, _, path, is_sync_boundary = max(candidates)
+    return path, is_sync_boundary
+
+
 def resolve_corpus(**kwargs):
     """Import the dataset reader only in the runtime that needs to stage data."""
     from train_on_corpus import resolve_corpus as resolve
@@ -155,17 +202,17 @@ def main() -> None:
         return
 
     save_folder.mkdir(parents=True, exist_ok=True)
+    resume_checkpoint: Path | None = None
     if args.resume:
         artifact = os.environ.get("WANDB_RESUME_ARTIFACT", "").strip()
         if artifact and not any(save_folder.glob("step*")):
             restore_checkpoint_artifact(artifact, save_folder)
-        checkpoints = sorted(
-            (path for path in save_folder.glob("step*") if path.is_dir()),
-            key=lambda path: int(path.name.removeprefix("step")),
+        resume_checkpoint, is_sync_boundary = _latest_resume_checkpoint(save_folder)
+        assert_resume_fingerprint(
+            save_folder if is_sync_boundary else resume_checkpoint,
+            identity,
         )
-        if not checkpoints:
-            raise SystemExit("--resume found no local or restored checkpoint")
-        assert_resume_fingerprint(checkpoints[-1], identity)
+        print(f"Resuming from checkpoint: {resume_checkpoint}", flush=True)
     elif any(save_folder.iterdir()):
         raise SystemExit(f"fresh run refuses non-empty save folder: {save_folder}")
 
@@ -196,6 +243,12 @@ def main() -> None:
             production=not args.local,
         )
         write_identity(save_folder, progress_dir, identity)
+        if resume_checkpoint is not None:
+            trainer.load_checkpoint(
+                resume_checkpoint,
+                load_trainer_state=True,
+                load_optim_state=True,
+            )
         trainer.fit()
     finally:
         teardown_training_environment()
