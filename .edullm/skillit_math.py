@@ -12,7 +12,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 RECIPE_PATH = Path(__file__).with_name("skillit_recipe.json")
-RECIPE_SHA256 = "f967a0befaa04f95d393ca95a6b175cfbfed85811d542d9526941d9c1bde32f8"
+RECIPE_SHA256 = "80842f2746f4e005f1a2771a32e4131f06dc22a28c15c89c5ce9b6688f6326e5"
 SOURCE_COMMIT = "b435cbe9c352399fc4ab54b310f36d28f6c9746f"
 OFFLINE_A_SOURCE_SHA256 = "e542e3e66f70c752110b51f60d1ee84f5f7860931dce5684e7a621f35dd74a21"
 DERIVATIVE_FIT_SOURCE_SHA256 = "acb4754b46cd6a588dffce7e7ad0d9bd70b0188db010669a7cfccf8622da2bcc"
