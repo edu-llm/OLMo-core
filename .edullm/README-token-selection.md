@@ -4,7 +4,7 @@ This branch contains the five approved RegMix token-selection arms outside
 `src/olmo_core`. Every arm uses the same `TransformerConfig.olmo2_370M` recipe:
 `d_model=1024`, 16 layers/heads, reordered norm, gated-SiLU 4096 MLP, full
 attention, QK-RMSNorm, RoPE theta 500,000, Dolma2 vocabulary 100,352, sequence
-2048, global batch 4,194,304 tokens, and 65,536 rank microbatch tokens.
+2048, global batch 4,194,304 tokens, and 32,768 rank microbatch tokens.
 Optimization is SkipStepAdamW at peak LR `4e-4`, betas `(0.9, 0.95)`, weight
 decay `0.1` except embeddings at `0`, 24-step cosine warmup, `alpha_f=0.1`,
 Z-loss `1e-5`, grad norm 1.0, HSDP bf16 parameters/fp32 reductions, init seed
