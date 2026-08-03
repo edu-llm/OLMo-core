@@ -15,9 +15,9 @@ Usage (per arm; GPU auto-detected)::
 
     .venv/bin/python src/scripts/latentcot/train_codi.py \
         --arm A2 --rung olmo2_370M \
-        --train-data local/latentcot/graph-reachability-depth/conversations/train-00000.jsonl \
-        --test-data  local/latentcot/graph-reachability-depth/conversations/heldout-00000.jsonl \
-        --steps 5000 --batch-size 16 --init-seed 0 --seed 1 --out local/latentcot/runs
+        --train-data data/latentcot/graph-reachability-depth/conversations/train-00000.jsonl \
+        --test-data  data/latentcot/graph-reachability-depth/conversations/heldout-00000.jsonl \
+        --steps 5000 --batch-size 16 --init-seed 0 --seed 1 --out runs/latentcot
 """
 
 import argparse
@@ -45,7 +45,7 @@ def main() -> None:
     parser.add_argument("--init-seed", type=int, default=0, help="SAME across arms (shared init)")
     parser.add_argument("--seed", type=int, default=0, help="data-shuffle seed (per run)")
     parser.add_argument("--init-checkpoint", default=None, help="optional shared base state_dict")
-    parser.add_argument("--out", type=Path, default=Path("local/latentcot/runs"))
+    parser.add_argument("--out", type=Path, default=Path("runs/latentcot"))
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"

@@ -3,7 +3,7 @@
 Runnable training/eval scripts for the latent chain-of-thought experiments
 (CODI continuous-thought substrate + superposition / distributional-shift study).
 
-Pre-registered design and build checklist: `local/latent-cot-superposition-prd.md`.
+Pre-registered design and build checklist: `docs/latent-cot/latent-cot-superposition-prd.md`.
 
 Planned (per the PRD build checklist, section 8):
 

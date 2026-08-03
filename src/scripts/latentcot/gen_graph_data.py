@@ -149,7 +149,7 @@ def main() -> None:
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path("local/latentcot/graph-reachability-depth"),
+        default=Path("data/latentcot/graph-reachability-depth"),
         help="publish source dir (contains ONLY the group directory)",
     )
     parser.add_argument("--per-combo", type=int, default=150)

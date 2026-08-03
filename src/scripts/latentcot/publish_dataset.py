@@ -13,7 +13,7 @@ that holds the data and can reach AWS — NOT needed on a GPU box.
 Usage::
 
     .venv/bin/python src/scripts/latentcot/publish_dataset.py \
-        --source local/latentcot/graph-reachability-depth
+        --source data/latentcot/graph-reachability-depth
 """
 
 import argparse
@@ -61,7 +61,7 @@ GROUP_META = {
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--source", type=Path, default=Path("local/latentcot/graph-reachability-depth")
+        "--source", type=Path, default=Path("data/latentcot/graph-reachability-depth")
     )
     args = parser.parse_args()
 

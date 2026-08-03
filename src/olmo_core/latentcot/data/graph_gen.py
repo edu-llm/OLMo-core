@@ -1,7 +1,7 @@
 """
 Synthetic directed-graph reachability generator for the latent-CoT experiments.
 
-This is Phase 1 of ``local/latent-cot-superposition-prd.md``. It produces
+This is Phase 1 of ``docs/latent-cot/latent-cot-superposition-prd.md``. It produces
 controllable reachability problems on *layered* directed graphs, where every
 edge advances exactly one level. That structure gives three properties the
 experiment relies on:

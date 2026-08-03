@@ -3,12 +3,12 @@ Evaluate trained arms and emit the gates + probe report (PRD Phase 6).
 
 Loads each arm's trained checkpoint, runs the held-out test set, and writes a JSON report
 (plus printed tables and, if matplotlib is available, a gate-A slope plot) under
-``local/latentcot/eval/``.
+``runs/latentcot/eval/``.
 
 Usage::
 
     .venv/bin/python src/scripts/latentcot/eval.py \
-        --test-data local/latentcot/graph-reachability-depth/conversations/heldout-00000.jsonl \
+        --test-data data/latentcot/graph-reachability-depth/conversations/heldout-00000.jsonl \
         --num-continuous-thoughts 8 \
         --arm A0=/path/to/A0/ckpt --arm A2=/path/to/A2/ckpt \
         --arm A3=/path/to/A3/ckpt --arm A4=/path/to/A4/ckpt
@@ -77,7 +77,7 @@ def main() -> None:
         metavar="ARM=CKPT_DIR",
         help="repeatable, e.g. --arm A2=/path/to/ckpt",
     )
-    parser.add_argument("--out", type=Path, default=Path("local/latentcot/eval"))
+    parser.add_argument("--out", type=Path, default=Path("runs/latentcot/eval"))
     args = parser.parse_args()
 
     model_config = getattr(TransformerConfig, args.model)(

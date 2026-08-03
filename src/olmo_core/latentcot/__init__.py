@@ -1,7 +1,7 @@
 """
 Latent chain-of-thought reasoning for OLMo-core (CODI substrate + superposition study).
 
-Experiment code for the pre-registered PRD at ``local/latent-cot-superposition-prd.md``.
+Experiment code for the pre-registered PRD at ``docs/latent-cot/latent-cot-superposition-prd.md``.
 Everything for the continuous-thought / superposition experiments lives under this
 package so it stays isolated from the rest of OLMo-core and does not conflict on ``main``.
 
