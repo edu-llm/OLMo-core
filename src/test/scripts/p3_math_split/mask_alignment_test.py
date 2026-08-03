@@ -1,150 +1,83 @@
-"""The label mask must cover the fact block and nothing else, in token space.
+"""Compatibility guards for the derived-mask artifact design.
 
-``corpus_invariants_test.py`` checks the mask in *character* space. By the time OLMo-core
-sees it, the mask is a per-token boolean, and the conversion is where a silent
-off-by-one lives: get the direction of the shift wrong and the split arm trains on the
-last fact token while skipping the first proof token, which is exactly the sort of thing
-that produces a small, plausible, wrong result.
-
-Run:
-    TOKENIZED_DIR=tokenized pytest -v src/test/scripts/p3_math_split/mask_alignment_test.py
+The original tests loaded `tokens.npy` and parallel boolean mask arrays. Published
+data now consists only of raw packed uint32 token shards; both arms read identical
+bytes and `DerivedMaskTrainModule` locates every fact boundary at runtime. Detailed
+packed-byte checks live in `packed_artifact_test.py`; this file prevents regression
+to sidecars or a second arm-specific token stream.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
 
-TOKENIZED = os.environ.get("TOKENIZED_DIR", "tokenized")
-CORPUS = os.environ.get("CORPUS_DIR", "corpus")
-SPLIT = os.environ.get("SPLIT_NAME", "train")
-HDR = "I know these mathematical statements:"
-SEP = "---"
+torch = pytest.importorskip("torch")
 
+SCRIPTS = Path(__file__).resolve().parents[3] / "scripts" / "train" / "p3_math_split"
+sys.path.insert(0, str(SCRIPTS))
 
-def _path(suffix):
-    return os.path.join(TOKENIZED, f"{SPLIT}_{suffix}")
+from train_module import DerivedMaskTrainModule  # noqa: E402
 
-
-@pytest.fixture(scope="module")
-def meta():
-    p = _path("meta.json")
-    if not os.path.exists(p):
-        pytest.skip(f"not tokenized yet: {p}")
-    return json.load(open(p, encoding="utf-8"))
+TOKENIZED = Path(os.environ.get("TOKENIZED_DIR", "artifacts/public"))
 
 
 @pytest.fixture(scope="module")
-def arrays(meta):
-    return {
-        "tokens": np.load(_path("tokens.npy")),
-        "dense": np.load(_path("label_mask_dense.npy")),
-        "split": np.load(_path("label_mask_split.npy")),
-        "index": json.load(open(_path("index.json"), encoding="utf-8")),
-    }
+def train_meta():
+    path = TOKENIZED / "train_meta.json"
+    if not path.exists():
+        pytest.skip(f"tokenized artifacts unavailable: {path}")
+    return json.loads(path.read_text())
 
 
-def test_all_three_arrays_are_the_same_length(arrays, meta):
-    n = meta["n_instances"] * meta["sequence_length"]
-    assert arrays["tokens"].shape == (n,)
-    assert arrays["dense"].shape == (n,)
-    assert arrays["split"].shape == (n,)
+def test_no_published_mask_sidecars(train_meta):
+    """The split/dense difference belongs to code, never parallel mutable bytes."""
+    assert train_meta["packed"] is True
+    assert not list(TOKENIZED.rglob("*label_mask*"))
+    assert not list(TOKENIZED.rglob("*.npy"))
 
 
-def test_masks_are_bool_and_tokens_are_uint32(arrays):
-    """OLMo-core reads label masks with dtype=np.bool_ (numpy_dataset.py:607)."""
-    assert arrays["dense"].dtype == np.bool_
-    assert arrays["split"].dtype == np.bool_
-    assert arrays["tokens"].dtype == np.uint32, "vocab 151936 does not fit in uint16"
+def test_both_arms_read_one_shared_token_inventory(train_meta):
+    paths = [
+        shard["path"]
+        for group in train_meta["groups"].values()
+        for shard in group["shards"]
+    ]
+    assert len(paths) == 6
+    assert all("/train-" in path for path in paths)
+    assert not any("dense" in path or "split" in path for path in paths)
 
 
-def test_split_mask_is_a_strict_subset_of_dense(arrays):
-    """Split supervises a subset of dense: the fact tokens, and only those, differ."""
-    dense, split = arrays["dense"], arrays["split"]
-    assert np.all(dense | split == dense), "split supervises a token dense does not"
-    assert split.sum() < dense.sum(), "the masks are identical — there is no experiment"
-
-
-def test_the_two_arms_differ_only_inside_fact_blocks(arrays, meta):
-    """Every position where the masks disagree must be a real (non-pad) token."""
-    dense, split = arrays["dense"], arrays["split"]
-    differ = dense & ~split
-    assert differ.sum() > 0
-    # Differences must never fall on padding, which is unsupervised in both arms.
-    assert np.all(dense[differ]), "a masked-only position is not supervised in dense either"
-    S = meta["sequence_length"]
-    for entry in arrays["index"][:200]:
-        lo = entry["instance"] * S
-        n_tok = entry["n_tokens"]
-        assert not differ[
-            lo + n_tok : lo + S
-        ].any(), f"instance {entry['instance']}: arms differ on padding"
-        assert differ[lo : lo + n_tok].sum() == entry["n_fact_tokens"]
-
-
-def test_padding_is_unsupervised_in_both_arms(arrays, meta):
-    S = meta["sequence_length"]
-    for entry in arrays["index"][:500]:
-        lo = entry["instance"] * S
-        hi = lo + entry["n_tokens"]
-        end = lo + S
-        assert not arrays["dense"][hi:end].any(), "dense supervises padding"
-        assert not arrays["split"][hi:end].any(), "split supervises padding"
-
-
-def test_dense_supervises_every_real_token(arrays, meta):
-    S = meta["sequence_length"]
-    for entry in arrays["index"][:500]:
-        lo = entry["instance"] * S
-        hi = lo + entry["n_tokens"]
-        assert arrays["dense"][lo:hi].all(), "dense skips a real token"
-
-
-def test_split_mask_boundary_lands_on_the_separator():
-    """Decode the first supervised token of each split instance and check where it is.
-
-    This is the assertion that would fail on an off-by-one: the first token the split
-    arm scores must be at or after the separator, never inside the last fact.
-    """
-    transformers = pytest.importorskip("transformers")
-    meta_path = _path("meta.json")
-    if not os.path.exists(meta_path):
-        pytest.skip("not tokenized yet")
-    meta = json.load(open(meta_path, encoding="utf-8"))
-    tokens = np.load(_path("tokens.npy"))
-    split = np.load(_path("label_mask_split.npy"))
-    index = json.load(open(_path("index.json"), encoding="utf-8"))
-
-    tok = transformers.AutoTokenizer.from_pretrained(meta["tokenizer"])
-    S = meta["sequence_length"]
-    checked = 0
-    for entry in index[:50]:
-        lo = entry["instance"] * S
-        hi = lo + entry["n_tokens"]
-        local = np.flatnonzero(split[lo:hi])
-        assert local.size, f"instance {entry['instance']} has no supervised tokens"
-        first = int(local[0])
-
-        prefix = tok.decode(tokens[lo : lo + first].tolist())
-        assert HDR in prefix, "the fact-block header is not in the unsupervised prefix"
-        assert SEP not in prefix, (
-            f"instance {entry['instance']}: the separator is inside the masked prefix, "
-            f"so the split arm is not being scored on the separator it must emit"
-        )
-        # Everything from the first supervised token on must contain the goal.
-        rest = tok.decode(tokens[lo + first : hi].tolist())
-        assert "GOAL" in rest, "the GOAL line is not in the supervised region"
-        checked += 1
-    assert checked, "no instances checked"
-
-
-def test_fact_fraction_is_in_the_design_band(meta):
-    frac = meta["fact_token_fraction"]
-    assert 0.05 < frac < 0.60, (
-        f"fact tokens are {frac:.1%} of supervised tokens; outside the 5-60% band. "
-        f"Too low and the arms barely differ; too high and the split arm has little "
-        f"signal. 17-30% is the design target."
+def test_runtime_mask_boundary_on_real_packed_bytes(train_meta):
+    group = train_meta["groups"]["metamath"]
+    shard = TOKENIZED / group["shards"][0]["path"]
+    rows = np.memmap(shard, mode="r", dtype="<u4").reshape(
+        -1, train_meta["sequence_length"]
     )
+    ids = torch.from_numpy(np.asarray(rows[0], dtype=np.int64).copy()).unsqueeze(0)
+
+    module = DerivedMaskTrainModule.__new__(DerivedMaskTrainModule)
+    module._sep = torch.tensor(train_meta["separator_ids"], dtype=torch.long)
+    module.eos_token_id = train_meta["eos_token_id"]
+    module.pad_token_id = train_meta["pad_token_id"]
+
+    supervised = module.supervised_mask(ids)[0]
+    padding = module.padding_mask(ids)[0]
+    assert torch.any(supervised)
+    assert torch.any(~supervised & ~padding)
+    assert not torch.any(supervised & padding)
+
+    sep = module._sep
+    starts = torch.nonzero(
+        (ids.unfold(1, len(sep), 1) == sep).all(dim=-1)[0]
+    ).flatten()
+    assert len(starts) >= 1
+    for start in starts:
+        assert not supervised[start : start + len(sep)].any()
+        assert supervised[start + len(sep)]
+

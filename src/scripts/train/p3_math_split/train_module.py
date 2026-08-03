@@ -172,6 +172,21 @@ class DerivedMaskTrainModule(FixedDivisorTransformerTrainModule):
         last_open = torch.cummax(torch.where(opens, idx, -torch.ones_like(idx)), dim=1)[0]
         return last_close > last_open
 
+    def padding_mask(self, input_ids: torch.Tensor) -> torch.Tensor:
+        """True only on padding, preserving genuine EOS predictions.
+
+        Qwen2.5 uses one id for EOS and padding. Every real document ends in EOS,
+        while fixed-width padding is the repeated-EOS tail after the final document.
+        Masking `input_ids == pad_token_id` would therefore remove every real EOS
+        target and teach neither arm to stop.
+        """
+        is_pad = input_ids == self.pad_token_id
+        if self.pad_token_id != self.eos_token_id:
+            return is_pad
+        previous_is_eos = torch.zeros_like(is_pad)
+        previous_is_eos[:, 1:] = input_ids[:, :-1] == self.eos_token_id
+        return is_pad & previous_is_eos
+
     def model_forward(  # type: ignore[override]
         self,
         input_ids: torch.Tensor,
@@ -180,7 +195,7 @@ class DerivedMaskTrainModule(FixedDivisorTransformerTrainModule):
     ):
         if labels is not None:
             labels = labels.clone()
-            labels[input_ids == self.pad_token_id] = -100
+            labels[self.padding_mask(input_ids)] = -100
             if self.arm == "split":
                 labels[~self.supervised_mask(input_ids)] = -100
         return super().model_forward(input_ids, labels=labels, **kwargs)

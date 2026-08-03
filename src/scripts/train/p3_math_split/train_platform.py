@@ -339,13 +339,17 @@ def corpus_from_manifest(read, *, dataset_id: str, version: str, tokenizer_id: s
             "in-range-looking id.",
         )
 
+    # Published dependencies arrive pinned as tokenizer/<name>/vN, while the
+    # architecture registry is keyed by version-independent tokenizer identity.
+    tokenizer_config_id = re.sub(r"/v\d+$", "", tokenizer_id)
     try:
-        tokenizer = TOKENIZERS[tokenizer_id]()
+        tokenizer = TOKENIZERS[tokenizer_config_id]()
     except KeyError:
         known = ", ".join(sorted(TOKENIZERS)) or "none"
         raise Refusal(
             Stage.THIS_IMAGE_HAS_NO_CONFIG_FOR_THAT_TOKENIZER,
-            f"no OLMo-core config for {tokenizer_id}; this image knows: {known}",
+            f"no OLMo-core config for {tokenizer_id} "
+            f"(normalized to {tokenizer_config_id}); this image knows: {known}",
         ) from None
 
     return Corpus(

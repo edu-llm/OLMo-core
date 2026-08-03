@@ -82,6 +82,37 @@ def test_dense_and_split_differ_exactly_on_the_fact_block():
     assert sum(1 for v in mask if v == 0) == 4, "and only the block plus separator"
 
 
+def test_qwen_eos_is_supervised_but_repeated_eos_padding_is_not():
+    """Qwen uses id 151643 for both EOS and pad.
+
+    Masking every token equal to pad_token_id also masks every genuine proof-ending
+    EOS, so neither arm learns to stop. In packed rows, padding starts after the
+    final real EOS and is therefore the repeated-EOS tail.
+    """
+    m = DerivedMaskTrainModule.__new__(DerivedMaskTrainModule)
+    m.eos_token_id = EOS
+    m.pad_token_id = EOS
+    ids = torch.tensor([[1, 7, 8, 2, EOS, 3, 7, 8, 4, EOS, EOS, EOS]])
+    got = DerivedMaskTrainModule.padding_mask(m, ids)[0].tolist()
+    assert got == [False] * 10 + [True, True]
+
+
+def test_distinct_pad_id_masks_every_occurrence():
+    m = DerivedMaskTrainModule.__new__(DerivedMaskTrainModule)
+    m.eos_token_id = EOS
+    m.pad_token_id = 0
+    ids = torch.tensor([[1, 7, 8, 2, EOS, 0, 0]])
+    assert DerivedMaskTrainModule.padding_mask(m, ids)[0].tolist() == [
+        False,
+        False,
+        False,
+        False,
+        False,
+        True,
+        True,
+    ]
+
+
 def test_empty_separator_is_rejected_at_construction():
     with pytest.raises(ValueError, match="separator_ids is empty"):
         DerivedMaskTrainModule.__init__(
