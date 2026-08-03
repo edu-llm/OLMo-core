@@ -407,8 +407,11 @@ and sweep `d_model`, taking the four widths the FFN's `multiple_of=256` quantum 
 
 Built from `TransformerConfig.olmo2_190M(vocab_size, n_layers=12, d_model=..., n_heads=...)`. **Rows
 are labelled by their measured non-embedding count, not by a round-number target**, because the labels
-are cosmetic and the measurement is not. The ladder is a clean ~2.2× geometric progression, which is
-what the design requires.
+are cosmetic and the measurement is not. The rungs step 2.25×, 2.25×, then 1.78×; the last step
+is short because 768 is the width OLMo-core's own `olmo2_190M` uses, so `d_ffn` matches the
+preset exactly, and because the top row is two cells whose job is to break the size confound
+rather than to extend the progression. Holding 2.1× would need `d_model=832`, 38% more cost on
+the grid's most expensive row for no additional science.
 
 Note the FFN sizing, because it is easy to get wrong by a third. Every `olmo2_*` factory applies
 `hidden_size_multiplier=1.5` on top of `8·d_model/3` and then rounds up to a multiple of 256
