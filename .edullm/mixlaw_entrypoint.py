@@ -231,6 +231,7 @@ def build_experiment_config(
             "EDULLM_RANK_MICROBATCH_TOKENS must be a positive sequence-length multiple "
             "that evenly divides the per-step global batch"
         )
+    skip_pre_train = environ.get("WANDB_RESUME", "").lower() in {"must", "allow"}
     tokenizer = TokenizerConfig.dolma2()
 
     dataset = NumpyFSLDatasetConfig.from_src_mix(
@@ -295,7 +296,8 @@ def build_experiment_config(
             CheckpointerCallback(
                 save_interval=SAVE_INTERVAL,
                 ephemeral_save_interval=None,
-                pre_train_checkpoint=True,
+                fixed_steps=[max_steps],
+                pre_train_checkpoint=not skip_pre_train,
                 save_async=True,
                 max_checkpoints=None,
             ),

@@ -302,6 +302,7 @@ def test_checkpoint_directory_is_direct_and_resume_is_explicit(monkeypatch) -> N
     checkpointer = built.trainer.callbacks["checkpointer"]
     assert checkpointer.pre_train_checkpoint is True
     assert checkpointer.save_interval == 125
+    assert checkpointer.fixed_steps == [mixlaw.PRODUCTION_STEPS]
     assert checkpointer.max_checkpoints is None
     evaluator = built.trainer.callbacks["task_loss_eval"]
     assert evaluator.total_steps == mixlaw.PRODUCTION_STEPS
