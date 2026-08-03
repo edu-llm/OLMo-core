@@ -1,0 +1,14 @@
+cell_id: 13m_d4p8
+decay_fraction: 0.1
+demand_bits_per_param: 4.8
+exposures: 200
+global_batch_size: 262144
+learning_rate: 0.003
+notes: ''
+reasoning_tokens: 0
+row: 13M
+seed: 1234
+sequence_length: 512
+sweep: count
+warmup_steps: 2000
+weight_decay: 0.1

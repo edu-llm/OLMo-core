@@ -1,0 +1,352 @@
+"""
+What a cell guarantees: one stated quantity, a derived one, and a grid whose labels are true.
+
+The refusals matter most. A cell that states both its demand and its entity count can have them
+disagree, and then it lands on the trend plot at the wrong x while every number in the run stays
+plausible. So stating both is refused rather than reconciled, and every committed config is resolved
+here so a hand edit cannot ship a cell that does not add up.
+
+``train_cell.py`` is imported too. It needs no ``torch`` until it builds a trainer, which is what lets
+``--dry-run`` catch config and arithmetic errors on any machine -- and which is the arrangement that a
+torch-gated bug earlier in this branch argued for.
+"""
+
+from pathlib import Path
+
+import pytest
+from factcrowd import cells as C
+from factcrowd.corpus import values as V
+from factcrowd.ladder import rho, sizes
+
+from olmo_core.exceptions import OLMoConfigurationError
+
+CONFIG_ROOT = Path("src/scripts/train/factcrowd/configs/cells")
+
+
+# --- the grid ---------------------------------------------------------------------------------------
+
+
+def test_the_first_run_is_fourteen_cells_across_three_rows():
+    """13M and 28M at all five demands, 64M at four. The 113M row and 64M's highest are omitted."""
+    cells = C.first_run_cells()
+    assert len(cells) == 14
+    per_row = {row: sum(1 for c in cells if c.row == row) for row in ("13M", "28M", "64M")}
+    assert per_row == {"13M": 5, "28M": 5, "64M": 4}
+    assert not any(c.row == "113M" for c in cells)
+
+
+def test_every_count_cell_lands_on_its_intended_rho():
+    """
+    Demand 0.30/0.60/1.20/2.40/4.80 reads as rho 0.25/0.5/1/2/4 at the declared constant.
+
+    The cell is placed by the demand -- rho is a presentation transform -- but the mapping has to hold
+    or the grid cannot be read against the literature.
+    """
+    expected = [0.25, 0.5, 1.0, 2.0, 4.0]
+    for row in ("13M", "28M"):
+        got = [c.resolve().rho for c in C.first_run_cells() if c.row == row]
+        # 1e-4 rather than exact: n_entities is an integer, so each cell carries a rounding residual
+        # of order 1/n. Far inside the 1% tolerance rho.check enforces.
+        assert got == pytest.approx(expected, abs=1e-4)
+
+
+def test_the_entropy_sweep_holds_entity_count_and_token_count_fixed():
+    """
+    The axis's whole justification, checked at the cell layer rather than only in the schema.
+
+    Six cells, one entity count, one token count, one step count -- so tokens, steps, schedule position
+    and cumulative weight decay are identical while demand sweeps over a 25x range.
+    """
+    cells = C.entropy_sweep_cells("28M")
+    assert len(cells) == 6
+    resolved = [cell.resolve() for cell in cells]
+
+    assert len({r.n_entities for r in resolved}) == 1
+    assert len({r.total_tokens(69.2) for r in resolved}) == 1
+    assert len({r.steps(69.2) for r in resolved}) == 1
+
+    demands = [r.demand_per_non_embedding_param for r in resolved]
+    assert demands == sorted(demands)
+    assert demands[-1] / demands[0] > 20
+
+
+def test_the_entropy_midpoint_sits_at_the_bios_anchor():
+    """``b=8`` is 48 bits/entity against bioS's 47.592, so its demand reads as rho about 1."""
+    midpoint = next(c for c in C.entropy_sweep_cells("28M") if c.bits_per_attribute == 8)
+    assert midpoint.resolve().rho == pytest.approx(1.0, abs=0.02)
+
+
+def test_the_entropy_sweep_pins_its_entity_count_to_the_demand_one_cell():
+    """
+    So that the sweep straddles the bioS anchor rather than sitting beside it.
+
+    The count comes from solving the count axis at demand 1.20, which is what makes ``b=8`` land there.
+    """
+    cells = C.entropy_sweep_cells("28M")
+    expected = rho.solve(
+        sizes.non_embedding_params(sizes.row("28M").d_model),
+        1.20,
+        bits_per_entity=V.bios_bits_per_entity(),
+        name_space=V.NAME_SPACE,
+    ).n_entities
+    assert {c.n_entities for c in cells} == {expected}
+
+
+# --- the stated-versus-derived rule -----------------------------------------------------------------
+
+
+def test_a_count_cell_stating_its_entity_count_is_refused():
+    """
+    Stating both is how a cell comes to sit at a demand other than its label.
+
+    Derivation is the point: one number is in the config and the other is arithmetic.
+    """
+    with pytest.raises(OLMoConfigurationError, match="derived from the demand"):
+        C.CellSpec(cell_id="x", row="28M", demand_bits_per_param=1.2, n_entities=500_000)
+
+
+def test_a_count_cell_without_a_demand_is_refused():
+    """There would be nothing to place it by."""
+    with pytest.raises(OLMoConfigurationError, match="placed by"):
+        C.CellSpec(cell_id="x", row="28M")
+
+
+def test_a_count_cell_stating_bits_per_attribute_is_refused():
+    """That field belongs to the entropy axis; the count axis uses the bioS schema's own bits."""
+    with pytest.raises(OLMoConfigurationError, match="belongs to the entropy axis"):
+        C.CellSpec(cell_id="x", row="28M", demand_bits_per_param=1.2, bits_per_attribute=8)
+
+
+def test_an_entropy_cell_needs_both_its_stated_quantities():
+    """Entity count is what it holds fixed; entropy is what it sweeps."""
+    with pytest.raises(OLMoConfigurationError, match="states both"):
+        C.CellSpec(cell_id="x", row="28M", sweep="entropy", bits_per_attribute=8)
+    with pytest.raises(OLMoConfigurationError, match="states both"):
+        C.CellSpec(cell_id="x", row="28M", sweep="entropy", n_entities=1000)
+
+
+def test_an_entropy_cell_stating_a_demand_is_refused():
+    """Demand is derived there, and a stated one could disagree with the entropy."""
+    with pytest.raises(OLMoConfigurationError, match="derived on the entropy axis"):
+        C.CellSpec(
+            cell_id="x",
+            row="28M",
+            sweep="entropy",
+            bits_per_attribute=8,
+            n_entities=1000,
+            demand_bits_per_param=1.2,
+        )
+
+
+def test_an_unknown_row_is_refused_and_the_ladder_is_listed():
+    """The message fires in front of somebody editing a config."""
+    with pytest.raises(OLMoConfigurationError, match="no ladder row"):
+        C.CellSpec(cell_id="x", row="60M", demand_bits_per_param=1.2)
+
+
+def test_an_unknown_sweep_is_refused():
+    """Silently defaulting would run the wrong axis under the right name."""
+    with pytest.raises(OLMoConfigurationError, match="'sweep' must be"):
+        C.CellSpec(cell_id="x", row="28M", sweep="widthwise", demand_bits_per_param=1.2)
+
+
+# --- hyperparameters are part of the cell -----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "overrides, match",
+    [
+        ({"exposures": 0}, "'exposures' must be positive"),
+        ({"sequence_length": 0}, "'sequence_length' must be positive"),
+        ({"global_batch_size": 0}, "'global_batch_size' must be positive"),
+        ({"learning_rate": 0.0}, "'learning_rate' must be positive"),
+        ({"warmup_steps": 0}, "'warmup_steps' must be positive"),
+        ({"decay_fraction": 0.0}, "'decay_fraction' must be in"),
+        ({"decay_fraction": 1.0}, "'decay_fraction' must be in"),
+        ({"weight_decay": -1.0}, "must not be negative"),
+        ({"seed": -1}, "must not be negative"),
+        ({"global_batch_size": 1000}, "must be a multiple of"),
+    ],
+)
+def test_degenerate_hyperparameters_are_refused(overrides, match):
+    """
+    Every one of these would produce a run, and a wrong one.
+
+    They live on the cell rather than on the launcher because cumulative weight decay already varies
+    14.6x across a count row; if the values themselves also drifted between cells there would be
+    nothing left to attribute a difference to.
+    """
+    with pytest.raises(OLMoConfigurationError, match=match):
+        C.CellSpec(cell_id="x", row="28M", demand_bits_per_param=1.2, **overrides)
+
+
+def test_the_grid_shares_one_set_of_hyperparameters():
+    """One learning rate, one batch size, one schedule across every cell."""
+    cells = C.first_run_cells() + C.entropy_sweep_cells("28M")
+    for field in (
+        "learning_rate",
+        "weight_decay",
+        "global_batch_size",
+        "sequence_length",
+        "warmup_steps",
+        "decay_fraction",
+        "exposures",
+    ):
+        assert len({getattr(cell, field) for cell in cells}) == 1, field
+
+
+def test_cumulative_weight_decay_varies_across_a_count_row():
+    """
+    The confound the entropy axis exists to remove, quantified at the cell layer.
+
+    Steps scale with demand on the count axis, so ``sum(lr * wd)`` does too -- about 16x across the
+    five 28M cells. The entropy axis holds it fixed instead, which is the comparison that matters.
+    """
+    count = [
+        c.resolve().summary(69.2)["cumulative_lr_times_wd"]
+        for c in C.first_run_cells()
+        if c.row == "28M"
+    ]
+    assert max(count) / min(count) > 10
+
+    entropy = [
+        c.resolve().summary(69.2)["cumulative_lr_times_wd"] for c in C.entropy_sweep_cells("28M")
+    ]
+    assert len(set(entropy)) == 1
+
+
+# --- serialisation, and the committed configs -------------------------------------------------------
+
+
+def test_a_cell_round_trips_through_a_dictionary():
+    """A config file is the unit a person edits and a run reproduces."""
+    original = C.first_run_cells()[3]
+    assert C.CellSpec.from_dict(original.to_dict()) == original
+
+
+def test_unknown_config_keys_are_refused_rather_than_ignored():
+    """
+    A typo'd override that silently does nothing is how a cell runs at settings nobody chose.
+    """
+    raw = C.first_run_cells()[0].to_dict()
+    raw["learning_rat"] = 1e-3
+    with pytest.raises(OLMoConfigurationError, match="unknown config keys"):
+        C.CellSpec.from_dict(raw)
+
+
+def test_a_config_missing_required_keys_is_refused():
+    """``cell_id`` and ``row`` have no sensible default."""
+    with pytest.raises(OLMoConfigurationError, match="missing required keys"):
+        C.CellSpec.from_dict({"demand_bits_per_param": 1.2})
+
+
+def test_every_committed_config_loads_and_resolves():
+    """
+    The test that stops a hand edit shipping a cell that does not add up.
+
+    Resolution runs ``rho.check``, so a config whose demand and entity count disagree fails here rather
+    than on a GPU.
+    """
+    for axis in ("count", "entropy"):
+        cells = C.load_cells(CONFIG_ROOT / axis)
+        assert cells, axis
+        for cell in cells:
+            resolved = cell.resolve()
+            assert resolved.n_entities > 0
+            assert resolved.demand_per_non_embedding_param > 0
+            assert cell.sweep == axis
+
+
+def test_the_committed_grid_matches_the_generator():
+    """
+    Regenerating is a command, so the configs and the code cannot drift.
+
+    Compares cell ids rather than whole objects, since ``reasoning_tokens`` is expected to be edited.
+    """
+    assert {c.cell_id for c in C.load_cells(CONFIG_ROOT / "count")} == {
+        c.cell_id for c in C.first_run_cells()
+    }
+    assert {c.cell_id for c in C.load_cells(CONFIG_ROOT / "entropy")} == {
+        c.cell_id for c in C.entropy_sweep_cells("28M")
+    }
+
+
+def test_the_two_axes_live_in_separate_directories():
+    """
+    A fan-out maps an array index to a cell by position, so its size must be what ``ls`` says.
+
+    Sharing one directory would let ``--row 28M`` pick up eleven cells where the submission asked for
+    five, and run the wrong cell under the right name.
+    """
+    count_rows = {c.row for c in C.load_cells(CONFIG_ROOT / "count")}
+    entropy_rows = {c.row for c in C.load_cells(CONFIG_ROOT / "entropy")}
+    assert "28M" in count_rows and "28M" in entropy_rows
+    assert len([c for c in C.load_cells(CONFIG_ROOT / "count") if c.row == "28M"]) == 5
+
+
+def test_load_cells_is_sorted_so_a_fanout_index_is_stable():
+    """
+    The index-to-cell mapping must be a function of the directory and nothing else.
+
+    A mapping that changed between submission and execution would run a different cell under the name
+    the approver saw.
+    """
+    ids = [cell.cell_id for cell in C.load_cells(CONFIG_ROOT / "count")]
+    assert ids == sorted(ids)
+
+
+def test_writing_and_reloading_a_grid_round_trips(tmp_path):
+    """Regeneration has to be idempotent, or the committed configs drift every time it runs."""
+    cells = C.first_run_cells(reasoning_tokens=5_000)
+    C.write_cells(cells, tmp_path)
+    assert C.load_cells(tmp_path) == cells
+
+
+def test_load_cell_refuses_a_file_that_is_not_a_mapping(tmp_path):
+    """A YAML list or scalar would otherwise reach ``from_dict`` as a type error."""
+    path = tmp_path / "bad.yaml"
+    path.write_text("- just\n- a\n- list\n")
+    with pytest.raises(OLMoConfigurationError, match="must hold a mapping"):
+        C.load_cell(path)
+
+
+def test_load_cells_refuses_an_empty_directory(tmp_path):
+    """Otherwise a fan-out of size zero submits and does nothing."""
+    with pytest.raises(OLMoConfigurationError, match="no cell configs"):
+        C.load_cells(tmp_path)
+
+
+# --- the entry point, without torch -----------------------------------------------------------------
+
+
+def test_train_cell_imports_and_resolves_a_fanout_index_without_torch():
+    """
+    ``--dry-run`` has to work on a laptop, which is what makes it worth running before a submission.
+
+    Only ``build_trainer`` needs the GPU stack, and it imports inside the function. An earlier module
+    in this branch put its only real logic behind a module-level ``torch`` import; its tests skipped,
+    and a call that raised ``TypeError`` for every input passed review.
+    """
+    import argparse
+    import importlib.util
+    import sys
+
+    path = Path("src/scripts/train/factcrowd/train_cell.py")
+    spec = importlib.util.spec_from_file_location("factcrowd_train_cell", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    args = argparse.Namespace(cell=None, row="28M", sweep="count", cell_index="2")
+    chosen = module.resolve_cell(args)
+    assert chosen.row == "28M"
+    assert chosen.cell_id == "28m_d1p2"
+
+    args.cell_index = "99"
+    with pytest.raises(OLMoConfigurationError, match="out of range"):
+        module.resolve_cell(args)
+
+    args.row = None
+    with pytest.raises(OLMoConfigurationError, match="either --cell"):
+        module.resolve_cell(args)

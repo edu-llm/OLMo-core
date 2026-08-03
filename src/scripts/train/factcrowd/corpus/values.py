@@ -51,6 +51,8 @@ __all__ = [
     "bits_per_entity_for",
     "bios_bits_per_entity",
     "BIOS_POOL_SIZES",
+    "DEFAULT_NAME_POOL_SIZES",
+    "NAME_SPACE",
 ]
 
 
@@ -760,6 +762,18 @@ class CorpusSchema:
         return {pool.name: i for i, pool in enumerate(self.schema.attributes)}
 
 
+DEFAULT_NAME_POOL_SIZES: Tuple[int, ...] = (400, 400, 1000)
+"""
+First / middle / last name pool sizes, and so the name universe.
+
+Load-bearing rather than a mere ceiling: the product appears in the demand formula's name term
+(:func:`factcrowd.ladder.rho.name_bits`), so widening the pools raises demand at fixed entity count.
+160M clears the largest remaining cell's 2.9M entities by 55x.
+"""
+
+NAME_SPACE = DEFAULT_NAME_POOL_SIZES[0] * DEFAULT_NAME_POOL_SIZES[1] * DEFAULT_NAME_POOL_SIZES[2]
+"""The default name universe, 160,000,000. What a cell's demand is computed against."""
+
 _NAME_POOLS = ("first_name", "middle_name", "last_name")
 
 
@@ -808,7 +822,7 @@ what makes the comparison legitimate.
 
 
 def bios_schema(
-    *, name_pool_sizes: Sequence[int] = (400, 400, 1000), reserved: Iterable[str] = ()
+    *, name_pool_sizes: Sequence[int] = DEFAULT_NAME_POOL_SIZES, reserved: Iterable[str] = ()
 ) -> CorpusSchema:
     """
     The bioS schema for the count axis: seven attributes, one word each.
@@ -830,7 +844,7 @@ def entropy_schema(
     *,
     n_attributes: int = ENTROPY_ATTRIBUTES,
     words_per_value: int = ENTROPY_WORDS_PER_VALUE,
-    name_pool_sizes: Sequence[int] = (400, 400, 1000),
+    name_pool_sizes: Sequence[int] = DEFAULT_NAME_POOL_SIZES,
     reserved: Iterable[str] = (),
 ) -> CorpusSchema:
     """
