@@ -1,0 +1,17 @@
+# A deliberately tiny cell: enough to exercise every stage of the path and nothing more.
+# Not a scientific cell -- exposures and batch size are cut so the run is minutes, not hours.
+cell_id: smoke_13m
+row: 13M
+sweep: entropy
+bits_per_attribute: 8
+n_entities: 200
+exposures: 10
+sequence_length: 512
+global_batch_size: 8192
+learning_rate: 0.003
+weight_decay: 0.1
+warmup_steps: 2
+decay_fraction: 0.2
+reasoning_tokens: 0
+seed: 1234
+notes: Smoke cell. Proves the path, proves nothing about capacity.

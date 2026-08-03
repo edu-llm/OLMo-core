@@ -350,3 +350,18 @@ def test_train_cell_imports_and_resolves_a_fanout_index_without_torch():
     args.row = None
     with pytest.raises(OLMoConfigurationError, match="either --cell"):
         module.resolve_cell(args)
+
+
+def test_every_committed_cell_yields_all_ten_checkpoints():
+    """
+    The log-spaced schedule collapses on a short run, and a bits curve read off five points is not
+    the one the design specifies.
+
+    ``train_cell.py`` warns when it collapses and refuses below three. This asserts no real cell is
+    anywhere near either.
+    """
+    fractions = (0.005, 0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.50, 0.75, 1.00)
+    for cell in C.load_cells(CONFIG_ROOT / "count") + C.load_cells(CONFIG_ROOT / "entropy"):
+        steps = cell.resolve().steps(69.2)
+        distinct = {min(steps, max(1, int(fraction * steps))) for fraction in fractions}
+        assert len(distinct) == len(fractions), (cell.cell_id, steps, sorted(distinct))

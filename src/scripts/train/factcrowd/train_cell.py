@@ -42,6 +42,7 @@ THE PLATFORM CONSTRAINTS THIS FILE SATISFIES. Each was a lost run for somebody.
 
 import argparse
 import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -66,6 +67,8 @@ from factcrowd.corpus import vocab as vocab_module  # noqa: E402
 from factcrowd.ladder import sizes as sizes_module  # noqa: E402
 
 from olmo_core.exceptions import OLMoConfigurationError  # noqa: E402
+
+log = logging.getLogger(__name__)
 
 CONFIG_ROOT = Path(__file__).resolve().parent / "configs"
 """Where the committed cell configs live."""
@@ -237,8 +240,10 @@ def build_trainer(
 
     :returns: The trainer.
     """
+    import torch
     from factcrowd.corpus.source import BioTokenSource
 
+    from olmo_core.data import TokenizerConfig
     from olmo_core.data.composable import (
         ComposableDataLoaderConfig,
         ConcatAndChunkInstanceSource,
@@ -264,18 +269,35 @@ def build_trainer(
 
     total_tokens = corpus.stream.num_tokens + spec.reasoning_tokens
     steps = total_tokens // spec.global_batch_size
-    if steps < len(CHECKPOINT_FRACTIONS):
+    checkpoint_steps = sorted(
+        {min(steps, max(1, int(fraction * steps))) for fraction in CHECKPOINT_FRACTIONS}
+    )
+    if len(checkpoint_steps) < 3:
         raise OLMoConfigurationError(
-            f"cell '{spec.cell_id}' runs for {steps} steps, fewer than the "
-            f"{len(CHECKPOINT_FRACTIONS)} checkpoints it is meant to write. Lower "
-            f"'global_batch_size' or raise the demand."
+            f"cell '{spec.cell_id}' runs for {steps} steps, which the log-spaced schedule collapses "
+            f"to {len(checkpoint_steps)} distinct checkpoints ({checkpoint_steps}). A bits curve "
+            f"needs more than that. Lower 'global_batch_size' or raise the demand."
+        )
+    if len(checkpoint_steps) < len(CHECKPOINT_FRACTIONS):
+        # Expected on a smoke cell, never on a real one: at 3,390 steps -- the shortest cell in the
+        # grid -- the ten fractions land on ten distinct steps, and a test asserts that for every
+        # committed cell.
+        log.warning(
+            "cell '%s' runs for %d steps, so the ten log-spaced fractions collapse to %d distinct "
+            "checkpoints: %s. Fine for a smoke run, wrong for a cell whose bits curve gets read.",
+            spec.cell_id,
+            steps,
+            len(checkpoint_steps),
+            checkpoint_steps,
         )
 
     train_module_config = TransformerTrainModuleConfig(
         rank_microbatch_size=args.rank_microbatch_size,
         max_sequence_length=spec.sequence_length,
         optim=AdamWConfig(lr=spec.learning_rate, weight_decay=spec.weight_decay),
-        scheduler=WSD(warmup=spec.warmup_steps, decay=max(1, int(steps * spec.decay_fraction))),
+        # decay_fraction rather than decay: WSD defaults decay_fraction to 0.1 and refuses both,
+        # so passing the step count would need decay_fraction=None alongside it.
+        scheduler=WSD(warmup=spec.warmup_steps, decay_fraction=spec.decay_fraction),
         compile_model=args.compile_model,
     )
 
@@ -293,9 +315,6 @@ def build_trainer(
         token_source, sequence_length=spec.sequence_length, work_dir=work_dir
     )
 
-    checkpoint_steps = sorted(
-        {min(steps, max(1, int(fraction * steps))) for fraction in CHECKPOINT_FRACTIONS}
-    )
     trainer_config = (
         TrainerConfig(
             save_folder=args.save_folder,
@@ -303,8 +322,12 @@ def build_trainer(
             save_overwrite=False,
             metrics_collect_interval=10,
             max_duration=Duration.steps(steps),
+            # Async bookkeeping runs collectives on a second process group. Under gloo that group is
+            # not registered where torch's distributed checkpointing expects it, so a CPU run dies in
+            # scatter_object on its first save. Off on CPU, on wherever it works -- and the CPU path
+            # matters because cpu-32vcpu is the profile the platform sends every first run to.
+            async_bookkeeping=torch.cuda.is_available(),
         )
-        .with_callback("gpu_monitor", GPUMemoryMonitorCallback())
         .with_callback("speed_monitor", SpeedMonitorCallback())
         .with_callback("config_saver", ConfigSaverCallback())
         .with_callback(
@@ -320,6 +343,23 @@ def build_trainer(
         )
     )
 
+    # The loader needs the special ids to collate: it pads with pad_token_id and counts eos_token_id
+    # to find document boundaries. Taking them from our own vocabulary rather than a named tokenizer
+    # is what keeps the two from disagreeing -- padding with the wrong id would put a real word in
+    # every gap, and sharing pad with eos would inflate the document count until it explodes.
+    tokenizer_config = TokenizerConfig(
+        vocab_size=corpus.vocabulary.padded_size(),
+        eos_token_id=corpus.vocabulary.eos_id,
+        pad_token_id=corpus.vocabulary.pad_id,
+        bos_token_id=corpus.vocabulary.bos_id,
+        identifier=f"factcrowd-words-{corpus.vocabulary.fingerprint()[:12]}",
+    )
+    # GPUMemoryMonitorCallback calls torch._C._cuda_resetPeakMemoryStats unconditionally, which does
+    # not exist in a CPU build -- so on CPU it kills the run in pre_train, before the first step, and
+    # the process-group error that follows is only the teardown tripping over the first failure.
+    if torch.cuda.is_available():
+        trainer_config = trainer_config.with_callback("gpu_monitor", GPUMemoryMonitorCallback())
+
     data_loader_config = ComposableDataLoaderConfig(
         global_batch_size=spec.global_batch_size, seed=spec.seed + 3, work_dir=work_dir
     )
@@ -327,7 +367,9 @@ def build_trainer(
     model = model_config.build(init_device="meta")
     train_module = train_module_config.build(model)
     data_loader = data_loader_config.build(
-        instance_source, dp_process_group=train_module.dp_process_group
+        instance_source,
+        tokenizer=tokenizer_config,
+        dp_process_group=train_module.dp_process_group,
     )
     return trainer_config.build(train_module, data_loader)
 
@@ -400,7 +442,28 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> int:
             "platform refuses a submission whose command text does not name it."
         )
 
-    build_trainer(resolved, corpus, args).fit()
+    # The distributed environment has to be up before any model is built, and torn down afterwards,
+    # even on one device: OLMo-core's train module and data loader both consult the process group.
+    # seed_all covers the parts of initialisation the cell's own seeds do not reach -- parameter init
+    # and dropout -- so two runs of one cell start from the same weights.
+    import torch
+
+    from olmo_core.train import (
+        prepare_training_environment,
+        teardown_training_environment,
+    )
+    from olmo_core.utils import seed_all
+
+    # The default backend names CUDA, and init_distributed then calls torch.cuda.set_device for it --
+    # which fails outright on a CPU-only build. Selecting gloo keeps the cheapest platform profile
+    # (cpu-32vcpu, the one its guide sends every first run to) usable for a smoke test.
+    backend = "cpu:gloo,cuda:nccl" if torch.cuda.is_available() else "gloo"
+    prepare_training_environment(backend=backend)
+    try:
+        seed_all(spec.seed)
+        build_trainer(resolved, corpus, args).fit()
+    finally:
+        teardown_training_environment()
     return 0
 
 
