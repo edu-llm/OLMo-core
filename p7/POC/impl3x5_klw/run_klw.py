@@ -107,8 +107,14 @@ def parse_args():
     p.add_argument("--max_batch_tokens", type=int, default=0,
                    help="Precompute forward budget. 0 = size from GPU memory.")
 
-    p.add_argument("--bundle", default="/content/impl3_handoff")
-    p.add_argument("--bundle_tar", default="/content/impl3_handoff.tar.gz")
+    # Absolute defaults, pointing at where the tarball actually lives in the repo. They used to
+    # be Colab's /content paths, inherited from run_impl5.py, which meant every platform
+    # submission had to override both -- and a *relative* override is a trap, because `sh()`
+    # runs with cwd=HERE while `Path(...).exists()` resolves against the process cwd. On the
+    # platform the process cwd is the repo root, so `p7/POC/impl3_handoff.tar.gz` passed the
+    # existence check and then failed inside tar. Both are resolved to absolute in main().
+    p.add_argument("--bundle", default="/tmp/impl3_handoff")
+    p.add_argument("--bundle_tar", default=str(POC_ROOT / "impl3_handoff.tar.gz"))
     p.add_argument("--artifacts", default=None)
     p.add_argument("--checkpoint_dir", default=os.environ.get("EDULLM_CHECKPOINT_DIR") or None)
     p.add_argument("--output_prefix", default=os.environ.get("EDULLM_OUTPUT_PREFIX") or None)
@@ -355,6 +361,13 @@ def main():
     unknown = want - set(ALL_STAGES)
     if unknown:
         raise SystemExit(f"unknown stages {sorted(unknown)}; known: {', '.join(ALL_STAGES)}")
+
+    # Resolved before anything reads them. Every `sh()` runs with an explicit cwd, so a
+    # relative path here would mean one thing to `Path.exists()` and another to the
+    # subprocess -- which is exactly how the first platform attempt died: the tarball existed
+    # relative to the process cwd, passed the guard, then tar could not open it.
+    args.bundle = str(Path(args.bundle).expanduser().resolve())
+    args.bundle_tar = str(Path(args.bundle_tar).expanduser().resolve())
 
     runs_root = Path(args.runs_root) if args.runs_root else HERE / "runs"
     impl5_runs = Path(args.impl5_runs_root) if args.impl5_runs_root else IMPL5 / "runs"
