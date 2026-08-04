@@ -1,0 +1,16 @@
+{
+  "repository": "OLMo-core",
+  "commit_sha": "c2aef0ccd07059a8b9b0d6d16059ac91d06323df",
+  "image_digest": "",
+  "workload_profile": "olmo-core-train",
+  "compute_profile": "gpu-1xa10g",
+  "dataset_release": "none",
+  "team": "post-training",
+  "experiment": "impl3x5-klw-math",
+  "wandb_project": "edullm-p7",
+  "maximum_runtime_hours": "4",
+  "maximum_attempts": "2",
+  "fanout_size": "",
+  "fanout_index_parameter": "",
+  "command": "bash -lc 'python p7/POC/impl3x5_klw/run_klw.py --stages bundle,math --adapters_from s3://sbsandbox-intern-edullm-outputs/teams/post-training/runs/run_019fcaae-3e79-70f8-908a-952c04a4d459/checkpoints --checkpoint_dir \"$EDULLM_CHECKPOINT_DIR\" --output_prefix \"$EDULLM_OUTPUT_PREFIX\"'"
+}

@@ -1,0 +1,16 @@
+{
+  "repository": "OLMo-core",
+  "commit_sha": "c2aef0ccd07059a8b9b0d6d16059ac91d06323df",
+  "image_digest": "",
+  "workload_profile": "olmo-core-train",
+  "compute_profile": "gpu-4xl40s",
+  "dataset_release": "none",
+  "team": "post-training",
+  "experiment": "impl3x5-klw",
+  "wandb_project": "edullm-p7",
+  "maximum_runtime_hours": "2",
+  "maximum_attempts": "",
+  "fanout_size": "",
+  "fanout_index_parameter": "",
+  "command": "bash -lc 'EDULLM_LAUNCH_CHECK=waived python p7/POC/impl3x5_klw/run_klw.py --stages bundle,fetch,pool,slot,mix,checks_fast,precompute,checks_full --pool_from s3://sbsandbox-intern-edullm-outputs/teams/post-training/runs/run_019fc3ec-96a2-70fe-8153-21545ef0e908 --reference_from s3://sbsandbox-intern-edullm-outputs/teams/post-training/runs/run_019fc3ec-96a2-70fe-8153-21545ef0e908/checkpoints --checkpoint_dir \"$EDULLM_CHECKPOINT_DIR\" --output_prefix \"$EDULLM_OUTPUT_PREFIX\" && aws s3 cp p7/POC/impl3x5_klw/data/ \"$EDULLM_OUTPUT_PREFIX/signal_cache/\" --recursive --exclude \"*\" --include \"signal_*.npz\" --include \"signal_meta_*.json\"'"
+}

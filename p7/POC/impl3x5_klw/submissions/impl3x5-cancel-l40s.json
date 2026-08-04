@@ -1,0 +1,5 @@
+{
+  "run_id": "run_019fcd96-6651-7096-9658-1a6ce632f108",
+  "stop": "true",
+  "reason": "Stuck RUNNABLE since 16:45 UTC: AWS has no g6e.12xlarge capacity, InsufficientInstanceCapacity failing in all four AZs the ASG can use (1a/1b/1c/1d, latest 17:11). Resubmitting the same math-axis job on gpu-4xa10g (g5.12xlarge), which is offered in five AZs including us-east-1f. Cancelling so this one cannot later grab a box and duplicate the work."
+}
