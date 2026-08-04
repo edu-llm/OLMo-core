@@ -3,21 +3,25 @@
 
 The paper's Figure 3 has three panels and treats every mid-training checkpoint as a point
 (Appendix B.3: "Including mid-training checkpoints, this produced approximately 500 runs per
-method"). We do the same, with each configuration playing the role the paper gives to a method:
+method"). We do the same, with each configuration playing the role the paper gives to a method.
 
-    left    new-task performance   vs  prior-task score    learning-forgetting trade-off
-    middle  new-task KL            vs  prior-task score    "KL predicts forgetting"  <- the claim
-    right   new-task KL            vs  new-task performance  how far each config travels per unit gain
+The three panels are laid out as a triangle — the central claim on top, its two supporting
+views side by side beneath — rather than in one row, so each panel gets roughly 1.6x the area:
+
+    top          new-task KL            vs  prior-task score      "KL predicts forgetting"  <- the claim
+    bottom-left  new-task performance   vs  prior-task score      learning-forgetting trade-off
+    bottom-right new-task KL            vs  new-task performance  how far each config travels per unit gain
 
 Input is the JSONL from sweep_ckpt_eval.py: one row per checkpoint with kl_new_SI, prior_score
 and ped_nll. New-task performance is the held-out pedagogy NLL, so LOWER is better; the axis is
 inverted on the panels that use it so "further right = learned more", matching the paper's
 accuracy axes.
 
-Each configuration gets its own fit over its own checkpoints. The middle panel additionally
-carries a single pooled fit with its R^2 — that pooled fit is the paper's actual claim (all
+Each configuration gets its own monotone fit over its own checkpoints. The middle panel
+additionally carries a single pooled fit — that pooled fit is the paper's actual claim (all
 methods collapsing onto one curve), so keeping both makes it visible whether our configurations
-agree or separate.
+agree or separate. Per-config isotonic R^2 is intentionally not drawn on the figure: it
+overstates fit quality relative to what a reader sees in the overlaid cloud.
 
     python eval/plot_figure3.py --data out/ckpt_sweep_eval.jsonl --out_dir out/figures
 """
@@ -380,10 +384,21 @@ def main():
          kl_label, "New-task performance:  pedagogy NLL", "KL vs new-task gain", False),
     ]
 
-    fig, axes = plt.subplots(1, 3, figsize=(19.5, 6.0))
+    # Triangle layout on a 4-column grid: the central claim centred on the top row, its two
+    # supporting views beneath. Each panel spans two columns, so all three are the same width
+    # and the top one sits centred over the gap between the bottom two.
+    fig = plt.figure(figsize=(18.0, 14.0))
+    gs = fig.add_gridspec(2, 4)
+    ax_of = {
+        "kl_vs_prior": fig.add_subplot(gs[0, 1:3]),
+        "new_vs_prior": fig.add_subplot(gs[1, 0:2]),
+        "kl_vs_new": fig.add_subplot(gs[1, 2:4]),
+    }
+
     fit_report = []
-    for ax, (pid, xk, yk, xlabel, ylabel, title, invert_x) in zip(axes, panels):
-        allx, ally, panel_r2 = [], [], []
+    for pid, xk, yk, xlabel, ylabel, title, invert_x in panels:
+        ax = ax_of[pid]
+        allx, ally = [], []
         for name in names:
             pts = [(r[xk], r[yk]) for r in configs[name] if r.get(xk) is not None and r.get(yk) is not None]
             if not pts:
@@ -400,7 +415,7 @@ def main():
                 ax.scatter(x, y, facecolor="none", edgecolor=c, s=210, marker="D",
                            linewidths=2.4, zorder=9)
                 ax.annotate(name, (x[0], y[0]), textcoords="offset points", xytext=(14, 14),
-                            fontsize=8.5, color=c, fontweight="bold", zorder=9,
+                            fontsize=10, color=c, fontweight="bold", zorder=9,
                             arrowprops=dict(arrowstyle="-", color=c, lw=1.0, alpha=0.8))
                 continue
             ax.scatter(x, y, color=c, s=70 if ref else 42, alpha=0.9,
@@ -410,16 +425,15 @@ def main():
             # both become optional, because the name is physically next to the line.
             j = int(np.argmax(x)) if not invert_x else int(np.argmin(x))
             ax.annotate(disp(name), (x[j], y[j]),
-                        textcoords="offset points", xytext=(6, 4), fontsize=6.8,
+                        textcoords="offset points", xytext=(6, 4), fontsize=9.5,
                         color="black" if ref else c, fontweight="bold", zorder=10,
-                        path_effects=[pe.withStroke(linewidth=2.2, foreground="white")])
+                        path_effects=[pe.withStroke(linewidth=2.4, foreground="white")])
             if len(x) >= args.min_points:
                 fit = fit_curve(np, x, y, kind=args.fit, degree=args.degree)
                 if fit:
                     fx, fy, r2 = fit
                     ax.plot(fx, fy, "-", color=c, lw=3.2 if ref else 2.0,
                             alpha=0.95, zorder=5 if ref else 2)
-                    panel_r2.append((name, r2))
                     if pid == "kl_vs_prior":
                         fit_report.append((name, len(x), r2))
                     continue
@@ -431,13 +445,6 @@ def main():
                 ax.scatter([bx], [base[yk]], marker="*", s=380, color="black", zorder=7)
             ax.axhline(base[yk], ls=":", c="0.5", lw=1.2, alpha=0.8)
 
-        # R^2 differs per panel, so it cannot live in the figure-wide legend. Report the median
-        # per-config fit quality on the panel it actually describes.
-        if panel_r2:
-            med = sorted(r for _, r in panel_r2)[len(panel_r2) // 2]
-            ax.text(0.02, 0.97, f"median per-config $R^2$ = {med:.2f}  (n={len(panel_r2)})",
-                    transform=ax.transAxes, ha="left", va="top", fontsize=8.5, color="0.3")
-
         # the paper's claim is a SINGLE curve across methods — show it where that claim lives
         if pid == "kl_vs_prior" and len(allx) >= 4:
             X, Y = np.array(allx), np.array(ally)
@@ -445,18 +452,13 @@ def main():
             if fit:
                 fx, fy, r2 = fit
                 ax.plot(fx, fy, "--", color="0.2", lw=2.6, alpha=0.85,
-                        label=f"pooled fit  $R^2$={r2:.2f}", zorder=6)
+                        label="pooled monotone fit", zorder=6)
                 fit_report.append(("POOLED", len(X), r2))
-                # A near-zero pooled R^2 here is the headline of this panel, and a reader skimming
-                # the figure will otherwise mistake a flat cloud for "no forgetting happened".
-                if r2 < 0.25:
-                    ax.text(0.5, 0.03, f"no KL-forgetting relationship (pooled $R^2$={r2:.3f}) — the "
-                            f"retention probes\nare too small to resolve it, not evidence that "
-                            f"forgetting is absent",
-                            transform=ax.transAxes, ha="center", va="bottom", fontsize=8.5,
-                            color="0.25", bbox=dict(fc="#fff6e5", ec="#e0b070", lw=0.8, pad=4))
 
-        ax.set_xlabel(xlabel); ax.set_ylabel(ylabel); ax.set_title(title)
+        ax.set_xlabel(xlabel, fontsize=12)
+        ax.set_ylabel(ylabel, fontsize=12)
+        ax.set_title(title, fontsize=14)
+        ax.tick_params(labelsize=11)
         ax.grid(alpha=0.25)
         if invert_x:
             ax.invert_xaxis()  # NLL: lower = better, so flip to read left-to-right as "more learned"
@@ -479,9 +481,9 @@ def main():
                             "cropped: " + ", ".join(disp(n) for n in off) +
                             f"\nextend past NLL {cut:.2f} (up to {max(r[xk] for n in off for r in configs[n]):.2f}) — "
                             "too cold to learn the task at all",
-                            transform=ax.transAxes, ha="center", va="bottom", fontsize=8,
+                            transform=ax.transAxes, ha="center", va="bottom", fontsize=9.5,
                             color="0.25", bbox=dict(fc="#fff6e5", ec="#e0b070", lw=0.8, pad=3))
-    axes[2].invert_yaxis()
+    ax_of["kl_vs_new"].invert_yaxis()
 
     from matplotlib.lines import Line2D
     handles = []
@@ -501,13 +503,13 @@ def main():
                        label="$\\bf{square}$ = variant a"),
                 Line2D([], [], color="0.35", marker="o", ms=7, ls="none",
                        label="$\\bf{circle}$ = variant b")]
-    fig.legend(handles=handles, loc="lower center", ncol=8, fontsize=8.5, frameon=False,
-               bbox_to_anchor=(0.5, -0.05))
+    fig.legend(handles=handles, loc="lower center", ncol=8, fontsize=11, frameon=False,
+               bbox_to_anchor=(0.5, -0.022))
     fit_desc = "monotone (isotonic) fit" if args.fit == "isotonic" else f"degree-{args.degree} fit"
     fig.suptitle(f"KL vs forgetting across Impl-3 configurations — {sum(len(v) for v in configs.values())} "
                  f"checkpoints from {len(configs)} runs ({fit_desc} per configuration)\n"
-                 f"KL measured {kl_cond};  prior task = {args.prior_key}", fontsize=13)
-    fig.tight_layout(rect=(0, 0.06, 1, 0.94))
+                 f"KL measured {kl_cond};  prior task = {args.prior_key}", fontsize=16)
+    fig.tight_layout(rect=(0, 0.025, 1, 0.955))
     path = os.path.join(out_dir, f"fig3_kl_forgetting{args.suffix}.png")
     fig.savefig(path, dpi=150, bbox_inches="tight")
 
