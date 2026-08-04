@@ -32,6 +32,7 @@ from curriculum_data import (  # noqa: E402
 from curriculum_ema import (  # noqa: E402
     EMA_ALPHA,
     EMA_STEPS,
+    EMA_WANDB_STEP,
     ema_merge_state_dicts,
     ema_weights,
     validate_checkpoint_provenance,
@@ -307,6 +308,7 @@ def test_order_provenance_binds_exact_parent_manifest() -> None:
 def test_ema_is_exact_recursive_four_checkpoint_convention() -> None:
     assert EMA_STEPS == (2000, 2125, 2250, 2384)
     assert EMA_ALPHA == 0.8
+    assert EMA_WANDB_STEP == 2385
     weights = ema_weights(4)
     assert weights == pytest.approx([0.512, 0.128, 0.16, 0.2])
     states = [{"w": torch.tensor([float(value)])} for value in range(4)]
@@ -338,10 +340,12 @@ def test_ema_requires_one_immutable_run_identity(tmp_path: Path) -> None:
     )
     assert (output / "model_eval.pt").is_file()
     payload = torch.load(output / "model_eval.pt", weights_only=False)
-    assert payload["step"] == 2384
+    assert payload["step"] == 2385
     assert payload["model"]["w"].item() == 1.0
-    assert (output / "step.txt").read_text() == "2384\n"
+    assert (output / "step.txt").read_text() == "2385\n"
     assert json.loads((output / "ema_manifest.json").read_text())["alpha"] == 0.8
+    assert json.loads((output / "ema_manifest.json").read_text())["wandb_step"] == 2385
+    assert json.loads((output / "ema_manifest.json").read_text())["source_final_step"] == 2384
 
     changed = checkpoint.write_run_fingerprint(tmp_path / "changed", {**identity, "seed": 7})
     checkpoint.copy_fingerprint_into_checkpoint(changed, root / "step2250")
