@@ -215,6 +215,71 @@ def test_the_ladder_rungs_are_geometric_and_never_below_step_two(steps, expected
     assert steps not in rungs
 
 
+def test_preparing_heldout_indices_is_a_noop_without_a_ladder():
+    """
+    A corpus with no val split attaches no ``lm_eval`` callback, so the pre-build must do
+    nothing rather than raise on a missing key.
+    """
+    from unittest import mock
+
+    from olmo_core.train import TrainerConfig
+    from olmo_core.train.callbacks import GPUMemoryMonitorCallback
+
+    trainer = TrainerConfig(
+        save_folder="/tmp/does-not-matter", metrics_collect_interval=5, cancel_check_interval=5
+    ).with_callback("gpu_monitor", GPUMemoryMonitorCallback())
+
+    class _Config:
+        pass
+
+    cfg = _Config()
+    cfg.trainer = trainer
+    with mock.patch.object(entry, "barrier") as barrier:
+        entry._prepare_heldout_indices(cfg)
+    barrier.assert_called_once()
+
+
+def test_a_failure_pre_building_indices_does_not_kill_the_run():
+    """
+    The pre-build is an optimisation, not a gate: if it fails the callback will build the
+    indices later. Raising here would turn a recoverable slow path into a dead run.
+    """
+    from unittest import mock
+
+    class _Boom:
+        def build(self):
+            raise RuntimeError("s3 unavailable")
+
+    class _Cfg:
+        pass
+
+    cfg = _Cfg()
+    cfg.trainer = mock.Mock(callbacks={"lm_eval": mock.Mock(eval_dataset=_Boom())})
+    with mock.patch.object(entry, "barrier"):
+        entry._prepare_heldout_indices(cfg)  # must not raise
+
+
+def test_the_heldout_indices_are_prepared_before_the_model_is_built():
+    """
+    ORDER IS THE WHOLE FIX, AND THIS IS THE TEST run_019fca21 DID NOT HAVE.
+
+    ``NumpyPaddedFSLDataset.prepare()`` forks a ProcessPoolExecutor on rank 0 behind a
+    ``barrier()``, and the start method is "spawn", so each worker is a fresh interpreter.
+    Forking that from a rank whose CUDA context and NCCL communicators are already live hung
+    past gloo's 900 s timeout and killed the run at exit 72 with nothing trained.
+
+    Asserts the pre-build call precedes the model build in the source of ``train``, which is
+    the property that keeps the fork cheap. A comment saying "call this early" is not a
+    constraint; this is.
+    """
+    import inspect
+
+    src = inspect.getsource(entry.train)
+    prepare_at = src.index("_prepare_heldout_indices(config)")
+    model_at = src.index("config.model.build(")
+    assert prepare_at < model_at, "the held-out pre-build must happen before the model is built"
+
+
 def test_a_run_short_enough_to_collapse_the_ladder_still_yields_valid_rungs():
     """
     The floor and the de-duplication have to hold on a short run too. At 20 steps the low
