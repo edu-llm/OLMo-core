@@ -384,6 +384,11 @@ class Checkpointer:
             description=f"waiting for '{train_dir}' to be created...",
             timeout=self.FS_TIMEOUT,
         )
+        rank0_only = os.environ.get(
+            "OLMO_CORE_CHECKPOINT_RANK0_TRAIN_STATE", ""
+        ).lower() in {"1", "true", "yes"}
+        if rank0_only and get_rank() != 0:
+            return
         torch.save(train_state, train_dir / f"rank{get_rank()}.pt")
 
     def _save_metadata(self, dir: PathOrStr, metadata: CheckpointMetadata):

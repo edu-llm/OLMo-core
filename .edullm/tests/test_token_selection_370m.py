@@ -26,6 +26,7 @@ from token_selection_370m.arms import (  # noqa: E402
 from token_selection_370m.blade import (  # noqa: E402
     BLADE_CHECKPOINT_FORMAT,
     BLADE_REFERENCE_MICROBATCH_TOKENS,
+    BLADE_SELECTION_MICROBATCH_TOKENS,
     BLADE_SYNC_STEPS,
     BladeCallback,
     BladeSchedule,
@@ -474,7 +475,10 @@ def test_method_polarities_and_per_sequence_selection() -> None:
         current=current,
         reference=reference * 3,
     )
-    assert blade.sum(dim=1).tolist() == [2, 2]
+    assert blade.bool().tolist() == [
+        [True, True, False, False],
+        [False, False, True, True],
+    ]
 
 
 def test_middle_ppl_drops_easy_and_hard_and_random_is_resumable() -> None:
@@ -597,7 +601,7 @@ def test_blade_k_update_microbatches_with_full_batch_gradient(monkeypatch) -> No
 
 def test_blade_selection_scoring_microbatches_full_rank_batch(monkeypatch) -> None:
     callback = _blade_callback()
-    callback.reference_microbatch_tokens = 4
+    callback.selection_microbatch_tokens = 4
     batch = {"input_ids": torch.arange(8, dtype=torch.long).reshape(4, 2)}
     calls = []
 
@@ -615,6 +619,29 @@ def test_blade_selection_scoring_microbatches_full_rank_batch(monkeypatch) -> No
     assert torch.equal(labels, batch["input_ids"])
     assert torch.equal(proxy_ce, batch["input_ids"].float() + 1)
     assert torch.equal(reference_ce, batch["input_ids"].float() + 3)
+
+
+def test_blade_pre_step_selects_largest_proxy_minus_reference_gap(monkeypatch) -> None:
+    callback = _blade_callback()
+    callback._new_reference()
+    callback.last_sync = 500
+    callback.trainer = types.SimpleNamespace(
+        global_step=500,
+        train_module=types.SimpleNamespace(label_ignore_index=-100),
+    )
+    labels = torch.tensor([[10, 11, 12, 13]])
+    proxy_ce = torch.tensor([[4.0, 3.0, 2.0, 1.0]])
+    reference_ce = torch.full_like(proxy_ce, 3.0)
+    monkeypatch.setattr(
+        callback,
+        "_proxy_and_reference_ce",
+        lambda batch: (labels, proxy_ce, reference_ce),
+    )
+    batch = {"input_ids": labels.clone()}
+
+    callback.pre_step(batch)
+
+    assert batch["labels"].tolist() == [[10, 11, 12, -100]]
 
 
 def test_blade_sync_boundary_saves_before_and_after_k_updates(monkeypatch) -> None:
@@ -669,6 +696,7 @@ def test_resume_prefers_post_sync_boundary_until_normal_step_catches_up(tmp_path
 def test_blade_locked_schedule_and_full_resume_state() -> None:
     assert BLADE_SYNC_STEPS == (500, 875, 1250, 1625, 2000)
     assert BLADE_REFERENCE_MICROBATCH_TOKENS == 8_192
+    assert BLADE_SELECTION_MICROBATCH_TOKENS == 32_768
     callback = _blade_callback()
     callback._new_reference()
     assert callback.reference is not None and callback.reference_optim is not None

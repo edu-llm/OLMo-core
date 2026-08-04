@@ -15,7 +15,10 @@ Method = Literal[
 
 REGMIX = "pretrain/regmix-10b"
 REFHQ = "pretrain/refhq-regmix-5p5b"
-REFHQ_STEP_1315 = "s3://edullm-checkpoints/olmo-370m/edullm-370M-refhq-5p5b/checkpoints/step1315/"
+RHO_REFERENCE_CHECKPOINT = (
+    "s3://edullm-checkpoints/olmo-370m/"
+    "edullm-370M-refhq-instruct-v3/checkpoints/step940/"
+)
 REFHQ_LATE_STEPS = (1000, 1125, 1315)
 
 
@@ -53,7 +56,7 @@ ARM_SPECS: dict[str, ArmSpec] = {
         "rho-1-regmix10b-v1",
         keep_fraction=0.6,
         wandb_project_override="token-selection",
-        reference_contract=REFHQ_STEP_1315,
+        reference_contract=RHO_REFERENCE_CHECKPOINT,
     ),
     "rel-ema-exp": ArmSpec(
         "rel-ema-exp",
