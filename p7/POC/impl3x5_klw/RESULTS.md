@@ -3,14 +3,17 @@
 James's Impl-3 per-token loss weighting on Impl 5's self-distilled targets. Four arms, all
 trained 2026-08-04 in one job, all against **D4** as the baseline.
 
-**Two of three axes are in. The forgetting axis has not run yet, so there is no answer yet to
-whether the combination bought anything.** What follows is what is measured, and nothing else.
+**All three axes are in.** The control is confirmed three independent ways; matched pedagogy
+quality is established with CIs; the forgetting axis shows a real KL reduction that does not
+convert into a resolvable retention gain. What follows is what is measured, and nothing else.
 
 | run | what |
 |---|---|
 | `run_019fcaae-3e79-70f8-908a-952c04a4d459` | training + ped_nll, all 4 arms, commit `c2aef0cc` |
 | `run_019fca79-…` | gate; everything passed, then died on a missing `aws` CLI in the last line |
 | `run_019fcd96-…` | math axis on `gpu-4xl40s` — **cancelled**, no `g6e.12xlarge` capacity in any AZ |
+| `run_019fce3c-…` | math axis on `gpu-1xa10g` — **cancelled**, driver bug put 4 arms on 1 GPU, 2 OOM'd |
+| `run_019fce5a-…` | math axis, fixed driver (`0b652500`) — **SUCCEEDED**, all 4 arms × 11 checkpoints |
 
 ## The control, which is what licenses reading anything else
 
@@ -114,17 +117,78 @@ in the +SI condition.
 
 ## Not done
 
-- **The forgetting axis.** Payload ready at `gpu-4xa10g`; `gpu-4xl40s` was abandoned after
-  `InsufficientInstanceCapacity` in all four AZs it can use. Note `gpu-1xl40s` is **not** a
-  fallback — same g6e family, same four AZs. The g5/g6/g4dn families get five, including
-  `us-east-1f`.
-- **The 2×2.** See the hint above.
+- **A larger math probe.** 250 GSM8K items resolve ~12 points; the retention gaps here are
+  0.8–8.4. This is the binding constraint on the Definition of Done, and it is a power problem,
+  not a compute problem — another training run would not help.
+- **The 2×2.** See the hint above: settling whether reweighting composes with distillation, or
+  would have helped on gold anyway, needs his three configs re-run on gold through this pipeline.
 - **A κ-validated judge.** Still one judge family; `tutor-eval-suite` remains the missing piece.
 
-## Honest expectation
+## Forgetting — GSM8K retention and KL (run `run_019fce5a-…`, 2026-08-04)
 
-`bT451` landed byte-identically on D4 and the three conditions are pedagogically
-indistinguishable from it. The forgetting axis may well show little movement too. If so the
-result is still clean and worth reporting: **on targets already pulled toward the base model,
-James's reweighting has little left to remove** — and the ESS numbers explain the mechanism.
-That is a real finding about *when* the two methods compose, not a failed experiment.
+11 checkpoints per arm, `gpu-1xa10g`, arms serialised. **Base measured in this run: 0.676 bare /
+0.652 hint** — use these, not the published 0.672/0.672, since generation is hardware-sensitive
+and D4's figures came off an L40S while these are A10G.
+
+| @923 | bare | hint | Δbare vs base | Δhint vs base | KL(SI) | deflect |
+|---|---|---|---|---|---|---|
+| base | 0.676 | 0.652 | — | — | 0.000 | 0.000 |
+| `aT8` | **0.684** | 0.620 | **+0.8** | −3.2 | 0.138 | 0.000 |
+| `bT2` | 0.624 | 0.600 | −5.2 | −5.2 | 0.150 | 0.000 |
+| `bT1` | 0.620 | **0.640** | −5.6 | **−1.2** | **0.134** | 0.000 |
+| `bT451` *(control)* | 0.600 | 0.588 | −7.6 | −6.4 | 0.155 | 0.012 |
+| D4 *(published)* | 0.612 | 0.572 | — | — | 0.155 | 0.004 / 0.012 |
+| A1 *(gold SFT)* | 0.456 | 0.216 | — | — | 0.790 | 0.148 / 0.516 |
+
+### (a) The control reproduces D4. Third confirmation — the question is closed.
+
+`bT451` vs D4: **KL 0.155 vs 0.155**, **hinted deflect 0.012 vs 0.012** — both exact. Bare −1.2,
+hint +1.6, inside noise. It also reproduced D4's *KL trajectory shape*, not just its endpoint:
+peak **0.220 at step 16** then a monotone decline (0.220 → 0.197 → 0.164 → 0.145 → 0.159 →
+0.155), which is the signature Impl 5 documented and which distinguishes D4 from A1's monotone
+rise.
+
+Together with `ped_nll` matching to **1.2e-4** and judge generation being **byte-identical**,
+the reimplementation of IMPL3_HANDOFF §4.1 is confirmed on all three axes. James's
+`common/weighting.py` is not in the handoff bundle, so this was rebuilt from the spec; it is
+now verified as faithful.
+
+### (b) All three arms move down-left — but only the KL half is resolvable.
+
+Against the control, measured in the same run on the same hardware:
+
+| | Δbare | Δhint | ΔKL |
+|---|---|---|---|
+| `aT8` | +8.4 | +3.2 | **−0.017** |
+| `bT2` | +2.4 | +1.2 | **−0.005** |
+| `bT1` | +2.0 | +5.2 | **−0.021** |
+
+**Direction is consistent: 3/3 arms retain more at lower KL.** But a 250-item GSM8K probe
+resolves ~12 points, and we watched `bT2`'s bare swing 0.644 → 0.704 across adjacent checkpoints
+at near-zero drift. **None of the retention gaps is individually resolvable.** The KL reductions
+are: KL is a continuous mean over 64 contexts, far more precise than an accuracy probe.
+
+So the honest verdict is **split**. The reweighting demonstrably does what it is designed to do —
+it reduces drift from base, most in the arm that suppresses hardest (`bT1`, ESS 0.633, KL 0.134).
+That drift reduction **did not convert into a measurable retention gain**, because D4 had already
+recovered most of the forgetting: gold SFT drops to 0.456/0.216, D4 sits at 0.600/0.588, and
+there is only ~7.6 points of bare forgetting left to remove. `aT8` removes essentially all of it
+(+0.8 vs base, i.e. no bare forgetting at all) — but 6.8 points below a 12-point resolution
+floor cannot be called a result.
+
+**Impl 5's Definition of Done is therefore NOT met with confidence.** Matched pedagogy quality is
+established (judge, n=100, CIs), and the arms trend the right way, but the forgetting half is
+under-powered at this probe size. Resolving it needs a larger math probe, not another training
+run — the power calculation, not the compute, is the binding constraint.
+
+### (c) No refusal confound anywhere, and a mechanism worth naming.
+
+`deflect = 0.000` for all three conditions at **every one of 33 checkpoints**. Bare and hint move
+together rather than diverging. This is the opposite of Impl 4's A3 mirage, where a hinted
+advantage turned out to be pure later-onset Socratic refusal — none of that is present here, so
+the hinted numbers measure math skill.
+
+Notably the **control** does show refusal (0.012 hinted, matching D4) while the reweighted arms
+show none. Suppressing high-KL tokens appears to suppress the tutor persona's bleed into
+non-tutoring contexts. That is a sharper description of what the weighting does than "stays
+closer to base," and it is the clearest mechanistic finding in the run.
