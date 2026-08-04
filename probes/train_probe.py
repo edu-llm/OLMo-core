@@ -237,6 +237,7 @@ def build_mixer_factory(
     :returns: The factory callable.
     """
     from olmo_core.nn.attention import GatedDeltaNetConfig, KimiDeltaAttentionConfig
+    from olmo_core.nn.transformer.init import InitMethod
 
     def factory(d_model: int, layer_idx: int) -> nn.Module:
         common = dict(n_heads=n_heads, head_dim=head_dim, expand_v=1.0)
@@ -260,7 +261,40 @@ def build_mixer_factory(
             )
         else:
             raise ValueError(f"unknown mixer '{name}'")
-        return cfg.build(d_model, layer_idx=layer_idx, n_layers=1, init_device="cuda")
+        mixer = cfg.build(d_model, layer_idx=layer_idx, n_layers=1, init_device="cuda")
+
+        # Initialize the mixer explicitly. THIS CALL IS LOAD-BEARING AND WAS MISSING.
+        #
+        # 'build()' only constructs; every OLMo-core mixer allocates its gate parameters with
+        # 'torch.empty' -- KimiDeltaHouseholder does so at recurrent.py:1162-1163 for 'A_log'
+        # and 'dt_bias' -- and relies on a separate 'init_weights' pass to fill them. In a real
+        # OLMo-core model that pass comes from 'Transformer.init_weights'
+        # (nn/transformer/init.py), but ProbeModel is a plain nn.Module, so nothing here called
+        # it. Every probe run before this fix therefore trained 'A_log' and 'dt_bias' on
+        # whatever those pages happened to hold.
+        #
+        # Why that is not merely untidy: uninitialized memory is only harmless if it is
+        # *identical across arms*. Fresh pages read as zero, but CUDA's caching allocator
+        # recycles freed blocks, and this file frees a whole model during the
+        # '--match-non-embedding' solve above -- so the arm that runs a solve can see different
+        # bytes than the arm that does not. That is an arm-dependent difference in the decay
+        # gate, which is exactly the quantity under study.
+        #
+        # No generator is passed: 'main' seeds the global RNG with the 'init' stream
+        # immediately before each 'build_model' call, and 'init_weights' draws from that same
+        # global RNG, so the init remains a pure function of 'seeds["init"]'.
+        #
+        # 'num_blocks=1' matches the 'n_layers=1' already passed to 'build' above. Both are
+        # deliberate: they select the depth-independent branch of 'init_weights', so a mixer's
+        # init does not change when the probe's layer count does. Only 'InitMethod.llama' and
+        # 'llama_depth' consume these, and 'normal' is what ProbeModel's own layers use.
+        mixer.init_weights(
+            init_method=InitMethod.normal,
+            d_model=d_model,
+            block_idx=layer_idx,
+            num_blocks=1,
+        )
+        return mixer
 
     return factory
 
