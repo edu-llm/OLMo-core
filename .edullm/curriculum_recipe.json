@@ -31,7 +31,7 @@
     {"index": 0, "name": "linear10-flesch", "pacing": "linear_n10", "metric": "flesch", "order_group": "flesch"},
     {"index": 1, "name": "linear10-mtld", "pacing": "linear_n10", "metric": "mtld", "order_group": "mtld"},
     {"index": 2, "name": "linear10-learn", "pacing": "linear_n10", "metric": "learnability", "order_group": "learnability"},
-    {"index": 3, "name": "warmup-mtld", "pacing": "warmup_1000", "metric": "mtld", "order_group": "mtld"},
-    {"index": 4, "name": "interleave-mtld", "pacing": "interleave_i10_linear", "metric": "mtld", "order_group": "mtld"}
+    {"index": 3, "name": "warmup-flesch", "pacing": "warmup_1000", "metric": "flesch", "order_group": "flesch"},
+    {"index": 4, "name": "interleave-flesch", "pacing": "interleave_i10_linear", "metric": "flesch", "order_group": "flesch"}
   ]
 }
