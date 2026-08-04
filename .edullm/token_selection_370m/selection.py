@@ -135,7 +135,9 @@ def selection_weights(
     elif method == "blade":
         if current is None or reference is None:
             raise ValueError("BLADE requires proxy and dynamic-reference losses")
-        mask = per_row_topk(reference - current, keep_fraction, valid)
+        # BLADE minimizes L_ref - L_proxy over the mask (Equation 5), which is
+        # equivalent to selecting the largest L_proxy - L_ref values.
+        mask = per_row_topk(current - reference, keep_fraction, valid)
     else:
         raise ValueError(f"unsupported token-selection method {method!r}")
     return mask.float()

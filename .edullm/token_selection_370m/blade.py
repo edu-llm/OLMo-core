@@ -61,6 +61,7 @@ BLADE_K = 75
 BLADE_GAMMA = 0.6
 BLADE_LAMBDA = 1.0
 BLADE_REFERENCE_MICROBATCH_TOKENS = 8_192
+BLADE_SELECTION_MICROBATCH_TOKENS = 32_768
 BLADE_CHECKPOINT_FORMAT = "blade_proxy_dynamic_ref_v2"
 
 
@@ -160,6 +161,7 @@ class BladeCallback(Callback):
         reference_lr: float = 4e-4,
         max_grad_norm: float = 1.0,
         reference_microbatch_tokens: int = BLADE_REFERENCE_MICROBATCH_TOKENS,
+        selection_microbatch_tokens: int = BLADE_SELECTION_MICROBATCH_TOKENS,
     ) -> None:
         schedule.validate(total_steps)
         self.total_steps = int(total_steps)
@@ -172,6 +174,9 @@ class BladeCallback(Callback):
         self.reference_microbatch_tokens = int(reference_microbatch_tokens)
         if self.reference_microbatch_tokens <= 0:
             raise ValueError("BLADE reference microbatch tokens must be positive")
+        self.selection_microbatch_tokens = int(selection_microbatch_tokens)
+        if self.selection_microbatch_tokens <= 0:
+            raise ValueError("BLADE selection microbatch tokens must be positive")
         self.reference: Optional[nn.Module] = None
         self.reference_optim: Optional[torch.optim.Optimizer] = None
         self.completed_step = 0
@@ -352,13 +357,13 @@ class BladeCallback(Callback):
 
     def _proxy_and_reference_ce(self, batch: dict[str, Any]) -> tuple[Tensor, Tensor, Tensor]:
         sequence_length = int(batch["input_ids"].shape[1])
-        if self.reference_microbatch_tokens < sequence_length:
+        if self.selection_microbatch_tokens < sequence_length:
             raise RuntimeError(
                 "BLADE selection microbatch token limit is smaller than sequence length"
             )
         labels, proxy_ce, reference_ce = [], [], []
         for micro_batch in split_batch(
-            batch, self.reference_microbatch_tokens // sequence_length
+            batch, self.selection_microbatch_tokens // sequence_length
         ):
             micro_labels, micro_proxy_ce, micro_reference_ce = (
                 self._proxy_and_reference_ce_microbatch(micro_batch)
@@ -418,11 +423,14 @@ class BladeCallback(Callback):
                 )
             labels, proxy_ce, ref_ce = self._proxy_and_reference_ce(batch)
             valid = labels != self.trainer.train_module.label_ignore_index
-            flat_scores = (ref_ce - proxy_ce)[valid]
+            # Equation 5 minimizes L_ref - L_proxy over a fixed-size mask, so
+            # ranking in descending order must use the equivalent L_proxy - L_ref.
+            selection_scores = proxy_ce - ref_ce
+            flat_scores = selection_scores[valid]
             keep = max(1, int(torch.ceil(torch.tensor(self.schedule.gamma * flat_scores.numel()))))
             threshold = torch.topk(flat_scores, min(keep, flat_scores.numel())).values[-1]
             batch["labels"] = labels.masked_fill(
-                ~(valid & ((ref_ce - proxy_ce) >= threshold)), -100
+                ~(valid & (selection_scores >= threshold)), -100
             )
 
     def post_train_batch(self) -> None:
