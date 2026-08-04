@@ -203,7 +203,11 @@ class BuiltCorpus:
             # compare -- so that axis carries unrelated reasoning alone. It costs nothing: the entropy
             # axis's job is the identified demand sweep, and the related-reasoning prediction lives on
             # the count axis where bioS does have a birth year.
-            if spec.sweep == "count" and self.table is not None:
+            if (
+                spec.sweep == "count"
+                and self.table is not None
+                and spec.related_reasoning_tokens > 0
+            ):
                 built.append(
                     tasks_module.CompareTask(
                         self.table,
@@ -215,7 +219,9 @@ class BuiltCorpus:
                     )
                 )
             self.task_streams = tuple(
-                tasks_module.TaskStream(task, num_tokens=spec.reasoning_tokens, label=task.name)
+                tasks_module.TaskStream(
+                    task, num_tokens=spec.slice_budget(task.name), label=task.name
+                )
                 for task in built
             )
         # The cell's own arithmetic declares which slices it carries, and every token estimate and cost
@@ -438,7 +444,7 @@ def build_trainer(
         optim=AdamWConfig(lr=spec.learning_rate, weight_decay=spec.weight_decay),
         # decay_fraction rather than decay: WSD defaults decay_fraction to 0.1 and refuses both,
         # so passing the step count would need decay_fraction=None alongside it.
-        scheduler=WSD(warmup=spec.warmup_steps, decay_fraction=spec.decay_fraction),
+        scheduler=WSD(warmup=resolved.warmup(steps), decay_fraction=spec.decay_fraction),
         compile_model=args.compile_model,
     )
 
@@ -578,7 +584,16 @@ def build_trainer(
         trainer_config = trainer_config.with_callback("gpu_monitor", GPUMemoryMonitorCallback())
 
     data_loader_config = ComposableDataLoaderConfig(
-        global_batch_size=spec.global_batch_size, seed=spec.seed + 3, work_dir=work_dir
+        global_batch_size=spec.global_batch_size,
+        seed=spec.seed + 3,
+        work_dir=work_dir,
+        # The corpus is generated on demand rather than read from disk, so the loader's default of zero
+        # workers puts that generation in the training process. The reasoning tasks are the slow ones --
+        # 0.59M tok/s for mano and 0.39M for compare against the bio renderer's 10.1M, since each item
+        # costs a mix and a scatter rather than a slice of a precompiled skeleton. A control is 100%
+        # reasoning and the smallest demand cells are around two-thirds, so those runs would be
+        # data-bound on a GPU. Workers cost nothing here.
+        num_workers=args.num_workers,
     )
 
     model = model_config.build(init_device="meta")
@@ -619,6 +634,13 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> int:
     parser.add_argument("--work-dir", default="/tmp/factcrowd", help="Local scratch")
     parser.add_argument("--rank-microbatch-size", type=int, default=16 * 1024)
     parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=4,
+        help="Data loader workers. The corpus is generated in-process, so zero makes a reasoning-heavy "
+        "cell data-bound.",
+    )
+    parser.add_argument(
         "--compile-model",
         action="store_true",
         help="torch.compile the model. Off by default: Inductor needs a C compiler, and "
@@ -642,6 +664,10 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> int:
     args.work_dir = work_dir
 
     corpus = BuiltCorpus(resolved, work_dir)
+    # Re-resolved with the vocabulary, which only the corpus knows. The entity count and the demand are
+    # unchanged -- the vocabulary feeds the *total*-parameter basis alone, which is otherwise a copy of
+    # the non-embedding one and makes 3's dual-basis reporting one basis printed twice.
+    resolved = spec.resolve(vocab_size=corpus.vocabulary.padded_size())
     summary = corpus.summary(resolved)
 
     if args.json:

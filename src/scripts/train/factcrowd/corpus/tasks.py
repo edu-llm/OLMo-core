@@ -29,6 +29,7 @@ what they plug into.
 """
 
 import hashlib
+import math
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Sequence, Tuple, Type
 
@@ -79,7 +80,7 @@ def compare_words() -> Tuple[str, ...]:
 
     :returns: The words, in a fixed order.
     """
-    return ("Between", "and", "who", "was", "born", "earlier", "?", "Answer", ":")
+    return ("Between", "and", "the", "earlier", "birth", "year", "?", "Answer", ":")
 
 
 class TaskItem:
@@ -127,6 +128,10 @@ class ReasoningTask(ABC):
 
     #: Slice name, used as a config key and a metric prefix.
     name: str = ""
+
+    #: Set by every subclass. Declared here because :meth:`degenerate_baseline` decodes items to search
+    #: copy policies, which needs the words rather than the ids.
+    _vocabulary: "Vocabulary"
 
     @property
     @abstractmethod
@@ -188,15 +193,68 @@ class ReasoningTask(ABC):
             items.append(rendered)
         return tuple(items)
 
-    def degenerate_answer(self, sample: int = 20_000) -> Tuple[Tuple[str, ...], float]:
+    def degenerate_baseline(self, sample: int = 20_000) -> Tuple[str, float]:
         """
-        The best constant answer and how often it is right, **measured rather than assumed**.
+        The strongest fact-free policy and how often it is right, **measured rather than assumed**.
 
         Every endpoint declares its degenerate baseline, because an endpoint whose score matches its
-        baseline carries no signal -- and because assuming one is how a previous eval came to report a
-        figure below its own floor. Mano's is 6.8% rather than the 1/23 = 4.3% a uniform answer
-        distribution would give, since sums and products modulo a prime are not uniform over a short
-        expression.
+        baseline carries no signal -- and because assuming one is how a previous eval in this programme
+        came to report a figure below its own floor.
+
+        Two policy families are searched, not one:
+
+        - **constant**: always emit the same answer. The obvious family, and for Mano the binding one.
+        - **copy**: always emit the span sitting at a fixed offset in the prompt. Requires no facts, no
+          ordering and no arithmetic -- an induction head suffices.
+
+        Searching only constants is a mistake that costs an endpoint its floor. ``<compare>``'s answer is
+        a copy of one of the two names in its own prompt, so "always name the first person" is right
+        **50%** of the time while the best constant name is right 0.02% -- a factor of 1,400. An endpoint
+        whose floor is quoted as 0% when it is really 50% has half the dynamic range its admission gate
+        assumes, and any score under 50% is below its own floor.
+
+        :param sample: How many items to draw.
+
+        :returns: A label for the winning policy, and its accuracy.
+        """
+        width = self.tokens_per_item
+        constant: Dict[Tuple[str, ...], int] = {}
+        # One counter per prompt offset a copy policy could read an answer-width span from.
+        copies: Dict[int, int] = {}
+        for index in range(sample):
+            item = self.item(index)
+            answer = item.answer
+            constant[answer] = constant.get(answer, 0) + 1
+            span = item.answer_end - item.answer_start
+            words = self._vocabulary.decode(item.tokens)
+            for offset in range(0, width - span + 1):
+                if offset == item.answer_start:
+                    continue  # reading the answer itself is not a policy
+                if tuple(words[offset : offset + span]) == answer:
+                    copies[offset] = copies.get(offset, 0) + 1
+
+        best_constant = max(constant, key=lambda key: constant[key])
+        label, count = f"constant:{' '.join(best_constant)}", constant[best_constant]
+        if copies:
+            # A copy policy wins only if it beats the best constant by more than sampling noise. The
+            # maximum over ~20 offsets is upward-biased -- each is right about 1/23 of the time on Mano,
+            # so the best of them exceeds the constant by two standard errors for nothing, and the floor
+            # would drift up with the number of offsets searched rather than with the task. Three
+            # standard errors of the constant rate is the bar; the real thing this exists to catch beat
+            # it by a factor of 1,400.
+            best_offset = max(copies, key=lambda key: copies[key])
+            rate = count / sample
+            margin = 3.0 * math.sqrt(max(rate * (1.0 - rate), 1e-12) / sample)
+            if copies[best_offset] / sample > rate + margin:
+                label, count = f"copy@{best_offset}", copies[best_offset]
+        return label, count / sample
+
+    def degenerate_answer(self, sample: int = 20_000) -> Tuple[Tuple[str, ...], float]:
+        """
+        The best *constant* answer and how often it is right.
+
+        Kept because the constant family is worth reporting on its own, but it is **not** the endpoint's
+        floor -- see :meth:`degenerate_baseline`, which is.
 
         :param sample: How many items to draw.
 
@@ -293,20 +351,38 @@ class ManoTask(ReasoningTask):
             residues.append(state % MANO_MODULUS)
             state //= MANO_MODULUS
             if state == 0:  # exhausted the draw; re-mix rather than repeat a residue pattern
+                # XOR rather than add: `draw + position + 1` overflows np.uint64 when draw is within
+                # `length` of 2**64, which raises rather than wrapping.
                 state = int(
-                    splitmix64(np.array([np.uint64(draw + position + 1)], dtype=np.uint64))[0]
+                    splitmix64(
+                        np.array([np.uint64(draw) ^ np.uint64(position + 1)], dtype=np.uint64)
+                    )[0]
                 )
 
         # Zero is excluded as a multiplicand, because multiplication by it is an absorbing state: with
         # a free choice of operand the answer is 0 far more often than any other residue, and the best
         # constant policy scores 8.3% instead of the 6.8% Physics 4.1 reports. An endpoint whose floor
-        # is higher than the paper's is a weaker instrument, and the fix costs one residue of entropy
-        # per multiplication rather than any change to the task.
-        for position, operator in enumerate(operators):
-            if operator == 1 and residues[position + 1] == 0:
-                residues[position + 1] = 1 + (residues[position + 1] + position) % (
-                    MANO_MODULUS - 1
-                )
+        # is higher than the paper's is a weaker instrument.
+        #
+        # The replacement is *redrawn*, not computed from the zero it replaces. The first version wrote
+        # `1 + (residues[position + 1] + position) % 22`, and inside a branch that only fires when that
+        # term is zero, which makes it the constant `1 + position` -- so operator position 0 always got
+        # <n1>, position 4 always <n5>, doubling the mass on one position-specific operand. The floor
+        # survived it; the uniformity the comment claimed did not.
+        if operators:
+            spare = int(
+                splitmix64(np.array([np.uint64(draw) ^ np.uint64(0x9E3779B9)], dtype=np.uint64))[0]
+            )
+            for position, operator in enumerate(operators):
+                if operator == 1 and residues[position + 1] == 0:
+                    residues[position + 1] = 1 + spare % (MANO_MODULUS - 1)
+                    spare //= MANO_MODULUS - 1
+                    if spare == 0:
+                        spare = int(
+                            splitmix64(np.array([np.uint64(draw + position + 7)], dtype=np.uint64))[
+                                0
+                            ]
+                        )
 
         total = residues[0]
         for operator, residue in zip(operators, residues[1:]):
@@ -411,14 +487,24 @@ class CompareTask(ReasoningTask):
         self._domain_token = domain_token
         self._probe_ids = probe_ids.astype(np.int64)
         self._seed = seed
-        self._order_column = corpus_schema.pool_index[specs[order_attribute].pool_names[0]]
+        self._order_pool_name = specs[order_attribute].pool_names[0]
+        self._order_column = corpus_schema.pool_index[self._order_pool_name]
         self._order_attribute = order_attribute
+        self._order_pool = {pool.name: pool for pool in corpus_schema.schema.attributes}[
+            self._order_pool_name
+        ]
         self._name_pools = tuple(pool.name for pool in corpus_schema.schema.names)
         self._name_width = len(self._name_pools)
 
+        # The answer is the earlier person's *year*, not their name, so the question asks for a year.
+        # A name answer is a span of the prompt, and "copy the first name" then scores 50% -- half the
+        # endpoint's range for free, on a task that needs no facts at all. Asking for the value puts the
+        # answer outside the prompt, where no copy policy can reach it: the measured floor falls from
+        # 50.2% to 0.7%. The composition under test is unchanged -- recall both years, compare, emit the
+        # smaller -- and it is now the only policy that works.
         prompt = ["Between"]
         prompt_after_first = ["and"]
-        tail = ["who", "was", "born", "earlier", "?", "Answer", ":"]
+        tail = ["the", "earlier", "birth", "year", "?", "Answer", ":"]
         self._prefix = vocabulary.encode([domain_token, vocabulary.words[2], *prompt])
         self._joiner = vocabulary.encode(prompt_after_first)
         self._tail = vocabulary.encode(tail)
@@ -429,8 +515,8 @@ class CompareTask(ReasoningTask):
             + self._joiner.size
             + self._name_width
             + self._tail.size
-            + self._name_width
-            + 1
+            + 1  # the answer: the earlier person's ordinal value, one word
+            + 1  # eos
         )
 
     @property
@@ -453,6 +539,18 @@ class CompareTask(ReasoningTask):
             [pool_ids[pool][row[position]] for position, pool in enumerate(self._name_pools)],
             dtype=_TOKEN_DTYPE,
         )
+
+    def _order_ids(self, entity_id: int) -> np.ndarray:
+        """Token ids of one entity's ordinal attribute value -- the answer."""
+        index = int(self._table.attributes[entity_id][self._order_column])
+        return np.array(
+            [self._vocabulary.pool_token_ids[self._order_pool_name][index]], dtype=_TOKEN_DTYPE
+        )
+
+    def _order_value(self, entity_id: int) -> Tuple[str, ...]:
+        """The words of one entity's ordinal attribute value."""
+        index = int(self._table.attributes[entity_id][self._order_column])
+        return (self._order_pool.values[index],)
 
     def item(self, index: int) -> TaskItem:
         draw = splitmix64(
@@ -485,13 +583,16 @@ class CompareTask(ReasoningTask):
             tokens[cursor : cursor + piece.size] = piece
             cursor += piece.size
         answer_start = cursor
-        answer_ids = self._name_ids(earlier)
+        answer_ids = self._order_ids(earlier)
         tokens[cursor : cursor + answer_ids.size] = answer_ids
         cursor += answer_ids.size
         tokens[cursor] = self._eos[0]
 
         return TaskItem(
-            tokens, answer_start, answer_start + self._name_width, self._table.name_parts(earlier)
+            tokens,
+            answer_start,
+            answer_start + answer_ids.size,
+            self._order_value(earlier),
         )
 
     def fingerprint(self) -> str:
@@ -502,7 +603,12 @@ class CompareTask(ReasoningTask):
             self._table.schema.fingerprint(),
             self._domain_token,
             self._order_attribute,
-            str(self._probe_ids.size),
+            # The probe ids themselves and the table's own seed, not just the subset's size. Without
+            # them two tasks over different entities -- or the same entities with different attribute
+            # values -- shared a fingerprint, and that digest keys the cached instance index and is what
+            # a "checkpoint versus corpus" audit compares.
+            hashlib.sha256(self._probe_ids.tobytes()).hexdigest(),
+            str(self._table.seed),
             str(self._seed),
         ):
             raw = field.encode()
@@ -548,7 +654,19 @@ class TaskStream:
 
     @property
     def num_tokens(self) -> int:
-        """Tokens in the slice: a whole number of items, so never mid-answer."""
+        """
+        A whole number of items, so the *stream* never ends mid-item.
+
+        That is a weaker guarantee than it looks, and weaker than this line used to claim. Rounding down
+        protects the end of the stream only; the trainer asks
+        :class:`~olmo_core.data.composable.ConcatAndChunkInstanceSource` for 512-token windows, and
+        neither 24 nor 19 divides 512, so **3.1% of mano items and 3.5% of compare items are cut by an
+        instance boundary** -- some of them mid-answer, leaving an instance that opens with an answer and
+        no question. The streams are byte-identical across cells so the cuts are identical too, which
+        makes this a uniform tax rather than a confound, but two things follow: ``answer_start`` is valid
+        only *before* chunking, so an eval must locate answers itself rather than trust it; and a
+        sequence length of 504 (or per-item padding with a label mask) would remove the tax entirely.
+        """
         return self._num_tokens
 
     @property

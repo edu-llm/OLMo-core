@@ -122,7 +122,19 @@ class TaskTokenSource(TokenSource):
 
     @property
     def num_tokens(self) -> int:
-        """Tokens in the slice. A whole number of items, so a range never ends mid-answer."""
+        """
+        A whole number of items, so the *stream* never ends mid-item.
+
+        That is a weaker guarantee than it looks, and weaker than this line used to claim. Rounding down
+        protects the end of the stream only; the trainer asks
+        :class:`~olmo_core.data.composable.ConcatAndChunkInstanceSource` for 512-token windows, and
+        neither 24 nor 19 divides 512, so **3.1% of mano items and 3.5% of compare items are cut by an
+        instance boundary** -- some of them mid-answer, leaving an instance that opens with an answer and
+        no question. The streams are byte-identical across cells so the cuts are identical too, which
+        makes this a uniform tax rather than a confound, but two things follow: ``answer_start`` is valid
+        only *before* chunking, so an eval must locate answers itself rather than trust it; and a
+        sequence length of 504 (or per-item padding with a label mask) would remove the tax entirely.
+        """
         return self._stream.num_tokens
 
     def get_token_range(self, start_idx: int, end_idx: int) -> TokenRange:

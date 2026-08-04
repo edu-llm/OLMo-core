@@ -15,5 +15,6 @@ weight_decay: 0.1
 warmup_steps: 2
 decay_fraction: 0.2
 reasoning_tokens: 20480
+related_reasoning_tokens: 20480
 seed: 1234
 notes: Smoke cell with both reasoning slices. Proves the path, proves nothing about capacity.

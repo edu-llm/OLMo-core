@@ -110,9 +110,18 @@ Two reporting bases, because the literature is ambiguous and the choice matters:
 | **non-embedding** | primary for cell placement | nothing in a tied embedding table is what Allen-Zhu's law is about |
 | **total** | reported alongside | Physics 3.3 §9 says "P … total number of parameters," excluding only *unused* embedding rows |
 
-The two differ by **1.650× at 13M falling to 1.217× at 113M — monotone in model size**, so a design
+At a tied 32k vocabulary the two differ by **1.650× at 13M falling to 1.217× at 113M — monotone in
+model size**, so a design
 that silently picks one loses cross-size comparability, which is what the size axis exists for.
 Report both for every cell; `rho.py` takes the basis as an explicit argument.
+
+**In this experiment the gap is much smaller than that, and the reason is worth stating.** §6.3 replaces
+the 32k BPE with a *closed word-level vocabulary*, which comes out at 3,584 padded entries — so the tied
+table is 0.9M parameters at 13M rather than 8.2M, and the real ratios are **1.073× / 1.049× / 1.032× /
+1.024×**. The monotone shape survives; the magnitude does not. So the basis choice moves a cell's
+reported x-coordinate by 7% at the bottom of the ladder and 2% at the top, not by 65%. Both are still
+reported, because 7% is not nothing and because the ratio is still monotone in size — but the dual-basis
+argument is a precaution here rather than the load-bearing correction it would be under a 32k BPE.
 
 Two further corrections to demand accounting, both in `rho.py`:
 
@@ -193,12 +202,12 @@ Per the cut decision: **omit the 113M row and the 64M ρ=4 cell.**
 | **28M** | ✓ | ✓ | ✓ | ✓ | ✓ |
 | **64M** | ✓ | ✓ | ✓ | ✓ | — |
 
-Fourteen cells plus three reasoning-only controls, **200.5B tokens**. **16.2 h on 8×H100 ≈ $891**, or
-52 h on 8×A100 ≈ $1,127 — roughly a third of the uncut grid. Largest single cell (`64m_d2p4`) 4.9 h,
+Fourteen cells plus three reasoning-only controls, **187.2B tokens**. **15.1 h on 8×H100 ≈ $831**, or
+48 h on 8×A100 ≈ $1,053 — roughly a third of the uncut grid. Largest single cell (`64m_d2p4`) 4.7 h,
 comfortably inside `olmo-core-train`'s 24 h ceiling (§10).
 
-**Submitted as three jobs, one per model size** (§10.3). Fully sequential the grid is 16.2 h; with
-the three rows running concurrently the wall clock is the slowest row, **9.6 h**. The other gain is
+**Submitted as three jobs, one per model size** (§10.3). Fully sequential the grid is 15.1 h; with
+the three rows running concurrently the wall clock is the slowest row, **9.1 h**. The other gain is
 independence: three approvals rather than one, and a failure in the 64M row does not strand the other
 two.
 
@@ -230,11 +239,22 @@ independent variable. **The "~35-exposure floor" cited in revision 1 is unsource
 neither Physics 3.3 nor 4.1, whose lowest useful-data exposure count is 100. The Zipf argument stands
 on computability; the specific floor does not.
 
-**Related reasoning.** Composition, comparison and aggregation over the same entities, covering a
-**fixed 25k-entity probe subset in every cell** at constant absolute tokens and constant per-entity
-coverage. The probe must fit the smallest cell — 13M at ρ=0.25 is **64,180** entities once the name
-term is counted, against 79,397 without it — so 25k leaves a **39k** non-probe comparison group
-there, still far above the n ≥ 2,000 the eval needs.
+**Related reasoning.** Comparison over the same entities, covering a **fixed 25k-entity probe subset in
+every cell** at constant absolute tokens and constant per-entity coverage. The probe must fit the
+smallest cell — 13M at ρ=0.25 is **64,180** entities once the name term is counted, against 79,397
+without it — so 25k leaves a **39k** non-probe comparison group there, still far above the n ≥ 2,000 the
+eval needs. Built as `<compare>` (§8.3): given two people, the earlier of their birth years. Composition
+and aggregation are specified but not built.
+
+Its budget is **separate from and much smaller than** the unrelated slice's — 50M tokens against 1.0B —
+and sized on per-entity coverage rather than on parity. The slice names two probe entities per item, so
+at 1.0B each entity's birth-year rank would be supervised 4,211 times against the 200 exposures fixed
+above: the slice would then teach the ranks outright, "needs two facts" would stop being true, and a
+decline in its score would say nothing about fact *access*. 50M gives 211 mentions per entity, level with
+the facts. One residual to report rather than fix: the slice injects ~216 kbit of fact demand outside the
+demand axis (the 400-word birth-year pool has no ordinal structure, so its total order has to be stored),
+constant in absolute bits across cells and absent from the control — so it shifts the x-axis rather than
+tilting it.
 
 **Unrelated reasoning.** The load-bearing measurement — see §8.3 for which endpoints, which changed.
 
@@ -466,7 +486,7 @@ weight decay varies 14.6× across a row, they are part of the design.
 |---|---|---|
 | sequence length | **512** | attention is +7.6% of FLOPs here against +30% at 2048 |
 | global batch | **≥ 256k tokens** (512 sequences) | below this the small rows lose 20–25% MFU to batch shape |
-| schedule | **WSD**, warmup 2,000 steps, decay-to-zero over the last 10% | with independent decay branches per compared checkpoint (§3.5) |
+| schedule | **WSD**, warmup **2% of each cell's own steps**, decay-to-zero over the last 10% | with independent decay branches per compared checkpoint (§3.5) |
 | learning rate | tuned once at 28M, then **identical in every cell** | the invariant matters more than the value |
 | weight decay | identical in every cell, and `Σ lr·wd` **logged per cell** | it varies 14.6× across a count row and cannot be argued away |
 | intra-document masking | on (`generate_doc_lengths`) | otherwise packed biographies attend across each other and contaminate the bit count. Flash backends only; `pad == eos` explodes `max_docs`; no composable test coverage |
@@ -564,8 +584,18 @@ hold nothing memorisable and cannot themselves compete for the capacity under me
 
 | | Width | Measured degenerate floor | Role |
 |---|---|---|---|
-| `<mano>` | 24 tokens at L=10 | **4.59%** against a 4.35% uniform baseline | primary, unrelated |
-| `<compare>` | 21 tokens | **0.035%** over the 25k probe subset | related; needs two facts |
+| `<mano>` | 24 tokens at L=10 | **4.64%** against a 4.35% uniform baseline | primary, unrelated |
+| `<compare>` | 19 tokens | **0.70%** over the 25k probe subset | related; needs two facts |
+
+Both floors are the best of two policy families -- the best *constant* answer **and** the best *copy* of
+a fixed span of the prompt. Searching constants alone is how an endpoint loses its floor: `<compare>`
+originally answered with the earlier person's **name**, which is a span of its own prompt, so "always
+name the first person" scored **50.2%** while the best constant name scored 0.02%. A binary endpoint
+whose floor is quoted as 0% when it is 50% has half the dynamic range its admission gate assumes, and
+any score under 50% is below its own floor -- which is the failure 1 lists for reasoning-gym. The task
+now answers with the earlier **birth year**, a word that never appears in the prompt, so no copy policy
+can reach it and the floor is 0.70%. The composition under test is unchanged: recall both years,
+compare, emit the smaller.
 
 The floors are measured, and measuring the first one changed the task. With a free choice of operand,
 `× 0` is an absorbing state and the best constant answer was right **8.34%** of the time — worse than
@@ -581,12 +611,12 @@ an arbitrary sub-pool, so that axis carries `<mano>` alone. Composition and aggr
 **What the eval set has to avoid, when it is built.** Both tasks are generated from a seed, so an eval
 set is a seed offset -- `+7` onward is unused (`+4` Mano, `+5` compare, `+6` the mixture). For Mano that
 is enough on its own: the item space is ~2^54 and 1.0B tokens covers 2e-9 of it, so an eval item is new
-with probability ~1. For `<compare>` it is **not**: there are 625M ordered pairs over the 25,000-entity
-probe subset and 1.0B tokens is 47.6M items, so **7.3% of eval pairs will have been seen verbatim in
-training**. That is defensible -- the fact is what is under test, not the pair -- but it has to be
-reported, and a 7.3% seen-pair rate must be excluded before it can be read as memorisation. Splitting
-the probe subset into disjoint train and eval halves is the alternative, at the cost of halving the
-per-entity coverage the subset was fixed to hold constant.
+with probability ~1. For `<compare>` the unit is the **unordered** pair, not the ordered one -- the
+answer to "the earlier birth year of A and B" does not depend on the order, and the generator emits both
+-- so there are 312M pairs over the 25,000-entity probe subset, not 625M. At the related slice's 50M
+budget that is 2.63M items and **0.84% of eval pairs will have been seen in training**, which is small
+enough to report and ignore. It was 14.1% at the 1.0B budget the slice originally carried, which was
+not.
 
 Brevo1 and Reasoning Core are the remaining gap in this section, and `<mano>` alone cannot separate
 "reasoning crowded out" from "mod-23 tables crowded out" — that separation is the reason this section
@@ -703,14 +733,16 @@ platform's dropdown tops out at `gpu-8xh100` ($55.04/hr) and `gpu-8xa100` ($21.9
 single card is `gpu-1xl40s` (48 GB). Anything at or above `gpu-8xa100` needs an **admin**, not a team
 lead, because every profile over $20/hr routes that way.
 
-| First run (§3.2), 14 cells + 3 controls, 200.5B tokens | 8×H100 | 8×A100 |
+| First run (§3.2), 14 cells + 3 controls, 187.2B tokens | 8×H100 | 8×A100 |
 |---|---|---|
-| wall clock, sequential | **16.2 h** | 52 h |
-| wall clock, 3 jobs in parallel | **9.6 h** | 32 h |
-| cost | **~$891** | ~$1,127 |
+| wall clock, sequential | **15.1 h** | 48 h |
+| wall clock, 3 jobs in parallel | **9.1 h** | 30 h |
+| cost | **~$831** | ~$1,053 |
 
-Per row: 13M 40.2B tokens / 1.5 h / $85, 28M 78.0B / 5.0 h / $278, 64M 82.3B / 9.6 h / $528. The 64M
-row is three-fifths of the cost, so it is the one to re-budget after the first measurement.
+Per row: 13M 35.4B tokens / 1.3 h / $74, 28M 73.3B / 4.7 h / $259, 64M 78.5B / 9.1 h / $499. The 64M
+row is three-fifths of the cost, so it is the one to re-budget after the first measurement. These are
+FLOP estimates at 12/16/20% MFU per row, **not measurements** — read the real figure off the first
+cell's first 50 steps.
 
 At 20% MFU with the LM head counted. **Revision 1's FLOP count omitted the LM head**, which is
 39/30/22% of the model across the rows — including it is +65/43/29% per row. And 8% MFU applied flat
@@ -1022,6 +1054,44 @@ correct consequence of the invariant rather than a violation of it.
 the best-constant policy scored **8.34%** -- worse than the 6.80% §8.3 cites as its reason for rejecting
 L=13. The endpoint promoted for having a clean floor had a dirtier one than the endpoint it replaced,
 and only measuring it showed that. Excluding zero brings it to 4.59% against a 4.35% uniform baseline.
+
+**The control ran a different learning-rate schedule from every cell it anchors.** `warmup_steps` was
+2,000 across the grid, on the principle that hyperparameters are held constant. For warmup that does the
+opposite of what it intends: run length varies 37x, so 2,000 steps was 1.4% of the largest cell and
+**52% of the control**. The control would have consumed its reasoning tokens at a mean 0.69 of peak
+learning rate against 0.94 for the cell it is compared with -- systematically under-optimised, biasing
+the crowding measurement toward a null. This is §3.5's withdrawn error reintroduced structurally rather
+than by choice of checkpoint. Warmup is now a **fraction** (2%), so the schedule *shape* is identical
+across cells, and a warmup that would consume a whole run is refused.
+
+**The related slice's floor was 50%, quoted as 0.035%.** `degenerate_answer` searched constant answers
+only. `<compare>`'s answer was the earlier person's *name* -- a span of its own prompt -- so "always name
+the first person" is right **50.2%** of the time, needing no facts, no ordering and no arithmetic. The
+best constant name managed 0.02%: a factor of 1,400. A binary endpoint whose floor is quoted as 0% when
+it is 50% has half the dynamic range §8.6's admission band assumes, and any score under 50% is below its
+own floor -- the reasoning-gym failure §1 lists. Two fixes: the task now answers with the earlier **birth
+year**, a word absent from the prompt, dropping the floor to 0.70%; and `degenerate_baseline` searches
+constant *and* copy families, taking a copy policy as the winner only when it beats the best constant by
+more than three standard errors (the maximum over ~20 offsets is otherwise upward-biased by noise).
+
+**The related slice out-supervised the facts it depends on by 21x.** At the unrelated slice's 1.0B it
+would have named each of the 25,000 probe entities 4,211 times against the fact slice's 200 exposures,
+teaching the birth-year ranks outright -- so "needs two facts to answer" would no longer have been true
+and a decline would have said nothing about fact *access*. It also injects ~216 kbit of fact demand
+outside the demand axis, present in every demand cell and absent from the control. The slice now has its
+own budget, `related_reasoning_tokens` = 50M, sized to 211 mentions per entity. The uncounted demand term
+remains, constant in absolute bits across cells, so it shifts the x-axis rather than tilting it.
+
+**The zero-exclusion re-randomisation was a dead expression.** `1 + (residues[i] + position) % 22`
+inside a branch that only fires when `residues[i] == 0` is the constant `1 + position`, so operator
+position 0 always got `<n1>` and position 4 always `<n5>`, doubling the mass on one position-specific
+operand. The floor survived it; the uniformity the comment claimed did not. The replacement is now
+redrawn from the item's own mixer.
+
+**`CompareTask.fingerprint` collided across tasks generating different items.** It hashed the schema, the
+probe subset's *size* and the task seed, but neither the table's seed nor the probe ids -- so two tasks
+over different entities shared a digest. That digest keys the cached instance index and is what a
+"checkpoint versus corpus" audit compares.
 
 **A repeated domain token is refused again.** An earlier fix let the vocabulary deduplicate a word
 repeated within one role, which it must, because the task words and the biography literals both want

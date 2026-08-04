@@ -63,9 +63,9 @@ Submit it as **three fan-outs, one per row**, so the rows run concurrently:
 
 | `--row` | `fanout_size` | tokens | wall clock on 8×H100 | cost |
 |---|---|---|---|---|
-| `13M` | 6 | 40.2B | 1.5 h | $85 |
-| `28M` | 6 | 78.0B | 5.0 h | $278 |
-| `64M` | 5 | 82.3B | 9.6 h | $528 |
+| `13M` | 6 | 35.4B | 1.3 h | $74 |
+| `28M` | 6 | 73.3B | 4.7 h | $259 |
+| `64M` | 5 | 78.5B | 9.1 h | $499 |
 
 ```
 bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone
@@ -74,8 +74,8 @@ bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone
 ```
 
 with `fanout_size: 6` and `fanout_index_parameter: cell`. Each cell reads
-`AWS_BATCH_JOB_ARRAY_INDEX` and gets its own checkpoint prefix. Sequential the grid is 16.2 h and about
-$891; three jobs bring the wall clock to 9.6 h, and a failure in one row does not strand the others.
+`AWS_BATCH_JOB_ARRAY_INDEX` and gets its own checkpoint prefix. Sequential the grid is 15.1 h and about
+$831; three jobs bring the wall clock to 9.1 h, and a failure in one row does not strand the others.
 
 Those hours are `PRD.md` §10's FLOP estimate at 12/16/20% MFU per row, scaled to the current token
 counts — **not measured**. Read the real MFU off the first cell's first 50 steps and re-budget before
@@ -145,27 +145,42 @@ grid generators default to 1.0B.
 The budget is **per slice**, not a total split between them. That distinction is load-bearing: the
 control carries only `<mano>`, so splitting a fixed total would have handed it twice the `<mano>`
 exposure of every cell it is the reference for, and its score would have beaten theirs for a reason
-that has nothing to do with facts. So a count-axis cell's reasoning total is 2.0B and the control's is
-1.0B, and that asymmetry is the correct consequence rather than a violated invariant.
+that has nothing to do with facts.
+
+The two slices carry deliberately *different* budgets — `reasoning_tokens` 1.0B for `<mano>`,
+`related_reasoning_tokens` 50M for `<compare>`. The related one is sized on **per-entity coverage**, not
+on parity: it names two of the fixed 25,000 probe entities per item, so at 1.0B each entity's birth-year
+rank would be supervised 4,211 times against the 200 exposures the fact slice gets. At that rate the
+slice teaches the ranks outright, "needs two facts" stops being true, and a decline would say nothing
+about fact access. 50M gives 211 mentions per entity, level with the facts.
 
 Two slices, each prefixed with a domain token so the endpoints stay separable:
 
 | | | |
 |---|---|---|
 | `<mano>` | mod-23 mental arithmetic, 10 operands, no chain of thought | unrelated to the facts |
-| `<compare>` | which of two people was born earlier | needs two facts to answer |
+| `<compare>` | the earlier of two people's birth years | needs two facts to answer |
 
 `<mano>` is Physics 4.1's task at the length that paper found the transition at. It is the primary
 endpoint because it shares no entity with the corpus: if it degrades as fact demand rises, the cost is
 capacity, not fact access. `<compare>` is the contrast — it reads two biographies, so it should
 degrade earlier and harder if the mechanism is retrieval instead.
 
-Both are generated per example from a seed rather than drawn from a fixed set, so the slice holds
-nothing to memorise and cannot itself compete for the capacity being measured. Both report a
-**measured** degenerate floor, not an assumed one: **4.59%** for Mano against a 4.35% uniform baseline,
-and **0.035%** for compare over the 25,000-entity probe subset. Measuring it changed the task — with a
-free choice of operand, `× 0` is absorbing and the floor came out at 8.34%, above the 6.80% the paper
-reports for the length this design rejected, so zero is excluded as a multiplicand.
+Both are generated per example from a seed rather than drawn from a fixed set, so neither slice holds an
+item worth memorising. Both report a **measured** degenerate floor, searched over two policy families —
+the best constant answer *and* the best copy of a fixed span of the prompt: **4.64%** for Mano against a
+4.35% uniform baseline, **0.70%** for compare.
+
+Measuring the floors changed both tasks, which is the argument for measuring them.
+
+- Mano: with a free choice of operand, `× 0` is absorbing and the floor came out at **8.34%** — above
+  the 6.80% the paper reports for the length this design *rejected*. Zero is now excluded as a
+  multiplicand.
+- `<compare>` originally answered with the earlier person's **name**, which is a span of its own prompt,
+  so "always name the first person" scored **50.2%** while the best constant name managed 0.02%. A binary
+  endpoint with a 50% floor has half its range available to a policy that reads no facts, and any score
+  below 50% would be under its own floor. It now answers with the earlier **birth year**, a word that
+  never appears in the prompt, so no copy policy can reach it.
 
 `<compare>` is skipped where there is nothing to compare: on the entropy axis, whose attributes are six
 positional four-word composites with no birth year, and on the control, which has no facts at all. Both

@@ -95,8 +95,30 @@ the endpoint is dead on dynamic range -- which is a gate failure, detected befor
 null.
 """
 
-_DOMAIN_TOKENS: Tuple[str, ...] = ("<facts>", "<mano>", "<brevo>", "<related>")
-"""One per corpus slice. Mandatory on every segment; there is no flag to disable it."""
+RELATED_REASONING_TOKENS: int = 50_000_000
+"""
+The related slice's own budget: 50M tokens, an order of magnitude below the unrelated slice's.
+
+Sized on *per-entity coverage*, not on parity with `<mano>`. The related slice draws pairs from the
+fixed 25,000-entity probe subset and names two entities per item, so 1.0B tokens would supervise each
+entity's birth-year rank **4,211 times against the 200 exposures 3.3 fixes for the fact slice** -- 21x.
+Three things follow from that, and all three are bad:
+
+- The birth-year pool is 400 words with no ordinal structure, so the task needs a 400-element arbitrary
+  total order plus 25,000 ranks stored in weights. That makes the related slice *parametric* in exactly
+  the way 8.3 criticises Mano for being, unacknowledged.
+- Roughly 216 kbit of fact demand enters outside the demand axis -- present in every demand cell and
+  absent from the control.
+- At 4,211 supervisions per entity the slice teaches the rank itself, so "needs two facts to answer" is
+  no longer guaranteed and a decline would not be evidence about fact *access*.
+
+50M gives 211 mentions per entity, level with the fact slice. The uncounted demand term does not go
+away -- it is constant in absolute bits across cells, so it shifts the x-axis rather than tilting it --
+but the slice stops out-supervising the facts it is supposed to depend on.
+"""
+
+_DOMAIN_TOKENS: Tuple[str, ...] = ("<facts>", "<mano>", "<compare>")
+"""One per corpus slice, and the same tuple ``train_cell`` builds from."""
 
 
 @dataclass(frozen=True)
@@ -121,10 +143,22 @@ class CellSpec:
     :param learning_rate: Peak learning rate. One value across the grid.
     :param weight_decay: One value across the grid. ``sum(lr * wd)`` is logged per cell because it
         varies 14.6x across a count row and cannot be argued away.
-    :param warmup_steps: WSD warmup. The scheduler itself is OLMo-core's ``WSD``.
+    :param warmup_fraction: WSD warmup, as a fraction of the cell's own step count. A *fraction*
+        rather than a step count, because a step count fixed across the grid does the opposite of what
+        holding a hyperparameter constant is supposed to do: run length varies 37x across the grid, so
+        2,000 steps was 1.4% of the largest cell and 52% of the reasoning-only control. The control
+        would have consumed its reasoning tokens at a mean 0.69 of peak learning rate against 0.94 for
+        the cell it is compared with -- systematically under-optimised, biasing the crowding
+        measurement toward a null. That is the error 3.5 withdraws revision 1 for, reintroduced
+        structurally. What has to be constant is the schedule *shape*.
+    :param warmup_steps: An explicit warmup in steps, overriding ``warmup_fraction``. For smoke cells,
+        which are too short for any fraction to be meaningful. Leave unset on a real cell.
     :param decay_fraction: Fraction of the run spent decaying to zero.
-    :param reasoning_tokens: Absolute tokens **per reasoning slice**, identical in every cell that
-        carries that slice. Per slice rather than a total split between them, because the control
+    :param related_reasoning_tokens: The related slice's own absolute budget, sized on per-entity
+        coverage rather than on parity with the unrelated slice. See :data:`RELATED_REASONING_TOKENS`.
+        Ignored where the cell carries no related slice.
+    :param reasoning_tokens: Absolute tokens for the **unrelated** reasoning slice, identical in every
+        cell. Per slice rather than a total split between them, because the control
         carries only the unrelated slice and an evenly split total would hand it twice the exposure of
         the cells it is the reference for. So a cell's reasoning total is this times the number of
         slices it carries. Zero marks a facts-only cell; the reasoning-only control states zero fact
@@ -147,9 +181,11 @@ class CellSpec:
     global_batch_size: int = 262_144
     learning_rate: float = 3e-3
     weight_decay: float = 0.1
-    warmup_steps: int = 2_000
+    warmup_fraction: float = 0.02
+    warmup_steps: Optional[int] = None
     decay_fraction: float = 0.1
     reasoning_tokens: int = 0
+    related_reasoning_tokens: int = 0
     seed: int = 1234
     table_entities: Optional[int] = None
     notes: str = ""
@@ -205,16 +241,35 @@ class CellSpec:
             ("sequence_length", self.sequence_length),
             ("global_batch_size", self.global_batch_size),
             ("learning_rate", self.learning_rate),
-            ("warmup_steps", self.warmup_steps),
         ):
             if value <= 0:
                 raise OLMoConfigurationError(
                     f"cell '{self.cell_id}': '{name}' must be positive, got {value}"
                 )
+        if not 0 < self.warmup_fraction < 0.5:
+            raise OLMoConfigurationError(
+                f"cell '{self.cell_id}': 'warmup_fraction' must be in (0, 0.5), got "
+                f"{self.warmup_fraction}. Above a half the run is mostly ramp."
+            )
+        if self.warmup_steps is not None and self.warmup_steps <= 0:
+            raise OLMoConfigurationError(
+                f"cell '{self.cell_id}': 'warmup_steps' must be positive when set, got "
+                f"{self.warmup_steps}"
+            )
         if not 0 < self.decay_fraction < 1:
             raise OLMoConfigurationError(
                 f"cell '{self.cell_id}': 'decay_fraction' must be in (0, 1), got "
                 f"{self.decay_fraction}"
+            )
+        if self.related_reasoning_tokens < 0:
+            raise OLMoConfigurationError(
+                f"cell '{self.cell_id}': 'related_reasoning_tokens' must not be negative, got "
+                f"{self.related_reasoning_tokens}"
+            )
+        if self.sweep == "entropy" and (self.n_entities or 0) <= 0:
+            raise OLMoConfigurationError(
+                f"cell '{self.cell_id}': the entropy axis needs a positive 'n_entities', got "
+                f"{self.n_entities}"
             )
         if self.weight_decay < 0 or self.reasoning_tokens < 0 or self.seed < 0:
             raise OLMoConfigurationError(
@@ -257,9 +312,25 @@ class CellSpec:
         """
         if self.reasoning_tokens <= 0:
             return ()
-        if self.sweep == "count" and not self.is_control:
+        if self.sweep == "count" and not self.is_control and self.related_reasoning_tokens > 0:
             return ("mano", "compare")
         return ("mano",)
+
+    def slice_budget(self, name: str) -> int:
+        """
+        The absolute token budget for one named slice.
+
+        :param name: A member of :attr:`reasoning_slice_names`.
+
+        :returns: Tokens.
+
+        :raises OLMoConfigurationError: If the cell does not carry that slice.
+        """
+        if name not in self.reasoning_slice_names:
+            raise OLMoConfigurationError(
+                f"cell '{self.cell_id}' carries {self.reasoning_slice_names}, not {name!r}"
+            )
+        return self.related_reasoning_tokens if name == "compare" else self.reasoning_tokens
 
     @property
     def ladder_row(self) -> sizes.LadderRow:
@@ -289,12 +360,17 @@ class CellSpec:
         assert self.bits_per_attribute is not None
         return corpus_values.bits_per_entity_for(self.bits_per_attribute)
 
-    def resolve(self, *, name_space: Optional[int] = None) -> "ResolvedCell":
+    def resolve(
+        self, *, name_space: Optional[int] = None, vocab_size: Optional[int] = None
+    ) -> "ResolvedCell":
         """
         Fill in everything the cell implies, and check the halves agree.
 
         :param name_space: The name universe, for the demand formula's name term. Defaults to the
             schema's own, which is what a run uses; pass a value only to explore the sensitivity.
+        :param vocab_size: Padded vocabulary size, for the *total*-parameter basis (embeddings are tied,
+            so one table). Without it both bases report the non-embedding count and 3's dual-basis
+            reporting is silently one basis twice. ``train_cell`` passes the built vocabulary's size.
 
         :returns: The resolved cell.
 
@@ -303,7 +379,16 @@ class CellSpec:
         """
         universe = corpus_values.NAME_SPACE if name_space is None else name_space
         params = self.non_embedding_params
-        total_params = params + 0  # embeddings are added by the caller that knows the vocabulary
+        # The total basis needs the embedding table, which needs the vocabulary. Without one the two
+        # bases collapse into each other, and 3's argument for reporting both is that they diverge
+        # monotonically with model size, so a design that quietly picks one loses the cross-size
+        # comparability the size axis exists for. Passing vocab_size is what makes the second basis real
+        # rather than a copy of the first. With our closed 3,584-word vocabulary the gap is 1.073x at 13M
+        # falling to 1.024x at 113M -- far below the 1.650x/1.217x a tied 32k BPE would give, which is
+        # why this is a precaution rather than a correction that changes a conclusion.
+        total_params = (
+            params if vocab_size is None else params + self.ladder_row.d_model * vocab_size
+        )
 
         if self.sweep == "count" and self.demand_bits_per_param == 0:
             # The reasoning-only control. solve() refuses a zero target and should keep refusing it --
@@ -337,7 +422,7 @@ class CellSpec:
             n_entities,
             bits_per_entity=self.bits_per_entity,
             non_embedding_params=params,
-            total_params=max(total_params, params),
+            total_params=total_params,
             name_space=universe,
         )
         return ResolvedCell(
@@ -348,6 +433,8 @@ class CellSpec:
             demand_per_non_embedding_param=demand.per_non_embedding_param,
             attribute_bits=demand.attribute_bits,
             name_bits=demand.name_bits,
+            total_params=total_params,
+            demand_per_total_param=demand.per_total_param,
         )
 
     # --- serialisation -----------------------------------------------------------------------------
@@ -406,6 +493,10 @@ class ResolvedCell:
     :param demand_per_non_embedding_param: The experiment's x-axis for this cell.
     :param attribute_bits: The ``N * bits_per_entity`` part.
     :param name_bits: The ``N * log2(N0/N)`` part.
+    :param total_params: Non-embedding plus the tied embedding table, when a vocabulary was supplied.
+        Equal to ``non_embedding_params`` when it was not.
+    :param demand_per_total_param: The second reporting basis of 3. Equal to
+        ``demand_per_non_embedding_param`` when no vocabulary was supplied.
     """
 
     spec: CellSpec
@@ -415,6 +506,8 @@ class ResolvedCell:
     demand_per_non_embedding_param: float
     attribute_bits: float
     name_bits: float
+    total_params: int = 0
+    demand_per_total_param: float = 0.0
 
     @property
     def rho(self) -> float:
@@ -442,8 +535,8 @@ class ResolvedCell:
 
     @property
     def reasoning_total(self) -> int:
-        """Reasoning tokens across every slice: the per-slice budget times the number of slices."""
-        return self.spec.reasoning_tokens * len(self.spec.reasoning_slice_names)
+        """Reasoning tokens across every slice this cell carries, at each slice's own budget."""
+        return sum(self.spec.slice_budget(name) for name in self.spec.reasoning_slice_names)
 
     def total_tokens(self, mean_tokens_per_bio: float) -> int:
         """Fact tokens plus the cell's reasoning tokens, over every slice it carries."""
@@ -458,6 +551,33 @@ class ResolvedCell:
         :returns: Steps, rounding down; the remainder is under one batch.
         """
         return self.total_tokens(mean_tokens_per_bio) // self.spec.global_batch_size
+
+    def warmup(self, steps: int) -> int:
+        """
+        WSD warmup in steps: the cell's fraction of its own run, or its explicit override.
+
+        Taking the step count as an argument rather than recomputing it, so the schedule is derived
+        from the same number the trainer's ``max_duration`` uses. At least one step, and never the whole
+        run -- a cell that warms up for its entire length never reaches peak learning rate.
+
+        :param steps: The cell's total optimizer steps.
+
+        :returns: Warmup steps.
+
+        :raises OLMoConfigurationError: If warmup would consume the whole run.
+        """
+        warmup = (
+            self.spec.warmup_steps
+            if self.spec.warmup_steps is not None
+            else max(1, round(self.spec.warmup_fraction * steps))
+        )
+        if warmup >= steps:
+            raise OLMoConfigurationError(
+                f"cell '{self.spec.cell_id}': warmup of {warmup:,} steps is not below the run's "
+                f"{steps:,}, so the learning rate never reaches its peak and the cell is not "
+                f"comparable with any other."
+            )
+        return warmup
 
     def summary(self, mean_tokens_per_bio: float) -> Dict[str, Any]:
         """
@@ -478,16 +598,21 @@ class ResolvedCell:
             "n_entities": self.n_entities,
             "exposures": self.spec.exposures,
             "demand_bits_per_param": round(self.demand_per_non_embedding_param, 4),
+            "demand_bits_per_total_param": round(self.demand_per_total_param, 4),
+            "total_params": self.total_params,
             "rho_at_declared_r_e": round(self.rho, 4),
             "attribute_bits": int(self.attribute_bits),
             "name_bits": int(self.name_bits),
             "mean_tokens_per_bio": round(mean_tokens_per_bio, 2),
             "fact_tokens": self.fact_tokens(mean_tokens_per_bio),
-            "reasoning_tokens_per_slice": self.spec.reasoning_tokens,
+            "reasoning_tokens_unrelated": self.spec.reasoning_tokens,
+            "reasoning_tokens_related": self.spec.related_reasoning_tokens,
             "reasoning_slices": ",".join(self.spec.reasoning_slice_names) or "none",
             "reasoning_tokens": self.reasoning_total,
             "total_tokens": self.total_tokens(mean_tokens_per_bio),
             "steps": steps,
+            "warmup_steps": self.warmup(steps),
+            "warmup_pct": round(100 * self.warmup(steps) / steps, 2),
             "cumulative_lr_times_wd": round(
                 steps * self.spec.learning_rate * self.spec.weight_decay, 4
             ),
@@ -509,7 +634,11 @@ def first_run_cells(**overrides: Any) -> Tuple[CellSpec, ...]:
 
     :returns: The cells, in the order the three jobs should run them.
     """
-    settings: Dict[str, Any] = {"reasoning_tokens": REASONING_TOKENS, **overrides}
+    settings: Dict[str, Any] = {
+        "reasoning_tokens": REASONING_TOKENS,
+        "related_reasoning_tokens": RELATED_REASONING_TOKENS,
+        **overrides,
+    }
     control: Dict[str, Any] = dict(settings)
     control["notes"] = control.get("notes") or "reasoning-only control: no facts"
     cells: List[CellSpec] = []

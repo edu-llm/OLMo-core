@@ -7,9 +7,10 @@ learning_rate: 0.003
 n_entities: 611184
 notes: ''
 reasoning_tokens: 1000000000
+related_reasoning_tokens: 0
 row: 28M
 seed: 1234
 sequence_length: 512
 sweep: entropy
-warmup_steps: 2000
+warmup_fraction: 0.02
 weight_decay: 0.1

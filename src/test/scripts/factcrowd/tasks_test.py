@@ -166,12 +166,16 @@ def test_a_degenerate_mano_length_is_refused():
 # --- the related-reasoning slice ---------------------------------------------------------------------
 
 
-def test_compare_answers_the_entity_with_the_lower_ordinal():
+def test_compare_answers_the_lower_of_the_two_birth_years():
     """
     Two facts and an ordering, checked against the table rather than against the generator.
 
     This is the related-reasoning slice: it needs both birth years, so it is where crowding would show
     first if the mechanism is fact access rather than capacity.
+
+    The answer is the earlier person's *year*, not their name, and that is the whole point. A name
+    answer is a span of the prompt, so "always name the first person" scored 50.2% -- half the range of a
+    binary endpoint, for a policy needing no facts at all. The year never appears in the prompt.
     """
     schema, vocabulary, table = assemble()
     column = schema.pool_index["birth_year"]
@@ -189,17 +193,23 @@ def test_compare_answers_the_entity_with_the_lower_ordinal():
         words = vocabulary.decode(item.tokens)
         assert tuple(words[item.answer_start : item.answer_end]) == item.answer
 
-        # Recover both names from the prompt and confirm the answer is the earlier of the two.
+        # Recover both names from the prompt, look up both years in the table, and confirm the answer
+        # is the earlier year -- never reading the generator's own bookkeeping.
         name_width = len(schema.schema.names)
         first = tuple(words[3 : 3 + name_width])
         second = tuple(words[4 + name_width : 4 + 2 * name_width])
-        candidates = {}
+        pool = {p.name: p for p in schema.schema.attributes}[
+            {v.name: v for v in schema.values}["birth_year"].pool_names[0]
+        ]
+        indices = []
         for entity_id in table.probe_ids:
-            parts = table.name_parts(int(entity_id))
-            if parts in (first, second):
-                candidates[parts] = int(table.attributes[int(entity_id)][column])
-        assert len(candidates) == 2, (first, second)
-        assert item.answer == min(candidates, key=lambda key: candidates[key])
+            if table.name_parts(int(entity_id)) in (first, second):
+                indices.append(int(table.attributes[int(entity_id)][column]))
+        assert len(indices) == 2, (first, second)
+        assert item.answer == (pool.values[min(indices)],)
+        # One token wide, and it is not anywhere in the prompt -- so no copy policy can reach it.
+        assert item.answer_end - item.answer_start == 1
+        assert item.answer[0] not in words[: item.answer_start]
 
 
 def test_compare_items_are_a_fixed_width_and_ask_about_two_distinct_people():
@@ -240,20 +250,48 @@ def test_compare_only_asks_about_the_probe_subset():
         assert tuple(words[4 + name_width : 4 + 2 * name_width]) in allowed
 
 
-def test_compares_degenerate_policy_is_near_zero():
+def test_compares_floor_is_low_because_no_copy_policy_can_reach_the_answer():
     """
-    A constant name is right only when that name happens to be in the pair and earlier.
+    The floor searched over both families -- constant answers *and* copies of prompt spans.
 
-    Which is what a good floor looks like: the endpoint has essentially its whole range as headroom.
+    Searching constants alone is how an endpoint loses its floor. When the answer was the earlier
+    person's name it was a span of the prompt, so "copy the first name" was right 50.2% of the time
+    while the best constant name managed 0.02%: a factor of 1,400, and half the range of a binary
+    endpoint available to a policy that reads no facts. Any score under 50% would then have been below
+    the endpoint's own floor, which is the reasoning-gym failure the module docstring cites.
     """
     schema, vocabulary, table = assemble()
     task = T.CompareTask(
         table, schema, vocabulary, domain_token="<compare>", probe_ids=table.probe_ids, seed=3
     )
-    _, frequency = task.degenerate_answer(3_000)
-    # Tiny, and it shrinks as the probe subset grows: 0.035% over the real 25,000-entity subset. A
-    # constant name is right only when it happens to be in the pair *and* the earlier of the two.
-    assert frequency < 0.01, frequency
+    label, frequency = task.degenerate_baseline(3_000)
+    assert frequency < 0.05, (label, frequency)
+    # A copy policy must not be the winner, and no offset may beat the best constant by much: the
+    # answer word is absent from the prompt by construction.
+    assert label.startswith("constant:"), label
+
+
+def test_mano_and_compare_floors_are_the_best_of_both_policy_families():
+    """
+    Whichever family wins, the reported floor is the maximum -- that is what a floor means.
+
+    For Mano the two coincide near the uniform 1/23, which is exactly why searching constants alone
+    looked adequate until a task arrived whose answer sat in its own prompt.
+    """
+    schema, vocabulary, table = assemble()
+    mano = T.ManoTask(vocabulary, domain_token="<mano>", length=10, seed=7)
+    label, frequency = mano.degenerate_baseline(5_000)
+    # A constant, because no offset in the expression predicts the answer: the best of ~20 offsets sits
+    # at the uniform rate and does not clear the noise margin the estimator requires.
+    assert label.startswith("constant:"), label
+    assert 1 / T.MANO_MODULUS - 0.01 < frequency < 0.06, (label, frequency)
+    # The constant-only figure can never exceed the full search.
+    assert mano.degenerate_answer(5_000)[1] <= frequency + 1e-9
+
+    compare = T.CompareTask(
+        table, schema, vocabulary, domain_token="<compare>", probe_ids=table.probe_ids, seed=3
+    )
+    assert compare.degenerate_answer(2_000)[1] <= compare.degenerate_baseline(2_000)[1] + 1e-9
 
 
 def test_compare_refuses_a_schema_without_an_ordinal_field():

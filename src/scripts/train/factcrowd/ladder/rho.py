@@ -139,7 +139,8 @@ class Demand(NamedTuple):
     """
     What a corpus asks of a model, on both parameter bases.
 
-    Carrying both is not indecision. The bases diverge monotonically with model size -- 1.650x at
+    Carrying both is not indecision. The bases diverge monotonically with model size -- at a tied 32k
+    vocabulary 1.650x at
     13M to 1.217x at 113M -- so a cross-size comparison made on one basis and read as the other is
     wrong by an amount that looks like a trend.
     """

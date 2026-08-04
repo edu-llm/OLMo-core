@@ -6,9 +6,10 @@ global_batch_size: 262144
 learning_rate: 0.003
 notes: ''
 reasoning_tokens: 1000000000
+related_reasoning_tokens: 50000000
 row: 64M
 seed: 1234
 sequence_length: 512
 sweep: count
-warmup_steps: 2000
+warmup_fraction: 0.02
 weight_decay: 0.1

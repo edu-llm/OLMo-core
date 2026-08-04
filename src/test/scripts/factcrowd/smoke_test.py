@@ -15,11 +15,13 @@ Marked ``slow``: about a minute on CPU. Deselect with ``-m 'not slow'``.
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+from factcrowd import cells as C
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 ENTRY_POINT = REPO_ROOT / "src" / "scripts" / "train" / "factcrowd" / "train_cell.py"
@@ -242,12 +244,22 @@ def test_the_three_way_mixture_trains_at_the_absolute_volumes_the_cell_states(tm
     output = result.stdout + result.stderr
 
     assert "Training complete" in output
-    line = output.split("mixture for")[1].split("\n")[0]
-    counts = {
-        part.strip().split()[0]: int(part.strip().split()[1])
-        for part in line.split(":", 1)[1].split(",")
-    }
-    assert set(counts) == {"facts", "mano", "compare"}, line
-    # Same per-slice budget, so the same instance count -- the invariant, read off the run itself.
-    assert counts["mano"] == counts["compare"], line
-    assert counts["facts"] > counts["mano"], line
+
+    # Parsed from MixingInstanceSource's own summary of what it actually sampled, NOT from
+    # train_cell's log line. That line reports train_cell's own arithmetic, so asserting against it
+    # would check the declaration against itself and pass however the mixer behaved.
+    sampled = {}
+    for line in output.splitlines():
+        match = re.search(r"([\d.]+)% (\w+), ([\d,]+) sampled instances", line)
+        if match:
+            sampled[match.group(2)] = int(match.group(3).replace(",", ""))
+    assert set(sampled) == {"facts", "mano", "compare"}, output[-3000:]
+    assert sampled["facts"] > sampled["mano"], sampled
+
+    # The two reasoning slices carry deliberately *different* budgets -- the related one is sized on
+    # per-entity coverage, not on parity -- so what is checked is each against its own config, in
+    # instances, allowing the one-instance truncation calculate_sample_sizes can introduce.
+    spec = C.load_cell(MIXTURE_CELL)
+    for name in ("mano", "compare"):
+        want = spec.slice_budget(name) // spec.sequence_length
+        assert abs(sampled[name] - want) <= 1, (name, sampled[name], want)

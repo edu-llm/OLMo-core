@@ -94,11 +94,31 @@ def test_the_control_gets_the_same_unrelated_exposure_as_the_cells_it_anchors():
 
     assert control.reasoning_slice_names == ("mano",)
     assert demand.reasoning_slice_names == ("mano", "compare")
-    # Same per-slice budget, so the same unrelated-slice exposure in both.
-    assert control.reasoning_tokens == demand.reasoning_tokens
-    # And the totals differ, which is the correct consequence rather than a violated invariant.
+    # The same *unrelated* budget in both, which is the exposure the comparison rests on.
+    assert control.slice_budget("mano") == demand.slice_budget("mano") == C.REASONING_TOKENS
+    # The totals differ, which is the correct consequence rather than a violated invariant: the related
+    # slice carries its own budget, sized on per-entity coverage rather than on parity.
     assert control.resolve().reasoning_total == C.REASONING_TOKENS
-    assert demand.resolve().reasoning_total == 2 * C.REASONING_TOKENS
+    assert demand.resolve().reasoning_total == C.REASONING_TOKENS + C.RELATED_REASONING_TOKENS
+    assert demand.slice_budget("compare") == C.RELATED_REASONING_TOKENS
+    with pytest.raises(OLMoConfigurationError, match="carries"):
+        control.slice_budget("compare")
+
+
+def test_the_related_slice_does_not_out_supervise_the_facts_it_depends_on():
+    """
+    Its budget is sized on per-entity coverage, because 1.0B would have taught the ranks outright.
+
+    The slice names two of the fixed 25,000 probe entities per item, so at the unrelated slice's budget
+    each entity's birth-year rank is supervised 4,211 times against the 200 exposures 3.3 fixes for the
+    fact slice -- 21x. At that rate the slice supplies its own answer and "needs two facts" stops being
+    true, so a decline would say nothing about fact access. This pins the ratio near one.
+    """
+    cell = [c for c in C.first_run_cells() if c.cell_id == "28m_d1p2"][0]
+    items = cell.slice_budget("compare") // 19  # the compare item width
+    mentions_per_entity = 2 * items / 25_000
+    assert 150 < mentions_per_entity < 400, mentions_per_entity
+    assert mentions_per_entity < 3 * cell.exposures, mentions_per_entity
 
 
 def test_the_entropy_axis_carries_the_unrelated_slice_alone():
@@ -470,3 +490,45 @@ def test_every_committed_cell_yields_all_ten_checkpoints():
         steps = cell.resolve().steps(69.2)
         distinct = {min(steps, max(1, int(fraction * steps))) for fraction in fractions}
         assert len(distinct) == len(fractions), (cell.cell_id, steps, sorted(distinct))
+
+
+def test_the_total_parameter_basis_is_real_only_when_a_vocabulary_is_supplied():
+    """
+    Without one, both bases report the non-embedding count and the dual-basis reporting is one basis
+    printed twice.
+
+    Worth a test because the failure is silent and looks like agreement: PRD 3 argues at length that a
+    design which quietly picks one basis loses the cross-size comparability the size axis exists for,
+    and the code satisfied that argument with ``total_params = params + 0``.
+    """
+    cell = [c for c in C.first_run_cells() if c.cell_id == "13m_d1p2"][0]
+
+    blind = cell.resolve()
+    assert blind.demand_per_total_param == blind.demand_per_non_embedding_param
+
+    seeing = cell.resolve(vocab_size=3_584)
+    assert seeing.n_entities == blind.n_entities  # the vocabulary moves the basis, not the corpus
+    assert seeing.demand_per_total_param < seeing.demand_per_non_embedding_param
+    ratio = seeing.demand_per_non_embedding_param / seeing.demand_per_total_param
+    # 1.073x with our closed word-level vocabulary, against the 1.650x a tied 32k BPE would give. The
+    # magnitude matters: it is why this is a precaution rather than a correction that moves a result.
+    assert ratio == pytest.approx(1.073, abs=0.005), ratio
+
+
+def test_the_basis_gap_stays_monotone_in_model_size():
+    """
+    The shape PRD 3 rests on, checked at our own vocabulary rather than at the 32k it was derived for.
+
+    The embedding table is one tied matrix of ``d_model x vocab``, so it grows linearly in width while
+    the body grows quadratically -- the gap must therefore shrink as the rows get wider, whatever the
+    vocabulary. A ladder where it did not would mean the widths were wrong.
+    """
+    ratios = []
+    for row in ("13M", "28M", "64M", "113M"):
+        cell = C.CellSpec(
+            cell_id=f"{row.lower()}_x", row=row, demand_bits_per_param=1.2, reasoning_tokens=1
+        ).resolve(vocab_size=3_584)
+        ratios.append(cell.demand_per_non_embedding_param / cell.demand_per_total_param)
+    assert ratios == sorted(ratios, reverse=True), ratios
+    assert ratios[0] == pytest.approx(1.073, abs=0.005)
+    assert ratios[-1] == pytest.approx(1.024, abs=0.005)
