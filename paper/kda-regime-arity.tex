@@ -101,15 +101,21 @@ de-nested position bands. Because Kimi K3's KDA layer fixes
 $\beta=\mathrm{Sigmoid}(\cdot)\in(0,1)$, a determinant argument shows K3-style
 nodes cannot obtain a negative-determinant transition at any $R$; whether they
 would benefit from $R>1$ in practice is a separate question our scale cannot
-settle. We report four results against our own interest. Our pre-registered
-mechanism --- that reflections help because $S_5$'s odd generator demands
-$\det=-1$ --- is \emph{contradicted}, and the fallback explanation we offer is
-contradicted too. Our $R$ arms are not parameter-matched. \emph{No} cell
-survives Holm correction at $n=6$, and only one does after we correct a metric
-artifact. And an asymmetric optimization failure (10 of 24 strict-$\beta$ runs
-end with unconverged loss, versus 0 of 24 reflection runs) means we cannot
-separate an expressivity effect from a trainability one. We report the effect,
-its size, and the four reasons it is not yet established.
+settle. Two follow-up experiments (72 further cells) close the two confounds we
+considered most serious. Repeating the design with capacity-matched $R{=}1$
+controls in \emph{both} regimes ($-0.055\%$ parameter match) leaves the effect
+intact and slightly larger ($A_5$, positions $129$--$256$:
+$+57.09 \to +58.88$pp). A learning-rate sweep spanning $33\times$ shows that
+\emph{no} rate closes the strict arms' deficit at a length inside the training
+range: they reach stable near-zero training loss and still fall $9$--$21$pp
+short of the reflection arms, which rules out the leading optimization
+explanation. We also report results against our own interest. Our
+pre-registered mechanism --- that reflections help because $S_5$'s odd
+generator demands $\det=-1$ --- is \emph{contradicted}, and the fallback
+explanation we offer is contradicted too. \emph{No} cell survives Holm
+correction at $n=6$, and the single band that survived before capacity matching
+does not survive after it. We report the effect, its size, and the reasons it is
+suggestive rather than established.
 \end{abstract}
 \end{minipage}
 \end{center}
@@ -171,9 +177,10 @@ In every de-nested band past position 40, \texttt{R1} and \texttt{DP2-strict}
 score within $2\times$ chance (Table~\ref{tab:bands}). This has a consequence we
 must state plainly, because it defeats an argument we would otherwise have
 liked to make: the strict-regime arity contrast cannot bound what capacity is
-worth, since it is measured between two models that are both floored. The
-parameter confound described in Section~\ref{sec:limitations} is therefore
-\emph{open}, not bounded.
+worth, since it is measured between two models that are both floored. We
+therefore removed the confound by experiment rather than bounding it, running
+capacity-matched $R{=}1$ controls in both regimes
+(Section~\ref{sec:capacity}); the interaction survives.
 
 \paragraph{Contributions.}
 \emph{(i)} A controlled factorial measurement of arity against $\beta$ range at
@@ -182,16 +189,18 @@ bundle is scored on a byte-identical evaluation bank (Section~\ref{sec:setup}).
 \emph{(ii)} The finding that in every band where both arms are measurable, the
 $\beta$ effect exceeds the arity effect by one to two orders of magnitude at
 zero parameter cost (Section~\ref{sec:betavsr}), together with a positive
-$\beta\times R$ interaction in five of eight de-nested bands --- of which one
-survives Holm correction (Section~\ref{sec:denested}). \emph{(iii)} A
+$\beta\times R$ interaction in five of eight de-nested bands
+(Section~\ref{sec:denested}). \emph{(iii)} A
 determinant observation about K3-style nodes, and a correction to a tempting but
 wrong reading of K3's new bounded-decay parameterization
 (Section~\ref{sec:k3}). \emph{(iv)} Two negative results against our own
 hypotheses: the group-parity account of \emph{why} reflections help is
 contradicted, and so is the headroom account we offered as a replacement
-(Section~\ref{sec:parity}). \emph{(v)} An explicit statement of the
-trainability confound that we cannot resolve, and of what would resolve it
-(Section~\ref{sec:limitations}).
+(Section~\ref{sec:parity}). \emph{(v)} Two follow-up experiments, 72 further
+cells, that close the capacity confound by construction and reject the leading
+optimization account of the remaining one --- at the cost of the single
+Holm-surviving cell, which does not survive capacity matching
+(Sections~\ref{sec:trainability}--\ref{sec:capacity}).
 
 We claim no new operator and no new theory. The gated Householder operator we
 measure is already implemented in public kernels and published at scale
@@ -369,6 +378,18 @@ byte-identical parameter ledgers. Post hoc, the strict arms reach
 $\beta_{\max}=1.0000$ and the reflection arms $\beta_{\max}=2.0000$, with no
 record violating its bound.
 
+Two follow-up experiments extend this design; both reuse the same bundle seeds,
+mixer, backend, and step count, and we report them where they bear on a
+limitation. \emph{(i) Capacity-matched arms} (Section~\ref{sec:capacity}):
+\texttt{R1-P} and \texttt{R1-refl-P} are the $R{=}1$ arms with the $R{=}2$
+parameter delta spent in feed-forward width, solved analytically to
+$d_\text{ffn}=174$ for $1{,}399{,}756$ non-embedding parameters ($-0.055\%$
+against the $R{=}2$ arms), holding $d_\text{model}$, head count, state dimension
+and depth fixed --- 24 cells. \emph{(ii) A learning-rate sweep}
+(Section~\ref{sec:trainability}): the two strict arms at peak rates
+$\{3{\times}10^{-4}, 10^{-3}, 3{\times}10^{-3}, 10^{-2}\}$, two tasks, three
+bundles --- 48 cells. All 72 cells completed; no cell failed.
+
 \paragraph{Tasks.}
 Two group word problems: given a sequence of generators of a finite group,
 predict the composed element. We use $A_5$ (order 60, non-solvable, \emph{both}
@@ -413,9 +434,13 @@ also report Holm-corrected outcomes across the band family, since we test many
 cells.
 
 \paragraph{Compute and provenance.}
-All 48 cells ran on one NVIDIA A10G, $48/48$ completing, for $3.52$ GPU-hours
-(cells $228$--$305$\,s). All 48 carry one probe-source revision, $0$ records
-were rejected, $0$ non-finite loss steps occurred.
+All 48 cells of the main sweep ran on one NVIDIA A10G, $48/48$ completing, for
+$3.52$ GPU-hours (cells $228$--$305$\,s). All 48 carry one probe-source
+revision, $0$ records were rejected, $0$ non-finite loss steps occurred. The two
+follow-ups add $72$ cells on the same accelerator, $72/72$ completing, for
+$5.16$ GPU-hours (cells $228$--$302$\,s), under a single later revision, again
+with $0$ rejected records and $0$ non-finite steps. Total: $120$ cells, $8.67$
+GPU-hours, no failed cell in either run.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % TABLE: arms
@@ -523,7 +548,10 @@ bound ($t_{0.95,5}=2.015$); \textbf{bold} marks L95 $>0$ uncorrected. Seven of
 ten prefix cells and five of eight bands are positive at uncorrected L95. Under
 Holm correction across the family, \textbf{zero} of the ten prefix cells and
 \textbf{one} of the eight bands survive (marked $\dagger$): with $df=5$,
-$p<0.00625$ needs $|t|>4.03$ and our maximum band $t$ is $4.26$. Note $S_5$ at
+$p<0.00625$ needs $|t|>4.03$ and our maximum band $t$ is $4.26$. That single
+survivor does \emph{not} survive once the arms are capacity-matched
+(Section~\ref{sec:capacity}, Table~\ref{tab:matched}), where no band clears
+Holm; this table reports the uncontrolled square. Note $S_5$ at
 $129$--$256$ and $257$--$512$ \emph{reverse sign} once de-nested --- they were
 significant only by inheriting the $41$--$64$ signal through prefix averaging.}
 \label{tab:paired}
@@ -608,10 +636,12 @@ We must be equally direct about multiplicity. Across the ten prefix cells,
 first comparison ($p=0.00658$ against a threshold of $0.005$). This is
 structural, not unlucky: with $df=5$, clearing $\alpha=0.005$ requires
 $|t|>4.03$, and no prefix cell reaches it. On the eight de-nested bands, exactly
-one survives ($S_5$, $41$--$64$, $t=4.26$, $p=0.00401$). So the defensible
-statement is: one band-level interaction is established at family-wise
-$\alpha=0.05$, and four more are positive and large but individually
-uncorrected. The count-based framing ``$k$ of $n$ cells significant'' is
+one survives ($S_5$, $41$--$64$, $t=4.26$, $p=0.00401$) --- and that one does not
+survive in the capacity-matched replication of Section~\ref{sec:capacity},
+where it weakens to $t=3.64$ and no band clears Holm. So the defensible
+statement is: \emph{no} band-level interaction is established at family-wise
+$\alpha=0.05$ in the better-controlled design, and several are positive and
+large but individually uncorrected. The count-based framing ``$k$ of $n$ cells significant'' is
 especially weak here because the cells are not independent (mean within-task
 cross-length $r=0.53$, several at $0.99$--$1.00$).
 
@@ -679,6 +709,93 @@ $S_5$, 41--64  & arity   & $+0.67$  & 1.02  & $45.5\times$ \\
 \end{table}
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% TABLE 4 -- capacity-matched square
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{table}[t]
+\centering
+\small
+\caption{The interaction on de-nested bands, before and after capacity
+matching. \textbf{Unmatched} uses \texttt{R1}/\texttt{R1-refl} ($998{,}092$
+non-embedding parameters) as the $R{=}1$ cells; \textbf{matched} substitutes
+\texttt{R1-P}/\texttt{R1-refl-P}, feed-forward-widened to $1{,}399{,}756$
+against the $R{=}2$ arms' $1{,}400{,}524$ ($-0.055\%$). Both squares share the
+same six bundles and byte-identical evaluation banks, so the columns are paired.
+Matching \emph{raises} the $A_5$ mid-range estimates and leaves the strict-arity
+effect at $\approx0$; it also costs the one cell that survived Holm in the
+unmatched square (see Section~\ref{sec:capacity}). \textbf{Bold} marks
+uncorrected L95 $>0$.}
+\label{tab:matched}
+\footnotesize
+\setlength{\tabcolsep}{3.6pt}
+\begin{tabular}{llrrrrr}
+\toprule
+& & \multicolumn{1}{c}{Unmatch.} & \multicolumn{4}{c}{Capacity-matched} \\
+\cmidrule(lr){3-3}\cmidrule(lr){4-7}
+Task & Band & \hd{Inter.} & \hd{Inter.} & \hd{se} & \hd{$t$} & \hd{L95} \\
+\midrule
+$A_5$ & 1--40    & $-3.30$ & $-2.46$ & 5.90 & $-0.42$ & $-14.35$ \\
+$A_5$ & 41--64   & $-3.03$ & $+14.03$ & 11.54 & $1.22$ & $-9.22$ \\
+$A_5$ & 65--128  & $+30.14$ & $\mathbf{+51.43}$ & 14.77 & $3.48$ & $\mathbf{+21.67}$ \\
+$A_5$ & 129--256 & $+57.09$ & $\mathbf{+58.88}$ & 14.85 & $3.96$ & $\mathbf{+28.95}$ \\
+$A_5$ & 257--512 & $+26.74$ & $\mathbf{+25.42}$ & 12.53 & $2.03$ & $\mathbf{+0.18}$ \\
+\midrule
+$S_5$ & 1--40    & $-1.65$ & $+5.28$ & 3.50 & $1.51$ & $-1.78$ \\
+$S_5$ & 41--64   & $+39.23$ & $\mathbf{+52.52}$ & 14.43 & $3.64$ & $\mathbf{+23.44}$ \\
+$S_5$ & 65--128  & $+22.14$ & $\mathbf{+21.77}$ & 9.08 & $2.40$ & $\mathbf{+3.47}$ \\
+$S_5$ & 129--256 & $-0.77$ & $+0.26$ & 1.03 & $0.25$ & $-1.81$ \\
+$S_5$ & 257--512 & $+0.31$ & $-0.30$ & 0.35 & $-0.87$ & $-1.01$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% TABLE 5 -- learning-rate sweep on the in-distribution gap
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{table}[t]
+\centering
+\small
+\caption{No learning rate closes the in-distribution gap. Accuracy at $L=40$,
+a length \emph{inside} the training range $3$--$40$, for the strict arms at four
+peak rates ($n=3$ bundles each), against the reflection arms of the main sweep
+as the ceiling. ``Fit'' is tail-mean training loss over the last $200$ steps:
+at the two highest rates the strict arms fit stably and still fall $9$--$21$pp
+short, so the deficit is not something a better rate repairs by fitting harder.
+The optimum is interior to the grid for three of four arm/task pairs;
+\texttt{DP2-strict} on $A_5$ peaks at the top rate, so its optimum is not
+bracketed.}
+\label{tab:lrgap}
+\begin{tabular}{llrrr}
+\toprule
+Task & Arm & \hd{Peak LR} & \hd{Acc.\ $L{=}40$} & \hd{Fit} \\
+\midrule
+$A_5$ & \texttt{R1}         & $3\!\times\!10^{-4}$ & $56.78$ & $0.538$ \\
+$A_5$ & \texttt{R1}         & $10^{-3}$            & $76.12$ & $0.163$ \\
+$A_5$ & \texttt{R1}         & $3\!\times\!10^{-3}$ & $83.66$ & $0.093$ \\
+$A_5$ & \texttt{R1}         & $10^{-2}$            & $83.61$ & $0.082$ \\
+$A_5$ & \texttt{DP2-strict} & $3\!\times\!10^{-4}$ & $62.34$ & $0.419$ \\
+$A_5$ & \texttt{DP2-strict} & $10^{-3}$            & $86.63$ & $0.063$ \\
+$A_5$ & \texttt{DP2-strict} & $3\!\times\!10^{-3}$ & $88.83$ & $0.049$ \\
+$A_5$ & \texttt{DP2-strict} & $10^{-2}$            & $91.33$ & $0.031$ \\
+\cmidrule(lr){1-5}
+\multicolumn{3}{l}{\emph{$A_5$ ceiling} (\texttt{R1-refl}/\texttt{Reflection})}
+  & $99.99$/$100.00$ & \\
+\midrule
+$S_5$ & \texttt{R1}         & $3\!\times\!10^{-4}$ & $55.44$ & $0.604$ \\
+$S_5$ & \texttt{R1}         & $10^{-3}$            & $71.07$ & $0.251$ \\
+$S_5$ & \texttt{R1}         & $3\!\times\!10^{-3}$ & $76.73$ & $0.170$ \\
+$S_5$ & \texttt{R1}         & $10^{-2}$            & $71.97$ & $0.246$ \\
+$S_5$ & \texttt{DP2-strict} & $3\!\times\!10^{-4}$ & $59.06$ & $0.524$ \\
+$S_5$ & \texttt{DP2-strict} & $10^{-3}$            & $76.13$ & $0.190$ \\
+$S_5$ & \texttt{DP2-strict} & $3\!\times\!10^{-3}$ & $84.02$ & $0.101$ \\
+$S_5$ & \texttt{DP2-strict} & $10^{-2}$            & $82.28$ & $0.115$ \\
+\cmidrule(lr){1-5}
+\multicolumn{3}{l}{\emph{$S_5$ ceiling} (\texttt{R1-refl}/\texttt{Reflection})}
+  & $97.07$/$98.09$ & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \section{Two failed explanations}
 \label{sec:parity}
 
@@ -717,9 +834,11 @@ interaction is four times larger.
 We have a measured interaction, a falsified pre-registered mechanism, a
 falsified fallback, and a determinant argument that predicts no interaction at
 $R=2$. We therefore offer \emph{no} mechanism. A reader should treat the
-interaction as an unexplained empirical regularity, and should weigh it against
-the trainability account in Section~\ref{sec:limitations}, which we cannot rule
-out. Distinguishing the candidates needs a solvable-group control, a
+interaction as an unexplained empirical regularity. The trainability account of
+Section~\ref{sec:trainability} is the leading alternative, and a learning-rate
+sweep spanning $33\times$ argues against it, though it does not exhaust the
+optimization hypotheses. Distinguishing the remaining candidates needs a
+solvable-group control, a
 difficulty-matched non-solvable pair, and an $R=3$ arm (where
 Equation~\eqref{eq:det} does predict something, since the $k\le2$ hypothesis of
 Grazzi Prop.~1.3 fails there). We ran none of these.
@@ -728,42 +847,75 @@ Grazzi Prop.~1.3 fails there). We ran none of these.
 \section{Limitations}
 \label{sec:limitations}
 
-\subsection{The trainability confound, which we cannot resolve}
+\subsection{The trainability confound, which a learning-rate sweep largely
+closes}
+\label{sec:trainability}
 
-This is the objection we consider most serious. Ten of 48 runs end with a final
-logged loss above $0.1$, and \emph{all ten are strict-$\beta$} (\texttt{R1}
-6/12, \texttt{DP2-strict} 4/12; both reflection arms 0/12). A perfectly
-asymmetric stability failure between the arms being compared is the signature of
-an optimization difference, not only an expressivity one. Within the 24 strict
-runs, log final loss correlates with accuracy at $r=-0.43$ ($L=40$), and spiked
-runs are worse at every length.
+This was the objection we considered most serious, and an earlier draft of this
+paper stated it more strongly than the evidence supports. We correct the
+statement and then report an experiment that addresses it.
 
-The confound is load-bearing. Restricting the interaction to bundles where all
-four arms ended below $0.1$ ($A_5$: 1102--1105, $n=4$; $S_5$: 1104--1105,
-$n=2$), \emph{zero} of ten cells remain significant. The $A_5$ point estimates
-survive largely intact ($+13.56$, $+28.52$, $+26.93$ at $L=128/256/512$ against
-$+13.47$, $+35.28$, $+31.01$), which is the best we can say for the effect; the
-significance does not. Traces make the problem concrete: \texttt{R1} on $S_5$
-bundle 1106 ends at $0.85$ having reached $10^{-4}$ at step 3000, and bundle
-1103 oscillates between $\sim\!0$ and $1.27$ across the last 1500 steps. Those
-are not converged models. Since $\beta=2$ doubles the effective write-gate
-gradient scale, the reflection arms' perfect stability record may itself be an
-optimization-geometry effect.
+\paragraph{What the loss traces do and do not show.} Ten of 48 runs end with a
+final logged loss above $0.1$, and \emph{all ten are strict-$\beta$}
+(\texttt{R1} 6/12, \texttt{DP2-strict} 4/12; both reflection arms 0/12). A
+perfectly asymmetric stability failure between the arms being compared is the
+signature of an optimization difference, not only an expressivity one. Within
+the 24 strict runs, log final loss correlates with accuracy at $r=-0.47$
+($L=40$).
 
-We therefore cannot separate ``reflection $\beta$ is more expressive'' from
-``reflection $\beta$ is easier to optimize in 4000 steps''. Our loss traces are
-logged only every 500 steps, too coarse to characterize the spikes, and we
-retained no intermediate checkpoints, so we cannot re-evaluate from a
-pre-spike model. Resolving this needs a learning-rate sweep per arm, longer
-training, or best-checkpoint evaluation. Until then, this paper measures
-\emph{the joint effect of expressivity and trainability} of the $\beta$ range,
-and the reader should read every result above with that substitution.
+We previously described those ten as unconverged. That was wrong, and the error
+was in our instrumentation rather than in the runs. The trace logs one
+minibatch every 500 steps, so its final entry is a \emph{single batch drawn at
+step 3999}, where the one-cycle schedule has decayed the rate to
+$4\times10^{-9}$ and the weights are effectively frozen. All ten reach
+$10^{-4}$ or below after warmup; \texttt{R1} on $S_5$ bundle 1106 reads
+$10^{-4}$ at step 3000 and $0.82$ at step 3999. Those models fit the training
+set. What the traces do show is \emph{instability}: two runs are above $0.05$ at
+five of seven sampled steps, which is sustained oscillation rather than one
+unlucky draw. Instability is the correct name for this confound, and it remains
+perfectly asymmetric across the regimes.
 
-\subsection{The $R$ arms are not parameter-matched, and the confound is open}
+\paragraph{The in-distribution gap.} Isolating the confound sharpened it. The
+strict arms fit to $\approx\!0$ training loss and still score $68$--$89\%$ at
+$L=40$ --- a length \emph{inside} the training range $3$--$40$ --- where
+\texttt{R1-refl} scores $99.99\%$ ($A_5$) and $97.07\%$ ($S_5$). That is a
+generalization gap on data drawn from the training distribution, so it is not
+length extrapolation and the nesting artifact of
+Section~\ref{sec:denested} does not touch it.
+
+\paragraph{A learning-rate sweep rules out the optimization explanation.} We ran
+the strict arms at four peak rates spanning $33\times$
+($3{\times}10^{-4}$, $10^{-3}$, $3{\times}10^{-3}$, $10^{-2}$), two tasks, three
+bundles, 48 cells (Table~\ref{tab:lrgap}). \emph{No rate closes the gap.} The
+best strict cell anywhere is \texttt{DP2-strict} on $A_5$ at $91.33\%$, still
+$8.67$pp short of the reflection ceiling; on $S_5$ the best is $84.02\%$,
+$14.06$pp short. At the two highest rates the strict runs are not merely
+fitting but fitting \emph{stably} --- tail-median training loss
+$0.0006$--$0.0084$ over the last 200 steps --- and still cap at $86.8\%$. They
+fit the training set and do not generalize, and no rate repairs that by fitting
+harder.
+
+Two caveats keep this from being conclusive. On three of the four arm/task
+pairs the optimum is interior to the grid, so the grid brackets it; but
+\texttt{DP2-strict} on $A_5$ peaks at the top rate we tried, so we have not
+bracketed its optimum and cannot exclude a still-better rate above $10^{-2}$.
+And a learning-rate sweep is not the only optimization lever: schedule shape,
+weight decay, gradient clipping, and initialization scale are untested. What we
+can say is that the single most likely optimization explanation, tested over a
+$33\times$ range, does not account for a $9$--$21$pp deficit.
+
+We therefore no longer claim the expressivity and trainability accounts are
+inseparable in general. Over the swept range they are separable, and the
+evidence favours expressivity. We do continue to flag that $\beta=2$ doubles the
+effective write-gate gradient scale, so the reflection arms' perfect stability
+record may itself be an optimization-geometry effect.
+
+\subsection{Parameter matching: the capacity confound, now closed}
+\label{sec:capacity}
 
 The $R{=}1$ arms have $998{,}092$ mixer parameters and the $R{=}2$ arms
 $1{,}400{,}524$, $+40.3\%$. Any raw ``$R{=}2$ beats $R{=}1$'' main effect is
-confounded with capacity and we claim none.
+confounded with capacity, and in the four-arm design above we claimed none.
 
 We had intended to argue that the strict-regime arity effect ($\le +3.50$pp)
 upper-bounds what that capacity is worth. We withdraw that argument. As
@@ -771,22 +923,40 @@ Table~\ref{tab:bands} shows, both strict arms are at chance in every
 extrapolation band, and a capacity contrast measured between two floored models
 is guaranteed to read $\approx0$ regardless of what capacity is worth. The bound
 is uninformative rather than reassuring, and using it would have been circular.
-Two further problems: the \texttt{DP2-strict} vs \texttt{R1} contrast varies
-arity and capacity together, so if arity were mildly harmful under strict
-$\beta$ while capacity helped, the observed difference would bound neither
-component; and the design's minimum detectable effect is $7.4$--$12.5$pp, so
-capacity could be worth up to $\sim\!+11.9$pp within our confidence bounds.
 
-It remains true that capacity differs by the same $402{,}432$ parameters in both
-regimes, so to first order it cancels from a difference of differences. But that
-argument assumes the \emph{value} of capacity is regime-independent, and we never
-varied capacity within the reflection regime, so we cannot check it. The fix is
-specified: the project defines an \texttt{R1-P} arm feed-forward-width-matched
-to \texttt{DP2-strict} at $1{,}399{,}756$ parameters (a $0.055\%$ match), which
-was \emph{not} run. Running it plus a reflection-regime counterpart --- roughly
-24 cells at a cost comparable to this sweep --- would isolate capacity within
-each regime. That control is necessary, not optional, and its absence is what
-prevents us from making an arity claim.
+Rather than argue the confound away, we removed it. We ran two additional arms,
+\texttt{R1-P} and \texttt{R1-refl-P}, which are $R{=}1$ with the $R{=}2$
+parameter delta spent entirely in feed-forward width at identical $d_\text{model}$,
+head count, state dimension and depth --- so the recurrent state size, the
+variable the comparison must hold fixed, is unchanged. Solving the width
+analytically gives $d_\text{ffn}=174$ and $1{,}399{,}756$ non-embedding
+parameters against \texttt{DP2-strict}'s $1{,}400{,}524$, a $-0.055\%$ match,
+ten times inside our $0.5\%$ tolerance. Both regimes are matched, not just the
+strict one: the estimand is an interaction, so controlling one contrast and not
+the other would leave the two halves differently constructed and their
+difference would mix the correction with the effect. The 24 cells reuse the
+bundle seeds of the main sweep, and we verified that every new cell's evaluation
+bank hashes identically to the corresponding cell of the original run, so the
+matched square is paired with the original arms rather than merely comparable to
+them.
+
+\textbf{The interaction survives capacity matching, and strengthens slightly.}
+Table~\ref{tab:matched} gives both squares side by side. On $A_5$ at positions
+$129$--$256$ the de-nested interaction moves from $+57.09$pp (unmatched) to
+$+58.88$pp (matched, se $14.85$, $t=3.96$, L95 $+28.95$); at $65$--$128$ it
+moves from $+30.14$ to $+51.43$pp. The strict-regime arity effect stays
+$\approx0$ in every extrapolation band under matching ($-0.23$ to $+3.10$pp),
+which is now an informative statement rather than a circular one, because
+\texttt{R1-P} is no longer capacity-starved relative to \texttt{DP2-strict}.
+
+Matching costs us one significance claim, and we report it. Under Holm at
+$\alpha=0.05$ over ten de-nested bands, the unmatched square had exactly one
+survivor ($S_5$, $41$--$64$, $t=4.26$, $p=0.00401$). In the matched square that
+cell weakens to $t=3.64$ ($p=0.00745$) and \emph{no} band survives: the strongest
+is $A_5$ $129$--$256$ at $p=0.00535$ against a first-step threshold of $0.00500$,
+which it misses. So capacity matching raises the point estimates on $A_5$ and
+lowers the family-wise evidence to zero surviving cells. Both facts belong in
+the record.
 
 \subsection{$n=6$, multiplicity, and influential bundles}
 
@@ -827,7 +997,7 @@ determinant observation --- that strict $\beta$ forecloses negative-determinant
 transitions at every arity --- follows from Equation~\eqref{eq:det} alone, is
 regime-agnostic, and does not depend on this experiment; we consider it sound.
 The empirical prediction that K3-style nodes would not \emph{benefit} from
-$R>1$ does depend on this experiment, and given the four caveats above we
+$R>1$ does depend on this experiment, and given the caveats above we
 present it as a hypothesis motivating a scaled replication, not as a finding.
 Group word problems are also a deliberately adversarial probe chosen because
 they discriminate; language modelling may weight these mechanisms differently.
@@ -836,18 +1006,24 @@ We also flag a tension with the prior work we rely on.
 \textsc{DeltaProduct} reports that its models ``fail to learn even the training
 context-length when restricted to the standard eigenvalue range $[0,1]$,
 regardless of the number of Householder transformations $n_h$''. Our strict-$\beta$
-arms do learn the training range ($74$--$82\%$ at $L=40$). Either the tasks
-differ materially or our strict arms are not the regime they describe; we cannot
-say which.
+arms do learn the training range ($74$--$82\%$ at $L=40$ at our default rate,
+and up to $91.3\%$ once the rate is tuned, Table~\ref{tab:lrgap}), while
+reaching near-zero training loss throughout. So the disagreement is not that
+their models fail to fit and ours fit: ours fit and then generalize
+imperfectly. Either the tasks differ materially or our strict arms are not the
+regime they describe; we cannot say which.
 
 \subsection{Other limitations}
 
 We measure $R\in\{1,2\}$ only, so we cannot speak to $R\ge3$ --- where, as noted,
 the theory actually predicts something different. All arms share one mixer
 implementation and Triton backend, so a kernel bug interacting with the $\beta$
-scale would not be caught by our design. We report a single learning-rate
-schedule per arm with no per-arm tuning, which is precisely what the trainability
-confound requires.
+scale would not be caught by our design. The main $2\times2$ sweep uses a single
+learning-rate schedule per arm; Section~\ref{sec:trainability} sweeps the rate
+for the strict arms only, on three bundles rather than six, so the reflection
+arms remain untuned and we cannot rule out that a different rate would move
+\emph{them} as well --- though they are already at $97$--$100\%$ on the metric in
+question, so there is little room for it to matter.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \section{Related work}
@@ -912,20 +1088,30 @@ ours, establishes independently of any experiment that a strict-$\beta$ node suc
 as Kimi~K3's KDA layer cannot obtain a negative-determinant transition at any
 arity.
 
-We are not able to claim more than that, and we would rather say so than imply
-otherwise. Four things stand between this measurement and a result. Our
-pre-registered mechanism is falsified and the fallback we offered is falsified
-too, so we have no mechanism. Our arity arms are not parameter-matched, and the
-bound we had hoped to place on that confound turns out to be uninformative
-because both strict arms are at chance. Only one of eight band-level interactions
-survives multiple-comparison correction at $n=6$, and none of the ten cells on
-the prefix-averaged metric does. And an asymmetric optimization failure means
-what we measured may be trainability rather than expressivity. Each has a
-specified, cheap fix --- the \texttt{R1-P} capacity control, more bundles, an
-$R=3$ arm, and per-arm learning-rate tuning with checkpoint retention. What we
-can defend is narrower than where we started: one lever is free and appears to
-matter a great deal, the other is expensive and appears to matter little, and we
-do not yet know why or whether it survives at scale.
+Two of the confounds that stood between this measurement and a result are now
+closed, and we closed them by running the experiments rather than by argument.
+Capacity matching --- $R{=}1$ controls widened to within $0.055\%$ of the
+$R{=}2$ arms, in \emph{both} regimes --- leaves the interaction intact and
+slightly larger ($+57.09 \to +58.88$pp on $A_5$ at positions $129$--$256$),
+which also retires the uninformative bound we had tried to place on it. A
+learning-rate sweep spanning $33\times$ shows no rate closes the strict arms'
+deficit at a length \emph{inside} the training range: they reach stable
+near-zero training loss and still fall $9$--$21$pp short. That is the leading
+optimization explanation tested and rejected, and it reframes the deficit as a
+generalization gap rather than a training failure.
+
+What remains open we state plainly. We have no mechanism: our pre-registered
+explanation is falsified and so is the fallback. \emph{No} band-level
+interaction survives multiple-comparison correction at $n=6$ --- and the single
+band that survived before capacity matching does not survive after it, so the
+better-controlled design has weaker family-wise evidence, not stronger. One arm
+of the rate sweep is unbracketed at the top of the grid, and optimization levers
+other than the rate are untested. The remaining fixes are specified and cheap:
+more bundles, an $R=3$ arm, and a wider optimization search. What we can defend
+is narrower than where we started but firmer than in our first draft: one lever
+is free and appears to matter a great deal, the other is expensive and appears
+to matter little, the difference is not explained by capacity or by the learning
+rate, and we do not yet know why or whether it survives at scale.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Manual bibliography -- no bibtex pass.
