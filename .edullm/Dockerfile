@@ -176,13 +176,36 @@ COPY . .
 #
 # So it names what a training workload actually reaches for. Anything that breaks between
 # the pinned torch and this library now breaks the build, where it costs a runner minute.
+#
+# THE `fla` EXTRA IS IN THE LIST BECAUSE EVERY RECURRENT MIXER REFUSES TO CONSTRUCT WITHOUT
+# IT, AND IT USED TO BE ABSENT.
+#
+# `flash-linear-attention` (pyproject's `fla` extra) supplies the chunked linear-attention
+# kernels and `fla.modules.FusedRMSNormGated`. GatedDeltaNet, KimiDeltaAttention and
+# KimiDeltaHouseholder each open their `__init__` with a bare `assert has_fla()` -- see
+# src/olmo_core/nn/attention/recurrent.py:87, :617 and :1111 -- so a run reaching for any of
+# them on an image without it dies in the model constructor with a bare AssertionError and no
+# message. That is what happened to run_019fcdc4-402c-708e-bcad-4deb83b7de20: four seconds
+# into a paid A10G, after the image pull, with a traceback as the only diagnostic.
+#
+# The import assertion below therefore constructs a recurrent mixer rather than importing the
+# package. `import fla` would prove the distribution installed; building a
+# KimiDeltaHouseholder proves the assert passes and the fused-norm import inside it resolves,
+# which is the thing that actually failed. It is built on CPU with init_device="cpu" because
+# the build runner has no GPU -- the assert and the imports do not need one.
+#
+# Cost of carrying it: fla pulls Triton, which the CUDA torch wheel already brings, so this
+# adds the fla wheel itself and not a toolchain. Note fla is NOT `sys_platform`-gated the way
+# `fa4` is on line 65 of pyproject.toml; that is safe here because this image is always
+# linux/amd64, but it is why the extra cannot simply be added to a non-Linux build.
 RUN set -eux; \
     python -m pip install --no-cache-dir "torch==2.9.0"; \
-    python -m pip install --no-cache-dir ".[wandb]" boto3; \
+    python -m pip install --no-cache-dir ".[wandb,fla]" boto3; \
     python -m pip install --no-cache-dir "edullm-data @ https://github.com/edu-llm/edullm-data/archive/38bf831a6c3f445e394784018441fd59288b876c.tar.gz"; \
     python -c "import torch; assert torch.__version__.startswith('2.9.0'), f'torch was moved off the pin: {torch.__version__}'"; \
     python -c "import torch; assert torch.version.cuda, 'the CUDA build of torch was replaced by a CPU wheel'"; \
     python -c "import boto3, wandb; from olmo_core.data import TokenizerConfig; from olmo_core.nn.transformer import TransformerConfig; print(TransformerConfig.olmo2_190M(vocab_size=TokenizerConfig.gpt2().padded_vocab_size()).__class__.__name__)"; \
+    python -c "from olmo_core.nn.attention import KimiDeltaHouseholderConfig; m = KimiDeltaHouseholderConfig(n_heads=2, head_dim=16, num_householder=2).build(32, layer_idx=0, n_layers=1, init_device='cpu'); print(type(m).__name__)"; \
     python -c "from edullm_data.read import dataset_paths, resolve_latest; print(dataset_paths.__module__)"
 
 # No CMD. The entrypoint of the registered base is inherited deliberately, so swapping the
