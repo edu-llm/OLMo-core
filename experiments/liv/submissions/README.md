@@ -74,7 +74,7 @@ gh workflow run submit-run.yml --repo edu-llm/platform --ref main \
   -f team=scratch -f experiment=liv-p1-throughput-probe \
   -f dataset_release=olmo-150b-dolma2-v1 -f wandb_project=eduLLM \
   -f maximum_runtime_hours=0.5 -f maximum_attempts=1 \
-  -f command='bash -lc '"'"'python -m torch.distributed.run --nproc-per-node=8 --standalone .edullm/train_liv_arm.py "$EDULLM_RUN_ID" --arm L0 --arm-seed 0 --data-seed 0 --steps 60 --save-interval 50 --warmup-steps 10 --sequence-length 4096 --global-batch-size 524288 --rank-microbatch-size 8192 --no-compile-model --save-folder "$EDULLM_CHECKPOINT_DIR"'"'"''
+  -f command='bash -lc '"'"'python .edullm/train_liv_arm.py "$EDULLM_RUN_ID" --prepare-heldout-only && python -m torch.distributed.run --nproc-per-node=8 --standalone .edullm/train_liv_arm.py "$EDULLM_RUN_ID" --arm L0 --arm-seed 0 --data-seed 0 --steps 60 --save-interval 50 --warmup-steps 10 --sequence-length 4096 --global-batch-size 524288 --rank-microbatch-size 8192 --no-compile-model --save-folder "$EDULLM_CHECKPOINT_DIR"'"'"''
 ```
 
 31.5M tokens. The 0.5h bound caps the loss at $10.98 in exactly the failure mode that has
@@ -107,7 +107,7 @@ gh workflow run submit-run.yml --repo edu-llm/platform --ref main \
   -f dataset_release=olmo-150b-dolma2-v1 -f wandb_project=eduLLM \
   -f maximum_runtime_hours=2.5 -f maximum_attempts=1 \
   -f fanout_size=3 -f fanout_index_parameter=arm \
-  -f command='bash -lc '"'"'python -m torch.distributed.run --nproc-per-node=8 --standalone .edullm/train_liv_arm.py "$EDULLM_RUN_ID" --fanout-grid L0:0,F-r128:0,G-grouped:0 --steps 762 --save-interval 200 --warmup-steps 15 --sequence-length 4096 --global-batch-size 524288 --rank-microbatch-size 8192 --learning-rate 1.5e-4 --no-compile-model --save-folder "$EDULLM_CHECKPOINT_DIR"'"'"''
+  -f command='bash -lc '"'"'python .edullm/train_liv_arm.py "$EDULLM_RUN_ID" --prepare-heldout-only && python -m torch.distributed.run --nproc-per-node=8 --standalone .edullm/train_liv_arm.py "$EDULLM_RUN_ID" --fanout-grid L0:0,F-r128:0,G-grouped:0 --steps 762 --save-interval 200 --warmup-steps 15 --sequence-length 4096 --global-batch-size 524288 --rank-microbatch-size 8192 --learning-rate 1.5e-4 --no-compile-model --save-folder "$EDULLM_CHECKPOINT_DIR"'"'"''
 ```
 
 `1.5e-4` is the sqrt-scaling neighbour of `3e-4`, i.e. a deliberate factor-of-2 step rather than
@@ -130,7 +130,7 @@ gh workflow run submit-run.yml --repo edu-llm/platform --ref main \
   -f dataset_release=olmo-150b-dolma2-v1 -f wandb_project=eduLLM \
   -f maximum_runtime_hours=2.5 -f maximum_attempts=1 \
   -f fanout_size=18 -f fanout_index_parameter=arm-and-seed \
-  -f command='bash -lc '"'"'python -m torch.distributed.run --nproc-per-node=8 --standalone .edullm/train_liv_arm.py "$EDULLM_RUN_ID" --fanout-grid L0:0,L0:1,L0:2,L0:3,L0:4,L0:5,F-r128:0,F-r128:1,F-r128:2,F-r128:3,F-r128:4,F-r128:5,G-grouped:0,G-grouped:1,G-grouped:2,G-grouped:3,G-grouped:4,G-grouped:5 --steps 762 --save-interval 200 --warmup-steps 15 --sequence-length 4096 --global-batch-size 524288 --rank-microbatch-size 8192 --no-compile-model --save-folder "$EDULLM_CHECKPOINT_DIR"'"'"''
+  -f command='bash -lc '"'"'python .edullm/train_liv_arm.py "$EDULLM_RUN_ID" --prepare-heldout-only && python -m torch.distributed.run --nproc-per-node=8 --standalone .edullm/train_liv_arm.py "$EDULLM_RUN_ID" --fanout-grid L0:0,L0:1,L0:2,L0:3,L0:4,L0:5,F-r128:0,F-r128:1,F-r128:2,F-r128:3,F-r128:4,F-r128:5,G-grouped:0,G-grouped:1,G-grouped:2,G-grouped:3,G-grouped:4,G-grouped:5 --steps 762 --save-interval 200 --warmup-steps 15 --sequence-length 4096 --global-batch-size 524288 --rank-microbatch-size 8192 --no-compile-model --save-folder "$EDULLM_CHECKPOINT_DIR"'"'"''
 ```
 
 **Set `maximum_runtime_hours` from the probe, not from this file.** 2.5 is a placeholder carrying

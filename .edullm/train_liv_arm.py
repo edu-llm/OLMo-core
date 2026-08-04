@@ -950,38 +950,50 @@ def show(config) -> None:
     rich.print(replace(config, dataset=shown))
 
 
-def _prepare_heldout_indices(config) -> None:
-    """Materialise the eval dataset's instance indices while it is still cheap and safe to fork.
+def prepare_heldout_indices(config) -> None:
+    """Build the held-out instance indices, in ONE process, outside any distributed context.
 
-    A no-op when no ladder was attached. Deliberately tolerant: a failure here must not take the
-    run down, because the indices will simply be built later by the callback -- the point is to
-    do the forking early, not to make it the only chance.
+    Run as its own command before ``torchrun`` via ``--prepare-heldout-only``. Deliberately NOT
+    called from ``train()``: that is the whole fix.
 
-    The barrier at the end is what makes the later `prepare()` a no-op on EVERY rank rather than
-    just on rank zero: without it a fast rank could reach `LMEvaluatorCallbackConfig.build()`
-    while rank zero is still writing, and find `paths_needed` non-empty after all.
+    TWO RUNS DIED LEARNING WHY THIS CANNOT LIVE INSIDE THE DISTRIBUTED PROGRAM. ``run_019fca21``
+    and ``run_019fcdd1`` both hit exit 72 after a 900-second gloo timeout -- ~$11 for zero
+    measurements. ``NumpyPaddedFSLDataset.prepare()`` (numpy_dataset.py:913-918) writes indices
+    on ``fs_local_rank`` 0 only, inside a bare ``ProcessPoolExecutor()``, and then every rank
+    meets a ``barrier()``.
+
+    ``ProcessPoolExecutor()`` with no ``max_workers`` uses ``os.cpu_count()``, which on a
+    p4d.24xlarge is **96**. The start method is already forced to ``"spawn"``
+    (train/__init__.py:127), so that is 96 fresh interpreters each importing torch and
+    olmo_core, launched from one rank while seven others hold CUDA contexts and NCCL
+    communicators on the same box. Rank 0 logged all four ``Gathering instance indices`` lines
+    within 0.16 s -- submitting futures is instant -- then never logged a single ``Created N
+    instances``, so not one future returned.
+
+    The first fix attempt only moved the call earlier in ``train()``, on the theory that a live
+    CUDA context was the problem. It failed identically with the traceback inside the helper.
+    A four-rank local reproduction on ten cores does NOT deadlock, which is why that theory
+    survived review: the pool is only pathological when ``cpu_count()`` is large.
+
+    Standalone there is no process group, so the internal ``barrier()`` is a no-op and the pool
+    has the machine to itself. ``_write_instance_indices`` then skips any path whose indices
+    file already exists, so when ``LMEvaluatorCallbackConfig.build()`` calls ``prepare()``
+    during the real run, ``paths_needed`` is empty and no pool is created at all.
+
+    **The two invocations must share ``--work-dir``** or the second finds nothing cached and
+    re-enters the deadlock.
     """
     eval_cfg = getattr(config.trainer, "callbacks", {}).get("lm_eval")
-    if eval_cfg is not None:
-        try:
-            eval_dataset = eval_cfg.eval_dataset.build()
-            log.info(
-                "pre-building held-out instance indices for %d shard(s)", len(eval_dataset.paths)
-            )
-            eval_dataset.prepare()
-        except BaseException as exc:  # noqa: BLE001 - see the docstring: never fatal here
-            log.warning(
-                "could not pre-build held-out indices (%s: %s); the eval callback will build "
-                "them, which is where run_019fca21 deadlocked -- watch for a gloo timeout at "
-                "startup",
-                type(exc).__name__,
-                exc,
-            )
-    # Unconditional, so every rank leaves this function at the same point whether or not a
-    # ladder was attached. An early return on the no-ladder path would make the barrier
-    # conditional on a value derived from the corpus -- and a barrier that some ranks skip is
-    # the failure mode this whole function exists to remove.
-    barrier()
+    if eval_cfg is None:
+        log.warning(
+            "no held-out ladder in this config, so there are no indices to prepare; the run "
+            "will train but a flat result will not be distinguishable from undertraining"
+        )
+        return
+    dataset = eval_cfg.eval_dataset.build()
+    log.info("preparing held-out indices for %d shard(s) in one process", len(dataset.paths))
+    dataset.prepare()
+    log.info("held-out indices ready; the eval callback will find them cached")
 
 
 def train(config, opts=None) -> None:
@@ -989,26 +1001,6 @@ def train(config, opts=None) -> None:
         show(config)
 
     seed_all(config.init_seed)
-
-    # BUILD THE HELD-OUT INDICES BEFORE ANYTHING TOUCHES CUDA. THIS COST run_019fca21.
-    #
-    # `NumpyPaddedFSLDataset.prepare()` (numpy_dataset.py:913-918) writes instance indices on
-    # fs_local_rank 0 only, inside a `ProcessPoolExecutor`, and then every rank meets a
-    # `barrier()`. `prepare_training_environment()` has already forced the multiprocessing
-    # start method to "spawn" (train/__init__.py:127), so each pool worker is a fresh
-    # interpreter that re-imports this module and torch. Spawning those from a rank whose CUDA
-    # context and NCCL communicators are already live hung rank 0 past gloo's 900 s timeout;
-    # the other seven sat at the barrier and the job died at exit 72 having trained nothing.
-    #
-    # The training path never hit this because `NumpyFSLDataset.prepare()` (:576-577) is just
-    # `len(self)` -- no pool, no barrier. Only the PADDED variant the evaluator requires has
-    # one, so wiring the ladder introduced the first pool in the startup path.
-    #
-    # Preparing here fixes it twice over: the fork happens before the model is built or moved
-    # to a device, and `_write_instance_indices` skips any path whose indices file already
-    # exists -- so when `LMEvaluatorCallbackConfig.build()` calls `prepare()` again during
-    # `config.trainer.build(...)`, `paths_needed` is empty and no pool is created at all.
-    _prepare_heldout_indices(config)
 
     model = config.model.build(init_device="meta")
     train_module = config.train_module.build(model)
@@ -1125,6 +1117,15 @@ def build_parser() -> argparse.ArgumentParser:
         "grid. Without this every cell of an array job would train the SAME arm and seed.",
     )
     parser.add_argument("--dry-run", action="store_true", help="Resolve and print, do not train.")
+    parser.add_argument(
+        "--prepare-heldout-only",
+        action="store_true",
+        help="Build the held-out eval indices and exit, without training and without starting a "
+        "process group. Run this ONCE, single-process, before torchrun, sharing the same "
+        "--work-dir: NumpyPaddedFSLDataset.prepare() opens a 96-worker spawn pool behind a "
+        "collective, which deadlocked two 8-GPU runs at a 900s gloo timeout when it ran inside "
+        "the distributed program.",
+    )
     return parser
 
 
@@ -1300,6 +1301,15 @@ def main() -> None:
         config = build_config(opts, overrides)
     if opts.dry_run:
         show(config)
+        return
+
+    # BEFORE prepare_training_environment(), and that placement is the fix rather than a
+    # detail. No process group exists yet, so the barrier inside `prepare()` is a no-op and
+    # cannot strand seven peers, and the 96-worker pool has the box to itself instead of
+    # competing with eight ranks holding CUDA contexts. See prepare_heldout_indices.
+    if opts.prepare_heldout_only:
+        with during(Stage.THE_CONFIG_WOULD_NOT_BUILD):
+            prepare_heldout_indices(config)
         return
 
     with during(Stage.THE_TRAINING_ENVIRONMENT_WOULD_NOT_START):

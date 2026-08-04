@@ -215,10 +215,10 @@ def test_the_ladder_rungs_are_geometric_and_never_below_step_two(steps, expected
     assert steps not in rungs
 
 
-def test_preparing_heldout_indices_is_a_noop_without_a_ladder():
+def test_preparing_heldout_indices_warns_rather_than_raising_without_a_ladder():
     """
-    A corpus with no val split attaches no ``lm_eval`` callback, so the pre-build must do
-    nothing rather than raise on a missing key.
+    A corpus with no val split attaches no ``lm_eval`` callback. Preparing must then be a
+    no-op, not a KeyError -- the absence is a property of the corpus, not an error.
     """
     from unittest import mock
 
@@ -229,55 +229,76 @@ def test_preparing_heldout_indices_is_a_noop_without_a_ladder():
         save_folder="/tmp/does-not-matter", metrics_collect_interval=5, cancel_check_interval=5
     ).with_callback("gpu_monitor", GPUMemoryMonitorCallback())
 
-    class _Config:
-        pass
-
-    cfg = _Config()
-    cfg.trainer = trainer
-    with mock.patch.object(entry, "barrier") as barrier:
-        entry._prepare_heldout_indices(cfg)
-    barrier.assert_called_once()
+    cfg = mock.Mock(trainer=trainer)
+    with mock.patch.object(entry.log, "warning") as warn:
+        entry.prepare_heldout_indices(cfg)
+    assert warn.called, "a run with no ladder must say so rather than pass silently"
 
 
-def test_a_failure_pre_building_indices_does_not_kill_the_run():
-    """
-    The pre-build is an optimisation, not a gate: if it fails the callback will build the
-    indices later. Raising here would turn a recoverable slow path into a dead run.
-    """
+def test_preparing_heldout_indices_calls_prepare_on_the_eval_dataset():
+    """The one thing this command exists to do."""
     from unittest import mock
 
-    class _Boom:
-        def build(self):
-            raise RuntimeError("s3 unavailable")
-
-    class _Cfg:
-        pass
-
-    cfg = _Cfg()
-    cfg.trainer = mock.Mock(callbacks={"lm_eval": mock.Mock(eval_dataset=_Boom())})
-    with mock.patch.object(entry, "barrier"):
-        entry._prepare_heldout_indices(cfg)  # must not raise
+    dataset = mock.Mock(paths=["s3://b/val-0.bin"])
+    cfg = mock.Mock(trainer=mock.Mock(callbacks={"lm_eval": mock.Mock()}))
+    cfg.trainer.callbacks["lm_eval"].eval_dataset.build.return_value = dataset
+    entry.prepare_heldout_indices(cfg)
+    dataset.prepare.assert_called_once()
 
 
-def test_the_heldout_indices_are_prepared_before_the_model_is_built():
+def test_train_never_touches_the_padded_prepare():
     """
-    ORDER IS THE WHOLE FIX, AND THIS IS THE TEST run_019fca21 DID NOT HAVE.
+    THE FIX, ASSERTED WHERE IT CAN REGRESS. TWO RUNS AND ~$11 WENT ON THIS.
 
-    ``NumpyPaddedFSLDataset.prepare()`` forks a ProcessPoolExecutor on rank 0 behind a
-    ``barrier()``, and the start method is "spawn", so each worker is a fresh interpreter.
-    Forking that from a rank whose CUDA context and NCCL communicators are already live hung
-    past gloo's 900 s timeout and killed the run at exit 72 with nothing trained.
+    ``NumpyPaddedFSLDataset.prepare()`` opens a bare ``ProcessPoolExecutor()`` -- 96 workers on
+    a p4d.24xlarge, under a forced "spawn" start method -- and then every rank meets a
+    ``barrier()``. Called from inside the distributed program it stranded seven ranks past
+    gloo's 900-second timeout, twice, at exit 72 with nothing trained.
 
-    Asserts the pre-build call precedes the model build in the source of ``train``, which is
-    the property that keeps the fork cheap. A comment saying "call this early" is not a
-    constraint; this is.
+    The first attempt at a fix merely moved the call earlier in ``train()`` and failed
+    identically, so "call it early" is not the invariant. The invariant is that ``train()``
+    does not call it at all: the indices are built by a separate single-process invocation
+    before ``torchrun``, and by the time the eval callback runs they are cached.
+
+    A four-rank local reproduction on ten cores does NOT deadlock, so no unit test can catch a
+    regression here dynamically. This asserts the structural property instead.
     """
     import inspect
 
     src = inspect.getsource(entry.train)
-    prepare_at = src.index("_prepare_heldout_indices(config)")
-    model_at = src.index("config.model.build(")
-    assert prepare_at < model_at, "the held-out pre-build must happen before the model is built"
+    assert "prepare_heldout_indices" not in src, (
+        "train() must not prepare the held-out indices; that call belongs in the separate "
+        "--prepare-heldout-only invocation, outside any process group"
+    )
+
+
+def test_the_prepare_only_path_exits_before_the_process_group_starts():
+    """
+    Order in ``main``: the prepare-only branch must return BEFORE
+    ``prepare_training_environment()``. If a process group exists, the barrier inside
+    ``prepare()`` is live again and the deadlock is back.
+    """
+    import inspect
+
+    # Comments are stripped, so a comment naming prepare_training_environment cannot be
+    # mistaken for the call. An earlier version of this test matched raw source and failed on
+    # exactly that -- the prose above the branch mentions the function before the branch runs.
+    lines = [
+        line.split("#")[0]
+        for line in inspect.getsource(entry.main).splitlines()
+        if not line.strip().startswith("#")
+    ]
+    src = "\n".join(lines)
+    branch_at = src.index("opts.prepare_heldout_only")
+    env_at = src.index("prepare_training_environment()")
+    assert branch_at < env_at, "the prepare-only branch must precede the process group"
+
+
+def test_prepare_heldout_only_is_a_flag_and_defaults_off():
+    """A normal training run must not silently turn into an index build."""
+    parser = entry.build_parser()
+    assert parser.parse_args([]).prepare_heldout_only is False
+    assert parser.parse_args(["--prepare-heldout-only"]).prepare_heldout_only is True
 
 
 def test_a_run_short_enough_to_collapse_the_ladder_still_yields_valid_rungs():
