@@ -18,22 +18,12 @@ import argparse
 import json
 from pathlib import Path
 
-import torch
-
-from olmo_core.distributed.checkpoint import load_model_and_optim_state
 from olmo_core.latentcot import tokens as T
 from olmo_core.latentcot.data.encode import encode_example
 from olmo_core.latentcot.data.graph_gen import Example
 from olmo_core.latentcot.evaluate import run_eval
+from olmo_core.latentcot.train_driver import load_checkpoint
 from olmo_core.nn.transformer import TransformerConfig
-
-
-def load_checkpoint(model, path: str) -> None:
-    """Load a plain state_dict ``.pt`` (from train_codi.py) or a framework checkpoint dir."""
-    if Path(path).is_file():
-        model.load_state_dict(torch.load(path, map_location="cpu"))
-    else:
-        load_model_and_optim_state(path, model)
 
 
 def load_examples(path: str, num_continuous_thoughts: int):

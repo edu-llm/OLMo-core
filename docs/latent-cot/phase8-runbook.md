@@ -62,6 +62,27 @@ done
   (vs shuffled control) / causal ablation, on directed-graph-reachability where theory predicts
   the superposition advantage.
 
+## 4b. Benchmark vs the "best model"
+Head-to-head against the general pretrained 370M baseline
+(`s3://edullm-olmo-370m-ckpts/olmo3-370m/run-10b-equal/step12716/`, W&B run `f08ey8cm`). The
+baseline is **not** run zero-shot — it never saw our graph format and would score ~chance.
+Instead every arm forks it as the shared init (§3, `--rung olmo3_370M --init-checkpoint s3://…`),
+and **A0** = that best model fine-tuned the *normal* way (explicit CoT, no continuous thoughts,
+no vocab reg). Comparing our latent arms against A0 from identical starting weights isolates the
+*training method*.
+```bash
+.venv/bin/python src/scripts/latentcot/compare_models.py \
+  --test-data $DATA/heldout-00000.jsonl --num-continuous-thoughts 8 --model olmo3_370M \
+  --baseline A0=runs/latentcot/A0-seed1/model.pt \
+  --ours A2=runs/latentcot/A2-seed1/model.pt \
+  --ours A3=runs/latentcot/A3-seed1/model.pt
+# writes runs/latentcot/compare/report.json (+ advantage.png if matplotlib present)
+```
+Prints solve-rate-by-depth for the baseline and each of our arms side by side with the per-depth
+advantage `acc(ours) − acc(baseline)` and its slope vs depth (the superposition signal — positive
+& increasing). Pulling the S3 checkpoint needs AWS creds + a GPU; the script's logic is dry-tested
+on tiny CPU models. Use `--model olmo3_370M` to match the S3-forked arms.
+
 ## 5. Escalation (PRD §3.1)
 If, at ≥5 seeds, gate A is null **but** probes show a weak, depth-increasing signal → bump one
 rung (`--rung olmo2_600M`, then `760M`, `1B`), re-sweep `--lr`, repeat 3–4. If gate A is absent
@@ -70,7 +91,10 @@ spend on scale. Escalate at most one rung at a time; stop at 1B (beyond is a sep
 
 ## Notes
 - `train_codi.py` builds from a seeded init by default (no external base checkpoint needed); pass
-  `--init-checkpoint <state_dict.pt>` if you have a shared pretrained base (use the SAME file for
-  every arm). Either way, keep `--init-seed` identical across arms.
+  `--init-checkpoint <state_dict.pt | dir | s3://…>` if you have a shared pretrained base (use the
+  SAME file for every arm) — e.g. the best model
+  `s3://edullm-olmo-370m-ckpts/olmo3-370m/run-10b-equal/step12716/` with `--rung olmo3_370M`.
+  `load_checkpoint` handles a plain `.pt` state_dict or a local/S3 OLMo-core checkpoint dir (S3
+  needs AWS creds). Either way, keep `--init-seed` identical across arms.
 - Publishing the dataset to the platform is separate (`publish_dataset.py`, needs AWS creds) and
   optional for these runs — the driver reads the local shards directly.

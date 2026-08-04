@@ -29,7 +29,7 @@ import torch
 from olmo_core.latentcot.arms import ARMS
 from olmo_core.latentcot.data.dataset import LatentCotDataset
 from olmo_core.latentcot.evaluate import overall_accuracy, solve_rate_by_depth
-from olmo_core.latentcot.train_driver import build_model, train_arm
+from olmo_core.latentcot.train_driver import build_model, load_checkpoint, train_arm
 
 
 def main() -> None:
@@ -53,7 +53,8 @@ def main() -> None:
 
     model = build_model(args.rung, init_seed=args.init_seed, device=device)
     if args.init_checkpoint:
-        model.load_state_dict(torch.load(args.init_checkpoint, map_location=device))
+        # Fork the shared base (the "best model") — a .pt state_dict or a local/S3 ckpt dir.
+        load_checkpoint(model, args.init_checkpoint)
 
     train_ds = LatentCotDataset(args.train_data, args.num_continuous_thoughts)
     history = train_arm(

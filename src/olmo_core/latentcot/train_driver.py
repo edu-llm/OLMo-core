@@ -8,6 +8,7 @@ doesn't fit the framework Trainer's token-array ``DataLoader``; this loop is the
 equivalent for the research runs.
 """
 
+from pathlib import Path
 from typing import Iterator, List
 
 import torch
@@ -16,7 +17,23 @@ from .arms import Arm
 from .data.dataset import LatentCotDataset, codi_collate
 from .loss import arm_loss
 
-__all__ = ["build_model", "iter_batches", "train_arm"]
+__all__ = ["build_model", "load_checkpoint", "iter_batches", "train_arm"]
+
+
+def load_checkpoint(model, path: str, *, strict: bool = True) -> None:
+    """
+    Load weights into ``model`` from either a plain ``.pt`` state_dict (produced by
+    ``train_codi.py``) or an OLMo-core checkpoint directory/URL — local **or remote**
+    (e.g. ``s3://…``, loaded via ``load_model_and_optim_state`` with ``pre_download``).
+
+    Used to fork every arm from the shared base checkpoint (the "best model").
+    """
+    if Path(str(path)).is_file():
+        model.load_state_dict(torch.load(path, map_location="cpu"), strict=strict)
+    else:
+        from olmo_core.distributed.checkpoint import load_model_and_optim_state
+
+        load_model_and_optim_state(str(path), model, pre_download=True, strict=strict)
 
 
 def build_model(rung: str, *, init_seed: int, device: str = "cpu"):
