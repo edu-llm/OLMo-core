@@ -1,16 +1,19 @@
 # HANDOFF — DP2-KDA / KDA-Householder
 
-**Last updated:** 2026-08-04 (second update this day; supersedes the earlier one at `8972066`).
+**Last updated:** 2026-08-04 (third update this day; supersedes `8972066` and `9e36632`).
 
 **Status in one paragraph.** The research question was re-pointed at **Kimi K3's** KDA node,
-answered by a 48-cell paired sweep on AWS, and **written up as an 8-page conference paper that
-compiles today** (`paper/kda-regime-arity.{tex,pdf}`). Writing the paper forced a **re-analysis
-that overturned several of the numbers in the previous handoff** — the evaluation metric is
-prefix-averaged, so the five "lengths" are nested, and de-nesting reverses two headline cells.
-The surviving claims are narrower and better supported. Total AWS spend: **~$50 worst case**,
-48/48 cells succeeded, 3.52 GPU-hours.
+answered by a 48-cell paired sweep on AWS, written up as a **9-page conference paper**
+(`paper/kda-regime-arity.{tex,pdf}`), and then **stress-tested by two follow-up runs (72 more
+cells) that close both of the paper's open confounds**. Capacity matching leaves the effect
+intact and slightly larger; a 33× learning-rate sweep rejects the leading optimization
+explanation. Both cut against an earlier claim as well: matching costs the single band that
+survived Holm. Writing the paper had already forced a re-analysis that overturned several
+numbers — the metric is prefix-averaged, so the five "lengths" are nested. Totals across all
+three runs: **120 cells, 120/120 succeeded, 8.67 GPU-hours, ~$122 worst case** (actual far
+lower; cells run 228–305 s against a 1 h bound).
 
-> **BRANCH:** `edullm/a5-solvability` at `5989dbb`, pushed, clean.
+> **BRANCH:** `edullm/a5-solvability` at `b26bbd1`, pushed, clean.
 > The image build only fires on `edullm/**` or `main`; an `agent/**` branch pushes green while
 > **publishing no image**.
 
@@ -30,7 +33,7 @@ is the dominant lever.**
 
 ### The paper — the primary deliverable
 
-`paper/kda-regime-arity.tex` (53,873 B) → `paper/kda-regime-arity.pdf`, **8 pages, US Letter**,
+`paper/kda-regime-arity.tex` → `paper/kda-regime-arity.pdf`, **9 pages, US Letter**,
 two-column. Author: Eric Wu, Stanford University / Alpha AI Engineering.
 
 **Build: `cd paper && tectonic -X compile kda-regime-arity.tex`.** Exit 0. **Only `tectonic`
@@ -41,8 +44,8 @@ free and would not fit.
 
 Title: *Write Strength, Not Write Count: The β Range Dominates Householder Arity in Gated
 Delta-Rule Attention.* Sections: Intro · Background · The K3 KDA node · Setup · Results ·
-Two failed explanations · Limitations (6 subsections) · Related work · Conclusion. Five
-booktabs tables.
+Two failed explanations · Limitations (6 subsections) · Related work · Conclusion. Seven
+booktabs tables (Table 6 = capacity-matched square, Table 7 = LR sweep).
 
 ### The experiment
 
@@ -78,6 +81,7 @@ are therefore **nested, not independent**. Four consequences, all verified indep
    124.7× (A5 65–128), 45.5× (S5 41–64).
 4. **Zero of ten prefix cells survive Holm correction; exactly one of eight bands does.** With
    df=5, p<0.00625 requires |t|>4.03 — no prefix cell reaches it, so none *could* have.
+   **Superseded:** that one survivor does not survive capacity matching either (see below).
 
 **Also withdrawn:** the "+3.50pp upper bound on the capacity confound" argument I constructed. It
 is circular — both strict arms sit within 2× chance in every extrapolation band (chance 1.67% A5,
@@ -103,20 +107,21 @@ finding). Two runs (`R1`/S5/b1102 and b1103) are high at **5 of 7** sampled step
 sustained oscillation, not one unlucky batch. Spiked runs average 74.46% at L=40 against 80.73%
 for clean ones. Zero of 24 reflection runs spike at all.
 
-So the paper's *conclusion* stands — expressivity and trainability are not separable here — but
-its *evidence* should be restated as loss instability rather than failure to converge, and the
-"traces show ... those are not converged models" sentence at `paper/kda-regime-arity.tex:749`
-is not supportable as written.
+Both were fixed in the paper at `b26bbd1`: §7.1 now states the instability finding and
+explicitly retracts the "not converged models" sentence. And the LR sweep went further than a
+restatement — over a 33× range the two accounts *are* separable, and the evidence favours
+expressivity.
 
 **The sharper effect this uncovered.** The strict arms fit to ~0.0000 training loss and still
 score only **68–89% at L=40** — a length *inside* the training range 3–40 — where `R1-refl`
 scores 100% (A5) / 92.6–99.0% (S5) and `Reflection` 100% / 89.8–100%. That is a generalization
 gap on in-distribution data: not length extrapolation, and untouched by the nesting artifact.
-It is what the second experiment now tests.
+This is what the LR sweep tested, and no rate closed it.
 
 ### What survives
 
-- The **A5 mid-range interaction**: +57.09pp (se 16.08, t 3.55, L95 +24.69) at positions 129–256.
+- The **A5 mid-range interaction**, now capacity-matched: **+58.88pp** (se 14.85, t 3.96,
+  L95 +28.95) at positions 129–256. Unmatched it was +57.09 (se 16.08, t 3.55).
 - The **cost asymmetry**: switching β regime is **free** (998,092 params both sides) while
   doubling R costs **+40.3%**.
 - **K3-relevant conclusion**: K3 fixes strict β, and under strict β arity buys almost nothing
@@ -192,27 +197,33 @@ It is what the second experiment now tests.
 The paper is submittable as an empirical/negative result. Two cheap experiments would materially
 strengthen it, both ROUTINE on the platform:
 
-Both are **wired and pre-validated as of `5989dbb`** — commands tested through the platform's
-exact `shlex.join`-in-`bash -c` fanout wrapping, dispatch verified cell-by-cell, both compile
-ROUTINE. Neither has been submitted; that needs a decision to spend.
+**BOTH RAN. 72/72 cells succeeded, 5.16 GPU-hours, and the paper is updated (`b26bbd1`).**
 
-- **Parameter-matched arms — 24 cells, $24.14 worst case.**
-  Inputs at `/tmp/pv/matched-inputs.json`, summary at `/tmp/pv/matched-summary.md`.
-  `R1-P` now carries `match_arm="DP2-strict"` in its arm definition, and the new `R1-refl-P`
-  carries `match_arm="Reflection"`. Both solve to `ffn_dim=174` → 1,399,756 params, **−0.055%**,
-  ten times inside the 0.5% tolerance. Analyse with `--square matched`.
-  *Both* regimes are matched deliberately: controlling only the strict contrast would leave the
-  two halves of the interaction differently constructed, which is worse than controlling
-  neither, because their difference would then mix the correction with the effect.
-- **The in-distribution gap — 48 cells, $48.29 worst case.**
-  Inputs at `/tmp/pv/lr-inputs.json`. 4 rates (3e-4/1e-3/3e-3/1e-2) × 2 strict arms × 2 tasks ×
-  3 bundles. Analyse with `probes/analyze_lr_gap.py`.
-  **Re-pointed from the re-diagnosed confound** (see above). The question is whether
-  *any* learning rate closes the strict arms' 68–89% at L=40 against the reflection arms'
-  ceiling. If none does, the optimization explanation is ruled out to the grid's resolution —
-  which is the useful direction, since that explanation would otherwise undercut every claim
-  the sweep makes. The reflection arms are not swept: they are already at ceiling, so there is
-  no gap for a rate to close.
+| Run | id | Cells | Result |
+|---|---|---|---|
+| Parameter-matched | `run_019fcf14-0f7c-70f0-bbb3-7f5d6b45482a` | 24 | Interaction survives, strengthens |
+| In-distribution LR | `run_019fcf14-6197-70b6-867c-29b766298103` | 48 | No rate closes the gap |
+
+Records synced to `/tmp/matched24/` and `/tmp/lrsweep48/`; re-sync from
+`s3://sbsandbox-intern-edullm-outputs/teams/scratch/runs/<run-id>/` if gone. Combine the
+matched run with the original sweep into one directory and analyse with `--square matched`.
+
+- **Capacity confound: CLOSED.** `R1-P`/`R1-refl-P` solved to `ffn_dim=174` → 1,399,756 params
+  against 1,400,524, **−0.055%**, verified in the live logs. Every new cell's eval bank hashes
+  identically to the original sweep's, so the squares are paired across runs. A5 129–256 goes
+  **+57.09 → +58.88pp** (t 3.96, L95 +28.95).
+- **Optimization confound: REJECTED over a 33× range.** Best strict cell is 91.33% at L=40
+  against a 100% ceiling; at the top two rates the strict arms fit *stably* (tail-median loss
+  0.0006–0.0084) and still fall 9–21pp short. Caveat recorded in the paper: `DP2-strict` on A5
+  peaks at the grid's top rate, so its optimum is unbracketed.
+
+### ⚠️ The cost of doing this properly: the last Holm survivor is gone
+
+Capacity matching **weakens** the family-wise evidence. S5 41–64 drops from t=4.26 to t=3.64,
+and **no band clears Holm in the matched square** — strongest is A5 129–256 at p=0.00535
+against a 0.00500 threshold. Higher point estimates, weaker corrected significance. Both facts
+are now in the abstract, results, Table 4's caption and the conclusion. Do not quote the "one
+band survives" line from the old draft.
 
 ### 2. Everything prior to `621eaba` is suspect
 
