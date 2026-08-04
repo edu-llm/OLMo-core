@@ -8,19 +8,24 @@ P4 · Latent Reasoning · Execution PRD v1 (OLMo-370M-locked)
 
 ---
 
-## Status & changes since this design was written (updated 2026-08-02)
+## Status & changes since this design was written (updated 2026-08-04)
 
-**Build status.** Phases 1–8 are implemented, unit-tested (**126 tests**, CPU), style-clean, and pushed to branch **`latent-cot-superposition-amy`**. The only step not done is the **370M training on GPU** (this environment is CPU-only) — the driver, eval, and runbook are ready. The per-phase `✅ DONE` notes in §8 are the source of truth for what's built; see also `progress.md` (changelog), `handoff.md` (agent brief), and `phase8-runbook.md` (the GPU procedure).
+**Build status.** Phases 1–8 are implemented, unit-tested (**128 tests**, CPU), style-clean, and pushed to branch **`latent-cot-superposition-amy`**. The only step not done is the **370M training on GPU** (this environment is CPU-only) — the driver, eval, benchmark, and runbook are ready. The per-phase `✅ DONE` notes in §8 are the source of truth for what's built; see also `progress.md` (changelog), `handoff.md` (agent brief), and `phase8-runbook.md` (the GPU procedure).
 
 **Notable changes from this design as originally written** (annotated in place; the design text below is preserved):
 - **Platform dataset shape (new; not in the original design).** The dataset is published to the eduLLM platform as **`sft/graph-reachability-depth`** via **`sft-conversations/v1`** — the only fitting *registered* profile (the natural `eval-items/v1` is unregistered in `edullm-data` v0.2.0). Each row carries a `messages[]` array (user = query+edges, assistant = BFS reasoning + yes/no) plus the full `Example` as metadata. Added per the `edullm-dataset-design` / `edullm-datasets` skills. See §3 and `src/scripts/latentcot/publish_dataset.py`.
 - **Optimize `.loss`, not `.ce_loss`.** `LMOutputWithLoss.ce_loss` is detached (logging only); `codi_loss` optimizes `.loss`. A grad-flow regression test guards this.
 - **Four control tokens, not three.** Added `<thought>` as the student latent-slot placeholder (design named `<bot>/<eot>/<distill>`); all four live at unused padded ids 100348–100351.
 - **Per-example student (batch dim 1).** Sidesteps the variable-length-prefix problem without left-padding/attention masks; batched/bucketed is a deferred optimization.
-- **`arm_mode` added to the confound whitelist** — A0/A1 are structurally different objectives, so the whitelist is `(arm_mode, num_continuous_thoughts, vocab_reg, vocab_reg_weight)`.
+- **`arm_mode` added to the confound whitelist** — A0/A1 are structurally different objectives, so the whitelist is `(arm_mode, num_continuous_thoughts, vocab_reg, vocab_reg_weight)`. *(Later extended with `vocab_reg_entropy_floor` — see the 2026-08-04 bullet below.)*
 - **Direct training loop, not the framework `Trainer`** (Phase 8): the per-example student doesn't fit the token-array `DataLoader`; the loop reuses the same `arm_loss` the `CodiTransformerTrainModule` uses.
 - **Secondary tasks (ProsQA / GSM8K) not implemented.** Only the synthetic directed-graph task was built; the compute-parity reproduction on ProsQA/GSM8K is deferred (§2 secondary objective).
 - **Matched starts via shared init**, not necessarily a checkpoint file: all arms build from the same `--init-seed` (identical weights) or the same `--init-checkpoint`.
+- **Best-model S3 init (design pivot; updated 2026-08-04).** The confirmatory sweep now forks a *real* general-pretrained base — the "best model" `s3://edullm-olmo-370m-ckpts/olmo3-370m/run-10b-equal/step12716/` (W&B run `f08ey8cm`) — via `train_codi.py --rung olmo3_370M --init-checkpoint s3://…`, rather than a from-scratch seeded init. This *refines* the §3/§5/§7 "all arms fork the same base checkpoint" requirement (still satisfied — the base is shared and identical across arms, so the confound control holds) but shifts **A0's role** from "matched-random-init upper anchor" to **the best model fine-tuned the normal way = the fair baseline**; the latent arms are measured against that same fine-tuned start, isolating the *training method*. A from-scratch `olmo2_370M` run (drop `--init-checkpoint`) remains available as a no-creds sanity check.
+- **Rung is `olmo3_370M`, not `olmo2_370M` (updated 2026-08-04).** The best model was pretrained as olmo3 (olmo2 + sliding-window + flash_2). The two factories' state dicts are **identical** (same keys/shapes, 474M params) and numerically equivalent for our sequence lengths (≪ the 4096 sliding window), so the §3 model spec and the §3.1 escalation ladder (written as `olmo2_*`) carry over unchanged — the escalation rungs would likewise use their `olmo3_*` counterparts.
+- **Entropy floor: implemented, default OFF, switchable (updated 2026-08-04).** R1's optional anti-collapse entropy floor (§4.2, §7 "superposition = collapse", §10 open question) is wired through but defaults to `0.0` so the **first sweep is the clean one-variable A3-vs-A4 comparison**. It is now a per-arm field switchable at runtime (`train_codi.py --vocab-reg-entropy-floor <nats>`); the empirical protocol (see `phase8-runbook.md` §4) is to inspect A3 decodability/probes for collapse first and only then re-run A3 with the floor on (noting the added-term caveat vs the L2 control). This resolves the §10 "R1's exact form needs a pilot" open question in favor of *empirical-first*, keeping both forms pre-registered.
+- **Confound whitelist extended (pre-registration edit; updated 2026-08-04).** `vocab_reg_entropy_floor` was added to `ARM_WHITELIST` (now `(arm_mode, num_continuous_thoughts, vocab_reg, vocab_reg_weight, vocab_reg_entropy_floor)`), so A3 may differ from A4 in the floor without tripping `assert_arms_differ_only_in`. With the floor off (the default), this is a no-op and A3/A4 still differ only in `vocab_reg`.
+- **Benchmark + pre-flight scripts (new; updated 2026-08-04).** `compare_models.py` tabulates our arms' solve-rate-by-depth against the best-model baseline (A0) with the per-depth advantage + slope (the §6.2 head-to-head); `verify_checkpoint.py` strict-loads the S3 base into `olmo3_370M` and exercises one plain + one continuous-thought forward/backward (run first on the GPU box). Eval/compare/train all auto-detect the GPU (`--device auto`).
 
 ---
 
@@ -120,7 +125,7 @@ Total loss = CE_teacher + CE_student + λ·distill. K (number of continuous thou
 
 The distributional-shift hypothesis says unconstrained continuous thoughts `h_t` drift off the manifold of real token embeddings, hurting accuracy and readability. We add a regularizer that pulls each continuous thought toward that manifold. Two concrete forms, pre-registered, one chosen after a pilot:
 
-- **(R1) Soft-decode entropy / commitment.** Compute the logit-lens distribution `p_t = softmax(W_U · h_t)` over the vocabulary and penalize its distance from the convex hull of embeddings, e.g. minimize `‖h_t − E·p_t‖²` where `E` is the embedding matrix (pull `h_t` toward a *mixture* of real token embeddings — a superposition that still lives in vocab space). Optionally add a mild entropy floor so it is a *mixture*, not a collapse to one token.
+- **(R1) Soft-decode entropy / commitment.** Compute the logit-lens distribution `p_t = softmax(W_U · h_t)` over the vocabulary and penalize its distance from the convex hull of embeddings, e.g. minimize `‖h_t − E·p_t‖²` where `E` is the embedding matrix (pull `h_t` toward a *mixture* of real token embeddings — a superposition that still lives in vocab space). Optionally add a mild entropy floor so it is a *mixture*, not a collapse to one token. *(As built: the entropy floor is implemented but **off by default** — a whitelisted per-arm `vocab_reg_entropy_floor`, switchable via `train_codi.py --vocab-reg-entropy-floor`; the first sweep runs it off for a clean A3-vs-A4 and it is switched on only if collapse is observed. See "Status & changes".)*
 - **(R2) Nearest-embedding distance.** Penalize distance to the nearest token embedding. *(As built: top-1 nearest by logit-lens — the argmax token's embedding; see `loss.vocab_manifold_reg`.)*
 
 Strength γ is swept. R1 is the primary form because it is exactly a "superposition constrained to vocabulary space," aligning the intervention with the mechanism.
@@ -182,7 +187,7 @@ This is the core of the PRD; each row is a way the result could lie, and the con
 | **K (thought count) confound** | A3 vs A2 differ in effective compute via K | Fix K identical between A2 and A3; sweep K separately |
 | **Distillation-token placement** | Result hinges on an arbitrary token position | Ablate distillation-token position; report sensitivity |
 | **Contamination** | Eval leakage inflates accuracy | Synthetic generator with disjoint train/test seeds; no public-graph reuse in the primary task |
-| **Superposition = collapse** | R1 collapses `h_t` to a single token, killing the mechanism it's meant to preserve | Entropy floor in R1; verify logit-lens mass stays multi-modal where multiple frontiers exist |
+| **Superposition = collapse** | R1 collapses `h_t` to a single token, killing the mechanism it's meant to preserve | Entropy floor in R1; verify logit-lens mass stays multi-modal where multiple frontiers exist. *(As built: floor default-off, switched on empirically if the `decodability` + `superposition_mass` probes show collapse.)* |
 
 ---
 
@@ -250,7 +255,7 @@ Reference implementation to port: [github.com/zhenyi4/codi](https://github.com/z
 
 ### Phase 5 — Arms as configs (differ only by pre-registered flags) — ✅ DONE (commit 7fcf039)
 - [x] **5.1** `src/olmo_core/latentcot/arms.py`: the 5 arms as overrides on one shared base `CodiTransformerTrainModuleConfig` (same model/data/optim/WSD/seed/base-checkpoint). **A0** `explicit_cot` (teacher CE), **A1** `no_cot` (direct `question <distill> answer` CE), **A2** `codi` vocab_reg=none, **A3** `codi`+R1, **A4** `codi`+L2 (control at matched γ). Multi-mode training via `arm_loss` (loss.py) + `arm_mode` dispatch in the train module; `codi_collate` yields the `{"examples": [...]}` batch.
-- [x] **5.2** `assert_arms_differ_only_in(configs, whitelist)` compares `as_dict()` outside the whitelist and raises naming any offending field (catches accidental LR/seed/data confounds). **Whitelist = `(arm_mode, num_continuous_thoughts, vocab_reg, vocab_reg_weight)`** — `arm_mode` added to the PRD's list because A0/A1 are structurally different objectives.
+- [x] **5.2** `assert_arms_differ_only_in(configs, whitelist)` compares `as_dict()` outside the whitelist and raises naming any offending field (catches accidental LR/seed/data confounds). **Whitelist = `(arm_mode, num_continuous_thoughts, vocab_reg, vocab_reg_weight)`** — `arm_mode` added to the PRD's list because A0/A1 are structurally different objectives. *(Later extended with `vocab_reg_entropy_floor` (default 0.0 = off) so A3 can carry R1's anti-collapse floor without a confound; see "Status & changes".)*
 - [x] **Done when:** the confound assertion passes on the shared base (and fails on a tampered LR), and each of A0–A4 reduces its primary CE over a short run. `src/test/latentcot/test_arms.py` (10 tests; suite total 100). *(Full Trainer-driven 100-step runs at 370M are Phase 8/GPU.)* ✅
 
 ### Phase 6 — Eval & probing harness — ✅ DONE (commit 1736251)
@@ -264,13 +269,13 @@ Reference implementation to port: [github.com/zhenyi4/codi](https://github.com/z
 - [x] **7.2** `assert_same_base_checkpoint` (fingerprint identical across arms) + `assert_disjoint_seeds` (train/test problem seeds don't overlap). Plus `assert_arms_differ_only_in` for the matched config.
 - [x] **Done when:** `preflight()` runs all checks and returns a report, raising on the first failure; validated by `test_preflight.py` (6 tests) — passes on matched arms, fails on a tampered LR / mismatched checkpoint / overlapping seeds. Suite total: 118. ✅
 
-### Phase 8 — Run, analyze, escalate — ⏳ CODE READY (commit 9e776b0); runs pending GPU
+### Phase 8 — Run, analyze, escalate — ⏳ CODE READY (commit c363732); runs pending GPU
 > Driver + eval + runbook are implemented and unit-tested on tiny CPU models. The boxes below stay unchecked until the actual **370M runs on GPU** are done — that's the one step this CPU-only environment can't execute. Turnkey procedure: `phase8-runbook.md`.
 - [ ] **8.1** Run ≥3 paired seeds (screen), then ≥5 (confirm), at 370M. Evaluate gates A and B (§6) with paired CIs. *(Driver: `src/scripts/latentcot/train_codi.py` / core `olmo_core.latentcot.train_driver`; eval: `src/scripts/latentcot/eval.py`.)*
 - [ ] **8.2** Apply the §3.1 escalation decision rule. If triggered, pass `--rung olmo2_760M` (then `1B`), re-sweep `--lr` only, and repeat at the next rung; record the gate metric vs. model size.
 - [ ] **Done when:** gates are decided with CIs at the current rung, and the scale decision (stop / escalate) is recorded in the results writeup.
 
-**Commands** (see the runbook for the full loop): `preflight.py` (gate) → `train_codi.py --arm <A0..A4> --rung olmo2_370M --init-seed 0 --seed <s> ...` (per arm × seeds; GPU auto-detected; writes `model.pt` + `metrics.json`) → `eval.py --arm A2=<...model.pt> ...` (gates A/B + report.json). Dataset under `data/` and run/eval outputs under `runs/` (both gitignored); publishing the dataset is separate (`publish_dataset.py`, AWS creds).
+**Commands** (see the runbook for the full loop): `verify_checkpoint.py --init-checkpoint s3://… --model olmo3_370M` (pre-flight: strict-load + forward-path smoke, run first) → `preflight.py` (gate) → `train_codi.py --arm <A0..A4> --rung olmo3_370M --init-checkpoint s3://… --init-seed 0 --seed <s> ...` (per arm × seeds, all forking the best model; GPU auto-detected; writes `model.pt` + `metrics.json`) → `eval.py --model olmo3_370M --arm A2=<...model.pt> ...` (gates A/B + report.json) → `compare_models.py --model olmo3_370M --baseline A0=<...> --ours A2=<...> ...` (§6.2 head-to-head vs the best-model baseline: solve-rate-by-depth + per-depth advantage slope). Dataset under `data/` and run/eval outputs under `runs/` (both gitignored); publishing the dataset is separate (`publish_dataset.py`, AWS creds).
 
 ---
 
@@ -284,7 +289,7 @@ Reference implementation to port: [github.com/zhenyi4/codi](https://github.com/z
 
 - **370M may be below the emergence scale** for clean superposition; a null on gate A is then a *scale* finding (report it, per non-goals), not a refutation of the method.
 - **CODI transfer at 370M on graph tasks** is unproven (its result is GSM8K at GPT-2 scale); the secondary compute-parity reproduction de-risks this before the primary claims are trusted.
-- **R1's exact form** (mixture pull vs entropy floor weighting) needs a pilot; both forms are pre-registered so the choice is not a garden-of-forking-paths.
+- **R1's exact form** (mixture pull vs entropy floor weighting) needs a pilot; both forms are pre-registered so the choice is not a garden-of-forking-paths. *(As built: resolved empirical-first — the floor is default-off for the clean A3-vs-A4 sweep and switched on only if the pilot shows collapse; both forms remain pre-registered. See "Status & changes".)*
 - **Causal-probe design** for "multiple frontiers" must be specified crisply (which directions, how patched) before looking at outcomes.
 - **Open question:** does vocab-manifold regularization trade off against the superposition advantage (constraining to vocab space might reduce the very mixing that helps)? Gate B's "preserve the compute advantage" condition is designed to catch exactly this tension.
 
