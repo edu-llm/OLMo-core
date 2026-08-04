@@ -233,17 +233,33 @@ class Vocabulary:
         words: list = list(SPECIALS)
         seen = set(words)
 
+        # A word repeated within ``literal_words`` is a duplicate list entry, not an ambiguity, and it
+        # happens for real: the reasoning tasks and the biography templates both want "and", and the
+        # caller concatenates the two lists. Deduplicate those silently.
+        #
+        # ``domain_tokens`` gets no such licence. It is one hand-written token per corpus slice, so a
+        # repeat means the slice labelling itself is wrong -- there is no legitimate case for it, and
+        # deduplicating would leave two slices sharing one label with nothing to distinguish them.
+        #
+        # A word in two *different* roles is a genuine ambiguity and raises either way, as does a pool
+        # value colliding with either -- that is the check that matters, because a token serving as both
+        # prose and a fact makes recall unmeasurable.
+        by_role: Dict[str, set] = {}
         for group_name, group in (
             ("domain_tokens", domain_tokens),
             ("literal_words", literal_words),
         ):
+            role_seen = by_role.setdefault(group_name, set())
             for word in group:
                 if word in seen:
+                    if group_name == "literal_words" and word in role_seen:
+                        continue
                     raise OLMoConfigurationError(
                         f"{word!r} in {group_name} is already a word. A token serving two roles is "
                         f"ambiguous between prose and a fact, which makes recall unmeasurable."
                     )
                 seen.add(word)
+                role_seen.add(word)
                 words.append(word)
 
         pool_token_ids: Dict[str, np.ndarray] = {}

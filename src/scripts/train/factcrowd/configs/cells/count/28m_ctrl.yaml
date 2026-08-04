@@ -1,10 +1,10 @@
-cell_id: 28m_d0p3
+cell_id: 28m_ctrl
 decay_fraction: 0.1
-demand_bits_per_param: 0.3
+demand_bits_per_param: 0.0
 exposures: 200
 global_batch_size: 262144
 learning_rate: 0.003
-notes: ''
+notes: 'reasoning-only control: no facts'
 reasoning_tokens: 1000000000
 row: 28M
 seed: 1234

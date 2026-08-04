@@ -448,7 +448,7 @@ def test_the_bios_schema_bits_reproduce_the_published_value():
         ),
         (lambda: R.capacity_bits(0, 1.2), "'params' must be"),
         (lambda: R.capacity_bits(100, 0.0), "'r_e' must be"),
-        (lambda: R.demanded_bits(0, _BITS, name_space=None), "'n_entities' must be"),
+        (lambda: R.demanded_bits(-1, _BITS, name_space=None), "'n_entities' must not be negative"),
         (lambda: R.achieved_r(-1.0, 100), "must not be negative"),
         (lambda: R.rho_from_demand(1.2, 0.0), "'r_e' must be"),
     ],
@@ -461,7 +461,7 @@ def test_the_bios_schema_bits_reproduce_the_published_value():
         "tokens-per-bio-zero",
         "capacity-params-zero",
         "capacity-r_e-zero",
-        "entities-zero",
+        "entities-negative",
         "achieved-negative",
         "rho-r_e-zero",
     ],
@@ -672,3 +672,32 @@ def test_zero_attribute_bits_are_accepted_and_negative_ones_are_not():
             total_params=LADDER["28M"][1],
             name_space=None,
         )
+
+
+def test_zero_entities_is_the_control_and_demands_exactly_nothing():
+    """
+    The reasoning-only control, whose demand is zero on both halves of the sum.
+
+    ``N*log2(N0/N)`` has the limit 0 as N goes to 0 but the expression divides by N, so the limit has
+    to be written down rather than evaluated. Only these three functions accept it: ``solve`` still
+    refuses a zero target, because on the linear path it divides by ``bits_per_entity`` and on the
+    name-term path zero falls below the monotonicity threshold, so an answer would be an accident.
+    """
+    assert R.name_bits(0, 160_000_000) == 0.0
+    assert R.demanded_bits(0, _BITS, name_space=160_000_000) == 0.0
+    assert R.demanded_bits(0, _BITS, name_space=None) == 0.0
+
+    picture = R.demand(
+        0,
+        bits_per_entity=_BITS,
+        non_embedding_params=_P,
+        total_params=_P,
+        name_space=160_000_000,
+    )
+    assert picture.bits == 0.0
+    assert picture.attribute_bits == 0.0
+    assert picture.name_bits == 0.0
+    assert picture.per_non_embedding_param == 0.0
+
+    with pytest.raises(OLMoConfigurationError, match="must be positive"):
+        R.solve(_P, 0.0, bits_per_entity=_BITS, name_space=160_000_000)

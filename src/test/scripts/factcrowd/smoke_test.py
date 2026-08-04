@@ -175,3 +175,79 @@ def test_the_run_is_reproducible_from_its_seed(tmp_path):
             [line.split("=")[1] for line in output.splitlines() if "train/CE loss=" in line]
         )
     assert curves[0] == curves[1], curves
+
+
+CONTROL_CELL = SMOKE_CELL.parent / "smoke_13m_ctrl.yaml"
+MIXTURE_CELL = SMOKE_CELL.parent / "smoke_13m_reason.yaml"
+
+
+@pytest.mark.slow
+def test_the_reasoning_only_control_trains_with_no_fact_corpus_at_all(tmp_path):
+    """
+    The control has no entity table, no renderer and no fact stream, and that path runs nowhere else.
+
+    Worth its own minute because the control is what every crowding claim is measured against: a cell
+    whose code had only ever been dry-run would be the one cell in the grid never actually executed, and
+    the bugs this module exists for were all invisible to a dry run.
+    """
+    pytest.importorskip("torch")
+    result = run_entry_point(
+        "smoke-ctrl",
+        "--cell",
+        str(CONTROL_CELL),
+        "--save-folder",
+        str(tmp_path / "ckpt"),
+        "--work-dir",
+        str(tmp_path / "work"),
+        "--rank-microbatch-size",
+        "2048",
+        cwd=REPO_ROOT,
+    )
+    assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-3000:]
+    output = result.stdout + result.stderr
+
+    assert "Training complete" in output
+    # One source, and it is the unrelated slice: no facts to mix in, and the related slice needs facts
+    # to ask about.
+    mixture = output.split("mixture for")[1].split("\n")[0]
+    assert "mano" in mixture and "100.0%" in mixture, mixture
+    assert "facts" not in mixture, mixture
+    losses = [float(line.split("=")[1]) for line in output.splitlines() if "train/CE loss=" in line]
+    assert losses and all(loss == loss for loss in losses), losses  # no NaN from an empty slice
+
+
+@pytest.mark.slow
+def test_the_three_way_mixture_trains_at_the_absolute_volumes_the_cell_states(tmp_path):
+    """
+    Facts plus both reasoning slices, with the two reasoning slices at equal absolute volume.
+
+    The mixer takes ratios, so the absolute counts are derived and then checked -- and a shortfall in
+    any source makes it rescale *every* source to preserve the ratios, silently moving the volumes the
+    design fixes. Equal instance counts for the two slices is what says the derivation held.
+    """
+    pytest.importorskip("torch")
+    result = run_entry_point(
+        "smoke-mix",
+        "--cell",
+        str(MIXTURE_CELL),
+        "--save-folder",
+        str(tmp_path / "ckpt"),
+        "--work-dir",
+        str(tmp_path / "work"),
+        "--rank-microbatch-size",
+        "2048",
+        cwd=REPO_ROOT,
+    )
+    assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-3000:]
+    output = result.stdout + result.stderr
+
+    assert "Training complete" in output
+    line = output.split("mixture for")[1].split("\n")[0]
+    counts = {
+        part.strip().split()[0]: int(part.strip().split()[1])
+        for part in line.split(":", 1)[1].split(",")
+    }
+    assert set(counts) == {"facts", "mano", "compare"}, line
+    # Same per-slice budget, so the same instance count -- the invariant, read off the run itself.
+    assert counts["mano"] == counts["compare"], line
+    assert counts["facts"] > counts["mano"], line

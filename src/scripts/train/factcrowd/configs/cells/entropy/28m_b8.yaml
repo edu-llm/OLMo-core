@@ -6,7 +6,7 @@ global_batch_size: 262144
 learning_rate: 0.003
 n_entities: 611184
 notes: ''
-reasoning_tokens: 0
+reasoning_tokens: 1000000000
 row: 28M
 seed: 1234
 sequence_length: 512

@@ -1,0 +1,19 @@
+# The smoke cell with both reasoning slices on: facts, unrelated reasoning and related reasoning mixed
+# at absolute token counts. Proves the mixture path and the related slice, neither of which the
+# facts-only smoke reaches -- the related slice needs the count axis, so this cell is on it.
+# Not a scientific cell -- the demand is 0.005 rather than a grid value purely to keep the entity
+# table at ~1,000 and the run at seconds.
+cell_id: smoke_13m_reason
+row: 13M
+sweep: count
+demand_bits_per_param: 0.005
+exposures: 2
+sequence_length: 512
+global_batch_size: 8192
+learning_rate: 0.003
+weight_decay: 0.1
+warmup_steps: 2
+decay_fraction: 0.2
+reasoning_tokens: 20480
+seed: 1234
+notes: Smoke cell with both reasoning slices. Proves the path, proves nothing about capacity.

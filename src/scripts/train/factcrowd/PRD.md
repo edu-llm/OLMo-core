@@ -193,12 +193,12 @@ Per the cut decision: **omit the 113M row and the 64M ρ=4 cell.**
 | **28M** | ✓ | ✓ | ✓ | ✓ | ✓ |
 | **64M** | ✓ | ✓ | ✓ | ✓ | — |
 
-Fourteen cells plus three reasoning-only controls. **15.05 h on 8×H100 ≈ $828**, or 48 h on 8×A100 ≈
-$1,048 — roughly a third of the uncut grid. Largest single cell 5.04 h, comfortably inside
-`olmo-core-train`'s 24 h ceiling (§10).
+Fourteen cells plus three reasoning-only controls, **200.5B tokens**. **16.2 h on 8×H100 ≈ $891**, or
+52 h on 8×A100 ≈ $1,127 — roughly a third of the uncut grid. Largest single cell (`64m_d2p4`) 4.9 h,
+comfortably inside `olmo-core-train`'s 24 h ceiling (§10).
 
-**Submitted as three jobs, one per model size** (§10.3). Fully sequential the grid is 15.05 h; with
-the three rows running concurrently the wall clock is the slowest row, **9.51 h**. The other gain is
+**Submitted as three jobs, one per model size** (§10.3). Fully sequential the grid is 16.2 h; with
+the three rows running concurrently the wall clock is the slowest row, **9.6 h**. The other gain is
 independence: three approvals rather than one, and a failure in the 64M row does not strand the other
 two.
 
@@ -252,9 +252,12 @@ reasoning slices are structured and learnable. Keep the token; it is harmless. D
 
 ### 3.4 Invariants
 
-**Reasoning slices are constant in absolute tokens**, 1.0B per cell, and **byte-identical** across
-cells: they are materialised once (§7.4), so §3.4's invariant is now identity of bytes rather than
-equality of volume.
+**Reasoning slices are constant in absolute tokens** and **identical across cells** — not merely
+equal in volume. Revision 1 got this by materialising them once; the built version gets it by
+generating each item from a fixed seed, which is stronger, because there is no file to drift and no
+step that could shuffle two cells differently. Identity is of *items*, not of token ids: wherever the
+schema differs the vocabulary differs, so on the entropy axis the same problems carry different ids.
+A test asserts both halves.
 
 **Every segment gets a domain token.**
 
@@ -288,20 +291,18 @@ src/scripts/train/factcrowd/
   README.md            how to run it; PRD.md is why
   PRD.md               this file
   train_cell.py        the platform entry point: one cell, one run
+  cells.py             one cell, and everything derivable from it              [done]
   corpus/
     entities.py        entity table, closed pools, exact bit accounting          [done]
-    render.py          entity -> biography, precompiled token pieces, splitmix64
-    values.py          the entropy axis: 4 sub-values from a pool of 2^(b/4)
-    reasoning.py       Mano / Brevo / related adapters
-    mixture.py         absolute-token mixing; the invariants of §3.4
-    source.py          the on-the-fly InstanceSource, fixed-length packing
-    tokenize.py        the 32k BPE trainer, run once, on the mixture
+    values.py          attribute values as words; the bioS and entropy schemas   [done]
+    vocab.py           the closed word-level vocabulary                          [done]
+    render.py          entity -> biography over 32 templates; exact value spans  [done]
+    stream.py          stream order, the token-offset index, token assembly      [done]
+    tasks.py           the reasoning slices: Mano at L=10, related comparison    [done]
+    source.py          the TokenSource adapters — 90 lines, all four methods     [done]
   ladder/
     rho.py             demand <-> entity count, both parameter bases            [done]
     sizes.py           width-scaled configs at fixed depth 12                   [done]
-  train/
-    schedule.py        WSD, steps, batch — the hyperparameters of §7.2
-    callbacks.py       BitCountCallback, ReasoningEvalCallback
   measure/
     bits.py            Allen-Zhu estimator, with the name term
     recall.py          generation and recognition (post-hoc job, not a callback)
@@ -311,9 +312,17 @@ src/scripts/train/factcrowd/
     trend.py           pooled regression + the equivalence test
     figures.py
   configs/
-    base.yaml
-    cells/             one YAML per cell; the grid is data, not code
+    cells/count/       one YAML per cell; the grid is data, not code            [done]
+    cells/entropy/     the identified axis                                      [done]
+    cells/smoke/       the two-minute cell                                      [done]
 ```
+
+Two modules revision 1 planned are absent by design. There is no `mixture.py`: OLMo-core's
+`MixingInstanceSource` already mixes weighted sources, so `train_cell.py` converts the absolute token
+targets of §3.4 into instance counts and hands them over — about twenty lines. And no `tokenize.py`:
+§6.3 makes the tokenizer an assertion rather than a measurement, and a closed word-level vocabulary
+discharges that assertion exactly instead of approximately, so there is no BPE to train. Likewise
+`train/schedule.py` and `train/callbacks.py` — `WSD` and `ListCheckpointerCallback` are OLMo-core's.
 
 ---
 
@@ -550,6 +559,41 @@ branch will not `pip install`; and `--depth-range` does not exist on the default
 Its 44.4/72.2 figures are arXiv v3 Appendix H, not PMLR Table 3's 37.7. Keep FLD only if the floor
 and the core-hours are both resolved in M0.
 
+**What is built.** Two slices, in `corpus/tasks.py`, both generated per example from a seed so they
+hold nothing memorisable and cannot themselves compete for the capacity under measurement:
+
+| | Width | Measured degenerate floor | Role |
+|---|---|---|---|
+| `<mano>` | 24 tokens at L=10 | **4.59%** against a 4.35% uniform baseline | primary, unrelated |
+| `<compare>` | 21 tokens | **0.035%** over the 25k probe subset | related; needs two facts |
+
+The floors are measured, and measuring the first one changed the task. With a free choice of operand,
+`× 0` is an absorbing state and the best constant answer was right **8.34%** of the time — worse than
+the 6.80% this section cites for L=13, i.e. a weaker instrument than the one the section rejects.
+Excluding zero as a multiplicand brings it to the uniform floor. This is the fourth instrumentation
+bug of the kind §1 lists, and the only one caught before a run rather than after.
+
+`<compare>` implements §3.3's related slice at its cheapest useful form — which of two people from the
+fixed probe subset was born earlier. It is skipped on the entropy axis, whose six four-word composite
+attributes contain no orderable field; a schema without one is refused rather than silently ordered on
+an arbitrary sub-pool, so that axis carries `<mano>` alone. Composition and aggregation are not built.
+
+**What the eval set has to avoid, when it is built.** Both tasks are generated from a seed, so an eval
+set is a seed offset -- `+7` onward is unused (`+4` Mano, `+5` compare, `+6` the mixture). For Mano that
+is enough on its own: the item space is ~2^54 and 1.0B tokens covers 2e-9 of it, so an eval item is new
+with probability ~1. For `<compare>` it is **not**: there are 625M ordered pairs over the 25,000-entity
+probe subset and 1.0B tokens is 47.6M items, so **7.3% of eval pairs will have been seen verbatim in
+training**. That is defensible -- the fact is what is under test, not the pair -- but it has to be
+reported, and a 7.3% seen-pair rate must be excluded before it can be read as memorisation. Splitting
+the probe subset into disjoint train and eval halves is the alternative, at the cost of halving the
+per-entity coverage the subset was fixed to hold constant.
+
+Brevo1 and Reasoning Core are the remaining gap in this section, and `<mano>` alone cannot separate
+"reasoning crowded out" from "mod-23 tables crowded out" — that separation is the reason this section
+asks for an in-context second endpoint, and until Brevo1 lands, a `<mano>` decline is ambiguous
+between the two. `<compare>` versus `<mano>` separates a different pair (fact access versus capacity),
+which is necessary but not the same contrast.
+
 ### 8.4 The contradiction at the centre, resolved
 
 Revision 1 argued reasoning is **flat in width** and called that a feature, *and* predicted (P5) that
@@ -659,11 +703,14 @@ platform's dropdown tops out at `gpu-8xh100` ($55.04/hr) and `gpu-8xa100` ($21.9
 single card is `gpu-1xl40s` (48 GB). Anything at or above `gpu-8xa100` needs an **admin**, not a team
 lead, because every profile over $20/hr routes that way.
 
-| First run (§3.2), 14 cells + 3 controls | 8×H100 | 8×A100 |
+| First run (§3.2), 14 cells + 3 controls, 200.5B tokens | 8×H100 | 8×A100 |
 |---|---|---|
-| wall clock, sequential | **15.05 h** | 48 h |
-| wall clock, 3 jobs in parallel | **9.51 h** | 30 h |
-| cost | **~$828** | ~$1,048 |
+| wall clock, sequential | **16.2 h** | 52 h |
+| wall clock, 3 jobs in parallel | **9.6 h** | 32 h |
+| cost | **~$891** | ~$1,127 |
+
+Per row: 13M 40.2B tokens / 1.5 h / $85, 28M 78.0B / 5.0 h / $278, 64M 82.3B / 9.6 h / $528. The 64M
+row is three-fifths of the cost, so it is the one to re-budget after the first measurement.
 
 At 20% MFU with the LM head counted. **Revision 1's FLOP count omitted the LM head**, which is
 39/30/22% of the model across the rows — including it is +65/43/29% per row. And 8% MFU applied flat
@@ -744,15 +791,23 @@ Before any of the above. **Under $5 and under one hour auto-approves**, so this 
 | `dataset_release` | `none` |
 | `team` | `scratch` for the very first, `memory-split` after |
 
-Three progressively less trivial smokes, each one able to fail cheaply:
+Four progressively less trivial smokes, each one able to fail cheaply. The first three have run
+green; the configs are under `configs/cells/smoke/`.
 
 1. **`--dry-run`** on `cpu-32vcpu`: builds the cell config, builds the model, asserts the
-   non-embedding count, renders 1,000 biographies, checks the token-boundary gate, prints the token
-   budget. Trains nothing. Catches every config and arithmetic error for cents.
-2. **20 steps on `gpu-1xa10g`** at the 13M row with a 10k-entity table: proves the data path feeds a
-   GPU, the loss falls, checkpoints land in `$EDULLM_CHECKPOINT_DIR`, and W&B receives the run.
-3. **One bit-count and one Mano eval at step 20**: proves the measurement callbacks run inside a real
-   trainer, which is where revision 1's plan had the most unexercised surface.
+   non-embedding count, renders biographies, prints the token budget. Trains nothing. Catches every
+   config and arithmetic error for cents. ✓
+2. **A short run on `gpu-1xa10g`** at the 13M row on a small table: proves the data path feeds a GPU,
+   the loss falls, checkpoints land in `$EDULLM_CHECKPOINT_DIR`, and W&B receives the run. ✓
+3. **`smoke_13m_reason`**: facts and both reasoning slices through `MixingInstanceSource`, which is
+   the path a real cell takes and the one the facts-only smokes never reach. Asserts the two reasoning
+   slices land at equal absolute volume. ✓ (locally; not yet on the platform)
+4. **`smoke_13m_ctrl`**: the reasoning-only control — no table, no renderer, no fact stream. A cell
+   whose code had only ever been dry-run would be the one cell in the grid never executed. ✓
+   (locally)
+
+Then one bit-count and one Mano *eval* at the last step, which is still unbuilt (§8) and is where the
+plan now has its most unexercised surface.
 
 *Exit:* a checkpoint under `teams/scratch/runs/<run id>/checkpoints/`, a loss curve in W&B, a
 `Measurement` row with a plausible achieved-bits number, and a measured MFU to re-budget from.
@@ -913,7 +968,7 @@ the row is cut on §8.4's grounds anyway.
 fixed-length renderer, and a natural-language scheme for high-entropy values. Call it 3–5
 person-days, against a review estimate of 28–42 person-days for corpus plus measurement overall.
 
-### 16.4 What a second adversarial pass found in revision 2's own code
+### 16.3 What a second adversarial pass found in revision 2's own code
 
 Reviewers were run against `ladder/rho.py` and `corpus/entities.py` after they were written. Two real
 bugs in the demand arithmetic, both now fixed and both pinned by tests:
@@ -952,7 +1007,35 @@ are corrected above. The most consequential was the last: the two sweeps were qu
 differently-defined x-axes, which would have made §3.1's "count-slope minus entropy-slope"
 subtraction meaningless.
 
-### 16.3 Deferred, with reasons
+### 16.4 What building the reasoning slices changed
+
+**The reasoning budget is per slice, not per cell.** Revision 2 wrote "1.0B per cell" without saying
+which, and the first implementation split a fixed total across whatever slices a cell carried. That gave
+the reasoning-only control -- which carries only the unrelated slice -- **twice** the unrelated-slice
+exposure of every cell it is the reference for, so its Mano score would have beaten theirs for a reason
+with nothing to do with fact load. The control is the instrument for the single comparison this
+experiment exists to make, and a fixed total quietly broke it. A cell's reasoning total is therefore
+1.0B on the control and the entropy axis and 2.0B on a count-axis cell, and that asymmetry is the
+correct consequence of the invariant rather than a violation of it.
+
+**Mano excludes zero as a multiplicand.** With a free choice of operand, `× 0` is an absorbing state and
+the best-constant policy scored **8.34%** -- worse than the 6.80% §8.3 cites as its reason for rejecting
+L=13. The endpoint promoted for having a clean floor had a dirtier one than the endpoint it replaced,
+and only measuring it showed that. Excluding zero brings it to 4.59% against a 4.35% uniform baseline.
+
+**A repeated domain token is refused again.** An earlier fix let the vocabulary deduplicate a word
+repeated within one role, which it must, because the task words and the biography literals both want
+"and" and the caller concatenates those lists. Applied to `domain_tokens` too, it silently accepted two
+slices sharing one label -- the labels that make the endpoints separable in the first place. The
+deduplication is now narrowed to `literal_words`.
+
+**The control's entity count is stated, not solved.** `rho.solve` refuses a zero target and keeps
+refusing it: its linear path divides by `bits_per_entity` and its name-term path falls below the
+monotonicity threshold of §16.3, so an answer would be an accident of the bracket. `name_bits`,
+`demanded_bits` and `demand` accept zero entities and return exactly zero -- the limit written down
+rather than evaluated -- and demand 0 with no reasoning tokens is refused as a run with no data.
+
+### 16.5 Deferred, with reasons
 
 FLD's 1,700 core-hours and 51.1% floor — decided in M0, not now. The exposure placebo and the
 mechanism battery — M4. Qwen3-0.6B continuation — after M3. Retiring

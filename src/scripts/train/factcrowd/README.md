@@ -20,10 +20,12 @@ It resolves the cell, generates the entity table, builds the vocabulary and the 
 token-offset index, and prints the plan with a sample biography. Add `--json` for a machine-readable
 version.
 
-Run the tests the same way — the suite is torch-free apart from two skipped cases:
+Run the tests the same way. The suite is torch-free apart from the end-to-end smoke runs, which are
+marked `slow` and take a few minutes each because they train a real model in a subprocess:
 
 ```bash
-python3 -m pytest -q --confcutdir=src/test/scripts/factcrowd src/test/scripts/factcrowd
+python3 -m pytest -q --confcutdir=src/test/scripts/factcrowd src/test/scripts/factcrowd -m 'not slow'
+python3 -m pytest -q --confcutdir=src/test/scripts/factcrowd src/test/scripts/factcrowd -m slow
 ```
 
 ## Submit a cell
@@ -56,13 +58,14 @@ one, and cannot see inside the process.
 
 ## The three jobs
 
-The first run is 14 cells. Submit it as **three fan-outs, one per row**, so the rows run concurrently:
+The first run is 17 cells — five demands per row, four on 64M, plus a reasoning-only control on each.
+Submit it as **three fan-outs, one per row**, so the rows run concurrently:
 
-| `--row` | `fanout_size` | wall clock on 8×H100 |
-|---|---|---|
-| `13M` | 5 | 0.5 h |
-| `28M` | 5 | 2.3 h |
-| `64M` | 4 | 5.4 h |
+| `--row` | `fanout_size` | tokens | wall clock on 8×H100 | cost |
+|---|---|---|---|---|
+| `13M` | 6 | 40.2B | 1.5 h | $85 |
+| `28M` | 6 | 78.0B | 5.0 h | $278 |
+| `64M` | 5 | 82.3B | 9.6 h | $528 |
 
 ```
 bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone
@@ -70,11 +73,20 @@ bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone
   --row 28M --save-folder "$EDULLM_CHECKPOINT_DIR"'
 ```
 
-with `fanout_size: 5` and `fanout_index_parameter: cell`. Each cell reads
-`AWS_BATCH_JOB_ARRAY_INDEX` and gets its own checkpoint prefix. Sequential the grid is 8.1 h and about
-$445; three jobs bring the wall clock to 5.4 h, and a failure in one row does not strand the others.
+with `fanout_size: 6` and `fanout_index_parameter: cell`. Each cell reads
+`AWS_BATCH_JOB_ARRAY_INDEX` and gets its own checkpoint prefix. Sequential the grid is 16.2 h and about
+$891; three jobs bring the wall clock to 9.6 h, and a failure in one row does not strand the others.
 
-The entropy sweep is a fourth job, `--sweep entropy --row 28M`, `fanout_size: 6`, 1.8 h and about $98.
+Those hours are `PRD.md` §10's FLOP estimate at 12/16/20% MFU per row, scaled to the current token
+counts — **not measured**. Read the real MFU off the first cell's first 50 steps and re-budget before
+submitting the 64M row, which is three-fifths of the cost.
+
+The index maps to a cell by *position in the sorted directory*, and `ctrl` sorts before `d0p3`, so the
+control is always index 0 and every demand cell sits one later than it would without it. Check
+`ls configs/cells/count | grep <row>` against the `fanout_size` you submit; a stale size runs a
+different cell under the name that was approved.
+
+The entropy sweep is a fourth job, `--sweep entropy --row 28M`, `fanout_size: 6`, 3.4 h and about $187.
 It is the identified axis (`PRD.md` §3.1) and the cheapest thing here.
 
 ## Configs
@@ -107,6 +119,7 @@ Ours is the corpus and the arithmetic that places a cell on the demand axis:
 | `corpus/vocab.py` | the closed word-level vocabulary |
 | `corpus/render.py` | 32 templates over four length bands; exact value spans |
 | `corpus/stream.py` | stream order, the token-offset index, token assembly |
+| `corpus/tasks.py` | the reasoning slices — Mano at L=10, and the related comparison task |
 | `corpus/source.py` | a 90-line `TokenSource` adapter |
 | `cells.py` | one cell, and everything derivable from it |
 | `train_cell.py` | assembles OLMo-core's configs and calls `fit()` |
@@ -121,10 +134,59 @@ torch-free side and tested; the adapter that needs the full install is four meth
 branch a module put its only real logic behind a torch import, its tests skipped, and a call that
 raised `TypeError` for every input passed both review and type-checking.
 
+## The reasoning slices
+
+Set `reasoning_tokens` on a cell and it trains on facts *and* reasoning, mixed through
+`MixingInstanceSource` at **fixed absolute token counts** — not fixed ratios. Every cell that carries a
+slice sees the same number of that slice's tokens, so a difference in reasoning score cannot be a
+difference in reasoning exposure. A bare `CellSpec` defaults to `0`, which trains on facts alone; the
+grid generators default to 1.0B.
+
+The budget is **per slice**, not a total split between them. That distinction is load-bearing: the
+control carries only `<mano>`, so splitting a fixed total would have handed it twice the `<mano>`
+exposure of every cell it is the reference for, and its score would have beaten theirs for a reason
+that has nothing to do with facts. So a count-axis cell's reasoning total is 2.0B and the control's is
+1.0B, and that asymmetry is the correct consequence rather than a violated invariant.
+
+Two slices, each prefixed with a domain token so the endpoints stay separable:
+
+| | | |
+|---|---|---|
+| `<mano>` | mod-23 mental arithmetic, 10 operands, no chain of thought | unrelated to the facts |
+| `<compare>` | which of two people was born earlier | needs two facts to answer |
+
+`<mano>` is Physics 4.1's task at the length that paper found the transition at. It is the primary
+endpoint because it shares no entity with the corpus: if it degrades as fact demand rises, the cost is
+capacity, not fact access. `<compare>` is the contrast — it reads two biographies, so it should
+degrade earlier and harder if the mechanism is retrieval instead.
+
+Both are generated per example from a seed rather than drawn from a fixed set, so the slice holds
+nothing to memorise and cannot itself compete for the capacity being measured. Both report a
+**measured** degenerate floor, not an assumed one: **4.59%** for Mano against a 4.35% uniform baseline,
+and **0.035%** for compare over the 25,000-entity probe subset. Measuring it changed the task — with a
+free choice of operand, `× 0` is absorbing and the floor came out at 8.34%, above the 6.80% the paper
+reports for the length this design rejected, so zero is excluded as a multiplicand.
+
+`<compare>` is skipped where there is nothing to compare: on the entropy axis, whose attributes are six
+positional four-word composites with no birth year, and on the control, which has no facts at all. Both
+carry `<mano>` alone. `CellSpec.reasoning_slice_names` is the single source of truth for that choice and
+`BuiltCorpus` asserts its own built set against it, so the token arithmetic and the data cannot disagree
+about a cell.
+
+### The reasoning-only control
+
+One per row — `13m_ctrl`, `28m_ctrl`, `64m_ctrl` — stating `demand_bits_per_param: 0.0`. Zero facts:
+no entity table, no renderer, no fact stream. It keeps the row's schema and vocabulary so the model is
+architecturally identical to the cells it anchors, and it is the demand-0 endpoint of every crowding
+curve — the one cell where a low reasoning score cannot be blamed on fact load.
+
+Zero entities is *stated*, never solved for: `rho.solve` refuses a zero target and should keep refusing
+it, since its linear path divides by bits-per-entity and its name-term path is non-monotone there. A
+cell with demand 0 and no reasoning tokens is refused outright, being a run with no data at all.
+
 ## Still to build
 
 The measurement half. `measure/bits.py` (the Allen-Zhu estimator over the value spans the renderer
-already returns), `measure/reasoning.py` and its gates, `measure/recall.py` as a post-hoc job, and the
-reasoning slices themselves — Mano at L=10 and Brevo1, mixed at fixed absolute token counts through
-`MixingInstanceSource`. Cells currently carry `reasoning_tokens: 0`, so a run today trains on facts
-alone. `PRD.md` §8 and §12 have the order.
+already returns), `measure/reasoning.py` and its gates, and `measure/recall.py` as a post-hoc job.
+Training writes the checkpoints those read; nothing scores them yet. `PRD.md` §8 and §12 have the
+order.

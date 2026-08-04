@@ -21,8 +21,9 @@ from olmo_core.data.composable.token_source import TokenRange
 
 from .render import Renderer
 from .stream import CHUNK, BioStream
+from .tasks import TaskStream
 
-__all__ = ["BioTokenSource"]
+__all__ = ["BioTokenSource", "TaskTokenSource"]
 
 
 class BioTokenSource(TokenSource):
@@ -91,6 +92,54 @@ class BioTokenSource(TokenSource):
         reads it when composing sources, so a method here would be compared as a bound object and two
         different corpora would fingerprint alike.
         """
+        return self._stream.fingerprint()
+
+    def children(self):
+        """No sub-sources: this one generates rather than composes."""
+        return []
+
+
+class TaskTokenSource(TokenSource):
+    """
+    A :class:`~olmo_core.data.composable.TokenSource` over a generated reasoning slice.
+
+    Thinner even than :class:`BioTokenSource`, because reasoning items are fixed width: locating a
+    token is a division, so there is no offset index and nothing to cache.
+
+    :param stream: The task stream to read from.
+    :param work_dir: Local directory, required by the base class though nothing is cached here.
+    :param label: Optional label for source visualisations.
+    """
+
+    def __init__(self, stream: TaskStream, *, work_dir, label: Optional[str] = None) -> None:
+        super().__init__(work_dir=work_dir, label=label or f"reasoning:{stream.task.name}")
+        self._stream = stream
+
+    @property
+    def stream(self) -> TaskStream:
+        """The underlying stream, for tests and for reading its statistics."""
+        return self._stream
+
+    @property
+    def num_tokens(self) -> int:
+        """Tokens in the slice. A whole number of items, so a range never ends mid-answer."""
+        return self._stream.num_tokens
+
+    def get_token_range(self, start_idx: int, end_idx: int) -> TokenRange:
+        """
+        Tokens at ``[start_idx, end_idx)``.
+
+        :param start_idx: First token, inclusive.
+        :param end_idx: One past the last token.
+
+        :returns: The token range.
+        """
+        start_idx, end_idx = self.validate_indices(start_idx, end_idx)
+        return {"input_ids": self._stream.tokens(start_idx, end_idx)}
+
+    @property
+    def fingerprint(self) -> str:
+        """A digest of the task and the slice size. A property, as ``SourceABC`` declares it."""
         return self._stream.fingerprint()
 
     def children(self):

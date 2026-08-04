@@ -46,7 +46,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # Two path fixups, both no-ops on the platform, both needed to run this from a checkout.
 # ``factcrowd`` lives in a script directory rather than an installed package, so its parent has to be
@@ -62,6 +62,7 @@ if __package__ in (None, ""):  # pragma: no cover - only when run as a script
 from factcrowd import cells as cell_module  # noqa: E402
 from factcrowd.corpus import render as render_module  # noqa: E402
 from factcrowd.corpus import stream as stream_module  # noqa: E402
+from factcrowd.corpus import tasks as tasks_module  # noqa: E402
 from factcrowd.corpus import values as values_module  # noqa: E402
 from factcrowd.corpus import vocab as vocab_module  # noqa: E402
 from factcrowd.ladder import sizes as sizes_module  # noqa: E402
@@ -73,8 +74,28 @@ log = logging.getLogger(__name__)
 CONFIG_ROOT = Path(__file__).resolve().parent / "configs"
 """Where the committed cell configs live."""
 
-DOMAIN_TOKENS: Tuple[str, ...] = ("<facts>", "<mano>", "<brevo>", "<related>")
+DOMAIN_TOKENS: Tuple[str, ...] = ("<facts>", "<mano>", "<compare>")
 """One per corpus slice. Prepended to every segment; there is no flag to disable it."""
+
+MANO_LENGTH = 10
+"""
+Expression length for Mano. Ten, not thirteen.
+
+At thirteen the task sits about a point above its own degenerate policy at 13M-28M, which fails
+the 20-80% admission band it is meant to pass. At ten Physics 4.1 reports 47.8 to 66.0 from
+scratch at our exact twelve layers, moving 18.2 points across the parameter range.
+"""
+
+TASK_WORDS: Tuple[str, ...] = tasks_module.all_required_words(
+    (tasks_module.ManoTask, tasks_module.CompareTask)
+)
+"""
+Words the reasoning tasks need, taken off the classes before anything is built.
+
+The ordering is forced: a task cannot be constructed without a vocabulary containing its tokens,
+and the vocabulary cannot be built without knowing which tokens to reserve -- and the pool
+allocator has to avoid them too, or a generated city could collide with an operator.
+"""
 
 CHECKPOINT_FRACTIONS: Tuple[float, ...] = (
     0.005,
@@ -112,7 +133,7 @@ class BuiltCorpus:
             self.templates = render_module.BIOS_TEMPLATES
             literals = render_module.literal_words_of(self.templates)
             self.corpus_schema = values_module.bios_schema(
-                reserved=tuple(literals) + vocab_module.SPECIALS + DOMAIN_TOKENS
+                reserved=tuple(literals) + TASK_WORDS + vocab_module.SPECIALS + DOMAIN_TOKENS
             )
         else:
             assert spec.bits_per_attribute is not None
@@ -122,32 +143,96 @@ class BuiltCorpus:
             literals = render_module.literal_words_of(self.templates)
             self.corpus_schema = values_module.entropy_schema(
                 spec.bits_per_attribute,
-                reserved=tuple(literals) + vocab_module.SPECIALS + DOMAIN_TOKENS,
+                reserved=tuple(literals) + TASK_WORDS + vocab_module.SPECIALS + DOMAIN_TOKENS,
             )
 
         self.vocabulary = vocab_module.Vocabulary.build(
-            self.corpus_schema.schema, literal_words=literals, domain_tokens=DOMAIN_TOKENS
+            self.corpus_schema.schema,
+            literal_words=tuple(literals) + TASK_WORDS,
+            domain_tokens=DOMAIN_TOKENS,
         )
-        table_entities = spec.table_entities or resolved.n_entities
-        self.table = entities_module.EntityTable.build(
-            self.corpus_schema.schema, table_entities, spec.seed
-        )
-        self.renderer = render_module.Renderer(
-            self.table,
-            self.corpus_schema,
-            self.vocabulary,
-            self.templates,
-            domain_token=DOMAIN_TOKENS[0],
-            seed=spec.seed + 1,
-            min_templates=1 if spec.sweep == "entropy" else 20,
-        )
-        self.stream = stream_module.BioStream(
-            self.renderer,
-            n_entities=resolved.n_entities,
-            exposures=spec.exposures,
-            work_dir=work_dir,
-            seed=spec.seed + 2,
-        )
+        # The reasoning-only control has no entities, so it has no table, no renderer and no fact
+        # stream. It keeps the schema and the vocabulary above: the model must be architecturally
+        # identical to the row's other cells, and dropping ~1,700 unused word embeddings would change
+        # the parameter count of the one cell the others are compared against.
+        self.table: Optional[Any] = None
+        self.renderer: Optional[Any] = None
+        self.stream: Optional[Any] = None
+        if not spec.is_control:
+            table_entities = spec.table_entities or resolved.n_entities
+            self.table = entities_module.EntityTable.build(
+                self.corpus_schema.schema, table_entities, spec.seed
+            )
+            self.renderer = render_module.Renderer(
+                self.table,
+                self.corpus_schema,
+                self.vocabulary,
+                self.templates,
+                domain_token=DOMAIN_TOKENS[0],
+                seed=spec.seed + 1,
+                min_templates=1 if spec.sweep == "entropy" else 20,
+            )
+            self.stream = stream_module.BioStream(
+                self.renderer,
+                n_entities=resolved.n_entities,
+                exposures=spec.exposures,
+                work_dir=work_dir,
+                seed=spec.seed + 2,
+            )
+
+        # The reasoning slices. Each is stated in absolute tokens and is identical in every cell that
+        # carries it, which is the invariant that stops reasoning volume moving with fact load -- hold
+        # the ratio instead and the result is confounded in both directions.
+        #
+        # Per slice, not split between them. Splitting a fixed total was the first thing written here
+        # and it silently broke the control: the control carries no related slice, so an evenly split
+        # total gave it 2x the Mano exposure of every cell it is the reference for, and its Mano score
+        # would have been higher for that reason alone. A cell's reasoning total therefore varies with
+        # how many slices it carries, and that is correct -- what an endpoint's score must be compared
+        # at is exposure to *that endpoint's* data.
+        self.task_streams: Tuple[tasks_module.TaskStream, ...] = ()
+        if spec.reasoning_tokens > 0:
+            built: list = [
+                tasks_module.ManoTask(
+                    self.vocabulary, domain_token="<mano>", length=MANO_LENGTH, seed=spec.seed + 4
+                )
+            ]
+            # The related-reasoning slice asks about the fact schema, so it exists only where that
+            # schema has fields to ask about. The entropy axis's attributes are abstract by
+            # construction -- six positional attributes of four words each, with no ordinal field to
+            # compare -- so that axis carries unrelated reasoning alone. It costs nothing: the entropy
+            # axis's job is the identified demand sweep, and the related-reasoning prediction lives on
+            # the count axis where bioS does have a birth year.
+            if spec.sweep == "count" and self.table is not None:
+                built.append(
+                    tasks_module.CompareTask(
+                        self.table,
+                        self.corpus_schema,
+                        self.vocabulary,
+                        domain_token="<compare>",
+                        probe_ids=self.table.probe_ids,
+                        seed=spec.seed + 5,
+                    )
+                )
+            self.task_streams = tuple(
+                tasks_module.TaskStream(task, num_tokens=spec.reasoning_tokens, label=task.name)
+                for task in built
+            )
+        # The cell's own arithmetic declares which slices it carries, and every token estimate and cost
+        # figure is computed from that. Asserting the built set against it means a divergence fails here
+        # rather than showing up as a run whose step count nobody can reproduce.
+        names = tuple(stream.task.name for stream in self.task_streams)
+        if names != spec.reasoning_slice_names:
+            raise OLMoConfigurationError(
+                f"cell '{spec.cell_id}' built reasoning slices {names} but its arithmetic declares "
+                f"{spec.reasoning_slice_names}. One of the two selection rules has drifted, and the "
+                f"cell's token count is computed from the declaration."
+            )
+
+    @property
+    def fact_tokens(self) -> int:
+        """Measured tokens in the fact slice; zero on the reasoning-only control."""
+        return 0 if self.stream is None else int(self.stream.num_tokens)
 
     def summary(self, resolved: cell_module.ResolvedCell) -> Dict[str, Any]:
         """
@@ -157,25 +242,79 @@ class BuiltCorpus:
 
         :returns: A flat mapping.
         """
-        out = resolved.summary(self.renderer.mean_tokens_per_bio)
+        out = resolved.summary(0.0 if self.renderer is None else self.renderer.mean_tokens_per_bio)
         out.update(
             {
                 "vocab_size": self.vocabulary.size,
                 "vocab_size_padded": self.vocabulary.padded_size(),
-                "templates": self.renderer.n_templates,
-                "tokens_per_bio_min": int(self.renderer.template_lengths.min()),
-                "tokens_per_bio_max": self.renderer.max_tokens_per_bio,
-                "bits_per_token": round(self.renderer.bits_per_token, 4),
-                "fact_tokens_measured": self.stream.num_tokens,
-                "table_entities": self.table.n_entities,
                 "schema_fingerprint": self.corpus_schema.schema.fingerprint()[:16],
-                "stream_fingerprint": self.stream.fingerprint()[:16],
+                "reasoning_slices": ", ".join(
+                    f"{s.task.name}:{s.n_items:,} items/{s.num_tokens:,} tokens"
+                    for s in self.task_streams
+                )
+                or "none",
             }
         )
+        if self.renderer is not None and self.stream is not None and self.table is not None:
+            out.update(
+                {
+                    "templates": self.renderer.n_templates,
+                    "tokens_per_bio_min": int(self.renderer.template_lengths.min()),
+                    "tokens_per_bio_max": self.renderer.max_tokens_per_bio,
+                    "bits_per_token": round(self.renderer.bits_per_token, 4),
+                    "fact_tokens_measured": self.stream.num_tokens,
+                    "table_entities": self.table.n_entities,
+                    "stream_fingerprint": self.stream.fingerprint()[:16],
+                }
+            )
+        else:
+            out["fact_tokens_measured"] = 0
         # The measured count supersedes the estimate; keep both so a drift is visible.
-        out["total_tokens"] = self.stream.num_tokens + resolved.spec.reasoning_tokens
+        out["total_tokens"] = self.fact_tokens + sum(
+            stream.num_tokens for stream in self.task_streams
+        )
         out["steps"] = out["total_tokens"] // resolved.spec.global_batch_size
         return out
+
+
+def resolve_platform_value(name: str, value: Optional[str]) -> Optional[str]:
+    """
+    Refuse a value that is still the literal text of an environment variable.
+
+    **This exists because it already cost three runs.** The platform's ``command`` field is exec'd
+    with no shell, so ``$EDULLM_CHECKPOINT_DIR`` only becomes a path if the command starts with
+    ``bash -lc``. Without it the text arrives verbatim, and OLMo-core creates a *directory named*
+    ``$EDULLM_CHECKPOINT_DIR`` rather than failing -- so a run trains, writes checkpoints into a
+    container-local path, exits zero, and is recorded as a success with nothing recoverable. The
+    platform's own checkpoint guard catches this at submission, but only under a profile that
+    declares a checkpoint contract; ``olmo-core-check`` does not, so a smoke run sails through.
+
+    Falling back to ``os.environ`` would be the friendlier choice and is the wrong one: the platform
+    reads the *command text* to decide whether a run promises a checkpoint, so quietly making an
+    unexpanded command work would leave the manifest disagreeing with the run. Refusing names the
+    fix instead.
+
+    :param name: Which argument is being checked, for the message.
+    :param value: The value as parsed.
+
+    :returns: The value, unchanged, when it is not an unexpanded variable.
+
+    :raises OLMoConfigurationError: If it is.
+    """
+    if value is None or not value.startswith("$"):
+        return value
+    variable = value.split("/")[0].lstrip("$").strip("{}")
+    resolved = os.environ.get(variable)
+    raise OLMoConfigurationError(
+        f"{name} is the literal text {value!r}, so nothing expanded it. The platform exec's the "
+        f"command with no shell, so it has to start with `bash -lc` for a variable to become a "
+        f"value:\n"
+        f"  bash -lc 'python src/scripts/train/factcrowd/train_cell.py \"$EDULLM_RUN_ID\" ...'\n"
+        f"{variable} is currently "
+        + (f"set to {resolved!r} in the environment" if resolved else "not set in the environment")
+        + ". Without the shell, OLMo-core would create a directory by that literal name and this "
+        "run would finish, exit zero, and leave nothing anybody can read."
+    )
 
 
 def resolve_cell(args: argparse.Namespace) -> cell_module.CellSpec:
@@ -241,12 +380,14 @@ def build_trainer(
     :returns: The trainer.
     """
     import torch
-    from factcrowd.corpus.source import BioTokenSource
+    from factcrowd.corpus.source import BioTokenSource, TaskTokenSource
 
     from olmo_core.data import TokenizerConfig
     from olmo_core.data.composable import (
         ComposableDataLoaderConfig,
         ConcatAndChunkInstanceSource,
+        MixingInstanceSource,
+        MixingInstanceSourceSpec,
     )
     from olmo_core.optim import WSD, AdamWConfig
     from olmo_core.train import Duration, TrainerConfig
@@ -267,7 +408,7 @@ def build_trainer(
         spec.ladder_row, corpus.vocabulary.padded_size(), tie_word_embeddings=True
     )
 
-    total_tokens = corpus.stream.num_tokens + spec.reasoning_tokens
+    total_tokens = corpus.fact_tokens + sum(stream.num_tokens for stream in corpus.task_streams)
     steps = total_tokens // spec.global_batch_size
     checkpoint_steps = sorted(
         {min(steps, max(1, int(fraction * steps))) for fraction in CHECKPOINT_FRACTIONS}
@@ -301,19 +442,95 @@ def build_trainer(
         compile_model=args.compile_model,
     )
 
-    token_source = BioTokenSource(
-        corpus.renderer,
-        n_entities=resolved.n_entities,
-        exposures=spec.exposures,
-        work_dir=work_dir,
-        seed=spec.seed + 2,
-        label=f"facts:{spec.cell_id}",
-    )
-    # Packing is OLMo-core's. This turns the token stream into fixed-length instances; the reasoning
-    # slices join through MixingInstanceSource once they exist.
-    instance_source = ConcatAndChunkInstanceSource(
-        token_source, sequence_length=spec.sequence_length, work_dir=work_dir
-    )
+    fact_target: List[Tuple[Any, int, str]] = []
+    if corpus.renderer is not None:
+        token_source = BioTokenSource(
+            corpus.renderer,
+            n_entities=resolved.n_entities,
+            exposures=spec.exposures,
+            work_dir=work_dir,
+            seed=spec.seed + 2,
+            label=f"facts:{spec.cell_id}",
+        )
+        # Packing is OLMo-core's: this turns a token stream into fixed-length instances.
+        fact_target = [
+            (
+                ConcatAndChunkInstanceSource(
+                    token_source, sequence_length=spec.sequence_length, work_dir=work_dir
+                ),
+                token_source.num_tokens,
+                "facts",
+            )
+        ]
+
+    if not fact_target and not corpus.task_streams:
+        raise OLMoConfigurationError(
+            f"cell '{spec.cell_id}' has neither facts nor reasoning, so there is nothing to train on"
+        )
+    if not corpus.task_streams:
+        instance_source = fact_target[0][0]
+    else:
+        # The mixture, at ABSOLUTE token counts. MixingInstanceSource takes ratios, so the ratios are
+        # derived from the absolute targets and the total is pinned with num_tokens -- which gives
+        # absolute counts as long as no source runs short.
+        #
+        # If one does, composable/utils.py scales *every* source down by the same factor to preserve
+        # the ratios. That is the right behaviour for a corpus mixture and the wrong one here: it would
+        # keep the ratios the design does not care about and silently move the absolute volumes it
+        # does. So each source is checked against its target first, and a shortfall is a refusal.
+        # Counted in *instances*, not tokens. Chunking drops whatever is left over after the last
+        # whole instance, so a token-denominated target is always a few tokens above what the source
+        # can offer and the check below would fire on its own rounding. Instances are exact on both
+        # sides, and the mixer takes num_instances directly.
+        targets = fact_target + [
+            (
+                ConcatAndChunkInstanceSource(
+                    TaskTokenSource(stream, work_dir=work_dir),
+                    sequence_length=spec.sequence_length,
+                    work_dir=work_dir,
+                ),
+                stream.num_tokens,
+                stream.task.name,
+            )
+            for stream in corpus.task_streams
+        ]
+        wanted: List[Tuple[Any, int, str]] = []
+        for source, target_tokens, name in targets:
+            target_instances = target_tokens // spec.sequence_length
+            if source.num_instances < target_instances:
+                raise OLMoConfigurationError(
+                    f"the '{name}' slice wants {target_instances:,} instances "
+                    f"({target_tokens:,} tokens) but its source holds only "
+                    f"{source.num_instances:,}. The mixer would rescale every slice down to keep the "
+                    f"ratios, leaving each cell with a different absolute volume than its config "
+                    f"states -- which is the one thing the mixture rule exists to prevent."
+                )
+            if target_instances < 1:
+                raise OLMoConfigurationError(
+                    f"the '{name}' slice wants {target_tokens:,} tokens, under one instance of "
+                    f"{spec.sequence_length}. Raise the slice or lower the sequence length."
+                )
+            wanted.append((source, target_instances, name))
+
+        total_instances = sum(count for _, count, _ in wanted)
+        instance_source = MixingInstanceSource(
+            *[
+                MixingInstanceSourceSpec(source=source, ratio=count / total_instances, label=name)
+                for source, count, name in wanted
+            ],
+            num_instances=total_instances,
+            seed=spec.seed + 6,
+            work_dir=work_dir,
+            label=f"mixture:{spec.cell_id}",
+        )
+        log.info(
+            "mixture for '%s': %s",
+            spec.cell_id,
+            ", ".join(
+                f"{name} {count:,} instances ({100 * count / total_instances:.1f}%)"
+                for _, count, name in wanted
+            ),
+        )
 
     trainer_config = (
         TrainerConfig(
@@ -413,6 +630,11 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> int:
     parser.add_argument("--json", action="store_true", help="Print the plan as JSON")
     args = parser.parse_args(argv)
 
+    # Checked before anything expensive: an unexpanded variable is a submission defect, and finding
+    # it after the corpus is built wastes the queue slot it took to get here.
+    args.run_name = resolve_platform_value("run_name", args.run_name)
+    args.save_folder = resolve_platform_value("--save-folder", args.save_folder)
+
     spec = resolve_cell(args)
     resolved = spec.resolve()
     work_dir = Path(args.work_dir) / spec.cell_id
@@ -430,7 +652,11 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> int:
         for key, value in summary.items():
             rendered = f"{value:,}" if isinstance(value, int) else str(value)
             print(f"  {key.rjust(width)}  {rendered}")
-        print(f"  {'sample'.rjust(width)}  {corpus.renderer.text(0, 0)[:160]}")
+        if corpus.renderer is not None:
+            print(f"  {'sample'.rjust(width)}  {corpus.renderer.text(0, 0)[:160]}")
+        for stream in corpus.task_streams:
+            sample = corpus.vocabulary.decode(stream.task.item(0).tokens)
+            print(f"  {stream.task.name.rjust(width)}  {' '.join(sample)[:160]}")
 
     if args.dry_run:
         return 0

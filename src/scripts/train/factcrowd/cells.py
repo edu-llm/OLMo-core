@@ -71,6 +71,30 @@ added for. Submitted as three jobs, one per row, so the rows run concurrently an
 not strand the others.
 """
 
+REASONING_TOKENS: int = 1_000_000_000
+"""
+The default reasoning budget: 1.0B tokens **per slice**, held constant in *absolute* tokens (PRD 3.4).
+
+Constant absolute rather than constant fraction, because holding the fraction would make reasoning
+exposure vary with fact demand -- and reasoning exposure is the thing a reasoning endpoint is most
+sensitive to. The cost is that the fraction varies instead: 1.0B is 53% of the smallest cell's tokens
+and 2.5% of the largest, since fact tokens span 0.89B to 39.7B across the grid *by construction* --
+that span is the axis. Equal absolute exposure is the invariant worth keeping; an equal fraction would
+buy nothing and cost the comparison.
+
+Per slice rather than per cell, which is a reading revision 2 did not pin down. A cell's reasoning
+total is therefore 1.0B on the reasoning-only control and the entropy axis, both of which carry the
+unrelated slice alone, and 2.0B on a count-axis cell that also carries the related one. Splitting a
+fixed *total* instead would give the control twice the unrelated-slice exposure of every cell it is
+the reference for -- so its score would beat theirs for a reason that has nothing to do with facts.
+
+Whether 1.0B is *enough* at the top of the grid is a live calibration question and not one this
+constant settles: M0's G1-G8 bracket the endpoints at both mixture extremes precisely to find out. If
+2.5% turns out to be too thin for the task to be learned at all, every cell scores near its floor and
+the endpoint is dead on dynamic range -- which is a gate failure, detected before the grid runs, not a
+null.
+"""
+
 _DOMAIN_TOKENS: Tuple[str, ...] = ("<facts>", "<mano>", "<brevo>", "<related>")
 """One per corpus slice. Mandatory on every segment; there is no flag to disable it."""
 
@@ -99,8 +123,12 @@ class CellSpec:
         varies 14.6x across a count row and cannot be argued away.
     :param warmup_steps: WSD warmup. The scheduler itself is OLMo-core's ``WSD``.
     :param decay_fraction: Fraction of the run spent decaying to zero.
-    :param reasoning_tokens: Absolute tokens of reasoning data, identical in every cell. Zero marks a
-        facts-only cell; the reasoning-only control states zero fact demand instead.
+    :param reasoning_tokens: Absolute tokens **per reasoning slice**, identical in every cell that
+        carries that slice. Per slice rather than a total split between them, because the control
+        carries only the unrelated slice and an evenly split total would hand it twice the exposure of
+        the cells it is the reference for. So a cell's reasoning total is this times the number of
+        slices it carries. Zero marks a facts-only cell; the reasoning-only control states zero fact
+        demand instead.
     :param seed: Seeds the entity table, the phrasing choice and the stream order, offset so the three
         stay independent.
     :param table_entities: Entities to generate in the table, if more than the slice uses. Lets several
@@ -150,6 +178,17 @@ class CellSpec:
                     f"axis, not stated. Stating both is how a cell comes to sit at a demand other "
                     f"than its label."
                 )
+            if self.demand_bits_per_param < 0:
+                raise OLMoConfigurationError(
+                    f"cell '{self.cell_id}': 'demand_bits_per_param' must not be negative, got "
+                    f"{self.demand_bits_per_param}"
+                )
+            if self.demand_bits_per_param == 0 and self.reasoning_tokens <= 0:
+                raise OLMoConfigurationError(
+                    f"cell '{self.cell_id}': demand 0 is the reasoning-only control, so it needs "
+                    f"'reasoning_tokens' above zero. As stated it has no facts and no reasoning, "
+                    f"which is a run with no data at all."
+                )
         else:
             if self.bits_per_attribute is None or self.n_entities is None:
                 raise OLMoConfigurationError(
@@ -190,6 +229,37 @@ class CellSpec:
             )
 
     # --- derived quantities ------------------------------------------------------------------------
+
+    @property
+    def is_control(self) -> bool:
+        """
+        Whether this is the reasoning-only control: reasoning data, no facts at all.
+
+        The demand-0 endpoint of every crowding curve, and the only cell where a decline in reasoning
+        cannot be attributed to fact load -- so it is what the rest of the row is compared against.
+        """
+        return self.sweep == "count" and self.demand_bits_per_param == 0
+
+    @property
+    def reasoning_slice_names(self) -> Tuple[str, ...]:
+        """
+        Which reasoning slices this cell carries, and therefore what its reasoning tokens multiply by.
+
+        The single source of truth for that decision: :class:`factcrowd.train_cell.BuiltCorpus` builds
+        the slices and then asserts its own set matches this one, so the token arithmetic here and the
+        data there cannot disagree about a cell.
+
+        The unrelated slice is everywhere. The related one needs an orderable fact to ask about, so it
+        is absent from the reasoning-only control -- which has no facts -- and from the entropy axis,
+        whose attributes are positional composites with no ordinal field.
+
+        :returns: The slice names, in build order. Empty on a facts-only cell.
+        """
+        if self.reasoning_tokens <= 0:
+            return ()
+        if self.sweep == "count" and not self.is_control:
+            return ("mano", "compare")
+        return ("mano",)
 
     @property
     def ladder_row(self) -> sizes.LadderRow:
@@ -235,7 +305,13 @@ class CellSpec:
         params = self.non_embedding_params
         total_params = params + 0  # embeddings are added by the caller that knows the vocabulary
 
-        if self.sweep == "count":
+        if self.sweep == "count" and self.demand_bits_per_param == 0:
+            # The reasoning-only control. solve() refuses a zero target and should keep refusing it --
+            # the linear path divides by bits_per_entity and the name-term path is non-monotone there,
+            # so a solver that answered would be answering by accident. Zero facts is stated, not
+            # solved for.
+            n_entities = 0
+        elif self.sweep == "count":
             assert self.demand_bits_per_param is not None
             size = rho.solve(
                 params,
@@ -364,9 +440,14 @@ class ResolvedCell:
         """
         return int(self.n_bios * mean_tokens_per_bio)
 
+    @property
+    def reasoning_total(self) -> int:
+        """Reasoning tokens across every slice: the per-slice budget times the number of slices."""
+        return self.spec.reasoning_tokens * len(self.spec.reasoning_slice_names)
+
     def total_tokens(self, mean_tokens_per_bio: float) -> int:
-        """Fact tokens plus the cell's reasoning tokens."""
-        return self.fact_tokens(mean_tokens_per_bio) + self.spec.reasoning_tokens
+        """Fact tokens plus the cell's reasoning tokens, over every slice it carries."""
+        return self.fact_tokens(mean_tokens_per_bio) + self.reasoning_total
 
     def steps(self, mean_tokens_per_bio: float) -> int:
         """
@@ -402,7 +483,9 @@ class ResolvedCell:
             "name_bits": int(self.name_bits),
             "mean_tokens_per_bio": round(mean_tokens_per_bio, 2),
             "fact_tokens": self.fact_tokens(mean_tokens_per_bio),
-            "reasoning_tokens": self.spec.reasoning_tokens,
+            "reasoning_tokens_per_slice": self.spec.reasoning_tokens,
+            "reasoning_slices": ",".join(self.spec.reasoning_slice_names) or "none",
+            "reasoning_tokens": self.reasoning_total,
             "total_tokens": self.total_tokens(mean_tokens_per_bio),
             "steps": steps,
             "cumulative_lr_times_wd": round(
@@ -426,8 +509,20 @@ def first_run_cells(**overrides: Any) -> Tuple[CellSpec, ...]:
 
     :returns: The cells, in the order the three jobs should run them.
     """
+    settings: Dict[str, Any] = {"reasoning_tokens": REASONING_TOKENS, **overrides}
+    control: Dict[str, Any] = dict(settings)
+    control["notes"] = control.get("notes") or "reasoning-only control: no facts"
     cells: List[CellSpec] = []
     for row, demands in FIRST_RUN_ROWS:
+        cells.append(
+            CellSpec(
+                cell_id=f"{row.lower()}_ctrl",
+                row=row,
+                sweep="count",
+                demand_bits_per_param=0.0,
+                **control,
+            )
+        )
         for demand in demands:
             cells.append(
                 CellSpec(
@@ -435,7 +530,7 @@ def first_run_cells(**overrides: Any) -> Tuple[CellSpec, ...]:
                     row=row,
                     sweep="count",
                     demand_bits_per_param=demand,
-                    **overrides,
+                    **settings,
                 )
             )
     return tuple(cells)
@@ -460,6 +555,7 @@ def entropy_sweep_cells(row: str = "28M", **overrides: Any) -> Tuple[CellSpec, .
         bits_per_entity=corpus_values.bios_bits_per_entity(),
         name_space=corpus_values.NAME_SPACE,
     ).n_entities
+    settings: Dict[str, Any] = {"reasoning_tokens": REASONING_TOKENS, **overrides}
     return tuple(
         CellSpec(
             cell_id=_cell_id(row, "entropy", bits),
@@ -467,7 +563,7 @@ def entropy_sweep_cells(row: str = "28M", **overrides: Any) -> Tuple[CellSpec, .
             sweep="entropy",
             bits_per_attribute=bits,
             n_entities=fixed,
-            **overrides,
+            **settings,
         )
         for bits in ENTROPY_AXIS_BITS
     )

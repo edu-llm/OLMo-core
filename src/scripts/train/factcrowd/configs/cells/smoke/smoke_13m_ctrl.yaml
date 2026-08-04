@@ -1,0 +1,16 @@
+# The reasoning-only control, at smoke scale: no entity table, no renderer, no fact stream, and the
+# unrelated slice alone. Proves the facts-free path, which no other smoke cell reaches -- a control
+# that only ever ran as a dry run would be the one cell in the grid whose code was never executed.
+cell_id: smoke_13m_ctrl
+row: 13M
+sweep: count
+demand_bits_per_param: 0.0
+sequence_length: 512
+global_batch_size: 8192
+learning_rate: 0.003
+weight_decay: 0.1
+warmup_steps: 2
+decay_fraction: 0.2
+reasoning_tokens: 81920
+seed: 1234
+notes: 'Reasoning-only control at smoke scale. Proves the path, proves nothing about capacity.'

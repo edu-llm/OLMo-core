@@ -26,13 +26,98 @@ CONFIG_ROOT = Path("src/scripts/train/factcrowd/configs/cells")
 # --- the grid ---------------------------------------------------------------------------------------
 
 
-def test_the_first_run_is_fourteen_cells_across_three_rows():
-    """13M and 28M at all five demands, 64M at four. The 113M row and 64M's highest are omitted."""
+def test_the_first_run_is_seventeen_cells_across_three_rows():
+    """
+    13M and 28M at all five demands, 64M at four, and a reasoning-only control on each row.
+
+    The 113M row and 64M's highest demand are omitted. The controls are what the rest of each row is
+    compared against, so a row that generated without one would have no zero-fact reference point.
+    """
     cells = C.first_run_cells()
-    assert len(cells) == 14
+    assert len(cells) == 17
     per_row = {row: sum(1 for c in cells if c.row == row) for row in ("13M", "28M", "64M")}
-    assert per_row == {"13M": 5, "28M": 5, "64M": 4}
+    assert per_row == {"13M": 6, "28M": 6, "64M": 5}
+    assert [c.cell_id for c in cells if c.is_control] == ["13m_ctrl", "28m_ctrl", "64m_ctrl"]
     assert not any(c.row == "113M" for c in cells)
+
+
+# --- the reasoning-only control ----------------------------------------------------------------------
+
+
+def test_the_control_has_no_facts_and_states_it_by_demand():
+    """
+    Zero facts is stated as demand 0, and resolves to zero entities without going near the solver.
+
+    ``rho.solve`` refuses a zero target and should keep refusing it: its linear path divides by
+    bits_per_entity and its name-term path is non-monotone there, so a solver that answered would be
+    answering by accident. The control is the one cell whose entity count is stated rather than solved.
+    """
+    control = C.CellSpec(
+        cell_id="13m_ctrl", row="13M", demand_bits_per_param=0.0, reasoning_tokens=1_000_000_000
+    )
+    assert control.is_control
+    resolved = control.resolve()
+    assert resolved.n_entities == 0
+    assert resolved.demand_per_non_embedding_param == 0.0
+    assert resolved.attribute_bits == 0 and resolved.name_bits == 0
+    assert resolved.fact_tokens(69.2) == 0
+    assert resolved.total_tokens(69.2) == 1_000_000_000
+
+    with pytest.raises(OLMoConfigurationError, match="must be positive"):
+        rho.solve(
+            control.non_embedding_params,
+            0.0,
+            bits_per_entity=V.bios_bits_per_entity(),
+            name_space=V.NAME_SPACE,
+        )
+
+
+def test_a_cell_with_neither_facts_nor_reasoning_is_refused():
+    """Demand 0 and no reasoning is a run with no data at all, which should not reach a GPU."""
+    with pytest.raises(OLMoConfigurationError, match="no facts and no reasoning"):
+        C.CellSpec(cell_id="empty", row="13M", demand_bits_per_param=0.0)
+    with pytest.raises(OLMoConfigurationError, match="must not be negative"):
+        C.CellSpec(cell_id="neg", row="13M", demand_bits_per_param=-1.0)
+
+
+def test_the_control_gets_the_same_unrelated_exposure_as_the_cells_it_anchors():
+    """
+    The confound this arithmetic exists to prevent, and it was live for one commit.
+
+    The budget is per *slice*. Splitting a fixed total between however many slices a cell carries gave
+    the control -- which carries only the unrelated slice -- twice the unrelated exposure of every cell
+    it is the reference for. Its score would then have beaten theirs for a reason that has nothing to do
+    with fact load, which is the one inference the control exists to support.
+    """
+    cells = {cell.cell_id: cell for cell in C.first_run_cells()}
+    control, demand = cells["13m_ctrl"], cells["13m_d1p2"]
+
+    assert control.reasoning_slice_names == ("mano",)
+    assert demand.reasoning_slice_names == ("mano", "compare")
+    # Same per-slice budget, so the same unrelated-slice exposure in both.
+    assert control.reasoning_tokens == demand.reasoning_tokens
+    # And the totals differ, which is the correct consequence rather than a violated invariant.
+    assert control.resolve().reasoning_total == C.REASONING_TOKENS
+    assert demand.resolve().reasoning_total == 2 * C.REASONING_TOKENS
+
+
+def test_the_entropy_axis_carries_the_unrelated_slice_alone():
+    """
+    Its attributes are positional composites with no ordinal field, so there is nothing to compare.
+
+    Checked here rather than only where the task is built, because the token arithmetic reads this and
+    a cell whose declared slices differ from its built ones has an unreproducible step count.
+    """
+    for cell in C.entropy_sweep_cells("28M"):
+        assert cell.reasoning_slice_names == ("mano",)
+        assert not cell.is_control
+
+
+def test_a_facts_only_cell_declares_no_slices():
+    """Zero reasoning tokens means no slices, whatever axis the cell is on."""
+    cell = C.CellSpec(cell_id="facts", row="13M", demand_bits_per_param=1.2, reasoning_tokens=0)
+    assert cell.reasoning_slice_names == ()
+    assert cell.resolve().reasoning_total == 0
 
 
 def test_every_count_cell_lands_on_its_intended_rho():
@@ -44,7 +129,12 @@ def test_every_count_cell_lands_on_its_intended_rho():
     """
     expected = [0.25, 0.5, 1.0, 2.0, 4.0]
     for row in ("13M", "28M"):
-        got = [c.resolve().rho for c in C.first_run_cells() if c.row == row]
+        got = [
+            c.resolve().rho
+            for c in C.first_run_cells()
+            if c.row == row
+            and not c.is_control  # the control sits at 0 by definition, not by demand
+        ]
         # 1e-4 rather than exact: n_entities is an integer, so each cell carries a rounding residual
         # of order 1/n. Far inside the 1% tolerance rho.check enforces.
         assert got == pytest.approx(expected, abs=1e-4)
@@ -252,9 +342,15 @@ def test_every_committed_config_loads_and_resolves():
         assert cells, axis
         for cell in cells:
             resolved = cell.resolve()
-            assert resolved.n_entities > 0
-            assert resolved.demand_per_non_embedding_param > 0
             assert cell.sweep == axis
+            if cell.is_control:
+                # The one cell with no facts, so the only one whose demand is legitimately zero.
+                assert resolved.n_entities == 0
+                assert resolved.demand_per_non_embedding_param == 0
+                assert cell.reasoning_tokens > 0
+            else:
+                assert resolved.n_entities > 0
+                assert resolved.demand_per_non_embedding_param > 0
 
 
 def test_the_committed_grid_matches_the_generator():
@@ -275,13 +371,16 @@ def test_the_two_axes_live_in_separate_directories():
     """
     A fan-out maps an array index to a cell by position, so its size must be what ``ls`` says.
 
-    Sharing one directory would let ``--row 28M`` pick up eleven cells where the submission asked for
-    five, and run the wrong cell under the right name.
+    Sharing one directory would let ``--row 28M`` pick up twelve cells where the submission asked for
+    six, and run the wrong cell under the right name.
     """
     count_rows = {c.row for c in C.load_cells(CONFIG_ROOT / "count")}
     entropy_rows = {c.row for c in C.load_cells(CONFIG_ROOT / "entropy")}
     assert "28M" in count_rows and "28M" in entropy_rows
-    assert len([c for c in C.load_cells(CONFIG_ROOT / "count") if c.row == "28M"]) == 5
+    # Six: five demands plus the row's reasoning-only control. This number is the submission's
+    # fanout_size, so it is asserted rather than derived.
+    assert len([c for c in C.load_cells(CONFIG_ROOT / "count") if c.row == "28M"]) == 6
+    assert len([c for c in C.load_cells(CONFIG_ROOT / "entropy") if c.row == "28M"]) == 6
 
 
 def test_load_cells_is_sorted_so_a_fanout_index_is_stable():
@@ -338,7 +437,13 @@ def test_train_cell_imports_and_resolves_a_fanout_index_without_torch():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
 
-    args = argparse.Namespace(cell=None, row="28M", sweep="count", cell_index="2")
+    # Index 0 is the control: 'ctrl' sorts before 'd0p3', so adding it shifted every demand cell by
+    # one. That shift is why the mapping is asserted here at all -- a submission that named a
+    # fanout_size from an older directory would run a different cell under the name it was approved as.
+    args = argparse.Namespace(cell=None, row="28M", sweep="count", cell_index="0")
+    assert module.resolve_cell(args).cell_id == "28m_ctrl"
+
+    args = argparse.Namespace(cell=None, row="28M", sweep="count", cell_index="3")
     chosen = module.resolve_cell(args)
     assert chosen.row == "28M"
     assert chosen.cell_id == "28m_d1p2"

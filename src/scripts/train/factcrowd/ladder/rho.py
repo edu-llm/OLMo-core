@@ -228,11 +228,15 @@ def name_bits(n_entities: int, name_space: int) -> float:
 
     :returns: Bits contributed by name selection.
 
-    :raises OLMoConfigurationError: If ``n_entities`` exceeds ``name_space``, or either is not
+    :raises OLMoConfigurationError: If ``n_entities`` exceeds ``name_space``, or ``name_space`` is not
         positive.
     """
-    _require_positive("n_entities", n_entities)
+    _require_non_negative("n_entities", n_entities)
     _require_positive("name_space", name_space)
+    if n_entities == 0:
+        # The reasoning-only control. N*log2(N0/N) has the limit 0 as N -> 0, but the expression
+        # itself divides by N, so the limit has to be written down rather than evaluated.
+        return 0.0
     if n_entities > name_space:
         raise OLMoConfigurationError(
             f"{n_entities:,} entities exceeds a name space of {name_space:,}, so two entities would "
@@ -259,8 +263,10 @@ def demanded_bits(n_entities: int, bits_per_entity: float, *, name_space: Option
 
     :raises OLMoConfigurationError: If any argument is out of range.
     """
-    _require_positive("n_entities", n_entities)
-    # Zero is legal here and nowhere else. The entropy axis's b=0 cell has singleton value pools, so
+    _require_non_negative("n_entities", n_entities)
+    # Zero entities is the reasoning-only control: no facts, so no demand, on either half of the sum.
+    # Zero *bits per entity* is legal here and nowhere else. The entropy axis's b=0 cell has singleton
+    # value pools, so
     # its attribute bits really are zero -- but its demand is not, because distinct names still carry
     # the name term. solve() stays strict: on the linear path it divides by this, and on the name-term
     # path b=0 falls below the monotonicity threshold, so neither path can serve it.
@@ -303,7 +309,7 @@ def demand(
             f"({non_embedding_params:,}), so they cannot describe the same model"
         )
 
-    _require_positive("n_entities", n_entities)
+    _require_non_negative("n_entities", n_entities)  # zero is the reasoning-only control
     _require_non_negative("bits_per_entity", bits_per_entity)
     attribute_bits = n_entities * bits_per_entity
     names = name_bits(n_entities, name_space) if name_space is not None else 0.0
