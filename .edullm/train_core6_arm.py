@@ -79,7 +79,7 @@ from olmo_core.data import (
     TokenizerConfig,
 )
 from olmo_core.distributed.parallel import DataParallelType
-from olmo_core.distributed.utils import barrier, get_rank
+from olmo_core.distributed.utils import barrier, get_rank, get_world_size
 from olmo_core.io import clear_directory, list_directory, normalize_path
 from olmo_core.nn.transformer import TransformerConfig
 from olmo_core.optim import AdamWConfig, CosWithWarmup, OptimGroupOverride
@@ -673,6 +673,23 @@ class LossWatcher(Callback):
         self.first: Optional[float] = None
         self.last: Optional[float] = None
         self.wandb_url = ""
+        #: Steady-state throughput, excluding startup and compilation.
+        #:
+        #: ``seconds`` in the summary wraps the whole of ``fit()``, so tokens/second derived
+        #: from it charges process start, dataset open, FSDP wrap and the torch.compile of
+        #: the first step against the measurement. On a short probe that is most of the
+        #: wall-clock and it under-reports the hardware badly -- and unequally across shapes,
+        #: since a bigger machine pays more fixed cost and would look worse than it is.
+        #:
+        #: ``SpeedMonitorCallback`` already measures the right thing: the trainer registers
+        #: it automatically (``trainer.py:347``) and it resets its clock AFTER step 1,
+        #: because "the first one tends to take unusually long". Its per-device average
+        #: reaches metrics as ``throughput/device/TPS (actual avg)``. Nothing forwarded it to
+        #: the JSON summary, which is the only channel the platform reads back.
+        self.tps_device_avg: Optional[float] = None
+        #: Instantaneous per-device TPS from the last logged step, for a sanity check that
+        #: the average is not still climbing when the probe ends.
+        self.tps_device_last: Optional[float] = None
 
     def log_metrics(self, step: int, metrics: Dict[str, float]) -> None:
         del step
@@ -681,6 +698,12 @@ class LossWatcher(Callback):
                 import wandb
 
                 self.wandb_url = getattr(wandb.run, "url", "") or ""
+        tps_avg = metrics.get("throughput/device/TPS (actual avg)")
+        if tps_avg is not None:
+            self.tps_device_avg = float(tps_avg)
+        tps_now = metrics.get("throughput/device/TPS")
+        if tps_now is not None:
+            self.tps_device_last = float(tps_now)
         loss = metrics.get("train/CE loss")
         if loss is None:
             return
@@ -886,6 +909,26 @@ def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float, sli
                 "first_loss": losses.first,
                 "last_loss": losses.last,
                 "seconds": seconds,
+                # THE THROUGHPUT NUMBER TO COST A RUN ON. Steady-state, per device, with
+                # step 1 excluded, so it does not charge process start, dataset open, FSDP
+                # wrap or the first-step compile against the hardware. Multiply by
+                # world_size for the machine.
+                "tps_device_avg": losses.tps_device_avg,
+                "tps_device_last": losses.tps_device_last,
+                "world_size": get_world_size(),
+                "tps_total_avg": (
+                    None
+                    if losses.tps_device_avg is None
+                    else losses.tps_device_avg * get_world_size()
+                ),
+                # Kept for contrast, and it is the WRONG number for costing: it includes
+                # every fixed cost above. On a short probe it can be several times lower
+                # than the steady-state figure, and it penalises bigger shapes hardest.
+                "tps_naive_wall_clock": (
+                    None
+                    if not seconds
+                    else trainer.global_step * opts.global_batch_size / seconds
+                ),
                 "peak_memory_gib": peak,
                 "checkpoint_uri": opts.save_folder,
                 "wandb_project": os.environ.get("EDULLM_WANDB_PROJECT", ""),
