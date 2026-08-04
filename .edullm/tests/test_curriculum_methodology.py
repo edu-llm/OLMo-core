@@ -110,8 +110,8 @@ def test_recipe_is_exact_approved_five_arm_matrix() -> None:
         ("linear10-flesch", "linear_n10", "flesch", "flesch"),
         ("linear10-mtld", "linear_n10", "mtld", "mtld"),
         ("linear10-learn", "linear_n10", "learnability", "learnability"),
-        ("warmup-mtld", "warmup_1000", "mtld", "mtld"),
-        ("interleave-mtld", "interleave_i10_linear", "mtld", "mtld"),
+        ("warmup-flesch", "warmup_1000", "flesch", "flesch"),
+        ("interleave-flesch", "interleave_i10_linear", "flesch", "flesch"),
     )
     assert {arm.pacing for arm in arms} == {
         "linear_n10",

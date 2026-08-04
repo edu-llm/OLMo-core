@@ -149,8 +149,8 @@ def load_recipe(path: Path = RECIPE_PATH) -> tuple[Arm, ...]:
         (0, "linear10-flesch", "linear_n10", "flesch", "flesch"),
         (1, "linear10-mtld", "linear_n10", "mtld", "mtld"),
         (2, "linear10-learn", "linear_n10", "learnability", "learnability"),
-        (3, "warmup-mtld", "warmup_1000", "mtld", "mtld"),
-        (4, "interleave-mtld", "interleave_i10_linear", "mtld", "mtld"),
+        (3, "warmup-flesch", "warmup_1000", "flesch", "flesch"),
+        (4, "interleave-flesch", "interleave_i10_linear", "flesch", "flesch"),
     )
     if tuple(
         (arm.index, arm.name, arm.pacing, arm.metric, arm.order_group) for arm in arms
