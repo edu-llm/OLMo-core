@@ -25,7 +25,8 @@
     "alpha_f": 1.0,
     "checkpoint_interval": 125,
     "ema_steps": [2000, 2125, 2250, 2384],
-    "ema_alpha": 0.8
+    "ema_alpha": 0.8,
+    "ema_wandb_step": 2385
   },
   "arms": [
     {"index": 0, "name": "linear10-flesch", "pacing": "linear_n10", "metric": "flesch", "order_group": "flesch"},

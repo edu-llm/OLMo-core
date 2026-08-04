@@ -50,6 +50,7 @@ from curriculum_data import (
 )
 from curriculum_loader import CurriculumDataLoader, ParentChunkDataset
 from curriculum_pacing import DIFFICULTY_METRICS, ORDER_GROUPS, PACING_NAMES
+from curriculum_ema import EMA_WANDB_STEP, build_ema_checkpoint, finalize_ema_production
 from production_contract import checkpoint as checkpoint_contract
 from production_contract import task_loss
 from production_contract import wandb_artifacts
@@ -132,6 +133,7 @@ def load_recipe(path: Path = RECIPE_PATH) -> tuple[Arm, ...]:
         "checkpoint_interval": CHECKPOINT_INTERVAL,
         "ema_steps": list(EMA_STEPS),
         "ema_alpha": EMA_ALPHA,
+        "ema_wandb_step": EMA_WANDB_STEP,
     }
     if training != fixed:
         raise CurriculumConfigError("recipe training fields differ from the approved recipe")
@@ -282,12 +284,17 @@ class CurriculumCheckpointCallback(Callback):
         self.fingerprint_path = fingerprint_path
         self.module_builder = module_builder
         self._completed: set[int] = set()
+        self._ema_completed = False
 
     def state_dict(self) -> dict[str, Any]:
-        return {"completed_steps": sorted(self._completed)}
+        return {
+            "completed_steps": sorted(self._completed),
+            "ema_completed": self._ema_completed,
+        }
 
     def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         self._completed = {int(step) for step in state_dict.get("completed_steps", [])}
+        self._ema_completed = bool(state_dict.get("ema_completed", False))
 
     def _release(self) -> None:
         old_module = self.trainer.train_module
@@ -321,6 +328,70 @@ class CurriculumCheckpointCallback(Callback):
     @staticmethod
     def _already_evaluated(_checkpoint: Path, *, out_path: Path, **_kwargs: Any) -> None:
         task_loss.validate_task_loss_result(out_path)
+
+    def _method_name(self) -> str:
+        return (
+            "plain_ce"
+            if self.arm.pacing == "control"
+            else f"curriculum:{self.arm.pacing}"
+        )
+
+    def _finalize_ema(self) -> None:
+        """Build the post-hoc EMA, eval it, and publish it as the final model.
+
+        Intermediate permanent steps never upload a model artifact. After the
+        true final training step, this merges EMA_STEPS, runs the full 20-label
+        task-loss suite on the merged weights, and uploads that EMA checkpoint
+        plus its eval to the same W&B run at step EMA_WANDB_STEP (2385).
+        """
+        if self._ema_completed:
+            return
+        if self.eval_script is None:
+            if self.production:
+                raise checkpoint_contract.CheckpointContractError(
+                    "production runs require automatic EMA finalization with task loss"
+                )
+            return
+        if not all(step in self._completed for step in EMA_STEPS):
+            return
+
+        ema_dir = self.save_folder / "step2384-ema"
+        if get_rank() == 0:
+            build_ema_checkpoint(
+                self.save_folder,
+                arm=self.arm.name,
+                output_dir=ema_dir,
+                overwrite=True,
+            )
+        barrier()
+
+        self._release()
+        barrier()
+
+        failure: str | None = None
+        if get_rank() == 0:
+            try:
+                finalize_ema_production(
+                    checkpoints_root=self.save_folder,
+                    arm=self.arm.name,
+                    run_name=self.run_name,
+                    task_loss_dir=self.task_loss_dir,
+                    eval_script=self.eval_script,
+                    task_loss_nproc=self.task_loss_nproc,
+                    progress_dir=self.progress_dir,
+                    fingerprint_path=self.fingerprint_path,
+                    wandb_run=wandb_artifacts.wandb_run_from_trainer(self.trainer),
+                    wandb_mode=self.wandb_mode,
+                    production=self.production,
+                    method=self._method_name(),
+                    ema_dir=ema_dir,
+                    evaluate=self._evaluate,
+                )
+                self._ema_completed = True
+            except BaseException as exc:  # noqa: BLE001
+                failure = f"EMA finalization failed: {type(exc).__name__}: {exc}"
+        _broadcast_failure(failure)
+        barrier()
 
     def _finalize(self, step: int) -> None:
         step = int(step)
@@ -358,15 +429,11 @@ class CurriculumCheckpointCallback(Callback):
                     task_loss_nproc=self.task_loss_nproc,
                     progress_dir=self.progress_dir,
                     fingerprint_path=self.fingerprint_path,
-                    method=(
-                        "plain_ce"
-                        if self.arm.pacing == "control"
-                        else f"curriculum:{self.arm.pacing}"
-                    ),
+                    method=self._method_name(),
                     wandb_run=wandb_artifacts.wandb_run_from_trainer(self.trainer),
                     wandb_mode=self.wandb_mode,
                     production=self.production,
-                    upload_checkpoint=step == self.total_steps,
+                    upload_checkpoint=False,
                     run_evaluator=self._already_evaluated,
                 )
             except BaseException as exc:  # noqa: BLE001
@@ -374,6 +441,8 @@ class CurriculumCheckpointCallback(Callback):
         _broadcast_failure(failure)
         self._completed.add(step)
         barrier()
+        if step == self.total_steps:
+            self._finalize_ema()
 
     def pre_train(self) -> None:
         self._finalize(0)
@@ -470,6 +539,7 @@ def scientific_identity(
         "checkpoint_steps": checkpoint_steps(total_steps),
         "ema_steps": list(EMA_STEPS),
         "ema_alpha": EMA_ALPHA,
+        "ema_wandb_step": EMA_WANDB_STEP,
     }
 
 

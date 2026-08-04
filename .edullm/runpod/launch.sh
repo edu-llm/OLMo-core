@@ -81,7 +81,7 @@ source "${identity_file}"
 export EDULLM_RUNPOD_INPUT_MANIFEST="${INPUT_MANIFEST}"
 export EDULLM_DATASET_ID="pretrain/regmix-10b"
 export EDULLM_DATASET_VERSION="v1"
-export EDULLM_WANDB_PROJECT="curriculum-${arm_name}"
+export EDULLM_WANDB_PROJECT="${EDULLM_WANDB_PROJECT:-curriculum}"
 export WANDB_PROJECT="${EDULLM_WANDB_PROJECT}"
 
 args=(
@@ -102,5 +102,5 @@ if [[ -n "${LENGTH_TOKENS:-}" ]]; then
   args+=(--length-tokens "${LENGTH_TOKENS}")
 fi
 
-exec python3 -m torch.distributed.run --standalone --nproc-per-node=8 \
+exec python3 -m torch.distributed.run --standalone --nproc-per-node=8 -- \
   "${REPO_DIR}/.edullm/runpod/entrypoint.py" "${args[@]}"

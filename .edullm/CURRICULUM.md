@@ -119,8 +119,10 @@ and resume are explicit: use `--fresh`, or `--load-path` with a local step
 directory. A W&B artifact can restore only a completed run's final checkpoint;
 never infer resume from scratch.
 The loader restores its exact zero-based batch position and bound order.
-Post-hoc EMA accepts only steps 2000/2125/2250/2384 from one fingerprint and
-uploads the merged checkpoint and its full task-loss result.
+Post-hoc EMA accepts only steps 2000/2125/2250/2384 from one fingerprint. The
+trainer merges them automatically at the end of the run, uploads the merged
+checkpoint as the sole final W&B model artifact, and logs the EMA task-loss
+eval on the same W&B run at step 2385.
 
 ## Exact commands and fixtures
 
