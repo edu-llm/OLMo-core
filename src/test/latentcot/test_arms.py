@@ -69,6 +69,16 @@ def test_arms_differ_only_in_whitelist():
     assert_arms_differ_only_in(configs, ARM_WHITELIST)
 
 
+def test_entropy_floor_is_whitelisted_and_propagates():
+    base = _base_config()
+    # A3 with its anti-collapse floor switched on stays confound-clean (floor is whitelisted).
+    a3_floored = replace(ARMS["A3"], vocab_reg_entropy_floor=1.0)
+    cfg = build_arm_config(base, a3_floored)
+    assert cfg.vocab_reg_entropy_floor == 1.0  # build_arm_config carries it through
+    configs = [build_arm_config(base, arm) for arm in ARMS.values()] + [cfg]
+    assert_arms_differ_only_in(configs, ARM_WHITELIST)  # must NOT raise
+
+
 def test_assertion_catches_out_of_whitelist_confound():
     base = _base_config()
     configs = [build_arm_config(base, arm) for arm in ARMS.values()]

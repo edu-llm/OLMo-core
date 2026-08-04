@@ -109,6 +109,7 @@ def train_arm(
             distill_weight=distill_weight,
             vocab_reg=arm.vocab_reg,
             vocab_reg_weight=arm.vocab_reg_weight,
+            vocab_reg_entropy_floor=arm.vocab_reg_entropy_floor,
         )
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)

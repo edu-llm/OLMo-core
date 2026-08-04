@@ -16,7 +16,11 @@ Arms:
   that isolates the *vocabulary-space direction* of R1 from mere regularization).
 
 The whitelist adds ``arm_mode`` to the PRD's ``(K, vocab_reg, vocab_reg_weight)`` because
-A0/A1 are structurally different training objectives, not just field tweaks.
+A0/A1 are structurally different training objectives, not just field tweaks. It also includes
+``vocab_reg_entropy_floor`` (R1's optional anti-collapse term): it is **off by default** (0.0)
+so the first sweep is the clean A3-vs-A4 comparison, and it lives in the whitelist so it can be
+switched on for A3 alone (empirically, if the thoughts are seen to collapse) without tripping
+the confound check. See ``vocab_manifold_reg`` for what the floor does.
 """
 
 from dataclasses import dataclass, replace
@@ -30,7 +34,13 @@ DEFAULT_K = 8
 DEFAULT_GAMMA = 0.01
 
 # Fields arms are allowed to differ in. Everything else must be identical.
-ARM_WHITELIST = ("arm_mode", "num_continuous_thoughts", "vocab_reg", "vocab_reg_weight")
+ARM_WHITELIST = (
+    "arm_mode",
+    "num_continuous_thoughts",
+    "vocab_reg",
+    "vocab_reg_weight",
+    "vocab_reg_entropy_floor",
+)
 
 
 @dataclass(frozen=True)
@@ -42,6 +52,8 @@ class Arm:
     num_continuous_thoughts: int
     vocab_reg: str
     vocab_reg_weight: float
+    # R1's optional anti-collapse entropy floor (nats); 0.0 = off (the default first sweep).
+    vocab_reg_entropy_floor: float = 0.0
 
 
 # K is held constant across arms (A0/A1 ignore it), so arms differ only in mode + reg.
@@ -64,6 +76,7 @@ def build_arm_config(
         num_continuous_thoughts=arm.num_continuous_thoughts,
         vocab_reg=arm.vocab_reg,
         vocab_reg_weight=arm.vocab_reg_weight,
+        vocab_reg_entropy_floor=arm.vocab_reg_entropy_floor,
     )
 
 

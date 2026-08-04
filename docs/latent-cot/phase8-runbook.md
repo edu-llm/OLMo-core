@@ -63,6 +63,12 @@ rungs are state-dict-interchangeable at our sequence lengths, but the real sweep
   the slope (compute from the per-seed `solve_rate_by_depth` in each run's metrics.json).
 - **Gate B (the fix):** A3 (R1) accuracy + decodability **>** A2 (none), and **A3 > A4** (L2
   control) — that isolates the *vocabulary-space direction*. Paired CIs across seeds.
+  R1 runs with its **anti-collapse entropy floor OFF by default** so this is the clean,
+  one-variable A3-vs-A4 comparison. First inspect A3's `decodability` + the probes below: if the
+  continuous thoughts have **collapsed** (near-one-hot logit-lens / degenerate decodability),
+  re-run *only A3* with the floor on — `train_codi.py --arm A3 --vocab-reg-entropy-floor 1.0` —
+  and note that A3 then carries an extra term the L2 control lacks (interpret Gate B accordingly,
+  or add a matched term to A4 for a strict control). The floor is recorded in each `metrics.json`.
 - **Probes:** use `olmo_core.latentcot.probes` on saved thoughts — logit-lens / linear probe
   (vs shuffled control) / causal ablation, on directed-graph-reachability where theory predicts
   the superposition advantage.

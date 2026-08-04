@@ -96,6 +96,22 @@ def test_vocab_reg_variants(tok, tiny_model):
     assert len({round(r1, 6), round(r2, 6), round(l2, 6)}) == 3
 
 
+def test_r1_entropy_floor_adds_anticollapse_penalty(tok, tiny_model):
+    torch.manual_seed(0)
+    thoughts = torch.randn(2, 3, D_MODEL)
+    base = float(vocab_manifold_reg(tiny_model, thoughts, "R1", entropy_floor=0.0).detach())
+    # floor=0 is a no-op — identical to the default (unfloored) R1.
+    assert base == float(vocab_manifold_reg(tiny_model, thoughts, "R1").detach())
+    # a floor above the achievable entropy (max is log(vocab)) is never satisfied, so the hinge
+    # adds a strictly positive anti-collapse penalty on top of the base pull.
+    high = float(vocab_manifold_reg(tiny_model, thoughts, "R1", entropy_floor=1e6).detach())
+    assert high > base
+    # the floor only touches R1's mixture target; L2/R2 return before the entropy term.
+    assert float(vocab_manifold_reg(tiny_model, thoughts, "L2", entropy_floor=1e6).detach()) == float(
+        vocab_manifold_reg(tiny_model, thoughts, "L2").detach()
+    )
+
+
 def test_config_build_returns_codi_module(tiny_model):
     from olmo_core.latentcot.train_module import (
         CodiTransformerTrainModule,

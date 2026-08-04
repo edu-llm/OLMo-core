@@ -26,6 +26,8 @@ from pathlib import Path
 
 import torch
 
+from dataclasses import replace
+
 from olmo_core.latentcot.arms import ARMS
 from olmo_core.latentcot.data.dataset import LatentCotDataset
 from olmo_core.latentcot.evaluate import overall_accuracy, solve_rate_by_depth
@@ -53,11 +55,21 @@ def main() -> None:
     parser.add_argument(
         "--device", default="auto", help="'auto' (cuda if available else cpu), 'cuda', or 'cpu'"
     )
+    parser.add_argument(
+        "--vocab-reg-entropy-floor",
+        type=float,
+        default=None,
+        help="override R1's anti-collapse entropy floor (nats); default off (arm's 0.0). "
+        "Set e.g. 1.0 to re-run A3 with the floor on if thoughts are seen to collapse.",
+    )
     parser.add_argument("--out", type=Path, default=Path("runs/latentcot"))
     args = parser.parse_args()
 
     device = resolve_device(args.device)
     arm = ARMS[args.arm]
+    if args.vocab_reg_entropy_floor is not None:
+        # Whitelisted field, so this keeps the confound check valid (arms may differ in it).
+        arm = replace(arm, vocab_reg_entropy_floor=args.vocab_reg_entropy_floor)
 
     model = build_model(args.rung, init_seed=args.init_seed, device=device)
     if args.init_checkpoint:
@@ -83,6 +95,9 @@ def main() -> None:
         "init_seed": args.init_seed,
         "seed": args.seed,
         "steps": args.steps,
+        "vocab_reg": arm.vocab_reg,
+        "vocab_reg_weight": arm.vocab_reg_weight,
+        "vocab_reg_entropy_floor": arm.vocab_reg_entropy_floor,
         "overall_acc": overall_accuracy(model, examples, arm.arm_mode),
         "solve_rate_by_depth": solve_rate_by_depth(model, examples, arm.arm_mode),
         "train_history": history,
