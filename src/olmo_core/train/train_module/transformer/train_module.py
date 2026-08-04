@@ -576,6 +576,24 @@ class TransformerTrainModule(TrainModule):
                 # For HSDP we can delay the gradients all-reduce until the final micro-batch.
                 if self.dp_config.name == DataParallelType.hsdp:
                     self.model.set_requires_all_reduce(is_last_mb)
+                # AND THE REDUCE-SCATTER, WHICH THE CALL ABOVE DOES NOT GATE.
+                # Without this every micro-batch reduce-scatters a full gradient, so a step
+                # with four micro-batches pays four times the necessary gradient traffic. The
+                # call above reads as though it covers that and does not: torch scopes
+                # `set_requires_all_reduce` to "reduce-scatter but not all-reduce for HSDP",
+                # meaning it gates the inter-replica all-reduce only, and on plain FSDP it is
+                # not even reached. The method that gates the reduce-scatter is
+                # `set_requires_gradient_sync` -- "gradient accumulation *without
+                # communication*", "the equivalence of no_sync in FSDP1" -- and nothing in
+                # this repository called it.
+                #
+                # The cost is that gradients accumulate unsharded across micro-batches:
+                # numel * reduce_dtype bytes per rank, which is 3.97 GiB for a 1.07B-parameter
+                # model at fp32 reduce_dtype, against 15.0 GiB measured free on an L40S at
+                # that shape. `accumulate_grads_without_comm=False` restores the previous
+                # behaviour exactly for a configuration that cannot spare it.
+                if self.dp_config.accumulate_grads_without_comm and num_micro_batches > 1:
+                    self.model.set_requires_gradient_sync(is_last_mb)
             elif isinstance(self.model, DDP):
                 # For DDP, only sync gradients on the final micro-batch.
                 if not is_last_mb:
