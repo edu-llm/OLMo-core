@@ -582,11 +582,22 @@ def build_trainer(
             save_overwrite=False,
             metrics_collect_interval=10,
             max_duration=Duration.steps(steps),
-            # Async bookkeeping runs collectives on a second process group. Under gloo that group is
-            # not registered where torch's distributed checkpointing expects it, so a CPU run dies in
-            # scatter_object on its first save. Off on CPU, on wherever it works -- and the CPU path
-            # matters because cpu-32vcpu is the profile the platform sends every first run to.
-            async_bookkeeping=torch.cuda.is_available(),
+            # OFF EVERYWHERE, AND IT COST A RUN TO LEARN THAT.
+            #
+            # Async bookkeeping runs metric reductions and the cancel check on a second, gloo process
+            # group off the training thread. It was off on CPU (that group is not registered where
+            # torch's distributed checkpointing looks, so a CPU run died in scatter_object on its first
+            # save) and on wherever CUDA was available -- which had never actually been tried.
+            #
+            # On 4xA10G it deadlocked. The run trained nineteen steps, saved a complete checkpoint, and
+            # at the next save stopped in `Waiting for bookkeeping ops to finish: 'reduce_metrics'`
+            # until gloo's 1,800-second recv timeout fired and killed the job. Thirty of its
+            # thirty-one minutes were that timeout.
+            #
+            # It buys overlapping a few small all-reduces with compute. It is not worth a second
+            # process group and a class of hang that only appears on a real multi-GPU node, so it is
+            # now off unconditionally and there is no branch left to be wrong about.
+            async_bookkeeping=False,
         )
         .with_callback("speed_monitor", SpeedMonitorCallback())
         .with_callback("config_saver", ConfigSaverCallback())
@@ -815,6 +826,7 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> int:
                 "checkpoint_steps": list(checkpointer.save_steps),
                 "max_duration_steps": trainer.max_duration.value,
                 "save_overwrite": trainer.save_overwrite,
+                "async_bookkeeping": trainer.async_bookkeeping,
                 "evaluator_callbacks": [n for n in trainer.callbacks if "eval" in n.lower()],
                 "wandb_enabled": trainer.callbacks["wandb"].enabled,
                 "data_parallel": "fsdp",

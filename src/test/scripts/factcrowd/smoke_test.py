@@ -371,3 +371,78 @@ def test_the_built_trainer_satisfies_every_platform_requirement(tmp_path):
     assert settings["wandb_enabled"] is False
     # And the run records its own cell, without which a finished checkpoint is unscoreable.
     assert settings["records_cell"] is True
+
+
+@pytest.mark.slow
+def test_bookkeeping_is_synchronous_and_repeated_saves_survive_multiple_ranks():
+    """
+    The defect that killed the first platform run, pinned two ways.
+
+    Async bookkeeping puts metric reductions and the cancel check on a second gloo process group off
+    the training thread. It was enabled whenever CUDA was available -- a branch that had never run on a
+    real multi-GPU node. On 4xA10G it deadlocked: nineteen steps trained, one complete checkpoint
+    written to S3, then `Waiting for bookkeeping ops to finish: 'reduce_metrics'` until gloo's
+    1,800-second recv timeout killed the job. Thirty of the run's thirty-one minutes were that timeout.
+
+    So: the flag must read false on the built trainer, and a multi-rank run must get *past* its second
+    checkpoint. One save proved nothing -- the first one succeeded in the run that died.
+    """
+    pytest.importorskip("torch")
+    result = run_entry_point(
+        "asyncchk",
+        "--cell",
+        str(CONTROL_CELL),
+        "--save-folder",
+        str(Path(tempfile.mkdtemp()) / "ck"),
+        "--work-dir",
+        str(Path(tempfile.mkdtemp()) / "wd"),
+        "--rank-microbatch-size",
+        "2048",
+        "--build-only",
+        cwd=REPO_ROOT,
+    )
+    assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
+    settings = json.loads(
+        next(
+            text
+            for text in (result.stdout + result.stderr).splitlines()
+            if text.startswith("BUILD_ONLY ")
+        )[len("BUILD_ONLY ") :]
+    )
+    assert settings["async_bookkeeping"] is False
+    assert len(settings["checkpoint_steps"]) >= 3, settings["checkpoint_steps"]
+
+    # And now actually run it on two ranks, through several saves.
+    with tempfile.TemporaryDirectory() as raw:
+        work = Path(raw)
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "torch.distributed.run",
+                "--nproc-per-node=2",
+                "--standalone",
+                str(ENTRY_POINT),
+                "asyncrun",
+                "--cell",
+                str(CONTROL_CELL),
+                "--save-folder",
+                str(work / "ck"),
+                "--work-dir",
+                str(work / "wd"),
+                "--rank-microbatch-size",
+                "1024",
+            ],
+            cwd=str(REPO_ROOT),
+            env=dict(os.environ, PYTHONPATH=str(REPO_ROOT / "src")),
+            capture_output=True,
+            text=True,
+            timeout=1800,
+        )
+        output = proc.stdout + proc.stderr
+        assert proc.returncode == 0, output[-3000:]
+        assert "Training complete" in output
+        assert "took longer than 30 seconds" not in output, "a bookkeeping op stalled"
+        assert "Timed out waiting" not in output
+        saved = sorted((work / "ck").glob("step*"))
+        assert len(saved) >= 3, [p.name for p in saved]

@@ -126,6 +126,46 @@ scorer prove it rebuilt the right ones rather than assume. Nothing about scoring
 before these jobs run.
 
 
+
+## Measured throughput, and the A10G route
+
+The first platform run measured what every estimate here had been guessing. On **4×A10G with the 13M
+row**: `228,883 tokens/s/device`, `22.76 TFLOP/s/device`, 1.0B tokens in 19 minutes.
+
+Two notes on reading that. OLMo-core's speed monitor reports `MFU 7.3%` against a declared device peak
+of 312 TFLOP/s — that is the A100 figure; A10G's bf16 peak is 125 TFLOP/s, so the real MFU is about
+**18%**, which is healthy for a 13M model. And per-cell time scales with non-embedding parameters, so
+the 28M row runs at roughly 407k tokens/s on four devices and the 64M row at 181k.
+
+Hours below are from that measurement, scaled by parameter count, with 8 GPUs taken as 1.9× four
+(sublinear because g5 has no NVLink):
+
+| | 4×A10G | 8×A10G |
+|---|---|---|
+| 13M row, all six cells | 10.5 h | 5.4 h |
+| 28M's four shortest | 12.6 h | 6.6 h |
+| `28m_d2p4` | 12.2 h | 6.4 h |
+| `28m_d4p8` | 24.1 h | 12.7 h |
+
+**64M cannot run on A10G.** `64m_d2p4` needs 32.0 h on eight devices against the platform's hard 24 h
+per-cell ceiling, and `64m_d1p2` at 16.2 h leaves little room. That row belongs on the P pool.
+
+The A10G route exists because the G quota (`L-DB2E81BA`) is separate from the P quota that H100 and A100
+draw on, and because every A10G rate is under the $20 exception ceiling — so these submissions are
+`ROUTINE` rather than needing an admin. Recommended split, four submissions, ~19 h wall clock, ~$442:
+
+| `compute_profile` | `nproc` | selector | `fanout_size` | `max_runtime_hours` | ceiling |
+|---|---|---|---|---|---|
+| `gpu-4xa10g` | 4 | `--row 13M` | 6 | 8 | $272 |
+| `gpu-4xa10g` | 4 | `--row 28M` | 4 | 10 | $227 |
+| `gpu-8xa10g` | 8 | `--cell …/28m_d2p4.yaml` | — | 10 | $163 |
+| `gpu-8xa10g` | 8 | `--cell …/28m_d4p8.yaml` | — | 18 | $293 |
+
+`--row 28M` with `fanout_size: 4` is deliberate: filenames sort by ascending demand, so a prefix
+fan-out is exactly the four shortest cells, and the two long ones go to eight devices where they fit
+under the cap. Packing the cells more finely across the two environments could reach ~16 h, at the cost
+of one submission per cell.
+
 ## Before you submit: what an expert review changed
 
 An independent review returned a stop-ship verdict on the commit before this one. Four defects would
