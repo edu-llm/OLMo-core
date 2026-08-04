@@ -654,6 +654,7 @@ def build_config(opts, overrides: List[str]):
         trainer=trainer_config,
         dataset_id=corpus.dataset_id,
         dataset_version=corpus.version,
+        init_seed=opts.init_seed,
     )
     return config.merge(overrides)
 
@@ -869,6 +870,12 @@ def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float, sli
                 "run_id": opts.run_name,
                 "dataset_id": config.dataset_id,
                 "dataset_version": config.dataset_version,
+                # BOTH seeds, because a paired analysis is only possible if each result
+                # says which data order and which initialisation produced it. Recording
+                # one and defaulting the other is how "n seeds" came to mean n data
+                # orderings of a single init.
+                "data_seed": opts.data_seed,
+                "init_seed": config.init_seed,
                 "gpu": device,
                 "torch": torch.__version__,
                 "cuda": torch.version.cuda,
@@ -1034,6 +1041,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--global-batch-size", type=int, default=256 * 1024)
     parser.add_argument("--rank-microbatch-size", type=int, default=16 * 1024)
     parser.add_argument("--data-seed", type=int, default=0)
+    # Weight init is a SEPARATE variance component from data order, and until this flag
+    # existed only `--data-seed` was exposed while `init_seed` stayed at its 12536 default.
+    # Every "n seeds" on this entry point was therefore n data orderings of ONE
+    # initialisation -- a narrower component than the FarmShare seed replicate measured,
+    # which biases any CI built from it optimistically. A paired design wants both varied.
+    parser.add_argument("--init-seed", type=int, default=12536)
     parser.add_argument("--dry-run", action="store_true", help="Resolve and print, do not train.")
     return parser
 
