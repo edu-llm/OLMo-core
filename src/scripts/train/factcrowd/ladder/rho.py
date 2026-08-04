@@ -213,9 +213,36 @@ def capacity_bits(params: int, r_e: float) -> float:
     return params * r_e
 
 
+def name_bits_proxy(n_entities: int, name_space: int) -> float:
+    """
+    Physics 3.3's ``N·log2(N0/N)`` term, kept only for reproducing published figures.
+
+    It is the first-order approximation to :func:`name_bits`, and it **understates** the real quantity
+    by 15.2% at N = 611,184 in a 160M name space -- 4.909 Mbit against 5.789. Use :func:`name_bits` for
+    anything this experiment reports; use this to compare against a number computed with the paper's
+    formula.
+
+    :param n_entities: Number of entities.
+    :param name_space: Size of the name universe.
+
+    :returns: The approximate name bits.
+    """
+    if n_entities == 0:
+        return 0.0
+    _require_non_negative("n_entities", n_entities)
+    _require_positive("name_space", name_space)
+    return n_entities * math.log2(name_space / n_entities)
+
+
 def name_bits(n_entities: int, name_space: int) -> float:
     """
-    The ``N·log2(N0/N)`` term: bits carried by *which* names exist out of the possible names.
+    Exact ``log2 C(N0, N)``: bits carried by *which* names exist out of the possible names.
+
+    Choosing which N of N0 names appear is a choice among ``C(N0, N)`` subsets, so its information
+    content is ``log2`` of that -- computed here through ``lgamma``, which is exact to double precision
+    at these sizes. ``N·log2(N0/N)`` is the leading term of the same quantity and is what Physics 3.3
+    writes; it is 15.2% low at our anchor, and that error lands directly on the x-axis every result is
+    plotted against. :func:`name_bits_proxy` keeps the published form for comparison.
 
     Zero when the corpus uses every available name, and larger the sparser the selection -- which is
     the right shape, because a name drawn from a wider universe is more surprising.
@@ -235,15 +262,17 @@ def name_bits(n_entities: int, name_space: int) -> float:
     _require_non_negative("n_entities", n_entities)
     _require_positive("name_space", name_space)
     if n_entities == 0:
-        # The reasoning-only control. N*log2(N0/N) has the limit 0 as N -> 0, but the expression
-        # itself divides by N, so the limit has to be written down rather than evaluated.
-        return 0.0
+        return 0.0  # the reasoning-only control: no names chosen, so no choice to describe
     if n_entities > name_space:
         raise OLMoConfigurationError(
             f"{n_entities:,} entities exceeds a name space of {name_space:,}, so two entities would "
             f"share a name and the corpus would assert contradictory facts about one key"
         )
-    return n_entities * math.log2(name_space / n_entities)
+    return (
+        math.lgamma(name_space + 1)
+        - math.lgamma(n_entities + 1)
+        - math.lgamma(name_space - n_entities + 1)
+    ) / math.log(2)
 
 
 def demanded_bits(n_entities: int, bits_per_entity: float, *, name_space: Optional[int]) -> float:
@@ -363,15 +392,17 @@ def solve(
     The only sanctioned way to obtain an entity count. A config states a demand; ``n_entities`` is
     derived here so the two cannot disagree.
 
-    Demand is **nonlinear in N** once the name term is included, so this bisects rather than
-    dividing. The derivative is ``bits_per_entity + log2(N0/N) - 1/ln2``, which is minimised at
-    ``N = name_space`` where it equals ``bits_per_entity - 1/ln2``. **So monotonicity -- and with it
-    the validity of the bisection -- requires ``bits_per_entity > 1/ln2 = 1.442695``**, and that is
-    checked rather than assumed. Below the threshold demand rises, peaks and falls, so a bisection
-    would both return non-closest answers and refuse reachable targets; at ``bits_per_entity = 1.0``
-    and a 160M name space the broken region is a quarter of the range. Any real schema here clears
-    the threshold by an order of magnitude -- the entropy axis's smallest non-zero cell is 24
-    bits/entity -- but a one-attribute debug schema would not.
+    Demand is **nonlinear in N** once the name term is included, so this bisects rather than dividing,
+    and the bisection needs monotonicity. With the exact name term the derivative is
+    ``bits_per_entity + log2((N0 - N)/N)``, which is positive for every ``N < N0/2`` at any positive
+    ``bits_per_entity`` -- so **the bracket is capped at N0/2** and monotonicity holds by construction
+    rather than by a threshold on the schema.
+
+    That cap costs nothing: ``log2 C(N0, N)`` is symmetric about ``N0/2``, so beyond it a wider corpus
+    would carry *fewer* name bits, which is not a region any cell should sit in. The largest cell in
+    the grid uses 1.8% of a 160M name space. An earlier version used the proxy ``N log2(N0/N)``, whose
+    derivative is ``bits_per_entity + log2(N0/N) - 1/ln2`` and which therefore needed
+    ``bits_per_entity > 1/ln2``; the exact term removes that requirement.
 
     On an exact tie between two entity counts the higher is kept. Which one is arbitrary; that it is
     deterministic is not.
@@ -400,33 +431,30 @@ def solve(
     _require_positive("tokens_per_bio", tokens_per_bio)
 
     target_bits = demand_bits_per_param * non_embedding_params
-    monotonicity_floor = 1.0 / math.log(2.0)
 
     def bits_at(n: int) -> float:
         return demanded_bits(n, bits_per_entity, name_space=name_space)
 
-    if name_space is not None and bits_per_entity <= monotonicity_floor:
+    if name_space is not None and bits_per_entity <= 0:
         raise OLMoConfigurationError(
-            f"'bits_per_entity' is {bits_per_entity:.4g}, at or below the 1/ln2 = "
-            f"{monotonicity_floor:.6f} threshold where demand stops being monotone in N once the "
-            f"name term is included. The derivative is bits_per_entity + log2(N0/N) - 1/ln2, so "
-            f"below the threshold demand rises, peaks near N0/e and falls -- and a bisection would "
-            f"then return non-closest answers and refuse reachable targets. Either use a schema "
-            f"carrying more bits per entity, or pass name_space=None to drop the name term and use "
-            f"the linear path."
+            f"'bits_per_entity' is {bits_per_entity:.4g}. With the name term the demand is monotone in "
+            f"N below N0/2 for any positive bits per entity, but at zero the attribute half contributes "
+            f"nothing and the entity count is not identified by a demand at all -- state it directly, "
+            f"as the entropy axis's b=0 cell does."
         )
 
     if name_space is None:
         n_entities = round(target_bits / bits_per_entity)
     else:
-        if bits_at(name_space) < target_bits:
+        if bits_at(max(1, name_space // 2)) < target_bits:
             raise OLMoConfigurationError(
                 f"demand of {demand_bits_per_param:.3f} bits/param against "
                 f"{non_embedding_params:,} params needs {target_bits:,.0f} bits, more than the "
                 f"{bits_at(name_space):,.0f} a name space of {name_space:,} can carry. Widen the "
                 f"name pools or lower the demand."
             )
-        low, high = 1, name_space
+        # Capped at N0/2, above which the exact name term turns over. See the docstring.
+        low, high = 1, max(1, name_space // 2)
         while low < high:
             mid = (low + high) // 2
             if bits_at(mid) < target_bits:

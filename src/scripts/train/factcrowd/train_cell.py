@@ -388,6 +388,7 @@ def build_trainer(
     import torch
     from factcrowd.corpus.source import BioTokenSource, TaskTokenSource
 
+    from olmo_core.config import DType
     from olmo_core.data import TokenizerConfig
     from olmo_core.data.composable import (
         ComposableDataLoaderConfig,
@@ -395,6 +396,7 @@ def build_trainer(
         MixingInstanceSource,
         MixingInstanceSourceSpec,
     )
+    from olmo_core.distributed.parallel import DataParallelType
     from olmo_core.optim import WSD, AdamWConfig
     from olmo_core.train import Duration, TrainerConfig
     from olmo_core.train.callbacks import (
@@ -404,7 +406,10 @@ def build_trainer(
         SpeedMonitorCallback,
         WandBCallback,
     )
-    from olmo_core.train.train_module import TransformerTrainModuleConfig
+    from olmo_core.train.train_module import (
+        TransformerDataParallelConfig,
+        TransformerTrainModuleConfig,
+    )
 
     spec = resolved.spec
     work_dir = str(args.work_dir)
@@ -412,7 +417,14 @@ def build_trainer(
     # The model. sizes.build asserts the built non-embedding count against the ladder, because rho is
     # computed from it and a 1% error there is a 1% error in every entity count.
     model_config = sizes_module.build(
-        spec.ladder_row, corpus.vocabulary.padded_size(), tie_word_embeddings=True
+        spec.ladder_row,
+        corpus.vocabulary.padded_size(),
+        tie_word_embeddings=True,
+        # Without this the parameters are initialised from TransformerConfig's default of 0, so every
+        # cell and every replicate starts from the same network and a "seed replicate" varies only the
+        # data. It varies with the replicate and not with the corpus, which is what makes a set of
+        # replicates a paired block over one fixed set of facts.
+        init_seed=spec.init_seed,
     )
 
     total_tokens = corpus.fact_tokens + sum(stream.num_tokens for stream in corpus.task_streams)
@@ -439,6 +451,23 @@ def build_trainer(
             checkpoint_steps,
         )
 
+    # DATA PARALLELISM IS NOT OPTIONAL, AND ITS ABSENCE IS SILENT.
+    #
+    # `parallelize_model` gates every wrapper behind `if dp_config is not None`, so a run launched with
+    # `torchrun --nproc-per-node=8` and no dp_config never wraps the model: eight ranks train eight
+    # independent models, gradients are never reduced, and the data loader still shards by rank -- so
+    # each model sees an eighth of the corpus at ~25 exposures rather than the 200 the whole design is
+    # built on. Nothing raises. Every smoke run in this repo passed because they run one process, which
+    # is the one world size where the omission is harmless.
+    on_gpu = torch.cuda.is_available()
+    dp_config = TransformerDataParallelConfig(
+        name=DataParallelType.fsdp,
+        # bf16 parameters with fp32 reductions on the platform, matching .edullm/train_on_corpus.py.
+        # fp32 throughout on CPU: bf16 gathers under gloo are slow and buy nothing, and the local smokes
+        # exist to check the wiring rather than the arithmetic precision.
+        param_dtype=DType.bfloat16 if on_gpu else None,
+        reduce_dtype=DType.float32,
+    )
     train_module_config = TransformerTrainModuleConfig(
         rank_microbatch_size=args.rank_microbatch_size,
         max_sequence_length=spec.sequence_length,
@@ -446,7 +475,14 @@ def build_trainer(
         # decay_fraction rather than decay: WSD defaults decay_fraction to 0.1 and refuses both,
         # so passing the step count would need decay_fraction=None alongside it.
         scheduler=WSD(warmup=resolved.warmup(steps), decay_fraction=spec.decay_fraction),
-        compile_model=args.compile_model,
+        # Compiled on a GPU, where the image carries a C compiler; off on CPU, where compilation costs
+        # more than the smoke run it would accelerate.
+        compile_model=args.compile_model if args.compile_model is not None else on_gpu,
+        dp_config=dp_config,
+        # Clipping at 1.0, as the reference does. A loss spike in a 155,000-step cell that nobody is
+        # watching is a lost day, and an unclipped spike changes the achieved-bits curve this
+        # experiment reads.
+        max_grad_norm=1.0,
     )
 
     fact_target: List[Tuple[Any, int, str]] = []
@@ -602,7 +638,7 @@ def build_trainer(
 
     data_loader_config = ComposableDataLoaderConfig(
         global_batch_size=spec.global_batch_size,
-        seed=spec.seed + 3,
+        seed=spec.order_seed,
         work_dir=work_dir,
         # The corpus is generated on demand rather than read from disk, so the loader's default of zero
         # workers puts that generation in the training process. The reasoning tasks are the slow ones --
@@ -686,14 +722,26 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> int:
     )
     parser.add_argument(
         "--compile-model",
+        dest="compile_model",
         action="store_true",
-        help="torch.compile the model. Off by default: Inductor needs a C compiler, and "
-        "older images do not carry one.",
+        default=None,
+        help="torch.compile the model. Defaults to on with a GPU and off without: the image carries a "
+        "C compiler, and compiling a CPU smoke costs more than it saves.",
+    )
+    parser.add_argument(
+        "--no-compile-model", dest="compile_model", action="store_false", help=argparse.SUPPRESS
     )
     parser.add_argument(
         "--dry-run", action="store_true", help="Resolve, build the corpus, print, stop"
     )
     parser.add_argument("--json", action="store_true", help="Print the plan as JSON")
+    parser.add_argument(
+        "--build-only",
+        action="store_true",
+        help="Build the model, the mixture and the trainer, print the settings the platform enforces, "
+        "and exit without training. Unlike --dry-run this exercises everything except fit(), which is "
+        "where the checkpoint schedule, the mixture targets and the parallelism config are decided.",
+    )
     args = parser.parse_args(argv)
 
     # Checked before anything expensive: an unexpanded variable is a submission defect, and finding
@@ -757,7 +805,24 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> int:
     prepare_training_environment(backend=backend)
     try:
         seed_all(spec.seed)
-        build_trainer(resolved, corpus, args).fit()
+        trainer = build_trainer(resolved, corpus, args)
+        if args.build_only:
+            checkpointer = trainer.callbacks["checkpointer"]
+            settings = {
+                "cell_id": spec.cell_id,
+                "max_checkpoints": checkpointer.max_checkpoints,
+                "ephemeral_save_interval": checkpointer.ephemeral_save_interval,
+                "checkpoint_steps": list(checkpointer.save_steps),
+                "max_duration_steps": trainer.max_duration.value,
+                "save_overwrite": trainer.save_overwrite,
+                "evaluator_callbacks": [n for n in trainer.callbacks if "eval" in n.lower()],
+                "wandb_enabled": trainer.callbacks["wandb"].enabled,
+                "data_parallel": "fsdp",
+                "records_cell": "factcrowd" in (trainer.callbacks["config_saver"].config or {}),
+            }
+            print("BUILD_ONLY " + json.dumps(settings))
+            return 0
+        trainer.fit()
     finally:
         teardown_training_environment()
     return 0

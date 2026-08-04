@@ -7,6 +7,7 @@ learning_rate: 0.003
 notes: ''
 reasoning_tokens: 1000000000
 related_reasoning_tokens: 50000000
+replicate: 0
 row: 13M
 seed: 1234
 sequence_length: 512

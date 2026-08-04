@@ -18,7 +18,19 @@ PYTHONPATH=src python3 src/scripts/train/factcrowd/train_cell.py local \
 
 It resolves the cell, generates the entity table, builds the vocabulary and the renderer, builds the
 token-offset index, and prints the plan with a sample biography. Add `--json` for a machine-readable
-version.
+version. The worst case in the grid — `64m_d2p4`, 2.79M entities — takes about two minutes and 8.6 MB of
+scratch.
+
+`--build-only` goes one step further: it builds the model, the mixture and the trainer, prints the
+settings the platform enforces, and exits without training. That is where the checkpoint schedule, the
+mixture targets and the parallelism config are decided, so it is the check worth running against a real
+cell before spending a queue slot:
+
+```bash
+PYTHONPATH=src python3 src/scripts/train/factcrowd/train_cell.py preflight \
+    --cell src/scripts/train/factcrowd/configs/cells/count/28m_d1p2.yaml \
+    --save-folder /tmp/preflight --build-only
+```
 
 Run the tests the same way. The suite is torch-free apart from the end-to-end smoke runs, which are
 marked `slow` and take a few minutes each because they train a real model in a subprocess:
@@ -45,11 +57,11 @@ run](https://github.com/edu-llm/platform/actions/workflows/submit-run.yml):
 | `wandb_project` | yours |
 
 ```
-bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone
-  src/scripts/train/factcrowd/train_cell.py "$EDULLM_RUN_ID"
-  --cell src/scripts/train/factcrowd/configs/cells/count/28m_d1p2.yaml
-  --save-folder "$EDULLM_CHECKPOINT_DIR"'
+bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone src/scripts/train/factcrowd/train_cell.py "$EDULLM_RUN_ID" --cell src/scripts/train/factcrowd/configs/cells/count/28m_d1p2.yaml --save-folder "$EDULLM_CHECKPOINT_DIR"'
 ```
+
+One line, deliberately. The newlines an earlier draft used sit *inside* the single quotes, so `bash -lc`
+reads them as statement separators and tries to run `src/scripts/...` as its own command.
 
 `bash -lc` is required — the container runs the command directly, so without it `$EDULLM_RUN_ID`
 arrives as fourteen literal characters. `--save-folder` must be on the line even though the program
@@ -63,19 +75,17 @@ Submit it as **three fan-outs, one per row**, so the rows run concurrently:
 
 | `--row` | `fanout_size` | tokens | wall clock on 8×H100 | cost |
 |---|---|---|---|---|
-| `13M` | 6 | 35.4B | 1.3 h | $74 |
-| `28M` | 6 | 73.3B | 4.7 h | $259 |
-| `64M` | 5 | 78.5B | 9.1 h | $499 |
+| `13M` | 6 | 34.7B | 1.3 h | $73 |
+| `28M` | 6 | 71.5B | 4.6 h | $252 |
+| `64M` | 5 | 76.6B | 8.8 h | $487 |
 
 ```
-bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone
-  src/scripts/train/factcrowd/train_cell.py "$EDULLM_RUN_ID"
-  --row 28M --save-folder "$EDULLM_CHECKPOINT_DIR"'
+bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone src/scripts/train/factcrowd/train_cell.py "$EDULLM_RUN_ID" --row 28M --save-folder "$EDULLM_CHECKPOINT_DIR"'
 ```
 
 with `fanout_size: 6` and `fanout_index_parameter: cell`. Each cell reads
-`AWS_BATCH_JOB_ARRAY_INDEX` and gets its own checkpoint prefix. Sequential the grid is 15.1 h and about
-$831; three jobs bring the wall clock to 9.1 h, and a failure in one row does not strand the others.
+`AWS_BATCH_JOB_ARRAY_INDEX` and gets its own checkpoint prefix. Sequential the grid is 14.7 h and about
+$812; three jobs bring the wall clock to 8.8 h, and a failure in one row does not strand the others.
 
 Those hours are `PRD.md` §10's FLOP estimate at 12/16/20% MFU per row, scaled to the current token
 counts — **not measured**. Read the real MFU off the first cell's first 50 steps and re-budget before
@@ -91,8 +101,8 @@ directory runs a different cell under the name that was approved:
 [0] 64m_ctrl  [1] 64m_d0p3  [2] 64m_d0p6  [3] 64m_d1p2  [4] 64m_d2p4
 ```
 
-The entropy sweep is a fourth job, `--sweep entropy --row 28M`, `fanout_size: 6`, 36.8B tokens,
-2.4 h and about $130.
+The entropy sweep is a fourth job, `--sweep entropy --row 28M`, `fanout_size: 6`, 36.0B tokens,
+2.3 h and about $127.
 It is the identified axis (`PRD.md` §3.1) and the cheapest thing here. Its indices sort alphabetically,
 so `[0] b0 [1] b16 [2] b24 [3] b32 [4] b4 [5] b8` — every cell is self-labelled, so the order is
 harmless, but it is not numeric.
@@ -114,6 +124,29 @@ rather than stored, so a checkpoint is only scoreable if the run recorded how to
 config replays the vocabulary, entity table and reasoning items exactly, and the fingerprints let a
 scorer prove it rebuilt the right ones rather than assume. Nothing about scoring needs to be decided
 before these jobs run.
+
+
+## Before you submit: what an expert review changed
+
+An independent review returned a stop-ship verdict on the commit before this one. Four defects would
+have invalidated the runs, and all four are fixed with regression tests. Two are worth knowing about
+because they change what you should expect to see:
+
+- **Eight GPUs used to train eight independent models.** No `dp_config` meant FSDP was never applied,
+  gradients were never reduced, and each rank saw an eighth of the corpus — ~25 exposures instead of
+  200. Now FSDP with bf16 parameters, fp32 reductions, clipping at 1.0 and compilation on GPU. Runtime
+  and cost estimates in this file describe *that* configuration; the older ones described fp32 without
+  compilation, so treat both as unmeasured until the 13M row reports its MFU.
+- **The entropy sweep varied the model.** Its vocabulary grew with entropy — 1,920 padded tokens at b=0
+  against 8,064 at b=32, i.e. 8.1% more parameters and a 4.2× wider softmax on the high-entropy arm.
+  Every cell now shares one union vocabulary. If you are running job 4, use a commit at or after this
+  one; earlier entropy results are not comparable across cells.
+
+The other two were latent: the reasoning eval set was 100% leaked from training by its keying, and
+`init_seed` was never set so replicates would have shared one initialisation. Neither had run yet.
+
+`PRD.md` §16.5 has the full account, including four places I judged differently from the review and the
+list of accepted-but-unbuilt work.
 
 ## Configs
 

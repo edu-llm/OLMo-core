@@ -74,17 +74,30 @@ def test_b_zero_is_a_legitimate_point_not_a_degenerate_one():
     schema = V.entropy_schema(0)
     assert schema.bits_per_entity == 0.0
     assert schema.words_per_entity == 24
-    assert all(len(pool) == 1 for pool in schema.schema.attributes)
+    # One *reachable* value per pool, out of a union pool shared with every other cell in the sweep.
+    # The pool is not shrunk to one word: doing that made the vocabulary a function of the treatment,
+    # so b=0 and b=32 differed by 8.1% in parameters and 4.2x in softmax width.
+    assert all(pool.active_size == 1 for pool in schema.schema.attributes)
+    assert all(
+        len(pool) == 2 ** (V.ENTROPY_VOCABULARY_BITS // 4) for pool in schema.schema.attributes
+    )
     # Names still vary, because entities must remain distinguishable keys.
     assert all(len(pool) > 1 for pool in schema.schema.names)
 
 
 def test_pool_size_is_a_power_of_two_at_every_level():
-    """``2^(b/4)``, so bits per pool is an integer and the arithmetic stays exact."""
+    """
+    The *active* size is ``2^(b/4)``, so bits per pool is an integer and the arithmetic stays exact.
+
+    The pool itself is the sweep's union and identical everywhere, which is what holds the model fixed
+    while the information content varies.
+    """
+    union = 2 ** (V.ENTROPY_VOCABULARY_BITS // 4)
     for bits in ENTROPY_LEVELS:
         for pool in V.entropy_schema(bits).schema.attributes:
-            assert len(pool) == 2 ** (bits // 4)
-            assert float(len(pool)).is_integer()
+            assert pool.active_size == 2 ** (bits // 4)
+            assert len(pool) == union
+            assert pool.bits == float(bits // 4)
 
 
 # --- bioS ------------------------------------------------------------------------------------------
@@ -250,12 +263,17 @@ def test_bits_not_divisible_by_the_word_count_are_refused_with_the_nearest_usabl
 
 def test_a_demand_needing_a_huge_vocabulary_is_refused():
     """
-    At b=64 the pools need 1.57M word types, an embedding table dwarfing the model.
+    Two refusals, and both matter.
 
-    The error names the way out -- more words per value spreads the same bits over smaller pools.
+    A level above the sweep's union is refused by name, because a cell whose pools were sized for itself
+    would carry a different model from the rest of the sweep -- the confound the union exists to remove.
+    And a union so wide that the embedding table dwarfs the model is refused with the way out: more
+    words per value spreads the same bits over smaller pools.
     """
-    with pytest.raises(OLMoConfigurationError, match="larger than the model") as excinfo:
+    with pytest.raises(OLMoConfigurationError, match="above the union vocabulary"):
         V.entropy_schema(64)
+    with pytest.raises(OLMoConfigurationError, match="larger than the model") as excinfo:
+        V.entropy_schema(64, vocabulary_bits=64)
     assert "words_per_value" in str(excinfo.value)
 
 
@@ -320,12 +338,14 @@ def test_the_entropy_sweep_reaches_the_demand_levels_the_prd_quotes():
             bits_per_entity=V.bits_per_entity_for(bits),
             name_space=name_space,
         )
-        assert with_names - got == pytest.approx(0.197, abs=0.001), bits
+        # 0.233 rather than 0.197: the name term is the exact log2 C(N0, N), and the proxy is
+        # 15.2% low at this entity count.
+        assert with_names - got == pytest.approx(0.233, abs=0.001), bits
 
 
 def test_the_b_zero_cell_is_not_zero_demand():
     """
-    Its attribute bits are zero, but distinct names still carry the name term: 0.197 bits/param.
+    Its attribute bits are zero, but distinct names still carry the name term: 0.233 bits/param.
 
     So the sweep's intercept is the name floor rather than the origin, and a plot drawn through zero
     would misplace every fitted line. Zero attribute bits is legal input to the demand arithmetic for
@@ -345,7 +365,7 @@ def test_the_b_zero_cell_is_not_zero_demand():
     )
     assert demand.attribute_bits == 0.0
     assert demand.name_bits > 0
-    assert demand.per_non_embedding_param == pytest.approx(0.197, abs=0.001)
+    assert demand.per_non_embedding_param == pytest.approx(0.233, abs=0.001)
 
     with pytest.raises(OLMoConfigurationError, match="'bits_per_entity' must be positive"):
         rho.solve(28_330_368, 1.2, bits_per_entity=0.0, name_space=None)

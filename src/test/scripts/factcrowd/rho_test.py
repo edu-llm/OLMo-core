@@ -56,15 +56,25 @@ def test_name_term_grows_as_the_selection_gets_sparser():
 
 def test_name_term_matches_the_magnitudes_the_prd_quotes():
     """
-    +16% of attribute demand at 714k entities and +10% at 6.4M, against a 160M name space.
+    +19.4% of attribute demand at 714k entities and +12.7% at 6.4M, against a 160M name space.
 
-    These are the figures section 3 uses to argue the term bends the trend rather than shifting it,
-    so they are checked rather than asserted in prose.
+    The share shrinks as the corpus grows, which is what makes the term bend the trend rather than
+    shift it. The exact ``log2 C(N0, N)`` runs above the ``N log2(N0/N)`` proxy the paper writes -- 15%
+    at 611k, 20% at 2.9M -- and understating it understates every cell's x-coordinate.
     """
-    for n_entities, expected_share in ((714_331, 0.164), (6_430_000, 0.097)):
+    for n_entities, expected_share in ((714_331, 0.194), (6_430_000, 0.127)):
         names = R.name_bits(n_entities, NAME_SPACE)
         attributes = n_entities * _BITS
         assert names / attributes == pytest.approx(expected_share, abs=0.003), n_entities
+
+    # The proxy is strictly below the exact term, and the gap widens with N.
+    for n_entities in (64_180, 611_184, 2_864_488):
+        proxy = R.name_bits_proxy(n_entities, NAME_SPACE)
+        exact = R.name_bits(n_entities, NAME_SPACE)
+        assert proxy < exact
+    assert R.name_bits(611_184, NAME_SPACE) / R.name_bits_proxy(
+        611_184, NAME_SPACE
+    ) == pytest.approx(1.179, abs=0.005)
 
 
 def test_the_name_term_shrinks_as_a_share_as_the_corpus_grows():
@@ -481,48 +491,57 @@ def test_solve_refuses_a_cell_too_small_to_be_a_corpus():
 # --- the monotonicity precondition the bisection depends on ---------------------------------------
 
 
-@pytest.mark.parametrize("bits_per_entity", [0.5, 1.0, 1.4, 1.442])
-def test_solve_refuses_a_schema_below_the_monotonicity_threshold(bits_per_entity):
+@pytest.mark.parametrize("bits_per_entity", [0.25, 0.5, 1.0, 1.442, 24.0])
+def test_solve_needs_no_schema_threshold_now_the_name_term_is_exact(bits_per_entity):
     """
-    Below ``1/ln2 = 1.442695`` demand is not monotone in N, so a bisection is simply invalid.
+    The 1/ln2 floor is gone, and its removal is a consequence rather than a relaxation.
 
-    The derivative ``bits_per_entity + log2(N0/N) - 1/ln2`` is minimised at ``N = name_space``, where
-    it is ``bits_per_entity - 1/ln2``. Under the threshold demand rises, peaks near ``N0/e`` and
-    falls, and the bisection then does two wrong things at once: it returns non-closest answers, and
-    it *refuses reachable targets* on the grounds that the endpoint value is too low. At
-    ``bits_per_entity = 1.0`` with a 1000-name space, targets of 1.01, 1.03 and 1.06 bits/param are
-    all achievable and were all refused.
+    With the proxy ``N log2(N0/N)`` the derivative was ``bits_per_entity + log2(N0/N) - 1/ln2``,
+    minimised at ``N = N0``, so monotonicity genuinely required ``bits_per_entity > 1/ln2``: below it a
+    bisection returned non-closest answers *and* refused reachable targets. With the exact
+    ``log2 C(N0, N)`` the derivative is ``bits_per_entity + log2((N0 - N)/N)``, positive for every
+    ``N < N0/2`` at any positive bits, so capping the bracket at N0/2 replaces the threshold entirely.
 
-    Any real schema clears this by an order of magnitude -- the entropy axis's smallest non-zero cell
-    is 24 bits/entity -- but a one-attribute debug schema would not, and nothing else would notice.
+    A one-attribute debug schema is therefore usable now, and what it returns is checked rather than
+    assumed to be sane.
     """
-    with pytest.raises(OLMoConfigurationError, match="monotone") as excinfo:
-        R.solve(1000, 1.03, bits_per_entity=bits_per_entity, name_space=1000)
-    assert "1.442695" in str(excinfo.value)
+    solved = R.solve(1000, 1.03, bits_per_entity=bits_per_entity, name_space=1000)
+    R.check(1000, 1.03, solved.n_entities, bits_per_entity=bits_per_entity, name_space=1000)
+    assert 0 < solved.n_entities <= 500  # inside the capped bracket
 
 
-def test_the_threshold_is_exactly_one_over_ln_two():
-    """Just above it the solve proceeds; just below it refuses. No fudge factor."""
-    just_above = 1.0 / math.log(2.0) + 1e-6
-    R.solve(1000, 1.0, bits_per_entity=just_above, name_space=1000, tolerance=0.5)
-    with pytest.raises(OLMoConfigurationError, match="monotone"):
-        R.solve(1000, 1.0, bits_per_entity=1.0 / math.log(2.0) - 1e-6, name_space=1000)
+def test_a_zero_bit_schema_is_still_refused_by_solve():
+    """
+    Zero bits per entity leaves the entity count unidentified by a demand, whatever the name term.
+
+    The entropy axis's b=0 cell states its count directly for exactly this reason.
+    """
+    with pytest.raises(OLMoConfigurationError, match="must be positive|not identified"):
+        R.solve(1000, 1.03, bits_per_entity=0.0, name_space=1000)
 
 
 def test_demand_really_is_monotone_above_the_threshold():
     """
-    The property the guard protects, verified by exhaustive walk rather than asserted.
+    The property the bisection needs, verified by exhaustive walk rather than asserted.
 
-    Checked at the threshold itself and at a real schema's bits/entity.
+    With the exact name term the derivative is ``bits_per_entity + log2((N0 - N)/N)``, positive for
+    every ``N < N0/2`` at *any* positive bits per entity -- so the walk runs well below the 1/ln2 floor
+    the proxy needed, and ``solve`` caps its bracket at N0/2 rather than checking a threshold.
     """
-    for bits_per_entity in (1.4427, 24.0, 47.592):
+    for bits_per_entity in (0.25, 1.0, 1.4427, 24.0, 47.592):
         for name_space in (1000, 160_000_000):
-            step = max(1, name_space // 5000)
+            half = name_space // 2
+            step = max(1, half // 5000)
             previous = -1.0
-            for n_entities in range(1, name_space + 1, step):
+            for n_entities in range(1, half + 1, step):
                 value = R.demanded_bits(n_entities, bits_per_entity, name_space=name_space)
                 assert value > previous, (bits_per_entity, name_space, n_entities)
                 previous = value
+
+    # And it genuinely turns over above the cap, which is why the cap is there: log2 C(N0, N) is
+    # symmetric about N0/2, so a wider corpus past it would carry fewer name bits.
+    peak = R.demanded_bits(500, 0.0, name_space=1000)
+    assert R.demanded_bits(900, 0.0, name_space=1000) < peak
 
 
 # --- solve() must not silently answer with something far off the request --------------------------
@@ -556,15 +575,23 @@ def test_the_residual_message_distinguishes_granularity_from_range():
 
 def test_solve_can_return_the_boundary_entity_counts():
     """
-    Exactly 1 and exactly ``name_space`` are legitimate answers, so the bracket must include them.
+    Exactly 1 and exactly ``N0/2`` are legitimate answers, so the bracket must include both ends.
 
     Neither boundary was exercised before, and a bracket of ``[2, name_space - 1]`` passed the suite.
+    The top of the bracket is N0/2 rather than N0 now that the name term is exact and symmetric about
+    that point -- past it a wider corpus carries fewer name bits, which no cell should sit in.
     """
-    at_top = R.demanded_bits(1000, 47.592, name_space=1000) / 1000
-    assert R.solve(1000, at_top, bits_per_entity=47.592, name_space=1000).n_entities == 1000
+    half = 500
+    at_top = R.demanded_bits(half, 47.592, name_space=1000) / 1000
+    assert R.solve(1000, at_top, bits_per_entity=47.592, name_space=1000).n_entities == half
 
     at_one = R.demanded_bits(1, 47.592, name_space=1000) / 1000
     assert R.solve(1000, at_one, bits_per_entity=47.592, name_space=1000).n_entities == 1
+
+    # And a demand only reachable above the cap is refused rather than answered from the wrong branch.
+    beyond = R.demanded_bits(half, 47.592, name_space=1000) / 1000 * 1.5
+    with pytest.raises(OLMoConfigurationError, match="name space"):
+        R.solve(1000, beyond, bits_per_entity=47.592, name_space=1000)
 
 
 def test_solve_then_check_always_agrees():
@@ -611,7 +638,7 @@ def test_demand_is_tied_to_the_functions_that_compute_its_parts():
 
     ``attribute_bits + name_bits == bits`` is satisfied by ``0 + a == a``, and the basis-ratio test
     only checks a ratio that is ``total/non_embedding`` whatever ``bits`` is. So every reported
-    x-coordinate could shift 16.4% undetected. These assertions tie the reported figure to the
+    x-coordinate could shift 19% undetected. These assertions tie the reported figure to the
     functions that define it, and pin one absolute value.
     """
     d = R.demand(
@@ -624,7 +651,7 @@ def test_demand_is_tied_to_the_functions_that_compute_its_parts():
     assert d.bits == pytest.approx(R.demanded_bits(714_331, _BITS, name_space=NAME_SPACE))
     assert d.name_bits == pytest.approx(R.name_bits(714_331, NAME_SPACE))
     assert d.attribute_bits == pytest.approx(714_331 * _BITS)
-    assert d.per_non_embedding_param == pytest.approx(1.397, abs=0.001)
+    assert d.per_non_embedding_param == pytest.approx(1.433, abs=0.001)
 
 
 def test_the_declared_constants_are_what_the_documents_quote():
@@ -660,7 +687,7 @@ def test_zero_attribute_bits_are_accepted_and_negative_ones_are_not():
     """
     only_names = R.demanded_bits(714_331, 0.0, name_space=NAME_SPACE)
     assert only_names == pytest.approx(R.name_bits(714_331, NAME_SPACE))
-    assert only_names / _P == pytest.approx(0.197, abs=0.001)
+    assert only_names / _P == pytest.approx(0.233, abs=0.001)
 
     with pytest.raises(OLMoConfigurationError, match="must not be negative"):
         R.demanded_bits(1000, -1.0, name_space=None)

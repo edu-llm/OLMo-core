@@ -83,6 +83,59 @@ def compare_words() -> Tuple[str, ...]:
     return ("Between", "and", "the", "earlier", "birth", "year", "?", "Answer", ":")
 
 
+SPLITS: Tuple[str, ...] = ("train", "eval")
+"""
+The generation splits. A task belongs to exactly one and cannot produce the other's items.
+
+The split is part of the key, not a convention, because a convention was not enough. The first version
+of this file mixed ``index ^ seed``, which makes the item set a *function of neither alone*: two seeds
+differing by 15 produce the same set of items, permuted, so ``item(i)`` under seed 1241 equals
+``item(i ^ 15)`` under seed 1238. Verified at 2,000/2,000. An evaluation set drawn that way is 100%
+leaked from training however the seed is chosen, and nothing about it looks wrong.
+"""
+
+_SPLIT_TAGS: Dict[str, int] = {
+    "train": 0x5F3759DF00000001,
+    "eval": 0xA5A5A5A500000002,
+}
+
+
+def item_key(*, class_tag: int, split: str, seed: int, index: int) -> int:
+    """
+    The 64-bit draw for one item, keyed by ``(class, split, seed, index)``.
+
+    Two rounds, and the structure is the point. The seed and split are mixed into a *key* first, then
+    combined with a separately mixed index. That makes the dependence on the seed non-translational: two
+    seeds no longer index the same sequence at an offset, so an eval item lands inside a training range
+    of N items only with probability about ``N / 2**64``. A single-round ``index ^ seed`` gives set
+    equality instead, which is the defect this replaces.
+
+    :param class_tag: Distinguishes task types, so two tasks cannot share a stream.
+    :param split: A member of :data:`SPLITS`.
+    :param seed: The task seed.
+    :param index: The item index.
+
+    :returns: The mixed draw.
+
+    :raises OLMoConfigurationError: If the split is unknown or the index is negative.
+    """
+    if split not in _SPLIT_TAGS:
+        raise OLMoConfigurationError(f"unknown split {split!r}; expected one of {SPLITS}")
+    if index < 0:
+        raise OLMoConfigurationError(f"item index must not be negative, got {index}")
+    mask = (1 << 64) - 1
+    key = int(
+        splitmix64(
+            np.array(
+                [np.uint64((int(seed) ^ _SPLIT_TAGS[split] ^ int(class_tag)) & mask)],
+                dtype=np.uint64,
+            )
+        )[0]
+    )
+    mixed_index = int(splitmix64(np.array([np.uint64((index + 1) & mask)], dtype=np.uint64))[0])
+    return int(splitmix64(np.array([np.uint64((key ^ mixed_index) & mask)], dtype=np.uint64))[0])
+
+
 class TaskItem:
     """
     One rendered reasoning item.
@@ -270,7 +323,16 @@ class ReasoningTask(ABC):
 
 class ManoTask(ReasoningTask):
     """
-    Mod-23 mental arithmetic with no chain of thought: Physics 4.1's Mano.
+    Mod-23 mental arithmetic with no chain of thought, in the spirit of Physics 4.1's Mano.
+
+    .. warning::
+        **This is not the published Mano, and that paper's accuracies do not transfer.** Upstream builds
+        recursive prefix trees over ``+``, ``-`` and ``x``, trains at variable lengths and evaluates at
+        exact length. This builds a flat infix expression of ten *operands* over ``+`` and ``x`` only,
+        evaluated left to right, at one fixed length, with zero excluded as a multiplicand. The
+        47.8-66.0 from-scratch range in PRD 8.3 describes a harder generator; this task needs its own
+        calibration, and the floor below is measured rather than cited for that reason. The class name is
+        a naming debt to be paid before anything is written up.
 
     An expression of ``length`` residues joined by ``+`` and ``*``, then ``=``, then the answer -- one
     token, evaluated left to right modulo 23. No intermediate steps appear, so the model has to hold
@@ -296,6 +358,7 @@ class ManoTask(ReasoningTask):
         domain_token: str,
         length: int = 10,
         seed: int = 0,
+        split: str = "train",
     ) -> None:
         if length < 2:
             raise OLMoConfigurationError(f"'length' must be at least 2, got {length}")
@@ -304,7 +367,10 @@ class ManoTask(ReasoningTask):
         self._vocabulary = vocabulary
         self._domain_token = domain_token
         self._length = length
+        if split not in SPLITS:
+            raise OLMoConfigurationError(f"unknown split {split!r}; expected one of {SPLITS}")
         self._seed = seed
+        self._split = split
 
         self._residue_ids = np.array(
             [vocabulary.id_of(f"<n{value}>") for value in range(MANO_MODULUS)], dtype=_TOKEN_DTYPE
@@ -338,8 +404,8 @@ class ManoTask(ReasoningTask):
     def item(self, index: int) -> TaskItem:
         # One mix per item gives 64 bits to spend; the expression needs `length` residues and
         # `length - 1` operator bits, which fits comfortably for any length worth training on.
-        draw = int(
-            splitmix64(np.array([np.uint64(index) ^ np.uint64(self._seed)], dtype=np.uint64))[0]
+        draw = item_key(
+            class_tag=0x4D414E4F, split=self._split, seed=self._seed, index=index  # 'MANO'
         )
         residues: List[int] = []
         operators: List[int] = []
@@ -418,6 +484,7 @@ class ManoTask(ReasoningTask):
             self._domain_token,
             str(self._length),
             str(self._seed),
+            self._split,
             str(MANO_MODULUS),
         ):
             raw = field.encode()
@@ -465,6 +532,7 @@ class CompareTask(ReasoningTask):
         probe_ids: np.ndarray,
         order_attribute: str = "birth_year",
         seed: int = 0,
+        split: str = "train",
     ) -> None:
         if probe_ids.size < 2:
             raise OLMoConfigurationError(
@@ -486,7 +554,10 @@ class CompareTask(ReasoningTask):
         self._vocabulary = vocabulary
         self._domain_token = domain_token
         self._probe_ids = probe_ids.astype(np.int64)
+        if split not in SPLITS:
+            raise OLMoConfigurationError(f"unknown split {split!r}; expected one of {SPLITS}")
         self._seed = seed
+        self._split = split
         self._order_pool_name = specs[order_attribute].pool_names[0]
         self._order_column = corpus_schema.pool_index[self._order_pool_name]
         self._order_attribute = order_attribute
@@ -553,9 +624,11 @@ class CompareTask(ReasoningTask):
         return (self._order_pool.values[index],)
 
     def item(self, index: int) -> TaskItem:
-        draw = splitmix64(
-            np.array([np.uint64(index) ^ (np.uint64(self._seed) << np.uint64(32))], dtype=np.uint64)
-        )[0]
+        draw = np.uint64(
+            item_key(
+                class_tag=0x434D5052, split=self._split, seed=self._seed, index=index  # 'CMPR'
+            )
+        )
         count = self._probe_ids.size
         first = self._probe_ids[int(draw % np.uint64(count))]
         # A second, distinct entity: offset by a nonzero amount modulo the count, which cannot collide.
@@ -610,6 +683,7 @@ class CompareTask(ReasoningTask):
             hashlib.sha256(self._probe_ids.tobytes()).hexdigest(),
             str(self._table.seed),
             str(self._seed),
+            self._split,
         ):
             raw = field.encode()
             digest.update(len(raw).to_bytes(8, "big"))

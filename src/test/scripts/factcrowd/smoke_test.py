@@ -18,6 +18,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -266,64 +267,107 @@ def test_the_three_way_mixture_trains_at_the_absolute_volumes_the_cell_states(tm
 
 
 @pytest.mark.slow
-def test_the_built_trainer_satisfies_every_platform_requirement():
+def test_two_ranks_reproduce_the_single_rank_optimisation():
     """
-    The settings the platform refuses a run for, or kills it over, asserted on a real trainer.
+    The check that would have caught the worst defect in this branch, and it needs two processes.
 
-    Each was a lost run for somebody: ``max_checkpoints`` at its default of three makes a prune delete
-    a key the workload role may not delete, so the run dies about an hour in having also thrown away
-    seven of the ten snapshots the bits curve needs; ``ephemeral_save_interval`` is refused in the
-    first seconds; the two evaluators fail while the trainer is being built; and ``max_duration``
-    defaults to one epoch. Reading them off the object is the only check that cannot drift from the
-    code.
+    ``parallelize_model`` gates every wrapper behind ``if dp_config is not None``. Without one, a run
+    started with ``torchrun --nproc-per-node=8`` trains **eight independent models**: no wrapper, no
+    gradient reduction, and the loader still shards by rank, so each model sees an eighth of the corpus
+    at roughly 25 exposures instead of 200. Nothing raises, and every single-process smoke passes --
+    world size one is the one size where the omission is invisible.
 
-    Also asserts the run records its own cell. The corpus is generated rather than stored, so a
-    checkpoint without it is weights nobody can attach to a demand -- and the scoring half of this
-    experiment does not exist yet, which makes that record the only thing standing between a finished
-    run and an unusable one.
+    Under FSDP with a fixed global batch the optimisation is world-size invariant, so two ranks must
+    reproduce the one-rank loss curve step for step. Unsynchronised gradients cannot.
     """
     pytest.importorskip("torch")
-    import argparse
-    import importlib.util
-    import sys
-    import tempfile
 
-    spec = importlib.util.spec_from_file_location("factcrowd_train_cell_plat", ENTRY_POINT)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-
-    with tempfile.TemporaryDirectory() as raw:
-        work = Path(raw)
-        cell = C.load_cell(SMOKE_CELL)
-        corpus = module.BuiltCorpus(cell.resolve(), work)
-        resolved = cell.resolve(vocab_size=corpus.vocabulary.padded_size())
-        trainer = module.build_trainer(
-            resolved,
-            corpus,
-            argparse.Namespace(
-                save_folder=str(work / "ck"),
-                work_dir=work,
-                rank_microbatch_size=2048,
-                compile_model=False,
-                num_workers=2,
-                run_name="plat",
-            ),
+    def losses_from(nproc: int, work: Path) -> list:
+        command = [sys.executable]
+        if nproc > 1:
+            command += ["-m", "torch.distributed.run", f"--nproc-per-node={nproc}", "--standalone"]
+        command += [
+            str(ENTRY_POINT),
+            f"ranks{nproc}",
+            "--cell",
+            str(SMOKE_CELL),
+            "--save-folder",
+            str(work / "ck"),
+            "--work-dir",
+            str(work / "wd"),
+            "--rank-microbatch-size",
+            "1024",
+        ]
+        result = subprocess.run(
+            command,
+            cwd=str(REPO_ROOT),
+            env=dict(os.environ, PYTHONPATH=str(REPO_ROOT / "src")),
+            capture_output=True,
+            text=True,
+            timeout=1800,
         )
+        assert result.returncode == 0, result.stdout[-2500:] + result.stderr[-2500:]
+        output = result.stdout + result.stderr
+        assert f"(dp={nproc},)" in output, "FSDP was not applied at this world size"
+        return [
+            float(line.split("=")[1]) for line in output.splitlines() if "train/CE loss=" in line
+        ]
 
-        checkpointer = trainer.callbacks["checkpointer"]
-        assert checkpointer.max_checkpoints is None
-        assert checkpointer.ephemeral_save_interval is None
-        assert trainer.max_duration.unit == "steps" and trainer.max_duration.value > 0
-        assert not [name for name in trainer.callbacks if "eval" in name.lower()]
-        assert not trainer.save_overwrite
+    with tempfile.TemporaryDirectory() as one, tempfile.TemporaryDirectory() as two:
+        single = losses_from(1, Path(one))
+        doubled = losses_from(2, Path(two))
 
-        # W&B off unless the platform named a project, so this never needs an API key locally.
-        assert trainer.callbacks["wandb"].enabled is False
-        assert trainer.callbacks["wandb"].name == "plat"
+    assert single and len(single) == len(doubled), (single, doubled)
+    for a, b in zip(single, doubled):
+        assert abs(a - b) < 0.02, (single, doubled)
 
-        recorded = trainer.callbacks["config_saver"].config["factcrowd"]
-        assert recorded["cell"]["cell_id"] == cell.cell_id
-        assert recorded["fingerprints"]["schema"] and recorded["fingerprints"]["vocabulary"]
-        assert recorded["checkpoint_steps"] == sorted(set(recorded["checkpoint_steps"]))
+
+@pytest.mark.slow
+def test_the_built_trainer_satisfies_every_platform_requirement(tmp_path):
+    """
+    The settings the platform refuses a run for, or kills it over, read off a real built trainer.
+
+    Run through ``--build-only`` as a subprocess rather than by calling ``build_trainer`` in-process,
+    because the trainer now requires a distributed context: ``dp_config`` is set unconditionally, and
+    OLMo-core refuses a parallelism config outside distributed training. That refusal is worth keeping
+    strict -- quietly dropping FSDP when the process group is missing is precisely the silent failure
+    that had eight ranks training eight independent models -- so the test adapts to the program rather
+    than the program to the test.
+
+    Each assertion here was a lost run for somebody: ``max_checkpoints`` at its default of three makes a
+    prune delete a key the workload role may not delete, and throws away seven of the ten snapshots the
+    bits curve needs; ``ephemeral_save_interval`` is refused in the first seconds; the two evaluators
+    fail while the trainer is being built; ``max_duration`` defaults to one epoch.
+    """
+    pytest.importorskip("torch")
+    result = run_entry_point(
+        "platcheck",
+        "--cell",
+        str(SMOKE_CELL),
+        "--save-folder",
+        str(tmp_path / "ck"),
+        "--work-dir",
+        str(tmp_path / "work"),
+        "--rank-microbatch-size",
+        "2048",
+        "--build-only",
+        cwd=REPO_ROOT,
+    )
+    assert result.returncode == 0, result.stdout[-2500:] + result.stderr[-2500:]
+    output = result.stdout + result.stderr
+
+    line = next(text for text in output.splitlines() if text.startswith("BUILD_ONLY "))
+    settings = json.loads(line[len("BUILD_ONLY ") :])
+
+    assert settings["max_checkpoints"] is None
+    assert settings["ephemeral_save_interval"] is None
+    assert settings["max_duration_steps"] > 0
+    assert settings["evaluator_callbacks"] == []
+    assert settings["save_overwrite"] is False
+    # FSDP applied, which is the fix a single-process loss curve cannot verify on its own.
+    assert settings["data_parallel"] == "fsdp"
+    assert "Applied FSDP" in output
+    # W&B off unless the platform named a project, so this never needs an API key locally.
+    assert settings["wandb_enabled"] is False
+    # And the run records its own cell, without which a finished checkpoint is unscoreable.
+    assert settings["records_cell"] is True

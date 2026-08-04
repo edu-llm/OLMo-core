@@ -317,9 +317,12 @@ def test_the_probe_subset_is_the_same_people_in_every_cell():
 
 def test_probe_size_fits_the_smallest_cell_in_the_grid():
     """
-    13M at a demand of 0.30 bits/param is 64,180 entities with the name term, so 39k are non-probe.
+    13M at a demand of 0.30 bits/param is 62,609 entities with the name term, so 37k are non-probe.
 
-    Without the name term it would read 79,397 and 54k. The docstring quotes the former.
+    62,609 rather than the 64,180 an earlier draft quoted, because the name term is now the exact
+    ``log2 C(N0, N)`` rather than its first-order proxy ``N log2(N0/N)``; the proxy is 11.3% low at this
+    size, and understating demand means overstating the entity count that meets it. Without the name
+    term at all it would read 79,397.
     """
     from factcrowd.ladder import rho
 
@@ -327,7 +330,7 @@ def test_probe_size_fits_the_smallest_cell_in_the_grid():
     smallest = rho.solve(
         12_595_456, 0.30, bits_per_entity=schema.bits_per_entity, name_space=schema.name_space
     ).n_entities
-    assert smallest == pytest.approx(64_180, rel=0.01)
+    assert smallest == pytest.approx(62_609, rel=0.01)
     assert E.PROBE_SIZE < smallest
     assert smallest - E.PROBE_SIZE > 30_000
 

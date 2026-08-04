@@ -46,7 +46,7 @@ import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 
@@ -220,21 +220,37 @@ class AttributePool:
 
     :param name: Attribute name, used in rendering and in the bit-counter's span labels.
     :param values: The closed set of values. Order is meaningful: an entity stores an index.
-    :param allow_singleton: Permit a pool of exactly one value, which carries zero bits. Off by
+    :param allow_singleton: Permit a pool of exactly one *active* value, which carries zero bits. Off by
         default because a singleton pool is nearly always a mistake; the exception is the entropy
         axis's ``b=0`` cell, where every entity sharing one value tuple *is* the manipulation.
+    :param active: How many leading values entities may actually be assigned, defaulting to all of
+        them. The rest stay in the vocabulary and are never sampled.
+
+        This exists to hold the *model* fixed while the information content varies. The entropy axis
+        used to size each pool at ``2**(b/4)``, which made the vocabulary a function of the treatment:
+        1,920 padded tokens at b=0 against 8,064 at b=32, so the high-entropy cell carried **8.1% more
+        parameters and a 4.2x larger softmax** than the cell it was being compared with. Those biases
+        run opposite ways -- extra parameters can hide crowding, a bigger softmax can manufacture a
+        reasoning decline -- so the axis could not identify anything. Now every cell shares one union
+        pool and differs only in how much of it is reachable.
     """
 
     name: str
     values: Tuple[str, ...]
     allow_singleton: bool = False
+    active: Optional[int] = None
 
     def __post_init__(self) -> None:
-        floor = 1 if self.allow_singleton else 2
-        if len(self.values) < floor:
+        if self.active is not None and not 0 < self.active <= len(self.values):
             raise OLMoConfigurationError(
-                f"pool '{self.name}' has {len(self.values)} values; a pool of one carries no bits "
-                f"and a pool of none cannot be sampled. Pass allow_singleton=True if a zero-bit "
+                f"pool '{self.name}' declares {self.active} active values out of "
+                f"{len(self.values)}; it must be positive and no larger than the pool"
+            )
+        floor = 1 if self.allow_singleton else 2
+        if self.active_size < floor:
+            raise OLMoConfigurationError(
+                f"pool '{self.name}' has {self.active_size} active values; a pool of one carries no "
+                f"bits and a pool of none cannot be sampled. Pass allow_singleton=True if a zero-bit "
                 f"pool is intended -- the entropy axis's b=0 cell is the one place it is."
             )
         if len(set(self.values)) != len(self.values):
@@ -244,9 +260,20 @@ class AttributePool:
             )
 
     @property
+    def active_size(self) -> int:
+        """How many values entities are actually assigned. The whole pool unless ``active`` is set."""
+        return len(self.values) if self.active is None else self.active
+
+    @property
     def bits(self) -> float:
-        """Bits carried by one index into this pool: ``log2(len(values))``, exactly."""
-        return math.log2(len(self.values))
+        """
+        Bits carried by one index into this pool: ``log2(active_size)``, exactly.
+
+        The *active* size, not the vocabulary size. An unreachable value carries no information about
+        an entity, so counting it would overstate demand -- and on the entropy axis every cell would
+        then report the union's bits rather than its own.
+        """
+        return math.log2(self.active_size)
 
     def __len__(self) -> int:
         return len(self.values)
@@ -325,6 +352,7 @@ class Schema:
                 field(kind.encode())
                 field(pool.name.encode())
                 field(len(pool).to_bytes(8, "big"))
+                field(pool.active_size.to_bytes(8, "big"))
                 for value in pool.values:
                     field(value.encode())
         return digest.hexdigest()
@@ -418,7 +446,7 @@ class EntityTable:
         attributes = np.empty((n_entities, len(schema.attributes)), dtype=_INDEX_DTYPE)
         for column, (pool, stream) in enumerate(zip(schema.attributes, streams)):
             attributes[:, column] = np.random.default_rng(stream).integers(
-                0, len(pool), size=n_entities, dtype=_INDEX_DTYPE
+                0, pool.active_size, size=n_entities, dtype=_INDEX_DTYPE
             )
 
         codes = name_codes(
@@ -539,7 +567,8 @@ class EntityTable:
                     f"table would otherwise load clean and fail inside a dataloader worker."
                 )
             for column, pool in enumerate(pools):
-                if array.shape[0] and int(array[:, column].max()) >= len(pool):
+                limit = pool.active_size if label == "attributes" else len(pool)
+                if array.shape[0] and int(array[:, column].max()) >= limit:
                     raise OLMoConfigurationError(
                         f"the table at {directory} has an index of "
                         f"{int(array[:, column].max()):,} in {label} column {column} "

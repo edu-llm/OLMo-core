@@ -163,8 +163,17 @@ class CellSpec:
         the cells it is the reference for. So a cell's reasoning total is this times the number of
         slices it carries. Zero marks a facts-only cell; the reasoning-only control states zero fact
         demand instead.
+    :param replicate: Which replicate of this cell. Changes the model initialisation and the data
+        order and **nothing else** -- the corpus, the reasoning items and their volumes are identical
+        across replicates, so a set of replicates is a paired block over one fixed set of facts.
+
+        This is what makes seed replication mean anything here. ``TransformerConfig.init_seed``
+        defaults to 0 and was never set, so every cell and every notional replicate initialised the
+        same model: varying the cell seed changed the corpus but not the network, and three "seeds"
+        would have shared one initialisation. A shared eval set reduces measurement noise; it does not
+        create trained-model replicates.
     :param seed: Seeds the entity table, the phrasing choice and the stream order, offset so the three
-        stay independent.
+        stay independent. Held fixed across replicates.
     :param table_entities: Entities to generate in the table, if more than the slice uses. Lets several
         cells share one table on disk.
     :param notes: Free text carried into the run's config record.
@@ -186,6 +195,7 @@ class CellSpec:
     decay_fraction: float = 0.1
     reasoning_tokens: int = 0
     related_reasoning_tokens: int = 0
+    replicate: int = 0
     seed: int = 1234
     table_entities: Optional[int] = None
     notes: str = ""
@@ -261,6 +271,10 @@ class CellSpec:
                 f"cell '{self.cell_id}': 'decay_fraction' must be in (0, 1), got "
                 f"{self.decay_fraction}"
             )
+        if self.replicate < 0:
+            raise OLMoConfigurationError(
+                f"cell '{self.cell_id}': 'replicate' must not be negative, got {self.replicate}"
+            )
         if self.related_reasoning_tokens < 0:
             raise OLMoConfigurationError(
                 f"cell '{self.cell_id}': 'related_reasoning_tokens' must not be negative, got "
@@ -284,6 +298,20 @@ class CellSpec:
             )
 
     # --- derived quantities ------------------------------------------------------------------------
+
+    @property
+    def init_seed(self) -> int:
+        """
+        Seed for parameter initialisation. Varies with the replicate, never with the corpus.
+
+        A prime stride so a replicate's initialisation cannot coincide with another cell's seed.
+        """
+        return self.seed + 9_973 * self.replicate
+
+    @property
+    def order_seed(self) -> int:
+        """Seed for shuffling and batching. Varies with the replicate, like the initialisation."""
+        return self.seed + 3 + 9_973 * self.replicate
 
     @property
     def is_control(self) -> bool:
@@ -611,6 +639,9 @@ class ResolvedCell:
             "reasoning_tokens": self.reasoning_total,
             "total_tokens": self.total_tokens(mean_tokens_per_bio),
             "steps": steps,
+            "replicate": self.spec.replicate,
+            "init_seed": self.spec.init_seed,
+            "order_seed": self.spec.order_seed,
             "warmup_steps": self.warmup(steps),
             "warmup_pct": round(100 * self.warmup(steps) / steps, 2),
             "cumulative_lr_times_wd": round(

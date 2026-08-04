@@ -435,3 +435,87 @@ def test_the_same_reasoning_items_appear_in_every_cell():
         assert bios_vocabulary.decode(left.item(index).tokens) == entropy_vocabulary.decode(
             across.item(index).tokens
         )
+
+
+def test_the_eval_split_shares_no_item_with_training():
+    """
+    The defect this keying exists to prevent, and it was total rather than partial.
+
+    The first version mixed ``index ^ seed``, which makes the item set independent of the seed: seeds
+    1238 and 1241 differ by 15, so ``item(i)`` under one equalled ``item(i ^ 15)`` under the other and
+    every one of 2,000 checked items matched. An evaluation set drawn that way is 100% leaked however
+    the seed is chosen, and it looks completely ordinary.
+
+    Now the split is part of the key, so disjointness does not depend on choosing a lucky seed -- it
+    holds even when the seeds are identical, which is what this checks.
+    """
+    _, vocabulary, table = assemble(3_000)
+    train = T.ManoTask(vocabulary, domain_token="<mano>", length=10, seed=1238, split="train")
+    other_seed = T.ManoTask(vocabulary, domain_token="<mano>", length=10, seed=1241, split="eval")
+    same_seed = T.ManoTask(vocabulary, domain_token="<mano>", length=10, seed=1238, split="eval")
+
+    seen = {train.item(i).tokens.tobytes() for i in range(60_000)}
+    for held_out in (other_seed, same_seed):
+        overlap = sum(1 for i in range(4_000) if held_out.item(i).tokens.tobytes() in seen)
+        assert overlap == 0, overlap
+    # The old translation attack, explicitly.
+    assert all(
+        other_seed.item(i).tokens.tobytes() != train.item(i ^ 15).tokens.tobytes()
+        for i in range(500)
+    )
+    # And the split reaches the fingerprint, so a checkpoint cannot claim the wrong one.
+    assert train.fingerprint() != same_seed.fingerprint()
+
+
+def test_the_compare_eval_split_repeats_a_pair_only_by_chance():
+    """
+    The related slice cannot be *keyed* into the training set, but it can collide with it.
+
+    Mano draws from ~2^54 expressions, so a held-out item is new with probability ~1. Compare draws
+    pairs from a finite probe subset, so some eval pair will have been asked in training however the
+    keying works -- that is a property of the population, not of the generator, and it is the 0.84%
+    contamination the grid's real budget implies over 25,000 probe entities.
+
+    What the keying has to guarantee is that the overlap is *chance*, not structure. Here 3,000 probe
+    entities give 4.5M unordered pairs against 40,000 training items, so the birthday expectation is
+    about 0.9% and anything near 100% would mean the splits share a stream.
+    """
+    schema, vocabulary, table = assemble(3_000)
+    kwargs = dict(domain_token="<compare>", probe_ids=table.probe_ids, seed=11)
+    train = T.CompareTask(table, schema, vocabulary, split="train", **kwargs)
+    held = T.CompareTask(table, schema, vocabulary, split="eval", **kwargs)
+
+    seen = {train.item(i).tokens.tobytes() for i in range(40_000)}
+    overlap = sum(1 for i in range(3_000) if held.item(i).tokens.tobytes() in seen) / 3_000
+    assert overlap < 0.05, overlap  # chance is ~0.9%; the old keying gave 1.0
+
+    # The draws themselves share nothing, which is the part the keying is responsible for.
+    train_keys = {
+        T.item_key(class_tag=0x434D5052, split="train", seed=11, index=i) for i in range(40_000)
+    }
+    assert not any(
+        T.item_key(class_tag=0x434D5052, split="eval", seed=11, index=i) in train_keys
+        for i in range(3_000)
+    )
+
+
+def test_an_unknown_split_is_refused():
+    """A typo'd split would otherwise generate a third, silently-overlapping stream."""
+    _, vocabulary, _ = assemble(50)
+    with pytest.raises(OLMoConfigurationError, match="unknown split"):
+        T.ManoTask(vocabulary, domain_token="<mano>", length=10, split="dev")
+
+
+def test_the_two_tasks_do_not_share_a_stream_even_at_one_seed():
+    """
+    The class tag separates them, so Mano and Compare at the same seed and split are unrelated.
+
+    Without it two tasks would walk the same 64-bit sequence, which is not wrong so much as an
+    unnecessary coupling between two endpoints that are meant to be independent.
+    """
+    keys = {
+        T.item_key(class_tag=tag, split="train", seed=7, index=i)
+        for tag in (0x4D414E4F, 0x434D5052)
+        for i in range(200)
+    }
+    assert len(keys) == 400

@@ -11,6 +11,7 @@ here so a hand edit cannot ship a cell that does not add up.
 torch-gated bug earlier in this branch argued for.
 """
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -590,3 +591,65 @@ def test_the_two_axes_render_different_lengths_so_one_mean_cannot_serve_both():
     wrong = cell.total_tokens(bios.mean_tokens_per_bio)
     right = cell.total_tokens(entropy.mean_tokens_per_bio)
     assert wrong > 1.5 * right, (wrong, right)
+
+
+def test_the_entropy_sweep_holds_the_model_fixed_while_entropy_varies():
+    """
+    One vocabulary, one padded size, one parameter count across the sweep. This is the primary axis.
+
+    Sizing each cell's pools at ``2**(b/4)`` made the vocabulary a function of the treatment: 1,920
+    padded tokens at b=0 against 8,064 at b=32, so the high-entropy cell carried 8.1% more trainable
+    parameters and a 4.2x wider softmax than the cell it is compared against. Those two biases run in
+    opposite directions -- more parameters can hide crowding, a wider softmax can manufacture a
+    reasoning decline -- so the axis could not identify anything at all. Now the pools are the sweep's
+    union and only the reachable prefix changes.
+    """
+    literals = R.literal_words_of(
+        R.entropy_templates(V.ENTROPY_ATTRIBUTES, V.ENTROPY_WORDS_PER_VALUE)
+    )
+    sizes_seen, fingerprints, bits = set(), set(), []
+    for cell in C.entropy_sweep_cells("28M"):
+        assert cell.bits_per_attribute is not None
+        schema = V.entropy_schema(cell.bits_per_attribute, reserved=tuple(literals) + ("<facts>",))
+        vocabulary = Vo.Vocabulary.build(
+            schema.schema, literal_words=literals, domain_tokens=("<facts>",)
+        )
+        sizes_seen.add(vocabulary.padded_size())
+        fingerprints.add(vocabulary.fingerprint())
+        bits.append(schema.schema.bits_per_entity)
+
+    assert len(sizes_seen) == 1, sizes_seen
+    assert len(fingerprints) == 1, "the vocabulary must be byte-identical across the sweep"
+    # And the treatment still varies over the full range, which is the point of holding the rest fixed.
+    assert bits == sorted(bits) and bits[0] == 0.0 and bits[-1] > 100
+
+
+def test_a_replicate_changes_the_network_and_the_order_but_not_the_corpus():
+    """
+    What makes seed replication mean anything: three replicates are a paired block over one corpus.
+
+    ``TransformerConfig.init_seed`` defaults to 0 and was never set, so every cell -- and every
+    notional replicate -- initialised the identical network, and changing the cell seed varied the
+    corpus instead. Three "seeds" would then have shared one initialisation while differing in the facts
+    they stored, which is the opposite of a replicate.
+    """
+    base = C.CellSpec(
+        cell_id="28m_b8",
+        row="28M",
+        sweep="entropy",
+        bits_per_attribute=8,
+        n_entities=595_367,
+        reasoning_tokens=1_000_000_000,
+    )
+    replicates = [replace(base, replicate=r) for r in (0, 1, 2)]
+
+    assert len({c.init_seed for c in replicates}) == 3
+    assert len({c.order_seed for c in replicates}) == 3
+    # The corpus seed is untouched, so the facts, the reasoning items and their volumes are identical.
+    assert len({c.seed for c in replicates}) == 1
+    assert len({c.resolve().n_entities for c in replicates}) == 1
+    assert len({c.resolve().reasoning_total for c in replicates}) == 1
+    # An init seed must never collide with another replicate's order seed.
+    assert not ({c.init_seed for c in replicates} & {c.order_seed for c in replicates})
+    with pytest.raises(OLMoConfigurationError, match="'replicate' must not be negative"):
+        replace(base, replicate=-1)

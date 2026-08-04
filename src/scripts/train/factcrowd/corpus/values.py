@@ -33,7 +33,7 @@ is satisfied by composition: four ordinary-looking words, not one random string.
 
 import math
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from olmo_core.exceptions import OLMoConfigurationError
 
@@ -43,6 +43,7 @@ __all__ = [
     "ValueSpec",
     "CorpusSchema",
     "ENTROPY_ATTRIBUTES",
+    "ENTROPY_VOCABULARY_BITS",
     "ENTROPY_WORDS_PER_VALUE",
     "allocate_words",
     "REAL_WORDS_BY_POOL",
@@ -55,6 +56,14 @@ __all__ = [
     "NAME_SPACE",
 ]
 
+
+ENTROPY_VOCABULARY_BITS = 32
+"""
+The entropy sweep's maximum ``bits_per_attribute``, which sizes the union vocabulary for every cell.
+
+Every cell in a sweep must pass the same value, or the axis varies the model alongside the information
+content it is supposed to isolate. A sweep-level constant rather than a per-cell field for that reason.
+"""
 
 ENTROPY_ATTRIBUTES = 6
 """
@@ -783,6 +792,7 @@ def _build_pools(
     *,
     allow_singleton: bool = False,
     reserved: Iterable[str] = (),
+    active: Optional[int] = None,
 ) -> Tuple[Tuple[AttributePool, ...], Tuple[AttributePool, ...]]:
     """
     Build the attribute and name pools together, so all of them draw from one disjoint allocation.
@@ -795,7 +805,7 @@ def _build_pools(
     every = list(attribute_sizes) + list(zip(_NAME_POOLS, name_pool_sizes))
     words = allocate_words(every, reserved=reserved)
     attributes = tuple(
-        AttributePool(name=name, values=words[name], allow_singleton=allow_singleton)
+        AttributePool(name=name, values=words[name], allow_singleton=allow_singleton, active=active)
         for name, _ in attribute_sizes
     )
     names = tuple(AttributePool(name=name, values=words[name]) for name in _NAME_POOLS)
@@ -846,6 +856,7 @@ def entropy_schema(
     words_per_value: int = ENTROPY_WORDS_PER_VALUE,
     name_pool_sizes: Sequence[int] = DEFAULT_NAME_POOL_SIZES,
     reserved: Iterable[str] = (),
+    vocabulary_bits: int = ENTROPY_VOCABULARY_BITS,
 ) -> CorpusSchema:
     """
     The entropy-axis schema: ``n_attributes`` attributes of ``words_per_value`` words each.
@@ -867,11 +878,15 @@ def entropy_schema(
         sweep tokens along with bits.
     :param name_pool_sizes: See :func:`bios_schema`.
     :param reserved: Words the pools must avoid. See :func:`allocate_words`.
+    :param vocabulary_bits: The **sweep's maximum** ``bits_per_attribute``, which sizes every pool.
+        Shared by every cell so the vocabulary, the padded size, the parameter count and the token ids
+        are identical across the sweep; only the reachable prefix of each pool changes. Defaults to
+        :data:`ENTROPY_VOCABULARY_BITS`.
 
     :returns: The schema and its attribute grouping.
 
-    :raises OLMoConfigurationError: If ``bits_per_attribute`` is negative, or not divisible by
-        ``words_per_value``, or if the implied pool size exceeds a sane vocabulary budget.
+    :raises OLMoConfigurationError: If ``bits_per_attribute`` is negative, not divisible by
+        ``words_per_value``, above ``vocabulary_bits``, or if the union pool exceeds a sane budget.
     """
     if bits_per_attribute < 0:
         raise OLMoConfigurationError(
@@ -887,7 +902,20 @@ def entropy_schema(
             f"{words_per_value * (bits_per_attribute // words_per_value + 1)}."
         )
 
-    pool_size = 2 ** (bits_per_attribute // words_per_value)
+    active_size = 2 ** (bits_per_attribute // words_per_value)
+    # The pool is sized by the *union* over the sweep, not by this cell. Every entropy cell therefore
+    # shares one vocabulary, one padded size, one parameter count and one set of token ids, and differs
+    # only in how many of each pool's words any entity can be assigned. Sizing pools per cell made the
+    # vocabulary a function of the treatment -- 1,920 padded tokens at b=0 against 8,064 at b=32, i.e.
+    # 8.1% more parameters and a 4.2x larger softmax on the high-entropy arm -- which is a confound
+    # running opposite ways in the two things this axis measures.
+    pool_size = 2 ** (vocabulary_bits // words_per_value)
+    if active_size > pool_size:
+        raise OLMoConfigurationError(
+            f"bits_per_attribute={bits_per_attribute} needs {active_size:,} values per pool, above "
+            f"the union vocabulary's {pool_size:,} at vocabulary_bits={vocabulary_bits}. Raise "
+            f"vocabulary_bits to the sweep's maximum -- every cell in a sweep must share one."
+        )
     total_words = n_attributes * words_per_value * pool_size
     if total_words > 65_536:
         raise OLMoConfigurationError(
@@ -905,7 +933,11 @@ def entropy_schema(
         values.append(ValueSpec(name=f"attr{attribute}", pool_names=pool_names))
 
     attributes, names = _build_pools(
-        attribute_sizes, name_pool_sizes, allow_singleton=True, reserved=reserved
+        attribute_sizes,
+        name_pool_sizes,
+        allow_singleton=True,
+        reserved=reserved,
+        active=active_size,
     )
     return CorpusSchema(schema=Schema(attributes=attributes, names=names), values=tuple(values))
 

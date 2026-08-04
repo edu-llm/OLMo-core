@@ -20,7 +20,9 @@ revises the numbers) — web pages are filtered out "to leave more model capacit
 mini size models," and "the model simply does not have the capacity to store too much factual
 knowledge" — with no controlled ablation anywhere in the report. The report's own table contradicts
 it: phi-3-small at 7B scores 59.1 on 5-shot TriviaQA against phi-3-mini at 3.8B scoring 64.0, while
-MMLU rises 68.8 to 75.3. Nearly doubling parameters made factual recall worse. Microsoft dropped the
+MMLU rises 68.8 to 75.3. Nearly doubling parameters made factual recall worse — though the two models
+differ in recipe, data and architecture, so this is a **non-monotonicity the report leaves unexplained,
+not a controlled refutation**. What is missing either way is the ablation, which is the gap this fills. Microsoft dropped the
 framing a generation later; phi-4 attributes the same deficit to hallucination and quantifies a
 **token-budget** trade-off instead (Table 4: +6.9 TriviaQA, −0.7 MATH, −0.7 GSM8k, −4.3 HumanEval,
 average 0.0), which is data competing for training tokens rather than facts competing for weights.
@@ -32,8 +34,18 @@ and feeding it to a bit-complexity bound. It measures no reasoning. **Marek et a
 proxies for measuring model capacity, such as model size and pretraining loss," and the competition
 they demonstrate is old knowledge against new knowledge.
 
-**Nobody has logged bit-counts and a controlled reasoning endpoint on the same checkpoints across a
-swept oversubscription ratio.** That is what this does.
+Predecessors exist and must be cited rather than waved past: *Scaling Laws for Fact Memorization*
+(`2406.15720`), *In-Tool Learning* (`2508.20755`), *Too Big to Think* (`2506.09099`), and on the
+measurement side *Geometric Factual Recall* (`2605.12426`) and *Engram* (`2601.07372`). None combines
+the three things this design needs at once, so the defensible claim is narrow and should be stated in
+exactly this form:
+
+> To our knowledge, the first fixed-architecture experiment varying persistent factual entropy at fixed
+> entity count, exposure and token budget, while measuring a source-faithful factual-information lower
+> bound and train-disjoint unrelated reasoning on the same checkpoints.
+
+That sentence is true only once the defects in §16.5 are fixed; "nobody has ever tested this" is not,
+and was too broad.
 
 ### The prior, sorted by what each paper manipulates
 
@@ -50,10 +62,14 @@ the sort — the papers that point away manipulate something else.
 
 `arXiv:2505.18091` is the closest existing work to this design and revision 1 cited it only as a
 variance anchor. It sweeps synthetic-biography-versus-web ratio × model size across Pythia 14M–6.9B,
-finds a 2.09pp average zero-shot loss at ratio 0.3 on a 410M model, **attributes it to capacity
-allocation, and explicitly rules out token displacement.** It must be cited as prior work, its design
-contrasted with ours, and our contribution stated against it: it manipulates *ratio* and infers
-capacity; we manipulate *bits* at fixed ratio and measure capacity directly.
+finds a 2.09pp average zero-shot loss at ratio 0.3 on a 410M model and attributes it to capacity
+allocation. **That attribution is disputed and this PRD no longer leans on it:** an independent reading
+of the same paper reports SynBio recall staying near zero while web tokens are displaced, which would
+make it evidence that a mixture treatment can hurt *without any facts being stored*. Either way it is
+the closest existing design and must be cited as prior work — read as a prior for stored-fact crowding
+only if the recall figures support it. Our contribution stands against it regardless: it manipulates
+*ratio* and infers capacity; we manipulate *bits* at fixed ratio and measure stored information
+directly.
 
 One citation from revision 1 was wrong and is withdrawn: the "iGSM op15 46.3 → 70.7 with capacity
 nearly unchanged" result is **not in the looped-LM paper**, which does not mention iGSM. That pair
@@ -136,7 +152,9 @@ Two further corrections to demand accounting, both in `rho.py`:
 - **R_E is unknown to about 1.8×, not 8%.** There is no 200-exposure run in Physics 3.3; log
   interpolation between its anchors gives 1.30 and linear gives 1.11. Worse, the paper reports gated
   MLPs at **1.3× lower capacity** than GPT-2 at 100 exposures even with tuned LR — and `olmo2_*` is
-  SwiGLU. Morris (`2505.24832`) reports 3.6 b/p. Plan for 0.9–1.3 and **measure it once in our own
+  SwiGLU. Morris (`2505.24832`) reports 3.6 b/p but measures **unintended memorisation of random
+  token sequences**, not bio-fact storage at 200 exposures, so it is an upper anchor of a different
+  quantity rather than a competing estimate of ours. Plan for 0.9–1.3 and **measure it once in our own
   setup** before the grid places a cell (§12, M0).
 
 ### 3.1 Two ways to sweep it, and why we want both
@@ -178,9 +196,22 @@ is fixed:
 the non-embedding basis. §3.1's "count-slope minus entropy-slope" subtraction is meaningless
 otherwise, and an earlier draft of this document quoted the two tables on different definitions.
 
+**One vocabulary across the sweep, and it is load-bearing.** Sizing each cell's pools at `2^(b/4)` made
+the vocabulary a function of the treatment: **1,920 padded tokens at b=0 against 8,064 at b=32**, so the
+high-entropy cell carried 8.1% more trainable parameters and a 4.2× wider softmax than the cell it is
+compared against. Those biases run in opposite directions — more parameters can hide crowding, a wider
+softmax can manufacture a reasoning decline — so the axis identified nothing. Every cell now shares one
+union pool of `2^(32/4) = 256` words per slot and differs only in how many are reachable, giving
+identical vocabulary, padded size, parameter count and token ids at 0 → 192 bits/entity.
+
+One residual, stated: marginal token frequencies still differ across cells, because fewer reachable
+values means each is emitted more often. That is inseparable from "vary the entropy" in any pool-based
+scheme. The stronger design keeps all 256 words active at matched marginal frequency and varies only
+*joint* entropy through correlated four-word codewords; it is specified here and not built.
+
 **The midpoint is bioS.** 6 × 8 = 48 bits/entity against bioS's 47.592 — a 0.9% match — so the axis
-anchors to the literature exactly where the comparison is made. Six cells cost **2.4 h on 8×H100
-(~$130)**, against 4.7 h for the 28M count row, and every one of the four confounds above is held
+anchors to the literature exactly where the comparison is made. Six cells cost **2.3 h on 8×H100
+(~$127)**, against 4.6 h for the 28M count row, and every one of the four confounds above is held
 fixed by construction rather than argued away.
 
 Two implementation notes. Values stay **natural**: four words from real word lists, so a 32-bit value
@@ -202,12 +233,12 @@ Per the cut decision: **omit the 113M row and the 64M ρ=4 cell.**
 | **28M** | ✓ | ✓ | ✓ | ✓ | ✓ |
 | **64M** | ✓ | ✓ | ✓ | ✓ | — |
 
-Fourteen cells plus three reasoning-only controls, **187.2B tokens**. **15.1 h on 8×H100 ≈ $831**, or
-48 h on 8×A100 ≈ $1,053 — roughly a third of the uncut grid. Largest single cell (`64m_d2p4`) 4.7 h,
+Fourteen cells plus three reasoning-only controls, **182.8B tokens**. **14.7 h on 8×H100 ≈ $812**, or
+47 h on 8×A100 ≈ $1,029 — roughly a third of the uncut grid. Largest single cell (`64m_d2p4`) 4.5 h,
 comfortably inside `olmo-core-train`'s 24 h ceiling (§10).
 
-**Submitted as three jobs, one per model size** (§10.3). Fully sequential the grid is 15.1 h; with
-the three rows running concurrently the wall clock is the slowest row, **9.1 h**. The other gain is
+**Submitted as three jobs, one per model size** (§10.3). Fully sequential the grid is 14.7 h; with
+the three rows running concurrently the wall clock is the slowest row, **8.8 h**. The other gain is
 independence: three approvals rather than one, and a failure in the 64M row does not strand the other
 two.
 
@@ -489,7 +520,11 @@ weight decay varies 14.6× across a row, they are part of the design.
 | schedule | **WSD**, warmup **2% of each cell's own steps**, decay-to-zero over the last 10% | with independent decay branches per compared checkpoint (§3.5) |
 | learning rate | tuned once at 28M, then **identical in every cell** | the invariant matters more than the value |
 | weight decay | identical in every cell, and `Σ lr·wd` **logged per cell** | it varies 14.6× across a count row and cannot be argued away |
-| intra-document masking | on (`generate_doc_lengths`) | otherwise packed biographies attend across each other and contaminate the bit count. Flash backends only; `pad == eos` explodes `max_docs`; no composable test coverage |
+| data parallelism | **FSDP**, bf16 parameters, **fp32 reductions** | `parallelize_model` gates every wrapper behind `if dp_config is not None`, so without one eight ranks train eight unsynchronised models on an eighth of the corpus each — at ~25 exposures, not 200. Nothing raises, and single-process smokes cannot see it |
+| gradient clipping | **1.0** | an unclipped spike in a 150,000-step cell nobody is watching changes the achieved-bits curve this experiment reads |
+| compilation | on with a GPU, off on CPU | the image carries a C compiler; compiling a CPU smoke costs more than it saves |
+| model init seed | varies with the **replicate**, never with the corpus | `TransformerConfig.init_seed` defaults to 0 and was never set, so every cell and every notional replicate initialised the same network. A shared eval set reduces measurement noise; it does not create trained-model replicates |
+| intra-document masking | **off, and this is a known deviation** | The PRD asked for `generate_doc_lengths`. Turning it on is not sufficient: documents render as `[domain, BOS, …, EOS]` while the detector wants adjacent `[EOS, BOS]`, and the packed-input path needs a Flash backend the CPU profile does not have. Left off deliberately, with the consequence stated in §7.3 |
 
 ### 7.3 Checkpoints and packing
 
@@ -506,6 +541,25 @@ prefix-sum index over 1.29B documents is 10–20 GB, contradicting "never materi
 entropy axis every value is a fixed token count, so **biographies are fixed-length by construction**
 and instance `i` simply holds biographies `[i·k, (i+1)·k)`. Packing becomes arithmetic. For the count
 sweep, pad each biography to a fixed slot and log the padding fraction.
+
+**Two packing consequences, stated rather than left to be discovered.** Neither is a between-cell
+confound — the streams are byte-identical across cells, so both are a uniform tax — but both bound what
+the endpoints can show.
+
+*Reasoning items are cut by instance boundaries.* `TaskStream` rounds down to whole items, which
+protects the end of the stream and nothing else: the trainer requests 512-token windows and neither 24
+nor 19 divides 512, so **3.1% of unrelated items and 3.5% of related ones** straddle a boundary, some
+of them mid-answer. The eval must therefore generate items standalone and locate answers itself rather
+than trusting `answer_start`, which is valid only before chunking. A sequence length of 504 — a
+multiple of both widths — or per-item padding with a label mask removes it; both were deferred rather
+than rushed in ahead of the first run.
+
+*Intra-document masking is off.* §7.2 records why: `[domain, BOS, …, EOS]` does not present the adjacent
+`[EOS, BOS]` the detector looks for, and the packed path needs a Flash backend. So a biography can
+attend to its predecessor's tokens. That inflates what the model can predict from context rather than
+from weights, which means the achieved-bits estimate is an **upper** bound on stored information, and
+the reported figure should say so until masking is on.
+
 
 ### 7.4 Data loading
 
@@ -578,6 +632,23 @@ generation costs 5.69 core-seconds/example so 500M tokens is **~1,700 core-hours
 branch will not `pip install`; and `--depth-range` does not exist on the default NeurIPS_2024 HEAD.
 Its 44.4/72.2 figures are arXiv v3 Appendix H, not PMLR Table 3's 37.7. Keep FLD only if the floor
 and the core-hours are both resolved in M0.
+
+**THE IMPLEMENTED TASK IS NOT THE PUBLISHED MANO, AND ITS CALIBRATION DOES NOT TRANSFER.** This is the
+most important correction in this section. Published Mano builds recursive prefix trees over `+`, `−`
+and `×`, trains at variable lengths and evaluates at exact length. What `corpus/tasks.py` builds is a
+flat infix expression of ten operands over `+` and `×` only, evaluated strictly left to right, at one
+fixed training length, with zero excluded as a multiplicand. Ten *operands*, not ten operations.
+
+So the 47.8 → 66.0 from-scratch figures above are **not** predictions for this task, and neither is its
+task-memory estimate. They describe a harder generator. Two ways out, and the second is the plan:
+vendor the upstream generator with golden fixtures, or keep the custom task and calibrate it
+independently. Until that calibration exists the admission gate has to be measured on our own task, and
+the paper's numbers may be cited only as the reason for choosing *a* mod-23 arithmetic task at this
+depth — never as its expected accuracy. The class should be renamed before anything is written up; it is
+still called `ManoTask` in this revision, which is a naming debt, and the docstring says so.
+
+Even a faithful Mano stores its modular tables in weights, so an unrelated-reasoning claim cannot rest
+on it alone — which is the same reason this section asks for an in-context second endpoint.
 
 **What is built.** Two slices, in `corpus/tasks.py`, both generated per example from a seed so they
 hold nothing memorisable and cannot themselves compete for the capacity under measurement:
@@ -733,13 +804,13 @@ platform's dropdown tops out at `gpu-8xh100` ($55.04/hr) and `gpu-8xa100` ($21.9
 single card is `gpu-1xl40s` (48 GB). Anything at or above `gpu-8xa100` needs an **admin**, not a team
 lead, because every profile over $20/hr routes that way.
 
-| First run (§3.2), 14 cells + 3 controls, 187.2B tokens | 8×H100 | 8×A100 |
+| First run (§3.2), 14 cells + 3 controls, 182.8B tokens | 8×H100 | 8×A100 |
 |---|---|---|
-| wall clock, sequential | **15.1 h** | 48 h |
-| wall clock, 3 jobs in parallel | **9.1 h** | 30 h |
-| cost | **~$831** | ~$1,053 |
+| wall clock, sequential | **14.7 h** | 47 h |
+| wall clock, 3 jobs in parallel | **8.8 h** | 29 h |
+| cost | **~$812** | ~$1,029 |
 
-Per row: 13M 35.4B tokens / 1.3 h / $74, 28M 73.3B / 4.7 h / $259, 64M 78.5B / 9.1 h / $499. The 64M
+Per row: 13M 34.7B tokens / 1.3 h / $73, 28M 71.5B / 4.6 h / $252, 64M 76.6B / 8.8 h / $487. The 64M
 row is three-fifths of the cost, so it is the one to re-budget after the first measurement. These are
 FLOP estimates at 12/16/20% MFU per row, **not measurements** — read the real figure off the first
 cell's first 50 steps.
@@ -749,7 +820,7 @@ At 20% MFU with the LM head counted. **Revision 1's FLOP count omitted the LM he
 across a 3× width span is structurally wrong: it inverts the cut decision by making small rows look
 cheap. Plan on 12/16/20/24% per row and **measure MFU on M1's first 50 steps**, then re-budget.
 
-The entropy sweep at 28M is **36.8B tokens, 2.4 h ≈ $130** for six cells. Its templates render 42
+The entropy sweep at 28M is **36.0B tokens, 2.3 h ≈ $127** for six cells. Its templates render 42
 tokens per biography against the bioS axis's 69.2, so an estimate that reuses the bioS mean
 overstates it by half — the figure above is measured from a dry run.
 
@@ -869,11 +940,11 @@ corrected demand table.
 **M1 — one cell end to end, ~0.7 h.** 28M at b=8 (the bioS anchor) on WSD. Measure MFU and
 re-budget. Then **3–6 replicates** to fix the seed count from data.
 
-**M2 — the entropy sweep, ~2.4 h.** 28M, b ∈ {0, 4, 8, 16, 24, 32}. Frozen n=30k eval set,
+**M2 — the entropy sweep, ~2.3 h.** 28M, b ∈ {0, 4, 8, 16, 24, 32}. Frozen n=30k eval set,
 pre-registered pooled regression and the 2pp equivalence test. *This is the identified axis and the
 primary result.*
 
-**M3 — the first run: the count grid, ~15.1 h in three jobs.** 13M/28M/64M minus 64M ρ=4, plus three controls, with
+**M3 — the first run: the count grid, ~14.7 h in three jobs.** 13M/28M/64M minus 64M ρ=4, plus three controls, with
 WSD cooldown branches so the compute-matched reading is legitimate. **M3 slope − M2 slope quantifies
 how much of any "crowding" was tokens, steps and ratio.**
 
@@ -1107,7 +1178,80 @@ monotonicity threshold of §16.3, so an answer would be an accident of the brack
 `demanded_bits` and `demand` accept zero entities and return exactly zero -- the limit written down
 rather than evaluated -- and demand 0 with no reasoning tokens is refused as a run with no data.
 
-### 16.5 Deferred, with reasons
+### 16.5 What an independent expert review found, and what it changed
+
+An external reviewer was given the executable system and returned a stop-ship verdict. Most of it was
+right, and four findings were defects that would have invalidated every headline outcome. All four are
+fixed, each pinned by a test that fails without the fix.
+
+**Eight ranks trained eight independent models.** `train_cell.py` started `torchrun --nproc-per-node=8`
+and supplied no `dp_config`, and `parallelize_model` gates FSDP and DDP behind `if dp_config is not
+None`. So no wrapper was applied, gradients were never reduced, and the loader still sharded by rank:
+eight models, an eighth of the corpus each, **~25 exposures instead of 200**. Nothing raised, and every
+smoke run in this repo passed, because world size one is the only size at which the omission is
+invisible. Now FSDP with bf16 parameters and fp32 reductions, gradient clipping at 1.0, and compilation
+on a GPU — matching the platform reference. A two-rank test asserts the loss curve matches the
+single-rank curve step for step, which unsynchronised gradients cannot do.
+
+**The entropy sweep varied the model.** Pools sized per cell at `2^(b/4)` made the vocabulary a function
+of the treatment: 1,920 padded tokens at b=0 against 8,064 at b=32, i.e. **8.1% more parameters and a
+4.2× wider softmax on the high-entropy arm**, with the two biases running opposite ways. Fixed with one
+union pool per slot and a reachable prefix per cell; §3.1 records the residual and the stronger design.
+
+**The unrelated-reasoning eval was 100% leaked.** Items were keyed on `index ^ seed`, which makes the
+item *set* independent of the seed: training at 1238 and evaluating at 1241 differ by 15, so eval item
+`i` was training item `i ^ 15`. Reproduced at 2,000/2,000. Keying is now framed and domain-separated over
+`(class, split, seed, index)` in two rounds, so the dependence on the seed is not a translation and
+disjointness holds even at an identical seed — checked against 60,000 training items.
+
+**Replicates would have shared one network.** `TransformerConfig.init_seed` defaults to 0 and was never
+set, so varying the cell seed varied the corpus and not the initialisation. A `replicate` field now
+drives initialisation and data order while the corpus, the reasoning items and their volumes stay fixed,
+which is what makes a set of replicates a paired block. A shared eval set reduces measurement noise; it
+never created trained-model replicates, and the review is right that the advertised power figures refer
+to an obsolete grid.
+
+Also corrected: the name term is now the exact `log2 C(N0, N)` rather than the `N·log2(N0/N)` proxy
+Physics 3.3 writes, which understates it by 15.2% at 611k entities and shifted every cell's
+x-coordinate; `solve`'s bracket is capped at `N0/2`, where the exact term is monotone for *any* positive
+bits per entity, which removes the `1/ln2` schema threshold entirely. §8.3 now states plainly that the
+implemented task is **not** the published Mano and that its calibration does not transfer. §7.2 and §7.3
+record the FSDP, clipping, masking and item-splitting positions. §1's phi-3, `2505.18091`, Morris and
+novelty claims are all narrowed.
+
+**Where I disagree, or judged differently.**
+
+*Item splitting is a tax, not a confound.* 3.1% of unrelated and 3.5% of related items straddle a
+512-token boundary, and the review reads that as corruption exceeding the target effect size. It is
+identical across cells — the streams are byte-identical — so it cannot bias a between-cell comparison;
+it lowers the endpoint's ceiling uniformly. It also does not touch the measurement, because the eval
+generates items standalone. Worth fixing at sequence length 504 or with padded slots; not worth blocking
+a run for. Same for intra-document masking, with the consequence recorded in §7.3: the achieved-bits
+figure is an upper bound until masking is on.
+
+*The measurement layer does not block training.* It did when checkpoints recorded nothing about the cell
+that produced them — that was a real defect and is fixed: every checkpoint now carries the cell config
+plus schema, vocabulary, stream and task fingerprints, so a scorer written later can replay the exact
+corpus and prove it. What remains is that the scorer is unwritten, which delays the *result*, not the
+*runs*.
+
+*Non-embedding parameters stay primary for placement.* The review is right that Physics 3.3 says total
+used parameters, and that is now stated. But with the closed 3,584-word vocabulary the two bases differ
+by 1.073× at 13M falling to 1.024× at 113M, so the choice moves a cell 2–7% and changes no conclusion —
+and both are reported per cell. Re-placing the grid a third time for that is churn.
+
+*The count sweep is already secondary.* §3.1 says the subtraction is not a causal decomposition, and the
+review's stronger phrasing is adopted there rather than treated as new.
+
+**Accepted and not yet done.** The four-arm storage-specific pilot (low-information, stable, balanced
+deterministic, per-exposure resampled) and the ephemeral-mapping control; the three-seed 18-run design as
+the primary rather than a single seed; a TOST interval instead of the one-sided rule, which is
+non-inferiority and is now called that; the hinge sensitivity; disjoint auxiliary identities for the
+related comparator with open-book, closed-book, constituent-recall and conditional reporting; a renamed
+and independently calibrated arithmetic task; a Flash-backed packed path with masking; the checkpoint →
+reconstruction → scoring smoke. §12 orders them.
+
+### 16.6 Deferred, with reasons
 
 FLD's 1,700 core-hours and 51.1% floor — decided in M0, not now. The exposure placebo and the
 mechanism battery — M4. Qwen3-0.6B continuation — after M3. Retiring
