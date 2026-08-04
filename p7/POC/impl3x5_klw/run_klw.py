@@ -169,19 +169,42 @@ def sh(cmd: str, cwd: Path = HERE, check: bool = True, log_path: Path | None = N
     return rc
 
 
-def sh_parallel(jobs: list[dict], check: bool = True) -> dict[str, int]:
-    """Run jobs concurrently, one per GPU, with prefixed interleaved output.
+def sh_parallel(jobs: list[dict], check: bool = True,
+                max_concurrent: int | None = None) -> dict[str, int]:
+    """Run jobs concurrently, at most one per GPU, with prefixed interleaved output.
 
     Each job is ``{"name", "cmd", "gpu", "log"}``. ``CUDA_VISIBLE_DEVICES`` is set per job so
     each process sees exactly one device as ``cuda:0`` — the training and eval scripts then need
     no device argument and no distributed setup, because nothing here is distributed. Four
     independent single-GPU jobs is the whole design.
 
+    **``max_concurrent`` is not a tuning knob, it is a correctness bound.** Call sites assign
+    devices with ``k % n_gpu``, which silently maps *every* job onto GPU 0 when there is one
+    GPU. That is what happened on the first single-GPU math run: four eval processes landed on
+    one 22 GiB A10G and two of them died with ``CUDA out of memory`` as the KV cache grew
+    mid-generation. Passing ``max_concurrent=n_gpu`` makes the same job list serialise on one
+    card and fan out on four, so the driver is correct at any GPU count rather than only at the
+    count it was written for.
+
     Output is line-prefixed with the job name because four training runs interleaving into one
     log is otherwise unreadable. Every job also gets its own log file, which is what to read.
     """
     if not jobs:
         return {}
+    if max_concurrent and max_concurrent < len(jobs):
+        # Batch, preserving order. Each batch is a barrier, which is fine: these are
+        # independent arms and the stage is bounded by the slowest one either way.
+        rcs: dict[str, int] = {}
+        for start in range(0, len(jobs), max_concurrent):
+            batch = jobs[start:start + max_concurrent]
+            print(f"\n-- batch {start // max_concurrent + 1} of "
+                  f"{(len(jobs) + max_concurrent - 1) // max_concurrent}: "
+                  f"{', '.join(j['name'] for j in batch)}", flush=True)
+            rcs.update(sh_parallel(batch, check=False))
+        failed = {k: v for k, v in rcs.items() if v}
+        if check and failed:
+            raise SystemExit(f"parallel stage failed: {failed}")
+        return rcs
     lock = threading.Lock()
     rcs: dict[str, int] = {}
 
@@ -485,9 +508,9 @@ def main():
                         f"--save_steps 100 --save_total_limit 1"),
             })
         if len(arms) > n_gpu:
-            print(f"  NOTE: {len(arms)} arms on {n_gpu} GPU(s) — jobs will contend for memory. "
-                  f"Run in batches of {n_gpu} instead if this OOMs.", flush=True)
-        sh_parallel(jobs)
+            print(f"  {len(arms)} arms on {n_gpu} GPU(s) — running in batches of {n_gpu}",
+                  flush=True)
+        sh_parallel(jobs, max_concurrent=n_gpu)
         if not args.skip_package:
             # Uncompressed, immediately. Gzipping ~1 GB of adapter safetensors takes ~15 min
             # and compresses them by almost nothing; a container reclaimed in that window
@@ -511,7 +534,7 @@ def main():
             "log": HERE / f"data/nll.{arm}.log",
             "cmd": (f"{sys.executable} nll_only.py --runs 'out/{RUN_PREFIX}{arm}' "
                     f"--out out/ped_nll_{RUN_PREFIX}{arm}.jsonl"),
-        } for k, arm in enumerate(arms)])
+        } for k, arm in enumerate(arms)], max_concurrent=n_gpu)
         merged = COMPAT / "work" / "out" / "ped_nll_impl3x5.jsonl"
         merge_jsonl([COMPAT / "work" / "out" / f"ped_nll_{RUN_PREFIX}{a}.jsonl"
                      for a in arms], merged)
@@ -532,16 +555,27 @@ def main():
            f"--arms {' '.join(arms)}{steps}", cwd=IMPL4)
         # --with_kl, not --with-kl: math_only.py's docstring writes it dashed but argparse
         # registered the underscore, and the dashed form is not a prefix of it.
-        sh_parallel([{
+        math_rcs = sh_parallel([{
             "name": f"math:{arm}", "gpu": k % n_gpu, "cwd": COMPAT,
             "log": HERE / f"data/math.{arm}.log",
             "cmd": (f"{sys.executable} math_only.py --runs 'out/{RUN_PREFIX}{arm}' "
                     f"--out out/math_{RUN_PREFIX}{arm}.jsonl --with_kl"),
-        } for k, arm in enumerate(arms)])
+        } for k, arm in enumerate(arms)], check=False, max_concurrent=n_gpu)
+        # Upload per-arm rows BEFORE merging and before raising. A partially completed math
+        # stage is partially useful -- an arm that scored all 11 checkpoints is a finished
+        # column -- and the previous version threw that away because the only s3_put sat after
+        # the merge, downstream of the failure.
+        for arm in arms:
+            s3_put(COMPAT / "work" / "out" / f"math_{RUN_PREFIX}{arm}.jsonl",
+                   args.output_prefix)
         merged = COMPAT / "work" / "out" / "math_impl3x5.jsonl"
         merge_jsonl([COMPAT / "work" / "out" / f"math_{RUN_PREFIX}{a}.jsonl" for a in arms],
                     merged, dedupe_base=True)
         s3_put(merged, args.output_prefix)
+        failed = {k: v for k, v in math_rcs.items() if v}
+        if failed:
+            raise SystemExit(f"math stage: {len(failed)} arm(s) failed {failed}; per-arm rows "
+                             f"for the survivors were uploaded before this raise")
 
     if not args.skip_package:
         banner("packaging results")
