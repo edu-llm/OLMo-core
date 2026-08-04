@@ -1,10 +1,11 @@
 import math
+from typing import Any, Dict
 
 import pytest
 import torch
 
 from olmo_core.nn.attention.base import SequenceMixerConfig
-from olmo_core.nn.attention.short_conv import ShortConv, ShortConvConfig
+from olmo_core.nn.attention.short_conv import GateStructure, ShortConv, ShortConvConfig
 
 
 def _reference_lfm2_short_conv(
