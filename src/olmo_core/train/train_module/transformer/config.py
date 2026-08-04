@@ -176,6 +176,21 @@ class TransformerDataParallelConfig(DataParallelConfig):
 
     prefetch_factor: int = 0
 
+    accumulate_grads_without_comm: bool = True
+    """
+    Skip the gradient reduce-scatter on every micro-batch except the last, so a step with ``n``
+    micro-batches communicates its gradients once rather than ``n`` times.
+
+    The reduction is mathematically identical either way -- summing per-micro-batch gradients
+    and then reducing across ranks gives the same result as reducing each and summing -- so
+    this changes throughput and memory, not the model or its loss.
+
+    The cost is that gradients accumulate unsharded between micro-batches, which is
+    ``numel * reduce_dtype`` bytes per rank: 3.97 GiB for a 1.07B-parameter model reducing in
+    fp32, half that in bf16. Set ``False`` where that does not fit and the reduce-scatter
+    returns to every micro-batch. No effect when a step has only one micro-batch.
+    """
+
 
 @dataclass
 class TransformerTensorParallelConfig(TensorParallelConfig):
