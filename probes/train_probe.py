@@ -205,10 +205,31 @@ def probe_source_revision() -> str:
         ).stdout.strip()
         return f"{rev}-dirty" if dirty else rev
     except Exception as exc:
+        # No git here. On the eduLLM platform that is the normal case rather than a fault: the
+        # image is built with .git excluded from the build context on purpose (the root
+        # .dockerignore documents why -- actions/checkout leaves the run's token in
+        # .git/config), so `git rev-parse` inside the container cannot work and never will.
+        #
+        # The platform passes the commit it built from as EDULLM_COMMIT_SHA, which is *stronger*
+        # provenance than a local git rev: it is the immutable 40-hex the image digest was built
+        # from, recorded by the submission pipeline rather than read from a mutable worktree.
+        # Preferring it here is what keeps a platform run from writing "unknown" into a field
+        # analysis then discards -- analyze_sigma.py rejects records whose
+        # probe_source_revision is None or "unknown", so a run that trained correctly and cost
+        # real money would be silently dropped at the aggregation step.
+        platform_sha = os.environ.get("EDULLM_COMMIT_SHA", "").strip()
+        if platform_sha:
+            print(
+                f"NOTE: no usable git in {here} ({type(exc).__name__}), which is expected in a "
+                f"platform image built without .git. Recording provenance from "
+                f"EDULLM_COMMIT_SHA instead.",
+                file=sys.stderr,
+            )
+            return platform_sha[:7] if len(platform_sha) >= 7 else platform_sha
         print(
-            f"WARNING: cannot determine probes/ git revision ({type(exc).__name__}: {exc}). "
-            f"Recording 'unknown'. This run has NO source provenance and must not be used for "
-            f"a manifest-grade result. Checked: {here}",
+            f"WARNING: cannot determine probes/ git revision ({type(exc).__name__}: {exc}) and "
+            f"EDULLM_COMMIT_SHA is unset. Recording 'unknown'. This run has NO source "
+            f"provenance and must not be used for a manifest-grade result. Checked: {here}",
             file=sys.stderr,
         )
         return "unknown"
@@ -506,6 +527,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Seed bundle. Expands to the four canonical streams via SEED_STREAM_OFFSETS.",
     )
+    p.add_argument(
+        "--run-id",
+        default=None,
+        help=(
+            "Identifier recorded as the record's 'run_id' when no manifest is in use. A "
+            "manifest's own 'run_id' always wins; this only fills the field on the free-form "
+            "path, where it was previously always null."
+        ),
+    )
     for stream in SEED_STREAM_OFFSETS:
         p.add_argument(
             f"--seed-{stream}",
@@ -647,7 +677,7 @@ def main() -> None:
     )
     if args.param_ledger_only:
         record = {
-            "run_id": manifest_data.get("run_id"),
+            "run_id": manifest_data.get("run_id") or args.run_id,
             "arm": args.arm,
             "probe_source_revision": probe_source_revision(),
             "mixer": args.mixer,
@@ -724,7 +754,10 @@ def main() -> None:
     beta_ok = 0.0 <= beta_stats["beta_min"] and beta_stats["beta_max"] <= beta_stats["beta_scale"]
 
     record = {
-        "run_id": manifest_data.get("run_id"),
+        # The manifest wins where one is in use -- it is the source of truth per runbook
+        # §5.2.1 -- and '--run-id' fills the field on the free-form path, where it was
+        # previously always null even when the caller knew the id.
+        "run_id": manifest_data.get("run_id") or args.run_id,
         "arm": args.arm,
         "manifest": args.manifest,
         "probe_source_revision": probe_source_revision(),

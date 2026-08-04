@@ -141,7 +141,13 @@ def main() -> None:
         target_dir.mkdir(parents=True, exist_ok=True)
         record = str(target_dir / name)
 
+    # '--run-id' carries the platform's run id into the record. Without it train_probe writes
+    # 'run_id': null on the free-form path, and a null id makes a result impossible to tie back
+    # to the submission, the S3 prefix or the W&B run that produced it -- all three of which are
+    # named by exactly this string.
     argv = [
+        "--run-id",
+        opts.run_name,
         "--arm",
         opts.arm,
         "--task",
