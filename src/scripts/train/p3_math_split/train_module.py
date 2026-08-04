@@ -27,7 +27,7 @@ from typing import Any, Optional
 import torch
 
 from olmo_core.distributed.utils import get_world_size
-from olmo_core.train import ReduceType
+from olmo_core.train import MetricMergeStrategy, ReduceType
 from olmo_core.train.train_module import TransformerTrainModule, TransformerTrainModuleConfig
 
 log = logging.getLogger(__name__)
@@ -150,11 +150,11 @@ class DerivedMaskTrainModule(FixedDivisorTransformerTrainModule):
         self.eos_token_id = int(eos_token_id)
         self.pad_token_id = int(pad_token_id)
         # TrainModule is a Stateful protocol, not torch.nn.Module, so it has no
-        # register_buffer() and is never moved by Module.to(). Keep this immutable
-        # runtime constant directly on the same device as the wrapped model.
-        self._sep = torch.tensor(
-            separator_ids, dtype=torch.long, device=self.device
-        )
+        # register_buffer() lifecycle. Inputs from the numpy loader (including the
+        # trainer's mock batch) are still on CPU here; Transformer._prepare_inputs
+        # moves them only after this module derives the mask. Keep the tiny immutable
+        # constant on CPU and copy it to the actual input device at comparison time.
+        self._sep = torch.tensor(separator_ids, dtype=torch.long)
         log.info(
             "arm=%s; fact block derived from a %d-token separator, packing-aware",
             arm,
@@ -181,7 +181,8 @@ class DerivedMaskTrainModule(FixedDivisorTransformerTrainModule):
         # a separator run ended at i-1, so supervision may begin at i
         closes = torch.zeros((b, t), dtype=torch.bool, device=input_ids.device)
         if t > k:
-            starts = (input_ids.unfold(1, k, 1) == self._sep).all(dim=-1)
+            separator = self._sep.to(device=input_ids.device)
+            starts = (input_ids.unfold(1, k, 1) == separator).all(dim=-1)
             closes[:, k:] = starts[:, : t - k]
 
         # a document begins at i (sequence start, or just after an EOS)
@@ -222,6 +223,12 @@ class DerivedMaskTrainModule(FixedDivisorTransformerTrainModule):
             token_live &= self.supervised_mask(input_ids)
         label_live = torch.zeros_like(token_live)
         label_live[:, :-1] = token_live[:, 1:]
+        # Intra-document attention defines each segment through its EOS token. The
+        # label at that EOS input position would predict the next packed document's
+        # first token from a state that cannot attend to that document. Keep the
+        # preceding label (the document's genuine EOS target), but never train the
+        # EOS state across a packed boundary.
+        label_live &= input_ids != self.eos_token_id
         return label_live
 
     def _record_divisor_diagnostics(self, live_tokens: Any) -> None:
@@ -246,8 +253,9 @@ class DerivedMaskTrainModule(FixedDivisorTransformerTrainModule):
             if kwargs.get("loss_div_factor") is not None:
                 self.record_metric(
                     "train/supervised token fraction",
-                    label_live.detach().float().mean(),
+                    label_live.detach().sum() / self.fixed_loss_div_factor,
                     ReduceType.mean,
+                    merge_strategy=MetricMergeStrategy.sum,
                 )
         return super().model_forward(input_ids, labels=labels, **kwargs)
 

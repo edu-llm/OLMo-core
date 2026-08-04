@@ -10,6 +10,8 @@ fingerprints; this catches it before the GPUs are booked.
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -117,3 +119,53 @@ def test_platform_reader_selects_train_partition_explicitly():
     """
     source = Path("src/scripts/train/p3_math_split/train_platform.py").read_text()
     assert 'dataset_paths(dataset_id, version, split="train", s3=s3)' in source
+
+
+def test_legacy_train_entrypoint_is_a_fail_fast_deprecation_stub():
+    legacy = Path("src/scripts/train/p3_math_split/train.py")
+    result = subprocess.run(
+        [sys.executable, str(legacy)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    message = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "deprecated" in message.lower()
+    assert "train_platform.py" in message
+    assert "label_mask" not in legacy.read_text(encoding="utf-8")
+
+
+def test_documented_platform_commands_are_canonical_single_lines():
+    readme = Path("src/scripts/train/p3_math_split/README.md").read_text(encoding="utf-8")
+    train_source = Path("src/scripts/train/p3_math_split/train_platform.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "p3_math_split/train.py" not in readme
+    assert "gpu-1xa10g" in readme
+    assert "gpu-8xh100" in readme
+    assert "olmo-core-train-4gpu" in readme
+    assert "--nproc-per-node=8" in readme
+    assert "--runtime-smoke" in readme
+    assert "--dry-run" in readme
+    assert "hashed run manifest" in readme.lower()
+    assert "image digest" in readme.lower()
+
+    in_fence = False
+    for line in readme.splitlines():
+        if line.startswith("```"):
+            in_fence = not in_fence
+        elif in_fence:
+            assert not line.rstrip().endswith("\\"), (
+                "platform command fields are pasted as one line; shell continuation "
+                f"found in: {line!r}"
+            )
+
+    source_commands = [
+        line.strip() for line in train_source.splitlines() if "bash -lc" in line
+    ]
+    assert source_commands
+    assert all("train_platform.py" in line for line in source_commands)
+    assert any("--nproc-per-node=8" in line for line in source_commands)
+    assert "--nproc-per-node=4" not in train_source

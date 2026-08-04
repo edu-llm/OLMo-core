@@ -4,7 +4,6 @@ from types import SimpleNamespace
 
 from . import load_project_module
 
-
 build_corpus = load_project_module("build_corpus")
 mm_expand = load_project_module("mm_expand")
 mm_verify = load_project_module("mm_verify")
@@ -67,9 +66,7 @@ def test_extract_renders_only_used_local_e_hypotheses_and_removes_their_pushes(
     assert "th.1" not in row["target"]
     assert "ext" in row["target"]
     assert "dup" in row["target"]
-    assert row["text"].index("Local assumptions:") < row["text"].index(
-        "\n---\nGOAL "
-    )
+    assert row["text"].index("Local assumptions:") < row["text"].index("\n---\nGOAL ")
     assert row["mask_end"] == row["text"].index("\n---\n")
 
     verified = mm_verify.verify_proof(
@@ -78,5 +75,6 @@ def test_extract_renders_only_used_local_e_hypotheses_and_removes_their_pushes(
         row["goal"],
         row["facts"],
         local_assumptions=row["local_assumptions"],
+        target_label="th",
     )
-    assert verified.valid, verified.reason
+    assert verified.status is mm_verify.VerificationStatus.VALID, verified.reason

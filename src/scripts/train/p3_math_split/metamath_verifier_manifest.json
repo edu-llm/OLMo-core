@@ -1,0 +1,26 @@
+{
+  "schema_version": "p3-metamath-official-verifier-v1",
+  "source": {
+    "repository": "https://github.com/metamath/metamath-exe.git",
+    "commit": "69a5d47fc755c21c125453407270cc26857d51b5",
+    "commit_timestamp": 1785119001
+  },
+  "build": {
+    "builder_id": "ubuntu-24.04-gcc-13.3.0-6ubuntu2~24.04.1-x86_64-linux-gnu",
+    "compiler": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+    "source_date_epoch": 1785119001,
+    "flags": [
+      "-std=c99",
+      "-O2",
+      "-DNDEBUG",
+      "-fno-ident",
+      "-ffile-prefix-map=<checkout>=."
+    ],
+    "source_glob": "src/m*.c"
+  },
+  "binary": {
+    "sha256": "b43a56d75e1489dc5e568c283a7684f0e7da7a2016e90e6ec020b01852b4eeed",
+    "version": "0.199.pre 29-Jan-2022",
+    "platform": "linux-x86_64"
+  }
+}

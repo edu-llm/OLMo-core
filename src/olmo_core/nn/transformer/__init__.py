@@ -23,14 +23,20 @@ from .init import InitMethod
 from .model import MoETransformer, NormalizedTransformer, Transformer
 from .qwen import (
     QWEN2_0_5B_HF_ID,
+    QWEN2_0_5B_HF_REVISION,
+    QWEN2_0_5B_HF_WEIGHTS_FILE,
+    QWEN2_0_5B_HF_WEIGHTS_SHA256,
+    QWEN2_0_5B_HF_WEIGHTS_SIZE,
     build_qwen2_0_5b,
     convert_hf_state_dict,
     export_to_hf_state_dict,
     hf_to_olmo_key_map,
     load_hf_weights,
+    load_pinned_hf_state_dict,
     parameter_report,
     qwen2_0_5b_config,
     qwen2_tokenizer_config,
+    resolve_pinned_hf_snapshot,
     strip_attn_out_bias,
 )
 
@@ -57,6 +63,10 @@ __all__ = [
     "TransformerActivationCheckpointingMode",
     "InitMethod",
     "QWEN2_0_5B_HF_ID",
+    "QWEN2_0_5B_HF_REVISION",
+    "QWEN2_0_5B_HF_WEIGHTS_FILE",
+    "QWEN2_0_5B_HF_WEIGHTS_SHA256",
+    "QWEN2_0_5B_HF_WEIGHTS_SIZE",
     "qwen2_0_5b_config",
     "qwen2_tokenizer_config",
     "build_qwen2_0_5b",
@@ -66,4 +76,6 @@ __all__ = [
     "convert_hf_state_dict",
     "export_to_hf_state_dict",
     "load_hf_weights",
+    "load_pinned_hf_state_dict",
+    "resolve_pinned_hf_snapshot",
 ]

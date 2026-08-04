@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """One arm of the dense/split comparison, on the eduLLM platform.
 
 **This file is a copy of `.edullm/train_on_corpus.py` with four changes.** Diff it
@@ -16,17 +17,13 @@ be re-derived:
   4. `compile_model` follows the arm config, which keeps it off until
      `src/test/nn/transformer/qwen_test.py` passes compiled.
 
-Run it (one line, from the platform form's `command` field):
+Paste commands into the platform as one physical line. Configuration preflight:
 
-    bash -lc 'python src/scripts/train/p3_math_split/train_platform.py "$EDULLM_RUN_ID"
-      --arm split --config src/scripts/train/p3_math_split/configs/split.yaml
-      --save-folder "$EDULLM_CHECKPOINT_DIR"'
+    bash -lc 'python src/scripts/train/p3_math_split/train_platform.py "$EDULLM_RUN_ID" --arm split --config src/scripts/train/p3_math_split/configs/split.yaml --save-folder "$EDULLM_CHECKPOINT_DIR" --dry-run'
 
-On a multi-GPU shape the launcher goes in the command — nothing wraps what you type:
+Final eight-rank launch (the platform does not add a launcher):
 
-    bash -lc 'python -m torch.distributed.run --nproc-per-node=4 --standalone
-      src/scripts/train/p3_math_split/train_platform.py "$EDULLM_RUN_ID" --arm split
-      --config .../split.yaml --save-folder "$EDULLM_CHECKPOINT_DIR"'
+    bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone src/scripts/train/p3_math_split/train_platform.py "$EDULLM_RUN_ID" --arm split --config src/scripts/train/p3_math_split/configs/split.yaml --save-folder "$EDULLM_CHECKPOINT_DIR"'
 """
 
 import argparse
@@ -38,16 +35,15 @@ import logging
 import os
 import re
 import sys
-from pathlib import Path
-
-import yaml
 import time
 import traceback
-from dataclasses import dataclass, replace
-from typing import Dict, Iterator, List, Optional, cast
+from dataclasses import dataclass, field, replace
+from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, cast
 
 import rich
 import torch
+import yaml
 
 from olmo_core.config import Config, DType
 from olmo_core.data import (
@@ -57,11 +53,15 @@ from olmo_core.data import (
     TokenizerConfig,
 )
 from olmo_core.distributed.parallel import DataParallelType
-from olmo_core.distributed.utils import barrier, get_rank
+from olmo_core.distributed.utils import barrier, get_rank, get_world_size
 from olmo_core.io import clear_directory, list_directory, normalize_path
 from olmo_core.nn.attention import AttentionBackendName
 from olmo_core.nn.transformer import TransformerConfig
 from olmo_core.nn.transformer.qwen import (
+    QWEN2_0_5B_HF_ID,
+    QWEN2_0_5B_HF_REVISION,
+    QWEN2_0_5B_HF_WEIGHTS_SHA256,
+    QWEN2_0_5B_HF_WEIGHTS_SIZE,
     load_hf_weights,
     parameter_report,
     qwen2_0_5b_config,
@@ -71,6 +71,7 @@ from olmo_core.nn.transformer.qwen import (
 from olmo_core.optim import AdamWConfig, CosWithWarmup, OptimGroupOverride
 from olmo_core.train import (
     Duration,
+    DurationUnit,
     TrainerConfig,
     prepare_training_environment,
     teardown_training_environment,
@@ -91,9 +92,30 @@ from olmo_core.utils import seed_all
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from provenance import TOKENIZER_ARTIFACT, fetch_tokenizer_artifact
 from train_module import DerivedMaskTrainModuleConfig
 
 log = logging.getLogger(__name__)
+
+P3_MODEL_FACTORY = "qwen2_0_5b"
+P3_DATASET_ID = "pretrain/formal-proof-premises-500m"
+P3_SEED = 42
+P3_CONFIG_DIR = Path(__file__).resolve().parent / "configs"
+EXPECTED_SEPARATOR_IDS = [10952, 15513, 969]
+P3_LAUNCH_CONTRACT: Dict[str, Any] = {
+    "schema_version": 1,
+    "final_compute_profile": "gpu-8xh100",
+    "final_world_size": 8,
+    "launcher": "python -m torch.distributed.run",
+    "config_preflight_compute_profile": "gpu-1xa10g",
+    "config_preflight_world_size": 1,
+    "enforced_by": "eduLLM platform compute-profile/process guard",
+}
+P3_RUNTIME_SMOKE = {
+    "max_steps": 100,
+    "warmup_steps": 10,
+    "save_every": 50,
+}
 
 
 class Stage(enum.IntEnum):
@@ -209,6 +231,11 @@ def leave_the_reason_in_wandb(*, run_name: str, stage: Stage, explanation: str) 
     with its own is worse than no diagnostic, and W&B is reachable over a network that a
     broken container may be exactly what is broken about.
     """
+    # Before process-group initialization and after teardown, get_rank() returns zero in
+    # every torchrun child. RANK remains valid through both phases, so consult it first.
+    if not is_global_rank_zero():
+        return
+
     # The submission form's `wandb_project` field is injected as WANDB_PROJECT
     # according to the platform guide. Keep the legacy EDULLM_* spelling as a fallback
     # because older images used it.
@@ -235,6 +262,17 @@ def leave_the_reason_in_wandb(*, run_name: str, stage: Stage, explanation: str) 
         run.finish(exit_code=int(stage))
     except BaseException as exc:  # noqa: BLE001 -- see the docstring
         print(f"could not leave the reason in W&B: {type(exc).__name__}: {exc}", file=sys.stderr)
+
+
+def is_global_rank_zero() -> bool:
+    """Work before distributed init and after teardown without duplicating rank-zero work."""
+    rank = os.environ.get("RANK")
+    if rank is not None:
+        try:
+            return int(rank) == 0
+        except ValueError:
+            return False
+    return get_rank() == 0
 
 
 # WHICH TOKENIZER EACH PUBLISHED ONE IS, SPELLED OUT RATHER THAN GUESSED.
@@ -288,8 +326,28 @@ class ExperimentConfig(Config):
     data_loader: NumpyDataLoaderConfig
     trainer: TrainerConfig
     train_module: TransformerTrainModuleConfig
+    arm: str = ""
+    run_mode: str = "train"
+    model_factory: str = ""
+    base_model_id: str = ""
+    base_model_revision: str = ""
+    base_model_weight_sha256: str = ""
+    base_model_weight_size: int = 0
+    tokenizer_artifact_id: str = ""
+    tokenizer_artifact_version: str = ""
+    tokenizer_file_sha256: Dict[str, str] = field(default_factory=dict)
+    tokenizer_composite_sha256: str = ""
+    tokenizers_version: str = ""
+    tokenizer_eos_token_id: int = -1
+    tokenizer_pad_token_id: int = -1
     dataset_id: str = ""
     dataset_version: str = ""
+    dataset_release: str = ""
+    world_size: int = 1
+    launch_contract: Dict[str, Any] = field(default_factory=dict)
+    source_commit: str = ""
+    platform_run_manifest_id: str = ""
+    platform_run_manifest_sha256: str = ""
     init_seed: int = 12536
 
 
@@ -514,49 +572,133 @@ def remove_torn_checkpoints(save_folder: str) -> List[str]:
 def separator_ids_for(tokenizer_id: str, work_dir: str) -> List[int]:
     """Token ids of SEPARATOR under the corpus's own published tokenizer.
 
-    Fetched from the tokenizer dataset rather than from a name typed here. A tokenizer
-    that is merely *similar* produces different ids, the split arm's search never
-    matches, every token is supervised, and the run silently becomes a second dense
-    arm that reports a plausible loss curve.
+    This compatibility wrapper resolves the same fully sealed artifact used by
+    :func:`build_config`; it never falls back to HuggingFace or a latest alias.
     """
-    from edullm_data.read import dataset_paths, resolve_latest
-    from edullm_data.s3 import Boto3S3
-    from tokenizers import Tokenizer
-    from urllib.parse import urlsplit
+    try:
+        tokenizer = fetch_tokenizer_artifact(tokenizer_id, work_dir)
+    except (OSError, RuntimeError, ValueError) as error:
+        raise Refusal(Stage.THE_CONFIG_WOULD_NOT_BUILD, str(error)) from error
+    return tokenizer.separator_ids(SEPARATOR_SEARCH)
 
-    s3 = Boto3S3.default()
-    dataset_id, sep, maybe_version = tokenizer_id.rpartition("/")
-    if sep and re.fullmatch(r"v\d+", maybe_version):
-        version = maybe_version
-    else:
-        dataset_id = tokenizer_id
-        version = resolve_latest(dataset_id, s3=s3)
-    read = dataset_paths(dataset_id, version, s3=s3)
-    files = [path for path in read.paths if path.endswith("tokenizer.json")]
-    if not files:
+
+def reject_config_overrides(overrides: List[str]) -> None:
+    """Refuse post-YAML config mutation, including unknown flags and dotlists."""
+    if overrides:
+        rendered = " ".join(overrides)
         raise Refusal(
             Stage.THE_CONFIG_WOULD_NOT_BUILD,
-            f"{tokenizer_id} publishes no tokenizer.json, so the separator cannot be "
-            "resolved and the split arm cannot find its fact blocks",
+            "P3 scientific controls cannot be overridden after the canonical YAML; "
+            f"remove this override/unknown argument: {rendered}",
         )
-    uri = urlsplit(files[0])
-    if uri.scheme != "s3" or not uri.netloc or not uri.path:
+
+
+def validate_submission_controls(opts, *, require_seed: bool = True) -> None:
+    """Validate identities that define the P3 experiment rather than accepting lookalikes."""
+    expected_config = (P3_CONFIG_DIR / f"{opts.arm}.yaml").resolve()
+    supplied_config = Path(opts.config).resolve()
+    if supplied_config != expected_config:
         raise Refusal(
             Stage.THE_CONFIG_WOULD_NOT_BUILD,
-            f"{tokenizer_id} resolved tokenizer.json to a non-S3 path: {files[0]!r}",
+            f"arm {opts.arm!r} must use its canonical config {expected_config}; "
+            f"got {supplied_config}",
         )
-    # build_config runs in all torchrun ranks before the distributed process
-    # group is initialized. A shared filename lets eight ranks truncate/write the
-    # same JSON concurrently. Give each local rank its own cache file instead of
-    # requiring a barrier that cannot exist yet.
-    local_rank = os.environ.get("LOCAL_RANK", "0")
-    local = Path(work_dir) / f"tokenizer-rank{local_rank}.json"
-    local.parent.mkdir(parents=True, exist_ok=True)
-    # Boto3S3 implements the reader's get/head/get_range/list protocol. It does
-    # not implement a `download` method; calling one gets through static checks and
-    # kills the run before config construction.
-    local.write_bytes(s3.get(uri.netloc, uri.path.lstrip("/")))
-    return list(Tokenizer.from_file(str(local)).encode(SEPARATOR_SEARCH, add_special_tokens=False).ids)
+    if opts.model_factory != P3_MODEL_FACTORY:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"P3 model factory is fixed to {P3_MODEL_FACTORY!r}; got {opts.model_factory!r}",
+        )
+    if opts.dataset_id != P3_DATASET_ID:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"P3 dataset ID is fixed to {P3_DATASET_ID!r}; got {opts.dataset_id!r}",
+        )
+    if re.fullmatch(r"v[1-9]\d*", opts.dataset_version or "") is None:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            "P3 dataset version must be an explicit immutable vN submission value; "
+            f"got {opts.dataset_version!r}",
+        )
+    if opts.dataset_tokenizer != TOKENIZER_ARTIFACT:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"P3 tokenizer is fixed to {TOKENIZER_ARTIFACT!r}; " f"got {opts.dataset_tokenizer!r}",
+        )
+    if require_seed and opts.data_seed != P3_SEED:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"P3 seed is fixed to {P3_SEED}; got {opts.data_seed}",
+        )
+
+
+def declared_world_size() -> int:
+    """Read torchrun's pre-init WORLD_SIZE without requiring a process group."""
+    raw = os.environ.get("WORLD_SIZE", "1")
+    try:
+        world_size = int(raw)
+    except ValueError as error:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"WORLD_SIZE must be a positive integer, got {raw!r}",
+        ) from error
+    if world_size < 1:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"WORLD_SIZE must be positive, got {world_size}",
+        )
+    return world_size
+
+
+def validate_runtime_launch_contract() -> None:
+    """Refuse non-dry P3 execution unless torchrun declares the final 8-rank process set."""
+
+    def required_process_integer(name: str) -> int:
+        raw = os.environ.get(name)
+        if raw is None:
+            raise Refusal(
+                Stage.THE_TRAINING_ENVIRONMENT_WOULD_NOT_START,
+                f"{name} is required for the final 8-rank P3 launch",
+            )
+        try:
+            return int(raw)
+        except ValueError as error:
+            raise Refusal(
+                Stage.THE_TRAINING_ENVIRONMENT_WOULD_NOT_START,
+                f"{name} must be an integer, got {raw!r}",
+            ) from error
+
+    expected_world_size = int(P3_LAUNCH_CONTRACT["final_world_size"])
+    world_size = required_process_integer("WORLD_SIZE")
+    if world_size != expected_world_size:
+        raise Refusal(
+            Stage.THE_TRAINING_ENVIRONMENT_WOULD_NOT_START,
+            f"WORLD_SIZE must equal {expected_world_size} for non-dry P3 execution; "
+            f"got {world_size}",
+        )
+    local_world_size = required_process_integer("LOCAL_WORLD_SIZE")
+    if local_world_size != expected_world_size:
+        raise Refusal(
+            Stage.THE_TRAINING_ENVIRONMENT_WOULD_NOT_START,
+            f"LOCAL_WORLD_SIZE must equal {expected_world_size} for the single-node "
+            f"{P3_LAUNCH_CONTRACT['final_compute_profile']} contract; got {local_world_size}",
+        )
+    rank = required_process_integer("RANK")
+    local_rank = required_process_integer("LOCAL_RANK")
+    if not 0 <= rank < world_size:
+        raise Refusal(
+            Stage.THE_TRAINING_ENVIRONMENT_WOULD_NOT_START,
+            f"RANK must be in [0, {world_size}), got {rank}",
+        )
+    if not 0 <= local_rank < local_world_size:
+        raise Refusal(
+            Stage.THE_TRAINING_ENVIRONMENT_WOULD_NOT_START,
+            f"LOCAL_RANK must be in [0, {local_world_size}), got {local_rank}",
+        )
+    if rank != local_rank:
+        raise Refusal(
+            Stage.THE_TRAINING_ENVIRONMENT_WOULD_NOT_START,
+            f"single-node P3 launch requires RANK == LOCAL_RANK, got {rank} != {local_rank}",
+        )
 
 
 def apply_arm_config(opts) -> dict:
@@ -574,6 +716,16 @@ def apply_arm_config(opts) -> dict:
             f"--arm {opts.arm} but {opts.config} declares arm={cfg.get('arm')!r}",
         )
     shared = cfg["shared"]
+    if shared.get("seed") != P3_SEED:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"P3 seed is fixed to {P3_SEED}; {opts.config} declares " f"{shared.get('seed')!r}",
+        )
+    if shared.get("runtime_smoke") != P3_RUNTIME_SMOKE:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"{opts.config} must declare the fixed runtime_smoke profile " f"{P3_RUNTIME_SMOKE!r}",
+        )
     opts.sequence_length = shared["sequence_length"]
     opts.global_batch_size = shared["global_batch_size_sequences"] * opts.sequence_length
     opts.rank_microbatch_size = shared["rank_microbatch_size_sequences"] * opts.sequence_length
@@ -611,13 +763,73 @@ def wandb_project(opts) -> Optional[str]:
     )
 
 
-def build_config(opts, overrides: List[str]):
+def loader_epoch_step_counts(rows: int, global_batch_size: int, epochs: int) -> tuple[int, int]:
+    """Return complete loader batches per epoch and across all epochs.
+
+    The numpy loader drops each epoch's incomplete global batch. Flooring only
+    after multiplying by epochs would carry every dropped tail into later epochs
+    and enter an extra epoch near the end of training.
+    """
+    if rows < 0:
+        raise ValueError(f"rows must be non-negative, got {rows}")
+    if global_batch_size <= 0:
+        raise ValueError(f"global_batch_size must be positive, got {global_batch_size}")
+    if epochs <= 0:
+        raise ValueError(f"epochs must be positive, got {epochs}")
+    batches_per_epoch = rows // global_batch_size
+    return batches_per_epoch, batches_per_epoch * epochs
+
+
+def validate_epoch_horizon(trainer, expected_steps: int) -> None:
+    """Verify the built loader resolves the manifest-derived epoch horizon."""
+    if trainer.max_duration.unit != DurationUnit.epochs:
+        return
+    actual_steps = trainer.max_steps
+    if actual_steps != expected_steps:
+        raise RuntimeError(
+            f"loader resolves {actual_steps} steps for {trainer.max_duration.value} epochs, "
+            f"but the manifest-derived horizon is {expected_steps}"
+        )
+
+
+def build_config(opts, overrides: List[str], *, validate_controls: bool = True):
+    reject_config_overrides(overrides)
+    if validate_controls:
+        validate_submission_controls(opts, require_seed=False)
     shared = apply_arm_config(opts)
+    if validate_controls:
+        validate_submission_controls(opts)
+
+    source_commit = os.environ.get("EDULLM_COMMIT_SHA", "").strip()
+    if not opts.dry_run and not source_commit:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            "EDULLM_COMMIT_SHA is required for a non-dry reportable run",
+        )
+    platform_run_manifest_id = os.environ.get("EDULLM_RUN_MANIFEST_ID", "").strip()
+    platform_run_manifest_sha256 = os.environ.get("EDULLM_RUN_MANIFEST_SHA256", "").strip()
+    if platform_run_manifest_sha256:
+        if not platform_run_manifest_id:
+            raise Refusal(
+                Stage.THE_CONFIG_WOULD_NOT_BUILD,
+                "platform run manifest SHA-256 requires EDULLM_RUN_MANIFEST_ID",
+            )
+        if re.fullmatch(r"[0-9a-f]{64}", platform_run_manifest_sha256) is None:
+            raise Refusal(
+                Stage.THE_CONFIG_WOULD_NOT_BUILD,
+                "platform run manifest SHA-256 must be lowercase 64-hex",
+            )
+
+    try:
+        sealed_tokenizer = fetch_tokenizer_artifact(opts.dataset_tokenizer, opts.work_dir)
+    except (OSError, RuntimeError, ValueError) as error:
+        raise Refusal(Stage.THE_CONFIG_WOULD_NOT_BUILD, str(error)) from error
     corpus = resolve_corpus(
         dataset_id=opts.dataset_id,
         version=opts.dataset_version,
         tokenizer_id=opts.dataset_tokenizer,
     )
+    corpus = replace(corpus, tokenizer=sealed_tokenizer.olmo_config())
     log.info(
         "%s/%s: %d shards, dtype %s, tokenizer %s",
         corpus.dataset_id,
@@ -627,10 +839,35 @@ def build_config(opts, overrides: List[str]):
         opts.dataset_tokenizer,
     )
 
-    if shared.get("max_steps"):
-        opts.steps = int(shared["max_steps"])
-    elif corpus.rows:
-        opts.steps = (corpus.rows * shared["epochs"]) // opts.global_batch_size
+    configured_max_steps = shared.get("max_steps")
+    if opts.runtime_smoke:
+        opts.steps = int(shared["runtime_smoke"]["max_steps"])
+        opts.warmup_steps = int(shared["runtime_smoke"]["warmup_steps"])
+        opts.save_interval = int(shared["runtime_smoke"]["save_every"])
+        max_duration = Duration.steps(opts.steps)
+    elif configured_max_steps is not None:
+        opts.steps = int(configured_max_steps)
+        max_duration = Duration.steps(opts.steps)
+    else:
+        if corpus.rows is None:
+            raise Refusal(
+                Stage.THE_CONFIG_WOULD_NOT_BUILD,
+                "the corpus manifest declares no row count, so exact loader epochs "
+                "cannot be derived at runtime",
+            )
+        epochs = int(shared["epochs"])
+        batches_per_epoch, opts.steps = loader_epoch_step_counts(
+            corpus.rows, opts.global_batch_size, epochs
+        )
+        max_duration = Duration.epochs(epochs)
+        log.info(
+            "%d rows // %d tokens = %d complete loader batches/epoch; " "%d epochs = %d steps",
+            corpus.rows,
+            opts.global_batch_size,
+            batches_per_epoch,
+            epochs,
+            opts.steps,
+        )
     if opts.steps < 1:
         raise Refusal(
             Stage.THE_CONFIG_WOULD_NOT_BUILD,
@@ -709,11 +946,17 @@ def build_config(opts, overrides: List[str]):
     # The separator the split arm searches for. Resolved from the corpus's OWN
     # tokenizer -- a different one would tokenize it to different ids, the search
     # would never match, and the split arm would silently become a second dense arm.
-    sep_ids = separator_ids_for(opts.dataset_tokenizer, opts.work_dir)
+    sep_ids = sealed_tokenizer.separator_ids(SEPARATOR_SEARCH)
     if not sep_ids:
         raise Refusal(
             Stage.THE_CONFIG_WOULD_NOT_BUILD,
             f"{SEPARATOR_SEARCH!r} tokenizes to nothing under {opts.dataset_tokenizer}",
+        )
+    if sep_ids != EXPECTED_SEPARATOR_IDS:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"{SEPARATOR_SEARCH!r} resolved to {sep_ids}, expected "
+            f"{EXPECTED_SEPARATOR_IDS} under the approved tokenizer seal",
         )
 
     train_module_config = DerivedMaskTrainModuleConfig(
@@ -766,7 +1009,7 @@ def build_config(opts, overrides: List[str]):
             cancel_check_interval=5,
             # Explicit, as the platform guide requires: the OLMo-core default is one
             # epoch, which here would be 1/13th of the intended run.
-            max_duration=Duration.steps(opts.steps),
+            max_duration=max_duration,
         )
         .with_callback("gpu_monitor", GPUMemoryMonitorCallback())
         .with_callback(
@@ -818,17 +1061,40 @@ def build_config(opts, overrides: List[str]):
     # back from the reader as `.val`, and wiring an evaluator to those is the right version of
     # this -- it needs a corpus that declares one, which regmix-10b does not.
 
+    tokenizer_provenance = sealed_tokenizer.provenance_dict()
     config = ExperimentConfig(
         model=model_config,
         dataset=dataset_config,
         data_loader=data_loader_config,
         train_module=train_module_config,
         trainer=trainer_config,
+        arm=opts.arm,
+        run_mode=(
+            "dry-run" if opts.dry_run else "runtime-smoke" if opts.runtime_smoke else "train"
+        ),
+        model_factory=opts.model_factory,
+        base_model_id=QWEN2_0_5B_HF_ID,
+        base_model_revision=QWEN2_0_5B_HF_REVISION,
+        base_model_weight_sha256=QWEN2_0_5B_HF_WEIGHTS_SHA256,
+        base_model_weight_size=QWEN2_0_5B_HF_WEIGHTS_SIZE,
+        tokenizer_artifact_id=tokenizer_provenance["tokenizer_artifact_id"],
+        tokenizer_artifact_version=tokenizer_provenance["tokenizer_artifact_version"],
+        tokenizer_file_sha256=tokenizer_provenance["tokenizer_file_sha256"],
+        tokenizer_composite_sha256=tokenizer_provenance["tokenizer_composite_sha256"],
+        tokenizers_version=tokenizer_provenance["tokenizers_version"],
+        tokenizer_eos_token_id=tokenizer_provenance["tokenizer_eos_token_id"],
+        tokenizer_pad_token_id=tokenizer_provenance["tokenizer_pad_token_id"],
         dataset_id=corpus.dataset_id,
         dataset_version=corpus.version,
+        dataset_release=os.environ.get("EDULLM_DATASET_RELEASE", ""),
+        world_size=declared_world_size(),
+        launch_contract=dict(P3_LAUNCH_CONTRACT),
+        source_commit=source_commit,
+        platform_run_manifest_id=platform_run_manifest_id,
+        platform_run_manifest_sha256=platform_run_manifest_sha256,
         init_seed=shared["seed"],
     )
-    return config.merge(overrides)
+    return config
 
 
 class LossWatcher(Callback):
@@ -871,15 +1137,41 @@ def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> 
     """
     if get_rank() != 0:
         return
+    environment_world = int(os.environ.get("WORLD_SIZE", "1"))
+    environment_local_world = int(os.environ.get("LOCAL_WORLD_SIZE", "1"))
+    observed_world = max(get_world_size(), environment_world)
     device = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"
     peak = torch.cuda.max_memory_allocated() / 1024**3 if torch.cuda.is_available() else 0.0
     print(
         json.dumps(
             {
                 "run_id": opts.run_name,
+                "arm": config.arm,
+                "run_mode": config.run_mode,
+                "model_factory": config.model_factory,
+                "base_model_id": config.base_model_id,
+                "base_model_revision": config.base_model_revision,
+                "base_model_weight_sha256": config.base_model_weight_sha256,
+                "base_model_weight_size": config.base_model_weight_size,
+                "tokenizer_artifact_id": config.tokenizer_artifact_id,
+                "tokenizer_artifact_version": config.tokenizer_artifact_version,
+                "tokenizer_file_sha256": config.tokenizer_file_sha256,
+                "tokenizer_composite_sha256": config.tokenizer_composite_sha256,
+                "tokenizers_version": config.tokenizers_version,
+                "tokenizer_eos_token_id": config.tokenizer_eos_token_id,
+                "tokenizer_pad_token_id": config.tokenizer_pad_token_id,
                 "dataset_id": config.dataset_id,
                 "dataset_version": config.dataset_version,
+                "dataset_release": config.dataset_release,
+                "world_size": observed_world,
+                "local_world_size": environment_local_world,
+                "declared_world_size": config.world_size,
+                "launch_contract": config.launch_contract,
+                "source_commit": config.source_commit,
+                "platform_run_manifest_id": config.platform_run_manifest_id,
+                "platform_run_manifest_sha256": config.platform_run_manifest_sha256,
                 "gpu": device,
+                "cuda_device_count": torch.cuda.device_count(),
                 "torch": torch.__version__,
                 "cuda": torch.version.cuda,
                 "parameters": sum(
@@ -938,6 +1230,8 @@ def train(config, opts=None) -> None:
     dataset = config.dataset.build()
     data_loader = config.data_loader.build(dataset, dp_process_group=train_module.dp_process_group)
     trainer = config.trainer.build(train_module, data_loader)
+    if opts is not None:
+        validate_epoch_horizon(trainer, opts.steps)
 
     cast(ConfigSaverCallback, trainer.callbacks["config_saver"]).config = config.as_config_dict()
     losses = LossWatcher()
@@ -991,22 +1285,29 @@ def build_parser() -> argparse.ArgumentParser:
         "prefix; a run that writes anywhere else cannot be resumed by its own retry.",
     )
     parser.add_argument("--work-dir", default="/tmp/dataset-cache")
-    parser.add_argument("--model-factory", default="qwen2_0_5b")
-    parser.add_argument("--sequence-length", type=int, default=2048)
-    parser.add_argument("--steps", type=int, default=200)
-    parser.add_argument("--save-interval", type=int, default=100)
-    parser.add_argument("--warmup-steps", type=int, default=20)
-    parser.add_argument("--learning-rate", type=float, default=1e-3)
-    parser.add_argument("--global-batch-size", type=int, default=256 * 1024)
-    parser.add_argument("--rank-microbatch-size", type=int, default=16 * 1024)
-    parser.add_argument("--data-seed", type=int, default=0)
+    parser.add_argument(
+        "--runtime-smoke",
+        action="store_true",
+        help="Use the closed 100-step verification profile declared in the canonical YAML.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Resolve and print, do not train.")
+    # Scientific controls are deliberately not command-line options. apply_arm_config()
+    # fills these from the canonical arm YAML after parse_cli_args() has rejected every
+    # unknown flag and dotlist.
+    parser.set_defaults(model_factory=P3_MODEL_FACTORY, data_seed=P3_SEED)
     return parser
+
+
+def parse_cli_args(argv: Optional[List[str]] = None):
+    """Parse the closed P3 CLI and reject unknown/dotlist overrides."""
+    opts, overrides = build_parser().parse_known_args(argv)
+    reject_config_overrides(overrides)
+    return opts
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
-    opts, overrides = build_parser().parse_known_args()
+    opts = parse_cli_args()
 
     missing = [
         name
@@ -1027,13 +1328,25 @@ def main() -> None:
             "means this run has no corpus to open.",
         )
 
+    if (
+        is_global_rank_zero()
+        and opts.dataset_id == P3_DATASET_ID
+        and opts.dataset_version == "v2"
+    ):
+        log.warning(
+            "SCIENTIFIC WARNING: %s/v2 is scientifically stale and forbidden for final "
+            "conclusions. Continuing only because the user selected the warning-only policy.",
+            P3_DATASET_ID,
+        )
+
     with during(Stage.THE_CONFIG_WOULD_NOT_BUILD):
-        config = build_config(opts, overrides)
+        config = build_config(opts, [])
     if opts.dry_run:
         show(config)
         return
 
     with during(Stage.THE_TRAINING_ENVIRONMENT_WOULD_NOT_START):
+        validate_runtime_launch_contract()
         prepare_training_environment()
     try:
         with during(Stage.TRAINING_ITSELF_FAILED):

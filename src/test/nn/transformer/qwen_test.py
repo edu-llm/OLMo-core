@@ -21,6 +21,13 @@ import pytest
 import torch
 
 from olmo_core.config import DType
+from olmo_core.nn.transformer import (
+    QWEN2_0_5B_HF_REVISION,
+    QWEN2_0_5B_HF_WEIGHTS_FILE,
+    QWEN2_0_5B_HF_WEIGHTS_SHA256,
+    QWEN2_0_5B_HF_WEIGHTS_SIZE,
+)
+from olmo_core.nn.transformer import qwen as qwen_module
 from olmo_core.nn.transformer.config import TransformerBlockConfig
 from olmo_core.nn.transformer.qwen import (
     HF_NUM_LAYERS,
@@ -45,7 +52,9 @@ def hf_state():
     transformers = pytest.importorskip("transformers")
     try:
         hf_model = transformers.AutoModelForCausalLM.from_pretrained(
-            QWEN2_0_5B_HF_ID, dtype=torch.float32
+            QWEN2_0_5B_HF_ID,
+            revision=QWEN2_0_5B_HF_REVISION,
+            dtype=torch.float32,
         )
     except Exception as e:  # pragma: no cover - offline
         pytest.skip(f"cannot fetch {QWEN2_0_5B_HF_ID}: {e}")
@@ -118,6 +127,79 @@ def test_architecture_matches_published_config():
     assert cfg.d_model // attn.n_heads == 64
 
 
+def test_pretrained_source_is_fully_pinned_and_exported():
+    assert QWEN2_0_5B_HF_ID == "Qwen/Qwen2.5-0.5B"
+    assert QWEN2_0_5B_HF_REVISION == "060db6499f32faf8b98477b0a26969ef7d8b9987"
+    assert QWEN2_0_5B_HF_WEIGHTS_FILE == "model.safetensors"
+    assert QWEN2_0_5B_HF_WEIGHTS_SHA256 == (
+        "88c142557820ccad55bb59756bfcfcf891de9cc6202816bd346445188a0ed342"
+    )
+    assert QWEN2_0_5B_HF_WEIGHTS_SIZE == 988_097_824
+
+
+def test_pinned_weight_loader_prefers_local_snapshot_and_verifies_before_load(
+    tmp_path, monkeypatch
+):
+    weights = tmp_path / "model.safetensors"
+    payload = b"local-cache-fixture"
+    weights.write_bytes(payload)
+    calls = []
+
+    def snapshot_download(**kwargs):
+        calls.append(("snapshot", kwargs))
+        return str(tmp_path)
+
+    def load_file(path, *, device):
+        calls.append(("deserialize", path, device))
+        return {"fixture": torch.ones(1)}
+
+    monkeypatch.setattr("huggingface_hub.snapshot_download", snapshot_download)
+    monkeypatch.setattr("safetensors.torch.load_file", load_file)
+    monkeypatch.setattr(qwen_module, "QWEN2_0_5B_HF_WEIGHTS_SIZE", len(payload))
+    monkeypatch.setattr(
+        qwen_module,
+        "QWEN2_0_5B_HF_WEIGHTS_SHA256",
+        __import__("hashlib").sha256(payload).hexdigest(),
+    )
+
+    state = qwen_module.load_pinned_hf_state_dict()
+
+    assert set(state) == {"fixture"}
+    assert calls[0][0] == "snapshot"
+    assert calls[0][1] == {
+        "repo_id": QWEN2_0_5B_HF_ID,
+        "revision": QWEN2_0_5B_HF_REVISION,
+        "allow_patterns": [QWEN2_0_5B_HF_WEIGHTS_FILE],
+        "local_files_only": True,
+    }
+    assert calls[1] == ("deserialize", str(weights), "cpu")
+
+
+def test_pinned_weight_loader_refuses_drift_before_deserialization(tmp_path, monkeypatch):
+    weights = tmp_path / "model.safetensors"
+    weights.write_bytes(b"drift")
+    deserialized = False
+
+    monkeypatch.setattr(
+        "huggingface_hub.snapshot_download",
+        lambda **_: str(tmp_path),
+    )
+
+    def load_file(*_args, **_kwargs):
+        nonlocal deserialized
+        deserialized = True
+        raise AssertionError("drifted bytes must not be deserialized")
+
+    monkeypatch.setattr("safetensors.torch.load_file", load_file)
+    monkeypatch.setattr(qwen_module, "QWEN2_0_5B_HF_WEIGHTS_SIZE", 5)
+    monkeypatch.setattr(qwen_module, "QWEN2_0_5B_HF_WEIGHTS_SHA256", "0" * 64)
+
+    with pytest.raises(RuntimeError, match="SHA-256 mismatch"):
+        qwen_module.load_pinned_hf_state_dict()
+
+    assert not deserialized
+
+
 def test_key_map_is_complete_and_injective():
     m = hf_to_olmo_key_map()
     # 2 global (embedding, final norm) + 12 per layer.
@@ -167,6 +249,10 @@ def test_distributed_state_dict_loads_after_train_module_initialization(monkeypa
             "lm_head.w_out.weight": expected.clone(),
         },
     )
+    monkeypatch.setattr(
+        "huggingface_hub.snapshot_download",
+        lambda **_: (_ for _ in ()).throw(AssertionError("injected state must stay offline")),
+    )
 
     load_hf_weights(
         model,
@@ -198,7 +284,11 @@ def test_logits_match_huggingface(hf_state):
     olmo.load_state_dict(convert_hf_state_dict(hf_state, tied=True), strict=True)
     olmo.eval()
 
-    hf = AutoModelForCausalLM.from_pretrained(QWEN2_0_5B_HF_ID, torch_dtype=torch.float32)
+    hf = AutoModelForCausalLM.from_pretrained(
+        QWEN2_0_5B_HF_ID,
+        revision=QWEN2_0_5B_HF_REVISION,
+        torch_dtype=torch.float32,
+    )
     hf.eval()
 
     torch.manual_seed(0)

@@ -10,6 +10,7 @@ the mask reaches the loss — not in the boundary logic.
 
 import os
 import sys
+from collections import OrderedDict
 from pathlib import Path
 
 import pytest
@@ -20,12 +21,14 @@ SCRIPTS = Path(__file__).resolve().parents[3] / "scripts" / "train" / "p3_math_s
 sys.path.insert(0, str(SCRIPTS))
 
 import train_module as p3_train_module  # noqa: E402
-from olmo_core.data.utils import get_labels  # noqa: E402
-from olmo_core.train.train_module import TransformerTrainModule  # noqa: E402
 from train_module import (  # noqa: E402
     DerivedMaskTrainModule,
     FixedDivisorTransformerTrainModule,
 )
+
+from olmo_core.data.utils import get_document_lengths, get_labels  # noqa: E402
+from olmo_core.train import MetricMergeStrategy, ReduceType, Trainer  # noqa: E402
+from olmo_core.train.train_module import TransformerTrainModule  # noqa: E402
 
 SEP = [7, 8]
 EOS = 9
@@ -170,9 +173,31 @@ def test_packed_split_label_mask_scores_each_goal_and_real_eos():
 
 def test_dense_label_mask_scores_all_real_targets_but_not_padding():
     ids = [1, 7, 8, 2, EOS, 3, 7, 8, 4, EOS, EOS]
-    # Every real token after the first is a target, including both genuine EOS.
+    # Both genuine EOS targets remain live (positions 3 and 8), but the first
+    # document's EOS state (position 4) must not predict document two's first token.
     # The EOS at position 10 is padding, so position 9 must not predict it.
-    assert label_supervision(ids, "dense") == [1] * 9 + [0, 0]
+    assert label_supervision(ids, "dense") == [1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 0]
+
+
+@pytest.mark.parametrize("arm", ["dense", "split"])
+def test_packed_doc_lengths_end_at_eos_states_whose_labels_are_masked(arm):
+    """Each doc_lens segment includes EOS, whose state has isolated attention."""
+    ids = torch.tensor(
+        [[
+            1, 7, 8, 2, EOS,
+            3, 7, 8, 4, EOS,
+            5, 7, 8, 6, EOS,
+            EOS, EOS,
+        ]]
+    )
+    doc_lens = get_document_lengths(ids[0], EOS)
+    assert doc_lens.tolist() == [5, 5, 5, 1, 1]
+
+    real_eos_positions = torch.cumsum(doc_lens[:3], dim=0) - 1
+    got = label_supervision(ids[0].tolist(), arm)
+    for eos_position in real_eos_positions.tolist():
+        assert got[eos_position - 1] == 1, "the genuine EOS target stays supervised"
+        assert got[eos_position] == 0, "an EOS state cannot predict into the next document"
 
 
 def test_split_masks_local_assumptions_while_dense_scores_them():
@@ -196,11 +221,14 @@ def test_model_forward_masks_shifted_labels_and_records_true_fraction(monkeypatc
     module.eos_token_id = EOS
     module.pad_token_id = EOS
     module.arm = "split"
+    module.fixed_loss_div_factor = 7
     recorded = {}
     forwarded = {}
 
-    def record_metric(name, value, _reduce):
+    def record_metric(name, value, reduce_type, merge_strategy):
         recorded[name] = float(value)
+        recorded["reduce_type"] = reduce_type
+        recorded["merge_strategy"] = merge_strategy
 
     def fake_parent(_self, input_ids, labels=None, **kwargs):
         forwarded["labels"] = labels.clone()
@@ -220,6 +248,54 @@ def test_model_forward_masks_shifted_labels_and_records_true_fraction(monkeypatc
         [-100, -100, 2, EOS, -100, -100, -100]
     ]
     assert recorded["train/supervised token fraction"] == pytest.approx(2 / 7)
+    assert recorded["reduce_type"] == ReduceType.mean
+    assert recorded["merge_strategy"] == MetricMergeStrategy.sum
+
+
+def test_supervised_fraction_sums_differing_microbatches_without_duplicate_warning(
+    monkeypatch, caplog
+):
+    module = DerivedMaskTrainModule.__new__(DerivedMaskTrainModule)
+    module._sep = torch.tensor(SEP, dtype=torch.long)
+    module.eos_token_id = EOS
+    module.pad_token_id = EOS
+    module.arm = "dense"
+    module.fixed_loss_div_factor = 14
+
+    trainer = Trainer.__new__(Trainer)
+    trainer.global_step = 1
+    trainer._metrics = OrderedDict()
+    trainer._metrics_reduce_type = {}
+    module._trainer = trainer
+
+    forwarded_divisors = []
+
+    def fake_transformer_forward(_self, input_ids, labels=None, **kwargs):
+        del input_ids, labels
+        forwarded_divisors.append(kwargs["loss_div_factor"])
+        return None, None, None, None
+
+    monkeypatch.setattr(TransformerTrainModule, "model_forward", fake_transformer_forward)
+    batches = [
+        torch.tensor([[1, 7, 8, 2, EOS, EOS, EOS]]),
+        torch.tensor([[1, EOS, EOS, EOS, EOS, EOS, EOS]]),
+    ]
+
+    with caplog.at_level("WARNING"):
+        for ids in batches:
+            DerivedMaskTrainModule.model_forward(
+                module,
+                ids,
+                labels=get_labels({"input_ids": ids}),
+                loss_div_factor=12,
+            )
+
+    metric = trainer.get_metric("train/supervised token fraction")
+    assert metric is not None
+    assert metric.item() == pytest.approx(5 / 14)
+    assert trainer._metrics_reduce_type["train/supervised token fraction"] == ReduceType.mean
+    assert "Attempting to log duplicate metric" not in caplog.text
+    assert forwarded_divisors == [14, 14], "the fixed loss divisor is diagnostic-independent"
 
 
 def test_empty_separator_is_rejected_at_construction():
@@ -244,32 +320,66 @@ def test_unknown_arm_is_rejected_at_construction():
         )
 
 
-def test_real_constructor_keeps_separator_on_the_train_modules_device(monkeypatch):
+def test_real_constructor_keeps_separator_on_cpu_when_module_device_is_cuda(monkeypatch):
     """TrainModule is not nn.Module, so register_buffer is unavailable.
 
     Keep this as a constructor test rather than another ``__new__`` algebra test:
     the latter let an AttributeError survive every local gate until a paid GPU job.
     """
+    from torch._subclasses.fake_tensor import FakeTensorMode
 
     def fake_parent_init(self, *args, **kwargs):
         del args, kwargs
-        self.device = torch.device("cpu")
+        self.device = torch.device("cuda")
 
     monkeypatch.setattr(
         FixedDivisorTransformerTrainModule,
         "__init__",
         fake_parent_init,
     )
-    module = DerivedMaskTrainModule(
-        arm="split",
-        separator_ids=SEP,
-        eos_token_id=EOS,
-        pad_token_id=EOS,
-        fixed_loss_div_factor=8,
-    )
+    with FakeTensorMode():
+        module = DerivedMaskTrainModule(
+            arm="split",
+            separator_ids=SEP,
+            eos_token_id=EOS,
+            pad_token_id=EOS,
+            fixed_loss_div_factor=8,
+        )
 
-    assert module._sep.tolist() == SEP
-    assert module._sep.device == module.device
+    assert module._sep.shape == (len(SEP),)
+    assert module._sep.dtype == torch.long
+    assert module._sep.device.type == "cpu"
+    assert "_sep" in module.__dict__, "TrainModule has no register_buffer lifecycle"
+
+
+@pytest.mark.parametrize("input_device", ["cpu", "cuda"])
+def test_separator_comparison_follows_cpu_training_and_cuda_eval_inputs(
+    monkeypatch, input_device
+):
+    """Mask derivation runs before Transformer moves IDs onto the model device."""
+    from torch._subclasses.fake_tensor import FakeTensorMode
+
+    def fake_parent_init(self, *args, **kwargs):
+        del args, kwargs
+        self.device = torch.device("cuda")
+
+    monkeypatch.setattr(
+        FixedDivisorTransformerTrainModule,
+        "__init__",
+        fake_parent_init,
+    )
+    with FakeTensorMode():
+        module = DerivedMaskTrainModule(
+            arm="split",
+            separator_ids=SEP,
+            eos_token_id=EOS,
+            pad_token_id=EOS,
+            fixed_loss_div_factor=8,
+        )
+        ids = torch.tensor([[1, 7, 8, 2, EOS]], device=input_device)
+        got = module.label_supervision_mask(ids)
+
+    assert got.device == ids.device
 
 
 def test_separator_longer_than_the_window_supervises_nothing():

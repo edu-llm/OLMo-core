@@ -29,8 +29,10 @@ warrants; the map below is explicit, exhaustive, and round-trip tested instead.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, Optional
 
 import torch
@@ -48,22 +50,34 @@ from .config import TransformerBlockConfig, TransformerBlockType, TransformerCon
 
 __all__ = [
     "QWEN2_0_5B_HF_ID",
+    "QWEN2_0_5B_HF_REVISION",
+    "QWEN2_0_5B_HF_WEIGHTS_FILE",
+    "QWEN2_0_5B_HF_WEIGHTS_SHA256",
+    "QWEN2_0_5B_HF_WEIGHTS_SIZE",
     "build_qwen2_0_5b",
     "convert_hf_state_dict",
     "export_to_hf_state_dict",
     "hf_to_olmo_key_map",
+    "load_pinned_hf_state_dict",
     "ParameterReport",
     "parameter_report",
     "qwen2_0_5b_config",
     "qwen2_tokenizer_config",
+    "resolve_pinned_hf_snapshot",
     "strip_attn_out_bias",
 ]
 
 log = logging.getLogger(__name__)
 
 QWEN2_0_5B_HF_ID = "Qwen/Qwen2.5-0.5B"
+QWEN2_0_5B_HF_REVISION = "060db6499f32faf8b98477b0a26969ef7d8b9987"
+QWEN2_0_5B_HF_WEIGHTS_FILE = "model.safetensors"
+QWEN2_0_5B_HF_WEIGHTS_SHA256 = (
+    "88c142557820ccad55bb59756bfcfcf891de9cc6202816bd346445188a0ed342"
+)
+QWEN2_0_5B_HF_WEIGHTS_SIZE = 988_097_824
 
-#: Architecture constants, from https://huggingface.co/Qwen/Qwen2.5-0.5B/raw/main/config.json.
+#: Architecture constants from ``config.json`` at :data:`QWEN2_0_5B_HF_REVISION`.
 #: Kept as module constants so the converter and the parity tests assert against the same
 #: numbers rather than repeating literals.
 HF_HIDDEN_SIZE = 896
@@ -392,6 +406,77 @@ def export_to_hf_state_dict(
     return out
 
 
+def resolve_pinned_hf_snapshot(*, allow_patterns: Optional[list[str]] = None) -> Path:
+    """
+    Resolve the immutable Qwen2.5-0.5B HuggingFace snapshot.
+
+    The local cache is consulted first. Only when the exact commit is absent does this ask
+    HuggingFace to download it; callers always receive a local snapshot directory and can load
+    from it with offline/local-only APIs.
+
+    :param allow_patterns: Optional snapshot files to resolve.
+
+    :returns: The local snapshot directory for :data:`QWEN2_0_5B_HF_REVISION`.
+    """
+    from huggingface_hub import snapshot_download
+    from huggingface_hub.errors import LocalEntryNotFoundError
+
+    kwargs = {
+        "repo_id": QWEN2_0_5B_HF_ID,
+        "revision": QWEN2_0_5B_HF_REVISION,
+        "allow_patterns": allow_patterns,
+    }
+    try:
+        snapshot = snapshot_download(**kwargs, local_files_only=True)
+    except LocalEntryNotFoundError:
+        snapshot = snapshot_download(**kwargs, local_files_only=False)
+    return Path(snapshot)
+
+
+def _sha256_file(path: Path, chunk_size: int = 8 * 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(chunk_size), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def load_pinned_hf_state_dict() -> Dict[str, torch.Tensor]:
+    """
+    Verify and deserialize the immutable Qwen2.5-0.5B safetensors file.
+
+    Size and SHA-256 are checked before safetensors sees the file. This prevents a mutable
+    branch, partial cache entry, or replaced blob from becoming plausible model weights.
+
+    :returns: The HuggingFace state dict loaded on CPU.
+
+    :raises FileNotFoundError: If the pinned snapshot does not contain the expected file.
+    :raises RuntimeError: If the weight file's size or SHA-256 differs from the approved bytes.
+    """
+    from safetensors.torch import load_file
+
+    snapshot = resolve_pinned_hf_snapshot(allow_patterns=[QWEN2_0_5B_HF_WEIGHTS_FILE])
+    weights_path = snapshot / QWEN2_0_5B_HF_WEIGHTS_FILE
+    if not weights_path.is_file():
+        raise FileNotFoundError(
+            f"{QWEN2_0_5B_HF_ID}@{QWEN2_0_5B_HF_REVISION} did not resolve "
+            f"{QWEN2_0_5B_HF_WEIGHTS_FILE}"
+        )
+    size = weights_path.stat().st_size
+    if size != QWEN2_0_5B_HF_WEIGHTS_SIZE:
+        raise RuntimeError(
+            f"{QWEN2_0_5B_HF_WEIGHTS_FILE} size mismatch: expected "
+            f"{QWEN2_0_5B_HF_WEIGHTS_SIZE}, got {size}"
+        )
+    digest = _sha256_file(weights_path)
+    if digest != QWEN2_0_5B_HF_WEIGHTS_SHA256:
+        raise RuntimeError(
+            f"{QWEN2_0_5B_HF_WEIGHTS_FILE} SHA-256 mismatch: expected "
+            f"{QWEN2_0_5B_HF_WEIGHTS_SHA256}, got {digest}"
+        )
+    return dict(load_file(str(weights_path), device="cpu"))
+
+
 def load_hf_weights(
     model: nn.Module,
     *,
@@ -414,12 +499,12 @@ def load_hf_weights(
 
     :raises RuntimeError: If the state dict does not match the model exactly.
     """
+    if hf_id != QWEN2_0_5B_HF_ID:
+        raise ValueError(
+            f"Qwen2.5-0.5B weights are pinned to {QWEN2_0_5B_HF_ID!r}; got {hf_id!r}"
+        )
     if hf_state_dict is None:
-        from transformers import AutoModelForCausalLM
-
-        hf_model = AutoModelForCausalLM.from_pretrained(hf_id, dtype=torch.float32)
-        hf_state_dict = {k: v.detach().clone() for k, v in hf_model.state_dict().items()}
-        del hf_model
+        hf_state_dict = load_pinned_hf_state_dict()
 
     tied = model.lm_head.w_out.weight is model.embeddings.weight
     converted = convert_hf_state_dict(hf_state_dict, tied=tied)
@@ -441,4 +526,10 @@ def load_hf_weights(
         model.load_state_dict(converted, strict=True)
     if tied and model.lm_head.w_out.weight is not model.embeddings.weight:
         raise RuntimeError("loading broke the embedding tie")
-    log.info("loaded %s weights: %s", hf_id, parameter_report(model))
+    log.info(
+        "loaded %s@%s weights (sha256=%s): %s",
+        hf_id,
+        QWEN2_0_5B_HF_REVISION,
+        QWEN2_0_5B_HF_WEIGHTS_SHA256,
+        parameter_report(model),
+    )

@@ -36,6 +36,12 @@ shared:
   # which keeps total input tokens tied to the exact packed dataset rather than to a
   # number typed here.
   max_steps: null
+  # Closed verification mode selected by --runtime-smoke. These values live in
+  # the paired YAMLs rather than arriving as arbitrary post-YAML overrides.
+  runtime_smoke:
+    max_steps: 100
+    warmup_steps: 10
+    save_every: 50
   # 13 is the preregistered exposure choice. Important: the raw JSONL is 629.5M
   # Qwen tokens, but the 16,384-token build drops 5,198 long documents containing
   # 135.3M tokens, retaining 494.2M real tokens before ~2% packing padding. So this
