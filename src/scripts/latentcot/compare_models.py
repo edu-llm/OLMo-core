@@ -43,7 +43,7 @@ from olmo_core.latentcot.evaluate import (
     solve_rate_by_depth,
 )
 from olmo_core.latentcot.tokens import TOKENIZER_CONFIG
-from olmo_core.latentcot.train_driver import load_checkpoint
+from olmo_core.latentcot.train_driver import load_checkpoint, resolve_device
 from olmo_core.nn.transformer import TransformerConfig
 
 
@@ -68,11 +68,12 @@ def parse_arm_spec(spec: str) -> Tuple[str, str]:
     return arm, ckpt
 
 
-def evaluate_arm(model_config, arm: str, ckpt: str, examples) -> dict:
+def evaluate_arm(model_config, arm: str, ckpt: str, examples, device: str = "cpu") -> dict:
     """Load one arm's checkpoint and score it on the held-out set."""
     mode = ARM_MODES[arm]
     model = model_config.build(init_device="cpu")
     load_checkpoint(model, ckpt)
+    model.to(device)
     model.eval()
     return {
         "checkpoint": ckpt,
@@ -142,8 +143,11 @@ def main() -> None:
     parser.add_argument("--num-continuous-thoughts", type=int, default=8)
     parser.add_argument(
         "--model",
-        default="olmo2_370M",
-        help="TransformerConfig factory name; use olmo3_370M for the S3-init runs",
+        default="olmo3_370M",
+        help="TransformerConfig factory name; olmo3_370M matches the S3-init runs",
+    )
+    parser.add_argument(
+        "--device", default="auto", help="'auto' (cuda if available else cpu), 'cuda', or 'cpu'"
     )
     parser.add_argument(
         "--baseline",
@@ -166,14 +170,17 @@ def main() -> None:
     if not args.ours:
         parser.error("provide at least one --ours ARM=CKPT to compare against the baseline")
 
+    device = resolve_device(args.device)
     model_config = getattr(TransformerConfig, args.model)(
         vocab_size=TOKENIZER_CONFIG.padded_vocab_size()
     )
     examples = load_examples(args.test_data, args.num_continuous_thoughts)
 
     baseline_arm, baseline_ckpt = args.baseline
-    baseline = evaluate_arm(model_config, baseline_arm, baseline_ckpt, examples)
-    ours = {arm: evaluate_arm(model_config, arm, ckpt, examples) for arm, ckpt in args.ours}
+    baseline = evaluate_arm(model_config, baseline_arm, baseline_ckpt, examples, device)
+    ours = {
+        arm: evaluate_arm(model_config, arm, ckpt, examples, device) for arm, ckpt in args.ours
+    }
 
     comparison = {}
     for arm, entry in ours.items():

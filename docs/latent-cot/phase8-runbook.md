@@ -23,17 +23,19 @@ Everything reuses the same `arm_loss` the tests validate, so behavior matches.
 Must print PREFLIGHT PASSED (matched config, disjoint seeds). Do not train if it fails.
 
 ## 3. Train the arms — matched starts, paired seeds
-Screen with 3 seeds, then confirm with 5. **Every arm uses the SAME `--init-seed`** (identical
-initial weights = the shared base); only `--seed` (data shuffle) and the arm's whitelisted
-fields vary. Arms: `A0` explicit-CoT, `A1` no-CoT, `A2` CODI, `A3` CODI+R1 (the fix),
-`A4` CODI+L2 (control).
+Screen with 3 seeds, then confirm with 5. **Every arm forks the same "best model" via
+`--rung olmo3_370M --init-checkpoint s3://…` and uses the SAME `--init-seed`** (identical
+starting weights = the shared base); only `--seed` (data shuffle) and the arm's whitelisted
+fields vary. Arms: `A0` explicit-CoT (= the best model fine-tuned the normal way, the fair
+baseline), `A1` no-CoT, `A2` CODI, `A3` CODI+R1 (the fix), `A4` CODI+L2 (control).
 
 ```bash
 DATA=data/latentcot/graph-reachability-depth/conversations
+BASE=s3://edullm-olmo-370m-ckpts/olmo3-370m/run-10b-equal/step12716/  # needs AWS creds
 for seed in 1 2 3; do
   for arm in A0 A1 A2 A3 A4; do
     .venv/bin/python src/scripts/latentcot/train_codi.py \
-      --arm $arm --rung olmo2_370M --steps 5000 --batch-size 16 \
+      --arm $arm --rung olmo3_370M --init-checkpoint $BASE --steps 5000 --batch-size 16 \
       --init-seed 0 --seed $seed \
       --train-data $DATA/train-00000.jsonl --test-data $DATA/heldout-00000.jsonl \
       --out runs/latentcot
@@ -42,11 +44,14 @@ done
 # each writes runs/latentcot/<arm>-seed<seed>/{model.pt, metrics.json}
 ```
 `metrics.json` already carries `overall_acc` + `solve_rate_by_depth` per run.
+GPU is auto-detected (`--device auto`); pass `--device cpu` to force CPU. To sanity-check the
+run *from scratch* (no S3/creds), drop `--init-checkpoint` and use `--rung olmo2_370M` — the two
+rungs are state-dict-interchangeable at our sequence lengths, but the real sweep forks the base.
 
 ## 4. Gates + probes
 ```bash
 .venv/bin/python src/scripts/latentcot/eval.py \
-  --test-data $DATA/heldout-00000.jsonl --num-continuous-thoughts 8 \
+  --test-data $DATA/heldout-00000.jsonl --num-continuous-thoughts 8 --model olmo3_370M \
   --arm A0=runs/latentcot/A0-seed1/model.pt \
   --arm A2=runs/latentcot/A2-seed1/model.pt \
   --arm A3=runs/latentcot/A3-seed1/model.pt \

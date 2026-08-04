@@ -17,7 +17,18 @@ from .arms import Arm
 from .data.dataset import LatentCotDataset, codi_collate
 from .loss import arm_loss
 
-__all__ = ["build_model", "load_checkpoint", "iter_batches", "train_arm"]
+__all__ = ["resolve_device", "build_model", "load_checkpoint", "iter_batches", "train_arm"]
+
+
+def resolve_device(device: str = "auto") -> str:
+    """
+    Resolve a device string: ``"auto"`` -> ``"cuda"`` if available else ``"cpu"``, else pass
+    the given value through unchanged. Shared by the training and eval scripts so all of them
+    land on the GPU when one is present.
+    """
+    if device == "auto":
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    return device
 
 
 def load_checkpoint(model, path: str, *, strict: bool = True) -> None:

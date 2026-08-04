@@ -22,7 +22,7 @@ from olmo_core.latentcot import tokens as T
 from olmo_core.latentcot.data.encode import encode_example
 from olmo_core.latentcot.data.graph_gen import Example
 from olmo_core.latentcot.evaluate import run_eval
-from olmo_core.latentcot.train_driver import load_checkpoint
+from olmo_core.latentcot.train_driver import load_checkpoint, resolve_device
 from olmo_core.nn.transformer import TransformerConfig
 
 
@@ -59,7 +59,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--test-data", required=True)
     parser.add_argument("--num-continuous-thoughts", type=int, default=8)
-    parser.add_argument("--model", default="olmo2_370M", help="TransformerConfig factory name")
+    parser.add_argument("--model", default="olmo3_370M", help="TransformerConfig factory name")
+    parser.add_argument(
+        "--device", default="auto", help="'auto' (cuda if available else cpu), 'cuda', or 'cpu'"
+    )
     parser.add_argument(
         "--arm",
         action="append",
@@ -70,6 +73,7 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=Path("runs/latentcot/eval"))
     args = parser.parse_args()
 
+    device = resolve_device(args.device)
     model_config = getattr(TransformerConfig, args.model)(
         vocab_size=T.TOKENIZER_CONFIG.padded_vocab_size()
     )
@@ -80,6 +84,7 @@ def main() -> None:
         arm, ckpt = spec.split("=", 1)
         model = model_config.build(init_device="cpu")
         load_checkpoint(model, ckpt)
+        model.to(device)
         models[arm] = model
 
     report = run_eval(models, examples)

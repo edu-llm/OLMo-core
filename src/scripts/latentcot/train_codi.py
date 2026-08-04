@@ -29,7 +29,12 @@ import torch
 from olmo_core.latentcot.arms import ARMS
 from olmo_core.latentcot.data.dataset import LatentCotDataset
 from olmo_core.latentcot.evaluate import overall_accuracy, solve_rate_by_depth
-from olmo_core.latentcot.train_driver import build_model, load_checkpoint, train_arm
+from olmo_core.latentcot.train_driver import (
+    build_model,
+    load_checkpoint,
+    resolve_device,
+    train_arm,
+)
 
 
 def main() -> None:
@@ -45,10 +50,13 @@ def main() -> None:
     parser.add_argument("--init-seed", type=int, default=0, help="SAME across arms (shared init)")
     parser.add_argument("--seed", type=int, default=0, help="data-shuffle seed (per run)")
     parser.add_argument("--init-checkpoint", default=None, help="optional shared base state_dict")
+    parser.add_argument(
+        "--device", default="auto", help="'auto' (cuda if available else cpu), 'cuda', or 'cpu'"
+    )
     parser.add_argument("--out", type=Path, default=Path("runs/latentcot"))
     args = parser.parse_args()
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = resolve_device(args.device)
     arm = ARMS[args.arm]
 
     model = build_model(args.rung, init_seed=args.init_seed, device=device)
