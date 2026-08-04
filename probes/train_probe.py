@@ -70,7 +70,13 @@ BETA_REGIMES = {"strict": False, "reflection": True}
 # silently mapping onto DP2-strict, which is what an omitted entry would do.
 ARMS: dict[str, dict] = {
     "R1": dict(mixer="kda_hh", num_householder=1, beta_regime="strict"),
-    "R1-P": dict(mixer="kda_hh", num_householder=1, beta_regime="strict"),
+    # The capacity control for DP2-strict: R=1, but with the DP2 parameter delta spent in FFN
+    # width so the two differ *only* in arity. 'match_arm' is part of the arm definition
+    # rather than a flag the caller supplies, because an R1-P run launched without it is
+    # byte-for-byte an R1 run wearing a different name -- it trains, it succeeds, and it
+    # records 'arm': 'R1-P' while controlling for nothing. That failure is invisible in the
+    # record unless someone thinks to compare param_ledger across two files.
+    "R1-P": dict(mixer="kda_hh", num_householder=1, beta_regime="strict", match_arm="DP2-strict"),
     "DP2-strict": dict(mixer="kda_hh", num_householder=2, beta_regime="strict"),
     "Reflection": dict(mixer="kda_hh", num_householder=2, beta_regime="reflection"),
     # R=1 under the reflection regime: the fourth cell of the (beta regime x R) square, and the
@@ -84,6 +90,17 @@ ARMS: dict[str, dict] = {
     # contrasts needs this arm. Naming it makes that contrast reproducible from an arm id
     # instead of from a pair of flags a caller has to remember to set together.
     "R1-refl": dict(mixer="kda_hh", num_householder=1, beta_regime="reflection"),
+    # R1-P's reflection twin, and the reason R1-P alone does not close the capacity confound.
+    #
+    # The quantity the sweep measures is an *interaction*: (R effect under reflection) minus
+    # (R effect under strict). Adding a capacity control to only one of those two contrasts
+    # does not make the interaction capacity-controlled -- it makes the two contrasts
+    # differently constructed, which is worse than leaving both uncontrolled, because the
+    # difference between them then mixes the capacity correction with the effect. Both
+    # regimes need their control or neither does.
+    "R1-refl-P": dict(
+        mixer="kda_hh", num_householder=1, beta_regime="reflection", match_arm="Reflection"
+    ),
     "DP2-budgeted": dict(unimplemented="needs per-factor beta b=2*sigmoid(l_b), pi=sigmoid(l_pi)"),
     "R1-2step-tiedK": dict(unimplemented="needs k2=k1 forced at the recurrence boundary"),
 }
@@ -107,6 +124,16 @@ def apply_arm(args: argparse.Namespace) -> None:
     if "unimplemented" in settings:
         raise SystemExit(f"arm '{args.arm}' is not implemented: {settings['unimplemented']}")
     for key, value in settings.items():
+        # An arm's settings ARE the arm. Letting a command-line flag survive here would mean
+        # two runs could both record 'arm': 'R1-P' while having matched different targets, and
+        # the record would not show which. Refuse instead of picking a winner.
+        existing = getattr(args, key, None)
+        if key == "match_arm" and existing is not None and existing != value:
+            raise SystemExit(
+                f"--match-arm {existing!r} conflicts with arm '{args.arm}', which is defined "
+                f"as matching {value!r}. Drop the flag, or use --mixer/--num-householder/"
+                f"--beta-regime directly instead of an arm id."
+            )
         setattr(args, key, value)
 
 
@@ -576,11 +603,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Solve --ffn-dim so the non-embedding parameter count matches this target (R1-P).",
     )
     p.add_argument(
+        "--match-arm",
+        default=None,
+        choices=sorted(ARMS),
+        help=(
+            "Resolve --match-non-embedding by building this arm and reading its ledger, "
+            "instead of hardcoding a count that is only correct for one geometry. The named "
+            "arm must be in the same beta regime as this run."
+        ),
+    )
+    p.add_argument(
         "--param-tolerance",
         type=float,
         default=0.005,
         help="Fractional tolerance on the --match-non-embedding mismatch. Runbook P1.0: 0.5%%.",
     )
+    # NOTE FOR AN LR SWEEP: this is the *peak* of a OneCycle schedule, not a constant rate
+    # (see the scheduler construction in 'main'). Every run therefore ends at ~0 regardless of
+    # this value, which is exactly why the final sampled loss says nothing about convergence.
+    # Changing it changes the whole trajectory, which is the intended treatment; do not read a
+    # cell's '--lr' as the rate that was in force at any particular step.
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--backend", default="triton", choices=["triton", "torch"])
     p.add_argument(
@@ -636,6 +678,57 @@ def main() -> None:
     # so the init stream is set here and nowhere else.
     torch.manual_seed(seeds["init"])
 
+    # '--match-arm' resolves to a parameter target by *building* the named arm's FFN-free
+    # model and reading its ledger, rather than making the caller type the number.
+    #
+    # The number is geometry-dependent: 1,400,524 is DP2-strict's non-embedding count at
+    # d_model=256, 3 layers, 4 heads, head_dim=64 and nothing else. A hardcoded target
+    # silently stops being a match the moment any of those changes, and it stops in the
+    # direction that still runs and still reports 'completed' -- the arm keeps its name while
+    # no longer controlling for what it is named after. Deriving it means the control cannot
+    # drift away from the thing it controls for.
+    if args.match_arm is not None:
+        if args.match_non_embedding is not None:
+            raise SystemExit("pass at most one of --match-arm and --match-non-embedding")
+        if ARMS[args.match_arm].get("match_arm"):
+            # A control cannot be matched to another control. The target is built FFN-free to
+            # read its intrinsic cost, so matching to an arm that is itself FFN-matched would
+            # read the count it has *before* its own match is applied -- silently targeting
+            # the wrong number while looking like it worked.
+            raise SystemExit(
+                f"--match-arm {args.match_arm!r} is itself parameter-matched (to "
+                f"{ARMS[args.match_arm]['match_arm']!r}). Match to the arm whose capacity is "
+                f"being controlled for, not to another control."
+            )
+        target_args = argparse.Namespace(**vars(args))
+        target_args.arm = args.match_arm
+        apply_arm(target_args)  # raises on an unimplemented target
+        if target_args.beta_regime != args.beta_regime:
+            # Matching across regimes would fold a capacity control and a regime contrast
+            # into one arm, which is what makes the result unreadable rather than merely
+            # imprecise. Both regimes have their own R=2 arm; name the right one.
+            raise SystemExit(
+                f"--match-arm {args.match_arm!r} is in the {target_args.beta_regime!r} regime "
+                f"but this run is {args.beta_regime!r}. A capacity control must match an arm "
+                f"in its own regime, or the comparison confounds capacity with beta range."
+            )
+        torch.manual_seed(seeds["init"])
+        target_model = build_model(
+            target_args,
+            spec,
+            ffn_dim=None,
+            allow_neg_eigval=BETA_REGIMES[target_args.beta_regime],
+            device=device,
+        )
+        args.match_non_embedding = target_model.parameter_ledger()["non_embedding"]
+        del target_model
+        torch.cuda.empty_cache()
+        print(
+            f"MATCH_ARM {args.match_arm} R={target_args.num_householder} "
+            f"non_embedding={args.match_non_embedding}",
+            flush=True,
+        )
+
     ffn_dim = args.ffn_dim
     ffn_solve: Optional[dict] = None
     if args.match_non_embedding is not None:
@@ -680,6 +773,22 @@ def main() -> None:
             abs(mismatch) <= args.param_tolerance * ffn_solve["target_non_embedding"]
         )
         print("FFN_SOLVE " + json.dumps(ffn_solve), flush=True)
+        # Refuse rather than train. 'within_tolerance' was computed and printed but never
+        # acted on, so a parameter-matched arm whose match missed still recorded
+        # 'outcome: completed' -- and the only thing that arm exists to establish is that the
+        # match held. A downstream reader comparing it to DP2-strict would be reading a
+        # capacity difference as a regime difference, which is the exact confound the arm was
+        # added to remove. Failing here costs one cell; passing costs the conclusion.
+        if not ffn_solve["within_tolerance"]:
+            raise SystemExit(
+                f"parameter match missed: solved ffn_dim={ffn_dim} gives "
+                f"{ffn_solve['achieved_non_embedding']} non-embedding parameters against a "
+                f"target of {ffn_solve['target_non_embedding']} "
+                f"({ffn_solve['mismatch_pct']:+.3f}%, tolerance "
+                f"±{ffn_solve['tolerance_pct']:.3f}%). The FFN width is an integer, so a "
+                f"target this close to the FFN-free cost may not be reachable at all; raise "
+                f"--param-tolerance only if the residual is defensible for the comparison."
+            )
 
     print("PARAM_LEDGER " + json.dumps(ledger), flush=True)
     # Before training: the parameter ledger must match what the manifest expects.
@@ -733,6 +842,17 @@ def main() -> None:
     task_gen = torch.Generator().manual_seed(seeds["task"])
     collisions = 0
     loss_trace: list[tuple[int, float]] = []
+    # A trailing window of per-step losses, reduced at the end into 'loss_summary'.
+    #
+    # WHY THE TRACE ALONE IS NOT ENOUGH, AND HOW IT MISLEADS. 'loss_trace' samples one
+    # minibatch every 500 steps, so its last entry is a single batch drawn at the final step.
+    # Under OneCycle the LR there is ~4e-9 -- the weights are frozen -- so a high value is a
+    # hard batch, not a model that failed to converge. Reading that entry as a convergence
+    # signal produced a false 'unconverged' finding on this very probe: runs that reached
+    # ~0.0000 by step 1000 were classified as failures because one late batch read 0.82.
+    # A mean over the tail cannot be spoofed by one draw.
+    tail_losses: list[float] = []
+    tail_window = max(1, args.steps // 20)
     nonfinite_steps = 0
     started = time.time()
     for step in range(args.steps):
@@ -749,6 +869,8 @@ def main() -> None:
         )
         if not torch.isfinite(loss):
             nonfinite_steps += 1
+        if step >= args.steps - tail_window:
+            tail_losses.append(loss.item())
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step()
@@ -757,6 +879,20 @@ def main() -> None:
         if step % 500 == 0 or step == args.steps - 1:
             loss_trace.append((step, round(loss.item(), 4)))
             print(f"step {step:5d}  loss {loss.item():.4f}  len {length}", flush=True)
+
+    finite_tail = sorted(x for x in tail_losses if x == x and abs(x) != float("inf"))
+    loss_summary = {
+        "tail_window_steps": tail_window,
+        "tail_mean": sum(finite_tail) / len(finite_tail) if finite_tail else float("nan"),
+        "tail_median": finite_tail[len(finite_tail) // 2] if finite_tail else float("nan"),
+        "tail_max": finite_tail[-1] if finite_tail else float("nan"),
+        "tail_min": finite_tail[0] if finite_tail else float("nan"),
+        # The best the run ever reached at a sampled step, ignoring the first two samples so a
+        # warmup value cannot stand in for it. This is the number that answers "did it fit at
+        # all", which is a different question from "where did it end up".
+        "trace_min_after_warmup": min((v for _, v in loss_trace[2:]), default=float("nan")),
+    }
+    print("LOSS_SUMMARY " + json.dumps(loss_summary), flush=True)
 
     acc = evaluate(model, eval_bank, device)
     beta_stats = measure_beta(model, eval_bank[max(eval_bank)][0].to(device), allow_neg_eigval)
@@ -781,10 +917,17 @@ def main() -> None:
         "bundle_id": args.bundle_id,
         "ffn_dim": ffn_dim,
         "ffn_solve": ffn_solve,
+        "match_arm": args.match_arm,
         "param_ledger": ledger,
         "n_params": n_params,
         "backend": args.backend,
         "steps": args.steps,
+        # The peak learning rate. Recorded because it is a *treatment* the moment a sweep
+        # varies it, and until now the record could not tell two LR arms apart: every other
+        # field of a 1e-3 run and a 3e-3 run of the same arm and bundle is identical, so an
+        # aggregator keying on (arm, task, bundle) would see them as duplicate cells rather
+        # than as two points on a curve.
+        "lr": args.lr,
         "batch": args.batch,
         "train_range": [args.train_min, args.train_max],
         "eval_bank_sha256": eval_digest,
@@ -793,6 +936,7 @@ def main() -> None:
         "beta_stats": beta_stats,
         "beta_range_ok": beta_ok,
         "loss_trace": loss_trace,
+        "loss_summary": loss_summary,
         "nonfinite_loss_steps": nonfinite_steps,
         "outcome": "completed" if beta_ok and nonfinite_steps == 0 else "invalid",
         "wall_seconds": round(time.time() - started, 1),

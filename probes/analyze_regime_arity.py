@@ -48,6 +48,19 @@ SQUARE = {
     "Reflection": (2, "reflection"),
 }
 
+#: The same square with each R=1 cell replaced by its parameter-matched control. Selected by
+#: ``--square matched``. The R=2 arms are shared with :data:`SQUARE` deliberately: the control
+#: is defined as "R=1 carrying the R=2 arm's parameter count", so the arm it is matched to has
+#: to be the same object in both squares or the match means nothing.
+SQUARE_MATCHED = {
+    "R1-P": (1, "strict"),
+    "DP2-strict": (2, "strict"),
+    "R1-refl-P": (1, "reflection"),
+    "Reflection": (2, "reflection"),
+}
+
+SQUARES = {"raw": SQUARE, "matched": SQUARE_MATCHED}
+
 #: One-sided 95% / two-sided 90% Student t, by degrees of freedom. Only the entries a real
 #: sweep can produce are tabulated; anything absent falls through to :func:`tcrit95`'s guard
 #: rather than a silently-too-small value. ``analyze_sigma.py``'s fallback of
@@ -89,12 +102,19 @@ def sd(v: list[float]) -> float:
     return math.sqrt(sum((x - m) ** 2 for x in v) / (len(v) - 1))
 
 
-def load(directory: str) -> tuple[dict, list[tuple[str, str]]]:
+def load(directory: str, lr: Optional[float] = None) -> tuple[dict, list[tuple[str, str]]]:
     """Load every record under ``directory``, keyed by ``(arm, task, bundle)``.
 
     Recurses, because a fan-out writes each cell into its own ``cell-<index>/`` prefix.
 
+    ``lr`` selects a single learning rate when the directory holds a sweep over several. It is
+    required in that case rather than defaulted, because the alternative -- picking one, or
+    pooling them -- would report an average over a treatment as though it were a measurement
+    of one condition. Records predating the ``lr`` field are treated as an unnamed single rate
+    and pass through untouched.
+
     :param directory: Directory holding the records.
+    :param lr: Keep only records at this learning rate.
     :returns: ``(records, rejected)``.
     :raises SystemExit: If a key appears twice, which would mean two cells wrote the same
         (arm, task, bundle) and one is about to be discarded unnoticed.
@@ -115,12 +135,26 @@ def load(directory: str) -> tuple[dict, list[tuple[str, str]]]:
         if d.get("probe_source_revision") in (None, "unknown"):
             rejected.append((name, f"prov={d.get('probe_source_revision')}"))
             continue
+        if lr is not None and d.get("lr") is not None and float(d["lr"]) != lr:
+            rejected.append((name, f"lr={d['lr']} != {lr}"))
+            continue
         arm, task, bundle = d.get("arm"), d.get("task"), d.get("bundle_id")
         if arm is None or task is None or bundle is None:
             rejected.append((name, f"arm={arm} task={task} bundle={bundle}"))
             continue
         key = (arm, task, int(bundle))
         if key in records:
+            # Two records for one cell. If they differ in learning rate this is a sweep the
+            # caller forgot to slice, and saying so is more useful than the generic message:
+            # the fix is a flag, not a re-run.
+            previous = records[key].get("lr")
+            current = d.get("lr")
+            if previous != current:
+                raise SystemExit(
+                    f"two records claim {key} at different learning rates ({previous} and "
+                    f"{current}). This directory holds an LR sweep; pass --lr to select one. "
+                    f"Pooling them would average over a treatment."
+                )
             raise SystemExit(
                 f"two records claim {key}: {name} duplicates an earlier one. A sweep should "
                 f"produce each cell once; averaging silently over a duplicate would weight it "
@@ -130,6 +164,41 @@ def load(directory: str) -> tuple[dict, list[tuple[str, str]]]:
     if not records:
         raise SystemExit(f"no usable records under {directory} (rejected {len(rejected)})")
     return records, rejected
+
+
+def denest(acc_by_length: dict[int, float], lengths: list[int]) -> dict[tuple[int, int], float]:
+    """Convert prefix-averaged accuracies into disjoint position bands.
+
+    THE REPORTED METRIC IS AN AVERAGE OVER POSITIONS 1..L, NOT AN ACCURACY *AT* L. The group
+    tasks mask nothing (``train_probe.py:427``), so every evaluation length's number already
+    contains every shorter length's positions. The five lengths are nested, and reading them
+    as five independent points overstates long-length performance by exactly the weight of the
+    short prefix that is carried along -- which at L=512 is most of it.
+
+    A model that is perfect below the training cutoff and at chance above it therefore traces
+    a smooth decay with no long-range ability whatsoever. That curve is arithmetic, and
+    mistaking it for extrapolation is the error this function exists to prevent.
+
+    Band accuracy follows from the definition of the average::
+
+        A(L) * L = A(L_prev) * L_prev + band * (L - L_prev)
+
+    :param acc_by_length: Prefix-averaged accuracy at each evaluation length.
+    :param lengths: Evaluation lengths, ascending. The first is its own band's upper edge.
+    :returns: Mapping ``(lo, hi) -> accuracy over positions lo..hi``, ``lo`` inclusive.
+    """
+    bands: dict[tuple[int, int], float] = {}
+    previous_length = 0
+    previous_mass = 0.0
+    for length in lengths:
+        if length not in acc_by_length:
+            continue
+        mass = acc_by_length[length] * length
+        width = length - previous_length
+        if width > 0:
+            bands[(previous_length + 1, length)] = (mass - previous_mass) / width
+        previous_length, previous_mass = length, mass
+    return bands
 
 
 def paired(a: list[float], b: list[float]) -> dict:
@@ -160,12 +229,31 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("directory", help="Directory holding the sweep's records.")
     p.add_argument("--json", default=None, help="Also write the full result here.")
+    p.add_argument(
+        "--square",
+        default="raw",
+        choices=sorted(SQUARES),
+        help=(
+            "'raw' uses R1/R1-refl as the R=1 cells; 'matched' uses the parameter-matched "
+            "controls R1-P/R1-refl-P instead."
+        ),
+    )
+    p.add_argument(
+        "--lr",
+        type=float,
+        default=None,
+        help="Select one learning rate when the directory holds an LR sweep.",
+    )
     opts = p.parse_args()
+    square = SQUARES[opts.square]
 
-    records, rejected = load(opts.directory)
+    records, rejected = load(opts.directory, lr=opts.lr)
     print(f"# loaded {len(records)} records; rejected {len(rejected)}")
     for name, why in rejected[:10]:
         print(f"#   REJECTED {name}: {why}")
+    print(f"# square={opts.square} ({', '.join(sorted(square))})")
+    if opts.lr is not None:
+        print(f"# lr={opts.lr}")
 
     arms = sorted({k[0] for k in records})
     tasks = sorted({k[1] for k in records})
@@ -174,8 +262,12 @@ def main() -> None:
     print(f"# tasks={tasks}")
     print(f"# bundles={bundles}")
 
+    # Completeness is judged against the selected square, not against every arm present. A
+    # directory may legitimately hold both squares -- the matched controls are pointless
+    # without the R=2 arms they are matched to -- and cross-producting all arms would report
+    # the arms of the *other* square as missing cells of this one.
     missing = [
-        (a, t, b) for a in arms for t in tasks for b in bundles if (a, t, b) not in records
+        (a, t, b) for a in square for t in tasks for b in bundles if (a, t, b) not in records
     ]
     if missing:
         print(f"# INCOMPLETE: {len(missing)} cells absent, e.g. {missing[:5]}")
@@ -215,6 +307,12 @@ def main() -> None:
         {int(k) for d in records.values() for k in d.get("accuracy_by_length", {})}
     )
 
+    # The two R=1 cells of the selected square, and the R=2 arm each is contrasted against.
+    r1_strict = next(a for a, (r, g) in square.items() if r == 1 and g == "strict")
+    r2_strict = next(a for a, (r, g) in square.items() if r == 2 and g == "strict")
+    r1_refl = next(a for a, (r, g) in square.items() if r == 1 and g == "reflection")
+    r2_refl = next(a for a, (r, g) in square.items() if r == 2 and g == "reflection")
+
     def acc(arm: str, task: str, bundle: int, length: int) -> Optional[float]:
         d = records.get((arm, task, bundle))
         if d is None:
@@ -222,7 +320,47 @@ def main() -> None:
         v = d.get("accuracy_by_length", {}).get(str(length))
         return None if v is None else 100.0 * v
 
-    out: dict = {"tasks": {}, "rejected": rejected, "missing": [list(m) for m in missing]}
+    def band_acc(arm: str, task: str, bundle: int, band: tuple[int, int]) -> Optional[float]:
+        d = records.get((arm, task, bundle))
+        if d is None:
+            return None
+        raw = {int(k): v for k, v in d.get("accuracy_by_length", {}).items()}
+        bands = denest(raw, sorted(raw))
+        v = bands.get(band)
+        return None if v is None else 100.0 * v
+
+    out: dict = {
+        "square": opts.square,
+        "lr": opts.lr,
+        "tasks": {},
+        "rejected": rejected,
+        "missing": [list(m) for m in missing],
+    }
+
+    # Capacity ledger. When the matched square is selected, the whole point is that the two
+    # arms of each contrast have the same parameter count -- so report whether they actually
+    # do rather than trusting that the arm name implies it.
+    print("\n## CAPACITY")
+    for arm in sorted(square):
+        counts = {
+            d.get("param_ledger", {}).get("non_embedding")
+            for (a, t, b), d in records.items()
+            if a == arm
+        }
+        counts.discard(None)
+        print(f"{arm:12s} non_embedding={sorted(counts) if len(counts) != 1 else counts.pop()}")
+    for label, one, two in (("strict", r1_strict, r2_strict), ("reflection", r1_refl, r2_refl)):
+        def one_count(arm: str) -> Optional[int]:
+            for (a, t, b), d in records.items():
+                if a == arm:
+                    return d.get("param_ledger", {}).get("non_embedding")
+            return None
+
+        lo, hi = one_count(one), one_count(two)
+        if lo is not None and hi is not None:
+            delta = 100.0 * (hi - lo) / lo
+            verdict = "MATCHED" if abs(delta) <= 0.5 else "NOT matched"
+            print(f"#   {label:10s} {one} vs {two}: {delta:+.2f}% -> {verdict}")
 
     for task in tasks:
         print(f"\n## {task}: R effect within each beta regime, and the interaction")
@@ -235,18 +373,18 @@ def main() -> None:
             common = [
                 b
                 for b in bundles
-                if all(acc(a, task, b, length) is not None for a in SQUARE)
+                if all(acc(a, task, b, length) is not None for a in square)
             ]
             if len(common) < 2:
                 continue
             # Within-regime R effect, paired by bundle.
             strict = paired(
-                [acc("DP2-strict", task, b, length) for b in common],
-                [acc("R1", task, b, length) for b in common],
+                [acc(r2_strict, task, b, length) for b in common],
+                [acc(r1_strict, task, b, length) for b in common],
             )
             refl = paired(
-                [acc("Reflection", task, b, length) for b in common],
-                [acc("R1-refl", task, b, length) for b in common],
+                [acc(r2_refl, task, b, length) for b in common],
+                [acc(r1_refl, task, b, length) for b in common],
             )
             # The interaction, paired at the bundle level. Differencing per bundle first --
             # rather than subtracting the two means and combining their SEs -- keeps the
@@ -265,10 +403,57 @@ def main() -> None:
                 "interaction": inter,
             }
 
+        # The same contrast on disjoint position bands. This is the primary table: the one
+        # above shares positions across every row, so its rows cannot be read as five
+        # independent measurements and its long-length entries are dominated by the short
+        # prefix they contain. Both are printed so the size of the artifact is visible.
+        print(f"\n## {task}: DE-NESTED into disjoint position bands (primary)")
+        print(
+            f"{'band':>12} {'n':>3} {'R_strict':>9} {'R_refl':>9} {'interaction':>12} "
+            f"{'se':>7} {'t':>7} {'L95':>8}"
+        )
+        all_bands: list[tuple[int, int]] = []
+        previous = 0
+        for length in lengths:
+            all_bands.append((previous + 1, length))
+            previous = length
+        out["tasks"][task]["bands"] = {}
+        for band in all_bands:
+            common = [
+                b for b in bundles if all(band_acc(a, task, b, band) is not None for a in square)
+            ]
+            if len(common) < 2:
+                continue
+            strict = paired(
+                [band_acc(r2_strict, task, b, band) for b in common],
+                [band_acc(r1_strict, task, b, band) for b in common],
+            )
+            refl = paired(
+                [band_acc(r2_refl, task, b, band) for b in common],
+                [band_acc(r1_refl, task, b, band) for b in common],
+            )
+            inter = paired(refl["diffs"], strict["diffs"])
+            label = f"{band[0]}-{band[1]}"
+            print(
+                f"{label:>12} {len(common):>3} {strict['mean']:>+9.2f} {refl['mean']:>+9.2f} "
+                f"{inter['mean']:>+12.2f} {inter['se']:>7.2f} {inter['t']:>7.2f} "
+                f"{inter['l95']:>+8.2f}"
+            )
+            out["tasks"][task]["bands"][label] = {
+                "bundles": common,
+                "r_effect_strict": strict,
+                "r_effect_reflection": refl,
+                "interaction": inter,
+            }
+
     print("\n## READING THIS")
-    print("# R_strict  : DP2-strict - R1        (R=2 vs R=1, beta in (0,1))")
-    print("# R_refl    : Reflection - R1-refl   (R=2 vs R=1, beta in (0,2))")
+    print(f"# R_strict  : {r2_strict} - {r1_strict}  (R=2 vs R=1, beta in (0,1))")
+    print(f"# R_refl    : {r2_refl} - {r1_refl}  (R=2 vs R=1, beta in (0,2))")
     print("# interaction: R_refl - R_strict, paired per bundle.")
+    print("# The banded table is primary. The prefix table's rows are nested -- each length's")
+    print("# number already contains every shorter length's positions -- so a model that is")
+    print("# perfect below the training cutoff and at chance above traces a smooth decay")
+    print("# there while having no long-range ability at all.")
     print("# A positive interaction means extra factors buy more when a reflection is")
     print("# reachable. Comparing it across a5_words and s5_words separates the parity")
     print("# obstruction from group order: both groups are non-solvable, but only S5's")
