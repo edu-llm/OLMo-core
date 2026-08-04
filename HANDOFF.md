@@ -10,7 +10,7 @@ prefix-averaged, so the five "lengths" are nested, and de-nesting reverses two h
 The surviving claims are narrower and better supported. Total AWS spend: **~$50 worst case**,
 48/48 cells succeeded, 3.52 GPU-hours.
 
-> **BRANCH:** `edullm/a5-solvability` at `ef85c82`, pushed, clean.
+> **BRANCH:** `edullm/a5-solvability` at `5989dbb`, pushed, clean.
 > The image build only fires on `edullm/**` or `main`; an `agent/**` branch pushes green while
 > **publishing no image**.
 
@@ -83,10 +83,36 @@ are therefore **nested, not independent**. Four consequences, all verified indep
 is circular — both strict arms sit within 2× chance in every extrapolation band (chance 1.67% A5,
 0.83% S5), so it bounds one floored model against another.
 
-**A confound found during the rewrite and left unresolved: 10 of 24 strict runs end with
-unconverged loss, versus 0 of 24 reflection runs.** Restricting to clean bundles, zero cells stay
-significant (A5 point estimates hold). This is a trainability-vs-expressivity confound the design
-cannot separate.
+### ⚠️ THE CONFOUND IS INSTABILITY, NOT NON-CONVERGENCE — RE-DIAGNOSED 2026-08-04
+
+The previous version of this file, and the paper's §"unconverged loss", call this "10 of 24
+strict runs end with unconverged loss". **The word "unconverged" is wrong; the confound is
+real.** Both halves matter, so do not carry either one alone into the next revision.
+
+**Wrong: "those are not converged models."** Every one of the ten reaches **1e-4 or below**
+after warmup (verified, all ten). `loss_trace` samples one minibatch every 500 steps and its
+final entry is a single batch at step 3999, where OneCycle has driven the LR to **4e-9** and
+the weights are frozen. `R1`/S5/b1106 reads 1e-4 at step 3000 and 0.824 at step 3999. They fit
+the training set. Fixed at `70dc155`: records now carry `loss_summary` (tail mean/median/max
+over the last 5% of steps, plus `trace_min_after_warmup`). **Never read `loss_trace[-1]` as
+convergence.**
+
+**Right: the instability is real and asymmetric.** Log final loss correlates with accuracy at
+L=40 at **r = −0.468** across the 24 strict runs (the paper says −0.43; I get −0.468 — same
+finding). Two runs (`R1`/S5/b1102 and b1103) are high at **5 of 7** sampled steps, which is
+sustained oscillation, not one unlucky batch. Spiked runs average 74.46% at L=40 against 80.73%
+for clean ones. Zero of 24 reflection runs spike at all.
+
+So the paper's *conclusion* stands — expressivity and trainability are not separable here — but
+its *evidence* should be restated as loss instability rather than failure to converge, and the
+"traces show ... those are not converged models" sentence at `paper/kda-regime-arity.tex:749`
+is not supportable as written.
+
+**The sharper effect this uncovered.** The strict arms fit to ~0.0000 training loss and still
+score only **68–89% at L=40** — a length *inside* the training range 3–40 — where `R1-refl`
+scores 100% (A5) / 92.6–99.0% (S5) and `Reflection` 100% / 89.8–100%. That is a generalization
+gap on in-distribution data: not length extrapolation, and untouched by the nesting artifact.
+It is what the second experiment now tests.
 
 ### What survives
 
@@ -106,6 +132,8 @@ cannot separate.
 | `b146c45` | `EDULLM_COMMIT_SHA` provenance fallback + `--run-id` | Image excludes `.git` on purpose (token in `.git/config`), so provenance wrote `"unknown"`, which `analyze_sigma.py:23-25` **rejects**. |
 | `4b5b9cf` | Add `R1-refl` arm id | Fourth cell of the 2×2 had no canonical id. |
 | `76502c6` | `probes/analyze_regime_arity.py` | `analyze_sigma.py` keys on filenames with no task axis; a two-task sweep silently overwrites. |
+| `70dc155` | `R1-P` carries its own `match_arm`; adds `R1-refl-P`, `--match-arm`, `lr` and `loss_summary` in the record; de-nesting in the aggregator | `R1-P` resolved to settings **byte-identical to `R1`**, so it trained, succeeded, and recorded `arm: R1-P` while controlling for nothing. A missed parameter match printed `within_tolerance: false` and trained anyway. |
+| `5989dbb` | `probes/analyze_lr_gap.py` | Nothing could read an LR sweep: records carried no `lr`, so its cells collided as duplicate `(arm, task, bundle)` keys. |
 
 ---
 
@@ -164,12 +192,27 @@ cannot separate.
 The paper is submittable as an empirical/negative result. Two cheap experiments would materially
 strengthen it, both ROUTINE on the platform:
 
-- **Parameter-matched arms.** `R1-P` exists in the registry (FFN-width-matched to `DP2-strict` at
-  1,399,756 params, 0.055%) and was **not run**. Add it plus a reflection-regime equivalent to
-  isolate capacity within each regime: ~24 cells, **~$25**.
-- **The convergence confound.** 10/24 strict runs unconverged. Longer training or a LR sweep on
-  the strict arms would establish whether the strict deficit is expressivity or optimization.
-  This is the single most attackable point in the paper.
+Both are **wired and pre-validated as of `5989dbb`** — commands tested through the platform's
+exact `shlex.join`-in-`bash -c` fanout wrapping, dispatch verified cell-by-cell, both compile
+ROUTINE. Neither has been submitted; that needs a decision to spend.
+
+- **Parameter-matched arms — 24 cells, $24.14 worst case.**
+  Inputs at `/tmp/pv/matched-inputs.json`, summary at `/tmp/pv/matched-summary.md`.
+  `R1-P` now carries `match_arm="DP2-strict"` in its arm definition, and the new `R1-refl-P`
+  carries `match_arm="Reflection"`. Both solve to `ffn_dim=174` → 1,399,756 params, **−0.055%**,
+  ten times inside the 0.5% tolerance. Analyse with `--square matched`.
+  *Both* regimes are matched deliberately: controlling only the strict contrast would leave the
+  two halves of the interaction differently constructed, which is worse than controlling
+  neither, because their difference would then mix the correction with the effect.
+- **The in-distribution gap — 48 cells, $48.29 worst case.**
+  Inputs at `/tmp/pv/lr-inputs.json`. 4 rates (3e-4/1e-3/3e-3/1e-2) × 2 strict arms × 2 tasks ×
+  3 bundles. Analyse with `probes/analyze_lr_gap.py`.
+  **Re-pointed from the re-diagnosed confound** (see above). The question is whether
+  *any* learning rate closes the strict arms' 68–89% at L=40 against the reflection arms'
+  ceiling. If none does, the optimization explanation is ruled out to the grid's resolution —
+  which is the useful direction, since that explanation would otherwise undercut every claim
+  the sweep makes. The reflection arms are not swept: they are already at ceiling, so there is
+  no gap for a rate to close.
 
 ### 2. Everything prior to `621eaba` is suspect
 
