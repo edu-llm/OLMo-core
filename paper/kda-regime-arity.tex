@@ -1,0 +1,988 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% kda-regime-arity.tex
+%
+% Two-column conference-style paper. Built and verified with tectonic 0.16.9:
+%   cd paper && tectonic -X compile kda-regime-arity.tex
+%
+% NOTE ON TOOLCHAIN: there is no conference .cls available in this environment,
+% so the conference look is approximated with article + mathptmx + geometry.
+% The bibliography is a manual thebibliography environment on purpose -- no
+% bibtex/biber pass is required or run.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\documentclass[10pt,twocolumn]{article}
+
+% ---- Fonts and page geometry -------------------------------------------------
+% IMPORTANT: do NOT swap mathptmx for \usepackage{times} here. tectonic runs
+% XeTeX, whose default encoding is TU; there is no TU-encoded `ptm', so
+% \usepackage{times} silently falls back to Latin Modern and the document is
+% not actually set in Times (verified with pdffonts: no Times glyph embedded).
+\usepackage[T1]{fontenc}
+\usepackage{mathptmx}
+\usepackage[letterpaper,margin=0.75in]{geometry}
+\setlength{\columnsep}{0.25in}
+\usepackage{microtype}
+
+% ---- Math and tables ---------------------------------------------------------
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{float}
+
+% ---- URLs --------------------------------------------------------------------
+\usepackage{xurl}
+
+% ---- Author block ------------------------------------------------------------
+\usepackage{authblk}
+\renewcommand\Authfont{\normalsize}
+\renewcommand\Affilfont{\small}
+\setlength{\affilsep}{0.6em}
+
+% ---- Float placement: keep tables near their callouts, not at the end --------
+\renewcommand{\topfraction}{0.9}
+\renewcommand{\bottomfraction}{0.8}
+\renewcommand{\textfraction}{0.07}
+\renewcommand{\floatpagefraction}{0.7}
+\renewcommand{\dbltopfraction}{0.9}
+\renewcommand{\dblfloatpagefraction}{0.7}
+\setcounter{topnumber}{3}
+\setcounter{bottomnumber}{2}
+\setcounter{totalnumber}{4}
+\setcounter{dbltopnumber}{3}
+
+% ---- Slightly tighter conference-style section headings ----------------------
+\makeatletter
+\renewcommand\section{\@startsection{section}{1}{\z@}%
+  {-2.0ex \@plus -0.5ex \@minus -0.2ex}{1.0ex \@plus 0.2ex}%
+  {\normalfont\large\bfseries}}
+\renewcommand\subsection{\@startsection{subsection}{2}{\z@}%
+  {-1.6ex \@plus -0.5ex \@minus -0.2ex}{0.8ex \@plus 0.2ex}%
+  {\normalfont\normalsize\bfseries}}
+\makeatother
+
+% ---- Table helper macros -----------------------------------------------------
+\newcommand{\hd}[1]{\multicolumn{1}{c}{#1}}
+
+\title{\bfseries Write Strength, Not Write Count: The $\beta$ Range Dominates\\
+Householder Arity in Gated Delta-Rule Attention}
+
+\author[1]{Anonymous}
+\affil[1]{Anonymous Institution}
+
+\date{}
+
+\begin{document}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Full-width title + abstract block, conference style.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\makeatletter
+\twocolumn[\begin{@twocolumnfalse}
+\maketitle
+\begin{center}
+\begin{minipage}{0.86\textwidth}
+\begin{abstract}
+\noindent
+Delta-rule linear attention with a channel-wise forget gate can be made more
+expressive in two ways: by applying more Householder factors per token
+(\emph{arity}, $R$), or by widening the range of the write-strength gate $\beta$
+from the strict $(0,1)$ to the reflection range $(0,2)$. Recent work has
+concentrated on the first. We report a small controlled factorial measurement
+suggesting the second matters far more. In a fully paired $2\times2$ design
+crossing $R\in\{1,2\}$ with $\beta$ regime, over two non-solvable group word
+problems ($A_5$, $S_5$) and six seed bundles (48 cells, 3.52 GPU-hours), the
+$\beta$ widening at fixed $R=1$ is large and significant in every position band
+where both arms are above chance, while doubling $R$ under strict $\beta$ is
+consistently positive but roughly two orders of magnitude smaller --- and the
+$\beta$ widening is \emph{free}, adding zero parameters, whereas doubling $R$
+costs $+40.3\%$. The $\beta\times R$ interaction is positive in five of eight
+de-nested position bands. Because Kimi K3's KDA layer fixes
+$\beta=\mathrm{Sigmoid}(\cdot)\in(0,1)$, a determinant argument shows K3-style
+nodes cannot obtain a negative-determinant transition at any $R$; whether they
+would benefit from $R>1$ in practice is a separate question our scale cannot
+settle. We report four results against our own interest. Our pre-registered
+mechanism --- that reflections help because $S_5$'s odd generator demands
+$\det=-1$ --- is \emph{contradicted}, and the fallback explanation we offer is
+contradicted too. Our $R$ arms are not parameter-matched. \emph{No} cell
+survives Holm correction at $n=6$, and only one does after we correct a metric
+artifact. And an asymmetric optimization failure (10 of 24 strict-$\beta$ runs
+end with unconverged loss, versus 0 of 24 reflection runs) means we cannot
+separate an expressivity effect from a trainability one. We report the effect,
+its size, and the four reasons it is not yet established.
+\end{abstract}
+\end{minipage}
+\end{center}
+\vspace{1.5ex}
+\end{@twocolumnfalse}]
+\makeatother
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Introduction}
+\label{sec:intro}
+
+Linear-attention sequence models trade the quadratic cost of softmax attention
+for a fixed-size recurrent state, and the delta rule
+\cite{schlag2021fwp,yang2024deltanet} has become the dominant way to write into
+that state: each token performs a rank-one \emph{erase} followed by a rank-one
+\emph{write}. A well-documented consequence is limited state-tracking ability.
+Two remedies have been proposed. \textsc{DeltaProduct}
+\cite{siems2025deltaproduct} increases the number of Householder factors applied
+per token, a quantity we call the \emph{arity} $R$. Separately, Grazzi et al.\
+\cite{grazzi2024negative} showed that admitting \emph{negative} eigenvalues in
+the state transition unlocks state tracking that is unreachable otherwise; in a
+delta-rule node this is achieved by widening the write-strength gate $\beta$
+from the strict range $(0,1)$ to the reflection range $(0,2)$, since $1-\beta$
+is the non-unit eigenvalue of each factor.
+
+These two levers are not independent, and the literature has largely pursued the
+first. That matters practically, because arity is expensive --- each extra factor
+needs its own key and gate projections --- while widening $\beta$ is a
+one-character change to a sigmoid that adds no parameters at all. It also
+matters now, because the largest deployed delta-rule attention variant, the Kimi
+Delta Attention (KDA) layer of Kimi~K3 \cite{kimi2026k3}, specifies
+$\beta_t = \mathrm{Sigmoid}(W_\beta x_t) \in (0,1)$ --- strictly inside the
+non-reflective range.
+
+We test this with a fully paired $2\times2$ factorial crossing arity
+$R \in \{1,2\}$ with $\beta$ regime at otherwise identical geometry, on two
+non-solvable group word problems, with six seed bundles per cell. The design is
+deliberately narrow: it is built to estimate one interaction term rather than to
+establish a state of the art. It is also small, and we have tried to be
+scrupulous about what a 48-cell, $n=6$, $1.4$M-parameter probe can and cannot
+support. Two things in particular govern how our results should be read, and we
+put them here rather than in a late limitations section.
+
+\paragraph{The metric is a prefix average, and we analyze around it.}
+Our harness scores mean token accuracy over \emph{all} positions $1..L$ of each
+evaluation sequence. Consequently the five nominal ``lengths'' are nested, and a
+model that is correct below $L=40$ and at chance above it still produces a
+smooth, gracefully-decaying curve that looks like partial extrapolation. For our
+strict-$\beta$ arms this is exactly what happens: a zero-parameter model
+asserting ``correct below 40, at chance above'' reproduces their entire length
+curve to within $1.3$pp (Table~\ref{tab:dilution}). We therefore report
+\emph{de-nested position bands} as our primary analysis
+(Section~\ref{sec:denested}) and treat the prefix-averaged numbers as secondary.
+De-nesting strengthens our $A_5$ result and \emph{eliminates} two of the seven
+apparently significant $S_5$ cells, and we report both directions.
+
+\paragraph{Both strict-$\beta$ arms are at chance beyond $L=40$.}
+In every de-nested band past position 40, \texttt{R1} and \texttt{DP2-strict}
+score within $2\times$ chance (Table~\ref{tab:bands}). This has a consequence we
+must state plainly, because it defeats an argument we would otherwise have
+liked to make: the strict-regime arity contrast cannot bound what capacity is
+worth, since it is measured between two models that are both floored. The
+parameter confound described in Section~\ref{sec:limitations} is therefore
+\emph{open}, not bounded.
+
+\paragraph{Contributions.}
+\emph{(i)} A controlled factorial measurement of arity against $\beta$ range at
+matched geometry, fully paired at the seed-bundle level so every arm within a
+bundle is scored on a byte-identical evaluation bank (Section~\ref{sec:setup}).
+\emph{(ii)} The finding that in every band where both arms are measurable, the
+$\beta$ effect exceeds the arity effect by one to two orders of magnitude at
+zero parameter cost (Section~\ref{sec:betavsr}), together with a positive
+$\beta\times R$ interaction in five of eight de-nested bands --- of which one
+survives Holm correction (Section~\ref{sec:denested}). \emph{(iii)} A
+determinant observation about K3-style nodes, and a correction to a tempting but
+wrong reading of K3's new bounded-decay parameterization
+(Section~\ref{sec:k3}). \emph{(iv)} Two negative results against our own
+hypotheses: the group-parity account of \emph{why} reflections help is
+contradicted, and so is the headroom account we offered as a replacement
+(Section~\ref{sec:parity}). \emph{(v)} An explicit statement of the
+trainability confound that we cannot resolve, and of what would resolve it
+(Section~\ref{sec:limitations}).
+
+We claim no new operator and no new theory. The gated Householder operator we
+measure is already implemented in public kernels and published at scale
+\cite{li2026eda}; the determinant argument of Section~\ref{sec:det} is a special
+case of a published result \cite{grazzi2024negative}, and weaker than it. What is
+new is the controlled measurement. This is an empirical, partly negative result
+and we frame it as one.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Background}
+\label{sec:background}
+
+\subsection{The gated delta rule}
+
+Let $S_t \in \mathbb{R}^{d_k \times d_v}$ be the recurrent state, $k_t$ the
+(L2-normalized) key, $v_t$ the value, $\beta_t$ the write strength and
+$\alpha_t \in (0,1)^{d_k}$ a channel-wise forget gate. The gated delta rule is
+\begin{equation}
+\label{eq:delta}
+S_t = \bigl(I - \beta_t k_t k_t^{\top}\bigr)\,\mathrm{Diag}(\alpha_t)\,S_{t-1}
+      + \beta_t k_t v_t^{\top},
+\end{equation}
+with readout $\tilde{o}_t = S_t^{\top} q_t$. Equation~\eqref{eq:delta} is
+exactly the KDA recurrence of Kimi~K3, and specializes to gated DeltaNet
+\cite{yang2024gated} and, with $\alpha$ scalar per head, to Mamba-2--style
+gating \cite{dao2024mamba2}.
+
+\subsection{Householder arity}
+
+\textsc{DeltaProduct} \cite{siems2025deltaproduct} applies $R$ rank-one factors
+per token, each with its own key and write strength:
+\begin{equation}
+\label{eq:arity}
+S_t = \Bigl[\textstyle\prod_{i=1}^{R}
+      \bigl(I - \beta_t^{(i)} k_t^{(i)} k_t^{(i)\top}\bigr)\Bigr]
+      \mathrm{Diag}(\alpha_t)\, S_{t-1} + \text{writes}.
+\end{equation}
+Each factor is a true Householder reflection when $\beta = 2$.
+
+\paragraph{Notation.} We write $R$ for the number of factors per token and call
+it \emph{arity}. \textsc{DeltaProduct} writes $n_h$, denoting models
+$\textsc{DeltaProduct}_{n_h}[\cdot]$ with the admissible eigenvalue range in
+brackets, and does not use the word ``arity''; our $R$ is their $n_h$, and our
+arms are their $n_h \in \{1,2\}$ (their $n_h{=}1$ is DeltaNet). Arity is not
+free: the $R{=}2$ node needs a second set of key and gate projections.
+
+\subsection{The determinant fact, and to whom it belongs}
+\label{sec:det}
+
+The per-token map acting on $S_{t-1}$ in Equation~\eqref{eq:arity} is
+$A_t = \bigl[\prod_i (I - \beta^{(i)}_t k^{(i)}_t k^{(i)\top}_t)\bigr]
+\mathrm{Diag}(\alpha_t)$. For a unit-norm key,
+$\det(I - \beta kk^{\top}) = 1 - \beta$, so
+\begin{equation}
+\label{eq:det}
+\det A_t = \Bigl[\textstyle\prod_{i=1}^{R}\bigl(1-\beta_t^{(i)}\bigr)\Bigr]
+           \cdot \textstyle\prod_{j} \alpha_{t,j}.
+\end{equation}
+Since $\alpha_{t,j} > 0$ by construction, the \emph{sign} of $\det A_t$ is
+governed entirely by the $\beta$ factors, and if every $\beta^{(i)} \in (0,1)$
+then $\det A_t > 0$ \emph{for every} $R$: raising arity cannot recover a
+negative determinant that the $\beta$ range has excluded.
+
+\paragraph{What this does \emph{not} predict.}
+We are careful here, because Equation~\eqref{eq:det} does not by itself predict
+the interaction we go on to measure. At $R=2$ with $\beta\in(0,2)$, two negative
+factors multiply to a \emph{positive} determinant, so $R{=}2$ reflection unlocks
+no determinant sign that $R{=}1$ reflection cannot already reach. Read strictly,
+Equation~\eqref{eq:det} predicts a main effect of $\beta$ and \emph{no}
+$\beta\times R$ interaction at $R=2$. Our measured interaction is therefore not
+explained by this argument, and we do not present it as confirmed theory. The
+determinant argument licenses exactly one claim --- that strict $\beta$
+forecloses negative determinants at every arity --- and we restrict ourselves to
+that.
+
+\paragraph{Attribution.}
+Grazzi et al.\ \cite{grazzi2024negative} study $\mathcal{M}^n_k(\Omega)$, the
+products of exactly $k$ generalized Householder matrices
+$I - \beta_i v_i v_i^\top$ with $(1-\beta_i) \in \Omega$, $\|v_i\|=1$. Their
+Proposition~1.3 states that any eigenvalue of $N \in \mathcal{M}^n_k((-1,1])$ is
+either $1$ or has modulus below $1$, and that \emph{if in addition}
+$N \in \mathcal{M}^n_k([0,1])$ \emph{and} $k \le 2$, then it lies in
+$[0,1]\subset\mathbb{R}$. The $k \le 2$ hypothesis is essential --- it was added
+in a published correction, and its failure for $k \ge 3$ is what
+\textsc{DeltaProduct} exploits. They conclude such transitions are the identity
+or non-orthogonal, hence neither reflections nor rotations, and that for
+$k \le 2$ the model cannot learn parity by their Theorem~1. Their
+Proposition~1.2 is the permutation statement proper: realizing a permutation
+matrix requires the eigenvalue set $\{-1,1\}$. Equation~\eqref{eq:det} is a
+determinant-level restatement, for the delta rule with normalized keys, of a
+spectral fact they establish in far greater generality; it also says strictly
+less, since at $R\ge3$ a positive determinant no longer implies non-negative
+real eigenvalues. We claim no theoretical novelty for it whatsoever.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{The K3 KDA node}
+\label{sec:k3}
+
+Kimi~K3 \cite{kimi2026k3} is a mixture-of-experts model with $2.78$T total and
+$104.2$B activated parameters, a 1M-token context, and native vision. Each block
+places three KDA layers followed by one gated MLA layer --- a $3{:}1$ ratio
+\emph{per block} (\S2.1) --- with one additional MLA layer at the end of the
+backbone, giving 69 KDA and 24 MLA layers (Table~1, \S3.2) and a global ratio of
+$2.875{:}1$. K3 uses no explicit positional encoding (\S3.4) and applies NoPE to
+all MLA layers, so positional and recency information reaches the model only
+through KDA's gating and decay (\S2.1.2). The KDA recurrence is
+Equation~\eqref{eq:delta}, and its write strength is
+\begin{equation}
+\label{eq:k3beta}
+\beta_t^{h} = \mathrm{Sigmoid}\bigl(W_\beta^{h} x_t\bigr) \in (0,1),
+\end{equation}
+a plain sigmoid, per head and per token, with no scale factor: we searched the
+report and $\beta$ is never scaled, doubled, or rescaled anywhere, with the open
+interval stated in two independent places (\S2.1.1). The remaining projections
+are $q,k = \mathrm{L2Norm}(\mathrm{Swish}(\mathrm{ShortConv}(W_{q/k}x)))$,
+$v = \mathrm{Swish}(\mathrm{ShortConv}(W_v x))$, and a decay logit
+$z = W_\alpha^{\uparrow} W_\alpha^{\downarrow} x + b_\alpha^{h}$ from a low-rank
+projection plus a per-head bias.
+
+By Equation~\eqref{eq:det}, K3's KDA layers have $\det A_t > 0$ at every token
+and head, and this would remain true at any $R$. That is a statement about what
+strict $\beta$ forecloses, and it holds independently of our experiment. Whether
+a K3-style node would \emph{in practice} benefit from $R>1$ is an empirical
+question that our $1.4$M-parameter probe cannot settle; we return to this in
+Section~\ref{sec:limitations}. We note the report contains no Householder,
+arity, or \textsc{DeltaProduct} discussion, and no analysis of KDA's
+state-tracking properties; the question we ask is not one K3 addresses.
+
+\paragraph{A correction worth making explicitly.}
+K3 introduces a \emph{bounded} decay parameterization (\S2.1.1, Eq.~5),
+$g = g_{\min}\!\cdot\!\mathrm{Sigmoid}(e^{A_h} z)$ with $g_{\min}=-5$ fixed and
+$A_h$ a learnable per-head log-scale initialized to $0$, so
+$\alpha = \exp(g) \in (e^{g_{\min}}, 1)$. K3 reports this replaces the unbounded
+negative-softplus mapping $g = -e^{A_h}\mathrm{Softplus}(z) \in (-\infty,0)$
+used by Kimi~Linear \cite{kimi2025linear}. It is tempting to read this floor as
+what forecloses reflections. It is not. Because $\alpha = \exp(g) > 0$ for any
+finite $g$, $\det\mathrm{Diag}(\alpha) > 0$ under \emph{both} parameterizations,
+so the floor cannot change the sign of $\det A_t$ at all. Determinant sign is
+governed solely by $\beta$. What forecloses odd permutations in K3 is the
+sigmoid-parameterized $\beta$ of Equation~\eqref{eq:k3beta}, which Kimi~Linear
+already had.
+
+K3's stated motivation for the floor is numerical, not representational. The
+reciprocal cumulative decay $1/\Gamma$ used to rescale keys within a chunk can
+grow without bound and overflow in finite precision; with $g_{\min}=-5$ the
+cumulative log-decay over a 16-token tile is bounded, so $1/\Gamma$ stays within
+BF16 range and \emph{all} causal tiles can use dense Tensor Core matrix
+multiplications, eliminating the position-pair diagonal path (Fig.~3). No
+modelling or quality justification is offered, and the report contains no
+architecture ablations at all --- so this is an absence of evidence, not
+evidence of absence. K3 does note the bounded form is related to lower-bounded
+recurrence gates in prior work; we read that as a relatedness remark appended
+after the numerical argument, since the paragraph's topic sentence and the
+figure caption are both purely computational.
+
+One consequence K3 does not discuss cuts against our own framing: the floor
+$\alpha > e^{-5} \approx 6.7\times10^{-3}$ is a genuine modelling constraint,
+since near-total single-step forgetting was representable under Kimi~Linear's
+unbounded range and is not under K3's. Given that KDA is also K3's only source
+of positional information, the decay range is load-bearing in a way the
+numerical framing does not convey. We raise it rather than let it be raised
+against us.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Experimental setup}
+\label{sec:setup}
+
+\paragraph{Arms.}
+We cross arity $R \in \{1,2\}$ with $\beta$ regime, giving four arms
+(Table~\ref{tab:arms}). All use the same gated Householder mixer with the same
+Triton backend, 4000 steps, batch 64, and no feed-forward blocks. The $\beta$
+regime is a single scale on the sigmoid, $\beta = s\cdot\mathrm{Sigmoid}(z)$
+with $s\in\{1,2\}$; it adds no parameters, and the two regimes have
+byte-identical parameter ledgers. Post hoc, the strict arms reach
+$\beta_{\max}=1.0000$ and the reflection arms $\beta_{\max}=2.0000$, with no
+record violating its bound.
+
+\paragraph{Tasks.}
+Two group word problems: given a sequence of generators of a finite group,
+predict the composed element. We use $A_5$ (order 60, non-solvable, \emph{both}
+generators even) and $S_5$ (order 120, non-solvable, transposition generator
+\emph{odd}). Chance accuracy is $1/60 = 1.67\%$ and $1/120 = 0.83\%$
+respectively. The parity difference motivated the prediction
+Section~\ref{sec:parity} reports as falsified.
+
+\paragraph{The metric, stated explicitly.}
+Accuracy is the fraction of correct predictions averaged over \emph{all} $L$
+positions of 64 evaluation sequences ($N = 64L$ scored tokens; we verified all
+240 reported values are integer multiples of $1/64L$). Training words have
+length $3$--$40$. Because the metric averages positions $1..L$, the nominal
+lengths are \emph{nested}: $\mathrm{acc}(512)$ includes positions $\le 40$ that
+are in-distribution. We therefore define \emph{de-nested bands}
+\begin{equation}
+\label{eq:denest}
+\mathrm{band}(L_{i-1},L_i) =
+\frac{L_i\,\mathrm{acc}(L_i) - L_{i-1}\,\mathrm{acc}(L_{i-1})}{L_i - L_{i-1}},
+\end{equation}
+the mean accuracy on positions in $(L_{i-1}, L_i]$ alone, and use these as the
+primary analysis. Only bands past position 40 are extrapolation.
+
+\paragraph{Pairing, and why $n=6$ helps.}
+Six seed bundles, $1101$--$1106$, each fixing four independent seed streams
+(initialization, data, task, evaluation), pairwise distinct in every record.
+Within a bundle all four arms are scored on the same evaluation bank: we
+confirmed one distinct \texttt{eval\_bank\_sha256} per (task, bundle) shared by
+all four arms, and twelve mutually distinct hashes across the twelve groups.
+Every contrast is a within-bundle difference cancelling evaluation-sampling
+noise identically in all arms. There were $0$ train/eval collisions.
+
+\paragraph{Statistics.}
+For each cell we compute per-bundle differences and aggregate those. The
+interaction is differenced \emph{per bundle before averaging},
+$i_b = d_b^{\text{refl}} - d_b^{\text{strict}}$, preserving pairing; computing
+it from arm means with an unpaired standard error would be wrong. We report
+mean, $\mathrm{se}=\mathrm{sd}/\sqrt6$ (sd with $\mathrm{ddof}=1$),
+$t=\mathrm{mean}/\mathrm{se}$, and the one-sided 95\% lower bound
+$\mathrm{L95}=\mathrm{mean}-t_{0.95,5}\,\mathrm{se}$, $t_{0.95,5}=2.015$. We
+also report Holm-corrected outcomes across the band family, since we test many
+cells.
+
+\paragraph{Compute and provenance.}
+All 48 cells ran on one NVIDIA A10G, $48/48$ completing, for $3.52$ GPU-hours
+(cells $228$--$305$\,s). All 48 carry one probe-source revision, $0$ records
+were rejected, $0$ non-finite loss steps occurred.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% TABLE: arms
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{table}[t]
+\centering
+\footnotesize
+\caption{The four arms. ``Mixer params'' excludes both the token embedding and
+the output head; it is task-invariant, whereas total parameters differ by task
+because the head does ($+39.7\%$ on $A_5$, $+39.1\%$ on $S_5$ from $R{=}1$ to
+$R{=}2$). The $\beta$ regime is parameter-free. $\bar\beta$ is the mean realized
+$\beta$ pooled over both tasks and all six bundles.}
+\label{tab:arms}
+\begin{tabular}{llrrr}
+\toprule
+Arm & $\beta$ range & \hd{$R$} & \hd{Mixer params} & \hd{$\bar\beta$} \\
+\midrule
+\texttt{R1}          & $(0,1)$ & 1 & 998{,}092   & 0.899 \\
+\texttt{DP2-strict}  & $(0,1)$ & 2 & 1{,}400{,}524 & 0.779 \\
+\texttt{R1-refl}     & $(0,2)$ & 1 & 998{,}092   & 1.800 \\
+\texttt{Reflection}  & $(0,2)$ & 2 & 1{,}400{,}524 & 1.658 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% TABLE 1 -- full width: accuracy, prefix and de-nested
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{table*}[t]
+\centering
+\small
+\caption{Mean accuracy (\%), $n=6$ bundles. \textbf{Left:} the prefix-averaged
+metric our harness reports, over positions $1..L$. \textbf{Right:} the same data
+de-nested into position bands via Equation~\eqref{eq:denest}, which is what
+actually measures behaviour at new lengths. Chance is $1.67\%$ ($A_5$) and
+$0.83\%$ ($S_5$); \emph{italic} marks band values within $2\times$ chance. Both
+strict arms are at chance in every extrapolation band --- the prefix metric
+disguises this as graceful decay.}
+\label{tab:bands}
+\begin{tabular}{llrrrrr@{\hspace{2em}}rrrrr}
+\toprule
+& & \multicolumn{5}{c}{Prefix-averaged, positions $1..L$}
+  & \multicolumn{5}{c}{De-nested bands, positions in $(L_{i-1},L_i]$} \\
+\cmidrule(lr){3-7}\cmidrule(lr){8-12}
+Arm & Task & \hd{40} & \hd{64} & \hd{128} & \hd{256} & \hd{512}
+        & \hd{1--40} & \hd{41--64} & \hd{65--128} & \hd{129--256} & \hd{257--512} \\
+\midrule
+\texttt{R1}         & $A_5$ & 79.19 & 49.96 & 25.74 & 13.83 & 7.82
+                    & 79.19 & \emph{1.24} & \emph{1.53} & \emph{1.91} & \emph{1.81} \\
+\texttt{DP2-strict} & $A_5$ & 82.49 & 53.45 & 27.75 & 14.81 & 8.17
+                    & 82.49 & 5.05 & \emph{2.04} & \emph{1.87} & \emph{1.53} \\
+\texttt{R1-refl}    & $A_5$ & 99.99 & 99.70 & 82.83 & 46.47 & 23.63
+                    & 99.99 & 99.22 & 65.97 & 10.11 & \emph{0.78} \\
+\texttt{Reflection} & $A_5$ & 100.00 & 100.00 & 98.31 & 82.73 & 54.99
+                    & 100.00 & 100.00 & 96.62 & 67.15 & 27.25 \\
+\cmidrule(lr){1-12}
+\texttt{R1}         & $S_5$ & 74.06 & 46.98 & 23.65 & 12.51 & 6.63
+                    & 74.06 & \emph{1.86} & \emph{0.31} & \emph{1.37} & \emph{0.76} \\
+\texttt{DP2-strict} & $S_5$ & 76.73 & 48.90 & 24.47 & 12.89 & 6.84
+                    & 76.73 & \emph{2.53} & \emph{0.04} & \emph{1.31} & \emph{0.79} \\
+\texttt{R1-refl}    & $S_5$ & 97.07 & 72.86 & 37.30 & 19.58 & 9.99
+                    & 97.07 & 32.50 & \emph{1.75} & \emph{1.85} & \emph{0.41} \\
+\texttt{Reflection} & $S_5$ & 98.09 & 88.45 & 56.04 & 28.53 & 14.64
+                    & 98.09 & 72.40 & 23.62 & \emph{1.02} & \emph{0.75} \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% TABLE: dilution fit
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{table}[t]
+\centering
+\footnotesize
+\caption{Why we de-nest. Maximum absolute error, over
+$L\in\{64,128,256,512\}$, of the \emph{zero-free-parameter} prediction
+$\mathrm{acc}(L) = \frac{40}{L}\mathrm{acc}(40)
++ \frac{L-40}{L}\cdot\text{chance}$, i.e.\ ``correct below 40, at chance
+above''. The strict arms are fit to within $1.3$pp: their apparent length curve
+carries no extrapolation signal. The reflection arms deviate by $12$--$66$pp, so
+they genuinely do extrapolate.}
+\label{tab:dilution}
+\begin{tabular}{lrr}
+\toprule
+Arm & \hd{$A_5$ max err} & \hd{$S_5$ max err} \\
+\midrule
+\texttt{R1}          & 0.16 & 0.38 \\
+\texttt{DP2-strict}  & 1.27 & 0.64 \\
+\texttt{R1-refl}     & 50.44 & 11.87 \\
+\texttt{Reflection}  & 65.92 & 26.84 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% TABLE 2 -- full width: interaction, both metrics
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{table*}[t]
+\centering
+\small
+\caption{The $\beta\times R$ interaction, differenced per bundle before
+averaging. \textbf{Left:} on the prefix-averaged metric. \textbf{Right:} on
+de-nested position bands, our primary analysis. L95 is the one-sided 95\% lower
+bound ($t_{0.95,5}=2.015$); \textbf{bold} marks L95 $>0$ uncorrected. Seven of
+ten prefix cells and five of eight bands are positive at uncorrected L95. Under
+Holm correction across the family, \textbf{zero} of the ten prefix cells and
+\textbf{one} of the eight bands survive (marked $\dagger$): with $df=5$,
+$p<0.00625$ needs $|t|>4.03$ and our maximum band $t$ is $4.26$. Note $S_5$ at
+$129$--$256$ and $257$--$512$ \emph{reverse sign} once de-nested --- they were
+significant only by inheriting the $41$--$64$ signal through prefix averaging.}
+\label{tab:paired}
+\begin{tabular}{lrrrr@{\hspace{2.2em}}lrrrr}
+\toprule
+\multicolumn{5}{c}{Prefix-averaged, positions $1..L$}
+& \multicolumn{5}{c}{De-nested bands} \\
+\cmidrule(lr){1-5}\cmidrule(lr){6-10}
+Task, $L$ & \hd{Inter.} & \hd{se} & \hd{$t$} & \hd{L95}
+& Task, band & \hd{Inter.} & \hd{se} & \hd{$t$} & \hd{L95} \\
+\midrule
+$A_5$, 40  & $-3.30$ & 4.25 & $-0.78$ & $-11.87$
+  & $A_5$, 41--64   & $-3.03$ & 1.53 & $-1.97$ & $-6.12$ \\
+$A_5$, 64  & $-3.20$ & 3.09 & $-1.03$ & $-9.43$
+  & $A_5$, 65--128  & $\mathbf{+30.14}$ & 9.34 & $3.23$ & $\mathbf{+11.32}$ \\
+$A_5$, 128 & $\mathbf{+13.47}$ & 4.74 & $2.84$ & $\mathbf{+3.93}$
+  & $A_5$, 129--256 & $\mathbf{+57.09}$ & 16.08 & $3.55$ & $\mathbf{+24.69}$ \\
+$A_5$, 256 & $\mathbf{+35.28}$ & 9.38 & $3.76$ & $\mathbf{+16.37}$
+  & $A_5$, 257--512 & $\mathbf{+26.74}$ & 12.56 & $2.13$ & $\mathbf{+1.43}$ \\
+$A_5$, 512 & $\mathbf{+31.01}$ & 10.70 & $2.90$ & $\mathbf{+9.45}$
+  & $S_5$, 41--64   & $\mathbf{+39.23}^{\dagger}$ & 9.21 & $4.26$ & $\mathbf{+20.66}$ \\
+$S_5$, 40  & $-1.65$ & 2.42 & $-0.68$ & $-6.52$
+  & $S_5$, 65--128  & $\mathbf{+22.14}$ & 8.80 & $2.52$ & $\mathbf{+4.40}$ \\
+$S_5$, 64  & $\mathbf{+13.68}$ & 4.23 & $3.23$ & $\mathbf{+5.15}$
+  & $S_5$, 129--256 & $-0.77$ & 0.79 & $-0.98$ & $-2.35$ \\
+$S_5$, 128 & $\mathbf{+17.91}$ & 6.33 & $2.83$ & $\mathbf{+5.15}$
+  & $S_5$, 257--512 & $+0.31$ & 0.24 & $1.31$ & $-0.17$ \\
+$S_5$, 256 & $\mathbf{+8.57}$ & 3.19 & $2.69$ & $\mathbf{+2.15}$
+  & & & & & \\
+$S_5$, 512 & $\mathbf{+4.44}$ & 1.68 & $2.64$ & $\mathbf{+1.05}$
+  & & & & & \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Results}
+\label{sec:results}
+
+\subsection{Accuracy, and what the prefix metric hides}
+\label{sec:denested}
+
+Table~\ref{tab:bands} gives both views. On the prefix-averaged metric the
+dominant feature is the $\beta$ contrast: at $L=128$ on $A_5$, moving from
+strict to reflection $\beta$ at fixed $R=1$ takes accuracy from $25.74\%$ to
+$82.83\%$, while doubling $R$ at fixed strict $\beta$ takes it from $25.74\%$ to
+$27.75\%$.
+
+De-nesting sharpens this and also disciplines it. In every extrapolation band,
+both strict arms sit within $2\times$ chance --- \texttt{R1} on $A_5$ scores
+$1.24$--$1.91\%$ against $1.67\%$ chance. The reflection arms are genuinely
+above chance for longer: \texttt{Reflection} on $A_5$ reaches $96.62\%$ on
+positions $65$--$128$ and $27.25\%$ on $257$--$512$. Table~\ref{tab:dilution}
+makes the point quantitatively: a zero-parameter ``correct below 40, at chance
+above'' model reproduces both strict arms' entire length curves to within
+$1.3$pp, and fails on the reflection arms by $12$--$66$pp. The honest reading is
+that \emph{the strict-$\beta$ arms do not extrapolate past the training range at
+all}, and the reflection arms partly do.
+
+This also corrects an interpretation we would otherwise have offered. The
+strict-regime arity effect on the prefix metric decays monotonically with length
+($A_5$: $+3.31, +3.50, +2.01, +0.98, +0.35$pp), which invites a story about
+extra factors mattering less as the task hardens. It is dilution: the pure
+prediction $(40/L)\times\text{effect}(40)$ gives $S_5$
+$+2.67, +1.67, +0.83, +0.42, +0.21$ against observed
+$+2.67, +1.92, +0.82, +0.38, +0.21$. That curve is one number divided by $L$,
+and we withdraw any interpretation of its shape.
+
+\subsection{The interaction}
+
+Table~\ref{tab:paired} gives the interaction under both metrics. On de-nested
+bands it is positive at uncorrected L95 in five of eight bands, from $+22.14$ to
+$+57.09$pp. De-nesting \emph{strengthens} $A_5$ ($+13.47 \to +30.14$ at
+$65$--$128$; $+35.28 \to +57.09$ at $129$--$256$) and \emph{eliminates} the two
+long-length $S_5$ cells, which reverse sign ($+8.57 \to -0.77$;
+$+4.44 \to +0.31$). Those two cells were significant only because prefix
+averaging carried the $41$--$64$ signal forward; their per-bundle interaction
+values correlate at $\rho \ge 0.99$ with the $L=64$ cell. We do not count them.
+
+We must be equally direct about multiplicity. Across the ten prefix cells,
+\emph{no} cell survives Holm or Bonferroni correction --- Holm stops at the
+first comparison ($p=0.00658$ against a threshold of $0.005$). This is
+structural, not unlucky: with $df=5$, clearing $\alpha=0.005$ requires
+$|t|>4.03$, and no prefix cell reaches it. On the eight de-nested bands, exactly
+one survives ($S_5$, $41$--$64$, $t=4.26$, $p=0.00401$). So the defensible
+statement is: one band-level interaction is established at family-wise
+$\alpha=0.05$, and four more are positive and large but individually
+uncorrected. The count-based framing ``$k$ of $n$ cells significant'' is
+especially weak here because the cells are not independent (mean within-task
+cross-length $r=0.53$, several at $0.99$--$1.00$).
+
+\subsection{$\beta$ dominates arity, and it is free}
+\label{sec:betavsr}
+
+Table~\ref{tab:cost} compares the two levers in the bands where both arms are
+measurable. On $A_5$ positions $41$--$64$, widening $\beta$ at fixed $R=1$ buys
+$+97.98$pp ($t=87.75$) against arity's $+3.81$pp ($t=2.40$), a ratio of
+$25.7\times$; on $65$--$128$, $+64.44$ against $+0.52$, or $124.7\times$; on
+$S_5$ $41$--$64$, $+30.64$ against $+0.67$, or $45.5\times$. Beyond those bands
+the comparison stops being meaningful because all four arms approach chance, and
+we report no ratio there. On the prefix metric the corresponding ratios run
+$6.3\times$ to $44.9\times$ across all ten cells, but we now regard those as
+contaminated and give them only for continuity.
+
+The cost asymmetry is the part we consider most robust, because it does not
+depend on the effect size at all: the $\beta$ widening adds \emph{zero}
+parameters --- both arms have $998{,}092$ mixer parameters and byte-identical
+ledgers --- whereas doubling arity costs $+40.3\%$ of mixer parameters
+($+39.7\%$ / $+39.1\%$ of total, by task). Whatever the true effect sizes, one
+intervention is free and the other is not.
+
+\paragraph{We do not claim arity does nothing.}
+An earlier framing of this work said arity's effect was ``not distinguishable
+from zero''. That is true cell-by-cell and misleading overall. The strict-regime
+arity effect is positive in $10$ of $10$ prefix cells (one-sided sign test
+$p=0.00098$, more significant than any single interaction cell we report), and
+pooling all 60 per-bundle differences gives $+1.61$pp, $\mathrm{se}=0.61$,
+$t=2.66$ --- though those 60 values are nested and not independent, so the
+pooled test overstates its own precision. Our design also had little power: the
+minimum detectable effect at 80\% power is $7.4$--$12.5$pp at short lengths, so
+a real $+3.3$pp arity effect would have been invisible to us. The accurate
+statement is that \emph{arity's benefit under strict $\beta$ is consistently
+positive, one to two orders of magnitude smaller than the $\beta$ effect, and
+below this design's per-cell resolution} --- not that it is absent.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% TABLE 3 -- single column
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{table}[t]
+\centering
+\footnotesize
+\caption{$\beta$ range versus arity, on de-nested bands, restricted to the three
+extrapolation bands where the compared arms are above chance. Both interventions
+start from the same $R{=}1$ strict baseline; $\Delta$ is a paired mean
+difference in points. The $\beta$ intervention is parameter-free; arity costs
+$+40.3\%$ mixer parameters. Bands past these are omitted because all arms
+approach chance, making the ratio meaningless.}
+\label{tab:cost}
+\begin{tabular}{llrrr}
+\toprule
+Task, band & Lever & \hd{$\Delta$} & \hd{$t$} & \hd{Ratio} \\
+\midrule
+$A_5$, 41--64  & $\beta$ & $+97.98$ & 87.75 & \\
+$A_5$, 41--64  & arity   & $+3.81$  & 2.40  & $25.7\times$ \\
+\cmidrule(lr){1-5}
+$A_5$, 65--128 & $\beta$ & $+64.44$ & 7.55  & \\
+$A_5$, 65--128 & arity   & $+0.52$  & 1.36  & $124.7\times$ \\
+\cmidrule(lr){1-5}
+$S_5$, 41--64  & $\beta$ & $+30.64$ & 6.05  & \\
+$S_5$, 41--64  & arity   & $+0.67$  & 1.02  & $45.5\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Two failed explanations}
+\label{sec:parity}
+
+We stated a mechanistic prediction before running the sweep. It failed. The
+replacement we then offered also fails against the same data. We report both.
+
+\paragraph{The parity prediction, and its falsification.}
+Equation~\eqref{eq:det} says reflection $\beta$ unlocks negative determinants,
+i.e.\ odd permutations. Our tasks differ exactly in whether odd permutations are
+demanded: $S_5$'s transposition generator is odd, so composing a word requires
+elements of determinant $-1$; in $A_5$ both generators are even. We predicted a
+\emph{large} interaction on $S_5$ and a \emph{small} one on $A_5$. We observe the
+opposite in the bands that matter: de-nested, the interaction is $+30.14$ and
+$+57.09$pp on $A_5$ at $65$--$128$ and $129$--$256$, against $-0.77$ and
+$+0.31$pp on $S_5$ in the same bands. Only the $41$--$64$ band favours $S_5$.
+The reachability-of-reflections story does not explain our result. As
+Section~\ref{sec:det} notes, it never should have: Equation~\eqref{eq:det}
+predicts no interaction at $R=2$ in the first place.
+
+\paragraph{The headroom explanation, also contradicted.}
+We then proposed that $\beta>1$ helps by making each write more expressive
+regardless of parity, with $A_5$ (order 60) simply easier than $S_5$ (order 120)
+so its reflection arms retain headroom where $S_5$'s have collapsed. This
+predicts the interaction should track available headroom. It does not. Across
+the ten prefix cells, the correlation between interaction and headroom
+($100 - \mathrm{acc}$ of \texttt{R1-refl}) is only $r=+0.53$; within $A_5$ it
+fits well ($r=+0.93$) but within $S_5$ there is no relationship ($r=+0.28$,
+$\rho=+0.10$), and using the \texttt{Reflection} arm's de-nested band accuracy
+as the regressor gives the \emph{wrong sign} ($r=-0.33$). The specific claim we
+had drafted --- that the $S_5$ reflection arms at $19.58\%$ ``have little room
+left'' --- is also indefensible: $19.58\%$ against a $0.83\%$ chance floor is
+$\sim$80pp of headroom, more than $A_5$ at $L=256$ ($46.47\%$), where the
+interaction is four times larger.
+
+\paragraph{Where that leaves the mechanism.}
+We have a measured interaction, a falsified pre-registered mechanism, a
+falsified fallback, and a determinant argument that predicts no interaction at
+$R=2$. We therefore offer \emph{no} mechanism. A reader should treat the
+interaction as an unexplained empirical regularity, and should weigh it against
+the trainability account in Section~\ref{sec:limitations}, which we cannot rule
+out. Distinguishing the candidates needs a solvable-group control, a
+difficulty-matched non-solvable pair, and an $R=3$ arm (where
+Equation~\eqref{eq:det} does predict something, since the $k\le2$ hypothesis of
+Grazzi Prop.~1.3 fails there). We ran none of these.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Limitations}
+\label{sec:limitations}
+
+\subsection{The trainability confound, which we cannot resolve}
+
+This is the objection we consider most serious. Ten of 48 runs end with a final
+logged loss above $0.1$, and \emph{all ten are strict-$\beta$} (\texttt{R1}
+6/12, \texttt{DP2-strict} 4/12; both reflection arms 0/12). A perfectly
+asymmetric stability failure between the arms being compared is the signature of
+an optimization difference, not only an expressivity one. Within the 24 strict
+runs, log final loss correlates with accuracy at $r=-0.43$ ($L=40$), and spiked
+runs are worse at every length.
+
+The confound is load-bearing. Restricting the interaction to bundles where all
+four arms ended below $0.1$ ($A_5$: 1102--1105, $n=4$; $S_5$: 1104--1105,
+$n=2$), \emph{zero} of ten cells remain significant. The $A_5$ point estimates
+survive largely intact ($+13.56$, $+28.52$, $+26.93$ at $L=128/256/512$ against
+$+13.47$, $+35.28$, $+31.01$), which is the best we can say for the effect; the
+significance does not. Traces make the problem concrete: \texttt{R1} on $S_5$
+bundle 1106 ends at $0.85$ having reached $10^{-4}$ at step 3000, and bundle
+1103 oscillates between $\sim\!0$ and $1.27$ across the last 1500 steps. Those
+are not converged models. Since $\beta=2$ doubles the effective write-gate
+gradient scale, the reflection arms' perfect stability record may itself be an
+optimization-geometry effect.
+
+We therefore cannot separate ``reflection $\beta$ is more expressive'' from
+``reflection $\beta$ is easier to optimize in 4000 steps''. Our loss traces are
+logged only every 500 steps, too coarse to characterize the spikes, and we
+retained no intermediate checkpoints, so we cannot re-evaluate from a
+pre-spike model. Resolving this needs a learning-rate sweep per arm, longer
+training, or best-checkpoint evaluation. Until then, this paper measures
+\emph{the joint effect of expressivity and trainability} of the $\beta$ range,
+and the reader should read every result above with that substitution.
+
+\subsection{The $R$ arms are not parameter-matched, and the confound is open}
+
+The $R{=}1$ arms have $998{,}092$ mixer parameters and the $R{=}2$ arms
+$1{,}400{,}524$, $+40.3\%$. Any raw ``$R{=}2$ beats $R{=}1$'' main effect is
+confounded with capacity and we claim none.
+
+We had intended to argue that the strict-regime arity effect ($\le +3.50$pp)
+upper-bounds what that capacity is worth. We withdraw that argument. As
+Table~\ref{tab:bands} shows, both strict arms are at chance in every
+extrapolation band, and a capacity contrast measured between two floored models
+is guaranteed to read $\approx0$ regardless of what capacity is worth. The bound
+is uninformative rather than reassuring, and using it would have been circular.
+Two further problems: the \texttt{DP2-strict} vs \texttt{R1} contrast varies
+arity and capacity together, so if arity were mildly harmful under strict
+$\beta$ while capacity helped, the observed difference would bound neither
+component; and the design's minimum detectable effect is $7.4$--$12.5$pp, so
+capacity could be worth up to $\sim\!+11.9$pp within our confidence bounds.
+
+It remains true that capacity differs by the same $402{,}432$ parameters in both
+regimes, so to first order it cancels from a difference of differences. But that
+argument assumes the \emph{value} of capacity is regime-independent, and we never
+varied capacity within the reflection regime, so we cannot check it. The fix is
+specified: the project defines an \texttt{R1-P} arm feed-forward-width-matched
+to \texttt{DP2-strict} at $1{,}399{,}756$ parameters (a $0.055\%$ match), which
+was \emph{not} run. Running it plus a reflection-regime counterpart --- roughly
+24 cells at a cost comparable to this sweep --- would isolate capacity within
+each regime. That control is necessary, not optional, and its absence is what
+prevents us from making an arity claim.
+
+\subsection{$n=6$, multiplicity, and influential bundles}
+
+Six bundles makes paired contrasts informative but imprecise: interaction
+standard errors run $1.68$--$16.08$pp, and the \texttt{Reflection} arm's
+between-bundle spread on $A_5$ is large (sd $20.19$pp at $L=256$). As
+Section~\ref{sec:denested} states, no prefix cell and only one band survives
+Holm correction, and with $df=5$ none could have cleared Bonferroni even in
+principle. Leave-one-bundle-out shows the two long-length $S_5$ prefix cells
+lose significance if either of two bundles is dropped --- consistent with their
+sign reversal under de-nesting. The $A_5$ result is more robust: dropping the
+most extreme bundle (1103) takes $L=256$ from $+35.28$ to $+29.18$
+(L95 $+10.56$) and $L=512$ from $+31.01$ to $+22.26$ (L95 $+6.18$), both still
+positive. We report L95 values, not point estimates, as the defensible claim.
+
+\subsection{Ceiling and floor censoring}
+
+Of 240 reported values, 26 are exactly $100.00\%$ and 35 exceed $99\%$; of the
+de-nested band values, $107$ of $240$ lie within $2\times$ chance and 10
+band-cells fall strictly below it. At $L=40$ the reflection arms score $99.99\%$
+and $100.00\%$ on $A_5$, the latter with zero variance across all six bundles,
+so the $L=40$ interaction is mechanically bounded and its negative sign
+($-3.30$pp) is not interpretable. As a robustness check we recomputed the
+interaction on Haldane--Anscombe-corrected log-odds: sign and significance
+broadly survive (9 of 10 prefix cells positive at uncorrected L95), but the
+largest interaction moves from $L=256$ to $L=128$ on $A_5$, and $S_5$ at $L=40$
+becomes significantly \emph{positive}. So the raw-scale magnitudes are partly an
+artifact of pp differences being maximized near $50\%$, and our reading of the
+$L=40$ cells as uninformative is right on $A_5$ but wrong on $S_5$.
+
+\subsection{Scale, scope, and the K3 claim}
+
+Our models have $1.0$--$1.4$M mixer parameters, no feed-forward blocks, and
+train for 4000 steps on synthetic group word problems. Kimi~K3 has $2.78$T total
+parameters. \textbf{Nothing in this paper is direct evidence about the behaviour
+of a frontier-scale model.} We separate the two K3 statements accordingly. The
+determinant observation --- that strict $\beta$ forecloses negative-determinant
+transitions at every arity --- follows from Equation~\eqref{eq:det} alone, is
+regime-agnostic, and does not depend on this experiment; we consider it sound.
+The empirical prediction that K3-style nodes would not \emph{benefit} from
+$R>1$ does depend on this experiment, and given the four caveats above we
+present it as a hypothesis motivating a scaled replication, not as a finding.
+Group word problems are also a deliberately adversarial probe chosen because
+they discriminate; language modelling may weight these mechanisms differently.
+
+We also flag a tension with the prior work we rely on.
+\textsc{DeltaProduct} reports that its models ``fail to learn even the training
+context-length when restricted to the standard eigenvalue range $[0,1]$,
+regardless of the number of Householder transformations $n_h$''. Our strict-$\beta$
+arms do learn the training range ($74$--$82\%$ at $L=40$). Either the tasks
+differ materially or our strict arms are not the regime they describe; we cannot
+say which.
+
+\subsection{Other limitations}
+
+We measure $R\in\{1,2\}$ only, so we cannot speak to $R\ge3$ --- where, as noted,
+the theory actually predicts something different. All arms share one mixer
+implementation and Triton backend, so a kernel bug interacting with the $\beta$
+scale would not be caught by our design. We report a single learning-rate
+schedule per arm with no per-arm tuning, which is precisely what the trainability
+confound requires.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Related work}
+\label{sec:related}
+
+\paragraph{Delta-rule linear attention.}
+The delta rule as a fast-weight update goes back to Schlag et al.\
+\cite{schlag2021fwp}; DeltaNet \cite{yang2024deltanet} made it trainable at
+scale with a chunkwise-parallel form, and gated DeltaNet \cite{yang2024gated}
+added the channel-wise forget gate that makes Equation~\eqref{eq:delta} the
+modern default. Mamba-2 \cite{dao2024mamba2} supplies the structured-state-space
+view of the same gating. Kimi~Linear \cite{kimi2025linear} introduced KDA, and
+Kimi~K3 \cite{kimi2026k3} deploys it as the majority attention layer at frontier
+scale.
+
+\paragraph{Arity and negative eigenvalues are one research programme.}
+The two lines of work our paper sits between share most of their authors.
+Grazzi et al.\ \cite{grazzi2024negative} established that admitting negative
+eigenvalues unlocks state tracking otherwise out of reach --- the result our
+Section~\ref{sec:det} specializes and which subsumes our determinant
+observation. \textsc{DeltaProduct} \cite{siems2025deltaproduct} then raised
+arity, and its \S5.2 reports the finding that most directly prefigures ours:
+``Unexpectedly, $S_4$ and $A_5$ can extrapolate robustly using only $n_h = 2$
+despite the theorem suggesting 3 and 4, respectively.'' Two details matter for
+us. They attribute the efficiency to $S_4$ and $A_5$ being isomorphic to
+subgroups of $SO(3,\mathbb{R})$, and they observe a head that learns $\beta=2$
+on \emph{both} factors --- two true reflections composing to a rotation. And
+their \S5.2 uses the extended eigenvalue range throughout, reporting the failure
+under $[0,1]$ quoted in Section~\ref{sec:limitations}. That sentence is the
+closest prior statement to our result. Our contribution is to convert it from a
+training-time observation reported in passing into a paired factorial estimate
+at length extrapolation --- with the caveats above. Our result is a refinement of
+their programme, not a challenge to it.
+
+\paragraph{The operator is not new, and we are precise about what is prior.}
+The per-channel-gated delta-rule operator we measure is computed by public
+kernels for generalized (diagonal-plus-low-rank) delta-rule updates, and is
+established at scale: EDA \cite{li2026eda} trains dense 2.5B and MoE
+25B-A2.8B models on it --- though it appears there as the \emph{baseline},
+explicitly credited to KDA, EDA's own contribution being a second,
+independently addressed erase factor. To avoid overclaiming on
+\textsc{DeltaProduct}'s behalf: its Appendix~B.4 Eq.~6 does place a per-channel
+$\mathrm{diag}(w)$ inside a product at arbitrary $n_h$, but the factors are
+asymmetric RWKV-7 matrices rather than Householders, the construction is offered
+explicitly as buying expressivity ``at the cost of stability'', and it is used
+for a theory result with no experiments; \textsc{DeltaProduct}'s own gated
+variant uses a \emph{scalar} gate outside the product. We contribute no
+operator, no kernel and no theorem --- only a controlled measurement.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Conclusion}
+\label{sec:conclusion}
+
+In a gated delta-rule node, the write-strength range $\beta$ and the Householder
+arity $R$ are not interchangeable routes to expressivity. Across 48 paired cells
+on two non-solvable group word problems, widening $\beta$ produced large gains
+in every position band where the compared arms were above chance --- $25.7\times$
+to $124.7\times$ the gain from doubling arity --- at zero parameter cost, against
+arity's $+40.3\%$. The $\beta \times R$ interaction was positive in five of eight
+de-nested bands. The determinant argument of Section~\ref{sec:det}, which is not
+ours, establishes independently of any experiment that a strict-$\beta$ node such
+as Kimi~K3's KDA layer cannot obtain a negative-determinant transition at any
+arity.
+
+We are not able to claim more than that, and we would rather say so than imply
+otherwise. Four things stand between this measurement and a result. Our
+pre-registered mechanism is falsified and the fallback we offered is falsified
+too, so we have no mechanism. Our arity arms are not parameter-matched, and the
+bound we had hoped to place on that confound turns out to be uninformative
+because both strict arms are at chance. Only one of eight band-level interactions
+survives multiple-comparison correction at $n=6$, and none of the ten cells on
+the prefix-averaged metric does. And an asymmetric optimization failure means
+what we measured may be trainability rather than expressivity. Each has a
+specified, cheap fix --- the \texttt{R1-P} capacity control, more bundles, an
+$R=3$ arm, and per-arm learning-rate tuning with checkpoint retention. What we
+can defend is narrower than where we started: one lever is free and appears to
+matter a great deal, the other is expensive and appears to matter little, and we
+do not yet know why or whether it survives at scale.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Manual bibliography -- no bibtex pass.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\small
+\begin{thebibliography}{99}
+
+\bibitem{dao2024mamba2}
+T.~Dao and A.~Gu.
+\newblock Transformers are SSMs: Generalized models and efficient algorithms
+through structured state space duality.
+\newblock \emph{ICML}, 2024. arXiv:2405.21060.
+
+\bibitem{li2026eda}
+X.~Li, C.~Zhang, H.~Luo, X.~Lin, Z.~Wang, Z.~Qiu, Y.~Mao, L.~Chen, M.~Yuan,
+M.~Sun, H.~Jiang, S.~Zhang, R.~Men, W.~Hu, G.~Cheng, B.~Zheng, D.~Liu, and
+J.~Zhou.
+\newblock Erase-then-Delta attention: Decoupling erase and write addresses in
+delta-rule linear attention.
+\newblock arXiv:2606.26560, 2026.
+
+\bibitem{grazzi2024negative}
+R.~Grazzi, J.~Siems, A.~Zela, J.~K.~H.~Franke, F.~Hutter, and M.~Pontil.
+\newblock Unlocking state-tracking in linear RNNs through negative eigenvalues.
+\newblock \emph{ICLR}, 2025. arXiv:2411.12537.
+
+\bibitem{kimi2025linear}
+Kimi Team.
+\newblock Kimi Linear: An expressive, efficient attention architecture.
+\newblock arXiv:2510.26692, 2025.
+
+\bibitem{kimi2026k3}
+Kimi Team.
+\newblock Kimi K3: Open frontier intelligence.
+\newblock arXiv:2607.24653, 2026.
+
+\bibitem{schlag2021fwp}
+I.~Schlag, K.~Irie, and J.~Schmidhuber.
+\newblock Linear transformers are secretly fast weight programmers.
+\newblock \emph{ICML}, 2021. arXiv:2102.11174.
+
+\bibitem{siems2025deltaproduct}
+J.~Siems, T.~Carstensen, A.~Zela, F.~Hutter, M.~Pontil, and R.~Grazzi.
+\newblock DeltaProduct: Improving state-tracking in linear RNNs via Householder
+products.
+\newblock \emph{NeurIPS}, 2025. arXiv:2502.10297.
+
+\bibitem{yang2024deltanet}
+S.~Yang, B.~Wang, Y.~Zhang, Y.~Shen, and Y.~Kim.
+\newblock Parallelizing linear transformers with the delta rule over sequence
+length.
+\newblock \emph{NeurIPS}, 2024. arXiv:2406.06484.
+
+\bibitem{yang2024gated}
+S.~Yang, J.~Kautz, and A.~Hatamizadeh.
+\newblock Gated delta networks: Improving Mamba2 with delta rule.
+\newblock \emph{ICLR}, 2025. arXiv:2412.06464.
+
+\end{thebibliography}
+
+\end{document}
