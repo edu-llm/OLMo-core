@@ -179,8 +179,8 @@ the non-embedding basis. §3.1's "count-slope minus entropy-slope" subtraction i
 otherwise, and an earlier draft of this document quoted the two tables on different definitions.
 
 **The midpoint is bioS.** 6 × 8 = 48 bits/entity against bioS's 47.592 — a 0.9% match — so the axis
-anchors to the literature exactly where the comparison is made. Six cells cost **3.4 h on 8×H100
-(~$187)**, against 4.4 h for the 28M count row, and every one of the four confounds above is held
+anchors to the literature exactly where the comparison is made. Six cells cost **2.4 h on 8×H100
+(~$130)**, against 4.7 h for the 28M count row, and every one of the four confounds above is held
 fixed by construction rather than argued away.
 
 Two implementation notes. Values stay **natural**: four words from real word lists, so a 32-bit value
@@ -749,7 +749,9 @@ At 20% MFU with the LM head counted. **Revision 1's FLOP count omitted the LM he
 across a 3× width span is structurally wrong: it inverts the cut decision by making small rows look
 cheap. Plan on 12/16/20/24% per row and **measure MFU on M1's first 50 steps**, then re-budget.
 
-The entropy sweep at 28M is **3.4 h ≈ $187** for six cells.
+The entropy sweep at 28M is **36.8B tokens, 2.4 h ≈ $130** for six cells. Its templates render 42
+tokens per biography against the bioS axis's 69.2, so an estimate that reuses the bioS mean
+overstates it by half — the figure above is measured from a dry run.
 
 ### 10.1 How a cell is submitted
 
@@ -867,11 +869,11 @@ corrected demand table.
 **M1 — one cell end to end, ~0.7 h.** 28M at b=8 (the bioS anchor) on WSD. Measure MFU and
 re-budget. Then **3–6 replicates** to fix the seed count from data.
 
-**M2 — the entropy sweep, ~3.4 h.** 28M, b ∈ {0, 4, 8, 16, 24, 32}. Frozen n=30k eval set,
+**M2 — the entropy sweep, ~2.4 h.** 28M, b ∈ {0, 4, 8, 16, 24, 32}. Frozen n=30k eval set,
 pre-registered pooled regression and the 2pp equivalence test. *This is the identified axis and the
 primary result.*
 
-**M3 — the first run: the count grid, ~15.05 h in three jobs.** 13M/28M/64M minus 64M ρ=4, plus three controls, with
+**M3 — the first run: the count grid, ~15.1 h in three jobs.** 13M/28M/64M minus 64M ρ=4, plus three controls, with
 WSD cooldown branches so the compute-matched reading is legitimate. **M3 slope − M2 slope quantifies
 how much of any "crowding" was tokens, steps and ratio.**
 

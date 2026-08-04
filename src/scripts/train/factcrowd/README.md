@@ -82,12 +82,38 @@ counts — **not measured**. Read the real MFU off the first cell's first 50 ste
 submitting the 64M row, which is three-fifths of the cost.
 
 The index maps to a cell by *position in the sorted directory*, and `ctrl` sorts before `d0p3`, so the
-control is always index 0 and every demand cell sits one later than it would without it. Check
-`ls configs/cells/count | grep <row>` against the `fanout_size` you submit; a stale size runs a
-different cell under the name that was approved.
+control is always index 0. Verify the mapping before submitting — a `fanout_size` from an older
+directory runs a different cell under the name that was approved:
 
-The entropy sweep is a fourth job, `--sweep entropy --row 28M`, `fanout_size: 6`, 3.4 h and about $187.
-It is the identified axis (`PRD.md` §3.1) and the cheapest thing here.
+```
+[0] 13m_ctrl  [1] 13m_d0p3  [2] 13m_d0p6  [3] 13m_d1p2  [4] 13m_d2p4  [5] 13m_d4p8
+[0] 28m_ctrl  [1] 28m_d0p3  [2] 28m_d0p6  [3] 28m_d1p2  [4] 28m_d2p4  [5] 28m_d4p8
+[0] 64m_ctrl  [1] 64m_d0p3  [2] 64m_d0p6  [3] 64m_d1p2  [4] 64m_d2p4
+```
+
+The entropy sweep is a fourth job, `--sweep entropy --row 28M`, `fanout_size: 6`, 36.8B tokens,
+2.4 h and about $130.
+It is the identified axis (`PRD.md` §3.1) and the cheapest thing here. Its indices sort alphabetically,
+so `[0] b0 [1] b16 [2] b24 [3] b32 [4] b4 [5] b8` — every cell is self-labelled, so the order is
+harmless, but it is not numeric.
+
+### Pre-flight, all verified on this commit
+
+| | |
+|---|---|
+| worst-case startup | 120 s and 8.6 MB of scratch for `64m_d2p4`, the 2.86M-entity cell |
+| `max_checkpoints` | `None`, so no prune deletes a key the workload role may not delete |
+| `ephemeral_save_interval` | `None` |
+| evaluators | none attached |
+| `max_duration` | explicit, in steps |
+| W&B | attached, enabled only when `EDULLM_WANDB_PROJECT` is set |
+| every checkpoint | carries the cell config and the schema, vocabulary, stream and task fingerprints |
+
+That last row is what makes it safe to train before the scoring half exists. The corpus is generated
+rather than stored, so a checkpoint is only scoreable if the run recorded how to rebuild it — the cell
+config replays the vocabulary, entity table and reasoning items exactly, and the fingerprints let a
+scorer prove it rebuilt the right ones rather than assume. Nothing about scoring needs to be decided
+before these jobs run.
 
 ## Configs
 
@@ -203,5 +229,9 @@ cell with demand 0 and no reasoning tokens is refused outright, being a run with
 
 The measurement half. `measure/bits.py` (the Allen-Zhu estimator over the value spans the renderer
 already returns), `measure/reasoning.py` and its gates, and `measure/recall.py` as a post-hoc job.
-Training writes the checkpoints those read; nothing scores them yet. `PRD.md` §8 and §12 have the
-order.
+`PRD.md` §8 and §12 have the order.
+
+None of it blocks the training jobs. All three read checkpoints after the fact, and every checkpoint
+records the cell that produced it, so the scorer can be written against runs that have already
+finished. Brevo1 and Reasoning Core are the other gap: until Brevo1 lands, a `<mano>` decline is
+ambiguous between "reasoning crowded out" and "mod-23 tables crowded out" (`PRD.md` §8.3).

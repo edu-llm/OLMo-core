@@ -15,7 +15,10 @@ from pathlib import Path
 
 import pytest
 from factcrowd import cells as C
+from factcrowd.corpus import entities as E
+from factcrowd.corpus import render as R
 from factcrowd.corpus import values as V
+from factcrowd.corpus import vocab as Vo
 from factcrowd.ladder import rho, sizes
 
 from olmo_core.exceptions import OLMoConfigurationError
@@ -532,3 +535,58 @@ def test_the_basis_gap_stays_monotone_in_model_size():
     assert ratios == sorted(ratios, reverse=True), ratios
     assert ratios[0] == pytest.approx(1.073, abs=0.005)
     assert ratios[-1] == pytest.approx(1.024, abs=0.005)
+
+
+def test_the_two_axes_render_different_lengths_so_one_mean_cannot_serve_both():
+    """
+    The bioS templates average 69.2 tokens and the entropy templates exactly 42.0.
+
+    Every token, step and cost figure is ``n_entities * exposures * mean``, so reusing the bioS mean for
+    the entropy axis overstates that job by half -- which is exactly the mistake this pins, having been
+    made once in this repo's own cost table. ``ResolvedCell`` takes the mean as an argument rather than
+    assuming one precisely so the caller has to supply the right renderer's figure.
+    """
+    # The literals have to be reserved before the pools are filled, or a generated value collides with
+    # a template word -- 'Born' did, once.
+    bios_literals = R.literal_words_of(R.BIOS_TEMPLATES)
+    bios_schema = V.bios_schema(reserved=tuple(bios_literals) + ("<facts>",))
+    bios = R.Renderer(
+        E.EntityTable.build(bios_schema.schema, 300, 7),
+        bios_schema,
+        Vo.Vocabulary.build(
+            bios_schema.schema, literal_words=bios_literals, domain_tokens=("<facts>",)
+        ),
+        R.BIOS_TEMPLATES,
+        domain_token="<facts>",
+        seed=1,
+    )
+    templates = R.entropy_templates(V.ENTROPY_ATTRIBUTES, V.ENTROPY_WORDS_PER_VALUE)
+    literals = R.literal_words_of(templates)
+    schema = V.entropy_schema(8, reserved=tuple(literals) + ("<facts>",))
+    entropy = R.Renderer(
+        E.EntityTable.build(schema.schema, 300, 7),
+        schema,
+        Vo.Vocabulary.build(schema.schema, literal_words=literals, domain_tokens=("<facts>",)),
+        templates,
+        domain_token="<facts>",
+        seed=1,
+        min_templates=1,
+    )
+
+    assert entropy.mean_tokens_per_bio == 42.0
+    assert bios.mean_tokens_per_bio > 1.5 * entropy.mean_tokens_per_bio
+    # The entropy axis renders one length whatever the entropy, which is its defining property.
+    assert int(entropy.template_lengths.min()) == entropy.max_tokens_per_bio
+
+    # And the same cell costs visibly different token counts under the two means, which is the trap.
+    cell = C.CellSpec(
+        cell_id="28m_b8",
+        row="28M",
+        sweep="entropy",
+        bits_per_attribute=8,
+        n_entities=611_184,
+        reasoning_tokens=1_000_000_000,
+    ).resolve()
+    wrong = cell.total_tokens(bios.mean_tokens_per_bio)
+    right = cell.total_tokens(entropy.mean_tokens_per_bio)
+    assert wrong > 1.5 * right, (wrong, right)

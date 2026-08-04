@@ -263,3 +263,67 @@ def test_the_three_way_mixture_trains_at_the_absolute_volumes_the_cell_states(tm
     for name in ("mano", "compare"):
         want = spec.slice_budget(name) // spec.sequence_length
         assert abs(sampled[name] - want) <= 1, (name, sampled[name], want)
+
+
+@pytest.mark.slow
+def test_the_built_trainer_satisfies_every_platform_requirement():
+    """
+    The settings the platform refuses a run for, or kills it over, asserted on a real trainer.
+
+    Each was a lost run for somebody: ``max_checkpoints`` at its default of three makes a prune delete
+    a key the workload role may not delete, so the run dies about an hour in having also thrown away
+    seven of the ten snapshots the bits curve needs; ``ephemeral_save_interval`` is refused in the
+    first seconds; the two evaluators fail while the trainer is being built; and ``max_duration``
+    defaults to one epoch. Reading them off the object is the only check that cannot drift from the
+    code.
+
+    Also asserts the run records its own cell. The corpus is generated rather than stored, so a
+    checkpoint without it is weights nobody can attach to a demand -- and the scoring half of this
+    experiment does not exist yet, which makes that record the only thing standing between a finished
+    run and an unusable one.
+    """
+    pytest.importorskip("torch")
+    import argparse
+    import importlib.util
+    import sys
+    import tempfile
+
+    spec = importlib.util.spec_from_file_location("factcrowd_train_cell_plat", ENTRY_POINT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    with tempfile.TemporaryDirectory() as raw:
+        work = Path(raw)
+        cell = C.load_cell(SMOKE_CELL)
+        corpus = module.BuiltCorpus(cell.resolve(), work)
+        resolved = cell.resolve(vocab_size=corpus.vocabulary.padded_size())
+        trainer = module.build_trainer(
+            resolved,
+            corpus,
+            argparse.Namespace(
+                save_folder=str(work / "ck"),
+                work_dir=work,
+                rank_microbatch_size=2048,
+                compile_model=False,
+                num_workers=2,
+                run_name="plat",
+            ),
+        )
+
+        checkpointer = trainer.callbacks["checkpointer"]
+        assert checkpointer.max_checkpoints is None
+        assert checkpointer.ephemeral_save_interval is None
+        assert trainer.max_duration.unit == "steps" and trainer.max_duration.value > 0
+        assert not [name for name in trainer.callbacks if "eval" in name.lower()]
+        assert not trainer.save_overwrite
+
+        # W&B off unless the platform named a project, so this never needs an API key locally.
+        assert trainer.callbacks["wandb"].enabled is False
+        assert trainer.callbacks["wandb"].name == "plat"
+
+        recorded = trainer.callbacks["config_saver"].config["factcrowd"]
+        assert recorded["cell"]["cell_id"] == cell.cell_id
+        assert recorded["fingerprints"]["schema"] and recorded["fingerprints"]["vocabulary"]
+        assert recorded["checkpoint_steps"] == sorted(set(recorded["checkpoint_steps"]))

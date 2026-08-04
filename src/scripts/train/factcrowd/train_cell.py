@@ -402,6 +402,7 @@ def build_trainer(
         GPUMemoryMonitorCallback,
         ListCheckpointerCallback,
         SpeedMonitorCallback,
+        WandBCallback,
     )
     from olmo_core.train.train_module import TransformerTrainModuleConfig
 
@@ -554,6 +555,22 @@ def build_trainer(
         .with_callback("speed_monitor", SpeedMonitorCallback())
         .with_callback("config_saver", ConfigSaverCallback())
         .with_callback(
+            "wandb",
+            WandBCallback(
+                name=args.run_name,
+                # EDULLM_WANDB_PROJECT, not WANDB_PROJECT: the platform sets both, and the reference
+                # script reads the former. No `group` -- the platform puts the experiment in
+                # WANDB_RUN_GROUP and the client reads that itself.
+                project=os.environ.get("EDULLM_WANDB_PROJECT"),
+                cancel_check_interval=10,
+                # Enabled only when the platform named a project, so a local run does not fail on a
+                # missing WANDB_API_KEY. Without this callback a nine-hour cell reports nothing until
+                # it finishes, which is the difference between noticing a diverged run at step 500 and
+                # at the end.
+                enabled=bool(os.environ.get("EDULLM_WANDB_PROJECT")),
+            ),
+        )
+        .with_callback(
             "checkpointer",
             ListCheckpointerCallback(
                 save_steps=checkpoint_steps,
@@ -603,7 +620,34 @@ def build_trainer(
         tokenizer=tokenizer_config,
         dp_process_group=train_module.dp_process_group,
     )
-    return trainer_config.build(train_module, data_loader)
+    trainer = trainer_config.build(train_module, data_loader)
+
+    # Record the cell alongside every checkpoint. This is what makes a checkpoint scoreable later: the
+    # corpus is generated rather than stored, so the only way to rebuild the exact vocabulary, entity
+    # table and reasoning items a checkpoint was trained on is to replay the cell that produced it. The
+    # fingerprints let a scorer prove it rebuilt the right one instead of assuming. Without this a
+    # finished run is a directory of weights nobody can attach to a demand.
+    #
+    # Set after the trainer is built and every callback attached, which is what the callback's own
+    # docstring requires -- it forwards the config to W&B and the others at assignment time.
+    trainer.callbacks["config_saver"].config = {
+        "factcrowd": {
+            "cell": spec.to_dict(),
+            "resolved": resolved.summary(
+                0.0 if corpus.renderer is None else corpus.renderer.mean_tokens_per_bio
+            ),
+            "fingerprints": {
+                "schema": corpus.corpus_schema.schema.fingerprint(),
+                "vocabulary": corpus.vocabulary.fingerprint(),
+                "stream": None if corpus.stream is None else corpus.stream.fingerprint(),
+                "reasoning": {
+                    stream.task.name: stream.task.fingerprint() for stream in corpus.task_streams
+                },
+            },
+            "checkpoint_steps": checkpoint_steps,
+        }
+    }
+    return trainer
 
 
 def main(argv: Optional[Tuple[str, ...]] = None) -> int:
