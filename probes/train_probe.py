@@ -73,6 +73,17 @@ ARMS: dict[str, dict] = {
     "R1-P": dict(mixer="kda_hh", num_householder=1, beta_regime="strict"),
     "DP2-strict": dict(mixer="kda_hh", num_householder=2, beta_regime="strict"),
     "Reflection": dict(mixer="kda_hh", num_householder=2, beta_regime="reflection"),
+    # R=1 under the reflection regime: the fourth cell of the (beta regime x R) square, and the
+    # only one that had no canonical id. The 155-record archive contains it under the name
+    # 'R1-refl' -- set there with explicit --num-householder/--beta-regime flags rather than an
+    # arm id -- which is why it is spelled that way here rather than 'R1-reflection'.
+    #
+    # It exists because the R-vs-regime interaction is not identified without it. 'Reflection'
+    # minus 'DP2-strict' confounds the two factors: they differ in R *and* in beta range. Only
+    # (Reflection - R1-refl) against (DP2-strict - R1) separates them, and the first of those
+    # contrasts needs this arm. Naming it makes that contrast reproducible from an arm id
+    # instead of from a pair of flags a caller has to remember to set together.
+    "R1-refl": dict(mixer="kda_hh", num_householder=1, beta_regime="reflection"),
     "DP2-budgeted": dict(unimplemented="needs per-factor beta b=2*sigmoid(l_b), pi=sigmoid(l_pi)"),
     "R1-2step-tiedK": dict(unimplemented="needs k2=k1 forced at the recurrence boundary"),
 }
