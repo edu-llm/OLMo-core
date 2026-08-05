@@ -221,13 +221,16 @@ def test_g2_admits_a_random_init_model_that_lands_at_its_floor():
 
 def test_g2_refuses_a_random_init_model_that_beats_its_own_floor():
     """
-    The `<compare>` bug from PRD 8.3, caught by the gate instead of by a reviewer: "always name the
-    first person" is a copy of the prompt, so it scored 50.2% while the best *constant* scored 0.02%.
-    Quoting the floor as the constant one would give a binary task half the range its gate assumes.
+    PRD 8.3's `<compare>` bug, replayed with its own numbers. "Always name the first person" is a copy
+    of the prompt, so it scores 50.2% where the best *constant* name scores 0.02% -- and an endpoint
+    whose floor is quoted as the constant one has half the range its admission gate assumes.
+
+    An untrained model landing 50pp above the quoted floor is how that gets found before a grid runs:
+    the network cannot do the task, so the margin is the instrument.
     """
-    verdict = gates.g2_label_permuted(endpoint(0.502, floor=MANO_FLOOR))
+    verdict = gates.g2_label_permuted(endpoint(0.502, floor=0.0002, name="compare"))
     assert not verdict.passed
-    assert "45.56pp above the measured floor" in verdict.detail
+    assert "50.18pp above the measured floor" in verdict.detail
 
 
 def test_g2_tolerance_narrows_as_the_eval_set_grows():

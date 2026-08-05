@@ -485,6 +485,11 @@ def build_trainer(
     # Set after the trainer is built and every callback attached, which is what the callback's own
     # docstring requires -- it forwards the config to W&B and the others at assignment time.
     trainer.callbacks["config_saver"].config = {
+        # Under "model", which is where OLMo-core's own tooling looks -- reshard_core_checkpoint,
+        # convert_checkpoint and TransformerGenerationModule.from_checkpoint all read config["model"].
+        # Our own scorer rebuilds from the cell instead, since a row implies exactly one width, but
+        # writing this makes a checkpoint openable by someone who does not have this repo.
+        "model": model_config.as_config_dict(),
         "factcrowd": {
             "cell": spec.to_dict(),
             "resolved": resolved.summary(
@@ -499,7 +504,7 @@ def build_trainer(
                 },
             },
             "checkpoint_steps": checkpoint_steps,
-        }
+        },
     }
     return trainer
 

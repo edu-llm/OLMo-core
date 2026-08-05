@@ -583,6 +583,11 @@ at a time without raising.
 
 ## 8. Measurement
 
+**Built, and the layering is in `README.md`.** `measure/` implements this section; §16.6 records what
+building it corrected. What remains unbuilt is the gates' *evidence* — a label-permuted control, a
+premise-ablated probe, a dilution ladder — and a gate whose evidence is missing returns false rather than
+passing silently.
+
 ### 8.1 Bits
 
 Allen-Zhu's estimator: **sum, never average**, the autoregressive loss over exactly the value tokens,
@@ -1251,7 +1256,58 @@ related comparator with open-book, closed-book, constituent-recall and condition
 and independently calibrated arithmetic task; a Flash-backed packed path with masking; the checkpoint →
 reconstruction → scoring smoke. §12 orders them.
 
-### 16.6 Deferred, with reasons
+### 16.6 What building the measurement half changed
+
+`score_run.py` and `measure/` now exist: a checkpoint goes in, one row per (cell, replicate, step,
+endpoint) comes out. Verified end to end on real checkpoints. Six things this section got wrong or left
+underspecified, found by building it.
+
+**The estimator needed one place to own the off-by-one.** OLMo-core builds labels as
+`pad(input_ids[..., 1:])`, so `ce_loss[t]` scores `input_ids[t+1]` and the cost of token `p` is
+`ce_loss[p-1]`. §8.1 says "sum the loss over exactly the value tokens" without saying which loss
+positions those are, and getting it backwards is invisible — a bit count would charge a value token's
+cost to the literal before it, and an endpoint would grade the token before the answer. Both produce
+plausible numbers. `measure/spans.py` holds the rule, checked against a manually computed cross-entropy
+from a real model, and every caller goes through it.
+
+**The parse-status problem is structurally absent, not merely handled.** §8.3's endpoints both render a
+single-token answer at a known position, so grading is a teacher-forced argmax — *identical* to greedy
+decoding, with no continuation to truncate and no string to parse. That removes the failure mode §1
+catalogues four times. `n_unparseable` is still reported, because G7 bounds it and a future multi-token
+endpoint could reintroduce the problem.
+
+**Achieved bits are an upper bound, and the report has to say so.** With intra-document masking off
+(§7.3) a packed biography can attend to its neighbour, so part of what looks stored was read from
+context. Every row carries `bits_is_upper_bound`, and a figure above the ~2 bits/param ceiling is
+refused as a **measurement fault** rather than reported as a finding. Storage is also clamped at zero:
+an untrained checkpoint's residual exceeds the prior — measured at 83–91 bits against a 47.59-bit prior
+— and that is not negative storage.
+
+**Rebuilding the corpus has to be verified, not assumed.** The corpus is generated, so scoring replays
+the cell recorded beside the weights. §8 did not say to check that the replay is right. It is now, and
+the guard has already refused a real checkpoint: one written before §3.1's union vocabulary rebuilds to a
+different schema today, and scoring it would have produced entirely reasonable numbers about a corpus the
+model never saw.
+
+**§8.5's pooled regression is the wrong inferential unit, and the size of the error is now measured.**
+It asks for one regression over all cells with size intercepts. That treats correlated observations as
+independent: on the planned 3×6 design the cell-level standard error comes out **2.83× smaller** than
+the blocked one, and its 90% interval declares equivalence — `[−0.74, +0.74]pp` — where the per-seed
+interval `[−3.49, +3.49]pp` cannot, on identical data. `analysis/trend.py` uses the per-seed slope, runs
+per ladder row, and provides both `tost` and `non_inferiority` so a null states which test it passed.
+The margin is also end-to-end rather than per bit: §8.5 defines the effect as `D = −4β`, so reading 2pp
+per bit/param would be permissive by 4.14×.
+
+**G4 cannot be a two-sided band.** Under P3 the predicted result is every cell sitting *at* the b=0
+arm's score, so a saturation check against that ceiling would refuse the pre-registered outcome for
+being predicted. `measure/gates.py` checks the ceiling instead: the achievable range must be ≥10pp and a
+cell must not out-score the no-facts arm. Three thresholds the PRD does not name (G3's 15pp drop, G4's
+10pp range, G6's 2pp rise) are derived from ones it does and are labelled in their docstrings as the
+module's choice. G7's MDE reconstructs to σ = 0.636pp for a 2pp effect at five points, matching this
+section's 0.63pp — and only with a one-sided α, which is now stated. **G5 remains absent**, with a test
+asserting it stays that way.
+
+### 16.7 Deferred, with reasons
 
 FLD's 1,700 core-hours and 51.1% floor — decided in M0, not now. The exposure placebo and the
 mechanism battery — M4. Qwen3-0.6B continuation — after M3. Retiring
