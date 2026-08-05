@@ -396,6 +396,16 @@ class MoERouter(nn.Module):
         # `load imbalance` is kept rather than replaced: it is what every prior run recorded,
         # and a metric that silently changes meaning between runs is worse than one that is
         # merely awkward to compare.
+        # ALL THREE ARE TAGGED ReduceType.max, AND NOT BECAUSE A MAXIMUM IS THE STATISTIC WE
+        # WANT. `Transformer.compute_auxiliary_metrics` folds same-named metrics from every
+        # MoE block into one entry, and for `mean` and `sum` it folds them by ADDING -- which
+        # is right for the auxiliary losses, the only things stock ever tagged that way, and
+        # wrong for anything bounded. Tagged `mean`, a normalised entropy of ~0.998 in each of
+        # 16 blocks is reported as ~15.97, i.e. a quantity defined on [0, 1] leaves the
+        # trainer above 15. `max` folds with `torch.max`, so each of these reads as its
+        # worst block: lowest-entropy, highest-CV, most-dead. That is the right summary for a
+        # health gate anyway, and the per-block series are logged separately for the arm
+        # comparison.
         counts = batch_size_per_expert.to(torch.float)
         num_experts = counts.numel()
         tiny = torch.finfo(torch.float32).tiny
@@ -403,25 +413,30 @@ class MoERouter(nn.Module):
 
         # Coefficient of variation: population std over mean, and the scale-free quantity the
         # load-balancing loss is a smooth surrogate for. Zero under perfect balance at every
-        # E, so it is comparable across arms. Averaged over ranks, not maximised.
-        out["load CV"] = (counts.std(unbiased=False) / mean.clamp_min(tiny), ReduceType.mean)
+        # E, so it is comparable across arms.
+        out["load CV"] = (counts.std(unbiased=False) / mean.clamp_min(tiny), ReduceType.max)
 
         # Normalised routing entropy, H(p)/log(E) over the realised assignment distribution.
         # 1.0 is perfect balance and 0.0 is collapse onto a single expert, at every E, which
-        # makes this the primary cross-arm readout.
+        # makes this the primary cross-arm readout. Negated so that folding with `max` keeps
+        # the WORST block rather than the best; the trainer's key says so.
         probs = counts / counts.sum().clamp_min(tiny)
         entropy = -(probs * probs.clamp_min(tiny).log()).sum()
-        out["load entropy (normalized)"] = (
-            entropy / math.log(num_experts) if num_experts > 1 else entropy,
-            ReduceType.mean,
+        normalized_entropy = (
+            entropy / math.log(num_experts) if num_experts > 1 else entropy
         )
+        out["load entropy deficit (worst block)"] = (1.0 - normalized_entropy, ReduceType.max)
 
         # Dead experts as a fraction, because the stop criteria name dead experts and neither
         # metric above separates "one expert idle" from "all slightly uneven". A fraction
-        # rather than a count so that it, too, is comparable across E.
+        # rather than a count so that it, too, is comparable across E. Guarded against an
+        # all-zero histogram, which happens before any tokens have been routed: the unguarded
+        # form returns 1.0 there, and 1.0 is indistinguishable from total expert collapse.
         out["dead expert fraction"] = (
-            (counts == 0).sum(dtype=torch.float) / num_experts,
-            ReduceType.mean,
+            (counts == 0).sum(dtype=torch.float) / num_experts
+            if counts.sum() > 0
+            else torch.zeros((), dtype=torch.float, device=counts.device),
+            ReduceType.max,
         )
 
         # Load balancing loss.
