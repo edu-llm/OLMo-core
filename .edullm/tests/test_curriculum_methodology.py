@@ -361,7 +361,7 @@ def test_platform_fixture_and_docker_are_branch_specific() -> None:
     assert fixture["dataset_release"] == "regmix-10b-v1"
     assert fixture["wandb_project"] == "curriculum"
     assert fixture["compute_profile"] == "gpu-8xa100"
-    assert fixture["workload_profile"] == "olmo-core-train-4gpu"
+    assert fixture["workload_profile"] == "olmo-core-train"
     assert "--nproc-per-node=8" in command
     assert "--" in command
     assert "--nproc 8" in command

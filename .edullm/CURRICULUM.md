@@ -96,8 +96,8 @@ README's 1–N GPU contract is preserved for explicit `--nproc` launches.
 
 The existing-platform compilation fixture uses the catalog's provisioned
 `gpu-8xa100` compute profile (8 × A100 on `p4d.24xlarge`) through the
-submission form's supported `compute_profile` override. The workload profile remains
-`olmo-core-train-4gpu` because it supplies the OLMo training bounds and
+submission form's supported `compute_profile` override. The workload profile is
+`olmo-core-train` because it supplies the OLMo training bounds and
 checkpoint contract; the compiler validates the resolved eight-GPU shape
 against the submitted eight-rank torchrun command. No platform configuration
 change is required. Because the A100 profile's hourly rate exceeds the routine
@@ -161,7 +161,7 @@ The exact platform forms are:
   `.edullm/fixtures/curriculum-linear10-flesch-benchmark-submission.json`
 
 Both select the provisioned `gpu-8xa100` profile (one `p4d.24xlarge`, 8 ×
-A100) through the `olmo-core-train-4gpu` workload and launch eight ranks. The
+A100) through the `olmo-core-train` workload and launch eight ranks. The
 benchmark contains no W&B/API credential and does not upload artifacts. Replace
 the all-zero `commit_sha` with the immutable published branch commit before a
 real submission; leave `image_digest` blank in **Submit a run** so the platform
