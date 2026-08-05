@@ -65,7 +65,7 @@ import re
 import sys
 import time
 import traceback
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Dict, Iterator, List, Optional, cast
 
 import rich
@@ -79,7 +79,12 @@ from olmo_core.data import (
     TokenizerConfig,
 )
 from olmo_core.distributed.parallel import DataParallelType
-from olmo_core.distributed.utils import barrier, get_rank, get_world_size
+from olmo_core.distributed.utils import (
+    all_reduce_value,
+    barrier,
+    get_rank,
+    get_world_size,
+)
 from olmo_core.io import clear_directory, list_directory, normalize_path
 from olmo_core.nn.transformer import TransformerConfig
 from olmo_core.optim import AdamWConfig, CosWithWarmup, OptimGroupOverride
@@ -139,6 +144,12 @@ class Stage(enum.IntEnum):
     THE_CONFIG_WOULD_NOT_BUILD = 70
     THE_TRAINING_ENVIRONMENT_WOULD_NOT_START = 71
     TRAINING_ITSELF_FAILED = 72
+    # The two below are the held-out endpoint, and they are SEPARATE FROM 72 on purpose. A run
+    # that trained for eleven hours and then could not produce a CE has a checkpoint on S3 and
+    # is worth re-evaluating from it; a run whose training failed has nothing. Both used to be
+    # exit 0 with a null field in the JSON, which is the failure these numbers exist to end.
+    THE_CORPUS_DECLARES_NO_HELD_OUT_SPLIT = 73
+    THE_HELD_OUT_EVALUATION_SCORED_NOTHING = 74
 
 
 class Refusal(SystemExit):
@@ -279,6 +290,14 @@ class ExperimentConfig(Config):
     dataset_id: str = ""
     dataset_version: str = ""
     init_seed: int = 12536
+    #: The corpus's own held-out objects and the row count its manifest declares for them.
+    #:
+    #: Carried on the config for the same reason ``dataset_id`` is: the record that lands beside
+    #: the checkpoint then names the exact objects the endpoint was computed over, so a CE in
+    #: the summary can be traced to a token set rather than taken on trust. It also puts them
+    #: where ``train()`` can reach them -- it receives the config and not the ``Corpus``.
+    val_paths: List[str] = field(default_factory=list)
+    val_rows: Optional[int] = None
 
 
 @dataclass
@@ -291,6 +310,19 @@ class Corpus:
     dtype: NumpyDatasetDType
     tokenizer: TokenizerConfig
     rows: Optional[int]
+    #: The corpus's OWN held-out objects, taken from the reader's split resolution.
+    #:
+    #: NOT reconstructed from shard names, and that is not a stylistic preference. A mask named
+    #: ``all-dressed-snazzy2__val-00212`` corresponds to
+    #: ``all-dressed-snazzy2/art_and_design/val-00212.u32le.bin`` -- the topic directory is
+    #: dropped from the name and 24 topics exist, so rebuilding a key from a filename fetches
+    #: a real, readable, plausible shard belonging to a different topic. The reader's
+    #: ``.val`` is the only place the true keys are written down.
+    val_paths: List[str] = field(default_factory=list)
+    #: Rows the manifest DECLARES for the held-out partitions, or None if it declares none.
+    #: This is the number the realized token count is checked against; see
+    #: :func:`evaluate_val_aggregate`.
+    val_rows: Optional[int] = None
 
 
 def corpus_from_manifest(read, *, dataset_id: str, version: str, tokenizer_id: str) -> Corpus:
@@ -300,6 +332,14 @@ def corpus_from_manifest(read, *, dataset_id: str, version: str, tokenizer_id: s
     should be able to hand it a manifest describing a big-endian corpus without standing up
     S3 or installing the reader. ``read`` is duck-typed for that reason: anything carrying
     ``paths``, ``dtype``, ``byte_order``, ``header_bytes`` and ``rows`` will do.
+
+    THE HELD-OUT SPLIT IS TAKEN FROM ``read.val``, WHICH IS THE READER'S OWN ANSWER. It is a
+    property over ``read.splits``, derived from ``is_trainable(name)`` over the partition names
+    ``dataset.json`` declares -- so the val objects here are the exact keys the manifest sealed,
+    topic directory and all. ``getattr`` with a default rather than a bare attribute access
+    because ``val``/``split_rows`` arrived in the reader after ``paths`` did, and a corpus or a
+    test fake that predates them should degrade to "no held-out split declared" rather than
+    raising an AttributeError in the middle of a config build.
     """
     if not read.paths:
         raise Refusal(
@@ -336,6 +376,27 @@ def corpus_from_manifest(read, *, dataset_id: str, version: str, tokenizer_id: s
             f"no OLMo-core config for {tokenizer_id}; this image knows: {known}",
         ) from None
 
+    # WHICH SPLITS ARE HELD OUT IS THE READER'S ANSWER, NOT A RULE RESTATED HERE. `read.val`
+    # is a property over `read.splits` filtered by the reader's own `is_trainable`, so the
+    # objects are the exact keys the manifest sealed -- topic directory and all. The declared
+    # row count is then taken for the splits whose objects ARE those val objects, rather than
+    # by re-deciding which partition names count as held out: a second copy of that rule here
+    # is a place for the two to disagree, and the disagreement would be a token count checked
+    # against the wrong partition's declaration.
+    val_paths = list(getattr(read, "val", None) or [])
+    split_rows = getattr(read, "split_rows", None) or {}
+    held_out = set(val_paths)
+    declared = [
+        split_rows.get(name)
+        for name, paths in (getattr(read, "splits", None) or {}).items()
+        if paths and held_out.issuperset(paths)
+    ]
+    val_rows = (
+        sum(n for n in declared if n is not None)
+        if declared and all(n is not None for n in declared)
+        else None
+    )
+
     return Corpus(
         dataset_id=dataset_id,
         version=version,
@@ -343,6 +404,8 @@ def corpus_from_manifest(read, *, dataset_id: str, version: str, tokenizer_id: s
         dtype=NumpyDatasetDType(read.dtype),
         tokenizer=tokenizer,
         rows=read.rows,
+        val_paths=val_paths,
+        val_rows=val_rows,
     )
 
 
@@ -510,6 +573,14 @@ def build_config(opts, overrides: List[str]):
         corpus.dtype,
         opts.dataset_tokenizer,
     )
+    # Said at CONFIG time rather than only at eval time, so a corpus that declares no held-out
+    # split is visible before the GPU hours are spent rather than after. The endpoint refuses
+    # in that case (Stage 73), and finding that out eleven hours in is the expensive version.
+    log.info(
+        "held out: %d object(s), %s declared token(s)",
+        len(corpus.val_paths),
+        "none" if corpus.val_rows is None else f"{corpus.val_rows:,}",
+    )
 
     # CORE-6 arms are declared in olmo_core.nn.transformer.core6_arms, not as
     # TransformerConfig classmethods, so this replaces the base entry point's
@@ -659,9 +730,13 @@ def build_config(opts, overrides: List[str]):
     # example's LM evaluator reads a C4 validation shard from olmo-data.org and the downstream
     # one pulls HellaSwag from Hugging Face; both would put a public-internet fetch in the
     # middle of a run whose whole claim is that it read a sealed corpus, and a failure in
-    # either would look like a training failure. Held-out shards for a published corpus come
-    # back from the reader as `.val`, and wiring an evaluator to those is the right version of
-    # this -- it needs a corpus that declares one, which regmix-10b does not.
+    # either would look like a training failure.
+    #
+    # The held-out endpoint is `evaluate_val_aggregate`, run once after fit() over the corpus's
+    # OWN `val` partition -- the shards the reader returns as `.val`, which is the right version
+    # of the above and is what olmo-150b-dolma2-v1 declares. It is not a trainer callback
+    # because it has to run on all ranks after the last step and report one all-reduced number,
+    # not per-step per-rank metrics.
 
     config = ExperimentConfig(
         model=model_config,
@@ -672,6 +747,8 @@ def build_config(opts, overrides: List[str]):
         dataset_id=corpus.dataset_id,
         dataset_version=corpus.version,
         init_seed=opts.init_seed,
+        val_paths=corpus.val_paths,
+        val_rows=corpus.val_rows,
     )
     return config.merge(overrides)
 
@@ -751,6 +828,61 @@ def _chunked_ce(logits, targets):
             )
         )
     return torch.cat(out)
+
+
+def _shard_token_count(path, *, dtype) -> int:
+    """How many tokens a local shard holds, from its size on disk rather than a manifest.
+
+    The independent half of the count check in :func:`evaluate_val_aggregate`: the manifest
+    DECLARES a row count and this measures what actually arrived, so a dropped shard, a
+    truncated download or a glob that matched the wrong objects makes the two disagree.
+    """
+    import numpy as np
+
+    return int(os.path.getsize(path) // np.dtype(dtype).itemsize)
+
+
+def _shard_windows(path, *, seq_len: int, micro: int, dtype):
+    """Yield ``(offsets, inputs, targets)`` per micro-batch of one LOCAL shard.
+
+    The one implementation of the memmap-and-window arithmetic, shared by the sliced evaluator
+    and the aggregate one so the two cannot drift on the off-by-one. ``offsets`` is the token
+    offset of each window in the shard, which is what a caller needs to align a per-token
+    side-channel (the band mask) against the TARGETS -- those start one token later than the
+    inputs, and a mask sliced from ``off`` rather than ``off + 1`` scores the wrong positions
+    and still produces a plausible cross-entropy.
+
+    ``dtype`` is required rather than defaulted. Guessing a width here is the same failure the
+    header of this file is about: uint16 over a uint32 corpus decodes to in-range ids and a
+    loss curve that is merely bad. Native byte order is correct because
+    :func:`corpus_from_manifest` already refused a corpus whose declared order differs from the
+    host's.
+    """
+    import numpy as np
+
+    tokens = np.memmap(path, dtype=dtype, mode="r")
+    windows = (tokens.size - 1) // seq_len
+    for start in range(0, windows, micro):
+        count = min(micro, windows - start)
+        offsets, xs, ys = [], [], []
+        for w in range(start, start + count):
+            off = w * seq_len
+            seg = np.asarray(tokens[off : off + seq_len + 1], dtype=np.int64)
+            offsets.append(off)
+            xs.append(seg[:-1])
+            ys.append(seg[1:])
+        yield offsets, np.stack(xs), np.stack(ys)
+
+
+def _shard_microbatch_count(path, *, seq_len: int, micro: int, dtype) -> int:
+    """How many micro-batches :func:`_shard_windows` will yield for this shard.
+
+    Derived from the same two lines rather than by draining the generator, because the count
+    is needed BEFORE the loop -- it is what every rank's step budget is reduced to, and a rank
+    that ran a different number of forward passes than its peers is a hang, not a wrong number.
+    """
+    windows = (_shard_token_count(path, dtype=dtype) - 1) // seq_len
+    return (windows + micro - 1) // micro
 
 
 def fetch_slice_inputs(*, mask_uri: str, work_dir: str):
@@ -836,6 +968,11 @@ def evaluate_sliced(*, model, vocab_size, val_paths, mask_paths, seq_len, micro=
     The mask indexes the CONTINUATION token, so it aligns with the targets and is offset by
     one from the inputs. An off-by-one here scores the wrong positions and still produces
     plausible numbers.
+
+    STILL RANK-GATED BY ITS CALLER, AND STILL NOT THE RUN'S ONLY ENDPOINT. See
+    :func:`evaluate_val_aggregate`, which is the one that runs on every rank and produces the
+    number a run is required to report. This is kept because the per-band decomposition is what
+    the gap-conditioned analysis needs, and it reads frozen masks that have to be built first.
     """
     import numpy as np
 
@@ -843,32 +980,30 @@ def evaluate_sliced(*, model, vocab_size, val_paths, mask_paths, seq_len, micro=
     agg_sum, agg_n = 0.0, 0
     band_sum = {b: 0.0 for b in BAND_BIT}
     band_n = {b: 0 for b in BAND_BIT}
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
     for vp, mp in zip(val_paths, mask_paths):
-        tokens = np.memmap(vp, dtype=np.uint32, mode="r")
         mask = np.memmap(mp, dtype=np.uint8, mode="r")
-        if tokens.size != mask.size:
+        n_tokens = _shard_token_count(vp, dtype=np.uint32)
+        if n_tokens != mask.size:
             raise Refusal(
                 Stage.THE_CONFIG_WOULD_NOT_BUILD,
-                f"mask/shard length mismatch for {vp}: {mask.size} vs {tokens.size}",
+                f"mask/shard length mismatch for {vp}: {mask.size} vs {n_tokens}",
             )
-        windows = (tokens.size - 1) // seq_len
-        for start in range(0, windows, micro):
-            count = min(micro, windows - start)
-            xs, ys, ms = [], [], []
-            for w in range(start, start + count):
-                off = w * seq_len
-                seg = np.asarray(tokens[off : off + seq_len + 1], dtype=np.int64)
-                xs.append(seg[:-1])
-                ys.append(seg[1:])
-                ms.append(np.asarray(mask[off + 1 : off + seq_len + 1], dtype=np.uint8))
-            x = torch.from_numpy(np.stack(xs)).cuda()
-            y = torch.from_numpy(np.stack(ys)).cuda()
-            m = torch.from_numpy(np.stack(ms)).cuda()
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                out = model(x)
-                logits = out.logits if hasattr(out, "logits") else out
-            ce = _chunked_ce(logits.reshape(-1, vocab_size), y.reshape(-1))
+        # Windowing goes through the shared generator rather than a second copy of the same
+        # arithmetic, so this and the aggregate evaluator cannot drift on the off-by-one the
+        # docstring above is about. `offsets` is what aligns the mask to the TARGETS.
+        for offsets, xs, ys in _shard_windows(
+            vp, seq_len=seq_len, micro=micro, dtype=np.uint32
+        ):
+            ms = np.stack(
+                [
+                    np.asarray(mask[off + 1 : off + seq_len + 1], dtype=np.uint8)
+                    for off in offsets
+                ]
+            )
+            m = torch.from_numpy(ms).to(device)
+            ce = _forward_ce(model, xs, ys, vocab_size=vocab_size, device=device)
             agg_sum += float(ce.sum())
             agg_n += ce.numel()
             flat = m.reshape(-1)
@@ -892,13 +1027,347 @@ def evaluate_sliced(*, model, vocab_size, val_paths, mask_paths, seq_len, micro=
     }
 
 
-def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float, sliced=None) -> None:
+def fetch_val_shards(*, val_paths: List[str], work_dir: str, rank: int, world_size: int):
+    """Download this rank's slice of the corpus's own held-out objects.
+
+    Sharded by object rather than by window, because the download is the expensive part and a
+    shard every rank fetches is world_size copies of the same bytes. The assignment is
+    ``i % world_size``, which is deterministic from rank alone -- so no rank needs to be told
+    what any other rank got, and the union over ranks is exactly ``val_paths`` with nothing
+    counted twice. That property is what makes the summed token count checkable: it can only
+    equal the declared total if every object was read exactly once.
+
+    ``val_paths`` are the URIs the reader resolved from the manifest. They are NOT rebuilt from
+    shard filenames: ``val-00212.u32le.bin`` appears under 24 different topic directories in
+    olmo-150b-dolma2, so a key reconstructed from a name fetches a readable shard of the wrong
+    topic and every number downstream is plausible and wrong.
+    """
+    from olmo_core.io import copy_file
+
+    local = os.path.join(work_dir, "val")
+    os.makedirs(local, exist_ok=True)
+
+    mine = [(i, uri) for i, uri in enumerate(val_paths) if i % world_size == rank]
+    fetched = []
+    for i, uri in mine:
+        # Indexed local name: two topics genuinely contain a `val-00212.u32le.bin`, so the
+        # basename alone is not unique and the second copy_file would silently overwrite the
+        # first -- halving the token count in a way that looks like a short corpus.
+        target = os.path.join(local, f"{i:05d}-{os.path.basename(normalize_path(uri))}")
+        copy_file(uri, target, save_overwrite=True)
+        fetched.append(target)
+    log.info(
+        "rank %d holds %d of %d held-out object(s)", rank, len(fetched), len(val_paths)
+    )
+    return fetched
+
+
+@torch.no_grad()
+def evaluate_val_aggregate(
+    *,
+    model,
+    vocab_size: int,
+    val_paths: List[str],
+    work_dir: str,
+    seq_len: int,
+    dtype,
+    declared_tokens: Optional[int] = None,
+    micro: int = 2,
+):
+    """Held-out cross-entropy over the corpus's OWN ``val`` partition, on EVERY rank.
+
+    THE ENDPOINT. Everything the experiment is for is a difference of this number between arms,
+    so a run that trained and produced no CE produced a checkpoint that cannot answer the
+    question. This is the version that can actually produce one.
+
+    WHY THE RANK-ZERO VERSION COULD NOT, AND WHY ITS ``except`` DID NOT SAVE IT. Under FSDP the
+    parameters are sharded, so a forward pass issues all-gathers -- collectives that every rank
+    in the group must enter. ``if get_rank() == 0: forward()`` has rank 0 enter a collective the
+    other ranks never reach, because they have already returned from ``train()`` and called
+    ``destroy_process_group()``. That is a HANG, and a hang is not an exception: the ``except
+    Exception`` around it never runs, NCCL's watchdog eventually aborts the job, and what the
+    platform records is a run that trained, wrote a checkpoint, exited, and reported no CE.
+    Every rank is in the compute path here, and there is no rank gate anywhere in it.
+
+    WHY IT RETURNS SUMS AND COUNTS RATHER THAN A MEAN. Two arms are differenced, and a
+    difference of two means computed over different token counts is not a paired difference. The
+    counts make an unequal denominator visible instead of letting it silently re-weight the
+    contrast.
+
+    TWO TOKEN COUNTS, AND THE REASON THERE ARE TWO IS SO ONE OF THEM CAN BE CHECKED EXACTLY.
+    ``tokens_present`` is measured from the SIZE ON DISK of every object that was read, summed
+    over ranks; it must equal the ``229,894,171`` the manifest declares for
+    olmo-150b-dolma2-v1, exactly, with no tolerance -- a shard that failed to download, two
+    shards overwriting one local filename, or a key reconstructed to the wrong topic all break
+    that equality. ``tokens`` is what cross-entropy actually covered, which is necessarily
+    smaller: fixed-length windowing cannot score the tail of a shard that does not fill a whole
+    window. Asserting the exact number against the SCORED count would refuse every correct run,
+    which is how an assertion gets deleted instead of fixed; asserting it against the PRESENT
+    count catches the whole class of wrong-bytes failures with no slack at all. See
+    :func:`assert_val_tokens_account_for_the_corpus`.
+
+    WHY IT RETURNS SUMS AND COUNTS RATHER THAN A MEAN. Two arms are differenced, and a
+    difference of two means computed over different token counts is not a paired difference. The
+    counts make an unequal denominator visible instead of letting it silently re-weight the
+    contrast.
+
+    Raises rather than returning a partial result. A silent null endpoint is the failure this
+    function exists to remove, so it does not get to reappear as a zero token count.
+    """
+    rank, world_size = get_rank(), get_world_size()
+    if not val_paths:
+        raise Refusal(
+            Stage.THE_CORPUS_DECLARES_NO_HELD_OUT_SPLIT,
+            "the corpus declares no held-out partition, so there is no set to score the arm "
+            "on. Every contrast this experiment reports is a difference of held-out CE; a run "
+            "that can only produce a training curve cannot contribute one.",
+        )
+
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+
+    # BEFORE the download, so no rank starts reading while another is still deciding what to
+    # read, and so the collectives below are entered from a known common point.
+    barrier()
+
+    # ONE RANK FAILING ITS DOWNLOAD MUST NOT BECOME A HANG, AND WITHOUT THIS IT WOULD BE ONE.
+    # A raise here propagates out of `train()` on that rank alone; the others carry on into the
+    # all_reduce below and wait on a participant that is already unwinding towards
+    # `destroy_process_group`. So the failure is turned into a value, all-reduced, and every rank
+    # raises together. This is a narrow catch that re-raises rather than a swallow: the run still
+    # dies, it just dies on all ranks at once and says which rank started it.
+    failed, error = 0, None
+    local_paths: List[str] = []
+    try:
+        local_paths = fetch_val_shards(
+            val_paths=val_paths, work_dir=work_dir, rank=rank, world_size=world_size
+        )
+    except BaseException as exc:  # noqa: BLE001 -- re-raised below, on every rank
+        failed, error = 1, exc
+        log.error("rank %d could not fetch its held-out shards: %r", rank, exc)
+    if int(all_reduce_value(failed, device, op=torch.distributed.ReduceOp.SUM)):
+        if error is not None:
+            # read_failure already separates "the role may not read it" from "it is not there",
+            # which are the two things worth telling apart here and are an IAM change and a
+            # dataset problem respectively.
+            raise Refusal(
+                read_failure(error),
+                f"rank {rank} failed to fetch its share of the held-out objects: "
+                f"{type(error).__name__}: {error}",
+            ) from error
+        raise Refusal(
+            Stage.THE_HELD_OUT_EVALUATION_SCORED_NOTHING,
+            "another rank failed to fetch its share of the held-out objects, so the held-out "
+            "CE would be computed over an incomplete token set. Failing on every rank rather "
+            "than waiting on a collective the failed rank will never enter.",
+        )
+
+    # EVERY RANK RUNS THE SAME NUMBER OF FORWARD PASSES, AND THAT IS A CORRECTNESS PROPERTY
+    # RATHER THAN A TIDINESS ONE. 60 objects over 8 ranks is 8 for some ranks and 7 for others;
+    # a rank with fewer shards would leave the loop early, reach the all_reduce below while its
+    # peers are still inside a forward, and every one of those forwards is an all-gather that
+    # now has a missing participant. The result is a hang, at the end of a run, after the
+    # money is spent.
+    #
+    # So the budget is agreed first: max over ranks of the local micro-batch count. A rank that
+    # runs out of real data pushes a discarded filler batch through the model instead, which
+    # enters exactly the same collectives -- the whole point -- and contributes nothing to the
+    # sums, so the token count stays exact.
+    local_steps = sum(
+        _shard_microbatch_count(p, seq_len=seq_len, micro=micro, dtype=dtype) for p in local_paths
+    )
+    # Measured from the size on disk of what actually arrived, NOT from the manifest. This is
+    # the number checked for exact equality against the declared count, so it has to come from
+    # the bytes rather than from the claim it is checking.
+    local_present = sum(_shard_token_count(p, dtype=dtype) for p in local_paths)
+    steps = int(all_reduce_value(local_steps, device, op=torch.distributed.ReduceOp.MAX))
+    log.info(
+        "rank %d: %d local micro-batch(es) over %s local token(s), %d agreed across %d rank(s)",
+        rank,
+        local_steps,
+        f"{local_present:,}",
+        steps,
+        world_size,
+    )
+    if steps == 0:
+        raise Refusal(
+            Stage.THE_HELD_OUT_EVALUATION_SCORED_NOTHING,
+            f"the held-out objects yielded no window of {seq_len} tokens on any rank, so "
+            "there is nothing to score. A shard shorter than one sequence, or a "
+            "sequence_length larger than the shards, are the two ways to get here.",
+        )
+
+    # A rank with NO shards still has to enter every collective, and to do that it needs a
+    # tensor of the right shape to push through the model. It cannot borrow one from its own
+    # data, because it has none -- so the shape is derived from the parameters that are common
+    # to all ranks, which is `seq_len` and `micro`, and the ids are zeros. It is thrown away.
+    #
+    # This is reachable whenever world_size > len(val_paths): 8 ranks over 60 objects gives
+    # every rank work, but a 64-GPU shape or a corpus with 3 val objects does not, and the
+    # version of this that asserted "every rank has at least one object" would have been a hang
+    # on exactly the shape that is easiest to submit by accident.
+    import numpy as np
+
+    filler = np.zeros((max(micro, 1), seq_len), dtype=np.int64)
+
+    was_training = model.training
+    model.eval()
+    ce_sum, n_tokens, done = 0.0, 0, 0
+    try:
+        for path in local_paths:
+            for _, xs, ys in _shard_windows(path, seq_len=seq_len, micro=micro, dtype=dtype):
+                ce = _forward_ce(model, xs, ys, vocab_size=vocab_size, device=device)
+                ce_sum += float(ce.sum())
+                n_tokens += int(ce.numel())
+                done += 1
+        # THE PADDING PASSES. Real collective traffic, discarded arithmetic. Without them a rank
+        # that got 7 shards where its peer got 8 leaves the loop one forward early, reaches the
+        # all_reduce below while the peer is still inside an all-gather, and the job hangs at
+        # the very end of a run that has already been paid for.
+        while done < steps:
+            _forward_ce(model, filler, filler, vocab_size=vocab_size, device=device)
+            done += 1
+    finally:
+        # Restored even on the way out through an exception, so a failure that is logged and
+        # re-raised does not leave the module in eval mode for whatever runs next.
+        if was_training:
+            model.train()
+
+    # THE ALL-REDUCE. Sums and counts, not means: a mean-of-means is weighted by whichever rank
+    # happened to get the larger shards. Called unconditionally -- `all_reduce_value` is a no-op
+    # off a process group, so there is no world_size branch here that could be right in one
+    # topology and a hang in the other.
+    ce_sum = float(all_reduce_value(ce_sum, device, op=torch.distributed.ReduceOp.SUM))
+    n_tokens = int(all_reduce_value(n_tokens, device, op=torch.distributed.ReduceOp.SUM))
+    tokens_present = int(all_reduce_value(local_present, device, op=torch.distributed.ReduceOp.SUM))
+    barrier()
+
+    if n_tokens <= 0:
+        raise Refusal(
+            Stage.THE_HELD_OUT_EVALUATION_SCORED_NOTHING,
+            "the held-out evaluation summed to zero tokens across all ranks",
+        )
+
+    result = {
+        "ce": ce_sum / n_tokens,
+        "sum": ce_sum,
+        # Tokens cross-entropy actually covered. Always below `tokens_present` by the per-shard
+        # window remainder.
+        "tokens": n_tokens,
+        # Tokens that were THERE, measured from bytes on disk. The one checked exactly.
+        "tokens_present": tokens_present,
+        "declared_tokens": declared_tokens,
+        "shards": len(val_paths),
+        "seq_len": seq_len,
+        "world_size": world_size,
+        # present - scored: the tail of each shard that cannot fill a whole window. Reported so
+        # the accounting is readable in the JSON rather than needing to be recomputed.
+        "unscored": tokens_present - n_tokens,
+    }
+    log.info(
+        "held-out CE %.4f over %s scored token(s) of %s present (%s declared), %s unscored tail",
+        result["ce"],
+        f"{n_tokens:,}",
+        f"{tokens_present:,}",
+        "unknown" if declared_tokens is None else f"{declared_tokens:,}",
+        f"{tokens_present - n_tokens:,}",
+    )
+    return result
+
+
+def _forward_ce(model, xs, ys, *, vocab_size: int, device: torch.device):
+    """One micro-batch through the model, returning per-token CE.
+
+    Shared by the padding passes and the real ones so a pad is bit-for-bit the same collective
+    traffic as the work it stands in for -- a "padding" pass that skipped the forward would
+    skip the all-gathers, which is the hang it exists to prevent.
+    """
+    x = torch.from_numpy(xs).to(device)
+    y = torch.from_numpy(ys).to(device)
+    if device.type == "cuda":
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            out = model(x)
+            logits = out.logits if hasattr(out, "logits") else out
+    else:
+        out = model(x)
+        logits = out.logits if hasattr(out, "logits") else out
+    return _chunked_ce(logits.reshape(-1, vocab_size), y.reshape(-1))
+
+
+def assert_val_tokens_account_for_the_corpus(result) -> None:
+    """Refuse a held-out CE that was not computed over the whole declared partition.
+
+    A MAGNITUDE CHECK, NOT AN EXISTENCE CHECK, and that distinction is the reason this exists at
+    all. ``val_ce is not None`` passes for a CE over one shard out of sixty, over the wrong
+    topic's shards, or over a val set halved by two objects landing on one local filename. All
+    three produce a number in the normal range, and a number in the normal range is what a
+    reader of the JSON will believe. This project has five documented green-but-meaningless
+    harness results, and the only check that ever caught uninitialised weights was asserting
+    loss ~ ln(vocab).
+
+    THE EXACT ONE IS ON ``tokens_present``, WHICH IS WHY THAT FIELD EXISTS. Bytes on disk over
+    every object every rank read, summed -- it must equal the manifest's declared row count with
+    no tolerance whatsoever: 229,894,171 for olmo-150b-dolma2-v1. Nothing legitimate makes it
+    differ. A shard that failed to download, a duplicate local filename, a key rebuilt to the
+    wrong topic and a glob that matched a subset all break it by millions of tokens.
+
+    THE SCORED COUNT IS BOUNDED RATHER THAN EQUAL, AND THAT IS NOT A WEAKER CHECK BEING
+    SUBSTITUTED. Fixed-length windowing genuinely cannot score the tail of a shard that does not
+    fill a whole window, so scored < present always, by at most ``seq_len`` per shard plus the
+    shifted target. Asserting equality there would refuse every correct run, which is how an
+    assertion gets deleted instead of fixed. The exact check above is what catches the failure
+    class; this one catches a windowing bug that dropped far more than the tail.
+    """
+    declared = result.get("declared_tokens")
+    present = result["tokens_present"]
+    scored = result["tokens"]
+    n_shards = result["shards"]
+    seq_len = result["seq_len"]
+
+    if declared is None:
+        raise Refusal(
+            Stage.THE_HELD_OUT_EVALUATION_SCORED_NOTHING,
+            f"held-out CE was computed over {scored:,} tokens but the manifest declares no row "
+            "count for the partition, so there is nothing to check it against. An unchecked "
+            "token count is how a CE over a quarter of the val set gets recorded as the "
+            "endpoint and believed.",
+        )
+    if present != declared:
+        raise Refusal(
+            Stage.THE_HELD_OUT_EVALUATION_SCORED_NOTHING,
+            f"the held-out objects that were read hold {present:,} tokens; the manifest "
+            f"declares {declared:,} for the partition, a difference of {present - declared:+,}. "
+            "This is measured from bytes on disk over every object every rank fetched, and "
+            "nothing legitimate makes it differ -- a shard that failed to download, two shards "
+            "written to one local name, a key rebuilt to the wrong topic, or a glob that "
+            "matched a subset are what get here. The CE would look completely normal either "
+            "way, which is why this is checked rather than reported.",
+        )
+    slack = n_shards * (seq_len + 1)
+    if not 0 <= present - scored <= slack:
+        raise Refusal(
+            Stage.THE_HELD_OUT_EVALUATION_SCORED_NOTHING,
+            f"{present:,} held-out tokens were present and {scored:,} were scored, leaving "
+            f"{present - scored:,} unaccounted. Windowing can only drop the tail of each shard, "
+            f"at most {slack:,} tokens over {n_shards} shard(s) at sequence length {seq_len}, "
+            "so a larger gap is a windowing bug rather than a remainder.",
+        )
+
+
+def summarise(
+    *, opts, config, trainer, losses: LossWatcher, seconds: float, sliced=None, val=None
+) -> None:
     """Print what only this process can report, as one JSON object on stdout.
 
     The platform reads this back out of the log stream: the device torch actually got, the
     parameter count, the loss at both ends and where the checkpoints went are not facts Batch
     holds. Printed on rank zero only, and printed whatever the losses are, because a run that
     reported nothing is indistinguishable from one that never started.
+
+    ``val`` is the held-out result from :func:`evaluate_val_aggregate`, already all-reduced
+    across ranks, so printing it from rank zero prints the whole run's number and not this
+    rank's share. That is the reason the rank gate here is safe and the one on the old sliced
+    eval was not: this function does no collective work, it formats a value the collectives
+    already produced.
     """
     if get_rank() != 0:
         return
@@ -956,6 +1425,19 @@ def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float, sli
                 # by comparing these fields rather than by trusting the two commands matched.
                 "arm": opts.arm,
                 "tokens_trained": trainer.global_step * opts.global_batch_size,
+                # THE ENDPOINT, FLAT AND AT THE TOP LEVEL, because it is the field every
+                # downstream contrast reads. A difference of two arms' `val_ce` is only a paired
+                # difference if their `val_tokens` match, so the denominator ships beside the
+                # number instead of being assumed equal. `val_tokens_present` is the count that
+                # was asserted against the manifest -- if it is here at all, that assertion
+                # passed, because the run refuses rather than printing a number it could not
+                # account for.
+                "val_ce": None if val is None else val["ce"],
+                "val_tokens": None if val is None else val["tokens"],
+                "val_tokens_present": None if val is None else val["tokens_present"],
+                "val_tokens_declared": None if val is None else val["declared_tokens"],
+                "val_nll_sum": None if val is None else val["sum"],
+                "val_shards": None if val is None else val["shards"],
                 # null when no slice directories were passed, which is how a training-only run
                 # says so explicitly rather than by omission.
                 "sliced_eval": sliced,
@@ -1009,45 +1491,79 @@ def train(config, opts=None) -> None:
     trainer.fit()
     elapsed = time.monotonic() - started
 
-    # The sliced evaluation, on rank zero only. Everything the experiment is for is a
-    # difference of these numbers between arms, so a run that trained and did not evaluate
-    # produces a checkpoint nobody can use to answer the question. Wrapped because a failure
-    # here must not discard four hours of training: the checkpoint is already on S3 and the
-    # eval can be redone from it, so this warns and continues rather than raising.
+    # THE HELD-OUT ENDPOINT, ON EVERY RANK, WITH NO FLAG TO TURN IT ON AND NO `except` AROUND
+    # IT. Everything the experiment reports is a difference of this number between arms, so a
+    # run that trained and produced no CE produced a checkpoint nobody can use to answer the
+    # question -- and the version of this code that did exactly that exited 0 with a null field,
+    # which reads in the record as "this arm was measured".
+    #
+    # It runs BEFORE summarise() because summarise() prints it, and before the `finally` in
+    # main() that tears the process group down, because it needs collectives.
+    val = None
+    if opts is not None:
+        val = evaluate_val_aggregate(
+            model=trainer.train_module.model,
+            vocab_size=config.model.vocab_size,
+            val_paths=list(config.val_paths),
+            work_dir=opts.work_dir,
+            seq_len=opts.sequence_length,
+            dtype=config.dataset.dtype.as_np_dtype(),
+            declared_tokens=config.val_rows,
+        )
+        # A MAGNITUDE CHECK ON THE ENDPOINT, RAISED RATHER THAN LOGGED. A CE over a quarter of
+        # the val set is in the normal range and would be believed. Every rank calls this on the
+        # same all-reduced numbers, so either all of them raise or none do -- there is no
+        # topology in which one rank refuses and the others go on to a collective it left.
+        assert_val_tokens_account_for_the_corpus(val)
+
+    # The sliced evaluation is SECONDARY and remains rank-zero, because it reads frozen masks
+    # that must be built first and it decomposes by gap band rather than producing the headline
+    # number. Its rank gate is the same defect described in `evaluate_val_aggregate` and it is
+    # still here: under FSDP a rank-zero-only forward waits on all-gathers the other ranks never
+    # enter. It is reached only when --slice-mask-uri is passed, which the current wave does not
+    # pass; the barrier below at least holds the other ranks inside the collective world while
+    # rank zero works, which is what makes it survivable rather than correct.
     sliced = None
-    if opts is not None and opts.slice_mask_uri and get_rank() == 0:
+    if opts is not None and opts.slice_mask_uri:
         try:
-            val_paths, mask_paths = fetch_slice_inputs(
-                mask_uri=opts.slice_mask_uri, work_dir=opts.work_dir
-            )
-            log.info("sliced eval over %d shard(s)", len(val_paths))
-            sliced = evaluate_sliced(
-                model=trainer.train_module.model,
-                vocab_size=config.model.vocab_size,
-                val_paths=val_paths,
-                mask_paths=mask_paths,
-                seq_len=opts.sequence_length,
-            )
-            log.info(
-                "aggregate CE %.4f over %s tokens",
-                sliced["aggregate"]["ce"],
-                f"{sliced['aggregate']['n']:,}",
-            )
-            for band in sorted(BAND_BIT):
-                entry = sliced["bands"][str(band)]
-                if entry["n"]:
-                    log.info(
-                        "  gap>%-5s CE %.4f over %s tokens",
-                        band,
-                        entry["ce"],
-                        f"{entry['n']:,}",
-                    )
-        except Exception as error:  # never lose a trained checkpoint to an eval bug
+            if get_rank() == 0:
+                val_paths, mask_paths = fetch_slice_inputs(
+                    mask_uri=opts.slice_mask_uri, work_dir=opts.work_dir
+                )
+                log.info("sliced eval over %d shard(s)", len(val_paths))
+                sliced = evaluate_sliced(
+                    model=trainer.train_module.model,
+                    vocab_size=config.model.vocab_size,
+                    val_paths=val_paths,
+                    mask_paths=mask_paths,
+                    seq_len=opts.sequence_length,
+                )
+                log.info(
+                    "aggregate CE %.4f over %s tokens",
+                    sliced["aggregate"]["ce"],
+                    f"{sliced['aggregate']['n']:,}",
+                )
+                for band in sorted(BAND_BIT):
+                    entry = sliced["bands"][str(band)]
+                    if entry["n"]:
+                        log.info(
+                            "  gap>%-5s CE %.4f over %s tokens",
+                            band,
+                            entry["ce"],
+                            f"{entry['n']:,}",
+                        )
+        except Exception as error:  # never lose a trained checkpoint to a SECONDARY eval bug
             log.warning(
-                "sliced eval failed (%s: %s); checkpoint is still on S3",
+                "sliced eval failed (%s: %s); checkpoint is still on S3 and val_ce above is "
+                "unaffected",
                 type(error).__name__,
                 error,
             )
+        finally:
+            # In the `finally` so a rank-zero failure does not leave the other ranks waiting
+            # here forever -- they would time out on the barrier instead of on a collective
+            # inside a forward, which at least fails.
+            barrier()
 
     if opts is not None:
         summarise(
@@ -1057,6 +1573,7 @@ def train(config, opts=None) -> None:
             losses=losses,
             seconds=elapsed,
             sliced=sliced,
+            val=val,
         )
 
 
