@@ -1611,7 +1611,7 @@ def _wire_a_corpus(monkeypatch, val_paths):
     )
 
 
-def _build_with_heldout(monkeypatch, tmp_path, val_paths, steps=200):
+def _build_with_heldout(monkeypatch, tmp_path, val_paths, steps=200, extra_flags=()):
     """Build the real config with the held-out block live, faking only the S3 download.
 
     ``_download_to`` is replaced with something that writes bytes, and ``get_file_size`` with
@@ -1621,6 +1621,13 @@ def _build_with_heldout(monkeypatch, tmp_path, val_paths, steps=200):
     ``LOCAL_RANK`` is pinned to "0" so these build as the fetching process. Without it the test
     outcome would depend on whatever the ambient environment happens to carry, and a shell that
     exported LOCAL_RANK=1 would turn the download assertions into silent no-ops.
+
+    ``steps=None`` OMITS ``--steps`` ENTIRELY, which is the only way to reach the E1 invocation
+    from here. This helper used to hardcode ``--steps``, and that is precisely why the ladder
+    could be scaled off the wrong length for two commits without a red test: with ``--steps``
+    always present, ``resolve_steps`` returns ``opts.steps`` and the two lengths agree by
+    construction, so the disagreement was unreachable. ``extra_flags`` is what lets a caller
+    pass ``--target-tokens`` beside it.
     """
     _wire_a_corpus(monkeypatch, val_paths)
     monkeypatch.setenv("LOCAL_RANK", "0")
@@ -1641,7 +1648,8 @@ def _build_with_heldout(monkeypatch, tmp_path, val_paths, steps=200):
             "--dataset-tokenizer=tokenizer/dolma2-bpe",
             "--save-folder=s3://outputs/teams/platform/runs/a-run-id/checkpoints/",
             f"--work-dir={tmp_path}",
-            f"--steps={steps}",
+            *([] if steps is None else [f"--steps={steps}"]),
+            *extra_flags,
         ]
     )
     return opts, entry.build_config(opts, overrides)
@@ -1809,6 +1817,69 @@ def test_the_ladder_the_config_carries_is_the_one_ladder_steps_computed(monkeypa
     # add unrequested rungs and change what every cell costs.
     assert callback.eval_interval is None
     assert callback.eval_on_finish is True
+
+
+def test_the_ladder_scales_off_the_derived_length_when_the_budget_sets_it(monkeypatch, tmp_path):
+    """THE LADDER AND THE TRAINER MUST MEASURE THE SAME RUN.
+
+    THE SEAM THIS GUARDS. E0 wired the ladder as ``ladder_steps(opts.steps)``, which was
+    correct while ``opts.steps`` WAS the run's length. E1 then made the length derived, and
+    ``max_duration`` moved to ``resolve_steps(opts)`` while the ladder did not. Neither commit
+    is wrong alone; the combination left the two reading different lengths.
+
+    WHAT THAT COSTS ON THE REAL INVOCATION. E1 passes ``--target-tokens 3e9
+    --global-batch-size 262144`` and no ``--steps`` -- it cannot pass one, since a ``--steps``
+    that disagrees with the budget is refused. ``opts.steps`` therefore keeps the parser default
+    of 200, and it is never reassigned anywhere in the entry point. The trainer runs 11,444
+    steps while the ladder fires at ``[10, 20, 40, 70, 100, 150]`` instead of
+    ``[572, 1144, 2288, 4005, 5722, 8583]``. At ``--warmup-fraction 0.1`` warmup is 1,144 steps,
+    so ALL SIX RUNGS LAND INSIDE WARMUP, the deepest at 1.31% of the run. Every rung scores a
+    nearly-untrained model, the CE curve comes back flat, and a flat curve is exactly what the
+    no-ladder warning further down exists to stop being mistaken for a result. It exits 0 and
+    writes a plausible checkpoint.
+
+    WHY NO EXISTING TEST CAUGHT IT. None combined ``--target-tokens`` with a val split.
+    ``_build_with_heldout`` hardcoded ``--steps``, which makes ``resolve_steps`` return
+    ``opts.steps`` so both lengths agree by construction; and the budget tests build through
+    ``FakeManifest``, which has no ``val`` attribute, so no ladder is attached at all. The gap
+    was the intersection of the two, and it is the intersection this test occupies.
+    """
+    # DERIVED, not typed: ask the code for the length rather than restating 11,444, so this
+    # cannot drift if the rounding or the batch changes. The rungs below stay concrete.
+    steps = entry.steps_for_tokens(E1_TARGET_TOKENS, E1_BATCH)
+
+    opts, config = _build_with_heldout(
+        monkeypatch,
+        tmp_path,
+        ["s3://edullm-data/x/v1/tokens/src/val-00000.u32le.bin"],
+        # NO --steps, and a budget instead. This is the E1 command line.
+        steps=None,
+        extra_flags=(f"--target-tokens={E1_TARGET_TOKENS:g}", f"--global-batch-size={E1_BATCH}"),
+    )
+    callback = config.trainer.callbacks["lm_eval"]
+
+    # The defaulted opts.steps is still sitting there, which is what made the bug invisible.
+    assert opts.steps == entry.build_parser().get_default("steps") == 200
+
+    # THE RUNGS AS INTEGERS, via the function the run itself calls.
+    assert callback.fixed_steps == entry.ladder_steps(steps)
+    assert callback.fixed_steps == [572, 1144, 2288, 4005, 5722, 8583]
+
+    # AND NOT THE ONES THE DEFAULT WOULD HAVE PRODUCED.
+    assert callback.fixed_steps != entry.ladder_steps(opts.steps)
+    assert callback.fixed_steps != [10, 20, 40, 70, 100, 150]
+
+    # THE PROPERTY THAT ACTUALLY MATTERS: the ladder must reach past warmup, or every rung
+    # scores a model still on its way up and the curve carries no signal.
+    warmup = round(steps * opts.warmup_fraction)
+    assert warmup == 1_144
+    assert max(callback.fixed_steps) > warmup
+    # More than a token amount past it -- the deepest rung sits at 75% of the run.
+    assert max(callback.fixed_steps) / steps > 0.5
+
+    # The ladder and the trainer agree on the length, which is the invariant behind all of it.
+    assert config.trainer.max_duration.value == steps
+    assert max(callback.fixed_steps) < config.trainer.max_duration.value
 
 
 def test_every_field_on_the_eval_callback_is_pinned_including_what_a_rung_costs(

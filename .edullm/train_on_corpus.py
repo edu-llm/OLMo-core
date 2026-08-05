@@ -1209,7 +1209,11 @@ def build_config(opts, overrides: List[str]):
     # carries a UTF-8 byte denominator -- a .u32le.bin shard's `bytes` is 4x its tokens, the
     # storage width.
     if corpus.val_paths:
-        eval_steps = ladder_steps(opts.steps)
+        # THE SAME RESOLVED LENGTH max_duration GOT, for the reason given at :1138. A ladder
+        # scaled off opts.steps is not merely inconsistent, it is silently useless: with a
+        # budget given and --steps left at its 200 default, every rung lands inside warmup and
+        # scores a model that has barely been trained, so a flat curve reads as a flat result.
+        eval_steps = ladder_steps(resolve_steps(opts))
         # LOCAL paths, and this is load-bearing rather than an optimisation. `iter_document
         # _indices` only scans the array for EOS boundaries when the path is NOT a url
         # (data/utils.py:193-197); for an s3:// path it looks for a sidecar metadata file whose
