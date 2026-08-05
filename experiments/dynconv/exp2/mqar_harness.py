@@ -95,6 +95,11 @@ from sigma import (  # noqa: E402
 # Zoology-faithful, 43 correctness tests (mqar_data_test.py). Two byte-identical copies exist; we
 # take whichever is present so this runs from either checkout.
 _MQAR_SOURCES = (
+    # ALONGSIDE THIS FILE FIRST. The absolute paths below are one laptop's checkout; on any
+    # other host they all miss and the harness dies at import with the generator absent.
+    # That is exactly what happened on FarmShare job 1676377 (FAILED in 8s). Staging
+    # mqar_data.py next to the harness is what makes this runnable off that laptop.
+    Path(__file__).resolve().parent,
     Path("/Users/ericwu/Developer/Capstone_LLM/Brainlifts/liv_experiment_research/probes/mqar"),
     Path(
         "/Users/ericwu/Developer/Capstone_LLM-worktrees/olmo-core/"
