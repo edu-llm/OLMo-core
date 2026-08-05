@@ -86,8 +86,10 @@ def main() -> None:
     thoughts.sum().backward()
     grads = [p.grad for p in model.parameters() if p.grad is not None]
     assert grads, "no gradients flowed through the continuous-thought loop"
-    print(f"  continuous-thought forward+backward OK: thoughts {tuple(thoughts.shape)}, "
-          f"{len(grads)} tensors got grads")
+    print(
+        f"  continuous-thought forward+backward OK: thoughts {tuple(thoughts.shape)}, "
+        f"{len(grads)} tensors got grads"
+    )
 
     print("\nVERIFY PASSED — base checkpoint loads and the continuous-thought path runs.")
 

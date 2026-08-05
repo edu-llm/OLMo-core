@@ -22,11 +22,10 @@ Usage (per arm; GPU auto-detected)::
 
 import argparse
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import torch
-
-from dataclasses import replace
 
 from olmo_core.latentcot.arms import ARMS
 from olmo_core.latentcot.data.dataset import LatentCotDataset

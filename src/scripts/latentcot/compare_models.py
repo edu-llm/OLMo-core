@@ -128,7 +128,9 @@ def maybe_plot(comparison: dict, out_dir: Path) -> None:
     for arm, entry in comparison.items():
         curve = entry["advantage_by_depth"]
         xs = sorted(curve)
-        plt.plot(xs, [curve[x] for x in xs], marker="o", label=f"{arm} (slope={entry['slope']:+.3f})")
+        plt.plot(
+            xs, [curve[x] for x in xs], marker="o", label=f"{arm} (slope={entry['slope']:+.3f})"
+        )
     plt.axhline(0.0, color="gray", linewidth=0.8)
     plt.xlabel("graph depth D")
     plt.ylabel("acc(ours) - acc(baseline)")
@@ -178,9 +180,7 @@ def main() -> None:
 
     baseline_arm, baseline_ckpt = args.baseline
     baseline = evaluate_arm(model_config, baseline_arm, baseline_ckpt, examples, device)
-    ours = {
-        arm: evaluate_arm(model_config, arm, ckpt, examples, device) for arm, ckpt in args.ours
-    }
+    ours = {arm: evaluate_arm(model_config, arm, ckpt, examples, device) for arm, ckpt in args.ours}
 
     comparison = {}
     for arm, entry in ours.items():

@@ -107,9 +107,9 @@ def test_r1_entropy_floor_adds_anticollapse_penalty(tok, tiny_model):
     high = float(vocab_manifold_reg(tiny_model, thoughts, "R1", entropy_floor=1e6).detach())
     assert high > base
     # the floor only touches R1's mixture target; L2/R2 return before the entropy term.
-    assert float(vocab_manifold_reg(tiny_model, thoughts, "L2", entropy_floor=1e6).detach()) == float(
-        vocab_manifold_reg(tiny_model, thoughts, "L2").detach()
-    )
+    assert float(
+        vocab_manifold_reg(tiny_model, thoughts, "L2", entropy_floor=1e6).detach()
+    ) == float(vocab_manifold_reg(tiny_model, thoughts, "L2").detach())
 
 
 def test_config_build_returns_codi_module(tiny_model):
