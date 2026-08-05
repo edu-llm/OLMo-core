@@ -524,7 +524,7 @@ def test_platform_routing_and_fixture_contract() -> None:
         )
         assert fixture["wandb_project"] == arm.wandb_project
         assert fixture["compute_profile"] == "gpu-8xa100"
-        assert fixture["workload_profile"] == "olmo-core-train-4gpu"
+        assert fixture["workload_profile"] == "olmo-core-train"
         assert fixture["dataset_release"] == "olmo-127b-v1"
         assert fixture["maximum_attempts"] == 1
         assert "EDULLM_CHECKPOINT_CHECK=waived" in fixture["command"][2]
