@@ -13,6 +13,7 @@ distributed process group and that does not compose with the rest of the suite.
 Marked ``slow``: about a minute on CPU. Deselect with ``-m 'not slow'``.
 """
 
+import csv
 import json
 import os
 import re
@@ -524,9 +525,10 @@ def test_a_trained_checkpoint_scores_end_to_end_into_a_table():
         assert float(row["answer_ce_bits"]) > 0.0
         assert float(row["achieved_bits_per_param"]) >= 0.0
         assert row["bits_is_upper_bound"] == "True"
-        # Recall carries its own chance level, so "above chance" is a subtraction.
-        assert 0.0 < float(row["recall_all_chance"]) < 1.0
-        assert 0.0 <= float(row["recall_all_generation"]) <= 1.0
+        # Template reconstruction carries its own chance level, so "above chance" is a subtraction.
+        # Note the name: this is not closed-book recall, which remains unbuilt (PRD 8.2).
+        assert 0.0 < float(row["template_all_chance"]) < 1.0
+        assert 0.0 <= float(row["template_all_generation"]) <= 1.0
 
     # The answer-token CE moves even while accuracy is pinned at zero -- which is the reason a continuous
     # endpoint is reported alongside the count. Observed on a real 20-step run: 11.83 -> 5.67 bits.
@@ -600,11 +602,128 @@ def test_the_entropy_axis_scores_end_to_end_too():
             rows = list(csv.DictReader(handle))
 
     assert rows
+    # No gate report was supplied, so nothing may be read as confirmatory (PRD 8.6).
+    assert all(row["confirmatory"] == "False" for row in rows)
+    assert all("no gate report" in row["admission"] for row in rows)
     # Mano alone: this axis has no orderable attribute, so the related slice is absent by construction.
     assert {row["endpoint"] for row in rows} == {"mano"}
     for row in rows:
         assert 0.0 <= float(row["unparseable_rate"]) <= 1.0
         # Six attributes of eight bits each: the prior is the schema's own, not a guess.
         assert float(row["prior_bits_per_entity"]) == pytest.approx(48.0)
-        # Four-word values mean four pools per attribute, and recall reports each attribute separately.
-        assert float(row["recall_attr0_chance"]) > 0.0
+        # Four-word values mean four pools per attribute, reported separately.
+        assert float(row["template_attr0_chance"]) > 0.0
+
+
+@pytest.mark.slow
+def test_the_gate_report_is_produced_from_real_runs_and_gates_real_admission():
+    """
+    The admission seam, in both directions, against a real scored run.
+
+    PRD 8.6 makes admission code-enforced, and the unit tests cover the assembler on synthetic
+    `ScoredCheckpoint`s. What they cannot cover is whether `score_run` hands the assembler the shape it
+    expects -- the identity fields it reads come out of a *record written by the trainer* and back through
+    a checkpoint, which is three seams away from the dataclass a unit test builds.
+
+    Both directions matter. A report that cannot be produced makes the gate unreachable; a report that
+    admits everything makes it decorative.
+    """
+    pytest.importorskip("torch")
+    with tempfile.TemporaryDirectory() as raw:
+        work = Path(raw)
+        train = run_entry_point(
+            "gate-fixture",
+            "--cell",
+            str(MIXTURE_CELL),
+            "--save-folder",
+            str(work / "ck"),
+            "--work-dir",
+            str(work / "train"),
+            "--rank-microbatch-size",
+            "2048",
+            cwd=REPO_ROOT,
+        )
+        assert train.returncode == 0, train.stdout[-2500:] + train.stderr[-2500:]
+
+        def score(*extra: str, out: str) -> subprocess.CompletedProcess:
+            return subprocess.run(
+                [
+                    sys.executable,
+                    str(REPO_ROOT / "src" / "scripts" / "train" / "factcrowd" / "score_run.py"),
+                    "--prefix",
+                    str(work / "ck"),
+                    "--out",
+                    str(work / out),
+                    "--work-dir",
+                    str(work / "score"),
+                    "--eval-items",
+                    "32",
+                    "--bit-entities",
+                    "32",
+                    "--batch-size",
+                    "16",
+                    *extra,
+                ],
+                cwd=str(REPO_ROOT),
+                env=dict(os.environ, PYTHONPATH=str(REPO_ROOT / "src")),
+                capture_output=True,
+                text=True,
+                timeout=1800,
+            )
+
+        # --- producing a report ------------------------------------------------------------------
+        report_path = work / "gates-mano.json"
+        first = score(
+            "--write-gate-report", str(report_path), "--gate-endpoint", "mano", out="pass1.csv"
+        )
+        assert first.returncode == 0, first.stdout[-2500:] + first.stderr[-2500:]
+        report = json.loads(report_path.read_text())
+
+        # One verdict per gate, and no gate passes on evidence this run cannot contain: there is no
+        # dilution ladder here, no untrained checkpoint, no depth sweep.
+        from factcrowd.measure import gates as gates_module
+
+        assert report["version"] == gates_module.GATE_REPORT_VERSION
+        assert report["endpoint"] == "mano"
+        assert len(report["results"]) == len(gates_module.GATES)
+        failures = {r["gate"] for r in report["results"] if not r["passed"]}
+        assert "G8" in failures, report["results"]
+
+        # And the run that produced the report is not admitted by it.
+        with (work / "pass1.csv").open() as handle:
+            rows = list(csv.DictReader(handle))
+        assert rows and all(row["confirmatory"] == "False" for row in rows)
+
+        # --- consuming a passing report --------------------------------------------------------
+        # Hand-built rather than earned: earning it needs five ladder arms, which is a submission and not
+        # a smoke test. What is under test here is that a passing report actually flips the column --
+        # every other test in this file can only show it staying False.
+        passing = [
+            {
+                "version": gates_module.GATE_REPORT_VERSION,
+                "endpoint": name,
+                "commit": "0ddba11",
+                "results": [
+                    {"gate": gate, "passed": True, "detail": "hand-built fixture"}
+                    for gate in gates_module.GATES
+                ],
+            }
+            for name in ("mano", "compare")
+        ]
+        admitted_path = work / "admitted.json"
+        admitted_path.write_text(json.dumps(passing))
+        second = score("--gate-report", str(admitted_path), out="pass2.csv")
+        assert second.returncode == 0, second.stdout[-2500:] + second.stderr[-2500:]
+        with (work / "pass2.csv").open() as handle:
+            admitted_rows = list(csv.DictReader(handle))
+
+    assert admitted_rows and len(admitted_rows) == len(rows)
+    assert all(row["confirmatory"] == "True" for row in admitted_rows)
+    assert all("0ddba11" in row["admission"] for row in admitted_rows)
+
+    # A failing report is refused too, and says which gate: the middle state between "no report" and
+    # "admitted" is the one a reader is most likely to misread as either.
+    broken = dict(passing[0])
+    broken["results"] = [{"gate": "G8", "passed": False, "detail": "ladder flat"}]
+    assert not gates_module.GateReport.from_dict(broken).passed
+    assert gates_module.GateReport.from_dict(broken).failures == ("G8",)

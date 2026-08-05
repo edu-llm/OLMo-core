@@ -60,6 +60,7 @@ if __package__ in (None, ""):  # pragma: no cover - only when run as a script
         sys.path.insert(0, str(_here.parents[3]))
 
 from factcrowd import cells as cell_module  # noqa: E402
+from factcrowd import provenance
 from factcrowd.corpus.build import BuiltCorpus  # noqa: E402
 from factcrowd.ladder import sizes as sizes_module  # noqa: E402
 
@@ -147,31 +148,41 @@ def resolve_cell(args: argparse.Namespace) -> cell_module.CellSpec:
     """
     if args.cell:
         return cell_module.load_cell(args.cell)
-    if not args.row:
-        raise OLMoConfigurationError("pass either --cell <config> or --row <ladder row>")
+    if not (args.row or args.config_dir):
+        raise OLMoConfigurationError(
+            "pass --cell <config>, --row <ladder row>, or --config-dir <directory>"
+        )
 
     index_text = os.environ.get("AWS_BATCH_JOB_ARRAY_INDEX", args.cell_index)
     if index_text is None:
         raise OLMoConfigurationError(
-            "--row needs a fan-out index: the platform sets AWS_BATCH_JOB_ARRAY_INDEX, or pass "
+            "a fan-out needs an index: the platform sets AWS_BATCH_JOB_ARRAY_INDEX, or pass "
             "--cell-index for a single run"
         )
     # Each axis has its own directory so a fan-out size is what `ls` says. Sharing one would let
     # --row 28M pick up eleven cells where the submission asked for five, and run the wrong cell under
     # the right name.
-    directory = CONFIG_ROOT / "cells" / args.sweep
-    row_cells = tuple(
-        cell for cell in cell_module.load_cells(directory) if cell.row.lower() == args.row.lower()
+    #
+    # `--config-dir` fans out over a whole directory, which is what the gate runs need: the dilution
+    # ladder is five arms of one row, so filtering by row would select all five anyway and `--row` would
+    # be a no-op that looked like a constraint.
+    directory = Path(args.config_dir) if args.config_dir else CONFIG_ROOT / "cells" / args.sweep
+    candidates = cell_module.load_cells(directory)
+    selected = (
+        tuple(cell for cell in candidates if cell.row.lower() == args.row.lower())
+        if args.row
+        else candidates
     )
-    if not row_cells:
-        raise OLMoConfigurationError(f"no cells found for row {args.row!r} in {directory}")
+    if not selected:
+        where = f"row {args.row!r} in {directory}" if args.row else str(directory)
+        raise OLMoConfigurationError(f"no cells found for {where}")
     index = int(index_text)
-    if not 0 <= index < len(row_cells):
+    if not 0 <= index < len(selected):
         raise OLMoConfigurationError(
-            f"fan-out index {index} is out of range for row {args.row}, which has "
-            f"{len(row_cells)} cells: {[c.cell_id for c in row_cells]}"
+            f"fan-out index {index} is out of range for {args.row or directory.name}, which has "
+            f"{len(selected)} cells: {[c.qualified_id for c in selected]}"
         )
-    return row_cells[index]
+    return selected[index]
 
 
 def build_trainer(
@@ -513,18 +524,24 @@ def build_trainer(
                 },
             },
             "checkpoint_steps": checkpoint_steps,
+            # Which code produced these weights. Every other digest here answers "is this the same
+            # corpus?"; none of them answers "is this the same code?", and two checkpoints with identical
+            # corpus digests can come from revisions that score the endpoint differently.
+            "provenance": provenance.record(),
         },
     }
     return trainer
 
 
-def main(argv: Optional[Tuple[str, ...]] = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     """
-    Entry point.
+    The command-line surface, separate from :func:`main` so a test can build real arguments.
 
-    :param argv: Argument list, defaulting to ``sys.argv[1:]``.
+    Hand-written ``Namespace`` objects in tests go stale silently: adding ``--config-dir`` broke a
+    fan-out test that had never heard of the field, which is a failure about the test rather than about
+    the code. Parsing real arguments means a new flag cannot do that.
 
-    :returns: A process exit code.
+    :returns: The parser.
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_name", help="The run name; on the platform, $EDULLM_RUN_ID")
@@ -536,6 +553,12 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> int:
         choices=("count", "entropy"),
         help="Which axis --row selects from. Each has its own config directory, so a fan-out size is "
         "what 'ls' says.",
+    )
+    parser.add_argument(
+        "--config-dir",
+        help="Fan out over every cell in a directory, ordered by filename. For sets that are not a "
+        "ladder row -- the gate runs, a replicate block -- where --row would select the whole "
+        "directory anyway and only look like a constraint.",
     )
     parser.add_argument("--cell-index", help="Fan-out index, if not set by the platform")
     parser.add_argument(
@@ -574,7 +597,18 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> int:
         "and exit without training. Unlike --dry-run this exercises everything except fit(), which is "
         "where the checkpoint schedule, the mixture targets and the parallelism config are decided.",
     )
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: Optional[Tuple[str, ...]] = None) -> int:
+    """
+    Entry point.
+
+    :param argv: Argument list, defaulting to ``sys.argv[1:]``.
+
+    :returns: A process exit code.
+    """
+    args = build_parser().parse_args(argv)
 
     # Checked before anything expensive: an unexpanded variable is a submission defect, and finding
     # it after the corpus is built wastes the queue slot it took to get here.

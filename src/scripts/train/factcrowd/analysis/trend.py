@@ -58,6 +58,7 @@ from ..measure.endpoints import EndpointResult
 
 __all__ = [
     "EQUIVALENCE_MARGIN_PP",
+    "check_blocks",
     "SeedBlock",
     "TrendResult",
     "EquivalenceResult",
@@ -282,6 +283,16 @@ class SeedBlock:
         so a slope can be traced back to the runs that produced it.
     :param demands: Demanded fact bits per parameter, one per cell, on the non-embedding basis and
         **including the name term** (PRD 3.1: both sweeps must be plotted on the same x definition).
+    :param endpoint: Which endpoint these accuracies came from. Blocks that disagree are refused: a slope
+        pooled across two endpoints is not a slope of either.
+    :param row: Ladder row. Slopes are not exchangeable across widths (PRD P5), so a pooled trend runs
+        per row.
+    :param sweep: ``"count"`` or ``"entropy"``. The two are different experiments (PRD 3.1) and must not
+        be pooled.
+    :param step: The checkpoint these came from. A trend mixing checkpoints is measuring training
+        progress, not demand.
+    :param eval_items: How many held-out items each accuracy is over. Differing ``n`` means differing
+        measurement noise, which the paired design assumes away.
     :param accuracies: Reasoning accuracy per cell, as **fractions** in ``[0, 1]`` --
         :attr:`~factcrowd.measure.endpoints.EndpointResult.accuracy`, not a percentage.
     """
@@ -289,6 +300,11 @@ class SeedBlock:
     replicate: int
     demands: Tuple[float, ...]
     accuracies: Tuple[float, ...]
+    endpoint: str = ""
+    row: str = ""
+    sweep: str = ""
+    step: int = -1
+    eval_items: int = -1
 
     def __post_init__(self) -> None:
         if len(self.demands) != len(self.accuracies):
@@ -487,6 +503,64 @@ class TrendResult:
         }
 
 
+def check_blocks(blocks: Sequence[SeedBlock], *, required_levels: int = 0) -> None:
+    """
+    Refuse a set of blocks that is not a paired design over one treatment grid.
+
+    Every check here corresponds to something the old code accepted. An adversarial pass fed it three
+    blocks all labelled ``replicate=0`` -- three readings of one seed reported as three replicates, so the
+    between-seed variance was noise about nothing -- and two blocks swept over *different* demand grids,
+    which is two experiments averaged into one slope.
+
+    The design's whole claim is that a block differs from its neighbours **only** in initialisation and
+    data order. That is unverifiable from the numbers alone, so the identity travels with the block and is
+    checked here.
+
+    :param blocks: The blocks.
+    :param required_levels: If set, the number of treatment levels each block must carry. The entropy
+        sweep is six cells; a trend fitted through three of them is a different, weaker claim and should
+        not be able to masquerade as the pre-registered one.
+
+    :raises OLMoConfigurationError: On duplicate replicates, a mismatched grid, or mismatched identity.
+    """
+    if not blocks:
+        raise OLMoConfigurationError("no blocks were given")
+
+    replicates = [block.replicate for block in blocks]
+    if len(set(replicates)) != len(replicates):
+        duplicated = sorted({r for r in replicates if replicates.count(r) > 1})
+        raise OLMoConfigurationError(
+            f"replicate ids {duplicated} appear more than once. Repeated readings of one seed are not "
+            f"replicates, and averaging them reports a between-seed variance that no seed produced."
+        )
+
+    reference = blocks[0]
+    for block in blocks[1:]:
+        if len(block.demands) != len(reference.demands) or any(
+            abs(a - b) > 1e-6 for a, b in zip(block.demands, reference.demands)
+        ):
+            raise OLMoConfigurationError(
+                f"replicate {block.replicate} was run at demands {block.demands} but replicate "
+                f"{reference.replicate} at {reference.demands}. A paired design needs one treatment "
+                f"grid; two grids with the same span are still two experiments."
+            )
+        for field in ("endpoint", "row", "sweep", "step", "eval_items"):
+            here, there = getattr(block, field), getattr(reference, field)
+            if here != there:
+                raise OLMoConfigurationError(
+                    f"replicate {block.replicate} has {field}={here!r} but replicate "
+                    f"{reference.replicate} has {field}={there!r}. Blocks that differ in anything but "
+                    f"initialisation and data order are not replicates of one another."
+                )
+
+    if required_levels and len(reference.demands) != required_levels:
+        raise OLMoConfigurationError(
+            f"each block carries {len(reference.demands)} treatment levels, not the {required_levels} "
+            f"the pre-registered design states. A trend through a subset is a weaker claim and has to be "
+            f"labelled as one rather than reported in its place."
+        )
+
+
 def pooled_trend(blocks: Sequence[SeedBlock]) -> TrendResult:
     """
     Pool the replicates: a one-sample t-test over their per-seed slopes.
@@ -511,6 +585,7 @@ def pooled_trend(blocks: Sequence[SeedBlock]) -> TrendResult:
 
     :raises OLMoConfigurationError: If fewer than two blocks are given.
     """
+    check_blocks(blocks)
     if len(blocks) < 2:
         raise OLMoConfigurationError(
             f"a between-seed t-test needs at least 2 replicates, got {len(blocks)} -- one seed "

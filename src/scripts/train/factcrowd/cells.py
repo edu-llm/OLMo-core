@@ -35,6 +35,9 @@ __all__ = [
     "ResolvedCell",
     "first_run_cells",
     "entropy_sweep_cells",
+    "dilution_ladder_cells",
+    "replicate_block",
+    "grid_summary",
     "load_cell",
     "load_cells",
     "write_cells",
@@ -298,6 +301,20 @@ class CellSpec:
             )
 
     # --- derived quantities ------------------------------------------------------------------------
+
+    @property
+    def qualified_id(self) -> str:
+        """
+        The cell id with its replicate, which is what a filename and a checkpoint prefix must use.
+
+        ``cell_id`` alone omits the replicate, so ``write_cells`` wrote every replicate of a cell to the
+        same YAML -- reproduced with r0 and r1 both landing on ``28m_b8.yaml`` -- and two replicates
+        submitted from it would share a checkpoint prefix. A design whose whole inferential unit is the
+        replicate cannot have the replicate absent from its identity.
+
+        Replicate 0 keeps the bare id, so the committed single-replicate grid is unchanged.
+        """
+        return self.cell_id if self.replicate == 0 else f"{self.cell_id}_r{self.replicate}"
 
     @property
     def init_seed(self) -> int:
@@ -729,6 +746,78 @@ def entropy_sweep_cells(row: str = "28M", **overrides: Any) -> Tuple[CellSpec, .
     )
 
 
+def dilution_ladder_cells(
+    row: str = "13M", *, demand_bits_per_param: float = 0.0, **overrides: Any
+) -> Tuple[CellSpec, ...]:
+    """
+    G8's calibration ladder: one cell trained on a decreasing share of its reasoning tokens.
+
+    This is the gate that makes a null mean something, and until it runs, :mod:`factcrowd.score_run`
+    marks every row non-confirmatory -- correctly, since PRD 8.6 admits a row only on gate evidence. It
+    is also the cheapest thing in the design: on the default control at 13M the reference arm is 1.0B
+    tokens and the whole ladder is under 1.5 slot-hours on 4xA10G.
+
+    **Why the default is the reasoning-only control.** Diluting reasoning tokens inside a mixture also
+    moves the mixture ratio and the total token budget, so a drop there has three candidate causes. With
+    no facts present, reasoning exposure is the only thing that varies, which is what a calibration
+    instrument wants. The cost is that the ladder then measures the endpoint's dose-response on a model
+    trained on reasoning alone, and the confirmatory cells are mixtures -- so pass
+    ``demand_bits_per_param`` to build the mixture-matched ladder instead, and read it knowing the dose
+    is confounded with the ratio.
+
+    :param row: Which ladder row. Use the row whose slope the ladder is calibrating.
+    :param demand_bits_per_param: Facts to carry. ``0.0``, the default, is the reasoning-only control.
+    :param overrides: Applied to every arm, e.g. ``seed``.
+
+    :returns: One cell per dose in :data:`factcrowd.measure.gates.DILUTION_DOSES_PCT`, strongest dose
+        last.
+
+    :raises OLMoConfigurationError: If an arm would carry no reasoning tokens at all.
+    """
+    from .measure.gates import (
+        DILUTION_DOSES_PCT,  # single source of truth for the doses
+    )
+
+    is_control = demand_bits_per_param == 0.0
+    settings: Dict[str, Any] = {
+        "reasoning_tokens": REASONING_TOKENS,
+        # A control carries no orderable fact, so `<compare>` is absent from it whatever this says
+        # (see `reasoning_slice_names`). Stated as zero rather than left at a value that is dropped.
+        "related_reasoning_tokens": 0 if is_control else RELATED_REASONING_TOKENS,
+        **overrides,
+    }
+    reference = int(settings["reasoning_tokens"])
+    related = int(settings["related_reasoning_tokens"])
+    cells: List[CellSpec] = []
+    for dose in DILUTION_DOSES_PCT:
+        scaled = (reference * dose) // 100
+        if scaled <= 0:
+            raise OLMoConfigurationError(
+                f"the {dose}% arm of the dilution ladder would carry {scaled} reasoning tokens. The "
+                f"reference arm is {reference:,}; a ladder needs every arm to train on something."
+            )
+        arm = dict(settings)
+        arm["reasoning_tokens"] = scaled
+        # The related slice takes the same dose. Holding it fixed would make the ladder a ratio sweep
+        # between the two reasoning slices, and G8 reads it as one reasoning-exposure dose.
+        arm["related_reasoning_tokens"] = (related * dose) // 100
+        arm["notes"] = (
+            f"G8 dilution ladder: {dose}% of the reasoning tokens"
+            f"{', no facts' if is_control else f', demand {demand_bits_per_param}'}. "
+            f"Reference arm is the 100% cell."
+        )
+        cells.append(
+            CellSpec(
+                cell_id=f"{row.lower()}_dil{dose}",
+                row=row,
+                sweep="count",
+                demand_bits_per_param=demand_bits_per_param,
+                **arm,
+            )
+        )
+    return tuple(cells)
+
+
 def load_cell(path: Union[str, Path]) -> CellSpec:
     """
     Read one cell from a YAML or JSON file.
@@ -789,11 +878,46 @@ def write_cells(cells: Iterable[CellSpec], directory: Union[str, Path]) -> List[
     target = Path(directory)
     target.mkdir(parents=True, exist_ok=True)
     written: List[Path] = []
+    seen: Dict[Path, str] = {}
     for cell in cells:
-        path = target / f"{cell.cell_id}.yaml"
+        # The replicate is part of the filename, and a collision is refused rather than resolved by
+        # whichever cell was generated last. Two replicates writing one file is silent data loss in the
+        # one place the design cannot afford it: the replicate is the inferential unit.
+        path = target / f"{cell.qualified_id}.yaml"
+        if path in seen:
+            raise OLMoConfigurationError(
+                f"cells '{seen[path]}' and '{cell.cell_id}' (replicate {cell.replicate}) both write "
+                f"{path.name}. A replicate must be part of a cell's identity or one silently replaces "
+                f"the other -- and two runs submitted from them would share a checkpoint prefix."
+            )
+        seen[path] = cell.cell_id
         path.write_text(yaml.safe_dump(cell.to_dict(), sort_keys=True))
         written.append(path)
     return written
+
+
+def replicate_block(cells: Iterable[CellSpec], replicates: int) -> Tuple[CellSpec, ...]:
+    """
+    Expand a grid into paired replicate blocks.
+
+    Each replicate carries the *same* corpus -- same entity table, same reasoning items, same volumes --
+    and differs only in initialisation and data order. That is what makes the set a paired block and the
+    per-seed slope the right inferential unit (PRD 8.5).
+
+    :param cells: One replicate's worth of cells.
+    :param replicates: How many replicates to produce.
+
+    :returns: Every cell at every replicate, grouped by replicate.
+
+    :raises OLMoConfigurationError: If ``replicates`` is below one.
+    """
+    if replicates < 1:
+        raise OLMoConfigurationError(f"'replicates' must be at least 1, got {replicates}")
+    base = list(cells)
+    out: List[CellSpec] = []
+    for index in range(replicates):
+        out.extend(replace(cell, replicate=index) for cell in base)
+    return tuple(out)
 
 
 def grid_summary(cells: Iterable[CellSpec], mean_tokens_per_bio: float) -> str:

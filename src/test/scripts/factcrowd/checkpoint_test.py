@@ -213,7 +213,11 @@ def test_the_csv_puts_identity_first_and_leaves_missing_measurements_blank(tmp_p
     )
     path = CO.write_csv(rows, tmp_path / "out" / "scores.csv")
     header = path.read_text().splitlines()[0].split(",")
-    assert header[: len(CO.IDENTITY_COLUMNS)] == list(CO.IDENTITY_COLUMNS)
+    # The identity columns that are *present* come first, in declared order. `confirmatory` and
+    # `admission` are added by score_run rather than by collect, so they are absent here -- and the
+    # ordering has to survive a missing column rather than shifting everything after it.
+    present = [column for column in CO.IDENTITY_COLUMNS if column in header]
+    assert header[: len(present)] == present
 
     import csv
 
@@ -343,4 +347,60 @@ def test_load_refuses_a_checkpoint_that_carried_an_endpoint_the_rebuild_does_not
             CK.CheckpointRef(step=13, path=str(tmp_path / "step13")),
             work_dir=tmp_path / "wd",
             with_model=False,
+        )
+
+
+def test_scoring_a_cell_builds_its_corpus_once_and_never_its_fact_stream():
+    """
+    One switch that covers the expensive half, which it did not.
+
+    `with_streams=False` still built the fact stream and its token-offset index -- 4.7s against 0.3s on a
+    127k-entity cell, paid on every one of ten checkpoints, because scoring also used a fresh work
+    directory per step. Scoring reads `tasks` and `renderer`, built either way; the renderer alone is
+    enough for bits and template reconstruction.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from factcrowd import cells as C
+    from factcrowd.corpus.build import BuiltCorpus
+
+    cell = C.load_cell("src/scripts/train/factcrowd/configs/cells/smoke/smoke_13m_reason.yaml")
+    resolved = cell.resolve()
+    with tempfile.TemporaryDirectory() as raw:
+        scoring = BuiltCorpus(resolved, Path(raw), split="eval", with_streams=False)
+        assert scoring.stream is None and scoring.task_streams == ()
+        assert scoring.renderer is not None  # enough for bits and template reconstruction
+        # Training still gets both, so the default is unchanged where it matters.
+        training = BuiltCorpus(resolved, Path(raw) / "t", split="train")
+        assert training.stream is not None and training.task_streams
+
+
+def test_a_corpus_may_only_be_reused_for_the_cell_it_was_built_for(tmp_path):
+    """
+    Reuse is checked, not assumed.
+
+    Scoring reuses one corpus across a cell's checkpoints because only the weights differ. Handing it the
+    wrong cell's corpus would score every checkpoint against a corpus the model never saw -- and would
+    look entirely reasonable.
+    """
+    from factcrowd import cells as C
+    from factcrowd.corpus.build import BuiltCorpus
+
+    cell = smoke_cell()
+    other = C.load_cell("src/scripts/train/factcrowd/configs/cells/smoke/smoke_13m_reason.yaml")
+    reference = BuiltCorpus(cell.resolve(), tmp_path / "ref", split="eval", with_streams=False)
+    fake_checkpoint(
+        tmp_path,
+        21,
+        cell,
+        fingerprints={"schema": reference.corpus_schema.schema.fingerprint()},
+    )
+    wrong = BuiltCorpus(other.resolve(), tmp_path / "wrong", split="eval", with_streams=False)
+    with pytest.raises(OLMoConfigurationError, match="was offered for a checkpoint of"):
+        CK.load(
+            CK.CheckpointRef(step=21, path=str(tmp_path / "step21")),
+            work_dir=tmp_path / "wd",
+            with_model=False,
+            corpus=wrong,
         )

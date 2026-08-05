@@ -133,7 +133,8 @@ class TaskTokenSource(TokenSource):
         no question. The streams are byte-identical across cells so the cuts are identical too, which
         makes this a uniform tax rather than a confound, but two things follow: ``answer_start`` is valid
         only *before* chunking, so an eval must locate answers itself rather than trust it; and a
-        sequence length of 504 (or per-item padding with a label mask) would remove the tax entirely.
+        No sequence length divides both widths -- 504 is 24x21 but not a multiple of 19 -- so the fix is
+        padding both tasks to 32 tokens with a label mask.
         """
         return self._stream.num_tokens
 

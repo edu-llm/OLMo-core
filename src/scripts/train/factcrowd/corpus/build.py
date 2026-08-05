@@ -55,9 +55,15 @@ class BuiltCorpus:
     :param work_dir: Local scratch for the entity table and the offset index.
     :param split: Which reasoning split to generate, ``"train"`` or ``"eval"``. Measurement passes
         ``"eval"``; the two sets are disjoint by construction.
-    :param with_streams: Build the packed :class:`~factcrowd.corpus.tasks.TaskStream` volumes.
-        Training needs them; measurement does not, and skipping them avoids materialising an offset
-        index over a billion tokens just to score thirty thousand items.
+    :param with_streams: Build the packed token volumes -- the fact
+        :class:`~factcrowd.corpus.stream.BioStream` with its token-offset index, and the
+        :class:`~factcrowd.corpus.tasks.TaskStream` volumes. Training needs them; measurement does not.
+
+        The switch used to cover only the task streams, so ``with_streams=False`` still built an offset
+        index over billions of fact tokens -- measured at 4.7s against 0.3s on a 127k-entity cell, paid
+        on every checkpoint scored. Measurement reads :attr:`tasks` and :attr:`renderer`, which are built
+        either way: the renderer renders a biography and reports its value spans, which is all that bits
+        and template reconstruction need.
     """
 
     def __init__(
@@ -100,6 +106,7 @@ class BuiltCorpus:
         self.table: Optional[Any] = None
         self.renderer: Optional[Any] = None
         self.stream: Optional[Any] = None
+        self.spec_cell_id = spec.cell_id
         self.split = split
         if not spec.is_control:
             table_entities = spec.table_entities or resolved.n_entities
@@ -115,6 +122,7 @@ class BuiltCorpus:
                 seed=spec.seed + 1,
                 min_templates=1 if spec.sweep == "entropy" else 20,
             )
+        if self.renderer is not None and with_streams:
             self.stream = stream_module.BioStream(
                 self.renderer,
                 n_entities=resolved.n_entities,

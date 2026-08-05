@@ -132,6 +132,15 @@ G7's cap on unreadable answers, as a fraction. Structurally zero for both endpoi
 see :func:`g2_label_permuted` for why that is a property of the rendering rather than of the scorer.
 """
 
+_DILUTION_TOLERANCE_PP = 0.5
+"""
+How far a dilution ladder may run backwards before it is called unordered.
+
+Not zero: these are finite samples, and two adjacent doses will cross by a fraction of a point from noise
+alone. Half a point is a quarter of the 2pp target, so a ladder that inverts by more than this is not
+measuring the dose response it claims to.
+"""
+
 DILUTION_DOSES_PCT: Tuple[int, ...] = (100, 95, 90, 80, 60)
 """
 G8's ladder: percent of reasoning tokens retained. ``100`` is the reference arm.
@@ -915,18 +924,48 @@ def g8_calibrated_positive_control(
         ("max_drop_pp", max(drops.values())),
     )
 
-    if max(drops.values()) < target_pp:
+    # THE STRONGEST DOSE, NOT THE LARGEST DROP ANYWHERE. Testing `max(drops.values())` passed a ladder
+    # that cost 3pp at 80% and *nothing* at 60%, and then reported "0.00pp at 95% rising to 0.00pp at
+    # 60%" -- a self-contradicting sentence attached to a pass. If removing more reasoning data does not
+    # cost more, the ladder is measuring noise and cannot calibrate anything.
+    if drops[strongest] < target_pp:
         return GateResult(
             gate="G8",
             passed=False,
             detail=(
-                f"the whole dilution ladder costs at most {max(drops.values()):.2f}pp, under the "
-                f"{target_pp:.0f}pp target -- cutting reasoning tokens to {strongest}% moves the "
-                f"endpoint {drops[strongest]:.2f}pp. A treatment known to hurt does not move it, so a "
-                f"null on the fact axis would say nothing about facts."
+                f"cutting reasoning tokens to {strongest}% costs only {drops[strongest]:.2f}pp, under "
+                f"the {target_pp:.0f}pp target (the largest drop anywhere on the ladder is "
+                f"{max(drops.values()):.2f}pp, at {max(drops, key=lambda d: drops[d])}%). A treatment "
+                f"known to hurt does not move the endpoint at its strongest, so a null on the fact axis "
+                f"would say nothing about facts."
             ),
-            value=max(drops.values()),
+            value=drops[strongest],
             threshold=target_pp,
+            evidence=evidence,
+        )
+
+    # And the response has to be ordered. A ladder that dips and recovers is noise with a trend drawn
+    # through it, and interpolating a "dose worth 2pp" from it names a number that means nothing.
+    ordered = [drops[dose] for dose in sorted(drops, reverse=True)]
+    inversions = [
+        (before, after)
+        for before, after in zip(ordered, ordered[1:])
+        if after < before - _DILUTION_TOLERANCE_PP
+    ]
+    if inversions:
+        return GateResult(
+            gate="G8",
+            passed=False,
+            detail=(
+                f"the dilution response is not ordered: removing more reasoning data costs less at "
+                f"{len(inversions)} step(s) on the ladder "
+                f"({', '.join(f'{a:.2f}pp then {b:.2f}pp' for a, b in inversions)}). Interpolating a "
+                f"dose worth {target_pp:.0f}pp from a non-monotone ladder names a number that means "
+                f"nothing. Re-run in paired replicates, replacing removed reasoning tokens with matched "
+                f"filler so total steps and the schedule stay fixed."
+            ),
+            value=float(len(inversions)),
+            threshold=0.0,
             evidence=evidence,
         )
     if drops[gentlest] > target_pp:
@@ -1142,3 +1181,125 @@ __all__: List[str] = [
     "require_all",
     "run_gates",
 ]
+
+
+GATE_REPORT_VERSION = "factcrowd.gates.v1"
+"""Bumped whenever a gate's definition changes, so an old report cannot admit a new endpoint."""
+
+
+@dataclass(frozen=True)
+class GateReport:
+    """
+    A signed record that an endpoint passed admission, and the only thing that can mark a row
+    confirmatory.
+
+    PRD 8.6 says ``grid.run()`` raises on an endpoint that has not passed every gate. Until this existed
+    that was a documentation claim: :func:`run_gates` and :func:`require_all` had no production caller, so
+    scoring wrote rows regardless of whether any evidence had ever been gathered.
+
+    The report is written by whoever gathers the evidence and read by
+    :mod:`factcrowd.score_run`, which marks every row non-confirmatory when there is no report for its
+    endpoint or the report does not pass. Nothing can grant confirmatory status implicitly.
+
+    :param version: :data:`GATE_REPORT_VERSION` at the time of writing.
+    :param endpoint: Which endpoint was admitted.
+    :param results: One verdict per gate.
+    :param commit: The commit the evidence was gathered at, so a report cannot outlive its code.
+    :param note: Free text for the person who ran it.
+    """
+
+    version: str
+    endpoint: str
+    results: Tuple[GateResult, ...]
+    commit: str = ""
+    note: str = ""
+
+    @property
+    def passed(self) -> bool:
+        """Whether every gate passed. A report with no gates does not pass."""
+        return bool(self.results) and all(result.passed for result in self.results)
+
+    @property
+    def failures(self) -> Tuple[str, ...]:
+        """The gates that did not pass, for the row's reason field."""
+        return tuple(result.gate for result in self.results if not result.passed)
+
+    def as_dict(self) -> Dict[str, object]:
+        """Serialise for JSON."""
+        return {
+            "version": self.version,
+            "endpoint": self.endpoint,
+            "commit": self.commit,
+            "note": self.note,
+            "passed": self.passed,
+            "results": [dict(result.summary()) for result in self.results],
+        }
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, object]) -> "GateReport":
+        """
+        Read a report, refusing one written against a different gate definition.
+
+        :param raw: The parsed JSON.
+
+        :returns: The report.
+
+        :raises OLMoConfigurationError: If the version does not match, or a required field is missing.
+        """
+        version = str(raw.get("version", ""))
+        if version != GATE_REPORT_VERSION:
+            raise OLMoConfigurationError(
+                f"gate report version {version!r} does not match {GATE_REPORT_VERSION!r}. A gate "
+                f"definition has changed since this evidence was gathered, so it cannot admit anything "
+                f"-- re-run the gates."
+            )
+        endpoint = raw.get("endpoint")
+        if not isinstance(endpoint, str) or not endpoint:
+            raise OLMoConfigurationError("gate report has no endpoint")
+        results = []
+        entries = raw.get("results") or []
+        if not isinstance(entries, (list, tuple)):
+            raise OLMoConfigurationError("gate report's 'results' is not a list")
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                raise OLMoConfigurationError("gate report has a malformed result entry")
+            results.append(
+                GateResult(
+                    gate=str(entry.get("gate", "?")),
+                    passed=bool(entry.get("passed", False)),
+                    detail=str(entry.get("detail", "")),
+                )
+            )
+        return cls(
+            version=version,
+            endpoint=endpoint,
+            results=tuple(results),
+            commit=str(raw.get("commit", "")),
+            note=str(raw.get("note", "")),
+        )
+
+
+def load_reports(path: str) -> Dict[str, GateReport]:
+    """
+    Read a JSON file of gate reports, keyed by endpoint.
+
+    :param path: A JSON file holding either one report or a list of them.
+
+    :returns: One report per endpoint.
+
+    :raises OLMoConfigurationError: If the file is unreadable or two reports claim one endpoint.
+    """
+    import json
+    from pathlib import Path
+
+    raw = json.loads(Path(path).read_text())
+    entries = raw if isinstance(raw, list) else [raw]
+    out: Dict[str, GateReport] = {}
+    for entry in entries:
+        report = GateReport.from_dict(entry)
+        if report.endpoint in out:
+            raise OLMoConfigurationError(
+                f"two gate reports claim endpoint {report.endpoint!r}; which one admits it is ambiguous"
+            )
+        out[report.endpoint] = report
+    return out

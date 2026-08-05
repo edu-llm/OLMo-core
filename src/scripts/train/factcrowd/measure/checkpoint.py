@@ -21,7 +21,7 @@ assumed:
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 from olmo_core.exceptions import OLMoConfigurationError
 
@@ -134,6 +134,7 @@ def load(
     device: str = "cpu",
     verify: bool = True,
     with_model: bool = True,
+    corpus: Optional[BuiltCorpus] = None,
 ) -> LoadedCheckpoint:
     """
     Rebuild the corpus and load the weights for one checkpoint.
@@ -145,6 +146,10 @@ def load(
         only thing standing between a wrong rebuild and a plausible-looking score.
     :param with_model: Load the weights. ``False`` rebuilds the corpus alone, which is enough for tests
         and for inspecting what a run trained on.
+    :param corpus: A corpus already built for this cell, to reuse across the cell's checkpoints. Only the
+        weights differ between them, and rebuilding the entity table for each one was costing more than
+        the scoring did -- an audit measured the fact stream alone at 4.7s against 0.3s without it, paid
+        ten times per cell. Reusing it is checked, not assumed: the cell id must match.
 
     :returns: The opened checkpoint.
 
@@ -153,10 +158,22 @@ def load(
     record = read_record(ref.path)
     cell = cell_module.CellSpec.from_dict(dict(record["cell"]))
     resolved = cell.resolve()
-    # Measurement wants the eval split and does not want the packed streams: building them would
-    # materialise an offset index over a billion tokens to score thirty thousand items.
-    corpus = BuiltCorpus(resolved, work_dir, split="eval", with_streams=False)
-    if verify:
+    if corpus is not None and corpus.spec_cell_id != cell.cell_id:
+        raise OLMoConfigurationError(
+            f"a corpus for cell '{corpus.spec_cell_id}' was offered for a checkpoint of "
+            f"'{cell.cell_id}'. Reusing the wrong corpus would score every checkpoint against a "
+            f"different one than it was trained on."
+        )
+    # The eval split, and none of the packed volumes. Scoring reads the tasks and the renderer, both of
+    # which are built either way; the offset index over billions of fact tokens is pure cost here. It was
+    # being built anyway until an audit measured it at 4.7s a checkpoint.
+    if corpus is None:
+        corpus = BuiltCorpus(resolved, work_dir, split="eval", with_streams=False)
+        if verify:
+            verify_fingerprints(corpus, record)
+    elif verify:
+        # Still verified per checkpoint: reuse saves the rebuild, not the check, and two checkpoints of
+        # one run could in principle carry different records.
         verify_fingerprints(corpus, record)
 
     model = None

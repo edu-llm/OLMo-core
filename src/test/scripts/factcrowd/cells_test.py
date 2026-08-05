@@ -13,6 +13,7 @@ torch-gated bug earlier in this branch argued for.
 
 from dataclasses import replace
 from pathlib import Path
+from typing import Dict, List
 
 import pytest
 from factcrowd import cells as C
@@ -376,6 +377,17 @@ def test_every_committed_config_loads_and_resolves():
                 assert resolved.n_entities > 0
                 assert resolved.demand_per_non_embedding_param > 0
 
+    # The gate directories are not axes -- their `sweep` is "count" and they carry no demand -- but a
+    # hand edit in them would ship a cell that does not add up just as easily. Two directories were
+    # added after this test and escaped it, which is exactly how a config tree drifts.
+    for extra in ("gates", "sigma"):
+        cells = C.load_cells(CONFIG_ROOT / extra)
+        assert cells, extra
+        for cell in cells:
+            resolved = cell.resolve()
+            assert cell.is_control and resolved.n_entities == 0
+            assert cell.reasoning_tokens > 0
+
 
 def test_the_committed_grid_matches_the_generator():
     """
@@ -388,6 +400,15 @@ def test_the_committed_grid_matches_the_generator():
     }
     assert {c.cell_id for c in C.load_cells(CONFIG_ROOT / "entropy")} == {
         c.cell_id for c in C.entropy_sweep_cells("28M")
+    }
+    assert {c.cell_id for c in C.load_cells(CONFIG_ROOT / "gates")} == {
+        c.cell_id for c in C.dilution_ladder_cells("13M")
+    }
+    # `sigma/` is a replicate block, so identity is the *qualified* id -- `cell_id` alone collapses the
+    # three replicates of each control into one and the comparison would pass at a third of the size.
+    assert {c.qualified_id for c in C.load_cells(CONFIG_ROOT / "sigma")} == {
+        c.qualified_id
+        for c in C.replicate_block([c for c in C.first_run_cells() if c.is_control], 3)
     }
 
 
@@ -450,7 +471,6 @@ def test_train_cell_imports_and_resolves_a_fanout_index_without_torch():
     in this branch put its only real logic behind a module-level ``torch`` import; its tests skipped,
     and a call that raised ``TypeError`` for every input passed review.
     """
-    import argparse
     import importlib.util
     import sys
 
@@ -464,21 +484,44 @@ def test_train_cell_imports_and_resolves_a_fanout_index_without_torch():
     # Index 0 is the control: 'ctrl' sorts before 'd0p3', so adding it shifted every demand cell by
     # one. That shift is why the mapping is asserted here at all -- a submission that named a
     # fanout_size from an older directory would run a different cell under the name it was approved as.
-    args = argparse.Namespace(cell=None, row="28M", sweep="count", cell_index="0")
-    assert module.resolve_cell(args).cell_id == "28m_ctrl"
+    def parsed(**overrides):
+        """
+        Arguments as ``argparse`` would build them, not as a hand-written ``Namespace``.
 
-    args = argparse.Namespace(cell=None, row="28M", sweep="count", cell_index="3")
-    chosen = module.resolve_cell(args)
+        Hand-building one made this test fail closed when ``--config-dir`` was added: the code read a
+        field the test had never heard of. Going through the real parser means a new flag cannot break
+        the test without breaking the CLI, which is the only failure worth being told about.
+        """
+        args = module.build_parser().parse_args(["run-name"])
+        for key, value in overrides.items():
+            assert hasattr(args, key), key
+            setattr(args, key, value)
+        return args
+
+    # Index 0 is the control: 'ctrl' sorts before 'd0p3', so adding it shifted every demand cell by
+    # one. That shift is why the mapping is asserted here at all -- a submission that named a
+    # fanout_size from an older directory would run a different cell under the name it was approved as.
+    assert module.resolve_cell(parsed(row="28M", cell_index="0")).cell_id == "28m_ctrl"
+
+    chosen = module.resolve_cell(parsed(row="28M", cell_index="3"))
     assert chosen.row == "28M"
     assert chosen.cell_id == "28m_d1p2"
 
-    args.cell_index = "99"
     with pytest.raises(OLMoConfigurationError, match="out of range"):
-        module.resolve_cell(args)
+        module.resolve_cell(parsed(row="28M", cell_index="99"))
 
-    args.row = None
-    with pytest.raises(OLMoConfigurationError, match="either --cell"):
-        module.resolve_cell(args)
+    with pytest.raises(OLMoConfigurationError, match="pass --cell"):
+        module.resolve_cell(parsed(cell_index="0"))
+
+    # A whole-directory fan-out, which is how the gate runs are submitted: five arms, no row.
+    ladder = [
+        module.resolve_cell(
+            parsed(config_dir="src/scripts/train/factcrowd/configs/cells/gates", cell_index=str(i))
+        ).cell_id
+        for i in range(5)
+    ]
+    assert sorted(ladder) == sorted(c.cell_id for c in C.dilution_ladder_cells("13M"))
+    assert len(set(ladder)) == 5  # each index maps to a distinct arm
 
 
 def test_every_committed_cell_yields_all_ten_checkpoints():
@@ -490,7 +533,14 @@ def test_every_committed_cell_yields_all_ten_checkpoints():
     anywhere near either.
     """
     fractions = (0.005, 0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.50, 0.75, 1.00)
-    for cell in C.load_cells(CONFIG_ROOT / "count") + C.load_cells(CONFIG_ROOT / "entropy"):
+    everywhere = tuple(
+        cell
+        for directory in ("count", "entropy", "gates", "sigma")
+        for cell in C.load_cells(CONFIG_ROOT / directory)
+    )
+    # The ladder's shortest arm is the tightest case in the whole tree: 60% of a 1.0B-token control.
+    assert any(c.cell_id == "13m_dil60" for c in everywhere)
+    for cell in everywhere:
         steps = cell.resolve().steps(69.2)
         distinct = {min(steps, max(1, int(fraction * steps))) for fraction in fractions}
         assert len(distinct) == len(fractions), (cell.cell_id, steps, sorted(distinct))
@@ -581,7 +631,7 @@ def test_the_two_axes_render_different_lengths_so_one_mean_cannot_serve_both():
 
     # And the same cell costs visibly different token counts under the two means, which is the trap.
     cell = C.CellSpec(
-        cell_id="28m_b8",
+        cell_id="28m_d1p2",
         row="28M",
         sweep="entropy",
         bits_per_attribute=8,
@@ -634,7 +684,7 @@ def test_a_replicate_changes_the_network_and_the_order_but_not_the_corpus():
     they stored, which is the opposite of a replicate.
     """
     base = C.CellSpec(
-        cell_id="28m_b8",
+        cell_id="28m_d1p2",
         row="28M",
         sweep="entropy",
         bits_per_attribute=8,
@@ -653,3 +703,157 @@ def test_a_replicate_changes_the_network_and_the_order_but_not_the_corpus():
     assert not ({c.init_seed for c in replicates} & {c.order_seed for c in replicates})
     with pytest.raises(OLMoConfigurationError, match="'replicate' must not be negative"):
         replace(base, replicate=-1)
+
+
+def test_a_replicate_is_part_of_a_cells_filename_and_of_its_checkpoint_prefix():
+    """
+    Reproduced: r0 and r1 of `28m_d1p2` both landed on `28m_d1p2.yaml`.
+
+    `cell_id` omits the replicate, so expanding a grid into replicate blocks and writing it out wrote
+    each cell twice to one path -- the second silently replacing the first -- and two runs submitted from
+    those configs would have shared a checkpoint prefix and overwritten each other's weights. The
+    replicate is the inferential unit of the whole design; it cannot be missing from the identity.
+
+    Replicate 0 keeps the bare id so the committed single-replicate grid is untouched.
+    """
+    base = C.load_cell(CONFIG_ROOT / "count" / "28m_d1p2.yaml")
+    assert base.replicate == 0 and base.qualified_id == base.cell_id == "28m_d1p2"
+    assert replace(base, replicate=2).qualified_id == "28m_d1p2_r2"
+
+
+def test_expanding_a_grid_into_replicates_varies_the_seeds_and_nothing_else():
+    """
+    A paired block differs in initialisation and data order, and in nothing else.
+
+    So `replicate_block` is the only thing that may touch those seeds, and everything that defines the
+    corpus -- entity count, attribute schema, token volumes -- has to come out identical across the block,
+    or the "paired" claim in PRD 8.5 is false and the per-seed slope is not a per-seed slope.
+    """
+    grid = [
+        C.load_cell(CONFIG_ROOT / "count" / name) for name in ("28m_d0p3.yaml", "28m_d1p2.yaml")
+    ]
+    block = C.replicate_block(grid, 3)
+    assert len(block) == 6
+    assert [c.replicate for c in block] == [0, 0, 1, 1, 2, 2]
+    assert len({c.qualified_id for c in block}) == 6
+
+    by_cell: Dict[str, List[C.CellSpec]] = {}
+    for cell in block:
+        by_cell.setdefault(cell.cell_id, []).append(cell)
+    for replicates in by_cell.values():
+        # Same corpus, cell for cell.
+        assert len({c.resolve().n_entities for c in replicates}) == 1
+        assert len({c.resolve().demand_bits for c in replicates}) == 1
+        assert len({c.resolve().attribute_bits for c in replicates}) == 1
+        # Distinct seeds, both of them, for every pair of replicates.
+        assert len({c.init_seed for c in replicates}) == len(replicates)
+        assert len({c.order_seed for c in replicates}) == len(replicates)
+
+    with pytest.raises(OLMoConfigurationError, match="must be at least 1"):
+        C.replicate_block(grid, 0)
+
+
+def test_two_cells_that_would_write_one_file_are_refused(tmp_path):
+    """
+    Silent overwrite is the one outcome a config generator must never have.
+
+    Refused with both cell ids and the shared filename, because the caller has to know *which* two
+    collided -- and because a run submitted from the survivor would look entirely normal.
+    """
+    grid = [C.load_cell(CONFIG_ROOT / "count" / "28m_d1p2.yaml")]
+    written = C.write_cells(C.replicate_block(grid, 2), tmp_path)
+    assert sorted(p.name for p in written) == ["28m_d1p2.yaml", "28m_d1p2_r1.yaml"]
+    # Round trip: what was written resolves back to the same replicate.
+    assert C.load_cell(tmp_path / "28m_d1p2_r1.yaml").replicate == 1
+
+    duplicated = [grid[0], replace(grid[0], n_entities=None, demand_bits_per_param=0.5)]
+    with pytest.raises(OLMoConfigurationError, match="both write 28m_d1p2.yaml"):
+        C.write_cells(duplicated, tmp_path / "sub")
+
+
+# --- the gate ladder --------------------------------------------------------------------------------
+
+
+def test_the_dilution_ladder_varies_reasoning_exposure_and_nothing_else():
+    """
+    G8 is the gate that makes a null mean something, and it was unbuildable.
+
+    `score_run` marks every row non-confirmatory without a gate report, and no committed config could
+    produce one: G8 needs the same cell trained on 100/95/90/80/60% of its reasoning tokens. The ladder
+    is the cheapest thing in the design -- 4.25B tokens all told, under 1.5 slot-hours at 13M -- and
+    without it 170 checkpoints of confirmatory grid arrive labelled descriptive.
+    """
+    from factcrowd.measure.gates import DILUTION_DOSES_PCT
+
+    ladder = C.dilution_ladder_cells("13M")
+    assert tuple(c.cell_id for c in ladder) == tuple(f"13m_dil{d}" for d in DILUTION_DOSES_PCT)
+
+    reference = ladder[0]
+    assert reference.reasoning_tokens == C.REASONING_TOKENS  # 100% is the reference arm
+    for cell, dose in zip(ladder, DILUTION_DOSES_PCT):
+        assert cell.reasoning_tokens == (C.REASONING_TOKENS * dose) // 100
+        assert cell.row == reference.row
+        # Everything that is not the dose is held: width, batch, schedule, optimiser, seed.
+        for field in (
+            "global_batch_size",
+            "sequence_length",
+            "learning_rate",
+            "weight_decay",
+            "warmup_fraction",
+            "decay_fraction",
+            "exposures",
+            "seed",
+            "replicate",
+        ):
+            assert getattr(cell, field) == getattr(reference, field), field
+
+    # Strictly decreasing exposure, so "strongest dose" is the last arm and G8's ordering check has
+    # something to be ordered about.
+    volumes = [c.reasoning_tokens for c in ladder]
+    assert volumes == sorted(volumes, reverse=True) and len(set(volumes)) == len(volumes)
+
+
+def test_the_ladder_defaults_to_the_control_so_the_dose_is_the_only_cause():
+    """
+    Diluting reasoning inside a mixture moves the ratio and the token budget too.
+
+    Three candidate causes for one drop is not a calibration. With no facts the dose stands alone -- and
+    the control carries no `<compare>` slice, so the arm states zero rather than carrying a number that
+    `reasoning_slice_names` silently drops.
+    """
+    control = C.dilution_ladder_cells("13M")
+    assert all(c.is_control and c.demand_bits_per_param == 0.0 for c in control)
+    assert all(c.related_reasoning_tokens == 0 for c in control)
+    assert all(c.reasoning_slice_names == ("mano",) for c in control)
+    # Total tokens fall with the dose, because reasoning is all there is.
+    totals = [c.resolve().total_tokens(69.2) for c in control]
+    assert totals == sorted(totals, reverse=True)
+
+    # The mixture-matched variant is available and does carry both slices; its fact volume is untouched
+    # by the dose, which is exactly the confound the default avoids.
+    matched = C.dilution_ladder_cells("13M", demand_bits_per_param=1.2)
+    assert all(c.reasoning_slice_names == ("mano", "compare") for c in matched)
+    assert len({c.resolve().n_entities for c in matched}) == 1
+    assert [c.related_reasoning_tokens for c in matched] == [
+        (C.RELATED_REASONING_TOKENS * d) // 100 for d in (100, 95, 90, 80, 60)
+    ]
+
+
+def test_an_arm_that_would_train_on_nothing_is_refused():
+    """
+    A 60% arm of zero is not a gentle dose, it is an untrained model reported as one.
+    """
+    with pytest.raises(OLMoConfigurationError, match="would carry 0 reasoning tokens"):
+        C.dilution_ladder_cells("13M", reasoning_tokens=1)
+
+
+def test_every_committed_gate_config_resolves_and_matches_the_generator():
+    """
+    The configs are generated, so a hand edit cannot drift from the generator that documents them.
+    """
+    written = {c.cell_id: c for c in C.dilution_ladder_cells("13M")}
+    on_disk = {c.cell_id: c for c in C.load_cells(CONFIG_ROOT / "gates")}
+    assert set(on_disk) == set(written)
+    for cell_id, cell in on_disk.items():
+        assert cell.to_dict() == written[cell_id].to_dict()
+        cell.resolve()  # the arithmetic has to close on every arm

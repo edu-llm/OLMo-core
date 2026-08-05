@@ -57,33 +57,49 @@ def test_a_model_worse_than_the_prior_stores_zero_rather_than_negative_bits():
     a = bits.achieved_bits(
         [90.0, 85.0], n_entities_total=10, prior_bits_per_entity=PRIOR, non_embedding_params=PARAMS
     )
+    # The headline clamps once, in aggregate -- Allen-Zhu's estimator.
     assert a.stored_bits_per_entity == 0.0
     assert a.achieved_per_param == 0.0
-    assert all(value == 0.0 for value in a.per_entity_bits)
+    # The distribution stays *signed*, so "worse than uniform about this entity" is visible rather
+    # than floored. Clamping per entity and then averaging is a different, upward-biased quantity,
+    # and publishing both a clamped distribution and a clamped mean is how two disagreeing numbers
+    # got into one summary.
+    assert all(value < 0.0 for value in a.per_entity_bits)
 
 
-def test_the_capacity_ceiling_is_asserted_and_says_what_to_check():
+def test_the_dataset_bound_is_enforced_and_the_published_estimate_only_warns():
     """
-    R <= R_max, and a violation is reported as a fault rather than a finding.
+    Two bounds, and only one of them is a theorem.
 
-    The message has to name the likely cause, because "achieved 40 bits/param" reads as a discovery to
-    anyone who has not just written the estimator.
+    ``achieved <= demanded`` is a fact about the dataset -- a model cannot supply more information than
+    its data holds -- so a violation is a measurement fault and stops the run.
+
+    Physics 3.3's ~2 bits/parameter is an empirical measurement at 1,000 exposures, not a theorem, and
+    three of the six entropy cells *demand* 2.2 to 4.2 bits/param. An earlier revision raised there, which
+    would have aborted scoring on its own primary axis and censored the quantity M0 exists to discover.
     """
+    demanded = rho.demanded_bits(1_000, PRIOR, name_space=160_000_000)
     honest = bits.achieved_bits(
         [20.0], n_entities_total=1_000, prior_bits_per_entity=PRIOR, non_embedding_params=PARAMS
     )
-    honest.check_against_capacity()  # ~0.002 bits/param, nowhere near the ceiling
+    honest.check_against_demand(demanded)
+    assert honest.capacity_warning() is None
 
+    # Storing more than the corpus contains violates a theorem, so it stops the run.
     absurd = bits.achieved_bits(
-        [0.0],
-        n_entities_total=10_000_000,
-        prior_bits_per_entity=PRIOR,
-        non_embedding_params=1_000,
+        [0.0], n_entities_total=1_000, prior_bits_per_entity=PRIOR, non_embedding_params=PARAMS
     )
-    with pytest.raises(OLMoConfigurationError, match="exceeds the .* ceiling"):
-        absurd.check_against_capacity()
-    with pytest.raises(OLMoConfigurationError, match="measurement fault"):
-        absurd.check_against_capacity(r_max=rho.R_E_MAX)
+    with pytest.raises(OLMoConfigurationError, match="the corpus contains"):
+        absurd.check_against_demand(demanded * 0.5)
+
+    # Passing the published estimate warns and carries on.
+    dense = bits.achieved_bits(
+        [0.0], n_entities_total=1_000_000, prior_bits_per_entity=PRIOR, non_embedding_params=10_000
+    )
+    assert dense.achieved_per_param > rho.R_E_MAX
+    warning = dense.capacity_warning()
+    assert warning is not None and "not impossible" in warning
+    dense.check_against_demand(rho.demanded_bits(1_000_000, PRIOR, name_space=160_000_000))
 
 
 def test_the_per_entity_distribution_is_reported_not_just_the_mean():
@@ -96,10 +112,10 @@ def test_the_per_entity_distribution_is_reported_not_just_the_mean():
         residuals, n_entities_total=4, prior_bits_per_entity=PRIOR, non_embedding_params=PARAMS
     )
     summary = a.summary()
-    assert summary["stored_bits_median"] == pytest.approx(PRIOR - 25.0, abs=0.01)
-    assert float(summary["stored_bits_p10"]) < float(summary["stored_bits_median"])  # type: ignore[arg-type]
-    assert float(summary["stored_bits_median"]) < float(summary["stored_bits_p90"])  # type: ignore[arg-type]
-    assert float(summary["stored_bits_sd"]) > 0  # type: ignore[arg-type]
+    assert summary["signed_bits_median"] == pytest.approx(PRIOR - 25.0, abs=0.01)
+    assert float(summary["signed_bits_p10"]) < float(summary["signed_bits_median"])  # type: ignore[arg-type]
+    assert float(summary["signed_bits_median"]) < float(summary["signed_bits_p90"])  # type: ignore[arg-type]
+    assert float(summary["signed_bits_sd"]) > 0  # type: ignore[arg-type]
     assert summary["bits_is_upper_bound"] is True
 
 

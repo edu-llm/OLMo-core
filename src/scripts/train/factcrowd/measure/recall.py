@@ -1,5 +1,23 @@
 """
-Fact recall by generation and by recognition.
+Template reconstruction: how much of a biography's values the model supplies, given the biography.
+
+**This is not closed-book recall, and the metric names say so.** What it measures is the model's
+probability over the value tokens of a *rendered training-style biography* -- the prompt is the real
+document, and the argmax is read at the positions the renderer reports. That is a genuine and useful
+storage diagnostic, and it is what PRD 8.1's bit count is built on. It is not:
+
+- "What is X's birth city?" asked as a question;
+- extraction under a held-out template;
+- multiple-choice recognition from a query.
+
+A model can score well here by completing a familiar template and still fail all three. So the columns are
+``template_generation`` and ``template_recognition``, and true closed-book QA over frozen, train-disjoint
+prompts remains unbuilt -- PRD 8.2 asks for it and this module does not provide it.
+
+Within that scope the two sub-metrics do come apart usefully. **Generation** is the unrestricted argmax.
+**Recognition** restricts each position to its own reachable pool, so it asks whether the right value
+outranks its alternatives even when the model would not produce it. A model at chance on the first and
+above it on the second distinguishes "the value is absent" from "the value is there but not preferred".
 
 Two questions that come apart, which is why both are asked. **Generation** is "what is this person's
 birth city?" answered into the whole vocabulary. **Recognition** restricts the choice to the attribute's
@@ -75,10 +93,10 @@ class RecallResult:
     def summary(self) -> Dict[str, Any]:
         """A flat mapping for collection."""
         return {
-            f"recall_{self.attribute}_generation": round(self.generation, 6),
-            f"recall_{self.attribute}_recognition": round(self.recognition, 6),
-            f"recall_{self.attribute}_chance": round(self.recognition_chance, 9),
-            f"recall_{self.attribute}_n": self.n_probed,
+            f"template_{self.attribute}_generation": round(self.generation, 6),
+            f"template_{self.attribute}_recognition": round(self.recognition, 6),
+            f"template_{self.attribute}_chance": round(self.recognition_chance, 9),
+            f"template_{self.attribute}_n": self.n_probed,
         }
 
 

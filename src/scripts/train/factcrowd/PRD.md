@@ -550,9 +550,10 @@ the endpoints can show.
 protects the end of the stream and nothing else: the trainer requests 512-token windows and neither 24
 nor 19 divides 512, so **3.1% of unrelated items and 3.5% of related ones** straddle a boundary, some
 of them mid-answer. The eval must therefore generate items standalone and locate answers itself rather
-than trusting `answer_start`, which is valid only before chunking. A sequence length of 504 — a
-multiple of both widths — or per-item padding with a label mask removes it; both were deferred rather
-than rushed in ahead of the first run.
+than trusting `answer_start`, which is valid only before chunking. **No sequence length fixes this**:
+504 is 24×21 but not a multiple of 19, so an earlier draft's "504-token fix" was arithmetically wrong.
+Padding both tasks to 32 tokens with a label mask is the fix, and it is deferred rather than rushed in
+ahead of the first run.
 
 *Intra-document masking is off.* §7.2 records why: `[domain, BOS, …, EOS]` does not present the adjacent
 `[EOS, BOS]` the detector looks for, and the packed path needs a Flash backend. So a biography can
@@ -1230,7 +1231,7 @@ novelty claims are all narrowed.
 512-token boundary, and the review reads that as corruption exceeding the target effect size. It is
 identical across cells — the streams are byte-identical — so it cannot bias a between-cell comparison;
 it lowers the endpoint's ceiling uniformly. It also does not touch the measurement, because the eval
-generates items standalone. Worth fixing at sequence length 504 or with padded slots; not worth blocking
+generates items standalone. Worth fixing by padding both tasks to 32 tokens with label masks; not worth blocking
 a run for. Same for intra-document masking, with the consequence recorded in §7.3: the achieved-bits
 figure is an upper bound until masking is on.
 
@@ -1364,7 +1365,80 @@ the vocabulary padding, which the count axis had been lucky enough to miss.
 `measure/recall` had no test importing it at all. `bits.score_checkpoint` and `checkpoint.load` were
 untested drivers, so a doubled prior and a `split="train"` rebuild both passed the suite.
 
-### 16.8 Deferred, with reasons
+### 16.8 What a third expert audit changed, and where I judged differently
+
+An independent audit of the measurement commit returned eighteen findings. Most were right. The four
+that mattered most were not about arithmetic:
+
+**The gates were unreachable.** §8.6 says a row is admitted only on gate evidence, `gates.py` implements
+G1–G8, and `score_run` refuses to mark a row confirmatory without a report — but *nothing could produce
+a report*. G8 in particular needs the same cell trained at 100/95/90/80/60% of its reasoning tokens, and
+no committed config could express that. The design's central safeguard was a document sentence with an
+unsatisfiable precondition: the only way to admit a row was to hand-write the JSON, which is asserting
+the gates passed rather than measuring it.
+
+Fixed by building both halves. `cells.dilution_ladder_cells` generates the ladder — five cells, 4.25B
+tokens, 1.4 slot-hours, about $8, the cheapest item in the entire design — and `measure/evidence.py`
+assembles a report from scored runs, recognising the ladder by cell id, the ceiling and the width sweep
+from the controls, and σ from the most-replicated cell. Four gates (G4, G6, G7, G8) are now feedable from
+configs that exist. **G1, G2 and G3 are not**, and they report as owed rather than being defaulted to
+pass, so no row is admitted yet. That is the honest state and it is now visible in a file rather than
+inferable from a docs cross-reference.
+
+Two properties are load-bearing and tested. A report assembled from a run does not admit that run — the
+gate cells would be admitting themselves. And an empty report does not pass: `GateReport.passed` requires
+a non-empty result set, because "no gates run" must never read as "all gates passed".
+
+**World size was about to become a second treatment.** On A10G, `28m_d4p8` needs eight devices (25.4 h on
+four, past the 24 h per-cell cap) while the other five 28M cells fit on four. Only the top cell differs,
+so world size would have correlated almost perfectly with demand and any effect of it would have landed
+directly on the row's slope. FSDP holds the global batch fixed and a 2-rank curve reproduces a 1-rank one
+exactly here, which is evidence but not a guarantee across 83,000 steps of bf16 reductions. The rule is
+now explicit — one world size per confirmatory row — and the 28M row goes entirely to 8×A10G at
+27.2 h and about $442, roughly $77 and half a day more than the mixed plan. Worth it: the 28M row also
+carries the entropy sweep, and a confounded top cell there attacks the M3 − M2 subtraction that separates
+crowding from tokens-and-steps.
+
+**The run order was backwards.** The README handed a reader the count grid first. With admission
+code-enforced, that produces 170 checkpoints of correctly-labelled descriptive data. M0's σ block and the
+dilution ladder together cost 4.7 h and $53 — 7.5% of the A10G plan's $705 — and until they run nothing
+downstream can be claimed rather than plotted. They now come first, then the entropy sweep, which is the
+identified axis and costs a third of the 28M count row.
+
+**Where I judged differently.** The audit proposed a sequence length of 504 to stop chunking truncating
+~3% of reasoning items, on the grounds that it is a multiple of both task widths. It is not: 504 is 24×21
+and the `<compare>` items are 19 tokens wide, which divides nothing here. No sequence length fixes this,
+so the claim is removed rather than acted on; padding both tasks to 32 tokens with label masks is the
+actual fix and remains deferred.
+
+The audit also asked for a second switch separating the fact stream from the task streams in
+`BuiltCorpus`. The measured problem was real — `with_streams=False` still built an offset index over
+billions of tokens, 4.7 s against 0.3 s per checkpoint — but a second switch is dead surface: scoring
+reads `tasks` and `renderer`, which are built either way, and no caller wants one volume without the
+other. One switch now covers both, and a mutation test confirms it: the version with two switches passed
+its own test with the fix reverted, because both flags were false at the only call site.
+
+One further defect surfaced while checking the audit's cost figures rather than from the audit itself.
+Every ceiling in the README is a `maximum_attempts=1` figure. The `gh` commands do pass that explicitly,
+but the platform default is higher, and at two attempts the two 8xA10G submissions cross the $500 routine
+bound ($652 and $554) and need admin release. Stated where the ceilings are, since a reader comparing them against a rejected
+submission would otherwise have no way to see why.
+
+**And one defect the audit's own fix introduced.** Renaming the recall columns to ``template_*`` -- the
+audit's point, and correct, since this measures template reconstruction and not closed-book recall --
+mangled every one of them. Three layers each handled the prefix: ``RecallResult.summary`` namespaced its
+keys, ``score_run`` stripped a hardcoded ``recall_``, and ``collect`` added ``recall_`` back. They agreed
+until one was renamed, after which ``"template_all_chance"[len("recall_"):]`` is ``e_all_chance`` and the
+column shipped as ``recall_e_all_chance``. The bit and reasoning columns were unaffected; only the
+template block was.
+
+The names now have one owner and neither downstream layer renames. The more useful lesson is about the
+test suite rather than the code: nothing faster than a 27-minute end-to-end run had ever looked at a
+column name, so a rename could mangle the output and every fast test still passed. Two fast tests now
+assert the exact column set through ``ScoredCheckpoint.rows()``, and they assert the set rather than a
+pattern -- a test accepting "something containing chance" would have passed on the mangled names too.
+
+### 16.9 Deferred, with reasons
 
 FLD's 1,700 core-hours and 51.1% floor — decided in M0, not now. The exposure placebo and the
 mechanism battery — M4. Qwen3-0.6B continuation — after M3. Retiring
@@ -1372,3 +1446,8 @@ mechanism battery — M4. Qwen3-0.6B continuation — after M3. Retiring
 spec that disagrees with this one on architecture, materialisation, model sizes and corpus size: that
 is a change in another repository and belongs to whoever owns it. **This file is the single source of
 truth.**
+
+Still owed for admission, and blocking it: G1's task-depth sweep, G2's untrained-checkpoint control and
+G3's premise-ablated probe all need task or corpus variants that do not exist. Each is cheap to run once
+built — the expense is the variant, not the compute — and until they exist `score_run` will mark every
+row `confirmatory=False`, which is the correct answer rather than a defect to work around.

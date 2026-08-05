@@ -150,30 +150,127 @@ measured — g5 has no NVLink, so treat the 8×A10G column as the optimistic end
 | `28m_d4p8` | 35.3B | **25.4 h — over the cap** | 13.4 h |
 
 **`28m_d4p8` must use eight devices**; four would breach the platform's hard 24 h per-cell ceiling.
-Everything else goes on 4×A10G, which is the *cheaper* way to buy the same eight GPUs —
-$1.418/GPU/h against $2.036 — and gives two concurrent slots instead of one.
+4×A10G is the *cheaper* way to buy the same eight GPUs — $1.418/GPU/h against $2.036 — and gives two
+concurrent slots instead of one, but see the next section: mixing world sizes inside one row is not free.
 
 **64M cannot run on A10G at all.** `64m_d2p4` needs 33.9 h even on eight devices, and `64m_d1p2` needs
 17.1 h with `d2p4` impossible behind it. That row belongs on the P pool.
 
-### 13M + 28M on A10G: ~18.6 h, ~$430, four submissions, all `ROUTINE`
+### One world size per confirmatory row
+
+A row's slope is fitted across its demand levels. If world size changes *within* the row it becomes a
+second variable, and on this plan it would not vary randomly — only the top cell needs eight devices, so
+world size would correlate almost perfectly with demand and any effect of it would land directly on the
+slope. Direction unknown, which is the problem: it could manufacture the result or mask it.
+
+FSDP holds `global_batch_size` fixed, so the expected update is world-size-invariant and a 2-rank loss
+curve reproduces a 1-rank one exactly on this code. That is evidence, not a guarantee: bf16 reduction
+order differs with rank count and divergence compounds over tens of thousands of steps. It is not worth
+resting the primary result on.
+
+So: **every cell in a confirmatory row runs at one world size.** For the 28M row on A10G that forces a
+choice, because `28m_d4p8` needs 35.3B tokens and 25.4 h on four devices — past the platform's hard 24 h
+per-cell ceiling — while the other five fit comfortably:
+
+| 28M row | makespan | cost | confound |
+|---|---|---|---|
+| all six on 8×A10G | 27.2 h (one slot, sequential) | ~$442 | none |
+| five on 4×A10G + `d4p8` on 8×A10G | ~13.4 h | ~$366 | world size aliases demand |
+
+**Take the first.** It costs about $77 and half a day more, and the 28M row is the one that also carries
+the entropy sweep — a confounded top cell there attacks the M3 − M2 subtraction that separates crowding
+from tokens-and-steps, which is the whole point of running both axes. The 13M row has no such problem:
+all six cells fit on 4×A10G, `13m_d4p8` at 5.1 h. 64M goes to the P pool, where one world size covers
+the row anyway.
+
+If you do run the mixed version, `28m_d4p8` is **descriptive only** — plot it, do not include it in the
+row's confirmatory slope, and fit that slope through the five cells that share a world size.
+
+### The sequence, and why the count grid is not first
+
+`score_run` marks every row `confirmatory=False` without a gate report, and admission is per endpoint.
+Running the count grid first therefore produces 170 checkpoints of correctly-labelled *descriptive* data.
+The cheap runs that change that come first:
+
+| # | milestone | what it buys | profile | cells | makespan | cost |
+|---|---|---|---|---|---|---|
+| A | **M0 σ** — controls, 3 widths × 3 replicates | run-to-run σ (G7), accuracy vs width (G6), the ceiling (G4). σ is what keys the seed count for everything after. | `gpu-4xa10g` | 9 | ~4.0 h | ~$45 |
+| B | **M0 G8** — the dilution ladder | the one gate that makes a null mean something: a treatment known to hurt, calibrated in reasoning-exposure units | `gpu-4xa10g` | 5 | ~0.7 h | ~$8 |
+| C | **M2** — the entropy sweep at 28M | *the identified axis and the primary result* | `gpu-4xa10g` | 6 | ~13.0 h | ~$147 |
+| D | **M3** — the count grid, 13M | the confounded axis, cheap row first | `gpu-4xa10g` | 6 | ~5.6 h | ~$63 |
+| E | **M3** — the count grid, 28M | the row the M3 − M2 subtraction needs | `gpu-8xa10g` | 6 | ~27.2 h | ~$442 |
+
+The table totals $705 and 50.5 h. A and B are $53 and 4.7 h of that — 7.5% of the cost, 9% of the time —
+and until they run, nothing downstream can be claimed rather than plotted. C is the primary result and
+costs a third of E. That ordering also means the first thing you learn is whether the design is powered at
+all, which is the cheapest possible way to find out it is not.
+
+64M stays on the P pool and is not in this table.
+
+### Submitting it
+
+Ceilings are `rate × nodes × maximum_runtime_hours × maximum_attempts × cells`. **Every figure below
+assumes `maximum_attempts=1`**, which the `gh` commands pass explicitly — the platform's default is
+higher, and at 2 attempts **E1 ($652) and E3 ($554)** cross the $500 routine bound and need admin
+release. The rest stay under it, C and D only barely at $476.
+Runtime limits are set per submission rather than stretched to cover the longest cell, because the cell
+count multiplies into the ceiling.
 
 | # | `compute_profile` | `nproc` | selector | `fanout_size` | `max_runtime_hours` | ceiling |
 |---|---|---|---|---|---|---|
-| 1 | `gpu-4xa10g` | 4 | `--row 13M` | 6 | 8 | $272 |
-| 2 | `gpu-4xa10g` | 4 | `--row 28M` | **4** | 10 | $227 |
-| 3 | `gpu-4xa10g` | 4 | `--cell …/count/28m_d2p4.yaml` | — | 18 | $102 |
-| 4 | `gpu-8xa10g` | 8 | `--cell …/count/28m_d4p8.yaml` | — | 20 | $326 |
+| A | `gpu-4xa10g` | 4 | `--config-dir …/configs/cells/sigma` | 9 | 3 | $153 |
+| B | `gpu-4xa10g` | 4 | `--config-dir …/configs/cells/gates` | 5 | 2 | $57 |
+| C | `gpu-4xa10g` | 4 | `--row 28M --sweep entropy` | 6 | 7 | $238 |
+| D | `gpu-4xa10g` | 4 | `--row 13M` | 6 | 7 | $238 |
+| E1 | `gpu-8xa10g` | 8 | `--row 28M` (all six, short limit) | 4 | 5 | $326 |
+| E2 | `gpu-8xa10g` | 8 | `--cell …/count/28m_d2p4.yaml` | — | 9 | $147 |
+| E3 | `gpu-8xa10g` | 8 | `--cell …/count/28m_d4p8.yaml` | — | 17 | $277 |
 
-Submissions 1–3 put eleven cells into the 4×A10G queue and Batch packs them across its two slots, so the
-makespan is `max(total ÷ 2, longest cell)` = 18.6 h. Submission 4 finishes in 13.4 h alongside them.
+`--config-dir` fans out over a whole directory ordered by filename; `--row` filters one axis directory to
+a ladder row. A and B use the first because neither set is a row: `sigma/` is three widths × three
+replicates and `gates/` is one row's five dilution arms, so `--row` would select everything anyway and
+only look like a constraint. **E1's `--row 28M` selects all six cells**, so its index range must be
+capped by `fanout_size: 4` — filenames sort by ascending demand (`ctrl, d0p3, d0p6, d1p2, d2p4, d4p8`),
+which puts the two long cells last and lets E2/E3 pick them up by name with limits that fit them.
 
-`--row 28M` with `fanout_size: 4` is deliberate: filenames sort by ascending demand, so a prefix fan-out
-is exactly the four shortest cells, and the two long ones get their own submissions with runtime limits
-that fit them rather than one limit stretched to cover the longest.
+`sigma/` holds all three replicates including r0, which duplicates the three controls in `count/` — about
+2.7 slot-hours and $15 of repeated work. Deliberate: it makes A self-contained, so the gate report can be
+assembled from A and B alone, before any confirmatory cell has run. That is the entire reason for running
+M0 first, and $15 is a cheap price for not coupling the report to the grid it admits.
 
-Every ceiling is under the $500 routine bound, so a team lead can release all four — no admin, and the G
-quota is independent of the P quota that H100 and A100 draw on.
+E is split three ways for the ceiling, not for speed: one submission of six cells at a 17 h limit would
+price at $1,466 and need admin. Split, every line is routine. The cells still run sequentially in the
+single 8×A10G slot, so the makespan is unchanged at ~27.2 h.
+
+Whether D can overlap E depends on one platform fact worth confirming before you plan around it: if the
+G pool's `MaxvCpus` is a single shared budget, then one 8×A10G job consumes what two 4×A10G jobs would
+and the two cannot run at once — makespan becomes the sum, ~33 h, rather than the max. If the profiles
+draw on separate budgets they overlap and it is ~27 h. The per-submission ceilings above are unaffected
+either way.
+
+### Producing the gate report
+
+Two passes, and the second cannot admit the first:
+
+```bash
+# 1. Score M0 (A + B) and assemble the report from what those runs measured.
+python src/scripts/train/factcrowd/score_run.py \
+  --prefix s3://…/factcrowd-m0 --out m0-scores.csv \
+  --write-gate-report gates-mano.json --gate-endpoint mano
+
+# 2. Score the confirmatory grid, admitting rows against that report.
+python src/scripts/train/factcrowd/score_run.py \
+  --prefix s3://…/factcrowd-m3 --out m3-scores.csv \
+  --gate-report gates-mano.json
+```
+
+Pass 1 deliberately does **not** admit its own rows: a report assembled from a run cannot admit that run,
+or the gate cells would be admitting themselves. It logs what it recognised — which doses it saw, which
+control became the ceiling, how many replicates fed σ — so a refusal is diagnosable.
+
+Four gates are feedable from configs that exist (G4, G6, G7, G8). **G1, G2 and G3 need task and corpus
+variants that are not built**, so they come back refused and no row is admitted yet. That is the honest
+state of the design: the report is a checklist of what is owed, and it is not going to quietly pass.
 
 ## Before you submit: what an expert review changed
 
@@ -199,8 +296,17 @@ list of accepted-but-unbuilt work.
 
 ## Configs
 
-One YAML per cell under `configs/cells/{count,entropy}/`. Two directories because a fan-out maps an
-array index to a cell by position, so its size has to be what `ls` says.
+One YAML per cell under `configs/cells/`, one directory per submittable set, because a fan-out maps an
+array index to a cell by position — its size has to be what `ls` says, and one shared directory would let
+`--row 28M` pick up cells the submission never asked for.
+
+| directory | cells | what submits it |
+|---|---|---|
+| `count/` | 17 | the confounded count axis, three rows plus a control each |
+| `entropy/` | 6 | the iso-token entropy axis at 28M — the identified one |
+| `gates/` | 5 | G8's dilution ladder, the cheapest run in the design |
+| `sigma/` | 9 | M0's σ block: the three controls × three replicates |
+| `smoke/` | 4 | local end-to-end tests, never submitted |
 
 A cell states **either** its demand or its entity count, never both — the other is derived, so a cell's
 label and its corpus cannot disagree. Regenerate them rather than hand-editing the set:
@@ -209,7 +315,14 @@ label and its corpus cannot disagree. Regenerate them rather than hand-editing t
 from factcrowd import cells
 cells.write_cells(cells.first_run_cells(), "src/scripts/train/factcrowd/configs/cells/count")
 cells.write_cells(cells.entropy_sweep_cells("28M"), "src/scripts/train/factcrowd/configs/cells/entropy")
+cells.write_cells(cells.dilution_ladder_cells("13M"), "src/scripts/train/factcrowd/configs/cells/gates")
+controls = [c for c in cells.first_run_cells() if c.is_control]
+cells.write_cells(cells.replicate_block(controls, 3), "src/scripts/train/factcrowd/configs/cells/sigma")
 ```
+
+`write_cells` refuses a filename collision rather than resolving it: replicates are named by
+`qualified_id`, so two of them cannot silently overwrite each other — which they did, since `cell_id`
+omits the replicate and the replicate is this design's inferential unit.
 
 Editing one field of one cell by hand is fine; a test resolves every committed config, so a cell that
 does not add up fails locally rather than on a GPU.
@@ -231,6 +344,9 @@ Ours is the corpus and the arithmetic that places a cell on the demand axis:
 | `corpus/source.py` | a 90-line `TokenSource` adapter |
 | `cells.py` | one cell, and everything derivable from it |
 | `train_cell.py` | assembles OLMo-core's configs and calls `fit()` |
+| `measure/gates.py` | G1–G8, and the versioned report that is the only thing granting admission |
+| `measure/evidence.py` | assembles that report from scored runs; feeds G4, G6, G7, G8 |
+| `score_run.py` | checkpoints in, one CSV row per (cell, replicate, step, endpoint) out |
 
 Everything else is OLMo-core's and is **not** reimplemented: `TransformerConfig.llama_like` for the
 model, `AdamWConfig` and `WSD` for optimisation, `ConcatAndChunkInstanceSource` for packing,
@@ -332,7 +448,7 @@ minutes of forward passes on one small GPU, dominated by pulling shards from S3.
 |---|---|
 | **reasoning** | per endpoint: three counts, accuracy, answer-token CE in bits, and the **measured** floor |
 | **achieved bits** | Allen-Zhu's estimator over the value spans the renderer returns, with the per-entity distribution |
-| **recall** | generation *and* recognition per attribute, each with its own chance level |
+| **template reconstruction** | `template_<attr>_generation` and `_recognition`, each with its own `_chance` — *not* closed-book recall, which is unbuilt (PRD §8.2) |
 
 Both endpoints render a **single-token answer at a known position**, so grading is a teacher-forced argmax
 — identical to what a greedy decode would produce, with no continuation to truncate and no string to
@@ -349,6 +465,7 @@ requires it under 5% and a future multi-token endpoint could break the property.
 | `measure/checkpoint.py` | find a checkpoint, rebuild its corpus, verify fingerprints, load weights |
 | `measure/reasoning.py` | the dependent variable |
 | `measure/bits.py` | achieved bits against demanded |
+| `measure/evidence.py` | assembles a gate report from scored runs — the only route to `confirmatory=True` |
 | `measure/recall.py` | generation and recognition |
 | `measure/gates.py` | `PRD.md` §8.6's G1–G8 |
 | `measure/collect.py` | one tidy row per (cell, replicate, step, endpoint) |
@@ -394,5 +511,4 @@ premise-ablated probe, a reasoning-token dilution ladder — and a gate whose ev
 in-context endpoint lands, a `<mano>` decline is ambiguous between "reasoning crowded out" and "mod-23
 tables crowded out".
 
-Intra-document masking (`PRD.md` §7.3) and the 504-token sequence length that would stop chunking cutting
-~3% of reasoning items are both specified and unbuilt.
+Intra-document masking (`PRD.md` §7.3) and padding reasoning items to 32 tokens so chunking stops cutting ~3% of them are both specified and unbuilt.

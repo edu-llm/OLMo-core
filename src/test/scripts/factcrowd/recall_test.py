@@ -146,3 +146,67 @@ def test_the_control_has_no_facts_to_recall():
     loaded = SimpleNamespace(corpus=corpus, resolved=resolved)
     assert corpus.renderer is None
     assert recall.score_recall(loaded, lambda batch: None) == ()
+
+
+def test_the_column_names_survive_the_trip_into_a_row():
+    """
+    The names this object publishes are the CSV's column names, and nothing may rename them in transit.
+
+    Reproduced: three layers each handled the prefix. `RecallResult.summary` namespaced its keys,
+    `score_run` stripped a fixed `recall_` from them, and `collect` added `recall_` back. They agreed
+    until the keys were renamed `template_*` for accuracy -- after which
+    `"template_all_chance"[len("recall_"):]` produced `e_all_chance` and every column became
+    `recall_e_all_chance`.
+
+    It cost a 27-minute end-to-end run to find, because nothing faster looked at a column name. This does,
+    and it asserts the exact set rather than a pattern: a test that accepted "something containing chance"
+    would have passed on the mangled names too.
+    """
+    from factcrowd.measure.checkpoint import CheckpointRef
+    from factcrowd.measure.collect import ScoredCheckpoint
+
+    result = RecallResult(
+        attribute="all", n_probed=64, n_generated=32, n_recognised=40, chance=0.0125
+    )
+    assert set(result.summary()) == {
+        "template_all_generation",
+        "template_all_recognition",
+        "template_all_chance",
+        "template_all_n",
+    }
+
+    row = ScoredCheckpoint(
+        ref=CheckpointRef(step=7, path="/tmp/step7"),
+        cell={"cell_id": "13m_d1p2", "row": "13M"},
+        recall=dict(result.summary()),
+    ).rows()[0]
+    for key, value in result.summary().items():
+        assert row[key] == value, key
+    # And no mangled sibling rode along under a second prefix.
+    assert not [column for column in row if column.startswith("recall_")]
+
+
+def test_two_attributes_do_not_collide_in_one_row():
+    """
+    The attribute is part of the key, which is what lets a per-attribute breakdown share one row.
+
+    A summary that dropped it -- or a collector that flattened over it -- would silently keep whichever
+    attribute was written last, and the entropy axis probes several.
+    """
+    from factcrowd.measure.checkpoint import CheckpointRef
+    from factcrowd.measure.collect import ScoredCheckpoint
+
+    merged = {}
+    for name in ("attr0", "attr1", "all"):
+        merged.update(
+            RecallResult(
+                attribute=name, n_probed=8, n_generated=4, n_recognised=5, chance=0.5
+            ).summary()
+        )
+    assert len(merged) == 12  # four fields x three attributes, none overwritten
+
+    row = ScoredCheckpoint(
+        ref=CheckpointRef(step=1, path="p"), cell={"cell_id": "c", "row": "28M"}, recall=merged
+    ).rows()[0]
+    for name in ("attr0", "attr1", "all"):
+        assert f"template_{name}_chance" in row

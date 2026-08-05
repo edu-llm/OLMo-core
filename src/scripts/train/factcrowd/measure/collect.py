@@ -39,6 +39,8 @@ IDENTITY_COLUMNS: Tuple[str, ...] = (
     "reasoning_tokens",
     "related_reasoning_tokens",
     "checkpoint_path",
+    "confirmatory",
+    "admission",
 )
 """
 What identifies a row, before any measurement.
@@ -71,6 +73,32 @@ class ScoredCheckpoint:
     recall: Dict[str, float] = field(default_factory=dict)
     extra: Dict[str, Any] = field(default_factory=dict)
 
+    def stated(self, key: str, default: Any = None) -> Any:
+        """
+        One identity field, read from the resolved record first and the cell second.
+
+        RESOLVED FIRST, THEN THE CELL. The two sweeps state disjoint halves of the identity block: the
+        count axis states a demand and derives an entity count, the entropy axis states an entity count
+        and derives the demand. :meth:`factcrowd.cells.CellSpec.to_dict` drops ``None``, so reading the
+        cell alone leaves ``demand_bits_per_param`` empty on the entropy axis -- and that column *is*
+        :attr:`factcrowd.analysis.trend.SeedBlock.demands`, the regressor. The identified axis would have
+        reached the analysis with no x.
+
+        A method rather than a closure inside :meth:`rows` because
+        :mod:`factcrowd.measure.evidence` needs the same rule, and two copies of a precedence rule is
+        one copy that can be updated alone.
+
+        :param key: The field name.
+        :param default: Returned when neither record carries it.
+
+        :returns: The value.
+        """
+        for source in (self.resolved or {}, self.cell):
+            value = source.get(key)
+            if value is not None:
+                return value
+        return default
+
     def rows(self) -> List[Dict[str, Any]]:
         """
         Flatten to one row per endpoint.
@@ -84,23 +112,8 @@ class ScoredCheckpoint:
 
         :returns: The rows.
         """
-        # RESOLVED FIRST, THEN THE CELL. The two sweeps state disjoint halves of this block:
-        # the count axis states a demand and derives an entity count, the entropy axis states an entity
-        # count and derives the demand. `CellSpec.to_dict()` drops None, so reading the cell alone leaves
-        # `demand_bits_per_param` empty on the entropy axis -- and that column *is*
-        # `trend.SeedBlock.demands`, the regressor. The identified axis would have arrived at the
-        # analysis with no x. The resolved record carries both, and its demand is the achieved value from
-        # the integer entity count rather than the solver's target.
-        resolved = dict(self.resolved or {})
-        cell = dict(self.cell)
-
-        def stated(key: str, default: Any = None) -> Any:
-            for source in (resolved, cell):
-                value = source.get(key)
-                if value is not None:
-                    return value
-            return default
-
+        # See `stated`: resolved first, then the cell, because the two sweeps state disjoint halves.
+        stated = self.stated
         identity = {
             "cell_id": stated("cell_id"),
             "row": stated("row"),
@@ -117,7 +130,11 @@ class ScoredCheckpoint:
         measured: Dict[str, Any] = dict(self.extra)
         if self.achieved is not None:
             measured.update(self.achieved.summary())
-        measured.update({f"recall_{name}": value for name, value in self.recall.items()})
+        # Used as given. `RecallResult.summary` already namespaces its keys (`template_all_chance`), and
+        # prefixing again here -- against a `recall_` prefix `score_run` was separately stripping -- turned
+        # every column into `recall_e_all_chance`. Three layers each renaming, agreeing until one of them
+        # was renamed. One owner: the result object names its own fields.
+        measured.update(self.recall)
 
         if not self.endpoints:
             return [{**identity, **measured}]

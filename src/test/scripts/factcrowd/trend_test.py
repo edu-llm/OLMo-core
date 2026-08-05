@@ -17,6 +17,7 @@ published table values and against the closed forms at df 1, 2 and 3.
 """
 
 import math
+from dataclasses import replace
 from typing import List
 
 import numpy as np
@@ -517,11 +518,23 @@ def test_replicates_that_swept_different_ranges_are_refused():
     """
     short = T.SeedBlock(replicate=0, demands=(0.2, 1.0, 2.0), accuracies=(0.44, 0.43, 0.42))
     long = T.SeedBlock(replicate=1, demands=(0.2, 2.0, 4.3), accuracies=(0.44, 0.43, 0.42))
+    # Refused on the grid itself, and **stating a span no longer opens that door**. An audit found blocks
+    # over different treatment grids being pooled whenever a span was named; two grids are two
+    # experiments, and a paired design's whole claim is that its blocks differ only in seed.
+    # Without a span, the range mismatch is caught first: an effect "across the sweep" is not one
+    # quantity when the sweeps differ.
     with pytest.raises(OLMoConfigurationError, match="swept different ranges"):
         T.tost([short, long])
+    # And naming a span no longer opens the door -- the grid itself is refused behind it.
+    with pytest.raises(OLMoConfigurationError, match="one treatment grid"):
+        T.tost([short, long], span=SPAN)
 
-    # Stating the span is the documented way through, and it does not raise.
-    assert T.tost([short, long], span=SPAN).span == pytest.approx(SPAN)
+    # On a valid design, span still controls how a slope becomes an end-to-end effect.
+    matched = [
+        T.SeedBlock(replicate=r, demands=(0.2, 1.0, 2.0), accuracies=(0.44, 0.43 + 0.001 * r, 0.42))
+        for r in range(3)
+    ]
+    assert T.tost(matched, span=SPAN).span == pytest.approx(SPAN)
 
 
 def test_the_published_sentences_say_what_is_excluded_rather_than_no_effect():
@@ -832,3 +845,54 @@ def test_the_equivalence_interval_is_the_trend_interval_scaled_by_the_span():
     assert equivalence.interval[0] == pytest.approx(trend_low * SPAN)
     assert equivalence.interval[1] == pytest.approx(trend_high * SPAN)
     assert equivalence.p_value == max(equivalence.p_lower, equivalence.p_upper)
+
+
+def test_three_readings_of_one_seed_are_not_three_replicates():
+    """
+    The between-seed variance has to come from between seeds.
+
+    An adversarial pass handed `pooled_trend` three blocks all labelled `replicate=0`. It returned a
+    confident interval built from a variance no seed had produced -- exactly the failure mode the
+    per-seed slope design exists to avoid, arriving through the door marked "paired".
+    """
+    with pytest.raises(OLMoConfigurationError, match=r"replicate ids \[0\] appear more than once"):
+        T.check_blocks([line(0, -0.5), line(0, -0.4), line(1, -0.3)])
+    T.check_blocks(lines(-0.5, -0.4, -0.3))  # distinct ids are fine
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("endpoint", "compare"),
+        ("row", "28m"),
+        ("sweep", "count"),
+        ("step", 12_098),
+        ("eval_items", 10_000),
+    ],
+)
+def test_blocks_differing_in_anything_but_the_seed_are_refused(field, value):
+    """
+    "Differs only in initialisation and data order" is a claim about the design, and it is not visible
+    in the numbers.
+
+    Two blocks read at different checkpoint steps, or on differently-sized eval sets, or from different
+    model rows, will pool into a perfectly plausible slope. So the identity travels with the block and is
+    compared, rather than assumed because the caller grouped them.
+    """
+    good = line(0, -0.5)
+    odd = replace(line(1, -0.4), **{field: value})
+    with pytest.raises(OLMoConfigurationError, match=f"has {field}="):
+        T.check_blocks([good, odd])
+
+
+def test_a_trend_through_a_subset_cannot_be_reported_as_the_pre_registered_one():
+    """
+    Six entropy cells were pre-registered; three of them are a different, weaker claim.
+
+    Nothing in the arithmetic objects to a three-point fit, so the level count is stated by the caller
+    and checked here.
+    """
+    blocks = lines(-0.5, -0.4)
+    T.check_blocks(blocks, required_levels=len(ENTROPY_DEMANDS))
+    with pytest.raises(OLMoConfigurationError, match="not the 3 the pre-registered design states"):
+        T.check_blocks(blocks, required_levels=3)

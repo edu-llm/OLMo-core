@@ -507,7 +507,7 @@ def test_g8_refuses_a_ladder_that_never_reaches_the_target():
     verdict = gates.g8_calibrated_positive_control(
         {100: 0.478, 95: 0.4779, 90: 0.4778, 80: 0.4777, 60: 0.4776}
     )
-    assert not verdict.passed and "A treatment known to hurt does not move it" in verdict.detail
+    assert not verdict.passed and "does not move the endpoint at its strongest" in verdict.detail
 
 
 def test_g8_refuses_a_ladder_too_coarse_to_name_the_dose():
@@ -622,3 +622,77 @@ def test_require_all_treats_a_gate_that_never_ran_as_a_failure():
     assert "2 of 7 refused it" in message
     assert "G7: no evidence: the gate was never run" in message
     assert "G8: no evidence: the gate was never run" in message
+
+
+def test_a_gate_report_is_versioned_and_refuses_stale_evidence():
+    """
+    Admission is granted by a report, and a report cannot outlive the gate definitions it was written
+    against.
+
+    Before this existed, `run_gates` and `require_all` had no production caller at all: scoring wrote rows
+    whether or not any evidence had ever been gathered, so PRD 8.6's "code-enforced admission" was a
+    sentence in a document.
+    """
+    passing = gates.GateReport(
+        version=gates.GATE_REPORT_VERSION,
+        endpoint="mano",
+        results=tuple(
+            gates.GateResult(gate=name, passed=True, detail="pilot") for name in gates.GATES
+        ),
+        commit="abc1234",
+    )
+    assert passing.passed and passing.failures == ()
+
+    failing = gates.GateReport(
+        version=gates.GATE_REPORT_VERSION,
+        endpoint="mano",
+        results=(
+            gates.GateResult(gate="G1", passed=True, detail=""),
+            gates.GateResult(gate="G7", passed=False, detail="sigma too wide"),
+        ),
+    )
+    assert not failing.passed and failing.failures == ("G7",)
+
+    # An empty report does not admit anything -- "no gates run" must not read as "all gates passed".
+    assert not gates.GateReport(
+        version=gates.GATE_REPORT_VERSION, endpoint="mano", results=()
+    ).passed
+
+    # Round trip, and a stale version is refused rather than honoured.
+    assert gates.GateReport.from_dict(passing.as_dict()).passed
+    stale = dict(passing.as_dict())
+    stale["version"] = "factcrowd.gates.v0"
+    with pytest.raises(OLMoConfigurationError, match="does not match"):
+        gates.GateReport.from_dict(stale)
+
+
+def test_g8_requires_the_strongest_dose_to_reach_the_target():
+    """
+    The false pass an audit found, and the self-contradicting sentence it printed.
+
+    The gate checked the largest drop *anywhere* on the ladder, so a ladder costing 3pp at 80% and nothing
+    at 60% passed -- and reported "0.00pp at 95% rising to 0.00pp at 60%" while doing it. If removing more
+    reasoning data does not cost more, the ladder is measuring noise and can calibrate nothing.
+    """
+    verdict = gates.g8_calibrated_positive_control(
+        {100: 0.50, 95: 0.50, 90: 0.49, 80: 0.47, 60: 0.50}
+    )
+    assert not verdict.passed
+    assert "does not move the endpoint at its strongest" in verdict.detail
+
+    # An ordered ladder that reaches the target at its strongest dose passes.
+    assert gates.g8_calibrated_positive_control(
+        {100: 0.50, 95: 0.499, 90: 0.494, 80: 0.485, 60: 0.472}
+    ).passed
+
+
+def test_g8_refuses_a_ladder_that_runs_backwards():
+    """
+    A dip-and-recover ladder is noise with a trend drawn through it, and interpolating a dose from it
+    names a number that means nothing.
+    """
+    verdict = gates.g8_calibrated_positive_control(
+        {100: 0.50, 95: 0.49, 90: 0.44, 80: 0.47, 60: 0.46}
+    )
+    assert not verdict.passed
+    assert "not ordered" in verdict.detail

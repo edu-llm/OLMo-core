@@ -44,8 +44,11 @@ class AchievedBits:
         own ``sum(log2(pool))``. The reference the residual is subtracted from.
     :param non_embedding_params: Denominator for the per-parameter figure.
     :param is_upper_bound: True while intra-document masking is off.
-    :param per_entity_bits: Stored bits for each sampled entity, for the distribution PRD 8.1 asks to be
-        logged. A mean hides a corpus where a few entities are memorised and the rest are not.
+    :param per_entity_bits: **Signed, unclamped** ``prior - residual_i`` for each sampled entity, for the
+        distribution PRD 8.1 asks to be logged. A mean hides a corpus where a few entities are memorised
+        and the rest are not -- but these are a diagnostic, not a second estimate of the headline. Their
+        mean is upward biased against it, so they are deliberately left signed: a negative value is
+        visible as "worse than uniform about this entity" rather than silently floored.
     """
 
     n_entities_sampled: int
@@ -74,20 +77,22 @@ class AchievedBits:
     @property
     def stored_bits_per_entity(self) -> float:
         """
-        Mean of the **per-entity** stored figures: ``mean_i max(0, prior - residual_i)``.
+        The headline: ``max(0, prior - mean(residual))``, clamped **once, in aggregate**.
 
-        Clamped per entity and then averaged, not the other way round. Those differ by Jensen whenever
-        any entity's residual exceeds the prior, which is the norm early in training -- a real 15-step
-        checkpoint measured 88-90 bits of residual against a 47.59-bit prior. Clamping the *mean* made
-        the headline read "stored nothing" while the distribution this class also publishes said half the
-        entities held 36 bits each. Two estimators, one of them the axis PRD 8.1 plots reasoning against.
+        This is Allen-Zhu's estimator, which subtracts an aggregate expected loss. Clamping per entity and
+        then averaging is a different quantity and is **upward biased by Jensen's inequality** -- every
+        entity the model is worse than uniform about contributes 0 instead of its true negative, so the
+        mean of clamps exceeds the clamp of the mean whenever any residual exceeds the prior. That is the
+        norm early in training, where a real checkpoint measured 88-90 bits of residual against a
+        47.59-bit prior, and a case exists where the per-entity form reports 2 stored bits while the
+        aggregate is 0.
 
-        Per-entity is the right one: storage is a property of an entity, and an entity the model has
-        learned nothing about contributes zero rather than a negative offset against the ones it has.
+        An earlier revision used the per-entity form to make this agree with
+        :attr:`signed_bits_per_entity`. Agreement was the right instinct and the wrong direction: the fix
+        is that the distribution is now published **signed and unclamped**, so it cannot be mistaken for
+        a second estimate of the same number.
         """
-        if not self.per_entity_bits:
-            return max(0.0, self.prior_bits_per_entity - self.residual_bits_per_entity)
-        return float(np.mean(np.asarray(self.per_entity_bits, dtype=np.float64)))
+        return max(0.0, self.prior_bits_per_entity - self.residual_bits_per_entity)
 
     @property
     def stored_bits_total(self) -> float:
@@ -99,22 +104,48 @@ class AchievedBits:
         """Stored bits per non-embedding parameter -- the achieved R(F)."""
         return self.stored_bits_total / self.non_embedding_params
 
-    def check_against_capacity(self, r_max: float = rho.R_E_MAX) -> None:
+    def check_against_demand(self, demanded_bits: float) -> None:
         """
-        Assert the achieved figure sits under the capacity bound.
+        Assert the achieved figure sits under the only bound that is a theorem.
 
-        :param r_max: The ceiling, in bits per parameter.
+        A model cannot supply more information about a corpus than the corpus contains, so
+        ``achieved <= demanded`` is a hard fact about the dataset. Exceeding it means the estimator is
+        crediting the model for something it did not store -- most likely a biography attending to its
+        neighbour, because intra-document masking is off (PRD 7.3).
 
-        :raises OLMoConfigurationError: If it does not. That is not a surprising result, it is a broken
-            measurement: the most likely cause is a biography attending to its neighbour because
-            intra-document masking is off, so the "stored" bits were partly read from context.
+        :param demanded_bits: Total demanded bits for this cell, from
+            :func:`factcrowd.ladder.rho.demanded_bits`.
+
+        :raises OLMoConfigurationError: If achieved exceeds demanded.
+        """
+        if demanded_bits > 0 and self.stored_bits_total > demanded_bits * (1.0 + 1e-6):
+            raise OLMoConfigurationError(
+                f"achieved {self.stored_bits_total:,.0f} bits exceeds the {demanded_bits:,.0f} the "
+                f"corpus contains. A model cannot supply more information than its data holds, so this "
+                f"is a measurement fault: check span alignment (measure.spans) and that packed documents "
+                f"are masked from each other."
+            )
+
+    def capacity_warning(self, r_max: float = rho.R_E_MAX) -> Optional[str]:
+        """
+        A note when the achieved figure passes the published capacity estimate. **Not an error.**
+
+        An earlier revision raised here, which was wrong twice over. Physics 3.3's ~2 bits/parameter is an
+        empirical measurement at 1,000 exposures, not a theorem -- and three of the six entropy cells
+        *demand* 2.2 to 4.2 bits/param, so a model that stored what it was given would have been refused
+        by the instrument built to measure it. That censors the quantity M0 exists to discover.
+
+        :param r_max: The published estimate, in bits per parameter.
+
+        :returns: A warning string, or ``None``.
         """
         if self.achieved_per_param > r_max:
-            raise OLMoConfigurationError(
-                f"achieved {self.achieved_per_param:.3f} bits/param exceeds the {r_max} ceiling. This "
-                f"is a measurement fault rather than a finding -- check that value spans are aligned "
-                f"(measure.spans) and that packed documents are masked from each other."
+            return (
+                f"achieved {self.achieved_per_param:.3f} bits/param is above the published ~{r_max} "
+                f"estimate. Worth checking span alignment and document masking, but not impossible: "
+                f"this cell may simply demand more than that, and the estimate is empirical."
             )
+        return None
 
     def summary(self) -> Dict[str, object]:
         """A flat mapping for logging and collection."""
@@ -122,10 +153,11 @@ class AchievedBits:
         if self.per_entity_bits:
             values = np.asarray(self.per_entity_bits, dtype=np.float64)
             distribution = {
-                "stored_bits_p10": round(float(np.percentile(values, 10)), 4),
-                "stored_bits_median": round(float(np.median(values)), 4),
-                "stored_bits_p90": round(float(np.percentile(values, 90)), 4),
-                "stored_bits_sd": round(float(values.std(ddof=1)) if values.size > 1 else 0.0, 4),
+                "signed_bits_p10": round(float(np.percentile(values, 10)), 4),
+                "signed_bits_median": round(float(np.median(values)), 4),
+                "signed_bits_p90": round(float(np.percentile(values, 90)), 4),
+                "signed_bits_sd": round(float(values.std(ddof=1)) if values.size > 1 else 0.0, 4),
+                "signed_bits_fraction_positive": round(float((values > 0).mean()), 4),
             }
         return {
             "n_entities_sampled": self.n_entities_sampled,
@@ -162,7 +194,10 @@ def achieved_bits(
     residuals = list(value_bits_per_entity)
     if not residuals:
         raise OLMoConfigurationError("no per-entity value bits were supplied")
-    stored = [max(0.0, prior_bits_per_entity - residual) for residual in residuals]
+    # Signed and unclamped: see AchievedBits.per_entity_bits. Clamping here and averaging is the biased
+    # estimator, and having both a clamped distribution and a clamped mean is what let two disagreeing
+    # numbers into one summary.
+    signed = [prior_bits_per_entity - residual for residual in residuals]
     return AchievedBits(
         n_entities_sampled=len(residuals),
         n_entities_total=n_entities_total,
@@ -170,7 +205,7 @@ def achieved_bits(
         prior_bits_per_entity=prior_bits_per_entity,
         non_embedding_params=non_embedding_params,
         is_upper_bound=is_upper_bound,
-        per_entity_bits=tuple(stored),
+        per_entity_bits=tuple(signed),
     )
 
 
