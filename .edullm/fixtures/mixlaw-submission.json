@@ -9,8 +9,9 @@
   "dataset_release": "olmo-127b-v1",
   "experiment": "mixlaw-370m-validation-olmo-mix-1124",
   "maximum_attempts": 2,
+  "maximum_runtime_hours": "12",
   "repository": "OLMo-core",
   "team": "pre-training",
   "wandb_project": "mixlaw",
-  "workload_profile": "olmo-core-train-4gpu"
+  "workload_profile": "olmo-core-train"
 }
