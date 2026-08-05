@@ -56,6 +56,7 @@ from olmo_core.distributed.parallel import DataParallelType
 from olmo_core.distributed.utils import barrier, get_rank, get_world_size
 from olmo_core.io import clear_directory, list_directory, normalize_path
 from olmo_core.nn.attention import AttentionBackendName
+from olmo_core.nn.lm_head import LMLossImplementation
 from olmo_core.nn.transformer import TransformerConfig
 from olmo_core.nn.transformer.qwen import (
     QWEN2_0_5B_HF_ID,
@@ -100,11 +101,13 @@ log = logging.getLogger(__name__)
 P3_MODEL_FACTORY = "qwen2_0_5b"
 P3_DATASET_ID = "pretrain/formal-proof-premises-500m"
 P3_SEED = 42
+P3_LOSS_IMPLEMENTATION = LMLossImplementation.fused_linear
 P3_CONFIG_DIR = Path(__file__).resolve().parent / "configs"
 EXPECTED_SEPARATOR_IDS = [10952, 15513, 969]
 P3_LAUNCH_CONTRACT: Dict[str, Any] = {
     "schema_version": 1,
-    "final_compute_profile": "gpu-8xh100",
+    "supported_compute_profiles": ["gpu-8xa100", "gpu-8xh100"],
+    "recommended_compute_profile": "gpu-8xh100",
     "final_world_size": 8,
     "launcher": "python -m torch.distributed.run",
     "config_preflight_compute_profile": "gpu-1xa10g",
@@ -329,6 +332,7 @@ class ExperimentConfig(Config):
     arm: str = ""
     run_mode: str = "train"
     model_factory: str = ""
+    loss_implementation: str = ""
     base_model_id: str = ""
     base_model_revision: str = ""
     base_model_weight_sha256: str = ""
@@ -680,7 +684,8 @@ def validate_runtime_launch_contract() -> None:
         raise Refusal(
             Stage.THE_TRAINING_ENVIRONMENT_WOULD_NOT_START,
             f"LOCAL_WORLD_SIZE must equal {expected_world_size} for the single-node "
-            f"{P3_LAUNCH_CONTRACT['final_compute_profile']} contract; got {local_world_size}",
+            "8-GPU P3 contract; "
+            f"got {local_world_size}",
         )
     rank = required_process_integer("RANK")
     local_rank = required_process_integer("LOCAL_RANK")
@@ -729,6 +734,19 @@ def apply_arm_config(opts) -> dict:
     opts.sequence_length = shared["sequence_length"]
     opts.global_batch_size = shared["global_batch_size_sequences"] * opts.sequence_length
     opts.rank_microbatch_size = shared["rank_microbatch_size_sequences"] * opts.sequence_length
+    try:
+        opts.loss_implementation = LMLossImplementation(shared["loss_implementation"])
+    except (KeyError, ValueError) as error:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"{opts.config} must declare a recognized loss_implementation",
+        ) from error
+    if opts.loss_implementation != P3_LOSS_IMPLEMENTATION:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"P3 Qwen loss implementation is fixed to {P3_LOSS_IMPLEMENTATION.value!r}; "
+            f"{opts.config} declares {opts.loss_implementation.value!r}",
+        )
     opts.learning_rate = shared["learning_rate"]
     opts.warmup_steps = shared["warmup_steps"]
     opts.data_seed = shared["seed"]
@@ -892,6 +910,12 @@ def build_config(opts, overrides: List[str], *, validate_controls: bool = True):
         model_config = qwen2_0_5b_config(
             init_seed=shared["seed"], tie_word_embeddings=opts.tie_embeddings
         )
+        if model_config.lm_head is None:  # pragma: no cover - Qwen architecture invariant
+            raise Refusal(
+                Stage.THE_CONFIG_WOULD_NOT_BUILD,
+                "Qwen2.5-0.5B config has no LM head for the fused-linear loss",
+            )
+        model_config.lm_head.loss_implementation = opts.loss_implementation
         # TorchAttentionBackend rejects cu_doc_lens at first forward. The platform
         # image installs flash-attn 2 explicitly in .edullm/Dockerfile; naming it
         # here turns a missing/incompatible install into a config-build failure
@@ -1073,6 +1097,7 @@ def build_config(opts, overrides: List[str], *, validate_controls: bool = True):
             "dry-run" if opts.dry_run else "runtime-smoke" if opts.runtime_smoke else "train"
         ),
         model_factory=opts.model_factory,
+        loss_implementation=opts.loss_implementation.value,
         base_model_id=QWEN2_0_5B_HF_ID,
         base_model_revision=QWEN2_0_5B_HF_REVISION,
         base_model_weight_sha256=QWEN2_0_5B_HF_WEIGHTS_SHA256,
@@ -1149,6 +1174,7 @@ def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> 
                 "arm": config.arm,
                 "run_mode": config.run_mode,
                 "model_factory": config.model_factory,
+                "loss_implementation": config.loss_implementation,
                 "base_model_id": config.base_model_id,
                 "base_model_revision": config.base_model_revision,
                 "base_model_weight_sha256": config.base_model_weight_sha256,

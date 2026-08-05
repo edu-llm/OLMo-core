@@ -60,6 +60,7 @@ def test_arm_is_the_only_top_level_difference(arms):
         "sequence_length",
         "global_batch_size_sequences",
         "rank_microbatch_size_sequences",
+        "loss_implementation",
         "learning_rate",
         "warmup_steps",
         "lr_alpha_f",
@@ -82,6 +83,11 @@ def test_batching_divides_evenly(arms):
         "global batch is not a multiple of the microbatch; gradient accumulation would "
         "differ between arms if either is retuned"
     )
+
+
+def test_fused_linear_loss_is_a_shared_closed_control(arms):
+    assert arms["dense"]["shared"]["loss_implementation"] == "fused_linear"
+    assert arms["split"]["shared"]["loss_implementation"] == "fused_linear"
 
 
 def test_step_count_is_derivable(arms):

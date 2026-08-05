@@ -11,6 +11,7 @@ FLASH_ATTN_WHEEL = (
 FLASH_ATTN_SHA256 = "4e2f9e39313266b1544b68138b15b91ee6221eccf14f7902b7c6620351340810"
 TRANSFORMERS_VERSION = "5.14.1"
 TOKENIZERS_VERSION = "0.22.2"
+LIGER_VERSION = "0.7.0"
 
 
 def test_research_image_installs_matching_binary_flash_attention():
@@ -42,3 +43,12 @@ def test_research_image_installs_and_imports_qwen_runtime_dependencies():
     assert source.index('"torch==2.9.0"') < source.index(
         f'"transformers=={TRANSFORMERS_VERSION}"'
     )
+
+
+def test_research_image_pins_and_deep_imports_fused_linear_loss():
+    source = DOCKERFILE.read_text(encoding="utf-8")
+
+    assert f'"liger-kernel=={LIGER_VERSION}"' in source
+    assert "LigerFusedLinearCrossEntropyFunction" in source
+    assert "callable(FLCE.apply)" in source
+    assert source.index('"torch==2.9.0"') < source.index(f'"liger-kernel=={LIGER_VERSION}"')

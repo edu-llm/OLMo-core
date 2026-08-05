@@ -41,11 +41,13 @@ from provenance import (  # noqa: E402
 
 from olmo_core.data import NumpyDatasetDType  # noqa: E402
 from olmo_core.nn.attention import AttentionBackendName  # noqa: E402
+from olmo_core.nn.lm_head import LMLossImplementation  # noqa: E402
 from olmo_core.nn.transformer.qwen import (  # noqa: E402
     QWEN2_0_5B_HF_ID,
     QWEN2_0_5B_HF_REVISION,
     QWEN2_0_5B_HF_WEIGHTS_SHA256,
     QWEN2_0_5B_HF_WEIGHTS_SIZE,
+    qwen2_0_5b_config,
     qwen2_tokenizer_config,
 )
 from olmo_core.train import DurationUnit, Trainer  # noqa: E402
@@ -236,15 +238,33 @@ def test_dataset_and_loader_controls(built):
 
 def test_model_and_mask_controls(built):
     cfg, _ = built
+    default_qwen = qwen2_0_5b_config()
+    assert default_qwen.lm_head is not None
+    assert default_qwen.lm_head.loss_implementation == LMLossImplementation.default
     assert cfg.model.vocab_size == 151_936
     assert cfg.model.init_seed == 42
     assert cfg.model.tie_word_embeddings is True
     assert cfg.model.block.sequence_mixer.backend == AttentionBackendName.flash_2
+    assert cfg.model.lm_head is not None
+    assert cfg.model.lm_head.loss_implementation == LMLossImplementation.fused_linear
     assert cfg.train_module.arm == "split"
     assert cfg.train_module.separator_ids == [10952, 15513, 969]
     assert cfg.train_module.eos_token_id == 151_643
     assert cfg.train_module.pad_token_id == 151_643
     assert cfg.train_module.fixed_loss_div_factor == 262_144.0
+
+
+def test_p3_refuses_to_fall_back_to_materialized_logits(built, tmp_path):
+    _, base = built
+    args = copy.copy(base)
+    explicit = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
+    explicit["shared"]["loss_implementation"] = "default"
+    config_path = tmp_path / "split.yaml"
+    config_path.write_text(yaml.safe_dump(explicit), encoding="utf-8")
+    args.config = str(config_path)
+
+    with pytest.raises(platform.Refusal, match="fixed to 'fused_linear'"):
+        platform.apply_arm_config(args)
 
 
 def test_optimizer_schedule_and_checkpoint_controls(built):
@@ -270,6 +290,7 @@ def test_checkpoint_config_persists_model_tokenizer_and_launch_provenance(built)
     cfg, _ = built
     assert cfg.arm == "split"
     assert cfg.model_factory == "qwen2_0_5b"
+    assert cfg.loss_implementation == "fused_linear"
     assert cfg.base_model_id == QWEN2_0_5B_HF_ID
     assert cfg.base_model_revision == QWEN2_0_5B_HF_REVISION
     assert cfg.base_model_weight_sha256 == QWEN2_0_5B_HF_WEIGHTS_SHA256
@@ -284,7 +305,11 @@ def test_checkpoint_config_persists_model_tokenizer_and_launch_provenance(built)
     assert cfg.dataset_version == "v3"
     assert cfg.dataset_release == "formal-proof-premises-500m-v3"
     assert cfg.world_size == 1
-    assert cfg.launch_contract["final_compute_profile"] == "gpu-8xh100"
+    assert cfg.launch_contract["supported_compute_profiles"] == [
+        "gpu-8xa100",
+        "gpu-8xh100",
+    ]
+    assert cfg.launch_contract["recommended_compute_profile"] == "gpu-8xh100"
     assert cfg.launch_contract["final_world_size"] == 8
     assert cfg.launch_contract["config_preflight_compute_profile"] == "gpu-1xa10g"
     assert cfg.source_commit == "a" * 40
@@ -762,5 +787,6 @@ def test_runtime_summary_records_observed_world_and_provenance(built, monkeypatc
     assert summary["base_model_id"] == QWEN2_0_5B_HF_ID
     assert summary["base_model_revision"] == QWEN2_0_5B_HF_REVISION
     assert summary["base_model_weight_sha256"] == QWEN2_0_5B_HF_WEIGHTS_SHA256
+    assert summary["loss_implementation"] == "fused_linear"
     assert summary["tokenizer_artifact_id"] == TOKENIZER_ARTIFACT_ID
     assert summary["tokenizer_file_sha256"] == TOKENIZER_FILE_SHA256

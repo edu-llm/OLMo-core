@@ -192,6 +192,17 @@ COPY . .
 # tokenizer.json to derive the separator IDs during config construction; `transformers`
 # loads the released Qwen checkpoint after FSDP initialization. They are exact pins because
 # neither is part of the base dependency set installed by `.[wandb]`.
+#
+# LIGER IS THE P3 QWEN LOSS BACKEND, NOT AN ATTENTION REPLACEMENT. At sequence length
+# 16,384 and vocabulary 151,936 the default LM head materializes a 9.27-GiB fp32 logits
+# tensor per rank, which does not fit the 40-GiB A100 path. OLMo-core's fused-linear loss
+# consumes the same hidden states, labels, tied output weight, and fixed loss divisor while
+# chunking the projection/loss so the full logits tensor is never resident. `--no-deps`
+# keeps this kernel package from moving the pinned torch/CUDA stack; every dependency is
+# already installed above or by `.[wandb]`. The deep import assertion proves the exact
+# symbol OLMo-core binds is present, not merely the top-level package. Version 0.7.0 is
+# the newest compatible API: 0.8.x returns a fourth `predicted_tokens` output while this
+# OLMo-core revision deliberately unpacks the three-output 0.7.x contract.
 RUN set -eux; \
     python -m pip install --no-cache-dir "torch==2.9.0"; \
     python -c "import torch; assert torch.compiled_with_cxx11_abi(), 'flash-attn wheel requires torch CXX11 ABI'"; \
@@ -199,10 +210,12 @@ RUN set -eux; \
     python -m pip install --no-cache-dir "einops==0.8.2"; \
     python -m pip install --no-cache-dir --no-deps "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3%2Bcu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl#sha256=4e2f9e39313266b1544b68138b15b91ee6221eccf14f7902b7c6620351340810"; \
     python -m pip install --no-cache-dir ".[wandb]" boto3; \
+    python -m pip install --no-cache-dir --no-deps "liger-kernel==0.7.0"; \
     python -m pip install --no-cache-dir "edullm-data @ https://github.com/edu-llm/edullm-data/archive/38bf831a6c3f445e394784018441fd59288b876c.tar.gz"; \
     python -c "import torch; assert torch.__version__.startswith('2.9.0'), f'torch was moved off the pin: {torch.__version__}'"; \
     python -c "import torch; assert torch.version.cuda, 'the CUDA build of torch was replaced by a CPU wheel'"; \
     python -c "import flash_attn; assert callable(flash_attn.flash_attn_varlen_func); assert callable(flash_attn.flash_attn_varlen_qkvpacked_func)"; \
+    python -c "from importlib.metadata import version; from liger_kernel.ops.fused_linear_cross_entropy import LigerFusedLinearCrossEntropyFunction as FLCE; assert version('liger-kernel') == '0.7.0'; assert callable(FLCE.apply)"; \
     python -c "import tokenizers, transformers; assert tokenizers.__version__ == '0.22.2'; assert transformers.__version__ == '5.14.1'; from tokenizers import Tokenizer; from transformers import AutoModelForCausalLM"; \
     python -c "import boto3, wandb; from olmo_core.data import TokenizerConfig; from olmo_core.nn.transformer import TransformerConfig; print(TransformerConfig.olmo2_190M(vocab_size=TokenizerConfig.gpt2().padded_vocab_size()).__class__.__name__)"; \
     python -c "from edullm_data.read import dataset_paths, resolve_latest; print(dataset_paths.__module__)"

@@ -24,13 +24,12 @@ shared:
   # several fact blocks in it. 16 x 16,384 = 262,144 tokens/step, which over ~615M
   # real tokens at 13 epochs is ~30,500 steps.
   global_batch_size_sequences: 16
-  # One 16,384-token sequence per rank per microbatch. The `default` LM loss
-  # materializes the full logits tensor (nn/lm_head.py:252), which at vocab 151,936 is
-  # 10.0 GB fp32 plus 10.0 GB of gradient, so ~28 GB with weights and Adam state. That
-  # fits an 80 GB H100 with room and does NOT fit a 24 GB A10G — this config is for the
-  # H100 shape. Raising it to 2 costs ~48 GB and still fits; liger-kernel's
-  # loss_implementation="fused_linear" skips the logits tensor and lifts the ceiling.
+  # One 16,384-token sequence per rank per microbatch. At vocab 151,936 the default
+  # loss materializes a 9.27-GiB fp32 logits tensor and OOMs on 40-GiB A100s.
+  # Liger fused-linear CE computes the same summed CE/fixed-divisor objective in
+  # chunks without retaining that tensor. This control is identical on A100 and H100.
   rank_microbatch_size_sequences: 1
+  loss_implementation: fused_linear
 
   # Leave max_steps null to derive it from the PUBLISHED token rows and `epochs`,
   # which keeps total input tokens tied to the exact packed dataset rather than to a

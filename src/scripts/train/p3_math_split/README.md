@@ -279,26 +279,28 @@ artifacts. It uses no AWS credentials or GPU:
 ## A10G configuration-build dry run
 
 Use workload profile `olmo-core-check-gpu`, compute profile `gpu-1xa10g`, team
-`memory-split`, and the explicit repaired dataset-release dropdown value. This stage
+`memory-split`, and Data: None until the v3 registry entry is exposed. This stage
 proves GPU visibility and configuration/artifact resolution; it does not train:
 
 ```bash
-bash -lc 'python -c "import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0))" && python src/scripts/train/p3_math_split/train_platform.py "$EDULLM_RUN_ID" --arm dense --config src/scripts/train/p3_math_split/configs/dense.yaml --save-folder "$EDULLM_CHECKPOINT_DIR" --dry-run'
+bash -lc 'python -c "import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0))" && python src/scripts/train/p3_math_split/train_platform.py "$EDULLM_RUN_ID" --arm dense --config src/scripts/train/p3_math_split/configs/dense.yaml --dataset-id pretrain/formal-proof-premises-500m --dataset-version v3 --dataset-tokenizer tokenizer/qwen25-vendored/v1 --save-folder "$EDULLM_CHECKPOINT_DIR" --dry-run'
 ```
 
 One A10G and `WORLD_SIZE=1` are valid at this configuration stage. The script records
 that observed declaration but does not pretend it is final training hardware.
 
-## 8xH100 runtime smoke
+## 8xA100/H100 runtime smoke
 
 Use workload profile `olmo-core-train-4gpu` for its checkpoint/retry contract and
-compute profile `gpu-8xh100` for the actual machine. The workload profile does not
-select hardware. The closed `--runtime-smoke` mode reads its 100-step, 10-step-warmup,
-and 50-step-checkpoint values from the paired YAML rather than accepting dotlist
-overrides:
+compute profile `gpu-8xa100` or `gpu-8xh100` for the actual machine (H100 is the
+faster recommended profile). The workload profile does not select hardware. Both
+profiles use the same Liger fused-linear cross-entropy control; FlashAttention2 is
+unchanged. The closed `--runtime-smoke` mode reads its 100-step,
+10-step-warmup, and 50-step-checkpoint values from the paired YAML rather than
+accepting dotlist overrides:
 
 ```bash
-bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone src/scripts/train/p3_math_split/train_platform.py "$EDULLM_RUN_ID" --arm dense --config src/scripts/train/p3_math_split/configs/dense.yaml --save-folder "$EDULLM_CHECKPOINT_DIR" --runtime-smoke'
+bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone src/scripts/train/p3_math_split/train_platform.py "$EDULLM_RUN_ID" --arm dense --config src/scripts/train/p3_math_split/configs/dense.yaml --dataset-id pretrain/formal-proof-premises-500m --dataset-version v3 --dataset-tokenizer tokenizer/qwen25-vendored/v1 --save-folder "$EDULLM_CHECKPOINT_DIR" --runtime-smoke'
 ```
 
 This remains a terminal live gate. Local tests do not establish FlashAttention2,
@@ -310,19 +312,21 @@ training setup unless torchrun declares a compatible single-node `WORLD_SIZE=8` 
 ## Final runs
 
 Submit two independent forms with the same built commit, workload profile
-`olmo-core-train-4gpu`, compute profile `gpu-8xh100`, team, experiment, W&B project,
-and repaired dataset release. Only arm/config differ.
+`olmo-core-train-4gpu`, compute profile `gpu-8xa100` or `gpu-8xh100`, team,
+experiment, W&B project, and Data: None until the v3 registry entry exists. H100
+is recommended for throughput; the model/loss controls are identical. Only
+arm/config differ.
 
 Dense:
 
 ```bash
-bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone src/scripts/train/p3_math_split/train_platform.py "$EDULLM_RUN_ID" --arm dense --config src/scripts/train/p3_math_split/configs/dense.yaml --save-folder "$EDULLM_CHECKPOINT_DIR"'
+bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone src/scripts/train/p3_math_split/train_platform.py "$EDULLM_RUN_ID" --arm dense --config src/scripts/train/p3_math_split/configs/dense.yaml --dataset-id pretrain/formal-proof-premises-500m --dataset-version v3 --dataset-tokenizer tokenizer/qwen25-vendored/v1 --save-folder "$EDULLM_CHECKPOINT_DIR"'
 ```
 
 Split:
 
 ```bash
-bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone src/scripts/train/p3_math_split/train_platform.py "$EDULLM_RUN_ID" --arm split --config src/scripts/train/p3_math_split/configs/split.yaml --save-folder "$EDULLM_CHECKPOINT_DIR"'
+bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone src/scripts/train/p3_math_split/train_platform.py "$EDULLM_RUN_ID" --arm split --config src/scripts/train/p3_math_split/configs/split.yaml --dataset-id pretrain/formal-proof-premises-500m --dataset-version v3 --dataset-tokenizer tokenizer/qwen25-vendored/v1 --save-folder "$EDULLM_CHECKPOINT_DIR"'
 ```
 
 The platform's hashed run manifest already pins the resolved image digest, workload
