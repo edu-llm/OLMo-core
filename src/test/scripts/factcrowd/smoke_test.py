@@ -536,3 +536,75 @@ def test_a_trained_checkpoint_scores_end_to_end_into_a_table():
         if row["endpoint"] == "mano"
     )
     assert mano[-1][1] < mano[0][1], mano
+
+
+@pytest.mark.slow
+def test_the_entropy_axis_scores_end_to_end_too():
+    """
+    The count axis is not the whole path, and scoring it first hid a crash.
+
+    Entropy-axis values are four words drawn from a union pool, so this exercises multi-token value spans
+    and a wider padded vocabulary. The first attempt at it raised `IndexError` inside the scorer, because
+    the output layer is wider than the vocabulary and an untrained model argmaxes into the gap -- 65 ids
+    with no word behind them here against 31 on the count axis. The count axis had simply been lucky.
+
+    It also pins the axis-aware endpoint selection from the other side: this cell carries `<mano>` alone,
+    because its attributes have no orderable field for `<compare>` to ask about.
+    """
+    pytest.importorskip("torch")
+    with tempfile.TemporaryDirectory() as raw:
+        work = Path(raw)
+        train = run_entry_point(
+            "entropy-fixture",
+            "--cell",
+            str(SMOKE_CELL.parent / "smoke_13m_entropy.yaml"),
+            "--save-folder",
+            str(work / "ck"),
+            "--work-dir",
+            str(work / "train"),
+            "--rank-microbatch-size",
+            "2048",
+            cwd=REPO_ROOT,
+        )
+        assert train.returncode == 0, train.stdout[-2000:] + train.stderr[-2000:]
+
+        scorer = REPO_ROOT / "src" / "scripts" / "train" / "factcrowd" / "score_run.py"
+        scored = subprocess.run(
+            [
+                sys.executable,
+                str(scorer),
+                "--prefix",
+                str(work / "ck"),
+                "--out",
+                str(work / "scores.csv"),
+                "--work-dir",
+                str(work / "score"),
+                "--eval-items",
+                "16",
+                "--bit-entities",
+                "16",
+                "--batch-size",
+                "8",
+            ],
+            cwd=str(REPO_ROOT),
+            env=dict(os.environ, PYTHONPATH=str(REPO_ROOT / "src")),
+            capture_output=True,
+            text=True,
+            timeout=1800,
+        )
+        assert scored.returncode == 0, scored.stdout[-2500:] + scored.stderr[-2500:]
+
+        import csv
+
+        with (work / "scores.csv").open() as handle:
+            rows = list(csv.DictReader(handle))
+
+    assert rows
+    # Mano alone: this axis has no orderable attribute, so the related slice is absent by construction.
+    assert {row["endpoint"] for row in rows} == {"mano"}
+    for row in rows:
+        assert 0.0 <= float(row["unparseable_rate"]) <= 1.0
+        # Six attributes of eight bits each: the prior is the schema's own, not a guess.
+        assert float(row["prior_bits_per_entity"]) == pytest.approx(48.0)
+        # Four-word values mean four pools per attribute, and recall reports each attribute separately.
+        assert float(row["recall_attr0_chance"]) > 0.0

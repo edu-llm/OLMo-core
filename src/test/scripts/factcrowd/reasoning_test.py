@@ -294,3 +294,43 @@ def test_the_measured_floor_is_used_when_none_is_supplied():
         floor_sample=3_000,
     )
     assert 1 / T.MANO_MODULUS - 0.01 < float(result.floor) < 0.06
+
+
+def test_an_argmax_into_the_vocabulary_padding_is_unparseable_not_a_crash():
+    """
+    The output layer is wider than the vocabulary, and an untrained model will use the gap.
+
+    `padded_size()` rounds up to a multiple of 128 for the matmul, leaving ids with no word behind them --
+    65 on the entropy axis, 31 on the count axis. Indexing the word list without checking raised
+    `IndexError` and took the whole scoring job down, which is a worse failure than the one it hid. It is
+    also the only way `n_unparseable` becomes non-zero on these endpoints, which is why the field exists.
+
+    Found by scoring the entropy axis after the count axis had passed: the count axis had simply been
+    lucky about where its argmax landed.
+    """
+    task = mano()
+    n = 8
+    padded = task.vocabulary.padded_size()
+    assert padded > task.vocabulary.size, "no padding, so this test would prove nothing"
+
+    def into_the_padding(batch):
+        ce = np.ones(batch.shape)
+        logits = np.zeros((*batch.shape, padded))
+        for row in range(batch.shape[0]):
+            item = task.item(_index_of(task, batch[row], n))
+            logits[row, item.answer_start - 1, padded - 1] = 10.0  # an id with no word
+        return ce, logits
+
+    result = reasoning.score_reasoning(
+        task,
+        into_the_padding,
+        n_items=n,
+        batch_size=4,
+        floor=0.0464,
+        degenerate_answer=("<n2>",),
+    )
+    assert result.n_unparseable == n
+    assert result.n_correct == 0
+    assert result.unparseable_rate == 1.0
+    # The CE is still recorded, because the answer span's loss is well defined either way.
+    assert result.answer_ce_bits > 0

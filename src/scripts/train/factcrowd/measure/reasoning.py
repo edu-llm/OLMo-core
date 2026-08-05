@@ -15,7 +15,7 @@ The scorer takes a ``forward`` callable rather than a model, so every line below
 that returns chosen logits -- including the cases a real model would almost never produce.
 """
 
-from typing import Callable, Optional, Sequence, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -84,16 +84,46 @@ def score_reasoning(
         ce_loss, logits = forward(batch)
         _check_shapes(ce_loss, logits, batch)
         for row, item in enumerate(items):
-            predicted = tuple(
-                task.vocabulary.words[predicted_token(logits[row], position)]
-                for position in range(item.answer_start, item.answer_end)
-            )
+            predicted, parseable = _decode_answer(task, logits[row], item)
             accumulator.add(
                 predicted=predicted,
                 expected=item.answer,
                 ce_bits=span_bits(ce_loss[row], item.answer_start, item.answer_end),
+                parseable=parseable,
             )
     return accumulator.result()
+
+
+def _decode_answer(task: ReasoningTask, logits, item) -> Tuple[Tuple[str, ...], bool]:
+    """
+    Read the model's answer, or report that there was not one.
+
+    **The output layer is wider than the vocabulary.** ``padded_size()`` rounds up to a multiple of 128
+    for the matmul, so a model can argmax into the padding -- 65 ids on the entropy axis, 31 on the count
+    axis -- where no word exists. An untrained checkpoint does this readily.
+
+    That is exactly what ``n_unparseable`` is for, and it is the only way the count becomes non-zero on
+    these endpoints: the model emitted something that is not a word, which is neither correct nor a wrong
+    answer. Indexing the word list without checking raised ``IndexError`` and took the whole scoring job
+    down, which is a worse failure than the one it was hiding.
+
+    :param task: The task, for its vocabulary.
+    :param logits: One sequence's logits.
+    :param item: The item being graded.
+
+    :returns: The answer as words, and whether every position decoded to a real word. On failure the
+        words decoded so far are still returned, for the log.
+    """
+    words: List[str] = []
+    parseable = True
+    real_words = task.vocabulary.size
+    for position in range(item.answer_start, item.answer_end):
+        token = predicted_token(logits, position)
+        if not 0 <= token < real_words:
+            parseable = False
+            continue
+        words.append(task.vocabulary.words[token])
+    return tuple(words), parseable
 
 
 def _answer_of(task: ReasoningTask, label: str) -> Optional[Tuple[str, ...]]:

@@ -230,3 +230,27 @@ def test_writing_an_empty_table_is_refused():
     """
     with pytest.raises(OLMoConfigurationError, match="no rows to write"):
         CO.write_csv([], Path("/tmp/never-written.csv"))
+
+
+def test_a_value_containing_a_comma_survives_the_round_trip():
+    """
+    The csv module quotes; a hand-rolled join would not.
+
+    Cell notes and checkpoint paths are free text, and one comma in either would shift every column to its
+    right for that row only -- which is the kind of corruption that shows up as an outlier rather than as
+    an error.
+    """
+    import csv
+    import tempfile
+
+    cell = smoke_cell()
+    item = scored(1, cell, endpoints=(endpoint("mano", 0.4),))
+    item.ref = CK.CheckpointRef(step=1, path='/tmp/a,b/"quoted"/step1')
+    rows = CO.collect([item])
+    with tempfile.TemporaryDirectory() as raw:
+        path = CO.write_csv(rows, Path(raw) / "scores.csv")
+        with path.open() as handle:
+            back = list(csv.DictReader(handle))
+    assert len(back) == 1
+    assert back[0]["checkpoint_path"] == '/tmp/a,b/"quoted"/step1'
+    assert back[0]["endpoint"] == "mano"

@@ -1,0 +1,18 @@
+# The entropy axis at smoke scale, for the scoring path rather than for training.
+# Its values are four words from a union pool, so it exercises multi-token value spans and the
+# wider padded vocabulary -- the count axis exercises neither, and scoring it first hid a crash.
+cell_id: smoke_13m_entropy
+row: 13M
+sweep: entropy
+bits_per_attribute: 8
+n_entities: 300
+exposures: 4
+sequence_length: 512
+global_batch_size: 8192
+learning_rate: 0.003
+weight_decay: 0.1
+warmup_steps: 2
+decay_fraction: 0.2
+reasoning_tokens: 20480
+seed: 1234
+notes: Entropy-axis fixture. Proves the scoring path, proves nothing about capacity.
