@@ -242,6 +242,16 @@ class MoEBase(nn.Module):
         if self.shared_mlp is not None:
             shared_out = self.shared_mlp(x)
 
+        # Tell the router the capacity it is being measured against, so it can report the
+        # fraction of assignments this step discarded. Only the capacity-based path defines
+        # one; the dropless path leaves it None and the metric is omitted rather than reported
+        # as a zero that cannot be distinguished from a measured zero. See the router's
+        # `dropped token fraction`.
+        expert_capacity = getattr(self.experts, "expert_capacity", None)
+        if callable(expert_capacity):
+            local_batch_size = expert_weights.numel() // self.top_k
+            self.router.expert_capacity = expert_capacity(local_batch_size)
+
         out = self.experts(x, expert_weights, expert_indices, batch_size_per_expert)
 
         if shared_out is not None:

@@ -200,6 +200,10 @@ class MoERouter(nn.Module):
         self.group: Optional[dist.ProcessGroup] = None
         self.cp_mesh: Optional[dist.DeviceMesh] = None
         self.tp_mesh: Optional[dist.DeviceMesh] = None
+        # Set by a capacity-based ParallelMLP so the router can report the drop rate it causes.
+        # Left None by the dropless path, where no token is ever dropped and the metric would be
+        # a constant zero pretending to be a measurement.
+        self.expert_capacity: Optional[int] = None
 
         if self.bias_gamma is not None:
             assert self.bias_gamma > 0
@@ -432,12 +436,36 @@ class MoERouter(nn.Module):
         # rather than a count so that it, too, is comparable across E. Guarded against an
         # all-zero histogram, which happens before any tokens have been routed: the unguarded
         # form returns 1.0 there, and 1.0 is indistinguishable from total expert collapse.
+        total = counts.sum()
         out["dead expert fraction"] = (
             (counts == 0).sum(dtype=torch.float) / num_experts
-            if counts.sum() > 0
+            if total > 0
             else torch.zeros((), dtype=torch.float, device=counts.device),
             ReduceType.max,
         )
+
+        # DROPPED TOKENS, WHICH NOTHING COMPUTED BEFORE.
+        # A capacity-based MoE pads every expert to `expert_capacity` slots and silently
+        # discards assignments beyond it -- `binned_gather` keeps the first `bin_size` of each
+        # bin and the rest never reach an expert. The discard leaves no trace: the loss is
+        # slightly worse and nothing says why. That matters more than usual here, because a
+        # drop rate is not a constant of the model: it depends on how uneven the router is,
+        # so two configurations with different expert counts can drop at different rates and
+        # the difference is invisible while looking exactly like a quality difference.
+        #
+        # `expert_capacity` is set by the capacity-based ParallelMLP each step. The dropless
+        # path leaves it None and the metric is omitted rather than reported as zero, because a
+        # constant zero and a measured zero should not look the same in a dashboard.
+        #
+        # Note the sort in `indices_and_bins` is by expert id only, so the assignments that
+        # survive are the earliest by position, not the highest-weighted -- overflow drops the
+        # end of the sequence. That is a separate issue from measuring it.
+        if self.expert_capacity is not None:
+            overflow = (counts - self.expert_capacity).clamp_min(0).sum()
+            out["dropped token fraction"] = (
+                overflow / total.clamp_min(1.0),
+                ReduceType.max,
+            )
 
         # Load balancing loss.
         if self.lb_loss_weight is not None:
