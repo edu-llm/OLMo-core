@@ -307,13 +307,92 @@ Zero entities is *stated*, never solved for: `rho.solve` refuses a zero target a
 it, since its linear path divides by bits-per-entity and its name-term path is non-monotone there. A
 cell with demand 0 and no reasoning tokens is refused outright, being a run with no data at all.
 
+## Scoring a finished run
+
+Training writes checkpoints; `score_run.py` reads them and produces one CSV you can analyse.
+
+```bash
+PYTHONPATH=src python3 src/scripts/train/factcrowd/score_run.py \
+    --prefix s3://.../runs/$RUN_ID/checkpoints \
+    --out    s3://.../runs/$RUN_ID/scores.csv
+```
+
+`--prefix` takes either one cell's checkpoint directory or a fan-out's parent — it finds the `cell-N/`
+segments itself. Add `--steps 0,1220,3814` to score a subset.
+
+**It is a separate single-process job, not a callback.** Recall needs free-running generation, which
+`TransformerGenerationModule` cannot provide from inside a trainer without re-parallelising the model
+(`PRD.md` §8.2). And `load_model_and_optim_state` reshards a checkpoint saved on four ranks into one
+unsharded model with no process group, so there is nothing to distribute. Scoring the whole first run is
+minutes of forward passes on one small GPU, dominated by pulling shards from S3.
+
+### What each checkpoint yields
+
+| | |
+|---|---|
+| **reasoning** | per endpoint: three counts, accuracy, answer-token CE in bits, and the **measured** floor |
+| **achieved bits** | Allen-Zhu's estimator over the value spans the renderer returns, with the per-entity distribution |
+| **recall** | generation *and* recognition per attribute, each with its own chance level |
+
+Both endpoints render a **single-token answer at a known position**, so grading is a teacher-forced argmax
+— identical to what a greedy decode would produce, with no continuation to truncate and no string to
+parse. That is what removes the failure mode `PRD.md` §1 catalogues four times: an eval whose score is
+bounded by its parser rather than by the model. `n_unparseable` is reported anyway, because §8.6's G7
+requires it under 5% and a future multi-token endpoint could break the property.
+
+### The layering
+
+| | |
+|---|---|
+| `measure/spans.py` | which loss position pays for which token — one rule, one place |
+| `measure/endpoints.py` | `EndpointResult`: the shape every endpoint reports in |
+| `measure/checkpoint.py` | find a checkpoint, rebuild its corpus, verify fingerprints, load weights |
+| `measure/reasoning.py` | the dependent variable |
+| `measure/bits.py` | achieved bits against demanded |
+| `measure/recall.py` | generation and recognition |
+| `measure/gates.py` | `PRD.md` §8.6's G1–G8 |
+| `measure/collect.py` | one tidy row per (cell, replicate, step, endpoint) |
+| `analysis/trend.py` | per-seed slopes, TOST equivalence, non-inferiority, MDE |
+
+`spans.py` exists because an off-by-one there is invisible: `ce_loss[t]` scores `input_ids[t+1]`, so the
+cost of token *p* is `ce_loss[p-1]`. Get it backwards and a bit count charges a value token's cost to the
+literal before it, and an endpoint grades the token before the answer. Both produce plausible numbers. It
+is checked against a manually computed cross-entropy from a real model.
+
+Every scorer takes a `forward` callable rather than a model, so the logic is testable on a stub that
+returns chosen logits — including a model that answers one position early, which is the only way to catch
+the off-by-one from the scorer's side.
+
+### Two honesty properties worth knowing before you read a number
+
+**Achieved bits are an upper bound while intra-document masking is off.** A packed biography can attend to
+its neighbour, so some of what looks stored was read from context. Every row carries
+`bits_is_upper_bound`, and `check_against_capacity()` refuses a figure above Physics 3.3's ~2 bits/param
+ceiling — such a figure is a broken measurement, not a striking result.
+
+**The rebuild is verified, not assumed.** The corpus is generated rather than stored, so scoring replays
+the cell recorded beside the weights and checks the schema and vocabulary fingerprints against what
+training wrote. This has already caught a real case: a checkpoint from before the entropy axis moved to a
+union vocabulary rebuilds to a different schema today, and scoring it would have produced entirely
+reasonable-looking numbers about a corpus the model never saw.
+
+### Analysis
+
+`analysis/trend.py` takes the **per-seed slope** as the inferential unit, not the individual cell.
+`PRD.md` §8.5 asked for one regression over all cells; that treats correlated observations as independent,
+and on the planned 3×6 design the naive cell-level standard error comes out **2.83× smaller** — its 90%
+interval declares equivalence where the blocked interval cannot, on the same data. `pooled_trend` is
+therefore per ladder row, and both `tost` (genuine ±2pp equivalence) and `non_inferiority` (the one-sided
+rule, correctly named) are provided so a null can say which one it is.
+
 ## Still to build
 
-The measurement half. `measure/bits.py` (the Allen-Zhu estimator over the value spans the renderer
-already returns), `measure/reasoning.py` and its gates, and `measure/recall.py` as a post-hoc job.
-`PRD.md` §8 and §12 have the order.
+The gates' *evidence*, and the endpoints that need building to satisfy them. `measure/gates.py`
+implements G1–G8, but several need runs that do not exist yet — a label-permuted control, a
+premise-ablated probe, a reasoning-token dilution ladder — and a gate whose evidence is missing returns
+**false**, never a silent pass. `PRD.md` §8.3 also still wants Brevo1 and Reasoning Core: until an
+in-context endpoint lands, a `<mano>` decline is ambiguous between "reasoning crowded out" and "mod-23
+tables crowded out".
 
-None of it blocks the training jobs. All three read checkpoints after the fact, and every checkpoint
-records the cell that produced it, so the scorer can be written against runs that have already
-finished. Brevo1 and Reasoning Core are the other gap: until Brevo1 lands, a `<mano>` decline is
-ambiguous between "reasoning crowded out" and "mod-23 tables crowded out" (`PRD.md` §8.3).
+Intra-document masking (`PRD.md` §7.3) and the 504-token sequence length that would stop chunking cutting
+~3% of reasoning items are both specified and unbuilt.

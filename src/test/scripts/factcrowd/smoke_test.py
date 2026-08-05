@@ -446,3 +446,93 @@ def test_bookkeeping_is_synchronous_and_repeated_saves_survive_multiple_ranks():
         assert "Timed out waiting" not in output
         saved = sorted((work / "ck").glob("step*"))
         assert len(saved) >= 3, [p.name for p in saved]
+
+
+@pytest.mark.slow
+def test_a_trained_checkpoint_scores_end_to_end_into_a_table():
+    """
+    Train a cell, then score its checkpoints with the real entry point, and read the table.
+
+    The one test that exercises the whole path a finished run takes: sharded checkpoint on disk ->
+    rebuilt corpus -> verified fingerprints -> loaded weights -> reasoning endpoints, achieved bits and
+    recall -> one CSV row per (checkpoint, endpoint).
+
+    Every stage of that has its own unit tests. This exists because the stages were written against each
+    other's docstrings, and the failure that matters is the one at a seam -- which is the same reason
+    `train_cell.py` has an end-to-end smoke at all.
+    """
+    pytest.importorskip("torch")
+    with tempfile.TemporaryDirectory() as raw:
+        work = Path(raw)
+        train = run_entry_point(
+            "score-fixture",
+            "--cell",
+            str(MIXTURE_CELL),
+            "--save-folder",
+            str(work / "ck"),
+            "--work-dir",
+            str(work / "train"),
+            "--rank-microbatch-size",
+            "2048",
+            cwd=REPO_ROOT,
+        )
+        assert train.returncode == 0, train.stdout[-2500:] + train.stderr[-2500:]
+
+        scorer = REPO_ROOT / "src" / "scripts" / "train" / "factcrowd" / "score_run.py"
+        scored = subprocess.run(
+            [
+                sys.executable,
+                str(scorer),
+                "--prefix",
+                str(work / "ck"),
+                "--out",
+                str(work / "scores.csv"),
+                "--work-dir",
+                str(work / "score"),
+                "--eval-items",
+                "32",
+                "--bit-entities",
+                "32",
+                "--batch-size",
+                "16",
+            ],
+            cwd=str(REPO_ROOT),
+            env=dict(os.environ, PYTHONPATH=str(REPO_ROOT / "src")),
+            capture_output=True,
+            text=True,
+            timeout=1800,
+        )
+        assert scored.returncode == 0, scored.stdout[-2500:] + scored.stderr[-2500:]
+
+        import csv
+
+        with (work / "scores.csv").open() as handle:
+            rows = list(csv.DictReader(handle))
+
+    # Two endpoints at every checkpoint, and the identity travels with the numbers.
+    assert rows, scored.stdout[-2000:]
+    assert {row["endpoint"] for row in rows} == {"mano", "compare"}
+    assert all(row["cell_id"] == "smoke_13m_reason" for row in rows)
+    steps = sorted({int(row["step"]) for row in rows})
+    assert len(steps) >= 3, steps
+    assert len(rows) == 2 * len(steps)
+
+    for row in rows:
+        # Every measurement present and in range, so a downstream read needs no defensive parsing.
+        assert 0.0 <= float(row["accuracy"]) <= 1.0
+        assert 0.0 <= float(row["floor"]) <= 1.0
+        assert float(row["answer_ce_bits"]) > 0.0
+        assert float(row["achieved_bits_per_param"]) >= 0.0
+        assert row["bits_is_upper_bound"] == "True"
+        # Recall carries its own chance level, so "above chance" is a subtraction.
+        assert 0.0 < float(row["recall_all_chance"]) < 1.0
+        assert 0.0 <= float(row["recall_all_generation"]) <= 1.0
+
+    # The answer-token CE moves even while accuracy is pinned at zero -- which is the reason a continuous
+    # endpoint is reported alongside the count. Observed on a real 20-step run: 11.83 -> 5.67 bits.
+    mano = sorted(
+        (int(row["step"]), float(row["answer_ce_bits"]))
+        for row in rows
+        if row["endpoint"] == "mano"
+    )
+    assert mano[-1][1] < mano[0][1], mano

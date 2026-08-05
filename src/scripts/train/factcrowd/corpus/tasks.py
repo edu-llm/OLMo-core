@@ -186,6 +186,24 @@ class ReasoningTask(ABC):
     #: copy policies, which needs the words rather than the ids.
     _vocabulary: "Vocabulary"
 
+    #: Set by every subclass. Part of the item key, so a task cannot produce another split's items.
+    _split: str
+
+    @property
+    def split(self) -> str:
+        """Which generation split this task produces, ``"train"`` or ``"eval"``."""
+        return self._split
+
+    @property
+    def vocabulary(self) -> "Vocabulary":
+        """
+        The vocabulary this task's ids index into.
+
+        Public so a scorer can decode a prediction without being handed a second vocabulary that might
+        not be the one the task was built against.
+        """
+        return self._vocabulary
+
     @property
     @abstractmethod
     def tokens_per_item(self) -> int:

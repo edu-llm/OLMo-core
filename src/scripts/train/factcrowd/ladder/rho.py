@@ -58,6 +58,7 @@ __all__ = [
     "BIOS_BITS_PER_ENTITY",
     "R_E_AT_200_EXPOSURES",
     "R_E_BAND",
+    "R_E_MAX",
     "EXPOSURES",
     "TOKENS_PER_BIO",
     "Demand",
@@ -112,6 +113,17 @@ Widened at the bottom from an earlier 1.0 to account for the SwiGLU penalty note
 grid's :math:`\\rho` labels through both ends before reporting: it is the difference between "the
 knee landed at :math:`\\rho=1`" and "the knee landed within 30% of :math:`\\rho=1`", and only the
 second is defensible from an interpolated constant.
+"""
+
+R_E_MAX = 2.0
+"""
+The capacity ceiling, in bits per non-embedding parameter.
+
+Physics 3.3's headline maximum: ~2 bits/parameter at 1,000 exposures per fact. Our cells run at 200, so
+an *achieved* figure anywhere near this is a warning rather than a result -- which is exactly why
+:meth:`factcrowd.measure.bits.AchievedBits.check_against_capacity` asserts against it. A measurement
+above the ceiling means the estimator is crediting the model for something it read from context, not for
+something it stored.
 """
 
 EXPOSURES = 200
