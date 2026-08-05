@@ -98,6 +98,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Canonical arm id (R1, R1-P, DP2-strict, Reflection). Sets mixer, R and regime.",
     )
     parser.add_argument("--bundle-id", type=int, required=True, help="Seed bundle.")
+    # Forwarded as train_probe's '--param-ledger-only'. The names differ because this flag is
+    # the platform-facing verb and that one is the harness's; keeping '--dry-run' here means a
+    # submission can be rehearsed with the same word the rest of the platform uses.
     parser.add_argument("--dry-run", action="store_true", help="Resolve and print; train nothing.")
     return parser
 
@@ -159,7 +162,11 @@ def main() -> None:
         *passthrough,
     ]
     if opts.dry_run:
-        argv.append("--dry-run")
+        # NOT '--dry-run'. train_probe spells this '--param-ledger-only' (train_probe.py:673),
+        # and forwarding the platform's spelling made argparse exit 2 with 'unrecognized
+        # arguments' -- after the image pull, on a paid instance, from a flag whose whole
+        # purpose is to cost nothing.
+        argv.append("--param-ledger-only")
 
     log.info("run_name=%s", opts.run_name)
     log.info("delegating to train_probe with argv: %s", " ".join(argv))

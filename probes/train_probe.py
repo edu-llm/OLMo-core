@@ -101,6 +101,35 @@ ARMS: dict[str, dict] = {
     "R1-refl-P": dict(
         mixer="kda_hh", num_householder=1, beta_regime="reflection", match_arm="Reflection"
     ),
+    # ---- The strict arity ladder: R=3 and R=4, and their capacity controls. ----
+    #
+    # These exist because the completed 2x2 answers "does R=2 pay under strict beta" (it does
+    # not, |t| <= 1.14 in all ten band x task cells) and cannot answer "does ANY R pay". Grazzi
+    # et al.'s Proposition 1 is a statement about k <= 2; R=3 is the first rung where its
+    # bound stops applying, so a null here is a null against a theory rather than against a
+    # guess. The kernel is R-general -- kda_householder.py asserts only 'R >= 1' -- so nothing
+    # in the operator needs to change.
+    #
+    # WHY A LADDER OF ADJACENT RUNGS RATHER THAN EVERYTHING MATCHED TO R=4. Parameters are
+    # exactly affine in R at this geometry: mixers = 997,068 + 402,432*(R-1). So matching R=1
+    # up to R=4 needs an FFN of 1,207,296 parameters, which is 1.21x that arm's own mixer and
+    # 55% of the model. That is not a control, it is a different architecture: the measured
+    # cost of only a THIRD of that dose, added to R1-refl, is -16.35pp at A5 41-64 and
+    # -20.54pp at A5 65-128 -- the two bands the headline interaction lives in. A capacity
+    # control that damages the arm it controls, in the bands that carry the result, biases the
+    # comparison toward "arity pays" for a reason that has nothing to do with arity.
+    #
+    # Adjacent rungs keep every match at the validated ffn_dim=174 delta (one R's worth of
+    # mixer, the same dose R1-P and R1-refl-P already carry at -0.055% mismatch), so each
+    # contrast is identified by the same correction the existing square uses.
+    #
+    # DIRECTION: 'solve_ffn_dim' raises when the target is below the FFN-free cost (model.py
+    # :182), so a lower-R arm is always the one that grows. DP2-P3 is R=2 matched UP to R=3,
+    # and DP3-P4 is R=3 matched UP to R=4. There is no arm that shrinks.
+    "DP3-strict": dict(mixer="kda_hh", num_householder=3, beta_regime="strict"),
+    "DP4-strict": dict(mixer="kda_hh", num_householder=4, beta_regime="strict"),
+    "DP2-P3": dict(mixer="kda_hh", num_householder=2, beta_regime="strict", match_arm="DP3-strict"),
+    "DP3-P4": dict(mixer="kda_hh", num_householder=3, beta_regime="strict", match_arm="DP4-strict"),
     "DP2-budgeted": dict(unimplemented="needs per-factor beta b=2*sigmoid(l_b), pi=sigmoid(l_pi)"),
     "R1-2step-tiedK": dict(unimplemented="needs k2=k1 forced at the recurrence boundary"),
 }
@@ -127,11 +156,20 @@ def apply_arm(args: argparse.Namespace) -> None:
         # An arm's settings ARE the arm. Letting a command-line flag survive here would mean
         # two runs could both record 'arm': 'R1-P' while having matched different targets, and
         # the record would not show which. Refuse instead of picking a winner.
+        #
+        # The guard covers EVERY key an arm defines, not just 'match_arm'. It was
+        # match_arm-only, and 'num_householder' was the gap that mattered: its flag used to
+        # carry default=1, so '--arm R1 --num-householder 3' silently trained at R=1. The
+        # record was not wrong -- it read 'num_householder': 1 honestly -- but the caller's
+        # intent was gone, and the run exited 0. That is the shape of failure an arity ladder
+        # is most exposed to, because every rung differs from its neighbour in this one field.
+        # Flags whose value is None were simply not supplied, and the arm fills them.
         existing = getattr(args, key, None)
-        if key == "match_arm" and existing is not None and existing != value:
+        if existing is not None and existing != value:
+            flag = f"--{key.replace('_', '-')}"
             raise SystemExit(
-                f"--match-arm {existing!r} conflicts with arm '{args.arm}', which is defined "
-                f"as matching {value!r}. Drop the flag, or use --mixer/--num-householder/"
+                f"{flag} {existing!r} conflicts with arm '{args.arm}', which is defined as "
+                f"{key}={value!r}. Drop the flag, or use --mixer/--num-householder/"
                 f"--beta-regime directly instead of an arm id."
             )
         setattr(args, key, value)
@@ -552,7 +590,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Canonical arm ID (runbook §3.2). Sets mixer, factor count and beta regime.",
     )
     p.add_argument("--mixer", choices=["kda", "gdn", "kda_hh"])
-    p.add_argument("--num-householder", type=int, default=1)
+    # default=None, not 1, so 'apply_arm' can tell "not supplied" from "supplied as 1" and
+    # refuse the second when the arm disagrees. 'main' fills the 1 after arm resolution.
+    p.add_argument("--num-householder", type=int, default=None)
     p.add_argument("--task", choices=sorted(TASKS))
     p.add_argument(
         "--beta-regime",
@@ -661,6 +701,10 @@ def main() -> None:
         args._manifest_data = {}
 
     apply_arm(args)
+    # Restore the documented default now that any arm has had its say. A free-form run
+    # (--mixer/--beta-regime, no --arm) still means R=1 unless it says otherwise.
+    if getattr(args, "num_householder", None) is None:
+        args.num_householder = 1
     for required in ("mixer", "task", "beta_regime"):
         if getattr(args, required, None) is None:
             raise SystemExit(f"--{required.replace('_', '-')} is required (or supply --arm/--manifest)")
