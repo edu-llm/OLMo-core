@@ -528,7 +528,24 @@ def build_config(opts, overrides: List[str]):
     # per-arm FFN width solve is anchored on the resulting parameter total, so the anchor
     # moves with it.
     vocab = corpus.tokenizer.padded_vocab_size()
-    model_config = build_arm(opts.arm, vocab_size=vocab)
+    # init_seed HAS TO BE PASSED HERE, AND THE VERSION WITHOUT IT WAS WORSE THAN NO FLAG.
+    #
+    # `seed_all(config.init_seed)` in `train()` seeds the GLOBAL rngs, and the global rng is
+    # NOT what draws the weights: `Transformer.init_weights` builds its own
+    # `torch.Generator(device).manual_seed(self.init_seed)` (model.py:298) and every
+    # `init_embeddings` / `init_weights` call takes that generator explicitly. `self.init_seed`
+    # comes from `TransformerConfig.init_seed`, which defaults to 0. So with the seed left off
+    # this call, `--init-seed 0`, `1` and `2` all produced BIT-IDENTICAL weights while
+    # `summarise()` printed the distinct number it was given -- a JSON record asserting a
+    # variance component that was never varied, which is a false fact rather than a missing
+    # one, and any CI built from those "seeds" is a data-order CI wearing an init-seed label.
+    #
+    # `build_arm` forwards **kwargs to `TransformerConfig.llama_like`, which forwards its own
+    # **kwargs to `cls(...)` -- so `init_seed` lands on the dataclass field and reaches
+    # `TransformerConfig.build`, which passes it to the `Transformer` constructor
+    # (config.py:384). Verified by construction rather than assumed; the regression test is
+    # `test_two_init_seeds_give_different_weights` in core6_arms_test.py.
+    model_config = build_arm(opts.arm, vocab_size=vocab, init_seed=opts.init_seed)
 
     arm_spec = ARMS[opts.arm]
     log.info(
