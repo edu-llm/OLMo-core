@@ -716,6 +716,9 @@ class LossWatcher(Callback):
     def __init__(self) -> None:
         self.first: Optional[float] = None
         self.last: Optional[float] = None
+        #: Which metric ``first``/``last`` hold. Reported so the summary states the quantity it
+        #: ranks on rather than leaving a reader to assume held-out CE was available.
+        self.loss_source: Optional[str] = None
         self.wandb_url = ""
 
     def log_metrics(self, step: int, metrics: Dict[str, float]) -> None:
@@ -725,9 +728,38 @@ class LossWatcher(Callback):
                 import wandb
 
                 self.wandb_url = getattr(wandb.run, "url", "") or ""
-        loss = metrics.get("train/CE loss")
-        if loss is None:
-            return
+        # HELD-OUT FIRST, TRAIN ONLY AS A FALLBACK, AND THE KEY IS NOT THE OBVIOUS ONE.
+        #
+        # ``summarise`` reports first_loss/last_loss and the comparison across a sweep's cells is
+        # taken over exactly those records, so whatever this reads is what ranks the arms. Reading
+        # train CE ranks them on the wrong quantity: a decay-to-zero schedule ends at a
+        # mechanically lower TRAIN loss than a decay-to-10% one at equal quality, so an argmin over
+        # train CE can inverte the very comparison E1 exists to make. The measurement protocol
+        # (docs/1b-leverage-audit/EXPERIMENT-PLAN.md §5 rule 1) requires held-out CE.
+        #
+        # ``LMEvaluator.compute_metrics`` yields ``heldout-val/CE loss``, but that is NOT the key
+        # that arrives here. ``EvaluatorCallback.perform_eval`` re-keys every metric as
+        # ``f"{prefix}/{evaluator.name}/{name}"`` (train/callbacks/evaluator_callback.py:171) with
+        # prefix "eval" (:116) and name "lm" hardcoded in ``LMEvaluatorCallbackConfig.build``
+        # (:281). Keying on the bare label matches nothing, ``.get`` returns None, and the fallback
+        # silently takes over -- which is the original bug wearing a fix's clothes.
+        #
+        # The fallback is deliberate, not laziness: a corpus with no val split declares no
+        # evaluator, and for those runs train CE is the only loss there is. Which one was used is
+        # recorded so a reader of the summary never has to guess.
+        loss = metrics.get("eval/lm/heldout-val/CE loss")
+        if loss is not None:
+            self.loss_source = "eval/lm/heldout-val/CE loss"
+        else:
+            loss = metrics.get("train/CE loss")
+            if loss is None:
+                return
+            # Do not downgrade: once a held-out number has been seen, a later train-only step
+            # must not overwrite last_loss with a different quantity.
+            if self.loss_source is None:
+                self.loss_source = "train/CE loss"
+            elif self.loss_source != "train/CE loss":
+                return
         if self.first is None:
             self.first = float(loss)
         self.last = float(loss)
@@ -760,6 +792,13 @@ def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> 
                 "steps": trainer.global_step,
                 "first_loss": losses.first,
                 "last_loss": losses.last,
+                # WHICH metric the two above are. A sweep's argmin is taken over these records,
+                # and held-out and train CE are not comparable quantities -- a decay-to-zero arm
+                # ends at a mechanically lower TRAIN loss than a decay-to-10% arm of equal
+                # quality. Emitted so a reader ranking cells can see they are comparing like with
+                # like, and so a run that silently fell back to train CE is visible in the log
+                # rather than inferred from the corpus.
+                "loss_source": losses.loss_source,
                 "seconds": seconds,
                 "peak_memory_gib": peak,
                 "checkpoint_uri": opts.save_folder,
