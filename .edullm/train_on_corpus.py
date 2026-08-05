@@ -90,7 +90,12 @@ from olmo_core.distributed.parallel import DataParallelType
 from olmo_core.distributed.utils import barrier, get_rank
 from olmo_core.io import clear_directory, list_directory, normalize_path
 from olmo_core.nn.transformer import TransformerConfig
-from olmo_core.optim import AdamWConfig, CosWithWarmup, OptimGroupOverride
+from olmo_core.optim import (
+    AdamWConfig,
+    CosWithWarmup,
+    LinearWithWarmup,
+    OptimGroupOverride,
+)
 from olmo_core.train import (
     Duration,
     TrainerConfig,
@@ -555,6 +560,43 @@ def remove_torn_checkpoints(save_folder: str) -> List[str]:
     return removed
 
 
+#: Terminal LR as a fraction of peak, per schedule. Zero for linear: this is the whole point
+#: of E1 and the reason the schedule became selectable rather than being swapped in place.
+#: OLMo-core's own default for BOTH classes is ``alpha_f=0.1`` (scheduler.py:355 for
+#: LinearWithWarmup, :459 for CosWithWarmup), i.e. the LR stops at a tenth of peak and the
+#: last tokens are trained at a rate the schedule never intended to end on.
+SCHEDULE_ALPHA_F = {"linear": 0.0, "cosine": 0.1}
+
+
+def build_scheduler(opts):
+    """The LR schedule, selected rather than hardcoded, with warmup as a fraction of steps.
+
+    WHY THIS IS A FLAG. Decay-to-zero is worth ~0.025 nats over cosine-to-10% (Bergsma
+    2502.15938 Table 1: 2.591 -> 2.571, measured at 610M/12.1B and again at 1.7B/34.3B, which
+    brackets our 1B/40B cell on both axes). But the optimal peak LR for decay-to-zero sits
+    about one doubling above the optimum for cosine-to-10%, so swapping the schedule while
+    holding the LR fixed measures the LR mismatch and not the schedule. E1 exists to sweep the
+    two together, and it can only do that if both are reachable from the command line.
+
+    WHY ``warmup_fraction`` AND NOT A COMPUTED STEP COUNT. Both scheduler classes take it
+    natively (scheduler.py:359 and :458) and resolve it against the trainer's real horizon at
+    every step -- ``warmup = round(t_max * warmup_fraction)`` inside ``get_lr``. Computing
+    ``round(0.1 * opts.steps)`` here would produce the same number today and the wrong one the
+    moment anything overrides ``trainer.max_duration`` on the command line, because this
+    function cannot see that override. Note the classes REFUSE both at once: ``__post_init__``
+    raises unless exactly one of ``warmup`` / ``warmup_fraction`` is set, so an explicit
+    ``--warmup-steps`` has to suppress the fraction rather than sit beside it.
+    """
+    alpha_f = SCHEDULE_ALPHA_F[opts.lr_schedule]
+    cls = LinearWithWarmup if opts.lr_schedule == "linear" else CosWithWarmup
+
+    if opts.warmup_steps is not None:
+        # `warmup`, not the `warmup_steps` the example still passes -- that spelling is
+        # deprecated upstream and warns on every construction.
+        return cls(warmup=opts.warmup_steps, alpha_f=alpha_f)
+    return cls(warmup_fraction=opts.warmup_fraction, alpha_f=alpha_f)
+
+
 def build_config(opts, overrides: List[str]):
     corpus = resolve_corpus(
         dataset_id=opts.dataset_id,
@@ -601,7 +643,20 @@ def build_config(opts, overrides: List[str]):
         max_sequence_length=opts.sequence_length,
         optim=AdamWConfig(
             lr=opts.learning_rate,
+            # AdamWConfig's own defaults are betas=(0.9, 0.999), eps=1e-8, weight_decay=1e-2
+            # (adamw.py:241-243) and nothing here used to override them. All three are set
+            # explicitly now -- see the flag help in build_parser for the source of each --
+            # and they are set explicitly rather than left to the library so that a future
+            # upstream change to those defaults cannot silently move this baseline.
+            betas=(opts.beta1, opts.beta2),
+            eps=opts.adam_eps,
+            weight_decay=opts.weight_decay,
             group_overrides=[
+                # DO NOT REMOVE. This exempts the embedding matrix from weight decay, and it
+                # keeps working with weight_decay set above: build_groups (optim/config.py:118)
+                # pulls the matched FQNs into their own param group and splats `opts` over it,
+                # so this group carries weight_decay=0.0 while every other parameter takes the
+                # config-level value. Raising weight_decay does not reach the embeddings.
                 OptimGroupOverride(params=["embeddings.weight"], opts=dict(weight_decay=0.0))
             ],
         ),
@@ -624,9 +679,20 @@ def build_config(opts, overrides: List[str]):
             reduce_dtype=DType.float32,
         ),
         max_grad_norm=1.0,
-        # `warmup`, not the `warmup_steps` the example still passes -- that spelling is
-        # deprecated upstream and warns on every construction.
-        scheduler=CosWithWarmup(warmup=opts.warmup_steps),
+        scheduler=build_scheduler(opts),
+        # Z-loss is a field on the TRAIN MODULE, not on the model and not on the trainer. The
+        # path is TransformerTrainModuleConfig.z_loss_multiplier (train_module/transformer/
+        # config.py:343) -> TransformerTrainModule.__init__ -> self.z_loss_multiplier ->
+        # model_forward(z_loss_multiplier=...) -> LMHead.forward (nn/lm_head.py:208), where
+        # `compute_z_loss=z_loss_multiplier is not None` is what actually switches it on. Left
+        # at None it is OFF -- the `or 1e-4` on lm_head.py:261 is a floor for a multiplier that
+        # was requested, not a default that fires. Setting it here also turns on the
+        # "train/Z loss" metric (train_module.py:445-455), which is how a run proves it is on.
+        #
+        # `or None` so that `--z-loss-multiplier 0` means OFF rather than on-with-a-zero-
+        # coefficient. The latter would add nothing to the loss but would still pay for the
+        # z-loss computation and would divide by it at train_module.py:454.
+        z_loss_multiplier=opts.z_loss_multiplier or None,
     )
 
     trainer_config = (
@@ -1024,9 +1090,87 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sequence-length", type=int, default=2048)
     parser.add_argument("--steps", type=int, default=200)
     parser.add_argument("--save-interval", type=int, default=100)
-    parser.add_argument("--warmup-steps", type=int, default=20)
-    parser.add_argument("--learning-rate", type=float, default=1e-3)
-    parser.add_argument("--global-batch-size", type=int, default=256 * 1024)
+    parser.add_argument(
+        "--lr-schedule",
+        choices=sorted(SCHEDULE_ALPHA_F),
+        default="linear",
+        help="linear decays to zero (alpha_f=0.0); cosine stops at 10%% of peak "
+        "(alpha_f=0.1, OLMo-core's default for both classes). Decay-to-zero is worth "
+        "~0.025 nats -- Bergsma 2502.15938 Tbl 1, 2.591 -> 2.571 at 610M/12.1B and again "
+        "at 1.7B/34.3B. E1 sweeps this against --learning-rate, because the two do not "
+        "move independently.",
+    )
+    parser.add_argument(
+        "--warmup-steps",
+        type=int,
+        default=None,
+        help="Absolute warmup length, overriding --warmup-fraction. Unset by default: this "
+        "used to default to 20, which is 0.013%% of a 40B-token run -- a smoke-test value "
+        "that reached the baseline. Wen et al.'s tuned grid uses ~1000.",
+    )
+    parser.add_argument(
+        "--warmup-fraction",
+        type=float,
+        default=0.1,
+        help="Warmup as a fraction of the run, resolved by the scheduler against the "
+        "trainer's real horizon rather than computed here. Ignored when --warmup-steps "
+        "is given, because the scheduler classes refuse to accept both.",
+    )
+    parser.add_argument(
+        "--learning-rate",
+        type=float,
+        default=1.4e-3,
+        help="Peak LR. Raised from 1e-3, which was transferred from Wen's tuned 1.2B "
+        "(2e-3 at a 1.05M batch) by sqrt-scaling to the OLD 262,144 batch. It co-moves "
+        "with --global-batch-size, and decay-to-zero's optimum sits ~1 doubling above "
+        "cosine-to-10%%'s. E1 sweeps it; this is the centre of that sweep, not a measured "
+        "optimum.",
+    )
+    parser.add_argument(
+        "--global-batch-size",
+        type=int,
+        default=786432,
+        help="Tokens per optimizer step. 786432 = 192 x 4096. Power Lines (2505.13738) "
+        "fits B_opt = 0.0306*D^0.383 (B in 2048-token sequences), giving 0.721M tokens at "
+        "D=40e9; the old 262,144 was 2.75x BELOW that, on the wrong side of a loss bowl "
+        "whose interior minimum is measured in their Table 1. Also what the completed "
+        "474M/10B run used.",
+    )
+    parser.add_argument(
+        "--weight-decay",
+        type=float,
+        default=0.07,
+        help="AdamW lambda, was the library default 1e-2 (adamw.py:243). Power Lines' "
+        "tau_opt = 1.084*TPP^-0.527 (R^2=0.975) at the NEW batch and peak LR. Embeddings "
+        "stay exempt via the group override -- this does not reach them.",
+    )
+    parser.add_argument(
+        "--beta1", type=float, default=0.9, help="AdamW beta1. Library default, unchanged."
+    )
+    parser.add_argument(
+        "--beta2",
+        type=float,
+        default=0.98,
+        help="AdamW beta2, was the library default 0.999 (adamw.py:241). Wen et al.'s tuned "
+        "runs use 0.98; train_liv_arm.py:661-662 already sets 0.95 here with a comment "
+        "recording that inheriting 0.999 was a bug.",
+    )
+    parser.add_argument(
+        "--adam-eps",
+        type=float,
+        default=1e-10,
+        help="AdamW eps, was the library default 1e-8 (adamw.py:242). Wen uses 1e-10. Worth "
+        "about nothing (their own span is 0.002, below their significance threshold) and "
+        "costs nothing.",
+    )
+    parser.add_argument(
+        "--z-loss-multiplier",
+        type=float,
+        default=1e-5,
+        help="Z-loss coefficient, was never passed at all -- the feature is OFF when this is "
+        "unset (lm_head.py:260 gates on `is not None`). Standard logit-norm stabiliser at "
+        "this scale. Pass 0 to disable.",
+    )
     parser.add_argument("--rank-microbatch-size", type=int, default=16 * 1024)
     parser.add_argument("--data-seed", type=int, default=0)
     parser.add_argument(

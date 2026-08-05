@@ -942,3 +942,200 @@ def test_a_run_with_no_wandb_reports_a_blank_url_rather_than_failing(monkeypatch
 
     assert watcher.wandb_url == ""
     assert watcher.first == 6.9
+
+
+# ---------------------------------------------------------------------------------------
+# The LR schedule, asserted by the numbers it produces rather than by the class it is.
+#
+# `assert isinstance(sched, LinearWithWarmup)` would pass with alpha_f left at OLMo-core's
+# default 0.1, which is the exact defect this change exists to remove -- a "linear" schedule
+# that stops at a tenth of peak and trains the last tokens at a rate it never meant to end on.
+# So these call build_scheduler and read the curve.
+# ---------------------------------------------------------------------------------------
+
+PEAK_LR = 1.4e-3
+HORIZON = 50_000  # steps; warmup_fraction=0.1 puts the peak at 5,000
+
+
+def scheduler_for(*flags: str):
+    """The scheduler the real CLI path builds, so a flag rename breaks this test."""
+    opts, _ = entry.build_parser().parse_known_args(["a-run-id", *flags])
+    return entry.build_scheduler(opts)
+
+
+def test_the_default_schedule_decays_all_the_way_to_zero():
+    """LINEAR, alpha_f=0.0. The endpoint is the whole point: EXACTLY 0.0, not 0.1*peak."""
+    sched = scheduler_for()
+
+    # Warmup is a fraction of the horizon, resolved against t_max by the scheduler itself.
+    assert sched.get_lr(PEAK_LR, 0, HORIZON) == 0.0
+    assert sched.get_lr(PEAK_LR, 2_500, HORIZON) == pytest.approx(0.7e-3)  # half way up
+    assert sched.get_lr(PEAK_LR, 5_000, HORIZON) == pytest.approx(PEAK_LR)  # the peak
+
+    # Midpoint of the decay leg (5,000 -> 50,000), so 27,500. Half of peak, because alpha_f=0.
+    assert sched.get_lr(PEAK_LR, 27_500, HORIZON) == pytest.approx(0.7e-3)
+
+    # The assertion this test exists for. At alpha_f=0.1 this returns 1.4e-4, which is 140,000x
+    # larger than what it must be, and every existence check still passes.
+    assert sched.get_lr(PEAK_LR, HORIZON, HORIZON) == 0.0
+    assert sched.get_lr(PEAK_LR, 49_999, HORIZON) == pytest.approx(3.1111e-8, rel=1e-4)
+
+
+def test_the_cosine_arm_stops_at_a_tenth_of_peak():
+    """COSINE, alpha_f=0.1. E1's contrast is only a contrast if this arm does NOT reach zero."""
+    sched = scheduler_for("--lr-schedule=cosine")
+
+    assert sched.get_lr(PEAK_LR, 0, HORIZON) == 0.0
+    assert sched.get_lr(PEAK_LR, 5_000, HORIZON) == pytest.approx(PEAK_LR)
+
+    # Cosine midpoint sits ABOVE the linear midpoint: eta_min + (peak-eta_min)/2
+    # = 1.4e-4 + (1.4e-3 - 1.4e-4)/2 = 7.7e-4, vs linear's 7.0e-4. Different curves, not just
+    # different endpoints.
+    assert sched.get_lr(PEAK_LR, 27_500, HORIZON) == pytest.approx(7.7e-4)
+
+    assert sched.get_lr(PEAK_LR, HORIZON, HORIZON) == pytest.approx(1.4e-4)
+    assert sched.get_lr(PEAK_LR, HORIZON, HORIZON) == pytest.approx(0.1 * PEAK_LR)
+
+
+def test_the_two_schedules_differ_by_the_amount_the_experiment_is_measuring():
+    """If these two ever returned the same tail, E1 would measure nothing and still be green."""
+    linear = scheduler_for("--lr-schedule=linear")
+    cosine = scheduler_for("--lr-schedule=cosine")
+
+    # Identical through warmup -- both are _linear_warmup to the same peak.
+    for step in (0, 2_500, 5_000):
+        assert linear.get_lr(PEAK_LR, step, HORIZON) == pytest.approx(
+            cosine.get_lr(PEAK_LR, step, HORIZON)
+        )
+
+    # And separated after it, by a final LR gap of exactly 0.1*peak.
+    assert cosine.get_lr(PEAK_LR, HORIZON, HORIZON) - linear.get_lr(
+        PEAK_LR, HORIZON, HORIZON
+    ) == pytest.approx(1.4e-4)
+
+
+def test_warmup_is_a_fraction_of_the_run_and_not_a_smoke_test_constant():
+    """The old default was 20 steps -- 0.013% of a 40B run. It must now scale with the horizon."""
+    sched = scheduler_for()
+    assert sched.warmup is None and sched.warmup_fraction == 0.1
+
+    # Same object, two horizons: the peak moves with the run rather than staying at step 20.
+    assert sched.get_lr(PEAK_LR, 1_000, 10_000) == pytest.approx(PEAK_LR)  # warmup = 1,000
+    assert sched.get_lr(PEAK_LR, 1_000, 100_000) == pytest.approx(0.1 * PEAK_LR)  # warmup=10,000
+
+    # At the OLD default of 20 steps, a 50,000-step run is at full LR by step 20.
+    old = scheduler_for("--warmup-steps=20")
+    assert old.get_lr(PEAK_LR, 20, HORIZON) == pytest.approx(PEAK_LR)
+    # ...whereas the new default is still climbing, at 0.4% of peak.
+    assert sched.get_lr(PEAK_LR, 20, HORIZON) == pytest.approx(PEAK_LR * 20 / 5_000)
+
+
+def test_an_explicit_warmup_step_count_suppresses_the_fraction():
+    """Both at once is an OLMoConfigurationError, so the override has to clear the fraction."""
+    sched = scheduler_for("--warmup-steps=1000")
+    assert sched.warmup == 1_000
+    assert sched.warmup_fraction is None
+    assert sched.get_lr(PEAK_LR, 1_000, HORIZON) == pytest.approx(PEAK_LR)
+    assert sched.get_lr(PEAK_LR, 500, HORIZON) == pytest.approx(0.5 * PEAK_LR)
+
+
+def test_the_corrected_optimizer_values_reach_the_built_config(monkeypatch):
+    """Every §2 knob, read off the config the CLI actually produces."""
+    monkeypatch.setattr(
+        entry,
+        "resolve_corpus",
+        lambda **kwargs: entry.corpus_from_manifest(
+            FakeManifest(),
+            dataset_id=kwargs["dataset_id"],
+            version=kwargs["version"],
+            tokenizer_id=kwargs["tokenizer_id"],
+        ),
+    )
+    opts, overrides = entry.build_parser().parse_known_args(
+        [
+            "a-run-id",
+            "--dataset-id=pretrain/regmix-10b",
+            "--dataset-version=v1",
+            "--dataset-tokenizer=tokenizer/dolma2-bpe",
+            "--save-folder=s3://outputs/teams/platform/runs/a-run-id/checkpoints/",
+        ]
+    )
+    config = entry.build_config(opts, overrides)
+    optim = config.train_module.optim
+
+    assert optim.lr == 1.4e-3
+    assert optim.betas == (0.9, 0.98)
+    assert optim.eps == 1e-10
+    assert optim.weight_decay == 0.07
+    # 786,432 = 192 x 4096. Asserted as the product so a typo'd digit fails here.
+    assert config.data_loader.global_batch_size == 192 * 4096 == 786_432
+
+    # z-loss is a train-module field, and `is not None` is what switches it on in the LM head.
+    assert config.train_module.z_loss_multiplier == 1e-5
+
+    # Neither of the two things that must not change.
+    assert config.train_module.compile_model is True
+    (embeddings,) = config.train_module.optim.group_overrides
+    assert embeddings.params == ["embeddings.weight"]
+    assert embeddings.opts == {"weight_decay": 0.0}
+
+
+def test_zero_means_off_for_z_loss_rather_than_on_with_no_coefficient(monkeypatch):
+    """`0.0 is not None` is True, so a bare pass-through would enable a no-op z-loss."""
+    monkeypatch.setattr(
+        entry,
+        "resolve_corpus",
+        lambda **kwargs: entry.corpus_from_manifest(
+            FakeManifest(),
+            dataset_id=kwargs["dataset_id"],
+            version=kwargs["version"],
+            tokenizer_id=kwargs["tokenizer_id"],
+        ),
+    )
+    opts, overrides = entry.build_parser().parse_known_args(
+        [
+            "a-run-id",
+            "--dataset-id=pretrain/regmix-10b",
+            "--dataset-version=v1",
+            "--dataset-tokenizer=tokenizer/dolma2-bpe",
+            "--save-folder=/tmp/x",
+            "--z-loss-multiplier=0",
+        ]
+    )
+    config = entry.build_config(opts, overrides)
+    assert config.train_module.z_loss_multiplier is None
+
+
+def test_raising_weight_decay_does_not_reach_the_embeddings():
+    """The exemption is a param GROUP, and it has to survive weight_decay becoming non-default.
+
+    Built against a real model rather than asserted on the config, because what matters is what
+    `build_groups` splats onto the group -- the config alone cannot show that.
+    """
+    from olmo_core.nn.transformer import TransformerConfig
+    from olmo_core.optim import AdamWConfig, OptimGroupOverride
+
+    model = TransformerConfig.olmo2_190M(vocab_size=100_352).build()
+    optim = AdamWConfig(
+        lr=1.4e-3,
+        betas=(0.9, 0.98),
+        eps=1e-10,
+        weight_decay=0.07,
+        group_overrides=[
+            OptimGroupOverride(params=["embeddings.weight"], opts=dict(weight_decay=0.0))
+        ],
+    ).build(model)
+
+    exempt = [g for g in optim.param_groups if g["weight_decay"] == 0.0]
+    decayed = [g for g in optim.param_groups if g["weight_decay"] != 0.0]
+
+    assert len(exempt) == 1 and len(exempt[0]["params"]) == 1
+    assert exempt[0]["params"][0].shape[0] == 100_352  # it really is the embedding matrix
+    assert decayed and all(g["weight_decay"] == 0.07 for g in decayed)
+    # Nothing fell out of the optimizer on the way through.
+    assert sum(len(g["params"]) for g in optim.param_groups) == len(list(model.parameters()))
+    # The other three optimizer knobs reach every group, exemption included.
+    for group in optim.param_groups:
+        assert group["betas"] == (0.9, 0.98)
+        assert group["eps"] == 1e-10
+        assert group["lr"] == 1.4e-3
