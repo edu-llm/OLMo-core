@@ -488,6 +488,41 @@ RECORDED_CONTROL_JSON = (
 )
 
 
+def _recorded_json_candidates(name: str) -> List[Path]:
+    """Where to look for a recorded-evidence JSON, **next to this file first**.
+
+    THE BUG THIS KILLS, and it is the third instance of the same shape in this experiment. Both
+    verifiers previously held a tuple of two ABSOLUTE LAPTOP PATHS
+    (``/Users/ericwu/...``), so on any other host both missed and the verifiers returned
+    ``["source JSON not found"]`` -- which made ``test_harness.py`` and
+    ``recorded_evidence_report()`` report "could not verify" on every machine except the one where
+    the code was written. It is exactly the failure that killed FarmShare job 1676377
+    (``_MQAR_SOURCES``), fixed there and left unfixed here.
+
+    The files ARE staged beside this module (``check_submission.sh`` lists both as required runtime
+    inputs and confirms them in the image), so resolving relative to ``__file__`` finds them on
+    FarmShare, in the container, and on the laptop alike. The laptop paths are kept as trailing
+    fallbacks so local use is unaffected.
+
+    **Generalisation worth carrying:** a hardcoded absolute path is a portability bug that only
+    appears on the SECOND host, and the first host is always the one where the code was written.
+    Every cross-host artifact in this program must resolve inputs relative to itself first.
+    """
+    here = Path(__file__).resolve().parent
+    return [
+        here / name,
+        here.parent / "mqar" / name,
+        Path("/Users/ericwu/Developer/Capstone_LLM")
+        / "Brainlifts/liv_experiment_research/probes/mqar"
+        / name,
+        Path(
+            "/Users/ericwu/Developer/Capstone_LLM-worktrees/olmo-core/"
+            "claude-01--liv-short-conv-mixer/experiments/liv/mqar"
+        )
+        / name,
+    ]
+
+
 @dataclass(frozen=True)
 class RecordedConfig:
     """One config's MEASURED numbers, read out of ``mqar_calibration.json`` (FarmShare 1670987)."""
@@ -616,17 +651,7 @@ def verify_recorded_numbers(json_path: Optional[Path] = None) -> Dict[str, objec
     :returns: ``{"ok", "checked", "mismatches", "source"}``. ``ok`` is False if the file is absent,
         so a caller can distinguish "verified" from "could not verify".
     """
-    candidates = (
-        [json_path]
-        if json_path
-        else [
-            Path("/Users/ericwu/Developer/Capstone_LLM") / RECORDED_CALIBRATION_JSON,
-            Path(
-                "/Users/ericwu/Developer/Capstone_LLM-worktrees/olmo-core/"
-                "claude-01--liv-short-conv-mixer/experiments/liv/mqar/mqar_calibration.json"
-            ),
-        ]
-    )
+    candidates = [json_path] if json_path else _recorded_json_candidates("mqar_calibration.json")
     src = next((p for p in candidates if p and p.is_file()), None)
     if src is None:
         return {"ok": False, "checked": 0, "mismatches": ["source JSON not found"], "source": None}
@@ -675,16 +700,7 @@ def verify_recorded_control(json_path: Optional[Path] = None) -> Dict[str, objec
     re-measurable.
     """
     candidates = (
-        [json_path]
-        if json_path
-        else [
-            Path("/Users/ericwu/Developer/Capstone_LLM") / RECORDED_CONTROL_JSON,
-            Path(
-                "/Users/ericwu/Developer/Capstone_LLM-worktrees/olmo-core/"
-                "claude-01--liv-short-conv-mixer/experiments/liv/mqar/"
-                "mqar_positive_control.json"
-            ),
-        ]
+        [json_path] if json_path else _recorded_json_candidates("mqar_positive_control.json")
     )
     src = next((p for p in candidates if p and p.is_file()), None)
     if src is None:
