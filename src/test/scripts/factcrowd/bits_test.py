@@ -12,10 +12,13 @@ result, it is a broken measurement -- most likely a biography reading its neighb
 documents are not masked from each other.
 """
 
+from types import SimpleNamespace
 from typing import Any, Dict
 
 import numpy as np
 import pytest
+from factcrowd.corpus import render as R
+from factcrowd.corpus import values as V
 from factcrowd.ladder import rho
 from factcrowd.measure import bits
 
@@ -149,3 +152,80 @@ def test_demanded_and_achieved_are_quoted_on_one_definition():
     assert got["demanded_bits_per_param"] == pytest.approx(expected)
     assert got["achieved_bits_per_param"] == pytest.approx(a.achieved_per_param)
     assert got["achieved_over_demanded"] == pytest.approx(a.achieved_per_param / expected)
+
+
+def test_a_span_shifted_by_one_gives_a_different_answer_under_varying_loss():
+    """
+    The test that the constant-loss version could not be.
+
+    An adversarial pass mutated `bits.value_bits_of_batch` to charge `(start+1, end+1)` and the whole
+    suite still passed, because the fixture used `ce = np.ones(...)` -- under constant loss a shift is
+    arithmetically invisible. With a varying row it is not, and this is the only thing standing between a
+    correct bit count and one that charges each value token's cost to its neighbour.
+    """
+    ce = np.arange(20, dtype=np.float64).reshape(1, 20)  # ce[t] = t, so every shift is visible
+    spans = [[(3, 5), (10, 12)]]
+    # Tokens 3,4 cost ce[2],ce[3] = 2+3; tokens 10,11 cost ce[9],ce[10] = 9+10. Total 24 nats.
+    assert bits.value_bits_of_batch(ce, spans) == [pytest.approx(24.0 / np.log(2))]
+    # Shifted by one in either direction is a different number, which is what makes the test bite.
+    assert bits.value_bits_of_batch(ce, [[(4, 6), (11, 13)]]) != bits.value_bits_of_batch(ce, spans)
+    assert bits.value_bits_of_batch(ce, [[(2, 4), (9, 11)]]) != bits.value_bits_of_batch(ce, spans)
+
+
+def test_the_prior_comes_from_the_schema_rather_than_a_constant():
+    """
+    Doubling the prior in the estimator passed the whole suite, because nothing tied it to a schema.
+
+    The prior is `sum(log2(pool))` over exactly the attributes whose spans are charged -- 47.5916 for
+    bioS, 48.0 for the entropy axis at b=8 (six attributes of eight bits). Pinning both catches a prior
+    that has drifted from the corpus it is supposed to describe.
+    """
+    bios = V.bios_schema(reserved=tuple(R.literal_words_of(R.BIOS_TEMPLATES)))
+    assert bios.schema.bits_per_entity == pytest.approx(47.5916, abs=1e-4)
+    entropy = V.entropy_schema(8)
+    assert entropy.schema.bits_per_entity == pytest.approx(48.0)
+    # And the count of charged spans equals the count of attributes the prior sums over.
+    assert len(bios.values) == len(bios.schema.attributes)
+    assert len(entropy.values) * V.ENTROPY_WORDS_PER_VALUE == len(entropy.schema.attributes)
+
+
+def test_score_checkpoint_charges_the_schemas_own_prior_over_the_renderers_own_spans():
+    """
+    The driver, not just the arithmetic.
+
+    An adversarial pass doubled the prior inside `score_checkpoint` and the whole suite passed, because
+    nothing exercised the driver -- only the pure functions beneath it. The prior it charges must be the
+    schema's `bits_per_entity`, and the spans must be the renderer's own, or the achieved-bits axis is
+    describing a corpus nobody trained on.
+
+    A stub forward returns zero loss everywhere, so the residual is zero and every entity stores exactly
+    the prior. That makes the prior readable straight off the result.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from factcrowd import cells as C
+    from factcrowd.corpus import build as B
+
+    cell = C.load_cell("src/scripts/train/factcrowd/configs/cells/smoke/smoke_13m_reason.yaml")
+    resolved = cell.resolve()
+    with tempfile.TemporaryDirectory() as raw:
+        corpus = B.BuiltCorpus(resolved, Path(raw), split="eval", with_streams=False)
+
+        loaded = SimpleNamespace(corpus=corpus, resolved=resolved, cell=cell)
+
+        def perfect(batch):
+            # Zero loss: the model needs to be told nothing, so stored == prior exactly.
+            return np.zeros(batch.shape), np.zeros((*batch.shape, corpus.vocabulary.size))
+
+        achieved = bits.score_checkpoint(loaded, perfect, n_entities=16, batch_size=8)
+
+    prior = corpus.corpus_schema.schema.bits_per_entity
+    assert achieved is not None
+    assert achieved.prior_bits_per_entity == pytest.approx(prior)
+    assert achieved.residual_bits_per_entity == pytest.approx(0.0)
+    # A perfect model stores the whole prior for every entity, so the headline is the prior itself.
+    assert achieved.stored_bits_per_entity == pytest.approx(prior)
+    assert achieved.n_entities_sampled == 16
+    assert achieved.n_entities_total == resolved.n_entities
+    assert achieved.is_upper_bound is True

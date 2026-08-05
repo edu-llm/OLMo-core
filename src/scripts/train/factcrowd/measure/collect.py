@@ -55,6 +55,8 @@ class ScoredCheckpoint:
 
     :param ref: Which checkpoint.
     :param cell: The cell record as saved, so the row needs no second lookup.
+    :param resolved: The cell's *resolved* summary, which carries both halves of the identity block.
+        The two sweeps each state only half in the cell itself.
     :param endpoints: One result per reasoning endpoint.
     :param achieved: The bit measurement, or ``None`` on the reasoning-only control.
     :param recall: Optional recall figures, keyed by name.
@@ -63,6 +65,7 @@ class ScoredCheckpoint:
 
     ref: CheckpointRef
     cell: Dict[str, Any]
+    resolved: Dict[str, Any] = field(default_factory=dict)
     endpoints: Sequence[EndpointResult] = ()
     achieved: Optional[AchievedBits] = None
     recall: Dict[str, float] = field(default_factory=dict)
@@ -81,17 +84,34 @@ class ScoredCheckpoint:
 
         :returns: The rows.
         """
+        # RESOLVED FIRST, THEN THE CELL. The two sweeps state disjoint halves of this block:
+        # the count axis states a demand and derives an entity count, the entropy axis states an entity
+        # count and derives the demand. `CellSpec.to_dict()` drops None, so reading the cell alone leaves
+        # `demand_bits_per_param` empty on the entropy axis -- and that column *is*
+        # `trend.SeedBlock.demands`, the regressor. The identified axis would have arrived at the
+        # analysis with no x. The resolved record carries both, and its demand is the achieved value from
+        # the integer entity count rather than the solver's target.
+        resolved = dict(self.resolved or {})
+        cell = dict(self.cell)
+
+        def stated(key: str, default: Any = None) -> Any:
+            for source in (resolved, cell):
+                value = source.get(key)
+                if value is not None:
+                    return value
+            return default
+
         identity = {
-            "cell_id": self.cell.get("cell_id"),
-            "row": self.cell.get("row"),
-            "sweep": self.cell.get("sweep"),
-            "replicate": self.cell.get("replicate", 0),
+            "cell_id": stated("cell_id"),
+            "row": stated("row"),
+            "sweep": stated("sweep"),
+            "replicate": stated("replicate", 0),
             "step": self.ref.step,
-            "demand_bits_per_param": self.cell.get("demand_bits_per_param"),
-            "bits_per_attribute": self.cell.get("bits_per_attribute"),
-            "n_entities": self.cell.get("n_entities"),
-            "reasoning_tokens": self.cell.get("reasoning_tokens"),
-            "related_reasoning_tokens": self.cell.get("related_reasoning_tokens"),
+            "demand_bits_per_param": stated("demand_bits_per_param"),
+            "bits_per_attribute": stated("bits_per_attribute"),
+            "n_entities": stated("n_entities"),
+            "reasoning_tokens": stated("reasoning_tokens"),
+            "related_reasoning_tokens": stated("related_reasoning_tokens"),
             "checkpoint_path": self.ref.path,
         }
         measured: Dict[str, Any] = dict(self.extra)

@@ -58,12 +58,25 @@ def cell_prefixes(prefix: str) -> Tuple[str, ...]:
     """
     from olmo_core.io import list_directory
 
-    if checkpoint_module.find_checkpoints(prefix):
+    def has_checkpoints(candidate: str) -> bool:
+        # A missing directory raises rather than returning empty, and a fan-out is full of siblings that
+        # legitimately have no checkpoints subdir -- a cell that died before its first save, `logs/`,
+        # `wandb/`. Letting that abort scoring for every *other* cell is the wrong trade.
+        try:
+            return bool(checkpoint_module.find_checkpoints(candidate))
+        except (FileNotFoundError, NotADirectoryError):
+            return False
+
+    if has_checkpoints(prefix):
         return (prefix,)
     out: List[str] = []
-    for child in list_directory(prefix, include_files=False):
+    try:
+        children = list(list_directory(prefix, include_files=False))
+    except (FileNotFoundError, NotADirectoryError):
+        return ()
+    for child in children:
         for candidate in (child, f"{str(child).rstrip('/')}/checkpoints"):
-            if checkpoint_module.find_checkpoints(candidate):
+            if has_checkpoints(candidate):
                 out.append(candidate)
                 break
     return tuple(out)
@@ -115,6 +128,7 @@ def score_checkpoint(
     return collect_module.ScoredCheckpoint(
         ref=ref,
         cell=dict(loaded.record["cell"]),
+        resolved=dict(loaded.record.get("resolved") or {}),
         endpoints=endpoints,
         achieved=achieved,
         recall=recall_row,

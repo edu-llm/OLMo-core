@@ -201,6 +201,10 @@ def verify_fingerprints(corpus: BuiltCorpus, record: Dict[str, Any]) -> None:
         ("schema", corpus.corpus_schema.schema.fingerprint()),
         ("vocabulary", corpus.vocabulary.fingerprint()),
     ]
+    # The renderer decides where value tokens land, so a changed seed or template set moves every span the
+    # bit counter charges. Schema and vocabulary are both blind to it.
+    if corpus.renderer is not None:
+        checks.append(("renderer", corpus.renderer.fingerprint()))
     for name, rebuilt in checks:
         expected = saved.get(name)
         if expected is None:
@@ -210,6 +214,28 @@ def verify_fingerprints(corpus: BuiltCorpus, record: Dict[str, Any]) -> None:
                 f"the rebuilt {name} does not match the one this checkpoint was trained with "
                 f"(saved {expected[:16]}, rebuilt {rebuilt[:16]}). Scoring it would measure a "
                 f"different corpus from the one the model saw."
+            )
+
+    # The tasks are checked on their *structure* rather than their stream digest: measurement generates
+    # the eval split, so it cannot reproduce the train digest a run recorded. Structure is what matters
+    # anyway -- an expression length or a domain token that changed alters every item scored.
+    saved_structure = dict(saved.get("reasoning_structure") or {})
+    for task in corpus.tasks:
+        expected = saved_structure.get(task.name)
+        if expected is None:
+            continue
+        rebuilt = task.structure_fingerprint()
+        if expected != rebuilt:
+            raise OLMoConfigurationError(
+                f"the rebuilt '{task.name}' endpoint does not match the one this checkpoint was trained "
+                f"with (saved {expected[:16]}, rebuilt {rebuilt[:16]}). Its item shape has changed, so "
+                f"every score would be on a different task."
+            )
+    for name in saved_structure:
+        if name not in {task.name for task in corpus.tasks}:
+            raise OLMoConfigurationError(
+                f"this checkpoint was trained with a '{name}' endpoint that the rebuild does not carry, "
+                f"so that endpoint cannot be scored and the others may not be comparable"
             )
 
 

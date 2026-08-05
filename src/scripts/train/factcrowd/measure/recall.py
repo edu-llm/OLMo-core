@@ -36,14 +36,17 @@ class RecallResult:
     :param n_probed: Entity-attribute pairs asked about.
     :param n_generated: Times the model's unrestricted argmax was the right value.
     :param n_recognised: Times the right value outranked every other value **in its own pool**.
-    :param pool_size: Candidates in the pool, so recognition has a stated chance level.
+    :param chance: Probability of getting every position right by guessing uniformly within each
+        position's own reachable pool -- the product over positions of ``1 / active_size``, not one over
+        the candidate count. Recognition requires the *whole* value, so a four-word value from four
+        four-word pools is one chance in 256, not one in sixteen.
     """
 
     attribute: str
     n_probed: int
     n_generated: int
     n_recognised: int
-    pool_size: int
+    chance: float
 
     def __post_init__(self) -> None:
         if self.n_probed <= 0:
@@ -66,15 +69,15 @@ class RecallResult:
 
     @property
     def recognition_chance(self) -> float:
-        """Chance level for recognition: one over the pool size."""
-        return 1.0 / self.pool_size if self.pool_size > 0 else 0.0
+        """The stated chance level, so "above chance" is a subtraction rather than an assumption."""
+        return self.chance
 
     def summary(self) -> Dict[str, Any]:
         """A flat mapping for collection."""
         return {
             f"recall_{self.attribute}_generation": round(self.generation, 6),
             f"recall_{self.attribute}_recognition": round(self.recognition, 6),
-            f"recall_{self.attribute}_chance": round(self.recognition_chance, 6),
+            f"recall_{self.attribute}_chance": round(self.recognition_chance, 9),
             f"recall_{self.attribute}_n": self.n_probed,
         }
 
@@ -107,8 +110,13 @@ def score_recall(
     if corpus.renderer is None or corpus.table is None:
         return ()
 
-    pool_ids = corpus.vocabulary.pool_token_ids
     spec_pools = {spec.name: spec.pool_names for spec in corpus.corpus_schema.values}
+    # Built once per attribute rather than per span: the pools do not change between biographies, and
+    # slicing to the reachable prefix on every one of 25,000 entities is the kind of cost that turns a
+    # minute of scoring into an hour.
+    candidates_by_attribute = {
+        name: _candidates_per_position(corpus, pools) for name, pools in spec_pools.items()
+    }
     probed: Dict[str, List[Tuple[bool, bool]]] = {name: [] for name in spec_pools}
 
     total = min(n_entities, loaded.resolved.n_entities)
@@ -123,7 +131,7 @@ def score_recall(
 
         for row, (tokens, spans) in enumerate(rendered):
             for span in spans:
-                candidates = _candidate_ids(pool_ids, spec_pools.get(span.attribute, ()))
+                candidates = candidates_by_attribute.get(span.attribute, ())
                 outcome = _score_span(logits[row], tokens, span, candidates)
                 probed.setdefault(span.attribute, []).append(outcome)
 
@@ -134,14 +142,13 @@ def score_recall(
             continue
         generated = sum(1 for was_generated, _ in outcomes if was_generated)
         recognised = sum(1 for _, was_recognised in outcomes if was_recognised)
-        pool = len(_candidate_ids(pool_ids, spec_pools.get(attribute, ())))
         results.append(
             RecallResult(
                 attribute=attribute,
                 n_probed=len(outcomes),
                 n_generated=generated,
                 n_recognised=recognised,
-                pool_size=pool,
+                chance=_chance_of(candidates_by_attribute.get(attribute, ())),
             )
         )
         pooled_gen += generated
@@ -155,41 +162,92 @@ def score_recall(
                 n_probed=pooled_n,
                 n_generated=pooled_gen,
                 n_recognised=pooled_rec,
-                pool_size=int(np.mean([r.pool_size for r in results])) if results else 0,
+                # The mean of the per-attribute chances, not one over the mean pool size. Those differ
+                # -- mean(1/n) against 1/mean(n) -- and the second understated the pooled chance by 3.8x
+                # on bioS, which reported an untrained model as 4.15x above chance when it was at it.
+                chance=float(np.mean([result.chance for result in results])) if results else 0.0,
             )
         )
     return tuple(results)
 
 
-def _candidate_ids(pool_ids: Dict[str, np.ndarray], pool_names: Sequence[str]) -> np.ndarray:
-    """Every token id an attribute's value could take, across the pools that compose it."""
-    if not pool_names:
-        return np.empty(0, dtype=np.int64)
-    return np.concatenate([np.asarray(pool_ids[name], dtype=np.int64) for name in pool_names])
+def _chance_of(candidates: Sequence[np.ndarray]) -> float:
+    """
+    Probability of getting a whole value right by guessing within each position's reachable pool.
+
+    The product over positions, because recognition requires every one of them. A four-word value drawn
+    from four four-word pools is one chance in 256, not one in sixteen.
+
+    :param candidates: One id array per position.
+
+    :returns: The chance level, or 0.0 when there is nothing to guess among.
+    """
+    if not candidates or any(array.size == 0 for array in candidates):
+        return 0.0
+    chance = 1.0
+    for array in candidates:
+        chance /= float(array.size)
+    return chance
+
+
+def _candidates_per_position(corpus: Any, pool_names: Sequence[str]) -> Tuple[np.ndarray, ...]:
+    """
+    The ids each position of a value may legally take, one array per position.
+
+    **Per position, and reachable only.** Two mistakes are easy here and both inflate the apparent
+    difficulty of recognition:
+
+    - Concatenating an attribute's pools and taking one argmax over the union lets position 1 be beaten by
+      a word only pool 2 contains. That is not a wrong answer, it is a question nobody asked -- the
+      corpus never puts pool 2's words in position 1.
+    - On the entropy axis a pool holds the sweep's union of 256 words while only ``2**(b/4)`` are ever
+      assigned. The rest are never trained and their embeddings are still at init, so letting them compete
+      measures initialisation noise.
+
+    :param corpus: The rebuilt corpus, for its schema and vocabulary.
+    :param pool_names: The pools composing one attribute, in position order.
+
+    :returns: One id array per position.
+    """
+    pools = {pool.name: pool for pool in corpus.corpus_schema.schema.attributes}
+    ids = corpus.vocabulary.pool_token_ids
+    out = []
+    for name in pool_names:
+        reachable = pools[name].active_size
+        out.append(np.asarray(ids[name], dtype=np.int64)[:reachable])
+    return tuple(out)
 
 
 def _score_span(
-    logits: np.ndarray, tokens: np.ndarray, span: Any, candidates: np.ndarray
+    logits: np.ndarray,
+    tokens: np.ndarray,
+    span: Any,
+    candidates: Sequence[np.ndarray],
 ) -> Tuple[bool, bool]:
     """
     Whether one value was generated, and whether it was recognised.
 
-    Generation is the unrestricted argmax at every position of the span. Recognition restricts the
-    comparison to the attribute's own pool, which is what makes it a different question rather than an
-    easier version of the same one.
+    Generation is the unrestricted argmax at every position. Recognition restricts each position to *its
+    own* reachable pool, which is what makes it a different question rather than an easier version of the
+    same one. Both require every position, because half a value is not the value.
+
+    :param logits: One sequence's logits.
+    :param tokens: The rendered biography, for the truth.
+    :param span: Where the value sits.
+    :param candidates: One id array per position of the span.
 
     :returns: ``(generated, recognised)``.
     """
     generated = True
-    recognised = True
-    for position in range(span.start, span.end):
+    recognised = bool(candidates)
+    for offset, position in enumerate(range(span.start, span.end)):
         truth = int(tokens[position])
         if predicted_token(logits, position) != truth:
             generated = False
-        if candidates.size:
-            row = logits[position - 1]
-            best = candidates[int(np.argmax(row[candidates]))]
-            if int(best) != truth:
+        if offset < len(candidates) and candidates[offset].size:
+            allowed = candidates[offset]
+            best = int(allowed[int(np.argmax(logits[position - 1][allowed]))])
+            if best != truth:
                 recognised = False
         else:
             recognised = False

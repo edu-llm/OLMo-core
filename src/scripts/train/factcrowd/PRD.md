@@ -1307,7 +1307,64 @@ module's choice. G7's MDE reconstructs to σ = 0.636pp for a 2pp effect at five 
 section's 0.63pp — and only with a one-sided α, which is now stated. **G5 remains absent**, with a test
 asserting it stays that way.
 
-### 16.7 Deferred, with reasons
+### 16.7 What an adversarial pass found in the measurement layer
+
+Eight defects, all demonstrated by running code, all fixed. It also cleared the three things most worth
+worrying about: `spans.predictor_slice` is correct and **every production caller uses the right
+convention** (the off-by-one bugs were in the tests, not the code); padding is never charged, verified over
+13,286 spans; and the bits prior corresponds exactly to the charged spans on both axes, including the
+entropy axis's use of the *reachable* pool size rather than the union's.
+
+**The regressor column was blank on the identified axis.** `collect` built its identity from the cell
+record alone, and `CellSpec.to_dict()` drops `None` — but the two sweeps state disjoint halves of that
+block: the count axis states a demand and derives an entity count, the entropy axis the reverse. So
+`demand_bits_per_param`, which *is* `trend.SeedBlock.demands`, arrived empty for every entropy cell. The
+resolved record carries both and was being discarded. It is now read first, which also replaces the
+solver's target with the achieved value from the integer entity count.
+
+**Recall reported an untrained model as 4.15× above chance.** Three defects compounding: recognition
+concatenated an attribute's pools and took one argmax over the union, so a word only pool 2 contains could
+beat the truth at position 1; unreachable words from the entropy axis's 256-word union competed despite
+never being trained; and the pooled chance was `1/mean(n)` instead of `mean(1/n)`, understating it 3.8× on
+bioS. Recognition is now restricted per position to that position's reachable pool, and chance is the
+product over positions — measured 1.01× on the same checkpoint, i.e. at chance, and exactly 2⁻ᵇ on the
+entropy axis.
+
+**The bit estimator's headline disagreed with its own distribution.** `stored` was `max(0, prior −
+mean(residual))` while the per-entity figures were `max(0, prior − residualᵢ)`. Those differ by Jensen
+whenever any entity's residual exceeds the prior, which is the norm early in training. The headline said
+"stored nothing" while the distribution §8.1 asks for said half the entities held 36 bits each. Now
+per-entity throughout, which is the right unit: an entity the model has learned nothing about contributes
+zero, not a negative offset against the ones it has.
+
+**TOST declared equivalence from zero variance.** A dead endpoint (`n_correct = 0` everywhere) or a
+saturated one gives identical integer counts across seeds, so the between-seed SD is exactly zero, every
+t is infinite, and both one-sided nulls are rejected with p = 0 — the pre-registered headline arriving at
+maximum strength from an instrument that measured nothing. A frozen shared eval set makes this *more*
+likely, not less. Both tests now withhold the verdict below a degenerate standard error and say why,
+while still reporting the interval and both p-values.
+
+**Fingerprint verification missed the two things most worth checking.** Schema and vocabulary are blind to
+the expression length and the renderer seed: a rebuild with `MANO_LENGTH = 13` or a different renderer
+seed passed both digests while changing every item scored and every span charged. The recorded task
+digest could not be used because it bakes in the split, so tasks now also publish a split-independent
+`structure_fingerprint`, and the renderer publishes its own. Both are recorded and checked, and an
+endpoint present at training but absent from the rebuild is refused.
+
+**One checkpoint-less sibling aborted the whole fan-out.** `find_checkpoints` raises rather than returning
+empty on a missing directory, so a `logs/`, a `wandb/`, or a cell that died before its first save took
+scoring down for every other cell.
+
+Also: `score_reasoning(floor=…)` was ignored unless `degenerate_answer` was passed too, silently
+re-measuring the floor once per endpoint per checkpoint. And an `IndexError` when the model argmaxes into
+the vocabulary padding, which the count axis had been lucky enough to miss.
+
+**Seven silent mutation survivors, now all caught.** The bit-count and answer-CE span tests used a
+*constant* loss, under which a one-position shift is arithmetically invisible; both now use a varying row.
+`measure/recall` had no test importing it at all. `bits.score_checkpoint` and `checkpoint.load` were
+untested drivers, so a doubled prior and a `split="train"` rebuild both passed the suite.
+
+### 16.8 Deferred, with reasons
 
 FLD's 1,700 core-hours and 51.1% floor — decided in M0, not now. The exposure placebo and the
 mechanism battery — M4. Qwen3-0.6B continuation — after M3. Retiring

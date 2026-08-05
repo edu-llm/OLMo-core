@@ -189,6 +189,32 @@ class ReasoningTask(ABC):
     #: Set by every subclass. Part of the item key, so a task cannot produce another split's items.
     _split: str
 
+    def structure_fingerprint(self) -> str:
+        """
+        A digest of everything that determines an item's *shape*, excluding the split and the seed.
+
+        :meth:`fingerprint` bakes in both, which is right for identifying a stream but useless for
+        checking a rebuild: measurement generates the ``eval`` split, so it can never reproduce the
+        ``train`` digest a run recorded. That left the two things most worth checking unchecked -- a
+        changed expression length or domain token passes the schema and vocabulary digests untouched while
+        changing every item scored.
+
+        :returns: The digest.
+        """
+        digest = hashlib.sha256()
+        for field in (
+            "factcrowd.ReasoningTask.structure.v1",
+            type(self).__name__,
+            self.name,
+            self.domain_token,
+            str(self.tokens_per_item),
+            "\u0000".join(self.required_words()),
+        ):
+            raw = field.encode()
+            digest.update(len(raw).to_bytes(8, "big"))
+            digest.update(raw)
+        return digest.hexdigest()
+
     @property
     def split(self) -> str:
         """Which generation split this task produces, ``"train"`` or ``"eval"``."""

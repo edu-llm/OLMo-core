@@ -71,10 +71,14 @@ def score_reasoning(
     if n_items <= 0:
         raise OLMoConfigurationError(f"n_items must be positive, got {n_items}")
 
-    if floor is None or degenerate_answer is None:
+    # `floor is None` alone, not `or degenerate_answer is None`. With `or`, passing a pre-measured floor
+    # without its answer silently re-measured and discarded it -- and re-measuring costs seconds per
+    # endpoint per checkpoint, which is a minute per cell of pure repetition over ten checkpoints.
+    if floor is None:
         label, measured = task.degenerate_baseline(floor_sample)
         floor = measured
-        degenerate_answer = _answer_of(task, label)
+        if degenerate_answer is None:
+            degenerate_answer = _answer_of(task, label)
 
     accumulator = EndpointAccumulator(task.name, floor=floor, degenerate_answer=degenerate_answer)
     for start in range(0, n_items, batch_size):

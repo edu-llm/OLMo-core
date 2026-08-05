@@ -74,12 +74,20 @@ class AchievedBits:
     @property
     def stored_bits_per_entity(self) -> float:
         """
-        Prior minus residual: what the model supplies about one entity.
+        Mean of the **per-entity** stored figures: ``mean_i max(0, prior - residual_i)``.
 
-        Clamped at zero. A negative value means the model is *worse* than the uniform prior on these
-        tokens, which is possible early in training and is not negative storage.
+        Clamped per entity and then averaged, not the other way round. Those differ by Jensen whenever
+        any entity's residual exceeds the prior, which is the norm early in training -- a real 15-step
+        checkpoint measured 88-90 bits of residual against a 47.59-bit prior. Clamping the *mean* made
+        the headline read "stored nothing" while the distribution this class also publishes said half the
+        entities held 36 bits each. Two estimators, one of them the axis PRD 8.1 plots reasoning against.
+
+        Per-entity is the right one: storage is a property of an entity, and an entity the model has
+        learned nothing about contributes zero rather than a negative offset against the ones it has.
         """
-        return max(0.0, self.prior_bits_per_entity - self.residual_bits_per_entity)
+        if not self.per_entity_bits:
+            return max(0.0, self.prior_bits_per_entity - self.residual_bits_per_entity)
+        return float(np.mean(np.asarray(self.per_entity_bits, dtype=np.float64)))
 
     @property
     def stored_bits_total(self) -> float:

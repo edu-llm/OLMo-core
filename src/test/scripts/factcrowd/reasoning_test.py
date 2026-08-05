@@ -334,3 +334,34 @@ def test_an_argmax_into_the_vocabulary_padding_is_unparseable_not_a_crash():
     assert result.unparseable_rate == 1.0
     # The CE is still recorded, because the answer span's loss is well defined either way.
     assert result.answer_ce_bits > 0
+
+
+def test_the_answer_ce_is_read_from_the_right_position_under_varying_loss():
+    """
+    PRD 8.3's continuous endpoint, pinned against a shift.
+
+    An adversarial pass shifted the CE span one earlier and the suite passed, because the stub returned a
+    constant nat at every position. `answer_ce_bits` is the quantity that moves before accuracy does, so
+    an offset in it is an offset in the only signal a flat grid would show.
+    """
+    task = mano()
+    n = 4
+    vocab = task.vocabulary.size
+    width = task.tokens_per_item
+
+    def varying(batch):
+        # ce[t] = t, so the answer's own position is the only one that gives its expected value.
+        ce = np.tile(np.arange(width, dtype=np.float64), (batch.shape[0], 1))
+        logits = np.zeros((*batch.shape, vocab))
+        for row in range(batch.shape[0]):
+            item = task.item(_index_of(task, batch[row], n))
+            logits[row, item.answer_start - 1, task.vocabulary.id_of(item.answer[0])] = 10.0
+        return ce, logits
+
+    result = reasoning.score_reasoning(
+        task, varying, n_items=n, batch_size=n, floor=0.0464, degenerate_answer=("<n2>",)
+    )
+    # Every item has the same width, so the answer sits at the same position in all of them.
+    expected_nats = float(task.item(0).answer_start - 1)
+    assert result.answer_ce_bits == pytest.approx(expected_nats / np.log(2), rel=1e-9)
+    assert result.accuracy == 1.0

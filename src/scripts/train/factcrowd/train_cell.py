@@ -499,8 +499,17 @@ def build_trainer(
                 "schema": corpus.corpus_schema.schema.fingerprint(),
                 "vocabulary": corpus.vocabulary.fingerprint(),
                 "stream": None if corpus.stream is None else corpus.stream.fingerprint(),
+                # The renderer and the task *structure* are recorded separately from the stream and the
+                # task, because those two bake in the split and the exposure count -- so a scorer
+                # generating the eval split can never reproduce them, and the two things most worth
+                # checking went unchecked. A changed expression length or renderer seed passes the schema
+                # and vocabulary digests untouched while changing every item scored.
+                "renderer": None if corpus.renderer is None else corpus.renderer.fingerprint(),
                 "reasoning": {
                     stream.task.name: stream.task.fingerprint() for stream in corpus.task_streams
+                },
+                "reasoning_structure": {
+                    task.name: task.structure_fingerprint() for task in corpus.tasks
                 },
             },
             "checkpoint_steps": checkpoint_steps,

@@ -70,6 +70,22 @@ __all__ = [
 ]
 
 
+_DEGENERATE_SE_PP = 1e-12
+"""
+Below this, an observed between-seed standard error is treated as no information rather than as perfect
+precision.
+
+An endpoint that is dead (``n_correct == 0`` in every cell of every replicate) or saturated produces
+*identical* integer counts across seeds, so the between-seed SD is exactly zero, every t is infinite, and
+both one-sided nulls are rejected with p = 0. The pre-registered headline then comes out maximally strong
+from an instrument that measured nothing -- the failure PRD 1 lists four times. A frozen shared evaluation
+set makes identical counts more likely, not less.
+
+A real effect with identical seeds is still correctly rejected, so this blocks only the flat case, and it
+blocks it by withholding the verdict rather than by hiding the numbers: both p-values and the interval are
+still reported, and the verdict string says the variance estimate is degenerate.
+"""
+
 EQUIVALENCE_MARGIN_PP = 2.0
 """
 The pre-registered margin: accuracy points of change across the whole swept range.
@@ -621,6 +637,12 @@ class EquivalenceResult:
         """
         low, high = self.interval
         confidence = 100.0 * (1.0 - 2.0 * self.alpha)
+        if self.se_pp <= _DEGENERATE_SE_PP:
+            return (
+                f"no verdict: the between-seed standard error is {self.se_pp:.2e}pp, so the seeds "
+                f"produced identical scores and this measured no variance. A dead or saturated endpoint "
+                f"looks exactly like this (n={self.n_blocks})"
+            )
         if self.equivalent:
             return (
                 f"changes larger than {self.margin_pp:.2f}pp in either direction are excluded across "
@@ -696,6 +718,11 @@ class NonInferiorityResult:
     def verdict(self) -> str:
         """The sentence to publish, including the half of the parameter space left untested."""
         confidence = 100.0 * (1.0 - self.alpha)
+        if self.se_pp <= _DEGENERATE_SE_PP:
+            return (
+                f"no verdict: the between-seed standard error is {self.se_pp:.2e}pp, so the seeds "
+                f"produced identical scores and this measured no variance (n={self.n_blocks})"
+            )
         if self.non_inferior:
             return (
                 f"declines greater than {self.margin_pp:.2f}pp are excluded across "
@@ -781,7 +808,7 @@ def tost(
         p_lower=p_lower,
         p_upper=p_upper,
         interval=(effect - half_width, effect + half_width),
-        equivalent=bool(p_lower < alpha and p_upper < alpha),
+        equivalent=bool(p_lower < alpha and p_upper < alpha and standard_error > _DEGENERATE_SE_PP),
     )
 
 
@@ -824,7 +851,7 @@ def non_inferiority(
         alpha=alpha,
         p_value=p_value,
         lower_bound=effect - _t_quantile(1.0 - alpha, trend.df) * standard_error,
-        non_inferior=bool(p_value < alpha),
+        non_inferior=bool((p_value < alpha) and standard_error > _DEGENERATE_SE_PP),
     )
 
 

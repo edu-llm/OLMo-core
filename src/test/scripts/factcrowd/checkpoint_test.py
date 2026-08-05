@@ -254,3 +254,93 @@ def test_a_value_containing_a_comma_survives_the_round_trip():
     assert len(back) == 1
     assert back[0]["checkpoint_path"] == '/tmp/a,b/"quoted"/step1'
     assert back[0]["endpoint"] == "mano"
+
+
+def test_load_rebuilds_on_the_eval_split_and_verifies_what_it_rebuilt(tmp_path):
+    """
+    Through `load` itself, not through `BuiltCorpus` directly.
+
+    An adversarial pass changed `load`'s `split="eval"` to `"train"` and the whole suite passed, because
+    every split test built the corpus directly and never exercised the loader. Scoring the training split
+    measures memorisation and would look like a strong result.
+
+    `with_model=False` keeps this fast: the rebuild and the verification are what matter here, and loading
+    weights is covered by the end-to-end test.
+    """
+    cell = smoke_cell()
+    resolved = cell.resolve()
+    reference = CK.BuiltCorpus(resolved, tmp_path / "ref", split="eval", with_streams=False)
+    fake_checkpoint(
+        tmp_path,
+        11,
+        cell,
+        fingerprints={
+            "schema": reference.corpus_schema.schema.fingerprint(),
+            "vocabulary": reference.vocabulary.fingerprint(),
+            "reasoning_structure": {
+                task.name: task.structure_fingerprint() for task in reference.tasks
+            },
+        },
+    )
+
+    loaded = CK.load(
+        CK.CheckpointRef(step=11, path=str(tmp_path / "step11")),
+        work_dir=tmp_path / "wd",
+        with_model=False,
+    )
+    assert loaded.corpus.split == "eval"
+    assert loaded.corpus.tasks and all(task.split == "eval" for task in loaded.corpus.tasks)
+    assert loaded.cell == cell
+    # The resolved cell knows the padded vocabulary, so both parameter bases are real rather than equal.
+    assert loaded.resolved.total_params > loaded.resolved.non_embedding_params
+
+
+def test_load_refuses_a_checkpoint_whose_endpoint_shape_changed(tmp_path):
+    """
+    The structural task digest, which is the one a split-baked fingerprint could not provide.
+
+    A changed expression length passes the schema and vocabulary digests untouched while altering every
+    item scored -- demonstrated by an adversarial pass with MANO_LENGTH=13.
+    """
+    cell = smoke_cell()
+    reference = CK.BuiltCorpus(cell.resolve(), tmp_path / "ref", split="eval", with_streams=False)
+    fake_checkpoint(
+        tmp_path,
+        12,
+        cell,
+        fingerprints={
+            "schema": reference.corpus_schema.schema.fingerprint(),
+            "vocabulary": reference.vocabulary.fingerprint(),
+            "reasoning_structure": {task.name: "deadbeef" * 8 for task in reference.tasks},
+        },
+    )
+    with pytest.raises(OLMoConfigurationError, match="item shape has changed"):
+        CK.load(
+            CK.CheckpointRef(step=12, path=str(tmp_path / "step12")),
+            work_dir=tmp_path / "wd",
+            with_model=False,
+        )
+
+
+def test_load_refuses_a_checkpoint_that_carried_an_endpoint_the_rebuild_does_not(tmp_path):
+    """An endpoint that has vanished cannot be scored, and its absence may make the others incomparable."""
+    cell = smoke_cell()
+    reference = CK.BuiltCorpus(cell.resolve(), tmp_path / "ref", split="eval", with_streams=False)
+    fake_checkpoint(
+        tmp_path,
+        13,
+        cell,
+        fingerprints={
+            "schema": reference.corpus_schema.schema.fingerprint(),
+            "reasoning_structure": {
+                **{task.name: task.structure_fingerprint() for task in reference.tasks},
+                "brevo": "f" * 64,
+            },
+        },
+    )
+    with pytest.raises(OLMoConfigurationError, match="the rebuild does not carry"):
+        CK.load(
+            CK.CheckpointRef(step=13, path=str(tmp_path / "step13")),
+            work_dir=tmp_path / "wd",
+            with_model=False,
+        )
