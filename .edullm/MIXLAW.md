@@ -83,6 +83,17 @@ before submitting the next. Do not use fan-out. Both fixtures deliberately use
 the standard checkpoint contract: the benchmark uses one attempt, while
 production uses two and resumes directly from `EDULLM_CHECKPOINT_DIR`.
 
+Production bounds the run at 12 hours. Omitting the field inherits the
+workload profile's 24 hour ceiling, and with two attempts that is what an
+approver is shown as the worst case: $1,053.96 on a shape charged at $21.9576
+an hour. The 12 hours is the bound the curriculum branch already carries for
+the same run, which is the right comparison rather than a guess, because the
+two are the same training contract to the step: OLMo2-370M, 2,048 sequence,
+4,194,304 token global batch, 2,384 steps, permanent checkpoints at step 0 and
+on the 125 grid, and the full 20-task OLMES BPB suite run synchronously at
+every one of them. It is still a ceiling rather than an estimate, and the
+first production arm to finish is the measurement that should replace it.
+
 ## Local validation
 
 The fixtures compile credential-free against the untouched platform
