@@ -81,6 +81,33 @@ def lang_label(path: str) -> str:
     return "unknown"
 
 
+def materialize_local_paths(paths: List[str], work_dir: str) -> List[str]:
+    """Download remote shards into ``work_dir`` so padded FSL can index them.
+
+    ``NumpyPaddedFSLDataset`` finds document boundaries via ``*.csv.gz`` sidecars
+    named by replacing ``.npy`` — our ``.u32le.bin`` shards have no such sidecar,
+    and on S3 that path gunzips the token file itself (``BadGzipFile``). Local
+    paths with ``eos_token_id`` + ``dtype`` use the array instead. Val shards are
+    small (~40 KiB); train stays remote because plain FSL never needs the sidecar.
+    """
+    from olmo_core.io import add_cached_path_clients, copy_file, is_url
+
+    add_cached_path_clients()
+    os.makedirs(work_dir, exist_ok=True)
+    local: List[str] = []
+    for path in paths:
+        if not is_url(path):
+            local.append(path)
+            continue
+        lang = lang_label(path)
+        dest = os.path.join(work_dir, "val_shards", lang, os.path.basename(path))
+        if not os.path.isfile(dest):
+            copy_file(path, dest, save_overwrite=True, quiet=True)
+            log.info("materialized %s → %s", path, dest)
+        local.append(dest)
+    return local
+
+
 def resolve_val_corpus(*, dataset_id: str, version: str, tokenizer_id: str):
     """Like ``resolve_corpus`` but only the held-out split."""
     from edullm_data.read import dataset_paths, resolve_latest
@@ -259,9 +286,11 @@ def build_config(opts, overrides: List[str]):
         work_dir=opts.work_dir,
     )
 
+    # Labels from the sealed S3 URIs (materialized paths lose the tokens/<lang>/ layout).
     eval_metadata = [{"label": lang_label(p)} for p in val_corpus.paths]
+    val_local = materialize_local_paths(list(val_corpus.paths), opts.work_dir)
     eval_dataset = NumpyPaddedFSLDatasetConfig(
-        paths=val_corpus.paths,
+        paths=val_local,
         metadata=eval_metadata,
         sequence_length=opts.sequence_length,
         tokenizer=val_corpus.tokenizer,
