@@ -378,24 +378,45 @@ def corpus_from_manifest(read, *, dataset_id: str, version: str, tokenizer_id: s
 
     # WHICH SPLITS ARE HELD OUT IS THE READER'S ANSWER, NOT A RULE RESTATED HERE. `read.val`
     # is a property over `read.splits` filtered by the reader's own `is_trainable`, so the
-    # objects are the exact keys the manifest sealed -- topic directory and all. The declared
-    # row count is then taken for the splits whose objects ARE those val objects, rather than
-    # by re-deciding which partition names count as held out: a second copy of that rule here
-    # is a place for the two to disagree, and the disagreement would be a token count checked
-    # against the wrong partition's declaration.
+    # objects are the exact keys the manifest sealed -- topic directory and all.
     val_paths = list(getattr(read, "val", None) or [])
     split_rows = getattr(read, "split_rows", None) or {}
-    held_out = set(val_paths)
-    declared = [
-        split_rows.get(name)
-        for name, paths in (getattr(read, "splits", None) or {}).items()
-        if paths and held_out.issuperset(paths)
-    ]
-    val_rows = (
-        sum(n for n in declared if n is not None)
-        if declared and all(n is not None for n in declared)
-        else None
+    splits = getattr(read, "splits", None) or {}
+
+    # EXACTLY ONE HELD-OUT PARTITION, OR REFUSE. The reader's `is_trainable` excludes every
+    # split that is not `train`, and the dataset standard's vocabulary is {train, val, test} --
+    # so a corpus that declares a `test` partition hands back val AND test concatenated in
+    # `.val`. Summing both declarations would make the token check BALANCE while the reported
+    # endpoint quietly included the test set: both sides of the equality move together, so the
+    # exact check cannot see it, and the number that gets published is contaminated.
+    #
+    # Two held-out partitions is also a question this file cannot answer on its own -- which
+    # one is the endpoint? -- so it is refused rather than guessed at. olmo-150b-dolma2-v1
+    # declares one (`val`, 229,894,171 rows) and this passes; a corpus that grows a `test`
+    # split fails here, in the first seconds, rather than by publishing a wrong CE.
+    held_out_splits = sorted(
+        name for name, paths in splits.items() if paths and set(paths) <= set(val_paths)
     )
+    if len(held_out_splits) > 1:
+        raise Refusal(
+            Stage.THE_MANIFEST_IS_NOT_SAFE_TO_MEMMAP,
+            f"{dataset_id}/{version} declares {len(held_out_splits)} held-out partitions "
+            f"({', '.join(held_out_splits)}) and this entry point scores exactly one. Summing "
+            "them would put the test set inside the reported endpoint with the token check "
+            "still balancing, because both sides of it would move together.",
+        )
+
+    # And no object twice. `.val` is a concatenation over partitions, so two partitions that
+    # overlap would list a shard twice -- and a shard scored twice is weighted twice in a CE
+    # that is supposed to be a plain per-token mean.
+    if len(set(val_paths)) != len(val_paths):
+        raise Refusal(
+            Stage.THE_MANIFEST_IS_NOT_SAFE_TO_MEMMAP,
+            f"{dataset_id}/{version} lists {len(val_paths) - len(set(val_paths))} held-out "
+            "object(s) more than once, so those tokens would be weighted twice in the mean.",
+        )
+
+    val_rows = split_rows.get(held_out_splits[0]) if held_out_splits else None
 
     return Corpus(
         dataset_id=dataset_id,
@@ -1196,35 +1217,80 @@ def evaluate_val_aggregate(
             "sequence_length larger than the shards, are the two ways to get here.",
         )
 
-    # A rank with NO shards still has to enter every collective, and to do that it needs a
-    # tensor of the right shape to push through the model. It cannot borrow one from its own
-    # data, because it has none -- so the shape is derived from the parameters that are common
-    # to all ranks, which is `seq_len` and `micro`, and the ids are zeros. It is thrown away.
+    # EVERY FORWARD PASS ON EVERY RANK IS THE SAME SHAPE, `(micro, seq_len)`, AND THAT IS A
+    # STRONGER PROPERTY THAN IT LOOKS.
     #
-    # This is reachable whenever world_size > len(val_paths): 8 ranks over 60 objects gives
-    # every rank work, but a 64-GPU shape or a corpus with 3 val objects does not, and the
-    # version of this that asserted "every rank has at least one object" would have been a hang
-    # on exactly the shape that is easiest to submit by accident.
+    # `_shard_windows` yields a RAGGED last micro-batch: a shard with an odd window count ends
+    # in a `(1, seq_len)` batch where its peers are `(2, seq_len)`. So without this padding,
+    # rank A's k-th pass and rank B's k-th pass could differ in batch size. Under the FSDP2
+    # `fully_shard` this model uses that happens to be survivable -- its all-gathers are over
+    # PARAMETER shards, whose shapes do not depend on the batch -- but "happens to be
+    # survivable under the parallelism we currently configure" is not a property to rest an
+    # eleven-hour run on. It would break under FSDP1, under context parallelism (which shards
+    # by sequence), and it makes `compile_model=True` recompile per distinct shape.
+    #
+    # So short batches are padded to `micro` rows and the padding is excluded from the sums by
+    # count rather than by masking arithmetic -- `_forward_ce` returns per-token CE in row
+    # order, so the real tokens are exactly the first `rows * seq_len` of it. A rank with NO
+    # shards pads with an entirely synthetic batch, which is reachable whenever
+    # `world_size > len(val_paths)`: a 64-GPU shape, or a corpus with three val objects. An
+    # earlier draft replayed a rank's LAST real batch instead, which a rank with no batches does
+    # not have -- a hang on exactly the shape that is easiest to submit by accident.
     import numpy as np
 
-    filler = np.zeros((max(micro, 1), seq_len), dtype=np.int64)
+    rows = max(micro, 1)
+    filler = np.zeros((rows, seq_len), dtype=np.int64)
 
+    def pad(batch):
+        """Grow a short micro-batch to `rows` by repeating its first row."""
+        if batch.shape[0] == rows:
+            return batch
+        extra = np.repeat(batch[:1], rows - batch.shape[0], axis=0)
+        return np.concatenate([batch, extra], axis=0)
+
+    # THE FORWARD LOOP GETS THE SAME FAILURE-IS-A-VALUE TREATMENT AS THE DOWNLOAD, AND FOR THE
+    # SAME REASON. A corrupt memmap or a single-card OOM raises on ONE rank; letting that
+    # propagate straight out unwinds that rank while its peers are still inside the loop, and
+    # they then walk into an all_reduce it will never enter. The download was guarded and this
+    # was not -- the same deadlock, one code block later. Every rank still runs `steps`
+    # forwards; a rank that broke early pads out the remainder so the collective structure is
+    # unchanged, then all ranks agree to raise together below.
     was_training = model.training
     model.eval()
     ce_sum, n_tokens, done = 0.0, 0, 0
+    compute_error: Optional[BaseException] = None
     try:
-        for path in local_paths:
-            for _, xs, ys in _shard_windows(path, seq_len=seq_len, micro=micro, dtype=dtype):
-                ce = _forward_ce(model, xs, ys, vocab_size=vocab_size, device=device)
-                ce_sum += float(ce.sum())
-                n_tokens += int(ce.numel())
-                done += 1
+        try:
+            for path in local_paths:
+                for _, xs, ys in _shard_windows(
+                    path, seq_len=seq_len, micro=micro, dtype=dtype
+                ):
+                    real = xs.shape[0] * seq_len
+                    ce = _forward_ce(
+                        model, pad(xs), pad(ys), vocab_size=vocab_size, device=device
+                    )
+                    # Only the real rows count. `ce` is flat in row-major order, so the padding
+                    # is the tail and slicing it off is exact rather than approximate.
+                    ce_sum += float(ce[:real].sum())
+                    n_tokens += real
+                    done += 1
+        except BaseException as exc:  # noqa: BLE001 -- re-raised on every rank below
+            compute_error = exc
+            log.error("rank %d failed during the held-out forward pass: %r", rank, exc)
+
         # THE PADDING PASSES. Real collective traffic, discarded arithmetic. Without them a rank
         # that got 7 shards where its peer got 8 leaves the loop one forward early, reaches the
         # all_reduce below while the peer is still inside an all-gather, and the job hangs at
-        # the very end of a run that has already been paid for.
+        # the very end of a run that has already been paid for. A rank that ABORTED also lands
+        # here, with more to pad, which is what keeps its peers unblocked long enough to be told.
         while done < steps:
-            _forward_ce(model, filler, filler, vocab_size=vocab_size, device=device)
+            try:
+                _forward_ce(model, filler, filler, vocab_size=vocab_size, device=device)
+            except BaseException as exc:  # noqa: BLE001 -- see above
+                # A filler pass that also fails means this rank cannot participate at all.
+                # Nothing further can be done here; the count still advances so the loop ends
+                # and the reduction below can tell the other ranks.
+                compute_error = compute_error or exc
             done += 1
     finally:
         # Restored even on the way out through an exception, so a failure that is logged and
@@ -1236,6 +1302,23 @@ def evaluate_val_aggregate(
     # happened to get the larger shards. Called unconditionally -- `all_reduce_value` is a no-op
     # off a process group, so there is no world_size branch here that could be right in one
     # topology and a hang in the other.
+    #
+    # The failure flag goes FIRST, so a rank that broke does not contribute its partial sums to
+    # a number anyone might use.
+    if int(all_reduce_value(1 if compute_error else 0, device, op=torch.distributed.ReduceOp.SUM)):
+        if compute_error is not None:
+            raise Refusal(
+                Stage.THE_HELD_OUT_EVALUATION_SCORED_NOTHING,
+                f"rank {rank} failed during the held-out forward pass: "
+                f"{type(compute_error).__name__}: {compute_error}",
+            ) from compute_error
+        raise Refusal(
+            Stage.THE_HELD_OUT_EVALUATION_SCORED_NOTHING,
+            "another rank failed during the held-out forward pass, so the CE would be computed "
+            "over an incomplete token set. Failing on every rank rather than returning a "
+            "number that is quietly missing a rank's share.",
+        )
+
     ce_sum = float(all_reduce_value(ce_sum, device, op=torch.distributed.ReduceOp.SUM))
     n_tokens = int(all_reduce_value(n_tokens, device, op=torch.distributed.ReduceOp.SUM))
     tokens_present = int(all_reduce_value(local_present, device, op=torch.distributed.ReduceOp.SUM))
@@ -1340,7 +1423,19 @@ def assert_val_tokens_account_for_the_corpus(result) -> None:
             "nothing legitimate makes it differ -- a shard that failed to download, two shards "
             "written to one local name, a key rebuilt to the wrong topic, or a glob that "
             "matched a subset are what get here. The CE would look completely normal either "
-            "way, which is why this is checked rather than reported.",
+            "way, which is why this is checked rather than reported. "
+            # THE ONE FALSE-POSITIVE THIS CAN PRODUCE, NAMED IN THE MESSAGE RATHER THAN LEFT
+            # FOR SOMEBODY TO REDISCOVER AT 3AM. `rows` is the manifest's count for the
+            # partition and the standard's unit vocabulary is {rows, tokens, items, indices,
+            # bytes}. Only `tokens` and `indices` are fixed-width, and this compares against a
+            # TOKEN count -- so a held-out partition declaring `items` (documents, say) would
+            # trip this on every correct run. The reader does not expose the unit through
+            # `split_rows`, so it cannot be checked here; olmo-150b-dolma2-v1 declares tokens,
+            # and a corpus that does not needs the unit plumbed through rather than this
+            # assertion relaxed.
+            "If this fires on a corpus you believe is intact, check what unit the partition's "
+            "count is declared in: this compares against tokens, and a partition counted in "
+            "items or bytes is a different quantity rather than a wrong one.",
         )
     slack = n_shards * (seq_len + 1)
     if not 0 <= present - scored <= slack:
@@ -1461,9 +1556,38 @@ def show(config) -> None:
     rich.print(replace(config, dataset=shown))
 
 
-def train(config, opts=None) -> None:
+def train(config, opts) -> None:
+    """Train, then evaluate the held-out endpoint, then report. All three, or none.
+
+    ``opts`` IS REQUIRED, AND IT USED TO DEFAULT TO None. Everything after ``fit()`` -- the
+    endpoint, the token-count assertion and ``summarise()`` -- sat behind ``if opts is not
+    None``, so a caller that omitted it got a run that trained, checkpointed, and printed NO
+    JSON at all. That is not a smaller failure than the null endpoint this file exists to
+    remove; it is a larger one, because the JSON on stdout is the only channel the platform
+    reads a run's results back through. ``main()`` always passes ``opts``, so the default was
+    never exercised -- which is exactly why it could sit there being wrong. Making the
+    parameter required means a caller that forgets gets a TypeError at the call rather than a
+    silent trained-and-said-nothing run.
+    """
     if get_rank() == 0:
         show(config)
+
+    # THE TWO SEEDS MUST AGREE, BECAUSE ONE IS REPORTED AND THE OTHER IS USED. `build_config`
+    # sets both from `--init-seed`, and then `config.merge(overrides)` runs -- so a dotlist
+    # override on the command line (`init_seed=99`, which is a natural thing to type, or
+    # `model.init_seed=42`) moves ONE of them. `summarise()` prints `config.init_seed` while the
+    # weights are drawn from `config.model.init_seed`, so a divergence republishes the exact bug
+    # this file just fixed: a JSON asserting a seed the tensors never saw. Checked here rather
+    # than in `build_config` because `merge` happens on the way out of that function.
+    if config.init_seed != config.model.init_seed:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"the summary would report init_seed {config.init_seed} while the weights are drawn "
+            f"from {config.model.init_seed}. These are set together from --init-seed and can "
+            "only differ if an override moved one of them; an override on `init_seed` alone "
+            "changes what is REPORTED and not what is USED, which is the failure --init-seed "
+            "was just fixed for. Pass --init-seed instead of overriding either field.",
+        )
 
     seed_all(config.init_seed)
 
@@ -1499,22 +1623,20 @@ def train(config, opts=None) -> None:
     #
     # It runs BEFORE summarise() because summarise() prints it, and before the `finally` in
     # main() that tears the process group down, because it needs collectives.
-    val = None
-    if opts is not None:
-        val = evaluate_val_aggregate(
-            model=trainer.train_module.model,
-            vocab_size=config.model.vocab_size,
-            val_paths=list(config.val_paths),
-            work_dir=opts.work_dir,
-            seq_len=opts.sequence_length,
-            dtype=config.dataset.dtype.as_np_dtype(),
-            declared_tokens=config.val_rows,
-        )
-        # A MAGNITUDE CHECK ON THE ENDPOINT, RAISED RATHER THAN LOGGED. A CE over a quarter of
-        # the val set is in the normal range and would be believed. Every rank calls this on the
-        # same all-reduced numbers, so either all of them raise or none do -- there is no
-        # topology in which one rank refuses and the others go on to a collective it left.
-        assert_val_tokens_account_for_the_corpus(val)
+    val = evaluate_val_aggregate(
+        model=trainer.train_module.model,
+        vocab_size=config.model.vocab_size,
+        val_paths=list(config.val_paths),
+        work_dir=opts.work_dir,
+        seq_len=opts.sequence_length,
+        dtype=config.dataset.dtype.as_np_dtype(),
+        declared_tokens=config.val_rows,
+    )
+    # A MAGNITUDE CHECK ON THE ENDPOINT, RAISED RATHER THAN LOGGED. A CE over a quarter of the
+    # val set is in the normal range and would be believed. Every rank calls this on the same
+    # all-reduced numbers, so either all of them raise or none do -- there is no topology in
+    # which one rank refuses and the others go on to a collective it left.
+    assert_val_tokens_account_for_the_corpus(val)
 
     # The sliced evaluation is SECONDARY and remains rank-zero, because it reads frozen masks
     # that must be built first and it decomposes by gap band rather than producing the headline
@@ -1524,7 +1646,7 @@ def train(config, opts=None) -> None:
     # pass; the barrier below at least holds the other ranks inside the collective world while
     # rank zero works, which is what makes it survivable rather than correct.
     sliced = None
-    if opts is not None and opts.slice_mask_uri:
+    if opts.slice_mask_uri:
         try:
             if get_rank() == 0:
                 val_paths, mask_paths = fetch_slice_inputs(
@@ -1544,15 +1666,22 @@ def train(config, opts=None) -> None:
                     f"{sliced['aggregate']['n']:,}",
                 )
                 for band in sorted(BAND_BIT):
-                    entry = sliced["bands"][str(band)]
-                    if entry["n"]:
+                    scored = sliced["bands"][str(band)]
+                    if scored["n"]:
                         log.info(
                             "  gap>%-5s CE %.4f over %s tokens",
                             band,
-                            entry["ce"],
-                            f"{entry['n']:,}",
+                            scored["ce"],
+                            f"{scored['n']:,}",
                         )
-        except Exception as error:  # never lose a trained checkpoint to a SECONDARY eval bug
+        # `Exception` IS THE WRONG BASE HERE AND THE COMMENT USED TO PROMISE OTHERWISE.
+        # `Refusal` subclasses `SystemExit`, which is a `BaseException` and NOT an `Exception`
+        # -- so the `Refusal` that `evaluate_sliced` raises on a mask/shard length mismatch
+        # would sail straight through an `except Exception` that says it never loses a
+        # checkpoint to a secondary eval bug, and lose one. `KeyboardInterrupt` and the
+        # trainer's own cancellation are the reason this is not simply `BaseException`: those
+        # must still stop the run.
+        except (Exception, Refusal) as error:  # never lose a checkpoint to a SECONDARY eval bug
             log.warning(
                 "sliced eval failed (%s: %s); checkpoint is still on S3 and val_ce above is "
                 "unaffected",
@@ -1565,16 +1694,18 @@ def train(config, opts=None) -> None:
             # inside a forward, which at least fails.
             barrier()
 
-    if opts is not None:
-        summarise(
-            opts=opts,
-            config=config,
-            trainer=trainer,
-            losses=losses,
-            seconds=elapsed,
-            sliced=sliced,
-            val=val,
-        )
+    # Unconditional. The JSON on stdout is the only channel the platform reads a run's results
+    # back through, so a path that reaches here and prints nothing is a run that did not happen
+    # as far as the record is concerned.
+    summarise(
+        opts=opts,
+        config=config,
+        trainer=trainer,
+        losses=losses,
+        seconds=elapsed,
+        sliced=sliced,
+        val=val,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
