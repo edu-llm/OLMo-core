@@ -860,3 +860,720 @@ def test_raising_weight_decay_does_not_reach_the_embeddings():
         assert group["betas"] == (0.9, 0.98)
         assert group["eps"] == 1e-10
         assert group["lr"] == 1.4e-3
+
+
+# ----------------------------------------------------------------------------------------------
+# The held-out ladder. Ported from `.edullm/train_liv_arm.py` on
+# `agent/claude-01/liv-short-conv-mixer` (3274f33 -> 016c702), where this code has already
+# produced a real 13-point CE curve (2.8681@1000 -> 2.0392@12716).
+# ----------------------------------------------------------------------------------------------
+
+
+@dataclass
+class FakeManifestWithVal(FakeManifest):
+    """``FakeManifest`` plus the held-out split the reader resolves for free.
+
+    A SEPARATE class rather than a field on ``FakeManifest``, so that every test above keeps
+    handing ``corpus_from_manifest`` an object with no ``val`` attribute at all. That is the
+    duck-typed case the ``getattr(read, "val", None)`` read exists for, and folding the field
+    into the base class would delete the only coverage it has.
+    """
+
+    val: Optional[List[str]] = None
+
+
+@pytest.mark.parametrize(
+    "steps,expected",
+    [
+        # int() TRUNCATES: 762*0.35 = 266.7 -> 266 and 762*0.75 = 571.5 -> 571, not 267/572.
+        (762, [38, 76, 152, 266, 381, 571]),
+        # The entry point's own --steps default.
+        (200, [10, 20, 40, 70, 100, 150]),
+        # Short enough that 0.05/0.1 collapse into the floor and de-duplicate: 1,2,4,7,10,15
+        # becomes five rungs, not six.
+        (20, [2, 4, 7, 10, 15]),
+    ],
+)
+def test_the_ladder_rungs_are_the_specific_integers_the_run_evaluates_at(steps, expected):
+    """
+    Pin the rungs as NUMBERS, because an analysis script that rounds instead of truncating
+    would look for rungs that were never evaluated and find nothing.
+
+    Calls ``entry.ladder_steps`` -- the function ``build_config`` itself calls -- rather than
+    re-deriving the set comprehension. A test that recomputes the arithmetic locally pins its
+    own copy: it stays green when the real fractions are changed, which is exactly the
+    regression it would be written to prevent.
+    """
+    rungs = entry.ladder_steps(steps)
+    assert rungs == expected
+    # post_step returns early for step <= 1 (train/callbacks/evaluator_callback.py:107-109), so
+    # a rung there would silently never fire and read as "evaluated, no gap".
+    assert min(rungs) >= 2
+    # 1.0 is deliberately absent from LADDER_FRACTIONS -- eval_on_finish already scores the
+    # final step, and listing it too would score the same model twice.
+    assert steps not in rungs
+    assert rungs == sorted(set(rungs)), "rungs must be unique and ascending"
+    assert len(rungs) <= len(entry.LADDER_FRACTIONS)
+
+
+def _wire_a_corpus(monkeypatch, val_paths):
+    """Point ``resolve_corpus`` at a manifest carrying ``val_paths``, without touching S3."""
+    monkeypatch.setattr(
+        entry,
+        "resolve_corpus",
+        lambda **kwargs: entry.corpus_from_manifest(
+            FakeManifestWithVal(val=val_paths),
+            dataset_id=kwargs["dataset_id"],
+            version=kwargs["version"],
+            tokenizer_id=kwargs["tokenizer_id"],
+        ),
+    )
+
+
+def _build_with_heldout(monkeypatch, tmp_path, val_paths, steps=200):
+    """Build the real config with the held-out block live, faking only the S3 download.
+
+    ``_download_to`` is replaced with something that writes bytes, and ``get_file_size`` with
+    the size it writes, so ``_localised_heldout_paths`` runs its real logic -- the URL test,
+    the cache path, the size comparison -- against a filesystem instead of a bucket.
+
+    ``LOCAL_RANK`` is pinned to "0" so these build as the fetching process. Without it the test
+    outcome would depend on whatever the ambient environment happens to carry, and a shell that
+    exported LOCAL_RANK=1 would turn the download assertions into silent no-ops.
+    """
+    _wire_a_corpus(monkeypatch, val_paths)
+    monkeypatch.setenv("LOCAL_RANK", "0")
+
+    payload = b"\x00\x01\x02\x03" * 4
+
+    def fake_download(url, dest):
+        Path(dest).write_bytes(payload)
+
+    monkeypatch.setattr(entry, "_download_to", fake_download)
+    monkeypatch.setattr("olmo_core.io.get_file_size", lambda url: len(payload))
+
+    opts, overrides = entry.build_parser().parse_known_args(
+        [
+            "a-run-id",
+            "--dataset-id=pretrain/regmix-10b",
+            "--dataset-version=v1",
+            "--dataset-tokenizer=tokenizer/dolma2-bpe",
+            "--save-folder=s3://outputs/teams/platform/runs/a-run-id/checkpoints/",
+            f"--work-dir={tmp_path}",
+            f"--steps={steps}",
+        ]
+    )
+    return opts, entry.build_config(opts, overrides)
+
+
+def test_every_heldout_path_reaching_the_evaluator_is_local_and_is_the_sorted_prefix(
+    monkeypatch, tmp_path
+):
+    """
+    THREE PROPERTIES, EACH WITH A SCAR.
+
+    LOCAL, because ``iter_document_indices`` (data/utils.py:193-197) only scans the array for
+    EOS boundaries when the path is NOT a url. For an ``s3://`` path it derives a sidecar name
+    as ``basename.replace(".npy", ".csv.gz")`` (:217) -- a no-op on ``.u32le.bin``, so the
+    "metadata file" resolves to the shard itself and ``gzip.open`` is handed raw uint32.
+    ``run_019fce60`` died exit 70 on exactly that.
+
+    EXACTLY ``min(HELDOUT_SHARDS, len(val_paths))``, because ``prepare()`` builds a per-shard
+    index for every path at startup and a whole corpus of them costs more than the eval.
+
+    THE SORTED PREFIX, because the subset must be identical across arms and seeds. A per-cell
+    subset makes the rungs incomparable, which is the one thing a ladder cannot tolerate.
+    """
+    from olmo_core.io import is_url
+
+    # Deliberately UNSORTED, and more shards than the ladder wants, so both the truncation and
+    # the ordering are observable rather than accidental.
+    val = [
+        "s3://edullm-data/x/v1/tokens/src/val-00004.u32le.bin",
+        "s3://edullm-data/x/v1/tokens/src/val-00000.u32le.bin",
+        "s3://edullm-data/x/v1/tokens/src/val-00003.u32le.bin",
+        "s3://edullm-data/x/v1/tokens/src/val-00001.u32le.bin",
+        "s3://edullm-data/x/v1/tokens/src/val-00002.u32le.bin",
+        "s3://edullm-data/x/v1/tokens/src/val-00005.u32le.bin",
+    ]
+    _, config = _build_with_heldout(monkeypatch, tmp_path, val)
+
+    eval_dataset = config.trainer.callbacks["lm_eval"].eval_dataset
+    paths = eval_dataset.paths
+
+    assert entry.HELDOUT_SHARDS == 4
+    assert len(paths) == min(entry.HELDOUT_SHARDS, len(val)) == 4
+    for path in paths:
+        assert not is_url(path), f"held-out paths must be local, got {path}"
+    # The sorted prefix of the six, in order: 00000, 00001, 00002, 00003. Basenames rather than
+    # full paths, because the directory is the run's work dir.
+    assert [Path(p).name for p in paths] == [
+        "val-00000.u32le.bin",
+        "val-00001.u32le.bin",
+        "val-00002.u32le.bin",
+        "val-00003.u32le.bin",
+    ]
+    # And they landed under the work dir both invocations share, not somewhere per-process.
+    for path in paths:
+        assert Path(path).parent == tmp_path / "heldout-shards"
+
+
+def test_fewer_val_shards_than_the_ladder_wants_uses_all_of_them(monkeypatch, tmp_path):
+    """``min(HELDOUT_SHARDS, len(val_paths))``, exercised from the short side.
+
+    A slice would silently produce two paths here whether the floor were min() or not, so the
+    case is only load-bearing together with the six-shard test above.
+    """
+    val = [
+        "s3://edullm-data/x/v1/tokens/src/val-00001.u32le.bin",
+        "s3://edullm-data/x/v1/tokens/src/val-00000.u32le.bin",
+    ]
+    _, config = _build_with_heldout(monkeypatch, tmp_path, val)
+    paths = config.trainer.callbacks["lm_eval"].eval_dataset.paths
+    assert len(paths) == min(entry.HELDOUT_SHARDS, len(val)) == 2
+    assert [Path(p).name for p in paths] == ["val-00000.u32le.bin", "val-00001.u32le.bin"]
+
+
+def test_the_eval_dataset_is_padded_and_carries_a_label_for_every_path(monkeypatch, tmp_path):
+    """
+    Two library contracts that raise at BUILD time, asserted where they can regress.
+
+    ``LMEvaluatorCallbackConfig.build`` raises ``OLMoConfigurationError`` unless the dataset is
+    a ``NumpyPaddedFSLDataset`` (train/callbacks/evaluator_callback.py:268-272), so the plain
+    ``NumpyFSLDatasetConfig`` the training path uses fails there.
+
+    ``LMEvaluator.from_numpy_dataset`` zips ``dataset.paths`` with ``dataset.metadata`` and
+    raises on any path whose metadata lacks a ``"label"`` key (eval/lm_evaluator.py:60-66).
+    The zip means a SHORT metadata list is worse than a missing one: it silently drops the
+    trailing paths instead of raising, so the count is asserted, not just the keys.
+    """
+    from olmo_core.data import NumpyPaddedFSLDatasetConfig
+
+    val = [f"s3://edullm-data/x/v1/tokens/src/val-0000{i}.u32le.bin" for i in range(6)]
+    _, config = _build_with_heldout(monkeypatch, tmp_path, val)
+    eval_dataset = config.trainer.callbacks["lm_eval"].eval_dataset
+
+    assert isinstance(eval_dataset, NumpyPaddedFSLDatasetConfig)
+    # Both fields are Optional on the config, and `None` is the shape that makes the zip in
+    # from_numpy_dataset yield nothing at all -- so pin non-None before counting.
+    metadata = eval_dataset.metadata
+    paths = eval_dataset.paths
+    assert metadata is not None and paths is not None
+    assert len(metadata) == len(paths) == 4
+    assert all("label" in m for m in metadata)
+    assert {m["label"] for m in metadata} == {"heldout-val"}
+
+
+def test_the_eval_dataset_reads_the_corpus_width_and_vocab_rather_than_a_default(
+    monkeypatch, tmp_path
+):
+    """
+    ``get_dtype()`` falls back to the NARROWEST dtype the tokenizer's vocab fits in when
+    ``dtype`` is unset -- 100,278 fits in uint16, and these corpora are uint32, so a default
+    here reads every token two bytes at a time and never raises. Same trap the training path
+    documents in the module header; the eval path is a second place to fall into it.
+
+    The vocab comes off the corpus too. Nothing here pins a number.
+    """
+    val = ["s3://edullm-data/x/v1/tokens/src/val-00000.u32le.bin"]
+    _, config = _build_with_heldout(monkeypatch, tmp_path, val)
+    eval_dataset = config.trainer.callbacks["lm_eval"].eval_dataset
+
+    assert eval_dataset.dtype == "uint32"
+    # Same dtype the training dataset got, from the same manifest field.
+    assert eval_dataset.dtype == config.dataset.dtype
+    # Same tokenizer the model's vocab was derived from -- dolma2's 100,278 padding to 100,352
+    # -- rather than a literal written here. Compared by VALUE, not identity: `config.merge`
+    # deep-copies, so the two are equal rather than the same object by the time this sees them.
+    assert eval_dataset.tokenizer == config.dataset.tokenizer
+    assert eval_dataset.tokenizer.vocab_size == 100_278
+    assert eval_dataset.tokenizer.padded_vocab_size() == 100_352
+    # And that padded vocab is what the model was actually built at.
+    assert config.model.vocab_size == 100_352
+
+
+def test_both_invocations_share_a_work_dir_and_a_sequence_length_the_module_accepts(
+    monkeypatch, tmp_path
+):
+    """
+    ``--work-dir`` is what makes ``--prepare-heldout-only`` worth running: the indices it
+    writes are found by the eval callback only if both processes name the same directory. If
+    they diverge, ``paths_needed`` is non-empty inside the distributed program and the
+    96-worker pool opens behind a collective again -- the exit-72 deadlock, twice, ~$11.
+
+    Sequence length: ``LMEvaluatorCallbackConfig.build`` raises when the eval dataset is longer
+    than ``train_module.eval_batch_spec.max_sequence_length``, which for the transformer module
+    is just ``self.max_sequence_length``
+    (train/train_module/transformer/train_module.py:205-210).
+    """
+    opts, config = _build_with_heldout(
+        monkeypatch, tmp_path, ["s3://edullm-data/x/v1/tokens/src/val-00000.u32le.bin"]
+    )
+    eval_dataset = config.trainer.callbacks["lm_eval"].eval_dataset
+
+    assert eval_dataset.work_dir == opts.work_dir == str(tmp_path)
+    assert eval_dataset.work_dir == config.dataset.work_dir
+    assert eval_dataset.sequence_length <= config.train_module.max_sequence_length
+    assert eval_dataset.sequence_length == 2048
+
+
+def test_the_ladder_the_config_carries_is_the_one_ladder_steps_computed(monkeypatch, tmp_path):
+    """The rungs on the callback come from the shared function, not from a second copy inline."""
+    _, config = _build_with_heldout(
+        monkeypatch, tmp_path, ["s3://edullm-data/x/v1/tokens/src/val-00000.u32le.bin"], steps=762
+    )
+    callback = config.trainer.callbacks["lm_eval"]
+    assert callback.fixed_steps == entry.ladder_steps(762) == [38, 76, 152, 266, 381, 571]
+    # None, so nothing but fixed_steps and eval_on_finish triggers an eval. A number here would
+    # add unrequested rungs and change what every cell costs.
+    assert callback.eval_interval is None
+    assert callback.eval_on_finish is True
+
+
+def test_every_field_on_the_eval_callback_is_pinned_including_what_a_rung_costs(
+    monkeypatch, tmp_path
+):
+    """
+    THE COST KNOB, PINNED. ``eval_duration`` was the one field on this callback that nothing
+    asserted, and it is the field whose default is expensive: ``LMEvaluatorCallbackConfig``
+    defaults it to ``Duration.epochs(1)``
+    (train/callbacks/evaluator_callback.py:227), which scores every shard IN FULL at every
+    rung. With a six-rung ladder over four shards that is the eval costing more than the
+    training it measures, and it fails no test and raises nothing -- the run is just slower and
+    more expensive, which is invisible in the metrics.
+
+    Asserted as UNIT AND VALUE, not merely non-None. ``Duration`` is a dataclass of
+    ``(value, unit)`` (train/common.py:36-45), so ``Duration.epochs(32)`` and
+    ``Duration.steps(32)`` both have value 32 and only the unit tells them apart -- an
+    assertion on the value alone would pass through the exact swap that matters.
+
+    Every remaining field is pinned here too, so that the library changing a default cannot
+    quietly move what this experiment does. The audit lists these as the callback's full
+    surface, and this test is what makes that list enforceable rather than descriptive.
+    """
+    from olmo_core.train.common import Duration, DurationUnit
+
+    _, config = _build_with_heldout(
+        monkeypatch, tmp_path, ["s3://edullm-data/x/v1/tokens/src/val-00000.u32le.bin"], steps=200
+    )
+    callback = config.trainer.callbacks["lm_eval"]
+
+    assert callback.eval_duration == Duration.steps(32)
+    assert callback.eval_duration.unit == DurationUnit.steps
+    assert callback.eval_duration.value == 32
+    # Not the library default, which is the whole point of pinning it.
+    assert callback.eval_duration != Duration.epochs(1)
+    assert callback.eval_duration.unit != DurationUnit.epochs
+
+    # The rest of the surface, so a changed library default cannot pass unnoticed.
+    assert callback.eval_interval is None
+    assert callback.eval_on_finish is True
+    assert callback.eval_on_startup is False
+    assert callback.cancel_after_first_eval is False
+    assert callback.enabled is True
+    assert callback.deterministic is True
+    assert callback.log_interval == 5
+
+
+def test_a_corpus_with_no_val_split_attaches_no_ladder_and_says_so(monkeypatch, tmp_path, caplog):
+    """
+    Not fatal -- eleven of sixteen releases have a val split, five correctly do not -- but it
+    must not pass silently. Without a ladder the run still trains and still reports a training
+    loss, and the missing endpoint is invisible until analysis.
+    """
+    import logging
+
+    _wire_a_corpus(monkeypatch, None)
+    opts, overrides = entry.build_parser().parse_known_args(
+        [
+            "a-run-id",
+            "--dataset-id=pretrain/regmix-10b",
+            "--dataset-version=v1",
+            "--dataset-tokenizer=tokenizer/dolma2-bpe",
+            "--save-folder=/tmp/x",
+            f"--work-dir={tmp_path}",
+        ]
+    )
+    with caplog.at_level(logging.WARNING):
+        config = entry.build_config(opts, overrides)
+
+    assert "lm_eval" not in config.trainer.callbacks
+    assert any("NO held-out split" in r.message for r in caplog.records)
+
+
+def test_a_val_shard_that_is_also_a_training_shard_is_refused_by_number(tmp_path):
+    """
+    CONTAMINATION, REFUSED LOUDLY. This project has already shipped a "held-out" set whose
+    shards were byte-copies of training shards, and the failure is invisible: the eval number
+    just looks better than it is.
+
+    Asserted on the STAGE'S INTEGER, because that number is the only channel out of a container
+    that dies before W&B exists, and on the message naming the shard, because a refusal that
+    does not say which one leaves the next person to diff two path lists by hand.
+    """
+    shared = "s3://edullm-data/x/v1/tokens/src/shard-00007.u32le.bin"
+    manifest = FakeManifestWithVal(
+        paths=["s3://edullm-data/x/v1/tokens/src/train-00000.u32le.bin", shared],
+        val=[shared, "s3://edullm-data/x/v1/tokens/src/val-00000.u32le.bin"],
+    )
+    with pytest.raises(entry.Refusal) as caught:
+        resolve(manifest)
+
+    assert caught.value.stage is entry.Stage.THE_MANIFEST_IS_NOT_SAFE_TO_MEMMAP
+    assert int(caught.value.stage) == 68
+    assert shared in caught.value.explanation
+    assert "1 shard(s) in BOTH" in caught.value.explanation
+
+
+def test_a_clean_split_carries_its_val_paths_through_untouched():
+    """The refusal above must not fire on the normal case, and `val` must actually arrive."""
+    val = ["s3://edullm-data/x/v1/tokens/src/val-00000.u32le.bin"]
+    corpus = resolve(
+        FakeManifestWithVal(paths=["s3://edullm-data/x/v1/tokens/src/t-0.u32le.bin"], val=val)
+    )
+    assert corpus.val_paths == val
+    assert corpus.paths == ["s3://edullm-data/x/v1/tokens/src/t-0.u32le.bin"]
+
+
+def test_a_manifest_that_predates_the_val_field_still_resolves():
+    """
+    The ``getattr(read, "val", None)`` read is duck-typed on purpose: ``corpus_from_manifest``
+    promises anything with paths/dtype/byte_order/header_bytes/rows will do, and ``FakeManifest``
+    has no ``val`` attribute at all.
+    """
+    corpus = resolve(FakeManifest())
+    assert corpus.val_paths == []
+    # Empty rather than None, so callers branch on truthiness. ResolvedSplit.val itself returns
+    # None for "no validation data" (edullm-data read.py:158-166).
+    assert corpus.val_paths is not None
+
+
+def test_train_does_not_prepare_the_heldout_indices():
+    """
+    THE FIX, ASSERTED WHERE IT CAN REGRESS. TWO RUNS AND ~$11 WENT ON THIS.
+
+    ``NumpyPaddedFSLDataset.prepare()`` opens a bare ``ProcessPoolExecutor()`` -- 96 workers on
+    a p4d.24xlarge, under a forced "spawn" start method -- and then every rank meets a
+    ``barrier()``. Called from inside the distributed program it stranded seven ranks past
+    gloo's 900-second timeout, twice, at exit 72 with nothing trained.
+
+    The first attempt at a fix merely moved the call earlier in ``train()`` and failed
+    identically, so "call it early" is not the invariant. The invariant is that ``train()``
+    does not call it at all: the indices are built by a separate single-process invocation
+    before ``torchrun``, and by the time the eval callback runs they are cached.
+
+    A four-rank local reproduction on ten cores does NOT deadlock, so no unit test can catch a
+    regression here dynamically. This asserts the structural property instead.
+    """
+    import inspect
+
+    src = inspect.getsource(entry.train)
+    assert "prepare_heldout_indices" not in src, (
+        "train() must not prepare the held-out indices; that call belongs in the separate "
+        "--prepare-heldout-only invocation, outside any process group"
+    )
+
+
+def test_the_prepare_only_path_exits_before_the_process_group_starts():
+    """
+    Order in ``main``: the prepare-only branch must return BEFORE
+    ``prepare_training_environment()``. If a process group exists, the barrier inside
+    ``prepare()`` is live again and the deadlock is back.
+    """
+    import inspect
+
+    # Comments are stripped, so a comment naming prepare_training_environment cannot be
+    # mistaken for the call. The prose above the branch mentions the function by name.
+    lines = [
+        line.split("#")[0]
+        for line in inspect.getsource(entry.main).splitlines()
+        if not line.strip().startswith("#")
+    ]
+    src = "\n".join(lines)
+    branch_at = src.index("opts.prepare_heldout_only")
+    env_at = src.index("prepare_training_environment()")
+    assert branch_at < env_at, "the prepare-only branch must precede the process group"
+
+
+def test_prepare_heldout_only_is_a_flag_and_defaults_off():
+    """A normal training run must not silently turn into an index build."""
+    parser = entry.build_parser()
+    assert parser.parse_args([]).prepare_heldout_only is False
+    assert parser.parse_args(["--prepare-heldout-only"]).prepare_heldout_only is True
+
+
+def test_a_url_shard_would_be_gunzipped_so_heldout_paths_must_be_local():
+    """
+    THE BUG THAT KILLED run_019fce60 AT EXIT 70, pinned as arithmetic on a filename.
+
+    ``iter_document_indices`` only scans the array for EOS boundaries when the path is NOT a
+    url. For a url it derives a sidecar metadata filename as
+    ``basename.replace(".npy", ".csv.gz")`` and gunzips it. Our shards end ``.u32le.bin``, so
+    that replace is a no-op: the "metadata file" it resolves is the shard itself, which exists,
+    so there is no FileNotFoundError -- it gunzips raw uint32 tokens and dies with
+    ``BadGzipFile: Not a gzipped file (b'5\\x00')``. Token 53 is ``b"5\\x00\\x00\\x00"``.
+    """
+    import gzip
+    import io
+    import os
+
+    assert os.path.basename("val-00033.u32le.bin").replace(".npy", ".csv.gz") == (
+        "val-00033.u32le.bin"
+    ), "if this ever differs, the library gained real sidecar support and the download may go"
+    # And the same derivation IS meaningful for the naming the library was written for.
+    assert os.path.basename("part-000.npy").replace(".npy", ".csv.gz") == "part-000.csv.gz"
+
+    # Gunzipping little-endian uint32 tokens fails exactly the way production did.
+    raw = (53).to_bytes(4, "little") + (100257).to_bytes(4, "little")
+    with pytest.raises(gzip.BadGzipFile):
+        with gzip.open(io.BytesIO(raw), "rt") as f:
+            f.readline()
+
+
+def test_a_cached_shard_of_the_right_size_is_not_downloaded_again(tmp_path, monkeypatch):
+    """
+    Size, not existence. A truncated download left by a killed attempt would otherwise be
+    reused, and a short shard yields WRONG document boundaries rather than an error -- the
+    ladder would report a number computed over the wrong instances.
+
+    Runs as the fetching process (LOCAL_RANK=0): the truncation protection lives on that side
+    of the gate, so pinning the rank is what keeps this a test of the size check rather than a
+    test of the gate.
+    """
+    from unittest import mock
+
+    monkeypatch.setenv("LOCAL_RANK", "0")
+
+    class _Opts:
+        work_dir = str(tmp_path)
+
+    url = "s3://bucket/pretrain/x/val-00001.u32le.bin"
+    payload = b"\xde\xad\xbe\xef" * 8
+    cached = tmp_path / "heldout-shards" / "val-00001.u32le.bin"
+    cached.parent.mkdir(parents=True, exist_ok=True)
+    cached.write_bytes(payload)
+
+    with mock.patch.object(entry, "_download_to") as download, mock.patch(
+        "olmo_core.io.get_file_size", return_value=len(payload)
+    ):
+        out = entry._localised_heldout_paths([url], _Opts())
+    download.assert_not_called()
+    assert out == [str(cached)]
+
+    # Now truncate it: the same call must re-fetch rather than trust what is on disk.
+    cached.write_bytes(payload[:4])
+    with mock.patch.object(entry, "_download_to") as download, mock.patch(
+        "olmo_core.io.get_file_size", return_value=len(payload)
+    ):
+        entry._localised_heldout_paths([url], _Opts())
+    download.assert_called_once()
+
+
+def test_preparing_heldout_indices_warns_rather_than_raising_without_a_ladder():
+    """
+    A corpus with no val split attaches no ``lm_eval`` callback. Preparing must then be a
+    no-op, not a KeyError -- the absence is a property of the corpus, not an error, and the
+    platform runs the prepare step unconditionally before torchrun.
+    """
+    from unittest import mock
+
+    from olmo_core.train import TrainerConfig
+    from olmo_core.train.callbacks import GPUMemoryMonitorCallback
+
+    trainer = TrainerConfig(
+        save_folder="/tmp/does-not-matter", metrics_collect_interval=5, cancel_check_interval=5
+    ).with_callback("gpu_monitor", GPUMemoryMonitorCallback())
+
+    cfg = mock.Mock(trainer=trainer)
+    with mock.patch.object(entry.log, "warning") as warn:
+        entry.prepare_heldout_indices(cfg)
+    assert warn.called, "a run with no ladder must say so rather than pass silently"
+
+
+def test_only_one_process_per_node_heads_or_downloads_the_heldout_shards(monkeypatch, tmp_path):
+    """
+    THE S3 HEAD STORM, AND WHY THE OBVIOUS GATE WOULD HAVE BEEN A NO-OP.
+
+    The size comparison IS the cache condition, so ``get_file_size`` -- an S3 HEAD -- is issued
+    on every call even when the shard is already local. ``get_file_size`` is decorated
+    ``@maybe_cache(condition=is_url)`` (io.py:107) and ``maybe_cache`` disables caching entirely
+    unless ``OLMO_CORE_FS_CACHE_DIR`` is set (fs_cache.py:34-38); nothing in ``.edullm/`` sets
+    it. ``build_config`` runs unguarded on every rank (main():1222), so ungated this is
+    8 ranks x N shards of HEADs at config-build time, and a throttle on any one of them dies
+    inside ``during(THE_CONFIG_WOULD_NOT_BUILD)`` at exit 70 -- which looks exactly like the
+    sidecar bug.
+
+    ``get_rank()``/``get_fs_local_rank()`` CANNOT be the gate: build_config runs BEFORE
+    ``prepare_training_environment()`` (:1237), so ``dist.is_initialized()`` is False and both
+    helpers return 0 in all eight workers (distributed/utils.py:249-256, :301-307). The gate
+    reads ``LOCAL_RANK`` from the environment, which torchrun sets at spawn.
+    """
+    from unittest import mock
+
+    class _Opts:
+        work_dir = str(tmp_path)
+
+    url = "s3://bucket/pretrain/x/val-00001.u32le.bin"
+
+    # A non-zero local rank: no HEAD, no download, but still a usable local path.
+    monkeypatch.setenv("LOCAL_RANK", "3")
+    with mock.patch.object(entry, "_download_to") as download, mock.patch(
+        "olmo_core.io.get_file_size", side_effect=AssertionError("rank 3 must not issue a HEAD")
+    ):
+        out = entry._localised_heldout_paths([url], _Opts())
+    download.assert_not_called()
+    assert out == [str(tmp_path / "heldout-shards" / "val-00001.u32le.bin")]
+
+    # Local rank 0 on the same box still does the real, size-verified fetch. The shard is
+    # pre-created at the WRONG size so the size branch is actually reached: the condition is
+    # `not dest.is_file() or size != get_file_size(url)`, which short-circuits on an absent
+    # file and would never issue a HEAD at all.
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    cached = tmp_path / "heldout-shards" / "val-00001.u32le.bin"
+    cached.parent.mkdir(parents=True, exist_ok=True)
+    cached.write_bytes(b"\x00" * 8)
+
+    heads = []
+    with mock.patch.object(entry, "_download_to") as download, mock.patch(
+        "olmo_core.io.get_file_size", side_effect=lambda u: (heads.append(u), 64)[1]
+    ):
+        out_zero = entry._localised_heldout_paths([url], _Opts())
+    assert heads == [url], "local rank 0 issues exactly one HEAD per shard"
+    download.assert_called_once()
+    # Both ranks agree on the string, which is what keeps _get_indices_path's SHA-256 cache key
+    # identical between the prepare-only invocation and the eval callback.
+    assert out_zero == out
+
+
+def test_a_single_process_invocation_still_fetches(monkeypatch, tmp_path):
+    """
+    ``--prepare-heldout-only`` runs with no ``LOCAL_RANK`` in the environment, and it is
+    precisely the invocation that must do the real download. A gate that defaulted to
+    "not the fetcher" would make the prepare step a no-op and push the work back inside the
+    distributed program -- the exit-72 deadlock.
+    """
+    from unittest import mock
+
+    class _Opts:
+        work_dir = str(tmp_path)
+
+    monkeypatch.delenv("LOCAL_RANK", raising=False)
+    assert entry._may_fetch_heldout_shards() is True
+
+    with mock.patch.object(entry, "_download_to") as download, mock.patch(
+        "olmo_core.io.get_file_size", return_value=64
+    ):
+        entry._localised_heldout_paths(["s3://bucket/x/val-00000.u32le.bin"], _Opts())
+    download.assert_called_once()
+
+
+def test_the_part_file_is_per_process_so_two_writers_cannot_share_one(monkeypatch, tmp_path):
+    """
+    ``_download_to`` writes a temporary then renames. With one fixed ``.part`` name, two
+    processes reaching this concurrently write the same path and rename it underneath each
+    other, and the loser's partial bytes can end up as the shard -- wrong document boundaries,
+    silently. The pid in the name makes the temporary unique per writer.
+    """
+    import os as _os
+
+    captured = {}
+
+    class _FakeS3:
+        def download_file(self, bucket, key, path):
+            captured["tmp"] = path
+            Path(path).write_bytes(b"\x00\x01\x02\x03")
+
+    fake_boto3 = type("_B", (), {"client": staticmethod(lambda _name: _FakeS3())})
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+
+    dest = tmp_path / "val-00000.u32le.bin"
+    entry._download_to("s3://bucket/x/val-00000.u32le.bin", dest)
+
+    assert dest.is_file(), "the shard is renamed into place"
+    assert captured["tmp"] != str(dest), "it is written via a temporary, not in place"
+    assert str(_os.getpid()) in captured["tmp"], "the temporary must be per-process"
+    assert captured["tmp"].endswith(".part")
+    assert not Path(captured["tmp"]).exists(), "the temporary is renamed away, not left behind"
+
+
+def test_a_fresh_model_scores_about_ln_vocab_and_the_evaluator_reports_that_number():
+    """
+    THE MAGNITUDE OF THE NUMBER THE EXPERIMENT EXISTS TO PRODUCE.
+
+    An untrained model over V=100,352 is uniform, so its CE is ln(V) = 11.5164 nats and its PPL
+    is ~V. Every plausible bug in this path lands somewhere else entirely: reading uint32 data
+    as uint16 gives a garbage-but-finite loss, an unpopulated label gives NaN, and a metric
+    reading its own zeros gives 0/0. Pinning the BAND is what tells those apart -- "a row
+    exists" does not, because ``compute_metrics`` calls ``metric.update(0.0, 0.0)`` before
+    ``compute()`` (eval/lm_evaluator.py:110-121), so a label that received NO data still emits
+    a value rather than nothing.
+
+    Driven through ``LMEvaluator``'s real ``update_metrics``/``compute_metrics`` with synthetic
+    per-token losses rather than end-to-end: a real forward pass needs a GPU. What this pins is
+    the arithmetic between a per-token CE and the reported row, which is where a
+    masking/weighting mistake would show up.
+    """
+    import math
+
+    import torch
+
+    from olmo_core.eval.lm_evaluator import LMEvaluator
+
+    ln_vocab = math.log(100_352)
+    assert abs(ln_vocab - 11.5164) < 1e-3, "sanity: ln(100,352) is the step-0 target"
+
+    evaluator = LMEvaluator(
+        name="lm",
+        batches=[],
+        labels=["heldout-val"],
+        device=torch.device("cpu"),
+    )
+
+    # Two instances of four tokens each, every token at the uniform-model loss.
+    batch = {
+        "metadata": [{"label": "heldout-val"}, {"label": "heldout-val"}],
+        "label_mask": torch.ones(2, 4, dtype=torch.bool),
+    }
+    ce_loss = torch.full((2, 4), ln_vocab, dtype=torch.float32)
+    evaluator.update_metrics(batch, ce_loss, None)
+
+    metrics = evaluator.compute_metrics()
+    ce = float(metrics["heldout-val/CE loss"])
+    ppl = float(metrics["heldout-val/PPL"])
+
+    assert not math.isnan(ce), "NaN is what an unpopulated label reports; this one has data"
+    # The band a freshly-initialised model must land in: not 0, not 2.0 (a trained model), not
+    # a garbage magnitude from a mis-decoded width.
+    assert 10.5 < ce < 12.5, f"step-0 CE must be near ln(vocab)=11.5164, got {ce}"
+    assert abs(ce - ln_vocab) < 1e-4
+    assert ce > 2.0, "2.0 is a CONVERGED loss; a fresh model cannot be there"
+    # PPL is exp(CE), so ~the vocab size. This is the second half of the row the ladder writes.
+    assert abs(ppl - 100_352) / 100_352 < 0.01, f"PPL should be ~vocab at step 0, got {ppl}"
+
+
+def test_a_label_that_received_no_data_is_nan_rather_than_a_believable_number():
+    """
+    WHY "A ROW EXISTS" IS WEAK EVIDENCE, PINNED AS BEHAVIOUR.
+
+    ``compute_metrics`` calls ``metric.update(0.0, 0.0)`` on every label before computing
+    (eval/lm_evaluator.py:110-121), so a label the eval loop never reached still emits a row.
+    ``MeanMetric.compute`` is ``weighted_sum / weight`` (eval/metrics.py:81-89), which for an
+    untouched metric is 0.0/0.0 = NaN.
+
+    That is the good outcome and this test pins it: NaN is loud in a plot. What must never
+    happen is that empty label reporting 0.0, which would read as a perfect loss.
+    """
+    import math
+
+    import torch
+
+    from olmo_core.eval.lm_evaluator import LMEvaluator
+
+    evaluator = LMEvaluator(
+        name="lm", batches=[], labels=["heldout-val"], device=torch.device("cpu")
+    )
+    metrics = evaluator.compute_metrics()
+    ce = float(metrics["heldout-val/CE loss"])
+
+    assert math.isnan(ce), "an unpopulated label must be NaN, never a believable number"
+    assert ce != 0.0, "0.0 would read as a perfect held-out loss"
