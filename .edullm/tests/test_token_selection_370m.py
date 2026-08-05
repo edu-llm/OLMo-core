@@ -890,7 +890,7 @@ def test_platform_entrypoint_is_locked_to_eight_gpu_torchrun() -> None:
     )
     command = submission["command"][-1]
     assert submission["compute_profile"] == "gpu-8xa100"
-    assert submission["workload_profile"] == "olmo-core-train-4gpu"
+    assert submission["workload_profile"] == "olmo-core-train"
     assert submission["dataset_release"] == "regmix-10b-v1"
     assert submission["wandb_project"] == "token-selection-attention"
     assert "--nproc-per-node=8" in command

@@ -128,7 +128,7 @@ The exact platform forms are:
   `.edullm/fixtures/token-selection-attention-benchmark-submission.json`
 
 Both select `gpu-8xa100` (one `p4d.24xlarge`, 8 × A100) through
-`olmo-core-train-4gpu`, launch eight ranks, use `regmix-10b-v1`, and contain no
+`olmo-core-train`, launch eight ranks, use `regmix-10b-v1`, and contain no
 credential. Replace the all-zero `commit_sha` with the immutable published
 branch commit before submission. In **Submit a run**, leave `image_digest`
 blank so the platform resolves that commit's image. For another arm, copy the

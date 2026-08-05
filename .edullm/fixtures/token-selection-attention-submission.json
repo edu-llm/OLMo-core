@@ -12,5 +12,5 @@
   "repository": "OLMo-core",
   "team": "pre-training",
   "wandb_project": "token-selection-attention",
-  "workload_profile": "olmo-core-train-4gpu"
+  "workload_profile": "olmo-core-train"
 }
