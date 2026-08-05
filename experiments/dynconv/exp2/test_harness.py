@@ -893,3 +893,66 @@ def test_seconds_per_cell_is_OUTSTANDING_and_cost_refuses_to_guess():
     got = H.cost_estimate(592.1, n_cells=560, n_parallel=1)
     assert got["sequential_gpu_hours"] == pytest.approx(560 * 592.1 / 3600, rel=1e-9)
     assert got["fits_095h_autoapprove"] is False
+
+
+# ==============================================================================================
+# REGRESSION: the s3:// persistence bug that made pilot run_019fd359 report success and produce
+# nothing. These pin BOTH the bug and the bug in my first fix for it.
+# ==============================================================================================
+
+
+def test_path_collapses_the_double_slash_which_is_why_startswith_failed():
+    """The normalization at the root of both the bug and my first broken guard.
+
+    ``Path("s3://b/x")`` renders as ``"s3:/b/x"`` -- ONE slash -- so a ``startswith("s3://")``
+    guard silently misses, and ``is_absolute()`` is False so the write lands in a CWD-relative
+    directory literally named ``s3:``. Pinned as a test because it is counter-intuitive and it
+    defeated an inspection-only review.
+    """
+    p = Path("s3://bucket/x.jsonl")
+    assert str(p) == "s3:/bucket/x.jsonl"
+    assert not str(p).startswith("s3://")      # the broken guard
+    assert not p.is_absolute()                 # -> writes under CWD
+    assert p.parts[0] == "s3:"                 # the guard that works
+
+
+def test_append_record_refuses_a_uri_destination():
+    """A URI must be REFUSED, not silently written to a directory named after its scheme."""
+    rec = _one_record()
+    for uri in ("s3://bucket/x.jsonl", "gs://bucket/x.jsonl"):
+        with pytest.raises(ValueError, match="LOCAL path"):
+            H.append_record(Path(uri), rec)
+
+
+def test_append_record_accepts_ordinary_local_paths(tmp_path):
+    """The guard must not over-fire: relative names and nested dirs are legitimate."""
+    rec = _one_record()
+    for good in (tmp_path / "a.jsonl", tmp_path / "nested" / "b.jsonl", Path("rel.jsonl")):
+        H.append_record(good, rec)
+        assert good.is_file() and good.stat().st_size > 0
+        good.unlink()
+
+
+def test_upload_and_verify_reports_false_when_there_is_nothing_to_upload():
+    """``verified`` must be False when the local file is absent.
+
+    The whole failure was a success message with no object behind it, so the receipt has to be
+    capable of saying no.
+    """
+    r = H.upload_and_verify(Path("/tmp/definitely-not-here.jsonl"), "s3://b/k/")
+    assert r["verified"] is False and "error" in r
+
+
+def test_local_mirror_keeps_local_paths_and_diverts_s3_ones():
+    assert H.local_mirror_for("/tmp/x.jsonl") == Path("/tmp/x.jsonl")
+    m = H.local_mirror_for("s3://bucket/teams/scratch/runs/run_019abc/")
+    assert m.is_absolute() and "s3:" not in str(m)
+
+
+def _one_record():
+    return H.SeedRecord(
+        arm="static", topology="allliv", kernel_size=3, config="N64_D4", seed=0,
+        accuracy=0.5, nll_query=1.0, num_pairs=4, acc_se_clustered=0.01, nll_se_clustered=0.01,
+        acc_design_effect=1.0, nll_design_effect=1.0, n_eval_items=1000, first_loss=5.5,
+        final_loss=1.0, n_params=1000, seconds=1.0, data_seed=1, init_seed=2, extra={},
+    )
