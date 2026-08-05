@@ -681,22 +681,51 @@ def test_paired_power_is_monotone_in_n_and_in_effect():
 # ======================================================================================
 
 
-def _recorded_calibration_accuracies():
-    """The per-config accuracies from mqar_calibration.json, read from the file."""
-    import json
+def _recorded_calibration_json() -> Path:
+    """Locate ``mqar_calibration.json``, **next to this file first**.
 
+    FOURTH AND FIFTH INSTANCE OF THE SAME BUG, AND THESE TWO WERE THE WORST KIND. Both helpers in
+    this file previously listed only two ABSOLUTE LAPTOP PATHS and called ``pytest.skip()`` when
+    neither existed. Off-laptop that is a **silent skip reported as green** -- the earlier FarmShare
+    run read ``44 passed, 2 skipped`` and the two skips were exactly these. The tests they gate are
+    not decoration: they are the MEASURED evidence for the sigma-pooling trap (EXP2-DESIGN.md
+    Sec 12.1), i.e. that pooling over saturated cells deflates sigma ~2x (21.2 pp vs 39.9 pp) and
+    therefore quarters the required n. **That claim was unverified on every host but the laptop.**
+
+    A skip is worse than a failure here. A failure is read; a skip is counted as a pass.
+
+    Resolves relative to ``__file__`` first, so it works on FarmShare, in the container and on the
+    laptop alike. ``pytest.fail`` rather than ``pytest.skip`` when the file is genuinely absent
+    **beside the module that ships with it**: ``check_submission.sh`` lists this JSON as a required
+    runtime input, so its absence next to the tests is a packaging defect, not a reason to pass.
+    """
+    here = Path(__file__).resolve().parent
     for p in (
+        here / "mqar_calibration.json",
+        here.parent / "mqar" / "mqar_calibration.json",
         Path("/Users/ericwu/Developer/Capstone_LLM/Brainlifts/liv_experiment_research/"
              "probes/mqar/mqar_calibration.json"),
         Path("/Users/ericwu/Developer/Capstone_LLM-worktrees/olmo-core/"
              "claude-01--liv-short-conv-mixer/experiments/liv/mqar/mqar_calibration.json"),
     ):
         if p.is_file():
-            by = {}
-            for r in json.loads(p.read_text())["runs"]:
-                by.setdefault(r["config"], []).append((r["accuracy"], r["num_pairs"]))
-            return by
-    pytest.skip("mqar_calibration.json not found")
+            return p
+    pytest.fail(
+        "mqar_calibration.json not found beside test_sigma.py. This file ships next to the tests "
+        "and check_submission.sh asserts it is in the image, so absence is a packaging defect. "
+        "Skipping here would report GREEN for the sigma-pooling evidence (Sec 12.1) without "
+        "having checked it -- which is how this went unverified off-laptop in the first place."
+    )
+
+
+def _recorded_calibration_accuracies():
+    """The per-config accuracies from mqar_calibration.json, read from the file."""
+    import json
+
+    by = {}
+    for r in json.loads(_recorded_calibration_json().read_text())["runs"]:
+        by.setdefault(r["config"], []).append((r["accuracy"], r["num_pairs"]))
+    return by
 
 
 def test_pooling_over_saturated_cells_deflates_sigma_by_a_measured_factor():
@@ -767,18 +796,7 @@ def test_the_summary_array_duplicate_deflates_sigma_to_21_pp():
     """
     import json
 
-    src = None
-    for p in (
-        Path("/Users/ericwu/Developer/Capstone_LLM/Brainlifts/liv_experiment_research/"
-             "probes/mqar/mqar_calibration.json"),
-        Path("/Users/ericwu/Developer/Capstone_LLM-worktrees/olmo-core/"
-             "claude-01--liv-short-conv-mixer/experiments/liv/mqar/mqar_calibration.json"),
-    ):
-        if p.is_file():
-            src = p
-            break
-    if src is None:
-        pytest.skip("mqar_calibration.json not found")
+    src = _recorded_calibration_json()
 
     summary = json.loads(src.read_text())["summary"]
     labels = [s["config"] for s in summary]
