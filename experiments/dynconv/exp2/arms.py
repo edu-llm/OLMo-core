@@ -24,8 +24,8 @@ THE FOUR ARMS (SPEC §1)
 **Pre-registered decision rule: if S4 beats S1 but does NOT beat S2, the hypothesis is
 unsupported.**
 
-TWO TOPOLOGIES, AND WHY ``allliv`` IS NOT OPTIONAL
---------------------------------------------------
+THREE TOPOLOGIES, AND WHY ``allliv`` IS NOT OPTIONAL
+----------------------------------------------------
 ``hybrid`` (4 LIV + 2 attention) is LFM2-shaped and is the proposal's configuration. But R5 F5(i)
 measured the in-tree probe -- a structurally near-identical hybrid with attention at 2 of 4
 layers -- at **100% success, every seed 1.00** on ``N128_D8`` and ``N256_D16``, and the probe's
@@ -37,6 +37,35 @@ configuration in which the conv mechanism is load-bearing on MQAR.
 Attention layer indices in ``hybrid`` are **(2, 5)**, pre-registered. LFM2-16L places attention at
 ``[2, 5, 8, 10, 12, 14]``; the first six layers of that published pattern are exactly ``{2, 5}``,
 so this is LFM2's own late-heavy spacing rather than a tuned choice.
+
+``attn1`` (5 LIV + 1 attention at layer 2) EXISTS BECAUSE BOTH ENDS SATURATED
+----------------------------------------------------------------------------
+Added 2026-08-05, after measurement rather than in anticipation. The topology axis as originally
+pre-registered is saturated at **both** ends, in opposite directions, so no sigma is measurable on
+either and the S4-vs-S2 contrast is unreadable on both:
+
+* ``hybrid`` is at **CEILING** -- attention solves MQAR by itself (measured 1.000, every seed).
+* ``allliv`` is at **FLOOR** -- measured ``acc 0.0092`` against a ``0.25`` floor at the FULL
+  512,000-example budget on the EASIEST rung (``N64_D4``), parked at the ``ln(128) = 4.852``
+  wrong-half plateau, one rung *below* the guess-among-D floor. The arithmetic explains it and
+  makes it structural rather than empirical: a stacked causal conv reaches ``1 + L(W-1)`` = **13
+  tokens at L=6, W=3**, against ~60 needed for ``N64_D4``. **No W in the swept grid reaches even
+  the easiest rung**; at the primary operating point the gap is 34x.
+
+So ``attn1`` is the hypothesis that **one attention layer of six is the topology in between** --
+enough global reach to make the task solvable, few enough that the conv still carries most of the
+recall work.
+
+The index is **2**, derived the same way ``hybrid``'s is rather than tuned: LFM2-16L's published
+attention pattern is ``[2, 5, 8, 10, 12, 14]`` and its FIRST element is 2, exactly as ``hybrid``
+takes the first two. It is also the right place on independent grounds -- layers 0-1 conv form local
+features, layer 2 gathers globally, layers 3-5 conv consume the result -- so the two rationales
+agree and neither was fitted to an outcome.
+
+**This topology's operating point is NOT assumed.** It is calibrated on the **baseline arm only**
+via :mod:`calibration`, which structurally cannot see a treatment arm (there is no arm flag and
+``BASELINE_ARM`` is the only model it builds). Choosing a difficulty by peeking at S4 would tune the
+experiment toward the hypothesis.
 
 WHAT THIS FILE FIXES THAT THE IN-TREE PROBE GOT WRONG
 -----------------------------------------------------
@@ -101,6 +130,9 @@ __all__ = [
     "TOPOLOGIES",
     "WIDTHS",
     "HYBRID_ATTENTION_LAYERS",
+    "ATTN1_ATTENTION_LAYERS",
+    "TOPOLOGY_ATTENTION_LAYERS",
+    "UNDEFINED_ARM_TOPOLOGY",
     "D_MODEL",
     "N_LAYERS",
     "VOCAB_SIZE",
@@ -131,8 +163,24 @@ FFN_MULT = 2
 N_HEADS = 1
 HYBRID_ATTENTION_LAYERS: Tuple[int, ...] = (2, 5)
 
+ATTN1_ATTENTION_LAYERS: Tuple[int, ...] = (2,)
+"""ONE attention layer of six, at index 2 -- the first element of LFM2-16L's published pattern
+``[2, 5, 8, 10, 12, 14]``, exactly as ``hybrid`` takes its first two. Added 2026-08-05 because both
+ends of the pre-registered topology axis measured saturated (see the module docstring). Its
+operating point is calibrated on the BASELINE ARM ONLY."""
+
 ARMS: Tuple[str, ...] = ("S1", "S2", "S3", "S4")
-TOPOLOGIES: Tuple[str, ...] = ("hybrid", "allliv")
+TOPOLOGIES: Tuple[str, ...] = ("hybrid", "attn1", "allliv")
+
+TOPOLOGY_ATTENTION_LAYERS: Dict[str, Tuple[int, ...]] = {
+    "hybrid": HYBRID_ATTENTION_LAYERS,
+    "attn1": ATTN1_ATTENTION_LAYERS,
+    "allliv": (),
+}
+"""The single source of truth for which layers are attention. ``ArmSpec.attn_idx`` reads THIS rather
+than counting layers, so a topology cannot disagree with itself: the previous code special-cased
+``allliv`` against a default field value, which meant adding a topology silently inherited
+``hybrid``'s indices."""
 WIDTHS: Tuple[int, ...] = (2, 3, 4, 8)
 """``{2,3,4}`` is the floor; W=3 must always be present (LFM2 fidelity anchor).
 
@@ -140,6 +188,16 @@ WIDTHS: Tuple[int, ...] = (2, 3, 4, 8)
 the dynamic block at W=2 is an *exact* reparameterization of the static block (max log-residual
 8.3e-16, constructive), so the dynamic arm has **zero** new degrees of freedom there. A W=2
 dynamic-vs-static difference exceeding seed noise is a bug, not a result."""
+
+
+UNDEFINED_ARM_TOPOLOGY: Tuple[Tuple[str, str], ...] = (("S3", "allliv"),)
+"""The (arm, topology) pairs with no definition. **Exactly one**, and it is a property of the ARM,
+not of attention-free-ness in general: S3 puts a dynamic conv on Q/K/V, so it needs at least one
+attention block. ``attn1`` has one, so S3 **is** defined there.
+
+Named because the grid-size arithmetic needs it. The count of undefined pairs is 1 regardless of how
+many topologies exist, and a test that instead wrote ``len(TOPOLOGIES) // 2`` passed by coincidence
+at both 2 and 3 topologies while being wrong as a formula."""
 
 
 class ArmNotDefined(ValueError):
@@ -175,7 +233,7 @@ class ArmSpec:
     """One cell of the grid. Frozen so a spec cannot be mutated after a count is computed."""
 
     arm: Literal["S1", "S2", "S3", "S4"]
-    topology: Literal["hybrid", "allliv"]
+    topology: Literal["hybrid", "attn1", "allliv"]
     width: int
     d_model: int = D_MODEL
     n_layers: int = N_LAYERS
@@ -183,7 +241,11 @@ class ArmSpec:
     rank: int = RANK
     ffn_mult: int = FFN_MULT
     n_heads: int = N_HEADS
-    attention_layers: Tuple[int, ...] = HYBRID_ATTENTION_LAYERS
+    attention_layers: Optional[Tuple[int, ...]] = None
+    """``None`` means "use the topology's canonical indices" -- see :attr:`attn_idx`. Defaulting this
+    to ``HYBRID_ATTENTION_LAYERS`` was a live trap: any topology other than ``allliv`` silently
+    inherited ``hybrid``'s two indices, so ``attn1`` would have been built with TWO attention layers
+    while reporting itself as one. An explicit tuple still overrides, for tests."""
     init_method: InitMethod = InitMethod.normal
     init_std: float = 0.02
     permute_mode: PermuteMode = "full"
@@ -216,11 +278,19 @@ class ArmSpec:
             raise ValueError(f"unknown topology '{self.topology}'")
         if self.width < 1:
             raise ValueError(f"width must be >= 1, got {self.width}")
-        if self.arm == "S3" and self.topology == "allliv":
+        bad = [i for i in self.attn_idx if not 0 <= i < self.n_layers]
+        if bad:
+            raise ValueError(
+                f"attention layer indices {bad} are outside [0, {self.n_layers}). An out-of-range "
+                f"index does not raise anywhere else -- `i in attn` simply never matches, so the "
+                f"model is built attention-free while declaring itself hybrid."
+            )
+        if (self.arm, self.topology) in UNDEFINED_ARM_TOPOLOGY:
             raise ArmNotDefined(
-                "S3 (dynamic conv on Q/K/V) is undefined in the allliv topology: there are no "
-                "attention blocks to put a dynamic conv in. Report it as N/A. Substituting S1 "
-                "here would create a duplicate baseline masquerading as a treatment arm."
+                f"{self.arm} (dynamic conv on Q/K/V) is undefined in the {self.topology} topology: "
+                "there are no attention blocks to put a dynamic conv in. Report it as N/A. "
+                "Substituting S1 here would create a duplicate baseline masquerading as a "
+                "treatment arm."
             )
 
     # -- derived ---------------------------------------------------------------------------
@@ -231,7 +301,22 @@ class ArmSpec:
 
     @property
     def attn_idx(self) -> Tuple[int, ...]:
-        return () if self.topology == "allliv" else tuple(self.attention_layers)
+        """The attention layer indices, from :data:`TOPOLOGY_ATTENTION_LAYERS` unless overridden.
+
+        Reads the topology TABLE rather than special-casing one topology against a default field
+        value. The previous form -- ``() if topology == "allliv" else self.attention_layers`` --
+        made every non-``allliv`` topology inherit ``hybrid``'s ``(2, 5)``, so a new 1-attention
+        topology would have been built with two attention layers and no check would have noticed:
+        ``expected_param_count`` and ``dynamic_layers`` both derive from ``attn_idx``, so the
+        declaration and the build would have agreed with each other and disagreed with the design.
+        That is the empty-comparison-set defect (EXP2-DESIGN.md Sec 12.4) in yet another costume.
+        """
+        idx = (
+            TOPOLOGY_ATTENTION_LAYERS[self.topology]
+            if self.attention_layers is None
+            else tuple(self.attention_layers)
+        )
+        return tuple(sorted(idx))
 
     @property
     def liv_idx(self) -> Tuple[int, ...]:
@@ -744,7 +829,7 @@ def na_cells(
         for t in topologies
         for a in arms
         for w in widths
-        if a == "S3" and t == "allliv"
+        if (a, t) in UNDEFINED_ARM_TOPOLOGY
     ]
 
 

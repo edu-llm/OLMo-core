@@ -137,12 +137,24 @@ N_LAYERS = 6
 GENERATOR_RANK = 16  # R. At d=128 this is R/d = 1/8, a PRE-REGISTERED deviation (SPEC Sec 7).
 HYBRID_ATTENTION_LAYERS = (1, 4)  # 2 of 6, spread like LFM2
 ALLLIV_ATTENTION_LAYERS: Tuple[int, ...] = ()
+ATTN1_ATTENTION_LAYERS: Tuple[int, ...] = (2,)
+"""ONE attention layer of six. Added 2026-08-05 because ``hybrid`` measured at CEILING (1.000) and
+``allliv`` at FLOOR (0.0092 against a 0.25 floor, parked at the ln(128) wrong-half plateau at the
+FULL budget on the EASIEST rung), so neither end of the topology axis can measure a sigma. Only the
+STUB model reads this table; the real arms read ``arms.TOPOLOGY_ATTENTION_LAYERS``, and
+``test_topology_tables_agree`` pins the two together so they cannot drift."""
 
-TOPOLOGIES = {"hybrid": HYBRID_ATTENTION_LAYERS, "allliv": ALLLIV_ATTENTION_LAYERS}
+TOPOLOGIES = {
+    "hybrid": HYBRID_ATTENTION_LAYERS,
+    "attn1": ATTN1_ATTENTION_LAYERS,
+    "allliv": ALLLIV_ATTENTION_LAYERS,
+}
 ARMS = ("static", "permuted", "dynqkv", "dynamic")  # S1, S2, S3, S4
 ARM_CODES = {"static": "S1", "permuted": "S2", "dynqkv": "S3", "dynamic": "S4"}
 
 # S3 has no definition without GQA blocks. Report N/A; never substitute S1 (SPEC Sec 1.2).
+# ONE pair, and it is a property of the arm rather than of attention-free-ness in general: `attn1`
+# has a single attention block, so S3 IS defined there and must not be widened into the exclusion.
 UNDEFINED_CELLS = {("dynqkv", "allliv")}
 
 DATA_SEED_BASE = 10_000  # data_seed = DATA_SEED_BASE + seed_pair. Shared across arms.
@@ -566,10 +578,14 @@ def arms_build_model(
         n_layers=n_layers,
         vocab_size=vocab_size,
     )
-    if topology == "allliv":
-        spec_kwargs["attention_layers"] = ()
-    else:
-        spec_kwargs["attention_layers"] = HYBRID_ATTENTION_LAYERS
+    # Pass the topology's indices EXPLICITLY, from the one table, for every topology. The previous
+    # form was `() if topology == "allliv" else HYBRID_ATTENTION_LAYERS`, i.e. an else-branch that
+    # silently handed hybrid's TWO indices to any topology that was not allliv. Adding a 1-attention
+    # topology under that code would have built it with two attention layers while every count check
+    # agreed, because the declaration and the build both derive from the same field.
+    if topology not in TOPOLOGIES:
+        raise ValueError(f"unknown topology {topology!r}; expected one of {sorted(TOPOLOGIES)}")
+    spec_kwargs["attention_layers"] = TOPOLOGIES[topology]
     model = build_arm(ArmSpec(**spec_kwargs), seed=seed)
 
     # Zoology gotcha 2, verified rather than asserted by fiat: a block must carry no state-mixer

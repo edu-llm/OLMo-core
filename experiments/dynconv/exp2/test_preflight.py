@@ -872,10 +872,31 @@ def test_label_defaults_are_not_hardcoded_to_cpu():
 
 
 def test_grid_coverage_is_complete_and_S3_allliv_is_reported_na():
-    from arms import arm_grid, na_cells
+    """Grid size, counted from the ONE rule that creates the exception.
+
+    Updated 2026-08-05 when the ``attn1`` topology was added: 3 topologies x 4 arms x 4 widths = 48
+    combinations, minus the 4 widths' worth of (S3, allliv), = **44** buildable cells (was 28 at 2
+    topologies).
+
+    The previous form asserted the count against
+    ``len(WIDTHS) * (len(ARMS) * len(TOPOLOGIES) - len(TOPOLOGIES) // 2)``. That expression is
+    **wrong as a formula and passed only by coincidence**: the number of (arm, topology) pairs that
+    are undefined is 1 -- S3 has no meaning only in ``allliv`` -- and ``len(TOPOLOGIES) // 2``
+    happens to equal 1 for both 2 and 3 topologies. At 4 topologies it would silently become 2 and
+    the test would endorse an undercount. Replaced with the actual rule.
+    """
+    from arms import UNDEFINED_ARM_TOPOLOGY, arm_grid, na_cells
+
+    n_undefined_pairs = len(UNDEFINED_ARM_TOPOLOGY)
+    assert n_undefined_pairs == 1, "only (S3, allliv) is undefined; update the count deliberately"
 
     grid = arm_grid()
-    assert len(grid) == len(WIDTHS) * (len(ARMS) * len(TOPOLOGIES) - len(TOPOLOGIES) // 2)
-    assert len(grid) == 28, f"expected 28 buildable cells, got {len(grid)}"
-    assert len(na_cells()) == 4
+    expected = len(WIDTHS) * (len(ARMS) * len(TOPOLOGIES) - n_undefined_pairs)
+    assert len(grid) == expected
+    assert len(grid) == 44, f"expected 44 buildable cells at 3 topologies, got {len(grid)}"
+    assert len(na_cells()) == len(WIDTHS) * n_undefined_pairs == 4
     assert all(c.startswith("S3-allliv") for c in na_cells())
+
+    # S3 IS defined in attn1 -- there is one attention block to instrument. Asserted so that a
+    # future "S3 is N/A without attention" shortcut cannot quietly widen the exclusion.
+    assert not any("attn1" in c for c in na_cells())

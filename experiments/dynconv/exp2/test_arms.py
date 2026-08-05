@@ -28,11 +28,13 @@ import torch.nn as nn
 
 from arms import (
     ARMS,
+    ATTN1_ATTENTION_LAYERS,
     D_MODEL,
     HYBRID_ATTENTION_LAYERS,
     N_LAYERS,
     RANK,
     TOPOLOGIES,
+    TOPOLOGY_ATTENTION_LAYERS,
     VOCAB_SIZE,
     WIDTHS,
     ArmNotDefined,
@@ -802,3 +804,149 @@ def test_engagement_is_zero_at_init_and_positive_after_a_step():
     stats = engagement_report(m)
     assert len(stats) == 6, "engagement must be reported PER LAYER, never averaged"
     assert all(st.engagement > 0.0 for st in stats), f"{[st.engagement for st in stats]}"
+
+
+# =================================================================================================
+# The `attn1` topology, and the silent-inheritance trap it exposed
+# =================================================================================================
+#
+# Added 2026-08-05 with the topology itself. `ArmSpec.attn_idx` used to read
+#
+#     () if self.topology == "allliv" else tuple(self.attention_layers)
+#
+# with `attention_layers` DEFAULTING to HYBRID_ATTENTION_LAYERS. So every topology that was not
+# `allliv` silently inherited hybrid's TWO indices. Adding a 1-attention topology under that code
+# would have built it with two attention layers, and NO existing check would have fired: both
+# `expected_param_count` and `dynamic_layers` derive from `attn_idx`, so the declaration and the
+# build would have agreed with each other while disagreeing with the design. That is exactly the
+# empty-comparison-set defect (EXP2-DESIGN.md Sec 12.4) -- a check that reads its expectation from
+# the same field as the implementation.
+#
+# So these tests COUNT BUILT MODULES rather than re-reading the spec.
+
+
+def _count_built_attention(model) -> int:
+    """Count `Attention` modules actually present in the built stack."""
+    return sum(1 for blk in model.blocks if isinstance(blk.sequence_mixer, Attention))
+
+
+def _built_attention_indices(model) -> tuple:
+    return tuple(
+        i for i, blk in enumerate(model.blocks) if isinstance(blk.sequence_mixer, Attention)
+    )
+
+
+@pytest.mark.parametrize(
+    "topology,expected_count", [("allliv", 0), ("attn1", 1), ("hybrid", 2)]
+)
+def test_attention_count_is_what_the_topology_says(topology: str, expected_count: int):
+    """The load-bearing regression. Counts BUILT `Attention` modules, so it fails under the
+    silent-inheritance bug that would have given `attn1` two attention layers."""
+    m = build_arm(ArmSpec(arm="S1", topology=topology, width=3), seed=0)
+    got = _count_built_attention(m)
+    assert got == expected_count, (
+        f"{topology}: built {got} attention modules, design says {expected_count}. "
+        f"Built indices {_built_attention_indices(m)}."
+    )
+    assert _built_attention_indices(m) == TOPOLOGY_ATTENTION_LAYERS[topology]
+
+
+def test_attn1_is_strictly_between_the_two_saturated_ends():
+    """`attn1` exists to be BETWEEN allliv (floor) and hybrid (ceiling). If its attention count is
+    not strictly between theirs it is not the topology the calibration is testing."""
+    counts = {
+        t: _count_built_attention(build_arm(ArmSpec(arm="S1", topology=t, width=3), seed=0))
+        for t in ("allliv", "attn1", "hybrid")
+    }
+    assert counts["allliv"] < counts["attn1"] < counts["hybrid"], counts
+
+
+def test_attn1_index_is_lfm2s_first_attention_layer():
+    """Not a tuned choice: LFM2-16L's published pattern is [2, 5, 8, 10, 12, 14] and `hybrid` takes
+    its first TWO, so `attn1` takes its first ONE."""
+    assert ATTN1_ATTENTION_LAYERS == (2,)
+    assert ATTN1_ATTENTION_LAYERS == HYBRID_ATTENTION_LAYERS[:1]
+
+
+def test_the_silent_inheritance_bug_would_now_be_caught():
+    """NEGATIVE CONTROL on the fix -- a guard that has never failed is not known to work.
+
+    Reproduce the old behaviour by passing hybrid's indices explicitly to `attn1`, and assert the
+    count check fires. This proves the test above reads the BUILD, not the label.
+    """
+    bugged = build_arm(
+        ArmSpec(arm="S1", topology="attn1", width=3, attention_layers=HYBRID_ATTENTION_LAYERS),
+        seed=0,
+    )
+    assert _count_built_attention(bugged) == 2, "the reproduction itself must build 2"
+    # ...and that is exactly what the production check refuses:
+    with pytest.raises(AssertionError):
+        got = _count_built_attention(bugged)
+        assert got == 1, f"attn1 built {got} attention modules"
+
+
+def test_attn1_param_count_reconciles_and_sits_between_the_other_two():
+    """Analytic vs built, on the new topology, and the ordering is a real constraint: an attention
+    block and a LIV block do not cost the same, so swapping one changes the total."""
+    for W in WIDTHS:
+        for arm in ARMS:
+            spec = ArmSpec(arm=arm, topology="attn1", width=W)
+            m = build_arm(spec, seed=0, strict=True)  # strict re-checks the analytic total
+            assert m.n_params == expected_param_count(spec)["total"]
+
+
+def test_S2_and_S4_stay_param_matched_in_attn1():
+    """The scientific core must survive the new topology: S2 is only a control if it is exactly
+    param-matched to S4."""
+    for W in WIDTHS:
+        s2 = build_arm(ArmSpec(arm="S2", topology="attn1", width=W), seed=0)
+        s4 = build_arm(ArmSpec(arm="S4", topology="attn1", width=W), seed=0)
+        assert s2.n_params == s4.n_params, f"attn1 W={W}: {s2.n_params} != {s4.n_params}"
+        assert {k: v.shape for k, v in s2.named_parameters()} == {
+            k: v.shape for k, v in s4.named_parameters()
+        }
+
+
+def test_attn1_dynamic_modules_land_on_the_five_conv_layers():
+    """S4 in `attn1` must carry a generator on the 5 LIV layers and NOT on the attention layer."""
+    spec = ArmSpec(arm="S4", topology="attn1", width=3)
+    m = build_arm(spec, seed=0, strict=True)
+    assert m.dynamic_module_layers() == (0, 1, 3, 4, 5)
+    assert m.n_dynamic_modules() == 5
+    assert 2 not in m.dynamic_module_layers(), "layer 2 is attention; a LIV generator cannot land"
+
+
+def test_S3_is_defined_in_attn1_on_exactly_one_layer():
+    """S3 instruments Q/K/V, so unlike `allliv` it IS defined here -- on the single attention
+    layer. It must not be silently N/A, nor silently substituted with S1."""
+    spec = ArmSpec(arm="S3", topology="attn1", width=3)
+    m = build_arm(spec, seed=0, strict=True)
+    assert m.dynamic_module_layers() == (2,)
+    assert m.n_dynamic_modules() == 1
+
+
+def test_out_of_range_attention_index_is_refused():
+    """An out-of-range index does not raise anywhere else: `i in attn` simply never matches, so the
+    model is built attention-free while declaring itself otherwise."""
+    with pytest.raises(ValueError, match="outside"):
+        ArmSpec(arm="S1", topology="attn1", width=3, attention_layers=(99,))
+
+
+def test_topology_tables_agree_between_arms_and_harness():
+    """`arms.py` and `mqar_harness.py` each carry a topology table -- arms for the real model, the
+    harness for the stub. Two tables that can disagree WILL: the harness would build a stub with a
+    different topology than the arm it is standing in for, and every count check would still pass
+    because each side is self-consistent."""
+    import mqar_harness
+
+    assert set(mqar_harness.TOPOLOGIES) == set(TOPOLOGY_ATTENTION_LAYERS)
+    assert mqar_harness.TOPOLOGIES["attn1"] == TOPOLOGY_ATTENTION_LAYERS["attn1"]
+    assert mqar_harness.TOPOLOGIES["allliv"] == TOPOLOGY_ATTENTION_LAYERS["allliv"]
+    # `hybrid` is DELIBERATELY different -- (1,4) in the harness stub vs (2,5) in arms -- and that
+    # predates this change. Pinned here so it is a recorded difference rather than a silent one.
+    assert mqar_harness.TOPOLOGIES["hybrid"] == (1, 4)
+    assert TOPOLOGY_ATTENTION_LAYERS["hybrid"] == (2, 5)
+    assert len(mqar_harness.TOPOLOGIES["hybrid"]) == len(TOPOLOGY_ATTENTION_LAYERS["hybrid"]), (
+        "the COUNT must match even where the indices differ -- otherwise the stub and the arm are "
+        "different topologies"
+    )

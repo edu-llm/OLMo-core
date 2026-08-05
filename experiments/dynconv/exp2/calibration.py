@@ -93,6 +93,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from mqar_harness import (  # noqa: E402
     ALLLIV_ATTENTION_LAYERS,
+    ATTN1_ATTENTION_LAYERS,
     CALIBRATED_BATCH_SIZE,
     CALIBRATED_EXAMPLES,
     CALIBRATED_LR,
@@ -107,8 +108,10 @@ from mqar_harness import (  # noqa: E402
     check_budget,
     completed_keys,
     load_records,
+    local_mirror_for,
     run_cell,
     stub_build_model,
+    upload_and_verify,
 )
 from sigma import (  # noqa: E402
     MIN_EVAL_ITEMS,
@@ -118,6 +121,350 @@ from sigma import (  # noqa: E402
 )
 
 BASELINE_ARM = "static"  # S1. The ONLY arm this module will build.
+
+# ======================================================================================
+# The loss plateau ladder -- the reading that accuracy alone cannot give
+# ======================================================================================
+#
+# Accuracy says "it did not solve it". The plateau says WHICH degenerate algorithm it learned, and
+# those are different findings with different fixes. `allliv` measured acc 0.0092 against a 0.25
+# floor -- BELOW chance -- which is only interpretable once you see the loss sat at ln(128): the
+# model learned "the answer is a value token" and never reached "guess among the D present values".
+# A run parked one rung BELOW the degenerate floor is not under-trained, it is unreachable.
+def plateau_ladder(vocab_size: int, num_pairs: int) -> Tuple[Tuple[str, float, str], ...]:
+    """The legible loss plateaus, ascending in competence. ``(name, loss, meaning)``."""
+    return (
+        ("bound", 0.0, "actually bound the pair -- the task is solved"),
+        (f"ln(D)=ln({num_pairs})", math.log(num_pairs),
+         "'one of the D values present' -- the DEGENERATE strategy, i.e. the 1/D accuracy floor"),
+        (f"ln(vocab/2)=ln({vocab_size // 2})", math.log(vocab_size / 2),
+         "'it is a value token' -- the WRONG-HALF plateau, one rung BELOW the 1/D floor"),
+        (f"ln(vocab)=ln({vocab_size})", math.log(vocab_size), "init -- nothing learned"),
+    )
+
+
+def classify_plateau(
+    final_loss: float, *, vocab_size: int, num_pairs: int, tol: float = 0.15
+) -> Dict[str, object]:
+    """Name where a final loss sits on the ladder.
+
+    :param tol: nats within which a loss counts as parked AT a plateau rather than between two.
+    :returns: ``{"nearest", "meaning", "distance", "parked", "position"}``.
+    """
+    ladder = plateau_ladder(vocab_size, num_pairs)
+    name, value, meaning = min(ladder, key=lambda r: abs(final_loss - r[1]))
+    dist = abs(final_loss - value)
+    ln_d, ln_half = math.log(num_pairs), math.log(vocab_size / 2)
+    if final_loss >= ln_half - tol:
+        position = "AT-OR-ABOVE the wrong-half plateau: below the degenerate 1/D strategy"
+    elif final_loss <= ln_d + tol:
+        position = "AT-OR-BELOW ln(D): has reached the degenerate floor or better"
+    else:
+        position = "DESCENDED past the wrong-half plateau, above ln(D)"
+    return {
+        "nearest": name,
+        "meaning": meaning,
+        "distance": dist,
+        "parked": dist <= tol,
+        "position": position,
+        "ln_D": ln_d,
+        "ln_vocab_half": ln_half,
+    }
+
+
+# ======================================================================================
+# The topology scan -- added 2026-08-05 because BOTH ends of the axis measured saturated
+# ======================================================================================
+#
+# hybrid (2 attn of 6) = CEILING, measured 1.000 on every seed: attention solves MQAR alone and
+#     masks the conv mechanism entirely.
+# allliv (0 attn of 6) = FLOOR, measured acc 0.0092 against a 0.25 floor at the FULL 512,000-example
+#     budget on the EASIEST rung, parked at ln(128) = 4.852.
+#
+# Neither can measure a sigma, and the S4-vs-S2 contrast is unreadable on both. The receptive-field
+# arithmetic makes the floor STRUCTURAL rather than a training failure: 1 + L(W-1) = 13 tokens at
+# L=6, W=3, against ~60 needed for N64_D4. No W in the swept grid reaches even the easiest rung.
+#
+# So the question is whether a topology BETWEEN the two ends exists. This scans attention count
+# {0, 1, 2} on the BASELINE ONLY. There is one weak prior that it might: the recorded control's
+# SECOND-BEST trial (RECORDED_CONTROL["second_best"]) was `attention_layers=(2,)` -- a single
+# attention layer -- at accuracy 0.9946 on a 4-layer model. That is near ceiling, not in band, so it
+# is a reason to look rather than a prediction of success, and it was at 4 layers not 6.
+TOPOLOGY_SCAN_ORDER: Tuple[str, ...] = ("allliv", "attn1", "hybrid")
+TOPOLOGY_ATTENTION_COUNT: Dict[str, int] = {"allliv": 0, "attn1": 1, "hybrid": 2}
+
+
+def conv_receptive_field(*, n_layers: int, width: int, n_attention: int) -> Dict[str, object]:
+    """Reach of the stack. Infinite once ANY attention layer is present.
+
+    The point of reporting this next to the accuracy is that it distinguishes "the task is hard"
+    from "the task is unreachable". A stack with no attention has a HARD bound of ``1 + L(W-1)``
+    tokens; no budget, seed count or width crosses it.
+    """
+    if n_attention > 0:
+        return {"reach_tokens": math.inf, "bounded": False,
+                "note": f"{n_attention} attention layer(s): global reach, not receptive-field bound"}
+    reach = 1 + n_layers * (width - 1)
+    return {"reach_tokens": float(reach), "bounded": True,
+            "note": f"1 + {n_layers}({width}-1) = {reach} tokens -- a HARD bound with 0 attention"}
+
+
+@dataclass(frozen=True)
+class TopologyVerdict:
+    """One attention count, judged off-ceiling AND off-floor on the baseline."""
+
+    topology: str
+    n_attention: int
+    n_seeds: int
+    floor: float
+    median_accuracy: float
+    per_seed_accuracy: Tuple[float, ...]
+    median_final_loss: float
+    plateau: str
+    plateau_position: str
+    off_ceiling: bool
+    off_floor: bool
+    discriminating: bool
+    verdict: str
+
+
+def assess_topology(
+    records: Sequence,
+    *,
+    topology: str,
+    num_pairs: int,
+    vocab_size: int,
+    width: int,
+    n_layers: int = N_LAYERS,
+) -> TopologyVerdict:
+    """Judge ONE topology on the baseline: is it off ceiling AND off floor?
+
+    Success is a conjunction and is reported as one. "Off ceiling" alone is what ``allliv``
+    achieved, and it was worthless.
+    """
+    if not records:
+        raise ValueError(f"no records for topology {topology!r}")
+    accs = tuple(r.accuracy for r in records)
+    losses = [r.final_loss for r in records]
+    floor = degenerate_floor(num_pairs)
+    med = statistics.median(accs)
+    med_loss = statistics.median(losses)
+    pl = classify_plateau(med_loss, vocab_size=vocab_size, num_pairs=num_pairs)
+
+    n_attn = TOPOLOGY_ATTENTION_COUNT.get(topology, -1)
+    at_ceiling = sum(1 for a in accs if a >= CEILING_ACC) / len(accs) >= CEILING_FRACTION
+    at_floor = sum(1 for a in accs if a <= floor * 1.5) / len(accs) >= CEILING_FRACTION
+    off_ceiling, off_floor = not at_ceiling, not at_floor
+    discriminating = off_ceiling and off_floor
+
+    if at_ceiling:
+        verdict = (
+            f"CEILING: {sum(1 for a in accs if a >= CEILING_ACC)}/{len(accs)} seeds >= "
+            f"{CEILING_ACC}. Attention solves the task alone, so the conv mechanism is masked. "
+            f"s_delta -> 0 and no n suffices."
+        )
+    elif at_floor:
+        rf = conv_receptive_field(n_layers=n_layers, width=width, n_attention=n_attn)
+        verdict = (
+            f"FLOOR: {sum(1 for a in accs if a <= floor * 1.5)}/{len(accs)} seeds within 1.5x the "
+            f"{floor:.4f} floor. Median loss {med_loss:.3f} is {pl['position']}. Reach: {rf['note']}."
+        )
+    else:
+        verdict = (
+            f"OFF CEILING AND OFF FLOOR: median {med:.4f} ({med:.4f}/{floor:.4f} = "
+            f"{med / floor:.1f}x floor), median final loss {med_loss:.3f} ({pl['position']}). "
+            f"USABLE for a sigma measurement."
+        )
+    return TopologyVerdict(
+        topology=topology,
+        n_attention=n_attn,
+        n_seeds=len(accs),
+        floor=floor,
+        median_accuracy=med,
+        per_seed_accuracy=accs,
+        median_final_loss=med_loss,
+        plateau=str(pl["nearest"]),
+        plateau_position=str(pl["position"]),
+        off_ceiling=off_ceiling,
+        off_floor=off_floor,
+        discriminating=discriminating,
+        verdict=verdict,
+    )
+
+
+def scan_topologies(
+    *,
+    build_model: ModelBuilder,
+    config: MQARConfig,
+    topologies: Sequence[str] = TOPOLOGY_SCAN_ORDER,
+    kernel_size: int = 3,
+    seeds: int = 1,
+    steps: int = CALIBRATED_STEPS,
+    batch_size: int = CALIBRATED_BATCH_SIZE,
+    lr: float = CALIBRATED_LR,
+    device: torch.device = torch.device("cpu"),
+    out_path: Path = Path("exp2_topology_scan.jsonl"),
+    eval_items: int = MIN_EVAL_ITEMS,
+    smoke: bool = False,
+    resume: bool = True,
+    verbose: bool = True,
+    upload_dest: Optional[str] = None,
+) -> Dict[str, object]:
+    """Scan attention count on the **BASELINE ARM ONLY**, at ONE config, at the FULL budget.
+
+    Answers exactly one question: *does a topology exist that is off ceiling AND off floor for the
+    baseline?* If the answer is no at every attention count, that is a real finding -- the d=128
+    synthetic task cannot discriminate at any topology -- and this function says so rather than
+    nominating the least-bad cell.
+
+    :param upload_dest: If set, upload the results file after EVERY cell rather than only at the
+        end. The harness uploads once at exit, which makes a wall-clock kill or a spot reclaim the
+        one failure mode where the partial work is also lost (Sec 13.0m). A cell is minutes of GPU
+        time and the upload is a few KB, so uploading per cell is nearly free insurance.
+    :returns: ``{"records", "verdicts", "recommendation", "discriminating"}``.
+    """
+    check_budget(steps, batch_size, smoke=smoke)
+    from mqar_harness import cell_key  # noqa: PLC0415
+
+    done = completed_keys(out_path) if resume else set()
+    for top in topologies:
+        n_attn = TOPOLOGY_ATTENTION_COUNT.get(top, -1)
+        rf = conv_receptive_field(n_layers=N_LAYERS, width=kernel_size, n_attention=n_attn)
+        if verbose:
+            print(
+                f"\n{top}  ({n_attn} of {N_LAYERS} layers attention)  {config.label}  "
+                f"floor {degenerate_floor(config.num_pairs):.4f}\n  reach: {rf['note']}",
+                flush=True,
+            )
+        for s in range(seeds):
+            if cell_key(BASELINE_ARM, top, kernel_size, config.label, s) in done:
+                if verbose:
+                    print(f"  seed {s}: already done, skipping", flush=True)
+                continue
+            rec = run_cell(
+                arm=BASELINE_ARM,
+                topology=top,
+                kernel_size=kernel_size,
+                cfg=config,
+                seed_pair=s,
+                build_model=build_model,
+                steps=steps,
+                batch_size=batch_size,
+                lr=lr,
+                device=device,
+                eval_items=eval_items,
+                smoke=smoke,
+                verbose=False,
+            )
+            rec.extra["role"] = "topology_scan"
+            rec.extra["n_attention"] = n_attn
+            rec.extra["receptive_field"] = rf
+            rec.extra["plateau"] = classify_plateau(
+                rec.final_loss, vocab_size=config.vocab_size, num_pairs=config.num_pairs
+            )
+            append_record(out_path, rec)
+            if verbose:
+                pl = rec.extra["plateau"]
+                print(
+                    f"  seed {s}: acc {rec.accuracy:.4f} ({rec.accuracy / rec.floor:5.1f}x floor)"
+                    f"  nll {rec.nll_query:.4f}  loss {rec.first_loss:.3f}->{rec.final_loss:.3f}"
+                    f"  [nearest plateau {pl['nearest']}, {pl['distance']:.3f} nats]"
+                    f"  [{rec.seconds:.1f}s]",
+                    flush=True,
+                )
+            # Upload after EVERY cell, not only at exit. A wall-clock kill is the one failure where
+            # the partial work is otherwise lost too, and a few KB per cell is nearly free.
+            if upload_dest:
+                r = upload_and_verify(out_path, upload_dest)
+                if verbose:
+                    print(
+                        f"    incremental upload: "
+                        f"{'VERIFIED ' + str(r.get('bytes')) + 'B' if r.get('verified') else 'UNVERIFIED ' + str(r)[:120]}",
+                        flush=True,
+                    )
+
+    records = [r for r in load_records(out_path) if r.extra.get("role") == "topology_scan"]
+    from collections import defaultdict
+
+    groups: Dict[str, List] = defaultdict(list)
+    for r in records:
+        if r.config == config.label and r.kernel_size == kernel_size:
+            groups[r.topology].append(r)
+
+    verdicts: List[TopologyVerdict] = []
+    for top in topologies:
+        if groups.get(top):
+            verdicts.append(
+                assess_topology(
+                    groups[top],
+                    topology=top,
+                    num_pairs=config.num_pairs,
+                    vocab_size=config.vocab_size,
+                    width=kernel_size,
+                )
+            )
+
+    usable = [v for v in verdicts if v.discriminating]
+    if usable:
+        pick = max(usable, key=lambda v: -abs(v.median_accuracy - 0.5))
+        recommendation = (
+            f"DISCRIMINATING TOPOLOGY FOUND: {pick.topology} ({pick.n_attention} of {N_LAYERS} "
+            f"attention), median accuracy {pick.median_accuracy:.4f} against a "
+            f"{pick.floor:.4f} floor, median final loss {pick.median_final_loss:.3f}. "
+            f"{pick.verdict}"
+        )
+    else:
+        recommendation = (
+            "NO DISCRIMINATING TOPOLOGY at any attention count in {0, 1, 2}. Every one is at "
+            "ceiling or at floor on the BASELINE. This is a real answer, not a tuning failure: it "
+            "means the d=128 MQAR task cannot discriminate arms at any topology, and Exp-2's "
+            "approach needs rethinking rather than retuning. Do NOT nominate the least-bad cell -- "
+            "a pinned endpoint has s_delta -> 0 and cannot rank arms at any n."
+        )
+    return {
+        "records": records,
+        "verdicts": verdicts,
+        "recommendation": recommendation,
+        "discriminating": [v.topology for v in usable],
+    }
+
+
+def topology_report(
+    verdicts: Sequence[TopologyVerdict],
+    *,
+    recommendation: str = "",
+    vocab_size: int = CALIBRATED_VOCAB,
+    num_pairs: int = 4,
+) -> str:
+    """The calibration table: attention count x accuracy x final loss x plateau position."""
+    lines = [
+        "=" * 104,
+        "EXP-2 TOPOLOGY CALIBRATION -- BASELINE (S1) ONLY, attention count in {0, 1, 2}",
+        "=" * 104,
+        "",
+        "The plateau ladder for this config:",
+    ]
+    for name, value, meaning in plateau_ladder(vocab_size, num_pairs):
+        lines.append(f"  {value:7.3f}  {name:<22} {meaning}")
+    lines += [
+        "",
+        f"{'topology':<10}{'attn':>5}{'n':>3}{'median acc':>12}{'xfloor':>8}"
+        f"{'final loss':>12}  {'nearest plateau':<24} off-ceil  off-floor",
+        "-" * 104,
+    ]
+    for v in verdicts:
+        lines.append(
+            f"{v.topology:<10}{v.n_attention:>5}{v.n_seeds:>3}{v.median_accuracy:>12.4f}"
+            f"{v.median_accuracy / v.floor:>8.1f}{v.median_final_loss:>12.3f}  {v.plateau:<24}"
+            f"{'yes' if v.off_ceiling else 'NO':>8}  {'yes' if v.off_floor else 'NO':>9}"
+        )
+    lines.append("")
+    for v in verdicts:
+        lines.append(f"{v.topology}: {v.verdict}")
+        lines.append(f"  per-seed accuracy: {', '.join(f'{a:.4f}' for a in v.per_seed_accuracy)}")
+    if recommendation:
+        lines += ["", "=" * 104, recommendation, "=" * 104]
+    return "\n".join(lines)
 
 # R3 F8's requested band. Reported against honestly, never silently widened.
 TARGET_ACC_LO, TARGET_ACC_HI = 0.30, 0.70
@@ -801,7 +1148,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         action="store_true",
         help="print the recorded evidence and exit. No compute.",
     )
-    ap.add_argument("--topologies", nargs="+", default=["allliv"], choices=["allliv", "hybrid"])
+    # Default is None, not a list, so the two modes can have DIFFERENT defaults and an explicit
+    # choice is distinguishable from an unset one. With a `["allliv"]` default, `--scan-topologies`
+    # silently intersected to allliv alone and the scan reported "NO DISCRIMINATING TOPOLOGY" having
+    # never built attn1 -- a submitted job would have run 1 cell of 3 and printed a confident
+    # negative. Caught in a smoke run; see the refusal in the scan branch below.
+    ap.add_argument(
+        "--topologies", nargs="+", default=None, choices=["allliv", "attn1", "hybrid"]
+    )
+    ap.add_argument(
+        "--scan-topologies",
+        action="store_true",
+        help="scan attention count {0,1,2} at ONE config on the BASELINE ONLY, and report whether "
+             "any topology is off-ceiling AND off-floor. Skips the difficulty grid.",
+    )
+    ap.add_argument(
+        "--scan-config",
+        default="N64_D4",
+        help="the config for --scan-topologies, as N<seq_len>_D<num_pairs>. Default N64_D4, the "
+             "easiest rung: if the easiest rung cannot discriminate, nothing harder can.",
+    )
     ap.add_argument("--kernel-size", type=int, default=3)
     ap.add_argument("--seeds", type=int, default=5)
     ap.add_argument("--steps", type=int, default=CALIBRATED_STEPS)
@@ -849,14 +1215,109 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     from mqar_harness import resolve_device  # noqa: PLC0415
 
+    # Per-mode defaults, resolved AFTER parsing so that "unset" is distinguishable from "chosen".
+    # The difficulty grid defaults to allliv (its historical default); the topology scan defaults to
+    # ALL THREE attention counts, because a scan of one end cannot answer the question it exists for.
+    grid_topologies = list(args.topologies) if args.topologies else ["allliv"]
+
     device = resolve_device(args.device)
-    out = Path(args.out)
+    # Write to real LOCAL disk first, then upload and VERIFY. `Path(args.out)` alone is the bug that
+    # cost a $0.76 pilot its entire output: handed `s3://...` it creates a container-local directory
+    # literally named `s3:` (`Path("s3://b/x").is_absolute()` is False), fsyncs successfully onto the
+    # wrong filesystem, prints "wrote N records to s3://...", and exits 0 with the bucket empty.
+    # `append_record` now REFUSES a URI, so this is belt and braces rather than the only guard.
+    out = local_mirror_for(args.out)
     print(f"\ndevice: {device}  dtype: torch.float32  torch {torch.__version__}   "
           f"budget: {args.steps * args.batch_size:,} examples"
           f"{'  [SMOKE -- not a result]' if args.smoke else ''}", flush=True)
+    print(f"local mirror: {out}   final destination: {args.out}", flush=True)
+
+    def _persist() -> int:
+        """Upload and prove it by consulting the registry. Non-zero exit if unverified."""
+        receipt = upload_and_verify(out, args.out)
+        print(f"\nRECEIPT persistence: {json.dumps(receipt, default=str)}", flush=True)
+        if not receipt.get("verified"):
+            print(
+                f"\nFAILED TO PERSIST to {args.out}. The results are NOT retrievable. Exiting "
+                f"non-zero so this cannot be read as success -- an fsync return value is not a "
+                f"receipt; the object listing is.",
+                file=sys.stderr, flush=True,
+            )
+            return 3
+        print(f"wrote and VERIFIED -> {receipt.get('uri', out)}", flush=True)
+        return 0
+
+    # ---- the topology scan: a different question from the difficulty grid ----------------------
+    # This asks "does ANY attention count give a baseline that is off ceiling AND off floor?", which
+    # must be answered before a difficulty sweep means anything. A difficulty grid run on a topology
+    # that is pinned at a plateau measures the variance of the plateau.
+    if args.scan_topologies:
+        try:
+            _n, _d = args.scan_config.lstrip("N").split("_D")
+            scan_cfg = MQARConfig(
+                seq_len=int(_n), num_pairs=int(_d), vocab_size=CALIBRATED_VOCAB
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"cannot parse --scan-config {args.scan_config!r}: {exc}", file=sys.stderr)
+            return 2
+        print(
+            f"\nTOPOLOGY SCAN on the BASELINE ARM ONLY ({BASELINE_ARM} = S1) at "
+            f"{scan_cfg.label}, W={args.kernel_size}, {args.seeds} seed(s) per topology.\n"
+            f"  Calibrating on a treatment arm would tune the experiment toward the hypothesis, so "
+            f"this module has no arm flag.",
+            flush=True,
+        )
+        scan_tops = (
+            [t for t in TOPOLOGY_SCAN_ORDER if t in set(args.topologies)]
+            if args.topologies
+            else list(TOPOLOGY_SCAN_ORDER)
+        )
+        # A "no discriminating topology" verdict is only meaningful if every attention count was
+        # actually built. Refuse to emit one from a partial scan: the whole hypothesis under test is
+        # that attention=1 is the topology in between, so a scan without `attn1` cannot answer it and
+        # must not be allowed to print a confident negative. Same shape as the persistence bug --
+        # a claim about an artifact must be checked against the artifact.
+        if "attn1" not in scan_tops:
+            print(
+                f"\nREFUSING: --scan-topologies without 'attn1' ({scan_tops}). The scan exists to "
+                f"test whether ONE attention layer is the topology between a saturated ceiling and "
+                f"a saturated floor. Without it the run can only re-measure the two ends that are "
+                f"already known to be saturated, and its 'NO DISCRIMINATING TOPOLOGY' verdict would "
+                f"be an artifact of what was not run.",
+                file=sys.stderr, flush=True,
+            )
+            return 2
+        t0 = time.time()
+        scan = scan_topologies(
+            build_model=builder,
+            config=scan_cfg,
+            topologies=scan_tops,
+            kernel_size=args.kernel_size,
+            seeds=args.seeds,
+            steps=args.steps,
+            batch_size=args.batch_size,
+            lr=args.lr,
+            device=device,
+            out_path=out,
+            eval_items=args.eval_items,
+            smoke=args.smoke,
+            upload_dest=args.out if args.out != str(out) else None,
+        )
+        print()
+        print(
+            topology_report(
+                scan["verdicts"],
+                recommendation=str(scan["recommendation"]),
+                vocab_size=scan_cfg.vocab_size,
+                num_pairs=scan_cfg.num_pairs,
+            ),
+            flush=True,
+        )
+        print(f"\n{time.time() - t0:.0f}s of scan", flush=True)
+        return _persist()
 
     if not args.skip_positive_control:
-        for top in args.topologies:
+        for top in grid_topologies:
             print(flush=True)
             ctl = positive_control(
                 build_model=builder,
@@ -886,7 +1347,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     t0 = time.time()
     res = calibrate(
         build_model=builder,
-        topologies=args.topologies,
+        topologies=grid_topologies,
         configs=exp2_grid(include_easier=not args.only_recorded_survivors),
         kernel_size=args.kernel_size,
         seeds=args.seeds,
@@ -901,7 +1362,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print()
     print(report(res["assessments"], recommendation=res["recommendation"]), flush=True)
     print(f"\nwrote {out}  ({time.time() - t0:.0f}s of sweep)", flush=True)
-    return 0
+    return _persist()
 
 
 if __name__ == "__main__":
