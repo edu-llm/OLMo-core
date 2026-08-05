@@ -64,7 +64,8 @@ import re
 import sys
 import time
 import traceback
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Dict, Iterator, List, Optional, cast
 
 import rich
@@ -75,6 +76,7 @@ from olmo_core.data import (
     NumpyDataLoaderConfig,
     NumpyDatasetDType,
     NumpyFSLDatasetConfig,
+    NumpyPaddedFSLDatasetConfig,
     TokenizerConfig,
 )
 from olmo_core.distributed.parallel import DataParallelType
@@ -98,6 +100,7 @@ from olmo_core.train.callbacks import (
     CheckpointerCallback,
     ConfigSaverCallback,
     GPUMemoryMonitorCallback,
+    LMEvaluatorCallbackConfig,
     WandBCallback,
 )
 from olmo_core.train.checkpoint import Checkpointer
@@ -295,6 +298,12 @@ class Corpus:
     dtype: NumpyDatasetDType
     tokenizer: TokenizerConfig
     rows: Optional[int]
+    #: Held-out URIs, or empty when the dataset declares none. Kept SEPARATE from ``paths``
+    #: rather than concatenated, which is the reader's own reasoning: a flat list is the bug,
+    #: because a caller cannot tell the two apart and held-out shards end up in training with
+    #: nothing to notice. ``ResolvedSplit.val`` returns ``None`` for "no validation data";
+    #: normalised to ``[]`` here so callers branch on truthiness rather than on ``is None``.
+    val_paths: List[str] = field(default_factory=list)
 
 
 def corpus_from_manifest(read, *, dataset_id: str, version: str, tokenizer_id: str) -> Corpus:
@@ -340,6 +349,26 @@ def corpus_from_manifest(read, *, dataset_id: str, version: str, tokenizer_id: s
             f"no OLMo-core config for {tokenizer_id}; this image knows: {known}",
         ) from None
 
+    # ``val`` is a property on the reader's ResolvedSplit and returns None when the dataset
+    # declares no held-out split. getattr keeps this function's duck-typed contract intact --
+    # its docstring promises anything with paths/dtype/byte_order/header_bytes/rows will do,
+    # and the tests hand it stub objects that predate this field.
+    val_paths = list(getattr(read, "val", None) or [])
+
+    # A held-out shard that is also a training shard is not held out. The reader derives the
+    # split from each filename rather than trusting the declaration, so this should be
+    # impossible -- but this project has already shipped a contaminated "held-out" set once
+    # (val files sitting at indices 0/128/163 of the training path list), and the failure is
+    # invisible: the eval number just looks better than it is. Cheap, and it fails loudly.
+    overlap = sorted(set(val_paths) & set(read.paths))
+    if overlap:
+        raise Refusal(
+            Stage.THE_MANIFEST_IS_NOT_SAFE_TO_MEMMAP,
+            f"{dataset_id}/{version} lists {len(overlap)} shard(s) in BOTH the trainable and "
+            f"held-out splits, so held-out loss would be measured on trained data. "
+            f"First: {overlap[0]}",
+        )
+
     return Corpus(
         dataset_id=dataset_id,
         version=version,
@@ -347,6 +376,7 @@ def corpus_from_manifest(read, *, dataset_id: str, version: str, tokenizer_id: s
         dtype=NumpyDatasetDType(read.dtype),
         tokenizer=tokenizer,
         rows=read.rows,
+        val_paths=val_paths,
     )
 
 
@@ -498,6 +528,142 @@ def remove_torn_checkpoints(save_folder: str) -> List[str]:
             removed.append(path)
     barrier()
     return removed
+
+
+#: Where on the run the held-out ladder evaluates, as fractions of ``--steps``.
+#:
+#: Geometric because loss falls roughly log-linearly in tokens, so evenly-spaced rungs would
+#: cluster in the flat tail and carry the least information. 1.0 is absent deliberately:
+#: ``eval_on_finish=True`` already scores the final step, and listing it would score it twice.
+LADDER_FRACTIONS = (0.05, 0.1, 0.2, 0.35, 0.5, 0.75)
+
+
+def ladder_steps(steps: int) -> List[int]:
+    """The steps the held-out evaluator fires on, for a run of ``steps`` total.
+
+    A named function rather than a comprehension inlined in ``build_config`` so that a test can
+    call the same code the run calls. A test that re-derives the arithmetic instead is a test of
+    its own copy: it stays green when the real fractions change, which is the failure it was
+    written to prevent.
+
+    The floor of 2 is not cosmetic. ``EvaluatorCallback.post_step`` returns early for
+    ``step <= 1`` (train/callbacks/evaluator_callback.py:107-109), so a rung at step 1 would be
+    silently skipped -- and a rung that never fires is indistinguishable from one that fired
+    and showed no gap.
+    """
+    return sorted({max(2, int(steps * f)) for f in LADDER_FRACTIONS})
+
+
+#: How many held-out shards the ladder scores. Four 2 MB shards is ~2M tokens, far more than
+#: the 32 batches a rung actually consumes, and every extra shard costs a download and an index
+#: build at startup for no additional signal.
+HELDOUT_SHARDS = 4
+
+
+def _localised_heldout_paths(urls: List[str], opts) -> List[str]:
+    """Download the held-out shards and return LOCAL paths.
+
+    THIS IS WHY run_019fce60 DIED AT EXIT 70 WITH ``gzip.BadGzipFile: Not a gzipped file
+    (b'5\\x00')``.
+
+    ``iter_document_indices`` (data/utils.py:170-251 on this checkout; the branch is at
+    :193-197 and the sidecar derivation at :217) picks between two strategies. For a LOCAL
+    path with ``eos_token_id`` and ``dtype`` it scans the memmap for EOS boundaries -- fast and
+    correct. For a URL it falls back to a sidecar metadata file whose name it derives as
+    ``os.path.basename(data_path).replace(".npy", ".csv.gz")``.
+
+    Our shards are ``val-00033.u32le.bin``. That ``replace`` matches nothing, so the "metadata
+    file" it resolves is **the shard itself** -- which exists, so there is no FileNotFoundError
+    to trigger the helpful message the code has ready -- and it gunzips raw uint32 tokens. Token
+    53 is ``b"5\\x00\\x00\\x00"``; those are the bytes in the error.
+
+    The training path never hit this: plain ``NumpyFSLDataset`` does not call
+    ``segment_documents_into_instances`` at all. Only ``NumpyPaddedFSLDataset`` (what the
+    evaluator requires) and ``NumpyFSLDatasetMixture`` do, so the bug was unreachable until the
+    ladder was wired.
+
+    Fixed here rather than in ``data/utils.py``: that ``.replace(".npy", ...)`` is correct for
+    Dolma-toolkit corpora that really do ship ``.csv.gz`` sidecars, and changing it would alter
+    behaviour for every dataset in the library to suit one experiment's shards.
+    """
+    from olmo_core.io import get_file_size, is_url
+
+    cache = Path(opts.work_dir) / "heldout-shards"
+    cache.mkdir(parents=True, exist_ok=True)
+
+    out: List[str] = []
+    for url in urls:
+        if not is_url(str(url)):
+            out.append(str(url))
+            continue
+        dest = cache / os.path.basename(str(url))
+        # Compare SIZE, not existence: a truncated download left by a killed attempt would
+        # otherwise be reused, and a short shard yields wrong document boundaries rather than
+        # an error.
+        if not dest.is_file() or dest.stat().st_size != get_file_size(url):
+            log.info("downloading held-out shard %s", url)
+            _download_to(str(url), dest)
+        out.append(str(dest))
+    return out
+
+
+def _download_to(url: str, dest: Path) -> None:
+    """Copy one object to a local file, writing via a .part file so a kill cannot look complete."""
+    from urllib.parse import urlparse
+
+    import boto3
+
+    parsed = urlparse(url)
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    boto3.client("s3").download_file(parsed.netloc, parsed.path.lstrip("/"), str(tmp))
+    tmp.rename(dest)
+
+
+def prepare_heldout_indices(config) -> None:
+    """Build the held-out instance indices, in ONE process, outside any distributed context.
+
+    Run as its own command before ``torchrun`` via ``--prepare-heldout-only``. Deliberately NOT
+    called from ``train()``: that is the whole fix.
+
+    TWO RUNS DIED LEARNING WHY THIS CANNOT LIVE INSIDE THE DISTRIBUTED PROGRAM. ``run_019fca21``
+    and ``run_019fcdd1`` both hit exit 72 after a 900-second gloo timeout -- ~$11 for zero
+    measurements. ``NumpyPaddedFSLDataset.prepare()`` (numpy_dataset.py:911-916 on this
+    checkout) writes indices on ``fs_local_rank`` 0 only, inside a bare
+    ``ProcessPoolExecutor()`` (:951), and then every rank meets a ``barrier()``.
+
+    ``ProcessPoolExecutor()`` with no ``max_workers`` uses ``os.cpu_count()``, which on a
+    p4d.24xlarge is **96**. The start method is already forced to ``"spawn"``
+    (train/__init__.py), so that is 96 fresh interpreters each importing torch and olmo_core,
+    launched from one rank while seven others hold CUDA contexts and NCCL communicators on the
+    same box. Rank 0 logged all four ``Gathering instance indices`` lines within 0.16 s --
+    submitting futures is instant -- then never logged a single ``Created N instances``, so not
+    one future returned.
+
+    The first fix attempt only moved the call earlier in ``train()``, on the theory that a live
+    CUDA context was the problem. It failed identically with the traceback inside the helper.
+    A four-rank local reproduction on ten cores does NOT deadlock, which is why that theory
+    survived review: the pool is only pathological when ``cpu_count()`` is large.
+
+    Standalone there is no process group, so the internal ``barrier()`` is a no-op and the pool
+    has the machine to itself. ``_write_instance_indices`` then skips any path whose indices
+    file already exists (numpy_dataset.py:944-949), so when
+    ``LMEvaluatorCallbackConfig.build()`` calls ``prepare()`` during the real run,
+    ``paths_needed`` is empty and no pool is created at all.
+
+    **The two invocations must share ``--work-dir``** or the second finds nothing cached and
+    re-enters the deadlock.
+    """
+    eval_cfg = getattr(config.trainer, "callbacks", {}).get("lm_eval")
+    if eval_cfg is None:
+        log.warning(
+            "no held-out ladder in this config, so there are no indices to prepare; the run "
+            "will train but a flat result will not be distinguishable from undertraining"
+        )
+        return
+    dataset = eval_cfg.eval_dataset.build()
+    log.info("preparing held-out indices for %d shard(s) in one process", len(dataset.paths))
+    dataset.prepare()
+    log.info("held-out indices ready; the eval callback will find them cached")
 
 
 #: Terminal LR as a fraction of peak, per schedule. Zero for linear: this is the whole point
@@ -683,13 +849,100 @@ def build_config(opts, overrides: List[str]):
         .with_callback("config_saver", ConfigSaverCallback())
     )
 
-    # No lm_evaluator and no downstream_evaluator, and their absence is a decision. The
-    # example's LM evaluator reads a C4 validation shard from olmo-data.org and the downstream
-    # one pulls HellaSwag from Hugging Face; both would put a public-internet fetch in the
-    # middle of a run whose whole claim is that it read a sealed corpus, and a failure in
-    # either would look like a training failure. Held-out shards for a published corpus come
-    # back from the reader as `.val`, and wiring an evaluator to those is the right version of
-    # this -- it needs a corpus that declares one, which regmix-10b does not.
+    # NO downstream_evaluator, AND THE EXAMPLE'S LM EVALUATOR IS STILL REFUSED. The example
+    # reads a C4 validation shard from olmo-data.org and pulls HellaSwag from Hugging Face;
+    # both would put a public-internet fetch in the middle of a run whose whole claim is that
+    # it read a sealed corpus, and a failure in either would look like a training failure.
+    # That objection is about the EXAMPLE'S data source, not about held-out evaluation, and it
+    # is exactly why the evaluator below is wired to the corpus's own `.val` instead: those
+    # shards come from the same sealed manifest the training shards do, resolved by the same
+    # `dataset_paths()` call, and reading them adds no source this run was not already given.
+    #
+    # AN EARLIER VERSION OF THIS COMMENT ENDED "it needs a corpus that declares one, which
+    # regmix-10b does not." THAT WAS FALSE, and it was the stated reason no evaluator existed.
+    # `pretrain/regmix-10b/v1`'s dataset.json declares
+    # {"name":"val","glob":"val-*.u32le.bin","rows":15007207} and seven val objects exist under
+    # tokens/<source>/ (verified live against s3://edullm-data on 2026-08-04; see
+    # docs/1b-leverage-audit/grounding/val-split-status.md sections B and D). Eleven of the
+    # sixteen registered releases carry a val split, and `val` is REQUIRED for the `pretrain`
+    # family (edullm-data/families/pretrain.json:52, enforced at validate.py:1157). The reader
+    # hands the paths over for free on the call resolve_corpus already makes; this file used
+    # to drop them on the floor.
+    #
+    # The endpoint is CE loss and PPL, not bits-per-byte: LMEvaluator emits exactly
+    # `{label}/CE loss` and `{label}/PPL` (eval/lm_evaluator.py:118-121), and no manifest
+    # carries a UTF-8 byte denominator -- a .u32le.bin shard's `bytes` is 4x its tokens, the
+    # storage width.
+    if corpus.val_paths:
+        eval_steps = ladder_steps(opts.steps)
+        # LOCAL paths, and this is load-bearing rather than an optimisation. `iter_document
+        # _indices` only scans the array for EOS boundaries when the path is NOT a url
+        # (data/utils.py:193-197); for an s3:// path it looks for a sidecar metadata file whose
+        # name it derives by `basename.replace(".npy", ".csv.gz")` (:217). Our shards end
+        # `.u32le.bin`, so that replace is a no-op, the "metadata file" it resolves is the
+        # shard itself, and it gunzips raw uint32 tokens -- `BadGzipFile: Not a gzipped file
+        # (b'5\x00')`, which killed run_019fce60 at exit 70.
+        #
+        # Resolved ONCE here, so the prepare-only invocation and the eval callback see the same
+        # strings. That matters more than it looks: `_get_indices_path`
+        # (data/numpy_dataset.py:433-448) names the cache file after a SHA-256 of
+        # `str(source_path)`, so an s3:// path and its local copy hash to different files --
+        # localising in only one of the two places would silently miss the cache and walk
+        # straight back into the gzip failure.
+        heldout_paths = _localised_heldout_paths(sorted(corpus.val_paths)[:HELDOUT_SHARDS], opts)
+        trainer_config = trainer_config.with_callback(
+            "lm_eval",
+            LMEvaluatorCallbackConfig(
+                # PADDED, not the NumpyFSLDatasetConfig the training path uses. The callback
+                # type-checks for NumpyPaddedFSLDataset and raises OLMoConfigurationError on
+                # anything else (train/callbacks/evaluator_callback.py:268-272), so the plain
+                # config fails at build time.
+                eval_dataset=NumpyPaddedFSLDatasetConfig(
+                    # A handful of shards, not all of them. `prepare()` builds a per-shard
+                    # instance index over every path with a process pool on first call, and a
+                    # corpus's worth of startup would cost more than the eval it serves.
+                    # Sorted so the subset is the same across arms and seeds -- a per-cell
+                    # subset would make the rungs incomparable, which is the one thing the
+                    # ladder cannot tolerate.
+                    paths=heldout_paths,
+                    # LMEvaluator.from_numpy_dataset raises when any path lacks a "label"
+                    # (eval/lm_evaluator.py:60-66), and the label is what its per-dataset
+                    # metric is keyed on.
+                    metadata=[{"label": "heldout-val"}] * len(heldout_paths),
+                    sequence_length=opts.sequence_length,
+                    # From the corpus, never pinned. The padded vocab the model is built with
+                    # comes off this same object.
+                    tokenizer=corpus.tokenizer,
+                    # Same uint32 trap as the training path: the corpus declares its width and
+                    # a default here would decode every token at the wrong one, because
+                    # get_dtype() falls back to the NARROWEST dtype the vocab fits in.
+                    dtype=corpus.dtype,
+                    # SAME work dir as the prepare-only invocation, or the cached indices are
+                    # not found and the 96-worker pool opens inside the distributed program.
+                    work_dir=opts.work_dir,
+                ),
+                # None, so only `fixed_steps` and `eval_on_finish` trigger an eval. A non-None
+                # interval would add unrequested rungs and change what each cell costs.
+                eval_interval=None,
+                fixed_steps=eval_steps,
+                eval_on_finish=True,
+                # Bounded by STEPS, not the default epochs(1). The default would score every
+                # shard in full at every rung, which costs more than the training it measures.
+                eval_duration=Duration.steps(32),
+            ),
+        )
+        log.info(
+            "held-out ladder at steps %s (from %d val shards)", eval_steps, len(corpus.val_paths)
+        )
+    else:
+        # Not fatal, but it must not pass silently: without a ladder the run still trains and
+        # still reports a loss, and the missing endpoint is invisible until analysis.
+        log.warning(
+            "%s/%s declares NO held-out split, so this run has no ladder and a flat result "
+            "will not be distinguishable from undertraining",
+            corpus.dataset_id,
+            corpus.version,
+        )
 
     config = ExperimentConfig(
         model=model_config,
@@ -930,6 +1183,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rank-microbatch-size", type=int, default=16 * 1024)
     parser.add_argument("--data-seed", type=int, default=0)
     parser.add_argument("--dry-run", action="store_true", help="Resolve and print, do not train.")
+    parser.add_argument(
+        "--prepare-heldout-only",
+        action="store_true",
+        help="Build the held-out eval indices and exit, without training and without starting a "
+        "process group. Run this ONCE, single-process, before torchrun, sharing the same "
+        "--work-dir: NumpyPaddedFSLDataset.prepare() opens a 96-worker spawn pool behind a "
+        "collective, which deadlocked two 8-GPU runs at a 900s gloo timeout when it ran inside "
+        "the distributed program.",
+    )
     return parser
 
 
@@ -960,6 +1222,15 @@ def main() -> None:
         config = build_config(opts, overrides)
     if opts.dry_run:
         show(config)
+        return
+
+    # BEFORE prepare_training_environment(), and that placement is the fix rather than a
+    # detail. No process group exists yet, so the barrier inside `prepare()` is a no-op and
+    # cannot strand seven peers, and the 96-worker pool has the box to itself instead of
+    # competing with eight ranks holding CUDA contexts. See prepare_heldout_indices.
+    if opts.prepare_heldout_only:
+        with during(Stage.THE_CONFIG_WOULD_NOT_BUILD):
+            prepare_heldout_indices(config)
         return
 
     with during(Stage.THE_TRAINING_ENVIRONMENT_WOULD_NOT_START):
