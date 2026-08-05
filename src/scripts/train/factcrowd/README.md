@@ -129,42 +129,51 @@ before these jobs run.
 
 ## Measured throughput, and the A10G route
 
-The first platform run measured what every estimate here had been guessing. On **4×A10G with the 13M
-row**: `228,883 tokens/s/device`, `22.76 TFLOP/s/device`, 1.0B tokens in 19 minutes.
+`13m_ctrl` ran end to end on **4×A10G in 19 min 15 s** — 1.0B tokens, 3,814 steps, ten checkpoints,
+`865,801 tokens/s` including setup and every save. That is the number the table below is built from, not
+an estimate.
 
-Two notes on reading that. OLMo-core's speed monitor reports `MFU 7.3%` against a declared device peak
-of 312 TFLOP/s — that is the A100 figure; A10G's bf16 peak is 125 TFLOP/s, so the real MFU is about
-**18%**, which is healthy for a 13M model. And per-cell time scales with non-embedding parameters, so
-the 28M row runs at roughly 407k tokens/s on four devices and the 64M row at 181k.
+Two notes on reading the run's own metrics. OLMo-core's speed monitor reports `MFU 7.3%` against a
+declared device peak of 312 TFLOP/s — that is the A100 figure; A10G's bf16 peak is 125, so the real MFU
+is about **18%**, healthy for a 13M model. And that cell is 100% `<mano>`, the *slowest* generator here
+(0.59M tok/s single-threaded against the bio renderer's 10.1M), yet data loading was 0.06% of step time
+— so the fact cells, which use the fast renderer, are not data-bound either.
 
-Hours below are from that measurement, scaled by parameter count, with 8 GPUs taken as 1.9× four
-(sublinear because g5 has no NVLink):
+Hours scale with non-embedding parameters. Eight devices are taken as 1.9× four, which is **not**
+measured — g5 has no NVLink, so treat the 8×A10G column as the optimistic end.
 
-| | 4×A10G | 8×A10G |
-|---|---|---|
-| 13M row, all six cells | 10.5 h | 5.4 h |
-| 28M's four shortest | 12.6 h | 6.6 h |
-| `28m_d2p4` | 12.2 h | 6.4 h |
-| `28m_d4p8` | 24.1 h | 12.7 h |
+| cell | tokens | 4×A10G | 8×A10G |
+|---|---|---|---|
+| `13m_ctrl` … `13m_d4p8` | 1.0–15.9B | 0.3–5.1 h | 0.2–2.7 h |
+| `28m_ctrl` … `28m_d1p2` | 1.0–9.3B | 0.7–6.7 h | 0.4–3.5 h |
+| `28m_d2p4` | 17.8B | 12.9 h | 6.8 h |
+| `28m_d4p8` | 35.3B | **25.4 h — over the cap** | 13.4 h |
 
-**64M cannot run on A10G.** `64m_d2p4` needs 32.0 h on eight devices against the platform's hard 24 h
-per-cell ceiling, and `64m_d1p2` at 16.2 h leaves little room. That row belongs on the P pool.
+**`28m_d4p8` must use eight devices**; four would breach the platform's hard 24 h per-cell ceiling.
+Everything else goes on 4×A10G, which is the *cheaper* way to buy the same eight GPUs —
+$1.418/GPU/h against $2.036 — and gives two concurrent slots instead of one.
 
-The A10G route exists because the G quota (`L-DB2E81BA`) is separate from the P quota that H100 and A100
-draw on, and because every A10G rate is under the $20 exception ceiling — so these submissions are
-`ROUTINE` rather than needing an admin. Recommended split, four submissions, ~19 h wall clock, ~$442:
+**64M cannot run on A10G at all.** `64m_d2p4` needs 33.9 h even on eight devices, and `64m_d1p2` needs
+17.1 h with `d2p4` impossible behind it. That row belongs on the P pool.
 
-| `compute_profile` | `nproc` | selector | `fanout_size` | `max_runtime_hours` | ceiling |
-|---|---|---|---|---|---|
-| `gpu-4xa10g` | 4 | `--row 13M` | 6 | 8 | $272 |
-| `gpu-4xa10g` | 4 | `--row 28M` | 4 | 10 | $227 |
-| `gpu-8xa10g` | 8 | `--cell …/28m_d2p4.yaml` | — | 10 | $163 |
-| `gpu-8xa10g` | 8 | `--cell …/28m_d4p8.yaml` | — | 18 | $293 |
+### 13M + 28M on A10G: ~18.6 h, ~$430, four submissions, all `ROUTINE`
 
-`--row 28M` with `fanout_size: 4` is deliberate: filenames sort by ascending demand, so a prefix
-fan-out is exactly the four shortest cells, and the two long ones go to eight devices where they fit
-under the cap. Packing the cells more finely across the two environments could reach ~16 h, at the cost
-of one submission per cell.
+| # | `compute_profile` | `nproc` | selector | `fanout_size` | `max_runtime_hours` | ceiling |
+|---|---|---|---|---|---|---|
+| 1 | `gpu-4xa10g` | 4 | `--row 13M` | 6 | 8 | $272 |
+| 2 | `gpu-4xa10g` | 4 | `--row 28M` | **4** | 10 | $227 |
+| 3 | `gpu-4xa10g` | 4 | `--cell …/count/28m_d2p4.yaml` | — | 18 | $102 |
+| 4 | `gpu-8xa10g` | 8 | `--cell …/count/28m_d4p8.yaml` | — | 20 | $326 |
+
+Submissions 1–3 put eleven cells into the 4×A10G queue and Batch packs them across its two slots, so the
+makespan is `max(total ÷ 2, longest cell)` = 18.6 h. Submission 4 finishes in 13.4 h alongside them.
+
+`--row 28M` with `fanout_size: 4` is deliberate: filenames sort by ascending demand, so a prefix fan-out
+is exactly the four shortest cells, and the two long ones get their own submissions with runtime limits
+that fit them rather than one limit stretched to cover the longest.
+
+Every ceiling is under the $500 routine bound, so a team lead can release all four — no admin, and the G
+quota is independent of the P quota that H100 and A100 draw on.
 
 ## Before you submit: what an expert review changed
 
