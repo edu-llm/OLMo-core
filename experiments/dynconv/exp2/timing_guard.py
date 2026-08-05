@@ -38,15 +38,45 @@ REFERENCE_S_PER_STEP: Dict[str, float] = {
 #: A correct measurement cannot be this far off the reference. Deliberately WIDE -- a shared node,
 #: a different core count or another tenant easily moves this 2-3x. It is sized to catch the
 #: Exp-1 class of error (43x), not to police noise.
+#: The reference above was measured at CPU / N512_D64. Both must be scaled out before comparing,
+#: or the guard fires on every GPU run and every shorter sequence -- see check_rate_plausible.
+REFERENCE_SEQ_LEN = 512
+
+#: MEASURED, pilot run_019fd359 vs FarmShare wheat-04, same arms and config: L4 is ~10x CPU on the
+#: baseline and ~15x on the dynamic arms. Use the CONSERVATIVE end (10x) so the ceiling stays
+#: generous -- this guard exists to catch a 43x error, not to police a factor of 1.5.
+GPU_SPEEDUP = 10.0
+
 SLOWDOWN_CEILING = 8.0
 SPEEDUP_FLOOR = 4.0
 
 
-def check_rate_plausible(arm: str, s_per_step: float) -> Optional[str]:
-    """Is this per-step time physically possible for a correct run of ``arm``?"""
+def check_rate_plausible(
+    arm: str,
+    s_per_step: float,
+    *,
+    device: str = "cpu",
+    seq_len: int = 512,
+) -> Optional[str]:
+    """Is this per-step time physically possible for a correct run of ``arm``?
+
+    **The reference is CONFIG-SPECIFIC and this check is worthless without scaling to it.**
+    Learned the hard way: `run_019fd374` ran on an L4 at T=64 and every arm was flagged
+    "55-79x FASTER than the reference -- work is being skipped". Nothing was skipped. The
+    reference was measured on CPU at T=512, and device (~10x) times sequence length (8x) is
+    ~80x all by itself. The guard was comparing across configurations, so it fired on a healthy
+    run -- a false alarm, which is the failure mode that gets a check ignored.
+
+    So: scale the reference to the observed configuration before comparing. A guard that cannot
+    be trusted is worse than no guard, because the next real inversion gets waved through.
+    """
     ref = REFERENCE_S_PER_STEP.get(arm)
     if ref is None or s_per_step <= 0:
         return None
+    # Reference conditions: CPU, T=512. Scale to the cell actually run.
+    ref = ref * (seq_len / REFERENCE_SEQ_LEN)
+    if device.startswith("cuda"):
+        ref = ref / GPU_SPEEDUP
     if s_per_step > ref * SLOWDOWN_CEILING:
         return (
             f"IMPOSSIBLE: {arm} at {s_per_step:.3f} s/step is {s_per_step/ref:.1f}x the measured "
@@ -136,11 +166,21 @@ def reset_between_cells() -> str:
         return f"dynamo reset unavailable ({type(exc).__name__}) -- fine if nothing compiles"
 
 
-def audit(rates: Dict[str, float], *, strict: bool = True) -> List[str]:
-    """Run every physical check. Returns problems; raises under ``strict`` if any are impossible."""
+def audit(
+    rates: Dict[str, float],
+    *,
+    strict: bool = True,
+    device: str = "cpu",
+    seq_len: int = 512,
+) -> List[str]:
+    """Run every physical check. Returns problems; raises under ``strict`` if impossible.
+
+    ``device`` and ``seq_len`` describe the cells that produced ``rates``, and are not optional in
+    practice: the rate check is meaningless unless the reference is scaled to the same config.
+    """
     problems: List[str] = []
     for arm, s in rates.items():
-        msg = check_rate_plausible(arm, s)
+        msg = check_rate_plausible(arm, s, device=device, seq_len=seq_len)
         if msg:
             problems.append(msg)
     problems.extend(check_arm_ordering(rates))

@@ -1467,7 +1467,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             code = ARM_CODES[r.arm]
             if r.seconds and args.steps:
                 rates.setdefault(code, r.seconds / args.steps)
-        problems = timing_guard.audit(rates, strict=False) if rates else []
+        # Pass the CONFIG, not just the rates. The reference is CPU/T=512; without scaling to the
+        # cell actually run, a healthy GPU run at T=64 is flagged "79x FASTER, work is being
+        # skipped" -- which happened on run_019fd374 and is the false alarm that gets a guard
+        # ignored. A guard that cannot be trusted is worse than no guard.
+        problems = (
+            timing_guard.audit(
+                rates, strict=False, device=str(device), seq_len=args.seq_len
+            )
+            if rates
+            else []
+        )
         verdict = "PASS (no physical impossibility)" if not problems else "FAIL"
         print(f"\nRECEIPT timing_guard arm-ordering: {verdict}")
         print(f"  s/step by arm: { {k: round(v, 5) for k, v in sorted(rates.items())} }")
