@@ -320,24 +320,55 @@ def resolve_kernel_path(model: nn.Module) -> Dict[str, object]:
     """
     backends: Dict[str, int] = {}
     flags: List[object] = []
-    for mod in model.modules():
+    per_module: Dict[str, str] = {}
+
+    # THE ACTUAL CONJUNCT ``ShortConv._conv`` BRANCHES ON, evaluated here rather than inferred.
+    # The fused path is taken only when `self.use_fla and has_fla() and x.is_cuda` ALL hold, so a
+    # check that reads `use_fla` alone reports a difference where none exists (no fla, or on CPU)
+    # and misses the only case that matters. `_fla_available` was never set on these modules, so
+    # the previous version could not report `fla.fused` at all -- it was structurally incapable of
+    # detecting the confound it existed to detect.
+    try:
+        from olmo_core.nn.attention.flash_linear_attn_api import has_fla as _hf
+
+        fla_available = bool(_hf())
+    except Exception:  # noqa: BLE001
+        fla_available = False
+    try:
+        dev = next(model.parameters()).device
+    except StopIteration:
+        dev = torch.device("cpu")
+    on_cuda = dev.type == "cuda"
+
+    for mod_name, mod in model.named_modules():
         name = type(mod).__name__
         if "Conv" not in name and "ShortConv" not in name:
             continue
         if hasattr(mod, "use_fla"):
             flags.append(bool(getattr(mod, "use_fla")))
-        fla_avail = getattr(mod, "_fla_available", None)
-        if isinstance(mod, nn.Conv1d):
-            key = "nn.Conv1d"
-        elif getattr(mod, "use_fla", False) and fla_avail:
-            key = "fla.fused"
-        elif hasattr(mod, "use_fla"):
-            key = "ShortConv/torch-fallback"
+            key = (
+                "fla.fused"
+                if (getattr(mod, "use_fla", False) and fla_available and on_cuda)
+                else "nn.Conv1d"
+            )
+        elif isinstance(mod, nn.Conv1d):
+            continue  # the inner Conv1d of a ShortConv; the owner already reported
         else:
             key = name
         backends[key] = backends.get(key, 0) + 1
+        per_module[mod_name or name] = key
+
     family = "|".join(f"{k}x{v}" for k, v in sorted(backends.items())) or "none"
-    return {"backends": backends, "use_fla_flags": flags, "family": family}
+    return {
+        "backends": backends,
+        "use_fla_flags": flags,
+        "family": family,
+        # RECEIPTS -- what EXECUTED, not what was configured.
+        "per_module": per_module,
+        "has_fla": fla_available,
+        "device": str(dev),
+        "fused_reachable": fla_available and on_cuda,
+    }
 
 
 def assert_same_kernel_family(paths: Dict[str, Dict[str, object]]) -> None:
@@ -924,6 +955,14 @@ def run_cell(
             ],
             "init_loss_in_band": True,  # run_cell raises otherwise, so reaching here proves it
             "kernel_path": kernel_path,
+            # RECEIPT 3: per-layer engagement AFTER training, on THIS device. Recorded here (not
+            # only in preflight) because the abort floor is a claim about the run that actually
+            # produced the numbers -- a preflight measurement on another host does not certify it.
+            # E_l < 1e-3 means the mechanism cannot affect the dominant tap even in principle
+            # (bf16 half-ulp at 1.0 is 2^-8 = 3.9e-3), so the arm is the baseline plus dead weight.
+            # Per layer, never averaged: depth-scaled init lets a mean sit above the floor while
+            # most layers are dead.
+            "engagement": _engagement_snapshot(model),
             "layout": layout,
             "device": str(device),
             "dtype": str(next(model.parameters()).dtype),
@@ -954,13 +993,120 @@ def cell_key(arm: str, topology: str, kernel_size: int, config: str, seed_pair: 
     return f"{arm}|{topology}|W{kernel_size}|{config}|s{seed_pair}"
 
 
+def _engagement_snapshot(model: nn.Module) -> Optional[Dict[str, object]]:
+    """Per-layer ``E_l`` and input-dependence, or ``None`` for an arm with no generator.
+
+    ``None`` is the correct answer for S1 (static) and must not be confused with zero: S1 has no
+    mechanism to engage, whereas ``E_l == 0`` on a dynamic arm means the mechanism is present and
+    inert -- the failure this receipt exists to surface.
+    """
+    try:
+        from dynamic_conv import engagement_report  # noqa: PLC0415
+
+        stats = engagement_report(model)
+    except Exception:  # noqa: BLE001 -- a stub model has no generators; that is not an error
+        return None
+    if not stats:
+        return None
+    return {
+        "per_layer_E": {s.name: round(float(s.engagement), 6) for s in stats},
+        "per_layer_input_dep": {s.name: round(float(s.input_dependence), 6) for s in stats},
+        "min_E": min(float(s.engagement) for s in stats),
+        "abort_floor": 1e-3,
+        "below_floor": [s.name for s in stats if float(s.engagement) < 1e-3],
+    }
+
+
+def is_s3_uri(s: str) -> bool:
+    """Is this destination an S3 URI rather than a local path?"""
+    return str(s).startswith("s3://")
+
+
+def local_mirror_for(out: str) -> Path:
+    """Where to write locally when the destination is S3.
+
+    Always write to real local disk FIRST, then upload. Streaming straight to S3 would make every
+    record a network round-trip and lose the crash-safety that fsync buys.
+    """
+    if not is_s3_uri(out):
+        return Path(out)
+    return Path("/tmp/exp2_results") / Path(out.rstrip("/")).name
+
+
+def upload_and_verify(local: Path, dest: str) -> Dict[str, object]:
+    """Upload to S3 and **verify the object exists**, returning a receipt.
+
+    THE BUG THIS EXISTS TO KILL. ``append_record`` used ``Path.open()``, which is a LOCAL write.
+    Handed ``--out s3://bucket/...`` it silently produced a relative directory literally named
+    ``s3:`` (``Path("s3://b/x")`` -> ``PosixPath("s3:/b/x")``, ``is_absolute() == False``), wrote
+    there, ``fsync``-ed successfully, printed "wrote 6 records to s3://...", and exited 0. The
+    container layer was then discarded. A $0.76 pilot reported success and produced nothing.
+
+    So this does not trust the upload either: it calls ``head-object`` afterwards and returns what
+    the registry actually reports. **A log line asserting a write is not a receipt** -- the receipt
+    is the object listing. Same rule as ``check_submission.sh``: a claim about an artifact must be
+    checked against the artifact.
+    """
+    receipt: Dict[str, object] = {"dest": dest, "local": str(local), "verified": False}
+    if not is_s3_uri(dest):
+        receipt["verified"] = local.is_file()
+        receipt["bytes"] = local.stat().st_size if local.is_file() else 0
+        return receipt
+    if not local.is_file():
+        receipt["error"] = f"nothing to upload: {local} does not exist"
+        return receipt
+
+    key_uri = dest.rstrip("/") + "/" + local.name
+    bucket, _, key = key_uri[len("s3://"):].partition("/")
+    try:
+        import boto3  # type: ignore
+
+        boto3.client("s3").upload_file(str(local), bucket, key)
+        head = boto3.client("s3").head_object(Bucket=bucket, Key=key)
+        receipt.update(verified=True, uri=key_uri, bytes=head["ContentLength"], via="boto3")
+        return receipt
+    except Exception as exc:  # noqa: BLE001 -- fall back, then report honestly
+        receipt["boto3_error"] = f"{type(exc).__name__}: {exc}"
+
+    import subprocess
+
+    try:
+        subprocess.run(["aws", "s3", "cp", str(local), key_uri], check=True,
+                       capture_output=True, timeout=300)
+        out = subprocess.run(["aws", "s3api", "head-object", "--bucket", bucket, "--key", key],
+                             capture_output=True, timeout=120, text=True)
+        if out.returncode == 0:
+            receipt.update(verified=True, uri=key_uri, via="aws-cli",
+                           bytes=json.loads(out.stdout).get("ContentLength"))
+        else:
+            receipt["cli_error"] = out.stderr.strip()[:300]
+    except Exception as exc:  # noqa: BLE001
+        receipt["cli_error"] = f"{type(exc).__name__}: {exc}"
+    return receipt
+
+
 def append_record(path: Path, rec: SeedRecord) -> None:
     """
     Append one record as a JSONL line and ``fsync``. Crash-safe and resumable.
 
     JSONL not JSON: a partially-written JSON array is unparseable, whereas a truncated JSONL file
     loses at most the last line. The repo memory is explicit that this machine has died mid-run.
+
+    ``path`` must be LOCAL -- see :func:`local_mirror_for`. Passing an ``s3://`` URI here is the
+    bug documented in :func:`upload_and_verify`, so it is refused rather than silently mangled.
     """
+    # Detect a URI via the FIRST PATH COMPONENT, not the string prefix. `Path` collapses the
+    # double slash -- `str(Path("s3://b/k")) == "s3:/b/k"` -- so a `startswith("s3://")` guard
+    # silently misses, which is the very normalization that caused the original bug. `parts[0]`
+    # is `"s3:"` and survives it. Any `scheme:` first component is refused, not just s3.
+    head = path.parts[0] if path.parts else ""
+    if head.endswith(":") and len(head) > 1 and not head[0].isupper():
+        raise ValueError(
+            f"append_record needs a LOCAL path, got what looks like a URI ({path}; first "
+            f"component {head!r}). Path.open() would create a directory literally named {head!r} "
+            f"and the records would die with the container -- fsync succeeds on the wrong "
+            f"filesystem. Use local_mirror_for() then upload_and_verify()."
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
     d = asdict(rec)
     d["_key"] = cell_key(rec.arm, rec.topology, rec.kernel_size, rec.config, rec.seed)
@@ -1078,6 +1224,21 @@ def run_sweep(
                                 f"[{rec.seconds:.1f}s]",
                                 flush=True,
                             )
+                            # RECEIPT 1+2: the realised backend per conv, and has_fla().
+                            # Printed per cell, not summarised, because the confound this guards
+                            # against is per-arm: one arm fused, another not.
+                            kp = rec.extra["kernel_path"]
+                            print(
+                                f"    RECEIPT backend={kp['family']}  has_fla={kp['has_fla']}  "
+                                f"device={kp['device']}  fused_reachable={kp['fused_reachable']}",
+                                flush=True,
+                            )
+                            print(f"    RECEIPT per_conv={kp['per_module']}", flush=True)
+                            # RECEIPT 3: engagement on THIS device. E_l < 1e-3 => the mechanism is
+                            # inert and the arm is the baseline carrying dead weight.
+                            eng = rec.extra.get("engagement")
+                            if eng is not None:
+                                print(f"    RECEIPT E_l={eng}", flush=True)
     if verbose and n_skipped_undefined:
         print(
             f"  N/A: {n_skipped_undefined} cells skipped as UNDEFINED "
@@ -1278,7 +1439,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         kernel_sizes=args.kernel_sizes,
         configs=[cfg],
         seed_pairs=list(range(args.seeds)),
-        out_path=Path(args.out),
+        out_path=local_mirror_for(args.out),
         build_model=builder,
         steps=args.steps,
         batch_size=args.batch_size,
@@ -1293,7 +1454,46 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     print()
     print(sigma_report(recs))
-    print(f"\nwrote {len(recs)} records to {args.out}", flush=True)
+
+    # ---- RECEIPT 4: the arm-ordering verdict, from timing_guard --------------------------------
+    # S2/S4 add a generator S1 does not have at byte-identical parameter counts, so they cannot be
+    # faster. A dynamic arm measuring faster than static is not a surprising result, it is a broken
+    # measurement -- Exp-1's process-sticky dynamo fallback presented exactly that way.
+    try:
+        import timing_guard  # noqa: PLC0415
+
+        rates: Dict[str, float] = {}
+        for r in recs:
+            code = ARM_CODES[r.arm]
+            if r.seconds and args.steps:
+                rates.setdefault(code, r.seconds / args.steps)
+        problems = timing_guard.audit(rates, strict=False) if rates else []
+        verdict = "PASS (no physical impossibility)" if not problems else "FAIL"
+        print(f"\nRECEIPT timing_guard arm-ordering: {verdict}")
+        print(f"  s/step by arm: { {k: round(v, 5) for k, v in sorted(rates.items())} }")
+        for p in problems:
+            print(f"  {p}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"\nRECEIPT timing_guard: UNAVAILABLE ({type(exc).__name__}: {exc})")
+
+    # ---- PERSISTENCE, AND THE ASSERTION THAT MAKES IT REAL -------------------------------------
+    # The previous version printed "wrote N records to s3://..." having written them into a local
+    # directory literally named `s3:` inside a container layer that was then discarded. Exit 0, a
+    # confident message, and zero retrievable output. So the upload is checked against the
+    # REGISTRY, and a failure is a NON-ZERO EXIT rather than a line in a log nobody re-reads.
+    local = local_mirror_for(args.out)
+    receipt = upload_and_verify(local, args.out)
+    print(f"\nRECEIPT persistence: {json.dumps(receipt, default=str)}", flush=True)
+    if not receipt.get("verified"):
+        print(
+            f"\nFAILED TO PERSIST {len(recs)} records to {args.out}.\n"
+            f"  The run's results are NOT retrievable. Exiting non-zero so this cannot be read as\n"
+            f"  success -- a fsync return value is not a receipt; the object listing is.",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 3
+    print(f"wrote and VERIFIED {len(recs)} records -> {receipt.get('uri', local)}", flush=True)
     return 0
 
 
