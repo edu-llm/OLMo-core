@@ -51,4 +51,6 @@ def test_research_image_pins_and_deep_imports_fused_linear_loss():
     assert f'"liger-kernel=={LIGER_VERSION}"' in source
     assert "LigerFusedLinearCrossEntropyFunction" in source
     assert "callable(FLCE.apply)" in source
+    assert "inspect.signature(FLCE.forward)" in source
+    assert "'return_predicted_tokens' not in inspect.signature(FLCE.forward).parameters" in source
     assert source.index('"torch==2.9.0"') < source.index(f'"liger-kernel=={LIGER_VERSION}"')

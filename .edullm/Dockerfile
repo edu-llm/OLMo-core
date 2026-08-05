@@ -215,7 +215,7 @@ RUN set -eux; \
     python -c "import torch; assert torch.__version__.startswith('2.9.0'), f'torch was moved off the pin: {torch.__version__}'"; \
     python -c "import torch; assert torch.version.cuda, 'the CUDA build of torch was replaced by a CPU wheel'"; \
     python -c "import flash_attn; assert callable(flash_attn.flash_attn_varlen_func); assert callable(flash_attn.flash_attn_varlen_qkvpacked_func)"; \
-    python -c "from importlib.metadata import version; from liger_kernel.ops.fused_linear_cross_entropy import LigerFusedLinearCrossEntropyFunction as FLCE; assert version('liger-kernel') == '0.7.0'; assert callable(FLCE.apply)"; \
+    python -c "import inspect; from importlib.metadata import version; from liger_kernel.ops.fused_linear_cross_entropy import LigerFusedLinearCrossEntropyFunction as FLCE; assert version('liger-kernel') == '0.7.0'; assert callable(FLCE.apply); assert 'return_predicted_tokens' not in inspect.signature(FLCE.forward).parameters"; \
     python -c "import tokenizers, transformers; assert tokenizers.__version__ == '0.22.2'; assert transformers.__version__ == '5.14.1'; from tokenizers import Tokenizer; from transformers import AutoModelForCausalLM"; \
     python -c "import boto3, wandb; from olmo_core.data import TokenizerConfig; from olmo_core.nn.transformer import TransformerConfig; print(TransformerConfig.olmo2_190M(vocab_size=TokenizerConfig.gpt2().padded_vocab_size()).__class__.__name__)"; \
     python -c "from edullm_data.read import dataset_paths, resolve_latest; print(dataset_paths.__module__)"
