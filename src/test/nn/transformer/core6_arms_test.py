@@ -12,10 +12,16 @@ the model would have; ``test_config_num_params_matches_built_model`` pins the tw
 for every arm that can actually be built here.
 """
 
+from dataclasses import replace
+from typing import Dict
+
 import pytest
+import torch
 
 from olmo_core.nn.attention import AttentionConfig, KimiDeltaAttentionConfig
 from olmo_core.nn.attention.short_conv import ShortConvConfig
+from olmo_core.nn.feed_forward import FeedForwardConfig
+from olmo_core.nn.transformer.config import TransformerConfig
 from olmo_core.nn.transformer.core6_arms import (
     ARMS,
     ATTENTION_LAYERS,
@@ -119,16 +125,46 @@ def test_removing_attention_would_add_params_without_the_solver():
 # --- topology -------------------------------------------------------------------------------
 
 
+#: The topology every arm must build to, keyed by arm name: global attention, KDA, sliding
+#: window, LIV. Written down rather than derived from the declaration, because a test that
+#: recomputes ``len(arm.attention_layers)`` and compares it to the built config's attention
+#: count would pass for any consistent pair of wrong numbers -- including the all-attention
+#: model the module docstring warns about, which is what a ``.attention`` typo produces.
+#:
+#: ``test_every_arm_has_a_declared_topology`` is what makes this a ledger rather than a list
+#: somebody forgot to extend: G2R0 was added on 2026-08-01 and got its parameter count checked
+#: (those tests parametrize over ``list(ARMS)``) while its topology went unchecked for the same
+#: reason this dict is guarded now.
+ARM_TOPOLOGY = {
+    "L0": (6, 0, 0, 10),
+    "K2": (6, 2, 0, 8),
+    "G4R0": (4, 0, 0, 12),
+    "G4R2": (4, 2, 0, 10),
+    "G2R0": (2, 0, 0, 14),
+    "S14": (2, 0, 14, 0),
+    "G0R0": (0, 0, 0, 16),
+}
+
+
+def test_every_arm_has_a_declared_topology():
+    """
+    A new arm cannot slip in with its topology unchecked.
+
+    This is the guard that was missing: the parametrize list below used to be six literal rows
+    and ``ARMS`` had seven entries, so ``G2R0`` -- the arm added for the dose-response wave --
+    had its parameter count asserted and its mixer schedule not. In a module whose own docstring
+    says a wrong attribute yields "a model that builds, trains, and answers a different
+    question", an unchecked topology is the failure mode, not a gap in coverage.
+    """
+    assert set(ARM_TOPOLOGY) == set(ARMS), (
+        f"declared but untested: {sorted(set(ARMS) - set(ARM_TOPOLOGY))}; "
+        f"tested but not declared: {sorted(set(ARM_TOPOLOGY) - set(ARMS))}"
+    )
+
+
 @pytest.mark.parametrize(
     "name,n_global,n_kda,n_swa,n_liv",
-    [
-        ("L0", 6, 0, 0, 10),
-        ("K2", 6, 2, 0, 8),
-        ("G4R0", 4, 0, 0, 12),
-        ("G4R2", 4, 2, 0, 10),
-        ("S14", 2, 0, 14, 0),
-        ("G0R0", 0, 0, 0, 16),
-    ],
+    [(name, *counts) for name, counts in ARM_TOPOLOGY.items()],
 )
 def test_arm_topology(name, n_global, n_kda, n_swa, n_liv):
     """
@@ -147,6 +183,28 @@ def test_arm_topology(name, n_global, n_kda, n_swa, n_liv):
     windowed = [a for a in attn if a.sliding_window is not None]
     assert len(windowed) == n_swa
     assert len(attn) - len(windowed) == n_global
+
+    # The four counts have to cover every layer. Without this a row could name three of the
+    # four correctly and leave a layer of some fourth kind entirely unmentioned.
+    assert n_global + n_kda + n_swa + n_liv == N_LAYERS
+
+
+def test_g2r0_sits_on_s14s_global_indices():
+    """
+    G2R0 and S14 must differ in ONE thing: whether the other 14 layers are sliding-window
+    attention or LIV convolutions. If their global indices ever drift apart the pair stops
+    being that comparison and becomes two unrelated arms.
+    """
+    assert ARMS["G2R0"].attention_layers == ARMS["S14"].attention_layers == (2, 12)
+
+    blocks = build_arm("G2R0").resolved_block_configs
+    idx = tuple(i for i, b in enumerate(blocks) if isinstance(b.sequence_mixer, AttentionConfig))
+    assert idx == (2, 12)
+    # And none of them windowed -- G2R0 is a DOSE point at a=2, so its two attention layers
+    # must be global. A sliding window here would make it a second S14 wearing G2R0's name.
+    assert all(
+        blocks[i].sequence_mixer.sliding_window is None for i in idx
+    ), "G2R0's global layers must not be windowed"
 
 
 def test_l0_attention_sits_at_the_released_indices():
@@ -288,3 +346,126 @@ def test_the_sigma_pair_is_present():
     """sigma_2 = (G4R2 - G4R0) / (G4R0 - L0): all three arms must exist."""
     for required in ("L0", "G4R0", "G4R2"):
         assert required in ARMS
+
+
+# --- the init seed reaches the tensors ------------------------------------------------------
+
+
+def _tiny(seed: int) -> TransformerConfig:
+    """L0's block wiring at a size a laptop can actually initialise, at a given ``init_seed``.
+
+    One layer, vocab 128, SwiGLU 32: about 3.4M parameters and under a second to draw, against
+    390M and minutes at the real geometry. The GEOMETRY is not what these tests are about --
+    that is asserted exactly by the ledger tests above. What is under test is whether the seed
+    argument reaches the generator that draws the tensors, and one layer exercises the same
+    ``init_weights`` path as sixteen.
+    """
+    cfg = build_arm("L0", vocab_size=128, init_seed=seed)
+    block = replace(cfg.block, feed_forward=FeedForwardConfig(hidden_size=32, bias=False))
+    return replace(cfg, n_layers=1, block=block, block_overrides=None)
+
+
+def _drawn_weights(seed: int) -> Dict[str, torch.Tensor]:
+    model = _tiny(seed).build(init_device="cpu")
+    model.init_weights(device=torch.device("cpu"))
+    return {name: p.detach().clone() for name, p in model.named_parameters()}
+
+
+def _is_constant(tensor: torch.Tensor) -> bool:
+    """Whether every element is the same value.
+
+    The norm gains are initialised to ones and no seed can change that, so they are identical
+    across seeds for a reason that has nothing to do with the bug under test. They are
+    identified by BEING CONSTANT rather than by having "norm" in their name: a name filter
+    would also excuse a real weight matrix that happened to be called something similar, and it
+    would go stale the moment a module is renamed. This test is about which tensors a random
+    draw touched, so "was this drawn at all" is the right question to ask of each one.
+    """
+    return bool(torch.all(tensor == tensor.flatten()[0]))
+
+
+def test_init_seed_reaches_the_config():
+    """The first link in the chain: ``build_arm(**kwargs)`` -> ``TransformerConfig.init_seed``.
+
+    Cheap and separate from the tensor test below so that a break in the kwargs plumbing is
+    distinguishable from a break in ``init_weights``.
+    """
+    assert build_arm("L0", init_seed=7).init_seed == 7
+    assert build_arm("L0", init_seed=0).init_seed == 0
+    # The default, which is what every arm got while `.edullm/train_core6_arm.py` was not
+    # passing the flag through -- including runs whose JSON reported init_seed 12536.
+    assert build_arm("L0").init_seed == 0
+
+
+def test_two_init_seeds_give_different_weights():
+    """
+    THE REGRESSION TEST FOR A FLAG THAT DID NOTHING. ``.edullm/train_core6_arm.py`` accepted
+    ``--init-seed`` and did not pass it to ``build_arm``, so every value produced BIT-IDENTICAL
+    weights while the run summary printed the distinct number it was given. That is worse than
+    having no flag: the JSON asserted a varied initialisation that was never varied, and any
+    seed-noise interval built from those runs is a data-order interval wearing the wrong label.
+
+    ``seed_all()`` is deliberately NOT what this checks. That seeds the global rngs;
+    ``Transformer.init_weights`` builds its own ``torch.Generator(device).manual_seed(
+    self.init_seed)`` and hands it to every draw, so the global rng is not what the weights
+    come from and seeding it proves nothing about this.
+
+    Asserted on EVERY randomly-drawn parameter rather than on one: a fix that threaded the seed
+    into the embeddings and not the blocks would pass a spot check and still leave most of the
+    model identical across "seeds". The constant-valued norm gains are excluded because no seed
+    can change a tensor of ones -- and the exclusion is counted and asserted below, so it cannot
+    quietly grow to cover the whole model.
+    """
+    a = _drawn_weights(0)
+    b = _drawn_weights(1)
+    assert set(a) == set(b) and a, "the two models must have the same parameters to compare"
+
+    drawn = [name for name in a if not _is_constant(a[name])]
+    assert len(drawn) >= 8, (
+        f"only {len(drawn)} of {len(a)} tensors look randomly drawn, so this test would be "
+        "asserting almost nothing; the model or its init changed"
+    )
+
+    identical = [name for name in drawn if torch.equal(a[name], b[name])]
+    assert not identical, (
+        f"{len(identical)} of {len(drawn)} randomly-drawn tensors are bit-identical across "
+        f"init_seed 0 and 1, so the seed is not reaching the generator that draws them: "
+        f"{identical[:5]}"
+    )
+
+
+def test_the_same_init_seed_gives_identical_weights():
+    """
+    The other half, and the half that makes the test above mean something. "Different weights"
+    is also what a seed that is ignored in favour of fresh entropy produces -- that would pass
+    the difference test and destroy reproducibility, which is the property the seed exists for.
+    Bit-identical, not close: a reproducible draw is exact.
+    """
+    a = _drawn_weights(3)
+    b = _drawn_weights(3)
+    assert set(a) == set(b) and a
+
+    for name in a:
+        assert torch.equal(a[name], b[name]), f"{name} differs between two draws at init_seed 3"
+
+
+def test_drawn_weights_have_the_declared_scale():
+    """
+    A magnitude check on the draw itself, because "different" and "identical" are both
+    satisfiable by a model whose weights were never initialised at all -- ``to_empty`` leaves
+    uninitialised memory, which differs between two runs for reasons that have nothing to do
+    with the seed. The block matrices are drawn at ``init_std``, so their sample standard
+    deviation has to land near it.
+
+    Embeddings are excluded: ``embedding_init_std`` may differ, and the tied LM head shares
+    that storage.
+    """
+    weights = _drawn_weights(0)
+    std = _tiny(0).init_std
+    checked = 0
+    for name, tensor in weights.items():
+        if "embeddings" not in name and tensor.dim() == 2 and tensor.numel() > 1024:
+            observed = float(tensor.std())
+            assert 0.2 * std < observed < 5 * std, f"{name}: std {observed:.4g} vs {std:.4g}"
+            checked += 1
+    assert checked >= 4, f"only {checked} matrices were checked, so this asserts almost nothing"
