@@ -72,6 +72,7 @@ PACKED_CORPUS_SCHEMA_VERSION = "p3-packed-corpus-v3"
 ENCODING_CACHE_SCHEMA_VERSION = "p3-encoding-cache-v3"
 ENCODING_CACHE_PROGRESS_SCHEMA_VERSION = "p3-encoding-cache-progress-v3"
 CORPUS_BINDING_SCHEMA_VERSION = "p3-tokenizer-corpus-binding-v1"
+SEALED_CORPUS_MANIFEST_SCHEMA_VERSION = "p3-sealed-corpus-manifest-v1"
 TOKENIZER_SEAL_SCHEMA_VERSION = "p3-tokenizer-four-part-seal-v1"
 TOKENIZE_CORPUS_CODE_VERSION = "tokenize-corpus-v4"
 PACKED_ALGORITHM_VERSION = "largest-fit-decreasing-v1"
@@ -188,6 +189,12 @@ STAGED_CORPUS_GENERATION_FIELDS = {
     "producer_source_sha256",
     "schema_version",
     "semantic_contract_sha256",
+}
+STAGED_SEALED_CORPUS_GENERATION_FIELDS = {
+    "logical_root_sha256",
+    "manifest_root_sha256",
+    "schema_version",
+    "sealed_corpus_manifest",
 }
 STAGED_PACKING_FIELDS = {
     "algorithm",
@@ -2117,6 +2124,62 @@ def require_corpus_generation_current(binding: Mapping) -> None:
         raise RuntimeError("corpus source inventory or SHA-256 changed during tokenization")
 
 
+def load_sealed_corpus_manifest(path: str | Path) -> dict:
+    """Resolve and independently validate a direct six-family sealed corpus manifest.
+
+    This is the production alternative to the atomic transaction contract: it binds
+    the exact final train/eval JSONL bytes by SHA-256 without requiring a committed
+    corpus-generation transaction. It is fail-closed -- any missing family, extra
+    family, wrong row schema, malformed entry, or manifest-root mismatch aborts the
+    build. It never enables the test-only unsealed seam: the fixed Qwen tokenizer
+    seal is still enforced during encoding.
+    """
+    manifest_path = Path(path).expanduser()
+    if manifest_path.is_symlink():
+        raise RuntimeError("sealed corpus manifest must not be a symlink")
+    data = json.loads(manifest_path.read_text())
+    if data.get("schema_version") != SEALED_CORPUS_MANIFEST_SCHEMA_VERSION:
+        raise RuntimeError("sealed corpus manifest schema_version is not recognized")
+    families = data.get("families")
+    if not isinstance(families, dict) or set(families) != set(FAMILIES):
+        raise RuntimeError(
+            "sealed corpus manifest must declare exactly the ordered P3 family set"
+        )
+    for family in FAMILIES:
+        record = families[family]
+        if not isinstance(record, dict):
+            raise RuntimeError(f"sealed corpus manifest family {family} is malformed")
+        if record.get("schema") != P3_SOURCE_SCHEMAS[family]:
+            raise RuntimeError(
+                f"sealed corpus manifest family {family} declares the wrong row schema"
+            )
+        for role in ("train", "eval"):
+            entry = record.get(role)
+            if (
+                not isinstance(entry, dict)
+                or not isinstance(entry.get("path"), str)
+                or not entry["path"]
+                or not isinstance(entry.get("sha256"), str)
+                or len(entry["sha256"]) != 64
+                or not isinstance(entry.get("bytes"), int)
+                or entry["bytes"] < 0
+                or not isinstance(entry.get("rows"), int)
+                or entry["rows"] < 0
+            ):
+                raise RuntimeError(
+                    f"sealed corpus manifest family {family}/{role} is malformed"
+                )
+    body = {"schema_version": data["schema_version"], "families": families}
+    manifest_root_sha256 = fingerprint_dict(body)
+    if manifest_root_sha256 != data.get("manifest_root_sha256"):
+        raise RuntimeError("sealed corpus manifest root SHA-256 does not seal its body")
+    return {
+        "schema_version": data["schema_version"],
+        "manifest_root_sha256": manifest_root_sha256,
+        "families": families,
+    }
+
+
 @contextmanager
 def corpus_generation_shared_lock(root: str | Path) -> Iterator[None]:
     """Hold the producer's no-follow generation lock in shared mode."""
@@ -2569,14 +2632,19 @@ def process_corpus(task: dict) -> dict:
     sequence_length = int(task["sequence_length"])
     tokenizer_id = task["tokenizer"]
     test_only = bool(task.get("test_only", False))
+    source_mode = task.get("source_mode")
+    if source_mode is None:
+        source_mode = "test-only" if test_only else "transaction"
+    source_mode = str(source_mode)
     corpus_generation = task.get("corpus_generation")
     if not isinstance(corpus_generation, dict):
         raise TypeError("an immutable corpus-generation binding is required")
 
     def require_current_source() -> None:
-        if test_only:
+        if source_mode == "test-only":
             return
-        require_corpus_generation_current(task["corpus_contract"])
+        if source_mode == "transaction":
+            require_corpus_generation_current(task["corpus_contract"])
         source_record = task.get("source_record")
         if (
             not isinstance(source_record, dict)
@@ -2585,7 +2653,7 @@ def process_corpus(task: dict) -> dict:
             or source_record.get("family") != name
             or not isinstance(source_record.get("schema"), str)
         ):
-            raise RuntimeError("source JSONL drifted from the resolved corpus generation")
+            raise RuntimeError("source JSONL drifted from the sealed corpus inputs")
 
     require_current_source()
     tok = AutoTokenizer.from_pretrained(
@@ -3015,22 +3083,37 @@ def _require_fixed_staged_manifest_contract(manifest: Mapping, *, split: str) ->
     generation = manifest.get("corpus_generation")
     if not isinstance(generation, Mapping):
         raise TypeError(f"{split} token manifest lacks corpus generation")
-    if (
-        set(generation) != STAGED_CORPUS_GENERATION_FIELDS
-        or generation.get("schema_version") != CORPUS_BINDING_SCHEMA_VERSION
-        or not isinstance(generation.get("generation_id"), str)
-        or not generation["generation_id"]
-    ):
-        raise RuntimeError(f"{split} token manifest corpus generation identity is invalid")
-    for field in (
-        "logical_root_sha256",
-        "manifest_root_sha256",
-        "manifest_file_sha256",
-        "current_sha256",
-        "semantic_contract_sha256",
-        "producer_source_sha256",
-    ):
-        _require_sha256(generation.get(field), f"{split} corpus generation {field}")
+    if generation.get("schema_version") == SEALED_CORPUS_MANIFEST_SCHEMA_VERSION:
+        # Direct sealed-manifest binding: no atomic transaction, so the identity is the
+        # sealed corpus manifest root rather than a generation_id/CURRENT chain.
+        if (
+            set(generation) != STAGED_SEALED_CORPUS_GENERATION_FIELDS
+            or generation.get("sealed_corpus_manifest") is not True
+        ):
+            raise RuntimeError(
+                f"{split} token manifest sealed corpus generation identity is invalid"
+            )
+        for field in ("logical_root_sha256", "manifest_root_sha256"):
+            _require_sha256(generation.get(field), f"{split} corpus generation {field}")
+        if generation["logical_root_sha256"] != generation["manifest_root_sha256"]:
+            raise RuntimeError(f"{split} sealed corpus generation roots disagree")
+    else:
+        if (
+            set(generation) != STAGED_CORPUS_GENERATION_FIELDS
+            or generation.get("schema_version") != CORPUS_BINDING_SCHEMA_VERSION
+            or not isinstance(generation.get("generation_id"), str)
+            or not generation["generation_id"]
+        ):
+            raise RuntimeError(f"{split} token manifest corpus generation identity is invalid")
+        for field in (
+            "logical_root_sha256",
+            "manifest_root_sha256",
+            "manifest_file_sha256",
+            "current_sha256",
+            "semantic_contract_sha256",
+            "producer_source_sha256",
+        ):
+            _require_sha256(generation.get(field), f"{split} corpus generation {field}")
 
     source_inventory = manifest.get("source_family_inventory")
     source_hashes = manifest.get("source_jsonl_sha256")
@@ -3801,6 +3884,11 @@ def main():
         help="immutable corpus transaction root containing CURRENT and generations/",
     )
     source_group.add_argument(
+        "--sealed-corpus-manifest",
+        help="production direct seam: a p3-sealed-corpus-manifest-v1 JSON that binds the "
+        "exact six-family train/eval JSONLs by SHA-256 without a committed transaction",
+    )
+    source_group.add_argument(
         "--test-only-corpus-dir",
         help="TEST ONLY: legacy directory seam; requires --test-only-allow-unsealed-inputs",
     )
@@ -3869,9 +3957,10 @@ def main():
     )
     args = ap.parse_args()
 
-    test_only = bool(args.test_only_allow_unsealed_inputs)
     source_records: dict[str, dict] = {}
     if args.corpus_contract_root is not None:
+        source_mode = "transaction"
+        test_only = False
         corpus_contract = load_corpus_generation_contract(args.corpus_contract_root)
         require_corpus_generation_current(corpus_contract)
         for family, records in corpus_contract["families"].items():
@@ -3893,7 +3982,44 @@ def main():
                 "producer_source_sha256",
             )
         }
+    elif args.sealed_corpus_manifest is not None:
+        source_mode = "sealed"
+        test_only = False
+        sealed = load_sealed_corpus_manifest(args.sealed_corpus_manifest)
+        role = "train" if args.split == "train" else "eval"
+        for family in FAMILIES:
+            entry = sealed["families"][family][role]
+            source_path = Path(entry["path"]).expanduser()
+            if source_path.is_symlink():
+                sys.exit(f"sealed source must not be a symlink: {source_path}")
+            if not source_path.is_file():
+                sys.exit(f"sealed source JSONL is missing: {source_path}")
+            if (
+                file_sha256(source_path) != entry["sha256"]
+                or source_path.stat().st_size != entry["bytes"]
+            ):
+                sys.exit(f"sealed source drifted from its seal: {family}/{role}")
+            source_records[family] = {
+                "source": str(source_path),
+                "path": str(source_path),
+                "sha256": entry["sha256"],
+                "bytes": entry["bytes"],
+                "family": family,
+                "schema": sealed["families"][family]["schema"],
+            }
+        corpus_contract = {
+            "schema_version": sealed["schema_version"],
+            "sealed_corpus_manifest": True,
+        }
+        corpus_generation = {
+            "schema_version": sealed["schema_version"],
+            "logical_root_sha256": sealed["manifest_root_sha256"],
+            "manifest_root_sha256": sealed["manifest_root_sha256"],
+            "sealed_corpus_manifest": True,
+        }
     else:
+        source_mode = "test-only"
+        test_only = bool(args.test_only_allow_unsealed_inputs)
         if not test_only:
             sys.exit(
                 "--test-only-corpus-dir requires --test-only-allow-unsealed-inputs; "
@@ -3961,7 +4087,8 @@ def main():
         "batch_size": args.batch_size,
         "suggest": args.suggest,
         "test_only": test_only,
-        "defer_done_commit": not test_only,
+        "source_mode": source_mode,
+        "defer_done_commit": source_mode == "transaction",
         "corpus_contract": corpus_contract,
         "corpus_generation": corpus_generation,
     }
@@ -3989,7 +4116,7 @@ def main():
             for future in concurrent.futures.as_completed(futures):
                 results.append(future.result())
     results.sort(key=lambda item: item["name"])
-    if not test_only:
+    if source_mode == "transaction":
         require_corpus_generation_current(corpus_contract)
 
     if args.suggest:
@@ -4013,7 +4140,7 @@ def main():
         print("  subset complete; run again without --only-corpus to finalize manifest")
         return
 
-    if test_only:
+    if source_mode != "transaction":
         require_exact_token_output_inventory(
             output_root,
             expected_groups=all_source_names,
@@ -4082,7 +4209,7 @@ def main():
         manifest=manifest,
     )
     meta_path = output_root / f"{args.split}_meta.json"
-    if test_only:
+    if source_mode != "transaction":
         atomic_write_json(meta_path, manifest)
     else:
         specifications = []

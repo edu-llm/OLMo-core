@@ -61,3 +61,8 @@ site/
 /scratch/
 core
 /dataset-cache/
+
+# local agent tooling / scratch (not part of the repo)
+/.agents/
+/graphify-out/
+/next-steps.md

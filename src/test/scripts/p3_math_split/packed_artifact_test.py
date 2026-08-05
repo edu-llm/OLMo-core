@@ -112,6 +112,7 @@ def test_manifest_arithmetic_and_files(artifact):
     assert set(meta["source_jsonl_sha256"]) == set(FAMILIES)
     assert set(meta["source_family_inventory"]) == set(FAMILIES)
     assert set(meta["groups"]) == set(FAMILIES)
+    assert all(meta["groups"][family]["shards"] for family in FAMILIES)
     assert meta["source_family_inventory"] == {
         family: {"family": family, "schema": P3_SOURCE_SCHEMAS[family]} for family in FAMILIES
     }
@@ -148,6 +149,7 @@ def test_manifest_arithmetic_and_files(artifact):
     for name, group in meta["groups"].items():
         require_exact_group_inventory(root / "tokens" / name)
         _assert_no_evaluator_fields(group, context=f"{split}/{name} done manifest")
+        assert group["shards"], f"{split}/{name} must contain one or more shards"
         assert group["schema_version"] == PACKED_GROUP_SCHEMA_VERSION
         assert group["code_version"] == TOKENIZE_CORPUS_CODE_VERSION
         assert group["cross_split_binding_schema_version"] == CROSS_SPLIT_BINDING_SCHEMA_VERSION
@@ -165,6 +167,12 @@ def test_manifest_arithmetic_and_files(artifact):
         assert group["build"]["source_jsonl"]["sha256"] == meta["source_jsonl_sha256"][name]
         assert group["documents"] + group["dropped_over_length"] == group["source_documents"]
         assert sum(shard["instances"] for shard in group["shards"]) == group["instances"]
+        assert sum(shard["tokens"] for shard in group["shards"]) == (
+            group["instances"] * meta["sequence_length"]
+        )
+        assert sum(shard["bytes"] for shard in group["shards"]) == (
+            group["instances"] * meta["sequence_length"] * 4
+        )
         assert group["real_tokens"] <= group["instances"] * meta["sequence_length"]
         assert group["real_tokens"] > 0
         ordinals = []
@@ -199,6 +207,16 @@ def test_manifest_arithmetic_and_files(artifact):
     assert seen_paths == {
         shard["path"] for group in meta["groups"].values() for shard in group["shards"]
     }
+    assert seen_paths == {
+        path.relative_to(root).as_posix()
+        for path in (root / "tokens").rglob(f"{split}-*.u32le.bin")
+    }
+    assert sum(
+        shard["tokens"] for group in meta["groups"].values() for shard in group["shards"]
+    ) == (meta["instances"] * meta["sequence_length"])
+    assert sum(
+        shard["bytes"] for group in meta["groups"].values() for shard in group["shards"]
+    ) == (meta["instances"] * meta["sequence_length"] * 4)
 
 
 def test_train_and_val_manifests_have_identical_cross_split_binding():
@@ -224,6 +242,7 @@ def test_train_and_val_manifests_have_identical_cross_split_binding():
         assert set(manifest["groups"]) == set(FAMILIES)
         assert set(manifest["source_family_inventory"]) == set(FAMILIES)
         assert manifest["tokenizer_seal"] == FIXED_QWEN_TOKENIZER_SEAL
+        assert all(manifest["groups"][family]["shards"] for family in FAMILIES)
     assert _token_manifest_cross_split_binding(
         manifests["train"]
     ) == _token_manifest_cross_split_binding(manifests["val"])
@@ -300,38 +319,41 @@ def test_real_derived_mask_on_sampled_packed_rows(artifact):
     model.pad_token_id = meta["pad_token_id"]
     model.arm = "split"
 
-    masked = real = checked = 0
+    masked = real = checked = expected_checked = 0
     for group in meta["groups"].values():
-        shard = group["shards"][0]
-        rows = np.memmap(root / shard["path"], mode="r", dtype="<u4").reshape(
-            -1, meta["sequence_length"]
-        )
-        for i in sorted({0, len(rows) // 2, len(rows) - 1}):
-            ids = torch.from_numpy(np.asarray(rows[i], dtype=np.int64).copy()).unsqueeze(0)
-            supervised = model.supervised_mask(ids)
-            padding = model.padding_mask(ids)
-            labels_live = model.label_supervision_mask(ids)
-            assert not torch.any(supervised & padding)
-            target_is_padding = torch.zeros_like(padding)
-            target_is_padding[:, :-1] = padding[:, 1:]
-            assert not torch.any(labels_live & target_is_padding)
-            assert not labels_live[:, -1].any()
-            # Every packed row has at least one fact block and one target.
-            assert torch.any(supervised)
-            assert torch.any(~supervised & ~padding)
-            # Real EOS is supervised; only repeated-EOS tail padding is not.
-            eos_positions = torch.nonzero(ids[0] == eos).flatten()
-            assert torch.any(supervised[0, eos_positions] & ~padding[0, eos_positions])
-            # OLMo shifts labels left. The position immediately before each first
-            # goal token must therefore be live, or the first goal token is skipped.
-            sep = model._sep
-            starts = torch.nonzero((ids.unfold(1, len(sep), 1) == sep).all(dim=-1)[0]).flatten()
-            assert len(starts) >= 1
-            for start in starts:
-                assert labels_live[0, start + len(sep) - 1]
-            masked += int((~labels_live & ~target_is_padding).sum())
-            real += int((~target_is_padding).sum())
-            checked += 1
+        for shard in group["shards"]:
+            rows = np.memmap(root / shard["path"], mode="r", dtype="<u4").reshape(
+                -1, meta["sequence_length"]
+            )
+            sample_indices = sorted({0, len(rows) // 2, len(rows) - 1})
+            expected_checked += len(sample_indices)
+            for i in sample_indices:
+                ids = torch.from_numpy(np.asarray(rows[i], dtype=np.int64).copy()).unsqueeze(0)
+                supervised = model.supervised_mask(ids)
+                padding = model.padding_mask(ids)
+                labels_live = model.label_supervision_mask(ids)
+                assert not torch.any(supervised & padding)
+                target_is_padding = torch.zeros_like(padding)
+                target_is_padding[:, :-1] = padding[:, 1:]
+                assert not torch.any(labels_live & target_is_padding)
+                assert not labels_live[:, -1].any()
+                # Every packed row has at least one fact block and one target.
+                assert torch.any(supervised)
+                assert torch.any(~supervised & ~padding)
+                # Real EOS is supervised; only repeated-EOS tail padding is not.
+                eos_positions = torch.nonzero(ids[0] == eos).flatten()
+                assert torch.any(supervised[0, eos_positions] & ~padding[0, eos_positions])
+                # OLMo shifts labels left. The position immediately before each first
+                # goal token must therefore be live, or the first goal token is skipped.
+                sep = model._sep
+                starts = torch.nonzero((ids.unfold(1, len(sep), 1) == sep).all(dim=-1)[0]).flatten()
+                assert len(starts) >= 1
+                for start in starts:
+                    assert labels_live[0, start + len(sep) - 1]
+                masked += int((~labels_live & ~target_is_padding).sum())
+                real += int((~target_is_padding).sum())
+                checked += 1
     fraction = masked / real
-    assert checked == 18
+    assert checked == expected_checked
+    assert checked >= len(FAMILIES)
     assert 0.05 < fraction < 0.60, f"fact mask fraction {fraction:.2%} is implausible"

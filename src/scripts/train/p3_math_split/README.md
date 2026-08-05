@@ -218,6 +218,7 @@ publish(
     purpose="Packed formal-proof premise tokens for the original full 13-epoch P3 pretraining run",
     profile="pretrain-tokens/v1",
     tokenizer="tokenizer/qwen25-vendored/v1",
+    group_meta={"tokens": {"seq_len": 16384}},
     s3=Boto3S3.default(),
     created_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
 )

@@ -1524,6 +1524,7 @@ def test_synthetic_six_family_fake_s3_structure_matches_pinned_profile(
         s3=s3,
         created_at="2026-08-03T23:00:00Z",
         tokenizer="tokenizer/qwen25-vendored/v1",
+        group_meta={"tokens": {"seq_len": 16_384}},
         env={
             "EDULLM_CODE_SHA256": "a" * 64,
             "EDULLM_PACKAGES_LOCK_SHA256": "b" * 64,
@@ -1541,6 +1542,7 @@ def test_synthetic_six_family_fake_s3_structure_matches_pinned_profile(
     dataset = json.loads(s3.get("edullm-landing", f"{prefix}/dataset.json"))
     group = dataset["groups"][0]
     assert group["name"] == "tokens"
+    assert group["seq_len"] == 16_384
     assert group["depends_on"] == [
         {
             "role": "tokenizer",

@@ -7,10 +7,12 @@ prints; model construction and actual bytes are covered elsewhere.
 
 from __future__ import annotations
 
+import ast
 import copy
 import importlib.util
 import json
 import logging
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -48,18 +50,41 @@ from olmo_core.nn.transformer.qwen import (  # noqa: E402
 )
 from olmo_core.train import DurationUnit, Trainer  # noqa: E402
 
+FAMILIES = ("metamath", "mizar", "thproofs", "prf2", "enigma", "isabelle")
+V3_TRAIN_SHARD_SEQUENCE_COUNTS = {
+    (
+        "s3://edullm-data/pretrain/formal-proof-premises-500m/v3/"
+        f"tokens/{family}/train-{shard:05d}.u32le.bin"
+    ): 2_600
+    + family_index * 10
+    + shard
+    for family_index, family in enumerate(FAMILIES)
+    for shard in range(2)
+}
+V3_TRAIN_PATHS = list(V3_TRAIN_SHARD_SEQUENCE_COUNTS)
+V3_AGGREGATE_ROWS = sum(V3_TRAIN_SHARD_SEQUENCE_COUNTS.values()) * 16_384
+V3_BATCHES_PER_EPOCH = V3_AGGREGATE_ROWS // (16 * 16_384)
+V3_STEPS = V3_BATCHES_PER_EPOCH * 13
+
 
 @pytest.fixture
-def built(monkeypatch):
-    corpus = platform.Corpus(
+def repaired_v3_read():
+    return SimpleNamespace(
+        paths=V3_TRAIN_PATHS,
+        dtype="uint32",
+        byte_order=sys.byteorder,
+        header_bytes=0,
+        rows=V3_AGGREGATE_ROWS,
+    )
+
+
+@pytest.fixture
+def built(monkeypatch, repaired_v3_read):
+    corpus = platform.corpus_from_manifest(
+        repaired_v3_read,
         dataset_id="pretrain/formal-proof-premises-500m",
-        version="v2",
-        paths=[
-            "s3://edullm-data/pretrain/formal-proof-premises-500m/v2/tokens/x/train-00000.u32le.bin"
-        ],
-        dtype=NumpyDatasetDType.uint32,
-        tokenizer=qwen2_tokenizer_config(),
-        rows=494_862_336,
+        version="v3",
+        tokenizer_id="tokenizer/qwen25-vendored/v1",
     )
     monkeypatch.setattr(platform, "resolve_corpus", lambda **_: corpus)
 
@@ -93,7 +118,7 @@ def built(monkeypatch):
     monkeypatch.delenv("EDULLM_WANDB_PROJECT", raising=False)
     monkeypatch.setenv("WORLD_SIZE", "1")
     monkeypatch.setenv("LOCAL_WORLD_SIZE", "1")
-    monkeypatch.setenv("EDULLM_DATASET_RELEASE", "formal-proof-premises-500m-v2")
+    monkeypatch.setenv("EDULLM_DATASET_RELEASE", "formal-proof-premises-500m-v3")
     monkeypatch.setenv("EDULLM_COMMIT_SHA", "a" * 40)
     args = platform.build_parser().parse_args(
         [
@@ -115,11 +140,91 @@ def built(monkeypatch):
     return platform.build_config(args, []), args
 
 
+@pytest.fixture
+def stale_v2_invocation(built):
+    cfg, base = built
+    args = copy.copy(base)
+    args.dataset_version = "v2"
+    cfg = copy.copy(cfg)
+    cfg.dataset_version = "v2"
+    cfg.dataset_release = "formal-proof-premises-500m-v2"
+    return cfg, args
+
+
+def test_tokenize_corpus_ast_import_and_cli_startup():
+    producer = SCRIPTS / "tokenize_corpus.py"
+    source = producer.read_text(encoding="utf-8")
+    ast.parse(source, filename=str(producer))
+
+    module_spec = importlib.util.spec_from_file_location("p3_tokenize_corpus_startup", producer)
+    assert module_spec and module_spec.loader
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+    assert module.FAMILIES == FAMILIES
+
+    startup = subprocess.run(
+        [sys.executable, str(producer), "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert startup.returncode == 0, startup.stderr
+    assert "--corpus-contract-root" in startup.stdout
+    assert "--test-only-corpus-dir" in startup.stdout
+
+
+def test_repaired_v3_fixture_consumes_every_multi_shard_path_and_aggregate_count(built):
+    cfg, args = built
+
+    assert cfg.dataset_version == "v3"
+    assert cfg.dataset.paths == V3_TRAIN_PATHS
+    assert set(cfg.dataset.paths) == set(V3_TRAIN_SHARD_SEQUENCE_COUNTS)
+    assert all(
+        sum(f"/tokens/{family}/" in path for path in cfg.dataset.paths) > 1 for family in FAMILIES
+    )
+    assert V3_AGGREGATE_ROWS == sum(V3_TRAIN_SHARD_SEQUENCE_COUNTS.values()) * 16_384
+    assert args.steps == V3_STEPS
+
+
+def test_reader_requests_train_and_preserves_every_v3_manifest_path(monkeypatch, repaired_v3_read):
+    calls = []
+    s3 = object()
+
+    def dataset_paths(dataset_id, version, *, split, s3):
+        calls.append((dataset_id, version, split, s3))
+        return repaired_v3_read
+
+    monkeypatch.setitem(
+        sys.modules,
+        "edullm_data.read",
+        SimpleNamespace(dataset_paths=dataset_paths, resolve_latest=lambda *_args, **_kwargs: "v3"),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "edullm_data.s3",
+        SimpleNamespace(Boto3S3=SimpleNamespace(default=lambda: s3)),
+    )
+
+    corpus = platform.resolve_corpus(
+        dataset_id="pretrain/formal-proof-premises-500m",
+        version="v3",
+        tokenizer_id="tokenizer/qwen25-vendored/v1",
+    )
+
+    assert calls == [("pretrain/formal-proof-premises-500m", "v3", "train", s3)]
+    assert corpus.paths == V3_TRAIN_PATHS
+    assert corpus.rows == sum(V3_TRAIN_SHARD_SEQUENCE_COUNTS.values()) * 16_384
+
+
+def test_publish_command_documents_profile_sequence_length_contract():
+    readme = (SCRIPTS / "README.md").read_text(encoding="utf-8")
+
+    assert 'group_meta={"tokens": {"seq_len": 16384}},' in readme
+
+
 def test_dataset_and_loader_controls(built):
     cfg, _ = built
-    assert cfg.dataset.paths == [
-        "s3://edullm-data/pretrain/formal-proof-premises-500m/v2/tokens/x/train-00000.u32le.bin"
-    ]
+    assert cfg.dataset.paths == V3_TRAIN_PATHS
     assert cfg.dataset.dtype == NumpyDatasetDType.uint32
     assert cfg.dataset.sequence_length == 16_384
     assert cfg.dataset.generate_doc_lengths is True
@@ -152,7 +257,7 @@ def test_optimizer_schedule_and_checkpoint_controls(built):
     assert cfg.train_module.max_grad_norm == 1.0
     assert cfg.train_module.scheduler.warmup == 2_400
     assert cfg.train_module.scheduler.alpha_f == 0.1
-    assert args.steps == 24_531
+    assert args.steps == V3_STEPS
     assert cfg.trainer.max_duration.unit == DurationUnit.epochs
     assert cfg.trainer.max_duration.value == 13
     assert cfg.trainer.callbacks["checkpointer"].save_interval == 2_000
@@ -176,8 +281,8 @@ def test_checkpoint_config_persists_model_tokenizer_and_launch_provenance(built)
     assert cfg.tokenizers_version == TOKENIZERS_VERSION
     assert cfg.tokenizer_eos_token_id == cfg.tokenizer_pad_token_id == 151_643
     assert cfg.dataset_id == "pretrain/formal-proof-premises-500m"
-    assert cfg.dataset_version == "v2"
-    assert cfg.dataset_release == "formal-proof-premises-500m-v2"
+    assert cfg.dataset_version == "v3"
+    assert cfg.dataset_release == "formal-proof-premises-500m-v3"
     assert cfg.world_size == 1
     assert cfg.launch_contract["final_compute_profile"] == "gpu-8xh100"
     assert cfg.launch_contract["final_world_size"] == 8
@@ -366,9 +471,15 @@ def test_no_cost_a10g_config_preflight_accepts_one_process(built):
     ],
 )
 def test_stale_v2_warning_is_warning_only_for_dry_and_non_dry_invocations(
-    built, monkeypatch, caplog, dry_run, dataset_version, rank, expects_warning
+    stale_v2_invocation,
+    monkeypatch,
+    caplog,
+    dry_run,
+    dataset_version,
+    rank,
+    expects_warning,
 ):
-    cfg, base = built
+    cfg, base = stale_v2_invocation
     args = copy.copy(base)
     args.dry_run = dry_run
     args.dataset_version = dataset_version
@@ -383,9 +494,7 @@ def test_stale_v2_warning_is_warning_only_for_dry_and_non_dry_invocations(
     monkeypatch.setattr(platform, "parse_cli_args", lambda: args)
     monkeypatch.setattr(platform, "build_config", lambda *_args, **_kwargs: cfg)
     monkeypatch.setattr(platform, "show", lambda _config: events.append("show"))
-    monkeypatch.setattr(
-        platform, "prepare_training_environment", lambda: events.append("prepare")
-    )
+    monkeypatch.setattr(platform, "prepare_training_environment", lambda: events.append("prepare"))
     monkeypatch.setattr(platform, "train", lambda *_args, **_kwargs: events.append("train"))
     monkeypatch.setattr(
         platform, "teardown_training_environment", lambda: events.append("teardown")
@@ -542,7 +651,7 @@ def test_versioned_published_tokenizer_resolves_to_local_config():
     corpus = platform.corpus_from_manifest(
         read,
         dataset_id="pretrain/formal-proof-premises-500m",
-        version="v2",
+        version="v3",
         tokenizer_id="tokenizer/qwen25-vendored/v1",
     )
     assert corpus.tokenizer.vocab_size == 151_936
@@ -552,12 +661,12 @@ def test_versioned_published_tokenizer_resolves_to_local_config():
     ("rows", "global_batch", "epochs", "expected_batches", "expected_steps"),
     [
         pytest.param(
-            30_204 * 16_384,
+            V3_AGGREGATE_ROWS,
             16 * 16_384,
             13,
-            1_887,
-            24_531,
-            id="v2-30204-sequences",
+            V3_BATCHES_PER_EPOCH,
+            V3_STEPS,
+            id="v3-aggregate-manifest-count",
         ),
         pytest.param(10, 4, 3, 2, 6, id="non-divisible-small"),
         pytest.param(12, 4, 3, 3, 9, id="exact-divisible-small"),
@@ -572,20 +681,20 @@ def test_loader_epoch_step_counts_drop_the_tail_each_epoch(
     )
 
 
-def test_trainer_and_scheduler_resolve_the_v2_epoch_horizon(built, monkeypatch):
+def test_trainer_and_scheduler_resolve_the_v3_epoch_horizon(built, monkeypatch):
     cfg, args = built
     trainer = Trainer.__new__(Trainer)
     trainer.max_duration = cfg.trainer.max_duration
     trainer.data_loader = SimpleNamespace(
-        total_batches=1_887,
+        total_batches=V3_BATCHES_PER_EPOCH,
         batches_processed=0,
-        batches_in_epoch=lambda _epoch: 1_887,
+        batches_in_epoch=lambda _epoch: V3_BATCHES_PER_EPOCH,
     )
     trainer.epoch = 1
     trainer.global_step = 0
     trainer.global_train_tokens_seen = 0
 
-    assert trainer.max_steps == args.steps == 24_531
+    assert trainer.max_steps == args.steps == V3_STEPS
 
     seen = {}
     scheduler = cfg.train_module.scheduler
@@ -596,7 +705,7 @@ def test_trainer_and_scheduler_resolve_the_v2_epoch_horizon(built, monkeypatch):
 
     monkeypatch.setattr(scheduler, "get_lr", capture_t_max)
     scheduler.set_lr({"lr": 2e-5, "params": []}, trainer)
-    assert seen["t_max"] == 24_531
+    assert seen["t_max"] == V3_STEPS
 
 
 def test_epoch_horizon_validation_rejects_loader_manifest_drift(built):
@@ -604,9 +713,9 @@ def test_epoch_horizon_validation_rejects_loader_manifest_drift(built):
     trainer = Trainer.__new__(Trainer)
     trainer.max_duration = cfg.trainer.max_duration
     trainer.data_loader = SimpleNamespace(
-        total_batches=1_886,
+        total_batches=V3_BATCHES_PER_EPOCH - 1,
         batches_processed=0,
-        batches_in_epoch=lambda _epoch: 1_886,
+        batches_in_epoch=lambda _epoch: V3_BATCHES_PER_EPOCH - 1,
     )
     trainer.epoch = 1
     trainer.global_step = 0
