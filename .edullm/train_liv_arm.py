@@ -109,6 +109,7 @@ import sys
 import time
 import traceback
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Tuple, cast
 
 import rich
@@ -774,6 +775,20 @@ def build_config(opts, overrides: List[str]):
     # after the final step, and listing it too would score the same model twice.
     if corpus.val_paths:
         eval_steps = ladder_steps(opts.steps)
+        # LOCAL paths, and this is load-bearing rather than an optimisation. `iter_document
+        # _indices` only scans the array for EOS boundaries when the path is NOT a url; for an
+        # s3:// path it looks for a sidecar metadata file whose name it derives by
+        # `basename.replace(".npy", ".csv.gz")`. Our shards end `.u32le.bin`, so that replace is
+        # a no-op, the "metadata file" it resolves is the shard itself, and it gunzips raw
+        # uint32 tokens -- `BadGzipFile: Not a gzipped file (b'5\x00')`, which killed
+        # run_019fce60 at exit 70.
+        #
+        # Resolved ONCE here, so the prepare-only invocation and the eval callback see the same
+        # strings. That matters more than it looks: `_get_indices_path` names the cache file
+        # after a SHA-256 of the source path, so an s3:// path and its local copy hash to
+        # different files -- localising in only one of the two places would silently miss the
+        # cache and walk straight back into the gzip failure.
+        heldout_paths = _localised_heldout_paths(sorted(corpus.val_paths)[:HELDOUT_SHARDS], opts)
         trainer_config = trainer_config.with_callback(
             "lm_eval",
             LMEvaluatorCallbackConfig(
@@ -786,10 +801,10 @@ def build_config(opts, overrides: List[str]):
                     # startup would cost more than the eval it serves. Sorted so the subset is
                     # the same across arms and seeds -- a per-cell subset would make the rungs
                     # incomparable, which is the one thing the ladder cannot tolerate.
-                    paths=sorted(corpus.val_paths)[:4],
+                    paths=heldout_paths,
                     # LMEvaluator.from_numpy_dataset raises when any path lacks a "label", and
                     # the label is what its per-dataset metric is keyed on.
-                    metadata=[{"label": "heldout-val"}] * len(sorted(corpus.val_paths)[:4]),
+                    metadata=[{"label": "heldout-val"}] * len(heldout_paths),
                     sequence_length=opts.sequence_length,
                     tokenizer=corpus.tokenizer,
                     # Same uint32 trap as the training path: the corpus declares its width and
@@ -948,6 +963,70 @@ def show(config) -> None:
     shown = copy.copy(config.dataset)
     shown.paths = [f"<{len(config.dataset.paths)} objects>"]
     rich.print(replace(config, dataset=shown))
+
+
+#: How many held-out shards the ladder scores. Four 2 MB shards is ~2M tokens, far more than
+#: the 32 batches a rung actually consumes, and every extra shard costs a download and an index
+#: build at startup for no additional signal.
+HELDOUT_SHARDS = 4
+
+
+def _localised_heldout_paths(urls: List[str], opts) -> List[str]:
+    """Download the held-out shards and return LOCAL paths.
+
+    THIS IS WHY run_019fce60 DIED AT EXIT 70 WITH ``gzip.BadGzipFile: Not a gzipped file
+    (b'5\\x00')``.
+
+    ``iter_document_indices`` (data/utils.py:193-229) picks between two strategies. For a LOCAL
+    path with ``eos_token_id`` and ``dtype`` it scans the memmap for EOS boundaries -- fast and
+    correct. For a URL it falls back to a sidecar metadata file whose name it derives as
+    ``os.path.basename(data_path).replace(".npy", ".csv.gz")``.
+
+    Our shards are ``val-00033.u32le.bin``. That ``replace`` matches nothing, so the "metadata
+    file" it resolves is **the shard itself** -- which exists, so there is no FileNotFoundError
+    to trigger the helpful message the code has ready -- and it gunzips raw uint32 tokens. Token
+    53 is ``b"5\\x00\\x00\\x00"``; those are the bytes in the error.
+
+    The training path never hit this: plain ``NumpyFSLDataset`` does not call
+    ``segment_documents_into_instances`` at all. Only ``NumpyPaddedFSLDataset`` (what the
+    evaluator requires) and ``NumpyFSLDatasetMixture`` do, so the bug was unreachable until the
+    ladder was wired.
+
+    Fixed here rather than in ``data/utils.py``: that ``.replace(".npy", ...)`` is correct for
+    Dolma-toolkit corpora that really do ship ``.csv.gz`` sidecars, and changing it would alter
+    behaviour for every dataset in the library to suit one experiment's shards.
+    """
+    from olmo_core.io import get_file_size, is_url
+
+    cache = Path(opts.work_dir) / "heldout-shards"
+    cache.mkdir(parents=True, exist_ok=True)
+
+    out: List[str] = []
+    for url in urls:
+        if not is_url(str(url)):
+            out.append(str(url))
+            continue
+        dest = cache / os.path.basename(str(url))
+        # Compare SIZE, not existence: a truncated download left by a killed attempt would
+        # otherwise be reused, and a short shard yields wrong document boundaries rather than
+        # an error.
+        if not dest.is_file() or dest.stat().st_size != get_file_size(url):
+            log.info("downloading held-out shard %s", url)
+            _download_to(str(url), dest)
+        out.append(str(dest))
+    return out
+
+
+def _download_to(url: str, dest: Path) -> None:
+    """Copy one object to a local file, writing via a .part file so a kill cannot look complete."""
+    from urllib.parse import urlparse
+
+    import boto3
+
+    parsed = urlparse(url)
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    boto3.client("s3").download_file(parsed.netloc, parsed.path.lstrip("/"), str(tmp))
+    tmp.rename(dest)
 
 
 def prepare_heldout_indices(config) -> None:

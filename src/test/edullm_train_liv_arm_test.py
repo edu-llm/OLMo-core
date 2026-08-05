@@ -294,6 +294,69 @@ def test_the_prepare_only_path_exits_before_the_process_group_starts():
     assert branch_at < env_at, "the prepare-only branch must precede the process group"
 
 
+def test_a_url_shard_would_be_gunzipped_so_heldout_paths_must_be_local():
+    """
+    THE BUG THAT KILLED run_019fce60 AT EXIT 70, pinned as arithmetic on a filename.
+
+    ``iter_document_indices`` only scans the array for EOS boundaries when the path is NOT a
+    url. For a url it derives a sidecar metadata filename as
+    ``basename.replace(".npy", ".csv.gz")`` and gunzips it. Our shards end ``.u32le.bin``, so
+    that replace is a no-op: the "metadata file" it resolves is the shard itself, which exists,
+    so there is no FileNotFoundError -- it gunzips raw uint32 tokens and dies with
+    ``BadGzipFile: Not a gzipped file (b'5\\x00')``. Token 53 is ``b"5\\x00\\x00\\x00"``.
+
+    Asserts the derivation is a no-op for our naming, which is the reason the held-out shards
+    must be localised before ``prepare()`` sees them.
+    """
+    import gzip
+    import os
+
+    assert os.path.basename("val-00033.u32le.bin").replace(".npy", ".csv.gz") == (
+        "val-00033.u32le.bin"
+    ), "if this ever differs, the library gained real sidecar support and the download may go"
+    # And the same derivation IS meaningful for the naming the library was written for.
+    assert os.path.basename("part-000.npy").replace(".npy", ".csv.gz") == "part-000.csv.gz"
+
+    # Gunzipping little-endian uint32 tokens fails exactly the way production did.
+    raw = (53).to_bytes(4, "little") + (100257).to_bytes(4, "little")
+    with pytest.raises(gzip.BadGzipFile):
+        import io
+
+        with gzip.open(io.BytesIO(raw), "rt") as f:
+            f.readline()
+
+
+def test_the_heldout_paths_reaching_the_evaluator_are_not_urls():
+    """
+    One resolution, shared by both consumers. ``_get_indices_path`` names the cache file after a
+    SHA-256 of the source path string, so an ``s3://`` path and its local copy hash to different
+    files -- localising in the prepare step but not in the callback's config would silently miss
+    the cache and walk back into the gzip failure. Asserting the helper returns local paths is
+    what keeps those two in agreement.
+    """
+    from unittest import mock
+
+    from olmo_core.io import is_url
+
+    class _Opts:
+        work_dir = "/tmp/edullm-test-cache"
+
+    urls = ["s3://bucket/pretrain/x/val-00001.u32le.bin"]
+    with mock.patch.object(entry, "_download_to") as download, mock.patch.object(
+        entry, "log"
+    ):
+        # Pretend the file is already cached at the right size, so nothing is fetched.
+        with mock.patch("pathlib.Path.is_file", return_value=True), mock.patch(
+            "pathlib.Path.stat"
+        ) as stat, mock.patch("olmo_core.io.get_file_size", return_value=2065460):
+            stat.return_value = mock.Mock(st_size=2065460)
+            out = entry._localised_heldout_paths(urls, _Opts())
+    download.assert_not_called()
+    assert len(out) == 1
+    assert not is_url(out[0]), f"held-out paths must be local, got {out[0]}"
+    assert out[0].endswith("val-00001.u32le.bin")
+
+
 def test_prepare_heldout_only_is_a_flag_and_defaults_off():
     """A normal training run must not silently turn into an index build."""
     parser = entry.build_parser()
