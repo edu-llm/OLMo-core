@@ -204,6 +204,10 @@ class MoERouter(nn.Module):
         # Left None by the dropless path, where no token is ever dropped and the metric would be
         # a constant zero pretending to be a measurement.
         self.expert_capacity: Optional[int] = None
+        # How many micro-batches are folded into `batch_size_per_expert` right now. The
+        # histogram accumulates until `reset_metrics`, while `expert_capacity` is per
+        # micro-batch, so the drop rate needs both to be over the same span.
+        self.num_accumulated_micro_batches: int = 0
 
         if self.bias_gamma is not None:
             assert self.bias_gamma > 0
@@ -460,9 +464,19 @@ class MoERouter(nn.Module):
         # Note the sort in `indices_and_bins` is by expert id only, so the assignments that
         # survive are the earliest by position, not the highest-weighted -- overflow drops the
         # end of the sequence. That is a separate issue from measuring it.
-        if self.expert_capacity is not None:
-            overflow = (counts - self.expert_capacity).clamp_min(0).sum()
-            out["dropped token fraction"] = (
+        if self.expert_capacity is not None and self.num_accumulated_micro_batches > 0:
+            # Capacity over the same span as the counts. See the note beside
+            # `num_accumulated_micro_batches`: comparing an interval's worth of assignments
+            # against one forward's capacity reports ~44% drops for a router measured, by the
+            # entropy beside it, as within 1% of uniform.
+            #
+            # This is an upper bound rather than the exact rate, because a per-micro-batch
+            # overflow that the accumulated histogram averages away is not recoverable from a
+            # summed count. It is tight when the router is stable across an interval, which is
+            # the regime the gate cares about, and it cannot under-report.
+            span_capacity = self.expert_capacity * self.num_accumulated_micro_batches
+            overflow = (counts - span_capacity).clamp_min(0).sum()
+            out["dropped token fraction (upper bound)"] = (
                 overflow / total.clamp_min(1.0),
                 ReduceType.max,
             )
@@ -493,6 +507,9 @@ class MoERouter(nn.Module):
     def reset_metrics(self):
         if (bz_per_expert := self.batch_size_per_expert) is not None:
             bz_per_expert.zero_()
+        # Cleared with the histogram it counts, or the capacity span would keep growing while
+        # the counts restarted from zero and the drop rate would fall to zero and stay there.
+        self.num_accumulated_micro_batches = 0
         if (lb_loss := self.load_balancing_loss) is not None:
             lb_loss.zero_()
         if (z_loss := self.z_loss) is not None:
@@ -590,6 +607,12 @@ class MoERouter(nn.Module):
                     aux_loss = scaled_z_loss if aux_loss is None else aux_loss + scaled_z_loss
 
             self.batch_size_per_expert += batch_size_per_expert
+            # Count the micro-batches folded into that accumulator. `expert_capacity` is a
+            # per-micro-batch bound, so a drop rate computed from the accumulated histogram
+            # has to compare against the capacity summed over the same micro-batches.
+            # Without this the numerator spans a whole logging interval and the denominator
+            # spans one forward, and a perfectly balanced router reports a large drop rate.
+            self.num_accumulated_micro_batches += 1
             if self.bias_gamma is not None:
                 assert self.score_bias_batch_size_per_expert is not None
                 self.score_bias_batch_size_per_expert += batch_size_per_expert
