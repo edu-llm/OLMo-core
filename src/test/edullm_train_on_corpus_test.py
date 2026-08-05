@@ -827,6 +827,571 @@ def test_zero_means_off_for_z_loss_rather_than_on_with_no_coefficient(monkeypatc
     assert config.train_module.z_loss_multiplier is None
 
 
+# ---------------------------------------------------------------------------------------
+# E1: the LR x schedule fan-out.
+#
+# 6 arms = {cosine alpha_f=0.1, linear alpha_f=0.0} x {5e-4, 1e-3, 2e-3}, 3 seeds = 18 cells.
+# The deliverable is an argmin over the 6-point grid, so the thing that must not go wrong is
+# 18 cells resolving to fewer than 18 distinct configurations. That failure is invisible:
+# every cell runs, every cell writes a loss curve, and the curves look plausible.
+# ---------------------------------------------------------------------------------------
+
+E1_SCHEDULES = ("cosine", "linear")
+E1_LRS = ("5e-4", "1e-3", "2e-3")
+E1_SEEDS = (0, 1, 2)
+
+#: The exact grid the 18-cell submission carries, built as the 2x3x3 product rather than
+#: typed out, so this string and the intended design cannot drift apart.
+E1_GRID = ",".join(
+    f"{schedule}:{lr}:{seed}"
+    for schedule in E1_SCHEDULES
+    for lr in E1_LRS
+    for seed in E1_SEEDS
+)
+
+#: D and B for the proxy. B_opt = 0.0306*D^0.383 in 2048-token sequences (Power Lines
+#: 2505.13738) gives 130.45 seqs = 267,171 tokens at D=3e9, so 262,144 is 0.98x optimum.
+#: The FLAGSHIP default of 786,432 would be 2.94x optimum here, and Power Lines Table 1
+#: measures 4x-above-optimum at +0.029 nats -- larger than the 0.025-nat schedule effect
+#: this experiment exists to measure.
+E1_TARGET_TOKENS = 3e9
+E1_BATCH = 262_144
+
+
+def test_all_eighteen_array_indices_resolve_to_eighteen_distinct_cells():
+    """THE HIGHEST-VALUE TEST IN THE EXPERIMENT.
+
+    A grid that resolves to fewer than 18 distinct (schedule, lr, seed) triples spends the
+    full 18-cell budget and delivers a sweep with a hole in it, and NOTHING downstream can
+    see that: the duplicated cell trains, converges, and writes a loss curve as plausible as
+    any other. The precedent's own commit message records the version of this that shipped --
+    "a 12-cell pilot would have trained the SAME arm and seed twelve times."
+
+    So this walks array indices 0..17 the way Batch will and asserts the resolved set IS the
+    intended 2x3x3 product, not merely that it has 18 members.
+    """
+    resolved = [entry.resolve_fanout_cell(E1_GRID, str(i), 18) for i in range(18)]
+
+    assert len(resolved) == 18
+    assert all(cell is not None for cell in resolved)
+
+    triples = [(c.schedule, c.lr, c.seed) for c in resolved]
+    assert len(set(triples)) == 18, "two array indices resolved to the same configuration"
+
+    # The set equals the intended product -- not just "18 distinct things", which a grid of
+    # 18 wrong-but-distinct cells would also satisfy.
+    intended = {
+        (schedule, float(lr), seed)
+        for schedule in E1_SCHEDULES
+        for lr in E1_LRS
+        for seed in E1_SEEDS
+    }
+    assert set(triples) == intended
+
+    # And the marginals, which is how a grid missing one arm and doubling another shows up.
+    for schedule in E1_SCHEDULES:
+        assert sum(1 for s, _, _ in triples if s == schedule) == 9
+    for lr in E1_LRS:
+        assert sum(1 for _, value, _ in triples if value == float(lr)) == 6
+    for seed in E1_SEEDS:
+        assert sum(1 for _, _, s in triples if s == seed) == 6
+
+    # Every (schedule, lr) arm carries all three seeds. A 6-point argmin averaged over an
+    # arm that is missing a seed is an argmin over unequal sample sizes.
+    for schedule in E1_SCHEDULES:
+        for lr in E1_LRS:
+            seeds = sorted(s for sc, v, s in triples if sc == schedule and v == float(lr))
+            assert seeds == [0, 1, 2], (schedule, lr, seeds)
+
+
+def test_the_array_index_is_what_selects_the_cell():
+    """Mutation: ignore AWS_BATCH_JOB_ARRAY_INDEX and return cells[0].
+
+    ``fanout_index_parameter`` on the submission form is documentation and substitutes
+    nothing into the command. Batch sets the variable and the program must read it, or all
+    18 cells train one configuration at 18x the price and the sweep reports as complete.
+    """
+    first = entry.resolve_fanout_cell(E1_GRID, "0", 18)
+    last = entry.resolve_fanout_cell(E1_GRID, "17", 18)
+
+    assert first is not None and last is not None
+    assert (first.schedule, first.lr, first.seed) == ("cosine", 5e-4, 0)
+    assert (last.schedule, last.lr, last.seed) == ("linear", 2e-3, 2)
+    assert first != last
+
+    # And the ordering is positional, so index i is cell i of the string the approver read.
+    assert entry.resolve_fanout_cell(E1_GRID, "9", 18) == entry.parse_fanout_grid(E1_GRID)[9]
+
+
+def test_without_a_grid_a_single_run_is_completely_unaffected():
+    """The fan-out machinery must be inert when nobody asked for it."""
+    assert entry.resolve_fanout_cell("", None) is None
+    assert entry.resolve_fanout_cell("", "3") is None
+
+    opts, _ = entry.build_parser().parse_known_args(["a-run-id"])
+    before = dict(vars(opts))
+
+    assert entry.apply_fanout_cell(opts, None) is None
+    assert vars(opts) == before, "no grid, but apply_fanout_cell changed the options"
+
+
+def test_a_grid_without_an_array_index_is_refused():
+    """Refusing beats defaulting to cell 0.
+
+    A grid submitted without the fan-out fields would otherwise run one configuration N
+    times, at N times the price, and be indistinguishable from a completed sweep.
+    """
+    with pytest.raises(entry.Refusal) as refusal:
+        entry.resolve_fanout_cell(E1_GRID, None)
+    assert "AWS_BATCH_JOB_ARRAY_INDEX" in refusal.value.explanation
+    assert refusal.value.stage is entry.Stage.THE_PLATFORM_DID_NOT_SET_THE_ENVIRONMENT
+
+
+def test_an_index_past_the_end_of_the_grid_is_refused():
+    """fanout_size and the grid must agree, or trailing cells vanish silently.
+
+    A `fanout_size` of 20 against an 18-cell grid runs cells 18 and 19 into this refusal
+    rather than into a default -- and a size of 16 is caught by --fanout-expect below.
+    """
+    with pytest.raises(entry.Refusal):
+        entry.resolve_fanout_cell(E1_GRID, "18", 18)
+    with pytest.raises(entry.Refusal):
+        entry.resolve_fanout_cell(E1_GRID, "-1", 18)
+
+
+def test_a_grid_holding_the_same_cell_twice_is_refused():
+    """THE REFUSAL THE PRECEDENT LACKS.
+
+    ``train_liv_arm.py:parse_fanout_grid`` validates each cell in isolation and would accept
+    ``L0:0,L0:0`` without complaint. That is the same "trains one cell N times" failure its
+    own commit describes, arriving by a different road: the index is read correctly, every
+    cell resolves, and two of them are simply the same run -- at twice the price, with a hole
+    where a third configuration should have been, and two plausible loss curves to show for
+    it.
+
+    The last case is the one a careless edit actually produces: the same cell spelled two
+    different ways. 5e-4 and 0.0005 are one configuration and must collide.
+    """
+    for duplicated in (
+        "linear:2e-3:0,linear:2e-3:0",
+        "cosine:1e-3:1,linear:1e-3:1,cosine:1e-3:1",
+        "linear:5e-4:0,linear:0.0005:0",
+    ):
+        with pytest.raises(entry.Refusal) as refusal:
+            entry.parse_fanout_grid(duplicated)
+        assert "twice" in refusal.value.explanation
+
+    # The 18-cell grid itself is clean, so the check is not vacuously passing on everything.
+    assert len(entry.parse_fanout_grid(E1_GRID)) == 18
+
+
+def test_a_grid_of_the_wrong_length_is_refused_against_the_declared_size():
+    """The other half of the fanout_size guard.
+
+    The duplicate check catches a grid that repeats itself; this catches one that is simply
+    short -- 17 cells typed where 18 were meant and submitted with fanout_size 18. Without
+    it, cell 17 dies on an out-of-range index AFTER the other 17 have already been billed,
+    and a sweep missing one of its six arms' seeds still reports 17 finished runs.
+    """
+    seventeen = ",".join(E1_GRID.split(",")[:17])
+
+    with pytest.raises(entry.Refusal) as refusal:
+        entry.parse_fanout_grid(seventeen, 18)
+    assert "17" in refusal.value.explanation and "18" in refusal.value.explanation
+
+    # Unset means unchecked, so an ad-hoc grid is unaffected.
+    assert len(entry.parse_fanout_grid(seventeen)) == 17
+
+
+def test_a_malformed_cell_or_unknown_schedule_is_refused_and_quotes_what_was_typed():
+    """A typo must not fall back to a default, and the message must name the typo.
+
+    Parsing the LR to a float and then reporting THAT would print "0.002" for a cell typed
+    "2-e3", which tells the submitter nothing about what to fix.
+    """
+    for bad in (
+        "linear:2e-3",  # no seed
+        "linear",  # no separators at all
+        "linear:2e-3:0:extra",  # too many fields
+        "linear:2e-3:x",  # seed is not an integer
+        "linear:notanumber:0",  # LR is not a number
+        "linear:-1e-3:0",  # LR is negative: builds an optimizer that trains backwards
+        "linear:0:0",  # LR is zero: trains nothing, converges to the init loss
+        "cosinme:2e-3:0",  # schedule typo
+        "linear:2e-3:0,cosinme:2e-3:0",  # good cell first, so the loop must keep checking
+    ):
+        with pytest.raises(entry.Refusal):
+            entry.parse_fanout_grid(bad)
+
+    # An unknown schedule names the ones that exist rather than silently picking one.
+    with pytest.raises(entry.Refusal) as refusal:
+        entry.parse_fanout_grid("cosinme:2e-3:0")
+    assert "cosine" in refusal.value.explanation and "linear" in refusal.value.explanation
+
+    # The ORIGINAL TEXT survives into the message, so a typo stays legible.
+    with pytest.raises(entry.Refusal) as refusal:
+        entry.parse_fanout_grid("linear:2-e3:0")
+    assert "2-e3" in refusal.value.explanation
+
+
+def test_an_empty_grid_string_with_separators_is_refused_rather_than_run_as_zero_cells():
+    """',,,' parses to nothing. Refusing beats an array job with no configuration in it."""
+    with pytest.raises(entry.Refusal):
+        entry.parse_fanout_grid(",,,")
+
+
+def test_the_cell_seed_varies_init_and_holds_data_order_fixed(monkeypatch):
+    """§5 STANDING RULE 2, AND A DELIBERATE DIVERGENCE FROM THE PRECEDENT.
+
+    ``train_liv_arm.py:1347`` does ``opts.data_seed = opts.arm_seed`` -- init AND batch order
+    move together. EXPERIMENT-PLAN §5 rule 2 asks for the opposite: "Paired seeds, same data
+    order, different init. Report the paired difference." Same data order is what makes the
+    cosine-vs-linear contrast paired, so the batch-order variance cancels in the difference
+    rather than being added to it. E1 has none to spare: the predicted 0.025-nat gap is
+    already below the n=3 MDE of 0.050.
+
+    So: three cells of one arm must differ in --init-seed and agree in --data-seed.
+    """
+    resolved = []
+    for index in range(18):
+        opts, _ = entry.build_parser().parse_known_args(
+            ["a-run-id", f"--fanout-grid={E1_GRID}", "--fanout-expect=18"]
+        )
+        entry.apply_fanout_cell(opts, str(index))
+        resolved.append(opts)
+
+    # Every cell keeps the SAME data order.
+    assert {opts.data_seed for opts in resolved} == {0}
+
+    # And the init seed varies, taking all three values within each of the six arms.
+    arms: Dict[Any, List[int]] = {}
+    for opts in resolved:
+        arms.setdefault((opts.lr_schedule, opts.learning_rate), []).append(opts.init_seed)
+    assert len(arms) == 6
+    for arm, seeds in arms.items():
+        assert sorted(seeds) == [0, 1, 2], arm
+
+    # A --data-seed given on the command line is still not overwritten by the cell.
+    opts, _ = entry.build_parser().parse_known_args(
+        ["a-run-id", f"--fanout-grid={E1_GRID}", "--data-seed=77"]
+    )
+    entry.apply_fanout_cell(opts, "5")  # cosine:2e-3:2
+    assert opts.init_seed == 2 and opts.data_seed == 77
+
+
+def test_the_init_seed_reaches_the_generator_that_actually_initialises_weights():
+    """THE SUBTLE ONE: a seed that reaches nothing is 3 identical runs per arm.
+
+    There are two ``init_seed``s. ``ExperimentConfig.init_seed`` (default 12536) is what
+    ``train`` hands to ``seed_all``, seeding the GLOBAL python/numpy/torch RNGs.
+    ``TransformerConfig.init_seed`` (default 0) is what ``Transformer.init_weights`` turns
+    into ``torch.Generator(device).manual_seed(seed)`` at model.py:294-299, and every
+    ``init_*`` in nn/transformer/init.py draws from THAT generator.
+
+    This asserts the distinction by building real models rather than by reading the code: if
+    a future refactor made the global RNG the source again, or made --init-seed reach only
+    ``ExperimentConfig``, this fails. The failure it prevents is silent -- three "seeds" that
+    are one model reported as a tight seed distribution, under which the 6-point argmin is
+    selected on a standard error that does not exist.
+    """
+    import torch
+    from olmo_core.nn.transformer import TransformerConfig
+    from olmo_core.utils import seed_all
+
+    def build(global_seed: int, config_init_seed: int):
+        config = TransformerConfig.olmo2_190M(vocab_size=1024)
+        config.init_seed = config_init_seed
+        seed_all(global_seed)
+        model = config.build(init_device="meta")
+        model.init_weights(device=torch.device("cpu"))
+        return {name: p.detach().clone() for name, p in model.named_parameters()}
+
+    baseline = build(global_seed=0, config_init_seed=0)
+    only_global_moved = build(global_seed=999, config_init_seed=0)
+    only_config_moved = build(global_seed=0, config_init_seed=999)
+
+    changed_by_global = [n for n in baseline if not torch.equal(baseline[n], only_global_moved[n])]
+    changed_by_config = [n for n in baseline if not torch.equal(baseline[n], only_config_moved[n])]
+
+    # seed_all reaches NOTHING. This is the assertion that names the trap.
+    assert changed_by_global == [], (
+        "seed_all() moved parameters, so the two seeds are no longer distinct and this "
+        "test's premise -- and the --init-seed wiring -- need re-deriving"
+    )
+    # TransformerConfig.init_seed reaches most of the model. The rest are norm gains and
+    # biases, which are constants by construction, so a magnitude is asserted rather than
+    # "something changed".
+    assert len(changed_by_config) >= 80
+    assert len(changed_by_config) > 0.6 * len(baseline)
+    # Named tensors, so a change confined to some corner of the model would not pass.
+    assert any("embeddings" in n for n in changed_by_config)
+    assert any("w_out" in n or "lm_head" in n for n in changed_by_config)
+    assert any("attention" in n for n in changed_by_config)
+    assert any("feed_forward" in n for n in changed_by_config)
+
+
+def test_the_resolved_seed_reaches_the_built_model_config(monkeypatch):
+    """The wiring end to end: a cell's seed must land on TransformerConfig.init_seed.
+
+    Asserted on the config the real CLI path produces, so a flag rename or a dropped
+    assignment in build_config breaks this rather than being discovered by 18 cells that
+    trained six models three times each.
+    """
+    monkeypatch.setattr(
+        entry,
+        "resolve_corpus",
+        lambda **kwargs: entry.corpus_from_manifest(
+            FakeManifest(),
+            dataset_id=kwargs["dataset_id"],
+            version=kwargs["version"],
+            tokenizer_id=kwargs["tokenizer_id"],
+        ),
+    )
+
+    seeds_seen = []
+    for index in (0, 1, 2):
+        opts, overrides = entry.build_parser().parse_known_args(
+            [
+                "a-run-id",
+                "--dataset-id=pretrain/regmix-10b",
+                "--dataset-version=v1",
+                "--dataset-tokenizer=tokenizer/dolma2-bpe",
+                "--save-folder=/tmp/x",
+                f"--fanout-grid={E1_GRID}",
+                "--fanout-expect=18",
+            ]
+        )
+        entry.apply_fanout_cell(opts, str(index))
+        config = entry.build_config(opts, overrides)
+        seeds_seen.append(config.model.init_seed)
+        # Batch order is identical in all three, which is what "paired" means.
+        assert config.data_loader.seed == 0
+
+    assert seeds_seen == [0, 1, 2]
+
+    # And with no --init-seed the factory default is left alone, so a single run is unchanged.
+    opts, overrides = entry.build_parser().parse_known_args(
+        [
+            "a-run-id",
+            "--dataset-id=pretrain/regmix-10b",
+            "--dataset-version=v1",
+            "--dataset-tokenizer=tokenizer/dolma2-bpe",
+            "--save-folder=/tmp/x",
+        ]
+    )
+    assert opts.init_seed is None
+    from olmo_core.nn.transformer import TransformerConfig
+
+    untouched = TransformerConfig.olmo2_190M(vocab_size=100_352).init_seed
+    assert entry.build_config(opts, overrides).model.init_seed == untouched
+
+
+@pytest.mark.parametrize("schedule,lr", [(s, lr) for s in E1_SCHEDULES for lr in E1_LRS])
+def test_each_arms_lr_reaches_the_scheduler_and_optimizer_at_the_right_magnitude(
+    monkeypatch, schedule, lr
+):
+    """MAGNITUDE, NOT EXISTENCE, for all six arms.
+
+    ``isinstance(sched, LinearWithWarmup)`` passes with alpha_f still at OLMo-core's default
+    0.1 -- a "linear" schedule that stops at a tenth of peak, which is precisely the defect
+    E1 exists to remove. So this reads the CURVE: linear must return EXACTLY 0.0 at the final
+    step and cosine must return 0.1 x peak, and both must peak at the LR the cell asked for.
+
+    Parametrised over all six arms rather than checked once, because an argmin over a
+    6-point grid is only meaningful if all six points are the points they claim to be.
+    """
+    monkeypatch.setattr(
+        entry,
+        "resolve_corpus",
+        lambda **kwargs: entry.corpus_from_manifest(
+            FakeManifest(),
+            dataset_id=kwargs["dataset_id"],
+            version=kwargs["version"],
+            tokenizer_id=kwargs["tokenizer_id"],
+        ),
+    )
+    index = E1_GRID.split(",").index(f"{schedule}:{lr}:0")
+    opts, overrides = entry.build_parser().parse_known_args(
+        [
+            "a-run-id",
+            "--dataset-id=pretrain/regmix-10b",
+            "--dataset-version=v1",
+            "--dataset-tokenizer=tokenizer/dolma2-bpe",
+            "--save-folder=/tmp/x",
+            f"--fanout-grid={E1_GRID}",
+            "--fanout-expect=18",
+        ]
+    )
+    entry.apply_fanout_cell(opts, str(index))
+    peak = float(lr)
+
+    # The optimizer carries the cell's LR, not the flag default of 1.4e-3.
+    config = entry.build_config(opts, overrides)
+    assert config.train_module.optim.lr == peak
+    assert config.train_module.optim.lr != 1.4e-3 or peak == 1.4e-3
+
+    # And the scheduler the same CLI path builds carries the alpha_f the schedule implies.
+    sched = entry.build_scheduler(opts)
+    steps = entry.steps_for_tokens(E1_TARGET_TOKENS, E1_BATCH)
+    warmup = round(steps * 0.1)
+
+    assert sched.get_lr(peak, warmup, steps) == pytest.approx(peak)
+
+    final = sched.get_lr(peak, steps, steps)
+    if schedule == "linear":
+        # EXACTLY zero. At alpha_f=0.1 this is 0.1*peak, and every isinstance check passes.
+        assert final == 0.0
+    else:
+        assert final == pytest.approx(0.1 * peak)
+        assert final > 0.0
+
+    # The two schedules must not have collapsed onto one curve, which would make E1 measure
+    # nothing while staying green.
+    other = "cosine" if schedule == "linear" else "linear"
+    opts.lr_schedule = other
+    assert entry.build_scheduler(opts).get_lr(peak, steps, steps) != final
+
+
+def test_the_six_arms_are_six_distinct_curves():
+    """A 6-point argmin over fewer than 6 distinct configurations is not an argmin."""
+    curves = {}
+    for schedule in E1_SCHEDULES:
+        for lr in E1_LRS:
+            opts, _ = entry.build_parser().parse_known_args(
+                ["a-run-id", f"--lr-schedule={schedule}"]
+            )
+            sched = entry.build_scheduler(opts)
+            peak = float(lr)
+            steps = entry.steps_for_tokens(E1_TARGET_TOKENS, E1_BATCH)
+            curves[(schedule, lr)] = tuple(
+                round(float(sched.get_lr(peak, at, steps)), 12)
+                for at in (0, 1_000, 5_000, steps // 2, steps - 1, steps)
+            )
+
+    assert len(set(curves.values())) == 6, "two of the six arms are the same schedule"
+
+
+def test_the_step_count_delivers_the_token_budget_the_experiment_declares():
+    """Mutation: type the step count beside the batch instead of deriving it from it.
+
+    Calls ``steps_for_tokens`` rather than re-deriving ``round(D/B)`` here. A test that
+    recomputes the formula passes whichever way the source rounds and keeps passing after the
+    source changes -- it tests its own copy of the arithmetic. This tests the program's.
+    """
+    steps = entry.steps_for_tokens(E1_TARGET_TOKENS, E1_BATCH)
+
+    assert steps == 11_444
+    delivered = steps * E1_BATCH
+    assert delivered == 2_999_975_936
+    # Within 0.01% of the declared 3e9 budget. Stated as a tolerance because the step count
+    # is an integer and 3e9/262,144 is not.
+    assert abs(delivered / E1_TARGET_TOKENS - 1) < 1e-4
+
+    # The batch is 128 sequences of 2048, asserted as the product so a typo'd digit fails.
+    assert E1_BATCH == 128 * 2048 == 262_144
+
+    # It really is derived: a different batch moves the steps to keep the budget.
+    assert entry.steps_for_tokens(E1_TARGET_TOKENS, 2 * E1_BATCH) == 5_722
+    assert abs(entry.steps_for_tokens(E1_TARGET_TOKENS, 786_432) * 786_432 / 3e9 - 1) < 1e-3
+    # A non-positive batch is refused rather than dividing by zero.
+    with pytest.raises(entry.Refusal):
+        entry.steps_for_tokens(E1_TARGET_TOKENS, 0)
+
+
+def test_the_proxy_batch_sits_at_its_own_optimum_and_the_flagship_batch_does_not():
+    """WHY 262,144 HERE AND 786,432 ON THE FLAGSHIP -- the same number, two different reasons.
+
+    262,144 was the OLD flagship default and was wrong there: at D=40e9, B_opt = 0.721M, so
+    262,144 is 0.36x optimum. `edullm/baseline-fix` raised it to 786,432 for exactly that
+    reason, and this test must not read as a revert of that fix.
+
+    At the PROXY's D=3e9 the optimum moves, because B_opt scales as D^0.383 and D is 13.3x
+    smaller: B_opt = 267,171 tokens, so 262,144 is 0.98x optimum and the flagship's 786,432
+    would be 2.94x. Power Lines Table 1 measures 4x-above-optimum at +0.029 nats -- LARGER
+    than the 0.025-nat schedule effect E1 exists to measure. Running the proxy at the
+    flagship batch would bury the measurement under a batch-position error bigger than its
+    own signal, which is the error that got E8 cancelled (batch-size-verdict.md §E).
+
+    The baseline default is asserted UNCHANGED here, because it belongs to the shared branch.
+    """
+    b_opt = lambda tokens: 0.0306 * tokens**0.383 * 2048  # noqa: E731 -- Power Lines eq.
+
+    # The law reproduces the flagship figure the baseline fix was justified on.
+    assert b_opt(40e9) == pytest.approx(720_511, rel=1e-4)
+    assert 786_432 / b_opt(40e9) == pytest.approx(1.09, abs=0.01)
+    assert 262_144 / b_opt(40e9) == pytest.approx(0.36, abs=0.01)
+
+    # And at the proxy's D the ranking inverts, which is the whole point.
+    assert b_opt(3e9) == pytest.approx(267_171, rel=1e-4)
+    assert E1_BATCH / b_opt(3e9) == pytest.approx(0.98, abs=0.01)
+    assert 786_432 / b_opt(3e9) == pytest.approx(2.94, abs=0.01)
+
+    # THE BASELINE DEFAULT IS NOT TOUCHED. E1 passes its batch on the command line; the
+    # shared branch's 786,432 must still be what an unflagged run gets, or E0 and E1 would
+    # disagree about the baseline.
+    opts, _ = entry.build_parser().parse_known_args(["a-run-id"])
+    assert opts.global_batch_size == 786_432
+    assert opts.learning_rate == 1.4e-3
+
+
+def test_the_proxy_warmup_is_about_a_thousand_steps():
+    """--warmup-fraction 0.1 over the proxy's horizon, checked against Wen's tuned ~1000.
+
+    The old default was 20 absolute steps. At the proxy that is 0.17% of the run.
+    """
+    steps = entry.steps_for_tokens(E1_TARGET_TOKENS, E1_BATCH)
+    opts, _ = entry.build_parser().parse_known_args(["a-run-id"])
+    sched = entry.build_scheduler(opts)
+
+    assert opts.warmup_fraction == 0.1
+    warmup = round(steps * opts.warmup_fraction)
+    assert warmup == 1_144
+    assert 1_000 <= warmup <= 1_300  # Wen et al.'s tuned grid uses ~1000
+
+    # Read off the curve rather than the arithmetic: the peak is AT the warmup step and the
+    # schedule is still climbing one step before it.
+    assert sched.get_lr(1e-3, warmup, steps) == pytest.approx(1e-3)
+    assert sched.get_lr(1e-3, warmup - 1, steps) < 1e-3
+    assert sched.get_lr(1e-3, 20, steps) == pytest.approx(1e-3 * 20 / warmup)
+
+
+def test_the_summary_says_which_cell_produced_the_loss(capsys):
+    """18 cells print 18 summaries into one log group and the argmin joins them by hand.
+
+    Without these fields the only route from a loss back to its configuration is the array
+    index in the job name -- a join that can be got wrong on a sweep whose entire output is
+    a ranking.
+    """
+    import json
+
+    opts, _ = entry.build_parser().parse_known_args(
+        [
+            "a-run-id",
+            f"--fanout-grid={E1_GRID}",
+            "--fanout-expect=18",
+            "--save-folder=s3://bucket/x/",
+        ]
+    )
+    entry.apply_fanout_cell(opts, "16")  # linear:2e-3:1
+
+    watcher = entry.LossWatcher()
+    watcher.log_metrics(1, {"train/CE loss": 11.5})
+    watcher.log_metrics(2, {"train/CE loss": 3.1})
+    entry.summarise(
+        opts=opts,
+        config=FakeConfig(),
+        trainer=FakeTrainer([FakeParameter(1)], step=11_444),
+        losses=watcher,
+        seconds=1.0,
+    )
+
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["lr_schedule"] == "linear"
+    assert printed["peak_lr"] == 2e-3
+    assert printed["init_seed"] == 1
+    assert printed["data_seed"] == 0
+
+
 def test_raising_weight_decay_does_not_reach_the_embeddings():
     """The exemption is a param GROUP, and it has to survive weight_decay becoming non-default.
 

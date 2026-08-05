@@ -66,7 +66,7 @@ import time
 import traceback
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, cast
+from typing import Dict, Iterator, List, Optional, Tuple, cast
 
 import rich
 import torch
@@ -738,6 +738,198 @@ def prepare_heldout_indices(config) -> None:
 SCHEDULE_ALPHA_F = {"linear": 0.0, "cosine": 0.1}
 
 
+@dataclass(frozen=True)
+class Cell:
+    """One point of an E1 fan-out grid: a schedule, a peak LR, and an init seed.
+
+    Frozen and comparable so that a duplicate is detectable by putting cells in a set, which
+    is the check ``parse_fanout_grid`` runs and the one the precedent lacked.
+
+    ``lr_text`` is the LR exactly as it was typed. It is carried alongside the parsed float
+    purely so a refusal can quote it back: ``2e-3`` and ``2-e3`` and ``2e_3`` are three
+    different typos and a message reading "0.002" tells the submitter nothing about which
+    one they made.
+    """
+
+    schedule: str
+    lr: float
+    seed: int
+    lr_text: str = ""
+
+    def key(self) -> Tuple[str, float, int]:
+        """What makes two cells the same experiment, ignoring how the LR was spelled.
+
+        ``5e-4`` and ``0.0005`` are the same cell and must collide in the duplicate check,
+        so the text is deliberately not part of this.
+        """
+        return (self.schedule, self.lr, self.seed)
+
+
+def parse_fanout_grid(spec: str, expected_size: Optional[int] = None) -> List[Cell]:
+    """Parse ``"linear:2e-3:0,cosine:1e-3:1"`` into cells, or refuse and say which one broke.
+
+    FOUR REFUSALS, NOT THE PRECEDENT'S THREE. ``train_liv_arm.py:parse_fanout_grid`` checks
+    that each cell is well-formed and names a real arm, and stops there. It will happily
+    accept ``L0:0,L0:0`` -- a grid holding the same cell twice. That is the same failure its
+    own commit message describes ("a 12-cell pilot would have trained the SAME arm and seed
+    twelve times") arriving by a different road: the array index is read correctly, every
+    cell resolves to something, and two of them are simply the same run at twice the price
+    with a hole where another cell should have been. Nothing downstream can see it, because
+    two identical configurations produce two plausible and near-identical loss curves rather
+    than an error. So a duplicate is refused here.
+
+    ``expected_size`` is the second half of that guard. The duplicate check catches a grid
+    that repeats itself; this catches one that is simply the wrong length -- 17 cells typed
+    where 18 were meant, submitted with ``fanout_size: 18``. Optional so a single run and an
+    ad-hoc grid are unaffected.
+
+    :raises Refusal: If a cell is malformed, names a schedule that does not exist, repeats
+        another cell, or if the grid's length disagrees with ``expected_size``.
+    """
+    cells: List[Cell] = []
+    for raw in (part.strip() for part in spec.split(",")):
+        if not raw:
+            continue
+        fields = raw.split(":")
+        if len(fields) != 3:
+            raise Refusal(
+                Stage.THE_CONFIG_WOULD_NOT_BUILD,
+                f"fan-out cell {raw!r} is not 'schedule:lr:seed'",
+            )
+        schedule, lr_text, seed_text = (field.strip() for field in fields)
+        if schedule not in SCHEDULE_ALPHA_F:
+            raise Refusal(
+                Stage.THE_CONFIG_WOULD_NOT_BUILD,
+                f"fan-out cell {raw!r} names an unknown schedule {schedule!r}; known: "
+                + ", ".join(sorted(SCHEDULE_ALPHA_F)),
+            )
+        try:
+            lr = float(lr_text)
+        except ValueError:
+            raise Refusal(
+                Stage.THE_CONFIG_WOULD_NOT_BUILD,
+                f"fan-out cell {raw!r} has a peak LR of {lr_text!r}, which is not a number",
+            ) from None
+        # Not merely unparseable but unusable: a non-positive or non-finite LR builds an
+        # optimizer that trains nothing, or NaNs on the first step, and both look like a
+        # training failure rather than a typo in a grid.
+        if not (lr > 0.0) or lr != lr or lr == float("inf"):
+            raise Refusal(
+                Stage.THE_CONFIG_WOULD_NOT_BUILD,
+                f"fan-out cell {raw!r} has a peak LR of {lr_text!r}, which is not a positive "
+                "finite number",
+            )
+        if not seed_text.lstrip("-").isdigit():
+            raise Refusal(
+                Stage.THE_CONFIG_WOULD_NOT_BUILD,
+                f"fan-out cell {raw!r} has a seed of {seed_text!r}, which is not an integer",
+            )
+        seed = int(seed_text)
+        # seed_all refuses anything outside [0, 2^32-1] (utils.py:172) and so does the
+        # generator model init builds, but it refuses AFTER the container has pulled and
+        # started. Cheaper here.
+        if not 0 <= seed <= 2**32 - 1:
+            raise Refusal(
+                Stage.THE_CONFIG_WOULD_NOT_BUILD,
+                f"fan-out cell {raw!r} has a seed of {seed}, outside [0, 2^32-1]",
+            )
+        cells.append(Cell(schedule=schedule, lr=lr, seed=seed, lr_text=lr_text))
+
+    if not cells:
+        raise Refusal(Stage.THE_CONFIG_WOULD_NOT_BUILD, "--fanout-grid parsed to zero cells")
+
+    # THE REFUSAL THE PRECEDENT DOES NOT HAVE. See the docstring.
+    seen: Dict[Tuple[str, float, int], str] = {}
+    for cell in cells:
+        spelled = f"{cell.schedule}:{cell.lr_text}:{cell.seed}"
+        if cell.key() in seen:
+            raise Refusal(
+                Stage.THE_CONFIG_WOULD_NOT_BUILD,
+                f"fan-out cell {spelled!r} appears twice in the grid (first as "
+                f"{seen[cell.key()]!r}). Two cells of one configuration cost two cells and "
+                "leave a hole where a third configuration should have been, and both produce "
+                "plausible loss curves -- so nothing downstream can tell.",
+            )
+        seen[cell.key()] = spelled
+
+    if expected_size is not None and len(cells) != expected_size:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"--fanout-grid holds {len(cells)} cells but --fanout-expect says "
+            f"{expected_size}. Set fanout_size on the submission form to the same number, or "
+            "trailing cells never run.",
+        )
+    return cells
+
+
+def resolve_fanout_cell(
+    spec: str, index: Optional[str], expected_size: Optional[int] = None
+) -> Optional[Cell]:
+    """Pick this process's cell from the grid, using Batch's array index.
+
+    ``fanout_index_parameter`` on the submission form is **documentation** -- it records what
+    the index varies so the approving lead can see it, and nothing substitutes it into the
+    command. Batch sets ``AWS_BATCH_JOB_ARRAY_INDEX`` in each cell's environment and the
+    program is expected to read it. A command that ignores it runs identically in every cell:
+    the grid costs 18x as much and produces one result 18 times.
+
+    Returns ``None`` when no grid was requested, so a single run is completely unaffected.
+
+    :raises Refusal: If the index is missing (every cell would train cell 0 and the sweep
+        would look finished), or outside the grid (``fanout_size`` disagreeing with the grid
+        drops trailing cells silently).
+    """
+    if not spec:
+        return None
+    cells = parse_fanout_grid(spec, expected_size)
+    if index is None:
+        raise Refusal(
+            Stage.THE_PLATFORM_DID_NOT_SET_THE_ENVIRONMENT,
+            "--fanout-grid was given but AWS_BATCH_JOB_ARRAY_INDEX is unset, so every cell "
+            "would train the same schedule, LR and seed and the sweep would look finished. "
+            "Submit with the fan-out fields, or drop --fanout-grid.",
+        )
+    try:
+        i = int(index)
+    except ValueError:
+        raise Refusal(
+            Stage.THE_PLATFORM_DID_NOT_SET_THE_ENVIRONMENT,
+            f"AWS_BATCH_JOB_ARRAY_INDEX is {index!r}, which is not an integer",
+        ) from None
+    if not 0 <= i < len(cells):
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"array index {i} is outside a {len(cells)}-cell grid; fanout_size must equal the "
+            "number of cells in --fanout-grid",
+        )
+    return cells[i]
+
+
+def steps_for_tokens(target_tokens: float, global_batch_size: int) -> int:
+    """How many optimizer steps deliver ``target_tokens`` at this batch size.
+
+    A NAMED FUNCTION SO THE TEST CAN CALL IT. A test that re-derives ``round(D / B)`` inline
+    passes whichever way this rounds, and keeps passing after somebody changes it -- it tests
+    its own copy of the arithmetic, not the code's. Calling this is what makes the assertion
+    about the program.
+
+    ROUND, NOT FLOOR OR CEIL, and the difference is one step in eleven thousand -- so the
+    reason is legibility rather than tokens. E1's proxy is D=3e9 at 262,144 tokens/step =
+    11,444.09 steps; ``round`` gives 11,444, which delivers 11,444 x 262,144 = 2,999,975,936
+    tokens, 0.0008% short of 3e9. Ceil would give 11,445 = 3,000,238,080, 0.0079% over. Both
+    are far inside seed noise. What matters is that the number is DERIVED from the batch
+    rather than typed beside it: a batch changed on the command line without the steps
+    changing with it silently moves the token budget, and a sweep whose arms saw different
+    numbers of tokens is not measuring its schedule.
+    """
+    if global_batch_size <= 0:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"global batch size {global_batch_size} is not positive",
+        )
+    return max(1, round(target_tokens / global_batch_size))
+
+
 def build_scheduler(opts):
     """The LR schedule, selected rather than hardcoded, with warmup as a fraction of steps.
 
@@ -792,6 +984,26 @@ def build_config(opts, overrides: List[str]):
     # multiple of 128 keeps the embedding matmul on a fast path. dolma2's 100,278 pads to
     # 100,352.
     model_config = factory(vocab_size=corpus.tokenizer.padded_vocab_size())
+
+    # THE SEED HAS TO LAND HERE OR IT LANDS NOWHERE, AND "NOWHERE" IS SILENT.
+    #
+    # There are two different `init_seed`s in this program and only one of them initialises a
+    # model. ExperimentConfig.init_seed (default 12536) is passed to `seed_all` in `train`,
+    # which seeds python/numpy/torch's GLOBAL RNGs. TransformerConfig.init_seed (default 0) is
+    # what `Transformer.init_weights` turns into `torch.Generator(device).manual_seed(seed)`
+    # at model.py:294-299, and every `init_*` call in nn/transformer/init.py draws from THAT
+    # generator. The global RNG is never consulted.
+    #
+    # MEASURED, not inferred. Building olmo2_190M(vocab_size=100352) twice under different
+    # `seed_all` values and identical `TransformerConfig.init_seed` gives 135 of 135 parameter
+    # tensors BIT-IDENTICAL; changing `TransformerConfig.init_seed` instead changes 86 of 135
+    # (the other 49 are norm gains and biases, which are constants by construction).
+    #
+    # So a fan-out that varied only `ExperimentConfig.init_seed` would train three IDENTICAL
+    # models per arm and report their zero variance as a tight seed distribution -- the E1
+    # argmin would then be selected on a standard error that does not exist.
+    if opts.init_seed is not None:
+        model_config.init_seed = opts.init_seed
 
     dataset_config = NumpyFSLDatasetConfig(
         paths=corpus.paths,
@@ -1121,6 +1333,19 @@ def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> 
                 "checkpoint_uri": opts.save_folder,
                 "wandb_project": os.environ.get("EDULLM_WANDB_PROJECT", ""),
                 "wandb_url": losses.wandb_url,
+                # WHICH CELL THIS WAS. 18 cells of an E1 array all print one of these into
+                # one log group, and the argmin is over (schedule, lr) averaged across seed.
+                # Without these four fields the analyst has to join a loss back to its
+                # configuration through the array index, which lives only in the job name --
+                # and a join that can be got wrong on a sweep whose whole output is a ranking
+                # is the sweep's single point of failure. `getattr` because `summarise` is
+                # also called with hand-built option objects in tests and by anyone running
+                # this by hand.
+                "lr_schedule": getattr(opts, "lr_schedule", None),
+                "peak_lr": getattr(opts, "learning_rate", None),
+                "init_seed": getattr(opts, "init_seed", None),
+                "data_seed": getattr(opts, "data_seed", None),
+                "array_index": os.environ.get("AWS_BATCH_JOB_ARRAY_INDEX"),
             },
             indent=2,
         ),
@@ -1145,6 +1370,20 @@ def train(config, opts=None) -> None:
     if get_rank() == 0:
         show(config)
 
+    # WHAT THIS SEEDS, AND WHAT IT DOES NOT. `ExperimentConfig.init_seed` is inherited from
+    # upstream's script_utils.py:35 and its name is a trap: it seeds the GLOBAL python/numpy/
+    # torch RNGs and it does NOT seed model init. Model init draws from a generator
+    # `Transformer.init_weights` builds from `TransformerConfig.init_seed` (model.py:294-299),
+    # which `build_config` sets from `--init-seed`. Measured: varying this value alone leaves
+    # all 135 of the 190M's parameter tensors bit-identical.
+    #
+    # IT IS HELD FIXED ACROSS AN E1 FAN-OUT, ON PURPOSE. torch's DataLoader draws each
+    # worker's base seed from the global RNG when no generator is passed (and none is --
+    # data_loader.py:578-586), so moving this would move worker RNG state. The batch ORDER is
+    # not affected either way, because the loader seeds its own generators explicitly from
+    # `--data-seed` (data_loader.py:547, :673, :860). But holding it fixed makes "same data
+    # order across seeds" true by construction rather than true by an audit of every worker
+    # path, and §5 rule 2's paired design is what rests on it.
     seed_all(config.init_seed)
 
     model = config.model.build(init_device="meta")
@@ -1284,7 +1523,42 @@ def build_parser() -> argparse.ArgumentParser:
         "this scale. Pass 0 to disable.",
     )
     parser.add_argument("--rank-microbatch-size", type=int, default=16 * 1024)
-    parser.add_argument("--data-seed", type=int, default=0)
+    parser.add_argument(
+        "--data-seed",
+        type=int,
+        default=0,
+        help="Seeds BATCH ORDER only -- it reaches NumpyDataLoaderConfig(seed=...) and "
+        "nothing else. EXPERIMENT-PLAN §5 rule 2 wants paired seeds: same data order, "
+        "different init. So an E1 fan-out varies --init-seed and holds this FIXED.",
+    )
+    parser.add_argument(
+        "--init-seed",
+        type=int,
+        default=None,
+        help="Seeds MODEL INIT, by reaching TransformerConfig.init_seed. Unset means the "
+        "factory default of 0. Verified by experiment, not by reading: seed_all() alone "
+        "changes ZERO of the 190M's 135 parameter tensors, because init_weights builds its "
+        "own torch.Generator from model.init_seed (model.py:294-299) and never touches the "
+        "global RNG. A fan-out that varied only the global seed would train 3 IDENTICAL "
+        "models per arm and report their agreement as low seed variance.",
+    )
+    parser.add_argument(
+        "--fanout-grid",
+        default="",
+        help="Comma-separated 'schedule:lr:seed' cells, e.g. "
+        "'linear:2e-3:0,cosine:1e-3:1'. The cell for THIS process is picked by "
+        "AWS_BATCH_JOB_ARRAY_INDEX, so one submission trains the whole grid. The seed sets "
+        "--init-seed and NOT --data-seed, so the arms are paired on data order. Without "
+        "this flag nothing changes and a single run is unaffected.",
+    )
+    parser.add_argument(
+        "--fanout-expect",
+        type=int,
+        default=None,
+        help="How many cells --fanout-grid is meant to hold. Refuses if it holds a different "
+        "number, which is the failure a wrong fanout_size on the form produces: trailing "
+        "cells never run and the sweep still reports as complete. E1 is 2x3x3 = 18.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Resolve and print, do not train.")
     parser.add_argument(
         "--prepare-heldout-only",
@@ -1298,9 +1572,54 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def apply_fanout_cell(opts, index: Optional[str]) -> Optional[Cell]:
+    """Fold this process's grid cell into ``opts``, or leave ``opts`` alone if there is no grid.
+
+    WHY THE SEED GOES TO ``init_seed`` AND NOT TO ``data_seed``, WHICH IS A DELIBERATE
+    DIVERGENCE FROM THE PRECEDENT. ``train_liv_arm.py:1347`` sets ``data_seed = arm_seed``
+    with the comment "paired: same seed drives init AND data order", so its three seeds vary
+    the model init AND the batch order together. That is a legitimate design -- it estimates
+    total run-to-run variance -- but it is not this experiment's.
+
+    EXPERIMENT-PLAN §5 standing rule 2 is explicit: "**Paired seeds**, same data order,
+    different init. Report the paired difference." Holding the data order fixed is what makes
+    the cosine-vs-linear contrast at a given seed a PAIRED comparison: the two arms see the
+    same tokens in the same order, so the batch-order component of the variance cancels in
+    the difference instead of being added to it. Letting the data order move with the seed
+    would put that variance back into the contrast, widening the interval E1 is already
+    tight against -- the predicted 0.025-nat schedule gap sits below the n=3 MDE of 0.050,
+    so the design has no variance to spare.
+
+    Hence: the cell's seed sets ``--init-seed`` only, and ``--data-seed`` keeps whatever it
+    was given (0 by default) in every one of the 18 cells.
+    """
+    cell = resolve_fanout_cell(opts.fanout_grid, index, opts.fanout_expect)
+    if cell is None:
+        return None
+    opts.lr_schedule = cell.schedule
+    opts.learning_rate = cell.lr
+    opts.init_seed = cell.seed
+    # data_seed is deliberately NOT touched. See the docstring.
+    log.info(
+        "fan-out cell %s: schedule=%s peak_lr=%g init_seed=%d data_seed=%d (data order is "
+        "held fixed across seeds; only init varies)",
+        index,
+        cell.schedule,
+        cell.lr,
+        cell.seed,
+        opts.data_seed,
+    )
+    return cell
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     opts, overrides = build_parser().parse_known_args()
+
+    # Before anything expensive, so the log's first lines name the schedule, LR and seed this
+    # container is actually training rather than the flag defaults -- and so a grid submitted
+    # without the fan-out fields dies in a second rather than after an image pull.
+    apply_fanout_cell(opts, os.environ.get("AWS_BATCH_JOB_ARRAY_INDEX"))
 
     missing = [
         name
