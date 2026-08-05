@@ -48,10 +48,22 @@ GPU is auto-detected (`--device auto`); pass `--device cpu` to force CPU. To san
 run *from scratch* (no S3/creds), drop `--init-checkpoint` and use `--rung olmo2_370M` — the two
 rungs are state-dict-interchangeable at our sequence lengths, but the real sweep forks the base.
 
+**Fine-tune schedule (all arms).** Because every arm forks the pretrained best model, this is a
+*fine-tune*: the LR follows warmup-stable-decay (`WSD`, `--warmup-steps 200` default, 10% linear
+decay tail) rather than a constant LR. Warmup eases the optimizer into the good pretrained weights
+(a full-LR first step can spike the loss and undo the pretraining we forked for). The schedule is
+identical across arms — it lives in the shared `train_arm` loop, so it stays confound-clean.
+
+**LR screen (PRD §3.1/§6, do before the confirmatory seeds).** Fine-tuning wants a smaller peak
+LR than a from-scratch run. Screen the peak LR on 1 seed of A0/A2 over
+`--lr {1e-5, 2e-5, 5e-5, 3e-4}` (pick the highest LR with a stable, decreasing loss curve), then
+fix that LR for all arms in the seeded sweep. `--lr`/`--warmup-steps` are recorded in each
+`metrics.json`.
+
 ## 4. Gates + probes
 ```bash
 .venv/bin/python src/scripts/latentcot/eval.py \
-  --test-data $DATA/heldout-00000.jsonl --num-continuous-thoughts 8 --model olmo3_370M \
+  --test-data $DATA/heldout-00000.jsonl --num-continuous-thoughts 10 --model olmo3_370M \
   --arm A0=runs/latentcot/A0-seed1/model.pt \
   --arm A2=runs/latentcot/A2-seed1/model.pt \
   --arm A3=runs/latentcot/A3-seed1/model.pt \
@@ -83,7 +95,7 @@ no vocab reg). Comparing our latent arms against A0 from identical starting weig
 *training method*.
 ```bash
 .venv/bin/python src/scripts/latentcot/compare_models.py \
-  --test-data $DATA/heldout-00000.jsonl --num-continuous-thoughts 8 --model olmo3_370M \
+  --test-data $DATA/heldout-00000.jsonl --num-continuous-thoughts 10 --model olmo3_370M \
   --baseline A0=runs/latentcot/A0-seed1/model.pt \
   --ours A2=runs/latentcot/A2-seed1/model.pt \
   --ours A3=runs/latentcot/A3-seed1/model.pt

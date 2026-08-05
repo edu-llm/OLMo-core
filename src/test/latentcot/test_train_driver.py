@@ -53,10 +53,33 @@ def test_train_arm_reduces_loss(dataset):
     torch.manual_seed(0)
     model = _tiny_model()
     history = train_arm(
-        model, ARMS["A2"], dataset, steps=120, batch_size=3, lr=3e-4, seed=0, log_every=20
+        model,
+        ARMS["A2"],
+        dataset,
+        steps=120,
+        batch_size=3,
+        lr=3e-4,
+        warmup_steps=10,  # short warmup so most of the run is at peak LR
+        seed=0,
+        log_every=20,
     )
     assert len(history) >= 2
     assert history[-1]["loss"] < history[0]["loss"]  # the arm is learning
+
+
+def test_train_arm_applies_warmup_schedule(dataset):
+    """The fine-tune LR follows WSD: a linear warmup ramp, capped at the peak, recorded per step."""
+    model = _tiny_model()
+    peak = 1e-3
+    history = train_arm(
+        model, ARMS["A2"], dataset, steps=60, batch_size=2, lr=peak, warmup_steps=20, log_every=1
+    )
+    lrs = [h["lr"] for h in history]
+    # linear warmup: rises from ~0 and is strictly increasing across the warmup window
+    assert lrs[0] < lrs[5] < lrs[15]
+    assert lrs[0] < peak  # first step is well below the peak (no full-LR step into the base)
+    assert max(lrs) <= peak + 1e-9  # never overshoots the peak
+    assert any(abs(lr - peak) < 1e-5 for lr in lrs)  # reaches the peak after warmup
 
 
 def test_train_arm_runs_for_all_modes(dataset):

@@ -45,10 +45,23 @@ def main() -> None:
     parser.add_argument("--rung", default="olmo2_370M", help="TransformerConfig factory name")
     parser.add_argument("--train-data", required=True)
     parser.add_argument("--test-data", required=True)
-    parser.add_argument("--num-continuous-thoughts", type=int, default=8)
+    parser.add_argument(
+        "--num-continuous-thoughts",
+        type=int,
+        default=10,
+        help="K continuous-thought budget; default 10 gives ~2 steps of headroom over the "
+        "deepest graph (depth 8) so a depth-8 failure means 'can't superpose', not 'one step short'.",
+    )
     parser.add_argument("--steps", type=int, default=5000)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument(
+        "--warmup-steps",
+        type=int,
+        default=200,
+        help="linear LR warmup steps (WSD); eases the fine-tune into the pretrained base. "
+        "Shared across arms, so it stays confound-clean.",
+    )
     parser.add_argument("--init-seed", type=int, default=0, help="SAME across arms (shared init)")
     parser.add_argument("--seed", type=int, default=0, help="data-shuffle seed (per run)")
     parser.add_argument("--init-checkpoint", default=None, help="optional shared base state_dict")
@@ -84,6 +97,7 @@ def main() -> None:
         steps=args.steps,
         batch_size=args.batch_size,
         lr=args.lr,
+        warmup_steps=args.warmup_steps,
         seed=args.seed,
     )
 
@@ -95,6 +109,9 @@ def main() -> None:
         "init_seed": args.init_seed,
         "seed": args.seed,
         "steps": args.steps,
+        "lr": args.lr,
+        "warmup_steps": args.warmup_steps,
+        "num_continuous_thoughts": args.num_continuous_thoughts,
         "vocab_reg": arm.vocab_reg,
         "vocab_reg_weight": arm.vocab_reg_weight,
         "vocab_reg_entropy_floor": arm.vocab_reg_entropy_floor,

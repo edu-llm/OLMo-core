@@ -91,16 +91,34 @@ def train_arm(
     steps: int,
     batch_size: int = 16,
     lr: float = 3e-4,
+    warmup_steps: int = 200,
     distill_weight: float = 1.0,
     max_grad_norm: float = 1.0,
     seed: int = 0,
     log_every: int = 100,
 ) -> List[dict]:
-    """Train ``model`` on one arm; return a list of logged metric snapshots."""
+    """
+    Train ``model`` on one arm; return a list of logged metric snapshots.
+
+    Because every arm forks the *same* pretrained base (the "best model"), this is a
+    fine-tune, not a from-scratch run — so the LR follows a warmup-stable-decay schedule
+    (the :class:`~olmo_core.optim.WSD` the pre-registration and ``preflight.py`` reference),
+    not a constant LR. Linear ``warmup_steps`` ease the optimizer into the pretrained weights
+    (a full-LR first step on a good checkpoint can spike the loss and erase what we forked
+    it for); a linear decay tail anneals at the end. The schedule lives *here*, in the shared
+    loop, so it is byte-identical across arms and stays confound-clean.
+    """
+    from olmo_core.optim import WSD
+
     model.train()
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
+    # min(...) keeps warmup < horizon on the short smoke runs; decay_fraction matches the WSD default.
+    scheduler = WSD(warmup=max(1, min(warmup_steps, steps - 1)), decay_fraction=0.1)
     history: List[dict] = []
     for step, batch in enumerate(iter_batches(dataset, batch_size, steps, seed)):
+        lr_t = scheduler.get_lr(lr, step, steps)
+        for group in opt.param_groups:
+            group["lr"] = lr_t
         opt.zero_grad(set_to_none=True)
         loss, metrics = arm_loss(
             model,
@@ -115,5 +133,7 @@ def train_arm(
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
         opt.step()
         if step % log_every == 0 or step == steps - 1:
-            history.append({"step": step, "loss": float(loss.detach()), **metrics})
+            history.append(
+                {"step": step, "lr": float(lr_t), "loss": float(loss.detach()), **metrics}
+            )
     return history

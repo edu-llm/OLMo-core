@@ -22,7 +22,7 @@ Usage::
 
     .venv/bin/python src/scripts/latentcot/compare_models.py \
         --test-data data/latentcot/graph-reachability-depth/conversations/heldout-00000.jsonl \
-        --num-continuous-thoughts 8 --model olmo3_370M \
+        --num-continuous-thoughts 10 --model olmo3_370M \
         --baseline A0=runs/latentcot/A0-seed1/model.pt \
         --ours A2=runs/latentcot/A2-seed1/model.pt \
         --ours A3=runs/latentcot/A3-seed1/model.pt
@@ -140,7 +140,7 @@ def maybe_plot(comparison: dict, out_dir: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--test-data", required=True)
-    parser.add_argument("--num-continuous-thoughts", type=int, default=8)
+    parser.add_argument("--num-continuous-thoughts", type=int, default=10)
     parser.add_argument(
         "--model",
         default="olmo3_370M",

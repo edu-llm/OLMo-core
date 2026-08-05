@@ -37,7 +37,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--train-data", required=True)
     parser.add_argument("--test-data", required=True)
-    parser.add_argument("--num-continuous-thoughts", type=int, default=8)
+    parser.add_argument("--num-continuous-thoughts", type=int, default=10)
     parser.add_argument("--base-checkpoint", default=None, help="base ckpt dir all arms fork")
     parser.add_argument("--rank-microbatch-size", type=int, default=8192)
     parser.add_argument("--max-sequence-length", type=int, default=1024)
@@ -50,7 +50,7 @@ def main() -> None:
         rank_microbatch_size=args.rank_microbatch_size,
         max_sequence_length=args.max_sequence_length,
         optim=AdamWConfig(lr=args.lr),
-        scheduler=WSD(warmup_steps=200),
+        scheduler=WSD(warmup=200, decay_fraction=0.1),  # matches train_arm's fine-tune schedule
         max_grad_norm=1.0,
         num_continuous_thoughts=args.num_continuous_thoughts,
     )

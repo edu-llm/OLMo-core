@@ -9,7 +9,7 @@ Usage::
 
     .venv/bin/python src/scripts/latentcot/eval.py \
         --test-data data/latentcot/graph-reachability-depth/conversations/heldout-00000.jsonl \
-        --num-continuous-thoughts 8 \
+        --num-continuous-thoughts 10 \
         --arm A0=/path/to/A0/ckpt --arm A2=/path/to/A2/ckpt \
         --arm A3=/path/to/A3/ckpt --arm A4=/path/to/A4/ckpt
 """
@@ -58,7 +58,7 @@ def maybe_plot_gate_a(curve: dict, out_dir: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--test-data", required=True)
-    parser.add_argument("--num-continuous-thoughts", type=int, default=8)
+    parser.add_argument("--num-continuous-thoughts", type=int, default=10)
     parser.add_argument("--model", default="olmo3_370M", help="TransformerConfig factory name")
     parser.add_argument(
         "--device", default="auto", help="'auto' (cuda if available else cpu), 'cuda', or 'cpu'"

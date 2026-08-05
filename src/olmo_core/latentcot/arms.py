@@ -30,7 +30,10 @@ from .train_module import CodiTransformerTrainModuleConfig
 
 __all__ = ["Arm", "ARMS", "ARM_WHITELIST", "build_arm_config", "assert_arms_differ_only_in"]
 
-DEFAULT_K = 8
+# K = continuous-thought budget. Superposition theory needs K >= graph depth D; the deepest
+# graph in our data is depth 8, so K=10 gives ~2 steps of headroom (a depth-8 failure then means
+# "can't superpose", not "one step short after imperfect optimization"). A0/A1 ignore K.
+DEFAULT_K = 10
 DEFAULT_GAMMA = 0.01
 
 # Fields arms are allowed to differ in. Everything else must be identical.

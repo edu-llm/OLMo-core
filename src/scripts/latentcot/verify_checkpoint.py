@@ -43,7 +43,7 @@ def main() -> None:
         default=None,
         help="base ckpt to strict-load (.pt | dir | s3://…); omit to test random init",
     )
-    parser.add_argument("--num-continuous-thoughts", type=int, default=8)
+    parser.add_argument("--num-continuous-thoughts", type=int, default=10)
     parser.add_argument("--seq-len", type=int, default=16, help="tiny forward-pass length")
     parser.add_argument(
         "--device", default="auto", help="'auto' (cuda if available else cpu), 'cuda', or 'cpu'"
