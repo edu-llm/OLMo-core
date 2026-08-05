@@ -108,6 +108,67 @@ def materialize_local_paths(paths: List[str], work_dir: str) -> List[str]:
     return local
 
 
+def write_chunked_instance_indices(
+    paths: List[str],
+    *,
+    work_dir: str,
+    sequence_length: int,
+    dtype,
+) -> None:
+    """Pre-write padded-FSL instance indices for EOS-less ``.u32le.bin`` shards.
+
+    Phase-0 val shards are contiguous token streams with **no** EOS (gigatoken
+    ``100000`` count is zero). ``NumpyPaddedFSLDataset.prepare`` then segments on
+    EOS and raises ``Failed to produce any documents``. Write the same
+    ``instance-indices-{seq}-{hash}.npy`` files it would reuse, chunking each
+    shard into non-overlapping windows of ``sequence_length`` (final window may
+    be shorter and gets pad-masked by the padded dataset).
+    """
+    import hashlib
+    from pathlib import Path
+
+    import numpy as np
+    from olmo_core.data.utils import memmap_to_write
+    from olmo_core.io import get_file_size
+
+    np_dtype = dtype.as_np_dtype() if hasattr(dtype, "as_np_dtype") else np.dtype(dtype).type
+    item_size = np.dtype(np_dtype).itemsize
+    work = Path(work_dir)
+    for path in paths:
+        file_size = get_file_size(path)
+        n_tokens = file_size // item_size
+        pairs: List[int] = []
+        for start in range(0, n_tokens, sequence_length):
+            end = min(start + sequence_length, n_tokens)
+            if end > start:
+                pairs.extend((start, end))
+        if not pairs:
+            raise Refusal(
+                Stage.THE_MANIFEST_IS_NOT_SAFE_TO_MEMMAP,
+                f"{path} has zero tokens after materialize; cannot build eval instances",
+            )
+
+        # Must match NumpyFSLDatasetBase._get_indices_path exactly.
+        digest = hashlib.sha256()
+        digest.update(str(path).encode())
+        digest.update(str(file_size).encode())
+        out = work / "dataset-common" / f"instance-indices-{sequence_length}-{digest.hexdigest()}.npy"
+        if out.is_file():
+            log.info("reusing instance indices for %s at %s", path, out)
+            continue
+        indices = np.asarray(pairs, dtype=np.uint32)
+        with memmap_to_write(out, dtype=np.uint32, shape=(indices.size,)) as mmap:
+            mmap[:] = indices
+        log.info(
+            "wrote %d seq-%d instances for %s (%d tokens) → %s",
+            len(pairs) // 2,
+            sequence_length,
+            path,
+            n_tokens,
+            out,
+        )
+
+
 def resolve_val_corpus(*, dataset_id: str, version: str, tokenizer_id: str):
     """Like ``resolve_corpus`` but only the held-out split."""
     from edullm_data.read import dataset_paths, resolve_latest
@@ -244,7 +305,9 @@ def summarise_metrics(
         "raw_metrics": raw,
         "notes": (
             "bits_per_token is CE/ln(2) (nats→bits). Not bits-per-byte; shards are "
-            "pre-tokenized without paired UTF-8 lengths in this path."
+            "pre-tokenized without paired UTF-8 lengths in this path. Val shards have "
+            "no EOS, so instances are non-overlapping sequence_length chunks over each "
+            "shard (final chunk may be shorter and pad-masked)."
         ),
     }
 
@@ -289,6 +352,12 @@ def build_config(opts, overrides: List[str]):
     # Labels from the sealed S3 URIs (materialized paths lose the tokens/<lang>/ layout).
     eval_metadata = [{"label": lang_label(p)} for p in val_corpus.paths]
     val_local = materialize_local_paths(list(val_corpus.paths), opts.work_dir)
+    write_chunked_instance_indices(
+        val_local,
+        work_dir=opts.work_dir,
+        sequence_length=opts.sequence_length,
+        dtype=val_corpus.dtype,
+    )
     eval_dataset = NumpyPaddedFSLDatasetConfig(
         paths=val_local,
         metadata=eval_metadata,
