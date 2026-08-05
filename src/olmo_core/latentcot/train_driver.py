@@ -192,11 +192,19 @@ def train_arm(
             vocab_reg_entropy_floor=arm.vocab_reg_entropy_floor,
         )
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+        # clip_grad_norm_ returns the PRE-clip total norm — log it: a rising grad norm is
+        # the earliest warning that the latent path is diverging.
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
         opt.step()
         if step % log_every == 0 or step == steps - 1:
             history.append(
-                {"step": step, "lr": float(lr_t), "loss": float(loss.detach()), **metrics}
+                {
+                    "step": step,
+                    "lr": float(lr_t),
+                    "loss": float(loss.detach()),
+                    "grad_norm": float(grad_norm),
+                    **metrics,
+                }
             )
         if checkpointing and ((step + 1) % save_every == 0 or step == steps - 1):
             _save_rolling(step + 1)

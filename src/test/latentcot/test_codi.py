@@ -56,7 +56,14 @@ def test_codi_loss_returns_metrics_and_grad_flows(tok, tiny_model):
         tiny_model, _examples(2), distill_weight=1.0, vocab_reg="R1", vocab_reg_weight=0.01
     )
     assert torch.isfinite(loss)
-    assert set(metrics) == {"ce_teacher", "ce_student", "distill", "vocab_reg"}
+    assert set(metrics) == {
+        "ce_teacher",
+        "ce_student",
+        "distill",
+        "vocab_reg",
+        "thought_rms",  # diagnostic only, not part of the objective
+    }
+    assert metrics["thought_rms"] > 0
     loss.backward()
     # a substantial gradient must reach the parameters (catches the ce_loss-detached bug)
     assert _grad_norm(tiny_model) > 0.5

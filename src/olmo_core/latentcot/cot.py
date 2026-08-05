@@ -12,13 +12,27 @@ for ``K`` steps (Coconut-style). This uses two mechanisms already in
 
 Gradients flow through the whole chain (each thought depends on the previous
 forward), so a downstream loss trains the thought-generating computation.
+
+**Thought scale.** ``return_hidden_states=True`` yields the *pre*-final-norm residual
+stream, because this model keeps the final norm inside the LM head
+(:class:`olmo_core.nn.lm_head.LMHead`). Fed back unnormalized, a thought's magnitude
+grows with both depth and ``K`` — measured on the ``olmo2_370M``/``olmo3_370M`` rung at
+``K=10``, RMS 5.8 -> 52 against a real-token embedding RMS of 1.0, and training amplifies
+it further. Two problems: the SwiGLU feed-forward sees the *unnormalized* residual under
+``reordered_norm`` blocks, so the pretrained weights get pushed off their operating point
+exactly at the thought positions; and the A3/A4 regularizers (which pull toward the
+embedding manifold / penalize thought norm) incidentally suppress that drift while the
+unregularized A2 does not — an arm-dependent artifact in a controlled comparison. So
+:func:`final_norm` is applied before each feedback step, matching the ``hidden_states[-1]``
+(post-final-norm) convention Coconut/CODI feed, and pinning thought scale to the
+embedding scale for every arm alike.
 """
 
 from typing import Optional, Tuple
 
 import torch
 
-__all__ = ["embed_tokens", "run_continuous_thoughts", "student_forward"]
+__all__ = ["embed_tokens", "final_norm", "run_continuous_thoughts", "student_forward"]
 
 
 def embed_tokens(model, input_ids: torch.Tensor) -> torch.Tensor:
@@ -41,6 +55,27 @@ def embed_tokens(model, input_ids: torch.Tensor) -> torch.Tensor:
     return h
 
 
+def final_norm(model, hidden: torch.Tensor) -> torch.Tensor:
+    """
+    Apply the model's final norm (the one living inside the LM head) to a hidden state.
+
+    ``Transformer.forward(return_hidden_states=True)`` returns the residual stream *before*
+    this norm, so a thought must pass through it to land in the same numeric range as the
+    token embeddings it is spliced next to — see the module docstring.
+
+    Falls back to returning ``hidden`` unchanged when the model has no final norm to apply
+    (no LM head under pipeline parallelism, or a head like
+    :class:`~olmo_core.nn.lm_head.NormalizedLMHead` that is built with ``layer_norm=None``).
+
+    :param model: A built :class:`~olmo_core.nn.transformer.Transformer`.
+    :param hidden: Hidden states of shape ``(..., d_model)``.
+    :returns: The normalized hidden states, same shape.
+    """
+    lm_head = getattr(model, "lm_head", None)
+    norm = getattr(lm_head, "norm", None) if lm_head is not None else None
+    return hidden if norm is None else norm(hidden)
+
+
 def _forward_hidden(model, inputs_embeds: torch.Tensor) -> torch.Tensor:
     """Run the model on pre-computed embeddings and return post-block hidden states."""
     batch, seq = inputs_embeds.shape[:2]
@@ -57,8 +92,10 @@ def run_continuous_thoughts(
     Generate ``K`` continuous thoughts from a prefix of embeddings.
 
     At each step the model is run on the running embedding sequence; the last-layer
-    hidden state at the final position becomes the next continuous thought and is
-    appended to the sequence.
+    hidden state at the final position is passed through :func:`final_norm` and becomes
+    the next continuous thought, appended to the sequence. The norm keeps a thought at
+    the same scale as a token embedding no matter how large ``num_thoughts`` is — without
+    it the magnitude compounds every step (see the module docstring).
 
     :param model: A built transformer.
     :param prefix_embeds: The prefix embeddings ``(batch, prefix_len, d_model)``
@@ -73,7 +110,9 @@ def run_continuous_thoughts(
     thoughts = []
     for _ in range(num_thoughts):
         hidden = _forward_hidden(model, embeds)
-        thought = hidden[:, -1:, :]  # (batch, 1, d_model) — last position
+        # (batch, 1, d_model) — last position, through the final norm so the thought
+        # lands in the same numeric range as a token embedding.
+        thought = final_norm(model, hidden[:, -1:, :])
         thoughts.append(thought)
         embeds = torch.cat([embeds, thought], dim=1)
     return torch.cat(thoughts, dim=1), embeds

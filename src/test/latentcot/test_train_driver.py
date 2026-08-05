@@ -67,6 +67,16 @@ def test_train_arm_reduces_loss(dataset):
     assert history[-1]["loss"] < history[0]["loss"]  # the arm is learning
 
 
+def test_train_arm_logs_drift_tripwires(dataset):
+    """History carries grad_norm and thought_rms — the early warnings for latent-path drift."""
+    model = _tiny_model()
+    history = train_arm(
+        model, ARMS["A2"], dataset, steps=6, batch_size=2, warmup_steps=2, seed=0, log_every=1
+    )
+    assert all("grad_norm" in h and "thought_rms" in h for h in history)
+    assert all(h["grad_norm"] >= 0 and h["thought_rms"] > 0 for h in history)
+
+
 def test_train_arm_applies_warmup_schedule(dataset):
     """The fine-tune LR follows WSD: a linear warmup ramp, capped at the peak, recorded per step."""
     model = _tiny_model()

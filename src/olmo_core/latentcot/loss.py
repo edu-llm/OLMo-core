@@ -143,10 +143,20 @@ def codi_loss(
 
     :returns: ``(loss, metrics)`` where ``loss`` is the mean total loss (a scalar tensor
         to call ``.backward()`` on) and ``metrics`` maps ``ce_teacher``/``ce_student``/
-        ``distill``/``vocab_reg`` to floats (for logging).
+        ``distill``/``vocab_reg``/``thought_rms`` to floats (for logging). ``thought_rms``
+        is diagnostic only — it is not part of the objective.
     """
     device = model.device
-    totals = {"ce_teacher": 0.0, "ce_student": 0.0, "distill": 0.0, "vocab_reg": 0.0}
+    totals = {
+        "ce_teacher": 0.0,
+        "ce_student": 0.0,
+        "distill": 0.0,
+        "vocab_reg": 0.0,
+        # Scale tripwire: thoughts pass through the final norm (see cot.final_norm), so this
+        # should sit near the token-embedding scale and stay flat in K. A climbing value means
+        # the latent path is drifting off the manifold the pretrained weights were fit on.
+        "thought_rms": 0.0,
+    }
     total_loss = torch.zeros((), device=device)
 
     for ex in examples:
@@ -188,6 +198,7 @@ def codi_loss(
         totals["ce_student"] += float(student_out.ce_loss.detach())
         totals["distill"] += float(distill.detach())
         totals["vocab_reg"] += float(reg.detach())
+        totals["thought_rms"] += float(thoughts.detach().float().pow(2).mean().sqrt())
 
     n = len(examples)
     metrics = {key: value / n for key, value in totals.items()}

@@ -45,6 +45,18 @@ done
 ```
 `metrics.json` already carries `overall_acc` + `solve_rate_by_depth` per run.
 
+**Watch these two tripwires** in `metrics.json` → `train_history` (logged every `--log-every`
+steps for the CODI arms A2/A3/A4):
+
+- `thought_rms` — the RMS of the continuous thoughts. Thoughts pass through the LM head's final
+  norm before feedback, so this should sit near the token-embedding scale (**≈ 1.0**) and stay
+  **flat** as training proceeds. A steady climb means the latent path is drifting off the manifold
+  the forked pretrained weights were fit on; unnormalized it reached ~52 by K=10 on this rung.
+- `grad_norm` — the pre-clip total gradient norm. A sustained rise is the earliest warning of the
+  same problem, and shows up before accuracy moves.
+
+Both are diagnostics, not objective terms, and are identical in definition across arms.
+
 **Checkpoints (crash recovery + best-selection).** Each run saves a rolling checkpoint every
 `--save-every` steps (default 500 ≈ ~10 saves; a crash loses <= one interval), keeping the last
 `--keep-last` (default 2, oldest deleted) plus `best.pt` — the checkpoint with the highest accuracy
