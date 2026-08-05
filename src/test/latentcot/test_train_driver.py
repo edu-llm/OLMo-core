@@ -82,6 +82,41 @@ def test_train_arm_applies_warmup_schedule(dataset):
     assert any(abs(lr - peak) < 1e-5 for lr in lrs)  # reaches the peak after warmup
 
 
+def test_train_arm_checkpoint_policy(dataset, tmp_path):
+    """Rolling checkpoints keep only the last `keep_last`; a best.pt/best.json is written."""
+    model = _tiny_model()
+    save_dir = tmp_path / "run"
+    val = [dataset[i] for i in range(len(dataset))]
+    train_arm(
+        model,
+        ARMS["A2"],
+        dataset,
+        steps=25,
+        batch_size=2,
+        lr=1e-3,
+        warmup_steps=5,
+        seed=0,
+        log_every=100,
+        save_dir=save_dir,
+        save_every=5,
+        keep_last=2,
+        val_examples=val,
+    )
+    rolling = sorted(save_dir.glob("step*.pt"))
+    assert len(rolling) == 2  # rolling window drops the oldest, keeps the 2 most recent
+    assert (save_dir / "best.pt").exists()
+    best = json.loads((save_dir / "best.json").read_text())
+    assert set(best) == {"step", "val_acc"} and 0.0 <= best["val_acc"] <= 1.0
+
+
+def test_train_arm_no_checkpoints_without_save_dir(dataset, tmp_path):
+    """Default (no save_dir) writes no checkpoint artifacts — the smoke/unit path is unchanged."""
+    model = _tiny_model()
+    train_arm(model, ARMS["A2"], dataset, steps=6, batch_size=2, seed=0, log_every=100)
+    assert not list(tmp_path.rglob("*.pt"))
+    assert not list(tmp_path.rglob("best.json"))
+
+
 def test_train_arm_runs_for_all_modes(dataset):
     # one short run per arm mode confirms the driver drives every arm
     for key in ("A0", "A2", "A4"):  # explicit_cot, codi, codi+L2

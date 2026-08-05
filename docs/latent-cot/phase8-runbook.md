@@ -41,9 +41,19 @@ for seed in 1 2 3; do
       --out runs/latentcot
   done
 done
-# each writes runs/latentcot/<arm>-seed<seed>/{model.pt, metrics.json}
+# each writes runs/latentcot/<arm>-seed<seed>/{model.pt, best.pt, best.json, stepN.pt x2, metrics.json}
 ```
 `metrics.json` already carries `overall_acc` + `solve_rate_by_depth` per run.
+
+**Checkpoints (crash recovery + best-selection).** Each run saves a rolling checkpoint every
+`--save-every` steps (default 500 ≈ ~10 saves; a crash loses <= one interval), keeping the last
+`--keep-last` (default 2, oldest deleted) plus `best.pt` — the checkpoint with the highest accuracy
+on a **validation split carved off TRAIN** (`--val-fraction` default 0.1, seeded independently of
+`--seed`, capped at `--best-eval-size` examples). The gate test set is **never** used to pick best
+(that would be selection on the eval data). `model.pt` is still the final last-step weights and
+remains what §4/§4b evaluate; point `eval.py`/`compare_models.py` at `best.pt` instead only if you
+deliberately want the val-selected checkpoint. Set `--save-every 0` to disable checkpointing (e.g. a
+quick smoke run). Note the ~1.9 GB/checkpoint footprint (~7.5 GB per run dir).
 GPU is auto-detected (`--device auto`); pass `--device cpu` to force CPU. To sanity-check the
 run *from scratch* (no S3/creds), drop `--init-checkpoint` and use `--rung olmo2_370M` — the two
 rungs are state-dict-interchangeable at our sequence lengths, but the real sweep forks the base.

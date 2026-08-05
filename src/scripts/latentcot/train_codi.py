@@ -61,6 +61,31 @@ def main() -> None:
         help="linear LR warmup steps (WSD); eases the fine-tune into the pretrained base. "
         "Shared across arms, so it stays confound-clean.",
     )
+    parser.add_argument(
+        "--save-every",
+        type=int,
+        default=500,
+        help="save a rolling checkpoint every N steps (0 disables); aim for ~10 saves over the "
+        "run (N ~= steps/10). Keeps the last --keep-last plus a best.pt; a crash loses <= one "
+        "interval.",
+    )
+    parser.add_argument(
+        "--keep-last", type=int, default=2, help="rolling checkpoints to retain (oldest deleted)"
+    )
+    parser.add_argument(
+        "--val-fraction",
+        type=float,
+        default=0.1,
+        help="fraction of TRAIN held out as a validation split to pick best.pt. Never the gate "
+        "test set (that would be model selection on the eval data). Seeded independently of "
+        "--seed so the split is identical across arms/seeds.",
+    )
+    parser.add_argument(
+        "--best-eval-size",
+        type=int,
+        default=200,
+        help="cap on validation examples scored per checkpoint (bounds A0's generation cost)",
+    )
     parser.add_argument("--init-seed", type=int, default=0, help="SAME across arms (shared init)")
     parser.add_argument("--seed", type=int, default=0, help="data-shuffle seed (per run)")
     parser.add_argument("--init-checkpoint", default=None, help="optional shared base state_dict")
@@ -89,16 +114,44 @@ def main() -> None:
         load_checkpoint(model, args.init_checkpoint)
 
     train_ds = LatentCotDataset(args.train_data, args.num_continuous_thoughts)
+
+    # Carve a fixed validation split off TRAIN for best-checkpoint selection. It is seeded
+    # independently of --seed so the split is identical across arms and seeds, and it never
+    # touches the held-out gate test set (selecting "best" there would be model selection on
+    # the eval data). With checkpointing off (--save-every 0) we train on the full train set.
+    val_examples = None
+    train_source: object = train_ds
+    if args.save_every and args.val_fraction > 0:
+        from torch.utils.data import Subset
+
+        n = len(train_ds)
+        perm = torch.randperm(n, generator=torch.Generator().manual_seed(0)).tolist()
+        n_val = max(1, int(n * args.val_fraction))
+        val_idx, train_idx = perm[:n_val], perm[n_val:]
+        train_source = Subset(train_ds, train_idx)
+        val_examples = [train_ds[i] for i in val_idx][: args.best_eval_size]
+
+    run_dir = args.out / f"{args.arm}-seed{args.seed}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
     history = train_arm(
         model,
         arm,
-        train_ds,
+        train_source,  # type: ignore[arg-type]  # LatentCotDataset or a Subset of one
         steps=args.steps,
         batch_size=args.batch_size,
         lr=args.lr,
         warmup_steps=args.warmup_steps,
         seed=args.seed,
+        save_dir=run_dir,
+        save_every=args.save_every,
+        keep_last=args.keep_last,
+        val_examples=val_examples,
     )
+    best = None
+    best_path = run_dir / "best.json"
+    if best_path.exists():
+        best = json.loads(best_path.read_text())
 
     test_ds = LatentCotDataset(args.test_data, args.num_continuous_thoughts)
     examples = [test_ds[i] for i in range(len(test_ds))]
@@ -114,18 +167,22 @@ def main() -> None:
         "vocab_reg": arm.vocab_reg,
         "vocab_reg_weight": arm.vocab_reg_weight,
         "vocab_reg_entropy_floor": arm.vocab_reg_entropy_floor,
+        "save_every": args.save_every,
+        "val_fraction": args.val_fraction if val_examples else 0.0,
+        "best_checkpoint": best,  # {step, val_acc} of best.pt, or None if checkpointing was off
         "overall_acc": overall_accuracy(model, examples, arm.arm_mode),
         "solve_rate_by_depth": solve_rate_by_depth(model, examples, arm.arm_mode),
         "train_history": history,
     }
 
-    run_dir = args.out / f"{args.arm}-seed{args.seed}"
-    run_dir.mkdir(parents=True, exist_ok=True)
+    # run_dir was created above; write the final (last-step) weights as the canonical artifact.
     torch.save(model.state_dict(), run_dir / "model.pt")
     (run_dir / "metrics.json").write_text(json.dumps(metrics, indent=2, default=float))
 
     print(f"[{arm.name} seed={args.seed}] overall_acc={metrics['overall_acc']:.3f}")
     print(f"  solve_rate_by_depth: {metrics['solve_rate_by_depth']}")
+    if best is not None:
+        print(f"  best.pt: step {best['step']} (val_acc={best['val_acc']:.3f})")
     print(f"  wrote {run_dir}/model.pt + metrics.json")
 
 

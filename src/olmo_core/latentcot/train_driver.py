@@ -8,16 +8,26 @@ doesn't fit the framework Trainer's token-array ``DataLoader``; this loop is the
 equivalent for the research runs.
 """
 
+import json
 from pathlib import Path
-from typing import Iterator, List
+from typing import Iterator, List, Optional, Protocol
 
 import torch
 
 from .arms import Arm
-from .data.dataset import LatentCotDataset, codi_collate
+from .data.dataset import codi_collate
 from .loss import arm_loss
 
 __all__ = ["resolve_device", "build_model", "load_checkpoint", "iter_batches", "train_arm"]
+
+
+class _Indexable(Protocol):
+    """The minimal dataset interface :func:`iter_batches` needs — a ``LatentCotDataset`` or a
+    ``torch.utils.data.Subset`` of one (the driver carves a validation split off the train set)."""
+
+    def __len__(self) -> int: ...
+
+    def __getitem__(self, index: int) -> dict: ...
 
 
 def resolve_device(device: str = "auto") -> str:
@@ -64,9 +74,7 @@ def build_model(rung: str, *, init_seed: int, device: str = "cpu"):
     return config.build(init_device=device)
 
 
-def iter_batches(
-    dataset: LatentCotDataset, batch_size: int, steps: int, seed: int
-) -> Iterator[dict]:
+def iter_batches(dataset: _Indexable, batch_size: int, steps: int, seed: int) -> Iterator[dict]:
     """Yield ``steps`` shuffled minibatches (cycling the dataset) as ``codi_collate`` dicts."""
     generator = torch.Generator().manual_seed(seed)
     n = len(dataset)
@@ -86,7 +94,7 @@ def iter_batches(
 def train_arm(
     model,
     arm: Arm,
-    dataset: LatentCotDataset,
+    dataset: _Indexable,
     *,
     steps: int,
     batch_size: int = 16,
@@ -96,6 +104,10 @@ def train_arm(
     max_grad_norm: float = 1.0,
     seed: int = 0,
     log_every: int = 100,
+    save_dir: Optional[Path] = None,
+    save_every: int = 0,
+    keep_last: int = 2,
+    val_examples: Optional[List[dict]] = None,
 ) -> List[dict]:
     """
     Train ``model`` on one arm; return a list of logged metric snapshots.
@@ -107,8 +119,58 @@ def train_arm(
     (a full-LR first step on a good checkpoint can spike the loss and erase what we forked
     it for); a linear decay tail anneals at the end. The schedule lives *here*, in the shared
     loop, so it is byte-identical across arms and stays confound-clean.
+
+    **Checkpointing (optional).** With ``save_dir`` set and ``save_every > 0``, every
+    ``save_every`` steps (and on the final step) the loop writes a rolling checkpoint
+    ``save_dir/stepN.pt`` and prunes to the most recent ``keep_last`` (so a crash loses at most
+    one interval, at bounded disk cost). If ``val_examples`` is given it is scored at each of
+    those points and the best-so-far weights are copied to ``save_dir/best.pt`` (with the step
+    and validation accuracy in ``save_dir/best.json``). The validation set **must** be held out
+    from the gate test set — selecting "best" on the test set would be model selection on the
+    very data the gates score. This is confound-clean: the policy is identical across arms.
+
+    :param save_dir: Directory for rolling/best checkpoints; ``None`` disables checkpointing.
+    :param save_every: Save a rolling checkpoint every N steps (0 disables).
+    :param keep_last: Number of most-recent rolling checkpoints to retain.
+    :param val_examples: Held-out (from train, not the test set) examples for best-selection.
     """
     from olmo_core.optim import WSD
+
+    from .evaluate import overall_accuracy
+
+    save_dir = Path(save_dir) if save_dir is not None else None
+    checkpointing = save_dir is not None and save_every > 0
+    if checkpointing:
+        assert save_dir is not None  # narrows the type for mypy
+        save_dir.mkdir(parents=True, exist_ok=True)
+    rolling: List[Path] = []
+    best_acc = -1.0
+
+    def _save_rolling(step_num: int) -> None:
+        assert save_dir is not None
+        path = save_dir / f"step{step_num}.pt"
+        torch.save(model.state_dict(), path)
+        rolling.append(path)
+        while len(rolling) > keep_last:  # rolling window: drop the oldest
+            rolling.pop(0).unlink(missing_ok=True)
+
+    def _maybe_update_best(step_num: int) -> None:
+        nonlocal best_acc
+        assert save_dir is not None
+        if not val_examples:
+            return
+        was_training = model.training
+        model.eval()
+        with torch.no_grad():
+            acc = overall_accuracy(model, val_examples, arm.arm_mode)
+        if was_training:
+            model.train()
+        if acc > best_acc:
+            best_acc = acc
+            torch.save(model.state_dict(), save_dir / "best.pt")
+            (save_dir / "best.json").write_text(
+                json.dumps({"step": step_num, "val_acc": acc}, indent=2)
+            )
 
     model.train()
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
@@ -136,4 +198,7 @@ def train_arm(
             history.append(
                 {"step": step, "lr": float(lr_t), "loss": float(loss.detach()), **metrics}
             )
+        if checkpointing and ((step + 1) % save_every == 0 or step == steps - 1):
+            _save_rolling(step + 1)
+            _maybe_update_best(step + 1)
     return history
