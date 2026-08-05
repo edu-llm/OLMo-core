@@ -939,9 +939,9 @@ def main():
                 n_boot=args.n_boot,
                 seed=args.seed,
             )
-        if r is None:
-            continue
-        out.append(r)
+            if r is None:
+                continue
+            out.append(r)
             print(f"{family}/{condition} ({r['paired_examples']:,} paired examples)")
             for name, endpoint in r["target_metrics"].items():
                 if "accuracy" in name:
@@ -960,7 +960,7 @@ def main():
                         f"[{endpoint['paired_bootstrap_ci95_low']:+.4f}, "
                         f"{endpoint['paired_bootstrap_ci95_high']:+.4f}]"
                     )
-        print(
+                print(
                     f"  {name}: dense {dense_value}, split {split_value}, "
                     f"split-dense {difference}, paired 95% CI {interval}"
                 )
@@ -972,7 +972,7 @@ def main():
                     f"[{endpoint['paired_bootstrap_ci95_low']:+.2%}, "
                     f"{endpoint['paired_bootstrap_ci95_high']:+.2%}]"
                 )
-            print(
+                print(
                     f"  {name}: dense {endpoint['dense_estimate']:.2%}, "
                     f"split {endpoint['split_estimate']:.2%}, split-dense "
                     f"{endpoint['difference_split_minus_dense']:+.2%}, "

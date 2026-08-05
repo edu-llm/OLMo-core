@@ -23,9 +23,9 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[3] / "scripts" / "train" / "p3_math_split"
 sys.path.insert(0, str(SCRIPTS))
 
-import tokenize_corpus as tokenization
-from provenance import tokenizer_behavior_sha256
-from tokenize_corpus import (
+import tokenize_corpus as tokenization  # noqa: E402
+from provenance import tokenizer_behavior_sha256  # noqa: E402
+from tokenize_corpus import (  # noqa: E402
     atomic_write_json,
     build_encoding_cache_from_jsonl,
     encode_rows_batched,

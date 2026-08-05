@@ -22,7 +22,7 @@ torch = pytest.importorskip("torch")
 SCRIPTS = Path(__file__).resolve().parents[3] / "scripts" / "train" / "p3_math_split"
 sys.path.insert(0, str(SCRIPTS))
 
-from tokenize_corpus import (
+from tokenize_corpus import (  # noqa: E402
     CROSS_SPLIT_BINDING_SCHEMA_VERSION,
     FAMILIES,
     FIXED_QWEN_TOKENIZER_SEAL,
@@ -38,7 +38,7 @@ from tokenize_corpus import (
     group_completion_sha256,
     require_exact_group_inventory,
 )
-from train_module import DerivedMaskTrainModule
+from train_module import DerivedMaskTrainModule  # noqa: E402
 
 TOKENIZED = Path(os.environ.get("TOKENIZED_DIR", "artifacts/public"))
 CACHE_ROOT = os.environ.get("TOKEN_CACHE_DIR")

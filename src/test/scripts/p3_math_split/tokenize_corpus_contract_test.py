@@ -16,7 +16,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[3] / "scripts" / "train" / "p3_math_split"
 sys.path.insert(0, str(SCRIPTS))
 
-import tokenize_corpus as tokenization
+import tokenize_corpus as tokenization  # noqa: E402
 
 FAMILIES = ("metamath", "mizar", "thproofs", "prf2", "enigma", "isabelle")
 SOURCE_SCHEMAS = {
