@@ -591,30 +591,94 @@ def _localised_heldout_paths(urls: List[str], opts) -> List[str]:
     cache = Path(opts.work_dir) / "heldout-shards"
     cache.mkdir(parents=True, exist_ok=True)
 
+    fetching = _may_fetch_heldout_shards()
+
     out: List[str] = []
     for url in urls:
         if not is_url(str(url)):
             out.append(str(url))
             continue
         dest = cache / os.path.basename(str(url))
-        # Compare SIZE, not existence: a truncated download left by a killed attempt would
-        # otherwise be reused, and a short shard yields wrong document boundaries rather than
-        # an error.
-        if not dest.is_file() or dest.stat().st_size != get_file_size(url):
-            log.info("downloading held-out shard %s", url)
-            _download_to(str(url), dest)
+        if fetching:
+            # Compare SIZE, not existence: a truncated download left by a killed attempt would
+            # otherwise be reused, and a short shard yields wrong document boundaries rather
+            # than an error. `get_file_size` is the S3 HEAD, and it is issued on the fetching
+            # process only -- see _may_fetch_heldout_shards for why the other seven must not.
+            if not dest.is_file() or dest.stat().st_size != get_file_size(url):
+                log.info("downloading held-out shard %s", url)
+                _download_to(str(url), dest)
         out.append(str(dest))
     return out
 
 
+#: The env var torchrun sets on every worker before any process group exists.
+#: ``olmo_core.distributed.utils.get_local_rank`` reads this same name, but it returns 0
+#: unconditionally until ``dist.is_initialized()``, which is why this file reads the variable
+#: directly rather than calling that helper. See ``_may_fetch_heldout_shards``.
+LOCAL_RANK_ENV_VAR = "LOCAL_RANK"
+
+
+def _may_fetch_heldout_shards() -> bool:
+    """Whether THIS process is the one allowed to HEAD and download the held-out shards.
+
+    WHY THIS CANNOT USE ``get_rank()`` OR ``get_fs_local_rank()``, WHICH IS THE WHOLE TRAP.
+    ``build_config`` is called at main():1222, BEFORE ``prepare_training_environment()`` at
+    :1237. At that moment ``dist.is_initialized()`` is False in every worker, and both helpers
+    short-circuit to 0 when ``is_distributed()`` is False
+    (distributed/utils.py:249-256 and :301-307). Gating on either would return True on all
+    eight ranks and change nothing at all -- a fix that reads correct and does nothing.
+
+    ``LOCAL_RANK`` is set by torchrun in the environment of every worker at spawn time, so it
+    is readable before the process group exists. That is the only rank signal available this
+    early.
+
+    WHAT THE GATE IS FOR. The size comparison in ``_localised_heldout_paths`` IS the cache
+    condition, so the ``get_file_size`` HEAD is issued on every call even when the shard is
+    already on disk. ``get_file_size`` is decorated ``@maybe_cache(condition=is_url)``
+    (io.py:107), and ``maybe_cache`` disables caching entirely unless ``OLMO_CORE_FS_CACHE_DIR``
+    is set (fs_cache.py:34-38) -- nothing in ``.edullm/`` sets it. Ungated, an 8-rank run
+    therefore issues 8 x N S3 HEADs at config-build time, and a throttle or a credential gap on
+    any single rank raises inside ``during(THE_CONFIG_WOULD_NOT_BUILD)`` and dies at exit 70 --
+    indistinguishable, from the outside, from the sidecar bug this port exists to fix.
+
+    It also removes a write race. ``_download_to`` writes one fixed ``dest + ".part"`` and then
+    renames it, with no per-rank suffix, so eight ranks meeting an absent shard would write the
+    same temporary path and rename it underneath each other.
+
+    A single-process invocation -- ``--prepare-heldout-only``, a ``--dry-run``, or someone
+    running this by hand -- has no ``LOCAL_RANK`` set, so it fetches. That is deliberate: the
+    prepare-only step is exactly the one that must do the real size-verified download.
+
+    ``LOCAL_RANK`` is per-NODE, so on a multi-node job one process per node fetches into that
+    node's own ``--work-dir``. That is the behaviour we want and it matches what
+    ``get_fs_local_rank`` means by "local rank per filesystem"; on one 8-GPU box the eight
+    workers share ``/tmp`` and read the single copy local rank 0 fetched.
+
+    THE RESIDUAL, STATED RATHER THAN HIDDEN. This assumes the documented contract holds: the
+    ``--prepare-heldout-only`` invocation runs first, so by training time the shards are
+    already on disk and the gate only suppresses a redundant HEAD. If that step is skipped AND
+    the shards are absent, the non-fetching workers now return a path that does not exist yet
+    and fail loudly on read, where previously they would have raced the same ``.part`` file and
+    could have read a torn one. Loud beats silent -- a torn shard yields wrong document
+    boundaries and a plausible-looking eval number -- but it is a real behaviour change and the
+    prepare step is what keeps it off the happy path.
+    """
+    return os.environ.get(LOCAL_RANK_ENV_VAR, "0") == "0"
+
+
 def _download_to(url: str, dest: Path) -> None:
-    """Copy one object to a local file, writing via a .part file so a kill cannot look complete."""
+    """Copy one object to a local file, writing via a .part file so a kill cannot look complete.
+
+    The ``.part`` name carries the pid so that two processes which do reach this concurrently
+    cannot write the same temporary file. ``_may_fetch_heldout_shards`` should already prevent
+    that, but ``rename`` is only atomic per source, and a torn shard is silent.
+    """
     from urllib.parse import urlparse
 
     import boto3
 
     parsed = urlparse(url)
-    tmp = dest.with_suffix(dest.suffix + ".part")
+    tmp = dest.with_suffix(dest.suffix + f".{os.getpid()}.part")
     boto3.client("s3").download_file(parsed.netloc, parsed.path.lstrip("/"), str(tmp))
     tmp.rename(dest)
 
