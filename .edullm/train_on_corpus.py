@@ -930,6 +930,60 @@ def steps_for_tokens(target_tokens: float, global_batch_size: int) -> int:
     return max(1, round(target_tokens / global_batch_size))
 
 
+def resolve_steps(opts) -> int:
+    """The run's length, DERIVED from the token budget when one was declared.
+
+    WHY THIS EXISTS AND WHY ``steps_for_tokens`` ALONE WAS NOT ENOUGH. ``steps_for_tokens``
+    was defined, documented, and tested -- and called from nowhere in the program. Every
+    caller was a test. ``--steps`` went verbatim into ``Duration.steps`` and the exact failure
+    that function's docstring claims to prevent was still live, with a green test beside it
+    saying otherwise. A guard outside the code path is not a guard; it is a second opinion
+    nobody asked the code for.
+
+    TWO SILENT FAILURES IT NOW CLOSES, both of which exit 0, write a checkpoint, and print a
+    summary that reads normal:
+
+      * ``--steps 11444`` with ``--global-batch-size`` omitted takes the flagship default of
+        786,432 and trains **9.0B tokens, 3x the declared budget** -- at 3x the cost, on a
+        cell whose whole purpose is to be a cheap proxy.
+      * ``--target-tokens`` omitted and ``--steps`` omitted takes the default of 200 and
+        trains **52.4M tokens, 1.75% of the budget**, in about half an hour. It also makes
+        ``--warmup-fraction 0.1`` resolve to 20 steps, walking the smoke-test warmup constant
+        the baseline fix removed straight back in.
+
+    So when ``--target-tokens`` is given the step count is computed from it and the batch,
+    and the two cannot disagree. When it is absent this returns ``opts.steps`` unchanged, so
+    a run that never asked for a budget behaves exactly as it did before.
+
+    A HAND-TYPED ``--steps`` BESIDE A BUDGET IS REFUSED RATHER THAN SILENTLY OVERRIDDEN. If
+    both are given and they disagree, one of them is wrong and no rule for picking a winner
+    is better than saying so: overriding hides a typo, and honouring it defeats the budget.
+    Passing a ``--steps`` that already agrees with the derivation is allowed, because that is
+    somebody being explicit rather than somebody being wrong.
+
+    :raises Refusal: If an explicit ``--steps`` disagrees with the budget's derivation.
+    """
+    target = getattr(opts, "target_tokens", None)
+    if target is None:
+        return opts.steps
+
+    derived = steps_for_tokens(target, opts.global_batch_size)
+
+    # Read the sentinel from the parser rather than repeating the literal, so this cannot
+    # drift from the flag it is comparing against.
+    default_steps = build_parser().get_default("steps")
+    if opts.steps != default_steps and opts.steps != derived:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"--steps {opts.steps} disagrees with --target-tokens {target:g} at a batch of "
+            f"{opts.global_batch_size}, which needs {derived} steps "
+            f"({derived * opts.global_batch_size:,} tokens). Pass the budget and let the "
+            "steps follow, or pass neither -- a run whose two length declarations disagree "
+            "trains one of them and reports the other.",
+        )
+    return derived
+
+
 def build_scheduler(opts):
     """The LR schedule, selected rather than hardcoded, with warmup as a fraction of steps.
 
@@ -1081,7 +1135,12 @@ def build_config(opts, overrides: List[str]):
             save_overwrite=False,
             metrics_collect_interval=5,
             cancel_check_interval=5,
-            max_duration=Duration.steps(opts.steps),
+            # resolve_steps, NOT opts.steps. When --target-tokens is given the length is
+            # derived from it and the batch, so the two cannot silently disagree; when it is
+            # absent this is opts.steps unchanged. This is the ONE call site, and it being
+            # the real one is the whole point -- steps_for_tokens previously existed, was
+            # documented, was tested, and was called only from tests.
+            max_duration=Duration.steps(resolve_steps(opts)),
         )
         .with_callback("gpu_monitor", GPUMemoryMonitorCallback())
         .with_callback(
@@ -1319,6 +1378,17 @@ def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> 
                     parameter.numel() for parameter in trainer.train_module.model.parameters()
                 ),
                 "steps": trainer.global_step,
+                # STEPS ALONE DO NOT SAY HOW LONG THE RUN WAS. 11,444 steps at 262,144
+                # tokens and 11,444 at 786,432 are the same number here and a 3x different
+                # experiment, and comparing two cells that differ in token budget is not a
+                # schedule measurement. Multiplying it out is what makes that visible in the
+                # record rather than requiring the reader to rederive it from the command.
+                "tokens_trained": (
+                    trainer.global_step * opts.global_batch_size
+                    if getattr(opts, "global_batch_size", None)
+                    else None
+                ),
+                "global_batch_size": getattr(opts, "global_batch_size", None),
                 "first_loss": losses.first,
                 "last_loss": losses.last,
                 # WHICH metric the two above are. A sweep's argmin is taken over these records,
@@ -1440,6 +1510,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-factory", default="olmo2_190M")
     parser.add_argument("--sequence-length", type=int, default=2048)
     parser.add_argument("--steps", type=int, default=200)
+    parser.add_argument(
+        "--target-tokens",
+        type=float,
+        default=None,
+        help="Token budget for the run. When given, the step count is DERIVED from this and "
+        "--global-batch-size rather than typed beside them, and an explicit --steps that "
+        "disagrees is refused. Unset (the default) leaves --steps exactly as it was, so a "
+        "run that declares no budget is unaffected. E1 passes 3e9. Without this, omitting "
+        "--global-batch-size trains 3x the budget at the flagship default and omitting "
+        "--steps trains 1.75% of it -- both exit 0 and write a plausible checkpoint.",
+    )
     parser.add_argument("--save-interval", type=int, default=100)
     parser.add_argument(
         "--lr-schedule",

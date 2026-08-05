@@ -1272,11 +1272,18 @@ def test_the_six_arms_are_six_distinct_curves():
 
 
 def test_the_step_count_delivers_the_token_budget_the_experiment_declares():
-    """Mutation: type the step count beside the batch instead of deriving it from it.
+    """The ARITHMETIC of the budget. Whether it reaches the run is the next test's job.
 
     Calls ``steps_for_tokens`` rather than re-deriving ``round(D/B)`` here. A test that
     recomputes the formula passes whichever way the source rounds and keeps passing after the
     source changes -- it tests its own copy of the arithmetic. This tests the program's.
+
+    WHAT THIS TEST DOES NOT PROVE, RECORDED BECAUSE IT ONCE READ AS THOUGH IT DID. Calling
+    ``steps_for_tokens`` shows the function computes the right number. It does NOT show the
+    program uses it. For a while it did not: every caller was a test, ``--steps`` went
+    verbatim into ``Duration.steps``, and this test was green beside a live defect. The
+    ``through_the_real_option_parsing_path`` test below is the one that closes that, and it
+    is the one to keep working if these ever have to be merged.
     """
     steps = entry.steps_for_tokens(E1_TARGET_TOKENS, E1_BATCH)
 
@@ -1296,6 +1303,115 @@ def test_the_step_count_delivers_the_token_budget_the_experiment_declares():
     # A non-positive batch is refused rather than dividing by zero.
     with pytest.raises(entry.Refusal):
         entry.steps_for_tokens(E1_TARGET_TOKENS, 0)
+
+
+def test_the_token_budget_reaches_the_trainer_through_the_real_option_parsing_path(monkeypatch):
+    """THE TEST THAT WOULD HAVE CAUGHT THE GUARD BEING DECORATIVE.
+
+    ``steps_for_tokens`` was defined, documented and tested, and called from nowhere but
+    tests. ``--steps`` went straight into ``Duration.steps``, so the failure its docstring
+    claimed to prevent was live with a green test beside it. The defect was invisible to
+    every test that called the function directly, because that is not how the program runs.
+
+    So this asserts on ``config.trainer.max_duration`` -- the object the trainer actually
+    stops on -- reached through ``build_parser().parse_known_args`` and ``build_config``, the
+    same two calls ``main`` makes. If the derivation is ever unwired again, the value here
+    falls back to the flag and this fails.
+    """
+    monkeypatch.setattr(
+        entry,
+        "resolve_corpus",
+        lambda **kwargs: entry.corpus_from_manifest(
+            FakeManifest(),
+            dataset_id=kwargs["dataset_id"],
+            version=kwargs["version"],
+            tokenizer_id=kwargs["tokenizer_id"],
+        ),
+    )
+
+    def built(*flags: str):
+        opts, overrides = entry.build_parser().parse_known_args(
+            [
+                "a-run-id",
+                "--dataset-id=pretrain/regmix-10b",
+                "--dataset-version=v1",
+                "--dataset-tokenizer=tokenizer/dolma2-bpe",
+                "--save-folder=/tmp/x",
+                *flags,
+            ]
+        )
+        return entry.build_config(opts, overrides)
+
+    # THE E1 CELL. The budget and the batch are given; the length is derived from them.
+    config = built("--target-tokens=3e9", f"--global-batch-size={E1_BATCH}")
+    assert config.trainer.max_duration.value == 11_444
+    assert str(config.trainer.max_duration.unit).endswith("steps")
+    # The tokens the trainer will actually see, which is the number the experiment declares.
+    assert config.trainer.max_duration.value * E1_BATCH == 2_999_975_936
+
+    # DERIVED, NOT TYPED: the same budget at twice the batch halves the run rather than
+    # training twice the tokens. This is what a hand-typed --steps cannot do.
+    doubled = built("--target-tokens=3e9", f"--global-batch-size={2 * E1_BATCH}")
+    assert doubled.trainer.max_duration.value == 5_722
+    assert doubled.trainer.max_duration.value * 2 * E1_BATCH == 2_999_975_936
+
+    # THE FIRST LIVE FAILURE: --global-batch-size omitted takes the flagship 786,432. With a
+    # budget the run shortens to hold the tokens; without one it would have trained
+    # 11,444 x 786,432 = 9.0B tokens, 3x the budget, at 3x the cost.
+    flagship_default = built("--target-tokens=3e9")
+    assert flagship_default.trainer.max_duration.value == 3_815
+    assert abs(3_815 * 786_432 / 3e9 - 1) < 1e-3
+
+    # THE SECOND LIVE FAILURE: no budget at all still means the pre-existing default of 200
+    # steps -- 52.4M tokens, 1.75% of the budget -- and that behaviour is DELIBERATELY
+    # preserved, because E0 must see an identical baseline. The guard is opt-in.
+    assert built().trainer.max_duration.value == 200
+    assert built("--steps=777").trainer.max_duration.value == 777
+
+
+def test_a_hand_typed_step_count_that_contradicts_the_budget_is_refused(monkeypatch):
+    """Two declarations of a run's length that disagree: one is wrong and neither wins.
+
+    Overriding the explicit flag hides a typo; honouring it defeats the budget. Refusing is
+    the only answer that cannot train one number and report the other.
+    """
+    monkeypatch.setattr(
+        entry,
+        "resolve_corpus",
+        lambda **kwargs: entry.corpus_from_manifest(
+            FakeManifest(),
+            dataset_id=kwargs["dataset_id"],
+            version=kwargs["version"],
+            tokenizer_id=kwargs["tokenizer_id"],
+        ),
+    )
+
+    def build(*flags: str):
+        opts, overrides = entry.build_parser().parse_known_args(
+            [
+                "a-run-id",
+                "--dataset-id=pretrain/regmix-10b",
+                "--dataset-version=v1",
+                "--dataset-tokenizer=tokenizer/dolma2-bpe",
+                "--save-folder=/tmp/x",
+                *flags,
+            ]
+        )
+        return entry.build_config(opts, overrides)
+
+    # Off by one step against the budget.
+    with pytest.raises(entry.Refusal) as refusal:
+        build("--target-tokens=3e9", f"--global-batch-size={E1_BATCH}", "--steps=11445")
+    assert "11445" in refusal.value.explanation and "11444" in refusal.value.explanation
+
+    # The exact mistake the verifier traced: the E1 step count typed beside the FLAGSHIP
+    # batch, which is 3x the budget and previously trained happily.
+    with pytest.raises(entry.Refusal):
+        build("--target-tokens=3e9", "--steps=11444")
+
+    # A --steps that AGREES is allowed: being explicit is not the same as being wrong.
+    agreeing = build("--target-tokens=3e9", f"--global-batch-size={E1_BATCH}", "--steps=11444")
+    assert agreeing.trainer.max_duration.value == 11_444
 
 
 def test_the_proxy_batch_sits_at_its_own_optimum_and_the_flagship_batch_does_not():
