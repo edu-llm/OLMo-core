@@ -139,22 +139,39 @@ is about **18%**, healthy for a 13M model. And that cell is 100% `<mano>`, the *
 (0.59M tok/s single-threaded against the bio renderer's 10.1M), yet data loading was 0.06% of step time
 — so the fact cells, which use the fast renderer, are not data-bound either.
 
-Hours scale with non-embedding parameters. Eight devices are taken as 1.9× four, which is **not**
-measured — g5 has no NVLink, so treat the 8×A10G column as the optimistic end.
+**Both columns below are now measured**, over twelve cells of the first count grid:
+
+| row | world size | aggregate tok/s | n |
+|---|---|---|---|
+| 13M | 4 | 886,128 | 6 |
+| 28M | 4 | 484,214 | 5 |
+| 28M | 8 | 514,203 | 1 |
+
+**Eight devices bought 6%, not 90%.** An earlier revision of this table took eight as 1.9× four and
+flagged it as unmeasured; the real figure is 1.06×, so g5's missing NVLink costs more than the optimistic
+end allowed for. Two corrections follow, and the second one killed a run:
+
+- Hours do **not** scale linearly with non-embedding parameters. 28M runs at 484k tok/s where the
+  parameter ratio predicts 390k, because the bigger model uses the device better (MFU 8.1% against 7.2%).
+  Every 28M figure in the old table was ~26% pessimistic.
+- `28m_d4p8` at eight devices needs **19.0 h**, not the 13.4 h the old table printed. A submission that
+  set its runtime bound from that number was killed at 13.80 h and step 97,450 of 134,480, with CE, grad
+  norm and throughput all steady to the last point — a wall-clock kill wearing a crash's clothes.
 
 | cell | tokens | 4×A10G | 8×A10G |
 |---|---|---|---|
-| `13m_ctrl` … `13m_d4p8` | 1.0–15.9B | 0.3–5.1 h | 0.2–2.7 h |
-| `28m_ctrl` … `28m_d1p2` | 1.0–9.3B | 0.7–6.7 h | 0.4–3.5 h |
-| `28m_d2p4` | 17.8B | 12.9 h | 6.8 h |
-| `28m_d4p8` | 35.3B | **25.4 h — over the cap** | 13.4 h |
+| `13m_ctrl` … `13m_d4p8` | 1.0–15.9B | 0.3–5.0 h | — |
+| `28m_ctrl` … `28m_d1p2` | 1.0–9.3B | 0.6–5.3 h | — |
+| `28m_d2p4` | 17.8B | 10.2 h | 9.6 h |
+| `28m_d4p8` | 35.3B | **20.2 h — inside the cap** | 19.0 h |
 
-**`28m_d4p8` must use eight devices**; four would breach the platform's hard 24 h per-cell ceiling.
-4×A10G is the *cheaper* way to buy the same eight GPUs — $1.418/GPU/h against $2.036 — and gives two
-concurrent slots instead of one, but see the next section: mixing world sizes inside one row is not free.
+**So `28m_d4p8` does not need eight devices after all**, and four is better on every axis at once:
+inside the 24 h ceiling, $115 of compute against $310, two concurrent slots instead of one, and it puts
+the whole 28M row at one world size. The old advice to use eight was built on the 1.9× guess.
 
-**64M cannot run on A10G at all.** `64m_d2p4` needs 33.9 h even on eight devices, and `64m_d1p2` needs
-17.1 h with `d2p4` impossible behind it. That row belongs on the P pool.
+**64M still cannot run the fact cells on A10G.** Extrapolating the measured 13M→28M scaling gives ~265k
+tok/s, so `64m_d2p4` needs ~41 h and `64m_d1p2` ~21 h. That row belongs on the P pool. The 64M
+*control* is 1.0B tokens and fits in ~1.1 h, which is why the σ block can include it.
 
 ### One world size per confirmatory row
 
@@ -168,23 +185,47 @@ curve reproduces a 1-rank one exactly on this code. That is evidence, not a guar
 order differs with rank count and divergence compounds over tens of thousands of steps. It is not worth
 resting the primary result on.
 
-So: **every cell in a confirmatory row runs at one world size.** For the 28M row on A10G that forces a
-choice, because `28m_d4p8` needs 35.3B tokens and 25.4 h on four devices — past the platform's hard 24 h
-per-cell ceiling — while the other five fit comfortably:
+So: **every cell in a confirmatory row runs at one world size.** Once the throughput was measured this
+stopped being a trade at all — the three options are no longer close:
 
 | 28M row | makespan | cost | confound |
 |---|---|---|---|
-| all six on 8×A10G | 27.2 h (one slot, sequential) | ~$442 | none |
-| five on 4×A10G + `d4p8` on 8×A10G | ~13.4 h | ~$366 | world size aliases demand |
+| **all six on 4×A10G** | **20.5 h** (two slots) | **~$232** | **none** |
+| all six on 8×A10G | 38.6 h (one slot) | ~$629 | none |
+| five on 4×A10G + `d4p8` on 8×A10G | ~19.0 h | ~$442 | world size aliases demand |
 
-**Take the first.** It costs about $77 and half a day more, and the 28M row is the one that also carries
-the entropy sweep — a confounded top cell there attacks the M3 − M2 subtraction that separates crowding
-from tokens-and-steps, which is the whole point of running both axes. The 13M row has no such problem:
-all six cells fit on 4×A10G, `13m_d4p8` at 5.1 h. 64M goes to the P pool, where one world size covers
-the row anyway.
+**Take the first**: cheapest, unconfounded, and within an hour of the fastest. The middle row is what an
+earlier revision recommended, on the belief that eight devices were 1.9× four and that `d4p8` could not
+fit on four; both were wrong.
 
-If you do run the mixed version, `28m_d4p8` is **descriptive only** — plot it, do not include it in the
-row's confirmatory slope, and fit that slope through the five cells that share a world size.
+The first grid ran as the third row, so `28m_d4p8` is currently at world size 8 while its five siblings
+are at 4 — and only the top cell differs, which is exactly the correlation with demand that makes it a
+second treatment. That partial run is **descriptive only**. Re-running it on four devices is $115 and
+puts the row back on one world size; `SUBMIT.md` job 6 is that command.
+
+The 13M row never had the problem: all six cells fit on 4×A10G, `13m_d4p8` at 5.0 h. 64M's fact cells go
+to the P pool, where one world size covers the row anyway.
+
+### Where the first grid actually got to
+
+The count grid ran first, ahead of M0 and the entropy sweep, which is the ordering the next section argues
+against. As of 2026-08-05 it stands at ten of twelve cells complete, with two to re-run:
+
+| | |
+|---|---|
+| complete | both controls, `13m_d0p3/d1p2/d2p4/d4p8`, `28m_d0p3/d0p6/d1p2/d2p4` |
+| `13m_d0p6` | crashed at step 3,441 / 10,732, seven checkpoints written |
+| `28m_d4p8` | killed at step 97,450 / 134,480 after 13.80 h, last checkpoint step 67,239 |
+
+235 GPU-hours and about $399 spent. Nothing is scored yet and no gate report exists, so every row of it is
+`confirmatory=False` — correctly. **`SUBMIT.md` has the six commands** that score what exists, re-run the
+two gaps, and run M0 and the entropy sweep.
+
+One reading to avoid: `train/CE loss` falls monotonically with demand across this grid, from 1.689 at both
+controls to 0.79 at `28m_d2p4`. That is not the model getting better at reasoning. Fact share rises from
+45% to 97% across the grid and correlates with final CE at **r = −0.899**; templated biographies are
+highly predictable and drag the average down. The endpoint is Mano accuracy on the frozen 30,000-item eval
+set, and only `score_run` produces it.
 
 ### The sequence, and why the count grid is not first
 
