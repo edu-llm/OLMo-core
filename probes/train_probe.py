@@ -135,12 +135,18 @@ ARMS: dict[str, dict] = {
 }
 
 
-def apply_arm(args: argparse.Namespace) -> None:
+def apply_arm(args: argparse.Namespace, *, enforce_no_conflict: bool = True) -> None:
     """Resolve ``args.arm`` into the concrete mixer/factor/regime settings, in place.
 
     :param args: Parsed arguments carrying ``arm``.
-    :raises SystemExit: If the arm ID is unknown or is one of the two arms whose
-        implementation requires a per-factor beta parameterization.
+    :param enforce_no_conflict: Refuse when a field already holds a value the arm disagrees
+        with. True for a user's command line, where a surviving flag would silently mean
+        something other than the arm id says. False for *internal* resolution, where the
+        caller deliberately re-points a copy of the args at a different arm and every field
+        is expected to be overwritten -- see the ``--match-arm`` block in :func:`main`.
+    :raises SystemExit: If the arm ID is unknown, is one of the two arms whose implementation
+        requires a per-factor beta parameterization, or (when ``enforce_no_conflict``)
+        conflicts with a field already set.
     """
     if args.arm is None:
         return
@@ -165,7 +171,7 @@ def apply_arm(args: argparse.Namespace) -> None:
         # is most exposed to, because every rung differs from its neighbour in this one field.
         # Flags whose value is None were simply not supplied, and the arm fills them.
         existing = getattr(args, key, None)
-        if existing is not None and existing != value:
+        if enforce_no_conflict and existing is not None and existing != value:
             flag = f"--{key.replace('_', '-')}"
             raise SystemExit(
                 f"{flag} {existing!r} conflicts with arm '{args.arm}', which is defined as "
@@ -173,6 +179,55 @@ def apply_arm(args: argparse.Namespace) -> None:
                 f"--beta-regime directly instead of an arm id."
             )
         setattr(args, key, value)
+
+
+def resolve_match_target(args: argparse.Namespace) -> argparse.Namespace:
+    """Build the argument namespace for a capacity control's *target* arm.
+
+    A control such as ``R1-P`` or ``DP2-P3`` declares the arm whose parameter count it must
+    reach. This resolves that target so the caller can build it FFN-free and read its ledger,
+    rather than hardcoding a number that stops being correct the moment the geometry moves.
+
+    Extracted from :func:`main` so it is reachable without a GPU. It was inline, and the one
+    bug it has ever had -- the conflict guard firing on the deliberate re-point below -- was
+    therefore only observable by paying for an array job. A test that reimplements these
+    fifteen lines would have passed while they were broken.
+
+    :param args: The run's arguments, already resolved by :func:`apply_arm`.
+    :returns: A copy re-pointed at ``args.match_arm``.
+    :raises SystemExit: If the target is itself parameter-matched, is unimplemented, or sits
+        in a different beta regime.
+    """
+    if args.match_non_embedding is not None:
+        raise SystemExit("pass at most one of --match-arm and --match-non-embedding")
+    if ARMS[args.match_arm].get("match_arm"):
+        # A control cannot be matched to another control. The target is built FFN-free to
+        # read its intrinsic cost, so matching to an arm that is itself FFN-matched would
+        # read the count it has *before* its own match is applied -- silently targeting
+        # the wrong number while looking like it worked.
+        raise SystemExit(
+            f"--match-arm {args.match_arm!r} is itself parameter-matched (to "
+            f"{ARMS[args.match_arm]['match_arm']!r}). Match to the arm whose capacity is "
+            f"being controlled for, not to another control."
+        )
+    target_args = argparse.Namespace(**vars(args))
+    target_args.arm = args.match_arm
+    # enforce_no_conflict=False: this copy still carries THIS arm's mixer/R/regime, and
+    # re-pointing it at the target is the whole purpose -- so every field is expected to
+    # disagree. With the guard on, resolving 'DP2-P3' (R=2) against its target 'DP3-strict'
+    # (R=3) reads as a conflict and exits 1, which is exactly what killed 24 cells in each of
+    # run_019fd472-ce2b and run_019fd472-e18c on 2026-08-05.
+    apply_arm(target_args, enforce_no_conflict=False)  # raises on an unimplemented target
+    if target_args.beta_regime != args.beta_regime:
+        # Matching across regimes would fold a capacity control and a regime contrast
+        # into one arm, which is what makes the result unreadable rather than merely
+        # imprecise. Both regimes have their own R=2 arm; name the right one.
+        raise SystemExit(
+            f"--match-arm {args.match_arm!r} is in the {target_args.beta_regime!r} regime "
+            f"but this run is {args.beta_regime!r}. A capacity control must match an arm "
+            f"in its own regime, or the comparison confounds capacity with beta range."
+        )
+    return target_args
 
 
 def load_manifest(path: str, parser: argparse.ArgumentParser) -> argparse.Namespace:
@@ -732,30 +787,7 @@ def main() -> None:
     # no longer controlling for what it is named after. Deriving it means the control cannot
     # drift away from the thing it controls for.
     if args.match_arm is not None:
-        if args.match_non_embedding is not None:
-            raise SystemExit("pass at most one of --match-arm and --match-non-embedding")
-        if ARMS[args.match_arm].get("match_arm"):
-            # A control cannot be matched to another control. The target is built FFN-free to
-            # read its intrinsic cost, so matching to an arm that is itself FFN-matched would
-            # read the count it has *before* its own match is applied -- silently targeting
-            # the wrong number while looking like it worked.
-            raise SystemExit(
-                f"--match-arm {args.match_arm!r} is itself parameter-matched (to "
-                f"{ARMS[args.match_arm]['match_arm']!r}). Match to the arm whose capacity is "
-                f"being controlled for, not to another control."
-            )
-        target_args = argparse.Namespace(**vars(args))
-        target_args.arm = args.match_arm
-        apply_arm(target_args)  # raises on an unimplemented target
-        if target_args.beta_regime != args.beta_regime:
-            # Matching across regimes would fold a capacity control and a regime contrast
-            # into one arm, which is what makes the result unreadable rather than merely
-            # imprecise. Both regimes have their own R=2 arm; name the right one.
-            raise SystemExit(
-                f"--match-arm {args.match_arm!r} is in the {target_args.beta_regime!r} regime "
-                f"but this run is {args.beta_regime!r}. A capacity control must match an arm "
-                f"in its own regime, or the comparison confounds capacity with beta range."
-            )
+        target_args = resolve_match_target(args)
         torch.manual_seed(seeds["init"])
         target_model = build_model(
             target_args,
