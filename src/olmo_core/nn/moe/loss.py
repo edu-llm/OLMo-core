@@ -247,8 +247,8 @@ def load_balancing_loss(
     :param tp_mesh: Tensor-parallel mesh, if any.
     :param cp_mesh: Context-parallel mesh, if any.
 
-    **Why the global variant needs no differentiable collective, and why its gradient has the
-    same magnitude as the local variant's.**
+    **Why the global variant needs no differentiable collective, and why switching granularity
+    introduces no world-size rescale.**
 
     Write the loss as ``E * sum_e f_e * P_e`` with ``f_e`` the fraction of assignments going to
     expert ``e`` and ``P_e`` the mean router probability for it. Only ``P_e`` is differentiable;
@@ -261,9 +261,19 @@ def load_balancing_loss(
     - **Gradient.** The data-parallel wrapper averages gradients across ranks, so the optimizer
       sees ``E * sum_e f_e^global * d(mean over ranks of P_e^local)/dtheta``. The local variant
       gives the same expression with ``f_e^global`` replaced by ``f_e^local``. Both ``f`` vectors
-      sum to one over experts and sit at ``O(1/E)``, so the two gradients have the same scale and
-      ``lb_loss_weight`` means the same thing under either granularity. Nothing has to be
-      multiplied by the world size, and nothing has to be all-reduced with a gradient attached.
+      sum to one over experts and sit at ``O(1/E)``, so **no world-size factor is introduced by the
+      switch** and ``lb_loss_weight`` means the same thing under either granularity. Nothing has to
+      be multiplied by the world size, and nothing has to be all-reduced with a gradient attached.
+
+      **This is deliberately weaker than "the two gradients have the same magnitude", which is what
+      this docstring used to claim and which is false.** Measured per-rank ``local/global``
+      gradient-norm ratios on four genuinely skewed ranks span **0.72x to 3.44x**. That spread is
+      the intended signal, not a bug: on a rank whose own histogram is collapsed, the local loss is
+      screaming about an imbalance the global batch does not have, so its gradient *should* be
+      larger. The claim the local-vs-global experimental arm rests on is the absence of a
+      world-size rescale -- which is what makes ``lb_loss_weight`` transferable -- not per-rank
+      gradient-norm equality. The old wording would have licensed reading a real routing signal as
+      a scale bug.
 
     The global counts are rescaled from the batch's token budget back down to this rank's, by the
     exact ratio of the two assignment totals, so that ``loss_div_factor`` keeps its rank-local
@@ -318,6 +328,17 @@ def load_balancing_loss(
     # Rescale the batch-wide counts to this rank's token budget. Both totals are exact integers,
     # so the only inexactness is the division itself; with equal ranks the factor is 1/world_size,
     # which is exact for a power-of-two world size and makes the identical-data case bit-exact.
+    # Two degenerate cases, both measured rather than assumed, both finite:
+    #
+    # - **A rank with zero assignments** (an empty shard, or a fully-masked batch). Its
+    #   `local_share` is 0, so its rescaled global counts are all zero and its balance loss is
+    #   exactly 0 -- it contributes no balance gradient even if the global batch is badly
+    #   imbalanced. That is the intended reading: a rank with no tokens has nothing to re-route,
+    #   and the ranks that do hold tokens still see the true global histogram. Recorded because it
+    #   is a behaviour rather than an obvious consequence.
+    # - **Every rank zero** (before any forward). `clamp_min(1.0)` on the denominator is what makes
+    #   this 0.0 rather than NaN. Do not remove it: a NaN here would poison the aux loss and, via
+    #   `attach_auxiliary_loss`, the whole graph.
     local_total = batch_size_per_expert.sum()
     global_total = global_counts_int.sum()
     local_share = (local_total.double() / global_total.double().clamp_min(1.0)).to(
