@@ -260,6 +260,12 @@ class MoERouter(nn.Module):
         # both a slowdown and a warning on every step.  `num_accumulated_micro_batches` above
         # is a plain int for the same reason.
         self._gate_mass_tokens: int = 0
+        # Router confidence: the PRE-normalisation top-k probability mass. Separate accumulator
+        # from gate mass because it is taken at a different point in `forward` -- before the
+        # `normalize_expert_weights` division, which is what makes it a distinct measurement
+        # rather than a duplicate. See the comment at the accumulation site.
+        self._topk_score_mass_sum = hide_from_torch(torch.zeros([], device=init_device))
+        self._topk_score_mass_tokens: int = 0
         # The rank-local and data-parallel-reduced values of the SAME load-balancing loss on the
         # SAME batch. Both are accumulated whatever the granularity, because a run that logs only
         # the value it optimizes cannot distinguish a working all-reduce from one that returned
@@ -293,6 +299,8 @@ class MoERouter(nn.Module):
         # `__init__`, which is "meta" for an FSDP build, and a meta tensor accumulates nothing.
         self._gate_mass_sum = hide_from_torch(torch.zeros([], device=self.device))
         self._gate_mass_tokens = 0
+        self._topk_score_mass_sum = hide_from_torch(torch.zeros([], device=self.device))
+        self._topk_score_mass_tokens = 0
 
         if self.bias_gamma is not None:
             assert self.score_bias is not None
@@ -403,6 +411,33 @@ class MoERouter(nn.Module):
         if self._gate_mass_sum.device != self.device:
             self._gate_mass_sum = self._gate_mass_sum.to(self.device)
         return unhide_from_torch(self._gate_mass_sum) / self._gate_mass_tokens
+
+    @property
+    def topk_score_mass_mean(self) -> Optional[torch.Tensor]:
+        """
+        Mean **pre-normalisation** top-k probability mass -- router confidence -- averaged over
+        every token routed since the last :meth:`reset_metrics()`.
+
+        ``None`` before any token has been routed, so a pre-training zero is not reported as a
+        measurement.
+
+        Uniform probabilities give exactly ``top_k / num_experts`` (0.125 at E=64/k=8); a fully
+        confident router gives 1.0. **This is the quantity the load-balancing loss is blind to.**
+        That loss penalises the load-probability correlation, so a router with near-uniform
+        probabilities but a consistent top-k argmax produces severe load imbalance with almost no
+        aux-loss signal -- measured, 56 of 64 experts dead at an LBL of 1.0088 against a
+        perfect-balance value of 1.0. Read together with :attr:`expert_load_cv`: low mass with high
+        CV is "unconfident but consistent", which is a router the aux loss cannot help rather than
+        one whose weight is merely too low.
+
+        Distinct from :attr:`gate_mass_mean`, which is taken *after* normalisation and is therefore
+        1.0 by construction whenever ``normalize_expert_weights`` is set.
+        """
+        if self._topk_score_mass_tokens <= 0:
+            return None
+        if self._topk_score_mass_sum.device != self.device:
+            self._topk_score_mass_sum = self._topk_score_mass_sum.to(self.device)
+        return unhide_from_torch(self._topk_score_mass_sum) / self._topk_score_mass_tokens
 
     @property
     def load_balancing_loss(self) -> Optional[torch.Tensor]:
@@ -926,6 +961,36 @@ class MoERouter(nn.Module):
         if (gate_mass := self.gate_mass_mean) is not None:
             out["gate_mass_mean"] = (gate_mass, ReduceType.max)
 
+        # ROUTER CONFIDENCE -- the pre-normalisation top-k probability mass, and the ONE quantity
+        # that distinguishes the two ways a router can be badly balanced. Emitted beside
+        # `gate_mass_mean` because they are the same measurement taken on opposite sides of the
+        # normalisation, and reading them apart is how the distinction gets missed.
+        #
+        # `gate_mass_mean` is 1.0 by construction whenever `normalize_expert_weights` is set, so it
+        # CANNOT show this. This one can: uniform probabilities give exactly `k/E` (0.125 at
+        # E=64/k=8), a fully confident router gives 1.0.
+        #
+        # Why it earns its place. The load-balancing loss penalises the load-probability
+        # CORRELATION, so it is nearly blind to a router whose probabilities are uniform but whose
+        # top-k argmax is consistent. Measured: 56 of 64 experts dead, load CV 2.6458, and the LBL
+        # reads 1.0088 against a perfect-balance value of 1.0. The first R0 run on GPU was in
+        # exactly that state, and nothing then emitted could distinguish it from a router whose
+        # aux weight was merely too low -- two diagnoses with opposite fixes.
+        #
+        # `max` folds it to the worst block, consistent with every other bounded balance metric
+        # here. Note "worst" for confidence is ambiguous in general -- both extremes are bad -- but
+        # the failure this exists to catch is the LOW end, so read the per-block series when the
+        # folded value looks healthy.
+        if (topk_mass := self.topk_score_mass_mean) is not None:
+            out["topk_score_mass"] = (topk_mass, ReduceType.max)
+            # Normalised so it is comparable across rungs: 1.0 is exactly uniform at every E and
+            # k, above 1.0 is a confident router. Raw mass is not comparable, because uniform is
+            # k/E and the ladder varies E by 4x -- the same E-comparability trap as raw CV.
+            out["topk_score_mass_excess"] = (
+                topk_mass / (self.top_k / self.num_experts),
+                ReduceType.max,
+            )
+
         # DROPPED TOKENS, WHICH NOTHING COMPUTED BEFORE.
         # A capacity-based MoE pads every expert to `expert_capacity` slots and silently
         # discards assignments beyond it -- `binned_gather` keeps the first `bin_size` of each
@@ -1018,6 +1083,9 @@ class MoERouter(nn.Module):
         # or the reported mean decays toward zero across a run while the true mass is 1.0.
         unhide_from_torch(self._gate_mass_sum).zero_()
         self._gate_mass_tokens = 0
+        # Router confidence, cleared on the same span for the same reason.
+        unhide_from_torch(self._topk_score_mass_sum).zero_()
+        self._topk_score_mass_tokens = 0
         # And the exact drop counters, for the same reason: numerator and denominator must be
         # cleared together or the rate drifts toward the run's lifetime average.
         if self._drop_dropped_sum is not None:
@@ -1066,6 +1134,34 @@ class MoERouter(nn.Module):
 
         # shape: (batch_size, seq_len, top_k)
         expert_weights, expert_indices = self.get_top_k(scores)
+
+        # PRE-NORMALISATION TOP-K PROBABILITY MASS -- ROUTER CONFIDENCE.
+        #
+        # Taken HERE, before the `normalize_expert_weights` division below, and that ordering is
+        # the entire point: after normalisation the top-k weights sum to 1.0 by construction, so
+        # `gate_mass_mean` cannot see this and no existing metric can.
+        #
+        # What it is for. The load-balancing loss penalises the CORRELATION between load and
+        # probability, `L = (E/k) * sum_e f_e * P_e`, so it only sees imbalance that shows up in
+        # the PROBABILITIES. A router whose probabilities are nearly uniform but whose top-k
+        # argmax is consistently the same experts produces catastrophic load imbalance with almost
+        # no aux-loss signal. Measured: with load pinned at maximum skew (56 of 64 experts dead,
+        # load CV 2.6458) and a logit gap of 0.01, the LBL reads 1.0088 against a perfect-balance
+        # value of 1.0 -- indistinguishable. That blind spot is invisible in every metric this
+        # module emitted before this one, and it is the state the first R0 run on GPU was in.
+        #
+        # How to read it. Uniform probabilities give exactly `k/E` (0.125 at R0's E=64/k=8); a
+        # fully confident router gives 1.0. So `topk_score_mass` near `k/E` while `expert_load_cv`
+        # is large is the signature of "unconfident but consistent" -- the diagnosis that
+        # distinguishes a router the aux loss cannot help from one whose weight is merely low.
+        #
+        # Accumulated the same way as gate mass, for the same reasons: one fused add, no `.item()`,
+        # divisor from `.shape` so nothing forces a host-device sync inside the step.
+        with torch.no_grad():
+            if self._topk_score_mass_sum.device != expert_weights.device:
+                self._topk_score_mass_sum = self._topk_score_mass_sum.to(expert_weights.device)
+            unhide_from_torch(self._topk_score_mass_sum).add_(expert_weights.detach().float().sum())
+            self._topk_score_mass_tokens += expert_weights.numel() // expert_weights.shape[-1]
 
         if self.normalize_expert_weights is not None:
             expert_weights = expert_weights.div(

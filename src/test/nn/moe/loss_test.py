@@ -834,3 +834,79 @@ def _run_pooled_world_size_counts_ranks():
 
 def test_pooled_world_size_equals_the_rank_count():
     run_distributed_test(_run_pooled_world_size_counts_ranks, world_size=4, backend="gloo")
+
+
+def test_topk_score_mass_is_pre_normalisation_and_uniform_reads_k_over_E():
+    """
+    Router confidence: pre-normalisation top-k probability mass.
+
+    Two properties, and the first is the whole reason the metric exists:
+
+    1. It is taken BEFORE the ``normalize_expert_weights`` division, so it is not 1.0 by
+       construction. ``gate_mass_mean`` is taken after and *is* 1.0 whenever the flag is set --
+       which is why that metric cannot see router confidence and this one can.
+    2. A router with uniform probabilities reads exactly ``k/E``, and the ``_excess`` form reads
+       1.0 at every E and k so it is comparable across rungs.
+
+    The band matters: the load-balancing loss is nearly blind to a router with uniform
+    probabilities and a consistent top-k argmax -- measured 56 of 64 experts dead at an LBL of
+    1.0088 against a perfect-balance value of 1.0. Low confidence with high load CV is that state.
+    """
+    E, K = 64, 8
+    router = MoELinearRouter(
+        d_model=32,
+        num_experts=E,
+        top_k=K,
+        lb_loss_weight=0.01,
+        normalize_expert_weights=1.0,
+    )
+    router.train()
+    router.reset_parameters()
+
+    # Force uniform probabilities by zeroing the router weight: every logit 0 -> every score 1/E
+    # -> top-k mass exactly k/E.
+    with torch.no_grad():
+        router.weight.zero_()
+    router(torch.randn(2, 64, 32))
+
+    metrics = router.compute_metrics(reset=False)
+    mass = metrics["topk_score_mass"][0].item()
+    excess = metrics["topk_score_mass_excess"][0].item()
+    assert mass == pytest.approx(
+        K / E, rel=1e-5
+    ), f"uniform probabilities must read k/E = {K/E}, got {mass}"
+    assert excess == pytest.approx(1.0, rel=1e-5)
+
+    # And it is NOT the post-normalisation gate mass, which is 1.0 here by construction. If these
+    # two were equal the metric would be measuring the wrong side of the division.
+    gate = metrics["gate_mass_mean"][0].item()
+    assert gate == pytest.approx(1.0, rel=1e-5)
+    assert mass != pytest.approx(gate, rel=1e-3), (
+        "topk_score_mass must be measured BEFORE normalisation -- equal to gate_mass_mean means "
+        "it was taken after, and then it cannot detect an unconfident router"
+    )
+
+
+def test_topk_score_mass_rises_with_confidence_and_clears_with_the_span():
+    """
+    A confident router reads near 1.0; the accumulator covers the same span as every other metric
+    and clears with them.
+    """
+    E, K = 32, 4
+    router = MoELinearRouter(
+        d_model=16, num_experts=E, top_k=K, lb_loss_weight=0.01, normalize_expert_weights=1.0
+    )
+    router.train()
+    router.reset_parameters()
+
+    # Large weights -> peaked softmax -> most mass inside the top-k.
+    with torch.no_grad():
+        router.weight.mul_(200.0)
+    router(torch.randn(2, 64, 16))
+    confident = router.compute_metrics(reset=False)["topk_score_mass"][0].item()
+    assert confident > 0.9, f"a peaked router should concentrate mass in its top-k, got {confident}"
+    assert confident <= 1.0 + 1e-6
+
+    # Cleared with the rest of the interval's metrics.
+    router.compute_metrics(reset=True)
+    assert router.topk_score_mass_mean is None, "must be None again after reset, not a stale value"
