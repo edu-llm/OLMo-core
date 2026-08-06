@@ -792,12 +792,53 @@ class MoERouter(nn.Module):
         # rather than a count so that it, too, is comparable across E. Guarded against an
         # all-zero histogram, which happens before any tokens have been routed: the unguarded
         # form returns 1.0 there, and 1.0 is indistinguishable from total expert collapse.
+        #
+        # KEPT, BUT IT IS THE RANK-LOCAL VIEW AND IT OVER-REPORTS. `counts == 0` here means "idle
+        # on this rank", so an expert busy on rank 3 and idle on rank 0 counts as dead once, and
+        # folding with `max` takes the worst rank rather than the truth. L2 measured the per-rank
+        # form at 0.0004 against a true global 0.0000 at 256 tokens/rank with E=32 over 4 ranks --
+        # and it over-reports hardest at *small local batches*, which is exactly R3's regime
+        # (256 assignments/expert) and exactly where a dead-expert alarm would be believed.
+        # Retained under its existing name because prior runs recorded it; **assert on the global
+        # metric below instead.**
         out["dead_expert_frac"] = (
             (
                 (counts == 0).sum(dtype=torch.float) / num_experts
                 if total > 0
                 else torch.zeros((), dtype=torch.float, device=counts.device)
             ),
+            ReduceType.max,
+        )
+
+        # DEAD EXPERTS OVER THE GLOBAL BATCH -- the one the `== 0` band is asserted against.
+        #
+        # An expert is dead if *no rank* routed anything to it. That is a property of the global
+        # assignment population, so it needs the counts summed across every rank holding a
+        # different slice of the batch, which is what L2's `global_batch_size_per_expert()` gives.
+        #
+        # THIS IS A COLLECTIVE AND IS THEREFORE CALLED UNCONDITIONALLY. `compute_metrics` is
+        # reached by every rank once per logging interval, so the call sits at the top level of
+        # this method with no surrounding `if` -- putting a collective behind a data-dependent
+        # branch is how a run deadlocks at hour 11 with one rank waiting in an all_reduce that
+        # another rank never entered. The `total > 0` guard below applies to the *result*, after
+        # the collective has already run on every rank.
+        global_counts, counts_reduced = self.global_batch_size_per_expert()
+        global_total = global_counts.sum()
+        out["dead_expert_frac_global"] = (
+            (
+                (global_counts == 0).sum(dtype=torch.float) / num_experts
+                if global_total > 0
+                else torch.zeros((), dtype=torch.float, device=global_counts.device)
+            ),
+            ReduceType.max,
+        )
+        # Whether a collective actually ran, inverted so `max` carries alarm upward: 0.0 only if
+        # every block reduced. On one rank this reads 1.0, which is correct and expected -- there
+        # is nothing to reduce over, and the global metric equals the local one. Without this, a
+        # reduction that silently no-ops and a real global zero look identical, which is the same
+        # unfalsifiability argument L2 makes for logging the LBL pair.
+        out["dead_expert_counts_not_reduced"] = (
+            torch.full_like(global_total, 0.0 if counts_reduced else 1.0),
             ReduceType.max,
         )
 
