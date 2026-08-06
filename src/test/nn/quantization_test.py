@@ -297,6 +297,50 @@ def test_quant_linear_is_an_nn_linear():
     assert isinstance(QuantLinear(8, 8), nn.Linear)
 
 
+def test_checkpoint_interoperates_three_ways():
+    """
+    A checkpoint must load cleanly between stock, control and ternary builds of the same module,
+    with **no missing and no unexpected keys**.
+
+    This is what lets X4a's two arms start from one init, and what stops a resume from a
+    non-quantized checkpoint silently reinitializing the projections -- ``load_state_dict``
+    with ``strict=False`` elsewhere in the stack would swallow a key mismatch, so the assertion
+    is on the returned key lists rather than on the call not raising.
+    """
+    torch.manual_seed(0)
+    common = dict(hidden_size=128, bias=False)
+    stock = FeedForwardConfig(**common).build(d_model=64)  # type: ignore[arg-type]
+    ctrl = FeedForwardConfig(**common, quant=QuantConfig(enabled=False)).build(d_model=64)  # type: ignore[arg-type]
+    tern = FeedForwardConfig(**common, quant=QuantConfig(enabled=True)).build(d_model=64)  # type: ignore[arg-type]
+
+    for src, dst in ((stock, ctrl), (stock, tern), (ctrl, tern), (tern, stock)):
+        missing, unexpected = dst.load_state_dict(src.state_dict())
+        assert list(missing) == [], f"missing keys {list(missing)}"
+        assert list(unexpected) == [], f"unexpected keys {list(unexpected)}"
+        assert torch.equal(src.w1.weight, dst.w1.weight)
+
+    # Same init, different forward -- that is the whole point of the pairing.
+    x = torch.randn(4, 8, 64)
+    assert torch.equal(stock(x), ctrl(x))
+    assert not torch.allclose(stock(x), tern(x))
+
+
+def test_olmo_init_path_accepts_quant_linear():
+    """
+    ``init_linear`` is typed against ``nn.Linear``; since ``QuantLinear`` is one, the whole
+    ``InitMethod`` machinery works with no special case. Verify against the real function, and
+    check the resulting zero fraction is still in the TWN band under OLMo-core's own init
+    (trunc_normal std=0.02 truncated at 3 sigma) rather than a pure Gaussian.
+    """
+    from olmo_core.nn.transformer.init import init_linear
+
+    torch.manual_seed(0)
+    q = QuantLinear(1024, 256, bias=False, enabled=True)
+    init_linear(q, std=0.02)
+    zero_frac = (twn_quantize(q.weight.detach(), in_dim=-1) == 0).float().mean().item()
+    assert 0.35 < zero_frac < 0.46, zero_frac
+
+
 def test_enabled_quant_linear_differs_from_nn_linear():
     """Guard against the opposite failure: a toggle that is wired but never fires."""
     torch.manual_seed(0)
@@ -306,6 +350,68 @@ def test_enabled_quant_linear_differs_from_nn_linear():
         q.weight.copy_(ref.weight)
     x = torch.randn(16, 128)
     assert not torch.allclose(ref(x), q(x))
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_exact_equality_survives_torch_compile(dtype):
+    """
+    The exact-equality property must hold **under `torch.compile`**, because that is the
+    shipped configuration: `.edullm/train_on_corpus.py` sets `compile_model=True`.
+
+    Note carefully what is and is not asserted. Compiled output is *not* bitwise equal to
+    eager -- inductor fuses and reassociates, and this was measured at 3.6e-07 on a
+    (128 -> 64) fp32 layer. That is fine and expected. The property X4a actually needs is
+    that the control arm and stock agree **under the same compilation**, so that the two arms
+    differ only in the quantizer and not in the compilation path. That is what this checks.
+    """
+    torch.manual_seed(0)
+    ref = nn.Linear(256, 128, bias=False, dtype=dtype)
+    nn.init.trunc_normal_(ref.weight, std=0.02, a=-0.06, b=0.06)
+    ctrl = QuantLinear(256, 128, bias=False, enabled=False, dtype=dtype)
+    ctrl.load_state_dict(ref.state_dict())
+
+    x = torch.randn(4, 32, 256, dtype=dtype)
+    torch._dynamo.reset()
+    y_ref = torch.compile(ref)(x)
+    torch._dynamo.reset()
+    y_ctrl = torch.compile(ctrl)(x)
+
+    assert torch.equal(y_ref, y_ctrl), (
+        "compiled QuantLinear(enabled=False) diverged from compiled nn.Linear by "
+        f"{(y_ref.float() - y_ctrl.float()).abs().max().item():.3e} -- the X4a control arm is "
+        "no longer paired with stock under the shipped compiled config"
+    )
+
+
+def test_compiled_ste_backward_is_still_identity():
+    """
+    A custom autograd Function under dynamo is a place the backward could silently stop being
+    the identity. Assert it survives compilation rather than assuming it does.
+    """
+    torch.manual_seed(0)
+    w = torch.randn(8, 64, requires_grad=True)
+    g = torch.randn(8, 64)
+    torch._dynamo.reset()
+    torch.compile(lambda t: twn_quantize_ste(t, in_dim=-1))(w).backward(g)
+    assert w.grad is not None
+    assert torch.equal(w.grad, g)
+
+
+def test_compiled_ternary_forward_is_deterministic():
+    """
+    A nondeterministic quantizer would inject noise straight into the X4a loss-curve
+    comparison, where it would be indistinguishable from a convergence difference.
+    """
+    torch.manual_seed(0)
+    q = QuantLinear(256, 64, bias=False, enabled=True)
+    nn.init.trunc_normal_(q.weight, std=0.02, a=-0.06, b=0.06)
+    x = torch.randn(4, 32, 256)
+    torch._dynamo.reset()
+    cq = torch.compile(q)
+    a = cq(x)
+    assert torch.equal(a, cq(x))
+    torch._dynamo.reset()
+    assert torch.equal(a, torch.compile(q)(x))
 
 
 # ---------------------------------------------------------------------------------
