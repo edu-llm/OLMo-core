@@ -10,7 +10,7 @@ It verifies evaluator controls and cohorts. Training-control equality must come
 from the saved platform configs and the arm YAML equality test; the old local
 ``arm_fingerprint.json``/mask-sidecar workflow is not used by platform runs.
 
-    python src/scripts/train/p3_math_split/compare_arms.py \
+    python src/scripts/train/p3_math_split/evals/compare_arms.py \
       --dense results/dense.json --split results/split.json \
       --dense-config runs/dense/config.json \
       --split-config runs/split/config.json
@@ -27,7 +27,7 @@ import random
 import re
 import sys
 
-RESULT_SCHEMA_VERSION = "p3-eval-v3"
+RESULT_SCHEMA_VERSION = "p3-eval-v5"
 COMPARISON_SCHEMA_VERSION = "p3-comparison-v3"
 MODEL_EXPORT_SCHEMA_VERSION = "p3-model-export-v1"
 SAFETENSORS_SHARD = re.compile(r"^model-(\d{5})-of-(\d{5})\.safetensors$")
@@ -41,6 +41,7 @@ _MISSING = object()
 MATCHED_RESULT_PATHS = (
     ("evaluation_controls", "evaluator_seed"),
     ("evaluation_controls", "conditions"),
+    ("evaluation_controls", "condition_cohort_policy"),
     ("evaluation_controls", "do_sample"),
     ("evaluation_controls", "temperature"),
     ("evaluation_controls", "context_length"),
@@ -649,23 +650,29 @@ def _validate_result_schema(result, label):
                 f"{label}/{family}: evaluation_controls.conditions differs from "
                 "family condition keys"
             )
-        cohort_ids = None
+        cohort_ids_by_condition = {}
         for condition, value in conditions.items():
             condition_ids = _validate_condition_schema(label, family, condition, value)
-            if cohort_ids is None:
-                cohort_ids = condition_ids
-            elif condition_ids != cohort_ids:
-                raise ValueError(f"{label}/{family}: cohort IDs differ across conditions")
-            for key in (
-                "source_examples",
-                "context_eligible_examples",
-                "evaluated_examples",
-            ):
+            cohort_ids_by_condition[condition] = condition_ids
+            for key in ("source_examples", "context_eligible_examples"):
                 _assert_close(
                     value[key],
                     family_result[key],
                     f"{label}/{family}/{condition}.{key}",
                 )
+            if value["evaluated_examples"] > family_result["evaluated_examples"]:
+                raise ValueError(
+                    f"{label}/{family}/{condition}: condition cohort exceeds "
+                    "the full family cohort"
+                )
+        present_ids = cohort_ids_by_condition.get("facts_present")
+        if present_ids is not None:
+            for condition, condition_ids in cohort_ids_by_condition.items():
+                if not condition_ids <= present_ids:
+                    raise ValueError(
+                        f"{label}/{family}/{condition}: condition cohort is not a "
+                        "subset of facts_present"
+                    )
 
 
 def validate_eval_compatibility(dense, split):
@@ -697,8 +704,7 @@ def validate_eval_compatibility(dense, split):
                 )
         if set(dense_family["conditions"]) != set(split_family["conditions"]):
             raise ValueError(f"{family}: evaluated condition sets differ")
-        if dense_family["conditions"]:
-            condition = next(iter(dense_family["conditions"]))
+        for condition in dense_family["conditions"]:
             dense_ids = set(
                 _index_unique(
                     dense_family["conditions"][condition]["per_example"],
@@ -712,7 +718,7 @@ def validate_eval_compatibility(dense, split):
                 )
             )
             if dense_ids != split_ids:
-                raise ValueError(f"{family}: cohort IDs differ between arms")
+                raise ValueError(f"{family}/{condition}: cohort IDs differ between arms")
 
 
 def _bootstrap_interval(differences):

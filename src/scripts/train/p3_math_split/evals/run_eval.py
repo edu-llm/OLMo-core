@@ -10,7 +10,7 @@ statements in context, and every example cites at least one family-held-out fact
 That is the question — does the split model match or beat dense when both can read
 the facts.
 
-The other three conditions exist because a bare win is ambiguous, and each of them
+The other two conditions exist because a bare win is ambiguous, and each of them
 rules something out:
 
   facts_present    the real setting. Correct facts, correct order.
@@ -21,9 +21,6 @@ rules something out:
   facts_corrupted  names kept, statements swapped between examples. A model that reads
                    its context should collapse. A model that ignores the block and
                    recites from memory will not — which is how you tell the two apart.
-  facts_shuffled   block order permuted. Should be a no-op for both arms. If it is not,
-                   the model is keying on position rather than content and every other
-                   number here needs re-reading.
 
 There is also a direct memorisation probe (--probe): given a fact name alone, state the
 fact. It measures the thing the training manipulation is supposed to change, without
@@ -34,7 +31,7 @@ first. Greedy is the default because sampling noise is a comparison confound.
 The evaluator applies the same ``text + EOS <= 16,384`` eligibility gate as
 training, then teacher-forces bounded logits chunks without losing prompt context.
 
-    python src/scripts/train/p3_math_split/run_eval.py \
+    python src/scripts/train/p3_math_split/evals/run_eval.py \
       --model runs/split/hf --arm split --corpus corpus \
       --families metamath mizar prf2 --mm-dir /tmp/dscount/mm \
       --out results/split.json
@@ -53,7 +50,7 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import mm_verify
 
@@ -63,16 +60,40 @@ HDR = "I know these mathematical statements:"
 LOCAL_HDR = "Local assumptions:"
 ATP_LOCAL_HDR = "Local ATP inputs:"
 SEP = "---"
-CONDITIONS = ("facts_present", "facts_absent", "facts_corrupted", "facts_shuffled")
+CONDITIONS = ("facts_present", "facts_absent", "facts_corrupted")
 FAMILIES = ("enigma", "isabelle", "metamath", "mizar", "prf2", "thproofs")
 DEFAULT_MAX_NEW_TOKENS = 8_192
-RESULT_SCHEMA_VERSION = "p3-eval-v3"
+RESULT_SCHEMA_VERSION = "p3-eval-v5"
 MODEL_EXPORT_SCHEMA_VERSION = "p3-model-export-v1"
 SAFETENSORS_SHARD = re.compile(r"^model-(\d{5})-of-(\d{5})\.safetensors$")
 SAFETENSORS_INDEX = "model.safetensors.index.json"
 METAMATH_VERIFIER_SCHEMA_VERSION = "p3-metamath-tristate-v1"
 NLL_CONTEXT_POLICY = "bounded_sliding_window_preserve_predecessor"
 NLL_TARGET_POLICY = "combined_prompt_target_suffix_plus_single_eos"
+DIAGNOSTIC_CONDITIONS = CONDITIONS[1:]
+HEADLINE_NUMERATOR = 4
+HEADLINE_DENOMINATOR = 5
+DIAGNOSTIC_NUMERATOR = 1
+DIAGNOSTIC_DENOMINATOR = 10
+COHORT_POLICY = "stable-sha256-stratified-per-family-v1"
+CONDITION_COHORT_POLICY = {
+    "facts_present": {
+        "selection": COHORT_POLICY,
+        "numerator": HEADLINE_NUMERATOR,
+        "denominator": HEADLINE_DENOMINATOR,
+        "rounding": "ceiling",
+    },
+    **{
+        condition: {
+            "selection": COHORT_POLICY,
+            "numerator": DIAGNOSTIC_NUMERATOR,
+            "denominator": DIAGNOSTIC_DENOMINATOR,
+            "rounding": "ceiling",
+            "subset_of": "facts_present",
+        }
+        for condition in DIAGNOSTIC_CONDITIONS
+    },
+}
 CORRUPTED_METAMATH_REASON = (
     "validity against visible corrupted statements is unsupported; the current "
     "checker can instantiate only canonical database rules, so using those hidden "
@@ -86,6 +107,50 @@ HELDOUT_MANIFEST = {
     "mizar": "mizar",
     "thproofs": "mizar",
 }
+
+
+def rows_for_condition(
+    rows: list[dict],
+    *,
+    family: str,
+    condition: str,
+    seed: int,
+) -> list[dict]:
+    """Return the deterministic condition cohort while preserving source order."""
+    if condition not in CONDITIONS:
+        raise ValueError(f"unknown condition {condition!r}")
+    if not rows:
+        return list(rows)
+    require_unique_ids(rows, f"{family}/{condition} cohort selection")
+
+    def rank(row: dict, namespace: str) -> bytes:
+        identity = f"{seed}\0{family}\0{namespace}\0{row['id']}".encode()
+        return hashlib.sha256(identity).digest()
+
+    headline_count = (
+        len(rows) * HEADLINE_NUMERATOR + HEADLINE_DENOMINATOR - 1
+    ) // HEADLINE_DENOMINATOR
+    headline_ids = {
+        row["id"]
+        for row in sorted(rows, key=lambda row: rank(row, "facts_present"))[
+            :headline_count
+        ]
+    }
+    if condition == "facts_present":
+        selected_ids = headline_ids
+    else:
+        diagnostic_count = (
+            len(rows) * DIAGNOSTIC_NUMERATOR + DIAGNOSTIC_DENOMINATOR - 1
+        ) // DIAGNOSTIC_DENOMINATOR
+        headline_rows = [row for row in rows if row["id"] in headline_ids]
+        selected_ids = {
+            row["id"]
+            for row in sorted(
+                headline_rows,
+                key=lambda row: rank(row, condition),
+            )[:diagnostic_count]
+        }
+    return [row for row in rows if row["id"] in selected_ids]
 
 
 def discover_families(corpus: str | Path) -> list[str]:
@@ -295,8 +360,6 @@ class ConditionMaterialization:
 
     prompt: str
     visible_facts: dict[str, str]
-    shuffle_eligible: bool
-    shuffle_changed: bool
     metamath_validity_supported: bool
     metamath_validity_reason: str | None
 
@@ -306,16 +369,6 @@ def _corrupt_statement(statement: str, corrupt_pool, rng: random.Random) -> str:
     if not candidates:
         raise ValueError("facts_corrupted requires a distinct replacement statement")
     return rng.choice(candidates)
-
-
-def _shuffle_nonidentity(items: list, rng: random.Random) -> tuple[list, bool, bool]:
-    shuffled = list(items)
-    eligible = len(shuffled) >= 2
-    if eligible:
-        rng.shuffle(shuffled)
-        if shuffled == items:
-            shuffled = shuffled[1:] + shuffled[:1]
-    return shuffled, eligible, shuffled != items
 
 
 def _expected_prompt_prefix(row: dict) -> str:
@@ -328,7 +381,7 @@ def _materialize_isabelle_condition(
     condition: str,
     rng: random.Random,
     corrupt_pool,
-) -> tuple[str, dict[str, str], bool, bool]:
+) -> tuple[str, dict[str, str]]:
     facts = row["facts"]
     aliases = row["premise_aliases"]
     original_lines = []
@@ -342,12 +395,8 @@ def _materialize_isabelle_condition(
         original_lines.append((alias, qualified, facts[qualified]))
 
     visible_lines = list(original_lines)
-    shuffle_eligible = False
-    shuffle_changed = False
     if condition == "facts_absent":
         visible_lines = []
-    elif condition == "facts_shuffled":
-        visible_lines, shuffle_eligible, shuffle_changed = _shuffle_nonidentity(original_lines, rng)
     elif condition == "facts_corrupted":
         replacements = {
             qualified: _corrupt_statement(statement, corrupt_pool, rng)
@@ -375,7 +424,7 @@ def _materialize_isabelle_condition(
     block = "\n".join(lines)
     prompt = f"{block}\n{SEP}\nGOAL\n{row['goal']}\n"
     visible_facts = {qualified: statement for _, qualified, statement in visible_lines}
-    return prompt, visible_facts, shuffle_eligible, shuffle_changed
+    return prompt, visible_facts
 
 
 def materialize_condition(
@@ -390,7 +439,7 @@ def materialize_condition(
 
     schema_version = row.get("schema_version")
     if schema_version == "isabelle-transition-v2":
-        prompt, visible_facts, shuffle_eligible, shuffle_changed = _materialize_isabelle_condition(
+        prompt, visible_facts = _materialize_isabelle_condition(
             row, condition, rng, corrupt_pool
         )
         validity_supported = condition != "facts_corrupted"
@@ -403,23 +452,17 @@ def materialize_condition(
         return ConditionMaterialization(
             prompt=prompt,
             visible_facts=visible_facts,
-            shuffle_eligible=shuffle_eligible,
-            shuffle_changed=shuffle_changed,
             metamath_validity_supported=validity_supported,
             metamath_validity_reason=validity_reason,
         )
 
     original_items = list(row["facts"].items())
     visible_items = list(original_items)
-    shuffle_eligible = False
-    shuffle_changed = False
     validity_supported = True
     validity_reason = None
 
     if condition == "facts_absent":
         visible_items = []
-    elif condition == "facts_shuffled":
-        visible_items, shuffle_eligible, shuffle_changed = _shuffle_nonidentity(original_items, rng)
     elif condition == "facts_corrupted":
         visible_items = [
             (name, _corrupt_statement(statement, corrupt_pool, rng))
@@ -479,8 +522,6 @@ def materialize_condition(
     return ConditionMaterialization(
         prompt=prompt,
         visible_facts=visible_facts,
-        shuffle_eligible=shuffle_eligible,
-        shuffle_changed=shuffle_changed,
         metamath_validity_supported=validity_supported,
         metamath_validity_reason=validity_reason,
     )
@@ -1212,6 +1253,7 @@ def build_evaluation_metadata(
         "evaluation_controls": {
             "evaluator_seed": args.seed,
             "conditions": list(args.conditions),
+            "condition_cohort_policy": CONDITION_COHORT_POLICY,
             "do_sample": bool(args.sample),
             "temperature": args.temperature,
             "context_length": args.context_length,
@@ -1353,14 +1395,23 @@ def main():
         )
 
         for condition in args.conditions:
-            print(f"\n[{args.arm}/{family}] {condition}: {len(rows):,} examples")
+            condition_rows = rows_for_condition(
+                rows,
+                family=family,
+                condition=condition,
+                seed=args.seed,
+            )
+            print(
+                f"\n[{args.arm}/{family}] {condition}: "
+                f"{len(condition_rows):,}/{len(rows):,} examples"
+            )
 
             # Per-token loss exists for every family on the same context-eligible
             # cohort used for whole-proof generation.
             loss_stats = target_nll(
                 model,
                 tok,
-                rows,
+                condition_rows,
                 condition,
                 random.Random(args.seed),
                 corrupt_pool,
@@ -1386,13 +1437,14 @@ def main():
 
             rng = random.Random(args.seed)
             materialized = [
-                materialize_condition(row, condition, rng, corrupt_pool) for row in rows
+                materialize_condition(row, condition, rng, corrupt_pool)
+                for row in condition_rows
             ]
             prompts = [item.prompt for item in materialized]
             prompt_lengths = [
                 len(tok(prompt, add_special_tokens=False)["input_ids"]) for prompt in prompts
             ]
-            generated = [""] * len(rows)
+            generated = [""] * len(condition_rows)
             generation_buckets: dict[int, list[int]] = {}
             generation_budget = generation_budgets(
                 prompt_lengths,
@@ -1416,7 +1468,9 @@ def main():
                     generated[i] = text
 
             per_example = []
-            for i, (row, gen, condition_input) in enumerate(zip(rows, generated, materialized)):
+            for i, (row, gen, condition_input) in enumerate(
+                zip(condition_rows, generated, materialized)
+            ):
                 prompt_ids, full_ids = tokenize_target_with_eos(
                     tok, condition_input.prompt, row["target"]
                 )
@@ -1440,11 +1494,6 @@ def main():
                     "generation_attempted": attempted,
                     "generation_budget": allowance,
                 }
-
-                if condition == "facts_shuffled":
-                    item["shuffle_eligible"] = condition_input.shuffle_eligible
-                    item["shuffle_changed"] = condition_input.shuffle_changed
-
                 per_example.append(item)
 
             condition_result = {
@@ -1456,19 +1505,6 @@ def main():
                 ),
                 "per_example": per_example,
             }
-            if condition == "facts_shuffled":
-                shuffle_eligible = sum(item.shuffle_eligible for item in materialized)
-                shuffle_changed = sum(item.shuffle_changed for item in materialized)
-                condition_result.update(
-                    {
-                        "shuffle_eligible_examples": shuffle_eligible,
-                        "shuffle_ineligible_examples": (len(materialized) - shuffle_eligible),
-                        "shuffle_changed_examples": shuffle_changed,
-                        "shuffle_change_rate_eligible": (
-                            shuffle_changed / shuffle_eligible if shuffle_eligible else None
-                        ),
-                    }
-                )
             if family == "metamath":
                 condition_result["metamath_verification"] = {
                     **metamath_availability,

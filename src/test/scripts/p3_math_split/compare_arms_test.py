@@ -3,12 +3,22 @@
 import copy
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
 from . import load_project_module
 
 compare = load_project_module("compare_arms")
+
+P3_ROOT = Path("src/scripts/train/p3_math_split")
+EVAL_COMPARE_ARMS = P3_ROOT / "evals" / "compare_arms.py"
+LEGACY_COMPARE_ARMS = P3_ROOT / "compare_arms.py"
+
+
+def test_compare_arms_entrypoint_lives_under_evals_subfolder():
+    assert EVAL_COMPARE_ARMS.is_file()
+    assert not LEGACY_COMPARE_ARMS.exists()
 
 SHA_A = "a" * 64
 SHA_B = "b" * 64
@@ -64,11 +74,33 @@ def result(arm, items):
     exact = sum(bool(entry["exact_match"]) for entry in items)
     exact_eligible = sum(bool(entry["exact_match"]) for entry in eligible)
     return {
-        "schema_version": "p3-eval-v3",
+        "schema_version": "p3-eval-v5",
         "arm": arm,
         "evaluation_controls": {
             "evaluator_seed": 20260801,
             "conditions": ["facts_present"],
+            "condition_cohort_policy": {
+                "facts_present": {
+                    "selection": "stable-sha256-stratified-per-family-v1",
+                    "numerator": 4,
+                    "denominator": 5,
+                    "rounding": "ceiling",
+                },
+                "facts_absent": {
+                    "selection": "stable-sha256-stratified-per-family-v1",
+                    "numerator": 1,
+                    "denominator": 10,
+                    "rounding": "ceiling",
+                    "subset_of": "facts_present",
+                },
+                "facts_corrupted": {
+                    "selection": "stable-sha256-stratified-per-family-v1",
+                    "numerator": 1,
+                    "denominator": 10,
+                    "rounding": "ceiling",
+                    "subset_of": "facts_present",
+                },
+            },
             "do_sample": False,
             "temperature": 0.7,
             "context_length": 16_384,
@@ -293,7 +325,7 @@ def test_comparison_rejects_duplicate_ids_before_mapping():
         )
 
 
-def test_comparator_requires_one_cohort_across_conditions_and_arms():
+def test_comparator_requires_condition_subsets_and_pairing_across_arms():
     entries = [
         item("first", tokens=2, correct=1, nll_sum=2.0, exact=False),
         item("second", tokens=2, correct=1, nll_sum=2.0, exact=False),
@@ -307,7 +339,7 @@ def test_comparator_requires_one_cohort_across_conditions_and_arms():
         )
 
     dense["families"]["mizar"]["conditions"]["facts_absent"]["per_example"][1]["id"] = "different"
-    with pytest.raises(ValueError, match="cohort IDs differ across conditions"):
+    with pytest.raises(ValueError, match="not a subset of facts_present"):
         compare.validate_eval_compatibility(dense, split)
 
     dense = result("dense", copy.deepcopy(entries))
@@ -315,6 +347,53 @@ def test_comparator_requires_one_cohort_across_conditions_and_arms():
     split["families"]["mizar"]["conditions"]["facts_present"]["per_example"][1]["id"] = "different"
     with pytest.raises(ValueError, match="cohort IDs differ between arms"):
         compare.validate_eval_compatibility(dense, split)
+
+
+def test_comparator_accepts_paired_absent_subset_of_present_cohort():
+    entries = [
+        item("first", tokens=2, correct=1, nll_sum=2.0, exact=False),
+        item("second", tokens=2, correct=1, nll_sum=2.0, exact=False),
+    ]
+    dense = result("dense", copy.deepcopy(entries))
+    split = result("split", copy.deepcopy(entries))
+    for arm_result in (dense, split):
+        arm_result["evaluation_controls"]["conditions"].append("facts_absent")
+        absent = result(arm_result["arm"], [copy.deepcopy(entries[0])])["families"]["mizar"][
+            "conditions"
+        ]["facts_present"]
+        absent["source_examples"] = len(entries)
+        absent["context_eligible_examples"] = len(entries)
+        arm_result["families"]["mizar"]["conditions"]["facts_absent"] = absent
+
+    compare.validate_eval_compatibility(dense, split)
+    got = compare.compare_condition(
+        dense,
+        split,
+        family="mizar",
+        condition="facts_absent",
+        n_boot=10,
+        seed=1,
+    )
+    assert got["paired_examples"] == 1
+
+
+def test_comparator_accepts_sampled_present_cohort():
+    entries = [
+        item(str(index), tokens=2, correct=1, nll_sum=2.0, exact=False)
+        for index in range(4)
+    ]
+    dense = result("dense", copy.deepcopy(entries))
+    split = result("split", copy.deepcopy(entries))
+    for arm_result in (dense, split):
+        family = arm_result["families"]["mizar"]
+        family["source_examples"] = 5
+        family["context_eligible_examples"] = 5
+        family["evaluated_examples"] = 5
+        present = family["conditions"]["facts_present"]
+        present["source_examples"] = 5
+        present["context_eligible_examples"] = 5
+
+    compare.validate_eval_compatibility(dense, split)
 
 
 def test_comparator_rejects_impossible_family_denominator_ordering():

@@ -2,7 +2,8 @@
 
 Local example:
 
-    python src/scripts/train/p3_math_split/export_checkpoint.py --run runs/dense --out exports/dense
+    python src/scripts/train/p3_math_split/evals/export_checkpoint.py \
+        --run runs/dense --out exports/dense
 
 Remote checkpoints are supported, but unsharding and model materialization always
 stage locally. Upload is a separate explicit option:
@@ -55,7 +56,7 @@ from olmo_core.nn.transformer.qwen import (
 )
 from olmo_core.train.checkpoint import Checkpointer
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from provenance import (
     TOKENIZER_ARTIFACT_ID,

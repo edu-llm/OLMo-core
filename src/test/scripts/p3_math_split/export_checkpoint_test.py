@@ -19,12 +19,14 @@ ROOT = Path(__file__).resolve().parents[4]
 SCRIPTS = ROOT / "src" / "scripts" / "train" / "p3_math_split"
 sys.path.insert(0, str(SCRIPTS))
 
-import compare_arms as compare  # noqa: E402
-import export_checkpoint as export  # noqa: E402
-import provenance  # noqa: E402
-import run_eval  # noqa: E402
+from . import load_project_module
 
-from olmo_core.nn.transformer.qwen import (  # noqa: E402
+compare = load_project_module("compare_arms")
+export = load_project_module("export_checkpoint")
+run_eval = load_project_module("run_eval")
+import provenance
+
+from olmo_core.nn.transformer.qwen import (
     QWEN2_0_5B_HF_ID,
     QWEN2_0_5B_HF_REVISION,
     QWEN2_0_5B_HF_WEIGHTS_SHA256,
@@ -32,6 +34,14 @@ from olmo_core.nn.transformer.qwen import (  # noqa: E402
     convert_hf_state_dict,
     qwen2_0_5b_config,
 )
+
+EVAL_EXPORT_CHECKPOINT = SCRIPTS / "evals" / "export_checkpoint.py"
+LEGACY_EXPORT_CHECKPOINT = SCRIPTS / "export_checkpoint.py"
+
+
+def test_export_checkpoint_entrypoint_lives_under_evals_subfolder():
+    assert EVAL_EXPORT_CHECKPOINT.is_file()
+    assert not LEGACY_EXPORT_CHECKPOINT.exists()
 
 
 def _saved_config() -> dict:

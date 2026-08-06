@@ -4,6 +4,7 @@ import hashlib
 import json
 import random
 import sys
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 import pytest
@@ -13,6 +14,15 @@ from safetensors.torch import save_file
 from . import load_project_module
 
 run_eval = load_project_module("run_eval")
+
+P3_ROOT = Path("src/scripts/train/p3_math_split")
+EVAL_RUN_EVAL = P3_ROOT / "evals" / "run_eval.py"
+LEGACY_RUN_EVAL = P3_ROOT / "run_eval.py"
+
+
+def test_run_eval_entrypoint_lives_under_evals_subfolder():
+    assert EVAL_RUN_EVAL.is_file()
+    assert not LEGACY_RUN_EVAL.exists()
 
 
 def test_default_generation_budget_is_large_enough_for_secondary_proof_metrics():
@@ -65,6 +75,54 @@ def test_generation_budget_uses_remaining_context_instead_of_skipping_row():
         context_length=16,
         max_new_tokens=6,
     ) == {0: 6, 1: 2}
+
+
+def test_headline_uses_stable_eighty_percent_and_diagnostics_use_ten_percent_subsets():
+    rows = [{"id": f"row-{index}"} for index in range(23)]
+
+    present = run_eval.rows_for_condition(
+        rows,
+        family="mizar",
+        condition="facts_present",
+        seed=20260801,
+    )
+    present_reordered = run_eval.rows_for_condition(
+        list(reversed(rows)),
+        family="mizar",
+        condition="facts_present",
+        seed=20260801,
+    )
+    present_ids = {row["id"] for row in present}
+    assert len(present) == 19  # ceil(23 * 80%)
+    assert present_ids == {row["id"] for row in present_reordered}
+
+    for condition in ("facts_absent", "facts_corrupted"):
+        diagnostic = run_eval.rows_for_condition(
+            rows,
+            family="mizar",
+            condition=condition,
+            seed=20260801,
+        )
+        diagnostic_reordered = run_eval.rows_for_condition(
+            list(reversed(rows)),
+            family="mizar",
+            condition=condition,
+            seed=20260801,
+        )
+
+        assert len(diagnostic) == 3  # ceil(23 * 10%)
+        assert {row["id"] for row in diagnostic} == {
+            row["id"] for row in diagnostic_reordered
+        }
+        assert {row["id"] for row in diagnostic} < present_ids
+
+    with pytest.raises(ValueError, match="unknown condition"):
+        run_eval.rows_for_condition(
+            rows,
+            family="mizar",
+            condition="facts_shuffled",
+            seed=20260801,
+        )
 
 
 def test_corrupted_condition_never_keeps_the_original_statement():
@@ -338,12 +396,9 @@ def test_atp_v2_conditions_preserve_local_inputs_and_present_prefix_exactly():
     corrupted = run_eval.materialize_condition(
         row, "facts_corrupted", random.Random(1), ["GLOBAL ONE", "GLOBAL TWO", "OTHER"]
     )
-    shuffled = run_eval.materialize_condition(
-        row, "facts_shuffled", random.Random(1), ["GLOBAL ONE", "GLOBAL TWO", "OTHER"]
-    )
 
     assert present.prompt == prefix
-    for materialized in (present, absent, corrupted, shuffled):
+    for materialized in (present, absent, corrupted):
         assert "Local ATP inputs:\nlocal_only : LOCAL PREMISE" in materialized.prompt
         assert materialized.prompt.index("Local ATP inputs:") < materialized.prompt.index(
             "\n---\nGOAL "
@@ -352,7 +407,6 @@ def test_atp_v2_conditions_preserve_local_inputs_and_present_prefix_exactly():
     assert "g1 :" not in absent.prompt and "g2 :" not in absent.prompt
     assert corrupted.visible_facts.keys() == row["facts"].keys()
     assert all(corrupted.visible_facts[name] != row["facts"][name] for name in row["facts"])
-    assert set(shuffled.visible_facts.items()) == set(row["facts"].items())
 
 
 def test_mizar_proof_v2_uses_exact_global_fact_prompt_without_derived_local_metadata():
@@ -389,32 +443,6 @@ def test_mizar_proof_v2_uses_exact_global_fact_prompt_without_derived_local_meta
         assert "Local assumptions:" not in materialized.prompt
         assert "A1 : BaseGoal" not in materialized.prompt
     assert "assume A1: BaseGoal;" in row["target"], "local context stays inside the target"
-
-
-def test_shuffle_forces_non_identity_and_reports_one_fact_as_ineligible():
-    class IdentityRng:
-        @staticmethod
-        def shuffle(items):
-            del items
-
-    two = run_eval.materialize_condition(
-        {"facts": {"a": "A", "b": "B"}, "goal": "G"},
-        "facts_shuffled",
-        IdentityRng(),
-        ["A", "B"],
-    )
-    assert two.shuffle_eligible
-    assert two.shuffle_changed
-    assert list(two.visible_facts) != ["a", "b"]
-
-    one = run_eval.materialize_condition(
-        {"facts": {"a": "A"}, "goal": "G"},
-        "facts_shuffled",
-        IdentityRng(),
-        ["A", "B"],
-    )
-    assert not one.shuffle_eligible
-    assert not one.shuffle_changed
 
 
 def test_metamath_conditions_do_not_promote_incomplete_api_to_validity():
@@ -677,6 +705,28 @@ def test_evaluation_metadata_requires_complete_exporter_provenance(tmp_path):
         "facts_present",
         "facts_absent",
     ]
+    assert first["evaluation_controls"]["condition_cohort_policy"] == {
+        "facts_present": {
+            "selection": "stable-sha256-stratified-per-family-v1",
+            "numerator": 4,
+            "denominator": 5,
+            "rounding": "ceiling",
+        },
+        "facts_absent": {
+            "selection": "stable-sha256-stratified-per-family-v1",
+            "numerator": 1,
+            "denominator": 10,
+            "rounding": "ceiling",
+            "subset_of": "facts_present",
+        },
+        "facts_corrupted": {
+            "selection": "stable-sha256-stratified-per-family-v1",
+            "numerator": 1,
+            "denominator": 10,
+            "rounding": "ceiling",
+            "subset_of": "facts_present",
+        },
+    }
     assert first["input_provenance"]["tokenizer_sha256"]
     assert first["input_provenance"]["corpus_sha256"]
     assert first["input_provenance"]["eval_shard_sha256"]["mizar"]
@@ -985,19 +1035,12 @@ def test_isabelle_transition_v2_materializes_all_conditions_and_eos():
     absent = run_eval.materialize_condition(row, "facts_absent", random.Random(1), pool)
     corrupted = run_eval.materialize_condition(row, "facts_corrupted", random.Random(1), pool)
 
-    class IdentityRng:
-        @staticmethod
-        def shuffle(items):
-            del items
-
-    shuffled = run_eval.materialize_condition(row, "facts_shuffled", IdentityRng(), pool)
-
     assert present.prompt == prefix
     assert "\n---\nGOAL\n" in present.prompt
     assert "\n---\nGOAL " not in present.prompt
     assert "a [Theory.one]" not in absent.prompt
     assert "b [Theory.two]" not in absent.prompt
-    for materialized in (present, absent, corrupted, shuffled):
+    for materialized in (present, absent, corrupted):
         assert "local [local.hyp] : LOCAL STATEMENT" in materialized.prompt
 
     corrupted_lines = {
@@ -1008,12 +1051,6 @@ def test_isabelle_transition_v2_materializes_all_conditions_and_eos():
     assert corrupted_lines["a"] == corrupted_lines["a2"]
     assert corrupted_lines["a"] != "STATEMENT ONE"
     assert corrupted_lines["b"] != "STATEMENT TWO"
-
-    shuffled_aliases = [
-        line.split(" [", 1)[0] for line in shuffled.prompt.splitlines() if " [Theory." in line
-    ]
-    assert shuffled_aliases != ["a", "a2", "b"]
-    assert shuffled.shuffle_eligible and shuffled.shuffle_changed
 
     class CharTokenizer:
         eos_token_id = 255

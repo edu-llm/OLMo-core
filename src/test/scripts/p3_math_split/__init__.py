@@ -10,6 +10,8 @@ from pathlib import Path
 from types import ModuleType
 
 PROJECT_DIR = Path("src/scripts/train/p3_math_split")
+EVALS_DIR = PROJECT_DIR / "evals"
+EVAL_MODULES = frozenset({"compare_arms", "export_checkpoint", "run_eval"})
 
 
 def load_project_module(name: str) -> ModuleType:
@@ -23,11 +25,17 @@ def load_project_module(name: str) -> ModuleType:
 
     :returns: The imported module.
     """
-    project_dir = str(PROJECT_DIR.resolve())
+    project_root = PROJECT_DIR.resolve()
+    project_dir = str(project_root)
     if project_dir not in sys.path:
         sys.path.insert(0, project_dir)
 
-    spec = importlib.util.spec_from_file_location(name, PROJECT_DIR / f"{name}.py")
+    if name in EVAL_MODULES:
+        module_path = EVALS_DIR / f"{name}.py"
+    else:
+        module_path = project_root / f"{name}.py"
+
+    spec = importlib.util.spec_from_file_location(name, module_path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
