@@ -7,7 +7,14 @@
 # edullm check prices this and lists every refusal, without dispatching anything.
 schema_version: 1
 workload_profile: olmo-core-train
-suggested_compute: gpu-1xl4
+suggested_compute: gpu-1xa10g
+# --param-dtype is named here even though bfloat16 is the file's default: the platform's
+# precision guard reads the words of the command and cannot see a dtype set in code.
 command: >-
-  bash -lc 'python .edullm/train_on_corpus.py "$EDULLM_RUN_ID" --save-folder
-  "$EDULLM_CHECKPOINT_DIR"'
+  bash -lc 'python .edullm/train_on_corpus.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --sequence-length 4096
+  --steps 2000
+  --save-interval 500
+  --warmup-steps 200
+  --param-dtype bfloat16'
