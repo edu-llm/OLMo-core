@@ -1125,7 +1125,7 @@ class TransformerConfig(ModelConfig):
         vocab_size: int,
         *,
         rung: str = "R3",
-        quantize: bool = False,
+        quantize: Optional[bool] = None,
         **kwargs,
     ) -> "TransformerConfig":
         """
@@ -1141,9 +1141,23 @@ class TransformerConfig(ModelConfig):
             the module comment above; the platform's dispatcher passes nothing else.
         :param rung: Which rung of the ladder, a key of :data:`MAPLE_RUNGS`. Not reachable
             from the platform command line; use the ``maple_r0`` .. ``maple_r3`` wrappers.
-        :param quantize: Build the expert and attention projections as ternary-QAT
-            (:class:`QuantLinear`) rather than ``nn.Linear``. Off by default, so the bf16
-            track is what you get unless asked.
+        :param quantize: Ternary QAT on the expert and attention projections. **Three states,
+            not two, and the distinction is load-bearing for X4a:**
+
+            * ``None`` (default) -- stock ``nn.Linear``. Use for any run that is *not* part of
+              the ternary-vs-bf16 paired comparison.
+            * ``False`` -- builds :class:`~olmo_core.nn.quantization.QuantLinear` with the
+              quantizer **bypassed**. Bitwise identical to ``nn.Linear`` (it is the same
+              ``F.linear`` call; ``QuantLinear`` subclasses ``nn.Linear``), but it keeps the
+              same module graph and state-dict keys. **This is the bf16 CONTROL arm of X4a.**
+            * ``True`` -- the ternary arm.
+
+            ``None`` and ``False`` produce identical *numbers* but different *module trees*. If
+            the control arm were built with ``None``, the two X4a arms would have different
+            state dicts and the comparison would no longer be paired -- which is exactly the
+            property `contracts/quant-surface.md` calls the cheapest thing to verify. So
+            ``False`` is not a synonym for ``None``, and picking the wrong one produces a
+            comparison that looks fine and is not paired.
         """
         if rung not in cls.MAPLE_RUNGS:
             raise OLMoConfigurationError(
@@ -1161,14 +1175,26 @@ class TransformerConfig(ModelConfig):
         # f_e = d/4. Maple is d=2048 -> 512.
         expert_hidden_size = kwargs.pop("expert_hidden_size", d_model // 4)
 
-        if quantize:
-            raise NotImplementedError(
-                "ternary QAT (`quantize=True`) is not wired up yet -- it is L4's C1-C5. "
-                "This raises rather than silently building a bf16 model, because a ternary "
-                "arm that quietly ran in bf16 would look like a successful paired comparison."
-            )
+        # Deferred import, deliberately. L4 owns `nn/quantization.py` and the merge order is
+        # L1 -> ... -> L4, so a module-level import of it would make THIS branch unimportable
+        # until L4 lands. Imported at call time instead, and only when quantization was asked
+        # for -- so `quantize=None` (every bf16 run) has no dependency on L4 at all.
+        quant = None
+        if quantize is not None:
+            try:
+                from ..quantization import QuantConfig
+            except ImportError as e:
+                raise OLMoConfigurationError(
+                    "`quantize` was requested but `olmo_core.nn.quantization` is not present "
+                    "in this tree -- it is L4's C1-C5 and lands after L1 in the merge order. "
+                    "This refuses rather than silently building an unquantized model, because "
+                    "a ternary arm that quietly ran in bf16 would look like a *successful* "
+                    "paired comparison, which is the worst outcome for X4a."
+                ) from e
+            quant = QuantConfig(enabled=quantize)
 
         config = cls._maple_config(
+            quant=quant,
             vocab_size=vocab_size,
             d_model=d_model,
             n_layers=n_layers,
@@ -1213,6 +1239,21 @@ class TransformerConfig(ModelConfig):
         """Build the Maple config. Every non-default knob here is deliberate; see comments."""
         dtype = kwargs.pop("dtype", DType.float32)
         layer_norm_eps = kwargs.pop("layer_norm_eps", 1e-6)
+        # None -> stock nn.Linear. QuantConfig(enabled=False) -> QuantLinear, bypassed, bitwise
+        # identical to nn.Linear but sharing the module graph. See `maple_scaled`'s docstring.
+        quant = kwargs.pop("quant", None)
+        # `AttentionConfig.quant`, `MoEConfig.quant` and `MoEConfig.swiglu_limit` are L4's
+        # fields and do not exist until L4 merges (L1 lands first). Pass them only when they
+        # are actually available, so this branch builds standalone AND picks them up
+        # automatically once L4 is in, with no second edit and no silent divergence.
+        quant_kwargs = {} if quant is None else {"quant": quant}
+        try:
+            from ..feed_forward import MAPLE_SWIGLU_LIMIT
+
+            swiglu_kwargs = {"swiglu_limit": kwargs.pop("swiglu_limit", MAPLE_SWIGLU_LIMIT)}
+        except ImportError:
+            swiglu_kwargs = {}
+            kwargs.pop("swiglu_limit", None)
 
         layer_norm = LayerNormConfig(
             name=LayerNormType.rms, eps=layer_norm_eps, bias=False, dtype=dtype
@@ -1272,6 +1313,9 @@ class TransformerConfig(ModelConfig):
             qk_norm=layer_norm,
             use_head_qk_norm=True,
             sliding_window=sliding_window,
+            # q/k/v/o. Maple ternarizes every matmul; norms stay full precision, and there is
+            # no code path from here to the QK-norms.
+            **quant_kwargs,
             dtype=dtype,
         )
 
@@ -1302,6 +1346,16 @@ class TransformerConfig(ModelConfig):
             lb_loss_weight=kwargs.pop("lb_loss_weight", 0.01),
             # Explicit: stock default is off.
             z_loss_weight=kwargs.pop("z_loss_weight", 0.001),
+            # EXPERT projections only. The router is structurally unreachable from this flag,
+            # and that is load-bearing: routing is discrete, so quantizing the router would
+            # change *which* experts fire rather than how accurately they compute.
+            **quant_kwargs,
+            # gpt-oss's asymmetric SwiGLU outlier guard (gate `max=7.0`, up `[-7,7]`), which
+            # Maple carries in `MapleMLP.forward` unconditionally -- NOT gated on `quantize`.
+            # At ~52x the measured pre-activation RMS it never fires, so it costs nothing; but
+            # gating it on the quant flag would confound the clamp with the precision change
+            # across X4a's two arms, which is the one thing X4a is trying to measure.
+            **swiglu_kwargs,
             dtype=dtype,
         )
 
