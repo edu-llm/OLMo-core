@@ -566,25 +566,63 @@ def _localised_heldout_paths(urls: List[str], opts) -> List[str]:
     THIS IS WHY run_019fce60 DIED AT EXIT 70 WITH ``gzip.BadGzipFile: Not a gzipped file
     (b'5\\x00')``.
 
-    ``iter_document_indices`` (data/utils.py:170-251 on this checkout; the branch is at
-    :193-197 and the sidecar derivation at :217) picks between two strategies. For a LOCAL
-    path with ``eos_token_id`` and ``dtype`` it scans the memmap for EOS boundaries -- fast and
-    correct. For a URL it falls back to a sidecar metadata file whose name it derives as
-    ``os.path.basename(data_path).replace(".npy", ".csv.gz")``.
+    ``iter_document_indices`` (data/utils.py:170-251 on this checkout) picks between two
+    strategies, and **the choice is made at :193-197, before any filename is inspected**::
 
-    Our shards are ``val-00033.u32le.bin``. That ``replace`` matches nothing, so the "metadata
-    file" it resolves is **the shard itself** -- which exists, so there is no FileNotFoundError
-    to trigger the helpful message the code has ready -- and it gunzips raw uint32 tokens. Token
-    53 is ``b"5\\x00\\x00\\x00"``; those are the bytes in the error.
+        if use_array_if_local is None:
+            if eos_token_id is not None and dtype is not None and not is_url(data_path):
+                use_array_if_local = True
+        if use_array_if_local and not is_url(data_path):
+            ... mmap scan for EOS boundaries ...      # what we take
+        else:
+            ... sidecar metadata file ...             # :217's .replace lives HERE
+
+    So the invariant that keeps us out of the sidecar branch is a **conjunction of three**:
+    local path AND ``eos_token_id`` AND ``dtype``. They are supplied in two different places,
+    which is the thing to keep straight:
+
+    - **This function supplies locality only** -- it downloads, so ``is_url`` goes false. That
+      is its entire contribution to the fix, and it is why the fix lives here.
+    - ``dtype`` and ``eos_token_id`` come from the ``NumpyPaddedFSLDatasetConfig`` site below
+      (``dtype=corpus.dtype``, ``tokenizer=corpus.tokenizer``). ``corpus.dtype`` cannot be
+      ``None``: :323-327 refuses a release that declares no dtype.
+
+    It is NOT that the derived sidecar name misses. That distinction is load-bearing, so do not
+    restate it the other way round:
+
+    - **We are safe under any filename.** :217 executes only after the branch is already lost.
+      A future shard named ``.npy`` would still take the mmap scan. Anyone "hardening" this by
+      renaming shards is defending a door that is not the one that opens.
+    - **The regression to guard is a caller that drops ``dtype`` or ``tokenizer``** at the
+      config site -- then the sidecar branch is taken *even for a local file*, and only then
+      does the name matter. **No test covers that**, and it fails exactly the way
+      run_019fce60 did. Localising alone is not sufficient; two of the three conditions are
+      owned by code this function cannot see.
+
+    What the derived name explains is only the *shape of the error message*. Our shards are
+    ``val-00033.u32le.bin``, so ``.replace(".npy", ".csv.gz")`` matches nothing and the
+    "metadata file" resolves to **the shard itself** -- which exists, so there is no
+    FileNotFoundError to trigger the helpful message the code has ready, and it gunzips raw
+    uint32 tokens instead. Token 53 is ``b"5\\x00\\x00\\x00"``: the bytes in
+    ``gzip.BadGzipFile: Not a gzipped file (b'5\\x00')``. A corpus whose shards really did end
+    in ``.npy`` would have failed the same way with a clearer error.
 
     The training path never hit this: plain ``NumpyFSLDataset`` does not call
     ``segment_documents_into_instances`` at all. Only ``NumpyPaddedFSLDataset`` (what the
     evaluator requires) and ``NumpyFSLDatasetMixture`` do, so the bug was unreachable until the
-    ladder was wired.
+    ladder was wired. This is also why a probe against ``NumpyFSLDataset`` cannot verify the
+    fix -- its ``prepare()`` is ``len(self)`` (numpy_dataset.py:576-577), so the branch is
+    unreachable by construction and a clean run proves nothing.
 
     Fixed here rather than in ``data/utils.py``: that ``.replace(".npy", ...)`` is correct for
     Dolma-toolkit corpora that really do ship ``.csv.gz`` sidecars, and changing it would alter
     behaviour for every dataset in the library to suit one experiment's shards.
+
+    Verified by observation on FarmShare (jobs 1676364/1676366, 2026-08-05), not inferred:
+    with localised shards ``gzip.open`` is called **0** times, and a negative control that
+    forces ``use_array_if_local=False`` drives it to **1** -- so the probe would have noticed
+    had the branch been entered. An earlier control that renamed shards to ``.npy`` **failed to
+    fire**, which is the observation this docstring's previous wording could not have predicted.
     """
     from olmo_core.io import get_file_size, is_url
 
