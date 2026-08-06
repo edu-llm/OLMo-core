@@ -7,8 +7,13 @@
 #
 # olmo-core-check rather than olmo-core-train, because this measures the card and
 # the shape rather than training anything, so it opens no corpus and needs none.
+#
+# NO SHELL, AND NO WORD HERE CONTAINS A SPACE. edullm submit splits this string into
+# words, rejoins them with a plain space and lets the compile job split it a second
+# time, so any quoting is lost between the two. `bash -lc 'python x.py "$VAR"'` checks
+# clean and is refused at submit with "bash -lc reads exactly one word as the command".
+# The program reads EDULLM_RUN_ID out of the environment instead.
 schema_version: 1
 workload_profile: olmo-core-check
 suggested_compute: gpu-1xt4
-command: >-
-  bash -lc 'python .edullm/time_attention.py "$EDULLM_RUN_ID"'
+command: python .edullm/time_attention.py

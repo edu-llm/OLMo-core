@@ -1,0 +1,29 @@
+# The probe: a small OLMo-core model trained on one card until the loss curve falls,
+# reported in bits per byte as well as in nats.
+#
+# Pass this with `edullm check --spec .edullm/train.yaml`. The default spec beside it is
+# the attention timing, which reads no corpus; this one does, and names the corpus at
+# submit time rather than here, because the corpus is what a run costs rather than what
+# the code is.
+#
+# gpu-1xa10g rather than gpu-1xt4. The recipe's default parameter dtype is bfloat16, the
+# T4 is Turing and has no bfloat16 arithmetic at all, and the image refuses the pair in
+# its first seconds. Ampere is the cheapest silicon here that has it.
+#
+# NO WORD IN THE COMMAND CONTAINS A SPACE, and that is a constraint rather than a style.
+# edullm submit splits the command into words, rejoins them with a plain space, and the
+# compile job splits the result again, so anything quoted is lost between the two passes.
+#
+# --bytes-per-token is measured rather than assumed: 3.314853 UTF-8 bytes per token over
+# twenty million tokens sampled in ten windows spread across both shards of
+# pretrain/math-frontload-100m v1, decoded with the dolma2-bpe tokenizer that corpus's
+# own manifest declares as its tokenizer dependency. The running mean over those ten
+# windows stayed inside 3.313 to 3.355. It belongs on the command line rather than in the
+# code because it is a property of one corpus under one tokenizer.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-1xa10g
+command: >-
+  python .edullm/train_on_corpus.py --steps 200 --save-interval 100
+  --global-batch-size 131072 --rank-microbatch-size 16384
+  --bytes-per-token 3.314853

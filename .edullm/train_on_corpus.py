@@ -68,6 +68,7 @@ import copy
 import enum
 import json
 import logging
+import math
 import os
 import re
 import sys
@@ -889,15 +890,34 @@ class LossWatcher(Callback):
     than in ``pre_train``, because callbacks of equal priority run in reverse registration
     order and this one is registered last, so ``pre_train`` here happens before W&B has a run
     to name.
+
+    It also prints the curve as it goes, one line per flush, on stdout rather than through
+    the logger. A run whose only record of its loss is a W&B project is a run nobody can
+    read after the fact from the log stream the platform keeps, and W&B is the single
+    largest named cause of failure on this platform.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, bytes_per_token: float = 0.0) -> None:
         self.first: Optional[float] = None
         self.last: Optional[float] = None
         self.wandb_url = ""
+        self.bytes_per_token = bytes_per_token
+        self.curve: List[Tuple[int, float]] = []
+
+    def bits_per_byte(self, ce_nats: float) -> Optional[float]:
+        """Cross-entropy in nats per token, restated in bits per byte of the source text.
+
+        Nats to bits is a division by ln 2, and tokens to bytes is a division by how many
+        UTF-8 bytes a token of this corpus under this tokenizer stands for. Without that
+        second figure there is no bits-per-byte number to print, only bits per token, and
+        the two differ by a factor of three on this corpus -- so this returns nothing
+        rather than quietly reporting the one when asked for the other.
+        """
+        if self.bytes_per_token <= 0:
+            return None
+        return ce_nats / math.log(2) / self.bytes_per_token
 
     def log_metrics(self, step: int, metrics: Dict[str, float]) -> None:
-        del step
         if not self.wandb_url:
             with contextlib.suppress(Exception):
                 import wandb
@@ -906,9 +926,20 @@ class LossWatcher(Callback):
         loss = metrics.get("train/CE loss")
         if loss is None:
             return
+        loss = float(loss)
         if self.first is None:
-            self.first = float(loss)
-        self.last = float(loss)
+            self.first = loss
+        self.last = loss
+        self.curve.append((step, loss))
+        if get_rank() != 0:
+            return
+        bpb = self.bits_per_byte(loss)
+        bpb_text = f"{bpb:>8.4f}" if bpb is not None else "       -"
+        print(
+            f"curve  step {step:>6}  CE nats/token {loss:>8.4f}"
+            f"  bits/token {loss / math.log(2):>8.4f}  bits/byte {bpb_text}",
+            flush=True,
+        )
 
 
 def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> None:
@@ -938,6 +969,14 @@ def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> 
                 "steps": trainer.global_step,
                 "first_loss": losses.first,
                 "last_loss": losses.last,
+                "bytes_per_token": losses.bytes_per_token or None,
+                "first_bits_per_byte": (
+                    losses.bits_per_byte(losses.first) if losses.first is not None else None
+                ),
+                "last_bits_per_byte": (
+                    losses.bits_per_byte(losses.last) if losses.last is not None else None
+                ),
+                "loss_curve": [[step, loss] for step, loss in losses.curve],
                 "seconds": seconds,
                 "peak_memory_gib": peak,
                 "checkpoint_uri": opts.save_folder,
@@ -976,7 +1015,7 @@ def train(config, opts=None) -> None:
     trainer = config.trainer.build(train_module, data_loader)
 
     cast(ConfigSaverCallback, trainer.callbacks["config_saver"]).config = config.as_config_dict()
-    losses = LossWatcher()
+    losses = LossWatcher(bytes_per_token=getattr(opts, "bytes_per_token", 0.0) if opts else 0.0)
     trainer.add_callback("edullm_losses", losses)
 
     # Before the load rather than after it, so that the state of the save folder the loader
@@ -1029,6 +1068,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--global-batch-size", type=int, default=256 * 1024)
     parser.add_argument("--rank-microbatch-size", type=int, default=16 * 1024)
     parser.add_argument("--data-seed", type=int, default=0)
+    parser.add_argument(
+        "--bytes-per-token",
+        type=float,
+        default=0.0,
+        help="How many UTF-8 bytes of source text one token of this corpus stands for, "
+        "which is what turns the cross-entropy this trainer reports -- nats per token -- "
+        "into bits per byte. There is no default worth having: it is a property of one "
+        "corpus under one tokenizer, it is 3.31 for pretrain/math-frontload-100m under "
+        "dolma2-bpe and would be a different number for the same text under SuperBPE, and "
+        "a wrong one is a wrong bits-per-byte figure rather than a failure. Measure it by "
+        "decoding a sample of the shards with the tokenizer the dataset manifest names. "
+        "Left at zero, the run reports nats and bits per token and no bits per byte.",
+    )
     parser.add_argument(
         "--param-dtype",
         default=DType.bfloat16.value,

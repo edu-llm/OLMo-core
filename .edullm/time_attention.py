@@ -14,6 +14,8 @@ the kernel runs and time.time() around an un-synchronised call measures the laun
 from __future__ import annotations
 
 import argparse
+import os
+
 import torch
 import torch.nn.functional as F
 
@@ -55,7 +57,11 @@ def time_one(*, batch: int, seq: int, heads: int, head_dim: int, steps: int, dev
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("run_name", nargs="?", default="local")
+    # From the environment rather than from argv, because the command a submission carries
+    # cannot hold a word with a space in it: edullm submit rejoins the split command with a
+    # plain space and the compile job splits it again, so `bash -lc '...'` loses its quoting
+    # in transit and is refused. Without a shell there is nothing to expand $EDULLM_RUN_ID.
+    parser.add_argument("run_name", nargs="?", default=os.environ.get("EDULLM_RUN_ID", "local"))
     parser.add_argument("--batch", type=int, default=8)
     parser.add_argument("--heads", type=int, default=12)
     parser.add_argument("--head-dim", type=int, default=64)
