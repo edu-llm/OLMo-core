@@ -174,11 +174,28 @@ def chunked_linear_cross_entropy_loss(
     # grows with the padding fraction.
     mask = labels != ignore_index
 
+    # Mask z for the reducing paths ONLY, because that is what the reference does: it applies
+    # `z_squared * mask` inside the sum/mean branches (`cross_entropy_loss.py:43-46`) and leaves z
+    # untouched under "none". `ce_per_token` needs no equivalent -- F.cross_entropy already emits
+    # exactly 0.0 at ignored positions under reduction="none".
+    if z_per_token is not None:
+        z_per_token = z_per_token * mask
+
     if reduction == "sum":
         ce_loss = ce_per_token.sum()
         z_loss = z_per_token.sum() if z_per_token is not None else None
     elif reduction == "mean":
-        denom = mask.sum().clamp(min=1)
+        # NOT `.clamp(min=1)`, and the difference is a real divergence rather than a nicety.
+        # When EVERY label is ignore_index, `F.cross_entropy(reduction="mean")` divides 0 by 0 and
+        # returns NaN; clamping the denominator to 1 would return 0.0 instead. Both are defensible
+        # in isolation, but only one of them matches the path this function claims equivalence to,
+        # and a silent 0.0 where the reference gives NaN is exactly the kind of divergence that
+        # turns "equivalent" into a false claim -- an all-ignored microbatch would contribute
+        # nothing and look healthy instead of loudly poisoning the loss.
+        #
+        # Found by an independent audit of this file, not by the test suite, which never covered
+        # an all-ignored slice. See agents/lanes/L6-memory-ce/verify/chunked-ce-equivalence.md.
+        denom = mask.sum()
         ce_loss = ce_per_token.sum() / denom
         z_loss = (z_per_token.sum() / denom) if z_per_token is not None else None
     else:
@@ -222,8 +239,15 @@ def _chunk_loss(
         return ce, ce.new_zeros(())
 
     assert z is not None
-    # `cross_entropy_loss` with reduction="none" leaves z per-token but does NOT mask it
-    # (functional/cross_entropy_loss.py:41-48 only masks for sum/mean). Mask here so the
-    # caller's reduction over ignored positions matches the unchunked path.
-    z = z * (labels != ignore_index)
+    # z is returned UNMASKED, which is deliberate and is a correction.
+    #
+    # This line used to mask z by `labels != ignore_index` here. That silently diverged from the
+    # reference on the `reduction="none"` path: `cross_entropy_loss` masks z only for sum/mean
+    # (`functional/cross_entropy_loss.py:41-48`) and returns it UNMASKED under "none". Masking
+    # here made per-token z differ from the unchunked path at exactly the ignored positions --
+    # which is the eval path's reduction, so the divergence would have surfaced as a wrong
+    # per-token z on held-out scoring rather than as an error.
+    #
+    # The mask now lives in the caller, applied only for sum/mean, which reproduces both paths.
+    # Found by an independent audit, not by the test suite -- it had no "none"+z-loss case.
     return ce, z
