@@ -33,12 +33,52 @@ from olmo_core.train.callbacks import MetricAssertionCallback, MetricAssertionEr
 # The bare metric names the callback's band checks look for. Kept beside the callback rather than
 # inside it because a band is only meaningful with its ceiling, and the ceilings are fields; this
 # list is asserted below to be a subset of `_block_metric_names`, so it cannot silently grow stale.
+# EVERY per-block metric the RATIFIED CONTRACT registers, transcribed from
+# `maple/agents/contracts/telemetry-schema.md` and its ratified amendments.
+#
+# THIS LIST EXISTS BECAUSE THE CONTRACT'S REGISTRY LIVES IN PROSE AND CODE CANNOT READ PROSE.
+# `effective_capacity_factor` was registered in `telemetry-schema.md` -- explicitly, as "required
+# for X3", with the measured 1.2188-vs-1.2031 justification -- and computed correctly in
+# `parallel_mlp.py`, and published by nothing. Three lanes each did their part and the metric did
+# not exist in any run. The registry test could not catch it because the test only knew the names
+# the assertion callback happened to reference, and nothing referenced this one.
+#
+# So: a name registered in the contract must appear here, and this list is checked against what the
+# code actually emits. That converts "registered in a document somebody has to remember to read"
+# into a failing test. It is the closest a code-level check can get to enforcing a prose registry,
+# and it is the answer to whether "computed but not published" is closeable: **it is, but only for
+# names the test is told to expect** -- so the telling has to be mechanical.
+CONTRACT_REGISTERED_BLOCK_METRICS = (
+    # telemetry-schema.md, ratified registry
+    "expert_load_cv",
+    "entropy_deficit",
+    "dead_expert_frac",
+    "drop_frac",
+    "effective_capacity_factor",
+    # amendment 1
+    "expert_load_cv_excess",
+    "gate_mass_mean",
+    "assignments_per_expert_mean",
+    # amendment 3
+    "dead_expert_frac_global",
+    "dead_expert_counts_not_reduced",
+    # amendment 4 (the B3 histograms travel per-bucket; see the dedicated test)
+    "drop_histograms_unavailable",
+)
+
+# Registered per-block series that travel as one scalar per bucket rather than under their bare
+# name, because `record_metric` takes a scalar. Checked by `test_b3_histograms_are_emitted_per_bucket`
+# rather than by bare-name lookup -- listed here so the two tests cannot silently disagree about
+# which names are exempt.
+CONTRACT_REGISTERED_BUCKETED_SERIES = ("drop_by_position", "drop_by_doc_index")
+
 ASSERTED_BAND_METRICS = (
     "dead_expert_frac_global",
     "gate_mass_mean",
     "drop_frac",
     "drop_frac_upper_bound",
     "entropy_deficit",
+    "capacity_factor_deficit",
 )
 
 
@@ -67,6 +107,10 @@ def _emitted_metric_names(
     # counts (via the accumulator L3 feeds) and the capacity the upper bound needs.
     router.expert_capacity = 8
     router.accumulate_drop_accounting(torch.tensor(3.0), torch.tensor(256.0))
+    # The capacity pair, as `MoE.forward` hands it over. 2.0 configured and 2.0 realized is the
+    # funded path, where quantization vanishes exactly.
+    router.effective_capacity_factor = 2.0
+    router.configured_capacity_factor = 2.0
     # And the B3 histograms. Deliberately different lengths, because they really are:
     # `drop_by_doc_index` is capped at one bucket per document, so at a small micro-batch it is
     # shorter than `drop_by_position`. A test that used equal lengths would not catch a helper that
@@ -98,6 +142,40 @@ def test_every_asserted_metric_is_actually_emitted():
         f"guard's own list, so if it is wrong every band it protects is unprotected. "
         f"Emitted: {sorted(emitted)}"
     )
+
+
+def test_every_contract_registered_metric_is_emitted():
+    """
+    Every per-block metric the ratified contract registers must exist in what the code emits.
+
+    THIS IS THE TEST THAT WOULD HAVE CAUGHT `effective_capacity_factor`. It was registered in
+    `telemetry-schema.md` as "required for X3", computed correctly in `parallel_mlp.py`, and
+    published by nothing -- the third instance of the same seam after `drop_frac` and the B3
+    histograms. The earlier registry test could not see it, because that test only knew names the
+    assertion callback referenced, and no band referenced this one.
+
+    The distinction from `test_every_asserted_metric_is_actually_emitted` is the point: that test
+    protects metrics a GATE reads. This one protects metrics the CONTRACT promises, which is a
+    strictly larger set -- a metric can be required for an experiment (X3) without any band gating
+    it.
+    """
+    emitted = _emitted_metric_names()
+    missing = sorted(m for m in CONTRACT_REGISTERED_BLOCK_METRICS if m not in emitted)
+    assert not missing, (
+        f"{missing} are registered in telemetry-schema.md (or a ratified amendment) but are NOT "
+        f"emitted by MoERouter.compute_metrics. A metric is registered when something in the "
+        f"integrated tree PUBLISHES it, not when a lane computes it (D-022). If one of these is "
+        f"deliberately retired, remove it from CONTRACT_REGISTERED_BLOCK_METRICS and from the "
+        f"contract in the same change. Emitted: {sorted(emitted)}"
+    )
+
+    # The bucketed series are exempt from bare-name lookup, but must not be silently forgotten:
+    # they are covered by the per-bucket test, and this asserts the exemption list stays honest.
+    for series in CONTRACT_REGISTERED_BUCKETED_SERIES:
+        assert any(k.startswith(f"{series}_b") for k in emitted), (
+            f"'{series}' is registered and is exempt from bare-name lookup because it travels "
+            f"per-bucket -- but no '{series}_b<NN>' keys are emitted either, so it is simply absent."
+        )
 
 
 def test_asserted_metrics_are_registered_for_aggregation():
@@ -228,6 +306,69 @@ def test_not_reduced_signals_are_NOT_gated_by_the_unavailable_convention():
             "train/block 00/lbl_not_reduced": 1.0,
         },
     )
+
+
+def test_capacity_factor_assertion_is_ge_and_not_equality():
+    """
+    `effective >= configured` must pass; only a genuine shortfall may fail.
+
+    `ensure_multiple_of` rounds capacity UP, so the realized factor legitimately EXCEEDS the
+    configured one -- L3 measured a requested 1.2 realizing as 1.2188 at E=256/8192 and 1.2031 at
+    16384. An `== configured` gate would fire on that healthy run. On the funded factor 2.0 the
+    quantization vanishes exactly, which is why equality *looks* safe right up until a rung or batch
+    size changes: D-019's failure mode hiding inside this metric.
+    """
+    base = {
+        "train/CE loss": 4.4,
+        "train/block 00/dead_expert_frac_global": 0.0,
+        "train/block 00/gate_mass_mean": 1.0,
+        "train/block 00/drop_frac": 0.0,
+        "train/block 00/drop_histograms_unavailable": 0.0,
+    }
+
+    def check(deficit):
+        cb = MetricAssertionCallback(vocab_size=100352)
+        cb._checked_step0 = True
+        metrics = dict(base)
+        metrics["train/block 00/capacity_factor_deficit"] = deficit
+        try:
+            cb.pre_log_metrics(60, metrics)
+            return None
+        except MetricAssertionError as err:
+            return str(err)
+
+    # Funded path: realized == configured, deficit exactly 0. Must pass.
+    assert check(0.0) is None, "the funded path (deficit 0.0) must not raise"
+
+    # Realized ABOVE configured -- the rounding case. The deficit metric clamps at 0, so this is
+    # the same 0.0 input; asserted explicitly because it is the case an equality gate would fail.
+    assert check(0.0) is None
+
+    # A real shortfall: the dispatch allocated less than requested. Rounding up cannot do this.
+    err = check(0.05)
+    assert err is not None, (
+        "a positive capacity deficit must raise -- rounding UP cannot produce one, so it means the "
+        "capacity path is not doing what the config says"
+    )
+    assert "capacity_factor_deficit" in err
+    assert "effective >= configured" in err, (
+        "the failure message must state the correct assertion form, or whoever reads it at 3am "
+        "will 'fix' it into an equality"
+    )
+
+
+def test_capacity_factor_pair_is_emitted_together():
+    """Both sides of the inequality must be published, or a gate cannot evaluate it."""
+    emitted = _emitted_metric_names()
+    for name in (
+        "effective_capacity_factor",
+        "configured_capacity_factor",
+        "capacity_factor_deficit",
+    ):
+        assert name in emitted, (
+            f"'{name}' is missing. The assertion is `effective >= configured`; publishing only one "
+            f"side leaves a reader comparing against a config value they hope was in force."
+        )
 
 
 def test_glob_matching_is_anchored_and_does_not_leak():

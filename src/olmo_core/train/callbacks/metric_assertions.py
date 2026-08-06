@@ -201,6 +201,27 @@ class MetricAssertionCallback(Callback):
     does.
     """
 
+    capacity_factor_deficit_max: Optional[float] = 0.0
+    """
+    Ceiling on ``capacity_factor_deficit`` = ``max(0, configured - effective)``.
+
+    **This encodes ``effective >= configured``, and it is deliberately NOT an equality.**
+    ``ensure_multiple_of`` rounds capacity **up**, so the realized factor is expected to exceed the
+    configured one whenever quantization moves it -- L3 measured a requested 1.2 realizing as 1.2188
+    at E=256 with an 8192-token local microbatch, and 1.2031 at 16384. An ``== configured`` gate
+    would therefore gate on the number somebody *intended* rather than the one the dispatch
+    *allocated*.
+
+    On the funded path (factor 2.0) the quantization vanishes at every rung in this ladder, so the
+    deficit is exactly 0.0 -- **which is exactly why an equality gate would look safe right up until
+    a rung or batch size changed, and then fire on a healthy run.** That is D-019's failure mode
+    hiding inside this very metric, so the direction matters more than the tightness here.
+
+    A ceiling of 0.0 on the deficit is tight *and* correct: rounding up cannot produce a positive
+    deficit, so anything above zero means the dispatch allocated **less** capacity than the config
+    asked for, which is a real defect rather than a tolerance question.
+    """
+
     assert_instrumented: bool = True
     """
     Fail if a metric that reports its own unavailability says it is unavailable.
@@ -358,6 +379,11 @@ class MetricAssertionCallback(Callback):
         "drop_histograms_unavailable",
         "drop_by_position_num_buckets",
         "drop_by_doc_index_num_buckets",
+        # The capacity pair and its derived violation. All three, because a reader debugging a
+        # deficit needs both sides, not just the verdict.
+        "effective_capacity_factor",
+        "configured_capacity_factor",
+        "capacity_factor_deficit",
     )
     _failures: List[str] = field(default_factory=list, repr=False)
     _checked_step0: bool = field(default=False, repr=False)
@@ -709,6 +735,16 @@ class MetricAssertionCallback(Callback):
                 "drop_frac_upper_bound",
                 self.drop_frac_max,
                 "as drop_frac, but this is the accumulated-histogram upper bound",
+            ),
+            (
+                "capacity_factor_deficit",
+                self.capacity_factor_deficit_max,
+                "the dispatch allocated LESS capacity than the config requested. "
+                "`ensure_multiple_of` rounds UP, so a positive deficit cannot come from "
+                "quantization -- the capacity path is not doing what the config says. Read "
+                "`effective_capacity_factor` against `configured_capacity_factor` to see by how "
+                "much, and note the assertion is `effective >= configured`, never equality: the "
+                "realized factor legitimately exceeds the requested one",
             ),
         ]
         # NOT IN THAT LIST, ON PURPOSE: `drop_by_position` and `drop_by_doc_index`.

@@ -210,6 +210,17 @@ class MoERouter(nn.Module):
         # Left None by the dropless path, where no token is ever dropped and the metric would be
         # a constant zero pretending to be a measurement.
         self.expert_capacity: Optional[int] = None
+        # The capacity factor the dispatch ACTUALLY allocated, and the one it was asked for, both
+        # set by the capacity-based ParallelMLP each step. Plain floats: L3 computes the realized
+        # value from integers the host already holds, so carrying it costs no sync.
+        #
+        # These are a matched pair on purpose. The only safe assertion is `effective >= configured`
+        # -- `ensure_multiple_of` rounds capacity UP, so equality is wrong in general -- and a gate
+        # cannot evaluate that without seeing both sides. Publishing only the realized value would
+        # leave a reader comparing it against a number from a config file they hope was the one in
+        # force.
+        self.effective_capacity_factor: Optional[float] = None
+        self.configured_capacity_factor: Optional[float] = None
         # How many micro-batches are folded into `batch_size_per_expert` right now. The
         # histogram accumulates until `reset_metrics`, while `expert_capacity` is per
         # micro-batch, so the drop rate needs both to be over the same span.
@@ -1085,6 +1096,61 @@ class MoERouter(nn.Module):
                 # mean different things.
                 out[f"{series_name}_num_buckets"] = (
                     torch.full_like(series[0], float(series.numel())),
+                    ReduceType.max,
+                )
+
+        # THE REALIZED CAPACITY FACTOR, AND THE ONE THAT WAS REQUESTED. A matched pair, because the
+        # only safe assertion is `effective >= configured` and a gate cannot evaluate an inequality
+        # it can only see one side of.
+        #
+        # `ensure_multiple_of(..., 8)` rounds capacity UP, so the realized factor is >= the
+        # configured one and the gap depends on BOTH the expert count and the batch size: L3
+        # measured a requested 1.2 realizing as 1.2188 at E=256/8192 and 1.2031 at 16384. An E-sweep
+        # holding the nominal factor fixed therefore varies the effective one across rungs, which
+        # confounds capacity with E on a ladder whose only axis is E.
+        #
+        # On the funded path (factor 2.0) the quantization vanishes at every rung in this project,
+        # so this reads exactly 2.0000 -- which is what makes it a flat-line tripwire and also
+        # exactly why an equality gate would look safe until a rung or batch size changed and then
+        # fire on a healthy run. That is D-019's failure mode hiding inside this very metric, so the
+        # assertion is `>=` and the source says so in both places.
+        #
+        # `ep_world_size` is already excluded by L3's method: `expert_capacity` returns a global
+        # figure while the ideal load is per-local-expert, so a naive ratio would report
+        # ep_world_size x the truth -- a healthy 2.0 reading 16.0 under 8-way EP. Nothing here
+        # re-derives the ratio; it carries L3's number, which is the point of a bridge.
+        if self.effective_capacity_factor is not None:
+            device = self.batch_size_per_expert.device
+            out["effective_capacity_factor"] = (
+                torch.tensor(self.effective_capacity_factor, dtype=torch.float, device=device),
+                ReduceType.max,
+            )
+            if self.configured_capacity_factor is not None:
+                out["configured_capacity_factor"] = (
+                    torch.tensor(self.configured_capacity_factor, dtype=torch.float, device=device),
+                    ReduceType.max,
+                )
+                # The violation as a NON-NEGATIVE quantity, so the assertion is one metric rather
+                # than a comparison a reader reconstructs -- and so that `max` carries alarm
+                # UPWARD, like every other signal in this method.
+                #
+                # The sign convention is load-bearing and the obvious spelling is wrong. Reporting
+                # `effective - configured` puts the alarm at NEGATIVE values, and
+                # `compute_auxiliary_metrics` folds `max` across blocks with `torch.max`, so one
+                # block at -0.5 beside eleven at 0.0 folds to 0.0 -- the bare key would report
+                # healthy while a block was violating. That is the same class of defect as the
+                # entropy that summed to 15.97: a fold that silently discards the finding.
+                #
+                # `clamp_min(0)` of `configured - effective` instead: 0.0 is healthy (and is the
+                # exact value on the funded path), positive is the violation, and the fold reports
+                # the WORST block. Rounding up cannot produce a positive value here, so anything
+                # above zero means the dispatch allocated less capacity than the config asked for.
+                out["capacity_factor_deficit"] = (
+                    torch.tensor(
+                        max(0.0, self.configured_capacity_factor - self.effective_capacity_factor),
+                        dtype=torch.float,
+                        device=device,
+                    ),
                     ReduceType.max,
                 )
 

@@ -320,6 +320,32 @@ class MoEBase(nn.Module):
             local_batch_size = expert_weights.numel() // self.top_k
             self.router.expert_capacity = expert_capacity(local_batch_size)
 
+            # AND THE REALIZED CAPACITY FACTOR, across the same bridge, for the same reason.
+            # `expert_capacity` above was carried; `effective_capacity_factor` was not, so L3
+            # computed it correctly on every step and nothing published it -- the third instance of
+            # this seam after `drop_frac` and the B3 histograms. Wired at the same call site because
+            # it takes the same `local_batch_size`, which is the argument that makes the two
+            # quantities describe the same dispatch.
+            #
+            # It is a flat-line tripwire: on the funded path it reads exactly 2.0000 at every rung,
+            # so any deviation means the capacity path is not doing what the config says. Cheaper
+            # than any histogram, and it removes the hand-derivation from
+            # `assignments_per_expert_mean` that G2 had to fall back on.
+            #
+            # A PLAIN PYTHON FLOAT, host-side, and it stays one: L3's method is arithmetic on ints
+            # already known to the host, so nothing here reads a device tensor and no sync is added
+            # to the step. It is only turned into a tensor at emission time.
+            effective_capacity_factor = getattr(self.experts, "effective_capacity_factor", None)
+            if callable(effective_capacity_factor):
+                self.router.effective_capacity_factor = effective_capacity_factor(local_batch_size)
+                # The CONFIGURED factor alongside it, because the assertion is
+                # `effective >= configured` and a gate that cannot see the right-hand side cannot
+                # evaluate it. Reading it here rather than having the router guess keeps the pair
+                # sourced from the same object that allocated the capacity.
+                self.router.configured_capacity_factor = getattr(
+                    self.experts, "capacity_factor", None
+                )
+
         out = self.experts(x, expert_weights, expert_indices, batch_size_per_expert)
 
         # Hand the EXACT drop counts back to the router so they reach the metrics.
