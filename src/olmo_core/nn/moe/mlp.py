@@ -28,6 +28,11 @@ __all__ = ["MoEMLP", "DroplessMoEMLP"]
 
 log = logging.getLogger(__name__)
 
+#: Expert count at or above which a missing ``grouped_gemm`` is an error rather than a warning.
+#: See the reasoning in :class:`DroplessMoEMLP`; below this, the per-expert host-sync fallback is
+#: slow but usable, and upstream unit tests depend on it.
+_GMM_FALLBACK_MAX_EXPERTS = 64
+
 
 class MoEMLPBase(nn.Module):
     def __init__(
@@ -239,6 +244,39 @@ class DroplessMoEMLP(MoEMLPBase):
 
         self._gmm = gmm
         if self._gmm is None:
+            # A WARNING IS NOT ENOUGH HERE ABOVE A CERTAIN EXPERT COUNT, AND THE NUMBERS ARE WHY.
+            #
+            # Without `grouped_gemm`, `gmm` below falls back to a Python loop over
+            # `batch_sizes.cpu().numpy()` -- one device-to-host sync per expert, per matmul, per
+            # layer, per step. There are three `gmm` calls per forward, so at num_experts=256 over
+            # 12 layers that is on the order of 10^4 host syncs in a single step. The job does not
+            # fail; it trains, logs every step, and reports a throughput nobody can explain. That
+            # is the most expensive shape of failure available on a 12-hour wall clock, and this
+            # project has already paid for the version of it that only warned.
+            #
+            # `grouped_gemm` is also NOT a 2-line dependency in the platform image: the image
+            # carries no nvcc, no CUDA headers and no git, and the CUTLASS headers this package
+            # needs arrive only as a git submodule. See
+            # `maple/agents/lanes/L3-dispatch-capacity/evidence/B4-grouped-gemm-buildability.md`.
+            # So the fallback is the *likely* state of an unprepared image rather than an edge case,
+            # which is exactly why it must be loud.
+            #
+            # The threshold is a judgement call, not a measurement: at a handful of experts the
+            # sync count is small enough that the fallback is a legitimate way to run a test on a
+            # machine without the dependency, and several upstream unit tests rely on precisely
+            # that. 64 keeps those working while refusing every configuration in this project's
+            # ladder (R1-R3 are 64/128/256).
+            if num_experts >= _GMM_FALLBACK_MAX_EXPERTS:
+                raise OLMoConfigurationError(
+                    f"Dropless MoE was selected with num_experts={num_experts}, but the "
+                    "'grouped_gemm' package is not available. The fallback path issues one "
+                    "host synchronization per expert per matmul per layer, which is not a viable "
+                    "training configuration at this expert count -- it would train silently and "
+                    "slowly rather than fail. Either install 'grouped_gemm' "
+                    "(https://github.com/tgale96/grouped_gemm) or use capacity-based dispatch "
+                    f"(MoEType.default). To run anyway for testing, use fewer than "
+                    f"{_GMM_FALLBACK_MAX_EXPERTS} experts."
+                )
             warnings.warn(
                 "Grouped GEMM not available, so the MoE will be substantially slower. "
                 "Please install the 'grouped_gemm' package if possible.\n"

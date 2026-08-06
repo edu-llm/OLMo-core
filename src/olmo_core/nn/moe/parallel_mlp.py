@@ -14,6 +14,7 @@ from olmo_core.ops import moe as ops
 from olmo_core.utils import ensure_multiple_of, get_default_device, move_to_device
 
 from ..buffer_cache import BufferCache
+from .drop_accounting import DropAccounting, compute_drop_accounting
 from .mlp import DroplessMoEMLP, MoEMLP, MoEMLPBase
 
 __all__ = ["ParallelMLPBase", "ParallelMLP", "ParallelDroplessMLP"]
@@ -361,6 +362,18 @@ class ParallelMLP(ParallelMLPBase):
         self.capacity_factor = capacity_factor
         self.tp_degree: int = 1
         self.max_local_microbatch_size = max_local_microbatch_size
+
+        # B3 -- DROP ACCOUNTING. Set `drop_accounting_seq_len` to the training sequence length to
+        # enable the per-position and per-document histograms; the scalar `drop_frac` needs no
+        # sequence length and is always computed. Left None by default so nothing changes for a
+        # caller that has not opted in, and so the histograms are reported as unavailable rather
+        # than binned on a guessed axis -- see `drop_accounting.py` on why the axis matters.
+        self.drop_accounting_seq_len: Optional[int] = None
+        #: Populated each forward with the most recent :class:`DropAccounting`. L5 reads this and
+        #: owns the emission; this lane owns the computation. See
+        #: `agents/contracts/file-ownership.md`.
+        self.last_drop_accounting: Optional[DropAccounting] = None
+
         if self.max_local_microbatch_size is not None:
             self.warmup_cache(self.max_local_microbatch_size)
 
@@ -474,6 +487,13 @@ class ParallelMLP(ParallelMLPBase):
         batch_size = expert_weights.numel() // self.top_k
         expert_capacity = self.expert_capacity(batch_size)
 
+        # B3 -- account for the drop with the SAME indices/bins/capacity that reach
+        # `binned_gather` below. Computed here rather than in the router because position is
+        # unrecoverable once assignments are summed into a per-expert histogram, and because the
+        # router's own drop metric is an accumulated upper bound by its own admission. Under
+        # no_grad and free of host syncs, so it is safe every step.
+        self._record_drop_accounting(indices=indices, bins=bins, expert_capacity=expert_capacity)
+
         x = self.permute_and_compute(
             x,
             indices=indices,
@@ -483,6 +503,18 @@ class ParallelMLP(ParallelMLPBase):
             top_k=self.top_k,
         )
         return x
+
+    @torch.no_grad()
+    def _record_drop_accounting(
+        self, *, indices: torch.Tensor, bins: torch.Tensor, expert_capacity: int
+    ) -> None:
+        self.last_drop_accounting = compute_drop_accounting(
+            indices=indices,
+            bins=bins,
+            expert_capacity=expert_capacity,
+            top_k=self.top_k,
+            seq_len=self.drop_accounting_seq_len,
+        )
 
     def permute_and_all_to_all(
         self,
