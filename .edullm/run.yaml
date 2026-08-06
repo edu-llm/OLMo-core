@@ -1,0 +1,13 @@
+# Written by edullm check, from config/workload-catalog.yaml in /Users/philote/.local/share/uv/tools/edullm-platform/lib/python3.13/site-packages/edullm_platform/_config.
+# Everything here is a property of the code and travels with it in git.
+# What a run costs -- the machine, the corpus, the experiment -- is supplied at
+# submit time, because one commit run by two people belongs to two teams.
+#
+# Workload profiles registered for OLMo-core: olmo-core-check, olmo-core-train.
+# edullm check prices this and lists every refusal, without dispatching anything.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-1xt4
+command: >-
+  bash -lc 'python .edullm/train_on_corpus.py "$EDULLM_RUN_ID" --save-folder
+  "$EDULLM_CHECKPOINT_DIR"'
