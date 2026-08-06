@@ -1473,10 +1473,23 @@ class TransformerConfig(ModelConfig):
                     f"bias_gamma must be unset (Maple has no expert bias); got "
                     f"{moe.router.bias_gamma!r}"
                 )
+            # Two separate checks, because they catch two different mistakes. `None` is the
+            # silent-default bug: `as_dict(exclude_none=True)` drops the key, so `MoE.__init__`'s
+            # own `capacity_factor: float = 1.2` wins and "unset" silently means 1.2 -- the
+            # known-wrong value at R3. The value check then pins the funded choice (D-009), so an
+            # explicit 1.2 is rejected too rather than coinciding with the default and passing.
             if moe.capacity_factor is None:
                 problems.append(
                     "capacity_factor must be set explicitly; `None` is dropped by "
                     "`exclude_none` and silently becomes 1.2"
+                )
+            elif moe.capacity_factor != 2.0:
+                problems.append(
+                    f"capacity_factor must be 2.0 (D-009: the funded path is MoEType.default at "
+                    f"2.0, dropless descoped because grouped_gemm does not build in the image); "
+                    f"got {moe.capacity_factor}. At cf=2.0 the `ensure_multiple_of(..., 8)` "
+                    f"quantization vanishes and effective capacity is exactly 2.0000 at every "
+                    f"rung, which is what keeps the E-sweep unconfounded."
                 )
             if moe.z_loss_weight is None:
                 problems.append("z_loss_weight must be set explicitly")
