@@ -90,6 +90,14 @@ class MoEMLPBase(nn.Module):
 
         :param tp_mesh: A 1D device mesh to shard experts over.
         """
+        # NOTE (ternary QAT): unlike `FeedForward.apply_tp` and `Attention.apply_tp`, this needs
+        # no `assert_no_tensor_parallel` guard -- but only because it delegates to
+        # `_shard_experts`, which shards flat axis 0 (the EXPERT axis), never a feature axis. So
+        # TWN's per-output-row reduction still sees whole rows. That is load-bearing: if a
+        # feature-axis placement is ever added below, each rank would derive alpha from a
+        # fraction of each row and the quantizer would change silently, with no guard to catch
+        # it. Same caveat for `hidden_sharding_degree`, which is hardcoded to 1 -- raising it
+        # would shard the hidden axis, which IS the reduction axis for w1/w3.
         del float8_enabled  # TODO
         if tp_mesh.ndim != 1:
             raise RuntimeError("tensor parallel mesh must be 1 dimensional")
@@ -222,12 +230,19 @@ class MoEMLP(MoEMLPBase):
             get_local_tensor(self.w3.view(self.num_experts, self.d_model, self.hidden_size)),
         )
 
-        # Ternary QAT, if enabled. `in_dim=1` for all three: these are `bmm(x, w)` operands, so
-        # the *middle* axis is input features and the last axis indexes output rows. It is the
-        # same value for all three only by coincidence of orientation -- w1/w3 are
-        # (d_model, hidden) and w2 is (hidden, d_model). Applied after `get_local_tensor` so
-        # that under expert parallelism each rank quantizes whole experts (the shard is on the
-        # expert axis, so every output row is complete on the rank that owns it).
+        # Ternary QAT, if enabled. `in_dim=1` for all three because `torch.bmm(x, w)` contracts
+        # `w`'s axis -2 UNCONDITIONALLY -- it is forced by the operator, not by the fact that
+        # w1/w3 are (d_model, hidden) while w2 is (hidden, d_model). So this is NOT fragile to
+        # that transposition; it is fragile to a change of operator (bmm -> einsum, baddbmm with
+        # a transposed operand, gmm), which would move the contracted axis.
+        #
+        # Applied after `get_local_tensor` so that under expert parallelism each rank quantizes
+        # whole experts. That is safe because `_shard_experts` uses `Shard(0)` on the FLATTENED
+        # (E*a, b) parameter and enforces `num_experts % num_shards == 0` -- the reduction axis
+        # is interleaved inside flat axis 0, so a cut at a non-expert boundary would split rows.
+        # The divisibility guard is what makes post-shard quantization equivalent to pre-shard,
+        # not the shard axis alone. Verified under real DTensor, FSDP2, and stacked EP+FSDP2 in
+        # `maple/agents/lanes/L4-ternary/verify/in-dim-orientation.md`.
         w1 = self.maybe_quantize(w1, in_dim=1)
         w2 = self.maybe_quantize(w2, in_dim=1)
         w3 = self.maybe_quantize(w3, in_dim=1)

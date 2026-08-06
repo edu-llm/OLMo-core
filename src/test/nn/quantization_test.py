@@ -484,11 +484,7 @@ def test_attention_qk_norm_stays_full_precision():
     assert att.k_norm is not None and not isinstance(att.k_norm, QuantLinear)
 
 
-def test_moe_mlp_quant_toggle_and_row_orientation():
-    """
-    ``MoEMLP`` reduces over axis 1 for all three weights, and each *output row* of each expert
-    must land on a single alpha. Check the realized ternary structure, not just that a flag is set.
-    """
+def test_moe_mlp_quant_toggle():
     torch.manual_seed(0)
     common = dict(d_model=64, hidden_size=32, num_experts=4)
     mlp_off = MoEMLP(**common, quant=QuantConfig(enabled=False))  # type: ignore[arg-type]
@@ -498,13 +494,158 @@ def test_moe_mlp_quant_toggle_and_row_orientation():
     x = torch.randn(4, 16, 64)
     assert not torch.allclose(mlp_off(x), mlp_on(x))
 
-    # w1 is (E, d_model, hidden); in_dim=1 means each *column* (output feature) shares an alpha.
-    w1 = mlp_on.w1.view(4, 64, 32)
-    q = twn_quantize(w1, in_dim=1)
-    for e in range(4):
-        for h in range(32):
-            vals = torch.unique(q[e, :, h])
-            assert vals.numel() <= 3
+
+def _alpha_group_id(w: torch.Tensor, in_dim: int) -> torch.Tensor:
+    """
+    Label each weight element with the id of the alpha group it belongs to under ``in_dim``.
+
+    Two elements share an id iff :func:`twn_quantize` would give them the same ``alpha``. Built
+    by broadcasting a unique id over the reduced axis, so it is derived from ``in_dim`` alone and
+    carries no assumption about which axis is correct.
+    """
+    shape = list(w.shape)
+    shape[in_dim] = 1
+    ids = torch.arange(int(torch.tensor(shape).prod()), dtype=torch.long).reshape(shape)
+    return ids.expand_as(w)
+
+
+def _autograd_support(matmul, w: torch.Tensor, out_index: tuple) -> torch.Tensor:
+    """
+    Which weight elements feed a single output element, determined by **autograd**.
+
+    ``d y[out_index] / d w`` is nonzero exactly on the weight elements that contribute to that
+    output. This is ground truth about the *realized* matmul and owes nothing to any comment,
+    variable name or claimed axis -- which is the whole point.
+    """
+    wr = w.detach().clone().requires_grad_(True)
+    matmul(wr)[out_index].backward()
+    assert wr.grad is not None
+    return wr.grad != 0
+
+
+def _assert_in_dim_is_uniquely_correct(matmul, w: torch.Tensor, claimed: int, out_index: tuple):
+    """
+    Assert the claimed ``in_dim`` is the **unique** axis whose alpha grouping equals the set of
+    weight elements feeding one output element -- and that every other axis fails.
+
+    This is the test that has teeth. Asserting "at most 3 distinct values along axis k" after
+    quantizing on axis k is unconditionally true for every k, so it passes under a mutated
+    ``in_dim`` and proves nothing. Comparing the alpha grouping against the autograd support
+    fails under exactly the mutations that matter.
+    """
+    support = _autograd_support(matmul, w, out_index)
+    groups = _alpha_group_id(w, claimed)
+    ids_in_support = torch.unique(groups[support])
+    assert ids_in_support.numel() == 1, (
+        f"in_dim={claimed}: the {int(support.sum())} weights feeding output {out_index} span "
+        f"{ids_in_support.numel()} different alphas -- this is a per-input-row alpha, i.e. a "
+        "different quantizer"
+    )
+    # ...and the group must be exactly the support, with no extra members.
+    assert bool(((groups == ids_in_support[0]) == support).all())
+
+    for other in range(w.ndim):
+        if other == claimed % w.ndim:
+            continue
+        other_groups = _alpha_group_id(w, other)
+        assert torch.unique(other_groups[support]).numel() > 1, (
+            f"in_dim={other} also satisfies one-alpha-per-output-element, so this test cannot "
+            "distinguish the axes -- pick non-square dimensions"
+        )
+
+
+def test_moe_mlp_in_dim_matches_the_realized_bmm():
+    """
+    ``in_dim=1`` for all three ``MoEMLP`` weights must be the axis ``bmm`` actually contracts.
+
+    Note *why* it is 1 for all three, because the reason is not what it looks like:
+    ``torch.bmm(x, w)`` contracts ``w``'s axis ``-2`` **unconditionally**, regardless of whether
+    the weight is ``(E, d_model, hidden)`` or ``(E, hidden, d_model)``. So the shared value is
+    forced by the *operator*, not by a lucky alignment of the two orientations. What this is
+    fragile to is a change of operator (``bmm`` -> ``einsum``, ``baddbmm`` with a transposed
+    operand, ``gmm``), not to the w1-vs-w2 transposition.
+
+    Deliberately ``d_model != hidden`` so squareness cannot make two axes agree.
+    """
+    torch.manual_seed(0)
+    E, d_model, hidden = 3, 6, 10
+    x1 = torch.randn(E, 4, d_model)
+    x2 = torch.randn(E, 4, hidden)
+
+    # w1, w3: (E, d_model, hidden)
+    w13 = torch.randn(E, d_model, hidden)
+    _assert_in_dim_is_uniquely_correct(lambda w: torch.bmm(x1, w), w13, 1, (0, 0, 0))
+    # w2: (E, hidden, d_model)
+    w2 = torch.randn(E, hidden, d_model)
+    _assert_in_dim_is_uniquely_correct(lambda w: torch.bmm(x2, w), w2, 1, (0, 0, 0))
+
+
+def test_dropless_moe_mlp_in_dim_matches_the_realized_gmm():
+    """
+    The ``trans_b`` asymmetry, tested against the matmul rather than against the quantizer.
+
+    All three ``DroplessMoEMLP`` weights have shape ``(E, hidden, d_model)``, but ``gmm`` is
+    called ``trans_b=True`` for w1/w3 and ``False`` for w2, so ``in_dim`` is ``2, 2, 1``. This is
+    the single most likely silent-wrong-model failure in the lane: both orientations are
+    individually well-formed, no shape check fires when ``d_model == hidden``, and the TWN
+    zero-fraction assertion is *insensitive* to the axis (both give ~0.42). So the only thing
+    that can catch it is a comparison against the realized matmul, which is what this does.
+
+    If L3 ever changes a ``trans_b``, this test fails -- which is the intent.
+    """
+    torch.manual_seed(0)
+    E, d_model, hidden = 3, 6, 10
+    w = torch.randn(E, hidden, d_model)
+
+    # trans_b=True: x @ w[i].T, inputs are d_model (axis 2), outputs indexed by hidden.
+    x_d = torch.randn(4, d_model)
+    _assert_in_dim_is_uniquely_correct(lambda ww: x_d @ ww[0].t(), w, 2, (0, 0))
+    # trans_b=False: x @ w[i], inputs are hidden (axis 1), outputs indexed by d_model.
+    x_h = torch.randn(4, hidden)
+    _assert_in_dim_is_uniquely_correct(lambda ww: x_h @ ww[0], w, 1, (0, 0))
+
+
+def test_dropless_gmm_fallback_semantics_are_what_in_dim_assumes():
+    """
+    The w2 row rests entirely on ``gmm(trans_b=False)`` being ``x @ w[i]``. Check the fallback
+    against a hand-written reference instead of trusting the flag name.
+
+    ``grouped_gemm`` is absent from ``pyproject.toml`` and the image, so this Python fallback is
+    the live path.
+    """
+    torch.manual_seed(0)
+    E, d_model, hidden = 2, 6, 10
+    mlp = DroplessMoEMLP(d_model=d_model, hidden_size=hidden, num_experts=E)
+    w = mlp.w1.detach().view(E, hidden, d_model)
+    batch = torch.tensor([4, 4])
+
+    x_d = torch.randn(8, d_model)
+    out_t = mlp.gmm(x_d, w, batch, trans_b=True)
+    assert torch.equal(out_t[:4], x_d[:4] @ w[0].t())
+
+    x_h = torch.randn(8, hidden)
+    out_f = mlp.gmm(x_h, w, batch, trans_b=False)
+    assert torch.equal(out_f[:4], x_h[:4] @ w[0])
+
+    # The two paths are genuinely different, not interchangeable.
+    assert out_t.shape != out_f.shape
+
+
+def test_moe_mlp_view_layout_is_expert_block_major():
+    """
+    ``MoEMLP.forward`` reshapes a flat ``(E*A, B)`` parameter with ``.view(E, A, B)``. The
+    ``in_dim`` orientation assumes that view yields per-expert blocks, i.e. that the flat
+    parameter is block-major in the expert index. Verify element-by-element rather than by
+    inspection -- if this were interleaved instead, every alpha group would straddle experts.
+    """
+    torch.manual_seed(0)
+    E, d_model, hidden = 3, 6, 10
+    mlp = MoEMLP(d_model=d_model, hidden_size=hidden, num_experts=E)
+    flat = mlp.w1.detach()
+    viewed = flat.view(E, d_model, hidden)
+    for e in range(E):
+        for i in range(d_model):
+            assert torch.equal(viewed[e, i], flat[e * d_model + i])
 
 
 def test_moe_mlp_none_is_identity_to_disabled():
@@ -517,26 +658,47 @@ def test_moe_mlp_none_is_identity_to_disabled():
     assert torch.equal(a(x), b(x))
 
 
-def test_dropless_moe_mlp_in_dim_asymmetry():
+def test_in_dim_is_required_for_a_stacked_weight():
     """
-    ``DroplessMoEMLP`` has the same *shape* for all three weights but ``gmm`` is called with
-    ``trans_b=True`` for w1/w3 and not for w2, so ``in_dim`` differs. Verify the module picks
-    the axis that makes alpha per *output* row of the realized matmul.
+    Omitting ``in_dim`` on a >2-D weight must **raise**, not silently reduce over axis -1.
+
+    The ``-1`` default is correct for a 2-D ``nn.Linear`` weight and wrong for four of the six
+    stacked expert weights, and getting it wrong is silent. No live call site omits it -- all
+    three in each ``forward`` pass it explicitly -- but a future caller reaching for the public
+    function would land on the wrong quantizer with no signal.
+    """
+    with pytest.raises(ValueError, match="in_dim must be given explicitly"):
+        twn_quantize(torch.randn(3, 10, 6))
+    with pytest.raises(ValueError, match="in_dim must be given explicitly"):
+        twn_threshold_and_scale(torch.randn(3, 10, 6))
+    # 2-D is fine: -1 is the right answer there, so the convenience is kept where it is correct.
+    twn_quantize(torch.randn(10, 6))
+    # And explicitly passing -1 on a stacked weight is allowed -- the guard is against silence,
+    # not against the value.
+    twn_quantize(torch.randn(3, 10, 6), in_dim=2)
+
+
+def test_wrong_in_dim_changes_the_forward_and_is_otherwise_silent():
+    """
+    Document the failure mode this lane's `in_dim` care exists to prevent, by exhibiting it.
+
+    At ``d_model == hidden`` both axes are shape-legal, the forward runs with no exception, and
+    the TWN zero-fraction -- the module's headline discriminator against BitNet -- is ~0.42 for
+    *both*. So nothing in the rest of the assertion set can catch an axis error; only the
+    autograd-support tests above can.
     """
     torch.manual_seed(0)
-    mlp = DroplessMoEMLP(d_model=64, hidden_size=32, num_experts=2, quant=QuantConfig(enabled=True))
-    w = mlp.w1.detach().view(2, 32, 64)
+    w = torch.randn(3, 8, 8)  # square on purpose: no shape check can fire
+    q1 = twn_quantize(w, in_dim=1)
+    q2 = twn_quantize(w, in_dim=2)
 
-    # w1: x @ w[i].T -- output features index axis 1 (hidden), inputs are axis 2 (d_model).
-    q_right = twn_quantize(w, in_dim=2)
-    for e in range(2):
-        for h in range(32):
-            assert torch.unique(q_right[e, h, :]).numel() <= 3
-
-    # Reducing over the wrong axis gives a per-input-row alpha: also <=3 values, but along the
-    # other direction. Confirm the two differ so the choice is observable, not cosmetic.
-    q_wrong = twn_quantize(w, in_dim=1)
-    assert not torch.allclose(q_right, q_wrong)
+    assert not torch.allclose(q1, q2), "the axis choice must at least be observable"
+    for q in (q1, q2):
+        zf = (q == 0).float().mean().item()
+        assert 0.35 < zf < 0.46, (
+            f"zero fraction {zf:.4f} -- both axes land in the TWN band, which is exactly why "
+            "the zero-fraction assertion cannot police the orientation"
+        )
 
 
 def test_swiglu_clamp_is_asymmetric_and_inert_at_normal_scale():

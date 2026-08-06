@@ -95,8 +95,36 @@ test can assert we are *not* here.
 """
 
 
+def _resolve_in_dim(w: torch.Tensor, in_dim: Optional[int]) -> int:
+    """
+    Resolve an omitted ``in_dim``, or refuse to guess.
+
+    ``-1`` is the correct axis for a 2-D :class:`torch.nn.Linear` weight, so omitting it there is
+    convenient and safe. For a stacked expert weight it is the **wrong** answer four times out of
+    six -- e.g. ``DroplessMoEMLP.w2`` needs ``1`` while its identically-shaped ``w1``/``w3`` need
+    ``2`` -- and the error is silent: both orientations are shape-legal, no exception fires, and
+    the TWN zero-fraction assertion cannot tell them apart (both land near 0.42). So for
+    ``ndim > 2`` the caller has to say which axis it means.
+
+    Passing ``-1`` explicitly on a stacked weight is allowed: the guard is against *silence*, not
+    against the value.
+    """
+    if in_dim is not None:
+        return in_dim
+    if w.ndim > 2:
+        raise ValueError(
+            f"in_dim must be given explicitly for a {w.ndim}-D weight of shape "
+            f"{tuple(w.shape)}. Omitting it defaults to -1, which is right for a 2-D nn.Linear "
+            "weight and WRONG for most stacked expert weights: DroplessMoEMLP.w2 needs "
+            "in_dim=1 while its identically-shaped w1/w3 need in_dim=2. Reducing over the wrong "
+            "axis yields a per-input-row alpha -- a different quantizer that trains without "
+            "error. See the orientation table in twn_quantize's docstring."
+        )
+    return -1
+
+
 def twn_threshold_and_scale(
-    w: torch.Tensor, *, in_dim: int = -1
+    w: torch.Tensor, *, in_dim: Optional[int] = None
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Compute the TWN per-output-row threshold ``delta`` and scale ``alpha``.
@@ -115,12 +143,17 @@ def twn_threshold_and_scale(
     :param w: The latent weight.
     :param in_dim: The single dimension holding *input* features, i.e. the axis reduced over.
         For an :class:`torch.nn.Linear` weight of shape ``(out_features, in_features)`` this
-        is ``-1``. For stacked expert weights it depends on the orientation the forward pass
-        uses -- see :func:`twn_quantize`.
+        is ``-1``, which is the default. For a weight with more than 2 dimensions it is
+        **required**, because the default is right for a 2-D weight and wrong for four of the
+        six stacked expert weights -- see :func:`twn_quantize`.
 
     :returns: ``(delta, alpha)``, both float32 and both keeping ``in_dim`` as a size-1 axis so
         they broadcast against ``w``.
+
+    :raises ValueError: if ``w`` has more than 2 dimensions and ``in_dim`` was left at its
+        default. Omitting it there is silently the wrong quantizer, so it must be stated.
     """
+    in_dim = _resolve_in_dim(w, in_dim)
     w32 = w.detach().to(torch.float32)
     absw = w32.abs()
     delta = TWN_DELTA_FACTOR * absw.mean(dim=in_dim, keepdim=True)
@@ -133,7 +166,7 @@ def twn_threshold_and_scale(
     return delta, alpha
 
 
-def twn_quantize(w: torch.Tensor, *, in_dim: int = -1) -> torch.Tensor:
+def twn_quantize(w: torch.Tensor, *, in_dim: Optional[int] = None) -> torch.Tensor:
     """
     Ternarize ``w`` with the TWN rule: ``alpha * sign(W) * 1[|W| > delta]``, per output row.
 
@@ -163,6 +196,7 @@ def twn_quantize(w: torch.Tensor, *, in_dim: int = -1) -> torch.Tensor:
     :param w: The latent weight.
     :param in_dim: The input-feature axis. See the table above.
     """
+    in_dim = _resolve_in_dim(w, in_dim)
     delta, alpha = twn_threshold_and_scale(w, in_dim=in_dim)
     w32 = w.detach().to(torch.float32)
     q = torch.sign(w32) * (w32.abs() > delta) * alpha
@@ -201,7 +235,7 @@ class _TWNQuantizeSTE(torch.autograd.Function):
         return grad_output, None
 
 
-def twn_quantize_ste(w: torch.Tensor, *, in_dim: int = -1) -> torch.Tensor:
+def twn_quantize_ste(w: torch.Tensor, *, in_dim: Optional[int] = None) -> torch.Tensor:
     """
     :func:`twn_quantize` in the forward direction, identity straight-through in the backward.
 
@@ -209,7 +243,7 @@ def twn_quantize_ste(w: torch.Tensor, *, in_dim: int = -1) -> torch.Tensor:
     :func:`twn_quantize` for the ``in_dim`` orientation table -- getting it wrong builds a
     different quantizer without erroring.
     """
-    return _TWNQuantizeSTE.apply(w, in_dim)  # type: ignore[no-any-return]
+    return _TWNQuantizeSTE.apply(w, _resolve_in_dim(w, in_dim))  # type: ignore[no-any-return]
 
 
 @dataclass
