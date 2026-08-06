@@ -1081,14 +1081,41 @@ class TransformerConfig(ModelConfig):
 
     #: Expected ``(total, active)`` params per rung at ``V=100352``, asserted to within 1%.
     #: Keyed by vocab size because these numbers are dominated by the embedding tables --
-    #: at R1, ``2 * 1024 * 100352`` is 205.5M of an 841.0M total, so a different vocab moves
+    #: at R1, ``2 * 1024 * 100352`` is 205.5M of an 841.8M total, so a different vocab moves
     #: the total by more than the tolerance and the assertion must not fire spuriously.
+    #:
+    #: **These are MEASURED, not hand-derived.** Every figure below was read off
+    #: ``config.num_params`` / ``config.num_active_params`` for the built config on FarmShare
+    #: (job 1676541, L40S) and independently reproduced bit-for-bit by closed-form arithmetic.
+    #: Two of them differ from the numbers first ratified in the contract -- see
+    #: ``agents/lanes/L1-model-factory/STATUS.md``:
+    #:   * R0 was 213.9M/125.8M, which is a **2.0x-width** R0 (n_heads=8 at d=512). At the
+    #:     ruled 1.0x width (n_heads=4) R0 is 208.9M/120.9M.
+    #:   * "active exactly constant across R1-R3" is true of active params **excluding
+    #:     routers**, not of active params. Routers are active at every token and scale with E.
     MAPLE_EXPECTED_PARAMS: ClassVar[Dict[int, Dict[str, Tuple[int, int]]]] = {
         100352: {
-            "R0": (213_900_000, 125_800_000),
-            "R1": (841_000_000, 312_500_000),
-            "R2": (1_444_900_000, 312_500_000),
-            "R3": (2_652_900_000, 312_500_000),
+            "R0": (208_939_520, 120_859_136),
+            "R1": (841_773_056, 313_290_752),
+            "R2": (1_446_539_264, 314_077_184),
+            "R3": (2_656_071_680, 315_650_048),
+        }
+    }
+
+    #: Active params EXCLUDING router params, at ``V=100352``. This is the quantity that is
+    #: *exactly* invariant across the E-sweep (312,504,320 at R1, R2 and R3 alike), and it is
+    #: therefore the one the FLOPs-per-token argument actually rests on. Asserted exactly.
+    #:
+    #: Router params are ``L * d * E`` -- 0.79M at R1, 1.57M at R2, 3.15M at R3. Every token
+    #: traverses the full router, so they are active by definition and cannot be constant while
+    #: E is the swept axis. Quoting plain "active params" as constant across the ladder would
+    #: overstate the invariance by up to 1.01%, which is why this second table exists.
+    MAPLE_EXPECTED_ACTIVE_MINUS_ROUTERS: ClassVar[Dict[int, Dict[str, int]]] = {
+        100352: {
+            "R0": 120_596_992,
+            "R1": 312_504_320,
+            "R2": 312_504_320,
+            "R3": 312_504_320,
         }
     }
 
@@ -1448,12 +1475,16 @@ class TransformerConfig(ModelConfig):
         total = config.num_params
         active = config.num_active_params
         embed = d_model * vocab_size
+        # Router params are active at every token and scale with E, so they are the reason
+        # plain `active` is not constant across the E-sweep. Report them separately.
+        routers = n_layers * d_model * num_experts
         print(
             f"PARAM_LEDGER rung={rung} V={vocab_size} d={d_model} L={n_layers} "
             f"E={num_experts} k={top_k} f_e={expert_hidden_size} "
             f"n_heads={n_heads} n_kv={n_kv_heads} head_dim={head_dim} "
             f"total={total} active={active} embed={embed} "
-            f"non_embed_total={total - embed} non_embed_active={active - embed}",
+            f"non_embed_total={total - embed} non_embed_active={active - embed} "
+            f"routers={routers} active_minus_routers={active - routers}",
             flush=True,
         )
 
@@ -1472,6 +1503,19 @@ class TransformerConfig(ModelConfig):
                     f"for {rung} at V={vocab_size} "
                     f"({100 * (active - exp_active) / exp_active:+.2f}%)"
                 )
+
+        # The E-sweep's load-bearing invariant, asserted EXACTLY rather than to a tolerance:
+        # active-params-excluding-routers must be identical across R1/R2/R3, because that is
+        # what makes FLOPs/token constant and therefore what makes a measured throughput delta
+        # attributable to kernel and routing overhead rather than to arithmetic. A 1% band here
+        # would admit exactly the drift it is supposed to forbid.
+        exp_amr = cls.MAPLE_EXPECTED_ACTIVE_MINUS_ROUTERS.get(vocab_size, {}).get(rung)
+        if exp_amr is not None and active - routers != exp_amr:
+            problems.append(
+                f"active params excluding routers is {active - routers:,}, expected exactly "
+                f"{exp_amr:,} for {rung} at V={vocab_size}. This quantity must be identical "
+                f"across R1-R3 or the E-sweep's throughput attribution does not hold."
+            )
 
         if problems:
             raise OLMoConfigurationError(
