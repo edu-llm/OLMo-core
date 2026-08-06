@@ -27,7 +27,6 @@
 #SBATCH --job-name=liv-gate-latency-l40s
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=00:45:00
 #SBATCH --exclude=wheat-01
@@ -72,7 +71,19 @@ echo "=== the harness ==="
 # --allow-unresolvable: set DELIBERATELY, because at 8 rounds the A/A interval will very likely
 # exceed the 1.8% target and a non-zero exit would mask any genuine defect further down. The
 # verdict is still PRINTED, and reading it is the point of this run.
-srun $V .edullm/bench_gate_latency.py "l40s-smoke-${SLURM_JOB_ID}" \
+#
+# NO `srun`, DELIBERATELY. Slurm 26.05 aborts when --cpus-per-task and the partition's per-GPU
+# CPU default disagree: "cpus-per-task set by two different environment variables
+# SLURM_CPUS_PER_TASK=17 != SLURM_TRES_PER_TASK=cpu=8", which killed job 1676750 six seconds in.
+# A single-process benchmark gains nothing from a step launcher, so the fix is to drop it rather
+# than to negotiate two Slurm variables into agreement. Removing --cpus-per-task too, so the
+# partition's own default applies and there is nothing left to conflict.
+# `set -e` is relaxed around this one command so the exit code can be REPORTED rather than
+# merely inherited. Under `set -e` a non-zero exit would abort the script before the echo, and
+# "$?" after an aborted command reads the wrong value -- so the code that says whether a guard
+# fired would be the one thing the log did not contain.
+set +e
+$V .edullm/bench_gate_latency.py "l40s-smoke-${SLURM_JOB_ID}" \
   --rounds 8 \
   --iters-per-round 3 \
   --warmup 5 \
@@ -82,6 +93,11 @@ srun $V .edullm/bench_gate_latency.py "l40s-smoke-${SLURM_JOB_ID}" \
   --device-peak-tflops 362 \
   --allow-unresolvable \
   --out "$D/gate_latency_l40s_${SLURM_JOB_ID}.json"
+RC=$?
+set -e
 
 echo
-echo "=== exit code was $? ==="
+echo "=== harness exit code: $RC ==="
+# Non-zero here is INFORMATION, not necessarily failure: it means a guard fired, and which one
+# is in the stderr above. Exit 0 regardless so Slurm's state does not overwrite that distinction.
+exit 0

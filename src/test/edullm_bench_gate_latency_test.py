@@ -349,34 +349,77 @@ def _cell(**kw):
     return entry.Cell(**args)
 
 
-def test_a_tight_interval_that_excludes_zero_is_still_unresolvable():
-    """THE finding this function was extracted for.
+def test_a_tight_interval_far_from_zero_is_unresolvable():
+    """A narrow interval sitting 3pp off zero describes a biased rig, not a precise one.
 
-    An A/A control reading +3.0% with CI [+2.8, +3.3] has a width of 0.5pp, so a width-only
-    check certifies it as able to resolve 1.8%. But the control's true effect is EXACTLY zero,
-    so that interval says the rig has a 3pp systematic bias between two identical models. The
-    guard the design calls "the one that can fail for the right reason" was passing for the
-    wrong one.
+    Width alone certifies [+2.8, +3.3]. But the control's true effect is EXACTLY zero, so that
+    interval says two byte-identical models differ by 3pp -- larger than the 1.8% being hunted.
+    The criterion is the worst EDGE against the target, which catches this.
     """
     biased = _cell(vs_baseline_pct=3.0, ci_low_pct=2.8, ci_high_pct=3.3)
     lines, unresolvable = entry.resolution_verdict([biased])
     assert unresolvable, "a 3pp bias between identical models must not be called resolvable"
-    assert any("excludes zero" in line for line in lines)
+    assert any("CANNOT resolve" in line for line in lines)
 
 
 def test_a_wide_interval_bracketing_zero_is_also_unresolvable():
-    """The width condition must still hold: noisier than the effect means it cannot be seen."""
+    """Noisier than the effect means it cannot be seen, even when centred on zero."""
     noisy = _cell(vs_baseline_pct=0.1, ci_low_pct=-4.0, ci_high_pct=4.2)
     _lines, unresolvable = entry.resolution_verdict([noisy])
     assert unresolvable
 
 
 def test_a_tight_interval_bracketing_zero_passes():
-    """The one case that should pass: narrow AND centred on zero."""
+    """The easy case: narrow and centred on zero."""
     good = _cell(vs_baseline_pct=0.05, ci_low_pct=-0.4, ci_high_pct=0.5)
     lines, unresolvable = entry.resolution_verdict([good])
     assert unresolvable == []
     assert any("OK" in line for line in lines)
+
+
+def test_a_tiny_bias_excluding_zero_still_passes():
+    """THE false alarm the L40S rehearsal caught, in its measured numbers.
+
+    Job 1676751 produced ``[+0.05, +0.25]`` on graphed decode b=8 -- a bootstrap interval so
+    tight that a 0.17pp bias excludes zero. An earlier version of this function required the
+    interval to BRACKET zero and marked four such rows unresolvable, when every one of them is
+    ~7x SMALLER than the 1.8% target. That is the best result the rig produced being reported as
+    a failure.
+
+    A guard that fires on a measurement this good is a defect: somebody passes
+    ``--allow-unresolvable`` to get past it, and then it protects nothing.
+    """
+    measured = _cell(
+        mode="graphed", batch_size=8, vs_baseline_pct=0.17, ci_low_pct=0.05, ci_high_pct=0.25
+    )
+    lines, unresolvable = entry.resolution_verdict([measured])
+    assert unresolvable == [], "0.25pp worst edge is far inside 1.8% and must pass"
+    # But the residual structure is still worth saying out loud.
+    assert any("residual bias" in line for line in lines)
+
+
+@pytest.mark.parametrize(
+    "lo, hi, expect_ok",
+    [
+        (0.05, 0.25, True),  # L40S graphed b=8, measured
+        (0.15, 0.28, True),  # L40S graphed b=32, measured
+        (0.04, 0.40, True),  # L40S prefill b=4, measured
+        (-0.11, -0.01, True),  # L40S prefill-lastlogit b=4, measured
+        (-5.86, 0.27, False),  # L40S prefill b=1: 5.86pp edge, genuinely too noisy
+        (-0.07, 3.53, False),  # L40S prefill-lastlogit b=1: 3.53pp edge
+        (2.8, 3.3, False),  # the biased-but-tight case
+    ],
+)
+def test_the_criterion_matches_every_measured_l40s_row(lo, hi, expect_ok):
+    """Pins the verdict against all ten A/A intervals the rehearsal actually produced.
+
+    Six should pass and the two genuinely noisy batch-1 prefill rows should not. Written from
+    measured data rather than invented literals, so the threshold is calibrated against what this
+    rig really does.
+    """
+    cell = _cell(vs_baseline_pct=(lo + hi) / 2, ci_low_pct=lo, ci_high_pct=hi)
+    _lines, unresolvable = entry.resolution_verdict([cell])
+    assert (unresolvable == []) is expect_ok, f"[{lo}, {hi}] verdict was wrong"
 
 
 def test_no_control_cell_is_a_failure_not_an_absence():

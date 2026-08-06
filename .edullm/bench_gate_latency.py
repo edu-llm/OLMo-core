@@ -98,20 +98,44 @@ WHY EAGER AND GRAPHED ARE BOTH REPORTED FOR DECODE
   each timed region nothing hides the dispatch cost: ~2.5-3 ms of launch time against ~1-2 ms
   of GPU work, so eager decode measures Python dispatch rather than bandwidth.
 
-  **And the treatments ADD launches**, which is why this is not a neutral choice. Counted from
-  ``_GateProj.forward``: dense is 1 addmm per LIV layer; low-rank is a down-projection plus
-  two up-projections, each fed a strided slice that forces a materializing copy (5 kernels);
-  grouped is two gates each needing a copy, a bmm and a copy (6 kernels). Over 10 LIV layers
-  that is +40 and +50 launches, worth +8% to +14% on a 2.5 ms baseline -- two to three times
-  the entire 4.03% ceiling, pointing AGAINST the treatments.
+  **And the treatments ADD launches**, which is why this is not a neutral choice. MEASURED on
+  L40S 2026-08-06 (job 1676753), at decode b=1:
 
-  Eager decode would therefore rank the arms by launch count and reproduce the retracted
-  result's sign for an unrelated reason. Graph replay collapses launch cost, which is what a
-  served system does. Both are reported and the graphed one is the headline. Graph replay is
-  safe here precisely because the model cannot be cache-resident.
+    L0          784 kernels, 189 of them copy-ish
+    F-r128      803  (+19)   189
+    G-grouped   793   (+9)   189
+    L0-aa       783   (-1)   189   <- the A/A arm, i.e. run-to-run noise is about 1 kernel
+
+  **Two predictions in an earlier version of this docstring were WRONG, and the corrected
+  numbers are above.** It said +40 and +50 launches, reasoning from ``_GateProj.forward`` that
+  each factorized gate needs a materializing copy for its strided slice. The real deltas are
+  +19 and +9, and the copy-kernel count is IDENTICAL (189) on all four arms including the
+  baseline -- so the extra kernels are the extra GEMMs and nothing is copying more than dense
+  does. The "this may be an implementation artifact rather than a structural cost" caveat
+  elsewhere in this file was therefore aimed at a cost that does not exist; it is retained only
+  as a statement about GEMM count.
+
+  The effect on eager decode is real regardless, and larger than predicted per launch: eager
+  measures **-2.3% to -5.4%** against the treatments while graphed measures **-1.1% to +1.1%**.
+  Same arms, same rounds, same host. An eager-only run would have reproduced the retracted
+  -8.2% sign for an unrelated reason.
+
+  Graph replay collapses launch cost, which is what a served system does. Both are reported and
+  the graphed one is the headline. Graph replay is safe here precisely because the model cannot
+  be cache-resident.
 
   A per-arm kernel launch count is recorded outside the timed region, so an eager row is
   interpretable rather than merely small.
+
+THE BYTE SAVING DOES NOT CONVERT ONE-FOR-ONE, WHICH IS THE REAL FINDING TO EXPECT
+  Both treatments remove exactly 4.03% of weight bytes. On L40S graphed decode at b=1 that
+  bought 0.52% for ``F-r128`` and 1.19% for ``G-grouped`` -- **13% and 29% of the byte saving**.
+  Achieved bandwidth on those rows is 41-43% of HBM peak, not 90%, so the step is not purely
+  weight-bandwidth-bound and a byte saving cannot be collected in full.
+
+  Read the ceiling accordingly: 4.03% is what a PERFECTLY bandwidth-bound step would give, and
+  the fraction of it actually realised is itself one of the results. Do not quote the ceiling as
+  a prediction.
 
 DECODE USES logits_to_keep=1, WHICH REAL SERVING ALSO DOES
   Without it the head computes logits for every position: 2 x 16384 x 1024 x 100352 = 3.37
@@ -127,10 +151,15 @@ WHAT THIS CANNOT ANSWER
   pushes the other way and is larger, so the decode delta is neither an upper nor a lower
   bound. It is the delta for a cacheless seq_len=1 step, and that is all it is.
 
-  A negative result may belong to this IMPLEMENTATION rather than to gate structure. The
-  copies in ``_GateProj`` are costs of how the projections are written, not of low-rank or
-  block-diagonal gating as ideas. The launch and copy counts are reported per arm so that
-  distinction can be made rather than glossed.
+  A negative result may belong to this IMPLEMENTATION rather than to gate structure -- but note
+  the measured copy counts above are IDENTICAL across all four arms, so the "extra copies"
+  version of that concern is falsified. What remains is GEMM count: the treatments run more,
+  smaller matmuls, and a fused kernel would not. That is a property of the factorization, not of
+  how it happens to be coded here.
+
+  And nothing here is the A100 answer. L40S is 864 GB/s with 96 MiB of L2; A100-SXM4-40GB is
+  1555 GB/s with 40 MiB. Different bandwidth, different cache, different fraction of the byte
+  saving realised. This file's numbers are a rehearsal of the METHOD.
 
   srun -p gpu --gres=gpu:1 -c 8 --mem=64G -t 00:40:00 python .edullm/bench_gate_latency.py
 """
@@ -573,15 +602,24 @@ def resolution_verdict(
 ) -> Tuple[List[str], List[str]]:
     """Read the rig's own resolution off the A/A control, and say which shapes cannot be trusted.
 
-    Two conditions, and the second was missing when this lived inline in ``main``:
+    One condition, on the magnitude the A/A arm could be wrong by: **the whole interval must lie
+    within ``+/- target_pct`` of zero.** The control's true effect is exactly zero, so the
+    furthest edge of its interval is the largest error this rig can attribute to a real arm. If
+    that edge is inside the effect being hunted, the rig can see the effect; if not, it cannot.
 
-    1. **The interval must be narrower than the effect.** A control interval wider than the
-       target means two byte-identical models differ by more than the thing being hunted.
-    2. **The interval must contain zero.** The control's true effect is EXACTLY zero, so an
-       interval like ``[+2.8, +3.3]`` is narrow, passes condition 1, and describes a rig with a
-       3pp systematic bias between two identical models. Width alone certified that as
-       resolvable, which made the one guard "that can fail for the right reason" pass for the
-       wrong one.
+    This subsumes two checks that were tried and are both wrong on their own:
+
+    * **Width alone** certifies an interval like ``[+2.8, +3.3]``: narrow, and describing a rig
+      with a 3pp systematic bias between two identical models.
+    * **Bracketing zero** looked like the fix and FALSE-ALARMS on real data. The 2026-08-06 L40S
+      rehearsal produced ``[+0.05, +0.25]`` on graphed decode -- a bootstrap interval so tight
+      that a 0.17pp bias excludes zero -- and four such rows were reported unresolvable while
+      every one of them is 7x smaller than the 1.8% target. A guard that fires on a measurement
+      this good is a defect: somebody passes ``--allow-unresolvable`` to get past it and then it
+      protects nothing.
+
+    A tight interval that misses zero is worth SAYING, because it means the pairing has residual
+    structure, so it is annotated. It is not disqualifying while it stays well inside the target.
 
     Returns ``(report_lines, unresolvable_shapes)``. An empty control list yields an explicit
     ``NOT MEASURED`` line and a sentinel in the unresolvable list, so a run with no floor fails
@@ -607,21 +645,26 @@ def resolution_verdict(
 
     for c in control:
         width = c.ci_high_pct - c.ci_low_pct
-        narrow_enough = width < target_pct
-        brackets_zero = c.ci_low_pct <= 0.0 <= c.ci_high_pct
+        # The furthest either edge sits from zero is the largest error this rig can attribute to
+        # a real arm, since the control's true effect is zero. That single number is the floor.
+        worst_edge = max(abs(c.ci_low_pct), abs(c.ci_high_pct))
+        resolvable = worst_edge < target_pct
         shape = f"{c.regime}/{c.mode} b={c.batch_size}"
-        verdicts = []
-        if not narrow_enough:
-            verdicts.append(f"interval wider than {target_pct}%")
-        if not brackets_zero:
-            verdicts.append("interval excludes zero, so the rig is biased between identical models")
+
+        if resolvable:
+            note = f"OK (worst edge {worst_edge:.2f}pp < {target_pct}%)"
+            # Worth saying, not worth failing: a tight interval that misses zero means the
+            # pairing has residual structure, even though it is far inside the target.
+            if not (c.ci_low_pct <= 0.0 <= c.ci_high_pct):
+                note += "; small residual bias, interval misses zero"
+        else:
+            note = f"CANNOT resolve {target_pct}%: worst edge {worst_edge:.2f}pp"
+            unresolvable.append(shape)
+
         lines.append(
             f"  {shape:<30} {c.vs_baseline_pct:+6.2f}%  CI "
-            f"[{c.ci_low_pct:+6.2f},{c.ci_high_pct:+6.2f}]  width {width:5.2f}pp  "
-            + ("OK" if not verdicts else "; ".join(verdicts))
+            f"[{c.ci_low_pct:+6.2f},{c.ci_high_pct:+6.2f}]  width {width:5.2f}pp  " + note
         )
-        if verdicts:
-            unresolvable.append(shape)
     return lines, unresolvable
 
 
