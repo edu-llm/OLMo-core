@@ -288,9 +288,34 @@ class Gate:
 # the wrapper shape is what every gate below uses and the kwarg shape is recorded as the
 # alternative it is not. If L1 ratifies the kwarg shape, `.edullm/train_on_corpus.py` needs
 # a `--model-rung` flag before any of this is submittable.
+# RATIFIED IN CODE 2026-08-05 21:31. L1 shipped maple_r0..maple_r3 at merged SHA a93e81b, each
+# `(cls, vocab_size: int, **kwargs)` delegating to `maple_scaled(vocab_size, rung=...)`. That
+# keeps `vocab_size` the sole required positional-or-keyword arg, which is what the platform's
+# `factory(vocab_size=corpus.tokenizer.padded_vocab_size())` call at train_on_corpus.py:854
+# requires. Verified by reading the merged blob, not by assuming the merge landed.
 FACTORY_WRAPPERS = {"R0": "maple_r0", "R1": "maple_r1", "R2": "maple_r2", "R3": "maple_r3"}
 
-_COMMON = ["--dataset-id", "$EDULLM_DATASET_ID"]
+# THE PLATFORM'S rank_microbatch_size DEFAULT OOMs R3, SO EVERY R3 GATE MUST PIN IT.
+# `.edullm/train_on_corpus.py:1491` defaults `--rank-microbatch-size` to 16*1024 = 16384. L6
+# measured the R3 budget against A100-40GB usable (37.99 GiB after CUDA context and NCCL
+# buffers) and that default lands at 131% of usable at capacity_factor 1.2 and 142% at 2.0 --
+# an OOM, not a tight fit. mb=8192 fits at 78.6% (84.5% including the worst-case math-SDPA path
+# on the 9 masked SWA layers).
+#
+# THIS IS EXACTLY THE CLASS THE LADDER EXISTS TO CATCH, AND IT WOULD HAVE REACHED AN A100
+# ANYWAY, because nothing upstream of the GPU can see it: `compile_submission.py` does not read
+# a model config, and OOM gets NO RETRY -- Batch retries fire only on `Host EC2*`. An R3 gate
+# inheriting the default would have burned $21.96-$87.83 to produce one traceback.
+# Source: lanes/L6-memory-ce/evidence/E2-memory-budget-of-record.md §0.
+RANK_MICROBATCH = ["--rank-microbatch-size", "8192"]
+
+# L6's chunked CE, verified bitwise-identical to the unchunked path on FarmShare job 1676566
+# (73/73 assertions). It takes the logits family from a measured 15.344 GiB to 2.359 GiB at
+# N=8192 -- 6.50x -- and makes that line mb-INDEPENDENT, which is what buys the headroom back:
+# mb=8192 goes from 78.6% to 40.5% of usable. Used on the R3 gates where the logits family
+# dominates. NOT used on R0, whose d=512/L=8 has no memory problem and where the default path
+# is the one a production run would take -- G2 should exercise the default, not the mitigation.
+CHUNKED_CE = ["--lm-loss-implementation", "chunked_linear"]
 
 
 def ladder() -> list[Gate]:
@@ -432,7 +457,7 @@ def ladder() -> list[Gate]:
             experiment="maple-g5-r3-throughput",
             dataset_release="olmo-150b-dolma2-v1",
             program_args=["--model-factory", FACTORY_WRAPPERS["R3"], "--steps", "200",
-                          "--save-interval", "100"],
+                          "--save-interval", "100"] + RANK_MICROBATCH + CHUNKED_CE,
             max_runtime_hours=Decimal("1"),
             max_attempts=1,
             needs_checkpoint_dir=True,
@@ -457,7 +482,7 @@ def ladder() -> list[Gate]:
             experiment="maple-g6-ternary-pair",
             dataset_release="olmo-150b-dolma2-v1",
             program_args=["--model-factory", FACTORY_WRAPPERS["R3"], "--steps", "500",
-                          "--save-interval", "250"],
+                          "--save-interval", "250"] + RANK_MICROBATCH + CHUNKED_CE,
             max_runtime_hours=Decimal("4"),
             max_attempts=1,
             needs_checkpoint_dir=True,
@@ -482,7 +507,7 @@ def ladder() -> list[Gate]:
             experiment="maple-g7-e-sweep",
             dataset_release="olmo-150b-dolma2-v1",
             program_args=["--model-factory", FACTORY_WRAPPERS["R1"], "--steps", "300",
-                          "--save-interval", "150"],
+                          "--save-interval", "150"] + RANK_MICROBATCH + CHUNKED_CE,
             max_runtime_hours=Decimal("4"),
             max_attempts=1,
             needs_checkpoint_dir=True,
@@ -735,6 +760,42 @@ def check_g3_provokes(gates: list[Gate]) -> str:
     return f"G3 forces {writes} checkpoint writes over 2 attempts, past the 4th-save prune"
 
 
+def check_microbatch_is_pinned(gates: list[Gate]) -> str:
+    """THE OOM CLASS NOTHING UPSTREAM OF THE GPU CAN SEE.
+
+    `.edullm/train_on_corpus.py:1491` defaults `--rank-microbatch-size` to 16384, which L6
+    measured at 131-142% of A100-40GB usable for R3 -- an OOM. `compile_submission.py` reads
+    no model config, so it cannot catch this, and OOM gets NO retry (Batch retries fire only
+    on `Host EC2*`). So a gate that inherits the default burns its whole ceiling to produce
+    one traceback, and the cheapest place to refuse that is here, for free.
+
+    Asserted on any gate running an R2/R3 rung, since those are the ones L6 measured. R0 and
+    R1 are smaller; R1 is included anyway because the E-sweep holds active params constant
+    and its dispatch buffers grow with E.
+    """
+    for g in gates:
+        text = g.command()[-1]
+        heavy = any(FACTORY_WRAPPERS[r] in text for r in ("R1", "R2", "R3"))
+        if not heavy:
+            continue
+        _require(
+            "--rank-microbatch-size" in text,
+            f"{g.gate_id} runs a large rung and does not pin --rank-microbatch-size. The "
+            "default 16384 was measured at 131-142% of A100-40GB usable for R3. This is an "
+            "OOM with no retry, and no platform check can see it.",
+        )
+        m = re.search(r"--rank-microbatch-size (\d+)", text)
+        _require(m is not None, f"{g.gate_id} has an unparseable microbatch size")
+        assert m is not None
+        size = int(m.group(1))
+        _require(
+            size <= 8192,
+            f"{g.gate_id} pins mb={size}. L6 measured 8192 at 78.6% of usable (84.5% worst "
+            f"case) and 16384 as an OOM; anything above 8192 is unmeasured.",
+        )
+    return "every large-rung gate pins a measured-safe --rank-microbatch-size"
+
+
 def check_rung_selection(gates: list[Gate]) -> str:
     """A DOTTED OVERRIDE CANNOT SELECT A RUNG, AND THIS IS THE PROOF.
 
@@ -807,6 +868,7 @@ CHECKS = [
     check_container_overrides_cap,
     check_no_platform_ceiling_is_assumed,
     check_g3_provokes,
+    check_microbatch_is_pinned,
     check_rung_selection,
     check_dataset_and_slugs,
 ]
