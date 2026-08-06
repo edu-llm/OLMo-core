@@ -59,17 +59,13 @@ class ReaderProtocolStub:
     A boto3 client has none of them, which is the entire subject of the two tests below.
     """
 
-    def get(self, bucket, key):
-        ...
+    def get(self, bucket, key): ...
 
-    def get_range(self, bucket, key, start, length):
-        ...
+    def get_range(self, bucket, key, start, length): ...
 
-    def head(self, bucket, key):
-        ...
+    def head(self, bucket, key): ...
 
-    def list(self, bucket, prefix):
-        ...
+    def list(self, bucket, prefix): ...
 
 
 @pytest.fixture
@@ -131,8 +127,7 @@ def test_the_reader_is_handed_its_own_adapter_and_not_a_boto3_client(reader):
 
     for method in ("get", "get_range", "head", "list"):
         assert callable(getattr(reader["s3"], method, None)), (
-            f"the reader was handed something with no {method}(), which is what a boto3 "
-            "client is"
+            f"the reader was handed something with no {method}(), which is what a boto3 client is"
         )
 
 
@@ -1291,7 +1286,12 @@ def test_the_prepare_only_path_exits_before_the_process_group_starts():
     ]
     src = "\n".join(lines)
     branch_at = src.index("opts.prepare_heldout_only")
-    env_at = src.index("prepare_training_environment()")
+    # Matched WITHOUT the closing paren, so that passing an argument does not break the test.
+    # It did: this line read `prepare_training_environment()` and broke the moment the call
+    # became `prepare_training_environment(timeout=timedelta(minutes=60))`, which is a change
+    # to the timeout and not to the ordering this test is about. A test that fails on an
+    # unrelated edit teaches people to edit the test.
+    env_at = src.index("prepare_training_environment(")
     assert branch_at < env_at, "the prepare-only branch must precede the process group"
 
 
@@ -1353,8 +1353,9 @@ def test_a_cached_shard_of_the_right_size_is_not_downloaded_again(tmp_path, monk
     cached.parent.mkdir(parents=True, exist_ok=True)
     cached.write_bytes(payload)
 
-    with mock.patch.object(entry, "_download_to") as download, mock.patch(
-        "olmo_core.io.get_file_size", return_value=len(payload)
+    with (
+        mock.patch.object(entry, "_download_to") as download,
+        mock.patch("olmo_core.io.get_file_size", return_value=len(payload)),
     ):
         out = entry._localised_heldout_paths([url], _Opts())
     download.assert_not_called()
@@ -1362,8 +1363,9 @@ def test_a_cached_shard_of_the_right_size_is_not_downloaded_again(tmp_path, monk
 
     # Now truncate it: the same call must re-fetch rather than trust what is on disk.
     cached.write_bytes(payload[:4])
-    with mock.patch.object(entry, "_download_to") as download, mock.patch(
-        "olmo_core.io.get_file_size", return_value=len(payload)
+    with (
+        mock.patch.object(entry, "_download_to") as download,
+        mock.patch("olmo_core.io.get_file_size", return_value=len(payload)),
     ):
         entry._localised_heldout_paths([url], _Opts())
     download.assert_called_once()
@@ -1417,8 +1419,11 @@ def test_only_one_process_per_node_heads_or_downloads_the_heldout_shards(monkeyp
 
     # A non-zero local rank: no HEAD, no download, but still a usable local path.
     monkeypatch.setenv("LOCAL_RANK", "3")
-    with mock.patch.object(entry, "_download_to") as download, mock.patch(
-        "olmo_core.io.get_file_size", side_effect=AssertionError("rank 3 must not issue a HEAD")
+    with (
+        mock.patch.object(entry, "_download_to") as download,
+        mock.patch(
+            "olmo_core.io.get_file_size", side_effect=AssertionError("rank 3 must not issue a HEAD")
+        ),
     ):
         out = entry._localised_heldout_paths([url], _Opts())
     download.assert_not_called()
@@ -1434,8 +1439,9 @@ def test_only_one_process_per_node_heads_or_downloads_the_heldout_shards(monkeyp
     cached.write_bytes(b"\x00" * 8)
 
     heads = []
-    with mock.patch.object(entry, "_download_to") as download, mock.patch(
-        "olmo_core.io.get_file_size", side_effect=lambda u: (heads.append(u), 64)[1]
+    with (
+        mock.patch.object(entry, "_download_to") as download,
+        mock.patch("olmo_core.io.get_file_size", side_effect=lambda u: (heads.append(u), 64)[1]),
     ):
         out_zero = entry._localised_heldout_paths([url], _Opts())
     assert heads == [url], "local rank 0 issues exactly one HEAD per shard"
@@ -1460,8 +1466,9 @@ def test_a_single_process_invocation_still_fetches(monkeypatch, tmp_path):
     monkeypatch.delenv("LOCAL_RANK", raising=False)
     assert entry._may_fetch_heldout_shards() is True
 
-    with mock.patch.object(entry, "_download_to") as download, mock.patch(
-        "olmo_core.io.get_file_size", return_value=64
+    with (
+        mock.patch.object(entry, "_download_to") as download,
+        mock.patch("olmo_core.io.get_file_size", return_value=64),
     ):
         entry._localised_heldout_paths(["s3://bucket/x/val-00000.u32le.bin"], _Opts())
     download.assert_called_once()
@@ -1577,3 +1584,52 @@ def test_a_label_that_received_no_data_is_nan_rather_than_a_believable_number():
 
     assert math.isnan(ce), "an unpopulated label must be NaN, never a believable number"
     assert ce != 0.0, "0.0 would read as a perfect held-out loss"
+
+
+def test_the_shutdown_barrier_runs_before_the_rank_zero_closes():
+    """The teardown barrier must precede ``callback.close()``, not follow it.
+
+    THIS PINS THE FIX FOR A REAL FAILURE. ``run_019fd3eb`` completed all 1525 training steps
+    and all six held-out eval rungs on 8xA100, then died in teardown:
+
+        RuntimeError: [gloo/transport/tcp/unbound_buffer.cc:78]
+          Timed out waiting 900000ms for recv operation to complete
+
+    900000ms is the DEFAULT process group's timeout -- ``prepare_training_environment``
+    defaults to 15 minutes and this entry point took that default. It identifies the barrier
+    in ``Trainer._shutdown`` uniquely, because the bookkeeping group (``new_group()`` with no
+    timeout, which resolves to the backend default rather than inheriting the parent's) and
+    the checkpointing group (explicit ``timedelta(minutes=30)``) both carry 30 minutes.
+
+    The divergence that fed it: three of the six ``close`` implementations are rank-zero only
+    and block on I/O -- ``WandBCallback.close`` calls ``wandb.finish()``, ``CometCallback``
+    the same, ``MetricSaverCallback`` writes a file. With the barrier after them, ranks
+    1..N-1 skip all three and wait in the collective while rank zero flushes, so rank zero's
+    upload time becomes a deadline the peers enforce.
+
+    Ordering is the whole content of the fix, so a source-order assertion is the honest test:
+    reproducing the deadlock would need eight ranks and a stalled network flush.
+    """
+    import inspect
+
+    from olmo_core.train.trainer import Trainer
+
+    lines = [
+        line.split("#")[0]
+        for line in inspect.getsource(Trainer._shutdown).splitlines()
+        if not line.strip().startswith("#")
+    ]
+    src = "\n".join(lines)
+
+    barrier_at = src.index("barrier()")
+    close_at = src.index("callback.close()")
+    assert barrier_at < close_at, (
+        "the graceful-shutdown barrier must run BEFORE callback.close(), or a rank-zero-only "
+        "close (wandb.finish) blocks while peers hold the collective -- the 900s gloo timeout "
+        "that killed run_019fd3eb after a fully successful run"
+    )
+
+    # And the pools must still be drained before close, which is what PR #546 was for. The
+    # fix moves the barrier, not close, so #546's invariant has to survive it.
+    pool_at = src.index("_multi_thread_pool.shutdown")
+    assert pool_at < close_at, "PR #546's invariant: thread pools drain before callback.close()"

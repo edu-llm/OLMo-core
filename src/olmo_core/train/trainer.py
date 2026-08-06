@@ -774,13 +774,46 @@ class Trainer:
                 self._single_thread_pool.shutdown(wait=True, cancel_futures=False)
                 self._single_thread_pool = None
 
+        # THE BARRIER GOES BEFORE '.close', NOT AFTER, AND THE ORDER IS THE WHOLE FIX.
+        #
+        # Every rank must still be doing the same thing when it meets this collective. Three of
+        # the six `close` implementations are rank-zero only and block on I/O:
+        # `WandBCallback.close` (callbacks/wandb.py:158-160) calls `wandb.finish()`, which flushes
+        # pending history to a server; `CometCallback.close` (comet.py:236-238) is the same shape;
+        # `MetricSaverCallback.close` (metric_saver.py:73-81) writes the final metrics file. With
+        # the barrier after them, ranks 1..N-1 skip all three and sit in the collective while rank
+        # zero flushes -- so rank zero's upload time silently becomes a deadline the other ranks
+        # are enforcing, and the timeout that fires is the *group's*, not the upload's.
+        #
+        # That is what killed an 8xA100 run at step 1525 of 1525, after every training step and
+        # every held-out eval rung had already succeeded:
+        #   RuntimeError: [gloo/transport/tcp/unbound_buffer.cc:78]
+        #     Timed out waiting 900000ms for recv operation to complete
+        #
+        # 900000ms identifies this barrier uniquely, which is what makes the diagnosis checkable
+        # rather than plausible. It is the DEFAULT process group's timeout:
+        # `prepare_training_environment` (train/__init__.py:89) defaults to 15 minutes and the
+        # caller took the default. The other two groups in play both carry 30 minutes -- the
+        # bookkeeping group (trainer.py:375) passes no timeout, and `new_group` resolves an unset
+        # timeout against the backend default rather than inheriting the parent's, while the
+        # checkpointing group (callbacks/checkpointer.py:232) sets 30 minutes explicitly. So the
+        # number in the message rules both of them out. It is gloo rather than NCCL for the same
+        # reason a default-group `barrier()` always is: the backend string registers cpu:gloo and
+        # the collective's device resolution prefers CPU when both are present.
+        #
+        # Moving the barrier up is safe because no `close` issues a collective -- verified across
+        # all six on this checkout (callback.py:167 is `pass`; garbage_collector.py:43 and
+        # gap_monitor.py:320 are local cleanup; the three above are rank-zero I/O). It also keeps
+        # what PR #546 was for: `close` still runs after the thread pools are drained, so
+        # bookkeeping ops still finish first. #546 moved `close` after the pools and left it
+        # before the barrier; this moves the barrier, not `close`.
+        if gracefully:
+            barrier()
+
         # NOTE: '.close' must be called after shutting down thread pools to ensure bookkeeping ops
         # have finished first. See https://github.com/allenai/OLMo-core/pull/546.
         for callback in self._iter_callbacks():
             callback.close()
-
-        if gracefully:
-            barrier()
 
         gc_cuda()
 

@@ -65,6 +65,7 @@ import sys
 import time
 import traceback
 from dataclasses import dataclass, field, replace
+from datetime import timedelta
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, cast
 
@@ -1298,7 +1299,30 @@ def main() -> None:
         return
 
     with during(Stage.THE_TRAINING_ENVIRONMENT_WOULD_NOT_START):
-        prepare_training_environment()
+        # SIXTY MINUTES, NOT THE FIFTEEN THIS TOOK BY DEFAULT, AND IT IS A SECOND LINE OF DEFENCE
+        # RATHER THAN THE FIX. `prepare_training_environment` defaults `timeout` to 15 minutes
+        # (train/__init__.py:89) and passes it to `init_process_group`, so 15 minutes is the bound
+        # on every collective issued on the DEFAULT group -- including the teardown barrier in
+        # `Trainer._shutdown`. `run_019fd3eb` died there:
+        #   RuntimeError: [gloo/.../unbound_buffer.cc:78]
+        #     Timed out waiting 900000ms for recv operation to complete
+        # after all 1525 steps and all 6 eval rungs had already succeeded. 900000ms is exactly this
+        # default, which is how that barrier was identified: the bookkeeping and checkpointing
+        # groups both carry 30 minutes.
+        #
+        # The actual repair is the barrier ordering in `Trainer._shutdown` -- rank zero's
+        # `wandb.finish()` no longer runs while seven peers hold a collective. This widening is
+        # kept anyway because it is one argument and it covers the collectives that ordering fix
+        # does NOT touch: `_prepare_dir` at the head of a synchronous checkpoint save, and the
+        # data loader's reshuffle barrier inside the finish eval. Both are on the default group,
+        # both are symmetric across ranks, and both sit behind an S3 round trip whose tail latency
+        # nothing here bounds. Fifteen minutes is a tight bound for a 1B-parameter shard upload
+        # from eight ranks; sixty is not generous, it is merely not tight.
+        #
+        # The cost of a too-large value is a hang taking longer to surface. The cost of a
+        # too-small one is a completed run marked FAILED with its final checkpoint lost, which is
+        # what happened, and it is the worse failure by a wide margin.
+        prepare_training_environment(timeout=timedelta(minutes=60))
     try:
         with during(Stage.TRAINING_ITSELF_FAILED):
             train(config, opts)
