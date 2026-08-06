@@ -27,10 +27,14 @@ reporting a third thing whose exclusions are explicit and logged.
 
 WHAT IT REFUSES TO DO.
 
-It does not report a tokens/s number without its denominator. Every ``RESULT `` line it emits
-carries the FLOPs formula, the peak it divided by, the window boundaries, and the count of steps
-excluded and why. A throughput figure with no denominator is how a benchmark reports the wrong sign
-and reproduces cleanly, and this project has paid for that once already.
+It does not report a tokens/s number without its denominator. The ``RESULT `` lines it emits carry
+the FLOPs formula, the peak it divided by, the window boundaries, and the count of steps excluded
+and why. A throughput figure with no denominator is how a benchmark reports the wrong sign and
+reproduces cleanly, and this project has paid for that once already.
+
+Output format is ``RESULT <json>``, one object per line, per ``_emit`` below -- machine-readable
+because X2 aggregates these across four rungs, and aggregating an E-sweep by regex over
+``key=value`` text is its own way of reporting a confident wrong number.
 
 It also does not report a *bandwidth* figure it cannot substantiate. ``torch.cuda`` exposes no
 achieved-bytes counter, so an "achieved GB/s" here would be a model masquerading as a measurement.
@@ -41,6 +45,7 @@ sign and replicates cleanly. Working set is the diagnostic that catches it; a fa
 number is not.
 """
 
+import json
 import logging
 import statistics
 import time
@@ -58,6 +63,34 @@ from .speed_monitor import SpeedMonitorCallback
 log = logging.getLogger(__name__)
 
 __all__ = ["SteadyStateThroughputCallback"]
+
+
+def _emit(event: str, **fields):
+    """
+    Emit one ``RESULT <json>`` line.
+
+    THE FORMAT IS `TAG + " " + json.dumps(obj)` AND THAT IS A CONTRACT, NOT A STYLE CHOICE.
+    ``probes/train_probe.py`` established it and L5's ``ResultProtocolCallback`` follows it. This
+    file used to print space-separated ``key=value`` under the same ``RESULT `` tag, and L5
+    measured the consequence: the obvious reader, ``json.loads(line[7:])``, parses their lines and
+    raises ``JSONDecodeError`` on these -- so a reader that guards the exception SILENTLY DROPS
+    them, and what it drops is the X2 throughput headline. Two formats under one tag is the same
+    class of bug as publishing nothing readable, which is why D3 exists.
+
+    ``excluded={'eval': 2}`` was the worst of it: a Python repr with single quotes, which is not
+    valid JSON even on its own. ``json.dumps`` fixes that for free.
+
+    ``sort_keys`` so a diff between two runs' lines is readable. ``default=str`` so an unexpected
+    non-serializable value degrades to its repr instead of raising -- a reporting helper must never
+    be the thing that kills a training run, and this one is called from ``finally``-adjacent paths.
+    """
+    payload = {"event": event, **fields}
+    try:
+        line = json.dumps(payload, sort_keys=True, default=str)
+    except (TypeError, ValueError):  # pragma: no cover -- defensive, `default=str` covers ~all
+        log.exception("could not serialize a RESULT payload for event %r", event)
+        return
+    print(f"RESULT {line}", flush=True)
 
 
 @dataclass
@@ -118,37 +151,54 @@ class SteadyStateThroughputCallback(Callback):
         # later this line is still in the log and the numbers that did appear are interpretable.
         tm = self.trainer.train_module
         peak = sm.device_peak_flops_per_second
-        print(
-            f"RESULT throughput_denominator device="
-            f"{torch.cuda.get_device_name(self.trainer.device) if self.trainer.device.type == 'cuda' else self.trainer.device.type} "
-            f"peak_bf16_dense_flops_per_s={peak} "
-            f"window=[{self.warmup_steps},{self.warmup_steps + self.window_steps}) "
-            f"world_size={get_world_size()}",
-            flush=True,
+        device_name = (
+            torch.cuda.get_device_name(self.trainer.device)
+            if self.trainer.device.type == "cuda"
+            else self.trainer.device.type
         )
-        if peak is None:
-            print(
-                "RESULT throughput_denominator WARNING peak is None -- this device is not in "
-                "speed_monitor.py's table, so MFU is deliberately not reported rather than "
-                "reported against a borrowed peak. tokens/s is still valid.",
-                flush=True,
-            )
+        _emit(
+            "throughput_denominator",
+            device=device_name,
+            peak_bf16_dense_flops_per_s=peak,
+            warmup_steps=self.warmup_steps,
+            window_start=self.warmup_steps,
+            window_stop=self.warmup_steps + self.window_steps,
+            world_size=get_world_size(),
+            peak_known=peak is not None,
+            note=(
+                None
+                if peak is not None
+                else "peak is None: this device is not in speed_monitor.py's table, so MFU is "
+                "deliberately not reported rather than reported against a borrowed peak. "
+                "tokens/s is still valid."
+            ),
+        )
 
-        # The FLOPs formula, printed so MFU is auditable rather than trusted.
-        print(
-            "RESULT flops_formula per_token = sum_over_blocks[ 6*block_params "
-            "+ 12*n_heads*head_dim*min(window_size, seq_len) ] + 6*lm_head_params ; "
-            "MoE blocks contribute 6*router_params + 6*int(expert_params*top_k/num_experts). "
-            "Source: nn/transformer/model.py:1018-1029, nn/attention/__init__.py:791-809, "
-            "nn/moe/moe.py:337-343, nn/lm_head.py:422-425.",
-            flush=True,
-        )
-        print(
-            "RESULT flops_formula NOTE this is NOT '6*(active_params - embed_params)'. That "
-            "expression omits the attention score term and mis-credits the head; at R3 it is "
-            "0.906x the counted figure, i.e. 9.4% low. Quote the counted formula above, since it "
-            "is what the reported MFU actually divides.",
-            flush=True,
+        # The FLOPs formula, emitted so MFU is auditable rather than trusted.
+        _emit(
+            "flops_formula",
+            per_token=(
+                "sum_over_blocks[ 6*block_params + 12*n_heads*head_dim*min(window_size, seq_len) ]"
+                " + 6*lm_head_params ; MoE blocks contribute 6*router_params + "
+                "6*int(expert_params*top_k/num_experts)"
+            ),
+            source=(
+                "nn/transformer/model.py:1018-1029, nn/attention/__init__.py:791-809, "
+                "nn/moe/moe.py:337-343, nn/lm_head.py:422-425"
+            ),
+            not_this="6*(active_params - embed_params)",
+            not_this_ratio_at_r3=0.906,
+            not_this_note=(
+                "that expression omits the attention score term and mis-credits the head; at R3 "
+                "it is 0.906x the counted figure, i.e. 9.4% low. The counted formula above is "
+                "what the reported MFU actually divides."
+            ),
+            understates_mfu_note=(
+                "MoE.num_flops_per_token uses top_k/num_experts of total expert params, i.e. "
+                "IDEALIZED DROPLESS FLOPs (see parallel_mlp.py:336-340). On the capacity path at "
+                "factor 2.0 every expert is padded to ~2x mean load, so executed FLOPs exceed "
+                "counted and this MFU is UNDERSTATED."
+            ),
         )
 
         if isinstance(tm, TransformerTrainModule):
@@ -172,22 +222,23 @@ class SteadyStateThroughputCallback(Callback):
             props = torch.cuda.get_device_properties(self.trainer.device)
             l2_bytes = getattr(props, "L2_cache_size", None)
 
-        msg = (
-            f"RESULT working_set params={params} param_bytes={param_bytes} "
-            f"rank_microbatch_tokens={mb}"
+        fits_in_l2 = None if not l2_bytes else bool(param_bytes < l2_bytes)
+        _emit(
+            "working_set",
+            params=params,
+            param_bytes=param_bytes,
+            rank_microbatch_tokens=mb,
+            l2_cache_bytes=l2_bytes,
+            param_bytes_over_l2=(None if not l2_bytes else round(param_bytes / l2_bytes, 3)),
+            fits_in_l2=fits_in_l2,
+            warning=(
+                "the parameter working set FITS IN L2. A measurement of this subgraph can report "
+                "the WRONG SIGN and reproduce cleanly. Do not quote a throughput number from it "
+                "without saying so."
+                if fits_in_l2
+                else None
+            ),
         )
-        if l2_bytes:
-            ratio = param_bytes / l2_bytes
-            msg += f" l2_cache_bytes={l2_bytes} param_bytes_over_l2={ratio:.1f}x"
-            if param_bytes < l2_bytes:
-                msg += (
-                    " WARNING the parameter working set FITS IN L2. A measurement of this "
-                    "subgraph can report the wrong sign and reproduce cleanly. Do not quote a "
-                    "throughput number from it without saying so."
-                )
-        else:
-            msg += " l2_cache_bytes=unknown"
-        print(msg, flush=True)
 
     def post_checkpoint_saved(self, path):
         """
@@ -271,12 +322,15 @@ class SteadyStateThroughputCallback(Callback):
         self._reported = True
         n = len(self._step_times)
         if n == 0:
-            print(
-                f"RESULT steady_state INCOMPLETE steps_in_window=0 "
-                f"excluded={self._excluded} "
-                f"-- the run ended before the window opened. Report NO throughput number from "
-                f"this run rather than reporting the contaminated cumulative average.",
-                flush=True,
+            _emit(
+                "steady_state",
+                complete=False,
+                steps_in_window=0,
+                excluded=dict(self._excluded),
+                note=(
+                    "the run ended before the window opened. Report NO throughput number from "
+                    "this run rather than reporting the contaminated cumulative average."
+                ),
             )
             return
 
@@ -296,39 +350,42 @@ class SteadyStateThroughputCallback(Callback):
         sm = self._speed_monitor
         peak = sm.device_peak_flops_per_second if sm is not None else None
 
-        print(
-            f"RESULT steady_state steps_in_window={n} "
-            f"window=[{self.warmup_steps},{self.warmup_steps + self.window_steps}) "
-            f"median_step_s={med:.4f} min_s={lo:.4f} p90_s={p90:.4f} max_s={hi:.4f} "
-            f"max_over_median={hi / med:.2f}x "
-            f"excluded={self._excluded}",
-            flush=True,
+        # ONE object with everything in it, rather than three lines a reader has to correlate.
+        # X2 has to aggregate this across four rungs, and aggregating by regex over key=value text
+        # is how a benchmark reports a confident wrong number.
+        _emit(
+            "steady_state",
+            complete=True,
+            steps_in_window=n,
+            window_start=self.warmup_steps,
+            window_stop=self.warmup_steps + self.window_steps,
+            median_step_s=round(med, 6),
+            min_step_s=round(lo, 6),
+            p90_step_s=round(p90, 6),
+            max_step_s=round(hi, 6),
+            max_over_median=round(hi / med, 4),
+            excluded=dict(self._excluded),
+            tokens_per_s_per_device=round(tps, 2),
+            counted_flops_per_s_per_device=fps,
+            counted_flops_per_step=flops,
+            peak_bf16_dense_flops_per_s=peak,
+            mfu_median_pct=(None if not peak else round(100 * fps / peak, 4)),
+            mfu_basis=(
+                "median-based; warmup, checkpoint-save and eval steps excluded (see 'excluded'). "
+                "Compare against 'throughput/device/MFU (actual avg)', which includes all three -- "
+                "the gap between them IS the warmup-contamination diagnostic."
+                if peak
+                else "not reported: no known BF16 peak for this device. See "
+                "speed_monitor.py:128-149 for why it is deliberately not defaulted."
+            ),
+            unimodal_warning=(
+                (
+                    f"max/median={hi / med:.2f}x -- the step time is NOT unimodal inside the "
+                    f"window. Most likely a cold S3-mmap shard boundary. The median is still the "
+                    f"right statistic but the mean would be wrong, and a throughput claim from "
+                    f"this run must quote the spread."
+                )
+                if hi / med > 1.5
+                else None
+            ),
         )
-        print(
-            f"RESULT steady_state tokens_per_s_per_device={tps:.1f} "
-            f"counted_flops_per_s_per_device={fps:.4e} "
-            f"counted_flops_per_step={flops}",
-            flush=True,
-        )
-        if peak:
-            print(
-                f"RESULT steady_state MFU_median={100 * fps / peak:.3f}% "
-                f"peak_used={peak} "
-                f"-- median-based, warmup/checkpoint/eval excluded. Compare against "
-                f"'throughput/device/MFU (actual avg)', which includes all three.",
-                flush=True,
-            )
-        else:
-            print(
-                "RESULT steady_state MFU=not_reported (no known BF16 peak for this device; "
-                "see speed_monitor.py:128-149 for why it is not defaulted)",
-                flush=True,
-            )
-        if hi / med > 1.5:
-            print(
-                f"RESULT steady_state WARNING max/median={hi / med:.2f}x -- the step time is not "
-                f"unimodal inside the window. Most likely a cold S3-mmap shard boundary. The "
-                f"median is still the right statistic but the mean would be wrong, and a "
-                f"throughput claim from this run should quote the spread.",
-                flush=True,
-            )

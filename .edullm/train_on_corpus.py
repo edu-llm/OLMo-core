@@ -92,6 +92,7 @@ from olmo_core.distributed.parallel import DataParallelType
 from olmo_core.distributed.utils import barrier, get_rank
 from olmo_core.io import clear_directory, list_directory, normalize_path
 from olmo_core.nn.lm_head import LMLossImplementation
+from olmo_core.nn.quantization import audit_quantization
 from olmo_core.nn.transformer import TransformerConfig
 from olmo_core.optim import (
     AdamWConfig,
@@ -111,6 +112,8 @@ from olmo_core.train.callbacks import (
     ConfigSaverCallback,
     GPUMemoryMonitorCallback,
     LMEvaluatorCallbackConfig,
+    MetricAssertionCallback,
+    ResultProtocolCallback,
     SteadyStateThroughputCallback,
     WandBCallback,
 )
@@ -1412,9 +1415,89 @@ def train(config, opts=None) -> None:
     data_loader = config.data_loader.build(dataset, dp_process_group=train_module.dp_process_group)
     trainer = config.trainer.build(train_module, data_loader)
 
+    # B3 -- ENABLE L3'S DROP HISTOGRAMS. Without this the scalar `drop_frac` still works but both
+    # positional histograms come back `nan` (`parallel_mlp.py:366-371` leaves
+    # `drop_accounting_seq_len` None by default, deliberately, so an unset axis is never mistaken
+    # for a measured zero). The failure is therefore SILENT and looks like B3 is broken rather than
+    # switched off -- and B3 is the deliverable that shows overflow drops the END of the sequence,
+    # which is the whole point of a run whose story is SWA plus long context.
+    #
+    # Set from the config rather than from `opts`, so it stays correct when `train()` is reached
+    # from a resumed config rather than a fresh command line, and so it cannot disagree with the
+    # sequence length the dataset was actually built with.
+    #
+    # Walks for ParallelMLP by duck-typing on the attribute rather than importing the class: the
+    # attribute is the contract L3 published, the MoE class hierarchy is L3's to change, and an
+    # `isinstance` here would be a second place that has to be updated when it does.
+    seq_len_for_drops = config.dataset.sequence_length
+    mlps_wired = 0
+    for module in model.modules():
+        if hasattr(module, "drop_accounting_seq_len"):
+            module.drop_accounting_seq_len = seq_len_for_drops
+            mlps_wired += 1
+    log.info(
+        "B3 drop accounting: seq_len=%d set on %d dispatch module(s)", seq_len_for_drops, mlps_wired
+    )
+    if mlps_wired == 0:
+        # Not fatal -- a dense model legitimately has none -- but it must not pass in silence,
+        # because on an MoE config it means every positional histogram will be `nan`.
+        log.warning(
+            "B3 drop accounting: NO module exposed 'drop_accounting_seq_len'. If this is an MoE "
+            "run, the per-position and per-document drop histograms will be nan."
+        )
+
+    # C5 -- AUDIT THE QUANTIZATION SURFACE, POST-BUILD. L4's audit walks the built model and
+    # raises if anything matching the full-precision carve-out (embeddings, lm_head, router, norms)
+    # got quantized. It runs here, after `build()`, because that is the only point where the
+    # realized module tree exists -- a config-level check cannot see what `build()` actually made.
+    #
+    # Unconditional rather than gated on a quantization flag: on a BF16 run it asserts the
+    # complement, that nothing is quantized, which is exactly the assertion that catches a ternary
+    # toggle left on by accident in what is supposed to be the control arm. A silently-quantized
+    # control would make the whole ternary comparison meaningless and would not otherwise show up.
+    quant_audit = audit_quantization(model)
+    print(
+        "RESULT "
+        + json.dumps(
+            {
+                "event": "quantization_audit",
+                "num_quantized": quant_audit["num_quantized"],
+                "num_full_precision": quant_audit["num_full_precision"],
+                "quantized_numel": quant_audit["quantized_numel"],
+                "full_precision_numel": quant_audit["full_precision_numel"],
+            }
+        ),
+        flush=True,
+    )
+
     cast(ConfigSaverCallback, trainer.callbacks["config_saver"]).config = config.as_config_dict()
     losses = LossWatcher()
     trainer.add_callback("edullm_losses", losses)
+
+    # D2/D3 -- L5'S ASSERTIONS AND THE INCREMENTAL RESULT PROTOCOL.
+    #
+    # REGISTERED HERE BECAUSE OTHERWISE THEY DO NOT RUN AT ALL. The merge order put L5 ahead of
+    # this file, so at L5's merge point `MetricAssertionCallback` and `ResultProtocolCallback`
+    # existed and nothing constructed them -- assertions that exist and never execute, which is
+    # precisely the green-run-that-verified-nothing failure D2 was built to prevent. A callback is
+    # only real once something adds it.
+    #
+    # `config.model.vocab_size` is the PADDED vocab and is the right field for the step-0 loss
+    # band: `build_config` calls the factory with `corpus.tokenizer.padded_vocab_size()` (see the
+    # `model_config = factory(...)` line above), so this is 100,352 for dolma2 and
+    # `ln(100352) = 11.5164` is the band's basis. Reading the unpadded 100,278 would shift the band
+    # by 0.0007 nats -- harmless, but wrong, and the LM head is built at the padded size so the
+    # padded number is the one that describes the logits the loss is computed over.
+    trainer.add_callback(
+        "maple_assertions", MetricAssertionCallback(vocab_size=config.model.vocab_size)
+    )
+    trainer.add_callback(
+        "maple_result",
+        ResultProtocolCallback(
+            run_id=getattr(opts, "run_name", None) if opts is not None else None,
+            rung=getattr(opts, "model_factory", None) if opts is not None else None,
+        ),
+    )
 
     # Before the load rather than after it, so that the state of the save folder the loader
     # reads is the state this attempt is going to write into. Either order resumes from the
@@ -1427,15 +1510,47 @@ def train(config, opts=None) -> None:
     # derived from the run id and is therefore the same string on both attempts.
     trainer.maybe_load_checkpoint()
     started = time.monotonic()
-    trainer.fit()
-    if opts is not None:
-        summarise(
-            opts=opts,
-            config=config,
-            trainer=trainer,
-            losses=losses,
-            seconds=time.monotonic() - started,
-        )
+
+    # THE EXIT-72 BUG, AND WHY THIS IS A `finally` RATHER THAN A STRAIGHT-LINE CALL.
+    #
+    # `summarise()` used to sit directly below `trainer.fit()`, which reads as "summarise after
+    # training" and behaves as "summarise only if training returns normally". Run run_019fd3eb
+    # (exit 72) completed all 1,525 steps, all six eval rungs and its step-1500 checkpoint, and
+    # published NOTHING READABLE: its only structured output was this call, and `fit()` did not
+    # return. The science was intact and unreachable. Diagnosed by L5.
+    #
+    # `finally` rather than `except` deliberately: the exception must still propagate, because the
+    # exit code is what the platform records and swallowing it would turn a failed run green. This
+    # only guarantees the summary is *attempted* on the way out.
+    #
+    # The summary call is itself wrapped, because an exception raised inside `finally` REPLACES the
+    # in-flight one -- so a bug in reporting would erase the traceback saying why the run actually
+    # died. That trade is never worth it: the original failure is the more valuable artifact and a
+    # summary is best-effort by nature. `log.exception` records the reporting bug without
+    # displacing the real one.
+    #
+    # Belt-and-braces with L5's `ResultProtocolCallback`, which prints `RESULT` lines incrementally
+    # and again from `close()` (which `Trainer._shutdown` runs on the ungraceful path too). Both
+    # land and neither subsumes the other: the callback gets the per-step record out *during* the
+    # run, this gets the end-of-run summary out on the *failure* path.
+    try:
+        trainer.fit()
+    finally:
+        if opts is not None:
+            try:
+                summarise(
+                    opts=opts,
+                    config=config,
+                    trainer=trainer,
+                    losses=losses,
+                    seconds=time.monotonic() - started,
+                )
+            except Exception:
+                log.exception(
+                    "summarise() failed on the way out. The run's own outcome propagates "
+                    "unchanged and is not masked by this. RESULT lines from "
+                    "ResultProtocolCallback remain the machine-readable record."
+                )
 
 
 def build_parser() -> argparse.ArgumentParser:
