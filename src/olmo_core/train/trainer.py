@@ -1019,20 +1019,54 @@ class Trainer:
             ephemeral=ephemeral,
         )
 
+        # THE FUTURE WE HAND BACK MUST NOT COMPLETE BEFORE `callback` BELOW HAS FINISHED.
+        #
+        # This is the same bug as the one described in the NOTE in `run_bookkeeping_op`, in the
+        # one place it was missed: work done from `add_done_callback` runs *after* the inner
+        # future is marked FINISHED, and `Future.set_result` wakes waiters before invoking
+        # callbacks. So `fut.result()` in `CheckpointerCallback._await_last_checkpoint` can and
+        # does return while `callback` has not yet run `record_metric` below.
+        #
+        # Here that race is not merely stale state, it is a COLLECTIVE DIVERGENCE, and it killed
+        # 3 of 4 cells of run_019fd382. `_shutdown` calls `_log_metrics`, which returns early --
+        # taking no collective at all -- when `self._metrics` is empty. After the last step the
+        # only thing left in `self._metrics` is the metric recorded below, so a rank that won the
+        # race enters an all-reduce on the bookkeeping process group while a rank that lost it
+        # skips straight to the `barrier()` at the end of `_shutdown`. Neither ever completes:
+        # the majority time out after the bookkeeping group's 30 minutes, the barrier after the
+        # default group's 15. Eight ranks race a window of a few milliseconds independently, so
+        # on any given cell they can land on both sides of it -- which is why the surviving cell
+        # was survivorship and not correctness.
+        #
+        # Resolving `observable` only at the end of `callback` makes the await a real happens-
+        # before edge: every rank that has finished awaiting has recorded the metric, so every
+        # rank makes the same choice in `_log_metrics`. It adds no collective and changes no
+        # numerics -- it only removes an ordering in which some ranks skipped one.
+        observable: Future = Future()
+        observable.set_running_or_notify_cancel()
+
         def callback(future: Future):
-            future.result()  # ensure it finished successfully
-            self.record_metric(
-                "checkpoint/save_async_duration_s",
-                time.perf_counter() - save_start,
-                reduce_type=ReduceType.max,
-            )
-            for callback in self._iter_callbacks():
-                callback.post_checkpoint_saved(path)
-            log.info(f"Checkpoint for step {step} saved successfully")
+            try:
+                future.result()  # ensure it finished successfully
+                self.record_metric(
+                    "checkpoint/save_async_duration_s",
+                    time.perf_counter() - save_start,
+                    reduce_type=ReduceType.max,
+                )
+                for callback in self._iter_callbacks():
+                    callback.post_checkpoint_saved(path)
+                log.info(f"Checkpoint for step {step} saved successfully")
+            except BaseException as exc:
+                # Must always resolve, or an awaiting rank waits on it forever -- a failure that
+                # used to surface through `fut.result()` would become a hang.
+                observable.set_exception(exc)
+                raise
+            else:
+                observable.set_result(None)
 
         fut.add_done_callback(callback)
 
-        return path, fut
+        return path, observable
 
     def record_metric(
         self,
