@@ -110,36 +110,347 @@ def test_the_two_treatment_arms_are_exactly_parameter_matched():
 # The utilization floor, which REPLACED the unfireable cache ceiling. The property that
 # matters is not that it computes correctly but that it can fail in this regime.
 # ------------------------------------------------------------------------------------------
-def test_the_old_cache_ceiling_would_have_been_unfireable_here():
-    """Records why the guard was replaced, in arithmetic rather than prose.
+def test_no_bandwidth_ceiling_has_been_reintroduced():
+    """A bandwidth CEILING must not come back, and this detects it rather than describing it.
 
-    For the weights alone to exceed A100 HBM peak the step must finish in under 0.50 ms. The
-    fastest configured shape does not come close, so the old check would have read False on
-    every row and printed as a passed check. This test is the receipt for that decision; if
-    somebody reintroduces a bandwidth CEILING, it should fail review against this number.
+    An earlier version of this test only recomputed the arithmetic below and claimed in its
+    docstring that a reintroduced ceiling "should fail review against this number". Nothing in
+    it detected one. This does: it greps the harness for the field and flag the old guard used.
+
+    The arithmetic is kept because it is the reason, and it is worth being able to cite:
     """
+    src = _MODULE_PATH.read_text()
+    assert "cache_resident" not in src, (
+        "a cache-residency ceiling has been reintroduced. It cannot fire at full-model scale "
+        "(see the arithmetic below) and will print as a passed check."
+    )
+    assert "fail-on-cache-resident" not in src
+
+    # Why: tripping >100% of A100 HBM peak needs the whole model to move in under 0.502 ms.
     peak = entry.HBM_PEAK_GBS["NVIDIA A100-SXM4-40GB"]
     ms_needed = MODEL_BYTES / (peak * 1e9) * 1e3
     assert ms_needed == pytest.approx(0.502, abs=0.005)
-    # Even an optimistic graphed decode is above that, so >100% was unreachable.
-    optimistic_graphed_ms = 0.7
-    assert optimistic_graphed_ms > ms_needed
+    # The fastest configured shape is well above that, so the ceiling was unreachable.
+    assert 0.7 > ms_needed
     # And the model cannot be cache-resident anyway: 18.6x the A100 L2.
     assert MODEL_BYTES / 2**20 / entry.L2_MIB["NVIDIA A100-SXM4-40GB"] > 18
+
+
+A100_GBS = 1555.0
+A100_TFLOPS = 312.0
+
+
+def _util(**kw):
+    """Call the real ``utilization`` with A100 denominators and sensible defaults."""
+    args = dict(
+        regime="decode",
+        mode="graphed",
+        median_ms=0.72,
+        weight_bytes_=MODEL_BYTES,
+        flops_per_token=0,
+        batch_size=1,
+        seq_len=1,
+        peak_gbs=A100_GBS,
+        peak_tflops=A100_TFLOPS,
+    )
+    args.update(kw)
+    return entry.utilization(**args)
 
 
 def test_the_utilization_floor_is_reachable_from_both_sides():
     """The floor must be a threshold real measurements straddle, not one they all clear.
 
-    A guard every row passes is indistinguishable from no guard. These are the plausible
-    readings on an A100: a graph-replayed decode near 70% of HBM peak clears the floor, and a
-    launch-bound eager decode near 20% does not -- so the check discriminates.
+    A guard every row passes is indistinguishable from no guard. Calls the real function on the
+    plausible A100 readings: a graph-replayed decode near 70% of HBM peak clears it, a
+    launch-bound eager-speed decode near 20% does not.
+
+    This calls ``utilization`` rather than re-deriving the formula, which is the difference that
+    matters. The previous version of this test recomputed the arithmetic on literals, so
+    inverting the comparison, swapping the two peaks, or deleting ``utilization_ok`` entirely
+    all left it green.
     """
-    peak = entry.HBM_PEAK_GBS["NVIDIA A100-SXM4-40GB"]
-    graphed_pct = MODEL_BYTES / (0.72 / 1e3) / 1e9 / peak * 100
-    eager_pct = MODEL_BYTES / (2.5 / 1e3) / 1e9 / peak * 100
-    assert graphed_pct > entry.MIN_DECODE_BW_UTIL_PCT, graphed_pct
-    assert eager_pct < entry.MIN_DECODE_BW_UTIL_PCT, eager_pct
+    fast = _util(median_ms=0.72)
+    assert fast["pct_of_hbm_peak"] > entry.MIN_DECODE_BW_UTIL_PCT
+    assert fast["utilization_ok"] is True
+
+    slow = _util(median_ms=2.5)
+    assert slow["pct_of_hbm_peak"] < entry.MIN_DECODE_BW_UTIL_PCT
+    assert slow["utilization_ok"] is False
+    assert "launch-bound" in slow["utilization_note"]
+
+
+def test_eager_decode_is_exempt_from_the_floor_and_says_so():
+    """Eager decode is EXPECTED launch-bound, so failing it would fire on designed behaviour.
+
+    A guard that false-alarms gets an --allow flag passed to silence it, and then it protects
+    nothing. The row still reports its bandwidth; it just is not judged on it.
+    """
+    row = _util(mode="eager", median_ms=2.5)
+    assert row["utilization_ok"] is None
+    assert "exempt" in row["utilization_note"]
+    assert row["pct_of_hbm_peak"] is not None, "the number is still reported, just not judged"
+
+
+#: Forward-only FLOPs per token for the real 390M model, derived rather than invented:
+#: ``num_flops_per_token`` returns ``6 * params`` (training), and inference is the forward third.
+#: Using a made-up figure here is how the first version of these tests came to assert that a
+#: perfectly healthy prefill row was below the floor.
+REAL_FWD_FLOPS_PER_TOKEN = int(6 * 390_135_552 / 3)
+
+
+def test_prefill_is_judged_on_flops_and_never_on_weight_bandwidth():
+    """Prefill must not carry a weights-only bandwidth ratio.
+
+    At batch 4 x 4096 the logits tensor alone is 3.29 GB, four times the weight footprint, and
+    real traffic is 15-20 GB against the 0.78 GB a weights-only ratio counts -- a ~20x
+    understatement. So the bandwidth fields stay None and the FLOPs fields carry the verdict.
+    """
+    row = _util(
+        regime="prefill",
+        mode="eager",
+        median_ms=100.0,
+        flops_per_token=REAL_FWD_FLOPS_PER_TOKEN,
+        batch_size=4,
+        seq_len=4096,
+    )
+    assert row["pct_of_hbm_peak"] is None
+    assert row["achieved_gbs"] is None
+    assert row["pct_of_flops_peak"] is not None
+    assert row["utilization_ok"] is not None
+
+
+def test_the_prefill_floor_passes_a_realistic_row_and_fails_a_starved_one():
+    """The floor must clear a plausible prefill and reject a starved one.
+
+    Both sides matter. A floor that fails healthy measurements gets an --allow flag passed to
+    silence it; a floor nothing can fail is decoration. The healthy figure is derived from the
+    real model (12.8 TFLOP at b=4 s=4096, so ~41% of A100 peak at 100 ms) rather than chosen to
+    make the assertion pass.
+    """
+    healthy = _util(
+        regime="prefill",
+        mode="eager",
+        median_ms=100.0,
+        flops_per_token=REAL_FWD_FLOPS_PER_TOKEN,
+        batch_size=4,
+        seq_len=4096,
+    )
+    assert healthy["pct_of_flops_peak"] == pytest.approx(41.0, abs=1.0)
+    assert healthy["utilization_ok"] is True
+
+    # Same work, 2.5x slower: 16% of peak, which is not a compute-bound region.
+    starved = _util(
+        regime="prefill",
+        mode="eager",
+        median_ms=250.0,
+        flops_per_token=REAL_FWD_FLOPS_PER_TOKEN,
+        batch_size=4,
+        seq_len=4096,
+    )
+    assert starved["utilization_ok"] is False
+    assert "compute-bound" in starved["utilization_note"]
+
+
+def test_a_nonpositive_timing_is_rejected_rather_than_dividing():
+    """A zero or negative elapsed time must fail, not raise or produce infinity."""
+    row = _util(median_ms=0.0)
+    assert row["utilization_ok"] is False
+    assert "not usable" in row["utilization_note"]
+
+
+def test_forward_only_flops_fraction_is_one_third():
+    """The codebase's ``num_flops_per_token`` is the 6x TRAINING convention.
+
+    ``short_conv.py``'s own docstring warns that a mixer using the 2x convention "would report a
+    third of its true cost". This harness measures inference, so it must take the forward third.
+    Leaving the 6x figure would make the denominator 3x too large, drive every prefill row to a
+    third of its real utilization, and fail the floor on a healthy measurement.
+    """
+    assert entry.FORWARD_ONLY_FLOPS_FRACTION == pytest.approx(1 / 3)
+
+
+def test_lastlogit_rows_are_not_charged_the_full_lm_head():
+    """``logits_to_keep=1`` removes ~23% of prefill work, so it must not be billed for it.
+
+    Charging the full-head figure would overstate those rows' utilization by ~1.3x and let them
+    clear the floor for free. Calls the real re-pricing helper.
+    """
+    head = 205_000_000
+    info = entry.ArmInfo(
+        arm="L0",
+        source_arm="L0",
+        params_total=390_135_552,
+        weight_bytes=MODEL_BYTES,
+        conv_path="nn.Conv1d",
+        gate_structure="dense",
+        flops_per_token_4096=880_000_000,
+    )
+    full = entry.arm_flops_per_token(info, regime="prefill", seq_len=4096, lm_head_flops=head)
+    trimmed = entry.arm_flops_per_token(
+        info, regime="prefill-lastlogit", seq_len=4096, lm_head_flops=head
+    )
+    assert trimmed < full, "the lastlogit row must be charged less, not the same"
+    # And both are forward-only, i.e. a third of the recorded 6x figure.
+    assert full == pytest.approx(880_000_000 / 3, rel=1e-6)
+
+
+# ------------------------------------------------------------------------------------------
+# The clock-spread guard. It was gated on a value that is always None in the research image,
+# which made it unfireable -- the same disease as the cache ceiling it sits beside.
+# ------------------------------------------------------------------------------------------
+def test_clock_spread_distinguishes_unmeasured_from_agreeing():
+    """``None`` must mean "not measured", never "the clocks agree".
+
+    ``pynvml`` is absent from the research image, so every clock reads None and the spread is
+    None. If the guard treated that as 0% it would pass silently on every run -- which is
+    exactly what it did before the refusal was added.
+    """
+    assert entry.clock_spread_pct([None, None, None]) is None
+    assert entry.clock_spread_pct([1410.0]) is None, "one arm cannot have a spread"
+    assert entry.clock_spread_pct([1410.0, 1410.0]) == pytest.approx(0.0)
+
+
+def test_clock_spread_exceeds_the_limit_on_a_realistic_drift():
+    """A 3% swing must trip the 2% limit; a 0.5% swing must not.
+
+    An A100-SXM4's SM clock moves 4-10% between idle and sustained bf16 load, so this is the
+    magnitude the guard exists for -- and it is larger than the 1.8% effect being hunted.
+    """
+    tripping = entry.clock_spread_pct([1410.0, 1410.0, 1368.0])
+    assert tripping is not None and tripping > entry.MAX_CLOCK_SPREAD_PCT, tripping
+    fine = entry.clock_spread_pct([1410.0, 1410.0, 1403.0])
+    assert fine is not None and fine < entry.MAX_CLOCK_SPREAD_PCT, fine
+
+
+def test_missing_nvml_is_refused_by_default():
+    """The CLI must not proceed without a drift receipt unless told to in as many words."""
+    src = _MODULE_PATH.read_text()
+    assert "--allow-unmeasured-clocks" in src
+    assert "allow_unmeasured_clocks" in src
+
+
+# ------------------------------------------------------------------------------------------
+# The A/A resolution verdict. Width alone is not enough: a narrow interval that excludes zero
+# describes a rig with a systematic bias between two byte-identical models.
+# ------------------------------------------------------------------------------------------
+def _cell(**kw):
+    args = dict(
+        arm=entry.CONTROL_ARM,
+        regime="decode",
+        mode="graphed",
+        batch_size=1,
+        seq_len=1,
+        rounds=20,
+        median_ms=1.0,
+        p10_ms=0.99,
+        p90_ms=1.01,
+    )
+    args.update(kw)
+    return entry.Cell(**args)
+
+
+def test_a_tight_interval_that_excludes_zero_is_still_unresolvable():
+    """THE finding this function was extracted for.
+
+    An A/A control reading +3.0% with CI [+2.8, +3.3] has a width of 0.5pp, so a width-only
+    check certifies it as able to resolve 1.8%. But the control's true effect is EXACTLY zero,
+    so that interval says the rig has a 3pp systematic bias between two identical models. The
+    guard the design calls "the one that can fail for the right reason" was passing for the
+    wrong one.
+    """
+    biased = _cell(vs_baseline_pct=3.0, ci_low_pct=2.8, ci_high_pct=3.3)
+    lines, unresolvable = entry.resolution_verdict([biased])
+    assert unresolvable, "a 3pp bias between identical models must not be called resolvable"
+    assert any("excludes zero" in line for line in lines)
+
+
+def test_a_wide_interval_bracketing_zero_is_also_unresolvable():
+    """The width condition must still hold: noisier than the effect means it cannot be seen."""
+    noisy = _cell(vs_baseline_pct=0.1, ci_low_pct=-4.0, ci_high_pct=4.2)
+    _lines, unresolvable = entry.resolution_verdict([noisy])
+    assert unresolvable
+
+
+def test_a_tight_interval_bracketing_zero_passes():
+    """The one case that should pass: narrow AND centred on zero."""
+    good = _cell(vs_baseline_pct=0.05, ci_low_pct=-0.4, ci_high_pct=0.5)
+    lines, unresolvable = entry.resolution_verdict([good])
+    assert unresolvable == []
+    assert any("OK" in line for line in lines)
+
+
+def test_no_control_cell_is_a_failure_not_an_absence():
+    """A run with no A/A measurement must not report a reassuring blank.
+
+    Reachable in practice with ``--baseline L0-aa``, which makes the control the baseline so it
+    gets no ratio. Before this, that path printed "NOT MEASURED" and exited zero.
+    """
+    lines, unresolvable = entry.resolution_verdict([])
+    assert unresolvable, "an unmeasured floor must appear in the failure list"
+    assert any("NOT MEASURED" in line for line in lines)
+
+
+def test_the_verdict_ignores_cells_from_other_arms():
+    """Only the control arm's cells define the floor.
+
+    A treatment arm's tight interval must not be mistaken for evidence about the rig.
+    """
+    treatment = _cell(arm="F-r128", vs_baseline_pct=1.9, ci_low_pct=1.5, ci_high_pct=2.3)
+    lines, unresolvable = entry.resolution_verdict([treatment])
+    assert any(
+        "NOT MEASURED" in line for line in lines
+    ), "a treatment cell must not be read as the control"
+    assert unresolvable
+
+
+# ------------------------------------------------------------------------------------------
+# The launch counter, whose profiler field was renamed between torch versions.
+# ------------------------------------------------------------------------------------------
+class _Ev:
+    def __init__(self, key, count, device_time=None, cuda_time=None):
+        self.key = key
+        self.count = count
+        if device_time is not None:
+            self.device_time_total = device_time
+        if cuda_time is not None:
+            self.cuda_time_total = cuda_time
+
+
+def test_launch_counter_reads_the_current_field_name():
+    """torch 2.9 exposes ``device_time_total``; the old spelling was ``cuda_time_total``.
+
+    Reading only the old name yields an empty kernel list and returns None on every arm --
+    printing an empty column rather than failing, which is how the one integer that makes an
+    eager row interpretable would have gone missing.
+    """
+    total, copies = entry.summarise_profile(
+        [
+            _Ev("aten::addmm", 10, device_time=500),
+            _Ev("aten::copy_", 4, device_time=20),
+        ]
+    )
+    assert total == 14
+    assert copies == 4
+
+
+def test_launch_counter_still_reads_the_legacy_field_name():
+    """An older torch must not silently report zero kernels."""
+    total, copies = entry.summarise_profile(
+        [_Ev("aten::addmm", 7, cuda_time=100), _Ev("aten::contiguous", 3, cuda_time=5)]
+    )
+    assert total == 10
+    assert copies == 3
+
+
+def test_launch_counter_returns_none_on_an_empty_profile():
+    """No events must be None, so the caller can refuse rather than print 0."""
+    assert entry.summarise_profile([]) == (None, None)
+
+
+def test_missing_launch_counts_are_refused_by_default():
+    src = _MODULE_PATH.read_text()
+    assert "--allow-missing-launch-counts" in src
+    assert "allow_missing_launch_counts" in src
 
 
 def test_every_card_has_all_three_denominators():
@@ -227,22 +538,40 @@ def test_use_fla_is_pinned_on_every_liv_layer_including_overrides():
 def test_the_cli_default_for_use_fla_is_false():
     """The default must be the safe one, because the default is what a hurried run uses.
 
-    Asserted by parsing the module's own argument parser rather than by matching source text,
-    so reformatting cannot break it and a changed default cannot hide behind whitespace.
+    Asserted by PARSING the module's own parser, which is what the previous version of this test
+    only claimed to do -- it scanned source lines for the literal ``default="false"`` and set a
+    flag on any match, never tying it to this argument. Flipping this default to ``"true"``
+    passed so long as some other option still carried ``"false"``.
     """
-    import argparse
-
-    src = _MODULE_PATH.read_text()
-    assert "--use-fla" in src
-    parser_defaults = {}
-    for line in src.splitlines():
-        if 'default="false"' in line:
-            parser_defaults["use_fla"] = "false"
-    assert parser_defaults.get("use_fla") == "false", (
+    opts = entry.build_parser().parse_args([])
+    assert opts.use_fla == "false", (
         "--use-fla must default to 'false': fla is absent from the research image, so True "
-        "makes kernel selection a property of the environment"
+        "makes kernel selection a property of the environment rather than of the config"
     )
-    assert isinstance(argparse.ArgumentParser, type)
+
+
+def test_the_guard_bypasses_all_default_to_off():
+    """Every --allow-* escape hatch must be off by default.
+
+    Each one disables a check that exists because a previous version of this harness shipped a
+    number it should not have. A default-on bypass is the same as no check.
+    """
+    opts = entry.build_parser().parse_args([])
+    assert opts.allow_unresolvable is False
+    assert opts.allow_unmeasured_clocks is False
+    assert opts.allow_missing_launch_counts is False
+    assert (
+        opts.skip_graphed is False
+    ), "graphed decode must be on by default; eager alone ranks arms by launch count"
+
+
+def test_the_default_arm_list_includes_the_control():
+    """Parsed from the CLI, not read off the constant, since the CLI is what a run uses."""
+    opts = entry.build_parser().parse_args([])
+    arms = opts.arms.split(",")
+    assert entry.CONTROL_ARM in arms
+    assert entry.BASELINE_ARM in arms
+    assert "F-r128" in arms and "G-grouped" in arms
 
 
 def test_the_control_arm_resolves_to_the_baseline_and_is_therefore_zero_effect():
@@ -276,30 +605,58 @@ def test_the_control_arm_resolves_to_the_baseline_and_is_therefore_zero_effect()
     assert describe(entry.CONTROL_ARM) == describe(entry.BASELINE_ARM)
 
 
-def test_the_control_arm_is_in_the_default_arm_list():
-    """A default run must measure its own resolution.
-
-    If the control were opt-in, the common invocation would produce deltas with no floor -- and
-    a delta with no floor is what the retraction was.
-    """
-    assert entry.CONTROL_ARM in entry.ARM_NAMES
-    assert entry.BASELINE_ARM in entry.ARM_NAMES
-
-
-def test_running_without_the_control_arm_is_refused():
+def test_running_without_the_control_arm_is_refused(capsys):
     """Dropping the A/A arm must be an explicit choice, not a quiet one.
 
-    Exercised through ``main``, which is where the check lives, so it cannot pass by
-    re-implementing the condition.
+    **Asserts the MESSAGE, not just the exit code.** An earlier version checked only
+    ``rc == 1``, and on any CPU host ``main`` returns 1 from the ``torch.cuda.is_available()``
+    check long before reaching this guard -- so deleting the guard entirely left the test green.
+    It was passing on the wrong return. The guard has since been moved above the torch import
+    (it is pure string work), and this now proves which refusal fired.
     """
     rc = entry.main(["local", "--arms", "L0,F-r128", "--baseline", "L0"])
     assert rc == 1
+    assert "A/A control arm" in capsys.readouterr().err
 
 
-def test_baseline_must_be_among_the_measured_arms():
-    """``--baseline`` naming an arm not in ``--arms`` must refuse before spending a GPU."""
+def test_the_control_arm_may_be_dropped_deliberately(capsys):
+    """With ``--allow-unresolvable`` the run must get PAST the control check.
+
+    This is the negative control for the test above: it proves the refusal is conditional on the
+    flag rather than unconditional. It still exits 1 on a CPU host, but for the CUDA reason, and
+    asserting which reason is the whole point.
+    """
+    rc = entry.main(["local", "--arms", "L0,F-r128", "--baseline", "L0", "--allow-unresolvable"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "A/A control arm" not in err, "the flag must suppress this refusal"
+    assert "no CUDA device" in err, "and the run must then stop for the honest reason"
+
+
+def test_baseline_must_be_among_the_measured_arms(capsys):
+    """``--baseline`` naming an arm not in ``--arms`` must refuse before spending a GPU.
+
+    Same history as the control-arm test: this used to pass on the CUDA return.
+    """
     rc = entry.main(["local", "--arms", "F-r128,G-grouped,L0-aa", "--baseline", "L0"])
     assert rc == 1
+    assert "is not in --arms" in capsys.readouterr().err
+
+
+def test_argv_validation_happens_before_the_torch_import(capsys):
+    """The ordering is load-bearing and is asserted rather than trusted.
+
+    A guard that only runs on a GPU host cannot protect you from misconfiguring a GPU run. Both
+    argv checks are pure string work, so they belong first -- and the proof is that on this
+    CPU-only host the argv message appears INSTEAD of the CUDA message.
+    """
+    entry.main(["local", "--arms", "F-r128", "--baseline", "L0"])
+    err = capsys.readouterr().err
+    assert "is not in --arms" in err
+    assert "no CUDA device" not in err, (
+        "the argv guard must fire first; if the CUDA message appears the ordering regressed and "
+        "these guards are unreachable on every CPU host"
+    )
 
 
 def test_arm_geometry_differs_in_gate_structure_only():
@@ -372,32 +729,60 @@ def test_tied_parameters_are_counted_once():
     assert entry.weight_bytes(model) == 1536 * 4
 
 
-def test_two_distinct_tensors_sharing_storage_are_both_counted():
+def test_two_distinct_tensors_at_one_address_are_both_counted():
     """Deduplication must key on IDENTITY, not on ``data_ptr``.
 
-    Two different parameters that view one storage are two sets of bytes. Keying on
-    ``data_ptr()`` would merge them -- and worse, every parameter on a meta device reports
-    address 0, so a meta-built model would collapse to a single entry.
+    The fixture holds two DIFFERENT objects that report the SAME address, which is the only
+    configuration that separates the two implementations: id-keyed counts both (4096), ptr-keyed
+    merges them (2048).
 
-    This is the test that distinguishes the two implementations, so it is the one that would
-    have caught the ``data_ptr`` version.
+    An earlier version of this test used ``storage[:1024]`` and ``storage[1024:]`` and proved in
+    its own body that their addresses DIFFER -- so a ptr-keyed implementation passed it too, and
+    it was vacuous with respect to the thing it claimed to catch.
     """
     import torch
 
     storage = torch.zeros(2048, dtype=torch.float32)
+    view_a = storage.view(2048)
+    view_b = storage[:]
 
-    class _SharedStorage:
-        def __init__(self):
-            self.x = storage[:1024]
-            self.y = storage[1024:]
+    # The premise, asserted rather than assumed: distinct objects, one address.
+    assert view_a is not view_b
+    assert view_a.data_ptr() == view_b.data_ptr() == storage.data_ptr()
 
+    class _Aliased:
         def parameters(self):
-            return iter([self.x, self.y])
+            return iter([view_a, view_b])
 
-    # Confirm the fixture really shares storage, so the assertion is not vacuous.
-    assert storage[:1024].data_ptr() == storage.data_ptr()
-    assert storage[1024:].data_ptr() != storage.data_ptr()
-    assert entry.count_params(_SharedStorage()) == 2048
+    assert entry.count_params(_Aliased()) == 4096, (
+        "id-keyed dedup must count both; a data_ptr-keyed version returns 2048 here, which is "
+        "exactly the bug this test exists to catch"
+    )
+
+
+def test_meta_device_parameters_do_not_collapse():
+    """The other half of the ``data_ptr`` bug, and the more dangerous one in practice.
+
+    Every tensor on a meta device reports address 0, so a ptr-keyed dedup collapses an entire
+    model to one parameter. ``build_arm_config`` builds on meta, so this is the path the harness
+    actually takes.
+    """
+    import torch
+
+    with torch.device("meta"):
+        a = torch.zeros(1024, dtype=torch.float32)
+        b = torch.zeros(512, dtype=torch.float32)
+
+    assert a.data_ptr() == b.data_ptr() == 0, "premise: meta tensors share address 0"
+
+    class _Meta:
+        def parameters(self):
+            return iter([a, b])
+
+    assert entry.count_params(_Meta()) == 1536, (
+        "a data_ptr-keyed dedup would return 1024 here, silently reporting one parameter's "
+        "worth of working set for a whole model"
+    )
 
 
 def test_weight_bytes_scales_with_dtype():

@@ -50,9 +50,29 @@ HOW THE 1.8% IS PROTECTED, WHICH IS THE ACTUAL DESIGN
     of reporting a number. This is the one guard that can fail for the right reason.
   * **Clock and temperature recorded per arm**, and a refusal if mean SM clock differs across
     arms by more than a threshold. Locking clocks needs root and is not available in a Batch
-    container, so interleaving is the primary defence and this is the receipt.
+    container, so interleaving is the primary defence and this is the receipt. **An unreadable
+    NVML is itself a refusal** (``--allow-unmeasured-clocks`` to override): ``pynvml`` is not in
+    the research image, so without that refusal every clock reads ``None``, the spread is
+    ``None``, and the guard is skipped on every run -- the same disease as the ceiling below, on
+    the receipt this design calls its evidence.
   * **A utilization FLOOR, not a cache ceiling.** See below -- this replaces a guard that
     could never fire.
+
+  Every one of those bypasses is off by default and each is asserted so in the tests. A
+  default-on bypass is the same as no check.
+
+WHERE THE GUARDS LIVE, AND WHY THEY ARE NOT INLINE
+  ``utilization``, ``clock_spread_pct``, ``resolution_verdict`` and ``summarise_profile`` are
+  module-level functions rather than code inside ``main``. That is not tidiness. Inline, each
+  could only run on a GPU with NVML present, so the only test possible was one that re-derived
+  the formula on invented literals -- and such a test passes when the comparison is inverted,
+  when the two peak figures are swapped, or when the field it reads is deleted. Extracted, a
+  CPU test calls the same code the run calls.
+
+  The argv checks in ``main`` run BEFORE the torch import for the same reason. While they sat
+  below the CUDA check they were unreachable on every CPU host: two tests asserted them through
+  ``main`` and were in fact passing on the "no CUDA device" return, so deleting either guard
+  left both green.
 
 WHY THE OLD CACHE-RESIDENCY GUARD IS GONE
   An earlier version failed a row whose achieved bandwidth exceeded HBM peak, on the theory
@@ -426,6 +446,185 @@ def read_clock_and_temp(nv, handle) -> Tuple[Optional[float], Optional[float]]:
         return None, None
 
 
+def clock_spread_pct(values: Sequence[Optional[float]]) -> Optional[float]:
+    """Peak-to-peak spread of per-arm mean SM clock, as a percent of the mean.
+
+    Extracted as a pure function so the guard that consumes it is testable on a CPU. It used to
+    be four lines inline in ``main`` and could therefore only be exercised on a GPU with NVML
+    present -- which is to say, never, since ``pynvml`` is not in the research image.
+
+    Returns ``None`` when fewer than two arms reported a clock, which is a DIFFERENT condition
+    from "the clocks agree" and the caller must not conflate them: unmeasured is not zero.
+    """
+    readable = [v for v in values if v is not None]
+    if len(readable) < 2:
+        return None
+    return (max(readable) - min(readable)) / statistics.fmean(readable) * 100.0
+
+
+#: ``num_flops_per_token`` throughout this codebase uses the **6x-params** convention, i.e.
+#: forward AND backward. ``short_conv.py``'s docstring is explicit about it and warns that a
+#: mixer using the 2x convention "would report a third of its true cost and silently unbalance
+#: every arm". This harness runs inference only, so the forward share is one third.
+#:
+#: Getting this wrong is not cosmetic: leaving the 6x figure in place makes the denominator 3x
+#: too large, drives every prefill row to about a third of its real utilization, and fails the
+#: 25% floor on a perfectly healthy measurement. A guard that false-alarms gets flags passed to
+#: silence it, and then it protects nothing.
+FORWARD_ONLY_FLOPS_FRACTION = 1.0 / 3.0
+
+
+def arm_flops_per_token(info: "ArmInfo", *, regime: str, seq_len: int, lm_head_flops: int) -> int:
+    """Forward-only FLOPs per token for one arm on one shape.
+
+    Two corrections over the raw ``model.num_flops_per_token(seq_len)``:
+
+    * **Forward only.** See :data:`FORWARD_ONLY_FLOPS_FRACTION`.
+    * **Per shape.** The ``prefill-lastlogit`` rows pass ``logits_to_keep=1``, so the head runs
+      on one position rather than ``seq_len``. Its cost is therefore amortised across the
+      sequence instead of paid per token, and charging the full-head figure would overstate
+      those rows' utilization by ~1.3x -- letting them clear the floor for free.
+    """
+    total = info.flops_per_token_4096 or 0
+    if regime == "prefill-lastlogit" and seq_len > 0:
+        # The head still runs once for the whole sequence, so spread it over the tokens.
+        total = total - lm_head_flops + max(1, lm_head_flops // seq_len)
+    return int(total * FORWARD_ONLY_FLOPS_FRACTION)
+
+
+def utilization(
+    *,
+    regime: str,
+    mode: str,
+    median_ms: float,
+    weight_bytes_: int,
+    flops_per_token: int,
+    batch_size: int,
+    seq_len: int,
+    peak_gbs: float,
+    peak_tflops: float,
+) -> Dict[str, Any]:
+    """Achieved utilization for one cell, and whether it clears the floor.
+
+    Extracted from ``main`` for one reason: as inline code it could not be called without a
+    GPU, so the only test possible was one that re-derived the formula on invented literals --
+    which passes when the comparison is inverted, when the wrong peak is used as the
+    denominator, or when the branches are swapped. Calling this is what makes those mutations
+    fail.
+
+    Returns a dict rather than a tuple because the caller stores six different fields from it
+    and positional unpacking of six values is where the branches get crossed.
+
+    The floor is direction-correct for each regime, which the old bandwidth CEILING was not:
+
+    * **prefill** is compute-bound, so it is judged on FLOPs. A region below the floor is not
+      compute-bound and a FLOPs saving cannot show up in it.
+    * **graphed decode** is memory-bound, so it is judged on weight bandwidth.
+    * **eager decode** is EXEMPT and says so. It is expected to be launch-bound -- that is the
+      whole reason the graphed row exists -- so failing it would be a guard that fires on the
+      designed behaviour, which trains people to pass ``--allow`` flags.
+
+    ``flops_per_token`` must be the figure for the SHAPE being measured, not a constant. The
+    ``prefill-lastlogit`` rows drop ~23% of the work by computing one position's logits instead
+    of 4096, so charging them the full-head figure would overstate their utilization by ~1.3x
+    and let them clear the floor too easily.
+    """
+    out: Dict[str, Any] = {
+        "achieved_gbs": None,
+        "pct_of_hbm_peak": None,
+        "achieved_tflops": None,
+        "pct_of_flops_peak": None,
+        "utilization_ok": None,
+        "utilization_note": "",
+    }
+    seconds = median_ms / 1e3
+    if seconds <= 0:
+        out["utilization_ok"] = False
+        out["utilization_note"] = "non-positive elapsed time; the timing is not usable"
+        return out
+
+    if regime == "decode":
+        out["achieved_gbs"] = weight_bytes_ / seconds / 1e9
+        out["pct_of_hbm_peak"] = out["achieved_gbs"] / peak_gbs * 100.0
+        if mode == "graphed":
+            out["utilization_ok"] = out["pct_of_hbm_peak"] >= MIN_DECODE_BW_UTIL_PCT
+            if not out["utilization_ok"]:
+                out["utilization_note"] = (
+                    f"below {MIN_DECODE_BW_UTIL_PCT:.0f}% of HBM peak: still launch-bound or "
+                    f"throttled, not a bandwidth comparison"
+                )
+        else:
+            out["utilization_note"] = "eager decode is expected launch-bound; exempt"
+        return out
+
+    out["achieved_tflops"] = flops_per_token * batch_size * seq_len / seconds / 1e12
+    out["pct_of_flops_peak"] = out["achieved_tflops"] / peak_tflops * 100.0
+    out["utilization_ok"] = out["pct_of_flops_peak"] >= MIN_PREFILL_FLOPS_UTIL_PCT
+    if not out["utilization_ok"]:
+        out["utilization_note"] = (
+            f"below {MIN_PREFILL_FLOPS_UTIL_PCT:.0f}% of bf16 peak: the timed region is not "
+            f"compute-bound, so a FLOPs saving cannot show up"
+        )
+    return out
+
+
+def resolution_verdict(
+    cells: Sequence["Cell"], *, control_arm: str = None, target_pct: float = None
+) -> Tuple[List[str], List[str]]:
+    """Read the rig's own resolution off the A/A control, and say which shapes cannot be trusted.
+
+    Two conditions, and the second was missing when this lived inline in ``main``:
+
+    1. **The interval must be narrower than the effect.** A control interval wider than the
+       target means two byte-identical models differ by more than the thing being hunted.
+    2. **The interval must contain zero.** The control's true effect is EXACTLY zero, so an
+       interval like ``[+2.8, +3.3]`` is narrow, passes condition 1, and describes a rig with a
+       3pp systematic bias between two identical models. Width alone certified that as
+       resolvable, which made the one guard "that can fail for the right reason" pass for the
+       wrong one.
+
+    Returns ``(report_lines, unresolvable_shapes)``. An empty control list yields an explicit
+    ``NOT MEASURED`` line and a sentinel in the unresolvable list, so a run with no floor fails
+    rather than printing a reassuring absence.
+    """
+    control_arm = control_arm or CONTROL_ARM
+    target_pct = TARGET_RESOLUTION_PCT if target_pct is None else target_pct
+
+    lines: List[str] = []
+    unresolvable: List[str] = []
+    control = [
+        c
+        for c in cells
+        if c.arm == control_arm and c.ci_low_pct is not None and c.ci_high_pct is not None
+    ]
+    if not control:
+        lines.append(
+            "  NOT MEASURED -- no A/A cell carried an interval, so no delta above has a known "
+            "noise floor. This is a failure, not an absence."
+        )
+        unresolvable.append("<no A/A control measured>")
+        return lines, unresolvable
+
+    for c in control:
+        width = c.ci_high_pct - c.ci_low_pct
+        narrow_enough = width < target_pct
+        brackets_zero = c.ci_low_pct <= 0.0 <= c.ci_high_pct
+        shape = f"{c.regime}/{c.mode} b={c.batch_size}"
+        verdicts = []
+        if not narrow_enough:
+            verdicts.append(f"interval wider than {target_pct}%")
+        if not brackets_zero:
+            verdicts.append("interval excludes zero, so the rig is biased between identical models")
+        lines.append(
+            f"  {shape:<30} {c.vs_baseline_pct:+6.2f}%  CI "
+            f"[{c.ci_low_pct:+6.2f},{c.ci_high_pct:+6.2f}]  width {width:5.2f}pp  "
+            + ("OK" if not verdicts else "; ".join(verdicts))
+        )
+        if verdicts:
+            unresolvable.append(shape)
+    return lines, unresolvable
+
+
 def count_launches(model, tokens, *, logits_to_keep: int) -> Tuple[Optional[int], Optional[int]]:
     """Kernel launches and copy-ish kernels for one forward, OUTSIDE any timed region.
 
@@ -434,8 +633,9 @@ def count_launches(model, tokens, *, logits_to_keep: int) -> Tuple[Optional[int]
     transposes into ``bmm`` and reshapes out of it), and without this integer a slower eager
     row reads as a verdict on gate structure rather than on dispatch count.
 
-    Returns ``(None, None)`` if profiling is unavailable, because a missing diagnostic must not
-    stop the measurement it was going to annotate.
+    Returns ``(None, None)`` if profiling is unavailable. The caller treats that as a defect
+    rather than as an absence -- see ``main`` -- because a diagnostic that silently returns
+    ``None`` produces a report with an empty column that reads as "nothing to see".
     """
     import torch
 
@@ -446,19 +646,46 @@ def count_launches(model, tokens, *, logits_to_keep: int) -> Tuple[Optional[int]
             with profile(activities=[ProfilerActivity.CUDA], record_shapes=False) as prof:
                 model(tokens, logits_to_keep=logits_to_keep)
             torch.cuda.synchronize()
-        events = [e for e in prof.events() if getattr(e, "device_type", None) is not None]
-        kernels = [e for e in prof.key_averages() if getattr(e, "cuda_time_total", 0) > 0]
-        total = sum(int(getattr(e, "count", 0)) for e in kernels)
-        copies = sum(
-            int(getattr(e, "count", 0))
-            for e in kernels
-            if any(t in e.key.lower() for t in ("copy", "contiguous", "cat", "clone"))
-        )
-        del events
-        return total or None, copies
+        return summarise_profile(prof.key_averages())
     except Exception as exc:  # pragma: no cover - diagnostic only
         log.warning("could not count kernel launches (%s)", exc)
         return None, None
+
+
+#: Substrings that mark a kernel as a data-movement kernel rather than real work. The treatments
+#: add these (a strided slice into ``F.linear``; ``_grouped``'s transpose/reshape around
+#: ``bmm``), so counting them separately is what distinguishes "this structure is slower" from
+#: "this implementation copies more".
+_COPY_KERNEL_MARKERS = ("copy", "contiguous", "cat", "clone", "permute", "transpose")
+
+
+def summarise_profile(averages) -> Tuple[Optional[int], Optional[int]]:
+    """Total device-kernel count and copy-kernel count from profiler averages.
+
+    Split out from ``count_launches`` so it can be tested against a stub, because the field it
+    reads was RENAMED. ``cuda_time_total`` is the pre-2.x spelling of ``device_time_total``; a
+    bare ``getattr(e, "cuda_time_total", 0)`` on torch 2.9 would match nothing, make the kernel
+    list empty, and return ``None`` -- printing an empty column rather than failing. Both
+    spellings are tried, and a row exposing neither is counted rather than dropped.
+    """
+    kernels = []
+    for event in averages:
+        device_time = getattr(event, "device_time_total", None)
+        if device_time is None:
+            device_time = getattr(event, "cuda_time_total", None)
+        # A row that exposes neither field is kept: dropping it silently is how the count
+        # became zero in the first place.
+        if device_time is None or device_time > 0:
+            kernels.append(event)
+    if not kernels:
+        return None, None
+    total = sum(int(getattr(e, "count", 0)) for e in kernels)
+    copies = sum(
+        int(getattr(e, "count", 0))
+        for e in kernels
+        if any(marker in str(getattr(e, "key", "")).lower() for marker in _COPY_KERNEL_MARKERS)
+    )
+    return (total or None), copies
 
 
 def make_runner(model, tokens, *, logits_to_keep: int, graphed: bool):
@@ -537,7 +764,14 @@ def percentiles(values: Sequence[float]) -> Tuple[float, float, float]:
     )
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The CLI, extracted so a test can assert a DEFAULT rather than grep for one.
+
+    The previous test for ``--use-fla``'s default scanned the source for the literal
+    ``default="false"`` and set a flag on any line that matched -- never tying the match to this
+    argument. Flipping this default to ``"true"`` passed, so long as some other option still
+    carried ``"false"``.
+    """
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("run_id", nargs="?", default=os.environ.get("EDULLM_RUN_ID", "local"))
     ap.add_argument("--arms", default=",".join(ARM_NAMES))
@@ -589,12 +823,55 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="Report numbers even when the A/A control cannot separate zero from the target "
         "effect. Off by default: a rig that cannot see 1.8% must say so, not print a delta.",
     )
+    ap.add_argument(
+        "--allow-unmeasured-clocks",
+        action="store_true",
+        help="Proceed when NVML is unavailable, i.e. with no evidence that interleaving made "
+        "clock drift common-mode. Off by default because pynvml is absent from the research "
+        "image, which would otherwise silently disable the clock-spread guard.",
+    )
+    ap.add_argument(
+        "--allow-missing-launch-counts",
+        action="store_true",
+        help="Proceed when the profiler yields no kernel counts. Off by default: without them "
+        "an eager decode gap cannot be attributed to dispatch rather than gate structure.",
+    )
     ap.add_argument("--out", default=None)
-    opts = ap.parse_args(argv)
+    return ap
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    opts = build_parser().parse_args(argv)
 
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stdout
     )
+
+    # ------------------------------------------------------------------------------------
+    # ARGV VALIDATION FIRST, BEFORE ANY TORCH IMPORT. This ordering is load-bearing, not
+    # tidiness: these checks are pure string work, and while they sat below the CUDA check
+    # they were UNREACHABLE on any CPU host. Two tests claimed to exercise them through
+    # `main` and were in fact passing on the "no CUDA device" return -- deleting either
+    # guard entirely left both tests green. A guard that can only run on the machine it is
+    # meant to protect you from misconfiguring is not a guard.
+    # ------------------------------------------------------------------------------------
+    arms = [a.strip() for a in opts.arms.split(",") if a.strip()]
+    if opts.baseline not in arms:
+        print(
+            f"ERROR: baseline {opts.baseline!r} is not in --arms ({arms}). Every ratio is "
+            f"formed against it, so a run without it produces no comparisons at all.",
+            file=sys.stderr,
+        )
+        return 1
+    if CONTROL_ARM not in arms and not opts.allow_unresolvable:
+        print(
+            f"ERROR: the A/A control arm {CONTROL_ARM!r} is not in --arms. It is the only "
+            f"thing that measures whether this rig can resolve {TARGET_RESOLUTION_PCT}%, and "
+            f"without it a delta has no floor to be compared against. Add it, or pass "
+            f"--allow-unresolvable to state deliberately that you are not measuring the floor.",
+            file=sys.stderr,
+        )
+        return 1
 
     try:
         import torch
@@ -630,23 +907,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         opts.dtype
     ]
     use_fla = opts.use_fla == "true"
-    arms = [a.strip() for a in opts.arms.split(",") if a.strip()]
-    if opts.baseline not in arms:
-        print(
-            f"ERROR: baseline {opts.baseline!r} is not in --arms ({arms}). Every ratio is "
-            f"formed against it, so a run without it produces no comparisons at all.",
-            file=sys.stderr,
-        )
-        return 1
-    if CONTROL_ARM not in arms and not opts.allow_unresolvable:
-        print(
-            f"ERROR: the A/A control arm {CONTROL_ARM!r} is not in --arms. It is the only "
-            f"thing that measures whether this rig can resolve {TARGET_RESOLUTION_PCT}%, and "
-            f"without it a delta has no floor to be compared against. Add it, or pass "
-            f"--allow-unresolvable to state deliberately that you are not measuring the floor.",
-            file=sys.stderr,
-        )
-        return 1
 
     try:
         from olmo_core.nn.attention.flash_linear_attn_api import has_fla
@@ -655,6 +915,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except Exception:
         fla_importable = False
 
+    # ------------------------------------------------------------------------------------
+    # NVML, and why an absence here is a REFUSAL rather than a shrug.
+    #
+    # `pynvml` is NOT in the research image (checked against `.edullm/Dockerfile`, which
+    # installs torch, `.[wandb]`, boto3 and edullm-data, and against `pyproject.toml`).
+    # Without it every per-arm clock is None, the spread is None, and the clock guard is
+    # skipped -- so the run would print "drift is uncontrolled-but-unmeasured" and exit 0.
+    #
+    # That is exactly the disease this file removed the bandwidth ceiling for: a guard that
+    # cannot fire, on the receipt the design calls its evidence that interleaving worked. So
+    # a missing NVML now stops the run unless the operator says otherwise in as many words.
+    # ------------------------------------------------------------------------------------
     nv = _nvml()
     handle = None
     if nv is not None:
@@ -662,6 +934,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             handle = nv.nvmlDeviceGetHandleByIndex(0)
         except Exception:
             handle = None
+    if handle is None and not opts.allow_unmeasured_clocks:
+        print(
+            "ERROR: NVML is unavailable, so per-arm SM clock cannot be read and the "
+            f"{MAX_CLOCK_SPREAD_PCT}% clock-spread guard cannot fire. Interleaving is this "
+            "design's defence against a 4-10% clock swing on an effect whose ceiling is "
+            "4.03%, and the clock reading is the only evidence that it worked. `pynvml` is "
+            "not in the research image: add it, or pass --allow-unmeasured-clocks to record "
+            "deliberately that this run has no drift receipt.",
+            file=sys.stderr,
+        )
+        return 1
 
     log.info("run %s on %s (%s), %s", opts.run_id, device_name, platform.node(), opts.dtype)
     log.info(
@@ -678,6 +961,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # ------------------------------------------------------------------------------------
     models: Dict[str, Any] = {}
     info: Dict[str, ArmInfo] = {}
+    lm_head_flops: Optional[int] = None
     for arm_name in arms:
         model = build_one_arm(
             arm_name,
@@ -697,6 +981,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             gate_structure=gate_structure_of(model),
             flops_per_token_4096=model.num_flops_per_token(4096),
         )
+        # The head's own share, needed to re-price the `logits_to_keep=1` rows. Read off the
+        # module rather than recomputed, so a change to the head's accounting follows here.
+        if lm_head_flops is None and getattr(model, "lm_head", None) is not None:
+            lm_head_flops = model.lm_head.num_flops_per_token(4096)
         log.info(
             "built %-10s %s gates, %s params, %.1f MiB, conv %s",
             arm_name,
@@ -747,7 +1035,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 0, opts.vocab_size, (b, s), generator=gen, dtype=torch.long
             ).to(device)
 
-    # Launch counts, once per arm, outside every timed region.
+    # Launch counts, once per arm, outside every timed region. A missing count is a REFUSAL
+    # rather than an empty column: it is the only thing that lets an eager decode gap be
+    # attributed to dispatch rather than to gate structure, and the field the profiler exposes
+    # it under was renamed between torch versions -- so "None everywhere" is the expected shape
+    # of that breakage and would otherwise print as nothing-to-see.
     for arm_name in arms:
         total, copies = count_launches(models[arm_name], tokens[(1, 1)], logits_to_keep=1)
         info[arm_name].launch_count = total
@@ -756,6 +1048,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             log.info(
                 "%-10s %d kernel launches at decode b=1 (%s copy-ish)", arm_name, total, copies
             )
+    missing_counts = [a for a in arms if info[a].launch_count is None]
+    if missing_counts and not opts.allow_missing_launch_counts:
+        print(
+            f"ERROR: no kernel-launch count for {', '.join(missing_counts)}. The profiler "
+            f"returned nothing usable -- most likely the event field was renamed again "
+            f"(`cuda_time_total` became `device_time_total`), which yields None on every arm "
+            f"rather than an error. Without these counts an eager decode gap cannot be "
+            f"separated from gate structure. Pass --allow-missing-launch-counts to proceed "
+            f"without that attribution.",
+            file=sys.stderr,
+        )
+        return 1
 
     # ------------------------------------------------------------------------------------
     # Soak, so timing starts at the steady clock rather than partway up the thermal ramp.
@@ -883,31 +1187,30 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     cell.ci_low_pct = (1.0 - hi) * 100.0
                     cell.ci_high_pct = (1.0 - lo) * 100.0
 
-            # Utilization: the guard that can actually fire here.
-            wbytes = info[arm_name].weight_bytes
-            if regime == "decode":
-                cell.achieved_gbs = wbytes / (med / 1e3) / 1e9
-                cell.pct_of_hbm_peak = cell.achieved_gbs / peak_gbs * 100.0
-                if mode == "graphed":
-                    cell.utilization_ok = cell.pct_of_hbm_peak >= MIN_DECODE_BW_UTIL_PCT
-                    if not cell.utilization_ok:
-                        cell.utilization_note = (
-                            f"below {MIN_DECODE_BW_UTIL_PCT:.0f}% of HBM peak: still "
-                            f"launch-bound or throttled, not a bandwidth comparison"
-                        )
-                else:
-                    cell.utilization_ok = None
-                    cell.utilization_note = "eager decode is expected launch-bound; exempt"
-            else:
-                fpt = info[arm_name].flops_per_token_4096 or 0
-                cell.achieved_tflops = fpt * b * s / (med / 1e3) / 1e12
-                cell.pct_of_flops_peak = cell.achieved_tflops / peak_tflops * 100.0
-                cell.utilization_ok = cell.pct_of_flops_peak >= MIN_PREFILL_FLOPS_UTIL_PCT
-                if not cell.utilization_ok:
-                    cell.utilization_note = (
-                        f"below {MIN_PREFILL_FLOPS_UTIL_PCT:.0f}% of bf16 peak: the timed "
-                        f"region is not compute-bound, so a FLOPs saving cannot show up"
-                    )
+            # Utilization: the guard that can actually fire here. Computed by the extracted
+            # `utilization()` so a CPU test can call the same code, rather than inline where
+            # the only possible test was one that re-derived the formula.
+            #
+            # The FLOPs figure is PER SHAPE. `prefill-lastlogit` computes one position's
+            # logits instead of 4096, which removes ~23% of the work, so charging it the
+            # full-head figure would overstate its utilization by ~1.3x and let it clear the
+            # floor too easily.
+            fpt = arm_flops_per_token(
+                info[arm_name], regime=regime, seq_len=s, lm_head_flops=lm_head_flops
+            )
+            util = utilization(
+                regime=regime,
+                mode=mode,
+                median_ms=med,
+                weight_bytes_=info[arm_name].weight_bytes,
+                flops_per_token=fpt,
+                batch_size=b,
+                seq_len=s,
+                peak_gbs=peak_gbs,
+                peak_tflops=peak_tflops,
+            )
+            for attr, value in util.items():
+                setattr(cell, attr, value)
             cells.append(cell)
 
     # ------------------------------------------------------------------------------------
@@ -957,28 +1260,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             f"{c.median_ms:>10.3f} {delta:>9} {ci} {util:>8}{flag}"
         )
 
-    # The resolution verdict. This is the finding that decides whether any delta above means
-    # anything, so it is printed as a verdict rather than left for the reader to derive.
-    control = [
-        c
-        for c in cells
-        if c.arm == CONTROL_ARM and c.ci_low_pct is not None and c.ci_high_pct is not None
-    ]
-    unresolvable: List[str] = []
+    # The resolution verdict, computed by the extracted `resolution_verdict` so a CPU test can
+    # feed it a synthetic biased-but-tight control cell. Inline, the only reachable test was a
+    # source grep -- and the version that lived here checked interval WIDTH only, so a control
+    # reading +3.0% with a CI of [+2.8, +3.3] was certified as able to resolve 1.8%.
     print("\nA/A control -- the rig's own resolution (true effect is exactly 0):")
-    if not control:
-        print("  NOT MEASURED. No floor, so no delta above has a known noise level.")
-    for c in control:
-        width = c.ci_high_pct - c.ci_low_pct
-        can_see = width < TARGET_RESOLUTION_PCT
-        shape = f"{c.regime}/{c.mode} b={c.batch_size}"
-        print(
-            f"  {shape:<30} {c.vs_baseline_pct:+6.2f}%  CI "
-            f"[{c.ci_low_pct:+6.2f},{c.ci_high_pct:+6.2f}]  width {width:5.2f}pp  "
-            f"{'CAN' if can_see else 'CANNOT'} resolve {TARGET_RESOLUTION_PCT}%"
-        )
-        if not can_see:
-            unresolvable.append(shape)
+    verdict_lines, unresolvable = resolution_verdict(cells)
+    for line in verdict_lines:
+        print(line)
 
     low_util = [c for c in cells if c.utilization_ok is False]
     print("\nnotes:")
@@ -1010,17 +1299,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if low_util:
         print(f"  - {len(low_util)} row(s) below the utilization floor; see LOW_UTIL.")
 
-    clock_values = [i.sm_clock_mhz_mean for i in info.values() if i.sm_clock_mhz_mean]
-    clock_spread = None
-    if len(clock_values) > 1:
-        clock_spread = (
-            (max(clock_values) - min(clock_values)) / statistics.fmean(clock_values) * 100
-        )
+    clock_spread = clock_spread_pct([i.sm_clock_mhz_mean for i in info.values()])
+    if clock_spread is not None:
         print(
             f"  - SM clock spread across arms: {clock_spread:.2f}% (limit {MAX_CLOCK_SPREAD_PCT}%)"
         )
-    elif not clock_values:
-        print("  - SM clock was NOT readable (no pynvml), so drift is uncontrolled-but-unmeasured.")
+    else:
+        print(
+            "  - SM clock was NOT readable, so this run carries NO evidence that interleaving "
+            "made drift common-mode. Reached only via --allow-unmeasured-clocks."
+        )
 
     payload = {
         "run_id": opts.run_id,
