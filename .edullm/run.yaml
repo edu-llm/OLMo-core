@@ -1,0 +1,21 @@
+# What this commit runs on the platform.
+#
+# The command lives HERE and not in a flag: it is a property of the code, while everything a
+# run is charged against (team, experiment, dataset, machine) is supplied at submit time,
+# because one commit run by two people belongs to two teams.
+#
+# `EDULLM_LAUNCH_CHECK=waived` is required and is not a formality. The platform refuses one
+# process on a multi-GPU shape, and gpu-8xa100 is the only A100 this account prices -- there is
+# no single-A100 profile on the form. Inference latency is a per-card property and this harness
+# uses ONE device, so seven cards sit idle. That is the honest cost of measuring on the card the
+# training runs actually used, and the waiver is exactly the benchmark case it exists for.
+#
+# No `EDULLM_CHECKPOINT_CHECK` waiver: olmo-core-check declares `checkpoint: null`, so nothing
+# is promised and there is nothing to waive. Verified by compiling the submission both ways.
+schema_version: 1
+workload_profile: olmo-core-check
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'EDULLM_LAUNCH_CHECK=waived python .edullm/bench_gate_latency.py "$EDULLM_RUN_ID"
+  --rounds 20 --iters-per-round 5 --warmup 10 --soak-seconds 75 --use-fla false
+  --allow-unmeasured-clocks --out "$EDULLM_CHECKPOINT_DIR/gate_latency_$EDULLM_RUN_ID.json"'
