@@ -930,6 +930,34 @@ def steps_for_tokens(target_tokens: float, global_batch_size: int) -> int:
     return max(1, round(target_tokens / global_batch_size))
 
 
+def b_opt_tokens(target_tokens: float, sequence_length: int) -> float:
+    """Power Lines' compute-optimal batch size at a token budget, in TOKENS.
+
+    A NAMED FUNCTION FOR THE SAME REASON ``steps_for_tokens`` IS ONE, immediately above. A
+    test that re-derives ``0.0306 * D**0.383 * L`` inline passes however the fit changes,
+    because it is checking its own copy of the arithmetic rather than the program's --
+    ``test_the_proxy_batch_sits_at_its_own_optimum_and_the_flagship_batch_does_not`` did
+    exactly that with a local ``lambda`` before this function existed for it to call instead.
+
+    Power Lines (2505.13738) fits ``B_opt = 0.0306 * D**0.383`` in 2048-token SEQUENCES, not
+    tokens -- the same fit the ``--global-batch-size`` help text cites to justify 786,432 at
+    the flagship's D=40e9. ``sequence_length`` multiplies the fit's unit into tokens so it is
+    comparable to ``--global-batch-size``, which is also tokens; passing 2048 here reproduces
+    the help text's ~0.721M. At E1's D=3e9 this returns ~267,171, which is why 262,144 sits at
+    0.98x optimum there while the flagship default of 786,432 sits at 2.94x -- see
+    ``resolve_steps``, which warns on that gap without refusing it.
+    """
+    return 0.0306 * target_tokens**0.383 * sequence_length
+
+
+#: How far --global-batch-size may sit from Power Lines' B_opt, in either direction, before
+#: resolve_steps warns. 1.5x rather than something tighter: Power Lines Table 1 puts real cost
+#: on being off-optimum, but the flagship itself runs at 1.09x by design (baseline-fix's own
+#: justification) and someone deliberately probing the bowl's shoulder is not wrong to ask for
+#: it. The warning exists so the gap is recorded, not to pick a number nobody may pass.
+B_OPT_WARN_RATIO = 1.5
+
+
 def resolve_steps(opts) -> int:
     """The run's length, DERIVED from the token budget when one was declared.
 
@@ -951,6 +979,17 @@ def resolve_steps(opts) -> int:
         ``--warmup-fraction 0.1`` resolve to 20 steps, walking the smoke-test warmup constant
         the baseline fix removed straight back in.
 
+    A THIRD FAILURE THIS ONLY SURFACES, BECAUSE CLOSING IT WOULD BE WRONG. Leaving
+    ``--global-batch-size`` at its default of 786,432 (correct for the flagship at D=40e9)
+    while declaring a small ``--target-tokens`` trains at the wrong point on Power Lines'
+    loss-vs-batch curve: at E1's D=3e9, B_opt is ~267,171 tokens (``b_opt_tokens``), so the
+    786,432 default is **2.94x optimum**, and 2505.13738 Table 1 measures 4x-above-optimum at
+    +0.029 nats -- LARGER than the 0.025-nat schedule effect E1 exists to measure. The token
+    budget is still honoured and both guards above stay green, so nothing else catches this.
+    It is a ``log.warning`` rather than the same treatment as the first two, because unlike
+    those it is not two numbers contradicting each other -- it is one number that may be a
+    deliberate choice, and the flagship's own 786,432 is deliberately 1.09x its D's optimum.
+
     So when ``--target-tokens`` is given the step count is computed from it and the batch,
     and the two cannot disagree. When it is absent this returns ``opts.steps`` unchanged, so
     a run that never asked for a budget behaves exactly as it did before.
@@ -968,6 +1007,27 @@ def resolve_steps(opts) -> int:
         return opts.steps
 
     derived = steps_for_tokens(target, opts.global_batch_size)
+
+    # B_OPT IS MEASURED HERE, NOT REFUSED ON -- see the docstring. `b_opt` is exactly 0 only
+    # for a --target-tokens of exactly 0, which nobody would type as a budget and which
+    # nothing else in this function refuses either; skipping the check there avoids dividing
+    # by zero to report a ratio that has no meaning at D=0 in the first place.
+    b_opt = b_opt_tokens(target, opts.sequence_length)
+    if b_opt > 0:
+        ratio = opts.global_batch_size / b_opt
+        if not (1 / B_OPT_WARN_RATIO <= ratio <= B_OPT_WARN_RATIO):
+            log.warning(
+                "--global-batch-size %d is %.2fx Power Lines' B_opt=%.0f tokens "
+                "(0.0306*D^0.383*L) at --target-tokens %g -- 2505.13738 Table 1 measures "
+                "4x-above-optimum at +0.029 nats, larger than a 0.025-nat schedule effect "
+                "this size is meant to resolve. Not refused: the flagship itself runs off "
+                "this ratio on purpose. Pass a batch nearer B_opt, or know that this cell's "
+                "loss carries a batch-position error on top of whatever it is measuring.",
+                opts.global_batch_size,
+                ratio,
+                b_opt,
+                target,
+            )
 
     # Read the sentinel from the parser rather than repeating the literal, so this cannot
     # drift from the flag it is comparing against.
@@ -1369,6 +1429,31 @@ def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> 
         return
     device = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"
     peak = torch.cuda.max_memory_allocated() / 1024**3 if torch.cuda.is_available() else 0.0
+    parameters = sum(parameter.numel() for parameter in trainer.train_module.model.parameters())
+    global_batch_size = getattr(opts, "global_batch_size", None)
+    # STEPS ALONE DO NOT SAY HOW LONG THE RUN WAS. 11,444 steps at 262,144
+    # tokens and 11,444 at 786,432 are the same number here and a 3x different
+    # experiment, and comparing two cells that differ in token budget is not a
+    # schedule measurement. Multiplying it out is what makes that visible in the
+    # record rather than requiring the reader to rederive it from the command.
+    tokens_trained = trainer.global_step * global_batch_size if global_batch_size else None
+    # HOW FAR OFF POWER LINES' B_OPT THIS CELL RAN. `resolve_steps` warns on the same ratio
+    # at build time; this is what lets a reader confirm which cells it fired for after the
+    # fact, without re-finding a WARNING line in a log group 18 cells deep. None when no
+    # budget was declared -- B_opt is a function of --target-tokens, and a run that never
+    # stated one has nothing to compare its batch against.
+    target_tokens = getattr(opts, "target_tokens", None)
+    sequence_length = getattr(opts, "sequence_length", None)
+    b_opt_ratio = (
+        global_batch_size / b_opt_tokens(target_tokens, sequence_length)
+        if target_tokens and global_batch_size and sequence_length
+        else None
+    )
+    # TOKENS PER PARAMETER. docs/1b-leverage-audit/EXPERIMENT-PLAN.md:732 standing rule 8:
+    # "Record the TPP of every arm" -- nothing did. `parameters` cannot be 0 on a real model;
+    # guarded because a test double can construct one that is, and dividing by that should
+    # report None rather than raise out of a function whose whole job is to always print.
+    tpp = tokens_trained / parameters if tokens_trained is not None and parameters else None
     print(
         json.dumps(
             {
@@ -1378,21 +1463,12 @@ def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> 
                 "gpu": device,
                 "torch": torch.__version__,
                 "cuda": torch.version.cuda,
-                "parameters": sum(
-                    parameter.numel() for parameter in trainer.train_module.model.parameters()
-                ),
+                "parameters": parameters,
                 "steps": trainer.global_step,
-                # STEPS ALONE DO NOT SAY HOW LONG THE RUN WAS. 11,444 steps at 262,144
-                # tokens and 11,444 at 786,432 are the same number here and a 3x different
-                # experiment, and comparing two cells that differ in token budget is not a
-                # schedule measurement. Multiplying it out is what makes that visible in the
-                # record rather than requiring the reader to rederive it from the command.
-                "tokens_trained": (
-                    trainer.global_step * opts.global_batch_size
-                    if getattr(opts, "global_batch_size", None)
-                    else None
-                ),
-                "global_batch_size": getattr(opts, "global_batch_size", None),
+                "tokens_trained": tokens_trained,
+                "global_batch_size": global_batch_size,
+                "b_opt_ratio": b_opt_ratio,
+                "tpp": tpp,
                 "first_loss": losses.first,
                 "last_loss": losses.last,
                 # WHICH metric the two above are. A sweep's argmin is taken over these records,

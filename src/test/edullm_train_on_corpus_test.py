@@ -1429,8 +1429,16 @@ def test_the_proxy_batch_sits_at_its_own_optimum_and_the_flagship_batch_does_not
     own signal, which is the error that got E8 cancelled (batch-size-verdict.md §E).
 
     The baseline default is asserted UNCHANGED here, because it belongs to the shared branch.
+
+    CALLS ``entry.b_opt_tokens``, NOT A LOCAL COPY OF THE FIT. This test used to carry its own
+    ``lambda tokens: 0.0306 * tokens**0.383 * 2048`` -- the exact scar the repo's memory file
+    calls "test-must-call-not-recompute": a test that re-derives the code's formula passes
+    whichever way the fit changes, because it is checking its own arithmetic rather than the
+    program's. ``b_opt_tokens`` did not exist yet when this test was written; it does now, and
+    the sequence length is pinned to 2048 here (rather than read off ``opts``) because this
+    test is about the LAW's numbers at two values of D, not about any one cell's config.
     """
-    b_opt = lambda tokens: 0.0306 * tokens**0.383 * 2048  # noqa: E731 -- Power Lines eq.
+    b_opt = lambda tokens: entry.b_opt_tokens(tokens, 2048)  # noqa: E731
 
     # The law reproduces the flagship figure the baseline fix was justified on.
     assert b_opt(40e9) == pytest.approx(720_511, rel=1e-4)
@@ -1448,6 +1456,83 @@ def test_the_proxy_batch_sits_at_its_own_optimum_and_the_flagship_batch_does_not
     opts, _ = entry.build_parser().parse_known_args(["a-run-id"])
     assert opts.global_batch_size == 786_432
     assert opts.learning_rate == 1.4e-3
+
+
+def test_the_batch_size_warning_fires_off_bopt_and_stays_silent_on_it(caplog):
+    """BOTH DIRECTIONS: a guard that always fires is as useless as one that never does.
+
+    ``resolve_steps`` warns rather than refuses (see its docstring) when
+    ``--global-batch-size`` sits more than ``B_OPT_WARN_RATIO`` away from Power Lines' B_opt
+    at the declared ``--target-tokens``. Leaving ``--global-batch-size`` at the flagship
+    default of 786,432 while declaring E1's D=3e9 sits at 2.94x and must warn; E1's actual
+    command line -- the same budget at 262,144 -- sits at 0.98x and must stay silent. A check
+    that fires on both, or on neither, would be indistinguishable from no check at all.
+    """
+    import logging
+
+    opts_default, _ = entry.build_parser().parse_known_args(["a-run-id", "--target-tokens=3e9"])
+    with caplog.at_level(logging.WARNING):
+        entry.resolve_steps(opts_default)
+    fired = [r.message for r in caplog.records]
+    # ACTIONABLE: the batch, the ratio and the B_opt figure all have to be readable off the
+    # line without anyone re-deriving them, or the warning is a siren with no address on it.
+    assert any("B_opt" in m for m in fired), fired
+    assert any("786432" in m and "2.94" in m for m in fired), fired
+
+    caplog.clear()
+    opts_e1, _ = entry.build_parser().parse_known_args(
+        ["a-run-id", "--target-tokens=3e9", f"--global-batch-size={E1_BATCH}"]
+    )
+    with caplog.at_level(logging.WARNING):
+        entry.resolve_steps(opts_e1)
+    assert caplog.records == []
+
+
+def test_the_summary_records_bopt_ratio_and_tpp_for_every_cell(capsys):
+    """docs/1b-leverage-audit/EXPERIMENT-PLAN.md:732 standing rule 8: "Record the TPP of every
+    arm" -- nothing did until ``tpp`` was added here. ``b_opt_ratio`` is the same quantity
+    ``resolve_steps`` warns on, recorded per cell so a reader does not have to refind a
+    WARNING line 18 cells deep in one log group to tell an off-optimum cell from a schedule
+    effect.
+    """
+    import json
+
+    opts, _ = entry.build_parser().parse_known_args(
+        [
+            "a-run-id",
+            "--target-tokens=3e9",
+            f"--global-batch-size={E1_BATCH}",
+            "--save-folder=/tmp/x",
+        ]
+    )
+    entry.summarise(
+        opts=opts,
+        config=FakeConfig(),
+        trainer=FakeTrainer([FakeParameter(1000)], step=11_444),
+        losses=entry.LossWatcher(),
+        seconds=1.0,
+    )
+    printed = json.loads(capsys.readouterr().out)
+
+    assert printed["tokens_trained"] == 11_444 * E1_BATCH == 2_999_975_936
+    assert printed["parameters"] == 1000
+    assert printed["tpp"] == pytest.approx(2_999_975_936 / 1000)
+    # Same ratio and tolerance as the law test above, not re-derived here.
+    assert printed["b_opt_ratio"] == pytest.approx(0.98, abs=0.01)
+
+    # NONE, NOT A CRASH, WHEN NO BUDGET WAS DECLARED. FakeOptions carries neither
+    # --target-tokens nor --global-batch-size, which is what an E0-style call looks like --
+    # and B_opt is a function of a budget that was never stated.
+    entry.summarise(
+        opts=FakeOptions(),
+        config=FakeConfig(),
+        trainer=FakeTrainer([FakeParameter(1000)], step=11_444),
+        losses=entry.LossWatcher(),
+        seconds=1.0,
+    )
+    printed_no_budget = json.loads(capsys.readouterr().out)
+    assert printed_no_budget["b_opt_ratio"] is None
+    assert printed_no_budget["tpp"] is None
 
 
 def test_the_proxy_warmup_is_about_a_thousand_steps():
