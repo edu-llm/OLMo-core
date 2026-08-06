@@ -190,35 +190,43 @@ class Report:
 # same shape as a test that recomputes what it is checking. Walking the real parameters means a
 # gate structure that failed to apply shows up as a working set identical to dense.
 # ---------------------------------------------------------------------------------------------
+def _distinct_parameters(model):
+    """Yield each parameter once, deduplicating tied weights.
+
+    Keyed on ``id(p)``, which is what ``liv_arms._count_params`` uses to produce the frozen
+    ledger figures (390,135,552 for ``L0``). Keying on ``data_ptr()`` instead would look more
+    physical and be WRONG in two ways: every parameter on a meta device reports address 0, so
+    a meta-built model would collapse to a single entry, and two genuinely distinct tensors
+    that happen to view one storage would silently merge. Tying in this codebase makes the two
+    names refer to the same object, so identity is both the narrower test and the one whose
+    answer matches the ledger.
+    """
+    seen = set()
+    for p in model.parameters():
+        if id(p) in seen:
+            continue
+        seen.add(id(p))
+        yield p
+
+
 def weight_bytes(model) -> int:
     """Bytes of distinct parameter storage a single forward pass reads.
 
-    Tied parameters are counted ONCE, keyed by storage identity. The embedding is tied to the
-    unembedding in every arm, and double-counting it would add ~205 MiB of phantom traffic to
-    all three arms equally -- which would not change the ratio, but would make
-    ``pct_of_hbm_peak`` overstate and could mask a genuinely cache-resident row.
+    The embedding is tied to the unembedding in every arm. Double-counting it would add ~205
+    MiB of phantom traffic to all three arms equally -- which leaves the RATIO unchanged, but
+    inflates ``pct_of_hbm_peak`` and could let a genuinely cache-resident row read as
+    admissible. That is a wrong number that looks right.
     """
-    seen = set()
-    total = 0
-    for p in model.parameters():
-        key = p.data_ptr()
-        if key in seen:
-            continue
-        seen.add(key)
-        total += p.numel() * p.element_size()
-    return total
+    return sum(p.numel() * p.element_size() for p in _distinct_parameters(model))
 
 
 def count_params(model) -> int:
-    """Distinct parameters, tied weights counted once."""
-    seen = set()
-    total = 0
-    for p in model.parameters():
-        if p.data_ptr() in seen:
-            continue
-        seen.add(p.data_ptr())
-        total += p.numel()
-    return total
+    """Distinct parameters, tied weights counted once.
+
+    Must agree with ``liv_arms._count_params`` so the number printed beside the latency table
+    is the same one the frozen ledger and the training runs recorded.
+    """
+    return sum(p.numel() for p in _distinct_parameters(model))
 
 
 def realised_conv_path(model) -> str:

@@ -319,13 +319,18 @@ def test_the_two_treatment_arms_are_exactly_parameter_matched():
 # bandwidth numerator on every arm equally -- which hides cache residency.
 # ------------------------------------------------------------------------------------------
 class _Tied:
-    """A tiny stand-in with two tensors sharing storage, plus one that does not."""
+    """A stand-in whose parameter list yields THE SAME OBJECT twice, plus a distinct one.
+
+    This is how tying works in this codebase: ``Transformer._tie_weights`` makes the two names
+    refer to one ``nn.Parameter``, so the duplicate is object identity and not merely shared
+    storage. The fixture mirrors that rather than a looser version of it.
+    """
 
     def __init__(self):
         import torch
 
         self.a = torch.zeros(1024, dtype=torch.float32)
-        self.b = self.a  # tied: same storage
+        self.b = self.a  # tied: the identical object, as _tie_weights produces
         self.c = torch.zeros(512, dtype=torch.float32)
 
     def parameters(self):
@@ -333,17 +338,63 @@ class _Tied:
 
 
 def test_tied_parameters_are_counted_once():
-    """Storage shared between two names must contribute its bytes ONCE.
+    """A parameter appearing twice under two names must contribute its bytes ONCE.
 
-    The embedding is tied to the unembedding in every arm. Counting it twice would add the same
-    phantom traffic to all three arms, leave the RATIO unchanged, and inflate
-    ``pct_of_hbm_peak`` -- so a genuinely cache-resident row could read as admissible. That is
-    a wrong number that looks right, which is the class this file exists to catch.
+    The embedding is tied to the unembedding in every arm and is ~205 MiB in bf16. Counting it
+    twice would add the same phantom traffic to all three arms, leave the RATIO unchanged, and
+    inflate ``pct_of_hbm_peak`` -- so a genuinely cache-resident row could read as admissible.
+    That is a wrong number that looks right, which is the class this file exists to catch.
     """
     model = _Tied()
-    # 1024 + 512 distinct floats = 1536 * 4 bytes. Naive summation would give 2560 * 4.
+    # 1024 + 512 distinct floats = 1536. Naive summation over parameters() gives 2560.
     assert entry.count_params(model) == 1536
     assert entry.weight_bytes(model) == 1536 * 4
+
+
+def test_two_distinct_tensors_sharing_storage_are_both_counted():
+    """Deduplication must key on IDENTITY, not on ``data_ptr``.
+
+    Two different parameters that view one storage are two reads and two sets of bytes. Keying
+    on ``data_ptr()`` would merge them and understate the working set -- and worse, every
+    parameter on a meta device reports address 0, so a meta-built model would collapse to a
+    single entry and report a working set of one tensor.
+
+    This is the test that distinguishes the two implementations, so it is the one that would
+    have caught the ``data_ptr`` version.
+    """
+    import torch
+
+    storage = torch.zeros(2048, dtype=torch.float32)
+
+    class _SharedStorage:
+        def __init__(self):
+            self.x = storage[:1024]  # distinct object, same underlying storage
+            self.y = storage[1024:]
+
+        def parameters(self):
+            return iter([self.x, self.y])
+
+    # Confirm the fixture really does share storage, so the assertion below is not vacuous:
+    # if these were separate allocations the test would pass for the wrong reason.
+    assert storage[:1024].data_ptr() == storage.data_ptr()
+    assert storage[1024:].data_ptr() != storage.data_ptr()
+    assert entry.count_params(_SharedStorage()) == 2048
+
+
+def test_ledger_and_harness_count_parameters_the_same_way():
+    """``count_params`` must agree with the frozen ledger's own helper on a real arm.
+
+    ``liv_arms._count_params`` produced the 390,135,552 recorded for ``L0`` and used by every
+    parameter-matching decision in the study. If the harness counted differently, the number it
+    prints beside the latency table would not be the number the training runs recorded, and the
+    two halves of the efficiency claim would be measured on different rulers.
+    """
+    from olmo_core.nn.transformer import liv_arms
+
+    cfg = entry.build_arm_config("L0", vocab_size=100_352, use_fla=False, seed=0)
+    model = cfg.build(init_device="meta")
+    assert entry.count_params(model) == liv_arms._count_params(cfg)
+    assert entry.count_params(model) == liv_arms.L0_PARAM_TARGET_DOLMA2
 
 
 def test_weight_bytes_scales_with_dtype():
