@@ -31,6 +31,8 @@ from olmo_core.latentcot.arms import ARMS
 from olmo_core.latentcot.data.dataset import LatentCotDataset
 from olmo_core.latentcot.evaluate import overall_accuracy, solve_rate_by_depth
 from olmo_core.latentcot.train_driver import (
+    PRECISIONS,
+    autocast_ctx,
     build_model,
     load_checkpoint,
     resolve_device,
@@ -52,7 +54,22 @@ def main() -> None:
         "deepest graph (depth 8) so a depth-8 failure means 'can't superpose', not 'one step short'.",
     )
     parser.add_argument("--steps", type=int, default=5000)
-    parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=16,
+        help="examples per optimizer step. NOTE: the CODI student is processed one example at a "
+        "time, so this does NOT batch the GPU — raising it adds sequential forwards and costs "
+        "wall-clock linearly. It is an effective-batch (gradient-noise) knob, not a throughput "
+        "one, until the per-example loop is packed. Must match across arms.",
+    )
+    parser.add_argument(
+        "--precision",
+        default="bf16",
+        choices=PRECISIONS,
+        help="bf16 (default) runs forwards under bf16 autocast and enables TF32 on CUDA; fp32 is "
+        "bit-identical to the pre-flag driver. No-op off CUDA. Identical across arms.",
+    )
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument(
         "--warmup-steps",
@@ -147,6 +164,7 @@ def main() -> None:
         save_every=args.save_every,
         keep_last=args.keep_last,
         val_examples=val_examples,
+        precision=args.precision,
     )
     best = None
     best_path = run_dir / "best.json"
@@ -155,12 +173,19 @@ def main() -> None:
 
     test_ds = LatentCotDataset(args.test_data, args.num_continuous_thoughts)
     examples = [test_ds[i] for i in range(len(test_ds))]
+    # Score under the same precision the run trained and best-selected under, so the reported
+    # gate numbers and best.json's val_acc are measured on the same footing.
+    with autocast_ctx(args.precision, device):
+        final_acc = overall_accuracy(model, examples, arm.arm_mode)
+        final_by_depth = solve_rate_by_depth(model, examples, arm.arm_mode)
     metrics = {
         "arm": arm.name,
         "rung": args.rung,
         "init_seed": args.init_seed,
         "seed": args.seed,
         "steps": args.steps,
+        "batch_size": args.batch_size,
+        "precision": args.precision,
         "lr": args.lr,
         "warmup_steps": args.warmup_steps,
         "num_continuous_thoughts": args.num_continuous_thoughts,
@@ -170,8 +195,8 @@ def main() -> None:
         "save_every": args.save_every,
         "val_fraction": args.val_fraction if val_examples else 0.0,
         "best_checkpoint": best,  # {step, val_acc} of best.pt, or None if checkpointing was off
-        "overall_acc": overall_accuracy(model, examples, arm.arm_mode),
-        "solve_rate_by_depth": solve_rate_by_depth(model, examples, arm.arm_mode),
+        "overall_acc": final_acc,
+        "solve_rate_by_depth": final_by_depth,
         "train_history": history,
     }
 

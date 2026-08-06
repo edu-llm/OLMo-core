@@ -45,6 +45,19 @@ done
 ```
 `metrics.json` already carries `overall_acc` + `solve_rate_by_depth` per run.
 
+**Precision.** `--precision bf16` is the default: bf16 autocast on the training forward, the
+in-loop val scoring, and the final gate scoring, plus TF32 for the ops that stay fp32. The
+distill and R1 terms are pinned to fp32 internally. Pass `--precision fp32` for a
+bit-reproducible (and several-fold slower) run. Keep it the same across every arm — it is
+recorded in each `metrics.json`.
+
+**Do not raise `--batch-size` expecting a speedup.** The CODI student is processed one example
+at a time, so a bigger batch adds sequential forwards rather than widening a tensor: per-example
+step time is flat from batch 2 upward, while total step time grows linearly. At 16 the fixed
+per-step optimizer cost is already amortized. Raising it is a gradient-noise choice that costs
+wall-clock linearly and would require re-screening peak LR (§ above). Throughput here comes from
+packing the per-example loop, not from the batch flag.
+
 **Watch these two tripwires** in `metrics.json` → `train_history` (logged every `--log-every`
 steps for the CODI arms A2/A3/A4):
 

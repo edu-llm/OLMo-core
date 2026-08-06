@@ -9,7 +9,12 @@ from olmo_core.latentcot.arms import ARMS
 from olmo_core.latentcot.data.dataset import LatentCotDataset
 from olmo_core.latentcot.data.encode import to_sft_record
 from olmo_core.latentcot.data.graph_gen import generate
-from olmo_core.latentcot.train_driver import iter_batches, train_arm
+from olmo_core.latentcot.train_driver import (
+    autocast_ctx,
+    configure_precision,
+    iter_batches,
+    train_arm,
+)
 from olmo_core.nn.transformer import TransformerConfig
 
 D_MODEL = 128
@@ -65,6 +70,42 @@ def test_train_arm_reduces_loss(dataset):
     )
     assert len(history) >= 2
     assert history[-1]["loss"] < history[0]["loss"]  # the arm is learning
+
+
+@pytest.mark.parametrize("precision", ["fp32", "bf16"])
+def test_autocast_ctx_is_a_noop_off_cuda(precision):
+    """The fast path is GPU-only: on CPU both settings must leave numerics untouched."""
+    import torch
+
+    with autocast_ctx(precision, "cpu"):
+        assert not torch.is_autocast_enabled()
+
+
+def test_precision_helpers_reject_unknown_values():
+    with pytest.raises(ValueError):
+        autocast_ctx("fp16", "cuda")
+    with pytest.raises(ValueError):
+        configure_precision("tf32", "cuda")
+
+
+@pytest.mark.parametrize("precision", ["fp32", "bf16"])
+def test_train_arm_accepts_either_precision(dataset, precision):
+    """Both settings train on CPU (bf16 degrades to the fp32 path there) and stay finite."""
+    import math
+
+    model = _tiny_model()
+    history = train_arm(
+        model,
+        ARMS["A2"],
+        dataset,
+        steps=4,
+        batch_size=2,
+        warmup_steps=2,
+        seed=0,
+        log_every=1,
+        precision=precision,
+    )
+    assert all(math.isfinite(h["loss"]) for h in history)
 
 
 def test_train_arm_logs_drift_tripwires(dataset):

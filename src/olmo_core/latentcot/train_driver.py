@@ -8,9 +8,10 @@ doesn't fit the framework Trainer's token-array ``DataLoader``; this loop is the
 equivalent for the research runs.
 """
 
+import contextlib
 import json
 from pathlib import Path
-from typing import Iterator, List, Optional, Protocol
+from typing import ContextManager, Iterator, List, Optional, Protocol
 
 import torch
 
@@ -18,7 +19,19 @@ from .arms import Arm
 from .data.dataset import codi_collate
 from .loss import arm_loss
 
-__all__ = ["resolve_device", "build_model", "load_checkpoint", "iter_batches", "train_arm"]
+__all__ = [
+    "PRECISIONS",
+    "autocast_ctx",
+    "build_model",
+    "configure_precision",
+    "iter_batches",
+    "load_checkpoint",
+    "resolve_device",
+    "train_arm",
+]
+
+PRECISIONS = ("fp32", "bf16")
+"""Valid ``precision`` values. ``fp32`` is bit-identical to the pre-precision-flag driver."""
 
 
 class _Indexable(Protocol):
@@ -39,6 +52,58 @@ def resolve_device(device: str = "auto") -> str:
     if device == "auto":
         return "cuda" if torch.cuda.is_available() else "cpu"
     return device
+
+
+def _check_precision(precision: str) -> str:
+    if precision not in PRECISIONS:
+        raise ValueError(f"precision must be one of {PRECISIONS}, got {precision!r}")
+    return precision
+
+
+def configure_precision(precision: str, device: str) -> None:
+    """
+    Set global matmul precision for a run. Call once, before training.
+
+    ``bf16`` also turns on TF32 for the matmuls that stay in fp32 (norms, the loss, the
+    regularizer targets) — on an A100 strict fp32 matmul peaks at ~19.5 TFLOPS against
+    ~312 for bf16, so leaving TF32 off costs most of the tensor-core throughput on those
+    ops. ``fp32`` deliberately leaves both alone so a run is bit-reproducible.
+
+    No-op off CUDA, so CPU tests and this repo's Mac development path are unaffected.
+
+    :param precision: One of :data:`PRECISIONS`.
+    :param device: The resolved device string (see :func:`resolve_device`).
+
+    :raises ValueError: If ``precision`` is not a valid choice.
+    """
+    if _check_precision(precision) == "bf16" and device.startswith("cuda"):
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+
+
+def autocast_ctx(precision: str, device: str) -> ContextManager:
+    """
+    The autocast context for a forward pass under ``precision``.
+
+    Returns a null context for ``fp32`` **and** for any non-CUDA device: bf16 autocast on CPU
+    is not a throughput win here and would change the numerics the CPU test suite pins, so the
+    fast path is GPU-only by design. bf16 needs no ``GradScaler`` (unlike fp16), and parameters
+    stay fp32 — autocast only casts the ops.
+
+    Wrap the *forward* in this; call ``loss.backward()`` outside it (autograd replays each op in
+    the dtype it ran in). Because it lives in the shared driver, every arm gets the identical
+    treatment, so it cannot become a confound.
+
+    :param precision: One of :data:`PRECISIONS`.
+    :param device: The resolved device string.
+
+    :returns: A context manager — ``torch.autocast`` or ``contextlib.nullcontext``.
+
+    :raises ValueError: If ``precision`` is not a valid choice.
+    """
+    if _check_precision(precision) == "bf16" and device.startswith("cuda"):
+        return torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    return contextlib.nullcontext()
 
 
 def load_checkpoint(model, path: str, *, strict: bool = True) -> None:
@@ -108,6 +173,7 @@ def train_arm(
     save_every: int = 0,
     keep_last: int = 2,
     val_examples: Optional[List[dict]] = None,
+    precision: str = "bf16",
 ) -> List[dict]:
     """
     Train ``model`` on one arm; return a list of logged metric snapshots.
@@ -133,11 +199,17 @@ def train_arm(
     :param save_every: Save a rolling checkpoint every N steps (0 disables).
     :param keep_last: Number of most-recent rolling checkpoints to retain.
     :param val_examples: Held-out (from train, not the test set) examples for best-selection.
+    :param precision: ``bf16`` (default) runs forwards under bf16 autocast on CUDA and enables
+        TF32; ``fp32`` is bit-identical to the pre-flag driver. Applied to the training forward
+        *and* to in-loop validation scoring so best-selection matches training. GPU-only — see
+        :func:`autocast_ctx`.
     """
     from olmo_core.optim import WSD
 
     from .evaluate import overall_accuracy
 
+    device = str(getattr(model, "device", "cpu"))
+    configure_precision(precision, device)
     save_dir = Path(save_dir) if save_dir is not None else None
     checkpointing = save_dir is not None and save_every > 0
     if checkpointing:
@@ -161,7 +233,7 @@ def train_arm(
             return
         was_training = model.training
         model.eval()
-        with torch.no_grad():
+        with torch.no_grad(), autocast_ctx(precision, device):
             acc = overall_accuracy(model, val_examples, arm.arm_mode)
         if was_training:
             model.train()
@@ -182,15 +254,17 @@ def train_arm(
         for group in opt.param_groups:
             group["lr"] = lr_t
         opt.zero_grad(set_to_none=True)
-        loss, metrics = arm_loss(
-            model,
-            batch["examples"],
-            mode=arm.arm_mode,
-            distill_weight=distill_weight,
-            vocab_reg=arm.vocab_reg,
-            vocab_reg_weight=arm.vocab_reg_weight,
-            vocab_reg_entropy_floor=arm.vocab_reg_entropy_floor,
-        )
+        with autocast_ctx(precision, device):
+            loss, metrics = arm_loss(
+                model,
+                batch["examples"],
+                mode=arm.arm_mode,
+                distill_weight=distill_weight,
+                vocab_reg=arm.vocab_reg,
+                vocab_reg_weight=arm.vocab_reg_weight,
+                vocab_reg_entropy_floor=arm.vocab_reg_entropy_floor,
+            )
+        # backward runs OUTSIDE autocast; autograd replays each op in the dtype it ran in.
         loss.backward()
         # clip_grad_norm_ returns the PRE-clip total norm — log it: a rising grad norm is
         # the earliest warning that the latent path is diverging.

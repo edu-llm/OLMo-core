@@ -63,18 +63,20 @@ def vocab_manifold_reg(
     if kind == "none":
         return thoughts.new_zeros(())
     if kind == "L2":
-        return thoughts.pow(2).mean()
+        return thoughts.float().pow(2).mean()
 
     logits = model.lm_head(thoughts)  # (batch, K, vocab) — labels=None returns logits
     embeddings = model.embeddings.weight  # (vocab, d_model)
     if kind == "R2":
         target = embeddings[logits.argmax(dim=-1)]  # (batch, K, d_model)
-        return (thoughts - target).pow(2).mean()
+        return (thoughts.float() - target.float()).pow(2).mean()
 
-    # R1
-    probs = torch.softmax(logits, dim=-1)
-    target = probs @ embeddings  # (batch, K, d_model)
-    reg = (thoughts - target).pow(2).mean()
+    # R1. The softmax runs in fp32: under bf16 autocast a 100k-way softmax loses enough
+    # precision in the tail to move the mixture target, and the .float() calls are no-ops
+    # in the fp32 path (so both paths stay bit-identical to before).
+    probs = torch.softmax(logits.float(), dim=-1)
+    target = probs @ embeddings.float()  # (batch, K, d_model)
+    reg = (thoughts.float() - target).pow(2).mean()
     if entropy_floor > 0:
         entropy = -(probs * probs.clamp_min(1e-9).log()).sum(dim=-1).mean()
         reg = reg + torch.relu(torch.as_tensor(entropy_floor, device=reg.device) - entropy)
@@ -186,7 +188,9 @@ def codi_loss(
         )
 
         # --- Distillation + vocab regularizer ---
-        distill = F.smooth_l1_loss(student_acts, teacher_acts.detach())
+        # fp32: this aligns raw hidden states across all layers, and bf16's ~3 decimal digits
+        # would quantize exactly the small teacher-student differences the term exists to close.
+        distill = F.smooth_l1_loss(student_acts.float(), teacher_acts.detach().float())
         reg = vocab_manifold_reg(model, thoughts, vocab_reg, vocab_reg_entropy_floor)
 
         # Optimize `.loss` (the trainable term); `.ce_loss` is detached (logging only).
