@@ -26,7 +26,12 @@ from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.utils import get_default_device
 
 from ..config import ModuleConfig
-from .loss import MoELoadBalancingLossGranularity, load_balancing_loss, router_z_loss
+from .loss import (
+    MoELoadBalancingLossGranularity,
+    load_balancing_loss,
+    reduce_expert_counts,
+    router_z_loss,
+)
 
 if TYPE_CHECKING:
     from olmo_core.train.common import ReduceType
@@ -238,6 +243,23 @@ class MoERouter(nn.Module):
         # both a slowdown and a warning on every step.  `num_accumulated_micro_batches` above
         # is a plain int for the same reason.
         self._gate_mass_tokens: int = 0
+        # The rank-local and data-parallel-reduced values of the SAME load-balancing loss on the
+        # SAME batch. Both are accumulated whatever the granularity, because a run that logs only
+        # the value it optimizes cannot distinguish a working all-reduce from one that returned
+        # the local value under a new name -- and those two look identical in every other respect.
+        # `MoELoadBalancingLossGranularity.global_batch` is the whole point of this lane, so its
+        # own verification cannot depend on it.
+        self._lbl_local: Optional[_HiddenTensor] = None
+        self._lbl_global: Optional[_HiddenTensor] = None
+        # Whether a collective actually ran on the last forward. Distinguishes "the pair matches
+        # because there is one rank" from "the pair matches because the reduction did nothing",
+        # which are the same number and opposite conclusions.
+        self.lbl_reduced: bool = False
+        # Set by MoEBase so the effective per-layer weight is logged rather than asserted. The
+        # stock code divided both aux weights by the model's TOTAL depth while only MoE blocks
+        # contribute a term, landing the summed weight 1.5x low on a 24-layer/16-MoE model. Now
+        # that the divisor is a choice, it has to be visible in the run's own metrics.
+        self.aux_loss_divisor: Optional[int] = None
 
     def reset_parameters(self):
         self._batch_size_per_expert = hide_from_torch(
@@ -258,6 +280,8 @@ class MoERouter(nn.Module):
 
         if self.lb_loss_weight is not None:
             self._load_balancing_loss = hide_from_torch(torch.zeros([], device=self.device))
+            self._lbl_local = hide_from_torch(torch.zeros([], device=self.device))
+            self._lbl_global = hide_from_torch(torch.zeros([], device=self.device))
 
         if self.z_loss_weight is not None:
             self._z_loss = hide_from_torch(torch.zeros([], device=self.device))
@@ -297,6 +321,29 @@ class MoERouter(nn.Module):
     def batch_size_per_expert(self, value: torch.Tensor):
         self._batch_size_per_expert = hide_from_torch(value)
 
+    @torch.no_grad()
+    def global_batch_size_per_expert(self) -> Tuple[torch.Tensor, bool]:
+        """
+        The accumulated assignment histogram summed across every rank holding a different slice of
+        the batch, and whether a collective ran.
+
+        Exposed for telemetry that needs a *global* population rather than a rank-local one. The
+        clearest case is the dead-expert fraction: computed per-rank, ``counts == 0`` means "idle
+        on this rank", and averaging that across ranks reports an expert busy on rank 3 and idle on
+        rank 0 as one quarter dead. Simulated at 256 tokens/rank with E=32 over 4 ranks the
+        per-rank form read 0.0004 against a true global 0.0000 -- it over-reports, and it
+        over-reports hardest at small local batch sizes, which is where a debug run lives and
+        where a dead-expert alarm would be believed.
+
+        This is a **collective**: every rank in the group must call it, the same number of times.
+        Call it once per logging interval from a metrics path that all ranks reach, never inside a
+        conditional that only some ranks take.
+
+        :returns: ``(counts, reduced)``. ``reduced=False`` means there was one rank and the counts
+            are a copy of the local histogram.
+        """
+        return reduce_expert_counts(self.batch_size_per_expert, group=self.group)
+
     @property
     def gate_mass_mean(self) -> Optional[torch.Tensor]:
         """
@@ -329,6 +376,59 @@ class MoERouter(nn.Module):
     @load_balancing_loss.setter
     def load_balancing_loss(self, value: torch.Tensor):
         self._load_balancing_loss = hide_from_torch(value)
+
+    def _lazy_accumulator(self, attr: str) -> Optional[torch.Tensor]:
+        """
+        Shared body for the load-balancing telemetry accumulators.
+
+        Same lifecycle as :attr:`load_balancing_loss`: allocated on first access, migrated if the
+        module has since moved device, hidden from torch and FSDP because ``torch.compile`` does
+        not handle a mutated buffer well. Factored out because there are now three of these and
+        three copies of the same eight lines is three places for them to drift apart.
+        """
+        if self.lb_loss_weight is None:
+            return None
+        current: Optional[_HiddenTensor] = getattr(self, attr)
+        if current is None:
+            current = hide_from_torch(torch.zeros([], device=self.device))
+            setattr(self, attr, current)
+        elif current.device != self.device:
+            current = current.to(self.device)
+            setattr(self, attr, current)
+        return unhide_from_torch(current)
+
+    @property
+    def lbl_local(self) -> Optional[torch.Tensor]:
+        """
+        Accumulated rank-local load-balancing loss, unscaled. ``None`` when the balance loss is
+        off. Logged as ``moe/lbl_local``; see :attr:`lbl_global`.
+        """
+        return self._lazy_accumulator("_lbl_local")
+
+    @lbl_local.setter
+    def lbl_local(self, value: torch.Tensor):
+        # Needed, not decorative. `self.lbl_local += x` is a read followed by a *write* through the
+        # property, so without a setter the accumulation in `forward` raises AttributeError on the
+        # first step -- caught here by mypy rather than in a queued A100 run.
+        self._lbl_local = hide_from_torch(value)
+
+    @property
+    def lbl_global(self) -> Optional[torch.Tensor]:
+        """
+        Accumulated data-parallel-reduced load-balancing loss, unscaled, on the same batches and
+        from the same router scores as :attr:`lbl_local`.
+
+        The pair is the falsification test for the global-batch granularity. Under identical
+        per-rank count histograms -- one rank, or a uniform router -- they agree exactly; under
+        different histograms they must diverge. A "global" number that tracks the local one on
+        genuinely different data is a reduction that did not happen, and no single logged scalar
+        can reveal that.
+        """
+        return self._lazy_accumulator("_lbl_global")
+
+    @lbl_global.setter
+    def lbl_global(self, value: torch.Tensor):
+        self._lbl_global = hide_from_torch(value)
 
     @property
     def z_loss(self) -> Optional[torch.Tensor]:
@@ -409,6 +509,139 @@ class MoERouter(nn.Module):
         :returns: The expert logits, shape ``(*, num_experts)``.
         """
         raise NotImplementedError
+
+    @torch.no_grad()
+    def compute_loss_metrics(self) -> Dict[str, Tuple[torch.Tensor, Optional["ReduceType"]]]:
+        """
+        Metrics about the auxiliary losses themselves: the local/global load-balancing pair, and
+        the effective per-layer weights.
+
+        Kept out of :meth:`compute_metrics` on purpose. That method is the telemetry owner's, and
+        three lanes want to edit it; this one is the loss owner's and is merged in with a single
+        call so the two concerns do not have to be untangled from one 130-line body.
+
+        **How each of these folds.** ``Transformer.compute_auxiliary_metrics`` merges same-named
+        metrics from every MoE block into one top-level entry: ``ReduceType.mean`` and ``.sum``
+        merge by *adding*, ``ReduceType.max`` by ``torch.max``. Adding is right for a loss and
+        wrong for a bounded statistic -- a normalised entropy tagged ``mean`` in 16 blocks left
+        the trainer reading 15.97 for a quantity defined on ``[0, 1]``. So the tag on each metric
+        below is chosen for how it needs to fold across blocks, and the name says which
+        aggregation the top-level number is:
+
+        - The **loss pair** is tagged ``mean``. Across blocks it therefore sums, which is correct
+          for a loss and is what ``load balancing loss`` already did. Both halves fold
+          identically, so their ratio survives the fold -- which is the only property the
+          comparison needs.
+        - The **weights** are tagged so that the fold performs the audit rather than reporting a
+          constant twelve times. See ``lb_loss_weight_summed_over_blocks``.
+        - The **reduction flag** is inverted and tagged ``max`` so that it folds monotonically in
+          the direction of alarm: any block, on any rank, that failed to reduce carries it to 1.0.
+          Tagged the other way round a single failing rank would be averaged away.
+
+        **Two spellings of the pair, on purpose, and they cannot disagree.** L5's frozen registry
+        asks for **bare** keys, because ``MoETransformer.compute_auxiliary_metrics`` prefixes them
+        into ``block NN/<key>`` and that is where the per-block series comes from.
+        ``telemetry-schema.md`` separately registers the flat scalars ``moe/lbl_local`` and
+        ``moe/lbl_global``, and a gate written against the contract will look for exactly those
+        strings. So both are emitted -- but each pair member is a ``clone()`` of **one** accumulator,
+        so the two spellings are the same number by construction and there is no second
+        implementation to drift. This is the one case where duplicating a metric is safe: an
+        assertion pointed at a name nobody emits is a green run that verified nothing, and that is
+        the more expensive failure.
+        """
+        from olmo_core.train.common import ReduceType
+
+        out: Dict[str, Tuple[torch.Tensor, Optional["ReduceType"]]] = {}
+
+        if self.lb_loss_weight is None:
+            # No balance loss, so no pair to compare and no weight to audit. Emitting zeros here
+            # would put a metric on the dashboard that looks like a measurement of a balanced
+            # router.
+            return out
+
+        lbl_local = self.lbl_local
+        lbl_global = self.lbl_global
+        assert lbl_local is not None and lbl_global is not None
+
+        # THE PAIR. BOTH, ALWAYS, WHATEVER THE GRANULARITY.
+        #
+        # The load-balancing loss was rank-local only: neither granularity aggregated over the
+        # data-parallel group and no all-reduce of the expert counts existed in the loss path. The
+        # fix adds one. But an all-reduce over a group of size one, an all-reduce over the wrong
+        # group, and an all-reduce that silently no-ops all produce a plausible scalar, so logging
+        # only the value being optimized would make the fix unfalsifiable in exactly the way that
+        # matters. These two are computed from the same router scores and the same count
+        # histogram, differing only in whether the histogram was reduced, so the comparison is
+        # controlled.
+        #
+        # What to expect. With one rank, or with every rank holding an identical histogram, they
+        # agree exactly. With ranks holding different data the local value should come out the
+        # LARGER of the two: a rank's own counts are the argmax of its own scores, so the local
+        # inner product <f_local, P_local> is positively correlated in a way <f_global, P_local>
+        # is not. Equality on genuinely different data is the failure this pair exists to catch.
+        # Bare keys -> `block NN/lbl_local`, per L5's frozen registry.
+        out["lbl_local"] = (lbl_local.clone(), ReduceType.mean)
+        out["lbl_global"] = (lbl_global.clone(), ReduceType.mean)
+        # Flat keys -> exactly the strings `telemetry-schema.md` registers, for the gate assertion.
+        out["moe/lbl_local"] = (lbl_local.clone(), ReduceType.mean)
+        out["moe/lbl_global"] = (lbl_global.clone(), ReduceType.mean)
+
+        # The comparison as one number, so a gate can assert on it without reconstructing the
+        # ratio from two separately-reduced series. Dimensionless, 1.0 when the reduction changed
+        # nothing. Both numerator and denominator fold by addition, so the top-level value is a
+        # load-weighted average of the per-block ratios rather than a meaningless quantity.
+        ratio = lbl_global / lbl_local.clamp_min(torch.finfo(torch.float32).tiny)
+        out["lbl_global_over_local"] = (ratio.clone(), ReduceType.mean)
+        out["moe/lbl_global_over_local"] = (ratio.clone(), ReduceType.mean)
+
+        # Did a collective actually run? Inverted so that `max` carries alarm upward: reads 0.0
+        # only if every block on every rank reduced. On a single-process run this is 1.0 and that
+        # is correct and expected -- there is nothing to reduce over, and it is the reason a gate
+        # comparing the pair has to run on more than one rank to mean anything.
+        not_reduced = torch.full_like(lbl_local, 0.0 if self.lbl_reduced else 1.0)
+        out["lbl_not_reduced"] = (not_reduced.clone(), ReduceType.max)
+        out["moe/lbl_not_reduced"] = (not_reduced.clone(), ReduceType.max)
+
+        # THE EFFECTIVE PER-LAYER AUX WEIGHTS, so the divisor correction is auditable.
+        #
+        # Stock divided both weights by the model's TOTAL depth while only MoE blocks contribute a
+        # term, so the summed weight came out low by n_moe_layers/n_layers -- measured 0.00667
+        # against a recipe that said 0.01, i.e. 1.5x, in the coefficient governing the routing
+        # health the run exists to measure. Now that the divisor is a choice, the choice has to
+        # appear in the run's own logs.
+        #
+        # `lb_loss_weight_effective` is the name L5 asked for verbatim, and it means the weight
+        # ACTUALLY IN USE after the divisor -- not the config field. Tagged `max` so the fold
+        # reports it unchanged rather than multiplying a constant by the block count.
+        #
+        # `..._summed_over_blocks` is tagged `mean` precisely so the cross-block fold ADDS it. The
+        # top-level value is then the per-layer weight times the number of MoE blocks the model
+        # actually built -- the true summed weight, computed by the fold rather than asserted from
+        # a config field that could be wrong. Compare it against the recipe's number; they should
+        # be equal, and if they are not, this metric says so. That distinction is the whole audit:
+        # the per-layer weight tells you what was applied, and only the fold tells you whether the
+        # divisor matched the realized MoE depth.
+        weight_kwargs = dict(dtype=torch.float32, device=lbl_local.device)
+        lb_w = torch.tensor(self.lb_loss_weight, **weight_kwargs)  # type: ignore[arg-type]
+        out["lb_loss_weight_effective"] = (lb_w.clone(), ReduceType.max)
+        out["moe/lb_loss_weight_effective"] = (lb_w.clone(), ReduceType.max)
+        out["lb_loss_weight_summed_over_blocks"] = (lb_w.clone(), ReduceType.mean)
+        out["moe/lb_loss_weight_summed_over_blocks"] = (lb_w.clone(), ReduceType.mean)
+        if self.z_loss_weight is not None:
+            z_w = torch.tensor(self.z_loss_weight, **weight_kwargs)  # type: ignore[arg-type]
+            out["z_loss_weight_effective"] = (z_w.clone(), ReduceType.max)
+            out["moe/z_loss_weight_effective"] = (z_w.clone(), ReduceType.max)
+            out["z_loss_weight_summed_over_blocks"] = (z_w.clone(), ReduceType.mean)
+            out["moe/z_loss_weight_summed_over_blocks"] = (z_w.clone(), ReduceType.mean)
+        if self.aux_loss_divisor is not None:
+            # The divisor itself, so a mismatch between it and the realized MoE depth is
+            # diagnosable from the logs alone. Tagged `max`: it is a constant, so the fold should
+            # report it unchanged rather than multiply it by the block count.
+            div = torch.tensor(float(self.aux_loss_divisor), **weight_kwargs)  # type: ignore[arg-type]
+            out["aux_loss_divisor"] = (div.clone(), ReduceType.max)
+            out["moe/aux_loss_divisor"] = (div.clone(), ReduceType.max)
+
+        return out
 
     @torch.no_grad()
     def compute_metrics(
@@ -629,6 +862,10 @@ class MoERouter(nn.Module):
             out["router Z loss"] = (self.z_loss_weight * self.z_loss, ReduceType.mean)
             out["router Z loss unscaled"] = (self.z_loss.clone(), ReduceType.mean)
 
+        # Loss-side metrics live in their own method; see `compute_loss_metrics`. One line here so
+        # that the telemetry owner and the loss owner are not editing the same body.
+        out.update(self.compute_loss_metrics())
+
         if reset:
             self.reset_metrics()
 
@@ -646,6 +883,13 @@ class MoERouter(nn.Module):
         self._gate_mass_tokens = 0
         if (lb_loss := self.load_balancing_loss) is not None:
             lb_loss.zero_()
+        # Cleared together with the loss they mirror. If these outlived it, the pair would cover a
+        # different span than the value being optimized and their ratio would stop meaning
+        # anything -- the same span mismatch that made the drop rate read 44% on a balanced router.
+        if (lbl_local := self.lbl_local) is not None:
+            lbl_local.zero_()
+        if (lbl_global := self.lbl_global) is not None:
+            lbl_global.zero_()
         if (z_loss := self.z_loss) is not None:
             z_loss.zero_()
 
@@ -736,7 +980,7 @@ class MoERouter(nn.Module):
                     if self.gating_function == MoERouterGatingFunction.sigmoid:
                         scores = scores / scores.sum(dim=-1, keepdim=True)
 
-                    lb_loss = load_balancing_loss(
+                    lb = load_balancing_loss(
                         num_experts=self.num_experts,
                         top_k=self.top_k,
                         expert_scores=scores,
@@ -744,12 +988,18 @@ class MoERouter(nn.Module):
                         batched_batch_size_per_expert=batched_batch_size_per_expert,
                         granularity=self.lb_loss_granularity,
                         loss_div_factor=loss_div_factor,
+                        dp_group=self.group,
                         tp_mesh=self.tp_mesh,
                         cp_mesh=self.cp_mesh,
                     )
-                    self.load_balancing_loss += lb_loss.detach()
+                    self.load_balancing_loss += lb.loss.detach()
+                    # Both, always, on the same batch. See `lbl_global`.
+                    assert self.lbl_local is not None and self.lbl_global is not None
+                    self.lbl_local += lb.lbl_local
+                    self.lbl_global += lb.lbl_global
+                    self.lbl_reduced = lb.reduced
 
-                    scaled_lb_loss = self.lb_loss_weight * lb_loss
+                    scaled_lb_loss = self.lb_loss_weight * lb.loss
                     aux_loss = scaled_lb_loss
 
                 if self.z_loss_weight is not None:
