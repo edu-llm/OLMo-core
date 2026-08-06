@@ -26,6 +26,7 @@ from olmo_core.nn.quantization import (
     TWN_GAUSSIAN_ZERO_FRACTION,
     QuantConfig,
     QuantLinear,
+    assert_no_float8_conflict,
     audit_quantization,
     gaussian_zero_fraction,
     twn_quantize,
@@ -663,6 +664,28 @@ def test_audit_notices_nothing_was_quantized():
 # ---------------------------------------------------------------------------------
 # Refusals
 # ---------------------------------------------------------------------------------
+
+
+def test_float8_conflict_is_refused():
+    """
+    float8 conversion filters on ``isinstance(m, nn.Linear)``, which ``QuantLinear`` satisfies,
+    so it would replace every quantized projection with a ``Float8Linear`` and silently discard
+    the quantizer -- a run reporting as the ternary arm while actually training in fp8.
+
+    This is the one place the ``nn.Linear`` subclassing cuts the wrong way, so it gets a guard
+    rather than a comment.
+    """
+
+    class Fake(nn.Module):
+        def __init__(self, enabled):
+            super().__init__()
+            self.w_q = QuantLinear(8, 8, enabled=enabled)
+
+    with pytest.raises(OLMoConfigurationError, match="float8 conversion would silently replace"):
+        assert_no_float8_conflict(Fake(True))
+    # Bypassed and stock are both fine: there is no quantizer to discard.
+    assert_no_float8_conflict(Fake(False))
+    assert_no_float8_conflict(nn.Linear(8, 8))
 
 
 def test_normalized_feed_forward_rejects_quant():

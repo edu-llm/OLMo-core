@@ -58,6 +58,7 @@ __all__ = [
     "twn_quantize",
     "twn_quantize_ste",
     "audit_quantization",
+    "assert_no_float8_conflict",
     "QuantAuditEntry",
 ]
 
@@ -297,6 +298,41 @@ class QuantLinear(nn.Linear):
                 "weight would compute the TWN threshold over a fraction of each output row, "
                 "which is a different quantizer. Use expert parallelism instead."
             )
+
+
+def assert_no_float8_conflict(model: nn.Module) -> None:
+    """
+    Refuse float8 conversion on a model that has ternary QAT enabled.
+
+    This guards a **silent** failure that follows directly from ``QuantLinear`` subclassing
+    ``nn.Linear``. ``Float8Config.apply_float8_linear`` filters candidates with
+    ``isinstance(m, nn.Linear)``, which a ``QuantLinear`` satisfies -- so
+    ``convert_to_float8_training`` would **replace** every quantized projection with a
+    ``Float8Linear``, discarding the quantizer entirely. The result is a run that reports itself
+    as the ternary arm, trains happily, and is actually fp8: exactly the "wrong experiment that
+    trains happily" failure mode the carve-out audit exists to prevent, arriving by a different
+    door.
+
+    The subclassing is still the right call -- it is what buys bitwise-exact ``enabled=False``,
+    a shared state dict, and free compatibility with ``init_linear`` and the parallel wrappers.
+    This is the one place that inheritance cuts the wrong way, so it gets an explicit guard
+    rather than a comment.
+
+    Not currently reachable in our run path (``.edullm/train_on_corpus.py`` sets no
+    ``float8_config``), but it is one config field away from being reachable.
+
+    :raises OLMoConfigurationError: if any enabled :class:`QuantLinear` is present.
+    """
+    offenders = [
+        fqn for fqn, m in model.named_modules() if isinstance(m, QuantLinear) and m.quant_enabled
+    ]
+    if offenders:
+        raise OLMoConfigurationError(
+            f"float8 conversion would silently replace {len(offenders)} ternary-QAT "
+            f"QuantLinear module(s) with Float8Linear, discarding the quantizer -- the run "
+            f"would report as the ternary arm while actually training in fp8. Disable one or "
+            f"the other. First offenders: {offenders[:4]}"
+        )
 
 
 # ===================================================================================
