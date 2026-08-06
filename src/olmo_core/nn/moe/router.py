@@ -1061,7 +1061,19 @@ class MoERouter(nn.Module):
         # before `_b10`, which `_q2`/`_q10` would not. `fnmatch` is anchored, so this family is
         # registered explicitly in `MetricAssertionCallback._block_metric_names`; a bare
         # `drop_by_position` does NOT match `drop_by_position_b03`.
-        if (histograms := self.drop_histograms) is not None:
+        # GATED ON `_drop_histogram_steps`, NOT MERELY ON THE ACCUMULATOR EXISTING. When
+        # `drop_accounting_seq_len` is unset, `compute_drop_accounting` returns both series as
+        # all-`nan`, the accumulator is allocated and every bucket ends 0/0 -- so the buckets would
+        # be published as a full set of `nan` keys. That is precisely the state L3 warned about
+        # before G2: "a run that quietly emits nan histograms would look like B3 failed rather than
+        # like B3 was never switched on." A wall of `nan` in a dashboard reads as a broken
+        # measurement, not as an absent one, and it invites exactly the wrong diagnosis.
+        #
+        # So an uninstrumented run publishes NO bucket keys at all, and says why in one number
+        # (`drop_histograms_unavailable` = 1.0) which is asserted. Absent-and-explained beats
+        # present-and-meaningless. Caught by the check that asserted no bucket keys appear when
+        # uninstrumented -- a test written expecting to pass.
+        if (histograms := self.drop_histograms) is not None and self._drop_histogram_steps > 0:
             for series_name, series in (
                 ("drop_by_position", histograms[0]),
                 ("drop_by_doc_index", histograms[1]),
