@@ -23,8 +23,8 @@ reverting the fix turns them red.
 
 import threading
 import time
-from concurrent.futures import Future
-from typing import Any, Dict, List, Optional
+from concurrent.futures import CancelledError, Future
+from typing import Any, Dict, List
 
 import pytest
 
@@ -118,8 +118,12 @@ class _RecordingTrainer:
     def state_dict(self) -> Dict[str, Any]:
         return {}
 
-    def record_metric(self, name: str, value: float, reduce_type: Optional[Any] = None) -> None:
-        del reduce_type
+    def record_metric(self, name: str, value: float, **kwargs: Any) -> None:
+        # `**kwargs` rather than the exact signature: the real `Trainer.record_metric` also takes
+        # `namespace` and `merge_strategy`, and a stand-in narrower than the real thing would fail
+        # with a TypeError -- a green-to-red for the wrong reason -- if a keyword were ever added
+        # at the call site.
+        del kwargs
         self.metrics[name] = value
 
     def _iter_callbacks(self):
@@ -226,6 +230,52 @@ def test_a_save_that_fails_after_uploading_also_resolves():
 
     assert future.done(), "a callback failure left the returned future unresolved"
     with pytest.raises(RuntimeError, match="sidecar write failed"):
+        future.result()
+
+
+def test_a_cancelled_save_resolves_rather_than_stranding_the_awaiting_rank():
+    """
+    THE SUBTLEST PATH THE FIX HAND-MANAGES, AND THE ONE MOST LIKELY TO BE MISSED. A cancelled
+    future still fires its done-callbacks, but ``result()`` on it raises ``CancelledError`` --
+    which is NOT an ``Exception`` subclass. An ``except Exception`` in the callback would let it
+    escape, leaving the returned future unresolved and the awaiting rank blocked forever inside
+    ``_await_last_checkpoint``: a silent hang, strictly worse than the bug being fixed.
+    """
+    trainer = _RecordingTrainer()
+    _, future = trainer.save_checkpoint_async()
+
+    assert trainer.checkpointer.inner.cancel(), "could not cancel the inner future"
+
+    assert future.done(), (
+        "a cancelled save left the returned future unresolved -- _await_last_checkpoint hangs"
+    )
+    with pytest.raises(CancelledError):
+        future.result()
+    assert METRIC not in trainer.metrics, "a cancelled save must not report a save duration"
+
+
+def test_a_refusal_from_a_sidecar_write_is_not_swallowed():
+    """``Refusal`` in this repo subclasses ``SystemExit``, so it is a ``BaseException`` and NOT an
+    ``Exception`` -- the exact trap called out elsewhere in the entry point. It must still reach
+    the awaiting rank through the returned future."""
+    trainer = _RecordingTrainer()
+
+    class _Refusal(SystemExit):
+        pass
+
+    class _RefusingCallback:
+        @staticmethod
+        def post_checkpoint_saved(path) -> None:
+            del path
+            raise _Refusal("the role may not write that key")
+
+    trainer._iter_callbacks = lambda: iter([_RefusingCallback()])  # type: ignore[method-assign]
+
+    _, future = trainer.save_checkpoint_async()
+    trainer.checkpointer.inner.finish()
+
+    assert future.done(), "a BaseException left the returned future unresolved -- an await hangs"
+    with pytest.raises(_Refusal):
         future.result()
 
 

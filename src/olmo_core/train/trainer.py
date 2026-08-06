@@ -1030,18 +1030,30 @@ class Trainer:
         # Here that race is not merely stale state, it is a COLLECTIVE DIVERGENCE, and it killed
         # 3 of 4 cells of run_019fd382. `_shutdown` calls `_log_metrics`, which returns early --
         # taking no collective at all -- when `self._metrics` is empty. After the last step the
-        # only thing left in `self._metrics` is the metric recorded below, so a rank that won the
-        # race enters an all-reduce on the bookkeeping process group while a rank that lost it
-        # skips straight to the `barrier()` at the end of `_shutdown`. Neither ever completes:
-        # the majority time out after the bookkeeping group's 30 minutes, the barrier after the
-        # default group's 15. Eight ranks race a window of a few milliseconds independently, so
-        # on any given cell they can land on both sides of it -- which is why the surviving cell
-        # was survivorship and not correctness.
+        # only thing left in `self._metrics` is the metric recorded below, so ranks that lost the
+        # race arrive at `_log_metrics` with nothing to reduce while ranks that won it have one
+        # entry. The disagreeing ranks then submit mismatched (or missing) contributions to the
+        # `reduce_metrics` all-reduce on the bookkeeping process group, which can never complete
+        # and dies after that group's 30-minute timeout. That failure is swallowed into
+        # `self._error` by `run_bookkeeping_op`'s done-callback, `_join_bookkeeping_ops` reports
+        # "All bookkeeping ops complete" anyway, and every rank then walks into the `barrier()` at
+        # the end of `_shutdown` on an already-poisoned gloo group -- burning the default group's
+        # 15 minutes on top. That is why the logs show 1800s `reduce_metrics` timeouts followed
+        # ~900s LATER by barrier timeouts, rather than the two clocks running concurrently.
+        #
+        # Cell 0 survived because its metric happened to land before `_log_metrics` read the dict
+        # (its own log shows the read ~12ms after the record), so all 8 ranks agreed. That is
+        # survivorship, not correctness: the window is milliseconds and each rank races it alone.
         #
         # Resolving `observable` only at the end of `callback` makes the await a real happens-
         # before edge: every rank that has finished awaiting has recorded the metric, so every
         # rank makes the same choice in `_log_metrics`. It adds no collective and changes no
         # numerics -- it only removes an ordering in which some ranks skipped one.
+        #
+        # NOTE: this does NOT make `_log_metrics`'s early return safe in general. Any future code
+        # that records a metric on some ranks and not others, or from another thread, reproduces
+        # the same outage. The collective-safe fix is to stop making the collective conditional on
+        # per-rank state; this change only removes the one producer of asymmetry that we hit.
         observable: Future = Future()
         observable.set_running_or_notify_cancel()
 
@@ -1057,10 +1069,20 @@ class Trainer:
                     callback.post_checkpoint_saved(path)
                 log.info(f"Checkpoint for step {step} saved successfully")
             except BaseException as exc:
-                # Must always resolve, or an awaiting rank waits on it forever -- a failure that
-                # used to surface through `fut.result()` would become a hang.
+                # MUST ALWAYS RESOLVE, or an awaiting rank waits forever -- a failure that used to
+                # surface through `fut.result()` would become a hang, which is worse than the bug
+                # being fixed. `BaseException` on purpose: this repo's `Refusal` subclasses
+                # `SystemExit`, and a cancelled inner future raises `CancelledError`, neither of
+                # which is an `Exception`.
+                #
+                # Deliberately NOT re-raised. The exception is now carried by `observable` and gets
+                # raised on the awaiting (training) thread by `_await_last_checkpoint`, which is
+                # where it can actually stop the run. Re-raising here would only reach the DCP
+                # writer thread, where `Future._invoke_callbacks` catches `Exception` and logs it --
+                # and would not even log a `BaseException`. Logged here instead, so a failure is
+                # visible even if nothing ever awaits this save.
+                log.exception(f"Async checkpoint for step {step} failed")
                 observable.set_exception(exc)
-                raise
             else:
                 observable.set_result(None)
 
