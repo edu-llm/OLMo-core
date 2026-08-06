@@ -17,9 +17,31 @@ would have caught it on the first logged step.
 because it manufactures confidence: the run completes, the log contains a line nobody read, and
 the artifact looks validated. Every check here raises :class:`MetricAssertionError`, which
 reaches ``Trainer._check_and_pass_on_metrics`` -> the bookkeeping future -> ``Trainer._error`` ->
-``RuntimeError`` from ``training_complete``, i.e. it stops the run. That path is exercised by the
-existing non-finite-loss check in the same method, so it is a known-working escalation route
-rather than a hoped-for one.
+``RuntimeError`` from ``training_complete``. That path is exercised by the existing
+non-finite-loss check in the same method, so it is a known-working escalation route rather than a
+hoped-for one.
+
+**Exactly when it stops, which is NOT "at the failing step".** Audited in
+``maple/agents/lanes/L5-telemetry/verify/assertion-raise-path.md`` and
+``evidence/async-assertion-escalation-gap.md``; stated here because a docstring that overclaims
+the guarantee is its own hazard.
+
+- **Single process** (any 1-GPU gate): ``run_bookkeeping_op`` runs the op inline, so the exception
+  propagates straight out of ``_log_metrics`` into ``fit()``'s handler and the run stops
+  immediately, exit non-zero. This is the reliable path.
+- **Multi-rank**: bookkeeping is async, so the future's done-callback stores ``_error``
+  (``trainer.py:1345``) and does *not* raise. ``_error`` is only read by ``training_complete`` /
+  ``is_canceled``, so with ``metrics_collect_interval=5`` **up to ~5 further optimizer steps run
+  after a divergence is detected.**
+- **On the final logged step it can be lost entirely**: ``_shutdown(gracefully=True)`` joins the
+  bookkeeping ops but never re-reads ``_error``, so a failure detected there lets ``fit()`` return
+  normally and the process exit **0**, with the failure visible only as a ``log.exception``.
+
+The last point is why :class:`ResultProtocolCallback` matters as much as the assertions: its
+``close()`` runs on both shutdown paths, so the *evidence* escapes even when the *exit code* is
+wrong. A two-line ``_error`` re-check at the end of ``Trainer.fit()`` would close the gap, but
+``trainer.py`` is not this lane's file and the change alters the exit code of runs that previously
+exited 0 with a logged bookkeeping error -- a deliberate decision for whoever owns it.
 """
 
 import json
@@ -28,7 +50,7 @@ import math
 import time
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
 from olmo_core.distributed.utils import get_rank
 from olmo_core.exceptions import OLMoError
@@ -89,6 +111,22 @@ class MetricAssertionCallback(Callback):
     entropy of ~0.998 in each of 16 blocks came to be logged as **15.97** for a quantity defined
     on ``[0, 1]``. Computing the aggregate here, from the already-reduced per-block series, is the
     only place a real mean is available.
+    """
+
+    priority: ClassVar[int] = 4
+    """
+    Runs first, for two reasons that both matter.
+
+    On the metrics path, ``pre_log_metrics`` here *adds* the ``moe/<metric>_{max,mean,min}``
+    aggregates to the dict, and callbacks that consume metrics -- the console logger, W&B, the
+    metric saver, the ``RESULT `` protocol -- must see them. Callbacks run in priority order, so
+    computing the aggregates first is what makes them visible downstream rather than only to
+    whichever callback happens to follow.
+
+    On the shutdown path, the same argument as :class:`ResultProtocolCallback`: ``close()`` here
+    reports whether the balance bands were ever applied, and an unguarded ``wandb.finish()`` later
+    in the loop must not be able to suppress it. Above ``ResultProtocolCallback``'s 3 so that the
+    band-application count is printed before the final ``RESULT `` line.
     """
 
     # -- what to assert -----------------------------------------------------------------------
@@ -178,14 +216,35 @@ class MetricAssertionCallback(Callback):
 
     # -- how loudly ---------------------------------------------------------------------------
 
-    warmup_steps: int = 0
+    warmup_steps: int = 50
     """
-    Steps to skip before applying the balance assertions (not the finite-loss or step-0 checks,
-    which apply immediately). ``dead_expert_frac`` in particular is meaningless before any token
-    has been routed.
+    The balance bands apply only from the **steady-state window**, i.e. steps at or after this.
+    Before it, only the loss band and the finite check run. Ruled by the orchestrator 2026-08-06.
+
+    **Why this is not a fudge.** The balance metrics are not merely noisy at step 1, they are
+    *not yet the quantity the band describes*. Measured on an R0 toy (6 steps, 1/8 micro-batch):
+    ``dead_expert_frac`` **0.219** and ``drop_frac_upper_bound`` **0.217** at step 1 -- both wildly
+    outside their bands, on a run that was working correctly. An untrained router has not yet
+    spread load across experts, and at a small local batch a large fraction of experts legitimately
+    receive nothing on the first step.
+
+    The alternative -- loosening the bands so they hold at step 1 on a toy config -- was rejected
+    and rightly: a ceiling wide enough to pass ``dead_expert_frac = 0.219`` cannot catch anything
+    real at R3, where the whole point is that zero is the measured expectation. **Narrow the
+    window, not the band.**
+
+    This is the third instance of D-019 (the null for a balance metric is almost never zero) and it
+    sharpens it: the null is not even *stationary* at step 1. 50 matches the discard used by the
+    throughput harness for the same underlying reason -- early steps are not the regime being
+    measured. It is deliberately a **plain step index, not a fraction of the run**, so a 6-step
+    smoke test simply never enters the window and reports that rather than asserting on transients.
     """
 
-    require_present: Tuple[str, ...] = ("dead_expert_frac", "gate_mass_mean", "drop_frac")
+    require_present: Tuple[str, ...] = (
+        "dead_expert_frac_global",
+        "gate_mass_mean",
+        "drop_frac",
+    )
     """
     Per-block metric names that MUST appear in the metrics dict, checked once at
     ``presence_check_step``.
@@ -231,6 +290,8 @@ class MetricAssertionCallback(Callback):
         "expert_load_cv_excess",
         "entropy_deficit",
         "dead_expert_frac",
+        "dead_expert_frac_global",
+        "dead_expert_counts_not_reduced",
         "gate_mass_mean",
         "drop_frac",
         "drop_frac_upper_bound",
@@ -245,6 +306,8 @@ class MetricAssertionCallback(Callback):
     _checked_step0: bool = field(default=False, repr=False)
     _checked_presence: bool = field(default=False, repr=False)
     _resumed: bool = field(default=False, repr=False)
+    _bands_applied: int = field(default=0, repr=False)
+    _last_step_seen: int = field(default=0, repr=False)
 
     def state_dict(self) -> Dict[str, Any]:
         # `_checked_step0` is saved so a resumed run does not re-apply the step-0 band to a step
@@ -378,6 +441,7 @@ class MetricAssertionCallback(Callback):
 
     def _assert_all(self, step: int, metrics: Dict[str, float]):
         self._failures = []
+        self._last_step_seen = max(self._last_step_seen, step)
 
         if self.assert_finite:
             self._check_finite(metrics)
@@ -386,6 +450,10 @@ class MetricAssertionCallback(Callback):
         if step >= self.presence_check_step:
             self._check_presence(step, metrics)
         if step >= self.warmup_steps:
+            # Counted, not just executed. See `close()`: a run that never reaches the steady-state
+            # window has had its balance bands checked ZERO times, and that must be said out loud
+            # rather than inferred from an absence of failures.
+            self._bands_applied += 1
             self._check_bands(metrics)
 
         if self._failures:
@@ -397,6 +465,52 @@ class MetricAssertionCallback(Callback):
                 "maple/agents/contracts/telemetry-schema.md. This raises rather than warns "
                 "deliberately: every band here guards a defect that otherwise TRAINS HAPPILY to "
                 "completion."
+            )
+
+    def close(self):
+        """
+        Say, on the way out, whether the balance bands were ever actually applied.
+
+        THE WARMUP WINDOW OPENS A VACUITY HOLE AND THIS IS WHAT CLOSES IT. With
+        ``warmup_steps=50``, a run shorter than 50 steps -- a smoke test, an early crash, a gate
+        that only ever meant to do 6 steps -- never enters the steady-state window, so **every
+        balance band is skipped and no failure is ever appended.** That is indistinguishable, from
+        the outside, from a run whose balance was verified and found healthy. It is the same
+        confidence-manufacturing failure that `require_present` exists to prevent, arriving through
+        a different door.
+
+        So the count is reported unconditionally at shutdown. It does not raise: a short run is a
+        legitimate thing to do, and failing it would make the smoke test unrunnable. It states
+        plainly which bands did and did not get exercised, at WARNING when the answer is none, so a
+        green 6-step run cannot be quoted as evidence of routing health.
+
+        Printed via ``RESULT `` as well as logged, because a log line that only exists in a stream
+        nobody re-reads is how the sibling published nothing.
+        """
+        if not self.enabled or get_rank() != 0:
+            return
+        record = {
+            "check": "metric_assertions",
+            "band_checks_applied": self._bands_applied,
+            "warmup_steps": self.warmup_steps,
+            "last_step_seen": self._last_step_seen,
+            "step0_loss_checked": self._checked_step0,
+            "presence_checked": self._checked_presence,
+            "resumed": self._resumed,
+        }
+        print("RESULT " + json.dumps(record), flush=True)
+        if self._bands_applied == 0:
+            log.warning(
+                "MetricAssertionCallback: the balance bands were applied on ZERO steps. The run "
+                f"reached step {self._last_step_seen} and the steady-state window starts at "
+                f"{self.warmup_steps}, so dead_expert_frac, drop_frac and the gate-mass band were "
+                "NEVER CHECKED. This run is not evidence of routing health. Expected for a smoke "
+                "test; if this was a real run, lower warmup_steps or run longer."
+            )
+        else:
+            log.info(
+                f"MetricAssertionCallback: balance bands applied on {self._bands_applied} logged "
+                f"step(s) from step {self.warmup_steps} onward, all within band."
             )
 
     def _check_finite(self, metrics: Dict[str, float]):
@@ -509,10 +623,19 @@ class MetricAssertionCallback(Callback):
         # point of B2.
         checks: List[Tuple[str, Optional[float], str]] = [
             (
-                "dead_expert_frac",
+                # THE GLOBAL POPULATION, NOT THE RANK-LOCAL ONE. An expert is dead if *no rank*
+                # routed to it, so the `== 0` band has to be evaluated on the reduced counts. The
+                # per-rank `dead_expert_frac` reads "idle on this rank" and over-reports -- L2
+                # measured 0.0004 against a true global 0.0000 at 256 tokens/rank, and it
+                # over-reports hardest at small local batches, which is R3's regime exactly. A
+                # zero-ceiling band on the per-rank metric would therefore fire spuriously at the
+                # flagship, i.e. it would be an assertion that fails on healthy runs.
+                "dead_expert_frac_global",
                 self.dead_expert_frac_max,
-                "an expert receiving zero assignments is capacity bought and not used; sibling "
-                "measured 0.000000 across all 16 blocks, so zero is the real expectation",
+                "an expert receiving zero assignments FROM ANY RANK is capacity bought and not "
+                "used; sibling measured 0.000000 across all 16 blocks, so zero is the real "
+                "expectation. Check `dead_expert_counts_not_reduced` -- if it is 1.0 on a "
+                "multi-rank run the collective did not run and this number is rank-local",
             ),
             (
                 "entropy_deficit",
