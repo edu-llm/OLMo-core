@@ -372,7 +372,21 @@ class Trainer:
                         "A CPU-only backend is required for async bookkeeping"
                     )
                 log.info("Creating new process group for async bookkeeping")
-                self._bookkeeping_pg = dist.new_group()
+                # A BOUND ON WHAT A DIVERGENCE ON THIS GROUP COSTS, NOT A FIX FOR ONE.
+                #
+                # `dist.new_group()` takes the default 30-minute timeout. This group only ever
+                # all-reduces a handful of scalar metrics, which takes milliseconds; the 30
+                # minutes is dead time on the one path where it matters, when ranks disagree
+                # about whether to enter the collective at all. In run_019fd382 that cost three
+                # cells 30 minutes each before they even reached the barrier that killed them --
+                # 45 minutes per cell to learn something a bounded wait reports in under two.
+                #
+                # Five minutes is far above any legitimate reduce of a few floats and far below
+                # the runtime bound of any real run, so it turns a hang into a prompt, legible
+                # failure. It does NOT prevent the divergence: see the NOTE in
+                # `save_checkpoint_async` for that bug, and for why `_log_metrics`'s early
+                # return keeps the class of it open.
+                self._bookkeeping_pg = dist.new_group(timeout=timedelta(minutes=5))
 
         # Check data loader configuration.
         if self.data_loader.dp_world_size != get_world_size(self.dp_process_group):
@@ -1419,8 +1433,28 @@ class Trainer:
                     f"Waiting for bookkeeping ops to finish: '{op_name}' ({len(futures_dict)} ops)..."
                 )
                 futures.extend(futures_dict.values())
-        concurrent.futures.wait(futures, timeout=timeout)
-        log.info("All bookkeeping ops complete")
+        done, not_done = concurrent.futures.wait(futures, timeout=timeout)
+        # SAY WHAT ACTUALLY HAPPENED, BECAUSE THIS LINE ONCE LIED FOR THIRTY MINUTES.
+        #
+        # `concurrent.futures.wait` returns rather than raising when it times out, and the
+        # unconditional "All bookkeeping ops complete" below was printed either way. In
+        # run_019fd382 a `reduce_metrics` all-reduce died on the bookkeeping group's timeout,
+        # `run_bookkeeping_op`'s done-callback swallowed the error into `self._error`, and this
+        # line then reported success -- after which every rank walked into the `barrier()` at
+        # the end of `_shutdown` on an already-poisoned group and burned 15 minutes more. The
+        # log said the teardown was fine right up until the process died.
+        #
+        # This does not raise: `self._error` is the channel that stops a run, and raising here
+        # would change control flow on a path that several callers reach during their own error
+        # handling. It only stops the log from asserting something untrue.
+        if not_done:
+            log.error(
+                "%d bookkeeping op(s) did NOT complete within the join timeout; "
+                "continuing teardown, but any collective they own may be diverged",
+                len(not_done),
+            )
+        else:
+            log.info("All %d bookkeeping ops complete", len(done))
 
     def _check_if_canceled(self):
         if self._canceled:
