@@ -398,7 +398,14 @@ class ParallelMLP(ParallelMLPBase):
         if self.max_local_microbatch_size is not None:
             self.warmup_cache(self.max_local_microbatch_size)
 
-    def expert_capacity(self, local_batch_size: int) -> int:
+    def _capacity_local_batch_size(self, local_batch_size: int) -> int:
+        """
+        The local batch size the capacity computation actually uses.
+
+        Extracted so :meth:`expert_capacity` and :meth:`effective_capacity_factor` cannot drift:
+        two copies of this substitution would be two chances for the reported factor to describe a
+        capacity nobody allocated.
+        """
         # NOTE: need to ensure this is the same across the process group.
         # If local batch sizes are different then these will be different, and `parallel_forward_once`
         # will break. This shouldn't be a problem with our trainer, but would be an issue for inference.
@@ -412,12 +419,49 @@ class ParallelMLP(ParallelMLPBase):
                 )
             else:
                 local_batch_size = max_local_microbatch_size
+        return local_batch_size
+
+    def expert_capacity(self, local_batch_size: int) -> int:
+        local_batch_size = self._capacity_local_batch_size(local_batch_size)
 
         ideal_local_inputs_per_expert = self.top_k * local_batch_size / self.num_experts
         allowed_local_inputs_per_expert = ensure_multiple_of(
             int(self.capacity_factor * ideal_local_inputs_per_expert), 8
         )
         return self.ep_world_size * allowed_local_inputs_per_expert
+
+    def effective_capacity_factor(self, local_batch_size: int) -> float:
+        """
+        The capacity factor the dispatch **actually** allocated, which is not the one requested.
+
+        WHY THIS IS A METRIC AND NOT A CONSTANT. :meth:`expert_capacity` wraps its result in
+        ``ensure_multiple_of(..., 8)``, which rounds **up**. So a requested 1.2 is really 1.2188 at
+        E=256 with a 8192-token local microbatch, and 1.2031 at 16384 -- the error depends on both
+        the expert count and the batch size. An E-sweep that holds the *nominal* factor fixed
+        therefore varies the *effective* capacity across rungs, which confounds capacity with E on a
+        ladder whose only axis is E. Reporting the realized value is what makes that visible instead
+        of assumed. (At factor 2.0 the quantization vanishes for every rung in this project, so the
+        funded path is the one configuration where this metric is expected to read exactly 2.0.)
+
+        THE ``ep_world_size`` FACTOR IS DELIBERATELY NOT IN THIS RATIO. ``expert_capacity`` returns
+        ``ep_world_size * allowed_local_inputs_per_expert`` -- a global figure -- while the ideal
+        load it is compared against is *per local expert*. Dividing the returned value by the local
+        ideal would report ``ep_world_size x`` the true factor, i.e. a healthy 2.0 would appear as
+        16.0 on an 8-way expert-parallel run. The ratio is formed from the local quantities on both
+        sides instead.
+
+        :param local_batch_size: Tokens in the local microbatch, the same value passed to
+            :meth:`expert_capacity`.
+        """
+        local_batch_size = self._capacity_local_batch_size(local_batch_size)
+
+        ideal_local_inputs_per_expert = self.top_k * local_batch_size / self.num_experts
+        if ideal_local_inputs_per_expert <= 0:
+            return float("nan")
+        allowed_local_inputs_per_expert = ensure_multiple_of(
+            int(self.capacity_factor * ideal_local_inputs_per_expert), 8
+        )
+        return allowed_local_inputs_per_expert / ideal_local_inputs_per_expert
 
     @torch.no_grad()
     def _get_parallel_indices_and_bins(

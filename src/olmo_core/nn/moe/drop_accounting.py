@@ -55,11 +55,34 @@ population makes the uniform-drop null **flat**, which is the only way a ramp is
 are relative (fixed count, normalized axis) so the series is comparable across sequence lengths and
 across expert counts, per ``telemetry-schema.md`` rule 2.
 
-STATED EXPECTATION, IN ADVANCE. With documents packed to a full ``seq_len``, ``drop_by_position`` is
-expected to be **flat** and ``drop_by_doc_index`` to **ramp**. Writing the null down before
-measuring is what stops a flat line from being read as broken instrumentation -- and if
-``drop_by_position`` ramps anyway, something beyond bin truncation is position-dependent, which is a
-real finding rather than a bug in this file.
+THE NULL IS NOT ZERO, WHICH WAS PREDICTED WRONG AND THEN MEASURED. BOTH SERIES ARE UNGATED.
+--------------------------------------------------------------------------------------------
+The prediction written here first was that ``drop_by_position`` would be **flat** while
+``drop_by_doc_index`` ramped. Measured on a forced overflow (L40S sm_89, 512 assignments per bucket,
+binomial sd 0.0197):
+
+    drop_by_doc_index   spread 0.363   =  18.5 sd   -- doc 0 loses nothing, docs 2-7 lose 33-36%
+    drop_by_position    spread 0.107   =   5.46 sd  -- NOT noise: +0.047 tilt into the last quarter
+
+So the positional axis carries **real signal**, and "flat" was too strong. The direction of the
+framing above survives -- the document effect is **7.7x** larger, so binning the flattened order
+would still be reporting the wrong axis -- but the positional null is a *tilt*, not a flat line.
+
+The tilt has a mechanical cause rather than being noise or a second phenomenon: the last surviving
+document is truncated **mid-document**, so it contributes its early positions and not its late ones,
+which leaks a tail-ward tilt into the position-folded histogram. It is the same truncation seen
+through a different projection.
+
+**CONSEQUENCE, AND THE REASON IT IS WRITTEN IN THE SOURCE RATHER THAN ONLY IN A CONTRACT: both
+series are deliberately UNGATED.** An assertion of the form "the positional axis is flat" fires on
+every healthy run -- it would have been added in good faith on the strength of the original
+prediction, and it would have produced a false alarm in production. If a gate is ever wanted here,
+the discriminating condition is a positional ramp **large relative to** ``drop_by_doc_index``, not
+non-flatness. The gated quantity is ``drop_frac`` (ceiling 1%), which is scalar and has a real null.
+
+Generalizing, since a sibling lane reached the same conclusion independently on a balance metric:
+**the null for a balance or drop metric is almost never zero.** Assert against a measured band, or
+do not assert.
 
 ON SORT STABILITY, WHICH THIS FILE DELIBERATELY DOES NOT ASSUME
 ---------------------------------------------------------------
