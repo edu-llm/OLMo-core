@@ -73,6 +73,29 @@ class MoEConfig(ModuleConfig):
     )
     z_loss_weight: Optional[float] = None
     scale_loss_by_num_layers: bool = True
+    n_moe_layers: Optional[int] = None
+    """
+    How many blocks in the model are MoE blocks. Only used when
+    :data:`scale_loss_by_num_layers` is on, where it is the divisor applied to both auxiliary
+    loss weights.
+
+    Leave ``None`` and the divisor is the model's **total** depth, which is what the stock code
+    did unconditionally and which is wrong whenever some blocks are dense. Every MoE layer
+    divides its weight by the total depth, but only the MoE layers contribute a term, so the
+    summed weight comes out low by exactly ``n_moe_layers / n_layers``. Measured on a 24-layer
+    model with 16 MoE blocks: the per-layer weight read back as ``0.01/24 = 0.000416666...``, so
+    the summed balance weight was ``16*0.01/24 = 0.00667`` where the recipe asked for ``0.01`` --
+    **1.5x low**, silently, in the coefficient that controls the routing health the run is
+    measuring.
+
+    Set it to the number of MoE blocks and the summed weight is the number you wrote down.
+
+    .. note::
+        For a model whose every block is an MoE block this changes nothing, because the two
+        depths are equal. That is not a reason to leave it unset: an unset divisor is a
+        correctness property that happens to hold, and it stops holding the moment a dense block
+        is introduced, with no error.
+    """
     dtype: DType = DType.float32
     quant: Optional[QuantConfig] = None
     """
@@ -157,17 +180,41 @@ class MoEBase(nn.Module):
         lb_loss_granularity: MoELoadBalancingLossGranularity = MoELoadBalancingLossGranularity.local_batch,
         z_loss_weight: Optional[float] = None,
         n_layers: int = 1,
+        n_moe_layers: Optional[int] = None,
         scale_loss_by_num_layers: bool = True,
         dtype: torch.dtype = torch.float32,
         cache: Optional[BufferCache] = None,
         **kwargs,
     ):
         super().__init__()
+        # Divide by MoE depth, not total depth. Only MoE blocks contribute an auxiliary loss term,
+        # so dividing by the total depth makes the summed weight low by `n_moe_layers/n_layers`.
+        # See `MoEConfig.n_moe_layers` for the measured 1.5x.
+        #
+        # `n_moe_layers=None` reproduces the old behaviour rather than guessing, because a wrong
+        # guess here is invisible: it scales a coefficient, and any value trains.
+        aux_loss_divisor = n_layers if n_moe_layers is None else n_moe_layers
+        if aux_loss_divisor < 1:
+            raise OLMoConfigurationError(
+                f"auxiliary loss divisor must be at least 1, got {aux_loss_divisor} "
+                f"(n_layers={n_layers}, n_moe_layers={n_moe_layers})"
+            )
+        if n_moe_layers is not None and n_moe_layers > n_layers:
+            raise OLMoConfigurationError(
+                f"'n_moe_layers' ({n_moe_layers}) cannot exceed 'n_layers' ({n_layers})"
+            )
         if scale_loss_by_num_layers:
             if lb_loss_weight is not None:
-                lb_loss_weight = lb_loss_weight / n_layers
+                lb_loss_weight = lb_loss_weight / aux_loss_divisor
             if z_loss_weight is not None:
-                z_loss_weight = z_loss_weight / n_layers
+                z_loss_weight = z_loss_weight / aux_loss_divisor
+
+        # Recorded so the correction is auditable rather than asserted: the effective per-layer
+        # weights and the divisor that produced them are logged as metrics, and a run whose
+        # summed weight is not the number in its recipe can be identified from its own logs
+        # instead of by re-reading this constructor. See `MoERouter.compute_metrics`.
+        self.aux_loss_divisor = aux_loss_divisor
+        self.n_layers = n_layers
 
         self.router = router.build(
             d_model,
@@ -178,6 +225,8 @@ class MoEBase(nn.Module):
             dtype=dtype,
             init_device=init_device,
         )
+        # So the divisor appears in the run's own metrics rather than only in this constructor.
+        self.router.aux_loss_divisor = aux_loss_divisor if scale_loss_by_num_layers else 1
         self.experts = self._init_parallel_mlp(
             d_model=d_model,
             num_experts=num_experts,
@@ -382,6 +431,7 @@ class MoE(MoEBase):
         z_loss_weight: Optional[float] = None,
         scale_loss_by_num_layers: bool = True,
         n_layers: int = 1,
+        n_moe_layers: Optional[int] = None,
         dtype: torch.dtype = torch.float32,
         cache: Optional[BufferCache] = None,
         quant: Optional[QuantConfig] = None,
@@ -399,6 +449,7 @@ class MoE(MoEBase):
             z_loss_weight=z_loss_weight,
             scale_loss_by_num_layers=scale_loss_by_num_layers,
             n_layers=n_layers,
+            n_moe_layers=n_moe_layers,
             dtype=dtype,
             capacity_factor=capacity_factor,
             cache=cache,

@@ -2,7 +2,11 @@
 MoE layers.
 """
 
-from .loss import MoELoadBalancingLossGranularity
+from .loss import (
+    LoadBalancingLoss,
+    MoELoadBalancingLossGranularity,
+    reduce_expert_counts,
+)
 from .mlp import DroplessMoEMLP, MoEMLP
 from .moe import DroplessMoE, MoEBase, MoEConfig, MoEType
 from .router import (
@@ -26,4 +30,6 @@ __all__ = [
     "MoERouterType",
     "MoERouterGatingFunction",
     "MoELoadBalancingLossGranularity",
+    "LoadBalancingLoss",
+    "reduce_expert_counts",
 ]
