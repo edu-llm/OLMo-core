@@ -1247,13 +1247,32 @@ class TransformerConfig(ModelConfig):
         # are actually available, so this branch builds standalone AND picks them up
         # automatically once L4 is in, with no second edit and no silent divergence.
         quant_kwargs = {} if quant is None else {"quant": quant}
+        # The gate/up clamp. Maple applies it in `MapleMLP.forward` unconditionally, in BOTH
+        # precision regimes, so its absence is a faithfulness divergence and not a quant detail.
+        #
+        # This used to fall back silently to "no clamp" when L4's field was absent, which the
+        # independent audit correctly flagged (F5): a silently-absent architectural feature is
+        # the exact failure class this factory exists to prevent, and it was inconsistent with
+        # how `quantize` behaves one screen up -- that RAISES. So this warns loudly instead of
+        # passing in silence, and `require_swiglu_limit=True` turns it into a hard error for
+        # anyone who wants the guarantee rather than the notice.
+        require_swiglu_limit = kwargs.pop("require_swiglu_limit", False)
         try:
             from ..feed_forward import MAPLE_SWIGLU_LIMIT
 
             swiglu_kwargs = {"swiglu_limit": kwargs.pop("swiglu_limit", MAPLE_SWIGLU_LIMIT)}
-        except ImportError:
+        except ImportError as e:
             swiglu_kwargs = {}
             kwargs.pop("swiglu_limit", None)
+            msg = (
+                "MoEConfig.swiglu_limit is unavailable in this tree, so Maple's gate/up clamp "
+                "(gate max=7.0, up [-7,7]) is ABSENT from every expert built by this factory. "
+                "Maple applies it unconditionally in both precision regimes, so this model is "
+                "not clamp-faithful. It lands with L4's C4."
+            )
+            if require_swiglu_limit:
+                raise OLMoConfigurationError(msg) from e
+            log.warning("%s Pass require_swiglu_limit=True to make this fatal.", msg)
 
         layer_norm = LayerNormConfig(
             name=LayerNormType.rms, eps=layer_norm_eps, bias=False, dtype=dtype
@@ -1313,6 +1332,25 @@ class TransformerConfig(ModelConfig):
             qk_norm=layer_norm,
             use_head_qk_norm=True,
             sliding_window=sliding_window,
+            # PINNED, and it must be. Left as `None`, the backend is resolved PER LAYER from
+            # whether that layer has a window: a sliding layer takes the
+            # `if backend is None and has_flash_attn_2()` branch and gets flash_2, while a
+            # global layer skips it and falls through to `backend = torch`
+            # (`nn/attention/__init__.py:454-462`). On a flash-attn image that silently makes
+            # our 3:1 SWA layout a 3:1 *kernel* split -- 9 layers on FlashAttention-2 and
+            # layers {3,7,11} on torch SDPA.
+            #
+            # Two consequences, neither visible in the config:
+            #   1. Throughput. Three layers on a slower kernel biases absolute MFU downward and
+            #      makes it non-comparable to the `moe/` track's baseline, which had no
+            #      global/sliding split. MFU is the E-sweep's dependent variable.
+            #   2. Correctness, latently: torch SDPA raises on intra-document masking, so a
+            #      packed-corpus run with `generate_doc_lengths=True` would die at the first
+            #      global layer. flash_2 supports it.
+            #
+            # The sibling `olmo3_*` factories in this file pin `attn_backend=flash_2` for
+            # exactly this reason. Ours is a SWA factory too, so it pins it as well.
+            backend=kwargs.pop("attn_backend", AttentionBackendName.flash_2),
             # q/k/v/o. Maple ternarizes every matmul; norms stay full precision, and there is
             # no code path from here to the QK-norms.
             **quant_kwargs,
@@ -1517,6 +1555,17 @@ class TransformerConfig(ModelConfig):
                     )
                 if swa.force_full_attention_on_last_layer:
                     problems.append("force_full_attention_on_last_layer must be False")
+            # The backend must be PINNED, not resolved per layer. Unpinned, sliding layers get
+            # flash_2 and global layers fall through to torch SDPA, making the 3:1 SWA layout a
+            # 3:1 kernel split that biases MFU and crashes on intra-document masking. Neither
+            # is visible in the config, and MFU is the E-sweep's dependent variable.
+            if mixer.backend is None:
+                problems.append(
+                    "attention backend must be pinned explicitly; left None it is resolved "
+                    "PER LAYER from the presence of a window, so sliding layers get flash_2 "
+                    "while global layers fall through to torch SDPA "
+                    "(nn/attention/__init__.py:454-462)"
+                )
             rope = mixer.rope
             if rope is None:
                 problems.append("expected a RoPE config")
@@ -1556,7 +1605,22 @@ class TransformerConfig(ModelConfig):
         )
 
         expected = cls.MAPLE_EXPECTED_PARAMS.get(vocab_size, {}).get(rung)
-        if expected is not None:
+        if expected is None:
+            # Say so. A rung or vocab with no ratified figures skips BOTH ledger checks, and a
+            # skipped assertion that announces nothing is indistinguishable from a passing one --
+            # which is how `E8` (X2's low anchor) could have been submitted un-gated.
+            log.warning(
+                "no ratified param figures for rung=%s at V=%d, so the total/active ledger "
+                "assertions were SKIPPED, not passed. Computed: total=%d active=%d "
+                "active_minus_routers=%d. File these in MAPLE_EXPECTED_PARAMS before relying "
+                "on this rung.",
+                rung,
+                vocab_size,
+                total,
+                active,
+                active - routers,
+            )
+        else:
             exp_total, exp_active = expected
             # 1% because the published table is rounded, not because the count is uncertain.
             if abs(total - exp_total) > 0.01 * exp_total:
