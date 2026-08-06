@@ -1694,30 +1694,37 @@ class TransformerConfig(ModelConfig):
 
     @classmethod
     def maple_r0(cls, vocab_size: int, **kwargs) -> "TransformerConfig":
-        """R0, the code-path smoke rung: d=512, L=8, E=64. ~214M total / ~126M active.
+        """R0, the code-path smoke rung: d=512, L=8, E=64.
 
         Sized for `gpu-1xa10g` at ~$1/hr. Never compared for quality -- it is MQA rather than
-        GQA 4:1 and exists only to prove the code path runs before an A100 approval is spent.
+        GQA 4:1 and exists only to prove the code path runs before A100 time is spent.
+
+        Param counts are deliberately NOT quoted here. They live in
+        :data:`MAPLE_EXPECTED_PARAMS`, which is the authoritative table; every one of the three
+        errors this ladder has had entered through a hand-copied figure, including a stale
+        "~214M / ~126M" that sat in this docstring after the geometry was corrected.
         """
         return cls.maple_scaled(vocab_size, rung="R0", **kwargs)
 
     @classmethod
     def maple_r1(cls, vocab_size: int, **kwargs) -> "TransformerConfig":
-        """R1: d=1024, L=12, E=64. ~841M total / ~312.5M active."""
+        """R1: d=1024, L=12, E=64. Counts in :data:`MAPLE_EXPECTED_PARAMS`, not here."""
         return cls.maple_scaled(vocab_size, rung="R1", **kwargs)
 
     @classmethod
     def maple_r2(cls, vocab_size: int, **kwargs) -> "TransformerConfig":
-        """R2: d=1024, L=12, E=128. ~1.44B total / ~312.5M active."""
+        """R2: d=1024, L=12, E=128. Counts in :data:`MAPLE_EXPECTED_PARAMS`, not here."""
         return cls.maple_scaled(vocab_size, rung="R2", **kwargs)
 
     @classmethod
     def maple_r3(cls, vocab_size: int, **kwargs) -> "TransformerConfig":
-        """R3, the flagship: d=1024, L=12, E=256. ~2.65B total / ~312.5M active.
+        """R3, the flagship: d=1024, L=12, E=256.
 
         The unique sub-Maple point that preserves every ratio: f_e/d = 1/4 and k*f_e/d = 2.0
         force k=8, then k/E = 1/32 forces E=256, and d/L with head_dim 128 and L % 4 == 0
         forces d=1024/L=12.
+
+        Counts in :data:`MAPLE_EXPECTED_PARAMS`, not here.
         """
         return cls.maple_scaled(vocab_size, rung="R3", **kwargs)
 
