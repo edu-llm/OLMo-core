@@ -444,9 +444,12 @@ class MetricAssertionCallback(Callback):
         if self.assert_finite:
             active.append("CE loss and grad norm finite, every logged step")
         if self.dead_expert_frac_max is not None:
-            active.append(f"dead_expert_frac <= {self.dead_expert_frac_max}")
+            active.append(f"dead_expert_frac_global <= {self.dead_expert_frac_max}")
         else:
-            skipped.append("dead_expert_frac")
+            skipped.append(
+                "dead_expert_frac_global -- DELIBERATELY DISABLED. Expert death is not gated on "
+                "this run"
+            )
         if self.gate_mass_tolerance is not None:
             active.append(f"gate mass in 1.0 +/- {self.gate_mass_tolerance}")
         else:
@@ -454,7 +457,9 @@ class MetricAssertionCallback(Callback):
         if self.drop_frac_max is not None:
             active.append(f"drop_frac <= {self.drop_frac_max}")
         else:
-            skipped.append("drop_frac")
+            skipped.append(
+                "drop_frac -- DELIBERATELY DISABLED. Token dropping is not gated on this run"
+            )
         if self.entropy_deficit_max is not None:
             active.append(f"entropy_deficit <= {self.entropy_deficit_max}")
         else:
@@ -468,6 +473,62 @@ class MetricAssertionCallback(Callback):
             + "".join(f"    ASSERT  {line}\n" for line in active)
             + "".join(f"    skipped {line}\n" for line in skipped)
         )
+
+        # THE BALANCE BANDS BEING OFF IS THE ONE THING THAT MUST SURVIVE THE LOG.
+        #
+        # Three reasons this is not left to the INFO line above. (a) INFO is rank-0-only under
+        # `rank0_only` log filtering while WARNING is never filtered, so a WARNING is the level that
+        # reliably lands. (b) A 3.4-hour run buries a single startup INFO line thousands of lines
+        # deep, and the question "was this run gating balance?" gets asked afterwards, by someone
+        # reading the evidence rather than watching the console. (c) A run with the balance bands off
+        # produces exactly the numbers a gated run would produce if it were healthy -- the only
+        # difference is whether anything would have stopped it -- so the record that it was *not*
+        # gating is the difference between a measurement and a claim.
+        #
+        # Emitted as `RESULT ` too, on the `probes/` convention, because a machine-readable line is
+        # what an evidence file can be grepped for. `ResultProtocolCallback` owns the `RESULT ` tag
+        # in general; this is one startup record, not a per-step series.
+        disabled = [
+            name
+            for name, value in (
+                ("drop_frac", self.drop_frac_max),
+                ("dead_expert_frac_global", self.dead_expert_frac_max),
+            )
+            if value is None
+        ]
+        if disabled and get_rank() == 0:
+            print(
+                "RESULT "
+                + json.dumps(
+                    {
+                        "check": "metric_assertions_config",
+                        "balance_bands_disabled": disabled,
+                        "drop_frac_max": self.drop_frac_max,
+                        "dead_expert_frac_max": self.dead_expert_frac_max,
+                        # The bands that stay HARD even on a diagnostic run, named explicitly so the
+                        # record says what was still being enforced rather than only what was not.
+                        "still_enforced": {
+                            "step0_loss_band": self.assert_step0_loss
+                            and self.vocab_size is not None,
+                            "finite_loss_and_grad": self.assert_finite,
+                            "instrumentation_present": self.assert_instrumented,
+                            "gate_mass": self.gate_mass_tolerance is not None,
+                            "capacity_factor_deficit": self.capacity_factor_deficit_max is not None,
+                        },
+                    }
+                ),
+                flush=True,
+            )
+        if disabled:
+            log.warning(
+                "BALANCE BANDS DELIBERATELY DISABLED for this run: %s. Those quantities are "
+                "MEASURED AND LOGGED but NOT GATED, so this run cannot be cited as evidence that "
+                "balance was healthy -- only as a measurement of what balance did. The loss band, "
+                "the finite-loss/grad check, the instrumentation-presence check, the gate-mass band "
+                "and the capacity-factor band all remain ACTIVE, so a divergence or a missing "
+                "instrument still fails the run.",
+                ", ".join(disabled),
+            )
 
     @property
     def step0_loss_bounds(self) -> Tuple[float, float]:

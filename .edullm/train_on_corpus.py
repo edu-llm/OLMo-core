@@ -75,7 +75,7 @@ import time
 import traceback
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Tuple, cast
+from typing import Any, Dict, Iterator, List, Optional, Tuple, cast
 
 import rich
 import torch
@@ -125,6 +125,12 @@ from olmo_core.train.train_module import (
 from olmo_core.utils import seed_all
 
 log = logging.getLogger(__name__)
+
+# Sentinel for "the caller explicitly asked for no ceiling", distinct from `None` meaning "the caller
+# said nothing". `MetricAssertionCallback` takes `None` to mean *disabled*, so the two intents collide
+# on the wire and need separating before they reach it -- otherwise `--drop-frac-max none` and an
+# absent flag are indistinguishable, and the explicit request silently restores the default.
+DISABLE_BAND = "__disable__"
 
 
 class Stage(enum.IntEnum):
@@ -1488,9 +1494,30 @@ def train(config, opts=None) -> None:
     # `ln(100352) = 11.5164` is the band's basis. Reading the unpadded 100,278 would shift the band
     # by 0.0007 nats -- harmless, but wrong, and the LM head is built at the padded size so the
     # padded number is the one that describes the logits the loss is computed over.
-    trainer.add_callback(
-        "maple_assertions", MetricAssertionCallback(vocab_size=config.model.vocab_size)
-    )
+    # The two balance ceilings, from the command line rather than from a config override. See
+    # `--no-balance-bands` in `build_parser` for why argparse: this construction happens long after
+    # `config.merge(overrides)`, so a dotlist override cannot reach it.
+    #
+    # Built as a kwargs dict so an unset flag leaves the callback's own default in force, rather than
+    # this file restating 0.01 and 0.0 and becoming a second place they can drift.
+    assertion_kwargs: Dict[str, Any] = {"vocab_size": config.model.vocab_size}
+    if opts is not None:
+        if getattr(opts, "no_balance_bands", False):
+            assertion_kwargs["drop_frac_max"] = None
+            assertion_kwargs["dead_expert_frac_max"] = None
+        else:
+            for flag, field_name in (
+                ("drop_frac_max", "drop_frac_max"),
+                ("dead_expert_frac_max", "dead_expert_frac_max"),
+            ):
+                parsed = _optional_float(
+                    getattr(opts, flag, None), flag=f"--{flag.replace('_', '-')}"
+                )
+                if parsed is DISABLE_BAND:
+                    assertion_kwargs[field_name] = None
+                elif parsed is not None:
+                    assertion_kwargs[field_name] = parsed
+    trainer.add_callback("maple_assertions", MetricAssertionCallback(**assertion_kwargs))
     trainer.add_callback(
         "maple_result",
         ResultProtocolCallback(
@@ -1739,7 +1766,71 @@ def build_parser() -> argparse.ArgumentParser:
         "collective, which deadlocked two 8-GPU runs at a 900s gloo timeout when it ran inside "
         "the distributed program.",
     )
+    # THE TWO BALANCE CEILINGS, SETTABLE FROM THE COMMAND LINE. Argparse rather than a config
+    # override, and that is the whole point: `MetricAssertionCallback` is constructed inside
+    # `train()`, which runs long after `config.merge(overrides)` in `build_config`, so a dotlist
+    # override cannot reach it -- the same ordering trap as the rung override in D-013. `opts` is
+    # passed straight into `train()`, so a flag does reach it.
+    #
+    # These exist for ONE diagnostic shape: a run whose purpose is to observe routing imbalance past
+    # the steady-state window. A gate that kills such a run at step 50 makes the measurement it was
+    # authorized for impossible. Defaults are unchanged, so every ordinary run is still gated at
+    # `drop_frac <= 0.01` and `dead_expert_frac_global == 0`.
+    #
+    # NOT a global soft mode, and deliberately not a warning-only mode: the loss band, the
+    # finite-loss/grad check, the instrumentation-presence check, the gate-mass band and the
+    # capacity-factor band all stay hard, so a divergence or an absent instrument still fails a
+    # diagnostic run. Disabling a NAMED band and logging that you did is a different thing from
+    # letting every assertion degrade to a warning nobody reads.
+    parser.add_argument(
+        "--no-balance-bands",
+        action="store_true",
+        help="Disable ONLY the two balance ceilings (drop_frac, dead_expert_frac_global) so a "
+        "diagnostic run can observe routing imbalance past step 50 without being killed by it. "
+        "Everything else stays gated: the step-0 loss band, the NaN/Inf check, the "
+        "instrumentation-presence check, gate mass, and the capacity-factor deficit. The run logs "
+        "a WARNING and a `RESULT ` line recording which bands were off, so its output cannot be "
+        "cited as evidence that balance was healthy -- only as a measurement of what it did.",
+    )
+    parser.add_argument(
+        "--drop-frac-max",
+        default=None,
+        help="Override the drop_frac ceiling (default 0.01). Pass a float, or 'none' to disable "
+        "just this band. Ignored when --no-balance-bands is set.",
+    )
+    parser.add_argument(
+        "--dead-expert-frac-max",
+        default=None,
+        help="Override the dead_expert_frac_global ceiling (default 0.0, i.e. any dead expert "
+        "fails). Pass a float, or 'none' to disable just this band. Ignored when "
+        "--no-balance-bands is set.",
+    )
     return parser
+
+
+def _optional_float(value, *, flag: str):
+    """Parse a ceiling that may be a float, the string ``none``, or absent.
+
+    ``None`` return means "the caller said nothing, keep the callback's default"; the sentinel
+    ``DISABLE_BAND`` means "the caller explicitly asked for no ceiling". Those are different
+    instructions and collapsing them would make ``--drop-frac-max none`` silently restore 0.01.
+
+    Rejects unparseable input rather than falling back to a default, because a typo'd ceiling that
+    quietly becomes the default is a run gated differently from how its command line reads.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str) and value.strip().lower() in ("none", "off", "disabled"):
+        return DISABLE_BAND
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"{flag} must be a float or 'none', got {value!r}. Refusing rather than falling back "
+            "to the default, because a run whose gate does not match its command line is worse "
+            "than one that will not start.",
+        )
 
 
 def main() -> None:
