@@ -80,9 +80,15 @@ prediction, and it would have produced a false alarm in production. If a gate is
 the discriminating condition is a positional ramp **large relative to** ``drop_by_doc_index``, not
 non-flatness. The gated quantity is ``drop_frac`` (ceiling 1%), which is scalar and has a real null.
 
-Generalizing, since a sibling lane reached the same conclusion independently on a balance metric:
-**the null for a balance or drop metric is almost never zero.** Assert against a measured band, or
-do not assert.
+Generalizing -- and this is now a project-wide precedent rather than a note about this file, because
+two lanes reached it independently within hours (here on a positional histogram, and on a raw CV in
+the telemetry lane): **the null for a balance or drop metric is almost never zero. Measure the band
+under a known-good condition before asserting against it, or do not assert.**
+
+The corollary that came out of the capacity metric below is the same shape: assert
+``effective >= configured``, never ``==``, because rounding legitimately moves the realized value in
+one direction. A gate written against the value you *intended* rather than the one the code
+*allocates* is a gate that fires on healthy runs.
 
 ON SORT STABILITY, WHICH THIS FILE DELIBERATELY DOES NOT ASSUME
 ---------------------------------------------------------------

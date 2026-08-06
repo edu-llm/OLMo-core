@@ -450,8 +450,19 @@ class ParallelMLP(ParallelMLPBase):
         16.0 on an 8-way expert-parallel run. The ratio is formed from the local quantities on both
         sides instead.
 
+        IF YOU ARE WRITING AN ASSERTION AGAINST THIS, USE ``>=`` AND NOT ``==``. The returned value
+        is *expected* to exceed ``capacity_factor`` whenever the rounding above moves it, so
+        ``effective >= configured`` (never equality) is the only safe form. Asserting equality with
+        the configured factor gates on the number somebody intended rather than the one the dispatch
+        allocated, and it fires on a healthy run -- at E=256 with an 8192-token local microbatch a
+        requested 1.2 realizes as 1.2188. On the funded path (factor 2.0) it happens to be exactly
+        2.0000 at every rung in this project's ladder, which makes equality *look* safe right up
+        until a rung or batch size changes.
+
         :param local_batch_size: Tokens in the local microbatch, the same value passed to
             :meth:`expert_capacity`.
+        :returns: The realized capacity factor, always ``>= capacity_factor``. ``nan`` if the ideal
+            per-expert load is non-positive.
         """
         local_batch_size = self._capacity_local_batch_size(local_batch_size)
 
