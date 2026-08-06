@@ -38,6 +38,14 @@ class ConsoleLoggerCallback(Callback):
             "train/load balancing loss",
             "train/router Z loss",
             "train/block */load imbalance",
+            # The E-comparable balance metrics (B2), as the CROSS-BLOCK aggregates rather than
+            # the per-block series: `block */...` at E=256 and L=12 would put 12 lines per
+            # metric in the console every interval and bury the loss. The per-block series
+            # still reaches W&B and metrics.json, which is where a per-block comparison is
+            # actually read. `moe/*` also picks up the explicitly-labelled max/mean pairs the
+            # assertion callback computes, which is the point -- a bare folded key is the worst
+            # block and does not say so in its name.
+            "moe/*",
             "gpu_memory/*",
             "optim/total grad norm",
             "optim/step skipped",

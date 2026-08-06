@@ -19,6 +19,11 @@ from .garbage_collector import GarbageCollectorCallback
 from .gpu_memory_monitor import GPUMemoryMonitorCallback
 from .hf_converter import HFConverterCallback
 from .list_checkpointer import ListCheckpointerCallback
+from .metric_assertions import (
+    MetricAssertionCallback,
+    MetricAssertionError,
+    ResultProtocolCallback,
+)
 from .metric_saver import MetricSaverCallback
 from .model_merger import ModelMergeCallback
 from .monkey_patcher import MonkeyPatcherCallback
@@ -58,6 +63,9 @@ __all__ = [
     "MetricSaverCallback",
     "ModelMergeCallback",
     "ListCheckpointerCallback",
+    "MetricAssertionCallback",
+    "MetricAssertionError",
+    "ResultProtocolCallback",
 ]
 
 __doc__ += "\n"
