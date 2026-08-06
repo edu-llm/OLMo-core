@@ -20,7 +20,7 @@ from ..attention import (
     GateGranularity,
     SlidingWindowAttentionConfig,
 )
-from ..attention.recurrent import GatedDeltaNetConfig
+from ..attention.recurrent import GatedDeltaNetConfig, KimiDeltaHouseholderConfig
 from ..buffer_cache import BufferCache
 from ..config import ModelConfig, ModuleConfig
 from ..feed_forward import ActivationFunction, FeedForwardConfig, FeedForwardType
@@ -1621,6 +1621,86 @@ class TransformerConfig(ModelConfig):
             n_layers=n_layers,
             block={"gdn": gdn_block, "attn": attn_block},
             block_pattern=["gdn", "gdn", "gdn", "attn"],
+            lm_head=LMHeadConfig(layer_norm=layer_norm, bias=False, dtype=dtype),
+            dtype=dtype,
+            tie_word_embeddings=kwargs.pop("tie_word_embeddings", True),
+            **kwargs,
+        )
+
+    @classmethod
+    def kda_householder_130M(
+        cls,
+        vocab_size: int,
+        *,
+        d_model: int = 512,
+        n_layers: int = 12,
+        n_heads: int = 8,
+        head_dim: int = 64,
+        num_householder: int = 2,
+        allow_neg_eigval: bool = False,
+        hidden_size_multiplier: float = 1.5,
+        layer_norm_eps: float = 1e-6,
+        dtype: DType = DType.float32,
+        **kwargs,
+    ) -> "TransformerConfig":
+        """
+        A ~130M-parameter model whose every sequence mixer is a gated Householder delta-rule
+        node (:class:`~olmo_core.nn.attention.recurrent.KimiDeltaHouseholder`).
+
+        Exists so the write-strength regime can be selected from a command line. The
+        platform's entry point resolves ``--model-factory`` through
+        ``getattr(TransformerConfig, name)`` and then applies dotlist overrides, so a run
+        selects the regime with
+        ``block.sequence_mixer.allow_neg_eigval=true``. Overriding a mixer's ``type`` by
+        dotlist instead is a **silent no-op** --- ``Config.from_dict`` drops ``type`` when
+        ``_CLASS_`` is present --- which would train softmax attention while reporting the
+        arm it was asked for. A named factory is what makes the arm checkable.
+
+        ``allow_neg_eigval`` is the sole difference between the two regimes and it adds no
+        parameters: ``beta = s * Sigmoid(z)`` with ``s in {1, 2}``. The parameter ledgers and
+        ``num_flops_per_token`` are identical across the two, so the arms are compute-matched
+        as well as capacity-matched.
+
+        :param vocab_size: Vocabulary size.
+        :param d_model: Hidden size.
+        :param n_layers: Number of blocks.
+        :param n_heads: Number of key heads in each mixer.
+        :param head_dim: Dimension of each head.
+        :param num_householder: Householder factors per token, ``R``.
+        :param allow_neg_eigval: ``False`` gives the strict regime ``beta in (0,1)``; ``True``
+            gives the reflection regime ``beta in (0,2)``, where a factor can reverse a state
+            component rather than only contract it.
+        :param hidden_size_multiplier: Feed-forward width multiplier.
+        :param layer_norm_eps: Epsilon for every norm.
+        :param dtype: Parameter dtype.
+
+        :returns: The config.
+        """
+        layer_norm = LayerNormConfig(
+            name=LayerNormType.rms, eps=layer_norm_eps, bias=False, dtype=dtype
+        )
+        hidden_size = int(hidden_size_multiplier * 4 * d_model)
+        hidden_size = 256 * ((hidden_size + 255) // 256)
+
+        block = TransformerBlockConfig(
+            name=kwargs.pop("block_name", TransformerBlockType.default),
+            sequence_mixer=KimiDeltaHouseholderConfig(
+                n_heads=n_heads,
+                head_dim=head_dim,
+                num_householder=num_householder,
+                allow_neg_eigval=allow_neg_eigval,
+                norm_eps=layer_norm_eps,
+                dtype=dtype,
+            ),
+            feed_forward=FeedForwardConfig(hidden_size=hidden_size, bias=False, dtype=dtype),
+            layer_norm=layer_norm,
+        )
+
+        return cls(
+            d_model=d_model,
+            vocab_size=vocab_size,
+            n_layers=n_layers,
+            block=block,
             lm_head=LMHeadConfig(layer_norm=layer_norm, bias=False, dtype=dtype),
             dtype=dtype,
             tie_word_embeddings=kwargs.pop("tie_word_embeddings", True),
