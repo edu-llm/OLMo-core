@@ -75,3 +75,119 @@ bytes per token versus the existing attention path at matched parameter count.
 
 The other two candidates — the **MoE router** and the **MoE FFN block swap** — are kept as
 documented fallbacks in case the hour-2 reading changes the picture.
+
+## Decision confirmed (hour-2 read)
+
+Reading `nn/moe/router.py`, `nn/moe/moe.py`, and `nn/attention/base.py` confirmed the survey: the
+MoE surface is already dense — `MoERouterConfig` with sigmoid gating and the DeepSeek-v3
+auxiliary-loss-free `bias_gamma` centroid update, `MoELoadBalancingLossGranularity`, router z-loss,
+capacity and dropped-token accounting — and it overlaps the live `edullm/moe-m1-pilot` study. The
+attention package (`Attention`, `FusedAttention`, `NormalizedAttention`, `GatedDeltaNet`) has **no**
+latent attention. So MLA is the uncrowded, self-contained choice with a single legible payoff. The
+`SequenceMixer` / `SequenceMixerConfig` base is small and clean, and `GatedDeltaNet` is a working
+example of a non-standard mixer that still satisfies the interface, so a new mixer is genuinely
+additive.
+
+## What I built
+
+A new sequence mixer, `MultiheadLatentAttention` (`olmo_core.nn.attention.mla`), registered as
+`"mla"` via `MLAConfig`. It follows DeepSeek-V2/V3 Multi-head Latent Attention.
+
+**How MLA works.**
+
+1. **Joint KV compression.** A single down-projection `W_DKV` maps each token from `d_model` to a
+   small latent `c_kv` of width `kv_lora_rank`, *plus* a small shared decoupled-RoPE key of width
+   `qk_rope_head_dim`. An up-projection `W_UKV` reconstructs the per-head non-RoPE keys
+   (`qk_nope_head_dim`) and the values (`v_head_dim`) from `c_kv`. At inference time only `c_kv`
+   and the decoupled key need caching — that is the whole point.
+2. **Optional query compression.** If `q_lora_rank` is set, queries go through their own
+   down/norm/up (`W_DQ` → `RMSNorm` → `W_UQ`); otherwise `W_Q` projects them directly.
+3. **Decoupled RoPE.** RoPE can't be applied to the compressed latent (the up-projection would mix
+   positions across the rank), so position lives on a separate sub-vector. Each query/key is
+   `concat(nope, rope)` along the head dim: the `qk_nope_head_dim` part carries no position, and the
+   `qk_rope_head_dim` part is rotated. The decoupled key is a *single* head, broadcast across all
+   query heads, exactly as in DeepSeek. Reconstruction gives full multi-head keys/values, so
+   `n_kv_heads == n_heads` — the savings are in the *cache*, not in the head count.
+
+**Key design decisions.**
+
+- **Reuse the existing SDPA backend.** MLA builds the shared `AttentionBackend` (defaulting to the
+  `torch` backend, which works everywhere) with `n_kv_heads == n_heads`, and calls it just like
+  `Attention.sdpa`. This inherits causal masking and intra-document masking (`cu_doc_lens` /
+  `max_doc_len`) for free. The value head width may differ from the query/key head width, which
+  SDPA handles. The softmax scale defaults to `1 / sqrt(qk_nope_head_dim + qk_rope_head_dim)`.
+- **Reuse RoPE and RMSNorm.** The decoupled RoPE uses the repo's `RotaryEmbedding` built for the
+  small `qk_rope_head_dim`; the latents get a bias-free `RMSNorm` (configurable, matching DeepSeek).
+- **Scope.** Tensor/context parallelism raise `NotImplementedError` (as `GatedDeltaNet` does for
+  unsupported parallelism), and an optimized inference path that caches `c_kv` is future work:
+  `forward` reconstructs full per-head K/V each call and rejects `cache_leftpad`. The training
+  forward path (shapes, gradients, masking kwargs) is complete and tested on CPU.
+
+**How to configure it.** `MLAConfig` slots in wherever a `SequenceMixerConfig` is expected (e.g. a
+`TransformerBlock`'s `sequence_mixer`), the same way `AttentionConfig` / `GatedDeltaNetConfig` do:
+
+```python
+from olmo_core.nn.attention import MLAConfig
+
+mixer = MLAConfig(
+    n_heads=16,
+    kv_lora_rank=512,       # width of the cached joint KV latent
+    q_lora_rank=None,       # or e.g. 1536 to also low-rank the queries
+    qk_nope_head_dim=128,   # non-RoPE per-head width (from the latent)
+    qk_rope_head_dim=64,    # decoupled RoPE per-head width (bypasses the latent)
+    v_head_dim=128,         # value per-head width
+    # norm=LayerNormConfig(name="rms", bias=False)  # default; set None to disable
+    # rope=RoPEConfig()                              # default decoupled RoPE
+    # bias=False, dropout=0.0, softmax_scale=None, backend=None, dtype="float32"
+)
+```
+
+The `num_params(d_model)` estimate (asserted equal to the built module's parameter count in the
+unit test) is, with `dk = qk_nope_head_dim + qk_rope_head_dim`, `H = n_heads`, and `N(size)` the
+norm's parameter count (a bias-free `RMSNorm` contributes `size`):
+
+```
+# queries
+  q_lora_rank is None:  d_model * H * dk                        (+ H*dk           if bias)
+  else:                 d_model * q_lora_rank + q_lora_rank*H*dk (+ q_lora_rank + H*dk if bias)
+                        + N(q_lora_rank)
+# keys / values
+  W_DKV:  d_model * (kv_lora_rank + qk_rope_head_dim)           (+ (kv_lora_rank+qk_rope_head_dim) if bias)
+  norm:   N(kv_lora_rank)
+  W_UKV:  kv_lora_rank * H * (qk_nope_head_dim + v_head_dim)    (+ H*(qk_nope_head_dim+v_head_dim) if bias)
+# output
+  W_out:  H * v_head_dim * d_model                              (+ d_model         if bias)
+```
+
+## The payoff: KV-cache bytes per token
+
+This is the legible number the experiment was chosen for. Per layer, per token, the number of
+scalars that must be cached to decode the next token:
+
+- **MLA:** `kv_lora_rank + qk_rope_head_dim` (cache the latent `c_kv` and the one decoupled key).
+- **Standard MHA/GQA/MQA:** `2 * n_kv_heads * head_dim` (cache K and V for every KV head).
+
+At matched attention geometry (`n_heads = 16`, `head_dim = 128`, and the MLA defaults
+`kv_lora_rank = 512`, `qk_rope_head_dim = 64`), at bf16 (2 bytes/scalar):
+
+| Variant            | `n_kv_heads` | scalars / token / layer            | bf16 bytes / token / layer | vs MLA |
+| ------------------ | ------------ | ---------------------------------- | -------------------------- | ------ |
+| MHA                | 16           | `2 * 16 * 128 = 4096`              | 8192 (8.0 KiB)             | 7.1×   |
+| GQA (groups of 8)  | 2            | `2 * 2 * 128 = 512`               | 1024 (1.0 KiB)             | 0.9×   |
+| MQA                | 1            | `2 * 1 * 128 = 256`              | 512 (0.5 KiB)              | 0.44×  |
+| **MLA**            | 16 (at compute) | `512 + 64 = 576`               | 1152 (≈1.13 KiB)           | 1.0×   |
+
+The story in one line: **MLA caches about as little as GQA/MQA (576 scalars, ~7× smaller than the
+4096 of full MHA) while still computing full 16-head attention.** GQA/MQA buy their small cache by
+literally sharing K/V across query heads; MLA instead keeps every head at compute time and pays only
+for a low-rank latent in the cache. (This module does not yet *implement* the latent-cache decode
+path — see scope above — but the parameterization is exactly what makes that cache small, which is
+what the table quantifies.)
+
+## Tests and checks
+
+`src/test/nn/attention/mla_test.py` (CPU-only, no `@pytest.mark.gpu`) builds small configs and
+asserts: output shape equals input shape, the output is differentiable (backward reaches the
+input), and `config.num_params(d_model)` equals `sum(p.numel() for p in module.parameters())` across
+config variants (direct vs low-rank queries, bias on/off, norm on/off, default/complex/no RoPE, and
+uneven head dims). `isort`, `black`, `ruff`, and `mypy` pass on the new files.
