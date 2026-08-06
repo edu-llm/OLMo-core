@@ -534,8 +534,9 @@ class MetricAssertionCallback(Callback):
                     # rather than making the reader guess which one they hit.
                     if value < lo:
                         cause = (
-                            "BELOW band. The stock default is `None`, i.e. no normalisation at "
-                            "all, and zero of five shipped recipes set it. The sibling track "
+                            "BELOW band, which means `normalize_expert_weights` is almost "
+                            "certainly unset: its stock default is `None`, i.e. no normalisation "
+                            "at all, and zero of five shipped recipes set it. The sibling track "
                             "MEASURED 0.161 against an intended 1.000 -- a 6.2x error that "
                             "trains happily and shows up only as a quietly worse loss. Note the "
                             "unnormalised mass is ~k/E at init, so this failure gets LARGER up "
@@ -551,10 +552,16 @@ class MetricAssertionCallback(Callback):
                             "weights, i.e. 2.83 at k=8, independent of E. Only p=1.0 makes the "
                             "gate mass 1.0."
                         )
+                    # THE FIX IS NAMED IN EVERY BRANCH, not just the one that seemed likeliest
+                    # when this was written. A failure message that diagnoses the symptom without
+                    # naming the knob costs whoever reads it at 3am a source dive, and both
+                    # branches here have the same one-line remedy.
                     self._failures.append(
-                        f"'{key}' = {value:.6f} is outside [{lo:.4f}, {hi:.4f}]. {cause} Maple's "
-                        "`norm_topk_prob` is this flag, and `ladder-and-factory.md` requires it "
-                        "set to 1.0."
+                        f"'{key}' = {value:.6f} is outside [{lo:.4f}, {hi:.4f}]. {cause} "
+                        "REQUIRED FIX: set `normalize_expert_weights=1.0` on the router config "
+                        "(this is Maple's `norm_topk_prob`, and `ladder-and-factory.md` mandates "
+                        "it). Note it is a norm ORDER, not a boolean -- only p=1.0 makes the "
+                        "gate mass 1.0."
                     )
 
 
