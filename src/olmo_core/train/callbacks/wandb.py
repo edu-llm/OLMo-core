@@ -125,16 +125,28 @@ class WandBCallback(Callback):
             self.wandb
             wandb_dir = self.trainer.work_dir / "wandb"
             wandb_dir.mkdir(parents=True, exist_ok=True)
-            self.wandb.init(
-                dir=wandb_dir,
-                project=self.project,
-                entity=self.entity,
-                group=self.group,
-                name=self.name,
-                tags=self.tags,
-                notes=self.notes,
-                config=self.config,
-            )
+            try:
+                self.wandb.init(
+                    dir=wandb_dir,
+                    project=self.project,
+                    entity=self.entity,
+                    group=self.group,
+                    name=self.name,
+                    tags=self.tags,
+                    notes=self.notes,
+                    config=self.config,
+                )
+            except Exception:
+                # Logging is not the work. A run that cannot reach W&B still trains, still
+                # writes its checkpoints and is still reproducible from them, so ending it
+                # here spends the hardware and returns nothing. The missing-key check above
+                # stays fatal because it is certain and costs no network; this one is not.
+                # `check_if_canceled` already takes the same view of a mid-run failure.
+                log.exception(
+                    "W&B could not be started, so this run trains without metrics logging"
+                )
+                self.enabled = False
+                return
             self._run_path = self.run.path  # type: ignore
 
     def log_metrics(self, step: int, metrics: Dict[str, float]):
