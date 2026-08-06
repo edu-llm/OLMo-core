@@ -49,6 +49,7 @@ from ..functional import l2_normalize
 from ..layer_norm import LayerNormConfig
 from ..lm_head import LMHeadConfig, LMLossImplementation, LMOutputWithLoss
 from ..moe import MoEBase
+from ..quantization import assert_no_float8_conflict
 from ..rope import RoPEBuffers, RotaryEmbeddingBase
 from ..utils import selective_checkpointing_context_fn
 from .block import (
@@ -656,6 +657,12 @@ class Transformer(nn.Module):
         """
         if not float8_config.enabled:
             return
+
+        # float8 conversion filters on `isinstance(m, nn.Linear)`, which a ternary-QAT
+        # `QuantLinear` satisfies -- so it would REPLACE every quantized projection with a
+        # `Float8Linear` and silently discard the quantizer, leaving a run that reports as the
+        # ternary arm while actually training in fp8. Refuse instead.
+        assert_no_float8_conflict(self)
 
         modules_to_ignore = set()
         if self.lm_head is not None:

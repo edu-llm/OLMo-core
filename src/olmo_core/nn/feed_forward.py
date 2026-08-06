@@ -15,6 +15,7 @@ from ..doc_utils import beta_feature
 from ..exceptions import OLMoConfigurationError
 from .config import ModuleConfig
 from .functional import l2_normalize
+from .quantization import QuantConfig, QuantLinear
 from .utils import get_tp_wrappers
 
 __all__ = [
@@ -23,7 +24,22 @@ __all__ = [
     "FeedForwardConfig",
     "FeedForward",
     "NormalizedFeedForward",
+    "MAPLE_SWIGLU_LIMIT",
 ]
+
+
+MAPLE_SWIGLU_LIMIT: float = 7.0
+"""
+The SwiGLU outlier clamp Maple-Preview carries: gate ``max=7.0``, up ``[-7.0, 7.0]``.
+
+Semantically identical to ``transformers/models/gpt_oss/modeling_gpt_oss.py`` (``self.limit =
+7.0``), **including the asymmetry** -- which is the tell that it was copied rather than derived.
+Measured layer-0 MoE pre-activation RMS in the released model is ~0.136, so 7.0 is roughly
+**52x RMS**: the clamp is inert at inference and almost certainly never fires during training
+either. It is included as a faithfulness detail. Do not "tune" it -- a clamp that never fires
+costs nothing, and changing it is the kind of well-meaning edit that makes a replication stop
+being one.
+"""
 
 
 class ActivationFunction(StrEnum):
@@ -83,6 +99,26 @@ class FeedForwardConfig(ModuleConfig):
     """
     The activation function to use. See :class:`ActivationFunction` for options.
     """
+    quant: Optional[QuantConfig] = None
+    """
+    Ternary QAT on the three projections. ``None`` builds stock :class:`torch.nn.Linear`.
+
+    See :mod:`olmo_core.nn.quantization`. Note that ``QuantConfig(enabled=False)`` is *not* the
+    same as ``None``: it builds :class:`~olmo_core.nn.quantization.QuantLinear` with the
+    quantizer bypassed, which is bitwise identical in the forward pass but keeps the module
+    graph and state-dict keys of the ternary arm. That is what makes bf16-vs-ternary a paired
+    comparison. Use ``enabled=False`` for the control arm, not ``None``.
+    """
+    swiglu_limit: Optional[float] = None
+    """
+    Clamp the gate (``w1``) output to ``max=limit`` and the up (``w3``) output to
+    ``[-limit, limit]`` before the gated product.
+
+    Set to :data:`MAPLE_SWIGLU_LIMIT` (7.0) for Maple faithfulness. This is an *architecture*
+    detail, not a quantization one -- Maple carries it in both cases and so must both arms of
+    the precision comparison, so it is deliberately a separate knob from ``quant``. The
+    asymmetry (one-sided on gate, two-sided on up) is intentional and copied.
+    """
 
     def num_params(self, d_model: int) -> int:
         """
@@ -121,6 +157,12 @@ class FeedForwardConfig(ModuleConfig):
         elif dtype is not None:
             kwargs["dtype"] = dtype
 
+        # `as_dict` recurses by default, so a nested `QuantConfig` arrives here as a plain
+        # dict. Put the real object back -- silently passing `{"enabled": True}` would make
+        # `quant.enabled` an AttributeError at first forward, i.e. at step 0 of a queued run.
+        if self.quant is not None:
+            kwargs["quant"] = self.quant
+
         try:
             if self.name == FeedForwardType.default:
                 return FeedForward(**kwargs)
@@ -129,6 +171,16 @@ class FeedForwardConfig(ModuleConfig):
                 if activation != ActivationFunction.silu:
                     raise OLMoConfigurationError(
                         f"NormalizedFeedForward only supports 'silu' activation, got '{activation}'"
+                    )
+                if self.quant is not None:
+                    raise OLMoConfigurationError(
+                        "ternary QAT is not supported with NormalizedFeedForward: nGPT "
+                        "re-normalizes the weight matrices after every optimizer step, which "
+                        "fights the TWN threshold for control of the weight scale"
+                    )
+                if self.swiglu_limit is not None:
+                    raise OLMoConfigurationError(
+                        "'swiglu_limit' is not supported with NormalizedFeedForward"
                     )
                 return NormalizedFeedForward(**kwargs)
             else:
@@ -153,14 +205,37 @@ class FeedForward(nn.Module):
         dtype: torch.dtype = torch.float32,
         init_device: str = "cpu",
         activation: ActivationFunction = ActivationFunction.silu,
+        quant: Optional[QuantConfig] = None,
+        swiglu_limit: Optional[float] = None,
     ):
         super().__init__()
         self.d_model = d_model
         self.hidden_size = hidden_size
         self.activation_fn = activation.build()
-        self.w1 = nn.Linear(d_model, hidden_size, bias=bias, dtype=dtype, device=init_device)
-        self.w2 = nn.Linear(hidden_size, d_model, bias=bias, dtype=dtype, device=init_device)
-        self.w3 = nn.Linear(d_model, hidden_size, bias=bias, dtype=dtype, device=init_device)
+        self.quant = quant
+        self.swiglu_limit = swiglu_limit
+
+        # QuantLinear subclasses nn.Linear and, with `enabled=False`, has an identical forward
+        # and an identical state dict. So the control arm of the paired comparison builds the
+        # same class as the ternary arm, and `init_linear` / `apply_tp` / `normalize_matrices`
+        # keep working on both without a special case.
+        def linear(in_features: int, out_features: int) -> nn.Linear:
+            if quant is None:
+                return nn.Linear(
+                    in_features, out_features, bias=bias, dtype=dtype, device=init_device
+                )
+            return QuantLinear(
+                in_features,
+                out_features,
+                bias=bias,
+                enabled=quant.enabled,
+                dtype=dtype,
+                device=init_device,
+            )
+
+        self.w1 = linear(d_model, hidden_size)
+        self.w2 = linear(hidden_size, d_model)
+        self.w3 = linear(d_model, hidden_size)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -168,7 +243,14 @@ class FeedForward(nn.Module):
 
         :param x: The input of shape ``(*, d_model)``.
         """
-        return self.w2(self.activation_fn(self.w1(x)) * self.w3(x))
+        gate = self.w1(x)
+        up = self.w3(x)
+        if self.swiglu_limit is not None:
+            # Asymmetric on purpose: gate is clamped above only, up on both sides. This is
+            # gpt-oss's shape, copied. See MAPLE_SWIGLU_LIMIT.
+            gate = gate.clamp(max=self.swiglu_limit)
+            up = up.clamp(min=-self.swiglu_limit, max=self.swiglu_limit)
+        return self.w2(self.activation_fn(gate) * up)
 
     def apply_tp(
         self,
@@ -178,6 +260,14 @@ class FeedForward(nn.Module):
         use_local_output: bool = True,
         float8_enabled: bool = False,
     ):
+        # `w2` is row-wise sharded, i.e. sharded on its input-feature axis -- the exact axis TWN
+        # reduces over. Under TP each rank would compute `mean|W|` from its own shard only,
+        # producing a per-row alpha derived from a fraction of the row. That is a different
+        # quantizer, and it would train without complaint, so refuse instead.
+        for w in (self.w1, self.w2, self.w3):
+            if isinstance(w, QuantLinear):
+                w.assert_no_tensor_parallel()
+
         rowwise_parallel, colwise_parallel, prepare_module_input = get_tp_wrappers(
             float8_enabled=float8_enabled
         )

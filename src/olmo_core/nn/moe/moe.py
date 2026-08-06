@@ -25,6 +25,7 @@ from olmo_core.ops import attach_auxiliary_loss
 from ..buffer_cache import BufferCache
 from ..config import ModuleConfig
 from ..feed_forward import FeedForwardConfig
+from ..quantization import QuantConfig
 from .loss import MoELoadBalancingLossGranularity
 from .mlp import DroplessMoEMLP, MoEMLP
 from .parallel_mlp import ParallelDroplessMLP, ParallelMLP, ParallelMLPBase
@@ -73,6 +74,24 @@ class MoEConfig(ModuleConfig):
     z_loss_weight: Optional[float] = None
     scale_loss_by_num_layers: bool = True
     dtype: DType = DType.float32
+    quant: Optional[QuantConfig] = None
+    """
+    Ternary QAT on the **expert** projections (gate/up/down). ``None`` leaves them full precision.
+
+    The **router is never quantized by this flag** and there is no flag that quantizes it. That
+    is deliberate and load-bearing: routing is *discrete*, so quantizing the router changes
+    *which experts fire*, not merely how accurately they are weighted. See
+    :func:`~olmo_core.nn.quantization.audit_quantization`, which raises if a router ever ends up
+    quantized. If a ``shared_mlp`` is configured it carries its own ``quant`` on its
+    :class:`~olmo_core.nn.feed_forward.FeedForwardConfig` -- MoTE (arXiv:2506.14435) measured a
+    ternary shared expert at 48.2 against 57.3 for BF16, so that one wants deciding explicitly
+    rather than inheriting. Maple has zero shared experts anyway.
+    """
+    swiglu_limit: Optional[float] = None
+    """
+    Clamp expert gate/up pre-activations, asymmetrically. Set to
+    :data:`~olmo_core.nn.feed_forward.MAPLE_SWIGLU_LIMIT` (7.0) for Maple faithfulness.
+    """
 
     def num_params(self, d_model: int) -> int:
         num_params = 0
@@ -365,6 +384,8 @@ class MoE(MoEBase):
         n_layers: int = 1,
         dtype: torch.dtype = torch.float32,
         cache: Optional[BufferCache] = None,
+        quant: Optional[QuantConfig] = None,
+        swiglu_limit: Optional[float] = None,
     ):
         super().__init__(
             d_model=d_model,
@@ -381,6 +402,8 @@ class MoE(MoEBase):
             dtype=dtype,
             capacity_factor=capacity_factor,
             cache=cache,
+            quant=quant,
+            swiglu_limit=swiglu_limit,
         )
 
     def _init_parallel_mlp(  # type: ignore[override]
@@ -393,6 +416,8 @@ class MoE(MoEBase):
         dtype: torch.dtype = torch.float32,
         init_device: str = "cpu",
         cache: Optional[BufferCache] = None,
+        quant: Optional[QuantConfig] = None,
+        swiglu_limit: Optional[float] = None,
     ) -> ParallelMLP:
         return ParallelMLP(
             mlp=MoEMLP(
@@ -401,6 +426,8 @@ class MoE(MoEBase):
                 num_experts=num_experts,
                 dtype=dtype,
                 init_device=init_device,
+                quant=quant,
+                swiglu_limit=swiglu_limit,
             ),
             top_k=self.router.top_k,
             capacity_factor=capacity_factor,
@@ -422,6 +449,8 @@ class DroplessMoE(MoEBase):
         dtype: torch.dtype = torch.float32,
         init_device: str = "cpu",
         cache: Optional[BufferCache] = None,
+        quant: Optional[QuantConfig] = None,
+        swiglu_limit: Optional[float] = None,
     ) -> ParallelDroplessMLP:
         return ParallelDroplessMLP(
             mlp=DroplessMoEMLP(
@@ -430,6 +459,8 @@ class DroplessMoE(MoEBase):
                 hidden_size=hidden_size,
                 dtype=dtype,
                 init_device=init_device,
+                quant=quant,
+                swiglu_limit=swiglu_limit,
             ),
             top_k=self.router.top_k,
             cache=cache,
