@@ -161,6 +161,11 @@ jobs:
   # This job can, so it turns the answer into an output the matrix is allowed to depend on.
   # Without it the seven checks run their steps, launch nothing and report green, which is a
   # worse signal than a red one because nothing distinguishes it from seven passing suites.
+  #
+  # This job is also where the skip is explained. A skipped matrix is never expanded, so the
+  # seven collapse into one check whose `matrix` context is null -- and GitHub does not
+  # evaluate that check's name at all, it prints the template. There is no expression that
+  # renders well in both states, so the reason is announced from here instead.
   beaker_token:
     name: Beaker token
     runs-on: ubuntu-latest
@@ -172,11 +177,15 @@ jobs:
         # The expression is a boolean, so this prints "true" or "false" and never the token.
         run: echo "present=${{ secrets.BEAKER_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
 
+      - name: Say that the GPU tests will not run
+        if: steps.check.outputs.present != 'true'
+        run: |
+          echo "::notice title=GPU tests skipped::BEAKER_TOKEN is not set in this repository, so"
+          echo "::notice::the seven (GPU) checks are skipped rather than run. They report skipped,"
+          echo "::notice::not green, so nothing here claims a GPU suite passed."
+
   gpu_checks:
-    # A skipped matrix is never expanded, so the seven become one check and `matrix` is null
-    # in its name. Without the fallback that check is titled `matrix.task.name`, which reads
-    # like a broken workflow rather than like the deliberate skip it is.
-    name: ${{ matrix.task.name || 'GPU tests (no Beaker token in this fork)' }}
+    name: ${{ matrix.task.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: beaker_token
