@@ -1,8 +1,10 @@
 import json
+from dataclasses import dataclass, field
 
 import pytest
 from cached_path import cached_path
 
+from olmo_core.config import UNSET, Config
 from olmo_core.nn.attention.recurrent import KimiDeltaHouseholderConfig
 from olmo_core.nn.transformer.config import TransformerBlockConfig, TransformerConfig
 
@@ -82,3 +84,39 @@ def test_kda_householder_130M_round_trips():
     assert TransformerConfig.from_dict(config.as_config_dict()).as_config_dict() == (
         config.as_config_dict()
     )
+
+
+@dataclass
+class _RunConfigLike(Config):
+    """The shape a launcher merges into: the model is a *field*, not the root.
+
+    ``.edullm/train_on_corpus.py`` builds an experiment config holding ``model:
+    TransformerConfig`` alongside dataset, trainer and data-loader configs, then calls
+    ``config.merge(overrides)`` on that wrapper (``:708``). So a dotlist reaching the mixer
+    must be rooted at ``model.``, not at ``block.``.
+    """
+
+    model: TransformerConfig = field(default=UNSET)  # type: ignore[assignment]
+
+
+@pytest.mark.parametrize("reflection", [False, True])
+def test_beta_regime_override_is_rooted_at_the_model_field(reflection: bool):
+    """A launcher's override needs the ``model.`` prefix, and omitting it raises.
+
+    Written after both throughput calibration runs died seven seconds in with
+    ``KeyError: 'block'``. The override had been checked against a bare
+    ``TransformerConfig``, where ``block`` *is* top level, so it passed locally and failed on
+    the machine. The prefix is only observable through a wrapper, which is what this builds.
+    """
+    wrapper = _RunConfigLike(model=TransformerConfig.kda_householder_130M(vocab_size=VOCAB_SIZE))
+
+    merged = wrapper.merge(
+        [f"model.block.sequence_mixer.allow_neg_eigval={str(reflection).lower()}"]
+    )
+    assert merged.model.block.sequence_mixer.allow_neg_eigval is reflection
+
+    # The unprefixed form is not merely ineffective -- it raises, which is why the runs
+    # failed loudly rather than training the wrong arm. Both outcomes are worth pinning:
+    # a silent no-op here would be far more expensive than a crash.
+    with pytest.raises(KeyError):
+        wrapper.merge([f"block.sequence_mixer.allow_neg_eigval={str(reflection).lower()}"])
