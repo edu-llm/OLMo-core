@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import InitVar, dataclass, field
 from fnmatch import fnmatch
 from itertools import cycle, islice
-from typing import TYPE_CHECKING, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, ClassVar, Dict, List, Optional, Tuple, cast
 
 from olmo_core.config import UNSET, DType, StrEnum
 from olmo_core.doc_utils import beta_feature
@@ -1063,7 +1063,12 @@ class TransformerConfig(ModelConfig):
     #: on `k`, not `E` -- that identity is what makes any throughput delta across the E-sweep
     #: attributable to kernel and routing overhead rather than arithmetic, so it is a
     #: correctness property of this table and not a coincidence.
-    MAPLE_RUNGS: Dict[str, Dict[str, int]] = {
+    #: NOTE the `ClassVar`. `TransformerConfig` is a `@dataclass`, so a bare annotated
+    #: class attribute becomes a FIELD -- and a dict default is a mutable default, which makes
+    #: `@dataclass` raise at import time and takes the whole module with it. `ClassVar` is what
+    #: keeps this a constant instead of a field. (Found the hard way: ruff, black and isort all
+    #: passed on a module that would not import at all.)
+    MAPLE_RUNGS: ClassVar[Dict[str, Dict[str, int]]] = {
         # R0 is a code-path smoke rung for `gpu-1xa10g`, never compared for quality. n_kv=1
         # (MQA rather than GQA 4:1) is accepted there for that reason.
         "R0": dict(d_model=512, n_layers=8, num_experts=64, n_heads=4, n_kv_heads=1),
@@ -1078,7 +1083,7 @@ class TransformerConfig(ModelConfig):
     #: Keyed by vocab size because these numbers are dominated by the embedding tables --
     #: at R1, ``2 * 1024 * 100352`` is 205.5M of an 841.0M total, so a different vocab moves
     #: the total by more than the tolerance and the assertion must not fire spuriously.
-    MAPLE_EXPECTED_PARAMS: Dict[int, Dict[str, tuple]] = {
+    MAPLE_EXPECTED_PARAMS: ClassVar[Dict[int, Dict[str, Tuple[int, int]]]] = {
         100352: {
             "R0": (213_900_000, 125_800_000),
             "R1": (841_000_000, 312_500_000),
