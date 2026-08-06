@@ -173,7 +173,10 @@ jobs:
         run: echo "present=${{ secrets.BEAKER_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
 
   gpu_checks:
-    name: ${{ matrix.task.name }}
+    # A skipped matrix is never expanded, so the seven become one check and `matrix` is null
+    # in its name. Without the fallback that check is titled `matrix.task.name`, which reads
+    # like a broken workflow rather than like the deliberate skip it is.
+    name: ${{ matrix.task.name || 'GPU tests (no Beaker token in this fork)' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: beaker_token
