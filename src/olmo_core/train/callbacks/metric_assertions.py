@@ -17,9 +17,31 @@ would have caught it on the first logged step.
 because it manufactures confidence: the run completes, the log contains a line nobody read, and
 the artifact looks validated. Every check here raises :class:`MetricAssertionError`, which
 reaches ``Trainer._check_and_pass_on_metrics`` -> the bookkeeping future -> ``Trainer._error`` ->
-``RuntimeError`` from ``training_complete``, i.e. it stops the run. That path is exercised by the
-existing non-finite-loss check in the same method, so it is a known-working escalation route
-rather than a hoped-for one.
+``RuntimeError`` from ``training_complete``. That path is exercised by the existing
+non-finite-loss check in the same method, so it is a known-working escalation route rather than a
+hoped-for one.
+
+**Exactly when it stops, which is NOT "at the failing step".** Audited in
+``maple/agents/lanes/L5-telemetry/verify/assertion-raise-path.md`` and
+``evidence/async-assertion-escalation-gap.md``; stated here because a docstring that overclaims
+the guarantee is its own hazard.
+
+- **Single process** (any 1-GPU gate): ``run_bookkeeping_op`` runs the op inline, so the exception
+  propagates straight out of ``_log_metrics`` into ``fit()``'s handler and the run stops
+  immediately, exit non-zero. This is the reliable path.
+- **Multi-rank**: bookkeeping is async, so the future's done-callback stores ``_error``
+  (``trainer.py:1345``) and does *not* raise. ``_error`` is only read by ``training_complete`` /
+  ``is_canceled``, so with ``metrics_collect_interval=5`` **up to ~5 further optimizer steps run
+  after a divergence is detected.**
+- **On the final logged step it can be lost entirely**: ``_shutdown(gracefully=True)`` joins the
+  bookkeeping ops but never re-reads ``_error``, so a failure detected there lets ``fit()`` return
+  normally and the process exit **0**, with the failure visible only as a ``log.exception``.
+
+The last point is why :class:`ResultProtocolCallback` matters as much as the assertions: its
+``close()`` runs on both shutdown paths, so the *evidence* escapes even when the *exit code* is
+wrong. A two-line ``_error`` re-check at the end of ``Trainer.fit()`` would close the gap, but
+``trainer.py`` is not this lane's file and the change alters the exit code of runs that previously
+exited 0 with a logged bookkeeping error -- a deliberate decision for whoever owns it.
 """
 
 import json
@@ -28,7 +50,7 @@ import math
 import time
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
 from olmo_core.distributed.utils import get_rank
 from olmo_core.exceptions import OLMoError
@@ -89,6 +111,22 @@ class MetricAssertionCallback(Callback):
     entropy of ~0.998 in each of 16 blocks came to be logged as **15.97** for a quantity defined
     on ``[0, 1]``. Computing the aggregate here, from the already-reduced per-block series, is the
     only place a real mean is available.
+    """
+
+    priority: ClassVar[int] = 4
+    """
+    Runs first, for two reasons that both matter.
+
+    On the metrics path, ``pre_log_metrics`` here *adds* the ``moe/<metric>_{max,mean,min}``
+    aggregates to the dict, and callbacks that consume metrics -- the console logger, W&B, the
+    metric saver, the ``RESULT `` protocol -- must see them. Callbacks run in priority order, so
+    computing the aggregates first is what makes them visible downstream rather than only to
+    whichever callback happens to follow.
+
+    On the shutdown path, the same argument as :class:`ResultProtocolCallback`: ``close()`` here
+    reports whether the balance bands were ever applied, and an unguarded ``wandb.finish()`` later
+    in the loop must not be able to suppress it. Above ``ResultProtocolCallback``'s 3 so that the
+    band-application count is printed before the final ``RESULT `` line.
     """
 
     # -- what to assert -----------------------------------------------------------------------
