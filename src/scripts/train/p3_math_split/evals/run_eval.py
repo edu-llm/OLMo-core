@@ -46,8 +46,11 @@ import math
 import os
 import random
 import re
+import statistics
 import sys
+import time
 from collections import Counter
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -72,6 +75,24 @@ SAFETENSORS_INDEX = "model.safetensors.index.json"
 METAMATH_VERIFIER_SCHEMA_VERSION = "p3-metamath-tristate-v1"
 NLL_CONTEXT_POLICY = "bounded_sliding_window_preserve_predecessor"
 NLL_TARGET_POLICY = "combined_prompt_target_suffix_plus_single_eos"
+GENERATION_BACKENDS = ("hf", "vllm")
+#: Qwen2.5's vocabulary. A model predicting uniformly over it scores
+#: ``ln(151_936) = 11.93`` nats per token, the ceiling any trained checkpoint
+#: sits far beneath.
+QWEN_VOCAB_SIZE = 151_936
+UNIFORM_NLL_PER_TOKEN = math.log(QWEN_VOCAB_SIZE)
+#: Tripwire for gross corruption of the shared HuggingFace model state, the
+#: failure mode where standing up vLLM in the same process disturbs the weights
+#: NLL is computed from. Placed well above any healthy value and well below
+#: chance so it fires on collapse, not on a merely weak checkpoint.
+#:
+#: It detects collapse and nothing subtler. A perturbation that shifts NLL by a
+#: few percent passes this cleanly while still invalidating the arm comparison,
+#: so a quiet canary is not evidence that the two backends agree.
+NLL_CANARY_THRESHOLD = 8.0
+#: Set by ``main`` when ``--generation-backend vllm``. ``generate`` dispatches on
+#: it, which keeps the module-level signature the probe test monkeypatches.
+_VLLM_ENGINE = None
 DIAGNOSTIC_COHORT_FRACTION = 0.10
 DIAGNOSTIC_COHORT_ROUNDING = "ceil"
 COHORT_RANK_KEY_FIELDS = ("evaluator_seed", "family", "condition", "example_id")
@@ -161,6 +182,21 @@ def rows_for_condition(
         ),
     )
     return ranked[:cohort_size]
+
+
+def shard_positions(cohort_size: int, *, shard_index: int, shard_count: int) -> set[int]:
+    """Offsets into the ranked cohort that this shard is responsible for scoring.
+
+    Strided rather than contiguous. The cohort is already in rank-key order, so
+    a contiguous block would tie shard identity to the rank key: one shard's
+    failure would drop a systematically related slice of the corpus instead of
+    an arbitrary one, and a partial merge would be silently biased.
+    """
+    if shard_count < 1:
+        raise ValueError("shard_count must be positive")
+    if not 0 <= shard_index < shard_count:
+        raise ValueError(f"shard_index must be in [0, {shard_count}), got {shard_index}")
+    return set(range(shard_index, cohort_size, shard_count))
 
 
 def discover_families(corpus: str | Path) -> list[str]:
@@ -547,7 +583,76 @@ def load_jsonl(path):
         return [json.loads(line) for line in f if line.strip()]
 
 
+def build_vllm_engine(model_path, *, gpu_memory_utilization: float, max_model_len: int):
+    """Construct the vLLM engine that serves the generation pass.
+
+    Must be called before the HuggingFace model is loaded: vLLM sizes its KV
+    cache from whatever GPU memory is free at construction, so a resident HF
+    model would either shrink the cache or push the allocation over the card.
+
+    BF16 is fixed rather than ``auto`` because the whole export pipeline
+    validates BF16 and vLLM refuses it below compute capability 8.0. Failing at
+    engine construction with a clear dtype error beats silently downcasting.
+    """
+    from vllm import LLM
+
+    print(
+        f"initializing vLLM: max_model_len={max_model_len:,} "
+        f"gpu_memory_utilization={gpu_memory_utilization}",
+        flush=True,
+    )
+    return LLM(
+        model=str(model_path),
+        dtype="bfloat16",
+        max_model_len=max_model_len,
+        gpu_memory_utilization=gpu_memory_utilization,
+        tensor_parallel_size=1,
+    )
+
+
+def _generate_vllm(tok, prompts, max_new_tokens, do_sample, temperature):
+    """Generate through vLLM while matching the HF path's observable behavior.
+
+    Prompts are tokenized here and handed over as token IDs rather than strings.
+    vLLM would otherwise apply its own tokenization, and any disagreement about
+    special tokens would silently shift the prompt the model actually sees,
+    which is exactly the class of difference the backend comparison is meant to
+    rule out.
+
+    ``batch_size`` and ``device`` have no analogue: vLLM schedules continuously
+    and owns placement.
+    """
+    from vllm import SamplingParams
+
+    if not prompts:
+        return []
+
+    encoded = tok(prompts, add_special_tokens=False)["input_ids"]
+    params = SamplingParams(
+        n=1,
+        temperature=temperature if do_sample else 0.0,
+        # The HF call passes top_p=None, i.e. no nucleus truncation. vLLM spells
+        # that 1.0; None would be rejected.
+        top_p=1.0,
+        max_tokens=max_new_tokens,
+        skip_special_tokens=True,
+    )
+    request_outputs = _VLLM_ENGINE.generate(
+        [{"prompt_token_ids": list(ids)} for ids in encoded],
+        params,
+    )
+    if len(request_outputs) != len(prompts):
+        raise RuntimeError(
+            f"vLLM returned {len(request_outputs)} outputs for {len(prompts)} prompts"
+        )
+    print(f"  generated {len(prompts):,}/{len(prompts):,} (vllm)", flush=True)
+    return [output.outputs[0].text for output in request_outputs]
+
+
 def generate(model, tok, prompts, max_new_tokens, batch_size, do_sample, temperature, device):
+    if _VLLM_ENGINE is not None:
+        return _generate_vllm(tok, prompts, max_new_tokens, do_sample, temperature)
+
     import torch
 
     outputs = []
@@ -725,6 +830,7 @@ def target_nll(
     context_length,
     chunk_size,
     device,
+    scored_positions=None,
 ):
     """Mean per-token NLL over every target span, teacher-forced in chunks.
 
@@ -751,8 +857,17 @@ def target_nll(
     sliding = 0
     max_tokens = 0
     per_example = {}
+    scored_total = len(rows) if scored_positions is None else len(scored_positions)
+    scored_seen = 0
     for i, row in enumerate(rows, 1):
+        # Built for every row, including rows another shard scores. Under
+        # facts_corrupted the replacement statements come off a shared RNG
+        # stream, so skipping a row early would shift every later draw and this
+        # shard would score different prompts than the unsharded run.
         prompt = build_prompt(row, condition, rng, corrupt_pool)
+        if scored_positions is not None and (i - 1) not in scored_positions:
+            continue
+        scored_seen += 1
         try:
             prompt_ids, full_ids = tokenize_target_with_eos(tok, prompt, row["target"])
         except RuntimeError as exc:
@@ -777,8 +892,8 @@ def target_nll(
         }
         sliding += len(full_ids) > context_length
         max_tokens = max(max_tokens, len(full_ids))
-        if i % 100 == 0 or i == len(rows):
-            print(f"  NLL {i:,}/{len(rows):,}", flush=True)
+        if scored_seen % 100 == 0 or scored_seen == scored_total:
+            print(f"  NLL {scored_seen:,}/{scored_total:,}", flush=True)
     n_examples = len(per_example)
     return {
         "target_nll_sum": tot_nll,
@@ -1501,6 +1616,9 @@ def build_evaluation_metadata(
             "nll_chunk_size": args.nll_chunk_size,
             "nll_context_policy": NLL_CONTEXT_POLICY,
             "nll_target_policy": NLL_TARGET_POLICY,
+            # Only generation varies; NLL is always the HF forward path, so the
+            # policies above describe it accurately under either backend.
+            "generation_backend": args.generation_backend,
         },
         "input_provenance": {
             "hash_algorithm": "sha256",
@@ -1518,6 +1636,190 @@ def build_evaluation_metadata(
             "model": model_provenance or resolve_model_provenance(model_path),
         },
     }
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def parse_s3_uri(uri: str) -> tuple[str, str]:
+    if not uri.startswith("s3://"):
+        raise ValueError(f"S3 destination must start with s3://, got {uri!r}")
+    bucket, _, prefix = uri[len("s3://") :].partition("/")
+    if not bucket:
+        raise ValueError(f"S3 destination has no bucket: {uri!r}")
+    return bucket, prefix.strip("/")
+
+
+def cell_summary(
+    *,
+    family: str,
+    condition: str,
+    condition_result: dict,
+    generation_lengths: list[tuple[int, int]],
+) -> dict:
+    """A flat, eyeball-sized digest of one family/condition cell.
+
+    The full condition result is deeply nested and carries every per-example
+    record, which is the wrong shape for someone polling a running sweep. This
+    is the shape you can read in one line.
+
+    ``generation_lengths`` holds ``(generated_tokens, allowance)`` for attempted
+    rows only. The cap-hit fraction is the live answer to whether generations
+    terminate on EOS or run to the token ceiling, which is the difference
+    between a half-hour sweep and a four-hour one.
+    """
+    lengths = [tokens for tokens, _ in generation_lengths]
+    capped = sum(1 for tokens, allowance in generation_lengths if tokens >= allowance)
+    micro_nll = condition_result["target_token_micro_nll_per_token"]
+    return {
+        "family": family,
+        "condition": condition,
+        "rows_scored": condition_result["evaluated_examples"],
+        "target_tokens": condition_result["target_tokens"],
+        "target_token_micro_nll_per_token": micro_nll,
+        "target_example_macro_nll_per_token": condition_result[
+            "target_example_macro_nll_per_token"
+        ],
+        "target_token_micro_accuracy": condition_result["target_token_micro_accuracy"],
+        "exact_match_rate_evaluated": condition_result["exact_match_rate_evaluated"],
+        "generation_attempted_examples": condition_result["generation_attempted_examples"],
+        "generated_tokens_mean": (statistics.fmean(lengths) if lengths else None),
+        "generated_tokens_median": (statistics.median(lengths) if lengths else None),
+        "generated_tokens_max": (max(lengths) if lengths else None),
+        "generation_cap_hit_examples": capped,
+        "generation_cap_hit_fraction": (capped / len(lengths) if lengths else None),
+        "nll_sliding_window_examples": condition_result["nll_sliding_window_examples"],
+        "nll_canary_threshold": NLL_CANARY_THRESHOLD,
+        "nll_canary_uniform_reference": UNIFORM_NLL_PER_TOKEN,
+        "nll_canary_tripped": bool(micro_nll is not None and micro_nll > NLL_CANARY_THRESHOLD),
+    }
+
+
+class ProgressSync:
+    """Publish per-cell progress to S3 so a running sweep can be inspected.
+
+    Every upload except the final result is best-effort. A sweep that has spent
+    hours of GPU time must not die because a progress file failed to write, so
+    transport errors are logged and swallowed. The terminal ``result.json`` is
+    worth a few retries, and the local copy is written regardless.
+    """
+
+    def __init__(self, s3_out: str, *, arm: str, shard_index: int, total_cells: int):
+        import boto3
+
+        bucket, root = parse_s3_uri(s3_out)
+        self.bucket = bucket
+        self.prefix = "/".join(filter(None, (root, arm, f"shard{shard_index}")))
+        self.total_cells = total_cells
+        self.summaries: list[dict] = []
+        self.rows_scored = 0
+        self.started_at = _utc_now()
+        self.client = boto3.client("s3")
+        print(f"progress sync -> s3://{self.bucket}/{self.prefix}/", flush=True)
+
+    def _put(self, name: str, payload, *, attempts: int = 1) -> bool:
+        body = payload if isinstance(payload, str) else json.dumps(payload, indent=2)
+        key = f"{self.prefix}/{name}"
+        for attempt in range(1, attempts + 1):
+            try:
+                self.client.put_object(
+                    Bucket=self.bucket,
+                    Key=key,
+                    Body=body.encode("utf-8"),
+                    ContentType="application/json",
+                )
+                return True
+            except Exception as error:  # noqa: BLE001 - transport failures must not be fatal
+                if attempt == attempts:
+                    print(f"WARNING: progress sync failed for {key}: {error}", flush=True)
+                    return False
+                time.sleep(2**attempt)
+        return False
+
+    def cell_completed(self, summary: dict, results: dict) -> None:
+        self.summaries.append(summary)
+        self.rows_scored += summary["rows_scored"]
+        if summary["nll_canary_tripped"]:
+            print(
+                "\n"
+                + "!" * 78
+                + f"\nNLL CANARY TRIPPED on {summary['family']}/{summary['condition']}: "
+                f"micro NLL {summary['target_token_micro_nll_per_token']:.4f} exceeds "
+                f"{NLL_CANARY_THRESHOLD} (uniform over {QWEN_VOCAB_SIZE:,} tokens is "
+                f"{UNIFORM_NLL_PER_TOKEN:.2f}).\nThe evaluated model may be corrupted; "
+                "treat every endpoint from this run as suspect.\n" + "!" * 78 + "\n",
+                flush=True,
+            )
+        self._put(
+            "_IN_PROGRESS",
+            {
+                "updated_at": _utc_now(),
+                "started_at": self.started_at,
+                "cells_completed": len(self.summaries),
+                "cells_total": self.total_cells,
+                "current_family": summary["family"],
+                "current_condition": summary["condition"],
+                "rows_scored": self.rows_scored,
+                "latest": summary,
+                "nll_canary_tripped_cells": [
+                    f"{item['family']}/{item['condition']}"
+                    for item in self.summaries
+                    if item["nll_canary_tripped"]
+                ],
+            },
+        )
+        self._put(
+            "partial.json",
+            {
+                # Loud enough that nobody mistakes this for a reportable result.
+                # compare_arms.py would reject it on cohort size anyway, but the
+                # marker means a human does not have to work that out.
+                "partial": True,
+                "partial_warning": (
+                    "INCOMPLETE evaluation written mid-run. Cohorts are truncated "
+                    "and every aggregate is provisional. Not reportable; use "
+                    "result.json once _READY exists."
+                ),
+                "cells_completed": len(self.summaries),
+                "cells_total": self.total_cells,
+                "updated_at": _utc_now(),
+                "cell_summaries": self.summaries,
+                **results,
+            },
+        )
+
+    def finished(self, results: dict) -> None:
+        uploaded = self._put("result.json", results, attempts=3)
+        self._put(
+            "_READY" if uploaded else "_FAILED",
+            {
+                "finished_at": _utc_now(),
+                "cells_completed": len(self.summaries),
+                "cells_total": self.total_cells,
+                "rows_scored": self.rows_scored,
+                "result_uploaded": uploaded,
+                "cell_summaries": self.summaries,
+                "nll_canary_tripped_cells": [
+                    f"{item['family']}/{item['condition']}"
+                    for item in self.summaries
+                    if item["nll_canary_tripped"]
+                ],
+            },
+        )
+
+    def failed(self, error: BaseException) -> None:
+        self._put(
+            "_FAILED",
+            {
+                "finished_at": _utc_now(),
+                "cells_completed": len(self.summaries),
+                "cells_total": self.total_cells,
+                "error_type": type(error).__name__,
+                "error": str(error),
+                "cell_summaries": self.summaries,
+            },
+        )
 
 
 def main():
@@ -1551,7 +1853,59 @@ def main():
     ap.add_argument("--probe", action="store_true", help="also run the fact-recall probe")
     ap.add_argument("--probe-n", type=int, default=500)
     ap.add_argument("--probe-max-new-tokens", type=int, default=96)
+    ap.add_argument(
+        "--generation-backend",
+        choices=GENERATION_BACKENDS,
+        default="hf",
+        help="engine for the generation pass only; teacher-forced NLL always runs "
+        "through the HuggingFace forward path so the primary endpoint is unaffected",
+    )
+    ap.add_argument(
+        "--vllm-gpu-memory-utilization",
+        type=float,
+        default=0.55,
+        help="fraction of GPU memory vLLM may claim; the remainder must hold the "
+        "HuggingFace model used for NLL",
+    )
+    ap.add_argument(
+        "--vllm-max-model-len",
+        type=int,
+        default=None,
+        help="vLLM context window; defaults to --context-length",
+    )
+    ap.add_argument(
+        "--s3-out",
+        default=None,
+        help="s3:// prefix for incremental progress. After every family/condition "
+        "cell the run publishes _IN_PROGRESS, partial.json and a flat per-cell "
+        "summary, then result.json plus _READY or _FAILED at the end. Keys are "
+        "shard-scoped so concurrent processes never collide",
+    )
+    ap.add_argument(
+        "--shard-count",
+        type=int,
+        default=1,
+        help="split each family/condition cohort across this many processes; "
+        "every shard writes a partial result that merge_shards.py recombines",
+    )
+    ap.add_argument(
+        "--shard-index",
+        type=int,
+        default=0,
+        help="which strided slice of the cohort this process scores",
+    )
+    ap.add_argument(
+        "--persist-generations",
+        action="store_true",
+        help="store raw generated text on each per-example record. Off by default "
+        "so the reportable schema is unchanged; required to compare generation "
+        "backends against each other",
+    )
     args = ap.parse_args()
+    if args.shard_count < 1:
+        raise SystemExit("--shard-count must be positive")
+    if not 0 <= args.shard_index < args.shard_count:
+        raise SystemExit(f"--shard-index must be in [0, {args.shard_count})")
 
     try:
         model_provenance = resolve_model_provenance(args.model)
@@ -1577,6 +1931,18 @@ def main():
     if tok.pad_token_id is None:
         tok.pad_token = tok.eos_token
     tok.padding_side = "left"
+
+    # vLLM sizes its KV cache from free GPU memory at construction, so it has to
+    # come up before the HuggingFace model claims any. Both stay resident: NLL
+    # runs on the HF model regardless of backend.
+    global _VLLM_ENGINE
+    if args.generation_backend == "vllm":
+        _VLLM_ENGINE = build_vllm_engine(
+            args.model,
+            gpu_memory_utilization=args.vllm_gpu_memory_utilization,
+            max_model_len=args.vllm_max_model_len or args.context_length,
+        )
+
     model = AutoModelForCausalLM.from_pretrained(
         args.model, dtype=torch.bfloat16 if device == "cuda" else torch.float32
     ).to(device)
@@ -1607,11 +1973,68 @@ def main():
         "arm": args.arm,
         "families": {},
     }
+    if args.shard_count > 1:
+        # Absent from unsharded runs so their output stays byte-identical to
+        # what it was before sharding existed. merge_shards.py strips it.
+        results["shard"] = {"index": args.shard_index, "count": args.shard_count}
     if metamath_sources is not None:
         results["metamath_sources"] = metamath_sources
     if args.probe:
         train_fact_names, train_visibility_available = load_train_fact_names(args.corpus)
 
+    sync = None
+    if args.s3_out:
+        try:
+            sync = ProgressSync(
+                args.s3_out,
+                arm=args.arm,
+                shard_index=args.shard_index,
+                total_cells=len(families) * len(args.conditions),
+            )
+        except Exception as error:  # noqa: BLE001 - observability must not gate the run
+            print(f"WARNING: progress sync unavailable, continuing without it: {error}", flush=True)
+
+    try:
+        evaluate_families(
+            args=args,
+            families=families,
+            results=results,
+            model=model,
+            tok=tok,
+            device=device,
+            metamath_availability=metamath_availability,
+            mm_databases=mm_databases,
+            sync=sync,
+            train_fact_names=train_fact_names if args.probe else set(),
+            train_visibility_available=(train_visibility_available if args.probe else False),
+        )
+    except BaseException as error:
+        if sync is not None:
+            sync.failed(error)
+        raise
+
+    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+    with open(args.out, "w", encoding="utf-8") as f:
+        json.dump(results, f, indent=2)
+    print(f"\nwrote {args.out}")
+    if sync is not None:
+        sync.finished(results)
+
+
+def evaluate_families(
+    *,
+    args,
+    families,
+    results,
+    model,
+    tok,
+    device,
+    metamath_availability,
+    mm_databases,
+    sync,
+    train_fact_names,
+    train_visibility_available,
+):
     for family in families:
         rows, heldout = load_family(args.corpus, family)
         source_examples = len(rows)
@@ -1649,9 +2072,26 @@ def main():
                 condition=condition,
                 seed=args.seed,
             )
+            scored_positions = (
+                None
+                if args.shard_count == 1
+                else shard_positions(
+                    len(condition_rows),
+                    shard_index=args.shard_index,
+                    shard_count=args.shard_count,
+                )
+            )
+            scored_count = (
+                len(condition_rows) if scored_positions is None else len(scored_positions)
+            )
+            shard_note = (
+                ""
+                if scored_positions is None
+                else f" (shard {args.shard_index}/{args.shard_count}: {scored_count:,} scored)"
+            )
             print(
                 f"\n[{args.arm}/{family}] {condition}: "
-                f"{len(condition_rows):,}/{len(rows):,} examples"
+                f"{len(condition_rows):,}/{len(rows):,} examples{shard_note}"
             )
 
             # Per-token loss exists for every family on the same context-eligible
@@ -1666,6 +2106,7 @@ def main():
                 args.context_length,
                 args.nll_chunk_size,
                 device,
+                scored_positions=scored_positions,
             )
             per_example_target_stats = loss_stats.pop("per_example")
             micro_nll = loss_stats["target_token_micro_nll_per_token"]
@@ -1700,6 +2141,8 @@ def main():
                 max_new_tokens=args.max_new_tokens,
             )
             for i, allowance in generation_budget.items():
+                if scored_positions is not None and i not in scored_positions:
+                    continue
                 generation_buckets.setdefault(allowance, []).append(i)
             for allowance, indices in generation_buckets.items():
                 generated_subset = generate(
@@ -1716,9 +2159,12 @@ def main():
                     generated[i] = text
 
             per_example = []
+            generation_lengths: list[tuple[int, int]] = []
             for i, (row, gen, condition_input) in enumerate(
                 zip(condition_rows, generated, materialized)
             ):
+                if scored_positions is not None and i not in scored_positions:
+                    continue
                 prompt_ids, full_ids = tokenize_target_with_eos(
                     tok, condition_input.prompt, row["target"]
                 )
@@ -1731,6 +2177,15 @@ def main():
                 attempted = i in generation_budget
                 allowance = generation_budget.get(i, 0)
                 budget_eligible = attempted and target_tokens <= allowance
+                if attempted:
+                    # Re-encoded from the decoded text rather than counted off
+                    # the emitted IDs. A BPE round trip is not guaranteed exact,
+                    # but this only has to answer "do generations stop early or
+                    # run to the cap", and it needs no token counts threaded back
+                    # through the backend dispatch.
+                    generation_lengths.append(
+                        (len(tok(gen, add_special_tokens=False)["input_ids"]), allowance)
+                    )
                 is_exact = attempted and exact_target(gen, row["target"])
                 item = {
                     "id": row["id"],
@@ -1742,6 +2197,12 @@ def main():
                     "generation_attempted": attempted,
                     "generation_budget": allowance,
                 }
+                if args.persist_generations:
+                    # Off by default: the reportable schema stays byte-identical
+                    # for production runs. Backend comparison needs the raw text,
+                    # since verdict agreement alone cannot distinguish "both wrong
+                    # in the same way" from "both wrong differently".
+                    item["generated"] = gen
                 if family == "metamath":
                     item["metamath"] = verify_metamath_example(
                         generated=gen,
@@ -1788,6 +2249,20 @@ def main():
             print(
                 f"  exact/evaluated {exact_display}; " f"whole-proof budget covers {budget_display}"
             )
+            summary = cell_summary(
+                family=family,
+                condition=condition,
+                condition_result=condition_result,
+                generation_lengths=generation_lengths,
+            )
+            if summary["generated_tokens_mean"] is not None:
+                print(
+                    f"  generated tokens mean {summary['generated_tokens_mean']:.0f}, "
+                    f"median {summary['generated_tokens_median']:.0f}, "
+                    f"hit cap {summary['generation_cap_hit_fraction']:.1%}"
+                )
+            if sync is not None:
+                sync.cell_completed(summary, results)
 
         if args.probe:
             print(f"\n[{args.arm}/{family}] fact-recall probe")
@@ -1801,11 +2276,6 @@ def main():
                 train_fact_names=train_fact_names,
                 train_visibility_available=train_visibility_available,
             )
-
-    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
-    with open(args.out, "w", encoding="utf-8") as f:
-        json.dump(results, f, indent=2)
-    print(f"\nwrote {args.out}")
 
 
 if __name__ == "__main__":
