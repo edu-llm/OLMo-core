@@ -18,6 +18,7 @@ from olmo_core.distributed.utils import (
     _HiddenTensor,
     distribute_like,
     get_local_tensor,
+    get_world_size,
     hide_from_torch,
     is_distributed,
     unhide_from_torch,
@@ -267,10 +268,17 @@ class MoERouter(nn.Module):
         # own verification cannot depend on it.
         self._lbl_local: Optional[_HiddenTensor] = None
         self._lbl_global: Optional[_HiddenTensor] = None
-        # Whether a collective actually ran on the last forward. Distinguishes "the pair matches
-        # because there is one rank" from "the pair matches because the reduction did nothing",
-        # which are the same number and opposite conclusions.
-        self.lbl_reduced: bool = False
+        # Whether counts from MORE THAN ONE RANK were pooled on the last forward -- NOT whether an
+        # all_reduce call executed. The platform bootstraps a single-process distributed group for
+        # 1-GPU runs, so a collective-based predicate reports success on a run that pooled nothing.
+        # Distinguishes "the pair matches because there is one rank" from "the pair matches because
+        # the reduction did nothing": same number, opposite conclusions.
+        self.lbl_pooled: bool = False
+        # HOW MANY ranks were pooled. A positive quantity, because asserting
+        # `lbl_pooled_world_size == 4` on a 4-rank gate is strictly stronger than asserting a flag
+        # is zero -- a flag cannot tell 4 ranks from 2, and a partially-formed process group is a
+        # real failure mode that reads as success on a boolean.
+        self.lbl_pooled_world_size: int = 1
         # Set by MoEBase so the effective per-layer weight is logged rather than asserted. The
         # stock code divided both aux weights by the model's TOTAL depth while only MoE blocks
         # contribute a term, landing the summed weight 1.5x low on a 24-layer/16-MoE model. Now
@@ -355,8 +363,9 @@ class MoERouter(nn.Module):
         Call it once per logging interval from a metrics path that all ranks reach, never inside a
         conditional that only some ranks take.
 
-        :returns: ``(counts, reduced)``. ``reduced=False`` means there was one rank and the counts
-            are a copy of the local histogram.
+        :returns: ``(counts, pooled)``. ``pooled=False`` means the group held one rank and the
+            counts are a copy of the local histogram -- including on a 1-GPU platform run, where
+            distributed *is* initialised but there is still nothing to pool.
         """
         return reduce_expert_counts(self.batch_size_per_expert, group=self.group)
 
@@ -629,13 +638,32 @@ class MoERouter(nn.Module):
         out["lbl_global_over_local"] = (ratio.clone(), ReduceType.mean)
         out["moe/lbl_global_over_local"] = (ratio.clone(), ReduceType.mean)
 
-        # Did a collective actually run? Inverted so that `max` carries alarm upward: reads 0.0
-        # only if every block on every rank reduced. On a single-process run this is 1.0 and that
-        # is correct and expected -- there is nothing to reduce over, and it is the reason a gate
+        # WERE COUNTS FROM MORE THAN ONE RANK POOLED? Inverted so that `max` carries alarm upward:
+        # reads 0.0 only if every block on every rank pooled. On a single-rank run it reads 1.0,
+        # and that is correct and expected -- there is nothing to pool, and it is the reason a gate
         # comparing the pair has to run on more than one rank to mean anything.
-        not_reduced = torch.full_like(lbl_local, 0.0 if self.lbl_reduced else 1.0)
-        out["lbl_not_reduced"] = (not_reduced.clone(), ReduceType.max)
-        out["moe/lbl_not_reduced"] = (not_reduced.clone(), ReduceType.max)
+        #
+        # This is keyed on GROUP SIZE, not on whether an all_reduce executed, and the distinction is
+        # load-bearing. The platform bootstraps a single-process distributed group for 1-GPU runs,
+        # so `is_distributed()` is True with world_size 1 and a collective-based flag would read
+        # 0.0 -- "pooled fine" -- on a run that provably pooled nothing. Measured on FarmShare.
+        not_pooled = torch.full_like(lbl_local, 0.0 if self.lbl_pooled else 1.0)
+        out["lbl_not_reduced"] = (not_pooled.clone(), ReduceType.max)
+        out["moe/lbl_not_reduced"] = (not_pooled.clone(), ReduceType.max)
+
+        # And HOW MANY ranks, as a positive quantity. `lbl_not_reduced == 0.0` cannot distinguish
+        # a fully-formed 4-rank group from a partially-formed 2-rank one, and a partial group reads
+        # as success on a boolean while silently pooling half the batch. Tagged `min` across ranks
+        # is not available, so `max` folds it across blocks -- every block shares one group, so all
+        # blocks agree and the fold is a no-op. A GATE SHOULD ASSERT THIS EQUALS ITS RANK COUNT.
+        out["lbl_pooled_world_size"] = (
+            torch.full_like(lbl_local, float(self.lbl_pooled_world_size)),
+            ReduceType.max,
+        )
+        out["moe/lbl_pooled_world_size"] = (
+            torch.full_like(lbl_local, float(self.lbl_pooled_world_size)),
+            ReduceType.max,
+        )
 
         # THE EFFECTIVE PER-LAYER AUX WEIGHTS, so the divisor correction is auditable.
         #
@@ -1048,7 +1076,9 @@ class MoERouter(nn.Module):
                     assert self.lbl_local is not None and self.lbl_global is not None
                     self.lbl_local += lb.lbl_local
                     self.lbl_global += lb.lbl_global
-                    self.lbl_reduced = lb.reduced
+                    self.lbl_pooled = lb.reduced
+                    # Host-side, from the process group, so it costs no sync. See the metric.
+                    self.lbl_pooled_world_size = get_world_size(self.group)
 
                     scaled_lb_loss = self.lb_loss_weight * lb.loss
                     aux_loss = scaled_lb_loss

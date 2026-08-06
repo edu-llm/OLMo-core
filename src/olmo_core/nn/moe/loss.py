@@ -44,7 +44,7 @@ import torch.distributed as dist
 from torch.distributed.tensor import DTensor, Replicate, Shard
 
 from olmo_core.config import StrEnum
-from olmo_core.distributed.utils import get_local_tensor, is_distributed
+from olmo_core.distributed.utils import get_local_tensor, get_world_size
 
 __all__ = [
     "MoELoadBalancingLossGranularity",
@@ -100,10 +100,19 @@ class LoadBalancingLoss(NamedTuple):
     :param lbl_local: The rank-local value, detached. Equal to what
         :data:`MoELoadBalancingLossGranularity.local_batch` would have produced.
     :param lbl_global: The data-parallel-reduced value, detached.
-    :param reduced: Whether a collective actually ran. ``False`` means ``lbl_global`` is a copy of
-        the local computation because there was nothing to reduce over -- not that the reduction
-        was skipped. Callers that assert the two differ must check this first, or the assertion
-        fires on a single-GPU run for the wrong reason.
+    :param reduced: Whether counts from **more than one rank** were actually pooled. ``False``
+        means ``lbl_global`` is arithmetically the local computation, because the group had size
+        one -- not that the reduction was skipped by mistake. Callers that assert the two differ
+        must check this first, or the assertion fires on a single-GPU run for the wrong reason.
+
+        .. warning::
+            This is deliberately **not** "did an ``all_reduce`` call execute". The platform
+            bootstraps a single-process distributed group for 1-GPU runs, so
+            ``is_distributed()`` is ``True`` with ``world_size == 1`` and the collective does
+            run -- over one rank, pooling nothing. Keyed on the collective it would report
+            ``True`` there, and a gate reading "reduced" as evidence that the global batch was
+            pooled would be reading a run where it demonstrably was not. Size of the group is the
+            honest predicate; whether a call happened is not.
     """
 
     loss: torch.Tensor
@@ -122,8 +131,10 @@ def reduce_expert_counts(
 
     :param counts: Integer counts of shape ``(num_experts,)`` for the rank-local slice.
     :param group: The group to reduce over. See the note below on which group is correct.
-    :returns: ``(global_counts, reduced)``. ``global_counts`` is a **new** tensor;
-        ``counts`` is never modified.
+    :returns: ``(global_counts, pooled)``. ``global_counts`` is a **new** tensor; ``counts`` is
+        never modified. ``pooled`` is ``True`` only when the group holds **more than one rank**,
+        i.e. only when the returned counts genuinely describe more than this rank's slice --
+        **not** merely when an ``all_reduce`` executed. See :class:`LoadBalancingLoss`.
 
     **Why the input must be cloned.** The same ``batch_size_per_expert`` tensor the router hands
     to this function is also handed to the dispatch path, which sizes its all-to-all and its
@@ -147,11 +158,26 @@ def reduce_expert_counts(
     path already reduces over, so the two globally-balanced mechanisms in this stack agree about
     what "global" means.
     """
-    if not is_distributed():
-        # Nothing to reduce over. Return a distinct tensor anyway so that callers cannot
-        # accidentally alias the input, and report `reduced=False` so a caller comparing local
-        # against global can tell "identical because there is one rank" from "identical because
-        # the collective did nothing".
+    # THE PREDICATE IS GROUP SIZE, NOT WHETHER A COLLECTIVE RAN. Keyed on `is_distributed()`
+    # alone this reported "reduced" on any 1-GPU platform run, because the platform bootstraps a
+    # single-process distributed group -- `is_distributed()` is True, `world_size` is 1, the
+    # all_reduce executes and pools nothing. A gate reading that as "the global batch was pooled"
+    # would be reading a run where it provably was not, which is the exact false confidence the
+    # local/global pair exists to prevent. Measured on FarmShare: world_size=1 with gloo
+    # initialised returns reduced=True under the old predicate.
+    #
+    # `get_world_size(group)` returns 1 when distributed is uninitialised, so this one call covers
+    # both the not-distributed and the world-size-1 cases.
+    if get_world_size(group) <= 1:
+        # Nothing to pool. Return a distinct tensor anyway so that callers cannot accidentally
+        # alias the input, and report `pooled=False` so a caller comparing local against global
+        # can tell "identical because there is one rank" from "identical because the reduction
+        # silently failed".
+        #
+        # The collective is skipped rather than run over a group of one. That is safe for
+        # collective symmetry precisely because the condition is world size, which every rank in
+        # the group agrees on -- so either all ranks skip or none do. A condition that could
+        # differ per rank must never gate a collective; this one cannot.
         return counts.clone(), False
 
     global_counts = counts.clone()

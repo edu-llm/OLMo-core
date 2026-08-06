@@ -15,6 +15,7 @@ and requires the two to differ by a computed amount.
 """
 
 import math
+import os
 
 import pytest
 import torch
@@ -455,7 +456,7 @@ def _run_router_pair_accumulates():
     router(x)
     after_one = (router.lbl_local.item(), router.lbl_global.item())
     assert after_one[0] > 0.0 and after_one[1] > 0.0
-    assert router.lbl_reduced is True
+    assert router.lbl_pooled is True
 
     router(x)
     after_two = (router.lbl_local.item(), router.lbl_global.item())
@@ -479,6 +480,7 @@ def _run_router_pair_accumulates():
         ("lbl_global", "moe/lbl_global"),
         ("lbl_global_over_local", "moe/lbl_global_over_local"),
         ("lbl_not_reduced", "moe/lbl_not_reduced"),
+        ("lbl_pooled_world_size", "moe/lbl_pooled_world_size"),
         ("lb_loss_weight_effective", "moe/lb_loss_weight_effective"),
     ):
         assert bare in metrics, bare
@@ -506,7 +508,7 @@ def test_router_accumulates_and_clears_the_pair():
 
 def test_router_reports_not_reduced_on_a_single_process():
     """
-    Single-process: the flag must say the reduction did not run. A gate that reads ``lbl_local ==
+    Single-process: the flag must say nothing was pooled. A gate that reads ``lbl_local ==
     lbl_global`` as proof of anything on one rank is reading this flag wrong, and the metric exists
     to make that mistake visible.
     """
@@ -521,4 +523,89 @@ def test_router_reports_not_reduced_on_a_single_process():
     router(torch.randn(2, 16, 32))
     metrics = router.compute_metrics(reset=False)
     assert metrics["moe/lbl_not_reduced"][0].item() == 1.0
-    assert router.lbl_reduced is False
+    assert metrics["moe/lbl_pooled_world_size"][0].item() == 1.0
+    assert router.lbl_pooled is False
+
+
+def _run_world_size_one_is_honest():
+    """
+    THE REGRESSION THAT SHIPPED AND WAS CAUGHT AFTER MERGE.
+
+    ``reduced`` was keyed on ``is_distributed()``. But the platform bootstraps a **single-process
+    distributed group** for 1-GPU runs -- the trainer prints "Distributed launch env vars not
+    found; bootstrapping a single-process distributed setup" -- so ``is_distributed()`` is ``True``
+    with ``world_size == 1``, the ``all_reduce`` executes over one rank, and it pools nothing.
+
+    Under the old predicate ``lbl_not_reduced`` therefore read **0.0** on every 1-GPU platform run,
+    which is the value this project's own guidance said means "the global batch was pooled". A gate
+    asserting ``lbl_not_reduced == 0.0`` would have passed on a run where no pooling occurred --
+    manufacturing exactly the confidence the local/global pair exists to deny.
+
+    The predicate is now group SIZE. This test runs with ``world_size=1`` under an initialised
+    process group, which is the platform's 1-GPU shape, and requires the honest answer.
+    """
+    assert dist.is_initialized(), "this test is meaningless without an initialised group"
+    assert dist.get_world_size() == 1, "this test must run at world_size 1"
+
+    num_experts, top_k, B, S = 16, 2, 2, 64
+    scores, counts, batched = _uniform_inputs(num_experts, top_k, B, S)
+    counts = counts.clone()
+    counts[0] *= 3
+    counts[1] = 0
+
+    out = _call(num_experts=num_experts, top_k=top_k, scores=scores, counts=counts, batched=batched)
+    assert out.reduced is False, (
+        "world_size==1 with distributed initialised must report pooled=False: the collective runs "
+        "but pools nothing, and reporting True there is the false-confidence bug"
+    )
+    # And the arithmetic must still be right -- the skip must not change the value.
+    assert out.lbl_local.item() == out.lbl_global.item()
+
+    router = MoELinearRouter(d_model=32, num_experts=8, top_k=2, lb_loss_weight=0.01)
+    router.train()
+    router.reset_parameters()
+    router(torch.randn(2, 16, 32))
+    metrics = router.compute_metrics(reset=False)
+    assert (
+        metrics["moe/lbl_not_reduced"][0].item() == 1.0
+    ), "a 1-GPU platform run must report NOT pooled"
+    assert metrics["moe/lbl_pooled_world_size"][0].item() == 1.0
+
+
+def test_world_size_one_reports_not_pooled_even_though_distributed_is_initialized():
+    # NOT via `run_distributed_test`, which asserts `world_size > 1` -- and that assertion is
+    # itself why this bug survived: the harness cannot construct the shape the platform actually
+    # runs 1-GPU jobs in, so no existing test could have covered it. Initialise the group directly.
+    if dist.is_initialized():
+        pytest.skip("must own the process group to initialise it at world_size 1")
+    os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
+    os.environ.setdefault("MASTER_PORT", "29713")
+    dist.init_process_group(backend="gloo", world_size=1, rank=0)
+    try:
+        _run_world_size_one_is_honest()
+    finally:
+        dist.destroy_process_group()
+
+
+def _run_pooled_world_size_counts_ranks():
+    """
+    ``lbl_pooled_world_size`` must equal the real rank count, not just be nonzero.
+
+    ``lbl_not_reduced == 0.0`` cannot tell a fully-formed 4-rank group from a partially-formed
+    2-rank one, and a partial group pools half the batch while reading as success on a boolean. A
+    gate should assert this equals the rank count it asked for.
+    """
+    world_size = dist.get_world_size()
+    router = MoELinearRouter(d_model=32, num_experts=8, top_k=2, lb_loss_weight=0.01)
+    router.train()
+    router.reset_parameters()
+    router(torch.randn(2, 16, 32))
+    metrics = router.compute_metrics(reset=False)
+    assert router.lbl_pooled is True
+    assert router.lbl_pooled_world_size == world_size
+    assert metrics["moe/lbl_pooled_world_size"][0].item() == float(world_size)
+    assert metrics["moe/lbl_not_reduced"][0].item() == 0.0
+
+
+def test_pooled_world_size_equals_the_rank_count():
+    run_distributed_test(_run_pooled_world_size_counts_ranks, world_size=4, backend="gloo")
