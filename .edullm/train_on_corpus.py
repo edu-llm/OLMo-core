@@ -59,6 +59,7 @@ import copy
 import enum
 import json
 import logging
+import math
 import os
 import re
 import sys
@@ -554,10 +555,118 @@ def ladder_steps(steps: int) -> List[int]:
     return sorted({max(2, int(steps * f)) for f in LADDER_FRACTIONS})
 
 
-#: How many held-out shards the ladder scores. Four 2 MB shards is ~2M tokens, far more than
-#: the 32 batches a rung actually consumes, and every extra shard costs a download and an index
-#: build at startup for no additional signal.
-HELDOUT_SHARDS = 4
+def _domain_of(url: str) -> str:
+    """The held-out shard's topic domain: the name of its immediate parent directory.
+
+    ``s3://.../tokens/all-dressed-snazzy2/adult_content/val-00033.u32le.bin`` -> ``"adult_content"``
+    -- confirmed against a live object, ``edullm-data/HANDOFF.md:614-615``:
+    ``tokens/all-dressed-snazzy2/adult_content/val-00033.u32le.bin`` carries
+    ``labels={'domain': 'adult_content', 'source': 'all-dressed-snazzy2'}``.
+
+    Falls back to the literal ``"heldout-val"`` -- the ORIGINAL single label this file used
+    before this fix -- for a shard with no directory structure to read a domain from (fewer
+    than two ``/`` in the path). That keeps a flat, single-directory corpus behaving exactly as
+    it did before: one label, everything grouped together, nothing here to spread.
+
+    One function, used for THREE things below (grouping in ``spread_across_sources``, the
+    per-path label, and the localised-shard cache key) rather than three separate derivations.
+    A second copy of this rule is exactly how Defect B happened upstream: the selection and the
+    label were changed in one place and the metric key that has to agree with the label lived
+    somewhere else, so the two drifted apart silently. One function can still be wrong, but it
+    cannot disagree with itself.
+    """
+    return url.rsplit("/", 2)[-2] if url.count("/") >= 2 else "heldout-val"
+
+
+def spread_across_sources(urls: List[str], limit: int) -> List[str]:
+    """Pick up to ``limit`` held-out shards, spread across topic domains rather than one
+    domain exhausted before the next is touched.
+
+    THE FAILURE THIS REPLACES. ``sorted(corpus.val_paths)[:HELDOUT_SHARDS]`` sorts by the
+    FULL url, so shards group by directory before they group by shard number: every path
+    under ``.../adult_content/`` sorts before every path under ``.../art_and_design/``,
+    regardless of shard number, because string comparison never gets past the directory name
+    to look at what follows it. Which domains a plain prefix touches, and in what proportion,
+    is then an accident of the alphabet and of how many val shards that one domain happens to
+    have -- not a property anyone chose, and not one that survives the corpus changing.
+
+    ``run_019fd4dc`` (docs/1b-leverage-audit/grounding/val-split-status.md:285-296) shows this
+    is not hypothetical, and also that it is not reliably as bad as "one domain either": that
+    run's naive ``[:4]`` landed on four DIFFERENT domains -- ``adult_content``,
+    ``art_and_design``, ``crime_and_law``, ``education_and_jobs`` -- purely because
+    ``adult_content`` happened to have only one val shard before the alphabet moved on, with
+    2,284 / 409 / 542 / 396 instances respectively. That is not single-category collapse, but
+    it is not coverage either: 2,284 of those 3,631 instances (63%) are ``adult_content``, so
+    any rung's 256-instance read is dominated by whichever domain happened to sort first, and a
+    corpus with a differently-sized alphabetically-first domain -- or this same corpus after a
+    single shard is re-cut -- collapses to exactly the one-domain failure this function exists
+    to prevent, silently, with no line in this file changing. This corpus has 24 topic domains
+    (``edullm-data/HANDOFF.md:467``: "24 topic domains (adult_content ... travel_and_tourism)"),
+    of which the naive prefix reached 4 -- and which 4 was never a decision.
+
+    Grouped by DOMAIN, not by (source, domain). ``all-dressed-snazzy2`` and ``s2pdf-redacted``
+    are two different scrapes that both contribute ``adult_content``, ``crime_and_law``,
+    ``education_and_jobs`` and ``art_and_design`` shards
+    (``docs/scaling-audit/wandb_run_meta.json:148-197``). The risk a held-out ladder exists to
+    catch is a model that is silently only ever evaluated on one TOPIC -- source is a
+    processing detail underneath that, and two shards of the same domain from different
+    sources close far less of the coverage gap than one shard of a domain not seen at all. So
+    the grouping key drops source on purpose.
+
+    Deterministic: ``sorted(urls)`` up front, then domains visited in sorted order at every
+    depth, so the same input always yields the same picks regardless of manifest list order --
+    load-bearing because the ladder compares 18 E1 cells against each other and a per-cell
+    subset would make the rungs incomparable. Round-robins ACROSS domains (one shard from every
+    domain before a second shard from any of them) rather than sorting shards and slicing, which
+    is the one property that makes truncation -- ``limit`` smaller than the shard count --
+    honest instead of silently biased: with round-robin, ``limit`` shards is ``limit`` DISTINCT
+    domains (until they run out), never ``limit`` shards of the alphabetically-first one.
+    Raising ``HELDOUT_SHARDS`` alone, with the plain sort left in place, would not have fixed
+    this -- a bigger N still exhausts one domain before touching a second if that domain has N
+    or more shards, which is exactly what made ``adult_content`` alone look safe on this corpus
+    (it happens to have few val shards) and would not on one where it has many.
+
+    :param urls: All held-out shard urls the corpus declares (``corpus.val_paths``).
+    :param limit: How many to keep. If fewer distinct domains exist than ``limit``, some
+        domains get a second shard once every domain has one. If ``urls`` itself has fewer
+        entries than ``limit``, everything is returned.
+    """
+    by_domain: Dict[str, List[str]] = {}
+    for url in sorted(urls):
+        by_domain.setdefault(_domain_of(url), []).append(url)
+
+    picked: List[str] = []
+    max_depth = max((len(shards) for shards in by_domain.values()), default=0)
+    for depth in range(max_depth):
+        for domain in sorted(by_domain):
+            if len(picked) >= limit:
+                return picked
+            if depth < len(by_domain[domain]):
+                picked.append(by_domain[domain][depth])
+    return picked
+
+
+#: How many held-out shards the ladder scores, spread one-per-domain by
+#: ``spread_across_sources`` before any domain gets a second (see that function's docstring for
+#: why the ORDER of the selection, not merely raising this count, is what makes truncation
+#: safe). 24 because that is the domain count this corpus actually has --
+#: ``edullm-data/HANDOFF.md:467``, "24 topic domains (adult_content ... travel_and_tourism)" --
+#: so it is the smallest N that can put every domain in front of the evaluator at least once.
+#:
+#: Raised from 4, which was sized on the wrong axis: the old comment justified 4 shards as
+#: "~2M tokens, far more than the 32 batches a rung actually consumes" -- true, but volume was
+#: never the problem, coverage was (see ``spread_across_sources``). This number changes what
+#: gets DOWNLOADED and INDEXED once at startup, not what a rung reads: each rung is still capped
+#: at ``eval_duration=Duration.steps(32)`` (:~1290 below), independent of how big the pool
+#: behind it is. The real cost this pays is the one-time ``segment_documents_into_instances``
+#: scan per shard inside ``--prepare-heldout-only``; the only measured data point is 4 shards
+#: in 5.5 s total (``run_019fd4dc``, val-split-status.md:277-278), so 24 shards should still be
+#: a startup cost of seconds, not minutes -- stated as an extrapolation, not something this
+#: change ran and timed.
+#:
+#: If val ever has fewer than 24 distinct domains, ``spread_across_sources`` just returns fewer
+#: distinct ones and some get a second shard -- nothing here needs to track the true count.
+HELDOUT_SHARDS = 24
 
 
 def _localised_heldout_paths(urls: List[str], opts) -> List[str]:
@@ -598,7 +707,12 @@ def _localised_heldout_paths(urls: List[str], opts) -> List[str]:
         if not is_url(str(url)):
             out.append(str(url))
             continue
-        dest = cache / os.path.basename(str(url))
+        # Prefixed by domain, not the bare basename: once selection spans multiple domains
+        # (spread_across_sources, above) two different domains could in principle name a shard
+        # the same way, and a basename-only cache key would let one silently shadow the other.
+        # No collision has been observed on this corpus's shard numbering, which looks globally
+        # assigned -- this is a defensive width, not a fix for something seen.
+        dest = cache / f"{_domain_of(str(url))}--{os.path.basename(str(url))}"
         if fetching:
             # Compare SIZE, not existence: a truncated download left by a killed attempt would
             # otherwise be reused, and a short shard yields wrong document boundaries rather
@@ -1228,7 +1342,21 @@ def build_config(opts, overrides: List[str]):
         # `str(source_path)`, so an s3:// path and its local copy hash to different files --
         # localising in only one of the two places would silently miss the cache and walk
         # straight back into the gzip failure.
-        heldout_paths = _localised_heldout_paths(sorted(corpus.val_paths)[:HELDOUT_SHARDS], opts)
+        #
+        # `spread_across_sources`, NOT `sorted(...)[:HELDOUT_SHARDS]` -- see that function's
+        # docstring. The REMOTE urls are what get grouped, before localisation renames them to
+        # a flat cache directory that no longer carries the domain in its path.
+        heldout_urls = spread_across_sources(corpus.val_paths, HELDOUT_SHARDS)
+        # Labels derived from the SAME urls and the SAME function as the selection grouping
+        # (`_domain_of`), before they are localised. This is the other half of the coupled fix:
+        # a selection that spans domains but keeps the single literal "heldout-val" label would
+        # merge every domain's CE back into one bucket and throw away exactly the coverage this
+        # was for. See `LossWatcher.log_metrics` below for the half that reads these labels back
+        # out -- that half has to change in the SAME commit, not a later one, or the metric key
+        # it looks for stops existing and the fallback to train CE re-inverts the ranking this
+        # was written to prevent.
+        heldout_labels = [_domain_of(url) for url in heldout_urls]
+        heldout_paths = _localised_heldout_paths(heldout_urls, opts)
         trainer_config = trainer_config.with_callback(
             "lm_eval",
             LMEvaluatorCallbackConfig(
@@ -1240,14 +1368,23 @@ def build_config(opts, overrides: List[str]):
                     # A handful of shards, not all of them. `prepare()` builds a per-shard
                     # instance index over every path with a process pool on first call, and a
                     # corpus's worth of startup would cost more than the eval it serves.
-                    # Sorted so the subset is the same across arms and seeds -- a per-cell
-                    # subset would make the rungs incomparable, which is the one thing the
-                    # ladder cannot tolerate.
+                    # `spread_across_sources` picks the same subset for the same `corpus.val_paths`
+                    # every time -- it sorts internally rather than depending on the order `urls`
+                    # arrives in -- so the subset is still identical across arms and seeds. A
+                    # per-cell subset would make the rungs incomparable, which is the one thing
+                    # the ladder cannot tolerate; spreading the selection across domains does not
+                    # reintroduce that risk, it only changes WHICH fixed subset gets picked.
                     paths=heldout_paths,
+                    # One label PER DOMAIN now, not one shared literal for every path.
                     # LMEvaluator.from_numpy_dataset raises when any path lacks a "label"
-                    # (eval/lm_evaluator.py:60-66), and the label is what its per-dataset
-                    # metric is keyed on.
-                    metadata=[{"label": "heldout-val"}] * len(heldout_paths),
+                    # (eval/lm_evaluator.py:60-66) and builds one MeanMetric PER DISTINCT LABEL
+                    # (eval/lm_evaluator.py:39,114-117), so this label list is what turns one
+                    # combined held-out number into one number per domain -- which is the entire
+                    # point of spreading the selection: a single blended average could still hide
+                    # a domain that trains badly behind others that train well. `LossWatcher`
+                    # below reads exactly these per-domain keys back out; see its module-level
+                    # `_HELDOUT_CE_LOSS_KEY_RE` for the other half of this coupling.
+                    metadata=[{"label": label} for label in heldout_labels],
                     sequence_length=opts.sequence_length,
                     # From the corpus, never pinned. The padded vocab the model is built with
                     # comes off this same object.
@@ -1295,6 +1432,35 @@ def build_config(opts, overrides: List[str]):
     return config.merge(overrides)
 
 
+#: A held-out CE-loss key looks like ``eval/lm/<domain>/CE loss`` -- one such key PER LABEL
+#: ``LMEvaluator.compute_metrics`` emits (eval/lm_evaluator.py:114-117: one
+#: ``out[f"{label}/CE loss"]`` per distinct ``metadata["label"]`` the dataset carries), re-keyed
+#: by ``EvaluatorCallback.perform_eval`` as ``f"{prefix}/{evaluator.name}/{name}"``
+#: (train/callbacks/evaluator_callback.py:171) with prefix "eval" (:116) and name "lm" hardcoded
+#: in ``LMEvaluatorCallbackConfig.build`` (:281).
+#:
+#: Before this fix every held-out path carried the single literal label "heldout-val", so there
+#: was exactly one such key and a hardcoded ``metrics.get("eval/lm/heldout-val/CE loss")`` found
+#: it. Now that the paths passed to ``NumpyPaddedFSLDatasetConfig`` above are labelled by
+#: ``_domain_of`` (one label per topic domain -- see ``spread_across_sources``), there is one key
+#: PER DOMAIN SELECTED and that single hardcoded lookup matches nothing: this regex, and the
+#: aggregation below, are the other half of that same fix, landing in the same commit. Changing
+#: the label without this is exactly how Defect B happens -- the metric key that has to agree
+#: with the label lives in a different function, so a straight port of the selection fix alone
+#: leaves this reading None and silently falling back to train CE.
+_HELDOUT_CE_LOSS_KEY_RE = re.compile(r"^eval/lm/[^/]+/CE loss$")
+
+#: Descriptive, not a literal metric key -- there no longer is one key, there are several
+#: (one per domain that had data this rung), and this is their combination. See
+#: ``LossWatcher.log_metrics`` for why the combination is an UNWEIGHTED mean of domains rather
+#: than a token-weighted mean of instances: weighting by tokens would let whichever domain
+#: happened to get the most eval batches in a 32-batch-capped rung dominate the number again,
+#: which is the same imbalance ``spread_across_sources`` exists to avoid at the selection layer.
+_HELDOUT_LOSS_SOURCE = "eval/lm/*/CE loss (unweighted mean over domains with data this rung)"
+
+_TRAIN_LOSS_KEY = "train/CE loss"
+
+
 class LossWatcher(Callback):
     """Keeps what the summary can only learn while the run is still going.
 
@@ -1308,9 +1474,17 @@ class LossWatcher(Callback):
     def __init__(self) -> None:
         self.first: Optional[float] = None
         self.last: Optional[float] = None
-        #: Which metric ``first``/``last`` hold. Reported so the summary states the quantity it
-        #: ranks on rather than leaving a reader to assume held-out CE was available.
-        self.loss_source: Optional[str] = None
+        #: Which metric ``first``/``last`` each hold, tracked SEPARATELY rather than as one
+        #: shared ``loss_source`` field. That single field was Defect C: ``first`` is set
+        #: unconditionally on whatever loss is seen on the very first call to this method --
+        #: which in practice is train CE, since it is logged every step while a held-out rung
+        #: fires only at ``fixed_steps`` -- while ``last`` is guarded below to never downgrade
+        #: away from a held-out reading once one lands. A single field can only name the more
+        #: recent of those two decisions, so once a rung fires it silently relabels `first` as
+        #: held-out CE even though the number sitting in `first` was never touched. Two fields
+        #: cannot make that mistake: each is written only at the moment its own value is written.
+        self.first_loss_source: Optional[str] = None
+        self.last_loss_source: Optional[str] = None
         self.wandb_url = ""
 
     def log_metrics(self, step: int, metrics: Dict[str, float]) -> None:
@@ -1320,41 +1494,49 @@ class LossWatcher(Callback):
                 import wandb
 
                 self.wandb_url = getattr(wandb.run, "url", "") or ""
-        # HELD-OUT FIRST, TRAIN ONLY AS A FALLBACK, AND THE KEY IS NOT THE OBVIOUS ONE.
+        # HELD-OUT FIRST, TRAIN ONLY AS A FALLBACK.
         #
         # ``summarise`` reports first_loss/last_loss and the comparison across a sweep's cells is
         # taken over exactly those records, so whatever this reads is what ranks the arms. Reading
         # train CE ranks them on the wrong quantity: a decay-to-zero schedule ends at a
         # mechanically lower TRAIN loss than a decay-to-10% one at equal quality, so an argmin over
-        # train CE can inverte the very comparison E1 exists to make. The measurement protocol
+        # train CE can invert the very comparison E1 exists to make. The measurement protocol
         # (docs/1b-leverage-audit/EXPERIMENT-PLAN.md §5 rule 1) requires held-out CE.
         #
-        # ``LMEvaluator.compute_metrics`` yields ``heldout-val/CE loss``, but that is NOT the key
-        # that arrives here. ``EvaluatorCallback.perform_eval`` re-keys every metric as
-        # ``f"{prefix}/{evaluator.name}/{name}"`` (train/callbacks/evaluator_callback.py:171) with
-        # prefix "eval" (:116) and name "lm" hardcoded in ``LMEvaluatorCallbackConfig.build``
-        # (:281). Keying on the bare label matches nothing, ``.get`` returns None, and the fallback
-        # silently takes over -- which is the original bug wearing a fix's clothes.
-        #
-        # The fallback is deliberate, not laziness: a corpus with no val split declares no
-        # evaluator, and for those runs train CE is the only loss there is. Which one was used is
-        # recorded so a reader of the summary never has to guess.
-        loss = metrics.get("eval/lm/heldout-val/CE loss")
-        if loss is not None:
-            self.loss_source = "eval/lm/heldout-val/CE loss"
+        # NaN-filtered: a domain that this rung's ``eval_duration=Duration.steps(32)`` cap never
+        # actually reached leaves its ``MeanMetric`` un-updated, and ``MeanMetric.compute()``
+        # (eval/metrics.py:80-87) returns ``0/0`` for that -- a real NaN, not a zero -- so an
+        # unfiltered mean would silently corrupt every rung where 32 batches don't cover all
+        # selected domains, which given 24 domains is most of them. Filtered out here rather than
+        # upstream because upstream (``MeanMetric``) has no way to know which of its callers can
+        # tolerate a NaN and which cannot.
+        heldout_values = [
+            value
+            for key, value in metrics.items()
+            if _HELDOUT_CE_LOSS_KEY_RE.match(key) and not math.isnan(value)
+        ]
+        loss: Optional[float]
+        source: str
+        if heldout_values:
+            loss = sum(heldout_values) / len(heldout_values)
+            source = _HELDOUT_LOSS_SOURCE
         else:
-            loss = metrics.get("train/CE loss")
+            loss = metrics.get(_TRAIN_LOSS_KEY)
             if loss is None:
                 return
-            # Do not downgrade: once a held-out number has been seen, a later train-only step
-            # must not overwrite last_loss with a different quantity.
-            if self.loss_source is None:
-                self.loss_source = "train/CE loss"
-            elif self.loss_source != "train/CE loss":
+            source = _TRAIN_LOSS_KEY
+            # Do not downgrade `last`: once a held-out reading has landed there, a later
+            # train-only step must not silently overwrite it with a different quantity. `first`
+            # carries no such guard -- it is written at most once, below, the first time this
+            # method sees ANY loss -- so this check only ever protects `last`.
+            if self.last_loss_source is not None and self.last_loss_source != _TRAIN_LOSS_KEY:
                 return
+
         if self.first is None:
             self.first = float(loss)
+            self.first_loss_source = source
         self.last = float(loss)
+        self.last_loss_source = source
 
 
 def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> None:
@@ -1395,13 +1577,20 @@ def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> 
                 "global_batch_size": getattr(opts, "global_batch_size", None),
                 "first_loss": losses.first,
                 "last_loss": losses.last,
-                # WHICH metric the two above are. A sweep's argmin is taken over these records,
+                # WHICH metric EACH of the two above is -- two fields, not one, because they can
+                # be different quantities (LossWatcher.__init__'s docstring on
+                # `first_loss_source`/`last_loss_source` explains why: `first` is whatever loss
+                # is logged first, almost always train CE since it is logged every step while a
+                # held-out rung only fires at fixed_steps; `last` is guarded to prefer held-out
+                # CE once any rung has produced one). A sweep's argmin is taken over `last_loss`,
                 # and held-out and train CE are not comparable quantities -- a decay-to-zero arm
                 # ends at a mechanically lower TRAIN loss than a decay-to-10% arm of equal
                 # quality. Emitted so a reader ranking cells can see they are comparing like with
-                # like, and so a run that silently fell back to train CE is visible in the log
-                # rather than inferred from the corpus.
-                "loss_source": losses.loss_source,
+                # like, and so a run that silently fell back to train CE -- or whose `first` and
+                # `last` are not actually the same kind of number -- is visible in the log rather
+                # than inferred from the corpus.
+                "first_loss_source": losses.first_loss_source,
+                "last_loss_source": losses.last_loss_source,
                 "seconds": seconds,
                 "peak_memory_gib": peak,
                 "checkpoint_uri": opts.save_folder,

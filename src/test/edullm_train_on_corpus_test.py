@@ -560,6 +560,156 @@ def test_the_first_and_last_loss_are_kept_and_the_ones_between_are_not():
     assert watcher.last == 6.1
 
 
+def test_first_and_last_loss_sources_can_differ_and_each_is_reported_honestly():
+    """
+    DEFECT C, REPRODUCED AND FIXED. Before this fix ``first``/``last`` shared one
+    ``loss_source`` field, set unconditionally to whatever loss was seen MOST RECENTLY --
+    so once a held-out rung fired, the shared field silently relabelled ``first`` as held-out
+    CE too, even though the number sitting in ``first`` was train CE from step 1 and had never
+    been touched again. This drives exactly that sequence -- train CE first, held-out CE later
+    -- and checks the two sources are allowed to disagree AND are each individually correct.
+    """
+    watcher = entry.LossWatcher()
+
+    # Step 1: only train CE exists yet (no rung has fired). `first` is set here.
+    watcher.log_metrics(1, {"train/CE loss": 6.9})
+    assert watcher.first == 6.9
+    assert watcher.first_loss_source == "train/CE loss"
+
+    # Step 2: a rung fires, spread across two domains. Held-out always wins over train, no
+    # guard needed on this branch -- `last` updates unconditionally.
+    watcher.log_metrics(
+        2,
+        {
+            "eval/lm/adult_content/CE loss": 2.0,
+            "eval/lm/art_and_design/CE loss": 4.0,
+            "train/CE loss": 5.5,
+        },
+    )
+    assert watcher.last == 3.0  # unweighted mean of the two domains, not the train value
+    assert watcher.last_loss_source == entry._HELDOUT_LOSS_SOURCE
+    # `first` is untouched: it was already set, and first is written at most once.
+    assert watcher.first == 6.9
+    assert watcher.first_loss_source == "train/CE loss"
+    # THE DEFECT C SCENARIO ITSELF: first and last are different QUANTITIES, and the two
+    # separate fields say so rather than one shared field claiming they match.
+    assert watcher.first_loss_source != watcher.last_loss_source
+
+    # Step 3: train-only again (this rung's window skipped, or fixed_steps has passed). Must
+    # NOT downgrade `last` back to a train reading.
+    watcher.log_metrics(3, {"train/CE loss": 5.0})
+    assert watcher.last == 3.0
+    assert watcher.last_loss_source == entry._HELDOUT_LOSS_SOURCE
+
+    # Step 4: another held-out rung. Held-out always overwrites `last` -- the guard only ever
+    # protects `last` from a train-only downgrade, never from a fresher held-out reading.
+    watcher.log_metrics(4, {"eval/lm/adult_content/CE loss": 1.0, "eval/lm/crime_and_law/CE loss": 3.0})
+    assert watcher.last == 2.0
+    assert watcher.last_loss_source == entry._HELDOUT_LOSS_SOURCE
+    assert watcher.first == 6.9  # first never moves again once set
+    assert watcher.first_loss_source == "train/CE loss"
+
+
+def test_the_watcher_means_the_domains_present_and_ignores_ones_with_no_data_this_rung():
+    """
+    NaN-FILTERED AGGREGATION, PINNED AS BEHAVIOUR NOT EXISTENCE.
+
+    ``MeanMetric.compute()`` is ``weighted_sum / weight`` (eval/metrics.py:81-89); a label the
+    32-batch-capped rung never reached leaves ``weight`` at 0, so that label's CE is a REAL NaN,
+    not a zero (``eval/lm_evaluator.py:110-121`` calls ``metric.update(0.0, 0.0)`` first, which
+    does not change that). An unfiltered ``sum(values) / len(values)`` would let one NaN domain
+    poison the whole rung's number; this pins that it does not, and that a rung where EVERY
+    selected domain came back NaN correctly falls all the way back to train CE rather than
+    reporting NaN as if it were a real held-out loss.
+    """
+    import math
+
+    some_data = entry.LossWatcher()
+    some_data.log_metrics(
+        1,
+        {
+            "eval/lm/adult_content/CE loss": 2.0,
+            "eval/lm/art_and_design/CE loss": float("nan"),
+            "eval/lm/crime_and_law/CE loss": 4.0,
+        },
+    )
+    assert some_data.last == 3.0, "mean of the two domains WITH data, the NaN one excluded"
+    assert not math.isnan(some_data.last)
+    assert some_data.last_loss_source == entry._HELDOUT_LOSS_SOURCE
+
+    no_data_this_rung = entry.LossWatcher()
+    no_data_this_rung.log_metrics(
+        1,
+        {
+            "eval/lm/adult_content/CE loss": float("nan"),
+            "eval/lm/art_and_design/CE loss": float("nan"),
+            "train/CE loss": 7.0,
+        },
+    )
+    assert no_data_this_rung.last == 7.0, "every selected domain was NaN, so fall back to train"
+    assert no_data_this_rung.last_loss_source == "train/CE loss"
+
+
+def test_the_watcher_key_matches_the_real_metric_names_the_evaluator_produces_for_the_same_labels(
+    monkeypatch, tmp_path
+):
+    """
+    THE COUPLING ITSELF, EXERCISED END TO END -- Defect B, reproduced and closed.
+
+    Defect B was two functions drifting apart: selection relabels each held-out path by its
+    topic domain (``_domain_of``, used both inside ``spread_across_sources`` and at the
+    ``NumpyPaddedFSLDatasetConfig(metadata=...)`` call site in ``build_config``), and
+    ``LossWatcher.log_metrics`` has to read the SAME domains back out of the metric names
+    ``LMEvaluator.compute_metrics`` (eval/lm_evaluator.py:114-117) and
+    ``EvaluatorCallback.perform_eval`` (train/callbacks/evaluator_callback.py:171) actually
+    produce for those labels. A test that hand-writes one metric key and feeds it to
+    ``LossWatcher`` in isolation could not catch the two drifting apart -- it would pass just as
+    happily with a stale key on both sides, which is exactly how this bug happens. This drives
+    BOTH halves from the same multi-domain fixture: the labels come out of the real
+    ``build_config``, and the metric-name format comes out of a real ``LMEvaluator`` built with
+    exactly those labels.
+    """
+    import torch
+
+    from olmo_core.eval.lm_evaluator import LMEvaluator
+
+    val = [
+        "s3://edullm-data/x/v1/tokens/all-dressed-snazzy2/adult_content/val-00033.u32le.bin",
+        "s3://edullm-data/x/v1/tokens/all-dressed-snazzy2/art_and_design/val-00212.u32le.bin",
+        "s3://edullm-data/x/v1/tokens/all-dressed-snazzy2/crime_and_law/val-00336.u32le.bin",
+    ]
+    _, config = _build_with_heldout(monkeypatch, tmp_path, val)
+    metadata = config.trainer.callbacks["lm_eval"].eval_dataset.metadata
+    assert metadata is not None
+    labels = [m["label"] for m in metadata]
+    assert set(labels) == {"adult_content", "art_and_design", "crime_and_law"}
+
+    evaluator = LMEvaluator(name="lm", batches=[], labels=labels, device=torch.device("cpu"))
+    per_domain_ce = {"adult_content": 2.0, "art_and_design": 4.0, "crime_and_law": 6.0}
+    for label, ce in per_domain_ce.items():
+        evaluator.update_metrics(
+            {"metadata": [{"label": label}], "label_mask": torch.ones(1, 4, dtype=torch.bool)},
+            torch.full((1, 4), ce, dtype=torch.float32),
+            None,
+        )
+    raw = evaluator.compute_metrics()
+    # The exact re-keying `EvaluatorCallback.perform_eval` applies
+    # (train/callbacks/evaluator_callback.py:171): f"{prefix}/{evaluator.name}/{name}", prefix
+    # "eval", evaluator.name "lm".
+    reeval_metrics = {f"eval/lm/{name}": float(value) for name, value in raw.items()}
+
+    watcher = entry.LossWatcher()
+    watcher.log_metrics(1, reeval_metrics)
+
+    assert watcher.last == pytest.approx(sum(per_domain_ce.values()) / len(per_domain_ce))
+    assert watcher.last_loss_source == entry._HELDOUT_LOSS_SOURCE
+    # The old single hardcoded key would have found nothing here and silently fallen back to
+    # train CE -- there is none in this metrics dict, so that failure mode would show up as
+    # `last` staying `None`, not as a wrong number. Asserted directly so a regression to the old
+    # single-key lookup is loud rather than a quiet drop in signal.
+    assert watcher.last is not None
+
+
 def test_the_summary_is_one_json_object_carrying_what_only_this_process_knows(capsys):
     """The platform reads this back out of the log stream, so it has to parse on its own."""
     import json
@@ -601,6 +751,46 @@ def test_a_summary_is_printed_even_when_no_step_reported_a_loss(capsys):
     printed = json.loads(capsys.readouterr().out)
     assert printed["first_loss"] is None
     assert printed["last_loss"] is None
+    # A run that never logged anything has no source for either end either -- there is nothing
+    # to have come from train CE or held-out CE, so both fields are None, not the string "None"
+    # and not the empty string.
+    assert printed["first_loss_source"] is None
+    assert printed["last_loss_source"] is None
+
+
+def test_the_summary_names_a_source_for_each_end_and_the_two_can_differ(capsys):
+    """
+    THE JSON HALF OF DEFECT C's FIX. The single ``loss_source`` field this replaces would have
+    reported one string for both ``first_loss`` and ``last_loss`` even when they were different
+    quantities (train CE at step 1, held-out CE later); a sweep reading that field to decide
+    which number is comparable across cells would have been silently misled. This drives that
+    exact disagreement through ``summarise`` and checks the printed JSON, not just the watcher's
+    attributes directly -- ``summarise`` is where a stale key name would actually bite a
+    consumer parsing the log stream.
+    """
+    import json
+
+    watcher = entry.LossWatcher()
+    watcher.log_metrics(1, {"train/CE loss": 6.9})
+    watcher.log_metrics(2, {"eval/lm/adult_content/CE loss": 2.0, "eval/lm/art_and_design/CE loss": 4.0})
+
+    entry.summarise(
+        opts=FakeOptions(),
+        config=FakeConfig(),
+        trainer=FakeTrainer([FakeParameter(1)], step=2),
+        losses=watcher,
+        seconds=1.0,
+    )
+
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["first_loss"] == 6.9
+    assert printed["first_loss_source"] == "train/CE loss"
+    assert printed["last_loss"] == 3.0
+    assert printed["last_loss_source"] == entry._HELDOUT_LOSS_SOURCE
+    assert printed["first_loss_source"] != printed["last_loss_source"]
+    # The field this replaces must actually be gone, not just supplemented -- a consumer still
+    # reading the old key name should get a loud KeyError rather than a quietly stale value.
+    assert "loss_source" not in printed
 
 
 def test_the_config_print_names_how_many_shards_rather_than_all_of_them(monkeypatch):
@@ -1655,7 +1845,7 @@ def _build_with_heldout(monkeypatch, tmp_path, val_paths, steps=200, extra_flags
     return opts, entry.build_config(opts, overrides)
 
 
-def test_every_heldout_path_reaching_the_evaluator_is_local_and_is_the_sorted_prefix(
+def test_every_heldout_path_reaching_the_evaluator_is_local_and_is_the_sorted_order(
     monkeypatch, tmp_path
 ):
     """
@@ -1670,13 +1860,22 @@ def test_every_heldout_path_reaching_the_evaluator_is_local_and_is_the_sorted_pr
     EXACTLY ``min(HELDOUT_SHARDS, len(val_paths))``, because ``prepare()`` builds a per-shard
     index for every path at startup and a whole corpus of them costs more than the eval.
 
-    THE SORTED PREFIX, because the subset must be identical across arms and seeds. A per-cell
-    subset makes the rungs incomparable, which is the one thing a ladder cannot tolerate.
+    SORTED ORDER, because the subset must be identical across arms and seeds. A per-cell subset
+    makes the rungs incomparable, which is the one thing a ladder cannot tolerate. This fixture
+    puts all six shards under ONE directory (domain "src"), which is the degenerate case of
+    ``spread_across_sources``: with only one domain present, its round-robin has nothing to
+    interleave against and collapses to a plain sort -- so this test still pins sorted order,
+    just not via the old literal ``sorted(...)[:HELDOUT_SHARDS]`` slice. The case that actually
+    exercises spreading across MULTIPLE domains is
+    ``test_spread_across_sources_interleaves_domains_instead_of_exhausting_one`` below, with the
+    naive-slice-collapses positive control in
+    ``test_the_naive_sorted_prefix_this_replaces_would_have_collapsed_to_one_domain``.
     """
     from olmo_core.io import is_url
 
-    # Deliberately UNSORTED, and more shards than the ladder wants, so both the truncation and
-    # the ordering are observable rather than accidental.
+    # Deliberately UNSORTED, so the ordering is observable rather than accidental. Only six
+    # shards, all under the same directory (domain "src"), so every one of them is still fewer
+    # than the new HELDOUT_SHARDS=24 and nothing here gets truncated.
     val = [
         "s3://edullm-data/x/v1/tokens/src/val-00004.u32le.bin",
         "s3://edullm-data/x/v1/tokens/src/val-00000.u32le.bin",
@@ -1690,17 +1889,19 @@ def test_every_heldout_path_reaching_the_evaluator_is_local_and_is_the_sorted_pr
     eval_dataset = config.trainer.callbacks["lm_eval"].eval_dataset
     paths = eval_dataset.paths
 
-    assert entry.HELDOUT_SHARDS == 4
-    assert len(paths) == min(entry.HELDOUT_SHARDS, len(val)) == 4
+    assert entry.HELDOUT_SHARDS == 24
+    assert len(paths) == min(entry.HELDOUT_SHARDS, len(val)) == 6
     for path in paths:
         assert not is_url(path), f"held-out paths must be local, got {path}"
-    # The sorted prefix of the six, in order: 00000, 00001, 00002, 00003. Basenames rather than
-    # full paths, because the directory is the run's work dir.
+    # All six, sorted -- the single-domain degenerate case of spread_across_sources. Basenames
+    # rather than full paths, because the directory is the run's work dir.
     assert [Path(p).name for p in paths] == [
         "val-00000.u32le.bin",
         "val-00001.u32le.bin",
         "val-00002.u32le.bin",
         "val-00003.u32le.bin",
+        "val-00004.u32le.bin",
+        "val-00005.u32le.bin",
     ]
     # And they landed under the work dir both invocations share, not somewhere per-process.
     for path in paths:
@@ -1735,6 +1936,13 @@ def test_the_eval_dataset_is_padded_and_carries_a_label_for_every_path(monkeypat
     raises on any path whose metadata lacks a ``"label"`` key (eval/lm_evaluator.py:60-66).
     The zip means a SHORT metadata list is worse than a missing one: it silently drops the
     trailing paths instead of raising, so the count is asserted, not just the keys.
+
+    The label is the shard's TOPIC DOMAIN now (``_domain_of``), not the single literal
+    "heldout-val" every path used to carry -- this fixture's six shards are all under one
+    directory (domain "src"), so they still collapse to one label, which is exactly the
+    single-domain case ``_domain_of``'s fallback comment describes. A fixture that spans
+    multiple domains and gets multiple distinct labels back is
+    ``test_selection_labels_span_every_domain_present_up_to_the_shard_limit`` below.
     """
     from olmo_core.data import NumpyPaddedFSLDatasetConfig
 
@@ -1748,9 +1956,240 @@ def test_the_eval_dataset_is_padded_and_carries_a_label_for_every_path(monkeypat
     metadata = eval_dataset.metadata
     paths = eval_dataset.paths
     assert metadata is not None and paths is not None
-    assert len(metadata) == len(paths) == 4
+    assert len(metadata) == len(paths) == 6
     assert all("label" in m for m in metadata)
-    assert {m["label"] for m in metadata} == {"heldout-val"}
+    assert {m["label"] for m in metadata} == {"src"}
+
+
+def _domain_labelled(domain: str, shard: str) -> str:
+    return f"s3://edullm-data/x/v1/tokens/all-dressed-snazzy2/{domain}/{shard}.u32le.bin"
+
+
+def test_the_naive_sorted_prefix_this_replaces_would_have_collapsed_to_one_domain():
+    """
+    THE POSITIVE CONTROL: Defect A, reproduced on purpose, so the fix below has something to be
+    better than.
+
+    ``sorted(urls)[:N]`` sorts by the FULL url, so shards group by directory before they group
+    by shard number: every path under one domain's directory sorts before every path under the
+    next. Constructed here so ``adult_content`` (the real corpus's alphabetically-first domain,
+    ``edullm-data/HANDOFF.md:467``) has MORE shards than the old ``HELDOUT_SHARDS = 4`` -- the
+    exact condition ``spread_across_sources``'s docstring says the real corpus happened NOT to
+    hit, and that made the naive slice look safer than it is.
+    """
+    urls = (
+        [_domain_labelled("adult_content", f"val-{i:05d}") for i in range(6)]
+        + [_domain_labelled("art_and_design", "val-00212")]
+        + [_domain_labelled("crime_and_law", "val-00336")]
+    )
+    naive = sorted(urls)[:4]
+    assert {entry._domain_of(u) for u in naive} == {"adult_content"}, (
+        "the failure this replaces: four shards picked, one domain represented"
+    )
+
+
+def test_spread_across_sources_interleaves_domains_instead_of_exhausting_one():
+    """
+    THE FIX, ON THE SAME FIXTURE AS THE POSITIVE CONTROL ABOVE.
+
+    Same six ``adult_content`` + one ``art_and_design`` + one ``crime_and_law`` urls, same
+    limit of 4, run through ``spread_across_sources`` instead of a plain sort-and-slice. One
+    shard from every domain before a second shard from any of them, so a limit smaller than the
+    domain count still returns THAT MANY DISTINCT DOMAINS rather than a bigger sample of one.
+    """
+    urls = (
+        [_domain_labelled("adult_content", f"val-{i:05d}") for i in range(6)]
+        + [_domain_labelled("art_and_design", "val-00212")]
+        + [_domain_labelled("crime_and_law", "val-00336")]
+    )
+    picked = entry.spread_across_sources(urls, 4)
+    assert len(picked) == 4
+    domains = [entry._domain_of(u) for u in picked]
+    assert set(domains) == {"adult_content", "art_and_design", "crime_and_law"}, (
+        "all three domains must be represented before adult_content gets a second shard"
+    )
+    # adult_content is the only domain with more than one shard, so with three domains and a
+    # limit of four exactly one of them gets a second pick, and round-robin order puts it last.
+    assert domains.count("adult_content") == 2
+    assert domains.count("art_and_design") == 1
+    assert domains.count("crime_and_law") == 1
+
+
+def test_spread_across_sources_is_deterministic_regardless_of_input_order():
+    """
+    The ladder compares 18 E1 cells against each other; a selection that depended on
+    ``corpus.val_paths``'s manifest order rather than its CONTENT would make the rungs
+    incomparable across arms that happened to resolve their manifest differently.
+    """
+    urls = (
+        [_domain_labelled("adult_content", f"val-{i:05d}") for i in range(3)]
+        + [_domain_labelled("art_and_design", f"val-{i:05d}") for i in range(3)]
+        + [_domain_labelled("crime_and_law", f"val-{i:05d}") for i in range(3)]
+    )
+    forward = entry.spread_across_sources(urls, 5)
+    backward = entry.spread_across_sources(list(reversed(urls)), 5)
+    shuffled = entry.spread_across_sources(
+        [urls[i] for i in (4, 0, 8, 2, 6, 1, 7, 3, 5)], 5
+    )
+    assert forward == backward == shuffled
+
+
+def test_spread_across_sources_returns_everything_when_asked_for_more_than_exists():
+    urls = [
+        _domain_labelled("adult_content", "val-00000"),
+        _domain_labelled("art_and_design", "val-00212"),
+    ]
+    assert entry.spread_across_sources(urls, 100) == sorted(urls)
+
+
+def test_spread_across_sources_on_a_single_directory_corpus_degenerates_to_a_plain_sort():
+    """
+    ``_domain_of`` falls back to the literal ``"heldout-val"`` for a path with no directory
+    structure to read a domain from, so a flat corpus -- one directory, no topic split -- has
+    exactly one group and this function must behave exactly as the old
+    ``sorted(urls)[:limit]`` did for it. No corpus this repo trains on is actually this flat
+    (edullm-data/HANDOFF.md:467), but the entry point does not import that fact, so the function
+    must degrade safely rather than assume it.
+    """
+    urls = [f"val-{i:05d}.u32le.bin" for i in reversed(range(5))]
+    assert entry.spread_across_sources(urls, 3) == sorted(urls)[:3]
+
+
+def test_selection_labels_span_every_domain_present_up_to_the_shard_limit(monkeypatch, tmp_path):
+    """
+    THE INTEGRATION VERSION OF THE TWO UNIT TESTS ABOVE: run through ``build_config`` itself,
+    not just ``spread_across_sources`` in isolation, so a mistake in HOW ``build_config`` calls
+    it (wrong argument order, deriving labels from the localised path instead of the remote url,
+    calling it on the wrong list) would show up here even if the function itself is correct.
+    """
+    val = (
+        [_domain_labelled("adult_content", f"val-{i:05d}") for i in range(3)]
+        + [_domain_labelled("art_and_design", "val-00212")]
+        + [_domain_labelled("crime_and_law", "val-00336")]
+    )
+    _, config = _build_with_heldout(monkeypatch, tmp_path, val)
+    eval_dataset = config.trainer.callbacks["lm_eval"].eval_dataset
+    metadata = eval_dataset.metadata
+    assert metadata is not None
+    labels = [m["label"] for m in metadata]
+    # HELDOUT_SHARDS=24 exceeds the 5 shards this fixture declares, so every shard is kept and
+    # every one of its three domains must be labelled -- collapsing to fewer would mean the
+    # labels were derived from something other than the per-url domain (e.g. a single shared
+    # literal, which is the exact bug this whole fix removes).
+    assert len(labels) == 5
+    assert set(labels) == {"adult_content", "art_and_design", "crime_and_law"}
+    assert labels.count("adult_content") == 3
+
+
+def _build_tiny_padded_dataset(tmp_path: Path, domains: List[str]):
+    """One tiny one-document shard per entry in ``domains``, each carrying that domain as its
+    ``label`` metadata -- the exact ``NumpyPaddedFSLDataset``/metadata shape
+    ``LMEvaluator.from_numpy_dataset`` builds its data loader from in production.
+    """
+    import numpy as np
+
+    from olmo_core.data import NumpyPaddedFSLDataset
+
+    paths = []
+    for i, _domain in enumerate(domains):
+        data = [10 + i, 11 + i, 0]  # one short document, ending in eos_token_id=0
+        path = tmp_path / f"shard-{i}.npy"
+        mmap = np.memmap(path, mode="w+", dtype=np.uint16, shape=(len(data),))
+        mmap[:] = data
+        mmap.flush()
+        paths.append(path)
+
+    ds = NumpyPaddedFSLDataset(
+        *paths,
+        sequence_length=8,
+        pad_token_id=0,
+        eos_token_id=0,
+        vocab_size=32_000,
+        metadata=[{"label": domain} for domain in domains],
+    )
+    ds.prepare()
+    return ds
+
+
+def _global_read_order(ds, tmp_path: Path):
+    """The exact call sequence ``Evaluator.__iter__`` makes for a deterministic evaluator
+    (eval/evaluator.py): ``reshuffle(epoch=1, in_memory=True)`` then read the global indices --
+    seed 0 is ``LMEvaluator.from_numpy_dataset``'s default, never overridden in production.
+    """
+    from olmo_core.data import DataCollator, NumpyFSLDataLoader
+
+    loader = NumpyFSLDataLoader(
+        ds,
+        global_batch_size=ds.sequence_length,
+        collator=DataCollator(pad_token_id=0),
+        work_dir=tmp_path,
+        seed=0,
+        dp_world_size=1,
+        dp_rank=0,
+        fs_local_rank=0,
+    )
+    loader.reshuffle(epoch=1, in_memory=True)
+    return loader.get_global_indices()
+
+
+def test_the_first_instances_in_read_order_span_multiple_domains_by_pigeonhole(tmp_path):
+    """
+    THE READ-ORDER REQUIREMENT ITSELF, DRIVEN THROUGH THE REAL SHUFFLE RATHER THAN ASSERTED
+    AGAINST A KNOWN PERMUTATION.
+
+    ``Evaluator.__iter__`` (eval/evaluator.py) calls ``self.batches.reset()`` then, for a
+    deterministic evaluator (``LMEvaluatorCallbackConfig.deterministic`` defaults ``True``),
+    ``self.batches.reshuffle(epoch=1, in_memory=True)`` -- a GLOBAL shuffle over every instance
+    the padded dataset produces, not a walk in path order. ``NumpyFSLDataLoader._build_global_indices``
+    (data/data_loader.py:667-679) is ``rng = get_rng(seed + epoch)`` over
+    ``np.arange(len(dataset))``, so what exact permutation comes out depends on ``get_rng``'s
+    internals -- which this test must NOT need to know, because nothing computational runs on
+    this laptop to go check what a specific seed produces.
+
+    Instead this uses a PIGEONHOLE argument: 3 domains, 2 shards (= 2 padded instances, one doc
+    per shard) each, 6 instances total. No domain has 3 or more instances, so ANY 3-element
+    prefix of ANY permutation of the 6 indices must draw from at least 2 domains. This holds for
+    every possible shuffle output, which is what makes it safe to assert without executing the
+    RNG to see what it actually produced.
+    """
+    domains = [
+        "adult_content",
+        "adult_content",
+        "art_and_design",
+        "art_and_design",
+        "crime_and_law",
+        "crime_and_law",
+    ]
+    ds = _build_tiny_padded_dataset(tmp_path, domains)
+    assert len(ds) == 6, "one padded instance per shard, since each shard is one document"
+
+    global_indices = _global_read_order(ds, tmp_path)
+    assert sorted(int(i) for i in global_indices) == list(range(6)), "a shuffle, not a subset"
+
+    prefix_labels = [ds[int(idx)]["metadata"]["label"] for idx in global_indices[:3]]
+    assert len(set(prefix_labels)) >= 2, (
+        "3 instances drawn from 3 domains of 2 each cannot all share one label, got "
+        f"{prefix_labels}"
+    )
+
+
+def test_the_pigeonhole_check_above_would_fail_on_a_fixture_that_has_only_one_domain(tmp_path):
+    """
+    FALSIFIABILITY OF THE CHECK ABOVE, PINNED DIRECTLY -- the same real dataset/loader/shuffle
+    machinery, the same seed and epoch, the same prefix length, with the ONE thing that matters
+    changed: every shard now carries the same domain. If this test's ``>= 2 distinct domains``
+    style of assertion could pass no matter what the fixture contained -- if it were vacuously
+    true -- it would be worthless as a regression check on ``spread_across_sources``. Driving it
+    through this negative fixture and getting exactly one domain back (by construction, for
+    every possible permutation) is what proves the positive test above is actually discriminating
+    and not just asserting something that was always going to be true.
+    """
+    domains = ["adult_content"] * 6
+    ds = _build_tiny_padded_dataset(tmp_path, domains)
+
+    global_indices = _global_read_order(ds, tmp_path)
+    prefix_labels = [ds[int(idx)]["metadata"]["label"] for idx in global_indices[:3]]
+    assert len(set(prefix_labels)) == 1, "single-domain fixture: every prefix is one domain"
 
 
 def test_the_eval_dataset_reads_the_corpus_width_and_vocab_rather_than_a_default(
@@ -1890,9 +2329,9 @@ def test_every_field_on_the_eval_callback_is_pinned_including_what_a_rung_costs(
     asserted, and it is the field whose default is expensive: ``LMEvaluatorCallbackConfig``
     defaults it to ``Duration.epochs(1)``
     (train/callbacks/evaluator_callback.py:227), which scores every shard IN FULL at every
-    rung. With a six-rung ladder over four shards that is the eval costing more than the
-    training it measures, and it fails no test and raises nothing -- the run is just slower and
-    more expensive, which is invisible in the metrics.
+    rung. With a six-rung ladder over the now-24 held-out shards that is the eval costing far
+    more than the training it measures, and it fails no test and raises nothing -- the run is
+    just slower and more expensive, which is invisible in the metrics.
 
     Asserted as UNIT AND VALUE, not merely non-None. ``Duration`` is a dataclass of
     ``(value, unit)`` (train/common.py:36-45), so ``Duration.epochs(32)`` and
