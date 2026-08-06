@@ -124,10 +124,18 @@ AUTOMATIC_BELOW_COST_USD = Decimal("500")
 #
 # THEREFORE THIS LANE CARRIES ITS OWN CEILING, BECAUSE THE PLATFORM NO LONGER DOES.
 # A gate at or above this figure must be flagged for an explicit human decision even though
-# the platform would let it through unattended. $10 is chosen so that G1-G4 (the ladder that
-# is supposed to run first, unattended, and catch the cheap failures) sit below it and every
-# A100 gate sits above it. This is not a platform constant and must not be confused with one.
-LANE_ATTENTION_CEILING_USD = Decimal("10")
+# the platform would let it through unattended.
+#
+# $25 IS THE USER'S OWN RULING (D-015), NOT A NUMBER THIS FILE CHOSE. It was $10 here, picked
+# so that G1-G4 fell below it and every A100 gate above it. That arithmetic broke the moment
+# D-030 removed the attempt pins: at the inherited 2 attempts G4 is $11.34, so a $10 ceiling
+# would have demanded a human for the last cheap gate in the ladder. $25 is what the user set
+# after the v5 finding was escalated -- ping above it, G1-G4 proceed silently -- and it still
+# separates the ladder correctly: G4 at $11.34 is unattended, G5 at $43.92 is not.
+#
+# Anchoring on the ruling rather than on a number that happens to sort the current table is
+# the point. This is not a platform constant and must not be confused with one.
+LANE_ATTENTION_CEILING_USD = Decimal("25")
 
 # The largest worst case that still self-releases, measured rather than derived: 22.7h x 1 on
 # gpu-8xa100 compiles AUTOMATIC at $498.44, and 23h compiles ROUTINE at $505.02. So the whole
@@ -147,6 +155,22 @@ CONTRACTED_WORKLOADS = frozenset({"olmo-core-train", "edullm-alt-cl-train",
 
 # Declared bounds per workload, from config/workload-catalog.yaml. A gate that does not
 # override inherits these, and the worst-case cost is computed from them.
+#
+# THE ATTEMPT COUNT IS NOT OURS TO LOWER, AND LOWERING IT COST A LIVE REJECTION (D-030).
+# `olmo-core-train` declares `maximum_attempts: 2` beside
+# `checkpoint.resume_required: true`. G2 pinned `maximum_attempts=1` to halve its ceiling;
+# the deployed validator refused the submission outright (AdmissionRejected) and
+# reclassified it routine, because pinning one attempt contradicts a contract whose entire
+# purpose is that a retry resumes. Nothing reached Batch, so it cost $0 -- but only because
+# the refusal happened to be free.
+#
+# `compile_submission.py` DOES NOT REPRODUCE THIS, IN EITHER DIRECTION. Measured 2026-08-06
+# on the same G2 inputs: the pinned form compiles exit 0 AND classifies AUTOMATIC at $1.01;
+# the inherited form compiles exit 0 and classifies AUTOMATIC at $2.01. Offline agreed with
+# the wrong answer and even priced it, which makes this worse than `no_execution_target` --
+# that one at least has a documented mitigation. `check_attempts_are_not_pinned_below` reads
+# these numbers out of the catalog at runtime rather than trusting this table, on the same
+# reasoning as `verify_policy`.
 WORKLOAD_BOUNDS: dict[str, tuple[Decimal, int]] = {
     # name: (maximum_runtime_hours, maximum_attempts)
     "olmo-core-check": (Decimal("1"), 1),
@@ -361,15 +385,24 @@ def ladder() -> list[Gate]:
             compute_profile="gpu-1xa10g",
             experiment="maple-g2-fwdbwd",
             dataset_release="olmo-150b-dolma2-v1",
-            program_args=["--model-factory", FACTORY_WRAPPERS["R0"], "--steps", "20",
+            program_args=["--model-factory", FACTORY_WRAPPERS["R0"], "--steps", "60",
                           "--save-interval", "20"],
             max_runtime_hours=Decimal("1"),
-            # ONE ATTEMPT, DELIBERATELY, ON A CONTRACTED WORKLOAD. The contract offers two
-            # and a second attempt on a twenty-step check buys nothing except a doubled
-            # ceiling: $1.01 against $2.01. Retries fire only on `Host EC2*` anyway, so the
-            # failures this gate is looking for -- a NaN, an exit 72, an OOM -- get no
-            # second attempt whatever this says.
-            max_attempts=1,
+            # ATTEMPTS INHERITED, NOT PINNED, AND THE PIN THAT WAS HERE COST A LIVE
+            # REJECTION. This read `max_attempts=1` with a comment arguing a second attempt
+            # on a short check buys nothing but a doubled ceiling. That reasoning was about
+            # cost and ignored the contract: `olmo-core-train` declares
+            # `checkpoint.resume_required: true` with `maximum_attempts: 2`, and pinning 1
+            # contradicts a contract whose entire purpose is that a retry resumes. The
+            # deployed validator refused it -- AdmissionRejected, reclassified routine,
+            # nothing reached Batch. See D-030 and check_attempts_are_not_pinned_below.
+            #
+            # `compile_submission.py` DOES NOT REPRODUCE THIS. Measured 2026-08-06: both the
+            # pinned and inherited forms compile exit 0 AND both classify AUTOMATIC offline.
+            # So this is a second, distinct hole in G0 alongside no_execution_target -- and a
+            # worse one, because the offline tool actively agreed with the wrong answer.
+            # 60 steps rather than 20: L5's bands only evaluate after a 50-step warmup, so a
+            # 20-step gate would have skipped every routing assertion while reporting green.
             needs_checkpoint_dir=True,
             notes=(
                 "olmo-core-train is now the ONLY training workload, so this single-GPU "
@@ -397,12 +430,24 @@ def ladder() -> list[Gate]:
             program_args=["--model-factory", FACTORY_WRAPPERS["R0"], "--steps", "120",
                           "--save-interval", "10"],
             max_runtime_hours=Decimal("1"),
-            # TWO ATTEMPTS HERE AND ONLY HERE, BECAUSE THE SECOND ATTEMPT IS THE TEST. The
-            # torn-directory failure only appears on a resume: attempt 1 loses its host
-            # mid-write, attempt 2 resumes from the last good step, trains back to the torn
-            # one, and dies FileExistsError in Checkpointer._prepare_dir. One attempt cannot
-            # observe that, so it is worth the doubled $2.01 ceiling.
-            max_attempts=2,
+            # ATTEMPTS INHERITED (2), WHICH IS WHAT THIS GATE ALREADY WANTED. It was pinned
+            # to 2, matching the declared value, so this gate was never at risk of the D-030
+            # rejection -- but the pin is removed anyway so that the catalog stays the single
+            # source of the number. If the profile ever moves to 3, a pin here would silently
+            # become a downgrade and the validator would refuse it.
+            #
+            # G3 IS STILL PARTIAL, AND THE INHERITED CONTRACT DOES NOT CHANGE THAT. Two
+            # attempts were always available here; the constraint was never the attempt
+            # count. It is `RETRY_ONLY_WHAT_A_RETRY_FIXES` in the platform's execution.py:753,
+            # which sends Batch an explicit `EvaluateOnExit` list on EVERY submission:
+            #   {"OnStatusReason": "Host EC2*", "Action": "RETRY"}
+            #   {"OnReason": "OutOfMemoryError*", "Action": "EXIT"}
+            #   {"OnExitCode": "*", "Action": "EXIT"}      <- matches everything, incl. 1
+            # Batch stops at the first match, so a torn-write death by traceback or non-zero
+            # exit is EXIT, not RETRY. Only a lost host retries, and nothing we can put in a
+            # command asks for one. So the resume path is reachable only if we get unlucky in
+            # the right way, which is not a test. Report partial, and do not let the inherited
+            # 2 be read as having closed this.
             needs_checkpoint_dir=True,
             provokes_failure=True,
             notes=(
@@ -429,10 +474,12 @@ def ladder() -> list[Gate]:
             compute_profile="gpu-4xa10g",
             experiment="maple-g4-distributed",
             dataset_release="olmo-150b-dolma2-v1",
-            program_args=["--model-factory", FACTORY_WRAPPERS["R0"], "--steps", "40",
+            program_args=["--model-factory", FACTORY_WRAPPERS["R0"], "--steps", "60",
                           "--save-interval", "20"],
             max_runtime_hours=Decimal("1"),
-            max_attempts=1,
+            # Attempts inherited (2) per D-030. 60 steps rather than 40 so L5's routing bands,
+            # which only evaluate after a 50-step warmup, actually get evaluated -- a 40-step
+            # gate would have skipped every one of them and still reported green.
             needs_checkpoint_dir=True,
             notes=(
                 "THE ALL-REDUCE ASSERTION MUST BE A MAGNITUDE, NOT AN EXISTENCE CHECK. A "
@@ -459,7 +506,8 @@ def ladder() -> list[Gate]:
             program_args=["--model-factory", FACTORY_WRAPPERS["R3"], "--steps", "200",
                           "--save-interval", "100"] + RANK_MICROBATCH + CHUNKED_CE,
             max_runtime_hours=Decimal("1"),
-            max_attempts=1,
+            # Attempts inherited (2) per D-030, which DOUBLES this gate's ceiling from $21.96
+            # to $43.92. That is the honest number and it was understated before.
             needs_checkpoint_dir=True,
             notes=(
                 "$21.96/hr crosses EXCEPTION_RATE_CEILING_USD_PER_HOUR = 20, so this needs "
@@ -484,7 +532,7 @@ def ladder() -> list[Gate]:
             program_args=["--model-factory", FACTORY_WRAPPERS["R3"], "--steps", "500",
                           "--save-interval", "250"] + RANK_MICROBATCH + CHUNKED_CE,
             max_runtime_hours=Decimal("4"),
-            max_attempts=1,
+            # Attempts inherited (2) per D-030: ceiling doubles $87.83 -> $175.66 per arm.
             needs_checkpoint_dir=True,
             notes=(
                 "TWO SUBMISSIONS, NOT ONE, AND NOT A FAN-OUT. A fan-out is never AUTOMATIC "
@@ -509,7 +557,7 @@ def ladder() -> list[Gate]:
             program_args=["--model-factory", FACTORY_WRAPPERS["R1"], "--steps", "300",
                           "--save-interval", "150"] + RANK_MICROBATCH + CHUNKED_CE,
             max_runtime_hours=Decimal("4"),
-            max_attempts=1,
+            # Attempts inherited (2) per D-030: ceiling doubles $87.83 -> $175.66 per arm.
             needs_checkpoint_dir=True,
             notes=(
                 "THREE SEPARATE SUBMISSIONS, one per rung, because the rung is in the "
@@ -760,6 +808,110 @@ def check_g3_provokes(gates: list[Gate]) -> str:
     return f"G3 forces {writes} checkpoint writes over 2 attempts, past the 4th-save prune"
 
 
+def _catalog_workloads(platform: Path) -> dict[str, tuple[Decimal, int, bool]]:
+    """`{name: (hours, attempts, has_checkpoint_contract)}` read out of the live catalog.
+
+    A deliberately small hand parse rather than a YAML dependency, because this file must run
+    on a laptop with no venv. It reads only the four keys it needs and raises on anything it
+    cannot account for, so a catalog restructure is a loud failure rather than a silent
+    default.
+    """
+    path = platform / "config" / "workload-catalog.yaml"
+    if not path.exists():
+        raise CheckFailed(f"cannot read {path}")
+    out: dict[str, tuple[Decimal, int, bool]] = {}
+    name: str | None = None
+    hours: Decimal | None = None
+    attempts: int | None = None
+    contract = False
+    in_workloads = False
+
+    def flush() -> None:
+        if name is not None and hours is not None and attempts is not None:
+            out[name] = (hours, attempts, contract)
+
+    for raw in path.read_text().splitlines():
+        if raw.startswith("workloads:"):
+            in_workloads = True
+            continue
+        if not in_workloads or raw.strip().startswith("#"):
+            continue
+        m = re.match(r"^  - name: (\S+)", raw)
+        if m:
+            flush()
+            name, hours, attempts, contract = m.group(1), None, None, False
+            continue
+        if re.match(r"^    maximum_runtime_hours:", raw):
+            hours = Decimal(raw.split(":", 1)[1].strip().strip('"'))
+        elif re.match(r"^    maximum_attempts:", raw):
+            attempts = int(raw.split(":", 1)[1].strip())
+        elif re.match(r"^    checkpoint:\s*$", raw):
+            contract = True
+        elif re.match(r"^    checkpoint:\s*null\s*$", raw):
+            contract = False
+    flush()
+    if not out:
+        raise CheckFailed(f"parsed no workloads out of {path}; the catalog shape changed")
+    return out
+
+
+def check_attempts_are_not_pinned_below(gates: list[Gate], platform: Path) -> str:
+    """D-030. PINNING ATTEMPTS BELOW A resume_required CONTRACT IS REFUSED BY THE DEPLOYED
+    VALIDATOR AND NOT BY THE OFFLINE COMPILER.
+
+    G2 pinned `maximum_attempts=1` on `olmo-core-train`, which declares 2 beside
+    `checkpoint.resume_required: true`. Live it was reclassified routine and refused outright
+    (AdmissionRejected); nothing reached Batch. Offline, BOTH the pinned and inherited forms
+    compile exit 0 and BOTH classify AUTOMATIC, so `compile_submission.py` is no help here at
+    all -- it agreed with the wrong answer and priced it.
+
+    Reads the catalog at runtime rather than trusting `WORKLOAD_BOUNDS`, on the same reasoning
+    as `verify_policy`: a copied number is what made the v4 mistake pass its own selfcheck.
+    The rule is one-directional -- pinning ABOVE the declared count is not blocked here,
+    because that raises the ceiling rather than contradicting the contract, and the cost check
+    is what should object to it.
+    """
+    catalog = _catalog_workloads(platform)
+    for g in gates:
+        declared = catalog.get(g.workload_profile)
+        _require(
+            declared is not None,
+            f"{g.gate_id} names workload {g.workload_profile!r}, which is not in the live "
+            "catalog. An unregistered workload is refused while compiling.",
+        )
+        assert declared is not None
+        hours, attempts, contract = declared
+        # Hold the copied table honest too, since cost is derived from it.
+        _require(
+            WORKLOAD_BOUNDS.get(g.workload_profile) == (hours, attempts),
+            f"WORKLOAD_BOUNDS has {WORKLOAD_BOUNDS.get(g.workload_profile)} for "
+            f"{g.workload_profile!r}, the catalog says {(hours, attempts)}. Every worst-case "
+            "cost in this file is derived from that table, so a drift misprices the ladder.",
+        )
+        _require(
+            contract == (g.workload_profile in CONTRACTED_WORKLOADS),
+            f"{g.gate_id}: catalog checkpoint contract={contract} but CONTRACTED_WORKLOADS "
+            f"says {g.workload_profile in CONTRACTED_WORKLOADS}.",
+        )
+        if g.max_attempts is None:
+            continue
+        if contract:
+            _require(
+                g.max_attempts >= attempts,
+                f"{g.gate_id} pins maximum_attempts={g.max_attempts} on "
+                f"{g.workload_profile!r}, which declares {attempts} beside a "
+                "resume_required checkpoint contract. The DEPLOYED VALIDATOR refuses this "
+                "(AdmissionRejected) and reclassifies the run routine. The offline compiler "
+                "does NOT catch it -- it compiles exit 0 and classifies automatic either "
+                "way. Remove the pin and let it inherit.",
+            )
+    pinned = [g.gate_id for g in gates if g.max_attempts is not None]
+    return (
+        f"no gate pins attempts below its contract (catalog read live; pinned gates: "
+        f"{pinned or 'none'})"
+    )
+
+
 def check_microbatch_is_pinned(gates: list[Gate]) -> str:
     """THE OOM CLASS NOTHING UPSTREAM OF THE GPU CAN SEE.
 
@@ -885,6 +1037,14 @@ def selfcheck(platform: Path) -> int:
         failures.append(("verify_policy", str(exc)))
         print(f"FAIL verify_policy: {exc}")
         print("      -> every approval_class printed below is UNRELIABLE until this passes.")
+    # Also reads the live catalog rather than a copied table, so it sits with verify_policy
+    # rather than in CHECKS, which take only the gates.
+    try:
+        print(f"PASS check_attempts_are_not_pinned_below: "
+              f"{check_attempts_are_not_pinned_below(gates, platform)}")
+    except CheckFailed as exc:
+        failures.append(("check_attempts_are_not_pinned_below", str(exc)))
+        print(f"FAIL check_attempts_are_not_pinned_below: {exc}")
     for check in CHECKS:
         try:
             print(f"PASS {check.__name__}: {check(gates)}")
