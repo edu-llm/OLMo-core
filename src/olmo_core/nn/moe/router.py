@@ -224,11 +224,29 @@ class MoERouter(nn.Module):
         self._score_bias_batch_size_per_expert: Optional[_HiddenTensor] = None
         self._load_balancing_loss: Optional[_HiddenTensor] = None
         self._z_loss: Optional[_HiddenTensor] = None
+        # Sum of per-token gate mass -- the row-sum of the post-normalisation expert weights --
+        # accumulated over the logging interval, so the metric reports a mean over the interval
+        # rather than whatever the last micro-batch happened to be.  Hidden from torch for the
+        # same reason as the histogram above: FSDP must not manage it, and a BufferCache does
+        # not survive `torch.compile()` when the value is mutated in place.
+        self._gate_mass_sum = hide_from_torch(torch.zeros([], device=init_device))
+        # The divisor is a PLAIN PYTHON INT, not a tensor, and deliberately so.  It counts
+        # tokens, which is a function of tensor SHAPES and therefore already known on the host
+        # -- so keeping it here costs nothing, whereas reading a device-side counter to decide
+        # whether the metric exists would force a host-device sync inside the training step.
+        # The trainer runs the step under `set_sync_debug_mode("warn")`, so that sync would be
+        # both a slowdown and a warning on every step.  `num_accumulated_micro_batches` above
+        # is a plain int for the same reason.
+        self._gate_mass_tokens: int = 0
 
     def reset_parameters(self):
         self._batch_size_per_expert = hide_from_torch(
             torch.zeros(self.num_experts, device=self.device)
         )
+        # Re-created on the real device alongside the histogram. Built on `init_device` in
+        # `__init__`, which is "meta" for an FSDP build, and a meta tensor accumulates nothing.
+        self._gate_mass_sum = hide_from_torch(torch.zeros([], device=self.device))
+        self._gate_mass_tokens = 0
 
         if self.bias_gamma is not None:
             assert self.score_bias is not None
@@ -278,6 +296,22 @@ class MoERouter(nn.Module):
     @batch_size_per_expert.setter
     def batch_size_per_expert(self, value: torch.Tensor):
         self._batch_size_per_expert = hide_from_torch(value)
+
+    @property
+    def gate_mass_mean(self) -> Optional[torch.Tensor]:
+        """
+        Mean gate mass -- the row-sum of the post-normalisation expert weights, averaged over
+        every token routed since the last :meth:`reset_metrics()`.
+
+        ``None`` before any token has been routed, so that a pre-training zero is not reported
+        as a measured collapse. Under ``normalize_expert_weights=1.0`` this is 1.0 by
+        construction; the sibling track measured **0.161** with the flag at its stock ``None``.
+        """
+        if self._gate_mass_tokens <= 0:
+            return None
+        if self._gate_mass_sum.device != self.device:
+            self._gate_mass_sum = self._gate_mass_sum.to(self.device)
+        return unhide_from_torch(self._gate_mass_sum) / self._gate_mass_tokens
 
     @property
     def load_balancing_loss(self) -> Optional[torch.Tensor]:
@@ -391,62 +425,108 @@ class MoERouter(nn.Module):
             ReduceType.max,
         )
 
-        # THE THREE BELOW EXIST BECAUSE `load imbalance` CANNOT BE COMPARED BETWEEN TWO
-        # CONFIGURATIONS WITH DIFFERENT EXPERT COUNTS, WHICH IS WHAT A GRANULARITY ABLATION
-        # DOES. max/mean is the maximum of `num_experts` positively-skewed counts, so its
-        # expectation rises with `num_experts` even when routing is perfectly uniform: a
-        # multinomial draw of 4,096 assignments gives 1.06 at E=8/k=2 and 1.19 at E=32/k=8.
-        # Reducing it with ReduceType.max across data-parallel ranks skews it further, since
-        # each rank contributes its own local maximum rather than a pooled count. A difference
-        # in this metric between two arms is therefore not evidence of a difference in their
-        # routing.
+        # ---------------------------------------------------------------------------------
+        # B2 -- E-COMPARABLE BALANCE METRICS.  See `maple/agents/contracts/telemetry-schema.md`,
+        # which registers these names.  They exist because `load imbalance` above CANNOT BE
+        # COMPARED BETWEEN TWO CONFIGURATIONS WITH DIFFERENT EXPERT COUNTS, and the expert
+        # count is the only axis of the rung ladder these metrics are built to compare -- so
+        # using max/mean naively invalidates the central result of the whole series.
+        #
+        # Why max/mean is not comparable: it is the maximum of `num_experts` positively-skewed
+        # counts, so its expectation rises with `num_experts` even when routing is perfectly
+        # uniform.  A multinomial draw of 4,096 assignments gives 1.06 at E=8/k=2 and 1.19 at
+        # E=32/k=8 -- a 12% "worsening" caused by nothing but counting more experts.  Reducing
+        # it with ReduceType.max across data-parallel ranks skews it further, since each rank
+        # contributes its own local maximum rather than a pooled count.  A difference in that
+        # metric between two rungs is therefore not evidence of a difference in their routing.
         #
         # `load imbalance` is kept rather than replaced: it is what every prior run recorded,
         # and a metric that silently changes meaning between runs is worse than one that is
-        # merely awkward to compare.
-        # ALL THREE ARE TAGGED ReduceType.max, AND NOT BECAUSE A MAXIMUM IS THE STATISTIC WE
-        # WANT. `Transformer.compute_auxiliary_metrics` folds same-named metrics from every
-        # MoE block into one entry, and for `mean` and `sum` it folds them by ADDING -- which
-        # is right for the auxiliary losses, the only things stock ever tagged that way, and
-        # wrong for anything bounded. Tagged `mean`, a normalised entropy of ~0.998 in each of
-        # 16 blocks is reported as ~15.97, i.e. a quantity defined on [0, 1] leaves the
-        # trainer above 15. `max` folds with `torch.max`, so each of these reads as its
-        # worst block: lowest-entropy, highest-CV, most-dead. That is the right summary for a
-        # health gate anyway, and the per-block series are logged separately for the arm
-        # comparison.
+        # merely awkward to compare.  It must not be used for a cross-rung comparison.
+        #
+        # EVERY KEY BELOW IS TAGGED ReduceType.max, AND NOT BECAUSE A MAXIMUM IS THE STATISTIC
+        # WE WANT.  `MoETransformer.compute_auxiliary_metrics` emits each key twice: once as
+        # `block NN/<key>`, which is the series to read, and once folded across every MoE block
+        # under the bare `<key>`.  For `mean` and `sum` it folds by ADDING -- which is right for
+        # the auxiliary losses, the only things stock ever tagged that way, and wrong for
+        # anything bounded.  Tagged `mean`, a normalised entropy of ~0.998 in each of 16 blocks
+        # was reported as ~15.97: a quantity defined on [0, 1] left the trainer above 15.  That
+        # is not hypothetical, it is what the sibling track logged.  `max` folds with
+        # `torch.max`, so the bare key reads as the WORST block -- lowest-entropy, highest-CV,
+        # most-dead -- which is the right summary for a health gate.
+        #
+        # The bare folded key is still under-labelled: `expert_load_cv` with no block prefix
+        # means "worst block", which the name does not say.  Explicitly-named cross-block
+        # aggregates (`moe/expert_load_cv_max`, `moe/expert_load_cv_mean`, ...) are computed by
+        # `MetricAssertionCallback` from the `block NN/` series, where a mean is a real mean
+        # rather than a sum.  Read those, or read the per-block series.  Never read a bare
+        # cross-block key and assume it is an average.
         counts = batch_size_per_expert.to(torch.float)
         num_experts = counts.numel()
         tiny = torch.finfo(torch.float32).tiny
         mean = counts.mean()
+        total = counts.sum()
 
         # Coefficient of variation: population std over mean, and the scale-free quantity the
         # load-balancing loss is a smooth surrogate for. Zero under perfect balance at every
         # E, so it is comparable across arms.
-        out["load CV"] = (counts.std(unbiased=False) / mean.clamp_min(tiny), ReduceType.max)
+        out["expert_load_cv"] = (counts.std(unbiased=False) / mean.clamp_min(tiny), ReduceType.max)
 
-        # Normalised routing entropy, H(p)/log(E) over the realised assignment distribution.
-        # 1.0 is perfect balance and 0.0 is collapse onto a single expert, at every E, which
-        # makes this the primary cross-arm readout. Negated so that folding with `max` keeps
-        # the WORST block rather than the best; the trainer's key says so.
-        probs = counts / counts.sum().clamp_min(tiny)
+        # Normalised routing entropy deficit, 1 - H(p)/log(E) over the realised assignment
+        # distribution. 0.0 is perfect balance and 1.0 is collapse onto a single expert, at
+        # every E, which makes this the primary cross-rung readout. Stated as a deficit rather
+        # than as entropy so that folding with `max` keeps the WORST block rather than the best.
+        probs = counts / total.clamp_min(tiny)
         entropy = -(probs * probs.clamp_min(tiny).log()).sum()
-        normalized_entropy = (
-            entropy / math.log(num_experts) if num_experts > 1 else entropy
-        )
-        out["load entropy deficit (worst block)"] = (1.0 - normalized_entropy, ReduceType.max)
+        normalized_entropy = entropy / math.log(num_experts) if num_experts > 1 else entropy
+        out["entropy_deficit"] = (1.0 - normalized_entropy, ReduceType.max)
 
         # Dead experts as a fraction, because the stop criteria name dead experts and neither
         # metric above separates "one expert idle" from "all slightly uneven". A fraction
         # rather than a count so that it, too, is comparable across E. Guarded against an
         # all-zero histogram, which happens before any tokens have been routed: the unguarded
         # form returns 1.0 there, and 1.0 is indistinguishable from total expert collapse.
-        total = counts.sum()
-        out["dead expert fraction"] = (
-            (counts == 0).sum(dtype=torch.float) / num_experts
-            if total > 0
-            else torch.zeros((), dtype=torch.float, device=counts.device),
+        out["dead_expert_frac"] = (
+            (
+                (counts == 0).sum(dtype=torch.float) / num_experts
+                if total > 0
+                else torch.zeros((), dtype=torch.float, device=counts.device)
+            ),
             ReduceType.max,
         )
+
+        # Assignments per expert per micro-batch -- the DENOMINATOR every band in the telemetry
+        # contract is quoted against, logged so those bands are auditable in-run rather than
+        # taken on faith from a planning document.  The ladder's whole balance risk is stated in
+        # these units: 2048 assignments/expert on the sibling probe, 1024 at R1, 512 at R2, 256
+        # at R3, against a capacity of 312 at factor 1.2 (3.50 sigma) or ~512 at the funded
+        # factor 2.0.  If this number is not what the rung table predicts then the batch, the
+        # micro-batch split or the expert count is not what was configured, and every band below
+        # is being applied to the wrong regime.
+        #
+        # Divided by the accumulated micro-batch count because `batch_size_per_expert` sums over
+        # every micro-batch since the last `reset_metrics`, while the capacity it is compared
+        # against is per-micro-batch.  Reporting the raw accumulated mean is how a balanced
+        # router comes to look like it is dropping 44% of its assignments.
+        if self.num_accumulated_micro_batches > 0:
+            out["assignments_per_expert_mean"] = (
+                mean / self.num_accumulated_micro_batches,
+                ReduceType.max,
+            )
+
+        # GATE MASS -- THE GUARD ON `normalize_expert_weights`, WHICH IS MEASURED-BROKEN BY
+        # DEFAULT.  `normalize_expert_weights=None` is the stock default and zero of five
+        # shipped recipes set it; the sibling track measured the resulting gate mass at 0.161
+        # against an intended 1.000, a 6.2x error that TRAINS HAPPILY and shows up only as a
+        # quietly worse loss.  This is Maple's `norm_topk_prob`, so it is an architectural
+        # requirement here, not a tuning knob.
+        #
+        # Accumulated in `forward` after the normalisation block, so this measures the weights
+        # the experts were actually scaled by rather than the config value that was supposed to
+        # produce them.  A config assertion cannot catch a normalisation that runs and produces
+        # the wrong norm; this can.
+        if (gate_mass := self.gate_mass_mean) is not None:
+            out["gate_mass_mean"] = (gate_mass, ReduceType.max)
 
         # DROPPED TOKENS, WHICH NOTHING COMPUTED BEFORE.
         # A capacity-based MoE pads every expert to `expert_capacity` slots and silently
@@ -476,7 +556,19 @@ class MoERouter(nn.Module):
             # the regime the gate cares about, and it cannot under-report.
             span_capacity = self.expert_capacity * self.num_accumulated_micro_batches
             overflow = (counts - span_capacity).clamp_min(0).sum()
-            out["dropped token fraction (upper bound)"] = (
+            # RENAMED from "dropped token fraction (upper bound)" to match the `drop_frac`
+            # family that `telemetry-schema.md` registers, and to lose the spaces and
+            # parentheses that make a metric name awkward to glob and awkward to assert on.
+            # The "_upper_bound" suffix is load-bearing and stays: this is computed from the
+            # ACCUMULATED histogram against a per-micro-batch capacity summed over the same
+            # span, so a per-micro-batch overflow that the accumulation averages away is not
+            # recoverable from it.  It cannot under-report, and it is tight when the router is
+            # stable across an interval, which is the regime the gate cares about.
+            #
+            # L3 owns the true per-micro-batch `drop_frac` if it produces one.  Both names are
+            # registered; a run that emits only this one is asserted against this one.  An
+            # assertion pointed at a metric nobody emits is a green run that verified nothing.
+            out["drop_frac_upper_bound"] = (
                 overflow / total.clamp_min(1.0),
                 ReduceType.max,
             )
@@ -510,6 +602,10 @@ class MoERouter(nn.Module):
         # Cleared with the histogram it counts, or the capacity span would keep growing while
         # the counts restarted from zero and the drop rate would fall to zero and stay there.
         self.num_accumulated_micro_batches = 0
+        # Same reasoning for gate mass: the sum and its token count must be cleared together
+        # or the reported mean decays toward zero across a run while the true mass is 1.0.
+        unhide_from_torch(self._gate_mass_sum).zero_()
+        self._gate_mass_tokens = 0
         if (lb_loss := self.load_balancing_loss) is not None:
             lb_loss.zero_()
         if (z_loss := self.z_loss) is not None:
@@ -555,6 +651,32 @@ class MoERouter(nn.Module):
                     keepdim=True,
                 )
             )
+
+        # GATE MASS, MEASURED HERE AND NOWHERE ELSE.  This is the one point in the model where
+        # the weights the experts will actually be scaled by are visible: after `get_top_k` and
+        # after the normalisation above.  Accumulated unconditionally rather than only when
+        # `normalize_expert_weights` is set, because the case worth catching is precisely the
+        # one where the flag is UNSET -- stock default `None`, zero of five shipped recipes set
+        # it, measured mass 0.161 against an intended 1.000.  A metric that only exists when the
+        # knob is configured cannot detect the knob being missing.
+        #
+        # Summed over all but the last dimension so the divisor is a token count: `top_k`
+        # weights per token sum to the mass of one token's gate.  No `.item()` and no
+        # comparison against a device tensor anywhere in here -- the whole accumulator is one
+        # fused add, and the token count is taken from `.shape`, which is host-side already.
+        if self.training and torch.is_grad_enabled():
+            with torch.no_grad():
+                if self._gate_mass_sum.device != expert_weights.device:
+                    self._gate_mass_sum = self._gate_mass_sum.to(expert_weights.device)
+                # `.add_()` rather than `+=`, deliberately. `unhide_from_torch` returns the
+                # WRAPPED tensor itself, so `+=` on the returned local would in fact mutate the
+                # stored tensor -- but only because `Tensor.__iadd__` happens to be in-place.
+                # That is too subtle to rely on in a metric whose whole job is to catch a silent
+                # error: if it ever rebound instead of mutating, this accumulator would read a
+                # permanent zero and the gate-mass assertion would pass vacuously forever.
+                # `.add_()` cannot be misread.
+                unhide_from_torch(self._gate_mass_sum).add_(expert_weights.detach().float().sum())
+                self._gate_mass_tokens += expert_weights.numel() // expert_weights.shape[-1]
 
         with torch.no_grad():
             # Histogram the expert ids to identify the number of items/tokens routed to each expert.
