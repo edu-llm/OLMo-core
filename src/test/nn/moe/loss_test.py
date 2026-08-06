@@ -216,15 +216,21 @@ def test_only_the_requested_granularity_carries_grad():
     assert not out.lbl_global.requires_grad
 
 
-def test_global_granularity_gradient_matches_local_in_scale():
+def test_global_granularity_gradient_is_identical_on_one_rank():
     """
-    Switching granularity must not silently rescale the gradient, or ``lb_loss_weight`` would mean
-    two different things under the two settings and the local-vs-global arm would be confounded
-    with an effective learning-rate change on the router.
+    On one rank the two granularities are literally the same computation, so their gradients must be
+    bitwise identical.
 
-    On one rank the two are the same computation, so the gradients must be identical. That is the
-    strongest form of the check available without ranks; the multi-rank version below asserts the
-    *values* diverge while the scale stays O(1).
+    **This is a smoke check, and it used to be named and documented as if it established the
+    gradient-scale claim. It does not, and the old name overstated it** -- on one rank with uniform
+    counts there is nothing to distinguish, so it is tautological with respect to any cross-rank
+    property. Kept because a failure here would mean the granularity switch perturbed something it
+    should not have, which is worth catching cheaply. The real claim -- that no *world-size* factor
+    is introduced -- is what
+    :func:`_run_overlapping_ranks_discriminate_the_reduce_op` and the uniform-routing invariance
+    tests establish, and it is stated in that weaker, true form in ``load_balancing_loss``'s
+    docstring. Measured per-rank gradient-norm ratios on skewed ranks span 0.72x-3.44x, so per-rank
+    magnitude equality is emphatically *not* a property of this code.
     """
     num_experts, top_k = 32, 8
     grads = []
@@ -326,8 +332,20 @@ def _run_skewed_ranks():
 
     So local is ``E`` and global is ``1.0``: a factor of ``E`` apart, both closed-form. A "global"
     path that returned the local value under a new name would read ``E`` here. So would one that
-    reduced over a group of size one, or over the wrong group. This is the test that makes the fix
-    falsifiable, and it is why it asserts an exact ratio rather than merely ``!=``.
+    reduced over a group of size one, or over the wrong group.
+
+    **What this test CANNOT detect, contrary to what it used to claim.** It called itself "the test
+    that makes the fix falsifiable". It is not sufficient for that, and the reason is structural
+    rather than bad luck: each rank's histogram is nonzero on exactly one expert, so across ranks
+    every expert column has a single nonzero entry -- and **SUM and MAX are identical on a one-hot
+    stack**. Verified: 4 ranks one-hot on 4 experts give SUM ``[64,64,64,64]`` and MAX
+    ``[64,64,64,64]``. So swapping ``ReduceOp.SUM`` for ``MAX`` leaves this test green, and an
+    adversarial audit confirmed *every* test in this file passed under that swap.
+
+    The maximally-skewed construction that makes the local/global gap largest is precisely the one
+    that cannot identify the reduction *operator*. Detecting that needs **overlapping** histograms
+    -- see :func:`_run_overlapping_ranks_discriminate_the_reduce_op`, which is the test that
+    actually closes this hole.
     """
     world_size = dist.get_world_size()
     rank = dist.get_rank()
@@ -356,6 +374,213 @@ def _run_skewed_ranks():
 
 def test_lbl_global_differs_from_local_under_skewed_ranks():
     run_distributed_test(_run_skewed_ranks, world_size=4, backend="gloo")
+
+
+# Per-rank histograms that OVERLAP -- every expert receives assignments from more than one rank --
+# and are not proportional to each other. Each row sums to 20 assignments. Hardcoded, with the
+# pooled sum computed by hand, so no expected value below is produced by the code under test.
+_OVERLAP_COUNTS = [
+    [20.0, 0.0, 0.0, 0.0],
+    [5.0, 5.0, 5.0, 5.0],
+    [8.0, 2.0, 6.0, 4.0],
+    [3.0, 7.0, 4.0, 6.0],
+]
+# column sums, by hand: 20+5+8+3=36, 0+5+2+7=14, 0+5+6+4=15, 0+5+4+6=15
+_OVERLAP_POOLED = [36.0, 14.0, 15.0, 15.0]
+
+
+def _run_overlapping_ranks_discriminate_the_reduce_op():
+    """
+    THE TEST THAT ACTUALLY MAKES THE REDUCTION FALSIFIABLE.
+
+    :func:`_run_skewed_ranks` cannot: its one-hot-per-rank histograms make SUM and MAX identical,
+    so an adversarial audit found that swapping ``ReduceOp.SUM`` for ``MAX`` left every test in
+    this file green. A test that passes under a wrong reduction operator is not a check on the
+    reduction.
+
+    This one uses overlapping, non-proportional histograms where SUM ``[36,14,15,15]`` and MAX
+    ``[20,7,6,6]`` differ in every position, and asserts the pooled counts and the resulting loss
+    against values computed **by hand** in ``_OVERLAP_POOLED`` -- not against anything the code
+    returns. Measured discrimination: under MAX the loss comes out ~14% wrong here, where
+    ``_run_skewed_ranks`` sees 0%.
+
+    It is deliberately not asserted as "the two differ". `!=` is satisfied by a great many wrong
+    implementations; an exact hand-computed value is satisfied by one.
+    """
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    assert world_size == len(_OVERLAP_COUNTS), "this test is written for exactly 4 ranks"
+
+    num_experts, top_k = 4, 1
+    counts = torch.tensor(_OVERLAP_COUNTS[rank])
+    tokens = int(counts.sum().item())  # top_k == 1, so assignments == tokens
+
+    # First: the pooled histogram itself, against the hand-computed column sums.
+    pooled, did = reduce_expert_counts(counts.clone())
+    assert did is True
+    torch.testing.assert_close(pooled, torch.tensor(_OVERLAP_POOLED), rtol=0, atol=1e-6)
+
+    # Then the loss built from it. Score vector = this rank's own realised distribution, which is
+    # what makes the local value the larger of the two.
+    scores = (counts / counts.sum()).expand(1, tokens, num_experts).contiguous()
+    batched = counts.unsqueeze(0).clone()
+    out = _call(
+        num_experts=num_experts,
+        top_k=top_k,
+        scores=scores,
+        counts=counts,
+        batched=batched,
+        granularity=MoELoadBalancingLossGranularity.global_batch,
+    )
+
+    # Hand-computed expectations, in plain Python, from the hardcoded tables.
+    mean_scores = [c / sum(_OVERLAP_COUNTS[rank]) for c in _OVERLAP_COUNTS[rank]]
+    pooled_total = sum(_OVERLAP_POOLED)
+    share = sum(_OVERLAP_COUNTS[rank]) / pooled_total
+    exp_local = (
+        (num_experts / top_k)
+        * sum(c * s for c, s in zip(_OVERLAP_COUNTS[rank], mean_scores))
+        / tokens
+    )
+    exp_global = (
+        (num_experts / top_k)
+        * sum(c * share * s for c, s in zip(_OVERLAP_POOLED, mean_scores))
+        / tokens
+    )
+    torch.testing.assert_close(out.lbl_local, torch.tensor(float(exp_local)), rtol=1e-5, atol=1e-5)
+    torch.testing.assert_close(
+        out.lbl_global, torch.tensor(float(exp_global)), rtol=1e-5, atol=1e-5
+    )
+    # And the optimized value is the pooled one.
+    torch.testing.assert_close(out.loss, torch.tensor(float(exp_global)), rtol=1e-5, atol=1e-5)
+
+
+def test_overlapping_histograms_pin_the_reduction_operator():
+    run_distributed_test(
+        _run_overlapping_ranks_discriminate_the_reduce_op, world_size=4, backend="gloo"
+    )
+
+
+def _run_ratio_metric_is_bounded_after_the_cross_block_fold():
+    """
+    ``lbl_global_over_local`` must survive the cross-block fold as a dimensionless quantity.
+
+    It did not. Tagged ``ReduceType.mean`` the fold ADDS it, so the bare key read ``L`` times the
+    true ratio -- measured **12.000000 on 12 blocks and 16.000000 on 16** for a quantity documented
+    as 1.0. That is the ``entropy = 15.97`` defect reproduced inside the metric whose own docstring
+    cites it. Now tagged ``max``.
+
+    This asserts the property that was violated -- the folded value stays in ``[0, 1]`` -- rather
+    than re-asserting the per-block number, because the per-block number was always right and
+    checking it is what missed the bug.
+    """
+    from olmo_core.train.common import ReduceType
+
+    router = MoELinearRouter(
+        d_model=32,
+        num_experts=8,
+        top_k=2,
+        lb_loss_weight=0.01,
+        lb_loss_granularity=MoELoadBalancingLossGranularity.global_batch,
+    )
+    router.train()
+    router.reset_parameters()
+    router(torch.randn(2, 16, 32))
+    metrics = router.compute_metrics(reset=False)
+
+    for key in ("lbl_global_over_local", "moe/lbl_global_over_local"):
+        val, red = metrics[key]
+        # The tag is the fix, so assert the tag.
+        assert red == ReduceType.max, (
+            f"{key} must be ReduceType.max: `mean` is folded across blocks by ADDING, which turns "
+            f"a bounded ratio into L times itself"
+        )
+        assert 0.0 <= val.item() <= 1.0 + 1e-6, (key, val.item())
+
+    # Emulate the cross-block fold over L blocks exactly as
+    # `MoETransformer.compute_auxiliary_metrics` does, and require the result to stay bounded.
+    for num_blocks in (12, 16):
+        folded = None
+        for _ in range(num_blocks):
+            val, red = metrics["moe/lbl_global_over_local"]
+            if folded is None:
+                folded = val.clone()
+            elif red in (ReduceType.mean, ReduceType.sum):
+                folded = folded + val
+            elif red == ReduceType.max:
+                folded = torch.max(folded, val)
+        assert folded is not None
+        assert folded.item() <= 1.0 + 1e-6, (
+            f"folded over {num_blocks} blocks the ratio reads {folded.item()} -- a dimensionless "
+            f"quantity must not scale with block count"
+        )
+
+
+def test_ratio_metric_survives_the_cross_block_fold():
+    run_distributed_test(
+        _run_ratio_metric_is_bounded_after_the_cross_block_fold, world_size=2, backend="gloo"
+    )
+
+
+def _run_degenerate_ranks_stay_finite():
+    """
+    A rank with **zero** assignments, and the all-zero case.
+
+    Both were untested. Neither may produce NaN: the balance loss is attached to the graph via
+    ``attach_auxiliary_loss``, so a NaN here poisons the whole model's gradient, and it would do so
+    on a ragged final batch or a fully-masked shard rather than on anything obviously exotic.
+
+    Also pins the *semantics* rather than only finiteness: a rank with no tokens has
+    ``local_share == 0``, so its balance loss is exactly ``0`` and it contributes no balance
+    gradient. That is intended -- it has nothing to re-route -- but it is a behaviour worth
+    asserting so a future change cannot silently turn it into a NaN or a spurious penalty.
+    """
+    rank = dist.get_rank()
+    num_experts, top_k, B, S = 4, 1, 1, 4
+
+    # Rank 0 holds nothing; every other rank holds a uniform batch.
+    if rank == 0:
+        counts = torch.zeros(num_experts)
+        scores = torch.full((B, S, num_experts), 1.0 / num_experts)
+        batched = torch.zeros(B, num_experts)
+    else:
+        counts = torch.full((num_experts,), float(B * S * top_k) / num_experts)
+        scores = torch.full((B, S, num_experts), 1.0 / num_experts)
+        batched = counts.unsqueeze(0).clone()
+
+    out = _call(num_experts=num_experts, top_k=top_k, scores=scores, counts=counts, batched=batched)
+    assert torch.isfinite(
+        out.lbl_local
+    ).all(), "NaN would poison the graph via attach_auxiliary_loss"
+    assert torch.isfinite(out.lbl_global).all()
+    assert torch.isfinite(out.loss).all()
+
+    if rank == 0:
+        assert (
+            out.lbl_global.item() == 0.0
+        ), "a rank with no assignments must contribute no balance gradient, not a NaN"
+    else:
+        # Uniform routing on the ranks that do hold tokens.
+        torch.testing.assert_close(out.lbl_local, torch.tensor(1.0), rtol=1e-5, atol=1e-5)
+
+
+def test_degenerate_rank_histograms_stay_finite():
+    run_distributed_test(_run_degenerate_ranks_stay_finite, world_size=4, backend="gloo")
+
+
+def test_all_zero_histogram_is_zero_not_nan():
+    """
+    Before any forward, every count is zero. ``clamp_min(1.0)`` on the pooled total is the only
+    thing standing between that and a division by zero, and this is the test that says so.
+    """
+    num_experts, top_k, B, S = 8, 2, 2, 8
+    scores = torch.full((B, S, num_experts), 1.0 / num_experts)
+    counts = torch.zeros(num_experts)
+    batched = torch.zeros(B, num_experts)
+    out = _call(num_experts=num_experts, top_k=top_k, scores=scores, counts=counts, batched=batched)
+    assert out.lbl_local.item() == 0.0
+    assert out.lbl_global.item() == 0.0
+    assert torch.isfinite(out.loss).all()
 
 
 def _run_global_granularity_is_the_global_value():

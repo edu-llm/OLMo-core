@@ -576,6 +576,10 @@ class MoERouter(nn.Module):
           for a loss and is what ``load balancing loss`` already did. Both halves fold
           identically, so their ratio survives the fold -- which is the only property the
           comparison needs.
+        - **Anything DERIVED from the pair must not be tagged ``mean``.** The pair folds safely
+          because a sum of losses is a loss; a sum of *ratios of* losses is nothing. Divide after
+          the fold, or tag the per-block ratio ``max``. Getting this wrong is how
+          ``lbl_global_over_local`` came to read 12.0 on 12 blocks -- see the comment there.
         - The **weights** are tagged so that the fold performs the audit rather than reporting a
           constant twelve times. See ``lb_loss_weight_summed_over_blocks``.
         - The **reduction flag** is inverted and tagged ``max`` so that it folds monotonically in
@@ -631,12 +635,31 @@ class MoERouter(nn.Module):
         out["moe/lbl_global"] = (lbl_global.clone(), ReduceType.mean)
 
         # The comparison as one number, so a gate can assert on it without reconstructing the
-        # ratio from two separately-reduced series. Dimensionless, 1.0 when the reduction changed
-        # nothing. Both numerator and denominator fold by addition, so the top-level value is a
-        # load-weighted average of the per-block ratios rather than a meaningless quantity.
+        # ratio from two separately-reduced series. Dimensionless and in `[0, 1]`; 1.0 when the
+        # reduction changed nothing.
+        #
+        # TAGGED `max`, AND THE EARLIER `mean` HERE WAS A BUG OF EXACTLY THE KIND THE REST OF THIS
+        # METHOD IS ORGANISED TO AVOID. The reasoning that justified `mean` -- "both numerator and
+        # denominator fold by addition, so the top-level value is a load-weighted average" -- is
+        # true of a metric that emits the numerator and denominator separately and divides AFTER
+        # the fold. It is false of this one, which divides per block and then hands the *ratio* to
+        # the fold. `mean`-tagged metrics are merged across blocks by ADDING, so the bare key read
+        # `sum_b ratio_b` = L x the true ratio: measured **12.000000 on 12 blocks and 16.000000 on
+        # 16** for a quantity this comment claimed was 1.0. That is the `entropy = 15.97` scar
+        # reproduced, in the metric written by the person citing it.
+        #
+        # `max` folds with `torch.max`, so the bare key is the WORST block -- and worst is the right
+        # alarm direction here, because a block whose reduction silently failed has
+        # `global == local`, i.e. ratio 1.0, which is the MAXIMUM of a quantity bounded above by 1.
+        # Measured: 11 blocks reducing at 0.85 with block 07 failing at 1.00 folds to 1.000000, so
+        # the fold surfaces the failure instead of averaging it away.
+        #
+        # A gate may equally divide the folded `moe/lbl_global` by the folded `moe/lbl_local` --
+        # those two are losses, they fold by addition correctly, and their ratio is the
+        # load-weighted average. Both readings are valid; this one is the cheaper assertion.
         ratio = lbl_global / lbl_local.clamp_min(torch.finfo(torch.float32).tiny)
-        out["lbl_global_over_local"] = (ratio.clone(), ReduceType.mean)
-        out["moe/lbl_global_over_local"] = (ratio.clone(), ReduceType.mean)
+        out["lbl_global_over_local"] = (ratio.clone(), ReduceType.max)
+        out["moe/lbl_global_over_local"] = (ratio.clone(), ReduceType.max)
 
         # WERE COUNTS FROM MORE THAN ONE RANK POOLED? Inverted so that `max` carries alarm upward:
         # reads 0.0 only if every block on every rank pooled. On a single-rank run it reads 1.0,
