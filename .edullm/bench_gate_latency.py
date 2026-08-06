@@ -659,24 +659,44 @@ def count_launches(model, tokens, *, logits_to_keep: int) -> Tuple[Optional[int]
 _COPY_KERNEL_MARKERS = ("copy", "contiguous", "cat", "clone", "permute", "transpose")
 
 
+#: The profiler's per-event device-time field, newest spelling first. ``cuda_time_total`` is the
+#: pre-2.x name of ``device_time_total``; reading only one of them on the wrong torch matches
+#: nothing and yields a count of zero.
+_DEVICE_TIME_FIELDS = ("device_time_total", "cuda_time_total")
+
+
 def summarise_profile(averages) -> Tuple[Optional[int], Optional[int]]:
     """Total device-kernel count and copy-kernel count from profiler averages.
 
     Split out from ``count_launches`` so it can be tested against a stub, because the field it
-    reads was RENAMED. ``cuda_time_total`` is the pre-2.x spelling of ``device_time_total``; a
-    bare ``getattr(e, "cuda_time_total", 0)`` on torch 2.9 would match nothing, make the kernel
-    list empty, and return ``None`` -- printing an empty column rather than failing. Both
-    spellings are tried, and a row exposing neither is counted rather than dropped.
+    reads was RENAMED between torch versions.
+
+    **The recognised-field count is the point.** An earlier version of this function kept any row
+    exposing neither field, reasoning that dropping rows silently was what produced a zero count.
+    That leniency made the function unable to tell "this row has no timing" from "I am reading a
+    field name that no longer exists" -- and a mutation test proved it: switching to the legacy
+    spelling alone left every test passing, because the rows were kept regardless.
+
+    So: if NO event exposes either spelling, the field has been renamed again and this returns
+    ``(None, None)``, which the caller turns into a refusal. If some do, the name is right and
+    rows without a positive device time are genuinely not kernels.
     """
     kernels = []
+    recognised = 0
     for event in averages:
-        device_time = getattr(event, "device_time_total", None)
-        if device_time is None:
-            device_time = getattr(event, "cuda_time_total", None)
-        # A row that exposes neither field is kept: dropping it silently is how the count
-        # became zero in the first place.
-        if device_time is None or device_time > 0:
+        device_time = None
+        for field in _DEVICE_TIME_FIELDS:
+            value = getattr(event, field, None)
+            if value is not None:
+                device_time = value
+                recognised += 1
+                break
+        if device_time is not None and device_time > 0:
             kernels.append(event)
+    if not recognised:
+        # Either an empty profile or a third rename. Both must reach the caller as "unknown"
+        # rather than as zero kernels, because zero reads as a measurement.
+        return None, None
     if not kernels:
         return None, None
     total = sum(int(getattr(e, "count", 0)) for e in kernels)

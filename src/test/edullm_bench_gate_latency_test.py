@@ -419,9 +419,12 @@ class _Ev:
 def test_launch_counter_reads_the_current_field_name():
     """torch 2.9 exposes ``device_time_total``; the old spelling was ``cuda_time_total``.
 
-    Reading only the old name yields an empty kernel list and returns None on every arm --
-    printing an empty column rather than failing, which is how the one integer that makes an
-    eager row interpretable would have gone missing.
+    The stub exposes ONLY the modern field, which is what makes this discriminating: a version
+    reading only ``cuda_time_total`` finds nothing here and must return ``(None, None)``.
+
+    An earlier version of this test used a stub that set the field it was checking for AND kept
+    rows exposing neither, so switching the harness to the legacy spelling alone left all 46
+    tests green. A mutation run caught that; this is the repair.
     """
     total, copies = entry.summarise_profile(
         [
@@ -431,6 +434,23 @@ def test_launch_counter_reads_the_current_field_name():
     )
     assert total == 14
     assert copies == 4
+
+
+def test_launch_counter_returns_none_when_no_event_exposes_a_known_field():
+    """A third rename must surface as "unknown", never as zero kernels.
+
+    Zero reads as a measurement; None becomes a refusal in ``main``. This is the case the old
+    leniency swallowed -- it kept unrecognised rows and counted them, so a renamed field produced
+    a confident total assembled from rows whose device time was never read.
+    """
+
+    class _Renamed:
+        def __init__(self):
+            self.key = "aten::addmm"
+            self.count = 10
+            self.gpu_time_total = 500  # neither spelling the harness knows
+
+    assert entry.summarise_profile([_Renamed()]) == (None, None)
 
 
 def test_launch_counter_still_reads_the_legacy_field_name():
