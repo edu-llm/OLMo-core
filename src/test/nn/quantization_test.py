@@ -629,6 +629,26 @@ def test_audit_passes_and_counts_a_legal_model():
     assert report["num_full_precision"] >= 3
 
 
+def test_audit_does_not_double_count_a_dense_feed_forward():
+    """
+    A dense ``FeedForward`` carries ``.quant``, ``.w1`` and ``.w2`` just like a stacked-expert
+    MLP, but holds them as ``nn.Linear`` submodules that the audit already counts individually.
+    Counting the parent too would inflate ``num_quantized`` -- and an inflated count is exactly
+    what would hide the "toggle wired but never fires" failure this number exists to catch.
+    """
+    ff = FeedForwardConfig(hidden_size=64, bias=False, quant=QuantConfig(enabled=True)).build(
+        d_model=32
+    )
+    # Three projections, and the parent must not be counted as a fourth.
+    assert audit_quantization(ff)["num_quantized"] == 3
+
+
+def test_audit_counts_a_stacked_expert_mlp_once():
+    """The expert stack has no Linear submodules, so the parent is the only thing to count."""
+    mlp = MoEMLP(d_model=32, hidden_size=16, num_experts=4, quant=QuantConfig(enabled=True))
+    assert audit_quantization(mlp)["num_quantized"] == 1
+
+
 def test_audit_notices_nothing_was_quantized():
     """A report with zero quantized tensors is the 'toggle wired but never fires' failure."""
 

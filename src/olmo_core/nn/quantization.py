@@ -327,6 +327,20 @@ FULL_PRECISION_NAME_MARKERS: Tuple[str, ...] = (
 )
 
 
+def _is_stacked_expert_mlp(module: nn.Module) -> bool:
+    """
+    Is this a stacked-expert MLP (``MoEMLP`` / ``DroplessMoEMLP``)?
+
+    Identified structurally rather than by import, to avoid a circular import between
+    ``nn.quantization`` and ``nn.moe.mlp``. The discriminating test is that ``w1``/``w2`` are
+    raw ``nn.Parameter``s: a dense ``FeedForward`` also carries ``.quant``, ``.w1`` and ``.w2``
+    but holds them as ``nn.Linear`` submodules.
+    """
+    if not all(hasattr(module, a) for a in ("quant", "w1", "w2", "w3")):
+        return False
+    return all(isinstance(getattr(module, a), nn.Parameter) for a in ("w1", "w2", "w3"))
+
+
 def audit_quantization(model: nn.Module) -> Dict[str, Any]:
     """
     Walk a built model and report exactly which matmuls are ternary and which are not.
@@ -351,9 +365,14 @@ def audit_quantization(model: nn.Module) -> Dict[str, Any]:
             quantized = bool(module.quant_enabled)
         elif isinstance(module, nn.Linear):
             quantized = False
-        elif hasattr(module, "quant") and hasattr(module, "w1") and hasattr(module, "w2"):
+        elif _is_stacked_expert_mlp(module):
             # Stacked-expert MLP (MoEMLP / DroplessMoEMLP): weights are raw Parameters, not
-            # Linear submodules, so identify it structurally.
+            # Linear submodules, so `isinstance(m, nn.Linear)` cannot see them and they have to
+            # be identified structurally. The `nn.Parameter` test is what distinguishes them
+            # from a dense `FeedForward`, which also has `.quant`, `.w1` and `.w2` but holds
+            # them as `nn.Linear` submodules -- and whose projections are therefore already
+            # counted individually by the `QuantLinear` branch above. Without that test a dense
+            # FFN would be double-counted, inflating `num_quantized`.
             quant = getattr(module, "quant", None)
             quantized = bool(quant is not None and getattr(quant, "enabled", False))
         elif isinstance(module, nn.Embedding):
