@@ -71,19 +71,26 @@ Confidence on the family is high; on this exact constant, medium-high (see
 faithfulness parameter, and the zero-fraction match is the only evidence pinning it.
 """
 
-TWN_GAUSSIAN_ZERO_FRACTION: float = 0.4237
+TWN_GAUSSIAN_ZERO_FRACTION: float = 0.423510
 """
 Zero fraction TWN produces on Gaussian latents, closed form and dimension-free.
 
-``delta = 0.7 * E|W| = 0.7 * sigma * sqrt(2/pi) = 0.5585 * sigma``, so the zero fraction is
-``2 * Phi(0.5585) - 1 = 0.4237``. This is the discriminating assertion: a build that produces
-0.31 has been "corrected" to BitNet b1.58.
+``delta = 0.7 * E|W| = 0.7 * sigma * sqrt(2/pi) = 0.5585192 * sigma``, so the zero fraction is
+``erf(0.5585192 / sqrt(2)) = 0.4235110``. This is the discriminating assertion: a build that
+produces 0.31 has been "corrected" to BitNet b1.58.
+
+Note: ``maple/plan/maple-preview-recipe-hypotheses.md`` section 3 quotes this as 42.4%, which is
+this number rounded. It is written out to six places here so the assertion band cannot drift.
 """
 
-BITNET_B158_GAUSSIAN_ZERO_FRACTION: float = 0.3100
+BITNET_B158_GAUSSIAN_ZERO_FRACTION: float = 0.310064
 """
-What BitNet b1.58 would produce on the same latents: ``2 * Phi(0.399) - 1 = 0.310``. Recorded
-so a test can assert we are *not* here.
+What BitNet b1.58 would produce on the same latents.
+
+b1.58 rounds ``W / mean|W|`` to the nearest integer, so its zero band is ``|W| < 0.5 * mean|W|``
+-- an effective threshold factor of 0.5 against TWN's 0.7. That gives
+``erf(0.3989423 / sqrt(2)) = 0.3100643``, matching the 31.0% in the plan document. Recorded so a
+test can assert we are *not* here.
 """
 
 

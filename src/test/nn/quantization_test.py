@@ -39,12 +39,18 @@ from olmo_core.nn.quantization import (
 
 
 def test_gaussian_zero_fraction_closed_form():
-    """The closed form must reproduce the two numbers the TWN-vs-BitNet call rests on."""
-    assert gaussian_zero_fraction(0.7) == pytest.approx(TWN_GAUSSIAN_ZERO_FRACTION, abs=1e-4)
+    """
+    The closed form must reproduce the two numbers the TWN-vs-BitNet call rests on, to six
+    places -- these are the constants the whole quantizer identity argument runs on, so the
+    tolerance is tight on purpose. (This test already caught one transcription error: the
+    module constant was 0.4237, from the plan document's rounded 42.4%, against the true
+    0.4235110.)
+    """
+    assert gaussian_zero_fraction(0.7) == pytest.approx(TWN_GAUSSIAN_ZERO_FRACTION, abs=1e-6)
     # BitNet b1.58 rounds W/mean|W| to nearest integer, so the zero band is |W| < 0.5*mean|W|,
     # i.e. an effective delta factor of 0.5.
     assert gaussian_zero_fraction(0.5) == pytest.approx(
-        BITNET_B158_GAUSSIAN_ZERO_FRACTION, abs=2e-3
+        BITNET_B158_GAUSSIAN_ZERO_FRACTION, abs=1e-6
     )
 
 
@@ -63,7 +69,7 @@ def test_zero_fraction_matches_twn_not_bitnet():
 
     assert zero_frac == pytest.approx(TWN_GAUSSIAN_ZERO_FRACTION, abs=0.01)
     assert abs(zero_frac - BITNET_B158_GAUSSIAN_ZERO_FRACTION) > 0.08, (
-        f"zero fraction {zero_frac:.4f} is near BitNet b1.58's 0.310, not TWN's 0.4237 -- "
+        f"zero fraction {zero_frac:.4f} is near BitNet b1.58's 0.3101, not TWN's 0.4235 -- "
         "the quantizer has been changed to b1.58, which the artifact evidence rules out"
     )
     # And inside the band actually observed in the released weights.
@@ -595,8 +601,15 @@ def test_quantized_forward_dtype_follows_weight():
 
 
 def test_math_constants_are_what_the_docs_claim():
-    """Guard the two numbers the whole TWN-vs-BitNet argument rests on."""
+    """
+    Guard the numbers the whole TWN-vs-BitNet argument rests on, recomputed here from first
+    principles rather than copied from the module -- so this fails if the module constant is
+    edited, which is the point.
+    """
     assert TWN_DELTA_FACTOR == 0.7
     z = 0.7 * math.sqrt(2.0 / math.pi)
-    assert z == pytest.approx(0.5585, abs=1e-3)
-    assert TWN_GAUSSIAN_ZERO_FRACTION == pytest.approx(0.4237, abs=1e-4)
+    assert z == pytest.approx(0.5585192, abs=1e-6)
+    assert TWN_GAUSSIAN_ZERO_FRACTION == pytest.approx(math.erf(z / math.sqrt(2.0)), abs=1e-6)
+    # Both round to the figures the plan document quotes (42.4% and 31.0%).
+    assert round(TWN_GAUSSIAN_ZERO_FRACTION * 100, 1) == 42.4
+    assert round(BITNET_B158_GAUSSIAN_ZERO_FRACTION * 100, 1) == 31.0
