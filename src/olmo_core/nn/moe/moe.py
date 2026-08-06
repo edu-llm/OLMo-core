@@ -273,6 +273,26 @@ class MoEBase(nn.Module):
 
         out = self.experts(x, expert_weights, expert_indices, batch_size_per_expert)
 
+        # Hand the EXACT drop counts back to the router so they reach the metrics.
+        #
+        # THIS BRIDGE WAS MISSING, AND FINDING IT COST NOTHING, WHICH IS THE POINT.
+        # `ParallelMLP._record_drop_accounting` (B3) computes `last_drop_accounting` on every step
+        # of every block, and after the six-branch merge NOTHING IN THE TREE READ IT -- so the
+        # exact `drop_frac` that `telemetry-schema.md` registers, and that the ratified 1% ceiling
+        # asserts against, was computed and then discarded every step. The capacity path would have
+        # published only the accumulated upper bound, while an assertion pointing at the exact name
+        # found nothing and -- but for the anti-vacuity guard in `MetricAssertionCallback` -- would
+        # have passed having checked nothing at all.
+        #
+        # Wired here rather than inside `ParallelMLP` because the experts module holds no reference
+        # to the router; this class is the one place both are in scope, and it is already where
+        # `expert_capacity` is handed over, for exactly the same reason.
+        drop_accounting = getattr(self.experts, "last_drop_accounting", None)
+        if drop_accounting is not None:
+            self.router.accumulate_drop_accounting(
+                drop_accounting.dropped_count, drop_accounting.total_count
+            )
+
         if shared_out is not None:
             shared_out = shared_out / (self.top_k + 1)
             out = shared_out.add(out, alpha=self.top_k / (self.top_k + 1))

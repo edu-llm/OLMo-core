@@ -208,6 +208,22 @@ class MoERouter(nn.Module):
         # histogram accumulates until `reset_metrics`, while `expert_capacity` is per
         # micro-batch, so the drop rate needs both to be over the same span.
         self.num_accumulated_micro_batches: int = 0
+        # EXACT drop accounting handed over by the capacity-based ParallelMLP (B3, L3's
+        # `drop_accounting.py`), accumulated the same way the histogram above is: a running sum of
+        # dropped and total assignments over the logging interval, so the reported rate is a real
+        # interval rate rather than whichever micro-batch happened to be last.
+        #
+        # Two counters rather than a running mean of `drop_frac`, because micro-batches differ in
+        # their total assignment count and a mean of per-micro-batch rates would weight them
+        # equally. Left at None by the dropless path, where the metric is omitted rather than
+        # reported as a zero indistinguishable from a measured zero.
+        #
+        # This closes a seam that the six-branch merge left open: `ParallelMLP` computed
+        # `last_drop_accounting` every step and NOTHING IN THE TREE READ IT, so the exact
+        # `drop_frac` the telemetry contract registers was computed and then discarded. Found by
+        # the anti-vacuity guard in `MetricAssertionCallback`, which is exactly what it is for.
+        self._drop_dropped_sum: Optional[torch.Tensor] = None
+        self._drop_total_sum: Optional[torch.Tensor] = None
 
         if self.bias_gamma is not None:
             assert self.bias_gamma > 0
@@ -296,6 +312,25 @@ class MoERouter(nn.Module):
     @batch_size_per_expert.setter
     def batch_size_per_expert(self, value: torch.Tensor):
         self._batch_size_per_expert = hide_from_torch(value)
+
+    @torch.no_grad()
+    def accumulate_drop_accounting(
+        self, dropped_count: torch.Tensor, total_count: torch.Tensor
+    ) -> None:
+        """
+        Fold one micro-batch's **exact** drop counts into the interval accumulator.
+
+        Called by the capacity-based ``ParallelMLP`` right after it computes them, so the reported
+        ``drop_frac`` is the exact ratio over the same span as every other metric here rather than
+        the accumulated upper bound. Device tensors in, no host sync: the counts stay on device and
+        are only divided at ``compute_metrics`` time.
+        """
+        if self._drop_dropped_sum is None or self._drop_dropped_sum.device != dropped_count.device:
+            self._drop_dropped_sum = torch.zeros((), dtype=torch.float, device=dropped_count.device)
+            self._drop_total_sum = torch.zeros((), dtype=torch.float, device=dropped_count.device)
+        assert self._drop_total_sum is not None
+        self._drop_dropped_sum += dropped_count.detach().float()
+        self._drop_total_sum += total_count.detach().float()
 
     @property
     def gate_mass_mean(self) -> Optional[torch.Tensor]:
@@ -582,6 +617,16 @@ class MoERouter(nn.Module):
         # Note the sort in `indices_and_bins` is by expert id only, so the assignments that
         # survive are the earliest by position, not the highest-weighted -- overflow drops the
         # end of the sequence. That is a separate issue from measuring it.
+        # THE EXACT RATE, which is the one the telemetry contract registers as `drop_frac` and the
+        # one the 1% ceiling asserts against. Emitted whenever the capacity path handed over real
+        # counts; the upper bound below is emitted alongside it so a reader can see how loose the
+        # accumulated estimate is against the truth.
+        if self._drop_total_sum is not None and self._drop_dropped_sum is not None:
+            out["drop_frac"] = (
+                self._drop_dropped_sum / self._drop_total_sum.clamp_min(1.0),
+                ReduceType.max,
+            )
+
         if self.expert_capacity is not None and self.num_accumulated_micro_batches > 0:
             # Capacity over the same span as the counts. See the note beside
             # `num_accumulated_micro_batches`: comparing an interval's worth of assignments
@@ -644,6 +689,12 @@ class MoERouter(nn.Module):
         # or the reported mean decays toward zero across a run while the true mass is 1.0.
         unhide_from_torch(self._gate_mass_sum).zero_()
         self._gate_mass_tokens = 0
+        # And the exact drop counters, for the same reason: numerator and denominator must be
+        # cleared together or the rate drifts toward the run's lifetime average.
+        if self._drop_dropped_sum is not None:
+            self._drop_dropped_sum.zero_()
+        if self._drop_total_sum is not None:
+            self._drop_total_sum.zero_()
         if (lb_loss := self.load_balancing_loss) is not None:
             lb_loss.zero_()
         if (z_loss := self.z_loss) is not None:
