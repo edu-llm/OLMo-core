@@ -37,6 +37,32 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+def _maple_uniform_attn_backend() -> AttentionBackendName:
+    """
+    Pick ONE attention backend for every layer of a Maple model.
+
+    The Maple factory mixes sliding-window and global layers, and OLMo-core resolves an unset
+    backend *per layer* from whether that layer has a window — flash_2 for the sliding ones,
+    torch SDPA for the global ones (``nn/attention/__init__.py:454-462``). That would make the
+    3:1 SWA layout a 3:1 kernel split: it biases MFU, which is the E-sweep's dependent
+    variable, and torch SDPA additionally raises on intra-document masking.
+
+    Preferring flash_2 unconditionally is not an option either — it is absent from the platform
+    image and from FarmShare, and its ``assert_supported`` raises rather than degrading. So
+    probe once and return a single backend that every layer can actually use.
+    """
+    from ..attention import flash_attn_api
+
+    if flash_attn_api.has_flash_attn_2():
+        return AttentionBackendName.flash_2
+    log.info(
+        "flash-attn 2 is unavailable, so all Maple layers will use the torch SDPA backend. "
+        "This is uniform across sliding and global layers, which is what keeps MFU "
+        "comparable; it is slower than flash_2 and does not support intra-document masking."
+    )
+    return AttentionBackendName.torch
+
+
 class TransformerDataParallelWrappingStrategy(StrEnum):
     """
     An enumeration of the different wrapping strategy for the data parallel implementations.
@@ -1247,13 +1273,32 @@ class TransformerConfig(ModelConfig):
         # are actually available, so this branch builds standalone AND picks them up
         # automatically once L4 is in, with no second edit and no silent divergence.
         quant_kwargs = {} if quant is None else {"quant": quant}
+        # The gate/up clamp. Maple applies it in `MapleMLP.forward` unconditionally, in BOTH
+        # precision regimes, so its absence is a faithfulness divergence and not a quant detail.
+        #
+        # This used to fall back silently to "no clamp" when L4's field was absent, which the
+        # independent audit correctly flagged (F5): a silently-absent architectural feature is
+        # the exact failure class this factory exists to prevent, and it was inconsistent with
+        # how `quantize` behaves one screen up -- that RAISES. So this warns loudly instead of
+        # passing in silence, and `require_swiglu_limit=True` turns it into a hard error for
+        # anyone who wants the guarantee rather than the notice.
+        require_swiglu_limit = kwargs.pop("require_swiglu_limit", False)
         try:
             from ..feed_forward import MAPLE_SWIGLU_LIMIT
 
             swiglu_kwargs = {"swiglu_limit": kwargs.pop("swiglu_limit", MAPLE_SWIGLU_LIMIT)}
-        except ImportError:
+        except ImportError as e:
             swiglu_kwargs = {}
             kwargs.pop("swiglu_limit", None)
+            msg = (
+                "MoEConfig.swiglu_limit is unavailable in this tree, so Maple's gate/up clamp "
+                "(gate max=7.0, up [-7,7]) is ABSENT from every expert built by this factory. "
+                "Maple applies it unconditionally in both precision regimes, so this model is "
+                "not clamp-faithful. It lands with L4's C4."
+            )
+            if require_swiglu_limit:
+                raise OLMoConfigurationError(msg) from e
+            log.warning("%s Pass require_swiglu_limit=True to make this fatal.", msg)
 
         layer_norm = LayerNormConfig(
             name=LayerNormType.rms, eps=layer_norm_eps, bias=False, dtype=dtype
@@ -1313,6 +1358,36 @@ class TransformerConfig(ModelConfig):
             qk_norm=layer_norm,
             use_head_qk_norm=True,
             sliding_window=sliding_window,
+            # PINNED to ONE backend for every layer, and the value is resolved at call time.
+            #
+            # Left as `None`, the backend is chosen PER LAYER from whether that layer has a
+            # window: a sliding layer takes the `if backend is None and has_flash_attn_2()`
+            # branch and gets flash_2, while a global layer skips it and falls through to
+            # `backend = torch` (`nn/attention/__init__.py:454-462`). On a flash-attn host that
+            # silently turns our 3:1 SWA layout into a 3:1 *kernel* split -- 9 layers on
+            # FlashAttention-2 and layers {3,7,11} on torch SDPA. Two consequences, neither
+            # visible in the config:
+            #   1. Throughput. Three layers on a slower kernel biases absolute MFU downward and
+            #      makes it non-comparable to the `moe/` track's baseline, which had no
+            #      global/sliding split. MFU is the E-sweep's dependent variable.
+            #   2. Correctness, latently: torch SDPA raises on intra-document masking, so a
+            #      packed-corpus run with `generate_doc_lengths=True` would die at the first
+            #      global layer. flash_2 supports it.
+            #
+            # WHY THIS IS NOT A HARD `flash_2`, which is what the sibling `olmo3_*` factories
+            # do: flash-attn 2 is **not installed in the platform image**. `.edullm/Dockerfile`
+            # installs `torch==2.9.0` and `.[wandb]`, and flash-attn appears in neither
+            # `pyproject.toml`'s core dependencies nor its extras (only `fa4`, a different
+            # package). `AttentionBackendName.flash_2.assert_supported()` RAISES when the
+            # package is missing (`nn/attention/backend.py:452-457`), so a hard pin would make
+            # every rung unbuildable on the platform and on FarmShare. Measured: it did --
+            # FarmShare job 1676576 died with "'FlashAttention2Backend' is missing the
+            # flash-attn package".
+            #
+            # So: use flash_2 where it exists, torch everywhere else, and either way use the
+            # SAME backend on all layers -- which is the property that actually matters. The
+            # uniformity is asserted below; the identity of the backend is not.
+            backend=kwargs.pop("attn_backend", None) or _maple_uniform_attn_backend(),
             # q/k/v/o. Maple ternarizes every matmul; norms stay full precision, and there is
             # no code path from here to the QK-norms.
             **quant_kwargs,
@@ -1517,6 +1592,18 @@ class TransformerConfig(ModelConfig):
                     )
                 if swa.force_full_attention_on_last_layer:
                     problems.append("force_full_attention_on_last_layer must be False")
+            # The backend must be PINNED, not resolved per layer. Unpinned, sliding layers get
+            # flash_2 and global layers fall through to torch SDPA, making the 3:1 SWA layout a
+            # 3:1 kernel split that biases MFU and crashes on intra-document masking. Neither
+            # is visible in the config, and MFU is the E-sweep's dependent variable.
+            if mixer.backend is None:
+                problems.append(
+                    "attention backend must be pinned to a single value; left None it is "
+                    "resolved PER LAYER from the presence of a window, so sliding layers get "
+                    "flash_2 while global layers fall through to torch SDPA "
+                    "(nn/attention/__init__.py:454-462) -- a 3:1 kernel split that biases MFU "
+                    "and breaks intra-document masking on the global layers"
+                )
             rope = mixer.rope
             if rope is None:
                 problems.append("expected a RoPE config")
@@ -1556,7 +1643,22 @@ class TransformerConfig(ModelConfig):
         )
 
         expected = cls.MAPLE_EXPECTED_PARAMS.get(vocab_size, {}).get(rung)
-        if expected is not None:
+        if expected is None:
+            # Say so. A rung or vocab with no ratified figures skips BOTH ledger checks, and a
+            # skipped assertion that announces nothing is indistinguishable from a passing one --
+            # which is how `E8` (X2's low anchor) could have been submitted un-gated.
+            log.warning(
+                "no ratified param figures for rung=%s at V=%d, so the total/active ledger "
+                "assertions were SKIPPED, not passed. Computed: total=%d active=%d "
+                "active_minus_routers=%d. File these in MAPLE_EXPECTED_PARAMS before relying "
+                "on this rung.",
+                rung,
+                vocab_size,
+                total,
+                active,
+                active - routers,
+            )
+        else:
             exp_total, exp_active = expected
             # 1% because the published table is rounded, not because the count is uncertain.
             if abs(total - exp_total) > 0.01 * exp_total:
@@ -1592,30 +1694,37 @@ class TransformerConfig(ModelConfig):
 
     @classmethod
     def maple_r0(cls, vocab_size: int, **kwargs) -> "TransformerConfig":
-        """R0, the code-path smoke rung: d=512, L=8, E=64. ~214M total / ~126M active.
+        """R0, the code-path smoke rung: d=512, L=8, E=64.
 
         Sized for `gpu-1xa10g` at ~$1/hr. Never compared for quality -- it is MQA rather than
-        GQA 4:1 and exists only to prove the code path runs before an A100 approval is spent.
+        GQA 4:1 and exists only to prove the code path runs before A100 time is spent.
+
+        Param counts are deliberately NOT quoted here. They live in
+        :data:`MAPLE_EXPECTED_PARAMS`, which is the authoritative table; every one of the three
+        errors this ladder has had entered through a hand-copied figure, including a stale
+        "~214M / ~126M" that sat in this docstring after the geometry was corrected.
         """
         return cls.maple_scaled(vocab_size, rung="R0", **kwargs)
 
     @classmethod
     def maple_r1(cls, vocab_size: int, **kwargs) -> "TransformerConfig":
-        """R1: d=1024, L=12, E=64. ~841M total / ~312.5M active."""
+        """R1: d=1024, L=12, E=64. Counts in :data:`MAPLE_EXPECTED_PARAMS`, not here."""
         return cls.maple_scaled(vocab_size, rung="R1", **kwargs)
 
     @classmethod
     def maple_r2(cls, vocab_size: int, **kwargs) -> "TransformerConfig":
-        """R2: d=1024, L=12, E=128. ~1.44B total / ~312.5M active."""
+        """R2: d=1024, L=12, E=128. Counts in :data:`MAPLE_EXPECTED_PARAMS`, not here."""
         return cls.maple_scaled(vocab_size, rung="R2", **kwargs)
 
     @classmethod
     def maple_r3(cls, vocab_size: int, **kwargs) -> "TransformerConfig":
-        """R3, the flagship: d=1024, L=12, E=256. ~2.65B total / ~312.5M active.
+        """R3, the flagship: d=1024, L=12, E=256.
 
         The unique sub-Maple point that preserves every ratio: f_e/d = 1/4 and k*f_e/d = 2.0
         force k=8, then k/E = 1/32 forces E=256, and d/L with head_dim 128 and L % 4 == 0
         forces d=1024/L=12.
+
+        Counts in :data:`MAPLE_EXPECTED_PARAMS`, not here.
         """
         return cls.maple_scaled(vocab_size, rung="R3", **kwargs)
 

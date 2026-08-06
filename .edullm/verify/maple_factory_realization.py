@@ -175,6 +175,24 @@ def main() -> int:
             f"block {sliding_idx} theta={rope.theta}, expected 10000 (tree default is 500000)",
         )
 
+        # F1 from the independent audit: the attention backend must be the SAME on sliding and
+        # global layers. Left unpinned it resolves PER LAYER from whether the layer has a
+        # window, so on a flash-attn image the 3:1 SWA layout silently becomes a 3:1 KERNEL
+        # split (flash_2 on sliding, torch SDPA on global) -- biasing MFU, the E-sweep's
+        # dependent variable, and crashing on intra-document masking. Invisible in the config,
+        # so it must be read off the built modules. NOTE: on a host WITHOUT flash-attn every
+        # layer falls back to torch and this check passes trivially -- it only has teeth on the
+        # platform image, which is where it matters.
+        backends = {i: type(model.blocks[str(i)].attention.backend).__name__ for i in windows}
+        global_bk = {b for i, b in backends.items() if windows[i] is None}
+        sliding_bk = {b for i, b in backends.items() if windows[i] is not None}
+        check(
+            f"realized/{rung}/backend_uniform_across_layers",
+            global_bk == sliding_bk and len(global_bk) == 1,
+            f"global={sorted(global_bk)} sliding={sorted(sliding_bk)} "
+            f"(must be ONE identical backend; a split biases MFU)",
+        )
+
         # Attention width equals the residual stream, as built.
         attn0 = model.blocks["0"].attention
         d = cfg.d_model
