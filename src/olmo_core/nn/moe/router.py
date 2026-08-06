@@ -468,14 +468,52 @@ class MoERouter(nn.Module):
         total = counts.sum()
 
         # Coefficient of variation: population std over mean, and the scale-free quantity the
-        # load-balancing loss is a smooth surrogate for. Zero under perfect balance at every
-        # E, so it is comparable across arms.
-        out["expert_load_cv"] = (counts.std(unbiased=False) / mean.clamp_min(tiny), ReduceType.max)
+        # load-balancing loss is a smooth surrogate for. Zero under perfect balance at every E.
+        cv = counts.std(unbiased=False) / mean.clamp_min(tiny)
+        out["expert_load_cv"] = (cv, ReduceType.max)
+
+        # CV EXCESS OVER THE UNIFORM-ROUTING NULL, AND THIS IS THE ONE TO COMPARE ACROSS RUNGS.
+        #
+        # `expert_load_cv` is scale-free in the mean LOAD but NOT in the SAMPLE SIZE, and the
+        # ladder varies the sample size by 4x -- so comparing raw CV across rungs is the same
+        # class of error as comparing max/mean, merely smaller and much less obvious. Measured
+        # on FarmShare and confirmed in closed form:
+        #
+        #   counts ~ Multinomial(n, 1/E) under perfect uniform routing, so
+        #   sd = sqrt(n/E * (1 - 1/E)), mean = n/E, and therefore
+        #       CV_null = sqrt((1 - 1/E) / mean)
+        #
+        # Total assignments are tokens*k and k=8 at every rung, so assignments/expert FALLS as E
+        # rises: 2048 on the sibling probe, then 1024 (R1), 512 (R2), 256 (R3). The null CV
+        # therefore rises 0.0207 -> 0.0310 -> 0.0440 -> 0.0624 across the ladder -- it TRIPLES
+        # from the sibling to R3 under identical, perfect routing. A raw-CV comparison would read
+        # that as balance degrading with granularity, which is exactly the false conclusion the
+        # E-comparability requirement exists to prevent.
+        #
+        # The ratio is 1.0 under perfect balance at every E and every sample size, which is what
+        # "comparable across rungs" has to mean. Above 1.0 is real imbalance in units of "times
+        # worse than chance"; a value below 1.0 is a router more uniform than a fair multinomial
+        # draw, which is what a load-balancing loss actually produces and is not an error.
+        #
+        # `mean` here is the ACCUMULATED mean over the logging interval, which is correct without
+        # dividing by the micro-batch count: the null formula takes whatever sample the observed
+        # CV was computed from, and both come from the same accumulated histogram.
+        cv_null = ((1.0 - 1.0 / num_experts) / mean.clamp_min(tiny)).sqrt()
+        out["expert_load_cv_excess"] = (cv / cv_null.clamp_min(tiny), ReduceType.max)
 
         # Normalised routing entropy deficit, 1 - H(p)/log(E) over the realised assignment
         # distribution. 0.0 is perfect balance and 1.0 is collapse onto a single expert, at
         # every E, which makes this the primary cross-rung readout. Stated as a deficit rather
         # than as entropy so that folding with `max` keeps the WORST block rather than the best.
+        #
+        # This one carries the same finite-sample bias as the CV above -- a fair multinomial draw
+        # has entropy strictly below log(E), so the null deficit is (E-1)/(2*n*ln E) rather than
+        # zero -- but here the bias is negligible rather than merely small: it runs 1.0e-4 at the
+        # sibling's E=8/2048 to 3.5e-4 at R3, i.e. THREE ORDERS OF MAGNITUDE below the [0, 0.06]
+        # band of interest. So no null correction is emitted for it, and the sibling's measured
+        # worst-block 0.0663 stands as ~645x its own null: overwhelmingly real imbalance, not a
+        # sampling artefact. Recorded here so the asymmetry with the CV is a documented decision
+        # rather than an oversight.
         probs = counts / total.clamp_min(tiny)
         entropy = -(probs * probs.clamp_min(tiny).log()).sum()
         normalized_entropy = entropy / math.log(num_experts) if num_experts > 1 else entropy

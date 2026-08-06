@@ -103,6 +103,22 @@ class MetricAssertionCallback(Callback):
     step0_loss_band_nats: float = STEP0_LOSS_BAND_NATS
     """Width of the step-0 loss band above ``ln(vocab_size)``."""
 
+    step0_max_step: int = 5
+    """
+    The band is applied only to a first-logged step at or below this. Beyond it the check is
+    skipped with a warning instead of being applied to a step it does not describe.
+
+    Without this bound the check reads "the first logged step, whatever its number", and that is
+    wrong in a way that only shows up in the field: the sibling's provenance is 11.718 at step 0
+    falling to **11.520 by step 3**, so the loss leaves the band's neighbourhood within a handful
+    of steps. Any run whose first *logged* step is late -- a resume this callback failed to detect,
+    a callback attached mid-run, a large ``metrics_collect_interval``, a config that skips early
+    steps -- would then have an initialisation band applied to a partly-trained loss and fail for
+    the wrong reason. 5 clears the default ``metrics_collect_interval=5`` in
+    ``.edullm/train_on_corpus.py``, where ``_fit_epoch`` logs the first batch unconditionally so
+    the first logged step is normally step 1.
+    """
+
     assert_step0_loss: bool = True
     dead_expert_frac_max: Optional[float] = 0.0
     """
@@ -195,6 +211,7 @@ class MetricAssertionCallback(Callback):
 
     _block_metric_names: Tuple[str, ...] = (
         "expert_load_cv",
+        "expert_load_cv_excess",
         "entropy_deficit",
         "dead_expert_frac",
         "gate_mass_mean",
@@ -423,6 +440,20 @@ class MetricAssertionCallback(Callback):
             log.info(
                 "Skipping the step-0 loss band: this attempt resumed from a checkpoint, so its "
                 f"first logged step ({step}, loss {loss:.4f}) is not an initialisation."
+            )
+            return
+
+        if step > self.step0_max_step:
+            # WARNING, not a failure. A late first-logged step means the check could not be
+            # applied, which is worth knowing about loudly -- but failing the run over it would
+            # turn "we could not verify the init" into "the init is broken", and those are
+            # different claims. See `step0_max_step`.
+            log.warning(
+                f"NOT applying the step-0 loss band: the first logged step is {step}, beyond "
+                f"step0_max_step={self.step0_max_step}, and the loss ({loss:.4f}) no longer "
+                "describes an initialisation -- the sibling fell from 11.718 to 11.520 by step 3. "
+                "The init was therefore NOT verified on this run. If this is a resume, the "
+                "resume guard did not fire and that is worth investigating."
             )
             return
 
