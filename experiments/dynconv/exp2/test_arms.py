@@ -950,3 +950,91 @@ def test_topology_tables_agree_between_arms_and_harness():
         "the COUNT must match even where the indices differ -- otherwise the stub and the arm are "
         "different topologies"
     )
+
+
+# =================================================================================================
+# THE BIMODAL BLIND SPOT in the topology conjunction -- found by run_019fd45d, 2026-08-05
+# =================================================================================================
+#
+# `assess_topology` decides "discriminating" as: NOT at_ceiling AND NOT at_floor, where each is a
+# >=60% majority fraction over seeds. On a UNIMODAL endpoint that is correct, and it was tested that
+# way -- ceiling inputs, floor inputs, middle inputs, each verified to classify correctly.
+#
+# It is WRONG on a BIMODAL endpoint, which is the only kind this task produces (EXP2-DESIGN Sec 5.2:
+# "a run either finds the recall algorithm or sits at chance"). The measured attn1 cell was
+# {0.2617, 0.9915, 0.9828} -- one degenerate seed, two SOLVED (final loss 0.025 and 0.040, i.e. the
+# pair is bound). Neither fraction reached 60%, so BOTH majority tests answered "no" and the
+# conjunction reported "off ceiling and off floor" for a cell where NO SEED is in the middle.
+#
+# Root cause of the miss: the original tests supplied only unimodal inputs, so the failing case was
+# absent from the comparison set. Sec 12.4 again, in the test suite this time rather than the code.
+#
+# These tests pin the real measured numbers so the blind spot cannot be reintroduced silently.
+
+
+def _assess(accs, losses):
+    import sys as _s
+    _s.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+    import calibration as C
+
+    class _R:
+        def __init__(self, a, l):
+            self.accuracy = a; self.final_loss = l; self.topology = "attn1"
+            self.config = "N64_D4"; self.kernel_size = 3; self.num_pairs = 4; self.seed = 0
+
+    return C.assess_topology([_R(a, l) for a, l in zip(accs, losses)],
+                             topology="attn1", num_pairs=4, vocab_size=256, width=3)
+
+
+def test_the_measured_attn1_cell_is_reported_discriminating_AND_THAT_IS_THE_BUG():
+    """DOCUMENTS A KNOWN-WRONG OUTPUT, with the real numbers from run_019fd45d.
+
+    This test asserts the CURRENT (incorrect) behaviour on purpose, so that whoever fixes
+    `assess_topology` sees this test fail and must read the reasoning rather than discovering the
+    bimodal case for themselves. **Do not "fix" this test by editing the expectation.** Fix
+    `assess_topology`, then invert the assertion and cite this docstring.
+    """
+    v = _assess([0.2617, 0.9915, 0.9828], [1.386, 0.025, 0.040])
+    assert v.discriminating is True, "measured behaviour changed -- read this docstring"
+    # ...and the reason it is wrong, asserted so the evidence travels with the claim:
+    assert v.median_accuracy > 0.98, "median is at ceiling in substance"
+    assert v.median_final_loss < 0.05, (
+        "median final loss ~0.04 is the 'bound' plateau: the pair IS bound, i.e. SOLVED. "
+        "A solved task is a CEILING however the 0.99 accuracy fraction is counted."
+    )
+
+
+def test_no_single_seed_of_the_measured_attn1_cell_is_actually_in_the_middle():
+    """The sharp statement of the defect: the AGGREGATE looks mid-range, every SEED is saturated."""
+    floor = 0.25
+    for acc, loss in ((0.2617, 1.386), (0.9915, 0.025), (0.9828, 0.040)):
+        near_floor = acc <= floor * 1.5      # the degenerate 'guess among D' strategy
+        solved = loss < 0.10                 # the 'bound' plateau
+        assert near_floor or solved, (
+            f"acc {acc} / loss {loss} was expected to be at one mode or the other; if a genuine "
+            f"middle seed ever appears, the bimodality premise has changed and Sec 5.2 needs revisiting"
+        )
+
+
+def test_a_ceiling_floor_MIXTURE_defeats_the_majority_conjunction():
+    """The general form, independent of the measured numbers: half ceiling, half floor, no middle.
+
+    This is the input class the original tests never supplied. Both majority tests answer "no",
+    so the conjunction answers "discriminating" for a cell with no discriminating power at all.
+    """
+    v = _assess([0.01, 0.02, 1.0, 1.0], [4.85, 4.85, 0.001, 0.001])
+    assert v.off_ceiling and v.off_floor and v.discriminating, (
+        "a 50/50 ceiling-floor mixture currently reports DISCRIMINATING -- this is the blind spot"
+    )
+    # And the aggregate is actively MISLEADING rather than merely permissive: a half-and-half
+    # mixture averages to a median of ~0.51, which looks like the textbook off-ceiling-and-off-floor
+    # operating point (~2x floor, "50% success") while NO SEED is anywhere near it. This is worse
+    # than the measured attn1 case, not better -- there the median at least sat at 0.98 and hinted
+    # at the ceiling. A reader checking only the median would call this cell ideal.
+    assert 0.375 < v.median_accuracy < 0.99, (
+        "the mixture's median lands in the apparent sweet spot, which is what makes it dangerous"
+    )
+    assert all((a <= 0.375 or a >= 0.99) for a in v.per_seed_accuracy), (
+        "yet every individual seed is pinned at one mode or the other -- the median is an artifact "
+        "of averaging two modes and describes no seed in the cell"
+    )
