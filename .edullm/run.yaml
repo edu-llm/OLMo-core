@@ -8,15 +8,16 @@
 # Does frontloading math change the early loss trajectory of a 190M model?
 # olmo-core-train rather than olmo-core-check, because this opens a corpus.
 #
-# --param-dtype is named even though bfloat16 is what the file already defaults
-# to. The platform reads the words of the command and cannot see a dtype set in
-# code, so a run that does not say it is a run the guard cannot refuse on a card
-# without bfloat16. The L4 is Ada and has it; saying so is what keeps the guard
-# able to answer if the shape ever changes.
+# --param-dtype and --save-folder are both named even though the file already
+# defaults to each. The platform reads the words of the command and can see
+# neither a dtype set in code nor an environment variable read in code. A
+# command that does not say where it saves is one the checkpoint contract
+# cannot check, and a retry then resumes from nothing at full price.
 schema_version: 1
 workload_profile: olmo-core-train
 suggested_compute: gpu-1xl4
 command: >-
   bash -lc 'python .edullm/train_on_corpus.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
   --sequence-length 2048 --steps 2000 --save-interval 500
   --warmup-steps 200 --param-dtype bfloat16'
