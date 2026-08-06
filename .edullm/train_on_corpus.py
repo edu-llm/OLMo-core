@@ -91,6 +91,7 @@ from olmo_core.data import (
 from olmo_core.distributed.parallel import DataParallelType
 from olmo_core.distributed.utils import barrier, get_rank
 from olmo_core.io import clear_directory, list_directory, normalize_path
+from olmo_core.nn.lm_head import LMLossImplementation
 from olmo_core.nn.transformer import TransformerConfig
 from olmo_core.optim import (
     AdamWConfig,
@@ -110,6 +111,7 @@ from olmo_core.train.callbacks import (
     ConfigSaverCallback,
     GPUMemoryMonitorCallback,
     LMEvaluatorCallbackConfig,
+    SteadyStateThroughputCallback,
     WandBCallback,
 )
 from olmo_core.train.checkpoint import Checkpointer
@@ -853,6 +855,32 @@ def build_config(opts, overrides: List[str]):
     # 100,352.
     model_config = factory(vocab_size=corpus.tokenizer.padded_vocab_size())
 
+    # THE LOSS IMPLEMENTATION, WHICH IS A MEMORY DECISION MASQUERADING AS A NUMERICS ONE.
+    #
+    # Applied AFTER the factory so a factory that sets it deliberately is not overridden by a flag
+    # nobody passed -- hence the `is not None` guard rather than a defaulted flag.
+    #
+    # `lm_head` is Optional on TransformerConfig (a pipeline stage may not carry one), so this is
+    # guarded rather than assumed. A silent no-op here would mean the run trains with the
+    # materialising path while the command line says otherwise, and the first symptom would be an
+    # OOM on an A100 that gets no retry.
+    if opts.lm_loss_implementation is not None:
+        if model_config.lm_head is None:
+            raise Refusal(
+                Stage.THE_CONFIG_WOULD_NOT_BUILD,
+                f"--lm-loss-implementation {opts.lm_loss_implementation} was passed but model "
+                f"factory {opts.model_factory} builds no lm_head",
+            )
+        model_config.lm_head.loss_implementation = LMLossImplementation(
+            opts.lm_loss_implementation
+        )
+        model_config.lm_head.loss_chunk_size = opts.lm_loss_chunk_size
+        log.info(
+            "LM loss implementation: %s (chunk size %d)",
+            opts.lm_loss_implementation,
+            opts.lm_loss_chunk_size,
+        )
+
     dataset_config = NumpyFSLDatasetConfig(
         paths=corpus.paths,
         sequence_length=opts.sequence_length,
@@ -943,6 +971,32 @@ def build_config(opts, overrides: List[str]):
             max_duration=Duration.steps(opts.steps),
         )
         .with_callback("gpu_monitor", GPUMemoryMonitorCallback())
+        # STEADY-STATE THROUGHPUT, BECAUSE NEITHER EXISTING MFU METRIC EXCLUDES WARMUP.
+        #
+        # SpeedMonitorCallback (added automatically at trainer.py:348) reports
+        # `throughput/device/MFU` from the single most recent step and
+        # `.../MFU (actual avg)` cumulatively from the SECOND step -- so the average includes
+        # torch.compile's multi-minute first compiled step, every cold S3-mmap shard stall, every
+        # checkpoint write and every eval, and being cumulative it can never forget them. On a
+        # sibling run the two differed by ~6 points, and that gap IS the contamination signal
+        # rather than a bug in either.
+        #
+        # This callback adds a third figure whose exclusions are explicit: a MEDIAN over a fixed
+        # window opened after `warmup_steps`, with checkpoint-save and eval steps dropped and
+        # counted, and with the denominator -- device peak, FLOPs formula, working set -- printed
+        # to stdout before any number depends on it. It reads SpeedMonitorCallback's own per-step
+        # quantities rather than recomputing FLOPs.
+        #
+        # Window defaults to steps 50-150. At `--steps 200` (the default) that fits; a shorter run
+        # reports `steady_state INCOMPLETE` and NO number, which is the correct output for a run
+        # too short to have a steady state.
+        .with_callback(
+            "steady_state_throughput",
+            SteadyStateThroughputCallback(
+                warmup_steps=opts.throughput_warmup_steps,
+                window_steps=opts.throughput_window_steps,
+            ),
+        )
         .with_callback(
             "checkpointer",
             CheckpointerCallback(
@@ -1488,7 +1542,66 @@ def build_parser() -> argparse.ArgumentParser:
         "unset (lm_head.py:260 gates on `is not None`). Standard logit-norm stabiliser at "
         "this scale. Pass 0 to disable.",
     )
-    parser.add_argument("--rank-microbatch-size", type=int, default=16 * 1024)
+    parser.add_argument(
+        "--rank-microbatch-size",
+        type=int,
+        default=16 * 1024,
+        help="Tokens per rank per micro-step. THE DEFAULT DOES NOT FIT THE MAPLE R3 FLAGSHIP ON "
+        "A100-40GB WITH THE DEFAULT LOSS IMPLEMENTATION, and the reason is the logits, not the "
+        "weights. At V=100,352 the default LM-head path holds FIVE simultaneously-live (N,V) "
+        "buffers -- the projection output, the log_softmax output saved for backward, the "
+        "log_softmax backward grad_input, a separate nll_loss backward buffer, and the z-loss "
+        "logsumexp backward. Measured 15.34 GiB at N=8192 in fp32 (FarmShare L40S, job 1676534), "
+        "~13.8 GiB under bf16 autocast, and the family is LINEAR in this flag. At 16,384 that is "
+        "~27.6 GiB against ~38 GiB usable, which OOMs once FSDP state, the MoE dispatch buffer "
+        "and block activations are added -- at capacity_factor 1.2 as well as 2.0, so it is not "
+        "a capacity problem. OOM gets NO Batch retry (retries fire only on 'Host EC2*'). "
+        "Either pass 8192, or pass --lm-loss-implementation chunked_linear, which makes the "
+        "logits cost independent of this flag. See "
+        "maple/agents/lanes/L6-memory-ce/evidence/E2-memory-budget-of-record.md. "
+        "NOTE this flag is not numerics-neutral for an MoE: expert_capacity is computed from it "
+        "(parallel_mlp.py:388-408), so it changes WHICH tokens get expert compute. Hold it fixed "
+        "across every arm of a comparison.",
+    )
+    parser.add_argument(
+        "--lm-loss-implementation",
+        default=None,
+        choices=["default", "fused_linear", "chunked_linear"],
+        help="How the LM head computes its loss. Unset leaves the model factory's choice. "
+        "'default' materialises the logits (see --rank-microbatch-size for the cost). "
+        "'chunked_linear' chunks the projection and the loss so no (N,V) tensor exists: measured "
+        "15.34 -> 2.36 GiB at N=8192, a 6.50x reduction, and INDEPENDENT of microbatch. It costs "
+        "one extra forward projection per chunk, ~4.9%% of counted step FLOPs at R3, so it must "
+        "be held fixed across any throughput comparison. 'fused_linear' is faster than "
+        "'chunked_linear' and needs liger-kernel, WHICH IS NOT IN THE PLATFORM IMAGE -- "
+        "src/Dockerfile installs it but that is the AI2 Beaker image, not .edullm/Dockerfile -- "
+        "so on a platform run it raises RuntimeError at the first micro-step, after the queue "
+        "wait and the GPU are paid for.",
+    )
+    parser.add_argument(
+        "--lm-loss-chunk-size",
+        type=int,
+        default=1024,
+        help="Tokens per chunk when --lm-loss-implementation is chunked_linear. Peak logits "
+        "memory is proportional to this: measured 2.36 GiB at 1024 and 8.10 GiB at 4096 "
+        "(N=8192, V=100,352).",
+    )
+    parser.add_argument(
+        "--throughput-warmup-steps",
+        type=int,
+        default=50,
+        help="Steps discarded before the steady-state throughput window opens. torch.compile "
+        "alone can take minutes on the first compiled step, and the S3-mmap loader is I/O-bound "
+        "early, so a throughput number that starts at step 0 measures startup.",
+    )
+    parser.add_argument(
+        "--throughput-window-steps",
+        type=int,
+        default=100,
+        help="Steps in the steady-state throughput window (default window is steps 50-150). A "
+        "run that ends before the window fills reports 'steady_state INCOMPLETE' and no "
+        "throughput number, which is the correct output for a run with no steady state.",
+    )
     parser.add_argument("--data-seed", type=int, default=0)
     parser.add_argument(
         "--param-dtype",
