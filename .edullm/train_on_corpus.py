@@ -555,10 +555,84 @@ def ladder_steps(steps: int) -> List[int]:
     return sorted({max(2, int(steps * f)) for f in LADDER_FRACTIONS})
 
 
-#: How many held-out shards the ladder scores. Four 2 MB shards is ~2M tokens, far more than
-#: the 32 batches a rung actually consumes, and every extra shard costs a download and an index
-#: build at startup for no additional signal.
-HELDOUT_SHARDS = 4
+#: How many held-out shards the ladder scores, one per source, spread by
+#: :func:`spread_across_sources`.
+#:
+#: RAISED FROM 4 TO 8 FOR COVERAGE, NOT FOR VOLUME, AND THE DISTINCTION IS THE WHOLE POINT.
+#: Volume was never binding: a rung reads 32 batches x 32 instances x 2,048 = 2,097,152 tokens,
+#: which is 8.39% of ONE 25,001,984-token shard. Four shards were already ~48x more material
+#: than a rung consumes.
+#:
+#: What four shards could not do is reach the sources. `pretrain/reservoir-dolma2/v1` has 14
+#: sources across 8 categories, so eight is the smallest count that can touch each category
+#: once. Eight shards is ~800 MB of download against a rung that reads 2 MB -- the download is
+#: the cost here, and it is one-time per run.
+#:
+#: ⚠️ SHARD COUNT ALONE DOES NOTHING. The evaluator breaks after `eval_duration` batches with
+#: `shuffle=False` (train/callbacks/evaluator_callback.py:139-157, :392), so it reads instances
+#: in ORDER and stops. One shard holds 12,208 instances at seq 2,048, so a 32-batch rung never
+#: leaves the first shard unless the global eval batch exceeds 381 instances -- ours is 32.
+#: Handing it more shards without interleaving them downloads material it never opens. That is
+#: why `spread_across_sources` interleaves rather than concatenates, and why raising this
+#: number is only half of a fix.
+HELDOUT_SHARDS = 8
+
+
+def spread_across_sources(urls: List[str], limit: int) -> List[str]:
+    """Pick ``limit`` held-out shards, one per source, ORDERED so the first batches span sources.
+
+    TWO SEPARATE DEFECTS, AND FIXING ONLY THE FIRST LOOKS LIKE A FIX WHILE CHANGING NOTHING.
+
+    **Defect one: which shards get chosen.** Published shards are laid out
+    ``tokens/<source>/val-NNNNN.u32le.bin``, so ``sorted()`` orders by source name and a
+    ``[:limit]`` slice takes whatever the alphabetically-first source holds. On
+    ``pretrain/reservoir-dolma2/v1`` -- 14 sources, 8 categories, 39 val shards --
+    ``sorted()[:4]`` returns ``dclm/val-00000`` .. ``dclm/val-00003``: four shards, ONE source,
+    one category of eight, 11.9% of train. Code (15.9%) and synthetic (23.8%) are never sampled.
+
+    **Defect two: which shards get READ.** The evaluator breaks after ``eval_duration`` batches
+    (evaluator_callback.py:155-157) over a loader built with ``shuffle=False`` (:392). It
+    therefore consumes instances in list order and stops. A reservoir shard holds 12,208
+    instances at sequence length 2,048 and a rung is 32 batches of 32 instances = 1,024, so the
+    rung covers 8.39% of the FIRST shard and never opens the rest. Selecting eight
+    well-spread shards and concatenating them per source would still measure only source one.
+
+    So the ordering is load-bearing, not cosmetic: this returns at most one shard per source,
+    ``source``-major and interleaved, so that consecutive batches walk across sources and a
+    truncated rung still samples every one of them. With one shard per source and a rung far
+    smaller than a shard, "interleaved" and "one each" coincide -- but the order is what makes
+    the truncation harmless, so it is stated rather than left to luck.
+
+    Neither defect fails loudly. Together they report a held-out CE computed on web text under a
+    whole-corpus label, and they silently empty the domain-sliced secondary endpoint, which
+    needs per-source coverage to mean anything at all. On a single-source corpus every ordering
+    agrees, which is why this was invisible on ``regmix-10b`` and ``olmo-150b``.
+
+    Deterministic -- sources sorted, shards within a source sorted, no RNG. That matters more
+    than the coverage: every arm and every seed must score the SAME held-out material in the
+    SAME order or the rungs are not comparable, which is the one thing the ladder cannot
+    tolerate. Returns fewer than ``limit`` when the corpus has fewer sources than that, and
+    falls back to the plain prefix on a corpus whose shards share one directory.
+    """
+    by_source: Dict[str, List[str]] = {}
+    for url in sorted(urls):
+        # The parent directory is the source. ``rsplit`` rather than ``Path`` because these are
+        # ``s3://`` URLs and ``Path`` would collapse the ``//`` after the scheme.
+        source = url.rsplit("/", 2)[-2] if url.count("/") >= 2 else ""
+        by_source.setdefault(source, []).append(url)
+
+    # Round-robin by DEPTH so the result is interleaved across sources rather than grouped by
+    # them: with limit > len(by_source) this yields source A's first shard, then B's first, and
+    # only later A's second. A grouped result would put every shard of A before any of B and
+    # hand the truncation problem straight back.
+    picked: List[str] = []
+    for depth in range(max((len(v) for v in by_source.values()), default=0)):
+        for source in sorted(by_source):
+            if len(picked) >= limit:
+                return picked
+            if depth < len(by_source[source]):
+                picked.append(by_source[source][depth])
+    return picked
 
 
 def _localised_heldout_paths(urls: List[str], opts) -> List[str]:
@@ -599,7 +673,22 @@ def _localised_heldout_paths(urls: List[str], opts) -> List[str]:
         if not is_url(str(url)):
             out.append(str(url))
             continue
-        dest = cache / os.path.basename(str(url))
+        # PREFIXED WITH THE SOURCE DIRECTORY, BECAUSE BASENAMES COLLIDE ACROSS SOURCES.
+        # Shards are `tokens/<source>/val-NNNNN.u32le.bin` and the numbering restarts per
+        # source, so `dclm/val-00000.u32le.bin` and `finemath/val-00000.u32le.bin` share a
+        # basename. Caching on the basename alone would have the second download overwrite the
+        # first, silently, and the evaluator would then score one source twice under two labels
+        # -- a per-source metric that is confidently wrong rather than absent.
+        #
+        # Unreachable before `spread_across_sources` existed, because `sorted()[:N]` only ever
+        # returned shards from ONE source, where basenames are unique by construction. Fixing
+        # the selection is what made this reachable, so it is fixed in the same change.
+        source = str(url).rsplit("/", 2)[-2] if str(url).count("/") >= 2 else ""
+        dest = (
+            cache / f"{source}--{os.path.basename(str(url))}"
+            if source
+            else cache / os.path.basename(str(url))
+        )
         if fetching:
             # Compare SIZE, not existence: a truncated download left by a killed attempt would
             # otherwise be reused, and a short shard yields wrong document boundaries rather
@@ -954,7 +1043,19 @@ def build_config(opts, overrides: List[str]):
         # `str(source_path)`, so an s3:// path and its local copy hash to different files --
         # localising in only one of the two places would silently miss the cache and walk
         # straight back into the gzip failure.
-        heldout_paths = _localised_heldout_paths(sorted(corpus.val_paths)[:HELDOUT_SHARDS], opts)
+        # Spread over sources rather than `sorted()[:N]`, which on a multi-source corpus takes
+        # every shard from the alphabetically-first source. See `spread_across_sources`.
+        #
+        # The REMOTE urls are kept, because they are the only place the source name survives:
+        # `_localised_heldout_paths` writes `<work-dir>/heldout-shards/<basename>`, which
+        # flattens `tokens/<source>/val-NNNNN.u32le.bin` down to `val-NNNNN.u32le.bin`. So the
+        # per-source labels below must be derived here, before localisation, and NOT from the
+        # local paths -- every local path would report the same parent directory.
+        heldout_urls = spread_across_sources(corpus.val_paths, HELDOUT_SHARDS)
+        heldout_labels = [
+            url.rsplit("/", 2)[-2] if url.count("/") >= 2 else "heldout-val" for url in heldout_urls
+        ]
+        heldout_paths = _localised_heldout_paths(heldout_urls, opts)
         trainer_config = trainer_config.with_callback(
             "lm_eval",
             LMEvaluatorCallbackConfig(
@@ -970,10 +1071,34 @@ def build_config(opts, overrides: List[str]):
                     # subset would make the rungs incomparable, which is the one thing the
                     # ladder cannot tolerate.
                     paths=heldout_paths,
-                    # LMEvaluator.from_numpy_dataset raises when any path lacks a "label"
-                    # (eval/lm_evaluator.py:60-66), and the label is what its per-dataset
-                    # metric is keyed on.
-                    metadata=[{"label": "heldout-val"}] * len(heldout_paths),
+                    # ONE LABEL PER SOURCE, NOT ONE LABEL FOR ALL OF THEM, AND THIS IS WHAT
+                    # MAKES THE COVERAGE LIMIT VISIBLE INSTEAD OF SILENT.
+                    #
+                    # `LMEvaluator.from_numpy_dataset` raises when any path lacks a "label"
+                    # (eval/lm_evaluator.py:60-66) and keys a separate metric on each distinct
+                    # one. A single shared label therefore folds every source into one number,
+                    # which is exactly the number that cannot tell you whether a source was
+                    # read at all: `heldout-val/CE loss` looks equally healthy whether the rung
+                    # covered eight sources or truncated after the first.
+                    #
+                    # That matters because the rung DOES truncate. `eval_duration` is 32 batches
+                    # over a `shuffle=False` loader, which is 8.39% of one 12,208-instance
+                    # shard, so sources after the first are not reached. Covering all eight
+                    # would need ~3,052 batches per rung -- ~83 min of 8xA100 across the seven
+                    # rungs, roughly $30 a run and more than the training it measures.
+                    #
+                    # So do not pay for it: name each source instead. An unread source reports
+                    # `<source>/CE loss` = NaN, because `MeanMetric.compute` is
+                    # `weighted_sum / weight` = 0/0 for an untouched label (eval/metrics.py:81-89)
+                    # -- loud in a plot and impossible to mistake for a measurement. And the
+                    # sources that ARE read now give per-source CE for free, which is the
+                    # domain-sliced secondary endpoint the study wanted and previously could not
+                    # compute at all.
+                    #
+                    # The label is the source directory, so it is stable across arms and seeds
+                    # and reads the same in W&B as in the corpus manifest. Derived from the
+                    # REMOTE urls above, because localisation flattens the source directory away.
+                    metadata=[{"label": label} for label in heldout_labels],
                     sequence_length=opts.sequence_length,
                     # From the corpus, never pinned. The padded vocab the model is built with
                     # comes off this same object.

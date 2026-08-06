@@ -996,18 +996,17 @@ def test_every_heldout_path_reaching_the_evaluator_is_local_and_is_the_sorted_pr
     eval_dataset = config.trainer.callbacks["lm_eval"].eval_dataset
     paths = eval_dataset.paths
 
-    assert entry.HELDOUT_SHARDS == 4
-    assert len(paths) == min(entry.HELDOUT_SHARDS, len(val)) == 4
+    # Derived from HELDOUT_SHARDS rather than pinning it to a literal. This test is about
+    # localisation, ordering and truncation; the count is a separate decision that moved from 4
+    # to 8 for source coverage, and a test that hardcodes it fails on that unrelated change.
+    expected = min(entry.HELDOUT_SHARDS, len(val))
+    assert len(paths) == expected
     for path in paths:
         assert not is_url(path), f"held-out paths must be local, got {path}"
-    # The sorted prefix of the six, in order: 00000, 00001, 00002, 00003. Basenames rather than
-    # full paths, because the directory is the run's work dir.
-    assert [Path(p).name for p in paths] == [
-        "val-00000.u32le.bin",
-        "val-00001.u32le.bin",
-        "val-00002.u32le.bin",
-        "val-00003.u32le.bin",
-    ]
+    # Sorted despite the unsorted input, and prefixed with the source directory because
+    # basenames repeat across sources -- `dclm/val-00000` and `finemath/val-00000` would
+    # otherwise cache to the same file and the second would overwrite the first.
+    assert [Path(p).name for p in paths] == [f"src--val-{i:05d}.u32le.bin" for i in range(expected)]
     # And they landed under the work dir both invocations share, not somewhere per-process.
     for path in paths:
         assert Path(path).parent == tmp_path / "heldout-shards"
@@ -1026,7 +1025,10 @@ def test_fewer_val_shards_than_the_ladder_wants_uses_all_of_them(monkeypatch, tm
     _, config = _build_with_heldout(monkeypatch, tmp_path, val)
     paths = config.trainer.callbacks["lm_eval"].eval_dataset.paths
     assert len(paths) == min(entry.HELDOUT_SHARDS, len(val)) == 2
-    assert [Path(p).name for p in paths] == ["val-00000.u32le.bin", "val-00001.u32le.bin"]
+    assert [Path(p).name for p in paths] == [
+        "src--val-00000.u32le.bin",
+        "src--val-00001.u32le.bin",
+    ]
 
 
 def test_the_eval_dataset_is_padded_and_carries_a_label_for_every_path(monkeypatch, tmp_path):
@@ -1054,9 +1056,34 @@ def test_the_eval_dataset_is_padded_and_carries_a_label_for_every_path(monkeypat
     metadata = eval_dataset.metadata
     paths = eval_dataset.paths
     assert metadata is not None and paths is not None
-    assert len(metadata) == len(paths) == 4
+    assert len(metadata) == len(paths) == min(entry.HELDOUT_SHARDS, len(val))
     assert all("label" in m for m in metadata)
-    assert {m["label"] for m in metadata} == {"heldout-val"}
+    # ONE LABEL PER SOURCE, not one shared label. A shared label folds every source into a
+    # single `heldout-val/CE loss`, which reads identically whether the rung covered eight
+    # sources or truncated after the first -- and the rung does truncate, at 32 batches over a
+    # shuffle=False loader. Per-source labels make an unread source report NaN instead of
+    # vanishing, and give the domain-sliced secondary endpoint for free.
+    #
+    # Every shard here is under `tokens/src/`, so one label is correct for this fixture; what is
+    # pinned is that the label comes from the SOURCE DIRECTORY rather than being a constant.
+    assert {m["label"] for m in metadata} == {"src"}
+
+
+def test_each_heldout_source_gets_its_own_label(monkeypatch, tmp_path):
+    """A shared label cannot distinguish "eight sources scored" from "one source scored".
+
+    The labels must also come from the REMOTE urls: `_localised_heldout_paths` caches to
+    `<work-dir>/heldout-shards/<source>--<basename>`, so deriving them from the local paths
+    would read `heldout-shards` for every shard.
+    """
+    val = [
+        f"s3://edullm-data/pretrain/reservoir-dolma2/v1/tokens/{source}/val-00000.u32le.bin"
+        for source in ("dclm", "finemath", "stackv2-edu")
+    ]
+    _, config = _build_with_heldout(monkeypatch, tmp_path, val)
+    metadata = config.trainer.callbacks["lm_eval"].eval_dataset.metadata
+
+    assert [m["label"] for m in metadata] == ["dclm", "finemath", "stackv2-edu"]
 
 
 def test_the_eval_dataset_reads_the_corpus_width_and_vocab_rather_than_a_default(
@@ -1349,7 +1376,7 @@ def test_a_cached_shard_of_the_right_size_is_not_downloaded_again(tmp_path, monk
 
     url = "s3://bucket/pretrain/x/val-00001.u32le.bin"
     payload = b"\xde\xad\xbe\xef" * 8
-    cached = tmp_path / "heldout-shards" / "val-00001.u32le.bin"
+    cached = tmp_path / "heldout-shards" / "x--val-00001.u32le.bin"
     cached.parent.mkdir(parents=True, exist_ok=True)
     cached.write_bytes(payload)
 
@@ -1427,14 +1454,14 @@ def test_only_one_process_per_node_heads_or_downloads_the_heldout_shards(monkeyp
     ):
         out = entry._localised_heldout_paths([url], _Opts())
     download.assert_not_called()
-    assert out == [str(tmp_path / "heldout-shards" / "val-00001.u32le.bin")]
+    assert out == [str(tmp_path / "heldout-shards" / "x--val-00001.u32le.bin")]
 
     # Local rank 0 on the same box still does the real, size-verified fetch. The shard is
     # pre-created at the WRONG size so the size branch is actually reached: the condition is
     # `not dest.is_file() or size != get_file_size(url)`, which short-circuits on an absent
     # file and would never issue a HEAD at all.
     monkeypatch.setenv("LOCAL_RANK", "0")
-    cached = tmp_path / "heldout-shards" / "val-00001.u32le.bin"
+    cached = tmp_path / "heldout-shards" / "x--val-00001.u32le.bin"
     cached.parent.mkdir(parents=True, exist_ok=True)
     cached.write_bytes(b"\x00" * 8)
 
@@ -1633,3 +1660,107 @@ def test_the_shutdown_barrier_runs_before_the_rank_zero_closes():
     # fix moves the barrier, not close, so #546's invariant has to survive it.
     pool_at = src.index("_multi_thread_pool.shutdown")
     assert pool_at < close_at, "PR #546's invariant: thread pools drain before callback.close()"
+
+
+RESERVOIR_VAL_SHARDS = {
+    "dclm": 5,
+    "finemath": 6,
+    "finepdfs-edu": 5,
+    "fineweb-edu": 3,
+    "finewiki": 1,
+    "pes2o": 2,
+    "pubmed": 1,
+    "stackexchange": 1,
+    "stackv2-edu": 7,
+    "synthetic-finephrase-faq": 2,
+    "synthetic-finephrase-math": 2,
+    "synthetic-finephrase-table": 2,
+    "synthetic-finephrase-tutorial": 2,
+}
+"""``pretrain/reservoir-dolma2/v1``'s real val layout, from its own realized-tokens.json.
+
+Thirteen sources with val shards (``ubuntu-irc`` has none -- 1.87B source tokens cannot fill one
+5.0B-token val shard at ``val_fraction`` 0.005), 39 shards, eight categories.
+"""
+
+
+def _reservoir_val_urls():
+    base = "s3://edullm-data/pretrain/reservoir-dolma2/v1/tokens"
+    return [
+        f"{base}/{source}/val-{index:05d}.u32le.bin"
+        for source, count in RESERVOIR_VAL_SHARDS.items()
+        for index in range(count)
+    ]
+
+
+def test_heldout_selection_does_not_take_every_shard_from_one_source():
+    """Mutation: ``sorted(val_paths)[:N]``, which is what this did.
+
+    Shards are ``tokens/<source>/val-NNNNN.u32le.bin``, so sorting orders by source name and a
+    prefix slice returns whatever the alphabetically-first sources happen to hold. At the old
+    ``HELDOUT_SHARDS = 4`` that was ``dclm/val-00000`` .. ``dclm/val-00003`` -- ONE source of
+    thirteen, one category of eight, 11.9% of train, with code (15.9%) and synthetic (23.8%)
+    never sampled.
+
+    Nothing fails. The run reports a held-out CE computed on web text under a whole-corpus label.
+
+    Both bounds below are asserted rather than one, because the naive slice's damage depends on
+    the count and a test that only checked today's count would stop meaning anything the moment
+    it changed. At 4 the slice is one source; at 8 it is two (dclm's five, then finemath's first
+    three). Either way it is far short of eight.
+    """
+    urls = _reservoir_val_urls()
+    assert len(urls) == 39, "the fixture should match the published corpus"
+
+    assert len({u.rsplit("/", 2)[-2] for u in sorted(urls)[:4]}) == 1, (
+        "precondition: at the original count the naive slice collapses to a single source"
+    )
+    naive_sources = {u.rsplit("/", 2)[-2] for u in sorted(urls)[: entry.HELDOUT_SHARDS]}
+    assert len(naive_sources) < entry.HELDOUT_SHARDS, (
+        "precondition: the naive slice still under-covers at the current count"
+    )
+
+    picked = entry.spread_across_sources(urls, entry.HELDOUT_SHARDS)
+    assert len(picked) == entry.HELDOUT_SHARDS
+    assert len({u.rsplit("/", 2)[-2] for u in picked}) == entry.HELDOUT_SHARDS, (
+        "every selected shard must come from a different source"
+    )
+
+
+def test_heldout_selection_is_deterministic_regardless_of_input_order():
+    """Arms and seeds must score the SAME material or the ladder rungs are incomparable.
+
+    The reader gives no ordering guarantee, so the selection has to impose one.
+    """
+    urls = _reservoir_val_urls()
+    forward = entry.spread_across_sources(urls, entry.HELDOUT_SHARDS)
+    backward = entry.spread_across_sources(list(reversed(urls)), entry.HELDOUT_SHARDS)
+    assert forward == backward
+
+
+def test_heldout_selection_interleaves_rather_than_grouping_by_source():
+    """Order is load-bearing, because the evaluator truncates.
+
+    ``eval_duration`` bounds a rung at 32 batches over a ``shuffle=False`` loader
+    (train/callbacks/evaluator_callback.py:155-157, :392), so it reads instances in list order
+    and stops. A result grouped by source would put every shard of the first source ahead of any
+    other and hand the truncation problem straight back.
+    """
+    urls = _reservoir_val_urls()
+    picked = entry.spread_across_sources(urls, 6)
+    sources = [u.rsplit("/", 2)[-2] for u in picked]
+    assert sources == sorted(sources), "one shard per source, in source order, before any second"
+    assert len(set(sources)) == 6
+
+
+def test_heldout_selection_survives_a_single_directory_corpus():
+    """``regmix-10b`` and ``olmo-150b`` put val shards under one prefix. Do not regress them."""
+    base = "s3://edullm-data/pretrain/regmix-10b/v1/tokens/all"
+    urls = [f"{base}/val-{i:05d}.u32le.bin" for i in range(7)]
+    picked = entry.spread_across_sources(urls, 4)
+    assert picked == sorted(urls)[:4], "one source means the plain prefix is already right"
+
+
+def test_heldout_selection_returns_what_exists_when_asked_for_more():
+    urls = _reservoir_val_urls()[:3]
+    assert len(entry.spread_across_sources(urls, 8)) == 3
