@@ -30,14 +30,16 @@ S3.
 
 ## Conditions and checkpoint
 
-Use the completed final checkpoint step **23166** for both arms.
+Use only the completed final checkpoint step **23166** for both arms. Do not
+run intermediate checkpoint evaluations.
 
-Evaluator cohorts (seed `20260801`, no `facts_shuffled`):
+All three conditions run on 100% of the 4,191 context-eligible source eval rows
+(seed `20260801`) with identical row IDs. No `facts_shuffled`; no
+Metamath-validity result.
 
-- `facts_present` — correct global premise block, 80% per family
-- `facts_absent` — no global premise block, 10% per family
-- `facts_corrupted` — premise names retained but statements replaced, 10% per
-  family
+- `facts_present` — correct global premise block
+- `facts_absent` — no global premise block
+- `facts_corrupted` — premise names retained but statements replaced
 
 ## Execution order
 

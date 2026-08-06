@@ -77,44 +77,25 @@ def test_generation_budget_uses_remaining_context_instead_of_skipping_row():
     ) == {0: 6, 1: 2}
 
 
-def test_headline_uses_stable_eighty_percent_and_diagnostics_use_ten_percent_subsets():
+def test_rows_for_condition_returns_all_rows_for_every_condition():
     rows = [{"id": f"row-{index}"} for index in range(23)]
 
-    present = run_eval.rows_for_condition(
-        rows,
-        family="mizar",
-        condition="facts_present",
-        seed=20260801,
-    )
-    present_reordered = run_eval.rows_for_condition(
-        list(reversed(rows)),
-        family="mizar",
-        condition="facts_present",
-        seed=20260801,
-    )
-    present_ids = {row["id"] for row in present}
-    assert len(present) == 19  # ceil(23 * 80%)
-    assert present_ids == {row["id"] for row in present_reordered}
-
-    for condition in ("facts_absent", "facts_corrupted"):
-        diagnostic = run_eval.rows_for_condition(
+    for condition in run_eval.CONDITIONS:
+        selected = run_eval.rows_for_condition(
             rows,
             family="mizar",
             condition=condition,
             seed=20260801,
         )
-        diagnostic_reordered = run_eval.rows_for_condition(
+        reordered = run_eval.rows_for_condition(
             list(reversed(rows)),
             family="mizar",
             condition=condition,
             seed=20260801,
         )
 
-        assert len(diagnostic) == 3  # ceil(23 * 10%)
-        assert {row["id"] for row in diagnostic} == {
-            row["id"] for row in diagnostic_reordered
-        }
-        assert {row["id"] for row in diagnostic} < present_ids
+        assert selected == rows
+        assert selected == list(reversed(reordered))
 
     with pytest.raises(ValueError, match="unknown condition"):
         run_eval.rows_for_condition(
@@ -575,6 +556,7 @@ def _write_exported_model(
     arm="dense",
     architecture="Qwen2ForCausalLM",
     source_commit="c" * 40,
+    checkpoint_step=run_eval.FINAL_CHECKPOINT_STEP,
 ):
     model.mkdir(parents=True)
     (model / "config.json").write_text(
@@ -610,7 +592,7 @@ def _write_exported_model(
         json.dumps(
             {
                 "schema_version": "p3-model-export-v1",
-                "checkpoint_step": 24_540,
+                "checkpoint_step": checkpoint_step,
                 "arm": arm,
                 "base_model_id": "Qwen/Qwen2.5-0.5B",
                 "base_model_revision": "revision-abc",
@@ -623,6 +605,51 @@ def _write_exported_model(
             }
         )
     )
+
+
+def test_cli_rejects_non_final_checkpoint_before_model_load(tmp_path, monkeypatch):
+    model = tmp_path / "hf"
+    _write_exported_model(model, arm="dense", checkpoint_step=24_540)
+
+    transformers = ModuleType("transformers")
+
+    class MustNotLoad:
+        @classmethod
+        def from_pretrained(cls, *_args, **_kwargs):
+            raise AssertionError(
+                "non-final checkpoint must fail before model or tokenizer load"
+            )
+
+    transformers.AutoModelForCausalLM = MustNotLoad
+    transformers.AutoTokenizer = MustNotLoad
+    monkeypatch.setitem(sys.modules, "transformers", transformers)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_eval.py",
+            "--model",
+            str(model),
+            "--arm",
+            "dense",
+            "--families",
+            "mizar",
+            "--out",
+            str(tmp_path / "result.json"),
+        ],
+    )
+
+    with pytest.raises(SystemExit, match=str(run_eval.FINAL_CHECKPOINT_STEP)):
+        run_eval.main()
+
+
+def test_validate_reportable_checkpoint_step_accepts_final_export():
+    run_eval.validate_reportable_checkpoint_step(run_eval.FINAL_CHECKPOINT_STEP)
+
+
+def test_validate_reportable_checkpoint_step_rejects_other_exports():
+    with pytest.raises(ValueError, match=str(run_eval.FINAL_CHECKPOINT_STEP)):
+        run_eval.validate_reportable_checkpoint_step(24_540)
 
 
 def test_cli_rejects_arm_mismatch_before_model_load(tmp_path, monkeypatch):
@@ -671,7 +698,8 @@ def test_evaluation_metadata_requires_complete_exporter_provenance(tmp_path):
     (corpus / "shards" / "isabelle.jsonl").write_text('{"facts":{"sibling_fact":"I"}}\n')
 
     model = tmp_path / "run" / "step24540" / "hf"
-    _write_exported_model(model)
+    checkpoint_step = run_eval.FINAL_CHECKPOINT_STEP
+    _write_exported_model(model, checkpoint_step=checkpoint_step)
 
     args = SimpleNamespace(
         seed=20260801,
@@ -706,26 +734,8 @@ def test_evaluation_metadata_requires_complete_exporter_provenance(tmp_path):
         "facts_absent",
     ]
     assert first["evaluation_controls"]["condition_cohort_policy"] == {
-        "facts_present": {
-            "selection": "stable-sha256-stratified-per-family-v1",
-            "numerator": 4,
-            "denominator": 5,
-            "rounding": "ceiling",
-        },
-        "facts_absent": {
-            "selection": "stable-sha256-stratified-per-family-v1",
-            "numerator": 1,
-            "denominator": 10,
-            "rounding": "ceiling",
-            "subset_of": "facts_present",
-        },
-        "facts_corrupted": {
-            "selection": "stable-sha256-stratified-per-family-v1",
-            "numerator": 1,
-            "denominator": 10,
-            "rounding": "ceiling",
-            "subset_of": "facts_present",
-        },
+        condition: {"selection": "all-context-eligible-v1"}
+        for condition in run_eval.CONDITIONS
     }
     assert first["input_provenance"]["tokenizer_sha256"]
     assert first["input_provenance"]["corpus_sha256"]
@@ -734,7 +744,7 @@ def test_evaluation_metadata_requires_complete_exporter_provenance(tmp_path):
     assert first["input_provenance"]["train_shard_sha256"] == {
         "mizar": hashlib.sha256(mizar_train.read_bytes()).hexdigest(),
     }
-    assert first["input_provenance"]["model"]["checkpoint_step"] == 24_540
+    assert first["input_provenance"]["model"]["checkpoint_step"] == checkpoint_step
     assert first["input_provenance"]["model"]["base_model_id"] == "Qwen/Qwen2.5-0.5B"
     assert first["input_provenance"]["model"]["base_model_revision"] == "revision-abc"
     assert first["input_provenance"]["model"]["initial_weights_sha256"] == "a" * 64

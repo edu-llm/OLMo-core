@@ -63,36 +63,17 @@ SEP = "---"
 CONDITIONS = ("facts_present", "facts_absent", "facts_corrupted")
 FAMILIES = ("enigma", "isabelle", "metamath", "mizar", "prf2", "thproofs")
 DEFAULT_MAX_NEW_TOKENS = 8_192
-RESULT_SCHEMA_VERSION = "p3-eval-v5"
+RESULT_SCHEMA_VERSION = "p3-eval-v7"
 MODEL_EXPORT_SCHEMA_VERSION = "p3-model-export-v1"
+FINAL_CHECKPOINT_STEP = 23_166
 SAFETENSORS_SHARD = re.compile(r"^model-(\d{5})-of-(\d{5})\.safetensors$")
 SAFETENSORS_INDEX = "model.safetensors.index.json"
 METAMATH_VERIFIER_SCHEMA_VERSION = "p3-metamath-tristate-v1"
 NLL_CONTEXT_POLICY = "bounded_sliding_window_preserve_predecessor"
 NLL_TARGET_POLICY = "combined_prompt_target_suffix_plus_single_eos"
-DIAGNOSTIC_CONDITIONS = CONDITIONS[1:]
-HEADLINE_NUMERATOR = 4
-HEADLINE_DENOMINATOR = 5
-DIAGNOSTIC_NUMERATOR = 1
-DIAGNOSTIC_DENOMINATOR = 10
-COHORT_POLICY = "stable-sha256-stratified-per-family-v1"
+COHORT_POLICY = "all-context-eligible-v1"
 CONDITION_COHORT_POLICY = {
-    "facts_present": {
-        "selection": COHORT_POLICY,
-        "numerator": HEADLINE_NUMERATOR,
-        "denominator": HEADLINE_DENOMINATOR,
-        "rounding": "ceiling",
-    },
-    **{
-        condition: {
-            "selection": COHORT_POLICY,
-            "numerator": DIAGNOSTIC_NUMERATOR,
-            "denominator": DIAGNOSTIC_DENOMINATOR,
-            "rounding": "ceiling",
-            "subset_of": "facts_present",
-        }
-        for condition in DIAGNOSTIC_CONDITIONS
-    },
+    condition: {"selection": COHORT_POLICY} for condition in CONDITIONS
 }
 CORRUPTED_METAMATH_REASON = (
     "validity against visible corrupted statements is unsupported; the current "
@@ -116,41 +97,14 @@ def rows_for_condition(
     condition: str,
     seed: int,
 ) -> list[dict]:
-    """Return the deterministic condition cohort while preserving source order."""
+    """Return every context-eligible row while preserving source order."""
+    del seed
     if condition not in CONDITIONS:
         raise ValueError(f"unknown condition {condition!r}")
     if not rows:
         return list(rows)
     require_unique_ids(rows, f"{family}/{condition} cohort selection")
-
-    def rank(row: dict, namespace: str) -> bytes:
-        identity = f"{seed}\0{family}\0{namespace}\0{row['id']}".encode()
-        return hashlib.sha256(identity).digest()
-
-    headline_count = (
-        len(rows) * HEADLINE_NUMERATOR + HEADLINE_DENOMINATOR - 1
-    ) // HEADLINE_DENOMINATOR
-    headline_ids = {
-        row["id"]
-        for row in sorted(rows, key=lambda row: rank(row, "facts_present"))[
-            :headline_count
-        ]
-    }
-    if condition == "facts_present":
-        selected_ids = headline_ids
-    else:
-        diagnostic_count = (
-            len(rows) * DIAGNOSTIC_NUMERATOR + DIAGNOSTIC_DENOMINATOR - 1
-        ) // DIAGNOSTIC_DENOMINATOR
-        headline_rows = [row for row in rows if row["id"] in headline_ids]
-        selected_ids = {
-            row["id"]
-            for row in sorted(
-                headline_rows,
-                key=lambda row: rank(row, condition),
-            )[:diagnostic_count]
-        }
-    return [row for row in rows if row["id"] in selected_ids]
+    return list(rows)
 
 
 def discover_families(corpus: str | Path) -> list[str]:
@@ -1118,6 +1072,15 @@ def _step_from_path(path: Path) -> int | None:
     return None
 
 
+def validate_reportable_checkpoint_step(checkpoint_step: int) -> None:
+    """Refuse reportable evaluation exports from non-final checkpoints."""
+    if checkpoint_step != FINAL_CHECKPOINT_STEP:
+        raise ValueError(
+            f"reportable evaluation requires checkpoint step {FINAL_CHECKPOINT_STEP}; "
+            f"export metadata declares {checkpoint_step}"
+        )
+
+
 def resolve_model_provenance(model_path: str | Path) -> dict:
     """Require exporter-supplied model identity and semantic configuration."""
     resolved = Path(model_path).expanduser().resolve()
@@ -1322,7 +1285,10 @@ def main():
         raise SystemExit(
             f"exported arm {model_provenance['arm']!r} does not match --arm {args.arm!r}"
         )
-
+    try:
+        validate_reportable_checkpoint_step(model_provenance["checkpoint_step"])
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 

@@ -27,9 +27,10 @@ import random
 import re
 import sys
 
-RESULT_SCHEMA_VERSION = "p3-eval-v5"
+RESULT_SCHEMA_VERSION = "p3-eval-v7"
 COMPARISON_SCHEMA_VERSION = "p3-comparison-v3"
 MODEL_EXPORT_SCHEMA_VERSION = "p3-model-export-v1"
+FINAL_CHECKPOINT_STEP = 23_166
 SAFETENSORS_SHARD = re.compile(r"^model-(\d{5})-of-(\d{5})\.safetensors$")
 SAFETENSORS_INDEX = "model.safetensors.index.json"
 INFERENCE_SCOPE = (
@@ -384,6 +385,11 @@ def _validate_model_provenance(result, label):
         or checkpoint_step <= 0
     ):
         raise ValueError(f"{label} checkpoint_step must be a positive integer")
+    if checkpoint_step != FINAL_CHECKPOINT_STEP:
+        raise ValueError(
+            f"{label} checkpoint_step must be {FINAL_CHECKPOINT_STEP} for "
+            "reportable evaluation"
+        )
     for key in (
         "base_model_id",
         "base_model_revision",
@@ -651,6 +657,8 @@ def _validate_result_schema(result, label):
                 "family condition keys"
             )
         cohort_ids_by_condition = {}
+        reference_ids = None
+        family_evaluated = family_result["evaluated_examples"]
         for condition, value in conditions.items():
             condition_ids = _validate_condition_schema(label, family, condition, value)
             cohort_ids_by_condition[condition] = condition_ids
@@ -660,19 +668,18 @@ def _validate_result_schema(result, label):
                     family_result[key],
                     f"{label}/{family}/{condition}.{key}",
                 )
-            if value["evaluated_examples"] > family_result["evaluated_examples"]:
+            if value["evaluated_examples"] != family_evaluated:
                 raise ValueError(
-                    f"{label}/{family}/{condition}: condition cohort exceeds "
-                    "the full family cohort"
+                    f"{label}/{family}/{condition}: condition cohort must equal "
+                    "the full family evaluated cohort"
                 )
-        present_ids = cohort_ids_by_condition.get("facts_present")
-        if present_ids is not None:
-            for condition, condition_ids in cohort_ids_by_condition.items():
-                if not condition_ids <= present_ids:
-                    raise ValueError(
-                        f"{label}/{family}/{condition}: condition cohort is not a "
-                        "subset of facts_present"
-                    )
+            if reference_ids is None:
+                reference_ids = condition_ids
+            elif condition_ids != reference_ids:
+                raise ValueError(
+                    f"{label}/{family}/{condition}: condition cohort IDs must be "
+                    "identical across all conditions"
+                )
 
 
 def validate_eval_compatibility(dense, split):

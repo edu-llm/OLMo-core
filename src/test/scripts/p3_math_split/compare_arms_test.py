@@ -65,7 +65,15 @@ def item(
     }
 
 
-def result(arm, items):
+ALL_CONTEXT_COHORT_POLICY = {
+    condition: {"selection": "all-context-eligible-v1"}
+    for condition in ("facts_present", "facts_absent", "facts_corrupted")
+}
+
+
+def result(arm, items, *, checkpoint_step=None):
+    if checkpoint_step is None:
+        checkpoint_step = compare.FINAL_CHECKPOINT_STEP
     trained_weight_files, trained_weights_root_sha256 = trained_weight_identity(arm)
     target_tokens = sum(entry["target_tokens"] for entry in items)
     target_correct = sum(entry["target_correct"] for entry in items)
@@ -74,33 +82,12 @@ def result(arm, items):
     exact = sum(bool(entry["exact_match"]) for entry in items)
     exact_eligible = sum(bool(entry["exact_match"]) for entry in eligible)
     return {
-        "schema_version": "p3-eval-v5",
+        "schema_version": "p3-eval-v7",
         "arm": arm,
         "evaluation_controls": {
             "evaluator_seed": 20260801,
             "conditions": ["facts_present"],
-            "condition_cohort_policy": {
-                "facts_present": {
-                    "selection": "stable-sha256-stratified-per-family-v1",
-                    "numerator": 4,
-                    "denominator": 5,
-                    "rounding": "ceiling",
-                },
-                "facts_absent": {
-                    "selection": "stable-sha256-stratified-per-family-v1",
-                    "numerator": 1,
-                    "denominator": 10,
-                    "rounding": "ceiling",
-                    "subset_of": "facts_present",
-                },
-                "facts_corrupted": {
-                    "selection": "stable-sha256-stratified-per-family-v1",
-                    "numerator": 1,
-                    "denominator": 10,
-                    "rounding": "ceiling",
-                    "subset_of": "facts_present",
-                },
-            },
+            "condition_cohort_policy": ALL_CONTEXT_COHORT_POLICY,
             "do_sample": False,
             "temperature": 0.7,
             "context_length": 16_384,
@@ -121,7 +108,7 @@ def result(arm, items):
             "evaluator_sha256": SHA_D,
             "model": {
                 "resolved_path": f"/models/{arm}",
-                "checkpoint_step": 24_540,
+                "checkpoint_step": checkpoint_step,
                 "arm": arm,
                 "base_model_id": "Qwen/Qwen2.5-0.5B",
                 "base_model_revision": "revision-abc",
@@ -137,7 +124,7 @@ def result(arm, items):
                 "export_metadata_schema": "p3-model-export-v1",
                 "export_metadata": {
                     "schema_version": "p3-model-export-v1",
-                    "checkpoint_step": 24_540,
+                    "checkpoint_step": checkpoint_step,
                     "arm": arm,
                     "base_model_id": "Qwen/Qwen2.5-0.5B",
                     "base_model_revision": "revision-abc",
@@ -325,7 +312,7 @@ def test_comparison_rejects_duplicate_ids_before_mapping():
         )
 
 
-def test_comparator_requires_condition_subsets_and_pairing_across_arms():
+def test_comparator_requires_identical_full_cohorts_across_conditions_and_arms():
     entries = [
         item("first", tokens=2, correct=1, nll_sum=2.0, exact=False),
         item("second", tokens=2, correct=1, nll_sum=2.0, exact=False),
@@ -339,7 +326,7 @@ def test_comparator_requires_condition_subsets_and_pairing_across_arms():
         )
 
     dense["families"]["mizar"]["conditions"]["facts_absent"]["per_example"][1]["id"] = "different"
-    with pytest.raises(ValueError, match="not a subset of facts_present"):
+    with pytest.raises(ValueError, match="identical across all conditions"):
         compare.validate_eval_compatibility(dense, split)
 
     dense = result("dense", copy.deepcopy(entries))
@@ -349,7 +336,57 @@ def test_comparator_requires_condition_subsets_and_pairing_across_arms():
         compare.validate_eval_compatibility(dense, split)
 
 
-def test_comparator_accepts_paired_absent_subset_of_present_cohort():
+def test_comparator_accepts_identical_full_cohorts_for_all_conditions():
+    entries = [
+        item("first", tokens=2, correct=1, nll_sum=2.0, exact=False),
+        item("second", tokens=2, correct=1, nll_sum=2.0, exact=False),
+    ]
+    dense = result("dense", copy.deepcopy(entries))
+    split = result("split", copy.deepcopy(entries))
+    for arm_result in (dense, split):
+        arm_result["evaluation_controls"]["conditions"].extend(
+            ["facts_absent", "facts_corrupted"]
+        )
+        present = arm_result["families"]["mizar"]["conditions"]["facts_present"]
+        arm_result["families"]["mizar"]["conditions"]["facts_absent"] = copy.deepcopy(present)
+        arm_result["families"]["mizar"]["conditions"]["facts_corrupted"] = copy.deepcopy(present)
+
+    compare.validate_eval_compatibility(dense, split)
+
+
+def test_comparator_rejects_different_condition_cohort_ids():
+    entries = [
+        item("first", tokens=2, correct=1, nll_sum=2.0, exact=False),
+        item("second", tokens=2, correct=1, nll_sum=2.0, exact=False),
+    ]
+    dense = result("dense", copy.deepcopy(entries))
+    split = result("split", copy.deepcopy(entries))
+    for arm_result in (dense, split):
+        arm_result["evaluation_controls"]["conditions"].extend(
+            ["facts_absent", "facts_corrupted"]
+        )
+        present = copy.deepcopy(arm_result["families"]["mizar"]["conditions"]["facts_present"])
+        absent = copy.deepcopy(present)
+        corrupted = copy.deepcopy(present)
+        absent["per_example"][1]["id"] = "different"
+        arm_result["families"]["mizar"]["conditions"]["facts_present"] = present
+        arm_result["families"]["mizar"]["conditions"]["facts_absent"] = absent
+        arm_result["families"]["mizar"]["conditions"]["facts_corrupted"] = corrupted
+
+    with pytest.raises(ValueError, match="identical across all conditions"):
+        compare.validate_eval_compatibility(dense, split)
+
+
+def test_comparator_rejects_non_final_checkpoint_step():
+    entries = [item("one", tokens=2, correct=1, nll_sum=2.0, exact=False)]
+    dense = result("dense", copy.deepcopy(entries), checkpoint_step=24_540)
+    split = result("split", copy.deepcopy(entries), checkpoint_step=24_540)
+
+    with pytest.raises(ValueError, match=str(compare.FINAL_CHECKPOINT_STEP)):
+        compare.validate_eval_compatibility(dense, split)
+
+
+def test_comparator_rejects_partial_condition_cohort():
     entries = [
         item("first", tokens=2, correct=1, nll_sum=2.0, exact=False),
         item("second", tokens=2, correct=1, nll_sum=2.0, exact=False),
@@ -365,19 +402,11 @@ def test_comparator_accepts_paired_absent_subset_of_present_cohort():
         absent["context_eligible_examples"] = len(entries)
         arm_result["families"]["mizar"]["conditions"]["facts_absent"] = absent
 
-    compare.validate_eval_compatibility(dense, split)
-    got = compare.compare_condition(
-        dense,
-        split,
-        family="mizar",
-        condition="facts_absent",
-        n_boot=10,
-        seed=1,
-    )
-    assert got["paired_examples"] == 1
+    with pytest.raises(ValueError, match="full family evaluated cohort"):
+        compare.validate_eval_compatibility(dense, split)
 
 
-def test_comparator_accepts_sampled_present_cohort():
+def test_comparator_rejects_sampled_present_cohort():
     entries = [
         item(str(index), tokens=2, correct=1, nll_sum=2.0, exact=False)
         for index in range(4)
@@ -393,7 +422,8 @@ def test_comparator_accepts_sampled_present_cohort():
         present["source_examples"] = 5
         present["context_eligible_examples"] = 5
 
-    compare.validate_eval_compatibility(dense, split)
+    with pytest.raises(ValueError, match="full family evaluated cohort"):
+        compare.validate_eval_compatibility(dense, split)
 
 
 def test_comparator_rejects_impossible_family_denominator_ordering():
@@ -880,7 +910,6 @@ def test_comparator_cross_checks_saved_config_source_and_manifest_identity(
         (("input_provenance", "tokenizer_sha256"), SHA_C),
         (("input_provenance", "corpus_sha256"), SHA_D),
         (("input_provenance", "eval_shard_sha256"), {"mizar": SHA_E}),
-        (("input_provenance", "model", "checkpoint_step"), 22_000),
         (("input_provenance", "model", "base_model_id"), "other-model"),
         (("input_provenance", "model", "base_model_revision"), "other-revision"),
         (("input_provenance", "model", "initial_weights_sha256"), SHA_B),
