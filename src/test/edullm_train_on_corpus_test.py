@@ -1979,14 +1979,16 @@ def test_every_heldout_path_reaching_the_evaluator_is_local_and_is_the_sorted_or
     for path in paths:
         assert not is_url(path), f"held-out paths must be local, got {path}"
     # All six, sorted -- the single-domain degenerate case of spread_across_sources. Basenames
-    # rather than full paths, because the directory is the run's work dir.
+    # rather than full paths, because the directory is the run's work dir. The cached name is
+    # "<domain>--<basename>": selection now spans domains, so a bare basename would let two
+    # domains' identically-numbered shards shadow each other in one cache dir.
     assert [Path(p).name for p in paths] == [
-        "val-00000.u32le.bin",
-        "val-00001.u32le.bin",
-        "val-00002.u32le.bin",
-        "val-00003.u32le.bin",
-        "val-00004.u32le.bin",
-        "val-00005.u32le.bin",
+        "src--val-00000.u32le.bin",
+        "src--val-00001.u32le.bin",
+        "src--val-00002.u32le.bin",
+        "src--val-00003.u32le.bin",
+        "src--val-00004.u32le.bin",
+        "src--val-00005.u32le.bin",
     ]
     # And they landed under the work dir both invocations share, not somewhere per-process.
     for path in paths:
@@ -2006,7 +2008,10 @@ def test_fewer_val_shards_than_the_ladder_wants_uses_all_of_them(monkeypatch, tm
     _, config = _build_with_heldout(monkeypatch, tmp_path, val)
     paths = config.trainer.callbacks["lm_eval"].eval_dataset.paths
     assert len(paths) == min(entry.HELDOUT_SHARDS, len(val)) == 2
-    assert [Path(p).name for p in paths] == ["val-00000.u32le.bin", "val-00001.u32le.bin"]
+    assert [Path(p).name for p in paths] == [
+        "src--val-00000.u32le.bin",
+        "src--val-00001.u32le.bin",
+    ]
 
 
 def test_the_eval_dataset_is_padded_and_carries_a_label_for_every_path(monkeypatch, tmp_path):
@@ -2625,7 +2630,7 @@ def test_a_cached_shard_of_the_right_size_is_not_downloaded_again(tmp_path, monk
 
     url = "s3://bucket/pretrain/x/val-00001.u32le.bin"
     payload = b"\xde\xad\xbe\xef" * 8
-    cached = tmp_path / "heldout-shards" / "val-00001.u32le.bin"
+    cached = tmp_path / "heldout-shards" / "x--val-00001.u32le.bin"
     cached.parent.mkdir(parents=True, exist_ok=True)
     cached.write_bytes(payload)
 
@@ -2698,14 +2703,14 @@ def test_only_one_process_per_node_heads_or_downloads_the_heldout_shards(monkeyp
     ):
         out = entry._localised_heldout_paths([url], _Opts())
     download.assert_not_called()
-    assert out == [str(tmp_path / "heldout-shards" / "val-00001.u32le.bin")]
+    assert out == [str(tmp_path / "heldout-shards" / "x--val-00001.u32le.bin")]
 
     # Local rank 0 on the same box still does the real, size-verified fetch. The shard is
     # pre-created at the WRONG size so the size branch is actually reached: the condition is
     # `not dest.is_file() or size != get_file_size(url)`, which short-circuits on an absent
     # file and would never issue a HEAD at all.
     monkeypatch.setenv("LOCAL_RANK", "0")
-    cached = tmp_path / "heldout-shards" / "val-00001.u32le.bin"
+    cached = tmp_path / "heldout-shards" / "x--val-00001.u32le.bin"
     cached.parent.mkdir(parents=True, exist_ok=True)
     cached.write_bytes(b"\x00" * 8)
 
