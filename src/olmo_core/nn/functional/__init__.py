@@ -4,11 +4,14 @@ Common ``nn`` function implementations.
 
 import torch
 
+from .chunked_cross_entropy_loss import *
 from .cross_entropy_loss import *
 
 __all__ = [
     "cross_entropy_loss",
     "fused_linear_cross_entropy_loss",
+    "chunked_linear_cross_entropy_loss",
+    "DEFAULT_CE_CHUNK_SIZE",
     "l2_normalize",
 ]
 

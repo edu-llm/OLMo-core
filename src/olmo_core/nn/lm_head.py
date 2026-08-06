@@ -22,6 +22,8 @@ from olmo_core.exceptions import OLMoConfigurationError
 
 from .config import ModuleConfig
 from .functional import (
+    DEFAULT_CE_CHUNK_SIZE,
+    chunked_linear_cross_entropy_loss,
     cross_entropy_loss,
     fused_linear_cross_entropy_loss,
     l2_normalize,
@@ -71,6 +73,26 @@ class LMLossImplementation(StrEnum):
     """
     A low-memory triton implementation from Liger-Kernel that fused the linear logits projection
     with the loss computation.
+
+    .. warning::
+        **Requires liger-kernel, which is NOT installed in the eduLLM platform image.**
+        ``src/Dockerfile:93-95`` installs it, but that is the AI2 Beaker image;
+        ``.edullm/Dockerfile`` is what the platform builds and it does not. On a platform run this
+        setting raises ``RuntimeError`` at the first micro-step rather than degrading, i.e. after
+        the queue wait and the GPU allocation are already paid for. Use
+        :data:`chunked_linear` there.
+    """
+
+    chunked_linear = "chunked_linear"
+    """
+    Chunks the logits projection and the loss over tokens so that no ``(N, vocab_size)`` tensor is
+    ever materialised, using ``torch.utils.checkpoint`` and no extra dependency.
+
+    Slower than :data:`fused_linear` -- it pays one extra forward projection per chunk -- but it
+    runs on the platform image as built. Use when the logits tensor is the binding memory
+    constraint, which at ``vocab_size=100,352`` and a rank microbatch of 8,192 tokens means
+    **10.72 GiB** across the four simultaneously-live ``(N, V)`` tensors of the
+    :data:`default` path.
     """
 
 
@@ -90,6 +112,12 @@ class LMHeadConfig(ModuleConfig):
     bias: Optional[bool] = None
     dtype: DType = DType.float32
     loss_implementation: LMLossImplementation = LMLossImplementation.default
+    loss_chunk_size: int = DEFAULT_CE_CHUNK_SIZE
+    """
+    Tokens per chunk when :data:`loss_implementation` is
+    :data:`~LMLossImplementation.chunked_linear`. Ignored otherwise. Peak logits memory is
+    proportional to this.
+    """
 
     def num_params(self, d_model: int, vocab_size: int) -> int:
         """
@@ -166,6 +194,7 @@ class LMHead(nn.Module):
         bias: bool = True,
         init_device: str = "cpu",
         loss_implementation: LMLossImplementation = LMLossImplementation.default,
+        loss_chunk_size: int = DEFAULT_CE_CHUNK_SIZE,
     ):
         super().__init__()
         self.norm = (
@@ -175,6 +204,7 @@ class LMHead(nn.Module):
         self._d_model = d_model
         self._vocab_size = vocab_size
         self._loss_implementation = loss_implementation
+        self._loss_chunk_size = loss_chunk_size
         self._tp_mesh: Optional[DeviceMesh] = None
         self._cp_mesh: Optional[DeviceMesh] = None
 
@@ -281,6 +311,26 @@ class LMHead(nn.Module):
                 ce_loss = loss - z_loss
             else:
                 ce_loss = loss
+        elif self.loss_implementation == LMLossImplementation.chunked_linear:
+            logits = None
+            # Returns CE and Z separately, unlike the Liger path which returns their sum and has
+            # to subtract. Keeping them separate avoids a cancellation that shows up as a tiny
+            # negative `ce_loss` when z dominates.
+            ce_loss, z_loss = chunked_linear_cross_entropy_loss(
+                get_local_tensor(h).contiguous().view(-1, self.d_model),
+                weight=get_local_tensor(self.w_out.weight),
+                labels=get_local_tensor(labels).contiguous().view(-1),
+                bias=get_local_tensor(self.w_out.bias) if self.w_out.bias is not None else None,
+                ignore_index=ignore_index,
+                reduction=loss_reduction,
+                compute_z_loss=z_loss_multiplier is not None,
+                z_loss_multiplier=z_loss_multiplier or 1e-4,
+                chunk_size=self._loss_chunk_size,
+            )
+            if z_loss is not None:
+                loss = ce_loss + z_loss
+            else:
+                loss = ce_loss
         else:
             raise NotImplementedError(
                 f"'{self.loss_implementation}' loss implementation is not supported by {self.__class__.__name__}"
@@ -374,6 +424,21 @@ class LMHead(nn.Module):
         # 2. If we're not using 'fused_linear' loss and we don't have a norm, then we start with
         #    the input replicated and proceed the same way.
         # 3. If we're using 'fused_linear' loss we do sequence-parallel all the way through.
+        if self.loss_implementation == LMLossImplementation.chunked_linear:
+            # 'chunked_linear' would want case 3 -- it consumes the local hidden states against a
+            # replicated `w_out` exactly as 'fused_linear' does, so sequence-parallel throughout is
+            # almost certainly the correct plan. REFUSED RATHER THAN ASSUMED. A tensor-parallel
+            # plan that is merely plausible produces a run that trains, logs, and converges to the
+            # wrong thing; and nothing on this project's path exercises TP (the platform launcher
+            # `.edullm/train_on_corpus.py` sets no `tp_config`), so there is no test that would
+            # catch a wrong guess. If you need TP with chunked CE, derive the plan and add a
+            # distributed test alongside `src/test/nn/lm_head_test.py::test_lm_head_tp`.
+            raise NotImplementedError(
+                "tensor parallelism is not implemented for the 'chunked_linear' loss "
+                "implementation. Use 'fused_linear' (needs liger-kernel) or 'default' with TP, or "
+                "run without TP."
+            )
+
         parallelize_module(
             module=self,
             device_mesh=tp_mesh,
