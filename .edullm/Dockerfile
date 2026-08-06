@@ -296,6 +296,28 @@ RUN set -eux; \
     python -c "from awscrt.checksums import crc32c; assert crc32c(b'123456789') == 0xE3069283, 'awscrt computes something other than CRC-32C'"; \
     python -c "from edullm_data.read import dataset_paths, resolve_latest; print(dataset_paths.__module__)"
 
+# FLASHATTENTION-2 (Dao), PREBUILT WHEEL — NO NVCC IN THIS IMAGE.
+#
+# Frontload-cl (and other seq=4096 runs) want the flash_2 backend. Building flash-attn
+# from source needs the CUDA toolkit; the registered base is bare Python. Official
+# Dao-AILab wheels for torch 2.9 + cu12 + cp312 install in seconds and include SM80
+# (A100) kernels. flash_3/4 need Hopper/Blackwell and are not installed here.
+#
+# The wheel URL encodes the torch CXX11 ABI. We read it from the torch we just pinned
+# rather than hard-coding TRUE/FALSE, so a future torch rebuild that flips ABI fails
+# the image build instead of shipping a silent import-time crash on the GPU.
+#
+# `--no-build-isolation` is required so a missing wheel does not fall back to a
+# multi-hour source compile that would also fail without nvcc.
+ARG FLASH_ATTN_VERSION=2.8.3
+RUN set -eux; \
+    ABI=$(python -c 'import torch; print("TRUE" if torch._C._GLIBCXX_USE_CXX11_ABI else "FALSE")'); \
+    PY=$(python -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")'); \
+    WHEEL="https://github.com/Dao-AILab/flash-attention/releases/download/v${FLASH_ATTN_VERSION}/flash_attn-${FLASH_ATTN_VERSION}+cu12torch2.9cxx11abi${ABI}-${PY}-${PY}-linux_x86_64.whl"; \
+    echo "installing ${WHEEL}"; \
+    python -m pip install --no-cache-dir --no-build-isolation "${WHEEL}"; \
+    python -c "import flash_attn; print('flash_attn', flash_attn.__version__)"
+
 # No CMD. The entrypoint of the registered base is inherited deliberately, so swapping the
 # base does not leave a stale command behind.
 #
