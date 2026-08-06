@@ -130,16 +130,25 @@ class MetricAssertionCallback(Callback):
     gate_mass_tolerance: Optional[float] = GATE_MASS_TOLERANCE
     """Tolerance around a gate mass of 1.0. ``None`` disables."""
 
-    drop_frac_max: Optional[float] = 0.10
+    drop_frac_max: Optional[float] = 0.01
     """
-    Ceiling on ``drop_frac`` / ``drop_frac_upper_bound``.
+    Ceiling on ``drop_frac`` / ``drop_frac_upper_bound``. **1%, supplied by L3, who owns the
+    number.**
 
-    Default 0.10. The sibling measured max **0.0455** at capacity factor 1.2, where capacity sat
-    9.7 sigma above mean load. The funded path is ``capacity_factor=2.0`` (ruling D-009), which at
-    R3 puts capacity ~512 against mean load 256 and sd 16.0 -- about 16 sigma -- so the expected
-    drop rate there is essentially zero and anything above 10% means dispatch is broken rather
-    than merely imbalanced. **This is a deliberately loose backstop, not a tuned threshold**; L3
-    owns the per-rung number and this is what applies until L3 supplies one.
+    My initial default was 0.10 and L3 correctly applied my own standard back at me: at
+    ``capacity_factor=2.0`` an expert must exceed **2x mean** before it drops anything, after which
+    ``drop_frac ~ sum(share - 2/E)``, so at E=256 a 10% ceiling does not fire until one expert
+    holds roughly **30x its share.** A ceiling that cannot fire is the same as no assertion.
+
+    L3's derived mapping from ceiling to tolerable hottest-expert multiple at E=256:
+    0.1% <-> 2.26x mean, 0.5% <-> 3.28x, **1.0% <-> 4.56x**, 5% <-> 14.8x, 10% <-> ~30x.
+
+    1% is deliberately **uniform across rungs** rather than a per-rung ladder: it is dimensionless
+    and E-normalised, which is what rule 2 of the telemetry schema requires of anything compared
+    across rungs, and a per-rung table of numbers would not be. It tolerates a 4.6x hot expert at
+    E=256 -- loose enough that ordinary fluctuation never trips it, given ~16 sigma of headroom at
+    factor 2.0 -- while catching real collapse long before it costs a run. The sibling's measured
+    max of 0.0455 was at factor **1.2**, a different regime, and is not the relevant comparison.
     """
 
     assert_finite: bool = True
@@ -176,7 +185,7 @@ class MetricAssertionCallback(Callback):
     has been routed.
     """
 
-    require_present: Tuple[str, ...] = ("dead_expert_frac", "gate_mass_mean")
+    require_present: Tuple[str, ...] = ("dead_expert_frac", "gate_mass_mean", "drop_frac")
     """
     Per-block metric names that MUST appear in the metrics dict, checked once at
     ``presence_check_step``.
@@ -194,8 +203,16 @@ class MetricAssertionCallback(Callback):
     accumulator being non-empty -- exactly the shape of thing that can go quiet without anyone
     noticing.
 
-    ``drop_frac`` is deliberately **not** on this list: it is L3's to produce, dropless is
-    descoped, and its absence is a known open state rather than a defect. Add it once L3 confirms.
+    ``drop_frac`` **is** on this list as of L3's confirmation (2026-08-06): L3 produces the true
+    per-micro-batch rate from the same ``indices``/``bins``/``expert_capacity`` that reach
+    ``binned_gather``, verified against the real Triton kernel by multiset equality. So its absence
+    would now be a defect rather than a known open state, and the ceiling that checks it must not
+    be allowed to pass vacuously.
+
+    ``drop_by_position`` / ``drop_by_doc_index`` are **not** required: L3 reports they come back
+    ``nan`` unless ``drop_accounting_seq_len`` is set on each ``ParallelMLP``, which lives in L6's
+    file. Requiring them would make this guard fail on a switch being off, which is a different
+    fault from a metric having gone missing.
     """
 
     presence_check_step: int = 1
@@ -218,6 +235,11 @@ class MetricAssertionCallback(Callback):
         "drop_frac",
         "drop_frac_upper_bound",
         "assignments_per_expert_mean",
+        # L3's B3 axes. Aggregated so the max/mean/min per bucket is available, but DELIBERATELY
+        # NOT GATED -- see the note in `_check_bands`. L3 measured the positional axis as real
+        # signal rather than noise, so a flatness assertion would fire on every healthy run.
+        "drop_by_position",
+        "drop_by_doc_index",
     )
     _failures: List[str] = field(default_factory=list, repr=False)
     _checked_step0: bool = field(default=False, repr=False)
@@ -509,6 +531,19 @@ class MetricAssertionCallback(Callback):
                 "as drop_frac, but this is the accumulated-histogram upper bound",
             ),
         ]
+        # NOT IN THAT LIST, ON PURPOSE: `drop_by_position` and `drop_by_doc_index`.
+        #
+        # The intuitive assertion -- "drops should be positionally uniform" -- is WRONG, and L3
+        # measured it wrong rather than arguing it. Under forced overflow the positional spread was
+        # 0.107 (5.46 sigma) and the document-index spread 0.363 (18.5 sigma). The positional tilt
+        # is REAL SIGNAL: the last surviving document is truncated mid-document, so it contributes
+        # its early positions and not its late ones, which puts a genuine +0.047 ramp into the
+        # final quarter of a healthy run. A gate asserting flatness there would fire on every
+        # healthy run and train everyone to ignore this suite.
+        #
+        # The alarm condition is a positional ramp LARGE RELATIVE TO `drop_by_doc_index`, not
+        # non-flatness -- and nobody has a measurement of that ratio on a real run yet. So these
+        # are aggregated and read, not gated. Gate them when there is a number.
         for metric, ceiling, why in checks:
             if ceiling is None:
                 continue
