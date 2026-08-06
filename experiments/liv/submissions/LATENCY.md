@@ -38,9 +38,51 @@ recommendation, but because grouped wins, not because low-rank loses.
 
 Share-weighting the subgraph win by the ~5.4–5.9% of weights the gates hold predicts about
 **+1.8%** end-to-end. That figure is arithmetic, not a measurement, and it is what this run
-replaces. It is also the reason the harness reports p10/p90 alongside every median: a 1.8% effect
-is only readable if the measurement's own spread is smaller than that, and if it is not, the
-correct output is "cannot resolve" rather than a number.
+replaces.
+
+## The constraint that dictates the whole design: the ceiling is 4.03%
+
+`15,728,640 × 2 B = 31.5 MB` of the model's `780.3 MB`. So a **perfectly** weight-bandwidth-bound
+decode step cannot improve by more than **4.03%**, prefill's ceiling is ~3.6%, and the predicted
+value is ~1.8%.
+
+**Ordinary GPU benchmarking noise is 5–20%.** Clock drift under sustained bf16 load is 4–10% on an
+A100-SXM4; kernel-launch overhead at `seq_len=1` is worth 8–14%. A conventional benchmark here
+does not return a small number with error bars — it returns a confound with a plausible sign.
+
+An earlier version of this harness was exactly that, and it failed in three ways that all pointed
+the same direction — **against the treatments**, which is the direction that would have read as
+corroboration of the retracted −8.2%:
+
+| what was wrong | worth | why it was invisible |
+|---|---|---|
+| **arm-at-a-time ordering** | 5–10% | `L0` measured first and coldest ⇒ artificially small baseline. p10/p90 comes back *tight* because drift is locally stable, certifying the run. |
+| **eager-only decode** | 8–14% | the treatments *add* 40–50 kernel launches, so eager decode ranks arms by dispatch count |
+| **a cache-residency ceiling** | — | **unfireable**: tripping it needs the step under 0.502 ms; the fastest shape is ~0.7 ms. Every row read `False` and printed "0 rows exceeded peak" |
+
+The last one is the worst of the three, because it printed as a *passed check*.
+
+## What the harness does instead
+
+- **Interleaved randomized rounds.** All arms stay resident (4 × 780 MB against 40 GB), 75 s soak
+  to reach steady clocks, then each round times every arm back-to-back in a **reshuffled** order.
+  Ratios are formed **within** a round, so drift is common-mode and divides out.
+- **Paired ratios with a percentile bootstrap CI**, not a difference of medians.
+- **An A/A control arm.** `L0` built twice under two names. Its true effect is *exactly zero*, so
+  the interval around it **is** the rig's resolution. If that interval is wider than 1.8%, the run
+  **exits non-zero and refuses to report deltas** — two identical models differing by more than the
+  effect being hunted means any delta is noise with a sign. This is the one guard that can fail for
+  the right reason, and it is in the default arm list so a plain invocation measures its own floor.
+- **Eager *and* CUDA-graphed decode**, with per-arm launch and copy-kernel counts, so a negative
+  eager row can be attributed to dispatch rather than to gate structure. Graph replay is safe here
+  precisely because a 744 MiB model against a 40 MiB L2 cannot be cache-resident.
+- **A utilization FLOOR replacing the ceiling** — FLOPs for prefill, bandwidth for graphed decode.
+  It fails in the direction the failure actually lies: a region that is neither compute- nor
+  bandwidth-bound cannot show a saving. Plausible readings straddle it (graphed ≈70%, eager ≈20%
+  against a 30% floor), which is what makes it a discriminating check rather than a decoration.
+- **`logits_to_keep=1` for decode**, as real serving does. The full head is 3.37 TFLOP of
+  arm-invariant work — ~23% of prefill — sitting in both numerator and denominator, diluting the
+  delta toward zero. Prefill reports the delta **both ways** so the dilution is visible.
 
 ## The two submissions
 
@@ -100,26 +142,29 @@ second host**, which is the cheapest available portability test — a harness th
 in one place has never been shown to be reproducible. It also re-measures the exact card the
 retraction happened on, at full-model scale this time.
 
-## The four receipts every row carries
+## The receipts every row carries
 
 A latency delta on its own is not checkable, and this project has already believed one for a day.
 
 | field | what it is for |
 |---|---|
-| `working_set_mib` | weight bytes the timed region reads, from the built module |
-| `achieved_gbs` | `working_set / elapsed` |
-| `pct_of_hbm_peak` | against 1555 GB/s (A100-SXM4-**40**GB) or 864 (L40S) |
-| `conv_path` | `fla` or `nn.Conv1d`, **asserted identical across arms** |
+| `ratio_median` + `ci_low/high_pct` | the paired ratio and its bootstrap interval, not a bare delta |
+| `pct_of_flops_peak` / `pct_of_hbm_peak` | against the utilization floor, per regime |
+| `utilization_ok` | `False` ⇒ `LOW_UTIL` flag and a non-zero exit |
+| `launch_count`, `copy_kernel_count` | per arm, so an eager gap is attributable to dispatch |
+| `sm_clock_mhz_mean`, `temperature_c_max` | per arm; >2% clock spread is a refusal |
+| `conv_path`, `gate_structure` | asserted identical / distinct across arms as appropriate |
 
-Above 100% of peak is impossible for an HBM-bound region and therefore proves cache residency.
-`--fail-on-cache-resident` is **on by default** and exits non-zero, because this is the check
-whose absence caused the retraction.
+**The bandwidth ratio is decode-only now.** In prefill at batch 4 × 4096 the logits tensor alone is
+3.29 GB written — four times the entire weight footprint — and real traffic is 15–20 GB against
+the 0.78 GB a weights-only ratio counts. Quoting it there understates by ~20×, so prefill prints
+`n/a` and is judged on FLOPs instead.
 
-**Note what the bandwidth ratio would and would not have caught.** The retracted probe read
-744.7 GB/s against an 864 GB/s peak — **86%, which is below 100 and would have passed.** What
-catches it is the working set (40 MiB) against L2 (96 MiB), which is why both are printed on
-every row. The full model is 744 MiB in bf16, more than 7x the L40S L2 and 18x the A100's 40 MiB,
-so it is genuinely HBM-bound.
+**And note what the bandwidth ratio never would have caught.** The retracted probe read 744.7 GB/s
+against an 864 GB/s peak — **86%, below 100, would have passed.** What catches *that* failure is
+the working set (40 MiB) against L2 (96 MiB). At full-model scale neither check is the live one —
+744 MiB against a 40 MiB L2 is 18.6× over, so cache residency is impossible — which is exactly why
+the ceiling was replaced by a floor.
 
 `conv_path` exists because `ShortConvConfig.use_fla` defaults to `True` and dispatches on
 `use_fla and has_fla() and x.is_cuda`. `fla` is **absent from the research image** (verified
@@ -129,24 +174,35 @@ the declared config. Left alone across arms, the contrast can compare a fused ke
 hypothesis**, which is the direction that gets believed. The harness pins it to `false` on every
 arm and asserts the realised path afterwards.
 
-## The limit that must travel with the decode number
+## The limits that must travel with the number
 
-**Decode here is a `seq_len=1` forward, not an autoregressive step.** `ShortConv` implements no
-conv-state cache and this config's attention runs without a KV cache, so a served decode would
-reuse both and this does not.
+**Decode is a `seq_len=1` forward, not an autoregressive step.** `ShortConv` implements no
+conv-state cache and this config's attention runs without a KV cache.
 
-That omitted traffic is **identical across the three arms** — they share attention geometry
-exactly — so it enters both numerator and denominator and *dilutes* the ratio. Therefore the
-decode delta reported here is an **UPPER BOUND** on the served-decode speedup, and the harness
-prints that sentence in its own output rather than leaving it in a commit message.
+**A correction to what I wrote earlier: this is NOT an "upper bound" on served decode.** I claimed
+that, reasoning that the omitted cache traffic is arm-invariant and therefore dilutes the ratio.
+That much is true, but **added launch overhead pushes the opposite way and is larger**, so the
+decode delta is neither an upper nor a lower bound. It is the delta for a cacheless `seq_len=1`
+step, and that is the whole of what it is. A test fails if the tidier claim reappears.
 
-The prefill rung carries no such caveat, which is why both regimes are reported. Prefill is also
-the conservative one: it is compute-bound, so a smaller gate buys the least there.
+**A negative result may belong to this implementation, not to gate structure.** The materializing
+copies in `_GateProj` — a strided slice fed to `F.linear`, a transpose into `bmm` and a reshape out
+— are costs of how the projections are *written*, not of low-rank or block-diagonal gating as
+ideas. A rewrite avoiding them plausibly recovers most of the penalty. The launch and copy counts
+are reported per arm so that distinction can be made rather than glossed over.
+
+**`liv_arms.py` still carries the retracted −8.2% in its own arms table** as justification for
+calling the latency claim dead. That line is stale and should be annotated before anyone cites it
+as prior corroboration of a fresh negative.
+
+Prefill is the conservative rung: it is compute-bound, so a smaller gate buys the least there, and
+it carries none of the decode caveats.
 
 ## What this run cannot answer
 
 - **Not a served-throughput number.** No batching scheduler, no cache, no continuous batching.
 - **Not a training-speed number.** The 1B-token grid already measured that at 286,400 tok/s/node.
-- **Not eager-vs-graph.** Both are eager, matching the study's `--no-compile-model`. Real serving
-  would capture graphs, which cuts launch overhead — and low-rank *adds* one launch per gate, so
-  graphs would help it more than they help dense.
+- **Not a statement about tuned kernels.** Both paths use the stock implementations, and the
+  copy-avoiding rewrite noted above is untested.
+- **Not `torch.compile`.** Graph *capture* is used for decode, which removes launch overhead, but
+  no fusion pass runs. A compiled model could fuse the low-rank chain and change the ranking.
