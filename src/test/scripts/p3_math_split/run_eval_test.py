@@ -77,25 +77,48 @@ def test_generation_budget_uses_remaining_context_instead_of_skipping_row():
     ) == {0: 6, 1: 2}
 
 
-def test_rows_for_condition_returns_all_rows_for_every_condition():
+EXPECTED_CONTEXT_ELIGIBLE_COUNTS = {
+    "enigma": 263,
+    "isabelle": 590,
+    "metamath": 494,
+    "mizar": 2485,
+    "prf2": 313,
+    "thproofs": 46,
+}
+EXPECTED_DIAGNOSTIC_COHORT_COUNTS = {
+    family: run_eval.expected_diagnostic_cohort_size(count)
+    for family, count in EXPECTED_CONTEXT_ELIGIBLE_COUNTS.items()
+}
+
+
+def test_rows_for_condition_returns_full_cohort_only_for_facts_present():
     rows = [{"id": f"row-{index}"} for index in range(23)]
 
-    for condition in run_eval.CONDITIONS:
-        selected = run_eval.rows_for_condition(
+    selected = run_eval.rows_for_condition(
+        rows,
+        family="mizar",
+        condition="facts_present",
+        seed=20260801,
+    )
+    reordered = run_eval.rows_for_condition(
+        list(reversed(rows)),
+        family="mizar",
+        condition="facts_present",
+        seed=20260801,
+    )
+
+    assert selected == rows
+    assert selected == list(reversed(reordered))
+
+    for condition in ("facts_absent", "facts_corrupted"):
+        diagnostic = run_eval.rows_for_condition(
             rows,
             family="mizar",
             condition=condition,
             seed=20260801,
         )
-        reordered = run_eval.rows_for_condition(
-            list(reversed(rows)),
-            family="mizar",
-            condition=condition,
-            seed=20260801,
-        )
-
-        assert selected == rows
-        assert selected == list(reversed(reordered))
+        assert len(diagnostic) == run_eval.expected_diagnostic_cohort_size(len(rows))
+        assert {row["id"] for row in diagnostic}.issubset({row["id"] for row in rows})
 
     with pytest.raises(ValueError, match="unknown condition"):
         run_eval.rows_for_condition(
@@ -104,6 +127,87 @@ def test_rows_for_condition_returns_all_rows_for_every_condition():
             condition="facts_shuffled",
             seed=20260801,
         )
+
+
+def test_diagnostic_cohort_selection_is_stable_under_source_reorder():
+    rows = [{"id": f"row-{index:04d}"} for index in range(100)]
+
+    for condition in ("facts_absent", "facts_corrupted"):
+        forward = run_eval.rows_for_condition(
+            rows,
+            family="metamath",
+            condition=condition,
+            seed=20260801,
+        )
+        backward = run_eval.rows_for_condition(
+            list(reversed(rows)),
+            family="metamath",
+            condition=condition,
+            seed=20260801,
+        )
+        assert [row["id"] for row in forward] == [row["id"] for row in backward]
+
+
+def test_diagnostic_cohorts_use_separate_condition_namespaces():
+    rows = [{"id": f"row-{index:04d}"} for index in range(100)]
+
+    absent = run_eval.rows_for_condition(
+        rows,
+        family="prf2",
+        condition="facts_absent",
+        seed=20260801,
+    )
+    corrupted = run_eval.rows_for_condition(
+        rows,
+        family="prf2",
+        condition="facts_corrupted",
+        seed=20260801,
+    )
+
+    assert {row["id"] for row in absent} != {row["id"] for row in corrupted}
+
+
+@pytest.mark.parametrize(
+    ("family", "context_eligible", "expected_diagnostic"),
+    [
+        ("enigma", 263, 27),
+        ("isabelle", 590, 59),
+        ("metamath", 494, 50),
+        ("mizar", 2485, 249),
+        ("prf2", 313, 32),
+        ("thproofs", 46, 5),
+    ],
+)
+def test_diagnostic_cohort_sizes_match_ceiling_rounded_ten_percent_per_family(
+    family, context_eligible, expected_diagnostic
+):
+    rows = [{"id": f"{family}-{index:05d}"} for index in range(context_eligible)]
+
+    for condition in ("facts_absent", "facts_corrupted"):
+        selected = run_eval.rows_for_condition(
+            rows,
+            family=family,
+            condition=condition,
+            seed=20260801,
+        )
+        assert len(selected) == expected_diagnostic
+
+    assert sum(EXPECTED_DIAGNOSTIC_COHORT_COUNTS.values()) == 422
+
+
+def test_thproofs_diagnostic_cohort_uses_ceiling_not_floor():
+    rows = [{"id": f"thproofs-{index:02d}"} for index in range(46)]
+
+    selected = run_eval.rows_for_condition(
+        rows,
+        family="thproofs",
+        condition="facts_absent",
+        seed=20260801,
+    )
+
+    assert len(selected) == 5
+    assert run_eval.expected_diagnostic_cohort_size(46) == 5
+    assert int(0.10 * 46) == 4
 
 
 def test_corrupted_condition_never_keeps_the_original_statement():
@@ -438,6 +542,7 @@ def test_metamath_conditions_do_not_promote_incomplete_api_to_validity():
         row, "facts_absent", random.Random(1), ["|- ph", "|- ch"]
     )
     assert absent.visible_facts == {}
+    assert absent.metamath_validity_supported
 
     corrupted = run_eval.materialize_condition(
         row, "facts_corrupted", random.Random(1), ["|- ph", "|- ch"]
@@ -446,8 +551,224 @@ def test_metamath_conditions_do_not_promote_incomplete_api_to_validity():
     assert "visible corrupted statements" in corrupted.metamath_validity_reason
 
     status = run_eval.metamath_verifier_availability(run_eval.mm_verify)
-    assert status["status"] == "unavailable"
-    assert status["detected_schema"] is None
+    assert status["status"] == "available"
+    assert status["detected_schema"] == "p3-metamath-tristate-v1"
+
+
+def test_metamath_runtime_availability_requires_mm_dir_and_verified_sources():
+    availability = run_eval.metamath_runtime_availability(
+        mm_dir=None,
+        metamath_sources=None,
+        mm_databases={},
+    )
+    assert availability["status"] == "unavailable"
+    assert availability["mm_dir_supplied"] is False
+
+    with_dir = run_eval.metamath_runtime_availability(
+        mm_dir="/tmp/mm",
+        metamath_sources={"commit": "abc", "files": {"set.mm": {}, "iset.mm": {}, "nf.mm": {}}},
+        mm_databases={"set": object(), "iset": object(), "nf": object()},
+    )
+    assert with_dir["status"] == "available"
+    assert with_dir["loaded_source_databases"] == ["iset", "nf", "set"]
+
+    partial = run_eval.metamath_runtime_availability(
+        mm_dir="/tmp/mm",
+        metamath_sources={"commit": "abc", "files": {"set.mm": {}, "iset.mm": {}, "nf.mm": {}}},
+        mm_databases={"set": object()},
+    )
+    assert partial["status"] == "unavailable"
+    assert "pinned source database" in partial["reason"].lower()
+
+
+def test_metamath_fact_block_uses_visible_or_canonical_facts_by_condition():
+    row = {
+        "facts": {"ax": "|- canonical", "syl": "|- ( ph -> ps ) & |- ( ps -> ch ) => |- ( ph -> ch )"},
+        "goal": "|- ph",
+    }
+    visible = {"ax": "|- visible"}
+    assert run_eval.metamath_verification_fact_block(row, "facts_present", visible) == visible
+    assert run_eval.metamath_verification_fact_block(row, "facts_absent", visible) == row["facts"]
+    assert run_eval.metamath_verification_fact_block(row, "facts_corrupted", visible) is None
+
+
+def test_resolve_metamath_theorem_context_splits_database_prefix():
+    assert run_eval.resolve_metamath_theorem_context("set:pm4.39") == ("pm4.39", "set")
+    assert run_eval.resolve_metamath_theorem_context("iset:con4") == ("con4", "iset")
+    assert run_eval.resolve_metamath_theorem_context("syl") == ("syl", None)
+
+
+def test_verify_metamath_example_reports_tri_state_and_routes_source_database(tmp_path):
+    mm_path = Path(__file__).parent / "fixtures" / "mm_verify_soundness.mm"
+    mm = load_project_module("mm_expand").MM().parse(mm_path)
+    availability = run_eval.metamath_runtime_availability(
+        mm_dir=str(tmp_path),
+        metamath_sources={"commit": "abc", "files": {}},
+        mm_databases={"set": mm, "iset": mm, "nf": mm},
+    )
+    row = {
+        "theorem": "target",
+        "goal": "|- ( a -> ( c -> ( b -> a ) ) )",
+        "facts": {
+            "ax-1": "|- ( ph -> ( ps -> ph ) )",
+            "syl": "|- ( ph -> ps ) & |- ( ps -> ch ) => |- ( ph -> ch )",
+        },
+        "local_assumptions": {},
+    }
+    good_proof = "\n".join(
+        [
+            "  1  ax-1        |- ( a -> ( b -> a ) )",
+            "  2  ax-1        |- ( ( b -> a ) -> ( c -> ( b -> a ) ) )",
+            "  3  syl         |- ( a -> ( c -> ( b -> a ) ) )",
+        ]
+    )
+    facts_present = run_eval.verify_metamath_example(
+        generated=good_proof,
+        row=row,
+        condition="facts_present",
+        visible_facts=row["facts"],
+        mm_databases={"set": mm, "iset": mm, "nf": mm},
+        availability=availability,
+        condition_supported=True,
+        condition_reason=None,
+        generation_attempted=True,
+    )
+    assert facts_present["status"] == "valid"
+    assert facts_present["verifier_schema_version"] == "p3-metamath-tristate-v1"
+    assert facts_present["target_label"] == "target"
+    assert facts_present["source_database"] is None
+
+    facts_absent = run_eval.verify_metamath_example(
+        generated=good_proof,
+        row=row,
+        condition="facts_absent",
+        visible_facts={},
+        mm_databases={"set": mm, "iset": mm, "nf": mm},
+        availability=availability,
+        condition_supported=True,
+        condition_reason=None,
+        generation_attempted=True,
+    )
+    assert facts_absent["status"] == "valid"
+
+    corrupted = run_eval.verify_metamath_example(
+        generated=good_proof,
+        row=row,
+        condition="facts_corrupted",
+        visible_facts={"ax-1": "|- wrong"},
+        mm_databases={"set": mm, "iset": mm, "nf": mm},
+        availability=availability,
+        condition_supported=False,
+        condition_reason=run_eval.CORRUPTED_METAMATH_REASON,
+        generation_attempted=True,
+    )
+    assert corrupted["status"] == "excluded"
+    assert "unsupported" in corrupted["reason"]
+
+    bad = run_eval.verify_metamath_example(
+        generated="  1  syl  |- ( a -> ( c -> ( b -> a ) ) )",
+        row=row,
+        condition="facts_present",
+        visible_facts=row["facts"],
+        mm_databases={"set": mm, "iset": mm, "nf": mm},
+        availability=availability,
+        condition_supported=True,
+        condition_reason=None,
+        generation_attempted=True,
+    )
+    assert bad["status"] == "invalid"
+
+
+def test_summarize_metamath_validity_unavailable_zeros_reportable_counts():
+    availability = run_eval.metamath_runtime_availability(
+        mm_dir=None,
+        metamath_sources=None,
+        mm_databases={},
+    )
+    per_example = [
+        {
+            "metamath": {
+                "status": "unavailable",
+                "verifier_schema_version": None,
+                "target_label": "target",
+                "source_database": None,
+                "reason_code": "verifier_unavailable",
+                "reason": "no mm dir",
+            }
+        }
+    ]
+    summary = run_eval.summarize_metamath_validity(
+        per_example,
+        availability=availability,
+        condition_supported=True,
+        condition_reason=None,
+    )
+    assert summary["evaluated_count"] == 0
+    assert summary["valid_count"] == 0
+    assert summary["invalid_count"] == 0
+    assert summary["unknown_count"] == 0
+    assert summary["decided_count"] == 0
+    assert summary["valid_rate_decided"] is None
+    assert summary["unavailable_count"] == 1
+
+
+def test_summarize_metamath_validity_keeps_unknown_out_of_decided_denominator():
+    availability = run_eval.metamath_runtime_availability(
+        mm_dir="/tmp/mm",
+        metamath_sources={"commit": "abc", "files": {"set.mm": {}, "iset.mm": {}, "nf.mm": {}}},
+        mm_databases={"set": object(), "iset": object(), "nf": object()},
+    )
+    per_example = [
+        {"metamath": {"status": "valid"}},
+        {"metamath": {"status": "invalid"}},
+        {"metamath": {"status": "unknown"}},
+        {"metamath": {"status": "excluded"}},
+        {"metamath": {"status": "unavailable"}},
+    ]
+    summary = run_eval.summarize_metamath_validity(
+        per_example,
+        availability=availability,
+        condition_supported=True,
+        condition_reason=None,
+    )
+    assert summary["valid_count"] == 1
+    assert summary["invalid_count"] == 1
+    assert summary["unknown_count"] == 1
+    assert summary["excluded_count"] == 1
+    assert summary["unavailable_count"] == 1
+    assert summary["decided_count"] == 2
+    assert summary["evaluated_count"] == 3
+    assert summary["valid_rate_decided"] == 0.5
+    assert summary["valid_rate_denominator"] == "valid_count + invalid_count"
+
+
+def test_summarize_metamath_validity_for_unsupported_condition_reports_no_rates():
+    availability = run_eval.metamath_runtime_availability(
+        mm_dir=None,
+        metamath_sources=None,
+        mm_databases={},
+    )
+    per_example = [
+        {
+            "metamath": {
+                "status": "excluded",
+                "verifier_schema_version": None,
+                "target_label": "target",
+                "source_database": None,
+                "reason_code": "condition_unsupported",
+                "reason": run_eval.CORRUPTED_METAMATH_REASON,
+            }
+        }
+    ]
+    summary = run_eval.summarize_metamath_validity(
+        per_example,
+        availability=availability,
+        condition_supported=False,
+        condition_reason=run_eval.CORRUPTED_METAMATH_REASON,
+    )
+    assert summary["evaluated_count"] == 0
+    assert summary["valid_rate_decided"] is None
+    assert summary["decided_count"] == 0
 
 
 def test_fact_probe_uses_actual_train_visibility_and_reports_eos_budgets(monkeypatch):
@@ -733,10 +1054,8 @@ def test_evaluation_metadata_requires_complete_exporter_provenance(tmp_path):
         "facts_present",
         "facts_absent",
     ]
-    assert first["evaluation_controls"]["condition_cohort_policy"] == {
-        condition: {"selection": "all-context-eligible-v1"}
-        for condition in run_eval.CONDITIONS
-    }
+    assert first["evaluation_controls"]["condition_cohort_policy"] == run_eval.CONDITION_COHORT_POLICY
+    assert first["schema_version"] == "p3-eval-v9"
     assert first["input_provenance"]["tokenizer_sha256"]
     assert first["input_provenance"]["corpus_sha256"]
     assert first["input_provenance"]["eval_shard_sha256"]["mizar"]

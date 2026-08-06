@@ -103,9 +103,11 @@ FACTS = {
 
 
 def proof(*lines):
-    return "\n".join(
-        f"{i + 1:>3}  {lbl:<12} {expr}" for i, (lbl, expr) in enumerate(lines)
-    )
+    return "\n".join(f"{i + 1:>3}  {lbl:<12} {expr}" for i, (lbl, expr) in enumerate(lines))
+
+
+def tokens(expression):
+    return expression.split()
 
 
 # --------------------------------------------------------------- the matcher
@@ -118,29 +120,21 @@ def test_match_binds_a_sequence_valued_variable():
 
 def test_match_enforces_repeated_variables():
     assert (
-        match_template(["(", "ph", "->", "ph", ")"], ["(", "A", "->", "A", ")"], {"ph"})
-        is not None
+        match_template(["(", "ph", "->", "ph", ")"], ["(", "A", "->", "A", ")"], {"ph"}) is not None
     )
-    assert (
-        match_template(["(", "ph", "->", "ph", ")"], ["(", "A", "->", "B", ")"], {"ph"})
-        is None
-    )
+    assert match_template(["(", "ph", "->", "ph", ")"], ["(", "A", "->", "B", ")"], {"ph"}) is None
 
 
 def test_match_rejects_constant_mismatch():
     assert (
-        match_template(
-            ["(", "ph", "->", "ps", ")"], ["(", "A", "<->", "B", ")"], {"ph", "ps"}
-        )
+        match_template(["(", "ph", "->", "ps", ")"], ["(", "A", "<->", "B", ")"], {"ph", "ps"})
         is None
     )
 
 
 # --------------------------------------------------------------- parsing
 def test_parse_reads_well_formed_steps():
-    steps = parse_proof(
-        proof(("ax-1", "|- ( a -> ( b -> a ) )"), ("syl", "|- ( a -> c )"))
-    )
+    steps = parse_proof(proof(("ax-1", "|- ( a -> ( b -> a ) )"), ("syl", "|- ( a -> c )")))
     assert steps == [("ax-1", "|- ( a -> ( b -> a ) )"), ("syl", "|- ( a -> c )")]
 
 
@@ -177,9 +171,7 @@ def test_accepts_a_correct_proof(sound_mm):
         target_label="target",
     )
     assert r.valid, r.reason
-    assert (
-        r.goal_reached and r.all_grounded and r.all_instances and r.all_hyps_discharged
-    )
+    assert r.goal_reached and r.all_grounded and r.all_instances and r.all_hyps_discharged
 
 
 def test_accepts_a_valid_proof_that_differs_from_the_gold_trace(sound_mm):
@@ -378,9 +370,7 @@ def test_rejects_the_goal_asserted_without_derivation(sound_mm):
         target_label="target",
     )
     assert not r.valid, "asserting the goal as a bare syl step must not count"
-    assert (
-        r.goal_reached
-    ), "it does reach the goal -- that is exactly why this is a trap"
+    assert r.goal_reached, "it does reach the goal -- that is exactly why this is a trap"
     assert not r.all_hyps_discharged
 
 
@@ -467,9 +457,8 @@ def test_later_hypothesis_dependency_on_unknown_step_stays_unknown(sound_mm):
         sound_mm,
         proof(("ax-1", expression), ("dup", expression)),
         expression,
-        {"ax-1": FACTS["ax-1"], "dup": FACTS["dup"]},
+        {"ax-1": "|- bogus", "dup": FACTS["dup"]},
         target_label="dup-target",
-        syntax_node_budget=1,
     )
 
     assert result.status == "unknown"
@@ -529,4 +518,355 @@ def test_missing_target_context_is_explicitly_unknown(sound_mm):
 
     assert result.status == "unknown"
     assert result.reason_code == "target_context_required"
+    assert result.valid is None
+
+
+def test_syntax_budget_is_scoped_to_each_distinct_typing_query(sound_mm):
+    """Regression for gold row 7841cb188517 (set:axprOLD).
+
+    That trace exhausted one proof-wide syntax allowance after several individually
+    bounded, successful queries. This miniature pair has the same failure mode.
+    """
+    checker = _mm_verify.SyntaxTypeChecker(
+        sound_mm,
+        "target",
+        sound_mm.assertion_frames["target"],
+        node_budget=80,
+    )
+
+    first = checker.check("wff", tokens("( a -> ( b -> a ) )"))
+    second = checker.check(
+        "wff",
+        tokens("( ( b -> a ) -> ( c -> ( b -> a ) ) )"),
+    )
+
+    assert first.status == "valid", first.reason
+    assert second.status == "valid", second.reason
+
+
+def test_memoized_syntax_search_rejects_ill_typed_mutation(sound_mm):
+    """Changing a wff substitution to the class variable A must remain invalid."""
+    generated = proof(
+        ("ax-1", "|- ( A -> ( b -> A ) )"),
+        ("ax-1", "|- ( a -> ( b -> a ) )"),
+        ("ax-1", "|- ( ( b -> a ) -> ( c -> ( b -> a ) ) )"),
+        ("syl", GOOD_GOAL),
+    )
+
+    result = verify_proof(
+        sound_mm,
+        generated,
+        GOOD_GOAL,
+        FACTS,
+        target_label="target",
+    )
+
+    assert result.status == "invalid"
+    assert result.steps[0].reason_code == "floating_type_mismatch"
+
+
+def _rpexpmord_syl221anc_search_inputs():
+    """The exact templates and prior expressions from gold row 6479886f2ed5."""
+    essential = (
+        ("syl3anc.1", tuple(tokens("|- ( ph -> ps )"))),
+        ("syl3anc.2", tuple(tokens("|- ( ph -> ch )"))),
+        ("syl3anc.3", tuple(tokens("|- ( ph -> th )"))),
+        ("syl3Xanc.4", tuple(tokens("|- ( ph -> ta )"))),
+        ("syl23anc.5", tuple(tokens("|- ( ph -> et )"))),
+        (
+            "syl221anc.6",
+            tuple(tokens("|- ( ( ( ps /\\ ch ) /\\ ( th /\\ ta ) /\\ et ) -> ze )")),
+        ),
+    )
+    initial_subst = {
+        "ph": tokens(r"( ( N e. NN /\ ( a e. RR+ /\ b e. RR+ ) ) /\ a < b )"),
+        "ze": tokens("( a ^ N ) < ( b ^ N )"),
+    }
+    derived = [
+        expression.split()
+        for expression in (
+            "|- ( a = b -> ( a ^ N ) = ( b ^ N ) )",
+            "|- ( a = A -> ( a ^ N ) = ( A ^ N ) )",
+            "|- ( a = B -> ( a ^ N ) = ( B ^ N ) )",
+            "|- RR+ C_ RR",
+            "|- ( a e. RR+ -> a e. RR )",
+            "|- ( N e. NN -> N e. NN0 )",
+            r"|- ( ( a e. RR /\ N e. NN0 ) -> ( a ^ N ) e. RR )",
+            r"|- ( ( N e. NN /\ a e. RR+ ) -> ( a ^ N ) e. RR )",
+            r"|- ( ( ( N e. NN /\ ( a e. RR+ /\ b e. RR+ ) ) /\ a < b ) -> a e. RR+ )",
+            r"|- ( ( ( N e. NN /\ ( a e. RR+ /\ b e. RR+ ) ) /\ a < b ) -> a e. RR )",
+            r"|- ( ( ( N e. NN /\ ( a e. RR+ /\ b e. RR+ ) ) /\ a < b ) -> b e. RR+ )",
+            r"|- ( ( ( N e. NN /\ ( a e. RR+ /\ b e. RR+ ) ) /\ a < b ) -> b e. RR )",
+            r"|- ( ( ( N e. NN /\ ( a e. RR+ /\ b e. RR+ ) ) /\ a < b ) -> 0 <_ a )",
+            r"|- ( ( ( N e. NN /\ ( a e. RR+ /\ b e. RR+ ) ) /\ a < b ) -> a < b )",
+            r"|- ( ( ( N e. NN /\ ( a e. RR+ /\ b e. RR+ ) ) /\ a < b ) -> N e. NN )",
+            r"|- ( ( ( a e. RR /\ b e. RR ) /\ ( 0 <_ a /\ a < b ) /\ N e. NN ) -> ( a ^ N ) < ( b ^ N ) )",
+        )
+    ]
+    return essential, initial_subst, {"ph", "ps", "ch", "th", "ta", "et", "ze"}, derived
+
+
+def test_constraint_first_search_recovers_real_rpexpmord_gold_step():
+    """The six syl221anc hypotheses have one sound match inside the default budget."""
+    essential, initial_subst, variables, derived = _rpexpmord_syl221anc_search_inputs()
+
+    subst, sources = next(
+        _mm_verify._match_essential_hypotheses(
+            essential,
+            initial_subst,
+            variables,
+            derived,
+            _mm_verify.SearchBudget(_mm_verify.MATCH_NODE_BUDGET),
+        )
+    )
+
+    assert sources == (9, 11, 12, 13, 14, 15)
+    assert subst["ps"] == tokens("a e. RR")
+    assert subst["et"] == tokens("N e. NN")
+
+
+def test_constraint_first_search_rejects_mutated_rpexpmord_premise():
+    essential, initial_subst, variables, derived = _rpexpmord_syl221anc_search_inputs()
+    derived[-1] = tokens(
+        r"|- ( ( ( a e. RR /\ b e. RR ) /\ ( 0 <_ a /\ a < b ) /\ N e. NN )"
+        " -> ( b ^ N ) < ( a ^ N ) )"
+    )
+
+    matches = _mm_verify._match_essential_hypotheses(
+        essential,
+        initial_subst,
+        variables,
+        derived,
+        _mm_verify.SearchBudget(_mm_verify.MATCH_NODE_BUDGET),
+    )
+
+    assert next(matches, None) is None
+
+
+def _nested_conjunction_syntax_case(tmp_path, depth=35):
+    """Small grammar with the ambiguity shape of set:naddass row 98ef96536475."""
+    variables = [f"a{index}" for index in range(depth)]
+    expression = variables[0]
+    for variable in variables[1:]:
+        expression = f"( {expression} /\\ {variable} )"
+    source = (
+        "$c wff |- ( ) /\\ $.\n"
+        f"$v ph ps {' '.join(variables)} $.\n"
+        "wph $f wff ph $.\n"
+        "wps $f wff ps $.\n"
+        + "".join(f"f{index} $f wff {variable} $.\n" for index, variable in enumerate(variables))
+        + "wa $a wff ( ph /\\ ps ) $.\n"
+        + f"target-rule $a |- {expression} $.\n"
+        + f"target $p |- {expression} $= target-rule $.\n"
+    )
+    path = tmp_path / "nested-conjunction.mm"
+    path.write_text(source, encoding="utf-8")
+    mm = _mm_expand.MM().parse(path)
+    checker = _mm_verify.SyntaxTypeChecker(
+        mm,
+        "target",
+        mm.assertion_frames["target"],
+        node_budget=_mm_verify.SYNTAX_NODE_BUDGET,
+    )
+    return checker, expression
+
+
+def test_typed_syntax_matching_prunes_real_naddass_ambiguity_shape(tmp_path):
+    checker, expression = _nested_conjunction_syntax_case(tmp_path)
+
+    result = checker.check("wff", expression.split())
+
+    assert result.status == "valid", result.reason
+
+
+def test_typed_syntax_matching_does_not_accept_unbalanced_mutation(tmp_path):
+    checker, expression = _nested_conjunction_syntax_case(tmp_path)
+
+    result = checker.check("wff", expression.split()[:-1])
+
+    assert result.status != "valid"
+
+
+def _operation_equality_case(tmp_path, depth=8):
+    """Miniature of bpoly2's long, sequence-valued oveq12d application."""
+
+    def nested(names):
+        expression = names[0]
+        for name in names[1:]:
+            expression = f"( {expression} f {name} )"
+        return expression
+
+    groups = [[f"{prefix}{index}" for index in range(depth)] for prefix in "abcd"]
+    left_a, left_b, right_a, right_b = map(nested, groups)
+    leaves = [name for group in groups for name in group]
+    goal = f"|- ( p -> ( {left_a} f {left_b} ) = ( {right_a} f {right_b} ) )"
+    premise_a = f"|- ( p -> {left_a} = {right_a} )"
+    premise_b = f"|- ( p -> {left_b} = {right_b} )"
+    source = (
+        "$c wff class |- ( ) -> = $.\n"
+        f"$v ph ps A B C D F p f {' '.join(leaves)} $.\n"
+        "wph $f wff ph $.\n"
+        "wps $f wff ps $.\n"
+        "cA $f class A $.\n"
+        "cB $f class B $.\n"
+        "cC $f class C $.\n"
+        "cD $f class D $.\n"
+        "cF $f class F $.\n"
+        "wp $f wff p $.\n"
+        "cf $f class f $.\n"
+        + "".join(f"c{index} $f class {variable} $.\n" for index, variable in enumerate(leaves))
+        + "co $a class ( A F B ) $.\n"
+        + "weq $a wff A = B $.\n"
+        + "wi $a wff ( ph -> ps ) $.\n"
+        + "emit $a |- ph $.\n"
+        + "${\n"
+        + "  op-eq.1 $e |- ( ph -> A = C ) $.\n"
+        + "  op-eq.2 $e |- ( ph -> B = D ) $.\n"
+        + "  op-eq $a |- ( ph -> ( A F B ) = ( C F D ) ) $.\n"
+        + "$}\n"
+        + f"target-rule $a {goal} $.\n"
+        + f"target $p {goal} $= target-rule $.\n"
+    )
+    path = tmp_path / "operation-equality.mm"
+    path.write_text(source, encoding="utf-8")
+    mm = _mm_expand.MM().parse(path)
+    facts = {
+        "emit": "|- ph",
+        "op-eq": (
+            "|- ( ph -> A = C ) & |- ( ph -> B = D )" " => |- ( ph -> ( A F B ) = ( C F D ) )"
+        ),
+    }
+    return mm, goal, premise_a, premise_b, left_b, facts
+
+
+def test_typed_application_matching_recovers_real_bpoly2_ambiguity_shape(tmp_path):
+    mm, goal, premise_a, premise_b, _, facts = _operation_equality_case(tmp_path)
+    generated = proof(
+        ("emit", premise_a),
+        ("emit", premise_b),
+        ("op-eq", goal),
+    )
+
+    result = verify_proof(mm, generated, goal, facts, target_label="target")
+
+    assert result.status == "valid", result.reason
+
+
+def test_typed_application_matching_rejects_mutated_bpoly2_premise(tmp_path):
+    mm, goal, premise_a, _, left_b, facts = _operation_equality_case(tmp_path)
+    generated = proof(
+        ("emit", premise_a),
+        ("emit", f"|- ( p -> {left_b} = {left_b} )"),
+        ("op-eq", goal),
+    )
+
+    result = verify_proof(mm, generated, goal, facts, target_label="target")
+
+    assert result.status == "invalid"
+    assert result.steps[-1].reason_code == "essential_hypothesis_unmet"
+
+
+def _unary_negation_checker(tmp_path):
+    """Portable excerpt of set.mm's ``wn $a wff -. ph`` syntax."""
+    path = tmp_path / "deep-negation.mm"
+    path.write_text(
+        "$c wff |- -. $.\n"
+        "$v ph p $.\n"
+        "wph $f wff ph $.\n"
+        "wp $f wff p $.\n"
+        "wn $a wff -. ph $.\n"
+        "target-rule $a |- p $.\n"
+        "target $p |- p $= wp target-rule $.\n",
+        encoding="utf-8",
+    )
+    mm = _mm_expand.MM().parse(path)
+    return _mm_verify.SyntaxTypeChecker(
+        mm,
+        "target",
+        mm.assertion_frames["target"],
+        node_budget=_mm_verify.SYNTAX_NODE_BUDGET,
+    )
+
+
+def test_deep_legal_negation_returns_unknown_instead_of_recursion_error(tmp_path):
+    deep_checker = _unary_negation_checker(tmp_path)
+
+    deep = deep_checker.check("wff", ["-."] * 250 + ["p"])
+
+    assert deep.status == "unknown"
+    assert deep.witness == ()
+
+    shallow_checker = _unary_negation_checker(tmp_path)
+    shallow = shallow_checker.check("wff", ["-."] * 200 + ["p"])
+    assert shallow.status == "valid", shallow.reason
+
+
+def _mutually_recursive_syntax_checker(tmp_path, *, include_base: bool):
+    path = tmp_path / f"mutually-recursive-{include_base}.mm"
+    base = "ta-c $a ta c $.\n" if include_base else ""
+    path.write_text(
+        (
+            "$c ta tb |- c $.\n"
+            "$v x $.\n"
+            "${\n"
+            "  bx $f tb x $.\n"
+            "  a-from-b $a ta x $.\n"
+            "$}\n"
+            "${\n"
+            "  ax $f ta x $.\n"
+            "  b-from-a $a tb x $.\n"
+            "$}\n"
+            f"{base}"
+            "target-rule $a |- c $.\n"
+            "target $p |- c $= target-rule $.\n"
+        ),
+        encoding="utf-8",
+    )
+    mm = _mm_expand.MM().parse(path)
+    return _mm_verify.SyntaxTypeChecker(
+        mm,
+        "target",
+        mm.assertion_frames["target"],
+        node_budget=_mm_verify.SYNTAX_NODE_BUDGET,
+    )
+
+
+def test_cycle_pruning_does_not_poison_later_syntax_queries(tmp_path):
+    checker = _mutually_recursive_syntax_checker(tmp_path, include_base=True)
+
+    first = checker.check("ta", ["c"])
+    after_prior_search = checker.check("tb", ["c"])
+    fresh = _mutually_recursive_syntax_checker(tmp_path, include_base=True).check("tb", ["c"])
+
+    assert first.status == "valid", first.reason
+    assert fresh.status == "valid", fresh.reason
+    assert after_prior_search.status == fresh.status
+    assert after_prior_search.witness == ("ta-c", "b-from-a")
+
+
+def test_verify_proof_tristate_exposes_versioned_public_schema(sound_mm):
+    assert _mm_verify.VERIFIER_SCHEMA_VERSION == "p3-metamath-tristate-v1"
+    result = _mm_verify.verify_proof_tristate(
+        sound_mm,
+        GOOD_PROOF,
+        GOOD_GOAL,
+        FACTS,
+        target_label="target",
+    )
+    assert result.status.value == "valid"
+    assert result.valid is True
+    assert result.as_dict()["status"] == "valid"
+    assert "valid" in result.as_dict()
+    assert result.as_dict()["valid"] is True
+
+
+def test_verify_proof_tristate_preserves_unknown_as_none(sound_mm):
+    result = _mm_verify.verify_proof_tristate(
+        sound_mm,
+        GOOD_PROOF,
+        GOOD_GOAL,
+        FACTS,
+        target_label=None,
+    )
+    assert result.status.value == "unknown"
     assert result.valid is None

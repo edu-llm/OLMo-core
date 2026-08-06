@@ -33,9 +33,19 @@ S3.
 Use only the completed final checkpoint step **23166** for both arms. Do not
 run intermediate checkpoint evaluations.
 
-All three conditions run on 100% of the 4,191 context-eligible source eval rows
-(seed `20260801`) with identical row IDs. No `facts_shuffled`; no
-Metamath-validity result.
+The six family shards contain 4,191 source eval rows in total.
+`facts_present` uses every post-context-gate row. `facts_absent` and
+`facts_corrupted` each use a separate deterministic, ceiling-rounded 10%
+sample per family (422 rows each at seed `20260801`). Dense and split use
+identical IDs within each condition; diagnostic conditions need not share IDs.
+There is no `facts_shuffled`.
+
+Result schema is `p3-eval-v9`; paired comparison schema is
+`p3-comparison-v5`.
+
+Metamath reports versioned tri-state generated-proof validity for
+`facts_present` and `facts_absent` when `--mm-dir` supplies hash-verified
+`set.mm`, `iset.mm`, and `nf.mm`. `facts_corrupted` has no validity rate.
 
 - `facts_present` — correct global premise block
 - `facts_absent` — no global premise block
@@ -65,6 +75,7 @@ cd "$OLMO_ROOT"
 
 "$PYTHON" src/scripts/train/p3_math_split/evals/run_eval.py \
   --model "$EVAL_WORK/hf/dense" --arm dense --corpus "$P3_ROOT/corpus-v3" \
+  --mm-dir "$MM_DIR" \
   --families enigma isabelle metamath mizar prf2 thproofs \
   --conditions facts_present facts_absent facts_corrupted \
   --batch-size 8 --context-length 16384 --max-new-tokens 8192 \

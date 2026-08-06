@@ -42,6 +42,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import random
 import re
@@ -63,7 +64,7 @@ SEP = "---"
 CONDITIONS = ("facts_present", "facts_absent", "facts_corrupted")
 FAMILIES = ("enigma", "isabelle", "metamath", "mizar", "prf2", "thproofs")
 DEFAULT_MAX_NEW_TOKENS = 8_192
-RESULT_SCHEMA_VERSION = "p3-eval-v7"
+RESULT_SCHEMA_VERSION = "p3-eval-v9"
 MODEL_EXPORT_SCHEMA_VERSION = "p3-model-export-v1"
 FINAL_CHECKPOINT_STEP = 23_166
 SAFETENSORS_SHARD = re.compile(r"^model-(\d{5})-of-(\d{5})\.safetensors$")
@@ -71,9 +72,28 @@ SAFETENSORS_INDEX = "model.safetensors.index.json"
 METAMATH_VERIFIER_SCHEMA_VERSION = "p3-metamath-tristate-v1"
 NLL_CONTEXT_POLICY = "bounded_sliding_window_preserve_predecessor"
 NLL_TARGET_POLICY = "combined_prompt_target_suffix_plus_single_eos"
-COHORT_POLICY = "all-context-eligible-v1"
+DIAGNOSTIC_COHORT_FRACTION = 0.10
+DIAGNOSTIC_COHORT_ROUNDING = "ceil"
+COHORT_RANK_KEY_FIELDS = ("evaluator_seed", "family", "condition", "example_id")
 CONDITION_COHORT_POLICY = {
-    condition: {"selection": COHORT_POLICY} for condition in CONDITIONS
+    "facts_present": {
+        "selection": "all-context-eligible-v2",
+        "fraction": 1.0,
+        "rounding": "none",
+        "rank_key": list(COHORT_RANK_KEY_FIELDS),
+    },
+    "facts_absent": {
+        "selection": "deterministic-rank-sample-v1",
+        "fraction": DIAGNOSTIC_COHORT_FRACTION,
+        "rounding": DIAGNOSTIC_COHORT_ROUNDING,
+        "rank_key": list(COHORT_RANK_KEY_FIELDS),
+    },
+    "facts_corrupted": {
+        "selection": "deterministic-rank-sample-v1",
+        "fraction": DIAGNOSTIC_COHORT_FRACTION,
+        "rounding": DIAGNOSTIC_COHORT_ROUNDING,
+        "rank_key": list(COHORT_RANK_KEY_FIELDS),
+    },
 }
 CORRUPTED_METAMATH_REASON = (
     "validity against visible corrupted statements is unsupported; the current "
@@ -90,6 +110,29 @@ HELDOUT_MANIFEST = {
 }
 
 
+def expected_diagnostic_cohort_size(context_eligible_examples: int) -> int:
+    """Return the per-family diagnostic cohort size under the published policy."""
+    if context_eligible_examples <= 0:
+        return 0
+    return math.ceil(DIAGNOSTIC_COHORT_FRACTION * context_eligible_examples)
+
+
+def cohort_rank_key(*, seed: int, family: str, condition: str, example_id) -> str:
+    """Stable rank key for deterministic cohort membership independent of source order."""
+    payload = json.dumps(
+        {
+            "evaluator_seed": seed,
+            "family": family,
+            "condition": condition,
+            "example_id": example_id,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
 def rows_for_condition(
     rows: list[dict],
     *,
@@ -97,14 +140,27 @@ def rows_for_condition(
     condition: str,
     seed: int,
 ) -> list[dict]:
-    """Return every context-eligible row while preserving source order."""
-    del seed
+    """Return the condition-specific context-eligible cohort in rank order."""
     if condition not in CONDITIONS:
         raise ValueError(f"unknown condition {condition!r}")
     if not rows:
         return list(rows)
     require_unique_ids(rows, f"{family}/{condition} cohort selection")
-    return list(rows)
+    if condition == "facts_present":
+        return list(rows)
+    cohort_size = expected_diagnostic_cohort_size(len(rows))
+    if cohort_size == 0:
+        return []
+    ranked = sorted(
+        rows,
+        key=lambda row: cohort_rank_key(
+            seed=seed,
+            family=family,
+            condition=condition,
+            example_id=row["id"],
+        ),
+    )
+    return ranked[:cohort_size]
 
 
 def discover_families(corpus: str | Path) -> list[str]:
@@ -790,7 +846,7 @@ def load_metamath_databases(mm_dir: str | Path | None) -> dict:
 
 
 def metamath_verifier_availability(verifier_module=mm_verify) -> dict:
-    """Describe whether the future sound tri-state verifier contract is present."""
+    """Describe whether the sound tri-state verifier contract is present."""
     detected_schema = getattr(verifier_module, "VERIFIER_SCHEMA_VERSION", None)
     tri_state_api = getattr(verifier_module, "verify_proof_tristate", None)
     if detected_schema != METAMATH_VERIFIER_SCHEMA_VERSION or not callable(tri_state_api):
@@ -804,13 +860,233 @@ def metamath_verifier_availability(verifier_module=mm_verify) -> dict:
             ),
         }
     return {
-        "status": "integration_pending",
+        "status": "available",
         "required_schema": METAMATH_VERIFIER_SCHEMA_VERSION,
         "detected_schema": detected_schema,
-        "reason": (
-            "the sound tri-state API is present but this evaluator integration "
-            "must be completed before validity is reportable"
+        "reason": None,
+    }
+
+
+def resolve_metamath_theorem_context(theorem: str) -> tuple[str, str | None]:
+    """Split a corpus theorem label into its native label and source database."""
+    database, separator, native_label = theorem.partition(":")
+    if separator and database in mm_verify.METAMATH_DATABASES and native_label:
+        return native_label, database
+    return theorem, None
+
+
+def metamath_verification_fact_block(
+    row: dict,
+    condition: str,
+    visible_facts: dict[str, str],
+) -> dict[str, str] | None:
+    """Return the fact block used for sound verification under one condition."""
+    if condition == "facts_present":
+        return dict(visible_facts)
+    if condition == "facts_absent":
+        return dict(row["facts"])
+    if condition == "facts_corrupted":
+        return None
+    raise ValueError(f"unknown condition {condition!r}")
+
+
+def metamath_runtime_availability(
+    *,
+    mm_dir: str | Path | None,
+    metamath_sources: dict | None,
+    mm_databases: dict,
+    verifier_availability: dict | None = None,
+) -> dict:
+    """Describe whether this run can report Metamath validity for one family."""
+    verifier_availability = verifier_availability or metamath_verifier_availability()
+    if verifier_availability["status"] != "available":
+        return {
+            **verifier_availability,
+            "mm_dir_supplied": mm_dir is not None,
+            "metamath_sources_verified": metamath_sources is not None,
+            "loaded_source_databases": sorted(mm_databases),
+        }
+    if mm_dir is None:
+        return {
+            **verifier_availability,
+            "status": "unavailable",
+            "reason": (
+                "Metamath validity requires --mm-dir with pinned set.mm, iset.mm, "
+                "and nf.mm sources verified against corpus metamath_sources.json"
+            ),
+            "mm_dir_supplied": False,
+            "metamath_sources_verified": False,
+            "loaded_source_databases": [],
+        }
+    if metamath_sources is None:
+        return {
+            **verifier_availability,
+            "status": "unavailable",
+            "reason": "corpus metamath_sources.json was not verified for this run",
+            "mm_dir_supplied": True,
+            "metamath_sources_verified": False,
+            "loaded_source_databases": sorted(mm_databases),
+        }
+    if not mm_databases:
+        return {
+            **verifier_availability,
+            "status": "unavailable",
+            "reason": "no Metamath source databases were loaded from --mm-dir",
+            "mm_dir_supplied": True,
+            "metamath_sources_verified": True,
+            "loaded_source_databases": [],
+        }
+    loaded = sorted(mm_databases)
+    expected = sorted(mm_verify.METAMATH_DATABASES)
+    if loaded != expected:
+        return {
+            **verifier_availability,
+            "status": "unavailable",
+            "reason": (
+                "Metamath validity requires every pinned source database to be loaded; "
+                f"expected {expected}, got {loaded}"
+            ),
+            "mm_dir_supplied": True,
+            "metamath_sources_verified": True,
+            "loaded_source_databases": loaded,
+        }
+    return {
+        **verifier_availability,
+        "mm_dir_supplied": True,
+        "metamath_sources_verified": True,
+        "loaded_source_databases": loaded,
+    }
+
+
+def verify_metamath_example(
+    *,
+    generated: str,
+    row: dict,
+    condition: str,
+    visible_facts: dict[str, str],
+    mm_databases: dict,
+    availability: dict,
+    condition_supported: bool,
+    condition_reason: str | None,
+    generation_attempted: bool,
+) -> dict:
+    """Verify one generated Metamath trace with explicit tri-state semantics."""
+    target_label, source_database = resolve_metamath_theorem_context(row["theorem"])
+    record = {
+        "status": "unavailable",
+        "verifier_schema_version": None,
+        "target_label": target_label,
+        "source_database": source_database,
+        "reason_code": "",
+        "reason": "",
+    }
+    if availability["status"] != "available":
+        record["status"] = "unavailable"
+        record["reason_code"] = "verifier_unavailable"
+        record["reason"] = availability.get("reason") or "Metamath verifier is unavailable"
+        return record
+    if not condition_supported:
+        record["status"] = "excluded"
+        record["reason_code"] = "condition_unsupported"
+        record["reason"] = condition_reason or CORRUPTED_METAMATH_REASON
+        return record
+    if not generation_attempted:
+        record["status"] = "excluded"
+        record["reason_code"] = "generation_not_attempted"
+        record["reason"] = "validity is defined only for attempted generations"
+        return record
+    fact_block = metamath_verification_fact_block(row, condition, visible_facts)
+    if fact_block is None:
+        record["status"] = "excluded"
+        record["reason_code"] = "condition_unsupported"
+        record["reason"] = condition_reason or CORRUPTED_METAMATH_REASON
+        return record
+
+    database_key = source_database or "set"
+    mm = mm_databases.get(database_key)
+    if mm is None:
+        record["status"] = "unavailable"
+        record["reason_code"] = "source_database_unavailable"
+        record["reason"] = (
+            f"Metamath source database {database_key!r} is not loaded for theorem "
+            f"{row['theorem']!r}"
+        )
+        return record
+
+    proof_result = mm_verify.verify_proof_tristate(
+        mm,
+        generated,
+        row["goal"],
+        fact_block,
+        local_assumptions=row.get("local_assumptions") or {},
+        target_label=target_label,
+        source_database=source_database,
+    )
+    record["status"] = proof_result.status.value
+    record["verifier_schema_version"] = METAMATH_VERIFIER_SCHEMA_VERSION
+    record["reason_code"] = proof_result.reason_code
+    record["reason"] = proof_result.reason
+    record["parsed_steps"] = proof_result.parsed_steps
+    return record
+
+
+def summarize_metamath_validity(
+    per_example: list[dict],
+    *,
+    availability: dict,
+    condition_supported: bool,
+    condition_reason: str | None,
+) -> dict:
+    """Aggregate tri-state Metamath validity without collapsing unknown into invalid."""
+    counts = {
+        "valid_count": 0,
+        "invalid_count": 0,
+        "unknown_count": 0,
+        "excluded_count": 0,
+        "unavailable_count": 0,
+    }
+    for item in per_example:
+        metamath = item.get("metamath")
+        if not isinstance(metamath, dict):
+            counts["unavailable_count"] += 1
+            continue
+        status = metamath.get("status")
+        if status == "valid":
+            counts["valid_count"] += 1
+        elif status == "invalid":
+            counts["invalid_count"] += 1
+        elif status == "unknown":
+            counts["unknown_count"] += 1
+        elif status == "excluded":
+            counts["excluded_count"] += 1
+        else:
+            counts["unavailable_count"] += 1
+
+    decided_count = counts["valid_count"] + counts["invalid_count"]
+    evaluated_count = counts["valid_count"] + counts["invalid_count"] + counts["unknown_count"]
+    reportable = availability["status"] == "available" and condition_supported
+    if not reportable:
+        counts["valid_count"] = 0
+        counts["invalid_count"] = 0
+        counts["unknown_count"] = 0
+        decided_count = 0
+        evaluated_count = 0
+    return {
+        "availability": availability,
+        "verifier_schema_version": (
+            METAMATH_VERIFIER_SCHEMA_VERSION
+            if availability["status"] == "available"
+            else availability.get("detected_schema")
         ),
+        "condition_supported": condition_supported,
+        "condition_reason": condition_reason,
+        "evaluated_count": evaluated_count,
+        **counts,
+        "decided_count": decided_count,
+        "valid_rate_decided": (
+            counts["valid_count"] / decided_count if reportable and decided_count else None
+        ),
+        "valid_rate_denominator": "valid_count + invalid_count",
     }
 
 
@@ -1307,12 +1583,18 @@ def main():
     model.eval()
 
     metamath_sources = None
+    mm_databases: dict = {}
     if args.mm_dir:
         manifest_path = Path(args.corpus) / "metamath_sources.json"
         if not manifest_path.exists():
             raise SystemExit(f"{manifest_path} is required for deterministic Metamath verification")
         metamath_sources = verify_metamath_sources(args.mm_dir, manifest_path)
-    metamath_availability = metamath_verifier_availability()
+        mm_databases = load_metamath_databases(args.mm_dir)
+    metamath_availability = metamath_runtime_availability(
+        mm_dir=args.mm_dir,
+        metamath_sources=metamath_sources,
+        mm_databases=mm_databases,
+    )
     results = {
         **build_evaluation_metadata(
             args=args,
@@ -1460,6 +1742,18 @@ def main():
                     "generation_attempted": attempted,
                     "generation_budget": allowance,
                 }
+                if family == "metamath":
+                    item["metamath"] = verify_metamath_example(
+                        generated=gen,
+                        row=row,
+                        condition=condition,
+                        visible_facts=condition_input.visible_facts,
+                        mm_databases=mm_databases,
+                        availability=metamath_availability,
+                        condition_supported=condition_input.metamath_validity_supported,
+                        condition_reason=condition_input.metamath_validity_reason,
+                        generation_attempted=attempted,
+                    )
                 per_example.append(item)
 
             condition_result = {
@@ -1472,19 +1766,20 @@ def main():
                 "per_example": per_example,
             }
             if family == "metamath":
-                condition_result["metamath_verification"] = {
-                    **metamath_availability,
-                    "condition_supported": (
+                condition_result["metamath_verification"] = summarize_metamath_validity(
+                    per_example,
+                    availability=metamath_availability,
+                    condition_supported=(
                         condition_input.metamath_validity_supported
                         if materialized
                         else condition != "facts_corrupted"
                     ),
-                    "condition_reason": (
+                    condition_reason=(
                         condition_input.metamath_validity_reason
                         if materialized
                         else (CORRUPTED_METAMATH_REASON if condition == "facts_corrupted" else None)
                     ),
-                }
+                )
             family_result["conditions"][condition] = condition_result
             exact_rate = condition_result["exact_match_rate_evaluated"]
             budget_coverage = condition_result["whole_proof_budget_coverage_evaluated"]

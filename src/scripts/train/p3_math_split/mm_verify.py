@@ -18,9 +18,17 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 
+VERIFIER_SCHEMA_VERSION = "p3-metamath-tristate-v1"
+
 MATCH_NODE_BUDGET = 200_000
 SYNTAX_NODE_BUDGET = 200_000
 METAMATH_DATABASES = frozenset(("set", "iset", "nf"))
+SYNTAX_BUDGET_EXCEEDED = "syntax proof search budget exceeded"
+SYNTAX_RECURSION_EXCEEDED = "syntax proof recursion limit exceeded"
+SYNTAX_CYCLE_PRUNED = "cyclic syntax branch requires an independent finite proof"
+NON_CACHEABLE_SYNTAX_REASONS = frozenset(
+    (SYNTAX_BUDGET_EXCEEDED, SYNTAX_RECURSION_EXCEEDED, SYNTAX_CYCLE_PRUNED)
+)
 
 # `  1  syl          |- ( ph -> ch )` — the shape build_corpus.py emits.
 STEP_RE = re.compile(r"^\s*(\d+)\s+(\S+)\s+(\|-\s.*)$")
@@ -180,9 +188,7 @@ def rule_parts(mm, label: str) -> RuleParts | None:
     floating = tuple(
         (hyp_label, data[0], data[1]) for kind, hyp_label, data in mand if kind == "$f"
     )
-    essential = tuple(
-        (hyp_label, tuple(data)) for kind, hyp_label, data in mand if kind == "$e"
-    )
+    essential = tuple((hyp_label, tuple(data)) for kind, hyp_label, data in mand if kind == "$e")
     return RuleParts(
         conclusion=tuple(data[0]),
         floating=floating,
@@ -200,9 +206,7 @@ def render_rule_statement(mm, label: str) -> str | None:
         return None
     data = entry[1]
     conclusion = norm(data[0])
-    essentials = [
-        norm(hyp_data) for hyp_kind, _, hyp_data in data[1] if hyp_kind == "$e"
-    ]
+    essentials = [norm(hyp_data) for hyp_kind, _, hyp_data in data[1] if hyp_kind == "$e"]
     if not essentials:
         return conclusion
     return f"{' & '.join(essentials)} => {conclusion}"
@@ -214,34 +218,75 @@ def _match_essential_hypotheses(
     variables: set[str],
     derived: Sequence[Sequence[str]],
     budget: SearchBudget,
+    *,
+    variable_types: Mapping[str, str] | None = None,
+    syntax_checker=None,
+    diagnostics=None,
 ) -> Iterator[tuple[dict[str, list[str]], tuple[int, ...]]]:
-    stack: list[tuple[int, dict[str, list[str]], tuple[int, ...]]] = [
-        (0, {name: list(value) for name, value in initial_subst.items()}, ())
-    ]
     seen = set()
-    while stack:
-        budget.spend()
-        hyp_index, subst, sources = stack.pop()
-        state_key = (hyp_index, _subst_key(subst))
-        if state_key in seen:
-            continue
-        seen.add(state_key)
-        if hyp_index == len(essential):
-            yield subst, sources
-            continue
 
-        _, template = essential[hyp_index]
-        next_states = []
+    def search(
+        remaining: tuple[tuple[int, tuple[str, Sequence[str]]], ...],
+        subst: dict[str, list[str]],
+        sources: tuple[int, ...],
+    ) -> Iterator[tuple[dict[str, list[str]], tuple[int, ...]]]:
+        budget.spend()
+        state_key = (tuple(index for index, _ in remaining), _subst_key(subst))
+        if state_key in seen:
+            return
+        seen.add(state_key)
+        if not remaining:
+            yield subst, sources
+            return
+
+        # Bind the hypothesis constrained by the most already-known variables first.
+        # This is only a search order: every hypothesis is still matched exactly.
+        selected = max(
+            range(len(remaining)),
+            key=lambda position: (
+                len(
+                    {
+                        token
+                        for token in remaining[position][1][1]
+                        if token in variables and token in subst
+                    }
+                ),
+                len(remaining[position][1][1]),
+                -remaining[position][0],
+            ),
+        )
+        original_index, (_, template) = remaining[selected]
+        next_remaining = remaining[:selected] + remaining[selected + 1 :]
         for source_index, candidate in enumerate(derived):
-            for extended in _iter_template_matches(
-                template,
-                candidate,
-                variables,
-                subst,
-                budget,
-            ):
-                next_states.append((hyp_index + 1, extended, sources + (source_index,)))
-        stack.extend(reversed(next_states))
+            if syntax_checker is None:
+                matches = _iter_template_matches(
+                    template,
+                    candidate,
+                    variables,
+                    subst,
+                    budget,
+                )
+            else:
+                matches = _iter_typed_application_matches(
+                    template,
+                    candidate,
+                    variables,
+                    subst,
+                    variable_types or {},
+                    syntax_checker,
+                    budget,
+                    diagnostics,
+                )
+            for extended in matches:
+                next_sources = list(sources)
+                next_sources[original_index] = source_index
+                yield from search(next_remaining, extended, tuple(next_sources))
+
+    yield from search(
+        tuple(enumerate(essential)),
+        {name: list(value) for name, value in initial_subst.items()},
+        (-1,) * len(essential),
+    )
 
 
 def _variables_in(mm, expression: Sequence[str]) -> set[str]:
@@ -308,9 +353,7 @@ def _syntax_index(mm) -> dict[str, tuple[SyntaxProduction, ...]]:
             continue
         mand = data[1] if len(data) > 1 else []
         floating = tuple(
-            (hyp_data[0], hyp_data[1])
-            for hyp_kind, _, hyp_data in mand
-            if hyp_kind == "$f"
+            (hyp_data[0], hyp_data[1]) for hyp_kind, _, hyp_data in mand if hyp_kind == "$f"
         )
         variables = frozenset(variable for _, variable in floating)
         frame = _get_frame(mm, label)
@@ -339,17 +382,6 @@ class SyntaxResult:
     witness: tuple[str, ...] = ()
 
 
-@dataclass(frozen=True)
-class _SyntaxGoal:
-    typecode: str
-    expression: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class _SyntaxEmit:
-    label: str
-
-
 class SyntaxTypeChecker:
     """Memoized bounded syntax proof search for one target theorem context."""
 
@@ -365,6 +397,7 @@ class SyntaxTypeChecker:
         self.target_index = getattr(mm, "label_order", {}).get(target_label)
         self.productions = _syntax_index(mm)
         self.floating = tuple(target_frame.active_f)
+        self.node_budget = node_budget
         self.budget = SearchBudget(node_budget)
         self.cache: dict[tuple[str, tuple[str, ...]], SyntaxResult] = {}
 
@@ -374,7 +407,11 @@ class SyntaxTypeChecker:
         if cached is not None:
             return cached
         result = self._search(typecode, tuple(expression))
-        self.cache[key] = result
+        if not (
+            result.status is VerificationStatus.UNKNOWN
+            and result.reason in NON_CACHEABLE_SYNTAX_REASONS
+        ):
+            self.cache[key] = result
         return result
 
     def _search(self, typecode: str, expression: tuple[str, ...]) -> SyntaxResult:
@@ -383,96 +420,359 @@ class SyntaxTypeChecker:
                 VerificationStatus.UNKNOWN,
                 "target declaration order is unavailable",
             )
-        initial_tasks: tuple[_SyntaxGoal | _SyntaxEmit, ...] = (
-            _SyntaxGoal(typecode, expression),
-        )
-        stack: list[tuple[tuple[_SyntaxGoal | _SyntaxEmit, ...], tuple[str, ...]]] = [
-            (initial_tasks, ())
-        ]
-        seen = set()
-        encountered_unsupported = False
+        self.budget = SearchBudget(self.node_budget)
         try:
-            while stack:
-                self.budget.spend()
-                tasks, witness = stack.pop()
-                if not tasks:
-                    return SyntaxResult(
-                        VerificationStatus.VALID,
-                        witness=witness,
-                    )
-                task, rest = tasks[0], tasks[1:]
-                if isinstance(task, _SyntaxEmit):
-                    stack.append((rest, witness + (task.label,)))
-                    continue
-                state_key = tasks
-                if state_key in seen:
-                    continue
-                seen.add(state_key)
-
-                alternatives = []
-                for floating_label, floating_type, variable in self.floating:
-                    if floating_type == task.typecode and task.expression == (
-                        variable,
-                    ):
-                        alternatives.append((rest, witness + (floating_label,)))
-
-                for production in self.productions.get(task.typecode, ()):
-                    if (
-                        production.statement_index < 0
-                        or production.statement_index >= self.target_index
-                    ):
-                        continue
-                    for subst in _iter_template_matches(
-                        production.template,
-                        task.expression,
-                        set(production.variables),
-                        {},
-                        self.budget,
-                    ):
-                        if production.has_essential:
-                            encountered_unsupported = True
-                            continue
-                        disjoint_ok, _ = _check_disjoint(
-                            self.mm,
-                            production.mandatory_disjoint,
-                            subst,
-                            self.target_frame,
-                        )
-                        if disjoint_ok is None:
-                            encountered_unsupported = True
-                            continue
-                        if not disjoint_ok:
-                            continue
-                        if any(
-                            variable not in subst for _, variable in production.floating
-                        ):
-                            encountered_unsupported = True
-                            continue
-                        subgoals = tuple(
-                            _SyntaxGoal(required_type, tuple(subst[variable]))
-                            for required_type, variable in production.floating
-                        )
-                        alternatives.append(
-                            (
-                                subgoals + (_SyntaxEmit(production.label),) + rest,
-                                witness,
-                            )
-                        )
-                stack.extend(reversed(alternatives))
+            return self._prove(typecode, expression, set())
         except MatchBudgetExceeded:
             return SyntaxResult(
                 VerificationStatus.UNKNOWN,
-                "syntax proof search budget exceeded",
+                SYNTAX_BUDGET_EXCEEDED,
             )
-        if encountered_unsupported:
+        except RecursionError:
             return SyntaxResult(
                 VerificationStatus.UNKNOWN,
-                "matching syntax assertions require unsupported context",
+                SYNTAX_RECURSION_EXCEEDED,
             )
-        return SyntaxResult(
-            VerificationStatus.INVALID,
-            f"no source syntax proof establishes {typecode} {' '.join(expression)}",
+
+    @staticmethod
+    def _literal_tokens_match(
+        production: SyntaxProduction,
+        expression: Sequence[str],
+    ) -> bool:
+        """Whether a production's constants occur in the required order."""
+
+        concrete = iter(expression)
+        for token in production.template:
+            if token in production.variables:
+                continue
+            for candidate in concrete:
+                if candidate == token:
+                    break
+            else:
+                return False
+        return True
+
+    def _iter_typed_matches(
+        self,
+        production: SyntaxProduction,
+        expression: tuple[str, ...],
+        visiting: set[tuple[str, tuple[str, ...]]],
+        unknown_reasons: set[str],
+    ) -> Iterator[tuple[dict[str, list[str]], dict[str, tuple[str, ...]]]]:
+        """Match one syntax template while proving each chosen variable span."""
+
+        variables = set(production.variables)
+        required_types = {variable: typecode for typecode, variable in production.floating}
+
+        def next_token_can_start(
+            template_index: int,
+            concrete_index: int,
+            subst: Mapping[str, Sequence[str]],
+        ) -> bool:
+            next_index = template_index + 1
+            if next_index == len(production.template):
+                return concrete_index == len(expression)
+            next_token = production.template[next_index]
+            if next_token not in variables:
+                return concrete_index < len(expression) and expression[concrete_index] == next_token
+            if next_token not in subst:
+                return True
+            bound = subst[next_token]
+            end = concrete_index + len(bound)
+            return list(expression[concrete_index:end]) == list(bound)
+
+        def match(
+            template_index: int,
+            concrete_index: int,
+            subst: dict[str, list[str]],
+            witnesses: dict[str, tuple[str, ...]],
+        ) -> Iterator[tuple[dict[str, list[str]], dict[str, tuple[str, ...]]]]:
+            self.budget.spend()
+            if template_index == len(production.template):
+                if concrete_index == len(expression):
+                    yield subst, witnesses
+                return
+
+            token = production.template[template_index]
+            if token not in variables:
+                if concrete_index < len(expression) and expression[concrete_index] == token:
+                    yield from match(
+                        template_index + 1,
+                        concrete_index + 1,
+                        subst,
+                        witnesses,
+                    )
+                return
+
+            if token in subst:
+                bound = subst[token]
+                end = concrete_index + len(bound)
+                if list(expression[concrete_index:end]) == bound:
+                    yield from match(
+                        template_index + 1,
+                        end,
+                        subst,
+                        witnesses,
+                    )
+                return
+
+            required_type = required_types.get(token)
+            if required_type is None:
+                unknown_reasons.add("matching syntax assertions require unsupported context")
+                return
+            minimum_rest = _minimum_concrete_tokens(
+                production.template,
+                template_index + 1,
+                variables,
+                subst,
+            )
+            maximum_end = len(expression) - minimum_rest
+            for end in range(concrete_index, maximum_end + 1):
+                if not next_token_can_start(template_index, end, subst):
+                    continue
+                value = expression[concrete_index:end]
+                syntax = self._prove(required_type, value, visiting)
+                if syntax.status is VerificationStatus.UNKNOWN:
+                    unknown_reasons.add(syntax.reason)
+                    continue
+                if syntax.status is VerificationStatus.INVALID:
+                    continue
+                extended = dict(subst)
+                extended[token] = list(value)
+                extended_witnesses = dict(witnesses)
+                extended_witnesses[token] = syntax.witness
+                yield from match(
+                    template_index + 1,
+                    end,
+                    extended,
+                    extended_witnesses,
+                )
+
+        yield from match(0, 0, {}, {})
+
+    def _prove(
+        self,
+        typecode: str,
+        expression: tuple[str, ...],
+        visiting: set[tuple[str, tuple[str, ...]]],
+    ) -> SyntaxResult:
+        key = (typecode, expression)
+        cached = self.cache.get(key)
+        if cached is not None:
+            return cached
+        if key in visiting:
+            return SyntaxResult(
+                VerificationStatus.UNKNOWN,
+                SYNTAX_CYCLE_PRUNED,
+            )
+
+        self.budget.spend()
+        visiting.add(key)
+        unknown_reasons: set[str] = set()
+        try:
+            for floating_label, floating_type, variable in self.floating:
+                if floating_type == typecode and expression == (variable,):
+                    result = SyntaxResult(
+                        VerificationStatus.VALID,
+                        witness=(floating_label,),
+                    )
+                    self.cache[key] = result
+                    return result
+
+            for production in self.productions.get(typecode, ()):
+                if (
+                    production.statement_index < 0
+                    or production.statement_index >= self.target_index
+                    or not self._literal_tokens_match(production, expression)
+                ):
+                    continue
+                if production.has_essential:
+                    if (
+                        next(
+                            _iter_template_matches(
+                                production.template,
+                                expression,
+                                set(production.variables),
+                                {},
+                                self.budget,
+                            ),
+                            None,
+                        )
+                        is not None
+                    ):
+                        unknown_reasons.add(
+                            "matching syntax assertions require unsupported context"
+                        )
+                    continue
+
+                typed_unknown_reasons: set[str] = set()
+                for subst, variable_witnesses in self._iter_typed_matches(
+                    production,
+                    expression,
+                    visiting,
+                    typed_unknown_reasons,
+                ):
+                    disjoint_ok, _ = _check_disjoint(
+                        self.mm,
+                        production.mandatory_disjoint,
+                        subst,
+                        self.target_frame,
+                    )
+                    if disjoint_ok is None:
+                        unknown_reasons.add(
+                            "matching syntax assertions require unsupported context"
+                        )
+                        continue
+                    if not disjoint_ok:
+                        continue
+                    if any(variable not in subst for _, variable in production.floating):
+                        unknown_reasons.add(
+                            "matching syntax assertions require unsupported context"
+                        )
+                        continue
+
+                    witness: list[str] = []
+                    for _, variable in production.floating:
+                        variable_witness = variable_witnesses.get(variable)
+                        if variable_witness is None:
+                            unknown_reasons.add(
+                                "matching syntax assertions require unsupported context"
+                            )
+                            break
+                        witness.extend(variable_witness)
+                    else:
+                        result = SyntaxResult(
+                            VerificationStatus.VALID,
+                            witness=tuple(witness) + (production.label,),
+                        )
+                        self.cache[key] = result
+                        return result
+                unknown_reasons.update(typed_unknown_reasons)
+
+            if unknown_reasons:
+                unknown_reason = (
+                    SYNTAX_CYCLE_PRUNED
+                    if SYNTAX_CYCLE_PRUNED in unknown_reasons
+                    else min(unknown_reasons)
+                )
+                result = SyntaxResult(
+                    VerificationStatus.UNKNOWN,
+                    unknown_reason,
+                )
+            else:
+                result = SyntaxResult(
+                    VerificationStatus.INVALID,
+                    f"no source syntax proof establishes {typecode} {' '.join(expression)}",
+                )
+            if not (
+                result.status is VerificationStatus.UNKNOWN
+                and result.reason in NON_CACHEABLE_SYNTAX_REASONS
+            ):
+                self.cache[key] = result
+            return result
+        finally:
+            visiting.remove(key)
+
+
+@dataclass
+class _TypedMatchDiagnostics:
+    saw_type_failure: bool = False
+    type_failure_reason: str = ""
+    unknown_reason: str = ""
+
+
+def _iter_typed_application_matches(
+    template: Sequence[str],
+    concrete: Sequence[str],
+    variables: set[str],
+    initial_subst: Mapping[str, Sequence[str]],
+    variable_types: Mapping[str, str],
+    syntax_checker: SyntaxTypeChecker,
+    budget: SearchBudget,
+    diagnostics: _TypedMatchDiagnostics | None,
+) -> Iterator[dict[str, list[str]]]:
+    """Match an assertion template while pruning ill-typed variable spans."""
+
+    diagnostics = diagnostics or _TypedMatchDiagnostics()
+    seed = {name: list(value) for name, value in initial_subst.items()}
+    emitted = set()
+
+    def next_token_can_start(
+        template_index: int,
+        concrete_index: int,
+        subst: Mapping[str, Sequence[str]],
+    ) -> bool:
+        next_index = template_index + 1
+        if next_index == len(template):
+            return concrete_index == len(concrete)
+        next_token = template[next_index]
+        if next_token not in variables:
+            return concrete_index < len(concrete) and concrete[concrete_index] == next_token
+        if next_token not in subst:
+            return True
+        bound = subst[next_token]
+        end = concrete_index + len(bound)
+        return list(concrete[concrete_index:end]) == list(bound)
+
+    def match(
+        template_index: int,
+        concrete_index: int,
+        subst: dict[str, list[str]],
+    ) -> Iterator[dict[str, list[str]]]:
+        budget.spend()
+        if template_index == len(template):
+            if concrete_index == len(concrete):
+                key = _subst_key(subst)
+                if key not in emitted:
+                    emitted.add(key)
+                    yield subst
+            return
+
+        token = template[template_index]
+        if token not in variables:
+            if concrete_index < len(concrete) and concrete[concrete_index] == token:
+                yield from match(
+                    template_index + 1,
+                    concrete_index + 1,
+                    subst,
+                )
+            return
+
+        if token in subst:
+            bound = subst[token]
+            end = concrete_index + len(bound)
+            if list(concrete[concrete_index:end]) == bound:
+                yield from match(template_index + 1, end, subst)
+            return
+
+        required_type = variable_types.get(token)
+        if required_type is None:
+            diagnostics.unknown_reason = f"mandatory variable {token} has no floating type"
+            return
+        minimum_rest = _minimum_concrete_tokens(
+            template,
+            template_index + 1,
+            variables,
+            subst,
         )
+        maximum_end = len(concrete) - minimum_rest
+        for end in range(concrete_index, maximum_end + 1):
+            if not next_token_can_start(template_index, end, subst):
+                continue
+            value = concrete[concrete_index:end]
+            syntax = syntax_checker.check(required_type, value)
+            if syntax.status is VerificationStatus.UNKNOWN:
+                diagnostics.unknown_reason = syntax.reason
+                continue
+            if syntax.status is VerificationStatus.INVALID:
+                diagnostics.saw_type_failure = True
+                diagnostics.type_failure_reason = syntax.reason
+                continue
+            extended = dict(subst)
+            extended[token] = list(value)
+            yield from match(template_index + 1, end, extended)
+
+    yield from match(0, 0, seed)
 
 
 @dataclass
@@ -526,9 +826,7 @@ class ProofResult:
 
     @property
     def any_unknown(self) -> bool:
-        return self.status is VerificationStatus.UNKNOWN or any(
-            step.unknown for step in self.steps
-        )
+        return self.status is VerificationStatus.UNKNOWN or any(step.unknown for step in self.steps)
 
     def as_dict(self) -> dict:
         return {
@@ -589,8 +887,12 @@ def _verify_application(
     target_frame,
     syntax_checker: SyntaxTypeChecker,
     node_budget: int,
+    *,
+    _typed_matching: bool = False,
 ) -> _ApplicationResult:
     budget = SearchBudget(node_budget)
+    variable_types = {variable: typecode for _, typecode, variable in parts.floating}
+    typed_diagnostics = _TypedMatchDiagnostics()
     saw_conclusion = False
     saw_hypotheses = False
     saw_type_failure = False
@@ -599,21 +901,43 @@ def _verify_application(
     last_type_reason = ""
     last_disjoint_reason = ""
     try:
-        conclusion_matches = _iter_template_matches(
-            parts.conclusion,
-            expression,
-            set(parts.variables),
-            {},
-            budget,
-        )
+        if _typed_matching:
+            conclusion_matches = _iter_typed_application_matches(
+                parts.conclusion,
+                expression,
+                set(parts.variables),
+                {},
+                variable_types,
+                syntax_checker,
+                budget,
+                typed_diagnostics,
+            )
+        else:
+            conclusion_matches = _iter_template_matches(
+                parts.conclusion,
+                expression,
+                set(parts.variables),
+                {},
+                budget,
+            )
         for conclusion_subst in conclusion_matches:
             saw_conclusion = True
+            match_kwargs = (
+                {
+                    "variable_types": variable_types,
+                    "syntax_checker": syntax_checker,
+                    "diagnostics": typed_diagnostics,
+                }
+                if _typed_matching
+                else {}
+            )
             for subst, hypothesis_sources in _match_essential_hypotheses(
                 parts.essential,
                 conclusion_subst,
                 set(parts.variables),
                 derived,
                 budget,
+                **match_kwargs,
             ):
                 saw_hypotheses = True
                 syntax_witnesses = []
@@ -623,9 +947,7 @@ def _verify_application(
                     value = subst.get(variable)
                     if value is None:
                         typing_unknown = True
-                        last_type_reason = (
-                            f"mandatory variable {variable} has no substitution"
-                        )
+                        last_type_reason = f"mandatory variable {variable} has no substitution"
                         break
                     syntax = syntax_checker.check(typecode, value)
                     if syntax.status is VerificationStatus.UNKNOWN:
@@ -670,6 +992,17 @@ def _verify_application(
                     syntax_witnesses=tuple(syntax_witnesses),
                 )
     except MatchBudgetExceeded:
+        if not _typed_matching:
+            return _verify_application(
+                mm,
+                parts,
+                expression,
+                derived,
+                target_frame,
+                syntax_checker,
+                node_budget,
+                _typed_matching=True,
+            )
         return _ApplicationResult(
             status=VerificationStatus.UNKNOWN,
             reason_code="match_budget_exceeded",
@@ -680,6 +1013,12 @@ def _verify_application(
             disjoint_valid=None,
         )
 
+    if _typed_matching:
+        if typed_diagnostics.unknown_reason:
+            unknown_reason = typed_diagnostics.unknown_reason
+        if typed_diagnostics.saw_type_failure:
+            saw_type_failure = True
+            last_type_reason = typed_diagnostics.type_failure_reason or last_type_reason
     if unknown_reason:
         return _ApplicationResult(
             status=VerificationStatus.UNKNOWN,
@@ -689,6 +1028,16 @@ def _verify_application(
             hyps_discharged=True,
             floating_types_valid=None,
             disjoint_valid=None,
+        )
+    if not saw_conclusion and saw_type_failure:
+        return _ApplicationResult(
+            status=VerificationStatus.INVALID,
+            reason_code="floating_type_mismatch",
+            reason=last_type_reason,
+            is_instance=True,
+            hyps_discharged=True,
+            floating_types_valid=False,
+            disjoint_valid=False,
         )
     if not saw_conclusion:
         return _ApplicationResult(
@@ -833,11 +1182,38 @@ def _target_context(mm, target_label: str | None, goal: str):
             {},
         )
     expected_local = {
-        hyp_label: norm(hyp_data)
-        for hyp_kind, hyp_label, hyp_data in data[1]
-        if hyp_kind == "$e"
+        hyp_label: norm(hyp_data) for hyp_kind, hyp_label, hyp_data in data[1] if hyp_kind == "$e"
     }
     return VerificationStatus.VALID, "", "", frame, expected_local
+
+
+def verify_proof_tristate(
+    mm,
+    generated: str,
+    goal: str,
+    fact_block: dict[str, str],
+    gold_target: str | None = None,
+    local_assumptions: dict[str, str] | None = None,
+    *,
+    target_label: str | None = None,
+    source_database: str | None = None,
+    match_node_budget: int = MATCH_NODE_BUDGET,
+    syntax_node_budget: int = SYNTAX_NODE_BUDGET,
+) -> ProofResult:
+    """Verify one generated trace and return an explicit tri-state ``ProofResult``."""
+
+    return verify_proof(
+        mm,
+        generated,
+        goal,
+        fact_block,
+        gold_target=gold_target,
+        local_assumptions=local_assumptions,
+        target_label=target_label,
+        source_database=source_database,
+        match_node_budget=match_node_budget,
+        syntax_node_budget=syntax_node_budget,
+    )
 
 
 def verify_proof(
@@ -896,10 +1272,7 @@ def verify_proof(
 
     supplied_local = local_assumptions or {}
     for local_label, expression in supplied_local.items():
-        if (
-            local_label not in expected_local
-            or norm(expression) != expected_local[local_label]
-        ):
+        if local_label not in expected_local or norm(expression) != expected_local[local_label]:
             res.status = VerificationStatus.INVALID
             res.reason_code = "local_assumption_not_in_target_frame"
             res.reason = (
@@ -908,9 +1281,7 @@ def verify_proof(
             )
             return res
 
-    derived: list[list[str]] = [
-        expression.split() for expression in supplied_local.values()
-    ]
+    derived: list[list[str]] = [expression.split() for expression in supplied_local.values()]
     possibly_derived: list[list[str]] = list(derived)
     syntax_checker = SyntaxTypeChecker(
         mm,
@@ -962,10 +1333,7 @@ def verify_proof(
             application = _ApplicationResult(
                 status=VerificationStatus.UNKNOWN,
                 reason_code="visible_rule_mismatch",
-                reason=(
-                    "visible fact statement does not match the pinned source "
-                    "assertion"
-                ),
+                reason=("visible fact statement does not match the pinned source " "assertion"),
                 is_instance=None,
                 hyps_discharged=None,
                 floating_types_valid=None,
@@ -987,9 +1355,7 @@ def verify_proof(
                 application = _ApplicationResult(
                     status=VerificationStatus.UNKNOWN,
                     reason_code="rule_context_unavailable",
-                    reason=(
-                        "source declaration frame is unavailable for " f"{native_label}"
-                    ),
+                    reason=("source declaration frame is unavailable for " f"{native_label}"),
                     is_instance=None,
                     hyps_discharged=None,
                     floating_types_valid=None,
@@ -1029,9 +1395,7 @@ def verify_proof(
                             ),
                             is_instance=possible_application.is_instance,
                             hyps_discharged=None,
-                            floating_types_valid=(
-                                possible_application.floating_types_valid
-                            ),
+                            floating_types_valid=(possible_application.floating_types_valid),
                             disjoint_valid=possible_application.disjoint_valid,
                         )
 
@@ -1081,10 +1445,7 @@ def verify_proof(
     if invalid_step is not None:
         res.status = VerificationStatus.INVALID
         res.reason_code = invalid_step.reason_code
-        res.reason = (
-            f"step {invalid_step.index} ({invalid_step.label}): "
-            f"{invalid_step.reason}"
-        )
+        res.reason = f"step {invalid_step.index} ({invalid_step.label}): " f"{invalid_step.reason}"
     elif not res.goal_reached:
         res.status = VerificationStatus.INVALID
         res.reason_code = "final_goal_mismatch"
@@ -1092,10 +1453,7 @@ def verify_proof(
     elif unknown_step is not None:
         res.status = VerificationStatus.UNKNOWN
         res.reason_code = unknown_step.reason_code
-        res.reason = (
-            f"step {unknown_step.index} ({unknown_step.label}): "
-            f"{unknown_step.reason}"
-        )
+        res.reason = f"step {unknown_step.index} ({unknown_step.label}): " f"{unknown_step.reason}"
     else:
         res.status = VerificationStatus.VALID
     return res

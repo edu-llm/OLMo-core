@@ -26,9 +26,14 @@ import os
 import random
 import re
 import sys
+from pathlib import Path
 
-RESULT_SCHEMA_VERSION = "p3-eval-v7"
-COMPARISON_SCHEMA_VERSION = "p3-comparison-v3"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from run_eval import expected_diagnostic_cohort_size
+
+RESULT_SCHEMA_VERSION = "p3-eval-v9"
+COMPARISON_SCHEMA_VERSION = "p3-comparison-v5"
+METAMATH_VERIFIER_SCHEMA_VERSION = "p3-metamath-tristate-v1"
 MODEL_EXPORT_SCHEMA_VERSION = "p3-model-export-v1"
 FINAL_CHECKPOINT_STEP = 23_166
 SAFETENSORS_SHARD = re.compile(r"^model-(\d{5})-of-(\d{5})\.safetensors$")
@@ -114,6 +119,33 @@ REQUIRED_ITEM_KEYS = (
     "whole_proof_budget_eligible",
     "generation_attempted",
 )
+REQUIRED_METAMATH_VERIFICATION_KEYS = (
+    "availability",
+    "verifier_schema_version",
+    "condition_supported",
+    "condition_reason",
+    "evaluated_count",
+    "valid_count",
+    "invalid_count",
+    "unknown_count",
+    "excluded_count",
+    "unavailable_count",
+    "decided_count",
+    "valid_rate_decided",
+    "valid_rate_denominator",
+)
+REQUIRED_METAMATH_ITEM_KEYS = (
+    "status",
+    "verifier_schema_version",
+    "target_label",
+    "source_database",
+    "reason_code",
+    "reason",
+)
+METAMATH_DECIDED_STATUSES = frozenset(("valid", "invalid"))
+METAMATH_EVALUATED_STATUSES = frozenset(("valid", "invalid", "unknown"))
+METAMATH_NONDECIDED_STATUSES = frozenset(("excluded", "unavailable"))
+EXPECTED_LOADED_METAMATH_DATABASES = ("iset", "nf", "set")
 ALLOWED_CONFIG_DIFFERENCES = {
     ("arm",),
     ("platform_run_manifest_id",),
@@ -122,6 +154,165 @@ ALLOWED_CONFIG_DIFFERENCES = {
     ("trainer", "save_folder"),
     ("trainer", "callbacks", "wandb", "name"),
 }
+
+
+def _recompute_metamath_status_counts(per_example):
+    counts = {
+        "valid_count": 0,
+        "invalid_count": 0,
+        "unknown_count": 0,
+        "excluded_count": 0,
+        "unavailable_count": 0,
+    }
+    for item in per_example:
+        metamath = item.get("metamath")
+        if not isinstance(metamath, dict):
+            counts["unavailable_count"] += 1
+            continue
+        status = metamath.get("status")
+        if status == "valid":
+            counts["valid_count"] += 1
+        elif status == "invalid":
+            counts["invalid_count"] += 1
+        elif status == "unknown":
+            counts["unknown_count"] += 1
+        elif status == "excluded":
+            counts["excluded_count"] += 1
+        else:
+            counts["unavailable_count"] += 1
+    return counts
+
+
+def _validate_metamath_availability(availability, context):
+    if not isinstance(availability, dict):
+        raise ValueError(f"{context}: metamath availability must be an object")
+    status = availability.get("status")
+    if status == "available":
+        if not availability.get("mm_dir_supplied"):
+            raise ValueError(f"{context}: available Metamath validity requires mm_dir_supplied")
+        if not availability.get("metamath_sources_verified"):
+            raise ValueError(
+                f"{context}: available Metamath validity requires metamath_sources_verified"
+            )
+        loaded = availability.get("loaded_source_databases")
+        if loaded != list(EXPECTED_LOADED_METAMATH_DATABASES):
+            raise ValueError(
+                f"{context}: available Metamath validity requires loaded databases "
+                f"{list(EXPECTED_LOADED_METAMATH_DATABASES)!r}, got {loaded!r}"
+            )
+        if availability.get("required_schema") != METAMATH_VERIFIER_SCHEMA_VERSION:
+            raise ValueError(f"{context}: metamath required_schema must match the verifier contract")
+        if availability.get("detected_schema") != METAMATH_VERIFIER_SCHEMA_VERSION:
+            raise ValueError(f"{context}: metamath detected_schema must match the verifier contract")
+        if availability.get("reason") is not None:
+            raise ValueError(f"{context}: available Metamath validity must not carry a reason")
+    elif status == "unavailable":
+        if not availability.get("reason"):
+            raise ValueError(f"{context}: unavailable Metamath validity requires a reason")
+    else:
+        raise ValueError(f"{context}: metamath availability status is invalid")
+
+
+def _validate_metamath_item(metamath, context):
+    if not isinstance(metamath, dict):
+        raise ValueError(f"{context}: metamath must be an object")
+    for key in REQUIRED_METAMATH_ITEM_KEYS:
+        if key not in metamath:
+            raise ValueError(f"{context}: metamath key {key!r} is missing")
+    status = metamath["status"]
+    if status not in METAMATH_DECIDED_STATUSES | METAMATH_EVALUATED_STATUSES | METAMATH_NONDECIDED_STATUSES:
+        raise ValueError(f"{context}: metamath status {status!r} is invalid")
+    if status in METAMATH_EVALUATED_STATUSES:
+        if metamath["verifier_schema_version"] != METAMATH_VERIFIER_SCHEMA_VERSION:
+            raise ValueError(
+                f"{context}: metamath verifier_schema_version must be "
+                f"{METAMATH_VERIFIER_SCHEMA_VERSION!r}"
+            )
+    if "valid" in metamath:
+        raise ValueError(f"{context}: boolean metamath.valid is forbidden")
+
+
+def _validate_metamath_verification(label, family, condition, value, *, result):
+    context = f"{label}/{family}/{condition}"
+    verification = value.get("metamath_verification")
+    if verification is None:
+        raise ValueError(f"{context}: metamath_verification is missing")
+    if not isinstance(verification, dict):
+        raise ValueError(f"{context}: metamath_verification must be an object")
+    for key in REQUIRED_METAMATH_VERIFICATION_KEYS:
+        if key not in verification:
+            raise ValueError(f"{context}: metamath_verification key {key!r} is missing")
+    availability = verification["availability"]
+    _validate_metamath_availability(availability, context)
+    if verification["valid_rate_denominator"] != "valid_count + invalid_count":
+        raise ValueError(f"{context}: metamath valid_rate_denominator is invalid")
+    if availability["status"] == "available" and result.get("metamath_sources") is None:
+        raise ValueError(f"{context}: metamath_sources is required when validity is available")
+    condition_supported = verification["condition_supported"]
+
+    per_example = value["per_example"]
+    indexed = _index_unique(per_example, context)
+    for example_id, item in indexed.items():
+        if item.get("metamath") is None:
+            raise ValueError(f"{context}/{example_id}: metamath item metadata is missing")
+        metamath = item["metamath"]
+        _validate_metamath_item(metamath, f"{context}/{example_id}")
+        if availability["status"] != "available" and metamath["status"] in METAMATH_EVALUATED_STATUSES:
+            raise ValueError(
+                f"{context}/{example_id}: evaluated metamath status is forbidden when "
+                "validity is unavailable"
+            )
+        if not condition_supported and metamath["status"] in METAMATH_EVALUATED_STATUSES:
+            raise ValueError(
+                f"{context}/{example_id}: evaluated metamath status is forbidden for "
+                "unsupported conditions"
+            )
+
+    counts = _recompute_metamath_status_counts(per_example)
+    decided = counts["valid_count"] + counts["invalid_count"]
+    evaluated = counts["valid_count"] + counts["invalid_count"] + counts["unknown_count"]
+    if availability["status"] != "available" or not condition_supported:
+        expected_counts = {
+            "valid_count": 0,
+            "invalid_count": 0,
+            "unknown_count": 0,
+            "decided_count": 0,
+            "evaluated_count": 0,
+            "valid_rate_decided": None,
+        }
+    else:
+        expected_counts = {
+            **counts,
+            "decided_count": decided,
+            "evaluated_count": evaluated,
+            "valid_rate_decided": (counts["valid_count"] / decided if decided else None),
+        }
+
+    for key in ("valid_count", "invalid_count", "unknown_count", "excluded_count", "unavailable_count"):
+        if verification[key] != counts[key]:
+            raise ValueError(
+                f"{context}: metamath {key}={verification[key]!r} does not match "
+                f"per-example recomputation {counts[key]!r}"
+            )
+    for key in ("decided_count", "evaluated_count", "valid_rate_decided"):
+        actual = verification[key]
+        expected = expected_counts[key]
+        if key == "valid_rate_decided":
+            _assert_close(actual, expected, f"{context}.{key}")
+        elif actual != expected:
+            raise ValueError(
+                f"{context}: metamath {key}={actual!r} does not match recomputation {expected!r}"
+            )
+
+    cohort_size = len(per_example)
+    if sum(counts.values()) != cohort_size:
+        raise ValueError(f"{context}: metamath per-example statuses do not sum to cohort size")
+    if verification["verifier_schema_version"] != (
+        METAMATH_VERIFIER_SCHEMA_VERSION
+        if availability["status"] == "available"
+        else availability.get("detected_schema")
+    ):
+        raise ValueError(f"{context}: metamath verifier_schema_version is inconsistent")
 
 
 def _display(value) -> str:
@@ -474,7 +665,7 @@ def validate_result_config_binding(result, config, *, expected_arm, label):
         )
 
 
-def _validate_condition_schema(label, family, condition, value):
+def _validate_condition_schema(label, family, condition, value, *, result):
     context = f"{label}/{family}/{condition}"
     if not isinstance(value, dict):
         raise ValueError(f"{context}: condition result must be an object")
@@ -520,6 +711,10 @@ def _validate_condition_schema(label, family, condition, value):
                 f"{context}/{example_id}: boolean Metamath validity is forbidden "
                 "without the sound versioned tri-state API"
             )
+        if family == "metamath":
+            if metamath is None:
+                raise ValueError(f"{context}/{example_id}: metamath item metadata is missing")
+            _validate_metamath_item(metamath, f"{context}/{example_id}")
         if item["exact_match"] and not item["generation_attempted"]:
             raise ValueError(f"{context}/{example_id}: exact_match implies generation_attempted")
         if item["whole_proof_budget_eligible"] and not item["generation_attempted"]:
@@ -624,7 +819,41 @@ def _validate_condition_schema(label, family, condition, value):
     }
     for key, recomputed in rates.items():
         _assert_close(value[key], recomputed, f"{context}.{key}")
+    if family == "metamath":
+        _validate_metamath_verification(label, family, condition, value, result=result)
     return frozenset(indexed)
+
+
+def _validate_condition_cohort_membership(
+    label,
+    family,
+    condition,
+    condition_ids,
+    *,
+    family_evaluated,
+    present_ids,
+):
+    context = f"{label}/{family}/{condition}"
+    if condition == "facts_present":
+        if len(condition_ids) != family_evaluated:
+            raise ValueError(
+                f"{context}: condition cohort must equal the full family evaluated cohort"
+            )
+        return
+    expected_size = expected_diagnostic_cohort_size(family_evaluated)
+    if expected_size == 0:
+        if condition_ids:
+            raise ValueError(f"{context}: diagnostic cohort must be empty when policy size is 0")
+        return
+    if len(condition_ids) != expected_size:
+        raise ValueError(
+            f"{context}: diagnostic cohort size {len(condition_ids)!r} "
+            f"does not match policy count {expected_size!r}"
+        )
+    if not condition_ids:
+        raise ValueError(f"{context}: diagnostic cohort must be nonempty")
+    if not condition_ids.issubset(present_ids):
+        raise ValueError(f"{context}: diagnostic cohort must be a subset of facts_present")
 
 
 def _validate_result_schema(result, label):
@@ -657,10 +886,9 @@ def _validate_result_schema(result, label):
                 "family condition keys"
             )
         cohort_ids_by_condition = {}
-        reference_ids = None
         family_evaluated = family_result["evaluated_examples"]
         for condition, value in conditions.items():
-            condition_ids = _validate_condition_schema(label, family, condition, value)
+            condition_ids = _validate_condition_schema(label, family, condition, value, result=result)
             cohort_ids_by_condition[condition] = condition_ids
             for key in ("source_examples", "context_eligible_examples"):
                 _assert_close(
@@ -668,18 +896,29 @@ def _validate_result_schema(result, label):
                     family_result[key],
                     f"{label}/{family}/{condition}.{key}",
                 )
-            if value["evaluated_examples"] != family_evaluated:
+            if condition == "facts_present":
+                if value["evaluated_examples"] != family_evaluated:
+                    raise ValueError(
+                        f"{label}/{family}/{condition}: condition cohort must equal "
+                        "the full family evaluated cohort"
+                    )
+            elif value["evaluated_examples"] != len(condition_ids):
                 raise ValueError(
-                    f"{label}/{family}/{condition}: condition cohort must equal "
-                    "the full family evaluated cohort"
+                    f"{label}/{family}/{condition}: evaluated_examples must equal "
+                    "the diagnostic cohort size"
                 )
-            if reference_ids is None:
-                reference_ids = condition_ids
-            elif condition_ids != reference_ids:
-                raise ValueError(
-                    f"{label}/{family}/{condition}: condition cohort IDs must be "
-                    "identical across all conditions"
-                )
+        present_ids = cohort_ids_by_condition.get("facts_present")
+        if present_ids is None:
+            raise ValueError(f"{label}/{family}: facts_present cohort is required")
+        for condition, condition_ids in cohort_ids_by_condition.items():
+            _validate_condition_cohort_membership(
+                label,
+                family,
+                condition,
+                condition_ids,
+                family_evaluated=family_evaluated,
+                present_ids=present_ids,
+            )
 
 
 def validate_eval_compatibility(dense, split):
@@ -726,6 +965,9 @@ def validate_eval_compatibility(dense, split):
             )
             if dense_ids != split_ids:
                 raise ValueError(f"{family}/{condition}: cohort IDs differ between arms")
+    if "metamath" in dense["families"]:
+        if dense.get("metamath_sources") != split.get("metamath_sources"):
+            raise ValueError("metamath_sources differs between arms")
 
 
 def _bootstrap_interval(differences):
@@ -827,6 +1069,69 @@ def _paired_items(dense_condition, split_condition, context):
     return pairs
 
 
+def _metamath_decided(item) -> bool:
+    metamath = item.get("metamath")
+    return isinstance(metamath, dict) and metamath.get("status") in METAMATH_DECIDED_STATUSES
+
+
+def _metamath_valid(item) -> bool:
+    metamath = item.get("metamath")
+    return isinstance(metamath, dict) and metamath.get("status") == "valid"
+
+
+def _compare_metamath_validity(pairs, n_boot, seed):
+    eligible_pairs = []
+    unknown_pairs = 0
+    excluded_pairs = 0
+    unavailable_pairs = 0
+    for dense_item, split_item in pairs:
+        dense_status = dense_item.get("metamath", {}).get("status")
+        split_status = split_item.get("metamath", {}).get("status")
+        statuses = {dense_status, split_status}
+        if statuses <= METAMATH_DECIDED_STATUSES:
+            eligible_pairs.append((dense_item, split_item))
+        elif "unknown" in statuses:
+            unknown_pairs += 1
+        elif "excluded" in statuses:
+            excluded_pairs += 1
+        else:
+            unavailable_pairs += 1
+    if not eligible_pairs:
+        return {
+            "paired_examples": len(pairs),
+            "eligible_paired_examples": 0,
+            "unknown_paired_examples": unknown_pairs,
+            "excluded_paired_examples": excluded_pairs,
+            "unavailable_paired_examples": unavailable_pairs,
+            "dense_estimate": None,
+            "split_estimate": None,
+            "difference_split_minus_dense": None,
+            "paired_bootstrap_ci95_low": None,
+            "paired_bootstrap_ci95_high": None,
+            "valid_rate_denominator": "valid_count + invalid_count",
+            "verifier_schema_version": METAMATH_VERIFIER_SCHEMA_VERSION,
+        }
+    rate_pairs = [
+        (float(_metamath_valid(dense_item)), float(_metamath_valid(split_item)))
+        for dense_item, split_item in eligible_pairs
+    ]
+    endpoint = _outcome_endpoint(rate_pairs, n_boot, seed)
+    return {
+        "paired_examples": len(pairs),
+        "eligible_paired_examples": len(eligible_pairs),
+        "unknown_paired_examples": unknown_pairs,
+        "excluded_paired_examples": excluded_pairs,
+        "unavailable_paired_examples": unavailable_pairs,
+        "dense_estimate": endpoint["dense_estimate"],
+        "split_estimate": endpoint["split_estimate"],
+        "difference_split_minus_dense": endpoint["difference_split_minus_dense"],
+        "paired_bootstrap_ci95_low": endpoint["paired_bootstrap_ci95_low"],
+        "paired_bootstrap_ci95_high": endpoint["paired_bootstrap_ci95_high"],
+        "valid_rate_denominator": "valid_count + invalid_count",
+        "verifier_schema_version": METAMATH_VERIFIER_SCHEMA_VERSION,
+    }
+
+
 def compare_condition(dense, split, *, family, condition, n_boot, seed):
     dc = dense["families"][family]["conditions"].get(condition)
     sc = split["families"][family]["conditions"].get(condition)
@@ -864,6 +1169,17 @@ def compare_condition(dense, split, *, family, condition, n_boot, seed):
         "exact_match_evaluated": _outcome_endpoint(exact_pairs, n_boot, seed),
         "exact_match_budget_eligible": _outcome_endpoint(eligible_exact_pairs, n_boot, seed),
     }
+    if family == "metamath":
+        dense_verification = dc.get("metamath_verification")
+        split_verification = sc.get("metamath_verification")
+        if dense_verification is None or split_verification is None:
+            raise ValueError(f"{context}: metamath_verification is missing")
+        if not dense_verification.get("condition_supported") or not split_verification.get(
+            "condition_supported"
+        ):
+            outcomes["metamath_validity_decided"] = None
+        else:
+            outcomes["metamath_validity_decided"] = _compare_metamath_validity(pairs, n_boot, seed)
 
     return {
         "family": family,
@@ -980,6 +1296,9 @@ def main():
             for name, endpoint in r["outcomes"].items():
                 if endpoint is None:
                     print(f"  {name}: no eligible paired examples")
+                    continue
+                if endpoint.get("dense_estimate") is None or endpoint.get("split_estimate") is None:
+                    print(f"  {name}: no eligible paired decided examples")
                     continue
                 interval = (
                     f"[{endpoint['paired_bootstrap_ci95_low']:+.2%}, "

@@ -3,6 +3,7 @@
 import copy
 import hashlib
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ import pytest
 from . import load_project_module
 
 compare = load_project_module("compare_arms")
+run_eval = load_project_module("run_eval")
 
 P3_ROOT = Path("src/scripts/train/p3_math_split")
 EVAL_COMPARE_ARMS = P3_ROOT / "evals" / "compare_arms.py"
@@ -65,28 +67,88 @@ def item(
     }
 
 
-ALL_CONTEXT_COHORT_POLICY = {
-    condition: {"selection": "all-context-eligible-v1"}
-    for condition in ("facts_present", "facts_absent", "facts_corrupted")
-}
+ALL_CONTEXT_COHORT_POLICY = run_eval.CONDITION_COHORT_POLICY
 
 
-def result(arm, items, *, checkpoint_step=None):
+def diagnostic_items(items, *, family, condition, seed=20260801):
+    rows = [{"id": entry["id"]} for entry in items]
+    selected_ids = {
+        row["id"]
+        for row in run_eval.rows_for_condition(
+            rows,
+            family=family,
+            condition=condition,
+            seed=seed,
+        )
+    }
+    return [copy.deepcopy(entry) for entry in items if entry["id"] in selected_ids]
+
+
+def condition_block(items, *, family="mizar", condition="facts_present", seed=20260801):
+    cohort_items = (
+        copy.deepcopy(items)
+        if condition == "facts_present"
+        else diagnostic_items(items, family=family, condition=condition, seed=seed)
+    )
+    target_tokens = sum(entry["target_tokens"] for entry in cohort_items)
+    target_correct = sum(entry["target_correct"] for entry in cohort_items)
+    target_nll_sum = sum(entry["nll_sum"] for entry in cohort_items)
+    eligible = [entry for entry in cohort_items if entry["whole_proof_budget_eligible"]]
+    exact = sum(bool(entry["exact_match"]) for entry in cohort_items)
+    exact_eligible = sum(bool(entry["exact_match"]) for entry in eligible)
+    evaluated = len(cohort_items)
+    return {
+        "target_nll_sum": target_nll_sum,
+        "target_tokens": target_tokens,
+        "target_correct": target_correct,
+        "target_token_micro_nll_per_token": target_nll_sum / target_tokens,
+        "target_example_macro_nll_per_token": sum(
+            entry["target_nll_per_token"] for entry in cohort_items
+        )
+        / evaluated,
+        "target_token_micro_accuracy": target_correct / target_tokens,
+        "target_example_macro_accuracy": sum(
+            entry["target_token_accuracy"] for entry in cohort_items
+        )
+        / evaluated,
+        "source_examples": len(items),
+        "context_eligible_examples": len(items),
+        "evaluated_examples": evaluated,
+        "generation_attempted_examples": sum(
+            bool(entry["generation_attempted"]) for entry in cohort_items
+        ),
+        "whole_proof_budget_eligible_examples": len(eligible),
+        "whole_proof_budget_ineligible_examples": evaluated - len(eligible),
+        "whole_proof_budget_coverage_evaluated": len(eligible) / evaluated,
+        "exact_match_count_evaluated": exact,
+        "exact_match_rate_evaluated": exact / evaluated,
+        "exact_match_count_budget_eligible": exact_eligible,
+        "exact_match_rate_budget_eligible": exact_eligible / len(eligible) if eligible else None,
+        "per_example": cohort_items,
+    }
+
+
+def result(arm, items, *, checkpoint_step=None, family="mizar", conditions=None):
     if checkpoint_step is None:
         checkpoint_step = compare.FINAL_CHECKPOINT_STEP
+    if conditions is None:
+        conditions = ["facts_present"]
     trained_weight_files, trained_weights_root_sha256 = trained_weight_identity(arm)
-    target_tokens = sum(entry["target_tokens"] for entry in items)
-    target_correct = sum(entry["target_correct"] for entry in items)
-    target_nll_sum = sum(entry["nll_sum"] for entry in items)
-    eligible = [entry for entry in items if entry["whole_proof_budget_eligible"]]
-    exact = sum(bool(entry["exact_match"]) for entry in items)
-    exact_eligible = sum(bool(entry["exact_match"]) for entry in eligible)
+    family_items = copy.deepcopy(items)
+    condition_results = {
+        condition: condition_block(
+            family_items,
+            family=family,
+            condition=condition,
+        )
+        for condition in conditions
+    }
     return {
-        "schema_version": "p3-eval-v7",
+        "schema_version": "p3-eval-v9",
         "arm": arm,
         "evaluation_controls": {
             "evaluator_seed": 20260801,
-            "conditions": ["facts_present"],
+            "conditions": conditions,
             "condition_cohort_policy": ALL_CONTEXT_COHORT_POLICY,
             "do_sample": False,
             "temperature": 0.7,
@@ -138,43 +200,11 @@ def result(arm, items, *, checkpoint_step=None):
             },
         },
         "families": {
-            "mizar": {
-                "source_examples": len(items),
-                "context_eligible_examples": len(items),
-                "evaluated_examples": len(items),
-                "conditions": {
-                    "facts_present": {
-                        "target_nll_sum": target_nll_sum,
-                        "target_tokens": target_tokens,
-                        "target_correct": target_correct,
-                        "target_token_micro_nll_per_token": target_nll_sum / target_tokens,
-                        "target_example_macro_nll_per_token": sum(
-                            entry["target_nll_per_token"] for entry in items
-                        )
-                        / len(items),
-                        "target_token_micro_accuracy": target_correct / target_tokens,
-                        "target_example_macro_accuracy": sum(
-                            entry["target_token_accuracy"] for entry in items
-                        )
-                        / len(items),
-                        "source_examples": len(items),
-                        "context_eligible_examples": len(items),
-                        "evaluated_examples": len(items),
-                        "generation_attempted_examples": sum(
-                            bool(entry["generation_attempted"]) for entry in items
-                        ),
-                        "whole_proof_budget_eligible_examples": len(eligible),
-                        "whole_proof_budget_ineligible_examples": len(items) - len(eligible),
-                        "whole_proof_budget_coverage_evaluated": len(eligible) / len(items),
-                        "exact_match_count_evaluated": exact,
-                        "exact_match_rate_evaluated": exact / len(items),
-                        "exact_match_count_budget_eligible": exact_eligible,
-                        "exact_match_rate_budget_eligible": exact_eligible / len(eligible)
-                        if eligible
-                        else None,
-                        "per_example": items,
-                    }
-                },
+            family: {
+                "source_examples": len(family_items),
+                "context_eligible_examples": len(family_items),
+                "evaluated_examples": len(family_items),
+                "conditions": condition_results,
             }
         },
     }
@@ -312,68 +342,165 @@ def test_comparison_rejects_duplicate_ids_before_mapping():
         )
 
 
-def test_comparator_requires_identical_full_cohorts_across_conditions_and_arms():
+def test_comparator_accepts_diagnostic_subsets_with_policy_counts_and_paired_arms():
     entries = [
-        item("first", tokens=2, correct=1, nll_sum=2.0, exact=False),
-        item("second", tokens=2, correct=1, nll_sum=2.0, exact=False),
+        item(str(index), tokens=2, correct=1, nll_sum=2.0, exact=False)
+        for index in range(100)
     ]
-    dense = result("dense", copy.deepcopy(entries))
-    split = result("split", copy.deepcopy(entries))
-    for arm_result in (dense, split):
-        arm_result["evaluation_controls"]["conditions"].append("facts_absent")
-        arm_result["families"]["mizar"]["conditions"]["facts_absent"] = copy.deepcopy(
-            arm_result["families"]["mizar"]["conditions"]["facts_present"]
-        )
+    conditions = ["facts_present", "facts_absent", "facts_corrupted"]
+    dense = result("dense", copy.deepcopy(entries), conditions=conditions)
+    split = result("split", copy.deepcopy(entries), conditions=conditions)
 
-    dense["families"]["mizar"]["conditions"]["facts_absent"]["per_example"][1]["id"] = "different"
-    with pytest.raises(ValueError, match="identical across all conditions"):
-        compare.validate_eval_compatibility(dense, split)
+    compare.validate_eval_compatibility(dense, split)
 
-    dense = result("dense", copy.deepcopy(entries))
-    split = result("split", copy.deepcopy(entries))
-    split["families"]["mizar"]["conditions"]["facts_present"]["per_example"][1]["id"] = "different"
-    with pytest.raises(ValueError, match="cohort IDs differ between arms"):
-        compare.validate_eval_compatibility(dense, split)
+    present_ids = {
+        entry["id"]
+        for entry in dense["families"]["mizar"]["conditions"]["facts_present"]["per_example"]
+    }
+    absent_ids = {
+        entry["id"]
+        for entry in dense["families"]["mizar"]["conditions"]["facts_absent"]["per_example"]
+    }
+    corrupted_ids = {
+        entry["id"]
+        for entry in dense["families"]["mizar"]["conditions"]["facts_corrupted"]["per_example"]
+    }
+    assert len(present_ids) == 100
+    assert len(absent_ids) == run_eval.expected_diagnostic_cohort_size(100)
+    assert len(corrupted_ids) == run_eval.expected_diagnostic_cohort_size(100)
+    assert absent_ids != corrupted_ids
+    assert absent_ids.issubset(present_ids)
+    assert corrupted_ids.issubset(present_ids)
 
 
-def test_comparator_accepts_identical_full_cohorts_for_all_conditions():
+def test_comparator_allows_different_diagnostic_ids_across_conditions():
     entries = [
-        item("first", tokens=2, correct=1, nll_sum=2.0, exact=False),
-        item("second", tokens=2, correct=1, nll_sum=2.0, exact=False),
+        item(str(index), tokens=2, correct=1, nll_sum=2.0, exact=False)
+        for index in range(100)
     ]
-    dense = result("dense", copy.deepcopy(entries))
-    split = result("split", copy.deepcopy(entries))
-    for arm_result in (dense, split):
-        arm_result["evaluation_controls"]["conditions"].extend(
-            ["facts_absent", "facts_corrupted"]
-        )
-        present = arm_result["families"]["mizar"]["conditions"]["facts_present"]
-        arm_result["families"]["mizar"]["conditions"]["facts_absent"] = copy.deepcopy(present)
-        arm_result["families"]["mizar"]["conditions"]["facts_corrupted"] = copy.deepcopy(present)
+    conditions = ["facts_present", "facts_absent", "facts_corrupted"]
+    dense = result("dense", copy.deepcopy(entries), conditions=conditions)
+    split = result("split", copy.deepcopy(entries), conditions=conditions)
 
     compare.validate_eval_compatibility(dense, split)
 
 
-def test_comparator_rejects_different_condition_cohort_ids():
-    entries = [
-        item("first", tokens=2, correct=1, nll_sum=2.0, exact=False),
-        item("second", tokens=2, correct=1, nll_sum=2.0, exact=False),
-    ]
-    dense = result("dense", copy.deepcopy(entries))
-    split = result("split", copy.deepcopy(entries))
-    for arm_result in (dense, split):
-        arm_result["evaluation_controls"]["conditions"].extend(
-            ["facts_absent", "facts_corrupted"]
-        )
-        present = copy.deepcopy(arm_result["families"]["mizar"]["conditions"]["facts_present"])
-        absent = copy.deepcopy(present)
-        corrupted = copy.deepcopy(present)
-        absent["per_example"][1]["id"] = "different"
-        arm_result["families"]["mizar"]["conditions"]["facts_present"] = present
-        arm_result["families"]["mizar"]["conditions"]["facts_absent"] = absent
-        arm_result["families"]["mizar"]["conditions"]["facts_corrupted"] = corrupted
+def _rebuild_condition_aggregates(condition):
+    items = condition["per_example"]
+    target_tokens = sum(entry["target_tokens"] for entry in items)
+    target_correct = sum(entry["target_correct"] for entry in items)
+    target_nll_sum = sum(entry["nll_sum"] for entry in items)
+    eligible = [entry for entry in items if entry["whole_proof_budget_eligible"]]
+    exact = sum(bool(entry["exact_match"]) for entry in items)
+    exact_eligible = sum(bool(entry["exact_match"]) for entry in eligible)
+    evaluated = len(items)
+    condition.update(
+        {
+            "target_nll_sum": target_nll_sum,
+            "target_tokens": target_tokens,
+            "target_correct": target_correct,
+            "target_token_micro_nll_per_token": (
+                target_nll_sum / target_tokens if target_tokens else None
+            ),
+            "target_example_macro_nll_per_token": (
+                sum(entry["target_nll_per_token"] for entry in items) / evaluated
+                if evaluated
+                else None
+            ),
+            "target_token_micro_accuracy": (
+                target_correct / target_tokens if target_tokens else None
+            ),
+            "target_example_macro_accuracy": (
+                sum(entry["target_token_accuracy"] for entry in items) / evaluated
+                if evaluated
+                else None
+            ),
+            "evaluated_examples": evaluated,
+            "generation_attempted_examples": sum(
+                bool(entry["generation_attempted"]) for entry in items
+            ),
+            "whole_proof_budget_eligible_examples": len(eligible),
+            "whole_proof_budget_ineligible_examples": evaluated - len(eligible),
+            "whole_proof_budget_coverage_evaluated": (
+                len(eligible) / evaluated if evaluated else None
+            ),
+            "exact_match_count_evaluated": exact,
+            "exact_match_rate_evaluated": exact / evaluated if evaluated else None,
+            "exact_match_count_budget_eligible": exact_eligible,
+            "exact_match_rate_budget_eligible": exact_eligible / len(eligible) if eligible else None,
+        }
+    )
 
-    with pytest.raises(ValueError, match="identical across all conditions"):
+
+def test_comparator_rejects_cross_arm_diagnostic_cohort_mismatch():
+    entries = [
+        item(str(index), tokens=2, correct=1, nll_sum=2.0, exact=False)
+        for index in range(100)
+    ]
+    conditions = ["facts_present", "facts_absent"]
+    dense = result("dense", copy.deepcopy(entries), conditions=conditions)
+    split = result("split", copy.deepcopy(entries), conditions=conditions)
+    dense_absent_ids = {
+        entry["id"]
+        for entry in dense["families"]["mizar"]["conditions"]["facts_absent"]["per_example"]
+    }
+    replacement_id = next(
+        entry["id"]
+        for entry in dense["families"]["mizar"]["conditions"]["facts_present"]["per_example"]
+        if entry["id"] not in dense_absent_ids
+    )
+    split["families"]["mizar"]["conditions"]["facts_absent"]["per_example"][0]["id"] = (
+        replacement_id
+    )
+
+    with pytest.raises(ValueError, match="cohort IDs differ between arms"):
+        compare.validate_eval_compatibility(dense, split)
+
+
+def test_comparator_rejects_diagnostic_cohort_not_subset_of_present():
+    entries = [
+        item(str(index), tokens=2, correct=1, nll_sum=2.0, exact=False)
+        for index in range(100)
+    ]
+    dense = result("dense", copy.deepcopy(entries), conditions=["facts_present", "facts_absent"])
+    split = result("split", copy.deepcopy(entries), conditions=["facts_present", "facts_absent"])
+    for arm_result in (dense, split):
+        absent = arm_result["families"]["mizar"]["conditions"]["facts_absent"]
+        absent["per_example"][0]["id"] = "foreign"
+
+    with pytest.raises(ValueError, match="subset of facts_present"):
+        compare.validate_eval_compatibility(dense, split)
+
+
+def test_comparator_rejects_wrong_size_diagnostic_cohort():
+    entries = [
+        item(str(index), tokens=2, correct=1, nll_sum=2.0, exact=False)
+        for index in range(100)
+    ]
+    dense = result("dense", copy.deepcopy(entries), conditions=["facts_present", "facts_absent"])
+    split = result("split", copy.deepcopy(entries), conditions=["facts_present", "facts_absent"])
+    absent = dense["families"]["mizar"]["conditions"]["facts_absent"]
+    absent["per_example"] = absent["per_example"][:-1]
+    _rebuild_condition_aggregates(absent)
+    split["families"]["mizar"]["conditions"]["facts_absent"] = copy.deepcopy(absent)
+
+    with pytest.raises(ValueError, match="policy count"):
+        compare.validate_eval_compatibility(dense, split)
+
+
+def test_comparator_rejects_empty_diagnostic_cohort_when_policy_requires_nonempty():
+    entries = [
+        item(str(index), tokens=2, correct=1, nll_sum=2.0, exact=False)
+        for index in range(100)
+    ]
+    dense = result("dense", copy.deepcopy(entries), conditions=["facts_present", "facts_absent"])
+    split = result("split", copy.deepcopy(entries), conditions=["facts_present", "facts_absent"])
+    for arm_result in (dense, split):
+        absent = arm_result["families"]["mizar"]["conditions"]["facts_absent"]
+        absent["per_example"] = []
+        _rebuild_condition_aggregates(absent)
+
+    with pytest.raises(ValueError, match="policy count"):
         compare.validate_eval_compatibility(dense, split)
 
 
@@ -386,21 +513,21 @@ def test_comparator_rejects_non_final_checkpoint_step():
         compare.validate_eval_compatibility(dense, split)
 
 
-def test_comparator_rejects_partial_condition_cohort():
+def test_comparator_rejects_partial_present_cohort():
     entries = [
-        item("first", tokens=2, correct=1, nll_sum=2.0, exact=False),
-        item("second", tokens=2, correct=1, nll_sum=2.0, exact=False),
+        item(str(index), tokens=2, correct=1, nll_sum=2.0, exact=False)
+        for index in range(4)
     ]
     dense = result("dense", copy.deepcopy(entries))
     split = result("split", copy.deepcopy(entries))
     for arm_result in (dense, split):
-        arm_result["evaluation_controls"]["conditions"].append("facts_absent")
-        absent = result(arm_result["arm"], [copy.deepcopy(entries[0])])["families"]["mizar"][
-            "conditions"
-        ]["facts_present"]
-        absent["source_examples"] = len(entries)
-        absent["context_eligible_examples"] = len(entries)
-        arm_result["families"]["mizar"]["conditions"]["facts_absent"] = absent
+        family = arm_result["families"]["mizar"]
+        family["source_examples"] = 5
+        family["context_eligible_examples"] = 5
+        family["evaluated_examples"] = 5
+        present = family["conditions"]["facts_present"]
+        present["source_examples"] = 5
+        present["context_eligible_examples"] = 5
 
     with pytest.raises(ValueError, match="full family evaluated cohort"):
         compare.validate_eval_compatibility(dense, split)
@@ -725,6 +852,335 @@ def test_comparator_rejects_exact_aggregate_above_attempted_aggregate():
         ValueError,
         match="exact_match_count_evaluated.*generation_attempted_examples",
     ):
+        compare.validate_eval_compatibility(dense, split)
+
+
+METAMATH_SOURCES = {
+    "commit": "abc123",
+    "files": {
+        "set.mm": {"sha256": SHA_D},
+        "iset.mm": {"sha256": SHA_E},
+        "nf.mm": {"sha256": SHA_F},
+    },
+}
+
+
+def _attach_metamath_sources(payload):
+    payload["metamath_sources"] = copy.deepcopy(METAMATH_SOURCES)
+    return payload
+
+
+def metamath_item(
+    example_id,
+    *,
+    tokens,
+    correct,
+    nll_sum,
+    exact,
+    metamath_status,
+    budget_eligible=True,
+    generation_attempted=True,
+    verifier_schema_version="p3-metamath-tristate-v1",
+):
+    entry = item(
+        example_id,
+        tokens=tokens,
+        correct=correct,
+        nll_sum=nll_sum,
+        exact=exact,
+        budget_eligible=budget_eligible,
+        generation_attempted=generation_attempted,
+    )
+    entry["metamath"] = {
+        "status": metamath_status,
+        "verifier_schema_version": (
+            verifier_schema_version
+            if metamath_status in {"valid", "invalid", "unknown"}
+            else None
+        ),
+        "target_label": "target",
+        "source_database": "set",
+        "reason_code": "",
+        "reason": "",
+    }
+    return entry
+
+
+def metamath_verification_block(items, *, condition_supported=True, condition_reason=None):
+    counts = {
+        "valid_count": 0,
+        "invalid_count": 0,
+        "unknown_count": 0,
+        "excluded_count": 0,
+        "unavailable_count": 0,
+    }
+    for entry in items:
+        status = entry["metamath"]["status"]
+        if status == "valid":
+            counts["valid_count"] += 1
+        elif status == "invalid":
+            counts["invalid_count"] += 1
+        elif status == "unknown":
+            counts["unknown_count"] += 1
+        elif status == "excluded":
+            counts["excluded_count"] += 1
+        else:
+            counts["unavailable_count"] += 1
+    decided = counts["valid_count"] + counts["invalid_count"]
+    return {
+        "availability": {
+            "status": "available",
+            "required_schema": "p3-metamath-tristate-v1",
+            "detected_schema": "p3-metamath-tristate-v1",
+            "reason": None,
+            "mm_dir_supplied": True,
+            "metamath_sources_verified": True,
+            "loaded_source_databases": ["iset", "nf", "set"],
+        },
+        "verifier_schema_version": "p3-metamath-tristate-v1",
+        "condition_supported": condition_supported,
+        "condition_reason": condition_reason,
+        "evaluated_count": decided + counts["unknown_count"] if condition_supported else 0,
+        **counts,
+        "decided_count": decided if condition_supported else 0,
+        "valid_rate_decided": (
+            counts["valid_count"] / decided if condition_supported and decided else None
+        ),
+        "valid_rate_denominator": "valid_count + invalid_count",
+    }
+
+
+def metamath_result(arm, items, *, condition="facts_present", condition_supported=True):
+    payload = result(arm, items)
+    family = payload["families"]["metamath"] = copy.deepcopy(payload["families"]["mizar"])
+    del payload["families"]["mizar"]
+    family["heldout_manifest"] = "metamath"
+    condition_block = family["conditions"]["facts_present"]
+    condition_block["per_example"] = items
+    condition_block["metamath_verification"] = metamath_verification_block(
+        items,
+        condition_supported=condition_supported,
+        condition_reason=(
+            run_eval.CORRUPTED_METAMATH_REASON if not condition_supported else None
+        ),
+    )
+    family["conditions"] = {condition: condition_block}
+    payload["evaluation_controls"]["conditions"] = [condition]
+    payload["input_provenance"]["eval_shard_sha256"] = {"metamath": SHA_D}
+    payload["input_provenance"]["heldout_manifest_sha256"] = {"metamath": SHA_E}
+    payload["input_provenance"]["train_shard_sha256"] = {"metamath": SHA_F}
+    return _attach_metamath_sources(payload)
+
+
+def test_comparator_rejects_old_eval_schema_version():
+    entries = [item("one", tokens=2, correct=1, nll_sum=2.0, exact=False)]
+    dense = result("dense", copy.deepcopy(entries))
+    split = result("split", copy.deepcopy(entries))
+    dense["schema_version"] = "p3-eval-v8"
+
+    with pytest.raises(ValueError, match="p3-eval-v9"):
+        compare.validate_eval_compatibility(dense, split)
+
+
+def test_comparator_pairs_metamath_validity_without_counting_unknown_as_invalid():
+    entries = [
+        metamath_item("a", tokens=2, correct=1, nll_sum=2.0, exact=False, metamath_status="valid"),
+        metamath_item(
+            "b", tokens=2, correct=1, nll_sum=2.0, exact=False, metamath_status="invalid"
+        ),
+        metamath_item(
+            "c", tokens=2, correct=1, nll_sum=2.0, exact=False, metamath_status="unknown"
+        ),
+    ]
+    dense = metamath_result(
+        "dense",
+        copy.deepcopy(entries),
+    )
+    split = metamath_result(
+        "split",
+        [
+            metamath_item(
+                "a", tokens=2, correct=1, nll_sum=2.0, exact=False, metamath_status="valid"
+            ),
+            metamath_item(
+                "b", tokens=2, correct=1, nll_sum=2.0, exact=False, metamath_status="valid"
+            ),
+            metamath_item(
+                "c", tokens=2, correct=1, nll_sum=2.0, exact=False, metamath_status="unknown"
+            ),
+        ],
+    )
+    compare.validate_eval_compatibility(dense, split)
+    got = compare.compare_condition(
+        dense,
+        split,
+        family="metamath",
+        condition="facts_present",
+        n_boot=100,
+        seed=1,
+    )
+    endpoint = got["outcomes"]["metamath_validity_decided"]
+    assert endpoint["paired_examples"] == 3
+    assert endpoint["eligible_paired_examples"] == 2
+    assert endpoint["unknown_paired_examples"] == 1
+    assert endpoint["dense_estimate"] == 0.5
+    assert endpoint["split_estimate"] == 1.0
+    assert endpoint["difference_split_minus_dense"] == 0.5
+    assert endpoint["valid_rate_denominator"] == "valid_count + invalid_count"
+    assert "dense_valid_rate_decided" not in endpoint
+
+
+def test_comparator_main_prints_and_writes_metamath_validity(tmp_path, monkeypatch, capsys):
+    entries = [
+        metamath_item("a", tokens=2, correct=1, nll_sum=2.0, exact=False, metamath_status="valid"),
+        metamath_item(
+            "b", tokens=2, correct=1, nll_sum=2.0, exact=False, metamath_status="invalid"
+        ),
+    ]
+    dense = metamath_result("dense", copy.deepcopy(entries))
+    split = metamath_result(
+        "split",
+        [
+            metamath_item(
+                "a", tokens=2, correct=1, nll_sum=2.0, exact=False, metamath_status="valid"
+            ),
+            metamath_item(
+                "b", tokens=2, correct=1, nll_sum=2.0, exact=False, metamath_status="valid"
+            ),
+        ],
+    )
+    dense_path = tmp_path / "dense.json"
+    split_path = tmp_path / "split.json"
+    out_path = tmp_path / "comparison.json"
+    dense_path.write_text(json.dumps(dense), encoding="utf-8")
+    split_path.write_text(json.dumps(split), encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "compare_arms.py",
+            "--dense",
+            str(dense_path),
+            "--split",
+            str(split_path),
+            "--skip-training-config-check",
+            "--n-boot",
+            "20",
+            "--seed",
+            "1",
+            "--out",
+            str(out_path),
+        ],
+    )
+    compare.main()
+    captured = capsys.readouterr()
+    assert "metamath_validity_decided" in captured.out
+    assert "dense 50.00%" in captured.out or "dense 50%" in captured.out
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    endpoint = payload["comparisons"][0]["outcomes"]["metamath_validity_decided"]
+    assert endpoint["dense_estimate"] == 0.5
+    assert endpoint["split_estimate"] == 1.0
+
+
+def test_comparator_rejects_available_availability_without_runtime_gates():
+    entries = [
+        metamath_item("a", tokens=2, correct=1, nll_sum=2.0, exact=False, metamath_status="valid"),
+    ]
+    dense = metamath_result("dense", copy.deepcopy(entries))
+    split = metamath_result("split", copy.deepcopy(entries))
+    for arm_result in (dense, split):
+        verification = arm_result["families"]["metamath"]["conditions"]["facts_present"][
+            "metamath_verification"
+        ]
+        verification["availability"]["mm_dir_supplied"] = False
+        verification["availability"]["metamath_sources_verified"] = False
+        verification["availability"]["loaded_source_databases"] = []
+
+    with pytest.raises(ValueError, match="mm_dir_supplied"):
+        compare.validate_eval_compatibility(dense, split)
+
+
+def test_comparator_rejects_mismatched_metamath_sources_between_arms():
+    entries = [
+        metamath_item("a", tokens=2, correct=1, nll_sum=2.0, exact=False, metamath_status="valid"),
+    ]
+    dense = metamath_result("dense", copy.deepcopy(entries))
+    split = metamath_result("split", copy.deepcopy(entries))
+    split["metamath_sources"] = copy.deepcopy(METAMATH_SOURCES)
+    split["metamath_sources"]["commit"] = "different"
+
+    with pytest.raises(ValueError, match="metamath_sources"):
+        compare.validate_eval_compatibility(dense, split)
+
+
+def test_comparator_rejects_inconsistent_metamath_aggregate_counts():
+    entries = [
+        metamath_item("a", tokens=2, correct=1, nll_sum=2.0, exact=False, metamath_status="valid"),
+        metamath_item(
+            "b", tokens=2, correct=1, nll_sum=2.0, exact=False, metamath_status="invalid"
+        ),
+    ]
+    dense = metamath_result("dense", copy.deepcopy(entries))
+    split = metamath_result("split", copy.deepcopy(entries))
+    verification = dense["families"]["metamath"]["conditions"]["facts_present"][
+        "metamath_verification"
+    ]
+    verification["valid_count"] = 2
+    split["families"]["metamath"]["conditions"]["facts_present"]["metamath_verification"] = (
+        copy.deepcopy(verification)
+    )
+
+    with pytest.raises(ValueError, match="valid_count"):
+        compare.validate_eval_compatibility(dense, split)
+
+
+def test_comparator_rejects_unknown_without_versioned_schema():
+    entries = [
+        metamath_item(
+            "a",
+            tokens=2,
+            correct=1,
+            nll_sum=2.0,
+            exact=False,
+            metamath_status="unknown",
+            verifier_schema_version=None,
+        ),
+    ]
+    dense = metamath_result("dense", copy.deepcopy(entries))
+    split = metamath_result("split", copy.deepcopy(entries))
+
+    with pytest.raises(ValueError, match="verifier_schema_version"):
+        compare.validate_eval_compatibility(dense, split)
+
+
+def test_comparator_rejects_unavailable_metamath_block_with_reportable_rates():
+    entries = [
+        metamath_item(
+            "a",
+            tokens=2,
+            correct=1,
+            nll_sum=2.0,
+            exact=False,
+            metamath_status="unavailable",
+            verifier_schema_version=None,
+        ),
+    ]
+    dense = metamath_result("dense", copy.deepcopy(entries))
+    split = metamath_result("split", copy.deepcopy(entries))
+    for arm_result in (dense, split):
+        verification = arm_result["families"]["metamath"]["conditions"]["facts_present"][
+            "metamath_verification"
+        ]
+        verification["availability"]["status"] = "unavailable"
+        verification["availability"]["reason"] = "no mm dir"
+        verification["availability"]["mm_dir_supplied"] = False
+        verification["availability"]["metamath_sources_verified"] = False
+        verification["availability"]["loaded_source_databases"] = []
+        verification["evaluated_count"] = 1
+        verification["valid_count"] = 1
+        del arm_result["metamath_sources"]
+
+    with pytest.raises(ValueError, match="valid_count"):
         compare.validate_eval_compatibility(dense, split)
 
 
