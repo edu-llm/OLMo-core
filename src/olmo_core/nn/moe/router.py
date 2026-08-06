@@ -230,6 +230,30 @@ class MoERouter(nn.Module):
         # the anti-vacuity guard in `MetricAssertionCallback`, which is exactly what it is for.
         self._drop_dropped_sum: Optional[torch.Tensor] = None
         self._drop_total_sum: Optional[torch.Tensor] = None
+        # THE B3 HISTOGRAMS (`drop_by_position`, `drop_by_doc_index`), same seam, same story.
+        # `compute_drop_accounting` produced both every step and, until this was wired, nothing
+        # published them -- so when the G2 run dropped 13.5-24.2% of assignments and the question
+        # was *where in the sequence* those drops landed, the answer was "cannot tell you", on a run
+        # that had already been paid for.
+        #
+        # Accumulated as weighted sums rather than a mean of per-step rates. Each step contributes a
+        # per-bucket RATE, and the buckets it was computed from hold different assignment counts, so
+        # averaging rates would weight a step with few assignments equally with a full one. Keeping
+        # numerator and denominator separately makes the interval value an exact pooled rate.
+        #
+        # An empty bucket arrives as `nan` from `_bucketed_rate` -- deliberately, so an unpopulated
+        # bucket is not reported as a measured zero. `nan` must not be allowed to poison the
+        # accumulator, so it is masked out and each bucket carries its own count of contributing
+        # steps. A bucket that was empty on every step therefore ends as 0/0 and is republished as
+        # `nan`, which is the honest answer.
+        self._drop_pos_sum: Optional[torch.Tensor] = None
+        self._drop_pos_n: Optional[torch.Tensor] = None
+        self._drop_doc_sum: Optional[torch.Tensor] = None
+        self._drop_doc_n: Optional[torch.Tensor] = None
+        # How many micro-batches contributed a POPULATED histogram (i.e. not all-`nan`). A plain
+        # int, host-side, for the reason given beside `drop_histograms_unavailable`: deciding
+        # whether the instrument ran must not cost a host-device sync every logging interval.
+        self._drop_histogram_steps: int = 0
 
         if self.bias_gamma is not None:
             assert self.bias_gamma > 0
@@ -387,6 +411,77 @@ class MoERouter(nn.Module):
         assert self._drop_total_sum is not None
         self._drop_dropped_sum += dropped_count.detach().float()
         self._drop_total_sum += total_count.detach().float()
+
+    @torch.no_grad()
+    def accumulate_drop_histograms(
+        self,
+        drop_by_position: torch.Tensor,
+        drop_by_doc_index: torch.Tensor,
+        *,
+        instrumented: bool,
+    ) -> None:
+        """
+        Fold one micro-batch's B3 per-bucket drop rates into the interval accumulators.
+
+        Both arguments are ``(num_buckets,)`` per-bucket **rates**, with ``nan`` for buckets that
+        held no assignments. The two can differ in length -- ``drop_by_doc_index`` is capped at one
+        bucket per document (``min(num_buckets, num_docs)``), so at a small micro-batch it is shorter
+        than ``drop_by_position``. Each accumulator is therefore sized from the tensor it receives,
+        not from a shared constant.
+
+        ``nan`` is masked rather than added, and each bucket keeps its own contributing-step count,
+        so a bucket empty on every step ends 0/0 and is republished as ``nan``. Adding ``nan`` once
+        would otherwise make that bucket ``nan`` forever regardless of later steps -- and a single
+        early empty bucket would silently erase a real signal for the rest of the run.
+
+        :param instrumented: Whether these histograms carry real buckets rather than the all-``nan``
+            placeholder ``compute_drop_accounting`` returns when ``seq_len`` is unset. **Passed in
+            by the caller rather than inferred from the tensors**, because inferring it means reading
+            a device tensor into a Python bool -- a host-device sync, every micro-batch, inside a
+            step the trainer runs under ``set_sync_debug_mode("warn")``. The caller knows the answer
+            from ``drop_accounting_seq_len``, which is host-side already.
+
+        No host sync anywhere in here: the mask, the sum and the count are all device ops, and the
+        one host-side decision is handed in.
+        """
+        for name, value in (("pos", drop_by_position), ("doc", drop_by_doc_index)):
+            value = value.detach().float()
+            sum_attr, n_attr = f"_drop_{name}_sum", f"_drop_{name}_n"
+            acc = getattr(self, sum_attr)
+            # Re-created when absent, when the device moved, or when the bucket count changed. The
+            # last case is not hypothetical: `drop_by_doc_index`'s length depends on the micro-batch
+            # token count, and a final short micro-batch legitimately yields fewer documents.
+            if acc is None or acc.device != value.device or acc.shape != value.shape:
+                setattr(self, sum_attr, torch.zeros_like(value))
+                setattr(self, n_attr, torch.zeros_like(value))
+                acc = getattr(self, sum_attr)
+            count = getattr(self, n_attr)
+            populated = ~torch.isnan(value)
+            acc += torch.where(populated, value, torch.zeros_like(value))
+            count += populated.to(value.dtype)
+        # Counted once per call, not once per series: `compute_drop_accounting` returns both series
+        # as all-`nan` together when `seq_len` is unset, so one flag covers both. See the
+        # `instrumented` parameter above for why this is not inferred from the tensors.
+        if instrumented:
+            self._drop_histogram_steps += 1
+
+    @property
+    def drop_histograms(self) -> Optional[Tuple[torch.Tensor, torch.Tensor]]:
+        """
+        Interval-pooled ``(drop_by_position, drop_by_doc_index)``, or ``None`` if never accumulated.
+
+        ``None`` means the capacity path never handed histograms over -- either the dropless path is
+        in use or ``drop_accounting_seq_len`` was not set, in which case ``compute_drop_accounting``
+        returns all-``nan`` and there is nothing to report. That is a different state from "measured
+        and flat", and :class:`MetricAssertionCallback` fails on it rather than letting a
+        never-instrumented run look healthy.
+        """
+        if self._drop_pos_sum is None or self._drop_doc_sum is None:
+            return None
+        assert self._drop_pos_n is not None and self._drop_doc_n is not None
+        pos = self._drop_pos_sum / self._drop_pos_n
+        doc = self._drop_doc_sum / self._drop_doc_n
+        return pos, doc
 
     @property
     def gate_mass_mean(self) -> Optional[torch.Tensor]:
@@ -952,6 +1047,63 @@ class MoERouter(nn.Module):
                 ReduceType.max,
             )
 
+        # THE B3 HISTOGRAMS, AS PER-BUCKET SCALARS. `Trainer.record_metric` takes a scalar and
+        # `reduce_metrics` stacks every metric into one flat tensor for a single all-reduce, so a
+        # `(num_buckets,)` tensor cannot travel that path -- which is why these were computed every
+        # step of the G2 run and never appeared in any of its 388 columns. One key per bucket is the
+        # only shape the trainer can carry.
+        #
+        # Bucket count is read from the tensor, never assumed: `drop_by_doc_index` is capped at one
+        # bucket per document, so at a small micro-batch it is legitimately shorter than
+        # `drop_by_position`. Hard-coding 16 here would emit keys for buckets that do not exist.
+        #
+        # Suffix `_b<NN>` zero-padded, so the keys sort lexicographically into axis order -- `_b02`
+        # before `_b10`, which `_q2`/`_q10` would not. `fnmatch` is anchored, so this family is
+        # registered explicitly in `MetricAssertionCallback._block_metric_names`; a bare
+        # `drop_by_position` does NOT match `drop_by_position_b03`.
+        if (histograms := self.drop_histograms) is not None:
+            for series_name, series in (
+                ("drop_by_position", histograms[0]),
+                ("drop_by_doc_index", histograms[1]),
+            ):
+                for bucket_idx in range(series.numel()):
+                    out[f"{series_name}_b{bucket_idx:02d}"] = (series[bucket_idx], ReduceType.max)
+                # Bucket count as its own metric. Without it a reader cannot tell a 4-bucket
+                # document axis from a 16-bucket one whose last 12 buckets went missing, and those
+                # mean different things.
+                out[f"{series_name}_num_buckets"] = (
+                    torch.full_like(series[0], float(series.numel())),
+                    ReduceType.max,
+                )
+
+        # B3 INSTRUMENTATION PRESENCE, AS A MAGNITUDE RATHER THAN A NAME ON A LIST.
+        #
+        # This is the metric that makes "B3 was never switched on" impossible to confuse with "B3
+        # measured healthy drops". Those two states were indistinguishable on G2, on a run that had
+        # already been paid for, and the reason is that the presence check's coverage was a list a
+        # human maintains -- it protected exactly the three names it happened to name and was silent
+        # about the rest.
+        #
+        # 1.0 means the histograms are unavailable: either the dropless path is in use, or
+        # `drop_accounting_seq_len` is unset so `compute_drop_accounting` returned all-`nan`.
+        # Inverted so `max` carries alarm upward, matching `dead_expert_counts_not_reduced`.
+        # Emitted UNCONDITIONALLY whenever a capacity dispatch reported drops at all, because a
+        # presence signal that is itself conditional cannot report its own absence.
+        if self._drop_total_sum is not None:
+            # `_drop_histogram_steps` is a PLAIN PYTHON INT, deliberately, and this is the third
+            # counter in this class kept that way (`num_accumulated_micro_batches`,
+            # `_gate_mass_tokens`). The obvious spelling -- `bool(torch.isnan(hist).all())` -- reads
+            # a device tensor into a Python bool, which is a host-device sync on every logging
+            # interval, inside a step the trainer runs under `set_sync_debug_mode("warn")`. The fact
+            # this needs is "did any step contribute a populated bucket", which is known host-side
+            # at accumulation time and costs nothing to record there.
+            out["drop_histograms_unavailable"] = (
+                torch.full_like(
+                    self._drop_total_sum, 0.0 if self._drop_histogram_steps > 0 else 1.0
+                ),
+                ReduceType.max,
+            )
+
         if self.expert_capacity is not None and self.num_accumulated_micro_batches > 0:
             # Capacity over the same span as the counts. See the note beside
             # `num_accumulated_micro_batches`: comparing an interval's worth of assignments
@@ -1024,6 +1176,16 @@ class MoERouter(nn.Module):
             self._drop_dropped_sum.zero_()
         if self._drop_total_sum is not None:
             self._drop_total_sum.zero_()
+        # The B3 accumulators, cleared with everything else. Numerator and per-bucket denominator
+        # must go together, or the pooled rate drifts toward the run's lifetime average instead of
+        # describing the interval. `_drop_histogram_steps` clears too: it answers "did the instrument
+        # run *this interval*", so carrying it across intervals would report a run as instrumented
+        # long after `drop_accounting_seq_len` had been unset.
+        for attr in ("_drop_pos_sum", "_drop_pos_n", "_drop_doc_sum", "_drop_doc_n"):
+            tensor = getattr(self, attr)
+            if tensor is not None:
+                tensor.zero_()
+        self._drop_histogram_steps = 0
         if (lb_loss := self.load_balancing_loss) is not None:
             lb_loss.zero_()
         # Cleared together with the loss they mirror. If these outlived it, the pair would cover a

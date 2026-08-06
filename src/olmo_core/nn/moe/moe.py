@@ -341,6 +341,22 @@ class MoEBase(nn.Module):
             self.router.accumulate_drop_accounting(
                 drop_accounting.dropped_count, drop_accounting.total_count
             )
+            # AND THE B3 HISTOGRAMS, which the first version of this bridge did not carry -- it
+            # forwarded the two scalars and left the `(num_buckets,)` tensors behind. That omission
+            # is why the G2 run could report that 13.5-24.2% of assignments were dropped and not
+            # where in the sequence they landed, which was the one question B3 exists to answer.
+            # The same seam, missed twice, because carrying "the drop accounting" felt done once the
+            # rate was flowing.
+            #
+            # `instrumented` is read from `drop_accounting_seq_len` rather than from the tensors:
+            # `compute_drop_accounting` returns both series as all-`nan` when that is unset, and
+            # detecting it tensor-side would cost a host-device sync every micro-batch. Host-side
+            # here, free.
+            self.router.accumulate_drop_histograms(
+                drop_accounting.drop_by_position,
+                drop_accounting.drop_by_doc_index,
+                instrumented=getattr(self.experts, "drop_accounting_seq_len", None) is not None,
+            )
 
         if shared_out is not None:
             shared_out = shared_out / (self.top_k + 1)

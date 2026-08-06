@@ -28,7 +28,7 @@ no forward pass are involved.
 import torch
 
 from olmo_core.nn.moe.router import MoELinearRouter
-from olmo_core.train.callbacks import MetricAssertionCallback
+from olmo_core.train.callbacks import MetricAssertionCallback, MetricAssertionError
 
 # The bare metric names the callback's band checks look for. Kept beside the callback rather than
 # inside it because a band is only meaningful with its ceiling, and the ceilings are fields; this
@@ -42,7 +42,13 @@ ASSERTED_BAND_METRICS = (
 )
 
 
-def _emitted_metric_names(*, num_experts: int = 32, top_k: int = 4) -> set:
+def _emitted_metric_names(
+    *,
+    num_experts: int = 32,
+    top_k: int = 4,
+    num_position_buckets: int = 16,
+    num_doc_buckets: int = 4,
+) -> set:
     """Every bare key `compute_metrics` actually returns, on a realistic capacity-path router."""
     router = MoELinearRouter(
         d_model=64,
@@ -61,6 +67,15 @@ def _emitted_metric_names(*, num_experts: int = 32, top_k: int = 4) -> set:
     # counts (via the accumulator L3 feeds) and the capacity the upper bound needs.
     router.expert_capacity = 8
     router.accumulate_drop_accounting(torch.tensor(3.0), torch.tensor(256.0))
+    # And the B3 histograms. Deliberately different lengths, because they really are:
+    # `drop_by_doc_index` is capped at one bucket per document, so at a small micro-batch it is
+    # shorter than `drop_by_position`. A test that used equal lengths would not catch a helper that
+    # assumed a single shared bucket count.
+    router.accumulate_drop_histograms(
+        torch.full((num_position_buckets,), 0.01),
+        torch.full((num_doc_buckets,), 0.02),
+        instrumented=True,
+    )
     return set(router.compute_metrics(reset=False).keys())
 
 
@@ -97,45 +112,121 @@ def test_asserted_metrics_are_registered_for_aggregation():
     )
 
 
-def test_aggregated_metrics_are_emitted_or_known_pending():
+def test_b3_histograms_are_emitted_per_bucket():
     """
-    Every name registered for aggregation must be emitted, or be a known-pending exception.
+    The B3 histograms must reach the metrics as one scalar per bucket.
 
-    Aggregating a name nothing emits is not fatal -- `_add_cross_block_aggregates` skips empty
-    families -- but it means `moe/<name>_max` never appears, so a dashboard or a downstream gate
-    keyed on it reads as "no data" rather than "not implemented". The exceptions are listed
-    explicitly so that the list is the thing that gets reviewed, rather than the silence.
+    THIS IS THE REGRESSION TEST FOR THE G2 FAILURE. `drop_by_position` and `drop_by_doc_index` were
+    computed on every step of that run and appeared in none of its 388 W&B columns, because
+    `record_metric` takes a scalar and `reduce_metrics` stacks every metric into one flat tensor --
+    a `(num_buckets,)` tensor cannot travel that path. So the gate could not distinguish "positional
+    drops are healthy" from "positional drops were never measured", on a run that had already been
+    paid for.
     """
-    # L3's B3 histograms: computed in `parallel_mlp.py` but not yet published, pending per-bucket
-    # key names from L3 and `drop_accounting_seq_len` being set (L6's file). Tracked in
-    # contracts/telemetry-schema-amendment-2.md. Remove from this list when they land.
-    KNOWN_PENDING = {"drop_by_position", "drop_by_doc_index"}
+    emitted = _emitted_metric_names(num_position_buckets=16, num_doc_buckets=4)
 
-    emitted = _emitted_metric_names()
-    callback = MetricAssertionCallback()
-    unemitted = {
-        name for name in callback._block_metric_names if name not in emitted
-    } - KNOWN_PENDING
-    assert not unemitted, (
-        f"{sorted(unemitted)} are registered for aggregation but not emitted, and are not in the "
-        f"known-pending list. Either wire them up or add them to KNOWN_PENDING with a reason."
+    # Bucket keys, at the lengths actually handed over -- note the two series differ, which is real.
+    for i in range(16):
+        assert f"drop_by_position_b{i:02d}" in emitted, f"missing positional bucket {i}"
+    for i in range(4):
+        assert f"drop_by_doc_index_b{i:02d}" in emitted, f"missing document bucket {i}"
+
+    # And NOT keys past the end of each series: emitting a bucket that does not exist is as
+    # misleading as omitting one that does.
+    assert "drop_by_doc_index_b04" not in emitted, (
+        "a bucket key was emitted past the end of the document series -- the bucket count must be "
+        "read from the tensor, not assumed to be DEFAULT_NUM_BUCKETS"
     )
 
+    # The bucket count itself, so a 4-bucket axis cannot be confused with a 16-bucket axis whose
+    # last 12 buckets went missing.
+    assert "drop_by_position_num_buckets" in emitted
+    assert "drop_by_doc_index_num_buckets" in emitted
 
-def test_known_pending_metrics_are_still_pending():
+    # Zero-padded so the keys sort into axis order: `_b02` sorts before `_b10`.
+    ordered = sorted(k for k in emitted if k.startswith("drop_by_position_b"))
+    assert (
+        ordered[2] == "drop_by_position_b02" and ordered[10] == "drop_by_position_b10"
+    ), f"bucket keys do not sort into axis order: {ordered[:12]}"
+
+
+def test_instrumentation_presence_signal_is_emitted_and_gated_by_convention():
     """
-    The reverse guard: once a pending metric IS emitted, this fails so the exception gets removed.
+    A component that knows it was not instrumented must say so in a NUMBER, and that number gated.
 
-    Without it, `KNOWN_PENDING` becomes a permanent excuse list that outlives the reason for each
-    entry -- which is how a temporary exception turns into a metric nobody notices is ungated.
+    The G2 lesson, structurally: the presence check protected exactly the three names on its list
+    and was silent about the histograms. A list has a blind spot shaped like the list. So the fix is
+    a convention -- any `<name>_unavailable` metric is gated automatically -- and this test pins
+    both halves: that the signal is emitted, and that the callback gates the suffix rather than a
+    hard-coded name.
     """
     emitted = _emitted_metric_names()
-    now_emitted = sorted({"drop_by_position", "drop_by_doc_index"} & emitted)
-    assert not now_emitted, (
-        f"{now_emitted} are now emitted, so remove them from KNOWN_PENDING in "
-        f"test_aggregated_metrics_are_emitted_or_known_pending and decide whether they should be "
-        f"gated (see contracts/telemetry-schema-amendment-2.md -- L3 measured the positional axis "
-        f"as real signal, so a flatness band would fire on healthy runs)."
+    assert "drop_histograms_unavailable" in emitted, (
+        "the B3 presence signal is not emitted, so 'never instrumented' and 'measured healthy' are "
+        "once again indistinguishable"
+    )
+
+    callback = MetricAssertionCallback()
+    assert callback.assert_instrumented, "the instrumentation check must be on by default"
+    assert "drop_histograms_unavailable" in callback.require_present, (
+        "the presence signal must itself be required -- otherwise a build that stopped emitting it "
+        "would leave the suffix convention with nothing to match, which is the same failure one "
+        "level up"
+    )
+
+    # The gate is the SUFFIX, not the name: a hypothetical future signal is covered with no edit.
+    assert callback.unavailable_metric_suffix == "_unavailable"
+
+    metrics = {
+        "train/CE loss": 4.4,
+        "train/block 00/dead_expert_frac_global": 0.0,
+        "train/block 00/gate_mass_mean": 1.0,
+        "train/block 00/drop_frac": 0.0,
+        "train/block 00/drop_histograms_unavailable": 0.0,
+    }
+    cb = MetricAssertionCallback(vocab_size=100352)
+    cb._checked_step0 = True  # mid-run state; the step-0 band is not under test here
+    cb.pre_log_metrics(60, dict(metrics))  # healthy: must not raise
+
+    # Now flip the signal. A future instrument nobody has written yet is covered by the same rule.
+    for offender in ("drop_histograms_unavailable", "some_future_instrument_unavailable"):
+        bad = dict(metrics)
+        bad[f"train/block 03/{offender}"] = 1.0
+        cb2 = MetricAssertionCallback(vocab_size=100352)
+        cb2._checked_step0 = True
+        try:
+            cb2.pre_log_metrics(60, bad)
+        except MetricAssertionError as err:
+            assert offender in str(err), f"the failure must name the offending instrument: {err}"
+        else:
+            raise AssertionError(
+                f"'{offender}' = 1.0 did not raise. An instrument reporting its own absence must "
+                "fail loudly; that is the whole point of the B3 fix."
+            )
+
+
+def test_not_reduced_signals_are_NOT_gated_by_the_unavailable_convention():
+    """
+    `..._not_reduced` must stay ungated: on one rank it is legitimately 1.0.
+
+    Gating it would fire on every single-GPU gate, which is the "assertion that fails on healthy
+    runs" failure this suite has now hit twice (the flat-histogram band, the per-rank dead-expert
+    band). "Not reduced" is a correct state; "unavailable" is not.
+    """
+    cb = MetricAssertionCallback(vocab_size=100352)
+    cb._checked_step0 = True
+    cb.pre_log_metrics(
+        60,
+        {
+            "train/CE loss": 4.4,
+            "train/block 00/dead_expert_frac_global": 0.0,
+            "train/block 00/gate_mass_mean": 1.0,
+            "train/block 00/drop_frac": 0.0,
+            "train/block 00/drop_histograms_unavailable": 0.0,
+            # Single-rank run: both of these are legitimately 1.0 and must not raise.
+            "train/block 00/dead_expert_counts_not_reduced": 1.0,
+            "train/block 00/lbl_not_reduced": 1.0,
+        },
     )
 
 

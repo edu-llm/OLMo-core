@@ -201,6 +201,47 @@ class MetricAssertionCallback(Callback):
     does.
     """
 
+    assert_instrumented: bool = True
+    """
+    Fail if a metric that reports its own unavailability says it is unavailable.
+
+    **THE B3 SCAR.** The G2 run measured ``drop_frac`` at 0.135-0.242 with 6 of 64 experts dead in
+    one block -- collapse, not fluctuation -- and when asked *where in the sequence* those drops
+    landed, the answer was "cannot tell you". ``drop_by_position`` and ``drop_by_doc_index`` were
+    computed on every step and published nowhere, so the gate could not distinguish **"positional
+    drops are healthy"** from **"positional drops were never measured"** on a run that had already
+    cost an A10G.
+
+    L3 wrote that exact warning to two lanes *before* the run -- "a run that quietly emits nan
+    histograms would look like B3 failed rather than like B3 was never switched on" -- and it
+    happened anyway, **because a warning in prose is not a check.**
+
+    Note carefully what did *not* fail: :data:`require_present` **passed**, on
+    ``dead_expert_frac_global`` / ``gate_mass_mean`` / ``drop_frac``. It protected exactly the names
+    it listed and was silent about every name it did not. So the lesson is not "the check was
+    broken" -- it is that **a check whose coverage is a hand-maintained list has a blind spot
+    shaped exactly like the list**, which is the same class as the registry-vs-emission gap.
+
+    This is the magnitude form of the same idea, and it is why the metric exists rather than being
+    inferred: a component that *knows* it is uninstrumented says so in a number
+    (``drop_histograms_unavailable`` = 1.0), and that number is asserted like any other band. The
+    metric reports its own absence, so nobody has to remember to list it.
+    """
+
+    unavailable_metric_suffix: str = "_unavailable"
+    """
+    Any per-block metric whose name ends with this must read 0.0.
+
+    A **convention**, not a list, and that is the whole point. Any component can declare "my
+    instrument did not run" by emitting ``<something>_unavailable = 1.0``, and it is gated
+    automatically -- no edit here, nothing to remember, no list to fall out of date. Currently
+    satisfied by ``drop_histograms_unavailable``.
+
+    Deliberately *not* also gating ``..._not_reduced``: on a single-rank run
+    ``dead_expert_counts_not_reduced`` is legitimately 1.0, so a blanket band there would fire on
+    every 1-GPU gate. "Not reduced" is a correct state; "unavailable" is not.
+    """
+
     entropy_deficit_max: Optional[float] = None
     """
     Ceiling on ``entropy_deficit``. **Default ``None`` (disabled), deliberately.**
@@ -244,6 +285,11 @@ class MetricAssertionCallback(Callback):
         "dead_expert_frac_global",
         "gate_mass_mean",
         "drop_frac",
+        # The presence signal must itself be present. Without this the suffix convention above
+        # protects nothing: a build that stopped emitting `drop_histograms_unavailable` would have
+        # no `..._unavailable` key to match, so the instrumentation check would pass by finding
+        # nothing -- the very shape of failure it was added to prevent, one level up.
+        "drop_histograms_unavailable",
     )
     """
     Per-block metric names that MUST appear in the metrics dict, checked once at
@@ -299,8 +345,19 @@ class MetricAssertionCallback(Callback):
         # L3's B3 axes. Aggregated so the max/mean/min per bucket is available, but DELIBERATELY
         # NOT GATED -- see the note in `_check_bands`. L3 measured the positional axis as real
         # signal rather than noise, so a flatness assertion would fire on every healthy run.
+        #
+        # These bare names are NOT what is emitted: the histograms travel as one scalar per bucket
+        # (`drop_by_position_b00` ...), because `record_metric` takes a scalar. They stay listed so
+        # the registry test's KNOWN_PENDING reverse-guard keeps pointing at something, and because
+        # `_add_cross_block_aggregates` matching them is harmless when nothing bears the bare name.
         "drop_by_position",
         "drop_by_doc_index",
+        # The presence signals. Gated by suffix convention (see `assert_instrumented`), listed here
+        # so the cross-block aggregate exists -- `moe/drop_histograms_unavailable_max` answers "was
+        # ANY block uninstrumented" in one number, which is the form a gate wants.
+        "drop_histograms_unavailable",
+        "drop_by_position_num_buckets",
+        "drop_by_doc_index_num_buckets",
     )
     _failures: List[str] = field(default_factory=list, repr=False)
     _checked_step0: bool = field(default=False, repr=False)
@@ -676,6 +733,31 @@ class MetricAssertionCallback(Callback):
                 if isinstance(value, (int, float)) and math.isfinite(value) and value > ceiling:
                     self._failures.append(
                         f"'{key}' = {value:.6f} exceeds its ceiling of {ceiling} -- {why}."
+                    )
+
+        # INSTRUMENTATION PRESENCE, BY CONVENTION RATHER THAN BY LIST. See `assert_instrumented`.
+        #
+        # Matched on a SUFFIX, so any component that can tell it was not instrumented declares it
+        # by emitting `<name>_unavailable = 1.0` and is gated with no edit here. That is the
+        # structural fix for the B3 failure: the previous presence check protected the three names
+        # it listed and was silent about the histograms, so "never measured" and "measured healthy"
+        # were indistinguishable on a run that had already been paid for.
+        if self.assert_instrumented:
+            for key, value in metrics.items():
+                bare = key.rsplit("/", 1)[-1]
+                if not bare.endswith(self.unavailable_metric_suffix):
+                    continue
+                if not self._is_block_key(key, bare):
+                    continue
+                if isinstance(value, (int, float)) and math.isfinite(value) and value > 0.0:
+                    instrument = bare[: -len(self.unavailable_metric_suffix)]
+                    self._failures.append(
+                        f"'{key}' = {value:.6f} -- the '{instrument}' instrument reports itself "
+                        "UNAVAILABLE, so any band that reads it verified nothing. This is not a "
+                        "measurement of health; it is the absence of a measurement. For "
+                        "drop_histograms specifically: `drop_accounting_seq_len` must be set on "
+                        "each ParallelMLP, or the dropless path is in use and the histograms "
+                        "cannot be formed."
                     )
 
         if self.gate_mass_tolerance is not None:
