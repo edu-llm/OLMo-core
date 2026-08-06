@@ -14,6 +14,7 @@ from torch.distributed.tensor import Placement, Shard, distribute_tensor
 from olmo_core.distributed.parallel import get_device_mesh_info
 from olmo_core.distributed.utils import get_local_tensor
 from olmo_core.exceptions import OLMoConfigurationError
+from olmo_core.nn.quantization import QuantConfig, twn_quantize_ste
 from olmo_core.utils import log_once
 
 try:
@@ -36,16 +37,42 @@ class MoEMLPBase(nn.Module):
         d_model: int,
         hidden_size: int,
         num_experts: int,
+        quant: Optional[QuantConfig] = None,
     ):
         super().__init__()
         self.d_model = d_model
         self.hidden_size = hidden_size
         self.num_experts = num_experts
+        self.quant = quant
 
         self.num_local_experts = num_experts
         self.hidden_sharding_degree = 1
         self.ep_mesh: Optional[DeviceMesh] = None
         self.ep_pg: Optional[dist.ProcessGroup] = None
+
+    def maybe_quantize(self, w: torch.Tensor, *, in_dim: int) -> torch.Tensor:
+        """
+        Apply ternary QAT to a stacked expert weight, or return it untouched.
+
+        Expert weights here are bare stacked :class:`torch.nn.Parameter` tensors of shape
+        ``(num_experts, a, b)``, not :class:`torch.nn.Linear` submodules, so
+        :class:`~olmo_core.nn.quantization.QuantLinear` does not apply and the quantizer is
+        called on the tensor directly. This is a single hook at the top of ``forward`` rather
+        than a rewrite of the matmul sequence, which keeps the ``grouped_gemm``-versus-``bmm``
+        question entirely in L3's hands.
+
+        ``in_dim`` must be the axis the *forward pass* treats as input features, which is not
+        the same axis for every weight here -- see the table in
+        :func:`~olmo_core.nn.quantization.twn_quantize`. Reducing over the wrong one gives a
+        per-input-row alpha: a different quantizer that trains happily.
+
+        ``quant=None`` and ``QuantConfig(enabled=False)`` both return ``w`` **by identity**, so
+        the control arm is not merely numerically close to the unquantized path, it *is* the
+        unquantized path.
+        """
+        if self.quant is None or not self.quant.enabled:
+            return w
+        return twn_quantize_ste(w, in_dim=in_dim)
 
     def apply_ep(self, ep_mesh: DeviceMesh):
         """
@@ -133,8 +160,13 @@ class MoEMLP(MoEMLPBase):
         num_experts: int,
         dtype: torch.dtype = torch.float32,
         init_device: str = "cpu",
+        quant: Optional[QuantConfig] = None,
+        swiglu_limit: Optional[float] = None,
     ):
-        super().__init__(d_model=d_model, hidden_size=hidden_size, num_experts=num_experts)
+        super().__init__(
+            d_model=d_model, hidden_size=hidden_size, num_experts=num_experts, quant=quant
+        )
+        self.swiglu_limit = swiglu_limit
         # NOTE: these parameters need to have a large enough first dimension (which would be num experts)
         # in order to be sharded over big world sizes with FSDP, so we flatten the first 2 dimensions.
         self.w1 = nn.Parameter(
@@ -182,17 +214,34 @@ class MoEMLP(MoEMLPBase):
         og_dtype = x.dtype
 
         # Scale gradients and get local tensors (in case of expert parallelism).
-        # shape (all): (num_local_experts, hidden_size, d_model)
+        # shapes: w1, w3 -> (num_local_experts, d_model, hidden_size)
+        #         w2     -> (num_local_experts, hidden_size, d_model)
         w1, w2, w3 = (
             get_local_tensor(self.w1.view(self.num_experts, self.d_model, self.hidden_size)),
             get_local_tensor(self.w2.view(self.num_experts, self.hidden_size, self.d_model)),
             get_local_tensor(self.w3.view(self.num_experts, self.d_model, self.hidden_size)),
         )
 
+        # Ternary QAT, if enabled. `in_dim=1` for all three: these are `bmm(x, w)` operands, so
+        # the *middle* axis is input features and the last axis indexes output rows. It is the
+        # same value for all three only by coincidence of orientation -- w1/w3 are
+        # (d_model, hidden) and w2 is (hidden, d_model). Applied after `get_local_tensor` so
+        # that under expert parallelism each rank quantizes whole experts (the shard is on the
+        # expert axis, so every output row is complete on the rank that owns it).
+        w1 = self.maybe_quantize(w1, in_dim=1)
+        w2 = self.maybe_quantize(w2, in_dim=1)
+        w3 = self.maybe_quantize(w3, in_dim=1)
+
         x = x.type_as(w1)
 
         # Compute the MLP.
-        return torch.bmm(F.silu(torch.bmm(x, w1)) * torch.bmm(x, w3), w2).to(dtype=og_dtype)
+        gate = torch.bmm(x, w1)
+        up = torch.bmm(x, w3)
+        if self.swiglu_limit is not None:
+            # gpt-oss's asymmetric SwiGLU outlier guard; see feed_forward.MAPLE_SWIGLU_LIMIT.
+            gate = gate.clamp(max=self.swiglu_limit)
+            up = up.clamp(min=-self.swiglu_limit, max=self.swiglu_limit)
+        return torch.bmm(F.silu(gate) * up, w2).to(dtype=og_dtype)
 
 
 class DroplessMoEMLP(MoEMLPBase):
@@ -208,8 +257,13 @@ class DroplessMoEMLP(MoEMLPBase):
         num_experts: int,
         dtype: torch.dtype = torch.float32,
         init_device: str = "cpu",
+        quant: Optional[QuantConfig] = None,
+        swiglu_limit: Optional[float] = None,
     ):
-        super().__init__(d_model=d_model, hidden_size=hidden_size, num_experts=num_experts)
+        super().__init__(
+            d_model=d_model, hidden_size=hidden_size, num_experts=num_experts, quant=quant
+        )
+        self.swiglu_limit = swiglu_limit
         # NOTE: these parameters need to have a large enough first dimension (which would be num experts)
         # in order to be sharded over big world sizes with FSDP, so we flatten the first 2 dimensions.
         self.w1 = nn.Parameter(
@@ -285,8 +339,25 @@ class DroplessMoEMLP(MoEMLPBase):
             get_local_tensor(self.w3.view(self.num_experts, self.hidden_size, self.d_model)),
         )
 
+        # Ternary QAT, if enabled. Note `in_dim` differs between w1/w3 and w2 even though all
+        # three tensors have the SAME shape (num_experts, hidden_size, d_model). The axis that
+        # counts is the one the matmul consumes as input features, and `gmm` is called with
+        # `trans_b=True` for w1/w3 but not for w2:
+        #   w1, w3 : x @ w[i].T  -> w[i].T is (d_model, hidden), input features are d_model, axis 2
+        #   w2     : x @ w[i]    -> w[i]   is (hidden, d_model), input features are hidden,  axis 1
+        # Using 2 for w2 would compute alpha across d_model for a matmul whose output rows are
+        # indexed by d_model -- a per-input-row scale, i.e. a different quantizer that trains
+        # without complaint. If L3 changes a `trans_b`, this must change with it.
+        w1 = self.maybe_quantize(w1, in_dim=2)
+        w3 = self.maybe_quantize(w3, in_dim=2)
+        w2 = self.maybe_quantize(w2, in_dim=1)
+
         # Compute the MLP.
         x1 = self.gmm(x, w1, batch_size_per_expert, trans_b=True)
         x2 = self.gmm(x, w3, batch_size_per_expert, trans_b=True)
+        if self.swiglu_limit is not None:
+            # gpt-oss's asymmetric SwiGLU outlier guard; see feed_forward.MAPLE_SWIGLU_LIMIT.
+            x1 = x1.clamp(max=self.swiglu_limit)
+            x2 = x2.clamp(min=-self.swiglu_limit, max=self.swiglu_limit)
         x1 = F.silu(x1) * x2
         return self.gmm(x1, w2, batch_size_per_expert)

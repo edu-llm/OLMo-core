@@ -22,6 +22,7 @@ from ..buffer_cache import BufferCache
 from ..config import ModuleConfig
 from ..functional import l2_normalize
 from ..layer_norm import LayerNorm, LayerNormConfig
+from ..quantization import QuantConfig, QuantLinear
 from ..rope import (
     ComplexRotaryEmbedding,
     FusedRotaryEmbedding,
@@ -201,6 +202,17 @@ class AttentionConfig(SequenceMixerConfig["SequenceMixer"]):
     dtype: DType = DType.float32
     sliding_window: Optional[SlidingWindowAttentionConfig] = None
     use_head_qk_norm: Optional[bool] = None
+    quant: Optional[QuantConfig] = None
+    """
+    Ternary QAT on the q/k/v/o projections. ``None`` builds stock :class:`torch.nn.Linear`.
+
+    Maple ternarizes **all** matmuls, attention included -- only embeddings, the LM head, the
+    router and the norms stay full precision. ``q_norm``/``k_norm`` are norms and are therefore
+    never touched by this. See :mod:`olmo_core.nn.quantization`.
+
+    ``QuantConfig(enabled=False)`` builds :class:`~olmo_core.nn.quantization.QuantLinear` with
+    the quantizer bypassed and is bitwise identical to ``nn.Linear``; that is the control arm.
+    """
 
     def num_params(self, d_model: int) -> int:
         """
@@ -302,11 +314,27 @@ class AttentionConfig(SequenceMixerConfig["SequenceMixer"]):
                     raise OLMoConfigurationError(
                         "'window_size' is not supported with fused attention"
                     )
+                if kwargs.pop("quant", None) is not None:
+                    # Fused attention packs q, k and v into a single (3*d_model, d_model)
+                    # weight. Per-output-row alpha would still be well defined, but Maple has
+                    # no packed qkv and this variant also rejects sliding windows, so it cannot
+                    # be the Maple path. Refuse rather than quietly quantize a shape Maple
+                    # never had.
+                    raise OLMoConfigurationError(
+                        "ternary QAT is not supported with fused attention (packed qkv). Use "
+                        "the 'default' attention variant, which is what Maple uses."
+                    )
                 return FusedAttention(**kwargs)
             elif self.name == "normalized":
                 if "window_size" in kwargs:
                     raise OLMoConfigurationError(
                         "'window_size' is not supported with normalized attention"
+                    )
+                if kwargs.pop("quant", None) is not None:
+                    raise OLMoConfigurationError(
+                        "ternary QAT is not supported with normalized attention: nGPT "
+                        "re-normalizes the weight matrices after every optimizer step, which "
+                        "fights the TWN threshold for control of the weight scale"
                     )
                 return NormalizedAttention(**kwargs)
             else:
@@ -365,33 +393,51 @@ class Attention(SequenceMixer):
         init_device: str = "cpu",
         cache: Optional[BufferCache] = None,
         use_head_qk_norm: bool = False,
+        quant: Optional[QuantConfig] = None,
     ):
         super().__init__()
 
         self.n_heads = n_heads
         self.n_kv_heads = n_kv_heads or n_heads
         self.d_model = d_model
+        self.quant = quant
         # Some models (e.g. Qwen3) use explicit head_dim that differs from d_model // n_heads.
         if head_dim is not None:
             self.head_dim = head_dim
         else:
             self.head_dim = d_model // n_heads
-        self.w_q = nn.Linear(
-            d_model, n_heads * self.head_dim, bias=bias, dtype=dtype, device=init_device
-        )
-        self.w_k = nn.Linear(
-            d_model, self.n_kv_heads * self.head_dim, bias=bias, dtype=dtype, device=init_device
-        )
-        self.w_v = nn.Linear(
-            d_model, self.n_kv_heads * self.head_dim, bias=bias, dtype=dtype, device=init_device
-        )
-        self.w_out = nn.Linear(
-            n_heads * self.head_dim, d_model, bias=bias, dtype=dtype, device=init_device
-        )
+
+        # QuantLinear subclasses nn.Linear with an identical state dict, so `init_attention`,
+        # `apply_tp` and `normalize_matrices` keep working and the bf16 control arm (built with
+        # `enabled=False`) shares checkpoints with the ternary arm.
+        def linear(in_features: int, out_features: int) -> nn.Linear:
+            if quant is None:
+                return nn.Linear(
+                    in_features, out_features, bias=bias, dtype=dtype, device=init_device
+                )
+            return QuantLinear(
+                in_features,
+                out_features,
+                bias=bias,
+                enabled=quant.enabled,
+                dtype=dtype,
+                device=init_device,
+            )
+
+        self.w_q = linear(d_model, n_heads * self.head_dim)
+        self.w_k = linear(d_model, self.n_kv_heads * self.head_dim)
+        self.w_v = linear(d_model, self.n_kv_heads * self.head_dim)
+        self.w_out = linear(n_heads * self.head_dim, d_model)
 
         self.gate = gate
         self.w_g: Optional[nn.Linear] = None
         if gate is not None:
+            # The attention gate is left FULL PRECISION deliberately, and it is not an
+            # oversight that it differs from q/k/v/o. Like the MoE router, the gate is a
+            # *control* signal rather than a feature transform -- `GateConfig.full_precision`
+            # already exists in-tree for exactly this reason and defaults to True. Maple has no
+            # attention gate at all (`gate=None`), so under the Maple factory this branch is
+            # dead code and the choice is moot; it matters only if someone combines the two.
             if gate.granularity == GateGranularity.headwise:
                 self.w_g = nn.Linear(
                     d_model, self.n_heads, bias=bias, dtype=dtype, device=init_device
@@ -661,6 +707,13 @@ class Attention(SequenceMixer):
         use_local_output: bool = True,
         float8_enabled: bool = False,
     ):
+        # `w_out` is row-wise sharded, i.e. sharded on its input-feature axis -- the axis TWN
+        # reduces over. Each rank would then derive alpha from a fraction of each output row,
+        # which is a different quantizer that trains without complaint. Refuse.
+        for w in (self.w_q, self.w_k, self.w_v, self.w_out):
+            if isinstance(w, QuantLinear):
+                w.assert_no_tensor_parallel()
+
         rowwise_parallel, colwise_parallel, prepare_module_input = get_tp_wrappers(
             float8_enabled=float8_enabled
         )
