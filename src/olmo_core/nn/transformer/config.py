@@ -1028,6 +1028,481 @@ class TransformerConfig(ModelConfig):
         )
         return config
 
+    # -------------------------------------------------------------------------------------
+    # Maple-Preview scale-down ladder
+    # -------------------------------------------------------------------------------------
+    #
+    # See `maple/agents/contracts/ladder-and-factory.md` for the ratified ladder and the
+    # reasoning behind every constant below. Two facts about how this factory is *reached*
+    # shape its whole shape, and both are load-bearing:
+    #
+    #   1. `.edullm/train_on_corpus.py` dispatches with
+    #      `getattr(TransformerConfig, opts.model_factory)` and then calls
+    #      `factory(vocab_size=corpus.tokenizer.padded_vocab_size())` -- passing *only*
+    #      `vocab_size`. So `vocab_size` must stay the only required argument, and no other
+    #      knob is reachable from the command line.
+    #   2. The only override channel is `config.merge(overrides)`, which runs *after*
+    #      `build_config` has already built the model config. A dotlist override edits the
+    #      serialized dict and rebuilds through `Config.from_dict` -- it never re-enters this
+    #      factory, so it BYPASSES every assertion in `_maple_assert_ladder`.
+    #
+    # (2) is why rung selection is per-rung wrapper classmethods (`maple_r0` .. `maple_r3`)
+    # rather than a `rung=` override: a rung passed as a dotlist would silently skip the
+    # param-count check that is this factory's reason for existing.
+
+    #: The Maple scale-down ladder. One entry per rung; `maple_scaled` reads nothing else.
+    #:
+    #: Ratio identities that make this Maple-faithful, preserved at every rung:
+    #: ``f_e/d == 1/4``, ``k*f_e/d == 2.0``, ``n_heads*head_dim == d_model`` (attention width
+    #: equals the residual stream, as in Maple), GQA 4:1, and ``L % 4 == 0`` for the 3:1 SWA
+    #: pattern. `k/E == 1/32` holds at R3 only -- R1/R2 vary E deliberately, which is the
+    #: E-sweep, and is why that identity is asserted only where it is claimed.
+    #:
+    #: The `total`/`active` figures are at ``V=100352`` (padded dolma2) and are asserted to
+    #: within 1%. Active params are *exactly* equal across R1-R3 because active cost depends
+    #: on `k`, not `E` -- that identity is what makes any throughput delta across the E-sweep
+    #: attributable to kernel and routing overhead rather than arithmetic, so it is a
+    #: correctness property of this table and not a coincidence.
+    MAPLE_RUNGS: Dict[str, Dict[str, int]] = {
+        # R0 is a code-path smoke rung for `gpu-1xa10g`, never compared for quality. n_kv=1
+        # (MQA rather than GQA 4:1) is accepted there for that reason.
+        "R0": dict(d_model=512, n_layers=8, num_experts=64, n_heads=4, n_kv_heads=1),
+        "R1": dict(d_model=1024, n_layers=12, num_experts=64, n_heads=8, n_kv_heads=2),
+        "R2": dict(d_model=1024, n_layers=12, num_experts=128, n_heads=8, n_kv_heads=2),
+        "R3": dict(d_model=1024, n_layers=12, num_experts=256, n_heads=8, n_kv_heads=2),
+        # X2's low anchor: E=8 at R3's geometry. Same active params as R1-R3 by construction.
+        "E8": dict(d_model=1024, n_layers=12, num_experts=8, n_heads=8, n_kv_heads=2),
+    }
+
+    #: Expected ``(total, active)`` params per rung at ``V=100352``, asserted to within 1%.
+    #: Keyed by vocab size because these numbers are dominated by the embedding tables --
+    #: at R1, ``2 * 1024 * 100352`` is 205.5M of an 841.0M total, so a different vocab moves
+    #: the total by more than the tolerance and the assertion must not fire spuriously.
+    MAPLE_EXPECTED_PARAMS: Dict[int, Dict[str, tuple]] = {
+        100352: {
+            "R0": (213_900_000, 125_800_000),
+            "R1": (841_000_000, 312_500_000),
+            "R2": (1_444_900_000, 312_500_000),
+            "R3": (2_652_900_000, 312_500_000),
+        }
+    }
+
+    @classmethod
+    def maple_scaled(
+        cls,
+        vocab_size: int,
+        *,
+        rung: str = "R3",
+        quantize: bool = False,
+        **kwargs,
+    ) -> "TransformerConfig":
+        """
+        A ratio-faithful scale-down of DeepGrove's Maple-Preview (20.2B total / 1.49B active).
+
+        Maple-Preview is 24 layers at ``d=2048``, 256 experts routed top-8 with expert FFN 512
+        and zero shared experts, 3:1 SWA-512:global with NoPE on the global layers, partial
+        rotary 0.5, per-head QK-norm, untied embeddings. Preserving ``f_e/d = 1/4`` and
+        ``k*f_e/d = 2.0`` forces ``k=8``, and ``k/E = 1/32`` then forces ``E=256``, so a
+        ratio-faithful Maple is a one-parameter family in ``d``.
+
+        :param vocab_size: The vocabulary size. Must stay the only required argument -- see
+            the module comment above; the platform's dispatcher passes nothing else.
+        :param rung: Which rung of the ladder, a key of :data:`MAPLE_RUNGS`. Not reachable
+            from the platform command line; use the ``maple_r0`` .. ``maple_r3`` wrappers.
+        :param quantize: Build the expert and attention projections as ternary-QAT
+            (:class:`QuantLinear`) rather than ``nn.Linear``. Off by default, so the bf16
+            track is what you get unless asked.
+        """
+        if rung not in cls.MAPLE_RUNGS:
+            raise OLMoConfigurationError(
+                f"unknown Maple rung {rung!r}; known rungs: {sorted(cls.MAPLE_RUNGS)}"
+            )
+        spec = cls.MAPLE_RUNGS[rung]
+
+        d_model = kwargs.pop("d_model", spec["d_model"])
+        n_layers = kwargs.pop("n_layers", spec["n_layers"])
+        num_experts = kwargs.pop("num_experts", spec["num_experts"])
+        n_heads = kwargs.pop("n_heads", spec["n_heads"])
+        n_kv_heads = kwargs.pop("n_kv_heads", spec["n_kv_heads"])
+        head_dim = kwargs.pop("head_dim", 128)
+        top_k = kwargs.pop("top_k", 8)
+        # f_e = d/4. Maple is d=2048 -> 512.
+        expert_hidden_size = kwargs.pop("expert_hidden_size", d_model // 4)
+
+        if quantize:
+            raise NotImplementedError(
+                "ternary QAT (`quantize=True`) is not wired up yet -- it is L4's C1-C5. "
+                "This raises rather than silently building a bf16 model, because a ternary "
+                "arm that quietly ran in bf16 would look like a successful paired comparison."
+            )
+
+        config = cls._maple_config(
+            vocab_size=vocab_size,
+            d_model=d_model,
+            n_layers=n_layers,
+            n_heads=n_heads,
+            n_kv_heads=n_kv_heads,
+            head_dim=head_dim,
+            num_experts=num_experts,
+            top_k=top_k,
+            expert_hidden_size=expert_hidden_size,
+            **kwargs,
+        )
+        cls._maple_assert_ladder(
+            config,
+            rung=rung,
+            d_model=d_model,
+            n_layers=n_layers,
+            n_heads=n_heads,
+            n_kv_heads=n_kv_heads,
+            head_dim=head_dim,
+            num_experts=num_experts,
+            top_k=top_k,
+            expert_hidden_size=expert_hidden_size,
+            vocab_size=vocab_size,
+        )
+        return config
+
+    @classmethod
+    def _maple_config(
+        cls,
+        *,
+        vocab_size: int,
+        d_model: int,
+        n_layers: int,
+        n_heads: int,
+        n_kv_heads: int,
+        head_dim: int,
+        num_experts: int,
+        top_k: int,
+        expert_hidden_size: int,
+        **kwargs,
+    ) -> "TransformerConfig":
+        """Build the Maple config. Every non-default knob here is deliberate; see comments."""
+        dtype = kwargs.pop("dtype", DType.float32)
+        layer_norm_eps = kwargs.pop("layer_norm_eps", 1e-6)
+
+        layer_norm = LayerNormConfig(
+            name=LayerNormType.rms, eps=layer_norm_eps, bias=False, dtype=dtype
+        )
+
+        # A3 + A4 + A5 IN ONE CONFIG, NOT TWELVE.
+        #
+        # Per-layer window size is NOT per-block config in this tree. `AttentionConfig.build`
+        # receives `layer_idx`/`n_layers` and computes the window from the pattern itself; and
+        # -- this is the part worth knowing -- the same `else` branch that handles a global
+        # layer is what drops RoPE when `no_global_rope` is set. So one shared
+        # `SlidingWindowAttentionConfig` realizes the 3:1 SWA layout *and* NoPE-on-globals
+        # together.
+        #
+        # DO NOT hand-place this with `block_overrides`: 12 deep copies would each still
+        # resolve from their own `layer_idx`, giving identical behavior with 12x the config
+        # surface and a second place for the layout to disagree with itself.
+        #
+        # DO NOT use `block_pattern` either: it `cycle()`s and would silently give a wrong
+        # layout that trains happily.
+        #
+        # Both `force_full_attention_on_*` are False because Maple's own `layer_types` puts
+        # globals at 3, 7, ..., 23 with layer 0 sliding and layer 23 global. Leaving
+        # `force_full_attention_on_first_layer` at its default `True` would both make layer 0
+        # global AND shift the whole pattern by one (`_get_window_size` decrements the
+        # effective index), i.e. two errors, neither of which raises.
+        sliding_window = kwargs.pop(
+            "sliding_window",
+            SlidingWindowAttentionConfig(
+                pattern=[512, 512, 512, -1],
+                force_full_attention_on_first_layer=False,
+                force_full_attention_on_last_layer=False,
+            ),
+        )
+
+        attention = AttentionConfig(
+            name=AttentionType.default,
+            n_heads=n_heads,
+            n_kv_heads=n_kv_heads,
+            head_dim=head_dim,
+            bias=False,
+            rope=RoPEConfig(
+                name=RoPEType.default,
+                # 10,000 -- NOT this tree's 500,000 default. Maple's config.json says 10000,
+                # and a wrong theta on partial-rotary SWA layers is a faithfulness bug that
+                # trains happily.
+                theta=kwargs.pop("rope_theta", 10_000),
+                full_precision=True,
+                # Realizes NoPE on the global layers, via the branch described above.
+                no_global_rope=True,
+                # Rotate only the leading 64 of 128 head dims.
+                partial_rotary_factor=0.5,
+            ),
+            # Per-HEAD QK-norm, matching Maple's `MapleRMSNorm(self.head_dim)`. The default
+            # (`use_head_qk_norm=False`) norms over the whole concatenated projection instead,
+            # which is a DIFFERENT OPERATOR, not just a different parameter count.
+            qk_norm=layer_norm,
+            use_head_qk_norm=True,
+            sliding_window=sliding_window,
+            dtype=dtype,
+        )
+
+        moe = MoEConfig(
+            name=MoEType.default,
+            num_experts=num_experts,
+            hidden_size=expert_hidden_size,
+            # Explicit, and NOT left to `None`: `MoEConfig.build` calls
+            # `as_dict(exclude_none=True)`, which drops the key, so `None` silently becomes
+            # `MoE.__init__`'s own default of 1.2. At R3 (mean load 256) a factor of 1.2 is
+            # known-wrong -- headroom collapses to ~3.5 sigma -- and dropless is unavailable
+            # because `grouped_gemm` is unreachable in the image.
+            capacity_factor=kwargs.pop("capacity_factor", 2.0),
+            router=MoERouterConfig(
+                # Stock default is 1. Left unset this is silently a top-1 model.
+                top_k=top_k,
+                # Maple's `norm_topk_prob`. Measured gate mass 0.161 vs 1.000 when unset --
+                # a 6.2x error that trains happily. Zero of five shipped recipes set it.
+                normalize_expert_weights=1.0,
+                # Maple has no expert bias (`moe_router_enable_expert_bias: false`). Do NOT
+                # set this as a load-balancing fallback -- it would change the architecture
+                # under test.
+                bias_gamma=None,
+            ),
+            # Maple has zero shared experts. MoTE measured a ternary shared expert at 48.2 vs
+            # 57.3 BF16, and it would cost +151 MB/token at Maple scale.
+            shared_mlp=None,
+            lb_loss_weight=kwargs.pop("lb_loss_weight", 0.01),
+            # Explicit: stock default is off.
+            z_loss_weight=kwargs.pop("z_loss_weight", 0.001),
+            dtype=dtype,
+        )
+
+        block = TransformerBlockConfig(
+            name=TransformerBlockType.moe,
+            sequence_mixer=attention,
+            feed_forward_moe=moe,
+            layer_norm=layer_norm,
+        )
+
+        return cls(
+            d_model=d_model,
+            vocab_size=vocab_size,
+            n_layers=n_layers,
+            block=block,
+            lm_head=LMHeadConfig(layer_norm=layer_norm, bias=False, dtype=dtype),
+            name=TransformerType.moe,
+            dtype=dtype,
+            # Maple is untied (`tie_word_embeddings: false`). Untied is also this tree's
+            # default, but it is pinned here so an upstream change cannot move our ledger.
+            tie_word_embeddings=kwargs.pop("tie_word_embeddings", False),
+            **kwargs,
+        )
+
+    @classmethod
+    def _maple_assert_ladder(
+        cls,
+        config: "TransformerConfig",
+        *,
+        rung: str,
+        d_model: int,
+        n_layers: int,
+        n_heads: int,
+        n_kv_heads: int,
+        head_dim: int,
+        num_experts: int,
+        top_k: int,
+        expert_hidden_size: int,
+        vocab_size: int,
+    ) -> None:
+        """
+        A2. Assert the ratio identities and the param ledger, and **raise** rather than warn.
+
+        These are cheap insurance against a class of failure this project has already paid
+        for: a config that serializes correctly, trains happily, and is not the model anyone
+        intended. Every check here is an identity someone has claimed in writing.
+        """
+        problems: List[str] = []
+
+        # --- Ratio identities -----------------------------------------------------------
+        # f_e/d == 1/4 and k*f_e/d == 2.0 are what force k=8; they are the reason this
+        # scale-down is a one-parameter family in d rather than a free choice.
+        if expert_hidden_size * 4 != d_model:
+            problems.append(
+                f"f_e/d must be 1/4: got f_e={expert_hidden_size}, d={d_model} "
+                f"(ratio {expert_hidden_size / d_model:.4f})"
+            )
+        if top_k * expert_hidden_size != 2 * d_model:
+            problems.append(
+                f"k*f_e/d must be 2.0: got k={top_k}, f_e={expert_hidden_size}, d={d_model} "
+                f"(ratio {top_k * expert_hidden_size / d_model:.4f})"
+            )
+        # k/E == 1/32 is claimed at R3 only. R1/R2/E8 vary E deliberately -- that variation
+        # IS the E-sweep -- so asserting it everywhere would forbid the experiment.
+        if rung == "R3" and top_k * 32 != num_experts:
+            problems.append(
+                f"k/E must be 1/32 at R3: got k={top_k}, E={num_experts} "
+                f"(ratio {top_k / num_experts:.5f})"
+            )
+
+        # --- Geometry -------------------------------------------------------------------
+        # THE assertion that catches a mixed-geometry ladder. Attention width must equal the
+        # residual stream, as it does in Maple (16 * 128 == 2048 == d). A ladder whose rows
+        # were computed at different widths reproduces its own totals row by row and is still
+        # wrong; only checking one identity against every row catches it.
+        if n_heads * head_dim != d_model:
+            problems.append(
+                f"attention width must equal the residual stream: n_heads*head_dim = "
+                f"{n_heads}*{head_dim} = {n_heads * head_dim} != d_model={d_model} "
+                f"({n_heads * head_dim / d_model:.2f}x)"
+            )
+        # The 3:1 SWA pattern has period 4, so a layer count not divisible by 4 would leave a
+        # truncated final cycle and put the globals somewhere nobody chose.
+        if n_layers % 4 != 0:
+            problems.append(f"L % 4 must be 0 for the 3:1 SWA pattern: got L={n_layers}")
+        if d_model % head_dim != 0:
+            problems.append(f"d_model {d_model} must be divisible by head_dim {head_dim}")
+        # GQA 4:1, except at R0, which is a code-path smoke rung and is MQA (4/1) by design.
+        expected_gqa = 4 if rung != "R0" else n_heads
+        if n_heads != expected_gqa * n_kv_heads:
+            problems.append(
+                f"GQA ratio must be {expected_gqa}:1 at {rung}: got n_heads={n_heads}, "
+                f"n_kv_heads={n_kv_heads}"
+            )
+
+        # --- Known-broken defaults that must have been set explicitly -------------------
+        # Re-read off the built config rather than off the local variables, so this checks
+        # what was actually constructed and not what we meant to construct.
+        block = config.block
+        assert not isinstance(block, dict)
+        moe = block.feed_forward_moe
+        if moe is None:
+            problems.append("expected an MoE block, got a dense one")
+        else:
+            if moe.router.top_k != top_k:
+                problems.append(f"router top_k is {moe.router.top_k}, expected {top_k}")
+            if moe.router.normalize_expert_weights != 1.0:
+                problems.append(
+                    "normalize_expert_weights must be 1.0 (Maple's `norm_topk_prob`); got "
+                    f"{moe.router.normalize_expert_weights!r}. Unset, gate mass measures "
+                    "0.161 against 1.000 -- a 6.2x error that trains happily."
+                )
+            if moe.router.bias_gamma is not None:
+                problems.append(
+                    f"bias_gamma must be unset (Maple has no expert bias); got "
+                    f"{moe.router.bias_gamma!r}"
+                )
+            if moe.capacity_factor is None:
+                problems.append(
+                    "capacity_factor must be set explicitly; `None` is dropped by "
+                    "`exclude_none` and silently becomes 1.2"
+                )
+            if moe.z_loss_weight is None:
+                problems.append("z_loss_weight must be set explicitly")
+            if moe.shared_mlp is not None:
+                problems.append("Maple has zero shared experts; got a shared MLP")
+
+        mixer = block.sequence_mixer
+        if isinstance(mixer, AttentionConfig):
+            if mixer.qk_norm is None:
+                problems.append("QK-norm must be on (Maple `use_qk_norm: true`)")
+            if not mixer.use_head_qk_norm:
+                problems.append(
+                    "QK-norm must be PER-HEAD (`use_head_qk_norm=True`) to match Maple's "
+                    "`MapleRMSNorm(head_dim)`; the default norms the whole concatenated "
+                    "projection, which is a different operator"
+                )
+            if mixer.sliding_window is None:
+                problems.append("expected a sliding-window config for the 3:1 SWA pattern")
+            else:
+                swa = mixer.sliding_window
+                if swa.force_full_attention_on_first_layer:
+                    problems.append(
+                        "force_full_attention_on_first_layer must be False: it makes layer 0 "
+                        "global AND shifts the whole pattern by one"
+                    )
+                if swa.force_full_attention_on_last_layer:
+                    problems.append("force_full_attention_on_last_layer must be False")
+            rope = mixer.rope
+            if rope is None:
+                problems.append("expected a RoPE config")
+            else:
+                if not rope.no_global_rope:
+                    problems.append("no_global_rope must be True (NoPE on the global layers)")
+                if rope.partial_rotary_factor != 0.5:
+                    problems.append(
+                        f"partial_rotary_factor must be 0.5; got {rope.partial_rotary_factor}"
+                    )
+                if rope.theta != 10_000:
+                    problems.append(
+                        f"rope_theta must be 10000 to match Maple; got {rope.theta}. This "
+                        "tree defaults to 500000."
+                    )
+
+        if config.tie_word_embeddings:
+            problems.append("Maple has untied embeddings; got tied")
+
+        # --- The param ledger -----------------------------------------------------------
+        # Printed unconditionally and BEFORE any raise, so a mismatch is diagnosable rather
+        # than merely fatal. `PARAM_LEDGER ` is the agreed stdout protocol.
+        total = config.num_params
+        active = config.num_active_params
+        embed = d_model * vocab_size
+        print(
+            f"PARAM_LEDGER rung={rung} V={vocab_size} d={d_model} L={n_layers} "
+            f"E={num_experts} k={top_k} f_e={expert_hidden_size} "
+            f"n_heads={n_heads} n_kv={n_kv_heads} head_dim={head_dim} "
+            f"total={total} active={active} embed={embed} "
+            f"non_embed_total={total - embed} non_embed_active={active - embed}",
+            flush=True,
+        )
+
+        expected = cls.MAPLE_EXPECTED_PARAMS.get(vocab_size, {}).get(rung)
+        if expected is not None:
+            exp_total, exp_active = expected
+            # 1% because the published table is rounded, not because the count is uncertain.
+            if abs(total - exp_total) > 0.01 * exp_total:
+                problems.append(
+                    f"total params {total:,} is outside 1% of the ladder's {exp_total:,} "
+                    f"for {rung} at V={vocab_size} ({100 * (total - exp_total) / exp_total:+.2f}%)"
+                )
+            if abs(active - exp_active) > 0.01 * exp_active:
+                problems.append(
+                    f"active params {active:,} is outside 1% of the ladder's {exp_active:,} "
+                    f"for {rung} at V={vocab_size} "
+                    f"({100 * (active - exp_active) / exp_active:+.2f}%)"
+                )
+
+        if problems:
+            raise OLMoConfigurationError(
+                f"maple_scaled({rung}) violates the ratified ladder "
+                f"(contracts/ladder-and-factory.md):\n  - " + "\n  - ".join(problems)
+            )
+
+    @classmethod
+    def maple_r0(cls, vocab_size: int, **kwargs) -> "TransformerConfig":
+        """R0, the code-path smoke rung: d=512, L=8, E=64. ~214M total / ~126M active.
+
+        Sized for `gpu-1xa10g` at ~$1/hr. Never compared for quality -- it is MQA rather than
+        GQA 4:1 and exists only to prove the code path runs before an A100 approval is spent.
+        """
+        return cls.maple_scaled(vocab_size, rung="R0", **kwargs)
+
+    @classmethod
+    def maple_r1(cls, vocab_size: int, **kwargs) -> "TransformerConfig":
+        """R1: d=1024, L=12, E=64. ~841M total / ~312.5M active."""
+        return cls.maple_scaled(vocab_size, rung="R1", **kwargs)
+
+    @classmethod
+    def maple_r2(cls, vocab_size: int, **kwargs) -> "TransformerConfig":
+        """R2: d=1024, L=12, E=128. ~1.44B total / ~312.5M active."""
+        return cls.maple_scaled(vocab_size, rung="R2", **kwargs)
+
+    @classmethod
+    def maple_r3(cls, vocab_size: int, **kwargs) -> "TransformerConfig":
+        """R3, the flagship: d=1024, L=12, E=256. ~2.65B total / ~312.5M active.
+
+        The unique sub-Maple point that preserves every ratio: f_e/d = 1/4 and k*f_e/d = 2.0
+        force k=8, then k/E = 1/32 forces E=256, and d/L with head_dim 128 and L % 4 == 0
+        forces d=1024/L=12.
+        """
+        return cls.maple_scaled(vocab_size, rung="R3", **kwargs)
+
     @classmethod
     def smallmoe(cls, vocab_size: int, **kwargs) -> "TransformerConfig":
         d_model = kwargs.pop("d_model", 768)
