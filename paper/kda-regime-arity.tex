@@ -90,13 +90,16 @@ expressive in two ways: by applying more Householder factors per token
 from the strict $(0,1)$ to the reflection range $(0,2)$. Recent work has
 concentrated on the first. We report a controlled factorial measurement
 suggesting the second matters far more. Our design crosses $R\in\{1,2\}$ with
-$\beta$ regime over two non-solvable group word problems ($A_5$, $S_5$) and six
-seed bundles, and adds two further factors so that the two confounds such a
+$\beta$ regime over two non-solvable group word problems ($A_5$, $S_5$) and
+twelve seed bundles, and adds three further factors so that the confounds such a
 comparison invites are removed by construction rather than argued away: a
 \emph{capacity} factor giving each $R{=}1$ arm a parameter-matched twin
 ($-0.055\%$) that carries the $R{=}2$ parameter count in feed-forward width, in
-\emph{both} regimes; and a \emph{learning-rate} factor spanning $33\times$ on the
-arms where a gap exists. 120 cells, 8.67 GPU-hours, all fully paired at the
+\emph{both} regimes; a \emph{learning-rate} factor spanning $33\times$ on the
+arms where a gap exists; and an \emph{arity ladder} extending strict $\beta$ to
+$R\in\{3,4\}$ with a capacity control at each rung, reaching the regime where the
+$k\le2$ bound of Grazzi et al.~\cite{grazzi2025} no longer applies. 216 cells, 16.28
+GPU-hours, all fully paired at the
 seed-bundle level. The $\beta$ widening at fixed $R$ is large in every position
 band where both arms are above chance, while doubling $R$ under strict $\beta$ is
 consistently positive but one to two orders of magnitude smaller --- and the
@@ -105,17 +108,20 @@ costs $+40.3\%$. The interaction is not a capacity artifact: matching moves the
 $A_5$ mid-range estimate \emph{up}, to $+58.88$pp. Nor is it an optimization
 artifact: no rate closes the strict arms' deficit at a length \emph{inside} the
 training range, where they reach stable near-zero training loss and still fall
-$9$--$21$pp short --- a generalization gap, not a training failure. Because Kimi
+$9$--$21$pp short --- a generalization gap, not a training failure. At $n=12$,
+\textbf{four} capacity-matched bands survive one-sided Holm correction, the
+strongest at $p=0.00003$. Because Kimi
 K3's KDA layer fixes $\beta=\mathrm{Sigmoid}(\cdot)\in(0,1)$, a determinant
 argument shows K3-style nodes cannot obtain a negative-determinant transition at
 any $R$; whether they would benefit from $R>1$ in practice is a separate
 question our scale cannot settle. We report results against our own interest.
 Our pre-registered mechanism --- that reflections help because $S_5$'s odd
 generator demands $\det=-1$ --- is \emph{contradicted}, and the fallback
-explanation we offer is contradicted too. \emph{No} band survives Holm
-correction at $n=6$ once the arms are capacity-matched, though one does without
-it. We report the effect, its size, and the reasons it is suggestive rather than
-established.
+explanation we offer is contradicted too. The arity ladder is the sharper case:
+its one positive cell is capacity-matched, and decomposing that match shows
+$81\%$ of the $R{=}4$ ``gain'' is damage the control's feed-forward block does to
+itself, leaving a raw arity effect of $+3.11$pp at $t=1.06$. We report the
+effects, their sizes, and the reasons each is suggestive or established.
 \end{abstract}
 \end{minipage}
 \end{center}
@@ -151,18 +157,20 @@ $\beta_t = \mathrm{Sigmoid}(W_\beta x_t) \in (0,1)$ --- strictly inside the
 non-reflective range.
 
 We test this with a fully paired factorial design at otherwise identical
-geometry, on two non-solvable group word problems, with six seed bundles per
-cell. Its core crosses arity $R \in \{1,2\}$ with $\beta$ regime. Because that
+geometry, on two non-solvable group word problems. Its core crosses arity
+$R \in \{1,2\}$ with $\beta$ regime over twelve seed bundles. Because that
 core alone cannot distinguish arity from the parameters arity buys, nor
-expressivity from trainability, the design carries two further factors aimed at
-exactly those two alternatives: a \emph{capacity} factor pairing each $R{=}1$ arm
-with a parameter-matched twin in both regimes, and a \emph{learning-rate} factor
-spanning $33\times$. 120 cells in total. The intent is that the two objections a
-reader would raise first are answered by the design rather than by discussion.
+expressivity from trainability, the design carries three further factors aimed at
+exactly those alternatives: a \emph{capacity} factor pairing each $R{=}1$ arm
+with a parameter-matched twin in both regimes, a \emph{learning-rate} factor
+spanning $33\times$, and an \emph{arity ladder} carrying strict $\beta$ to
+$R\in\{3,4\}$ with a matched control at each rung. 216 cells in total. The intent
+is that the objections a reader would raise first are answered by the design
+rather than by discussion.
 
 The design is deliberately narrow: it is built to estimate one interaction term
 rather than to establish a state of the art. It is also small, and we have tried
-to be scrupulous about what an $n=6$, $1.4$M-parameter probe can and cannot
+to be scrupulous about what a $1.4$M-parameter probe can and cannot
 support. Two things in particular govern how our results should be read, and we
 put them here rather than in a late limitations section.
 
@@ -380,13 +388,12 @@ against us.
 \label{sec:setup}
 
 \paragraph{Design.}
-The experiment is a single design with three factors and two nested extensions,
-run as 120 cells on one accelerator. The core is a $2\times2$: arity
-$R \in \{1,2\}$ crossed with $\beta$ regime, over two tasks and six seed
-bundles. Two additional factors exist to remove the two confounds that a bare
-$2\times2$ cannot address, and each is crossed only where it is identified,
-because cells spent where a factor cannot move the answer are cells not spent
-on precision.
+The experiment is a single design with four factors, run as 216 cells on one
+accelerator. The core is a $2\times2$: arity $R \in \{1,2\}$ crossed with $\beta$
+regime, over two tasks and twelve seed bundles. Three additional factors exist to
+remove the confounds a bare $2\times2$ cannot address, and each is crossed only
+where it is identified, because cells spent where a factor cannot move the answer
+are cells not spent on precision.
 
 \emph{Capacity.} Each $R{=}1$ arm has a parameter-matched twin
 (\texttt{R1-P}, \texttt{R1-refl-P}) carrying the $R{=}2$ arms' parameter count
@@ -404,7 +411,16 @@ so there is no gap for a rate to close and sweeping them would buy nothing. This
 is the one deliberate asymmetry in the design and we flag it as a limitation
 rather than a feature.
 
-All six arms (Table~\ref{tab:arms}) use the same gated Householder mixer, the
+\emph{Arity ladder.} The strict regime is carried to $R\in\{3,4\}$
+(\texttt{DP3-strict}, \texttt{DP4-strict}), each with a capacity control matched
+to the rung above it (\texttt{DP2-P3}, \texttt{DP3-P4}). This factor is crossed
+only with strict $\beta$ and only over the first six bundles. Its purpose is to
+reach $R\ge3$, where the $k\le2$ bound of Grazzi et al.~\cite{grazzi2025} no longer holds,
+so a null there is a null against a theory rather than against an expectation.
+Section~\ref{sec:ladder} explains why the rungs are matched to their neighbours
+rather than to a common $R{=}4$ target.
+
+All ten arms (Table~\ref{tab:arms}) use the same gated Householder mixer, the
 same Triton backend, 4000 steps, batch 64, and identical $d_\text{model}$, head
 count, state dimension and depth --- so the recurrent state size, the variable
 every contrast must hold fixed, never varies. The $\beta$ regime is a single
@@ -486,14 +502,21 @@ also report Holm-corrected outcomes across the band family, since we test many
 cells.
 
 \paragraph{Compute and provenance.}
-All 120 cells ran on one NVIDIA A10G, $120/120$ completing, for $8.67$
-GPU-hours (cells $228$--$305$\,s). No cell failed, $0$ records were rejected,
-and $0$ non-finite loss steps occurred anywhere. Cells were executed in two
-batches under two probe-source revisions --- the second adds the capacity and
-learning-rate factors and fixes the loss-summary instrumentation discussed in
-Section~\ref{sec:trainability} --- and every record carries the revision that
-produced it. Section~\ref{sec:replication} uses the twelve duplicated cells to
+All 216 cells ran on one NVIDIA A10G apiece, $216/216$ completing, for $16.28$
+GPU-hours (cells $228$--$317$\,s). No cell failed, $0$ records were rejected,
+and $0$ non-finite loss steps occurred anywhere. Cells were executed in four
+batches under four probe-source revisions --- successively adding the capacity
+and learning-rate factors, the loss-summary instrumentation discussed in
+Section~\ref{sec:trainability}, the arity ladder, and the six additional
+bundles --- and every record carries the revision that produced it.
+Section~\ref{sec:replication} uses the twelve duplicated cells to
 check that this does not bias the comparison; it does not.
+
+Every cell's evaluation bank is content-addressed by SHA-256, and the hash
+depends only on the (task, bundle) pair. Across all 216 records the 24 distinct
+(task, bundle) groups carry exactly 24 distinct hashes, so cells added in a later
+batch are paired with earlier ones rather than merely comparable to them. This is
+what licenses pooling the $n=6$ and $n=12$ analyses on the same bundles.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % TABLE: arms
@@ -517,6 +540,10 @@ Arm & $\beta$ range & \hd{$R$} & \hd{Non-emb.\ params} & \hd{$\bar\beta$} \\
 \texttt{R1}            & $(0,1)$ & 1 & 998{,}092     & 0.899 \\
 \texttt{R1-P}          & $(0,1)$ & 1 & 1{,}399{,}756 & 0.878 \\
 \texttt{DP2-strict}    & $(0,1)$ & 2 & 1{,}400{,}524 & 0.779 \\
+\texttt{DP2-P3}        & $(0,1)$ & 2 & 1{,}802{,}188 & 0.803 \\
+\texttt{DP3-strict}    & $(0,1)$ & 3 & 1{,}802{,}956 & 0.744 \\
+\texttt{DP3-P4}        & $(0,1)$ & 3 & 2{,}204{,}620 & 0.755 \\
+\texttt{DP4-strict}    & $(0,1)$ & 4 & 2{,}205{,}388 & 0.725 \\
 \midrule
 \texttt{R1-refl}       & $(0,2)$ & 1 & 998{,}092     & 1.800 \\
 \texttt{R1-refl-P}     & $(0,2)$ & 1 & 1{,}399{,}756 & 1.767 \\
@@ -608,9 +635,9 @@ ten prefix cells and five of eight bands are positive at uncorrected L95. Under
 Holm correction across the family, \textbf{zero} of the ten prefix cells and
 \textbf{one} of the eight bands survive (marked $\dagger$): with $df=5$,
 $p<0.00625$ needs $|t|>4.03$ and our maximum band $t$ is $4.26$. This table uses
-the unmatched $R{=}1$ cells; that single survivor does \emph{not} survive with
-the capacity factor controlled (Section~\ref{sec:capacity},
-Table~\ref{tab:matched}), where no band clears Holm. Note $S_5$ at
+the unmatched $R{=}1$ cells at $n=6$; the capacity-matched square at $n=12$
+yields \textbf{four} Holm survivors (Section~\ref{sec:capacity},
+Table~\ref{tab:matched}). Note $S_5$ at
 $129$--$256$ and $257$--$512$ \emph{reverse sign} once de-nested --- they were
 significant only by inheriting the $41$--$64$ signal through prefix averaging.}
 \label{tab:paired}
@@ -765,14 +792,33 @@ extrapolation band under matching ($-0.23$ to $+3.10$pp) --- and this version of
 that statement is informative, because \texttt{R1-P} is no longer
 capacity-starved relative to \texttt{DP2-strict}.
 
-Matching costs us our one significance claim, and we report that as plainly as
-the rest. Under Holm at $\alpha=0.05$ over ten de-nested bands, the unmatched
-cells yield exactly one survivor ($S_5$, $41$--$64$, $t=4.26$, $p=0.00401$). With
-the matched cells that band weakens to $t=3.64$ ($p=0.00745$) and \emph{no} band
-survives: the strongest is $A_5$ $129$--$256$ at $p=0.00535$ against a first-step
-threshold of $0.00500$, which it misses. Higher point estimates, weaker
-family-wise evidence. Both are properties of the better-controlled comparison
-and we prefer it to the worse-controlled one.
+\paragraph{At $n=6$ matching cost us our one significance claim; at $n=12$ it
+does not.} We report both, because the first was the state of this paper for a
+week and the reason for the second is arithmetic rather than insight. Under Holm
+at $\alpha=0.05$, the unmatched cells at $n=6$ yield exactly one survivor ($S_5$,
+$41$--$64$, $t=4.26$, $p=0.00401$); matched, that band weakens to $t=3.64$ and
+\emph{no} band survives, the strongest being $A_5$ $129$--$256$ at $p=0.00535$
+against a first-step threshold of $0.00500$.
+
+Six further seed bundles ($1107$--$1112$, identical protocol, same frozen
+evaluation banks) resolve it. The standard error of a paired mean falls as
+$1/\sqrt{n}$, and nothing about the point estimates needed to change for the
+family to clear: at $n=12$, \textbf{four} of the eight matched extrapolation
+bands survive one-sided Holm (Table~\ref{tab:holm12}). The strongest is $S_5$
+$41$--$64$ at $t=6.34$, $p=0.00003$ --- the same band that missed at $n=6$. $A_5$
+$129$--$256$, the band that missed by $0.00035$, now reads $p=0.00282$ against a
+threshold of $0.00833$.
+
+This is worth stating precisely, because ``more seeds made it significant'' is
+also what a fishing expedition sounds like. The band family, the estimand, the
+correction and the one-sided convention were all fixed before these bundles ran;
+the only quantity that changed is $n$. What $n=6$ established was that the
+effects were large and the evidence was too thin to survive a family-wise
+correction over eight bands. What $n=12$ establishes is that four of them do.
+The point estimates at $n=12$ are, if anything, slightly smaller than at $n=6$
+($A_5$ $129$--$256$: $+40.94$pp against $+58.88$pp), which is the direction
+regression to the mean predicts and the opposite of what selective reporting
+would produce.
 
 \subsection{The learning-rate factor: a generalization gap, not an optimization
 failure}
@@ -829,6 +875,74 @@ is that the single most likely optimization explanation, tested over a $33\times
 range, does not account for a $9$--$21$pp deficit. We do continue to flag that
 $\beta=2$ doubles the effective write-gate gradient scale, so the reflection
 arms' perfect stability record may itself be an optimization-geometry effect.
+
+\subsection{The arity ladder: $R=3$ and $R=4$ under strict $\beta$}
+\label{sec:ladder}
+
+Everything above compares $R{=}1$ against $R{=}2$, which is exactly the range in
+which Grazzi et al.'s Proposition~1~\cite{grazzi2025} already tells us what to expect.
+The interesting question is whether arity pays where that bound stops applying.
+We therefore extend the strict regime to $R\in\{3,4\}$, with a capacity control
+at each rung.
+
+\paragraph{Adjacent rungs, not a common target.} The obvious design --- match
+everything to the $R{=}4$ parameter count --- is the wrong one here, and the
+reason is quantitative. Parameters are exactly affine in $R$ at this geometry:
+the mixer costs $997{,}068 + 402{,}432(R-1)$. Matching an $R{=}1$ arm up to
+$R{=}4$ therefore requires a feed-forward block of $1{,}207{,}296$ parameters,
+which is $1.21\times$ that arm's own mixer and $55\%$ of the resulting model.
+That is not a control but a different architecture, and we can measure what it
+would cost: adding merely one third of that dose ($\texttt{ffn\_dim}=174$) to
+\texttt{R1-refl} costs $-16.35$pp at $A_5$ $41$--$64$ and $-20.54$pp at
+$65$--$128$ --- the two bands the headline interaction lives in. A control
+damaged in the bands that carry the result biases the comparison toward
+``arity pays'' for a reason unrelated to arity.
+
+We instead compare \emph{adjacent} rungs, each matched by the same validated
+$\texttt{ffn\_dim}=174$ increment the existing controls carry: \texttt{DP2-P3}
+($R{=}2$ grown to $R{=}3$'s count, $-0.043\%$) and \texttt{DP3-P4} ($R{=}3$ grown
+to $R{=}4$'s, $-0.035\%$). Matching only runs upward: \texttt{solve\_ffn\_dim}
+refuses a target below the feed-forward-free cost.
+
+\paragraph{One band moves, and it is not an extrapolation band.} On $A_5$ at
+positions $41$--$64$, strict-$\beta$ accuracy climbs monotonically with $R$:
+$1.24\%$ ($R{=}1$), $5.05\%$ ($R{=}2$), $16.79\%$ ($R{=}3$), $19.90\%$ ($R{=}4$),
+against a $1.67\%$ chance floor. This is the one place in the entire study where
+strict $\beta$ does something, and it contradicts what our own $R\le2$ data
+predicted. Every other cell --- both tasks, all three longer bands, all four
+arities --- sits within noise of chance.
+
+\paragraph{The matched effect is mostly damage to the control.} Reporting the
+matched contrast alone would overstate this badly, so we decompose it. Writing
+the matched effect as the raw arity effect plus whatever the control's
+feed-forward block does to the control itself, at $A_5$ $41$--$64$:
+
+\begin{center}
+\footnotesize
+\begin{tabular}{lrrr}
+\toprule
+Rung & \hd{Raw $R$} & \hd{Control harm} & \hd{Matched} \\
+\midrule
+$R{=}3$ vs $R{=}2$ & $+11.74$ & $+2.73$ & $+14.47$ \\
+$R{=}4$ vs $R{=}3$ & $+3.11$ & $+13.56$ & $+16.68$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+At $R{=}3$ the matched estimate is mostly a real arity effect ($+11.74$pp,
+$t=2.62$ unmatched). At $R{=}4$ it is mostly not: the raw effect is $+3.11$pp at
+$t=1.06$, and $81\%$ of the matched $+16.68$pp is the $\texttt{DP3-P4}$ control
+losing $13.56$pp to its own feed-forward block. The honest reading is that
+$R{=}3$ buys something at short range and $R{=}4$ buys little beyond it.
+
+\paragraph{What this does and does not establish.} Neither ladder contrast
+survives Holm over the 16-contrast family it belongs to: at $df=5$, $t=2.60$ is
+$p\approx0.024$ against a first-step threshold of $0.003$. Both live in a single
+task and a single band, at $n=6$. We report the ladder as a signal worth
+following, not a result --- and note that it does not disturb the paper's
+comparison, since the $\beta$ effects in Table~\ref{tab:holm12} are $+22$ to
+$+52$pp where arity's best is $+15$pp, and $\beta$ remains free while $R{=}4$
+costs $+121\%$ in parameters.
 
 \subsection{A replication check the design gives for free}
 \label{sec:replication}
@@ -891,8 +1005,8 @@ parameters) and with their matched twins
 against the $R{=}2$ arms' $1{,}400{,}524$, $-0.055\%$). Both use the same six
 bundles and byte-identical evaluation banks, so the columns are paired.
 Matching \emph{raises} the $A_5$ mid-range estimates and leaves the strict-arity
-effect at $\approx0$; it also costs the one cell that survives Holm when
-capacity is uncontrolled (Section~\ref{sec:capacity}). \textbf{Bold} marks
+effect at $\approx0$. Both columns are $n=6$; Table~\ref{tab:holm12} carries the
+matched square to $n=12$, where four bands clear Holm. \textbf{Bold} marks
 uncorrected L95 $>0$.}
 \label{tab:matched}
 \footnotesize
@@ -914,6 +1028,43 @@ $S_5$ & 41--64   & $+39.23$ & $\mathbf{+52.52}$ & 14.43 & $3.64$ & $\mathbf{+23.
 $S_5$ & 65--128  & $+22.14$ & $\mathbf{+21.77}$ & 9.08 & $2.40$ & $\mathbf{+3.47}$ \\
 $S_5$ & 129--256 & $-0.77$ & $+0.26$ & 1.03 & $0.25$ & $-1.81$ \\
 $S_5$ & 257--512 & $+0.31$ & $-0.30$ & 0.35 & $-0.87$ & $-1.01$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% TABLE -- capacity-matched square at n=12
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{table}[t]
+\centering
+\small
+\caption{The capacity-matched interaction at $n=12$: the six original bundles
+plus $1107$--$1112$, identical protocol and the same frozen evaluation banks.
+$p$ is one-sided; $\dagger$ marks the four bands that survive Holm at
+$\alpha=0.05$ over the eight extrapolation bands ($1$--$40$ is inside the
+training range and is excluded from the family, reported for reference).
+\textbf{Bold} marks L95 $>0$ uncorrected, with $t_{0.95,11}=1.796$. Nothing
+about the design changed between $n=6$ and $n=12$ except the number of bundles;
+the point estimates are slightly \emph{smaller} here than in
+Table~\ref{tab:matched}, and four bands clear anyway.}
+\label{tab:holm12}
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{llrrrrr}
+\toprule
+Task & Band & \hd{Inter.} & \hd{se} & \hd{$t$} & \hd{L95} & \hd{$p$} \\
+\midrule
+$A_5$ & 1--40 & $-1.49$ & 2.97 & $-0.50$ & $-6.83$ & $0.687$ \\
+$A_5$ & 41--64 & $+7.47$ & 5.86 & $1.27$ & $-3.06$ & $0.115$ \\
+$A_5$ & 65--128 & $\mathbf{+32.08}$ & 10.59 & $3.03$ & $\mathbf{+13.06}$ & $0.0057^\dagger$ \\
+$A_5$ & 129--256 & $\mathbf{+40.94}$ & 11.94 & $3.43$ & $\mathbf{+19.49}$ & $0.0028^\dagger$ \\
+$A_5$ & 257--512 & $\mathbf{+20.86}$ & 9.00 & $2.32$ & $\mathbf{+4.68}$ & $0.020$ \\
+\midrule
+$S_5$ & 1--40 & $\mathbf{+4.52}$ & 2.24 & $2.02$ & $\mathbf{+0.50}$ & $0.034$ \\
+$S_5$ & 41--64 & $\mathbf{+51.67}$ & 8.15 & $6.34$ & $\mathbf{+37.04}$ & $0.00003^\dagger$ \\
+$S_5$ & 65--128 & $\mathbf{+22.57}$ & 5.94 & $3.80$ & $\mathbf{+11.90}$ & $0.0015^\dagger$ \\
+$S_5$ & 129--256 & $+0.21$ & 0.51 & $0.40$ & $-0.71$ & $0.347$ \\
+$S_5$ & 257--512 & $+0.14$ & 0.26 & $0.53$ & $-0.33$ & $0.302$ \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -1007,10 +1158,13 @@ $R=2$. We therefore offer \emph{no} mechanism. A reader should treat the
 interaction as an unexplained empirical regularity --- one that survives the two
 controls the design carries (Sections~\ref{sec:capacity}--\ref{sec:trainability})
 but has no account of \emph{why}. Distinguishing the remaining candidates needs a
-solvable-group control, a
-difficulty-matched non-solvable pair, and an $R=3$ arm (where
-Equation~\eqref{eq:det} does predict something, since the $k\le2$ hypothesis of
-Grazzi Prop.~1.3 fails there). We ran none of these.
+solvable-group control and a difficulty-matched non-solvable pair, neither of
+which we ran. The third item on that list --- an $R=3$ arm, where
+Equation~\eqref{eq:det} does predict something because the $k\le2$ hypothesis of
+Grazzi Prop.~1.3 fails --- we did run, and Section~\ref{sec:ladder} reports it.
+It does not rescue the mechanism: $R{=}3$ helps only on $A_5$ at $41$--$64$, a
+band \emph{below} the training cutoff's reach where a determinant argument
+predicts nothing in particular, and it leaves every extrapolation band at chance.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \section{Limitations}
@@ -1021,14 +1175,22 @@ are factors in the design and are reported in
 Sections~\ref{sec:capacity}--\ref{sec:trainability}. What follows is what the
 design does \emph{not} address.
 
-\subsection{$n=6$, multiplicity, and influential bundles}
+\subsection{Sample size, multiplicity, and influential bundles}
 
-Six bundles makes paired contrasts informative but imprecise: interaction
+The core square is $n=12$; every other factor --- learning rate, the arity
+ladder, and the leave-one-out diagnostics below --- remains at $n=6$, so the
+precision claims differ by factor and we state which applies where.
+
+At $n=6$ paired contrasts are informative but imprecise: interaction
 standard errors run $1.68$--$16.08$pp, and the \texttt{Reflection} arm's
-between-bundle spread on $A_5$ is large (sd $20.19$pp at $L=256$). As
-Section~\ref{sec:denested} states, no prefix cell and only one band survives
-Holm correction, and with $df=5$ none could have cleared Bonferroni even in
-principle. Leave-one-bundle-out shows the two long-length $S_5$ prefix cells
+between-bundle spread on $A_5$ is large (sd $20.19$pp at $L=256$). At that size
+no prefix cell and only one band survived Holm correction, and with $df=5$ none
+could have cleared Bonferroni even in principle. Doubling to $n=12$ on the
+matched square is what changes this: four bands clear Holm
+(Table~\ref{tab:holm12}), and $df=11$ makes Bonferroni reachable --- $S_5$
+$41$--$64$ at $p=0.00003$ clears $0.05/8=0.00625$ by two orders of magnitude.
+\emph{The arity ladder has no such backing}: it is $n=6$, and neither of its two
+positive contrasts survives correction over its own family. Leave-one-bundle-out shows the two long-length $S_5$ prefix cells
 lose significance if either of two bundles is dropped --- consistent with their
 sign reversal under de-nesting. The $A_5$ result is more robust: dropping the
 most extreme bundle (1103) takes $L=256$ from $+35.28$ to $+29.18$
@@ -1142,7 +1304,7 @@ operator, no kernel and no theorem --- only a controlled measurement.
 \label{sec:conclusion}
 
 In a gated delta-rule node, the write-strength range $\beta$ and the Householder
-arity $R$ are not interchangeable routes to expressivity. Across 48 paired cells
+arity $R$ are not interchangeable routes to expressivity. Across 216 paired cells
 on two non-solvable group word problems, widening $\beta$ produced large gains
 in every position band where the compared arms were above chance --- $25.7\times$
 to $124.7\times$ the gain from doubling arity --- at zero parameter cost, against
@@ -1154,24 +1316,26 @@ arity.
 
 The two alternative explanations the design was built to exclude are excluded.
 The effect is not capacity: with $R{=}1$ controls widened to within $0.055\%$ of
-the $R{=}2$ arms in \emph{both} regimes, the interaction is intact and slightly
-larger ($+58.88$pp on $A_5$ at positions $129$--$256$, against $+57.09$
-uncontrolled). It is not the learning rate: across $33\times$ in peak rate, no
+the $R{=}2$ arms in \emph{both} regimes, the interaction is intact, and at
+$n=12$ four bands survive one-sided Holm correction, the strongest at
+$p=0.00003$. It is not the learning rate: across $33\times$ in peak rate, no
 setting closes the strict arms' deficit at a length \emph{inside} the training
 range, where they reach stable near-zero training loss and still fall $9$--$21$pp
 short. That last result also changes what the deficit \emph{is} --- a
 generalization gap on in-distribution data, not a training failure.
 
 What remains open we state plainly. We have no mechanism: our pre-registered
-explanation is falsified and so is the fallback. \emph{No} band-level
-interaction survives multiple-comparison correction at $n=6$ once capacity is
-controlled --- one does without that control, so the better-controlled analysis
-has the weaker family-wise evidence, and we report the better-controlled one.
+explanation is falsified and so is the fallback. The arity ladder we added to
+test the one place a determinant argument still had room --- $R\ge3$, where
+Grazzi's $k\le2$ hypothesis fails --- does not rescue it: $R{=}3$ helps on a
+single task in a single short band, $R{=}4$'s apparent matched gain is $81\%$
+damage to its own control, and every extrapolation band stays at chance.
 One arm of the rate factor is unbracketed at the top of the grid, optimization
 levers other than the rate are untested, and our own replication check says
 single cells of this apparatus are not resolvable below roughly $4$pp at short
-lengths. The remaining fixes are specified and cheap: more bundles, an $R=3$
-arm, and a wider optimization search. What we can defend is narrow but it is
+lengths. The remaining fixes are specified and cheap: a solvable-group control,
+a difficulty-matched non-solvable pair, and a wider optimization search. What we
+can defend is narrow but it is
 now well controlled: one lever is free and appears to matter a great deal, the
 other is expensive and appears to matter little, the difference is explained by
 neither capacity nor learning rate, and we do not yet know why or whether it
