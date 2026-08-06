@@ -37,6 +37,32 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+def _maple_uniform_attn_backend() -> AttentionBackendName:
+    """
+    Pick ONE attention backend for every layer of a Maple model.
+
+    The Maple factory mixes sliding-window and global layers, and OLMo-core resolves an unset
+    backend *per layer* from whether that layer has a window — flash_2 for the sliding ones,
+    torch SDPA for the global ones (``nn/attention/__init__.py:454-462``). That would make the
+    3:1 SWA layout a 3:1 kernel split: it biases MFU, which is the E-sweep's dependent
+    variable, and torch SDPA additionally raises on intra-document masking.
+
+    Preferring flash_2 unconditionally is not an option either — it is absent from the platform
+    image and from FarmShare, and its ``assert_supported`` raises rather than degrading. So
+    probe once and return a single backend that every layer can actually use.
+    """
+    from ..attention import flash_attn_api
+
+    if flash_attn_api.has_flash_attn_2():
+        return AttentionBackendName.flash_2
+    log.info(
+        "flash-attn 2 is unavailable, so all Maple layers will use the torch SDPA backend. "
+        "This is uniform across sliding and global layers, which is what keeps MFU "
+        "comparable; it is slower than flash_2 and does not support intra-document masking."
+    )
+    return AttentionBackendName.torch
+
+
 class TransformerDataParallelWrappingStrategy(StrEnum):
     """
     An enumeration of the different wrapping strategy for the data parallel implementations.
@@ -1332,15 +1358,15 @@ class TransformerConfig(ModelConfig):
             qk_norm=layer_norm,
             use_head_qk_norm=True,
             sliding_window=sliding_window,
-            # PINNED, and it must be. Left as `None`, the backend is resolved PER LAYER from
-            # whether that layer has a window: a sliding layer takes the
-            # `if backend is None and has_flash_attn_2()` branch and gets flash_2, while a
-            # global layer skips it and falls through to `backend = torch`
-            # (`nn/attention/__init__.py:454-462`). On a flash-attn image that silently makes
-            # our 3:1 SWA layout a 3:1 *kernel* split -- 9 layers on FlashAttention-2 and
-            # layers {3,7,11} on torch SDPA.
+            # PINNED to ONE backend for every layer, and the value is resolved at call time.
             #
-            # Two consequences, neither visible in the config:
+            # Left as `None`, the backend is chosen PER LAYER from whether that layer has a
+            # window: a sliding layer takes the `if backend is None and has_flash_attn_2()`
+            # branch and gets flash_2, while a global layer skips it and falls through to
+            # `backend = torch` (`nn/attention/__init__.py:454-462`). On a flash-attn host that
+            # silently turns our 3:1 SWA layout into a 3:1 *kernel* split -- 9 layers on
+            # FlashAttention-2 and layers {3,7,11} on torch SDPA. Two consequences, neither
+            # visible in the config:
             #   1. Throughput. Three layers on a slower kernel biases absolute MFU downward and
             #      makes it non-comparable to the `moe/` track's baseline, which had no
             #      global/sliding split. MFU is the E-sweep's dependent variable.
@@ -1348,9 +1374,20 @@ class TransformerConfig(ModelConfig):
             #      packed-corpus run with `generate_doc_lengths=True` would die at the first
             #      global layer. flash_2 supports it.
             #
-            # The sibling `olmo3_*` factories in this file pin `attn_backend=flash_2` for
-            # exactly this reason. Ours is a SWA factory too, so it pins it as well.
-            backend=kwargs.pop("attn_backend", AttentionBackendName.flash_2),
+            # WHY THIS IS NOT A HARD `flash_2`, which is what the sibling `olmo3_*` factories
+            # do: flash-attn 2 is **not installed in the platform image**. `.edullm/Dockerfile`
+            # installs `torch==2.9.0` and `.[wandb]`, and flash-attn appears in neither
+            # `pyproject.toml`'s core dependencies nor its extras (only `fa4`, a different
+            # package). `AttentionBackendName.flash_2.assert_supported()` RAISES when the
+            # package is missing (`nn/attention/backend.py:452-457`), so a hard pin would make
+            # every rung unbuildable on the platform and on FarmShare. Measured: it did --
+            # FarmShare job 1676576 died with "'FlashAttention2Backend' is missing the
+            # flash-attn package".
+            #
+            # So: use flash_2 where it exists, torch everywhere else, and either way use the
+            # SAME backend on all layers -- which is the property that actually matters. The
+            # uniformity is asserted below; the identity of the backend is not.
+            backend=kwargs.pop("attn_backend", None) or _maple_uniform_attn_backend(),
             # q/k/v/o. Maple ternarizes every matmul; norms stay full precision, and there is
             # no code path from here to the QK-norms.
             **quant_kwargs,
@@ -1561,10 +1598,11 @@ class TransformerConfig(ModelConfig):
             # is visible in the config, and MFU is the E-sweep's dependent variable.
             if mixer.backend is None:
                 problems.append(
-                    "attention backend must be pinned explicitly; left None it is resolved "
-                    "PER LAYER from the presence of a window, so sliding layers get flash_2 "
-                    "while global layers fall through to torch SDPA "
-                    "(nn/attention/__init__.py:454-462)"
+                    "attention backend must be pinned to a single value; left None it is "
+                    "resolved PER LAYER from the presence of a window, so sliding layers get "
+                    "flash_2 while global layers fall through to torch SDPA "
+                    "(nn/attention/__init__.py:454-462) -- a 3:1 kernel split that biases MFU "
+                    "and breaks intra-document masking on the global layers"
                 )
             rope = mixer.rope
             if rope is None:
