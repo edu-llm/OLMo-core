@@ -71,3 +71,12 @@ def test_bootstrap_builds_an_isolated_pinned_environment():
         assert requirement in script
     assert "uv venv" in script
     assert "preflight_vllm.py" in script
+
+
+def test_bootstrap_installs_the_pinned_tokenizer_reader():
+    script = (EVALS_DIR / "bootstrap_vllm_env.sh").read_text(encoding="utf-8")
+
+    # The exporter imports edullm_data to resolve the vendored tokenizer, so the
+    # isolated environment must install it or every arm fails during export.
+    assert "edullm-data" in script
+    assert "38bf831a6c3f445e394784018441fd59288b876c" in script

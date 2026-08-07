@@ -102,6 +102,14 @@ def main() -> int:
     except Exception as error:  # noqa: BLE001 - catches CUDA and native ABI failures
         errors.append(f"vllm._C import failed: {type(error).__name__}: {error}")
 
+    # The checkpoint exporter resolves the vendored tokenizer through these; a
+    # missing reader fails every arm during export, not at eval time.
+    for module in ("edullm_data.read", "edullm_data.s3"):
+        try:
+            importlib.import_module(module)
+        except Exception as error:  # noqa: BLE001 - missing reader dependency
+            errors.append(f"{module} import failed: {type(error).__name__}: {error}")
+
     if errors:
         print("P3 vLLM preflight FAILED:", file=sys.stderr)
         for error in errors:

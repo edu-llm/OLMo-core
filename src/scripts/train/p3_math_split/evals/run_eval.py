@@ -595,6 +595,12 @@ def build_vllm_engine(model_path, *, gpu_memory_utilization: float, max_model_le
     validates BF16 and vLLM refuses it below compute capability 8.0. Failing at
     engine construction with a clear dtype error beats silently downcasting.
     """
+    # vLLM V1 launches its EngineCore in a child process. This evaluator has
+    # already initialized CUDA in the parent (device detection, and the resident
+    # HuggingFace NLL model), so a forked child raises "Cannot re-initialize CUDA
+    # in forked subprocess". Force spawn before importing vllm so the EngineCore
+    # gets its own CUDA context. setdefault keeps an operator override intact.
+    os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
     from vllm import LLM
 
     print(

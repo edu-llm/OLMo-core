@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 import random
 import sys
 from pathlib import Path
@@ -1005,6 +1006,49 @@ def test_cli_rejects_arm_mismatch_before_model_load(tmp_path, monkeypatch):
 
     with pytest.raises(SystemExit, match="exported arm.*dense.*--arm.*split"):
         run_eval.main()
+
+
+def test_build_vllm_engine_forces_spawn_multiprocessing(monkeypatch):
+    monkeypatch.delenv("VLLM_WORKER_MULTIPROC_METHOD", raising=False)
+
+    captured = {}
+
+    class FakeLLM:
+        def __init__(self, **kwargs):
+            # vLLM would fork its EngineCore here; the env var must already be set.
+            captured["env"] = os.environ.get("VLLM_WORKER_MULTIPROC_METHOD")
+            captured["kwargs"] = kwargs
+
+    fake_vllm = ModuleType("vllm")
+    fake_vllm.LLM = FakeLLM
+    monkeypatch.setitem(sys.modules, "vllm", fake_vllm)
+
+    engine = run_eval.build_vllm_engine(
+        "/models/dense",
+        gpu_memory_utilization=0.55,
+        max_model_len=16_384,
+    )
+
+    assert isinstance(engine, FakeLLM)
+    assert captured["env"] == "spawn"
+    assert captured["kwargs"]["dtype"] == "bfloat16"
+    assert os.environ["VLLM_WORKER_MULTIPROC_METHOD"] == "spawn"
+
+
+def test_build_vllm_engine_preserves_operator_multiproc_override(monkeypatch):
+    monkeypatch.setenv("VLLM_WORKER_MULTIPROC_METHOD", "fork")
+
+    class FakeLLM:
+        def __init__(self, **kwargs):
+            pass
+
+    fake_vllm = ModuleType("vllm")
+    fake_vllm.LLM = FakeLLM
+    monkeypatch.setitem(sys.modules, "vllm", fake_vllm)
+
+    run_eval.build_vllm_engine("/models/dense", gpu_memory_utilization=0.55, max_model_len=16_384)
+
+    assert os.environ["VLLM_WORKER_MULTIPROC_METHOD"] == "fork"
 
 
 def test_vllm_startup_failure_publishes_failed_marker(tmp_path, monkeypatch):
