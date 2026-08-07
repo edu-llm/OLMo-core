@@ -1,5 +1,7 @@
 """
-Train a 1B-7B OLMoE model (mixture of experts).
+Train a 7B OLMoE-style model with 96 routed experts, top-4 routing, and two
+shared-expert equivalents.
+
 Run this script without any arguments to see usage info.
 """
 
@@ -21,9 +23,36 @@ from olmo_core.train.train_module import (
 SEQUENCE_LENGTH = 4096
 GLOBAL_BATCH_SIZE = 1024 * SEQUENCE_LENGTH
 
+MODEL_DIM = 2048
+NUM_LAYERS = 16
+NUM_HEADS = 16
+NUM_ROUTED_EXPERTS = 96
+TOP_K = 4
+ROUTED_EXPERT_HIDDEN_SIZE = 672
+NUM_SHARED_EXPERT_EQUIVALENTS = 2
+# OLMo-core exposes one always-on shared MLP. Giving it twice the routed-expert
+# width preserves the parameter capacity of two same-width shared experts.
+SHARED_EXPERT_HIDDEN_SIZE = NUM_SHARED_EXPERT_EQUIVALENTS * ROUTED_EXPERT_HIDDEN_SIZE
+
 
 def build_model_config(common: CommonComponents) -> TransformerConfig:
-    return TransformerConfig.olmoe_1B_7B(vocab_size=common.tokenizer.padded_vocab_size())
+    return TransformerConfig.llama_like_moe(
+        vocab_size=common.tokenizer.padded_vocab_size(),
+        d_model=MODEL_DIM,
+        n_layers=NUM_LAYERS,
+        n_heads=NUM_HEADS,
+        num_experts=NUM_ROUTED_EXPERTS,
+        top_k=TOP_K,
+        expert_hidden_size=ROUTED_EXPERT_HIDDEN_SIZE,
+        shared_expert_hidden_size=SHARED_EXPERT_HIDDEN_SIZE,
+        dropless=True,
+        lb_loss_weight=0.01,
+        z_loss_weight=0.001,
+        reordered_norm=True,
+        qk_norm=True,
+        rope_theta=500_000,
+        layer_norm_eps=1e-6,
+    )
 
 
 def build_train_module_config(common: CommonComponents) -> TransformerTrainModuleConfig:
