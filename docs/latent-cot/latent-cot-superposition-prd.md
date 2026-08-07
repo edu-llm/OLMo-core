@@ -38,7 +38,7 @@ Everything below fixes the model, data, arms, budgets, metrics, and every confou
 
 ## Status & as-built notes (updated 2026-08-05)
 
-**Build status.** Phases 1–8 are implemented, unit-tested (**140 tests**, CPU), style-clean, and pushed to branch **`latent-cot-superposition-amy`** (never `main`). The only remaining step is the **370M training on GPU** (this environment is CPU-only); the driver, eval, benchmark, and runbook are ready. Source of truth for what's built: the per-phase `✅ DONE` notes in §8, plus `progress.md` (changelog), `handoff.md` (agent brief), and `phase8-runbook.md` (the GPU procedure).
+**Build status.** Phases 1–8 are implemented, unit-tested (**146 tests**, CPU), style-clean, and pushed to branch **`latent-cot-superposition-amy`** (never `main`). The only remaining step is the **370M training on GPU** (this environment is CPU-only); the driver, eval, benchmark, and runbook are ready. Source of truth for what's built: the per-phase `✅ DONE` notes in §8, plus `progress.md` (changelog), `handoff.md` (agent brief), and `phase8-runbook.md` (the GPU procedure).
 
 **As-built deltas from the original design** (the design text below is preserved; these are the ways the implementation refines it):
 

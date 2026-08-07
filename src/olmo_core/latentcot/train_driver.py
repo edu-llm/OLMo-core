@@ -24,8 +24,10 @@ __all__ = [
     "autocast_ctx",
     "build_model",
     "configure_precision",
+    "is_remote",
     "iter_batches",
     "load_checkpoint",
+    "publish_artifact",
     "resolve_device",
     "train_arm",
 ]
@@ -52,6 +54,41 @@ def resolve_device(device: str = "auto") -> str:
     if device == "auto":
         return "cuda" if torch.cuda.is_available() else "cpu"
     return device
+
+
+def is_remote(path) -> bool:
+    """
+    Whether ``path`` is a remote URI (``s3://``, ``gs://``, …) rather than a local path.
+
+    Worth being explicit about why this exists: :class:`pathlib.Path` silently *mangles* a URI —
+    ``Path("s3://bucket/k")`` is ``PosixPath("s3:/bucket/k")``, a **relative local** path — so
+    handing a checkpoint URI to code that assumes `Path` writes a directory literally named
+    ``s3:`` next to the process and loses it when the container exits. No exception is raised.
+    The eduLLM platform's ``$EDULLM_CHECKPOINT_DIR`` is exactly such a URI.
+
+    :param path: A path or URI.
+    :returns: ``True`` if it is a URL/URI.
+    """
+    from olmo_core.io import is_url
+
+    return is_url(str(path))
+
+
+def publish_artifact(local_path: Path, remote_dir: Optional[str]) -> None:
+    """
+    Mirror a just-written local artifact to ``remote_dir`` (a URI), if one is configured.
+
+    A no-op when ``remote_dir`` is ``None`` (the ordinary local-disk case). Uploads overwrite:
+    a rolling checkpoint reuses its name, and a re-run of the same step should replace, not fail.
+
+    :param local_path: The file that was just written locally.
+    :param remote_dir: Destination URI prefix, or ``None`` to skip.
+    """
+    if remote_dir is None:
+        return
+    from olmo_core.io import upload
+
+    upload(local_path, f"{str(remote_dir).rstrip('/')}/{local_path.name}", save_overwrite=True)
 
 
 def _check_precision(precision: str) -> str:
@@ -174,6 +211,7 @@ def train_arm(
     keep_last: int = 2,
     val_examples: Optional[List[dict]] = None,
     precision: str = "bf16",
+    remote_dir: Optional[str] = None,
 ) -> List[dict]:
     """
     Train ``model`` on one arm; return a list of logged metric snapshots.
@@ -203,6 +241,11 @@ def train_arm(
         TF32; ``fp32`` is bit-identical to the pre-flag driver. Applied to the training forward
         *and* to in-loop validation scoring so best-selection matches training. GPU-only — see
         :func:`autocast_ctx`.
+    :param remote_dir: Optional URI (e.g. the platform's ``$EDULLM_CHECKPOINT_DIR``) to mirror
+        every checkpoint to as it is written. ``save_dir`` stays the **local** staging directory;
+        a URI cannot be used as one, because :class:`pathlib.Path` mangles it into a relative
+        local path without erroring — see :func:`is_remote`. Local rolling pruning still applies;
+        remote copies are not pruned, since with no ``--resume`` they exist for manual recovery.
     """
     from olmo_core.optim import WSD
 
@@ -210,6 +253,13 @@ def train_arm(
 
     device = str(getattr(model, "device", "cpu"))
     configure_precision(precision, device)
+    if save_dir is not None and is_remote(save_dir):
+        raise ValueError(
+            f"save_dir must be a LOCAL staging directory, got the URI {save_dir!r}. "
+            "pathlib.Path silently rewrites 's3://b/k' to the relative local path 's3:/b/k', so "
+            "this would write checkpoints next to the process and lose them. Pass a local "
+            "save_dir and the URI as remote_dir instead."
+        )
     save_dir = Path(save_dir) if save_dir is not None else None
     checkpointing = save_dir is not None and save_every > 0
     if checkpointing:
@@ -222,6 +272,7 @@ def train_arm(
         assert save_dir is not None
         path = save_dir / f"step{step_num}.pt"
         torch.save(model.state_dict(), path)
+        publish_artifact(path, remote_dir)
         rolling.append(path)
         while len(rolling) > keep_last:  # rolling window: drop the oldest
             rolling.pop(0).unlink(missing_ok=True)
@@ -243,6 +294,8 @@ def train_arm(
             (save_dir / "best.json").write_text(
                 json.dumps({"step": step_num, "val_acc": acc}, indent=2)
             )
+            publish_artifact(save_dir / "best.pt", remote_dir)
+            publish_artifact(save_dir / "best.json", remote_dir)
 
     model.train()
     opt = torch.optim.AdamW(model.parameters(), lr=lr)

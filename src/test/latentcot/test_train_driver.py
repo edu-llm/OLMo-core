@@ -12,7 +12,9 @@ from olmo_core.latentcot.data.graph_gen import generate
 from olmo_core.latentcot.train_driver import (
     autocast_ctx,
     configure_precision,
+    is_remote,
     iter_batches,
+    publish_artifact,
     train_arm,
 )
 from olmo_core.nn.transformer import TransformerConfig
@@ -70,6 +72,49 @@ def test_train_arm_reduces_loss(dataset):
     )
     assert len(history) >= 2
     assert history[-1]["loss"] < history[0]["loss"]  # the arm is learning
+
+
+@pytest.mark.parametrize(
+    "path, expected",
+    [
+        ("s3://bucket/teams/scratch/runs/r1/checkpoints", True),
+        ("gs://bucket/k", True),
+        ("runs/latentcot", False),
+        ("/tmp/runs", False),
+    ],
+)
+def test_is_remote(path, expected):
+    assert is_remote(path) is expected
+
+
+def test_train_arm_refuses_a_uri_as_save_dir(dataset):
+    """
+    Regression guard for a silent-data-loss bug.
+
+    Path('s3://b/k') is PosixPath('s3:/b/k') — a *relative local* path — so a URI passed as
+    save_dir would write checkpoints into a directory named 's3:' beside the process and lose
+    them when the container exits, with no error. The platform's $EDULLM_CHECKPOINT_DIR is
+    exactly such a URI, so this must fail loudly rather than appear to succeed.
+    """
+    model = _tiny_model()
+    with pytest.raises(ValueError, match="LOCAL staging directory"):
+        train_arm(
+            model,
+            ARMS["A2"],
+            dataset,
+            steps=2,
+            batch_size=2,
+            warmup_steps=1,
+            save_dir="s3://bucket/teams/scratch/runs/r1/checkpoints",
+            save_every=1,
+        )
+
+
+def test_publish_artifact_is_a_noop_without_a_remote(tmp_path):
+    f = tmp_path / "model.pt"
+    f.write_text("x")
+    publish_artifact(f, None)  # must not raise, must not need boto3
+    assert f.read_text() == "x"
 
 
 @pytest.mark.parametrize("precision", ["fp32", "bf16"])

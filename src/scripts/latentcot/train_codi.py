@@ -24,6 +24,7 @@ import argparse
 import json
 from dataclasses import replace
 from pathlib import Path
+from typing import Optional
 
 import torch
 
@@ -34,7 +35,9 @@ from olmo_core.latentcot.train_driver import (
     PRECISIONS,
     autocast_ctx,
     build_model,
+    is_remote,
     load_checkpoint,
+    publish_artifact,
     resolve_device,
     train_arm,
 )
@@ -116,7 +119,18 @@ def main() -> None:
         help="override R1's anti-collapse entropy floor (nats); default off (arm's 0.0). "
         "Set e.g. 1.0 to re-run A3 with the floor on if thoughts are seen to collapse.",
     )
-    parser.add_argument("--out", type=Path, default=Path("runs/latentcot"))
+    parser.add_argument(
+        "--out",
+        default="runs/latentcot",
+        help="output root: a local directory OR a remote URI (e.g. the platform's "
+        "$EDULLM_CHECKPOINT_DIR, an s3:// prefix). With a URI, artifacts are staged in "
+        "--staging-dir and mirrored to the URI as each one is written.",
+    )
+    parser.add_argument(
+        "--staging-dir",
+        default="runs/latentcot-staging",
+        help="local scratch used only when --out is a remote URI",
+    )
     args = parser.parse_args()
 
     device = resolve_device(args.device)
@@ -148,7 +162,17 @@ def main() -> None:
         train_source = Subset(train_ds, train_idx)
         val_examples = [train_ds[i] for i in val_idx][: args.best_eval_size]
 
-    run_dir = args.out / f"{args.arm}-seed{args.seed}"
+    # --out may be a remote URI (the platform passes $EDULLM_CHECKPOINT_DIR, an s3:// prefix).
+    # Path() would silently rewrite that to a relative local dir named "s3:" and the artifacts
+    # would vanish with the container, so stage locally and mirror every write to the URI.
+    leaf = f"{args.arm}-seed{args.seed}"
+    remote_dir: Optional[str] = None
+    if is_remote(args.out):
+        remote_dir = f"{str(args.out).rstrip('/')}/{leaf}"
+        run_dir = Path(args.staging_dir) / leaf
+        print(f"[out] remote: {remote_dir}\n[out] local staging: {run_dir}")
+    else:
+        run_dir = Path(args.out) / leaf
     run_dir.mkdir(parents=True, exist_ok=True)
 
     history = train_arm(
@@ -165,6 +189,7 @@ def main() -> None:
         keep_last=args.keep_last,
         val_examples=val_examples,
         precision=args.precision,
+        remote_dir=remote_dir,
     )
     best = None
     best_path = run_dir / "best.json"
@@ -203,6 +228,10 @@ def main() -> None:
     # run_dir was created above; write the final (last-step) weights as the canonical artifact.
     torch.save(model.state_dict(), run_dir / "model.pt")
     (run_dir / "metrics.json").write_text(json.dumps(metrics, indent=2, default=float))
+    # Mirror the two artifacts the analysis actually needs. Last, so a mirrored metrics.json
+    # means the run finished.
+    publish_artifact(run_dir / "model.pt", remote_dir)
+    publish_artifact(run_dir / "metrics.json", remote_dir)
 
     print(f"[{arm.name} seed={args.seed}] overall_acc={metrics['overall_acc']:.3f}")
     print(f"  solve_rate_by_depth: {metrics['solve_rate_by_depth']}")

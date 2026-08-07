@@ -100,6 +100,22 @@ Notes on the mapping: the flag is **`--out`**, not `--save-dir`; `A$i` for `i` i
 arms A0–A4; `--rung olmo3_370M` is passed explicitly because the script still defaults to
 `olmo2_370M`. Waiting on each PID (rather than bare `wait`) is what makes a failed arm fail the job.
 
+**`$EDULLM_CHECKPOINT_DIR` is an `s3://` URI, not a directory.** (`checkpoints.py`: *"a checkpoint
+prefix must be an s3:// URI"*; the value is `output_prefix(team, run_id) + "checkpoints/"`.) This
+matters more than it looks: `Path("s3://b/k")` is `PosixPath("s3:/b/k")` — a **relative local**
+path — so passing the URI to code that assumes `Path` writes into a directory named `s3:` beside
+the process, raises nothing, and loses everything when the container exits. `train_codi.py` now
+detects a URI in `--out`, stages artifacts in `--staging-dir` (local, default
+`runs/latentcot-staging`), and mirrors each one — rolling `stepN.pt`, `best.pt`, `best.json`,
+`model.pt`, `metrics.json` — to the URI as it is written. `train_arm` raises if a URI reaches
+`save_dir` directly. Remote copies are not pruned (local ones still are): with no `--resume` they
+exist for manual recovery, which is exactly what you want if the 24 h cap truncates a run.
+
+The `EDULLM_LAUNCH_CHECK=waived` token is real (`launchers.LAUNCH_CHECK_WAIVER`) and waives
+`require_a_process_for_every_device`, which would otherwise refuse 5 processes on an 8-device
+machine. It is not silent: `waived_launch_check_note` surfaces a sentence to the approving lead
+saying the run bills for 8 devices and starts 5.
+
 ```bash
 edullm check --json --compute gpu-8xa100 --workload olmo-core-train \
   --experiment latent-cot-pilot --dataset none --attempts 1

@@ -2,7 +2,7 @@
 
 Context brief for an AI agent taking over this work. Read this + `latent-cot-superposition-prd.md`
 (the full spec) + `progress.md` (per-phase changelog) + `phase8-runbook.md` (the GPU procedure).
-Everything below is implemented, unit-tested (**140 tests, CPU**), style-clean, and pushed to the
+Everything below is implemented, unit-tested (**146 tests, CPU**), style-clean, and pushed to the
 branch. The only thing not done is the **370M GPU run**.
 
 ---
@@ -100,13 +100,13 @@ Package `src/olmo_core/latentcot/`:
 - `evaluate.py` — `predict_reachable`, `greedy_generate`, `solve_rate_by_depth`, `gate_a_curve`+`linear_slope`, `overall_accuracy`, `mean_decodability`, `inference_token_cost`, `run_eval`.
 - `probes.py` — `logit_lens`, `decodability`, `superposition_mass`, `linear_probe_accuracy` (+ shuffled control), `causal_ablation_margin_change`.
 - `preflight.py` — `checkpoint_fingerprint`, `assert_same_base_checkpoint`, `assert_disjoint_seeds`, `per_arm_compute`, `preflight`.
-- `train_driver.py` — `resolve_device`, `build_model`, `load_checkpoint`, `iter_batches`, `train_arm`, `configure_precision`, `autocast_ctx`, `PRECISIONS`.
+- `train_driver.py` — `resolve_device`, `build_model`, `load_checkpoint`, `iter_batches`, `train_arm`, `configure_precision`, `autocast_ctx`, `PRECISIONS`, `is_remote`, `publish_artifact`.
 
 Scripts `src/scripts/latentcot/`: `gen_graph_data.py`, `train_codi.py`, `eval.py`, `compare_models.py`,
 `verify_checkpoint.py`, `preflight.py`, `publish_dataset.py` (+ `README.md`).
 Tests `src/test/latentcot/`: `test_graph_gen`, `test_encode`, `test_cot`, `test_codi`, `test_arms`,
 `test_evaluate`, `test_probes`, `test_preflight`, `test_train_driver`, `test_publish_shape` —
-**140 tests, all pass** (`.venv/bin/python -m pytest -q src/test/latentcot/`, ~75 s).
+**146 tests, all pass** (`.venv/bin/python -m pytest -q src/test/latentcot/`, ~75 s).
 
 **One core-file edit** (the only change outside `latentcot`): `src/olmo_core/nn/transformer/model.py`
 added an additive `return_hidden_states: bool = False` kwarg to `Transformer.forward` (+6 lines;
