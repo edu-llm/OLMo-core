@@ -80,3 +80,23 @@ def test_bootstrap_installs_the_pinned_tokenizer_reader():
     # isolated environment must install it or every arm fails during export.
     assert "edullm-data" in script
     assert "38bf831a6c3f445e394784018441fd59288b876c" in script
+
+
+def test_prepare_base_model_script_pins_control_and_vendored_tokenizer():
+    script = (EVALS_DIR / "prepare_base_model.sh").read_text(encoding="utf-8")
+
+    assert script.startswith("#!/usr/bin/env bash")
+    assert "set -euo pipefail" in script
+    # The untrained control must be the exact snapshot the arms initialized from.
+    assert "Qwen/Qwen2.5-0.5B" in script
+    assert "060db6499f32faf8b98477b0a26969ef7d8b9987" in script
+    # Pull only weights + config from the Hub; the stock tokenizer is excluded.
+    assert "config.json" in script
+    assert "model.safetensors" in script
+    assert "allow_patterns" in script
+    # Overlay the vendored tokenizer via the same artifact the exporter uses so
+    # tokenizer_sha256 matches dense/split.
+    assert "fetch_tokenizer_artifact" in script
+    assert "TOKENIZER_ARTIFACT" in script
+    # The control arm carries no export provenance.
+    assert "model_provenance.json" in script

@@ -19,6 +19,35 @@ All evaluator commands live in this directory:
   required by the vLLM wheel on the L4 DLAMI.
 - `preflight_vllm.py` — import the native vLLM extension and reject incompatible
   Python, package, CUDA, or GPU versions before a fleet launch.
+- `prepare_base_model.sh` — materialize the untrained `base` control model dir
+  (pinned `Qwen/Qwen2.5-0.5B` weights + the vendored qwen2.5 tokenizer).
+
+## Base control arm
+
+The `base` arm scores the untrained `Qwen/Qwen2.5-0.5B` checkpoint the two arms
+were initialized from, to test whether the base model's own pretrained knowledge
+already explains a trained arm's `facts_present` behavior. It reuses the same
+corpus, deterministic cohorts, conditions, and seed, so its rows line up with
+dense/split; only the served weights differ. It carries no training provenance
+and is compared standalone (never through `compare_arms.py`, which is dense vs
+split only).
+
+```bash
+# after bootstrap_vllm_env.sh; $PYTHON is /mnt/work/venv/bin/python
+P3_PYTHON="$PYTHON" bash src/scripts/train/p3_math_split/evals/prepare_base_model.sh \
+  "$EVAL_WORK/hf/base"
+
+"$PYTHON" src/scripts/train/p3_math_split/evals/run_eval.py \
+  --model "$EVAL_WORK/hf/base" --arm base \
+  --base-model-id Qwen/Qwen2.5-0.5B \
+  --base-model-revision 060db6499f32faf8b98477b0a26969ef7d8b9987 \
+  --corpus "$P3_ROOT/corpus-v3" --mm-dir "$MM_DIR" \
+  --conditions facts_present facts_absent facts_corrupted \
+  --generation-backend vllm --vllm-gpu-memory-utilization 0.55 \
+  --vllm-max-model-len 16384 \
+  --context-length 16384 --max-new-tokens 8192 --nll-chunk-size 256 \
+  --seed 20260801 --out "$EVAL_WORK/results/base.json"
+```
 
 The corpus assembler is **not** here. It is local-only in the
 `memorysplit-requery-exact` checkout because it reads absolute `.p3-work` sealed
