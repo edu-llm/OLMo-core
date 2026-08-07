@@ -101,6 +101,11 @@ The five arms are **independent processes** — if you have 5 GPUs, run them con
 per GPU, `CUDA_VISIBLE_DEVICES=$i`) and wall-clock becomes the slowest single arm rather than the
 sum. There is no multi-GPU parallelism *within* an arm (the direct loop has no DDP/FSDP), so more
 GPUs than arms buys nothing here. See §0b for sizing.
+
+**On partial capacity, order the arms `A2` then `A0`.** Gate A is the A2−A0 depth curve, so those
+two alone produce the headline signal (~9 h combined at 5% MFU on one A100); A3/A4 (Gate B) and A1
+(the floor) can follow on the same GPU or on capacity that frees up later. One ≥40 GB bf16 GPU is
+enough to start — don't wait for five.
 `metrics.json` already carries `overall_acc` + `solve_rate_by_depth` per run.
 
 **Precision.** `--precision bf16` is the default: bf16 autocast on the training forward, the
