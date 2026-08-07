@@ -132,6 +132,14 @@ def _peak_mem_gib() -> Optional[float]:
     return round(torch.cuda.max_memory_allocated() / (1024**3), 3)
 
 
+def _allocated_mem_gib() -> Optional[float]:
+    import torch
+
+    if not torch.cuda.is_available():
+        return None
+    return round(torch.cuda.memory_allocated() / (1024**3), 3)
+
+
 def run_microbench(
     *,
     steps: int = 3,
@@ -140,21 +148,25 @@ def run_microbench(
     attn_backend: str = C.DEFAULT_ATTN_BACKEND,
     compile_model: bool = False,
     with_optim: bool = False,
+    activation_checkpointing: bool = True,
     device: Optional[str] = None,
 ) -> Dict[str, object]:
     """
     OLMo2-370M forward+backward at the real per-rank microbatch shape.
 
     Goal: approximate **activation** memory of one ``gpu-8xa100`` rank (24×4096,
-    FA2, bf16). This is intentionally *not* a full replica of HSDP training:
+    FA2, bf16, fused CE, full activation checkpointing). This is intentionally
+    *not* a full replica of HSDP training:
 
     - Platform HSDP shards params + Adam state across 8 GPUs; this process holds
       the whole model, so enabling ``with_optim`` overestimates rank memory.
     - ``torch.compile`` can spike reserved memory on the first step; leave it off
       until a non-compile step succeeds.
+    - Without activation checkpointing, storing every layer's activations at
+      24×4096 fills a 40 GiB A100 even with fused CE (same ~38 GiB OOM fingerprint
+      as the old logits path). Platform train scripts enable full AC for that reason.
 
-    On a clean 40 GiB A100, a FA2+bf16 fwd/bwd at 24×4096 should fit; leftover
-    fragmentation from earlier OOMs often will not — restart the Colab session first.
+    Restart the Colab runtime after earlier OOMs so fragmentation does not linger.
     """
     import torch
 
@@ -163,9 +175,10 @@ def run_microbench(
     from olmo_core.data import TokenizerConfig
     from olmo_core.nn.lm_head import LMLossImplementation, LMOutputWithLoss
     from olmo_core.nn.transformer import TransformerConfig
+    from olmo_core.nn.transformer.config import TransformerActivationCheckpointingMode
 
     # Bump when diagnosing "did Colab actually pull the fix?"
-    banner = "FRONTLOAD_CL_MICROBENCH_V3_FUSED_LINEAR"
+    banner = "FRONTLOAD_CL_MICROBENCH_V4_FUSED_CE_AC"
     print(banner, flush=True)
     log.info(banner)
 
@@ -197,11 +210,13 @@ def run_microbench(
             f"Missing banner '{banner}' in the log means this file was not pulled."
         ) from exc
     log.info(
-        "microbench: device=%s attn=%s dtype=%s loss=%s compile=%s optim=%s shape=(%d,%d) vocab=%d",
+        "microbench: device=%s attn=%s dtype=%s loss=%s ac=%s compile=%s optim=%s "
+        "shape=(%d,%d) vocab=%d",
         device,
         backend,
         param_dtype,
         config.lm_head.loss_implementation,
+        activation_checkpointing,
         compile_model,
         with_optim,
         sequences,
@@ -213,6 +228,10 @@ def run_microbench(
         "default CE would allocate %.2f GiB of fp32 logits at this shape; fused_linear must avoid that",
         default_ce_logits_gib,
     )
+    if not activation_checkpointing:
+        log.warning(
+            "activation checkpointing is OFF; 24×4096 activations alone typically fill a 40GiB A100"
+        )
 
     if device.startswith("cuda"):
         torch.cuda.empty_cache()
@@ -225,7 +244,15 @@ def run_microbench(
         raise RuntimeError(
             f"lm_head.loss_implementation is {model.lm_head.loss_implementation!r}, expected fused_linear"
         )
+    if activation_checkpointing:
+        model.apply_activation_checkpointing(TransformerActivationCheckpointingMode.full)
+        log.info("applied full activation checkpointing")
     model.train()
+    log.info(
+        "after build (+AC): allocated_gib=%s peak_gib=%s",
+        _allocated_mem_gib(),
+        _peak_mem_gib(),
+    )
     if compile_model and device.startswith("cuda"):
         # Same intent as the platform trainer (Inductor). First step is slow / spiky.
         model = torch.compile(model)
@@ -266,16 +293,17 @@ def run_microbench(
         last_loss = float(loss.detach())
         peak = _peak_mem_gib()
         log.info(
-            "step %d/%d loss=%.4f peak_mem_gib=%s",
+            "step %d/%d loss=%.4f allocated_gib=%s peak_mem_gib=%s",
             step + 1,
             steps,
             last_loss,
+            _allocated_mem_gib(),
             peak,
         )
         if peak is not None and peak > 35.0:
             raise RuntimeError(
-                f"peak_mem_gib={peak} still looks like the default-CE ~39GiB logits path. "
-                f"Confirm the log contains '{banner}' and 'loss=fused_linear'."
+                f"peak_mem_gib={peak} still looks like no-AC / default-CE ~39GiB path. "
+                f"Confirm the log contains '{banner}', 'loss=fused_linear', and 'ac=True'."
             )
 
     result = {
@@ -288,6 +316,7 @@ def run_microbench(
         "attn_backend": str(backend),
         "param_dtype": str(param_dtype),
         "loss_implementation": str(model.lm_head.loss_implementation),
+        "activation_checkpointing": activation_checkpointing,
         "compile": compile_model,
         "with_optim": with_optim,
         "device": device,
@@ -297,8 +326,8 @@ def run_microbench(
         "default_ce_logits_gib": round(default_ce_logits_gib, 3),
         "gpu": gpu_report(),
         "note": (
-            "fwd/bwd activation proxy for one HSDP rank; full Adam/compile are optional "
-            "and stricter than the sharded platform path"
+            "fwd/bwd activation proxy for one HSDP rank with full AC + fused CE; "
+            "full Adam/compile are optional and stricter than the sharded platform path"
         ),
     }
     print(json.dumps(result, indent=2), flush=True)
@@ -342,6 +371,7 @@ def run_synthetic_train(
     )
     from olmo_core.train.callbacks import GPUMemoryMonitorCallback
     from olmo_core.train.train_module import (
+        TransformerActivationCheckpointingConfig,
         TransformerDataParallelConfig,
         TransformerTrainModuleConfig,
     )
@@ -426,6 +456,7 @@ def run_synthetic_train(
                 param_dtype=DType.bfloat16,
                 reduce_dtype=DType.float32,
             ),
+            ac_config=TransformerActivationCheckpointingConfig(),
             max_grad_norm=C.GRAD_CLIP,
             scheduler=CosWithWarmup(warmup=min(2, max(steps - 1, 0))),
         )
@@ -487,6 +518,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run AdamW on the full model (stricter than HSDP; off by default).",
     )
+    m.add_argument(
+        "--no-ac",
+        action="store_true",
+        help="Disable activation checkpointing (will OOM at 24×4096 on 40GiB).",
+    )
     m.add_argument("--device", default=None, help="cuda | cpu (default: cuda if available)")
 
     w = sub.add_parser("write-data", help="Write synthetic tokens/<source> shards.")
@@ -532,6 +568,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             attn_backend=opts.attn_backend,
             compile_model=opts.compile,
             with_optim=opts.with_optim,
+            activation_checkpointing=not opts.no_ac,
             device=opts.device,
         )
         return 0

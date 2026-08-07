@@ -130,6 +130,7 @@ from olmo_core.train.callbacks import (  # noqa: E402
 )
 from olmo_core.train.checkpoint import Checkpointer  # noqa: E402
 from olmo_core.train.train_module import (  # noqa: E402
+    TransformerActivationCheckpointingConfig,
     TransformerDataParallelConfig,
     TransformerTrainModuleConfig,
     validate_precision_support,
@@ -345,6 +346,8 @@ def build_config(opts, overrides: List[str]) -> ExperimentConfig:
             param_dtype=DType(opts.param_dtype),
             reduce_dtype=DType.float32,
         ),
+        # Without AC, 24×4096 activations fill a 40GiB A100 even with fused CE.
+        ac_config=TransformerActivationCheckpointingConfig(),
         max_grad_norm=C.GRAD_CLIP,
         scheduler=CosWithWarmup(warmup=opts.warmup_steps),
     )

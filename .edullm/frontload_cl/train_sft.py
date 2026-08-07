@@ -96,6 +96,7 @@ from olmo_core.train.callbacks import (  # noqa: E402
 )
 from olmo_core.train.checkpoint import Checkpointer  # noqa: E402
 from olmo_core.train.train_module import (  # noqa: E402
+    TransformerActivationCheckpointingConfig,
     TransformerDataParallelConfig,
     TransformerTrainModuleConfig,
     validate_precision_support,
@@ -344,6 +345,7 @@ def build_config(opts, overrides: List[str], *, token_paths: List[str], mask_pat
             param_dtype=DType(opts.param_dtype),
             reduce_dtype=DType.float32,
         ),
+        ac_config=TransformerActivationCheckpointingConfig(),
         max_grad_norm=C.GRAD_CLIP,
         scheduler=LinearWithWarmup(
             warmup_fraction=C.SFT_WARMUP_FRACTION,
