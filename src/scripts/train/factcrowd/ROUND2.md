@@ -84,9 +84,68 @@ nine and give the survivors new checkpoint prefixes.
 
 ## 2. Score everything
 
-Six prefixes now. `--prefix` walks a fan-out parent, so this covers all 27 finished cells.
+### Why not a bigger GPU
 
-Ceiling **$12.07** = 1.006 × 1 × 12 × 1 × 1. Expect ~4 h for ~270 checkpoints; 12 h is insurance.
+`gpu-1xa100` and `gpu-4xa100` do not exist — the profile list is `cpu-32vcpu`, `gpu-1x{a10g,l4,l40s,t4}`,
+`gpu-4x{a10g,l4,l40s,t4}`, `gpu-8x{a100,a10g,l4,l40s,t4}`. The only A100 shape is `gpu-8xa100`, and it is
+the wrong tool three times over: `require_a_process_for_every_device` refuses a single-process command on
+an 8-GPU profile; the rate is $21.96/h against $1.006/h; and it places `after_a_wait` with a **61-minute
+median** queue (worst 12.6 h) where `gpu-1xa10g` places *reliably*.
+
+Scoring is not GPU-bound anyway. Corpus building is numpy over up to 2.47M entities, checkpoint loads are
+network, and the forwards are a 13–64M model on 24-token sequences.
+
+### What actually makes it faster
+
+Two structural levers, and one that measured smaller than expected:
+
+| lever | factor | basis |
+|---|---|---|
+| `--last-only` | ~10× | one checkpoint per cell instead of ten |
+| fan-out over prefixes | ~6× wall clock | six independent 1×A10G jobs, same GPU-hours |
+| `--batch-size 512` | **1.17×** | measured, 989 s → 846 s on a real 13M checkpoint |
+
+The batch size was expected to dominate and does not. On CPU it bought 17%, and there is no GPU in the
+development environment to test whether launch overhead makes it matter more there — so it is set to 512
+because it costs nothing and is proven not to change any number (bit-identical CSVs across all fourteen
+rows at 32 and at 512, with a fast test pinning the invariant), **not** because it is load-bearing.
+
+The two structural levers are hardware-independent and together turn ~4 h into minutes.
+
+### The command
+
+Six prefixes, one per fan-out index. `--prefix` still walks a fan-out parent, so each index covers a whole
+submission.
+
+Ceiling **$24.14** = 1.006 × 1 × 4 × 1 × 6.
+
+```bash
+gh workflow run submit-run.yml -R edu-llm/platform \
+  -f repository=OLMo-core \
+  -f commit_sha=edullm/fact-crowding \
+  -f workload_profile=olmo-core-check \
+  -f compute_profile=gpu-1xa10g \
+  -f dataset_release=none \
+  -f team=memory-split \
+  -f experiment=fact-crowding \
+  -f wandb_project=fact-crowding \
+  -f maximum_runtime_hours=4 \
+  -f maximum_attempts=1 \
+  -f fanout_size=6 \
+  -f fanout_index_parameter=cell \
+  -f command='bash -lc '"'"'B=s3://sbsandbox-intern-edullm-outputs/teams/memory-split/runs; P=(run_019fcfc6-c6cd-70be-aec5-e3e10d9fc2c4/ run_019fcfc8-14dd-706c-a2fa-ab2492af0bbb/ run_019fcfc8-acca-70c6-9345-f3674a37f8b0/checkpoints/ run_019fd3c2-ebb6-7038-85b6-eb508275feb4/checkpoints/ run_019fd3c2-9cb5-70d1-8aa4-7412df51bc6c/checkpoints/ run_019fd3c1-1d5f-7071-9171-a0c93f7dd0cc/); N=(count-13m count-28m-short count-28m-d2p4 count-28m-d4p8 count-13m-d0p6 entropy-28m); I=${AWS_BATCH_JOB_ARRAY_INDEX:-0}; python src/scripts/train/factcrowd/score_run.py --prefix $B/${P[$I]} --out ${EDULLM_OUTPUT_PREFIX}${N[$I]}.csv --work-dir /tmp/s --device cuda --batch-size 512 --last-only'"'"''
+```
+
+Drop `--last-only` for the full ten-checkpoint trajectory — the bit curve over training needs it, a first
+endpoint read does not. Each cell writes under its own `cell-N/` output prefix, so collect six CSVs rather
+than one.
+
+Ceiling for the full-trajectory version, at 12 h: $72.43. Still routine.
+
+### The old single-job form
+
+Ceiling **$12.07** = 1.006 × 1 × 12 × 1 × 1. Expect ~4 h for ~270 checkpoints; 12 h is insurance. Keep this
+if you would rather have one CSV than six.
 
 ```bash
 gh workflow run submit-run.yml -R edu-llm/platform \
