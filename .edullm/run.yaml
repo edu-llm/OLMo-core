@@ -7,18 +7,37 @@
 # THE DEFAULT HERE IS THE SMOKE RUN, DELIBERATELY. The full 10B-token run does not fit one
 # submission (see README.md: the loop is 2.8x the baseline FLOPs at T=4), and the first thing
 # anybody needs from this branch is a measured tokens-per-second to size the real run from.
-# `--steps 200` on one card answers that in minutes. Override the profile and the machine per
-# submission with `--workload olmo-core-train --compute gpu-8xa100` rather than editing this.
+# `--steps 200` is 157M tokens, which at 8.469 GFLOP/token is about 1.33e18 FLOPs.
 #
 # THE PROCESS COUNT IS PART OF THE COMMAND, SO THIS FILE IS PER-SHAPE. The platform starts
 # exactly one process and refuses `process_per_device` when the count does not equal the
 # number of cards, and `--compute` overrides the machine without touching the command. So
-# moving off one card means editing the line below and pushing a new commit, not passing a
-# different flag. Verified against `edullm check` on 2026-08-07: the bare `python` below
-# clears gpu-1xl40s and is refused on gpu-4xl40s, and `--nproc-per-node=4` is the reverse.
+# moving between shapes means editing the line below and pushing a new commit, not passing a
+# different flag.
 #
 #   1 card   python .edullm/train_recurrent.py ...
 #   N cards  python -m torch.distributed.run --nproc-per-node=N --standalone .edullm/train_recurrent.py ...
+#
+# EIGHT, BECAUSE gpu-8xa100 IS THE LARGEST SHAPE THAT PLACES AT ALL. Everything above its
+# 320 GB is `provisioned: false` with no queue behind it, so `gpu-8xh100` and the Blackwell
+# shapes refuse with `unprovisioned_compute_profile` however the command is written. The
+# global batch of 786,432 tokens divides evenly by 8 ranks into 98,304 each, which is 12
+# accumulation steps at the 8,192-token rank microbatch below, so no figure here has to move
+# with the rank count.
+#
+# `olmo-core-train` RATHER THAN `olmo-core-check`, WHICH IS NOT ABOUT EXPECTED RUNTIME. Eight
+# A100s should finish 200 steps well inside the one-hour check bound, but a 370M model on
+# eight-way FSDP is communication-bound and nobody has measured its MFU here, so the low end
+# of the plausible range lands close to that bound. `olmo-core-check` carries no checkpoint
+# contract, so a run that reaches that bound has written nothing and there is no partial
+# result to read a tokens-per-second off. The train profile bills on real time either way.
+#
+# SUBMIT IT WITH `--hours 6 --attempts 1`, WHICH IS ABOUT THE APPROVAL GATE AND NOT THE RUN.
+# A spec carries three fields and a runtime bound is not one of them, so the profile's full
+# 24 hours and 2 attempts is what gets priced without them: a $1,053.96 ceiling, which
+# classifies `routine` and waits for a team lead. The same submission at 6 hours and one
+# attempt prices at $131.75 and classifies `automatic`, so nobody has to release it. Neither
+# figure is what the run costs, which is real time at $21.9576 an hour.
 #
 # On the rest of the command:
 #   `bash -lc` is required. The container runs the command directly with no shell, so without
@@ -29,10 +48,11 @@
 #   precision guard can see it. A dtype set only in code is invisible to that guard, and the
 #   run would be admitted onto a Turing card and die on the first kernel that needs the format.
 schema_version: 1
-workload_profile: olmo-core-check
-suggested_compute: gpu-1xl40s
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
 command: >-
-  bash -lc 'python .edullm/train_recurrent.py "$EDULLM_RUN_ID"
+  bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/train_recurrent.py "$EDULLM_RUN_ID"
   --save-folder "$EDULLM_CHECKPOINT_DIR"
   --model-factory recurrent_olmo3_370M
   --n-loops 4
