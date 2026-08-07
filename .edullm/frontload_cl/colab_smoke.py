@@ -150,6 +150,7 @@ def run_microbench(
     import torch
 
     from frontload_cl.attn import resolve_attn_backend
+    from olmo_core.config import DType
     from olmo_core.data import TokenizerConfig
     from olmo_core.nn.transformer import TransformerConfig
 
@@ -159,13 +160,18 @@ def run_microbench(
         raise RuntimeError("CUDA requested but torch.cuda.is_available() is False")
 
     backend = resolve_attn_backend(attn_backend)
+    # Match platform HSDP param_dtype: FA2 only accepts fp16/bf16 activations.
+    param_dtype = DType.bfloat16 if device.startswith("cuda") else DType.float32
     tokenizer = TokenizerConfig.dolma2()
     vocab = tokenizer.padded_vocab_size()
-    config = TransformerConfig.olmo2_370M(vocab_size=vocab, attn_backend=backend)
+    config = TransformerConfig.olmo2_370M(
+        vocab_size=vocab, attn_backend=backend, dtype=param_dtype
+    )
     log.info(
-        "microbench: device=%s attn=%s compile=%s shape=(%d,%d) vocab=%d",
+        "microbench: device=%s attn=%s dtype=%s compile=%s shape=(%d,%d) vocab=%d",
         device,
         backend,
+        param_dtype,
         compile_model,
         sequences,
         seq_length,
@@ -213,6 +219,7 @@ def run_microbench(
         "sequences": sequences,
         "seq_length": seq_length,
         "attn_backend": str(backend),
+        "param_dtype": str(param_dtype),
         "compile": compile_model,
         "device": device,
         "last_loss": last_loss,
