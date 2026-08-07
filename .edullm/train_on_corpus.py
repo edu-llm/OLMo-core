@@ -871,7 +871,7 @@ def build_config(opts, overrides: List[str]):
     # ternary arm. X4a's control arm MUST be `False`, because a control built with `None` has a
     # different state dict and the comparison silently stops being paired. That is why the flag
     # spells the three cases out rather than being a boolean.
-    factory_kwargs = {}
+    factory_kwargs: Dict[str, Any] = {}
     if opts.quantize is not None:
         factory_kwargs["quantize"] = opts.quantize
     model_config = factory(vocab_size=corpus.tokenizer.padded_vocab_size(), **factory_kwargs)
@@ -1592,6 +1592,32 @@ def train(config, opts=None) -> None:
                 )
 
 
+_QUANTIZE_STATES: Dict[str, Optional[bool]] = {
+    # `off` and an omitted flag are the same thing: the keyword never reaches the factory.
+    "off": None,
+    # NOT a synonym for `off`. See `--quantize`'s help and `QuantConfig`'s docstring.
+    "control": False,
+    "ternary": True,
+}
+
+
+def _quantize_arg(value: str) -> Optional[bool]:
+    """Resolve a ``--quantize`` spelling to the three states ``maple_scaled`` documents.
+
+    An ``argparse`` ``type=`` converter rather than a lookup in :func:`main`, because the tests
+    and the gate harness call :func:`build_parser` and :func:`build_config` without going
+    through :func:`main`. Converting here is what makes every caller see the same three states.
+    """
+    try:
+        return _QUANTIZE_STATES[value]
+    except KeyError:
+        raise argparse.ArgumentTypeError(
+            f"invalid choice: {value!r} (choose from "
+            + ", ".join(repr(k) for k in _QUANTIZE_STATES)
+            + ")"
+        ) from None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="train_on_corpus",
@@ -1623,10 +1649,25 @@ def build_parser() -> argparse.ArgumentParser:
     #
     # Default `None` = omit the keyword entirely, so every non-Maple factory (`olmo2_*`, which
     # accepts no such keyword) is unaffected by this flag existing.
+    #
+    # RESOLVED BY `type=` AT PARSE TIME, NOT IN `main()`, AND THAT PLACEMENT IS THE POINT. Every
+    # test reaches this module as `build_parser().parse_known_args()` then `build_config(opts,
+    # ...)` directly, never through `main()`. A conversion living in `main()` would therefore
+    # leave `opts.quantize` as the raw string in every test, and the string "control" is
+    # *truthy*: it flows to `QuantConfig(enabled="control")`, whose `enabled` is consumed as
+    # `if self.quant_enabled` -- so THE CONTROL ARM WOULD QUANTIZE while still reporting itself
+    # as the control. That is the silently-unpaired comparison this flag exists to prevent,
+    # reintroduced by the flag itself. `type=` runs inside `parse_known_args`, so every caller
+    # gets the same three states.
+    #
+    # `choices` is checked AFTER `type=`, so it must list the converted values, not the strings
+    # a user types -- hence `[None, False, True]` and the spellings living in the converter.
     parser.add_argument(
         "--quantize",
-        choices=["off", "control", "ternary"],
+        type=_quantize_arg,
+        choices=[None, False, True],
         default=None,
+        metavar="{off,control,ternary}",
         help="Ternary QAT on expert and attention projections, for X4a. Omit for a normal run "
         "(stock nn.Linear). 'control' builds QuantLinear bypassed -- numerically identical to "
         "omitting the flag, but with the ternary arm's module tree, which is what makes the "
@@ -1869,13 +1910,6 @@ def _optional_float(value, *, flag: str):
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     opts, overrides = build_parser().parse_known_args()
-
-    # Resolve the three spellings to the three states `maple_scaled` documents. Done here, once,
-    # rather than at the call site, so `opts.quantize` is the factory's own vocabulary
-    # everywhere downstream and no second reader has to remember that "control" means False.
-    # `off` and an omitted flag both resolve to None, which is the same thing: stock nn.Linear.
-    # `control` -> False is the one that matters; see the flag's own help.
-    opts.quantize = {None: None, "off": None, "control": False, "ternary": True}[opts.quantize]
 
     missing = [
         name
