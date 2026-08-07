@@ -1,0 +1,43 @@
+schema_version: 1
+
+# olmo-core-train, not olmo-core-check: this declares a 30-minute checkpoint contract, which
+# is why the command below must expand "$EDULLM_CHECKPOINT_DIR". A cell is ~10.8 h measured
+# (run_019fd602: 38,780 s for 11,444 steps on this shape), so a lost machine without a
+# resumable checkpoint costs the whole cell.
+workload_profile: olmo-core-train
+
+# A suggestion, not a decision -- --compute overrides it. gpu-1xl40s at $1.861/hr is the
+# cheapest provisioned shape that fits: 267M params peaked at 9.33 GiB of the card's 45 GiB.
+suggested_compute: gpu-1xl40s
+
+# THE 18 CELLS ARE 2 SCHEDULES x 3 PEAK LRs x 3 SEEDS, and the grid string here is the same
+# product src/test/edullm_train_on_corpus_test.py builds as E1_GRID (:1035) from E1_SCHEDULES,
+# E1_LRS and E1_SEEDS. --fanout-expect 18 refuses a grid of any other length, so a hand-edit
+# here that drops or duplicates a cell fails at config-build rather than training a sweep with
+# a hole in it.
+#
+# --global-batch-size 262144 IS NOT OPTIONAL. The program's default is the flagship's 786,432,
+# which is 2.94x Power Lines' B_opt at D=3e9 (b_opt_tokens gives 267,171 tokens; 262,144 is
+# 0.98x). Table 1 of 2505.13738 puts 4x-above-optimum at +0.029 nats -- LARGER than the
+# 0.025-nat schedule effect this experiment exists to measure. Omitting the flag honours the
+# token budget, keeps every guard green, exits 0, and invalidates the result. resolve_steps
+# warns when the ratio leaves [1/1.5, 1.5]; the warning is a receipt, not a gate.
+#
+# The seed sets --init-seed only, never --data-seed: EXPERIMENT-PLAN §5 standing rule 2 wants
+# paired seeds, same data order, different init, so the batch-order variance cancels in the
+# cosine-vs-linear difference instead of being added to it. apply_fanout_cell enforces that.
+command: >-
+  bash -lc 'PYTHONNOUSERSITE=1 python .edullm/train_on_corpus.py
+  --target-tokens 3e9 --global-batch-size 262144
+  --fanout-grid
+  cosine:5e-4:0,cosine:5e-4:1,cosine:5e-4:2,cosine:1e-3:0,cosine:1e-3:1,cosine:1e-3:2,cosine:2e-3:0,cosine:2e-3:1,cosine:2e-3:2,linear:5e-4:0,linear:5e-4:1,linear:5e-4:2,linear:1e-3:0,linear:1e-3:1,linear:1e-3:2,linear:2e-3:0,linear:2e-3:1,linear:2e-3:2
+  --fanout-expect 18
+  --save-folder "$EDULLM_CHECKPOINT_DIR"'
+
+# Batch sets AWS_BATCH_JOB_ARRAY_INDEX per cell and apply_fanout_cell reads it to pick this
+# process's (schedule, lr, seed). Without a fan-out the variable is unset and the program
+# REFUSES at exit 64 rather than training the same cell eighteen times -- which is what
+# run_019fd5f4 did when a one-cell submission carried --fanout-grid.
+fanout:
+  size: 18
+  index_parameter: schedule-lr-seed
