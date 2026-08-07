@@ -1380,7 +1380,30 @@ def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> 
     if get_rank() != 0:
         return
     device = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"
-    peak = torch.cuda.max_memory_allocated() / 1024**3 if torch.cuda.is_available() else 0.0
+
+    # PEAK MEMORY: TRUNCATED AT SOURCE, AND THIS IS THE FIELD PEOPLE SIZE HARDWARE WITH.
+    #
+    # `torch.cuda.max_memory_allocated()` here reports the peak since the last reset -- and
+    # `GPUMemoryMonitorCallback.post_step` calls `reset_peak_memory_stats()` on **every** step.
+    # So the naive read is the LAST STEP'S peak, not the run's, and it under-reports by exactly
+    # however much the true peak exceeded the final step. It looks like a whole-run peak, it is
+    # named like one, and it is the number a reader reaches for to decide whether a shape fits --
+    # so the error is silent and in the unsafe direction.
+    #
+    # The callback accumulates the real running maximum before each reset. Prefer it; fall back to
+    # the truncated read only if the callback is absent, and **say which one this is** in the
+    # emitted JSON rather than leaving two incomparable quantities under one key.
+    peak = 0.0
+    peak_source = "unavailable"
+    current_allocated = 0.0
+    if torch.cuda.is_available():
+        peak = torch.cuda.max_memory_allocated() / 1024**3
+        peak_source = "final_step_only"
+        current_allocated = torch.cuda.memory_allocated() / 1024**3
+        monitor = trainer.callbacks.get("gpu_monitor")
+        if isinstance(monitor, GPUMemoryMonitorCallback) and monitor.peak_active_bytes > 0:
+            peak = monitor.peak_active_bytes / 1024**3
+            peak_source = "whole_run"
     print(
         json.dumps(
             {
@@ -1398,6 +1421,14 @@ def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> 
                 "last_loss": losses.last,
                 "seconds": seconds,
                 "peak_memory_gib": peak,
+                # Which quantity `peak_memory_gib` actually is. "final_step_only" means the
+                # callback was absent and the figure is the truncated read -- do NOT size hardware
+                # against that value.
+                "peak_memory_source": peak_source,
+                # Resident state with activations at their floor, sampled after the last step.
+                # Peaks mix persistent state, activations and one-instant transients and so
+                # attribute to no single term; this one does.
+                "current_allocated_gib": current_allocated,
                 "checkpoint_uri": opts.save_folder,
                 "wandb_project": os.environ.get("EDULLM_WANDB_PROJECT", ""),
                 "wandb_url": losses.wandb_url,

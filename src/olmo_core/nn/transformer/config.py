@@ -1103,6 +1103,26 @@ class TransformerConfig(ModelConfig):
         "R3": dict(d_model=1024, n_layers=12, num_experts=256, n_heads=8, n_kv_heads=2),
         # X2's low anchor: E=8 at R3's geometry. Same active params as R1-R3 by construction.
         "E8": dict(d_model=1024, n_layers=12, num_experts=8, n_heads=8, n_kv_heads=2),
+        # M20 -- THE MISSION DELIVERABLE. **Maple-Preview's own shape, not a scale-down.**
+        #
+        # Read straight off `maple/evidence/config.json`, field for field, rather than derived
+        # by scaling R3: `hidden_size=2048`, `num_hidden_layers=24`, `num_experts=256`,
+        # `num_experts_per_tok=8`, `moe_intermediate_size=512`, `num_attention_heads=16`,
+        # `num_key_value_heads=4`, `head_dim=128`, `num_shared_experts=0`,
+        # `tie_word_embeddings=false`. Every ratio identity the ladder asserts holds here by
+        # construction, which is the point: it is the fixed point the ladder scales *down* from.
+        #   f_e/d   = 512/2048   = 1/4    OK
+        #   k*f_e/d = 8*512/2048 = 2.0    OK
+        #   k/E     = 8/256      = 1/32   OK  (claimed at M20 and R3, the two faithful points)
+        #   n_h*h_d = 16*128     = 2048 = d  OK (1.0x, the D-012/D-014 assertion)
+        #   GQA     = 16/4       = 4:1    OK
+        #   L % 4   = 24 % 4     = 0      OK
+        #
+        # This differs from Maple ONLY in vocabulary: V=100,352 (padded dolma2) against Maple's
+        # 151,936. That is a frozen decision (`maple/CLAUDE.md`), so **the total is 20.00B and
+        # NOT DeepGrove's published 20.2B, and that is correct rather than an error.** The whole
+        # 211,288,064 gap is `2*d*(151936 - 100352)`; see `MAPLE_EXPECTED_PARAMS` below.
+        "M20": dict(d_model=2048, n_layers=24, num_experts=256, n_heads=16, n_kv_heads=4),
     }
 
     #: Expected ``(total, active)`` params per rung at ``V=100352``, asserted to within 1%.
@@ -1125,6 +1145,25 @@ class TransformerConfig(ModelConfig):
             "R1": (841_773_056, 313_290_752),
             "R2": (1_446_539_264, 314_077_184),
             "R3": (2_656_071_680, 315_650_048),
+            # M20 is DERIVED, NOT MEASURED -- the only row in this table that is, and it is
+            # labelled so deliberately. Every other figure here was read off a built model on
+            # FarmShare. These two were computed two independent ways and have never been built:
+            #
+            #   (a) the closed form in `contracts/ladder-and-factory.md`, and
+            #   (b) an adversarial walk of `num_params`/`num_active_params` term by term as the
+            #       interpreter executes them, which never consulted the closed form and which
+            #       reproduced the MEASURED R3 and R1 rows bit-for-bit as its control
+            #       (`maple/agents/lanes/P-M20/verify/m20-param-count-via-config-tree.md`).
+            #
+            # Both landed on exactly these integers. **That is two methods agreeing, which D-076
+            # established is not proof** -- two derivations there agreed and were both wrong
+            # because they shared a premise. The premise these two share is that the factory
+            # constructs the config tree the verifier read. The ~$1.43 CPU dry-run in
+            # `agents/lanes/P-M20/STATUS.md` closes that by printing `PARAM_LEDGER` off a built
+            # config. **Until it has, treat this row as a falsifiable prediction**: if it is
+            # wrong the assertion below FAILS THE RUN at config-build time for $1.43 and no GPU,
+            # which is the cheapest possible place to find out.
+            "M20": (20_002_742_272, 1_279_369_216),
         }
     }
 
@@ -1142,6 +1181,13 @@ class TransformerConfig(ModelConfig):
             "R1": 312_504_320,
             "R2": 312_504_320,
             "R3": 312_504_320,
+            # DERIVED, not measured -- see the note in MAPLE_EXPECTED_PARAMS. Routers at M20 are
+            # L*d*E = 24*2048*256 = 12,582,912, so active-minus-routers is
+            # 1,279,369,216 - 12,582,912. M20 is not part of the E-sweep (it is a single point,
+            # not a rung of it), so this row exists for the ledger's completeness and to keep M20
+            # out of the `expected is None` branch below -- NOT because any invariance is claimed
+            # between M20 and R1-R3, which have a different d and L entirely.
+            "M20": 1_266_786_304,
         }
     }
 
@@ -1493,9 +1539,11 @@ class TransformerConfig(ModelConfig):
                 f"k*f_e/d must be 2.0: got k={top_k}, f_e={expert_hidden_size}, d={d_model} "
                 f"(ratio {top_k * expert_hidden_size / d_model:.4f})"
             )
-        # k/E == 1/32 is claimed at R3 only. R1/R2/E8 vary E deliberately -- that variation
-        # IS the E-sweep -- so asserting it everywhere would forbid the experiment.
-        if rung == "R3" and top_k * 32 != num_experts:
+        # k/E == 1/32 is claimed at the two Maple-faithful points, R3 and M20. R1/R2/E8 vary E
+        # deliberately -- that variation IS the E-sweep -- so asserting it everywhere would
+        # forbid the experiment. M20 is Maple's literal config, so if this ever fails there the
+        # transcription from `evidence/config.json` is wrong, which is the more valuable catch.
+        if rung in ("R3", "M20") and top_k * 32 != num_experts:
             problems.append(
                 f"k/E must be 1/32 at R3: got k={top_k}, E={num_experts} "
                 f"(ratio {top_k / num_experts:.5f})"
@@ -1727,6 +1775,31 @@ class TransformerConfig(ModelConfig):
         Counts in :data:`MAPLE_EXPECTED_PARAMS`, not here.
         """
         return cls.maple_scaled(vocab_size, rung="R3", **kwargs)
+
+    @classmethod
+    def maple_m20(cls, vocab_size: int, **kwargs) -> "TransformerConfig":
+        """M20, the mission deliverable: Maple-Preview's OWN shape. d=2048, L=24, E=256.
+
+        Not a scale-down -- this is DeepGrove's published config transcribed from
+        `maple/evidence/config.json`, at our vocabulary instead of theirs. It is the fixed point
+        that R0-R3 scale down *from*, and every ratio identity the ladder preserves holds here by
+        construction rather than by choice.
+
+        **The total is 20.00B, not the published 20.2B**, because V=100,352 (padded dolma2) and
+        Maple is 151,936. The entire difference is the untied embedding pair. Do not quote this
+        model as reproducing DeepGrove's headline parameter count, and **report bits-per-byte
+        rather than loss** -- ln(100352) vs ln(151936) is a 0.415-nat offset before fertility.
+
+        **Active params are ~1.28B, not the ~1B a scale target might suggest, and this is the one
+        place where the mission's stated numbers and Maple-faithfulness cannot both hold.** See
+        `agents/lanes/P-M20/NOTES.md`: at Maple's own geometry `k` and `f_e` are fully determined
+        by the ratio identities, so active params are not a free parameter. Nothing was adjusted
+        to hit a round number.
+
+        Counts in :data:`MAPLE_EXPECTED_PARAMS`, not here -- and note that M20's row there is the
+        only **derived** row in the table. It has never been built.
+        """
+        return cls.maple_scaled(vocab_size, rung="M20", **kwargs)
 
     @classmethod
     def smallmoe(cls, vocab_size: int, **kwargs) -> "TransformerConfig":
