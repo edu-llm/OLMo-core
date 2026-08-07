@@ -24,6 +24,7 @@ from ..attention.recurrent import GatedDeltaNetConfig
 from ..buffer_cache import BufferCache
 from ..config import ModelConfig, ModuleConfig
 from ..feed_forward import ActivationFunction, FeedForwardConfig, FeedForwardType
+from ..hyper_connections import HyperConnectionConfig, StreamCollapseConfig
 from ..layer_norm import LayerNormConfig, LayerNormType
 from ..lm_head import LMHeadConfig, LMHeadType
 from ..moe import MoEConfig, MoERouterConfig, MoEType
@@ -96,6 +97,11 @@ class TransformerType(StrEnum):
     ➡️ :class:`MoETransformer`
     """
 
+    hyper_connection = "hyper_connection"
+    """
+    ➡️ :class:`HyperConnectionTransformer`
+    """
+
 
 class TransformerBlockType(StrEnum):
     """
@@ -147,6 +153,11 @@ class TransformerBlockType(StrEnum):
     ➡️ :class:`MoEHybridReorderedNormTransformerBlock`
     """
 
+    hyper_connection = "hyper_connection"
+    """
+    ➡️ :class:`HyperConnectionTransformerBlock`
+    """
+
 
 @dataclass
 class TransformerBlockConfig(ModuleConfig):
@@ -175,6 +186,11 @@ class TransformerBlockConfig(ModuleConfig):
     feed_forward_moe: Optional[MoEConfig] = None
     """
     The config for the MoE feed-forward layer. Required for MoE blocks.
+    """
+    hyper_connection: Optional[HyperConnectionConfig] = None
+    """
+    The hyper-connection config. Required for, and only valid on,
+    :data:`TransformerBlockType.hyper_connection` blocks.
     """
     name: TransformerBlockType = TransformerBlockType.default
     """
@@ -206,6 +222,11 @@ class TransformerBlockConfig(ModuleConfig):
             raise OLMoConfigurationError(
                 "TransformerBlockConfig requires 'sequence_mixer' to be set."
             )
+        if self.hyper_connection is not None and self.name != TransformerBlockType.hyper_connection:
+            raise OLMoConfigurationError(
+                f"'hyper_connection' is only valid on "
+                f"'{TransformerBlockType.hyper_connection}' blocks, not '{self.name}'"
+            )
 
     def build(
         self,
@@ -227,6 +248,7 @@ class TransformerBlockConfig(ModuleConfig):
             ReorderedNormTransformerBlock,
             TransformerBlock,
         )
+        from .hc_block import HyperConnectionTransformerBlock
 
         kwargs = self.as_dict(exclude_none=True, recurse=False)
         kwargs.pop("name")
@@ -257,6 +279,8 @@ class TransformerBlockConfig(ModuleConfig):
                 return MoEHybridTransformerBlock(**kwargs)
             elif self.name == TransformerBlockType.moe_hybrid_reordered_norm:
                 return MoEHybridReorderedNormTransformerBlock(**kwargs)
+            elif self.name == TransformerBlockType.hyper_connection:
+                return HyperConnectionTransformerBlock(**kwargs)
             else:
                 raise NotImplementedError(self.name)
         except TypeError as e:
@@ -290,6 +314,11 @@ class TransformerBlockConfig(ModuleConfig):
         if self.name == TransformerBlockType.peri_norm:
             assert self.layer_norm is not None
             block_params += 2 * self.layer_norm.num_params(d_model)
+
+        # Routing params for both wrapped sub-layers of a hyper-connected block.
+        if self.name == TransformerBlockType.hyper_connection:
+            hc = self.hyper_connection or HyperConnectionConfig()
+            block_params += 2 * hc.num_params()
 
         return block_params
 
@@ -331,6 +360,11 @@ class TransformerConfig(ModelConfig):
     block_overrides: Optional[Dict[int, TransformerBlockConfig]] = None
     embed_scale: Optional[float] = None
     tie_word_embeddings: bool = False
+    stream_collapse: Optional[StreamCollapseConfig] = None
+    """
+    How to collapse the ``n`` residual streams back to one before the LM head. Required for, and
+    only valid on, :data:`TransformerType.hyper_connection` models.
+    """
 
     def __post_init__(self):
         if self.tie_word_embeddings and self.name == TransformerType.normalized:
@@ -351,6 +385,34 @@ class TransformerConfig(ModelConfig):
                 self.n_layers,
                 len(self.block_pattern),
             )
+        if self.stream_collapse is not None and self.name != TransformerType.hyper_connection:
+            raise OLMoConfigurationError(
+                f"'stream_collapse' is only valid on '{TransformerType.hyper_connection}' "
+                f"models, not '{self.name}'"
+            )
+        if self.name == TransformerType.hyper_connection:
+            hc_blocks = [
+                b
+                for b in self.resolved_block_configs
+                if b.name == TransformerBlockType.hyper_connection
+            ]
+            if not hc_blocks:
+                raise OLMoConfigurationError(
+                    f"a '{TransformerType.hyper_connection}' model needs at least one "
+                    f"'{TransformerBlockType.hyper_connection}' block"
+                )
+            n_streams = {
+                (b.hyper_connection or HyperConnectionConfig()).n_streams for b in hc_blocks
+            }
+            if len(n_streams) > 1:
+                raise OLMoConfigurationError(
+                    f"every hyper-connected block must use the same 'n_streams', got {n_streams}"
+                )
+            collapse_streams = (self.stream_collapse or StreamCollapseConfig()).n_streams
+            if collapse_streams != n_streams.pop():
+                raise OLMoConfigurationError(
+                    "'stream_collapse.n_streams' must match the blocks' 'n_streams'"
+                )
 
     def build(
         self,
@@ -363,7 +425,12 @@ class TransformerConfig(ModelConfig):
         :param init_device: The device to put the parameters on during initialization. In a
             distributed setting it usually makes sense to set this to "meta".
         """
-        from .model import MoETransformer, NormalizedTransformer, Transformer
+        from .model import (
+            HyperConnectionTransformer,
+            MoETransformer,
+            NormalizedTransformer,
+            Transformer,
+        )
 
         log.info(
             f"Building transformer with {self.num_params:,d} total params, "
@@ -424,6 +491,26 @@ class TransformerConfig(ModelConfig):
                 block_pattern=self.block_pattern,
                 tie_word_embeddings=self.tie_word_embeddings,
             )
+        elif self.name == TransformerType.hyper_connection:
+            model = HyperConnectionTransformer(
+                d_model=self.d_model,
+                vocab_size=self.vocab_size,
+                n_layers=self.n_layers,
+                block=self.block,
+                embedding_norm=self.embedding_norm,
+                lm_head=self.lm_head,
+                stream_collapse=self.stream_collapse or StreamCollapseConfig(),
+                dtype=self.dtype.as_pt(),
+                init_method=self.init_method,
+                init_device=init_device,
+                init_seed=self.init_seed,
+                init_std=self.init_std,
+                embedding_init_std=self.embedding_init_std,
+                block_overrides=self.block_overrides,
+                block_pattern=self.block_pattern,
+                embed_scale=self.embed_scale,
+                tie_word_embeddings=self.tie_word_embeddings,
+            )
         else:
             raise NotImplementedError(self.name)
 
@@ -475,10 +562,31 @@ class TransformerConfig(ModelConfig):
         # LM head.
         num_params += self.lm_head.num_params(self.d_model, self.vocab_size)
 
+        # Stream readout, for hyper-connected models.
+        if self.stream_collapse is not None:
+            num_params += self.stream_collapse.num_params()
+
         # The LM head weight is shared with the embeddings when tied.
         if self.tie_word_embeddings:
             num_params -= self.d_model * self.vocab_size
 
+        return num_params
+
+    @property
+    def num_routing_params(self) -> int:
+        """
+        The number of hyper-connection routing parameters a model from this config would have,
+        counting both wrapped sub-layers of every hyper-connected block plus the stream readout.
+
+        :returns: The parameter count, which is 0 for an ordinary single-stream model.
+        """
+        num_params = 0
+        for block_config in self.resolved_block_configs:
+            if block_config.name == TransformerBlockType.hyper_connection:
+                hc = block_config.hyper_connection or HyperConnectionConfig()
+                num_params += 2 * hc.num_params()
+        if self.stream_collapse is not None:
+            num_params += self.stream_collapse.num_params()
         return num_params
 
     @property

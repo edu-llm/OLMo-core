@@ -46,6 +46,7 @@ from ..attention import (
 )
 from ..buffer_cache import BufferCache
 from ..functional import l2_normalize
+from ..hyper_connections import HyperConnection, StreamCollapse, StreamCollapseConfig
 from ..layer_norm import LayerNormConfig
 from ..lm_head import LMHeadConfig, LMLossImplementation, LMOutputWithLoss
 from ..moe import MoEBase
@@ -63,6 +64,7 @@ from .config import (
     TransformerDataParallelWrappingStrategy,
     resolve_block_configs,
 )
+from .hc_block import HyperConnectionTransformerBlock
 from .init import InitMethod
 
 if TYPE_CHECKING:
@@ -72,6 +74,7 @@ __all__ = [
     "Transformer",
     "NormalizedTransformer",
     "MoETransformer",
+    "HyperConnectionTransformer",
     "TransformerDataParallelWrappingStrategy",
     "TransformerActivationCheckpointingMode",
 ]
@@ -205,6 +208,36 @@ class Transformer(nn.Module):
 
     def _validate_block(self, block: TransformerBlockBase) -> TransformerBlockBase:
         return block
+
+    def expand_residual_streams(self, h: torch.Tensor) -> torch.Tensor:
+        """
+        Lift the hidden state into whatever residual-stream layout the blocks expect, between
+        the embeddings and the first block.
+
+        The identity for an ordinary single-stream transformer.
+        :class:`HyperConnectionTransformer` overrides it to turn ``(batch, seq, d_model)`` into
+        ``(batch, seq, n_streams, d_model)``.
+
+        :param h: The hidden state coming out of the embeddings.
+
+        :returns: The hidden state to hand to the first block.
+        """
+        return h
+
+    def collapse_residual_streams(self, h: torch.Tensor) -> torch.Tensor:
+        """
+        Reduce the blocks' residual-stream layout back to a single hidden state, between the
+        last block and the LM head. The inverse of :meth:`expand_residual_streams`, and likewise
+        the identity by default.
+
+        Only called on a model that has an LM head, so under pipeline parallelism the streams
+        stay expanded across every stage boundary and are collapsed once, on the last stage.
+
+        :param h: The hidden state coming out of the last block.
+
+        :returns: The hidden state to hand to the LM head.
+        """
+        return h
 
     def compute_auxiliary_metrics(
         self, reset: bool = True
@@ -627,6 +660,8 @@ class Transformer(nn.Module):
             if self.embedding_norm is not None:
                 h = self.embedding_norm(h)
 
+        h = self.expand_residual_streams(h)
+
         # Run each block.
         for block_key, block in self.blocks.items():
             block_idx = int(block_key)
@@ -638,6 +673,7 @@ class Transformer(nn.Module):
 
         # Get final logits but again pass-through in case of pipeline parallelism.
         if self.lm_head is not None:
+            h = self.collapse_residual_streams(h)
             if self.compile_enabled:
                 mark_dynamic(h, (0, 1), strict=False)
                 if labels is not None:
@@ -1237,6 +1273,110 @@ class MoETransformer(Transformer):
                 continue
             block = cast(MoETransformerBlock, block)
             block.feed_forward_moe.post_batch(dry_run=dry_run)
+
+
+@beta_feature
+class HyperConnectionTransformer(Transformer):
+    """
+    A transformer that carries ``n`` parallel residual streams instead of one, to be used with
+    :class:`~olmo_core.nn.transformer.HyperConnectionTransformerBlock` blocks.
+
+    Everything outside the blocks is unchanged. The embeddings still produce one
+    ``(batch, seq, d_model)`` hidden state, which is lifted into ``n`` identical streams before
+    the first block, and the ``n`` streams are collapsed back to one before the LM head, so the
+    head, the loss and every callback see exactly what they see for a single-stream model.
+
+    :param stream_collapse: How to reduce the ``n`` streams back to one before the LM head.
+
+    See :class:`Transformer` for the other parameters.
+    """
+
+    def __init__(
+        self,
+        *,
+        stream_collapse: Optional[StreamCollapseConfig] = None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        collapse_config = stream_collapse if stream_collapse is not None else StreamCollapseConfig()
+        self.n_streams = collapse_config.n_streams
+        self.stream_collapse = collapse_config.build(init_device=kwargs.get("init_device", "cpu"))
+
+        # `Transformer.__init__` reads `num_params` and `num_non_embedding_params` on its way
+        # out to freeze them before pipeline parallelism can strip parameters, which happens
+        # before the readout above exists. Drop the cached values so they are recomputed with it.
+        for cached in ("num_params", "num_non_embedding_params"):
+            self.__dict__.pop(cached, None)
+        self.num_params
+        self.num_non_embedding_params
+
+    def _validate_block(self, block: TransformerBlockBase) -> TransformerBlockBase:
+        if not isinstance(block, HyperConnectionTransformerBlock):
+            raise OLMoConfigurationError(
+                f"'{self.__class__.__name__}' requires "
+                f"'{HyperConnectionTransformerBlock.__name__}' blocks, got "
+                f"'{block.__class__.__name__}'"
+            )
+        return block
+
+    def expand_residual_streams(self, h: torch.Tensor) -> torch.Tensor:
+        """
+        Duplicate the hidden state across ``n_streams``.
+
+        :param h: A tensor of shape ``(batch_size, seq_len, d_model)``. A tensor that already
+            carries a stream dimension is passed through, which is what a pipeline stage
+            downstream of the embeddings receives.
+
+        :returns: A tensor of shape ``(batch_size, seq_len, n_streams, d_model)``.
+        """
+        if h.dim() == 4:
+            return h
+        return h.unsqueeze(-2).expand(*h.shape[:-1], self.n_streams, h.shape[-1])
+
+    def collapse_residual_streams(self, h: torch.Tensor) -> torch.Tensor:
+        """
+        Reduce the stream dimension away with the configured readout.
+
+        :param h: A tensor of shape ``(batch_size, seq_len, n_streams, d_model)``.
+
+        :returns: A tensor of shape ``(batch_size, seq_len, d_model)``.
+        """
+        if h.dim() == 3:
+            return h
+        return self.stream_collapse(h)
+
+    @torch.no_grad()
+    def init_weights(self, **kwargs) -> torch.Generator:
+        """
+        Initialize the model weights, then re-draw the hyper-connections' symmetry-breaking
+        noise from the model's seeded generator.
+
+        :class:`Transformer.init_weights` calls every module's ``reset_parameters()`` without a
+        generator, which would leave the routing noise — the one thing that decides whether the
+        ``n`` streams ever differentiate — dependent on global RNG state rather than on
+        ``init_seed``. Re-running it here with the seeded generator makes an HC run reproducible
+        from its config alone.
+
+        :returns: The generator, as :meth:`Transformer.init_weights` does.
+        """
+        generator = super().init_weights(**kwargs)
+        for module in self.modules():
+            if isinstance(module, (HyperConnection, StreamCollapse)):
+                module.reset_parameters(generator=generator)
+        return generator
+
+    @property
+    def num_routing_params(self) -> int:
+        """
+        The number of hyper-connection routing parameters in the model, including the readout.
+
+        :returns: The parameter count.
+        """
+        num_params = 0
+        for module in self.modules():
+            if isinstance(module, (HyperConnection, StreamCollapse)):
+                num_params += sum(p.numel() for p in module.parameters(recurse=False))
+        return num_params
 
 
 def _hide_cpu_inputs_from_torch(m, args, kwargs) -> Optional[Tuple[Any, Dict[str, Any]]]:
