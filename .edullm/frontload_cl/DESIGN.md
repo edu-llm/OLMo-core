@@ -161,6 +161,7 @@ A milestone within `--checkpoint-milestone-proximity` (default 100) of a periodi
 | --- | --- |
 | Resolve data from env / form | `EDULLM_DATASET_*` → `edullm_data.read`; dtype/byte-order from manifest, never inferred |
 | Checkpoints | `--save-folder "$EDULLM_CHECKPOINT_DIR"` on the command line; `max_checkpoints=None`; torn-step cleanup before resume. Platform sets that to `s3://sbsandbox-intern-edullm-outputs/teams/<team>/runs/<run_id>/checkpoints/` (e.g. team `pre-training`) |
+| Loss | `lm_head.loss_implementation = fused_linear` (liger-kernel in the image). Default CE materializes fp32 `(B·T·V)` logits (~39 GiB at 24×4096×Dolma2) and OOMs a 40 GiB A100 |
 | No broken evaluators | omit `lm_evaluator` / `downstream_evaluator` (they fail at trainer build in this image) |
 | Explicit duration | `Duration.steps(TOTAL_STEPS)` |
 | Multi-GPU | submitter puts `torch.distributed.run --nproc-per-node=N` in the command; script is one rank |

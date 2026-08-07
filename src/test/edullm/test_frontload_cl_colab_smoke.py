@@ -88,8 +88,9 @@ def test_parser_microbench_defaults():
 
 @pytest.mark.gpu
 def test_microbench_one_step_gpu():
-    """Optional: real A100/L4 path. Skipped without GPU."""
+    """Optional: real A100/L4 path. Skipped without GPU / liger-kernel."""
     torch = pytest.importorskip("torch")
+    pytest.importorskip("liger_kernel")
     if not torch.cuda.is_available():
         pytest.skip("no CUDA")
     # Prefer torch SDPA so the test does not require flash-attn in CI images.
@@ -98,6 +99,8 @@ def test_microbench_one_step_gpu():
             [
                 "microbench",
                 "--steps",
+                "1",
+                "--sequences",
                 "1",
                 "--attn-backend",
                 "torch",

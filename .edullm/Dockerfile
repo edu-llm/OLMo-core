@@ -318,6 +318,16 @@ RUN set -eux; \
     python -m pip install --no-cache-dir --no-build-isolation "${WHEEL}"; \
     python -c "import flash_attn; print('flash_attn', flash_attn.__version__)"
 
+# FUSED LINEAR CROSS-ENTROPY (Liger). Without this, default CE does
+# `logits = w_out(h); logits.float()` and materializes a (B·T·V) fp32 tensor.
+# At the ladder microbatch 24×4096 with Dolma2 (~100k vocab) that alone is ~39 GiB —
+# an entire 40 GiB A100 — before activations or Adam. Official OLMo-hybrid scripts
+# set LMLossImplementation.fused_linear for the same reason. Triton is already
+# pulled in by torch; liger-kernel is the missing piece.
+RUN set -eux; \
+    python -m pip install --no-cache-dir "liger-kernel"; \
+    python -c "from liger_kernel.ops.fused_linear_cross_entropy import LigerFusedLinearCrossEntropyFunction; print('liger-kernel ok')"
+
 # No CMD. The entrypoint of the registered base is inherited deliberately, so swapping the
 # base does not leave a stale command behind.
 #

@@ -161,6 +161,7 @@ def run_microbench(
     from frontload_cl.attn import resolve_attn_backend
     from olmo_core.config import DType
     from olmo_core.data import TokenizerConfig
+    from olmo_core.nn.lm_head import LMLossImplementation
     from olmo_core.nn.transformer import TransformerConfig
 
     if device is None:
@@ -176,6 +177,8 @@ def run_microbench(
     config = TransformerConfig.olmo2_370M(
         vocab_size=vocab, attn_backend=backend, dtype=param_dtype
     )
+    # Avoid materializing fp32 (B·T·V) logits — ~39GiB at 24×4096 on Dolma2.
+    config.lm_head.loss_implementation = LMLossImplementation.fused_linear
     log.info(
         "microbench: device=%s attn=%s dtype=%s compile=%s optim=%s shape=(%d,%d) vocab=%d",
         device,
@@ -327,6 +330,9 @@ def run_synthetic_train(
             vocab_size=tokenizer.padded_vocab_size(),
             attn_backend=backend,
         )
+        from olmo_core.nn.lm_head import LMLossImplementation
+
+        model_config.lm_head.loss_implementation = LMLossImplementation.fused_linear
         # Flat concat of every synthetic source (not the primer/control curriculum).
         doc = NumpyDocumentSource.Config(
             source_paths=paths,

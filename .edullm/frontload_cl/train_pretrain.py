@@ -112,6 +112,7 @@ from olmo_core.distributed.parallel import DataParallelType  # noqa: E402
 from olmo_core.distributed.utils import barrier, get_rank  # noqa: E402
 from olmo_core.exceptions import OLMoConfigurationError  # noqa: E402
 from olmo_core.io import clear_directory, list_directory, normalize_path  # noqa: E402
+from olmo_core.nn.lm_head import LMLossImplementation  # noqa: E402
 from olmo_core.nn.transformer import TransformerConfig  # noqa: E402
 from olmo_core.optim import CosWithWarmup, OptimGroupOverride, SkipStepAdamWConfig  # noqa: E402
 from olmo_core.train import (  # noqa: E402
@@ -310,6 +311,9 @@ def build_config(opts, overrides: List[str]) -> ExperimentConfig:
         vocab_size=corpus.tokenizer.padded_vocab_size(),
         attn_backend=attn_backend,
     )
+    # Default CE materializes fp32 logits (B·T·V); at 24×4096×Dolma2 that is ~39GiB alone
+    # and OOMs a 40GiB A100. Fused linear CE (liger-kernel) never builds that tensor.
+    model_config.lm_head.loss_implementation = LMLossImplementation.fused_linear
     log.info("attention backend: %s", attn_backend)
 
     data_loader_config = ComposableDataLoaderConfig(
