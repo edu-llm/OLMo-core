@@ -733,6 +733,21 @@ def test_the_gate_report_is_produced_from_real_runs_and_gates_real_admission():
         with (work / "pass2.csv").open() as handle:
             admitted_rows = list(csv.DictReader(handle))
 
+        # --- one checkpoint per cell -------------------------------------------------------------
+        # A first read needs the end of training, not the trajectory, and the trajectory is nine tenths
+        # of the work. Per *cell*, because cells finish at different steps and one --steps list cannot
+        # say "the end of each".
+        third = score("--last-only", out="pass3.csv")
+        assert third.returncode == 0, third.stdout[-2500:] + third.stderr[-2500:]
+        with (work / "pass3.csv").open() as handle:
+            last_rows = list(csv.DictReader(handle))
+
+    # One step, and it is the last one the full pass saw.
+    last_steps = {int(r["step"]) for r in last_rows}
+    assert len(last_steps) == 1, last_steps
+    assert last_steps == {max(int(r["step"]) for r in rows)}
+    assert len(last_rows) == len({r["endpoint"] for r in rows})  # one row per endpoint, one step
+
     assert admitted_rows and len(admitted_rows) == len(rows)
     assert all(row["confirmatory"] == "True" for row in admitted_rows)
     assert all("0ddba11" in row["admission"] for row in admitted_rows)

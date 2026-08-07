@@ -226,6 +226,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="Comma-separated steps to score. Every checkpoint by default.",
     )
     parser.add_argument(
+        "--last-only",
+        action="store_true",
+        help="Score only each cell's final checkpoint. Ten times less work, and enough for every "
+        "endpoint number: accuracy, achieved bits and template reconstruction are all read at the end "
+        "of training. The trajectory is what the other nine give you, and a first read does not need it. "
+        "A gate report only ever reads the last checkpoint anyway, so this changes nothing for one.",
+    )
+    parser.add_argument(
         "--gate-report",
         default="",
         help="JSON gate report from measure.gates. Without one, every row is written "
@@ -284,6 +292,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # per step also defeated the offset-index cache, so nothing was reused at all.
         corpus = None
         cell_dir = work_dir / _slug(cell_prefix)
+        if args.last_only and refs:
+            # Per cell, not globally: the cells finish at different steps, so a single --steps list
+            # cannot express "the end of each one".
+            refs = (max(refs, key=lambda r: r.step),)
         for ref in refs:
             if wanted and ref.step not in wanted:
                 continue
