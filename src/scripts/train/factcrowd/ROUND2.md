@@ -159,9 +159,40 @@ fixed, so CE differences are real:
 | `28m_b32` | 4.235 | **2.3951** |
 
 Monotone rising, as it should be — more bits per attribute is less compressible — **except that b32 sits
-below b24**. That inversion is worth understanding before the endpoint numbers are read, because the
-entropy axis is the primary result and a non-monotonicity in its own training loss is either a real
-saturation effect or a defect in how the highest-entropy pool is built. It is not explained yet.
+below b24**.
+
+**The corpus is not the cause.** Each biography carries 6 value spans of 4 tokens, and the distinct tokens
+observed at each position within a span, over 60,000 entities, are exactly the pool size: 2 / 4 / 16 / 64 /
+256 for b4 / b8 / b16 / b24 / b32. Realised entropy equals stated entropy — 24, 48, 96, 144, 192 bits per
+entity — at every level, and `mean_tokens_per_bio` is 42.0 across the whole sweep. The axis is built
+correctly.
+
+So compare each cell against the CE it would pay if it memorised *nothing* and simply predicted value
+tokens at their pool entropy — `0.833 × (bits_per_entity / 42) × ln2 + 0.167 × 1.689`, the second term
+being the reasoning slice at the control's CE:
+
+| cell | no-memorisation floor | observed | observed − floor |
+|---|---|---|---|
+| `28m_b0` | 0.282 | 0.671 | +0.389 |
+| `28m_b4` | 0.612 | 1.010 | +0.399 |
+| `28m_b8` | 0.942 | 1.252 | +0.310 |
+| `28m_b16` | 1.602 | 2.030 | +0.428 |
+| `28m_b24` | 2.262 | 2.708 | +0.446 |
+| `28m_b32` | 2.922 | 2.422 | **−0.500** |
+
+Five cells sit a consistent 0.31–0.45 nats *above* their floor. b32 is the only one below it, and going
+below is only reachable by memorising. Its trajectory says the same thing: b16 and b24 are flat from 10%
+to 100% (2.041→2.030, 2.672→2.708 — b24 actually *rises*), while b32 is flat to 75% and then falls hard,
+3.20 → 2.90 → 2.42 through the cooldown.
+
+So the highest-demand cell on the axis appears to have memorised more than the cell below it, which is
+backwards for a capacity account. Three readings are open and this data cannot separate them: a real
+late-training phase change, an artefact of the WSD cooldown interacting with a loss that has not yet
+started descending, or something specific to a 256-option pool. **It is not explained, and b32 is the
+highest-leverage point on the primary axis**, so it should be resolved before the entropy slope is
+published. The cheapest discriminator is the scored endpoint: if b32's Mano accuracy and its achieved-bits
+curve agree with its CE drop, the phase change is real; if they do not, the CE drop is about the training
+mixture and not about storage.
 
 None of this is the endpoint. Mano accuracy on the frozen 30,000-item eval set is, and only `score_run`
 produces it.
