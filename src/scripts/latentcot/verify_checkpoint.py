@@ -48,12 +48,24 @@ def main() -> None:
     parser.add_argument(
         "--device", default="auto", help="'auto' (cuda if available else cpu), 'cuda', or 'cpu'"
     )
+    parser.add_argument(
+        "--attn-backend",
+        default=None,
+        choices=["torch", "flash_2", "flash_3", "flash_4", "te"],
+        help="override the attention backend. The olmo3_* factories hardcode flash_2, which "
+        "raises at construction on an image without flash-attn (the eduLLM research image has "
+        "none) -- pass 'torch' there. Same attention math, different kernel; the 4096 sliding "
+        "window is a no-op at our ~300-token sequences.",
+    )
     args = parser.parse_args()
 
     device = resolve_device(args.device)
     vocab = TOKENIZER_CONFIG.padded_vocab_size()
     print(f"building {args.model}(vocab_size={vocab}) on {device} ...")
-    model = getattr(TransformerConfig, args.model)(vocab_size=vocab).build(init_device="cpu")
+    model = getattr(TransformerConfig, args.model)(
+        vocab_size=vocab,
+        **({} if args.attn_backend is None else {"attn_backend": args.attn_backend}),
+    ).build(init_device="cpu")
     n_params = sum(p.numel() for p in model.parameters())
     print(f"  built: {n_params:,} params")
 

@@ -167,6 +167,15 @@ def main() -> None:
         help="repeatable, our latent arm(s), e.g. --ours A2=/path/model.pt",
     )
     parser.add_argument("--out", type=Path, default=Path("runs/latentcot/compare"))
+    parser.add_argument(
+        "--attn-backend",
+        default=None,
+        choices=["torch", "flash_2", "flash_3", "flash_4", "te"],
+        help="override the attention backend. The olmo3_* factories hardcode flash_2, which "
+        "raises at construction on an image without flash-attn (the eduLLM research image has "
+        "none) -- pass 'torch' there. Same attention math, different kernel; the 4096 sliding "
+        "window is a no-op at our ~300-token sequences.",
+    )
     args = parser.parse_args()
 
     if not args.ours:
@@ -174,7 +183,8 @@ def main() -> None:
 
     device = resolve_device(args.device)
     model_config = getattr(TransformerConfig, args.model)(
-        vocab_size=TOKENIZER_CONFIG.padded_vocab_size()
+        **({} if args.attn_backend is None else {"attn_backend": args.attn_backend}),
+        vocab_size=TOKENIZER_CONFIG.padded_vocab_size(),
     )
     examples = load_examples(args.test_data, args.num_continuous_thoughts)
 

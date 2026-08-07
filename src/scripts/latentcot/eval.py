@@ -71,11 +71,21 @@ def main() -> None:
         help="repeatable, e.g. --arm A2=/path/to/ckpt",
     )
     parser.add_argument("--out", type=Path, default=Path("runs/latentcot/eval"))
+    parser.add_argument(
+        "--attn-backend",
+        default=None,
+        choices=["torch", "flash_2", "flash_3", "flash_4", "te"],
+        help="override the attention backend. The olmo3_* factories hardcode flash_2, which "
+        "raises at construction on an image without flash-attn (the eduLLM research image has "
+        "none) -- pass 'torch' there. Same attention math, different kernel; the 4096 sliding "
+        "window is a no-op at our ~300-token sequences.",
+    )
     args = parser.parse_args()
 
     device = resolve_device(args.device)
     model_config = getattr(TransformerConfig, args.model)(
-        vocab_size=T.TOKENIZER_CONFIG.padded_vocab_size()
+        **({} if args.attn_backend is None else {"attn_backend": args.attn_backend}),
+        vocab_size=T.TOKENIZER_CONFIG.padded_vocab_size(),
     )
     examples = load_examples(args.test_data, args.num_continuous_thoughts)
 

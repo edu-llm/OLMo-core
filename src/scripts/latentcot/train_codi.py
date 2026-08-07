@@ -47,6 +47,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arm", required=True, choices=sorted(ARMS))
     parser.add_argument("--rung", default="olmo2_370M", help="TransformerConfig factory name")
+    parser.add_argument(
+        "--attn-backend",
+        default=None,
+        choices=["torch", "flash_2", "flash_3", "flash_4", "te"],
+        help="override the attention backend. The olmo3_* factories hardcode flash_2, which "
+        "raises at construction on an image without flash-attn (the eduLLM research image has "
+        "none) -- pass 'torch' there. Same attention math, different kernel; the 4096 sliding "
+        "window is a no-op at our ~300-token sequences.",
+    )
     parser.add_argument("--train-data", required=True)
     parser.add_argument("--test-data", required=True)
     parser.add_argument(
@@ -147,7 +156,9 @@ def main() -> None:
         # Whitelisted field, so this keeps the confound check valid (arms may differ in it).
         arm = replace(arm, vocab_reg_entropy_floor=args.vocab_reg_entropy_floor)
 
-    model = build_model(args.rung, init_seed=args.init_seed, device=device)
+    model = build_model(
+        args.rung, init_seed=args.init_seed, device=device, attn_backend=args.attn_backend
+    )
     if args.init_checkpoint:
         # Fork the shared base (the "best model") — a .pt state_dict or a local/S3 ckpt dir.
         load_checkpoint(model, args.init_checkpoint)
@@ -220,6 +231,7 @@ def main() -> None:
         "steps": args.steps,
         "batch_size": args.batch_size,
         "precision": args.precision,
+        "attn_backend": args.attn_backend,
         "lr": args.lr,
         "warmup_steps": args.warmup_steps,
         "num_continuous_thoughts": args.num_continuous_thoughts,

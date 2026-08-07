@@ -160,12 +160,22 @@ def load_checkpoint(model, path: str, *, strict: bool = True) -> None:
         load_model_and_optim_state(str(path), model, pre_download=True, strict=strict)
 
 
-def build_model(rung: str, *, init_seed: int, device: str = "cpu"):
+def build_model(
+    rung: str, *, init_seed: int, device: str = "cpu", attn_backend: Optional[str] = None
+):
     """
     Build a model at ``rung`` (a ``TransformerConfig`` factory name) with deterministic init.
 
     All arms must share the same ``init_seed`` so they start from identical weights — the
     shared "base checkpoint" the confound control requires.
+
+    :param attn_backend: Override the attention backend (``"torch"``, ``"flash_2"``, …). The
+        ``olmo3_*`` factories hardcode ``flash_2``, which raises at construction on any image
+        without the ``flash-attn`` package — including the eduLLM research image, where it kills
+        the run 11 seconds in. ``"torch"`` (SDPA) computes the *same* attention with a different
+        kernel, and the sliding-window pattern is a no-op at our ~300-token sequences (window
+        4096), so this is an implementation choice rather than an architecture change. ``None``
+        keeps the factory's own default.
     """
     from olmo_core.nn.transformer import TransformerConfig
     from olmo_core.utils import seed_all
@@ -173,7 +183,10 @@ def build_model(rung: str, *, init_seed: int, device: str = "cpu"):
     from .tokens import TOKENIZER_CONFIG
 
     seed_all(init_seed)
-    config = getattr(TransformerConfig, rung)(vocab_size=TOKENIZER_CONFIG.padded_vocab_size())
+    kwargs = {"vocab_size": TOKENIZER_CONFIG.padded_vocab_size()}
+    if attn_backend is not None:
+        kwargs["attn_backend"] = attn_backend
+    config = getattr(TransformerConfig, rung)(**kwargs)
     return config.build(init_device=device)
 
 
