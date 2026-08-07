@@ -862,7 +862,19 @@ def build_config(opts, overrides: List[str]):
     # padded rather than exact for the same reason the example pads: a vocab that is a
     # multiple of 128 keeps the embedding matmul on a fast path. dolma2's 100,278 pads to
     # 100,352.
-    model_config = factory(vocab_size=corpus.tokenizer.padded_vocab_size())
+    #
+    # `quantize` is passed only when the flag was given, so a factory that is not the Maple
+    # family -- every `olmo2_*` preset, which takes no such keyword -- keeps working untouched.
+    # THREE STATES, NOT TWO, and `--quantize control` is not a synonym for omitting the flag:
+    # `None` builds stock `nn.Linear`, `False` builds `QuantLinear` with the quantizer bypassed
+    # (bitwise identical numbers, same module graph and state-dict keys), and `True` is the
+    # ternary arm. X4a's control arm MUST be `False`, because a control built with `None` has a
+    # different state dict and the comparison silently stops being paired. That is why the flag
+    # spells the three cases out rather than being a boolean.
+    factory_kwargs: Dict[str, Any] = {}
+    if opts.quantize is not None:
+        factory_kwargs["quantize"] = opts.quantize
+    model_config = factory(vocab_size=corpus.tokenizer.padded_vocab_size(), **factory_kwargs)
 
     # THE LOSS IMPLEMENTATION, WHICH IS A MEMORY DECISION MASQUERADING AS A NUMERICS ONE.
     #
@@ -1580,6 +1592,32 @@ def train(config, opts=None) -> None:
                 )
 
 
+_QUANTIZE_STATES: Dict[str, Optional[bool]] = {
+    # `off` and an omitted flag are the same thing: the keyword never reaches the factory.
+    "off": None,
+    # NOT a synonym for `off`. See `--quantize`'s help and `QuantConfig`'s docstring.
+    "control": False,
+    "ternary": True,
+}
+
+
+def _quantize_arg(value: str) -> Optional[bool]:
+    """Resolve a ``--quantize`` spelling to the three states ``maple_scaled`` documents.
+
+    An ``argparse`` ``type=`` converter rather than a lookup in :func:`main`, because the tests
+    and the gate harness call :func:`build_parser` and :func:`build_config` without going
+    through :func:`main`. Converting here is what makes every caller see the same three states.
+    """
+    try:
+        return _QUANTIZE_STATES[value]
+    except KeyError:
+        raise argparse.ArgumentTypeError(
+            f"invalid choice: {value!r} (choose from "
+            + ", ".join(repr(k) for k in _QUANTIZE_STATES)
+            + ")"
+        ) from None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="train_on_corpus",
@@ -1600,6 +1638,42 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--work-dir", default="/tmp/dataset-cache")
     parser.add_argument("--model-factory", default="olmo2_190M")
+    # THE TERNARY TOGGLE, AND THE REASON IT IS NOT A BOOLEAN FLAG.
+    #
+    # `TransformerConfig.maple_scaled` takes `quantize` as three states, and the middle one is
+    # the whole point: `control` builds `QuantLinear` with the quantizer bypassed, which is
+    # bitwise identical to `nn.Linear` but keeps the same module graph and state-dict keys.
+    # X4a compares `ternary` against `control`, NOT against a run that omitted the flag -- a
+    # `None` control has a different state dict, so the arms stop being paired while still
+    # looking fine. A `store_true` flag cannot express that, so this spells the cases out.
+    #
+    # Default `None` = omit the keyword entirely, so every non-Maple factory (`olmo2_*`, which
+    # accepts no such keyword) is unaffected by this flag existing.
+    #
+    # RESOLVED BY `type=` AT PARSE TIME, NOT IN `main()`, AND THAT PLACEMENT IS THE POINT. Every
+    # test reaches this module as `build_parser().parse_known_args()` then `build_config(opts,
+    # ...)` directly, never through `main()`. A conversion living in `main()` would therefore
+    # leave `opts.quantize` as the raw string in every test, and the string "control" is
+    # *truthy*: it flows to `QuantConfig(enabled="control")`, whose `enabled` is consumed as
+    # `if self.quant_enabled` -- so THE CONTROL ARM WOULD QUANTIZE while still reporting itself
+    # as the control. That is the silently-unpaired comparison this flag exists to prevent,
+    # reintroduced by the flag itself. `type=` runs inside `parse_known_args`, so every caller
+    # gets the same three states.
+    #
+    # `choices` is checked AFTER `type=`, so it must list the converted values, not the strings
+    # a user types -- hence `[None, False, True]` and the spellings living in the converter.
+    parser.add_argument(
+        "--quantize",
+        type=_quantize_arg,
+        choices=[None, False, True],
+        default=None,
+        metavar="{off,control,ternary}",
+        help="Ternary QAT on expert and attention projections, for X4a. Omit for a normal run "
+        "(stock nn.Linear). 'control' builds QuantLinear bypassed -- numerically identical to "
+        "omitting the flag, but with the ternary arm's module tree, which is what makes the "
+        "comparison paired; this is X4a's bf16 arm, NOT the same as omitting. 'ternary' is the "
+        "quantized arm. 'off' is an explicit spelling of the default. Maple factories only.",
+    )
     parser.add_argument("--sequence-length", type=int, default=2048)
     parser.add_argument("--steps", type=int, default=200)
     parser.add_argument("--save-interval", type=int, default=100)
