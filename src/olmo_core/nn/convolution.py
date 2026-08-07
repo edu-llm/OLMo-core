@@ -2,9 +2,10 @@ from typing import Literal, Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.distributed.device_mesh import DeviceMesh
 
-from olmo_core.nn.attention.flash_linear_attn_api import dispatch_causal_conv1d
+from olmo_core.nn.attention.flash_linear_attn_api import dispatch_causal_conv1d, has_fla
 
 __all__ = ["CausalConv1d"]
 
@@ -72,15 +73,34 @@ class CausalConv1d(nn.Conv1d):
             if bias is not None:
                 bias = bias[self._cp_channel_slice]
 
-        output = dispatch_causal_conv1d(
-            x=x,
-            weight=weight.squeeze(1),
-            bias=bias,
-            activation=self.activation,
-            backend=self.backend,
-            cu_seqlens=cu_seqlens,
+        if x.is_cuda and has_fla():
+            output = dispatch_causal_conv1d(
+                x=x,
+                weight=weight.squeeze(1),
+                bias=bias,
+                activation=self.activation,
+                backend=self.backend,
+                cu_seqlens=cu_seqlens,
+            )
+            return output[0]
+
+        if cu_seqlens is not None:
+            raise NotImplementedError(
+                "cu_seqlens is not supported by the causal conv1d fallback because "
+                "sequence-boundary handling is unavailable"
+            )
+
+        output = F.conv1d(
+            x.transpose(1, 2),
+            weight,
+            bias,
+            padding=self.padding[0],
+            groups=weight.shape[0],
         )
-        return output[0]
+        output = output[..., : x.shape[1]]
+        if self.activation in ("silu", "swish"):
+            output = F.silu(output)
+        return output.transpose(1, 2)
 
     def apply_cp(self, cp_mesh: DeviceMesh):
         """

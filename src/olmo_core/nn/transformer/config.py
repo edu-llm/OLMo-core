@@ -26,6 +26,7 @@ from ..config import ModelConfig, ModuleConfig
 from ..feed_forward import ActivationFunction, FeedForwardConfig, FeedForwardType
 from ..layer_norm import LayerNormConfig, LayerNormType
 from ..lm_head import LMHeadConfig, LMHeadType
+from ..memory import EngramConfig, LngramConfig
 from ..moe import MoEConfig, MoERouterConfig, MoEType
 from ..rope import RoPEConfig, RoPEScalingConfig, RoPEType
 from .init import InitMethod
@@ -137,6 +138,16 @@ class TransformerBlockType(StrEnum):
     ➡️ :class:`MoEReorderedNormTransformerBlock`
     """
 
+    moe_engram_reordered_norm = "moe_engram_reordered_norm"
+    """
+    ➡️ :class:`MoEEngramReorderedNormTransformerBlock`
+    """
+
+    moe_lngram_reordered_norm = "moe_lngram_reordered_norm"
+    """
+    ➡️ :class:`MoELngramReorderedNormTransformerBlock`
+    """
+
     moe_hybrid = "moe_hybrid"
     """
     ➡️ :class:`MoEHybridTransformerBlock`
@@ -175,6 +186,10 @@ class TransformerBlockConfig(ModuleConfig):
     feed_forward_moe: Optional[MoEConfig] = None
     """
     The config for the MoE feed-forward layer. Required for MoE blocks.
+    """
+    memory: EngramConfig | LngramConfig | None = None
+    """
+    The memory config. Required for Engram and Lngram blocks.
     """
     name: TransformerBlockType = TransformerBlockType.default
     """
@@ -218,8 +233,10 @@ class TransformerBlockConfig(ModuleConfig):
     ) -> "TransformerBlockBase":
         from .block import (
             LayerNormScaledTransformerBlock,
+            MoEEngramReorderedNormTransformerBlock,
             MoEHybridReorderedNormTransformerBlock,
             MoEHybridTransformerBlock,
+            MoELngramReorderedNormTransformerBlock,
             MoEReorderedNormTransformerBlock,
             MoETransformerBlock,
             NormalizedTransformerBlock,
@@ -253,6 +270,14 @@ class TransformerBlockConfig(ModuleConfig):
                 return MoETransformerBlock(**kwargs)
             elif self.name == TransformerBlockType.moe_reordered_norm:
                 return MoEReorderedNormTransformerBlock(**kwargs)
+            elif self.name == TransformerBlockType.moe_engram_reordered_norm:
+                if not isinstance(self.memory, EngramConfig):
+                    raise TypeError("'memory' must be an EngramConfig")
+                return MoEEngramReorderedNormTransformerBlock(**kwargs)
+            elif self.name == TransformerBlockType.moe_lngram_reordered_norm:
+                if not isinstance(self.memory, LngramConfig):
+                    raise TypeError("'memory' must be a LngramConfig")
+                return MoELngramReorderedNormTransformerBlock(**kwargs)
             elif self.name == TransformerBlockType.moe_hybrid:
                 return MoEHybridTransformerBlock(**kwargs)
             elif self.name == TransformerBlockType.moe_hybrid_reordered_norm:
@@ -286,6 +311,10 @@ class TransformerBlockConfig(ModuleConfig):
             if self.layer_norm is not None:
                 block_params += self.layer_norm.num_params(d_model)
 
+        # Block memory.
+        if self.memory is not None:
+            block_params += self.memory.num_params(d_model)
+
         # Two extra norms for Peri-LN block type.
         if self.name == TransformerBlockType.peri_norm:
             assert self.layer_norm is not None
@@ -295,12 +324,17 @@ class TransformerBlockConfig(ModuleConfig):
 
     def num_active_params(self, d_model: int) -> int:
         num_params = self.num_params(d_model)
-        if self.feed_forward_moe is None:
-            return num_params
 
-        num_inactive_params = self.feed_forward_moe.num_params(
-            d_model
-        ) - self.feed_forward_moe.num_active_params(d_model)
+        num_inactive_params = 0
+        if self.feed_forward_moe is not None:
+            num_inactive_params += self.feed_forward_moe.num_params(
+                d_model
+            ) - self.feed_forward_moe.num_active_params(d_model)
+        if self.memory is not None:
+            num_inactive_params += self.memory.num_params(d_model) - self.memory.num_active_params(
+                d_model
+            )
+
         return num_params - num_inactive_params
 
 

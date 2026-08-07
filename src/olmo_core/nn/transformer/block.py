@@ -28,6 +28,8 @@ from .config import TransformerDataParallelWrappingStrategy
 if TYPE_CHECKING:
     from olmo_core.train.common import ReduceType
 
+    from ..memory import EngramConfig, LngramConfig
+
 
 class TransformerBlockBase(nn.Module):
     """
@@ -714,6 +716,119 @@ class MoEReorderedNormTransformerBlock(MoETransformerBlock):
                 fsdp_att.set_modules_to_forward_prefetch([fsdp_moe])
         else:
             fully_shard(self, mesh=dp_mesh, **fsdp_kwargs)
+
+
+@beta_feature
+class MoEEngramReorderedNormTransformerBlock(MoEReorderedNormTransformerBlock):
+    """
+    A reordered-norm MoE block with an Engram residual before attention.
+    """
+
+    def __init__(
+        self,
+        *,
+        d_model: int,
+        memory: "EngramConfig",
+        init_device: str = "cpu",
+        **kwargs,
+    ):
+        super().__init__(d_model=d_model, init_device=init_device, **kwargs)
+        self.memory = memory.build(d_model, init_device=init_device)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        *,
+        loss_div_factor: Optional[Union[torch.Tensor, float]] = None,
+        engram_hash_indices: Tuple[torch.Tensor, ...],
+        **kwargs,
+    ) -> torch.Tensor:
+        x = x + self.memory(x, hash_indices=engram_hash_indices)
+        return super().forward(x, loss_div_factor=loss_div_factor, **kwargs)
+
+    def apply_pp(self, pp_mesh: DeviceMesh):
+        del pp_mesh
+        raise NotImplementedError(
+            "PP is not implemented yet for the Engram memory transformer block variant"
+        )
+
+    def apply_tp(
+        self, tp_mesh: DeviceMesh, *, input_layout: Placement, float8_enabled: bool = False
+    ):
+        del tp_mesh, input_layout, float8_enabled
+        raise NotImplementedError(
+            "TP is not implemented yet for the Engram memory transformer block variant"
+        )
+
+    def apply_cp(
+        self,
+        cp_mesh: DeviceMesh,
+        ring: Optional[RingContextParallelStyle] = None,
+        uly: Optional[UlyssesContextParallelStyle] = None,
+    ):
+        del cp_mesh, ring, uly
+        raise NotImplementedError(
+            "CP is not implemented yet for the Engram memory transformer block variant"
+        )
+
+    def num_flops_per_token(self, seq_len: int) -> int:
+        return super().num_flops_per_token(seq_len) + self.memory.num_flops_per_token(seq_len)
+
+
+@beta_feature
+class MoELngramReorderedNormTransformerBlock(MoEReorderedNormTransformerBlock):
+    """
+    A reordered-norm MoE block with an Lngram residual before attention.
+    """
+
+    def __init__(
+        self,
+        *,
+        d_model: int,
+        memory: "LngramConfig",
+        init_device: str = "cpu",
+        **kwargs,
+    ):
+        super().__init__(d_model=d_model, init_device=init_device, **kwargs)
+        self.memory = memory.build(d_model, init_device=init_device)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        *,
+        loss_div_factor: Optional[Union[torch.Tensor, float]] = None,
+        **kwargs,
+    ) -> torch.Tensor:
+        x = x + self.memory(x)
+        return super().forward(x, loss_div_factor=loss_div_factor, **kwargs)
+
+    def apply_pp(self, pp_mesh: DeviceMesh):
+        del pp_mesh
+        raise NotImplementedError(
+            "PP is not implemented yet for the Lngram memory transformer block variant"
+        )
+
+    def apply_tp(
+        self, tp_mesh: DeviceMesh, *, input_layout: Placement, float8_enabled: bool = False
+    ):
+        del tp_mesh, input_layout, float8_enabled
+        raise NotImplementedError(
+            "TP is not implemented yet for the Lngram memory transformer block variant"
+        )
+
+    def apply_cp(
+        self,
+        cp_mesh: DeviceMesh,
+        ring: Optional[RingContextParallelStyle] = None,
+        uly: Optional[UlyssesContextParallelStyle] = None,
+    ):
+        del cp_mesh, ring, uly
+        raise NotImplementedError(
+            "CP is not implemented yet for the Lngram memory transformer block variant"
+        )
+
+    def num_flops_per_token(self, seq_len: int) -> int:
+        return super().num_flops_per_token(seq_len) + self.memory.num_flops_per_token(seq_len)
 
 
 @beta_feature

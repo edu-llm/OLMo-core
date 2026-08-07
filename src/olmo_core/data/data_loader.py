@@ -5,10 +5,12 @@ Distributed, deterministic, stateful data loaders used by the :class:`~olmo_core
 import functools
 import logging
 import math
+import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from itertools import islice
 from pathlib import Path
+from types import ModuleType
 from typing import (
     Any,
     Callable,
@@ -21,12 +23,24 @@ from typing import (
     TypeVar,
 )
 
-import bettermap
 import numpy as np
 import torch
 import torch.distributed as dist
 import torch.utils.data
 from torch.distributed import DeviceMesh
+
+# bettermap imports ``ForkProcess``, which does not exist on Windows. Config construction never
+# uses it, but other OLMo-core modules import its symbol eagerly. Install a no-use compatibility
+# module on Windows so imports/config inspection work; the actual threaded path still fails loudly.
+if sys.platform == "win32" and "bettermap" not in sys.modules:
+    bettermap_fallback = ModuleType("bettermap")
+
+    def _ordered_map_per_thread_unavailable(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError("bettermap threaded loading is unavailable on Windows")
+
+    bettermap_fallback.ordered_map_per_thread = _ordered_map_per_thread_unavailable  # type: ignore[attr-defined]
+    sys.modules["bettermap"] = bettermap_fallback
 
 from ..aliases import PathOrStr
 from ..config import Config, Registrable
@@ -708,6 +722,8 @@ class NumpyFSLDataLoader(NumpyDataLoaderBase):
         # Get instances for the batch.
         map_fn: Callable
         if self.worker_info is None and self.num_threads is not None and self.num_threads > 1:
+            import bettermap
+
             map_fn = functools.partial(
                 bettermap.ordered_map_per_thread, parallelism=self.num_threads
             )

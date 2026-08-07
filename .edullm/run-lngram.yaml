@@ -1,0 +1,7 @@
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone
+  src/scripts/train/engram_experiment/lngram_moe.py train "$EDULLM_RUN_ID"
+  --param-dtype bfloat16 --save-folder "$EDULLM_CHECKPOINT_DIR"'

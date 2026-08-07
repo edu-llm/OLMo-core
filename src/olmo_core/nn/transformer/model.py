@@ -52,6 +52,7 @@ from ..moe import MoEBase
 from ..rope import RoPEBuffers, RotaryEmbeddingBase
 from ..utils import selective_checkpointing_context_fn
 from .block import (
+    MoEEngramReorderedNormTransformerBlock,
     MoETransformerBlock,
     NormalizedTransformerBlock,
     TransformerBlock,
@@ -163,6 +164,20 @@ class Transformer(nn.Module):
                     cache=cache,
                 )
             )
+        engram_blocks = [
+            (int(block_idx), block)
+            for block_idx, block in self.blocks.items()
+            if isinstance(block, MoEEngramReorderedNormTransformerBlock)
+        ]
+        if engram_blocks:
+            expected_signature = engram_blocks[0][1].memory.hash_signature
+            for block_idx, engram_block in engram_blocks[1:]:
+                if engram_block.memory.hash_signature != expected_signature:
+                    raise OLMoConfigurationError(
+                        "All Engram blocks must use identical hash orders, table sizes, "
+                        "multipliers, and compression maps because Transformer.forward() "
+                        f"precomputes their indices once (mismatch at block {block_idx})."
+                    )
         self.lm_head = lm_head.build(
             d_model=d_model, vocab_size=vocab_size, init_device=init_device
         )
@@ -293,9 +308,23 @@ class Transformer(nn.Module):
         device = device or self.device
         self.to_empty(device=device)
 
+        memory_modules: List[nn.Module] = []
+        for block in self.blocks.values():
+            memory = getattr(block, "memory", None)
+            if isinstance(memory, nn.Module):
+                memory_modules.append(memory)
+        memory_module_ids = {id(module) for module in memory_modules}
+
         for module in self.modules():
+            if id(module) in memory_module_ids:
+                continue
             if hasattr(module, "reset_parameters"):
                 module.reset_parameters()  # type: ignore
+
+        # Reset memory modules after their children so parent-level invariants, such as
+        # Lngram's zero-initialized convolution branch, are not overwritten by child resets.
+        for memory in memory_modules:
+            memory.reset_parameters()  # type: ignore
 
         seed = self.init_seed
         if world_mesh is not None and self.pp_enabled:
@@ -564,6 +593,10 @@ class Transformer(nn.Module):
             or tensor specifying which positions to keep. Default is 0 (keep all).
 
         :returns: The logits if ``labels`` is ``None`` or the losses if ``labels`` is not ``None``.
+
+        .. todo::
+            CP/PP support for memory blocks must route token IDs and exchange n-gram/convolution
+            sequence-boundary halos before computing or applying memory features.
         """
         if input_embeddings is not None and self._cp_load_balancer is not None:
             raise RuntimeError(
@@ -615,6 +648,18 @@ class Transformer(nn.Module):
             logits_to_keep=logits_to_keep,
             **kwargs,
         )
+
+        engram_blocks: list[tuple[int, MoEEngramReorderedNormTransformerBlock]] = []
+        for block_key, block in self.blocks.items():
+            if isinstance(block, MoEEngramReorderedNormTransformerBlock):
+                engram_blocks.append((int(block_key), block))
+
+        if engram_blocks:
+            engram_hash_indices = engram_blocks[0][1].memory.compute_hash_indices(input_ids)
+            for block_idx, _ in engram_blocks:
+                per_block_kwargs.setdefault(block_idx, {})[
+                    "engram_hash_indices"
+                ] = engram_hash_indices
 
         # Get embeddings but pass-through for non-existent layers to allow easy
         # pipeline parallel configuration.
