@@ -2,24 +2,35 @@
 
 **Status:** Proposal, for team decision. Nothing here is merged or scheduled.
 **Scope:** Whether to bring mHC into `main` as a supported architecture option.
-**Recommendation in one line:** Do not merge yet. Fund one cheap pretraining ablation first, because the published effect is currently within noise.
+**Recommendation in one line:** Do not merge yet. Fund one small pretraining ablation first, because the strongest available evidence points at the cheap variant, not the expensive one.
 
 ---
 
 ## 1. What is being proposed
 
-Hyper-Connections replace the single residual stream with `n` parallel streams. Each
+Hyper-Connections (HC) replace the single residual stream with `n` parallel streams. Each
 sub-layer reads one vector in from those streams, runs unchanged attention or MLP, then
 writes the result back out. A matrix `H_res` mixes the streams between layers. mHC
 constrains `H_res` to be doubly stochastic, so repeated mixing over depth can neither
 amplify nor suppress the residual signal.
 
 Adopting it means changing the tensor contract between transformer blocks from
-`(B, T, D)` to `(B, T, n, D)`. That is the whole cost story, and it is not a small change.
+`(B, T, D)` to `(B, T, n, D)`. That is the cost story, and it is not a small change.
 
-## 2. What we already know works
+## 2. This is not a new idea here
 
-A static prototype exists on `edullm/adarsh-hc-ablation` and has been verified on CPU.
+A brainlift written in this org in July 2026 (`MLArchitecture/brainlifts/mhc-multi-stream-information-flow.md`)
+already worked through HC and mHC and proposed a three-arm experiment: standard residual,
+HC at `n=4`, mHC at `n=4`, compared on loss, gradient stability, memory and training time,
+and math and reasoning accuracy.
+
+**That experiment is now built.** The prototype on `edullm/adarsh-hc-ablation` implements
+those three arms plus three more, and clears its correctness gate. This RFC is the decision
+that brainlift deferred, with the implementation cost now measured rather than guessed.
+
+## 3. What we already know works
+
+Verified on CPU. No training has run.
 
 - Six arms build and run: single-stream baseline, unconstrained HC, and three mHC
   parameterisations (Sinkhorn, Birkhoff, Kronecker), plus an identity control, all at `n=4`.
@@ -39,32 +50,45 @@ Routing parameters on a 267,424,512-parameter model:
 | `mhc_sinkhorn` | Sinkhorn | 576 | 24 |
 | `mhc_lite` | Birkhoff | 768 | 32 |
 
-**Read this correctly.** It shows the mechanism is implementable and cheap in parameters.
-It says nothing about whether it makes models better. No training or evaluation has run.
+This shows the mechanism is implementable and cheap in parameters. It says nothing about
+whether it makes models better.
 
-## 3. What the evidence actually supports
+## 4. What the evidence actually supports
 
-Three sources, and they do not all say the same thing.
+**The constraint itself is well motivated.** Unconstrained HC compounds its mixing matrix
+over depth, and the mHC paper measures composite signal gains approaching 3000. Under the
+doubly stochastic constraint the same quantity stays near 1.6. If we run multi-stream at
+all, we should run it constrained. That part is not in question.
 
-**Finetuning (arXiv:2607.18130, July 2026).** Wrapped frozen OLMo-2 1B and 7B with mHC.
-Standalone mHC lost to LoRA at matched parameter budgets. The best combined result at 7B
-was 0.980 test loss against 0.981 for LoRA alone, and downstream wins split four
-benchmarks to four. **A 0.001 gap on a single seed is not a result.** It is smaller than
-ordinary seed-to-seed variation, and the paper reports limited seed coverage.
+**Pretraining (Xie et al., arXiv:2512.24880).** Reports lower pretraining loss, steadier
+gradient norms, and better benchmarks at 3B, 9B and 27B, with about 6.7% additional
+training time at `n=4`. Different lab, no independent replication, and none on OLMo.
 
-**Pretraining (Xie et al., arXiv:2512.24880).** This is where the real claims live: mHC
-beating HC and residual baselines at 27B with limited overhead. Different lab, different
-scale, no independent replication, and none on OLMo.
+**Finetuning (arXiv:2607.18130, July 2026).** Wrapped frozen OLMo-2 1B and 7B. Standalone
+mHC lost to LoRA at matched budgets. The best combined result at 7B was 0.980 test loss
+against 0.981 for LoRA alone, with downstream wins splitting four benchmarks to four. On
+the seed coverage reported, a 0.001 gap is not a result.
 
-**The interesting contradiction.** The finetuning paper found that fixing `H_res` to the
-identity, that is, not mixing streams at all, matched or beat learned mixing. That
-directly opposes the pretraining paper, where learned mixing is the point. Nobody has
-tested which holds during pretraining.
+**The signal worth acting on: the mixing matrix may not be earning its keep.** Three
+independent lines now point the same way.
 
-## 4. What full adoption costs
+1. The finetuning paper found that fixing `H_res` to the identity matched or beat learned
+   mixing, while removing parameters.
+2. It reports this agrees with earlier pretraining interpretability work (Alimaskina et
+   al., arXiv:2606.03483), where deeper-layer mixing in mHC-lite also collapsed toward
+   identity.
+3. Causal work on stream dominance (Peng et al., arXiv:2603.14833) finds some streams
+   carry the model's behaviour while representationally similar streams stay passive.
 
-Phase 1, the prototype above, is the easy part and it is done. The remaining work is where
-the risk concentrates. Risk ratings are from the internal implementation map.
+So the collapse-toward-identity behaviour has already been *observed* during pretraining.
+What has **not** been done is the controlled ablation asking whether *fixing* it to identity
+preserves or improves pretraining performance. That gap is narrow, cheap to close, and
+sits exactly where our prototype already runs.
+
+## 5. What full adoption costs
+
+Phase 1, the prototype, is done. The remaining work is where risk concentrates. Ratings
+are from the internal implementation map.
 
 | Area | Risk |
 | --- | --- |
@@ -78,53 +102,64 @@ the risk concentrates. Risk ratings are from the internal implementation map.
 Three costs deserve naming plainly.
 
 **Memory, not parameters.** At `n=4` the model carries four times the residual state
-between every layer. Routing weights are negligible; activation memory is not. This, not
-parameter count, is what will bound the usable configuration.
+between every layer. Routing weights are negligible; activation memory and inter-layer
+bandwidth are not. The 6.7% training-time figure above comes from an optimised
+implementation, and ours is not one.
 
 **It collides with live work.** mHC routes around the MoE branch, and the standard and
 hybrid MoE blocks currently hand-code their residual adds. Those blocks are under active
-experimentation in the MoE study on `edullm/moe-m1-pilot`. Adopting mHC means editing code
-somebody else is running experiments against.
+experimentation on `edullm/moe-m1-pilot`. Adopting mHC means editing code somebody else is
+running experiments against.
 
-**Existing checkpoints have no routing state.** Every published OLMo checkpoint would need
+**Existing checkpoints carry no routing state.** Every published OLMo checkpoint would need
 a defined load path, and export and conversion would need updating.
 
-## 5. Decision gates
+## 6. Decision gates
 
 Do not advance a gate until the previous one passes.
 
 - **Gate 1, correctness.** Baseline-equivalent initialisation, constrained matrices,
-  gradient flow, save and resume, eager and compiled parity. **Already passing** on the
-  prototype branch.
-- **Gate 2, science.** Matched baseline against HC and mHC at `n=4`: identical tokens,
-  data, and schedule, **multiple seeds**, reporting validation loss and downstream tasks
-  with variance. Not started.
+  gradient flow, save and resume, eager and compiled parity. **Already passing.**
+- **Gate 2, science.** Matched arms on identical tokens, data and schedule, reporting
+  validation loss and downstream tasks. Not started.
 - **Gate 3, systems.** Tokens per second, peak memory, step time, communication bytes, and
   wall-clock time to a target loss. Not started.
 
-Gate 2 is the one that matters. Because the published effect sizes are near noise, a single
-run per arm cannot distinguish a real improvement from luck. Multiple seeds with reported
-variance is not optional rigour here; without it the experiment cannot answer the question.
+**Gate 2 must meet the bar this team already uses elsewhere.** The multi-hop work
+preregistered its gates and required effect sizes with confidence intervals over three to
+five seeds, on the explicit reasoning that a small effect cannot be ruled in or out at one
+seed. mHC effect sizes are smaller than that project's were. Anything less than the same
+standard cannot answer the question, and a single run per arm would waste the compute.
 
-## 6. Recommendation
+## 7. Recommendation
 
-**Do not merge mHC into `main` now.** The evidence does not yet justify a high-risk change
-to a core tensor contract, and roughly eighty percent of the remaining cost sits in the
-distributed, MoE, and pipeline work that only pays off if the science holds.
+**Do not merge mHC into `main` now.** The evidence does not justify a high-risk change to a
+core tensor contract, and most of the remaining cost sits in distributed, MoE and pipeline
+work that only pays off if the science holds.
 
-**Do fund Gate 2 at small scale.** The prototype already runs all six arms. A matched
-pretraining ablation with several seeds is comparatively cheap and answers the one
-genuinely open question: does the identity finding survive into pretraining? If it does, it
-contradicts the original mHC paper and is a publishable result in its own right, and it
-would also mean the expensive learned-mixing machinery can be skipped. If mixing does win,
-we then have our own evidence rather than someone else's, and Gate 3 becomes worth funding.
+**Do fund Gate 2 at small scale**, with the identity arm treated as a first-class
+hypothesis rather than a control. The most likely outcome, on current evidence, is that
+fixed identity matches learned mixing. That result is worth more than it sounds: it would
+mean we get the multi-stream capacity while skipping Sinkhorn, the dynamic router, and most
+of the high-risk column in section 5. The cheap variant winning is the good outcome, not the
+null one.
 
-Either outcome is informative, which is what makes this the right next spend.
+If learned mixing does win, we will have our own pretraining evidence on OLMo rather than
+someone else's, and Gate 3 becomes worth funding.
 
-## 7. What we are not claiming
+**A note on which benchmarks.** The generic suites (ARC, HellaSwag, PIQA, Winogrande, MMLU,
+GSM8K, Minerva-MATH) are wired up and are the right common currency. But the July brainlift
+argued the real hypothesis for an educational model is that separate streams might carry
+subject knowledge, student state, reasoning, and pedagogical policy. If that is the actual
+motivation, Gate 2 should also measure misconception identification, multi-turn student-state
+consistency, and answer leakage when the model should only hint. Those are not in the harness
+yet, and generic benchmarks will not detect them.
 
-No training or evaluation has been run in this repository. Every number in section 2 is a
+## 8. What we are not claiming
+
+No training or evaluation has been run in this repository. Every number in section 3 is a
 build-time or correctness measurement. Dynamic routing, MoE integration, and fused kernels
 are unimplemented. Tensor and context parallelism deliberately raise `NotImplementedError`
 on a hyper-connected block rather than silently applying a plan written for a 3-D hidden
-state.
+state. The stream-specialisation hypothesis in section 7 remains a hypothesis; nothing
+guarantees streams learn separable human-interpretable roles.
