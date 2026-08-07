@@ -193,7 +193,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--prefix", required=True, help="Checkpoint directory, or a fan-out's parent"
+        "--prefix",
+        required=True,
+        nargs="+",
+        help="One or more checkpoint directories, or fan-out parents. Several because a gate report has "
+        "to be assembled from evidence that does not share a parent: the sigma block and the dilution "
+        "ladder are separate submissions, so a report built from one of them alone reports G8 missing "
+        "while the ladder sits in the next prefix along.",
     )
     parser.add_argument("--out", required=True, help="Where to write the CSV")
     parser.add_argument("--work-dir", default="/tmp/factcrowd-score", help="Local scratch")
@@ -254,11 +260,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
 
     wanted = {int(step) for step in args.steps.split(",") if step.strip()}
-    prefixes = cell_prefixes(args.prefix)
+    prefixes: List[str] = []
+    for root in args.prefix:
+        found = cell_prefixes(root)
+        if not found:
+            # Named and skipped rather than fatal. With several prefixes, one empty root should not cost
+            # the others -- and a silent skip would let a typo read as "that submission scored nothing".
+            log.warning("no checkpoints under %s; skipping it", root)
+            continue
+        prefixes.extend(found)
     if not prefixes:
         raise OLMoConfigurationError(
-            f"no checkpoints under {args.prefix}. A run that died before its first save writes none, "
-            f"and a fan-out keeps them under cell-N/checkpoints -- check one level down."
+            f"no checkpoints under any of {list(args.prefix)}. A run that died before its first save "
+            f"writes none, and a fan-out keeps them under cell-N/checkpoints -- check one level down."
         )
     log.info("scoring %d cell prefix(es) under %s", len(prefixes), args.prefix)
 

@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Sequence
 
 import pytest
 from factcrowd import cells as C
@@ -645,13 +646,18 @@ def test_the_gate_report_is_produced_from_real_runs_and_gates_real_admission():
         )
         assert train.returncode == 0, train.stdout[-2500:] + train.stderr[-2500:]
 
-        def score(*extra: str, out: str) -> subprocess.CompletedProcess:
+        def score(
+            *extra: str, out: str, extra_prefixes: Sequence[str] = ()
+        ) -> subprocess.CompletedProcess:
+            # Extra roots join the single --prefix list rather than adding a second --prefix flag:
+            # under nargs="+" a second occurrence replaces the first, which would drop the real run.
             return subprocess.run(
                 [
                     sys.executable,
                     str(REPO_ROOT / "src" / "scripts" / "train" / "factcrowd" / "score_run.py"),
                     "--prefix",
                     str(work / "ck"),
+                    *extra_prefixes,
                     "--out",
                     str(work / out),
                     "--work-dir",
@@ -672,10 +678,20 @@ def test_the_gate_report_is_produced_from_real_runs_and_gates_real_admission():
             )
 
         # --- producing a report ------------------------------------------------------------------
+        # A second, nonexistent prefix rides along on purpose. `--prefix` takes several because gate
+        # evidence does not share a parent -- the sigma block and the dilution ladder are separate
+        # submissions -- and with several roots one bad root must not cost the others. It is warned
+        # about and skipped, not fatal, and not silent either.
         report_path = work / "gates-mano.json"
         first = score(
-            "--write-gate-report", str(report_path), "--gate-endpoint", "mano", out="pass1.csv"
+            "--write-gate-report",
+            str(report_path),
+            "--gate-endpoint",
+            "mano",
+            out="pass1.csv",
+            extra_prefixes=(str(work / "no-such-run"),),
         )
+        assert "no checkpoints under" in (first.stdout + first.stderr)
         assert first.returncode == 0, first.stdout[-2500:] + first.stderr[-2500:]
         report = json.loads(report_path.read_text())
 
@@ -727,3 +743,41 @@ def test_the_gate_report_is_produced_from_real_runs_and_gates_real_admission():
     broken["results"] = [{"gate": "G8", "passed": False, "detail": "ladder flat"}]
     assert not gates_module.GateReport.from_dict(broken).passed
     assert gates_module.GateReport.from_dict(broken).failures == ("G8",)
+
+
+@pytest.mark.slow
+def test_checkpoint_saving_is_synchronous_and_opens_no_second_process_group():
+    """
+    The defect that ate five runs, and the reason a passing smoke test did not catch it.
+
+    `CheckpointerCallback.save_async` defaults to `None`, which `pre_train` resolves to
+    `backend_supports_cpu()` -- true on this backend -- and it then calls `dist.new_group()` to obtain a
+    second process group for the save. A second process group is precisely what `async_bookkeeping` used,
+    and disabling that is already recorded in `train_cell.py` as having cost a run; the same construct
+    came back through a different field and kept going.
+
+    The evidence is positional rather than a traceback: across the first count grid, the sigma block and
+    the dilution ladder, six runs failed and five of them died 0, 0, 0, 10 and 15 steps after a planned
+    checkpoint. The sixth was an unrelated wall-clock kill.
+
+    Asserted on a *built trainer* rather than on the config literal, because the whole failure was a
+    default resolving at runtime to something the config never said.
+    """
+    pytest.importorskip("torch")
+    result = run_entry_point(
+        "async-off",
+        "--cell",
+        str(SMOKE_CELL),
+        "--save-folder",
+        "/tmp/factcrowd-async-off",
+        "--work-dir",
+        "/tmp/factcrowd-async-off-wd",
+        "--build-only",
+        cwd=REPO_ROOT,
+    )
+    assert result.returncode == 0, result.stdout[-2500:] + result.stderr[-2500:]
+    match = re.search(r"BUILD_ONLY (\{.*\})", result.stdout)
+    assert match is not None, result.stdout[-2500:]
+    settings = json.loads(match.group(1))
+    assert settings["save_async"] is False, settings
+    assert settings["async_bookkeeping"] is False, settings

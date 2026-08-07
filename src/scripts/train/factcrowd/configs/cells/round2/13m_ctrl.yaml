@@ -1,0 +1,16 @@
+cell_id: 13m_ctrl
+decay_fraction: 0.1
+demand_bits_per_param: 0.0
+exposures: 200
+global_batch_size: 262144
+learning_rate: 0.003
+notes: 'reasoning-only control: no facts'
+reasoning_tokens: 1000000000
+related_reasoning_tokens: 50000000
+replicate: 0
+row: 13M
+seed: 1234
+sequence_length: 512
+sweep: count
+warmup_fraction: 0.02
+weight_decay: 0.1

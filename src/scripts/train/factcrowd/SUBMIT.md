@@ -21,6 +21,12 @@ or commit", the platform resolves it and seals the real SHA into the lineage rec
 the repository it names cannot pin a SHA that stays correct past the commit which writes it. Substitute an
 explicit SHA if you need two submissions to be provably the same code.
 
+> **SUPERSEDED 2026-08-07 for jobs 2–6 — they ran.** The count grid is complete (12/12), the entropy
+> sweep is complete (6/6), and both re-runs landed: `28m_d4p8` finished at 134,479/134,480 in 20.14 h
+> against a 20.2 h estimate, and `13m_d0p6` in 0.89 h. Three cells still owe a re-run because they hit the
+> checkpoint-save defect described below. **`ROUND2.md` has the remaining commands.** Job 1's scoring
+> prefixes are stale — it predates the two re-runs.
+
 ## State this replaces
 
 | cell | outcome |

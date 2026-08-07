@@ -380,7 +380,7 @@ def test_every_committed_config_loads_and_resolves():
     # The gate directories are not axes -- their `sweep` is "count" and they carry no demand -- but a
     # hand edit in them would ship a cell that does not add up just as easily. Two directories were
     # added after this test and escaped it, which is exactly how a config tree drifts.
-    for extra in ("gates", "sigma"):
+    for extra in ("gates", "sigma", "round2"):
         cells = C.load_cells(CONFIG_ROOT / extra)
         assert cells, extra
         for cell in cells:
@@ -535,7 +535,7 @@ def test_every_committed_cell_yields_all_ten_checkpoints():
     fractions = (0.005, 0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.50, 0.75, 1.00)
     everywhere = tuple(
         cell
-        for directory in ("count", "entropy", "gates", "sigma")
+        for directory in ("count", "entropy", "gates", "sigma", "round2")
         for cell in C.load_cells(CONFIG_ROOT / directory)
     )
     # The ladder's shortest arm is the tightest case in the whole tree: 60% of a 1.0B-token control.

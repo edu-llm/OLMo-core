@@ -444,6 +444,16 @@ def build_trainer(
                 # -- so the run would die about an hour in having thrown away seven of them.
                 max_checkpoints=None,
                 ephemeral_save_interval=None,
+                # SYNCHRONOUS, AND THIS COST FIVE RUNS BEFORE IT WAS FOUND. Left at its default the
+                # field is None, which `pre_train` resolves to `backend_supports_cpu()` -- True here --
+                # and it then calls `dist.new_group()` to get a second process group for the async save.
+                # A second process group is exactly what `async_bookkeeping` used, and disabling *that*
+                # is already recorded in this file as having cost a run. The same construct arrived
+                # through a different door and went on eating runs: of six failures across the first
+                # grid, the sigma block and the dilution ladder, five died within 0-15 steps of a
+                # checkpoint save (deltas 0, 0, 0, 10, 15) and the sixth was an unrelated wall-clock
+                # kill. Synchronous saving costs about 2s per save, ~30s over a run's ten.
+                save_async=False,
             ),
         )
     )
@@ -682,6 +692,7 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> int:
                 "max_duration_steps": trainer.max_duration.value,
                 "save_overwrite": trainer.save_overwrite,
                 "async_bookkeeping": trainer.async_bookkeeping,
+                "save_async": checkpointer.save_async,
                 "evaluator_callbacks": [n for n in trainer.callbacks if "eval" in n.lower()],
                 "wandb_enabled": trainer.callbacks["wandb"].enabled,
                 "data_parallel": "fsdp",
