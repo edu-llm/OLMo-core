@@ -103,7 +103,9 @@ def fused_linear_cross_entropy_loss(
     """
     if _fused_linear_cross_entropy_loss is None:
         raise RuntimeError("'fused_linear_cross_entropy_loss' requires liger-kernel")
-    ce_loss, z_loss, per_token_acc = _fused_linear_cross_entropy_loss(
+    # Older liger returned (loss, z_loss, token_acc); newer returns a fourth
+    # predicted_tokens slot. Accept either so Colab/pip and the image stay compatible.
+    outputs = _fused_linear_cross_entropy_loss(
         _input,
         weight,
         labels,
@@ -117,7 +119,11 @@ def fused_linear_cross_entropy_loss(
         compute_z_loss,
         accum_dtype,
     )
-    del per_token_acc
+    if len(outputs) < 2:
+        raise RuntimeError(
+            f"liger fused_linear_cross_entropy returned {len(outputs)} values; expected at least 2"
+        )
+    ce_loss, z_loss = outputs[0], outputs[1]
     if compute_z_loss:
         return ce_loss, z_loss
     else:
