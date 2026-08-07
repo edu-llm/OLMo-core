@@ -56,6 +56,7 @@ MATCHED_RESULT_PATHS = (
     ("evaluation_controls", "nll_chunk_size"),
     ("evaluation_controls", "nll_context_policy"),
     ("evaluation_controls", "nll_target_policy"),
+    ("evaluation_controls", "generation_backend"),
     ("input_provenance", "hash_algorithm"),
     ("input_provenance", "corpus_hash_policy"),
     ("input_provenance", "tokenizer_sha256"),

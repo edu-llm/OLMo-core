@@ -15,6 +15,10 @@ All evaluator commands live in this directory:
 - `run_eval.py` — score one arm on the local `corpus-v3/` evaluator root.
 - `compare_arms.py` — paired dense-versus-split comparison from two result JSON
   files.
+- `bootstrap_vllm_env.sh` — create the isolated Python 3.12/CUDA 12 environment
+  required by the vLLM wheel on the L4 DLAMI.
+- `preflight_vllm.py` — import the native vLLM extension and reject incompatible
+  Python, package, CUDA, or GPU versions before a fleet launch.
 
 The corpus assembler is **not** here. It is local-only in the
 `memorysplit-requery-exact` checkout because it reads absolute `.p3-work` sealed
@@ -58,16 +62,23 @@ Run these steps in order from the handoff document
 
 1. **Validate corpus** — `assemble_v3_evaluator_root.py --check-only` on
    `corpus-v3/`.
-2. **Export both checkpoints** — dense and split to Hugging Face format with
+2. **Prepare and preflight vLLM** — run `bootstrap_vllm_env.sh` on one L4. Do
+   not use the DLAMI's Python 3.13/PyTorch cu130 environment.
+3. **Export both checkpoints** — dense and split to Hugging Face format with
    `export_checkpoint.py`.
-3. **Smoke evals** — one-row `run_eval.py` runs for dense and split.
-4. **Full evals** — all six families and three conditions with `run_eval.py`.
-5. **Compare** — `compare_arms.py` on the dense and split result JSON files.
+4. **Smoke evals** — one-row vLLM `run_eval.py` runs for dense and split on the
+   same L4 and with the same 16,384-token engine settings as production.
+5. **Full evals** — all six families and three conditions with `run_eval.py`.
+6. **Compare** — `compare_arms.py` on the dense and split result JSON files.
 
 Example invocations (after setting paths as in the handoff):
 
 ```bash
 cd "$OLMO_ROOT"
+
+P3_WORK_ROOT=/mnt/work \
+  bash src/scripts/train/p3_math_split/evals/bootstrap_vllm_env.sh
+PYTHON=/mnt/work/p3-vllm-venv/bin/python
 
 "$PYTHON" src/scripts/train/p3_math_split/evals/export_checkpoint.py \
   --run "$DENSE_RUN" --step 23166 --out "$EVAL_WORK/hf/dense" \
@@ -78,6 +89,8 @@ cd "$OLMO_ROOT"
   --mm-dir "$MM_DIR" \
   --families enigma isabelle metamath mizar prf2 thproofs \
   --conditions facts_present facts_absent facts_corrupted \
+  --generation-backend vllm --vllm-gpu-memory-utilization 0.55 \
+  --vllm-max-model-len 16384 \
   --batch-size 8 --context-length 16384 --max-new-tokens 8192 \
   --nll-chunk-size 256 --seed 20260801 --out "$EVAL_WORK/results/dense.json"
 

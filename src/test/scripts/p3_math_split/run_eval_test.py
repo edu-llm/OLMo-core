@@ -1007,6 +1007,75 @@ def test_cli_rejects_arm_mismatch_before_model_load(tmp_path, monkeypatch):
         run_eval.main()
 
 
+def test_vllm_startup_failure_publishes_failed_marker(tmp_path, monkeypatch):
+    model = tmp_path / "hf"
+    _write_exported_model(model, arm="dense")
+
+    class FakeTokenizer:
+        pad_token_id = 0
+        eos_token = "</s>"
+        padding_side = "right"
+
+    class TokenizerLoader:
+        @classmethod
+        def from_pretrained(cls, *_args, **_kwargs):
+            return FakeTokenizer()
+
+    class MustNotLoadModel:
+        @classmethod
+        def from_pretrained(cls, *_args, **_kwargs):
+            raise AssertionError("vLLM startup failure must happen before the HF model load")
+
+    transformers = ModuleType("transformers")
+    transformers.AutoModelForCausalLM = MustNotLoadModel
+    transformers.AutoTokenizer = TokenizerLoader
+    monkeypatch.setitem(sys.modules, "transformers", transformers)
+
+    events = []
+
+    class FakeProgressSync:
+        def __init__(self, s3_out, *, arm, shard_index, total_cells):
+            events.append(("started", s3_out, arm, shard_index, total_cells))
+
+        def failed(self, error):
+            events.append(("failed", type(error).__name__, str(error)))
+
+    monkeypatch.setattr(run_eval, "ProgressSync", FakeProgressSync)
+
+    def fail_vllm_startup(*_args, **_kwargs):
+        raise ImportError("libcudart.so.12 missing")
+
+    monkeypatch.setattr(run_eval, "build_vllm_engine", fail_vllm_startup)
+    monkeypatch.setattr(run_eval, "_VLLM_ENGINE", None)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_eval.py",
+            "--model",
+            str(model),
+            "--arm",
+            "dense",
+            "--families",
+            "mizar",
+            "--generation-backend",
+            "vllm",
+            "--s3-out",
+            "s3://bucket/p3-smoke",
+            "--out",
+            str(tmp_path / "result.json"),
+        ],
+    )
+
+    with pytest.raises(ImportError, match="libcudart"):
+        run_eval.main()
+
+    assert events == [
+        ("started", "s3://bucket/p3-smoke", "dense", 0, 3),
+        ("failed", "ImportError", "libcudart.so.12 missing"),
+    ]
+
+
 def test_evaluation_metadata_requires_complete_exporter_provenance(tmp_path):
     corpus = tmp_path / "corpus"
     (corpus / "eval").mkdir(parents=True)
@@ -1031,6 +1100,7 @@ def test_evaluation_metadata_requires_complete_exporter_provenance(tmp_path):
         max_new_tokens=8_192,
         limit=None,
         nll_chunk_size=256,
+        generation_backend="vllm",
     )
     first = run_eval.build_evaluation_metadata(
         args=args,
@@ -1055,6 +1125,7 @@ def test_evaluation_metadata_requires_complete_exporter_provenance(tmp_path):
         "facts_absent",
     ]
     assert first["evaluation_controls"]["condition_cohort_policy"] == run_eval.CONDITION_COHORT_POLICY
+    assert first["evaluation_controls"]["generation_backend"] == "vllm"
     assert first["schema_version"] == "p3-eval-v9"
     assert first["input_provenance"]["tokenizer_sha256"]
     assert first["input_provenance"]["corpus_sha256"]

@@ -26,8 +26,9 @@ There is also a direct memorisation probe (--probe): given a fact name alone, st
 fact. It measures the thing the training manipulation is supposed to change, without
 routing through proof search.
 
-Generation runs through HuggingFace, so the trained OLMo-core checkpoint is exported
-first. Greedy is the default because sampling noise is a comparison confound.
+Generation runs through HuggingFace or vLLM, while teacher-forced NLL always uses
+the HuggingFace model. Greedy is the default because sampling noise is a comparison
+confound.
 The evaluator applies the same ``text + EOS <= 16,384`` eligibility gate as
 training, then teacher-forces bounded logits chunks without losing prompt context.
 
@@ -1919,34 +1920,52 @@ def main():
         validate_reportable_checkpoint_step(model_provenance["checkpoint_step"])
     except ValueError as error:
         raise SystemExit(str(error)) from error
-    import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer
 
     families = args.families or discover_families(args.corpus)
     if not families:
         raise SystemExit(f"no eval families found under {Path(args.corpus) / 'eval'}")
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    tok = AutoTokenizer.from_pretrained(args.model)
-    if tok.pad_token_id is None:
-        tok.pad_token = tok.eos_token
-    tok.padding_side = "left"
+    sync = None
+    if args.s3_out:
+        try:
+            sync = ProgressSync(
+                args.s3_out,
+                arm=args.arm,
+                shard_index=args.shard_index,
+                total_cells=len(families) * len(args.conditions),
+            )
+        except Exception as error:  # noqa: BLE001 - observability must not gate the run
+            print(f"WARNING: progress sync unavailable, continuing without it: {error}", flush=True)
 
-    # vLLM sizes its KV cache from free GPU memory at construction, so it has to
-    # come up before the HuggingFace model claims any. Both stay resident: NLL
-    # runs on the HF model regardless of backend.
-    global _VLLM_ENGINE
-    if args.generation_backend == "vllm":
-        _VLLM_ENGINE = build_vllm_engine(
-            args.model,
-            gpu_memory_utilization=args.vllm_gpu_memory_utilization,
-            max_model_len=args.vllm_max_model_len or args.context_length,
-        )
+    try:
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model, dtype=torch.bfloat16 if device == "cuda" else torch.float32
-    ).to(device)
-    model.eval()
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        tok = AutoTokenizer.from_pretrained(args.model)
+        if tok.pad_token_id is None:
+            tok.pad_token = tok.eos_token
+        tok.padding_side = "left"
+
+        # vLLM sizes its KV cache from free GPU memory at construction, so it has to
+        # come up before the HuggingFace model claims any. Both stay resident: NLL
+        # runs on the HF model regardless of backend.
+        global _VLLM_ENGINE
+        if args.generation_backend == "vllm":
+            _VLLM_ENGINE = build_vllm_engine(
+                args.model,
+                gpu_memory_utilization=args.vllm_gpu_memory_utilization,
+                max_model_len=args.vllm_max_model_len or args.context_length,
+            )
+
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model, dtype=torch.bfloat16 if device == "cuda" else torch.float32
+        ).to(device)
+        model.eval()
+    except BaseException as error:
+        if sync is not None:
+            sync.failed(error)
+        raise
 
     metamath_sources = None
     mm_databases: dict = {}
@@ -1981,18 +2000,6 @@ def main():
         results["metamath_sources"] = metamath_sources
     if args.probe:
         train_fact_names, train_visibility_available = load_train_fact_names(args.corpus)
-
-    sync = None
-    if args.s3_out:
-        try:
-            sync = ProgressSync(
-                args.s3_out,
-                arm=args.arm,
-                shard_index=args.shard_index,
-                total_cells=len(families) * len(args.conditions),
-            )
-        except Exception as error:  # noqa: BLE001 - observability must not gate the run
-            print(f"WARNING: progress sync unavailable, continuing without it: {error}", flush=True)
 
     try:
         evaluate_families(

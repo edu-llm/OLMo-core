@@ -11,7 +11,7 @@ from types import ModuleType
 
 PROJECT_DIR = Path("src/scripts/train/p3_math_split")
 EVALS_DIR = PROJECT_DIR / "evals"
-EVAL_MODULES = frozenset({"compare_arms", "export_checkpoint", "run_eval"})
+EVAL_MODULES = frozenset({"compare_arms", "export_checkpoint", "preflight_vllm", "run_eval"})
 
 
 def load_project_module(name: str) -> ModuleType:

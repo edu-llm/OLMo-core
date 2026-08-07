@@ -158,6 +158,7 @@ def result(arm, items, *, checkpoint_step=None, family="mizar", conditions=None)
             "nll_chunk_size": 256,
             "nll_context_policy": "bounded_sliding_window_preserve_predecessor",
             "nll_target_policy": "combined_prompt_target_suffix_plus_single_eos",
+            "generation_backend": "vllm",
         },
         "input_provenance": {
             "hash_algorithm": "sha256",
@@ -1363,6 +1364,7 @@ def test_comparator_cross_checks_saved_config_source_and_manifest_identity(
         (("evaluation_controls", "nll_chunk_size"), 128),
         (("evaluation_controls", "nll_context_policy"), "other"),
         (("evaluation_controls", "nll_target_policy"), "content_without_eos"),
+        (("evaluation_controls", "generation_backend"), "hf"),
         (("input_provenance", "tokenizer_sha256"), SHA_C),
         (("input_provenance", "corpus_sha256"), SHA_D),
         (("input_provenance", "eval_shard_sha256"), {"mizar": SHA_E}),
