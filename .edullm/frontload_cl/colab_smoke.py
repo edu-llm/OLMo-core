@@ -161,8 +161,13 @@ def run_microbench(
     from frontload_cl.attn import resolve_attn_backend
     from olmo_core.config import DType
     from olmo_core.data import TokenizerConfig
-    from olmo_core.nn.lm_head import LMLossImplementation
+    from olmo_core.nn.lm_head import LMLossImplementation, LMOutputWithLoss
     from olmo_core.nn.transformer import TransformerConfig
+
+    # Bump when diagnosing "did Colab actually pull the fix?"
+    banner = "FRONTLOAD_CL_MICROBENCH_V3_FUSED_LINEAR"
+    print(banner, flush=True)
+    log.info(banner)
 
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -181,11 +186,15 @@ def run_microbench(
     config.lm_head.loss_implementation = LMLossImplementation.fused_linear
     try:
         import liger_kernel  # noqa: F401
+        from liger_kernel.ops.fused_linear_cross_entropy import (  # noqa: F401
+            LigerFusedLinearCrossEntropyFunction,
+        )
     except ImportError as exc:
         raise RuntimeError(
             "liger-kernel is required for fused_linear CE. "
             "Without it, default CE allocates ~39GiB of fp32 logits at 24×4096 and OOMs a 40GiB A100. "
-            "pip install liger-kernel, then retry."
+            "Re-run the install cell (pip install liger-kernel), then retry. "
+            f"Missing banner '{banner}' in the log means this file was not pulled."
         ) from exc
     log.info(
         "microbench: device=%s attn=%s dtype=%s loss=%s compile=%s optim=%s shape=(%d,%d) vocab=%d",
@@ -199,6 +208,11 @@ def run_microbench(
         seq_length,
         vocab,
     )
+    default_ce_logits_gib = sequences * seq_length * vocab * 4 / (1024**3)
+    log.info(
+        "default CE would allocate %.2f GiB of fp32 logits at this shape; fused_linear must avoid that",
+        default_ce_logits_gib,
+    )
 
     if device.startswith("cuda"):
         torch.cuda.empty_cache()
@@ -206,6 +220,7 @@ def run_microbench(
 
     model = config.build(init_device=device)
     assert model.lm_head is not None
+    model.lm_head._loss_implementation = LMLossImplementation.fused_linear
     if model.lm_head.loss_implementation != LMLossImplementation.fused_linear:
         raise RuntimeError(
             f"lm_head.loss_implementation is {model.lm_head.loss_implementation!r}, expected fused_linear"
@@ -233,34 +248,53 @@ def run_microbench(
             opt.zero_grad(set_to_none=True)
         else:
             model.zero_grad(set_to_none=True)
-        out = model(input_ids=input_ids, labels=labels)
-        loss = out.loss if hasattr(out, "loss") else out
+        out = model(input_ids=input_ids, labels=labels, return_logits=False)
+        if not isinstance(out, LMOutputWithLoss):
+            raise RuntimeError(
+                f"expected LMOutputWithLoss, got {type(out)!r}. "
+                "A raw logits Tensor means fused CE is not active (~39GiB OOM)."
+            )
+        if out.logits is not None:
+            raise RuntimeError(
+                "lm_head returned logits; fused_linear must leave logits=None. "
+                f"loss_implementation={model.lm_head.loss_implementation!r}"
+            )
+        loss = out.loss
         loss.backward()
         if opt is not None:
             opt.step()
         last_loss = float(loss.detach())
+        peak = _peak_mem_gib()
         log.info(
             "step %d/%d loss=%.4f peak_mem_gib=%s",
             step + 1,
             steps,
             last_loss,
-            _peak_mem_gib(),
+            peak,
         )
+        if peak is not None and peak > 35.0:
+            raise RuntimeError(
+                f"peak_mem_gib={peak} still looks like the default-CE ~39GiB logits path. "
+                f"Confirm the log contains '{banner}' and 'loss=fused_linear'."
+            )
 
     result = {
         "mode": "microbench",
         "ok": True,
+        "banner": banner,
         "steps": steps,
         "sequences": sequences,
         "seq_length": seq_length,
         "attn_backend": str(backend),
         "param_dtype": str(param_dtype),
+        "loss_implementation": str(model.lm_head.loss_implementation),
         "compile": compile_model,
         "with_optim": with_optim,
         "device": device,
         "last_loss": last_loss,
         "seconds": round(time.monotonic() - started, 2),
         "peak_mem_gib": _peak_mem_gib(),
+        "default_ce_logits_gib": round(default_ce_logits_gib, 3),
         "gpu": gpu_report(),
         "note": (
             "fwd/bwd activation proxy for one HSDP rank; full Adam/compile are optional "
