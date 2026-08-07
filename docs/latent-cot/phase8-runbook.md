@@ -116,11 +116,40 @@ The `EDULLM_LAUNCH_CHECK=waived` token is real (`launchers.LAUNCH_CHECK_WAIVER`)
 machine. It is not silent: `waived_launch_check_note` surfaces a sentence to the approving lead
 saying the run bills for 8 devices and starts 5.
 
+**Submit by dispatching the platform workflow, not the `edullm` CLI.** The `edullm` console script
+in `.venv/bin` is broken — it imports `edullm.cli`, which does not exist; only the `edullm_data`
+package (dataset publishing) is installed. `edu-llm/platform`'s `submit-run.yml` is the same
+interface and needs no CLI. It takes fifteen `workflow_dispatch` inputs; these are the ones this
+experiment sets (proven on the calibration run):
+
 ```bash
-edullm check --json --compute gpu-8xa100 --workload olmo-core-train \
-  --experiment latent-cot-pilot --dataset none --attempts 1
+gh workflow run submit-run.yml --repo edu-llm/platform \
+  -f repository=OLMo-core \
+  -f commit_sha=$(git rev-parse HEAD) \
+  -f image_digest="" \
+  -f workload_profile=olmo-core-train \
+  -f compute_profile=gpu-8xa100 \
+  -f dataset_release=none \
+  -f team=pre-training \
+  -f experiment=latent-cot-pilot \
+  -f wandb_project=latent-cot-superposition \
+  -f command="$COMMAND" \
+  -f maximum_runtime_hours=24 -f maximum_attempts=1 \
+  -f fanout_size="" -f fanout_index_parameter="" -f edullm_version=""
 ```
-Fix anything under `refusals` (match on code, not prose), then swap `check` → `submit`.
+
+**The dispatch *is* the check.** The compile job applies every refusal before any credential
+exists, so a bad submission fails there and costs nothing; read `refusals` in that job's log and
+match on the code rather than the prose. The commit must already have a **green image build** —
+the platform refuses a commit with no published image, so push first and wait for
+`Build eduLLM research image` to pass (and don't push again while it runs: a moving branch head
+fails the build's "Re-verify source identity" step).
+
+After compile, the run **parks at the `run-approval-lead` environment** until a team lead releases
+it — nothing is spent before that. Check with
+`gh api repos/edu-llm/platform/actions/runs/<id>/pending_deployments`; approve in the UI's *Review
+deployments*, or with `gh api ... -f state=approved -f environment_ids='[<id>]'`. Expect ~1 h of
+queue after approval.
 
 **Calibrate first on `gpu-1xa10g`** (§0b) — but an **A10G is 24 GB, below the ~25 GB estimate**, so
 calibrate at `--batch-size 8` (activations scale linearly ⇒ ~12–13 GB) and double the per-example
