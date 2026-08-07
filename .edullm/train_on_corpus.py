@@ -360,6 +360,25 @@ class Corpus:
     val_paths: List[str] = field(default_factory=list)
 
 
+def _shard_label(path: str) -> str:
+    """The source category a held-out shard belongs to, for grouping its loss.
+
+    ``LMEvaluator`` requires a ``label`` on every evaluation shard and groups its metrics by
+    it (``lm_evaluator.py:60-66``). The reader returns paths and no per-shard metadata, so the
+    directory is the only place the category is written down:
+    ``.../tokens/algebraic-stack/val-00000.u32le.bin`` -> ``algebraic-stack``.
+
+    :param path: An ``s3://`` shard URI.
+    :returns: The parent directory's name, or ``"val"`` when the layout is flat.
+    """
+    parts = [part for part in path.rstrip("/").split("/") if part]
+    # parts[-1] is the file; parts[-2] is the category, when there is one. "tokens" means the
+    # shards sit directly under the split root with no category level.
+    if len(parts) >= 2 and parts[-2] not in ("tokens", "val"):
+        return parts[-2]
+    return "val"
+
+
 def corpus_from_manifest(
     read,
     *,
@@ -782,12 +801,29 @@ def build_config(opts, overrides: List[str]):
     # here does not fail -- it reads every token to a different in-range id and produces a
     # validation loss that is wrong rather than missing, which is the one error this whole
     # metric cannot survive.
+    # EVERY VAL SHARD NEEDS A `label`, WHICH THE TRAINING PATH DOES NOT. LMEvaluator groups its
+    # metrics by that key and refuses a shard without one (lm_evaluator.py:60-66), so the
+    # asymmetry is real: NumpyFSLDatasetConfig builds fine with no metadata at all and the
+    # padded config for evaluation does not. Discovered by running it -- five runs died at
+    # exit 72 in eleven seconds with "Missing dataset 'label' in metadata".
+    #
+    # THE LABEL IS THE SOURCE CATEGORY, TAKEN FROM THE PATH. A published corpus lays its shards
+    # out as .../tokens/<category>/val-00000.u32le.bin, and the reader hands back paths without
+    # any per-shard metadata (ResolvedSplit carries paths, dtype, rows and nothing per file).
+    # So the directory holding the shard is the only source for it, and it is the right one:
+    # reservoir-dolma2 declares eight source categories and a per-category validation loss is
+    # more useful than one pooled number.
+    #
+    # A FLAT LAYOUT FALLS BACK TO "val" RATHER THAN FAILING. The label only has to exist and be
+    # stable; a corpus that puts every held-out shard in one directory gets one group, which is
+    # exactly the pooled number and still satisfies the evaluator.
     if corpus.val_paths:
         trainer_config = trainer_config.with_callback(
             "lm_evaluator",
             LMEvaluatorCallbackConfig(
                 eval_dataset=NumpyPaddedFSLDatasetConfig(
                     paths=corpus.val_paths,
+                    metadata=[{"label": _shard_label(path)} for path in corpus.val_paths],
                     sequence_length=opts.sequence_length,
                     tokenizer=corpus.tokenizer,
                     dtype=corpus.dtype,

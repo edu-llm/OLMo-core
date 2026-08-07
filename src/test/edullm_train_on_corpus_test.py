@@ -1041,3 +1041,104 @@ def test_the_summary_reports_the_held_out_loss_when_there_was_an_evaluator(capsy
     assert summary["val_loss"] == 7.4
     assert summary["val_shards"] == 2
     assert summary["last_loss"] == 11.6, "training loss must still be reported separately"
+
+
+@pytest.mark.parametrize(
+    "path,expected",
+    [
+        (
+            "s3://d/pretrain/regmix-10b/v1/tokens/algebraic-stack/val-00000.u32le.bin",
+            "algebraic-stack",
+        ),
+        (
+            "s3://d/pretrain/reservoir-dolma2/v1/tokens/stackexchange/val-00003.u32le.bin",
+            "stackexchange",
+        ),
+        ("s3://d/pretrain/x/v1/tokens/val-00000.u32le.bin", "val"),
+        ("s3://d/pretrain/x/v1/val/a.u32le.bin", "val"),
+    ],
+)
+def test_a_held_out_shard_is_labelled_by_its_source_category(path, expected):
+    """``LMEvaluator`` refuses a shard with no ``label`` and groups its metrics by it.
+
+    The reader returns paths and no per-shard metadata, so the directory is the only place the
+    category is written down. A flat layout falls back to one group rather than failing --
+    the label has to exist and be stable, not be interesting.
+    """
+    assert entry._shard_label(path) == expected
+
+
+def test_the_evaluator_dataset_carries_a_label_for_every_held_out_shard(monkeypatch):
+    """The asymmetry that cost five runs: training needs no metadata and evaluation does.
+
+    ``NumpyFSLDatasetConfig`` builds with no metadata at all, so the training path never
+    exercises this. ``LMEvaluator.from_numpy_dataset`` raises for any shard missing ``label``
+    (``lm_evaluator.py:60-66``), which was reachable only against real S3 -- five cells died at
+    exit 72 in eleven seconds before this test existed.
+
+    Drives ``build_config`` and applies the evaluator's OWN gate to what it produced. An
+    earlier version of this test asserted a label helper it called itself, and passed against
+    the broken code -- the same mistake, one day apart.
+    """
+    val = [
+        "s3://d/pretrain/reservoir-dolma2/v1/tokens/finewiki/val-00000.u32le.bin",
+        "s3://d/pretrain/reservoir-dolma2/v1/tokens/stackexchange/val-00000.u32le.bin",
+    ]
+    monkeypatch.setattr(
+        entry,
+        "resolve_corpus",
+        lambda **kwargs: entry.corpus_from_manifest(
+            FakeManifest(),
+            dataset_id=kwargs["dataset_id"],
+            version=kwargs["version"],
+            tokenizer_id=kwargs["tokenizer_id"],
+            val_paths=val,
+        ),
+    )
+    opts, overrides = entry.build_parser().parse_known_args(
+        [
+            "a-run-id",
+            "--dataset-id=pretrain/reservoir-dolma2",
+            "--dataset-version=v1",
+            "--dataset-tokenizer=tokenizer/dolma2-bpe",
+            "--save-folder=s3://outputs/teams/scratch/runs/a-run-id/checkpoints/",
+            "--steps=25",
+        ]
+    )
+    config = entry.build_config(opts, overrides)
+
+    evaluator = config.trainer.callbacks["lm_evaluator"]
+    metadata = evaluator.eval_dataset.metadata
+    assert metadata is not None, "the evaluator was built with no metadata at all"
+    assert len(metadata) == len(val), "every held-out shard needs its own metadata entry"
+
+    # LMEvaluator.from_numpy_dataset's own condition, not a paraphrase of it.
+    missing = [path for path, item in zip(val, metadata) if "label" not in item]
+    assert not missing, f"LMEvaluator would refuse {len(missing)} shard(s) with no label"
+    assert {item["label"] for item in metadata} == {"finewiki", "stackexchange"}
+
+
+def test_a_corpus_with_no_held_out_shards_gets_no_evaluator(monkeypatch):
+    """The callback must be absent rather than present and empty."""
+    monkeypatch.setattr(
+        entry,
+        "resolve_corpus",
+        lambda **kwargs: entry.corpus_from_manifest(
+            FakeManifest(),
+            dataset_id=kwargs["dataset_id"],
+            version=kwargs["version"],
+            tokenizer_id=kwargs["tokenizer_id"],
+        ),
+    )
+    opts, overrides = entry.build_parser().parse_known_args(
+        [
+            "a-run-id",
+            "--dataset-id=pretrain/regmix-10b",
+            "--dataset-version=v1",
+            "--dataset-tokenizer=tokenizer/dolma2-bpe",
+            "--save-folder=s3://outputs/teams/scratch/runs/a-run-id/checkpoints/",
+            "--steps=25",
+        ]
+    )
+    config = entry.build_config(opts, overrides)
+    assert "lm_evaluator" not in config.trainer.callbacks
