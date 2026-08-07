@@ -1893,9 +1893,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--expert-load-cv-max",
         default=None,
-        help="Override the RAW expert_load_cv ceiling (default 0.50). Pass a float, or 'none' to "
+        help="Override the RAW expert_load_cv ceiling (default 0.55, which is the ESCALATE "
+        "boundary pre-registered in maple/plan/balance-floor.md; (0.40, 0.55] is the ADOPT-cf-2.5 "
+        "band where the plan says keep going). Pass a float, or 'none' to "
         "disable just this band. Ignored when --no-balance-bands is set. NOTE the band is on raw "
-        "CV, not on expert_load_cv_excess: cv_excess = CV*sqrt(T*k/(E-1)) and so depends on the "
+        "CV, not on expert_load_cv_excess: cv_excess = CV*sqrt(T*N*k/(E-1)) and so depends on the "
         "logging interval, which means gating it would let a longer interval alone fail a "
         "physically identical model (D-075).",
     )

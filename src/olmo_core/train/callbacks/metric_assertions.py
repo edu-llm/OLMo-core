@@ -263,12 +263,12 @@ class MetricAssertionCallback(Callback):
     every 1-GPU gate. "Not reduced" is a correct state; "unavailable" is not.
     """
 
-    expert_load_cv_max: Optional[float] = 0.50
+    expert_load_cv_max: Optional[float] = 0.55
     """
     Ceiling on ``expert_load_cv`` -- **RAW CV, and deliberately not on** ``expert_load_cv_excess``.
 
     **WHY THE RAW QUANTITY IS THE GATEABLE ONE (D-075).** ``expert_load_cv_excess`` divides by a
-    null computed from the **accumulated** mean, so ``cv_excess = CV * sqrt(T*k/(E-1))`` and it
+    null computed from the **accumulated** mean, so ``cv_excess = CV * sqrt(T*N*k/(E-1))`` and it
     **grows without bound in the logging-interval length at fixed physical balance**. Measured: on
     X1 the ratio ``cv_excess / expert_load_cv`` was exactly **316.013** at every one of 600 logged
     steps, and 316.01 again on a different run and arm. So a band on it would mean **a longer
@@ -283,40 +283,70 @@ class MetricAssertionCallback(Callback):
     derived from a null. Read ``expert_load_cv_excess_per_micro_batch`` for the E-normalised,
     window-free cross-rung readout. **Gate the magnitude; compare the normalised statistic.**
 
-    **PROVENANCE OF 0.50, from measurement rather than taste, and it is a BOUNDED INTERVAL rather
-    than a single argument.** The number is pinned between a measured floor and a published ceiling,
-    and it must lie strictly inside both.
+    **PROVENANCE OF 0.55: IT IS THE PROJECT'S OWN PRE-REGISTERED ESCALATION THRESHOLD.**
+    ``maple/plan/balance-floor.md`` fixes a decision rule *before* the P1 probe, on **block-max raw
+    CV** -- which is exactly the quantity this band evaluates, since the check fires if ANY block
+    exceeds:
 
-    **The floor -- healthy steady-state, this stack, this gate:**
+    ======================  =====================================================
+    block-max raw CV        pre-registered meaning
+    ======================  =====================================================
+    <= 0.40                 RETIRE balance as a 20B risk. Ship at cf=2.0.
+    (0.40, 0.55]            ADOPT capacity_factor 2.5. One config change, no new science.
+    > 0.55                  ESCALATE: balance is real and architectural.
+    ======================  =====================================================
 
-    ==============================  ========  =====================================
-    run                             raw CV    margin to 0.50
-    ==============================  ========  =====================================
-    X1 tail (steps 587-600, flat)   0.2853    1.75x
-    X4a control                     0.3064    1.63x
-    X4a ternary                     0.3370    1.48x
-    ==============================  ========  =====================================
+    **So the ceiling is 0.55 and not a rounder number because that is where the project already
+    committed, in writing, that the situation stops being a config change and becomes a decision for
+    the user.** A raising assertion belongs exactly at the ESCALATE boundary and nowhere tighter:
+    inside ``(0.40, 0.55]`` the pre-registered response is *adopt a larger capacity factor and keep
+    going*, so a band that raised there would kill a run the plan says to continue.
 
-    The tightest margin is against the **ternary** arm, which is the correct binding case: QAT is
-    the arm expected to route worse, and a ceiling that fires on it would kill the comparison the
-    ladder exists to make.
+    **AND THIS CORRECTS MY OWN FIRST TWO ATTEMPTS, BOTH OF WHICH WERE WRONG.** They are recorded
+    because each error is instructive and neither is obvious:
 
-    **The published ceiling:** Wang et al. (arXiv:2408.15664) Table 2 reports aux-loss-controlled
-    baselines at **0.72 (1B)** and **0.52 (3B)**, and a **softmax-gate** baseline at **0.937** --
-    and softmax is **our** gating function. So the evidence-bounded window is **(0.3370, 0.52)**,
-    and 0.50 sits strictly inside it with ~4% clearance below the tightest published number. It does
-    not tolerate a state worse than any published router, which is the property that makes it a
-    tripwire rather than a formality.
+    1. **0.55 justified from the wrong evidence.** I first set 0.55 by comparing our CV against
+       "published baselines" of 0.72 / 0.52 / 0.937 from Wang et al. (arXiv:2408.15664) Table 2.
+       **Those numbers are MaxVio = max/mean - 1, NOT CV.** ``balance-floor.md`` converts X1 to
+       MaxVio **0.683** before comparing it to them, precisely because the units differ. Comparing a
+       CV to a MaxVio is a category error that happens to land in a plausible range, which is the
+       worst kind. **Almost nobody reports expert-load CV**, so there is no external CV referent to
+       calibrate against -- the calibration has to come from our own measurements and our own
+       pre-registered rule.
+    2. **0.50, "corrected" from an interval that was itself unit-confused.** Retreating to 0.50
+       looked like tightening on evidence. It was tightening on the *same wrong upper bound*, and it
+       moved the ceiling **into** the pre-registered ADOPT band -- i.e. it would hard-fail runs the
+       plan says to continue with cf=2.5. A tighter band is not automatically a safer band.
 
-    **0.55 was the first draft and it was WRONG, recorded here because the error is instructive.**
-    0.55 is *above* the 0.52 published figure, i.e. above the entire evidence window -- so it would
-    have tolerated a router measurably worse than a published aux-loss-controlled 3B model while
-    reading as "evidence-based" because every *healthy* number cleared it. A band justified only
-    from below is half a justification: it proves the band will not fire spuriously and says nothing
-    about whether it can fire at all. Both ends, or the number is taste wearing a citation.
+    **AND THE HEALTHY MEASUREMENTS MUST BE READ AS BLOCK-MAX, WHICH THEY MOSTLY WERE NOT.** This
+    band iterates per-block keys, so the relevant healthy figure is the **worst block**, not block
+    00:
+
+    ================================  =============  ==============  ================
+    run                               block 00       **block max**   margin to 0.55
+    ================================  =============  ==============  ================
+    X1 tail (steps 587-600, flat)     0.2853         **0.3512**      1.57x
+    X4a control                       0.3064         not recorded    --
+    X4a ternary                       0.3370         not recorded    --
+    ================================  =============  ==============  ================
+
+    X1's spread was **0.1755-0.3512 across 8 blocks** (``balance-floor.md``), so quoting 0.2853
+    against a block-max gate overstates the margin by 1.23x. The X4a figures are block-00 or
+    cross-block-mean and **their block-max is not recorded anywhere** -- so the honest binding
+    number is X1's **0.3512**, giving **1.57x**. Note that 0.3512 is *above* 0.3370, i.e. an earlier
+    draft of this docstring enforced a floor that X1's own healthy block-max violated.
+
+    **THE REAL RESIDUAL RISK, STATED PLAINLY: every one of these is E=64, and the flagship is
+    E=256.** Nothing above E=64 has ever trained. ``balance-floor.md`` computes the *sampling* term
+    at E=256 as only +0.007 to +0.026 -- negligible against 0.55 -- but calls the **persistent**
+    term at E=256 "genuinely unknown", and retiring that unknown is the entire purpose of the P1
+    probe. So this band is calibrated on E=64 and applied at E=256 on the argument that its ceiling
+    is a *pre-registered decision boundary* rather than an extrapolated measurement. **If P1 reads
+    block-max raw CV above 0.40 at E=256, this default must be revisited before any long run** --
+    not by widening it, but by taking the escalation the plan already describes.
 
     Lower reference, from the consequence side: ``drop_frac`` crosses its ratified 0.01 ceiling at
-    raw CV ~= **0.46** at ``capacity_factor=2.0``. **0.50 is deliberately ABOVE that, and that is
+    raw CV ~= **0.46** at ``capacity_factor=2.0``. **0.55 is deliberately ABOVE that, and that is
     not a relaxation.** Below ~0.46 the drop band is the tighter of the two and fires first, so a CV
     ceiling at 0.46 would be redundant with it. The CV band earns its place in the regime
     ``drop_frac`` is **blind** to: D-053 measured drops falling **1000x** (0.2247 -> 0.0002) while
@@ -328,15 +358,20 @@ class MetricAssertionCallback(Callback):
     **AND IT MUST CLEAR THE RECOVERY TRANSIENT, WHICH IS WHY** :data:`expert_load_cv_warmup_steps`
     **EXISTS.** The same D-053 curve, at E=64, on a run that completed 600/600 steps cleanly:
 
-    ======  ========  ===========
-    step    raw CV    vs 0.50
-    ======  ========  ===========
-    50      1.2434    **2.5x over**
-    100     0.7500    **1.5x over**
-    200     0.4618    under, by 1.08x
-    300     0.3567    under, by 1.40x
-    339     0.3204    under, by 1.56x
-    ======  ========  ===========
+    ======  =================  ===========
+    step    raw CV (block 00)  vs 0.55
+    ======  =================  ===========
+    50      1.2434             **2.3x over**
+    100     0.7500             **1.4x over**
+    200     0.4618             under, by 1.19x
+    300     0.3567             under, by 1.54x
+    339     0.3204             under, by 1.72x
+    ======  =================  ===========
+
+    **These are block-00 values and the band is on block-max, so every margin above is optimistic.**
+    Scaling by X1's measured block-max/block-00 ratio (0.3512/0.2853 = 1.23x) puts step 300 at an
+    implied block-max ~0.439, clearing 0.55 by only **~1.25x** rather than 1.54x. The per-block
+    curve was never recorded, so that is an estimate and is flagged as one.
 
     So this ceiling applied from the shared ``warmup_steps=50`` would have **failed a healthy run
     twice over**. An untrained router has not spread load yet and the recovery runs for *hundreds*
@@ -360,10 +395,20 @@ class MetricAssertionCallback(Callback):
     window would either fire this band on a healthy recovery or force the drop band's window out to
     where it protects nothing.
 
-    Chosen from the curve, not rounded for looks: at step 300 the measured healthy value is 0.3567,
-    which clears the 0.50 ceiling by **1.40x**. Step 200 (0.4618) clears it by only **1.08x** -- far
-    inside the run-to-run spread the three healthy measurements already show (0.2853 to 0.3370 is
-    itself a 1.18x range), so a window at 200 would put a raising assertion inside its own noise.
+    Chosen from the curve, not rounded for looks: at step 300 the block-00 value is 0.3567, and
+    scaling by X1's measured block-max/block-00 ratio of 1.23x gives an implied block-max ~0.439 --
+    clearing the 0.55 ceiling by ~1.25x. Step 200 (block 00 0.4618, implied block-max ~0.568) would
+    be **over the ceiling**, so 200 is not merely noisy, it would fail a healthy run outright.
+
+    **THE COST OF THIS WINDOW IS REAL AND IS NOT HIDDEN: at 300 steps, this band checks almost
+    nothing on the current gate ladder.** Measured gate lengths are G2 60, G4 60, G3 120, G5 200,
+    G7 300, G6 500, and the 20B throughput probe 150 -- so with ``metrics_collect_interval=5`` four
+    gates check this band **zero** times, G7 at most once, and only G6 gets real coverage. **Both
+    runs that would read E=256 balance (G5, and the throughput probe) get zero checks.** That is
+    why :meth:`close` reports ``cv_band_checks_applied`` separately and WARNS at zero: on most gates
+    the honest output of this band is "not evidence of routing balance", and it must say so rather
+    than pass silently. Lowering the window to cover them was rejected -- at 200 the band would fire
+    on a measured healthy run -- so the correct fix is a longer probe, not an earlier window.
 
     **The vacuity hole this opens is closed explicitly, not by assumption.** A run shorter than 300
     steps never checks this band, and :meth:`close` therefore reports its application count
@@ -464,7 +509,7 @@ class MetricAssertionCallback(Callback):
 
     _block_metric_names: Tuple[str, ...] = (
         "expert_load_cv",
-        # KEPT for aggregation, NOT GATED. `cv_excess` is `CV * sqrt(T*k/(E-1))` and therefore
+        # KEPT for aggregation, NOT GATED. `cv_excess` is `CV * sqrt(T*N*k/(E-1))` and therefore
         # depends on the logging interval (D-075); a band on it can fire on a physically identical
         # model. The window-free sibling is the E-comparable readout.
         "expert_load_cv_excess",
@@ -1072,7 +1117,7 @@ class MetricAssertionCallback(Callback):
 
         ON RAW ``expert_load_cv``, NEVER ON ``expert_load_cv_excess``. See
         :data:`expert_load_cv_max` for the full argument; the short form is that ``cv_excess`` is
-        ``CV * sqrt(T*k/(E-1))`` and therefore **a longer logging interval alone would trip this
+        ``CV * sqrt(T*N*k/(E-1))`` and therefore **a longer logging interval alone would trip this
         ceiling on a physically identical model** (D-075). Raw CV has no window dependence.
         """
         if self.expert_load_cv_max is None:
@@ -1087,16 +1132,22 @@ class MetricAssertionCallback(Callback):
                 continue
             self._failures.append(
                 f"'{key}' = {value:.6f} exceeds the raw expert-load CV ceiling of {ceiling} -- "
-                "expert load is persistently uneven. Healthy steady-state on this stack measured "
-                "0.2853 (X1 tail), 0.3064 (X4a control) and 0.3370 (X4a ternary), and the ceiling "
-                "sits below every published softmax-gate baseline (Wang et al. 2408.15664 Table 2: "
-                "0.937 softmax, 0.72/0.52 aux-loss-controlled). This band is NOT redundant with "
-                "`drop_frac`: at capacity_factor=2.0 an expert drops nothing until it exceeds 2x "
-                "mean, so drops fell 1000x while CV fell only 3.9x on one measured run -- "
-                "`drop_frac` is a thresholded view of balance, not a measure of it. Read the "
-                "per-block series, not the bare cross-block key. Do NOT diagnose this from "
-                "`expert_load_cv_excess`, which is raw CV times a window-dependent constant; use "
-                "`expert_load_cv_excess_per_micro_batch` if you want the E-normalised magnitude."
+                "expert load is persistently uneven. THE CEILING IS A PRE-REGISTERED DECISION "
+                "BOUNDARY, not a tolerance: maple/plan/balance-floor.md fixed <=0.40 = retire "
+                "balance as a risk, (0.40, 0.55] = adopt capacity_factor 2.5, >0.55 = ESCALATE "
+                "because balance is architectural and the remaining levers break Maple "
+                "faithfulness. So crossing this means the escalation branch, and the next step is "
+                "that decision rather than a band edit. Healthy measured block-max on this stack is "
+                "0.3512 (X1 tail, spread 0.1755-0.3512 over 8 blocks). NOTE all healthy data is "
+                "E=64 and the flagship is E=256, where the persistent term is unmeasured -- if "
+                "this fires on an E=256 run, probe P1's reading is the thing to check first. NOT "
+                "redundant with `drop_frac`: at capacity_factor=2.0 an expert drops nothing until "
+                "it exceeds 2x mean, so drops fell 1000x while CV fell only 3.9x on one measured "
+                "run -- `drop_frac` is a thresholded view of balance, not a measure of it. Do NOT "
+                "diagnose this from `expert_load_cv_excess`, which is raw CV times a "
+                "window-dependent constant; use `expert_load_cv_excess_per_micro_batch` for the "
+                "E-normalised magnitude. Do NOT recalibrate against Wang et al. 2408.15664 Table 2 "
+                "-- those figures (0.72/0.52/0.937) are MaxVio = max/mean - 1, NOT CV."
             )
 
 

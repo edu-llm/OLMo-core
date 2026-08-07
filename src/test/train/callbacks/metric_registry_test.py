@@ -85,7 +85,7 @@ ASSERTED_BAND_METRICS = (
     "entropy_deficit",
     "capacity_factor_deficit",
     # D-075. RAW CV, and `expert_load_cv_excess` is deliberately NOT here: it is
-    # `CV * sqrt(T*k/(E-1))`, so gating it lets a longer logging interval alone fail a physically
+    # `CV * sqrt(T*N*k/(E-1))`, so gating it lets a longer logging interval alone fail a physically
     # identical model. `test_no_band_gates_a_window_dependent_statistic` pins that exclusion, so it
     # cannot be reintroduced by someone reading this list as a menu.
     "expert_load_cv",
@@ -429,7 +429,7 @@ def test_contract_registered_lbl_pair_is_emitted():
 # shrinks as 1/sqrt(T) while the observed CV does not -- per-micro-batch imbalance is correlated
 # across micro-batches, so accumulated CV converges to the persistent imbalance instead. Hence
 #
-#       cv_excess = CV * sqrt(T * k / (E - 1))
+#       cv_excess = CV * sqrt(T * N * k / (E - 1))
 #
 # which GROWS WITHOUT BOUND in the logging-interval length at fixed physical balance. Measured: on
 # X1 (E=64, mean_acc = 98,304) `cv_excess / expert_load_cv` was exactly 316.013 at every one of 600
@@ -529,12 +529,22 @@ def test_cv_excess_is_still_window_dependent_so_the_test_above_is_not_vacuous():
         f"should be revisited; if it is some other factor, the model of the defect is wrong."
     )
 
-    # And the identity itself: cv_excess / cv is a constant for a fixed window, which is what makes
-    # `cv_excess` carry no information raw CV does not. Measured as 316.013 on X1.
-    for metrics in (short, long):
-        expected = (metrics["expert_load_cv_excess"] / metrics["expert_load_cv"]) ** 2
-        implied_mean_acc = (1.0 - 1.0 / 64) * expected
-        assert implied_mean_acc > 0, "the closed form did not invert"
+    # And the identity inverts to the ACCUMULATED MEAN, exactly. This is the check that makes the
+    # closed form auditable rather than asserted: `cv_excess/cv = 1/cv_null = sqrt(mean_acc/(1-1/E))`,
+    # so `mean_acc = (cv_excess/cv)^2 * (1-1/E)`. On X1 that reads 316.013^2 * (1-1/64) = 98,303.8,
+    # recovering the true 98,304 = 2048 assignments x 48 micro-batches.
+    #
+    # `> 0` was the first version of this assertion and it CANNOT FAIL -- a vacuous assert inside a
+    # test whose whole subject is non-vacuity. Pinned to the fixture's real accumulated mean now.
+    for metrics, t in ((short, 1), (long, 24)):
+        ratio = metrics["expert_load_cv_excess"] / metrics["expert_load_cv"]
+        implied_mean_acc = ratio**2 * (1.0 - 1.0 / 64)
+        expected_mean_acc = metrics["assignments_per_expert_mean"] * t
+        assert implied_mean_acc == pytest.approx(expected_mean_acc, rel=1e-4), (
+            f"inverting cv_excess/cv gave mean_acc {implied_mean_acc:.2f}, but the accumulated "
+            f"histogram's own mean is {expected_mean_acc:.2f}. The closed form documented in "
+            f"router.py does not describe the code."
+        )
 
 
 def test_the_two_excess_forms_differ_by_exactly_sqrt_of_the_window():
@@ -556,7 +566,7 @@ def test_no_band_gates_a_window_dependent_statistic():
     checks that something emitted is NOT asserted, on purpose.
     """
     assert "expert_load_cv_excess" not in ASSERTED_BAND_METRICS, (
-        "a band is gating `expert_load_cv_excess`, which is CV*sqrt(T*k/(E-1)). A longer logging "
+        "a band is gating `expert_load_cv_excess`, which is CV*sqrt(T*N*k/(E-1)). A longer logging "
         "interval alone would then fail a physically identical model. Gate `expert_load_cv` "
         "instead, and read `expert_load_cv_excess_per_micro_batch` for the E-normalised magnitude "
         "(D-075)."
@@ -580,46 +590,67 @@ def test_no_band_gates_a_window_dependent_statistic():
 
 def test_raw_cv_band_fires_above_its_ceiling_and_not_below():
     """
-    A magnitude check on the band itself, with the ceiling's own provenance as the fixture.
+    A magnitude check on the band, pinned to the project's PRE-REGISTERED escalation threshold.
 
-    The three healthy measurements on this stack (X1 tail 0.2853, X4a control 0.3064, X4a ternary
-    0.3370) must PASS, and a value above the published softmax-gate baseline must FAIL. A band that
-    fires on healthy runs teaches everyone to ignore the suite; a band that cannot fire is not a
-    band.
+    `maple/plan/balance-floor.md` fixes a decision rule on **block-max raw CV** before the P1 probe:
+    <=0.40 retire balance as a risk; (0.40, 0.55] adopt capacity_factor 2.5; >0.55 escalate because
+    balance is architectural. A RAISING assertion belongs at the ESCALATE boundary and nowhere
+    tighter -- inside the middle band the pre-registered response is "change one config value and
+    keep going", so a band that raised there would kill a run the plan says to continue.
+
+    THIS TEST'S BOUNDS ARE THE FIX FOR TWO REAL ERRORS, and they are asserted rather than commented
+    so neither can come back:
+
+    1. The ceiling was first justified against "published baselines" 0.72 / 0.52 / 0.937 from Wang
+       et al. 2408.15664 Table 2. **Those are MaxVio = max/mean - 1, not CV** -- balance-floor.md
+       converts X1 to MaxVio 0.683 before comparing, precisely because the units differ. Almost
+       nobody publishes expert-load CV, so there is no external CV referent and the calibration must
+       come from our own pre-registered rule.
+    2. The healthy figures 0.2853 / 0.3064 / 0.3370 are **block-00 or cross-block-mean**, and this
+       band gates **block-max**. X1's spread was 0.1755-0.3512 across 8 blocks, so the binding
+       healthy number is **0.3512** -- which is ABOVE 0.3370, i.e. an earlier version of this test
+       enforced a floor that X1's own healthy block-max violated.
     """
     callback = MetricAssertionCallback(vocab_size=100352)
     ceiling = callback.expert_load_cv_max
     assert ceiling is not None, "the raw-CV ceiling must be armed by default"
 
-    for healthy in (0.2853, 0.3064, 0.3370):
+    # Healthy, on the block-max reading the band actually evaluates. 0.3512 is X1's measured
+    # worst block; the other two are block-00 figures whose block-max was never recorded.
+    for healthy in (0.2853, 0.3064, 0.3370, 0.3512):
         callback._failures = []
         callback._check_cv_band({"train/block 00/expert_load_cv": healthy})
         assert not callback._failures, (
-            f"the ceiling {ceiling} fires on {healthy}, which is a MEASURED healthy steady-state "
-            f"value on this stack. Tightest of the three is the ternary arm (0.3370) and it is the "
-            f"binding case: QAT is expected to route worse, and a band that kills it kills the "
-            f"comparison the ladder exists to make."
+            f"the ceiling {ceiling} fires on {healthy}, a MEASURED healthy value on this stack "
+            f"(0.3512 is X1's worst BLOCK, which is the reading this band gates)."
         )
 
-    # Wang et al. 2408.15664 Table 2: softmax-gate baseline 0.937, and softmax is OUR gate. The
-    # ceiling must sit below every published number for a router of our own kind.
-    for unhealthy in (0.72, 0.937, 1.2434):
+    # The pre-registered ADOPT band must NOT raise: the plan's response there is capacity_factor
+    # 2.5, one config change. A band firing inside it kills a run the plan says to continue.
+    for adopt_band in (0.41, 0.50, 0.55):
         callback._failures = []
-        callback._check_cv_band({"train/block 00/expert_load_cv": unhealthy})
-        assert callback._failures, f"the ceiling {ceiling} does not fire on {unhealthy}"
+        callback._check_cv_band({"train/block 00/expert_load_cv": adopt_band})
+        assert not callback._failures, (
+            f"the ceiling {ceiling} fires at block-max CV {adopt_band}, which is inside the "
+            f"pre-registered (0.40, 0.55] ADOPT band where balance-floor.md prescribes "
+            f"capacity_factor 2.5 rather than failure."
+        )
 
-    # THE BAND MUST BE BOUNDED FROM BOTH SIDES. This is the check that caught the first draft: 0.55
-    # cleared every healthy measurement and was ABOVE the 0.52 published figure, so it would have
-    # tolerated a router measurably worse than a published aux-loss-controlled 3B model while
-    # reading as evidence-based. A band justified only from below proves it will not fire
-    # spuriously and says nothing about whether it can fire at all.
-    assert 0.3370 < ceiling < 0.52, (
-        f"the ceiling {ceiling} is outside the evidence-bounded window (0.3370, 0.52): it must "
-        f"clear the worst MEASURED healthy value (0.3370, the ternary arm) and sit below the "
-        f"lowest PUBLISHED baseline (0.52, aux-loss-controlled 3B in Wang et al. 2408.15664 "
-        f"Table 2). Above 0.52 the band tolerates a published-but-poor router; below 0.3370 it "
-        f"fires on our own healthy ternary arm."
+    # And it must fire above the ESCALATE boundary, or it is not a band.
+    for escalate in (0.5501, 0.60, 0.7500, 1.2434):
+        callback._failures = []
+        callback._check_cv_band({"train/block 00/expert_load_cv": escalate})
+        assert callback._failures, f"the ceiling {ceiling} does not fire on {escalate}"
+
+    assert ceiling == pytest.approx(0.55), (
+        f"the ceiling is {ceiling}, not the pre-registered ESCALATE boundary of 0.55 "
+        f"(maple/plan/balance-floor.md). Tighter is NOT safer here: 0.50 sits inside the ADOPT "
+        f"band and would hard-fail runs the plan says to continue with capacity_factor 2.5. Looser "
+        f"than 0.55 abandons the only threshold this project committed to in advance. Do NOT "
+        f"re-derive this from Wang et al. Table 2 -- those figures are MaxVio, not CV."
     )
+    # It must also clear the worst measured healthy block, or it fires on a healthy run (D-019).
+    assert ceiling > 0.3512
 
 
 def test_cv_band_has_a_later_window_and_reports_it_separately():

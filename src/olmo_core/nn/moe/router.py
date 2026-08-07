@@ -926,7 +926,15 @@ class MoERouter(nn.Module):
         #
         # so the ratio grows without bound in the window length at fixed physical balance:
         #
-        #       cv_excess  =  CV * sqrt(T * k / (E - 1))
+        #       cv_excess  =  CV * sqrt(T * N * k / (E - 1))
+        #
+        # where T is the accumulated micro-batch count, N the tokens per micro-batch and k the top-k.
+        # NOTE THE `N`: an earlier statement of this identity (D-075, and my own first draft of this
+        # comment) wrote `sqrt(T*k/(E-1))`, which drops tokens-per-micro-batch and is off by
+        # sqrt(N) -- 128x at X1's numbers, since sqrt(48*8/63) = 2.47 against a measured 316.01 while
+        # sqrt(48*16384*8/63) = 316.01 exactly. `T*N*k/E` is just `mean_acc`, so the identity reduces
+        # to `cv_excess = CV / cv_null`; the reason to write it out longhand is that the only factor
+        # in it which is NOT a physical property of the model is T.
         #
         # MEASURED, NOT ARGUED: on X1 (E=64, mean_acc = 98,304) `cv_excess / expert_load_cv` was
         # exactly 316.013 at every one of 600 logged steps and on every block; and 316.01 again on
