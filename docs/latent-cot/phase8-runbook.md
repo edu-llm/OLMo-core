@@ -8,6 +8,57 @@ Everything reuses the same `arm_loss` the tests validate, so behavior matches.
 - A CUDA GPU (the driver auto-detects `cuda`). 370M with the per-example CODI student is the
   cost driver — expect this to be the slow part; start with a modest `--steps` and scale up.
 
+## 0b. Compute requirements (for GPU shopping)
+
+**Shape of the job:** 5 independent single-GPU processes (one per arm), 1 seed, 5,000 steps each.
+No multi-node, no multi-GPU-per-job, no interconnect requirement. Estimates below are from
+FLOPs × assumed MFU (`local/latentcot_gpu_estimate.py`), using real token counts from the
+difficulty grid — **they are estimates, not measurements**; calibrate on the box (see below) before
+booking long reservations.
+
+Cost per arm (5,000 steps, batch 16, K=10, mean student sequence ≈ 272 tokens):
+
+| Arm | forwards/step | token-pos/step | train PFLOPs | eval PFLOPs | total |
+|---|---|---|---|---|---|
+| A0 explicit-CoT | 16 | 4,929 | 70 | **69** | 139 |
+| A1 no-CoT | 16 | 4,161 | 59 | 1 | 60 |
+| A2/A3/A4 CODI (each) | **192** | 51,453 | 732 | 8 | 740 |
+
+Campaign total ≈ **2,420 PFLOPs**; slowest single arm ≈ **740 PFLOPs**. Note A0's *eval* nearly
+equals its training cost — `greedy_generate` has no KV cache, so every generated CoT token is a
+full forward. Lower `--best-eval-size` if A0's checkpoint evals dominate.
+
+Wall-clock, dense bf16 peaks, `serial (all 5 arms on one GPU) / parallel (5 GPUs, = slowest arm)`:
+
+| GPU | @2% MFU | @5% MFU | @10% MFU |
+|---|---|---|---|
+| A100-40GB / 80GB | 108 h / 33 h | 43 h / 13 h | 22 h / 7 h |
+| H100-80GB | 34 h / 10 h | 14 h / 4 h | 7 h / 2 h |
+| L40S-48GB | 186 h / 57 h | 74 h / 23 h | 37 h / 11 h |
+| RTX A6000-48GB | 217 h / 66 h | 87 h / 27 h | 43 h / 13 h |
+
+**Plan against the 5% column** — the loop issues 192 batch-1 forwards per step, which is
+launch-latency bound rather than compute bound, so low MFU is expected until the per-example loop
+is packed. For the same reason, **do not expect an H100 to deliver its 3.2× FLOPs advantage here**;
+at batch 1 clock and memory latency matter more than tensor-core peak. An A100-40GB is the
+sweet spot; anything with ≥40 GB and bf16 works.
+
+**Memory (per GPU, one CODI arm):** params fp32 1.9 GB + AdamW states 3.8 GB + grads 1.9 GB +
+retained activations ≈ 17 GB → **≈ 25 GB**. The activation term is the interesting one: `codi_loss`
+accumulates all 16 examples' graphs and backprops **once**, so every example's whole K-chain is
+alive simultaneously, and it scales *linearly* with `--batch-size` (halve the batch to halve it).
+40 GB is comfortable; 24 GB cards are marginal and would need a smaller batch. A0/A1 need far less.
+
+**Calibrate before booking (≈10 min on the real box):** run one CODI arm for 20 steps and read the
+actual step time and peak memory, then rescale the table:
+```bash
+.venv/bin/python src/scripts/latentcot/verify_checkpoint.py --model olmo3_370M   # loads + 1 fwd/bwd
+.venv/bin/python src/scripts/latentcot/train_codi.py --arm A2 --rung olmo3_370M \
+  --steps 20 --batch-size 16 --save-every 0 --log-every 1 \
+  --train-data $DATA/train-00000.jsonl --test-data $DATA/heldout-00000.jsonl --out /tmp/cal
+# hours per CODI arm ≈ (mean seconds/step) * 5000 / 3600 ; also check nvidia-smi peak memory
+```
+
 ## 1. Generate the dataset (once)
 ```bash
 .venv/bin/python src/scripts/latentcot/gen_graph_data.py
@@ -22,27 +73,34 @@ Everything reuses the same `arm_loss` the tests validate, so behavior matches.
 ```
 Must print PREFLIGHT PASSED (matched config, disjoint seeds). Do not train if it fails.
 
-## 3. Train the arms — matched starts, paired seeds
-Screen with 3 seeds, then confirm with 5. **Every arm forks the same "best model" via
-`--rung olmo3_370M --init-checkpoint s3://…` and uses the SAME `--init-seed`** (identical
-starting weights = the shared base); only `--seed` (data shuffle) and the arm's whitelisted
+## 3. Train the arms — matched starts, **1 seed (pilot)**
+**This first campaign is 1 seed per arm.** That makes it a *screen*, not the confirmatory run:
+with a single seed there is no seed-level variance, so the pre-registered Gate A/B criteria — which
+are **paired-seed 95% CIs** — cannot be *concluded*, only pointed at. See §4 for what you can and
+cannot claim, and §6 for what the confirmatory sweep needs.
+
+**Every arm forks the same "best model" via `--rung olmo3_370M --init-checkpoint s3://…` and uses
+the SAME `--init-seed`** (identical starting weights = the shared base); only the arm's whitelisted
 fields vary. Arms: `A0` explicit-CoT (= the best model fine-tuned the normal way, the fair
 baseline), `A1` no-CoT, `A2` CODI, `A3` CODI+R1 (the fix), `A4` CODI+L2 (control).
 
 ```bash
 DATA=data/latentcot/graph-reachability-depth/conversations
 BASE=s3://edullm-olmo-370m-ckpts/olmo3-370m/run-10b-equal/step12716/  # needs AWS creds
-for seed in 1 2 3; do
-  for arm in A0 A1 A2 A3 A4; do
-    .venv/bin/python src/scripts/latentcot/train_codi.py \
-      --arm $arm --rung olmo3_370M --init-checkpoint $BASE --steps 5000 --batch-size 16 \
-      --init-seed 0 --seed $seed \
-      --train-data $DATA/train-00000.jsonl --test-data $DATA/heldout-00000.jsonl \
-      --out runs/latentcot
-  done
+SEED=1                       # pilot: one seed, identical for every arm
+for arm in A0 A1 A2 A3 A4; do
+  .venv/bin/python src/scripts/latentcot/train_codi.py \
+    --arm $arm --rung olmo3_370M --init-checkpoint $BASE --steps 5000 --batch-size 16 \
+    --init-seed 0 --seed $SEED \
+    --train-data $DATA/train-00000.jsonl --test-data $DATA/heldout-00000.jsonl \
+    --out runs/latentcot
 done
 # each writes runs/latentcot/<arm>-seed<seed>/{model.pt, best.pt, best.json, stepN.pt x2, metrics.json}
 ```
+The five arms are **independent processes** — if you have 5 GPUs, run them concurrently (one arm
+per GPU, `CUDA_VISIBLE_DEVICES=$i`) and wall-clock becomes the slowest single arm rather than the
+sum. There is no multi-GPU parallelism *within* an arm (the direct loop has no DDP/FSDP), so more
+GPUs than arms buys nothing here. See §0b for sizing.
 `metrics.json` already carries `overall_acc` + `solve_rate_by_depth` per run.
 
 **Precision.** `--precision bf16` is the default: bf16 autocast on the training forward, the
@@ -105,8 +163,14 @@ fix that LR for all arms in the seeded sweep. `--lr`/`--warmup-steps` are record
   --arm A4=runs/latentcot/A4-seed1/model.pt
 # writes runs/latentcot/eval/report.json (+ gate_a.png if matplotlib present)
 ```
+> **1-seed caveat.** Both gates are pre-registered on **paired-seed 95% CIs**. With one seed there
+> is no seed-level variance to compute them from, so read everything below as a *point estimate* —
+> a screen for "is there a depth-increasing signal at all", not a pass/fail. You may legitimately
+> bootstrap a CI over the 960 held-out **items**; that captures test-item noise, not init/data-order
+> variance, and does not substitute for the paired-seed criterion. See §6.
+
 - **Gate A (superposition):** `report["gate_a"]["slope"]` should be **positive** and the
-  `curve` (A2 − A0 by depth) increasing. Aggregate across seeds and report a **paired CI** on
+  `curve` (A2 − A0 by depth) increasing. With ≥3 seeds, aggregate and report a **paired CI** on
   the slope (compute from the per-seed `solve_rate_by_depth` in each run's metrics.json).
 - **Gate B (the fix):** A3 (R1) accuracy + decodability **>** A2 (none), and **A3 > A4** (L2
   control) — that isolates the *vocabulary-space direction*. Paired CIs across seeds.
@@ -146,6 +210,20 @@ If, at ≥5 seeds, gate A is null **but** probes show a weak, depth-increasing s
 rung (`--rung olmo2_600M`, then `760M`, `1B`), re-sweep `--lr`, repeat 3–4. If gate A is absent
 even in-distribution **and** A2 never approaches A0 → debug at a reduced-size config first, don't
 spend on scale. Escalate at most one rung at a time; stop at 1B (beyond is a separate decision).
+
+## 6. From pilot to confirmatory
+The 1-seed run is a screen. What it *can* settle: the harness runs clean at 370M (loss decreases,
+`thought_rms` stays ≈1 and flat, `grad_norm` stable, no OOM), the calibrated cost per arm, whether
+A2 gets anywhere near A0 at all, and the sign/shape of the depth curve. What it *cannot* settle:
+either gate, because both are defined on paired-seed CIs.
+
+To convert it into a result, re-run §3 with `for SEED in 1 2 3` (and 5 for the confirmatory sweep),
+keeping `--init-seed 0` and every other flag byte-identical — only `--seed` changes. Cost scales
+linearly: ~3× and ~5× the §0b numbers. Nothing else about the procedure changes, and the pilot's
+seed-1 runs are reusable as one of the seeds (same code, same flags → same run).
+
+Anything written from the 1-seed pilot must call itself a pilot; presenting it as a gate outcome
+would violate the §11 pre-registration terms.
 
 ## Notes
 - `train_codi.py` builds from a seeded init by default (no external base checkpoint needed); pass
