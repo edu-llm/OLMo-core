@@ -10,6 +10,7 @@ equivalent for the research runs.
 
 import contextlib
 import json
+import time
 from pathlib import Path
 from typing import ContextManager, Iterator, List, Optional, Protocol
 
@@ -298,6 +299,9 @@ def train_arm(
             publish_artifact(save_dir / "best.json", remote_dir)
 
     model.train()
+    if device.startswith("cuda"):
+        torch.cuda.reset_peak_memory_stats()
+    started = time.perf_counter()
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
     # min(...) keeps warmup < horizon on the short smoke runs; decay_fraction matches the WSD default.
     scheduler = WSD(warmup=max(1, min(warmup_steps, steps - 1)), decay_fraction=0.1)
@@ -330,6 +334,15 @@ def train_arm(
                     "lr": float(lr_t),
                     "loss": float(loss.detach()),
                     "grad_norm": float(grad_norm),
+                    # Cost telemetry, so a short run measures what the sizing estimate guessed:
+                    # seconds since the loop began (differences give s/step) and the true peak
+                    # allocation. Both are what a compute request should quote instead of a model.
+                    "elapsed_s": round(time.perf_counter() - started, 3),
+                    "peak_mem_gb": (
+                        round(torch.cuda.max_memory_allocated() / 1e9, 3)
+                        if device.startswith("cuda")
+                        else 0.0
+                    ),
                     **metrics,
                 }
             )

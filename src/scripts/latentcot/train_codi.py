@@ -93,6 +93,14 @@ def main() -> None:
         "--keep-last", type=int, default=2, help="rolling checkpoints to retain (oldest deleted)"
     )
     parser.add_argument(
+        "--log-every",
+        type=int,
+        default=100,
+        help="append a train_history entry every N steps. Each carries elapsed_s and "
+        "peak_mem_gb, so a short run measures step time and true peak memory (use --log-every 1 "
+        "on a calibration run).",
+    )
+    parser.add_argument(
         "--val-fraction",
         type=float,
         default=0.1,
@@ -184,6 +192,7 @@ def main() -> None:
         lr=args.lr,
         warmup_steps=args.warmup_steps,
         seed=args.seed,
+        log_every=args.log_every,
         save_dir=run_dir,
         save_every=args.save_every,
         keep_last=args.keep_last,
