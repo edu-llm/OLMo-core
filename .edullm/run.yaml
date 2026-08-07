@@ -1,18 +1,14 @@
-# Checkpoint-transfer smoke (Ben / Lin et al.): post-train an earlier base, apply
-# Δ onto a later base from the same trajectory, report retention.
-#
-# Default mode is synthetic_twin (builds Ms→Mt by sequential train on one 370M-class
-# model). Team S3 ladder dumps (step15000/20000) are the intended production pair;
-# switch to --mode team_s3 once those old-OLMo model.pt keys load cleanly.
-#
-# Platform: push only on edullm/** (never main). Price with edullm check before submit.
+# MoE checkpoint-transfer smoke v2 (Ben / Lin et al.).
+# 4-of-40 MoE at smoke width, real math-frontload tokens, held-out CE retention.
+# Branch: edullm/** only — never main. Cap submit with --hours 4 --attempts 1 (~$3.22).
 schema_version: 1
 workload_profile: olmo-core-train
 suggested_compute: gpu-1xl4
 command: >-
   bash -lc 'python .edullm/ckpt_transfer_smoke.py
   --save-folder "$EDULLM_CHECKPOINT_DIR"
-  --mode synthetic_twin
-  --steps-pre 60 --steps-gap 60 --steps-sft 40
+  --steps-pre 200 --steps-gap 200 --steps-sft 400
   --seq-len 256 --batch-size 4
+  --train-batches 32 --sft-batches 16 --eval-batches 8
+  --num-experts 40 --top-k 4 --d-model 512 --n-layers 8 --n-heads 8
   --param-dtype float32'

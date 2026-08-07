@@ -1,29 +1,21 @@
-# Checkpoint transfer smoke
+# Checkpoint transfer smoke (v2, MoE)
 
-Investigates Ben’s idea: post-train an **earlier** pretrain checkpoint, then move
-that change onto a **later** checkpoint via $\Delta = \mathrm{FT}(M_s) - M_s$,
-$M_t + \Delta$.
+Ben’s idea: post-train earlier base $M_s$, apply $\Delta=\mathrm{FT}-M_s$ onto later $M_t$.
 
-Paper: [Efficient Model Development through Fine-tuning Transfer](https://arxiv.org/abs/2503.20110).
+Paper: https://arxiv.org/abs/2503.20110
 
-## Checkpoints (team)
+## v2 (accurate-enough smoke)
 
-| Role | URI |
-|---|---|
-| $M_s$ | `s3://edullm-checkpoints/olmo2-370m-cpt/edullm-370M-30B/step15000-unsharded/model.pt` |
-| $M_t$ | `s3://edullm-checkpoints/olmo2-370m-cpt/edullm-370M-30B/step20000-unsharded/model.pt` |
+- **MoE** `top_k=4` / `num_experts=40` at d_model=512 (same routing pattern as team 4/40; not full 7B)
+- **Real tokens** from `math-frontload-100m` (dolma2), not random ids
+- Held-out CE on a disjoint shard region
+- Requires SFT gain ≥ 0.05 CE before calling transfer decisive
 
-First submit uses `--mode synthetic_twin` (same experiment, keys guaranteed).
-`--mode team_s3` loads the URIs above when the old-OLMo dump loads into olmo_core.
-
-## Branch / push
-
-Use `edullm/ckpt-transfer-smoke` only. **Do not push to `main`.**
-
-## Launch
+## Launch (not main)
 
 ```bash
-edullm check --experiment ckpt-transfer-smoke --dataset none --hours 2
-# only after check is clean and you approve:
-edullm submit --experiment ckpt-transfer-smoke --dataset none --hours 2
+# on edullm/ckpt-transfer-smoke
+edullm check --experiment ckpt-transfer-smoke-moe --dataset math-frontload-100m-v1 --hours 4 --attempts 1
+# ceiling should be ~$3.22; only submit if under $50
+edullm submit --experiment ckpt-transfer-smoke-moe --dataset math-frontload-100m-v1 --hours 4 --attempts 1
 ```
