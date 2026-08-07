@@ -82,6 +82,8 @@ def test_parser_microbench_defaults():
     assert opts.sequences == C.GLOBAL_BATCH_SEQUENCES // 8
     assert opts.seq_length == C.SEQ_LENGTH
     assert opts.attn_backend == C.DEFAULT_ATTN_BACKEND
+    assert opts.compile is False
+    assert opts.with_optim is False
 
 
 @pytest.mark.gpu
@@ -99,7 +101,6 @@ def test_microbench_one_step_gpu():
                 "1",
                 "--attn-backend",
                 "torch",
-                "--no-compile",
                 "--device",
                 "cuda",
             ]

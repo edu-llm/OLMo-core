@@ -138,14 +138,23 @@ def run_microbench(
     sequences: int = C.GLOBAL_BATCH_SEQUENCES // 8,  # 24 — one 8×A100 rank
     seq_length: int = C.SEQ_LENGTH,
     attn_backend: str = C.DEFAULT_ATTN_BACKEND,
-    compile_model: bool = True,
+    compile_model: bool = False,
+    with_optim: bool = False,
     device: Optional[str] = None,
 ) -> Dict[str, object]:
     """
     OLMo2-370M forward+backward at the real per-rank microbatch shape.
 
-    On one A100 this matches the activation footprint of one platform rank
-    (global batch 192 / 8 GPUs = 24 sequences).
+    Goal: approximate **activation** memory of one ``gpu-8xa100`` rank (24×4096,
+    FA2, bf16). This is intentionally *not* a full replica of HSDP training:
+
+    - Platform HSDP shards params + Adam state across 8 GPUs; this process holds
+      the whole model, so enabling ``with_optim`` overestimates rank memory.
+    - ``torch.compile`` can spike reserved memory on the first step; leave it off
+      until a non-compile step succeeds.
+
+    On a clean 40 GiB A100, a FA2+bf16 fwd/bwd at 24×4096 should fit; leftover
+    fragmentation from earlier OOMs often will not — restart the Colab session first.
     """
     import torch
 
@@ -168,27 +177,32 @@ def run_microbench(
         vocab_size=vocab, attn_backend=backend, dtype=param_dtype
     )
     log.info(
-        "microbench: device=%s attn=%s dtype=%s compile=%s shape=(%d,%d) vocab=%d",
+        "microbench: device=%s attn=%s dtype=%s compile=%s optim=%s shape=(%d,%d) vocab=%d",
         device,
         backend,
         param_dtype,
         compile_model,
+        with_optim,
         sequences,
         seq_length,
         vocab,
     )
 
     if device.startswith("cuda"):
-        torch.cuda.reset_peak_memory_stats()
         torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
 
     model = config.build(init_device=device)
     model.train()
     if compile_model and device.startswith("cuda"):
-        # Same intent as the platform trainer (Inductor). First step is slow.
+        # Same intent as the platform trainer (Inductor). First step is slow / spiky.
         model = torch.compile(model)
 
-    opt = torch.optim.AdamW(model.parameters(), lr=C.PEAK_LR)
+    # Default: no Adam — platform HSDP shards optim state; a full AdamW here would
+    # add several GiB the rank does not carry and confuses the activation question.
+    opt = (
+        torch.optim.AdamW(model.parameters(), lr=C.PEAK_LR) if with_optim else None
+    )
     started = time.monotonic()
     last_loss: Optional[float] = None
     for step in range(steps):
@@ -198,11 +212,15 @@ def run_microbench(
         # Labels are caller-shifted left of input_ids (see Transformer.forward).
         labels = torch.roll(input_ids, shifts=-1, dims=-1)
         labels[:, -1] = -100
-        opt.zero_grad(set_to_none=True)
+        if opt is not None:
+            opt.zero_grad(set_to_none=True)
+        else:
+            model.zero_grad(set_to_none=True)
         out = model(input_ids=input_ids, labels=labels)
         loss = out.loss if hasattr(out, "loss") else out
         loss.backward()
-        opt.step()
+        if opt is not None:
+            opt.step()
         last_loss = float(loss.detach())
         log.info(
             "step %d/%d loss=%.4f peak_mem_gib=%s",
@@ -221,11 +239,16 @@ def run_microbench(
         "attn_backend": str(backend),
         "param_dtype": str(param_dtype),
         "compile": compile_model,
+        "with_optim": with_optim,
         "device": device,
         "last_loss": last_loss,
         "seconds": round(time.monotonic() - started, 2),
         "peak_mem_gib": _peak_mem_gib(),
         "gpu": gpu_report(),
+        "note": (
+            "fwd/bwd activation proxy for one HSDP rank; full Adam/compile are optional "
+            "and stricter than the sharded platform path"
+        ),
     }
     print(json.dumps(result, indent=2), flush=True)
     return result
@@ -400,7 +423,16 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--sequences", type=int, default=C.GLOBAL_BATCH_SEQUENCES // 8)
     m.add_argument("--seq-length", type=int, default=C.SEQ_LENGTH)
     m.add_argument("--attn-backend", default=C.DEFAULT_ATTN_BACKEND)
-    m.add_argument("--no-compile", action="store_true")
+    m.add_argument(
+        "--compile",
+        action="store_true",
+        help="Enable torch.compile (off by default; can spike memory on step 1).",
+    )
+    m.add_argument(
+        "--with-optim",
+        action="store_true",
+        help="Run AdamW on the full model (stricter than HSDP; off by default).",
+    )
     m.add_argument("--device", default=None, help="cuda | cpu (default: cuda if available)")
 
     w = sub.add_parser("write-data", help="Write synthetic tokens/<source> shards.")
@@ -444,7 +476,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             sequences=opts.sequences,
             seq_length=opts.seq_length,
             attn_backend=opts.attn_backend,
-            compile_model=not opts.no_compile,
+            compile_model=opts.compile,
+            with_optim=opts.with_optim,
             device=opts.device,
         )
         return 0
