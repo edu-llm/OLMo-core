@@ -370,6 +370,24 @@ COPY . .
 #
 # If that reading is wrong the build goes red on this line, which is the safe direction: a red
 # build costs a runner minute, and the image it refuses to publish is one that cannot train.
+#
+# THE olmo2_190M CONSTRUCTION ABOVE IT IS KEPT, AND WHAT IT CANNOT SEE IS RECORDED HERE RATHER
+# THAN LEFT FOR THE NEXT PERSON TO REDISCOVER. It is not superseded: it is the only line that
+# proves this image can get from `pip install` to a built model config at all, and it catches
+# an import or a constructor breaking under the pinned torch. But it is olmo2, so it resolves
+# to the torch backend, and on a builder it would resolve to the torch backend even if it were
+# olmo3 -- so it says nothing whatever about flash-attn. That is not a criticism of the line;
+# it is the reason this image was green for the whole period in which no olmo3 model could be
+# constructed, and it is worth one sentence in the file rather than being learnt again.
+#
+# The flash_2 assertion beside it is a hardcoded floor and is deliberately the lesser of the
+# two checks now in this repository. `.edullm/verify_image.py` asks the same question properly:
+# it enumerates the registered factories off `TransformerConfig`, derives the backends they
+# actually name, and asserts each -- so a fifteenth olmo3 rung, or a rung that starts naming
+# something else, is covered without anybody editing a list. That file runs on the *assembled*
+# image rather than in a layer, which is strictly better, and it runs only where the platform's
+# self-check gate is deployed. This line is what holds until then, and it is the one to delete
+# when it is redundant rather than merely duplicated.
 RUN set -eux; \
     python -m pip install --no-cache-dir ".[wandb]"; \
     python -c "import torch; assert torch.__version__.startswith('2.9.0'), f'torch was moved off the pin: {torch.__version__}'"; \
