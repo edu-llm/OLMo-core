@@ -897,34 +897,100 @@ class MoERouter(nn.Module):
         cv = counts.std(unbiased=False) / mean.clamp_min(tiny)
         out["expert_load_cv"] = (cv, ReduceType.max)
 
-        # CV EXCESS OVER THE UNIFORM-ROUTING NULL, AND THIS IS THE ONE TO COMPARE ACROSS RUNGS.
+        # CV EXCESS OVER THE UNIFORM-ROUTING NULL.  *** DO NOT GATE ON THIS, AND DO NOT TREND IT
+        # ACROSS RUNS.  IT IS A SIGNIFICANCE STATISTIC, NOT AN EFFECT SIZE.  See D-075. ***
         #
-        # `expert_load_cv` is scale-free in the mean LOAD but NOT in the SAMPLE SIZE, and the
-        # ladder varies the sample size by 4x -- so comparing raw CV across rungs is the same
-        # class of error as comparing max/mean, merely smaller and much less obvious. Measured
-        # on FarmShare and confirmed in closed form:
+        # The null derivation is correct and the reason this metric exists is still valid:
         #
         #   counts ~ Multinomial(n, 1/E) under perfect uniform routing, so
         #   sd = sqrt(n/E * (1 - 1/E)), mean = n/E, and therefore
         #       CV_null = sqrt((1 - 1/E) / mean)
         #
-        # Total assignments are tokens*k and k=8 at every rung, so assignments/expert FALLS as E
-        # rises: 2048 on the sibling probe, then 1024 (R1), 512 (R2), 256 (R3). The null CV
-        # therefore rises 0.0207 -> 0.0310 -> 0.0440 -> 0.0624 across the ladder -- it TRIPLES
-        # from the sibling to R3 under identical, perfect routing. A raw-CV comparison would read
-        # that as balance degrading with granularity, which is exactly the false conclusion the
-        # E-comparability requirement exists to prevent.
+        # `expert_load_cv` is scale-free in the mean LOAD but NOT in the SAMPLE SIZE, and the
+        # ladder varies the sample size by 4x. Total assignments are tokens*k and k=8 at every
+        # rung, so assignments/expert FALLS as E rises: 2048 on the sibling probe, then 1024 (R1),
+        # 512 (R2), 256 (R3). The null CV therefore rises 0.0207 -> 0.0310 -> 0.0440 -> 0.0624
+        # across the ladder under identical, perfect routing -- a raw-CV comparison across E reads
+        # that sampling artefact as balance degrading with granularity.
         #
-        # The ratio is 1.0 under perfect balance at every E and every sample size, which is what
-        # "comparable across rungs" has to mean. Above 1.0 is real imbalance in units of "times
-        # worse than chance"; a value below 1.0 is a router more uniform than a fair multinomial
-        # draw, which is what a load-balancing loss actually produces and is not an error.
+        # WHAT THIS KEY GETS WRONG, WHICH IS THE POINT OF THE COMMENT. `mean` here is the
+        # ACCUMULATED mean over the logging interval. The comment previously in this slot argued
+        # that needed no micro-batch division because "the null formula takes whatever sample the
+        # observed CV was computed from". That is right about the null and wrong about the ratio.
+        # Accumulating T micro-batches multiplies `mean` by T, so `cv_null` falls as 1/sqrt(T) --
+        # but the observed `cv` does NOT, because per-micro-batch imbalance is CORRELATED across
+        # micro-batches (the same experts are hot on every step). Accumulated CV converges to the
+        # persistent imbalance instead:
         #
-        # `mean` here is the ACCUMULATED mean over the logging interval, which is correct without
-        # dividing by the micro-batch count: the null formula takes whatever sample the observed
-        # CV was computed from, and both come from the same accumulated histogram.
+        #       CV_acc^2  ~=  CV_persistent^2  +  CV_null,1^2 / T
+        #
+        # so the ratio grows without bound in the window length at fixed physical balance:
+        #
+        #       cv_excess  =  CV * sqrt(T * k / (E - 1))
+        #
+        # MEASURED, NOT ARGUED: on X1 (E=64, mean_acc = 98,304) `cv_excess / expert_load_cv` was
+        # exactly 316.013 at every one of 600 logged steps and on every block; and 316.01 again on
+        # a different run and a different arm (X4a control, step 284). For a whole run this key is
+        # raw CV times a constant -- it carries no information raw CV does not, and the constant
+        # depends on the logging interval. It is essentially sqrt(chi^2/(E-1)): a test of "is this
+        # distinguishable from uniform", which at ~10^5 assignments per expert answers "yes,
+        # overwhelmingly" for any real router, healthy or not.
+        #
+        # Consequence, and this is why it must never appear in a band: A LONGER LOGGING INTERVAL
+        # ALONE CAN TRIP A BALANCE CEILING ON A PHYSICALLY IDENTICAL MODEL. At a 20B-scale batch,
+        # the identical physical balance that reads ~88 here would read ~222. That is a fail-closed
+        # footgun, and the 20B run has long intervals by construction.
+        #
+        # KEPT rather than deleted, for the same reason `load imbalance` above is kept: prior runs
+        # recorded it, and a metric that silently changes meaning between runs is worse than one
+        # that is merely awkward to compare. Read it as "how many sigma from uniform", nothing
+        # more, and read `expert_load_cv_excess_per_micro_batch` below when you want a magnitude.
+        #
+        # Note the irony in the history, because the general lesson is worth more than the fix:
+        # this metric was introduced *specifically* as "THE ONE TO COMPARE ACROSS RUNGS", and its
+        # multinomial null was derived correctly to kill the max/mean E-comparability trap. Leaving
+        # `mean` accumulated reintroduced a subtler instance of the very non-comparability it was
+        # built to prevent. A careful fix produced a quieter version of the same bug.
         cv_null = ((1.0 - 1.0 / num_experts) / mean.clamp_min(tiny)).sqrt()
         out["expert_load_cv_excess"] = (cv / cv_null.clamp_min(tiny), ReduceType.max)
+
+        # THE WINDOW-FREE EXCESS, AND THIS IS THE ONE TO COMPARE ACROSS RUNGS. Same null, same
+        # derivation, evaluated at the sample size ONE MICRO-BATCH provides rather than at the
+        # accumulated sample size:
+        #
+        #       mean_per_mb  = mean / T
+        #       cv_null_1    = sqrt((1 - 1/E) / mean_per_mb)           <- independent of T
+        #       cv_excess_1  = cv / cv_null_1  =  cv_excess / sqrt(T)  <- independent of T
+        #
+        # Both halves are T-free: the numerator `cv` is scale-invariant in the counts and converges
+        # to the persistent imbalance, and this null no longer shrinks as the window grows. So the
+        # same physical router reads the same number at any logging interval, global batch size or
+        # DP degree, while STILL being normalised against E -- which is what "comparable across
+        # rungs" has to mean and what `expert_load_cv_excess` only half-delivered.
+        #
+        # THIS IS THE SAME BUG AND THE SAME FIX AS `assignments_per_expert_mean` ~90 lines below,
+        # which divides the accumulated mean by the micro-batch count "because the capacity it is
+        # compared against is per-micro-batch. Reporting the raw accumulated mean is how a balanced
+        # router comes to look like it is dropping 44% of its assignments." One metric apart, the
+        # identical accumulation-length error -- caught once, missed once.
+        #
+        # Per-micro-batch is the physically right regime rather than merely the convenient one: the
+        # capacity bound, and therefore token dropping, is applied PER MICRO-BATCH. The accumulated
+        # window is not a regime anything in the model actually experiences.
+        #
+        # Emitted under the same accumulator guard as `assignments_per_expert_mean`. NOT GATED:
+        # every published band is in raw `expert_load_cv`, which needs no null at all because the
+        # ceiling is set from measurements at this ladder's own assignment counts. This key is the
+        # E-comparable READOUT for the cross-rung comparison; the gate is the raw quantity.
+        if self.num_accumulated_micro_batches > 0:
+            cv_null_per_micro_batch = (
+                (1.0 - 1.0 / num_experts)
+                / (mean / self.num_accumulated_micro_batches).clamp_min(tiny)
+            ).sqrt()
+            out["expert_load_cv_excess_per_micro_batch"] = (
+                cv / cv_null_per_micro_batch.clamp_min(tiny),
+                ReduceType.max,
+            )
 
         # Normalised routing entropy deficit, 1 - H(p)/log(E) over the realised assignment
         # distribution. 0.0 is perfect balance and 1.0 is collapse onto a single expert, at

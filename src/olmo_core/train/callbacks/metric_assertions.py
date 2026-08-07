@@ -263,6 +263,116 @@ class MetricAssertionCallback(Callback):
     every 1-GPU gate. "Not reduced" is a correct state; "unavailable" is not.
     """
 
+    expert_load_cv_max: Optional[float] = 0.50
+    """
+    Ceiling on ``expert_load_cv`` -- **RAW CV, and deliberately not on** ``expert_load_cv_excess``.
+
+    **WHY THE RAW QUANTITY IS THE GATEABLE ONE (D-075).** ``expert_load_cv_excess`` divides by a
+    null computed from the **accumulated** mean, so ``cv_excess = CV * sqrt(T*k/(E-1))`` and it
+    **grows without bound in the logging-interval length at fixed physical balance**. Measured: on
+    X1 the ratio ``cv_excess / expert_load_cv`` was exactly **316.013** at every one of 600 logged
+    steps, and 316.01 again on a different run and arm. So a band on it would mean **a longer
+    logging interval alone can trip a balance ceiling on a physically identical model** -- and the
+    20B run has long intervals by construction. That is a fail-closed footgun in a suite whose
+    assertions RAISE.
+
+    Raw CV has no such dependence: it is scale-invariant in the counts and converges to the
+    persistent imbalance as the window grows. It is not normalised against ``E``, which is a real
+    limitation for a **cross-rung comparison** -- but it is not a limitation for a **ceiling**,
+    because the ceiling is set from measurements at this ladder's own assignment counts rather than
+    derived from a null. Read ``expert_load_cv_excess_per_micro_batch`` for the E-normalised,
+    window-free cross-rung readout. **Gate the magnitude; compare the normalised statistic.**
+
+    **PROVENANCE OF 0.50, from measurement rather than taste, and it is a BOUNDED INTERVAL rather
+    than a single argument.** The number is pinned between a measured floor and a published ceiling,
+    and it must lie strictly inside both.
+
+    **The floor -- healthy steady-state, this stack, this gate:**
+
+    ==============================  ========  =====================================
+    run                             raw CV    margin to 0.50
+    ==============================  ========  =====================================
+    X1 tail (steps 587-600, flat)   0.2853    1.75x
+    X4a control                     0.3064    1.63x
+    X4a ternary                     0.3370    1.48x
+    ==============================  ========  =====================================
+
+    The tightest margin is against the **ternary** arm, which is the correct binding case: QAT is
+    the arm expected to route worse, and a ceiling that fires on it would kill the comparison the
+    ladder exists to make.
+
+    **The published ceiling:** Wang et al. (arXiv:2408.15664) Table 2 reports aux-loss-controlled
+    baselines at **0.72 (1B)** and **0.52 (3B)**, and a **softmax-gate** baseline at **0.937** --
+    and softmax is **our** gating function. So the evidence-bounded window is **(0.3370, 0.52)**,
+    and 0.50 sits strictly inside it with ~4% clearance below the tightest published number. It does
+    not tolerate a state worse than any published router, which is the property that makes it a
+    tripwire rather than a formality.
+
+    **0.55 was the first draft and it was WRONG, recorded here because the error is instructive.**
+    0.55 is *above* the 0.52 published figure, i.e. above the entire evidence window -- so it would
+    have tolerated a router measurably worse than a published aux-loss-controlled 3B model while
+    reading as "evidence-based" because every *healthy* number cleared it. A band justified only
+    from below is half a justification: it proves the band will not fire spuriously and says nothing
+    about whether it can fire at all. Both ends, or the number is taste wearing a citation.
+
+    Lower reference, from the consequence side: ``drop_frac`` crosses its ratified 0.01 ceiling at
+    raw CV ~= **0.46** at ``capacity_factor=2.0``. **0.50 is deliberately ABOVE that, and that is
+    not a relaxation.** Below ~0.46 the drop band is the tighter of the two and fires first, so a CV
+    ceiling at 0.46 would be redundant with it. The CV band earns its place in the regime
+    ``drop_frac`` is **blind** to: D-053 measured drops falling **1000x** (0.2247 -> 0.0002) while
+    raw CV fell only **3.9x** (1.2434 -> 0.3204), because at 2x capacity an expert drops nothing
+    until it exceeds 2x mean. ``drop_frac`` is a *thresholded* view of balance, not a measure of it.
+    A CV band above the drop threshold is what catches imbalance that has stopped costing drops and
+    is still costing quality.
+
+    **AND IT MUST CLEAR THE RECOVERY TRANSIENT, WHICH IS WHY** :data:`expert_load_cv_warmup_steps`
+    **EXISTS.** The same D-053 curve, at E=64, on a run that completed 600/600 steps cleanly:
+
+    ======  ========  ===========
+    step    raw CV    vs 0.50
+    ======  ========  ===========
+    50      1.2434    **2.5x over**
+    100     0.7500    **1.5x over**
+    200     0.4618    under, by 1.08x
+    300     0.3567    under, by 1.40x
+    339     0.3204    under, by 1.56x
+    ======  ========  ===========
+
+    So this ceiling applied from the shared ``warmup_steps=50`` would have **failed a healthy run
+    twice over**. An untrained router has not spread load yet and the recovery runs for *hundreds*
+    of steps -- far longer than the drop and dead-expert transients ``warmup_steps=50`` was measured
+    against. The alternative, widening the ceiling to pass 1.2434, was rejected on the standing rule
+    from ``warmup_steps``: **narrow the window, not the band.** A ceiling above 1.24 could not catch
+    anything short of near-total collapse (CV at full collapse onto one expert is ``sqrt(E-1)`` =
+    7.9 at E=64, 16.0 at E=256).
+
+    Set to ``None`` to disable, and ``--no-balance-bands`` disables it with the other two.
+    """
+
+    expert_load_cv_warmup_steps: int = 300
+    """
+    The step from which :data:`expert_load_cv_max` applies. **Deliberately later than**
+    ``warmup_steps``.
+
+    300 rather than 50 because the balance transient and the *drop* transient have very different
+    durations, measured on the same run: ``drop_frac`` was already at 0.0021 by step 200 while raw
+    CV was still 0.4618, and CV did not settle to its 0.2853 tail until step ~590. Sharing one
+    window would either fire this band on a healthy recovery or force the drop band's window out to
+    where it protects nothing.
+
+    Chosen from the curve, not rounded for looks: at step 300 the measured healthy value is 0.3567,
+    which clears the 0.50 ceiling by **1.40x**. Step 200 (0.4618) clears it by only **1.08x** -- far
+    inside the run-to-run spread the three healthy measurements already show (0.2853 to 0.3370 is
+    itself a 1.18x range), so a window at 200 would put a raising assertion inside its own noise.
+
+    **The vacuity hole this opens is closed explicitly, not by assumption.** A run shorter than 300
+    steps never checks this band, and :meth:`close` therefore reports its application count
+    **separately** from the other bands' -- a single "bands applied on 250 steps" line would be true
+    and would hide the fact that the CV band was applied **zero** times. That is D-048's lesson
+    (the blind spot is the *definition* of the coverage, not its contents) and it applies to a
+    per-band window just as much as to a metric list.
+    """
+
     entropy_deficit_max: Optional[float] = None
     """
     Ceiling on ``entropy_deficit``. **Default ``None`` (disabled), deliberately.**
@@ -354,7 +464,11 @@ class MetricAssertionCallback(Callback):
 
     _block_metric_names: Tuple[str, ...] = (
         "expert_load_cv",
+        # KEPT for aggregation, NOT GATED. `cv_excess` is `CV * sqrt(T*k/(E-1))` and therefore
+        # depends on the logging interval (D-075); a band on it can fire on a physically identical
+        # model. The window-free sibling is the E-comparable readout.
         "expert_load_cv_excess",
+        "expert_load_cv_excess_per_micro_batch",
         "entropy_deficit",
         "dead_expert_frac",
         "dead_expert_frac_global",
@@ -390,6 +504,7 @@ class MetricAssertionCallback(Callback):
     _checked_presence: bool = field(default=False, repr=False)
     _resumed: bool = field(default=False, repr=False)
     _bands_applied: int = field(default=0, repr=False)
+    _cv_band_applied: int = field(default=0, repr=False)
     _last_step_seen: int = field(default=0, repr=False)
 
     def state_dict(self) -> Dict[str, Any]:
@@ -460,6 +575,16 @@ class MetricAssertionCallback(Callback):
             skipped.append(
                 "drop_frac -- DELIBERATELY DISABLED. Token dropping is not gated on this run"
             )
+        if self.expert_load_cv_max is not None:
+            active.append(
+                f"expert_load_cv <= {self.expert_load_cv_max} (RAW CV, from step "
+                f"{self.expert_load_cv_warmup_steps} -- NOT expert_load_cv_excess, which is "
+                "window-dependent; see D-075)"
+            )
+        else:
+            skipped.append(
+                "expert_load_cv -- DELIBERATELY DISABLED. Routing balance is not gated on this run"
+            )
         if self.entropy_deficit_max is not None:
             active.append(f"entropy_deficit <= {self.entropy_deficit_max}")
         else:
@@ -493,6 +618,7 @@ class MetricAssertionCallback(Callback):
             for name, value in (
                 ("drop_frac", self.drop_frac_max),
                 ("dead_expert_frac_global", self.dead_expert_frac_max),
+                ("expert_load_cv", self.expert_load_cv_max),
             )
             if value is None
         ]
@@ -505,6 +631,8 @@ class MetricAssertionCallback(Callback):
                         "balance_bands_disabled": disabled,
                         "drop_frac_max": self.drop_frac_max,
                         "dead_expert_frac_max": self.dead_expert_frac_max,
+                        "expert_load_cv_max": self.expert_load_cv_max,
+                        "expert_load_cv_warmup_steps": self.expert_load_cv_warmup_steps,
                         # The bands that stay HARD even on a diagnostic run, named explicitly so the
                         # record says what was still being enforced rather than only what was not.
                         "still_enforced": {
@@ -599,6 +727,15 @@ class MetricAssertionCallback(Callback):
             # rather than inferred from an absence of failures.
             self._bands_applied += 1
             self._check_bands(metrics)
+        # The CV band has its OWN, LATER window, and is therefore counted separately. Measured
+        # reason: at step 200 of a run that finished 600/600 clean, `drop_frac` was 0.0021 (settled)
+        # while raw CV was 0.4618 and still falling to a 0.2853 tail. See
+        # `expert_load_cv_warmup_steps`. Folding it into `_bands_applied` would let a 250-step run
+        # report "bands applied on 200 steps" while this band ran zero times -- true, and hiding
+        # exactly the thing `close()` exists to say out loud.
+        if step >= self.expert_load_cv_warmup_steps:
+            self._cv_band_applied += 1
+            self._check_cv_band(metrics)
 
         if self._failures:
             detail = "\n".join(f"  - {failure}" for failure in self._failures)
@@ -637,6 +774,12 @@ class MetricAssertionCallback(Callback):
             "check": "metric_assertions",
             "band_checks_applied": self._bands_applied,
             "warmup_steps": self.warmup_steps,
+            # SEPARATE, because the window is separate. A 250-step run would otherwise report
+            # "bands applied on 200 steps" -- true, and silent about the CV band having run zero
+            # times. Same class as D-048: the blind spot is the definition of the coverage.
+            "cv_band_checks_applied": self._cv_band_applied,
+            "expert_load_cv_warmup_steps": self.expert_load_cv_warmup_steps,
+            "expert_load_cv_max": self.expert_load_cv_max,
             "last_step_seen": self._last_step_seen,
             "step0_loss_checked": self._checked_step0,
             "presence_checked": self._checked_presence,
@@ -655,6 +798,28 @@ class MetricAssertionCallback(Callback):
             log.info(
                 f"MetricAssertionCallback: balance bands applied on {self._bands_applied} logged "
                 f"step(s) from step {self.warmup_steps} onward, all within band."
+            )
+        # Reported unconditionally and separately, because its window is later and a run can
+        # legitimately clear the first window and never reach this one.
+        if self.expert_load_cv_max is None:
+            log.warning(
+                "MetricAssertionCallback: the raw expert_load_cv ceiling was DISABLED for this "
+                "run. Routing balance was measured and logged but NOT gated."
+            )
+        elif self._cv_band_applied == 0:
+            log.warning(
+                "MetricAssertionCallback: the raw expert_load_cv ceiling was applied on ZERO "
+                f"steps. The run reached step {self._last_step_seen} and this band's window starts "
+                f"at {self.expert_load_cv_warmup_steps} (later than warmup_steps="
+                f"{self.warmup_steps} on purpose -- a healthy run measured CV 1.2434 at step 50 "
+                "and 0.4618 at step 200, settling to 0.2853 only near step 590). So this run is "
+                "NOT evidence of routing balance, even if the other balance bands passed."
+            )
+        else:
+            log.info(
+                f"MetricAssertionCallback: raw expert_load_cv ceiling "
+                f"({self.expert_load_cv_max}) applied on {self._cv_band_applied} logged step(s) "
+                f"from step {self.expert_load_cv_warmup_steps} onward, all within band."
             )
 
     def _check_finite(self, metrics: Dict[str, float]):
@@ -900,6 +1065,39 @@ class MetricAssertionCallback(Callback):
                         "it). Note it is a norm ORDER, not a boolean -- only p=1.0 makes the "
                         "gate mass 1.0."
                     )
+
+    def _check_cv_band(self, metrics: Dict[str, float]):
+        """
+        The raw-CV balance ceiling. **Separate from :meth:`_check_bands` because its window is.**
+
+        ON RAW ``expert_load_cv``, NEVER ON ``expert_load_cv_excess``. See
+        :data:`expert_load_cv_max` for the full argument; the short form is that ``cv_excess`` is
+        ``CV * sqrt(T*k/(E-1))`` and therefore **a longer logging interval alone would trip this
+        ceiling on a physically identical model** (D-075). Raw CV has no window dependence.
+        """
+        if self.expert_load_cv_max is None:
+            return
+        ceiling = self.expert_load_cv_max
+        for key, value in metrics.items():
+            if not self._is_block_key(key, "expert_load_cv"):
+                continue
+            if not isinstance(value, (int, float)) or not math.isfinite(value):
+                continue
+            if value <= ceiling:
+                continue
+            self._failures.append(
+                f"'{key}' = {value:.6f} exceeds the raw expert-load CV ceiling of {ceiling} -- "
+                "expert load is persistently uneven. Healthy steady-state on this stack measured "
+                "0.2853 (X1 tail), 0.3064 (X4a control) and 0.3370 (X4a ternary), and the ceiling "
+                "sits below every published softmax-gate baseline (Wang et al. 2408.15664 Table 2: "
+                "0.937 softmax, 0.72/0.52 aux-loss-controlled). This band is NOT redundant with "
+                "`drop_frac`: at capacity_factor=2.0 an expert drops nothing until it exceeds 2x "
+                "mean, so drops fell 1000x while CV fell only 3.9x on one measured run -- "
+                "`drop_frac` is a thresholded view of balance, not a measure of it. Read the "
+                "per-block series, not the bare cross-block key. Do NOT diagnose this from "
+                "`expert_load_cv_excess`, which is raw CV times a window-dependent constant; use "
+                "`expert_load_cv_excess_per_micro_batch` if you want the E-normalised magnitude."
+            )
 
 
 @dataclass

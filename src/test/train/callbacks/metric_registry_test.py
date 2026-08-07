@@ -25,6 +25,7 @@ Runs on CPU: `compute_metrics` is driven off a hand-set histogram, so no Triton 
 no forward pass are involved.
 """
 
+import pytest
 import torch
 
 from olmo_core.nn.moe.router import MoELinearRouter
@@ -64,6 +65,10 @@ CONTRACT_REGISTERED_BLOCK_METRICS = (
     "dead_expert_counts_not_reduced",
     # amendment 4 (the B3 histograms travel per-bucket; see the dedicated test)
     "drop_histograms_unavailable",
+    # amendment 5 (D-075). The window-free companion to `expert_load_cv_excess`. Registered
+    # because it is the E-comparable cross-rung READOUT; the GATE is raw `expert_load_cv`, which
+    # needs no null. Both are required: one is comparable across E, the other is gateable.
+    "expert_load_cv_excess_per_micro_batch",
 )
 
 # Registered per-block series that travel as one scalar per bucket rather than under their bare
@@ -79,6 +84,11 @@ ASSERTED_BAND_METRICS = (
     "drop_frac_upper_bound",
     "entropy_deficit",
     "capacity_factor_deficit",
+    # D-075. RAW CV, and `expert_load_cv_excess` is deliberately NOT here: it is
+    # `CV * sqrt(T*k/(E-1))`, so gating it lets a longer logging interval alone fail a physically
+    # identical model. `test_no_band_gates_a_window_dependent_statistic` pins that exclusion, so it
+    # cannot be reintroduced by someone reading this list as a menu.
+    "expert_load_cv",
 )
 
 
@@ -409,3 +419,294 @@ def test_contract_registered_lbl_pair_is_emitted():
             f"on one batch to prove the all-reduce reduces; it cannot compare what is absent. "
             f"Emitted: {sorted(emitted)}"
         )
+
+
+# ---------------------------------------------------------------------------------------------
+# D-075 -- THE ACCUMULATION-LENGTH DEFECT.
+#
+# `expert_load_cv_excess = cv / sqrt((1-1/E)/mean_acc)`, and `mean_acc` is the mean of the
+# ACCUMULATED histogram. Accumulating T micro-batches multiplies `mean_acc` by T, so the null
+# shrinks as 1/sqrt(T) while the observed CV does not -- per-micro-batch imbalance is correlated
+# across micro-batches, so accumulated CV converges to the persistent imbalance instead. Hence
+#
+#       cv_excess = CV * sqrt(T * k / (E - 1))
+#
+# which GROWS WITHOUT BOUND in the logging-interval length at fixed physical balance. Measured: on
+# X1 (E=64, mean_acc = 98,304) `cv_excess / expert_load_cv` was exactly 316.013 at every one of 600
+# logged steps, and 316.01 again on X4a control at step 284 -- a different run and a different arm.
+#
+# THE OPERATIONAL HAZARD, which is what these tests exist to prevent: `MetricAssertionCallback`
+# assertions RAISE. A band on `cv_excess` therefore means A LONGER LOGGING INTERVAL ALONE CAN FAIL A
+# PHYSICALLY IDENTICAL MODEL, and the 20B run has long intervals by construction. Fail-closed.
+#
+# So the gated quantity is RAW `expert_load_cv`, and the tests below pin all three halves of that:
+# that the gated quantity does not move with the window, that the diagnostic one DOES (so the tests
+# are not passing because the mechanism vanished), and that no band references it.
+# ---------------------------------------------------------------------------------------------
+
+_CV_BAND_METRICS = ("expert_load_cv", "expert_load_cv_excess_per_micro_batch")
+
+
+def _metrics_at_accumulation_length(
+    *,
+    num_micro_batches: int,
+    num_experts: int = 64,
+    per_micro_batch_counts=(30.0, 20.0, 14.0),
+) -> dict:
+    """
+    Drive `compute_metrics` at a given accumulation length holding PHYSICAL BALANCE FIXED.
+
+    The construction is the whole point of the test, so it is spelled out rather than left to be
+    inferred: the accumulated histogram is one fixed per-micro-batch shape multiplied by
+    `num_micro_batches`. That means the RATIO of expert loads -- which is what "physical balance"
+    means, and what raw CV measures, since CV is invariant under scaling all counts by a constant --
+    is IDENTICAL at every accumulation length, while the accumulated mean scales with the window.
+
+    Deliberately NOT modelled as independent multinomial draws per micro-batch. That would make the
+    accumulated CV shrink as 1/sqrt(T) for real, and then `cv_excess` would legitimately be
+    window-invariant and there would be no bug. The defect is real precisely because router
+    imbalance is PERSISTENT -- the same experts are hot on every step -- and this fixture encodes
+    that persistence rather than assuming it away.
+    """
+    router = MoELinearRouter(
+        d_model=64,
+        num_experts=num_experts,
+        top_k=4,
+        normalize_expert_weights=1.0,
+        lb_loss_weight=0.01,
+        z_loss_weight=0.001,
+        init_device="cpu",
+    )
+    router.train()
+
+    # A fixed uneven per-micro-batch shape: the first three experts hot, the rest uniform.
+    base = torch.full((num_experts,), 10.0)
+    for i, count in enumerate(per_micro_batch_counts):
+        base[i] = count
+
+    router.batch_size_per_expert = base * float(num_micro_batches)
+    router.num_accumulated_micro_batches = num_micro_batches
+    return {k: v[0].item() for k, v in router.compute_metrics(reset=False).items()}
+
+
+def test_gated_cv_band_metric_is_invariant_to_accumulation_length():
+    """
+    THE TEST THAT WOULD HAVE CAUGHT D-075. Same physical balance, two windows, gated value fixed.
+
+    If this fails, the fix is wrong: a metric a RAISING assertion gates must not depend on how often
+    the trainer happens to log.
+    """
+    short = _metrics_at_accumulation_length(num_micro_batches=1)
+    long = _metrics_at_accumulation_length(num_micro_batches=24)
+
+    for name in _CV_BAND_METRICS:
+        assert name in short and name in long, f"'{name}' is not emitted at both windows"
+        assert short[name] == pytest.approx(long[name], rel=1e-6), (
+            f"'{name}' moved from {short[name]:.6f} at 1 micro-batch to {long[name]:.6f} at 24, on "
+            f"IDENTICAL physical balance. Ratio {long[name] / short[name]:.4f} vs the sqrt(24) = "
+            f"{24 ** 0.5:.4f} signature of the accumulation-length defect. A gated quantity that "
+            f"moves with the logging interval means a longer interval alone fails a physically "
+            f"identical model, and these assertions RAISE (D-075)."
+        )
+
+
+def test_cv_excess_is_still_window_dependent_so_the_test_above_is_not_vacuous():
+    """
+    The defect must still be DEMONSTRABLE, or the test above passes for the wrong reason.
+
+    A test whose pass does not depend on the behaviour is not a test. If `cv_excess` were somehow
+    made window-invariant too, `test_gated_cv_band_metric_is_invariant_to_accumulation_length` would
+    pass trivially and prove nothing about the choice of gated metric. So this pins the mechanism:
+    `cv_excess` grows as exactly sqrt(T), and that is why it is not the gated quantity.
+    """
+    short = _metrics_at_accumulation_length(num_micro_batches=1)
+    long = _metrics_at_accumulation_length(num_micro_batches=24)
+
+    ratio = long["expert_load_cv_excess"] / short["expert_load_cv_excess"]
+    assert ratio == pytest.approx(24**0.5, rel=1e-5), (
+        f"expert_load_cv_excess grew by {ratio:.4f} over a 24x window, expected sqrt(24) = "
+        f"{24 ** 0.5:.4f}. If this is now ~1.0 the metric was silently changed and the band choice "
+        f"should be revisited; if it is some other factor, the model of the defect is wrong."
+    )
+
+    # And the identity itself: cv_excess / cv is a constant for a fixed window, which is what makes
+    # `cv_excess` carry no information raw CV does not. Measured as 316.013 on X1.
+    for metrics in (short, long):
+        expected = (metrics["expert_load_cv_excess"] / metrics["expert_load_cv"]) ** 2
+        implied_mean_acc = (1.0 - 1.0 / 64) * expected
+        assert implied_mean_acc > 0, "the closed form did not invert"
+
+
+def test_the_two_excess_forms_differ_by_exactly_sqrt_of_the_window():
+    """`cv_excess_per_micro_batch = cv_excess / sqrt(T)`, which is the entire content of the fix."""
+    for t in (1, 5, 24):
+        metrics = _metrics_at_accumulation_length(num_micro_batches=t)
+        assert metrics["expert_load_cv_excess_per_micro_batch"] == pytest.approx(
+            metrics["expert_load_cv_excess"] / (t**0.5), rel=1e-6
+        ), f"the two excess forms do not differ by sqrt({t})"
+
+
+def test_no_band_gates_a_window_dependent_statistic():
+    """
+    NO BAND MAY REFERENCE `expert_load_cv_excess`. Structural, not a comment.
+
+    `ASSERTED_BAND_METRICS` reads like a menu, and the excess form is the one with "compare across
+    rungs" in its history -- so the reason it is absent has to be enforced rather than documented.
+    This is the reverse guard: the other tests check that everything asserted is emitted; this
+    checks that something emitted is NOT asserted, on purpose.
+    """
+    assert "expert_load_cv_excess" not in ASSERTED_BAND_METRICS, (
+        "a band is gating `expert_load_cv_excess`, which is CV*sqrt(T*k/(E-1)). A longer logging "
+        "interval alone would then fail a physically identical model. Gate `expert_load_cv` "
+        "instead, and read `expert_load_cv_excess_per_micro_batch` for the E-normalised magnitude "
+        "(D-075)."
+    )
+    assert "expert_load_cv_excess_per_micro_batch" not in ASSERTED_BAND_METRICS, (
+        "the window-free excess is a READOUT, not a gate: its value still depends on E and on the "
+        "micro-batch size, so a single ceiling across the rung ladder would not mean one thing. The "
+        "gate is raw CV, whose ceiling is set from measurements at this ladder's own assignment "
+        "counts."
+    )
+
+    # Both forms must still be AGGREGATED, or `moe/<name>_max` silently misses and the diagnostic is
+    # unreadable at exactly the moment someone needs it.
+    callback = MetricAssertionCallback()
+    for name in ("expert_load_cv_excess", "expert_load_cv_excess_per_micro_batch"):
+        assert name in callback._block_metric_names, (
+            f"'{name}' is not aggregated, so no moe/{name}_{{max,mean,min}} exists. Ungated is not "
+            f"the same as unread."
+        )
+
+
+def test_raw_cv_band_fires_above_its_ceiling_and_not_below():
+    """
+    A magnitude check on the band itself, with the ceiling's own provenance as the fixture.
+
+    The three healthy measurements on this stack (X1 tail 0.2853, X4a control 0.3064, X4a ternary
+    0.3370) must PASS, and a value above the published softmax-gate baseline must FAIL. A band that
+    fires on healthy runs teaches everyone to ignore the suite; a band that cannot fire is not a
+    band.
+    """
+    callback = MetricAssertionCallback(vocab_size=100352)
+    ceiling = callback.expert_load_cv_max
+    assert ceiling is not None, "the raw-CV ceiling must be armed by default"
+
+    for healthy in (0.2853, 0.3064, 0.3370):
+        callback._failures = []
+        callback._check_cv_band({"train/block 00/expert_load_cv": healthy})
+        assert not callback._failures, (
+            f"the ceiling {ceiling} fires on {healthy}, which is a MEASURED healthy steady-state "
+            f"value on this stack. Tightest of the three is the ternary arm (0.3370) and it is the "
+            f"binding case: QAT is expected to route worse, and a band that kills it kills the "
+            f"comparison the ladder exists to make."
+        )
+
+    # Wang et al. 2408.15664 Table 2: softmax-gate baseline 0.937, and softmax is OUR gate. The
+    # ceiling must sit below every published number for a router of our own kind.
+    for unhealthy in (0.72, 0.937, 1.2434):
+        callback._failures = []
+        callback._check_cv_band({"train/block 00/expert_load_cv": unhealthy})
+        assert callback._failures, f"the ceiling {ceiling} does not fire on {unhealthy}"
+
+    # THE BAND MUST BE BOUNDED FROM BOTH SIDES. This is the check that caught the first draft: 0.55
+    # cleared every healthy measurement and was ABOVE the 0.52 published figure, so it would have
+    # tolerated a router measurably worse than a published aux-loss-controlled 3B model while
+    # reading as evidence-based. A band justified only from below proves it will not fire
+    # spuriously and says nothing about whether it can fire at all.
+    assert 0.3370 < ceiling < 0.52, (
+        f"the ceiling {ceiling} is outside the evidence-bounded window (0.3370, 0.52): it must "
+        f"clear the worst MEASURED healthy value (0.3370, the ternary arm) and sit below the "
+        f"lowest PUBLISHED baseline (0.52, aux-loss-controlled 3B in Wang et al. 2408.15664 "
+        f"Table 2). Above 0.52 the band tolerates a published-but-poor router; below 0.3370 it "
+        f"fires on our own healthy ternary arm."
+    )
+
+
+def test_cv_band_has_a_later_window_and_reports_it_separately():
+    """
+    The CV band's window must outlast the drop transient, and its coverage be reported on its own.
+
+    Measured on a run that finished 600/600 clean: `drop_frac` was 0.0021 at step 200 while raw CV
+    was 0.4618 and still falling to a 0.2853 tail near step 590. So a CV ceiling sharing
+    `warmup_steps=50` would have failed a healthy run twice (1.2434 at step 50, 0.7500 at step 100).
+
+    And the separate count is not cosmetic: folded into `_bands_applied`, a 250-step run would
+    report "bands applied on 200 steps" -- true, and silent about this band having run zero times.
+    That is D-048's lesson, where the blind spot is the DEFINITION of the coverage.
+    """
+    callback = MetricAssertionCallback(vocab_size=100352)
+    assert callback.expert_load_cv_warmup_steps > callback.warmup_steps, (
+        "the CV band's window must be later than the shared one: the balance transient outlasts the "
+        "drop transient by hundreds of steps on measured data."
+    )
+    # It must clear the step-200 reading of a healthy run, which is 0.4618 -- inside the ceiling but
+    # only by 1.19x, which is inside the spread of the three healthy measurements.
+    assert callback.expert_load_cv_warmup_steps >= 300
+
+    # The two counters are independent. `presence_check_step` is pushed out of reach because this
+    # test is about the WINDOWS, and a partial metrics dict would otherwise fail the anti-vacuity
+    # guard for an unrelated reason -- which would make the test pass or fail for the wrong cause.
+    windows = MetricAssertionCallback(
+        vocab_size=100352, assert_step0_loss=False, presence_check_step=10**9
+    )
+    windows._assert_all(60, {"train/block 00/expert_load_cv": 0.30})
+    assert windows._bands_applied == 1
+    assert windows._cv_band_applied == 0, (
+        "the CV band ran inside its own warmup window, so a healthy recovery transient would fail "
+        "the run"
+    )
+    windows._assert_all(400, {"train/block 00/expert_load_cv": 0.30})
+    assert windows._cv_band_applied == 1
+
+    # And it would actually FIRE past its window -- a window test that never exercises the band
+    # proves only that the counter increments.
+    fires = MetricAssertionCallback(
+        vocab_size=100352, assert_step0_loss=False, presence_check_step=10**9
+    )
+    with pytest.raises(MetricAssertionError, match="expert-load CV ceiling"):
+        fires._assert_all(400, {"train/block 00/expert_load_cv": 1.2434})
+    # ...and NOT inside the window, on the identical value. This is the half that matters: the
+    # measured step-50 reading of a healthy run is exactly this number.
+    early = MetricAssertionCallback(
+        vocab_size=100352, assert_step0_loss=False, presence_check_step=10**9
+    )
+    early._assert_all(60, {"train/block 00/expert_load_cv": 1.2434})
+
+
+def test_no_balance_bands_would_disable_the_cv_ceiling_too():
+    """
+    `--no-balance-bands` promises to disable the balance ceilings, and the CV ceiling is one.
+
+    The flag exists for "a run whose purpose is to observe routing imbalance past the steady-state
+    window". A raw-CV ceiling is the most direct possible way to kill exactly that run, so leaving
+    it armed would make the flag's documented promise false. The launcher wires it; this pins that
+    the callback accepts the disable and reports it in the disabled list.
+    """
+    callback = MetricAssertionCallback(
+        vocab_size=100352,
+        drop_frac_max=None,
+        dead_expert_frac_max=None,
+        expert_load_cv_max=None,
+    )
+    callback._failures = []
+    callback._check_cv_band({"train/block 00/expert_load_cv": 9.9})
+    assert not callback._failures, "a disabled ceiling still fired"
+
+
+def test_cv_glob_does_not_leak_between_the_three_cv_metrics():
+    """
+    `expert_load_cv` must not match either excess form. This is the prefix trap, one level deeper.
+
+    It matters more here than elsewhere: the three metrics differ by a factor of ~316 on real data,
+    so a leak would apply a 0.50 ceiling to a value that is legitimately ~90 and fail every step of
+    every healthy run -- or, in the other direction, silently gate nothing.
+    """
+    is_block_key = MetricAssertionCallback._is_block_key
+    assert is_block_key("train/block 00/expert_load_cv", "expert_load_cv")
+    assert not is_block_key("train/block 00/expert_load_cv_excess", "expert_load_cv")
+    assert not is_block_key(
+        "train/block 00/expert_load_cv_excess_per_micro_batch", "expert_load_cv"
+    )
+    assert not is_block_key(
+        "train/block 00/expert_load_cv_excess_per_micro_batch", "expert_load_cv_excess"
+    )
