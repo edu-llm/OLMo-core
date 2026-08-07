@@ -59,6 +59,58 @@ actual step time and peak memory, then rescale the table:
 # hours per CODI arm ≈ (mean seconds/step) * 5000 / 3600 ; also check nvidia-smi peak memory
 ```
 
+## 0c. Platform submission (edullm compute)
+
+Branch must live under `edullm/**` — images are only built from that namespace:
+```bash
+git push -u origin latent-cot-superposition-amy:edullm/latent-cot-superposition-amy
+```
+
+Target `gpu-8xa100` (8×40 GB; one arm per card, 3 idle). Five processes on eight cards is refused
+unless the command carries `EDULLM_LAUNCH_CHECK=waived` verbatim, and checkpoints must go to
+`$EDULLM_CHECKPOINT_DIR` (expanded by the shell at runtime, hence `bash -lc` with single quotes).
+Submit with `--attempts 1`: the profile allows two and declares `resume_required: true`, but there
+is no `--resume` flag, so a second attempt would silently restart from the base checkpoint.
+
+**The dataset is gitignored — a fresh clone has none.** Generate it in-job before training, and run
+the pre-registration gate, or the arms train on nothing:
+
+```bash
+bash -lc 'EDULLM_LAUNCH_CHECK=waived
+set -uo pipefail
+DATA=data/latentcot/graph-reachability-depth/conversations
+BASE=s3://edullm-olmo-370m-ckpts/olmo3-370m/run-10b-equal/step12716/
+python src/scripts/latentcot/gen_graph_data.py
+python src/scripts/latentcot/preflight.py \
+  --train-data $DATA/train-00000.jsonl --test-data $DATA/heldout-00000.jsonl || exit 1
+pids=()
+for i in 0 1 2 3 4; do
+  mkdir -p "$EDULLM_CHECKPOINT_DIR/A$i"
+  CUDA_VISIBLE_DEVICES=$i python src/scripts/latentcot/train_codi.py \
+    --arm A$i --rung olmo3_370M --init-checkpoint "$BASE" \
+    --steps 5000 --batch-size 16 --precision bf16 --lr <SCREENED_LR> \
+    --init-seed 0 --seed 1 \
+    --train-data $DATA/train-00000.jsonl --test-data $DATA/heldout-00000.jsonl \
+    --out "$EDULLM_CHECKPOINT_DIR/A$i" > "$EDULLM_CHECKPOINT_DIR/A$i/train.log" 2>&1 &
+  pids+=($!)
+done
+rc=0; for p in "${pids[@]}"; do wait "$p" || rc=1; done; exit $rc'
+```
+Notes on the mapping: the flag is **`--out`**, not `--save-dir`; `A$i` for `i` in 0–4 lines up with
+arms A0–A4; `--rung olmo3_370M` is passed explicitly because the script still defaults to
+`olmo2_370M`. Waiting on each PID (rather than bare `wait`) is what makes a failed arm fail the job.
+
+```bash
+edullm check --json --compute gpu-8xa100 --workload olmo-core-train \
+  --experiment latent-cot-pilot --dataset none --attempts 1
+```
+Fix anything under `refusals` (match on code, not prose), then swap `check` → `submit`.
+
+**Calibrate first on `gpu-1xa10g`** (§0b) — but an **A10G is 24 GB, below the ~25 GB estimate**, so
+calibrate at `--batch-size 8` (activations scale linearly ⇒ ~12–13 GB) and double the per-example
+step time to project batch 16. That run also *validates the memory model*: if batch 8 lands near
+12–13 GB, batch 16 on a 40 GB A100 is safe.
+
 ## 1. Generate the dataset (once)
 ```bash
 .venv/bin/python src/scripts/latentcot/gen_graph_data.py
