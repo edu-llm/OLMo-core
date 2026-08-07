@@ -157,10 +157,39 @@ jobs:
           name: package
           path: dist
 
+  # The GPU checks below need a Beaker token, and a job-level `if:` cannot read `secrets`.
+  # This job can, so it turns the answer into an output the matrix is allowed to depend on.
+  # Without it the seven checks run their steps, launch nothing and report green, which is a
+  # worse signal than a red one because nothing distinguishes it from seven passing suites.
+  #
+  # This job is also where the skip is explained. A skipped matrix is never expanded, so the
+  # seven collapse into one check whose `matrix` context is null -- and GitHub does not
+  # evaluate that check's name at all, it prints the template. There is no expression that
+  # renders well in both states, so the reason is announced from here instead.
+  beaker_token:
+    name: Beaker token
+    runs-on: ubuntu-latest
+    outputs:
+      present: ${{ steps.check.outputs.present }}
+    steps:
+      - name: Check for a Beaker token
+        id: check
+        # The expression is a boolean, so this prints "true" or "false" and never the token.
+        run: echo "present=${{ secrets.BEAKER_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Say that the GPU tests will not run
+        if: steps.check.outputs.present != 'true'
+        run: |
+          echo "::notice title=GPU tests skipped::BEAKER_TOKEN is not set in this repository, so"
+          echo "::notice::the seven (GPU) checks are skipped rather than run. They report skipped,"
+          echo "::notice::not green, so nothing here claims a GPU suite passed."
+
   gpu_checks:
     name: ${{ matrix.task.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    needs: beaker_token
+    if: needs.beaker_token.outputs.present == 'true'
     env:
       GANTRY_GITHUB_TESTING: "true" # force better logging for CI
     strategy:
@@ -236,7 +265,6 @@ jobs:
           uv tool install 'beaker-gantry>=3.4.5,<4.0'
 
       - name: Determine Beaker workspace
-        if: env.BEAKER_TOKEN != ''
         run: |
           echo "BEAKER_WORKSPACE=$(make get-beaker-workspace)" >> $GITHUB_ENV
 
@@ -252,17 +280,7 @@ jobs:
           echo "COMMIT_SHA=$GITHUB_SHA" >> $GITHUB_ENV
           echo "BRANCH_NAME=${{ github.ref_name }}" >> $GITHUB_ENV
 
-      # Say so in the log, because a job that reports success having run nothing is worse than
-      # one that reports failure. These need a Beaker cluster, which this fork has no token
-      # for; the checks below are green and empty until it does.
-      - name: No GPU tests ran
-        if: env.BEAKER_TOKEN == ''
-        run: |
-          echo "::warning title=No GPU tests ran::BEAKER_TOKEN is not set in this repository, so"
-          echo "::warning::'${{ matrix.task.name }}' launched nothing. This check is green and empty."
-
       - name: GPU Tests
-        if: env.BEAKER_TOKEN != ''
         run: |
           exec gantry run \
             --show-logs \
