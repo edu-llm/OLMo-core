@@ -365,3 +365,41 @@ def test_the_answer_ce_is_read_from_the_right_position_under_varying_loss():
     expected_nats = float(task.item(0).answer_start - 1)
     assert result.answer_ce_bits == pytest.approx(expected_nats / np.log(2), rel=1e-9)
     assert result.accuracy == 1.0
+
+
+@pytest.mark.parametrize("batches", [(1, 7), (3, 64), (8, 1000)])
+def test_the_batch_size_changes_nothing_about_the_score(batches):
+    """
+    Batching is a throughput knob, and a throughput knob that moves a number is a bug.
+
+    Worth pinning because the batch size is the first thing anyone reaches for when scoring is slow --
+    the default is 32 and the eval set is 30,000 items -- and the ways it could go wrong are quiet.
+    Padding a short final batch and letting the pad positions into the mean would shift accuracy by a
+    fraction of a percent; a batch larger than the item count could drop the remainder entirely.
+
+    Confirmed end to end as well: a real 13M checkpoint scored at 32 and at 512 produced bit-identical
+    CSVs across all fourteen rows. This is the fast version of that, including a batch far larger than
+    the item count.
+    """
+    small, large = batches
+    task = mano()
+    n = 37  # deliberately not a multiple of any batch size here
+    answers = {}
+    for size in (small, large):
+        result = reasoning.score_reasoning(
+            task,
+            forward_from(task, lambda item: item.answer, n),
+            n_items=n,
+            batch_size=size,
+            floor=0.0464,
+            degenerate_answer=("<n2>",),
+        )
+        answers[size] = (
+            result.n_total,
+            result.n_correct,
+            result.n_unparseable,
+            result.n_degenerate,
+            round(result.answer_ce_bits, 12),
+        )
+    assert answers[small] == answers[large], answers
+    assert answers[small][0] == n  # and every item was scored, not just the whole batches
