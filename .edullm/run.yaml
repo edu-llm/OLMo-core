@@ -1,0 +1,46 @@
+# What a submission naming this commit runs.
+#
+# Per-commit, not per-repository: the platform resolves a branch to a commit and reads the
+# run.yaml at that commit, so this file governs submissions of the recurrent branch only and
+# does not change the default for anyone else working in this fork.
+#
+# THE DEFAULT HERE IS THE SMOKE RUN, DELIBERATELY. The full 10B-token run does not fit one
+# submission (see README.md: the loop is 2.8x the baseline FLOPs at T=4), and the first thing
+# anybody needs from this branch is a measured tokens-per-second to size the real run from.
+# `--steps 200` on one card answers that in minutes. Override the profile and the machine per
+# submission with `--workload olmo-core-train --compute gpu-8xa100` rather than editing this.
+#
+# THE PROCESS COUNT IS PART OF THE COMMAND, SO THIS FILE IS PER-SHAPE. The platform starts
+# exactly one process and refuses `process_per_device` when the count does not equal the
+# number of cards, and `--compute` overrides the machine without touching the command. So
+# moving off one card means editing the line below and pushing a new commit, not passing a
+# different flag. Verified against `edullm check` on 2026-08-07: the bare `python` below
+# clears gpu-1xl40s and is refused on gpu-4xl40s, and `--nproc-per-node=4` is the reverse.
+#
+#   1 card   python .edullm/train_recurrent.py ...
+#   N cards  python -m torch.distributed.run --nproc-per-node=N --standalone .edullm/train_recurrent.py ...
+#
+# On the rest of the command:
+#   `bash -lc` is required. The container runs the command directly with no shell, so without
+#   it `$EDULLM_RUN_ID` arrives as fourteen literal characters.
+#   `--save-folder "$EDULLM_CHECKPOINT_DIR"` is already the default, and is written out anyway
+#   because a submission check reads the command text and refuses if it cannot find it.
+#   `train_module.dp_config.param_dtype=bfloat16` is in the command text so the platform's
+#   precision guard can see it. A dtype set only in code is invisible to that guard, and the
+#   run would be admitted onto a Turing card and die on the first kernel that needs the format.
+schema_version: 1
+workload_profile: olmo-core-check
+suggested_compute: gpu-1xl40s
+command: >-
+  bash -lc 'python .edullm/train_recurrent.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --model-factory recurrent_olmo3_370M
+  --n-loops 4
+  --sequence-length 4096
+  --global-batch-size 786432
+  --rank-microbatch-size 8192
+  --steps 200
+  --save-interval 100
+  --warmup-steps 20
+  --learning-rate 7.8e-4
+  train_module.dp_config.param_dtype=bfloat16'
