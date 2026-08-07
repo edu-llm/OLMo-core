@@ -1,0 +1,29 @@
+# Written by edullm check, then edited. Everything here is a property of the code and travels
+# with it in git; the machine, the corpus and the experiment arrive at submit time, because one
+# commit run by two people belongs to two teams.
+#
+# Workload profiles registered for OLMo-core: olmo-core-check, olmo-core-train.
+#
+# WHY olmo-core-check RATHER THAN THE GENERATED olmo-core-train. This spec is the
+# microbatch-throughput probe: 20 steps, a few minutes, nothing to resume. `olmo-core-train`
+# declares a checkpoint contract and prices 2 attempts against 24 declared hours, which put the
+# worst case at $89.33 on an L40S for a run whose median is minutes. `olmo-core-check` is one
+# hour and one attempt. Switch back to olmo-core-train for the real 12-cell beta experiment,
+# where the contract is load-bearing because a cell runs ~11 hours.
+#
+# THE OVERRIDE IS ROOTED AT `model.`, NOT AT `block.`. train_on_corpus.py:708 merges the dotlist
+# into the *experiment* config, where the model is a field. Two calibration runs died seven
+# seconds in with KeyError: 'block' on 2026-08-06 for exactly this. Pinned by
+# src/test/nn/transformer/config_test.py::test_beta_regime_override_is_rooted_at_the_model_field
+#
+# --model-factory kda_householder_130M is the only factory that builds a KDA-Householder model.
+# Selecting the mixer by a dotlist `type=` instead is a silent no-op that trains softmax
+# attention and reports success.
+schema_version: 1
+workload_profile: olmo-core-check
+suggested_compute: gpu-1xl40s
+command: >-
+  bash -lc 'python .edullm/train_on_corpus.py "$EDULLM_RUN_ID" --work-dir /tmp/dataset-cache
+  --save-folder "$EDULLM_CHECKPOINT_DIR" --model-factory kda_householder_130M --steps 20
+  --warmup-steps 3 --save-interval 1000 --sequence-length 2048 --global-batch-size 262144
+  --rank-microbatch-size 131072 model.block.sequence_mixer.allow_neg_eigval=false'
