@@ -1,23 +1,18 @@
-# Everything here is a property of the code and travels with it in git.
-# What a run costs -- the machine, the corpus, the experiment -- is supplied at
-# submit time, because one commit run by two people belongs to two teams.
+# Checkpoint-transfer smoke (Ben / Lin et al.): post-train an earlier base, apply
+# Δ onto a later base from the same trajectory, report retention.
 #
-# Workload profiles registered for OLMo-core: olmo-core-check, olmo-core-train.
-# edullm check prices this and lists every refusal, without dispatching anything.
+# Default mode is synthetic_twin (builds Ms→Mt by sequential train on one 370M-class
+# model). Team S3 ladder dumps (step15000/20000) are the intended production pair;
+# switch to --mode team_s3 once those old-OLMo model.pt keys load cleanly.
 #
-# Does frontloading math change the early loss trajectory of a 190M model?
-# olmo-core-train rather than olmo-core-check, because this opens a corpus.
-#
-# --param-dtype and --save-folder are both named even though the file already
-# defaults to each. The platform reads the words of the command and can see
-# neither a dtype set in code nor an environment variable read in code. A
-# command that does not say where it saves is one the checkpoint contract
-# cannot check, and a retry then resumes from nothing at full price.
+# Platform: push only on edullm/** (never main). Price with edullm check before submit.
 schema_version: 1
 workload_profile: olmo-core-train
 suggested_compute: gpu-1xl4
 command: >-
-  bash -lc 'python .edullm/train_on_corpus.py "$EDULLM_RUN_ID"
+  bash -lc 'python .edullm/ckpt_transfer_smoke.py
   --save-folder "$EDULLM_CHECKPOINT_DIR"
-  --sequence-length 2048 --steps 2000 --save-interval 500
-  --warmup-steps 200 --param-dtype bfloat16'
+  --mode synthetic_twin
+  --steps-pre 60 --steps-gap 60 --steps-sft 40
+  --seq-len 256 --batch-size 4
+  --param-dtype float32'
