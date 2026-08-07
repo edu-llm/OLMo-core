@@ -179,11 +179,20 @@ def run_microbench(
     )
     # Avoid materializing fp32 (B·T·V) logits — ~39GiB at 24×4096 on Dolma2.
     config.lm_head.loss_implementation = LMLossImplementation.fused_linear
+    try:
+        import liger_kernel  # noqa: F401
+    except ImportError as exc:
+        raise RuntimeError(
+            "liger-kernel is required for fused_linear CE. "
+            "Without it, default CE allocates ~39GiB of fp32 logits at 24×4096 and OOMs a 40GiB A100. "
+            "pip install liger-kernel, then retry."
+        ) from exc
     log.info(
-        "microbench: device=%s attn=%s dtype=%s compile=%s optim=%s shape=(%d,%d) vocab=%d",
+        "microbench: device=%s attn=%s dtype=%s loss=%s compile=%s optim=%s shape=(%d,%d) vocab=%d",
         device,
         backend,
         param_dtype,
+        config.lm_head.loss_implementation,
         compile_model,
         with_optim,
         sequences,
@@ -196,6 +205,11 @@ def run_microbench(
         torch.cuda.reset_peak_memory_stats()
 
     model = config.build(init_device=device)
+    assert model.lm_head is not None
+    if model.lm_head.loss_implementation != LMLossImplementation.fused_linear:
+        raise RuntimeError(
+            f"lm_head.loss_implementation is {model.lm_head.loss_implementation!r}, expected fused_linear"
+        )
     model.train()
     if compile_model and device.startswith("cuda"):
         # Same intent as the platform trainer (Inductor). First step is slow / spiky.
