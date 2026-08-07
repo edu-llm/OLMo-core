@@ -1,0 +1,47 @@
+# Start a new run from a dead run's checkpoints, which is the only recovery that exists.
+#
+#   edullm submit --spec .edullm/run-recover-from-another-run.yaml \
+#     --experiment recover --dataset regmix-10b-v1 --compute gpu-1xa10g \
+#     --hours 0.35 --attempts 1
+#
+# WHY THIS IS THE ONE THAT MATTERS. A Batch retry re-runs the same job with the same run id
+# and therefore the same $EDULLM_CHECKPOINT_DIR, which is what makes a retry resume. But a
+# retry only happens on a host failure: measured on 2026-08-07, a job stopped for outrunning
+# attemptDurationSeconds is reported FAILED at "Attempts 1 of 2" and Batch makes no second
+# attempt. So the case a long run actually dies of -- it ran out of its bound, or its
+# container failed -- produces no retry at all, and the recovery is a new submission.
+#
+# A new submission gets a new run id and therefore a new, empty $EDULLM_CHECKPOINT_DIR. It
+# will not find the dead run's checkpoints on its own and nothing on the submission form
+# points it at them. What does is an OLMo-core dotted config override, which reaches
+# `config.merge(overrides)` through argparse's parse_known_args:
+#
+#   trainer.load_path=s3://sbsandbox-intern-edullm-outputs/teams/<team>/runs/<dead>/checkpoints/
+#
+# `Trainer.fit()` looks in the save folder first and falls back to `load_path`, so the new run
+# writes its own checkpoints where its own retry would look and reads the dead run's once. The
+# GPU workload role's `write-and-resume-one-teams-outputs` policy grants s3:GetObject on
+# teams/*/runs/*, so a run may read another run's prefix; a role scoped per run would refuse
+# this and it is not.
+#
+# PASS THE SAME --steps THE DEAD RUN PASSED. It is `max_steps`, and `max_steps` is the
+# denominator OLMo-core's stateless CosWithWarmup divides by. Recovering an eight-hour run
+# with a smaller --steps because "there are only four hours left" restores the weights onto a
+# different learning-rate curve and produces a worse model that reports nothing wrong.
+#
+# EDIT THE URI BELOW. It names the run this file was proved against and is not a default
+# anybody should submit unchanged.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-1xa10g
+command: >-
+  bash -lc 'python .edullm/train_on_corpus.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --sequence-length 1024 --global-batch-size 131072 --steps 700
+  --save-interval 20 --warmup-steps 100 --param-dtype bfloat16
+  trainer.load_path=s3://sbsandbox-intern-edullm-outputs/teams/scratch/runs/run_019fdd8f-ad71-70f6-bc19-e091cf3b22a7/checkpoints/
+  >/tmp/r.log 2>&1;
+  echo "exit=$?";
+  echo "=== LOAD ==="; grep -E "resume|Loading checkpoint|No checkpoint found|Ignoring load path" /tmp/r.log | head -5;
+  echo "=== FIRST STEPS ==="; grep -E "eta=|train/CE loss=|optim/LR" /tmp/r.log | head -6;
+  echo "=== END ==="; tail -22 /tmp/r.log'

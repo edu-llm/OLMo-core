@@ -744,13 +744,31 @@ class LossWatcher(Callback):
         self.last = float(loss)
 
 
-def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> None:
+def summarise(
+    *, opts, config, trainer, losses: LossWatcher, seconds: float, resumed_from: int
+) -> None:
     """Print what only this process can report, as one JSON object on stdout.
 
     The platform reads this back out of the log stream: the device torch actually got, the
     parameter count, the loss at both ends and where the checkpoints went are not facts Batch
     holds. Printed on rank zero only, and printed whatever the losses are, because a run that
     reported nothing is indistinguishable from one that never started.
+
+    ``resumed_from`` IS HERE BECAUSE IT IS THE ONE FACT ABOUT THIS PROCESS NOBODY COULD READ,
+    AND IT IS THE FACT A SECOND ATTEMPT IS SOLD ON. ``steps`` below has always said where the
+    run ended. Where it *began* is the difference between a retry that continued and a retry
+    that quietly repeated the first attempt at full price, and it appeared nowhere: the line
+    that says it is ``Trainer.load_state_dict``'s "Will resume training from step N", which
+    is emitted before the first batch and is therefore hundreds of megabytes above the end of
+    the log. The platform reads fifty lines from the tail -- `edullm logs` is
+    ``cancel-run.yml`` calling ``get-log-events --limit 50 --no-start-from-head`` -- so that
+    line has never been visible to anybody without an AWS credential, which is everybody the
+    log is for.
+
+    Zero on a run that started from nothing, and that is a value rather than an absence: a
+    first attempt reports 0 and a retry that failed to resume reports 0, which is exactly the
+    thing being watched for. The platform's ``config/reports/resume-demonstrations.yaml``
+    takes this and ``steps`` as its two integers.
     """
     if get_rank() != 0:
         return
@@ -768,6 +786,7 @@ def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> 
                 "parameters": sum(
                     parameter.numel() for parameter in trainer.train_module.model.parameters()
                 ),
+                "resumed_from_step": resumed_from,
                 "steps": trainer.global_step,
                 "first_loss": losses.first,
                 "last_loss": losses.last,
@@ -822,6 +841,14 @@ def train(config, opts=None) -> None:
     # than start over. It looks in the save folder, which is EDULLM_CHECKPOINT_DIR, which is
     # derived from the run id and is therefore the same string on both attempts.
     trainer.maybe_load_checkpoint()
+
+    # READ BETWEEN THE LOAD AND THE FIT, WHICH IS THE ONLY MOMENT IT MEANS ANYTHING. Before
+    # the load it is always 0 and after fit() it is always the end of the run, so the step a
+    # resume started from exists as a readable value for exactly these few lines. Reported
+    # by summarise below, because the trainer's own log line saying it is far above the
+    # fifty lines anybody without an AWS credential can read.
+    resumed_from = trainer.global_step
+
     started = time.monotonic()
     trainer.fit()
     if opts is not None:
@@ -831,6 +858,7 @@ def train(config, opts=None) -> None:
             trainer=trainer,
             losses=losses,
             seconds=time.monotonic() - started,
+            resumed_from=resumed_from,
         )
 
 

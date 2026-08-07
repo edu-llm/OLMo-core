@@ -807,11 +807,16 @@ def test_the_summary_is_one_json_object_carrying_what_only_this_process_knows(ca
         trainer=FakeTrainer([FakeParameter(100), FakeParameter(90)], step=50),
         losses=watcher,
         seconds=12.5,
+        resumed_from=20,
     )
 
     printed = json.loads(capsys.readouterr().out)
     assert printed["parameters"] == 190
     assert printed["steps"] == 50
+    # Where the run began as well as where it ended. Trainer.load_state_dict says this in a
+    # log line emitted before the first batch, which on a real run is hundreds of megabytes
+    # above the end of the stream and out of reach of the fifty lines the platform reads.
+    assert printed["resumed_from_step"] == 20
     assert printed["first_loss"] == 6.9
     assert printed["last_loss"] == 6.1
     assert printed["seconds"] == 12.5
@@ -829,11 +834,15 @@ def test_a_summary_is_printed_even_when_no_step_reported_a_loss(capsys):
         trainer=FakeTrainer([FakeParameter(1)], step=0),
         losses=entry.LossWatcher(),
         seconds=0.5,
+        resumed_from=0,
     )
 
     printed = json.loads(capsys.readouterr().out)
     assert printed["first_loss"] is None
     assert printed["last_loss"] is None
+    # Zero is a value rather than an absence, and it is the one being watched for: a first
+    # attempt reports 0 and so does a retry that failed to resume.
+    assert printed["resumed_from_step"] == 0
 
 
 def test_the_config_print_names_how_many_shards_rather_than_all_of_them(monkeypatch):
