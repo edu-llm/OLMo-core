@@ -1,0 +1,53 @@
+# How this repository's MoE study runs. Everything here is a property of the CODE and travels
+# with it in git; the machine, the corpus, the team and the experiment are supplied at submit
+# time, because one commit run by two people belongs to two teams.
+#
+#   edullm check --json --experiment <slug> --dataset reservoir-dolma2-v1 --team scratch \
+#     --compute gpu-8xa100 --hours 2 --attempts 1
+#   edullm submit <same flags>
+#
+# ⚠️ ALWAYS PASS --hours AND --attempts. The workload's defaults are 24 h x 2 attempts, which on
+# gpu-8xa100 ($21.9576/h) prices at $1,053.96 worst case -- over policy v6's
+# automatic_below_cost_usd of $500, so the run parks waiting for a lead instead of starting.
+# Measured 2026-08-06: 24h x 2 = $1,053.96 routine; 16h x 1 = $351.32 automatic;
+# 2h x 1 = $43.92 automatic. The bound is what buys the automatic gate, and a 200M-token probe
+# finishes in ~30 min anyway. Note `check`'s class is a BEST CASE -- it cannot see the day's
+# spend against automatic_daily_ceiling_usd ($1,000), so the compile job may still route to a
+# lead. Read the real gate from `edullm status --json`.
+#
+# THE COMMAND IS TWO INVOCATIONS CHAINED WITH &&, AND THAT IS A FIX RATHER THAN A STYLE.
+# `--prepare-heldout-only` builds the held-out instance indices in ONE process, before torchrun
+# exists. NumpyPaddedFSLDataset.prepare() opens a bare ProcessPoolExecutor() -- os.cpu_count(),
+# which is 96 on a p4d.24xlarge -- on fs_local_rank 0 only, and then every rank meets a
+# barrier(). Run inside the distributed program, that deadlocked two 8-GPU runs at a 900 s gloo
+# timeout for ~$11 and zero measurements (run_019fca21, run_019fcdd1). Standalone there is no
+# process group, so the barrier is a no-op and the pool has the box to itself.
+#
+# BOTH INVOCATIONS MUST SHARE --work-dir or the second finds nothing cached and re-enters the
+# deadlock. /tmp/dataset-cache is per-container, so the two must be ONE submission -- they
+# cannot be split across runs.
+#
+# `require_a_process_for_every_device` reads the FIRST launcher among the shell's simple
+# commands, so the leading single-process python does not trip the 8-device check; torchrun's
+# --nproc-per-node=8 is what it matches. No EDULLM_LAUNCH_CHECK=waived is needed.
+#
+# --model-factory IS THE ARM, and is the one thing that changes between cells:
+#   edullm_moe_m1    8 experts x 2112, top-2   1,065,534,464 total / 442,680,320 forward
+#   edullm_dense_d1  dense f=4224, the control    442,549,248 total / 442,549,248 forward
+#   M1-G8            edullm_moe_m1 with 32 x 528, top-8  (three kwargs, no new code)
+# M1.forward - D1.total = 131,072 exactly, which is the routers and nothing else. That identity
+# is what makes the comparison valid; re-verify it after any change to the factories.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'python .edullm/train_on_corpus.py "$EDULLM_RUN_ID"
+  --model-factory edullm_moe_m1 --sequence-length 2048 --steps 1525
+  --work-dir /tmp/dataset-cache --prepare-heldout-only
+  && python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/train_on_corpus.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --model-factory edullm_moe_m1 --sequence-length 2048 --steps 1525
+  --global-batch-size 131072 --rank-microbatch-size 8192
+  --save-interval 500 --data-seed 0 --work-dir /tmp/dataset-cache
+  trainer.callbacks.checkpointer.max_checkpoints=null'
