@@ -227,6 +227,34 @@ RUN set -eux; \
     python -c "from olmo_core.nn.attention.flash_attn_api import has_flash_attn_2; print('has_flash_attn_2():', has_flash_attn_2())" \
       || echo "flash-attn did not import on this builder; the GPU run will say whether that is real"
 
+# THE TOKENIZER, AND ITS FILE, BECAUSE EVERY ENCODE PATH REACHES BOTH AND NEITHER IS HERE.
+#
+# `tokenizers` is not a core dependency of this project and is not in the `wandb` extra this
+# image installs -- it arrives only through the `transformers` extra, which nothing here pulls.
+# So olmo_core.latentcot.tokens.load_tokenizer() raises ImportError, and it is reached by the
+# first LatentCotDataset access, one line after the model construction that already killed
+# run_019fde30. Adding flash-attn above without this would have bought the next eleven-second
+# failure rather than a run.
+#
+# huggingface_hub is named explicitly even though cached-path pulls it in transitively: a
+# transitive pin is somebody else's to change, and this file asserts what it depends on.
+#
+# WARMING THE CACHE IS THE SECOND HALF, AND THE HALF A DEPENDENCY LIST CANNOT FIX. The loader
+# calls hf_hub_download, which is a network read at run time. Whether a training container has
+# egress to huggingface.co is not this file's decision, and a run that dies reaching for a
+# 2 MB json after being handed eight A100s is the worst way to find out. Downloading it here
+# puts it in the image, where the build already has network and nothing is billed by the hour.
+#
+# HF_HOME is pinned to an absolute path rather than left to $HOME so the cache the build writes
+# is the cache the run reads, whatever user the container starts as. load_tokenizer() retries
+# with local_files_only=True when the Hub is unreachable, so a container with no egress uses
+# this copy instead of failing.
+ENV HF_HOME=/opt/hf-cache
+RUN set -eux; \
+    python -m pip install --no-cache-dir tokenizers huggingface_hub; \
+    python -c "from olmo_core.latentcot.tokens import load_tokenizer, PADDED_VOCAB_SIZE; t = load_tokenizer(); print('dolma2 tokenizer cached, vocab', t.get_vocab_size(), 'padded', PADDED_VOCAB_SIZE)"; \
+    python -c "import os; assert os.path.isdir('/opt/hf-cache'), 'the tokenizer cache was not written where the run will look'"
+
 # No CMD. The entrypoint of the registered base is inherited deliberately, so swapping the
 # base does not leave a stale command behind.
 #

@@ -359,6 +359,23 @@ def train_arm(
                     **metrics,
                 }
             )
+            # Print it too, flushed. `train_history` only reaches disk in metrics.json at the
+            # very end, so without this a 13-hour run is silent: no way to see progress, and the
+            # drift tripwires (thought_rms, grad_norm) that exist to catch a diverging latent
+            # path early are unreadable until it is too late to act. Printing makes the
+            # platform's own "last fifty lines the container printed" a live monitor.
+            entry = history[-1]
+            print(
+                " ".join(
+                    (
+                        f"{key}={entry[key]:.4g}"
+                        if isinstance(entry[key], float)
+                        else f"{key}={entry[key]}"
+                    )
+                    for key in entry
+                ),
+                flush=True,
+            )
         if checkpointing and ((step + 1) % save_every == 0 or step == steps - 1):
             _save_rolling(step + 1)
             _maybe_update_best(step + 1)

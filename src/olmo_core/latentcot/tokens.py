@@ -45,7 +45,12 @@ SPECIAL_TOKENS = {"BOT": BOT, "EOT": EOT, "DISTILL": DISTILL, "THOUGHT": THOUGHT
 def load_tokenizer() -> "Tokenizer":
     """
     Load the dolma2 tokenizer (cached). Downloads ``tokenizer.json`` from the Hub on
-    first use.
+    first use, falling back to an already-cached copy when the Hub is unreachable.
+
+    That fallback is what makes this usable inside a training container. Every encode path
+    reaches here, so with no egress to huggingface.co the run dies at the first
+    ``LatentCotDataset`` access — before step 1, having already paid for the GPU. The eduLLM
+    image pre-warms this cache at build time, so ``local_files_only`` finds the file.
 
     :raises ImportError: If the ``tokenizers`` package is not installed.
     """
@@ -58,7 +63,12 @@ def load_tokenizer() -> "Tokenizer":
             "(a transitive dep of the `transformers` extra). Install with: "
             "`uv pip install tokenizers`."
         ) from e
-    path = hf_hub_download(str(TOKENIZER_CONFIG.identifier), "tokenizer.json")
+    identifier = str(TOKENIZER_CONFIG.identifier)
+    try:
+        path = hf_hub_download(identifier, "tokenizer.json")
+    except Exception:  # pragma: no cover - network dependent
+        # Offline / no egress: use the baked cache rather than failing the run.
+        path = hf_hub_download(identifier, "tokenizer.json", local_files_only=True)
     return Tokenizer.from_file(path)
 
 
