@@ -100,6 +100,19 @@ Notes on the mapping: the flag is **`--out`**, not `--save-dir`; `A$i` for `i` i
 arms A0–A4; `--rung olmo3_370M` is passed explicitly because the script still defaults to
 `olmo2_370M`. Waiting on each PID (rather than bare `wait`) is what makes a failed arm fail the job.
 
+**flash-attn is now in the image; `--attn-backend` is the fallback, not the plan.** Every
+`olmo3_*` config hardcodes `attn_backend=flash_2` and `Attention.__init__` asserts support at
+construction, so on an image without the package the run dies before step 1 — that is how
+`run_019fde30-…` ended 11 s in. `.edullm/Dockerfile` now installs the prebuilt wheel
+`flash_attn-2.8.3+cu12torch2.9cxx11abiTRUE-cp312` (a wheel, not `pip install flash-attn`: the
+registered base is a bare python image with no nvcc, so the sdist cannot compile). The tuple is
+not interchangeable — cu12 because torch 2.9.0 pins `nvidia-*-cu12==12.8.x`, cp312 for the base's
+python, abiTRUE because it is the only ABI shipped for torch 2.9 — and the Dockerfile asserts the
+CUDA major so a moved torch pin fails the build instead of installing a wheel that imports
+nowhere. If it ever regresses, `--attn-backend torch` still runs: same attention math, different
+kernel, and the 4096 sliding window is a no-op at our ~300-token sequences. Whichever was used is
+recorded in `metrics.json` as `attn_backend`.
+
 **`$EDULLM_CHECKPOINT_DIR` is an `s3://` URI, not a directory.** (`checkpoints.py`: *"a checkpoint
 prefix must be an s3:// URI"*; the value is `output_prefix(team, run_id) + "checkpoints/"`.) This
 matters more than it looks: `Path("s3://b/k")` is `PosixPath("s3:/b/k")` — a **relative local**

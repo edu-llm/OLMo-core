@@ -185,6 +185,48 @@ RUN set -eux; \
     python -c "import boto3, wandb; from olmo_core.data import TokenizerConfig; from olmo_core.nn.transformer import TransformerConfig; print(TransformerConfig.olmo2_190M(vocab_size=TokenizerConfig.gpt2().padded_vocab_size()).__class__.__name__)"; \
     python -c "from edullm_data.read import dataset_paths, resolve_latest; print(dataset_paths.__module__)"
 
+# FLASH-ATTENTION, AS A PREBUILT WHEEL, BECAUSE THE olmo3_* CONFIGS CANNOT BE BUILT WITHOUT IT.
+#
+# Every olmo3_* TransformerConfig hardcodes attn_backend=flash_2, and Attention.__init__ calls
+# assert_supported() during construction. Without this package that raises before step 1: run
+# run_019fde30-1d27-7096-8bd9-3ef9b7748d7b died eleven seconds after starting, with the model
+# half-built and a GPU already billed. The latentcot scripts now carry --attn-backend torch as a
+# fallback, but the fallback trades the kernel the config asks for, so the honest fix is here.
+#
+# A WHEEL AND NOT `pip install flash-attn`, WHICH CANNOT WORK ON THIS BASE. The sdist compiles
+# CUDA sources and needs nvcc plus the CUDA toolkit; the registered base is a bare python image
+# that carries neither, and the C compiler added above is for torch.compile, not for nvcc. A
+# source build would also take a standard runner far past its budget. A prebuilt wheel only
+# unpacks, so it installs on a CPU runner with no GPU and no toolkit.
+#
+# WHY THIS EXACT FILENAME. flash-attn publishes one wheel per (flash version, CUDA major, torch
+# minor, C++ ABI, python, arch) and they are not interchangeable -- a mismatched ABI or torch
+# minor installs cleanly and then fails to import at runtime, which is the same eleven-second
+# death by a different route. cu12 is right because torch 2.9.0's PyPI wheel pins
+# nvidia-*-cu12==12.8.x, torch2.9 matches the pin above, cp312 matches the base's python 3.12.13,
+# abiTRUE because it is the only ABI flash-attn ships for torch 2.9, and the CUDA-major
+# assertion below fails the build rather than installing the wrong one if that pin ever moves.
+#
+# 253 MB of wheel, taking the image from ~2.94 GB to ~3.2 GB. That is the cost of the kernel the
+# registered configs name.
+#
+# THE IMPORT PROBE IS DELIBERATELY NON-FATAL. `has_flash_attn_2()` is the exact predicate that
+# failed, so it is what gets probed rather than something adjacent. It is a plain module import
+# with no device check, so it should succeed on this builder -- but dlopen of the CUDA-linked
+# extension is the one step that could reasonably behave differently without a GPU present, and
+# failing the build there would block an image that works on the machine that matters. So the
+# distribution being present is asserted, the import is reported, and the build log carries the
+# answer either way. A wrong wheel still surfaces on the next run in eleven seconds, against
+# --attn-backend torch as the escape hatch.
+ARG FLASH_ATTN_WHEEL=https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3%2Bcu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
+RUN set -eux; \
+    python -c "import torch; cu = torch.version.cuda or ''; assert cu.startswith('12'), f'the pinned wheel is cu12; torch reports CUDA {cu!r} -- repin FLASH_ATTN_WHEEL'"; \
+    python -m pip install --no-cache-dir "${FLASH_ATTN_WHEEL}"; \
+    python -c "import torch; assert torch.__version__.startswith('2.9.0'), f'flash-attn install moved torch off the pin: {torch.__version__}'"; \
+    python -c "from importlib.metadata import version; print('flash_attn dist:', version('flash_attn'))"; \
+    python -c "from olmo_core.nn.attention.flash_attn_api import has_flash_attn_2; print('has_flash_attn_2():', has_flash_attn_2())" \
+      || echo "flash-attn did not import on this builder; the GPU run will say whether that is real"
+
 # No CMD. The entrypoint of the registered base is inherited deliberately, so swapping the
 # base does not leave a stale command behind.
 #
