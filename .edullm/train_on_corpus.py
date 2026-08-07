@@ -73,7 +73,7 @@ import re
 import sys
 import time
 import traceback
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Dict, Iterator, List, Optional, Tuple, cast
 
 import rich
@@ -84,6 +84,7 @@ from olmo_core.data import (
     NumpyDataLoaderConfig,
     NumpyDatasetDType,
     NumpyFSLDatasetConfig,
+    NumpyPaddedFSLDatasetConfig,
     TokenizerConfig,
 )
 from olmo_core.distributed.parallel import DataParallelType
@@ -102,6 +103,7 @@ from olmo_core.train.callbacks import (
     CheckpointerCallback,
     ConfigSaverCallback,
     GPUMemoryMonitorCallback,
+    LMEvaluatorCallbackConfig,
     WandBCallback,
 )
 from olmo_core.train.checkpoint import Checkpointer
@@ -332,6 +334,11 @@ class ExperimentConfig(Config):
     train_module: TransformerTrainModuleConfig
     dataset_id: str = ""
     dataset_version: str = ""
+    #: How many held-out shards the evaluator was wired to, recorded on the config so the
+    #: summary can report it without re-resolving the corpus. Zero means the corpus declared
+    #: no validation split, which is why ``val_loss`` is null -- a fact worth keeping apart
+    #: from an evaluator that ran and returned nothing.
+    dataset_val_paths: List[str] = field(default_factory=list)
     init_seed: int = 12536
 
 
@@ -345,9 +352,22 @@ class Corpus:
     dtype: NumpyDatasetDType
     tokenizer: TokenizerConfig
     rows: Optional[int]
+    #: The corpus's held-out shards, empty when it declares none. Separate from ``paths``
+    #: rather than mixed into it: a validation shard that reached the training stream is the
+    #: one data error no metric can show, because the number it corrupts is the number you
+    #: would check. ``dataset_paths(split="val")`` returns empty rather than raising for a
+    #: corpus without a split, so an empty list here means "asked and there are none".
+    val_paths: List[str] = field(default_factory=list)
 
 
-def corpus_from_manifest(read, *, dataset_id: str, version: str, tokenizer_id: str) -> Corpus:
+def corpus_from_manifest(
+    read,
+    *,
+    dataset_id: str,
+    version: str,
+    tokenizer_id: str,
+    val_paths: Optional[List[str]] = None,
+) -> Corpus:
     """Turn what the reader returned into what OLMo-core needs, or refuse and say why.
 
     Separate from the fetch because this is the part with the judgement in it, and a test
@@ -395,6 +415,13 @@ def corpus_from_manifest(read, *, dataset_id: str, version: str, tokenizer_id: s
         ) from None
     tokenizer = build_tokenizer()
 
+    # THE HELD-OUT SHARDS INHERIT THE THREE CHECKS ABOVE RATHER THAN GETTING THEIR OWN. dtype,
+    # header_bytes and byte_order are properties of the published corpus, not of one split, so
+    # a val shard that needed a different answer to any of them would mean the corpus is not
+    # internally consistent -- and the refusals above have already run on the manifest that
+    # describes both. What matters is that the eval dataset is built with the SAME dtype: a
+    # width mismatch there reads every token to a different in-range id and produces a
+    # validation loss that is wrong rather than absent.
     return Corpus(
         dataset_id=dataset_id,
         version=version,
@@ -402,6 +429,7 @@ def corpus_from_manifest(read, *, dataset_id: str, version: str, tokenizer_id: s
         dtype=NumpyDatasetDType(read.dtype),
         tokenizer=tokenizer,
         rows=read.rows,
+        val_paths=list(val_paths or []),
     )
 
 
@@ -466,8 +494,39 @@ def resolve_corpus(*, dataset_id: str, version: str, tokenizer_id: str) -> Corpu
             read_failure(exc),
             f"reading {dataset_id}/{version}: {type(exc).__name__}: {exc}",
         ) from exc
+
+    # THE HELD-OUT SPLIT, ASKED FOR SEPARATELY AND ALLOWED TO BE ABSENT. A second call rather
+    # than a flag on the first, because ``split=None`` above is the reader's answer to "what
+    # may this run train on" and held-out shards are deliberately not in it. Asking for a
+    # split a corpus does not declare returns an EMPTY result rather than raising, so this
+    # distinguishes "no validation data" from "the read failed" without a try/except around
+    # the question itself.
+    #
+    # A FAILURE HERE IS NOT FATAL AND THAT IS THE ONE JUDGEMENT IN THIS FUNCTION. The training
+    # stream is already resolved at this point; refusing the run because the *evaluation* half
+    # could not be listed would throw away a training run over a metric. So this degrades to
+    # no evaluator and says so, and the caller decides whether a run without one is worth
+    # starting -- which for a beta-regime comparison it is not, and `--require-val` is how a
+    # submission says so.
+    val_paths: List[str] = []
+    try:
+        held_out = dataset_paths(dataset_id, version, split="val", s3=s3)
+        val_paths = list(held_out.paths)
+    except BaseException as exc:  # noqa: BLE001 -- see the paragraph above
+        log.warning(
+            "could not list the held-out split of %s/%s, so this run has no evaluator: %s: %s",
+            dataset_id,
+            version,
+            type(exc).__name__,
+            exc,
+        )
+
     return corpus_from_manifest(
-        read, dataset_id=dataset_id, version=version, tokenizer_id=tokenizer_id
+        read,
+        dataset_id=dataset_id,
+        version=version,
+        tokenizer_id=tokenizer_id,
+        val_paths=val_paths,
     )
 
 
@@ -562,13 +621,23 @@ def build_config(opts, overrides: List[str]):
         tokenizer_id=opts.dataset_tokenizer,
     )
     log.info(
-        "%s/%s: %d shards, dtype %s, tokenizer %s",
+        "%s/%s: %d shards, dtype %s, tokenizer %s, %d held-out shards",
         corpus.dataset_id,
         corpus.version,
         len(corpus.paths),
         corpus.dtype,
         opts.dataset_tokenizer,
+        len(corpus.val_paths),
     )
+    # Refused here rather than after the model is built, because the answer is already known
+    # and a run that cannot measure what it exists to measure should not reach a GPU.
+    if opts.require_val and not corpus.val_paths:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"--require-val was given and {corpus.dataset_id}/{corpus.version} declares no "
+            "validation split, so this run could report only training loss. `edullm data "
+            "<reference-id>` says which corpora carry held-out shards.",
+        )
 
     factory = getattr(TransformerConfig, opts.model_factory, None)
     if factory is None:
@@ -688,13 +757,57 @@ def build_config(opts, overrides: List[str]):
         .with_callback("config_saver", ConfigSaverCallback())
     )
 
-    # No lm_evaluator and no downstream_evaluator, and their absence is a decision. The
-    # example's LM evaluator reads a C4 validation shard from olmo-data.org and the downstream
-    # one pulls HellaSwag from Hugging Face; both would put a public-internet fetch in the
-    # middle of a run whose whole claim is that it read a sealed corpus, and a failure in
-    # either would look like a training failure. Held-out shards for a published corpus come
-    # back from the reader as `.val`, and wiring an evaluator to those is the right version of
-    # this -- it needs a corpus that declares one, which regmix-10b does not.
+    # STILL NO downstream_evaluator, and that absence is still a decision: the example's pulls
+    # HellaSwag from Hugging Face, which would put a public-internet fetch in the middle of a
+    # run whose whole claim is that it read a sealed corpus, and a failure in it would look
+    # like a training failure.
+    #
+    # THE LM EVALUATOR IS NOW WIRED, TO THE CORPUS'S OWN HELD-OUT SHARDS. Same argument, other
+    # direction: `dataset_paths(split="val")` reads the same sealed prefix the training stream
+    # came from, so there is no new network dependency and no new failure mode. What it needs
+    # is a corpus that declares a split -- regmix-10b does not, reservoir-dolma2 does, with
+    # 975,077,376 validation tokens carved as whole documents before tokenization.
+    #
+    # WITHOUT THIS A BETA-REGIME COMPARISON MEASURES NOTHING. The two arms differ in one
+    # boolean and the estimand is held-out cross-entropy; `first_loss`/`last_loss` are training
+    # loss, so a run without an evaluator reports how well each arm fit the stream it just saw.
+    # That is not the quantity, and it is not a proxy for it.
+    #
+    # A PADDED FSL DATASET RATHER THAN THE TRAINING CONFIG'S OWN CLASS, because
+    # LMEvaluatorCallbackConfig.build refuses anything else by name
+    # (evaluator_callback.py:266-269). Padding is what makes the last instance of each shard
+    # comparable across arms instead of silently dropped at a different point in each.
+    #
+    # SAME dtype AND SAME tokenizer AS THE TRAINING STREAM, passed explicitly. A width mismatch
+    # here does not fail -- it reads every token to a different in-range id and produces a
+    # validation loss that is wrong rather than missing, which is the one error this whole
+    # metric cannot survive.
+    if corpus.val_paths:
+        trainer_config = trainer_config.with_callback(
+            "lm_evaluator",
+            LMEvaluatorCallbackConfig(
+                eval_dataset=NumpyPaddedFSLDatasetConfig(
+                    paths=corpus.val_paths,
+                    sequence_length=opts.sequence_length,
+                    tokenizer=corpus.tokenizer,
+                    dtype=corpus.dtype,
+                    work_dir=opts.work_dir,
+                ),
+                eval_interval=opts.eval_interval,
+                # ON FINISH, WHICH IS THE ONE THAT CARRIES THE RESULT. A paired comparison
+                # reads the final number, so the run must produce one at the end rather than
+                # only at the last multiple of eval_interval.
+                eval_on_finish=True,
+                # NOT on startup. It costs a full pass over the held-out set to measure an
+                # untrained model, and the arms are identical there by construction.
+                eval_on_startup=False,
+                # ONE PASS, BOUNDED. The held-out set is 975M tokens; an unbounded epoch over
+                # it would cost more than the training run it is measuring. This is a fixed
+                # number of batches so every arm and every seed evaluates on the same amount.
+                eval_duration=Duration.steps(opts.eval_batches),
+                deterministic=True,
+            ),
+        )
 
     config = ExperimentConfig(
         model=model_config,
@@ -704,6 +817,7 @@ def build_config(opts, overrides: List[str]):
         trainer=trainer_config,
         dataset_id=corpus.dataset_id,
         dataset_version=corpus.version,
+        dataset_val_paths=list(corpus.val_paths),
     )
     return config.merge(overrides)
 
@@ -894,6 +1008,14 @@ class LossWatcher(Callback):
     def __init__(self) -> None:
         self.first: Optional[float] = None
         self.last: Optional[float] = None
+        #: The last held-out CE loss this run recorded, or None when it had no evaluator.
+        #: THIS IS THE NUMBER A REGIME COMPARISON READS, and it is captured here for the same
+        #: reason the W&B url is: the summary runs after the trainer has stopped, and nothing
+        #: it can reach then still holds the evaluator's metrics. Without this the value exists
+        #: in W&B and in the log stream, and the machine-readable summary the platform parses
+        #: carries only training loss -- which is how a run reports a number that reads like a
+        #: result and is not one.
+        self.val: Optional[float] = None
         self.wandb_url = ""
 
     def log_metrics(self, step: int, metrics: Dict[str, float]) -> None:
@@ -903,6 +1025,13 @@ class LossWatcher(Callback):
                 import wandb
 
                 self.wandb_url = getattr(wandb.run, "url", "") or ""
+        # Matched by suffix rather than by an exact key. EvaluatorCallback records under
+        # "{prefix}/{evaluator name}/{metric}" (evaluator_callback.py:171), so the evaluator's
+        # name and the prefix both sit in the middle of the string and a hardcoded key breaks
+        # the moment either is renamed -- silently, by matching nothing.
+        for name, value in metrics.items():
+            if name.endswith("/CE loss") and not name.startswith("train/"):
+                self.val = float(value)
         loss = metrics.get("train/CE loss")
         if loss is None:
             return
@@ -938,6 +1067,11 @@ def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> 
                 "steps": trainer.global_step,
                 "first_loss": losses.first,
                 "last_loss": losses.last,
+                # null when the corpus declared no validation split, which is a different fact
+                # from a run that had one and scored badly. --require-val refuses the first
+                # case up front for a comparison that cannot use it.
+                "val_loss": losses.val,
+                "val_shards": len(config.dataset_val_paths),
                 "seconds": seconds,
                 "peak_memory_gib": peak,
                 "checkpoint_uri": opts.save_folder,
@@ -1029,6 +1163,36 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--global-batch-size", type=int, default=256 * 1024)
     parser.add_argument("--rank-microbatch-size", type=int, default=16 * 1024)
     parser.add_argument("--data-seed", type=int, default=0)
+    parser.add_argument(
+        "--eval-interval",
+        type=int,
+        default=1000,
+        help=(
+            "Steps between held-out evaluations. Only reached when the corpus declares a "
+            "validation split; a corpus without one gets no evaluator whatever this says."
+        ),
+    )
+    parser.add_argument(
+        "--eval-batches",
+        type=int,
+        default=64,
+        help=(
+            "Batches per held-out evaluation. Bounded rather than a full epoch: the largest "
+            "registered corpus holds 975M validation tokens and an unbounded pass over them "
+            "costs more than the training run it measures. Fixed so that every arm and every "
+            "seed is scored on the same amount of data."
+        ),
+    )
+    parser.add_argument(
+        "--require-val",
+        action="store_true",
+        help=(
+            "Refuse rather than train when the corpus declares no validation split. A "
+            "comparison whose estimand is held-out loss gets nothing from a run that cannot "
+            "measure it, and the failure is otherwise invisible: the run trains, exits zero, "
+            "and reports training loss under a name that reads like a result."
+        ),
+    )
     parser.add_argument(
         "--param-dtype",
         default=DType.bfloat16.value,

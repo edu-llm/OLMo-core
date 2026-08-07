@@ -816,6 +816,9 @@ class FakeOptions:
 class FakeConfig:
     dataset_id: str = "pretrain/regmix-10b"
     dataset_version: str = "v1"
+    # Defaults to no held-out shards, which is what regmix-10b declares and therefore the
+    # right default for a fixture named after it. A test about the evaluator sets it.
+    dataset_val_paths: List[str] = field(default_factory=list)
 
 
 class FakeParameter:
@@ -942,3 +945,99 @@ def test_a_run_with_no_wandb_reports_a_blank_url_rather_than_failing(monkeypatch
 
     assert watcher.wandb_url == ""
     assert watcher.first == 6.9
+
+
+# ---------------------------------------------------------------------------------------
+# The held-out evaluator, and why each half of it is asserted.
+# ---------------------------------------------------------------------------------------
+
+
+def test_a_corpus_carries_its_held_out_shards_separately_from_its_trainable_ones():
+    """Validation shards must never reach the training stream.
+
+    A val shard mixed into ``paths`` is the one data error no metric can show, because the
+    number it corrupts is the number you would check it with.
+    """
+    corpus = entry.corpus_from_manifest(
+        FakeManifest(),
+        dataset_id="pretrain/reservoir-dolma2",
+        version="v1",
+        tokenizer_id="tokenizer/dolma2-bpe",
+        val_paths=["s3://edullm-data/pretrain/reservoir-dolma2/v1/val/a.u32le.bin"],
+    )
+    assert corpus.val_paths == ["s3://edullm-data/pretrain/reservoir-dolma2/v1/val/a.u32le.bin"]
+    assert corpus.val_paths[0] not in corpus.paths
+
+
+def test_a_corpus_that_declares_no_split_reports_no_held_out_shards():
+    """Absent is a value, not an error. ``dataset_paths(split=...)`` returns empty, not raises."""
+    corpus = entry.corpus_from_manifest(
+        FakeManifest(),
+        dataset_id="pretrain/regmix-10b",
+        version="v1",
+        tokenizer_id="tokenizer/dolma2-bpe",
+    )
+    assert corpus.val_paths == []
+
+
+def test_the_loss_watcher_keeps_held_out_loss_apart_from_training_loss():
+    """The two are different numbers and only one of them is the estimand.
+
+    ``EvaluatorCallback`` records under ``{prefix}/{evaluator}/{metric}``
+    (``evaluator_callback.py:171``), so the match is on the suffix: a hardcoded
+    ``"eval/lm/CE loss"`` breaks silently the moment the prefix or the evaluator's name moves.
+    A training step after an evaluation must not overwrite the held-out value.
+    """
+    watcher = entry.LossWatcher()
+    watcher.log_metrics(1, {"train/CE loss": 11.6})
+    assert watcher.val is None, "a run with no evaluator must report no held-out loss"
+
+    watcher.log_metrics(2, {"eval/lm/CE loss": 7.2})
+    watcher.log_metrics(3, {"train/CE loss": 9.9})
+    assert watcher.val == 7.2, "a later training step must not overwrite the held-out loss"
+    assert watcher.last == 9.9
+
+    watcher.log_metrics(4, {"eval/merged/lm/CE loss": 6.8})
+    assert watcher.val == 6.8, "the merged-prefix form must match too"
+
+
+def test_the_summary_distinguishes_no_evaluator_from_a_bad_score(capsys):
+    """``val_loss: null`` beside ``val_shards: 0`` says the run could not measure, not that it
+    measured badly. A comparison reading these apart is what ``--require-val`` protects."""
+    import json
+
+    entry.summarise(
+        opts=FakeOptions(),
+        config=FakeConfig(),
+        trainer=FakeTrainer([FakeParameter(10)], step=5),
+        losses=entry.LossWatcher(),
+        seconds=1.0,
+    )
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["val_loss"] is None
+    assert summary["val_shards"] == 0
+
+
+def test_the_summary_reports_the_held_out_loss_when_there_was_an_evaluator(capsys):
+    """The number a beta-regime comparison reads must reach the machine-readable summary.
+
+    It is recorded in W&B either way; what this asserts is that it also lands in the JSON the
+    platform parses out of the log stream, beside the shard count that explains it.
+    """
+    import json
+
+    watcher = entry.LossWatcher()
+    watcher.log_metrics(1, {"train/CE loss": 11.6})
+    watcher.log_metrics(2, {"eval/lm/CE loss": 7.4})
+
+    entry.summarise(
+        opts=FakeOptions(),
+        config=FakeConfig(dataset_val_paths=["s3://b/val/a.bin", "s3://b/val/b.bin"]),
+        trainer=FakeTrainer([FakeParameter(10)], step=5),
+        losses=watcher,
+        seconds=1.0,
+    )
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["val_loss"] == 7.4
+    assert summary["val_shards"] == 2
+    assert summary["last_loss"] == 11.6, "training loss must still be reported separately"
