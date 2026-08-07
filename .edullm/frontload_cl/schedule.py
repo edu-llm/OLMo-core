@@ -1,18 +1,23 @@
 """Build primer vs control instance-source curricula for frontload-cl.
 
 Schedules live here (not as separate ``curriculum/`` datasets). Both arms read the same
-published shards under ``pretrain/frontload-cl-10b``; only ordering differs.
+published shards under ``pretrain/frontload-cl-10b``; only post-warmup ordering differs.
 
-Primer
-------
-1. Warmup tokens (~371M): HQ main mix only (LR ramp is separate).
-2. 100M contiguous SFT-like block.
-3. Remaining HQ main + remaining 100M SFT-like, mixed uniformly.
-4. Anneal 1B: FineWeb-Edu anneal + FineWiki @ 5% (no SFT-like).
+Shared warmup (both arms)
+-------------------------
+~371M tokens of HQ main only (FineWeb-Edu main + FineWiki @ 5%), sized to the LR
+warmup window. Same ``hq.split`` seed so both arms see the same warmup instances.
+``CosWithWarmup`` in the train script is separate and identical for both arms.
 
-Control
--------
-1. Pre-anneal 9.0B: HQ main + all 200M SFT-like mixed uniformly (includes warmup window).
+Primer (after warmup)
+---------------------
+1. 100M contiguous SFT-like block.
+2. Remaining HQ main + remaining 100M SFT-like, mixed uniformly.
+3. Anneal 1B: FineWeb-Edu anneal + FineWiki @ 5% (no SFT-like).
+
+Control (after warmup)
+----------------------
+1. Remaining HQ main + all 200M SFT-like, mixed uniformly.
 2. Anneal 1B: same as primer.
 """
 
@@ -234,13 +239,34 @@ def _sft_like(
     )
 
 
+def _split_hq_warmup(
+    hq: InstanceSource,
+    *,
+    sequence_length: int,
+) -> tuple[InstanceSource, InstanceSource]:
+    """Carve the shared LR-warmup HQ window from ``hq-main``.
+
+    Uses the actual mix size after seq-length flooring (not the nominal
+    ``HQ_PRE_ANNEAL`` constant) and a fixed seed so primer and control get the
+    same warmup instances and the same ``hq_rest``.
+    """
+    warmup_tokens = _aligned_tokens(C.WARMUP_TOKENS, sequence_length)
+    warmup_ratio = warmup_tokens / hq.num_tokens
+    if not (0.0 < warmup_ratio < 1.0):
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"warmup slice {warmup_tokens} does not fit in hq-main ({hq.num_tokens} tokens)",
+        )
+    return hq.split(warmup_ratio, seed=C.DATA_SEED + 10)
+
+
 def build_primer_phases(
     corpus: Corpus,
     *,
     sequence_length: int = C.SEQ_LENGTH,
     work_dir: str,
 ) -> List[InstanceSource]:
-    """Ordered phases for the primer arm (warmup HQ → block → main → anneal)."""
+    """Ordered phases: shared HQ warmup → SFT block → mixed rest → anneal."""
     set_composable_seed(C.DATA_SEED)
     wiki_main, wiki_anneal = _split_finewiki(
         corpus, sequence_length=sequence_length, work_dir=work_dir
@@ -251,16 +277,7 @@ def build_primer_phases(
         sequence_length=sequence_length,
         work_dir=work_dir,
     )
-    # Align the HQ warmup slice to the LR warmup window (~371M / 472 steps), using the
-    # actual mix size after seq-length flooring — not the nominal HQ_PRE_ANNEAL constant.
-    warmup_tokens = _aligned_tokens(C.WARMUP_TOKENS, sequence_length)
-    warmup_ratio = warmup_tokens / hq.num_tokens
-    if not (0.0 < warmup_ratio < 1.0):
-        raise Refusal(
-            Stage.THE_CONFIG_WOULD_NOT_BUILD,
-            f"warmup slice {warmup_tokens} does not fit in hq-main ({hq.num_tokens} tokens)",
-        )
-    hq_warmup, hq_rest = hq.split(warmup_ratio, seed=C.DATA_SEED + 10)
+    hq_warmup, hq_rest = _split_hq_warmup(hq, sequence_length=sequence_length)
 
     sft = _sft_like(corpus, sequence_length=sequence_length, work_dir=work_dir)
     primer_ratio = C.PRIMER_BLOCK / C.SFT_LIKE_TOTAL
@@ -285,7 +302,7 @@ def build_primer_phases(
         num_tokens=main_tokens,
         label="main-post-primer",
         work_dir=work_dir,
-        seed=C.DATA_SEED + 12,
+        seed=C.DATA_SEED + 69,
         sequence_length=sequence_length,
     )
     anneal = _hq_anneal(
@@ -305,7 +322,7 @@ def build_control_phases(
     sequence_length: int = C.SEQ_LENGTH,
     work_dir: str,
 ) -> List[InstanceSource]:
-    """Ordered phases for the control arm (flat pre-anneal mix → anneal)."""
+    """Ordered phases: shared HQ warmup → flat HQ-rest+SFT → anneal."""
     set_composable_seed(C.DATA_SEED)
     wiki_main, wiki_anneal = _split_finewiki(
         corpus, sequence_length=sequence_length, work_dir=work_dir
@@ -316,27 +333,29 @@ def build_control_phases(
         sequence_length=sequence_length,
         work_dir=work_dir,
     )
+    hq_warmup, hq_rest = _split_hq_warmup(hq, sequence_length=sequence_length)
+
     sft = _sft_like(corpus, sequence_length=sequence_length, work_dir=work_dir)
-    pre_tokens = C.HQ_PRE_ANNEAL + C.SFT_LIKE_TOTAL
-    pre_anneal = _mix(
+    post_tokens = hq_rest.num_tokens + sft.num_tokens
+    post_warmup = _mix(
         [
             MixingInstanceSource.Spec(
-                source=hq,
-                ratio=C.HQ_PRE_ANNEAL / pre_tokens,
-                label="hq-main",
+                source=hq_rest,
+                ratio=hq_rest.num_tokens / post_tokens,
+                label="hq-rest",
                 max_repetition_factor=_POOL_EDGE_REPETITION,
             ),
             MixingInstanceSource.Spec(
                 source=sft,
-                ratio=C.SFT_LIKE_TOTAL / pre_tokens,
+                ratio=sft.num_tokens / post_tokens,
                 label="sft-like",
                 max_repetition_factor=_POOL_EDGE_REPETITION,
             ),
         ],
-        num_tokens=pre_tokens,
-        label="pre-anneal-flat",
+        num_tokens=post_tokens,
+        label="post-warmup-flat",
         work_dir=work_dir,
-        seed=C.DATA_SEED + 20,
+        seed=C.DATA_SEED + 420,
         sequence_length=sequence_length,
     )
     anneal = _hq_anneal(
@@ -345,7 +364,7 @@ def build_control_phases(
         sequence_length=sequence_length,
         work_dir=work_dir,
     )
-    phases = [pre_anneal, anneal]
+    phases = [hq_warmup, post_warmup, anneal]
     _log_phases("control", phases)
     return phases
 

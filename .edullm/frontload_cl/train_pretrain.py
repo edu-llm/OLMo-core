@@ -58,9 +58,13 @@ Notes
   ``frontload-cl-10b-v1`` (``edullm data frontload-cl-10b-v1``).
 * Put ``--param-dtype bfloat16`` in the command: the platform guard reads command words and
   cannot see a dtype set only in code. A T4 has no bfloat16 in hardware.
-* Curriculum construction floors mix targets to seq length and allows a tiny
+* Curriculum (``schedule.py``): both arms share an HQ-main warmup (~371M, no SFT-like);
+  then primer does a 100M SFT-like block + mixed rest, control flat-mixes remaining HQ +
+  all 200M SFT-like; same HQ anneal. Mix targets floor to seq length; tiny
   ``max_repetition_factor`` so pool-edge packing remainders do not refuse a complete corpus.
   A short corpus fails at mix build or at the steps×batch cover check — it does not under-train.
+* Checkpoints go to ``$EDULLM_CHECKPOINT_DIR`` →
+  ``s3://sbsandbox-intern-edullm-outputs/teams/<team>/runs/<run_id>/checkpoints/``.
 * SFT is a separate script (``.edullm/frontload_cl/train_sft.py``); both PT arms share it.
   Full design / status: ``.edullm/frontload_cl/DESIGN.md``.
 """

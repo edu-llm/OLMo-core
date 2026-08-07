@@ -13,14 +13,14 @@ This note records **implementation** choices in `.edullm/frontload_cl/`: why the
 
 | Piece | State |
 | --- | --- |
-| Train scripts (`.edullm/frontload_cl/`) | Ready: primer/control curricula, ladder 370M, platform contract, `--param-dtype` |
+| Train scripts (`.edullm/frontload_cl/`) | Ready: shared HQ warmup; primer block vs control flat after warmup; ladder 370M; `--param-dtype` |
 | FlashAttention-2 + A100 defaults | Wired: image wheel + `--attn-backend flash_2`, microbatch `24×4096`, HSDP, `--smoke` |
 | Local token build (`data/frontload-cl/`) | Complete (~10.1B train tokens); used only as build input |
 | Publish `pretrain/frontload-cl-10b` | **`v1` on `s3://edullm-data`** (~37.7 GiB; train ~10.09B / val 31M tokens) |
 | Publish `sft/frontload-cl-chat-sft` | **`v1` on `s3://edullm-data`** (conversation JSONL) |
 | Platform `datasets.yaml` registration | **Done** — `frontload-cl-10b-v1` runs (`edullm data`); SFT release is `exits_69` if named as train dataset (no tokenizer) |
 | `.edullm/run.yaml` (+ smoke / control specs) | Committed: `gpu-8xa100`, dtype + checkpoint dir in command text |
-| Image / `edullm/**` branch | Push this branch so ECR builds; wait for scan before submit |
+| Image / `edullm/**` branch | **Not pushed** for latest HEAD — push so ECR builds; wait for scan before submit |
 | Shared SFT (`train_sft.py`) | Wired: tokenize conversations → masks, 1-epoch 370M SFT from `--checkpoint` |
 | Colab 1×A100 smoke | `.edullm/frontload_cl/colab_smoke.ipynb` + `colab_smoke.py` (microbench / synthetic; not 8-GPU) |
 | Held-out SFT-like NLL callback | Not wired |
@@ -79,17 +79,25 @@ This note records **implementation** choices in `.edullm/frontload_cl/`: why the
 - Ratio mixes (`MixingInstanceSource`) give exact token targets for HQ / SFT-like / anneal without hand-rolled index files.
 - `set_composable_seed(DATA_SEED)` keeps sampling reproducible across arms where they share structure.
 
-**Primer phases (token order):**
+**What “HQ” means here:** FineWeb-Edu main (`fineweb-edu-main`), FineWeb-Edu anneal (`fineweb-edu-anneal`), and FineWiki (`finewiki`). Not HQ (SFT-like): `cosmopedia-v2`, `finemath-4plus`, `openhermes-pt`, `natural-reasoning`.
 
-1. ~371M HQ main only (covers the LR warmup window; warmup itself is still CosWithWarmup steps)
+**Shared warmup (both arms, identical split seed):**
+
+1. ~371M HQ main only (FineWeb-Edu main + FineWiki @ 5%) — covers the LR warmup window.
+   ``CosWithWarmup`` steps are separate and also identical. No SFT-like during warmup.
+
+**Primer after warmup:**
+
 2. 100M contiguous SFT-like block
 3. Remaining HQ main + remaining 100M SFT-like, mixed
 4. 1B anneal (FineWeb-Edu anneal + FineWiki @ 5%; no SFT-like)
 
-**Control phases:**
+**Control after warmup:**
 
-1. Full pre-anneal 9.0B = HQ main + all 200M SFT-like, flat mix (includes the warmup window)
-2. Same 1B anneal as primer
+2. Remaining HQ main + all 200M SFT-like, flat mix
+3. Same 1B anneal as primer
+
+**Arm differences beyond curriculum:** primer-only checkpoint milestone after the SFT block; W&B run name includes the arm; post-warmup mix seeds are `DATA_SEED + 69` (primer) and `DATA_SEED + 420` (control). Same model, batch, LR, corpus, anneal, and loss otherwise.
 
 **FineWiki disjointness:** the published FineWiki pool is one folder (~490M). Main (440M) and anneal (50M) slices are a seeded `split` before mixing so the two HQ phases do not resample the same documents.
 
@@ -97,11 +105,9 @@ This note records **implementation** choices in `.edullm/frontload_cl/`: why the
 
 - Mix `num_tokens` are floored to a multiple of sequence length before `MixingInstanceSource` sees them.
 - Specs use `max_repetition_factor=1.05` so a `ConcatAndChunk` trailing remainder (< seq len) does not refuse mixes that sit on published pool sizes. Without this, a complete corpus still fails at the FineWeb / FineWiki edges under factor `1.0`.
-- Primer HQ warmup is split from the *actual* `hq-main` size (`WARMUP_TOKENS / hq.num_tokens`), not the nominal `HQ_PRE_ANNEAL` constant, so the data phase lines up with 472 LR warmup steps.
+- Shared HQ warmup is split from the *actual* `hq-main` size (`WARMUP_TOKENS / hq.num_tokens`), not the nominal `HQ_PRE_ANNEAL` constant, so the data phase lines up with 472 LR warmup steps. Primer and control call the same helper with the same seed.
 - Primer SFT block uses `PRIMER_BLOCK / SFT_LIKE_TOTAL` (not a bare `0.5`).
 - `train_pretrain.py` refuses early if total curriculum tokens `< steps × global_batch` (incomplete FineWeb fails loudly instead of under-training).
-
-Warmup data vs experiment wording: the experiment says warmup is “normal mix for that arm,” not a special stage. For primer that *is* HQ main until the block; for control it includes thin SFT-like from step 0. The schedule matches both.
 
 ---
 
@@ -154,7 +160,7 @@ A milestone within `--checkpoint-milestone-proximity` (default 100) of a periodi
 | Rule | How we satisfy it |
 | --- | --- |
 | Resolve data from env / form | `EDULLM_DATASET_*` → `edullm_data.read`; dtype/byte-order from manifest, never inferred |
-| Checkpoints | `--save-folder "$EDULLM_CHECKPOINT_DIR"` on the command line; `max_checkpoints=None`; torn-step cleanup before resume |
+| Checkpoints | `--save-folder "$EDULLM_CHECKPOINT_DIR"` on the command line; `max_checkpoints=None`; torn-step cleanup before resume. Platform sets that to `s3://sbsandbox-intern-edullm-outputs/teams/<team>/runs/<run_id>/checkpoints/` (e.g. team `pre-training`) |
 | No broken evaluators | omit `lm_evaluator` / `downstream_evaluator` (they fail at trainer build in this image) |
 | Explicit duration | `Duration.steps(TOTAL_STEPS)` |
 | Multi-GPU | submitter puts `torch.distributed.run --nproc-per-node=N` in the command; script is one rank |

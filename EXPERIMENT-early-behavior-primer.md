@@ -3,7 +3,7 @@
 Implementation: `.edullm/frontload_cl/` (design note: `.edullm/frontload_cl/DESIGN.md`).  
 Dataset layout / publish: `DATASET-DESIGN-frontload-cl.md`.
 
-**Status (2026-08-07):** train scripts and curricula match this doc (ladder 370M, primer vs control ordering, shared pools). `pretrain/frontload-cl-10b/v1` and `sft/frontload-cl-chat-sft/v1` are on `s3://edullm-data`; the pretrain release is registered as `frontload-cl-10b-v1`. Platform submit path is `.edullm/run.yaml` + `edullm check`/`submit` (see DESIGN). Held-out SFT-like NLL logging during PT is still deferred.
+**Status (2026-08-07):** train scripts and curricula match this doc (ladder 370M; shared HQ warmup; primer block vs control flat mix after warmup; shared pools). `pretrain/frontload-cl-10b/v1` and `sft/frontload-cl-chat-sft/v1` are on `s3://edullm-data`; the pretrain release is registered as `frontload-cl-10b-v1`. Platform submit path is `.edullm/run.yaml` + `edullm check`/`submit` (see DESIGN). Held-out SFT-like NLL logging during PT is still deferred.
 
 ## Claim
 
@@ -11,7 +11,7 @@ A short dose of SFT-like data early in pretraining — after LR warmup, while mo
 
 ## Setup
 
-Train an OLMo2-arch **370M** from scratch for **10B** tokens, then run the **same real SFT** on both checkpoints. Two pretrain runs only. Match tokenizer, sequence length, optimizer, HQ mix, anneal, and final SFT. The only intentional difference is how the SFT-like tokens are ordered.
+Train an OLMo2-arch **370M** from scratch for **10B** tokens, then run the **same real SFT** on both checkpoints. Two pretrain runs only. Match tokenizer, sequence length, optimizer, HQ mix, anneal, and final SFT. The only intentional training difference is how the SFT-like tokens are ordered **after** a shared HQ warmup.
 
 Use the **AI2 model-ladder 370M hyperparameters** (Bhagia et al. / OLMo-ladder Table 1), not OLMo2 1B/7B production settings:
 
@@ -70,31 +70,28 @@ Held out (not in train): **5M** tokens total from the same four sources in the s
 
 ## Warmup
 
-**472 steps / ~371M tokens**, per the ladder 370M recipe. Same on both arms. Linear 0 → peak, then cosine over the rest of the 10B.
+**472 steps / ~371M tokens**, per the ladder 370M recipe. Same on both arms — both the LR ramp (`CosWithWarmup`) and the **data**. Linear 0 → peak, then cosine over the rest of the 10B.
 
-Warmup is only an LR ramp. Data during warmup is **normal pretraining data** for that arm — the start of the usual mix — not a special HQ-only stage. On the primer arm, the 100M SFT-like *block* is scheduled after warmup, so those first tokens are ordinary HQ main-mix until the block starts. On the control arm, the dispersed SFT-like rate is part of normal data from step 0, including during warmup. Match total SFT-like tokens across arms over the full 10B (200M each).
+During warmup both arms see the same **HQ main** stream only (FineWeb-Edu main + FineWiki @ 5%). No SFT-like tokens until after warmup. That keeps LR warmup from confounding the timing treatment. Match total SFT-like tokens across arms over the full 10B (200M each).
 
 ## Schedule
 
 Durations below are in **tokens**. Shared skeleton:
 
-1. **Warmup (~371M)** — normal pretrain mix for that arm; LR ramp only.
+1. **Warmup (~371M)** — identical HQ main on both arms; LR ramp only (no SFT-like).
 2. **SFT-like timing** — arms differ (below).
-3. **Main** — FineWeb-Edu + FineWiki as above, plus SFT-like per arm.
+3. **Main** — remaining FineWeb-Edu main + FineWiki main, plus SFT-like per arm.
 4. **Anneal (last 1B, 10%)** — FineWeb-Edu anneal pool (`int_score >= 4`) + FineWiki at 5%. General corpus only. No SFT-like. Same on both arms.
 5. **Real SFT** — shared post-training.
 
-
-
 ### Primer arm
 
-During warmup: normal HQ main mix (no concentrated block yet).  
-After warmup: **100M** SFT-like as one contiguous block.  
-Then: HQ main, with the **other 100M** SFT-like mixed uniformly through the post-primer, pre-anneal window. Anneal has no SFT-like (best-HQ upweight only, FineWiki still at 5%).
+After shared warmup: **100M** SFT-like as one contiguous block.  
+Then: remaining HQ main, with the **other 100M** SFT-like mixed uniformly through the post-primer, pre-anneal window. Anneal has no SFT-like (best-HQ upweight only, FineWiki still at 5%).
 
 ### Control arm
 
-No early block. Spread all **200M** SFT-like uniformly through the pre-anneal run, **including warmup** (normal mix = HQ + that thin SFT-like rate from step 0). Anneal matches the primer arm.
+After shared warmup: no early block. Spread all **200M** SFT-like uniformly through the remaining pre-anneal HQ main. Anneal matches the primer arm.
 
 ## Decision rule
 

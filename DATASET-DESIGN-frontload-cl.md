@@ -9,7 +9,7 @@ Profiles verified: `pretrain-tokens/v1`, `sft-conversations/v1`, `tokenizer/v1`
 Shared seed for all subsamples: **42069666**  
 Tokenizer dependency (already published): **`tokenizer/dolma2-bpe`** — do not republish unless you need a private fork.
 
-Schedules (primer block vs flat): **in the train script**, not separate `curriculum/` datasets.
+Schedules (shared HQ warmup; then primer block vs control flat): **in the train script**, not separate `curriculum/` datasets.
 
 ## Status (2026-08-07)
 

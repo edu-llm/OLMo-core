@@ -10,7 +10,7 @@
 #
 # Alternate specs on this branch (edullm check --spec / edullm submit --spec):
 #   .edullm/run-smoke.yaml    — 20-step GPU smoke on the same shape
-#   .edullm/run-control.yaml  — full control arm (same corpus, flat schedule)
+#   .edullm/run-control.yaml  — full control arm (same corpus/warmup; flat SFT after)
 #
 # Submit (do not dispatch until you intend to):
 #   edullm check  --json --team pre-training --experiment frontload-cl \

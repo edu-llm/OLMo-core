@@ -1,4 +1,5 @@
-# Frontload-cl pretrain (control arm). Same corpus as run.yaml; flat SFT-like mix.
+# Frontload-cl pretrain (control arm). Same corpus + shared HQ warmup as run.yaml;
+# after warmup, remaining HQ + all 200M SFT-like flat-mixed (no primer block).
 #
 #   edullm check  --json --spec .edullm/run-control.yaml --team pre-training \
 #     --experiment frontload-cl --dataset frontload-cl-10b-v1 --compute gpu-8xa100
