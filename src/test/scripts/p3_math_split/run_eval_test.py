@@ -929,6 +929,130 @@ def _write_exported_model(
     )
 
 
+def _write_base_model(model_dir: Path, *, architecture="Qwen2ForCausalLM"):
+    """A plain HF model directory: config + weights, no export provenance."""
+    model_dir.mkdir(parents=True, exist_ok=True)
+    (model_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "qwen2",
+                "architectures": [architecture],
+                "tie_word_embeddings": True,
+                "vocab_size": 151_936,
+            }
+        )
+    )
+    save_file({"weight": torch.ones(2, dtype=torch.bfloat16)}, model_dir / "model.safetensors")
+
+
+def test_resolve_base_model_provenance_accepts_plain_hf_model_without_export(tmp_path):
+    model = tmp_path / "base"
+    _write_base_model(model)
+    # The trained-arm resolver requires export metadata this directory lacks.
+    with pytest.raises(RuntimeError, match="model export metadata is required"):
+        run_eval.resolve_model_provenance(model)
+
+    provenance = run_eval.resolve_base_model_provenance(
+        model,
+        base_model_id="Qwen/Qwen2.5-0.5B",
+        base_model_revision="060db6499f32faf8b98477b0a26969ef7d8b9987",
+    )
+    assert provenance["arm"] == "base"
+    assert provenance["is_base_model"] is True
+    assert provenance["base_model_id"] == "Qwen/Qwen2.5-0.5B"
+    assert provenance["base_model_revision"] == "060db6499f32faf8b98477b0a26969ef7d8b9987"
+    assert "model.safetensors" in provenance["served_weight_files"]
+    assert len(provenance["served_weights_root_sha256"]) == 64
+    # The control carries no training identity by construction.
+    for absent in ("checkpoint_step", "source_commit", "trained_weights_root_sha256"):
+        assert absent not in provenance
+
+
+def test_resolve_base_model_provenance_requires_pinned_identity(tmp_path):
+    model = tmp_path / "base"
+    _write_base_model(model)
+    for bad_id, bad_rev in (("", "rev"), ("Qwen/Qwen2.5-0.5B", "")):
+        with pytest.raises(RuntimeError, match="base arm requires"):
+            run_eval.resolve_base_model_provenance(
+                model, base_model_id=bad_id, base_model_revision=bad_rev
+            )
+
+
+def test_base_arm_requires_base_model_flags(tmp_path, monkeypatch):
+    model = tmp_path / "base"
+    _write_base_model(model)
+
+    class MustNotLoad:
+        @classmethod
+        def from_pretrained(cls, *_args, **_kwargs):
+            raise AssertionError("base arm must fail on missing flags before any model load")
+
+    transformers = ModuleType("transformers")
+    transformers.AutoModelForCausalLM = MustNotLoad
+    transformers.AutoTokenizer = MustNotLoad
+    monkeypatch.setitem(sys.modules, "transformers", transformers)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_eval.py",
+            "--model",
+            str(model),
+            "--arm",
+            "base",
+            "--families",
+            "mizar",
+            "--out",
+            str(tmp_path / "result.json"),
+        ],
+    )
+    with pytest.raises(SystemExit, match="base-model-id"):
+        run_eval.main()
+
+
+def test_build_evaluation_metadata_embeds_base_model_identity(tmp_path):
+    corpus = tmp_path / "corpus"
+    (corpus / "eval").mkdir(parents=True)
+    (corpus / "heldout").mkdir()
+    (corpus / "shards").mkdir()
+    (corpus / "eval" / "mizar.jsonl").write_text('{"id":"x"}\n')
+    (corpus / "heldout" / "mizar.json").write_text('{"facts":[]}\n')
+    (corpus / "shards" / "mizar.jsonl").write_text('{"facts":{"m":"M"}}\n')
+
+    model = tmp_path / "base"
+    _write_base_model(model)
+    base_provenance = run_eval.resolve_base_model_provenance(
+        model,
+        base_model_id="Qwen/Qwen2.5-0.5B",
+        base_model_revision="060db6499f32faf8b98477b0a26969ef7d8b9987",
+    )
+    args = SimpleNamespace(
+        seed=20260801,
+        conditions=["facts_present", "facts_absent"],
+        sample=False,
+        temperature=0.7,
+        context_length=16_384,
+        max_new_tokens=8_192,
+        limit=None,
+        nll_chunk_size=256,
+        generation_backend="vllm",
+    )
+    metadata = run_eval.build_evaluation_metadata(
+        args=args,
+        tokenizer=_SerializedTokenizer(),
+        corpus=corpus,
+        families=["mizar"],
+        model_path=model,
+        model_provenance=base_provenance,
+    )
+    model_block = metadata["input_provenance"]["model"]
+    assert model_block["arm"] == "base"
+    assert model_block["is_base_model"] is True
+    assert model_block["base_model_id"] == "Qwen/Qwen2.5-0.5B"
+    assert "checkpoint_step" not in model_block
+    assert "trained_weights_root_sha256" not in model_block
+
+
 def test_cli_rejects_non_final_checkpoint_before_model_load(tmp_path, monkeypatch):
     model = tmp_path / "hf"
     _write_exported_model(model, arm="dense", checkpoint_step=24_540)

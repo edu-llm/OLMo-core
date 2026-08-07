@@ -1569,6 +1569,54 @@ def resolve_model_provenance(model_path: str | Path) -> dict:
     return provenance
 
 
+def resolve_base_model_provenance(
+    model_path: str | Path,
+    *,
+    base_model_id: str,
+    base_model_revision: str,
+) -> dict:
+    """Identity for an untrained control arm served straight from HuggingFace.
+
+    The base arm exists to answer whether the pretrained checkpoint's own
+    knowledge already explains a trained arm's behavior, so it deliberately
+    carries no training provenance (no ``checkpoint_step``, ``source_commit`` or
+    ``trained_weights_root_sha256``). It records what was actually served instead:
+    the pinned Hub id/revision and a fresh digest of the served weight files.
+    """
+    resolved = Path(model_path).expanduser().resolve()
+    config_path = resolved / "config.json"
+    if not config_path.is_file():
+        raise RuntimeError(f"base model config is missing: {config_path}")
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    if not isinstance(config, dict):
+        raise RuntimeError(f"base model config must be an object: {config_path}")
+    if not isinstance(base_model_id, str) or not base_model_id.strip():
+        raise RuntimeError("base arm requires a nonempty base_model_id")
+    if not isinstance(base_model_revision, str) or not base_model_revision.strip():
+        raise RuntimeError("base arm requires a nonempty base_model_revision")
+
+    served_weight_files = {
+        path.name: {"sha256": _sha256_file(path), "bytes": path.stat().st_size}
+        for path in sorted(resolved.iterdir())
+        if path.is_file() and _is_weight_artifact(path.name)
+    }
+    if not served_weight_files:
+        raise RuntimeError(f"base model directory has no weight files: {resolved}")
+
+    return {
+        "resolved_path": str(resolved),
+        "arm": "base",
+        "is_base_model": True,
+        "base_model_id": base_model_id.strip(),
+        "base_model_revision": base_model_revision.strip(),
+        "served_weight_files": served_weight_files,
+        "served_weights_root_sha256": _stable_json_sha256(served_weight_files),
+        "model_type": config.get("model_type"),
+        "architectures": config.get("architectures"),
+        "semantic_config_sha256": semantic_model_config_sha256(config),
+    }
+
+
 def build_evaluation_metadata(
     *,
     args,
@@ -1832,7 +1880,17 @@ class ProgressSync:
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--model", required=True, help="HF-format directory for the trained arm")
-    ap.add_argument("--arm", required=True, choices=("dense", "split"))
+    ap.add_argument("--arm", required=True, choices=("dense", "split", "base"))
+    ap.add_argument(
+        "--base-model-id",
+        default=None,
+        help="pinned Hub id for --arm base (the untrained control), e.g. Qwen/Qwen2.5-0.5B",
+    )
+    ap.add_argument(
+        "--base-model-revision",
+        default=None,
+        help="pinned Hub revision for --arm base; recorded in provenance",
+    )
     ap.add_argument("--corpus", default="corpus")
     ap.add_argument(
         "--families",
@@ -1914,18 +1972,34 @@ def main():
     if not 0 <= args.shard_index < args.shard_count:
         raise SystemExit(f"--shard-index must be in [0, {args.shard_count})")
 
-    try:
-        model_provenance = resolve_model_provenance(args.model)
-    except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as error:
-        raise SystemExit(str(error)) from error
-    if model_provenance["arm"] != args.arm:
-        raise SystemExit(
-            f"exported arm {model_provenance['arm']!r} does not match --arm {args.arm!r}"
-        )
-    try:
-        validate_reportable_checkpoint_step(model_provenance["checkpoint_step"])
-    except ValueError as error:
-        raise SystemExit(str(error)) from error
+    if args.arm == "base":
+        # The untrained control is served straight from the Hub, so it has no
+        # OLMo-core export metadata, no arm field to match, and no final-step gate.
+        if not args.base_model_id or not args.base_model_revision:
+            raise SystemExit(
+                "--base-model-id and --base-model-revision are required when --arm base"
+            )
+        try:
+            model_provenance = resolve_base_model_provenance(
+                args.model,
+                base_model_id=args.base_model_id,
+                base_model_revision=args.base_model_revision,
+            )
+        except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as error:
+            raise SystemExit(str(error)) from error
+    else:
+        try:
+            model_provenance = resolve_model_provenance(args.model)
+        except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as error:
+            raise SystemExit(str(error)) from error
+        if model_provenance["arm"] != args.arm:
+            raise SystemExit(
+                f"exported arm {model_provenance['arm']!r} does not match --arm {args.arm!r}"
+            )
+        try:
+            validate_reportable_checkpoint_step(model_provenance["checkpoint_step"])
+        except ValueError as error:
+            raise SystemExit(str(error)) from error
 
     families = args.families or discover_families(args.corpus)
     if not families:
