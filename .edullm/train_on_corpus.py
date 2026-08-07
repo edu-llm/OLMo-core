@@ -1548,10 +1548,16 @@ def train(config, opts=None) -> None:
         if getattr(opts, "no_balance_bands", False):
             assertion_kwargs["drop_frac_max"] = None
             assertion_kwargs["dead_expert_frac_max"] = None
+            # THE RAW-CV CEILING IS A BALANCE BAND AND `--no-balance-bands` MUST DISABLE IT. The
+            # flag exists for "a run whose purpose is to observe routing imbalance past the
+            # steady-state window", and a CV ceiling is the most direct possible way to kill exactly
+            # that run. Leaving it armed here would make the flag's documented promise false.
+            assertion_kwargs["expert_load_cv_max"] = None
         else:
             for flag, field_name in (
                 ("drop_frac_max", "drop_frac_max"),
                 ("dead_expert_frac_max", "dead_expert_frac_max"),
+                ("expert_load_cv_max", "expert_load_cv_max"),
             ):
                 parsed = _optional_float(
                     getattr(opts, flag, None), flag=f"--{flag.replace('_', '-')}"
@@ -1560,6 +1566,11 @@ def train(config, opts=None) -> None:
                     assertion_kwargs[field_name] = None
                 elif parsed is not None:
                     assertion_kwargs[field_name] = parsed
+            # The window, which is an int rather than an optional float, so it does not go through
+            # `_optional_float` -- there is no "disable the window", only "disable the band".
+            cv_warmup = getattr(opts, "expert_load_cv_warmup_steps", None)
+            if cv_warmup is not None:
+                assertion_kwargs["expert_load_cv_warmup_steps"] = int(cv_warmup)
     trainer.add_callback("maple_assertions", MetricAssertionCallback(**assertion_kwargs))
     trainer.add_callback(
         "maple_result",
@@ -1909,6 +1920,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override the dead_expert_frac_global ceiling (default 0.0, i.e. any dead expert "
         "fails). Pass a float, or 'none' to disable just this band. Ignored when "
         "--no-balance-bands is set.",
+    )
+    parser.add_argument(
+        "--expert-load-cv-max",
+        default=None,
+        help="Override the RAW expert_load_cv ceiling (default 0.55, which is the ESCALATE "
+        "boundary pre-registered in maple/plan/balance-floor.md; (0.40, 0.55] is the ADOPT-cf-2.5 "
+        "band where the plan says keep going). Pass a float, or 'none' to "
+        "disable just this band. Ignored when --no-balance-bands is set. NOTE the band is on raw "
+        "CV, not on expert_load_cv_excess: cv_excess = CV*sqrt(T*N*k/(E-1)) and so depends on the "
+        "logging interval, which means gating it would let a longer interval alone fail a "
+        "physically identical model (D-075).",
+    )
+    parser.add_argument(
+        "--expert-load-cv-warmup-steps",
+        type=int,
+        default=None,
+        help="First step at which the raw expert_load_cv ceiling applies (default 300). Later than "
+        "the shared warmup of 50 on purpose: a run that finished 600/600 clean measured CV 1.2434 "
+        "at step 50 and 0.4618 at step 200, settling to 0.2853 only near step 590, so the balance "
+        "transient outlasts the drop transient by hundreds of steps. Lower it only with a "
+        "measurement.",
     )
     return parser
 
