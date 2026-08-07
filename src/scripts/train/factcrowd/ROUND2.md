@@ -3,6 +3,15 @@
 Jobs 2–6 of `SUBMIT.md` all ran. Two estimates in that file were worth the arithmetic: `28m_d4p8` finished
 in **20.14 h** against a 20.2 h projection, and `13m_d0p6` in **0.89 h** against 0.88 h.
 
+> **ALL TRAINING IS COMPLETE as of 2026-08-07 19:12 UTC.** count 12/12, entropy 6/6, sigma 9/9,
+> ladder 5/5 — 32 cells. The three round-2 cells finished on **4 physical A10Gs** (indices 0-3) at their
+> exact targets in ~19 min each, which also confirms `save_async=False`: they are the same cells that
+> crashed at step 19 three times, their checkpoint schedule still starts at 19, and they no longer die.
+>
+> **4xA10G is available and has been throughout** — 33 of 39 runs used it, three of them today. Nothing
+> needs migrating. The only work left is scoring, and scoring is single-process on `gpu-1xa10g`, the
+> shape with the best availability on the platform. Jump to **`SCORE.md`**.
+
 ## Where the design stands
 
 | block | cells | state |
