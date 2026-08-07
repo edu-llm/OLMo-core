@@ -12,6 +12,7 @@
    feed_forward
    functional
    hf
+   hyper_connections
    layer_norm
    lm_head
    moe
