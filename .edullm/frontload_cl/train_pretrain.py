@@ -85,7 +85,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, cast
 
 import rich
-import torch
 
 # Allow ``python .edullm/frontload_cl/train_pretrain.py`` (not installed as a package).
 _DIR = Path(__file__).resolve().parent

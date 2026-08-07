@@ -20,7 +20,8 @@ Modes
 
 Colab::
 
-    # After cloning this branch into /content/OLMo-core and installing deps:
+    # After cloning this branch into /content/OLMo-core (see colab_smoke.ipynb):
+    # install with ``pip install -e . --no-deps`` + a few wheels — not ``.[all]``.
     %cd /content/OLMo-core
     !python .edullm/frontload_cl/colab_smoke.py microbench --attn-backend flash_2
     !python .edullm/frontload_cl/colab_smoke.py write-data --out /content/synth

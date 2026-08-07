@@ -33,12 +33,11 @@ import gzip
 import json
 import os
 import random
-import struct
 import time
 from array import array
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Iterable, Iterator, Optional
+from typing import Iterable, Optional
 
 SEED = 42069666
 EOS_ID = 100257

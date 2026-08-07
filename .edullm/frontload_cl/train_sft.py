@@ -46,7 +46,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, cast
 
 import rich
-import torch
 
 _DIR = Path(__file__).resolve().parent
 _PARENT = str(_DIR.parent)
