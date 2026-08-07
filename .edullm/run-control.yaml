@@ -1,0 +1,12 @@
+# Frontload-cl pretrain (control arm). Same corpus as run.yaml; flat SFT-like mix.
+#
+#   edullm check  --json --spec .edullm/run-control.yaml --team pre-training \
+#     --experiment frontload-cl --dataset frontload-cl-10b-v1 --compute gpu-8xa100
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/frontload_cl/train_pretrain.py "$EDULLM_RUN_ID"
+  --arm control --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --param-dtype bfloat16'

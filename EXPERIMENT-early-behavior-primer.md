@@ -3,7 +3,7 @@
 Implementation: `.edullm/frontload_cl/` (design note: `.edullm/frontload_cl/DESIGN.md`).  
 Dataset layout / publish: `DATASET-DESIGN-frontload-cl.md`.
 
-**Status (2026-08-05):** train scripts and curricula match this doc (ladder 370M, primer vs control ordering, shared pools). `pretrain/frontload-cl-10b/v1` and `sft/frontload-cl-chat-sft/v1` are on `s3://edullm-data`. Platform `datasets.yaml` registration, shared SFT training (tokens+masks), and held-out SFT-like NLL logging are still deferred — see DESIGN status table.
+**Status (2026-08-07):** train scripts and curricula match this doc (ladder 370M, primer vs control ordering, shared pools). `pretrain/frontload-cl-10b/v1` and `sft/frontload-cl-chat-sft/v1` are on `s3://edullm-data`; the pretrain release is registered as `frontload-cl-10b-v1`. Platform submit path is `.edullm/run.yaml` + `edullm check`/`submit` (see DESIGN). Held-out SFT-like NLL logging during PT is still deferred.
 
 ## Claim
 

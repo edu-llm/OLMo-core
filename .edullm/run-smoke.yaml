@@ -1,0 +1,13 @@
+# Frontload-cl GPU smoke: same 370M / microbatch / flash_2 as the full run, 20 steps.
+# Use before the primer/control arms on gpu-8xa100.
+#
+#   edullm check  --json --spec .edullm/run-smoke.yaml --team pre-training \
+#     --experiment frontload-cl --dataset frontload-cl-10b-v1 --compute gpu-8xa100
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/frontload_cl/train_pretrain.py "$EDULLM_RUN_ID"
+  --arm primer --smoke --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --param-dtype bfloat16'

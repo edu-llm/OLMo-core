@@ -9,22 +9,24 @@ This note records **implementation** choices in `.edullm/frontload_cl/`: why the
 
 ---
 
-## Status (2026-08-05)
+## Status (2026-08-07)
 
 | Piece | State |
 | --- | --- |
-| Train scripts (`.edullm/frontload_cl/`) | Ready: primer/control curricula, ladder 370M, platform contract |
+| Train scripts (`.edullm/frontload_cl/`) | Ready: primer/control curricula, ladder 370M, platform contract, `--param-dtype` |
 | FlashAttention-2 + A100 defaults | Wired: image wheel + `--attn-backend flash_2`, microbatch `24×4096`, HSDP, `--smoke` |
 | Local token build (`data/frontload-cl/`) | Complete (~10.1B train tokens); used only as build input |
 | Publish `pretrain/frontload-cl-10b` | **`v1` on `s3://edullm-data`** (~37.7 GiB; train ~10.09B / val 31M tokens) |
 | Publish `sft/frontload-cl-chat-sft` | **`v1` on `s3://edullm-data`** (conversation JSONL) |
-| Platform `datasets.yaml` registration | Not yet — form cannot name the corpus until a `published:` entry lands |
-| Image / `edullm/**` branch | Not pushed (must rebuild image after Dockerfile flash-attn layer) |
+| Platform `datasets.yaml` registration | **Done** — `frontload-cl-10b-v1` runs (`edullm data`); SFT release is `exits_69` if named as train dataset (no tokenizer) |
+| `.edullm/run.yaml` (+ smoke / control specs) | Committed: `gpu-8xa100`, dtype + checkpoint dir in command text |
+| Image / `edullm/**` branch | Push this branch so ECR builds; wait for scan before submit |
 | Shared SFT (`train_sft.py`) | Wired: tokenize conversations → masks, 1-epoch 370M SFT from `--checkpoint` |
+| Colab 1×A100 smoke | `.edullm/frontload_cl/colab_smoke.ipynb` + `colab_smoke.py` (microbench / synthetic; not 8-GPU) |
 | Held-out SFT-like NLL callback | Not wired |
 | Downstream eval (GSM8K / ARC / IFEval) | After shared SFT, via `olmo-eval-full` — not this image |
 
-**Next concrete steps:** register `pretrain/frontload-cl-10b/v1` in `edu-llm/platform` → push `edullm/frontload-cl` (rebuild image w/ flash-attn) → `olmo-core-check` dry-run → **8×A100 `--smoke`** → two `olmo-core-train` arms.
+**Next concrete steps:** push `edullm/frontload-cl` (image + scan) → `edullm check --spec .edullm/run-smoke.yaml …` → submit smoke → two full arms (`run.yaml` / `run-control.yaml`).
 
 ---
 
@@ -166,7 +168,10 @@ A milestone within `--checkpoint-milestone-proximity` (default 100) of a periodi
 
 **24h ceiling:** ~12,715 steps may exceed routine 24h on slower shapes. Options: faster compute profile, runtime exception approval, or rely on Batch’s second attempt (same run id / checkpoint dir). A *new* submission is a new run id and does not auto-continue the previous prefix.
 
-**Dataset registration:** `pretrain/frontload-cl-10b/v1` is already on `edullm-data`. Add a `published:` entry in `edu-llm/platform` `config/datasets.yaml`. Until that PR lands, the form cannot name the corpus (`frontload-cl-10b` is not registered today). Training scripts resolve via `edullm_data.read` from `s3://edullm-data/...` once env / form points at the release.
+**Dataset registration:** `frontload-cl-10b-v1` is registered and `runs: true`
+(`edullm data frontload-cl-10b-v1`). Name it with `--dataset frontload-cl-10b-v1` on
+`edullm check` / `submit`. Training scripts still resolve shards via `edullm_data.read`
+from the env the platform sets (`EDULLM_DATASET_*`).
 
 ---
 
@@ -192,8 +197,9 @@ chat template and assistant-only label masks, then runs **one epoch** of OLMo2-3
 
 - Published ``v1`` is ``sft-conversations/v1`` (JSONL). OLMo-core needs ``.npy`` tokens + masks.
 - Tokenization lives in ``sft_tokenize.py`` so we do not depend on open-instruct at train time.
-- Platform form may still need ``dataset_release: none`` plus explicit ``--dataset-id``;
-  conversations are resolved via ``edullm_data.read`` regardless.
+- Prefer ``--dataset none`` plus explicit ``--dataset-id sft/frontload-cl-chat-sft``;
+  naming ``frontload-cl-chat-sft-v1`` as the training dataset exits 69 (no tokenizer).
+  Conversations are resolved via ``edullm_data.read`` either way.
 
 **SFT hparams (defaults):** seq 4096, global batch 64×4096, lr ``8e-5``,
 ``LinearWithWarmup(warmup_fraction=0.03)``, wd 0, ``Duration.epochs(1)``, SkipStepAdamW.
@@ -207,21 +213,20 @@ or full train with ``--checkpoint``.
 
 ## 8. Exit codes and operability
 
-**Decision:** reuse the staged exit-code pattern from `train_on_corpus.py` (`Refusal` / `Stage` 64–72).
+**Decision:** reuse the staged exit-code pattern from `train_on_corpus.py` (`Refusal` / `Stage` 64–73).
 
-**Why:** platform CloudWatch logs are hard to read from the submitter side; a distinct exit code separates “role can’t read corpus” from “bad config” from “training crashed.”
+**Why:** platform CloudWatch logs are hard to read from the submitter side; a distinct exit code separates “role can’t read corpus” from “bad config” from “training crashed.” Exit 73 is bfloat16 on silicon that has none.
 
 ---
 
 ## 9. Open risks / follow-ups
 
-1. **Platform registry** — corpus is on `edullm-data` but not in `config/datasets.yaml`; the form cannot offer `dataset_release` until that PR lands. Dry-runs can still pass `--dataset-id` / env overrides where the profile allows.
-2. **Image rebuild for flash-attn** — `.edullm/Dockerfile` now installs Dao FA2 via official wheel. Any SHA submitted before that layer lands will fail `--attn-backend flash_2` (use `--attn-backend torch` only as a temporary escape).
-3. **Held-out NLL during PT** — experiment wants SFT-like domain NLL logged through pretrain; not wired yet (evaluators disabled on platform image). Val shards are already on the published corpus; need a custom callback over them.
-4. **Downstream eval** — GSM8K / ARC / IFEval after shared SFT belong in `olmo-eval-full` submissions, not this train image.
-5. **Commit / push** — these files must land on an `edullm/**` branch and build an image before any platform train submission.
-6. **SFT tokenization cache** — first train/tokenize writes ``--tokens-dir``; multi-node
+1. **Image / push** — this `edullm/frontload-cl` branch must be pushed so ECR builds; wait for the vuln scan before submit. Any SHA without the Dockerfile flash-attn layer fails `--attn-backend flash_2` (use `--attn-backend torch` only as a temporary escape).
+2. **Held-out NLL during PT** — experiment wants SFT-like domain NLL logged through pretrain; not wired yet (evaluators disabled on platform image). Val shards are already on the published corpus; need a custom callback over them.
+3. **Downstream eval** — GSM8K / ARC / IFEval after shared SFT belong in `olmo-eval-full` submissions, not this train image.
+4. **SFT tokenization cache** — first train/tokenize writes ``--tokens-dir``; multi-node
    needs that directory on shared storage (single-node 8×GPU ``/tmp`` is fine).
+5. **24h ceiling** — full 10B may need the second attempt or a runtime exception on slower shapes; see §5.
 
 Pool-edge repetition (anneal FineWiki / exact FineWeb budgets) is handled in `schedule.py` (`max_repetition_factor=1.05` + seq-aligned targets); no longer an open risk for the published corpus.
 
@@ -230,26 +235,49 @@ Pool-edge repetition (anneal FineWiki / exact FineWeb budgets) is handled in `sc
 ## 10. Submit cheat-sheet
 
 ```bash
-# After datasets.yaml registration + image build/scan
-# (corpus already at s3://edullm-data/pretrain/frontload-cl-10b/v1/):
+# After image build/scan on this edullm/** branch
+# (corpus registered as frontload-cl-10b-v1):
 
-# 1) Path check (CPU / cheap)
-bash -lc 'EDULLM_CHECKPOINT_CHECK=waived python .edullm/frontload_cl/train_pretrain.py \
-  "$EDULLM_RUN_ID" --arm primer --dry-run --save-folder "$EDULLM_CHECKPOINT_DIR"'
+# Price / refuse without dispatching (reads .edullm/run.yaml by default)
+edullm check --json --team pre-training --experiment frontload-cl \
+  --dataset frontload-cl-10b-v1 --compute gpu-8xa100
 
-# 2) GPU smoke on the target 8×A100 shape (flash + compile + microbatch OOM check)
-bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone \
-  .edullm/frontload_cl/train_pretrain.py "$EDULLM_RUN_ID" \
-  --arm primer --smoke --save-folder "$EDULLM_CHECKPOINT_DIR"'
+# 1) GPU smoke on the target 8×A100 shape
+edullm check --json --spec .edullm/run-smoke.yaml --team pre-training \
+  --experiment frontload-cl --dataset frontload-cl-10b-v1 --compute gpu-8xa100
+# then edullm submit --spec .edullm/run-smoke.yaml … (same flags)
 
-# 3) Full arms
-bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone \
-  .edullm/frontload_cl/train_pretrain.py "$EDULLM_RUN_ID" \
-  --arm primer --save-folder "$EDULLM_CHECKPOINT_DIR"'
-
-bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone \
-  .edullm/frontload_cl/train_pretrain.py "$EDULLM_RUN_ID" \
-  --arm control --save-folder "$EDULLM_CHECKPOINT_DIR"'
+# 2) Full arms (default run.yaml = primer; control via --spec)
+edullm submit --team pre-training --experiment frontload-cl \
+  --dataset frontload-cl-10b-v1 --compute gpu-8xa100
+edullm submit --spec .edullm/run-control.yaml --team pre-training \
+  --experiment frontload-cl --dataset frontload-cl-10b-v1 --compute gpu-8xa100
 ```
 
-Form fields: `repository=OLMo-core`, `workload_profile=olmo-core-train` (or `olmo-core-check` for dry-run), `compute_profile` matching `nproc` (prefer 8×A100), `dataset_release=<frontload-cl-10b-vN>`, `experiment=frontload-cl`.
+Equivalent command text (must include ``--param-dtype`` and ``$EDULLM_CHECKPOINT_DIR``):
+
+```bash
+# Path check (CPU / cheap)
+bash -lc 'EDULLM_CHECKPOINT_CHECK=waived python .edullm/frontload_cl/train_pretrain.py \
+  "$EDULLM_RUN_ID" --arm primer --dry-run --save-folder "$EDULLM_CHECKPOINT_DIR" \
+  --param-dtype bfloat16'
+
+# GPU smoke
+bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone \
+  .edullm/frontload_cl/train_pretrain.py "$EDULLM_RUN_ID" \
+  --arm primer --smoke --save-folder "$EDULLM_CHECKPOINT_DIR" \
+  --param-dtype bfloat16'
+
+# Full arms
+bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone \
+  .edullm/frontload_cl/train_pretrain.py "$EDULLM_RUN_ID" \
+  --arm primer --save-folder "$EDULLM_CHECKPOINT_DIR" \
+  --param-dtype bfloat16'
+
+bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone \
+  .edullm/frontload_cl/train_pretrain.py "$EDULLM_RUN_ID" \
+  --arm control --save-folder "$EDULLM_CHECKPOINT_DIR" \
+  --param-dtype bfloat16'
+```
+
+CLI fields: `--experiment frontload-cl`, `--dataset frontload-cl-10b-v1`, `--compute gpu-8xa100`, `--team` one of your groups. Workload comes from the spec (`olmo-core-train`).

@@ -21,11 +21,13 @@ Examples::
     # Train one epoch from a pretrain arm checkpoint (8 GPUs)
     bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone \\
       .edullm/frontload_cl/train_sft.py "$EDULLM_RUN_ID" \\
-      --checkpoint "$PT_CKPT" --save-folder "$EDULLM_CHECKPOINT_DIR"'
+      --checkpoint "$PT_CKPT" --save-folder "$EDULLM_CHECKPOINT_DIR" \\
+      --param-dtype bfloat16'
 
-Platform note: the submission form may only offer pretrain corpora. Pass
-``dataset_release: none`` and keep ``--dataset-id sft/frontload-cl-chat-sft``
-(or set ``EDULLM_DATASET_ID``) so this script resolves conversations itself.
+Platform note: naming ``frontload-cl-chat-sft-v1`` as ``--dataset`` exits 69 on the
+pretrain image (no tokenizer). Pass ``--dataset none`` and keep
+``--dataset-id sft/frontload-cl-chat-sft`` (or ``EDULLM_DATASET_ID``) so this script
+resolves conversations itself.
 """
 
 from __future__ import annotations
@@ -74,6 +76,7 @@ from olmo_core.data import (  # noqa: E402
 from olmo_core.data.types import LongDocStrategy  # noqa: E402
 from olmo_core.distributed.parallel import DataParallelType  # noqa: E402
 from olmo_core.distributed.utils import barrier, get_rank  # noqa: E402
+from olmo_core.exceptions import OLMoConfigurationError  # noqa: E402
 from olmo_core.io import clear_directory, list_directory, normalize_path  # noqa: E402
 from olmo_core.nn.transformer import TransformerConfig  # noqa: E402
 from olmo_core.optim import LinearWithWarmup, SkipStepAdamWConfig  # noqa: E402
@@ -95,6 +98,7 @@ from olmo_core.train.checkpoint import Checkpointer  # noqa: E402
 from olmo_core.train.train_module import (  # noqa: E402
     TransformerDataParallelConfig,
     TransformerTrainModuleConfig,
+    validate_precision_support,
 )
 from olmo_core.utils import seed_all  # noqa: E402
 
@@ -225,6 +229,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Tokenize conversations into --tokens-dir and exit.",
     )
+    p.add_argument(
+        "--param-dtype",
+        default=DType.bfloat16.value,
+        choices=[DType.bfloat16.value, DType.float16.value, DType.float32.value],
+        help="Parameter dtype HSDP holds and computes in. Name it on the platform "
+        "command so the submission guard can see it. float32 on a T4.",
+    )
     return p
 
 
@@ -328,7 +339,9 @@ def build_config(opts, overrides: List[str], *, token_paths: List[str], mask_pat
         ),
         compile_model=True,
         dp_config=TransformerDataParallelConfig(
-            name=DataParallelType.hsdp, param_dtype=DType.bfloat16, reduce_dtype=DType.float32
+            name=DataParallelType.hsdp,
+            param_dtype=DType(opts.param_dtype),
+            reduce_dtype=DType.float32,
         ),
         max_grad_norm=C.GRAD_CLIP,
         scheduler=LinearWithWarmup(
@@ -360,12 +373,9 @@ def build_config(opts, overrides: List[str], *, token_paths: List[str], mask_pat
             "wandb",
             WandBCallback(
                 name=f"{opts.run_name}-sft",
-                project=os.environ.get("EDULLM_WANDB_PROJECT")
-                or os.environ.get("WANDB_PROJECT"),
+                project=os.environ.get("EDULLM_WANDB_PROJECT"),
                 cancel_check_interval=10,
-                enabled=bool(
-                    os.environ.get("EDULLM_WANDB_PROJECT") or os.environ.get("WANDB_PROJECT")
-                ),
+                enabled=bool(os.environ.get("EDULLM_WANDB_PROJECT")),
             ),
         )
         .with_callback("config_saver", ConfigSaverCallback())
@@ -503,6 +513,12 @@ def main() -> None:
                 token_paths=stats["token_paths"],
                 mask_paths=stats["mask_paths"],
             )
+            try:
+                validate_precision_support(config)
+            except OLMoConfigurationError as unusable:
+                raise Refusal(
+                    Stage.THE_DEVICE_CANNOT_DO_THE_REQUESTED_PRECISION, str(unusable)
+                ) from None
             if get_rank() == 0:
                 rich.print(config)
         with during(Stage.TRAINING_ITSELF_FAILED):

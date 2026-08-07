@@ -9,7 +9,13 @@ Submit with ``olmo-core-train`` on 8×A100 (same compute profile as the full run
 
     bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone \\
       .edullm/frontload_cl/smoke_pretrain.py "$EDULLM_RUN_ID" \\
-      --arm primer --save-folder "$EDULLM_CHECKPOINT_DIR"'
+      --arm primer --save-folder "$EDULLM_CHECKPOINT_DIR" \\
+      --param-dtype bfloat16'
+
+Or use the committed spec::
+
+    edullm check --json --spec .edullm/run-smoke.yaml --team pre-training \\
+      --experiment frontload-cl --dataset frontload-cl-10b-v1 --compute gpu-8xa100
 
 Success: 20 steps complete, CE loss logged, GPU monitor shows peak memory under
 capacity, no flash-attn / Inductor / NCCL errors. Then launch the full primer

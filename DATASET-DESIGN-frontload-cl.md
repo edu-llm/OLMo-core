@@ -11,7 +11,7 @@ Tokenizer dependency (already published): **`tokenizer/dolma2-bpe`** — do not 
 
 Schedules (primer block vs flat): **in the train script**, not separate `curriculum/` datasets.
 
-## Status (2026-08-05)
+## Status (2026-08-07)
 
 | Artifact | State |
 | --- | --- |
@@ -19,7 +19,7 @@ Schedules (primer block vs flat): **in the train script**, not separate `curricu
 | Local SFT JSONL under `data/frontload-cl/conversations/` | Present (train ~558k / val ~28k rows) |
 | `pretrain/frontload-cl-10b` on `edullm-data` | **Published `v1`** (`_VALIDATED.json`, catalog, README; ~37.7 GiB, 53 objects; train 10 085 769 122 / val 31 000 000 tokens) |
 | `sft/frontload-cl-chat-sft` on `edullm-data` | **Published `v1`** (`_VALIDATED.json` present) |
-| Platform `config/datasets.yaml` entry | Not registered — form cannot offer the corpus until after publish + PR |
+| Platform `config/datasets.yaml` entry | **Registered** as `frontload-cl-10b-v1` (`runs: true`). SFT release is usable via `--dataset none` + `--dataset-id` (naming it as train dataset exits 69). |
 
 ---
 
@@ -219,8 +219,8 @@ r = dataset_paths("sft/frontload-cl-chat-sft", "v1", split="train", s3=Boto3S3.d
 4. `publish()` pretrain → wait for `_VALIDATED.json`. **Done (`v1`).**  
 5. Build `sft/frontload-cl-chat-sft` JSONL (train + val). **Done.**  
 6. `publish()` SFT → wait for `_VALIDATED.json`. **Done (`v1`).**  
-7. Register `pretrain/frontload-cl-10b/v1` in `edu-llm/platform` `config/datasets.yaml`.  
-8. Point training at the registered release (see `.edullm/frontload_cl/DESIGN.md` submit cheat-sheet). SFT training still needs tokenized+masked shards after the conversation publish — see DESIGN §7.
+7. Register `pretrain/frontload-cl-10b/v1` in `edu-llm/platform` `config/datasets.yaml`. **Done** (`frontload-cl-10b-v1`).  
+8. Point training at the registered release (`.edullm/run.yaml` + `edullm check`/`submit`; see DESIGN §10). SFT still tokenizes conversations in-script — see DESIGN §7.
 
 Raw HF downloads stay on the build machine (or ephemeral landing staging). Only `tokens/` / `conversations/` trees are published.
 

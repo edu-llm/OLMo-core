@@ -30,6 +30,8 @@ class Stage(enum.IntEnum):
     THE_CONFIG_WOULD_NOT_BUILD = 70
     THE_TRAINING_ENVIRONMENT_WOULD_NOT_START = 71
     TRAINING_ITSELF_FAILED = 72
+    # Matches ``.edullm/train_on_corpus.py``: bfloat16 asked for on silicon that has none.
+    THE_DEVICE_CANNOT_DO_THE_REQUESTED_PRECISION = 73
 
 
 class Refusal(SystemExit):
@@ -52,7 +54,9 @@ class Corpus:
 def source_name_from_path(path: str) -> str:
     """Extract ``fineweb-edu-main`` from ``.../tokens/fineweb-edu-main/train-00000.u32le.bin``."""
     parsed = urlparse(path)
-    parts = [p for p in (parsed.path or path).split("/") if p]
+    raw = parsed.path or path
+    # Local Windows paths use backslashes; S3 URIs use '/'.
+    parts = [p for p in raw.replace("\\", "/").split("/") if p]
     try:
         tokens_idx = parts.index("tokens")
     except ValueError as exc:

@@ -1,0 +1,27 @@
+# Frontload-cl pretrain (primer arm). Properties of the code; travels with git.
+# Machine, corpus, experiment, and team are supplied at submit time.
+#
+# Workload profiles for OLMo-core: olmo-core-check, olmo-core-train.
+# Suggested compute matches --nproc-per-node=8 and FlashAttention-2 (A100+).
+#
+# --param-dtype and --save-folder are named even though the script defaults to
+# each. The platform reads the words of the command and cannot see a dtype set
+# in code, nor an environment variable only read in code.
+#
+# Alternate specs on this branch (edullm check --spec / edullm submit --spec):
+#   .edullm/run-smoke.yaml    — 20-step GPU smoke on the same shape
+#   .edullm/run-control.yaml  — full control arm (same corpus, flat schedule)
+#
+# Submit (do not dispatch until you intend to):
+#   edullm check  --json --team pre-training --experiment frontload-cl \
+#     --dataset frontload-cl-10b-v1 --compute gpu-8xa100
+#   edullm submit --team pre-training --experiment frontload-cl \
+#     --dataset frontload-cl-10b-v1 --compute gpu-8xa100
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/frontload_cl/train_pretrain.py "$EDULLM_RUN_ID"
+  --arm primer --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --param-dtype bfloat16'

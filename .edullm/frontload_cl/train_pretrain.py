@@ -1,47 +1,50 @@
 """
 Frontload-cl pretrain: OLMo2-370M, 10B tokens, primer vs control schedule.
 
-Platform submission (``pretrain/frontload-cl-10b/v1`` is on ``edullm-data``; register it
-then submit)::
+Platform path (``frontload-cl-10b-v1`` is registered; push this ``edullm/**`` branch so
+the image builds, then check / submit via the CLI — do not call AWS from a laptop)::
 
-    # Branch must be edullm/** so the image builds (includes flash-attn 2).
-    git switch -c edullm/frontload-cl
     git push -u origin edullm/frontload-cl
 
-    # Form: https://github.com/edu-llm/platform/actions/workflows/submit-run.yml
-    #   repository:          OLMo-core
-    #   commit_sha:          <full SHA>
-    #   workload_profile:    olmo-core-train   (or olmo-core-check for a dry path test)
-    #   compute_profile:     gpu-8xa100        (set --nproc-per-node to match)
-    #   team:                pre-training      (or your group)
-    #   experiment:          frontload-cl
-    #   dataset_release:     frontload-cl-10b-v1   # after platform registry PR
-    #   wandb_project:       <your project>
+    edullm check  --json --team pre-training --experiment frontload-cl \\
+      --dataset frontload-cl-10b-v1 --compute gpu-8xa100
+    edullm submit --team pre-training --experiment frontload-cl \\
+      --dataset frontload-cl-10b-v1 --compute gpu-8xa100
+
+Committed specs under ``.edullm/`` (command text must name dtype and checkpoint dir)::
+
+    .edullm/run.yaml          — full primer arm (default)
+    .edullm/run-smoke.yaml    — 20-step GPU smoke (``edullm check --spec …``)
+    .edullm/run-control.yaml  — full control arm
 
 GPU smoke (same 370M / microbatch / flash_2 as the real run, 20 steps) — run this
 before the full arms on the target 8×A100 shape::
 
     bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone \\
       .edullm/frontload_cl/train_pretrain.py "$EDULLM_RUN_ID" \\
-      --arm primer --smoke --save-folder "$EDULLM_CHECKPOINT_DIR"'
+      --arm primer --smoke --save-folder "$EDULLM_CHECKPOINT_DIR" \\
+      --param-dtype bfloat16'
 
 Primer arm (8 GPUs)::
 
     bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone \\
       .edullm/frontload_cl/train_pretrain.py "$EDULLM_RUN_ID" \\
-      --arm primer --save-folder "$EDULLM_CHECKPOINT_DIR"'
+      --arm primer --save-folder "$EDULLM_CHECKPOINT_DIR" \\
+      --param-dtype bfloat16'
 
 Control arm::
 
     bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone \\
       .edullm/frontload_cl/train_pretrain.py "$EDULLM_RUN_ID" \\
-      --arm control --save-folder "$EDULLM_CHECKPOINT_DIR"'
+      --arm control --save-folder "$EDULLM_CHECKPOINT_DIR" \\
+      --param-dtype bfloat16'
 
 Dry-run (resolve corpus + print curriculum, no fit) — use ``olmo-core-check`` on CPU
 and waive checkpoint if you want::
 
     bash -lc 'EDULLM_CHECKPOINT_CHECK=waived python .edullm/frontload_cl/train_pretrain.py \\
-      "$EDULLM_RUN_ID" --arm primer --dry-run --save-folder "$EDULLM_CHECKPOINT_DIR"'
+      "$EDULLM_RUN_ID" --arm primer --dry-run --save-folder "$EDULLM_CHECKPOINT_DIR" \\
+      --param-dtype bfloat16'
 
 Notes
 -----
@@ -51,9 +54,10 @@ Notes
 * 10B @ 370M is ~12,715 steps. The routine ``olmo-core-train`` ceiling is 24h / 2 attempts.
   If a shape cannot finish in 24h, ask for a runtime exception or chain via resume
   (same run id / checkpoint dir on Batch retry only — a new submission is a new run id).
-* ``pretrain/frontload-cl-10b/v1`` is on ``s3://edullm-data``. Register it in
-  ``edu-llm/platform`` ``config/datasets.yaml`` before the form will offer
-  ``dataset_release: frontload-cl-10b-v1``.
+* ``pretrain/frontload-cl-10b/v1`` is on ``s3://edullm-data`` and registered as
+  ``frontload-cl-10b-v1`` (``edullm data frontload-cl-10b-v1``).
+* Put ``--param-dtype bfloat16`` in the command: the platform guard reads command words and
+  cannot see a dtype set only in code. A T4 has no bfloat16 in hardware.
 * Curriculum construction floors mix targets to seq length and allows a tiny
   ``max_repetition_factor`` so pool-edge packing remainders do not refuse a complete corpus.
   A short corpus fails at mix build or at the steps×batch cover check — it does not under-train.
@@ -103,6 +107,7 @@ from olmo_core.data.composable import (  # noqa: E402
 )
 from olmo_core.distributed.parallel import DataParallelType  # noqa: E402
 from olmo_core.distributed.utils import barrier, get_rank  # noqa: E402
+from olmo_core.exceptions import OLMoConfigurationError  # noqa: E402
 from olmo_core.io import clear_directory, list_directory, normalize_path  # noqa: E402
 from olmo_core.nn.transformer import TransformerConfig  # noqa: E402
 from olmo_core.optim import CosWithWarmup, OptimGroupOverride, SkipStepAdamWConfig  # noqa: E402
@@ -123,6 +128,7 @@ from olmo_core.train.checkpoint import Checkpointer  # noqa: E402
 from olmo_core.train.train_module import (  # noqa: E402
     TransformerDataParallelConfig,
     TransformerTrainModuleConfig,
+    validate_precision_support,
 )
 from olmo_core.utils import seed_all  # noqa: E402
 
@@ -266,6 +272,14 @@ def build_parser() -> argparse.ArgumentParser:
             "target 8×A100 shape to catch OOM / flash / compile failures before a 10B run."
         ),
     )
+    p.add_argument(
+        "--param-dtype",
+        default=DType.bfloat16.value,
+        choices=[DType.bfloat16.value, DType.float16.value, DType.float32.value],
+        help="Parameter dtype HSDP holds and computes in. THE DEFAULT IS THE DTYPE THIS "
+        "FILE ALWAYS USED. Name it on the platform command so the submission guard can "
+        "see it (code defaults are invisible to that check). float32 on a T4.",
+    )
     return p
 
 
@@ -317,8 +331,12 @@ def build_config(opts, overrides: List[str]) -> ExperimentConfig:
             ],
         ),
         compile_model=True,
+        # param_dtype from --param-dtype so the choice appears in the command text; the
+        # platform reads command words and cannot see a dtype set only in code.
         dp_config=TransformerDataParallelConfig(
-            name=DataParallelType.hsdp, param_dtype=DType.bfloat16, reduce_dtype=DType.float32
+            name=DataParallelType.hsdp,
+            param_dtype=DType(opts.param_dtype),
+            reduce_dtype=DType.float32,
         ),
         max_grad_norm=C.GRAD_CLIP,
         scheduler=CosWithWarmup(warmup=opts.warmup_steps),
@@ -363,12 +381,10 @@ def build_config(opts, overrides: List[str]) -> ExperimentConfig:
             "wandb",
             WandBCallback(
                 name=f"{opts.run_name}-{opts.arm}" + ("-smoke" if opts.smoke else ""),
-                project=os.environ.get("EDULLM_WANDB_PROJECT")
-                or os.environ.get("WANDB_PROJECT"),
+                project=os.environ.get("EDULLM_WANDB_PROJECT"),
+                # No `group`: the platform puts the experiment in WANDB_RUN_GROUP.
                 cancel_check_interval=10 if not opts.smoke else 1,
-                enabled=bool(
-                    os.environ.get("EDULLM_WANDB_PROJECT") or os.environ.get("WANDB_PROJECT")
-                ),
+                enabled=bool(os.environ.get("EDULLM_WANDB_PROJECT")),
             ),
         )
         .with_callback("config_saver", ConfigSaverCallback())
@@ -483,6 +499,18 @@ def main() -> None:
 
     with during(Stage.THE_CONFIG_WOULD_NOT_BUILD):
         config = build_config(opts, overrides)
+
+    # Same early refusal as train_on_corpus: before the process group, exit 73 when the
+    # merged config asks for bfloat16 on silicon that has none. Library build() also checks.
+    try:
+        validate_precision_support(config)
+    except OLMoConfigurationError as unusable:
+        if opts.dry_run:
+            log.warning("%s", unusable)
+        else:
+            raise Refusal(
+                Stage.THE_DEVICE_CANNOT_DO_THE_REQUESTED_PRECISION, str(unusable)
+            ) from None
 
     if opts.dry_run:
         phases = build_phases(
