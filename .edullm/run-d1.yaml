@@ -1,0 +1,59 @@
+# ARM D1-compute -- THE CONTROL, and the arm the whole study rests on.
+#
+#   edullm check --json --spec .edullm/run-d1.yaml --experiment d1-seed0 \
+#     --dataset reservoir-dolma2-v1 --team scratch --compute gpu-8xa100 --hours 2 --attempts 1
+#   edullm submit <same flags>
+#
+# WHAT MAKES IT THE RIGHT CONTROL. Blocks 9-24 are an ordinary dense SwiGLU of width 4,224,
+# and 4,224 = 2 x 2,112 is exactly the feed-forward width M1 executes per token when its
+# router picks 2 of its 8 experts of width 2,112. So the two arms run the same arithmetic per
+# token and differ only in whether that arithmetic is CHOSEN. At vocab 100,352:
+#
+#   D1  442,549,248 total / 442,549,248 forward
+#   M1  1,065,534,464 total / 442,680,320 forward
+#   M1.forward - D1.total = 131,072   <- the sixteen routers (16 x 1,024 x 8), and nothing else
+#
+# A control matched on TOTAL parameters instead would be a 1.07B dense model, which costs 2.4x
+# the compute per token and answers a different question. A control matched on nothing in
+# particular answers no question at all. If that 131,072 ever moves, this study is void.
+#
+# Everything below is identical to run-m1.yaml except `--model-factory`. That is deliberate and
+# it is the point: same steps, same batch, same microbatch, same sequence length, same save
+# interval, same corpus, same seed. Any per-arm difference in those is a confound that no
+# number of seeds can average away.
+#
+# ⚠️ ALWAYS PASS --hours AND --attempts. The workload's defaults are 24 h x 2 attempts, which on
+# gpu-8xa100 ($21.9576/h) prices at $1,053.96 -- over policy v6's automatic_below_cost_usd of
+# $500, so the run parks waiting for a lead instead of starting. Measured 2026-08-06:
+# 24h x 2 = $1,053.96 routine; 16h x 1 = $351.32 automatic; 2h x 1 = $43.92 automatic.
+#
+# THE COMMAND IS TWO INVOCATIONS CHAINED WITH &&, AND THAT IS A FIX RATHER THAN A STYLE.
+# `--prepare-heldout-only` builds the held-out instance indices in ONE process, before torchrun
+# exists. NumpyPaddedFSLDataset.prepare() opens a bare ProcessPoolExecutor() -- os.cpu_count(),
+# 96 on a p4d.24xlarge -- on fs_local_rank 0 only, and then every rank meets a barrier(). Run
+# inside the distributed program, that deadlocked two 8-GPU runs at a 900 s gloo timeout for
+# ~$11 and zero measurements. Both invocations MUST share --work-dir, and /tmp is
+# per-container, so they must be one submission.
+#
+# `require_a_process_for_every_device` reads the FIRST launcher among the shell's simple
+# commands, so the leading single-process python does not trip the 8-device check.
+#
+# --steps 1525 x --global-batch-size 131072 = 199,884,800 tokens, the 200M probe length. For a
+# 10B campaign cell raise --steps to 76,294 and use --hours 16 --attempts 1.
+# --data-seed IS THE SEED: 0/1/2 for the three cells of this arm.
+#
+# Proven: run_019fd947 (200 steps, exit 0, clean teardown, all 8 per-source CE labels present).
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'python .edullm/train_on_corpus.py "$EDULLM_RUN_ID"
+  --model-factory edullm_dense_d1 --sequence-length 2048 --steps 1525
+  --work-dir /tmp/dataset-cache --prepare-heldout-only
+  && python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/train_on_corpus.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --model-factory edullm_dense_d1 --sequence-length 2048 --steps 1525
+  --global-batch-size 131072 --rank-microbatch-size 8192
+  --save-interval 500 --data-seed 0 --work-dir /tmp/dataset-cache
+  trainer.callbacks.checkpointer.max_checkpoints=null'

@@ -1,9 +1,18 @@
-# How this repository's MoE study runs. Everything here is a property of the CODE and travels
-# with it in git; the machine, the corpus, the team and the experiment are supplied at submit
-# time, because one commit run by two people belongs to two teams.
+# ARM M1 -- the MoE. 8 experts x 2,112, top-2, in blocks 9-24.
 #
-#   edullm check --json --experiment <slug> --dataset reservoir-dolma2-v1 --team scratch \
-#     --compute gpu-8xa100 --hours 2 --attempts 1
+# ONE SPEC PER ARM, SELECTED WITH --spec, RATHER THAN ONE FILE EDITED BETWEEN SUBMISSIONS.
+# Its siblings are run-d1.yaml (the control) and run-g8.yaml (granularity). A nine-cell
+# campaign hand-editing a single spec is nine chances to submit the wrong arm under the right
+# label, and nothing downstream would catch it -- the run id would say `m1-seed2` while the
+# container trained a dense model. With three committed files each cell is reproducible from
+# git, and `git show <sha>:.edullm/run-m1.yaml` answers "what did that run actually do".
+#
+# Everything here is a property of the CODE and travels with it in git; the machine, the
+# corpus, the team and the experiment are supplied at submit time, because one commit run by
+# two people belongs to two teams.
+#
+#   edullm check --json --spec .edullm/run-m1.yaml --experiment m1-seed0 \
+#     --dataset reservoir-dolma2-v1 --team scratch --compute gpu-8xa100 --hours 2 --attempts 1
 #   edullm submit <same flags>
 #
 # ⚠️ ALWAYS PASS --hours AND --attempts. The workload's defaults are 24 h x 2 attempts, which on
@@ -31,12 +40,23 @@
 # commands, so the leading single-process python does not trip the 8-device check; torchrun's
 # --nproc-per-node=8 is what it matches. No EDULLM_LAUNCH_CHECK=waived is needed.
 #
-# --model-factory IS THE ARM, and is the one thing that changes between cells:
-#   edullm_moe_m1    8 experts x 2112, top-2   1,065,534,464 total / 442,680,320 forward
-#   edullm_dense_d1  dense f=4224, the control    442,549,248 total / 442,549,248 forward
-#   M1-G8            edullm_moe_m1 with 32 x 528, top-8  (three kwargs, no new code)
-# M1.forward - D1.total = 131,072 exactly, which is the routers and nothing else. That identity
-# is what makes the comparison valid; re-verify it after any change to the factories.
+# THIS ARM, at vocab 100,352: 1,065,534,464 total / 442,680,320 forward.
+#
+#   M1.forward - D1.total = 131,072
+#
+# exactly, which is the sixteen routers (16 x 1,024 x 8) and nothing else. The control executes
+# the same feed-forward width per token -- 4,224 = 2 x 2,112 -- so the ONLY thing M1 has that
+# D1 does not is the ability to choose. If M1 wins, choosing is what won. Re-verify that
+# integer after any change to the factories; if it moves, the comparison is void and no amount
+# of seeds fixes it.
+#
+# --steps 1525 x --global-batch-size 131072 = 199,884,800 tokens, the 200M probe length. For a
+# campaign cell at 10B, raise --steps to 76,294 and the runtime bound with it (~9.9 h of
+# compute at 36.9% MFU, so --hours 16 --attempts 1 = $351.32 and still automatic).
+#
+# --data-seed IS THE SEED, and it is the only thing that differs between cells of one arm.
+# Pass --data-seed 0/1/2 for the three seeds. Every other number here is held fixed across
+# arms and seeds; a per-cell change to any of them makes the rungs incomparable.
 schema_version: 1
 workload_profile: olmo-core-train
 suggested_compute: gpu-8xa100

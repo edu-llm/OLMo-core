@@ -1,0 +1,69 @@
+# ARM M1-G8 -- granularity. 32 experts x 528, top-8, in blocks 9-24.
+#
+#   edullm check --json --spec .edullm/run-g8.yaml --experiment g8-seed0 \
+#     --dataset reservoir-dolma2-v1 --team scratch --compute gpu-8xa100 --hours 2 --attempts 1
+#   edullm submit <same flags>
+#
+# THE ONE ARM WITH NO FACTORY OF ITS OWN, AND THE REASON IS WORTH KNOWING BEFORE EDITING IT.
+# `train_on_corpus.py` calls the factory as `factory(vocab_size=...)` and passes NO other
+# kwargs, so `--model-factory edullm_moe_m1 --num-experts 32` does not exist and would be
+# silently ignored if it did. What DOES reach the config is the trailing dotted overrides,
+# which `parse_known_args` collects and `config.merge(overrides)` applies. Hence the three
+# `block.feed_forward_moe.*` assignments at the end of the command.
+#
+# `block.` and not `block_overrides.N.`: `edullm_moe_m1` puts the MoE on the BASE block and
+# overrides blocks 0-7 back to dense, so the base block is what blocks 8-23 use. Verified by
+# execution -- the factory has 8 block_overrides, keys 0..7, none carrying a feed_forward_moe.
+#
+# WHAT THIS ARM HOLDS FIXED, WHICH IS THE WHOLE EXPERIMENT. Against M1 it keeps TWO budgets
+# constant simultaneously, verified by execution at vocab 100,352:
+#
+#   E x f_e   (stored width)   M1 8x2112 = 16,896   G8 32x528 = 16,896   EQUAL
+#   k x f_e   (executed width) M1 2x2112 =  4,224   G8  8x528 =  4,224   EQUAL
+#
+#   G8  1,065,927,680 total / 443,073,536 forward
+#   M1  1,065,534,464 total / 442,680,320 forward
+#
+# So the two MoE arms store the same, execute the same, and differ ONLY in how finely the
+# choice is divided: 2-of-8 versus 8-of-32. There are exactly three integer solutions holding
+# both budgets fixed and these are two of them. G8's forward exceeds D1's total by 524,288 --
+# four times M1's 131,072, because four times the experts is four times the router weights.
+# That is expected and is NOT the study's invariant; the invariant is M1.forward - D1.total.
+#
+# WHY THIS ARM IS WORTH ITS THIRD OF THE BUDGET. The two published scaling-law fits DISAGREE on
+# the sign of M1-vs-D1 at this sparsity (they straddle zero, crossover near 2B tokens) but
+# AGREE on granularity's sign. G8's G=8 is within 3% of what FLAME-MoE chose at an almost
+# identical compute budget. It needs no new code -- three overrides.
+#
+# ⚠️ ALWAYS PASS --hours AND --attempts; the 24 h x 2 default prices at $1,053.96 and loses the
+# automatic gate. 16h x 1 = $351.32 automatic; 2h x 1 = $43.92 automatic.
+#
+# The chained --prepare-heldout-only step, the shared --work-dir and the first-launcher rule
+# are all as in run-m1.yaml; see that file for why each is load-bearing.
+#
+# --steps 1525 = 199,884,800 tokens (the probe). For a 10B cell use --steps 76294 --hours 16.
+# --data-seed IS THE SEED: 0/1/2.
+#
+# ⚠️ NOT YET RUN. M1 and D1 have both executed on 8xA100; this arm has not. Its ledger is
+# verified by execution but "config builds" and "trains for N steps on 8 ranks" are different
+# claims. Smoke it at --steps 200 before spending a campaign cell on it.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'python .edullm/train_on_corpus.py "$EDULLM_RUN_ID"
+  --model-factory edullm_moe_m1 --sequence-length 2048 --steps 1525
+  --work-dir /tmp/dataset-cache --prepare-heldout-only
+  block.feed_forward_moe.num_experts=32
+  block.feed_forward_moe.hidden_size=528
+  block.feed_forward_moe.router.top_k=8
+  && python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/train_on_corpus.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --model-factory edullm_moe_m1 --sequence-length 2048 --steps 1525
+  --global-batch-size 131072 --rank-microbatch-size 8192
+  --save-interval 500 --data-seed 0 --work-dir /tmp/dataset-cache
+  trainer.callbacks.checkpointer.max_checkpoints=null
+  block.feed_forward_moe.num_experts=32
+  block.feed_forward_moe.hidden_size=528
+  block.feed_forward_moe.router.top_k=8'
