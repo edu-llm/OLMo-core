@@ -35,7 +35,7 @@ def test_platform_artifacts_exist():
 
 def test_four_arm_geometry_has_identical_attention_and_full_recurrent_treatments():
     module = load_entrypoint()
-    from olmo_core.nn.attention import AttentionConfig
+    from olmo_core.nn.attention import AttentionBackendName, AttentionConfig
 
     configs = {
         arm: module.build_model_config(arm, module.valid_init_seeds(arm)[0]) for arm in module.ARMS
@@ -55,6 +55,7 @@ def test_four_arm_geometry_has_identical_attention_and_full_recurrent_treatments
             if index in module.ATTENTION_LAYERS:
                 assert isinstance(mixer, AttentionConfig)
                 assert (mixer.n_heads, mixer.n_kv_heads, mixer.head_dim) == (16, 8, 64)
+                assert mixer.backend == AttentionBackendName.torch
                 assert mixer.rope is not None
             assert block.feed_forward is not None
             if index in module.ATTENTION_LAYERS:

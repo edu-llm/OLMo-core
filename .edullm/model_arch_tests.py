@@ -271,7 +271,7 @@ def _attention_mixer() -> AttentionConfig:
         rope=RoPEConfig(name=RoPEType.default, theta=500_000),
         qk_norm=norm,
         use_head_qk_norm=False,
-        backend=AttentionBackendName.flash_2,
+        backend=AttentionBackendName.torch,
         dtype=DType.bfloat16,
     )
 

@@ -11,7 +11,6 @@ ENV PYTHONPATH=/opt/olmo-core/src \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     TRITON_F32_DEFAULT=ieee \
-    OLMO_FLASH_ATTN2_CUDA_ARCHS=80 \
     CC=gcc-14 \
     CXX=g++-14 \
     CUDA_HOME=/usr/local/cuda-12.8 \
@@ -82,10 +81,10 @@ RUN set -eux; \
     python -m pip install --no-cache-dir \
       "edullm-data @ https://github.com/edu-llm/edullm-data/archive/38bf831a6c3f445e394784018441fd59288b876c.tar.gz"
 
-# FlashAttention and the official Mamba-3 source revision build only for A100 sm80.
+# The official Mamba-3 source revision and xLSTM kernels build only for A100 sm80.
+# The four shared attention layers use PyTorch fused SDPA, avoiding a separate
+# FlashAttention source build on the research-image runner.
 RUN set -eux; \
-    TORCH_CUDA_ARCH_LIST="8.0" python -m pip install --no-cache-dir --no-build-isolation \
-      "flash-attn==2.8.2"; \
     TORCH_CUDA_ARCH_LIST="8.0" MAMBA_FORCE_BUILD=TRUE \
       python -m pip install --no-cache-dir --no-build-isolation \
       "mamba-ssm @ https://github.com/state-spaces/mamba/archive/e9594ce1c732d97440f0332fdc43170a2294dbfa.tar.gz"; \

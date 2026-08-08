@@ -16,7 +16,7 @@ count, and machine-readable seeds. The source of truth is
 ## Frozen architectures
 
 Every arm has 16 layers, `d_model=1024`, a tied 100,352-token embedding/LM
-head, sequence length 4096, and identical FlashAttention-2 GQA layers at
+head, sequence length 4096, and identical PyTorch fused-SDPA GQA layers at
 indices 3, 7, 11, and 15.
 
 - `mamba-b3`: twelve Mamba-3 SISO layers with rotation block size 3.
