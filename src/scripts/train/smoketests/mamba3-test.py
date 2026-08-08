@@ -138,21 +138,6 @@ from olmo_core.internal.cookbook import configure_required_callbacks
 from olmo_core.internal.experiment import CliContext, ExperimentConfig, main
 from olmo_core.launch.beaker import BeakerLaunchConfig
 from olmo_core.nn.mamba3 import Mamba3Config
-
-
-def _rotation_block_size(model_config: Mamba3Config) -> int:
-    """
-    Read the SSM rotation block size out of a named-block hybrid config.
-
-    :param model_config: A hybrid config built by ``Mamba3Config.mamba3_hybrid_*``.
-
-    :returns: The ``rotation_block_size`` of the Mamba-3 blocks.
-    """
-    blocks = model_config.block
-    assert isinstance(blocks, dict), "hybrid Mamba-3 configs use named blocks"
-    return blocks["mamba3"].sequence_mixer.rotation_block_size
-
-
 from olmo_core.nn.transformer import (
     TransformerActivationCheckpointingMode,
     TransformerDataParallelWrappingStrategy,
@@ -169,6 +154,20 @@ from olmo_core.train.train_module import (
 # Sibling modules, resolved via the script's own directory on sys.path.
 from mamba3_cli import pop_flag, pop_int_opt, popped_tokens  # isort: skip
 from mamba3_sentinel import Mamba3SentinelCallback  # isort: skip
+
+
+def _rotation_block_size(model_config: Mamba3Config) -> int:
+    """
+    Read the SSM rotation block size out of a named-block hybrid config.
+
+    :param model_config: A hybrid config built by ``Mamba3Config.mamba3_hybrid_*``.
+
+    :returns: The ``rotation_block_size`` of the Mamba-3 blocks.
+    """
+    blocks = model_config.block
+    assert isinstance(blocks, dict), "hybrid Mamba-3 configs use named blocks"
+    return blocks["mamba3"].sequence_mixer.rotation_block_size
+
 
 # Set by the argv pre-parse in `__main__`, before `main()` builds the config. Module-level
 # because `build_experiment_config` is a callback and never sees argv.

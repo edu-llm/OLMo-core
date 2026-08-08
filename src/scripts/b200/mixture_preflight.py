@@ -27,7 +27,7 @@ import glob as globlib
 import os
 import sys
 from dataclasses import dataclass
-from typing import Dict, Iterator, List, Optional, Tuple
+from typing import Dict, Iterator, List, Tuple
 from urllib.parse import urlparse
 
 import yaml

@@ -2560,24 +2560,32 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
                 # along V. Passing one scalar beta for both would silently time KDA's operator.
                 erase = randn(B, T, HV, K).sigmoid()
                 write = randn(B, T, HV, V).sigmoid()
-                call = (
-                    lambda s, kernel=kernel, q=q, k=k, v=v, g=g, erase=erase, write=write, A_log=A_log, dt_bias=dt_bias: (
-                        kernel(
-                            q=q,
-                            k=k,
-                            v=v,
-                            g=g,
-                            b=erase,
-                            w=write,
-                            A_log=A_log,
-                            dt_bias=dt_bias,
-                            initial_state=s,
-                            output_final_state=True,
-                            use_qk_l2norm_in_kernel=True,
-                            use_gate_in_kernel=True,
-                        )
+                def call(
+                    s,
+                    kernel=kernel,
+                    q=q,
+                    k=k,
+                    v=v,
+                    g=g,
+                    erase=erase,
+                    write=write,
+                    A_log=A_log,
+                    dt_bias=dt_bias,
+                ):
+                    return kernel(
+                        q=q,
+                        k=k,
+                        v=v,
+                        g=g,
+                        b=erase,
+                        w=write,
+                        A_log=A_log,
+                        dt_bias=dt_bias,
+                        initial_state=s,
+                        output_final_state=True,
+                        use_qk_l2norm_in_kernel=True,
+                        use_gate_in_kernel=True,
                     )
-                )
             else:
                 # `allow_neg_eigval` IS APPLIED IN EAGER PYTORCH AND IS DELIBERATELY *NOT*
                 # FORWARDED TO THE KERNEL, BECAUSE THAT IS WHAT THE TRAINING FORWARD DOES.
@@ -2594,23 +2602,31 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
                 beta = randn(B, T, HV).sigmoid()
                 if geometry["allow_neg_eigval"]:
                     beta = beta * 2.0
-                call = (
-                    lambda s, kernel=kernel, q=q, k=k, v=v, g=g, beta=beta, A_log=A_log, dt_bias=dt_bias: (
-                        kernel(
-                            q=q,
-                            k=k,
-                            v=v,
-                            g=g,
-                            beta=beta,
-                            A_log=A_log,
-                            dt_bias=dt_bias,
-                            initial_state=s,
-                            output_final_state=True,
-                            use_qk_l2norm_in_kernel=True,
-                            use_gate_in_kernel=True,
-                        )
+
+                def call(
+                    s,
+                    kernel=kernel,
+                    q=q,
+                    k=k,
+                    v=v,
+                    g=g,
+                    beta=beta,
+                    A_log=A_log,
+                    dt_bias=dt_bias,
+                ):
+                    return kernel(
+                        q=q,
+                        k=k,
+                        v=v,
+                        g=g,
+                        beta=beta,
+                        A_log=A_log,
+                        dt_bias=dt_bias,
+                        initial_state=s,
+                        output_final_state=True,
+                        use_qk_l2norm_in_kernel=True,
+                        use_gate_in_kernel=True,
                     )
-                )
 
             # Warmup: Triton compiles on the first call and the allocator is still growing.
             threaded = state

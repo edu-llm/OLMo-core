@@ -14,7 +14,6 @@ These tests pin *which* projections are treated as sensitive and prove the helpe
 decision into the fully-qualified module names ``Float8Config.modules_to_ignore`` needs.
 """
 
-import pytest
 import torch
 import torch.nn as nn
 
