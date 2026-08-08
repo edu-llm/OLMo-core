@@ -51,6 +51,35 @@
 # that is ~32k examples over a 2,400-example train set (~13 epochs), which is ample to separate
 # the arms if they separate at all. --save-every 500 is kept deliberately: if this is killed
 # anyway, best.pt and stepN.pt are already mirrored to S3 and eval.py can be pointed at them.
+# W&B, AND WHY THE PROJECT IS NAMED HERE AS WELL AS AT SUBMIT TIME.
+#
+# Each arm streams its metrics to W&B through olmo_core.latentcot.tracking. Two independent
+# things have to be true for that to happen, and only one of them is in this file:
+#
+#   1. A PROJECT IS NAMED. `--wandb-project` below does that unconditionally. The platform also
+#      exports EDULLM_WANDB_PROJECT when `edullm submit --wandb-project ...` is passed, and
+#      either source is enough -- but the flag is written here so tracking does not depend on
+#      anybody remembering a submit-time argument on the run that matters.
+#   2. WANDB_API_KEY IS IN THE CONTAINER. This file cannot supply it and must not try; a key
+#      committed here would be a secret in an image built from the commit. It arrives with the
+#      submission, which is why `edullm submit --wandb-project latent-cot-superposition` is
+#      still the right way to launch this even with the flag set below.
+#
+# Grouping is deliberately not set: the platform exports WANDB_RUN_GROUP and the wandb client
+# reads it by itself, so the five arms land in one comparable group named after the experiment.
+# Run names are "<arm>-seed<n>", so A0..A4 are told apart inside it.
+#
+# If neither source names a project, or the key is missing, every arm trains UNTRACKED rather
+# than dying -- a metrics sidecar must never cost a day of A100 time. It prints one line saying
+# so, and `metrics.json` records whether tracking was active, because the line below sends each
+# arm's stdout to a file (see the note on train.log under `command`).
+#
+# NOTE ON train.log: `> "$EDULLM_CHECKPOINT_DIR/A$i/train.log"` is a shell redirect, and
+# $EDULLM_CHECKPOINT_DIR is an s3:// URI, so the shell writes to a LOCAL relative path
+# ("s3:/bucket/...") that dies with the container -- the same Path()-mangling trap documented
+# above, one layer out where no Python guard can see it. So these per-arm logs are NOT durable,
+# and W&B plus the mirrored metrics.json are the only surviving per-step record. That is the
+# main reason tracking is not optional here.
 schema_version: 1
 workload_profile: olmo-core-train
 suggested_compute: gpu-8xa100
@@ -69,6 +98,7 @@ command: >-
   --arm ${ARMS[$i]} --rung olmo3_370M --init-checkpoint "$BASE"
   --steps 2000 --batch-size 16 --precision bf16 --lr 2e-5
   --init-seed 0 --seed 1 --log-every 50
+  --wandb-project latent-cot-superposition
   --train-data $DATA/train-00000.jsonl --test-data $DATA/heldout-00000.jsonl
   --out "$EDULLM_CHECKPOINT_DIR/A$i"
   > "$EDULLM_CHECKPOINT_DIR/A$i/train.log" 2>&1 & pids+=($!); done;

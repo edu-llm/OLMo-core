@@ -10,9 +10,20 @@ equivalent for the research runs.
 
 import contextlib
 import json
+import sys
 import time
 from pathlib import Path
-from typing import Any, ContextManager, Dict, Iterator, List, Optional, Protocol, Union
+from typing import (
+    Any,
+    Callable,
+    ContextManager,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Protocol,
+    Union,
+)
 
 import torch
 
@@ -256,6 +267,7 @@ def train_arm(
     val_examples: Optional[List[dict]] = None,
     precision: str = "bf16",
     remote_dir: Optional[str] = None,
+    on_log: Optional[Callable[[dict], None]] = None,
 ) -> List[dict]:
     """
     Train ``model`` on one arm; return a list of logged metric snapshots.
@@ -277,6 +289,12 @@ def train_arm(
     from the gate test set — selecting "best" on the test set would be model selection on the
     very data the gates score. This is confound-clean: the policy is identical across arms.
 
+    :param on_log: Called with each ``train_history`` entry as it is recorded — the streaming
+        hook :class:`~olmo_core.latentcot.tracking.ArmTracker` is wired into. Kept a plain
+        callable so this loop stays free of any metrics dependency and unit-testable. An
+        exception from it is caught and reported rather than allowed to end the run, since a
+        metrics sidecar must never cost a day of GPU time; pass a callable that swallows its own
+        errors (``ArmTracker`` does).
     :param save_dir: Directory for rolling/best checkpoints; ``None`` disables checkpointing.
     :param save_every: Save a rolling checkpoint every N steps (0 disables).
     :param keep_last: Number of most-recent rolling checkpoints to retain.
@@ -406,6 +424,14 @@ def train_arm(
                 ),
                 flush=True,
             )
+            if on_log is not None:
+                try:
+                    on_log(entry)
+                except BaseException as exc:  # noqa: BLE001 -- see the :param on_log: note
+                    print(
+                        f"[on_log] sink raised, continuing: {type(exc).__name__}: {exc}",
+                        file=sys.stderr,
+                    )
         if checkpointing and ((step + 1) % save_every == 0 or step == steps - 1):
             _save_rolling(step + 1)
             _maybe_update_best(step + 1)

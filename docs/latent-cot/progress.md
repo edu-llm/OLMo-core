@@ -118,3 +118,43 @@ Verified: 146 latentcot tests pass; 61 core transformer tests pass / 42 GPU-skip
 
 Still open (unchanged by this port): the pilot `run_019fdf83`'s outcome, the unscreened peak LR,
 n=1 seeds, and the `local/` blobs still reachable from `e0dff82a` on the two old pushed branches.
+
+## 2026-08-08 — W&B tracking (new: `tracking.py`)
+
+Nothing was reaching W&B before this. The Phase-8 driver is a direct loop, not the framework
+`Trainer`, so it never builds a callback list and `WandBCallback` — how everything else in this
+repo reaches W&B — was simply not in play. Metrics existed only as stdout and an end-of-run
+`metrics.json`.
+
+- **`latentcot/tracking.py`** (new): `resolve_project()` + `ArmTracker`. Follows the platform's
+  convention from `.edullm/train_on_corpus.py` rather than a new one — enable iff
+  `EDULLM_WANDB_PROJECT` (or `--wandb-project`) names a project, let the wandb client read
+  `WANDB_RUN_GROUP` itself (so `group=` is *not* passed), default `WANDB_INIT_TIMEOUT=60`.
+- **`train_arm(on_log=...)`**: a plain callable invoked with each `train_history` entry. The
+  training core stays free of any metrics dependency and unit-testable; `tracking.py` is the only
+  file that imports `wandb`.
+- **`train_codi.py`**: starts the tracker *before* training (so a run that dies mid-way keeps its
+  curve), streams per-step metrics, writes the gate numbers to the run summary — including
+  `solve_rate/depth_N` flattened to scalars, since gate A is a slope over depth and a nested dict
+  can't be compared across arms — and on an exception marks the run failed with the reason on it.
+  Run name is `<arm>-seed<n>`; config carries every arm-defining field.
+- **Fail-open throughout, and this is the point:** missing `wandb`, unset `WANDB_API_KEY`, failed
+  `init`, failed `log`, even an `on_log` that raises — each degrades to one stderr line and an
+  untracked run. A metrics sidecar must never cost a day of A100 time. 14 new tests in
+  `test_tracking.py` assert exactly these paths; suite total **160**.
+- **`metrics.json` now records `{"wandb": {active, url, reason}}`**, because `run.yaml` redirects
+  each arm's stdout to a `train.log` that does not survive (see below), so otherwise there'd be no
+  durable answer to "was this tracked?".
+- **`.edullm/run.yaml`**: `--wandb-project latent-cot-superposition` written into the command, so
+  tracking does not depend on remembering a submit-time flag. `WANDB_API_KEY` still arrives with
+  the submission and cannot live in this file — a key committed here would be a secret in an image
+  built from the commit — so `edullm submit --wandb-project latent-cot-superposition` remains the
+  right way to launch.
+
+**Found while doing this, pre-existing, NOT fixed:** `run.yaml` does
+`mkdir -p "$EDULLM_CHECKPOINT_DIR/A$i"` and `> "$EDULLM_CHECKPOINT_DIR/A$i/train.log"` where that
+variable is an `s3://` URI. Those are *shell* operations, so they hit a local relative path
+(`s3:/bucket/...`) that dies with the container — the same `Path()`-mangling trap the file documents
+for Python, one layer out where no Python guard can catch it. The per-arm logs are therefore not
+durable. Verified end-to-end against a fake `wandb`: config, per-step logs, group-from-env, summary,
+`finish(0)`, and both untracked paths completing normally.

@@ -31,6 +31,7 @@ import torch
 from olmo_core.latentcot.arms import ARMS
 from olmo_core.latentcot.data.dataset import LatentCotDataset
 from olmo_core.latentcot.evaluate import overall_accuracy, solve_rate_by_depth
+from olmo_core.latentcot.tracking import ArmTracker, resolve_project
 from olmo_core.latentcot.train_driver import (
     PRECISIONS,
     autocast_ctx,
@@ -148,6 +149,15 @@ def main() -> None:
         default="runs/latentcot-staging",
         help="local scratch used only when --out is a remote URI",
     )
+    parser.add_argument(
+        "--wandb-project",
+        default=None,
+        help="W&B project for streaming metrics. Normally leave this unset ON THE PLATFORM and "
+        "pass --wandb-project to `edullm submit` instead, which exports EDULLM_WANDB_PROJECT "
+        "into the container (and WANDB_RUN_GROUP, which groups the five arms, and the API key). "
+        "This flag is the local/manual override and wins over the environment. With neither, the "
+        "run trains untracked and says so.",
+    )
     args = parser.parse_args()
 
     device = resolve_device(args.device)
@@ -194,36 +204,11 @@ def main() -> None:
         run_dir = Path(args.out) / leaf
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    history = train_arm(
-        model,
-        arm,
-        train_source,  # type: ignore[arg-type]  # LatentCotDataset or a Subset of one
-        steps=args.steps,
-        batch_size=args.batch_size,
-        lr=args.lr,
-        warmup_steps=args.warmup_steps,
-        seed=args.seed,
-        log_every=args.log_every,
-        save_dir=run_dir,
-        save_every=args.save_every,
-        keep_last=args.keep_last,
-        val_examples=val_examples,
-        precision=args.precision,
-        remote_dir=remote_dir,
-    )
-    best = None
-    best_path = run_dir / "best.json"
-    if best_path.exists():
-        best = json.loads(best_path.read_text())
-
-    test_ds = LatentCotDataset(args.test_data, args.num_continuous_thoughts)
-    examples = [test_ds[i] for i in range(len(test_ds))]
-    # Score under the same precision the run trained and best-selected under, so the reported
-    # gate numbers and best.json's val_acc are measured on the same footing.
-    with autocast_ctx(args.precision, device):
-        final_acc = overall_accuracy(model, examples, arm.arm_mode)
-        final_by_depth = solve_rate_by_depth(model, examples, arm.arm_mode)
-    metrics = {
+    # The run's identity and every hyperparameter, assembled once and used for three things:
+    # W&B's config (so the arm comparison is legible in the UI), the metrics.json header, and
+    # the console summary. The arm-defining fields are in here deliberately — they are what the
+    # confound control is *about*, so they have to be visible on the run.
+    run_config = {
         "arm": arm.name,
         "rung": args.rung,
         "init_seed": args.init_seed,
@@ -240,11 +225,86 @@ def main() -> None:
         "vocab_reg_entropy_floor": arm.vocab_reg_entropy_floor,
         "save_every": args.save_every,
         "val_fraction": args.val_fraction if val_examples else 0.0,
+    }
+
+    # Start tracking BEFORE training, so a run that dies mid-way still has its curve and its
+    # config in W&B. `leaf` is "<arm>-seed<n>", which is exactly the run name wanted inside the
+    # group the platform sets from the experiment.
+    tracker = ArmTracker.start(
+        project=resolve_project(args.wandb_project),
+        name=leaf,
+        config=run_config,
+        dir=str(run_dir),
+        tags=[arm.arm_mode, f"rung:{args.rung}", f"vocab_reg:{arm.vocab_reg}"],
+    )
+    # Recorded into metrics.json below, because that file is mirrored to S3 while this script's
+    # stdout is redirected to a train.log the container takes with it (see .edullm/run.yaml).
+    # Without this there would be no durable answer to "was this run tracked?".
+    wandb_info = {"active": tracker.active, "url": tracker.url, "reason": tracker.reason}
+    if tracker.active:
+        print(f"[wandb] tracking {leaf}: {tracker.url or '(url pending)'}", flush=True)
+    else:
+        print(f"[wandb] NOT tracking -- {tracker.reason}", flush=True)
+
+    try:
+        history = train_arm(
+            model,
+            arm,
+            train_source,  # type: ignore[arg-type]  # LatentCotDataset or a Subset of one
+            steps=args.steps,
+            batch_size=args.batch_size,
+            lr=args.lr,
+            warmup_steps=args.warmup_steps,
+            seed=args.seed,
+            log_every=args.log_every,
+            save_dir=run_dir,
+            save_every=args.save_every,
+            keep_last=args.keep_last,
+            val_examples=val_examples,
+            precision=args.precision,
+            remote_dir=remote_dir,
+            on_log=tracker.log,
+        )
+        best = None
+        best_path = run_dir / "best.json"
+        if best_path.exists():
+            best = json.loads(best_path.read_text())
+
+        test_ds = LatentCotDataset(args.test_data, args.num_continuous_thoughts)
+        examples = [test_ds[i] for i in range(len(test_ds))]
+        # Score under the same precision the run trained and best-selected under, so the reported
+        # gate numbers and best.json's val_acc are measured on the same footing.
+        with autocast_ctx(args.precision, device):
+            final_acc = overall_accuracy(model, examples, arm.arm_mode)
+            final_by_depth = solve_rate_by_depth(model, examples, arm.arm_mode)
+    except BaseException as exc:
+        # Mark the run failed in W&B and put the reason on it. This is the one place a
+        # researcher will look, and a container that dies takes its log with it.
+        tracker.summarize({"error": f"{type(exc).__name__}: {exc}"})
+        tracker.finish(exit_code=1)
+        raise
+
+    metrics = {
+        **run_config,
+        "wandb": wandb_info,
         "best_checkpoint": best,  # {step, val_acc} of best.pt, or None if checkpointing was off
         "overall_acc": final_acc,
         "solve_rate_by_depth": final_by_depth,
         "train_history": history,
     }
+
+    # The gate numbers, as summary columns so the five arms compare directly in a runs table.
+    # The per-depth solve rates are also flattened to scalars, because gate A is a slope over
+    # depth and a nested dict cannot be plotted against the other arms.
+    tracker.summarize(
+        {
+            "overall_acc": final_acc,
+            "solve_rate_by_depth": final_by_depth,
+            **{f"solve_rate/depth_{depth}": rate for depth, rate in final_by_depth.items()},
+            **({"best_step": best["step"], "best_val_acc": best["val_acc"]} if best else {}),
+        }
+    )
+    tracker.finish()
 
     # run_dir was created above; write the final (last-step) weights as the canonical artifact.
     torch.save(model.state_dict(), run_dir / "model.pt")
