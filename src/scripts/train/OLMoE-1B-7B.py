@@ -1,6 +1,6 @@
 """
-Train a 7B OLMoE-style model with 96 routed experts, top-4 routing, and two
-shared-expert equivalents.
+Train a 7B OLMoE-style model with 32 routed experts and top-4 routing for
+100B tokens.
 
 Run this script without any arguments to see usage info.
 """
@@ -12,7 +12,7 @@ from olmo_core.distributed.parallel import DataParallelType
 from olmo_core.internal.experiment import CommonComponents, build_config, main
 from olmo_core.nn.transformer import TransformerConfig
 from olmo_core.optim import AdamWConfig, CosWithWarmup, OptimGroupOverride
-from olmo_core.train import TrainerConfig
+from olmo_core.train import Duration, TrainerConfig
 from olmo_core.train.callbacks import CheckpointerCallback, CometCallback, WandBCallback
 from olmo_core.train.train_module import (
     TransformerDataParallelConfig,
@@ -22,17 +22,16 @@ from olmo_core.train.train_module import (
 
 SEQUENCE_LENGTH = 4096
 GLOBAL_BATCH_SIZE = 1024 * SEQUENCE_LENGTH
+TRAINING_TOKENS = 100_000_000_000
 
 MODEL_DIM = 2048
 NUM_LAYERS = 16
 NUM_HEADS = 16
-NUM_ROUTED_EXPERTS = 96
+NUM_ROUTED_EXPERTS = 32
 TOP_K = 4
-ROUTED_EXPERT_HIDDEN_SIZE = 672
-NUM_SHARED_EXPERT_EQUIVALENTS = 2
-# OLMo-core exposes one always-on shared MLP. Giving it twice the routed-expert
-# width preserves the parameter capacity of two same-width shared experts.
-SHARED_EXPERT_HIDDEN_SIZE = NUM_SHARED_EXPERT_EQUIVALENTS * ROUTED_EXPERT_HIDDEN_SIZE
+# This is the 32-expert/top-4 OLMoE granularity: it keeps the routed MLP's
+# active capacity close to OLMoE-1B-7B while avoiding an always-on shared MLP.
+ROUTED_EXPERT_HIDDEN_SIZE = 2048
 
 
 def build_model_config(common: CommonComponents) -> TransformerConfig:
@@ -44,7 +43,6 @@ def build_model_config(common: CommonComponents) -> TransformerConfig:
         num_experts=NUM_ROUTED_EXPERTS,
         top_k=TOP_K,
         expert_hidden_size=ROUTED_EXPERT_HIDDEN_SIZE,
-        shared_expert_hidden_size=SHARED_EXPERT_HIDDEN_SIZE,
         dropless=True,
         lb_loss_weight=0.01,
         z_loss_weight=0.001,
@@ -88,6 +86,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             save_overwrite=True,
             metrics_collect_interval=10,
             cancel_check_interval=1,
+            max_duration=Duration.tokens(TRAINING_TOKENS),
         )
         .with_callback(
             "checkpointer",
@@ -102,7 +101,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             CometCallback(
                 name=common.run_name,
                 workspace="ai2",
-                project="OLMo-core-1B",
+                project="OLMo-core-7B",
                 enabled=True,
                 cancel_check_interval=10,
             ),
@@ -112,7 +111,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             WandBCallback(
                 name=common.run_name,
                 entity="ai2-llm",
-                project="OLMo-core-1B",
+                project="OLMo-core-7B",
                 enabled=False,
                 cancel_check_interval=10,
             ),
