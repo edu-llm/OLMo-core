@@ -52,7 +52,7 @@ command: >-
   --sequence-length 4096
   --global-batch-size 4194304
   --rank-microbatch-size 16384
-  --steps 23842
+  --steps 11921
   --warmup-steps 2000
   --learning-rate 4e-4
   --param-dtype bfloat16
@@ -89,11 +89,29 @@ command: >-
 # announce itself with a nonsense -1; it would serve a model claiming exactly twice the context
 # it was trained at. `src/test/edullm_train_on_corpus_test.py` pins the wiring for that reason.
 #
-# --steps 23842 AND THE TOKEN BUDGET.
+# --steps 11921 AND THE TOKEN BUDGET, WHICH HALVED ON 2026-08-08 FROM 100B TO 50B.
 #   4,194,304 tokens/step  =  2^22, and 4,194,304 / 4,096 = 1,024 sequences a step
-#   ceil(100,000,000,000 / 4,194,304)      = 23,842 steps
-#   23,842 x 4,194,304                     = 100,000,595,968 tokens  (100.0006B)
-#   overshoot against the 100B target      = 595,968 tokens, one part in 168,000
+#   round(50,000,000,000 / 4,194,304)      = 11,921 steps
+#   11,921 x 4,194,304                     = 50,000,297,984 tokens  (50.0003B)
+#   overshoot against the 50B target       = 297,984 tokens, one part in 168,000
+#
+# WHY 50B IS A DEFENSIBLE PLACE TO STOP RATHER THAN A CONCESSION. 50B over 1.49B active
+# parameters is 33.6 tokens per active parameter. At the same compute budget the
+# Chinchilla-optimal DENSE point is 37.6B tokens on a 1.88B model, so this run is slightly
+# over-trained relative to dense -- which is the correct direction for a sparse model, where the
+# optimum sits at a higher token-per-parameter ratio than the dense law predicts. Against total
+# parameters it is 7.0 tokens each, under-trained, which is also normal for an MoE and is the
+# ratio a reader unfamiliar with sparse scaling will reach for first.
+#
+# --warmup-steps STAYS AT 2000 AND WAS NOT HALVED WITH THE BUDGET, WHICH LOOKS WRONG AND IS NOT.
+# It was 8.4% of the run and is now 16.8%, and the instinct is to halve it to hold the shape.
+# Summing the learning rate over every step of `CosWithWarmup` says the instinct is wrong:
+# halving warmup to 1,000 changes the total delivered learning rate by 0.4 percentage points,
+# because a shorter ramp is very nearly compensated by a longer cosine. Meanwhile warmup's job
+# -- surviving the phase where the weights are random, the gradients are large and badly
+# conditioned, and an MoE router can collapse onto a handful of experts -- takes an absolute
+# number of steps to get through and does not scale with what happens afterwards. So halving it
+# buys a rounding error and spends real risk on a run that cannot be repeated.
 #
 # --rank-microbatch-size 16384, IN TOKENS LIKE --global-batch-size AND NOT IN SEQUENCES.
 #   1,024 sequences / 64 ranks   = 16 sequences a rank a step
@@ -114,13 +132,19 @@ command: >-
 #
 # --learning-rate 4e-4 and --warmup-steps 2000 are `src/scripts/train/OLMoE-1B-7B.py` lines 68
 # and 85, which is the recipe this entry point was aligned with rather than a fresh guess. 2,000
-# of 23,842 is 8.4% of the run in warmup.
+# of 11,921 is 16.8% of the run in warmup; see the paragraph above for why that is left alone.
 #
 # --save-interval 800, AND THE INTERVAL IS THE PRODUCT HERE RATHER THAN INSURANCE. The
 # downstream lane consumes intermediate checkpoints, so this is a delivery cadence.
-#   15 h budget = 54,000 s over 23,842 steps  = 2.265 s/step
-#   1,800 s (30 min) / 2.265                  = 795 steps, taken to 800
-#   800 x 2.265                               = 1,812 s = 30.2 min between saves
+#   800 steps is between 19 and 42 minutes across the plausible range of step times
+#
+# THE 2.265 s/step THAT USED TO BE DERIVED HERE WAS NEVER A MEASUREMENT. It was a 15-hour
+# estimate divided by the step count, and it works out to 24.8% MFU against the 8.48 GFLOP/token
+# figure -- a round guess wearing three decimal places. Restated against the 9.29 GFLOP/token
+# OLMo-core actually logs, it is 27.2%. The interval is left at 800 because it lands in the right
+# half-hour band across everything plausible: at 35% MFU a step is 1.76 s and 800 steps is 23
+# minutes; at 22% it is 2.80 s and 37 minutes. Read the real figure off the first hundred steps
+# and move this only if it falls outside that band.
 #   23,842 / 800                              = 29 saves, at step 800 through 23,200
 # THE 2.265 s/step IS AN ASSUMPTION AND THE ONLY ONE IN THIS FILE. It is the owner's 15-hour
 # estimate divided by the step count, not a measurement. Read the real figure off the first
