@@ -1,0 +1,43 @@
+{#-
+  A chat template for a model that has not been post-trained.
+
+  PLAIN WORDS AND NOT ChatML, AND THE REASON IS THE MODEL RATHER THAN TASTE. The dolma2
+  vocabulary carries <|im_start|> and <|im_end|> at 100264 and 100265, so a ChatML template
+  tokenises cleanly and looks correct in every way that can be inspected without a GPU. It
+  is still the wrong template here: those two ids occur essentially nowhere in a pretraining
+  corpus, so their embeddings are wherever initialisation left them, and a base model
+  prompted with them emits drift. "User:" and "Assistant:" are ordinary text the model has
+  read transcripts of, which is what makes a base model answer in the shape of a reply at
+  all. The turn markers a post-trained model wants arrive with its own template and replace
+  this one; until then, conventional-looking and unusable is worse than plain and working.
+
+  NOTHING HERE IS A SPECIAL TOKEN, WHICH IS ALSO HOW GENERATION STOPS. A base model has
+  never been taught to emit an end-of-turn marker and will not emit one, so a template
+  relying on a stop token produces a reply that runs to max_tokens every time. "\nUser:" is
+  a string the model reaches on its own when it has finished a turn, because that is how the
+  transcripts it read continue, and a stop string catches it. serve_a_checkpoint.py installs
+  the matching stop strings beside this file for exactly that reason.
+
+  A system message is folded into the preamble rather than given a marker of its own. A
+  third speaker label the model has not seen costs more than it buys, and one instruction
+  paragraph at the top is a shape that appears in pretraining data.
+-#}
+{%- if messages and messages[0]['role'] == 'system' -%}
+{{- messages[0]['content'] | trim + '\n\n' -}}
+{%- set conversation = messages[1:] -%}
+{%- else -%}
+{{- 'A conversation between a curious user and a helpful assistant.\n\n' -}}
+{%- set conversation = messages -%}
+{%- endif -%}
+{%- for message in conversation -%}
+{%- if message['role'] == 'user' -%}
+{{- 'User: ' + message['content'] | trim + '\n\n' -}}
+{%- elif message['role'] == 'assistant' -%}
+{{- 'Assistant: ' + message['content'] | trim + '\n\n' -}}
+{%- elif message['role'] == 'system' -%}
+{{- message['content'] | trim + '\n\n' -}}
+{%- endif -%}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+{{- 'Assistant:' -}}
+{%- endif -%}
