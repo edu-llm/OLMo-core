@@ -1356,6 +1356,83 @@ written down here. Read both out of `check --json` rather than out of this parag
 totals, which the platform's own catalog states, so all three submissions go to a lead
 regardless. Re-read it rather than quoting this.
 
+## Stage 1's health gate, and the three things checking it turned up
+
+`.edullm/stage_gate.py` is the gate. It is a third sibling to `wandb_panels.py`, which asks
+whether a metric *key* arrived, and `noise_floor.py`, which asks what the numbers in those keys
+are worth once a run has finished. This one asks the only question that has to be answered while
+the cells are still going — whether the configuration is sound and whether it fits its bound —
+and it answers `go`, `no-go`, or `too early`, which is a third answer and not a soft `no-go`.
+
+```bash
+python .edullm/stage_gate.py --self-test                                   # no network
+python .edullm/stage_gate.py --run <full run id> --cells 5 --watch 420
+```
+
+Read at step ~750 of 6,000, `run_019fe279-4ef0` passes every check the gate makes: three live
+cells at seeds 0, 1 and 3 whose losses differ at every shared step, clean medians of 8.211,
+8.076 and 8.259 s/step over 750, 760 and 740 rows, 14.37 projected hours against the 19-hour
+bound, z-loss written on all three, and seven per-source metrics with bits-per-byte beside every
+cross-entropy at both the startup evaluation and the one at step 500. It does **not** report
+`go`, because two of the five cells have logged nothing — see below.
+
+### The MFU is right, and this is the first run for which that can be said
+
+The two 370M probes fell through `SpeedMonitorCallback`'s device table to its A100 default and
+were scored against 312 TF; the callback gained an L40S branch afterwards. The live baseline is
+the first run on the corrected path and it lands there:
+
+- **The peak the run used divides out of its own logs at exactly 362.05 TF.** `flopsPS` over
+  `MFU/100` is 3.6205e14 in every row, so the L40S branch is live and nothing is falling through
+  to the A100 default.
+- **362.05 is the dense figure and must not be halved.** NVIDIA publishes `362.05 | 733*` for
+  BFLOAT16 Tensor Core on the L40S, starred for structural sparsity, so the branch is right to
+  use it as it stands where the surrounding branches apply a `dense_correction` of one-half to a
+  sparse-quoted spec. The `L40` branch immediately below it *does* halve 362.05, and that is
+  also right and is not an inconsistency: the L40's own datasheet reads `181.05 | 362.05`.
+- **The hand calculation agrees.** `hc_370M` at the baseline arm builds
+  `num_flops_per_token` = 3,032,684,544 at sequence length 4096, and the run's own
+  `flopsPS / TPS` reads 3,032,684,502 — the same number through a float32 log. At 196,608 tokens
+  a device-step and a clean median of 8.2188 s that is **20.04% MFU**, against 20.038% reported.
+  Reported and hand-computed agree to three decimal places, so there is no second factor of two
+  hiding anywhere and the v2.5.0 history does not repeat here.
+
+The arms remain comparable on it, because `num_flops_per_token` counts the lane mixing. What MFU
+must not be read as here is a hardware verdict: at 20% on a card the branch has already shown to
+be bound by its wire rather than its tensor cores, the number is measuring the interconnect.
+
+### The arm *is* in the logged config, and `tranche_watch` does not have to be told it
+
+`train_on_corpus` writes no `arm` field, which is why the watcher takes the arm from its command
+line. But `arm.apply` edits the model config before `ConfigSaverCallback` saves it, and those
+edits survive into W&B: `model.block.hyper_connections` is absent on `baseline` and present on
+every lane arm, and among the four funded arms the triple `(mode, doubly_stochastic,
+output_init_exponent)` separates `faithful` from `output-only` from `mhc`.
+`stage_gate.arms_consistent_with` reads it, and a test walks all four.
+
+This is worth more than a label. A watcher told its arm on a command line will print whatever it
+was told, so the one failure it could catch — a cell that resolved to an arm nobody meant, which
+`resolve_cell` is shaped around and which no loss curve would reveal — is exactly the failure it
+cannot. The config is the run's own testimony. It does not separate every arm in the table and
+does not claim to: `decay-everything` differs from `faithful` in the optimizer alone and
+`tied-faithful` in block reuse, so both come back beside it. All of those are unfunded.
+
+### `wandb_panels.py --verify` cannot gate a baseline-only group, and currently says it can
+
+Run against `hyper-connections-370m` while stage 1 is live it prints `VERDICT: everything the
+pre-registration rests on is present` and exits 0. Both halves of that are misleading, for two
+independent reasons, and neither is a reason to stop using it for what it was built for.
+
+**It unions keys across every run in the group.** The `hc/*` families it reports as `ok` are
+carried entirely by the `faithful` rehearsal and probes; the five baseline cells log none of them
+and correctly should, since `train` attaches the lane monitor only to an arm with lanes. So the
+guard and stability sections pass on evidence from other runs, and a stage-2 group containing one
+stale probe would pass the same way.
+
+**It keys `observed_keys` by `run.name`, and every cell of a fan-out shares a name.** It reported
+`7 run(s)` for a project holding nine, because the three live cells collapsed into one entry. The
+cell is in `run.id`, as `<run id>-cell-<index>`, which is what `stage_gate.read_cells` addresses.
+
 ## Order of operations
 
 1. **Rehearse.** Done: `run_019fdfe9-e6c0`, `faithful` at the rehearsal size, 200 steps,
