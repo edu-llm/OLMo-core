@@ -1,6 +1,10 @@
 """
-Train a ~7.5B OLMoE-style model with 32 routed experts, top-4 routing, and two
-always-on shared experts for 100B tokens.
+Train a ~7B OLMoE-style model with 32 routed experts and top-4 routing for
+100B tokens.
+
+This mirrors the ``olmoe_7b_32x4`` recipe in ``.edullm/train_on_corpus.py``,
+which is the entrypoint an eduLLM run actually uses. Keep the two in step: a
+model that differs between them is two experiments wearing one name.
 
 Run this script without any arguments to see usage info.
 """
@@ -30,10 +34,10 @@ NUM_HEADS = 16
 NUM_ROUTED_EXPERTS = 32
 TOP_K = 4
 ROUTED_EXPERT_HIDDEN_SIZE = 2048
-# OLMo-core represents shared experts as one always-on MLP. Giving that MLP
-# twice a routed expert's intermediate width is two shared experts' worth of
-# capacity, not a second routed expert pool.
-SHARED_EXPERT_HIDDEN_SIZE = 2 * ROUTED_EXPERT_HIDDEN_SIZE
+# OLMo-core represents shared experts as one always-on MLP, so ``None`` is none
+# of them. Shared experts are a screened arm rather than part of the base, and
+# the arm sets this to twice a routed expert's width for two of them.
+SHARED_EXPERT_HIDDEN_SIZE = None
 
 
 def build_model_config(common: CommonComponents) -> TransformerConfig:

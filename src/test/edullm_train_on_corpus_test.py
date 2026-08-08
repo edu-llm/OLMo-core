@@ -293,10 +293,14 @@ def configure(*extra: str):
     return opts, entry.build_config(opts, overrides)
 
 
-def test_the_platform_moe_recipe_has_two_shared_experts_of_capacity(corpus):
-    """The shared MLP is one unconditional 4096-wide MLP, i.e. two 2048-wide experts."""
+def test_the_platform_moe_recipe_is_the_base_and_carries_no_shared_expert(corpus):
+    """No shared MLP unless an arm asks for one, because the base is the control.
+
+    A module cannot be screened against a base that already contains it, so the
+    default here is load-bearing rather than a preference.
+    """
     _, config = configure(
-        "--model-factory=olmoe_7b_32x4_shared2",
+        "--model-factory=olmoe_7b_32x4",
         "--sequence-length=4096",
         "--steps=23842",
         "--global-batch-size=4194304",
@@ -312,13 +316,10 @@ def test_the_platform_moe_recipe_has_two_shared_experts_of_capacity(corpus):
     assert moe.num_experts == 32
     assert moe.hidden_size == 2048
     assert moe.router.top_k == 4
-    assert moe.shared_mlp is not None
-    assert moe.shared_mlp.hidden_size == 4096
-    assert moe.shared_mlp.bias is False
-    assert (
-        config.model.as_config_dict()["block"]["feed_forward_moe"]["shared_mlp"]["hidden_size"]
-        == 4096
-    )
+    assert moe.shared_mlp is None
+    # The serialised config drops the key entirely rather than writing a null, and the
+    # saved config beside the checkpoint is the record of what ran.
+    assert "shared_mlp" not in config.model.as_config_dict()["block"]["feed_forward_moe"]
     assert config.train_module.dp_config is not None
     assert config.train_module.dp_config.name is entry.DataParallelType.hsdp
     assert config.train_module.dp_config.num_replicas == 2
@@ -327,10 +328,28 @@ def test_the_platform_moe_recipe_has_two_shared_experts_of_capacity(corpus):
     assert config.train_module.ep_config.degree == 32
 
 
+def test_the_shared_expert_arm_differs_from_the_base_in_exactly_one_flag(corpus):
+    """Two shared experts is one unconditional 4096-wide MLP, not a second expert pool."""
+    _, base = configure("--model-factory=olmoe_7b_32x4")
+    _, arm = configure("--model-factory=olmoe_7b_32x4", "--moe-shared-experts=2")
+
+    arm_moe = arm.model.block.feed_forward_moe
+    assert arm_moe.shared_mlp is not None
+    assert arm_moe.shared_mlp.hidden_size == 4096
+    assert arm_moe.shared_mlp.bias is False
+
+    # Everything else has to be identical, or the arm measures more than one thing.
+    base_dict = base.model.as_config_dict()
+    arm_dict = arm.model.as_config_dict()
+    base_dict["block"]["feed_forward_moe"].pop("shared_mlp", None)
+    arm_dict["block"]["feed_forward_moe"].pop("shared_mlp", None)
+    assert base_dict == arm_dict
+
+
 def test_the_platform_moe_recipe_rejects_an_expert_mesh_that_cannot_own_32_experts(corpus):
     with pytest.raises(entry.Refusal, match="32 routed experts do not divide"):
         configure(
-            "--model-factory=olmoe_7b_32x4_shared2",
+            "--model-factory=olmoe_7b_32x4",
             "--moe-shard-degree=24",
         )
 
@@ -339,7 +358,7 @@ def test_the_platform_moe_recipe_requires_the_64_rank_production_mesh(corpus, mo
     monkeypatch.setenv("WORLD_SIZE", "8")
 
     with pytest.raises(entry.Refusal, match="expects WORLD_SIZE=64"):
-        configure("--model-factory=olmoe_7b_32x4_shared2")
+        configure("--model-factory=olmoe_7b_32x4")
 
 
 @pytest.fixture

@@ -70,6 +70,7 @@ import argparse
 import contextlib
 import copy
 import enum
+import functools
 import json
 import logging
 import os
@@ -325,29 +326,35 @@ TOKENIZERS = {
 # This is deliberately a platform entrypoint recipe rather than a legacy
 # ``src/scripts/train`` recipe. It receives its corpus and checkpoint location
 # from eduLLM, so a submitted run cannot quietly read the upstream AI2 mix.
-OLMOE_7B_32X4_SHARED2_FACTORY = "olmoe_7b_32x4_shared2"
-OLMOE_7B_32X4_SHARED2_ROUTED_EXPERTS = 32
-OLMOE_7B_32X4_SHARED2_ROUTED_HIDDEN_SIZE = 2048
-OLMOE_7B_32X4_SHARED2_SHARED_HIDDEN_SIZE = 2 * OLMOE_7B_32X4_SHARED2_ROUTED_HIDDEN_SIZE
+OLMOE_7B_32X4_FACTORY = "olmoe_7b_32x4"
+OLMOE_7B_32X4_ROUTED_EXPERTS = 32
+OLMOE_7B_32X4_ROUTED_HIDDEN_SIZE = 2048
 
 
-def olmoe_7b_32x4_shared2(vocab_size: int) -> TransformerConfig:
-    """Build the ~7.5B total / 32x4 routed MoE with two shared experts' capacity.
+def olmoe_7b_32x4(vocab_size: int, shared_experts: int = 0) -> TransformerConfig:
+    """Build the ~7B total / 32x4 routed MoE that every arm is measured against.
+
+    ``shared_experts`` is zero here and that is the whole point: this is the
+    control, and a module cannot be screened as an arm while it is also in the
+    thing the arm is compared to. The shared-expert arm passes
+    ``--moe-shared-experts 2`` and nothing else changes.
 
     A shared expert in OLMo-core is one unconditional MLP, so its intermediate
-    width is the number of shared experts times one routed expert's width.
-    ``4096`` therefore means two 2048-wide shared experts, evaluated for every
-    token in addition to the top-four routed experts.
+    width is the number of shared experts times one routed expert's width --
+    two shared experts is one 4096-wide MLP, evaluated for every token in
+    addition to the top-four routed experts.
     """
     return TransformerConfig.llama_like_moe(
         vocab_size=vocab_size,
         d_model=2048,
         n_layers=16,
         n_heads=16,
-        num_experts=OLMOE_7B_32X4_SHARED2_ROUTED_EXPERTS,
+        num_experts=OLMOE_7B_32X4_ROUTED_EXPERTS,
         top_k=4,
-        expert_hidden_size=OLMOE_7B_32X4_SHARED2_ROUTED_HIDDEN_SIZE,
-        shared_expert_hidden_size=OLMOE_7B_32X4_SHARED2_SHARED_HIDDEN_SIZE,
+        expert_hidden_size=OLMOE_7B_32X4_ROUTED_HIDDEN_SIZE,
+        shared_expert_hidden_size=(
+            shared_experts * OLMOE_7B_32X4_ROUTED_HIDDEN_SIZE if shared_experts else None
+        ),
         dropless=True,
         lb_loss_weight=0.01,
         z_loss_weight=0.001,
@@ -358,9 +365,9 @@ def olmoe_7b_32x4_shared2(vocab_size: int) -> TransformerConfig:
     )
 
 
-def is_olmoe_7b_32x4_shared2(opts) -> bool:
+def is_olmoe_7b_32x4(opts) -> bool:
     """Whether ``opts`` selects the fixed MoE recipe this entrypoint owns."""
-    return opts.model_factory == OLMOE_7B_32X4_SHARED2_FACTORY
+    return opts.model_factory == OLMOE_7B_32X4_FACTORY
 
 
 def validate_olmoe_parallelism(opts) -> None:
@@ -381,10 +388,15 @@ def validate_olmoe_parallelism(opts) -> None:
             Stage.THE_CONFIG_WOULD_NOT_BUILD,
             "--moe-num-replicas must be positive",
         )
-    if OLMOE_7B_32X4_SHARED2_ROUTED_EXPERTS % opts.moe_shard_degree:
+    if opts.moe_shared_experts < 0:
         raise Refusal(
             Stage.THE_CONFIG_WOULD_NOT_BUILD,
-            f"{OLMOE_7B_32X4_SHARED2_ROUTED_EXPERTS} routed experts do not divide "
+            "--moe-shared-experts cannot be negative",
+        )
+    if OLMOE_7B_32X4_ROUTED_EXPERTS % opts.moe_shard_degree:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"{OLMOE_7B_32X4_ROUTED_EXPERTS} routed experts do not divide "
             f"--moe-shard-degree={opts.moe_shard_degree}",
         )
 
@@ -663,9 +675,9 @@ def build_config(opts, overrides: List[str]):
         opts.dataset_tokenizer,
     )
 
-    if is_olmoe_7b_32x4_shared2(opts):
+    if is_olmoe_7b_32x4(opts):
         validate_olmoe_parallelism(opts)
-        factory = olmoe_7b_32x4_shared2
+        factory = functools.partial(olmoe_7b_32x4, shared_experts=opts.moe_shared_experts)
     else:
         factory = getattr(TransformerConfig, opts.model_factory, None)
         if factory is None:
@@ -693,7 +705,7 @@ def build_config(opts, overrides: List[str]):
         num_workers=4,
     )
 
-    if is_olmoe_7b_32x4_shared2(opts):
+    if is_olmoe_7b_32x4(opts):
         train_module_config = TransformerTrainModuleConfig(
             rank_microbatch_size=opts.rank_microbatch_size,
             max_sequence_length=opts.sequence_length,
@@ -977,7 +989,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="olmo2_190M",
         help=(
             "A TransformerConfig factory, or "
-            f"{OLMOE_7B_32X4_SHARED2_FACTORY!r} for the platform-native ~7.5B 32x4 MoE recipe"
+            f"{OLMOE_7B_32X4_FACTORY!r} for the platform-native ~7.5B 32x4 MoE recipe"
         ),
     )
     parser.add_argument("--sequence-length", type=int, default=2048)
@@ -993,7 +1005,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=32,
         help=(
             "HSDP and expert-parallel shard degree for "
-            f"{OLMOE_7B_32X4_SHARED2_FACTORY}; ignored by other model factories"
+            f"{OLMOE_7B_32X4_FACTORY}; ignored by other model factories"
         ),
     )
     parser.add_argument(
@@ -1002,7 +1014,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=2,
         help=(
             "HSDP replica count for "
-            f"{OLMOE_7B_32X4_SHARED2_FACTORY}; ignored by other model factories"
+            f"{OLMOE_7B_32X4_FACTORY}; ignored by other model factories"
+        ),
+    )
+    parser.add_argument(
+        "--moe-shared-experts",
+        type=int,
+        default=0,
+        help=(
+            "Always-on shared experts for "
+            f"{OLMOE_7B_32X4_FACTORY}, each one routed-expert wide. Zero is the "
+            "base every arm is compared against; the shared-expert arm passes 2. "
+            "Ignored by other model factories"
         ),
     )
     parser.add_argument("--data-seed", type=int, default=0)
