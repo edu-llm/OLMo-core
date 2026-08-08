@@ -20,6 +20,7 @@ import socket
 import sys
 
 import pytest
+import torch
 import yaml
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -30,6 +31,11 @@ import hyper_connection_arms as arms  # noqa: E402
 import score_checkpoints as score  # noqa: E402
 import train_hyper_connections  # noqa: E402
 import train_on_corpus  # noqa: E402
+
+from olmo_core.train.callbacks.evaluator_callback import (  # noqa: E402
+    DownstreamEvaluator,
+)
+from olmo_core.utils import get_default_device  # noqa: E402
 
 
 def has_olmo_eval() -> bool:
@@ -408,6 +414,308 @@ def test_a_task_that_does_not_report_a_metric_is_skipped_rather_than_counted_as_
     accuracy = score.aggregate(results, "len_norm_v2")
     assert accuracy["groups"] == {"olmes": 0.4}
     assert accuracy["tasks"] == 1
+
+
+# ---------------------------------------------------------------------------------------
+# Where the tensors are, which is the one failure a --device cpu test cannot reach.
+# ---------------------------------------------------------------------------------------
+
+#: The device these tests select, standing in for the CUDA device a scoring cell selects.
+#:
+#: WHAT WENT WRONG ON THE CARD, BECAUSE THE APPROACH IS PICKED AGAINST IT. The scoring loop
+#: moved ``input_ids`` to the GPU and left the rest of the batch where the loader built it,
+#: on the host. ``ICLMetric.update`` reads seven more tensors out of that batch --
+#: ``continuation`` is the target of ``F.cross_entropy`` against logits that came off the
+#: model -- so the first task raised a CPU target against a ``cuda:0`` prediction, after the
+#: image had been pulled and the checkpoint fetched and the machine billed.
+#:
+#: WHY IT COULD NOT BE CAUGHT HERE BEFORE. The local smoke test runs ``--device cpu``, where
+#: the device the loader builds on and the device the scorer selects are the same device, so
+#: every tensor agrees no matter what the loop does and the test can only pass. Reaching the
+#: bug needs a run whose selected device is NOT the loader's, and on a laptop there is
+#: exactly one other device: ``meta``. Torch implements it on every machine, a host tensor
+#: moves onto it with the same ``.to()`` as any other, and an op mixing it with a host
+#: tensor raises the same ``RuntimeError`` a CUDA/CPU mix raises.
+#:
+#: A meta tensor holds no values, so nothing below reads a number out of one. That is not a
+#: limitation for this section: every question here is about placement.
+SCORING_DEVICE = torch.device("meta")
+
+
+def host_batch(instances: int = 2, ctx_len: int = 6, cont_len: int = 3):
+    """
+    One batch shaped like ``ICLMultiChoiceTaskDataset.collate_fn``'s, on the host.
+
+    EVERY VALUE IS A TENSOR AND EVERY ONE OF THEM IS READ BY THE METRIC, which is the fact
+    the bug turned on: ``collate_fn`` returns fourteen keys and ``ICLMetric.update`` indexes
+    ``continuation``, ``cont_len``, ``ctx_len``, ``cont_str_len``, ``cont_byte_len``, their
+    two no-leading-space variants, ``doc_id``, ``cont_id`` and ``label_id``. A loop that
+    moves ``input_ids`` alone has moved one fourteenth of what it was handed.
+
+    On the host, unconditionally, because that is where a ``DataLoader`` builds them however
+    the evaluator that owns it was constructed. Nothing in the harness moves a batch; the
+    caller does, and this is the test for the caller.
+
+    :param instances: Rows in the batch.
+    :param ctx_len: Context tokens before the continuation.
+    :param cont_len: Continuation tokens, which are what the metric scores.
+
+    :returns: The batch.
+    """
+    lengths = torch.full((instances,), ctx_len)
+    return {
+        "doc_id": torch.arange(instances),
+        "cont_id": torch.zeros(instances, dtype=torch.long),
+        "ctx": torch.ones(instances, ctx_len, dtype=torch.long),
+        "continuation": torch.ones(instances, cont_len, dtype=torch.long),
+        "ctx_len": lengths,
+        "dc_len": lengths,
+        "cont_len": torch.full((instances,), cont_len),
+        "cont_str_len": torch.full((instances,), cont_len * 4),
+        "cont_byte_len": torch.full((instances,), cont_len * 4),
+        "cont_str_len_no_leading_space": torch.full((instances,), cont_len * 4 - 1),
+        "cont_byte_len_no_leading_space": torch.full((instances,), cont_len * 4 - 1),
+        "input_ids": torch.ones(instances, ctx_len + cont_len, dtype=torch.long),
+        "dc_input_ids": torch.ones(instances, ctx_len, dtype=torch.long),
+        "label_id": torch.zeros(instances, dtype=torch.long),
+    }
+
+
+class StandInMetric(torch.nn.Module):
+    """
+    Stands in for ``olmo_eval.ICLMetric``: state that ``.to(device)`` moves.
+
+    A buffer rather than nothing, so that "the evaluator's own tensors are where the scorer
+    put them" is a question with an answer.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.register_buffer("updates", torch.zeros((), dtype=torch.long))
+
+    def reset(self) -> None:
+        self.updates.zero_()
+
+
+def stand_in_evaluator():
+    """
+    A ``DownstreamEvaluator`` that yields host batches and records what it is handed.
+
+    WHY A STAND-IN RATHER THAN THE REAL ONE. ``DownstreamEvaluator`` builds its task through
+    ``olmo_eval.build_task``, which needs the harness installed and the dolma2 tokenizer on
+    disk, so a test written against it skips on most machines -- and a regression test that
+    skips where the regression happens is not one. What it stands in for is asserted
+    separately, by :func:`test_the_real_metric_refuses_a_batch_that_disagrees_with_its_logits`
+    where the harness is present.
+
+    It is faithful in the three ways this section reads: batches arrive on the host, the
+    metric is placed exactly the way ``_build_data_loader`` places the real one -- falling
+    back to ``get_default_device()`` when the caller names no device, so a scorer that
+    stopped passing one is caught -- and ``compute_metrics`` returns host scalars under the
+    real one's ``"<label> (<human readable metric>)"`` keys.
+
+    :returns: ``(class, built)``, where ``built`` collects every instance constructed.
+    """
+    built = []
+
+    class StandInEvaluator:
+        metric_type_to_label = DownstreamEvaluator.metric_type_to_label
+
+        def __init__(self, *, name, task, batch_spec, tokenizer, device=None, **rest):
+            del batch_spec, tokenizer, rest
+            self.name = name
+            self.label = task
+            self.device = device
+            self.metric = StandInMetric().to(device or get_default_device())
+            self.seen = []
+            built.append(self)
+
+        def __iter__(self):
+            # Two batches, because a loop that moved the first and not the rest is a
+            # different defect from the one under test and both should fail this.
+            return iter([host_batch(), host_batch()])
+
+        def reset_metrics(self):
+            self.metric.reset()
+
+        def update_metrics(self, batch, ce_loss, logits):
+            del ce_loss
+            self.metric.updates += 1
+            self.seen.append((batch, logits))
+
+        def compute_metrics(self):
+            # Host scalars under the real keys: `ICLMetric.compute` builds its return out of
+            # Python floats, so its tensors are on the host whatever device it sits on.
+            return {
+                f"{self.label} ({self.metric_type_to_label[metric_type]})": torch.tensor(0.5)
+                for metric_type in (score.PRIMARY_METRIC, "len_norm_v2")
+            }
+
+    return StandInEvaluator, built
+
+
+class StandInModel:
+    """
+    Stands in for the loaded model: logits on the device, and the device's own refusal.
+
+    A real model has been ``.to(device)``-ed by ``main`` before ``score_task`` sees it, so it
+    raises on an input that is somewhere else. Asserting that here means this class fails the
+    same two ways the real one does rather than only the one the test is looking at.
+    """
+
+    def __init__(self, device, vocab: int = 32):
+        self.device = device
+        self.vocab = vocab
+
+    def __call__(self, input_ids):
+        assert (
+            input_ids.device == self.device
+        ), f"a model on {self.device} was handed input_ids on {input_ids.device}"
+        return torch.zeros(*input_ids.shape, self.vocab, device=self.device)
+
+
+def misplaced(batch, device) -> list:
+    """
+    Every tensor in a batch that is not on the device the scorer selected.
+
+    :param batch: What the metric was handed.
+    :param device: The device :func:`score_checkpoints.resolve_device` returned.
+
+    :returns: ``"<key> on <device>"`` for each one, so a failure names the fields rather
+        than only the count.
+    """
+    return [
+        f"{key} on {value.device}"
+        for key, value in sorted(batch.items())
+        if isinstance(value, torch.Tensor) and value.device != device
+    ]
+
+
+def scored_on(device, monkeypatch, limit_batches=None):
+    """
+    Run one task through :func:`score_checkpoints.score_task` against the stand-in harness.
+
+    :param device: The device the scorer is told to score on.
+    :param monkeypatch: pytest's, for replacing the evaluator the function imports.
+    :param limit_batches: Passed through.
+
+    :returns: ``(result, evaluator)``.
+    """
+    evaluator_class, built = stand_in_evaluator()
+    monkeypatch.setattr(
+        "olmo_core.train.callbacks.evaluator_callback.DownstreamEvaluator", evaluator_class
+    )
+    result = score.score_task(
+        StandInModel(device),
+        score.SUITE_SMOKE[0],
+        tokenizer=None,
+        device=device,
+        max_sequence_length=64,
+        rank_batch_size=64,
+        limit_batches=limit_batches,
+    )
+    assert len(built) == 1
+    return result, built[0]
+
+
+def test_every_tensor_the_metric_is_handed_is_on_the_device_the_scorer_chose(monkeypatch):
+    """
+    THE REGRESSION. This is the failure that cost a card: it is the batch, not the metric,
+    that was in the wrong place, and moving ``input_ids`` on its own left thirteen tensors
+    behind for ``ICLMetric.update`` to take a cross-entropy against.
+
+    Against the loop as it was, ``continuation`` and the twelve others report ``cpu`` while
+    the scorer selected something else, and this fails naming them. It is the same assertion
+    a CUDA run makes -- the scorer's device against the tensors' -- with a device a laptop
+    has.
+    """
+    result, evaluator = scored_on(SCORING_DEVICE, monkeypatch)
+
+    assert evaluator.seen, "score_task ran no batches, so this asserted nothing"
+    for batch, logits in evaluator.seen:
+        assert not misplaced(batch, SCORING_DEVICE)
+        assert logits.device == SCORING_DEVICE
+    assert result.metrics[score.PRIMARY_METRIC] == 0.5
+
+
+def test_the_bookkeeping_is_read_before_the_batch_leaves_the_host(monkeypatch):
+    """
+    THE SIBLING THE FIX COULD HAVE INTRODUCED, AND IT COSTS TIME RATHER THAN CORRECTNESS.
+    ``int(doc)`` on a device tensor is a host-device sync, and this one is per document per
+    batch: at 32 instances a batch over thirteen tasks that is tens of thousands of stalls
+    bought for a set of integers the loader already had on the host.
+
+    A ``meta`` tensor has no value to read at all, so a loop that counts after the move
+    raises here rather than merely running slowly.
+    """
+    result, _ = scored_on(SCORING_DEVICE, monkeypatch)
+
+    # Two batches of two rows, and both batches carry the same two doc ids: four requests
+    # against two distinct documents, which is the distinction the output document reports.
+    assert result.requests == 4
+    assert result.instances == 2
+
+
+def test_the_evaluators_own_tensors_are_on_the_device_the_scorer_chose(monkeypatch):
+    """
+    THE OTHER HALF OF THE CLASS, WHICH THIS PROGRAM HAPPENS TO GET RIGHT AND SHOULD KEEP
+    GETTING RIGHT. ``DownstreamEvaluator`` places its ``ICLMetric`` on the device it was
+    constructed with and falls back to ``get_default_device()`` when it was given none, so a
+    ``score_task`` that stopped passing ``device=`` would still work on a one-card box and
+    would put the metric on the GPU under ``--device cpu``. Auditing the evaluator's state
+    after construction is what tells the two apart without a card.
+    """
+    _, evaluator = scored_on(SCORING_DEVICE, monkeypatch)
+
+    assert evaluator.device == SCORING_DEVICE
+    held = list(evaluator.metric.buffers()) + list(evaluator.metric.parameters())
+    assert held, "the stand-in metric holds no state, so this asserted nothing"
+    for tensor in held:
+        assert tensor.device == SCORING_DEVICE
+
+
+def test_a_cpu_run_is_still_a_run_that_touches_nothing_else(monkeypatch):
+    """
+    The same path on the device the local smoke test uses, which is the case that always
+    passed and must keep passing: selecting the host means the batch is already where it
+    belongs and the move is a no-op rather than a copy.
+    """
+    device = torch.device("cpu")
+    result, evaluator = scored_on(device, monkeypatch, limit_batches=1)
+
+    assert len(evaluator.seen) == 1
+    for batch, logits in evaluator.seen:
+        assert not misplaced(batch, device)
+        assert logits.device == device
+    assert result.requests == 2
+
+
+@needs_olmo_eval
+def test_the_real_metric_refuses_a_batch_that_disagrees_with_its_logits():
+    """
+    WHAT THE STAND-IN STANDS FOR, ASSERTED AGAINST THE HARNESS ITSELF. Everything above
+    checks placement and takes it on trust that the real metric cares; this is the test that
+    says it does, and it needs no tokenizer and no task because ``ICLMetric.update`` takes a
+    batch and logits and nothing else.
+
+    The disagreement is arranged the other way round from the one on the card -- host batch,
+    logits elsewhere, rather than host batch and logits on ``cuda:0`` -- because the value
+    side is what ``meta`` can supply. The requirement asserted is the same one: the two must
+    be on one device, and ``olmo_eval/metrics.py`` line 121 is where it is enforced.
+    """
+    from olmo_eval import ICLMetric
+
+    batch = host_batch()
+    rows, sequence = batch["input_ids"].shape
+    logits = torch.zeros(rows, sequence, 32)
+
+    metric = ICLMetric(metric_type="len_norm")
+    metric.update(batch, logits)
+
+    metric = ICLMetric(metric_type="len_norm")
+    with pytest.raises(RuntimeError) as mismatch:
+        metric.update(batch, logits.to(SCORING_DEVICE))
+    assert "device" in str(mismatch.value)
 
 
 # ---------------------------------------------------------------------------------------

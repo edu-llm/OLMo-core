@@ -910,6 +910,15 @@ def score_task(
     bits-per-byte. bfloat16 carries about three significant decimal digits, so a
     log-partition summed in it would put the quantization noise on top of the effect.
 
+    THE WHOLE BATCH GOES TO THE DEVICE AND NOT ONLY ``input_ids``, which is the one thing
+    ``EvaluatorCallback.perform_eval`` does here that is easy to leave out. The metric is
+    handed the batch as well as the logits: ``ICLMetric.update`` reads ``continuation`` as
+    the target of a cross-entropy against logits that came off the model, so a batch left
+    where the loader built it is a CPU target against a CUDA prediction and torchmetrics
+    raises. It cannot be reproduced with ``--device cpu`` -- there the two agree by
+    construction -- so it costs a card to find. ``move_to_device`` is the same helper the
+    training loop uses, one line above its own ``update_metrics``.
+
     :param model: The loaded model, already in eval mode.
     :param task: The task to run.
     :param tokenizer: An ``olmo_eval.HFTokenizer``.
@@ -928,6 +937,7 @@ def score_task(
     from olmo_core.exceptions import OLMoConfigurationError
     from olmo_core.train.callbacks.evaluator_callback import DownstreamEvaluator
     from olmo_core.train.train_module import EvalBatchSizeUnit, EvalBatchSpec
+    from olmo_core.utils import move_to_device
 
     started = time.monotonic()
     batch_spec = EvalBatchSpec(
@@ -953,14 +963,17 @@ def score_task(
     for index, batch in enumerate(evaluator):
         if limit_batches is not None and index >= limit_batches:
             break
-        input_ids = batch["input_ids"].to(device)
+        # The bookkeeping is read off the loader's own tensors, before the move, because
+        # `int()` on a device tensor is a host-device sync and this one is per document
+        # rather than per batch. `doc_id` is the loader's and is always on the host here.
+        documents.update(int(doc) for doc in batch["doc_id"])
+        requests += int(batch["input_ids"].shape[0])
+        batch = move_to_device(batch, device)
         with torch.no_grad():
-            logits = model(input_ids)
+            logits = model(batch["input_ids"])
         # See the docstring. `.float()` is a no-op when the model is already fp32.
         evaluator.update_metrics(batch, None, logits.float())
         batches += 1
-        requests += int(input_ids.shape[0])
-        documents.update(int(doc) for doc in batch["doc_id"])
 
     if batches == 0:
         # `--limit-batches 0`, which is what the preflight passes: the task was built and
@@ -1230,7 +1243,14 @@ def say(line: str) -> None:
 
 def resolve_device(requested: Optional[str]):
     """
-    The torch device to score on.
+    The torch device to score on, with its index filled in.
+
+    CONCRETE RATHER THAN ``cuda``, because the index is what everything downstream is
+    compared against. ``torch.device("cuda")`` carries ``index=None`` while every tensor
+    that lands on it reports ``cuda:0``, so "is this tensor where the scorer put it" is not
+    an equality anybody can write, and the run document would name card 0 whatever card the
+    process was actually given. Both differences are invisible on a laptop and invisible on
+    a one-card shape, which is every shape this job has been run on so far.
 
     :param requested: ``--device``, or ``None`` to take a GPU if there is one.
 
@@ -1240,7 +1260,10 @@ def resolve_device(requested: Optional[str]):
 
     if requested is None:
         requested = "cuda" if torch.cuda.is_available() else "cpu"
-    return torch.device(requested)
+    device = torch.device(requested)
+    if device.type == "cuda" and device.index is None:
+        device = torch.device("cuda", torch.cuda.current_device())
+    return device
 
 
 def main() -> None:
@@ -1256,6 +1279,7 @@ def main() -> None:
     import torch
 
     from olmo_core.config import DType
+    from olmo_core.utils import gc_cuda
 
     arm, seed, step, provenance = resolve_target(opts)
     say(f"cell         arm {arm}, seed {seed}, step {step}, from {provenance}")
@@ -1296,6 +1320,18 @@ def main() -> None:
     say(f"tokenizer    {tokenizer_path}")
 
     device = resolve_device(opts.device)
+    say(f"device       {device}, {opts.param_dtype}")
+    if device.type != "cuda" and opts.device is None:
+        # A GPU shape whose driver or CUDA_VISIBLE_DEVICES is wrong lands here, and the
+        # fallback is silent: the job scores correctly and takes hours instead of minutes,
+        # then hits the wall clock having spent the whole reservation. Not a refusal --
+        # `--device cpu` is a real thing to want -- but not a thing to find out from the
+        # `"device"` field of a document that was never written.
+        say(
+            "             NOTE: nothing asked for a device and torch can see no CUDA one, "
+            "so this is scoring on the CPU. On a GPU shape that is a driver or a "
+            "visibility problem rather than a choice."
+        )
     dtype = DType(opts.param_dtype).as_pt()
     if device.type == "cuda":
         from olmo_core.exceptions import OLMoConfigurationError
@@ -1351,6 +1387,12 @@ def main() -> None:
             limit_batches=opts.limit_batches,
         )
         results.append(result)
+        # Between tasks, as `EvaluatorCallback.perform_eval` does between evaluators. Each
+        # task holds a tokenized dataset and a metric of its own, and the logits of one
+        # batch at 8,192 tokens over a 100,352-token vocabulary are 1.6 GB in bfloat16 and
+        # another 3.3 GB once `.float()` has copied them. Thirteen tasks of that arriving in
+        # different shapes is how a card that has the room fragments out of it anyway.
+        gc_cuda()
         primary = result.metrics.get(PRIMARY_METRIC)
         log.info(
             "%s: %s=%s (%d instances, %.1fs)",
@@ -1377,7 +1419,7 @@ def main() -> None:
         "warnings": warnings,
         "tokenizer": tokenizer_path,
         "param_dtype": opts.param_dtype,
-        "device": torch.cuda.get_device_name(0) if device.type == "cuda" else "cpu",
+        "device": torch.cuda.get_device_name(device) if device.type == "cuda" else "cpu",
         "torch": torch.__version__,
         "parameters": sum(parameter.numel() for parameter in model.parameters()),
         "load_seconds": loaded,

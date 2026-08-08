@@ -1,5 +1,6 @@
-# THROWAWAY. One cell, about $1.61, to answer one question before fifteen cells depend on it:
-# can a checkpoint written by eight ranks be read back by one?
+# THROWAWAY, AND THIS IS ITS SECOND RUN. One cell, about $1.61, to answer one question
+# before fifteen cells depend on it: can a checkpoint written by eight ranks be read back
+# by one?
 #
 #   edullm submit --experiment hyper-connections-370m --dataset none \
 #     --team input-core --spec .edullm/run.checkpoint-read-test.yaml \
@@ -9,23 +10,58 @@
 # corpus. It reads one checkpoint and a task suite that is inside the image.
 #
 # ---------------------------------------------------------------------------------------
-# WHAT IS UNPROVEN, AND WHY IT IS WORTH $1.61 TO PROVE IT NOW
+# WHAT THE FIRST RUN PROVED, WHAT IT CAUGHT, AND WHY IT IS BEING RUN AGAIN UNCHANGED
+# ---------------------------------------------------------------------------------------
+#
+# PROVED, AND NOTHING BELOW SHOULD BE READ AS DOUBTING IT AGAIN. The first run reached
+# `score_task`'s `evaluator.update_metrics(...)` on the first task, which is downstream of
+# every question this cell was bought to answer: the checkpoint eight FSDP ranks wrote was
+# read at world size 1, the rebuilt model agreed with the config.json the run had written
+# beside its weights, the model produced logits on cuda:0, and `copycolors_10way_fast` was
+# built inside the image from package data with no network. That was the risk. It is retired.
+#
+# CAUGHT, AND IT IS WHY THERE IS A SECOND RUN. The scoring loop moved `input_ids` to the GPU
+# and left the other thirteen tensors of the batch where the loader had built them, on the
+# host. `ICLMetric.update` reads `continuation` out of that batch as the target of a
+# cross-entropy against the model's logits, so it raised a CPU target against a cuda:0
+# prediction and the cell died in the first task with nothing scored. Fixed by moving the
+# whole batch, which is what `EvaluatorCallback.perform_eval` does one line above its own
+# `update_metrics` call.
+#
+# THE TEST SUITE COULD NOT HAVE CAUGHT IT AND NOW CAN. The local smoke test runs
+# `--device cpu`, where the loader's device and the scorer's are the same device and every
+# tensor agrees whatever the loop does, so that failure was unreachable on a laptop by
+# construction. `test_score_checkpoints.py` now selects `meta` -- a device every machine has,
+# that a host tensor moves onto like any other, and that raises the same way on a mixed op --
+# and audits every tensor the metric is handed against the device the scorer chose. It fails
+# against the loop as it was, naming all thirteen.
+#
+# NOTHING ABOUT WHAT THIS SCORES HAS CHANGED, deliberately: same one cell, same `--suite
+# smoke`, same `--limit-batches 20`, same step500 of cell 0 of the baseline. A retest that
+# also moved the target would not be a retest.
+#
+# ---------------------------------------------------------------------------------------
+# WHAT WAS UNPROVEN WHEN THIS WAS WRITTEN, AND WHY IT WAS WORTH $1.61 TO PROVE
 # ---------------------------------------------------------------------------------------
 #
 # The tranche trains on gpu-8xa100 and writes its checkpoints from EIGHT ranks under FSDP.
-# The downstream scoring job reads them on ONE gpu-1xl4. That asymmetry has never been
+# The downstream scoring job reads them on ONE gpu-1xl4. That asymmetry had never been
 # exercised on this branch.
 #
-# The write half is not in doubt. `load_model_and_optim_state` is documented as agnostic to
+# The write half was not in doubt. `load_model_and_optim_state` is documented as agnostic to
 # the distributed topology, it goes through `dist_cp.state_dict_loader.load`, and another
 # team's frontload-cl runs wrote eight-rank distributed checkpoints twenty-six times per run
-# at this model size to this bucket yesterday. What is untested is the read at world size 1,
-# and the cost of testing it after the fact is twenty trained cells and no way to score them.
+# at this model size to this bucket yesterday. What was untested was the read at world size
+# 1, and the cost of testing it after the fact is twenty trained cells and no way to score
+# them.
 #
-# THE FAILURE THIS IS REALLY FOR IS THE QUIET ONE. A load that raises is free to diagnose.
-# A load that silently populates nothing leaves a randomly-initialized model that scores at
-# chance -- which looks like a 370M model doing badly on hard tasks, not like a bug, and
-# which would be believed. So the test is read against a number, not against an exit code:
+# THE FAILURE THIS IS REALLY FOR IS THE QUIET ONE, AND IT IS THE WHOLE OF WHAT THE SECOND
+# RUN IS BUYING. A load that raises is free to diagnose, and the first run showed this one
+# does not raise. A load that silently populates nothing leaves a randomly-initialized model
+# that scores at chance -- which looks like a 370M model doing badly on hard tasks, not like
+# a bug, and which would be believed. The first run died before any metric was computed, so
+# it produced no number and this question is still open. It is read against a number, not
+# against an exit code:
 #
 #   an untrained model scores gold-continuation BPB near ln(100352) / (ln 2 x 4.57 bytes
 #     per token), which is about 3.6 bits per byte
@@ -60,7 +96,9 @@
 # Proves: an 8-rank distributed write loads at world size 1 with no missing or unexpected
 # keys; the rebuilt model config agrees with the config.json the run wrote beside its
 # weights (the scorer's exit 75); the task data really is inside the image with no network;
-# and the whole load-score-report path emits its JSON document.
+# and the whole load-score-report path emits its JSON document. The first run reached the
+# first metric update, so of that list only the last clause is still owed -- and the number
+# it carries, which is the one above.
 #
 # Does not prove: the h2b suite's runtime, because --suite smoke is two tasks and
 # --limit-batches truncates them. A truncated task is not a score and the output document
