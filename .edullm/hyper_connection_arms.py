@@ -15,15 +15,20 @@ setups, one per arm.
 An arm is applied to a size rather than being its own size, so the same eleven arms run at the
 rehearsal size and at 370M without a second table to keep in sync.
 
-WHAT THE FIRST TRANCHE FUNDS, AND WHY IT IS THREE ARMS RATHER THAN SEVEN.
+WHAT THE FIRST TRANCHE FUNDS, AND WHY IT IS FOUR ARMS RATHER THAN SEVEN.
 
-Fifteen runs: ``baseline`` x5, ``faithful`` x5, ``output-only`` x5, and zero everywhere else.
-That buys exactly two hypotheses, both at full power and both against the same noise floor:
+Twenty runs: ``baseline`` x5, ``faithful`` x5, ``output-only`` x5, ``mhc`` x5, and zero
+everywhere else. That buys exactly three hypotheses, all at full power and all against the
+same noise floor:
 
   H1   replication          arm 2 against arm 1, five seeds against five.
   H2a  implementation       arm 3 against arm 2, five seeds against five. Whether the
                             field's negative result is an artifact of a reimplementation
                             that kept the output mixing and dropped the input map.
+  H5   the constraint       arm 9 against arm 2, five seeds against five. Whether pinning
+                            the lane-mixing matrix's spectral radius at 1 is what rescues
+                            the method. See below for why this arm was bought with the
+                            money a sixth seed would have cost.
 
 FIVE AND NOT THE THREE THAT STOOD HERE, AND THE MONEY CAME OUT OF THE HORIZON RATHER THAN
 OUT OF THE BUDGET. Three arms at three seeds was priced on the assumption that seed sigma
@@ -46,21 +51,29 @@ errors of the contrast -- was written against. It takes the pooled variance esti
 df = 12 rather than the df = 6 a triple design gave, and the baseline's own to df = 4 rather
 than df = 2.
 
-THE FIFTEEN RUN AS THREE SUBMISSIONS AND NOT ONE, AND THAT IS A PRE-REGISTRATION CONSTRAINT
+THE TWENTY RUN AS FOUR SUBMISSIONS AND NOT ONE, AND THAT IS A PRE-REGISTRATION CONSTRAINT
 RATHER THAN A PLATFORM ONE. The analysis plan forbids submitting a treatment arm before the
 noise-floor table has numbers in it, and the per-source inverse-variance weights have to be
 frozen from the baseline alone or they are a researcher degree of freedom. So ``baseline``
-went first on its own (stage 1), and ``faithful`` and ``output-only`` follow as stage 2. Each
-stage is a five-cell ``--fanout-index-parameter seed`` fan-out with its arm in the command;
-:data:`STAGE_SPECS` is the three specs and what has to be identical across them.
+went first on its own (stage 1), ``faithful`` and ``output-only`` follow as stage 2, and
+``mhc`` as stage 3. Each stage is a five-cell ``--fanout-index-parameter seed`` fan-out with
+its arm in the command; :data:`STAGE_SPECS` is the four specs and what has to be identical
+across them.
 
-``mhc`` / H5 IS DEFERRED TO A SECOND TRANCHE AND IS NOT ABANDONED. It is the best-designed
-hypothesis in this module: the Sinkhorn-Knopp normalization towards the Birkhoff polytope is
-a mechanism claim with a spectral prediction the monitor already instruments, and it ships in
-DeepSeek V4, so a null there is publishable and a positive is load-bearing. It is last in
-:data:`CUT_ORDER` for that reason -- the last thing cut and the first thing a second tranche
-restores. Dropping it silently would be the loss; dropping it in writing, with the three runs
-it needs already specified and tested, costs a number and not a design.
+``mhc`` / H5 IS FUNDED, AND IT WAS BOUGHT WITH MONEY A SIXTH SEED WOULD HAVE COST. It was
+last in :data:`CUT_ORDER` -- the last thing cut and the first thing a restoration buys -- and
+a budget grant above the original $4,000 restored it rather than widening the arms already
+running. The arithmetic is not close. A sixth seed on three arms buys about 9% off the
+standard error of each contrast and no new hypothesis; five seeds of this arm buy a third
+hypothesis at the same power as the other two.
+
+H5 IS ALSO THE ONLY ARM IN THE MODULE WHOSE NULL IS READABLE, which is what makes it worth
+more than precision on the arms that have one. mHC's claim is mechanical -- the Sinkhorn
+projection pins the lane-mixing matrix's spectral radius at 1 by construction -- and the
+monitor already records that radius per layer. So a null here separates "the constraint was
+inert" from "the constraint held and the effect is small", because the instrument says which
+happened. Every other arm's null is one number that could be either. It ships in DeepSeek V4,
+so both outcomes are worth writing down.
 
 ``output-only`` IS ONLY WORTH RUNNING BECAUSE OF COMMIT ``b7983ea9``. Before that commit the
 arm replaced both the learned input map and the paper's fixed staggered one-hot read, which
@@ -256,9 +269,11 @@ ARMS: Dict[str, Arm] = {
         "Sinkhorn-Knopp, which at eight sweeps lands column-stochastic rather than doubly "
         "stochastic and carries the spectral radius mHC argues from either way.",
         isolates="H5. Whether the constraint is what rescues the method. It ships in DeepSeek "
-        "V4. DEFERRED TO A SECOND TRANCHE AND NOT ABANDONED: it is last in CUT_ORDER, which "
-        "makes it the first three runs a second tranche buys.",
-        seeds=0,
+        "V4. FUNDED AS STAGE 3, restored from the end of CUT_ORDER by a budget grant above "
+        "the original $4,000, and worth more than a sixth seed on the arms already running "
+        "because its null is readable: the monitor measures the radius the mechanism pins, so "
+        "an absent effect can be told apart from an absent mechanism.",
+        seeds=5,
         hyper_connections=_hc(doubly_stochastic=True),
     ),
     "tied-faithful": Arm(
@@ -282,11 +297,19 @@ ARMS: Dict[str, Arm] = {
 #: The order to cut arms in if the budget does not stretch, and therefore the order a second
 #: tranche restores them in, read from the end.
 #:
-#: Eight of the eleven arms are now unfunded, and this list is all eight of them followed by
-#: nothing: the three that remain -- ``baseline``, ``faithful``, ``output-only`` -- are the
-#: tranche, and a test asserts that whatever carries zero seeds is exactly the head of this
+#: Seven of the eleven arms are now unfunded, and this list is all seven of them followed by
+#: nothing: the four that remain -- ``baseline``, ``faithful``, ``output-only``, ``mhc`` -- are
+#: the tranche, and a test asserts that whatever carries zero seeds is exactly the head of this
 #: list. That is what stops the budget being balanced by quietly cutting something the plan
 #: never nominated for cutting.
+#:
+#: ``mhc`` USED TO BE THE LAST ENTRY AND HAS LEFT THIS LIST BY BEING FUNDED, which is the
+#: mechanism this ordering was written for working exactly once. It was placed last so that a
+#: restoration would reach it first, a budget grant above the original $4,000 arrived, and it
+#: was the first thing bought -- ahead of a sixth seed on the arms already running, which the
+#: module docstring gives the arithmetic for. What the list now records is that everything
+#: still in it was cut in an order fixed in advance, and that the one restoration so far went
+#: to the arm the order nominated.
 #:
 #: The order, and why each one is where it is:
 #:
@@ -298,14 +321,11 @@ ARMS: Dict[str, Arm] = {
 #:   ``decay-everything``      Cause 3. One run at one seed could never have separated the
 #:                             parameter-group split from the seed it drew.
 #:   ``n1``                    The seesaw control. Reconnaissance, no claim attached.
-#:   ``no-output-init``        Cause 2 / H3. A real hypothesis, and the first non-mhc thing a
-#:                             second tranche should want -- but it asks whether a scaling is
-#:                             load-bearing, which only means something once H1 says the
-#:                             method does anything at all.
-#:   ``mhc``                   H5. LAST, DELIBERATELY. It is the best-designed hypothesis in
-#:                             the module and the three runs it needs are specified, tested
-#:                             and iso-parameter today. Being last here is the record that it
-#:                             was deferred rather than dropped.
+#:   ``no-output-init``        Cause 2 / H3. LAST, and therefore the next thing a further
+#:                             grant buys. A real hypothesis, and the strongest of the seven
+#:                             that remain -- but it asks whether a scaling is load-bearing,
+#:                             which only means something once H1 says the method does
+#:                             anything at all.
 CUT_ORDER = [
     "n8",
     "n2",
@@ -314,7 +334,6 @@ CUT_ORDER = [
     "decay-everything",
     "n1",
     "no-output-init",
-    "mhc",
 ]
 
 #: The arms the first tranche actually runs, derived rather than written down twice.
@@ -333,18 +352,19 @@ FUNDED = [name for name, arm in ARMS.items() if arm.seeds > 0]
 #:
 #: THIS IS NOT THE PATH THE FIRST TRANCHE ACTUALLY TOOK, AND IT IS KEPT ON PURPOSE. The
 #: pre-registration forbids submitting a treatment arm before the noise floor is measured, so
-#: the fifteen went out as three five-cell ``--fanout-index-parameter seed`` submissions
+#: the twenty went out as four five-cell ``--fanout-index-parameter seed`` submissions
 #: (:data:`STAGE_SPECS`) with the arm written into each command. An unstaged tranche -- the
 #: next module, or a re-run of this one once H1 has an answer -- wants this table and the one
 #: submission it buys instead. What it costs to keep is a table and its tests; what it would
 #: cost to reconstruct after the fact is the reasoning above.
 #:
 #: DERIVED FROM THE SEED COUNTS RATHER THAN WRITTEN OUT, so an arm that gains or loses a seed
-#: moves the cell list and ``total_runs()`` together and cannot move only one of them. That
-#: is what happened when the design went from three seeds to five: nothing here was edited
-#: and the cell list went from nine entries to fifteen. The order is the arm table's own,
-#: which is the pre-registration's numbering, so cell 0 is ``baseline`` seed 0 and the last
-#: cell is ``output-only`` at its highest seed.
+#: moves the cell list and ``total_runs()`` together and cannot move only one of them. That is
+#: what happened twice: the design went from three seeds to five and the cell list went from
+#: nine entries to fifteen, then ``mhc`` was funded and it went to twenty, and nothing here was
+#: edited either time. The order is the arm table's own, which is the pre-registration's
+#: numbering, so cell 0 is ``baseline`` seed 0 and the last cell is ``mhc`` at its highest
+#: seed.
 TRANCHE_CELLS: List[Tuple[str, int]] = [
     (name, seed) for name, arm in ARMS.items() for seed in range(arm.seeds)
 ]
@@ -688,15 +708,56 @@ TRANCHE_WARMUP_FRACTION = 0.02
 #: finding out at step 400 costs about an hour and finding out at the end costs the arm. It
 #: is after warmup on both horizons and inside the first checkpoint interval on both.
 #:
-#: IT IS INERT ON ``baseline``, WHICH IS WHAT LETS ONE COMMAND SERVE ALL NINE CELLS.
+#: IT IS INERT ON ``baseline``, WHICH IS WHAT LETS ONE COMMAND SERVE ALL FIVE OF ITS CELLS.
 #: ``train_hyper_connections.train`` attaches the monitor only for an arm with lanes, so the
-#: three baseline cells parse this flag and never build a callback that could read it.
+#: five baseline cells parse this flag and never build a callback that could read it.
 #:
 #: The guard passes on a majority of blocks and then disables itself. At 370M the probe had
 #: fourteen of sixteen blocks over the floor against the half it needs, so the margin is wide;
 #: the two that were under are blocks 01 and 02, and hyper-connections.md records why a
 #: shallow dead zone is a finding about depth rather than a reason to abort.
+#:
+#: IT MUST NOT BE SET ON ``mhc``, AND THAT IS MEASURED RATHER THAN FEARED. See
+#: :data:`MHC_LANE_DISPERSION_AT_GATE`: the Sinkhorn projection contracts the lane mixing
+#: towards the lane mean, which is the mechanism working, and lane dispersion is exactly the
+#: statistic that contraction compresses. The floor was calibrated against unconstrained
+#: mixing, so on this arm the guard reads the constraint as an absence of one and would abort
+#: all five cells at step 400.
 TRANCHE_FAIL_CLOSED_BY_STEP = 400
+
+#: What the guard above would read on the ``mhc`` arm, and therefore why that arm's stage does
+#: not set it. Measured at the rehearsal size on CPU, eight blocks, 400 AdamW steps at the
+#: tranche's learning rate and weight decay, dispersion computed the way
+#: ``HyperConnectionMonitorCallback._activation_hook`` computes it.
+#:
+#:   step 50    ``mhc`` 1.1e-03 .. 3.7e-03   ``faithful`` 6.2e-03 .. 3.4e-02
+#:   step 200   ``mhc`` 7.9e-04 .. 5.2e-03   ``faithful`` 1.4e-02 .. 8.5e-02
+#:   step 400   ``mhc`` 5.2e-04 .. 4.1e-03   ``faithful`` 2.1e-02 .. 1.1e-01
+#:
+#: Against a floor of 5e-03 on half the blocks that is 0 of 8 for ``mhc`` at every step
+#: measured and 8 of 8 for ``faithful``. THE TREND IS THE PART THAT SETTLES IT: ``faithful``
+#: rises by a factor of five over those steps and ``mhc`` falls, so this is not a slow start
+#: that another 400 steps would resolve.
+#:
+#: WHY IT HAPPENS, WHICH IS THE REASON THIS IS NOT A BUG IN THE ARM. Sinkhorn-Knopp normalizes
+#: the mixing matrix towards row and column sums of 1, and a nonnegative matrix with unit sums
+#: is close to an averaging operator: applying it repeatedly pulls the lanes together. Lane
+#: dispersion measures how far the lanes sit from their own mean. So the arm that constrains
+#: the mixing reads lower on this statistic *because* the constraint binds, and an arm that
+#: reads 4e-03 here is not an arm whose lanes are one vector -- ``faithful`` at 2e-02 and
+#: ``mhc`` at 4e-03 are both mixing, one of them under a constraint.
+#:
+#: The floor's own docstring says it was set from the rehearsal, which is the ``faithful``
+#: mechanism, and calls the quantity bimodal with nothing in the middle. It is bimodal for
+#: unconstrained mixing. This arm lands in the middle of that empty band, which is what a
+#: threshold calibrated on one mechanism does when it meets another.
+#:
+#: WHAT IS GIVEN UP BY OMITTING IT: on this arm alone, a genuinely dead run is billed for
+#: eighteen hours instead of one. That is the cheaper mistake by a wide margin -- the guard
+#: would cost all five cells with certainty, and what replaces it is the radius the monitor
+#: records at the same interval, which on this arm is pinned at 1 by construction and is the
+#: quantity H5 is actually about.
+MHC_LANE_DISPERSION_AT_GATE = 4.1e-3
 
 #: The throughput probe, which is the other thing ``.edullm/run.yaml`` is ever allowed to be.
 #:
@@ -861,7 +922,7 @@ class StagedTranche:
     an editing session.
 
     NEITHER IS SUBMITTABLE AS IT STANDS AND BOTH ARE KEPT ANYWAY. The tranche went out as the
-    three five-cell stages in :data:`STAGE_SPECS` instead, for the pre-registration reason
+    four five-cell stages in :data:`STAGE_SPECS` instead, for the pre-registration reason
     :class:`StageSpec` gives, and both of these files still say nine cells -- which is what the
     arm table said when they were written and no longer is. What survives them is the shape:
     an unstaged tranche is one submission, one approval and one commit for every cell, and the
@@ -1014,7 +1075,7 @@ STAGED_TRANCHES: Dict[str, StagedTranche] = {
 #: disagreed with the arm table would run a different design than the one that was priced.
 STAGE_CELLS = ARMS["baseline"].seeds
 
-#: The ``--hours`` every stage is submitted under, and it is the same number for all three.
+#: The ``--hours`` every stage is submitted under, and it is the same number for all four.
 #:
 #: 19 covers a 17.8-hour cell -- 6,000 steps at the measured 10.32 s/step is 17.2 hours, and
 #: the twelve evaluations, thirteen checkpoints, 120 monitor firings and the container's
@@ -1039,18 +1100,18 @@ STAGE_ATTEMPTS = 2
 
 @dataclass(frozen=True)
 class StageSpec:
-    """One of the three submissions the fifteen-run tranche actually went out as.
+    """One of the four submissions the twenty-run tranche actually went out as.
 
-    THE TRANCHE IS FIFTEEN CELLS AND WAS SUBMITTED AS THREE FIVE-CELL FAN-OUTS, and the split
+    THE TRANCHE IS TWENTY CELLS AND WAS SUBMITTED AS FOUR FIVE-CELL FAN-OUTS, and the split
     is a pre-registration constraint rather than a platform one. The analysis plan forbids
     submitting a treatment arm before the noise-floor table has numbers in it, because two of
-    the things stage 2 is analysed against -- sigma-hat and the per-source inverse-variance
-    weights -- cannot be estimated from a treatment arm without circularity. So ``baseline``
-    went first and alone, and the treatments follow once those are frozen.
+    the things the treatments are analysed against -- sigma-hat and the per-source
+    inverse-variance weights -- cannot be estimated from a treatment arm without circularity.
+    So ``baseline`` went first and alone, and the treatments follow once those are frozen.
 
-    WHAT THE SPLIT COSTS, AND WHAT THIS CLASS IS FOR. In one fifteen-cell submission every
+    WHAT THE SPLIT COSTS, AND WHAT THIS CLASS IS FOR. In one twenty-cell submission every
     cell is the same command at the same commit, and nothing can drift because there is
-    nothing to drift between. Three submissions at three commits is three chances for a
+    nothing to drift between. Four submissions at up to four commits is four chances for a
     default to move underneath the contrast, with nothing reporting it: the loss curves of a
     baseline trained at one weight decay and a treatment trained at another look exactly like
     the loss curves of a baseline and a treatment. ``STAGE_SPECS`` and the test that walks it
@@ -1059,8 +1120,8 @@ class StageSpec:
     Every stage is a ``--fanout-index-parameter seed`` fan-out with its arm in the command,
     including the treatments, and NOT the ``arm-and-seed`` path :data:`TRANCHE_CELLS` serves.
     Both resolve the same seeds, but stage 1 has already run through ``resolve_seed``, and
-    fifteen cells assigned their replicate by one mechanism is worth more in an experiment
-    whose output is a noise floor than one saved approval is.
+    twenty cells assigned their replicate by one mechanism is worth more in an experiment
+    whose output is a noise floor than the approvals it saves are.
     """
 
     spec: str
@@ -1070,7 +1131,16 @@ class StageSpec:
     """Which arm every cell of this stage runs. It is in the command, not in the index."""
 
     stage: int
-    """1 for the noise floor, 2 for the treatments. Stage 2 may not be submitted first."""
+    """
+    Which submission this is, in the order the pre-registration allows them to go out in.
+
+    1 for the noise floor, 2 for the two treatments H1 and H2a rest on, 3 for ``mhc``. Only
+    the 1-before-everything-else ordering is a constraint: sigma-hat and the inverse-variance
+    weights come from the baseline alone, so no treatment may precede it. 3 is a separate
+    number from 2 because ``mhc`` was funded later, by a grant rather than by the original
+    budget, and a stage number that records when a submission was decided is worth more here
+    than one that records only that it is not the baseline.
+    """
 
     run_id: Optional[str] = None
     """The platform's run id, once this stage has been submitted. ``None`` until then."""
@@ -1106,14 +1176,14 @@ class StageSpec:
         return self.cells * self.hours_per_cell * hourly_rate_usd
 
 
-#: The three stage submissions, keyed by the arm each one runs.
+#: The four stage submissions, keyed by the arm each one runs.
 #:
-#: ONE SOURCE OF TRUTH FOR THREE FILES THAT MUST AGREE ON EVERYTHING BUT ONE WORD.
-#: ``test_the_three_stage_specs_differ_in_the_arm_and_in_nothing_else`` parses all three
-#: commands through the real parser and compares every resolved option, so a hand-edit to one
-#: arm's command fails on a laptop. Nothing downstream would catch it: ``edullm check`` prices
-#: a ceiling out of the workload profile and never reads the command's hyperparameters, and
-#: two arms trained at different settings produce loss curves that look like two arms.
+#: ONE SOURCE OF TRUTH FOR FOUR FILES THAT MUST AGREE ON EVERYTHING BUT ONE WORD.
+#: ``test_the_stage_specs_differ_in_the_arm_and_in_nothing_else`` parses all four commands
+#: through the real parser and compares every resolved option, so a hand-edit to one arm's
+#: command fails on a laptop. Nothing downstream would catch it: ``edullm check`` prices a
+#: ceiling out of the workload profile and never reads the command's hyperparameters, and two
+#: arms trained at different settings produce loss curves that look like two arms.
 STAGE_SPECS: Dict[str, StageSpec] = {
     "baseline": StageSpec(
         spec="run.baseline-stage.yaml",
@@ -1126,10 +1196,11 @@ STAGE_SPECS: Dict[str, StageSpec] = {
     ),
     "faithful": StageSpec(spec="run.faithful-stage.yaml", arm="faithful", stage=2),
     "output-only": StageSpec(spec="run.output-only-stage.yaml", arm="output-only", stage=2),
+    "mhc": StageSpec(spec="run.mhc-stage.yaml", arm="mhc", stage=3),
 }
 
 
-#: What stage 1's command resolved to, and therefore what all fifteen cells must be compared
+#: What stage 1's command resolved to, and therefore what all twenty cells must be compared
 #: at. Read out of ``run.baseline-stage.yaml`` through the real parser at commit ``38b665919``,
 #: which is the commit the five admitted cells were built from.
 #:
@@ -1172,7 +1243,7 @@ STAGE_PINNED: Dict[str, object] = {
 #: The resolved options a stage spec may differ from the other two in, and why each one is
 #: allowed to.
 #:
-#: EVERYTHING NOT IN HERE HAS TO BE IDENTICAL ACROSS ALL THREE STAGES, and that is what the
+#: EVERYTHING NOT IN HERE HAS TO BE IDENTICAL ACROSS ALL FOUR STAGES, and that is what the
 #: diff test enforces. An allowlist rather than a list of things to check, because the failure
 #: is a flag nobody thought about: a checked list silently permits whatever is not on it,
 #: which is precisely the flag a later commit adds.
@@ -1184,12 +1255,19 @@ STAGE_CONTRAST_EXEMPT: Dict[str, str] = {
     "fail_closed_by_step": (
         "An abort threshold and not a training setting: it changes no parameter, no datum "
         "and no schedule, only whether a run whose lanes never differentiated is killed at "
-        "step 400 instead of billed for eighteen hours. It is UNREACHABLE on the baseline -- "
+        "step 400 instead of billed for eighteen hours. Two of the four stages omit it and "
+        "for two different reasons, and the diff test asserts both rather than taking this "
+        "paragraph's word for either. On BASELINE it is UNREACHABLE -- "
         "train_hyper_connections.train attaches HyperConnectionMonitorCallback only when "
-        "arm.hyper_connections is not None, and the baseline's is None -- so setting it there "
-        "would have changed nothing, and the stage-1 command that omits it and a stage-2 "
-        "command that sets it describe the same baseline. The diff test asserts that "
-        "unreachability rather than taking this paragraph's word for it."
+        "arm.hyper_connections is not None, and the baseline's is None -- so the stage-1 "
+        "command that omits it and a stage-2 command that sets it describe the same run. On "
+        "MHC it is reachable and would fire: the Sinkhorn projection contracts the lane "
+        "mixing towards the lane mean, lane dispersion is the statistic that contraction "
+        "compresses, and the floor was calibrated against unconstrained mixing, so the guard "
+        "reads a working constraint as a missing mechanism and aborts all five cells at step "
+        "400. MHC_LANE_DISPERSION_AT_GATE carries the measurement. Neither omission touches "
+        "the contrast, because a threshold that never fires and a threshold that is absent "
+        "train the same model."
     ),
 }
 

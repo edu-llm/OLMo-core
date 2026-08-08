@@ -1,0 +1,180 @@
+# STAGE 3 OF THE TRANCHE, ARM 9 OF 11: five seeds of mHC x4, and nothing else.
+#
+#   edullm check  --json --experiment hyper-connections-370m --dataset regmix-10b-v1 \
+#     --team input-core --spec .edullm/run.mhc-stage.yaml \
+#     --hours 19 --attempts 2 --fanout-size 5 --fanout-index-parameter seed
+#   edullm submit       --experiment hyper-connections-370m --dataset regmix-10b-v1 \
+#     --team input-core --spec .edullm/run.mhc-stage.yaml \
+#     --hours 19 --attempts 2 --fanout-size 5 --fanout-index-parameter seed
+#
+# This is arm 9 in the pre-registration: hyper-connections with the lane-mixing matrix pushed
+# towards the Birkhoff polytope by Sinkhorn-Knopp, as mHC (arXiv 2512.24880) does and as
+# DeepSeek V4 ships. It is H5, and H5 asks whether the constraint is what rescues the method.
+# It is read against run.faithful-stage.yaml -- arm 9 minus arm 2 is the constraint and nothing
+# else -- and against the same baseline noise floor as every other contrast in the module.
+#
+# ---------------------------------------------------------------------------------------
+# WHY THIS ARM WAS BOUGHT, AND WHY IT IS A FOURTH STAGE RATHER THAN A SIXTH SEED
+# ---------------------------------------------------------------------------------------
+#
+# It was last in hyper_connection_arms.CUT_ORDER, which is the position an arm is put in when
+# it is meant to be the first thing a restoration buys, and a budget grant above the original
+# $4,000 restored it. The alternative use of the same money was a sixth seed on the three arms
+# already funded, which buys sqrt(5/6) -- about 9% -- off the standard error of each contrast
+# and no new hypothesis.
+#
+# H5 IS ALSO THE ONLY HYPOTHESIS IN THE MODULE WHOSE NULL IS READABLE, and that is worth more
+# than 9%. mHC's claim is mechanical: the projection pins the spectral radius of the mixing
+# matrix at 1 by construction. HyperConnectionMonitorCallback already records that radius per
+# layer per block at --monitor-interval. So if this arm shows no loss difference, the monitor
+# says which kind of nothing it was -- a constraint that held and did not matter, or a
+# constraint that never bound. Every other arm's null is a single number that could be either.
+#
+# ---------------------------------------------------------------------------------------
+# THE ONE THING THIS FILE DOES DIFFERENTLY FROM THE OTHER TWO TREATMENTS, AND IT IS MEASURED
+# ---------------------------------------------------------------------------------------
+#
+# THERE IS NO --fail-closed-by-step HERE, AND SETTING IT WOULD ABORT ALL FIVE CELLS AT STEP
+# 400. This is the one flag that could not be copied from run.faithful-stage.yaml, and it took
+# a measurement to find out.
+#
+# The guard reads lane dispersion -- how far a block's lanes sit from their own mean -- and
+# refuses a run in which fewer than half the blocks clear 5e-03, on the argument that lanes
+# which never separated make the arm the baseline with dead parameters. Measured at the
+# rehearsal size over 400 AdamW steps at this tranche's learning rate and weight decay, with
+# dispersion computed the way the callback computes it:
+#
+#             step 50              step 200             step 400
+#   mhc       1.1e-03..3.7e-03     7.9e-04..5.2e-03     5.2e-04..4.1e-03    0 of 8 blocks
+#   faithful  6.2e-03..3.4e-02     1.4e-02..8.5e-02     2.1e-02..1.1e-01    8 of 8 blocks
+#
+# The trend is what settles it rather than the level: faithful rises by a factor of five over
+# those steps and mhc falls, so this is not a slow start that another four hundred steps would
+# resolve.
+#
+# THE REASON IS THE MECHANISM AND NOT A FAULT IN THE ARM. Sinkhorn-Knopp drives the mixing
+# matrix towards unit row and column sums, and a nonnegative matrix with unit sums is close to
+# an averaging operator, so applying it pulls the lanes together. Lane dispersion is precisely
+# what that contraction compresses. The floor's own docstring says it was calibrated from the
+# rehearsal -- which is the faithful mechanism -- and calls the statistic bimodal with nothing
+# in the middle. It is bimodal for unconstrained mixing. This arm sits in the middle of that
+# empty band, because the constraint binds.
+#
+# WHAT IS GIVEN UP: on this arm alone, a genuinely dead run is billed for 17.8 hours instead of
+# 1.1. That is much the cheaper mistake, because the guard would cost all five cells with
+# certainty. What replaces it is the radius the monitor records at the same interval: on this
+# arm it is pinned at 1 to within 1.6e-06 by construction, and a run whose radius left 1 would
+# mean the projection had stopped being applied, which is a sharper alarm than the dispersion
+# floor ever was on the arms it was calibrated for.
+#
+# The arm table's STAGE_CONTRAST_EXEMPT lists fail_closed_by_step as one of the two resolved
+# options a stage may differ in, and it now carries both reasons an omission can be sound: on
+# the baseline the flag is unreachable, and here it is reachable and miscalibrated. The diff
+# test asserts both rather than believing either paragraph.
+#
+# ---------------------------------------------------------------------------------------
+# EIGHT SINKHORN SWEEPS ARE ENOUGH FOR WHAT H5 RESTS ON, AND THE REASON IS NOT CONVERGENCE
+# ---------------------------------------------------------------------------------------
+#
+# sinkhorn_knopp ships at num_iters=8 and at that count it is column-stochastic exactly and
+# row-stochastic only roughly -- the row residual over n=4 is 2.8e-02 at logit scale sigma=1
+# and 3.6e-01 at sigma=4, and it does not converge away. That does not weaken H5, because the
+# radius does not come from convergence. The last operation of every sweep normalizes over
+# dim=-2 and the result is exponentiated, so the columns sum to 1 at ANY sweep count; a
+# nonnegative column-stochastic matrix has 1 as an eigenvalue of its transpose and, by
+# Gershgorin on that transpose, no eigenvalue above 1 in modulus. Measured over 4,096 draws per
+# cell at sigma in {0.5, 1, 2, 4, 8} and num_iters in {1, 2, 4, 8, 16}, |rho - 1| never exceeds
+# 1.6e-06, and after 120 real optimizer steps on this arm the per-token radius reads
+# 0.999999..1.000000 while faithful's has already spread to 0.997..1.131. Raising the sweep
+# count would buy row sums nothing in this module reads.
+#
+# ---------------------------------------------------------------------------------------
+# THE FLAGS THAT ARE HERE BECAUSE THEY WERE NOT IN STAGE 1
+# ---------------------------------------------------------------------------------------
+#
+# --weight-decay, --z-loss-multiplier, --held-out-shards, --bytes-per-token and
+# --learning-rate are parser defaults, and stage 1's command left them to the parser. In one
+# twenty-cell submission a default cannot drift, because every cell is the same command at the
+# same commit. These are separate submissions at DIFFERENT COMMITS, and this one is later than
+# the other three, so it has the most commits behind it in which a default could have moved. A
+# commit that moves DEFAULT_WEIGHT_DECAY changes what this arm trains at and not what the
+# baseline trained at, and nothing reports it: the loss curves of a baseline at one weight
+# decay and a treatment at another look exactly like the loss curves of a baseline and a
+# treatment.
+#
+# So every value below is the value the RUNNING BASELINE resolved to, read out of its command
+# at commit 38b665919 and written as a literal rather than as a reference to the constant it
+# guards -- a reference would move with the thing it is here to catch:
+#
+#   --weight-decay 0.033          DEFAULT_WEIGHT_DECAY at 38b665919
+#   --z-loss-multiplier 1e-5      the parser default at 38b665919
+#   --held-out-shards 2           hyper_connection_arms.HELD_OUT_SHARDS at 38b665919
+#   --bytes-per-token 4.57        DOLMA2_BYTES_PER_TOKEN at 38b665919
+#   --learning-rate 7.8e-4        DEFAULT_LEARNING_RATE at 38b665919
+#   --eval-interval 500           already in stage 1's command
+#   --monitor-interval 50         already in stage 1's command
+#
+# --held-out-shards 2 IS INERT ON THIS CORPUS AND IS PINNED ANYWAY. regmix-10b-v1 declares
+# seven validation shards stratified by source, and `_add_held_out_evaluation` prefers a
+# declared split, so `split_held_out` never fires and this number is never read. It is here for
+# the lineage record: a future corpus with no declared split would make it live, and a pinned
+# inert flag costs nothing while an unpinned live one costs the experiment.
+#
+# --monitor-interval 50 is doing more work on this arm than on the other two. It is what
+# records the radius H5 is about, 120 times over the run.
+#
+# ---------------------------------------------------------------------------------------
+# WHAT MUST BE IDENTICAL TO THE OTHER THREE STAGES, AND WHAT CHECKS IT
+# ---------------------------------------------------------------------------------------
+#
+# steps 6000, save-interval 500, warmup-steps 120, rank-microbatch-size 16384,
+# global-batch-size 786432, sequence-length 4096, nproc-per-node 4, model-factory hc_370M,
+# param-dtype bfloat16, and every pinned value above. `--arm` and `--fail-closed-by-step` are
+# the only two resolved options that may differ across the four stage files, the arm table
+# names both in STAGE_CONTRAST_EXEMPT with the reason each is allowed to, and the diff test in
+# test_train_hyper_connections.py parses all four commands through the real parser and compares
+# every resolved option. Nothing downstream would: `edullm check` prices a ceiling out of the
+# workload profile and never reads a hyperparameter.
+#
+# NO --seed. Every cell is handed this one command, so an explicit --seed would run five cells
+# on one replicate -- five identical curves, a measured noise floor of zero, and every arm
+# significant against it. `resolve_seed` refuses that combination rather than resolving it.
+#
+# NO --partial-rotary-factor. It is a real and unmeasured question and it is a second change
+# inside the contrast H5 is about.
+#
+# --hours 19 covers a 17.8-hour cell, the same bound the other three stages ran under, and that
+# sameness matters for a reason that is not arithmetic: a bound is what kills a cell that runs
+# long, so an arm under a looser bound survives drift another arm dies of, and a treatment arm
+# missing a cell is not missing it at random.
+#
+# THE STEP TIME BEHIND THAT 17.8 IS THE BASELINE'S AND THIS ARM ADDS WORK TO IT. Sinkhorn is
+# eight sweeps of two log-sum-exps over a per-token 4x4, which is no arithmetic worth counting
+# but is 6,144 extra kernel launches per step across 32 streams and 12 microbatches --
+# 0.06-0.23 s of a 10.32 s step, forward and backward, at 4-15 us a launch. The bound has 0.69
+# s/step of slack, so the estimate fits with three to eleven times over. It is an estimate and
+# not a measurement: no mHC run has been timed on this shape, and the first cell's step time is
+# the thing to read at hour one.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-4xl40s
+command: >-
+  bash -lc 'python -m torch.distributed.run --nproc-per-node=4 --standalone
+  .edullm/train_hyper_connections.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --arm mhc
+  --model-factory hc_370M
+  --sequence-length 4096
+  --global-batch-size 786432
+  --rank-microbatch-size 16384
+  --steps 6000
+  --save-interval 500
+  --warmup-steps 120
+  --learning-rate 7.8e-4
+  --weight-decay 0.033
+  --z-loss-multiplier 1e-5
+  --held-out-shards 2
+  --bytes-per-token 4.57
+  --monitor-interval 50
+  --eval-interval 500
+  --param-dtype bfloat16'

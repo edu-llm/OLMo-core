@@ -676,9 +676,11 @@ def test_every_cell_of_the_tranche_resolves_to_its_own_arm_and_seed(index: int):
 
 
 def test_the_cell_table_is_the_tranche_and_covers_each_arm_at_each_seed():
-    assert len(arms.TRANCHE_CELLS) == arms.total_runs() == 15
+    assert len(arms.TRANCHE_CELLS) == arms.total_runs() == 20
     assert arms.TRANCHE_CELLS[0] == ("baseline", 0)
-    assert arms.TRANCHE_CELLS[-1] == ("output-only", arms.ARMS["output-only"].seeds - 1)
+    # The last cell follows the arm table's order, which is the pre-registration's numbering, so
+    # funding arm 9 moved the tail from arm 3 to arm 9 without the list being edited.
+    assert arms.TRANCHE_CELLS[-1] == ("mhc", arms.ARMS["mhc"].seeds - 1)
     assert len(set(arms.TRANCHE_CELLS)) == len(arms.TRANCHE_CELLS)
     for name in arms.FUNDED:
         seeds = sorted(s for a, s in arms.TRANCHE_CELLS if a == name)
@@ -958,18 +960,24 @@ def resolved(name: str) -> dict:
     return vars(opts)
 
 
-def test_the_three_stage_specs_differ_in_the_arm_and_in_nothing_else():
+def test_the_stage_specs_differ_in_the_arm_and_in_nothing_else():
     """
     THE TEST THE SPLIT TRANCHE EXISTS ON, AND THE ONE FAILURE IT CATCHES IS INVISIBLE
     EVERYWHERE ELSE.
 
-    Fifteen runs in three submissions are only an experiment if all fifteen were trained at
+    Twenty runs in four submissions are only an experiment if all twenty were trained at
     the same settings. A hand-edit to one arm's command -- a microbatch nudged to fit a
     memory scare, a horizon shortened to save an hour, a learning rate copied from another
     file -- makes the arms incomparable and produces loss curves that look precisely like
     loss curves. Nothing downstream disagrees: the platform prices a ceiling from the
     workload profile and never reads these words, and the analysis reads the runs' own
     reports rather than the commands that made them.
+
+    THIS TEST WAS CALLED ``test_the_three_stage_specs_differ_in_the_arm_and_in_nothing_else``
+    and the headers of run.faithful-stage.yaml and run.output-only-stage.yaml still cite it
+    under that name. Those two files are the text two admitted submissions were built from and
+    are not edited after the fact; the count in the old name is what went stale when ``mhc``
+    was funded, and this line is where a reader who greps the old name lands.
 
     THE COMPARISON IS OVER THE WHOLE RESOLVED OPTION SET AND NOT OVER A LIST OF THINGS TO
     CHECK, which is the difference between a test that holds and a test that held. A checked
@@ -982,7 +990,7 @@ def test_the_three_stage_specs_differ_in_the_arm_and_in_nothing_else():
     options = {name: resolved(arms.STAGE_SPECS[name].spec) for name in STAGES}
 
     keys = {frozenset(o) for o in options.values()}
-    assert len(keys) == 1, "the three specs parse to different option sets"
+    assert len(keys) == 1, "the specs parse to different option sets"
 
     differ = {key for key in next(iter(keys)) if len({repr(o[key]) for o in options.values()}) > 1}
     assert differ == set(arms.STAGE_CONTRAST_EXEMPT), (
@@ -990,11 +998,11 @@ def test_the_three_stage_specs_differ_in_the_arm_and_in_nothing_else():
         + ", ".join(sorted(differ))
         + " and the only differences the arm table permits are "
         + ", ".join(sorted(arms.STAGE_CONTRAST_EXEMPT))
-        + ". Every option outside that set has to be identical across all three, or the "
-        "fifteen runs were not trained at the same settings and the contrast is not one."
+        + ". Every option outside that set has to be identical across all four, or the "
+        "twenty runs were not trained at the same settings and the contrast is not one."
     )
 
-    # And the difference in the one option the experiment is made of is the three arms
+    # And the difference in the one option the experiment is made of is the four arms
     # themselves, rather than two specs that happen to name the same one.
     assert {o["arm"] for o in options.values()} == set(arms.FUNDED)
     for name, opts in options.items():
@@ -1055,19 +1063,25 @@ def test_the_pinned_table_still_agrees_with_the_design_constants_it_froze():
     assert not {"arm", "seed", "data_seed", "save_folder", "run_name"} & set(arms.STAGE_PINNED)
 
 
-def test_the_one_option_the_stages_differ_in_besides_the_arm_is_unreachable_on_the_baseline(
-    monkeypatch,
-):
+def test_the_two_stages_that_omit_the_lane_guard_omit_it_for_the_reasons_claimed(monkeypatch):
     """
     ``fail_closed_by_step`` is exempt from the diff, and this is the proof rather than the
-    claim. The exemption is only sound because the option cannot reach the baseline: ``train``
-    attaches ``HyperConnectionMonitorCallback`` where ``arm.hyper_connections is not None``,
-    and the baseline's is ``None``, so stage 1's omitting it and stage 2's setting it to 400
-    describe the same baseline.
+    claim. TWO OF THE FOUR STAGES OMIT IT AND THE TWO REASONS ARE NOT THE SAME ONE, which is
+    exactly why an exemption granted in prose needs a test underneath it.
 
-    If a later commit attaches that monitor unconditionally -- for lane norms on an ordinary
-    residual stream, say, which is a reasonable thing to want -- the exemption stops being
-    sound and this fails, which is the whole reason it is a test and not a paragraph.
+    On BASELINE the option is UNREACHABLE: ``train`` attaches
+    ``HyperConnectionMonitorCallback`` where ``arm.hyper_connections is not None`` and the
+    baseline's is ``None``, so stage 1's omitting it and stage 2's setting it to 400 describe
+    the same run. If a later commit attaches that monitor unconditionally -- for lane norms on
+    an ordinary residual stream, say, which is a reasonable thing to want -- the exemption stops
+    being sound and this fails.
+
+    On MHC the option is REACHABLE AND MISCALIBRATED, which is the opposite situation and the
+    more dangerous one: setting it would abort all five cells at step 400, because the Sinkhorn
+    projection compresses the lane dispersion the guard reads.
+    ``test_the_mhc_arm_is_the_only_stage_the_lane_gate_would_refuse`` in
+    ``test_hyper_connection_arms.py`` measures that; what this asserts is that the arm which
+    would be refused is the arm whose command leaves the flag out.
     """
     seen: set = set()
 
@@ -1087,6 +1101,14 @@ def test_the_one_option_the_stages_differ_in_besides_the_arm_is_unreachable_on_t
         if name == "baseline":
             assert not reachable, "the baseline now runs the monitor, so the exemption is unsound"
             assert opts.fail_closed_by_step is None
+        elif name == "mhc":
+            # Reachable, and left unset anyway. The monitor is still attached and still records
+            # the radius H5 is about; it is the abort threshold that is absent.
+            assert reachable, "mhc without the monitor would leave H5 without its instrument"
+            assert opts.fail_closed_by_step is None, (
+                "run.mhc-stage.yaml now sets --fail-closed-by-step, which would abort all five "
+                "cells at step 400; see MHC_LANE_DISPERSION_AT_GATE"
+            )
         else:
             assert reachable, name
             assert opts.fail_closed_by_step == arms.TRANCHE_FAIL_CLOSED_BY_STEP == 400
@@ -1180,25 +1202,30 @@ def test_every_stage_fits_one_attempt_of_the_bound_it_is_submitted_under(name: s
     assert exposure < 1.5
 
 
-def test_the_three_stages_are_the_whole_tranche_and_no_arm_is_left_out():
+def test_the_stages_are_the_whole_tranche_and_no_arm_is_left_out():
     """
-    Fifteen cells in three submissions have to be the same fifteen the arm table prices, or
-    the budget is for one design and the runs are another. The count is not written down here:
-    it is the arm table's, so a seed added to an arm and not to a stage fails.
+    Twenty cells in four submissions have to be the same twenty the arm table prices, or the
+    budget is for one design and the runs are another. The count is not written down here: it
+    is the arm table's, so a seed added to an arm and not to a stage fails.
     """
     assert sorted(arms.STAGE_SPECS) == sorted(arms.FUNDED)
-    assert sum(stage.cells for stage in arms.STAGE_SPECS.values()) == arms.total_runs() == 15
+    assert sum(stage.cells for stage in arms.STAGE_SPECS.values()) == arms.total_runs() == 20
     assert {stage.cells for stage in arms.STAGE_SPECS.values()} == {arms.STAGE_CELLS}
 
     # Balanced, because an unbalanced contrast carries SE = sigma*sqrt(1/n_a + 1/n_b) and pays
-    # for the smaller arm twice.
+    # for the smaller arm twice. mhc joining at five seeds rather than at three is what keeps
+    # H5 as powerful as H1 and H2a.
     assert len({arms.ARMS[name].seeds for name in arms.FUNDED}) == 1
 
     # Stage 1 is the noise floor and it is the one that has run. A treatment arm submitted
-    # first would have nothing to be compared against that was not estimated from itself.
+    # first would have nothing to be compared against that was not estimated from itself. The
+    # later stage numbers are not an ordering constraint -- 3 records that mhc was funded by a
+    # grant after stage 2 was written, and either may go out first.
     assert arms.STAGE_SPECS["baseline"].stage == 1
     assert arms.STAGE_SPECS["baseline"].run_id
     assert all(arms.STAGE_SPECS[name].stage == 2 for name in ("faithful", "output-only"))
+    assert arms.STAGE_SPECS["mhc"].stage == 3
+    assert all(stage.stage > 1 for name, stage in arms.STAGE_SPECS.items() if name != "baseline")
 
 
 @pytest.mark.parametrize("shape", STAGED)
@@ -1207,9 +1234,9 @@ def test_the_superseded_whole_tranche_specs_say_so_where_a_submit_line_is_read(s
     THESE TWO FILES CARRY A SUBMIT LINE THAT WOULD NOW BE REFUSED OR WOULD OVERSPEND, AND THEY
     ARE KEPT ANYWAY, so the thing to catch is somebody copying one out of them.
 
-    Both say `--fanout-size 9` and the tranche is fifteen cells, because the seed count moved
-    and ``TRANCHE_CELLS`` followed it. The L40S variant at fifteen cells, 21 hours and two
-    attempts prices a ceiling around $6,610 against a $4,000 budget; the A100 variant is
+    Both say `--fanout-size 9` and the tranche is twenty cells, because the seed count moved and
+    then an arm was funded and ``TRANCHE_CELLS`` followed both. The L40S variant at twenty
+    cells, 21 hours and two attempts prices a ceiling near $8,800; the A100 variant is
     superseded outright, because measured seed sigma makes horizon the wrong thing to buy at
     any step time and its shape question was therefore never load-bearing.
 
@@ -1229,5 +1256,7 @@ def test_the_superseded_whole_tranche_specs_say_so_where_a_submit_line_is_read(s
         assert stage.spec in header, stage.spec
 
     # And the count it disagrees with is stated rather than left for the reader to discover at
-    # admission, where the disagreement is between --fanout-size and a table.
-    assert str(arms.total_runs()) in header or "fifteen" in header
+    # admission, where the disagreement is between --fanout-size and a table. Written as digits
+    # rather than as a word, because the count has now moved twice and a spelt-out number in a
+    # banner is the thing that gets left behind.
+    assert str(arms.total_runs()) in header

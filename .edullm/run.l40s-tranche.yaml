@@ -1,21 +1,29 @@
 # SUPERSEDED AND NOT SUBMITTABLE AS IT STANDS. DO NOT SUBMIT THIS FILE.
 #
-# It says nine cells throughout, and the tranche is fifteen: the arm table went from three
-# seeds an arm to five when DataDecide's measured seed sigma (D^-0.172, so a fixed budget's
-# standard error goes as D^(+0.328)) said replicates beat horizon, and `TRANCHE_CELLS` followed
-# the table without anybody editing it. At fifteen cells, `--hours 21 --attempts 2` prices a
-# ceiling of about $6,610 and is over the $4,000 budget, so the submit line below is wrong in
-# two places and the second one cannot be repaired by changing a number.
+# It says nine cells throughout, and the tranche is 20: the arm table went from three seeds an
+# arm to five when DataDecide's measured seed sigma (D^-0.172, so a fixed budget's standard
+# error goes as D^(+0.328)) said replicates beat horizon, which made it fifteen, and then a
+# grant above the original $4,000 funded the `mhc` arm from the end of CUT_ORDER, which made it
+# 20. `TRANCHE_CELLS` followed the table both times without anybody editing it. At 20 cells,
+# `--hours 21 --attempts 2` prices a ceiling near $8,800, so the submit line below is wrong in
+# its fan-out size and wrong in what that size costs.
 #
-# WHAT ACTUALLY RAN, AND WHY THE SHAPE HERE IS STILL WORTH KEEPING. The fifteen went out as
-# three five-cell `--fanout-index-parameter seed` submissions -- run.baseline-stage.yaml,
-# run.faithful-stage.yaml, run.output-only-stage.yaml -- because the pre-registration forbids
-# submitting a treatment arm before the noise floor has numbers in it. That split is a cost,
-# not a saving: three submissions at three commits can silently disagree about a default where
-# one submission cannot, which is what STAGE_PINNED and the stage diff test now stand in for.
-# The one-submission shape below is the better one wherever the pre-registration allows it,
-# and the `arm-and-seed` fan-out is how it is expressed. The next module wants this file's
-# structure and not the staging.
+# WHAT ACTUALLY RAN, AND WHY THE SHAPE HERE IS STILL WORTH KEEPING. The twenty went out as four
+# five-cell `--fanout-index-parameter seed` submissions -- run.baseline-stage.yaml,
+# run.faithful-stage.yaml, run.output-only-stage.yaml, run.mhc-stage.yaml -- because the
+# pre-registration forbids submitting a treatment arm before the noise floor has numbers in it.
+# That split is a cost, not a saving: four submissions at up to four commits can silently
+# disagree about a default where one submission cannot, which is what STAGE_PINNED and the
+# stage diff test now stand in for. The one-submission shape below is the better one wherever
+# the pre-registration allows it, and the `arm-and-seed` fan-out is how it is expressed. The
+# next module wants this file's structure and not the staging.
+#
+# ONE THING THE ONE-SUBMISSION SHAPE WOULD NOW GET WRONG, and it is not a count. A single
+# command cannot carry `--fail-closed-by-step` for this tranche any more: the flag is right for
+# `faithful` and `output-only`, inert on `baseline`, and would abort all five `mhc` cells at
+# step 400, because the Sinkhorn projection compresses the lane dispersion the guard reads. See
+# MHC_LANE_DISPERSION_AT_GATE. An unstaged tranche that includes a constrained arm has to leave
+# the guard out of the shared command or gate it on the resolved arm inside the program.
 #
 # Everything below is as it was written. Nothing in it is edited, because a file that is a
 # record of what was not run stops being one as soon as it is kept up to date.
