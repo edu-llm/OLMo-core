@@ -51,7 +51,7 @@ import argparse
 import os
 import sys
 from contextlib import contextmanager
-from typing import Any, Iterator, List
+from typing import Any, Dict, Iterator, List
 
 # Both files live in `.edullm/`, which is not a package. Insert the directory so that
 # `train_on_corpus` imports here and also re-imports cleanly in a dataloader worker.
@@ -193,23 +193,230 @@ def build_parser() -> argparse.ArgumentParser:
         "[0, 1] one and its Table 5 finds the widened range gives no consistent gain at 1.3B -- "
         "note that GatedDeltaNet's equivalent flag defaults the other way.",
     )
+
+    mix = parser.add_argument_group("source mixture")
+    mix.add_argument(
+        "--mixture",
+        choices=["off", "on"],
+        default="off",
+        help="Read a weighted subset of the corpus rather than all of it, through the reader's "
+        "own build_mixture. Off reads the corpus flat, which for a corpus larger than the token "
+        "budget means the shards the loader happens to reach first.",
+    )
+    mix.add_argument(
+        "--mixture-total",
+        type=int,
+        default=10_000_000_000,
+        help="Token budget the mixture is drawn to. build_mixture fills with whole shards, so "
+        "the result lands within one shard of this rather than exactly on it.",
+    )
+    mix.add_argument(
+        "--mixture-ratios",
+        default=None,
+        help="YAML of source name to ratio, summing to 1.0, optionally under a `sources:` key. "
+        "This is the faithful route when the ratios are known. Omitted, the ratios are derived "
+        "by water-filling the budget over whatever the corpus holds.",
+    )
+    mix.add_argument(
+        "--mixture-label-key",
+        default="source",
+        help="Which shard label the mixture is expressed over. `source` is what a pretrain "
+        "corpus carries; a finer mix might use `domain`.",
+    )
+    mix.add_argument(
+        "--mixture-seed",
+        type=int,
+        default=0,
+        help="Seeds the shard draw. Same seed and same inputs give the same shard list, which "
+        "is what makes the mixture reproducible from the config.",
+    )
     return parser
+
+
+def water_fill(available: Dict[str, int], total: int) -> Dict[str, float]:
+    """Allocate ``total`` across sources equally, capped by what each source holds.
+
+    Water-filling: give every source an equal share; where a source holds less than its share,
+    it contributes everything it has and its shortfall is redistributed over the sources that
+    still have room. Repeat until nothing moves. The result is a function of the source sizes
+    and the budget alone -- there are no weights to choose, which is the property that lets a
+    mixture be reconstructed rather than copied from a file.
+
+    :param available: tokens each source holds, keyed by source name.
+    :param total: the budget to allocate.
+
+    :returns: each source's share of ``total``, summing to 1.0.
+
+    :raises ValueError: if ``available`` is empty or holds nothing, or ``total`` is not positive.
+    """
+    if not available or sum(available.values()) <= 0:
+        raise ValueError("water_fill needs at least one non-empty source")
+    if total <= 0:
+        raise ValueError(f"water_fill needs a positive budget; got {total}")
+
+    # The fill runs in FLOAT space and rounds nowhere, which is not fussiness. Truncating each
+    # equal share to an int zeroes the whole allocation whenever the budget is smaller than the
+    # number of sources -- share < 1 for every source, int(share) == 0 for every source -- and
+    # the only symptom would be the "allocated nothing" refusal below on a budget that is
+    # perfectly meaningful. Ratios are what this returns anyway, so integers buy nothing.
+    remaining, open_sources = float(total), dict(available)
+    alloc: Dict[str, float] = {}
+    while open_sources and remaining > 0:
+        share = remaining / len(open_sources)
+        capped = {n: c for n, c in open_sources.items() if c <= share}
+        if not capped:  # every open source can take a full share; we are done
+            for n in open_sources:
+                alloc[n] = alloc.get(n, 0.0) + share
+            remaining = 0.0
+            break
+        for n, c in capped.items():
+            alloc[n] = alloc.get(n, 0.0) + float(c)
+            remaining -= c
+            del open_sources[n]
+
+    drawn = sum(alloc.values())
+    if drawn <= 0:
+        raise ValueError(f"water_fill allocated nothing from {sum(available.values())} tokens")
+    # Normalise to exactly 1.0: build_mixture refuses a sum more than 1e-6 away, because an
+    # implicit remainder would silently decide part of the mix.
+    ratios = {n: c / drawn for n, c in alloc.items() if c > 0}
+    slack = 1.0 - sum(ratios.values())
+    widest = max(ratios, key=lambda n: ratios[n])
+    ratios[widest] += slack
+    return ratios
+
+
+def mixture_sources(opts, pool) -> list:
+    """Turn the resolved shard pool into weighted mixture components.
+
+    ``--mixture-ratios`` names a YAML of ``{source: ratio}`` and is the faithful route when the
+    ratios are known. ``--mixture water-fill`` derives them from the pool instead.
+    """
+    from edullm_data.read import MixtureSource
+
+    key = opts.mixture_label_key
+    available: Dict[str, int] = {}
+    for entry in pool:
+        labels = getattr(entry, "labels", None) or {}
+        name = labels.get(key)
+        count = getattr(entry, "count", None)
+        if name is None or not count:
+            continue
+        available[name] = available.get(name, 0) + int(count)
+    if not available:
+        raise toc.Refusal(
+            toc.Stage.THE_CORPUS_IS_NOT_WHERE_THE_REGISTRY_SAYS,
+            f"no shard in this corpus carries a {key!r} label with a count, so a mixture over "
+            f"{key} cannot be expressed. Pass --mixture-label-key with a key the shards do "
+            f"carry, or --mixture off to read the corpus flat.",
+        )
+
+    toc.log.info("mixture pool: %d sources over %s", len(available), key)
+    for name in sorted(available, key=lambda n: -available[n]):
+        toc.log.info("  %-28s %15d tokens", name, available[name])
+
+    if opts.mixture_ratios:
+        import yaml
+
+        with open(opts.mixture_ratios) as f:
+            declared = yaml.safe_load(f) or {}
+        declared = declared.get("sources", declared)
+        if not isinstance(declared, dict):
+            raise toc.Refusal(
+                toc.Stage.THE_CONFIG_WOULD_NOT_BUILD,
+                f"{opts.mixture_ratios} must be a mapping of source name to ratio, or carry one "
+                "under a `sources:` key.",
+            )
+        unknown = sorted(set(declared) - set(available))
+        if unknown:
+            raise toc.Refusal(
+                toc.Stage.THE_CONFIG_WOULD_NOT_BUILD,
+                f"{opts.mixture_ratios} names sources this corpus does not have: {unknown}. "
+                f"It has {sorted(available)}.",
+            )
+        ratios = {n: float(r) for n, r in declared.items()}
+        toc.log.info("mixture ratios read from %s", opts.mixture_ratios)
+    else:
+        ratios = water_fill(available, opts.mixture_total)
+        toc.log.info("mixture ratios derived by water-filling %d tokens", opts.mixture_total)
+
+    for name in sorted(ratios, key=lambda n: -ratios[n]):
+        toc.log.info("  %-28s ratio %.6f", name, ratios[name])
+    return [MixtureSource(labels={key: n}, ratio=r) for n, r in ratios.items()]
+
+
+def resolve_corpus(*, dataset_id: str, version: str, tokenizer_id: str):
+    """`train_on_corpus.resolve_corpus`, then narrow it to a weighted mixture.
+
+    The flat resolve runs first and unchanged, so every check it makes -- the seal, the dtype,
+    the byte order, the tokenizer identity -- still happens and still produces the same staged
+    refusals. Only the path list is replaced.
+    """
+    corpus = _base_resolve_corpus(dataset_id=dataset_id, version=version, tokenizer_id=tokenizer_id)
+    if _MIXTURE_OPTS is None or _MIXTURE_OPTS.mixture == "off":
+        return corpus
+
+    from dataclasses import replace
+
+    from edullm_data.read import _mixture_entries, build_mixture
+    from edullm_data.s3 import Boto3S3
+
+    opts = _MIXTURE_OPTS
+    s3 = Boto3S3.default()
+    try:
+        pool = _mixture_entries(
+            dataset_id, corpus.version, s3=s3, data_bucket="edullm-data", group=None, split=None
+        )
+        resolved = build_mixture(
+            dataset_id,
+            corpus.version,
+            sources=mixture_sources(opts, pool),
+            total=opts.mixture_total,
+            seed=opts.mixture_seed,
+            s3=s3,
+        )
+    except toc.Refusal:
+        raise
+    except BaseException as exc:
+        raise toc.Refusal(toc.read_failure(exc), f"{type(exc).__name__}: {exc}") from exc
+
+    toc.log.info(
+        "mixture resolved: %d of %d shards, %s %s of a %d budget",
+        len(resolved.paths),
+        len(corpus.paths),
+        f"{resolved.total:,}",
+        resolved.unit,
+        opts.mixture_total,
+    )
+    for name, count in sorted(resolved.counts_by_source.items()):
+        toc.log.info("  %-28s %15d actual ratio %.6f", name, count, resolved.actual_ratios[name])
+    if resolved.shortfall:
+        # Not fatal: build_mixture lands within one shard of target by design. Worth saying out
+        # loud, because a source that came up short changes the mixture that was asked for.
+        toc.log.warning("mixture shortfall by source: %s", dict(resolved.shortfall))
+
+    return replace(corpus, paths=list(resolved.paths))
 
 
 def build_config(opts, overrides: List[str]):
     """`train_on_corpus.build_config`, with the factory wrapped for the duration."""
+    global _MIXTURE_OPTS
+    _MIXTURE_OPTS = opts
     with factory_with_gdn2(opts.model_factory, mixer_config(opts)):
         return _base_build_config(opts, overrides)
 
 
+_MIXTURE_OPTS = None
 _base_build_parser = toc.build_parser
 _base_build_config = toc.build_config
+_base_resolve_corpus = toc.resolve_corpus
 
-# The two seams. `toc.main` calls both by name off its own module, so patching the module
-# attributes is what puts this file's behaviour inside the whole of its error handling,
-# precision refusal, dry-run path and exit-code contract.
+# The three seams. `toc.main` and `toc.build_config` call these by name off their own module,
+# so patching the module attributes is what puts this file's behaviour inside the whole of
+# train_on_corpus's error handling, precision refusal, dry-run path and exit-code contract.
 toc.build_parser = build_parser
 toc.build_config = build_config
+toc.resolve_corpus = resolve_corpus
 
 
 if __name__ == "__main__":
