@@ -380,6 +380,71 @@ def test_segment_payload_contains_worker_config_hash():
     assert frozen["config_hash"] != payload["config_hash"]
 
 
+def test_segment_payload_merges_fixed_and_searched_hps():
+    allocation = SimpleNamespace(
+        realized_hps={"lr": 2e-3, "max_grad_norm": 0.8},
+        checkpoint_ref=None,
+        transition=None,
+    )
+    payload = entry._segment_payload(
+        allocation,
+        controller_spec={
+            "base_global_batch_size": 32768,
+            "fixed_hps": {
+                "lr": 1e-3,
+                "weight_decay": 0.1,
+                "beta2_gap": 0.05,
+                "eps": 1e-8,
+                "warmup_fraction": 0.05,
+                "decay_fraction": 0.2,
+                "terminal_lr_ratio": 0.1,
+                "global_batch_mult": 1.0,
+                "max_grad_norm": 1.0,
+            },
+            "experiment_factory": "module:factory",
+            "controller": {
+                "target_tokens": 327680,
+                "checkpoint_root": "/ckpt",
+            },
+            "search_validation_callback": "search_validation",
+            "untouched_evaluator": "final_evaluation",
+            "heldout_metric": "eval/lm/CE loss",
+        },
+    )
+    assert payload["realized_hps"]["lr"] == 2e-3
+    assert payload["realized_hps"]["max_grad_norm"] == 0.8
+    assert payload["realized_hps"]["weight_decay"] == 0.1
+    assert set(payload["realized_hps"]) == {
+        "lr",
+        "weight_decay",
+        "beta2_gap",
+        "eps",
+        "warmup_fraction",
+        "decay_fraction",
+        "terminal_lr_ratio",
+        "global_batch_mult",
+        "max_grad_norm",
+    }
+
+
+def test_controller_spec_expands_environment_without_placeholders(
+    monkeypatch,
+):
+    monkeypatch.setenv("EDULLM_CHECKPOINT_DIR", "s3://checkpoints/run-1")
+    expanded = entry._expand_environment(
+        {
+            "root": "${EDULLM_CHECKPOINT_DIR}/hybrid",
+            "nested": ["${EDULLM_CHECKPOINT_DIR}", 3],
+        }
+    )
+    assert expanded == {
+        "root": "s3://checkpoints/run-1/hybrid",
+        "nested": ["s3://checkpoints/run-1", 3],
+    }
+    with pytest.raises(ValueError, match="unresolved"):
+        entry._expand_environment("${MISSING_COMPARISON_ENV}")
+
+
 def test_controller_log_load_falls_back_to_latest_remote_snapshot(monkeypatch, tmp_path):
     local = tmp_path / "missing.jsonl"
     monkeypatch.setattr(
@@ -507,6 +572,13 @@ def test_controller_runs_untouched_evaluator_once(monkeypatch):
     assert len(calls) == 1
     assert calls[0]["trial_id"] == "winner"
     assert calls[0]["checkpoint_ref"] == "/ckpt/winner/step10"
+
+
+def test_required_final_winner_fails_closed():
+    controller = SimpleNamespace(final_evaluation_completed=lambda: False)
+    with pytest.raises(RuntimeError, match="winner"):
+        entry._enforce_required_winner(controller, {"require_final_winner": True})
+    entry._enforce_required_winner(controller, {"require_final_winner": False})
 
 
 def test_proxy_winner_is_retrained_from_scratch_on_exact_model(

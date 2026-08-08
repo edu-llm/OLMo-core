@@ -1,0 +1,255 @@
+"""Matched OLMo2-190M configuration for default-recipe versus HPO smoke runs."""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from dataclasses import dataclass
+from typing import Any
+
+from ..config import Config, DType
+from ..data import (
+    NumpyDataLoaderConfig,
+    NumpyDatasetDType,
+    NumpyFSLDatasetConfig,
+    NumpyPaddedFSLDatasetConfig,
+    TokenizerConfig,
+)
+from ..distributed.parallel import DataParallelType
+from ..nn.transformer import TransformerConfig
+from ..optim import AdamWConfig, CosWithWarmup, OptimGroupOverride
+from ..train import Duration, TrainerConfig
+from ..train.callbacks import CheckpointerCallback, LMEvaluatorCallbackConfig
+from ..train.train_module import (
+    TransformerDataParallelConfig,
+    TransformerTrainModuleConfig,
+)
+
+__all__ = [
+    "COMPARISON_HELDOUT_LABEL",
+    "COMPARISON_HELDOUT_METRIC",
+    "DEFAULT_RECIPE_HPS",
+    "ComparisonDataset",
+    "ComparisonExperimentConfig",
+    "comparison_dataset_from_read",
+    "build_comparison_experiment",
+    "smoke_final_evaluator",
+]
+
+COMPARISON_HELDOUT_LABEL = "reservoir-dolma2-val"
+COMPARISON_HELDOUT_METRIC = f"eval/lm/{COMPARISON_HELDOUT_LABEL}/CE loss"
+
+DEFAULT_RECIPE_HPS = {
+    "lr": 1e-3,
+    "weight_decay": 0.1,
+    "beta2_gap": 0.05,
+    "eps": 1e-8,
+    "warmup_fraction": 0.05,
+    "decay_fraction": 0.2,
+    "terminal_lr_ratio": 0.1,
+    "global_batch_mult": 1.0,
+    "max_grad_norm": 1.0,
+}
+
+
+@dataclass(frozen=True)
+class ComparisonDataset:
+    dataset_id: str
+    version: str
+    tokenizer_id: str
+    train_paths: tuple[str, ...]
+    val_paths: tuple[str, ...]
+    dtype: NumpyDatasetDType
+
+
+@dataclass
+class ComparisonExperimentConfig(Config):
+    model: TransformerConfig
+    dataset: NumpyFSLDatasetConfig
+    data_loader: NumpyDataLoaderConfig
+    trainer: TrainerConfig
+    train_module: TransformerTrainModuleConfig
+    dataset_id: str
+    dataset_version: str
+    init_seed: int
+
+
+def comparison_dataset_from_read(
+    read: Any,
+    *,
+    dataset_id: str,
+    version: str,
+    tokenizer_id: str,
+) -> ComparisonDataset:
+    if tokenizer_id != "tokenizer/dolma2-bpe":
+        raise ValueError("the comparison currently supports only tokenizer/dolma2-bpe")
+    train_paths = tuple(read.paths)
+    val_paths = tuple(read.val or ())
+    if not train_paths:
+        raise ValueError("comparison dataset has no trainable split")
+    if not val_paths:
+        raise ValueError("comparison dataset has no held-out split")
+    if set(train_paths) & set(val_paths):
+        raise ValueError("train and held-out paths overlap")
+    if int(read.header_bytes) != 0:
+        raise ValueError("comparison dataset has a nonzero header")
+    byte_order = read.byte_order
+    if byte_order is not None and byte_order != sys.byteorder:
+        raise ValueError(
+            f"comparison dataset byte order {byte_order!r} "
+            f"does not match host {sys.byteorder!r}"
+        )
+    if read.dtype is None:
+        raise ValueError("comparison dataset declares no fixed-width dtype")
+    return ComparisonDataset(
+        dataset_id=dataset_id,
+        version=version,
+        tokenizer_id=tokenizer_id,
+        train_paths=train_paths,
+        val_paths=val_paths,
+        dtype=NumpyDatasetDType(read.dtype),
+    )
+
+
+def _required_env(name: str) -> str:
+    value = os.environ.get(name, "")
+    if not value:
+        raise ValueError(f"the eduLLM platform did not set {name}")
+    return value
+
+
+def build_comparison_experiment(
+    *,
+    sequence_length: int = 2048,
+    global_batch_size: int = 32768,
+    rank_microbatch_size: int = 4096,
+    data_seed: int = 210007,
+    init_seed: int = 110007,
+    eval_steps: int = 2,
+    work_dir: str = "/tmp/hpo-comparison-data",
+) -> ComparisonExperimentConfig:
+    """Build the matched model/data/eval contract used by both comparison arms."""
+    if sequence_length <= 0 or global_batch_size <= 0:
+        raise ValueError("sequence length and global batch size must be positive")
+    if global_batch_size % sequence_length or rank_microbatch_size % sequence_length:
+        raise ValueError("global and rank microbatch sizes must contain whole sequences")
+    if rank_microbatch_size <= 0 or global_batch_size % rank_microbatch_size:
+        raise ValueError("global batch size must be divisible by rank microbatch size")
+    if eval_steps <= 0:
+        raise ValueError("eval_steps must be positive")
+
+    dataset_id = _required_env("EDULLM_DATASET_ID")
+    version = _required_env("EDULLM_DATASET_VERSION")
+    tokenizer_id = _required_env("EDULLM_DATASET_TOKENIZER")
+    checkpoint_root = _required_env("EDULLM_CHECKPOINT_DIR")
+
+    from edullm_data.read import dataset_paths
+    from edullm_data.s3 import Boto3S3
+
+    read = dataset_paths(
+        dataset_id,
+        version,
+        s3=Boto3S3.default(),
+    )
+    corpus = comparison_dataset_from_read(
+        read,
+        dataset_id=dataset_id,
+        version=version,
+        tokenizer_id=tokenizer_id,
+    )
+    tokenizer = TokenizerConfig.dolma2()
+    model = TransformerConfig.olmo2_190M(vocab_size=tokenizer.padded_vocab_size())
+    dataset = NumpyFSLDatasetConfig(
+        paths=list(corpus.train_paths),
+        sequence_length=sequence_length,
+        tokenizer=tokenizer,
+        dtype=corpus.dtype,
+        work_dir=work_dir,
+    )
+    eval_dataset = NumpyPaddedFSLDatasetConfig(
+        paths=list(corpus.val_paths),
+        metadata=[{"label": COMPARISON_HELDOUT_LABEL} for _ in corpus.val_paths],
+        sequence_length=sequence_length,
+        tokenizer=tokenizer,
+        dtype=corpus.dtype,
+        work_dir=work_dir,
+    )
+    data_loader = NumpyDataLoaderConfig(
+        global_batch_size=global_batch_size,
+        seed=data_seed,
+        num_workers=4,
+    )
+    train_module = TransformerTrainModuleConfig(
+        rank_microbatch_size=rank_microbatch_size,
+        max_sequence_length=sequence_length,
+        optim=AdamWConfig(
+            lr=DEFAULT_RECIPE_HPS["lr"],
+            weight_decay=DEFAULT_RECIPE_HPS["weight_decay"],
+            betas=(0.9, 1.0 - DEFAULT_RECIPE_HPS["beta2_gap"]),
+            eps=DEFAULT_RECIPE_HPS["eps"],
+            group_overrides=[
+                OptimGroupOverride(
+                    params=["embeddings.weight"],
+                    opts={"weight_decay": 0.0},
+                )
+            ],
+        ),
+        compile_model=False,
+        dp_config=TransformerDataParallelConfig(
+            name=DataParallelType.fsdp,
+            param_dtype=DType.bfloat16,
+            reduce_dtype=DType.float32,
+        ),
+        max_grad_norm=DEFAULT_RECIPE_HPS["max_grad_norm"],
+        scheduler=CosWithWarmup(warmup=1),
+    )
+    trainer = (
+        TrainerConfig(
+            save_folder=checkpoint_root,
+            save_overwrite=False,
+            metrics_collect_interval=1,
+            cancel_check_interval=1,
+            max_duration=Duration.tokens(global_batch_size),
+        )
+        .with_callback(
+            "checkpointer",
+            CheckpointerCallback(
+                save_interval=1,
+                ephemeral_save_interval=None,
+                max_checkpoints=None,
+                save_async=False,
+            ),
+        )
+        .with_callback(
+            "search_validation",
+            LMEvaluatorCallbackConfig(
+                eval_dataset=eval_dataset,
+                eval_interval=None,
+                eval_on_finish=True,
+                eval_duration=Duration.steps(eval_steps),
+                log_interval=1,
+                deterministic=True,
+            ),
+        )
+    )
+    return ComparisonExperimentConfig(
+        model=model,
+        dataset=dataset,
+        data_loader=data_loader,
+        trainer=trainer,
+        train_module=train_module,
+        dataset_id=dataset_id,
+        dataset_version=version,
+        init_seed=init_seed,
+    )
+
+
+def smoke_final_evaluator(**kwargs: Any) -> dict[str, Any]:
+    """Record the search metric for a functional smoke; this is not an untouched eval."""
+    result = {
+        "kind": "functional-smoke-search-validation",
+        **kwargs,
+    }
+    print(json.dumps(result, sort_keys=True), flush=True)
+    return result

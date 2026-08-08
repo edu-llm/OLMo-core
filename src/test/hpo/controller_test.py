@@ -1336,6 +1336,45 @@ def test_brainlift_all_fatal_population_restarts_entirely_fresh():
     )
 
 
+def test_initial_oversample_refills_after_all_trials_fail_before_transition():
+    controller, _ = build(
+        workers=4,
+        rounds_target=4,
+        quantum=2,
+        btt=BTTDiagnoser(BTTConfig(min_fidelity=2)),
+        ipbt=IPBTController(
+            IPBTConfig(
+                population_size=4,
+                initial_oversample=4,
+                top_quantile=0.25,
+                bottom_quantile=0.25,
+                update_interval_init=4,
+            )
+        ),
+        ipbt_meta_proposer=IfBOCandidateGenerator(ndim=2, seed=99),
+        restart_mode=PopulationRestartMode.BTT_AGGREGATE,
+    )
+    allocations = controller.propose_round()
+    controller.ingest(
+        [
+            WorkerObservation(
+                trial_id=allocation.trial_id,
+                tokens=allocation.target_fidelity,
+                heldout_ce=float("nan"),
+                train_ce_history=(float("nan"),),
+                grad_norm_history=(float("nan"),),
+                activation_ratio=None,
+                numeric_failure=True,
+                checkpoint_ref=None,
+            )
+            for allocation in allocations
+        ]
+    )
+    replacements = controller.propose_round()
+    assert len(replacements) == 4
+    assert all(allocation.kind is ActionKind.START for allocation in replacements)
+
+
 def test_doubled_ipbt_interval_elapses_from_last_transition(monkeypatch):
     ipbt = IPBTController(
         IPBTConfig(

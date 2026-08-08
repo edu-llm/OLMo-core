@@ -1,0 +1,102 @@
+{
+  "algorithm": "ifbo_ipbt_btt",
+  "seed": 20260808,
+  "search_space": [
+    {
+      "name": "lr",
+      "low": 0.0003,
+      "high": 0.0015,
+      "log": true
+    },
+    {
+      "name": "weight_decay",
+      "low": 0.03,
+      "high": 0.2,
+      "log": true
+    },
+    {
+      "name": "max_grad_norm",
+      "low": 0.5,
+      "high": 2.0,
+      "log": true
+    }
+  ],
+  "fixed_hps": {
+    "beta2_gap": 0.05,
+    "eps": 1e-08,
+    "warmup_fraction": 0.05,
+    "decay_fraction": 0.2,
+    "terminal_lr_ratio": 0.1,
+    "global_batch_mult": 1.0
+  },
+  "normalizer": {
+    "ce_at_zero": 16.0,
+    "ce_at_one": 8.0
+  },
+  "posterior": {
+    "kind": "ftpfn",
+    "device": "cpu"
+  },
+  "proposer": {
+    "kind": "ifbo"
+  },
+  "btt": {
+    "min_fidelity": 163840,
+    "window": 2,
+    "agv_max_grad_norm": 100000.0,
+    "eag_ratio": 100.0,
+    "erg_ratio": 0.01,
+    "plc_min_rel_improve": 0.0,
+    "ulc_spike_ratio": 100.0,
+    "lar_min_active": 0.0,
+    "nmg_min_rel_improve": 0.0,
+    "same_fidelity_top_fraction": 0.25,
+    "late_bloomer_reserve": 0.0
+  },
+  "ipbt": {
+    "population_size": 4,
+    "initial_oversample": 4,
+    "top_quantile": 0.25,
+    "bottom_quantile": 0.25,
+    "update_interval_init": 163840,
+    "reset_fraction": 0.5,
+    "random_hp_fraction": 0.5
+  },
+  "controller": {
+    "target_tokens": 327680,
+    "quantum": 163840,
+    "n_fidelity_bins": 2,
+    "worker_count": 4,
+    "budget_tokens": 1146880,
+    "checkpoint_root": "${EDULLM_CHECKPOINT_DIR}/hybrid",
+    "restart_mode": "btt_aggregate",
+    "btt_restart_fraction": 0.5
+  },
+  "base_global_batch_size": 32768,
+  "gpu_ids": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "experiment_factory": "olmo_core.hpo.comparison:build_comparison_experiment",
+  "factory_kwargs": {
+    "sequence_length": 2048,
+    "global_batch_size": 32768,
+    "rank_microbatch_size": 4096,
+    "data_seed": 210007,
+    "init_seed": 110007,
+    "eval_steps": 2
+  },
+  "search_validation_callback": "search_validation",
+  "untouched_evaluator": "final_evaluation",
+  "heldout_metric": "eval/lm/reservoir-dolma2-val/CE loss",
+  "fidelity": {
+    "kind": "exact"
+  },
+  "final_evaluator_factory": "olmo_core.hpo.comparison:smoke_final_evaluator",
+  "controller_state_path": "/tmp/hpo-comparison-${EDULLM_RUN_ID}.jsonl",
+  "controller_snapshot_root": "${EDULLM_CHECKPOINT_DIR}/hybrid-state",
+  "max_rounds": 16,
+  "require_final_winner": true
+}

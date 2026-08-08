@@ -1,0 +1,10 @@
+# Four one-GPU HPO workers, matched to 35 aggregate optimizer steps.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-4xa10g
+command: >-
+  bash -lc 'export PYTHONDONTWRITEBYTECODE=1 EDULLM_LAUNCH_CHECK=waived &&
+  python .edullm/hpo_on_corpus.py "$EDULLM_RUN_ID"
+  --controller-spec .edullm/hpo-comparison-hybrid.json
+  --checkpoint-root "$EDULLM_CHECKPOINT_DIR"
+  --param-dtype bfloat16'

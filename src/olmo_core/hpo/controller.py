@@ -430,14 +430,20 @@ class HpoController:
             and self.ipbt.config.initial_oversample is not None
             and not self._ipbt_planned_signatures
         ):
-            completed_initial = sum(record.current_fidelity > 0 for record in state.trials.values())
+            completed_initial = sum(
+                record.current_fidelity > 0
+                and record.status not in (TrialStatus.RETIRED, TrialStatus.FAILED)
+                for record in state.trials.values()
+            )
             if completed_initial < self.ipbt.config.initial_oversample:
                 return []
-            initialization_fidelity = min(
+            paused_fidelities = [
                 record.current_fidelity
                 for record in state.trials.values()
                 if record.current_fidelity > 0 and record.status is TrialStatus.PAUSED
-            )
+            ]
+            if paused_fidelities:
+                initialization_fidelity = min(paused_fidelities)
         cands: List[Candidate] = []
         for tid, rec in sorted(state.trials.items()):
             if tid not in self._configs:
@@ -1009,7 +1015,11 @@ class HpoController:
                 self.ipbt is not None
                 and self.ipbt.config.initial_oversample is not None
                 and not self._ipbt_planned_signatures
-                and sum(record.current_fidelity > 0 for record in state.trials.values())
+                and sum(
+                    record.current_fidelity > 0
+                    and record.status not in (TrialStatus.RETIRED, TrialStatus.FAILED)
+                    for record in state.trials.values()
+                )
                 >= self.ipbt.config.initial_oversample
             )
             while True:

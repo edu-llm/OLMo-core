@@ -153,6 +153,10 @@ def _parse_args(argv: Optional[List[str]]) -> argparse.Namespace:
     parser.add_argument("--segment-spec", default=None)
     parser.add_argument("--controller-spec", default=os.environ.get("EDULLM_HPO_SPEC"))
     parser.add_argument("--controller-state", default=None)
+    parser.add_argument(
+        "--checkpoint-root",
+        default=os.environ.get("EDULLM_CHECKPOINT_DIR"),
+    )
     return parser.parse_args(argv)
 
 
@@ -162,6 +166,19 @@ def _load_object(reference: str) -> Any:
     except ValueError as exc:
         raise ValueError("object references must use 'module:attribute' syntax") from exc
     return getattr(importlib.import_module(module_name), attribute)
+
+
+def _expand_environment(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _expand_environment(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_expand_environment(item) for item in value]
+    if isinstance(value, str):
+        expanded = os.path.expandvars(value)
+        if re.search(r"\$(?:\{[^}]+\}|[A-Za-z_][A-Za-z0-9_]*)", expanded):
+            raise ValueError(f"controller spec contains an unresolved environment value: {value}")
+        return expanded
+    return value
 
 
 def _run_configured_segment(
@@ -406,7 +423,9 @@ def _segment_payload(
     controller_spec: Dict[str, Any],
 ) -> Dict[str, Any]:
     base_batch = int(controller_spec["base_global_batch_size"])
-    multiplier = float(allocation.realized_hps.get("global_batch_mult", 1.0))
+    realized_hps = dict(controller_spec.get("fixed_hps", {}))
+    realized_hps.update(allocation.realized_hps)
+    multiplier = float(realized_hps.get("global_batch_mult", 1.0))
     global_batch_size = int(round(base_batch * multiplier))
     target_tokens = int(controller_spec["controller"]["target_tokens"])
     payload = {
@@ -414,7 +433,7 @@ def _segment_payload(
         "factory_kwargs": controller_spec.get("factory_kwargs", {}),
         "target_tokens": target_tokens,
         "global_batch_size": global_batch_size,
-        "realized_hps": allocation.realized_hps,
+        "realized_hps": realized_hps,
         "checkpoint_root": controller_spec["controller"]["checkpoint_root"],
         "search_validation_callback": controller_spec["search_validation_callback"],
         "untouched_evaluator": controller_spec["untouched_evaluator"],
@@ -696,6 +715,14 @@ def _run_untouched_evaluation(
     controller.record_final_evaluation(payload)
 
 
+def _enforce_required_winner(controller, spec: Mapping[str, Any]) -> None:
+    if not bool(spec.get("require_final_winner", False)):
+        return
+    completed = getattr(controller, "final_evaluation_completed", None)
+    if not callable(completed) or not completed():
+        raise RuntimeError("comparison run completed without a full-fidelity winner")
+
+
 def _validate_evidence_gates(spec: Dict[str, Any]) -> None:
     proxy_evidence = spec.get("proxy_evidence")
     fidelity_kind = spec.get("fidelity", {}).get("kind", "exact")
@@ -745,7 +772,12 @@ def run_controller(args: argparse.Namespace) -> int:
     """Run the CPU controller process."""
     if not args.controller_spec:
         raise ValueError("--controller-spec is required in controller mode")
-    spec = json.loads(Path(args.controller_spec).read_text())
+    spec = _expand_environment(json.loads(Path(args.controller_spec).read_text()))
+    if args.checkpoint_root:
+        required_prefix = args.checkpoint_root.rstrip("/") + "/"
+        configured_root = str(spec["controller"]["checkpoint_root"])
+        if not configured_root.startswith(required_prefix):
+            raise ValueError("controller checkpoint_root must be under --checkpoint-root")
     _validate_evidence_gates(spec)
     controller = _build_controller_from_spec(spec)
     state_path = args.controller_state or spec.get(
@@ -803,6 +835,7 @@ def run_controller(args: argparse.Namespace) -> int:
             exact_result=exact_result,
         )
     _persist_controller_log(controller, state_path, remote_root)
+    _enforce_required_winner(controller, spec)
     return 0
 
 

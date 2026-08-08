@@ -1,0 +1,12 @@
+# Fixed OLMo2-190M control: 35 optimizer steps and one held-out evaluation.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-1xa10g
+command: >-
+  bash -lc 'export PYTHONDONTWRITEBYTECODE=1 &&
+  python .edullm/run_hpo_baseline.py "$EDULLM_RUN_ID"
+  --target-tokens 1146880 --sequence-length 2048
+  --global-batch-size 32768 --rank-microbatch-size 4096
+  --eval-steps 2 --data-seed 210007 --init-seed 110007
+  --checkpoint-root "$EDULLM_CHECKPOINT_DIR"
+  --param-dtype bfloat16'
