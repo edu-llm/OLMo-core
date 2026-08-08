@@ -250,11 +250,57 @@ class MatrixAwareOptimConfig(OptimConfig, Generic[Opt]):
             f"lm_head.{n}" for n, p in model.lm_head.named_parameters() if p.ndim == 2
         ]
 
-        # Convolution layers typically use parameter tensors with 3+ dimensions. These are currently
-        # not supported. Experimental support for for 3+ dim parameters is available in the Muon
-        # optimizer. It simply flattens the parameters into a 2D tensor.
-        # Check for 3D+ parameters which are not supported
-        params_3d_plus = [n for n, p in model.named_parameters() if p.ndim > 2]
+        # DEPTHWISE CONVOLUTION WEIGHTS GO TO THE AdamW SIDE, AND ARE NOT A 3D+ REFUSAL.
+        #
+        # A depthwise `nn.Conv1d` weight is `(channels, 1, kernel_size)`: `channels` independent
+        # length-`kernel_size` vectors, not a matrix. Orthogonalizing one is meaningless, and
+        # Hyperball's radius over one constrains an arbitrary quantity. So they belong in the
+        # vector group with the gains and biases, which is where every Muon-family config sends
+        # things it should not rotate.
+        #
+        # Without this, the short convolutions inside `GatedDeltaNet` and `GatedDeltaNet2` make
+        # every matrix-aware optimizer refuse the whole model. Measured, not hypothetical: it is
+        # `AssertionError: 3D+ parameters are not supported` at optimizer construction, after the
+        # model is built and W&B has a run, which on the platform is a container that exits 72
+        # with the explanation only reachable from the log stream.
+        #
+        # This widens the categorization rather than changing it. Every configuration that worked
+        # before had no 3D parameters at all -- it would have hit the assertion -- so nothing that
+        # currently trains is routed anywhere new.
+        depthwise_conv_params = {
+            n for n, p in model.named_parameters() if p.ndim == 3 and p.shape[1] == 1
+        }
+        vector_params += sorted(depthwise_conv_params)
+
+        # A MODULE MAY DECLARE THAT SOME OF ITS MATRICES MUST NOT BE ORTHOGONALIZED.
+        #
+        # The case this exists for is a deliberately zero-initialised matrix -- a conditioning
+        # projection meant to start as an exact no-op, so that an untrained model computes the
+        # unconditioned function. Hyperball reads its radius as R = ||W_0||_F, which is zero for
+        # such a matrix, and a zero radius pins it at zero for the whole run while its gradients
+        # are computed and thrown away. `MuonH` now refuses that outright rather than training a
+        # dead parameter, so the routing has to be decided here.
+        #
+        # Declared by name on the owning module rather than detected from the values, because a
+        # resumed checkpoint has non-zero values by then and a value-based rule would silently
+        # hand the parameter to a different optimizer on the second attempt than the first.
+        declared: set = set()
+        for module_name, module in model.named_modules():
+            for local_name in getattr(module, "no_orthogonalize_params", ()) or ():
+                declared.add(f"{module_name}.{local_name}" if module_name else local_name)
+        known = {n for n, _ in model.named_parameters()}
+        if unknown := declared - known:
+            raise ValueError(
+                f"no_orthogonalize_params names parameters that do not exist: {sorted(unknown)}"
+            )
+        matrix_params = [n for n in matrix_params if n not in declared]
+        vector_params += sorted(declared & known - set(vector_params))
+
+        # Anything else with 3+ dimensions is still refused, because it would be a genuine matrix
+        # of unknown layout and guessing how to rotate it is worse than stopping.
+        params_3d_plus = [
+            n for n, p in model.named_parameters() if p.ndim > 2 and n not in depthwise_conv_params
+        ]
         assert not params_3d_plus, f"3D+ parameters are not supported: {params_3d_plus}"
 
         # Assert all parameters are categorized

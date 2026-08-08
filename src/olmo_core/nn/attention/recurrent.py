@@ -653,6 +653,12 @@ class GatedDeltaNet2(SequenceMixer):
             for proj in (self.u_a, self.u_b, self.u_w):
                 nn.init.zeros_(proj.weight)
                 nn.init.zeros_(proj.bias)
+            # These three are 2D, so a matrix-aware optimizer would put them in its Muon group and
+            # Hyperball would read their radius as ||W_0||_F = 0 -- pinning them at zero for the
+            # whole run, which turns the noise conditioning off while everything still trains and
+            # reports a plausible loss. Declaring them here routes them to AdamW, which can move a
+            # parameter off zero. See `MatrixAwareOptimConfig.categorize_parameters`.
+            self.no_orthogonalize_params = ("u_a.weight", "u_b.weight", "u_w.weight")
 
         self.q_conv1d = CausalConv1d(
             hidden_size=self.key_dim,

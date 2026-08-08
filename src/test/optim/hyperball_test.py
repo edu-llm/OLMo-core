@@ -463,3 +463,116 @@ def test_hsdp_moe_step(config_cls, shard_degree: int, num_replicas: int):
         world_size=2,
         func_args=(config_cls, shard_degree, num_replicas),
     )
+
+
+def test_depthwise_conv_weights_go_to_adamw_not_muon():
+    """GDN-2's short convolutions must not make a matrix-aware optimizer refuse the model.
+
+    Measured on run_019fe28d-2fcd, not hypothetical: a `CausalConv1d` weight is
+    `(channels, 1, kernel_size)`, `categorize_parameters` asserted on any 3D parameter, and the
+    container exited 72 at optimizer construction -- after the model was built and W&B had opened a
+    run, so the only explanation was in the log stream.
+
+    A depthwise weight is `channels` independent length-`kernel_size` vectors, so orthogonalizing it
+    is meaningless and Hyperball's radius over it constrains an arbitrary quantity. It belongs with
+    the gains and biases on the AdamW side.
+    """
+    import torch.nn as nn
+
+    from olmo_core.nn.transformer import TransformerConfig
+    from olmo_core.optim import MuonHConfig
+
+    model = TransformerConfig.llama2_271M(vocab_size=1024).build()
+    config = MuonHConfig(lr=0.01)
+
+    # A model with no 3D parameters must categorize exactly as it always did.
+    before = config.categorize_parameters(model)
+
+    model.blocks["0"].probe_conv = nn.Conv1d(64, 64, 4, groups=64, bias=False)
+    name = "blocks.0.probe_conv.weight"
+    assert model.blocks["0"].probe_conv.weight.ndim == 3
+
+    after = config.categorize_parameters(model)
+
+    assert name in after["vector"], "a depthwise conv weight belongs on the AdamW side"
+    assert name not in after["matrix"], "a depthwise conv weight must not be orthogonalized"
+    # Nothing else moved.
+    assert after["matrix"] == before["matrix"]
+    assert after["embed"] == before["embed"]
+    assert after["lm_head"] == before["lm_head"]
+
+    # And the whole group-building path now succeeds rather than asserting.
+    assert config.default_group_overrides(model)
+    assert config.build_groups(model, strict=True)
+
+
+def test_non_depthwise_3d_parameters_are_still_refused():
+    """Widening the categorization must not turn the guard off for layouts we cannot guess."""
+    import torch.nn as nn
+
+    from olmo_core.nn.transformer import TransformerConfig
+    from olmo_core.optim import MuonHConfig
+
+    model = TransformerConfig.llama2_271M(vocab_size=1024).build()
+    # in_channels > 1, so this is a genuine stack of matrices rather than per-channel vectors.
+    model.blocks["0"].bad_conv = nn.Conv1d(64, 64, 4, bias=False)
+
+    with pytest.raises(AssertionError, match="3D\\+ parameters are not supported"):
+        MuonHConfig(lr=0.01).categorize_parameters(model)
+
+
+def test_zero_initialised_matrix_is_routed_to_adamw_when_declared():
+    """A conditioning projection that starts as an exact no-op cannot be Hyperball-constrained.
+
+    R = ||W_0||_F is zero for a zero-initialised matrix, so the step adds nothing and the radial
+    projection multiplies by zero: the parameter is pinned at zero for the whole run while its
+    gradients are computed and discarded. Everything still trains and reports a plausible loss,
+    which is why this is declared rather than left to be noticed.
+    """
+    import torch.nn as nn
+
+    from olmo_core.nn.transformer import TransformerConfig
+    from olmo_core.optim import MuonHConfig
+
+    model = TransformerConfig.llama2_271M(vocab_size=1024).build()
+    config = MuonHConfig(lr=0.01)
+    before = config.categorize_parameters(model)
+
+    block = model.blocks["0"]
+    block.u_a = nn.Linear(64, 16, bias=True)
+    nn.init.zeros_(block.u_a.weight)
+    nn.init.zeros_(block.u_a.bias)
+    block.no_orthogonalize_params = ("u_a.weight",)
+
+    after = MuonHConfig(lr=0.01).categorize_parameters(model)
+    name = "blocks.0.u_a.weight"
+
+    assert name not in after["matrix"], "a declared matrix must leave the Muon group"
+    assert name in after["vector"], "and land on the AdamW side, which can move it off zero"
+    assert after["matrix"] == before["matrix"], "nothing else may move"
+
+
+def test_no_orthogonalize_params_naming_a_missing_parameter_is_an_error():
+    """A typo here would silently leave the parameter in the Muon group, which is the bug."""
+    from olmo_core.nn.transformer import TransformerConfig
+    from olmo_core.optim import MuonHConfig
+
+    model = TransformerConfig.llama2_271M(vocab_size=1024).build()
+    model.blocks["0"].no_orthogonalize_params = ("does_not_exist.weight",)
+
+    with pytest.raises(ValueError, match="do not exist"):
+        MuonHConfig(lr=0.01).categorize_parameters(model)
+
+
+def test_hyperball_refuses_a_zero_radius_block():
+    """Refusing beats freezing: a zero radius also makes the drift metric read 1.0 and lie."""
+    import torch.nn as nn
+
+    from olmo_core.optim.hyperball import MuonH
+
+    weight = nn.Parameter(torch.zeros(8, 8))
+    optim = MuonH([{"params": [weight], "algorithm": "muon", "lr": 0.01}], constraint="hyperball")
+    weight.grad = torch.randn(8, 8)
+
+    with pytest.raises(RuntimeError, match="radius is zero"):
+        optim.step()

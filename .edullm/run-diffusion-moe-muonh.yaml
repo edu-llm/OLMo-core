@@ -16,7 +16,16 @@
 # 524288 --sequence-length 4096 --rank-microbatch-size 8192 --mixture on --mixture-total
 # 10000000000`. Steps, batch, sequence length, microbatch, corpus, mixture and dtype are held
 # equal here so that the difference between the two runs is the thing being tested rather than a
-# budget. The baseline's own runs took 11-12 hours on this shape, which is what sets --hours below.
+# budget.
+#
+# HOW LONG THIS TAKES IS NOT KNOWN FROM ANY FINISHED RUN, AND THE SMOKE SPEC IS WHAT ANSWERS IT.
+# `edullm status`'s duration column is age since submission and not runtime -- the same run reads
+# larger every time it is asked -- so nothing there says what the baseline cost in wall clock. The
+# only committed figure to reason from is the MuonH MoE arm's own budget: 4.00B tokens at
+# `--hours 7` on this shape, so about 1.75 h/B at sequence length 2048 with top_k=4. Scaled to 10B
+# that is ~17.5h before adjusting for this spec's longer sequence and doubled top_k, both of which
+# push it up, against a reversed scan that costs nothing. Read the projection out of the smoke
+# run's tokens/second and do not submit this until it is under the ceiling with headroom.
 #
 # --moe-top-k 8, WHICH IS NOT olmo2_370M_moe's OWN 4, AND IS A SCIENCE PARAMETER. At top_k=4 this
 # arm has 299.6M active non-embedding parameters against the baseline's 409.2M -- 73% -- so a loss

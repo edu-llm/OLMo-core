@@ -449,6 +449,25 @@ class MuonH(Optimizer):
         radius = self._radii.get(key)
         if radius is None:
             radius = weight_blocks.norm(dim=(-2, -1), keepdim=True).to(torch.float32)
+            # A ZERO-NORM BLOCK IS NOT A SMALL RADIUS, IT IS A FROZEN PARAMETER.
+            #
+            # R = ||W_0||_F, the step is `lr * R`, and the projection is `W * R / ||W||`. At
+            # R = 0 the step adds nothing and the projection multiplies by zero, so the block is
+            # pinned at zero for the whole run while its gradients are computed and discarded.
+            # Worse, the drift metric becomes `0 / 1e-30 - 1 = -1`, so the one number that says
+            # whether Hyperball is working reports 1.0 and looks like a constraint failure.
+            #
+            # This reaches any deliberately zero-initialised matrix -- a zero-init residual gate,
+            # a conditioning projection meant to start as a no-op -- which is a normal thing to
+            # want and silently incompatible with a norm constraint. Such a parameter belongs on
+            # the AdamW side, which can move it off zero.
+            if (radius == 0).any():
+                raise RuntimeError(
+                    "Hyperball radius is zero for at least one block, because its weight was "
+                    "zero at initialisation. R = ||W_0||_F, so that block can never move and its "
+                    "reported drift will be 1.0. Route zero-initialised parameters to an AdamW "
+                    "group instead of a muon group."
+                )
             if radius_scale != 1.0:
                 # W_0 is on the sphere of radius ||W_0||_F by definition, so it only needs
                 # moving onto the sphere we actually asked for.
