@@ -214,8 +214,79 @@ COPY pyproject.toml ./
 # The import assertion below is the same argument as the one above it: `import edullm_data`
 # would prove the distribution installed, and `from edullm_data.read import dataset_paths`
 # proves the module a training run actually reaches for loads.
+# FLASH-ATTENTION 2, AS A PREBUILT WHEEL, AND THE URL IS FOUR COORDINATES RATHER THAN A NAME.
+#
+# The absence of this package was costing the 370M arms more than any other line in this
+# file. `olmo3_370M` asks for the flash-2 backend, the first rehearsal died on it in
+# eighteen minutes with "'FlashAttention2Backend' is missing the flash-attn package or is
+# not supported on this platform", and `.edullm/hyper_connection_arms.py` answered by
+# pinning the backend to torch SDPA. That is not a property of the card -- an L40S is Ada
+# and flash-2 covers it -- but of this image, and a 100-step probe of the real model on
+# 4xL40S then measured 15.55 s/step, which puts one 12,715-step arm at 55 hours against a
+# 24-hour ceiling. The arm could not be admitted at all.
+#
+# `pip install flash-attn` IS NOT WHAT THIS LINE DOES, AND MUST NOT BE. The sdist builds
+# every kernel from source with nvcc, which this image does not have and which takes hours
+# on a runner even when it does. Dao-AILab publishes prebuilt wheels on its GitHub releases
+# instead, one per (CUDA major, torch minor, C++ ABI, Python, arch) combination, and the
+# whole question is whether one of them matches what is installed above.
+#
+# ALL FOUR COORDINATES WERE READ RATHER THAN ASSUMED:
+#
+#   cu12    -- `torch==2.9.0` from PyPI declares nvidia-cuda-runtime-cu12==12.8.90 and the
+#              rest of the 12.8 nvidia-*-cu12 set, so the runtime in this image is CUDA 12.8.
+#              v2.8.3.post1 publishes only a cu13 build for torch 2.9, so the pin is v2.8.3,
+#              which is the last release carrying cu12torch2.9. Going to post1 would need
+#              torch rebuilt against CUDA 13 and is a different change.
+#   torch2.9 -- matches the pin above exactly. These wheels link libtorch and are not
+#              portable across torch minors; moving the torch pin moves this URL with it.
+#   cxx11abiTRUE -- torch's manylinux_2_28 wheels are built with the new libstdc++ ABI, and
+#              the extension's dynamic symbols carry __cxx11, so the TRUE build is the
+#              matching one. Dao-AILab publishes no FALSE build for torch 2.9 at all.
+#   cp312   -- the registered base digest sha256:57cd7c3a…10de is Debian trixie carrying
+#              python 3.12.13, the same fact the apt-get layer above rests on.
+#
+# NO CUDA BASE IMAGE IS NEEDED FOR THIS, WHICH IS THE FINDING WORTH WRITING DOWN. The
+# registry describes edullm-p1 as "the only registration that needs a prebuilt flash-attn
+# wheel", and it builds from docker.io/nvidia/cuda for that reason. Read the wheel and the
+# reason does not hold. `flash_attn_2_cuda…so` declares nine DT_NEEDED entries -- libc10,
+# libtorch_cpu, libtorch_python, libc10_cuda, libtorch_cuda, libstdc++, libgcc_s, libc, and
+# exactly one CUDA library: libcudart.so.12. torch's own pip wheels ship that, in
+# site-packages/nvidia/cuda_runtime/lib, and load it under that soname before any extension
+# is imported, so the loader resolves it against an object already in the link map. Nothing
+# in the wheel wants cuBLAS, cuDNN or a driver stub from a base layer. p1's CUDA base is
+# doing something else for it -- its verify_image.py asserts torch.version.cuda == "12.8"
+# and does a bare ctypes.CDLL("libcudart.so.12") with no torch loaded, which is a check that
+# needs a system CUDA rather than a wheel that does -- so for this image the CUDA base would
+# have been convenient and is not necessary. This repository keeps the one python base the
+# three training images share, and the registry comment above is worth correcting.
+#
+# THE GLIBC AND ARCHITECTURE CHECKS, BECAUSE A `linux_x86_64` TAG PROMISES NEITHER. The
+# extension's highest versioned symbol requirement is GLIBC_2.32 and GLIBCXX_3.4.21, against
+# trixie's 2.41 and GCC 14, so both clear with room. Its fatbin carries sm_80, sm_86, sm_89
+# and sm_90 -- sm_89 is the L40S named directly, and CUDA's minor-version binary
+# compatibility would have covered it from sm_80 regardless.
+#
+# UNPINNED BY HASH AND STILL IMMUTABLE, like the edullm-data tarball below it: a GitHub
+# release asset URL names one uploaded file, and the version is in the filename four times
+# over. Installed WITHOUT --no-deps deliberately, for the same reason the project install at
+# the bottom of this file is: the wheel declares torch and einops, torch is already
+# satisfied by the pin on the line above so pip reaches the network for nothing, and einops
+# is a real import inside flash_attn that --no-deps would leave out of the image.
+#
+# IT COSTS ABOUT A GIGABYTE, and that is the honest price. One 253 MiB wheel expands to a
+# single 998 MiB shared object, because it is every head-dim and every dtype instantiated
+# ahead of time. It sits in this layer rather than below the source copy, so it is keyed on
+# pyproject.toml and this file and is one blob shared by every image built from this
+# dependency set -- the same argument the paragraph above makes, and the reason this is
+# affordable at all.
+#
+# WHAT THIS LINE DOES NOT INSTALL: ring-flash-attn, which FlashAttention2Backend requires
+# only for context parallelism. These runs are DP-only at sequence length 4096, so it would
+# be weight in the image nothing reaches for.
 RUN set -eux; \
     python -m pip install --no-cache-dir "torch==2.9.0"; \
+    python -m pip install --no-cache-dir "flash-attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3%2Bcu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl"; \
     python -c "import tomllib; project = tomllib.load(open('pyproject.toml', 'rb'))['project']; open('/tmp/dependencies.txt', 'w').write('\n'.join(project['dependencies'] + project['optional-dependencies']['wandb']) + '\n')"; \
     python -m pip install --no-cache-dir -r /tmp/dependencies.txt boto3 "botocore[crt]"; \
     rm /tmp/dependencies.txt; \
@@ -268,6 +339,24 @@ COPY . .
 # So it names what a training workload actually reaches for. Anything that breaks between
 # the pinned torch and this library now breaks the build, where it costs a runner minute.
 #
+# THE FLASH-2 LINE IS THE EIGHTEEN-MINUTE REHEARSAL, MADE INTO A BUILD STEP, AND IT CALLS
+# THE EXACT CLASSMETHOD THAT KILLED IT. `import flash_attn` succeeding would prove a
+# distribution is on disk; it would not prove olmo_core reaches it.
+# olmo_core.nn.attention.flash_attn_api imports flash_attn inside a try/except and sets its
+# module global to None on any failure -- a torch-minor mismatch, a C++ ABI mismatch, a
+# libcudart the loader cannot find -- so an image can carry the wheel and answer
+# has_flash_attn_2() False anyway, silently, until an arm has been priced and admitted and
+# has run for eighteen minutes.
+#
+# FlashAttention2Backend.assert_supported() is therefore the check, because it is the frame
+# the rehearsal's traceback named and it raises the rehearsal's own RuntimeError. The
+# version print beside it is not decoration: it puts the resolved version in the build log,
+# which is where somebody debugging a future torch bump will look first.
+#
+# It needs no GPU. The extension's only CUDA dependency is libcudart, which loads on a
+# runner with no device because CUDA initialisation is lazy, so this is a real check of the
+# link rather than a check deferred to the first paid instance.
+#
 # THE CRC-32C LINE IS THE FAILED RUN, MADE INTO A BUILD STEP, AND IT IS TWO CHECKS BECAUSE
 # THERE ARE TWO WAYS TO GET THIS WRONG. `pip install botocore[crt]` succeeding proves a
 # distribution is on disk; it does not prove botocore reached it. botocore imports awscrt
@@ -292,6 +381,7 @@ RUN set -eux; \
     python -c "import torch; assert torch.__version__.startswith('2.9.0'), f'torch was moved off the pin: {torch.__version__}'"; \
     python -c "import torch; assert torch.version.cuda, 'the CUDA build of torch was replaced by a CPU wheel'"; \
     python -c "import boto3, wandb; from olmo_core.data import TokenizerConfig; from olmo_core.nn.transformer import TransformerConfig; print(TransformerConfig.olmo2_190M(vocab_size=TokenizerConfig.gpt2().padded_vocab_size()).__class__.__name__)"; \
+    python -c "from olmo_core.nn.attention.backend import FlashAttention2Backend; FlashAttention2Backend.assert_supported(); import flash_attn; print(flash_attn.__version__)"; \
     python -c "import boto3; from botocore import UNSIGNED; from botocore.config import Config; from botocore.stub import Stubber; client = boto3.client('s3', region_name='us-east-1', config=Config(signature_version=UNSIGNED)); stub = Stubber(client); stub.add_response('put_object', {}); stub.activate(); client.put_object(Bucket='b', Key='k', Body=b'123456789', ChecksumAlgorithm='CRC32C')"; \
     python -c "from awscrt.checksums import crc32c; assert crc32c(b'123456789') == 0xE3069283, 'awscrt computes something other than CRC-32C'"; \
     python -c "from edullm_data.read import dataset_paths, resolve_latest; print(dataset_paths.__module__)"
