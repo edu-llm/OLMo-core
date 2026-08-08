@@ -1,4 +1,6 @@
 from .block import (
+    HyperConnectionReorderedNormTransformerBlock,
+    HyperConnectionTransformerBlock,
     LayerNormScaledTransformerBlock,
     MoEHybridReorderedNormTransformerBlock,
     MoEHybridTransformerBlock,
@@ -36,6 +38,8 @@ __all__ = [
     "TransformerBlockBase",
     "TransformerBlock",
     "ReorderedNormTransformerBlock",
+    "HyperConnectionTransformerBlock",
+    "HyperConnectionReorderedNormTransformerBlock",
     "LayerNormScaledTransformerBlock",
     "PeriNormTransformerBlock",
     "NormalizedTransformerBlock",

@@ -43,6 +43,38 @@ def init_linear(
         nn.init.zeros_(m.bias)
 
 
+@torch.no_grad()
+def scale_output_modules(block: nn.Module, *, factor: float):
+    """
+    Rescale a block's already-initialized output modules in place, which is how
+    hyper-connections keep the standard deviation of the pre-unembedding hidden state where it
+    would have been without the extra lanes.
+
+    ByteDance scale "the second linear layer of the feedforward network and the output projector
+    of the attention module"; those are ``feed_forward.w2`` and ``attention.w_out`` here. See
+    :func:`~olmo_core.nn.residual_stream.output_init_scale` for the factor and for why its sign
+    is not obvious from the paper.
+
+    :param block: The transformer block to rescale.
+    :param factor: Multiplier applied to the weights, which multiplies their standard deviation
+        by the same amount.
+    """
+    if factor == 1.0:
+        return
+
+    for module_path in ("feed_forward.w2", "attention.w_out"):
+        module: Optional[nn.Module] = block
+        for attr in module_path.split("."):
+            module = getattr(module, attr, None)
+            if module is None:
+                break
+        if module is None:
+            continue
+        weight = getattr(module, "weight", None)
+        if weight is not None:
+            get_local_tensor(weight).mul_(factor)
+
+
 class InitMethod(StrEnum):
     normal = "normal"
     """

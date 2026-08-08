@@ -12,6 +12,7 @@ from torch.distributed.tensor.parallel import PrepareModuleInput, parallelize_mo
 from olmo_core.distributed.parallel.tensor_parallel import SequenceParallel
 from olmo_core.distributed.utils import get_local_tensor
 from olmo_core.doc_utils import beta_feature
+from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.ops import attach_auxiliary_loss
 
 from ..attention.base import SequenceMixerConfig
@@ -22,7 +23,11 @@ from ..functional import l2_normalize
 from ..layer_norm import LayerNormConfig
 from ..moe import MoEConfig, MoERouter
 from ..moe.parallel_mlp import ParallelMLPBase
-from ..residual_stream import ResidualStream
+from ..residual_stream import (
+    HyperConnectionConfig,
+    HyperConnectionMode,
+    ResidualStream,
+)
 from .config import TransformerDataParallelWrappingStrategy
 
 if TYPE_CHECKING:
@@ -288,6 +293,140 @@ class LayerNormScaledTransformerBlock(TransformerBlock):
         return self.feed_forward_residual_stream(
             h, self.feed_forward(self.feed_forward_norm(h) * scale)
         )
+
+
+class HyperConnectionTransformerBlock(TransformerBlock):
+    """
+    A variant of :class:`TransformerBlock` whose residual stream is widened into ``n`` lanes by
+    `hyper-connections <https://arxiv.org/abs/2409.19606>`_.
+
+    The block operates on a lane tensor of shape ``(batch_size, seq_len, n_lanes, d_model)``;
+    :class:`~olmo_core.nn.transformer.Transformer` replicates the embeddings into lanes on the
+    way in and sums them on the way out. The sublayers themselves are untouched and still see
+    ``(batch_size, seq_len, d_model)``.
+
+    The reason this needs a block rather than only a
+    :class:`~olmo_core.nn.residual_stream.HyperConnectionStream` is the input side. A residual
+    module is handed the sublayer *output*, so swapping one in can only mix lanes on the output
+    side -- which is the incomplete variant Tencent reported a significant degradation for.
+    Reading ``A_m^T H`` has to happen where the sublayer input is still in scope, which is here.
+
+    :param hyper_connections: The hyper-connection config. Required.
+
+    See :class:`TransformerBlock` for the other parameters.
+    """
+
+    def __init__(
+        self,
+        *,
+        d_model: int,
+        block_idx: int,
+        n_layers: int,
+        sequence_mixer: SequenceMixerConfig,
+        feed_forward: FeedForwardConfig,
+        layer_norm: LayerNormConfig,
+        hyper_connections: Optional[HyperConnectionConfig] = None,
+        dropout: float = 0.0,
+        attention_residual_alpha: float = 1.0,
+        feed_forward_residual_alpha: float = 1.0,
+        init_device: str = "cpu",
+        cache: Optional[BufferCache] = None,
+    ):
+        super().__init__(
+            d_model=d_model,
+            block_idx=block_idx,
+            n_layers=n_layers,
+            sequence_mixer=sequence_mixer,
+            feed_forward=feed_forward,
+            layer_norm=layer_norm,
+            dropout=dropout,
+            attention_residual_alpha=attention_residual_alpha,
+            feed_forward_residual_alpha=feed_forward_residual_alpha,
+            init_device=init_device,
+            cache=cache,
+        )
+        if hyper_connections is None:
+            raise OLMoConfigurationError(
+                f"{self.__class__.__name__} requires a 'hyper_connections' config"
+            )
+        self.hyper_connections = hyper_connections
+        self.n_lanes = hyper_connections.n_lanes
+
+        # The two ResidualStream modules the parent built cannot carry lanes, so replace them.
+        # Each residual connection is one "layer" k in eq. 14, so the lane that gets read
+        # advances between attention and feed-forward rather than once per block. That is what
+        # eq. 26's factor of two per block means, and it is what makes the lanes differentiate.
+        self.attention_residual_stream = hyper_connections.build(
+            d_model=d_model,
+            block_idx=2 * block_idx,
+            alpha=attention_residual_alpha,
+            dropout=dropout,
+            init_device=init_device,
+        )
+        self.feed_forward_residual_stream = hyper_connections.build(
+            d_model=d_model,
+            block_idx=2 * block_idx + 1,
+            alpha=feed_forward_residual_alpha,
+            dropout=dropout,
+            init_device=init_device,
+        )
+
+    def _run_attention(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
+        return self.attention(self.attention_norm(x), **kwargs)
+
+    def _run_feed_forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.feed_forward(self.feed_forward_norm(x))
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        *,
+        loss_div_factor: Optional[Union[torch.Tensor, float]] = None,
+        **kwargs,
+    ) -> torch.Tensor:
+        del loss_div_factor
+        att_in, att_beta, att_alpha_r = self.attention_residual_stream.read(x)
+        h = self.attention_residual_stream.write(
+            x, self._run_attention(att_in, **kwargs), att_beta, att_alpha_r
+        )
+        ff_in, ff_beta, ff_alpha_r = self.feed_forward_residual_stream.read(h)
+        return self.feed_forward_residual_stream.write(
+            h, self._run_feed_forward(ff_in), ff_beta, ff_alpha_r
+        )
+
+    def apply_tp(
+        self, tp_mesh: DeviceMesh, *, input_layout: Placement, float8_enabled: bool = False
+    ):
+        del tp_mesh, input_layout, float8_enabled
+        raise NotImplementedError(
+            "TP is not implemented yet for hyper-connections. The block passes a 4-D lane "
+            "tensor between sublayers, which the sequence-parallel layouts here assume is 3-D."
+        )
+
+    def num_flops_per_token(self, seq_len: int) -> int:
+        flops = super().num_flops_per_token(seq_len)
+        # Two streams per block, each reading, mixing and scattering the lanes, plus the dynamic
+        # projections. Roughly 0.2% of the block at n=4, matching the paper's Table 8.
+        n, d = self.n_lanes, self.d_model
+        per_stream = 2 * (n * d + n * n * d) + n * d
+        if self.hyper_connections.dynamic:
+            per_stream += 2 * (n * d * n + n * d)
+            if self.hyper_connections.mode == HyperConnectionMode.full:
+                per_stream += 2 * n * d
+        return flops + 2 * per_stream
+
+
+class HyperConnectionReorderedNormTransformerBlock(HyperConnectionTransformerBlock):
+    """
+    :class:`HyperConnectionTransformerBlock` with the norm placement of
+    :class:`ReorderedNormTransformerBlock`, which is what the OLMo-2 and OLMo-3 configs use.
+    """
+
+    def _run_attention(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
+        return self.attention_norm(self.attention(x, **kwargs))
+
+    def _run_feed_forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.feed_forward_norm(self.feed_forward(x))
 
 
 class ReorderedNormTransformerBlock(TransformerBlock):

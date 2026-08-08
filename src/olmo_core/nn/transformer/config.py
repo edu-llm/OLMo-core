@@ -27,6 +27,7 @@ from ..feed_forward import ActivationFunction, FeedForwardConfig, FeedForwardTyp
 from ..layer_norm import LayerNormConfig, LayerNormType
 from ..lm_head import LMHeadConfig, LMHeadType
 from ..moe import MoEConfig, MoERouterConfig, MoEType
+from ..residual_stream import HyperConnectionConfig, HyperConnectionMode
 from ..rope import RoPEConfig, RoPEScalingConfig, RoPEType
 from .init import InitMethod
 
@@ -122,6 +123,16 @@ class TransformerBlockType(StrEnum):
     ➡️ :class:`PeriNormTransformerBlock`
     """
 
+    hyper_connection = "hyper_connection"
+    """
+    ➡️ :class:`HyperConnectionTransformerBlock`
+    """
+
+    hyper_connection_reordered_norm = "hyper_connection_reordered_norm"
+    """
+    ➡️ :class:`HyperConnectionReorderedNormTransformerBlock`
+    """
+
     normalized = "normalized"
     """
     ➡️ :class:`NormalizedTransformerBlock`
@@ -176,6 +187,10 @@ class TransformerBlockConfig(ModuleConfig):
     """
     The config for the MoE feed-forward layer. Required for MoE blocks.
     """
+    hyper_connections: Optional[HyperConnectionConfig] = None
+    """
+    The hyper-connection config. Required for the hyper-connection block types.
+    """
     name: TransformerBlockType = TransformerBlockType.default
     """
     The block type.
@@ -217,6 +232,8 @@ class TransformerBlockConfig(ModuleConfig):
         cache: Optional[BufferCache] = None,
     ) -> "TransformerBlockBase":
         from .block import (
+            HyperConnectionReorderedNormTransformerBlock,
+            HyperConnectionTransformerBlock,
             LayerNormScaledTransformerBlock,
             MoEHybridReorderedNormTransformerBlock,
             MoEHybridTransformerBlock,
@@ -247,6 +264,10 @@ class TransformerBlockConfig(ModuleConfig):
                 return ReorderedNormTransformerBlock(**kwargs)
             elif self.name == TransformerBlockType.peri_norm:
                 return PeriNormTransformerBlock(**kwargs)
+            elif self.name == TransformerBlockType.hyper_connection:
+                return HyperConnectionTransformerBlock(**kwargs)
+            elif self.name == TransformerBlockType.hyper_connection_reordered_norm:
+                return HyperConnectionReorderedNormTransformerBlock(**kwargs)
             elif self.name == TransformerBlockType.normalized:
                 return NormalizedTransformerBlock(**kwargs)
             elif self.name == TransformerBlockType.moe:
@@ -290,6 +311,10 @@ class TransformerBlockConfig(ModuleConfig):
         if self.name == TransformerBlockType.peri_norm:
             assert self.layer_norm is not None
             block_params += 2 * self.layer_norm.num_params(d_model)
+
+        # Hyper-connection matrices, roughly 0.03% of the model at n=4.
+        if self.hyper_connections is not None:
+            block_params += self.hyper_connections.num_params(d_model)
 
         return block_params
 

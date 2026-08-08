@@ -49,9 +49,15 @@ from ..functional import l2_normalize
 from ..layer_norm import LayerNormConfig
 from ..lm_head import LMHeadConfig, LMLossImplementation, LMOutputWithLoss
 from ..moe import MoEBase
+from ..residual_stream import (
+    expand_residual_lanes,
+    output_init_scale,
+    reduce_residual_lanes,
+)
 from ..rope import RoPEBuffers, RotaryEmbeddingBase
 from ..utils import selective_checkpointing_context_fn
 from .block import (
+    HyperConnectionTransformerBlock,
     MoETransformerBlock,
     NormalizedTransformerBlock,
     TransformerBlock,
@@ -63,7 +69,7 @@ from .config import (
     TransformerDataParallelWrappingStrategy,
     resolve_block_configs,
 )
-from .init import InitMethod
+from .init import InitMethod, scale_output_modules
 
 if TYPE_CHECKING:
     from olmo_core.train.common import ReduceType
@@ -165,6 +171,23 @@ class Transformer(nn.Module):
             )
         self.lm_head = lm_head.build(
             d_model=d_model, vocab_size=vocab_size, init_device=init_device
+        )
+
+        # Hyper-connections widen the residual stream into lanes, which the blocks pass between
+        # each other but the embeddings and LM head know nothing about.
+        hc_configs = [
+            b.hyper_connections
+            for b in self.blocks.values()
+            if isinstance(b, HyperConnectionTransformerBlock)
+        ]
+        if hc_configs and any(c != hc_configs[0] for c in hc_configs[1:]):
+            raise OLMoConfigurationError(
+                "All hyper-connection blocks in a model must share one config; the lanes are a "
+                "property of the stream, not of a block."
+            )
+        self.hyper_connections = hc_configs[0] if hc_configs else None
+        self.residual_lanes = (
+            1 if self.hyper_connections is None else self.hyper_connections.n_lanes
         )
 
         self.tie_word_embeddings = tie_word_embeddings
@@ -358,6 +381,16 @@ class Transformer(nn.Module):
                     num_blocks=self.n_layers,
                     std=self.init_std,
                     generator=generator,
+                )
+
+            # Compensate the output modules for the lanes being summed before the unembedding.
+            # This runs last so it scales whatever the init method above produced.
+            if self.hyper_connections is not None:
+                scale_output_modules(
+                    block,
+                    factor=output_init_scale(
+                        self.residual_lanes, self.hyper_connections.output_init_exponent
+                    ),
                 )
 
             if isinstance(att, (Attention, FusedAttention)):
@@ -627,6 +660,13 @@ class Transformer(nn.Module):
             if self.embedding_norm is not None:
                 h = self.embedding_norm(h)
 
+        # Widen into hyper-connection lanes. Keyed off the rank rather than off which submodules
+        # this stage owns, so that a pipeline stage in the middle of the stack -- which receives
+        # a lane tensor and passes one on -- leaves it alone. Note n_lanes=1 still needs the
+        # lane axis: it is the paper's seesaw control, not the absence of the mechanism.
+        if self.hyper_connections is not None and h.ndim == 3:
+            h = expand_residual_lanes(h, self.residual_lanes)
+
         # Run each block.
         for block_key, block in self.blocks.items():
             block_idx = int(block_key)
@@ -635,6 +675,10 @@ class Transformer(nn.Module):
             if self.compile_enabled:
                 mark_dynamic(h, (0, 1), strict=False)
             h = block(h, **all_block_kwargs, **block_kwargs)
+
+        if self.lm_head is not None and h.ndim == 4:
+            assert self.hyper_connections is not None
+            h = reduce_residual_lanes(h, average=self.hyper_connections.average_lanes)
 
         # Get final logits but again pass-through in case of pipeline parallelism.
         if self.lm_head is not None:
