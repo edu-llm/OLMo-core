@@ -2,6 +2,11 @@ ARG BASE_IMAGE
 
 FROM ${BASE_IMAGE}
 
+# Research image for the eduLLM platform build pipeline.
+#
+# The platform supplies the registered base image as --build-arg BASE_IMAGE,
+# already pinned to a digest. Keep the ARG global and without a default so the
+# platform's base-image provenance gate remains authoritative.
 ENV PYTHONPATH=/opt/olmo-core/src \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
