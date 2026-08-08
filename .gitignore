@@ -61,3 +61,8 @@ site/
 /scratch/
 core
 /dataset-cache/
+
+# Scratch analysis, planning and context docs: untracked on purpose. The image build lints
+# the WHOLE repository (ruff check .), so a throwaway script here can block the pilot from
+# getting an image — and a careless `git add -A` here published private PDFs to a public repo.
+/local/
