@@ -10,16 +10,11 @@ suggested_compute: gpu-1xa10g
 # card with no bfloat16 in hardware would otherwise be admitted and then die on the first kernel.
 command: >-
   bash -lc 'B=s3://sbsandbox-intern-edullm-outputs/teams/memory-split/runs;
-  P=(run_019fcfc6-c6cd-70be-aec5-e3e10d9fc2c4/ run_019fcfc8-14dd-706c-a2fa-ab2492af0bbb/
-  run_019fcfc8-acca-70c6-9345-f3674a37f8b0/checkpoints/
-  run_019fd3c2-ebb6-7038-85b6-eb508275feb4/checkpoints/
-  run_019fd3c2-9cb5-70d1-8aa4-7412df51bc6c/checkpoints/
-  run_019fd3c1-1d5f-7071-9171-a0c93f7dd0cc/);
-  N=(count-13m count-28m-short count-28m-d2p4 count-28m-d4p8 count-13m-d0p6 entropy-28m);
-  I=${AWS_BATCH_JOB_ARRAY_INDEX:-0};
-  python src/scripts/train/factcrowd/score_run.py --prefix $B/${P[$I]}
-  --out ${EDULLM_OUTPUT_PREFIX}${N[$I]}.csv --work-dir /tmp/s
-  --device cuda --dtype float32 --batch-size 512 --last-only'
-fanout:
-  size: 6
-  index_parameter: cell
+  python src/scripts/train/factcrowd/score_run.py --prefix
+  $B/run_019fd3c0-8d2c-70ce-873e-4c2e333856b6/
+  $B/run_019fd3bf-ece6-708d-9706-08967ddbd557/
+  $B/run_019fdd84-9e11-707b-bcd3-adbadb4468ea/
+  --out ${EDULLM_OUTPUT_PREFIX}m0.csv --work-dir /tmp/g
+  --device cuda --dtype float32 --batch-size 512 --last-only
+  --write-gate-report ${EDULLM_OUTPUT_PREFIX}gates-mano.json --gate-endpoint mano'
+
