@@ -1,8 +1,10 @@
 # Mamba comparison
 
-Everything needed for the four-arm comparison now lives on the local branch
-`edullm/mamba-comparison`. Nothing in this preparation pushes a branch or
-submits a GPU job.
+Everything needed for the four-arm comparison lives on
+`edu-llm/OLMo-core` branch `edullm/mamba-comparison`. A push to that
+`edullm/**` branch builds an image for the pushed commit; local or merely
+staged changes are not part of that image. None of the commands in this
+document dispatches a GPU job unless `edullm submit` is used explicitly.
 
 The fan-out follows `edullm/mixer-bakeoff` at remote commit
 `092f2c2bd582c4daa9b3bbfae0effce76b0f833a`: one image, one entrypoint, literal
@@ -76,9 +78,19 @@ edullm check --json \
   --attempts 1
 ```
 
-Only after the branch is committed, pushed, built, and the check has no
-refusals would the corresponding `edullm submit` command be appropriate. Do
-not use `--force`. The platform takes a commit, not this working tree.
+Read the JSON on stdout without combining stderr into it. Exit 0 stands, exit
+1 is a refusal on the merits, exit 2 means the command is wrong, and only exit
+3 is retryable. Match refusal `code`, not its prose.
+
+Only after the intended files are committed, that exact commit is pushed and
+built, and the check has no refusals would the corresponding `edullm submit`
+command be appropriate. Do not use `--force`. The platform takes a commit, not
+this working tree.
+
+The check output is the sole authority for the current runtime bound, cost,
+approval class, image state, and capacity. This document deliberately does not
+quote those values; reviewed platform configuration changes independently of
+this branch.
 
 The rank-0 JSON reports held-out CE, post-warmup throughput, per-device
 throughput, real per-step peak allocated/reserved memory, FLOPs/token, and MFU
@@ -106,7 +118,6 @@ edullm check --json \
   --team memory-split \
   --spec .edullm/run-smoke.yaml \
   --compute gpu-8xa100 \
-  --hours 1 \
   --attempts 1 \
   --fanout-size 5 \
   --fanout-index-parameter AWS_BATCH_JOB_ARRAY_INDEX
@@ -133,7 +144,6 @@ edullm check --json \
   --team memory-split \
   --spec .edullm/run-throughput-smoke.yaml \
   --compute gpu-8xa100 \
-  --hours 1 \
   --attempts 1 \
   --fanout-size 5 \
   --fanout-index-parameter AWS_BATCH_JOB_ARRAY_INDEX
@@ -146,10 +156,12 @@ performance estimate.
 
 ### One A100
 
-The code supports a one-rank A100 functional smoke, but the eduLLM catalog has
-no `gpu-1xa100` profile: its only A100 target is the eight-card
-`gpu-8xa100` p4d node. Therefore the supported platform smoke above uses all
-eight cards. Do not reserve that node and silently use only one card.
+The code supports a one-rank A100 functional smoke. At the last local
+`edullm check`, the reviewed catalog exposed no `gpu-1xa100` profile and the
+available A100 target was the eight-card `gpu-8xa100` node. Treat that as an
+observed catalog result, not a permanent platform promise: inspect the current
+check output before running. Do not reserve an eight-card node and silently use
+only one card.
 
 On a separately controlled single A100 with the built image, dataset reader
 credentials, and the platform-provided `EDULLM_*` environment, use one process
@@ -166,16 +178,20 @@ python -m torch.distributed.run --nproc-per-node=1 --standalone \
   --param-dtype bfloat16 --skip-heldout-eval --no-decode-probe
 ```
 
-Substitute the arm and matching init seed from `docs/mamba-comparison/seeds.json`.
-Use 100 steps instead of 10 for throughput. This one-A100 path is configuration-
-valid and targets sm80, but it remains unverified on real A100 hardware until
-that smoke actually runs.
+Substitute the arm and matching init seed from
+`docs/mamba-comparison/seeds.json`. Use 100 steps instead of 10 for throughput.
+This direct one-A100 path is configuration-valid and targets sm80, but it is
+outside the recorded submission path and remains unverified on real A100
+hardware until that smoke actually runs. An `edullm run` or `edullm shell`
+session is likewise exploratory and does not produce a citable platform run.
 
 ## Image and dataset contract
 
 One sm80 image contains Mamba-3, both native PD kernels, `mlstm-kernels==2.0.4`,
 `xlstm==2.0.5`, and `flashrnn==1.0.6`. The NXAI license notice and confirmed
-organizational research approval are embedded in the image.
+organizational research approval are embedded in the image. The command text
+also names `bfloat16` explicitly; a dtype set only in Python is invisible to
+the platform precision guard.
 
 Dataset reads use the `edullm-dataset-design` and `edullm-datasets` contracts.
 The image pins `edullm-data` commit
