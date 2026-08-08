@@ -4,34 +4,36 @@
   "alpha": 0.05,
   "power_target": 0.8,
   "sources": {
-    "seed_schedule": "/Users/ericwu/Developer/Capstone_LLM-worktrees/olmo-core/claude-bakeoff--mixer-bakeoff/docs/mixer-bakeoff/seeds.json",
+    "seed_schedule": "docs/mixer-bakeoff/seeds.json",
     "seed_schedule_available": true,
-    "arm_param_ledger": "/Users/ericwu/Developer/Capstone_LLM-worktrees/olmo-core/claude-bakeoff--mixer-bakeoff/src/olmo_core/nn/transformer/core6_arms.py",
+    "arm_param_ledger": "src/olmo_core/nn/transformer/core6_arms.py",
     "arm_param_ledger_available": true,
-    "load_notes": [],
+    "load_notes": [
+      "no cell summary found in docs/mixer-bakeoff/run1/results.json"
+    ],
     "dedup_notes": []
   },
   "realised_budget": {
     "steps_used_for_admissibility": 1144,
-    "steps_basis": "the modal `steps` across the 8 cell(s) present",
+    "steps_basis": "the modal `steps` across the 18 cell(s) present",
     "steps_observed": {
-      "1144": 8
+      "1144": 18
     },
     "steps_disagree_across_cells": false,
     "steps_planned_in_seeds_json": 1907,
     "steps_differ_from_plan": true,
     "realised_tokens_per_cell": 599785472,
     "tokens_observed": {
-      "599785472": 8
+      "599785472": 18
     },
     "parameters": 390125472,
     "realised_tpp": 1.5374168441890408,
     "planned_tpp": 2.6
   },
   "coverage": {
-    "cells_found": 8,
+    "cells_found": 18,
     "cells_expected": 18,
-    "cells_admissible": 8,
+    "cells_admissible": 18,
     "cells_excluded": 0,
     "arm_census": [
       {
@@ -56,108 +58,47 @@
       },
       {
         "arm": "KDA_GCONV",
-        "n_admissible": 2,
-        "n_found": 2,
+        "n_admissible": 3,
+        "n_found": 3,
         "n_excluded": 0,
         "n_expected": 3,
         "contributes_variance": true,
-        "df_contributed": 1,
-        "status": "n=2: reduced power; contributes 1 df to the pooled sigma"
+        "df_contributed": 2,
+        "status": "complete"
       },
       {
         "arm": "GDN2",
-        "n_admissible": 0,
-        "n_found": 0,
+        "n_admissible": 3,
+        "n_found": 3,
         "n_excluded": 0,
         "n_expected": 3,
-        "contributes_variance": false,
-        "df_contributed": 0,
-        "status": "NO DATA -- absent from every table below"
+        "contributes_variance": true,
+        "df_contributed": 2,
+        "status": "complete"
       },
       {
         "arm": "KDA_R1",
-        "n_admissible": 0,
-        "n_found": 0,
+        "n_admissible": 3,
+        "n_found": 3,
         "n_excluded": 0,
         "n_expected": 3,
-        "contributes_variance": false,
-        "df_contributed": 0,
-        "status": "NO DATA -- absent from every table below"
+        "contributes_variance": true,
+        "df_contributed": 2,
+        "status": "complete"
       },
       {
         "arm": "KDA_R2",
-        "n_admissible": 0,
-        "n_found": 0,
+        "n_admissible": 3,
+        "n_found": 3,
         "n_excluded": 0,
         "n_expected": 3,
-        "contributes_variance": false,
-        "df_contributed": 0,
-        "status": "NO DATA -- absent from every table below"
+        "contributes_variance": true,
+        "df_contributed": 2,
+        "status": "complete"
       }
     ],
-    "missing_cells": [
-      {
-        "arm": "GDN2",
-        "replicate": 1,
-        "data_seed": 210007,
-        "init_seed": 119010
-      },
-      {
-        "arm": "GDN2",
-        "replicate": 2,
-        "data_seed": 220014,
-        "init_seed": 129017
-      },
-      {
-        "arm": "GDN2",
-        "replicate": 3,
-        "data_seed": 230021,
-        "init_seed": 139024
-      },
-      {
-        "arm": "KDA_GCONV",
-        "replicate": 3,
-        "data_seed": 230021,
-        "init_seed": 136023
-      },
-      {
-        "arm": "KDA_R1",
-        "replicate": 1,
-        "data_seed": 210007,
-        "init_seed": 122011
-      },
-      {
-        "arm": "KDA_R1",
-        "replicate": 2,
-        "data_seed": 220014,
-        "init_seed": 132018
-      },
-      {
-        "arm": "KDA_R1",
-        "replicate": 3,
-        "data_seed": 230021,
-        "init_seed": 142025
-      },
-      {
-        "arm": "KDA_R2",
-        "replicate": 1,
-        "data_seed": 210007,
-        "init_seed": 125012
-      },
-      {
-        "arm": "KDA_R2",
-        "replicate": 2,
-        "data_seed": 220014,
-        "init_seed": 135019
-      },
-      {
-        "arm": "KDA_R2",
-        "replicate": 3,
-        "data_seed": 230021,
-        "init_seed": 145026
-      }
-    ],
-    "partial": true
+    "missing_cells": [],
+    "partial": false
   },
   "hard_errors": [],
   "admissibility": {
@@ -168,11 +109,7 @@
     "saturation_excluded_count": 0,
     "saturation_note": "Pre-registration s4.2, fail-open: the CE endpoint has no ceiling in this design, so no cell is dropped from the sigma pool on saturation grounds.",
     "arms_with_no_variance_estimate": [],
-    "arms_with_no_admissible_cells": [
-      "GDN2",
-      "KDA_R1",
-      "KDA_R2"
-    ]
+    "arms_with_no_admissible_cells": []
   },
   "primary_endpoint": {
     "metric": "val_ce (nats, held out)",
@@ -198,12 +135,43 @@
         ]
       },
       "KDA_GCONV": {
-        "n": 2,
-        "mean": 3.0356585611531948,
-        "sd": 0.005017165878498483,
+        "n": 3,
+        "mean": 3.0451258033389776,
+        "sd": 0.016777127302936807,
         "values": [
           3.032110889138171,
-          3.039206233168219
+          3.039206233168219,
+          3.0640602877105416
+        ]
+      },
+      "GDN2": {
+        "n": 3,
+        "mean": 3.0884205049779356,
+        "sd": 0.004043733190050908,
+        "values": [
+          3.0837608238067027,
+          3.0910097808139754,
+          3.090490910313129
+        ]
+      },
+      "KDA_R1": {
+        "n": 3,
+        "mean": 3.0749409005799304,
+        "sd": 0.04515910262118345,
+        "values": [
+          3.0541736514618703,
+          3.126747774318641,
+          3.0439012759592803
+        ]
+      },
+      "KDA_R2": {
+        "n": 3,
+        "mean": 3.0580544141805,
+        "sd": 0.00642368428042907,
+        "values": [
+          3.0566655953146205,
+          3.065058903355643,
+          3.052438743871236
         ]
       }
     },
@@ -252,22 +220,75 @@
           "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
           "replicate": 2,
           "val_ce": 3.039206233168219
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "replicate": 3,
+          "val_ce": 3.0640602877105416
         }
       ],
-      "GDN2": [],
-      "KDA_R1": [],
-      "KDA_R2": []
+      "GDN2": [
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "replicate": 2,
+          "val_ce": 3.0837608238067027
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "replicate": 3,
+          "val_ce": 3.0910097808139754
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "replicate": 1,
+          "val_ce": 3.090490910313129
+        }
+      ],
+      "KDA_R1": [
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "replicate": 1,
+          "val_ce": 3.0541736514618703
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "replicate": 2,
+          "val_ce": 3.126747774318641
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "replicate": 3,
+          "val_ce": 3.0439012759592803
+        }
+      ],
+      "KDA_R2": [
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "replicate": 1,
+          "val_ce": 3.0566655953146205
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "replicate": 2,
+          "val_ce": 3.065058903355643
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "replicate": 3,
+          "val_ce": 3.052438743871236
+        }
+      ]
     },
     "pooled_sigma": {
-      "sigma": 0.007343472205535493,
-      "df": 5,
-      "contributing_arms": 3,
+      "sigma": 0.02041511911669867,
+      "df": 12,
+      "contributing_arms": 6,
       "chi2_interval": {
-        "multiplier_low": 0.6242080022589902,
-        "multiplier_high": 2.4526139885482716,
-        "sigma_low": 0.004583854115061731,
-        "sigma_high": 0.01801070265581178,
-        "df": 5
+        "multiplier_low": 0.7170859855380972,
+        "multiplier_high": 1.6507351390525902,
+        "sigma_low": 0.014639395811675514,
+        "sigma_high": 0.03369995449387877,
+        "df": 12
       },
       "literature_optimistic": 0.0019,
       "literature_pessimistic": 0.0105
@@ -275,27 +296,27 @@
     "anova": {
       "computable": true,
       "reason": null,
-      "f": 3.191106638565584,
-      "df_between": 2,
-      "df_within": 5,
-      "ms_within": 5.392658403347232e-05,
-      "p": 0.12789636848482355
+      "f": 2.489279924042566,
+      "df_between": 5,
+      "df_within": 12,
+      "ms_within": 0.00041677708854899546,
+      "p": 0.0907985379183337
     },
     "homogeneity": {
       "levene_median_centred": {
         "computable": true,
         "reason": null,
-        "statistic": 0.9990486142413815,
-        "df_between": 2,
-        "df_within": 5,
-        "p": 0.4314943174150919
+        "statistic": 0.9506448827209616,
+        "df_between": 5,
+        "df_within": 12,
+        "p": 0.48402076043117315
       },
       "bartlett": {
         "computable": true,
         "reason": null,
-        "statistic": 2.6310352630353258,
-        "df": 2,
-        "p": 0.26833538842946547
+        "statistic": 16.366690568893816,
+        "df": 5,
+        "p": 0.005871524078637114
       },
       "decision_test": "Levene (median-centred)",
       "rejected_at_alpha": false,
@@ -306,34 +327,34 @@
       "computable": true,
       "reason": null,
       "control": "KDA_BASE",
-      "k": 2,
-      "df": 5.0,
-      "pooled_sd": 0.007343472205535493,
+      "k": 5,
+      "df": 12.0,
+      "pooled_sd": 0.02041511911669867,
       "alpha": 0.05,
-      "rho": 0.4472135954999579,
-      "rho_note": "APPROXIMATE: design is unbalanced (n = [3, 2] vs control n = 3), so the correlations are not all equal; the mean correlation 0.4472 is used in the equicorrelated integral. The critical value is approximate for this design.",
-      "critical_value": 3.043175211229083,
+      "rho": 0.5,
+      "rho_note": "exact (balanced design, shared control)",
+      "critical_value": 2.901255031152524,
       "critical_value_validation": {
         "method": "Gaussian quadrature (Gauss-Legendre) over the equicorrelated max-|t| integral",
-        "k": 2,
-        "df": 5.0,
+        "k": 5,
+        "df": 12.0,
         "alpha": 0.05,
-        "rho": 0.4472135954999579,
-        "critical_value": 3.043175211229083,
+        "rho": 0.5,
+        "critical_value": 2.901255031152524,
         "check_1_quadrature_refinement": {
-          "n_nodes_48": 3.0431752112293653,
-          "n_nodes_96": 3.043175211229083,
-          "abs_diff": 2.824407374646398e-13,
+          "n_nodes_48": 2.9012550311414955,
+          "n_nodes_96": 2.901255031152524,
+          "abs_diff": 1.1028511437416455e-11,
           "passed": true
         },
         "check_2_k1_reduces_to_student_t": {
-          "quadrature_at_k1": 2.570581835636317,
-          "student_t_ppf": 2.5705818356364096,
-          "abs_diff": 9.281464485866309e-14,
+          "quadrature_at_k1": 2.1788128296672666,
+          "student_t_ppf": 2.1788128296671982,
+          "abs_diff": 6.838973831690964e-14,
           "passed": true
         },
         "check_3_integration_window_captures_the_mass": {
-          "mass": 0.9999999999999992,
+          "mass": 0.9999999999999991,
           "passed": true
         }
       },
@@ -343,25 +364,64 @@
           "n": 3,
           "n_control": 3,
           "estimate": -0.011348454102018124,
-          "se": 0.005995919947957518,
-          "t": -1.8926960667451742,
-          "ci_low": -0.029595089056156414,
-          "ci_high": 0.006898180852120166,
-          "ci_half_width": 0.01824663495413829,
-          "dunnett_adjusted_p": 0.19558692048044046,
+          "se": 0.01666887495801672,
+          "t": -0.6808170395783192,
+          "ci_low": -0.05970911143761645,
+          "ci_high": 0.037012203233580204,
+          "ci_half_width": 0.04836065733559833,
+          "dunnett_adjusted_p": 0.9340166232964299,
           "excludes_zero": false
         },
         {
           "arm": "KDA_GCONV",
-          "n": 2,
+          "n": 3,
           "n_control": 3,
-          "estimate": -0.015707167625282015,
-          "se": 0.006703642295640005,
-          "t": -2.3430796174040833,
-          "ci_low": -0.036107525684320504,
-          "ci_high": 0.004693190433756472,
-          "ci_half_width": 0.020400358059038486,
-          "dunnett_adjusted_p": 0.11308874000762947,
+          "estimate": -0.006239925439499139,
+          "se": 0.01666887495801672,
+          "t": -0.3743459264776662,
+          "ci_low": -0.05460058277509747,
+          "ci_high": 0.04212073189609919,
+          "ci_half_width": 0.04836065733559833,
+          "dunnett_adjusted_p": 0.994400559639103,
+          "excludes_zero": false
+        },
+        {
+          "arm": "GDN2",
+          "n": 3,
+          "n_control": 3,
+          "estimate": 0.03705477619945885,
+          "se": 0.01666887495801672,
+          "t": 2.2229920311231166,
+          "ci_low": -0.011305881136139478,
+          "ci_high": 0.08541543353505718,
+          "ci_half_width": 0.04836065733559833,
+          "dunnett_adjusted_p": 0.15847159415228607,
+          "excludes_zero": false
+        },
+        {
+          "arm": "KDA_R1",
+          "n": 3,
+          "n_control": 3,
+          "estimate": 0.02357517180145363,
+          "se": 0.01666887495801672,
+          "t": 1.4143229138638056,
+          "ci_low": -0.024785485534144697,
+          "ci_high": 0.07193582913705196,
+          "ci_half_width": 0.04836065733559833,
+          "dunnett_adjusted_p": 0.5097250839691552,
+          "excludes_zero": false
+        },
+        {
+          "arm": "KDA_R2",
+          "n": 3,
+          "n_control": 3,
+          "estimate": 0.0066886854020231645,
+          "se": 0.01666887495801672,
+          "t": 0.40126795712786306,
+          "ci_low": -0.041671971933575164,
+          "ci_high": 0.05504934273762149,
+          "ci_half_width": 0.04836065733559833,
+          "dunnett_adjusted_p": 0.9923640756017434,
           "excludes_zero": false
         }
       ]
@@ -372,45 +432,45 @@
       "table": [
         {
           "label": "MEASURED (pooled, this run)",
-          "sigma": 0.007343472205535493,
-          "se_of_difference": 0.005995919947957518,
-          "mde": 0.024233169240240913
+          "sigma": 0.02041511911669867,
+          "se_of_difference": 0.01666887495801672,
+          "mde": 0.06359797857807768
         },
         {
           "label": "literature optimistic",
           "sigma": 0.0019,
           "se_of_difference": 0.0015513435037626795,
-          "mde": 0.00626992521626903
+          "mde": 0.005918954408623016
         },
         {
           "label": "literature pessimistic",
           "sigma": 0.0105,
           "se_of_difference": 0.008573214099741124,
-          "mde": 0.03464958672148675
+          "mde": 0.03271001120554825
         }
       ],
-      "measured_mde": 0.024233169240240913
+      "measured_mde": 0.06359797857807768
     },
     "exploratory_gate_contrast": {
       "computable": true,
       "reason": null,
       "label": "KDA_GCONV - KDA_NOACT",
       "status": "EXPLORATORY, uncorrected",
-      "estimate": -0.004358713523263891,
-      "se": 0.006703642295640005,
-      "ci_low": -0.02159097464104005,
-      "ci_high": 0.012873547594512268,
-      "n_left": 2,
+      "estimate": 0.005108528662518985,
+      "se": 0.01666887495801672,
+      "ci_low": -0.03120982995212613,
+      "ci_high": 0.0414268872771641,
+      "n_left": 3,
       "n_right": 3,
-      "p_uncorrected": 0.5442503585566456
+      "p_uncorrected": 0.7644983993295621
     }
   },
   "co_primary_endpoints": {
     "throughput_headline": {
-      "source": "steady-state, total across devices (from `throughput_tok_s_steady` x8)",
+      "source": "steady-state, total across devices (from `throughput_tok_s_steady` x18)",
       "is_steady_state": true,
       "keys_used": {
-        "throughput_tok_s_steady": 8
+        "throughput_tok_s_steady": 18
       },
       "mixed_keys": false,
       "per_arm": {
@@ -426,6 +486,42 @@
           "ratio_to_control": 1.0,
           "ratio_unavailable_reason": null
         },
+        "GDN2": {
+          "n": 3,
+          "mean": 416894.0,
+          "sd": 5690.572291079343,
+          "values": [
+            422041.0,
+            417858.0,
+            410783.0
+          ],
+          "ratio_to_control": 0.9942892677051727,
+          "ratio_unavailable_reason": null
+        },
+        "KDA_R1": {
+          "n": 3,
+          "mean": 326513.0,
+          "sd": 2363.319910634191,
+          "values": [
+            327489.0,
+            328232.0,
+            323818.0
+          ],
+          "ratio_to_control": 0.7787312162473411,
+          "ratio_unavailable_reason": null
+        },
+        "KDA_R2": {
+          "n": 3,
+          "mean": 295638.3333333333,
+          "sd": 2537.974454822848,
+          "values": [
+            297290.0,
+            292716.0,
+            296909.0
+          ],
+          "ratio_to_control": 0.7050953526689703,
+          "ratio_unavailable_reason": null
+        },
         "KDA_NOACT": {
           "n": 3,
           "mean": 418363.6666666667,
@@ -439,14 +535,15 @@
           "ratio_unavailable_reason": null
         },
         "KDA_GCONV": {
-          "n": 2,
-          "mean": 411027.0,
-          "sd": 2664.378351510911,
+          "n": 3,
+          "mean": 410690.3333333333,
+          "sd": 1972.1788289435958,
           "values": [
             409143.0,
-            412911.0
+            412911.0,
+            410017.0
           ],
-          "ratio_to_control": 0.9802965138309834,
+          "ratio_to_control": 0.97949356619091,
           "ratio_unavailable_reason": null
         }
       }
@@ -465,6 +562,42 @@
           "ratio_to_control": 1.0,
           "ratio_unavailable_reason": null
         },
+        "GDN2": {
+          "n": 3,
+          "mean": 416894.0,
+          "sd": 5690.572291079343,
+          "values": [
+            422041.0,
+            417858.0,
+            410783.0
+          ],
+          "ratio_to_control": 0.9942892677051727,
+          "ratio_unavailable_reason": null
+        },
+        "KDA_R1": {
+          "n": 3,
+          "mean": 326513.0,
+          "sd": 2363.319910634191,
+          "values": [
+            327489.0,
+            328232.0,
+            323818.0
+          ],
+          "ratio_to_control": 0.7787312162473411,
+          "ratio_unavailable_reason": null
+        },
+        "KDA_R2": {
+          "n": 3,
+          "mean": 295638.3333333333,
+          "sd": 2537.974454822848,
+          "values": [
+            297290.0,
+            292716.0,
+            296909.0
+          ],
+          "ratio_to_control": 0.7050953526689703,
+          "ratio_unavailable_reason": null
+        },
         "KDA_NOACT": {
           "n": 3,
           "mean": 418363.6666666667,
@@ -478,20 +611,21 @@
           "ratio_unavailable_reason": null
         },
         "KDA_GCONV": {
-          "n": 2,
-          "mean": 411027.0,
-          "sd": 2664.378351510911,
+          "n": 3,
+          "mean": 410690.3333333333,
+          "sd": 1972.1788289435958,
           "values": [
             409143.0,
-            412911.0
+            412911.0,
+            410017.0
           ],
-          "ratio_to_control": 0.9802965138309834,
+          "ratio_to_control": 0.97949356619091,
           "ratio_unavailable_reason": null
         }
       },
       "meta": {
         "keys_used": {
-          "throughput_tok_s_steady": 8
+          "throughput_tok_s_steady": 18
         },
         "missing": []
       }
@@ -510,6 +644,42 @@
           "ratio_to_control": 1.0,
           "ratio_unavailable_reason": null
         },
+        "GDN2": {
+          "n": 3,
+          "mean": 52117.0,
+          "sd": 716.4558604687381,
+          "values": [
+            52769.0,
+            52232.0,
+            51350.0
+          ],
+          "ratio_to_control": 0.9944186881505077,
+          "ratio_unavailable_reason": null
+        },
+        "KDA_R1": {
+          "n": 3,
+          "mean": 40818.333333333336,
+          "sd": 298.2973907585069,
+          "values": [
+            40949.0,
+            41029.0,
+            40477.0
+          ],
+          "ratio_to_control": 0.778834420358491,
+          "ratio_unavailable_reason": null
+        },
+        "KDA_R2": {
+          "n": 3,
+          "mean": 36957.0,
+          "sd": 318.93416248498687,
+          "values": [
+            37167.0,
+            36590.0,
+            37114.0
+          ],
+          "ratio_to_control": 0.7051582297134968,
+          "ratio_unavailable_reason": null
+        },
         "KDA_NOACT": {
           "n": 3,
           "mean": 52295.333333333336,
@@ -523,20 +693,21 @@
           "ratio_unavailable_reason": null
         },
         "KDA_GCONV": {
-          "n": 2,
-          "mean": 51381.5,
-          "sd": 337.28993462598316,
+          "n": 3,
+          "mean": 51338.333333333336,
+          "sd": 249.94466054175538,
           "values": [
             51143.0,
-            51620.0
+            51620.0,
+            51252.0
           ],
-          "ratio_to_control": 0.980384976595071,
+          "ratio_to_control": 0.9795613347883957,
           "ratio_unavailable_reason": null
         }
       },
       "meta": {
         "keys_used": {
-          "throughput_tok_s_steady_per_device": 8
+          "throughput_tok_s_steady_per_device": 18
         },
         "missing": []
       }
@@ -555,6 +726,42 @@
           "ratio_to_control": 1.0,
           "ratio_unavailable_reason": null
         },
+        "GDN2": {
+          "n": 3,
+          "mean": 333147.71590358694,
+          "sd": 3627.0660237761713,
+          "values": [
+            336349.2964176109,
+            333885.30534200475,
+            329208.54595114524
+          ],
+          "ratio_to_control": 1.0078652648398108,
+          "ratio_unavailable_reason": null
+        },
+        "KDA_R1": {
+          "n": 3,
+          "mean": 301180.25671955815,
+          "sd": 2078.26108143088,
+          "values": [
+            301995.460280783,
+            302727.32920539397,
+            298817.9806724975
+          ],
+          "ratio_to_control": 0.9111547362102488,
+          "ratio_unavailable_reason": null
+        },
+        "KDA_R2": {
+          "n": 3,
+          "mean": 271977.88045709184,
+          "sd": 2205.1665359563895,
+          "values": [
+            273459.084676799,
+            269443.5991685825,
+            273030.95752589405
+          ],
+          "ratio_to_control": 0.8228093588274422,
+          "ratio_unavailable_reason": null
+        },
         "KDA_NOACT": {
           "n": 3,
           "mean": 330842.8864978303,
@@ -568,20 +775,21 @@
           "ratio_unavailable_reason": null
         },
         "KDA_GCONV": {
-          "n": 2,
-          "mean": 326103.73939918634,
-          "sd": 1570.5147600891864,
+          "n": 3,
+          "mean": 325782.5990589747,
+          "sd": 1242.0352894191944,
           "values": [
             324993.2177623737,
-            327214.26103599893
+            327214.26103599893,
+            325140.3183785516
           ],
-          "ratio_to_control": 0.9865552605797554,
+          "ratio_to_control": 0.9855837209935984,
           "ratio_unavailable_reason": null
         }
       },
       "meta": {
         "keys_used": {
-          "throughput_tok_s_whole_run": 8
+          "throughput_tok_s_whole_run": 18
         },
         "missing": []
       },
@@ -601,6 +809,42 @@
           "ratio_to_control": 1.0,
           "ratio_unavailable_reason": null
         },
+        "GDN2": {
+          "n": 3,
+          "mean": 9.333209991455078,
+          "sd": 0.0,
+          "values": [
+            9.333209991455078,
+            9.333209991455078,
+            9.333209991455078
+          ],
+          "ratio_to_control": 1.0196739778910775,
+          "ratio_unavailable_reason": null
+        },
+        "KDA_R1": {
+          "n": 3,
+          "mean": 9.216119766235352,
+          "sd": 0.0,
+          "values": [
+            9.216119766235352,
+            9.216119766235352,
+            9.216119766235352
+          ],
+          "ratio_to_control": 1.0068816100100086,
+          "ratio_unavailable_reason": null
+        },
+        "KDA_R2": {
+          "n": 3,
+          "mean": 9.360584259033203,
+          "sd": 0.0,
+          "values": [
+            9.360584259033203,
+            9.360584259033203,
+            9.360584259033203
+          ],
+          "ratio_to_control": 1.0226646775901946,
+          "ratio_unavailable_reason": null
+        },
         "KDA_NOACT": {
           "n": 3,
           "mean": 9.153131484985352,
@@ -614,10 +858,11 @@
           "ratio_unavailable_reason": null
         },
         "KDA_GCONV": {
-          "n": 2,
+          "n": 3,
           "mean": 9.434404373168945,
           "sd": 0.0,
           "values": [
+            9.434404373168945,
             9.434404373168945,
             9.434404373168945
           ],
@@ -627,7 +872,7 @@
       },
       "missing": [],
       "sources": {
-        "per_step_running_max": 8
+        "per_step_running_max": 18
       },
       "sources_mixed": false,
       "gated_on_source": "per_step_running_max",
@@ -652,6 +897,70 @@
           "tps_device_avg": 51779.28515625,
           "throughput_tok_s_steady_per_device": 51744.0,
           "ratio_upstream_over_ours": 1.0006819178310529,
+          "suspicious": false
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "arm": "GDN2",
+          "tps_device_avg": 52755.17578125,
+          "throughput_tok_s_steady_per_device": 52769.0,
+          "ratio_upstream_over_ours": 0.9997380238634426,
+          "suspicious": false
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "arm": "GDN2",
+          "tps_device_avg": 52232.2578125,
+          "throughput_tok_s_steady_per_device": 52232.0,
+          "ratio_upstream_over_ours": 1.0000049359109358,
+          "suspicious": false
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "arm": "KDA_R1",
+          "tps_device_avg": 40936.08203125,
+          "throughput_tok_s_steady_per_device": 40949.0,
+          "ratio_upstream_over_ours": 0.9996845351840093,
+          "suspicious": false
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "arm": "KDA_R1",
+          "tps_device_avg": 41028.9453125,
+          "throughput_tok_s_steady_per_device": 41029.0,
+          "ratio_upstream_over_ours": 0.9999986671013186,
+          "suspicious": false
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "arm": "KDA_R1",
+          "tps_device_avg": 40477.29,
+          "throughput_tok_s_steady_per_device": 40477.0,
+          "ratio_upstream_over_ours": 1.0000071645625912,
+          "suspicious": false
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "arm": "KDA_R2",
+          "tps_device_avg": 37161.2421875,
+          "throughput_tok_s_steady_per_device": 37167.0,
+          "ratio_upstream_over_ours": 0.99984508266742,
+          "suspicious": false
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "arm": "KDA_R2",
+          "tps_device_avg": 36589.46484375,
+          "throughput_tok_s_steady_per_device": 36590.0,
+          "ratio_upstream_over_ours": 0.9999853742484285,
+          "suspicious": false
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "arm": "KDA_R2",
+          "tps_device_avg": 37113.5625,
+          "throughput_tok_s_steady_per_device": 37114.0,
+          "ratio_upstream_over_ours": 0.9999882119954734,
           "suspicious": false
         },
         {
@@ -701,6 +1010,22 @@
           "throughput_tok_s_steady_per_device": 51620.0,
           "ratio_upstream_over_ours": 0.9998802850154979,
           "suspicious": false
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "arm": "KDA_GCONV",
+          "tps_device_avg": 51252.16796875,
+          "throughput_tok_s_steady_per_device": 51252.0,
+          "ratio_upstream_over_ours": 1.0000032773111294,
+          "suspicious": false
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "arm": "GDN2",
+          "tps_device_avg": 51347.828125,
+          "throughput_tok_s_steady_per_device": 51350.0,
+          "ratio_upstream_over_ours": 0.9999577044790653,
+          "suspicious": false
         }
       ],
       "suspicious": []
@@ -718,6 +1043,42 @@
         "ratio_to_control": 1.0,
         "ratio_unavailable_reason": null
       },
+      "GDN2": {
+        "n": 3,
+        "mean": 1.2403333333333333,
+        "sd": 0.014977761292440599,
+        "values": [
+          1.228,
+          1.236,
+          1.257
+        ],
+        "ratio_to_control": 1.00426817808146,
+        "ratio_unavailable_reason": null
+      },
+      "KDA_R1": {
+        "n": 3,
+        "mean": 1.5855,
+        "sd": 0.011434596626029313,
+        "values": [
+          1.581,
+          1.577,
+          1.5985
+        ],
+        "ratio_to_control": 1.2837413569052578,
+        "ratio_unavailable_reason": null
+      },
+      "KDA_R2": {
+        "n": 3,
+        "mean": 1.7691666666666668,
+        "sd": 0.017294025943467694,
+        "values": [
+          1.754,
+          1.788,
+          1.7655
+        ],
+        "ratio_to_control": 1.4324518557289303,
+        "ratio_unavailable_reason": null
+      },
       "KDA_NOACT": {
         "n": 3,
         "mean": 1.2357666666666667,
@@ -731,14 +1092,15 @@
         "ratio_unavailable_reason": null
       },
       "KDA_GCONV": {
-        "n": 2,
-        "mean": 1.256,
-        "sd": 0.008485281374238578,
+        "n": 3,
+        "mean": 1.2571,
+        "sd": 0.006295236294214876,
         "values": [
           1.262,
-          1.25
+          1.25,
+          1.2593
         ],
-        "ratio_to_control": 1.0169531026635157,
+        "ratio_to_control": 1.0178437463043835,
         "ratio_unavailable_reason": null
       }
     },
@@ -755,6 +1117,42 @@
         "ratio_to_control": 1.0,
         "ratio_unavailable_reason": null
       },
+      "GDN2": {
+        "n": 3,
+        "mean": 1.2750000000000001,
+        "sd": 0.0180277563773199,
+        "values": [
+          1.26,
+          1.27,
+          1.295
+        ],
+        "ratio_to_control": 1.0098438202740327,
+        "ratio_unavailable_reason": null
+      },
+      "KDA_R1": {
+        "n": 3,
+        "mean": 1.6243333333333334,
+        "sd": 0.012096831541082632,
+        "values": [
+          1.62,
+          1.615,
+          1.638
+        ],
+        "ratio_to_control": 1.2865278264563036,
+        "ratio_unavailable_reason": null
+      },
+      "KDA_R2": {
+        "n": 3,
+        "mean": 1.8056666666666665,
+        "sd": 0.017785762095938757,
+        "values": [
+          1.79,
+          1.825,
+          1.802
+        ],
+        "ratio_to_control": 1.430150058673055,
+        "ratio_unavailable_reason": null
+      },
       "KDA_NOACT": {
         "n": 3,
         "mean": 1.2713333333333334,
@@ -768,14 +1166,15 @@
         "ratio_unavailable_reason": null
       },
       "KDA_GCONV": {
-        "n": 2,
-        "mean": 1.294,
-        "sd": 0.008485281374238578,
+        "n": 3,
+        "mean": 1.2946666666666669,
+        "sd": 0.0061101009266077925,
         "values": [
           1.3,
-          1.288
+          1.288,
+          1.296
         ],
-        "ratio_to_control": 1.024892473282038,
+        "ratio_to_control": 1.0254204961945996,
         "ratio_unavailable_reason": null
       }
     }
@@ -784,18 +1183,24 @@
     "choice": "KDA_BASE",
     "basis": "throughput and memory (CE unresolved): the fastest arm not shown to be worse on CE",
     "ce_resolved": false,
-    "mde_nats": 0.024233169240240913,
+    "mde_nats": 0.06359797857807768,
     "resolved_better": [],
     "resolved_worse": [],
     "unresolved_arms": [
       "KDA_NOACT",
-      "KDA_GCONV"
+      "KDA_GCONV",
+      "GDN2",
+      "KDA_R1",
+      "KDA_R2"
     ],
     "rationale": [
       "NO arm's CE difference from the control clears the MDE with a Dunnett-adjusted CI that excludes zero. THE CE RANKING IS NOT RESOLVED AT n = 3. The arms are not ranked on CE below, and the recommendation falls back to throughput and memory. That fallback is a choice forced by the design's power, and it is stated rather than hidden behind an ordering of point estimates.",
       "KDA_BASE: throughput 419,288 tok/s (1.000x control), peak memory 9.15 GiB (1.000x control).",
       "KDA_NOACT: throughput 418,364 tok/s (0.998x control), peak memory 9.15 GiB (1.000x control).",
-      "KDA_GCONV: throughput 411,027 tok/s (0.980x control), peak memory 9.43 GiB (1.031x control)."
+      "GDN2: throughput 416,894 tok/s (0.994x control), peak memory 9.33 GiB (1.020x control).",
+      "KDA_GCONV: throughput 410,690 tok/s (0.979x control), peak memory 9.43 GiB (1.031x control).",
+      "KDA_R1: throughput 326,513 tok/s (0.779x control), peak memory 9.22 GiB (1.007x control).",
+      "KDA_R2: throughput 295,638 tok/s (0.705x control), peak memory 9.36 GiB (1.023x control)."
     ],
     "caveats": [
       "TPP IS 1.5 -- 599,785,472 tokens per cell for a 390,125,472-parameter model, computed from what the cells actually report, not from the plan. That is BELOW the academic literature cluster of 3-20, and further below this project's own 1B flagship at TPP 27-44. NOTE the budget moved after pre-registration: seeds.json planned 1,907 steps, the cells ran 1,144 (planned TPP was 2.6). The cut makes every CE magnitude below MORE inflated, not less.",

@@ -1,0 +1,591 @@
+<meta charset="utf-8">
+<title>Which Linear-Attention Mixer Should We Ship? — Run 1 Briefing</title>
+<style>
+  @page { size: A4 landscape; margin: 11mm 10mm 9mm; }
+  body { font: 8.5pt/1.36 "Helvetica Neue", Helvetica, Arial, sans-serif; color:#111; }
+  h1 { font-size: 15pt; margin: 0 0 1.5mm; letter-spacing:-.2pt; }
+  h2 { font-size: 9.8pt; margin: 5mm 0 2mm; padding-bottom: 0.9mm;
+       border-bottom: 0.9pt solid #222; text-transform: uppercase; letter-spacing: .05em; }
+  h3 { font-size: 8.8pt; margin: 3mm 0 1.2mm; }
+  .sub { font-size: 7.7pt; color:#444; margin: 0 0 1.5mm; }
+  table { border-collapse: collapse; width: 100%; margin: 1.5mm 0 2mm; }
+  th, td { padding: 1.25mm 1.5mm; border-bottom: 0.4pt solid #ccc; vertical-align: top; }
+  th { background:#f1f1f1; border-bottom: 0.9pt solid #222; text-align: left; font-size: 7.6pt; }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums;
+               font-family: "SF Mono", Menlo, monospace; font-size: 7.9pt; white-space: nowrap; }
+  .arm { font-weight: 700; font-size: 8.3pt; }
+  .cfg { font-family: "SF Mono", Menlo, monospace; font-size: 6.8pt; color:#555; }
+  .diff { font-size: 7.4pt; }
+  .best { background:#e8f3e8; }
+  .worst { background:#fbebea; }
+  .mid  { background:#fdf6e3; }
+  .flag { color:#a00; font-weight:700; }
+  .ok { color:#060; font-weight:700; }
+  p, li { font-size: 7.8pt; }
+  p.note { margin: 1.2mm 0; }
+  ul, ol { margin: 1mm 0 1.5mm 4.5mm; padding:0; }
+  li { margin-bottom: 0.9mm; }
+  code { font-family: "SF Mono", Menlo, monospace; font-size: 7.1pt; background:#f4f4f4; padding:0 .5mm; }
+  .box { border: 0.8pt solid #222; padding: 2mm 2.5mm; margin: 2mm 0; background:#fafafa; }
+  .box.warn { border-color:#a00; background:#fdf3f2; }
+  .box.go { border-color:#060; background:#f2f8f2; }
+  .box h3 { margin-top:0; }
+  .two { display:flex; gap:5mm; }
+  .two > div { flex:1; }
+  .pb { page-break-before: always; }
+  h2 { page-break-after: avoid; break-after: avoid; }
+  table, .box { page-break-inside: avoid; break-inside: avoid; }
+  tr { page-break-inside: avoid; break-inside: avoid; }
+  .two { page-break-inside: avoid; break-inside: avoid; }
+  .foot { font-size: 6.9pt; color:#555; border-top: 0.4pt solid #bbb; padding-top: 1.2mm; margin-top: 3mm; }
+  .strike { text-decoration: line-through; color:#999; }
+  .kicker { font-size:7pt; text-transform:uppercase; letter-spacing:.08em; color:#666; margin:0 0 .5mm; }
+  .big { font-size: 10pt; font-weight: 700; }
+</style>
+
+<h1>Which linear-attention mixer should we ship?</h1>
+<p class="sub">
+Run 1 results and independent audit · <b>run_019fe0f9-1bbd-702c-b141-6d58e128bda6</b> ·
+6 operators × 3 random seeds = 18 training runs · 390M-parameter model, 599,785,472 tokens each ·
+8×A100-40GB · measured 2026-08-08, audited 2026-08-08 · <b>Revision 2</b>
+</p>
+
+<div class="box go">
+<h3>The short version</h3>
+<p style="margin:0 0 1.5mm"><b>Ship KDA as we already have it</b> (<code>KDA_BASE</code>), or the
+variant with the convolution activation removed (<code>KDA_NOACT</code>). The two are
+indistinguishable in this data; either is defensible.</p>
+<p style="margin:0 0 1.5mm"><b>The decision rests on speed and memory, not on quality.</b> The
+quality measurement came back <i>inconclusive</i> — the experiment was not sensitive enough to tell
+these six operators apart on quality, and we knew before running it that this was a likely outcome.
+Speed and memory, by contrast, separate cleanly and are not in doubt.</p>
+<p style="margin:0"><b>Do not ship the Householder operators</b> (<code>KDA_R1</code>,
+<code>KDA_R2</code>) — they are 22–30% slower for no measured quality gain. But see §7: that cost
+turns out to be a <i>fixable implementation problem</i>, not a property of the idea, and the idea
+itself is available to us for free through a different route.</p>
+</div>
+
+<h2>1 · What this was for, and the vocabulary you need</h2>
+
+<div class="two">
+<div>
+<p class="note"><b>The decision.</b> We are about to spend real money training a large production
+model. Inside a transformer, every layer has a component that lets tokens exchange information —
+call it the <b>mixer</b>. Standard attention is one choice; it is accurate but its cost grows with
+the square of sequence length. <b>Linear-attention</b> mixers keep a fixed-size running summary
+instead, so cost grows linearly and generation is cheap. Several competing designs exist. This
+experiment was run to pick one.</p>
+
+<p class="note"><b>Terms used throughout:</b></p>
+<ul>
+<li><b>Cross-entropy (CE)</b> — how surprised the model is by text it has never seen. Lower is
+better. Measured in <b>nats</b>. Our models land around 3.05 nats; the differences we are hunting
+are in the third decimal place (0.01–0.03 nats).</li>
+<li><b>Throughput</b> — training tokens processed per second. Higher is better. Directly proportional
+to how much the run costs.</li>
+<li><b>Peak / reserved memory</b> — GPU memory used. <i>Peak</i> is what the model actually holds;
+<i>reserved</i> is what it asks the allocator for. Reserved is the number that decides whether a
+bigger model fits on the card.</li>
+<li><b>Seed</b> — the random number that sets the starting weights and the data order. The same
+design trained with three different seeds gives three slightly different results. That spread is our
+measurement noise.</li>
+<li><b>"Not resolved"</b> — the difference between two designs was smaller than our noise, so we
+cannot say which is better. <b>This is not the same as saying they are equal.</b></li>
+</ul>
+</div>
+<div>
+<p class="note"><b>How the comparison was kept fair.</b> All six versions are byte-identical except
+for the mixer placed in <b>two specific layers (slots 6 and 11) out of sixteen</b>. Everything else —
+the six standard-attention layers at positions 2, 5, 8, 10, 12, 14, all the feed-forward blocks, the
+vocabulary, the learning-rate schedule, the data — is the same. So a difference between two versions
+is caused by the mixer and nothing else.</p>
+
+<p class="note">Two details that were forced on us, and matter later:</p>
+<ul>
+<li><b>The six standard-attention layers could not be removed.</b> Position information (RoPE) is
+only attached to real attention layers in our codebase. An arm with fewer attention layers would
+silently lose its sense of word order, and its worse score would look like a mixer effect when it
+was actually missing position. A previous project lost a result to exactly this.</li>
+<li><b>Bigger mixers were paid for by shrinking the feed-forward layers</b>, so every version has the
+same parameter count to within ±0.05%. Otherwise a "better" mixer might just be a bigger model. This
+matters in §6 — it is the source of one of the errors we found.</li>
+</ul>
+
+<p class="note"><b>Each version was trained three times</b> (three seeds), which is the minimum that
+lets you estimate noise at all. As §5 explains, three turned out not to be enough for quality.</p>
+</div>
+</div>
+
+<h2>2 · The six versions, in plain terms</h2>
+<table>
+<tr><th style="width:19%">Name and mechanism</th><th style="width:13%">Config</th>
+    <th style="width:46%">What is different, and why we included it</th>
+    <th class="n">Params vs<br>target</th><th class="n">Speed<br>×ref</th></tr>
+
+<tr class="best"><td class="arm">KDA with no convolution activation<br><span class="cfg">KDA_NOACT</span></td>
+    <td class="cfg">conv_activation<br>=None</td>
+    <td class="diff">The shipped operator with one activation function deleted from its short
+    convolutions. <b>Its job is to be a control</b>, not a candidate: it is what makes the gated-conv
+    result below interpretable. It happens to score best on quality — but see §5 before reading
+    anything into that.</td>
+    <td class="n">−10,080</td><td class="n">0.998</td></tr>
+
+<tr><td class="arm">KDA plus a gated convolution<br><span class="cfg">KDA_GCONV</span></td>
+    <td class="cfg">gated_conv=True<br>depthwise</td>
+    <td class="diff">Adds LFM2/LIV-style learned gates to the short convolutions — a mechanism we
+    built ourselves and wanted to test. Gates are <i>depthwise</i> (one number per channel) rather
+    than <i>low-rank</i>, because low-rank would have added 2.36M parameters (12× our matching
+    tolerance) and broken the seed pairing.</td>
+    <td class="n">+2,208</td><td class="n">0.979</td></tr>
+
+<tr class="best"><td class="arm">KDA exactly as we ship it today<br><span class="cfg">KDA_BASE</span>
+    <div class="cfg" style="color:#060">← the reference</div></td>
+    <td class="cfg">fla chunk_kda</td>
+    <td class="diff">Kimi Delta Attention, the operator already in our codebase, running the
+    optimised third-party kernel from the <code>fla</code> library. <b>Every comparison in this
+    document is measured against this row.</b></td>
+    <td class="n">−10,080</td><td class="n">1.000</td></tr>
+
+<tr class="worst"><td class="arm">KDA-Householder, R=2, negative eigenvalues<br><span class="cfg">KDA_R2</span></td>
+    <td class="cfg">num_householder=2<br>allow_neg_eigval<br>=True</td>
+    <td class="diff">Applies two "reflection" updates per token instead of one, and widens a gate
+    parameter (β) from the range (0,1) to (0,2) so the update can genuinely reflect rather than only
+    shrink. This is the arm we had the most hope for. It runs a <b>hand-written kernel we wrote
+    ourselves</b>, not the optimised library one.</td>
+    <td class="n">+6,304</td><td class="n">0.705</td></tr>
+
+<tr class="worst"><td class="arm">KDA-Householder, R=1, negative eigenvalues<br><span class="cfg">KDA_R1</span></td>
+    <td class="cfg">num_householder=1<br>allow_neg_eigval<br>=True</td>
+    <td class="diff">The same hand-written operator with only <i>one</i> update per token. Included as
+    a control to separate "does a second update help?" from "is our kernel slow?". <b>It answered
+    that question decisively</b> — see §7.</td>
+    <td class="n">−10,080</td><td class="n">0.779</td></tr>
+
+<tr><td class="arm">Gated DeltaNet-2<br><span class="cfg">GDN2</span>
+    <div class="cfg">Tom Liu's implementation</div></td>
+    <td class="cfg">expand_v=1.0<br>allow_neg_eigval<br>=False</td>
+    <td class="diff">A different published design that uses <i>two separate</i> gates for erasing and
+    writing to its memory, where KDA drives both from one number. Configured as the paper's headline
+    model. It is the best-tested implementation in our codebase.</td>
+    <td class="n">+22,688</td><td class="n">0.994</td></tr>
+</table>
+<p class="note"><b>Reading the parameter column:</b> the target is 390,135,552 parameters and the
+tolerance is ±195,068 (0.05%). Every arm is inside it — the largest deviation, GDN2's +22,688, is
+about 8.6× inside the limit. Parameter matching is not a concern for any result here.</p>
+
+<h2>3 · Results — quality, speed, memory</h2>
+<table>
+<tr><th style="width:21%">Version</th>
+    <th class="n">Quality<br>(CE, nats)</th><th class="n">Spread<br>across seeds</th>
+    <th class="n">vs reference</th>
+    <th class="n">Throughput<br>(tokens/s)</th><th class="n">×ref</th>
+    <th class="n">Peak<br>mem GiB</th><th class="n">Reserved<br>mem GiB</th>
+    <th style="width:24%">Plain reading</th></tr>
+
+<tr class="best"><td class="arm">KDA, no conv activation<br><span class="cfg">KDA_NOACT</span></td>
+    <td class="n">3.0400</td><td class="n">0.00258</td><td class="n">−0.0113</td>
+    <td class="n">418,364</td><td class="n">0.998</td><td class="n">9.153</td><td class="n">10.721</td>
+    <td class="diff">Best point estimate on quality and the most reproducible of all six. Speed and
+    memory tied with the reference. <b>A co-winner.</b></td></tr>
+
+<tr><td class="arm">KDA + gated convolution<br><span class="cfg">KDA_GCONV</span></td>
+    <td class="n">3.0451</td><td class="n">0.01678</td><td class="n">−0.0062</td>
+    <td class="n">410,690</td><td class="n">0.979</td><td class="n">9.434</td><td class="n">11.018</td>
+    <td class="diff">Contains both the single best and nearly the worst individual run in the study.
+    Costs 2.1% speed and 3.1% memory. Verdict: unresolved — see §4.</td></tr>
+
+<tr class="best"><td class="arm">KDA as shipped (reference)<br><span class="cfg">KDA_BASE</span></td>
+    <td class="n">3.0514</td><td class="n">0.01075</td><td class="n">—</td>
+    <td class="n">419,288</td><td class="n">1.000</td><td class="n">9.153</td><td class="n">10.721</td>
+    <td class="diff">Fastest measured, joint-lowest memory, zero integration risk. <b>A co-winner —
+    and the incumbent.</b></td></tr>
+
+<tr class="mid"><td class="arm">KDA-Householder R=2<br><span class="cfg">KDA_R2</span></td>
+    <td class="n">3.0581</td><td class="n">0.00642</td><td class="n">+0.0067</td>
+    <td class="n">295,638</td><td class="n" style="font-weight:700">0.705</td>
+    <td class="n">9.361</td><td class="n" style="font-weight:700">13.391</td>
+    <td class="diff">Slowest in the run and +24.9% reserved memory, with no quality gain to show for
+    it <i>at this training budget</i>. Second-most reproducible.</td></tr>
+
+<tr class="mid"><td class="arm">KDA-Householder R=1<br><span class="cfg">KDA_R1</span></td>
+    <td class="n">3.0749</td><td class="n" style="font-weight:700">0.04516</td><td class="n">+0.0236</td>
+    <td class="n">326,513</td><td class="n" style="font-weight:700">0.779</td>
+    <td class="n">9.216</td><td class="n" style="font-weight:700">13.260</td>
+    <td class="diff">By far the least reproducible — its seed-to-seed spread is <b>17.5× the best
+    arm's</b>. One of its three runs is a clear outlier. See §7 and §8.</td></tr>
+
+<tr><td class="arm">Gated DeltaNet-2<br><span class="cfg">GDN2</span></td>
+    <td class="n">3.0884</td><td class="n">0.00404</td><td class="n">+0.0371</td>
+    <td class="n">416,894</td><td class="n">0.994</td><td class="n">9.333</td><td class="n">10.893</td>
+    <td class="diff">Largest quality gap in the run, and worse in all three seeds. Essentially free on
+    speed and memory. <b>Read §6 before acting on this</b> — the original claim that this was
+    statistically significant was wrong.</td></tr>
+</table>
+
+<p class="note"><b>A column has been deliberately removed from this revision.</b> The previous
+version of this document reported <b>MFU</b> (model FLOP utilisation — how much of the GPU's
+theoretical arithmetic capacity was used). That column was wrong, and correcting it makes it
+redundant: once the underlying bug is fixed, the MFU ranking becomes <i>identical</i> to the
+throughput ranking, so it adds no information. It has been struck rather than repaired. Details in
+§6.</p>
+
+<h2>4 · The gated convolution: why the answer depends on what you compare it to</h2>
+<div class="box">
+<p style="margin:0 0 1.5mm">This is the most instructive result in the study, and it is a lesson
+about experimental design rather than about the mechanism.</p>
+<p style="margin:0 0 1.5mm">Compared against <b>the shipped reference</b>, the gated convolution
+looks <b>better by 0.0062 nats</b>. Compared against <b>the no-activation control</b>, the same arm
+looks <b>worse by 0.0051 nats</b>. <span class="flag">Same arm, opposite sign.</span></p>
+<p style="margin:0 0 1.5mm">The reason is exact algebra. The gate our mechanism applies,
+<code>2·sigmoid(a·u)·u</code>, is <i>identically equal</i> to <code>(2/a)·silu(a·u)</code> — a SiLU
+activation with a learnable slope. (Verified to 8.9×10⁻¹⁶, i.e. floating-point exact.) So switching
+the gate on does not just add a gate: it also <b>relocates and reparameterises an activation
+function</b> that was already there. Comparing against the reference moves three things at once, and
+no part of that difference can be attributed to any one of them.</p>
+<p style="margin:0"><b>The honest comparison is against the control</b>, where the only remaining
+difference is the gate itself: <b>+0.0051 nats, 95% CI [−0.031, +0.041], p = 0.77.</b> That interval
+spans the entire range of effects we care about, in both directions. The correct statement is
+<i>"this experiment cannot tell the gate apart from no gate"</i> — not "the gate is worse," and not
+"the gate is fine." Without the control arm, this study would have produced a plausible, publishable,
+wrong number.</p>
+</div>
+
+<h2>5 · Why quality came back inconclusive, and why that is the honest answer</h2>
+<div class="two">
+<div>
+<p class="note">Across the 18 runs, the seed-to-seed noise in CE is <b>σ̂ = 0.0204 nats</b>. With
+three seeds per arm and six arms compared properly, the smallest difference this design could
+reliably have detected is <b>0.0636 nats</b>.</p>
+<p class="note">The differences we are looking for, from published work on these operator families,
+are <b>0.010 to 0.030 nats</b>. That is <b>2–6× smaller than what we could see.</b> The experiment
+was outmatched by the question.</p>
+<p class="note">The formal results all agree: overall test F(5,12) = 2.49, p = 0.091 — not
+significant. No individual comparison against the reference excludes zero once corrected for making
+five comparisons at once.</p>
+<div class="box warn" style="margin-top:2mm">
+<p style="margin:0"><b>Please do not read the quality ranking in §3 as a ranking.</b> The arms are
+listed in CE order because the table has to be in some order. The gap between best and worst
+(0.0484 nats) is almost exactly the width of a single confidence interval (0.0484 nats). Any of the
+six could be genuinely best.</p>
+</div>
+</div>
+<div>
+<p class="note"><b>This outcome was written down in advance.</b> The pre-registration filed before
+the run states that the design might not resolve CE differences and that the recommendation would
+then fall back to speed and memory. So this is a planned branch, not a failure — and the fallback
+axes did separate cleanly.</p>
+<p class="note"><b>Two things make the quality numbers upper bounds, not estimates.</b></p>
+<ul>
+<li><b>The training budget is small.</b> Each model saw 1.5 tokens per parameter. Published work
+clusters at 3–20, and our own production model sits at 27–44. Architecture differences measured at
+low budgets systematically <i>overstate</i>: in our own earlier measurements, one such gap halved
+(0.0103 → 0.0059 nats) when the budget grew 15×. So every CE difference here should be read as a
+ceiling on what it would be at production scale.</li>
+<li><b>A null result is a bound, not a proof of equality.</b> We did not pre-declare an equivalence
+margin, so we are not licensed to claim any two arms are the same — only that any difference is
+smaller than roughly 0.048 nats.</li>
+</ul>
+<p class="note"><b>The useful by-product:</b> σ̂ = 0.0204 nats is the first real measurement of noise
+at this scale in this project. It replaces a 5.5×-wide guess with a factor-2.3 bracket, and any
+future experiment should be sized from it.</p>
+</div>
+</div>
+
+<h2>6 · What the independent audit changed — read this before quoting revision 1</h2>
+<p class="note">After the results were written up, twelve independent reviews re-derived every number
+from the raw per-run data, the analysis code, the model source, and the AWS logs. <b>The core
+statistics all reproduced exactly</b> (σ̂, the overall test, the correction factor, the detection
+limit — all confirmed to five significant figures, and cross-checked against
+<code>scipy</code>). <b>The primary quality numbers were also confirmed bit-for-bit against the
+original training logs.</b></p>
+<p class="note">But six specific claims in revision 1 were wrong. All six were in the
+<i>hand-written</i> summary, not in the automatically generated analysis, which was clean
+throughout. They are corrected here.</p>
+
+<table>
+<tr><th style="width:26%">Revision 1 said</th><th style="width:37%">The truth</th>
+    <th style="width:37%">Why it happened, and does the decision change?</th></tr>
+
+<tr><td class="diff"><span class="strike">"GDN2 is significantly worse — the only arm significant
+    under any test," CI [+0.0262, +0.0479], excluding zero.</span></td>
+    <td class="diff"><b>No comparison in this study is statistically significant.</b> The correct
+    interval is <b>[−0.0008, +0.0749]</b>, which <b>includes zero</b>. Our own analysis script
+    outputs exactly that, with <code>excludes_zero: false</code> — on all five comparisons.</td>
+    <td class="diff">The published interval implies a statistical cut-off of <b>1.64</b>, which is
+    smaller than the 1.96 used for a <i>single uncorrected</i> comparison. A correction for five
+    comparisons can only make an interval wider. The centre was right; the width was not.
+    <b>Decision: unchanged — but GDN2 must be described as "largest point estimate, not resolved,"
+    never as "significantly worse."</b> This matters for how we talk to Tom Liu about it.</td></tr>
+
+<tr><td class="diff"><span class="strike">"Under the pre-registered unequal-variance fallback…"</span></td>
+    <td class="diff"><b>That fallback was never triggered.</b> The pre-registration names one test
+    (Levene) as the decider, and says to switch methods only <i>if it rejects</i>. It did not
+    (p = 0.48). A second test (Bartlett) did reject, but was explicitly designated
+    "reported, not deciding."</td>
+    <td class="diff">Switching to the method that produces a significant answer, after seeing that it
+    does, is precisely what a pre-registration exists to prevent — and ours said so in those words.
+    The generated report got this right; the summary drifted. <b>Decision: unchanged.</b></td></tr>
+
+<tr><td class="diff"><span class="strike">"Kernel overhead is 28.6%; the second reflection costs a
+    further 10.9%."</span></td>
+    <td class="diff">The real figures across all three seeds are <b>28.4%</b> and <b>10.4%</b>.</td>
+    <td class="diff">The published pair came from a <b>single run</b> (one seed, median step time)
+    quoted in the same sentence as three-seed averages — two different measurements presented as one.
+    <b>Decision: unchanged; the attribution logic in §7 is unaffected.</b></td></tr>
+
+<tr><td class="diff"><span class="strike">"KDA_R1 is the same function as the reference, so its
+    slowdown is pure kernel overhead."</span></td>
+    <td class="diff">It is parameter- and FLOP-identical, but it is <b>not the same function</b>: it
+    also widens β from (0,1) to (0,2), computes its gate differently, and calls a different kernel.
+    There is <b>no arm in this study</b> that isolates the reflection count alone.</td>
+    <td class="diff">Consequence split: the <b>speed and memory</b> conclusion survives (widening β is
+    one multiplication and changes FLOPs not at all), but the <b>quality and reproducibility</b>
+    conclusions about R=1 do not — they confound two changes. <b>Decision: unchanged, wording
+    tightened.</b></td></tr>
+
+<tr><td class="diff"><span class="strike">"GDN2 has the highest MFU in the run (42.0%)."</span></td>
+    <td class="diff">An artifact. GDN2 is in fact <b>slower</b> than the reference (0.994×). Corrected
+    to one convention, the reference has the highest MFU and the MFU order becomes identical to the
+    throughput order.</td>
+    <td class="diff">Our FLOP counter mixes two conventions: feed-forward blocks and GDN2 count
+    forward+backward work, while KDA and Householder count forward only — a systematic <b>3×</b>
+    advantage on GDN2's mixer term. Also, because bigger mixers were paid for by shrinking
+    feed-forward layers (§1), an arm with a <i>larger</i> operator can report <i>fewer</i> total
+    FLOPs. <b>Decision: unchanged — throughput is measured by a stopwatch and never touches the FLOP
+    count. MFU column struck.</b></td></tr>
+
+<tr><td class="diff"><span class="strike">"A well-powered null result."</span></td>
+    <td class="diff"><b>Badly under-powered</b>, and correctly reported as a bound. Detection limit
+    0.0636 against a 0.010–0.030 target.</td>
+    <td class="diff">A wording error with the opposite meaning to the truth. <b>Decision:
+    unchanged.</b></td></tr>
+</table>
+
+<div class="box warn">
+<h3>Three housekeeping defects, none of which move a conclusion</h3>
+<ul style="margin-bottom:0">
+<li><b>The machine-readable <code>results.json</code> in the results folder is a stale snapshot</b>
+taken mid-run. It describes 8 of 18 runs, lists three arms as "NO DATA," and reports the gated-conv
+comparison with the <i>opposite sign</i>. Anyone parsing it instead of reading this document gets a
+materially wrong answer. <b>It must be regenerated before this branch is merged.</b></li>
+<li><b>16 of the 18 per-run result files were transcribed by hand</b>, not captured programmatically.
+Detected by an exact arithmetic identity that must hold in binary (per-device throughput × 8 =
+total) and fails in 13 of 18 files. <b>The important fields are unaffected</b> — quality and both
+memory figures are full precision in all 18 and match the original logs exactly; the rounding on
+throughput is at most 0.026%, against arm differences of 2–29%. But the files should be re-extracted
+from the logs.</li>
+<li><b>A guard was silently disabled by its own configuration.</b> The analysis script keeps a list
+of "fields we have accounted for" so it can warn about fields nobody checked. Five fields — including
+the broken MFU and FLOP figures — were on that list but never actually read anywhere in the
+3,200-line script. The warning therefore came back empty, and the generated report skips from
+section 5 to section 7 because section 6 had nothing to print. <b>The check built to catch exactly
+this bug was switched off by declaring the bug's fields as checked.</b></li>
+</ul>
+</div>
+
+<h2>7 · The most useful finding: the reflection mechanism is available to us for free</h2>
+
+<div class="box go">
+<p style="margin:0 0 1.5mm"><b>The 22% slowdown we measured is not the price of the mechanism. It is
+the price of our own unfinished kernel — and we do not need that kernel.</b></p>
+<p style="margin:0 0 1.5mm">"Negative eigenvalues" sounds like a deep change to the mathematics. In
+implementation it is <b>one multiplication</b>: a gate value <code>β</code> computed as
+<code>sigmoid(x)</code> becomes <code>2·sigmoid(x)</code>. That is the whole mechanism. It is a change
+to how one number is <i>produced</i>, not to the kernel that consumes it.</p>
+<p style="margin:0 0 1.5mm">Concretely, in our codebase and in the third-party library we already
+depend on:</p>
+<ul style="margin-bottom:1.5mm">
+<li>The optimised library kernel <code>chunk_kda</code> <b>already accepts this option</b> as a
+documented public argument, implemented as a single scale factor. <b>No GPU kernel in the library
+references it at all</b> — the fast code is simply unaware of β's range.</li>
+<li>There is <b>no range check, no clamp, and no upper bound</b> on β anywhere in that code path. The
+matrix the algorithm inverts has ones on its diagonal and zeros above, so its determinant is exactly
+1 <i>for any value of β</i> — the widening cannot make it singular.</li>
+<li>Our shipped <code>KimiDeltaAttention</code> <b>already contains the two lines</b>, behind a
+config flag it already exposes. Our <code>GatedDeltaNet</code> has been training with the wide range
+on the fast kernel <b>by default, for the entire project</b>.</li>
+<li>The paper that introduced the idea states it outright: <i>"for DeltaNet, implementing the
+extended eigenvalue range is straightforward, since there is no need to modify the Triton
+kernel."</i></li>
+<li>Stability was <b>already measured in our own tree</b>: the wide-β regime reached β = 1.93 and
+landed in the <i>same</i> numerical-accuracy band as the baseline, with all test cells finite.</li>
+</ul>
+<p style="margin:0"><b>So the fix is one configuration field, not an engineering project.</b> Our
+hand-written Householder kernel, whose own documentation says it is a sequential implementation
+"expected to be materially slower" and built for "mechanism validation, not throughput," was never
+needed to get this mechanism at R=1.</p>
+</div>
+
+<div class="two">
+<div>
+<h3>Why our kernel is slow — diagnosed</h3>
+<p class="note">It walks the sequence one position at a time: <b>4,096 dependent iterations</b>,
+three times per training step. It uses <b>no tensor cores</b> at all, and runs at about
+<b>3.7% occupancy</b> — achieving <b>0.22% of the GPU's arithmetic peak</b>. It is limited by
+latency and serialisation, not by the amount of arithmetic. The optimised library kernel instead
+processes 64 positions at a time.</p>
+<p class="note">The extra reserved memory has a single identified cause: the backward pass keeps a
+full-precision copy of the running state for every position, ~2 GiB at our shape. Good news — it is
+freed per layer, so it does <b>not</b> grow with the number of layers using the operator. It does
+grow with batch size and sequence length.</p>
+</div>
+<div>
+<h3>But be careful what you claim it buys</h3>
+<p class="note">In this run, the wide-β arm scored <b>+0.0236 nats — worse</b> than the reference, and
+well inside the noise. Two published sources also report no consistent language-modelling gain from
+this change.</p>
+<p class="note">What it demonstrably buys is <b>state tracking</b> — the ability to represent
+algorithmic patterns a contracting update cannot. In the source paper, a parity task goes from
+<b>0.233 to 0.982</b> accuracy with this one change.</p>
+<p class="note"><b>So the correct pitch is free optionality, not free quality.</b> Turning it on
+costs nothing measurable, and makes a capability available. It is not a quality upgrade, and should
+not be sold as one.</p>
+<p class="note" style="margin-bottom:0"><b>Note this only covers R=1.</b> Getting <i>two or more</i>
+reflections per token at full speed still needs kernel work — see the box below.</p>
+</div>
+</div>
+
+<div class="box">
+<h3>If we later want more than one reflection per token (R &gt; 1), start with a measurement</h3>
+<p style="margin:0 0 1.5mm">A plan was on record to make the R&gt;1 case fast by re-expressing it on top
+of an existing, already-optimised library kernel (<code>chunk_dplr_delta_rule</code>). An independent
+review of that plan found the idea sound but three of its details wrong, and it changes what an
+engineer should do first:</p>
+<ul style="margin-bottom:1.5mm">
+<li><b>The risk we were most worried about is not real.</b> We feared the library's backward pass
+would be numerically unstable under the padding trick the plan needs. There are <b>zero divisions</b>
+anywhere in that kernel's source, and the padding pattern is <i>already what the library itself ships</i>
+for this exact case. A different, milder risk was found instead: one intermediate matrix becomes
+ill-conditioned precisely when β is large — worth watching, not blocking.</li>
+<li><b>The memory saving was overstated.</b> The claim "1.00 GiB → 32 MiB" is the R=1 number. At R=2
+it is closer to <b>64–176 MiB</b>. Still a real 6–17× improvement, so the memory argument survives —
+but do not quote 32 MiB. (Our own kernel's source also overstates its own workspace by 1.5×, on the
+numbers used to size this decision.)</li>
+<li><b>It might not actually be faster.</b> The replacement kernel builds four internal matrices
+where the simpler one builds one, works in 16-position chunks rather than 64, and recomputes its
+forward pass during the backward. <b>It could land slower than the 0.705× it is meant to fix.</b></li>
+</ul>
+<p style="margin:0"><b>Therefore: day one is a half-day throughput benchmark, not a week of
+implementation.</b> That single measurement either justifies the work or saves it. And do <i>not</i>
+modify the other candidate kernel (<code>chunk_gated_delta_product</code>) — its backward pass is
+shared with the production Gated DeltaNet path, so patching it would put our best-throughput arm at
+risk.</p>
+</div>
+
+<h2>8 · A warning about reusing the speed numbers</h2>
+<div class="box warn">
+<p style="margin:0 0 1.5mm">The treatment operator ran in <b>only 2 of 16 layers</b>. Everything else
+was identical, so the entire slowdown came from those two layers. Divide it out and the operator
+itself is running <b>roughly 5× to 21× slower</b> than the shipped one — not 22% slower. The
+whole-model figure is diluted by the fact that most of the model was untouched.</p>
+<p style="margin:0 0 1.5mm"><b>This means the penalty grows if we use the operator in more
+layers</b>, which is the usual direction for these architectures:</p>
+<table style="margin:1.5mm 0 1.5mm">
+<tr><th>Layers using the Householder operator</th><th class="n">2 of 16 (measured)</th>
+    <th class="n">4 of 16</th><th class="n">8 of 16</th><th class="n">14 of 16</th></tr>
+<tr><td>Whole-model throughput vs reference, R=1</td><td class="n"><b>0.779×</b></td>
+    <td class="n">0.638×</td><td class="n">0.468×</td><td class="n">0.335×</td></tr>
+<tr><td>Whole-model throughput vs reference, R=2</td><td class="n"><b>0.705×</b></td>
+    <td class="n">0.536×</td><td class="n">0.366×</td><td class="n">0.248×</td></tr>
+</table>
+<p style="margin:0"><b>Do not quote 0.779× or 0.705× for any design that uses a different number of
+linear-attention layers.</b> The model reproduces the measured value exactly at 2-of-16, which is
+what makes the extrapolation trustworthy. Memory does not scale this way and is not the blocker —
+<b>time is.</b></p>
+</div>
+
+<h2>9 · Should we spend more compute on this? — costed</h2>
+<p class="note">This is the question the results provoke, so it was priced properly. Everything is at
+$21.96 per node-hour, and includes the held-out evaluation pass (the previous revision's per-run cost
+omitted it and was ~1.8× too low).</p>
+
+<div class="two">
+<div>
+<h3>What resolving quality would cost</h3>
+<table>
+<tr><th>Goal</th><th class="n">Seeds<br>per arm</th><th class="n">Runs</th><th class="n">Cost</th></tr>
+<tr><td>Where we are now</td><td class="n">3</td><td class="n">18</td><td class="n">spent</td></tr>
+<tr><td>Detect a 0.030-nat difference</td><td class="n">11</td><td class="n">66</td><td class="n">~$2,900</td></tr>
+<tr><td>Detect a 0.010-nat difference</td><td class="n">95</td><td class="n">570</td><td class="n" style="font-weight:700">~$6,300–11,300</td></tr>
+</table>
+<h3>What being wrong would cost</h3>
+<p class="note">If we pick the worse operator and its true quality deficit is 0.010–0.030 nats, the
+fix is simply to train on a few percent more tokens. On a 1B-parameter production run
+(27–44B tokens, roughly $1,000–1,650) that is:</p>
+<table>
+<tr><th>True quality deficit</th><th class="n">Extra tokens needed</th><th class="n">Extra cost</th></tr>
+<tr><td>0.010 nats</td><td class="n">+7.6%</td><td class="n">$77</td></tr>
+<tr><td>0.020 nats</td><td class="n">+15.9%</td><td class="n">$161</td></tr>
+<tr><td>0.030 nats</td><td class="n">+25.1%</td><td class="n">$253–484</td></tr>
+</table>
+</div>
+<div>
+<div class="box">
+<p style="margin:0 0 1.5mm"><span class="big">The arithmetic that settles it.</span></p>
+<p style="margin:0 0 1.5mm">The entire quality ambiguity is worth <b>$77–484</b> on the production
+run. Removing it costs <b>$2,900–11,300</b>. Meanwhile the <i>speed</i> choice — which is already
+resolved to about 1% — carries a <b>larger</b> production penalty (<b>$286–687</b>) than the quality
+question does.</p>
+<p style="margin:0"><b>So: do not buy more seeds. Do not buy more tokens.</b> Training longer is
+plausibly worse on both axes at once, because these architecture differences <i>shrink</i> with
+budget faster than the noise does, while cost rises in proportion.</p>
+</div>
+<h3>What is worth buying</h3>
+<ol style="margin-bottom:0">
+<li><b>The one-field experiment, ~$55–65.</b> Three runs on the same frozen seeds, with the
+reflection range turned on via the <i>fast</i> kernel. This gets the mechanism at full speed and
+tests whether the reproducibility problem was our kernel. <b>Gate it</b> on two receipts: a logged
+β above 1.0 (proving the flag took effect) and throughput parity with the reference.</li>
+<li><b>A recall-focused re-scoring, ~$79–171 plus 2–4 engineer-days.</b> All 18 final checkpoints
+are still in S3, so no retraining is needed. Aggregate quality averages over mostly-easy tokens; the
+published evidence is that these operators differ on <i>recall</i>, where one study found a 20-point
+gap at near-identical perplexity. This is the only option that returns a new <i>kind</i> of
+evidence. <b>Not free:</b> the mask-builder script does not exist yet, and the scoring path is
+single-rank and will hang on 8 GPUs until fixed.</li>
+<li><b>Optional, ~$220–250:</b> a focused two-arm reference-vs-GDN2 comparison, if that result needs
+formally closing rather than just correctly describing.</li>
+</ol>
+</div>
+</div>
+
+<h2>10 · What we did not measure — the honest gaps</h2>
+<div class="two">
+<div>
+<ul>
+<li><b>Nothing about inference.</b> We measured training throughput only. The entire practical
+argument for linear attention is cheap single-token generation, and that path was never timed. For a
+production decision this is the largest gap.</li>
+<li><b>Only one configuration.</b> One sequence length (4,096), one batch shape, one node, one GPU
+type. The four fast arms are within 2.1% of each other — close enough that a different shape could
+re-order them.</li>
+<li><b>No recall or long-context measurement.</b> The secondary endpoint designed for exactly this
+was never wired up (see §9, item 2).</li>
+</ul>
+</div>
+<div>
+<ul>
+<li><b>No test in our codebase has ever checked kernel accuracy at β above 1</b> — which is the
+regime both Householder arms actually ran in. The existing β test recomputes the arithmetic inside
+the test itself and never calls the kernel. This is a real gap in the shipped result, not only in the
+proposal.</li>
+<li><b>The one test that checks our fused kernel does not read future tokens requires a GPU</b>, and
+we found no evidence it was run before these 18 jobs launched. On a machine without a GPU it skips
+silently, which looks identical to passing.</li>
+<li><b>The three "data seeds" are not three orderings of the same data.</b> Each run sees only 0.24%
+of the corpus, so they are ~99.8% different samples. Harmless for comparing arms (all six share a
+seed's data), but it means our noise figure mixes optimisation noise with data-sampling noise.</li>
+</ul>
+</div>
+</div>
+
+<div class="foot">
+<b>Revision 2, 2026-08-08.</b> Supersedes revision 1; six corrections in §6, MFU column struck, costs
+re-priced to include evaluation. Verified against the 18 raw per-run files, the analysis script's own
+output, the model source at commit <code>9425fea</code>, <code>fla-core</code> 0.5.1 source, and
+CloudWatch logs. Primary quality figures confirmed bit-for-bit against the original logs.
+Statistics: pooled σ̂ = 0.020415 nats at 12 degrees of freedom, χ² interval [0.01464, 0.03370];
+F(5,12) = 2.4893, p = 0.0908; Dunnett critical value 2.9013 at k = 5; detection limit 0.06360 nats —
+all independently reproduced and cross-checked against <code>scipy.stats.dunnett</code>.
+Full working: <code>docs/mixer-bakeoff/run1/REPORT.md</code> (generated, clean) and
+<code>docs/mixer-bakeoff/HANDOFF.md</code>. Branch <code>edullm/mixer-bakeoff</code>.
+</div>
