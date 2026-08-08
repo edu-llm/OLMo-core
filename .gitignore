@@ -62,7 +62,12 @@ site/
 core
 /dataset-cache/
 
+# Generated datasets: reproducible via src/scripts/latentcot/gen_graph_data.py, and published
+# to the platform as a dataset release, so version control adds nothing but weight.
+/data/
+
 # Scratch analysis, planning and context docs: untracked on purpose. The image build lints
 # the WHOLE repository (ruff check .), so a throwaway script here can block the pilot from
-# getting an image — and a careless `git add -A` here published private PDFs to a public repo.
+# getting an image — and a careless `git add -A` here published private PDFs to a public repo
+# (commit e0dff82a, whose blobs are still reachable from the two old branches).
 /local/
