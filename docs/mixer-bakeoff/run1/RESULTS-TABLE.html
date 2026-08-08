@@ -1,0 +1,210 @@
+<meta charset="utf-8">
+<title>Mixer Bake-Off — Run 1 Results</title>
+<style>
+  @page { size: A4 landscape; margin: 12mm 10mm; }
+  body { font: 8.4pt/1.32 "Helvetica Neue", Helvetica, Arial, sans-serif; color:#111; }
+  h1 { font-size: 14pt; margin: 0 0 1mm; }
+  h2 { font-size: 9.6pt; margin: 4mm 0 1.5mm; padding-bottom: 0.8mm;
+       border-bottom: 0.7pt solid #333; text-transform: uppercase; letter-spacing: .04em; }
+  .sub { font-size: 7.6pt; color:#444; margin: 0 0 1mm; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 1.5mm; }
+  th, td { padding: 1.15mm 1.4mm; border-bottom: 0.4pt solid #ccc; vertical-align: top; }
+  th { background:#f0f0f0; border-bottom: 0.8pt solid #333; text-align: left; font-size: 7.6pt; }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums;
+               font-family: "SF Mono", Menlo, monospace; font-size: 7.9pt; white-space: nowrap; }
+  .arm { font-weight: 700; font-size: 8.2pt; }
+  .cfg { font-family: "SF Mono", Menlo, monospace; font-size: 6.7pt; color:#555; }
+  .diff { font-size: 7.3pt; color:#222; }
+  .best { background:#eaf4ea; }
+  .worst { background:#fbeceb; }
+  .flag { color:#a00; font-weight:700; }
+  .ok { color:#060; font-weight:700; }
+  p.note { font-size: 7.4pt; margin: 1mm 0; }
+  ul { margin: 0.8mm 0 1mm 4mm; padding:0; }
+  li { font-size: 7.4pt; margin-bottom: 0.7mm; }
+  .foot { font-size: 6.8pt; color:#555; border-top: 0.4pt solid #bbb; padding-top: 1mm; margin-top: 2mm; }
+  code { font-family: "SF Mono", Menlo, monospace; font-size: 6.9pt; }
+</style>
+
+<h1>Linear-Attention Mixer Bake-Off — Run 1</h1>
+<p class="sub">
+<b>run_019fe0f9-1bbd-702c-b141-6d58e128bda6</b> · 18/18 cells, 0 failures · 6 operators × 3 seeds ·
+390M params, 1,144 steps = 599,785,472 tokens/cell (TPP 1.5) · <code>reservoir-dolma2-v1</code> ·
+8×A100-40GB · $790.47 declared ceiling · 2026-08-08
+</p>
+<p class="sub">
+Every arm is identical except the <b>operator in decoder slots {6, 11}</b>. All six keep the same
+six global-attention layers (2,5,8,10,12,14) — mandatory, because RoPE buffers are emitted only for
+<code>Attention</code> blocks, so dropping attention drops positional encoding and the loss gap
+stops being a mixer effect. All arms parameter-matched within ±0.05% of 390,135,552 by FFN-width
+respend.
+</p>
+
+<h2>1 · What each arm actually is</h2>
+<table>
+<tr><th style="width:20%">Arm (mechanism)</th><th style="width:15%">Config</th>
+    <th style="width:41%">What differs from the reference</th>
+    <th class="n">Params Δ</th><th class="n">FLOP/token</th></tr>
+
+<tr><td class="arm">KDA, no conv activation<br><span class="cfg">KDA_NOACT</span></td>
+    <td class="cfg">conv_activation=None<br>gated_conv=False</td>
+    <td class="diff">Shipped KDA with the SiLU removed from the three short convolutions; no gate.
+    Exists as the <b>isolating control</b> for the gated-conv arm.</td>
+    <td class="n">−10,080</td><td class="n">2,473,388,544</td></tr>
+
+<tr><td class="arm">KDA + LIV gated convolution<br><span class="cfg">KDA_GCONV</span></td>
+    <td class="cfg">gated_conv=True<br>gate_structure=depthwise</td>
+    <td class="diff">LFM2/LIV-style depthwise gates on all three short convolutions. Depthwise not
+    lowrank: lowrank would cost +2,359,296 params (12× tolerance) and forfeit seed pairing.</td>
+    <td class="n">+2,208</td><td class="n">2,473,425,408</td></tr>
+
+<tr><td class="arm">KDA, as shipped (reference)<br><span class="cfg">KDA_BASE</span></td>
+    <td class="cfg">fla chunk_kda<br>gated_conv=False</td>
+    <td class="diff">The shipped Kimi Delta Attention operator — per-channel forget gate, scalar
+    beta in (0,1), fla's fused chunked kernel. <b>Every contrast subtracts this.</b></td>
+    <td class="n">−10,080</td><td class="n">2,473,388,544</td></tr>
+
+<tr><td class="arm">KDA-Householder, negative eigenvalues, R=2<br><span class="cfg">KDA_R2</span></td>
+    <td class="cfg">num_householder=2<br>allow_neg_eigval=True</td>
+    <td class="diff">Two Householder (DeltaProduct) factors per token, beta widened to (0,2) so
+    (I − βkkᵀ) can be a true reflection. Custom non-chunked Triton kernel.</td>
+    <td class="n">+6,304</td><td class="n">2,457,037,312</td></tr>
+
+<tr><td class="arm">KDA-Householder, negative eigenvalues, R=1<br><span class="cfg">KDA_R1</span></td>
+    <td class="cfg">num_householder=1<br>allow_neg_eigval=True</td>
+    <td class="diff"><b>Arity control.</b> One factor per token, beta in (0,2). Mathematically the
+    same function as KDA_BASE — identical params, FLOPs and state_dict — differing only in that it
+    runs the custom kernel. Isolates reflection regime from arity.</td>
+    <td class="n">−10,080</td><td class="n">2,473,388,544</td></tr>
+
+<tr><td class="arm">Gated DeltaNet-2<br><span class="cfg">GDN2</span></td>
+    <td class="cfg">expand_v=1.0<br>allow_neg_eigval=False</td>
+    <td class="diff">Decouples the erase and write gates that KDA drives from one scalar beta, into
+    two independent channel-wise gates; per-channel decay through a low-rank bottleneck.</td>
+    <td class="n">+22,688</td><td class="n">2,512,375,232</td></tr>
+</table>
+
+<h2>2 · Results — held-out cross-entropy (primary) and cost (co-primary)</h2>
+<table>
+<tr><th style="width:24%">Arm</th><th class="n">n</th><th class="n">val_ce (nats)</th>
+    <th class="n">sd</th><th class="n">per-seed values</th>
+    <th class="n">Δ vs ref</th><th class="n">Dunnett 95% CI</th><th class="n">clears MDE?</th>
+    <th class="n">tok/s</th><th class="n">×ref</th><th class="n">peak GiB</th>
+    <th class="n">×ref</th><th class="n">MFU</th></tr>
+
+<tr class="best"><td class="arm">KDA, no conv activation</td><td class="n">3</td>
+  <td class="n"><b>3.0400</b></td><td class="n">0.00258</td>
+  <td class="n">3.0392 / 3.0380 / 3.0429</td>
+  <td class="n">−0.01135</td><td class="n">[−0.0597, +0.0370]</td><td class="n">no</td>
+  <td class="n">418,364</td><td class="n">0.998</td><td class="n">9.153</td><td class="n">1.000</td>
+  <td class="n">41.5%</td></tr>
+
+<tr><td class="arm">KDA + LIV gated convolution</td><td class="n">3</td>
+  <td class="n">3.0451</td><td class="n">0.01678</td>
+  <td class="n">3.0321 / 3.0392 / 3.0641</td>
+  <td class="n">−0.00624</td><td class="n">[−0.0546, +0.0421]</td><td class="n">no</td>
+  <td class="n">410,690</td><td class="n">0.979</td><td class="n">9.434</td>
+  <td class="n flag">1.031</td><td class="n">40.7%</td></tr>
+
+<tr><td class="arm">KDA, as shipped (reference)</td><td class="n">3</td>
+  <td class="n">3.0514</td><td class="n">0.01075</td>
+  <td class="n">3.0421 / 3.0632 / 3.0488</td>
+  <td class="n">—</td><td class="n">—</td><td class="n">—</td>
+  <td class="n">419,288</td><td class="n">1.000</td><td class="n">9.153</td><td class="n">1.000</td>
+  <td class="n">41.5%</td></tr>
+
+<tr><td class="arm">KDA-Householder, neg. eigenvalues, R=2</td><td class="n">3</td>
+  <td class="n">3.0581</td><td class="n">0.00642</td>
+  <td class="n">3.0567 / 3.0651 / 3.0524</td>
+  <td class="n">+0.00669</td><td class="n">[−0.0417, +0.0551]</td><td class="n">no</td>
+  <td class="n">295,638</td><td class="n flag">0.705</td><td class="n">9.361</td><td class="n">1.023</td>
+  <td class="n flag">29.1%</td></tr>
+
+<tr><td class="arm">KDA-Householder, neg. eigenvalues, R=1</td><td class="n">3</td>
+  <td class="n">3.0749</td><td class="n flag">0.04516</td>
+  <td class="n">3.0542 / <b>3.1267</b> / 3.0439</td>
+  <td class="n">+0.02358</td><td class="n">[−0.0248, +0.0719]</td><td class="n">no</td>
+  <td class="n">326,513</td><td class="n flag">0.779</td><td class="n">9.216</td><td class="n">1.007</td>
+  <td class="n flag">32.4%</td></tr>
+
+<tr class="worst"><td class="arm">Gated DeltaNet-2</td><td class="n">3</td>
+  <td class="n">3.0884</td><td class="n">0.00404</td>
+  <td class="n">3.0838 / 3.0910 / 3.0905</td>
+  <td class="n">+0.03705</td><td class="n">[−0.0113, +0.0854]</td><td class="n">no</td>
+  <td class="n">416,894</td><td class="n">0.994</td><td class="n">9.333</td><td class="n">1.020</td>
+  <td class="n">42.0%</td></tr>
+</table>
+<p class="note">Throughput is steady-state, post-50-step warmup, summed over 8 devices. Peak memory
+is a true per-step running max; its sd is <b>exactly 0.000 within every arm</b>, so those ratios are
+mechanism, not seed noise.</p>
+
+<h2>3 · Statistics</h2>
+<table>
+<tr><th style="width:30%">Quantity</th><th style="width:22%">Value</th><th>Reading</th></tr>
+<tr><td>Pooled within-arm σ̂</td><td class="n">0.02042 nats, df = 12</td>
+    <td class="diff">χ² interval [0.01464, 0.03370] — a factor-2.3 bracket, the pre-registered
+    target precision. <b>Size any future run from this</b>, not from the 0.0019/0.0105 literature pair.</td></tr>
+<tr><td>Minimum detectable effect</td><td class="n">0.0636 nats</td>
+    <td class="diff">80% power, exact non-central t. The literature gap between these mixer families
+    is 0.010–0.030 nats — <b>below the MDE</b>.</td></tr>
+<tr><td>One-way ANOVA</td><td class="n">F(5,12) = 2.489, p = 0.091</td>
+    <td class="diff">Arms not distinguishable at α = 0.05 under pooled variance.</td></tr>
+<tr><td>Dunnett vs reference</td><td class="n">crit 2.9013, k = 5</td>
+    <td class="diff"><b>No contrast clears the MDE.</b> CE is <b>not resolved</b> at n = 3.</td></tr>
+<tr><td>Variance homogeneity</td><td class="n">Levene p = 0.484<br>Bartlett p = 0.0059</td>
+    <td class="diff">They disagree. R=1's sd is 17× the no-activation arm's, so pooling lets one
+    unstable arm widen every CI. Under the pre-registered unequal-variance fallback (Welch
+    F = 53.29, p = 0.0005) GDN2's T3 CI is [+0.0262, +0.0479] — <b>excluding zero</b>. Both are
+    reported; neither is settled.</td></tr>
+<tr><td><b>Gate contrast</b><br>gated conv − no-activation KDA</td><td class="n">+0.00511 nats<br>[−0.0312, +0.0414], p = 0.765</td>
+    <td class="diff"><b>The only attributable test of the gated conv's post-gate.</b> The depthwise
+    pre-gate is algebraically a SiLU (2·sigmoid(a·u)·u ≡ (2/a)·silu(a·u), exact to 8.9e-16), so
+    comparing to the shipped reference instead moves three things at once — and reads
+    <b>−0.0062, the opposite sign</b>. A bound, not a benefit.</td></tr>
+</table>
+
+<h2>4 · Recommendation</h2>
+<p class="note"><b>Use KDA as shipped, or KDA with the convolution activation removed.</b>
+Basis: <b>throughput and memory, because cross-entropy is unresolved.</b> The four fla-kernel arms
+sit within 2% on speed and 0.05 nats on CE; the two custom-kernel Householder arms cost 22% and 29%
+for no measurable quality.</p>
+<ul>
+<li><b>The Householder finding is about the kernel, not the mechanism.</b> R=1 is mathematically
+identical to the shipped operator — same params, same 2,473,388,544 FLOP/token — yet runs at 0.779×
+with MFU 32.4% against 41.5%. So <b>kernel overhead alone is 28.6%</b>, while the arity step
+R=1→R=2 costs a further <b>10.9%</b>. If R&gt;1 is wanted, chunk the kernel; never ship
+KDA-Householder at R=1, since the shipped operator is the same model 28.6% faster.</li>
+<li><b>R=1 also carries sd 0.04516</b> — 4× any other arm, on identical mathematics. Suspected
+kernel-induced instability; n=3 with one outlier cannot prove it. Worth checking against the
+<code>backend="torch"</code> reference path.</li>
+<li><b>The gated convolution is a bound, not a benefit</b>: +0.005 nats against its correct control,
+for +3.1% peak memory and −2.1% throughput.</li>
+<li><b>GDN2 is the largest effect measured</b> (+0.037 nats, worse) and the only one significant
+under any test. Directional, not settled — and a quality-at-fixed-params result at TPP 1.5, not a
+verdict on the implementation.</li>
+</ul>
+
+<h2>5 · Caveats that travel with every CE number above</h2>
+<ul>
+<li><b>TPP = 1.5</b>, below the 3–20 academic cluster (budget cut 1,907→1,144 steps to fit the
+window). Architecture effects measured at low token budgets <b>systematically overstate</b> —
+measured in-tree, GDN's edge halved 0.0103 nats @1B → 0.0059 @15B. <b>Treat every CE figure as an
+upper bound on the production effect.</b></li>
+<li><b>Throughput and peak memory are budget-independent and fully valid.</b> They do not inflate
+the way CE does, which is why they carry the recommendation.</li>
+<li><b>A null is a bound, not equivalence.</b> No margin was pre-declared, so no TOST is available;
+a non-significant contrast licenses only "smaller than the CI half-width".</li>
+<li>A 0.6B-token run structurally cannot see effects that emerge late in training, or any
+long-horizon recall advantage. That is a limitation, not a null.</li>
+<li>Secondary endpoint (<code>sliced_eval</code>) is null throughout: it needs
+<code>--slice-mask-uri</code>, which this command does not set. Declared, not quietly skipped.</li>
+</ul>
+
+<p class="foot">
+Per-cell integrity, all 18: step-0 loss 11.71 inside the ln(100,352) = 11.5164 ± 0.5 band ·
+<code>val_tokens_present == declared</code> exactly (975,077,376 over all 39 held-out shards) ·
+parameter count matched <code>ARM_L0_DELTA</code> · seed pair matched the frozen schedule ·
+0 hard errors. Data seeds 210007/220014/230021 shared across arms (identical token order); init
+seeds unique per arm. Source sha 9425fea; results committed 562dbd7 under
+<code>docs/mixer-bakeoff/run1/</code>.
+</p>
