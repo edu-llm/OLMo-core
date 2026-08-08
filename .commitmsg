@@ -1,53 +1,35 @@
-fix(smoke): the liveness guard called a training gate dead
+fix(nn): the lowrank memory estimate is a floor, and 4.7% is still unexplained
 
-Job 1677746 (oat-06, L40S sm_89). THE MODULE PASSED EVERY OPERATOR CHECK. Both
-remaining failures were in the harness.
+Job 1677750 PASSED all five cells on L40S sm_89, but one passing number should
+not have passed. The lowrank cell predicted 0.281 GiB against 0.313 GiB measured
+-- an 11.4% shortfall that slipped under the harness's 15% tolerance.
 
-WHAT THE GPU CONFIRMED, and none of it was verifiable offline:
+Cause: gate_activation_bytes had no gate_rank parameter, so it applied the
+depthwise formula to a lowrank gate and omitted the shared bottleneck activation
+entirely. Now threaded through from KimiDeltaAttentionConfig.
 
-  fla honours activation=None       max|diff| vs 'silu' = 9.336e-01, not 0
-  gated == plain at init, None      max|diff| = 0.000e+00
-  gated == plain at init, silu      max|diff| = 0.000e+00
-  conv path                         all 360 of 360 fused, both gated arms
-  gate movement                     0.0212 and 0.0219 off neutral in 30 steps
-  memory prediction vs measured     2.250 GiB vs 2.250 GiB
+THE FIX DOES NOT CLOSE THE GAP, AND THE COMMENT SAYS SO. The bottleneck term is
+3/16 of one stream tensor against six of them, so 3.1% -- it explains 6.5 of the
+11.4 points and leaves 4.7 unexplained, most likely the two up-projections' own
+saved inputs. So:
 
-The first line is the one that could have collapsed the design: fla's kernel
-matches its activation string exactly and ignores anything else without error,
-so if it had ignored None too, kda-gated and kda-gated-silu would have been the
-same model. It does not. The second and third close the gap where the arms'
-bit-identical init was only ever checked on the reference path -- a path the
-experiment never executes.
+  - the docstring calls the lowrank figure a FLOOR, not a prediction
+  - the test asserts the bottleneck's true size (3.125%) rather than a range wide
+    enough to look like it explains everything
+  - the harness tolerance is per structure: 5% for depthwise, 10% for lowrank
 
-THE LIVENESS GUARD WAS WRONG, AND ITS OWN RUN PROVED IT. It failed
-kda-gated-silu at a gradient of 9.477e-06 against a floor of 1.043e-05, on the
-same run where that arm's gate MOVED 0.0219 off neutral -- more than the passing
-arm's 0.0212. A guard that calls an arm dead while the run watches it train is a
-defect in the guard, not conservatism.
+I first wrote a single 5% tolerance and a test asserting the bottleneck closed
+5-15% of the gap. That test failed, which is the only reason the residual got
+found instead of buried. Tuning one threshold until the arithmetic looked right
+would have shipped a number that reads as validated and is not.
 
-The threshold was relative to another parameter's gradient. That is the wrong
-denominator under an adaptive optimizer: AdamW normalizes each parameter by its
-own second moment, so the step is lr*m/(sqrt(v)+eps) and a uniformly smaller
-gradient takes the same step. A gradient's ratio to some other parameter's
-gradient does not enter the update at all. Only two things make a parameter
-untrainable: an exactly-zero gradient, or one small enough that eps dominates
-sqrt(v). So the floor is now absolute, 10x AdamW's eps. reference_grad is still
-taken and still used to fail closed, because a dead reference means the harness
-is not measuring anything.
+The depthwise figure IS a prediction: 2.250 GiB against 2.250 GiB measured, so
+5% there is comfortable rather than arbitrary.
 
-A test pins it: the same gate gradient must give the same verdict for references
-spanning 1e-3 to 1e6. Under the old rule the 1e6 case fails.
+Also adds M18, and fixes M8 -- whose pattern went stale when the return became
+'total = ...'. The NO-OP detector caught it, which is the second time in two
+commits that it has stopped a fictional verdict.
 
-Also: the gated-conv count keyed on 'kda-plain' exactly, so it failed
-kda-plain-noact for being the control it is -- left over from the three-arm
-version. And the memory prediction is now a GATE rather than a printed number,
-since it matched to three decimal places; a prediction that drifts low is what
-gets a paid run OOM-killed.
-
-Measured cost of the depthwise gate at d=2048, T=4096, bf16, eager: peak memory
-2.929 -> 5.179 GiB, a 1.768x increase for 49,152 parameters (0.0687%). The
-parameter delta is not the cost, and now there is a measurement saying so.
-
-66 CPU tests, 7 fla-gated. 19 mutations, 0 survived, 0 no-op.
+67 CPU tests, 7 fla-gated. 20 mutations, 0 survived, 0 no-op.
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>

@@ -1304,6 +1304,9 @@ class KimiDeltaAttentionConfig(SequenceMixerConfig[KimiDeltaAttention]):
                 hidden_size=h,
                 batch_size=batch_size,
                 seq_len=seq_len,
+                # Forwarded, or a lowrank arm's estimate lands 11% LOW -- the direction that
+                # OOM-kills a run. Measured on job 1677750 before this was threaded through.
+                gate_rank=self.gate_rank if self.gate_structure == "lowrank" else None,
                 bytes_per_element=bytes_per_element,
             )
             for h in (key_dim, key_dim, value_dim)

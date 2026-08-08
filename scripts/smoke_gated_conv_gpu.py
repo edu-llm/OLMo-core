@@ -585,13 +585,26 @@ def main(argv: Optional[List[str]] = None) -> int:
         # 2.250 GiB against 2.250 GiB, which is what validated the corrected eager count of three
         # retained tensors per gate. A prediction that drifts LOW is the dangerous direction: it is
         # what lets a paid run get OOM-killed.
+        # The tolerance is PER STRUCTURE, because the estimate is a prediction for one and a floor
+        # for the other -- a single number would either fail lowrank for a documented reason or let
+        # a real depthwise omission through.
+        #
+        # depthwise: 5%. The first version used 15% and passed a lowrank cell that was 11.4% short.
+        #   A tolerance wide enough to admit a real omission is not a gate. Job 1677750's depthwise
+        #   cells matched to three decimal places (2.250 vs 2.250 GiB), so 5% is comfortable.
+        # lowrank: 10%, and this is an acknowledged floor. The bottleneck term explains 6.5 of the
+        #   11.4 points; 4.7 remain unexplained, most likely the up-projections' saved inputs. The
+        #   number is documented as a floor rather than tuned until it looks right.
+        tolerance = 1.10 if opts.gate_structure == "lowrank" else 1.05
         predicted_gib = g["gate_bytes_predicted"] / 2**30
         measured_gib = g["peak_gib"] - p["peak_gib"]
-        if predicted_gib > 0 and measured_gib > predicted_gib * 1.15:
+        if predicted_gib > 0 and measured_gib > predicted_gib * tolerance:
             failures.append(
                 f"the measured activation increase ({measured_gib:.3f} GiB) exceeds the prediction "
-                f"({predicted_gib:.3f} GiB) by more than 15%. Any run sized from the prediction "
-                "would be under-provisioned."
+                f"({predicted_gib:.3f} GiB) by {measured_gib/predicted_gib - 1:.1%}, above the "
+                f"{tolerance - 1:.0%} tolerance for gate_structure={opts.gate_structure!r}. Any run "
+                "sized from the prediction would be under-provisioned, which is how a paid run gets "
+                "OOM-killed."
             )
 
     if {"kda-gated", "kda-gated-silu"} <= by_arm.keys():

@@ -240,6 +240,7 @@ def gate_activation_bytes(
     hidden_size: int,
     batch_size: int,
     seq_len: int,
+    gate_rank: Optional[int] = None,
     bytes_per_element: int = 2,
     tensors_per_gate: int = 3,
 ) -> int:
@@ -272,6 +273,19 @@ def gate_activation_bytes(
     :param hidden_size: The convolution's channel count.
     :param batch_size: The batch size.
     :param seq_len: The sequence length.
+    :param gate_rank: The bottleneck width for a ``"lowrank"`` gate. Pass it, or the estimate omits
+        the shared bottleneck activation entirely.
+
+        .. warning::
+            **For ``"lowrank"`` this function is a FLOOR, not a prediction, and the gap is not
+            fully explained.** Job 1677750 measured 0.313 GiB where the depthwise-only formula gave
+            0.281 -- an 11.4% shortfall. Adding the bottleneck term recovers 6.5 points and leaves
+            **4.7% unexplained**, most likely the two up-projections' own saved inputs, which this
+            model does not attempt to count. The depthwise cells matched to three decimal places
+            (2.250 vs 2.250 GiB), so the depthwise figure *is* a prediction and the lowrank one is
+            not. Size a lowrank run from a measurement.
+
+        Leave ``None`` for a depthwise gate, which has no bottleneck.
     :param bytes_per_element: 2 for bf16/fp16, 4 for fp32.
     :param tensors_per_gate: Stream-sized tensors retained per gate. Defaults to 3, which is the
         eager count. Pass 2 for a compiled run, 1 for a recompute-in-backward implementation, 0
@@ -280,7 +294,13 @@ def gate_activation_bytes(
     :returns: The number of extra bytes.
     """
     per_tensor = batch_size * seq_len * hidden_size * bytes_per_element
-    return 2 * tensors_per_gate * per_tensor
+    total = 2 * tensors_per_gate * per_tensor
+    if gate_rank is not None:
+        # The shared 'h = gate_down(x)' is computed ONCE per convolution and feeds both gates, so
+        # it is not multiplied by two. It is rank-sized rather than stream-sized, hence small at
+        # r=128 -- but it is exactly the 11% the depthwise-only formula was missing.
+        total += tensors_per_gate * batch_size * seq_len * gate_rank * bytes_per_element
+    return total
 
 
 def gate_is_absorbable(structure: GateStructure) -> bool:

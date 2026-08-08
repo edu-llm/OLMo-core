@@ -129,6 +129,32 @@ def test_gate_activation_bytes_matches_the_documented_kda_geometry():
     assert 28 * 3 * compiled / 2**30 == pytest.approx(10.5, abs=0.05)
 
 
+def test_lowrank_memory_estimate_includes_the_bottleneck():
+    """
+    A lowrank gate's estimate must count its shared bottleneck activation.
+
+    Without ``gate_rank`` the formula is the depthwise one, and job 1677750 measured the gap: 0.281
+    GiB predicted against **0.313 GiB actual**, an 11% shortfall that slipped under the harness's
+    then-15% tolerance. Low is the dangerous direction -- it is what gets a paid run OOM-killed --
+    so the harness tolerance is now 5% and the bottleneck term is here.
+
+    The bottleneck is added ONCE per convolution, not twice: ``h = gate_down(x)`` is shared by both
+    gates.
+    """
+    kw = dict(hidden_size=2048, batch_size=1, seq_len=1024, bytes_per_element=2)
+    depthwise = gate_activation_bytes(**kw)  # type: ignore[arg-type]
+    lowrank = gate_activation_bytes(**kw, gate_rank=128)  # type: ignore[arg-type]
+
+    assert lowrank > depthwise, "the bottleneck activation is missing from the estimate"
+    # 3 retained tensors x one rank-sized tensor, added once rather than per gate.
+    assert lowrank - depthwise == 3 * 1 * 1024 * 128 * 2
+    # At r = hidden/16 the bottleneck is 3/16 of one stream tensor against six of them, so 3.1%.
+    # NOTE this does NOT close the measured 11.4% gap -- it explains 6.5 points and leaves 4.7
+    # unexplained, which is why the lowrank estimate is documented as a floor rather than a
+    # prediction. Asserted at its true size so nobody reads it as the whole story.
+    assert lowrank / depthwise - 1 == pytest.approx(0.03125, abs=1e-4)
+
+
 def test_gate_activation_bytes_scales_as_documented():
     base = dict(hidden_size=512, batch_size=2, seq_len=128, bytes_per_element=2)
     b = gate_activation_bytes(**base)  # type: ignore[arg-type]

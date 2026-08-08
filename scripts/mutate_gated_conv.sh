@@ -148,8 +148,14 @@ run_case "wrong depthwise param count" "test_depthwise_gate_param_count_is_two_p
 # M8: gate_activation_bytes forgets that autograd retains two tensors per gate, halving the memory
 # figure a run would be sized from.
 echo "M8  memory estimate halved"
-perl -0pi -e 's/    return 2 \* tensors_per_gate \* per_tensor/    return tensors_per_gate * per_tensor/' "$SRC"
+perl -0pi -e 's/    total = 2 \* tensors_per_gate \* per_tensor/    total = tensors_per_gate * per_tensor/' "$SRC"
 run_case "halved memory estimate" "test_gate_activation_bytes_matches_the_documented_kda_geometry"
+
+# M18: the lowrank bottleneck term is dropped, so a lowrank arm's memory estimate lands ~3% lower
+# still -- on top of the 4.7% already unexplained. Low is the direction that OOM-kills a run.
+echo "M18 lowrank bottleneck dropped from the memory estimate"
+perl -0pi -e 's/    if gate_rank is not None:/    if False:/' "$SRC"
+run_case "bottleneck dropped" "test_lowrank_memory_estimate_includes_the_bottleneck"
 
 # M9a: the CONSTRUCTOR default flips to gated. Note this is a different surface from the config
 # field below -- M9a survived the first run of this script, because every test went through the
