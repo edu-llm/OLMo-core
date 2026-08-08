@@ -157,4 +157,21 @@ Anything longer belongs in [`prd.md`](prd.md) or [`dataset-design.md`](dataset-d
   `combinatorics.permutation_count`, `physics.final_velocity`) and search-shaped ones
   (`top_headlines`). Pedagogy: essentially nothing, hence 100% fresh there.
 
+- **CORRECTION: multi-turn is not blocked.** An earlier entry called it "a converter bug our data
+  format cannot dodge" — wrong. `verify/verify_multiturn_mask.py` reproduces the mechanism (a non-final
+  assistant turn renders `<|im_end|>\n` in the full pass but `eos_token` in the sub-pass, so
+  `rendered.startswith(through)` fails at byte 233; **8/8 sampled real Dolci rows fail**) — and then
+  reading `open_instruct/dataset_transformation.py:1212,1248` shows a **`last_turn_only`** flag and a
+  second exported transform `last_turn_tulu_tokenize_and_truncate_v1` that skips non-final assistant
+  turns. The suspicious part was always that AI2 trains 21-turn rows; they do, via that transform.
+  - Cost of that route: only the **final** assistant turn is trainable — 1 of 10 on a 21-message row,
+    which throws away most of the signal for a *tool-calling* set.
+  - **Recommended instead:** our own producer builds the mask **by construction** (render turn-by-turn,
+    tokenize each segment, concatenate) — no offset mapping, no prefix requirement, all turns
+    trainable. Safe because every segment boundary is an atomic added-token, so no BPE merge can
+    straddle it.
+  - **Rejected on evidence:** prefix-splitting at assistant boundaries — the longer rows still contain
+    a non-final assistant turn and still raise. Forcing `eos = <|im_end|>` also fixes stability but
+    drops the 100257 document boundary that packing depends on.
+
 <!-- next entry goes below -->

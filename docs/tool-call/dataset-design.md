@@ -833,19 +833,66 @@ A non-final assistant turn closes with `<|im_end|>\n`; the **final** assistant t
 `environment`, **no EOS is emitted at all** — and OLMo-core finds document boundaries by EOS, so
 packing would corrupt silently. **Every row must end on an assistant turn.** Ours do.
 
-### The multi-turn blocker — and why v1 is safe
+### Multi-turn: NOT blocked. Corrected 2026-08-08.
 
-Label masking is offset-mapping based: labels start fully `-100`, and for each assistant message `i`
-a trainable span is derived from `apply_chat_template(messages[:i], add_generation_prompt=True)`
-versus `apply_chat_template(messages[:i+1])`. The converter **raises** if the render is not
-prefix-stable. For a **non-final** assistant turn, the sub-render makes that turn `loop.last` → it
-emits `eos_token`, while the full render has `<|im_end|>\n` at the same position. So prefix-stability
-holds **only if `eos_token == "<|im_end|>"`** — and here eos is `<|endoftext|>`.
+An earlier draft called this "a converter bug our data format cannot dodge." **That was wrong** — it
+is a transform-function choice. Measured and source-read:
+[`verify/verify_multiturn_mask.py`](verify/verify_multiturn_mask.py).
 
-**INFERRED, not executed:** any conversation with ≥2 assistant turns should fail with *"the rendered
-conversation is not prefix-stable"*. Our v1 is `system + user + assistant` — exactly one assistant
-turn, and it is final, so v1 is safe. **The deferred multi-turn set is blocked on this, and it is a
-converter bug our data format cannot dodge.** Confirm empirically before planning v2 (§15 Q6).
+**The mechanism is real.** Label masking is offset-mapping based: for each assistant message `i` a
+trainable span comes from `apply_chat_template(messages[:i], add_generation_prompt=True)` versus
+`apply_chat_template(messages[:i+1])`, and `dataset_transformation.py:1284` **raises** unless
+`rendered.startswith(through)`. For a **non-final** assistant turn the sub-render makes that turn
+`loop.last`, so it emits `eos_token`; the full render has `<|im_end|>\n` at the same position:
+
+```
+multi-turn (2 assistants)  eos='<|endoftext|>'  ->  RAISES
+  assistant[2] (final=False) UNSTABLE at byte 233:
+      full has 'im_end|>\n<|i', sub-render has 'endoftext|>'
+  assistant[4] (final=True) stable
+```
+
+**8 of 8 sampled real Dolci rows fail this way** under the default transform — which is precisely why
+the claim "AI2 cannot train these" was suspicious, and it is false.
+
+**The fix already exists upstream.** `dataset_transformation.py:1212,1248`:
+
+```python
+last_turn_only: bool = False,
+...
+if last_turn_only and message_idx != last_assistant_idx:
+    continue
+```
+
+exposed as two transforms — `sft_tulu_tokenize_and_truncate_v1` (`last_turn_only=False`, the default)
+and **`last_turn_tulu_tokenize_and_truncate_v1`** (`last_turn_only=True`). With the latter, non-final
+assistant turns are skipped, so the only stability check is on the final turn, which is stable. Their
+own error text names the cause: *"the template appends eos_token only on the final turn."*
+
+**Ranked fixes for the deferred multi-turn set:**
+
+1. **`last_turn_tulu_tokenize_and_truncate_v1`** — zero code. Cost: only the **final** assistant turn
+   is trainable; earlier tool calls become masked context. On a 21-message row with 10 assistant
+   turns that trains 1 of 10, which for a tool-calling dataset throws away most of the signal.
+2. **Our own producer, mask built by construction** — render turn-by-turn, tokenize each segment,
+   concatenate. No offset mapping, therefore no prefix requirement, and **every** assistant turn stays
+   trainable. We already own the producer (it is offline and external either way), so this is the
+   recommended route. It is safe here for a specific reason: every segment boundary is an **atomic
+   added-token** (`<|im_start|>`, `<|im_end|>`, `<|endoftext|>`), so no BPE merge can straddle a
+   boundary and change the tokenization.
+3. **Patch the template** so non-final and final assistant turns close identically, then append the
+   real EOS once. Upstream-visible; least attractive.
+
+**Rejected on evidence:** splitting a conversation into prefix rows at assistant boundaries. The
+longer prefix rows still contain a non-final assistant turn, so they still raise — the split only
+helps the shortest row.
+
+Forcing `eos_token = "<|im_end|>"` also makes the render stable, but the conversation then no longer
+ends in **100257**, and OLMo-core finds document boundaries by EOS — so it trades one silent
+corruption for another unless the producer appends the real EOS itself.
+
+**v1 is unaffected either way:** `system + user + assistant` has exactly one assistant turn and it is
+final, so it is stable under the default transform.
 
 ### What the mask means for us
 
@@ -949,7 +996,7 @@ row-level `tools` path emits `'<functions>'`.
 | 3 | **Dolci licence sign-off** — ODC-BY is stated in the description prose with **no `license:` key** in frontmatter. Weaker than a tagged licence; needs a human, same decision class as xLAM | All 10,600 reformat rows, i.e. 26.5% of the corpus |
 | 4 | **xLAM licensing** — `cc-by-4.0` tag vs research-only prose | Whether the total can reach 67,500 |
 | 5 | Post-training **sequence length** | §10 gate 11, and max tools per row |
-| 6 | **Confirm the multi-turn prefix-stability failure** — one row with two assistant turns through the converter. Expected `ValueError: … not prefix-stable` (§12) | The deferred multi-turn set; nothing in v1 |
+| 6 | **Which multi-turn masking route** — `last_turn_only=True` (free, trains only the final turn) or our own by-construction producer (all turns trainable). §12 settles that both work; this is a cost decision | The deferred multi-turn set; nothing in v1 |
 | 7 | Which chat template the tokenization run uses. The README's `olmo123` is a deliberate placeholder that falls back to the tokenizer's own template; the *registry's* `olmo` template reportedly appends `" You do not currently have access to any functions. <functions></functions>"` when a system message carries no `functions` field — which would corrupt every one of our inlined rows. **UNVERIFIED, one-command check** | The tokenization run, not the publish |
 | 8 | Who writes the JSONL → `(tokens, label_mask)` producer, in-repo or offline (§12) | **Any use** of the dataset; not the publish |
 | 9 | Does the ~10% abstention optimum move at 4B active? | Nothing now — re-weightable by path glob. Best ablation candidate |

@@ -161,7 +161,9 @@ delimiters (single ids `100266`–`100269`, vocab unchanged at 100278;
 `allenai/dolma-2-tokenizer-olmo-3-instruct-final` is a 307 alias for
 `allenai/olmo-3-tokenizer-instruct-dev`, sha `55f211df…` — pin it); the `olmo-toolu-*` mixes are all
 401 but a public equivalent exists; size 40,000; abstention 10%; mixing 1:1; and the SFT path
-(consumption wired, producer external, **multi-turn currently un-tokenizable** — see design §12).
+(consumption wired, producer external). **Multi-turn is NOT blocked** — an earlier draft said it was,
+which was wrong. It needs either `last_turn_tulu_tokenize_and_truncate_v1` (free, but trains only the
+final assistant turn) or our own by-construction mask (all turns trainable). See design §12.
 
 Two things to inherit deliberately rather than by accident: **register `100269`
 (`</function_calls>`) as an explicit stop token** — it is `special: false`, so tool calls otherwise
