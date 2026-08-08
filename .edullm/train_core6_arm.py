@@ -60,13 +60,14 @@ import enum
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import sys
 import time
 import traceback
 from dataclasses import dataclass, field, replace
-from typing import Dict, Iterator, List, Optional, cast
+from typing import Any, Dict, Iterator, List, NamedTuple, Optional, Sequence, cast
 
 import rich
 import torch
@@ -774,6 +775,174 @@ def build_config(opts, overrides: List[str]):
     return config.merge(overrides)
 
 
+#: Steps discarded from the STEADY-STATE figure, counted from the start of the fit.
+#:
+#: WHY A CUTOFF EXISTS AT ALL WHEN ``SpeedMonitorCallback`` ALREADY DROPS STEP 1. It drops
+#: exactly one step, and one step is not what startup costs here. ``compile_model=True``, so
+#: Dynamo traces and Inductor compiles on the first shape it sees; the trainer's ``_dry_run_batch``
+#: absorbs some of that, but recompiles land on later steps whenever a shape or a guard changes,
+#: and the allocator is still growing its pools for the first tens of steps. Averaged from step 2
+#: those costs are divided over however many steps the run happened to have -- which makes the
+#: reported number a function of RUN LENGTH rather than of the hardware.
+#:
+#: That is not hypothetical here. A 200-step run on this stack reported 455,789 tok/s where a
+#: 20-step run at the SAME microbatch reported 303,072: a 1.5x spread from run length alone, and
+#: the whole-run wall clock read 3.1x low on the short probe. An arm compared against another at a
+#: different step count would inherit that spread as if it were a mixer property.
+#:
+#: 50 is chosen against the actual budget: cells run 1,900-2,300 steps, so this discards ~2.5%
+#: of the run and leaves ~97.5% of it in the measurement. It is a constant rather than a flag
+#: because two arms filtered at two cutoffs are not comparable, and a flag is how they end up so.
+WARMUP_STEPS_EXCLUDED = 50
+
+
+class StepSample(NamedTuple):
+    """One completed training step: which one, how long it took, how many tokens it moved.
+
+    ``tokens`` is GLOBAL -- summed over every rank -- because that is what
+    ``Trainer.global_train_tokens_seen`` counts and it is the number a cost estimate wants.
+    Per-device figures are derived by dividing at the point of reporting, where the world size
+    is named beside them, rather than being baked in here where a reader cannot see the divisor.
+    """
+
+    step: int
+    seconds: float
+    tokens: int
+
+
+def steps_after_warmup(
+    samples: Sequence[StepSample], *, warmup_steps: int = WARMUP_STEPS_EXCLUDED
+) -> List[StepSample]:
+    """The samples whose step index is strictly past the warmup cutoff.
+
+    Strictly greater, so ``warmup_steps=50`` keeps step 51 onward and the count of discarded
+    steps is exactly ``warmup_steps``. ``>=`` would keep step 50 and discard 49, which is the
+    kind of off-by-one that never shows up in a number anybody checks.
+
+    Filtering on the STEP INDEX rather than on position in the list matters on a resumed run:
+    a second Batch attempt starts at step 1,201 and its first sample is not its first step, so
+    dropping "the first 50 entries" would discard 50 perfectly good steady-state steps and
+    exclude nothing that needed excluding. The index is the run's, so the cutoff means the same
+    thing on attempt one and attempt two.
+    """
+    return [sample for sample in samples if sample.step > warmup_steps]
+
+
+def quantile_nearest_rank(values: Sequence[float], q: float) -> Optional[float]:
+    """The ``q``-quantile by nearest rank, or None when there is nothing to take it of.
+
+    NEAREST RANK, NOT INTERPOLATION, and the choice is deliberate: this returns a step time that
+    was actually observed rather than an average of two that were not. For "how long does a step
+    take on this arm" an observed duration is the honest answer, and it keeps p50 and p90 the
+    same kind of quantity computed by the same function rather than two conventions.
+
+    Definition: sort ascending, take index ``ceil(q * n) - 1`` clamped into range. At ``q=0.5``
+    and even ``n`` that is the lower of the two middle values.
+
+    None rather than 0.0 on an empty input. A zero step time reads as an infinitely fast arm,
+    which is the exact direction a missing measurement must never fail in.
+    """
+    if not values:
+        return None
+    if not 0.0 < q <= 1.0:
+        raise ValueError(f"q must be in (0, 1], got {q}")
+    ordered = sorted(values)
+    index = math.ceil(q * len(ordered)) - 1
+    return float(ordered[max(0, min(index, len(ordered) - 1))])
+
+
+def throughput_tokens_per_second(samples: Sequence[StepSample]) -> Optional[float]:
+    """Total tokens over total seconds for these samples, or None if that is not a number.
+
+    THE SUM OF TOKENS OVER THE SUM OF SECONDS, NOT THE MEAN OF THE PER-STEP RATES. Those are
+    different quantities and only the first one is throughput: a mean of rates weights a fast
+    step and a slow step equally, so a run with one 10x-slow checkpoint step reports a higher
+    figure than it achieved. This ratio is what the run would be costed at, by construction.
+
+    It is also what makes the figure robust to the host running ahead of the device. Individual
+    step boundaries measured on the CPU are noisy under async CUDA -- the host can queue several
+    steps before the GPU finishes one -- but the queue cannot run ahead forever, so the SUM over
+    hundreds of steps is bounded by real device time and converges to it. The per-step p50/p90
+    beside it are the noisier quantities, which is why they are reported as a distribution and
+    not as the throughput.
+
+    None, never 0.0, when either total is non-positive -- which is what a data loader that
+    reports no token count leaves behind, and a zero-token run must not report as zero speed.
+    """
+    total_tokens = sum(sample.tokens for sample in samples)
+    total_seconds = sum(sample.seconds for sample in samples)
+    if total_tokens <= 0 or total_seconds <= 0:
+        return None
+    return total_tokens / total_seconds
+
+
+#: Peak bf16/fp16 DENSE tensor-core throughput per GPU, keyed by a substring of the name torch
+#: reports, in FLOP/s.
+#:
+#: WHY THIS TABLE EXISTS WHEN ``SpeedMonitorCallback`` ALREADY HAS ONE. That one ends in
+#: ``else: # for other GPU types, assume A100``, so EVERY unrecognised card is assigned the
+#: A100's 312 TFLOP/s. On an A100 that is right. On an L40S -- 181 TFLOP/s dense -- it is 1.72x
+#: too high, and the MFU printed from it is 1.72x too LOW, silently, with no marker saying the
+#: denominator was a guess. A wrong denominator that looks authoritative is worse for a
+#: cross-arm comparison than no MFU at all, because all six arms inherit the same wrong constant
+#: and the ratio between them survives while the absolute number quietly does not.
+#:
+#: So this table has no fallback branch. A card that is not listed yields None, ``mfu_pct``
+#: is null, and ``mfu_basis`` says the peak was not known for that device. Adding a card is one
+#: line and a citation; guessing one is what this is here to stop.
+#:
+#: Values are the vendor's listed dense figure -- the marketing number is quoted WITH structural
+#: sparsity and is exactly 2x this, which is the factor ``speed_monitor`` writes as
+#: ``dense_correction = 0.5``.
+DEVICE_PEAK_BF16_FLOPS = {
+    # A100 40GB and 80GB, SXM and PCIe, are all 312 TFLOP/s dense bf16.
+    "A100": int(624e12 * 0.5),
+    "H100 NVL": int(1671e12 * 0.5),
+    "H100 PCIe": int(1513e12 * 0.5),
+    # SXM and the other H100 variants.
+    "H100": int(1979e12 * 0.5),
+    "B200": int(4.5e15 * 0.5),
+    # Ada, and the card the FarmShare probes ran on. 362 TFLOP/s with sparsity.
+    "L40S": int(362e12 * 0.5),
+}
+
+
+def device_peak_bf16_flops(device_name: Optional[str]) -> Optional[int]:
+    """Peak dense bf16 FLOP/s for this GPU, or None when this file does not know the card.
+
+    Longest key first, so ``H100 NVL`` is not shadowed by the ``H100`` entry that also matches
+    it. Substring matching because ``torch.cuda.get_device_name`` returns strings like
+    ``NVIDIA A100-SXM4-80GB`` and ``NVIDIA H100 80GB HBM3``, which no exact table can key on.
+
+    Returns None for an unknown or absent device rather than assuming anything. See
+    :data:`DEVICE_PEAK_BF16_FLOPS` for why that is the whole point of the function.
+    """
+    if not device_name:
+        return None
+    for key in sorted(DEVICE_PEAK_BF16_FLOPS, key=len, reverse=True):
+        if key in device_name:
+            return DEVICE_PEAK_BF16_FLOPS[key]
+    return None
+
+
+def model_flops_utilisation(
+    *,
+    tokens_per_second_per_device: Optional[float],
+    flops_per_token: Optional[int],
+    device_peak_flops: Optional[int],
+) -> Optional[float]:
+    """MFU as a percentage, or None if any of the three inputs is missing.
+
+    ``100 * (tokens/s/device * FLOPs/token) / peak FLOP/s``, the PaLM definition. Every input is
+    optional and any one of them being absent makes the output None rather than zero: an MFU of
+    0.0% and an unmeasured MFU are opposite claims about the hardware, and only one of them is
+    ever true here.
+    """
+    if not tokens_per_second_per_device or not flops_per_token or not device_peak_flops:
+        return None
+    return 100.0 * (tokens_per_second_per_device * flops_per_token) / device_peak_flops
+
+
 class LossWatcher(Callback):
     """Keeps what the summary can only learn while the run is still going.
 
@@ -805,6 +974,92 @@ class LossWatcher(Callback):
         #: Instantaneous per-device TPS from the last logged step, for a sanity check that
         #: the average is not still climbing when the probe ends.
         self.tps_device_last: Optional[float] = None
+
+        # --- per-step timing, sampled here rather than read off a metric --------------------
+        #
+        # WHY THIS DOES NOT REUSE ``throughput/device/TPS``. That metric only reaches
+        # ``log_metrics`` every ``metrics_collect_interval`` steps -- 5 here -- so a p90 over
+        # what arrives is a p90 over a fifth of the steps, and it is a BIASED fifth: the steps
+        # that get logged are exactly the ones at a multiple of 5, which is also where the
+        # checkpointer and the console logger do their work. The slow steps this is meant to
+        # find are disproportionately in the sample and the fast ones are not.
+        #
+        # ``post_step`` runs on EVERY step, so the sample below is the whole population.
+        #: One :class:`StepSample` per completed step, in step order.
+        self.steps: List[StepSample] = []
+        self._step_clock: Optional[float] = None
+        self._tokens_seen_at_last_step: Optional[int] = None
+
+        # --- peak memory, sampled BEFORE the monitor resets it ------------------------------
+        #
+        # THE READ IN ``summarise()`` IS TRUNCATED AT SOURCE AND LOOKS LIKE A WHOLE-RUN PEAK.
+        # ``GPUMemoryMonitorCallback.post_step`` calls ``torch.cuda.reset_peak_memory_stats()``
+        # on EVERY step, so a ``max_memory_allocated()`` read after ``fit()`` reports the peak
+        # of the LAST STEP ONLY. It under-reports by however much the true peak exceeded the
+        # final step, it is named like a run peak, and it is the field somebody sizes hardware
+        # with -- so the error is silent and in the unsafe direction.
+        #
+        # This callback has priority 0 and the monitor has -1, and the trainer runs higher
+        # priorities first, so this ``post_step`` is guaranteed to run BEFORE the reset that
+        # would destroy the reading. That ordering is load-bearing and is asserted in the
+        # tests rather than left to hold by luck.
+        #
+        # It matters most for exactly the arm this bake-off is worried about: the R=2
+        # Householder backward allocates an O(B*T*H*K*V) fp32 workspace, which is a transient
+        # inside a step. A per-step maximum sees it; a figure sampled after the run does not.
+        #: Running maximum of ``torch.cuda.max_memory_allocated()`` over every step, in bytes.
+        self.peak_allocated_bytes: int = 0
+        #: Running maximum of ``torch.cuda.max_memory_reserved()`` over every step, in bytes.
+        #: Reserved is what the allocator took from the driver and is the number that decides
+        #: whether a second process fits on the card; allocated is what the tensors needed.
+        self.peak_reserved_bytes: int = 0
+        #: How many steps contributed to the two figures above. Zero means they were never
+        #: sampled and must be reported as null rather than as 0 GiB.
+        self.memory_samples: int = 0
+
+    def post_step(self) -> None:
+        """Close out the step that just finished: its duration, its tokens, its memory peak.
+
+        ``post_step`` rather than ``log_metrics`` because it runs on every step instead of
+        every fifth, and because the memory reading has to be taken before
+        ``GPUMemoryMonitorCallback`` (priority -1, therefore later) resets it.
+
+        The first call establishes the clock and records nothing. There is no completed step to
+        time yet at that point, and a "duration" measured from the callback's construction to
+        the end of step one is process startup wearing a step's name -- which is the single
+        number this whole exercise exists to keep out of the throughput figure.
+        """
+        now = time.perf_counter()
+        trainer = self._trainer
+        tokens_seen = getattr(trainer, "global_train_tokens_seen", None) if trainer else None
+        step = getattr(trainer, "global_step", None) if trainer else None
+
+        if self._step_clock is not None and step is not None:
+            # Tokens are DIFFERENCED from the trainer's own running total rather than
+            # recomputed as `global_batch_size`. A short final batch, a resumed run, or a
+            # dynamic batch size all make the product wrong while the difference stays right,
+            # and the difference is the same quantity the trainer bills the schedule against.
+            tokens = 0
+            if tokens_seen is not None and self._tokens_seen_at_last_step is not None:
+                tokens = int(tokens_seen) - int(self._tokens_seen_at_last_step)
+            self.steps.append(
+                StepSample(step=int(step), seconds=now - self._step_clock, tokens=max(tokens, 0))
+            )
+
+        self._step_clock = now
+        if tokens_seen is not None:
+            self._tokens_seen_at_last_step = int(tokens_seen)
+
+        if torch.cuda.is_available():
+            # Both maxima, both since the monitor's last reset, both accumulated here into a
+            # true running maximum over the whole run.
+            self.peak_allocated_bytes = max(
+                self.peak_allocated_bytes, int(torch.cuda.max_memory_allocated())
+            )
+            self.peak_reserved_bytes = max(
+                self.peak_reserved_bytes, int(torch.cuda.max_memory_reserved())
+            )
+            self.memory_samples += 1
 
     def log_metrics(self, step: int, metrics: Dict[str, float]) -> None:
         del step
@@ -1448,6 +1703,170 @@ def assert_val_tokens_account_for_the_corpus(result) -> None:
         )
 
 
+def throughput_report(
+    losses: LossWatcher,
+    *,
+    world_size: int,
+    wall_clock_seconds: Optional[float],
+    flops_per_token: Optional[int] = None,
+    device_name: Optional[str] = None,
+    warmup_steps: int = WARMUP_STEPS_EXCLUDED,
+) -> Dict[str, Any]:
+    """The speed half of the record: two throughput figures that can never be confused.
+
+    TWO FIGURES, NAMED SO THAT NOBODY HAS TO REMEMBER WHICH IS WHICH.
+
+    ``throughput_tok_s_steady`` -- the one to rank arms on. Tokens over seconds across the steps
+    AFTER ``warmup_steps``, so process start, dataset open, FSDP wrap, Dynamo tracing, Inductor
+    compilation and the allocator's pool growth are all outside the measurement.
+
+    ``throughput_tok_s_whole_run`` -- the one to cost a machine-hour on and NOT to compare arms
+    with. Tokens over the entire wall clock of ``fit()``, fixed costs included. It is here for
+    contrast and because the gap between the two is itself diagnostic: a run whose steady figure
+    is far above its whole-run figure spent a lot of its life not training.
+
+    THE GAP BETWEEN THEM IS NOT SMALL AND IS NOT A CONSTANT. On this stack whole-run wall clock
+    read 3.1x low on a short probe, and the steady-state figure itself moved 1.5x between a
+    20-step and a 200-step run because the averaging window was contaminated. Two arms measured
+    at two run lengths would differ by that much with identical hardware behaviour, which is why
+    the cutoff is a module constant and both figures ship with the counts behind them.
+
+    EVERY FIGURE IS None WHEN IT COULD NOT BE MEASURED. Not 0.0, not the previous cell's value.
+    A zero throughput and an unmeasured throughput are opposite claims and only one is ever true.
+    """
+    steady_samples = steps_after_warmup(losses.steps, warmup_steps=warmup_steps)
+    steady_total = throughput_tokens_per_second(steady_samples)
+    # Same arithmetic over every recorded step, warmup included. Distinct from the wall-clock
+    # figure below: this one still excludes whatever happened before the first post_step.
+    all_steps_total = throughput_tokens_per_second(losses.steps)
+
+    step_seconds = [sample.seconds for sample in steady_samples]
+    tokens_in_steady = sum(sample.tokens for sample in steady_samples)
+
+    # Tokens over the WHOLE of fit(), which is the pessimistic figure. Derived from the same
+    # token total the trainer counted, not from a step count times a batch size.
+    tokens_all = sum(sample.tokens for sample in losses.steps)
+    whole_run_total: Optional[float] = None
+    if wall_clock_seconds and wall_clock_seconds > 0 and tokens_all > 0:
+        whole_run_total = tokens_all / wall_clock_seconds
+
+    # Per device from total, dividing by the world size that is reported beside it. A divisor a
+    # reader cannot see is how two arms measured on two shapes get compared as though on one.
+    divisor = world_size if world_size and world_size > 0 else None
+    steady_per_device = None if steady_total is None or divisor is None else steady_total / divisor
+    whole_run_per_device = (
+        None if whole_run_total is None or divisor is None else whole_run_total / divisor
+    )
+
+    device_peak = device_peak_bf16_flops(device_name)
+    mfu = model_flops_utilisation(
+        tokens_per_second_per_device=steady_per_device,
+        flops_per_token=flops_per_token,
+        device_peak_flops=device_peak,
+    )
+    if mfu is None:
+        # WHY THE MFU IS ABSENT, SAID IN THE RECORD RATHER THAN LEFT TO BE GUESSED. A null with
+        # no reason is indistinguishable from a bug in this function, and the three causes want
+        # different fixes: an unlisted card needs a line in DEVICE_PEAK_BF16_FLOPS, a missing
+        # flops/token needs the model to implement it, and a missing throughput means the run
+        # produced no usable steps at all.
+        if device_peak is None:
+            mfu_basis = f"no peak bf16 FLOP/s entry for device {device_name!r}"
+        elif not flops_per_token:
+            mfu_basis = "the train module reported no FLOPs per token"
+        else:
+            mfu_basis = "no steady-state throughput to compute it from"
+    else:
+        mfu_basis = (
+            f"{steady_per_device:,.0f} tok/s/device * {flops_per_token:,} FLOP/token "
+            f"/ {device_peak:,} FLOP/s peak dense bf16 on {device_name}"
+        )
+
+    return {
+        # THE FIGURE TO RANK ARMS ON. Post-warmup, total across every device.
+        "throughput_tok_s_steady": steady_total,
+        "throughput_tok_s_steady_per_device": steady_per_device,
+        # THE FIGURE TO COST WALL CLOCK ON, AND NOT TO RANK ARMS ON. Fixed costs included.
+        "throughput_tok_s_whole_run": whole_run_total,
+        "throughput_tok_s_whole_run_per_device": whole_run_per_device,
+        # Every recorded step including warmup, over summed step time. Between the two above,
+        # and its distance from `_steady` is how much the warmup was worth.
+        "throughput_tok_s_all_steps": all_steps_total,
+        # The counts behind the numbers, so a figure computed over four steps is visibly that.
+        "steps_measured": len(losses.steps),
+        "steady_state_steps": len(steady_samples),
+        "warmup_steps_excluded": warmup_steps,
+        "tokens_in_steady_window": tokens_in_steady if steady_samples else None,
+        # Step-time distribution over the steady window only. p50 and p90 rather than a mean:
+        # the mean is already implied by the throughput, and what a scheduler needs from the
+        # tail is a step time that was actually observed.
+        "step_time_s_p50": quantile_nearest_rank(step_seconds, 0.5),
+        "step_time_s_p90": quantile_nearest_rank(step_seconds, 0.9),
+        # Summed step time over the steady window. Wall clock MINUS startup, which is the
+        # quantity a per-cell schedule wants; `seconds` at the top level is the whole of fit().
+        "steady_window_seconds": sum(step_seconds) if step_seconds else None,
+        "training_seconds_excluding_startup": (
+            sum(sample.seconds for sample in losses.steps) if losses.steps else None
+        ),
+        "mfu_pct": mfu,
+        "mfu_basis": mfu_basis,
+        "device_peak_bf16_flops": device_peak,
+        "flops_per_token": flops_per_token,
+    }
+
+
+def memory_report(losses: LossWatcher) -> Dict[str, Any]:
+    """The memory half of the record: peak allocated and reserved, and WHICH read they are.
+
+    A fixed-size recurrent state is the main selling point of every mixer in this bake-off, so
+    the memory figure is an endpoint rather than a footnote -- and it is only an endpoint if the
+    six arms' numbers are the same quantity measured the same way.
+
+    THREE SOURCES, AND THEY ARE NOT INTERCHANGEABLE, WHICH IS WHY THE FIELD SAYS WHICH ONE:
+
+    ``per_step_running_max`` -- the real whole-run peak, accumulated by :class:`LossWatcher`
+    before ``GPUMemoryMonitorCallback`` resets the counters each step. This is the one to size
+    hardware with and the one to compare arms on.
+
+    ``final_step_only`` -- the naive post-``fit()`` read. Because the monitor resets peak stats
+    every step, this is the last step's peak and nothing more. It is a LOWER BOUND on the truth,
+    it looks exactly like a whole-run figure, and the difference is invisible in the value. It
+    is used only when the per-step sampler never ran, and it is labelled so nobody sizes a card
+    against it by accident.
+
+    ``unavailable`` -- no CUDA. Both figures are null, and null is the whole point: a run on CPU
+    reporting 0.0 GiB of peak memory is a claim that the arm is free, which is the direction a
+    missing measurement must never fail in.
+    """
+    gib = 1024**3
+    if losses.memory_samples > 0 and losses.peak_allocated_bytes > 0:
+        return {
+            "peak_memory_gib": losses.peak_allocated_bytes / gib,
+            "peak_memory_reserved_gib": losses.peak_reserved_bytes / gib,
+            "peak_memory_source": "per_step_running_max",
+            "peak_memory_samples": losses.memory_samples,
+        }
+
+    if torch.cuda.is_available():
+        allocated = int(torch.cuda.max_memory_allocated())
+        reserved = int(torch.cuda.max_memory_reserved())
+        return {
+            # A LOWER BOUND WEARING THE NAME OF A PEAK. `peak_memory_source` is the only thing
+            # separating this from the real figure, so it is never emitted without it.
+            "peak_memory_gib": allocated / gib if allocated > 0 else None,
+            "peak_memory_reserved_gib": reserved / gib if reserved > 0 else None,
+            "peak_memory_source": "final_step_only",
+            "peak_memory_samples": 0,
+        }
+
+    return {
+        "peak_memory_gib": None,
+        "peak_memory_reserved_gib": None,
+        "peak_memory_source": "unavailable",
+        "peak_memory_samples": 0,
+    }
+
+
 def summarise(
     *, opts, config, trainer, losses: LossWatcher, seconds: float, sliced=None, val=None
 ) -> None:
@@ -1467,7 +1886,23 @@ def summarise(
     if get_rank() != 0:
         return
     device = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"
-    peak = torch.cuda.max_memory_allocated() / 1024**3 if torch.cuda.is_available() else 0.0
+
+    # FLOPs per token comes from the train module, which returns None rather than raising when
+    # the model cannot estimate it -- so an arm whose mixer has no flop count yields a null MFU
+    # and a stated reason, not a wrong percentage.
+    flops_per_token: Optional[int] = None
+    with contextlib.suppress(Exception):
+        flops_per_token = trainer.train_module.num_flops_per_token(opts.sequence_length)
+
+    speed = throughput_report(
+        losses,
+        world_size=get_world_size(),
+        wall_clock_seconds=seconds,
+        flops_per_token=flops_per_token,
+        device_name=device if torch.cuda.is_available() else None,
+    )
+    memory = memory_report(losses)
+
     print(
         json.dumps(
             {
@@ -1490,13 +1925,26 @@ def summarise(
                 "first_loss": losses.first,
                 "last_loss": losses.last,
                 "seconds": seconds,
-                # THE THROUGHPUT NUMBER TO COST A RUN ON. Steady-state, per device, with
-                # step 1 excluded, so it does not charge process start, dataset open, FSDP
-                # wrap or the first-step compile against the hardware. Multiply by
-                # world_size for the machine.
+                "world_size": get_world_size(),
+                # CO-PRIMARY: SPEED. Two figures with deliberately unmistakable names --
+                # `throughput_tok_s_steady` ranks arms, `throughput_tok_s_whole_run` costs wall
+                # clock -- plus the counts behind them, the step-time distribution and MFU.
+                # Every one of them is null rather than zero when it could not be measured.
+                # See throughput_report for what each is and why they are not interchangeable.
+                **speed,
+                # CO-PRIMARY: MEMORY. `peak_memory_source` says WHICH read the figure is, and it
+                # is not decoration: the naive post-fit read is the last step's peak only,
+                # because the GPU monitor resets the counters every step. See memory_report.
+                **memory,
+                # The SpeedMonitorCallback's own per-device averages, kept because the
+                # preregistration names them and because they are an independent measurement of
+                # the same thing -- computed by upstream code, over a window that starts after
+                # step 1 rather than after the warmup cutoff. They should sit slightly BELOW
+                # `throughput_tok_s_steady_per_device`; a large gap means compilation or
+                # allocator growth leaked into upstream's average, which is the exact failure
+                # the cutoff exists for, so keeping both makes it visible instead of arguable.
                 "tps_device_avg": losses.tps_device_avg,
                 "tps_device_last": losses.tps_device_last,
-                "world_size": get_world_size(),
                 "tps_total_avg": (
                     None
                     if losses.tps_device_avg is None
@@ -1510,7 +1958,6 @@ def summarise(
                     if not seconds
                     else trainer.global_step * opts.global_batch_size / seconds
                 ),
-                "peak_memory_gib": peak,
                 "checkpoint_uri": opts.save_folder,
                 "wandb_project": os.environ.get("EDULLM_WANDB_PROJECT", ""),
                 "wandb_url": losses.wandb_url,

@@ -1049,3 +1049,355 @@ def test_train_requires_opts_rather_than_defaulting_to_a_silent_run():
         "train() has a default for `opts` again; a caller that omits it will train, checkpoint "
         "and report nothing"
     )
+
+
+# ---------------------------------------------------------------------------------------------
+# THROUGHPUT AND MEMORY REPORTING
+#
+# These are CO-PRIMARY endpoints alongside `val_ce`, not diagnostics. At the token budget this
+# study runs, the CE differences between arms may be under what three seeds can resolve, in which
+# case throughput and peak memory are what the production choice actually rests on.
+#
+# All of it is pure arithmetic over recorded samples, so all of it runs on a CPU with no model,
+# no CUDA and no trainer. Each test CALLS the function under test rather than re-deriving its
+# formula: a test that recomputes `sum(tokens)/sum(seconds)` in its own body passes when the
+# source changes to a mean-of-rates, which is the specific bug it would exist to catch.
+# ---------------------------------------------------------------------------------------------
+
+
+def samples(*triples):
+    """`(step, seconds, tokens)` triples as StepSamples, so the tests read as data."""
+    return [entry.StepSample(step=s, seconds=sec, tokens=tok) for s, sec, tok in triples]
+
+
+def test_the_steady_figure_is_absent_rather_than_zero_when_nothing_survives_the_cutoff():
+    """
+    THE FAILURE THIS EXISTS FOR: a cell whose steps were all inside the warmup window reports
+    `throughput_tok_s_steady: 0.0`, that arm sorts last in the ranking table, and a reader has no
+    way to tell "this mixer is slow" from "this figure was never measured". Zero is not a
+    conservative default for a speed -- it is a wrong claim in the direction that changes the
+    recommendation.
+
+    A short cell is not hypothetical: a crashed or cancelled attempt, a resumed run that stopped
+    early, or a smoke test at 20 steps all produce fewer completed steps than the 50-step cutoff.
+
+    The whole-run figure is checked in the same breath because it comes from a DIFFERENT
+    computation -- wall clock rather than summed step time -- and a null on one does not imply a
+    null on the other.
+    """
+    watcher = entry.LossWatcher()
+    watcher.steps = samples(*((i, 0.5, 1000) for i in range(1, entry.WARMUP_STEPS_EXCLUDED + 1)))
+
+    report = entry.throughput_report(watcher, world_size=8, wall_clock_seconds=100.0)
+
+    assert report["throughput_tok_s_steady"] is None, (
+        "no step survived the warmup cutoff, so there is no steady-state measurement; a number "
+        "here is a fabricated one and 0.0 would rank this arm last"
+    )
+    assert report["throughput_tok_s_steady_per_device"] is None
+    assert report["steady_state_steps"] == 0
+    assert report["step_time_s_p50"] is None
+    assert report["step_time_s_p90"] is None
+    # The whole-run figure IS measurable here -- there was a wall clock and there were tokens --
+    # so this also proves the null above is specific rather than the function failing wholesale.
+    assert report["throughput_tok_s_whole_run"] is not None
+
+
+def test_the_steady_figure_excludes_the_warmup_steps_it_says_it_excludes():
+    """
+    The cutoff is only worth having if the slow warmup steps are genuinely outside the average.
+    Here the first 50 steps are 10x slower than the rest, so a figure that included them would be
+    dragged far below the steady one -- and the two figures must therefore DIFFER.
+
+    Asserted as a relationship between the two reported numbers rather than against a literal:
+    a hard-coded expected value is a second implementation of the formula and goes stale silently.
+    """
+    slow = [(i, 5.0, 1000) for i in range(1, entry.WARMUP_STEPS_EXCLUDED + 1)]
+    fast = [(i, 0.5, 1000) for i in range(entry.WARMUP_STEPS_EXCLUDED + 1, 151)]
+    watcher = entry.LossWatcher()
+    watcher.steps = samples(*(slow + fast))
+
+    report = entry.throughput_report(watcher, world_size=4, wall_clock_seconds=1000.0)
+
+    assert report["steady_state_steps"] == 100
+    assert report["warmup_steps_excluded"] == entry.WARMUP_STEPS_EXCLUDED
+    # The steady window is the fast steps only: 100 steps x 1000 tokens / (100 x 0.5s).
+    assert report["throughput_tok_s_steady"] == pytest.approx(2000.0)
+    # Including the warmup would give 150,000 tokens over 300s = 500 tok/s, a 4x understatement.
+    assert report["throughput_tok_s_all_steps"] == pytest.approx(500.0)
+    assert report["throughput_tok_s_steady"] > 3 * report["throughput_tok_s_all_steps"], (
+        "the warmup steps are 10x slower and are supposed to be outside the steady figure; if "
+        "these two are close, the cutoff is not being applied"
+    )
+    # Per-device is the total divided by the world size that ships beside it.
+    assert report["throughput_tok_s_steady_per_device"] == pytest.approx(500.0)
+
+
+def test_the_cutoff_filters_on_the_step_index_so_a_resumed_run_is_not_over_trimmed():
+    """
+    A second Batch attempt resumes at step 1,201, so its FIRST recorded sample is step 1,201 --
+    already long past any warmup. Dropping "the first 50 entries of the list" would discard 50
+    perfectly good steady-state steps and exclude nothing that needed excluding, and the
+    resulting figure would still look completely normal.
+    """
+    resumed = samples(*((i, 0.5, 1000) for i in range(1201, 1301)))
+    kept = entry.steps_after_warmup(resumed)
+    assert len(kept) == 100, "a resumed run has no warmup steps in its samples to discard"
+    assert kept[0].step == 1201
+
+
+def test_the_cutoff_is_strict_so_exactly_warmup_steps_are_discarded():
+    """
+    `>` versus `>=` on the cutoff is a one-step difference that no reported number would ever
+    reveal. With `warmup_steps=50`, step 50 is discarded and step 51 is the first kept.
+    """
+    kept = entry.steps_after_warmup(samples(*((i, 1.0, 10) for i in range(1, 101))), warmup_steps=50)
+    assert len(kept) == 50
+    assert kept[0].step == 51
+
+
+def test_throughput_is_total_tokens_over_total_seconds_and_not_a_mean_of_rates():
+    """
+    THE TWO ARE DIFFERENT QUANTITIES AND ONLY ONE IS THROUGHPUT. One slow step among fast ones --
+    a checkpoint step, an allocator stall -- is what separates them: the ratio of sums charges
+    that step its full duration, while a mean of per-step rates gives it the same weight as a
+    fast one and reports a speed the run never achieved.
+
+    Constructed so the two answers are far apart: nine steps at 1000 tok/s and one at 100 tok/s.
+    Ratio of sums = 10,000 tokens / 19s = 526. Mean of rates = (9x1000 + 100)/10 = 910.
+    """
+    fast_then_one_slow = samples(*([(i, 1.0, 1000) for i in range(1, 10)] + [(10, 10.0, 1000)]))
+    measured = entry.throughput_tokens_per_second(fast_then_one_slow)
+    assert measured == pytest.approx(10_000 / 19.0)
+    assert measured < 600, (
+        "a mean of per-step rates would report ~910 tok/s here; throughput is the ratio of sums "
+        "and must charge the slow step its full duration"
+    )
+
+
+def test_throughput_is_none_rather_than_zero_when_no_tokens_were_counted():
+    """
+    A data loader that reports no token count leaves every sample at zero tokens. Dividing that
+    by real seconds is 0.0 tok/s -- a claim that the arm produced nothing, rather than the truth,
+    which is that nothing was counted.
+    """
+    assert entry.throughput_tokens_per_second(samples((51, 1.0, 0), (52, 1.0, 0))) is None
+    assert entry.throughput_tokens_per_second([]) is None
+    # And a zero-duration sample cannot become a division by zero or an infinity.
+    assert entry.throughput_tokens_per_second(samples((51, 0.0, 1000))) is None
+
+
+@pytest.mark.parametrize(
+    "values,q,expected",
+    [
+        # Nearest rank: index ceil(q*n)-1 into the sorted list, so the answer is always an
+        # OBSERVED value rather than an interpolation between two that were not.
+        ([1.0, 2.0, 3.0], 0.5, 2.0),
+        # Even n: the lower of the two middle values, not their average (which would be 2.5).
+        ([1.0, 2.0, 3.0, 4.0], 0.5, 2.0),
+        # p90 of ten sorted values is the 9th.
+        ([float(i) for i in range(1, 11)], 0.9, 9.0),
+        # Unsorted input must be sorted first; the max must be reachable at q=1.
+        ([5.0, 1.0, 3.0], 1.0, 5.0),
+        # A single sample is its own every quantile.
+        ([7.0], 0.9, 7.0),
+    ],
+)
+def test_the_quantile_is_nearest_rank_over_the_sorted_values(values, q, expected):
+    assert entry.quantile_nearest_rank(values, q) == expected
+
+
+def test_the_quantile_of_nothing_is_none_rather_than_zero():
+    """A p90 step time of 0.0 seconds is an infinitely fast arm. It must be absent instead."""
+    assert entry.quantile_nearest_rank([], 0.5) is None
+    assert entry.quantile_nearest_rank([], 0.9) is None
+
+
+def test_p90_is_at_or_above_p50_on_every_shape_of_input():
+    """
+    An ordering violation between the two would be invisible in a results table and would
+    silently invert what a scheduler thinks the tail costs. Checked over several lengths because
+    the nearest-rank index is where an off-by-one would hide.
+    """
+    for n in range(1, 40):
+        values = [float((i * 7) % n) for i in range(n)]
+        p50 = entry.quantile_nearest_rank(values, 0.5)
+        p90 = entry.quantile_nearest_rank(values, 0.9)
+        assert p50 is not None and p90 is not None
+        assert p90 >= p50, f"p90 {p90} below p50 {p50} at n={n}"
+
+
+def test_mfu_is_none_rather_than_wrong_when_the_card_is_not_in_the_table():
+    """
+    UPSTREAM'S TABLE ENDS IN `else: assume A100`, SO EVERY UNRECOGNISED CARD GETS 312 TFLOP/s.
+    On an L40S -- 181 TFLOP/s dense -- that denominator is 1.72x too high and the MFU printed
+    from it is 1.72x too low, with nothing in the record saying it was a guess. A wrong number
+    that looks authoritative is worse here than no number.
+    """
+    assert entry.device_peak_bf16_flops("NVIDIA GeForce RTX 4090") is None
+    assert entry.device_peak_bf16_flops(None) is None
+    assert entry.device_peak_bf16_flops("") is None
+    assert (
+        entry.model_flops_utilisation(
+            tokens_per_second_per_device=5000.0,
+            flops_per_token=2_000_000_000,
+            device_peak_flops=None,
+        )
+        is None
+    )
+
+
+def test_the_a100_is_in_the_table_because_that_is_the_card_this_study_runs_on():
+    """
+    The bake-off runs on gpu-8xa100 -- the only 80GB shape this account can get -- so an absent
+    A100 entry would make MFU null on every cell of the actual study. Named cards are checked in
+    the forms torch reports them in.
+    """
+    assert entry.device_peak_bf16_flops("NVIDIA A100-SXM4-80GB") == 312_000_000_000_000
+    assert entry.device_peak_bf16_flops("NVIDIA A100 80GB PCIe") == 312_000_000_000_000
+    # L40S is the FarmShare card and must NOT resolve to the A100's peak.
+    assert entry.device_peak_bf16_flops("NVIDIA L40S") == 181_000_000_000_000
+
+
+def test_the_longest_device_key_wins_so_h100_nvl_is_not_shadowed():
+    """
+    `H100` is a substring of `NVIDIA H100 NVL`, so a first-match-wins scan over an unordered
+    table would give the NVL card the SXM peak -- 989 against 835 TFLOP/s, an 18% error in the
+    MFU denominator that no reader could see.
+    """
+    assert entry.device_peak_bf16_flops("NVIDIA H100 NVL") == 835_500_000_000_000
+    assert entry.device_peak_bf16_flops("NVIDIA H100 80GB HBM3") == 989_500_000_000_000
+
+
+def test_mfu_uses_the_per_device_throughput_and_not_the_total():
+    """
+    MFU is a per-CARD utilisation. Feeding it the whole machine's tokens/second would multiply
+    the answer by the world size -- 800% on an 8-GPU node, which at least looks wrong; at world
+    size 1 it is silently identical, which is how the bug ships.
+    """
+    mfu = entry.model_flops_utilisation(
+        tokens_per_second_per_device=1000.0,
+        flops_per_token=312_000_000_000,
+        device_peak_flops=312_000_000_000_000,
+    )
+    assert mfu == pytest.approx(100.0)
+
+
+def test_mfu_is_none_when_the_model_reports_no_flops_per_token():
+    assert (
+        entry.model_flops_utilisation(
+            tokens_per_second_per_device=5000.0,
+            flops_per_token=None,
+            device_peak_flops=312_000_000_000_000,
+        )
+        is None
+    )
+
+
+def test_an_unmeasurable_mfu_says_why_rather_than_leaving_a_bare_null():
+    """
+    A null with no reason is indistinguishable from a bug in the reporting code, and the causes
+    want different fixes: an unlisted card needs a table entry, a missing flops/token needs the
+    model to implement it.
+    """
+    watcher = entry.LossWatcher()
+    watcher.steps = samples(*((i, 0.5, 1000) for i in range(1, 151)))
+
+    unknown_card = entry.throughput_report(
+        watcher, world_size=1, wall_clock_seconds=100.0, flops_per_token=10**9, device_name="TPUv5"
+    )
+    assert unknown_card["mfu_pct"] is None
+    assert "TPUv5" in unknown_card["mfu_basis"]
+
+    no_flops = entry.throughput_report(
+        watcher, world_size=1, wall_clock_seconds=100.0, flops_per_token=None, device_name="A100"
+    )
+    assert no_flops["mfu_pct"] is None
+    assert "FLOPs per token" in no_flops["mfu_basis"]
+
+
+def test_peak_memory_is_null_and_labelled_rather_than_zero_when_there_is_no_cuda():
+    """
+    0.0 GiB of peak memory is a claim that the arm is free. On a co-primary memory endpoint that
+    would rank the unmeasured arm FIRST, which is the worst possible direction for a missing
+    measurement to fail in.
+    """
+    watcher = entry.LossWatcher()  # never sampled: no CUDA, no steps
+    report = entry.memory_report(watcher)
+    if torch.cuda.is_available():
+        pytest.skip("this asserts the no-CUDA branch and there is a CUDA device here")
+    assert report["peak_memory_gib"] is None
+    assert report["peak_memory_reserved_gib"] is None
+    assert report["peak_memory_source"] == "unavailable"
+
+
+def test_peak_memory_prefers_the_running_maximum_over_the_truncated_read():
+    """
+    `GPUMemoryMonitorCallback.post_step` calls `reset_peak_memory_stats()` on EVERY step, so a
+    `max_memory_allocated()` read after `fit()` is the LAST STEP's peak. It is a lower bound
+    wearing the name of a whole-run peak, and it is the field somebody sizes a card with.
+
+    This matters most for the R=2 Householder arm, whose Triton backward allocates an
+    O(B*T*H*K*V) fp32 workspace -- a within-step transient that only a per-step maximum sees.
+    """
+    watcher = entry.LossWatcher()
+    watcher.peak_allocated_bytes = 40 * 1024**3
+    watcher.peak_reserved_bytes = 44 * 1024**3
+    watcher.memory_samples = 1900
+
+    report = entry.memory_report(watcher)
+    assert report["peak_memory_source"] == "per_step_running_max", (
+        "the sampled running maximum was available and must be preferred to the truncated "
+        "post-fit read"
+    )
+    assert report["peak_memory_gib"] == pytest.approx(40.0)
+    assert report["peak_memory_reserved_gib"] == pytest.approx(44.0)
+    assert report["peak_memory_samples"] == 1900
+
+
+def test_the_watcher_samples_memory_before_the_gpu_monitor_resets_it():
+    """
+    THE ORDERING IS LOAD-BEARING AND IS OTHERWISE HELD ONLY BY LUCK. `LossWatcher.post_step`
+    reads the CUDA peak counters; `GPUMemoryMonitorCallback.post_step` resets them. The trainer
+    runs callbacks in descending priority, so the watcher must have the HIGHER priority of the
+    two or every reading it takes is of a counter that was just zeroed -- and the resulting
+    figure would look entirely plausible.
+    """
+    from olmo_core.train.callbacks import GPUMemoryMonitorCallback
+
+    assert entry.LossWatcher.priority > GPUMemoryMonitorCallback.priority, (
+        "LossWatcher must run before GPUMemoryMonitorCallback in post_step, or it samples peak "
+        "memory counters that the monitor has already reset"
+    )
+
+
+def test_the_two_throughput_figures_have_names_that_cannot_be_confused():
+    """
+    The scar this guards: a 200-step run reported 455,789 tok/s where a 20-step run at the same
+    microbatch reported 303,072, and the higher figure was a run-length artifact. Two numbers
+    that differ by 1.5x for methodological reasons must not share a key, and must not be
+    distinguished only by a suffix somebody can drop when copying into a table.
+    """
+    watcher = entry.LossWatcher()
+    watcher.steps = samples(*((i, 0.5, 1000) for i in range(1, 151)))
+    report = entry.throughput_report(watcher, world_size=8, wall_clock_seconds=200.0)
+
+    assert "throughput_tok_s_steady" in report
+    assert "throughput_tok_s_whole_run" in report
+    assert report["throughput_tok_s_steady"] != report["throughput_tok_s_whole_run"]
+    # And the steady figure must be the HIGHER of the two: the whole-run one carries startup.
+    assert report["throughput_tok_s_steady"] > report["throughput_tok_s_whole_run"]
+
+
+def test_the_report_never_emits_a_zero_for_a_figure_it_could_not_measure():
+    """
+    A sweep of the whole emitted object on the worst input there is -- no steps, no wall clock.
+    Every numeric field must be null; a 0.0 anywhere in here is a measurement claim.
+    """
+    report = entry.throughput_report(entry.LossWatcher(), world_size=8, wall_clock_seconds=0.0)
+    for key, value in report.items():
+        if key in ("steps_measured", "steady_state_steps", "warmup_steps_excluded"):
+            continue  # honest counts of nothing
+        if isinstance(value, str):
+            continue  # mfu_basis, which explains the nulls
+        assert value is None, f"{key} is {value!r}; an unmeasured figure must be null, not zero"
