@@ -25,11 +25,22 @@
 # --learning-rate 0.01 is a MuonH rate and means something different: under Hyperball it is
 # a RELATIVE step size, ||dW||/||W|| ~ eta, dimensionless. It is not comparable to the
 # muon_w arm's number and neither is tuned yet -- both are sweep starting points.
+#
+# TRITON_F32_DEFAULT=ieee IS A CORRECTNESS SETTING, NOT A PERFORMANCE ONE, AND IT IS EXPORTED
+# BEFORE PYTHON STARTS BECAUSE IT PARTICIPATES IN KERNEL CODEGEN. Triton lowers tl.dot to TF32
+# on Ampere+ by its own default, and torch.backends.cuda.matmul.allow_tf32 does NOT reach it --
+# so a job can truthfully report "tf32 disabled" for torch and still run every Triton kernel at
+# reduced precision. Measured elsewhere in this project: 1.145e-03 relative error unset against
+# 6.892e-06 with ieee, 166x from one environment variable. The MoE dispatch path here is Triton
+# (binned_gather), so without this the two MoE arms would differ from the two dense arms in
+# numerics as well as architecture, and the setting is applied to all four arms so that they do
+# not differ from each other either.
 schema_version: 1
 workload_profile: olmo-core-train
 suggested_compute: gpu-1xl40s
 command: >-
-  bash -lc 'python -m torch.distributed.run --nproc-per-node=1 --standalone
+  bash -lc 'export TRITON_F32_DEFAULT=ieee
+  && python -m torch.distributed.run --nproc-per-node=1 --standalone
   .edullm/train_on_corpus.py "$EDULLM_RUN_ID"
   --save-folder "$EDULLM_CHECKPOINT_DIR"
   --model-factory olmo2_370M --init-method fan_in

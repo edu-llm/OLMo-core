@@ -96,7 +96,8 @@ class SpeedMonitorCallback(Callback):
                 tm.dp_config is not None and tm.dp_config.param_dtype == DType.bfloat16
             )
             if using_half_precision:
-                dense_correction = 0.5  # listed specs are one-half lower without sparsity
+                # Listed specs are the SPARSITY figures; halve them or MFU comes out 2x low.
+                dense_correction = 0.5
                 if "H100" in device_name:
                     # data from https://www.nvidia.com/en-us/data-center/h100/
                     if "NVL" in device_name:
@@ -108,9 +109,33 @@ class SpeedMonitorCallback(Callback):
                 elif "B200" in device_name:
                     # data from https://www.nvidia.com/en-us/data-center/hgx/
                     self.device_peak_flops_per_second = int(4.5e15 * dense_correction)
-                else:  # for other GPU types, assume A100
+                elif "A100" in device_name:
                     # data from https://www.nvidia.com/en-us/data-center/a100/
                     self.device_peak_flops_per_second = int(624e12 * dense_correction)
+                elif "L40S" in device_name:
+                    self.device_peak_flops_per_second = int(733e12 * dense_correction)
+                elif "A10G" in device_name:
+                    self.device_peak_flops_per_second = int(125e12 * dense_correction)
+                elif "L4" in device_name:
+                    self.device_peak_flops_per_second = int(242e12 * dense_correction)
+                elif "T4" in device_name:
+                    # Turing has no bfloat16 at all, so this branch should be unreachable; a
+                    # peak here would be a number for arithmetic the hardware cannot do.
+                    log.warning(
+                        f"{device_name} has no bfloat16 in hardware; reporting no MFU. "
+                        "Set device_peak_flops_per_second explicitly if you disagree."
+                    )
+                else:
+                    # NO FALL-THROUGH, AND THAT IS THE POINT. This used to assume A100 for
+                    # every unlisted card, which understates MFU by 5x on an A10G and
+                    # overstates it by ~1.175x on an L40S -- silently, because the result still
+                    # looks like a utilization. Two shapes reporting "MFU" against different
+                    # peaks cannot be compared, which makes a cross-shape throughput claim
+                    # wrong rather than merely imprecise. Absent beats plausible-and-wrong.
+                    log.warning(
+                        f"No peak FLOP/s on record for device '{device_name}', so MFU will not "
+                        "be reported. Add an entry here or set device_peak_flops_per_second."
+                    )
             log.info(
                 f"Device: {device_name}, Device peak Flops/s: {self.device_peak_flops_per_second}"
             )

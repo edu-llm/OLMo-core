@@ -116,6 +116,7 @@ from olmo_core.train.callbacks import (
     CheckpointerCallback,
     ConfigSaverCallback,
     GPUMemoryMonitorCallback,
+    SpeedMonitorCallback,
     WandBCallback,
 )
 from olmo_core.train.checkpoint import Checkpointer
@@ -744,6 +745,15 @@ def build_config(opts, overrides: List[str]):
         )
         .with_callback("config_saver", ConfigSaverCallback())
         .with_callback("muon_metrics", MuonMetricsCallback())
+        # THIS WAS MISSING, AND ITS ABSENCE IS WHY NO RUN HERE HAS EVER REPORTED tok/s OR MFU.
+        # Not a cosmetic gap: sizing a run against a 24 h attempt bound, or choosing a machine,
+        # or reading a throughput regression, all need a number that nothing was producing. The
+        # callback resets its own clock after step 1, so what it reports is steady state rather
+        # than a rate whose denominator includes process start, the dataset open and the first
+        # step's compile -- that conflation measured 3.1x low elsewhere in this project, and
+        # worse, it is biased AGAINST bigger shapes (more ranks to init, more shards to wrap),
+        # which inverts the comparison a throughput number exists to make.
+        .with_callback("speed_monitor", SpeedMonitorCallback())
     )
 
     # No lm_evaluator and no downstream_evaluator, and their absence is a decision. The
