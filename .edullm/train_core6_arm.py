@@ -1161,7 +1161,14 @@ def _shard_microbatch_count(path, *, seq_len: int, micro: int, dtype) -> int:
     return (windows + micro - 1) // micro
 
 
-def fetch_slice_inputs(*, mask_uri: str, work_dir: str):
+def fetch_slice_inputs(
+    *,
+    mask_uri: str,
+    work_dir: str,
+    rank: int = 0,
+    world_size: int = 1,
+    seq_len: Optional[int] = None,
+):
     """Download the frozen masks and the exact corpus shards they were built against.
 
     The masks live outside the corpus because they are not corpus data -- they are a derived
@@ -1174,6 +1181,24 @@ def fetch_slice_inputs(*, mask_uri: str, work_dir: str):
     Shard names encode their corpus location as ``<source>__<shard>.u32le.bin``, but the
     directory beneath the source is a topic that the name drops, so the corpus keys come from
     the manifest's own ``s3_key`` field rather than being reconstructed here.
+
+    SHARDED BY OBJECT ACROSS RANKS, THE SAME WAY :func:`fetch_val_shards` IS, AND FOR THE SAME
+    TWO REASONS. The download is the expensive part, so a set every rank fetches is
+    ``world_size`` copies of the same bytes; and the assignment ``i % world_size == rank`` is
+    deterministic from rank alone, so the union over ranks is exactly the manifest with nothing
+    counted twice. That second property is what makes the summed band counts meaningful -- they
+    can only add up to the whole labelled set if every object was read exactly once.
+
+    The digest check therefore covers this rank's share only. Over the world it covers every
+    mask exactly once, which is the same guarantee the unsharded version gave and at 1/world_size
+    of the bytes.
+
+    THE MANIFEST ITSELF IS READ BY EVERY RANK. It is one small JSON, and the band check below is
+    the one thing that must not be delegated: a rank that skipped it would score bands whose bit
+    layout it never verified.
+
+    The defaults are the single-process case, so a caller with no process group -- a test, or a
+    laptop -- gets the whole set exactly as before.
     """
     from olmo_core.io import copy_file, normalize_path
 
@@ -1191,10 +1216,40 @@ def fetch_slice_inputs(*, mask_uri: str, work_dir: str):
             f"mask bands {manifest.get('bands')} disagree with this build's {sorted(BAND_BIT)}"
         )
 
+    # THE BIT LAYOUT, NOT JUST THE BAND NAMES. Two builds can agree on `bands` -- the sorted gap
+    # distances -- and disagree on which BIT each one occupies, at which point every scored token is
+    # attributed to the wrong band and the table is entirely plausible. The names check above cannot
+    # see that, because it compares the keys and never the values.
+    declared_bits = manifest.get("band_bit")
+    if declared_bits is not None:
+        # JSON keys are strings; BAND_BIT's are ints.
+        if {int(k): v for k, v in declared_bits.items()} != BAND_BIT:
+            raise ValueError(
+                f"mask band->bit layout {declared_bits} disagrees with this build's {BAND_BIT}"
+            )
+
+    # THE WINDOW THE MASKS WERE BUILT AT MUST BE THE WINDOW WE SCORE AT, and nothing else in this
+    # function was checking it. A gap band is a distance measured INSIDE one evaluation window, so
+    # masks built at 4096 and scored at 2048 attribute every token to a band computed against a
+    # context the model never saw -- and produce a full, credible, wrong table rather than an error.
+    # The builder writes this field; refuse rather than trust it by omission.
+    declared_seq = manifest.get("sequence_length")
+    if seq_len is not None and declared_seq is not None and int(declared_seq) != int(seq_len):
+        raise ValueError(
+            f"slice masks were built at sequence_length {declared_seq} but this run scores at "
+            f"{seq_len}; every gap band would be measured against a context the model never saw"
+        )
+
     val_paths, mask_paths = [], []
-    for entry in manifest["shards"]:
-        shard_local = os.path.join(local, entry["shard"])
-        mask_local = os.path.join(local, entry["mask"])
+    for index, entry in enumerate(manifest["shards"]):
+        if index % world_size != rank:
+            continue
+        # Index-prefixed local names, for the reason `fetch_val_shards` documents: the manifest's
+        # `shard` field is a name rather than a key, so two entries that agree on it would have
+        # the second copy_file silently overwrite the first -- dropping tokens in a way that looks
+        # like a short mask set rather than like a collision.
+        shard_local = os.path.join(local, f"{index:05d}-{entry['shard']}")
+        mask_local = os.path.join(local, f"{index:05d}-{entry['mask']}")
         if "s3_key" not in entry:
             raise ValueError(
                 f"manifest entry for {entry['shard']} has no s3_key; regenerate it with the "
@@ -1210,18 +1265,32 @@ def fetch_slice_inputs(*, mask_uri: str, work_dir: str):
                 f"{entry['shard']}: {os.path.getsize(shard_local)//4} tokens on disk, "
                 f"manifest says {entry['tokens']}"
             )
+        # THE PREFIX LENGTH COMES FROM THE MANIFEST, WHICH MEANS THE MANIFEST DECIDES HOW MUCH OF
+        # ITSELF GETS CHECKED -- and an EMPTY string checks nothing at all: `digest[:0] == ""` is
+        # True for any bytes on earth. That is fail-open on the one guard that makes every arm
+        # provably scored on a byte-identical token set. Require a real digest before comparing.
+        declared_digest = entry.get("sha256") or ""
+        if len(declared_digest) < 16:
+            raise ValueError(
+                f"{entry['mask']}: manifest sha256 is {len(declared_digest)} chars "
+                f"({declared_digest!r}); refusing, because a short or empty digest makes this "
+                "check pass for arbitrary content"
+            )
         with open(mask_local, "rb") as handle:
-            digest = hashlib.sha256(handle.read()).hexdigest()[: len(entry["sha256"])]
-        if digest != entry["sha256"]:
-            raise ValueError(f"{entry['mask']}: sha256 {digest} != manifest {entry['sha256']}")
+            digest = hashlib.sha256(handle.read()).hexdigest()[: len(declared_digest)]
+        if digest != declared_digest:
+            raise ValueError(f"{entry['mask']}: sha256 {digest} != manifest {declared_digest}")
 
         val_paths.append(shard_local)
         mask_paths.append(mask_local)
 
     total = sum(e["tokens"] for e in manifest["shards"])
     log.info(
-        "slice inputs: %d shard(s), %s tokens, C_mass=%s, realized mass %.3f%%",
+        "slice inputs: rank %d holds %d of %d shard(s); %s tokens declared over the whole set, "
+        "C_mass=%s, realized mass %.3f%%",
+        rank,
         len(val_paths),
+        len(manifest["shards"]),
         f"{total:,}",
         manifest.get("c_mass"),
         100 * manifest.get("realized_mass", 0.0),
@@ -1229,15 +1298,113 @@ def fetch_slice_inputs(*, mask_uri: str, work_dir: str):
     return val_paths, mask_paths
 
 
+def fetch_slice_inputs_on_every_rank(
+    *, mask_uri: str, work_dir: str, seq_len: Optional[int] = None
+):
+    """Fetch this rank's share of the masks, and turn ONE rank's failure into ALL ranks failing.
+
+    WITHOUT THIS THE RANKS SPLIT AND DEADLOCK, AND THE CALLER'S ``except`` IS WHAT CAUSES IT.
+    The sliced eval is wrapped in a ``try`` that must not lose a checkpoint to a secondary bug.
+    So a rank whose download raises is caught, skips :func:`evaluate_sliced` entirely and lands
+    on the caller's ``barrier()`` -- while its peers, whose downloads succeeded, walk into the
+    all-reduces inside the evaluator. Barrier on one side, all-reduce on the other, on the same
+    process group: that is a mismatched collective, and it is a hang or an NCCL abort rather than
+    an error anybody can read. The rank-zero gate was removed and this is the second trap behind
+    it, one code block later -- the same shape of bug :func:`evaluate_val_aggregate` documents in
+    its download guard.
+
+    So the failure becomes a value, the value is all-reduced, and either every rank goes on or
+    every rank raises. The all-reduce is entered unconditionally on both paths, which is what
+    makes it safe.
+
+    :returns: ``(val_paths, mask_paths)`` for this rank's share.
+
+    :raises Refusal: On every rank, if any rank could not fetch its share.
+    """
+    rank = get_rank()
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+
+    failed, error = 0, None
+    val_paths: List[str] = []
+    mask_paths: List[str] = []
+    try:
+        val_paths, mask_paths = fetch_slice_inputs(
+            mask_uri=mask_uri,
+            work_dir=work_dir,
+            rank=rank,
+            world_size=get_world_size(),
+            seq_len=seq_len,
+        )
+    except BaseException as exc:  # noqa: BLE001 -- re-raised below, on every rank
+        failed, error = 1, exc
+        log.error("rank %d could not fetch its slice inputs: %r", rank, exc)
+
+    if int(all_reduce_value(failed, device, op=torch.distributed.ReduceOp.SUM)):
+        if error is not None:
+            raise Refusal(
+                Stage.THE_HELD_OUT_EVALUATION_SCORED_NOTHING,
+                f"rank {rank} failed to fetch its share of the slice masks: "
+                f"{type(error).__name__}: {error}",
+            ) from error
+        raise Refusal(
+            Stage.THE_HELD_OUT_EVALUATION_SCORED_NOTHING,
+            "another rank failed to fetch its share of the slice masks, so the per-band CE "
+            "would be computed over an incomplete token set. Failing on every rank rather than "
+            "waiting on a collective the failed rank will never enter.",
+        )
+    return val_paths, mask_paths
+
+
+def band_ce_from_totals(sums: Dict[int, float], counts: Dict[int, int]) -> Dict[str, Any]:
+    """Turn all-reduced per-band ``(sum, count)`` pairs into token-weighted mean CEs.
+
+    THE ONE PLACE A BAND'S MEAN IS FORMED, AND IT DIVIDES EXACTLY ONCE. The reduction this
+    serves adds per-rank sums and per-rank counts separately and then calls this on the totals,
+    which is a token-weighted mean over the whole world. The tempting alternative -- have each
+    rank compute its own band CE and average those -- is a mean of means, and it weights every
+    rank equally no matter how many tokens of that band the rank happened to hold. Bands are
+    exactly where that bias bites hardest: ``gap>4096`` is rare, so one rank can hold most of it
+    and another almost none, and the "average" would then be dominated by ranks with almost no
+    evidence. It is a silent bias -- the number stays in range and no assertion fails.
+
+    A BAND WITH NO TOKENS GETS ``None``, NOT ``0.0``, AND THAT IS THE WHOLE REASON THIS IS A
+    FUNCTION. The version this replaces divided by ``max(count, 1)``, so an empty band reported
+    a cross-entropy of ``0.0`` -- a PERFECT score, the best number in the table, for a band that
+    was never measured. At the tail bands that is not hypothetical: a mask built on a small slice
+    can easily leave ``gap>4096`` empty, and this study ranks arms on band CEs. A null says "not
+    measured" and an arm that reports one cannot be silently ranked first on it.
+
+    Pure arithmetic over plain numbers, deliberately: it takes no tensors, no model and no
+    process group, so a CPU test can call it with hand-computed totals and check the weighting
+    against an independently-derived answer.
+
+    :param sums: Per-band summed cross-entropy, already reduced across ranks.
+    :param counts: Per-band token counts, already reduced across ranks.
+
+    :returns: ``{str(band): {"sum": ..., "n": ..., "ce": ...}}``, ``ce`` null where ``n`` is 0.
+    """
+    out: Dict[str, Any] = {}
+    for band in sorted(sums):
+        total, n = float(sums[band]), int(counts[band])
+        out[str(band)] = {
+            "sum": total,
+            "n": n,
+            # Divided once, here, over the world's token count for this band.
+            "ce": (total / n) if n > 0 else None,
+        }
+    return out
+
+
 @torch.no_grad()
 def evaluate_sliced(*, model, vocab_size, val_paths, mask_paths, seq_len, micro=2):
-    """Aggregate and per-band AR-sliced CE over a fixed validation set.
+    """Aggregate and per-band AR-sliced CE over a fixed validation set, ON EVERY RANK.
 
-    This is the number the experiment is actually for. Training alone produces a loss curve;
-    the contrasts that answer the question -- D = CE(a=4) - CE(a=6), and the seed noise s --
-    are differences of *this* quantity between arms, computed on a byte-identical token set.
+    The per-band decomposition the gap-conditioned analysis needs: cross-entropy split by how
+    far back the token's supporting context sits, using the frozen masks build_slice_masks.py
+    wrote once. Read against :func:`evaluate_val_aggregate`, which is the headline endpoint;
+    this is the secondary one and it answers a different question.
 
-    Returns sums and counts rather than means, so that arms can be differenced without a
+    Returns sums and counts rather than only means, so that arms can be differenced without a
     re-weighting error, and so an unequal token count between arms is visible rather than
     silently invalidating the pairing.
 
@@ -1245,61 +1412,204 @@ def evaluate_sliced(*, model, vocab_size, val_paths, mask_paths, seq_len, micro=
     one from the inputs. An off-by-one here scores the wrong positions and still produces
     plausible numbers.
 
-    STILL RANK-GATED BY ITS CALLER, AND STILL NOT THE RUN'S ONLY ENDPOINT. See
-    :func:`evaluate_val_aggregate`, which is the one that runs on every rank and produces the
-    number a run is required to report. This is kept because the per-band decomposition is what
-    the gap-conditioned analysis needs, and it reads frozen masks that have to be built first.
+    IT USED TO BE ``if get_rank() == 0:`` AND RUN 2 WOULD HAVE HUNG ON IT. That gate is the
+    defect :func:`evaluate_val_aggregate`'s docstring describes at length, left in place only
+    because no wave had passed ``--slice-mask-uri`` yet. Run 2 passes it on 8 GPUs. Under FSDP
+    the parameters are sharded, so every forward issues all-gathers that every rank in the group
+    must enter; rank zero alone entering them waits forever on peers that have already left, and
+    the caller's ``except`` cannot catch a hang. The comment there conceded the point -- the
+    barrier made it "survivable rather than correct". It is now correct: every rank fetches its
+    share of the masks, every rank runs the same number of forwards, and the sums and counts are
+    all-reduced. There is no rank gate anywhere in this function.
+
+    THE REDUCTION IS TOKEN-WEIGHTED AND THAT IS NOT AUTOMATIC. Sums and counts are reduced
+    SEPARATELY and divided once at the end, in :func:`band_ce_from_totals`. Reducing each rank's
+    already-divided band CE would be a mean of means -- see that function for why bands are the
+    worst place to make that mistake.
+
+    Structurally a mirror of :func:`evaluate_val_aggregate` rather than a second pattern: same
+    agreed step budget, same padding, same failure-is-a-value treatment, same order of
+    collectives. Two evaluators that hold the ranks together two different ways is two things to
+    get right, and the aggregate one is the version already proven against the thread harness.
     """
     import numpy as np
 
+    rank, world_size = get_rank(), get_world_size()
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+
+    # THE LOCAL STRUCTURAL CHECKS, AS A REDUCED VALUE RATHER THAN A BARE RAISE. Both compare
+    # files this rank holds, so either can be true on ONE rank only -- and a lone `raise` here
+    # would leave that rank unwinding while its peers enter the step-budget all-reduce below.
+    # That is a mismatched collective, which is a hang rather than an error. So the reason is
+    # recorded, the FLAG is all-reduced, and every rank refuses together.
+    local_steps = 0
+    local_problem: Optional[str] = None
+    if len(val_paths) != len(mask_paths):
+        local_problem = (
+            f"rank {rank} holds {len(val_paths)} shard(s) and {len(mask_paths)} mask(s); a "
+            "shard scored against another shard's mask attributes every token to the wrong band"
+        )
+    else:
+        for vp, mp in zip(val_paths, mask_paths):
+            n_tokens = _shard_token_count(vp, dtype=np.uint32)
+            mask_tokens = int(os.path.getsize(mp))  # one uint8 per token
+            if n_tokens != mask_tokens:
+                local_problem = (
+                    f"mask/shard length mismatch for {vp}: {mask_tokens} vs {n_tokens}"
+                )
+                break
+            local_steps += _shard_microbatch_count(
+                vp, seq_len=seq_len, micro=micro, dtype=np.uint32
+            )
+
+    if int(
+        all_reduce_value(1 if local_problem else 0, device, op=torch.distributed.ReduceOp.SUM)
+    ):
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            local_problem
+            or (
+                "another rank's slice masks do not line up with its shards, so the per-band CE "
+                "would attribute tokens to the wrong bands. Failing on every rank rather than "
+                "waiting on a collective the refusing rank will never enter."
+            ),
+        )
+
+    # EVERY RANK RUNS THE SAME NUMBER OF FORWARD PASSES. A rank that leaves the loop early
+    # reaches the all-reduce below while its peers are still inside an all-gather, which is a
+    # hang at the end of a paid-for run. See `evaluate_val_aggregate` for the full argument; the
+    # budget is the max over ranks and short ranks push discarded filler batches.
+    steps = int(all_reduce_value(local_steps, device, op=torch.distributed.ReduceOp.MAX))
+    log.info(
+        "sliced eval: rank %d has %d local micro-batch(es) over %d shard(s), %d agreed across "
+        "%d rank(s)",
+        rank,
+        local_steps,
+        len(val_paths),
+        steps,
+        world_size,
+    )
+    if steps == 0:
+        raise Refusal(
+            Stage.THE_HELD_OUT_EVALUATION_SCORED_NOTHING,
+            f"the slice shards yielded no window of {seq_len} tokens on any rank, so there is "
+            "nothing to score. A shard shorter than one sequence, or a sequence_length larger "
+            "than the shards, are the two ways to get here.",
+        )
+
+    rows = max(micro, 1)
+    filler = np.zeros((rows, seq_len), dtype=np.int64)
+
+    def pad(batch):
+        """Grow a short micro-batch to `rows` by repeating its first row."""
+        if batch.shape[0] == rows:
+            return batch
+        extra = np.repeat(batch[:1], rows - batch.shape[0], axis=0)
+        return np.concatenate([batch, extra], axis=0)
+
+    was_training = model.training
     model.eval()
     agg_sum, agg_n = 0.0, 0
     band_sum = {b: 0.0 for b in BAND_BIT}
     band_n = {b: 0 for b in BAND_BIT}
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    done = 0
+    compute_error: Optional[BaseException] = None
+    try:
+        try:
+            for vp, mp in zip(val_paths, mask_paths):
+                mask = np.memmap(mp, dtype=np.uint8, mode="r")
+                # Windowing goes through the shared generator rather than a second copy of the
+                # same arithmetic, so this and the aggregate evaluator cannot drift on the
+                # off-by-one. `offsets` is what aligns the mask to the TARGETS.
+                for offsets, xs, ys in _shard_windows(
+                    vp, seq_len=seq_len, micro=micro, dtype=np.uint32
+                ):
+                    # `offsets` covers the REAL rows only, so the mask block and the sliced CE
+                    # below are both exactly `len(offsets) * seq_len` long and cannot include a
+                    # padded row. That is what keeps the band counts exact under padding.
+                    real = len(offsets) * seq_len
+                    ms = np.stack(
+                        [
+                            np.asarray(mask[off + 1 : off + seq_len + 1], dtype=np.uint8)
+                            for off in offsets
+                        ]
+                    )
+                    flat = torch.from_numpy(ms).to(device).reshape(-1)
+                    ce = _forward_ce(
+                        model, pad(xs), pad(ys), vocab_size=vocab_size, device=device
+                    )[:real]
+                    agg_sum += float(ce.sum())
+                    agg_n += ce.numel()
+                    for band, bit in BAND_BIT.items():
+                        selected = (flat & bit) != 0
+                        if selected.any():
+                            band_sum[band] += float(ce[selected].sum())
+                            band_n[band] += int(selected.sum())
+                    done += 1
+        except BaseException as exc:  # noqa: BLE001 -- re-raised on every rank below
+            compute_error = exc
+            log.error("rank %d failed during the sliced forward pass: %r", rank, exc)
 
-    for vp, mp in zip(val_paths, mask_paths):
-        mask = np.memmap(mp, dtype=np.uint8, mode="r")
-        n_tokens = _shard_token_count(vp, dtype=np.uint32)
-        if n_tokens != mask.size:
+        # THE PADDING PASSES. Real collective traffic, discarded arithmetic -- see
+        # `evaluate_val_aggregate`. A rank that ABORTED also lands here, with more to pad, which
+        # is what keeps its peers unblocked long enough to be told.
+        while done < steps:
+            try:
+                _forward_ce(model, filler, filler, vocab_size=vocab_size, device=device)
+            except BaseException as exc:  # noqa: BLE001 -- see above
+                compute_error = compute_error or exc
+            done += 1
+    finally:
+        if was_training:
+            model.train()
+
+    # The failure flag goes FIRST, so a rank that broke does not contribute its partial sums to
+    # a number anyone might use.
+    if int(all_reduce_value(1 if compute_error else 0, device, op=torch.distributed.ReduceOp.SUM)):
+        if compute_error is not None:
             raise Refusal(
-                Stage.THE_CONFIG_WOULD_NOT_BUILD,
-                f"mask/shard length mismatch for {vp}: {mask.size} vs {n_tokens}",
-            )
-        # Windowing goes through the shared generator rather than a second copy of the same
-        # arithmetic, so this and the aggregate evaluator cannot drift on the off-by-one the
-        # docstring above is about. `offsets` is what aligns the mask to the TARGETS.
-        for offsets, xs, ys in _shard_windows(
-            vp, seq_len=seq_len, micro=micro, dtype=np.uint32
-        ):
-            ms = np.stack(
-                [
-                    np.asarray(mask[off + 1 : off + seq_len + 1], dtype=np.uint8)
-                    for off in offsets
-                ]
-            )
-            m = torch.from_numpy(ms).to(device)
-            ce = _forward_ce(model, xs, ys, vocab_size=vocab_size, device=device)
-            agg_sum += float(ce.sum())
-            agg_n += ce.numel()
-            flat = m.reshape(-1)
-            for band, bit in BAND_BIT.items():
-                selected = (flat & bit) != 0
-                if selected.any():
-                    band_sum[band] += float(ce[selected].sum())
-                    band_n[band] += int(selected.sum())
+                Stage.THE_HELD_OUT_EVALUATION_SCORED_NOTHING,
+                f"rank {rank} failed during the sliced forward pass: "
+                f"{type(compute_error).__name__}: {compute_error}",
+            ) from compute_error
+        raise Refusal(
+            Stage.THE_HELD_OUT_EVALUATION_SCORED_NOTHING,
+            "another rank failed during the sliced forward pass, so the per-band CE would be "
+            "computed over an incomplete token set.",
+        )
 
-    model.train()
+    # SUMS AND COUNTS, SEPARATELY, THEN DIVIDED ONCE. Never a mean of per-rank means -- see
+    # `band_ce_from_totals`. Called unconditionally: `all_reduce_value` is a no-op off a process
+    # group, so there is no world_size branch that could be right in one topology and a hang in
+    # the other. `sorted` fixes the order, because every rank must enter these collectives in
+    # the SAME order and dict order is the wrong thing to rest that on.
+    agg_sum = float(all_reduce_value(agg_sum, device, op=torch.distributed.ReduceOp.SUM))
+    agg_n = int(all_reduce_value(agg_n, device, op=torch.distributed.ReduceOp.SUM))
+    for band in sorted(BAND_BIT):
+        band_sum[band] = float(
+            all_reduce_value(band_sum[band], device, op=torch.distributed.ReduceOp.SUM)
+        )
+        band_n[band] = int(
+            all_reduce_value(band_n[band], device, op=torch.distributed.ReduceOp.SUM)
+        )
+    barrier()
+
+    if agg_n <= 0:
+        raise Refusal(
+            Stage.THE_HELD_OUT_EVALUATION_SCORED_NOTHING,
+            "the sliced evaluation summed to zero tokens across all ranks",
+        )
+
     return {
-        "aggregate": {"sum": agg_sum, "n": agg_n, "ce": agg_sum / max(agg_n, 1)},
-        "bands": {
-            str(b): {
-                "sum": band_sum[b],
-                "n": band_n[b],
-                "ce": band_sum[b] / max(band_n[b], 1),
-            }
-            for b in BAND_BIT
+        "aggregate": {
+            "sum": agg_sum,
+            "n": agg_n,
+            # `agg_n > 0` is guaranteed by the refusal above, so this division is safe and is
+            # not hiding an empty set behind a `max(n, 1)`.
+            "ce": agg_sum / agg_n,
         },
+        "bands": band_ce_from_totals(band_sum, band_n),
+        "world_size": world_size,
     }
 
 
@@ -1815,6 +2125,631 @@ def throughput_report(
     }
 
 
+# --- the decode / inference measurement -------------------------------------------------------
+#
+# WHY THIS EXISTS AT ALL. Run 1 measured held-out CE, training throughput and peak training
+# memory, and NOTHING about inference. The entire practical argument for a linear-attention mixer
+# is that generation is cheap: the recurrent state is a fixed size, where softmax attention's KV
+# cache grows with the context. That is the claim this bake-off is deciding on, and run 1 never
+# ran the code path it lives in. For a production mixer choice it is the number that matters most.
+#
+# WHAT IS MEASURED, AND WHY IT IS THE OPERATOR RATHER THAN THE MODEL. Three options were weighed:
+#
+#   (a) OPERATOR MICROBENCHMARK -- time `fused_recurrent_*` directly at the run's head geometry,
+#       with a threaded state, at several batch sizes. What is implemented.
+#   (b) WHOLE-MODEL PREFILL+DECODE via repeated full forwards. Rejected, and not merely as
+#       expensive: our mixers have no incremental path (see below), so "decode" would re-run the
+#       whole prefix for every token. That is O(T^2) recompute, it is dominated by work a real
+#       server does not do, and -- decisively -- it would penalise the linear-attention arms for
+#       lacking the very state reuse the measurement is supposed to demonstrate. It would
+#       UNDERSTATE the advantage being measured, and produce a number that looks like a serving
+#       figure. A misleading measurement is worse here than a narrow one.
+#   (c) WIRE A REAL `step()` AND THREAD STATE THROUGH THE MODEL. The honest whole-model
+#       measurement, and the right follow-on. It is a FEATURE, not a measurement: all four mixer
+#       classes take a `cache` argument and explicitly discard it (`del layer_idx, n_layers,
+#       cache  # Unused` in recurrent.py), so there is no `step()` and no state threading anywhere
+#       in the model today. Building one is not in scope for run 2 and would touch four operator
+#       classes on a branch five agents are editing.
+#
+# So (a): the primitive `fla` already ships -- `fused_recurrent_kda` and `fused_recurrent_gdn2`,
+# both of which take `initial_state` and `output_final_state` -- is driven directly, one token at
+# a time, with the state threaded from each step into the next. That is exactly the arithmetic a
+# real decoder would do in the mixer, at the real geometry, so the per-token latency and the state
+# footprint are real. What it is NOT is a whole-model serving number, and `decode_basis` says so
+# in the record rather than in a comment nobody reads.
+#
+# THE NUMBER THAT ACTUALLY DECIDES SERVING BATCH SIZE is `decode_state_bytes_per_seq`, and it is
+# computed rather than timed -- so it is reported even when no GPU was available. It is the whole
+# point of linear attention: a fixed cost per sequence instead of one that grows per token.
+
+#: Batch sizes the decode probe sweeps. 1 is the latency-bound single-stream case a chat serving
+#: path lives in; 32 is throughput-bound where the kernel launch is amortised. A single batch size
+#: would answer only one of two different production questions.
+DECODE_BATCH_SIZES = (1, 8, 32)
+
+#: Tokens generated per timed measurement, after the warmup below. One token is a kernel-launch
+#: measurement, not a decode measurement -- at these state sizes a single fused step is tens of
+#: microseconds, which is the same order as the launch overhead and the timer's own resolution.
+DECODE_STEPS = 64
+
+#: Decode steps run and discarded before timing starts. Triton compiles on first call and the
+#: caching allocator is still growing; both land entirely in step 1 and would otherwise dominate a
+#: 64-step median. This is the same reasoning as WARMUP_STEPS_EXCLUDED, at decode's scale.
+DECODE_WARMUP_STEPS = 8
+
+
+def recurrent_state_bytes(
+    *,
+    n_heads: int,
+    head_k_dim: int,
+    head_v_dim: int,
+    n_layers: int,
+    bytes_per_element: int = 4,
+) -> int:
+    """Bytes of recurrent state one sequence holds, across every layer carrying the mixer.
+
+    THE FIELD THAT DECIDES SERVING BATCH SIZE, AND THE WHOLE POINT OF LINEAR ATTENTION. A KV
+    cache costs bytes per TOKEN; this costs bytes per SEQUENCE and does not move as the context
+    grows. Concurrency on a fixed card is (memory - weights) / this.
+
+    The state is one ``(head_k_dim, head_v_dim)`` matrix per head per layer -- the outer-product
+    accumulator the delta rule writes into -- so it is ``n_heads * head_k_dim * head_v_dim``
+    elements per layer. That matches the ``state_size`` both operators' own
+    ``num_flops_per_token`` uses, deliberately: two different state sizes in one file is how a
+    memory figure and a FLOP figure come to describe different models.
+
+    ``bytes_per_element`` DEFAULTS TO 4, NOT 2, AND THAT IS NOT CONSERVATISM. ``fla`` keeps the
+    recurrent state in float32 regardless of the input dtype -- the state accumulates over
+    thousands of steps and bf16 would drift -- so the state of a bf16 model is still fp32. Passing
+    2 here because "the run is bf16" would report half the real footprint, on the field somebody
+    sizes a serving fleet with. The realised dtype is asserted against this in the probe.
+
+    :param n_heads: Value heads carrying state (``n_v_heads`` where GVA applies).
+    :param head_k_dim: The key-side head dimension.
+    :param head_v_dim: The value-side head dimension (``head_dim * expand_v``).
+    :param n_layers: How many layers carry this mixer -- 2 here, not 16. See the note in
+        :func:`decode_report`.
+    :param bytes_per_element: 4 for fp32 state, 2 for bf16.
+
+    :returns: Bytes per sequence.
+    """
+    if min(n_heads, head_k_dim, head_v_dim, n_layers, bytes_per_element) <= 0:
+        raise ValueError(
+            "every dimension must be positive; a zero here silently reports a free state"
+        )
+    return n_heads * head_k_dim * head_v_dim * n_layers * bytes_per_element
+
+
+def kv_cache_bytes(
+    *,
+    n_kv_heads: int,
+    head_dim: int,
+    n_layers: int,
+    seq_len: int,
+    bytes_per_element: int = 2,
+) -> int:
+    """Bytes of KV cache the ATTENTION layers hold for one sequence at ``seq_len``.
+
+    THE COMPARISON THAT MAKES THE STATE FIGURE MEAN ANYTHING. "512 KiB of recurrent state" is a
+    number; "512 KiB fixed against a KV cache that passes it at 43 tokens and reaches 384 MiB at
+    32K" is a decision. Reported beside it so the contrast is in the record rather than left for a
+    reader to work out.
+
+    IT IS ALSO THE HONEST HALF OF THE STORY, BECAUSE THESE ARMS ARE HYBRIDS. Every arm keeps SIX
+    global-attention layers, and those layers' KV cache grows with context exactly as it always
+    did. Only the 2 mixer slots have a fixed state. So the arms do not remove the KV cache, they
+    shrink the part of the model that needs one -- and a summary that printed only the fixed state
+    would imply a pure linear-attention model this study is not testing.
+
+    Two tensors per layer, K and V, at ``n_kv_heads * head_dim`` each per token. bf16 by default
+    because a KV cache is stored at the activation dtype, unlike the fp32 recurrent state.
+
+    :returns: Bytes per sequence at this context length.
+    """
+    if min(n_kv_heads, head_dim, n_layers, seq_len, bytes_per_element) <= 0:
+        raise ValueError("every dimension must be positive")
+    return 2 * n_kv_heads * head_dim * n_layers * seq_len * bytes_per_element
+
+
+def decode_state_crossover_tokens(
+    *, state_bytes: int, kv_bytes_per_token: int
+) -> Optional[float]:
+    """Context length at which the KV cache overtakes the fixed recurrent state.
+
+    One number for "when does this start to pay", and it is the honest framing of the linear
+    attention claim: below the crossover the fixed state is pure overhead, above it the saving
+    grows without bound.
+
+    :returns: Tokens, or ``None`` when the KV cost per token is zero -- which would mean a model
+        with no attention layers at all, and is a null rather than an infinity because a division
+        that cannot be done must not report a length.
+    """
+    if kv_bytes_per_token <= 0:
+        return None
+    return state_bytes / kv_bytes_per_token
+
+
+def decode_tokens_per_second(
+    *, seconds_per_token: Optional[float], batch_size: int
+) -> Optional[float]:
+    """Decode tokens/sec from a per-step latency: every sequence in the batch emits one token.
+
+    ``None`` rather than 0.0 when there is no latency to divide, and a zero or negative latency is
+    also ``None`` -- a timer that returned nothing measured nothing, and 0.0 tok/s and an
+    unmeasured throughput are opposite claims.
+    """
+    if not seconds_per_token or seconds_per_token <= 0 or batch_size <= 0:
+        return None
+    return batch_size / seconds_per_token
+
+
+def decode_basis_string(
+    *,
+    measured: bool,
+    reason: Optional[str] = None,
+    operator: Optional[str] = None,
+    kernel: Optional[str] = None,
+    n_heads: Optional[int] = None,
+    head_k_dim: Optional[int] = None,
+    head_v_dim: Optional[int] = None,
+    mixer_layers: Optional[int] = None,
+    total_layers: Optional[int] = None,
+    steps: int = DECODE_STEPS,
+) -> str:
+    """What the decode numbers cover and -- at greater length -- what they do not.
+
+    MIRRORS ``mfu_basis``, FOR THE SAME REASON AND ONE MORE. Like that field, a null with no
+    stated cause is indistinguishable from a bug in this file. Unlike it, the numbers here are
+    the ones most likely to be QUOTED OUT OF CONTEXT: "3,000 tokens/sec" reads like a serving
+    figure, and this one is a single fused operator with no embedding, no FFN, no attention layer,
+    no LM head and no sampling. Whoever reads the JSON without reading this function must still
+    be told, so the exclusions travel inside the value itself.
+    """
+    if not measured:
+        return f"decode not measured: {reason or 'no reason recorded'}"
+    return (
+        f"operator-level microbenchmark of {kernel} ({operator}) at n_heads={n_heads}, "
+        f"head_k_dim={head_k_dim}, head_v_dim={head_v_dim}, one token per step, "
+        f"{steps} timed steps, recurrent state threaded step to step. "
+        f"COVERS the {mixer_layers} mixer layer(s) of {total_layers} only, x{mixer_layers} per "
+        "model token. EXCLUDES the QKV/gate/output projections, the short convolutions, the "
+        f"{total_layers} layers' norms and FFNs, the {total_layers - (mixer_layers or 0)} "
+        "non-mixer layers entirely (including the 6 global-attention layers whose KV cache DOES "
+        "grow with context), the embedding, the LM head and sampling. NOT a whole-model serving "
+        "throughput and must not be quoted as one; it isolates the mixer so arms can be ranked "
+        "against each other. A whole-model number needs an incremental step() path, which no "
+        "mixer in this tree has."
+    )
+
+
+#: Which fused recurrent kernel decodes each mixer, keyed by its CONFIG CLASS NAME rather than by
+#: the mixer string `core6_arms.MIXERS` registers.
+#:
+#: KEYED ON THE CLASS BECAUSE THE REGISTRY STRINGS ARE NOT A CLOSED SET AND RUN 2 IS ADDING ONE.
+#: `KDA_NEGEIG` is new this wave and its registry key is being written by another agent right now.
+#: A table keyed on strings would not have that key, would report "no kernel known" for a whole
+#: arm, and would do it silently -- one fifth of the study's headline new measurement missing
+#: because two files disagreed about a name. Every KDA variant in this bake-off differs only in
+#: constructor arguments (`conv_activation`, `gated_conv`, `allow_neg_eigval`) and is the SAME
+#: `KimiDeltaAttentionConfig` class decoding through the SAME kernel, so the class is the thing
+#: that actually determines the kernel, and keying on it makes a new arm work by construction.
+#:
+#: The arm's own `allow_neg_eigval` is read off its config and forwarded to the kernel, so
+#: `KDA_NEGEIG` decodes with the mechanism it is named for rather than with the class default.
+#:
+#: `KimiDeltaHouseholderConfig` IS DELIBERATELY ABSENT, and that is a finding rather than an
+#: omission: the Householder operator is a custom in-tree kernel
+#: (`olmo_core.nn.attention.kda_householder`) with no fused recurrent form in `fla` at all, so
+#: there is nothing to time. Those arms are out of run 2; if they return, the honest report is a
+#: stated absence, not a KDA number standing in for a Householder one.
+DECODE_KERNELS = {
+    "KimiDeltaAttentionConfig": ("fla.ops.kda.fused_recurrent", "fused_recurrent_kda"),
+    "GatedDeltaNet2Config": ("fla.ops.gdn2.fused_recurrent", "fused_recurrent_gdn2"),
+}
+
+#: Which of the two kernels' calling conventions a config class uses. GDN-2 takes two independent
+#: channel-wise gates (`b` erases along K, `w` writes along V) where KDA takes one scalar `beta`;
+#: passing KDA's beta to GDN-2 would time a different operator than the arm trains with.
+DECODE_CALL_STYLE = {
+    "KimiDeltaAttentionConfig": "kda",
+    "GatedDeltaNet2Config": "gdn2",
+}
+
+
+def _decode_geometry(arm_name: str):
+    """The mixer under test, its head geometry, and how many layers carry it.
+
+    Read off the ARM'S OWN CONFIG rather than from constants in this file. The geometry is frozen
+    at n_heads=16 head_dim=64 today, and a decode figure computed from a literal would keep
+    reporting that after somebody changed the arm -- a wrong state size that still looks right.
+    """
+    from olmo_core.nn.transformer.core6_arms import ARMS, mixer_config
+
+    arm = ARMS[arm_name]
+    config = mixer_config(arm)
+    n_heads = getattr(config, "n_heads")
+    n_v_heads = getattr(config, "n_v_heads", None) or n_heads
+    head_dim = getattr(config, "head_dim", None)
+    if not head_dim:
+        # `head_dim=None` means "derive d_model // n_heads", which this function cannot do
+        # without knowing d_model. Every bake-off arm passes it explicitly, so None here means
+        # the registry changed shape -- refused rather than defaulted, because a guessed head
+        # dimension produces a state size that is wrong and looks right.
+        raise ValueError(
+            f"mixer for arm {arm_name!r} declares no head_dim, so its state size cannot be "
+            "computed without d_model"
+        )
+    expand_v = getattr(config, "expand_v", 1.0)
+    return {
+        # The registry key, for the record. The KERNEL is chosen by class below, not by this.
+        "mixer": arm.mixer,
+        "config_class": type(config).__name__,
+        "n_heads": n_heads,
+        "n_v_heads": n_v_heads,
+        "head_k_dim": head_dim,
+        "head_v_dim": int(head_dim * expand_v),
+        "mixer_layers": len(arm.kda_layers),
+        "allow_neg_eigval": bool(getattr(config, "allow_neg_eigval", False)),
+    }
+
+
+@torch.no_grad()
+def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> Dict[str, Any]:
+    """Time the fused recurrent decode kernel for one arm's mixer, with a threaded state.
+
+    THE MEASUREMENT RUN 1 DID NOT HAVE. See the block comment above for why this is an operator
+    microbenchmark rather than a whole-model decode, and :func:`decode_basis_string` for the
+    exclusions that travel with the numbers.
+
+    THE RECEIPT IS THE POINT OF THIS FUNCTION, NOT A DECORATION. The audit found metric after
+    metric that recorded the REQUEST rather than the EXECUTION -- a field naming the backend that
+    was asked for while a silent eager fallback ran, poisoning 13 of 18 cells before anyone
+    noticed; and `short_conv.py` defaulting `use_fla=True` and falling back to `nn.Conv1d` without
+    a word when `fla` is absent. So nothing here records an intention. Every field below is read
+    back off the object that actually ran:
+
+      * ``decode_kernel_resolved`` is ``func.__module__ + "." + func.__qualname__`` of the callable
+        that was invoked -- not the name this file looked up.
+      * ``decode_state_dtype_realised`` is ``state.dtype`` of the tensor the kernel RETURNED, which
+        is what makes the fp32 state-size default checkable rather than assumed.
+      * ``decode_state_bytes_realised`` is ``state.numel() * state.element_size()`` of that same
+        tensor, so the computed footprint is checked against a measured one.
+      * ``decode_state_advanced`` proves the state was THREADED. A harness that passed
+        ``initial_state=None`` every step would return plausible latencies for a kernel doing a
+        different, cheaper thing -- and nothing in a timing would show it. So the returned state is
+        compared against the one passed in, and if it never changed the whole probe is refused.
+      * ``decode_fast_path_taken`` is only ever True when all of the above were observed.
+
+    WHAT HAPPENS IF THE FAST PATH IS NOT TAKEN. There is no fallback and no substitute number.
+    Every latency field is ``None``, ``decode_fast_path_taken`` is ``False``, and
+    ``decode_basis`` says which of the causes it was. A missing decode measurement must never
+    read as a fast one, and a partially-working probe must not average a real step with a
+    fallback step -- so the arms are comparable or they are absent.
+
+    Never raises. A decode probe is a secondary measurement bolted onto a paid-for training run,
+    and losing the CE endpoint to a benchmark bug would be a far worse trade than losing the
+    benchmark. Failures become a recorded reason.
+    """
+    try:
+        geometry = _decode_geometry(arm_name)
+    except BaseException as exc:  # noqa: BLE001 -- a benchmark must not cost the CE endpoint
+        log.warning("could not read the decode geometry for %s: %r", arm_name, exc)
+        return {
+            "decode_fast_path_taken": False,
+            "decode_basis": decode_basis_string(
+                measured=False,
+                reason=f"the arm's mixer geometry could not be read: {type(exc).__name__}: {exc}",
+            ),
+        }
+
+    mixer = geometry["mixer"]
+    config_class = geometry["config_class"]
+    state_elems_per_layer = (
+        geometry["n_v_heads"] * geometry["head_k_dim"] * geometry["head_v_dim"]
+    )
+
+    # The computed footprint. Emitted even with no GPU: it is arithmetic on the geometry, it is
+    # the field that decides serving batch size, and it does not need a kernel to be true.
+    result: Dict[str, Any] = {
+        "decode_operator": mixer,
+        "decode_config_class": config_class,
+        "decode_allow_neg_eigval": geometry["allow_neg_eigval"],
+        "decode_n_heads": geometry["n_heads"],
+        "decode_n_v_heads": geometry["n_v_heads"],
+        "decode_head_k_dim": geometry["head_k_dim"],
+        "decode_head_v_dim": geometry["head_v_dim"],
+        "decode_mixer_layers": geometry["mixer_layers"],
+        "decode_state_elems_per_layer": state_elems_per_layer,
+        # THE HEADLINE FIELD. fp32 because that is what `fla` keeps the state in; the realised
+        # dtype below is what proves it.
+        "decode_state_bytes_per_seq": recurrent_state_bytes(
+            n_heads=geometry["n_v_heads"],
+            head_k_dim=geometry["head_k_dim"],
+            head_v_dim=geometry["head_v_dim"],
+            n_layers=geometry["mixer_layers"],
+            bytes_per_element=4,
+        ),
+        "decode_kernel_requested": None,
+        "decode_kernel_resolved": None,
+        "decode_fast_path_taken": False,
+        "decode_state_dtype_realised": None,
+        "decode_state_bytes_realised": None,
+        "decode_state_advanced": None,
+        "decode_batches": {},
+        "decode_warmup_steps": DECODE_WARMUP_STEPS,
+        "decode_timed_steps": DECODE_STEPS,
+    }
+
+    # The KV-cache contrast, which is what makes the state figure a decision rather than a number.
+    # Computed from the arm's attention geometry, not the mixer's.
+    try:
+        from olmo_core.nn.transformer.core6_arms import (
+            ATTENTION_LAYERS,
+            HEAD_DIM,
+            N_KV_HEADS,
+            N_LAYERS,
+        )
+
+        kv_per_token = kv_cache_bytes(
+            n_kv_heads=N_KV_HEADS,
+            head_dim=HEAD_DIM,
+            n_layers=len(ATTENTION_LAYERS),
+            seq_len=1,
+        )
+        result["decode_attention_layers"] = len(ATTENTION_LAYERS)
+        result["decode_total_layers"] = N_LAYERS
+        result["decode_kv_bytes_per_token"] = kv_per_token
+        result["decode_kv_bytes_per_seq_at"] = {
+            str(t): kv_per_token * t for t in (1024, 4096, 8192, 32768)
+        }
+        result["decode_state_vs_kv_crossover_tokens"] = decode_state_crossover_tokens(
+            state_bytes=result["decode_state_bytes_per_seq"], kv_bytes_per_token=kv_per_token
+        )
+    except Exception as exc:  # noqa: BLE001 -- a contrast, not the endpoint
+        log.warning("could not compute the KV-cache contrast: %r", exc)
+
+    if config_class not in DECODE_KERNELS:
+        result["decode_basis"] = decode_basis_string(
+            measured=False,
+            reason=(
+                f"no fused recurrent kernel is known for {config_class} (arm mixer {mixer!r}). "
+                "The Householder operator is a custom in-tree kernel with no fla recurrent form, "
+                "so there is nothing to time rather than a number to substitute."
+            ),
+        )
+        return result
+
+    module_name, func_name = DECODE_KERNELS[config_class]
+    call_style = DECODE_CALL_STYLE[config_class]
+    result["decode_kernel_requested"] = f"{module_name}.{func_name}"
+
+    if not torch.cuda.is_available():
+        result["decode_basis"] = decode_basis_string(
+            measured=False,
+            reason="no CUDA device, and the fused recurrent kernels are Triton and CUDA-only",
+        )
+        return result
+
+    try:
+        import importlib
+
+        import numpy as np  # noqa: F401 -- imported for parity with the rest of this file
+
+        module = importlib.import_module(module_name)
+        kernel = getattr(module, func_name)
+        # THE RECEIPT: the identity of the callable that will actually be invoked, read off the
+        # object rather than from the string above. A kernel re-exported from somewhere else, or
+        # shadowed by a wrapper, shows up here as a different name.
+        result["decode_kernel_resolved"] = f"{kernel.__module__}.{kernel.__qualname__}"
+
+        device = torch.device("cuda")
+        # bf16 inputs, matching the run's `param_dtype`, with an fp32 state -- which is the
+        # combination `fla` uses and the one a server would run.
+        dtype = torch.bfloat16
+        H, HV = geometry["n_heads"], geometry["n_v_heads"]
+        K, V = geometry["head_k_dim"], geometry["head_v_dim"]
+
+        for batch_size in batch_sizes:
+            B, T = batch_size, 1  # one token per step: this is decode
+            torch.manual_seed(0)
+
+            def randn(*shape):
+                return torch.randn(*shape, device=device, dtype=dtype)
+
+            q = randn(B, T, H, K)
+            k = randn(B, T, H, K)
+            v = randn(B, T, HV, V)
+            # The gate is the RAW pre-activation and the kernel derives the decay itself, exactly
+            # as the training forward passes it (`use_gate_in_kernel=True`). A gate passed as an
+            # already-log-space decay would be a different, cheaper kernel path.
+            g = randn(B, T, HV, K)
+            # UNIFORM ON (1, 16) THEN log, WHICH IS `init_weights`' OWN RANGE AND NOT AN
+            # ARBITRARY ONE. `torch.rand` starts at 0 and log(0) is -inf, which makes exp(A_log)
+            # a zero decay: the state would be multiplied by nothing every step, never change,
+            # and the state-advanced receipt below would fail and abort the probe -- a benchmark
+            # bug wearing the costume of a kernel that does not thread state. recurrent.py's
+            # initialiser avoids log(0) for the same reason and says so.
+            A_log = (
+                torch.rand(HV, device=device, dtype=torch.float32) * 15.0 + 1.0
+            ).log()
+            dt_bias = torch.rand(HV * K, device=device, dtype=torch.float32)
+            # Nonzero, so the FIRST step already has something to decay and transform. A state
+            # starting at exactly zero still advances here (the write term is nonzero), but a
+            # nonzero start also exercises the decay path the timing is meant to include.
+            state = torch.randn(B, HV, K, V, device=device, dtype=torch.float32)
+
+            if call_style == "gdn2":
+                # GDN-2's two independent channel-wise gates: `b` erases along K, `w` writes
+                # along V. Passing one scalar beta for both would silently time KDA's operator.
+                erase = randn(B, T, HV, K).sigmoid()
+                write = randn(B, T, HV, V).sigmoid()
+                call = lambda s: kernel(  # noqa: E731
+                    q=q, k=k, v=v, g=g, b=erase, w=write,
+                    A_log=A_log, dt_bias=dt_bias,
+                    initial_state=s, output_final_state=True,
+                    use_qk_l2norm_in_kernel=True, use_gate_in_kernel=True,
+                )
+            else:
+                # `allow_neg_eigval` IS APPLIED IN EAGER PYTORCH AND IS DELIBERATELY *NOT*
+                # FORWARDED TO THE KERNEL, BECAUSE THAT IS WHAT THE TRAINING FORWARD DOES.
+                # `KimiDeltaAttention.forward` computes `beta = w_b(x).sigmoid()` and then, if the
+                # flag is set, `beta = beta * 2.0` -- and hands `dispatch_chunk_kda` a plain
+                # post-sigmoid tensor with no `allow_neg_eigval` argument at all. The flag selects
+                # no kernel, no branch and no flag inside fla on that path.
+                #
+                # `fused_recurrent_kda` DOES accept an `allow_neg_eigval` parameter, so passing it
+                # here as well as doubling beta would apply the mechanism TWICE -- a beta in (0,4)
+                # for an arm trained with beta in (0,2). It would not error, the latency would look
+                # entirely normal, and KDA_NEGEIG's decode number would describe an operator no arm
+                # in the study trains. So the eager doubling alone is the faithful mirror.
+                beta = randn(B, T, HV).sigmoid()
+                if geometry["allow_neg_eigval"]:
+                    beta = beta * 2.0
+                call = lambda s: kernel(  # noqa: E731
+                    q=q, k=k, v=v, g=g, beta=beta,
+                    A_log=A_log, dt_bias=dt_bias,
+                    initial_state=s, output_final_state=True,
+                    use_qk_l2norm_in_kernel=True, use_gate_in_kernel=True,
+                )
+
+            # Warmup: Triton compiles on the first call and the allocator is still growing.
+            threaded = state
+            for _ in range(DECODE_WARMUP_STEPS):
+                _, threaded = call(threaded)
+            torch.cuda.synchronize()
+
+            # THE STATE-THREADING RECEIPT. Compared against the state that went IN, on a clone so
+            # the kernel cannot have written through the reference we are comparing to. A probe
+            # that silently failed to thread would time a different, cheaper computation and no
+            # latency would look wrong.
+            before = threaded.clone()
+            _, threaded = call(threaded)
+            torch.cuda.synchronize()
+            advanced = bool(not torch.equal(before, threaded))
+            if result["decode_state_advanced"] is None:
+                result["decode_state_advanced"] = advanced
+                result["decode_state_dtype_realised"] = str(threaded.dtype)
+                # Per sequence, across the mixer layers -- the same quantity the computed field
+                # above reports, measured off the tensor the kernel returned.
+                realised = int(
+                    threaded.numel()
+                    * threaded.element_size()
+                    // B
+                    * geometry["mixer_layers"]
+                )
+                result["decode_state_bytes_realised"] = realised
+                # THE TWO NUMBERS MUST AGREE, AND THE COMPARISON IS RECORDED RATHER THAN LEFT FOR
+                # A READER TO DO. `decode_state_bytes_per_seq` is computed from the geometry with
+                # fp32 assumed; this is measured off the kernel's own tensor. If fla ever returns
+                # a bf16 state, or the geometry stops matching the kernel's layout, the headline
+                # footprint is wrong by 2x and BOTH fields would still look reasonable alone. A
+                # boolean makes the disagreement greppable instead of latent.
+                result["decode_state_bytes_agree"] = bool(
+                    realised == result["decode_state_bytes_per_seq"]
+                )
+                if not result["decode_state_bytes_agree"]:
+                    log.warning(
+                        "decode state size disagrees: computed %d B/seq from the geometry, "
+                        "measured %d B/seq off the kernel's %s state -- the headline footprint "
+                        "is the computed one and it is wrong",
+                        result["decode_state_bytes_per_seq"],
+                        realised,
+                        threaded.dtype,
+                    )
+            if not advanced:
+                # No timings recorded at all: a latency for a kernel that is not advancing state
+                # is a number for the wrong computation, and publishing it would be worse than
+                # publishing nothing.
+                result["decode_basis"] = decode_basis_string(
+                    measured=False,
+                    reason=(
+                        f"the recurrent state did not change across a decode step at batch "
+                        f"{B}, so the kernel was not threading state and any latency would "
+                        "describe a different computation"
+                    ),
+                )
+                return result
+
+            latencies: List[float] = []
+            for _ in range(DECODE_STEPS):
+                torch.cuda.synchronize()
+                started = time.perf_counter()
+                _, threaded = call(threaded)
+                torch.cuda.synchronize()
+                latencies.append(time.perf_counter() - started)
+
+            median = quantile_nearest_rank(latencies, 0.5)
+            p90 = quantile_nearest_rank(latencies, 0.9)
+            result["decode_batches"][str(B)] = {
+                "batch_size": B,
+                # Per token per sequence: one step emits one token for each of B sequences, so
+                # the step latency IS the per-token latency at this batch size.
+                "latency_ms_p50": None if median is None else median * 1000.0,
+                "latency_ms_p90": None if p90 is None else p90 * 1000.0,
+                "tokens_per_second": decode_tokens_per_second(
+                    seconds_per_token=median, batch_size=B
+                ),
+                "state_bytes_total": int(
+                    threaded.numel() * threaded.element_size() * geometry["mixer_layers"]
+                ),
+            }
+
+        result["decode_fast_path_taken"] = True
+        result["decode_basis"] = decode_basis_string(
+            measured=True,
+            operator=mixer,
+            kernel=result["decode_kernel_resolved"],
+            n_heads=geometry["n_v_heads"],
+            head_k_dim=K,
+            head_v_dim=V,
+            mixer_layers=geometry["mixer_layers"],
+            total_layers=result.get("decode_total_layers", 16),
+        )
+    except BaseException as exc:  # noqa: BLE001 -- never lose the CE endpoint to a benchmark
+        log.warning("decode probe failed (%s: %s)", type(exc).__name__, exc)
+        result["decode_fast_path_taken"] = False
+        result["decode_batches"] = {}
+        result["decode_basis"] = decode_basis_string(
+            measured=False, reason=f"the probe raised {type(exc).__name__}: {exc}"
+        )
+    return result
+
+
+def decode_report(*, arm_name: str, world_size: int) -> Dict[str, Any]:
+    """The decode probe plus the per-device framing, flattened for the summary JSON.
+
+    ONE RANK MEASURES AND THE FIGURE IS PER DEVICE ALREADY. Unlike training throughput, decode
+    here is a single-device measurement: the probe drives one operator on one GPU with no
+    collectives, so there is nothing to all-reduce and no world-size divisor to apply. The total
+    across the node is the per-device figure times ``world_size``, which is stated rather than
+    left for a reader to assume -- a decode number silently divided by 8 would rank every arm
+    identically wrongly.
+
+    ``decode_state_bytes_per_seq`` counts the MIXER LAYERS ONLY -- 2 of 16 -- because those are
+    the layers whose state is fixed. The other 14 are 6 global attention (whose KV cache grows)
+    and 8 LIV short convolutions, and folding them into one "state" figure would merge a
+    context-independent cost with a context-dependent one.
+    """
+    probe = decode_probe(arm_name=arm_name)
+
+    per_device_total = None
+    node_total = None
+    largest = probe.get("decode_batches", {}).get(str(max(DECODE_BATCH_SIZES)))
+    if largest is not None:
+        per_device_total = largest.get("tokens_per_second")
+        if per_device_total is not None and world_size and world_size > 0:
+            node_total = per_device_total * world_size
+
+    probe["decode_tok_s_per_device"] = per_device_total
+    probe["decode_tok_s_total"] = node_total
+    probe["decode_tok_s_basis"] = (
+        f"single-device operator throughput at batch {max(DECODE_BATCH_SIZES)}; total is "
+        f"per-device x world_size ({world_size}) and assumes independent replicas, which is how "
+        "a served model runs. NOT measured across ranks -- the probe uses no collectives."
+    )
+    return probe
+
+
 def memory_report(losses: LossWatcher) -> Dict[str, Any]:
     """The memory half of the record: peak allocated and reserved, and WHICH read they are.
 
@@ -1903,6 +2838,26 @@ def summarise(
     )
     memory = memory_report(losses)
 
+    # THE DECODE MEASUREMENT. Run on rank zero only, and that is safe for the same reason
+    # printing is: the probe drives one fused operator on one device with NO collectives and no
+    # sharded parameters, so unlike the sliced eval there is no all-gather for the other ranks to
+    # be missing from. It runs here, inside the rank gate, rather than in `train()` for exactly
+    # that reason -- putting it on all ranks would have eight processes contend for one card's
+    # clocks and report a latency none of them would see alone.
+    #
+    # Never raises: `decode_probe` turns every failure into a recorded reason, because a
+    # benchmark must not cost a run its CE endpoint.
+    decode: Dict[str, Any] = {}
+    if opts.decode_probe:
+        decode = decode_report(arm_name=opts.arm, world_size=get_world_size())
+    else:
+        decode = {
+            "decode_fast_path_taken": False,
+            "decode_basis": decode_basis_string(
+                measured=False, reason="--no-decode-probe was passed, so decode was not measured"
+            ),
+        }
+
     print(
         json.dumps(
             {
@@ -1936,6 +2891,17 @@ def summarise(
                 # is not decoration: the naive post-fit read is the last step's peak only,
                 # because the GPU monitor resets the counters every step. See memory_report.
                 **memory,
+                # THE INFERENCE HALF, WHICH RUN 1 DID NOT MEASURE AT ALL. The practical case for
+                # a linear-attention mixer is that generation is cheap -- a fixed recurrent state
+                # instead of a KV cache that grows with context -- and run 1 never ran that path.
+                # `decode_state_bytes_per_seq` is the field that decides serving batch size.
+                #
+                # `decode_fast_path_taken` IS A RECEIPT, NOT A REQUEST: it is only True when the
+                # kernel was resolved by identity, the returned state was fp32, and the state was
+                # OBSERVED to advance across a step. If it is False every latency is null and
+                # `decode_basis` says which cause. Read `decode_basis` before quoting any of
+                # these -- it is an operator microbenchmark and not a serving throughput.
+                **decode,
                 # The SpeedMonitorCallback's own per-device averages, kept because the
                 # preregistration names them and because they are an independent measurement of
                 # the same thing -- computed by upstream code, over a window that starts after
@@ -2085,35 +3051,58 @@ def train(config, opts) -> None:
     # which one rank refuses and the others go on to a collective it left.
     assert_val_tokens_account_for_the_corpus(val)
 
-    # The sliced evaluation is SECONDARY and remains rank-zero, because it reads frozen masks
-    # that must be built first and it decomposes by gap band rather than producing the headline
-    # number. Its rank gate is the same defect described in `evaluate_val_aggregate` and it is
-    # still here: under FSDP a rank-zero-only forward waits on all-gathers the other ranks never
-    # enter. It is reached only when --slice-mask-uri is passed, which the current wave does not
-    # pass; the barrier below at least holds the other ranks inside the collective world while
-    # rank zero works, which is what makes it survivable rather than correct.
+    # THE SLICED EVALUATION, ON EVERY RANK. It is SECONDARY -- it decomposes CE by gap band and
+    # reads frozen masks that must be built first -- but secondary does not mean rank-zero.
+    #
+    # IT USED TO BE GATED `if get_rank() == 0:` AND RUN 2 WOULD HAVE HUNG ON IT. Run 2 passes
+    # --slice-mask-uri on 8 GPUs, which is the first wave to reach this path at all. Under FSDP a
+    # rank-zero-only forward waits on all-gathers the other ranks never enter, the `except` below
+    # cannot catch a hang, and the barrier that used to sit in the `finally` only made it
+    # "survivable rather than correct" by holding the peers somewhere that at least times out.
+    # Both `fetch_slice_inputs` and `evaluate_sliced` now shard by rank and reduce across ranks,
+    # exactly as `evaluate_val_aggregate` does, so there is no gate left to remove.
+    #
+    # THE `try` STAYS, AND ITS MEANING HAS CHANGED. It no longer protects against a rank-zero
+    # hang -- nothing can. It protects the CHECKPOINT and `val_ce` from a bug in a secondary
+    # measurement, and it is now safe in a way it was not before: every rank runs the same code,
+    # so every rank raises the same refusal at the same collective and none is left waiting.
     sliced = None
     if opts.slice_mask_uri:
         try:
+            # Sharded by rank: the union over ranks is the whole mask set, each object fetched
+            # once. The manifest's band layout is checked on every rank. Wrapped so that one
+            # rank's failed download takes every rank down together rather than leaving this
+            # rank at the barrier below while its peers enter the evaluator's all-reduces --
+            # see `fetch_slice_inputs_on_every_rank` for why that split is a hang.
+            val_paths, mask_paths = fetch_slice_inputs_on_every_rank(
+                mask_uri=opts.slice_mask_uri,
+                work_dir=opts.work_dir,
+                # Passed so the manifest's build-time window is compared against the window we
+                # actually score at. A mismatch produces a plausible, fully-populated, WRONG table
+                # rather than an error, so it must be refused here.
+                seq_len=opts.sequence_length,
+            )
+            sliced = evaluate_sliced(
+                model=trainer.train_module.model,
+                vocab_size=config.model.vocab_size,
+                val_paths=val_paths,
+                mask_paths=mask_paths,
+                seq_len=opts.sequence_length,
+            )
+            # Logged on rank zero alone because the numbers are already all-reduced -- this is
+            # formatting, not computing, which is the same reason `summarise` may print from one
+            # rank. Every rank has the identical dict.
             if get_rank() == 0:
-                val_paths, mask_paths = fetch_slice_inputs(
-                    mask_uri=opts.slice_mask_uri, work_dir=opts.work_dir
-                )
-                log.info("sliced eval over %d shard(s)", len(val_paths))
-                sliced = evaluate_sliced(
-                    model=trainer.train_module.model,
-                    vocab_size=config.model.vocab_size,
-                    val_paths=val_paths,
-                    mask_paths=mask_paths,
-                    seq_len=opts.sequence_length,
-                )
                 log.info(
-                    "aggregate CE %.4f over %s tokens",
+                    "sliced aggregate CE %.4f over %s tokens (%d ranks)",
                     sliced["aggregate"]["ce"],
                     f"{sliced['aggregate']['n']:,}",
+                    sliced["world_size"],
                 )
                 for band in sorted(BAND_BIT):
                     scored = sliced["bands"][str(band)]
+                    # `ce` is null for an unmeasured band rather than 0.0, so say which it is
+                    # instead of printing a perfect score for an empty set.
                     if scored["n"]:
                         log.info(
                             "  gap>%-5s CE %.4f over %s tokens",
@@ -2121,6 +3110,8 @@ def train(config, opts) -> None:
                             scored["ce"],
                             f"{scored['n']:,}",
                         )
+                    else:
+                        log.warning("  gap>%-5s NOT MEASURED (no tokens in this band)", band)
         # `Exception` IS THE WRONG BASE HERE AND THE COMMENT USED TO PROMISE OTHERWISE.
         # `Refusal` subclasses `SystemExit`, which is a `BaseException` and NOT an `Exception`
         # -- so the `Refusal` that `evaluate_sliced` raises on a mask/shard length mismatch
@@ -2135,10 +3126,13 @@ def train(config, opts) -> None:
                 type(error).__name__,
                 error,
             )
+            # Left as None rather than a partial dict: a half-filled band table would be read as
+            # a measurement. `sliced_eval: null` in the summary is how a run says it did not get
+            # one, which is the same convention the null endpoint work established.
+            sliced = None
         finally:
-            # In the `finally` so a rank-zero failure does not leave the other ranks waiting
-            # here forever -- they would time out on the barrier instead of on a collective
-            # inside a forward, which at least fails.
+            # Every rank arrives here, whether it scored or refused, so the ranks re-converge
+            # before the summary and the teardown regardless of which branch they took.
             barrier()
 
     # Unconditional. The JSON on stdout is the only channel the platform reads a run's results
@@ -2202,6 +3196,27 @@ def build_parser() -> argparse.ArgumentParser:
     # initialisation -- a narrower component than the FarmShare seed replicate measured,
     # which biases any CI built from it optimistically. A paired design wants both varied.
     parser.add_argument("--init-seed", type=int, default=12536)
+    # THE DECODE PROBE IS ON BY DEFAULT, AND THE FLAG ONLY TURNS IT OFF. Run 2 exists partly to
+    # produce this number, so an opt-IN flag is one forgotten argument away from repeating run 1's
+    # gap -- and a cell that silently skipped it would report `decode_basis` explaining itself
+    # only to a reader who went looking. The cost is bounded and small: 3 batch sizes x 72 steps
+    # of one fused operator, after fit() has finished, on rank zero alone.
+    #
+    # DECLARED HERE, WITH `dest`, BECAUSE AN UNDECLARED FLAG IS HOW RUN 1 LOST ALL 18 CELLS. An
+    # argument argparse does not know about is swallowed by `parse_known_args` and handed to
+    # `config.merge()` as a dotted override, which dies at merge time -- AFTER the corpus and the
+    # arm have logged correctly, so it reads like a config bug rather than a typo. Grepping for a
+    # flag string is not enough either: run 1's `--lm-loss-implementation` appeared in a prose
+    # comment and nowhere in any `add_argument` call.
+    parser.add_argument(
+        "--no-decode-probe",
+        dest="decode_probe",
+        action="store_false",
+        default=True,
+        help="Skip the fused-recurrent decode measurement. On by default; the whole reason run 2 "
+        "exists is that run 1 measured nothing about inference. Turning it off records "
+        "decode_fast_path_taken=false with a stated reason rather than a null field.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Resolve and print, do not train.")
     return parser
 

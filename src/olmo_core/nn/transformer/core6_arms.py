@@ -142,7 +142,7 @@ ARM_L0_DELTA: Dict[str, int] = {
     "G2R0": 77_312,
     "S14": 3_328,
     "G0R0": 17_664,
-    # The bake-off arms. All six put their mixer in the same two slots as K2, so they differ from
+    # The bake-off arms. Every one puts its mixer in the same two slots as K2, so they differ from
     # K2 by exactly (their mixer - KDA) x 2, respent on the /32 grid by `solve_widths`.
     "KDA_R2": 6_304,
     "KDA_R1": K2_L0_DELTA,
@@ -150,6 +150,9 @@ ARM_L0_DELTA: Dict[str, int] = {
     "KDA_BASE": K2_L0_DELTA,
     "KDA_GCONV": 2_208,
     "KDA_NOACT": K2_L0_DELTA,
+    # 'allow_neg_eigval' is stored as a plain bool (recurrent.py:708) and read exactly once, inside
+    # 'forward' (:875), so it allocates nothing and this arm is parameter-identical to KDA_BASE.
+    "KDA_NEGEIG": K2_L0_DELTA,
 }
 
 #: Per-layer parameter cost of each mixer at the frozen geometry, for the width solver.
@@ -224,6 +227,12 @@ MIXERS: Dict[str, Callable[[], object]] = {
     "kda": lambda: _kda(),
     "kda_noact": lambda: _kda(conv_activation=None),
     "kda_gconv": lambda: _kda(gated_conv=True, gate_structure="depthwise"),
+    # THE REFLECTION REGIME ON THE SHIPPED CHUNKED KERNEL. This is the same mechanism the
+    # Householder arms were built for, obtained WITHOUT their kernel: 'allow_neg_eigval' is nothing
+    # but 'beta = beta * 2.0' in eager PyTorch (recurrent.py:874-876), applied before 'beta' is
+    # handed to 'dispatch_chunk_kda' (:918) as a plain post-sigmoid tensor. It selects no kernel, no
+    # branch and no flag inside fla. See the KDA_NEGEIG arm's notes for why that matters.
+    "kda_negeig": lambda: _kda(allow_neg_eigval=True),
     "kda_householder_r1": lambda: _kda_householder(num_householder=1),
     "kda_householder_r2": lambda: _kda_householder(num_householder=2),
     "gdn2": _gdn2,
@@ -371,9 +380,11 @@ ARMS: Dict[str, Core6Arm] = {
         ),
         # --- the mixer bake-off ---------------------------------------------------------------
         #
-        # Six arms that differ from each other in the OPERATOR filling slots {6, 11} and in
-        # nothing else. They keep L0's six global-attention layers, L0's LIV layers everywhere
-        # else, and the same two slots K2 uses.
+        # Arms that differ from each other in the OPERATOR filling slots {6, 11} and in nothing
+        # else. They keep L0's six global-attention layers, L0's LIV layers everywhere else, and
+        # the same two slots K2 uses. The set is NOT a fixed count -- run 2 adds KDA_NEGEIG and
+        # retires the two Householder arms -- so the guard that stops an arm slipping in unchecked
+        # is `test_every_arm_has_a_declared_topology`, which compares SETS, not a literal number.
         #
         # THE SIX GLOBAL LAYERS ARE NOT NEGOTIABLE AND THE REASON IS MECHANICAL, not stylistic.
         # `model.py:257` emits RoPE buffers only for `Attention`/`FusedAttention` blocks, so an
@@ -432,6 +443,51 @@ ARMS: Dict[str, Core6Arm] = {
             "seeded generator exists, so its random stream diverges from every other arm and "
             "seed pairing is forfeited. Depthwise costs 6,144 per layer, landing this arm at "
             "+2,208 against L0 -- inside tolerance and asserted exactly.",
+        ),
+        Core6Arm(
+            "KDA_NEGEIG",
+            "KDA, Negative Eigenvalues (beta in (0,2))",
+            "bake-off treatment",
+            kda_layers=KDA_LAYERS,
+            mixer="kda_negeig",
+            notes="KDA with allow_neg_eigval=True, so beta reaches (0,2) and (I - beta k k^T) can "
+            "be a true REFLECTION rather than a contraction. THIS IS THE MECHANISM KDA_R1 WAS "
+            "BUILT FOR, OBTAINED ON THE SHIPPED CHUNKED KERNEL. It is a beta-projection change and "
+            "nothing else: 'allow_neg_eigval' is read exactly once, at recurrent.py:875, where it "
+            "does 'beta = beta * 2.0' in eager PyTorch before beta is passed to dispatch_chunk_kda "
+            "at :918 as a plain post-sigmoid tensor. No fla flag is threaded, no kernel is "
+            "selected, no branch is taken. So KDA_R1's measured costs -- 0.7787x throughput "
+            "(326,513 vs 419,288 tok/s, a 22.1% penalty) and +2.539 GiB reserved -- WERE NOT THE "
+            "PRICE OF THIS MECHANISM. They were the price of routing it through "
+            "KimiDeltaHouseholder, whose own docstring (kda_householder.py:64-70) says it is a "
+            "sequential fused-recurrent kernel 'expected to be materially slower than fla's "
+            "chunked kernels' because 'the goal of this milestone is mechanism validation, not "
+            "throughput'; the run-1 audit localised the +2.539 GiB to that kernel's fp32 "
+            "state-history backward workspace, 79% of it a single 2.00 GiB 'hs' tensor. This arm "
+            "pays none of that.\n"
+            "WHAT THIS BUYS IS FREE OPTIONALITY, NOT FREE QUALITY, and the distinction is the "
+            "whole reason the arm is honestly declarable. Run 1 measured KDA_R1 - KDA_BASE = "
+            "+0.023575 nats -- WORSE than the reference, and well inside that run's 0.0636 MDE, so "
+            "it is not evidence of anything either way (KDA_R1 also had the worst seed sd of any "
+            "arm, 0.04516, 4.2x KDA_BASE's and 17.5x KDA_NOACT's). Two published sources agree "
+            "there is no CE gain to expect: Grazzi Table 4 (FineWeb 100B, 1.3B, R=1) reports Wiki "
+            "ppl 18.54 -> 18.57 and Avg 53.1 -> 52.4, their words 'mixed results'; GDN-2's Table 5 "
+            "finds widening the erase range to [0,2] 'gives no consistent gain at this scale' -- "
+            "which is exactly why the GDN2 arm here keeps allow_neg_eigval=False. The payoff is "
+            "STATE TRACKING: DeltaProduct Table 2 at R=1 takes Parity from 0.233 to 0.982 and the "
+            "average from 0.263 to 0.726. So the decision this arm informs is 'can the production "
+            "model have the state-tracking regime for free', and a CE null IS a passing result "
+            "provided throughput and memory come back at parity. Do not read a CE null here as "
+            "'negative eigenvalues do not work'.\n"
+            "Parameter-identical to KDA_BASE at -10,080, and that is not a claim about the flag "
+            "being cheap -- it is structural: recurrent.py:708 stores it as a plain bool, its only "
+            "reader is forward (:875), and num_params (:1209-1260) does not mention it, so no "
+            "tensor's name or shape can depend on it at ANY geometry. That is what makes KDA_BASE, "
+            "KDA_NOACT and KDA_NEGEIG seed-pairable: identical tensor inventories mean one shared "
+            "init RNG stream draws the same shapes in the same order, so it cannot diverge between "
+            "them. Run 1 had no such triple -- KDA_R2 widens w_k/w_v/w_b by R, GDN2 adds w_w, and "
+            "KDA_GCONV adds pre_scale/post_scale (its depthwise gate draws nothing, so its stream "
+            "matches, but its inventory does not).",
         ),
         Core6Arm(
             "KDA_R1",

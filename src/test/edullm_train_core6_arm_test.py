@@ -23,6 +23,7 @@ import importlib.util
 import math
 import os
 import sys
+import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -1401,3 +1402,667 @@ def test_the_report_never_emits_a_zero_for_a_figure_it_could_not_measure():
         if isinstance(value, str):
             continue  # mfu_basis, which explains the nulls
         assert value is None, f"{key} is {value!r}; an unmeasured figure must be null, not zero"
+
+
+# --- the decode / inference measurement -------------------------------------------------------
+#
+# WHAT THESE CAN AND CANNOT COVER. The kernel timing needs a GPU and `fla`, and neither exists on
+# a laptop, so none of it is tested here -- see the module note at the top of this file. What IS
+# tested is every number that is COMPUTED rather than timed: the state footprint that decides
+# serving batch size, the KV-cache contrast that gives it meaning, the crossover, the
+# tokens/sec arithmetic, and the basis string that stops an operator microbenchmark being quoted
+# as a serving figure. Those are the fields a reader acts on, and they are pure functions
+# precisely so that a CPU test can call them.
+#
+# EVERY EXPECTED VALUE BELOW IS COMPUTED INDEPENDENTLY AND WRITTEN DOWN, not re-derived from the
+# code's own expression. A test that recomputes `n * k * v * layers * bytes` passes whatever that
+# line becomes, which is the documented way this project has shipped green nothing before.
+
+
+def test_the_recurrent_state_size_is_the_hand_computed_number():
+    """
+    THE FIELD THAT DECIDES SERVING BATCH SIZE, PINNED TO ARITHMETIC DONE BY HAND.
+
+    At the frozen geometry -- 16 value heads, head_k_dim 64, head_v_dim 64, 2 mixer layers, fp32
+    state -- one head's state matrix is 64x64 = 4,096 elements. Sixteen heads is 65,536; that is
+    262,144 bytes at 4 bytes each; two layers is 524,288 bytes = exactly 512 KiB per sequence.
+
+    MUTATIONS THIS CATCHES: dropping `n_layers` from the product (reports 256 KiB, half the real
+    footprint, on the field somebody sizes a fleet with); using `head_k_dim` twice instead of
+    `head_k_dim * head_v_dim`; and defaulting `bytes_per_element` to 2 on the theory that "the run
+    is bf16", which halves the answer -- fla keeps the state in fp32 regardless.
+    """
+    assert (
+        entry.recurrent_state_bytes(
+            n_heads=16, head_k_dim=64, head_v_dim=64, n_layers=2, bytes_per_element=4
+        )
+        == 524_288
+    )
+    assert 524_288 == 512 * 1024, "the hand arithmetic above must equal 512 KiB"
+
+    # One layer is exactly half, which pins that `n_layers` is a factor rather than ignored.
+    assert (
+        entry.recurrent_state_bytes(
+            n_heads=16, head_k_dim=64, head_v_dim=64, n_layers=1, bytes_per_element=4
+        )
+        == 262_144
+    )
+    # An asymmetric shape, so a `head_k_dim ** 2` bug cannot pass: 8 * 32 * 128 * 1 * 4 = 131,072.
+    assert (
+        entry.recurrent_state_bytes(
+            n_heads=8, head_k_dim=32, head_v_dim=128, n_layers=1, bytes_per_element=4
+        )
+        == 131_072
+    )
+    # And the fp32 default is the DEFAULT, not something the caller must remember.
+    assert entry.recurrent_state_bytes(
+        n_heads=16, head_k_dim=64, head_v_dim=64, n_layers=2
+    ) == 524_288
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        dict(n_heads=0, head_k_dim=64, head_v_dim=64, n_layers=2),
+        dict(n_heads=16, head_k_dim=64, head_v_dim=64, n_layers=0),
+        dict(n_heads=16, head_k_dim=0, head_v_dim=64, n_layers=2),
+        dict(n_heads=16, head_k_dim=64, head_v_dim=64, n_layers=2, bytes_per_element=0),
+    ],
+)
+def test_a_zero_dimension_is_refused_rather_than_reporting_a_free_state(kwargs):
+    """
+    A ZERO ANYWHERE IN THE PRODUCT REPORTS A STATE OF 0 BYTES, WHICH IS A CLAIM THAT THE ARM IS
+    FREE -- the exact direction a missing measurement must never fail in. `n_layers=0` is the
+    reachable one: an arm whose `kda_layers` is empty would produce it, and the answer would be a
+    linear-attention mixer with no memory cost at all.
+
+    MUTATION THIS CATCHES: deleting the guard, which makes every case here return 0 and pass any
+    test that only checks the happy path.
+    """
+    with pytest.raises(ValueError):
+        entry.recurrent_state_bytes(**kwargs)
+
+
+def test_the_kv_cache_contrast_is_the_hand_computed_number():
+    """
+    THE COMPARISON THAT MAKES THE STATE FIGURE A DECISION. Six global-attention layers, 8 KV
+    heads, head_dim 64, bf16, both K and V:
+
+        per layer per token = 2 * 8 * 64 * 2 bytes = 2,048
+        six layers          = 12,288 bytes per token
+        at 4,096 tokens     = 50,331,648 bytes = exactly 48 MiB
+
+    MUTATIONS THIS CATCHES: dropping the factor of 2 for K-and-V (halves it); using `n_heads=16`
+    instead of `n_kv_heads=8` (doubles it -- these arms are GQA, so the cache is over KV heads);
+    and forgetting `seq_len`, which turns a per-token cost into a per-sequence constant and
+    destroys the entire crossover argument.
+    """
+    assert (
+        entry.kv_cache_bytes(n_kv_heads=8, head_dim=64, n_layers=6, seq_len=1) == 12_288
+    )
+    at_4k = entry.kv_cache_bytes(n_kv_heads=8, head_dim=64, n_layers=6, seq_len=4096)
+    assert at_4k == 50_331_648
+    assert at_4k == 48 * 1024 * 1024, "the hand arithmetic above must equal 48 MiB"
+
+    # Linear in seq_len -- which is the whole property that distinguishes it from the fixed state.
+    doubled = entry.kv_cache_bytes(n_kv_heads=8, head_dim=64, n_layers=6, seq_len=8192)
+    assert doubled == 2 * at_4k
+
+
+def test_the_crossover_is_where_the_kv_cache_passes_the_fixed_state():
+    """
+    512 KiB of fixed state against 12,288 bytes per token is 524,288 / 12,288 = 42.67 tokens.
+
+    THE NUMBER IS SMALL AND THAT IS THE FINDING, not a bug in the test: past ~43 tokens of context
+    the mixer's fixed state is already cheaper than the KV cache it replaces, and the gap widens
+    without bound. Pinned so that a sign error or an inverted ratio -- which would put the
+    crossover at 0.023 tokens, or in the thousands -- is caught rather than believed.
+
+    MUTATION THIS CATCHES: inverting the division to `kv_bytes_per_token / state_bytes`.
+    """
+    crossover = entry.decode_state_crossover_tokens(
+        state_bytes=524_288, kv_bytes_per_token=12_288
+    )
+    assert crossover == pytest.approx(42.666, abs=0.01)
+
+    # No attention layers means no KV cost, and a length cannot be divided out of that -- null
+    # rather than an infinity or a zero.
+    assert entry.decode_state_crossover_tokens(state_bytes=524_288, kv_bytes_per_token=0) is None
+
+
+def test_decode_throughput_is_batch_over_latency_and_null_when_unmeasurable():
+    """
+    Every sequence in the batch emits one token per step, so 32 sequences at 2 ms per step is
+    16,000 tok/s -- computed by hand here, not from the code's expression.
+
+    MUTATIONS THIS CATCHES: returning `1 / seconds` and ignoring the batch (reports 500 tok/s at
+    batch 32, understating by 32x and ranking every arm on a single-stream figure); and returning
+    0.0 instead of None for a missing latency, which is a claim that decode produced no tokens
+    rather than that it was never timed.
+    """
+    assert entry.decode_tokens_per_second(seconds_per_token=0.002, batch_size=32) == 16_000.0
+    assert entry.decode_tokens_per_second(seconds_per_token=0.002, batch_size=1) == 500.0
+
+    for bad in (None, 0.0, -1.0):
+        assert entry.decode_tokens_per_second(seconds_per_token=bad, batch_size=32) is None
+    assert entry.decode_tokens_per_second(seconds_per_token=0.002, batch_size=0) is None
+
+
+def test_the_decode_basis_says_it_is_not_a_whole_model_serving_number():
+    """
+    THE FIELD THAT STOPS THE MISQUOTE. These latencies are one fused operator on 2 of 16 layers,
+    and "3,000 tokens/sec" reads exactly like a serving figure. The exclusions therefore travel
+    INSIDE the value, because whoever reads the JSON will not read this file.
+
+    MUTATION THIS CATCHES: shortening the string to something that names only what was measured.
+    The assertions below require the words that mark the LIMITS, so a basis that describes only
+    the covered part fails.
+    """
+    basis = entry.decode_basis_string(
+        measured=True,
+        operator="kda",
+        kernel="fla.ops.kda.fused_recurrent.fused_recurrent_kda",
+        n_heads=16,
+        head_k_dim=64,
+        head_v_dim=64,
+        mixer_layers=2,
+        total_layers=16,
+    )
+    lowered = basis.lower()
+    assert "excludes" in lowered
+    assert "not a whole-model serving" in lowered
+    # It must name the layer accounting, since 2-of-16 is the single most misreadable part.
+    assert "2 mixer layer(s) of 16" in basis
+    # And it must name the attention layers whose cache DOES grow, or the summary implies a pure
+    # linear-attention model this study is not testing.
+    assert "grow with context" in lowered
+
+    # An unmeasured basis states a CAUSE rather than being empty or absent.
+    unmeasured = entry.decode_basis_string(measured=False, reason="no CUDA device")
+    assert "not measured" in unmeasured.lower() and "no CUDA device" in unmeasured
+    # And never silently claims a measurement it did not make.
+    assert "tokens/sec" not in unmeasured
+
+
+def test_an_unmeasured_decode_probe_is_never_reported_as_a_fast_one(monkeypatch):
+    """
+    THE RECEIPT, ON THE PATH A LAPTOP AND A CUDA-LESS CONTAINER BOTH TAKE. This is the property
+    the whole audit finding rests on: a field that records the REQUEST while something else ran.
+    With no CUDA there is no kernel, so `decode_fast_path_taken` must be False, every latency must
+    be absent, and the basis must say why.
+
+    It must ALSO still report the state footprint, because that number is arithmetic on the
+    geometry and does not need a GPU -- a probe that returned nothing at all would drop the one
+    field that decides serving batch size.
+
+    MUTATIONS THIS CATCHES: initialising `decode_fast_path_taken` to True and only setting it
+    False on an exception (the no-CUDA path returns early and would stay True); and setting it
+    from `torch.cuda.is_available()` or from the requested kernel name rather than from the
+    observed execution.
+    """
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    probe = entry.decode_probe(arm_name="KDA_BASE")
+
+    assert probe["decode_fast_path_taken"] is False
+    assert probe["decode_batches"] == {}
+    assert "not measured" in probe["decode_basis"].lower()
+    # The receipt fields are absent rather than optimistic.
+    assert probe["decode_kernel_resolved"] is None
+    assert probe["decode_state_advanced"] is None
+    assert probe["decode_state_dtype_realised"] is None
+
+    # But the computed footprint IS there, and it is the hand-computed 512 KiB.
+    assert probe["decode_state_bytes_per_seq"] == 524_288
+    assert probe["decode_mixer_layers"] == 2
+    # And the requested kernel is recorded as a request, under a name that says so.
+    assert probe["decode_kernel_requested"] == (
+        "fla.ops.kda.fused_recurrent.fused_recurrent_kda"
+    )
+
+
+def test_every_run_2_arm_resolves_to_a_decode_kernel(monkeypatch):
+    """
+    THE COORDINATION CHECK, AND IT IS THE ONE MOST LIKELY TO FAIL SILENTLY. The kernel table is
+    keyed on the mixer's CONFIG CLASS rather than on `core6_arms.MIXERS`' registry strings,
+    exactly so that `KDA_NEGEIG` -- new this wave, and being added by another agent -- works by
+    construction instead of falling through to "no kernel known" and dropping a fifth of the
+    study's new measurement.
+
+    So: every arm this run measures must resolve to a kernel. Arms absent from `ARMS` are skipped
+    rather than failed, because this test must not break while another agent's arm is mid-landing;
+    what it will not tolerate is an arm that EXISTS and resolves to nothing.
+
+    MUTATION THIS CATCHES: re-keying `DECODE_KERNELS` on the registry string (`"kda"`,
+    `"gdn2"`, ...), which makes any newly-named KDA variant unresolvable.
+    """
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    from olmo_core.nn.transformer.core6_arms import ARMS
+
+    run_2_arms = ["KDA_BASE", "KDA_NOACT", "KDA_NEGEIG", "KDA_GCONV", "GDN2"]
+    checked = 0
+    for name in run_2_arms:
+        if name not in ARMS:
+            continue  # not landed yet; another agent owns it
+        probe = entry.decode_probe(arm_name=name)
+        assert probe.get("decode_kernel_requested"), (
+            f"arm {name} resolved to no decode kernel; its mixer config class "
+            f"{probe.get('decode_config_class')!r} is missing from DECODE_KERNELS"
+        )
+        # The state footprint is the headline field and must be real for every arm.
+        assert probe["decode_state_bytes_per_seq"] == 524_288, (
+            f"arm {name} reports a different state size; every run-2 arm shares the frozen "
+            "geometry, so a difference here is a config change rather than a mixer property"
+        )
+        checked += 1
+
+    assert checked >= 4, (
+        f"only {checked} of the run-2 arms were found in ARMS; this test is meant to cover the "
+        "four that already exist"
+    )
+
+
+def test_the_householder_arms_report_an_absence_rather_than_a_kda_number(monkeypatch):
+    """
+    THE HONEST GAP. The R>1 Householder operator is a custom in-tree kernel with no fused
+    recurrent form in `fla`, so there is nothing to time. The wrong fix is to fall back to KDA's
+    kernel, which would report a number for a DIFFERENT operator under the Householder arm's
+    name -- and since R=1 is documented to be parameter-identical to KDA, the number would look
+    entirely plausible.
+
+    MUTATION THIS CATCHES: adding `KimiDeltaHouseholderConfig` to `DECODE_KERNELS` pointed at
+    `fused_recurrent_kda`.
+    """
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    from olmo_core.nn.transformer.core6_arms import ARMS
+
+    if "KDA_R2" not in ARMS:
+        pytest.skip("KDA_R2 is not declared in this build")
+    probe = entry.decode_probe(arm_name="KDA_R2")
+
+    assert probe["decode_fast_path_taken"] is False
+    assert probe.get("decode_kernel_requested") is None
+    assert "nothing to time" in probe["decode_basis"]
+    # The state size is still computable and still reported: the operator has a fixed state even
+    # though this harness cannot time its decode.
+    assert probe["decode_state_bytes_per_seq"] > 0
+
+
+def test_the_decode_probe_never_raises_even_on_an_unknown_arm():
+    """
+    A benchmark bolted onto a paid-for training run must not be able to cost it the CE endpoint.
+    An arm name that is not in the registry is the cheapest way to reach the failure path.
+
+    MUTATION THIS CATCHES: letting `_decode_geometry`'s KeyError propagate, which would take out
+    `summarise()` -- and `summarise()` is the only channel the platform reads results through, so
+    a decode bug would turn an eleven-hour run into a run that reported nothing.
+    """
+    probe = entry.decode_probe(arm_name="NO_SUCH_ARM")
+    assert probe["decode_fast_path_taken"] is False
+    assert "not measured" in probe["decode_basis"].lower()
+
+
+# --- the sliced eval's band reduction ---------------------------------------------------------
+
+
+def test_a_band_is_a_token_weighted_mean_and_not_a_mean_of_rank_means():
+    """
+    THE SILENT BIAS THIS FUNCTION EXISTS TO PREVENT, WITH THE TWO ANSWERS FAR ENOUGH APART TO
+    TELL THEM APART.
+
+    Two ranks, one band. Rank A scored 1,000 tokens at CE 2.0 (sum 2,000); rank B scored 10
+    tokens at CE 10.0 (sum 100). Reduced correctly the band CE is
+
+        (2000 + 100) / (1000 + 10) = 2100 / 1010 = 2.0792...
+
+    A mean of the two ranks' means would be (2.0 + 10.0) / 2 = 6.0 -- almost 3x higher, entirely
+    in range, and no assertion anywhere would fire. That is the shape of error that puts a wrong
+    number into a production decision, and bands are where it bites hardest because a rare band
+    like `gap>4096` can sit almost entirely on one rank.
+
+    MUTATION THIS CATCHES: dividing per-rank and averaging, or reducing an already-divided CE.
+    The expected value is worked out by hand above and written down, so it does not move when the
+    code does.
+    """
+    reduced = entry.band_ce_from_totals({4096: 2000.0 + 100.0}, {4096: 1000 + 10})
+    assert reduced["4096"]["ce"] == pytest.approx(2100.0 / 1010.0)
+    assert reduced["4096"]["ce"] == pytest.approx(2.079207920792079)
+    # The wrong answer, named so a future reader sees what is being excluded.
+    assert reduced["4096"]["ce"] != pytest.approx(6.0)
+    # Sums and counts survive into the record, so a reader can re-derive the mean or difference
+    # two arms without re-weighting.
+    assert reduced["4096"]["sum"] == 2100.0
+    assert reduced["4096"]["n"] == 1010
+
+
+def test_an_empty_band_is_null_rather_than_a_perfect_score():
+    """
+    THE BUG THE OLD CODE HAD. It divided by `max(count, 1)`, so a band with no tokens reported a
+    cross-entropy of 0.0 -- the BEST possible score, the top of the table, for a band that was
+    never measured at all. On a small slice `gap>4096` is easily empty, and arms are ranked on
+    these numbers.
+
+    MUTATION THIS CATCHES: restoring `total / max(n, 1)`, which turns every empty band back into
+    a perfect 0.0.
+    """
+    reduced = entry.band_ce_from_totals(
+        {0: 100.0, 4096: 0.0}, {0: 50, 4096: 0}
+    )
+    assert reduced["0"]["ce"] == pytest.approx(2.0)
+    assert reduced["4096"]["ce"] is None, "an unmeasured band must not report a score"
+    assert reduced["4096"]["n"] == 0
+    # Null and zero are opposite claims; assert the distinction explicitly.
+    assert reduced["4096"]["ce"] != 0.0
+
+
+def test_the_bands_come_back_in_a_fixed_order_with_string_keys():
+    """
+    Keys are strings because they go through JSON, and the order is sorted numerically rather
+    than by dict insertion -- every rank enters the reduction collectives in this order, and
+    "whatever order the dict happened to have" is the wrong thing to rest that on.
+    """
+    reduced = entry.band_ce_from_totals(
+        {4096: 1.0, 0: 1.0, 256: 1.0, 32: 1.0, 1024: 1.0},
+        {4096: 1, 0: 1, 256: 1, 32: 1, 1024: 1},
+    )
+    assert list(reduced) == ["0", "32", "256", "1024", "4096"]
+    assert set(reduced) == {str(b) for b in entry.BAND_BIT}
+
+
+# --- the sliced eval runs on every rank, run as actual ranks -----------------------------------
+#
+# The same thread harness the aggregate endpoint uses, for the same reason: an AST walk looking
+# for `get_rank() == 0` is theatre that passes for `if rank == 0:`. These execute the real control
+# flow of every rank against a rendezvous with a deadlock detector, so a rank that skips a
+# collective its peers enter is reported as a failure rather than reproduced as a hung suite.
+
+
+def write_mask(path, n_tokens: int, *, bit: int = 1, every: int = 1) -> str:
+    """A uint8 band mask, one byte per token, with ``bit`` set on every ``every``-th position."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mask = np.zeros(n_tokens, dtype=np.uint8)
+    mask[::every] = bit
+    mask.tofile(path)
+    return str(path)
+
+
+def run_sliced_on_ranks(monkeypatch, *, world_size: int, pairs, seq_len=SEQ_LEN, micro=2):
+    """Run ``evaluate_sliced`` on ``world_size`` threads, sharding ``pairs`` the way train() does.
+
+    ``pairs`` is the WHOLE ``(shard, mask)`` set; each rank takes ``i % world_size == rank``,
+    which is what `fetch_slice_inputs` does with the manifest.
+    """
+    import threading
+
+    group = FakeGroup(world_size)
+    local = threading.local()
+
+    def fake_all_reduce(value, device, op=None, group_=None):
+        name = "max" if op is torch.distributed.ReduceOp.MAX else "sum"
+        return group.rendezvous(local.rank, f"all_reduce:{name}", value, op=name)
+
+    monkeypatch.setattr(entry, "get_rank", lambda *a, **k: local.rank)
+    monkeypatch.setattr(entry, "get_world_size", lambda *a, **k: world_size)
+    monkeypatch.setattr(entry, "barrier", lambda *a, **k: group.rendezvous(local.rank, "barrier"))
+    monkeypatch.setattr(entry, "all_reduce_value", fake_all_reduce)
+
+    results: Dict[int, object] = {}
+    errors: Dict[int, BaseException] = {}
+    torch.manual_seed(0)
+    model = TinyLM()
+
+    def body(rank: int):
+        local.rank = rank
+        mine = [p for i, p in enumerate(pairs) if i % world_size == rank]
+        try:
+            results[rank] = entry.evaluate_sliced(
+                model=model,
+                vocab_size=VOCAB,
+                val_paths=[s for s, _ in mine],
+                mask_paths=[m for _, m in mine],
+                seq_len=seq_len,
+                micro=micro,
+            )
+        except BaseException as exc:  # noqa: BLE001 -- reported per rank below
+            errors[rank] = exc
+            group.abandon()
+
+    threads = [threading.Thread(target=body, args=(r,)) for r in range(world_size)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+        assert not thread.is_alive(), "a rank never finished -- the sliced eval hung"
+    return results, errors, group
+
+
+@pytest.fixture
+def slice_pairs(tmp_path):
+    """Four ``(shard, mask)`` pairs at the aggregate fixture's sizes, every token in band 0."""
+    pairs = []
+    for i, n in enumerate(SHARD_TOKENS):
+        shard = write_shard(tmp_path / "slice" / f"s{i}.u32le.bin", n)
+        mask = write_mask(tmp_path / "slice" / f"s{i}.mask.u8", n, bit=1)
+        pairs.append((shard, mask))
+    return pairs
+
+
+@pytest.mark.parametrize("world_size", [1, 2, 3, 8])
+def test_the_sliced_eval_reaches_every_collective_on_every_rank(
+    monkeypatch, slice_pairs, world_size
+):
+    """
+    THE FIX, MEASURED. This path was `if get_rank() == 0:` and run 2 passes `--slice-mask-uri` on
+    8 GPUs, so it WOULD have hung: under FSDP rank zero's forward issues all-gathers the other
+    ranks never enter, and the caller's `except` cannot catch a hang.
+
+    Four world sizes for the cases the shard assignment treats differently: one rank; a size that
+    divides the shard count; a size that does NOT (so some ranks run filler passes); and a size
+    LARGER than the shard count, where some ranks hold NO shards at all. That last is 8 GPUs over
+    4 mask shards -- not exotic, it is the default shape this run submits on, and it is the one a
+    naive implementation deadlocks on because a rank with nothing to score leaves the loop
+    immediately.
+
+    MUTATION THIS CATCHES: restoring the rank gate, or dropping the filler passes -- either makes
+    the ranks' collective traces diverge and the FakeGroup times out naming the collective.
+    """
+    results, errors, group = run_sliced_on_ranks(
+        monkeypatch, world_size=world_size, pairs=slice_pairs
+    )
+    assert not errors, f"ranks failed: { {r: repr(e) for r, e in errors.items()} }"
+    assert set(results) == set(range(world_size)), "not every rank produced a result"
+
+    traces = [group.trace[rank] for rank in range(world_size)]
+    assert all(t == traces[0] for t in traces), f"ranks diverged: {traces}"
+    # The step budget, the failure flag, the aggregate pair, and two per band.
+    assert traces[0].count("all_reduce:max") >= 1
+    assert traces[0].count("all_reduce:sum") >= 2 + 2 * len(entry.BAND_BIT)
+    assert traces[0].count("barrier") >= 1
+
+
+@pytest.mark.parametrize("world_size", [1, 2, 3, 8])
+def test_the_sliced_number_is_the_whole_runs_and_not_one_ranks_share(
+    monkeypatch, slice_pairs, world_size
+):
+    """
+    Every rank must come back with the SAME totals, and those totals must be the union over all
+    shards. The rank-zero version could not do this even if it had not hung -- it would have
+    reported whatever rank zero happened to hold.
+
+    THE EXPECTED COUNT IS THE HAND-COMPUTED ONE from the aggregate fixture's arithmetic: 256
+    scored tokens over the four shards (96 + 64 + 64 + 32). Every token carries band 0's bit, so
+    band 0's count must equal the aggregate count exactly -- which is also what proves the padding
+    rows were excluded from the band tallies rather than counted into them.
+
+    MUTATION THIS CATCHES: reducing sums but not counts (or vice versa); and counting padded rows,
+    which would push both counts above 256 at world sizes that require filler.
+    """
+    results, errors, _ = run_sliced_on_ranks(
+        monkeypatch, world_size=world_size, pairs=slice_pairs
+    )
+    assert not errors, f"ranks failed: { {r: repr(e) for r, e in errors.items()} }"
+
+    first = results[0]
+    assert first["aggregate"]["n"] == 256, (
+        f"scored {first['aggregate']['n']} tokens, expected the fixture's 256 -- a larger number "
+        "means padded rows were counted"
+    )
+    assert first["bands"]["0"]["n"] == 256, "every token carries band 0's bit"
+    assert first["bands"]["0"]["sum"] == pytest.approx(first["aggregate"]["sum"], rel=1e-6)
+
+    for rank, result in results.items():
+        assert result["aggregate"]["n"] == first["aggregate"]["n"], f"rank {rank} disagrees"
+        assert result["aggregate"]["ce"] == pytest.approx(first["aggregate"]["ce"], rel=1e-9)
+        assert result["world_size"] == world_size
+        # An untrained model over any token set scores near ln(vocab). The magnitude check that
+        # has historically been the only one to catch anything.
+        assert abs(result["aggregate"]["ce"] - math.log(VOCAB)) < 1.0
+
+
+def test_a_band_nobody_holds_is_null_across_the_whole_world(monkeypatch, tmp_path):
+    """
+    An empty band must survive the REDUCTION as null, not just the local computation. With bit 1
+    set everywhere and no other bit set anywhere, bands 32/256/1024/4096 are empty on every rank,
+    so their reduced count is 0 and their CE must be null rather than a perfect 0.0.
+
+    MUTATION THIS CATCHES: `total / max(n, 1)` after the reduction, which gives four bands a
+    0.0 CE -- and 0.0 sorts to the top of a table arms are ranked in.
+    """
+    pairs = []
+    for i, n in enumerate(SHARD_TOKENS):
+        shard = write_shard(tmp_path / "b" / f"s{i}.u32le.bin", n)
+        mask = write_mask(tmp_path / "b" / f"s{i}.mask.u8", n, bit=1)
+        pairs.append((shard, mask))
+
+    results, errors, _ = run_sliced_on_ranks(monkeypatch, world_size=3, pairs=pairs)
+    assert not errors, f"ranks failed: { {r: repr(e) for r, e in errors.items()} }"
+
+    for rank, result in results.items():
+        assert result["bands"]["0"]["ce"] is not None, f"rank {rank} lost the measured band"
+        for band in ("32", "256", "1024", "4096"):
+            assert result["bands"][band]["n"] == 0
+            assert result["bands"][band]["ce"] is None, (
+                f"rank {rank} band {band} reported {result['bands'][band]['ce']!r} for a band "
+                "with no tokens; an unmeasured band must not score"
+            )
+
+
+def test_one_rank_with_a_bad_mask_length_fails_every_rank_rather_than_hanging(
+    monkeypatch, tmp_path
+):
+    """
+    THE SPLIT THAT WOULD DEADLOCK. The mask/shard length check compares two files ONE rank holds,
+    so it can be true on that rank alone. A bare `raise` there unwinds that rank while its peers
+    enter the step-budget all-reduce -- a mismatched collective, which is a hang or an NCCL abort
+    rather than an error anyone can read.
+
+    So the flag is all-reduced and every rank refuses together. Rank 1 gets the short mask here.
+
+    MUTATION THIS CATCHES: turning the reduced flag back into a direct `raise` inside the loop.
+    The FakeGroup then reports that the other ranks waited at a collective rank 1 never entered.
+    """
+    pairs = []
+    for i, n in enumerate(SHARD_TOKENS):
+        shard = write_shard(tmp_path / "m" / f"s{i}.u32le.bin", n)
+        # Index 1 goes to rank 1 at world_size 2; give it a mask one byte short.
+        length = n - 1 if i == 1 else n
+        mask = write_mask(tmp_path / "m" / f"s{i}.mask.u8", length, bit=1)
+        pairs.append((shard, mask))
+
+    results, errors, _ = run_sliced_on_ranks(monkeypatch, world_size=2, pairs=pairs)
+
+    assert not results, "no rank may return a number when the token set is mislabelled"
+    assert set(errors) == {0, 1}, f"both ranks must refuse, got {sorted(errors)}"
+    for rank, error in errors.items():
+        assert isinstance(error, SystemExit), f"rank {rank} raised {error!r}"
+    # The rank that OWNS the bad mask says which file; the other says a peer did.
+    assert "mask/shard length mismatch" in str(errors[1])
+    assert "another rank" in str(errors[0])
+
+
+def test_shards_too_short_for_a_window_are_refused_rather_than_scoring_nothing(
+    monkeypatch, tmp_path
+):
+    """
+    Zero agreed steps means nothing to score, and the old code would have returned an aggregate of
+    0.0/0 through `max(n, 1)`. A refusal instead, on every rank, so a run cannot report a sliced
+    CE of zero.
+
+    MUTATION THIS CATCHES: removing the `steps == 0` refusal, or restoring `max(agg_n, 1)` on the
+    aggregate divide.
+    """
+    pairs = []
+    for i in range(2):
+        # 10 tokens at seq_len 32 yields (10-1)//32 = 0 windows.
+        shard = write_shard(tmp_path / "s" / f"s{i}.u32le.bin", 10)
+        mask = write_mask(tmp_path / "s" / f"s{i}.mask.u8", 10, bit=1)
+        pairs.append((shard, mask))
+
+    results, errors, _ = run_sliced_on_ranks(monkeypatch, world_size=2, pairs=pairs)
+    assert not results
+    assert set(errors) == {0, 1}
+    for error in errors.values():
+        assert isinstance(error, SystemExit)
+        assert "no window" in str(error)
+
+
+def test_the_sliced_eval_has_no_rank_gate_left_in_it():
+    """
+    THE REGRESSION GUARD, ON THE SOURCE, AND IT IS DELIBERATELY NARROW. The thread tests above
+    measure the participation structure and are the real check; this one exists because the defect
+    being fixed was a specific two-line shape that a reviewer can reintroduce while reading the
+    function as "secondary, so rank zero is fine".
+
+    It reads the source of `evaluate_sliced` and of the block in `train()` that calls it. Neither
+    may contain a rank comparison that guards work; the only permitted `get_rank()` use in the
+    caller is the LOGGING gate, which formats already-reduced numbers.
+
+    MUTATION THIS CATCHES: wrapping either the fetch or the evaluation in `if get_rank() == 0:`.
+    """
+    import ast
+    import inspect
+    import re
+
+    # THE DOCSTRING IS STRIPPED BEFORE SCANNING, AND THAT IS NOT A LOOPHOLE. `evaluate_sliced`
+    # DOCUMENTS the removed gate verbatim -- "It used to be `if get_rank() == 0:`" -- so a naive
+    # grep over the source matches the explanation of the fix and fails on correct code. The
+    # first version of this test did exactly that. Parsing and dropping the docstring scans the
+    # CODE, which is what the property is about; deleting the sentence to make a grep pass would
+    # have removed the best explanation in the function.
+    source = inspect.getsource(entry.evaluate_sliced)
+    tree = ast.parse(textwrap.dedent(source))
+    function = tree.body[0]
+    assert isinstance(function, ast.FunctionDef)
+    body = function.body
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        body = body[1:]  # drop the docstring, keep every statement
+    code = "\n".join(ast.unparse(node) for node in body)
+
+    # `rank` is assigned and used in messages, which is fine; a COMPARISON against 0 is not.
+    found = re.search(r"(get_rank\(\)|\brank\b)\s*[=!]=\s*0", code)
+    assert not found, (
+        f"evaluate_sliced's body contains the rank comparison {found.group(0)!r}; under FSDP a "
+        "rank-gated forward waits on all-gathers the other ranks never enter, which is the hang "
+        "this rewrite removed"
+    )
+    # The collectives must not be inside a rank-dependent branch either, so assert positively
+    # that the reduction and the barrier are present in the body that was just scanned.
+    assert "all_reduce_value" in code and "barrier()" in code
+
+    caller = inspect.getsource(entry.train)
+    block = caller[caller.index("if opts.slice_mask_uri:") :]
+    block = block[: block.index("summarise(")]
+    gates = re.findall(r"if get_rank\(\) == 0:", block)
+    assert len(gates) == 1, (
+        f"expected exactly one rank gate in the sliced-eval block (the log formatting), found "
+        f"{len(gates)}; a gate around the fetch or the evaluation is the hang"
+    )
+    # And the one that exists must guard logging, not computation.
+    after = block[block.index("if get_rank() == 0:") :]
+    assert "log.info" in after.split("\n")[1] or "log.info" in after[:400]
+    assert "evaluate_sliced(" not in after, "the rank gate must not contain the evaluation"
+    assert "fetch_slice_inputs" not in after, "the rank gate must not contain the fetch"

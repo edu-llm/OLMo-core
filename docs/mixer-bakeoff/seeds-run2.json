@@ -1,0 +1,358 @@
+{
+ "$comment": [
+  "FROZEN SEED SCHEDULE FOR RUN 2 of the linear-attention mixer bake-off. 5 arms x 5 replicates",
+  "= 25 cells. This file is the machine-readable authority for every integer run 2 submits.",
+  "Prose, decision rules and the analysis plan: docs/mixer-bakeoff/PREREGISTRATION-RUN2.md",
+  "",
+  "RUN 1's docs/mixer-bakeoff/seeds.json IS A SEPARATE, FROZEN RECORD OF A COMPLETED EXPERIMENT.",
+  "It is not edited by run 2 and it is not superseded. Where the two disagree about run 2 (run 1's",
+  "file sketched run 2 as a 2-arm KDA_K3 study), THIS FILE governs: the lead re-scoped run 2 to the",
+  "5-arm design below and dropped KDA_K3 along with the two Householder arms.",
+  "",
+  "THE ONE STRUCTURAL CHANGE FROM RUN 1: init seeds are now PAIRED across three of the five arms.",
+  "Run 1 could not do this and said so correctly. See `init_seed_semantics` for why dropping the",
+  "Householder arms made it valid, and for the two arms that remain declared exceptions."
+ ],
+ "schema_version": 1,
+ "run": 2,
+ "frozen_on": "2026-08-08",
+ "status": "frozen",
+ "entrypoint": ".edullm/train_core6_arm.py",
+ "supersedes_nothing": "docs/mixer-bakeoff/seeds.json is run 1's frozen record and is left untouched.",
+
+ "arms": {
+  "$comment": [
+   "Five arms. KDA_BASE is the shared control for every Dunnett contrast, so k = 4.",
+   "DROPPED from run 1: KDA_R1 and KDA_R2. Their hand-written Householder kernel has no fast",
+   "chunked path at R>1 and measured 5-21x slower locally; KDA_R1 alone carried 81.6% of run 1's",
+   "pooled sum of squares, which is the single largest reason run 2's MDE improves.",
+   "DROPPED from run 1's sketch of run 2: KDA_K3 (never implemented in this tree)."
+  ],
+  "KDA_BASE": {
+   "arm_index_run1": 0,
+   "role": "SHARED CONTROL -- Dunnett reference.",
+   "mixer_config": "KimiDeltaAttentionConfig(allow_neg_eigval=False, conv_activation='silu', gated_conv=False) -- the Kimi Linear paper / fla variant. Branch defaults (recurrent.py:1088,1100,1108).",
+   "param_delta_key": "ARM_L0_DELTA['KDA_BASE'] == K2_L0_DELTA == -10080",
+   "init_pairing": "PAIRED TRIO"
+  },
+  "KDA_NOACT": {
+   "arm_index_run1": 1,
+   "role": "no-activation KDA. The correct comparator for isolating the gate, because the depthwise pre-gate in KDA_GCONV is algebraically a SiLU.",
+   "mixer_config": "KimiDeltaAttentionConfig(gated_conv=False, conv_activation=None).",
+   "param_delta_key": "ARM_L0_DELTA['KDA_NOACT'] == K2_L0_DELTA == -10080",
+   "init_pairing": "PAIRED TRIO"
+  },
+  "KDA_NEGEIG": {
+   "arm_index_run1": null,
+   "role": "NEW IN RUN 2. allow_neg_eigval=True on the FAST CHUNKED kernel -- the mechanism the Householder arms were testing, at the shipped kernel's speed.",
+   "mixer_config": "KimiDeltaAttentionConfig(allow_neg_eigval=True) -- everything else at KDA_BASE's values.",
+   "param_delta_key": "ARM_L0_DELTA['KDA_NEGEIG'] == K2_L0_DELTA == -10080 (present in core6_arms.py:155 as of the freeze)",
+   "param_free_reason": "allow_neg_eigval is stored as a plain bool (recurrent.py:708) and read once inside forward (recurrent.py:875). It allocates no tensor.",
+   "init_pairing": "PAIRED TRIO"
+  },
+  "KDA_GCONV": {
+   "arm_index_run1": 2,
+   "role": "gated-conv KDA (LFM2/LIV-style gated short convolutions).",
+   "mixer_config": "KimiDeltaAttentionConfig(gated_conv=True, gated_conv_activation=None, gate_structure='depthwise').",
+   "param_delta_key": "ARM_L0_DELTA['KDA_GCONV'] == +2208 -- IT ADDS GATE TENSORS",
+   "init_pairing": "DECLARED EXCEPTION -- own init seeds"
+  },
+  "GDN2": {
+   "arm_index_run1": 3,
+   "role": "Gated DeltaNet-2 competitor.",
+   "mixer_config": "GatedDeltaNet2Config(expand_v=1.0, allow_neg_eigval=False) -- class defaults (recurrent.py:2352-2369).",
+   "param_delta_key": "ARM_L0_DELTA['GDN2'] == +22688 -- IT HAS w_w, WHICH KDA HAS NOT",
+   "init_pairing": "DECLARED EXCEPTION -- own init seeds"
+  }
+ },
+
+ "data_seeds_by_replicate": {
+  "$comment": [
+   "SHARED BY ALL FIVE ARMS. This is what the data-order pairing rests on, and it is the",
+   "component of pairing that run 1 already had and that is unconditionally valid.",
+   "Recorded as LITERALS. The construction formula below is documentation, not the source of truth.",
+   "Replicates 1-3 REUSE RUN 1's three integers exactly; 4 and 5 are new."
+  ],
+  "1": 210007,
+  "2": 220014,
+  "3": 230021,
+  "4": 240028,
+  "5": 250035,
+  "reused_from_run_1": [1, 2, 3],
+  "new_in_run_2": [4, 5],
+  "what_the_reuse_BUYS": [
+   "A per-replicate drift check on image / kernel / platform changes that does NOT depend on the",
+   "step count: `first_loss` at step 0 is a function of (init seed, first batch, vocabulary) only,",
+   "so run1(arm,r).first_loss and run2(arm,r).first_loss must agree for any arm whose init seed is",
+   "also unchanged. That is the strongest cross-run receipt available, and it survives the step",
+   "budget changing. See `cross_run_comparability` for what does NOT survive.",
+   "Throughput and peak memory are budget-independent, so the same three replicates give a direct",
+   "read on whether the platform got faster or slower between the two runs.",
+   "It does NOT buy a cross-run CE contrast. See `cross_run_comparability` -- the step count differs."
+  ],
+  "what_the_two_NEW_seeds_buy": [
+   "n=3 -> n=5 is the whole reason run 2 can resolve what run 1 could not: it moves pooled df from",
+   "12 to 20 and SE(diff) from sigma*sqrt(2/3) to sigma*sqrt(2/5), a 0.632x factor on the MDE.",
+   "They are NEW rather than recycled so that replicates 4 and 5 are genuinely fresh draws and the",
+   "n=5 variance estimate is not three measurements wearing five labels."
+  ]
+ },
+
+ "init_seed_semantics": {
+  "$comment": [
+   "RUN 1 COULD NOT PAIR INIT SEEDS ACROSS ARMS, AND ITS seeds.json WAS RIGHT TO REFUSE TO CLAIM IT.",
+   "Its reason: arms have different tensor inventories, so one RNG stream diverges at the first",
+   "differing tensor and every draw after it is unrelated. Reusing one integer across arms would",
+   "have bought NO variance reduction.",
+   "",
+   "DROPPING THE HOUSEHOLDER ARMS CHANGES THIS FOR THREE OF THE FIVE ARMS.",
+   "KDA_BASE, KDA_NOACT and KDA_NEGEIG have a BYTE-IDENTICAL TENSOR INVENTORY:",
+   "  - all three are the SAME config class (KimiDeltaAttentionConfig) differing only in",
+   "    constructor arguments;",
+   "  - all three sit at ARM_L0_DELTA == K2_L0_DELTA == -10080, so the solver gives all three the",
+   "    same FFN widths and the same whole-model shape;",
+   "  - removing an activation removes no tensor (conv_activation is an activation, not a weight);",
+   "  - allow_neg_eigval is a plain bool that allocates nothing.",
+   "So for those three, ONE init seed produces LITERALLY IDENTICAL STARTING WEIGHTS and the RNG",
+   "stream never diverges. Same weights, same data, same order -- only the operator differs. That",
+   "is the tightest available form of 'minimise luck-based variation'.",
+   "",
+   "PRECONDITION -- THIS IS A DEPENDENCY, NOT AN ASSUMPTION. See `preconditions.inventory_test`."
+  ],
+
+  "paired_trio": {
+   "arms": ["KDA_BASE", "KDA_NOACT", "KDA_NEGEIG"],
+   "rule": "ONE shared init seed per replicate, identical across all three arms.",
+   "seeds_by_replicate": {
+    "1": 110007,
+    "2": 120014,
+    "3": 130021,
+    "4": 140028,
+    "5": 150035
+   },
+   "chosen_to_equal_run_1s_KDA_BASE_column": "The trio's shared value IS run 1's KDA_BASE init seed for replicates 1-3, so run 2's KDA_BASE cells are bit-reproducible against run 1's on BOTH seeds.",
+   "what_this_buys": [
+    "INTERPRETATIONAL, and that is the honest framing. A KDA_NEGEIG - KDA_BASE difference within a",
+    "replicate is attributable to allow_neg_eigval alone: there is no init component in it at all,",
+    "because the two cells start from the same weights.",
+    "It does NOT license a claim of large variance reduction. Measured on run 1's four surviving",
+    "arms, the replicate/data-seed block effect is F = 1.13 on df (2,6) -- not significant -- and",
+    "blocking on it moves sigma only 0.010248 -> 0.010082 (a 1.6% reduction) while costing df.",
+    "So the primary analysis stays UNBLOCKED one-way; see the pre-registration section 5."
+   ],
+   "effect_on_the_test": "Sharing init makes the trio's cells positively correlated WITHIN a replicate. The unpaired Dunnett SE therefore OVERSTATES the variance of a trio contrast, making those contrasts CONSERVATIVE (true type I error <= alpha). It is exact for the two exception arms. Stated rather than exploited."
+  },
+
+  "declared_exceptions": {
+   "$comment": [
+    "THESE TWO ARMS CANNOT BE INIT-PAIRED, and the reason is a real tensor-inventory difference,",
+    "not caution. They share the DATA seeds with every other arm; only their init stream is their own."
+   ],
+   "KDA_GCONV": {
+    "reason": "Adds gate tensors (2*3*2*hidden per gated layer), ARM_L0_DELTA = +2208. Its parameter vector is a different length, so a shared RNG stream diverges at the first gate tensor.",
+    "seeds_by_replicate": {"1": 116009, "2": 126016, "3": 136023, "4": 146030, "5": 156037},
+    "reused_from_run_1": [1, 2, 3]
+   },
+   "GDN2": {
+    "reason": "Has w_w, which KDA has not, and a mixer ~2.08M parameters larger per slot that solve_widths respends into different FFN widths. ARM_L0_DELTA = +22688.",
+    "seeds_by_replicate": {"1": 119010, "2": 129017, "3": 139024, "4": 149031, "5": 159038},
+    "reused_from_run_1": [1, 2, 3]
+   },
+   "CONSEQUENCE_STATED_PLAINLY": [
+    "KDA_GCONV - KDA_BASE and GDN2 - KDA_BASE CARRY AN INIT-VARIANCE COMPONENT THAT THE THREE",
+    "PAIRED CONTRASTS DO NOT. Those two contrasts are therefore, at equal n, noisier in truth than",
+    "the trio's, even though the pooled-sigma procedure assigns every contrast the same SE.",
+    "Do not read a larger KDA_GCONV or GDN2 p-value as weaker mechanism evidence than a trio arm's",
+    "at face value: part of the difference is that the trio removed a variance component and these",
+    "two could not.",
+    "The gate-isolating contrast KDA_GCONV - KDA_NOACT is also NOT init-paired, for the same reason."
+   ]
+  },
+
+  "plumbing_verified_on_this_branch": {
+   ".edullm/train_core6_arm.py": "PLUMBED. build_config passes init_seed=opts.init_seed into build_arm -> TransformerConfig.llama_like -> cls(...), reaching the torch.Generator that actually draws weights (model.py:298). Default 12536. The comment block at train_core6_arm.py:623-640 records that the version WITHOUT this pass-through made --init-seed 0/1/2 produce BIT-IDENTICAL weights while summarise() printed the distinct number it was given.",
+   ".edullm/train_on_corpus.py": "NOT PLUMBED -- exposes --data-seed only. Every 'n seeds' on that entrypoint is n data orderings of ONE initialisation. Run 2 must not use it.",
+   "guard": "train_core6_arm.py refuses the run when config.init_seed != config.model.init_seed. Both are set from --init-seed, so they can only diverge via a dotlist override. NEVER override either field; pass --init-seed.",
+   "regression_tests": "test_init_seed_reaches_the_config, test_two_init_seeds_give_different_weights, test_the_same_init_seed_gives_identical_weights (core6_arms_test.py)."
+  },
+
+  "weight_draw_defaults_never_used": "No integer in this file is 0 or 12536, the two defaults on this entrypoint. A cell that silently fell back to a default is therefore visible in the summary JSON rather than indistinguishable from a real cell."
+ },
+
+ "seed_choice_rationale": {
+  "construction": "data_seed(r) = 200000 + 10007*r ; init_seed(i, r) = 100000 + 3001*i + 10007*r, with i = run 1's arm_index (trio uses i=0, KDA_GCONV i=2, GDN2 i=3). 10007 and 3001 are prime. RECORDED AS LITERALS ABOVE; THE FORMULA IS DOCUMENTATION, NOT THE SOURCE OF TRUTH.",
+  "replicate_index_is_1_based": true,
+  "not_small_sequential_integers": [
+   "0 and 12536 are the entrypoint's defaults; using either makes 'the flag never reached the weight draw' indistinguishable from 'it did'.",
+   "Data order keys on (seed + epoch), so seeds 0,1,2 let a cell at epoch 1 alias a different cell at epoch 0. The minimum gap between data seeds here is 10007, so aliasing is unreachable at any epoch count this study can hit.",
+   "Distinct decimal digits make a transposed seed in a submitted command visible by eye against the table."
+  ]
+ },
+
+ "collision_audit": {
+  "$comment": "Computed over the full 25-cell table with integer arithmetic, not asserted.",
+  "cells": 25,
+  "distinct_data_seeds": 5,
+  "distinct_init_integers": 15,
+  "why_15_and_not_25": "BY DESIGN: the paired trio shares one init seed per replicate, so 3 arms x 5 replicates draw on 5 integers rather than 15. 5 (trio) + 5 (KDA_GCONV) + 5 (GDN2) = 15.",
+  "distinct_integers_overall": 20,
+  "data_init_overlap": 0,
+  "cells_using_a_forbidden_default": 0,
+  "distinct_arm_data_seed_pairs": "25 of 25",
+  "distinct_arm_init_seed_pairs": "25 of 25",
+  "trio_shares_exactly_one_init_per_replicate": "verified for all 5 replicates",
+  "both_exception_arms_differ_from_the_trio_in_every_replicate": true,
+  "min_gap_between_data_seeds": 10007
+ },
+
+ "pairing_preconditions": {
+  "$comment": [
+   "CARRIED FORWARD FROM RUN 1, WHICH VERIFIED THEM ON THIS BRANCH. Data order is a function of",
+   "(data_seed + epoch, len(dataset)) ONLY and does not depend on the model:",
+   "_build_global_indices does get_rng(self.seed + self.epoch).shuffle(arange(len(dataset)))",
+   "(data_loader.py ~674) and get_rng is np.random.Generator(PCG64(seed)) (data/utils.py:585).",
+   "So the same --data-seed gives every arm a byte-identical token stream IF AND ONLY IF all of the",
+   "following also match. Any one differing silently breaks the pairing while every cell still",
+   "trains and prints a plausible number."
+  ],
+  "must_match_across_every_cell_being_paired": {
+   "sequence_length": "4096 -- identical (enters total_size via instances_per_batch = global_batch_size // sequence_length)",
+   "global_batch_size": "524288 -- identical (same reason)",
+   "dp_world_size": "8 -- identical (indices[:, dp_rank::dp_world_size], data_loader.py:707)",
+   "dataset_release": "identical -- len(dataset) is in the shuffle domain AND in the indices-cache filename",
+   "steps": "3721 -- identical",
+   "chunk_size_and_shuffle": "left at config defaults; do not override per arm"
+  },
+  "THE_STEP_COUNT_TRAP": [
+   "RUN 1's FROZEN PLAN SAID 1,907 STEPS AND THE CELLS RAN 1,144. The budget was cut after",
+   "pre-registration and the cut was legitimate and documented -- but it is the exact failure mode",
+   "this precondition names, and it landed on a real experiment.",
+   "RUN 2's 3,721 MUST BE IDENTICAL ACROSS ALL 25 CELLS OR THE PAIRING IS VOID. A cell that runs a",
+   "shorter budget consumes a PREFIX of the stream, not the same stream.",
+   "3721 is therefore a FROZEN quantity, not a cost dial. If the budget must move, it moves for all",
+   "25 cells together and this file is amended before submission -- never trimmed per cell to fit an",
+   "approval band."
+  ],
+  "consequence": "A cell that changes ANY of these is not paired with the others and must be analysed as an independent sample."
+ },
+
+ "cross_run_comparability": {
+  "$comment": [
+   "SAID PLAINLY BECAUSE THE SEED REUSE INVITES THE WRONG READING: run 2 does NOT deliver a clean",
+   "cross-run CE contrast against run 1, and no analysis may present one."
+  ],
+  "run_1_steps": 1144,
+  "run_2_steps": 3721,
+  "cells_sharing_a_run_1_DATA_seed": 15,
+  "cells_with_a_run_1_counterpart_ARM": 12,
+  "cells_bit_reproducible_against_run_1_on_BOTH_seeds": 9,
+  "which_9": "KDA_BASE, KDA_GCONV and GDN2 at replicates 1-3.",
+  "KDA_NOACT_is_the_deliberate_break": "Run 1 gave KDA_NOACT its own init seeds (113008/123015/133022). Run 2 pairs it to the trio's (110007/120014/130021). The two cannot both hold, and pairing WITHIN run 2 is worth more than reproducing run 1's isolated arm, so run 2's KDA_NOACT is data-paired to run 1 but NOT init-paired.",
+  "VALID_cross_run_reads": [
+   "first_loss -- a step-0 quantity, a function of (init seed, first batch, vocabulary) only. It is INDEPENDENT of the step budget, so it is comparable for all 9 both-seeds-identical cells and is the primary image/kernel drift receipt.",
+   "throughput (steady-state) and peak/reserved memory -- budget-independent, so comparable for all 12 counterpart cells.",
+   "parameters, world_size, vocabulary-derived shape -- structural, comparable everywhere."
+  ],
+  "INVALID_cross_run_reads": [
+   "val_ce, AT ALL, FOR ANY CELL. Run 2 trains 3.25x longer, so every run-2 CE is lower for a reason that has nothing to do with the mixer. No run1-vs-run2 CE difference may be reported as an arm effect, a drift measurement, or a replication.",
+   "last_loss -- both budget-dependent and not an endpoint (see endpoint_keys)."
+  ],
+  "what_this_costs": "The cross-run drift check is REAL but NARROWER than run 1's seeds.json anticipated: it covers the image, the kernels, the platform's speed and the initialisation, and it does NOT cover CE. Run 2's KDA_BASE is the WITHIN-run control for every run-2 contrast, which is why every contrast that moves a decision is internal to run 2."
+ },
+
+ "locked_run_parameters": {
+  "$comment": "Locked 2026-08-08. These are pairing preconditions, not just cost inputs.",
+  "arms": 5,
+  "replicates_per_arm": 5,
+  "cells": 25,
+  "pooled_within_arm_df": 20,
+  "dunnett_k": 4,
+  "control": "KDA_BASE",
+  "steps": 3721,
+  "global_batch_size": 524288,
+  "sequence_length": 4096,
+  "tokens_per_cell": 1950875648,
+  "tokens_arithmetic": "3721 * 524288 = 1,950,875,648 exactly.",
+  "parameters": 390125472,
+  "parameters_note": "Measured from run 1's cell JSONs for the KDA_BASE-shaped arms (L0_PARAM_TARGET 390,135,552 + K2_L0_DELTA -10,080). The paired trio all share it exactly; KDA_GCONV is +12,288 and GDN2 +32,768 against it.",
+  "tokens_per_param": 5.0006,
+  "steps_derivation": "TPP 5 target = 5 * 390,125,472 = 1,950,627,360 tokens -> / 524,288 = 3,720.53 -> ceil = 3721 steps, giving TPP 5.0006.",
+  "A_CORRECTION_TO_THE_BRIEF": "The design brief states 1,952,153,600 tokens/cell. That figure is not reachable at this batch size: 1,952,153,600 / 524,288 = 3,723.4375, not an integer, and it exceeds 3721 steps by 1,277,952 tokens (2.44 steps). The frozen quantity is STEPS = 3721 (it is what the flag takes and what the pairing requires); tokens are derived from it. 1,950,875,648 is the correct token count.",
+  "warmup_steps": 372,
+  "warmup_note": "10% of 3721, matching run 1's ratio (114/1144).",
+  "learning_rate": 0.0014,
+  "learning_rate_note": "IDENTICAL to run 1. Same batch size and same model shape, so holding LR fixed keeps the arm contrast comparable. The schedule is CosWithWarmup, set in code, decaying to zero over the NEW step count -- which is exactly why last_loss is not an endpoint.",
+  "rank_microbatch_size": 8192,
+  "save_interval": 1861,
+  "save_interval_note": "One mid-run permanent checkpoint at step 1861 as insurance (attempts=1 means there is no automatic retry), plus a guaranteed final checkpoint: CheckpointerCallback.post_train saves unconditionally when step > the last checkpointed step (checkpointer.py:320-324). A final checkpoint must exist because later re-scoring on new slice masks reads it.",
+  "compute_profile": "gpu-8xa100",
+  "attempts": 1,
+  "attempts_note": "PINNED. The olmo-core-train profile defaults to 2, which doubles the declared cost and can flip the approval gate.",
+  "dp_world_size": 8,
+  "declared_hours_per_cell": 2.2,
+  "worst_case_ceiling_usd": 1191.67,
+  "cost_basis": "Rate $21.6667/node-hour, derived from run 1's own declared ceiling ($1,014 / (18 cells x 2.6 h)). 25 x 2.2 x 21.6667 = $1,191.67. COST IS A DECLARED CEILING, NOT AN ESTIMATE: it is rate x nodes x DECLARED hours x DECLARED attempts x cells.",
+  "projected_runtime_per_cell_hours": 1.43,
+  "projected_runtime_basis": "Run 1's MEASURED steady-state throughput per arm plus its measured startup overhead, extrapolated to 3721 steps. Slowest run-2 arm is KDA_GCONV at ~1.43 h; the other four land at ~1.40 h. Declaring 2.2 h leaves ~1.5x headroom for queue and platform variance.",
+  "total_node_hours": 35.2,
+  "makespan_hours_at_8_way": 4.4,
+  "makespan_note": "35.2 node-hours / 8 concurrent = ~4.4 h of COMPUTE, plus queue wait (this shape supplies after_a_wait; run 1 recorded a 61-min median and a 12.6-h worst case). The brief's ~8.7 h figure is consistent with compute plus a typical wait; it is not reproducible from throughput alone. Batch array jobs refill slots as they free, so makespan is sum-of-cells / concurrency, not serial waves.",
+  "dropped_arms_speed_note": "Dropping KDA_R1 (~1.70 h/cell projected) and KDA_R2 (~1.88 h/cell) also removes run 1's long pole: every run-2 arm now finishes within 2% of every other."
+ },
+
+ "cell_ordering": {
+  "$comment": [
+   "ARM-MAJOR, AND IT IS LOAD-BEARING RATHER THAN COSMETIC. A truncated arm-major fan-out loses",
+   "WHOLE ARMS and leaves the remainder at the full n=5; a seed-major one loses one seed from every",
+   "arm and leaves nothing at n=5. It saved run 1 twice."
+  ],
+  "layout": "idx 0-4 KDA_BASE | 5-9 KDA_NOACT | 10-14 KDA_NEGEIG | 15-19 KDA_GCONV | 20-24 GDN2",
+  "within_an_arm": "replicates 1..5 in order, so index % 5 is the 0-based replicate.",
+  "control_is_first": "KDA_BASE occupies indices 0-4 so that the Dunnett reference is the LAST thing a truncation would remove.",
+  "authority": "The three literal 25-element arrays in .edullm/run-bakeoff2.yaml are transcribed from this file and are cross-checked against it programmatically before submission."
+ },
+
+ "endpoint_keys": {
+  "$comment": "Exact keys in the rank-0 JSON that .edullm/train_core6_arm.py summarise() prints. This is the only channel the platform reads results back through.",
+  "primary": "val_ce",
+  "primary_denominators_that_must_match": ["val_tokens", "val_tokens_present", "val_tokens_declared", "val_shards"],
+  "denominator_note": "All 18 of run 1's cells reported an identical denominator tuple (974917632 / 975077376 / 975077376 / 39 shards). Any run-2 cell that differs has not evaluated the same held-out set and its CE is not differenceable against the others.",
+  "co_primary_throughput": "throughput_tok_s_steady (total) and throughput_tok_s_steady_per_device. Steady-state: the clock excludes process start, dataset open, FSDP wrap and the first-step compile.",
+  "co_primary_throughput_excluded": "throughput_tok_s_whole_run and tps_naive_wall_clock are NOT endpoints -- they charge every fixed cost against the hardware and penalise bigger shapes hardest.",
+  "co_primary_memory": "peak_memory_gib AND peak_memory_reserved_gib, both gated on peak_memory_source == 'per_step_running_max'.",
+  "memory_source_gate": "peak_memory_source is the field that says whether the number is a real peak. A value of 'final_step_only' is A LOWER BOUND WEARING THE NAME OF A PEAK, because the GPU monitor resets peak stats every step; 'unavailable' is a null. Either one disqualifies that cell's memory reading, and the count is reported.",
+  "secondary_recall_slices": "sliced_eval -- null unless --slice-mask-uri is set. Depends on P2's mask builder and P3's FSDP rank gate.",
+  "secondary_decode": "the decode-probe fields (decode latency and recurrent-state bytes). The probe is ON BY DEFAULT on this entrypoint; --no-decode-probe would turn it off and is deliberately NOT passed.",
+  "init_receipt": "first_loss. Run 1 observed 11.7124 on every cell against ln(100352) = 11.5164 -- a +0.196 nat offset that is EXPECTED, not a fault: random initial logits have nonzero variance, so CE at step 0 sits above uniform by Jensen. Run 2's receipt is therefore calibrated to the OBSERVED 11.7124, not to ln(vocab). See the pre-registration section 4.",
+  "must_not_be_used_as_an_endpoint": "last_loss (final TRAIN loss). A decay-to-zero LR schedule ends at a mechanically lower train loss at equal held-out quality and can INVERT the comparison. Run 2 changes the step count, which changes the schedule's length, which changes last_loss for reasons wholly unrelated to the mixer.",
+  "provenance_to_record_on_every_cell": ["run_id", "arm", "data_seed", "init_seed", "parameters", "steps", "tokens_trained", "world_size", "gpu", "torch", "cuda", "seconds", "wandb_url", "checkpoint_uri", "ECR image digest"]
+ },
+
+ "preconditions": {
+  "$comment": "THINGS THAT MUST BE TRUE BEFORE SUBMISSION. Each names who owns it and what run 2 does if it fails.",
+  "inventory_test": {
+   "owner": "agent P1",
+   "requirement": "A test asserting that KDA_BASE, KDA_NOACT and KDA_NEGEIG have the SAME TENSOR INVENTORY -- identical parameter NAMES and SHAPES, not merely an identical parameter COUNT.",
+   "why_count_is_not_enough": "KDA_R1 sits at ARM_L0_DELTA == K2_L0_DELTA, exactly the same declared delta as KDA_BASE, while being a DIFFERENT config class (KimiDeltaHouseholderConfig) with w_b of a different width. An in-tree arm therefore already proves that equal parameter count does NOT imply equal inventory, and a count-only check would pass an arm whose RNG stream diverges.",
+   "status_at_freeze": "core6_arms.py:155 declares ARM_L0_DELTA['KDA_NEGEIG'] == K2_L0_DELTA and test_every_arm_lands_on_its_declared_delta covers the COUNT. The NAME-AND-SHAPE test was not yet present when this file was frozen.",
+   "IF_IT_FAILS": "The paired trio collapses. Fall back to run 1's rule -- every arm gets its own init seeds, from the construction formula at its own arm_index -- and delete every pairing claim from the analysis. THE 25-CELL STRUCTURE, THE STEP COUNT, THE DATA SEEDS AND THE MDE ARE UNAFFECTED, because the primary analysis is unblocked one-way and the MDE gain comes from dropping the Householder arms and k falling 5->4, not from init pairing."
+  },
+  "negeig_kernel_correctness": {
+   "owner": "agent P1",
+   "requirement": "The fast chunked kernel must be numerically correct at beta > 1, and allow_neg_eigval must demonstrably reach the kernel rather than being silently renormalised away.",
+   "status_at_freeze": "src/test/nn/attention/kda_negeig_test.py exists and gates exactly this.",
+   "IF_IT_FAILS": "KDA_NEGEIG comes out and run 2 is a 4-arm, 20-cell study at k=3. Re-derive the MDE at k=3, df=16 before submitting."
+  },
+  "slice_masks": {
+   "owner": "agents P2 (mask builder) and P3 (FSDP rank gate)",
+   "requirement": "--slice-mask-uri must point at a prefix holding slice_manifest.json plus the frozen *.mask.u8 files.",
+   "status_at_freeze": "Not available. The flag IS declared in argparse and defaults from EDULLM_SLICE_MASK_URI, so supplying it later needs no change to the entrypoint's flag vocabulary.",
+   "IF_IT_FAILS": "sliced_eval stays null and the recall-by-gap-band endpoint is simply absent. It is SECONDARY and moves no gate, so run 2 still submits."
+  },
+  "image_build": {
+   "requirement": "The image is per-COMMIT, not per-branch. Any commit after the build -- including to this file or the YAML -- makes the branch unsubmittable, and a build re-run replays the OLD sha.",
+   "order": "commit -> build -> submit, never interleaved.",
+   "note": "The agent/** branch namespace does not trigger a build; dispatch it explicitly."
+  }
+ }
+}

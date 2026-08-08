@@ -12,7 +12,7 @@ the model would have; ``test_config_num_params_matches_built_model`` pins the tw
 for every arm that can actually be built here.
 """
 
-from dataclasses import replace
+from dataclasses import fields, replace
 from typing import Dict
 
 import pytest
@@ -32,6 +32,7 @@ from olmo_core.nn.transformer.core6_arms import (
     KDA_LAYERS,
     KDA_SLOT_SWIGLU_WIDTH,
     L0_PARAM_TARGET,
+    MIXERS,
     N_HEADS,
     N_LAYERS,
     SWA_WINDOW,
@@ -44,6 +45,52 @@ from olmo_core.nn.transformer.core6_arms import (
     mixer_params,
     solve_widths,
 )
+from olmo_core.testing.utils import requires_fla
+
+# --- run 2's arm set ------------------------------------------------------------------------
+
+#: The five arms run 2 actually launches. Named as a SET rather than counted: the guard that used
+#: ``len(bakeoff) == 6`` was right for run 1 and wrong the moment ``KDA_NEGEIG`` was declared, which
+#: is what a cardinality assertion buys you -- it fires on correct additions and stays silent about
+#: which arms it covered.
+RUN2_BAKEOFF_ARMS = {"KDA_BASE", "KDA_NOACT", "KDA_NEGEIG", "KDA_GCONV", "GDN2"}
+
+#: The three arms run 2 pairs on the INIT SEED, in declaration order.
+#:
+#: Pairing is only valid if a shared ``torch.Generator`` stream cannot diverge between them, which
+#: requires that they draw the same tensors in the same order at the same shapes. Run 1 could not
+#: pair anything: ``KDA_R2`` widens ``w_k``/``w_v``/``w_b`` by ``R``, and ``GDN2`` adds ``w_w``, so
+#: both consume a different amount of randomness and every parameter after the divergence differs
+#: for a reason that has nothing to do with the operator. ``KDA_GCONV`` is excluded for a different
+#: reason: it is depthwise, so its gate draws nothing and its stream *does* match -- but it adds
+#: ``pre_scale``/``post_scale`` tensors, so its INVENTORY differs and it fails the identity below
+#: by name, not by stream.
+SEED_PAIRABLE_ARMS = ("KDA_BASE", "KDA_NOACT", "KDA_NEGEIG")
+
+#: Fields of :class:`KimiDeltaAttentionConfig` that :data:`SEED_PAIRABLE_ARMS` may differ in,
+#: each with the source evidence that it cannot move a parameter's name, shape, or draw order.
+#:
+#: WRITTEN DOWN RATHER THAN INFERRED, and the test that uses it takes a SET DIFFERENCE against
+#: ``dataclasses.fields`` rather than checking these two. That direction matters: a field added to
+#: the config later, or an arm that starts differing in a third field, lands in the diff and fails
+#: loudly. A test that only checked "these two differ" would pass while a widened ``expand_v``
+#: quietly broke the pairing.
+SHAPE_FREE_KDA_FIELDS = {
+    "allow_neg_eigval": (
+        "recurrent.py:708 assigns it to a plain bool attribute and recurrent.py:875 is its only "
+        "reader -- inside 'forward', where it does 'beta = beta * 2.0'. It is passed to no "
+        "submodule constructor, guards no branch of '__init__', and allocates nothing. It also "
+        "does not reach the kernel: 'dispatch_chunk_kda' (:918) receives the already-doubled "
+        "post-sigmoid tensor and has no such argument."
+    ),
+    "conv_activation": (
+        "forwarded to CausalConv1d as 'activation=' (recurrent.py:802), which stores it on "
+        "'self.activation' (convolution.py:50) and hands it to 'dispatch_causal_conv1d' at call "
+        "time. Every parameter of that module is allocated by the 'nn.Conv1d.__init__' above it "
+        "from hidden_size/kernel_size/bias alone. An activation is not a parameter."
+    ),
+}
+
 
 # --- the frozen ledger ----------------------------------------------------------------------
 
@@ -221,6 +268,309 @@ def test_the_gate_isolating_contrast_exists_and_is_parameter_free():
     assert ARM_L0_DELTA["KDA_NOACT"] == ARM_L0_DELTA["KDA_BASE"]
 
 
+# --- KDA_NEGEIG: the reflection regime on the shipped kernel ----------------------------------
+#
+# The arm is one keyword argument, so every test below is about proving that argument is REAL:
+# that it is set, that the arm it is set against does not have it, that setting it costs no
+# parameters, and that it leaves the tensor inventory untouched so run 2 can pair init seeds.
+#
+# FAILURE MUTATIONS ARE NAMED IN EACH DOCSTRING. None of these could be executed on the laptop
+# that wrote them (importing this module imports torch), so the mutation is written down instead
+# of run -- a test whose failure mode nobody can name is not evidence.
+
+
+def test_negeig_arm_widens_beta_and_the_reference_does_not():
+    """
+    The contrast has to be REAL, not merely labelled: ``KDA_NEGEIG`` sets the flag and
+    ``KDA_BASE`` does not.
+
+    ``allow_neg_eigval`` puts ``beta`` in (0, 2) -- ``recurrent.py:874-876`` does
+    ``beta = self.w_b(x).sigmoid()`` then ``beta = beta * 2.0`` -- so ``(I - beta k k^T)`` can be a
+    true reflection instead of a contraction. The class default is ``False``
+    (``recurrent.py:687``, ``:1088``), which means an arm built without the argument is a second
+    copy of ``KDA_BASE`` wearing a treatment name: it trains stably, costs the same, produces a
+    guaranteed null, and nothing downstream looks wrong. That is the single failure this test
+    exists for, and it is why the reference is asserted to be ``False`` in the same breath -- a
+    test that only checked ``NEGEIG is True`` would still pass if someone "fixed" the contrast by
+    flipping the default and turning it on for every arm.
+
+    FAILURE MUTATION: in ``core6_arms.py``, change ``MIXERS["kda_negeig"]`` to
+    ``lambda: _kda(allow_neg_eigval=False)`` (or drop the argument) -- the first assertion fails.
+    Separately, changing ``KimiDeltaAttentionConfig.allow_neg_eigval``'s default to ``True`` fails
+    the second.
+    """
+    assert mixer_config("KDA_NEGEIG").allow_neg_eigval is True
+    assert mixer_config("KDA_BASE").allow_neg_eigval is False
+    assert mixer_config("KDA_NOACT").allow_neg_eigval is False
+
+    # The class default, so that "the arm passes it explicitly" is a claim about the arm rather
+    # than about whatever the class happens to ship. If this ever flips, KDA_BASE silently becomes
+    # a wide-beta arm and this whole contrast evaporates.
+    assert KimiDeltaAttentionConfig(n_heads=N_HEADS, head_dim=HEAD_DIM).allow_neg_eigval is False
+
+
+def test_negeig_is_parameter_identical_to_the_reference():
+    """
+    ``KDA_NEGEIG`` must land on ``K2_L0_DELTA`` exactly, the same number as ``KDA_BASE``.
+
+    ASSERTED WITH ``==``, NEVER A TOLERANCE BAND. The declared band is +/-0.05% of the anchor,
+    which is 195,068 parameters -- wide enough to swallow this arm's entire mixer twice over -- and
+    the run-1 audit found 5 of 6 mutations to the width solver passing a band. An exact per-arm
+    constant is the only form of this assertion that can fail.
+
+    The equality is structural rather than lucky, and that is checked directly by
+    :func:`test_the_negeig_flag_cannot_move_a_tensor` below: ``allow_neg_eigval`` is a plain bool
+    that ``num_params`` never reads, so no shape can depend on it.
+
+    FAILURE MUTATION: change ``ARM_L0_DELTA["KDA_NEGEIG"]`` from ``K2_L0_DELTA`` to any other
+    integer -- ``test_every_arm_lands_on_its_declared_delta`` then fails for this arm, and the
+    ``K2_L0_DELTA`` identity here fails too. Conversely, adding a parameter to the arm (e.g.
+    ``_kda(allow_neg_eigval=True, gated_conv=True)``) fails the built-config delta at +2,208.
+    """
+    assert ARM_L0_DELTA["KDA_NEGEIG"] == ARM_L0_DELTA["KDA_BASE"] == K2_L0_DELTA == -10_080
+    assert mixer_params("KDA_NEGEIG") == mixer_params("KDA_BASE") == 4_487_248
+
+    # And on the BUILT config, not just the declaration -- the ledger test parametrizes over ARMS
+    # so this is redundant by construction, which is the point: if the two ever disagree the
+    # message says which.
+    delta = build_arm("KDA_NEGEIG").num_params - L0_PARAM_TARGET
+    assert delta == K2_L0_DELTA, f"KDA_NEGEIG lands at {delta:+,}, declared {K2_L0_DELTA:+,}"
+
+
+def test_the_negeig_flag_cannot_move_a_tensor():
+    """
+    Why the parameter identity above is structural: ``num_params`` cannot see the flag.
+
+    ``KimiDeltaAttentionConfig.num_params`` (``recurrent.py:1209-1260``) derives every term from
+    ``n_heads``, ``head_dim``, ``expand_v``, ``conv_size``, ``conv_bias`` and the gate options.
+    ``allow_neg_eigval`` appears nowhere in it, and in the layer it is assigned to a plain bool at
+    ``recurrent.py:708`` and read only at ``:875``. So a config that differs in that field alone
+    cannot differ in parameter count for ANY geometry, not just the frozen one.
+
+    Asserted over several geometries rather than at ``d_model=1024`` alone, because the arm's claim
+    is about the field being shape-free, and a single width could agree by coincidence.
+
+    FAILURE MUTATION: add ``if self.allow_neg_eigval: params += 1`` to
+    ``KimiDeltaAttentionConfig.num_params`` -- every geometry below fails. This is a real hazard
+    shape, not a contrived one: ``gated_conv`` is a bool in the same class that DOES add
+    parameters, via ``gate_params``, so "bool field" is not on its own a guarantee.
+    """
+    for d_model, n_heads, head_dim in ((1024, 16, 64), (512, 8, 64), (2048, 16, 128)):
+        strict = KimiDeltaAttentionConfig(n_heads=n_heads, head_dim=head_dim)
+        wide = replace(strict, allow_neg_eigval=True)
+        assert strict.num_params(d_model) == wide.num_params(d_model), (d_model, n_heads, head_dim)
+
+
+def test_negeig_obtains_the_mechanism_without_the_householder_kernel():
+    """
+    The arm's whole premise: this is ``KDA_R1``'s mechanism on ``KimiDeltaAttention``'s kernel.
+
+    Both classes implement ``allow_neg_eigval`` identically and in eager PyTorch --
+    ``recurrent.py:874-876`` and ``:1627-1629`` are the same two lines -- so the reflection regime
+    is not a property of either kernel. What ``KDA_R1`` additionally carries is
+    :class:`KimiDeltaHouseholder`, whose own docstring (``kda_householder.py:64-70``) describes a
+    sequential fused-recurrent kernel "expected to be materially slower than fla's chunked
+    kernels" because "the goal of this milestone is mechanism validation, not throughput". Run 1
+    charged that kernel's 22.1% throughput penalty and +2.539 GiB reserved to the mechanism; this
+    arm separates them.
+
+    What can be asserted on a laptop is the CLASS SPLIT: ``KDA_NEGEIG`` must run the shipped
+    ``KimiDeltaAttentionConfig`` (which dispatches to fla's chunked ``chunk_kda``), and must not
+    have acquired ``num_householder``. The throughput and memory parity that the "free" claim rests
+    on is a GPU measurement and is NOT tested here -- see this module's report.
+
+    FAILURE MUTATION: point ``MIXERS["kda_negeig"]`` at ``_kda_householder(num_householder=1)``.
+    The arm would still have the right beta regime and the right parameter count -- both other
+    tests here would pass -- and it would be paying the slow kernel again, which is the exact
+    mistake run 1 made. Only this test catches it.
+    """
+    cfg = mixer_config("KDA_NEGEIG")
+    assert type(cfg) is KimiDeltaAttentionConfig, type(cfg).__name__
+    assert not hasattr(cfg, "num_householder")
+    # Same class as the reference, so "same kernel" is not an inference from the arm's name.
+    assert type(cfg) is type(mixer_config("KDA_BASE"))
+
+
+def test_negeig_differs_from_the_reference_in_exactly_one_field():
+    """
+    One field, and it is a field that provably cannot move a tensor.
+
+    This is what makes ``KDA_NEGEIG - KDA_BASE`` attributable. The comparison is a full field-by-
+    field diff of the two configs, so a second difference introduced later -- a wider ``expand_v``,
+    a different ``conv_size`` -- shows up here rather than being discovered as an unexplained
+    parameter delta. ``KDA_GCONV - KDA_BASE`` is the cautionary case already documented in this
+    file: it moves three things at once and no difference can be attributed to any of them.
+
+    FAILURE MUTATION: change the factory to
+    ``_kda(allow_neg_eigval=True, conv_size=3)`` -- ``conv_size`` lands in the diff, is not in
+    ``SHAPE_FREE_KDA_FIELDS``, and this fails (with the parameter ledger failing too, which is the
+    point: two independent guards see it).
+    """
+    base, negeig = mixer_config("KDA_BASE"), mixer_config("KDA_NEGEIG")
+    diff = {f.name for f in fields(base) if getattr(base, f.name) != getattr(negeig, f.name)}
+    assert diff == {"allow_neg_eigval"}, f"KDA_NEGEIG vs KDA_BASE differ in {sorted(diff)}"
+
+
+def test_the_seed_pairable_arms_differ_only_in_shape_free_fields():
+    """
+    The three seed-paired arms must differ ONLY in fields documented not to allocate.
+
+    A SET DIFFERENCE against ``dataclasses.fields``, not a check that the two known fields differ.
+    The direction is deliberate: a field added to :class:`KimiDeltaAttentionConfig` later, or an arm
+    that starts differing in a third field, lands in ``undocumented`` and fails. The other
+    direction -- asserting the two known fields are present in the diff -- would pass while a
+    widened ``expand_v`` quietly broke the pairing this run depends on.
+
+    Each entry in :data:`SHAPE_FREE_KDA_FIELDS` carries its source evidence, so a future reader can
+    check the claim rather than trust the list.
+
+    FAILURE MUTATION: change any of the three factories to differ in a fourth field, e.g.
+    ``MIXERS["kda_noact"] = lambda: _kda(conv_activation=None, expand_v=2.0)`` -- ``expand_v``
+    is undocumented here and this fails. Deleting an entry from ``SHAPE_FREE_KDA_FIELDS`` also
+    fails, which is what stops the allow-list being widened silently.
+    """
+    configs = {name: mixer_config(name) for name in SEED_PAIRABLE_ARMS}
+    for cfg in configs.values():
+        assert type(cfg) is KimiDeltaAttentionConfig, type(cfg).__name__
+
+    reference = configs["KDA_BASE"]
+    differing: set = set()
+    for cfg in configs.values():
+        differing |= {
+            f.name for f in fields(reference) if getattr(reference, f.name) != getattr(cfg, f.name)
+        }
+
+    undocumented = differing - set(SHAPE_FREE_KDA_FIELDS)
+    assert not undocumented, (
+        f"{sorted(SEED_PAIRABLE_ARMS)} differ in {sorted(undocumented)}, which is not documented "
+        f"as shape-free; seed pairing across them is only valid while every difference is. "
+        f"Documented: {sorted(SHAPE_FREE_KDA_FIELDS)}"
+    )
+    # The three must not be the same config either, or the inventory test below is vacuous.
+    assert differing, "the seed-pairable arms are all identical, so nothing is being contrasted"
+
+
+def test_the_seed_pairable_arms_are_mutually_distinguishable():
+    """
+    Three arms, three distinct configs -- so the inventory test cannot pass by them being one arm.
+
+    The inventory identity below is an assertion that three things AGREE. That is exactly the shape
+    that passes vacuously when the three are secretly the same object, and ``MIXERS`` makes it easy:
+    every entry is a zero-argument callable returning *some* valid config, so a mis-keyed lambda
+    yields two arms that are the same model with different names and a guaranteed null. Checked
+    PAIRWISE rather than by ``len(set(...))``, so the message names the colliding pair.
+
+    FAILURE MUTATION: set ``MIXERS["kda_negeig"] = lambda: _kda()`` -- identical to ``kda`` -- and
+    the ``KDA_BASE``/``KDA_NEGEIG`` pair collides. Note the parameter ledger would NOT catch that
+    mutation: both arms land on -10,080 either way.
+    """
+    for i, a in enumerate(SEED_PAIRABLE_ARMS):
+        for b in SEED_PAIRABLE_ARMS[i + 1 :]:
+            assert mixer_config(a) != mixer_config(b), f"{a} and {b} are the same config"
+            assert ARMS[a].mixer != ARMS[b].mixer, f"{a} and {b} name the same MIXERS key"
+
+    # Distinct MIXERS keys, distinct arms: a key reused across two arms would make them one cell.
+    keys = [ARMS[name].mixer for name in SEED_PAIRABLE_ARMS]
+    assert len(set(keys)) == len(keys)
+    assert set(keys) <= set(MIXERS)
+
+
+def test_run2s_arm_set_is_declared():
+    """
+    Every arm run 2 launches exists, and the two retired Householder arms are still declarable.
+
+    The retired arms are NOT asserted absent. ``KDA_R1``/``KDA_R2`` carry run-1 measurements that
+    the analysis scripts read back through ``ARM_L0_DELTA``, and dropping them from the registry
+    would silently orphan those cells; run 2 not launching them is a decision about the launch
+    list, not about the ledger.
+
+    FAILURE MUTATION: remove ``KDA_NEGEIG`` from ``ARMS`` -- this fails, and so does
+    ``test_every_arm_has_a_declared_delta`` in the opposite direction (declared delta with no arm).
+    """
+    missing = RUN2_BAKEOFF_ARMS - set(ARMS)
+    assert not missing, f"run 2 arms not declared: {sorted(missing)}"
+    for name in RUN2_BAKEOFF_ARMS:
+        assert ARMS[name].kda_layers == KDA_LAYERS, name
+
+
+@requires_fla
+def test_the_seed_pairable_arms_have_identical_tensor_inventories():
+    """
+    THE TEST THAT UNLOCKS RUN 2'S PAIRING, and it needs a GPU. That is a finding, not an omission.
+
+    ``KDA_BASE``, ``KDA_NOACT`` and ``KDA_NEGEIG`` must have the same ``{name: shape}`` mapping over
+    every parameter. That -- not the parameter COUNT -- is what makes init-seed pairing valid:
+    ``Transformer.init_weights`` builds one seeded ``torch.Generator`` and walks the modules in
+    order, so two models draw the same values only if they request the same shapes in the same
+    order. Two arms can agree on a total and still diverge (one tensor wider, another narrower), at
+    which point every parameter after the divergence differs for a reason that has nothing to do
+    with the operator and does not show up in any loss curve. Run 1 could pair nothing: ``KDA_R2``
+    widens ``w_k``/``w_v``/``w_b`` by ``R`` and ``GDN2`` adds ``w_w``.
+
+    THE FULL MAPPING IS COMPARED, NOT A COUNT. ``len(dict)`` equality is satisfied by any
+    permutation of names or shapes, which is precisely the failure being excluded.
+
+    **THIS TEST CANNOT BE WRITTEN WITHOUT BUILDING A MODEL, and that is a finding rather than an
+    omission.** Parameter NAMES and SHAPES exist only on a built module: ``num_params`` is config
+    algebra returning a single integer, and no config method in this tree exposes an inventory. And
+    :class:`KimiDeltaAttention`'s constructor opens with ``assert has_fla()``
+    (``recurrent.py:700``), so it cannot be constructed on a host without ``fla`` on ANY device --
+    ``meta`` included. Hence ``@requires_fla``, which also carries ``pytest.mark.gpu``.
+
+    Allocation is avoided with ``init_device="meta"`` (the same trick ``recurrent_test.py`` uses),
+    so on the GPU host this costs no memory -- ``meta`` tensors carry real names and shapes and no
+    storage. **Run this on the GPU host before run 2 launches.** It SKIPS rather than fails without
+    ``fla``, so audit the skip count, not the pass count -- a skip here means the pairing is
+    UNVERIFIED, not fine.
+
+    What runs offline in its place, and what those checks do and do not establish:
+    :func:`test_the_seed_pairable_arms_differ_only_in_shape_free_fields` proves every differing
+    field is documented shape-free with its source, and
+    :func:`test_the_negeig_flag_cannot_move_a_tensor` proves ``num_params`` cannot read the flag at
+    any geometry. Together they make the inventory identity very likely by argument. Neither
+    measures it. This test does.
+
+    Built at the arms' real head geometry (``n_heads=16, head_dim=64``, so ``d_model=1024``), which
+    is what the inventory is a function of.
+
+    FAILURE MUTATION: change ``MIXERS["kda_negeig"]`` to
+    ``_kda(allow_neg_eigval=True, expand_v=2.0)``. ``w_v``/``w_out``/``g_proj``/``o_norm`` all
+    widen, so the mapping differs -- while ``test_negeig_arm_widens_beta_and_the_reference_does_not``
+    still passes. A second mutation that ONLY this test catches: ``_kda(allow_neg_eigval=True,
+    conv_bias=True)`` adds three bias tensors, changing the NAME SET at an unchanged head geometry
+    and an unchanged set of differing-but-documented fields.
+    """
+    inventories: Dict[str, Dict[str, tuple]] = {}
+    for name in SEED_PAIRABLE_ARMS:
+        mixer = mixer_config(name).build(  # type: ignore[union-attr]
+            d_model=N_HEADS * HEAD_DIM, layer_idx=0, n_layers=1, init_device="meta"
+        )
+        inventories[name] = {n: tuple(p.shape) for n, p in mixer.named_parameters()}
+
+    reference = inventories["KDA_BASE"]
+    # A floor on the comparison set, because "three empty dicts are equal" is the vacuous pass this
+    # shape of test invites. A KDA mixer has w_q/w_k/w_v/w_b/w_out, two f_proj, three g_proj
+    # tensors (the second carries a bias), A_log, dt_bias, three conv weights and o_norm.
+    assert len(reference) >= 16, (
+        f"only {len(reference)} parameters in a KDA mixer, so this test is asserting almost "
+        f"nothing: {sorted(reference)}"
+    )
+
+    for name, inventory in inventories.items():
+        mismatched = {
+            k: (reference[k], inventory[k])
+            for k in set(inventory) & set(reference)
+            if reference[k] != inventory[k]
+        }
+        assert inventory == reference, (
+            f"{name}'s tensor inventory differs from KDA_BASE, so a shared init RNG stream "
+            f"diverges and seed pairing across these arms is invalid. "
+            f"only-in-{name}={sorted(set(inventory) - set(reference))}, "
+            f"only-in-KDA_BASE={sorted(set(reference) - set(inventory))}, "
+            f"shape mismatches={mismatched}"
+        )
+
+
 def test_both_householder_arms_allow_negative_eigenvalues():
     """
     ``allow_neg_eigval=True`` is the mechanism, and the class default is ``False``.
@@ -253,7 +603,7 @@ def test_gdn2_pins_the_defaults_that_invert_gdn1():
 
 def test_every_bakeoff_arm_keeps_the_full_attention_budget():
     """
-    All six bake-off arms carry L0's six global-attention layers.
+    Every bake-off arm carries L0's six global-attention layers.
 
     THE REASON IS MECHANICAL, not aesthetic. ``model.py`` emits RoPE buffers only for
     ``Attention``/``FusedAttention`` blocks, so an arm with fewer attention layers loses positional
@@ -261,9 +611,20 @@ def test_every_bakeoff_arm_keeps_the_full_attention_budget():
     quality -- a large and entirely uninterpretable number. Asserted on the built config rather
     than on the declaration, so a solver or override bug that dropped an attention layer is caught
     too.
+
+    The membership guard is a SUPERSET against :data:`RUN2_BAKEOFF_ARMS` rather than the literal
+    ``len(...) == 6`` it used to be. That count was correct for run 1 and became wrong the moment
+    ``KDA_NEGEIG`` was declared, which is the failure mode of pinning a cardinality instead of the
+    content: it fires on any addition, including a correct one, and says nothing about *which* arms
+    were covered. A superset of the five named run-2 arms cannot be satisfied by an empty or
+    truncated comparison set -- which is the actual hazard here, since the loop below is a no-op
+    over an empty list and would report a pass.
     """
     bakeoff = [n for n in ARMS if ARMS[n].kda_layers and n not in ("K2", "G4R2")]
-    assert len(bakeoff) == 6, f"expected the six bake-off arms, got {sorted(bakeoff)}"
+    assert set(bakeoff) >= RUN2_BAKEOFF_ARMS, (
+        f"the run-2 bake-off arms must all be declared; missing "
+        f"{sorted(RUN2_BAKEOFF_ARMS - set(bakeoff))}"
+    )
     for name in bakeoff:
         blocks = build_arm(name).resolved_block_configs
         idx = tuple(
@@ -331,6 +692,7 @@ ARM_TOPOLOGY = {
     # loss gap would then be mostly missing RoPE rather than mixer quality.
     "KDA_BASE": (6, 2, 0, 8),
     "KDA_NOACT": (6, 2, 0, 8),
+    "KDA_NEGEIG": (6, 2, 0, 8),
     "KDA_GCONV": (6, 2, 0, 8),
     "KDA_R1": (6, 2, 0, 8),
     "KDA_R2": (6, 2, 0, 8),

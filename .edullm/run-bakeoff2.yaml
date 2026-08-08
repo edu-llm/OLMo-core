@@ -1,0 +1,162 @@
+# RUN 2 OF THE MIXER BAKE-OFF. Five mixers x five seeds = 25 cells, one command, one image.
+#
+# Point the submission at this file, or copy it over `.edullm/run.yaml`. It is kept separate so
+# `run.yaml` stays the cheap sm_80 gated-conv smoke gate, which has to be submittable at any moment
+# without editing the file the science run lives in. Run 1's `run-bakeoff.yaml` is likewise left
+# untouched as the record of what run 1 actually ran.
+#
+# WHAT THIS ANSWERS. Which linear-attention mixer should the next large production run use? Run 1
+# answered throughput and memory cleanly and left CE UNRESOLVED: pooled sigma-hat 0.020415 at df 12
+# gave an MDE of 0.0636 nats against a 0.010-0.030 literature target. Run 2 is sized to close that
+# gap, and adds the two things run 1 measured NOTHING about -- long-range recall and decode.
+#
+# THE DESIGN AND EVERY INTEGER BELOW ARE FROZEN IN TWO FILES, WHICH ARE THE AUTHORITY:
+#   docs/mixer-bakeoff/seeds-run2.json          -- the 25-cell seed table, machine-readable
+#   docs/mixer-bakeoff/PREREGISTRATION-RUN2.md  -- endpoints, decision rules, power
+#
+# WHY THE MDE IMPROVES 0.0636 -> 0.0229, AND WHICH PART IS A FREE LUNCH. Three sources: dropping
+# KDA_R1/KDA_R2 re-estimates sigma-hat 0.020415 (df 12) -> 0.01024761 (df 8), a factor of 1.99;
+# n=3 -> n=5 buys 1.29; k=5 -> k=4 lowers the Dunnett critical value 2.8905 -> 2.6510. ONLY THE
+# SECOND IS A REAL VARIANCE REDUCTION. The first is a re-estimate -- nothing was done to make the
+# surviving arms quieter, two noisy arms left the pool (KDA_R1 alone was 81.6% of run 1's pooled
+# sum of squares). It also COSTS df on sigma-hat itself, 12 -> 8, whose chi-square interval is a
+# factor-2.84 bracket: the MDE is 0.0229 if sigma-hat is right and 0.0155-0.0438 across the range
+# 8 df cannot exclude. Pre-registration section 8.1 states that as a bet rather than a promise.
+#
+# THE BUDGET IS 3,721 STEPS = 1,950,875,648 TOKENS PER CELL, AND THE STEP COUNT IS THE FROZEN
+# QUANTITY. TPP is 5.0006 at 390,125,472 parameters -- inside the bottom edge of the academic 3-20
+# cluster, where run 1 realised only 1.54. Tokens are DERIVED from steps: 3721 * 524288 exactly.
+# (The design brief's 1,952,153,600 is unreachable at this batch size -- it is 3,723.4375 steps.)
+#
+# ***THE STEP COUNT IS A PAIRING PRECONDITION, NOT A COST DIAL.*** Data order is a function of
+# (data_seed + epoch, len(dataset)) only, so the same --data-seed gives every arm a byte-identical
+# token stream IF AND ONLY IF sequence length, global batch size, DP world size, dataset release and
+# STEP COUNT also match. A cell on a shorter budget consumes a PREFIX of the stream, not the same
+# stream. RUN 1 LIVED THIS: its frozen plan said 1,907 steps and its cells ran 1,144. The cut was
+# legitimate and documented, but it is exactly the failure the precondition names. If this budget
+# must move it moves for all 25 cells together and seeds-run2.json is amended first -- NEVER trimmed
+# per cell to fit an approval band. It also means no run1-vs-run2 CE comparison is valid at all;
+# run 2 trains 3.25x longer, and every contrast that moves a decision is internal to run 2.
+#
+# THE CELL INDEX IS THE ONLY THING THAT VARIES ACROSS THE FAN-OUT, and it maps to (arm, data seed,
+# init seed) via three LITERAL arrays rather than arithmetic. Arithmetic would be shorter and is how
+# an off-by-one becomes an arm that ran twice while another never ran -- silently, because every
+# cell still exits zero. The arrays are generated FROM seeds-run2.json and cross-checked back
+# against it programmatically before submission (25/25 on all three).
+#
+# INDEX LAYOUT IS ARM-MAJOR, AND THAT IS LOAD-BEARING. A truncated arm-major fan-out loses WHOLE
+# ARMS and leaves the remainder at the full n=5; a seed-major one loses one seed from EVERY arm and
+# leaves nothing at n=5. It saved run 1 twice. The control sits at indices 0-4 so the Dunnett
+# reference is the last thing a truncation removes.
+#
+#   idx   0-4        5-9         10-14        15-19       20-24
+#   arm   KDA_BASE   KDA_NOACT   KDA_NEGEIG   KDA_GCONV   GDN2
+#         ^control                ^new arm
+#   Within an arm, replicates 1..5 in order, so (index % 5) is the 0-based replicate.
+#
+# THE FIVE DATA SEEDS REPEAT ACROSS ARMS ON PURPOSE -- that is the data-order pairing, and it is
+# unconditionally valid because data order does not depend on the model. Replicates 1-3 REUSE run
+# 1's integers (210007/220014/230021) so 15 of 25 cells are data-paired to run 1; 4 and 5 are new.
+#
+# THE INIT SEEDS ARE PAIRED ACROSS THREE ARMS, WHICH RUN 1 COULD NOT DO. Run 1 refused to pair init
+# seeds and was RIGHT: arms with different tensor inventories diverge at the first differing tensor,
+# so a shared integer buys nothing. Dropping the Householder arms changes that for three arms.
+# KDA_BASE, KDA_NOACT and KDA_NEGEIG are the SAME config class differing only in constructor
+# arguments, all three sit at ARM_L0_DELTA == K2_L0_DELTA == -10,080 so the width solver gives them
+# the same shape, removing an activation removes no tensor, and allow_neg_eigval is a plain bool
+# (recurrent.py:708) that allocates nothing. So indices 0-14 share ONE init seed per replicate and
+# start from LITERALLY IDENTICAL WEIGHTS: same weights, same data, same order, only the operator
+# differs. THIS DEPENDS ON P1'S NAME-AND-SHAPE INVENTORY TEST -- a count-only check is NOT enough,
+# because KDA_R1 already sits at the same declared delta as KDA_BASE while being a different config
+# class. If that test fails, every arm reverts to its own init seeds and the pairing claims are
+# deleted; the 25-cell structure, the step count and the MDE are unaffected.
+#
+# KDA_GCONV AND GDN2 ARE DECLARED EXCEPTIONS and keep their own init seeds: KDA_GCONV adds gate
+# tensors (+2,208) and GDN2 has w_w that KDA has not (+22,688). Consequence, stated rather than
+# buried: their arm-vs-control contrasts carry an init-variance component the paired three do not.
+#
+# TRITON_F32_DEFAULT=ieee IS A CORRECTNESS SETTING, NOT A SPEED ONE (166x accuracy on these fused
+# fp32 matmuls). The torch tf32 flag does NOT control Triton. It is already in the image ENV, which
+# is where it must be to participate in kernel codegen; it is exported again here so a reader need
+# not open the Dockerfile, and so torchrun forwards it to every worker.
+#
+# THE LAUNCHER COMES FIRST IN THE COMMAND AND THAT IS A PLATFORM CONSTRAINT, not style. Leading
+# shell assignments hide the launcher from the admission check, which then reads the command as one
+# process on eight GPUs and refuses it. Hence `export ... && python -m torch.distributed.run ...`
+# with the export ahead of the launcher inside one `bash -lc`.
+#
+# EVERY --flag BELOW IS DECLARED IN train_core6_arm.py's argparse. VERIFIED BY SET DIFFERENCE
+# against its add_argument names, not by grepping for the flag string: run 1 lost all 18 cells to
+# `--lm-loss-implementation`, which appeared only in a PROSE COMMENT and in no add_argument call.
+# An undeclared flag is swallowed by parse_known_args and handed to config.merge() as a dotted
+# override, so it dies AFTER the corpus and the arm have logged correctly and reads like a config
+# bug rather than a typo.
+#
+# RESULT: 11 entrypoint flags used, all 11 present among the 19 declared, 0 undeclared. The two
+# launcher flags (--nproc-per-node, --standalone) belong to torch.distributed.run and are excluded
+# from the comparison rather than silently counted as entrypoint flags.
+#
+# TWO NOTES ON HOW THAT CHECK WAS RUN, because the first version of it was VACUOUS. Extract the
+# flags by REGEX OVER THE COMMAND TEXT, not with shlex.split: the payload is single-quoted inside
+# `bash -lc '...'`, so shlex returns it as ONE token, the comparison set comes back EMPTY, and
+# "0 undeclared flags" is then trivially true of nothing. Assert the set is non-empty (>= 9) before
+# believing it. Then PROVE THE CHECK CAN FAIL by injecting `--lm-loss-implementation` into the
+# command and confirming the same code path reports it -- which it does. A check that has never
+# been shown to fail is not evidence.
+#
+# --slice-mask-uri IS DELIBERATELY NOT PASSED HERE. It is declared, and it defaults from
+# EDULLM_SLICE_MASK_URI, so the recall slices are supplied AT SUBMIT TIME as an environment
+# variable once P2's mask builder and P3's FSDP rank gate land -- no edit to this file, and no
+# guessed flag name. Empty means sliced_eval is null and the run produces a checkpoint only; that
+# endpoint is SECONDARY and moves no gate, so run 2 submits either way.
+#
+# THE DECODE PROBE IS ON BY DEFAULT and --no-decode-probe is deliberately NOT passed: measuring
+# decode latency and recurrent-state bytes is one of the two reasons run 2 exists. P3 owns it.
+#
+# --attempts 1 IS PINNED AT SUBMIT TIME, NOT HERE, and it is not optional. The olmo-core-train
+# profile defaults to maximum_attempts: 2, which DOUBLES the declared cost and can flip the approval
+# gate. Cost is a declared ceiling, not an estimate: rate x nodes x DECLARED hours x DECLARED
+# attempts x cells. At $21.6667/node-hour (derived from run 1's own $1,014 ceiling), 25 cells x 2.2
+# declared hours x attempts 1 = $1,191.67. Run 1's measured throughput projects every run-2 arm at
+# ~1.40-1.43 h/cell, so 2.2 h leaves ~1.5x headroom for queue and platform variance. 35.2 node-hours
+# total, ~4.4 h of compute at 8-way concurrency plus queue wait (this shape supplies after_a_wait:
+# run 1 saw a 61-min median and a 12.6-h worst case). Dropping the Householder arms also removed the
+# long pole -- every run-2 arm now finishes within 2% of every other.
+#
+# --save-interval 1861 GIVES ONE MID-RUN CHECKPOINT PLUS A GUARANTEED FINAL ONE. attempts=1 means
+# there is no automatic retry, so the mid-run checkpoint is the insurance. The final checkpoint is
+# not from the interval (3721 is not a multiple of 1861): CheckpointerCallback.post_train saves
+# unconditionally whenever step > the last checkpointed step (checkpointer.py:320-324). A final
+# checkpoint MUST exist because re-scoring on new slice masks reads it.
+#
+# --warmup-steps 372 is 10% of 3721, matching run 1's 114/1144 ratio. --learning-rate 1.4e-3 is
+# IDENTICAL to run 1 at the same batch size and model shape. The schedule is CosWithWarmup, set in
+# code, decaying to zero over the NEW step count -- which is exactly why last_loss is not an
+# endpoint and val_ce is.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'export TRITON_F32_DEFAULT=ieee &&
+  I=${AWS_BATCH_JOB_ARRAY_INDEX:-0} &&
+  ARMS=(KDA_BASE KDA_BASE KDA_BASE KDA_BASE KDA_BASE
+  KDA_NOACT KDA_NOACT KDA_NOACT KDA_NOACT KDA_NOACT
+  KDA_NEGEIG KDA_NEGEIG KDA_NEGEIG KDA_NEGEIG KDA_NEGEIG
+  KDA_GCONV KDA_GCONV KDA_GCONV KDA_GCONV KDA_GCONV
+  GDN2 GDN2 GDN2 GDN2 GDN2) &&
+  DSEEDS=(210007 220014 230021 240028 250035
+  210007 220014 230021 240028 250035
+  210007 220014 230021 240028 250035
+  210007 220014 230021 240028 250035
+  210007 220014 230021 240028 250035) &&
+  ISEEDS=(110007 120014 130021 140028 150035
+  110007 120014 130021 140028 150035
+  110007 120014 130021 140028 150035
+  116009 126016 136023 146030 156037
+  119010 129017 139024 149031 159038) &&
+  python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/train_core6_arm.py "$EDULLM_RUN_ID"
+  --arm "${ARMS[$I]}" --data-seed "${DSEEDS[$I]}" --init-seed "${ISEEDS[$I]}"
+  --sequence-length 4096 --steps 3721 --warmup-steps 372 --learning-rate 1.4e-3
+  --global-batch-size 524288 --rank-microbatch-size 8192 --save-interval 1861
+  --save-folder "$EDULLM_CHECKPOINT_DIR"'

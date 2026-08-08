@@ -29,6 +29,7 @@ they *compute* the right thing, because none of these mixers can be built withou
     guards falsifiable by constructing the failure each one is supposed to catch.
 """
 
+import os
 from typing import Dict, List, Tuple
 
 import pytest
@@ -485,3 +486,161 @@ def test_the_step_0_band_brackets_the_right_vocabulary():
     )
     # Wrong targets, however, are excluded -- a model cannot beat uniform before training.
     assert 10.0 < low, "the band must exclude sub-uniform losses, which mean the targets are wrong"
+
+
+# --- the skip-is-not-a-pass gate ------------------------------------------------------------------
+
+
+#: Set this to ``1`` on the GPU host and a missing GPU or missing ``fla`` becomes a FAILURE instead
+#: of a skip. It is opt-in because the same file is collected by the ordinary CPU test run, where
+#: skipping really is correct -- ``requires_gpu`` exists for absent *dependencies*. What it is not
+#: correct for is a run whose entire purpose was to exercise the kernel: there, "the dependency was
+#: absent" and "the guard did not run" are the same event, and it must be loud.
+REQUIRE_GPU_ENV_VAR = "EDULLM_GUARDS_REQUIRE_GPU"
+
+
+def test_a_declared_gpu_run_must_not_have_skipped_the_guards():
+    """
+    Turn a silent skip into a failure when the runner DECLARED this to be the GPU host run.
+
+    THIS EXISTS BECAUSE THE GUARDS IN THIS FILE NEVER RAN BEFORE RUN 1'S 18 JOBS AND NOBODY COULD
+    TELL. Every GPU test here is ``@requires_gpu`` + ``@requires_fla``, both of which expand to
+    ``pytest.mark.skipif``, so on a machine without CUDA or ``fla`` the file skips and pytest exits
+    0. "16 skipped" and "16 passed" are both green.
+
+    It is deliberately NOT ``@requires_gpu`` itself -- a gate that skips under the same condition it
+    is meant to detect is the definition of an unfireable guard. It runs everywhere, and does
+    nothing unless the operator asserts intent by setting the environment variable, which the
+    invocation block below does. Note that it is therefore a SECOND line of defence and not the
+    primary one: the primary gate is the ``skipped == 0`` assertion on the JUnit XML, which needs no
+    cooperation from inside the test process.
+
+    Mutation that breaks it: run with ``EDULLM_GUARDS_REQUIRE_GPU=1`` on the laptop -- it fails, as
+    it must. Run it there without the variable -- it passes, and reports why in the skip summary.
+    """
+    from olmo_core.testing.utils import has_cuda, has_fla
+
+    declared = os.environ.get(REQUIRE_GPU_ENV_VAR, "").strip().lower() in ("1", "true", "yes")
+    if not declared:
+        # Not an assertion-free pass by accident: state plainly what was and was not checked, so
+        # this line in the log is not mistaken for evidence the guards executed.
+        print(
+            f"[skip-gate] {REQUIRE_GPU_ENV_VAR} is not set: this run makes NO claim that the GPU "
+            f"guards executed (has_cuda={has_cuda}, has_fla={has_fla}). The JUnit 'skipped' count "
+            "is the gate."
+        )
+        return
+
+    missing = [n for n, ok in (("CUDA", has_cuda), ("flash-linear-attention", has_fla)) if not ok]
+    assert not missing, (
+        f"{REQUIRE_GPU_ENV_VAR} declares this to be the GPU host run, but {missing} is missing, so "
+        "every guard in this file and every beta > 1 accuracy cell in kda_negeig_test.py SKIPPED. "
+        "A skip is not a pass: the fused kernel's causality and its accuracy at beta > 1 are both "
+        "unverified by this run. Re-run on FarmShare L40S or an AWS Batch GPU host."
+    )
+    assert os.environ.get("TRITON_F32_DEFAULT") == "ieee", (
+        f"{REQUIRE_GPU_ENV_VAR} is set but TRITON_F32_DEFAULT is "
+        f"{os.environ.get('TRITON_F32_DEFAULT')!r}, not 'ieee'. The torch tf32 flag does not "
+        "control Triton and this project has measured a 166x fp32 accuracy difference, so every "
+        "relative-error band this run produces would be invalid."
+    )
+    print(f"[skip-gate] GPU run declared and the environment satisfies it (has_fla={has_fla}).")
+
+
+# --- HOW TO RUN THIS FILE, AND HOW TO TELL A SKIP FROM A PASS ------------------------------------
+#
+# THE GUARDS ABOVE DID NOT RUN BEFORE RUN 1'S 18 JOBS. That is established, not suspected: at the
+# run sha, ``git grep -n core6_bakeoff_guards`` returns zero hits outside this file, no workflow
+# under ``.github/`` references it, and the submitted Batch command never invokes pytest
+# (``docs/mixer-bakeoff/run1/audit/B2.md``). Because every GPU test here is ``@requires_gpu`` +
+# ``@requires_fla``, and both of those expand to ``pytest.mark.skipif``, on a machine without CUDA
+# or ``fla`` the whole file SKIPS SILENTLY -- and a summary line reading "2 passed, 14 skipped" is
+# what a green run looks like to anyone not counting. The two CPU self-tests
+# (``test_the_step_0_band_brackets_the_right_vocabulary`` here, and
+# ``test_the_beta_sweep_straddles_the_contraction_boundary`` in ``kda_negeig_test.py``) are the two
+# that pass; they prove the files were COLLECTED and prove nothing about the kernel.
+#
+# THE DELIVERABLE IS "0 skipped", NOT "N passed".
+#
+#   export TRITON_F32_DEFAULT=ieee        # MANDATORY. See below -- not optional, not a nicety.
+#   export EDULLM_GUARDS_REQUIRE_GPU=1    # makes a missing GPU/fla FAIL instead of skip
+#   cd <repo root>
+#   python -m pytest \
+#       src/test/nn/transformer/core6_bakeoff_guards_test.py \
+#       src/test/nn/attention/kda_negeig_test.py \
+#       -v -ra -s -p no:randomly --no-header \
+#       --junitxml=/tmp/bakeoff_guards.xml \
+#       < /dev/null 2>&1 | tee /tmp/bakeoff_guards.log
+#
+# Then read the gate, which is the skip count and NOT the exit code:
+#
+#   python - <<'EOF' < /dev/null
+#   import xml.etree.ElementTree as ET
+#   s = ET.parse("/tmp/bakeoff_guards.xml").getroot().find("testsuite")
+#   n, sk, f, e = (int(s.get(k) or 0) for k in ("tests", "skipped", "failures", "errors"))
+#   print(f"collected={n} skipped={sk} failures={f} errors={e}")
+#   assert n > 20, f"only {n} tests collected -- the files were not both collected"
+#   assert sk == 0, f"{sk} SKIPPED. A skip is not a pass. Missing GPU or fla; this did not run."
+#   assert f == e == 0, f"{f} failures, {e} errors"
+#   print("GUARDS RAN AND PASSED")
+#   EOF
+#
+# ``n > 20`` is a real floor with the arithmetic behind it, not a round number. This file: 4 tests
+# parametrized over ``MIXER_ARMS`` -- every arm with a non-empty ``kda_layers``, i.e. K2, G4R2,
+# KDA_BASE, KDA_NOACT, KDA_GCONV, KDA_R1, KDA_R2, GDN2 = 8 today, 9 once run 2's KDA_NEGEIG lands
+# -- so 32 (36), plus 3 unparametrized GPU self-tests, plus 2 that run anywhere = 37 (41). And
+# ``kda_negeig_test.py``: 6 forward cells + 3 backward cells + 6 unparametrized = 15. Total 52
+# today, 56 with KDA_NEGEIG. The floor sits far below that on purpose, because ``MIXER_ARMS`` is
+# derived from ``ARMS`` rather than listed and will keep growing.
+#
+# EXACTLY THREE TESTS ACROSS THE TWO FILES RUN WITHOUT A GPU: this file's
+# ``test_the_step_0_band_brackets_the_right_vocabulary`` and
+# ``test_a_declared_gpu_run_must_not_have_skipped_the_guards``, and ``kda_negeig_test.py``'s
+# ``test_the_beta_sweep_straddles_the_contraction_boundary``. So **"3 passed, 49 skipped" is what a
+# laptop run looks like**, and it exits 0. If the summary shows 3 passed, nothing was verified. If
+# the collected count comes in at 3 rather than ~52, the GPU files errored at import or were
+# deselected -- again invisible in the exit code.
+#
+# Why each flag:
+#
+# * ``TRITON_F32_DEFAULT=ieee`` -- **mandatory in this project**, and ``kda_negeig_test.py`` asserts
+#   it rather than trusting it. The torch tf32 flag does NOT control Triton, and the difference has
+#   been measured at 166x in fp32 accuracy. Every relative-error band is meaningless without it.
+# * ``EDULLM_GUARDS_REQUIRE_GPU=1`` -- makes ``test_a_declared_gpu_run_must_not_have_skipped_the_
+#   guards`` above FAIL rather than pass when CUDA or ``fla`` is absent. It is a second line of
+#   defence, useful because it fails *inside* the run with a specific message; the primary gate is
+#   still the XML ``skipped`` count, which needs no cooperation from the test process.
+# * ``-ra`` -- prints the short summary WITH the reason for every skip. Without it a skip is a bare
+#   ``s`` character and the reason ("Requires a GPU", "Requires flash-linear-attention (fla)") is
+#   invisible, which is exactly how a fully-skipped run gets read as a pass.
+# * ``--junitxml`` + the assertion above -- pytest's exit code is 0 when everything skips, so the
+#   exit code CANNOT distinguish "ran and passed" from "skipped everything". The XML's ``skipped``
+#   attribute can. This is the actual gate; treat a green exit code without it as no evidence.
+#   (``pytest --no-skips`` is not a real flag -- do not reach for it. The XML count is the check.)
+# * ``-s`` -- these tests ``print`` their realized error bands, beta ranges and per-cell numbers.
+#   Captured output is discarded on a pass, so without ``-s`` the measurements the run exists to
+#   produce are thrown away and only "passed" survives.
+# * ``-p no:randomly`` -- harmless here (``pytest-randomly`` is not in this repo's dev extra;
+#   ``pytest-xdist`` is), kept because it costs nothing and makes the ladder/seed-paired
+#   comparisons in ``kda_negeig_test.py`` reproducible if the plugin is ever present. Do NOT add
+#   ``-n`` / xdist: several tests here allocate a model per parametrization and the growth ladder
+#   runs to ``T = 512``.
+# * ``< /dev/null`` -- this project has had a CLI hang forever on ``stdin.read()`` under an agent
+#   shell, which is neither a TTY nor closed. Redirecting stdin makes a hang impossible.
+# * ``--no-header`` -- drops the plugin banner so the ``-ra`` summary is the first thing read.
+#
+# HOW A READER TELLS THE DIFFERENCE, in one sentence: the run is evidence if and only if the
+# checker above prints ``GUARDS RAN AND PASSED`` with ``skipped=0``; ``collected=N skipped=N`` with
+# a zero exit status means the file was collected on a machine that could not run it.
+#
+# WHERE THIS MUST RUN. A GPU host -- **FarmShare L40S (sm_89)** via the ``operate-farmshare``
+# skill, or a cheap AWS Batch GPU preflight through the ``edullm-platform-runs`` skill (the only
+# sanctioned AWS path). NOT on the laptop: nothing computational runs there, and in any case
+# ``import fla`` and ``torch.cuda`` are both absent, so a local run would skip everything and
+# manufacture precisely the false green described above. **If FarmShare is not already open, ask
+# the user to open it and wait** -- do not substitute a local run, and do not silently switch
+# venues.
+#
+# ONE PORTABILITY NOTE WORTH THE FIVE MINUTES: run it on both an L40S and the Batch A100 image if
+# both are cheap to reach. The two differ in Triton version and compute capability, and a second
+# host is a free test of whether these guards depend on a kernel autotuning decision.
