@@ -151,13 +151,37 @@ def load_checkpoint(model, path: str, *, strict: bool = True) -> None:
     (e.g. ``s3://…``, loaded via ``load_model_and_optim_state`` with ``pre_download``).
 
     Used to fork every arm from the shared base checkpoint (the "best model").
+
+    A checkpoint *directory* is probed for both layouts OLMo-core writes, because
+    ``load_model_and_optim_state`` only reads ``<dir>/.metadata`` while ``Checkpointer`` saves
+    the sharded state under ``<dir>/model_and_optim/`` — see
+    :meth:`~olmo_core.train.checkpoint.Checkpointer.dir_is_checkpoint`, which checks both. Passing
+    a step directory saved the second way otherwise fails with "is not a distributed checkpoint
+    folder", which is what killed run ``run_019fde62`` twelve seconds in.
+
+    :raises FileNotFoundError: If neither layout is present, naming both prefixes probed. Note
+        that S3 reads through ``cached_path`` surface a denied read as a missing file, so this
+        can equally mean "no permission" — check the grant before assuming the path is wrong.
     """
     if Path(str(path)).is_file():
         model.load_state_dict(torch.load(path, map_location="cpu"), strict=strict)
-    else:
-        from olmo_core.distributed.checkpoint import load_model_and_optim_state
+        return
 
-        load_model_and_optim_state(str(path), model, pre_download=True, strict=strict)
+    from olmo_core.distributed.checkpoint import load_model_and_optim_state
+    from olmo_core.io import file_exists
+
+    root = str(path).rstrip("/")
+    candidates = [root, f"{root}/model_and_optim"]
+    for candidate in candidates:
+        if file_exists(f"{candidate}/.metadata"):
+            load_model_and_optim_state(candidate, model, pre_download=True, strict=strict)
+            return
+    raise FileNotFoundError(
+        "no distributed checkpoint found. Probed for '.metadata' under: "
+        + ", ".join(candidates)
+        + ". A denied S3 read is reported as a missing file, so confirm the training role's "
+        "grant on the bucket before concluding the path is wrong."
+    )
 
 
 def build_model(

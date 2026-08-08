@@ -1,0 +1,44 @@
+# Run spec for the latent-CoT superposition pilot (PRD: docs/latent-cot/).
+#
+# 1 seed x 5 arms (A0 explicit-CoT baseline, A1 no-CoT floor, A2 CODI, A3 CODI+R1, A4 CODI+L2),
+# 5,000 steps each, all five fine-tuning the SAME pretrained 370M base -- that shared start is
+# the experiment's central confound control. See docs/latent-cot/phase8-runbook.md for the
+# procedure and docs/latent-cot/handoff.md for the compute request.
+#
+# THREE PARTS ARE PINNED BY THE PLATFORM AND MUST NOT BE REQUOTED OR REORDERED:
+#   EDULLM_LAUNCH_CHECK=waived   5 processes on 8 cards; launchers.LAUNCH_CHECK_WAIVER matches
+#                                this literally. It is not silent -- waived_launch_check_note
+#                                tells the approving lead the run bills for 8 and starts 5.
+#   "$EDULLM_CHECKPOINT_DIR/A$i" require_a_save_folder_a_retry_can_find reads the command TEXT
+#                                for this variable. It expands to an s3:// URI, which
+#                                train_codi.py handles by staging locally and mirroring each
+#                                artifact as it is written (Path() would mangle it to 's3:/...'
+#                                and silently lose everything).
+#   --rung olmo3_370M            explicit, because train_codi.py still defaults to olmo2_370M,
+#                                and a forgotten flag trains one architecture and evaluates
+#                                as another.
+#
+# The output flag is --out, not --save-dir; train_codi.py has no --save-dir.
+#
+# --attempts 1 at submit time: there is no --resume, so a second attempt would restart from the
+# base checkpoint and bill a second full run for one result.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'EDULLM_LAUNCH_CHECK=waived; set -uo pipefail;
+  DATA=data/latentcot/graph-reachability-depth/conversations;
+  BASE=s3://edullm-olmo-370m-ckpts/olmo3-370m/run-10b-equal/step12716/;
+  ARMS=(A0 A1 A2 A3 A4);
+  python src/scripts/latentcot/gen_graph_data.py;
+  python src/scripts/latentcot/preflight.py --train-data $DATA/train-00000.jsonl
+  --test-data $DATA/heldout-00000.jsonl || exit 1;
+  pids=(); for i in 0 1 2 3 4; do mkdir -p "$EDULLM_CHECKPOINT_DIR/A$i";
+  CUDA_VISIBLE_DEVICES=$i python src/scripts/latentcot/train_codi.py
+  --arm ${ARMS[$i]} --rung olmo3_370M --init-checkpoint "$BASE"
+  --steps 5000 --batch-size 16 --precision bf16 --lr 2e-5
+  --init-seed 0 --seed 1 --log-every 50
+  --train-data $DATA/train-00000.jsonl --test-data $DATA/heldout-00000.jsonl
+  --out "$EDULLM_CHECKPOINT_DIR/A$i"
+  > "$EDULLM_CHECKPOINT_DIR/A$i/train.log" 2>&1 & pids+=($!); done;
+  rc=0; for p in "${pids[@]}"; do wait "$p" || rc=1; done; exit $rc'
