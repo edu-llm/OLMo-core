@@ -30,12 +30,12 @@ WORKDIR /opt/olmo-core
 # its signed Debian 12 repository, which still publishes the 12.8 compiler.
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends ca-certificates wget gcc-14 g++-14; \
+    apt-get install -y --no-install-recommends ca-certificates wget gpgv gcc-14 g++-14; \
     wget -q https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-keyring_1.1-1_all.deb; \
     dpkg -i cuda-keyring_1.1-1_all.deb; \
     rm cuda-keyring_1.1-1_all.deb; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends cuda-nvcc-12-8; \
+    apt-get -o APT::Key::GPGVCommand=/usr/bin/gpgv update; \
+    apt-get install -y --no-install-recommends cuda-nvcc-12-8=12.8.93-1; \
     rm -rf /var/lib/apt/lists/*; \
     gcc-14 --version; \
     nvcc --version
