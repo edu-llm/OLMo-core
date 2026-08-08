@@ -259,6 +259,8 @@ def test_platform_dockerfile_pins_builds_and_asserts_sm80_symbols():
         assert f"callable(_flash_pd_native_cuda.{symbol})" in dockerfile
     assert "mamba3_siso_combined" in dockerfile
     assert "sm_80" in dockerfile
+    assert "torch._C._cuda_getArchFlags()" in dockerfile
+    assert "torch.cuda.get_arch_list()" not in dockerfile
     assert "aws " not in dockerfile.lower()
 
 

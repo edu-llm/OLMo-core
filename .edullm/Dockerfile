@@ -109,7 +109,7 @@ RUN set -eux; \
 COPY . .
 RUN set -eux; \
     python -m pip install --no-cache-dir --no-deps .; \
-    python -c "import torch; assert torch.__version__.startswith('2.10.0'); assert torch.version.cuda == '12.8', torch.version.cuda; assert 'sm_80' in torch.cuda.get_arch_list()"; \
+    python -c "import torch; arch_flags = torch._C._cuda_getArchFlags(); assert torch.__version__.startswith('2.10.0'); assert torch.version.cuda == '12.8', torch.version.cuda; assert arch_flags and 'sm_80' in arch_flags.split(), arch_flags"; \
     python -c "from mamba_ssm.ops.triton.mamba3.mamba3_siso_combined import mamba3_siso_combined; assert callable(mamba3_siso_combined)"; \
     python -c "import _flash_pd_native_cuda; assert callable(_flash_pd_native_cuda.forward); assert callable(_flash_pd_native_cuda.backward); assert callable(_flash_pd_native_cuda.mamba3_forward); assert callable(_flash_pd_native_cuda.paper_backward)"; \
     python -c "import importlib.metadata as m; expected={'xlstm':'2.0.5','mlstm-kernels':'2.0.4','flashrnn':'1.0.6'}; assert {k:m.version(k) for k in expected} == expected"; \

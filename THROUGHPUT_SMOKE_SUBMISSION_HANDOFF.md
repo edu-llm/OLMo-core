@@ -12,7 +12,7 @@ capacity; obtain those from a fresh `edullm check --json`.
 - Repository: `edu-llm/OLMo-core`
 - Local checkout: `/home/vs/AlphaAI/eduLLM/OLMo-core-flash-pd`
 - Branch: `edullm/mamba-comparison`
-- Current pushed commit: `0c6e0f54ca4c49d7f38467723ad9337b4b0a894f`
+- Current pushed commit: `8ebee6c96b4b25c42654185a1b607ad6aebbd35d`
 - CLI observed while writing this handoff: `edullm 4.5.0`
 - Smoke spec: `.edullm/run-throughput-smoke.yaml`
 - Entrypoint: `.edullm/train_core6_arm.py`
@@ -24,19 +24,22 @@ capacity; obtain those from a fresh `edullm check --json`.
 The commit is pushed, and the local remote-tracking ref now contains it. The
 latest image build did **not** publish an image:
 
-- [failed image workflow for `0c6e0f5`](https://github.com/edu-llm/OLMo-core/actions/runs/31282749986)
-- First build error: `ATen/cuda/CUDAContextLight.h` includes `cusparse.h`, but
-  the CUDA compiler image does not currently contain that header.
+- [failed image workflow for `8ebee6c`](https://github.com/edu-llm/OLMo-core/actions/runs/31283819693)
+- The native extension now compiles, confirming that the CUDA wheel-header fix
+  worked.
+- The new failure is the final image assertion using
+  `torch.cuda.get_arch_list()`. That public helper returns an empty list on the
+  GPU-less image builder, so it cannot verify a wheel's compiled sm80 support.
 
 Therefore the throughput smoke is **not submit-ready**. A local check can have
 no refusals while image questions remain deferred; do not submit until a newer
 commit's image workflow is green and has published exactly one image.
 
-The local working tree now contains an uncommitted fix in
-`flash_pd_native_setup.py`: the native extension discovers the cuBLAS,
-cuSPARSE, and cuSOLVER header directories supplied by the pinned Torch CUDA
-wheels and passes them to `CUDAExtension`. Its focused contract test passes,
-but this working-tree fix has not built or published an image.
+The local working tree now contains an uncommitted follow-up in
+`.edullm/Dockerfile`: it reads Torch's compiled architecture flags directly
+with `torch._C._cuda_getArchFlags()` instead of querying visible devices. Its
+focused contract test passes, but this working-tree fix has not built or
+published an image.
 
 ## What the smoke measures
 
@@ -256,7 +259,7 @@ Training cell failure
 
 ## Immediate next action
 
-Commit the native-extension header fix, its contract test, and this handoff;
-push the new SHA to `edullm/mamba-comparison`; then wait for a green image
-workflow. Only after the image publishes should the exact-ref fetch, `check`,
-and `submit` sequence above be repeated.
+Commit the GPU-independent architecture assertion, its contract test, and this
+updated handoff; push the new SHA to `edullm/mamba-comparison`; then wait for a
+green image workflow. Only after the image publishes should the exact-ref
+fetch, `check`, and `submit` sequence above be repeated.
