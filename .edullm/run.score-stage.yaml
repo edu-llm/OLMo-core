@@ -1,0 +1,203 @@
+# THE DOWNSTREAM SCORING JOB, AND IT IS THE ONE SUBMISSION H2b IS BLOCKED ON.
+#
+#   cells=$(python .edullm/score_checkpoints.py --fanout-size | awk '$2=="arm-and-seed"{print $1}')
+#   edullm check  --json --experiment hyper-connections-370m --dataset none \
+#     --team input-core --spec .edullm/run.score-stage.yaml --compute gpu-1xl4 \
+#     --hours 2 --attempts 1 --fanout-size "$cells" --fanout-index-parameter arm-and-seed
+#   edullm submit       --experiment hyper-connections-370m --dataset none \
+#     --team input-core --spec .edullm/run.score-stage.yaml --compute gpu-1xl4 \
+#     --hours 2 --attempts 1 --fanout-size "$cells" --fanout-index-parameter arm-and-seed
+#
+# THE CELL COUNT IS READ OUT OF THE ARM TABLE RATHER THAN WRITTEN HERE, AND THAT IS A
+# CORRECTION RATHER THAN A FLOURISH. The tranche has been nine cells, then fifteen when the
+# design bought five seeds instead of three, then twenty when `mhc` was funded off the end
+# of CUT_ORDER. None of those edits touched anything that would have noticed a stale number
+# in this header, and a --fanout-size below the table's length is a submission that silently
+# does not score the last arm. `score_checkpoints.resolve_target` refuses an index past the
+# table, so too high fails loudly; too low fails not at all.
+#
+# THIS FILE IS NOT SUBMITTABLE AS IT STANDS AND THE MISSING PIECE IS NAMED BELOW. The
+# --arm-run URIs need the platform run ids of the training stages, and most of those stages
+# have not been submitted: hyper_connection_arms.STAGE_SPECS carries `run_id=None` for
+# everything but the baseline, and the baseline's -- `run_019fe279-4ef0` -- is recorded
+# abbreviated rather than as the full uuid7 an S3 prefix needs. Fill them in from
+# `edullm status --json`, which is free and dispatches nothing, once the tranche has landed.
+# A test asserts that the placeholders below are still placeholders, so this cannot be
+# submitted by accident with them in.
+#
+# ONE --arm-run PER FUNDED ARM, AND THE LIST HAS TO TRACK `hyper_connection_arms.FUNDED`.
+# Every cell of the fan-out is handed this one command and any cell may turn out to be any
+# arm, so an arm the command does not name is five cells that pull an image and refuse.
+# `test_the_committed_command_names_every_funded_arm` is what catches the arm table gaining
+# one; naming an arm that is not funded costs nothing, because no cell asks for it.
+#
+# ---------------------------------------------------------------------------------------
+# WHAT THIS IS FOR
+# ---------------------------------------------------------------------------------------
+#
+# hyper-connections.md marks H2b **blocked**, and it is the only pre-registered hypothesis
+# in the module that nothing else funds: "the result H2 sets out to explain is Tencent's
+# -0.020 on a *downstream average* at 1.2B, and arm 3 produces in-loop bits-per-byte. Those
+# are not the same measurement... loss and downstream decouple by 6 to 16 points for changes
+# in this class." H2a -- arm 2 against arm 3 on held-out cross-entropy -- is evidence that
+# two implementations differ. It is not evidence about the published negative result.
+#
+# H5 GETS THE SAME NUMBER FOR FREE. `mhc` is funded as stage 3 and the fan-out covers every
+# funded cell, so the arm whose null the module calls its only readable one is read
+# downstream as well as in-loop, at no extra submission and at one more arm's worth of
+# ceiling. Nothing in this file is specific to the three arms it was first written against.
+#
+# The plan's own note says the job it needs "is not in this plan and not in this budget",
+# that "the arms save the checkpoints it would read -- which they already do", and that
+# "scheduling it is the single cheapest thing that would raise what this module can
+# conclude". This is that job, and the ceiling below is what cheapest turned out to mean.
+#
+# ---------------------------------------------------------------------------------------
+# ONE CELL PER TRAINING CELL, UNDER THE LABEL THAT ALREADY MEANS THAT
+# ---------------------------------------------------------------------------------------
+#
+# `--fanout-index-parameter arm-and-seed` is the tranche's own label and it is reused here
+# rather than invented: `score_checkpoints.resolve_target` resolves its (arm, seed) through
+# the identical `train_hyper_connections.resolve_cell` against the identical
+# `hyper_connection_arms.TRANCHE_CELLS`, so cell 7 is the same (arm, seed) it was during
+# training by construction rather than by two tables agreeing. Cell 0 is baseline seed 0.
+#
+# So the command carries NO --arm and NO --seed. Every cell of a fan-out is handed one
+# command; an --arm there would score one arm fifteen times and a --seed would score one
+# replicate fifteen times, and `resolve_cell` refuses both rather than honouring them. What
+# the command does carry is one --arm-run per funded arm, because the cell has to be able to
+# find whichever arm's run it turns out to be.
+#
+# WHERE A CELL LOOKS. `<--arm-run uri>/cell-<seed>/checkpoints/step6000`, which is exactly
+# where the platform's own fan-out prologue put it: `edullm_platform.execution` appends
+# `cell-$AWS_BATCH_JOB_ARRAY_INDEX/` to the output prefix and defines
+# `$EDULLM_CHECKPOINT_DIR` as that plus `checkpoints/`, and each training stage was a
+# `--fanout-index-parameter seed` fan-out, so a stage cell's index IS its seed.
+#
+# THE URIs ARE IN THE COMMAND BECAUSE THEY CANNOT BE DECLARED, AND THAT COSTS A LINEAGE
+# EDGE. `edullm_platform.weights` already has `resolve_weights_from_run`,
+# `plan_checkpoint_sweep`, `fanout_for_sweep` and `sweep_plan_document`, and `RunManifestV2`
+# carries `inputs` with an `InputRole.WEIGHTS`. None of it is reachable: `check` and
+# `submit` take `--dataset` and nothing else, and compile a `schema_version: 1` manifest
+# that has no `inputs` field. So this job is an ordinary fan-out with the S3 URIs written
+# into the command text, and the lineage record will not say that it read the three training
+# runs' weights. It is recoverable by hand -- the command is in the sealed submission record
+# and the URIs are in it -- and that is the whole of the mitigation.
+#
+# ---------------------------------------------------------------------------------------
+# --dataset none, AND IT IS A STATEMENT RATHER THAN AN OMISSION
+# ---------------------------------------------------------------------------------------
+#
+# This run reads no corpus. Every token it puts through the model comes from the task data
+# inside the image, which is the crux of the whole job and is argued at length in
+# score_checkpoints.py: `ai2-olmo-eval` ships its requests and its HuggingFace splits as
+# package data -- 110 MB of them -- read through `importlib_resources` and
+# `datasets.load_from_disk`, which reach no network. The one file it does not ship is the
+# dolma2 tokenizer, and .edullm/Dockerfile downloads that at BUILD time from a pinned
+# HuggingFace revision, checks its SHA-256, and sets $EDULLM_DOLMA2_TOKENIZER to it.
+#
+# That is why this job belongs in a module whose claim is that it read a sealed corpus.
+# train_on_corpus.py declines to wire the stock downstream evaluator into training because
+# "the downstream one pulls HellaSwag from Hugging Face"; at ai2-olmo-eval 0.9.0 that is no
+# longer true of the task data, and the residual risk was one tokenizer file, which is now
+# in the image. A `--dataset` naming a corpus would be a claim this run does not make.
+#
+# ---------------------------------------------------------------------------------------
+# THE WORKLOAD CONTRACT IS IMPERFECT AND THE IMPERFECTION IS NAMED RATHER THAN HIDDEN
+# ---------------------------------------------------------------------------------------
+#
+# `olmo-eval-sweep` is the contract this job wants -- two hours, one attempt, `checkpoint:
+# null`, and its comment is literally about "an eval cell [that] has nothing to resume: it
+# reads a checkpoint somebody else wrote and produces a metrics document". It belongs to the
+# `olmo-eval-full` repository, and `check` refuses it from here with
+# `workload_profile_repository_mismatch`. This repository registers two profiles:
+#
+#   olmo-core-check   1 hour,  1 attempt,  checkpoint: null
+#   olmo-core-train  24 hours, 2 attempts, checkpoint: 30 minutes, resume_required: true
+#
+# `olmo-core-check` is the better contract on every axis but one and the one is decisive:
+# `--hours` may only LOWER a workload's bound, so its one hour is a hard per-attempt
+# ceiling with one attempt behind it. A cell is an image pull, a 1.5 GB checkpoint fetch,
+# thirteen task builds and single-digit minutes of arithmetic; the arithmetic fits an hour
+# many times over and the pull and the fetch are the parts nobody has measured on this shape.
+# Being killed at 60 minutes with no second attempt is not a risk worth taking to get a
+# tidier contract, so this runs under `olmo-core-train` at `--hours 2`.
+#
+# What that costs is honesty in the record rather than money: the profile declares a
+# 30-minute checkpoint interval and `resume_required: true` for a job that writes no
+# checkpoint and has nothing to resume. Moving `olmo-eval-sweep` to cover this repository,
+# or raising `olmo-core-check` to two hours, is a pull request against
+# config/workload-catalog.yaml and is the right fix.
+#
+# `EDULLM_CHECKPOINT_CHECK=waived` IS IN THE COMMAND AND IT IS THE SANCTIONED WAY TO SAY
+# THIS, NOT A WAY AROUND A REFUSAL. Because the profile declares a contract,
+# `require_a_save_folder_a_retry_can_find` refuses any command that does not expand
+# `$EDULLM_CHECKPOINT_DIR` -- and the refusal's own detail names this token for the case it
+# is describing: "if this run places its own checkpoints, or is a throwaway nobody will
+# resume". This run writes one JSON document to `$EDULLM_OUTPUT_PREFIX` and no checkpoint at
+# all, so pointing a `--save-folder` at the checkpoint directory to satisfy the guard would
+# be a flag that exists to quiet a check, which is the thing AGENTS.md says not to do.
+#
+# The token is not silent, which is why it is the right escape. `waived_checkpoint_check_note`
+# puts a paragraph on the approver's page saying in as many words that this run waives the
+# check and that nothing verifies a retry would find anything to resume from. An approver
+# reads that sentence and this header; both say the same thing.
+#
+# ---------------------------------------------------------------------------------------
+# THE SHAPE, AND WHY IT IS THE SMALLEST ONE
+# ---------------------------------------------------------------------------------------
+#
+# gpu-1xl4 is a g6.xlarge: one L4, 24 GB, Ada (sm_89), so it has bfloat16 in hardware and
+# the `bfloat16_not_in_the_hardware` guard passes on the `--param-dtype bfloat16` in the
+# command. It is the cheapest provisioned GPU profile in the catalog. One device, so the
+# command runs `python` directly rather than through `torch.distributed.run`, and
+# `require_a_process_for_every_device` has one process for one device.
+#
+# ONE ATTEMPT, NOT TWO. A scoring cell holds no state: it reads weights somebody else wrote
+# and prints a document. A lost host costs the read again rather than the work, and
+# `--attempts` multiplies straight into the approved ceiling, so a second attempt would
+# double the number the budget clears in exchange for something a resubmission buys anyway.
+#
+# --param-dtype bfloat16 IS IN THE COMMAND TEXT AND HAS TO BE, for the reason AGENTS.md
+# gives: the guard reads the words of the command and cannot see a precision set in code, so
+# a shape with no bfloat16 in hardware is refused for free at check time rather than after
+# the machine has been billed. `score_checkpoints` also re-runs olmo_core's own
+# `validate_precision_support` against the visible device before it loads any weights.
+#
+# --batch-tokens 8192 is the arms' rank microbatch halved. A downstream evaluation needs
+# full logits over a 100,352-entry vocabulary for every position, which is the memory term
+# training does not pay in the same way, and 24 GB is a third of the 48 GB L40S the arms
+# trained on.
+#
+# ---------------------------------------------------------------------------------------
+# THE SUITE AND THE METRIC ARE IN score_checkpoints.py AND ARE NOT FLAGS HERE
+# ---------------------------------------------------------------------------------------
+#
+# `--suite h2b` names a table, `SUITE_H2B`, which carries the thirteen task labels and one
+# sentence per label saying what it is doing in the suite. The primary metric is
+# `bpb_v2`, the bits-per-byte of the gold continuation, and it is NOT multiple-choice
+# accuracy: at 370M over 4.72B tokens accuracy is at or near chance, and a metric pinned at
+# chance has no variance for a five-against-five contrast to divide by. DataDecide
+# (arXiv 2504.11393 Sec. 3.3-3.4) measures exactly that, and is specific about which
+# continuous metric helps -- the raw length-normalized likelihood of the gold answer, not
+# the softmax over the choice set. The argument is in the module, at the constant.
+#
+# The reason none of it is a flag: a suite that could be changed from a spec file is a
+# researcher degree of freedom, and this experiment is pre-registered. Changing the suite is
+# a commit, with a test that fails until `SUITE_VERSION` moves with it.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-1xl4
+command: >-
+  bash -lc 'EDULLM_CHECKPOINT_CHECK=waived python .edullm/score_checkpoints.py "$EDULLM_RUN_ID"
+  --arm-run baseline=s3://sbsandbox-intern-edullm-outputs/teams/input-core/runs/RUN_ID_OF_THE_BASELINE_STAGE/
+  --arm-run faithful=s3://sbsandbox-intern-edullm-outputs/teams/input-core/runs/RUN_ID_OF_THE_FAITHFUL_STAGE/
+  --arm-run output-only=s3://sbsandbox-intern-edullm-outputs/teams/input-core/runs/RUN_ID_OF_THE_OUTPUT_ONLY_STAGE/
+  --arm-run mhc=s3://sbsandbox-intern-edullm-outputs/teams/input-core/runs/RUN_ID_OF_THE_MHC_STAGE/
+  --model-factory hc_370M
+  --step 6000
+  --suite h2b
+  --max-sequence-length 4096
+  --batch-tokens 8192
+  --output-dir "$EDULLM_OUTPUT_PREFIX"
+  --param-dtype bfloat16'

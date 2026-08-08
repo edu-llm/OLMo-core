@@ -284,13 +284,92 @@ COPY pyproject.toml ./
 # WHAT THIS LINE DOES NOT INSTALL: ring-flash-attn, which FlashAttention2Backend requires
 # only for context parallelism. These runs are DP-only at sequence length 4096, so it would
 # be weight in the image nothing reaches for.
+#
+# THE `eval` EXTRA IS ON THE EXTRACTION BESIDE `wandb` NOW, AND IT IS WHAT MAKES A
+# DOWNSTREAM NUMBER POSSIBLE AT ALL WITHOUT A NETWORK.
+#
+# `ai2-olmo-eval==0.9.0` is an 85.6 MB wheel and almost all of it is data: 74 MB of
+# `olmo_eval/oe_eval_tasks` (one `requests.jsonl.gz` per task, already prompted and
+# few-shot-assembled) and 31 MB of `olmo_eval/hf_datasets` (HuggingFace splits saved with
+# `save_to_disk`). `olmo_eval.util` reads both through `importlib_resources` and
+# `datasets.load_from_disk`, so a container that has the wheel has the tasks and reaches no
+# network to build one. With its own dependencies -- datasets<4, pyarrow<20, torchmetrics --
+# the layer grows by about 240 MB.
+#
+# THAT IS THE WHOLE REASON THE DOWNSTREAM JOB CAN SIT BESIDE A SEALED-CORPUS EXPERIMENT.
+# `.edullm/train_on_corpus.py` declines to wire the stock downstream evaluator into training
+# because it "pulls HellaSwag from Hugging Face", and at this version of the harness that is
+# no longer true of the task data. What remains true is the tokenizer, which is the layer
+# below this one.
+#
+# IT IS IN THE SHARED DEPENDENCY LAYER RATHER THAN IN ONE OF ITS OWN, WHICH COSTS THE NEXT
+# TRAINING BUILD ONE CACHE MISS. Every argument in the paragraphs above this one is that a
+# layer keyed on pyproject.toml and this file is one blob shared by every image built from
+# one dependency set, and a layer below `COPY . .` is a distinct blob per commit. 240 MB
+# once, shared thereafter, against 240 MB per image; the first training image built after
+# this commit re-resolves the whole set and every one after it is a cache hit.
+#
+# The pins it brings are worth knowing before something else asks for a newer one:
+# `datasets<4`, `pyarrow<20` and `tokenizers<0.23`. Nothing else in this image asks for any
+# of the three today, so the resolution is unconstrained in practice, and a future
+# dependency that wants datasets 4 will meet this rather than silently winning.
 RUN set -eux; \
     python -m pip install --no-cache-dir "torch==2.9.0"; \
     python -m pip install --no-cache-dir "flash-attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3%2Bcu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl"; \
-    python -c "import tomllib; project = tomllib.load(open('pyproject.toml', 'rb'))['project']; open('/tmp/dependencies.txt', 'w').write('\n'.join(project['dependencies'] + project['optional-dependencies']['wandb']) + '\n')"; \
+    python -c "import tomllib; extras = tomllib.load(open('pyproject.toml', 'rb'))['project']; open('/tmp/dependencies.txt', 'w').write('\n'.join(extras['dependencies'] + extras['optional-dependencies']['wandb'] + extras['optional-dependencies']['eval']) + '\n')"; \
     python -m pip install --no-cache-dir -r /tmp/dependencies.txt boto3 "botocore[crt]"; \
     rm /tmp/dependencies.txt; \
     python -m pip install --no-cache-dir "edullm-data @ https://github.com/edu-llm/edullm-data/archive/38bf831a6c3f445e394784018441fd59288b876c.tar.gz"
+
+# THE DOLMA2 TOKENIZER, AS A FILE, BECAUSE IT IS THE ONE THING THE HARNESS DOES NOT SHIP.
+#
+# `ai2-olmo-eval` bundles two tokenizers in `olmo_eval/tokenizers` and neither is dolma2.
+# `TokenizerConfig.dolma2().identifier` is the HuggingFace id `allenai/dolma2-tokenizer`,
+# and `olmo_eval.HFTokenizer.__init__` resolves an identifier that is neither a local file
+# nor package data by calling `tokenizers.Tokenizer.from_pretrained` -- a fetch from
+# huggingface.co, from inside a running container, in a module whose entire claim is that it
+# read nothing from the public internet. Without this layer the task data is offline and the
+# tokenizer is not, which is the same defect with a smaller blast radius.
+#
+# BUILD-TIME NETWORK IS NOT RUN-TIME NETWORK, and that distinction is the whole design. This
+# image already reaches PyPI and two GitHub release assets at build time; what it must not do
+# is reach anything while a run is in progress, where a 503 is indistinguishable from a
+# training failure and lands on a paid instance. A file baked in at build time is read from
+# disk forever after.
+#
+# PINNED TO A REVISION AND CHECKSUMMED, for the same reason torch is pinned to a version. A
+# `resolve/main/` URL names whatever that repository's tip is on the day of the build, and
+# two builds of one commit would then carry different tokenizers -- which does not fail, and
+# does not even look wrong: every id is in range, and the run simply reports a worse model.
+# `5292e5d6c0f40b67cc765fe41bec991cf4345b5c` is the tip as it stood on 2026-08-08, and the
+# 4,237,178-byte file at it hashes to the digest below. `.edullm/score_checkpoints.py`
+# asserts the same digest at run time against the same constant, so an image where something
+# else put a tokenizer at this path is caught there too.
+#
+# NO `huggingface_hub`, NO `git lfs`, NO CREDENTIAL, AND NO NEW PACKAGE. The file is not an
+# LFS pointer and the repository is public, so `resolve/<sha>/tokenizer.json` is one
+# ordinary HTTPS GET. `urllib.request` and `hashlib` are the standard library of the python
+# base this image is built on, and curl is not something this base is known to carry --
+# adding it would be an apt layer and a package in an image an untrusted training command
+# runs inside, for a fetch python already does. `urlopen` raises on a non-200, so an error
+# page cannot be written to the output file and then checksummed, which is the failure mode
+# a bare `curl` without `--fail` has.
+#
+# THE VARIABLE IS SET HERE AND READ BY `score_checkpoints.resolve_tokenizer_path`, which also
+# falls back to this literal path and refuses outright rather than reaching for the
+# identifier if neither is there.
+#
+# THE URL AND THE DIGEST ARE LITERALS RATHER THAN `ARG`s, DELIBERATELY. The platform's
+# `verify_dockerfile_base` gate reads the global ARG scope of this file, and a build
+# argument nobody passes is also a build argument somebody can pass -- which would make the
+# provenance record name a revision the image was not built from. Two literals cannot be
+# overridden from a command line.
+ENV EDULLM_DOLMA2_TOKENIZER=/opt/edullm/tokenizers/dolma2-tokenizer/tokenizer.json
+RUN set -eux; \
+    mkdir -p "$(dirname "${EDULLM_DOLMA2_TOKENIZER}")"; \
+    python -c "import hashlib, os, sys, urllib.request; target = os.environ['EDULLM_DOLMA2_TOKENIZER']; body = urllib.request.urlopen(sys.argv[1], timeout=120).read(); digest = hashlib.sha256(body).hexdigest(); sys.exit(f'{sys.argv[1]} hashes to {digest}, not the pinned {sys.argv[2]}') if digest != sys.argv[2] else None; open(target, 'wb').write(body); print(f'{target}: {len(body)} bytes, sha256 {digest}')" \
+        "https://huggingface.co/allenai/dolma2-tokenizer/resolve/5292e5d6c0f40b67cc765fe41bec991cf4345b5c/tokenizer.json" \
+        "969c214487b744f1457d8a4f2055fd4ad348edff5322d4f21f2906ceb158a636"
 
 # The build context is the repository root, so the root .dockerignore is what keeps .git
 # out of this layer, and out of the context entirely.
@@ -376,15 +455,27 @@ COPY . .
 # 0xE3069283 and the platform's checkpoints.py asserts against the same constant. It costs a
 # microsecond and it is the difference between "botocore will use this" and "and the number
 # it gets is right".
+#
+# THE DOWNSTREAM LINE IS THE ONE THAT WOULD OTHERWISE BE FOUND ON A PAID INSTANCE, AND IT IS
+# THE READ PATH RATHER THAN THE IMPORT. `import olmo_eval` succeeding proves a distribution
+# is on disk. It does not prove the 105 MB of task data came with the wheel, that
+# `datasets.load_from_disk` can open a split saved by an older `datasets` than the one pip
+# resolved, or that the tokenizer file downloaded above is one `tokenizers` will parse. So
+# the check builds a real task with the real tokenizer: `copycolors_10way_fast` is a hundred
+# items and the cheapest thing in the catalogue, and it goes through
+# `load_oe_eval_requests`, `HFTokenizer.from_file` and the collator -- which is every part
+# of the offline path a scoring cell depends on. Its 100-sample count is asserted rather
+# than its truthiness, so a task file that shipped empty fails the build.
 RUN set -eux; \
-    python -m pip install --no-cache-dir ".[wandb]"; \
+    python -m pip install --no-cache-dir ".[wandb,eval]"; \
     python -c "import torch; assert torch.__version__.startswith('2.9.0'), f'torch was moved off the pin: {torch.__version__}'"; \
     python -c "import torch; assert torch.version.cuda, 'the CUDA build of torch was replaced by a CPU wheel'"; \
     python -c "import boto3, wandb; from olmo_core.data import TokenizerConfig; from olmo_core.nn.transformer import TransformerConfig; print(TransformerConfig.olmo2_190M(vocab_size=TokenizerConfig.gpt2().padded_vocab_size()).__class__.__name__)"; \
     python -c "from olmo_core.nn.attention.backend import FlashAttention2Backend; FlashAttention2Backend.assert_supported(); import flash_attn; print(flash_attn.__version__)"; \
     python -c "import boto3; from botocore import UNSIGNED; from botocore.config import Config; from botocore.stub import Stubber; client = boto3.client('s3', region_name='us-east-1', config=Config(signature_version=UNSIGNED)); stub = Stubber(client); stub.add_response('put_object', {}); stub.activate(); client.put_object(Bucket='b', Key='k', Body=b'123456789', ChecksumAlgorithm='CRC32C')"; \
     python -c "from awscrt.checksums import crc32c; assert crc32c(b'123456789') == 0xE3069283, 'awscrt computes something other than CRC-32C'"; \
-    python -c "from edullm_data.read import dataset_paths, resolve_latest; print(dataset_paths.__module__)"
+    python -c "from edullm_data.read import dataset_paths, resolve_latest; print(dataset_paths.__module__)"; \
+    python -c "import os, olmo_eval; from olmo_core.data import TokenizerConfig; t = TokenizerConfig.dolma2(); k = olmo_eval.HFTokenizer(os.environ['EDULLM_DOLMA2_TOKENIZER'], pad_token_id=t.pad_token_id, eos_token_id=t.eos_token_id); assert k.vocab_size == t.vocab_size, f'the vendored tokenizer has {k.vocab_size} tokens and dolma2 has {t.vocab_size}'; d = olmo_eval.build_task('copycolors_10way_fast', k); assert len(d.samples) == 100, f'the bundled task data is not there: {len(d.samples)} samples'; print(f'olmo_eval offline: {len(olmo_eval.list_tasks())} tasks')"
 
 # No CMD. The entrypoint of the registered base is inherited deliberately, so swapping the
 # base does not leave a stale command behind.
