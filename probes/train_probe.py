@@ -130,6 +130,34 @@ ARMS: dict[str, dict] = {
     "DP4-strict": dict(mixer="kda_hh", num_householder=4, beta_regime="strict"),
     "DP2-P3": dict(mixer="kda_hh", num_householder=2, beta_regime="strict", match_arm="DP3-strict"),
     "DP3-P4": dict(mixer="kda_hh", num_householder=3, beta_regime="strict", match_arm="DP4-strict"),
+    # ---- The reflection half of the R=4 rung. ----
+    #
+    # The ladder above is strict-only by construction, because its question was whether arity
+    # pays under the constraint K3 actually imposes. That leaves the (beta regime x R) square
+    # measured at R in {1,2} and the arity ladder measured at strict beta, and NOTHING at the
+    # corner where both are high. These two arms are that corner.
+    #
+    # The estimand is
+    #   (DP4-refl - DP3-P4-refl) - (DP4-strict - DP3-P4),
+    # which is why 'DP3-P4-refl' exists rather than reusing 'DP3-P4'. Both halves of an
+    # interaction must be built the same way: matching one contrast and not the other makes the
+    # two differently constructed, and their difference then mixes the capacity correction with
+    # the effect -- worse than controlling neither. The R=1/R=2 square learned this already
+    # (see R1-refl-P's note); the same rule applies one rung up.
+    #
+    # Both solve to the same ffn_dim=174 increment the strict controls carry, because the
+    # parameter cost is affine in R and identical across regimes: beta = s*Sigmoid(z) with
+    # s in {1,2} adds no parameter, so a reflection arm and its strict twin have byte-identical
+    # ledgers at equal R.
+    #
+    # UNTESTED TERRITORY, FLAGGED: no reflection arm has run above R=2. If four reflections per
+    # token behave differently from two -- saturation at beta=2, or instability the strict arms
+    # never showed -- it appears here first. All 216 prior cells logged zero non-finite loss
+    # steps, so this is a caution rather than an expectation.
+    "DP4-refl": dict(mixer="kda_hh", num_householder=4, beta_regime="reflection"),
+    "DP3-P4-refl": dict(
+        mixer="kda_hh", num_householder=3, beta_regime="reflection", match_arm="DP4-refl"
+    ),
     "DP2-budgeted": dict(unimplemented="needs per-factor beta b=2*sigmoid(l_b), pi=sigmoid(l_pi)"),
     "R1-2step-tiedK": dict(unimplemented="needs k2=k1 forced at the recurrence boundary"),
 }

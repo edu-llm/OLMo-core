@@ -1,0 +1,38 @@
+# The (beta regime x R) interaction at R=4, as a 48-cell fan-out.
+#
+# A SEPARATE SPEC RATHER THAN AN EDIT TO run.yaml. run.yaml is the language-model
+# microbatch-throughput probe and is load-bearing for that work; this is the 1.4M-parameter
+# synthetic probe, a different program with a different workload profile. `edullm submit --spec`
+# selects this one, so the two coexist instead of one overwriting the other.
+#
+# WHAT THIS MEASURES. The completed study has the beta contrast at R in {1,2} and the arity
+# ladder at strict beta, and nothing where both are high. This is that corner:
+#
+#   (DP4-refl - DP3-P4-refl) - (DP4-strict - DP3-P4)
+#
+# The two strict arms already exist at bundles 1101-1106; this adds the reflection halves at
+# 1101-1112, so the strict side pairs against the first six and the reflection side carries
+# n=12 for its own contrast. The eval banks are content-addressed by (task, bundle), so cells
+# added now are *paired* with cells run days ago rather than merely comparable.
+#
+# WHY BOTH REFLECTION ARMS AND NOT JUST DP4-refl. Both halves of an interaction must be built
+# the same way. The strict half is capacity-matched (DP3-P4 carries R=4's parameter count in
+# feed-forward width, -0.035%); a reflection half without its own control would make the two
+# differently constructed, and their difference would mix the capacity correction into the
+# effect. Worse than controlling neither.
+#
+# olmo-core-check, NOT olmo-core-train: a cell is ~290 s and has nothing to resume. The train
+# profile would declare a checkpoint contract and price 24 hours against a five-minute job.
+#
+# The index arithmetic is verified before every submission by running this exact bash through
+# the platform's own shlex.join-in-bash-c wrapping and asserting 48 distinct (arm, task, bundle)
+# triples. 24 // 12 selects the arm, (I // 6) % 2 the task, I % 6 the bundle offset.
+schema_version: 1
+workload_profile: olmo-core-check
+suggested_compute: gpu-1xa10g
+command: >-
+  bash -lc 'I="${AWS_BATCH_JOB_ARRAY_INDEX:-0}"; set -- DP4-refl DP3-P4-refl;
+  eval "ARM=\${$(( I / 24 + 1 ))}"; set -- a5_words s5_words;
+  eval "TASK=\${$(( (I / 12) % 2 + 1 ))}"; BUNDLE=$(( 1101 + I % 12 ));
+  exec python .edullm/probe_group_words.py "$EDULLM_RUN_ID" --task "$TASK" --arm "$ARM"
+  --bundle-id "$BUNDLE" --output-dir "$EDULLM_OUTPUT_PREFIX" --steps 4000'
