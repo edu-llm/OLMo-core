@@ -14,8 +14,8 @@ ENV PYTHONPATH=/opt/olmo-core/src \
     OLMO_FLASH_ATTN2_CUDA_ARCHS=80 \
     CC=gcc-14 \
     CXX=g++-14 \
-    CUDA_HOME=/opt/cuda \
-    PATH=/opt/cuda/bin:${PATH} \
+    CUDA_HOME=/usr/local/cuda-12.8 \
+    PATH=/usr/local/cuda-12.8/bin:${PATH} \
     TORCH_CUDA_ARCH_LIST="8.0"
 
 LABEL ai.edullm.mamba-comparison="true" \
@@ -25,11 +25,19 @@ LABEL ai.edullm.mamba-comparison="true" \
 WORKDIR /opt/olmo-core
 
 # Build tools are fixed to the compiler major used for the CUDA 12.8 extensions.
+# NVIDIA's CUDA 12 wheel named ``nvidia-cuda-nvcc-cu12`` contains ptxas but not
+# the nvcc driver, so install nvcc from NVIDIA's signed Debian 13 repository.
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends gcc-14 g++-14; \
+    apt-get install -y --no-install-recommends ca-certificates wget gcc-14 g++-14; \
+    wget -q https://developer.download.nvidia.com/compute/cuda/repos/debian13/x86_64/cuda-keyring_1.1-1_all.deb; \
+    dpkg -i cuda-keyring_1.1-1_all.deb; \
+    rm cuda-keyring_1.1-1_all.deb; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends cuda-nvcc-12-8; \
     rm -rf /var/lib/apt/lists/*; \
-    gcc-14 --version
+    gcc-14 --version; \
+    nvcc --version
 
 # The xLSTM kernels are distributed under the NXAI Community License. Keep the
 # organizational research approval and upstream attribution in the image.
@@ -66,16 +74,7 @@ RUN set -eux; \
       "boto3==1.40.70" \
       "botocore[crt]==1.40.70" \
       "wandb==0.23.0" \
-      "flash-linear-attention==0.4.1" \
-      "nvidia-cuda-nvcc-cu12==12.8.93" \
-      "nvidia-cuda-runtime-cu12==12.8.90"; \
-    NVIDIA_ROOT="$(python -c 'import site; print(site.getsitepackages()[0] + "/nvidia")')"; \
-    mkdir -p /opt/cuda; \
-    ln -s "${NVIDIA_ROOT}/cuda_nvcc/bin" /opt/cuda/bin; \
-    ln -s "${NVIDIA_ROOT}/cuda_nvcc/nvvm" /opt/cuda/nvvm; \
-    ln -s "${NVIDIA_ROOT}/cuda_runtime/include" /opt/cuda/include; \
-    ln -s "${NVIDIA_ROOT}/cuda_runtime/lib" /opt/cuda/lib64; \
-    /opt/cuda/bin/nvcc --version; \
+      "flash-linear-attention==0.4.1"; \
     python -m pip install --no-cache-dir \
       "edullm-data @ https://github.com/edu-llm/edullm-data/archive/38bf831a6c3f445e394784018441fd59288b876c.tar.gz"
 
