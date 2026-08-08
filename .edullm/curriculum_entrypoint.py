@@ -72,6 +72,8 @@ CHECKPOINT_INTERVAL = 125
 EMA_STEPS = (2000, 2125, 2250, 2384)
 EMA_ALPHA = 0.8
 WANDB_PROJECT_NAME = "curriculum"
+WANDB_PROJECT_EXT_NAME = "curriculum-ext"
+WANDB_PROJECT_NAMES = frozenset((WANDB_PROJECT_NAME, WANDB_PROJECT_EXT_NAME))
 
 
 def _wandb_project_name() -> str:
@@ -543,10 +545,11 @@ def scientific_identity(
 
 
 def _validate_runtime(args: argparse.Namespace, arm: Arm) -> tuple[Path, Path, Path]:
-    expected_project = WANDB_PROJECT_NAME
     project = _wandb_project_name()
-    if project != expected_project:
-        raise CurriculumConfigError(f"W&B project must be {expected_project!r}, got {project!r}")
+    if project not in WANDB_PROJECT_NAMES:
+        raise CurriculumConfigError(
+            f"W&B project must be one of {sorted(WANDB_PROJECT_NAMES)!r}, got {project!r}"
+        )
     if os.environ.get("EDULLM_DATASET_ID") not in (None, "", PARENT_DATASET_ID):
         raise CurriculumConfigError(f"platform dataset must be {PARENT_DATASET_ID}")
     if os.environ.get("EDULLM_DATASET_VERSION") not in (None, "", PARENT_VERSION):

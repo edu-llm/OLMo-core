@@ -368,8 +368,8 @@ def main(argv: list[str] | None = None) -> int:
         import wandb
 
         project = os.environ.get("EDULLM_WANDB_PROJECT") or "curriculum"
-        if project != "curriculum":
-            raise SystemExit("EMA W&B project must be curriculum")
+        if project not in {"curriculum", "curriculum-ext"}:
+            raise SystemExit("EMA W&B project must be curriculum or curriculum-ext")
         init_kwargs: dict[str, Any] = {
             "project": project,
             "mode": args.wandb_mode,

@@ -125,6 +125,7 @@ def test_recipe_is_exact_approved_seven_arm_matrix() -> None:
         "control",
     }
     assert all(arm.wandb_project == "curriculum" for arm in arms)
+    assert entrypoint.WANDB_PROJECT_NAMES == {"curriculum", "curriculum-ext"}
     assert CURRICULUM_DATASET_ID == "curriculum/regmix-370m"
     assert CURRICULUM_ORDER_GROUP_FOR_METRIC == {
         "compression_ratio": "compression",
