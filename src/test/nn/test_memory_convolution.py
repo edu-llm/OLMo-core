@@ -8,6 +8,8 @@ import pytest
 import torch
 import torch.nn.functional as F
 
+from olmo_core.testing.utils import requires_gpu
+
 
 def _load_convolution_module():
     flash_api = ModuleType("olmo_core.nn.attention.flash_linear_attn_api")
@@ -31,12 +33,14 @@ def _depthwise_reference(
     weight: torch.Tensor,
     bias: torch.Tensor | None,
     activation: str | None,
+    dilation: int = 1,
 ) -> torch.Tensor:
     output = F.conv1d(
         x.transpose(1, 2),
         weight,
         bias,
-        padding=weight.shape[-1] - 1,
+        padding=(weight.shape[-1] - 1) * dilation,
+        dilation=dilation,
         groups=weight.shape[0],
     )
     output = output[..., : x.shape[1]].transpose(1, 2)
@@ -91,6 +95,67 @@ def test_cpu_fallback_matches_depthwise_conv_and_backward(bias: bool, activation
     if conv.bias is not None:
         assert bias_ref is not None
         torch.testing.assert_close(conv.bias.grad, bias_ref.grad)
+
+
+def test_cpu_fallback_supports_dilation():
+    torch.manual_seed(9)
+    conv = CausalConv1d(
+        hidden_size=4,
+        kernel_size=4,
+        dilation=3,
+        bias=False,
+        activation=None,
+        dtype=torch.float64,
+    )
+    x = torch.randn(2, 12, 4, dtype=torch.float64, requires_grad=True)
+    x_ref = x.detach().clone().requires_grad_(True)
+    weight_ref = conv.weight.detach().clone().requires_grad_(True)
+
+    actual = conv(x)
+    expected = _depthwise_reference(
+        x_ref,
+        weight_ref,
+        None,
+        None,
+        dilation=3,
+    )
+    torch.testing.assert_close(actual, expected)
+    output_grad = torch.randn_like(actual)
+    actual.backward(output_grad)
+    expected.backward(output_grad)
+    torch.testing.assert_close(x.grad, x_ref.grad)
+    torch.testing.assert_close(conv.weight.grad, weight_ref.grad)
+
+
+@requires_gpu
+def test_cuda_dilated_fallback_compiles_in_bfloat16(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(convolution_module, "has_fla", lambda: True)
+    conv = CausalConv1d(
+        hidden_size=4,
+        kernel_size=4,
+        dilation=3,
+        bias=False,
+        activation=None,
+        dtype=torch.bfloat16,
+        init_device="cuda",
+    )
+    compiled = torch.compile(conv, fullgraph=True)
+    x = torch.randn(
+        2,
+        12,
+        4,
+        device="cuda",
+        dtype=torch.bfloat16,
+        requires_grad=True,
+    )
+    output = compiled(x)
+    output.float().square().mean().backward()
+
+    assert output.shape == x.shape
+    assert x.grad is not None
+    assert torch.isfinite(x.grad).all()
 
 
 def test_cpu_fallback_is_causal():

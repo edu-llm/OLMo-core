@@ -29,6 +29,7 @@ def build_model_config() -> TransformerConfig:
     assert model.block.feed_forward_moe is not None
     model.block.feed_forward_moe.num_experts = NUM_EXPERTS
     model.block.feed_forward_moe.hidden_size = EXPERT_HIDDEN_SIZE
+    model.checkpoint_revision = common.EXPERIMENT_REVISION
     return model
 
 

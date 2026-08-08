@@ -29,7 +29,7 @@ def test_build_config_uses_shared_local_pipeline_without_memory_overrides():
     assert config.model is not base_moe.build_model_config()
     assert config.dataset.paths == [common.LOCAL_DATASET_PLACEHOLDER]
     assert all(
-        override.params != ["blocks.*.memory.*"]
+        override.params != ["blocks.*.memory.tables.*"]
         for override in (config.train_module.optim.group_overrides or [])
     )
 

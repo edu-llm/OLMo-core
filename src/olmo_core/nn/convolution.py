@@ -21,6 +21,7 @@ class CausalConv1d(nn.Conv1d):
         *,
         hidden_size: int,
         kernel_size: int,
+        dilation: int = 1,
         bias: bool = False,
         backend: Literal["triton", "cuda"] = "triton",
         dtype: torch.dtype | None = None,
@@ -30,6 +31,7 @@ class CausalConv1d(nn.Conv1d):
         """
         :param hidden_size: Number of input/output channels (must be equal for depthwise conv).
         :param kernel_size: Size of the convolution kernel.
+        :param dilation: Spacing between convolution kernel taps.
         :param bias: Whether to include learnable bias.
         :param backend: Backend implementation ('triton' or 'cuda').
         :param dtype: The data type of the convolution weights and bias.
@@ -42,7 +44,8 @@ class CausalConv1d(nn.Conv1d):
             kernel_size=kernel_size,
             groups=hidden_size,
             bias=bias,
-            padding=kernel_size - 1,
+            padding=(kernel_size - 1) * dilation,
+            dilation=dilation,
             device=init_device,
             dtype=dtype,
         )
@@ -73,7 +76,7 @@ class CausalConv1d(nn.Conv1d):
             if bias is not None:
                 bias = bias[self._cp_channel_slice]
 
-        if x.is_cuda and has_fla():
+        if x.is_cuda and has_fla() and self.dilation == (1,):
             output = dispatch_causal_conv1d(
                 x=x,
                 weight=weight.squeeze(1),
@@ -95,6 +98,7 @@ class CausalConv1d(nn.Conv1d):
             weight,
             bias,
             padding=self.padding[0],
+            dilation=self.dilation[0],
             groups=weight.shape[0],
         )
         output = output[..., : x.shape[1]]

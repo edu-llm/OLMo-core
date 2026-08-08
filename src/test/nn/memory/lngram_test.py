@@ -41,6 +41,9 @@ def test_config_roundtrip_and_validation() -> None:
         {"surrogate_scale": -1.0},
         {"surrogate_scale": math.nan},
         {"conv_kernel_size": 0},
+        {"conv_dilation": 0},
+        {"norm_eps": 0.0},
+        {"norm_eps": math.inf},
         {"require_triton": "yes"},
     ]
     for kwargs in invalid_kwargs:
@@ -63,10 +66,12 @@ def test_builds_on_cpu_and_meta_with_exact_shapes_and_shared_readouts() -> None:
 
     assert isinstance(module, Lngram)
     assert isinstance(module.input_norm, RMSNorm)
+    assert isinstance(module.query_norm, RMSNorm)
     assert isinstance(module.key_norm, RMSNorm)
     assert isinstance(module.conv_norm, RMSNorm)
     assert isinstance(module.conv, CausalConv1d)
     assert module.input_norm.bias is None
+    assert module.query_norm.bias is None
     assert module.key_norm.bias is None
     assert module.conv_norm.bias is None
     assert module.w_q.bias is None
@@ -74,7 +79,12 @@ def test_builds_on_cpu_and_meta_with_exact_shapes_and_shared_readouts() -> None:
     assert module.w_v.bias is not None
     assert module.conv.bias is None
     assert module.conv.activation is None
+    assert module.conv.dilation == (1,)
+    assert module.input_norm.eps == config.norm_eps == 1e-6
     assert torch.count_nonzero(module.conv.weight) == 0
+    assert torch.count_nonzero(module.w_k.bias) == 0
+    assert torch.count_nonzero(module.w_v.bias) == 0
+    assert all(torch.count_nonzero(table) == 0 for table in module.tables)
 
     assert len(module.tables) == 2
     assert tuple(module.tables[0].shape) == (2 * 16**2, 2)
@@ -95,11 +105,29 @@ def test_builds_on_cpu_and_meta_with_exact_shapes_and_shared_readouts() -> None:
         key_hook.remove()
         value_hook.remove()
     assert output.shape == (2, 4, 8)
+    torch.testing.assert_close(output, torch.zeros_like(output))
     assert calls == {"key": len(config.orders), "value": len(config.orders)}
 
     meta_module = config.build(8, init_device="meta")
     assert all(parameter.is_meta for parameter in meta_module.parameters())
     assert tuple(meta_module.tables[1].shape) == (2 * 16**3, 2)
+
+
+def test_noop_initialization_still_updates_tables() -> None:
+    torch.manual_seed(5)
+    module = LngramConfig(memory_dim=2).build(4)
+    hidden_states = torch.randn(2, 5, 4, requires_grad=True)
+    output = module(hidden_states)
+
+    torch.testing.assert_close(output, torch.zeros_like(output))
+    (output * torch.randn_like(output)).sum().backward()
+    for table in module.tables:
+        _assert_finite_nonzero(table.grad)
+    assert module.w_q.weight.grad is not None
+    torch.testing.assert_close(
+        module.w_q.weight.grad,
+        torch.zeros_like(module.w_q.weight.grad),
+    )
 
 
 def test_exact_little_endian_addresses_mask_prefix_and_zero_conv_branch() -> None:
@@ -169,19 +197,49 @@ def test_zero_conv_output_is_manually_computed_shared_gated_sum(
     hidden_states = torch.randn(1, 3, 4)
 
     expected = torch.zeros_like(hidden_states)
-    normalized_h = module.input_norm(hidden_states)
+    normalized_h = module.query_norm(hidden_states)
     for order, memory in zip(module.orders, retrieved):
         key = module.w_k(memory)
         value = module.w_v(memory)
         alpha = torch.sigmoid(
-            (normalized_h * module.key_norm(key)).sum(dim=-1, keepdim=True)
+            (normalized_h.float() * module.key_norm(key).float()).sum(dim=-1, keepdim=True)
             / math.sqrt(module.d_model)
-        )
+        ).to(value.dtype)
         contribution = alpha * value
         contribution[:, : order - 1] = 0
         expected = expected + contribution
 
     torch.testing.assert_close(module(hidden_states), expected)
+
+
+def test_gate_similarity_accumulates_in_float32(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import olmo_core.nn.memory.lngram as lngram_module
+
+    module = LngramConfig(orders=(2,), memory_dim=1).build(
+        4,
+        dtype=torch.bfloat16,
+    )
+    retrieved = torch.randn(1, 3, 1, dtype=torch.bfloat16)
+    monkeypatch.setattr(
+        lngram_module,
+        "counterfactual_lookup",
+        lambda *args, **kwargs: (retrieved,),
+    )
+    hidden_states = torch.randn(1, 3, 4, dtype=torch.bfloat16)
+    key = module.w_k(retrieved)
+    value = module.w_v(retrieved)
+    gate_logits = (module.query_norm(hidden_states).float() * module.key_norm(key).float()).sum(
+        dim=-1, keepdim=True
+    ) / math.sqrt(module.d_model)
+    expected = torch.sigmoid(gate_logits).to(value.dtype) * value
+    expected[:, :1] = 0
+
+    actual = module(hidden_states)
+
+    assert actual.dtype is torch.bfloat16
+    torch.testing.assert_close(actual, expected)
 
 
 def test_incomplete_prefixes_stay_zero_with_affine_readout_biases() -> None:
@@ -212,6 +270,7 @@ def test_total_active_and_flop_accounting_are_exact() -> None:
     table_params = sum(table.numel() for table in module.tables)
     dense_params = (
         d_model  # input RMSNorm
+        + d_model  # query RMSNorm
         + d_model * d_model  # W_q
         + 2 * (d_model * routes * memory_dim + d_model)  # shared W_K and W_V
         + d_model  # key RMSNorm
@@ -233,6 +292,8 @@ def test_normal_and_counterfactual_gradients_are_finite_and_nonzero() -> None:
     torch.manual_seed(17)
     module = LngramConfig(memory_dim=2).build(4)
     with torch.no_grad():
+        for table in module.tables:
+            table.normal_(std=0.02)
         module.conv.weight.normal_(std=0.1)
 
     hidden_states = torch.randn(2, 5, 4, requires_grad=True)
@@ -248,6 +309,7 @@ def test_normal_and_counterfactual_gradients_are_finite_and_nonzero() -> None:
     _assert_finite_nonzero(module.w_v.bias.grad)
     _assert_finite_nonzero(module.conv.weight.grad)
     _assert_finite_nonzero(module.input_norm.weight.grad)
+    _assert_finite_nonzero(module.query_norm.weight.grad)
     _assert_finite_nonzero(module.key_norm.weight.grad)
     _assert_finite_nonzero(module.conv_norm.weight.grad)
     _assert_finite_nonzero(hidden_states.grad)
