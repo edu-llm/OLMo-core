@@ -1,0 +1,66 @@
+# STAGE 1 ON gpu-8xa100: five seeds of the baseline arm, and no treatment arm.
+#
+#   edullm check  --json --experiment hyper-connections-370m --dataset regmix-10b-v1 \
+#     --team input-core --spec .edullm/run.baseline-a100.yaml --compute gpu-8xa100 \
+#     --hours 7 --attempts 2 --fanout-size 5 --fanout-index-parameter seed
+#
+# WHY THIS FILE EXISTS. `run.baseline-stage.yaml` is the L40S submission and is not edited
+# after the fact, because five cells were admitted from it. This is the same stage on the
+# shape the capacity stall of 2026-08-08 moved the tranche to; the argument is in
+# hyper-connections.md under "The tranche moved to gpu-8xa100".
+#
+# THE TWO WORDS THAT DIFFER FROM THE L40S SPEC, AND NOTHING ELSE DOES.
+#
+#   --nproc-per-node          8 rather than 4. `require_a_process_for_every_device` refuses
+#                             the L40S command on this shape outright: four processes on
+#                             eight cards bills four idle GPUs.
+#   --rank-microbatch-size    12,288 rather than 16,384, and it is the A100 probe's own
+#                             value. 786,432 over 8 ranks is 98,304 a rank, which 12,288
+#                             divides exactly into 8 microbatches, and 12,288 puts the run
+#                             at ~28.9 GiB of a 40 GB card. 16,384 would be ~35.7 GiB, which
+#                             is 90% of the card before fragmentation, and an OOM is not
+#                             retried. The arithmetic is in commit 075f52aa7.
+#
+# EVERY OTHER RESOLVED OPTION IS THE L40S BASELINE'S, INCLUDING THE ONES IT LEFT TO DEFAULTS.
+# The L40S spec omitted --learning-rate, --weight-decay, --z-loss-multiplier,
+# --held-out-shards and --bytes-per-token and took the parser's values for them; its own
+# header records what those resolved to at commit 38b665919, and `hyper_connection_arms.
+# STAGE_PINNED` holds them as literals. They are written out here for the reason that header
+# gives about a staged tranche: a spec that leans on a default is a spec that changes when the
+# default does, and the four A100 stages have to be comparable to each other whatever lands in
+# between them.
+#
+# --seed IS ABSENT AND --arm IS PRESENT, exactly as on the L40S path. Under
+# `--fanout-index-parameter seed` every cell is handed this one command and the index is the
+# replicate; an explicit --seed would run five cells on one replicate, report a noise floor of
+# zero, and make every later arm significant against it. `resolve_seed` refuses the
+# combination rather than resolving it.
+#
+# --hours 7 COVERS A 5.5-HOUR CELL. At the probe's clean median of 2.91 s/step a lane cell is
+# 5.50 hours and a baseline cell is 5.45, so 7 leaves about 21% spare. It is not 8 because the
+# approved ceiling is rate x hours x attempts x cells and every unneeded hour is multiplied by
+# twenty. 2.91 is the `faithful` measurement and is therefore conservative here: the baseline
+# arm has no lanes to mix and measured 21% faster than `faithful` on the L40S.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/train_hyper_connections.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --arm baseline
+  --model-factory hc_370M
+  --sequence-length 4096
+  --global-batch-size 786432
+  --rank-microbatch-size 12288
+  --steps 6000
+  --save-interval 500
+  --warmup-steps 120
+  --learning-rate 7.8e-4
+  --weight-decay 0.033
+  --z-loss-multiplier 1e-5
+  --held-out-shards 2
+  --bytes-per-token 4.57
+  --monitor-interval 50
+  --eval-interval 500
+  --param-dtype bfloat16'

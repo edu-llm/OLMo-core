@@ -1,0 +1,39 @@
+# STAGE 2 ON gpu-8xa100, ARM 2 OF 3: five seeds of the faithful hyper-connection.
+#
+#   edullm check  --json --experiment hyper-connections-370m --dataset regmix-10b-v1 \
+#     --team input-core --spec .edullm/run.faithful-a100.yaml --compute gpu-8xa100 \
+#     --hours 7 --attempts 2 --fanout-size 5 --fanout-index-parameter seed
+#
+# The L40S spec this is derived from is `run.faithful-stage.yaml` and it is not edited:
+# `run_019fe2c2-afa8` was admitted from it. See `run.baseline-a100.yaml` for why the shape
+# moved, which two words differ from the L40S command, and why nothing else may.
+#
+# --fail-closed-by-step 400 IS HERE AND IS REACHABLE. `train` attaches the lane monitor only
+# to an arm that has lanes, so this is the one option that separates a treatment stage from
+# the baseline stage other than --arm itself. An arm whose lanes never differentiate is the
+# baseline with dead parameters and no downstream number from it reads in either direction, so
+# finding out at step 400 costs about twenty minutes on this shape rather than the arm.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/train_hyper_connections.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --arm faithful
+  --model-factory hc_370M
+  --sequence-length 4096
+  --global-batch-size 786432
+  --rank-microbatch-size 12288
+  --steps 6000
+  --save-interval 500
+  --warmup-steps 120
+  --learning-rate 7.8e-4
+  --weight-decay 0.033
+  --z-loss-multiplier 1e-5
+  --held-out-shards 2
+  --bytes-per-token 4.57
+  --monitor-interval 50
+  --eval-interval 500
+  --fail-closed-by-step 400
+  --param-dtype bfloat16'

@@ -1,0 +1,33 @@
+# STAGE 2 ON gpu-8xa100, ARM 3 OF 3: five seeds of output-side mixing only.
+#
+#   edullm check  --json --experiment hyper-connections-370m --dataset regmix-10b-v1 \
+#     --team input-core --spec .edullm/run.output-only-a100.yaml --compute gpu-8xa100 \
+#     --hours 7 --attempts 2 --fanout-size 5 --fanout-index-parameter seed
+#
+# The L40S spec this is derived from is `run.output-only-stage.yaml` and it is not edited:
+# `run_019fe2c2-bc91` was admitted from it. See `run.baseline-a100.yaml` for why the shape
+# moved, which two words differ from the L40S command, and why nothing else may.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/train_hyper_connections.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --arm output-only
+  --model-factory hc_370M
+  --sequence-length 4096
+  --global-batch-size 786432
+  --rank-microbatch-size 12288
+  --steps 6000
+  --save-interval 500
+  --warmup-steps 120
+  --learning-rate 7.8e-4
+  --weight-decay 0.033
+  --z-loss-multiplier 1e-5
+  --held-out-shards 2
+  --bytes-per-token 4.57
+  --monitor-interval 50
+  --eval-interval 500
+  --fail-closed-by-step 400
+  --param-dtype bfloat16'

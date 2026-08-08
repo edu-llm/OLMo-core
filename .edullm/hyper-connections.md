@@ -1185,6 +1185,161 @@ written a distributed checkpoint from eight ranks**, because the probe was cance
 before `--save-interval 100`. Any move to A100 should find that out in the first ten minutes of
 the first cell rather than at step 6,000 of fifteen of them.
 
+### The capacity stall of 2026-08-08, and what it does to the section above
+
+**Condition 1 of the two that flip the section above has not been met, and something the
+section did not weigh has happened instead: the L40S pool cannot deliver this tranche on any
+schedule the module can use.** The recommendation here is option (c) whole — all 20 cells on
+`gpu-8xa100`, freeze from the A100 baseline — and the argument is capacity rather than price.
+Read at 19:50 UTC.
+
+**What AWS says, rather than what the parent's state implies.** `edullm status` was spent on
+all four run ids. Every one of them reports the same thing:
+
+| submission | arm | queued | Batch status | attempts | cells logging in W&B |
+| --- | --- | --- | --- | --- | --- |
+| `run_019fe279-4ef0` | `baseline` | 17:45:45Z | `PENDING` | 0 of 2 | 3 of 5, step ~840 |
+| `run_019fe2c2-afa8` | `faithful` | 19:07:02Z | `PENDING` | 0 of 2 | 0 of 5 |
+| `run_019fe2c2-bc91` | `output-only` | 19:07:36Z | `PENDING` | 0 of 2 | 0 of 5 |
+| `run_019fe2c2-f498` | `mhc` | 19:07:50Z | `PENDING` | 0 of 2 | 0 of 5 |
+
+**Two things in that table are instrument rather than fact, and both are worth writing down
+before anybody reads a decision off it.**
+
+- **`PENDING` is the array parent and not a cell.** The baseline parent reads `PENDING` with
+  `0 of 2` attempts and a log stream "not yet assigned" while three of its children have been
+  training for two hours. `cancel-run.yml` reports `describe_jobs` on the parent id and never
+  reaches `arrayProperties.statusSummary`, so **the authorised read-only surface cannot
+  distinguish a `RUNNABLE` child from a `PENDING` one**, and no amount of spending on it will.
+  W&B is the only per-cell instrument this project has, which is what `tranche_watch.py` was
+  built for and is the whole of the evidence in the last column.
+- **`edullm status run_019fe2c2-bc91` prints `CANCELLED` and no compute was cancelled.** The
+  submission workflow's final job — "Index the run id against the workflow run that minted it"
+  — was cancelled, which makes GitHub call the whole run `cancelled`, which is what the CLI
+  reads. Every job before it succeeded, including "Start the admission execution", "Wait for
+  the admission decision" and "Say where this run went", and AWS holds a Batch job for it
+  queued at 19:07:36Z. So the `output-only` stage is admitted, is in the queue, and reads as
+  cancelled. Anything that keys off that word — a watcher, a resubmission, an audit of what
+  the tranche spent — is wrong about this stage in whichever direction it guesses.
+
+**What is not an instrument artifact: 3 of 20 cells are running, and 17 have never started.**
+Baseline seeds 2 and 4 have waited **2h04m** against a 19-minute median and a 6.4-hour worst
+observed. The fifteen treatment cells have waited **43 minutes**. Nothing has started since
+17:47.
+
+**The projection, and the pool is the ceiling rather than the queue.** Remaining work is
+3 × 12.2 hours on the running cells, 2 × 14.36 on the stranded baseline pair, and 15 × 17.85
+on the treatments: **333 node-hours**. The shape has **six nodes** and other teams are on them
+(`olmoe-specdec-baseline-l40s`, several `p3-evals-*`).
+
+| concurrency | wall clock to 20 cells |
+| --- | --- |
+| 3, the observed steady state | **111 hours — 4.6 days** |
+| 4 | 83 hours — 3.5 days |
+| 6, the entire pool with no other team on it | 55 hours — 2.3 days |
+
+**2.3 days is the floor and it assumes something that has never happened.** The honest range
+is **3.5 to 7 days**, centred near 4.5, and the upper end is not invented: the platform's own
+capacity line for this shape says two of ten queued runs were cancelled by hand while stuck in
+`RUNNABLE`, one at a hundred minutes, so a fifth of what queues here has historically never
+run at all.
+
+**The same 20 cells on `gpu-8xa100` are 110 node-hours.** At the probe's clean 2.91 s/step a
+lane cell is 5.50 hours and a baseline cell 5.45, and 2.91 is the `faithful` figure so the
+baseline five are priced 21% conservative. Fourteen nodes arrived over three days, thirteen
+runs have queued on them, **none was ever cancelled for want of capacity**, and the probe got
+a machine four minutes after admission. At six concurrent that is 18 hours and at ten it is
+11. **Call it 8 to 20 hours against 3.5 to 7 days.**
+
+#### `frontload-cl` is direct evidence, and it is stronger than the probe
+
+Another team ran this shape yesterday at what is materially this model. `run_019fddc9-3aaa`
+(`control`) and `run_019fddc9-44a6` (`primer`), W&B group `frontload-cl`, both **finished
+12,715 steps** on **8 × A100-SXM4-40GB**:
+
+| | `frontload-cl` control | this module |
+| --- | --- | --- |
+| `d_model` / `n_layers` / `n_heads` | 1024 / 16 / 16 | 1024 / 16 / 16 |
+| feed-forward hidden, sequence length | 4096, 4096 | 4096, 4096 |
+| global batch | 786,432 | 786,432 |
+| wall clock | **23,109 s for 12,715 steps — 1.82 s/step** | 2.91 s/step measured |
+
+**Do not plan against 1.82.** They run `attn_backend: flash_2`, full activation
+checkpointing, HSDP and a rank microbatch of 98,304 — one microbatch a rank. Every one of
+those is a numerics or a memory change this tranche has ruled out mid-experiment, and
+`PLATFORM_ATTN_BACKEND` pins every arm to torch SDPA. What the row is evidence of is the two
+things that are not numerics: **the shape places, twice in one evening for six and a half
+hours each**, and 10B tokens of this model fits it comfortably.
+
+**It also retires most of the checkpoint risk.** Their `checkpointer` ran at
+`save_interval: 1000` with `save_async: true` and `load_strategy: if_available`, so
+**distributed checkpoints from eight ranks were written on this shape, at this model size, to
+this bucket**, twenty-six times without incident. What that does not cover is stage 4, and see
+below.
+
+#### Pre-committing the freeze now is not the circular move the section above refused
+
+The objection was precise and it is worth keeping precise: under (c) there are two baselines,
+"whichever gets frozen is then a choice made with both visible", and pre-committing to the
+A100 one is "a commitment to discard a measurement already in hand in favour of one that does
+not exist yet". Three things have changed and each weakens a different clause.
+
+1. **Neither measurement is in hand and neither is visible.** σ̂ and the per-source
+   inverse-variance weights are read off finished 6,000-step cells. The L40S baseline is at
+   step 840 of 6,000 on three of five seeds. There is nothing to discard yet, and a rule
+   written now is written before either number exists — which is what a pre-registration is.
+2. **The L40S baseline cannot become the thing the freeze needs.** It has three live cells and
+   two that have never started, so at best it is **df = 2**, whose 95% interval on a variance
+   estimate spans a factor of **12.1** — the "rumour of a noise floor" this stage exists to
+   escape. The whole reason stage 1 went out alone was to buy df = 4. **The pool has already
+   taken that away**, and the candidate the circularity worried about is not a candidate.
+3. **The confound the section priced is gone rather than moved.** Under (c) whole, all four
+   arms and the baseline are on one shape at one world size, so the 16-against-24 padded
+   documents per eval batch cancels exactly, as it does within any shape. It is only the split
+   (option (b)) that aliases arm with machine, and that option is not being taken.
+
+So the rule, and it is committed here **before any A100 cell has been submitted**: **the A100
+baseline is the primary comparator for H1, H2a and H5 and the source of the frozen σ̂ and the
+frozen per-source weights. Whatever the three running L40S baseline cells reach before they
+are cancelled is a secondary cross-shape check and enters no gate.** That inverts nothing
+later; it is the last sentence written before the submissions go out.
+
+#### What makes this hard to reverse, and the ten-dollar thing that should precede it
+
+- **Stage 4 reads a step-6000 checkpoint back on one L4, and nothing has done that from an
+  eight-rank write on this branch.** The library says it can:
+  `load_model_and_optim_state` is documented "agnostic to the distributed topology in that it
+  can load checkpoints saved with a different distributed topology", it goes through
+  `dist_cp.state_dict_loader.load`, and `frontload-cl` proves the write half. The read half at
+  world size 1 is still unexercised **here**, and finding out at step 6,000 of twenty cells is
+  the expensive way. **Run one baseline cell to step 100 with `--save-interval 100`, then point
+  `score_checkpoints.py` at what it wrote from `gpu-1xl4`.** That is about $10 of ceiling and
+  half an hour, and it is the only pre-flight this move needs.
+- **Cancelling the three running baseline cells discards about 6 node-hours, which is $63.**
+  Their step-500 checkpoints stay in S3 under the old run id and are not resumable into a new
+  submission, so this is a real discard and a small one.
+- **`--rank-microbatch-size` stays at 12,288 and is not a knob.** It is the probe's own value,
+  ~28.9 GiB of a 40 GB card; 16,384 is ~35.7 GiB, and an OOM is not retried.
+- **The pre-commitment above is the one-way door.** It is worth more than the compute it
+  governs and it is worth nothing at all if it is revisited after a number appears.
+
+#### The four A100 specs
+
+`run.baseline-a100.yaml`, `run.faithful-a100.yaml`, `run.output-only-a100.yaml` and
+`run.mhc-a100.yaml`. The four L40S stage specs are **not edited**, because submissions were
+admitted from them. Each A100 spec differs from its L40S counterpart in `--nproc-per-node`
+(4 → 8), `--rank-microbatch-size` (16,384 → 12,288) and `suggested_compute`, and in nothing
+else: parsing all eight commands through `train_hyper_connections.build_parser` returns
+identical option sets whose only differing value is `rank_microbatch_size`. The baseline spec
+writes out the five options its L40S predecessor left to defaults — the literals
+`STAGE_PINNED` already holds — so the four stages cannot drift apart across the commits
+between them.
+
+`edullm check` on each returns `approval_class: routine`, `run-approval-lead`, and
+**$1,537.03** of ceiling at `--hours 7 --attempts 2 --fanout-size 5`: **$6,148.13** for the
+tranche, against $7,974 of L40S ceiling for the same twenty cells, and an expected bill near
+**$2,415** against $3,563.
+
 ### What a full arm actually costs, and why it cannot be submitted as one run
 
 `hyper_connection_arms.arm_seconds` builds a run out of the measured constants — 10.32 s a
