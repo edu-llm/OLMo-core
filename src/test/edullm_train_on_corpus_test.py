@@ -75,6 +75,11 @@ class ReaderProtocolStub:
         ...
 
 
+#: Distinguishes "the caller named no bucket, so the reader's own default applies" from any
+#: bucket a caller could actually pass, including None.
+_UNSET = object()
+
+
 @pytest.fixture
 def reader(monkeypatch):
     """A stand-in for the installed reader, recording what ``resolve_corpus`` hands it.
@@ -93,15 +98,20 @@ def reader(monkeypatch):
             handed["region"] = region
             return adapter
 
-    def dataset_paths(dataset_id, version, *, s3, split=None, **_):
+    # ``data_bucket`` is recorded rather than swallowed by ``**_`` because its absence is the
+    # failure being guarded: the real reader defaults it to ``edullm-data`` in us-east-1, and a
+    # stub that accepted anything would pass whether or not the caller named a bucket at all.
+    def dataset_paths(dataset_id, version, *, s3, split=None, data_bucket=_UNSET, **_):
         handed["s3"] = s3
         handed.setdefault("splits", []).append(split)
+        handed.setdefault("buckets", []).append(data_bucket)
         # The reader answers an unpublished split with an empty list rather than an error, so
         # a corpus with no held-out shards is a value and not a failure.
         return FakeManifest(paths=[]) if split == "val" else FakeManifest()
 
-    def resolve_latest(dataset_id, *, s3, **_):
+    def resolve_latest(dataset_id, *, s3, data_bucket=_UNSET, **_):
         handed["resolve_latest_s3"] = s3
+        handed["resolve_latest_bucket"] = data_bucket
         return "v7"
 
     # Typed Any because these are modules being built rather than imported, and mypy is
@@ -149,6 +159,48 @@ def test_resolving_the_latest_version_uses_the_same_adapter(reader):
     )
 
     assert reader["resolve_latest_s3"] is reader["s3"]
+
+
+def test_the_corpus_is_read_out_of_the_bucket_the_platform_named(reader, monkeypatch):
+    """Mutation: drop ``data_bucket`` from the reader calls, which is what they said.
+
+    ``edullm_data.read`` defaults the bucket to the module constant ``edullm-data``, in
+    us-east-1, and honours no environment variable of its own. That was invisible for as long
+    as every consumer was a Batch job in that region.
+
+    The capacity block is eight machines in us-east-2 whose instance profile grants
+    ``s3:GetObject`` on the ``edullm-data-us-east-2`` mirror and on nothing else, so the
+    default aims a 64-rank run at a bucket it may not read. It dies at exit 65 in the first
+    minute of a ninety-six hour reservation that is already billing, and the reason it gives
+    -- the role cannot read the corpus -- points at IAM rather than at the argument that was
+    never passed.
+
+    Both splits, because the held-out one is a separate call and ``--require-val`` turns a
+    bucket it cannot read into a refusal that reads like a corpus with no validation split.
+    """
+    monkeypatch.setenv("EDULLM_DATA_BUCKET", "edullm-data-us-east-2")
+
+    entry.resolve_corpus(
+        dataset_id="pretrain/reservoir-dolma2",
+        version="v1",
+        tokenizer_id="tokenizer/dolma2-bpe",
+    )
+
+    assert reader["buckets"] == ["edullm-data-us-east-2", "edullm-data-us-east-2"]
+
+
+def test_naming_no_bucket_leaves_the_reader_on_its_own_default(reader):
+    """Every caller that predates the mirror sets nothing and must keep what it had.
+
+    A literal ``edullm-data`` written into the entry point as a fallback would be a second
+    copy of a constant the reader already owns, and the copy that is wrong on the day the
+    reader's moves. Passing nothing is what keeps there being one.
+    """
+    entry.resolve_corpus(
+        dataset_id="pretrain/regmix-10b", version="v1", tokenizer_id="tokenizer/dolma2-bpe"
+    )
+
+    assert reader["buckets"] == [_UNSET, _UNSET]
 
 
 def test_a_healthy_corpus_keeps_the_width_the_manifest_declared():

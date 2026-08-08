@@ -1,0 +1,146 @@
+# The base run of the 2026-08-08 capacity block: 8 x p5.48xlarge, 64 H100, us-east-2a.
+#
+# WHAT READS THIS FILE. `infra/block-node-bootstrap.sh` in edu-llm/platform clones this branch
+# onto every node, loads this file with `yaml.safe_load` and takes `command`. Nothing else in
+# it is read, so the comments are for people and the one key is for the machine.
+#
+# WHAT THIS COMMAND MUST NOT CONTAIN, WHICH IS AS LOAD-BEARING AS WHAT IT DOES.
+#
+#   * No launcher. `edullm_platform.block_multinode.torchrun_command` prepends the rendezvous
+#     form -- `--nnodes`, `--nproc-per-node`, `--rdzv-backend=c10d` and the endpoint -- and the
+#     same string goes to all eight machines. A `torchrun` written here would be wrapped in a
+#     second one and the first evidence is 64 workers fighting over 8 cards.
+#
+#   * No `--moe-shard-degree` and no `--moe-num-replicas`. `with_mesh_flags` appends the pair
+#     it computed from the node count and the dispatch's `expert_parallel` input, and it
+#     REFUSES a command that names either flag with a value disagreeing with that mesh. Naming
+#     them here does not pin the mesh, it turns a dispatch into an error -- and the case it is
+#     protecting against is the quiet one, where 32 on eight nodes is accepted, trains
+#     correctly, and spends every MoE all-to-all on the network between machines.
+#
+#   * No `--save-folder`. The bootstrap sets `EDULLM_CHECKPOINT_DIR` to this run's own S3
+#     prefix, and that derivation is what lets a second attempt resume the first instead of
+#     repeating it at full price.
+#
+# WHAT IT MUST CONTAIN THAT LOOKS LIKE IT COULD COME FROM THE ENVIRONMENT. The three dataset
+# variables cannot. `main` refuses at exit 64 when `EDULLM_DATASET_ID`, `EDULLM_DATASET_VERSION`
+# or `EDULLM_DATASET_TOKENIZER` is unset, and the block bootstrap sets none of the three -- it
+# exports the run id, the output prefix, the checkpoint dir, the data bucket and the W&B
+# variables and stops there. On the Batch path the submission form fills them; there is no form
+# here, so they are arguments.
+
+command: >-
+  python .edullm/train_on_corpus.py
+  --model-factory olmoe_7b_32x4
+  --dataset-id pretrain/reservoir-dolma2
+  --dataset-version v1
+  --dataset-tokenizer tokenizer/dolma2-bpe
+  --require-val
+  --sequence-length 4096
+  --global-batch-size 4194304
+  --rank-microbatch-size 16384
+  --steps 23842
+  --warmup-steps 2000
+  --learning-rate 4e-4
+  --param-dtype bfloat16
+  --save-interval 800
+  --eval-interval 800
+  --eval-batches 64
+  --hf-export
+  --hf-export-interval 2400
+  --hf-tokenizer .edullm/tokenizer/dolma2
+  --data-seed 0
+
+# ---------------------------------------------------------------------------------------
+# WHERE EACH NUMBER CAME FROM. Every one is computed here or read from a file named here;
+# none is quoted from a document.
+#
+# --sequence-length 4096, WHICH IS THE FLAG THIS RUN CANNOT LEAVE OFF. The parser's default is
+# 2048 and its own help says why it stays there: every submission predating the MoE factory got
+# that value, and moving a default makes a sweep spanning the change two experiments reported
+# as one. `src/scripts/train/OLMoE-1B-7B.py` -- which d4b97fe aligned this entry point with --
+# is at 4096. It also becomes `max_position_embeddings` on every exported HuggingFace
+# checkpoint, so a run that forgets it hands the downstream lane a model declaring half the
+# context it was trained at.
+#
+# --steps 23842 AND THE TOKEN BUDGET.
+#   4,194,304 tokens/step  =  2^22, and 4,194,304 / 4,096 = 1,024 sequences a step
+#   ceil(100,000,000,000 / 4,194,304)      = 23,842 steps
+#   23,842 x 4,194,304                     = 100,000,595,968 tokens  (100.0006B)
+#   overshoot against the 100B target      = 595,968 tokens, one part in 168,000
+#
+# --rank-microbatch-size 16384, IN TOKENS LIKE --global-batch-size AND NOT IN SEQUENCES.
+#   1,024 sequences / 64 ranks   = 16 sequences a rank a step
+#   16 x 4,096                   = 65,536 tokens a rank a step
+#   65,536 / 16,384              = 4 micro-batches a rank a step, 4 sequences each
+# The parser's default, kept because it divides. `OLMoE-1B-7B.py` uses two sequences a
+# micro-batch (8,192 tokens), which also divides and gives eight; that is the number to drop to
+# if the first hundred steps run out of memory, and it costs throughput rather than correctness.
+#
+# --steps IS THE LEARNING-RATE SCHEDULE AS WELL AS THE STOPPING POINT, WHICH IS WHY IT IS SIZED
+# FOR THE WHOLE RUN AND NOT FOR WHAT ANY ONE ARM INTENDS TO SPEND. `TrainerConfig.max_duration`
+# becomes `Trainer.max_steps` (`trainer.py:_get_max_steps`), and `Scheduler.set_lr` recomputes
+# the rate every step from `global_step` against `max_steps` (`scheduler.py:73`). It is derived
+# rather than stored, so it is not in a checkpoint and a resume with a different `--steps`
+# silently continues on a different cosine. A truncated arm therefore keeps this number and
+# stops with `trainer.hard_stop`, which `training_progress` reads separately and which does not
+# reach the scheduler.
+#
+# --learning-rate 4e-4 and --warmup-steps 2000 are `src/scripts/train/OLMoE-1B-7B.py` lines 68
+# and 85, which is the recipe this entry point was aligned with rather than a fresh guess. 2,000
+# of 23,842 is 8.4% of the run in warmup.
+#
+# --save-interval 800, AND THE INTERVAL IS THE PRODUCT HERE RATHER THAN INSURANCE. The
+# downstream lane consumes intermediate checkpoints, so this is a delivery cadence.
+#   15 h budget = 54,000 s over 23,842 steps  = 2.265 s/step
+#   1,800 s (30 min) / 2.265                  = 795 steps, taken to 800
+#   800 x 2.265                               = 1,812 s = 30.2 min between saves
+#   23,842 / 800                              = 29 saves, at step 800 through 23,200
+# THE 2.265 s/step IS AN ASSUMPTION AND THE ONLY ONE IN THIS FILE. It is the owner's 15-hour
+# estimate divided by the step count, not a measurement. Read the real figure off the first
+# hundred steps and re-dispatch with a corrected interval if it is far out; everything else here
+# is arithmetic that does not move.
+#
+# --hf-export-interval 2400 RATHER THAN THE 2000 THAT WAS SUGGESTED, FOR ONE REASON: 2,000 is
+# not a multiple of 800. The flag's own help asks for a multiple of `--save-interval` so that
+# every export has a core checkpoint beside it, and without that the lane gets HuggingFace
+# weights at steps no resumable checkpoint exists for.
+#   2,400 = 3 x 800                = 10.07B tokens, 90.6 min apart
+#   23,842 / 2,400                 = 9 exports in-run, plus one at the end from `post_train`
+# The cost is real and is why this is not simply the save interval: `_get_full_model_state_dict`
+# gathers all 7,123,109,888 parameters to rank 0 with `cpu_offload=True` and every other rank
+# waits at a barrier while rank 0 builds an HF model and writes it. At bfloat16 that is 13.27
+# GiB gathered and written per export, ten times, and all 64 cards are idle for each of them.
+# The wall-clock length of that stall is the one number here nobody has measured -- the smoke
+# test in the report is what measures it, and 2,400 is the interval to revisit once it has.
+#
+# --hf-tokenizer .edullm/tokenizer/dolma2 AND WHY THE EMPTY DEFAULT IS DANGEROUS RATHER THAN
+# MERELY SLOW. Left empty, the exporter falls through to `TokenizerConfig.dolma2().identifier`,
+# which is the HuggingFace id `allenai/dolma2-tokenizer`, and calls
+# `AutoTokenizer.from_pretrained` on it at export time. The fleet can reach huggingface.co --
+# `block-launch-fleet.yml` refuses a subnet without `MapPublicIpOnLaunch`, and the nodes clone
+# this branch from github.com over that same path -- so this is not about whether the fetch
+# would work. It is about what one failed fetch costs: the call at `convert_checkpoint.py:185`
+# is not guarded, it happens BEFORE the weights are written at line 200, and the callback runs
+# with `raise_on_failure=False`. So an HF rate limit at the wrong minute discards the whole
+# export, weights included, logs one line, and the run carries on. Committed here instead:
+# 4.1 MiB of tokenizer.json, tokenizer_config.json and special_tokens_map.json, copied from
+# s3://edullm-data-us-east-2/tokenizer/dolma2-bpe/v1/tokenizer/, which is the sealed publication
+# of the same tokenizer. It loads to 100,278 entries with eos 100257, matching
+# `TokenizerConfig.dolma2()` exactly. A relative path because the bootstrap mounts the clone at
+# /work and runs with that as the working directory.
+#
+# --require-val, WHICH IS A REFUSAL THIS CORPUS PASSES AND THE OBVIOUS ALTERNATIVE DOES NOT.
+# `s3://edullm-data-us-east-2/pretrain/reservoir-dolma2/v1/dataset.json` declares two partitions
+# on its `tokens` group: `train-*.u32le.bin` at 250,242,924,544 rows and `val-*.u32le.bin` at
+# 975,077,376. The 100B this run reads is 40% of the train partition, so it does not wrap.
+# `regmix-10b` declares no val partition, and without this flag a run pointed at it would train
+# for fifteen hours and report training loss under a name that reads like a result.
+#
+# --eval-interval 800, matched to the save interval so that every checkpoint the lane picks up
+# has a held-out number beside it. It is close to free:
+#   eval batch = rank_microbatch x world  = 16,384 x 64 = 1,048,576 tokens an eval step
+#   64 eval steps                         = 67,108,864 tokens an evaluation, 6.9% of the split
+#   forward-only, so roughly a third of a training step's cost per token:
+#   67.1M / 3 / 4.19M                     = about 5.3 training steps' worth, per 800
+# which is under 1% of the run.

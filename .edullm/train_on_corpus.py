@@ -573,12 +573,44 @@ def resolve_corpus(*, dataset_id: str, version: str, tokenizer_id: str) -> Corpu
     # environment, which on Batch is the workload role.
     s3 = Boto3S3.default()
 
+    # WHICH BUCKET THE CORPUS IS READ OUT OF, WHICH UNTIL NOW WAS NOT A QUESTION THIS FILE
+    # ASKED. `edullm_data.read.DATA_BUCKET` is the module constant `edullm-data`, the reader
+    # takes `data_bucket` as a keyword and honours no environment variable of its own, and
+    # every call below omitted it -- so the bucket was `edullm-data` in us-east-1 whatever the
+    # platform said.
+    #
+    # That was correct for as long as every consumer was a Batch job in us-east-1. The capacity
+    # block is not: it is eight machines in us-east-2 reading a mirror at
+    # `edullm-data-us-east-2`, and `infra/iam/block-fleet-roles.yaml` grants the node role
+    # s3:GetObject on that mirror and on nothing else. So the default sends a 64-rank run at
+    # a bucket its own instance profile may not read, and the run dies at exit 65 in the first
+    # minute of a ninety-six hour reservation that is already billing.
+    #
+    # The platform has been exporting the answer into the container all along --
+    # `infra/block-node-bootstrap.sh` sets EDULLM_DATA_BUCKET from the launch input -- and
+    # nothing read it. Reading it here is what makes the mirror reachable at all.
+    #
+    # UNSET FALLS THROUGH TO THE READER'S OWN DEFAULT rather than to a literal repeated here.
+    # A second copy of `edullm-data` in this file is the copy that is wrong on the day the
+    # reader's moves, and every existing caller -- Batch, a laptop, a test -- sets nothing and
+    # must keep getting exactly what it got before.
+    data_bucket = os.environ.get("EDULLM_DATA_BUCKET") or None
+    bucket_kwargs = {"data_bucket": data_bucket} if data_bucket else {}
+    # Logged because `show` prints the shard list as a count, so the bucket is otherwise
+    # nowhere a person watching the first minute of a run can see it.
+    log.info(
+        "reading %s/%s from bucket %s",
+        dataset_id,
+        version,
+        data_bucket or "the reader's own default",
+    )
+
     # "latest" resolves through the catalog rather than being an alias anybody can move. A
     # pinned version is the normal case and what the platform sends; this branch exists so a
     # person poking at the image by hand does not have to look one up first.
     if version in ("", "latest"):
         try:
-            resolved = resolve_latest(dataset_id, s3=s3)
+            resolved = resolve_latest(dataset_id, s3=s3, **bucket_kwargs)
         except Refusal:
             raise
         except BaseException as exc:
@@ -600,7 +632,7 @@ def resolve_corpus(*, dataset_id: str, version: str, tokenizer_id: str) -> Corpu
     # and a role without that grant and a registry entry pointing at an unpublished prefix
     # both arrive here as a failed read. read_failure separates them.
     try:
-        read = dataset_paths(dataset_id, version, s3=s3)
+        read = dataset_paths(dataset_id, version, s3=s3, **bucket_kwargs)
     except Refusal:
         raise
     except BaseException as exc:
@@ -620,7 +652,9 @@ def resolve_corpus(*, dataset_id: str, version: str, tokenizer_id: str) -> Corpu
     # rather not start than train without one.
     val_paths: List[str] = []
     try:
-        val_paths = list(dataset_paths(dataset_id, version, split="val", s3=s3).paths)
+        val_paths = list(
+            dataset_paths(dataset_id, version, split="val", s3=s3, **bucket_kwargs).paths
+        )
     except BaseException as exc:  # noqa: BLE001 -- see above
         log.warning(
             "could not list the held-out split of %s/%s, so this run has no evaluator: %s: %s",
