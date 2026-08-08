@@ -10,7 +10,7 @@ from olmo_core.distributed.utils import get_full_tensor
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.nn.residual_stream import HyperConnectionStream, sinkhorn_knopp
 
-from ..common import ReduceType
+from ..common import MetricMergeStrategy, ReduceType
 from .callback import Callback
 
 log = logging.getLogger(__name__)
@@ -115,18 +115,33 @@ class HyperConnectionMonitorCallback(Callback):
         lane_norms = output.detach().float().norm(dim=-1).mean(dim=(0, 1))
         mean_norm = lane_norms.mean()
 
+        # A forward hook fires once per micro-batch, so every one of these names is recorded
+        # several times against the same step -- eight times at the rehearsal's batch shape.
+        # Without a merge strategy that is a warning per metric per micro-batch, and the
+        # default keeps the *first* value and discards the rest. These are per-token means
+        # already, so the last micro-batch of the step is as good an estimate as any and is a
+        # quantity that can be named, which an iterated pairwise mean is not.
         label = _block_label(block_name)
         for lane, norm in enumerate(lane_norms):
             self.trainer.record_metric(
-                f"hc/{label}/lane {lane} norm", norm, reduce_type=ReduceType.mean
+                f"hc/{label}/lane {lane} norm",
+                norm,
+                reduce_type=ReduceType.mean,
+                merge_strategy=MetricMergeStrategy.latest,
             )
         self.trainer.record_metric(
-            f"hc/{label}/hidden norm", mean_norm, reduce_type=ReduceType.mean
+            f"hc/{label}/hidden norm",
+            mean_norm,
+            reduce_type=ReduceType.mean,
+            merge_strategy=MetricMergeStrategy.latest,
         )
 
         spread = (lane_norms.std(unbiased=False) / mean_norm.clamp_min(1e-12)).item()
         self.trainer.record_metric(
-            f"hc/{label}/lane norm spread", spread, reduce_type=ReduceType.mean
+            f"hc/{label}/lane norm spread",
+            spread,
+            reduce_type=ReduceType.mean,
+            merge_strategy=MetricMergeStrategy.latest,
         )
         self._lane_spreads[block_name] = spread
 

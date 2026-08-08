@@ -38,12 +38,33 @@ class FakeTrainModule:
 
 @dataclass
 class FakeTrainer:
+    """
+    Stands in for the trainer, and reproduces the two rules of ``Trainer.record_metric`` that
+    a callback can get wrong: a metric recorded twice in one step needs a merge strategy, and
+    a metric's reduce type has to be the same every time it is recorded.
+    """
+
     train_module: FakeTrainModule
     global_step: int = 0
     metrics: Dict[str, float] = field(default_factory=dict)
+    reduce_types: Dict[str, Any] = field(default_factory=dict)
+    seen_this_step: set = field(default_factory=set)
 
-    def record_metric(self, name: str, value, **kwargs):
+    def record_metric(self, name: str, value, reduce_type=None, merge_strategy=None, **kwargs):
         del kwargs
+        key = (self.global_step, name)
+        if key in self.seen_this_step and merge_strategy is None:
+            raise AssertionError(
+                f"'{name}' recorded twice at step {self.global_step} with no merge strategy; "
+                "the real trainer warns and keeps the first value"
+            )
+        if name in self.reduce_types and self.reduce_types[name] != reduce_type:
+            raise AssertionError(
+                f"'{name}' changed reduce type from {self.reduce_types[name]} to {reduce_type}; "
+                "the real trainer raises"
+            )
+        self.reduce_types[name] = reduce_type
+        self.seen_this_step.add(key)
         self.metrics[name] = float(value)
 
 
@@ -183,6 +204,42 @@ def test_monitor_only_measures_on_the_interval():
     callback.pre_optim_step()
 
     assert callback.trainer.metrics == {}  # type: ignore[attr-defined]
+
+
+def test_gradient_accumulation_does_not_drop_the_lane_metrics():
+    """
+    A forward hook fires once per micro-batch, and the rehearsal runs eight of them per step.
+    Without a merge strategy the trainer warns on each duplicate and keeps the first value, so
+    the guard would be reading the first micro-batch of the step and the log would carry a few
+    hundred warnings per logged step.
+    """
+    model = build_model(HyperConnectionConfig(n_lanes=4))
+    callback = attach(model)
+
+    batch = torch.randint(0, VOCAB_SIZE, (2, SEQ_LEN))
+    for _ in range(8):  # eight micro-batches inside one optimizer step
+        model(batch)
+    callback.pre_optim_step()
+
+    assert "hc/block 00/lane 0 norm" in callback.trainer.metrics  # type: ignore[attr-defined]
+    assert "hc/composite condition number" in callback.trainer.metrics  # type: ignore[attr-defined]
+
+
+def test_reduce_type_is_stable_for_every_metric_across_steps():
+    """
+    The trainer raises if a metric name is ever recorded with a different reduce type than the
+    one it was first seen with, and it raises mid-run rather than at construction.
+    """
+    model = build_model(HyperConnectionConfig(n_lanes=4))
+    callback = attach(model)
+
+    for step in range(3):
+        callback.trainer.global_step = step  # type: ignore[attr-defined]
+        callback.trainer.seen_this_step.clear()  # type: ignore[attr-defined]
+        model(torch.randint(0, VOCAB_SIZE, (2, SEQ_LEN)))
+        callback.pre_optim_step()
+
+    assert len(callback.trainer.reduce_types) > 10  # type: ignore[attr-defined]
 
 
 def test_metric_names_are_stable_across_layers():
