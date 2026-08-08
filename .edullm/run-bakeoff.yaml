@@ -6,9 +6,23 @@
 #
 # WHAT THIS ANSWERS. Which linear-attention mixer should the next large production run use? The
 # endpoint is deliberately three numbers, not one: held-out CE, steady-state throughput, and peak
-# memory. At 1.0B tokens/cell the CE differences between these arms are likely to sit under what
+# memory. At this token budget the CE differences between these arms are likely to sit under what
 # three seeds can resolve, so throughput and memory are co-primary rather than decoration -- an
 # arm that ties on loss and costs 2x the step time is not a tie.
+#
+# THE BUDGET IS 1,144 STEPS = 599,785,472 TOKENS PER CELL, AND IT WAS CUT FROM 1,907 ON PURPOSE.
+# TPP is ~1.5, below the 3-20 academic cluster, and that is a real cost to the CE reading: effects
+# measured at low token budgets systematically OVERSTATE (measured in-tree, GDN's edge over
+# baseline shrank 0.0103 nats at 1B to 0.0059 at 15B). So the CE ranking here is DIRECTIONAL and
+# its magnitudes are inflated. Throughput and peak memory are budget-independent and remain fully
+# valid, which is why the cut falls on tokens rather than on arms or seeds.
+#
+# What forced it was capacity, not money: this shape supplies `after_a_wait` (median 61 min, worst
+# observed 12.6 h) and only ONE p4d was live when this was sized. Priced against the pessimistic
+# 3-node case, 1,907 steps finishes at ~12:36 and misses an 11:00 deadline outright, where 1,144
+# finishes ~09:25 and leaves 1.5 h for analysis. Cutting tokens keeps all six arms at n=3, which
+# preserves every contrast; cutting arms or seeds would have destroyed contrasts permanently to buy
+# a token budget whose extra precision the design cannot use anyway.
 #
 # THE CELL INDEX IS THE ONLY THING THAT VARIES ACROSS THE FAN-OUT, and it maps to (arm, seed) via
 # two literal arrays rather than arithmetic. Arithmetic would be shorter and is how an off-by-one
@@ -61,6 +75,6 @@ command: >-
   python -m torch.distributed.run --nproc-per-node=8 --standalone
   .edullm/train_core6_arm.py "$EDULLM_RUN_ID"
   --arm "${ARMS[$I]}" --data-seed "${DSEEDS[$I]}" --init-seed "${ISEEDS[$I]}"
-  --sequence-length 4096 --steps 1907 --warmup-steps 191 --learning-rate 1.4e-3
-  --global-batch-size 524288 --rank-microbatch-size 8192 --save-interval 954
+  --sequence-length 4096 --steps 1144 --warmup-steps 114 --learning-rate 1.4e-3
+  --global-batch-size 524288 --rank-microbatch-size 8192 --save-interval 572
   --save-folder "$EDULLM_CHECKPOINT_DIR"'
