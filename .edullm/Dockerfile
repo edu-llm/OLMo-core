@@ -176,12 +176,41 @@ COPY . .
 #
 # So it names what a training workload actually reaches for. Anything that breaks between
 # the pinned torch and this library now breaks the build, where it costs a runner minute.
+# flash-linear-attention IS INSTALLED HERE, AND NOT VIA THE `.[fla]` EXTRA.
+#
+# Two separate reasons, and both matter.
+#
+# 1. It was absent entirely. `.[wandb]` does not pull it, so the first A100 submission
+#    (run_019fdff4) died seven seconds in with "fla is not importable, so KimiDeltaAttention
+#    cannot be built" -- exit 3, about $0.05 of the $10.98 ceiling. Every recurrent mixer in
+#    this library asserts `has_fla()` in its constructor, so an image without it can build a
+#    dense transformer perfectly well and cannot build KDA at all.
+#
+# 2. The `.[fla]` extra pins 0.4.1, which is the WRONG VERSION for KDA. 0.4.1 is exposed to
+#    fla #802: an illegal memory access in `chunk_kda_bwd_kernel_wy_dqkg_fused` at BK=32 with
+#    num_warps=4, whose reproducer is literally `KimiDeltaAttention`. Fixed in 0.5.0 by #807.
+#    Installing the extra would have swapped "cannot build KDA" for "KDA's backward corrupts
+#    memory", which is the worse failure because it does not announce itself.
+#
+#    The extra is left alone deliberately -- sibling branches depend on 0.4.1, and moving a
+#    shared pin under them is not this change's business. The version is asserted below, so a
+#    resolver that quietly satisfies the extra instead breaks the build rather than the science.
+#
+# The last two assertions follow the argument already made above: a check that stops at the
+# package name proves the distribution installed, not that the code loads. `has_fla()` is the
+# function every mixer's constructor actually calls, and building a gated KDA config is what
+# proves `fla` is importable by the class that needs it -- on a runner minute rather than four
+# minutes into a paid A100.
 RUN set -eux; \
     python -m pip install --no-cache-dir "torch==2.9.0"; \
     python -m pip install --no-cache-dir ".[wandb]" boto3; \
+    python -m pip install --no-cache-dir "flash-linear-attention==0.5.1"; \
     python -m pip install --no-cache-dir "edullm-data @ https://github.com/edu-llm/edullm-data/archive/38bf831a6c3f445e394784018441fd59288b876c.tar.gz"; \
     python -c "import torch; assert torch.__version__.startswith('2.9.0'), f'torch was moved off the pin: {torch.__version__}'"; \
     python -c "import torch; assert torch.version.cuda, 'the CUDA build of torch was replaced by a CPU wheel'"; \
+    python -c "import fla; assert fla.__version__ == '0.5.1', f'fla was moved off the pin: {fla.__version__}. 0.4.1 is exposed to fla #802, an illegal memory access in KDA backward.'"; \
+    python -c "from olmo_core.nn.attention.flash_linear_attn_api import has_fla; assert has_fla(), 'fla is installed but has_fla() is False, so every recurrent mixer will refuse to build'"; \
+    python -c "from olmo_core.nn.attention import KimiDeltaAttentionConfig; from olmo_core.nn.gated_convolution import GatedCausalConv1d; c = KimiDeltaAttentionConfig(n_heads=8, gated_conv=True); m = c.build(512, layer_idx=0, n_layers=1, init_device='meta'); assert isinstance(m.q_conv1d, GatedCausalConv1d), 'gated_conv=True did not produce a gated convolution'; print('gated KDA builds, params:', c.num_params(512))"; \
     python -c "import boto3, wandb; from olmo_core.data import TokenizerConfig; from olmo_core.nn.transformer import TransformerConfig; print(TransformerConfig.olmo2_190M(vocab_size=TokenizerConfig.gpt2().padded_vocab_size()).__class__.__name__)"; \
     python -c "from edullm_data.read import dataset_paths, resolve_latest; print(dataset_paths.__module__)"
 

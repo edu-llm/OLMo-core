@@ -235,15 +235,39 @@ def main(argv: Optional[List[str]] = None) -> int:
     from olmo_core.nn.transformer.init import InitMethod
 
     if not has_fla():
+        # Name the fix, not just the symptom. This refusal fired on the first A100 submission
+        # (run_019fdff4, exit 3 after seven seconds) and the message alone did not say what to do
+        # about it -- the platform image installs `.[wandb]`, which does not pull fla.
         print(
-            "ERROR: fla is not importable, so KimiDeltaAttention cannot be built.", file=sys.stderr
+            "ERROR: fla is not importable, so KimiDeltaAttention cannot be built. Every recurrent "
+            "mixer in this library asserts has_fla() in its constructor.\n"
+            "  If this is a platform image: it installs '.[wandb]', which does NOT pull fla. Add "
+            "'flash-linear-attention==0.5.1' to .edullm/Dockerfile.\n"
+            "  Do NOT use the '.[fla]' extra: it pins 0.4.1, which is exposed to fla #802 (an "
+            "illegal memory access in KDA's backward, fixed in 0.5.0).",
+            file=sys.stderr,
         )
         return 3
+
+    # The version is REPORTED, not merely required, because 0.4.1 and 0.5.1 differ in whether
+    # KDA's backward corrupts memory -- and that failure does not announce itself in a loss curve.
+    try:
+        import fla
+
+        fla_version = fla.__version__
+    except Exception as exc:  # pragma: no cover - has_fla() already passed
+        fla_version = f"<unreadable: {exc}>"
 
     device = torch.device("cuda")
     props = torch.cuda.get_device_properties(0)
     print(f"device: {props.name} sm_{props.major}{props.minor}, {props.total_memory/2**30:.1f} GiB")
-    print(f"torch {torch.__version__}, TRITON_F32_DEFAULT={triton_f32!r}")
+    print(f"torch {torch.__version__}, fla {fla_version}, TRITON_F32_DEFAULT={triton_f32!r}")
+    if str(fla_version).startswith("0.4."):
+        print(
+            "  WARNING: fla 0.4.x is exposed to #802, an illegal memory access in "
+            "chunk_kda_bwd_kernel_wy_dqkg_fused whose reproducer is KimiDeltaAttention. Results "
+            "from this version are not trustworthy for KDA. Upgrade to >=0.5.0."
+        )
     if triton_f32 != "ieee":
         print(
             "  NOTE: TRITON_F32_DEFAULT is not 'ieee'. Triton lowers tl.dot to TF32 on Ampere+ by "
