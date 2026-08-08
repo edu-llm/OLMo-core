@@ -1,0 +1,818 @@
+{
+  "schema_version": 1,
+  "control": "KDA_BASE",
+  "alpha": 0.05,
+  "power_target": 0.8,
+  "sources": {
+    "seed_schedule": "/Users/ericwu/Developer/Capstone_LLM-worktrees/olmo-core/claude-bakeoff--mixer-bakeoff/docs/mixer-bakeoff/seeds.json",
+    "seed_schedule_available": true,
+    "arm_param_ledger": "/Users/ericwu/Developer/Capstone_LLM-worktrees/olmo-core/claude-bakeoff--mixer-bakeoff/src/olmo_core/nn/transformer/core6_arms.py",
+    "arm_param_ledger_available": true,
+    "load_notes": [],
+    "dedup_notes": []
+  },
+  "realised_budget": {
+    "steps_used_for_admissibility": 1144,
+    "steps_basis": "the modal `steps` across the 8 cell(s) present",
+    "steps_observed": {
+      "1144": 8
+    },
+    "steps_disagree_across_cells": false,
+    "steps_planned_in_seeds_json": 1907,
+    "steps_differ_from_plan": true,
+    "realised_tokens_per_cell": 599785472,
+    "tokens_observed": {
+      "599785472": 8
+    },
+    "parameters": 390125472,
+    "realised_tpp": 1.5374168441890408,
+    "planned_tpp": 2.6
+  },
+  "coverage": {
+    "cells_found": 8,
+    "cells_expected": 18,
+    "cells_admissible": 8,
+    "cells_excluded": 0,
+    "arm_census": [
+      {
+        "arm": "KDA_BASE",
+        "n_admissible": 3,
+        "n_found": 3,
+        "n_excluded": 0,
+        "n_expected": 3,
+        "contributes_variance": true,
+        "df_contributed": 2,
+        "status": "complete"
+      },
+      {
+        "arm": "KDA_NOACT",
+        "n_admissible": 3,
+        "n_found": 3,
+        "n_excluded": 0,
+        "n_expected": 3,
+        "contributes_variance": true,
+        "df_contributed": 2,
+        "status": "complete"
+      },
+      {
+        "arm": "KDA_GCONV",
+        "n_admissible": 2,
+        "n_found": 2,
+        "n_excluded": 0,
+        "n_expected": 3,
+        "contributes_variance": true,
+        "df_contributed": 1,
+        "status": "n=2: reduced power; contributes 1 df to the pooled sigma"
+      },
+      {
+        "arm": "GDN2",
+        "n_admissible": 0,
+        "n_found": 0,
+        "n_excluded": 0,
+        "n_expected": 3,
+        "contributes_variance": false,
+        "df_contributed": 0,
+        "status": "NO DATA -- absent from every table below"
+      },
+      {
+        "arm": "KDA_R1",
+        "n_admissible": 0,
+        "n_found": 0,
+        "n_excluded": 0,
+        "n_expected": 3,
+        "contributes_variance": false,
+        "df_contributed": 0,
+        "status": "NO DATA -- absent from every table below"
+      },
+      {
+        "arm": "KDA_R2",
+        "n_admissible": 0,
+        "n_found": 0,
+        "n_excluded": 0,
+        "n_expected": 3,
+        "contributes_variance": false,
+        "df_contributed": 0,
+        "status": "NO DATA -- absent from every table below"
+      }
+    ],
+    "missing_cells": [
+      {
+        "arm": "GDN2",
+        "replicate": 1,
+        "data_seed": 210007,
+        "init_seed": 119010
+      },
+      {
+        "arm": "GDN2",
+        "replicate": 2,
+        "data_seed": 220014,
+        "init_seed": 129017
+      },
+      {
+        "arm": "GDN2",
+        "replicate": 3,
+        "data_seed": 230021,
+        "init_seed": 139024
+      },
+      {
+        "arm": "KDA_GCONV",
+        "replicate": 3,
+        "data_seed": 230021,
+        "init_seed": 136023
+      },
+      {
+        "arm": "KDA_R1",
+        "replicate": 1,
+        "data_seed": 210007,
+        "init_seed": 122011
+      },
+      {
+        "arm": "KDA_R1",
+        "replicate": 2,
+        "data_seed": 220014,
+        "init_seed": 132018
+      },
+      {
+        "arm": "KDA_R1",
+        "replicate": 3,
+        "data_seed": 230021,
+        "init_seed": 142025
+      },
+      {
+        "arm": "KDA_R2",
+        "replicate": 1,
+        "data_seed": 210007,
+        "init_seed": 125012
+      },
+      {
+        "arm": "KDA_R2",
+        "replicate": 2,
+        "data_seed": 220014,
+        "init_seed": 135019
+      },
+      {
+        "arm": "KDA_R2",
+        "replicate": 3,
+        "data_seed": 230021,
+        "init_seed": 145026
+      }
+    ],
+    "partial": true
+  },
+  "hard_errors": [],
+  "admissibility": {
+    "excluded_count": 0,
+    "excluded_cells": [],
+    "warnings": [],
+    "outlier_warnings": [],
+    "saturation_excluded_count": 0,
+    "saturation_note": "Pre-registration s4.2, fail-open: the CE endpoint has no ceiling in this design, so no cell is dropped from the sigma pool on saturation grounds.",
+    "arms_with_no_variance_estimate": [],
+    "arms_with_no_admissible_cells": [
+      "GDN2",
+      "KDA_R1",
+      "KDA_R2"
+    ]
+  },
+  "primary_endpoint": {
+    "metric": "val_ce (nats, held out)",
+    "per_arm": {
+      "KDA_BASE": {
+        "n": 3,
+        "mean": 3.051365728778477,
+        "sd": 0.010750364504002036,
+        "values": [
+          3.0421188402509065,
+          3.063161454854065,
+          3.0488168912304583
+        ]
+      },
+      "KDA_NOACT": {
+        "n": 3,
+        "mean": 3.0400172746764587,
+        "sd": 0.0025807259421699808,
+        "values": [
+          3.0391896902322104,
+          3.037951858480697,
+          3.042910275316469
+        ]
+      },
+      "KDA_GCONV": {
+        "n": 2,
+        "mean": 3.0356585611531948,
+        "sd": 0.005017165878498483,
+        "values": [
+          3.032110889138171,
+          3.039206233168219
+        ]
+      }
+    },
+    "per_cell": {
+      "KDA_BASE": [
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "replicate": 1,
+          "val_ce": 3.0421188402509065
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "replicate": 2,
+          "val_ce": 3.063161454854065
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "replicate": 3,
+          "val_ce": 3.0488168912304583
+        }
+      ],
+      "KDA_NOACT": [
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "replicate": 1,
+          "val_ce": 3.0391896902322104
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "replicate": 2,
+          "val_ce": 3.037951858480697
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "replicate": 3,
+          "val_ce": 3.042910275316469
+        }
+      ],
+      "KDA_GCONV": [
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "replicate": 1,
+          "val_ce": 3.032110889138171
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "replicate": 2,
+          "val_ce": 3.039206233168219
+        }
+      ],
+      "GDN2": [],
+      "KDA_R1": [],
+      "KDA_R2": []
+    },
+    "pooled_sigma": {
+      "sigma": 0.007343472205535493,
+      "df": 5,
+      "contributing_arms": 3,
+      "chi2_interval": {
+        "multiplier_low": 0.6242080022589902,
+        "multiplier_high": 2.4526139885482716,
+        "sigma_low": 0.004583854115061731,
+        "sigma_high": 0.01801070265581178,
+        "df": 5
+      },
+      "literature_optimistic": 0.0019,
+      "literature_pessimistic": 0.0105
+    },
+    "anova": {
+      "computable": true,
+      "reason": null,
+      "f": 3.191106638565584,
+      "df_between": 2,
+      "df_within": 5,
+      "ms_within": 5.392658403347232e-05,
+      "p": 0.12789636848482355
+    },
+    "homogeneity": {
+      "levene_median_centred": {
+        "computable": true,
+        "reason": null,
+        "statistic": 0.9990486142413815,
+        "df_between": 2,
+        "df_within": 5,
+        "p": 0.4314943174150919
+      },
+      "bartlett": {
+        "computable": true,
+        "reason": null,
+        "statistic": 2.6310352630353258,
+        "df": 2,
+        "p": 0.26833538842946547
+      },
+      "decision_test": "Levene (median-centred)",
+      "rejected_at_alpha": false,
+      "fallback_engaged": false,
+      "power_caveat": "At n = 3 per arm Levene and Bartlett have almost no power. Failing to reject is weak evidence of homogeneity, not a demonstration of it."
+    },
+    "dunnett": {
+      "computable": true,
+      "reason": null,
+      "control": "KDA_BASE",
+      "k": 2,
+      "df": 5.0,
+      "pooled_sd": 0.007343472205535493,
+      "alpha": 0.05,
+      "rho": 0.4472135954999579,
+      "rho_note": "APPROXIMATE: design is unbalanced (n = [3, 2] vs control n = 3), so the correlations are not all equal; the mean correlation 0.4472 is used in the equicorrelated integral. The critical value is approximate for this design.",
+      "critical_value": 3.043175211229083,
+      "critical_value_validation": {
+        "method": "Gaussian quadrature (Gauss-Legendre) over the equicorrelated max-|t| integral",
+        "k": 2,
+        "df": 5.0,
+        "alpha": 0.05,
+        "rho": 0.4472135954999579,
+        "critical_value": 3.043175211229083,
+        "check_1_quadrature_refinement": {
+          "n_nodes_48": 3.0431752112293653,
+          "n_nodes_96": 3.043175211229083,
+          "abs_diff": 2.824407374646398e-13,
+          "passed": true
+        },
+        "check_2_k1_reduces_to_student_t": {
+          "quadrature_at_k1": 2.570581835636317,
+          "student_t_ppf": 2.5705818356364096,
+          "abs_diff": 9.281464485866309e-14,
+          "passed": true
+        },
+        "check_3_integration_window_captures_the_mass": {
+          "mass": 0.9999999999999992,
+          "passed": true
+        }
+      },
+      "contrasts": [
+        {
+          "arm": "KDA_NOACT",
+          "n": 3,
+          "n_control": 3,
+          "estimate": -0.011348454102018124,
+          "se": 0.005995919947957518,
+          "t": -1.8926960667451742,
+          "ci_low": -0.029595089056156414,
+          "ci_high": 0.006898180852120166,
+          "ci_half_width": 0.01824663495413829,
+          "dunnett_adjusted_p": 0.19558692048044046,
+          "excludes_zero": false
+        },
+        {
+          "arm": "KDA_GCONV",
+          "n": 2,
+          "n_control": 3,
+          "estimate": -0.015707167625282015,
+          "se": 0.006703642295640005,
+          "t": -2.3430796174040833,
+          "ci_low": -0.036107525684320504,
+          "ci_high": 0.004693190433756472,
+          "ci_half_width": 0.020400358059038486,
+          "dunnett_adjusted_p": 0.11308874000762947,
+          "excludes_zero": false
+        }
+      ]
+    },
+    "welch_fallback": null,
+    "mde": {
+      "target_power": 0.8,
+      "table": [
+        {
+          "label": "MEASURED (pooled, this run)",
+          "sigma": 0.007343472205535493,
+          "se_of_difference": 0.005995919947957518,
+          "mde": 0.024233169240240913
+        },
+        {
+          "label": "literature optimistic",
+          "sigma": 0.0019,
+          "se_of_difference": 0.0015513435037626795,
+          "mde": 0.00626992521626903
+        },
+        {
+          "label": "literature pessimistic",
+          "sigma": 0.0105,
+          "se_of_difference": 0.008573214099741124,
+          "mde": 0.03464958672148675
+        }
+      ],
+      "measured_mde": 0.024233169240240913
+    },
+    "exploratory_gate_contrast": {
+      "computable": true,
+      "reason": null,
+      "label": "KDA_GCONV - KDA_NOACT",
+      "status": "EXPLORATORY, uncorrected",
+      "estimate": -0.004358713523263891,
+      "se": 0.006703642295640005,
+      "ci_low": -0.02159097464104005,
+      "ci_high": 0.012873547594512268,
+      "n_left": 2,
+      "n_right": 3,
+      "p_uncorrected": 0.5442503585566456
+    }
+  },
+  "co_primary_endpoints": {
+    "throughput_headline": {
+      "source": "steady-state, total across devices (from `throughput_tok_s_steady` x8)",
+      "is_steady_state": true,
+      "keys_used": {
+        "throughput_tok_s_steady": 8
+      },
+      "mixed_keys": false,
+      "per_arm": {
+        "KDA_BASE": {
+          "n": 3,
+          "mean": 419288.44405833184,
+          "sd": 4589.719853652128,
+          "values": [
+            421888.6904423051,
+            413989.0,
+            421987.64173269033
+          ],
+          "ratio_to_control": 1.0,
+          "ratio_unavailable_reason": null
+        },
+        "KDA_NOACT": {
+          "n": 3,
+          "mean": 418363.6666666667,
+          "sd": 5995.469650772434,
+          "values": [
+            415168.0,
+            414643.0,
+            425280.0
+          ],
+          "ratio_to_control": 0.997794412403275,
+          "ratio_unavailable_reason": null
+        },
+        "KDA_GCONV": {
+          "n": 2,
+          "mean": 411027.0,
+          "sd": 2664.378351510911,
+          "values": [
+            409143.0,
+            412911.0
+          ],
+          "ratio_to_control": 0.9802965138309834,
+          "ratio_unavailable_reason": null
+        }
+      }
+    },
+    "throughput_total_steady": {
+      "per_arm": {
+        "KDA_BASE": {
+          "n": 3,
+          "mean": 419288.44405833184,
+          "sd": 4589.719853652128,
+          "values": [
+            421888.6904423051,
+            413989.0,
+            421987.64173269033
+          ],
+          "ratio_to_control": 1.0,
+          "ratio_unavailable_reason": null
+        },
+        "KDA_NOACT": {
+          "n": 3,
+          "mean": 418363.6666666667,
+          "sd": 5995.469650772434,
+          "values": [
+            415168.0,
+            414643.0,
+            425280.0
+          ],
+          "ratio_to_control": 0.997794412403275,
+          "ratio_unavailable_reason": null
+        },
+        "KDA_GCONV": {
+          "n": 2,
+          "mean": 411027.0,
+          "sd": 2664.378351510911,
+          "values": [
+            409143.0,
+            412911.0
+          ],
+          "ratio_to_control": 0.9802965138309834,
+          "ratio_unavailable_reason": null
+        }
+      },
+      "meta": {
+        "keys_used": {
+          "throughput_tok_s_steady": 8
+        },
+        "missing": []
+      }
+    },
+    "throughput_per_device_steady": {
+      "per_arm": {
+        "KDA_BASE": {
+          "n": 3,
+          "mean": 52409.51384062481,
+          "sd": 576.3850722729246,
+          "values": [
+            52736.08630528814,
+            51744.0,
+            52748.45521658629
+          ],
+          "ratio_to_control": 1.0,
+          "ratio_unavailable_reason": null
+        },
+        "KDA_NOACT": {
+          "n": 3,
+          "mean": 52295.333333333336,
+          "sd": 749.5500872745819,
+          "values": [
+            51896.0,
+            51830.0,
+            53160.0
+          ],
+          "ratio_to_control": 0.9978213782398614,
+          "ratio_unavailable_reason": null
+        },
+        "KDA_GCONV": {
+          "n": 2,
+          "mean": 51381.5,
+          "sd": 337.28993462598316,
+          "values": [
+            51143.0,
+            51620.0
+          ],
+          "ratio_to_control": 0.980384976595071,
+          "ratio_unavailable_reason": null
+        }
+      },
+      "meta": {
+        "keys_used": {
+          "throughput_tok_s_steady_per_device": 8
+        },
+        "missing": []
+      }
+    },
+    "throughput_whole_run": {
+      "per_arm": {
+        "KDA_BASE": {
+          "n": 3,
+          "mean": 330547.86936876643,
+          "sd": 2618.337207398142,
+          "values": [
+            332117.81931784126,
+            327525.23208733473,
+            332000.5567011233
+          ],
+          "ratio_to_control": 1.0,
+          "ratio_unavailable_reason": null
+        },
+        "KDA_NOACT": {
+          "n": 3,
+          "mean": 330842.8864978303,
+          "sd": 4058.8325013958256,
+          "values": [
+            328223.28290790046,
+            328787.07110599166,
+            335518.3054795987
+          ],
+          "ratio_to_control": 1.000892509546733,
+          "ratio_unavailable_reason": null
+        },
+        "KDA_GCONV": {
+          "n": 2,
+          "mean": 326103.73939918634,
+          "sd": 1570.5147600891864,
+          "values": [
+            324993.2177623737,
+            327214.26103599893
+          ],
+          "ratio_to_control": 0.9865552605797554,
+          "ratio_unavailable_reason": null
+        }
+      },
+      "meta": {
+        "keys_used": {
+          "throughput_tok_s_whole_run": 8
+        },
+        "missing": []
+      },
+      "warning": "NOT AN ENDPOINT. Whole-run wall clock charges process start, dataset open, FSDP wrap and the first-step compile against the hardware. This project measured it reading 3.1x LOW on a short probe, and it penalises bigger shapes hardest."
+    },
+    "peak_memory_gib": {
+      "per_arm": {
+        "KDA_BASE": {
+          "n": 3,
+          "mean": 9.153131484985352,
+          "sd": 0.0,
+          "values": [
+            9.153131484985352,
+            9.153131484985352,
+            9.153131484985352
+          ],
+          "ratio_to_control": 1.0,
+          "ratio_unavailable_reason": null
+        },
+        "KDA_NOACT": {
+          "n": 3,
+          "mean": 9.153131484985352,
+          "sd": 0.0,
+          "values": [
+            9.153131484985352,
+            9.153131484985352,
+            9.153131484985352
+          ],
+          "ratio_to_control": 1.0,
+          "ratio_unavailable_reason": null
+        },
+        "KDA_GCONV": {
+          "n": 2,
+          "mean": 9.434404373168945,
+          "sd": 0.0,
+          "values": [
+            9.434404373168945,
+            9.434404373168945
+          ],
+          "ratio_to_control": 1.0307296894669316,
+          "ratio_unavailable_reason": null
+        }
+      },
+      "missing": [],
+      "sources": {
+        "per_step_running_max": 8
+      },
+      "sources_mixed": false,
+      "gated_on_source": "per_step_running_max",
+      "lower_bound_only_per_arm": {},
+      "note": "The headline table admits ONLY peak_memory_source == 'per_step_running_max'. peak_memory_gib changed meaning while keeping its name: it is now a true per-step running max. 'final_step_only' is the LAST STEP'S peak (the GPU monitor resets the counters every step) -- a lower bound wearing the name of a peak, which must not size hardware, so it is tabled separately. A null or a zero is missing, never a value.",
+      "mixed_source_warning": null
+    },
+    "throughput_measurement_cross_check": {
+      "note": "tps_device_avg is upstream SpeedMonitorCallback's average over a window starting after step 1; throughput_tok_s_steady_per_device starts after 50. Upstream's should sit slightly BELOW ours. A large gap means compilation or allocator growth leaked into upstream's average, which is the exact failure the cutoff exists for.",
+      "per_cell": [
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "arm": "KDA_BASE",
+          "tps_device_avg": 52735.640625,
+          "throughput_tok_s_steady_per_device": 52736.08630528814,
+          "ratio_upstream_over_ours": 0.9999915488554543,
+          "suspicious": false
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "arm": "KDA_BASE",
+          "tps_device_avg": 51779.28515625,
+          "throughput_tok_s_steady_per_device": 51744.0,
+          "ratio_upstream_over_ours": 1.0006819178310529,
+          "suspicious": false
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "arm": "KDA_BASE",
+          "tps_device_avg": 52751.90625,
+          "throughput_tok_s_steady_per_device": 52748.45521658629,
+          "ratio_upstream_over_ours": 1.0000654243503349,
+          "suspicious": false
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "arm": "KDA_NOACT",
+          "tps_device_avg": 51864.7890625,
+          "throughput_tok_s_steady_per_device": 51896.0,
+          "ratio_upstream_over_ours": 0.9993985868371358,
+          "suspicious": false
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "arm": "KDA_NOACT",
+          "tps_device_avg": 51830.37109375,
+          "throughput_tok_s_steady_per_device": 51830.0,
+          "ratio_upstream_over_ours": 1.0000071598253908,
+          "suspicious": false
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "arm": "KDA_NOACT",
+          "tps_device_avg": 53159.98,
+          "throughput_tok_s_steady_per_device": 53160.0,
+          "ratio_upstream_over_ours": 0.9999996237772762,
+          "suspicious": false
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "arm": "KDA_GCONV",
+          "tps_device_avg": 51142.89453125,
+          "throughput_tok_s_steady_per_device": 51143.0,
+          "ratio_upstream_over_ours": 0.9999979377676319,
+          "suspicious": false
+        },
+        {
+          "cell": "run_019fe0f9-1bbd-702c-b141-6d58e128bda6",
+          "arm": "KDA_GCONV",
+          "tps_device_avg": 51613.8203125,
+          "throughput_tok_s_steady_per_device": 51620.0,
+          "ratio_upstream_over_ours": 0.9998802850154979,
+          "suspicious": false
+        }
+      ],
+      "suspicious": []
+    },
+    "step_time_median_s": {
+      "KDA_BASE": {
+        "n": 3,
+        "mean": 1.2350618693333975,
+        "sd": 0.010613273801693269,
+        "values": [
+          1.229610791000141,
+          1.2472929800001111,
+          1.2282818369999404
+        ],
+        "ratio_to_control": 1.0,
+        "ratio_unavailable_reason": null
+      },
+      "KDA_NOACT": {
+        "n": 3,
+        "mean": 1.2357666666666667,
+        "sd": 0.014354209603225532,
+        "values": [
+          1.2436,
+          1.2445,
+          1.2192
+        ],
+        "ratio_to_control": 1.000570657511797,
+        "ratio_unavailable_reason": null
+      },
+      "KDA_GCONV": {
+        "n": 2,
+        "mean": 1.256,
+        "sd": 0.008485281374238578,
+        "values": [
+          1.262,
+          1.25
+        ],
+        "ratio_to_control": 1.0169531026635157,
+        "ratio_unavailable_reason": null
+      }
+    },
+    "step_time_p90_s": {
+      "KDA_BASE": {
+        "n": 3,
+        "mean": 1.2625714733333855,
+        "sd": 0.02330250969265373,
+        "values": [
+          1.2405655560000923,
+          1.2869838190000564,
+          1.260165045000008
+        ],
+        "ratio_to_control": 1.0,
+        "ratio_unavailable_reason": null
+      },
+      "KDA_NOACT": {
+        "n": 3,
+        "mean": 1.2713333333333334,
+        "sd": 0.01850225211517051,
+        "values": [
+          1.281,
+          1.283,
+          1.25
+        ],
+        "ratio_to_control": 1.006939694254944,
+        "ratio_unavailable_reason": null
+      },
+      "KDA_GCONV": {
+        "n": 2,
+        "mean": 1.294,
+        "sd": 0.008485281374238578,
+        "values": [
+          1.3,
+          1.288
+        ],
+        "ratio_to_control": 1.024892473282038,
+        "ratio_unavailable_reason": null
+      }
+    }
+  },
+  "recommendation": {
+    "choice": "KDA_BASE",
+    "basis": "throughput and memory (CE unresolved): the fastest arm not shown to be worse on CE",
+    "ce_resolved": false,
+    "mde_nats": 0.024233169240240913,
+    "resolved_better": [],
+    "resolved_worse": [],
+    "unresolved_arms": [
+      "KDA_NOACT",
+      "KDA_GCONV"
+    ],
+    "rationale": [
+      "NO arm's CE difference from the control clears the MDE with a Dunnett-adjusted CI that excludes zero. THE CE RANKING IS NOT RESOLVED AT n = 3. The arms are not ranked on CE below, and the recommendation falls back to throughput and memory. That fallback is a choice forced by the design's power, and it is stated rather than hidden behind an ordering of point estimates.",
+      "KDA_BASE: throughput 419,288 tok/s (1.000x control), peak memory 9.15 GiB (1.000x control).",
+      "KDA_NOACT: throughput 418,364 tok/s (0.998x control), peak memory 9.15 GiB (1.000x control).",
+      "KDA_GCONV: throughput 411,027 tok/s (0.980x control), peak memory 9.43 GiB (1.031x control)."
+    ],
+    "caveats": [
+      "TPP IS 1.5 -- 599,785,472 tokens per cell for a 390,125,472-parameter model, computed from what the cells actually report, not from the plan. That is BELOW the academic literature cluster of 3-20, and further below this project's own 1B flagship at TPP 27-44. NOTE the budget moved after pre-registration: seeds.json planned 1,907 steps, the cells ran 1,144 (planned TPP was 2.6). The cut makes every CE magnitude below MORE inflated, not less.",
+      "ARCHITECTURE EFFECTS MEASURED AT LOW TOKEN BUDGETS SYSTEMATICALLY OVERSTATE. Measured in-tree: GDN's edge over baseline shrank 0.0103 nats @1B -> 0.0059 @15B, roughly halved for a 15x budget increase. So the CE result here is DIRECTIONAL WITH INFLATED MAGNITUDES: treat every CE number below as an UPPER BOUND on the production effect, never as the effect itself.",
+      "THROUGHPUT AND PEAK MEMORY ARE BUDGET-INDEPENDENT AND FULLY VALID. They do not inflate at a short budget the way CE does. At this TPP they are very likely to be what carries the recommendation, and they carry it soundly.",
+      "A NULL IS A BOUND, NOT EQUIVALENCE. A non-significant CE contrast licenses exactly one claim: the difference is smaller than the Dunnett-adjusted CI half-width. Equivalence needs a pre-declared margin and a TOST; no margin was declared, so no equivalence claim may be made from this design.",
+      "Say it that way when this is presented: the speed and memory conclusions are STRONG, the CE conclusions are INDICATIVE.",
+      "A 1.0B-token run structurally CANNOT see any effect that only emerges late in training, or any long-horizon recall advantage. That is a limitation, not a null.",
+      "The literature CE gap between these mixer families is ~0.01-0.03 nats, which may sit below this design's MDE. The pre-registration committed to that as an expected outcome before the run."
+    ]
+  },
+  "deviations_from_preregistration": [
+    "The unequal-variance fallback uses Dunnett's T3 (studentized maximum modulus) rather than Games-Howell (studentized range). Games-Howell is the ALL-PAIRS procedure; these comparisons are k arms against ONE control, whose unequal-variance analogue is T3. The two differ only in the critical-value distribution, and T3 is the correct family here. This is the only substantive departure from the pre-registered plan.",
+    "The pre-registration's saturation rule (s4.2 -- never pool sigma over cells where the endpoint cannot move) is implemented as FAIL-OPEN: the CE endpoint has no ceiling in this design, no cell is dropped from the sigma pool on saturation grounds, and the count of such drops is reported as zero rather than the rule being silently skipped.",
+    "Sliced-eval / W&B trajectory (the pre-registered SECONDARY endpoint) is not analysed here: sliced_eval is null unless --slice-mask-uri was set, and the W&B series is not in the per-cell JSON. Secondary means secondary; it moves no gate.",
+    "The cross-run drift check (s7) and run 2 are out of scope for this script, which analyses run 1 only."
+  ],
+  "trainer_reported_production_decision": {},
+  "unconsumed_keys": {}
+}
