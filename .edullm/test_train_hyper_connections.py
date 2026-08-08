@@ -651,13 +651,17 @@ def test_the_committed_run_fits_one_attempt_of_the_bound_it_will_be_submitted_un
 STAGED = sorted(arms.STAGED_TRANCHES)
 
 
-@pytest.mark.parametrize("index", range(9))
-def test_every_cell_of_the_nine_resolves_to_its_own_arm_and_seed(index: int):
+@pytest.mark.parametrize("index", range(len(arms.TRANCHE_CELLS)))
+def test_every_cell_of_the_tranche_resolves_to_its_own_arm_and_seed(index: int):
     """
-    THE WHOLE POINT OF THE NINE-CELL FAN-OUT, AND THE FAILURE IT HAS TO RULE OUT IS SILENT.
-    One submission, one command, nine cells, nine different runs. Batch is the only thing that
-    knows which cell a process is and it says so in AWS_BATCH_JOB_ARRAY_INDEX; everything else
-    about the cell is derived from the arm table here.
+    THE WHOLE POINT OF THE arm-and-seed FAN-OUT, AND THE FAILURE IT RULES OUT IS SILENT.
+    One submission, one command, one cell per run. Batch is the only thing that knows which
+    cell a process is and it says so in AWS_BATCH_JOB_ARRAY_INDEX; everything else about the
+    cell is derived from the arm table here.
+
+    THE COUNT COMES FROM THE ARM TABLE AND IS NOT WRITTEN DOWN. It was nine when this was
+    written and is fifteen now, and nothing in this file was edited to follow it -- which is
+    the property the derivation exists for.
     """
     name, seed = arms.cell(index)
     assert (name, seed) == arms.TRANCHE_CELLS[index]
@@ -672,29 +676,34 @@ def test_every_cell_of_the_nine_resolves_to_its_own_arm_and_seed(index: int):
 
 
 def test_the_cell_table_is_the_tranche_and_covers_each_arm_at_each_seed():
-    assert len(arms.TRANCHE_CELLS) == arms.total_runs() == 9
+    assert len(arms.TRANCHE_CELLS) == arms.total_runs() == 15
     assert arms.TRANCHE_CELLS[0] == ("baseline", 0)
-    assert arms.TRANCHE_CELLS[-1] == ("output-only", 2)
+    assert arms.TRANCHE_CELLS[-1] == ("output-only", arms.ARMS["output-only"].seeds - 1)
     assert len(set(arms.TRANCHE_CELLS)) == len(arms.TRANCHE_CELLS)
     for name in arms.FUNDED:
-        assert sorted(s for a, s in arms.TRANCHE_CELLS if a == name) == [0, 1, 2]
+        seeds = sorted(s for a, s in arms.TRANCHE_CELLS if a == name)
+        assert seeds == list(range(arms.ARMS[name].seeds))
+        # Contiguous from zero, because Batch requires that of an array index and the table is
+        # what the index is read against.
+        assert seeds == list(range(len(seeds)))
 
 
-def test_the_nine_cells_are_actually_nine_different_models(monkeypatch):
+def test_the_cells_are_actually_that_many_different_models(monkeypatch):
     """
     Reading the pair back is not enough: the failure this guards is cells that train the same
     thing, so what has to differ is the arm together with the three numbers the model, the
-    global RNG and the shuffle are drawn from. Three cells landing on one seed report a noise
-    floor of zero, and every contrast in the analysis plan is then divided by it.
+    global RNG and the shuffle are drawn from. Two cells landing on one seed report a noise
+    floor smaller than the one there is, and every contrast in the analysis plan is divided
+    by it.
     """
     monkeypatch.setenv(entry.FANOUT_PARAMETER_VARIABLE, entry.FANOUT_INDEX_PARAMETER_CELL)
     seen = set()
-    for index in range(9):
+    for index in range(len(arms.TRANCHE_CELLS)):
         monkeypatch.setenv(entry.FANOUT_INDEX_VARIABLE, str(index))
         config, opts = build(BASE_ARGV)
         seen.add((opts.arm, config.init_seed, config.model.init_seed, opts.data_seed))
 
-    assert len(seen) == 9, f"cells collided: {sorted(seen)}"
+    assert len(seen) == len(arms.TRANCHE_CELLS), f"cells collided: {sorted(seen)}"
     assert {arm for arm, *_ in seen} == set(arms.FUNDED)
 
 
@@ -703,16 +712,19 @@ def test_a_cell_outside_the_tranche_is_refused_rather_than_wrapped():
     An index past the end means --fanout-size and the arm table disagree about how many runs
     there are, which is a submission that runs the wrong experiment rather than a crash.
     """
-    with pytest.raises(train_on_corpus.Refusal, match="--fanout-size 9"):
-        entry.resolve_cell(None, None, fanout_env(9, parameter=entry.FANOUT_INDEX_PARAMETER_CELL))
+    beyond = len(arms.TRANCHE_CELLS)
+    with pytest.raises(train_on_corpus.Refusal, match=f"--fanout-size {beyond}"):
+        entry.resolve_cell(
+            None, None, fanout_env(beyond, parameter=entry.FANOUT_INDEX_PARAMETER_CELL)
+        )
 
 
 @pytest.mark.parametrize("flag,value", [("arm", "faithful"), ("seed", 1)])
-def test_a_flag_the_cell_index_owns_is_refused_inside_the_nine_cell_fanout(flag, value):
+def test_a_flag_the_cell_index_owns_is_refused_inside_the_arm_and_seed_fanout(flag, value):
     """
-    Every cell of a fan-out is handed the same command, so an --arm written into run.yaml runs
-    one arm nine times and a --seed runs one replicate nine times. Neither raises, neither
-    bends a curve, and the tranche reports a noise floor it did not measure.
+    Every cell of a fan-out is handed the same command, so an --arm written into the spec runs
+    one arm in every cell and a --seed runs one replicate in every cell. Neither raises,
+    neither bends a curve, and the tranche reports a noise floor it did not measure.
     """
     kwargs = {"explicit_arm": None, "explicit_seed": None, f"explicit_{flag}": value}
     with pytest.raises(train_on_corpus.Refusal, match="noise floor"):
@@ -724,16 +736,18 @@ def test_a_flag_the_cell_index_owns_is_refused_inside_the_nine_cell_fanout(flag,
 def test_no_arm_and_no_cell_index_is_refused_rather_than_defaulted():
     """
     There is no arm this experiment can silently mean, and the parser can no longer require
-    one because the nine-cell command deliberately carries none.
+    one because the arm-and-seed command deliberately carries none.
     """
     with pytest.raises(train_on_corpus.Refusal, match="nothing says which arm"):
         entry.resolve_cell(None, None, {})
 
 
-def test_the_three_cell_seed_fanout_still_works_beside_the_nine_cell_one():
+def test_the_seed_fanout_still_works_beside_the_arm_and_seed_one():
     """
-    The form commit d63dbb592 was written for is the fallback if the nine-cell array ever has
-    to be split, so it has to keep working rather than merely keep parsing.
+    THIS IS THE PATH ALL FIFTEEN CELLS ACTUALLY TOOK, so it has to keep working rather than
+    merely keep parsing. The tranche was split into three per-arm submissions for the
+    pre-registration's reason, stage 1 has already run through `resolve_seed`, and both stage-2
+    specs use the same call so that one mechanism assigned every replicate in the module.
     """
     name, seed, provenance = entry.resolve_cell("faithful", None, fanout_env(2))
     assert (name, seed) == ("faithful", 2)
@@ -906,3 +920,313 @@ def test_the_step_time_that_would_buy_the_full_horizon_is_written_down_in_advanc
     # The measured L40S step is the reason this branch exists at all: it does not clear the
     # threshold, so the tranche cannot reach the full horizon on that shape.
     assert arms.MEASURED_SECONDS_PER_STEP > arms.A100_STEP_SECONDS_FOR_FULL_HORIZON
+
+
+# ---------------------------------------------------------------------------------------
+# THE THREE STAGE SPECS, AND THE ONE TEST THAT MAKES A SPLIT TRANCHE AS SAFE AS ONE
+# ---------------------------------------------------------------------------------------
+#
+# The tranche went out as three five-cell submissions rather than one fifteen-cell one,
+# because the pre-registration forbids submitting a treatment arm before the noise floor has
+# numbers in it. That split gives up a guarantee the single submission had for free: in one
+# submission every cell is the same command at the same commit, so there is nothing for a
+# setting to drift between. Three submissions at three commits is three chances for one, and
+# the symptom of one is a plausible loss curve.
+#
+# So the guarantee is rebuilt here. These tests are the only thing in the pipeline that
+# compares the arms' commands to each other: `edullm check` prices a ceiling out of the
+# workload profile and never reads a hyperparameter, and the analysis reads what the runs
+# report rather than what they were asked for.
+
+STAGES = list(arms.STAGE_SPECS)
+
+
+def resolved(name: str) -> dict:
+    """
+    Every option one stage's committed command resolves to, through the real parser.
+
+    Resolved rather than textual, because the failure is a *value* that differs and the two
+    ways a value gets set -- written in the command, or left to a default -- are exactly what
+    the stages disagree about. Comparing the command text would report stage 1 and stage 2 as
+    different on nine flags that resolve to the same nine numbers, which is a test nobody
+    would keep.
+
+    :param name: The spec file, relative to ``.edullm/``.
+    """
+    opts, leftovers = entry.build_parser().parse_known_args(committed_argv(name))
+    assert leftovers == [], f"{name} carries words the parser does not know: {leftovers}"
+    return vars(opts)
+
+
+def test_the_three_stage_specs_differ_in_the_arm_and_in_nothing_else():
+    """
+    THE TEST THE SPLIT TRANCHE EXISTS ON, AND THE ONE FAILURE IT CATCHES IS INVISIBLE
+    EVERYWHERE ELSE.
+
+    Fifteen runs in three submissions are only an experiment if all fifteen were trained at
+    the same settings. A hand-edit to one arm's command -- a microbatch nudged to fit a
+    memory scare, a horizon shortened to save an hour, a learning rate copied from another
+    file -- makes the arms incomparable and produces loss curves that look precisely like
+    loss curves. Nothing downstream disagrees: the platform prices a ceiling from the
+    workload profile and never reads these words, and the analysis reads the runs' own
+    reports rather than the commands that made them.
+
+    THE COMPARISON IS OVER THE WHOLE RESOLVED OPTION SET AND NOT OVER A LIST OF THINGS TO
+    CHECK, which is the difference between a test that holds and a test that held. A checked
+    list silently permits every option not on it, and the option that breaks this experiment
+    is the one a later commit adds -- which is on nobody's list by construction. The
+    allowlist is inverted instead: ``STAGE_CONTRAST_EXEMPT`` names what may differ and
+    carries the reason it may, so a new option is caught by default and a new exemption is a
+    reviewable line in the arm table.
+    """
+    options = {name: resolved(arms.STAGE_SPECS[name].spec) for name in STAGES}
+
+    keys = {frozenset(o) for o in options.values()}
+    assert len(keys) == 1, "the three specs parse to different option sets"
+
+    differ = {key for key in next(iter(keys)) if len({repr(o[key]) for o in options.values()}) > 1}
+    assert differ == set(arms.STAGE_CONTRAST_EXEMPT), (
+        "the stages differ in "
+        + ", ".join(sorted(differ))
+        + " and the only differences the arm table permits are "
+        + ", ".join(sorted(arms.STAGE_CONTRAST_EXEMPT))
+        + ". Every option outside that set has to be identical across all three, or the "
+        "fifteen runs were not trained at the same settings and the contrast is not one."
+    )
+
+    # And the difference in the one option the experiment is made of is the three arms
+    # themselves, rather than two specs that happen to name the same one.
+    assert {o["arm"] for o in options.values()} == set(arms.FUNDED)
+    for name, opts in options.items():
+        assert opts["arm"] == name == arms.STAGE_SPECS[name].arm
+
+
+@pytest.mark.parametrize("name", STAGES)
+def test_every_stage_is_pinned_to_what_the_running_baseline_resolved_to(name: str):
+    """
+    The diff above catches a stage that disagrees with the other two TODAY. This catches the
+    other half: a default that has moved since stage 1 ran.
+
+    Stage 1 is `run_019fe279-4ef0` and its five cells were built from commit 38b665919. They
+    trained at whatever the parser resolved to THEN, and no later commit can change that --
+    but a later commit can change what stage 2 resolves to, and re-parsing stage 1's command
+    on a laptop today reports the new default rather than the one it ran under. So the values
+    those cells actually used are frozen in ``STAGE_PINNED`` as literals, and all three stages
+    are held against them.
+
+    A failure here does not mean "fix this number". It means stage 1 and stage 2 were trained
+    at different settings, and the only repair is five more baseline cells.
+    """
+    options = resolved(arms.STAGE_SPECS[name].spec)
+    for option, value in arms.STAGE_PINNED.items():
+        assert options[option] == value, (
+            f"{name} resolves {option} to {options[option]!r}, and the five baseline cells "
+            f"of run_019fe279-4ef0 trained at {value!r}"
+        )
+
+
+def test_the_pinned_table_still_agrees_with_the_design_constants_it_froze():
+    """
+    ``STAGE_PINNED`` is literals on purpose -- a reference to ``DEFAULT_WEIGHT_DECAY`` would
+    move with the default it exists to catch -- and the cost of literals is that they can
+    fall out of step with the design silently. This is the cross-check, and it is the one
+    place the two are compared.
+
+    It fails if somebody changes the tranche's horizon, its intervals or its corpus constants
+    while stage 2 is still unsubmitted, which is a real thing to want and is not free: it
+    makes the running baseline incomparable to whatever stage 2 becomes.
+    """
+    assert arms.STAGE_PINNED["steps"] == arms.TRANCHE_STEPS
+    assert arms.STAGE_PINNED["save_interval"] == arms.TRANCHE_SAVE_INTERVAL
+    assert arms.STAGE_PINNED["eval_interval"] == arms.TRANCHE_EVAL_INTERVAL
+    assert arms.STAGE_PINNED["monitor_interval"] == arms.TRANCHE_MONITOR_INTERVAL
+    assert arms.STAGE_PINNED["global_batch_size"] == arms.TRANCHE_TOKENS_PER_STEP
+    assert arms.STAGE_PINNED["warmup_steps"] == round(
+        arms.TRANCHE_STEPS * arms.TRANCHE_WARMUP_FRACTION
+    )
+    assert arms.STAGE_PINNED["held_out_shards"] == arms.HELD_OUT_SHARDS
+    assert arms.STAGE_PINNED["bytes_per_token"] == arms.DOLMA2_BYTES_PER_TOKEN
+    assert arms.STAGE_PINNED["weight_decay"] == entry.DEFAULT_WEIGHT_DECAY
+    assert arms.STAGE_PINNED["learning_rate"] == entry.DEFAULT_LEARNING_RATE
+
+    # Nothing that the fan-out index owns, and nothing the platform supplies, is in here: a
+    # pinned seed would be five cells of one replicate and a pinned checkpoint directory would
+    # be five cells writing over each other.
+    assert not {"arm", "seed", "data_seed", "save_folder", "run_name"} & set(arms.STAGE_PINNED)
+
+
+def test_the_one_option_the_stages_differ_in_besides_the_arm_is_unreachable_on_the_baseline(
+    monkeypatch,
+):
+    """
+    ``fail_closed_by_step`` is exempt from the diff, and this is the proof rather than the
+    claim. The exemption is only sound because the option cannot reach the baseline: ``train``
+    attaches ``HyperConnectionMonitorCallback`` where ``arm.hyper_connections is not None``,
+    and the baseline's is ``None``, so stage 1's omitting it and stage 2's setting it to 400
+    describe the same baseline.
+
+    If a later commit attaches that monitor unconditionally -- for lane norms on an ordinary
+    residual stream, say, which is a reasonable thing to want -- the exemption stops being
+    sound and this fails, which is the whole reason it is a test and not a paragraph.
+    """
+    seen = {}
+    monkeypatch.setattr(
+        entry,
+        "_train",
+        lambda config, opts=None: seen.update(callbacks=set(config.trainer.callbacks)),
+    )
+
+    for name in STAGES:
+        stage = arms.STAGE_SPECS[name]
+        argv = committed_argv(stage.spec) + BASE_ARGV[1:]
+        opts, overrides = entry.build_parser().parse_known_args(argv)
+        entry.train(entry.build_config(opts, overrides), opts)
+
+        reachable = "hyper_connections" in seen["callbacks"]
+        if name == "baseline":
+            assert not reachable, "the baseline now runs the monitor, so the exemption is unsound"
+            assert opts.fail_closed_by_step is None
+        else:
+            assert reachable, name
+            assert opts.fail_closed_by_step == arms.TRANCHE_FAIL_CLOSED_BY_STEP == 400
+
+
+@pytest.mark.parametrize("name", STAGES)
+def test_every_stage_carries_its_arm_and_not_the_replicate_the_index_owns(name: str):
+    """
+    THE ASYMMETRY IS LOAD-BEARING IN BOTH DIRECTIONS. Under
+    ``--fanout-index-parameter seed`` all five cells are handed one command, so an explicit
+    --seed runs one replicate five times: five identical curves, a measured noise floor of
+    zero, and every later contrast significant against it. And nothing but the command
+    supplies the arm on this path, so --arm has to be there or the run is refused.
+    """
+    argv = committed_argv(arms.STAGE_SPECS[name].spec)
+    assert "--seed" not in argv
+    assert "--arm" in argv
+
+    options = resolved(arms.STAGE_SPECS[name].spec)
+    assert options["seed"] is None
+    assert options["arm"] == arms.STAGE_SPECS[name].arm
+
+    # Which is the combination resolve_seed resolves rather than refuses, at every cell.
+    for index in range(arms.STAGE_SPECS[name].cells):
+        seed, provenance = entry.resolve_seed(None, fanout_env(index))
+        assert seed == index
+        assert entry.FANOUT_INDEX_VARIABLE in provenance
+
+
+@pytest.mark.parametrize("name", STAGES)
+def test_every_stage_starts_one_process_per_device(name: str):
+    """
+    The refusal this catches has already cost a submission: ``edullm check`` refused a 4-rank
+    command against gpu-8xa100 with ``process_per_device``. Fewer processes than devices bills
+    cards that idle, and more puts two ranks on one card.
+    """
+    spec = spec_of(arms.STAGE_SPECS[name].spec)
+    assert spec["schema_version"] == 1
+    assert spec["workload_profile"] == "olmo-core-train"
+
+    profile = spec["suggested_compute"]
+    assert profile in arms.GPUS_PER_COMPUTE_PROFILE, profile
+
+    tokens = committed_command(arms.STAGE_SPECS[name].spec)
+    assert "--standalone" in tokens, "a single-host launcher needs no rendezvous endpoint"
+    ranks = [t for t in tokens if t.startswith("--nproc-per-node")]
+    assert len(ranks) == 1, tokens
+    nproc = int(ranks[0].split("=")[1])
+    assert nproc == arms.GPUS_PER_COMPUTE_PROFILE[profile]
+
+    # Gradient accumulation splits each rank's share into whole microbatches.
+    options = resolved(arms.STAGE_SPECS[name].spec)
+    rank_batch, remainder = divmod(options["global_batch_size"], nproc)
+    assert remainder == 0
+    assert rank_batch % options["rank_microbatch_size"] == 0
+
+    # A retry has to find the same folder, and only a shell can expand this.
+    assert "$EDULLM_CHECKPOINT_DIR" in spec["command"]
+
+
+@pytest.mark.parametrize("name", STAGES)
+def test_every_stage_fits_one_attempt_of_the_bound_it_is_submitted_under(name: str):
+    """
+    A cell killed by the attempt timeout is not reliably retried: the platform grants a second
+    attempt for a lost host and reaches a timeout only through a no-exit-code fall-through
+    that torchrun's non-zero exit on SIGTERM races. So a cell has to finish inside one
+    attempt of ``--hours``, with room for eighteen hours of step-time drift.
+
+    ``--steps`` is in the command text rather than left to the default for the reason a retry
+    exposes: ``Trainer.state_dict`` writes ``max_steps`` and ``load_state_dict`` never reads
+    it back, while ``Scheduler.set_lr`` reads it live on every step, so a second attempt
+    launched under a different horizon resumes with a different schedule.
+    """
+    stage = arms.STAGE_SPECS[name]
+    spare = 1.0 - stage.hours_per_cell / arms.STAGE_HOURS
+    assert spare > 0.05, (
+        f"{name} needs {stage.hours_per_cell:.1f}h against a {arms.STAGE_HOURS:.0f}h attempt, "
+        f"which leaves {spare:.1%} of the bound for step-time drift"
+    )
+    # And 19 rather than the profile's 24, which is not caution being traded for money for its
+    # own sake: --hours is also the hours factor of the approved ceiling, where it is
+    # multiplied by two attempts and by five cells, so each hour of headroom costs ten
+    # cell-hours of ceiling per stage. 6% of eighteen hours is about an hour of drift, and the
+    # step time it is drifting from is measured rather than assumed.
+    assert spare < 0.15, "more headroom than the drift needs, bought with ceiling"
+    assert arms.STAGE_HOURS <= 24.0, "--hours may only lower the workload's own bound"
+    assert "--steps" in committed_argv(stage.spec)
+
+    # What a lost host throws away, which is one save interval and no more.
+    exposure = arms.TRANCHE_SAVE_INTERVAL * arms.MEASURED_SECONDS_PER_STEP / 3600.0
+    assert exposure < 1.5
+
+
+def test_the_three_stages_are_the_whole_tranche_and_no_arm_is_left_out():
+    """
+    Fifteen cells in three submissions have to be the same fifteen the arm table prices, or
+    the budget is for one design and the runs are another. The count is not written down here:
+    it is the arm table's, so a seed added to an arm and not to a stage fails.
+    """
+    assert sorted(arms.STAGE_SPECS) == sorted(arms.FUNDED)
+    assert sum(stage.cells for stage in arms.STAGE_SPECS.values()) == arms.total_runs() == 15
+    assert {stage.cells for stage in arms.STAGE_SPECS.values()} == {arms.STAGE_CELLS}
+
+    # Balanced, because an unbalanced contrast carries SE = sigma*sqrt(1/n_a + 1/n_b) and pays
+    # for the smaller arm twice.
+    assert len({arms.ARMS[name].seeds for name in arms.FUNDED}) == 1
+
+    # Stage 1 is the noise floor and it is the one that has run. A treatment arm submitted
+    # first would have nothing to be compared against that was not estimated from itself.
+    assert arms.STAGE_SPECS["baseline"].stage == 1
+    assert arms.STAGE_SPECS["baseline"].run_id
+    assert all(arms.STAGE_SPECS[name].stage == 2 for name in ("faithful", "output-only"))
+
+
+@pytest.mark.parametrize("shape", STAGED)
+def test_the_superseded_whole_tranche_specs_say_so_where_a_submit_line_is_read(shape: str):
+    """
+    THESE TWO FILES CARRY A SUBMIT LINE THAT WOULD NOW BE REFUSED OR WOULD OVERSPEND, AND THEY
+    ARE KEPT ANYWAY, so the thing to catch is somebody copying one out of them.
+
+    Both say `--fanout-size 9` and the tranche is fifteen cells, because the seed count moved
+    and ``TRANCHE_CELLS`` followed it. The L40S variant at fifteen cells, 21 hours and two
+    attempts prices a ceiling around $6,610 against a $4,000 budget; the A100 variant is
+    superseded outright, because measured seed sigma makes horizon the wrong thing to buy at
+    any step time and its shape question was therefore never load-bearing.
+
+    What is worth keeping is the shape: one submission, one approval, one commit for every
+    cell, expressed through the ``arm-and-seed`` fan-out, which is the right answer wherever a
+    pre-registration does not force the arms apart. So the files stay, the tests above keep
+    them coherent, and this one keeps them from being submitted.
+    """
+    header = (pathlib.Path(_HERE) / arms.STAGED_TRANCHES[shape].spec).read_text()
+    header = header.split("schema_version:")[0]
+
+    assert "SUPERSEDED" in header
+    assert "DO NOT SUBMIT" in header
+    # Naming what replaced it, because "superseded" without a successor sends the reader back
+    # to the git log to find out by what.
+    for stage in arms.STAGE_SPECS.values():
+        assert stage.spec in header, stage.spec
+
+    # And the count it disagrees with is stated rather than left for the reader to discover at
+    # admission, where the disagreement is between --fanout-size and a table.
+    assert str(arms.total_runs()) in header or "fifteen" in header

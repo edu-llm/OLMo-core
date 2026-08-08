@@ -1,3 +1,25 @@
+# SUPERSEDED AND NOT SUBMITTABLE AS IT STANDS. DO NOT SUBMIT THIS FILE.
+#
+# It says nine cells throughout, and the tranche is fifteen: the arm table went from three
+# seeds an arm to five when DataDecide's measured seed sigma (D^-0.172, so a fixed budget's
+# standard error goes as D^(+0.328)) said replicates beat horizon, and `TRANCHE_CELLS` followed
+# the table without anybody editing it. At fifteen cells, `--hours 21 --attempts 2` prices a
+# ceiling of about $6,610 and is over the $4,000 budget, so the submit line below is wrong in
+# two places and the second one cannot be repaired by changing a number.
+#
+# WHAT ACTUALLY RAN, AND WHY THE SHAPE HERE IS STILL WORTH KEEPING. The fifteen went out as
+# three five-cell `--fanout-index-parameter seed` submissions -- run.baseline-stage.yaml,
+# run.faithful-stage.yaml, run.output-only-stage.yaml -- because the pre-registration forbids
+# submitting a treatment arm before the noise floor has numbers in it. That split is a cost,
+# not a saving: three submissions at three commits can silently disagree about a default where
+# one submission cannot, which is what STAGE_PINNED and the stage diff test now stand in for.
+# The one-submission shape below is the better one wherever the pre-registration allows it,
+# and the `arm-and-seed` fan-out is how it is expressed. The next module wants this file's
+# structure and not the staging.
+#
+# Everything below is as it was written. Nothing in it is edited, because a file that is a
+# record of what was not run stops being one as soon as it is kept up to date.
+#
 # THE NINE-RUN TRANCHE AT 6,000 STEPS AND 4.72B TOKENS, ON gpu-4xl40s. Staged, not
 # submitted.
 #

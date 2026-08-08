@@ -42,28 +42,43 @@ def test_every_arm_in_the_plan_is_present_and_numbered_once():
 
 def test_the_seed_allocation_is_the_one_the_pre_registration_argues_for():
     """
-    Three arms at three seeds and nothing else. The tranche buys H1 (arm 2 against arm 1) and
-    H2a (arm 3 against arm 2) at three versus three, which is the smallest design in which
-    sigma is estimated rather than assumed, and gives up the six partial answers the previous
-    allocation spread the same money over.
+    Three arms at five seeds and nothing else. The tranche buys H1 (arm 2 against arm 1) and
+    H2a (arm 3 against arm 2) at five versus five, and gives up the six partial answers an
+    earlier allocation spread the same money over.
+
+    BALANCED, WHICH IS AN ASSERTION AND NOT A COINCIDENCE. The standard error of a contrast is
+    sigma*sqrt(1/n_a + 1/n_b), so an unbalanced design pays for the smaller arm twice: a
+    three-seed baseline against five-seed treatments is 22% worse on H1 than five against five
+    and costs the same. Funding one arm out of step with the others is the shape of mistake
+    this asserts against.
     """
     by_seeds = {}
     for name, arm in arms.ARMS.items():
         by_seeds.setdefault(arm.seeds, set()).add(name)
 
-    assert set(by_seeds) == {0, 3}, "the tranche funds an arm at three seeds or not at all"
-    assert by_seeds[3] == {"baseline", "faithful", "output-only"}
+    assert set(by_seeds) == {0, 5}, "the tranche funds an arm at five seeds or not at all"
+    assert by_seeds[5] == {"baseline", "faithful", "output-only"}
     assert sorted(arms.FUNDED) == ["baseline", "faithful", "output-only"]
 
 
-def test_the_tranche_is_nine_runs_and_says_so():
+def test_the_tranche_is_fifteen_runs_and_says_so():
     """
-    Nine, because that is what the budget buys and nothing else in this repository states it.
-    ``edullm check`` prices a ceiling from the workload profile and never reads the arm table,
-    so if this number is wrong nothing downstream disagrees with it.
+    Fifteen, because that is what the budget buys and nothing else in this repository states
+    it. ``edullm check`` prices a ceiling from the workload profile and never reads the arm
+    table, so if this number is wrong nothing downstream disagrees with it.
+
+    It was nine when the design assumed seed sigma fell as 1/sqrt(tokens). DataDecide measures
+    it falling as D^-0.172, which makes horizon the worse thing to spend a fixed budget on and
+    replicates the better one, so the same money buys five seeds at 6,000 steps instead of
+    three at 12,715. See the module docstring for the arithmetic.
     """
-    assert arms.total_runs() == 9
+    assert arms.total_runs() == 15
     assert str(arms.total_runs()) in arms.describe()
+    # And the fifteen went out as three five-cell submissions, which the table also has to say
+    # -- three separate submissions are the thing that can silently disagree with each other.
+    assert sum(stage.cells for stage in arms.STAGE_SPECS.values()) == arms.total_runs()
+    for stage in arms.STAGE_SPECS.values():
+        assert stage.spec in arms.describe()
 
 
 def test_mhc_is_deferred_rather_than_dropped_and_the_table_says_which():
@@ -87,7 +102,7 @@ def test_the_output_only_arm_records_that_it_was_degenerate_until_it_was_fixed()
     """
     summary = arms.ARMS["output-only"].summary
     assert "b7983ea9" in summary
-    assert arms.ARMS["output-only"].seeds == 3
+    assert arms.ARMS["output-only"].seeds == arms.ARMS["baseline"].seeds == 5
 
 
 @pytest.mark.parametrize("name", sorted(arms.ARMS))
@@ -263,9 +278,11 @@ def test_the_cost_model_is_built_from_the_measurement_and_not_from_a_price():
 
     hours = arms.tranche_hours()
     assert arms.estimated_cost_usd(10.0) == pytest.approx(hours * 10.0)
-    # Nine runs of about eighteen hours, so the expected spend is well under the ceiling
-    # `edullm check` prices and approves against. Both numbers matter and they are different.
-    assert 150 < hours < 175
+    # Fifteen runs of about eighteen hours, so the expected spend is well under the ceiling
+    # `edullm check` prices and approves against. Both numbers matter and they are different:
+    # the ceiling is what the budget has to clear, and this is what arrives on the bill.
+    assert 250 < hours < 290
+    assert hours == pytest.approx(arms.total_runs() * 17.8, rel=0.05)
 
 
 def test_the_arm_seconds_model_reproduces_the_probe_it_was_measured_from():

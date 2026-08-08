@@ -1,3 +1,30 @@
+# SUPERSEDED, AND BY A MEASUREMENT RATHER THAN BY THE PROBE IT WAS WAITING FOR.
+# DO NOT SUBMIT THIS FILE. Kept as the record of a question that was answered before its
+# instrument reported.
+#
+# THE FULL HORIZON IS NOT WORTH BUYING AT ANY STEP TIME, WHICH MAKES THE PROBE'S ANSWER
+# IRRELEVANT RATHER THAN LATE. This file exists to spend money on tokens instead of on
+# replicates, and that trade is the wrong way round. Ai2's DataDecide (arXiv 2504.11393) reads
+# seed sigma against token count directly on 1,050 models and it falls as D^-0.172, bootstrap
+# CI [0.088, 0.306]. A run costs in proportion to D, so a fixed budget buys n = C/D runs and
+# the standard error of an arm mean goes as D^(+0.328) -- positive across the whole interval.
+# Every dollar moved from seeds into horizon makes the experiment LESS sensitive. Combined with
+# the finding that the two shapes price within 1.5% per token, the A100 could only ever have
+# made a longer run legal, never cheaper, and a longer run is not what the money should buy.
+#
+# So the horizon stayed at 6,000 steps and the money bought five seeds an arm instead of three:
+# MDE 0.018 nats against this file's 0.022, for less money. The fifteen cells went out as three
+# five-cell `--fanout-index-parameter seed` submissions -- run.baseline-stage.yaml,
+# run.faithful-stage.yaml, run.output-only-stage.yaml.
+#
+# TWO THINGS BELOW ARE NOW ALSO ARITHMETICALLY WRONG AND ARE NOT CORRECTED. The file says nine
+# cells and `TRANCHE_CELLS` is fifteen, so the submit line's `--fanout-size 9` is wrong; and the
+# $4,742.84 ceiling it argues about becomes about $7,905 at fifteen, which is not a number any
+# reading of the budget clears. Correcting them would make it look submittable, which it is not.
+#
+# Everything below is as it was written, including its own account of the budget conflict, which
+# reached the right conclusion for a reason that turned out not to be the binding one.
+#
 # THE NINE-RUN TRANCHE AT THE FULL 10B HORIZON, ON gpu-8xa100. Staged, not submitted.
 #
 # It is one of two committed variants and only one of them will ever run. Which one is

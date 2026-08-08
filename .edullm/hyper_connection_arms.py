@@ -17,18 +17,42 @@ rehearsal size and at 370M without a second table to keep in sync.
 
 WHAT THE FIRST TRANCHE FUNDS, AND WHY IT IS THREE ARMS RATHER THAN SEVEN.
 
-Nine runs: ``baseline`` x3, ``faithful`` x3, ``output-only`` x3, and zero everywhere else.
+Fifteen runs: ``baseline`` x5, ``faithful`` x5, ``output-only`` x5, and zero everywhere else.
 That buys exactly two hypotheses, both at full power and both against the same noise floor:
 
-  H1   replication          arm 2 against arm 1, three seeds against three.
-  H2a  implementation       arm 3 against arm 2, three seeds against three. Whether the
+  H1   replication          arm 2 against arm 1, five seeds against five.
+  H2a  implementation       arm 3 against arm 2, five seeds against five. Whether the
                             field's negative result is an artifact of a reimplementation
                             that kept the output mixing and dropped the input map.
 
-Three against three is the smallest design in which sigma is estimated from the data rather
-than assumed, and it is what the analysis plan's gate -- two standard errors of the contrast
--- was written against. Two arms at two seeds and two more at one, which is what the previous
-allocation bought, gives four underpowered answers instead of two sharp ones.
+FIVE AND NOT THE THREE THAT STOOD HERE, AND THE MONEY CAME OUT OF THE HORIZON RATHER THAN
+OUT OF THE BUDGET. Three arms at three seeds was priced on the assumption that seed sigma
+falls as 1/sqrt(tokens), so that a longer run was worth paying for. Ai2's DataDecide
+(arXiv 2504.11393) reads sigma against token count directly -- 1,050 models at 25 recipes x
+14 sizes x 3 seeds with intermediate checkpoints, at sizes that bracket 370M -- and over the
+3B-30B window with model-size fixed effects sigma goes as D^-0.172, bootstrap CI
+[0.088, 0.306]. A run costs in proportion to D, so a fixed budget buys n = C/D runs and the
+standard error of an arm mean goes as D^(+0.328): positive across the whole interval, so
+horizon bought with seed money makes the experiment strictly less sensitive. Five seeds at
+4.72B is an MDE of 0.018 nats against the 0.022 the original plan would have had at 10B, for
+less money.
+
+Balanced 5/5/5 rather than a baseline quintuple and larger treatments, because an unbalanced
+contrast carries SE = sigma*sqrt(1/n_a + 1/n_b) and pays for the smaller arm twice.
+
+Five against five is also comfortably past the smallest design in which sigma is estimated
+from the data rather than assumed, which is what the analysis plan's gate -- two standard
+errors of the contrast -- was written against. It takes the pooled variance estimate to
+df = 12 rather than the df = 6 a triple design gave, and the baseline's own to df = 4 rather
+than df = 2.
+
+THE FIFTEEN RUN AS THREE SUBMISSIONS AND NOT ONE, AND THAT IS A PRE-REGISTRATION CONSTRAINT
+RATHER THAN A PLATFORM ONE. The analysis plan forbids submitting a treatment arm before the
+noise-floor table has numbers in it, and the per-source inverse-variance weights have to be
+frozen from the baseline alone or they are a researcher degree of freedom. So ``baseline``
+went first on its own (stage 1), and ``faithful`` and ``output-only`` follow as stage 2. Each
+stage is a five-cell ``--fanout-index-parameter seed`` fan-out with its arm in the command;
+:data:`STAGE_SPECS` is the three specs and what has to be identical across them.
 
 ``mhc`` / H5 IS DEFERRED TO A SECOND TRANCHE AND IS NOT ABANDONED. It is the best-designed
 hypothesis in this module: the Sinkhorn-Knopp normalization towards the Birkhoff polytope is
@@ -43,7 +67,7 @@ arm replaced both the learned input map and the paper's fixed staggered one-hot 
 left every lane reading the same vector: degenerate rather than crippled, an exact re-run of
 the baseline with dead parameters, and a null result that meant nothing. b7983ea9 put the
 staggered read back so that only the learned input map goes, which is the one difference H2a
-is about. Nine runs of a degenerate arm is the shape of mistake this note exists to prevent.
+is about. Five runs of a degenerate arm is the shape of mistake this note exists to prevent.
 """
 
 import math
@@ -89,11 +113,16 @@ class Arm:
     """
     How many seeds this arm is funded for in the tranche that is about to run.
 
-    Three where a three-versus-three difference is claimed against the baseline, and zero
+    Five where a five-versus-five difference is claimed against the baseline, and zero
     everywhere else. There is no longer a one and no longer a two: an arm at one seed cannot
     separate its effect from the seed it drew, and an arm at two estimates sigma from a single
     difference. The budget buys two hypotheses at full power rather than six at partial, and
     :data:`CUT_ORDER` records which order the rest come back in.
+
+    Five and not three because the money came out of the token horizon, which measured seed
+    sigma says is the worse thing to spend it on -- see the module docstring. Changing this
+    number changes :data:`TRANCHE_CELLS`, :func:`total_runs`, :func:`tranche_hours` and every
+    price derived from them, which is the point of it being one number.
 
     Zero is not the same as absent: the arm still has to build, stay iso-parameter, stay
     iso-FLOP and pass every test in ``test_hyper_connection_arms.py``, so funding it later
@@ -158,14 +187,14 @@ ARMS: Dict[str, Arm] = {
         number=1,
         summary="Standard residual stream.",
         isolates="The noise floor. Nothing else can be claimed until this has been measured.",
-        seeds=3,
+        seeds=5,
     ),
     "faithful": Arm(
         number=2,
         summary="DHC x4 as published: input-side pre-mapping, sqrt(n) output init, "
         "weight-decay split.",
         isolates="The actual method.",
-        seeds=3,
+        seeds=5,
         hyper_connections=_hc(),
     ),
     "output-only": Arm(
@@ -178,7 +207,7 @@ ARMS: Dict[str, Arm] = {
         "It is in the tranche because of that fix and would not otherwise be worth a run.",
         isolates="Cause 1, and H2a. Whether the field's negative result is an artifact of an "
         "incomplete reimplementation.",
-        seeds=3,
+        seeds=5,
         hyper_connections=_hc(mode=HyperConnectionMode.output),
     ),
     "no-output-init": Arm(
@@ -294,17 +323,28 @@ FUNDED = [name for name, arm in ARMS.items() if arm.seeds > 0]
 
 #: Every ``(arm, seed)`` pair the tranche runs, in the order the fan-out hands them out.
 #:
-#: NINE RUNS ARE ONE SUBMISSION AND THE CELL INDEX IS WHAT TELLS THEM APART. The platform
-#: fans a submission out with ``--fanout-size 9 --fanout-index-parameter arm-and-seed`` and
-#: gives each cell its own ``AWS_BATCH_JOB_ARRAY_INDEX``; ``resolve_cell`` in
+#: THE WHOLE TRANCHE AS ONE SUBMISSION, WITH THE CELL INDEX AS THE ONLY THING THAT TELLS THE
+#: RUNS APART. The platform fans a submission out with
+#: ``--fanout-size <len(TRANCHE_CELLS)> --fanout-index-parameter arm-and-seed`` and gives each
+#: cell its own ``AWS_BATCH_JOB_ARRAY_INDEX``; ``resolve_cell`` in
 #: ``train_hyper_connections.py`` reads that integer and comes back here for the pair it
-#: names. So the submitted command carries neither ``--arm`` nor ``--seed``, and the nine
-#: cells are nine different runs of one commit rather than three commits of three.
+#: names. So the submitted command carries neither ``--arm`` nor ``--seed``, and the cells are
+#: that many different runs of one commit rather than one commit submitted once per arm.
+#:
+#: THIS IS NOT THE PATH THE FIRST TRANCHE ACTUALLY TOOK, AND IT IS KEPT ON PURPOSE. The
+#: pre-registration forbids submitting a treatment arm before the noise floor is measured, so
+#: the fifteen went out as three five-cell ``--fanout-index-parameter seed`` submissions
+#: (:data:`STAGE_SPECS`) with the arm written into each command. An unstaged tranche -- the
+#: next module, or a re-run of this one once H1 has an answer -- wants this table and the one
+#: submission it buys instead. What it costs to keep is a table and its tests; what it would
+#: cost to reconstruct after the fact is the reasoning above.
 #:
 #: DERIVED FROM THE SEED COUNTS RATHER THAN WRITTEN OUT, so an arm that gains or loses a seed
-#: moves the cell list and ``total_runs()`` together and cannot move only one of them. The
-#: order is the arm table's own, which is the pre-registration's numbering, so cell 0 is
-#: ``baseline`` seed 0 and cell 8 is ``output-only`` seed 2.
+#: moves the cell list and ``total_runs()`` together and cannot move only one of them. That
+#: is what happened when the design went from three seeds to five: nothing here was edited
+#: and the cell list went from nine entries to fifteen. The order is the arm table's own,
+#: which is the pre-registration's numbering, so cell 0 is ``baseline`` seed 0 and the last
+#: cell is ``output-only`` at its highest seed.
 TRANCHE_CELLS: List[Tuple[str, int]] = [
     (name, seed) for name, arm in ARMS.items() for seed in range(arm.seeds)
 ]
@@ -814,12 +854,20 @@ def estimated_cost_usd(hourly_rate_usd: float, steps: int = TRANCHE_STEPS) -> fl
 
 @dataclass(frozen=True)
 class StagedTranche:
-    """One of the two nine-run tranche specs sitting committed next to ``run.yaml``.
+    """One of the two whole-tranche specs sitting committed next to ``run.yaml``.
 
-    Both are staged rather than one, because which shape the tranche runs on is decided by a
-    throughput probe that is still running, and the answer has to become a submission in
-    minutes rather than in an editing session. Whichever way the probe reads, one ``cp`` over
-    ``.edullm/run.yaml`` and one ``edullm submit`` is the whole of it.
+    Both were staged rather than one, because which shape the tranche ran on was to be decided
+    by a throughput probe, and the answer had to become a submission in minutes rather than in
+    an editing session.
+
+    NEITHER IS SUBMITTABLE AS IT STANDS AND BOTH ARE KEPT ANYWAY. The tranche went out as the
+    three five-cell stages in :data:`STAGE_SPECS` instead, for the pre-registration reason
+    :class:`StageSpec` gives, and both of these files still say nine cells -- which is what the
+    arm table said when they were written and no longer is. What survives them is the shape:
+    an unstaged tranche is one submission, one approval and one commit for every cell, and the
+    ``arm-and-seed`` fan-out these were written against is how that is expressed. The next
+    module, or a re-run of this one once H1 has an answer, wants that and not this staging.
+    Their headers carry what supersedes them.
     """
 
     spec: str
@@ -910,12 +958,14 @@ class StagedTranche:
         return tranche_hours(self.steps, self.seconds_per_step) * hourly_rate_usd
 
 
-#: The two staged tranches, keyed by the shape they run on.
+#: The two whole-tranche specs, keyed by the shape they run on. Superseded by
+#: :data:`STAGE_SPECS`, which is what actually ran; see :class:`StagedTranche` for why they
+#: are kept rather than deleted.
 #:
 #: ONE SOURCE OF TRUTH FOR TWO FILES NOBODY WILL RE-READ UNDER TIME PRESSURE.
 #: ``test_both_staged_tranches_are_the_shape_this_table_prices`` walks this dict, opens each
 #: spec and checks every field against it, so a half-edited variant fails on a laptop rather
-#: than at admission or, worse, eighteen hours into nine machines.
+#: than at admission or, worse, eighteen hours into a room full of machines.
 STAGED_TRANCHES: Dict[str, StagedTranche] = {
     "gpu-4xl40s": StagedTranche(
         spec="run.l40s-tranche.yaml",
@@ -953,6 +1003,193 @@ STAGED_TRANCHES: Dict[str, StagedTranche] = {
         hours=24.0,
         attempts=1,
         seconds_per_step=A100_STEP_SECONDS_FOR_FULL_HORIZON,
+    ),
+}
+
+
+#: How many cells one stage's fan-out has, which is one funded arm's seed count.
+#:
+#: Derived rather than written down, because the whole reason the stages exist is that the
+#: three arms have to be compared at the same replicate count, and a stage whose fan-out size
+#: disagreed with the arm table would run a different design than the one that was priced.
+STAGE_CELLS = ARMS["baseline"].seeds
+
+#: The ``--hours`` every stage is submitted under, and it is the same number for all three.
+#:
+#: 19 covers a 17.8-hour cell -- 6,000 steps at the measured 10.32 s/step is 17.2 hours, and
+#: the twelve evaluations, thirteen checkpoints, 120 monitor firings and the container's
+#: start-up are 0.58 more -- with about 6% of the bound unspent. It is not the profile's 24
+#: because ``--hours`` is also the hours factor of the approved ceiling, where it is
+#: multiplied by the attempts and by every cell.
+#:
+#: IT HAS TO BE THE SAME ACROSS THE STAGES FOR A REASON THAT IS NOT ARITHMETIC. A bound is
+#: what kills a cell that runs long, so a stage submitted under a looser bound than another
+#: survives drift that the other one dies of, and a treatment arm missing a cell is not
+#: missing it at random -- it is missing the slowest one.
+STAGE_HOURS = 19.0
+
+#: The ``--attempts`` every stage is submitted under.
+#:
+#: Two, which is the profile's own, because the second attempt is for a lost host: the
+#: platform's retry table is ``OnStatusReason "Host EC2*" RETRY`` and then two EXITs. It
+#: multiplies straight into the ceiling, so it is worth the doubling only because a cell lost
+#: at hour sixteen would otherwise take its seed out of the arm mean entirely.
+STAGE_ATTEMPTS = 2
+
+
+@dataclass(frozen=True)
+class StageSpec:
+    """One of the three submissions the fifteen-run tranche actually went out as.
+
+    THE TRANCHE IS FIFTEEN CELLS AND WAS SUBMITTED AS THREE FIVE-CELL FAN-OUTS, and the split
+    is a pre-registration constraint rather than a platform one. The analysis plan forbids
+    submitting a treatment arm before the noise-floor table has numbers in it, because two of
+    the things stage 2 is analysed against -- sigma-hat and the per-source inverse-variance
+    weights -- cannot be estimated from a treatment arm without circularity. So ``baseline``
+    went first and alone, and the treatments follow once those are frozen.
+
+    WHAT THE SPLIT COSTS, AND WHAT THIS CLASS IS FOR. In one fifteen-cell submission every
+    cell is the same command at the same commit, and nothing can drift because there is
+    nothing to drift between. Three submissions at three commits is three chances for a
+    default to move underneath the contrast, with nothing reporting it: the loss curves of a
+    baseline trained at one weight decay and a treatment trained at another look exactly like
+    the loss curves of a baseline and a treatment. ``STAGE_SPECS`` and the test that walks it
+    are what replaces the guarantee the single submission had for free.
+
+    Every stage is a ``--fanout-index-parameter seed`` fan-out with its arm in the command,
+    including the treatments, and NOT the ``arm-and-seed`` path :data:`TRANCHE_CELLS` serves.
+    Both resolve the same seeds, but stage 1 has already run through ``resolve_seed``, and
+    fifteen cells assigned their replicate by one mechanism is worth more in an experiment
+    whose output is a noise floor than one saved approval is.
+    """
+
+    spec: str
+    """The file, relative to ``.edullm/``."""
+
+    arm: str
+    """Which arm every cell of this stage runs. It is in the command, not in the index."""
+
+    stage: int
+    """1 for the noise floor, 2 for the treatments. Stage 2 may not be submitted first."""
+
+    run_id: Optional[str] = None
+    """The platform's run id, once this stage has been submitted. ``None`` until then."""
+
+    @property
+    def cells(self) -> int:
+        """The fan-out size, which is this arm's seed count."""
+        return ARMS[self.arm].seeds
+
+    @property
+    def hours_per_cell(self) -> float:
+        """How long one cell of this stage runs, at the measured step time."""
+        return arm_seconds(ARMS[self.arm], TRANCHE_STEPS) / 3600.0
+
+    def maximum_compute_cost_usd(self, hourly_rate_usd: float) -> float:
+        """
+        The ceiling this stage is approved against, which is the number the budget clears.
+
+        ``rate x nodes x hours x attempts x cells``, from
+        ``edullm_platform.contracts.workload.compute_maximum_compute_cost_usd``, on a single
+        node. THE RATE IS AN ARGUMENT for the reason :func:`estimated_cost_usd` gives.
+        """
+        return hourly_rate_usd * STAGE_HOURS * STAGE_ATTEMPTS * self.cells
+
+    def expected_cost_usd(self, hourly_rate_usd: float) -> float:
+        """
+        What this stage is expected to actually spend, which is a much smaller number.
+
+        Billing is wall clock: ``edullm_platform.run_costs._attempt_seconds`` sums each
+        attempt's ``ended_at - started_at``, so an hour of ``--hours`` a cell does not use
+        costs nothing, and the second attempt costs nothing unless a host is lost.
+        """
+        return self.cells * self.hours_per_cell * hourly_rate_usd
+
+
+#: The three stage submissions, keyed by the arm each one runs.
+#:
+#: ONE SOURCE OF TRUTH FOR THREE FILES THAT MUST AGREE ON EVERYTHING BUT ONE WORD.
+#: ``test_the_three_stage_specs_differ_in_the_arm_and_in_nothing_else`` parses all three
+#: commands through the real parser and compares every resolved option, so a hand-edit to one
+#: arm's command fails on a laptop. Nothing downstream would catch it: ``edullm check`` prices
+#: a ceiling out of the workload profile and never reads the command's hyperparameters, and
+#: two arms trained at different settings produce loss curves that look like two arms.
+STAGE_SPECS: Dict[str, StageSpec] = {
+    "baseline": StageSpec(
+        spec="run.baseline-stage.yaml",
+        arm="baseline",
+        stage=1,
+        # ADMITTED at commit 38b665919 under --hours 19 --attempts 2 --fanout-size 5. The
+        # file is history now and is not edited again: the values its command left to parser
+        # defaults are recorded in its header, and the two stage-2 specs pin them explicitly.
+        run_id="run_019fe279-4ef0",
+    ),
+    "faithful": StageSpec(spec="run.faithful-stage.yaml", arm="faithful", stage=2),
+    "output-only": StageSpec(spec="run.output-only-stage.yaml", arm="output-only", stage=2),
+}
+
+
+#: What stage 1's command resolved to, and therefore what all fifteen cells must be compared
+#: at. Read out of ``run.baseline-stage.yaml`` through the real parser at commit ``38b665919``,
+#: which is the commit the five admitted cells were built from.
+#:
+#: LITERALS AND NOT REFERENCES TO THE CONSTANTS THEY GUARD, WHICH IS THE ENTIRE POINT. Writing
+#: ``DEFAULT_WEIGHT_DECAY`` here would move with the default and this table would agree with a
+#: drifting number forever. Written as ``0.033`` it disagrees the moment the default moves, and
+#: what it is disagreeing with is the value five runs have already been trained at. The same
+#: goes for the tranche's own constants: ``TRANCHE_STEPS`` is 6,000 today and stage 1 ran 6,000
+#: whatever it becomes.
+#:
+#: A test cross-checks the whole table against those constants, so a deliberate change to the
+#: design fails here rather than silently invalidating stage 1's comparability. What that
+#: failure means is not "fix this number" -- it is "stage 1 cannot be compared to stage 2 any
+#: more", and the fix is another five baseline cells.
+#:
+#: ``fail_closed_by_step`` and ``arm`` are absent because they are the two options that are
+#: allowed to differ; see :data:`STAGE_CONTRAST_EXEMPT`. So are ``seed`` and ``data_seed``,
+#: which the fan-out index owns, and the platform's own ``run_name``, ``save_folder``,
+#: ``work_dir`` and ``dataset_*``.
+STAGE_PINNED: Dict[str, object] = {
+    "model_factory": "hc_370M",
+    "sequence_length": 4096,
+    "global_batch_size": 786_432,
+    "rank_microbatch_size": 16_384,
+    "steps": 6_000,
+    "warmup_steps": 120,
+    "save_interval": 500,
+    "eval_interval": 500,
+    "monitor_interval": 50,
+    "param_dtype": "bfloat16",
+    "learning_rate": 7.8e-4,
+    "weight_decay": 0.033,
+    "z_loss_multiplier": 1e-5,
+    "held_out_shards": 2,
+    "bytes_per_token": 4.57,
+    "partial_rotary_factor": None,
+}
+
+
+#: The resolved options a stage spec may differ from the other two in, and why each one is
+#: allowed to.
+#:
+#: EVERYTHING NOT IN HERE HAS TO BE IDENTICAL ACROSS ALL THREE STAGES, and that is what the
+#: diff test enforces. An allowlist rather than a list of things to check, because the failure
+#: is a flag nobody thought about: a checked list silently permits whatever is not on it,
+#: which is precisely the flag a later commit adds.
+STAGE_CONTRAST_EXEMPT: Dict[str, str] = {
+    "arm": (
+        "The contrast itself. H1 is arm 2 against arm 1 and H2a is arm 3 against arm 2, so "
+        "this is the one difference the experiment is made of."
+    ),
+    "fail_closed_by_step": (
+        "An abort threshold and not a training setting: it changes no parameter, no datum "
+        "and no schedule, only whether a run whose lanes never differentiated is killed at "
+        "step 400 instead of billed for eighteen hours. It is UNREACHABLE on the baseline -- "
+        "train_hyper_connections.train attaches HyperConnectionMonitorCallback only when "
+        "arm.hyper_connections is not None, and the baseline's is None -- so setting it there "
+        "would have changed nothing, and the stage-1 command that omits it and a stage-2 "
+        "command that sets it describe the same baseline. The diff test asserts that "
+        "unreachability rather than taking this paragraph's word for it."
     ),
 }
 
@@ -1023,4 +1260,13 @@ def describe() -> str:
         "expected spend; the ceiling that gets approved is attempts x the runtime bound x "
         "the rate x the cell count, which check reports as cost.maximum_compute_cost_usd."
     )
+    lines.append("")
+    lines.append(
+        f"submitted as {len(STAGE_SPECS)} stages of {STAGE_CELLS} cells, "
+        f"--fanout-index-parameter seed, --hours {STAGE_HOURS:.0f} "
+        f"--attempts {STAGE_ATTEMPTS}:"
+    )
+    for name, stage in STAGE_SPECS.items():
+        landed = stage.run_id or "not submitted"
+        lines.append(f"  stage {stage.stage}  {name.ljust(width)}  {stage.spec}  ({landed})")
     return "\n".join(lines)

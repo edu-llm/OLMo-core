@@ -1,0 +1,136 @@
+# STAGE 2 OF THE TRANCHE, ARM 3 OF 3: five seeds of output-side mixing only.
+#
+#   edullm check  --json --experiment hyper-connections-370m --dataset regmix-10b-v1 \
+#     --team input-core --spec .edullm/run.output-only-stage.yaml \
+#     --hours 19 --attempts 2 --fanout-size 5 --fanout-index-parameter seed
+#   edullm submit       --experiment hyper-connections-370m --dataset regmix-10b-v1 \
+#     --team input-core --spec .edullm/run.output-only-stage.yaml \
+#     --hours 19 --attempts 2 --fanout-size 5 --fanout-index-parameter seed
+#
+# This is arm 3, and it is the only arm in the module that tests a claim about somebody else's
+# code rather than about the method. It is DHC x4 with the learned input-side pre-mapping
+# removed and everything else kept, which is what a shared residual interface forces on an
+# implementer -- and it is what several of the reimplementations behind the field's negative
+# result actually did. H2a is this arm against `faithful`: if hyper-connections work and this
+# arm does not, the negative result is an artifact of an incomplete reimplementation, and that
+# is a more useful finding than either arm alone.
+#
+# THE READ STAYS ON THE PAPER'S FIXED STAGGERED ONE-HOT AND ONLY THE LEARNED MAP GOES, WHICH
+# IS THE DIFFERENCE BETWEEN THIS ARM AND A WASTED FIVE RUNS. Before commit b7983ea9 the arm
+# dropped the staggered read along with the learned map, so every lane read the same vector:
+# not a crippled method but a degenerate one, an exact re-run of the baseline with dead
+# parameters, and a null result that would have meant nothing and looked like something.
+# b7983ea9 put the read back. Five seeds of the pre-b7983ea9 arm is the shape of mistake this
+# paragraph exists to prevent.
+#
+# ---------------------------------------------------------------------------------------
+# WHY THIS IS ITS OWN SUBMISSION
+# ---------------------------------------------------------------------------------------
+#
+# A fan-out varies one parameter and here that parameter is the seed: `--fanout-size 5
+# --fanout-index-parameter seed` hands all five cells this one command and gives each its own
+# $AWS_BATCH_JOB_ARRAY_INDEX, which `resolve_seed` reads and which is the only per-cell value
+# that exists. So the arm is in the command text, one arm per submission, and the three arms
+# of the tranche are three submissions.
+#
+# The arm table also carries an `arm-and-seed` fan-out that would put all fifteen cells in one
+# submission under one approval. It is deliberately not used: stage 1 has already run through
+# `resolve_seed`, the two paths resolve identical seeds, and fifteen cells assigned their
+# replicate by one mechanism is worth more in an experiment whose output is a noise floor than
+# one saved approval. It is kept for an unstaged tranche, which is what the next module wants.
+#
+# Stage 1 is separate for the pre-registration's reason rather than the platform's: no
+# treatment arm may be submitted before the noise-floor table has numbers in it, because
+# sigma-hat and the per-source inverse-variance weights this arm is analysed against cannot be
+# estimated from a treatment arm without circularity. They come out of `run_019fe279-4ef0`.
+#
+# ---------------------------------------------------------------------------------------
+# THE FLAGS THAT ARE HERE BECAUSE THEY WERE NOT IN STAGE 1
+# ---------------------------------------------------------------------------------------
+#
+# Stage 1's command left --weight-decay, --z-loss-multiplier, --held-out-shards and
+# --bytes-per-token to parser defaults, on the argument that repeating a default is a second
+# place for it to drift. In a single fifteen-cell submission that argument holds, because every
+# cell is the same command at the same commit and there is nothing to drift between. This is a
+# SEPARATE SUBMISSION AT A DIFFERENT COMMIT, so a commit landing between the stages that moves
+# a default changes what this arm trains at, does not change what the baseline trained at, and
+# reports nothing: two arms trained at different settings produce loss curves that look like
+# two arms.
+#
+# Every value below is therefore the value the running baseline resolved to at commit
+# 38b665919, written as a literal rather than as a reference to the constant it guards, because
+# a reference moves with the thing it is meant to catch:
+#
+#   --weight-decay 0.033          DEFAULT_WEIGHT_DECAY at 38b665919
+#   --z-loss-multiplier 1e-5      the parser default at 38b665919
+#   --held-out-shards 2           hyper_connection_arms.HELD_OUT_SHARDS at 38b665919
+#   --bytes-per-token 4.57        DOLMA2_BYTES_PER_TOKEN at 38b665919
+#   --learning-rate 7.8e-4        DEFAULT_LEARNING_RATE at 38b665919
+#   --eval-interval 500           already in stage 1's command
+#   --monitor-interval 50         already in stage 1's command
+#
+# --held-out-shards 2 IS INERT ON THIS CORPUS AND IS PINNED ANYWAY.
+# `_add_held_out_evaluation` prefers the corpus's own declared validation split and only carves
+# shards out of training when there is none; regmix-10b-v1 declares seven validation shards
+# stratified by source, so `split_held_out` never fires and this number is never read. It is
+# here for the lineage record -- it is part of what the fifteen runs were submitted at, and a
+# corpus with no declared split would make it live.
+#
+# --fail-closed-by-step 400 IS AT ITS MOST USEFUL ON THIS ARM. `train` attaches
+# HyperConnectionMonitorCallback only where the arm has hyper-connections, so the flag is
+# unreachable on the baseline and stage 1's omitting it changed nothing. Here it is reachable
+# and the failure it catches is this arm's own: an arm that loses its input map is the arm most
+# likely to leave its lanes undifferentiated, and undifferentiated lanes make every downstream
+# number uninterpretable in both directions -- a null that means nothing, reported as a null
+# that means something. 400 is past the end of warmup at 120, so nothing is killed for a
+# schedule that has not started, and it costs 1.1 hours to find out instead of 17.8.
+#
+# ---------------------------------------------------------------------------------------
+# WHAT MUST BE IDENTICAL TO THE OTHER TWO STAGES, AND WHAT CHECKS IT
+# ---------------------------------------------------------------------------------------
+#
+# steps 6000, save-interval 500, warmup-steps 120, rank-microbatch-size 16384,
+# global-batch-size 786432, sequence-length 4096, nproc-per-node 4, model-factory hc_370M,
+# param-dtype bfloat16, and every pinned value above. `--arm` is the only word that may differ
+# between this file, run.faithful-stage.yaml and run.baseline-stage.yaml, and
+# `test_the_three_stage_specs_differ_in_the_arm_and_in_nothing_else` parses all three commands
+# through the real parser and compares every resolved option to prove it. Nothing downstream
+# would: `edullm check` prices a ceiling out of the workload profile and never reads a
+# hyperparameter, so a hand-edit to one arm's command is invisible until the analysis.
+#
+# NO --seed. All five cells are handed this one command, so an explicit --seed would run one
+# replicate five times: five identical curves, a measured noise floor of zero, and every
+# contrast significant against it. `resolve_seed` refuses it rather than resolving it.
+#
+# NO --partial-rotary-factor. A real unmeasured question, and a second change inside the
+# contrast H2a is about.
+#
+# --hours 19 covers a 17.8-hour cell -- 6,000 steps at the measured 10.32 s/step is 17.2
+# hours, plus 0.58 for twelve evaluations, thirteen checkpoints, 120 monitor firings and
+# start-up -- with about 6% of the bound unspent. It is the same 19 the other two stages run
+# under, because a bound is what kills a cell that runs long, and an arm under a looser bound
+# survives drift another arm dies of.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-4xl40s
+command: >-
+  bash -lc 'python -m torch.distributed.run --nproc-per-node=4 --standalone
+  .edullm/train_hyper_connections.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --arm output-only
+  --model-factory hc_370M
+  --sequence-length 4096
+  --global-batch-size 786432
+  --rank-microbatch-size 16384
+  --steps 6000
+  --save-interval 500
+  --warmup-steps 120
+  --learning-rate 7.8e-4
+  --weight-decay 0.033
+  --z-loss-multiplier 1e-5
+  --held-out-shards 2
+  --bytes-per-token 4.57
+  --monitor-interval 50
+  --eval-interval 500
+  --fail-closed-by-step 400
+  --param-dtype bfloat16'

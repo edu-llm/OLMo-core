@@ -62,6 +62,45 @@
 # DOLMA2_BYTES_PER_TOKEN, DEFAULT_WEIGHT_DECAY, 500, 50). Repeating a default in the command
 # is a second place for it to drift from the arm table.
 #
+# THAT PARAGRAPH IS WRONG AND THIS FILE IS KEPT AS IT WAS BECAUSE THE RUN LAUNCHED FROM IT.
+# Added after `run_019fe279-4ef0` was admitted; nothing below the comments is edited.
+#
+# The argument holds for a single fifteen-cell submission, where every cell is the same command
+# at the same commit and there is nothing for a default to drift between. It does not hold for
+# a tranche split into stages, which is what this one is: stage 2 is a separate submission at a
+# LATER COMMIT, so a commit landing in between that moves DEFAULT_WEIGHT_DECAY, or
+# HELD_OUT_SHARDS, or the z-loss default, changes what the treatment arms train at, leaves what
+# this baseline trained at untouched, and reports nothing. The loss curves of a baseline at one
+# weight decay and a treatment at another look exactly like the loss curves of a baseline and a
+# treatment, which is the failure -- and the split is what turned a redundant flag into a
+# missing one.
+#
+# THE LINEAGE RECORD. What this command actually resolved to at commit 38b665919, read back out
+# of it through `train_hyper_connections.build_parser`. These are the values the five admitted
+# cells trained at, and the two stage-2 specs pin every one of them as a literal:
+#
+#   --weight-decay          0.033       (DEFAULT_WEIGHT_DECAY)
+#   --z-loss-multiplier     1e-5        (parser default)
+#   --held-out-shards       2           (hyper_connection_arms.HELD_OUT_SHARDS)
+#   --bytes-per-token       4.57        (DOLMA2_BYTES_PER_TOKEN)
+#   --learning-rate         7.8e-4      (DEFAULT_LEARNING_RATE)
+#   --eval-interval         500         (in the command below)
+#   --monitor-interval      50          (in the command below)
+#   --fail-closed-by-step   None        (parser default, and unreachable on this arm:
+#                                       `train` attaches HyperConnectionMonitorCallback only
+#                                       where arm.hyper_connections is not None, and the
+#                                       baseline's is None, so setting it here would have
+#                                       changed nothing. Stage 2 sets it to 400, where it is
+#                                       reachable and is the only difference between the
+#                                       stages' resolved options other than the arm.)
+#   --partial-rotary-factor None        (parser default: ordinary RoPE)
+#
+# These live in `hyper_connection_arms.STAGE_PINNED` as literals rather than as references to
+# the constants they guard -- a reference would move with the thing it is meant to catch -- and
+# `test_the_three_stage_specs_differ_in_the_arm_and_in_nothing_else` compares all three stages
+# against them. If a default has already moved, that test fails and says which one, which is
+# the report this file could not make for itself.
+#
 # --seed and --arm: --arm IS here and --seed is NOT, and that asymmetry is load-bearing. Under
 # `--fanout-index-parameter seed` every cell is handed this one command, so an explicit --seed
 # would run five cells on one replicate -- five identical curves, a measured noise floor of
