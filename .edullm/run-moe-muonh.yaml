@@ -1,0 +1,69 @@
+# ARM M/H: olmo2_370M_moe (373.9M active), Hyperball; exercises per-expert blocking
+#
+#   edullm check --json --spec .edullm/run-moe-muonh.yaml --experiment muonh-370m \
+#     --dataset olmo-150b-dolma2-v1 --team scratch --compute gpu-8xa100 \
+#     --hours 7 --attempts 1
+#   edullm submit <same flags>
+#
+# gpu-8xa100 AND NOT A CHEAPER PCIe SHAPE, WHICH IS THE LARGEST DECISION IN THIS FILE. Same code,
+# same config, same commit, same corpus, measured elsewhere in this project: 4xL40S (PCIe, no
+# NVLink) reached 4.66% MFU and 8xA100 (NVSwitch) reached 36.6% -- 7.9x from interconnect topology
+# alone, on a workload that was communication-bound. Per hour the L40S shape looks cheap; per token
+# it is roughly an order of magnitude dearer AND produces a number not comparable to the A100
+# baseline. $/hr and device memory are the wrong instrument for choosing a shape.
+#
+# --hours 7 --attempts 1 IS DELIBERATE ON BOTH COUNTS. The workload profile's defaults are its
+# maximums (24h x 2), which price past the automatic threshold and park the run waiting for a lead
+# instead of starting it. attempts 1 means a death at hour ten is lost rather than resumed; that is
+# the trade for staying automatic, and the checkpoint interval is what limits the loss. Read the
+# real figure out of `check --json`, never from this comment.
+#
+# EVERY NUMBER BELOW IS IDENTICAL ACROSS ALL FOUR ARMS EXCEPT --model-factory, --optimizer AND
+# --learning-rate, AND THAT IS THE EXPERIMENT. Steps, batch, microbatch, sequence length, warmup,
+# seed, corpus, dtype and initializer are held equal; any per-arm difference in those is a confound
+# no number of seeds averages away.
+#
+# --rank-microbatch-size 8192 IS PINNED, AND FOR THE MoE ARMS IT IS A SCIENCE PARAMETER, NOT A
+# THROUGHPUT ONE. expert_capacity derives from max_local_microbatch_size, so a larger microbatch
+# enforces capacity over a larger token pool: load imbalance averages out more and fewer tokens are
+# dropped. It perturbs the MODEL, not just the speed. It must be identical across arms and must
+# never move mid-run. 8192 rather than 16384 because the loss path holds ~5 (N,V) fp32 tensors at
+# once -- ~16.8 GiB at N=8192, V=100352 -- and A100-40GB has ~37.99 GiB usable, so 16384 does not
+# fit. The chunked-CE lever that would relieve this is not on this branch, and `fused_linear` needs
+# Liger, which is absent from the image and raises at the first micro-step rather than degrading.
+#
+# --init-method fan_in ON EVERY ARM, INCLUDING THE WEIGHT-DECAY CONTROLS. Hyperball's radius is
+# R = ||W_0||_F, so the initializer sets the absolute step length; fan_in is the paper's
+# std=1/sqrt(d_in). An arm on a different initializer is not a control.
+#
+# TRITON_F32_DEFAULT=ieee IS EXPORTED BEFORE PYTHON STARTS, because it participates in kernel
+# codegen. Triton lowers tl.dot to TF32 on Ampere+ by its own default and
+# torch.backends.cuda.matmul.allow_tf32 does not reach it, so a run can truthfully report "tf32
+# disabled" for torch and still execute every Triton kernel at reduced precision -- 1.145e-03
+# relative error against 6.892e-06, measured. The MoE dispatch path is Triton, so this is what
+# keeps the MoE arms numerically comparable to the dense ones and to each other.
+#
+# --steps 7630 x --global-batch-size 524288 = 4.00B tokens, WITH THE COSINE SCHEDULE
+# COMPLETING INSIDE THAT BUDGET. Non-negotiable: the paper's own finding is that Hyperball "starts
+# slightly worse but overtakes WD as the learning rate decays". A run stopped before its decay
+# finishes is not a cheaper version of this experiment, it is one biased toward the weight-decay
+# arm. Do not shorten one arm and compare it to another that ran to completion.
+#
+# --learning-rate 0.01 is a MuonH rate and is a DIFFERENT QUANTITY: under Hyperball it is a
+# relative step size, ||dW||/||W|| ~ eta, dimensionless. It is not comparable to the muon_w
+# arm's number, and a single learning rate shared between the arms would compare nothing.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'export TRITON_F32_DEFAULT=ieee
+  && python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/train_on_corpus.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --model-factory olmo2_370M_moe --init-method fan_in
+  --optimizer muon_h --learning-rate 0.01 --adamw-learning-rate 8.2e-4
+  --param-dtype bfloat16
+  --sequence-length 2048 --steps 7630 --warmup-steps 380
+  --global-batch-size 524288 --rank-microbatch-size 8192
+  --save-interval 1000 --data-seed 0 --work-dir /tmp/dataset-cache
+  trainer.callbacks.checkpointer.max_checkpoints=null'
