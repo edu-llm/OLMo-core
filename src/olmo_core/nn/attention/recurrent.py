@@ -20,14 +20,65 @@ from olmo_core.nn.attention.flash_linear_attn_api import (
     dispatch_chunk_kda,
     has_fla,
 )
-from olmo_core.nn.attention.ring import RingContextParallelStyle, UlyssesContextParallelStyle
+from olmo_core.nn.attention.ring import (
+    RingContextParallelStyle,
+    UlyssesContextParallelStyle,
+)
 from olmo_core.nn.buffer_cache import BufferCache
 from olmo_core.nn.convolution import CausalConv1d
 from olmo_core.nn.feed_forward import ActivationFunction
 from olmo_core.nn.functional import l2_normalize
 
 if TYPE_CHECKING:
+    from olmo_core.nn.gated_convolution import GateStructure
     from olmo_core.nn.transformer.init import InitMethod
+
+
+def _init_short_conv(
+    conv: nn.Module, *, std: float, generator: Optional[torch.Generator] = None
+) -> None:
+    """
+    Initialize one short convolution, whether it is plain or gated.
+
+    ``init_linear`` writes ``m.weight`` and expects an :class:`torch.nn.Conv1d`, which a
+    :class:`~olmo_core.nn.gated_convolution.GatedCausalConv1d` is not — it *holds* one. This
+    resolves that and then zeroes the gate.
+
+    **The convolution weight is drawn first, unconditionally, from the shared generator**, so a
+    plain arm and a gated arm draw the same convolution values at the same point in the random
+    stream. This matters more than it looks: if a gated arm consumed randomness *before* the
+    convolution draw, every subsequent parameter in the model would differ too, and that confound
+    does not show up anywhere in a loss curve.
+
+    The ``"depthwise"`` gate draws nothing, so a ``depthwise`` gated arm shares the entire random
+    stream with the plain arm and differs only by the gate. The ``"lowrank"`` gate **must** draw
+    its shared down-projection -- zeroing both factors of a product kills the branch permanently
+    -- so a ``lowrank`` arm's later parameters do differ from the plain arm's. That is unavoidable
+    and it is reported: :meth:`~olmo_core.nn.gated_convolution.GatedCausalConv1d.init_gate_weights`
+    returns whether it drew, and this function surfaces it on the module as
+    ``_gate_init_consumed_randomness`` so a test or a run summary can assert on it instead of
+    guessing.
+
+    :param conv: The convolution module.
+    :param std: The standard deviation for the convolution weight.
+    :param generator: The random generator, shared across the whole model.
+
+    :raises TypeError: If ``conv`` is neither a plain nor a gated short convolution.
+    """
+    from olmo_core.nn.gated_convolution import GatedCausalConv1d
+    from olmo_core.nn.transformer.init import init_linear
+
+    # Dispatch on TYPE, not on attribute presence. 'getattr(conv, "conv", conv)' would look right
+    # and be wrong the moment any Conv1d subclass grew a '.conv' attribute -- it would initialize
+    # that and leave the real weight at torch's default, which trains.
+    if isinstance(conv, GatedCausalConv1d):
+        init_linear(conv.conv, std=std, generator=generator)
+        drew = conv.init_gate_weights(std=std, generator=generator)
+        conv._gate_init_consumed_randomness = drew
+    elif isinstance(conv, nn.Conv1d):
+        init_linear(conv, std=std, generator=generator)
+    else:
+        raise TypeError(f"cannot initialize a short convolution of type {type(conv).__name__}")
 
 
 class GatedDeltaNet(SequenceMixer):
@@ -592,6 +643,19 @@ class KimiDeltaAttention(SequenceMixer):
         Through Negative Eigenvalues <https://arxiv.org/abs/2411.12537>`_.
     :param conv_size: The kernel size of the short convolution. Default: 4.
     :param conv_bias: Whether to use bias in the short convolution. Default: ``False``.
+    :param gated_conv: Replace the three plain short convolutions with LFM2/LIV-style *gated*
+        ones (:class:`~olmo_core.nn.gated_convolution.GatedCausalConv1d`). Default: ``False``,
+        which is the shipped KDA operator. **Do not change this default** — every measurement in
+        ``KDA/HANDOFF.md`` was taken with plain convolutions, and a default that silently moved
+        would invalidate all of them.
+    :param gated_conv_activation: The activation inside the gated convolution. ``None`` matches
+        LFM2, whose block is activation-free; ``"silu"`` keeps KDA's activation *and* adds the
+        gate, which is the arm that separates "gating helps" from "removing silu helps". Ignored
+        when ``gated_conv=False``.
+    :param gate_structure: ``"depthwise"`` (per-channel, ~0.06% parameter cost, keeps arms
+        parameter-matched) or ``"lowrank"``. See
+        :data:`~olmo_core.nn.gated_convolution.GateStructure`.
+    :param gate_rank: The gate bottleneck width, required when ``gate_structure="lowrank"``.
     :param norm_eps: The epsilon value for the normalization layer. Default: 1e-5.
     :param dtype: The default data type to use for parameters.
     :param init_device: The device to initialize weights on.
@@ -608,6 +672,10 @@ class KimiDeltaAttention(SequenceMixer):
         allow_neg_eigval: bool = False,
         conv_size: int = 4,
         conv_bias: bool = False,
+        gated_conv: bool = False,
+        gated_conv_activation: Optional[str] = None,
+        gate_structure: "GateStructure" = "depthwise",
+        gate_rank: Optional[int] = None,
         norm_eps: float = 1e-5,
         dtype: torch.dtype = torch.float32,
         init_device: str = "cpu",
@@ -624,6 +692,10 @@ class KimiDeltaAttention(SequenceMixer):
         self.allow_neg_eigval = allow_neg_eigval
         self.conv_size = conv_size
         self.conv_bias = conv_bias
+        self.gated_conv = gated_conv
+        self.gated_conv_activation = gated_conv_activation
+        self.gate_structure: "GateStructure" = gate_structure
+        self.gate_rank = gate_rank
         self.norm_eps = norm_eps
 
         self.head_k_dim = self.head_dim
@@ -655,29 +727,17 @@ class KimiDeltaAttention(SequenceMixer):
         self.A_log = nn.Parameter(torch.empty(self.n_heads, dtype=dtype, device=init_device))
         self.dt_bias = nn.Parameter(torch.empty(self.key_dim, dtype=dtype, device=init_device))
 
-        self.q_conv1d = CausalConv1d(
-            hidden_size=self.key_dim,
-            kernel_size=conv_size,
-            bias=conv_bias,
-            activation=ActivationFunction.silu.value,
-            dtype=dtype,
-            init_device=init_device,
+        # The three short convolutions, either the shipped plain ones or the LIV-style gated
+        # ones. Both classes take '(x=..., cu_seqlens=...)', so the forward pass is unchanged
+        # apart from threading 'gate_input' when the gate reads the layer input.
+        self.q_conv1d = self._build_conv(
+            hidden_size=self.key_dim, dtype=dtype, init_device=init_device
         )
-        self.k_conv1d = CausalConv1d(
-            hidden_size=self.key_dim,
-            kernel_size=conv_size,
-            bias=conv_bias,
-            activation=ActivationFunction.silu.value,
-            dtype=dtype,
-            init_device=init_device,
+        self.k_conv1d = self._build_conv(
+            hidden_size=self.key_dim, dtype=dtype, init_device=init_device
         )
-        self.v_conv1d = CausalConv1d(
-            hidden_size=self.value_dim,
-            kernel_size=conv_size,
-            bias=conv_bias,
-            activation=ActivationFunction.silu.value,
-            dtype=dtype,
-            init_device=init_device,
+        self.v_conv1d = self._build_conv(
+            hidden_size=self.value_dim, dtype=dtype, init_device=init_device
         )
 
         # NOTE: like 'f_proj', the output gate is a low-rank bottleneck, and its second projection
@@ -698,6 +758,63 @@ class KimiDeltaAttention(SequenceMixer):
         self.w_out = nn.Linear(self.value_dim, d_model, bias=False, dtype=dtype, device=init_device)
 
         self.cp_enabled = False
+
+    def _build_conv(self, *, hidden_size: int, dtype: torch.dtype, init_device: str) -> nn.Module:
+        """
+        Build one short convolution, plain or gated.
+
+        Factored out so all three streams are guaranteed to get the same kind of convolution.
+        Building them inline three times is how one stream ends up plain while the other two are
+        gated, which trains fine and is not the operator under test.
+
+        :param hidden_size: The channel count for this stream.
+        :param dtype: Parameter dtype.
+        :param init_device: Device to initialize on.
+
+        :returns: A :class:`~olmo_core.nn.convolution.CausalConv1d` or a
+            :class:`~olmo_core.nn.gated_convolution.GatedCausalConv1d`.
+        """
+        if not self.gated_conv:
+            return CausalConv1d(
+                hidden_size=hidden_size,
+                kernel_size=self.conv_size,
+                bias=self.conv_bias,
+                activation=ActivationFunction.silu.value,
+                dtype=dtype,
+                init_device=init_device,
+            )
+
+        from olmo_core.nn.gated_convolution import GatedCausalConv1d
+
+        return GatedCausalConv1d(
+            hidden_size=hidden_size,
+            kernel_size=self.conv_size,
+            gate_structure=self.gate_structure,
+            d_model=self.d_model,
+            gate_rank=self.gate_rank,
+            bias=self.conv_bias,
+            # NOTE: passed explicitly rather than defaulted. 'CausalConv1d' defaults to 'silu'
+            # and 'GatedCausalConv1d' defaults to None, so relying on either default here would
+            # make the arm's operator depend on which class was constructed.
+            activation=self.gated_conv_activation,  # type: ignore[arg-type]
+            dtype=dtype,
+            init_device=init_device,
+        )
+
+    def _conv_kwargs(self, x: torch.Tensor) -> dict:
+        """
+        Extra keyword arguments the convolutions need for this forward pass.
+
+        A ``"lowrank"`` gate reads the mixer input, so it needs ``gate_input=x``; nothing else
+        does. Computed once here rather than at three call sites.
+
+        :param x: The mixer input.
+
+        :returns: Keyword arguments to pass to each convolution.
+        """
+        if self.gated_conv and self.gate_structure == "lowrank":
+            return {"gate_input": x}
+        return {}
 
     def forward(
         self,
@@ -738,9 +855,10 @@ class KimiDeltaAttention(SequenceMixer):
         if self.allow_neg_eigval:
             beta = beta * 2.0
 
-        q = self.q_conv1d(x=q, cu_seqlens=cu_doc_lens)
-        k = self.k_conv1d(x=k, cu_seqlens=cu_doc_lens)
-        v = self.v_conv1d(x=v, cu_seqlens=cu_doc_lens)
+        conv_kwargs = self._conv_kwargs(x)
+        q = self.q_conv1d(x=q, cu_seqlens=cu_doc_lens, **conv_kwargs)
+        k = self.k_conv1d(x=k, cu_seqlens=cu_doc_lens, **conv_kwargs)
+        v = self.v_conv1d(x=v, cu_seqlens=cu_doc_lens, **conv_kwargs)
 
         q = q.view(B, T, -1, self.head_k_dim)
         k = k.view(B, T, -1, self.head_k_dim)
@@ -842,7 +960,7 @@ class KimiDeltaAttention(SequenceMixer):
             assert isinstance(w, nn.Linear)
             init_linear(w, std=std, generator=generator)
         for conv in (self.q_conv1d, self.k_conv1d, self.v_conv1d):
-            init_linear(conv, std=std, generator=generator)
+            _init_short_conv(conv, std=std, generator=generator)
 
         # The reference KDA initialization: 'A_log = log(U(1, 16))' with a zero 'dt_bias'.
         self.A_log.copy_(nn.init.uniform_(self.A_log, a=1.0, b=16.0, generator=generator).log())
@@ -865,7 +983,7 @@ class KimiDeltaAttention(SequenceMixer):
 
         - Linear projections (``w_q``, ``w_k``, ``w_v``, ``w_b``, ``f_proj``, ``g_proj``,
           ``w_out``)
-        - Short convolutions (q, k, v)
+        - Short convolutions (q, k, v), and their gates when ``gated_conv=True``
         - The delta rule recurrent computation
         - Gated RMS normalization
 
@@ -883,11 +1001,25 @@ class KimiDeltaAttention(SequenceMixer):
         linear_flops = 2 * sum(m.weight.numel() for m in linears)
 
         # Short convolution FLOPs (2 ops per multiply-add, kernel_size taps per output).
-        conv_flops = (
-            2
-            * self.conv_size
-            * (self.key_dim + self.key_dim + self.value_dim)  # q_conv1d  # k_conv1d  # v_conv1d
-        )
+        conv_channels = self.key_dim + self.key_dim + self.value_dim  # q, k, v
+        conv_flops = 2 * self.conv_size * conv_channels
+
+        # Gate FLOPs, when gated. Each stream gets two gates; each gate is a sigmoid plus a
+        # multiply onto the stream, and 'lowrank' also pays its two projections. Small against
+        # the projections, but reported so an arm matched on this quantity is matched honestly
+        # rather than by omission.
+        gate_flops = 0
+        if self.gated_conv:
+            if self.gate_structure == "lowrank":
+                assert self.gate_rank is not None
+                # Shared down-projection once per stream, then one up-projection per gate.
+                gate_flops += 2 * 3 * self.d_model * self.gate_rank
+                gate_flops += 2 * 2 * self.gate_rank * conv_channels
+            else:
+                # One multiply per channel to form the gate's pre-activation.
+                gate_flops += 2 * 2 * conv_channels
+            # The elementwise 2*sigmoid and the multiply onto the stream, both gates.
+            gate_flops += 2 * 2 * conv_channels
 
         # Delta rule recurrent computation per token:
         # - Outer product k ⊗ v: n_v_heads * head_k_dim * head_v_dim
@@ -898,7 +1030,7 @@ class KimiDeltaAttention(SequenceMixer):
         state_size = self.n_v_heads * self.head_k_dim * self.head_v_dim
         recurrent_flops = 2 * 4 * state_size
 
-        return int(linear_flops + conv_flops + recurrent_flops)
+        return int(linear_flops + conv_flops + gate_flops + recurrent_flops)
 
 
 @SequenceMixerConfig.register("kimi_delta_attention")
@@ -942,6 +1074,48 @@ class KimiDeltaAttentionConfig(SequenceMixerConfig[KimiDeltaAttention]):
     """
     Whether to use bias in the short convolution.
     """
+    gated_conv: bool = False
+    """
+    Replace the three plain short convolutions with LFM2/LIV-style *gated* ones.
+
+    ``False`` is the shipped KDA operator and the only value any existing measurement was taken
+    at. **Do not change this default.** Every number in ``KDA/HANDOFF.md`` — the arm ledger, the
+    285,832 tok/s throughput, the 5.169 GiB peak — assumes plain convolutions, and a default that
+    moved would silently invalidate all of them while every test still passed.
+    """
+    gated_conv_activation: Optional[str] = None
+    """
+    The activation inside the gated convolution, ignored when :attr:`gated_conv` is ``False``.
+
+    ``None`` matches LFM2, whose LIV block is activation-free. ``"silu"`` keeps KDA's shipped
+    activation *and* adds the gate.
+
+    Both are needed, because the LIV formulation makes two changes at once — it adds gating and
+    it removes the activation. Three arms separate them:
+
+    ============================  ==============  ==========================
+    arm                           ``gated_conv``  ``gated_conv_activation``
+    ============================  ==============  ==========================
+    ``kda-plain`` (as shipped)    ``False``       n/a (silu)
+    ``kda-gated``                 ``True``        ``None``
+    ``kda-gated-silu``            ``True``        ``"silu"``
+    ============================  ==============  ==========================
+
+    Without the third arm a win cannot be attributed, so it is not optional.
+    """
+    gate_structure: str = "depthwise"
+    """
+    ``"depthwise"`` or ``"lowrank"``. See
+    :data:`~olmo_core.nn.gated_convolution.GateStructure`.
+
+    ``"depthwise"`` costs ``2 * hidden_size`` per convolution — about 0.06% of the layer's
+    projections — so the arms are parameter-matched for free. A full dense gate projection would
+    be +60% and would confound the mechanism with capacity.
+    """
+    gate_rank: Optional[int] = None
+    """
+    The gate bottleneck width, required when :attr:`gate_structure` is ``"lowrank"``.
+    """
     norm_eps: float = 1e-5
     """
     The epsilon value for the normalization layer.
@@ -950,6 +1124,40 @@ class KimiDeltaAttentionConfig(SequenceMixerConfig[KimiDeltaAttention]):
     """
     The default data type to use for parameters.
     """
+
+    def gate_params(self, d_model: int) -> int:
+        """
+        Parameters the convolution gates add, over the three streams.
+
+        Zero when :attr:`gated_conv` is ``False``. Exposed separately from :meth:`num_params` so
+        an arm's parameter delta can be asserted directly, rather than inferred by subtracting
+        two large totals where a mistake of a few thousand disappears into rounding.
+
+        :param d_model: The model dimensionality.
+
+        :returns: The number of gate parameters.
+        """
+        if not self.gated_conv:
+            return 0
+
+        from olmo_core.nn.gated_convolution import gate_param_count
+
+        n_heads = self.n_heads
+        n_v_heads = self.n_v_heads or n_heads
+        head_dim = self.head_dim or d_model // n_heads
+        head_v_dim = int(head_dim * self.expand_v)
+        key_dim = n_heads * head_dim
+        value_dim = n_v_heads * head_v_dim
+
+        return sum(
+            gate_param_count(
+                hidden_size=h,
+                structure=self.gate_structure,  # type: ignore[arg-type]
+                d_model=d_model,
+                gate_rank=self.gate_rank,
+            )
+            for h in (key_dim, key_dim, value_dim)
+        )
 
     def num_params(self, d_model: int) -> int:
         """
@@ -999,7 +1207,56 @@ class KimiDeltaAttentionConfig(SequenceMixerConfig[KimiDeltaAttention]):
         # FusedRMSNormGated (weight only, no bias).
         params += head_v_dim  # o_norm
 
+        # Convolution gates, zero unless 'gated_conv' is set.
+        params += self.gate_params(d_model)
+
         return params
+
+    def gate_activation_bytes(
+        self,
+        d_model: int,
+        *,
+        batch_size: int,
+        seq_len: int,
+        bytes_per_element: int = 2,
+    ) -> int:
+        """
+        Extra activation bytes one gated KDA layer holds for its backward pass.
+
+        **The parameter delta is not the cost of this experiment; this is.** At
+        ``d_model=2048, n_heads=16, expand_v=1.0`` with 8192 tokens per rank in bf16 — the
+        microbatch KDA's 285,832 tok/s was measured at — this is **384 MiB per layer**, so a
+        28-layer model pays about **10.5 GiB** on top of KDA's measured 5.169 GiB peak. That is
+        roughly 3x peak, not a rounding error: it fits on a 40 GiB card and would not fit at
+        ``seq_len=32768``. Size a run from a measured peak on the gated arm.
+
+        :param d_model: The model dimensionality.
+        :param batch_size: The per-rank batch size.
+        :param seq_len: The sequence length.
+        :param bytes_per_element: 2 for bf16, 4 for fp32.
+
+        :returns: The number of extra bytes, or 0 when :attr:`gated_conv` is ``False``.
+        """
+        if not self.gated_conv:
+            return 0
+
+        from olmo_core.nn.gated_convolution import gate_activation_bytes
+
+        n_heads = self.n_heads
+        n_v_heads = self.n_v_heads or n_heads
+        head_dim = self.head_dim or d_model // n_heads
+        key_dim = n_heads * head_dim
+        value_dim = n_v_heads * int(head_dim * self.expand_v)
+
+        return sum(
+            gate_activation_bytes(
+                hidden_size=h,
+                batch_size=batch_size,
+                seq_len=seq_len,
+                bytes_per_element=bytes_per_element,
+            )
+            for h in (key_dim, key_dim, value_dim)
+        )
 
     def build(
         self,
@@ -1020,8 +1277,23 @@ class KimiDeltaAttentionConfig(SequenceMixerConfig[KimiDeltaAttention]):
         :param cache: Optional buffer cache (unused).
 
         :returns: The built module.
+
+        :raises ValueError: If ``gate_structure="lowrank"`` without a ``gate_rank``, or if gate
+            options are set while :attr:`gated_conv` is ``False`` (which would read as a
+            configured gate that silently does nothing).
         """
         del layer_idx, n_layers, cache  # Unused
+
+        if not self.gated_conv:
+            # Fail loudly rather than ignore. A config carrying 'gate_structure="lowrank"' with
+            # 'gated_conv=False' looks like a gated arm in a YAML diff and trains as a plain one,
+            # which is the single cheapest way to run an ablation against itself.
+            if self.gate_rank is not None:
+                raise ValueError("'gate_rank' is set but 'gated_conv' is False")
+            if self.gated_conv_activation is not None:
+                raise ValueError("'gated_conv_activation' is set but 'gated_conv' is False")
+        elif self.gate_structure == "lowrank" and self.gate_rank is None:
+            raise ValueError("'gate_rank' is required when gate_structure='lowrank'")
 
         return KimiDeltaAttention(
             d_model=d_model,
@@ -1032,6 +1304,10 @@ class KimiDeltaAttentionConfig(SequenceMixerConfig[KimiDeltaAttention]):
             allow_neg_eigval=self.allow_neg_eigval,
             conv_size=self.conv_size,
             conv_bias=self.conv_bias,
+            gated_conv=self.gated_conv,
+            gated_conv_activation=self.gated_conv_activation,
+            gate_structure=self.gate_structure,  # type: ignore[arg-type]
+            gate_rank=self.gate_rank,
             norm_eps=self.norm_eps,
             dtype=self.dtype.as_pt(),
             init_device=init_device,
