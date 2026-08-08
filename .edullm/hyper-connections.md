@@ -385,10 +385,13 @@ correction off either way.
 
 `HyperConnectionMonitorCallback` logs, per layer:
 
-- **Per-lane norm and the spread across lanes.** The primary guard. Identical lane norms mean
-  every lane carries the same vector, the model is the baseline with extra parameters, and no
-  downstream number is interpretable in either direction. The rehearsal turns this into an
-  error.
+- **Per-lane norm, the spread across lanes, and the dispersion of the lanes about their mean.**
+  The primary guard. Lanes that all carry the same vector make the model the baseline with extra
+  parameters, and no downstream number is interpretable in either direction. Dispersion is what
+  the guard reads, because equal lane norms are also what a rotation produces and the spread
+  cannot tell the two apart. The rehearsal turns this into an error once a majority of blocks
+  fail it; a minority is logged as a warning, since the 370M probe found blocks 01 and 02 flat
+  while the other fourteen separated.
 - **Spectral radius of the lane-mixing matrix.** Parcae
   ([arXiv 2604.12946](https://arxiv.org/abs/2604.12946)) found diverging runs learn a radius at
   or above 1. Tencent's 3B divergence had a multi-lane drift signature. Under `mhc` this is
