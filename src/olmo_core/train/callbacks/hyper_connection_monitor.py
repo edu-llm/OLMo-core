@@ -33,10 +33,11 @@ class HyperConnectionMonitorCallback(Callback):
     - **Spectral radius of the lane-mixing matrix** per layer. Parcae (arXiv 2604.12946) found
       diverging looped runs learn a radius at or above 1 while converging ones stay below, and
       Tencent's 3B divergence had a multi-lane drift signature. This is how you see it coming.
-    - **Condition number of the composite mapping** across depth, i.e. of the product of every
-      layer's mixing matrix. mHC's argument for constraining that matrix to the Birkhoff polytope
-      is that doubly stochastic matrices are closed under multiplication, so the composite stays
-      well conditioned. Measuring it is how that gets tested rather than cited.
+    - **Condition number of the composite mapping** across depth, i.e. of the product of the
+      mixing matrix of every sublayer the model runs, in the order it runs them. mHC's argument
+      for constraining that matrix is that the constrained matrices are closed under
+      multiplication, so the composite stays well conditioned. Measuring it is how that gets
+      tested rather than cited.
     - **Hidden-state norm per layer**. RMSNorm readouts are scale-invariant, so cross-entropy
       cannot see hidden-state scale at all, and pre-norm stacks have been measured driving norms
       into the 10^3 to 10^4 range invisibly (arXiv 2606.24898).
@@ -117,6 +118,22 @@ class HyperConnectionMonitorCallback(Callback):
             if streams:
                 blocks.append((name, module))
         return blocks
+
+    def _block_execution_order(self, blocks: List[Tuple[str, torch.nn.Module]]) -> List[str]:
+        """
+        The block names in the order the model runs them, which under
+        :class:`~olmo_core.nn.transformer.BlockReuseConfig` is longer than the block list: the
+        tied arms hold 8 blocks and apply 16. A composite over the distinct blocks would be the
+        product for a model nobody is training.
+
+        Falls back to one application per block for a model that declares no order.
+        """
+        model = getattr(self.trainer.train_module, "model", None)
+        order = getattr(model, "block_execution_order", None)
+        if order is None:
+            return [name for name, _ in blocks]
+        known = {name for name, _ in blocks}
+        return [name for idx in order if (name := f"blocks.{idx}") in known]
 
     def _measuring(self) -> bool:
         return self.enabled and self.step % self.interval == 0
@@ -214,9 +231,11 @@ class HyperConnectionMonitorCallback(Callback):
         if not self._measuring():
             return
 
-        composite: Optional[torch.Tensor] = None
-        for name, block in self._hyper_connection_blocks():
+        blocks = self._hyper_connection_blocks()
+        matrices: Dict[str, List[torch.Tensor]] = {}
+        for name, block in blocks:
             label = _block_label(name)
+            matrices[name] = []
             for kind in ("attention", "feed_forward"):
                 stream = getattr(block, f"{kind}_residual_stream", None)
                 if not isinstance(stream, HyperConnectionStream):
@@ -228,6 +247,14 @@ class HyperConnectionMonitorCallback(Callback):
                 radius = torch.linalg.eigvals(matrix).abs().max()
                 self.trainer.record_metric(f"hc/{label}/rho(A_r) {kind}", radius)
 
+                matrices[name].append(matrix)
+
+        # Read once per block above, because a metric name recorded twice in a step needs a
+        # merge strategy; multiplied once per *application* here, because that is the mapping
+        # the model computes.
+        composite: Optional[torch.Tensor] = None
+        for name in self._block_execution_order(blocks):
+            for matrix in matrices[name]:
                 composite = matrix if composite is None else composite @ matrix
 
         if composite is not None and composite.shape[-1] > 1:

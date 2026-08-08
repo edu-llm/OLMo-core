@@ -29,6 +29,21 @@ and each one is an arm.
    does not expose the sublayer input. OLMo-core's `ResidualStream.forward(residual, x)` has the
    identical limitation, so anyone implementing this by swapping that module alone reproduces
    their crippled variant exactly. → arm 3.
+
+   **What the arm removes is the *learned* input map and nothing else.** The read stays on
+   eq. 14's staggered one-hot. This is the difference between an arm that is crippled and an
+   arm that is degenerate, and it is not a matter of taste: `B` is all-ones, `A_r` is the
+   identity and every lane starts as the same copy, so `A_m`'s stagger is the only object in
+   the construction that is not symmetric under permuting the lane index. An earlier version of
+   this branch read the lanes with a uniform mean instead, which makes every remaining object
+   permutation-equivariant, puts the model in the permutation-symmetric subspace and keeps the
+   gradients in that subspace's tangent space — where an elementwise optimizer holds them
+   forever. Measured over 60 AdamW steps: lane dispersion 8.2e-05 against `full`'s 2.0e-01,
+   with `A_r`'s diagonal spread and `B`'s spread both exactly zero, and a 1e-6 asymmetry seeded
+   by hand still at 1.3e-04 after 200 steps. That arm would have run to completion and reported
+   a clean null meaning nothing. With the one-hot read it lands at 1.5e-01 to 3.6e-01 over
+   three seeds, against the faithful arm's 1.7e-01 to 3.2e-01 under the same treatment — the
+   same order, which is what makes arm 3 differ from arm 2 in the one respect it claims to.
 2. **The √n output-initialization scaling.** ByteDance scale the second linear of the
    feed-forward network and the attention output projector so the pre-unembedding standard
    deviation is unchanged. Tencent's paper does not mention doing it. → arm 4.
@@ -96,17 +111,29 @@ validation sources, reported per source and as their mean, with bits-per-byte be
 same quantity divided by a constant. "Beats" means the paired difference defined in
 [The analysis plan](#the-analysis-plan) clears the gate stated there.
 
-- **H1 (replication).** Arm 2 beats arm 1 by ≥0.025 nats.
+- **H1 (replication).** Arm 2 beats arm 1 by ≥0.025 nats. **Confounded with an initialization
+  change, and it has to be written up that way.** See below.
 - **H2a (the artifact, in-loop).** Arm 2 > arm 3 on held-out cross-entropy.
 - **H2b (the artifact, downstream).** Arm 2 > arm 3 on the downstream average, and arm 3 but
   not arm 2 reproduces the published degradation. **Blocked**, and see below: this is the one
   that carries the headline, and nothing in this plan produces the number it needs.
 - **H3 (initialization).** Arm 2 > arm 4; the output-init scaling is load-bearing rather than
   cosmetic.
-- **H4 (the seesaw), restated as a superiority test.** Arm 2 > arm 6. ByteDance found n=1 does
-  not help; if one lane buys as much as four, their mechanism story is incomplete at this
-  scale. The difference between arm 6 and arm 1 is reported with its interval as a *bound*,
-  with no equivalence claim attached to it — see below for why the design cannot support one.
+- **H4 (the seesaw), restated as a superiority test.** Arm 4 > arm 6, **not arm 2 > arm 6**.
+  ByteDance found n=1 does not help; if one lane buys as much as four, their mechanism story is
+  incomplete at this scale. The difference between arm 6 and arm 1 is reported with its
+  interval as a *bound*, with no equivalence claim attached to it — see below for why the
+  design cannot support one.
+
+  Read against arm 4 because arm 6 differs from arm 2 in **two** ways, not one.
+  `output_init_scale` returns 1.0 whenever `n_lanes == 1`, so arm 6 silently loses the
+  output-init rescale as well as three lanes. That is principled — with one lane there is no
+  sum to compensate, and any other answer would be arbitrary — but it means an arm 2 versus
+  arm 6 gap mixes the expansion rate with the initialization prescription, which is the
+  contrast H3 already owns. Arm 4 is `faithful` with `output_init_exponent=0.0`, so arm 4
+  versus arm 6 moves the lane count alone. The cost is that the contrast is 2 seeds against 1
+  rather than 3 against 1, which widens its standard error; the alternative is a clean-looking
+  number that answers a different question.
 - **H5 (constraint).** Arm 9 ≥ arm 2, with the gap larger wherever arm 2 is unstable.
 - **H6 (reuse).** Arm 10 − arm 11 > arm 2 − arm 1. Lane value tracks parameter reuse, so the
   effect is larger when the same parameters run twice. Reported as an estimate with an
@@ -122,6 +149,19 @@ gap in held-out cross-entropy is evidence that the two implementations differ �
 worth having and is testable here — but it is not evidence about the published negative
 result, and writing it up as though it were would be exactly the like-for-like failure this
 module exists to expose in somebody else's work.
+
+**H1 is confounded, and arm 4 is what disentangles it.** The faithful arm does not start where
+the baseline starts. Eq. 14 makes hyper-connections compute exactly what the residual stack
+computes at initialization, and the test suite asserts it — but only with the output-init
+rescale off. Turn the rescale on at the paper's `output_init_exponent=0.5` and a same-seed
+baseline and a same-seed arm 2 differ in their logits by 1.0e+00 in the max, a relative 8.4e-01,
+against 7.2e-07 at exponent 0.0. So arm 2 is two changes away from arm 1, not one: the mechanism
+and a smaller initialization for every attention output projector and second feed-forward
+linear. An H1 gap is therefore attributable to **hyper-connections plus their initialization
+prescription**, and the write-up says exactly that unless arm 4 comes back flat against arm 1 —
+in which case the rescale is doing nothing on its own and H1 can be read as the mechanism.
+This is not a reason to change arm 2, which is the published method and has to stay it. It is a
+reason arm 4 is load-bearing for H1 as well as for H3.
 
 Downstream is deliberately not produced in-loop, for the reasons under
 [Where the runs land](#where-the-runs-land-and-what-they-log), so H2b needs the separate
@@ -251,7 +291,7 @@ comparison are ByteDance's −0.030 and Tencent's −0.020.
 | H1 | 2 − 1 | 3 v 3 | 0.0082 | 0.028 | marginal against −0.030 |
 | H2a | 2 − 3 | 3 v 2 | 0.0091 | 0.031 | marginal |
 | H3 | 2 − 4 | 3 v 2 | 0.0091 | 0.031 | marginal |
-| H4 | 2 − 6 | 3 v 1 | 0.0115 | 0.039 | under-powered |
+| H4 | 4 − 6 | 2 v 1 | 0.0122 | 0.041 | under-powered |
 | H5 | 9 − 2 | 3 v 3 | 0.0082 | 0.028 | marginal against −0.030 |
 | H6 | (10 − 11) − (2 − 1) | 1,1 v 3,3 | 0.0163 | 0.055 | cannot resolve anything predicted |
 
@@ -275,7 +315,7 @@ had bought the entire hyper-connection effect. A margin of 0.025 would need the 
 down to about 0.0074, which takes **three seeds on arm 6 and a measured ρ of at least 0.3** —
 two more runs than the budget has, contingent on a quantity that has not been measured.
 
-So H4 is restated above as the superiority test the design can run, arm 2 versus arm 6, which
+So H4 is restated above as the superiority test the design can run, arm 4 versus arm 6, which
 is the seesaw claim in the form that has content: the question is whether the fourth lane is
 doing anything the first one is not. The arm 6 minus arm 1 difference is still reported, with
 its 95% interval, explicitly as a bound — "the data are consistent with anything between X and
@@ -307,7 +347,7 @@ H5 only. Cheap, defensible, and it gives up the thing the module was built to do
 is a design that spends 3.0e19 FLOPs per arm to produce numbers whose gate it cannot clear.
 
 **Taken: reallocate.** The arm table above carries it. Arm 6 stays at one seed deliberately,
-because H4 is now the arm 2 versus arm 6 superiority test and the bound on arm 6 versus arm 1 —
+because H4 is now the arm 4 versus arm 6 superiority test and the bound on arm 6 versus arm 1 —
 neither of which a second seed rescues, since the equivalence claim it would have to support
 needs three seeds and a measured ρ. The review this revision came from suggested second seeds
 on arms 3, 4 *and* 6, which is eighteen runs rather than seventeen; the third one is the one
@@ -348,9 +388,12 @@ confirms the site count is right. Write it up as parameter-matched, not zero-par
 mixture goes through the sublayer's pre-norm before the sublayer. OLMo-2 and OLMo-3 use
 reordered norm, where the sublayer receives its input unnormalized — and the routed mixture is
 a convex combination of *raw sublayer outputs*, whose scale is nothing like a residual sum's.
-This is the same trap `HyperConnectionStream` documents when it reads the lanes with a mean
-rather than a sum. So Track B cannot share Track A's baseline, and that is one more three-seed
-run in the budget.
+So Track B cannot share Track A's baseline, and that is one more three-seed run in the budget.
+
+The sentence that stood here pointed at `HyperConnectionStream` reading the lanes with a mean
+as the same trap. It no longer reads them with a mean, and the reasoning was wrong where it
+stood: the scale concern was real but a uniform mean was a permutation-symmetric answer to it,
+which cost arm 3 the only asymmetry it had. With a one-hot read there is no sum to rescale.
 
 **There is no free kernel.** `flash-linear-attention` does ship AttnRes at
 `fla.ops.attnres.fused_attnres`, but it is strictly single-head — the online softmax state is
@@ -765,9 +808,18 @@ correction off either way.
   ([arXiv 2604.12946](https://arxiv.org/abs/2604.12946)) found diverging runs learn a radius at
   or above 1. Tencent's 3B divergence had a multi-lane drift signature. Under `mhc` this is
   pinned at exactly 1 by construction, which is the claim being tested.
-- **Condition number of the composite mapping across depth.** mHC's argument for the Birkhoff
-  constraint is that doubly stochastic matrices are closed under multiplication, so the
-  composite stays well conditioned. This measures it instead of citing it.
+- **Condition number of the composite mapping across depth.** mHC's argument for the constraint
+  is that the constrained matrices are closed under multiplication, so the composite stays well
+  conditioned. This measures it instead of citing it. The product follows
+  `Transformer.block_execution_order`, so the tied arms compose the 16 matrices the model
+  applies rather than the 8 distinct ones it holds.
+
+  On the constraint itself: at the shipped eight Sinkhorn sweeps `A_r` comes back **column**-
+  stochastic and only approximately row-stochastic — row residuals reach 4.6e-01 at drifted
+  logit scales. The property mHC's argument needs survives that intact, because a nonnegative
+  column-stochastic matrix already has spectral radius exactly 1 and is closed under
+  multiplication, and the measured radius sits within 1.3e-06 of 1 in every case. The Birkhoff
+  polytope is not where this lands, and the docstrings that said it was have been corrected.
 - **Hidden-state norm per layer.** RMSNorm readouts are scale-invariant, so cross-entropy
   cannot see hidden-state scale at all, and pre-norm stacks have been measured driving norms
   into the 10^3–10^4 range invisibly.

@@ -15,17 +15,19 @@ SEQ_LEN = 16
 WEIGHT_DECAY = 0.033
 
 
-def build_model(hc: HyperConnectionConfig):
+def build_model(hc: HyperConnectionConfig, *, n_layers: int = 2, block_reuse=None):
     config = TransformerConfig.llama_like(
         d_model=D_MODEL,
         vocab_size=VOCAB_SIZE,
-        n_layers=2,
+        n_layers=n_layers,
         n_heads=4,
         block_name=TransformerBlockType.hyper_connection_reordered_norm,
         qk_norm=True,
     )
     assert not isinstance(config.block, dict)
     config.block.hyper_connections = hc
+    config.block_reuse = block_reuse
+    config.__post_init__()
     model = config.build()
     model.init_weights(device=torch.device("cpu"), max_seq_len=SEQ_LEN)
     return model
@@ -165,6 +167,54 @@ def test_monitor_records_the_four_diagnostics():
     # A_r is the identity at init, so every radius and the composite condition are exactly 1.
     assert metrics["hc/block 00/rho(A_r) attention"] == pytest.approx(1.0, abs=1e-5)
     assert metrics["hc/composite condition number"] == pytest.approx(1.0, abs=1e-4)
+
+
+@pytest.mark.parametrize("n_unique_blocks, applications", [(4, 4), (2, 4), (1, 4)])
+def test_the_composite_follows_the_execution_order_and_not_the_block_list(
+    n_unique_blocks: int, applications: int
+):
+    """
+    Under reuse the model applies each block more than once, so a composite over the distinct
+    blocks is the product for a model nobody is training -- 8 matrices where the tied arms
+    apply 16. The expected product is built here from the model's own execution order.
+    """
+    from olmo_core.nn.transformer import BlockReuseConfig
+
+    model = build_model(
+        HyperConnectionConfig(n_lanes=4),
+        n_layers=applications,
+        block_reuse=BlockReuseConfig(n_unique_blocks=n_unique_blocks),
+    )
+    assert len(model.blocks) == n_unique_blocks
+    assert len(model.block_execution_order) == applications
+
+    with torch.no_grad():
+        for block in model.blocks.values():
+            for stream in (block.attention_residual_stream, block.feed_forward_residual_stream):
+                stream.hc_static_alpha_r.add_(torch.randn_like(stream.hc_static_alpha_r) * 0.1)
+
+    expected = torch.eye(4)
+    for block_idx in model.block_execution_order:
+        block = model.blocks[str(block_idx)]
+        for stream in (block.attention_residual_stream, block.feed_forward_residual_stream):
+            expected = expected @ stream.hc_static_alpha_r.detach().float()
+
+    callback = attach(model)
+    training_step(callback, model)
+    callback.pre_optim_step()
+
+    metrics = callback.trainer.metrics  # type: ignore[attr-defined]
+    assert metrics["hc/composite condition number"] == pytest.approx(
+        torch.linalg.cond(expected).item(), rel=1e-4
+    )
+    assert metrics["hc/composite spectral radius"] == pytest.approx(
+        torch.linalg.eigvals(expected).abs().max().item(), rel=1e-4
+    )
+
+    # And the per-block metrics stay one per distinct block, which is what FakeTrainer's
+    # duplicate check is there to catch.
+    labels = {k.split("/")[1] for k in metrics if k.startswith("hc/block")}
+    assert len(labels) == n_unique_blocks
 
 
 def test_doubly_stochastic_pins_the_spectral_radius_at_one():

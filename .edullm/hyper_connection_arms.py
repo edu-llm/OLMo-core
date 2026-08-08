@@ -137,7 +137,8 @@ ARMS: Dict[str, Arm] = {
     "output-only": Arm(
         number=3,
         summary="DHC x4 with output-side mixing only, which is what a shared residual "
-        "interface forces.",
+        "interface forces. The read stays on the paper's fixed staggered one-hot; only the "
+        "learned input map goes, or the arm is degenerate rather than crippled.",
         isolates="Cause 1. Whether the field's negative result is an artifact of an "
         "incomplete reimplementation.",
         seeds=2,
@@ -161,9 +162,11 @@ ARMS: Dict[str, Arm] = {
     ),
     "n1": Arm(
         number=6,
-        summary="DHC x1.",
+        summary="DHC x1, which also loses the output-init rescale: `output_init_scale` "
+        "returns 1.0 at n=1, because with one lane there is no sum to compensate.",
         isolates="The seesaw control. ByteDance found n=1 does not beat the baseline; if it "
-        "does here, their mechanism story is incomplete at this scale.",
+        "does here, their mechanism story is incomplete at this scale. Read against arm 4 and "
+        "not arm 2, since arm 2 carries the rescale that this arm cannot have.",
         seeds=1,
         hyper_connections=_hc(n_lanes=1),
     ),
@@ -183,8 +186,9 @@ ARMS: Dict[str, Arm] = {
     ),
     "mhc": Arm(
         number=9,
-        summary="mHC x4: the lane-mixing matrix projected onto the Birkhoff polytope by "
-        "Sinkhorn-Knopp.",
+        summary="mHC x4: the lane-mixing matrix normalized towards the Birkhoff polytope by "
+        "Sinkhorn-Knopp, which at eight sweeps lands column-stochastic rather than doubly "
+        "stochastic and carries the spectral radius mHC argues from either way.",
         isolates="Whether the constraint is what rescues the method. It ships in DeepSeek V4.",
         seeds=3,
         hyper_connections=_hc(doubly_stochastic=True),

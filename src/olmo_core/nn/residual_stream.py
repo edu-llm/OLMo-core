@@ -63,10 +63,21 @@ class HyperConnectionMode(StrEnum):
 
     output = "output"
     """
-    Output-side mixing only. The sublayer input is the unweighted mean of the lanes, so ``A_m``
-    does not exist. This is the variant a shared residual interface forces on you when it hands
-    the residual module the sublayer *output* and never the sublayer input, which is the reason
-    Tencent (arXiv 2605.20798) gave for their reimplementation being incomplete.
+    Output-side mixing only. The read stays on the fixed staggered one-hot ``e_{k mod n}`` of
+    eq. 14, but nothing learns it: there is no static ``A_m`` and no ``W_m``. This is the
+    variant a shared residual interface forces on you when it hands the residual module the
+    sublayer *output* and never the sublayer input, which is the reason Tencent
+    (arXiv 2605.20798) gave for their reimplementation being incomplete.
+
+    The read has to stay a one-hot, and that is the whole content of the arm. ``B`` is
+    all-ones, ``A_r`` is the identity and every lane starts as the same copy, so ``A_m``'s
+    stagger is the only object in the construction that is not symmetric under permuting the
+    lane index. Replace it with a uniform mean and the model sits in the permutation-symmetric
+    subspace with its gradients in that subspace's tangent space, which an elementwise
+    optimizer never leaves: measured over 60 AdamW steps, lane dispersion reads 8.2e-05 against
+    :data:`full`'s 2.0e-01, and ``A_r``'s diagonal and ``B`` do not move off their
+    initialization at all. That arm would be degenerate rather than crippled, and it would
+    report a clean null about nothing.
     """
 
 
@@ -107,12 +118,17 @@ class HyperConnectionConfig(ModuleConfig):
 
     doubly_stochastic: bool = False
     """
-    Constrain ``A_r`` to the Birkhoff polytope (mHC).
+    Push ``A_r`` towards the Birkhoff polytope with Sinkhorn-Knopp (mHC).
+
+    What :func:`sinkhorn_knopp` delivers at :data:`sinkhorn_iters` sweeps is a nonnegative
+    column-stochastic matrix, whose rows sum to 1 only approximately. That carries mHC's
+    property -- spectral radius exactly 1, closed under multiplication -- so the arm tests what
+    it claims to; it is just not the Birkhoff polytope. See :func:`sinkhorn_knopp`.
     """
 
     sinkhorn_iters: int = 8
     """
-    Sweeps used by the Sinkhorn-Knopp projection.
+    Sweeps used by the Sinkhorn-Knopp normalization.
     """
 
     birkhoff_init_logit: float = 8.0
@@ -386,14 +402,25 @@ def reduce_residual_lanes(hidden: torch.Tensor, *, average: bool = False) -> tor
 
 def sinkhorn_knopp(logits: torch.Tensor, *, num_iters: int = 8) -> torch.Tensor:
     """
-    Project a matrix of logits onto the Birkhoff polytope of doubly stochastic matrices by
+    Drive a matrix of logits towards the Birkhoff polytope of doubly stochastic matrices by
     alternating row and column normalization in the log domain, as mHC
     (`arXiv 2512.24880 <https://arxiv.org/abs/2512.24880>`_) does.
 
-    The result is exactly column-stochastic and approximately row-stochastic; the row residual
-    shrinks geometrically in ``num_iters``. Doubly stochastic matrices have spectral radius
-    exactly 1 and are closed under multiplication, which is the property mHC relies on to keep
-    the composite mapping across depth well conditioned.
+    **What is guaranteed is column-stochasticity, not double stochasticity.** The last sweep
+    normalizes over ``dim=-2``, so the columns sum to 1 exactly at any ``num_iters`` and the
+    rows only approximately. The row residual does fall with the sweep count, but from a level
+    set by how far apart the logits are, and at the shipped eight sweeps that level is not
+    small once they drift: over ``n=4``, the largest row residual across a batch is 1.0e-02 at
+    logit scale sigma=1, 1.1e-01 at sigma=2 and 4.6e-01 at sigma=4.
+
+    That is enough, and it is enough for a reason worth stating rather than for a reason to
+    raise ``num_iters``. mHC's argument is about spectral radius 1 and closure under
+    multiplication, and a nonnegative **column**-stochastic matrix already has both: its
+    transpose is row-stochastic so 1 is an eigenvalue, Gershgorin applied to that transpose
+    bounds every eigenvalue by 1 in modulus, and a product of column-stochastic matrices is
+    column-stochastic. Measured, the radius sits within 1.3e-06 of 1 at every sweep count and
+    logit scale above. So the composite across depth is as well behaved as mHC claims; the
+    Birkhoff polytope is simply not where this lands.
 
     :param logits: Logits of shape ``(..., n, n)``.
     :param num_iters: Number of alternating normalization sweeps.
@@ -446,8 +473,9 @@ class HyperConnectionStream(nn.Module):
     :param tanh: Squash the dynamic term. The paper's ``DHC x8 w/o tanh`` was their best single
         number, so this is worth having as a knob.
     :param dynamic_scale_init: Initial value of the learnable scales ``s_beta`` and ``s_alpha``.
-    :param doubly_stochastic: Project ``A_r`` onto the Birkhoff polytope (mHC).
-    :param sinkhorn_iters: Sweeps used by that projection.
+    :param doubly_stochastic: Push ``A_r`` towards the Birkhoff polytope with Sinkhorn-Knopp
+        (mHC). What arrives is column-stochastic; see :func:`sinkhorn_knopp`.
+    :param sinkhorn_iters: Sweeps used by that normalization.
     :param birkhoff_init_logit: Diagonal of ``A_r`` at initialization when ``doubly_stochastic``
         is set. ``A_r`` is then read as logits, so the identity has to be expressed as a large
         diagonal for the projection to return something close to the identity.
@@ -498,8 +526,20 @@ class HyperConnectionStream(nn.Module):
         self.hc_static_alpha_r = nn.Parameter(torch.empty(n_lanes, n_lanes, device=init_device))
         if self.mode == HyperConnectionMode.full:
             self.hc_static_alpha_m = nn.Parameter(torch.empty(n_lanes, device=init_device))
+            self.register_buffer("hc_fixed_alpha_m", None)
         else:
             self.register_parameter("hc_static_alpha_m", None)
+            # The same one-hot `full` initializes A_m to, held as a constant rather than
+            # learned. A buffer and not a `requires_grad=False` parameter: FSDP shards
+            # parameters on dim 0 and this one is `(n,)`, and it would otherwise land in an
+            # optimizer group, in `num_params`, and in the eq. 25 accounting the arm table is
+            # checked against. Buffers are replicated, are materialized by the same `to_empty`
+            # that precedes `reset_parameters`, and are none of those things. Non-persistent
+            # because `block_idx` and `n_lanes` determine it entirely, so a checkpoint carrying
+            # it could only ever disagree with the config that rebuilt it.
+            self.register_buffer(
+                "hc_fixed_alpha_m", torch.empty(n_lanes, device=init_device), persistent=False
+            )
 
         # Dynamic component (eqs. 11-13). One scale for beta and one shared by A_m and A_r,
         # which is what the paper's parameter count in eq. 25 implies.
@@ -546,10 +586,12 @@ class HyperConnectionStream(nn.Module):
                 identity * self.birkhoff_init_logit if self.doubly_stochastic else identity,
             )
 
+            read = torch.zeros_like(identity[0])
+            read[self.block_idx % self.n_lanes] = 1.0
             if self.hc_static_alpha_m is not None:
-                read = torch.zeros_like(identity[0])
-                read[self.block_idx % self.n_lanes] = 1.0
                 _set_full(self.hc_static_alpha_m, read)
+            if self.hc_fixed_alpha_m is not None:
+                _set_full(self.hc_fixed_alpha_m, read)
 
             if self.dynamic:
                 nn.init.zeros_(self.hc_dynamic_w_beta)
@@ -611,12 +653,10 @@ class HyperConnectionStream(nn.Module):
             alpha_r = sinkhorn_knopp(alpha_r, num_iters=self.sinkhorn_iters)
 
         if alpha_m is None:
-            # Output-side-only: a fixed uniform read. The mean rather than the sum, because the
-            # reordered-norm block hands the sublayer its input unnormalized, so a sum would
-            # feed it n times the baseline scale and the arm would stop being a control.
-            alpha_m = torch.full(
-                (self.n_lanes,), 1.0 / self.n_lanes, device=hidden.device, dtype=torch.float32
-            ).expand(*hidden.shape[:-2], self.n_lanes)
+            # Output-side-only: the read is eq. 14's one-hot and stays there. See
+            # `HyperConnectionMode.output` for why nothing else will do.
+            assert self.hc_fixed_alpha_m is not None
+            alpha_m = self.hc_fixed_alpha_m.float()
 
         return alpha_m.to(dtype), beta.to(dtype), alpha_r.to(dtype)
 
@@ -706,5 +746,10 @@ def output_init_scale(n_lanes: int, exponent: float) -> float:
     ``exponent=0.5`` is the paper's sqrt(n). ``exponent=1.0`` is what exactly cancels the sum at
     initialization, where the lanes are still identical copies. ``exponent=0.0`` turns the
     correction off.
+
+    At ``n_lanes == 1`` there is no sum to compensate, so this is 1.0 at every exponent. That
+    is principled and it is also a confound: the seesaw arm therefore differs from the faithful
+    arm in the expansion rate *and* in the initialization, and has to be read against the arm
+    that turns the correction off rather than against the faithful one.
     """
     return float(n_lanes) ** (-exponent) if n_lanes > 1 else 1.0
