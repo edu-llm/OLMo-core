@@ -33,6 +33,24 @@ commit a generated Dolma2 token-normalization map, so it deliberately uses the d
 identity fallback. Supply a precomputed NFKC/lowercase Dolma2 map through `EngramConfig` to test
 the paper's compressed-key variant; do not describe the fallback arm as having collapsed tokens.
 
+## Lngram CUDA acceleration
+
+Lngram keeps the exact PyTorch lookup and table-gradient implementation as its portable
+reference path. On CUDA hosts where Triton is available, order-2/order-3 four-bit routing
+automatically dispatches the counterfactual `grad_z` calculation to a fused kernel. The kernel
+computes forced-bit table differences and upstream dot products without materializing full
+counterfactual retrieval tensors. It uses bfloat16/float16 loads with float32 accumulation.
+
+CPU runs, missing Triton, unsupported shapes or dtypes, and higher-order gradients continue to
+use the reference implementation. Model parameters, optimizer state, FSDP2 ownership, activation
+checkpointing, and the three AWS run specs are unchanged.
+
+Benchmark the isolated backward at the production shape on one CUDA device with:
+
+```bash
+python src/scripts/benchmark_lngram_counterfactual.py
+```
+
 ## Sealed schedule and pipeline laws
 
 All arms consume exactly the same target schedule:

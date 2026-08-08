@@ -8,6 +8,8 @@ from numbers import Integral, Real
 
 import torch
 
+from ...ops.lngram import _try_counterfactual_grad_z as try_counterfactual_grad_z
+
 __all__ = ["CounterfactualLookupFunction", "counterfactual_lookup"]
 
 
@@ -19,8 +21,9 @@ def _pack_route_codes(z: torch.Tensor, bits_per_route: int) -> torch.Tensor:
     batch_size, seq_len, channels = z.shape
     num_routes = channels // bits_per_route
     bits = (z > 0).reshape(batch_size, seq_len, num_routes, bits_per_route)
-    weights = 1 << torch.arange(bits_per_route, device=z.device, dtype=torch.long)
-    return (bits.to(torch.long) * weights).sum(dim=-1)
+    dtype = torch.uint8 if bits_per_route <= 8 else torch.long
+    weights = 1 << torch.arange(bits_per_route, device=z.device, dtype=dtype)
+    return (bits.to(dtype) * weights).sum(dim=-1, dtype=dtype)
 
 
 def _addresses(codes: torch.Tensor, order: int, alphabet_size: int) -> torch.Tensor:
@@ -46,11 +49,12 @@ class CounterfactualLookupFunction(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, z: torch.Tensor, *args):
-        orders = tuple(args[-4])
-        bits_per_route = int(args[-3])
-        temperature = float(args[-2])
-        scale = float(args[-1])
-        tables = tuple(args[:-4])
+        orders = tuple(args[-5])
+        bits_per_route = int(args[-4])
+        temperature = float(args[-3])
+        scale = float(args[-2])
+        require_triton = bool(args[-1])
+        tables = tuple(args[:-5])
 
         codes = _pack_route_codes(z, bits_per_route)
         batch_size, seq_len, num_routes = codes.shape
@@ -72,6 +76,7 @@ class CounterfactualLookupFunction(torch.autograd.Function):
         ctx.bits_per_route = bits_per_route
         ctx.temperature = temperature
         ctx.scale = scale
+        ctx.require_triton = require_triton
         ctx.save_for_backward(z, codes, *tables)
         return tuple(outputs)
 
@@ -82,18 +87,40 @@ class CounterfactualLookupFunction(torch.autograd.Function):
         bits_per_route: int = ctx.bits_per_route
         temperature: float = ctx.temperature
         scale: float = ctx.scale
+        require_triton: bool = ctx.require_triton
 
         batch_size, seq_len, num_routes = codes.shape
         alphabet_size = 2**bits_per_route
+        grad_z: torch.Tensor | None = None
+        if ctx.needs_input_grad[0]:
+            if scale == 0 and not torch.is_grad_enabled():
+                grad_z = torch.zeros_like(z)
+            elif not torch.is_grad_enabled():
+                grad_z = try_counterfactual_grad_z(
+                    z,
+                    codes,
+                    tables,
+                    orders,
+                    grad_outputs,
+                    bits_per_route=bits_per_route,
+                    temperature=temperature,
+                    scale=scale,
+                )
+                if grad_z is None and require_triton:
+                    raise RuntimeError(
+                        "Lngram requires Triton acceleration, but this backward "
+                        "does not satisfy the fused kernel contract"
+                    )
         bit_scores = (
             z.new_zeros((batch_size, seq_len, num_routes, bits_per_route))
-            if ctx.needs_input_grad[0]
+            if ctx.needs_input_grad[0] and grad_z is None
             else None
         )
         table_grads: list[torch.Tensor | None] = []
 
         for table_idx, (table, order, grad_output) in enumerate(zip(tables, orders, grad_outputs)):
-            table_grad = torch.zeros_like(table) if ctx.needs_input_grad[table_idx + 1] else None
+            needs_table_grad = ctx.needs_input_grad[table_idx + 1]
+            table_grad: torch.Tensor | None = None
             window_count = seq_len - order + 1
             if grad_output is not None and window_count > 0:
                 memory_dim = table.shape[1]
@@ -101,11 +128,13 @@ class CounterfactualLookupFunction(torch.autograd.Function):
                 valid_grad = grad_output[:, order - 1 :].reshape(
                     batch_size, window_count, num_routes, memory_dim
                 )
-                if table_grad is not None:
-                    table_grad.index_add_(
-                        0,
-                        addresses.reshape(-1),
+                if needs_table_grad:
+                    table_grad = torch.ops.aten.embedding_dense_backward(
                         valid_grad.reshape(-1, memory_dim).to(table.dtype),
+                        addresses.reshape(-1),
+                        table.shape[0],
+                        -1,
+                        False,
                     )
 
                 if bit_scores is not None:
@@ -115,7 +144,7 @@ class CounterfactualLookupFunction(torch.autograd.Function):
                         route_codes = windows[..., offset]
                         for bit_idx in range(bits_per_route):
                             delta = (1 << bit_idx) * place_value
-                            current_bit = (route_codes >> bit_idx) & 1
+                            current_bit = ((route_codes >> bit_idx) & 1).to(addresses.dtype)
                             address_zero = addresses - current_bit * delta
                             address_one = address_zero + delta
                             difference = table[address_one] - table[address_zero]
@@ -123,16 +152,17 @@ class CounterfactualLookupFunction(torch.autograd.Function):
                             bit_scores[:, offset : offset + window_count, :, bit_idx].add_(
                                 score.to(z.dtype)
                             )
+            if needs_table_grad and table_grad is None:
+                table_grad = torch.zeros_like(table)
             table_grads.append(table_grad)
 
-        grad_z: torch.Tensor | None = None
         if bit_scores is not None:
             route_logits = z.reshape(batch_size, seq_len, num_routes, bits_per_route)
             probability = torch.sigmoid(temperature * route_logits)
             slope = scale * temperature * probability * (1 - probability)
             grad_z = (slope * bit_scores).reshape_as(z)
 
-        return grad_z, *table_grads, None, None, None, None
+        return grad_z, *table_grads, None, None, None, None, None
 
 
 def _validate_inputs(
@@ -212,8 +242,11 @@ def counterfactual_lookup(
     bits_per_route: int = 4,
     temperature: float = 1.0,
     scale: float = 1.0,
+    require_triton: bool = False,
 ) -> tuple[torch.Tensor, ...]:
     """Apply the hard Lngram lookup and local surrogate from arXiv:2605.24869."""
+    if not isinstance(require_triton, bool):
+        raise TypeError("'require_triton' must be a bool")
     table_tuple, order_tuple = _validate_inputs(
         z,
         tables,
@@ -229,6 +262,7 @@ def counterfactual_lookup(
         bits_per_route,
         float(temperature),
         float(scale),
+        require_triton,
     )
     if isinstance(result, torch.Tensor):
         return (result,)

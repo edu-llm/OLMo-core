@@ -44,6 +44,16 @@ def test_public_api_documents_the_lngram_paper():
     assert "arXiv:2605.24869" in (counterfactual_lookup.__doc__ or "")
 
 
+def test_route_code_packing_preserves_routes_wider_than_eight_bits() -> None:
+    import olmo_core.nn.memory.counterfactual as counterfactual_module
+
+    z = torch.ones(1, 1, 9)
+    codes = counterfactual_module._pack_route_codes(z, 9)
+
+    assert codes.dtype is torch.int64
+    assert codes.item() == 2**9 - 1
+
+
 def test_hard_forward_uses_little_endian_addresses_and_causal_zeros():
     # Route codes by token are [[1, 2], [3, 0], [0, 1]].
     codes = torch.tensor([[[1, 2], [3, 0], [0, 1]]])
@@ -193,6 +203,182 @@ def test_counterfactual_gradient_does_not_leak_into_table_gradients():
     slopes = scale * temperature * probabilities * (1 - probabilities)
     expected_z_grad = slopes * torch.tensor([[[3.0 * 4.0], [3.0 * 8.0]]])
     torch.testing.assert_close(z.grad, expected_z_grad)
+
+
+def test_optimized_grad_z_preserves_exact_hard_table_gradients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import olmo_core.nn.memory.counterfactual as counterfactual_module
+
+    z = torch.full((1, 3, 4), -1.0, requires_grad=True)
+    tables = (
+        torch.zeros(16**2, 1, requires_grad=True),
+        torch.zeros(16**3, 1, requires_grad=True),
+    )
+    sentinel = torch.full_like(z, 7.0)
+    calls = []
+
+    def fake_optimized(*args, **kwargs):
+        calls.append((args, kwargs))
+        return sentinel
+
+    monkeypatch.setattr(
+        counterfactual_module,
+        "try_counterfactual_grad_z",
+        fake_optimized,
+    )
+    outputs = counterfactual_lookup(z, tables, (2, 3), bits_per_route=4)
+    sum(output.sum() for output in outputs).backward()
+
+    assert len(calls) == 1
+    torch.testing.assert_close(z.grad, sentinel)
+    expected_order_2 = torch.zeros_like(tables[0])
+    expected_order_2[0] = 2
+    expected_order_3 = torch.zeros_like(tables[1])
+    expected_order_3[0] = 1
+    torch.testing.assert_close(tables[0].grad, expected_order_2)
+    torch.testing.assert_close(tables[1].grad, expected_order_3)
+
+
+def test_scale_zero_skips_counterfactual_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import olmo_core.nn.memory.counterfactual as counterfactual_module
+
+    monkeypatch.setattr(
+        counterfactual_module,
+        "try_counterfactual_grad_z",
+        lambda *args, **kwargs: pytest.fail("optimized path should not run"),
+    )
+    z = torch.randn(1, 3, 4, requires_grad=True)
+    tables = (
+        torch.randn(16**2, 1, requires_grad=True),
+        torch.randn(16**3, 1, requires_grad=True),
+    )
+    outputs = counterfactual_lookup(
+        z,
+        tables,
+        (2, 3),
+        bits_per_route=4,
+        scale=0.0,
+    )
+    sum(output.sum() for output in outputs).backward()
+
+    torch.testing.assert_close(z.grad, torch.zeros_like(z))
+
+
+def test_required_triton_rejects_reference_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import olmo_core.nn.memory.counterfactual as counterfactual_module
+
+    monkeypatch.setattr(
+        counterfactual_module,
+        "try_counterfactual_grad_z",
+        lambda *args, **kwargs: None,
+    )
+    z = torch.randn(1, 3, 4, requires_grad=True)
+    tables = (torch.randn(16**2, 1), torch.randn(16**3, 1))
+    outputs = counterfactual_lookup(
+        z,
+        tables,
+        (2, 3),
+        bits_per_route=4,
+        require_triton=True,
+    )
+
+    with pytest.raises(RuntimeError, match="requires Triton acceleration"):
+        sum(output.sum() for output in outputs).backward()
+
+
+def test_higher_order_gradients_use_reference_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import olmo_core.nn.memory.counterfactual as counterfactual_module
+
+    monkeypatch.setattr(
+        counterfactual_module,
+        "try_counterfactual_grad_z",
+        lambda *args, **kwargs: pytest.fail("Triton path is not higher-order differentiable"),
+    )
+    z = torch.randn(1, 3, 4, dtype=torch.float64, requires_grad=True)
+    tables = (
+        torch.randn(16**2, 1, dtype=torch.float64),
+        torch.randn(16**3, 1, dtype=torch.float64),
+    )
+    outputs = counterfactual_lookup(z, tables, (2, 3), bits_per_route=4)
+    first_grad = torch.autograd.grad(
+        sum(output.sum() for output in outputs),
+        z,
+        create_graph=True,
+    )[0]
+    second_grad = torch.autograd.grad(first_grad.sum(), z)[0]
+
+    assert torch.isfinite(first_grad).all()
+    assert torch.isfinite(second_grad).all()
+
+
+def test_scale_zero_preserves_higher_order_gradients() -> None:
+    z = torch.randn(1, 3, 4, dtype=torch.float64, requires_grad=True)
+    tables = (
+        torch.randn(16**2, 1, dtype=torch.float64),
+        torch.randn(16**3, 1, dtype=torch.float64),
+    )
+    outputs = counterfactual_lookup(
+        z,
+        tables,
+        (2, 3),
+        bits_per_route=4,
+        scale=0.0,
+    )
+    first_grad = torch.autograd.grad(
+        sum(output.sum() for output in outputs),
+        z,
+        create_graph=True,
+    )[0]
+    second_grad = torch.autograd.grad(first_grad.sum(), z)[0]
+
+    assert first_grad.requires_grad
+    torch.testing.assert_close(first_grad, torch.zeros_like(first_grad))
+    torch.testing.assert_close(second_grad, torch.zeros_like(second_grad))
+
+
+def test_aot_autograd_uses_required_optimized_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import olmo_core.nn.memory.counterfactual as counterfactual_module
+
+    calls: list[bool] = []
+
+    def fake_optimized(z, *args, **kwargs):
+        del args, kwargs
+        calls.append(torch.is_grad_enabled())
+        return torch.zeros_like(z)
+
+    monkeypatch.setattr(
+        counterfactual_module,
+        "try_counterfactual_grad_z",
+        fake_optimized,
+    )
+    tables = (torch.randn(16**2, 2), torch.randn(16**3, 2))
+    upstreams = (torch.randn(1, 3, 2), torch.randn(1, 3, 2))
+
+    def loss(z):
+        outputs = counterfactual_lookup(
+            z,
+            tables,
+            (2, 3),
+            bits_per_route=4,
+            require_triton=True,
+        )
+        return sum((output * upstream).sum() for output, upstream in zip(outputs, upstreams))
+
+    compiled_loss = torch.compile(loss, backend="aot_eager")
+    z = torch.randn(1, 3, 4, requires_grad=True)
+    compiled_loss(z).backward()
+
+    assert calls == [False]
+    assert z.grad is not None
 
 
 def _local_smooth_objective(

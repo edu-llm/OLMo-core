@@ -52,6 +52,7 @@ class LngramConfig(ModuleConfig):
     surrogate_temperature: float = 1.0
     surrogate_scale: float = 1.0
     conv_kernel_size: int = 4
+    require_triton: bool = False
 
     def __post_init__(self) -> None:
         if isinstance(self.orders, (list, tuple)):
@@ -103,6 +104,8 @@ class LngramConfig(ModuleConfig):
             raise OLMoConfigurationError(
                 f"'conv_kernel_size' must be a positive integer (got {self.conv_kernel_size!r})"
             )
+        if not isinstance(self.require_triton, bool):
+            raise OLMoConfigurationError("'require_triton' must be a bool")
 
     def _dense_params(self, d_model: int) -> int:
         _validate_d_model(d_model)
@@ -155,6 +158,7 @@ class LngramConfig(ModuleConfig):
             surrogate_temperature=float(self.surrogate_temperature),
             surrogate_scale=float(self.surrogate_scale),
             conv_kernel_size=self.conv_kernel_size,
+            require_triton=self.require_triton,
             init_device=init_device,
             dtype=torch.float32 if dtype is None else dtype,
         )
@@ -185,6 +189,7 @@ class Lngram(nn.Module):
         surrogate_temperature: float = 1.0,
         surrogate_scale: float = 1.0,
         conv_kernel_size: int = 4,
+        require_triton: bool = False,
         init_device: str | torch.device = "cpu",
         dtype: torch.dtype = torch.float32,
     ):
@@ -196,6 +201,7 @@ class Lngram(nn.Module):
             surrogate_temperature=surrogate_temperature,
             surrogate_scale=surrogate_scale,
             conv_kernel_size=conv_kernel_size,
+            require_triton=require_triton,
         )
         _validate_d_model(d_model)
 
@@ -206,6 +212,7 @@ class Lngram(nn.Module):
         self.surrogate_temperature = float(config.surrogate_temperature)
         self.surrogate_scale = float(config.surrogate_scale)
         self.conv_kernel_size = config.conv_kernel_size
+        self.require_triton = config.require_triton
         self.num_routes = self.d_model // self.bits_per_route
         self.alphabet_size = 2**self.bits_per_route
         self.readout_dim = self.num_routes * self.memory_dim
@@ -297,6 +304,7 @@ class Lngram(nn.Module):
         retrievals: Iterable[torch.Tensor] | torch.Tensor,
         hidden_states: torch.Tensor,
     ) -> tuple[torch.Tensor, ...]:
+        values: tuple[torch.Tensor, ...]
         if isinstance(retrievals, torch.Tensor):
             values = (retrievals,)
         else:
@@ -346,6 +354,7 @@ class Lngram(nn.Module):
             bits_per_route=self.bits_per_route,
             temperature=self.surrogate_temperature,
             scale=self.surrogate_scale,
+            require_triton=self.require_triton,
         )
         memories = self._validate_retrievals(retrievals, hidden_states)
 

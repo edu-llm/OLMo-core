@@ -40,6 +40,7 @@ def build_model_config() -> TransformerConfig:
             orders=(2, 3),
             bits_per_route=4,
             memory_dim=MEMORY_DIM,
+            require_triton=True,
         )
         model.block_overrides[layer_idx] = block
 

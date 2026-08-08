@@ -31,6 +31,7 @@ def test_model_has_exact_copied_lngram_overrides_and_reduced_experts():
         assert override.memory.orders == (2, 3)
         assert override.memory.bits_per_route == 4
         assert override.memory.memory_dim == lngram_moe.MEMORY_DIM
+        assert override.memory.require_triton is True
         assert override.sequence_mixer is not model.block.sequence_mixer
         assert override.feed_forward_moe is not model.block.feed_forward_moe
         assert override.feed_forward_moe is not None

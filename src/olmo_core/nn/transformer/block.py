@@ -740,9 +740,11 @@ class MoEEngramReorderedNormTransformerBlock(MoEReorderedNormTransformerBlock):
         x: torch.Tensor,
         *,
         loss_div_factor: Optional[Union[torch.Tensor, float]] = None,
-        engram_hash_indices: Tuple[torch.Tensor, ...],
+        engram_hash_indices: Optional[Tuple[torch.Tensor, ...]] = None,
         **kwargs,
     ) -> torch.Tensor:
+        if engram_hash_indices is None:
+            raise TypeError("Engram blocks require 'engram_hash_indices'")
         x = x + self.memory(x, hash_indices=engram_hash_indices)
         return super().forward(x, loss_div_factor=loss_div_factor, **kwargs)
 

@@ -41,6 +41,7 @@ def test_config_roundtrip_and_validation() -> None:
         {"surrogate_scale": -1.0},
         {"surrogate_scale": math.nan},
         {"conv_kernel_size": 0},
+        {"require_triton": "yes"},
     ]
     for kwargs in invalid_kwargs:
         with pytest.raises(OLMoConfigurationError):
@@ -49,6 +50,11 @@ def test_config_roundtrip_and_validation() -> None:
     for d_model in (0, 2, 6, 4.0):
         with pytest.raises(OLMoConfigurationError):
             LngramConfig(memory_dim=1).build(d_model)  # type: ignore[arg-type]
+
+
+def test_required_triton_can_build_portable_module() -> None:
+    module = LngramConfig(memory_dim=1, require_triton=True).build(4)
+    assert module.require_triton is True
 
 
 def test_builds_on_cpu_and_meta_with_exact_shapes_and_shared_readouts() -> None:
@@ -155,6 +161,7 @@ def test_zero_conv_output_is_manually_computed_shared_gated_sum(
             "bits_per_route": 4,
             "temperature": 1.0,
             "scale": 1.0,
+            "require_triton": False,
         }
         return retrieved
 
