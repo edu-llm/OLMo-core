@@ -1,0 +1,45 @@
+# What this commit runs on the platform: the rehearsal, not an arm.
+#
+# The command lives HERE and not in a flag, because it is a property of the code, while
+# everything a run is charged against -- team, experiment, dataset, machine -- is supplied at
+# submit time. Change the `--arm` below and commit before submitting a different arm, so that
+# the commit and the arm cannot disagree.
+#
+# THE REHEARSAL EXISTS TO BE THE CHEAP RUN THAT FAILS. A 370M arm is 21 hours and $220 on this
+# shape; this is roughly 20 minutes and $4 for the same code paths, on the same shape, with the
+# same kernels. Rehearsing on gpu-4xl40s rather than a single card is deliberate: the
+# hyper-connection parameters are the smallest in the model -- B is (n,) and the dynamic scales
+# are one element each -- and FSDP shards on dim 0, so four ranks is where a sharding mistake
+# shows up. One already did, in a unit test; the point of running it here too is the mistakes
+# that only a real device makes.
+#
+# `--fail-closed-by-step 150` is the part that matters. If the per-lane norms are still
+# identical by then, the mechanism is inert: every lane is carrying the same vector, the model
+# is exactly the baseline with extra parameters, and no downstream number it produced would be
+# interpretable in either direction. The run stops with an error instead of finishing and
+# looking like a null result.
+#
+# `--model-factory hc_rehearsal` is ~19M parameters in the blocks at d_model 384, in the 370M
+# config's shape. It is not 20M in total and cannot be: dolma2 is 100,278 tokens and OLMo-3
+# unties the embeddings, so the two tables alone are 77M.
+#
+# `--param-dtype bfloat16` is spelled out in the command text on purpose. The platform reads
+# command words to decide what a shape can do, and cannot see a dtype set in code.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-4xl40s
+command: >-
+  bash -lc 'python -m torch.distributed.run --nproc-per-node=4 --standalone
+  .edullm/train_hyper_connections.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --arm faithful
+  --model-factory hc_rehearsal
+  --sequence-length 4096
+  --global-batch-size 262144
+  --rank-microbatch-size 8192
+  --steps 200
+  --save-interval 100
+  --warmup-steps 20
+  --monitor-interval 10
+  --fail-closed-by-step 150
+  --param-dtype bfloat16'

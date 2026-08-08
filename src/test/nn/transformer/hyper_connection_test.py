@@ -263,6 +263,51 @@ def test_config_reports_the_added_parameters():
     assert added == 2 * (D_MODEL * (4 + 2) + 4 * (4 + 2) + 2)
 
 
+def run_fsdp_shards_the_hyper_connection_parameters():
+    """
+    The hyper-connection parameters are the smallest in the model -- ``B`` is ``(n,)`` and the
+    dynamic scales are one element each -- and FSDP shards on dim 0. A four-element tensor
+    across four ranks, or a one-element tensor across any of them, is exactly the case that
+    breaks, and it would break eleven hours into a run rather than at construction.
+    """
+    from olmo_core.distributed.parallel import (
+        DataParallelConfig,
+        DataParallelType,
+        build_world_mesh,
+    )
+    from olmo_core.distributed.utils import get_full_tensor
+    from olmo_core.utils import get_default_device
+
+    mesh = build_world_mesh(dp=DataParallelConfig(name=DataParallelType.fsdp))
+    config = build_config(hyper_connections=HyperConnectionConfig(n_lanes=4))
+    model = config.build(init_device="meta")
+    model.apply_fsdp(mesh)
+    model.init_weights(max_seq_len=SEQ_LEN, device=get_default_device())
+
+    stream = model.blocks["0"].attention_residual_stream
+    torch.testing.assert_close(get_full_tensor(stream.hc_static_alpha_r.detach()), torch.eye(4))
+    torch.testing.assert_close(get_full_tensor(stream.hc_static_beta.detach()), torch.ones(4))
+    torch.testing.assert_close(
+        get_full_tensor(stream.hc_dynamic_scale_beta.detach()), torch.tensor([0.01])
+    )
+
+    model(torch.randint(0, VOCAB_SIZE, (2, SEQ_LEN))).sum().backward()
+    for name, param in model.named_parameters():
+        if "hc_" in name:
+            assert param.grad is not None, f"no gradient for {name}"
+
+
+def test_fsdp_shards_the_hyper_connection_parameters():
+    from olmo_core.testing import run_distributed_test
+
+    run_distributed_test(
+        run_fsdp_shards_the_hyper_connection_parameters,
+        backend="gloo",
+        start_method="spawn",
+        world_size=4,
+    )
+
+
 def test_gradients_reach_every_hyper_connection_parameter():
     hc = HyperConnectionConfig(n_lanes=4)
     model = build_model(build_config(hyper_connections=hc))

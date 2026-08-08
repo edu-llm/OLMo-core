@@ -3,8 +3,10 @@ from typing import Tuple
 
 import torch
 import torch.nn as nn
+from torch.distributed.tensor import DTensor
 
 from ..config import StrEnum
+from ..distributed.utils import distribute_like, get_local_tensor
 from .config import ModuleConfig
 
 __all__ = [
@@ -195,6 +197,22 @@ class HyperConnectionConfig(ModuleConfig):
         return overrides
 
 
+def _set_full(param: torch.Tensor, value: torch.Tensor):
+    """
+    Write a full tensor into a parameter that may be sharded.
+
+    ``ones_`` and ``zeros_`` are safe on a :class:`~torch.distributed.tensor.DTensor` because
+    they are the same everywhere, but the identity and the one-hot read are position-dependent
+    and a rank holding rows 2 and 3 would otherwise get the wrong ones. Same approach as
+    ``olmo_core.nn.transformer.init._apply_init``, written out here rather than imported to
+    avoid a cycle -- the transformer config imports this module.
+    """
+    if isinstance(param, DTensor):
+        get_local_tensor(param).copy_(get_local_tensor(distribute_like(param, value)))
+    else:
+        param.copy_(value)
+
+
 def expand_residual_lanes(h: torch.Tensor, n_lanes: int) -> torch.Tensor:
     """
     Replicate a hidden state into ``n_lanes`` hyper hidden vectors, giving ``H^0`` of eq. 1
@@ -344,8 +362,10 @@ class HyperConnectionStream(nn.Module):
         if dynamic:
             self.hc_dynamic_w_beta = nn.Parameter(torch.empty(d_model, device=init_device))
             self.hc_dynamic_w_r = nn.Parameter(torch.empty(d_model, n_lanes, device=init_device))
-            self.hc_dynamic_scale_beta = nn.Parameter(torch.empty((), device=init_device))
-            self.hc_dynamic_scale_alpha = nn.Parameter(torch.empty((), device=init_device))
+            # Shape (1,) rather than a true scalar: FSDP shards on dim 0 and cannot shard a
+            # 0-dim parameter at all. One element either way, which is what eq. 24 counts.
+            self.hc_dynamic_scale_beta = nn.Parameter(torch.empty(1, device=init_device))
+            self.hc_dynamic_scale_alpha = nn.Parameter(torch.empty(1, device=init_device))
             if self.mode == HyperConnectionMode.full:
                 self.hc_dynamic_w_m = nn.Parameter(torch.empty(d_model, device=init_device))
             else:
@@ -370,20 +390,22 @@ class HyperConnectionStream(nn.Module):
         with torch.no_grad():
             nn.init.ones_(self.hc_static_beta)
 
-            if self.doubly_stochastic:
-                # A_r is read as logits here, so a plain identity would come back out of the
-                # Sinkhorn projection as a near-uniform matrix.
-                self.hc_static_alpha_r.fill_(0.0)
-                self.hc_static_alpha_r.add_(
-                    torch.eye(self.n_lanes, device=self.hc_static_alpha_r.device),
-                    alpha=self.birkhoff_init_logit,
-                )
-            else:
-                nn.init.eye_(self.hc_static_alpha_r)
+            identity = torch.eye(
+                self.n_lanes,
+                device=self.hc_static_alpha_r.device,
+                dtype=self.hc_static_alpha_r.dtype,
+            )
+            # In mHC, A_r is read as logits, so a plain identity would come back out of the
+            # Sinkhorn projection as a near-uniform matrix.
+            _set_full(
+                self.hc_static_alpha_r,
+                identity * self.birkhoff_init_logit if self.doubly_stochastic else identity,
+            )
 
             if self.hc_static_alpha_m is not None:
-                nn.init.zeros_(self.hc_static_alpha_m)
-                self.hc_static_alpha_m[self.block_idx % self.n_lanes] = 1.0
+                read = torch.zeros_like(identity[0])
+                read[self.block_idx % self.n_lanes] = 1.0
+                _set_full(self.hc_static_alpha_m, read)
 
             if self.dynamic:
                 nn.init.zeros_(self.hc_dynamic_w_beta)
