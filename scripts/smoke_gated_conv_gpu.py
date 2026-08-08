@@ -51,6 +51,7 @@ import argparse
 import json
 import math
 import os
+import re
 import sys
 from typing import Any, Dict, List, Optional
 
@@ -169,6 +170,41 @@ def gate_is_alive(gate_grad: Optional[float], reference_grad: Optional[float]) -
         f"gate gradient {gate_grad:.3e} vs floor {floor:.3e}, "
         f"reference {reference_grad:.3e} is nonzero"
     )
+
+
+def _write_payload(destination: str, payload: dict) -> str:
+    """
+    Write the result JSON, to a local path or to ``s3://``.
+
+    ``$EDULLM_CHECKPOINT_DIR`` on the platform is an ``s3://`` URL, and :func:`open` cannot write
+    to one -- it raises ``FileNotFoundError`` naming the URL as a directory that does not exist.
+    That is what turned a fully green sm_80 validation into exit 1 on ``run_019fe037``.
+
+    :param destination: A local path, or an ``s3://bucket/key`` URL.
+    :param payload: The document to serialize.
+
+    :returns: Where it was actually written.
+
+    :raises RuntimeError: If an ``s3://`` destination is given and ``boto3`` is unavailable.
+    """
+    body = json.dumps(payload, indent=2)
+    if not destination.startswith("s3://"):
+        with open(destination, "w") as fh:
+            fh.write(body)
+        return destination
+
+    try:
+        import boto3
+    except ImportError as exc:  # pragma: no cover - boto3 is in the platform image
+        raise RuntimeError(f"an s3:// destination needs boto3, which is not importable: {exc}")
+
+    # Collapse any '//' the caller's string concatenation produced -- the platform's
+    # EDULLM_CHECKPOINT_DIR already ends in a slash, so 'dir/' + '/file' is easy to produce and S3
+    # would treat the doubled slash as a real (and different) key.
+    bucket, _, key = destination[len("s3://") :].partition("/")
+    key = re.sub(r"/{2,}", "/", key)
+    boto3.client("s3").put_object(Bucket=bucket, Key=key, Body=body.encode())
+    return f"s3://{bucket}/{key}"
 
 
 def conv_path_is_fused(realised_paths: List[str], *, allow_eager: bool) -> tuple[bool, str]:
@@ -654,19 +690,38 @@ def main(argv: Optional[List[str]] = None) -> int:
         "records": records,
         "failures": failures,
     }
-    if opts.out:
-        with open(opts.out, "w") as fh:
-            json.dump(payload, fh, indent=2)
-        print(f"wrote {opts.out}")
-
+    # THE VERDICT IS PRINTED BEFORE THE ARTIFACT IS WRITTEN, AND THE WRITE CANNOT KILL THE RUN.
+    #
+    # On the first A100 attempt (run_019fe037) every check passed and the process still exited 1,
+    # because $EDULLM_CHECKPOINT_DIR is an s3:// URL and `open()` cannot write to one. The
+    # traceback landed where the verdict should have been, so a fully green sm_80 validation read
+    # as a failure and the numbers survived only in the container log.
+    #
+    # Two lessons, both applied here. An artifact write is reporting, not measurement, so it must
+    # never change the outcome. And the verdict goes to the log first, because the log is the one
+    # channel that exists whatever happens to the destination.
     print()
     if failures:
         print(f"FAILED ({len(failures)}):", file=sys.stderr)
         for f in failures:
             print(f"  - {f}", file=sys.stderr)
-        return 1
-    print("All checks passed. Note this is sm_89; sm_80 must be verified separately.")
-    return 0
+    else:
+        print(f"All checks passed on sm_{props.major}{props.minor} ({props.name}).")
+
+    if opts.out:
+        try:
+            written = _write_payload(opts.out, payload)
+            print(f"wrote {written}")
+        except Exception as exc:
+            # Loud, and NOT fatal. The full payload goes to stdout so the run is still readable.
+            print(
+                f"WARNING: could not write {opts.out} ({type(exc).__name__}: {exc}). "
+                "The JSON follows on stdout, and the verdict above stands regardless.",
+                file=sys.stderr,
+            )
+            print(json.dumps(payload, indent=2))
+
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

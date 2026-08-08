@@ -12,8 +12,12 @@ WHY THIS FILE EXISTS
 """
 
 import importlib.util
+import json
 import math
+import sys
+import types
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -156,6 +160,49 @@ def test_a_single_arm_run_is_refused():
 def test_an_unknown_arm_is_refused():
     mod = _load()
     assert mod.main(["--arms", "kda-plain,kda-bogus"]) == 2
+
+
+def test_a_local_destination_is_written_as_a_file(tmp_path):
+    mod = _load()
+    dest = tmp_path / "out.json"
+    written = mod._write_payload(str(dest), {"failures": []})
+    assert written == str(dest)
+    assert json.loads(dest.read_text()) == {"failures": []}
+
+
+def test_an_s3_destination_does_not_go_through_open():
+    """
+    An ``s3://`` URL must be recognised as one, not handed to :func:`open`.
+
+    This is the bug that turned a fully green sm_80 validation into exit 1 on ``run_019fe037``:
+    ``$EDULLM_CHECKPOINT_DIR`` on the platform is an ``s3://`` URL, ``open()`` raised
+    ``FileNotFoundError`` naming it as a missing directory, and the traceback landed where the
+    verdict should have been. Every measurement had already passed.
+
+    Also pins the ``//`` collapse. The platform's directory value ends in a slash, so the natural
+    concatenation produces ``.../checkpoints//smoke_....json`` -- and S3 treats a doubled slash as
+    part of the key, so the object would land at a path nothing looks in.
+    """
+    mod = _load()
+    captured = {}
+
+    class _Client:
+        def put_object(self, **kwargs):
+            captured.update(kwargs)
+
+    fake_boto3 = types.ModuleType("boto3")
+    fake_boto3.client = lambda service: _Client()  # type: ignore[attr-defined]
+
+    with mock.patch.dict(sys.modules, {"boto3": fake_boto3}):
+        written = mod._write_payload(
+            "s3://bucket/teams/scratch/runs/run_x/checkpoints//out.json", {"failures": []}
+        )
+
+    assert captured["Bucket"] == "bucket"
+    assert captured["Key"] == "teams/scratch/runs/run_x/checkpoints/out.json"
+    assert "//" not in captured["Key"]
+    assert written == "s3://bucket/teams/scratch/runs/run_x/checkpoints/out.json"
+    assert json.loads(captured["Body"].decode()) == {"failures": []}
 
 
 def test_the_argv_refusals_are_reachable_without_a_gpu():
