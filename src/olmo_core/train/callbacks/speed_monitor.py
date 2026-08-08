@@ -111,20 +111,45 @@ class SpeedMonitorCallback(Callback):
                 # The three Ada names below are prefixes of one another, so the order of these
                 # branches is what makes them mean anything: "L4" matches an L40S too.
                 elif "L40S" in device_name:
-                    # data from https://www.nvidia.com/en-us/data-center/l40s/
-                    # Ada publishes a dense BF16 figure of its own here -- 362.05, beside 733
-                    # with sparsity, which is rounded and is not twice it -- so that figure is
-                    # used as it stands rather than corrected down from the sparse one.
-                    self.device_peak_flops_per_second = int(362.05e12)
+                    # data from the NVIDIA Ada GPU architecture whitepaper, Appendix A (AD102)
+                    # and Appendix C (L40), not from the L40S product datasheet.
+                    #
+                    # THERE ARE TWO INDEPENDENT FACTORS OF TWO ON THIS LINE AND ONLY ONE OF
+                    # THEM IS SPARSITY. The datasheet's "362.05 | 733*" is quoted with FP16
+                    # accumulation, and on the consumer-class Ada dies the tensor cores run
+                    # FP32 accumulation at exactly half rate. The whitepaper's AD102 table
+                    # says so directly -- 330.3 TFLOPS for FP16 with FP16 accumulate against
+                    # 165.2 for FP16 or BF16 with FP32 accumulate -- and its L40 appendix
+                    # lists BF16 as "181 | 362", where 181 is the dense FP32-accumulate rate
+                    # and is half the datasheet's headline. The datacenter dies (GA100,
+                    # GH100) have no such penalty, which is why the A100 and H100 branches
+                    # take their datasheet figures at face value.
+                    #
+                    # Torch always accumulates in FP32: cuBLAS is called with
+                    # CUBLAS_COMPUTE_32F for BF16 inputs and there is no BF16-accumulate path
+                    # to opt into. So 181.03 is not a derating for realism, it is the peak
+                    # this card can reach for the only kind of matmul training does, and the
+                    # MFU denominator must be that rather than a rate no kernel here can hit.
+                    self.device_peak_flops_per_second = int(362.05e12 * dense_correction)
                 elif "L40" in device_name:
                     # data from https://resources.nvidia.com/en-us-l40/l40-datasheet
                     self.device_peak_flops_per_second = int(362.05e12 * dense_correction)
                 elif "L4" in device_name:
                     # data from https://www.nvidia.com/en-us/data-center/l4/
+                    #
+                    # SUSPECTED HIGH BY A FURTHER 2x, UNVERIFIED. The L4 is AD104 and the
+                    # A10G is GA102, and both are consumer-class dies that halve FP32
+                    # accumulation the way the L40S branch above documents. Their datasheet
+                    # figures are almost certainly quoted with FP16 accumulate too. Left as
+                    # they stand because nothing in this repository has run on either, so the
+                    # numbers are unmeasured here and correcting a spec from an argument by
+                    # analogy is how the L40S got its first wrong value. Measure before
+                    # trusting an MFU from either of these.
                     self.device_peak_flops_per_second = int(242e12 * dense_correction)
                 elif "A10G" in device_name:
                     # data from AWS's own A10G datasheet, which is a different part from the
                     # A10 and half its BF16 rate: 70 TFLOP/s dense against the A10's 125.
+                    # See the L4 branch: suspected high by a further 2x and unverified.
                     self.device_peak_flops_per_second = int(140e12 * dense_correction)
                 else:  # for other GPU types, assume A100
                     # data from https://www.nvidia.com/en-us/data-center/a100/

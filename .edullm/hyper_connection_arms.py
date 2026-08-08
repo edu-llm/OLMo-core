@@ -803,7 +803,13 @@ TRANCHE_TOKENS_PER_STEP = 768 * 1024
 
 
 def arm_seconds(
-    arm: Arm, steps: int = TRANCHE_STEPS, seconds_per_step: float = MEASURED_SECONDS_PER_STEP
+    arm: Arm,
+    steps: int = TRANCHE_STEPS,
+    seconds_per_step: float = MEASURED_SECONDS_PER_STEP,
+    *,
+    eval_seconds: float = MEASURED_EVAL_SECONDS,
+    checkpoint_seconds: float = MEASURED_CHECKPOINT_SECONDS,
+    startup_seconds: float = MEASURED_STARTUP_SECONDS,
 ) -> float:
     """
     How long one run of this arm takes, from the measurements above.
@@ -813,14 +819,23 @@ def arm_seconds(
     checkpoint at step zero and one every ``TRANCHE_SAVE_INTERVAL``, the container's start-up,
     and -- for an arm that has lanes to watch -- the lane monitor's own cost.
 
+    EVERY FIXED COST IS AN ARGUMENT NOW, BECAUSE THE ARGUMENT FOR HOLDING THEM FIXED TURNED OUT
+    TO BE ABOUT THE WORK AND NOT ABOUT THE TIME. What this docstring used to say -- that the
+    evaluations are the same seven shards and the checkpoints the same model to the same
+    bucket, so only the step term moves with the shape -- is true of what the machine does and
+    false of how long it takes. The A100 cells run the identical evaluation in about a quarter
+    of the L40S's 104 seconds. The defaults are still the L40S measurements, so nothing that
+    called this before it grew keywords has changed its answer.
+
     :param arm: The arm.
     :param steps: How many optimizer steps it runs for.
-    :param seconds_per_step: The step time to price against. Defaults to the L40S measurement,
-        which is the only one there is; the A100 tranche is priced against
-        :data:`A100_STEP_SECONDS_FOR_FULL_HORIZON`, which is the threshold the probe has to
-        clear and therefore the slowest step that would send the tranche to that shape at all.
-        Everything that is not a step is left at its measured value, because the evaluations
-        are the same seven shards and the checkpoints are the same model to the same bucket.
+    :param seconds_per_step: The step time to price against. Defaults to the L40S measurement;
+        the A100 tranche was staged against :data:`A100_STEP_SECONDS_FOR_FULL_HORIZON`, the
+        threshold the probe had to clear and therefore the slowest step that would send the
+        tranche to that shape at all.
+    :param eval_seconds: One held-out evaluation over the seven declared shards.
+    :param checkpoint_seconds: One permanent checkpoint.
+    :param startup_seconds: Container start to the first optimizer step, plus shutdown.
 
     :returns: Seconds.
     """
@@ -830,10 +845,10 @@ def arm_seconds(
     if arm.hyper_connections is not None:
         monitor = (steps // TRANCHE_MONITOR_INTERVAL) * MONITOR_SECONDS_PER_FIRING
     return (
-        MEASURED_STARTUP_SECONDS
+        startup_seconds
         + steps * seconds_per_step
-        + evaluations * MEASURED_EVAL_SECONDS
-        + checkpoints * MEASURED_CHECKPOINT_SECONDS
+        + evaluations * eval_seconds
+        + checkpoints * checkpoint_seconds
         + monitor
     )
 

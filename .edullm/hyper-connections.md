@@ -918,6 +918,14 @@ BF16 peak is 362.05 TF, so the honest figure is the second column, 13.8% lower. 
 gained an L40S branch on 2026-08-08 at 10:14, four hours after both of these runs, so anything
 submitted from here lands in the corrected column directly and arm 1 seed 0 will be the first.
 
+> **Superseded, and by a factor of two rather than by 13.8%.** 362.05 is the L40S's BF16 rate
+> *with FP16 accumulation*, and torch accumulates in FP32, which on AD102 runs at half rate. The
+> figure that belongs in an MFU denominator for this card is **181.03 TF**, so every L40S MFU on
+> this page — both columns of this table included — is understated by two. See "The A100 baseline,
+> and the second factor of two in the MFU". The TPS figures below are unaffected: tokens per
+> second are counted and have no peak in them, which is the same distinction the next paragraph
+> makes.
+
 **The rehearsal TPS was recorded as 49,620 and the measured median is 57,354.** The recorded
 figure is the measured one divided by 1.156, which is the peak-FLOPs correction from the
 paragraph above — a correction that belongs to MFU, a ratio against a hardware constant, and
@@ -1461,9 +1469,12 @@ cancellation and report a half-finished run as a completed one.
 
 Still not measured. See above — it needs arm 1's three seeds.
 
-Two notes on reading throughput numbers here. OLMo-core v2.5.0 fixed an A100 peak-FLOPs
+Three notes on reading throughput numbers here. OLMo-core v2.5.0 fixed an A100 peak-FLOPs
 constant in `SpeedMonitorCallback` that was 2× too low and had been inflating reported MFU by
-2×, so any figure from before that is wrong by a factor of two; this branch is on v2.5.0. And
+2×, so any figure from before that is wrong by a factor of two; this branch is on v2.5.0. The
+L40S constant this branch itself added had a second factor of two in it, the other way — 362.05
+is the FP16-accumulate rate and torch accumulates in FP32 — so every L40S MFU written before
+2026-08-08 evening is understated by two and the corrected peak is 181.03 TF. And
 `num_flops_per_token` here counts the hyper-connection cost, so MFU across arms is comparable.
 
 **`PLATFORM_ATTN_BACKEND` is still `"torch"`.** The image now installs flash-attention 2 from a
@@ -1524,87 +1535,176 @@ python .edullm/stage_gate.py --self-test                                   # no 
 python .edullm/stage_gate.py --run <full run id> --cells 5 --watch 420
 ```
 
-Read at step ~750 of 6,000, `run_019fe279-4ef0` passes every check the gate makes: three live
-cells at seeds 0, 1 and 3 whose losses differ at every shared step, clean medians of 8.211,
-8.076 and 8.259 s/step over 750, 760 and 740 rows, 14.37 projected hours against the 19-hour
-bound, z-loss written on all three, and seven per-source metrics with bits-per-byte beside every
-cross-entropy at both the startup evaluation and the one at step 500. It does **not** report
-`go`, because two of the five cells have logged nothing.
+Read at step ~750 of 6,000, `run_019fe279-4ef0` on `gpu-4xl40s` passed every check the gate
+makes: three live cells at seeds 0, 1 and 3 whose losses differ at every shared step, clean
+medians of 8.211, 8.076 and 8.259 s/step over 750, 760 and 740 rows, 14.37 projected hours
+against the 19-hour bound, z-loss written on all three, and seven per-source metrics with
+bits-per-byte beside every cross-entropy at both the startup evaluation and the one at step 500.
+It did **not** report `go`, because two of the five cells had logged nothing.
 
-**It never did report `go`, and the reason it eventually reported `no-go` is not any of the
-things it was watching for.** At 19:58Z, at step ~900 of 6,000 and 2h18m in, all three live cells
-took a SIGTERM within thirty seconds of each other — `RuntimeError: DataLoader worker (pid …) is
-killed by signal: Terminated`, logged by each cell as `TRAINING_ITSELF_FAILED` — and the array
-parent now reads `FAILED`, `Why: Array Child Job failed`. Three cells on three nodes dying inside
-one thirty-second window is not three faults; the account that fits is the one the migration
-commit above diagnoses from the other end, which is that twenty cells were asked of a six-node
-pool, so the two children that never placed are the likeliest thing to have failed the array and
-taken their running siblings down with them. That is inference from the timing and the signal,
-not something the platform reported, and `edullm logs` would settle it.
+**It never did report `go`, and the reason is not any of the things it was watching for.** The
+SIGTERM all three live cells took at 19:58Z was a deliberate `edullm cancel` landing on the
+submission, and the array parent reads `FAILED` because a cancelled array child is how Batch
+reports one. Nothing failed and nothing was starved. The reason for the cancellation was the
+capacity finding recorded above — six L40S nodes sustaining three of twenty submitted cells for
+over two hours, projecting the tranche at 3.5 to 7 days — and the whole tranche moved to
+`gpu-8xa100`.
 
-So **stage 1 measured no noise floor.** σ̂ at the final step is what stage 2 is gated on and the
-run stopped at 15% of the horizon, which is why the numbers in this section are all instrument
-readings — step time, MFU, metric coverage — and none of them is a variance. What the run does
-establish is that the configuration is sound: the arm, the seeds, the seven sources, the
-evaluator across a checkpoint boundary and the fit against the bound were all verified before it
-died, and none of them has to be re-established on the shape it moves to.
+So **stage 1 on the L40S measured no noise floor.** σ̂ at the final step is what stage 2 is gated
+on and the run stopped at 15% of the horizon, which is why its numbers are all instrument
+readings — step time, MFU, metric coverage — and none of them is a variance. What it does
+establish is that the configuration is sound, and none of that had to be re-established on the
+new shape *as configuration*. Every *measurement* did, which is the next section.
 
-### The MFU is right, and this is the first run for which that can be said
+## The A100 baseline, and the second factor of two in the MFU
 
-The two 370M probes fell through `SpeedMonitorCallback`'s device table to its A100 default and
-were scored against 312 TF; the callback gained an L40S branch afterwards. The live baseline is
-the first run on the corrected path and it lands there:
+`run_019fe2f4-f528` on `gpu-8xa100` is the baseline resubmitted: five of five cells, same commit
+lineage and same pinned flags, differing from the L40S command only in `--nproc-per-node` (4 → 8)
+and `--rank-microbatch-size` (16,384 → 12,288). Read at steps 659 to 1,179 of 6,000, it passes
+every check the gate makes and reports **`go`**:
 
-- **The peak the run used divides out of its own logs at exactly 362.05 TF.** `flopsPS` over
-  `MFU/100` is 3.6205e14 in every row, so the L40S branch is live and nothing is falling through
-  to the A100 default.
-- **362.05 is the dense figure and must not be halved.** NVIDIA publishes `362.05 | 733*` for
-  BFLOAT16 Tensor Core on the L40S, starred for structural sparsity, so the branch is right to
-  use it as it stands where the surrounding branches apply a `dense_correction` of one-half to a
-  sparse-quoted spec. The `L40` branch immediately below it *does* halve 362.05, and that is
-  also right and is not an inconsistency: the L40's own datasheet reads `181.05 | 362.05`.
-- **The hand calculation agrees.** `hc_370M` at the baseline arm builds
-  `num_flops_per_token` = 3,032,684,544 at sequence length 4096, and the run's own
-  `flopsPS / TPS` reads 3,032,684,502 — the same number through a float32 log. At 196,608 tokens
-  a device-step and a clean median of 8.2188 s that is **20.04% MFU**, against 20.038% reported.
-  Reported and hand-computed agree to three decimal places, so there is no second factor of two
-  hiding anywhere and the v2.5.0 history does not repeat here.
+| check | reading |
+| --- | --- |
+| seeds | 0–4 from the cells' own configs, five distinct losses at the shared step 659 spanning 0.1893 nats |
+| arm | 5/5 consistent with `baseline`, unambiguously |
+| loss | 11.7 → 2.74–2.92, decreasing on all five, no non-finite value |
+| z-loss | written by 5/5, so the configured 1e-5 is in force |
+| held-out | seven sources on all five cells, BPB beside CE on all seven |
+| throughput | median 1.700 s/step, slowest cell 1.728 over 865 clean rows |
+| fit | 3.18 h projected against the 7-hour bound, 55% spare |
+| MFU | 55.28–56.85% by hand, 55.35–56.87% reported |
 
-The arms remain comparable on it, because `num_flops_per_token` counts the lane mixing. What MFU
-must not be read as here is a hardware verdict: at 20% on a card the branch has already shown to
-be bound by its wire rather than its tensor cores, the number is measuring the interconnect.
+The clean medians are 1.681, 1.700, 1.692, 1.728 and 1.712 s over 1,173, 1,163, 700, 865 and 655
+rows, at an interquartile spread of 0.003–0.005 s. What is excluded from each is the first logged
+row, the rows the held-out evaluator ran on, and the row after each of those; the lane-monitor
+exclusion removes nothing here because the baseline attaches no monitor. The projection charges
+evaluations at the 26 s this shape measures rather than the L40S's 104 s, which is why
+`arm_seconds` grew keyword arguments for its fixed costs.
 
-### The arm *is* in the logged config, and `tranche_watch` does not have to be told it
+The two cells the L40S pool never placed are here and are 500 steps behind the first two, which
+costs nothing: the bound is per cell and per attempt, and every cell projects at 3.2 hours.
 
-`train_on_corpus` writes no `arm` field, which is why the watcher takes the arm from its command
-line. But `arm.apply` edits the model config before `ConfigSaverCallback` saves it, and those
-edits survive into W&B: `model.block.hyper_connections` is absent on `baseline` and present on
-every lane arm, and among the four funded arms the triple `(mode, doubly_stochastic,
-output_init_exponent)` separates `faithful` from `output-only` from `mhc`.
-`stage_gate.arms_consistent_with` reads it, and a test walks all four.
+### The A100 constant is right. The L40S constant was wrong, by exactly two
+
+The A100 half of this is clean, and it is worth saying precisely because of the history. OLMo-core
+v2.5.0 fixed an A100 peak that was 2× too low and had been inflating reported MFU by 2×. That fix
+is present and correct on this branch:
+
+- **The peak divides out of the run's own logs at exactly 312.00 TF.** `flopsPS` over `MFU/100` is
+  3.12e14 in every row.
+- **312 is the dense BF16 figure for an A100**, half of the starred 624 on NVIDIA's datasheet, and
+  GA100 reaches it with FP32 accumulation.
+- **The hand calculation agrees.** `hc_370M` builds `num_flops_per_token` = 3,032,684,544 at
+  sequence length 4096 and the padded vocabulary of 100,352 — the padding matters, and is 0.015%
+  — against 3,032,684,620 divided out of the run. At 98,304 tokens a device-step and a clean
+  median of 1.681 s that is **56.85%**, against 56.87% reported. Agreement to two decimal places.
+
+**The L40S constant is the one that was wrong, and this branch is what put it there.** There are
+two independent factors of two on these datasheet figures and only one of them is sparsity. The
+other is the accumulation format, and the L40S branch — added by this branch, with a comment
+reasoning carefully about sparsity and not at all about accumulation — took the wrong one:
+
+- NVIDIA's Ada whitepaper gives the AD102 rates directly: **330.3 TFLOPS for FP16 with FP16
+  accumulate against 165.2 for FP16 or BF16 with FP32 accumulate.** Exactly half.
+- Its L40 appendix lists BF16 as **`181 | 362`** for silicon whose product datasheet headline is
+  `362.05 | 733*`. The datasheet quotes the FP16-accumulate rate.
+- Torch accumulates in FP32 unconditionally — cuBLAS is called with `CUBLAS_COMPUTE_32F` for BF16
+  inputs and there is no BF16-accumulate path to opt into. So 362.05 is a rate no training kernel
+  on that card can reach.
+
+The dense BF16 peak of an L40S, for the only kind of matmul training performs, is **181.03 TF**.
+`SpeedMonitorCallback` and `stage_gate` are both corrected. The consequence for the record is that
+**every L40S MFU this branch has quoted is understated by two**: the stage-1 baseline was at
+**40.08%**, not the 20.04% reported above and in the section before it. The two agreed with each
+other because they were the same arithmetic over the same wrong denominator, which is the failure
+mode a hand calculation only catches if it sources its own constant. The A100 and H100 branches
+are unaffected — the datacenter dies have no accumulation penalty — and the L4 and A10G branches
+are suspected wrong the same way and left alone with a comment, since nothing here has run on
+either and reasoning by analogy is how the L40S got its first wrong value.
+
+### Where the 4.8× actually comes from
+
+8.219 s/step to 1.700 is **4.84×** on nominally 1.72× the compute, and the excess is mostly not
+efficiency — it is the denominator above.
+
+| | L40S ×4 | A100 ×8 | ratio |
+| --- | --- | --- | --- |
+| wall clock per step | 8.219 s | 1.700 s | 4.84× |
+| node peak, datasheet | 1,448 TF | 2,496 TF | 1.72× |
+| node peak, FP32 accumulate | 724 TF | 2,496 TF | **3.45×** |
+| MFU | 40.08% | 56.21% | 1.40× |
+
+So 3.45× of the 4.84× is hardware the L40S never had, and only **1.40×** is the machine being used
+better. That residual is two things, neither of which is the tensor cores:
+
+- **Memory bandwidth.** 1,555 GB/s of HBM2e per A100 against 864 GB/s of GDDR6 per L40S, and eight
+  devices against four: 12.4 TB/s against 3.5 TB/s per node. A 370M model spends a large share of
+  its step in norms, RoPE, SwiGLU elementwise and the optimizer, none of which touch a tensor core.
+- **The interconnect, and FSDP's exposure to it.** The train module runs `fsdp` with
+  `wrapping_strategy: full` and `prefetch_factor: 0`, so every parameter all-gather is fully
+  exposed rather than overlapped with compute. At 474M parameters in bf16 that is 12 microbatches
+  × 2 all-gathers × 711 MB ≈ 17 GB per rank per step on the L40S, over PCIe Gen4 — the L40S
+  datasheet says `NVIDIA NVLink Support: No`, so there is no peer path at all — against 8 × 2 ×
+  830 MB ≈ 13 GB over NVSwitch on the A100. Order 1–2 s of the L40S step against order 0.05 s of
+  the A100's.
+
+The two are not separable without a profile and the arithmetic above does not pretend to have
+separated them. What it does establish is that the puzzle was mostly in the denominator, and that
+the earlier note calling the L40S "bound by its wire rather than its tensor cores" was right about
+the direction while being wrong about the size by a factor of two.
+
+### The arm *is* in the logged config, and `tranche_watch` now reads it
+
+`train_on_corpus` writes no `arm` field, which is why the watcher used to take the arm from its
+command line. But `arm.apply` edits the model config before `ConfigSaverCallback` saves it, and
+those edits survive into W&B: `model.block.hyper_connections` is absent on `baseline` and present
+on every lane arm, among the funded arms the triple `(mode, doubly_stochastic,
+output_init_exponent)` separates `faithful` from `output-only` from `mhc`, and `model.block_reuse`
+separates the tied arms from the untied ones. `stage_gate.arms_consistent_with` reads all of it
+and `tranche_watch` now defers to it, keeping the command-line label only as a fallback for a cell
+that has not yet written a config, and marking it with a `?` when it is being used.
 
 This is worth more than a label. A watcher told its arm on a command line will print whatever it
 was told, so the one failure it could catch — a cell that resolved to an arm nobody meant, which
 `resolve_cell` is shaped around and which no loss curve would reveal — is exactly the failure it
-cannot. The config is the run's own testimony. It does not separate every arm in the table and
-does not claim to: `decay-everything` differs from `faithful` in the optimizer alone and
-`tied-faithful` in block reuse, so both come back beside it. All of those are unfunded.
+cannot. The config is the run's own testimony, and when the two disagree the watcher now says
+`ARM MISMATCH` and names the cells.
 
-### `wandb_panels.py --verify` cannot gate a baseline-only group, and currently says it can
+It does not separate every arm and does not claim to. `decay-everything` differs from `faithful`
+in the optimizer alone, which is not a model-config difference at all, so the two come back
+together; it is unfunded, and each of the four arms that run is uniquely identified. Reading
+`block_reuse` is what removed the other ambiguity: without it every baseline cell came back as
+`baseline` and `tied-baseline` together, and a check whose own output says "ambiguous" five times
+out of five teaches the reader to skip the word.
 
-Run against `hyper-connections-370m` while stage 1 is live it prints `VERDICT: everything the
-pre-registration rests on is present` and exits 0. Both halves of that are misleading, for two
-independent reasons, and neither is a reason to stop using it for what it was built for.
+### `wandb_panels.py --verify` passed for the wrong reason, and now scopes to a submission
 
-**It unions keys across every run in the group.** The `hc/*` families it reports as `ok` are
-carried entirely by the `faithful` rehearsal and probes; the five baseline cells log none of them
-and correctly should, since `train` attaches the lane monitor only to an arm with lanes. So the
-guard and stability sections pass on evidence from other runs, and a stage-2 group containing one
-stale probe would pass the same way.
+Run against the group while stage 1 was live it printed `VERDICT: everything the pre-registration
+rests on is present` and exited 0, for two independent and equally disqualifying reasons.
 
-**It keys `observed_keys` by `run.name`, and every cell of a fan-out shares a name.** It reported
-`7 run(s)` for a project holding nine, because the three live cells collapsed into one entry. The
-cell is in `run.id`, as `<run id>-cell-<index>`, which is what `stage_gate.read_cells` addresses.
+**It unioned keys across every run in the group.** The group is the whole module — every probe,
+every rehearsal, every arm, months of them — so the `hc/*` families it reported `ok` were carried
+entirely by old `faithful` probes, while the runs being gated were five `baseline` cells that
+cannot log a lane metric at all, since `train` attaches the monitor only to an arm with lanes.
+
+**It keyed `observed_keys` by `run.name`, and every cell of a fan-out shares a name.** A five-cell
+submission reported as `1 run(s)`, and a cell missing a family was hidden behind its siblings. The
+cell index is in `run.id`, as `<run id>-cell-<index>`, and the name is not even stable — the three
+cancelled L40S cells were all renamed to `…-died`.
+
+A verifier that passes for the wrong reason is worse than none, because it is the thing standing
+between the tranche and an analysis over a missing metric family. `--verify` now takes `--run`
+rather than `--group` and refuses the combination outright, addresses cells by id, and carries a
+scope per family: `hc/*` is required on an arm with lanes, **not expected** on one without, and
+*forbidden* there — a lane metric on a baseline cell means that cell did not run the arm it was
+submitted as, which is a failure the old "is anything missing" framing scored as a pass with
+extras. The weight-decay split stays advisory on every arm, because the live baseline cells log
+`optim/LR (group 1)` too: OLMo-core already splits decay off the norms and biases, so that family
+confirms groups exist and not that the lane split is why.
+
+```bash
+python .edullm/wandb_panels.py --verify --run <full run id> --cells 5 --arm baseline
+```
 
 ## Order of operations
 

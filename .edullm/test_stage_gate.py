@@ -139,45 +139,129 @@ class TestCleanStepSeconds:
             clean_step_seconds([], eval_interval=100)
 
 
+#: ``num_flops_per_token(4096)`` for the 370M arm at the padded dolma2 vocabulary of 100,352.
+#: Built locally in ``test_the_flops_per_token_is_what_the_runs_logged`` and matched against
+#: what both shapes' runs imply from ``flopsPS / TPS``.
+FLOPS_PER_TOKEN_370M = 3_032_684_544
+
+
 class TestMFU:
-    def test_matches_what_the_run_reported(self):
-        """Cell 0 of the baseline stage, read back out of its own logged row."""
+    def test_matches_what_the_a100_run_reported(self):
+        """
+        Cell 0 of the A100 baseline, read back out of its own logged row: a clean median of
+        1.681 s over 710 rows, 98,304 tokens on the device, against the A100's 312 TF.
+        """
         got = mfu_percent(
-            flops_per_token=3_032_684_544,
-            tokens_per_device_step=196_608,
-            seconds_per_step=8.218751574874052,
-            peak_flops=stage_gate.L40S_BF16_DENSE_FLOPS,
+            flops_per_token=FLOPS_PER_TOKEN_370M,
+            tokens_per_device_step=98_304,
+            seconds_per_step=1.6810,
+            peak_flops=stage_gate.A100_BF16_DENSE_FLOPS,
         )
-        assert got == pytest.approx(20.038, abs=0.01)
+        assert got == pytest.approx(56.85, abs=0.05)
 
-    def test_the_l40s_peak_is_the_dense_bf16_figure(self):
+    def test_matches_what_the_l40s_run_reported_once_the_peak_is_right(self):
         """
-        NVIDIA publishes ``362.05 | 733*`` for BFLOAT16 Tensor Core on the L40S, starred for
-        structural sparsity. So 362.05 is already dense and must not be halved again the way a
-        sparse-quoted spec is.
-        """
-        assert stage_gate.L40S_BF16_DENSE_FLOPS == pytest.approx(362.05e12)
-        assert stage_gate.L40S_BF16_DENSE_FLOPS == pytest.approx(733e12 / 2, rel=0.02)
-
-    def test_the_old_a100_fallback_inflates_it(self):
-        """
-        What the two 370M probes were scored against before the callback grew an L40S branch:
-        the A100 default of 624 TF halved to 312. It is 13.8% below the L40S's real peak, so
-        every MFU it produced was 16% too high.
+        The same cell of stage 1 on the L40S. 20.04% was what the callback reported and what
+        this module confirmed, and both were against a peak the card cannot reach; at the
+        FP32-accumulate rate the run was really at 40.08%.
         """
         kwargs = dict(
-            flops_per_token=3_032_684_544, tokens_per_device_step=196_608, seconds_per_step=10.32
+            flops_per_token=FLOPS_PER_TOKEN_370M,
+            tokens_per_device_step=196_608,
+            seconds_per_step=8.218751574874052,
         )
-        honest = mfu_percent(**kwargs, peak_flops=stage_gate.L40S_BF16_DENSE_FLOPS)
-        fallback = mfu_percent(**kwargs, peak_flops=312e12)
-        assert fallback / honest == pytest.approx(362.05 / 312, rel=1e-6)
-        assert honest < fallback
+        assert mfu_percent(**kwargs, peak_flops=362.05e12) == pytest.approx(20.04, abs=0.01)
+        assert mfu_percent(**kwargs, peak_flops=stage_gate.L40S_BF16_DENSE_FLOPS) == pytest.approx(
+            40.08, abs=0.01
+        )
+
+    def test_the_l40s_peak_is_the_fp32_accumulate_rate_and_not_the_headline(self):
+        """
+        THE SECOND FACTOR OF TWO, WHICH IS NOT SPARSITY. The L40S datasheet leads with
+        ``362.05 | 733*`` for BFLOAT16 Tensor Core, and the star is sparsity -- so reading
+        362.05 as the dense figure is right as far as it goes and still lands two times high,
+        because that column is quoted with FP16 accumulation. NVIDIA's Ada whitepaper gives
+        AD102 at 330.3 TFLOPS for FP16 with FP16 accumulate against 165.2 with FP32, and lists
+        the L40 at ``181 | 362`` for BF16. Torch accumulates in FP32 and cannot opt out.
+        """
+        assert stage_gate.L40S_BF16_DENSE_FLOPS == pytest.approx(181.03e12, rel=1e-3)
+        assert stage_gate.L40S_BF16_DENSE_FLOPS == pytest.approx(362.05e12 / 2)
+
+    def test_the_a100_is_not_derated_because_its_die_has_no_such_penalty(self):
+        """
+        GA100 reaches its quoted BF16 rate with FP32 accumulate, so the only correction the
+        A100 takes is the sparsity one: 624 starred, 312 dense.
+        """
+        assert stage_gate.A100_BF16_DENSE_FLOPS == pytest.approx(624e12 / 2)
+        assert stage_gate.peak_bf16_flops("NVIDIA A100-SXM4-40GB") == 312e12
+        assert stage_gate.peak_bf16_flops("NVIDIA A100-SXM4-80GB") == 312e12
+
+    def test_the_pre_v250_a100_constant_inflated_mfu_by_two(self):
+        """The bug the v2.5.0 changelog records, reproduced so the direction is not guessed at."""
+        kwargs = dict(
+            flops_per_token=FLOPS_PER_TOKEN_370M,
+            tokens_per_device_step=98_304,
+            seconds_per_step=1.69,
+        )
+        honest = mfu_percent(**kwargs, peak_flops=stage_gate.A100_BF16_DENSE_FLOPS)
+        broken = mfu_percent(**kwargs, peak_flops=stage_gate.A100_BF16_DENSE_FLOPS / 2)
+        assert broken == pytest.approx(2 * honest)
 
     def test_a_faster_step_is_a_higher_mfu(self):
-        kwargs = dict(flops_per_token=3.03e9, tokens_per_device_step=196_608)
+        kwargs = dict(
+            flops_per_token=3.03e9,
+            tokens_per_device_step=196_608,
+            peak_flops=stage_gate.L40S_BF16_DENSE_FLOPS,
+        )
         assert mfu_percent(**kwargs, seconds_per_step=8.2) > mfu_percent(
             **kwargs, seconds_per_step=10.32
         )
+
+
+class TestDevicePeaks:
+    def test_the_longest_name_wins_because_l4_is_a_prefix_of_l40s(self):
+        """The trap ``SpeedMonitorCallback`` documents, asserted rather than trusted."""
+        assert stage_gate.peak_bf16_flops("NVIDIA L40S") == stage_gate.L40S_BF16_DENSE_FLOPS
+        assert stage_gate.peak_bf16_flops("NVIDIA L4") == pytest.approx(121e12)
+        assert stage_gate.peak_bf16_flops("NVIDIA L40") != stage_gate.peak_bf16_flops("NVIDIA L4")
+
+    def test_an_unknown_part_returns_none_rather_than_the_a100_default(self):
+        """
+        THE FAILURE THE CALLBACK STILL HAS AND THIS TABLE MUST NOT COPY. Its A100 figure is the
+        ``else`` at the bottom of the chain, so an unrecognised card is scored against 312 TF
+        and reports an MFU unrelated to its hardware. Here that is ``None`` and gets said.
+        """
+        assert stage_gate.peak_bf16_flops("NVIDIA GeForce RTX 4090") is None
+        assert stage_gate.peak_bf16_flops("") is None
+
+    def test_a100_is_matched_by_name_and_not_reached_by_falling_through(self):
+        """``A100`` has its own row, so the table's answer for it is an assertion about it."""
+        assert any(token == "A100" for token, _ in stage_gate.DENSE_BF16_PEAK_FLOPS)
+
+
+class TestFlopsPerToken:
+    def test_it_is_what_both_shapes_logged(self):
+        """
+        THE NUMERATOR, BUILT LOCALLY RATHER THAN DIVIDED OUT OF THE RUN. Every MFU here is
+        ``flops_per_token`` over a peak, and reading the numerator back out of the same rows
+        that carry the figure being checked would leave only the peak actually checked. Built
+        from the arm table's own factory, it has to land on what the runs imply from
+        ``flopsPS / TPS``, which both shapes put at 3,032,684,6xx before float32 rounding.
+
+        At the padded vocabulary, which is the part worth pinning: dolma2 is 100,278 tokens and
+        the run pads to a multiple of 128, and OLMo-3 unties the embeddings, so the 74 padding
+        rows are 75,776 real parameters in the LM head and 454,656 FLOPs per token. That is
+        0.015% and is the entire difference between building this with the raw vocabulary and
+        building it the way the run did.
+        """
+        model = hyper_connection_arms.hc_370M(vocab_size=100_352).build()
+        assert model.num_flops_per_token(4096) == FLOPS_PER_TOKEN_370M
+
+    def test_the_unpadded_vocabulary_is_the_near_miss(self):
+        model = hyper_connection_arms.hc_370M(vocab_size=100_278).build()
+        got = model.num_flops_per_token(4096)
+        assert got != FLOPS_PER_TOKEN_370M
+        assert got == pytest.approx(FLOPS_PER_TOKEN_370M, rel=2e-4)
 
 
 class TestProjection:
@@ -185,6 +269,32 @@ class TestProjection:
         got = project("baseline", seconds_per_step=8.2, bound_hours=19.0)
         assert got.fits
         assert got.spare_fraction > 0.2
+
+    def test_the_a100_baseline_fits_its_seven_hour_bound(self):
+        """The slowest A100 cell, at the evaluation cost that shape actually measures."""
+        got = project("baseline", seconds_per_step=1.729, bound_hours=7.0, eval_seconds=25.4)
+        assert got.fits
+        assert got.hours == pytest.approx(3.19, abs=0.05)
+
+    def test_charging_the_l40s_evaluation_on_an_a100_overstates_the_run(self):
+        """
+        Why ``eval_seconds`` had to become an argument. Fourteen evaluations at 104 s against
+        14 at 25 s is a fifth of an hour, which is 6% of a 3-hour cell and would be the whole
+        margin on a tighter bound.
+        """
+        measured = project("baseline", seconds_per_step=1.729, bound_hours=7.0, eval_seconds=25.4)
+        borrowed = project("baseline", seconds_per_step=1.729, bound_hours=7.0, eval_seconds=104.0)
+        assert borrowed.hours > measured.hours
+        assert borrowed.hours - measured.hours == pytest.approx(14 * 78.6 / 3600, abs=0.01)
+
+    def test_the_default_is_still_the_l40s_measurement(self):
+        """Nothing that priced a run before ``arm_seconds`` grew keywords changed its answer."""
+        assert project("baseline", seconds_per_step=8.2, bound_hours=19.0).hours == pytest.approx(
+            hyper_connection_arms.arm_seconds(
+                hyper_connection_arms.ARMS["baseline"], seconds_per_step=8.2
+            )
+            / 3600.0
+        )
 
     def test_the_faithful_arm_at_its_measured_step_time_also_fits(self):
         assert project("faithful", seconds_per_step=10.32, bound_hours=19.0).fits
@@ -273,7 +383,10 @@ class TestArmFromConfig:
                 arm.hyper_connections.as_config_dict(),
                 _CLASS_="olmo_core.nn.residual_stream.HyperConnectionConfig",
             )
-        return {"model": {"block": block}}
+        model = {"block": block}
+        if arm.reuse_factor is not None:
+            model["block_reuse"] = {"n_unique_blocks": 16 // arm.reuse_factor}
+        return {"model": model}
 
     @pytest.mark.parametrize("arm_name", hyper_connection_arms.FUNDED)
     def test_each_funded_arm_is_the_only_funded_arm_that_matches(self, arm_name):
@@ -298,13 +411,22 @@ class TestArmFromConfig:
         got = stage_gate.arms_consistent_with(self.config_for("decay-everything"))
         assert "decay-everything" in got and "faithful" in got
 
-    def test_the_live_baseline_config_shape_reads_as_baseline(self):
-        """The exact shape W&B holds for stage 1: a block with no lane config at all."""
+    def test_the_live_baseline_config_shape_reads_as_baseline_alone(self):
+        """
+        The exact shape W&B holds for the A100 cells: a block with no lane config and no block
+        reuse. Unambiguous, which it was not before block reuse was read -- every baseline cell
+        used to come back as ``baseline`` and ``tied-baseline`` together.
+        """
         got = stage_gate.arms_consistent_with(
             {"model": {"block": {"name": "reordered_norm", "_CLASS_": "x"}}}
         )
-        assert "baseline" in got
-        assert "faithful" not in got
+        assert got == ("baseline",)
+
+    def test_block_reuse_separates_the_tied_arms_from_the_untied_ones(self):
+        tied = stage_gate.arms_consistent_with(self.config_for("tied-baseline"))
+        assert tied == ("tied-baseline",)
+        assert "baseline" not in tied
+        assert "tied-faithful" not in stage_gate.arms_consistent_with(self.config_for("faithful"))
 
     def test_a_config_with_no_model_does_not_explode(self):
         assert stage_gate.arms_consistent_with({}) != ()

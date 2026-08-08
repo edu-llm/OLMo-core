@@ -35,11 +35,20 @@ THE FIVE CHECKS, AND WHY EACH ONE IS HERE RATHER THAN LEFT TO THE EYE.
                 so this file and the submission cannot disagree about the cost model.
 
 ``mfu``         Recomputed from the model's own ``num_flops_per_token`` and the measured step
-                time rather than trusted. See :func:`mfu_percent`.
+                time rather than trusted, against a dense BF16 peak matched to the card the
+                run actually reports. See :func:`mfu_percent`.
+
+NOTHING HERE IS TOLD WHAT SHAPE IT IS LOOKING AT. The tranche has now run on two, and the
+things that differ between them -- four devices against eight, 196,608 tokens on a device
+against 98,304, 362.05 TF against 312, a held-out evaluation costing 104 s against 25 -- are
+every input the last two checks have. So each one is read back out of the run: the device from
+its W&B metadata, the tokens on it from ``TPS / BPS``, the peak the callback used from
+``flopsPS / MFU``, the evaluation from its own logged duration. A constant here would have
+been a factor of two in the MFU the first time the tranche moved card.
 
     python .edullm/stage_gate.py --self-test                    # no network
-    python .edullm/stage_gate.py --run run_019fe279-4ef0 --cells 5
-    python .edullm/stage_gate.py --run run_019fe279-4ef0 --cells 5 --watch 300
+    python .edullm/stage_gate.py --run run_019fe2f4-f528 --cells 5 --bound-hours 7
+    python .edullm/stage_gate.py --run run_019fe2f4-f528 --cells 5 --bound-hours 7 --watch 300
 """
 
 import argparse
@@ -82,18 +91,69 @@ HELD_OUT_SOURCES: Tuple[str, ...] = (
     "wiki",
 )
 
-#: Dense BF16 peak for one L40S, in FLOP/s, and the denominator every MFU here is taken
-#: against. NVIDIA's own datasheet publishes ``362.05 | 733*`` for BFLOAT16 Tensor Core, where
-#: the starred figure is with structural sparsity -- so 362.05 is already the dense number and
-#: halving it, which is what the surrounding branches of ``SpeedMonitorCallback`` do to a
-#: sparse-quoted spec, would be wrong here. Kept as a literal rather than imported from the
-#: callback: this module exists to check that constant, and a check that reads the value it is
-#: checking is not one.
-L40S_BF16_DENSE_FLOPS: float = 362.05e12
+#: Dense BF16 peak per device, in FLOP/s, keyed by the substring of ``torch.cuda`` device name
+#: that identifies the part. Longest-prefix ordering matters and is the same trap
+#: ``SpeedMonitorCallback`` documents: "L4" is a substring of "L40S".
+#:
+#: TRANSCRIBED FROM THE DATASHEETS A SECOND TIME RATHER THAN IMPORTED FROM THE CALLBACK, and
+#: that duplication is the whole point of the module. This file exists to check that constant,
+#: and a check that reads the value it is checking is not a check. Two independent
+#: transcriptions agreeing is evidence; one transcription read twice is not.
+#:
+#: TWO INDEPENDENT FACTORS OF TWO SIT ON EVERY ONE OF THESE ROWS AND ONLY ONE OF THEM IS
+#: SPARSITY. The other is the accumulation format, and it is the one that caught this branch
+#: out. On the consumer-class dies -- AD102, which is the L40S and the L40, and GA102, which is
+#: the A10G -- the tensor cores run FP32 accumulation at exactly half the FP16-accumulate rate,
+#: and the product datasheets quote the FP16-accumulate figure. NVIDIA's Ada whitepaper says it
+#: outright in its AD102 table, 330.3 TFLOPS for FP16 with FP16 accumulate against 165.2 for
+#: FP16 or BF16 with FP32 accumulate, and its L40 appendix lists BF16 as ``181 | 362`` where
+#: the datasheet's headline for the same silicon is 362.05. Torch accumulates in FP32 always,
+#: so 181.03 is the peak an L40S can reach for the only matmul training performs.
+#:
+#: The datacenter dies have no such penalty: GA100 and GH100 hit their quoted rate with FP32
+#: accumulate, so the A100 and H100 rows are their datasheet figures halved for sparsity alone.
+#:
+#: MATCHED BY NAME, WHICH IS THE OTHER THING THIS CATCHES. The callback's A100 figure is not an
+#: A100 branch -- it is the ``else`` at the bottom of the chain, so an unrecognised card is
+#: silently scored against 312 TF and reports an MFU with no relationship to its hardware. A
+#: name that matches nothing here is reported rather than defaulted.
+DENSE_BF16_PEAK_FLOPS: Tuple[Tuple[str, float], ...] = (
+    ("H100 NVL", 1671e12 / 2),
+    ("H100 PCIe", 1513e12 / 2),
+    ("H100", 1979e12 / 2),
+    ("B200", 4.5e15 / 2),
+    ("L40S", 362.05e12 / 2),
+    ("L40", 362.05e12 / 2),
+    ("L4", 242e12 / 2),
+    ("A10G", 140e12 / 2),
+    ("A100", 624e12 / 2),
+)
 
-#: Ranks per node on ``gpu-4xl40s``. The speed monitor logs *per device*, so a step time read
-#: back out of ``throughput/device/TPS`` needs this to reach the global batch.
-RANKS_PER_NODE = 4
+#: Dense BF16 peak for one L40S at FP32 accumulate, which is 181.03 TF and not the 362.05 the
+#: datasheet leads with. Named separately because every MFU this branch has quoted for an L40S
+#: was taken against the wrong one of those two, and several tests turn on the difference.
+L40S_BF16_DENSE_FLOPS: float = 362.05e12 / 2
+
+#: Dense BF16 peak for one A100, of either memory size: 40 GB and 80 GB differ in bandwidth
+#: and capacity and not in tensor-core rate.
+A100_BF16_DENSE_FLOPS: float = 312e12
+
+
+def peak_bf16_flops(device_name: str) -> Optional[float]:
+    """
+    The dense BF16 peak for a CUDA device name, or ``None`` for a part not in the table.
+
+    :param device_name: What ``torch.cuda.get_device_name`` returned, as W&B recorded it in
+        the run's metadata -- for instance ``NVIDIA A100-SXM4-40GB``.
+
+    :returns: FLOP/s, or ``None`` when the name matches nothing, which is a thing to report
+        and not a thing to substitute a default for.
+    """
+    for token, peak in DENSE_BF16_PEAK_FLOPS:
+        if token in device_name:
+            return peak
+    return None
+
 
 #: Rows to drop from the head of a run's throughput history. The callback already skips the
 #: first optimizer step -- ``_first_step`` in ``SpeedMonitorCallback.post_step`` -- so history
@@ -262,22 +322,33 @@ def _positive(value: object) -> bool:
 def mfu_percent(
     *,
     flops_per_token: float,
-    tokens_per_device_step: int,
+    tokens_per_device_step: float,
     seconds_per_step: float,
-    peak_flops: float = L40S_BF16_DENSE_FLOPS,
+    peak_flops: float,
 ) -> float:
     """
     Model FLOPs utilization, computed the way ``SpeedMonitorCallback`` computes it.
 
     Written out here so that the reported figure can be checked against something rather than
-    read. There is history: OLMo-core v2.5.0 fixed an A100 peak-FLOPs constant in that callback
-    that was 2x too low and had been inflating every MFU it reported by 2x, and until this
-    branch added an L40S branch to the same table an L40S fell through to that A100 default and
-    was scored against 312 TF instead of 362.05.
+    read, and the denominator is where the checking is needed. THE CONSTANT HAS BEEN WRONG
+    TWICE ON THIS TABLE, in opposite directions and for different reasons.
+
+    A100: OLMo-core v2.5.0 fixed a peak that was 2x too low, which had been reporting every
+    A100 MFU at twice its true value. The current figure is ``624e12 * 0.5``, and 624 is the
+    starred with-sparsity number on NVIDIA's A100 datasheet against a dense 312 -- so the
+    halving is right and the constant is now the dense BF16 rate.
+
+    L40S: until this branch added a branch for it, an L40S matched none of the names and fell
+    through the same ``else``, so it was scored against the A100's 312 TF instead of its own
+    362.05 and read 16% high. That is the failure mode the ``else`` still has for any part not
+    in the chain, which is why :func:`peak_bf16_flops` matches by name and returns ``None``
+    rather than defaulting.
 
     :param flops_per_token: The model's own ``num_flops_per_token`` at the run's sequence
         length. Not 6N: it counts attention, and on a hyper-connection arm it counts the lanes.
-    :param tokens_per_device_step: Global batch over the number of ranks.
+    :param tokens_per_device_step: Global batch over the number of ranks. Read back out of the
+        run as ``TPS / BPS`` rather than assumed, since the two shapes this tranche has run on
+        put 196,608 and 98,304 tokens on a device for the same 786,432-token global batch.
     :param seconds_per_step: The clean median.
     :param peak_flops: The device's dense peak at the dtype actually in use.
 
@@ -315,6 +386,7 @@ def project(
     seconds_per_step: float,
     steps: int = hyper_connection_arms.TRANCHE_STEPS,
     bound_hours: float,
+    eval_seconds: float = hyper_connection_arms.MEASURED_EVAL_SECONDS,
 ) -> Projection:
     """
     Price a cell at a measured step time.
@@ -325,13 +397,26 @@ def project(
     and thirteen checkpoints, and it charges the lane monitor only to an arm that has lanes,
     which the baseline does not.
 
+    THE STEP TIME IS NOT THE ONLY THING THAT MOVES WHEN THE SHAPE DOES, which is what
+    ``eval_seconds`` is here for. ``arm_seconds`` defaults every fixed cost to its L40S
+    measurement on the argument that the evaluations are the same seven shards and the
+    checkpoints the same model to the same bucket -- true of the *work*, not of the time it
+    takes. The A100 cells run the identical evaluation in about a quarter of the L40S's 104
+    seconds, and fourteen of them is a fifth of an hour either way. Pass what the run
+    measured. The checkpoint figure is left alone deliberately: it is not logged as a metric,
+    so there is nothing to pass, and over-charging it is the safe direction.
+
     :param arm_name: The arm, as a key of :data:`hyper_connection_arms.ARMS`.
     :param seconds_per_step: The measured clean median.
     :param steps: The horizon.
     :param bound_hours: ``--hours`` as submitted.
+    :param eval_seconds: One held-out evaluation, as this shape measures it.
     """
     seconds = hyper_connection_arms.arm_seconds(
-        ARMS[arm_name], steps=steps, seconds_per_step=seconds_per_step
+        ARMS[arm_name],
+        steps=steps,
+        seconds_per_step=seconds_per_step,
+        eval_seconds=eval_seconds,
     )
     return Projection(
         hours=seconds / 3600.0, bound_hours=bound_hours, seconds_per_step=seconds_per_step
@@ -368,6 +453,21 @@ class CellHealth:
     flops_per_token: Optional[float] = None
     implied_peak_flops: Optional[float] = None
 
+    device_name: str = ""
+    """What ``torch.cuda.get_device_name`` saw, out of the run's own W&B metadata."""
+
+    tokens_per_device_step: Optional[float] = None
+    """
+    Read back as ``TPS / BPS`` rather than assumed from a rank count.
+
+    The two shapes this tranche has run on put 196,608 and 98,304 tokens on a device for the
+    same 786,432-token global batch, so a hard-coded divisor is a factor of two waiting to
+    happen in the MFU -- which is the one number this module is here to be trusted about.
+    """
+
+    eval_seconds: Optional[float] = None
+    """The most recent held-out evaluation's own logged duration, for the projection."""
+
     @property
     def loss_is_healthy(self) -> bool:
         return (
@@ -392,25 +492,37 @@ def arms_consistent_with(config: Mapping[str, object]) -> Tuple[str, ...]:
     this is the run's own testimony, and it is the one that catches a cell that resolved to an
     arm nobody meant.
 
-    It does not separate every arm in the table and does not pretend to. ``decay-everything``
-    differs from ``faithful`` only in the optimizer and ``tied-faithful`` only in block reuse,
-    so both come back alongside it. All of those are unfunded; the four that run are unique.
+    BLOCK REUSE IS READ TOO, AND IT IS WHAT KEEPS THE ANSWER FROM BEING PERMANENTLY AMBIGUOUS.
+    ``arm.apply`` writes ``model.block_reuse`` for a tied arm and leaves it absent otherwise, so
+    the pair ``(lanes, tied)`` separates ``baseline`` from ``tied-baseline`` and ``faithful``
+    from ``tied-faithful``. Without it every baseline cell comes back as two arms and the
+    check's own output trains the reader to ignore the word "ambiguous".
+
+    What remains genuinely unreadable is ``decay-everything``, which differs from ``faithful``
+    in the optimizer alone and is not a model-config difference at all. It is unfunded, so the
+    four arms that run are each uniquely identified; the function reports the tie rather than
+    breaking it, because a gate that guesses is worse than one that says it cannot tell.
 
     :param config: A run's W&B config.
 
-    :returns: Every arm name whose lane configuration matches, in table order. A single-element
+    :returns: Every arm name whose configuration matches, in table order. A single-element
         result identifies the arm; more than one means the config cannot tell them apart.
     """
-    block = config.get("model")
-    block = (block or {}).get("block") if isinstance(block, dict) else None  # type: ignore[union-attr]
+    model = config.get("model")
+    model = model if isinstance(model, dict) else {}
+    block = model.get("block")
     logged = block.get("hyper_connections") if isinstance(block, dict) else None
-
-    if not isinstance(logged, dict):
-        return tuple(name for name, arm in ARMS.items() if arm.hyper_connections is None)
+    tied = model.get("block_reuse") is not None
 
     matches: List[str] = []
     for name, arm in ARMS.items():
+        if (arm.reuse_factor is not None) != tied:
+            continue
         if arm.hyper_connections is None:
+            if not isinstance(logged, dict):
+                matches.append(name)
+            continue
+        if not isinstance(logged, dict):
             continue
         wanted = arm.hyper_connections.as_config_dict()
         if all(_same(logged.get(key), value) for key, value in wanted.items()):
@@ -547,7 +659,17 @@ def _read_one(run, index: int, eval_interval: int) -> CellHealth:
         and r.get("_step") is not None
         and math.isfinite(float(r["train/CE loss"]))
     }
-    evaluations = sum(1 for r in rows if _positive(r.get("throughput/in-loop eval time (s)")))
+    # THE STARTUP EVALUATION IS NOT A MEASUREMENT OF AN EVALUATION and is dropped from the
+    # figure the projection uses: it runs before anything is warm and the A100 cells pay 52 s
+    # for it against 25 s for the step-500 pass. The L40S probe saw the same shape, 124.9 s
+    # against 103.6. Thirteen of the fourteen an arm runs are the steady-state kind.
+    eval_times = [
+        float(r["throughput/in-loop eval time (s)"])
+        for r in rows
+        if _positive(r.get("throughput/in-loop eval time (s)"))
+    ]
+    evaluations = len(eval_times)
+    steady_state_evals = eval_times[1:] or eval_times
     step_time: Optional[CleanStepTime] = None
     if rows:
         try:
@@ -555,9 +677,17 @@ def _read_one(run, index: int, eval_interval: int) -> CellHealth:
         except ValueError:
             step_time = None
 
+    # EVERY QUANTITY THE MFU CHECK NEEDS, RECOVERED FROM THE RUN'S OWN FOUR THROUGHPUT KEYS
+    # RATHER THAN FROM A CONSTANT. The callback logs flopsPS, TPS, BPS and MFU on the same row
+    # for the same step, and they are algebraically over-determined: flopsPS/TPS is the model's
+    # num_flops_per_token, TPS/BPS is the tokens on this device this step, and
+    # flopsPS/(MFU/100) is the peak the callback divided by. So the denominator that has been
+    # wrong twice on this table can be read straight out of the run and matched against a
+    # datasheet, with nothing assumed about the shape.
     reported_mfu = None
     flops_per_token = None
     implied_peak = None
+    tokens_per_device_step = None
     timed = [r for r in rows if r.get("throughput/device/BPS") and r.get("throughput/device/MFU")]
     if timed:
         last = timed[-1]
@@ -566,6 +696,7 @@ def _read_one(run, index: int, eval_interval: int) -> CellHealth:
         flops_ps = float(last["throughput/device/flopsPS"])
         flops_per_token = flops_ps / tps
         implied_peak = flops_ps / (reported_mfu / 100.0)
+        tokens_per_device_step = tps / float(last["throughput/device/BPS"])
 
     return CellHealth(
         cell=index,
@@ -587,6 +718,9 @@ def _read_one(run, index: int, eval_interval: int) -> CellHealth:
         reported_mfu=reported_mfu,
         flops_per_token=flops_per_token,
         implied_peak_flops=implied_peak,
+        device_name=str((run.metadata or {}).get("gpu") or ""),
+        tokens_per_device_step=tokens_per_device_step,
+        eval_seconds=statistics.median(steady_state_evals) if steady_state_evals else None,
     )
 
 
@@ -740,13 +874,30 @@ def report(
                 "filter does not know about"
             )
 
+    # POOLED ACROSS CELLS, AND ONLY FROM THE ONES PAST THEIR STARTUP PASS. A cell that has run
+    # a single evaluation has measured the cold one, which costs about twice the steady-state
+    # figure; taking its number would charge the whole run at the warm-up rate. Two of the five
+    # cells are far enough along to have a real measurement, and it is the same evaluation over
+    # the same seven shards on the same shape for all five.
+    measured_evals = [
+        c.eval_seconds for c in cells if c.eval_seconds is not None and c.evaluations > 1
+    ]
+    eval_seconds = (
+        statistics.median(measured_evals)
+        if measured_evals
+        else hyper_connection_arms.MEASURED_EVAL_SECONDS
+    )
     projection = project(
-        arm_name, seconds_per_step=slowest.step_time.median, bound_hours=bound_hours  # type: ignore[union-attr]
+        arm_name,
+        seconds_per_step=slowest.step_time.median,  # type: ignore[union-attr]
+        bound_hours=bound_hours,
+        eval_seconds=eval_seconds,
     )
     mark = "ok " if projection.fits else "FAIL"
     print(
         f"[fit]          {mark}  {projection.hours:.2f} h projected against a "
-        f"{bound_hours:.0f} h bound, {100 * projection.spare_fraction:+.1f}% spare"
+        f"{bound_hours:.0f} h bound, {100 * projection.spare_fraction:+.1f}% spare "
+        f"(at the slowest cell, evaluations charged at a measured {eval_seconds:.0f} s)"
     )
     if not projection.fits:
         failures.append(
@@ -754,27 +905,41 @@ def report(
         )
 
     for c in timed:
-        if c.flops_per_token is None or c.reported_mfu is None:
+        if c.flops_per_token is None or c.tokens_per_device_step is None:
+            continue
+        datasheet = peak_bf16_flops(c.device_name)
+        if datasheet is None:
+            print(
+                f"[mfu]          FAIL  cell {c.cell}: '{c.device_name}' is not a part this "
+                "module has a dense BF16 figure for, so its MFU cannot be checked"
+            )
+            failures.append(
+                f"cell {c.cell} ran on '{c.device_name}', which matches no entry in "
+                "DENSE_BF16_PEAK_FLOPS -- and which SpeedMonitorCallback's `else` therefore "
+                f"scored against the A100's {A100_BF16_DENSE_FLOPS / 1e12:.0f} TF regardless"
+            )
             continue
         hand = mfu_percent(
             flops_per_token=c.flops_per_token,
-            tokens_per_device_step=hyper_connection_arms.TRANCHE_TOKENS_PER_STEP // RANKS_PER_NODE,
+            tokens_per_device_step=c.tokens_per_device_step,
             seconds_per_step=c.step_time.median,  # type: ignore[union-attr]
-            peak_flops=L40S_BF16_DENSE_FLOPS,
+            peak_flops=datasheet,
         )
         peak_ok = (
             c.implied_peak_flops is not None
-            and abs(c.implied_peak_flops - L40S_BF16_DENSE_FLOPS) / L40S_BF16_DENSE_FLOPS < 1e-3
+            and abs(c.implied_peak_flops - datasheet) / datasheet < 1e-3
         )
         print(
-            f"[mfu]          {'ok ' if peak_ok else 'FAIL'}  cell {c.cell}: "
-            f"{hand:.2f}% by hand at the clean median, peak "
-            f"{(c.implied_peak_flops or 0) / 1e12:.2f} TF implied by the run"
+            f"[mfu]          {'ok ' if peak_ok else 'FAIL'}  cell {c.cell}: {hand:.2f}% by hand "
+            f"at the clean median, {c.reported_mfu:.2f}% reported at the last step; "
+            f"{(c.implied_peak_flops or 0) / 1e12:.2f} TF implied against a datasheet "
+            f"{datasheet / 1e12:.2f} TF for {c.device_name}"
         )
         if not peak_ok:
             failures.append(
                 f"cell {c.cell} is scored against {(c.implied_peak_flops or 0) / 1e12:.2f} TF, "
-                f"not the L40S's {L40S_BF16_DENSE_FLOPS / 1e12:.2f} TF dense BF16"
+                f"not the {c.device_name}'s {datasheet / 1e12:.2f} TF dense BF16. THE HAND "
+                f"CALCULATION WINS: the true MFU is {hand:.2f}%."
             )
 
     print()
@@ -834,15 +999,37 @@ def self_test() -> int:
         seconds_per_step=8.2188,
         peak_flops=L40S_BF16_DENSE_FLOPS,
     )
-    assert 19.9 < hand < 20.2, f"MFU hand calculation drifted to {hand}"
+    assert 39.9 < hand < 40.2, f"L40S MFU hand calculation drifted to {hand}"
 
-    doubled = mfu_percent(
+    # The L40S run as it was actually reported, against the peak the card cannot reach.
+    as_reported = mfu_percent(
         flops_per_token=3_032_684_544,
         tokens_per_device_step=196_608,
         seconds_per_step=8.2188,
-        peak_flops=312e12 * 0.5,
+        peak_flops=362.05e12,
     )
-    assert doubled > 2 * hand, "the historical A100 constant should inflate MFU, and by a lot"
+    assert abs(as_reported * 2 - hand) < 1e-6, "the FP32-accumulate correction is a clean 2x"
+
+    # The A100 cells, at half the tokens per device for the same global batch.
+    a100 = mfu_percent(
+        flops_per_token=3_032_684_544,
+        tokens_per_device_step=98_304,
+        seconds_per_step=1.69,
+        peak_flops=A100_BF16_DENSE_FLOPS,
+    )
+    assert 56.0 < a100 < 57.5, f"A100 MFU hand calculation drifted to {a100}"
+
+    pre_v250 = mfu_percent(
+        flops_per_token=3_032_684_544,
+        tokens_per_device_step=98_304,
+        seconds_per_step=1.69,
+        peak_flops=A100_BF16_DENSE_FLOPS / 2,
+    )
+    assert abs(pre_v250 - 2 * a100) < 1e-6, "the pre-v2.5.0 A100 constant inflated MFU by 2x"
+
+    assert peak_bf16_flops("NVIDIA A100-SXM4-40GB") == A100_BF16_DENSE_FLOPS
+    assert peak_bf16_flops("NVIDIA L40S") == L40S_BF16_DENSE_FLOPS
+    assert peak_bf16_flops("NVIDIA GeForce RTX 4090") is None, "an unknown part must not default"
 
     fits = project("baseline", seconds_per_step=8.2188, bound_hours=19.0)
     assert fits.fits, "the measured step time should fit the bound"
