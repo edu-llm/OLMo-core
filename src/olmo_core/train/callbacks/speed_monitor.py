@@ -108,6 +108,24 @@ class SpeedMonitorCallback(Callback):
                 elif "B200" in device_name:
                     # data from https://www.nvidia.com/en-us/data-center/hgx/
                     self.device_peak_flops_per_second = int(4.5e15 * dense_correction)
+                # The three Ada names below are prefixes of one another, so the order of these
+                # branches is what makes them mean anything: "L4" matches an L40S too.
+                elif "L40S" in device_name:
+                    # data from https://www.nvidia.com/en-us/data-center/l40s/
+                    # Ada publishes a dense BF16 figure of its own here -- 362.05, beside 733
+                    # with sparsity, which is rounded and is not twice it -- so that figure is
+                    # used as it stands rather than corrected down from the sparse one.
+                    self.device_peak_flops_per_second = int(362.05e12)
+                elif "L40" in device_name:
+                    # data from https://resources.nvidia.com/en-us-l40/l40-datasheet
+                    self.device_peak_flops_per_second = int(362.05e12 * dense_correction)
+                elif "L4" in device_name:
+                    # data from https://www.nvidia.com/en-us/data-center/l4/
+                    self.device_peak_flops_per_second = int(242e12 * dense_correction)
+                elif "A10G" in device_name:
+                    # data from AWS's own A10G datasheet, which is a different part from the
+                    # A10 and half its BF16 rate: 70 TFLOP/s dense against the A10's 125.
+                    self.device_peak_flops_per_second = int(140e12 * dense_correction)
                 else:  # for other GPU types, assume A100
                     # data from https://www.nvidia.com/en-us/data-center/a100/
                     self.device_peak_flops_per_second = int(624e12 * dense_correction)

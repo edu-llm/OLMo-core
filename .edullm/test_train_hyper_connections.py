@@ -9,9 +9,12 @@ Run with ``pytest -v .edullm/test_train_hyper_connections.py``.
 
 import math
 import os
+import pathlib
+import shlex
 import sys
 
 import pytest
+import yaml
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
@@ -355,3 +358,69 @@ def test_fail_closed_reaches_the_monitor(monkeypatch):
     entry.train(config, opts)
 
     assert seen["callback"].fail_closed_by_step == 150
+
+
+def committed_command() -> list:
+    """
+    The words the platform will exec, from the spec it reads them out of.
+
+    :returns: The tokens inside the ``bash -lc`` wrapper.
+    """
+    spec = yaml.safe_load((pathlib.Path(_HERE) / "run.yaml").read_text())
+    wrapper = shlex.split(spec["command"])
+    assert wrapper[:2] == ["bash", "-lc"], wrapper[:2]
+    return shlex.split(wrapper[2])
+
+
+def committed_argv() -> list:
+    """
+    Everything the committed command passes to this program, launcher stripped.
+
+    :returns: The argv the entry point will see.
+    """
+    tokens = committed_command()
+    for i, token in enumerate(tokens):
+        if token.endswith("train_hyper_connections.py"):
+            return tokens[i + 1 :]
+    raise AssertionError(f"the committed command runs no known entry point: {tokens}")
+
+
+def test_the_committed_command_carries_no_word_the_parser_does_not_know():
+    """
+    ``main`` reads argv with ``parse_known_args`` and hands the leftovers to the config layer
+    as dotted overrides. So a flag this parser has never heard of is not an error: it is read
+    as an override, fails to resolve against any config field, and takes the run down inside a
+    container -- or worse, resolves against something and quietly trains a different model.
+    A typo in run.yaml has to be caught here, on a laptop, because nothing downstream will.
+    """
+    _, leftovers = entry.build_parser().parse_known_args(committed_argv())
+    assert leftovers == []
+
+
+def test_the_committed_microbatch_divides_the_rank_batch_exactly():
+    """
+    Gradient accumulation splits each rank's share of the global batch into whole microbatches,
+    so a rank batch that is not a multiple of the microbatch is either a refusal at startup or
+    a silently different batch size. Sequence length has to divide it for the same reason.
+    """
+    tokens = committed_command()
+    ranks = [t for t in tokens if t.startswith("--nproc-per-node")]
+    assert len(ranks) == 1, tokens
+    nproc = int(ranks[0].split("=")[1])
+
+    opts, _ = entry.build_parser().parse_known_args(committed_argv())
+    rank_batch, remainder = divmod(opts.global_batch_size, nproc)
+    assert remainder == 0
+    assert rank_batch % opts.rank_microbatch_size == 0
+    assert opts.rank_microbatch_size % opts.sequence_length == 0
+
+
+def test_the_default_save_interval_is_priced_in_wall_clock():
+    """
+    Pins the checkpoint count an arm writes, which is stated nowhere else. It is the number
+    the interval was chosen for, and the thing that changes if somebody moves the interval or
+    the step count without pricing the loss a timeout would take.
+    """
+    _, opts = build(BASE_ARGV + ["--arm", "baseline"])
+    assert opts.save_interval == 500
+    assert opts.steps // opts.save_interval + 1 == 26

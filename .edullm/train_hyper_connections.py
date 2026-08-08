@@ -91,6 +91,21 @@ def build_parser():
     # trained a 190M would be hard to notice from the loss curve and impossible to compare.
     # hc_370M rather than olmo3_370M because the latter asks for a flash-attn backend this
     # image does not carry, which is what killed the first rehearsal.
+    # save_interval is 500 and not the 2000 it was, because 2000 was priced against nothing.
+    # At the 15.55 s/step the first 370M probe measured, 2000 steps is 8.6 hours, so a run
+    # that hit the platform's runtime ceiling or lost its host threw away up to 8.6 hours of
+    # paid compute and resumed from that far back -- against a workload profile that declares
+    # a 30-minute checkpoint interval, which is roughly 115 steps at that speed. 500 does not
+    # reach the declared interval either; it reaches it only if the step time comes down to
+    # about 3.6 s, which is what the microbatch probe in run.yaml is trying to find out. It
+    # is the value that keeps the worst loss under a fifth of what it was without making a
+    # checkpoint the dominant cost of a step.
+    #
+    # It buys 26 checkpoints per arm -- 25 on the interval plus the one at max_steps, from
+    # 12,715 steps -- where 2000 bought 7. Nothing anywhere else states that count, so it is
+    # stated here. All 26 are kept: CheckpointerCallback runs with max_checkpoints=None
+    # because the workload role cannot prune, for the reason train_on_corpus.py gives beside
+    # that field, so the storage grows by the same factor as the count.
     parser.set_defaults(
         model_factory="hc_370M",
         sequence_length=4096,
@@ -98,7 +113,7 @@ def build_parser():
         rank_microbatch_size=8 * 1024,
         steps=DEFAULT_STEPS,
         warmup_steps=round(DEFAULT_STEPS * 0.02),
-        save_interval=2000,
+        save_interval=500,
         learning_rate=DEFAULT_LEARNING_RATE,
     )
 

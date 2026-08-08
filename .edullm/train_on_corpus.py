@@ -856,7 +856,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-factory", default="olmo2_190M")
     parser.add_argument("--sequence-length", type=int, default=2048)
     parser.add_argument("--steps", type=int, default=200)
-    parser.add_argument("--save-interval", type=int, default=100)
+    parser.add_argument(
+        "--save-interval",
+        type=int,
+        default=100,
+        help="How often, in steps, to write a permanent checkpoint. PRICE THIS IN WALL CLOCK "
+        "AND NOT IN STEPS: the interval times the measured seconds per step is how much paid "
+        "compute a timeout or a lost host throws away, and the workload profile declares a "
+        "30-minute checkpoint interval that a step count cannot honour on its own. "
+        "`ephemeral_save_interval` is not the cheaper way to close the gap -- the workload "
+        "role is denied the delete that pruning an ephemeral checkpoint needs, which is why "
+        "it is None and max_checkpoints is None; see the comment beside CheckpointerCallback "
+        "above. Every checkpoint this writes is kept.",
+    )
     parser.add_argument("--warmup-steps", type=int, default=20)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--global-batch-size", type=int, default=256 * 1024)
