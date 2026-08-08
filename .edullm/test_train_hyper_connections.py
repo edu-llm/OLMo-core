@@ -471,25 +471,37 @@ def test_fail_closed_reaches_the_monitor(monkeypatch):
     assert seen["callback"].fail_closed_by_step == 150
 
 
-def committed_command() -> list:
+def spec_of(name: str = "run.yaml") -> dict:
+    """
+    One submission spec, parsed.
+
+    :param name: The file, relative to ``.edullm/``.
+    """
+    return yaml.safe_load((pathlib.Path(_HERE) / name).read_text())
+
+
+def committed_command(name: str = "run.yaml") -> list:
     """
     The words the platform will exec, from the spec it reads them out of.
 
+    :param name: The spec file, relative to ``.edullm/``.
+
     :returns: The tokens inside the ``bash -lc`` wrapper.
     """
-    spec = yaml.safe_load((pathlib.Path(_HERE) / "run.yaml").read_text())
-    wrapper = shlex.split(spec["command"])
+    wrapper = shlex.split(spec_of(name)["command"])
     assert wrapper[:2] == ["bash", "-lc"], wrapper[:2]
     return shlex.split(wrapper[2])
 
 
-def committed_argv() -> list:
+def committed_argv(name: str = "run.yaml") -> list:
     """
     Everything the committed command passes to this program, launcher stripped.
 
+    :param name: The spec file, relative to ``.edullm/``.
+
     :returns: The argv the entry point will see.
     """
-    tokens = committed_command()
+    tokens = committed_command(name)
     for i, token in enumerate(tokens):
         if token.endswith("train_hyper_connections.py"):
             return tokens[i + 1 :]
@@ -634,6 +646,249 @@ def test_the_committed_run_fits_one_attempt_of_the_bound_it_will_be_submitted_un
     opts, _ = entry.build_parser().parse_known_args(committed_argv())
     hours = arms.arm_seconds(arms.ARMS[opts.arm], opts.steps) / 3600
     assert hours < 0.9 * 21.0, f"{opts.arm} needs {hours:.1f}h against a 21h attempt"
+
+
+STAGED = sorted(arms.STAGED_TRANCHES)
+
+
+@pytest.mark.parametrize("index", range(9))
+def test_every_cell_of_the_nine_resolves_to_its_own_arm_and_seed(index: int):
+    """
+    THE WHOLE POINT OF THE NINE-CELL FAN-OUT, AND THE FAILURE IT HAS TO RULE OUT IS SILENT.
+    One submission, one command, nine cells, nine different runs. Batch is the only thing that
+    knows which cell a process is and it says so in AWS_BATCH_JOB_ARRAY_INDEX; everything else
+    about the cell is derived from the arm table here.
+    """
+    name, seed = arms.cell(index)
+    assert (name, seed) == arms.TRANCHE_CELLS[index]
+    assert name in arms.FUNDED
+    assert 0 <= seed < arms.ARMS[name].seeds
+
+    resolved_arm, resolved_seed, provenance = entry.resolve_cell(
+        None, None, fanout_env(index, parameter=entry.FANOUT_INDEX_PARAMETER_CELL)
+    )
+    assert (resolved_arm, resolved_seed) == (name, seed)
+    assert entry.FANOUT_INDEX_VARIABLE in provenance
+
+
+def test_the_cell_table_is_the_tranche_and_covers_each_arm_at_each_seed():
+    assert len(arms.TRANCHE_CELLS) == arms.total_runs() == 9
+    assert arms.TRANCHE_CELLS[0] == ("baseline", 0)
+    assert arms.TRANCHE_CELLS[-1] == ("output-only", 2)
+    assert len(set(arms.TRANCHE_CELLS)) == len(arms.TRANCHE_CELLS)
+    for name in arms.FUNDED:
+        assert sorted(s for a, s in arms.TRANCHE_CELLS if a == name) == [0, 1, 2]
+
+
+def test_the_nine_cells_are_actually_nine_different_models(monkeypatch):
+    """
+    Reading the pair back is not enough: the failure this guards is cells that train the same
+    thing, so what has to differ is the arm together with the three numbers the model, the
+    global RNG and the shuffle are drawn from. Three cells landing on one seed report a noise
+    floor of zero, and every contrast in the analysis plan is then divided by it.
+    """
+    monkeypatch.setenv(entry.FANOUT_PARAMETER_VARIABLE, entry.FANOUT_INDEX_PARAMETER_CELL)
+    seen = set()
+    for index in range(9):
+        monkeypatch.setenv(entry.FANOUT_INDEX_VARIABLE, str(index))
+        config, opts = build(BASE_ARGV)
+        seen.add((opts.arm, config.init_seed, config.model.init_seed, opts.data_seed))
+
+    assert len(seen) == 9, f"cells collided: {sorted(seen)}"
+    assert {arm for arm, *_ in seen} == set(arms.FUNDED)
+
+
+def test_a_cell_outside_the_tranche_is_refused_rather_than_wrapped():
+    """
+    An index past the end means --fanout-size and the arm table disagree about how many runs
+    there are, which is a submission that runs the wrong experiment rather than a crash.
+    """
+    with pytest.raises(train_on_corpus.Refusal, match="--fanout-size 9"):
+        entry.resolve_cell(None, None, fanout_env(9, parameter=entry.FANOUT_INDEX_PARAMETER_CELL))
+
+
+@pytest.mark.parametrize("flag,value", [("arm", "faithful"), ("seed", 1)])
+def test_a_flag_the_cell_index_owns_is_refused_inside_the_nine_cell_fanout(flag, value):
+    """
+    Every cell of a fan-out is handed the same command, so an --arm written into run.yaml runs
+    one arm nine times and a --seed runs one replicate nine times. Neither raises, neither
+    bends a curve, and the tranche reports a noise floor it did not measure.
+    """
+    kwargs = {"explicit_arm": None, "explicit_seed": None, f"explicit_{flag}": value}
+    with pytest.raises(train_on_corpus.Refusal, match="noise floor"):
+        entry.resolve_cell(
+            environ=fanout_env(0, parameter=entry.FANOUT_INDEX_PARAMETER_CELL), **kwargs
+        )
+
+
+def test_no_arm_and_no_cell_index_is_refused_rather_than_defaulted():
+    """
+    There is no arm this experiment can silently mean, and the parser can no longer require
+    one because the nine-cell command deliberately carries none.
+    """
+    with pytest.raises(train_on_corpus.Refusal, match="nothing says which arm"):
+        entry.resolve_cell(None, None, {})
+
+
+def test_the_three_cell_seed_fanout_still_works_beside_the_nine_cell_one():
+    """
+    The form commit d63dbb592 was written for is the fallback if the nine-cell array ever has
+    to be split, so it has to keep working rather than merely keep parsing.
+    """
+    name, seed, provenance = entry.resolve_cell("faithful", None, fanout_env(2))
+    assert (name, seed) == ("faithful", 2)
+    assert entry.FANOUT_INDEX_VARIABLE in provenance
+
+
+@pytest.mark.parametrize("shape", STAGED)
+def test_both_staged_tranches_are_the_shape_this_table_prices(shape: str):
+    """
+    THE FILE THIS CATCHES IS A HALF-EDITED ONE, and it catches it on a laptop rather than at
+    admission or eighteen hours into nine machines. Two variants are staged because which one
+    runs is decided by a probe that is still going, and the one that loses is edited by nobody
+    and read by nobody until the day it is needed -- which is exactly the file that drifts.
+
+    Everything here is read out of ``STAGED_TRANCHES``, so the cost model, the submitted
+    command and this test are one statement rather than three. Nothing at submission compares
+    them: ``edullm check`` prices a ceiling out of the workload profile and never reads either.
+    """
+    staged = arms.STAGED_TRANCHES[shape]
+    spec = spec_of(staged.spec)
+    opts, leftovers = entry.build_parser().parse_known_args(committed_argv(staged.spec))
+
+    assert spec["schema_version"] == 1
+    assert spec["workload_profile"] == "olmo-core-train"
+    assert spec["suggested_compute"] == staged.compute_profile == shape
+
+    # A flag the parser has never heard of is not an error: parse_known_args hands it on as a
+    # dotted override, where it either fails inside a container or resolves against something
+    # and quietly trains a different model.
+    assert leftovers == []
+
+    assert opts.steps == staged.steps
+    assert opts.warmup_steps == staged.warmup_steps
+    assert opts.rank_microbatch_size == staged.rank_microbatch_size
+    assert opts.save_interval == arms.TRANCHE_SAVE_INTERVAL
+    assert opts.eval_interval == arms.TRANCHE_EVAL_INTERVAL
+    assert opts.monitor_interval == arms.TRANCHE_MONITOR_INTERVAL
+    assert opts.fail_closed_by_step == arms.TRANCHE_FAIL_CLOSED_BY_STEP
+    assert opts.global_batch_size == arms.TRANCHE_TOKENS_PER_STEP
+    assert opts.sequence_length == 4096
+    assert opts.model_factory == "hc_370M"
+
+    # Defaults, written into the command anyway: a default is a number a later commit may
+    # move, and nine runs compared against each other have to have been compared at the same
+    # settings. What is in the command text is what the lineage record seals.
+    argv = committed_argv(staged.spec)
+    for flag in (
+        "--weight-decay",
+        "--z-loss-multiplier",
+        "--held-out-shards",
+        "--bytes-per-token",
+        "--eval-interval",
+        "--monitor-interval",
+        # The platform reads command words to decide what a shape can do and cannot see a
+        # dtype set in code, so a command that does not name it is accepted onto a T4.
+        "--param-dtype",
+    ):
+        assert flag in argv, flag
+    assert opts.weight_decay == entry.DEFAULT_WEIGHT_DECAY
+    assert opts.z_loss_multiplier == 1e-5
+    assert opts.held_out_shards == arms.HELD_OUT_SHARDS
+    assert opts.bytes_per_token == arms.DOLMA2_BYTES_PER_TOKEN
+
+    # Unset means ordinary RoPE. Setting it would put an unmeasured second change inside the
+    # contrast H1 and H2a are about.
+    assert opts.partial_rotary_factor is None
+
+    # $EDULLM_CHECKPOINT_DIR has to be expanded by a shell for the platform's
+    # require_a_save_folder_a_retry_can_find to see it, and a retry needs the same folder.
+    assert "$EDULLM_CHECKPOINT_DIR" in spec["command"]
+
+
+@pytest.mark.parametrize("shape", STAGED)
+def test_neither_staged_tranche_carries_the_flags_the_cell_index_owns(shape: str):
+    """
+    THE TWO WORDS THAT MUST NOT BE IN EITHER FILE. Nine cells are handed one command, so an
+    --arm here runs one arm nine times and a --seed runs one replicate nine times: no error,
+    no visibly wrong curve, nine lines lying on top of each other that read as a very clean
+    experiment. ``resolve_cell`` refuses both at run time; this catches them before a queue
+    wait.
+    """
+    argv = committed_argv(arms.STAGED_TRANCHES[shape].spec)
+    assert "--arm" not in argv
+    assert "--seed" not in argv
+
+    opts, _ = entry.build_parser().parse_known_args(argv)
+    assert opts.arm is None
+    assert opts.seed is None
+
+
+@pytest.mark.parametrize("shape", STAGED)
+def test_both_staged_tranches_start_one_process_per_device(shape: str):
+    """
+    The refusal this catches has already cost a submission: ``edullm check`` refused a 4-rank
+    command against gpu-8xa100 with ``process_per_device``. The platform's
+    ``require_a_process_for_every_device`` reads the device count out of its own
+    CONTAINER_SHAPES and compares it against the count it parses out of the command, so a rank
+    count left behind by a change of shape is exactly the file this catches -- and the two
+    staged variants differ in precisely that.
+    """
+    staged = arms.STAGED_TRANCHES[shape]
+    tokens = committed_command(staged.spec)
+    assert "--standalone" in tokens, "a single-host launcher needs no rendezvous endpoint"
+
+    ranks = [t for t in tokens if t.startswith("--nproc-per-node")]
+    assert len(ranks) == 1, tokens
+    nproc = int(ranks[0].split("=")[1])
+    assert nproc == arms.GPUS_PER_COMPUTE_PROFILE[staged.compute_profile]
+
+    # Gradient accumulation splits each rank's share into whole microbatches, so a rank batch
+    # that is not a multiple of the microbatch is a refusal at startup or a silently different
+    # batch size.
+    opts, _ = entry.build_parser().parse_known_args(committed_argv(staged.spec))
+    rank_batch, remainder = divmod(opts.global_batch_size, nproc)
+    assert remainder == 0
+    assert rank_batch % opts.rank_microbatch_size == 0
+    assert opts.rank_microbatch_size % opts.sequence_length == 0
+
+
+@pytest.mark.parametrize("shape", STAGED)
+def test_each_staged_tranche_fits_one_attempt_of_the_bound_it_is_submitted_under(shape: str):
+    """
+    A cell killed by the attempt timeout is not reliably retried: the platform's retry table
+    grants a second attempt for a lost host and reaches a timeout only through a
+    no-exit-code fall-through that torchrun's non-zero exit on SIGTERM races. So each variant
+    has to finish inside one attempt of its own ``--hours``, at the step time it is priced
+    against -- the measurement for the L40S, and for the A100 the threshold the probe has to
+    clear, which is the slowest step that would send the tranche there at all.
+    """
+    staged = arms.STAGED_TRANCHES[shape]
+    assert (
+        staged.hours_per_run < staged.hours
+    ), f"{shape} needs {staged.hours_per_run:.1f}h against a {staged.hours:.0f}h attempt"
+    # And the bound is one the platform will accept: --hours may only lower the workload's own.
+    assert staged.hours <= 24.0
+
+
+@pytest.mark.parametrize("shape", STAGED)
+def test_a_retry_of_either_variant_loses_a_bounded_and_stated_amount_of_work(shape: str):
+    """
+    The resume is sound -- ``Trainer.fit`` loads from the save folder with load_trainer_state
+    and load_optim_state hard-coded true, and each cell's prefix is re-derived identically by
+    a retry of the same child -- so what a lost host costs is one save interval and no more.
+
+    What the resume does NOT restore is ``max_steps``: ``Trainer.state_dict`` writes it and
+    ``load_state_dict`` never reads it back, and ``Scheduler.set_lr`` reads it live on every
+    step. So every attempt has to be launched with the same explicit ``--steps``, which is
+    what pins it into the command text here rather than leaving it to the parser default.
+    """
+    staged = arms.STAGED_TRANCHES[shape]
+    assert staged.checkpoint_exposure_hours < 1.5
+    assert "--steps" in committed_argv(staged.spec)
+
+    checkpoints = staged.steps // arms.TRANCHE_SAVE_INTERVAL + 1
+    assert checkpoints == (13 if staged.steps == arms.TRANCHE_STEPS else 26)
 
 
 def test_the_step_time_that_would_buy_the_full_horizon_is_written_down_in_advance():

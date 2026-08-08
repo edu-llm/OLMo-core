@@ -292,6 +292,45 @@ CUT_ORDER = [
 FUNDED = [name for name, arm in ARMS.items() if arm.seeds > 0]
 
 
+#: Every ``(arm, seed)`` pair the tranche runs, in the order the fan-out hands them out.
+#:
+#: NINE RUNS ARE ONE SUBMISSION AND THE CELL INDEX IS WHAT TELLS THEM APART. The platform
+#: fans a submission out with ``--fanout-size 9 --fanout-index-parameter arm-and-seed`` and
+#: gives each cell its own ``AWS_BATCH_JOB_ARRAY_INDEX``; ``resolve_cell`` in
+#: ``train_hyper_connections.py`` reads that integer and comes back here for the pair it
+#: names. So the submitted command carries neither ``--arm`` nor ``--seed``, and the nine
+#: cells are nine different runs of one commit rather than three commits of three.
+#:
+#: DERIVED FROM THE SEED COUNTS RATHER THAN WRITTEN OUT, so an arm that gains or loses a seed
+#: moves the cell list and ``total_runs()`` together and cannot move only one of them. The
+#: order is the arm table's own, which is the pre-registration's numbering, so cell 0 is
+#: ``baseline`` seed 0 and cell 8 is ``output-only`` seed 2.
+TRANCHE_CELLS: List[Tuple[str, int]] = [
+    (name, seed) for name, arm in ARMS.items() for seed in range(arm.seeds)
+]
+
+
+def cell(index: int) -> Tuple[str, int]:
+    """
+    Which arm and which replicate the fan-out cell at this index is.
+
+    :param index: ``$AWS_BATCH_JOB_ARRAY_INDEX``, contiguous from zero, which is what Batch
+        requires of an array.
+
+    :returns: ``(arm_name, seed)``.
+
+    :raises IndexError: If the index is outside the tranche, which means the submission's
+        ``--fanout-size`` and this table disagree about how many runs there are.
+    """
+    if not 0 <= index < len(TRANCHE_CELLS):
+        raise IndexError(
+            f"cell {index} of a tranche that has {len(TRANCHE_CELLS)} cells. The submission's "
+            f"--fanout-size and hyper_connection_arms.TRANCHE_CELLS disagree; submit with "
+            f"--fanout-size {len(TRANCHE_CELLS)}."
+        )
+    return TRANCHE_CELLS[index]
+
+
 #: The only attention backend this platform's training image can run.
 #:
 #: ``olmo3_370M`` asks for flash-2, and the first rehearsal died on it in eighteen minutes:
@@ -596,6 +635,29 @@ TRANCHE_SAVE_INTERVAL = 500
 TRANCHE_EVAL_INTERVAL = 500
 TRANCHE_MONITOR_INTERVAL = 50
 
+#: Warmup as a fraction of the horizon rather than as a step count, so the schedule keeps its
+#: shape when the horizon moves between the two staged tranches. 6,000 steps is 120 and 12,715
+#: is 254.
+TRANCHE_WARMUP_FRACTION = 0.02
+
+#: The step by which the lane monitor stops warning and starts refusing.
+#:
+#: THE ARMS ARE THE FIRST RUNS THIS GUARD POLICES FROM THE START, which is why it is here
+#: rather than left off. An arm whose lanes never differentiate is the baseline with dead
+#: parameters, and no downstream number from it is interpretable in either direction -- so
+#: finding out at step 400 costs about an hour and finding out at the end costs the arm. It
+#: is after warmup on both horizons and inside the first checkpoint interval on both.
+#:
+#: IT IS INERT ON ``baseline``, WHICH IS WHAT LETS ONE COMMAND SERVE ALL NINE CELLS.
+#: ``train_hyper_connections.train`` attaches the monitor only for an arm with lanes, so the
+#: three baseline cells parse this flag and never build a callback that could read it.
+#:
+#: The guard passes on a majority of blocks and then disables itself. At 370M the probe had
+#: fourteen of sixteen blocks over the floor against the half it needs, so the margin is wide;
+#: the two that were under are blocks 01 and 02, and hyper-connections.md records why a
+#: shallow dead zone is a finding about depth rather than a reason to abort.
+TRANCHE_FAIL_CLOSED_BY_STEP = 400
+
 #: The throughput probe, which is the other thing ``.edullm/run.yaml`` is ever allowed to be.
 #:
 #: A probe is not an arm and trains nothing anybody reads. It exists because the step time on
@@ -639,7 +701,9 @@ A100_STEP_SECONDS_FOR_FULL_HORIZON = 5.76
 TRANCHE_TOKENS_PER_STEP = 768 * 1024
 
 
-def arm_seconds(arm: Arm, steps: int = TRANCHE_STEPS) -> float:
+def arm_seconds(
+    arm: Arm, steps: int = TRANCHE_STEPS, seconds_per_step: float = MEASURED_SECONDS_PER_STEP
+) -> float:
     """
     How long one run of this arm takes, from the measurements above.
 
@@ -650,6 +714,12 @@ def arm_seconds(arm: Arm, steps: int = TRANCHE_STEPS) -> float:
 
     :param arm: The arm.
     :param steps: How many optimizer steps it runs for.
+    :param seconds_per_step: The step time to price against. Defaults to the L40S measurement,
+        which is the only one there is; the A100 tranche is priced against
+        :data:`A100_STEP_SECONDS_FOR_FULL_HORIZON`, which is the threshold the probe has to
+        clear and therefore the slowest step that would send the tranche to that shape at all.
+        Everything that is not a step is left at its measured value, because the evaluations
+        are the same seven shards and the checkpoints are the same model to the same bucket.
 
     :returns: Seconds.
     """
@@ -660,7 +730,7 @@ def arm_seconds(arm: Arm, steps: int = TRANCHE_STEPS) -> float:
         monitor = (steps // TRANCHE_MONITOR_INTERVAL) * MONITOR_SECONDS_PER_FIRING
     return (
         MEASURED_STARTUP_SECONDS
-        + steps * MEASURED_SECONDS_PER_STEP
+        + steps * seconds_per_step
         + evaluations * MEASURED_EVAL_SECONDS
         + checkpoints * MEASURED_CHECKPOINT_SECONDS
         + monitor
@@ -708,11 +778,15 @@ def seconds_per_step_to_fit(
     return (hours * 3600.0 * (1.0 - margin) - fixed) / steps
 
 
-def tranche_hours(steps: int = TRANCHE_STEPS) -> float:
+def tranche_hours(
+    steps: int = TRANCHE_STEPS, seconds_per_step: float = MEASURED_SECONDS_PER_STEP
+) -> float:
     """
     GPU-node hours for every funded run in the table, seeds counted.
     """
-    return sum(arm.seeds * arm_seconds(arm, steps) for arm in ARMS.values()) / 3600.0
+    return (
+        sum(arm.seeds * arm_seconds(arm, steps, seconds_per_step) for arm in ARMS.values()) / 3600.0
+    )
 
 
 def estimated_cost_usd(hourly_rate_usd: float, steps: int = TRANCHE_STEPS) -> float:
@@ -736,6 +810,188 @@ def estimated_cost_usd(hourly_rate_usd: float, steps: int = TRANCHE_STEPS) -> fl
     :returns: Dollars.
     """
     return tranche_hours(steps) * hourly_rate_usd
+
+
+@dataclass(frozen=True)
+class StagedTranche:
+    """One of the two nine-run tranche specs sitting committed next to ``run.yaml``.
+
+    Both are staged rather than one, because which shape the tranche runs on is decided by a
+    throughput probe that is still running, and the answer has to become a submission in
+    minutes rather than in an editing session. Whichever way the probe reads, one ``cp`` over
+    ``.edullm/run.yaml`` and one ``edullm submit`` is the whole of it.
+    """
+
+    spec: str
+    """The file, relative to ``.edullm/``."""
+
+    compute_profile: str
+    """The shape. Its device count is in :data:`GPUS_PER_COMPUTE_PROFILE`."""
+
+    steps: int
+    """The horizon, which is the thing the two variants disagree about."""
+
+    rank_microbatch_size: int
+    """
+    Tokens per rank per gradient-accumulation microbatch. Not portable between the two: 16,384
+    is what ran on a 48 GB L40S and the same arithmetic puts it at 90% of a 40 GB A100, so the
+    A100 spec is 12,288. The memory model is in the header of the commit that set it,
+    ``075f52aa7``, and moving this number without re-deriving it is how an arm meets
+    ``OnReason "OutOfMemoryError*" EXIT``.
+    """
+
+    hours: float
+    """
+    The ``--hours`` this variant is submitted under. It is a per-attempt runtime bound that
+    ``--hours`` may only lower, and it is also the hours factor in the approved ceiling, so it
+    is chosen against both the run's own length and the budget.
+    """
+
+    attempts: int
+    """
+    The ``--attempts`` this variant is submitted under, which multiplies the ceiling directly.
+    """
+
+    seconds_per_step: float
+    """
+    The step time this variant is priced against. Measured for the L40S; for the A100 it is
+    :data:`A100_STEP_SECONDS_FOR_FULL_HORIZON`, the threshold the probe has to clear, which is
+    the slowest step that would send the tranche to that shape at all and therefore the
+    conservative end of what it could turn out to be.
+    """
+
+    @property
+    def warmup_steps(self) -> int:
+        """Warmup at :data:`TRANCHE_WARMUP_FRACTION` of the horizon."""
+        return round(self.steps * TRANCHE_WARMUP_FRACTION)
+
+    @property
+    def hours_per_run(self) -> float:
+        """The longest of the funded arms, which is the one the bound has to hold."""
+        return (
+            max(arm_seconds(ARMS[name], self.steps, self.seconds_per_step) for name in FUNDED)
+            / 3600.0
+        )
+
+    @property
+    def checkpoint_exposure_hours(self) -> float:
+        """
+        The most work a retry after a mid-run failure throws away.
+
+        One save interval of steps, because ``Trainer.fit`` resumes from the last permanent
+        checkpoint in the save folder and the fan-out prologue gives each cell a checkpoint
+        prefix a retry of that cell re-derives identically.
+        """
+        return TRANCHE_SAVE_INTERVAL * self.seconds_per_step / 3600.0
+
+    def maximum_compute_cost_usd(self, hourly_rate_usd: float) -> float:
+        """
+        The ceiling admission prices, which is the number the budget has to clear.
+
+        ``rate x nodes x hours x attempts x cells``, from
+        ``edullm_platform.contracts.workload.compute_maximum_compute_cost_usd``. Every one of
+        the two shapes here is a single node.
+
+        THE RATE IS AN ARGUMENT FOR THE REASON :func:`estimated_cost_usd` GIVES. Read
+        ``cost.hourly_rate_usd`` out of ``edullm check --json`` and pass it in.
+        """
+        return hourly_rate_usd * self.hours * self.attempts * len(TRANCHE_CELLS)
+
+    def expected_cost_usd(self, hourly_rate_usd: float) -> float:
+        """
+        What the tranche is expected to actually spend, which is a different number.
+
+        BILLING IS WALL CLOCK AND NOT THE REQUESTED CEILING.
+        ``edullm_platform.run_costs._attempt_seconds`` sums each attempt's
+        ``ended_at - started_at`` and ``_cost`` multiplies that by the hourly rate, so an hour
+        of ``--hours`` that a run does not use costs nothing. The ceiling above is what gets
+        approved; this is what arrives on the bill.
+        """
+        return tranche_hours(self.steps, self.seconds_per_step) * hourly_rate_usd
+
+
+#: The two staged tranches, keyed by the shape they run on.
+#:
+#: ONE SOURCE OF TRUTH FOR TWO FILES NOBODY WILL RE-READ UNDER TIME PRESSURE.
+#: ``test_both_staged_tranches_are_the_shape_this_table_prices`` walks this dict, opens each
+#: spec and checks every field against it, so a half-edited variant fails on a laptop rather
+#: than at admission or, worse, eighteen hours into nine machines.
+STAGED_TRANCHES: Dict[str, StagedTranche] = {
+    "gpu-4xl40s": StagedTranche(
+        spec="run.l40s-tranche.yaml",
+        compute_profile="gpu-4xl40s",
+        steps=TRANCHE_STEPS,
+        rank_microbatch_size=16 * 1024,
+        hours=21.0,
+        attempts=2,
+        seconds_per_step=MEASURED_SECONDS_PER_STEP,
+    ),
+    "gpu-8xa100": StagedTranche(
+        spec="run.a100-tranche.yaml",
+        compute_profile="gpu-8xa100",
+        steps=FULL_HORIZON_STEPS,
+        rank_microbatch_size=12 * 1024,
+        # 24 AND ONE ATTEMPT, AND THE 24 IS NOT A DEFAULT -- IT IS THE SMALLEST BOUND THAT
+        # HOLDS THIS RUN AT THE STEP TIME THAT WOULD SEND IT HERE. At
+        # A100_STEP_SECONDS_FOR_FULL_HORIZON an arm is 21.6 hours, which is where that
+        # threshold came from: 10% of 24 left unspent. A bound of 20 would price under the
+        # budget and kill nine cells at step ~11,700 of 12,715, having paid for all of it.
+        #
+        # ONE ATTEMPT RATHER THAN THE PROFILE'S TWO, AND IT IS THE BUDGET THAT DECIDES IT
+        # HERE RATHER THAN THE RETRY RULES. The ceiling multiplies by attempts, so two is
+        # twice $4,742.84 for a second attempt that RETRY_ONLY_WHAT_A_RETRY_FIXES grants only
+        # for a lost host -- see TRANCHE_STEPS for the reading. On the L40S variant the
+        # second attempt fits under $4,000 and is kept; here it does not and is not.
+        #
+        # THIS IS THE ONE STAGED NUMBER THAT DOES NOT CLEAR THE STATED $4,000, AND IT CANNOT
+        # BE MADE TO WITHOUT MOVING THE HORIZON. See seconds_per_step_within_budget: at the
+        # A100 rate, nine cells of 12,715 steps come in under $4,000 of *actual* spend only
+        # if the probe measures about 5.4 s/step or better, and under a $4,000 approved
+        # *ceiling* only at --hours 20, which is 5.3 s/step with no margin at all. Between
+        # that and the 5.76 threshold the horizon fits the machine and not the budget, and
+        # that is a conversation rather than a staging decision.
+        hours=24.0,
+        attempts=1,
+        seconds_per_step=A100_STEP_SECONDS_FOR_FULL_HORIZON,
+    ),
+}
+
+
+def seconds_per_step_within_budget(
+    budget_usd: float,
+    hourly_rate_usd: float,
+    steps: int = FULL_HORIZON_STEPS,
+    arm: Optional["Arm"] = None,
+    cells: int = 0,
+) -> float:
+    """
+    The slowest step at which the whole tranche's expected spend still fits a budget.
+
+    A COMPANION TO :func:`seconds_per_step_to_fit` AND A DIFFERENT QUESTION. That one asks
+    what fits inside a runtime bound, which is about the machine; this asks what fits inside
+    a number of dollars, which is about the rate. They can disagree, and on the A100 shape
+    they do: the horizon reaches the 24-hour bound at a step time that is already over
+    $4,000, because that shape is 2.1 times the L40S rate and rather less than 2.1 times as
+    fast.
+
+    Priced on wall clock rather than on the ceiling, because that is what
+    ``edullm_platform.run_costs`` bills. The ceiling a submission is *approved* against is
+    :meth:`StagedTranche.maximum_compute_cost_usd` and is a larger number.
+
+    :param budget_usd: What the tranche may spend.
+    :param hourly_rate_usd: ``cost.hourly_rate_usd`` from ``edullm check --json``.
+    :param steps: The horizon.
+    :param arm: Which arm to price, since only the ones with lanes pay the monitor. Defaults
+        to ``faithful``, the more expensive of the two.
+    :param cells: How many runs. Defaults to the whole tranche.
+
+    :returns: Seconds per step. Negative means the fixed costs alone are over budget.
+    """
+    arm = ARMS["faithful"] if arm is None else arm
+    cells = len(TRANCHE_CELLS) if cells < 1 else cells
+    seconds_affordable = budget_usd * 3600.0 / (hourly_rate_usd * cells)
+    fixed = arm_seconds(arm, steps, seconds_per_step=0.0)
+    return (seconds_affordable - fixed) / steps
 
 
 def total_runs() -> int:

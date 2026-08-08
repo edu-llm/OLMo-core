@@ -1,0 +1,194 @@
+# THE NINE-RUN TRANCHE AT THE FULL 10B HORIZON, ON gpu-8xa100. Staged, not submitted.
+#
+# It is one of two committed variants and only one of them will ever run. Which one is
+# decided by the 100-step throughput probe on gpu-8xa100 -- run_019fe262-778d, commit
+# 075f52aa7 -- against `A100_STEP_SECONDS_FOR_FULL_HORIZON` in hyper_connection_arms.py,
+# which is 5.76 s/step and was written down before the probe started. Read the probe's
+# CLEAN median: steps 2-49 and 51-99, dropping step 1 which pays for torch.compile and
+# steps 50 and 100 which are the evaluator's and the monitor's. A median that includes 50
+# or 100 is measuring an instrument, which is the mistake that re-planned a whole tranche
+# once already.
+#
+#   cp .edullm/run.a100-tranche.yaml .edullm/run.yaml && git commit && git push
+#   edullm submit --experiment hyper-connections-370m --dataset regmix-10b-v1 \
+#     --team input-core --hours 24 --attempts 1 \
+#     --fanout-size 9 --fanout-index-parameter arm-and-seed
+#
+# ---------------------------------------------------------------------------------------
+# NINE RUNS ARE NINE CELLS OF ONE SUBMISSION, AND THE INDEX CARRIES THE ARM AS WELL AS THE
+# SEED
+# ---------------------------------------------------------------------------------------
+#
+# There is no `--arm` in the command below and no `--seed`, and both absences are the same
+# fact. Every cell of a Batch array is handed one command; the only thing that differs
+# between them is `$AWS_BATCH_JOB_ARRAY_INDEX`, which Batch assigns as it starts each
+# child. `resolve_cell` in train_hyper_connections.py reads that integer under the
+# `arm-and-seed` label and comes back with a pair out of
+# `hyper_connection_arms.TRANCHE_CELLS`, which is derived from the seed counts in the arm
+# table rather than written down a second time:
+#
+#   cell 0,1,2   baseline      seeds 0,1,2
+#   cell 3,4,5   faithful      seeds 0,1,2
+#   cell 6,7,8   output-only   seeds 0,1,2
+#
+# `test_every_cell_of_the_nine_resolves_to_its_own_arm_and_seed` walks all nine and asserts
+# they are nine distinct (arm, init seed, data seed) triples, because the failure this
+# guards against is the one that produces no error and no visibly wrong curve: cells that
+# collide report a noise floor of zero, and every contrast in the analysis plan is then
+# divided by it.
+#
+# A `--arm` or a `--seed` written into this file is refused at build time rather than
+# honoured, and `test_neither_staged_tranche_carries_the_flags_the_cell_index_owns` catches
+# it on a laptop first.
+#
+# THE ALTERNATIVE WAS THREE SUBMISSIONS OF A THREE-CELL FAN-OUT, which is what commit
+# d63dbb592 was written for, and it is worse in the way that bites under time pressure: the
+# arm lives in this file, so the file has to be edited and committed twice more while the
+# first submission is already running, and an arm that ran under the wrong commit is not
+# something the run's own output can say. That form still works -- `--fanout-index-parameter
+# seed` with `--arm` in the command -- and is what to fall back to if the nine-cell array
+# ever has to be split.
+#
+# ---------------------------------------------------------------------------------------
+# WHAT THIS COSTS, AND THE ONE PLACE IT DOES NOT CLEAR THE $4,000
+# ---------------------------------------------------------------------------------------
+#
+# Two numbers, and they are different in kind. Read both out of `edullm check --json`
+# rather than out of this paragraph, which was written on 2026-08-08 against reviewed
+# configuration that moves without anybody being told.
+#
+#   THE CEILING, which is what admission prices and what an approver reads. It is
+#   rate x nodes x hours x attempts x cells, in
+#   edullm_platform/contracts/workload.py:compute_maximum_compute_cost_usd. At $21.9576 an
+#   hour, one node, 24 hours, one attempt and nine cells that is $4,742.84.
+#
+#   THE BILL, which is wall clock. edullm_platform/run_costs.py sums each attempt's
+#   ended_at - started_at (`_attempt_seconds`) and multiplies by the rate (`_cost`), so an
+#   hour of `--hours` a run does not use costs nothing. At 5.76 s/step nine arms are 194.3
+#   node-hours, which is about $4,266.
+#
+# SO ASKING FOR HOURS IS FREE INSURANCE AGAINST THE CLOCK AND IS NOT FREE AGAINST THE
+# APPROVAL. That is why `--hours 24` is here and `--attempts 1` is too: the hours have to
+# hold the run, and the attempts are pure ceiling on a shape this expensive.
+#
+# AND BOTH NUMBERS ARE OVER THE STATED $4,000, WHICH IS A DECISION AND NOT A TYPO. At the
+# A100 rate this horizon does not fit that budget at the threshold step time, and no choice
+# of `--hours` fixes it -- 20 hours prices at $3,952.37 and kills nine cells at step ~11,700
+# of 12,715, having paid for all of it. What moves it is the probe:
+#
+#   <= 5.03 s/step   --hours 20 --attempts 1 holds the run with 5% spare and prices at
+#                    $3,952.37. Under budget, and this is the line to take if the probe
+#                    is generous.
+#   <= 5.38 s/step   the BILL comes in under $4,000 at --hours 24, but the approved ceiling
+#                    is still $4,742.84. A budget conversation about a ceiling nobody
+#                    expects to spend.
+#   <= 5.76 s/step   the horizon fits the machine and not the budget: $4,266 expected
+#                    against $4,000. Either the budget moves by about $750 of ceiling, or
+#                    the L40S variant runs.
+#   >  5.76 s/step   run.l40s-tranche.yaml, 6,000 steps, --hours 21. $3,966.20 of ceiling.
+#
+# `hyper_connection_arms.seconds_per_step_within_budget` computes the middle line from a
+# rate read out of check, so the number can be re-derived rather than trusted.
+#
+# ---------------------------------------------------------------------------------------
+# WHAT A RETRY LOSES, AND THE ONE THING THAT MAKES A SECOND ATTEMPT SAFE
+# ---------------------------------------------------------------------------------------
+#
+# `--save-interval 500` is 0.80 hours at 5.76 s/step, so that is the most work a lost host
+# throws away. 26 permanent checkpoints over the run, all kept -- the workload role cannot
+# prune. Under a fan-out each cell has its own checkpoint prefix, because FANOUT_PROLOGUE
+# re-exports EDULLM_CHECKPOINT_DIR as .../cell-$AWS_BATCH_JOB_ARRAY_INDEX/checkpoints/ and
+# the array index is stable across attempts of the same child, so a retry resumes its own
+# cell rather than a sibling's.
+#
+# `--steps 12715` IS SPELLED OUT AND HAS TO BE ON EVERY ATTEMPT. Trainer.state_dict writes
+# `max_steps` (trainer.py:828) and load_state_dict never reads it back (trainer.py:836-881);
+# it is a property recomputed from max_duration, which train_on_corpus.py:653 sets from
+# --steps, and Scheduler.set_lr reads trainer.max_steps live on every step. A second attempt
+# given a smaller number does not resume the cosine, it starts a new one from wherever the
+# first stopped and collapses the remaining decay into that segment -- and the loss curve
+# continues smoothly, so it looks like a run that finished. A Batch retry re-runs the
+# identical container, so this is safe exactly as long as nobody edits this file between
+# attempts.
+#
+# ---------------------------------------------------------------------------------------
+# WHY --rank-microbatch-size IS 12288 HERE AND 16384 ON THE L40S
+# ---------------------------------------------------------------------------------------
+#
+# THIS IS THE PROBE'S OWN VALUE AND IS NOT TO BE MOVED WITHOUT REDOING THE ARITHMETIC IN
+# COMMIT 075f52aa7, which is where the memory model lives in full. The short of it:
+# 786,432 tokens over 8 ranks is 98,304 per rank, three values divide it exactly, and an
+# A100-40GB has 40 GB where the L40S has 48 with no activation checkpointing anywhere to
+# absorb the difference. 12,288 puts the run at ~28.9 GiB of 40, which is 73%; 16,384 puts
+# it at ~35.7 GiB, which is 90%, and 90% of a card before fragmentation is a coin flip whose
+# losing side is `OnReason "OutOfMemoryError*" EXIT` -- an OOM is not retried, and it costs
+# the queue wait and the machine.
+#
+# ---------------------------------------------------------------------------------------
+# THE FLAGS THIS CARRIES THAT THE PROBE'S run.yaml DOES NOT, AND WHY EACH ONE IS SPELLED OUT
+# ---------------------------------------------------------------------------------------
+#
+# Every one of these is already the parser's default. They are written into the command
+# anyway, because a default is a number in a Python file that a later commit may move, and
+# nine runs that were compared against each other have to have been compared at the same
+# settings. What is in the command text is what the lineage record seals.
+#
+#   --weight-decay 0.033        DEFAULT_WEIGHT_DECAY. The static hyper-connection component
+#                               is excluded from it on every funded arm; only the unfunded
+#                               `decay-everything` arm turns that exclusion off.
+#   --z-loss-multiplier 1e-5    The 370M configuration calls for it and train_on_corpus
+#                               never set it, so `train/Z loss` was never written until
+#                               ec40cdecb. RMSNorm readouts are scale-invariant, so
+#                               cross-entropy cannot see hidden-state scale at all.
+#   --held-out-shards 2         Inert on regmix-10b, which declares seven validation shards
+#                               of its own; this is the carve fallback for a corpus that
+#                               declares none. Pinned so that a fallback nobody expects to
+#                               take cannot change size underneath the tranche.
+#   --bytes-per-token 4.57      Sets the absolute level of bits-per-byte only. Identical
+#                               across arms, so an arm-to-arm BPB difference is a CE
+#                               difference times a fixed factor whatever this is.
+#   --eval-interval 500         27 held-out evaluations at about 104 s each.
+#   --monitor-interval 50       254 lane-monitor firings at about 1.37 s each, and only on
+#                               the six cells that have lanes.
+#   --fail-closed-by-step 400   Turns the lane monitor from a plot into a refusal. An arm
+#                               whose lanes never differentiate is the baseline with dead
+#                               parameters and no downstream number from it is interpretable
+#                               in either direction, so finding out at step 400 costs about
+#                               35 minutes and finding out at the end costs the arm. Inert
+#                               on the three baseline cells, which is what lets one command
+#                               serve all nine: train_hyper_connections.train attaches the
+#                               monitor only for an arm with lanes. The guard needs half the
+#                               blocks over its floor and the 370M probe had fourteen of
+#                               sixteen, and it disables itself once it passes.
+#
+# TWO FLAGS ARE DELIBERATELY ABSENT AND NEITHER IS AN OVERSIGHT.
+#
+#   --partial-rotary-factor     Unset means untouched, which is ordinary RoPE. It is a free
+#                               axis composable with every arm and nobody has measured it
+#                               against a noise floor; setting it here would put an
+#                               unmeasured second change inside the contrast H1 and H2a are
+#                               about.
+#   --seed                      See the fan-out section above. This one destroys the
+#                               tranche silently.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/train_hyper_connections.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --model-factory hc_370M
+  --sequence-length 4096
+  --global-batch-size 786432
+  --rank-microbatch-size 12288
+  --steps 12715
+  --save-interval 500
+  --warmup-steps 254
+  --monitor-interval 50
+  --eval-interval 500
+  --fail-closed-by-step 400
+  --weight-decay 0.033
+  --z-loss-multiplier 1e-5
+  --held-out-shards 2
+  --bytes-per-token 4.57
+  --param-dtype bfloat16'

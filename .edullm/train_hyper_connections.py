@@ -20,14 +20,21 @@ at call time:
   ``train``         attaches the lane monitor, which has nowhere else to go: the trainer is
                     built inside ``train``.
 
-THREE SEEDS ARE ONE SUBMISSION, WHICH IS WHAT ``resolve_seed`` IS FOR. The platform fans a
-submission out with ``--fanout-size N --fanout-index-parameter seed`` and gives each cell its
-own ``AWS_BATCH_JOB_ARRAY_INDEX``, its own checkpoint prefix and its own W&B run id. So the
-command in ``.edullm/run.yaml`` carries no ``--seed`` at all and each cell reads its replicate
-number out of the environment. The precedence rules, and the two combinations that are refused
-rather than resolved, are in ``resolve_seed``'s docstring; the reason they are refusals is that
-three cells landing on one seed produces three identical runs, a measured noise floor of zero,
-and nine loss curves that look better than they have any right to.
+THE WHOLE TRANCHE IS ONE SUBMISSION, WHICH IS WHAT ``resolve_cell`` IS FOR. The platform fans
+a submission out with ``--fanout-size N --fanout-index-parameter <label>`` and gives each cell
+its own ``AWS_BATCH_JOB_ARRAY_INDEX``, its own checkpoint prefix and its own W&B run id. Two
+labels are read here and they differ in how much of the cell the index decides:
+
+  ``seed``          three cells, one arm, three replicates. The arm comes from ``--arm``.
+  ``arm-and-seed``  nine cells, and the index names an ``(arm, seed)`` pair out of
+                    ``hyper_connection_arms.TRANCHE_CELLS``. The command carries neither
+                    ``--arm`` nor ``--seed``, so one commit is the whole tranche. This is what
+                    the two staged tranche specs use.
+
+Under either label the flag the index owns is refused rather than honoured if the command
+passes it anyway, because every cell of a fan-out is handed one command: a ``--seed`` there
+would run one replicate N times and an ``--arm`` would run one arm nine times. Neither raises,
+neither bends a loss curve, and the noise floor the analysis plan divides by would be zero.
 
 The weight-decay split is worth spelling out, because it is one of the five candidate causes
 rather than a detail. ByteDance: "the static component does not utilize weight decay, whereas
@@ -93,8 +100,23 @@ FANOUT_INDEX_VARIABLE = "AWS_BATCH_JOB_ARRAY_INDEX"
 #: this is the only thing that tells them apart.
 FANOUT_PARAMETER_VARIABLE = "EDULLM_FANOUT_INDEX_PARAMETER"
 
-#: The one value of that label this program is willing to read an index under.
+#: The label under which an index means a replicate number, for a fan-out of one arm.
 FANOUT_INDEX_PARAMETER = "seed"
+
+#: The label under which an index means one cell of the whole nine-run tranche.
+#:
+#: WHY THERE ARE TWO LABELS AND NOT ONE. A three-cell fan-out varies the seed and takes its
+#: arm from ``--arm`` in the command, which is how the first tranche was going to be
+#: submitted: three commits, three submissions, and the arm edited in ``run.yaml`` between
+#: them. A nine-cell fan-out varies both, so the command carries neither ``--arm`` nor
+#: ``--seed`` and every cell reads its pair out of ``hyper_connection_arms.TRANCHE_CELLS``.
+#:
+#: The nine-cell form is what the staged tranches use, and it is better in the one way that
+#: matters under time pressure: three submissions of one file mean the file has to be edited
+#: and committed twice while the first submission is already running, and an arm that ran
+#: under the wrong commit is not something the run's own output can say. One commit, one
+#: submission, nine cells, and the arm each cell ran is derived from a table under test.
+FANOUT_INDEX_PARAMETER_CELL = "arm-and-seed"
 
 
 def resolve_seed(explicit, environ=None):
@@ -159,8 +181,17 @@ def resolve_seed(explicit, environ=None):
             "replicates, and nothing downstream would notice.",
         )
 
+    return _index(raw), f"${FANOUT_INDEX_VARIABLE}={int(raw)}, the fan-out cell index"
+
+
+def _index(raw):
+    """
+    The array index as an integer, or a refusal naming what arrived instead.
+
+    :raises train_on_corpus.Refusal: If Batch set something that is not an integer.
+    """
     try:
-        seed = int(raw)
+        return int(raw)
     except ValueError:
         raise train_on_corpus.Refusal(
             train_on_corpus.Stage.THE_CONFIG_WOULD_NOT_BUILD,
@@ -168,7 +199,79 @@ def resolve_seed(explicit, environ=None):
             "no replicate number to be.",
         ) from None
 
-    return seed, f"${FANOUT_INDEX_VARIABLE}={seed}, the fan-out cell index"
+
+def resolve_cell(explicit_arm, explicit_seed, environ=None):
+    """
+    Work out which arm and which replicate this process is.
+
+    THE NINE-CELL TRANCHE IS ONE SUBMISSION AND THE INDEX CARRIES BOTH FACTS. Under
+    ``--fanout-index-parameter arm-and-seed`` the command carries neither ``--arm`` nor
+    ``--seed``, and this reads the pair out of :data:`hyper_connection_arms.TRANCHE_CELLS`,
+    which is derived from the seed counts in the arm table. Cell 0 is ``baseline`` seed 0 and
+    cell 8 is ``output-only`` seed 2, and a test walks all nine.
+
+    Everything else is unchanged and delegates to :func:`resolve_seed`: a three-cell fan-out
+    labelled ``seed`` still takes its arm from ``--arm``, and a laptop with no fan-out at all
+    still gets seed 0.
+
+    Both explicit flags are refused inside an ``arm-and-seed`` fan-out rather than honoured,
+    for the reason ``resolve_seed`` gives about ``--seed``: every cell of a fan-out is handed
+    one command, so an ``--arm`` written into ``run.yaml`` would run nine cells of one arm and
+    a ``--seed`` would run them all on one replicate. Neither produces an error or a visibly
+    wrong curve.
+
+    :param explicit_arm: The value of ``--arm``, or ``None``.
+    :param explicit_seed: The value of ``--seed``, or ``None``.
+    :param environ: The environment to read. Defaults to ``os.environ``.
+
+    :returns: ``(arm_name, seed, provenance)``.
+
+    :raises train_on_corpus.Refusal: If a flag the cell index owns was passed anyway, if the
+        index is outside the tranche, or if ``--arm`` is missing where nothing else supplies
+        one.
+    """
+    environ = os.environ if environ is None else environ
+    raw = environ.get(FANOUT_INDEX_VARIABLE)
+    label = environ.get(FANOUT_PARAMETER_VARIABLE)
+
+    if raw not in (None, "") and label == FANOUT_INDEX_PARAMETER_CELL:
+        for flag, value in (("--arm", explicit_arm), ("--seed", explicit_seed)):
+            if value is not None:
+                raise train_on_corpus.Refusal(
+                    train_on_corpus.Stage.THE_CONFIG_WOULD_NOT_BUILD,
+                    f"this is cell {raw} of an {FANOUT_INDEX_PARAMETER_CELL!r} fan-out, whose "
+                    f"index is what says which arm and which replicate this cell is, and the "
+                    f"command also passes {flag} {value}. Every cell is handed the same "
+                    f"command, so honouring it would run the whole tranche as one cell "
+                    f"repeated nine times -- one arm or one replicate, a measured noise floor "
+                    f"of zero, and nine curves lying on top of each other that read as a very "
+                    f"clean experiment. Drop {flag} from the command in .edullm/run.yaml.",
+                )
+        index = _index(raw)
+        try:
+            name, seed = hyper_connection_arms.cell(index)
+        except IndexError as mismatch:
+            raise train_on_corpus.Refusal(
+                train_on_corpus.Stage.THE_CONFIG_WOULD_NOT_BUILD, str(mismatch)
+            ) from None
+        return (
+            name,
+            seed,
+            f"${FANOUT_INDEX_VARIABLE}={index}, which is cell {index} of "
+            f"{len(hyper_connection_arms.TRANCHE_CELLS)} in the tranche table",
+        )
+
+    if explicit_arm is None:
+        raise train_on_corpus.Refusal(
+            train_on_corpus.Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            "no --arm, and this is not a cell of an "
+            f"{FANOUT_INDEX_PARAMETER_CELL!r} fan-out either, so nothing says which arm to "
+            "run. Pass --arm, or submit with --fanout-index-parameter "
+            f"{FANOUT_INDEX_PARAMETER_CELL} and let the cell index choose.",
+        )
+
+    seed, provenance = resolve_seed(explicit_seed, environ)
+    return explicit_arm, seed, provenance
 
 
 class _ListArms(argparse.Action):
@@ -222,8 +325,13 @@ def build_parser():
     parser.add_argument(
         "--arm",
         choices=sorted(ARMS),
-        required=True,
-        help="Which arm to run. See --list-arms.",
+        default=None,
+        help="Which arm to run. See --list-arms. LEAVE THIS UNSET IN A NINE-CELL TRANCHE: the "
+        f"cell then takes its arm and its replicate together from ${FANOUT_INDEX_VARIABLE}, "
+        f"under the {FANOUT_INDEX_PARAMETER_CELL!r} label. Passing it there is refused rather "
+        "than honoured, because one command reaching nine cells would run one arm nine times. "
+        "Required everywhere else, and a run with neither is refused rather than defaulted -- "
+        "there is no arm this experiment can silently mean.",
     )
     parser.add_argument(
         "--list-arms",
@@ -342,7 +450,7 @@ def preflight(config) -> None:
     # verified by running the preflight three times with a different index in the
     # environment.
     if _SEED_PROVENANCE:
-        print(f"seed         {_SEED_PROVENANCE[0]}")
+        print(f"cell         {_SEED_PROVENANCE[0]}")
     print(
         f"seeded       init={config.init_seed}, model.init={config.model.init_seed}, "
         f"data={config.data_loader.seed}"
@@ -371,15 +479,15 @@ def preflight(config) -> None:
 
 
 def build_config(opts, overrides):
-    arm = ARMS[opts.arm]
+    # FIRST, AND LOUDLY. Everything below reads opts.arm and opts.seed, and a run that
+    # resolved either one wrongly is not recoverable from its own output -- see
+    # `resolve_cell`. The line goes to the log on every run and to the preflight summary, so
+    # what a cell became is written down somewhere a person will actually look.
+    opts.arm, opts.seed, provenance = resolve_cell(opts.arm, opts.seed)
+    _SEED_PROVENANCE[:] = [f"arm {opts.arm}, seed {opts.seed}, from {provenance}"]
+    print(f"cell         {_SEED_PROVENANCE[0]}", flush=True)
 
-    # FIRST, AND LOUDLY. Everything below reads opts.seed, and a run that resolved the wrong
-    # one is not recoverable from its own output -- see `resolve_seed`. The line goes to the
-    # log on every run and to the preflight summary, so which replicate a cell became is
-    # written down somewhere a person will actually look.
-    opts.seed, provenance = resolve_seed(opts.seed)
-    _SEED_PROVENANCE[:] = [f"seed {opts.seed}, from {provenance}"]
-    print(f"seed         {_SEED_PROVENANCE[0]}", flush=True)
+    arm = ARMS[opts.arm]
 
     # Before the delegate, because it builds the data loader with this.
     opts.data_seed = opts.data_seed + opts.seed
