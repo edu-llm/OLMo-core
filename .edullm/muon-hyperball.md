@@ -119,3 +119,96 @@ the path runs; they do **not** rank the optimizers, for the decay reason above. 
 run first if the sharded path has changed — every distributed test in
 `src/test/optim/hyperball_test.py` is `requires_multi_gpu` and does not execute on a CPU box, so
 the first real exercise of the FSDP gather path is a GPU run.
+
+## Result, 2026-08-08
+
+Both arms ran to completion on `gpu-8xa100`, 7630/7630 steps, 4,000,317,440 tokens each.
+
+| | MuonH | MuonW |
+|---|---|---|
+| run id | `run_019fdfa2-52d2-708d-ace7-5cb8f54f441c` | `run_019fdfa3-6f0a-7070-8f1c-89eb4bfb6905` |
+| learning rate | 0.01 (relative) | 0.02 (`adjust_lr`-scaled) |
+| CE loss, mean of last 800 steps | **2.8561** | 2.8978 |
+| PPL at that loss | **17.39** | 18.13 |
+| MFU (actual avg) | 27.82% | 28.04% |
+| wall clock | 3 h 16 m 44 s | 3 h 15 m 14 s |
+| `optim/matrix_norm_mean`, first → last | 26.947 → 26.947 | 26.946 → **117.879** |
+| `optim/radius_relative_drift_max` | 1.19e-07 | absent, as designed |
+
+**The constraint held, so the loss comparison means something.** Over all 7630 steps the drift
+never exceeded **1.788e-07** (its maximum, at step 3; 1.192e-07 = 2⁻²³ at the end), and **zero**
+steps were above the 1e-5 threshold. `matrix_norm_mean` is identical to four decimals at the
+first and last step. This is the check the section above says to make before reading any loss
+curve, and it passes. The MuonW arm has no drift metric at all, which is the correct behaviour
+for an arm with no radius rather than a missing log.
+
+The two arms started from an identical loss — 12.002816200256348 on both, to every digit — which
+confirms the shared initializer, seed and data order. MFU within 0.2 points and load-balancing
+loss within 1% mean neither arm was throughput- or routing-advantaged.
+
+**MuonH wins by 0.042 nats (≈4.1% perplexity).** Averaged over the last 800 steps rather than
+read off the final step, because single-step MoE CE loss is noisy by several hundredths.
+
+### The overtake happens, but not where the paper says it does
+
+Decile means of CE loss, and the difference:
+
+| steps | LR (group 0) | MuonH | MuonW | H − W |
+|---|---|---|---|---|
+| 0–762 | 0.01000 | 5.4274 | 4.8746 | **+0.5528** |
+| 763–1525 | 0.00976 | 3.6052 | 3.5637 | +0.0415 |
+| 1526–2288 | 0.00905 | 3.4000 | 3.4047 | −0.0047 |
+| 2289–3051 | 0.00796 | 3.2848 | 3.3147 | −0.0299 |
+| 3052–3814 | 0.00660 | 3.1869 | 3.2358 | −0.0489 |
+| 3815–4577 | 0.00513 | 3.1015 | 3.1652 | −0.0637 |
+| 4578–5340 | 0.00369 | 3.0199 | 3.0903 | **−0.0704** |
+| 5341–6103 | 0.00245 | 2.9494 | 3.0162 | −0.0668 |
+| 6104–6866 | 0.00154 | 2.8927 | 2.9469 | −0.0542 |
+| 6867–7629 | 0.00106 | 2.8557 | 2.8971 | −0.0414 |
+
+The qualitative shape the paper predicts — starts worse, ends better — reproduces. Two details
+of it do not, and both are worth more than the headline number:
+
+1. **"Starts *slightly* worse" understates it.** MuonH is 0.55 nats behind over the first decile
+   and 1.21 nats behind at step 50. That is not a small early penalty, it is a different regime;
+   the radial projection is discarding most of the progress a large early step would make while
+   the norm is still at its initial value.
+
+2. **The crossover is early, and not attributable to decay.** The 100-step mean of H−W turns
+   negative for good at **step 1818** — 24% of the way in, with the LR still at 93% of peak.
+   The cosine schedule has barely moved. And the advantage *peaks* at −0.0710 around step 5306
+   (LR 0.0031) and then **erodes by 42%** across the final decay, to −0.0414. The paper's stated
+   mechanism is that Hyperball "overtakes WD as the learning rate decays", which implies the gap
+   widens as the LR falls. Here it narrows. Whatever MuonH is winning on, this run does not
+   support decay as the cause.
+
+### What this result does not establish
+
+**Neither learning rate is tuned, and that is enough on its own to keep this provisional.**
+0.042 nats is a small gap and the two LRs are different quantities picked as starting points, not
+optima. The paper sweeps a √2 grid per arm and compares each at its own best; an untuned pair can
+favour either side, and a 4% perplexity difference is well inside what one grid step could move.
+Read this as "the implementation is correct, the constraint holds, and the method is not worse" —
+not as a ranking.
+
+Also outstanding: **one seed per arm**, so the gap has no error bar; **train loss only**, no
+held-out evaluation (the arms saw one epoch of a 150B corpus, so this is near-validation, but it
+is not validation); and **no dense counterpart** — `run-dense-*.yaml` is committed and unrun, and
+the MoE result is not automatically a dense result given that per-expert blocking is the part of
+this that needed new library code.
+
+The obvious next experiment is a √2 LR sweep on both arms at this scale, which is what would turn
+this into a comparison of optimizers rather than of two points.
+
+### A defect this run exposed
+
+`optim/radius_relative_drift_max` reached W&B and nothing else. `ConsoleLoggerCallback` prints an
+allowlist and the drift matched none of its patterns, so the single number that decides whether a
+MuonH arm is testing Hyperball at all was absent from `edullm logs` — the channel the platform
+actually gives you for a running job. Mid-flight, that log showed fifty lines of throughput, load
+imbalance and LR, and no drift.
+
+That is the same failure `MuonMetricsCallback` exists to prevent, displaced one layer out: from
+the log stream alone, a Hyperball result and a Hyperball bug were still indistinguishable. Fixed
+by configuring the console logger explicitly and extending the default pattern list. The fix does
+not apply retroactively to the two runs above — their invariant was verified from the dashboard.
