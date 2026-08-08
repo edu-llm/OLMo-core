@@ -45,7 +45,7 @@ def main() -> None:
         ("sinpif", "float"),
         ("cospif", "float"),
     ):
-        pattern = rf"(__func__\({scalar}\s+{name}\({scalar}\s+a\)\))"
+        pattern = rf"(__func__\({scalar}\s+{name}\((?:const\s+)?{scalar}\s+a\)\))"
         text = replace_once(
             text,
             pattern,
