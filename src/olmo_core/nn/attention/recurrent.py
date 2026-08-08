@@ -295,29 +295,24 @@ class GatedDeltaNet(SequenceMixer):
         - Gated RMS normalization
         """
         del seq_len
-        # Linear projection FLOPs (2 ops per multiply-add)
-        linear_flops = 2 * sum(
-            m.weight.numel()
-            for m in (self.w_q, self.w_k, self.w_v, self.w_a, self.w_b, self.w_g, self.w_out)
-        )
+        # 6 FLOPs per parameter (2 ops * 3 for forward+backward), which is the convention every
+        # other module here uses -- see `Attention`, `FeedForward` and `LMHead`. It covers the
+        # short convolutions exactly as well as the projections: a depthwise conv does one
+        # multiply-add per (channel, tap) per output, so its 2 * kernel_size * channels forward
+        # FLOPs are 2 per parameter, the same ratio as a matmul.
+        param_flops = 6 * sum(p.numel() for p in self.parameters())
 
-        # Short convolution FLOPs (2 ops per multiply-add, kernel_size taps per output)
-        conv_flops = (
-            2
-            * self.conv_size
-            * (self.key_dim + self.key_dim + self.value_dim)  # q_conv1d  # k_conv1d  # v_conv1d
-        )
-
-        # Gated delta rule recurrent computation per token:
-        # - Outer product k ⊗ v: n_v_heads * head_k_dim * head_v_dim
-        # - State decay: n_v_heads * head_k_dim * head_v_dim
-        # - Beta scaling: n_v_heads * head_k_dim * head_v_dim
-        # - Query-state matmul: n_v_heads * head_k_dim * head_v_dim
-        # Each is 2 FLOPs per element (multiply-add or similar)
+        # Gated delta rule recurrent computation per token, on a state of shape
+        # (n_v_heads, head_k_dim, head_v_dim):
+        # - Outer product k ⊗ v
+        # - State decay
+        # - Beta scaling
+        # - Query-state matmul
+        # 24x multiplier: 4 passes * 2 ops each * 3 for forward+backward
         state_size = self.n_v_heads * self.head_k_dim * self.head_v_dim
-        recurrent_flops = 2 * 4 * state_size
+        recurrent_flops = 24 * state_size
 
-        return int(linear_flops + conv_flops + recurrent_flops)
+        return int(param_flops + recurrent_flops)
 
 
 @SequenceMixerConfig.register("gated_delta_net")
@@ -787,31 +782,26 @@ class GatedDeltaNet2(SequenceMixer):
         - Gated RMS normalization
         """
         del seq_len
-        # Linear projection FLOPs (2 ops per multiply-add). The bottlenecks contribute both of
-        # their leaves.
-        linear_modules = [self.w_q, self.w_k, self.w_v, self.w_b, self.w_w, self.w_out]
-        linear_modules.extend(self.w_a)
-        linear_modules.extend(self.w_g)
-        linear_flops = 2 * sum(m.weight.numel() for m in linear_modules)
-
-        # Short convolution FLOPs (2 ops per multiply-add, kernel_size taps per output)
-        conv_flops = (
-            2
-            * self.conv_size
-            * (self.key_dim + self.key_dim + self.value_dim)  # q_conv1d  # k_conv1d  # v_conv1d
-        )
+        # 6 FLOPs per parameter (2 ops * 3 for forward+backward), the convention `Attention`,
+        # `FeedForward` and `LMHead` all use. Covering every parameter rather than an enumerated
+        # list of projections is also what keeps the two low-rank bottlenecks (`w_a`, `w_g`) and
+        # the short convolutions counted without naming their leaves: a depthwise conv does one
+        # multiply-add per (channel, tap) per output, which is 2 forward FLOPs per parameter --
+        # the same ratio as a matmul.
+        param_flops = 6 * sum(p.numel() for p in self.parameters())
 
         # GDN-2 recurrent computation per token, on a state of shape
         # (n_v_heads, head_k_dim, head_v_dim):
-        # - Outer product k ⊗ (w ⊙ v): one pass over the state
-        # - Channel-wise decay diag(exp(g)) S: one pass
+        # - Channel-wise decay diag(exp(g)) S: one pass over the state
         # - Erase term k (b ⊙ k)^T S: two passes (the read, then the rank-1 subtraction)
+        # - Outer product k ⊗ (w ⊙ v): one pass
         # - Query-state matmul: one pass
-        # Each is 2 FLOPs per element (multiply-add or similar)
+        # 30x multiplier: 5 passes * 2 ops each * 3 for forward+backward. One pass more than
+        # GatedDeltaNet, which folds erase and write into a single beta-scaled rank-1 update.
         state_size = self.n_v_heads * self.head_k_dim * self.head_v_dim
-        recurrent_flops = 2 * 5 * state_size
+        recurrent_flops = 30 * state_size
 
-        return int(linear_flops + conv_flops + recurrent_flops)
+        return int(param_flops + recurrent_flops)
 
 
 @SequenceMixerConfig.register("gated_delta_net_2")
