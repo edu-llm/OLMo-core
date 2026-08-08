@@ -60,7 +60,11 @@ def resolve_local_inputs(*, arm, order_version, cache_dir):
         )
     parent = resolved_input(payload["parent"])
     order = resolved_input(payload["order"]) if payload.get("order") else None
-    if order is None:
+    if arm.pacing == "control" and order is not None:
+        raise curriculum.PublishedInputError(
+            "RunPod control manifest must not include a curriculum order"
+        )
+    if arm.pacing != "control" and order is None:
         raise curriculum.PublishedInputError(
             f"RunPod manifest is missing the order for kept arm {arm.name}"
         )

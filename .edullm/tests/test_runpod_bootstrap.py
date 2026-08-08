@@ -1,16 +1,26 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
 import pytest
 
 STAGER = Path(__file__).resolve().parents[1] / "runpod" / "stage_inputs.py"
+ENTRYPOINT = STAGER.with_name("entrypoint.py")
 
 
 def load_stager():
     spec = importlib.util.spec_from_file_location("curriculum_runpod_stager", STAGER)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_entrypoint():
+    spec = importlib.util.spec_from_file_location("curriculum_runpod_entrypoint", ENTRYPOINT)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -83,3 +93,41 @@ def test_runpod_stager_accepts_only_kept_curriculum_indices(monkeypatch) -> None
     assert "quadratic10-mtld" in (STAGER.parents[1] / "curriculum_recipe.json").read_text(
         encoding="utf-8"
     )
+
+
+def test_runpod_control_manifest_requires_no_order(tmp_path, monkeypatch) -> None:
+    module = load_entrypoint()
+    parent_path = tmp_path / "parent.bin"
+    parent_path.write_bytes(b"parent")
+    identity = {
+        "dataset_id": module.curriculum.PARENT_DATASET_ID,
+        "version": module.curriculum.PARENT_VERSION,
+        "group": "tokens",
+        "profile": "pretrain-tokens/v1",
+        "manifest_sha256": module.curriculum.PARENT_MANIFEST_SHA256,
+        "paths": ["s3://edullm-data/parent.bin"],
+        "numpy_dtype": "uint32",
+        "header_bytes": 0,
+    }
+    payload = {
+        "schema_version": 1,
+        "family": "curriculum",
+        "arm_index": 5,
+        "arm_name": "control",
+        "parent": identity,
+        "parent_objects": [{"path": str(parent_path), "size": parent_path.stat().st_size}],
+        "order": None,
+        "order_objects": [],
+    }
+    manifest = tmp_path / "ready.json"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setenv("EDULLM_RUNPOD_INPUT_MANIFEST", str(manifest))
+
+    _parent, parent_paths, order, order_paths = module.resolve_local_inputs(
+        arm=module.curriculum.ARMS[5],
+        order_version=None,
+        cache_dir=tmp_path,
+    )
+    assert parent_paths == (parent_path,)
+    assert order is None
+    assert order_paths == ()
