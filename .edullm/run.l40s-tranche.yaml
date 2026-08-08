@@ -14,10 +14,16 @@
 # s/step. Read the probe's clean median: steps 2-49 and 51-99, dropping step 1 and the two
 # the evaluator and the monitor fire on.
 #
-#   cp .edullm/run.l40s-tranche.yaml .edullm/run.yaml && git commit && git push
-#   edullm submit --experiment hyper-connections-370m --dataset regmix-10b-v1 \
+#   edullm submit --spec .edullm/run.l40s-tranche.yaml \
+#     --experiment hyper-connections-370m --dataset regmix-10b-v1 \
 #     --team input-core --hours 21 --attempts 2 \
 #     --fanout-size 9 --fanout-index-parameter arm-and-seed
+#
+# NOTHING IS COPIED OVER run.yaml AND NOTHING NEEDS TO BE. `submit --spec` reads this file
+# directly and the container never reads a spec at all -- the command below is compiled into
+# the Batch job definition and sealed into the lineage record at submit time. What the commit
+# has to be is pushed: the image is built from it, and `check` refuses `commit_not_pushed`
+# until a branch named edullm/** carries it.
 #
 # ---------------------------------------------------------------------------------------
 # NINE RUNS ARE NINE CELLS OF ONE SUBMISSION
@@ -71,6 +77,18 @@
 # by recording no container exit code, and torchrun's elastic agent re-raises
 # SignalException and exits non-zero on SIGTERM in a dead heat with the container stop
 # timeout -- so the horizon is set to fit one attempt rather than to be rescued by a second.
+#
+# ---------------------------------------------------------------------------------------
+# WHO RELEASES IT, WHICH IS A LEAD AND NOT AN ADMIN
+# ---------------------------------------------------------------------------------------
+#
+# A fan-out is never automatic whatever it costs: `classify_request` in the platform's
+# contracts/policy.py tests `fanout_size > 1` before anything else, because nine cells is
+# nine machines starting at once and the total does not carry that. So this is `routine`,
+# and routine is `run-approval-lead`. One approval releases all nine cells, because a
+# fan-out is one `SubmitJob` carrying `ArrayProperties: {Size: 9}` and therefore one
+# workflow run and one deployment. The incantation is in run.a100-tranche.yaml and is the
+# same one for both variants.
 #
 # ---------------------------------------------------------------------------------------
 # WHAT A RETRY LOSES, AND THE ONE THING THAT MAKES A SECOND ATTEMPT SAFE

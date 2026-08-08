@@ -9,10 +9,18 @@
 # or 100 is measuring an instrument, which is the mistake that re-planned a whole tranche
 # once already.
 #
-#   cp .edullm/run.a100-tranche.yaml .edullm/run.yaml && git commit && git push
-#   edullm submit --experiment hyper-connections-370m --dataset regmix-10b-v1 \
+#   edullm submit --spec .edullm/run.a100-tranche.yaml \
+#     --experiment hyper-connections-370m --dataset regmix-10b-v1 \
 #     --team input-core --hours 24 --attempts 1 \
 #     --fanout-size 9 --fanout-index-parameter arm-and-seed
+#
+# NOTHING IS COPIED OVER run.yaml AND NOTHING NEEDS TO BE. `submit --spec` reads this file
+# directly and the container never reads a spec at all -- the command below is compiled into
+# the Batch job definition and sealed into the lineage record at submit time. So both
+# variants stay committed, run.yaml goes on holding the probe that chose between them, and
+# the losing variant is a record of what was not run rather than a file to delete. What the
+# commit has to be is pushed: the image is built from it, and `check` refuses
+# `commit_not_pushed` until a branch named edullm/** carries it.
 #
 # ---------------------------------------------------------------------------------------
 # NINE RUNS ARE NINE CELLS OF ONE SUBMISSION, AND THE INDEX CARRIES THE ARM AS WELL AS THE
@@ -89,6 +97,40 @@
 #
 # `hyper_connection_arms.seconds_per_step_within_budget` computes the middle line from a
 # rate read out of check, so the number can be re-derived rather than trusted.
+#
+# ---------------------------------------------------------------------------------------
+# WHO RELEASES IT, WHICH IS A LEAD AND NOT AN ADMIN
+# ---------------------------------------------------------------------------------------
+#
+# A FAN-OUT IS NEVER AUTOMATIC WHATEVER IT COSTS -- `classify_request` in the platform's
+# contracts/policy.py tests `fanout_size > 1` before it tests anything else, on the argument
+# that nine cells is nine machines starting at once and the total does not carry that. So
+# this is `routine`, and routine is `run-approval-lead`.
+#
+# THE NOTE IN hyper-connections.md SAYING gpu-8xa100 NEEDS AN ADMIN IS STALE. It was true
+# under policy v4, which refused to call any request routine when its compute profile cost
+# more than $20/hour. v5 removed that ceiling deliberately -- config/policy.yaml argues that
+# a rate cannot rank two requests by what they commit, and worst-case total can -- and under
+# v5 and v6 `classify_request` cannot return EXCEPTION at all. `run-approval-admin` is
+# reserved for capacity blocks, which nothing has designed yet. Confirm it anyway by reading
+# `approving_environment` out of `edullm check --json`.
+#
+# ONE APPROVAL RELEASES ALL NINE CELLS. A fan-out is one `SubmitJob` carrying
+# `ArrayProperties: {Size: 9}` (execution.py), so it is one workflow run, one deployment and
+# one gate. There is nothing per-cell to approve.
+#
+#   ID=$(edullm status --json <run-id> | jq -r .submission.workflow_run_id)
+#   ENV=$(gh api repos/edu-llm/platform/actions/runs/$ID/pending_deployments \
+#           --jq '.[0].environment.id')     # run-approval-lead was 18794577051
+#   gh api -X POST repos/edu-llm/platform/actions/runs/$ID/pending_deployments \
+#     -f state=approved -F "environment_ids[]=$ENV" -f comment="..."
+#
+# Read $ENV rather than pasting the number: the id is what the API takes and the name is not,
+# and renaming either environment silently revokes every submission because the admission
+# role's trust policy pins the subject claim to those two names.
+#
+# `prevent_self_review` is false on that gate, so the submitter may release their own
+# submission if they are in `team-leads`. That is how the probe was released.
 #
 # ---------------------------------------------------------------------------------------
 # WHAT A RETRY LOSES, AND THE ONE THING THAT MAKES A SECOND ATTEMPT SAFE
