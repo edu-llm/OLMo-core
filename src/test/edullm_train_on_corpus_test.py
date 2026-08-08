@@ -93,9 +93,12 @@ def reader(monkeypatch):
             handed["region"] = region
             return adapter
 
-    def dataset_paths(dataset_id, version, *, s3, **_):
+    def dataset_paths(dataset_id, version, *, s3, split=None, **_):
         handed["s3"] = s3
-        return FakeManifest()
+        handed.setdefault("splits", []).append(split)
+        # The reader answers an unpublished split with an empty list rather than an error, so
+        # a corpus with no held-out shards is a value and not a failure.
+        return FakeManifest(paths=[]) if split == "val" else FakeManifest()
 
     def resolve_latest(dataset_id, *, s3, **_):
         handed["resolve_latest_s3"] = s3
@@ -359,6 +362,256 @@ def test_the_platform_moe_recipe_requires_the_64_rank_production_mesh(corpus, mo
 
     with pytest.raises(entry.Refusal, match="expects WORLD_SIZE=64"):
         configure("--model-factory=olmoe_7b_32x4")
+
+
+# ---------------------------------------------------------------------------------------
+# Measuring the thing the arms are compared on
+# ---------------------------------------------------------------------------------------
+
+
+VAL_SHARDS = ["s3://edullm-data/x/v1/val/a.u32le.bin", "s3://edullm-data/x/v1/val/b.u32le.bin"]
+
+
+@pytest.fixture
+def corpus_with_a_held_out_split(monkeypatch):
+    monkeypatch.setattr(
+        entry,
+        "resolve_corpus",
+        lambda **kwargs: entry.corpus_from_manifest(
+            FakeManifest(),
+            dataset_id=kwargs["dataset_id"],
+            version=kwargs["version"],
+            tokenizer_id=kwargs["tokenizer_id"],
+            val_paths=list(VAL_SHARDS),
+        ),
+    )
+
+
+def test_the_held_out_shards_are_asked_for_separately_and_never_join_the_training_stream(
+    reader,
+):
+    """Mutation: pass ``split="val"`` on the one call, or merge the two path lists.
+
+    A validation shard that reached the training stream is the one data error no metric can
+    show, because the number it corrupts is the number anybody would check it with. The
+    default split is the reader's own answer to what a run may train on, and the held-out
+    listing is a second question rather than a wider first one.
+    """
+    corpus = entry.resolve_corpus(
+        dataset_id="pretrain/regmix-10b", version="v1", tokenizer_id="tokenizer/dolma2-bpe"
+    )
+
+    assert reader["splits"] == [None, "val"]
+    assert corpus.val_paths == []
+    assert not set(corpus.val_paths) & set(corpus.paths)
+
+
+def test_a_corpus_that_declares_a_split_gets_an_evaluator_on_its_own_shards(
+    corpus_with_a_held_out_split,
+):
+    """The estimand, wired to data the run already had a grant for.
+
+    Nothing here reaches olmo-data.org or Hugging Face, which is what kept the example's
+    evaluators out of this file. The shards come back from the same sealed prefix the
+    training stream did.
+    """
+    _, config = configure("--eval-interval=250", "--eval-batches=32")
+
+    evaluator = config.trainer.callbacks["lm_evaluator"]
+    assert list(evaluator.eval_dataset.paths) == VAL_SHARDS
+    assert evaluator.eval_interval == 250
+    assert evaluator.eval_duration == entry.Duration.steps(32)
+    # A paired comparison reads the final number, so the run has to produce one at the end
+    # rather than at the last multiple of the interval.
+    assert evaluator.eval_on_finish is True
+    assert evaluator.eval_on_startup is False
+
+
+def test_the_evaluator_reads_the_held_out_shards_at_the_width_the_manifest_declared(
+    corpus_with_a_held_out_split,
+):
+    """Mutation: leave ``dtype`` off the eval dataset and let OLMo-core infer it.
+
+    The inference picks the narrowest dtype the vocab fits in, so a uint32 corpus is read two
+    bytes at a time. On the training stream that is a bad loss curve; here it is a validation
+    loss that is wrong rather than missing, which is the one error this metric cannot
+    survive, because a wrong number still gets compared against the other arm's.
+    """
+    _, config = configure()
+
+    evaluator = config.trainer.callbacks["lm_evaluator"]
+    assert evaluator.eval_dataset.dtype == config.dataset.dtype
+    assert evaluator.eval_dataset.tokenizer == config.dataset.tokenizer
+    assert evaluator.eval_dataset.sequence_length == config.dataset.sequence_length
+
+
+def test_a_corpus_with_no_held_out_split_still_trains_and_reports_no_validation_loss(corpus):
+    # regmix-10b declares none. That is a run that cannot be compared on held-out loss, not a
+    # run that should fail; --require-val is how a comparison says otherwise.
+    _, config = configure()
+
+    assert "lm_evaluator" not in config.trainer.callbacks
+    assert config.dataset_val_paths == []
+
+
+def test_require_val_refuses_before_an_instance_is_allocated(corpus):
+    with pytest.raises(entry.Refusal, match="no validation split"):
+        configure("--require-val")
+
+
+def test_a_failed_listing_of_the_held_out_split_costs_the_metric_and_not_the_run(
+    monkeypatch, caplog
+):
+    """Mutation: let the second read raise like the first one does.
+
+    The training read is load-bearing and a failure there is the run. The held-out read is
+    not: losing it means the run reports no validation loss, and killing an otherwise valid
+    run over a metric is the more expensive of the two mistakes.
+    """
+    import types
+
+    class Boto3S3:
+        @classmethod
+        def default(cls, region="us-east-1"):
+            return ReaderProtocolStub()
+
+    def dataset_paths(dataset_id, version, *, s3, split=None, **_):
+        if split == "val":
+            raise Boom("An error occurred (AccessDenied) when calling the ListObjectsV2 operation")
+        return FakeManifest()
+
+    read_module: Any = types.ModuleType("edullm_data.read")
+    read_module.dataset_paths = dataset_paths
+    read_module.resolve_latest = lambda dataset_id, *, s3, **_: "v1"
+    s3_module: Any = types.ModuleType("edullm_data.s3")
+    s3_module.Boto3S3 = Boto3S3
+    monkeypatch.setitem(sys.modules, "edullm_data", types.ModuleType("edullm_data"))
+    monkeypatch.setitem(sys.modules, "edullm_data.read", read_module)
+    monkeypatch.setitem(sys.modules, "edullm_data.s3", s3_module)
+
+    with caplog.at_level(logging.WARNING):
+        resolved = entry.resolve_corpus(
+            dataset_id="pretrain/regmix-10b", version="v1", tokenizer_id="tokenizer/dolma2-bpe"
+        )
+
+    assert resolved.paths
+    assert resolved.val_paths == []
+    assert "no evaluator" in caplog.text
+
+
+def test_the_validation_loss_is_matched_by_suffix_rather_than_by_a_key_written_down_here():
+    """Mutation: read ``metrics["eval/lm_evaluator/CE loss"]``.
+
+    EvaluatorCallback records under ``{prefix}/{evaluator name}/{metric}``, so both the
+    prefix and the name sit in the middle of the key. A literal stops matching the moment
+    either is renamed, and it stops silently -- the run reports a null validation loss and
+    looks like a corpus with no split.
+    """
+    watcher = entry.LossWatcher()
+
+    watcher.log_metrics(1, {"train/CE loss": 6.9})
+    assert watcher.val is None
+
+    watcher.log_metrics(2, {"eval/whatever-this-gets-called/CE loss": 6.2})
+    assert watcher.val == 6.2
+    # And the training loss is not mistaken for it, which is the whole distinction.
+    assert watcher.last == 6.9
+
+
+# ---------------------------------------------------------------------------------------
+# Handing the weights to whatever runs beside the training job
+# ---------------------------------------------------------------------------------------
+
+
+def test_no_huggingface_export_unless_the_run_asked_for_one(corpus):
+    """Every submission that predates the flag is one that did not ask for the cost.
+
+    An export stops every rank at a barrier while rank zero writes the model, so turning it
+    on for existing users of this entry point would slow their runs for an artifact they
+    have no reader for.
+    """
+    _, config = configure()
+
+    assert "hf_converter" not in config.trainer.callbacks
+
+
+def test_the_exports_land_beside_the_checkpoints_under_the_run_own_prefix(corpus):
+    """The platform derives EDULLM_CHECKPOINT_DIR as ${EDULLM_OUTPUT_PREFIX}checkpoints/.
+
+    So the parent of the save folder is the run's output prefix and ``hf/`` is a sibling of
+    ``checkpoints/`` -- one prefix to list, holding one directory per exported step. Nothing
+    downstream has to be handed a path.
+    """
+    _, config = configure("--hf-export")
+
+    converter = config.trainer.callbacks["hf_converter"]
+    assert converter.output_folder == "s3://outputs/teams/platform/runs/a-run-id/hf"
+
+
+def test_an_overridden_save_folder_takes_the_exports_with_it(corpus):
+    # Derived from where the checkpoints are actually going rather than from the environment
+    # variable they usually come from, so an export cannot land beside another run's
+    # checkpoints when a submission overrode the save folder or an array cell rewrote it.
+    opts, _ = entry.build_parser().parse_known_args(
+        [
+            "a-run-id",
+            "--save-folder=s3://outputs/teams/platform/runs/other/cell-3/checkpoints/",
+            "--hf-export",
+        ]
+    )
+    assert entry.hf_export_folder(opts) == "s3://outputs/teams/platform/runs/other/cell-3/hf"
+
+
+def test_the_export_cadence_is_a_flag_and_the_default_is_once_at_the_end(corpus):
+    """Converting every save is what makes this expensive on a model this size.
+
+    Zero means the run exports once, when training finishes, which is the callback's own
+    behaviour. A number is what makes intermediate weights available while the run is still
+    going, and it is the caller who knows what a whole-fleet stall costs against how stale
+    the downstream lane can afford its inputs to be.
+    """
+    _, once = configure("--hf-export")
+    assert once.trainer.callbacks["hf_converter"].convert_interval is None
+
+    _, periodic = configure("--hf-export", "--hf-export-interval=2000")
+    assert periodic.trainer.callbacks["hf_converter"].convert_interval == 2000
+
+
+def test_a_failed_export_does_not_take_the_training_run_with_it(corpus):
+    """Mutation: leave the callback's default, which re-raises.
+
+    An export needs things the training does not -- a tokenizer fetched over the network, a
+    write to a prefix the checkpoints do not use -- and it runs inside ``post_step``, so
+    raising there ends the run. Ninety-six hours of training is not worth one conversion.
+    """
+    _, config = configure("--hf-export")
+
+    assert config.trainer.callbacks["hf_converter"].raise_on_failure is False
+
+
+def test_validation_of_the_conversion_is_off_because_it_cannot_run_on_this_model(corpus):
+    # It compares logits by running the OLMo-core model forward, and for a dropless MoE that
+    # forward goes through olmo_core.ops.moe, whose kernels are Triton. On the training device
+    # mid-run that is a second full forward pass, not a cheap assertion.
+    _, config = configure("--hf-export")
+
+    assert config.trainer.callbacks["hf_converter"].validate is False
+
+
+def test_the_shared_expert_arm_is_refused_an_export_rather_than_failing_at_the_first_one(corpus):
+    """HuggingFace has no MoE architecture with an always-on expert.
+
+    ``FlexOlmoConfig`` has no field for one, so the state converter meets the run's
+    ``shared_mlp`` weights with no destination and refuses. Said at config time because the
+    alternative is a run that trains for hours and then cannot export, and the person who
+    submitted it finds out from a log they cannot read.
+    """
+    with pytest.raises(entry.Refusal, match="shared_mlp"):
+        configure("--model-factory=olmoe_7b_32x4", "--moe-shared-experts=2", "--hf-export")
+
+    # And neither half is refused on its own.
+    configure("--model-factory=olmoe_7b_32x4", "--moe-shared-experts=2")
+    configure("--model-factory=olmoe_7b_32x4", "--hf-export")
 
 
 @pytest.fixture
@@ -832,12 +1085,15 @@ class FakeTrainer:
 class FakeOptions:
     run_name: str = "run_0"
     save_folder: str = "s3://bucket/teams/platform/runs/run_0/checkpoints/"
+    hf_export: bool = False
+    hf_export_folder: str = ""
 
 
 @dataclass
 class FakeConfig:
     dataset_id: str = "pretrain/regmix-10b"
     dataset_version: str = "v1"
+    dataset_val_paths: List[str] = field(default_factory=list)
 
 
 class FakeParameter:
@@ -885,6 +1141,39 @@ def test_the_summary_is_one_json_object_carrying_what_only_this_process_knows(ca
     assert printed["seconds"] == 12.5
     assert printed["dataset_id"] == "pretrain/regmix-10b"
     assert printed["checkpoint_uri"].endswith("/checkpoints/")
+    # Null beside zero shards is a run that had nothing to measure against, which is a
+    # different fact from an evaluator that ran and returned nothing.
+    assert printed["val_loss"] is None
+    assert printed["val_shards"] == 0
+    # And nothing was exported, so there is no prefix to point anybody at.
+    assert printed["hf_uri"] == ""
+
+
+def test_the_summary_carries_the_number_the_arms_are_compared_on(capsys):
+    """Mutation: report ``last_loss`` and leave the validation loss to W&B.
+
+    The platform parses this object out of the log stream. A summary carrying only training
+    loss reports how well the arm fit the stream it just saw, under a field name that reads
+    like the result, and nothing downstream can tell the difference.
+    """
+    import json
+
+    watcher = entry.LossWatcher()
+    watcher.log_metrics(1, {"train/CE loss": 6.9})
+    watcher.log_metrics(2, {"eval/held-out/CE loss": 6.4})
+
+    entry.summarise(
+        opts=FakeOptions(hf_export=True),
+        config=FakeConfig(dataset_val_paths=list(VAL_SHARDS)),
+        trainer=FakeTrainer([FakeParameter(1)], step=50),
+        losses=watcher,
+        seconds=1.0,
+    )
+
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["val_loss"] == 6.4
+    assert printed["val_shards"] == 2
+    assert printed["hf_uri"] == "s3://bucket/teams/platform/runs/run_0/hf"
 
 
 def test_a_summary_is_printed_even_when_no_step_reported_a_loss(capsys):

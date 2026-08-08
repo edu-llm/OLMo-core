@@ -78,7 +78,7 @@ import re
 import sys
 import time
 import traceback
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Dict, Iterator, List, Optional, cast
 
 import rich
@@ -89,6 +89,7 @@ from olmo_core.data import (
     NumpyDataLoaderConfig,
     NumpyDatasetDType,
     NumpyFSLDatasetConfig,
+    NumpyPaddedFSLDatasetConfig,
     TokenizerConfig,
 )
 from olmo_core.distributed.parallel import DataParallelType
@@ -108,6 +109,8 @@ from olmo_core.train.callbacks import (
     CheckpointerCallback,
     ConfigSaverCallback,
     GPUMemoryMonitorCallback,
+    HFConverterCallback,
+    LMEvaluatorCallbackConfig,
     WandBCallback,
 )
 from olmo_core.train.checkpoint import Checkpointer
@@ -393,6 +396,16 @@ def validate_olmoe_parallelism(opts) -> None:
             Stage.THE_CONFIG_WOULD_NOT_BUILD,
             "--moe-shared-experts cannot be negative",
         )
+    if opts.moe_shared_experts and opts.hf_export:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            "--hf-export cannot be combined with --moe-shared-experts: HuggingFace has no "
+            "MoE architecture with an always-on expert, so `FlexOlmoConfig` has no field for "
+            "one and the state converter refuses the run's shared_mlp weights rather than "
+            "dropping them. Refused here because the alternative is finding out at the first "
+            "export, hours in. The shared-expert arm is comparable on validation loss like "
+            "every other arm; what it cannot do is hand its weights to the downstream lane.",
+        )
     if OLMOE_7B_32X4_ROUTED_EXPERTS % opts.moe_shard_degree:
         raise Refusal(
             Stage.THE_CONFIG_WOULD_NOT_BUILD,
@@ -437,6 +450,11 @@ class ExperimentConfig(Config):
     train_module: TransformerTrainModuleConfig
     dataset_id: str = ""
     dataset_version: str = ""
+    #: The held-out shards the evaluator was wired to, empty when the corpus declares none.
+    #: Carried on the config so ``summarise`` can say how many there were without resolving
+    #: the corpus a second time: a null validation loss beside zero shards means the corpus
+    #: could not be measured, and beside a count it means the evaluator returned nothing.
+    dataset_val_paths: List[str] = field(default_factory=list)
     init_seed: int = 12536
 
 
@@ -450,15 +468,33 @@ class Corpus:
     dtype: NumpyDatasetDType
     tokenizer: TokenizerConfig
     rows: Optional[int]
+    #: The corpus's held-out shards, empty when it declares none. SEPARATE FROM ``paths``
+    #: RATHER THAN MIXED INTO IT: a validation shard that reached the training stream is the
+    #: one data error no metric can show, because the number it corrupts is the number you
+    #: would check it with.
+    val_paths: List[str] = field(default_factory=list)
 
 
-def corpus_from_manifest(read, *, dataset_id: str, version: str, tokenizer_id: str) -> Corpus:
+def corpus_from_manifest(
+    read,
+    *,
+    dataset_id: str,
+    version: str,
+    tokenizer_id: str,
+    val_paths: Optional[List[str]] = None,
+) -> Corpus:
     """Turn what the reader returned into what OLMo-core needs, or refuse and say why.
 
     Separate from the fetch because this is the part with the judgement in it, and a test
     should be able to hand it a manifest describing a big-endian corpus without standing up
     S3 or installing the reader. ``read`` is duck-typed for that reason: anything carrying
     ``paths``, ``dtype``, ``byte_order``, ``header_bytes`` and ``rows`` will do.
+
+    THE HELD-OUT SHARDS INHERIT THE THREE CHECKS BELOW RATHER THAN GETTING THEIR OWN. dtype,
+    header bytes and byte order are properties of the published corpus and not of one split,
+    and the manifest being checked describes both. What has to hold is that the eval dataset
+    is built at the same width: a mismatch there reads every held-out token to a different
+    in-range id and yields a validation loss that is wrong rather than absent.
     """
     if not read.paths:
         raise Refusal(
@@ -507,6 +543,7 @@ def corpus_from_manifest(read, *, dataset_id: str, version: str, tokenizer_id: s
         dtype=NumpyDatasetDType(read.dtype),
         tokenizer=tokenizer,
         rows=read.rows,
+        val_paths=list(val_paths or []),
     )
 
 
@@ -571,8 +608,34 @@ def resolve_corpus(*, dataset_id: str, version: str, tokenizer_id: str) -> Corpu
             read_failure(exc),
             f"reading {dataset_id}/{version}: {type(exc).__name__}: {exc}",
         ) from exc
+
+    # THE HELD-OUT SPLIT, ASKED FOR SEPARATELY AND ALLOWED TO BE ABSENT. A second call rather
+    # than a flag on the first, because the default above is the reader's answer to "what may
+    # this run train on" and the answer must not start including validation shards.
+    #
+    # ABSENT IS A VALUE HERE, WHICH IS WHY THIS DEGRADES RATHER THAN REFUSES. A corpus with no
+    # declared split comes back empty rather than raising, so "there is nothing to evaluate
+    # on" and "the read failed" stay distinguishable, and neither kills a run over a metric.
+    # ``--require-val`` is how a comparison whose estimand is held-out loss says it would
+    # rather not start than train without one.
+    val_paths: List[str] = []
+    try:
+        val_paths = list(dataset_paths(dataset_id, version, split="val", s3=s3).paths)
+    except BaseException as exc:  # noqa: BLE001 -- see above
+        log.warning(
+            "could not list the held-out split of %s/%s, so this run has no evaluator: %s: %s",
+            dataset_id,
+            version,
+            type(exc).__name__,
+            exc,
+        )
+
     return corpus_from_manifest(
-        read, dataset_id=dataset_id, version=version, tokenizer_id=tokenizer_id
+        read,
+        dataset_id=dataset_id,
+        version=version,
+        tokenizer_id=tokenizer_id,
+        val_paths=val_paths,
     )
 
 
@@ -660,6 +723,26 @@ def remove_torn_checkpoints(save_folder: str) -> List[str]:
     return removed
 
 
+def hf_export_folder(opts) -> str:
+    """Where the HuggingFace exports go, which nobody downstream should have to be told.
+
+    Beside the checkpoints rather than inside them, at the run's own output prefix. The
+    platform derives ``EDULLM_CHECKPOINT_DIR`` as ``${EDULLM_OUTPUT_PREFIX}checkpoints/``, so
+    the parent of the save folder is that prefix and ``hf/`` is a sibling of ``checkpoints/``
+    -- one directory to list, holding one ``step{N}`` per export and nothing else. A lane
+    reading the run's outputs finds them by listing rather than by being handed a path.
+
+    DERIVED FROM ``--save-folder`` AND NOT FROM ``EDULLM_OUTPUT_PREFIX``, although on the
+    platform the two agree. The save folder is the one the checkpoints are actually going to,
+    including when a submission overrode it or the array-job prologue rewrote the prefix
+    underneath it, and an export that landed beside a different run's checkpoints would be
+    worse than one nobody could find.
+    """
+    if opts.hf_export_folder:
+        return opts.hf_export_folder
+    return f"{os.path.dirname(normalize_path(opts.save_folder).rstrip('/'))}/hf"
+
+
 def build_config(opts, overrides: List[str]):
     corpus = resolve_corpus(
         dataset_id=opts.dataset_id,
@@ -667,13 +750,22 @@ def build_config(opts, overrides: List[str]):
         tokenizer_id=opts.dataset_tokenizer,
     )
     log.info(
-        "%s/%s: %d shards, dtype %s, tokenizer %s",
+        "%s/%s: %d shards, dtype %s, tokenizer %s, %d held-out shards",
         corpus.dataset_id,
         corpus.version,
         len(corpus.paths),
         corpus.dtype,
         opts.dataset_tokenizer,
+        len(corpus.val_paths),
     )
+    # Refused here rather than after the model is built, because the answer is already known
+    # and a run that cannot measure the thing it exists to measure should not reach a GPU.
+    if opts.require_val and not corpus.val_paths:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"--require-val was given and {corpus.dataset_id}/{corpus.version} declares no "
+            "validation split, so this run could report only training loss.",
+        )
 
     if is_olmoe_7b_32x4(opts):
         validate_olmoe_parallelism(opts)
@@ -825,13 +917,86 @@ def build_config(opts, overrides: List[str]):
         .with_callback("config_saver", ConfigSaverCallback())
     )
 
-    # No lm_evaluator and no downstream_evaluator, and their absence is a decision. The
-    # example's LM evaluator reads a C4 validation shard from olmo-data.org and the downstream
-    # one pulls HellaSwag from Hugging Face; both would put a public-internet fetch in the
-    # middle of a run whose whole claim is that it read a sealed corpus, and a failure in
-    # either would look like a training failure. Held-out shards for a published corpus come
-    # back from the reader as `.val`, and wiring an evaluator to those is the right version of
-    # this -- it needs a corpus that declares one, which regmix-10b does not.
+    # STILL NO downstream_evaluator, AND THAT ABSENCE IS STILL A DECISION. The example's pulls
+    # HellaSwag from Hugging Face and the task groups in `olmo_core.eval.task_groups` name
+    # paths this container cannot reach; either would put a public-internet fetch in the
+    # middle of a run whose whole claim is that it read a sealed corpus, a failure in one
+    # would look like a training failure, and the image installs `.[wandb]` rather than
+    # `.[eval]` so `ai2-olmo-eval` is not there to import in the first place.
+    #
+    # THE LM EVALUATOR IS NOW WIRED, TO THE CORPUS'S OWN HELD-OUT SHARDS. Same argument, other
+    # direction: `dataset_paths(split="val")` reads the same sealed prefix the training stream
+    # came from, so this adds no network dependency, no package and no failure mode the run
+    # did not already have. What it needs is a corpus that declares a split, and one that does
+    # not gets no evaluator rather than an error.
+    #
+    # WITHOUT IT THE RUN REPORTS TRAINING LOSS UNDER A NAME THAT READS LIKE A RESULT.
+    # `first_loss` and `last_loss` say how well the model fit the stream it just saw, and the
+    # arms of this experiment are compared on held-out cross-entropy. That is not the same
+    # quantity and it is not a proxy for it.
+    #
+    # A PADDED FSL DATASET RATHER THAN THE TRAINING CONFIG'S OWN CLASS, because
+    # LMEvaluatorCallbackConfig.build refuses anything else by name. Padding is what makes the
+    # last instance of each shard scored rather than silently dropped at a different point for
+    # each arm.
+    if corpus.val_paths:
+        trainer_config = trainer_config.with_callback(
+            "lm_evaluator",
+            LMEvaluatorCallbackConfig(
+                eval_dataset=NumpyPaddedFSLDatasetConfig(
+                    paths=corpus.val_paths,
+                    sequence_length=opts.sequence_length,
+                    tokenizer=corpus.tokenizer,
+                    # Same width as the training stream, passed rather than inferred, for the
+                    # reason the header gives about the training stream.
+                    dtype=corpus.dtype,
+                    work_dir=opts.work_dir,
+                ),
+                eval_interval=opts.eval_interval,
+                # On finish, because a paired comparison reads the final number and the run
+                # must produce one rather than stopping at the last multiple of the interval.
+                eval_on_finish=True,
+                # Not on startup: it costs a pass over the held-out set to measure a model
+                # that has not trained, and the arms are identical there by construction.
+                eval_on_startup=False,
+                # BOUNDED, NOT AN EPOCH. A held-out split of a corpus this size is hundreds of
+                # millions of tokens and an unbounded pass over it costs more than the stretch
+                # of training it measures. A fixed count also scores every arm on the same
+                # amount of data, which an epoch over differently sized splits would not.
+                eval_duration=Duration.steps(opts.eval_batches),
+                deterministic=True,
+            ),
+        )
+
+    # HUGGINGFACE EXPORT, OFF UNLESS ASKED FOR. It is off by default because it is not free
+    # and because every existing user of this entry point submitted without it: gathering the
+    # full model state dict is a collective, and every rank that is not zero then waits at a
+    # barrier while rank zero builds the model on CPU and writes it. On the 7B MoE that is the
+    # whole fleet stopped for the length of one write, which is why the cadence is a flag and
+    # not the checkpoint interval.
+    if opts.hf_export:
+        trainer_config = trainer_config.with_callback(
+            "hf_converter",
+            HFConverterCallback(
+                output_folder=hf_export_folder(opts),
+                convert_interval=opts.hf_export_interval or None,
+                # No validation. It runs the OLMo-core model forward to compare logits, and
+                # for a dropless MoE that forward goes through `olmo_core.ops.moe`, whose
+                # kernels are Triton and CUDA-only -- so on this model the check is not
+                # cheaper than the export, it is a second full forward pass on the training
+                # device in the middle of a run. `src/test/nn/hf/checkpoint_test.py` is where
+                # the mapping is held to the numbers instead.
+                validate=False,
+                tokenizer_id=opts.hf_tokenizer or None,
+                max_sequence_length=opts.sequence_length,
+                # A FAILED EXPORT MUST NOT END THE RUN. Everything it needs beyond the model
+                # is outside this process -- a tokenizer fetched from Hugging Face, a write to
+                # the outputs bucket -- and none of it is worth the ninety-six hours the run
+                # is standing on. The library default re-raises, which is right for a job
+                # whose only output is the converted model and wrong for this one.
+                raise_on_failure=False,
+            ),
+        )
 
     config = ExperimentConfig(
         model=model_config,
@@ -841,6 +1006,7 @@ def build_config(opts, overrides: List[str]):
         trainer=trainer_config,
         dataset_id=corpus.dataset_id,
         dataset_version=corpus.version,
+        dataset_val_paths=list(corpus.val_paths),
     )
     return config.merge(overrides)
 
@@ -858,6 +1024,13 @@ class LossWatcher(Callback):
     def __init__(self) -> None:
         self.first: Optional[float] = None
         self.last: Optional[float] = None
+        #: The last held-out CE loss the run recorded, or None when it had no evaluator.
+        #: THIS IS THE NUMBER A COMPARISON BETWEEN ARMS READS, and it is captured here for the
+        #: same reason the W&B url is: the summary runs after the trainer has stopped and
+        #: nothing it can reach by then still holds the evaluator's metrics. Without it the
+        #: value exists in W&B and in a log stream nobody may read, and the machine-readable
+        #: summary the platform parses carries training loss alone.
+        self.val: Optional[float] = None
         self.wandb_url = ""
 
     def log_metrics(self, step: int, metrics: Dict[str, float]) -> None:
@@ -867,6 +1040,13 @@ class LossWatcher(Callback):
                 import wandb
 
                 self.wandb_url = getattr(wandb.run, "url", "") or ""
+        # Matched by suffix rather than by an exact key. EvaluatorCallback records under
+        # "{prefix}/{evaluator name}/{metric}", so both the prefix and the evaluator's name
+        # sit in the middle of the string and a hardcoded key stops matching -- silently, by
+        # matching nothing -- the moment either is renamed.
+        for name, value in metrics.items():
+            if name.endswith("/CE loss") and not name.startswith("train/"):
+                self.val = float(value)
         loss = metrics.get("train/CE loss")
         if loss is None:
             return
@@ -902,9 +1082,17 @@ def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> 
                 "steps": trainer.global_step,
                 "first_loss": losses.first,
                 "last_loss": losses.last,
+                # Null beside zero shards says the corpus declared no held-out split, which
+                # is a different fact from a run that had one and scored badly. --require-val
+                # refuses the first case before an instance is allocated.
+                "val_loss": losses.val,
+                "val_shards": len(config.dataset_val_paths),
                 "seconds": seconds,
                 "peak_memory_gib": peak,
                 "checkpoint_uri": opts.save_folder,
+                # Empty when the run was not asked to export, so the lane can tell a run that
+                # produced no HuggingFace checkpoints from one whose exports it cannot find.
+                "hf_uri": hf_export_folder(opts) if opts.hf_export else "",
                 "wandb_project": os.environ.get("EDULLM_WANDB_PROJECT", ""),
                 "wandb_url": losses.wandb_url,
             },
@@ -940,6 +1128,15 @@ def train(config, opts=None) -> None:
     trainer = config.trainer.build(train_module, data_loader)
 
     cast(ConfigSaverCallback, trainer.callbacks["config_saver"]).config = config.as_config_dict()
+    # The same config, handed to the converter rather than left for it to read back. Its own
+    # default is to fetch `config.json` out of the checkpoint directory it is converting, and
+    # this run saves asynchronously -- so at the step being converted that object may not have
+    # been written yet, and an export would fail on a file the run is in the middle of
+    # producing. The process already holds the answer.
+    if "hf_converter" in trainer.callbacks:
+        cast(
+            HFConverterCallback, trainer.callbacks["hf_converter"]
+        ).experiment_config = config.as_config_dict()
     losses = LossWatcher()
     trainer.add_callback("edullm_losses", losses)
 
@@ -992,7 +1189,21 @@ def build_parser() -> argparse.ArgumentParser:
             f"{OLMOE_7B_32X4_FACTORY!r} for the platform-native ~7.5B 32x4 MoE recipe"
         ),
     )
-    parser.add_argument("--sequence-length", type=int, default=2048)
+    parser.add_argument(
+        "--sequence-length",
+        type=int,
+        default=2048,
+        help="THE DEFAULT PREDATES THE MoE RECIPE AND IS NOT THE VALUE THAT RECIPE WAS "
+        "PLANNED AT. `src/scripts/train/OLMoE-1B-7B.py`, which commit d4b97fe aligned with "
+        "this entry point so the two are one experiment rather than two, sets 4096 and "
+        "derives its global batch size from it. Left at 2048 here because every submission "
+        "that predates the MoE factory got this value and changing a default silently makes "
+        "a sweep spanning the change two experiments reported as one -- so the run that "
+        "wants 4096 passes it. What moves with it: attention FLOPs per token and the KV "
+        "cache both scale with this, --global-batch-size and --rank-microbatch-size are in "
+        "TOKENS and so hold the token budget fixed while halving the sequences per batch, "
+        "and an exported HuggingFace checkpoint takes this as its max_position_embeddings.",
+    )
     parser.add_argument("--steps", type=int, default=200)
     parser.add_argument("--save-interval", type=int, default=100)
     parser.add_argument("--warmup-steps", type=int, default=20)
@@ -1013,8 +1224,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=2,
         help=(
-            "HSDP replica count for "
-            f"{OLMOE_7B_32X4_FACTORY}; ignored by other model factories"
+            "HSDP replica count for " f"{OLMOE_7B_32X4_FACTORY}; ignored by other model factories"
         ),
     )
     parser.add_argument(
@@ -1029,6 +1239,64 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--data-seed", type=int, default=0)
+    parser.add_argument(
+        "--eval-interval",
+        type=int,
+        default=1000,
+        help="Steps between held-out evaluations. A corpus that declares no validation "
+        "split gets no evaluator whatever this says.",
+    )
+    parser.add_argument(
+        "--eval-batches",
+        type=int,
+        default=64,
+        help="Batches per held-out evaluation. Bounded rather than a full epoch, because a "
+        "pass over a whole validation split costs more than the stretch of training it "
+        "measures, and fixed so every arm and seed is scored on the same amount of data.",
+    )
+    parser.add_argument(
+        "--require-val",
+        action="store_true",
+        help="Refuse rather than train when the corpus declares no validation split. A "
+        "comparison whose estimand is held-out loss gets nothing from a run that cannot "
+        "measure it, and the failure is otherwise invisible: the run trains, exits zero, "
+        "and reports training loss under a name that reads like a result.",
+    )
+    parser.add_argument(
+        "--hf-export",
+        action="store_true",
+        help="Also write HuggingFace-format checkpoints, so that whatever reads them "
+        "downstream does not need a conversion job per handoff. OFF BY DEFAULT: an export "
+        "is a collective followed by every rank waiting at a barrier while rank zero "
+        "writes the model, which is a cost no existing user of this entry point asked for. "
+        "Requires the transformers package, which is not in the wandb extra.",
+    )
+    parser.add_argument(
+        "--hf-export-interval",
+        type=int,
+        default=0,
+        help="Steps between HuggingFace exports while the run is going. Zero, the default, "
+        "exports once when training finishes. A number here is what makes intermediate "
+        "checkpoints available to something running beside the training job, and it should "
+        "be a multiple of --save-interval so that every export has a core checkpoint "
+        "beside it.",
+    )
+    parser.add_argument(
+        "--hf-export-folder",
+        default="",
+        help="Where the exports go. Empty, the default, puts them at hf/ beside the "
+        "checkpoints under the run's own output prefix, which is where something reading "
+        "the run's outputs will look without being told.",
+    )
+    parser.add_argument(
+        "--hf-tokenizer",
+        default="",
+        help="A HuggingFace id or local directory to save alongside the exported model. "
+        "Empty uses the corpus tokenizer's own identifier, which for dolma2 is a "
+        "HuggingFace id and therefore a fetch over the public internet at export time; "
+        "point this at a vendored directory to avoid that. The gigatoken tokenizers carry "
+        "no identifier, so their exports are weights and config with no tokenizer at all.",
+    )
     parser.add_argument(
         "--param-dtype",
         default=DType.bfloat16.value,

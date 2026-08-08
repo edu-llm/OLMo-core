@@ -39,6 +39,74 @@ except ImportError:
 
 log = logging.getLogger(__name__)
 
+#: The per-expert weights this repository's MoE mapping emits, paired with the fused
+#: parameter each contributes to and the order it is concatenated in. ``gate`` before ``up``
+#: because ``FlexOlmoExperts.forward`` splits the projection's output with
+#: ``.chunk(2, dim=-1)`` and reads the first half as the gate.
+_FUSED_MOE_EXPERT_PARTS: Dict[str, tuple[str, ...]] = {
+    "gate_up_proj": ("gate_proj", "up_proj"),
+    "down_proj": ("down_proj",),
+}
+
+
+def _fuse_moe_expert_weights(
+    hf_state_dict: Dict[str, torch.Tensor], expected_keys: set
+) -> Dict[str, torch.Tensor]:
+    """Stack per-expert MoE weights into the single tensor per projection HF now wants.
+
+    THE LAYOUT MOVED UNDER US AND NOTHING IN THIS REPOSITORY NOTICED. ``transformers``
+    stores a MoE layer's experts as one 3D parameter per projection --
+    ``mlp.experts.gate_up_proj`` of ``(experts, 2 x intermediate, hidden)`` and
+    ``mlp.experts.down_proj`` of ``(experts, hidden, intermediate)`` -- and has done since
+    before ``5.4.0``, which is the floor this project declares. The mapping in
+    :mod:`olmo_core.nn.hf.convert` still emits the ``nn.ModuleList`` form that preceded it,
+    one ``mlp.experts.{i}.gate_proj.weight`` per expert. ``load_state_dict`` then reports
+    every expert weight as both missing and unexpected and the conversion dies.
+
+    It survived because no test loads a converted MoE state dict into an HF model. The two
+    that mention MoE check the generated config and the state mapping, and those agree with
+    each other; what they never ask is whether ``transformers`` agrees with either.
+
+    KEYED ON WHAT THE TARGET MODEL ASKS FOR RATHER THAN ON A VERSION TEST. ``expected_keys``
+    is the instantiated HF model's own ``state_dict`` keys, so this fuses exactly when the
+    model in front of it wants fused parameters and is a no-op when it wants the module
+    list. A ``transformers`` that moves back, or a model type that never moved, needs no
+    change here.
+    """
+    fused: Dict[str, torch.Tensor] = {}
+    consumed: set = set()
+    for expected in expected_keys:
+        prefix, _, projection = expected.rpartition(".")
+        parts = _FUSED_MOE_EXPERT_PARTS.get(projection)
+        if parts is None or not prefix.endswith(".experts"):
+            continue
+
+        stacked = []
+        expert = 0
+        while True:
+            keys = [f"{prefix}.{expert}.{part}.weight" for part in parts]
+            if not all(key in hf_state_dict for key in keys):
+                break
+            stacked.append(torch.cat([hf_state_dict[key] for key in keys], dim=0))
+            consumed.update(keys)
+            expert += 1
+        if not stacked:
+            continue
+        fused[expected] = torch.stack(stacked)
+
+    if not fused:
+        return hf_state_dict
+
+    log.info(
+        "Fused %d per-expert weights into %d MoE parameters, which is the layout the "
+        "installed transformers expects",
+        len(consumed),
+        len(fused),
+    )
+    remaining = {key: value for key, value in hf_state_dict.items() if key not in consumed}
+    remaining.update(fused)
+    return remaining
+
 
 @beta_feature
 def load_hf_model(
@@ -174,6 +242,8 @@ def save_hf_model(
         log.info("Initializing HF model with empty weights...")
         hf_model = AutoModelForCausalLM.from_config(hf_config)
         del hf_config
+
+    hf_state_dict = _fuse_moe_expert_weights(hf_state_dict, set(hf_model.state_dict()))
 
     hf_model.load_state_dict(hf_state_dict, assign=True)
 
