@@ -170,6 +170,16 @@ def build_parser():
         "to find that out for a few dollars than for a few hundred.",
     )
     parser.add_argument(
+        "--partial-rotary-factor",
+        type=float,
+        default=None,
+        help="Fraction of each head's channels that receive RoPE. A separate track from the "
+        "arms and composable with any of them: nobody has measured in-distribution "
+        "bits-per-byte against this fraction at any scale with a noise floor, and it is free "
+        "-- no parameters, no change to accounted FLOPs, only which channels carry positional "
+        "phase. 1.0 is ordinary RoPE and 0.0 is NoPE. Leave unset to touch nothing.",
+    )
+    parser.add_argument(
         "--preflight",
         action="store_true",
         help="Build the config AND the held-out dataset, say what they came out as, and exit "
@@ -239,6 +249,9 @@ def build_config(opts, overrides):
             config.train_module.optim.group_overrides = (
                 list(config.train_module.optim.group_overrides or []) + overrides_for_hc
             )
+
+    if opts.partial_rotary_factor is not None:
+        hyper_connection_arms.apply_partial_rotary(config.model, opts.partial_rotary_factor)
 
     _add_held_out_evaluation(config, opts)
 

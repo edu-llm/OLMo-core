@@ -302,6 +302,53 @@ HELD_OUT_SHARDS = 2
 DOLMA2_BYTES_PER_TOKEN = 4.57
 
 
+def apply_partial_rotary(config: TransformerConfig, factor: float) -> TransformerConfig:
+    """
+    Set the fraction of each head's channels that receive RoPE.
+
+    A separate axis from the arms and composable with all of them. It costs nothing -- RoPE has
+    no parameters and ``num_flops_per_token`` does not count it -- so the only thing that moves
+    is which channels carry positional phase. The channels above the cut pass through
+    unrotated rather than being dropped, and QK-norm still runs on the whole head beforehand.
+
+    :param config: The model config. Mutated in place and returned.
+    :param factor: In ``[0, 1]``. ``1.0`` is ordinary RoPE; ``0.0`` is NoPE.
+
+    :raises ValueError: If the factor is out of range, if the model has no rotary embedding to
+        set it on, if the RoPE implementation refuses it, or if it would cut a head into an odd
+        number of rotated channels -- RoPE rotates channels in pairs, so an odd count silently
+        leaves one of them out of the rotation it was supposed to be in.
+    """
+    from olmo_core.nn.rope import RoPEType
+
+    if not 0.0 <= factor <= 1.0:
+        raise ValueError(f"partial_rotary_factor must be in [0, 1], got {factor}")
+    if isinstance(config.block, dict):
+        raise ValueError("partial RoPE expects a single block config, not a named-block dict.")
+
+    rope = getattr(config.block.sequence_mixer, "rope", None)
+    if rope is None:
+        raise ValueError("this model has no rotary embedding to set a partial factor on")
+    if rope.name == RoPEType.fused:
+        raise ValueError(
+            "FusedRotaryEmbedding refuses a partial factor, and it refuses it at build time. "
+            "Use RoPEType.default."
+        )
+
+    head_dim = config.block.sequence_mixer.head_dim or (
+        config.d_model // config.block.sequence_mixer.n_heads
+    )
+    rotated = int(head_dim * factor)
+    if rotated % 2 != 0:
+        raise ValueError(
+            f"factor {factor} rotates {rotated} of {head_dim} channels, which is odd. RoPE "
+            "pairs channels, so an odd count drops one out of the rotation."
+        )
+
+    rope.partial_rotary_factor = factor
+    return config
+
+
 def source_label(path: str) -> str:
     """
     The corpus source a shard belongs to, which the LM evaluator needs as its metric label.

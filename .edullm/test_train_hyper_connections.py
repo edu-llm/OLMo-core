@@ -278,6 +278,48 @@ def test_the_platform_attention_backend_is_used_everywhere():
         assert mixer.sliding_window is None, opts.model_factory
 
 
+@pytest.mark.parametrize("factor", [1.0, 0.75, 0.5, 0.25, 0.0])
+def test_partial_rotary_is_a_free_axis_across_the_whole_sweep(factor: float):
+    """
+    Nobody has measured in-distribution BPB against the fraction of head channels carrying
+    RoPE, at any scale, with a noise floor. It costs nothing to ask: RoPE has no parameters and
+    is not counted in num_flops_per_token, so an arm at 0.25 is iso-everything with one at 1.0.
+    """
+    baseline, _ = build(BASE_ARGV + ["--arm", "baseline"])
+    swept, _ = build(BASE_ARGV + ["--arm", "baseline", "--partial-rotary-factor", str(factor)])
+
+    assert swept.model.block.sequence_mixer.rope.partial_rotary_factor == factor
+    assert swept.model.num_params == baseline.model.num_params
+    assert swept.model.build(init_device="meta").num_flops_per_token(4096) == baseline.model.build(
+        init_device="meta"
+    ).num_flops_per_token(4096)
+
+
+def test_partial_rotary_composes_with_a_hyper_connection_arm():
+    config, _ = build(BASE_ARGV + ["--arm", "faithful", "--partial-rotary-factor", "0.5"])
+    assert config.model.block.sequence_mixer.rope.partial_rotary_factor == 0.5
+    assert config.model.block.hyper_connections is not None
+
+
+def test_partial_rotary_is_untouched_unless_asked_for():
+    config, _ = build(BASE_ARGV + ["--arm", "baseline"])
+    assert config.model.block.sequence_mixer.rope.partial_rotary_factor == 1.0
+
+
+def test_partial_rotary_refuses_a_cut_that_splits_a_rotation_pair():
+    """
+    RoPE rotates channels in pairs. An odd count silently leaves one channel out of the
+    rotation it was supposed to be in, which is a quietly different model rather than an error.
+    """
+    with pytest.raises(ValueError, match="which is odd"):
+        build(BASE_ARGV + ["--arm", "baseline", "--partial-rotary-factor", "0.03"])
+
+
+def test_partial_rotary_refuses_an_out_of_range_factor():
+    with pytest.raises(ValueError, match=r"must be in \[0, 1\]"):
+        build(BASE_ARGV + ["--arm", "baseline", "--partial-rotary-factor", "1.5"])
+
+
 def test_an_unknown_arm_is_refused_at_parse_time():
     with pytest.raises(SystemExit):
         build(BASE_ARGV + ["--arm", "no-such-arm"])
