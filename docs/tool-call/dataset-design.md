@@ -477,6 +477,22 @@ from every `added_tokens_decoder`. See §16.
 The test is not "does the card say Apache-2.0" but "could the uploader grant model-training rights
 at all."
 
+**Tagged vs prose-only, measured** — [`verify/verify_licenses.py`](verify/verify_licenses.py):
+
+```
+Team-ACE/ToolACE                        license: apache-2.0    tags: ['license:apache-2.0']  TAGGED
+NousResearch/hermes-function-calling-v1 license: apache-2.0    tags: ['license:apache-2.0']  TAGGED
+allenai/Dolci-Instruct-SFT-Tool-Use     license: <ABSENT>      tags: <NONE>            PROSE-ONLY
+allenai/Dolci-Think-…-Tool-Use-SA       license: cc-by-sa-4.0  tags: ['license:cc-by-sa-4.0']  ← conflicts with its own ODC-BY prose
+Salesforce/xlam-function-calling-60k    license: cc-by-4.0     gated: auto             ← tag vs research-only gate prose
+```
+
+A **tagged** licence is a `license:` key in the card's YAML frontmatter, drawn from HF's controlled
+vocabulary: the Hub parses it, badges it, exposes it as a `license:*` API tag, and makes it
+filterable. A licence named only in the README prose is none of those things — nothing parses it, so
+it is a materially weaker statement of the uploader's intent. That is why our largest single source
+needs a human sign-off (§15 Q3) and ToolACE does not.
+
 | dataset | license | rows we can take | verdict |
 | --- | --- | --- | --- |
 | **`allenai/olmo-toolu-*`** (all five named in `src/scripts/train/sft/README.md:52-56`) | UNVERIFIED — unobtainable | **0** | **FORECLOSED — all five return HTTP 401.** Control: `allenai/tulu-3-sft-mixture` returns 200 from the same client, so the 401 is real. Private and nonexistent are indistinguishable from outside; neither is obtainable |
