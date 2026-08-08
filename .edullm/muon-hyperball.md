@@ -136,8 +136,10 @@ Both arms ran to completion on `gpu-8xa100`, 7630/7630 steps, 4,000,317,440 toke
 | `optim/radius_relative_drift_max` | 1.19e-07 | absent, as designed |
 
 **The constraint held, so the loss comparison means something.** Over all 7630 steps the drift
-never exceeded **1.788e-07** (its maximum, at step 3; 1.192e-07 = 2⁻²³ at the end), and **zero**
-steps were above the 1e-5 threshold. `matrix_norm_mean` is identical to four decimals at the
+never exceeded **1.788e-07**, and **zero** steps were above the 1e-5 threshold. It does not trend:
+it oscillates between 1.192e-07 and 1.788e-07 — exactly 1.0 and 1.5 × 2⁻²³ — for the whole run,
+which is the quantization of an fp32 ratio either side of 1 and not a drift at all. The maximum is
+attained repeatedly, in the last bucket of steps as much as the first, which is the point. `matrix_norm_mean` is identical to four decimals at the
 first and last step. This is the check the section above says to make before reading any loss
 curve, and it passes. The MuonW arm has no drift metric at all, which is the correct behaviour
 for an arm with no radius rather than a missing log.
