@@ -1,10 +1,13 @@
 # Memory paper-fidelity branch handoff
 
-Repository: `https://github.com/edu-llm/OLMo-core`
+Upstream repository: `https://github.com/edu-llm/OLMo-core`
+
+Contributor fork: `https://github.com/prestonloats/OLMo-core`
 
 - Source branch: `edullm/memory-paper-fidelity`
 - Target branch: `edullm/lngram-triton-optimization`
 - Required ancestor: `09c02401` (`Accelerate Lngram counterfactual backward`)
+- Implementation commit: `18d34ccf` (`Improve Engram and Lngram paper fidelity`)
 - Experiment revision: `memory-paper-fidelity-v1`
 
 The source branch is based directly on the target branch and contains:
@@ -29,7 +32,7 @@ Final model accounting:
 gh pr create \
   --repo edu-llm/OLMo-core \
   --base edullm/lngram-triton-optimization \
-  --head edullm/memory-paper-fidelity \
+  --head prestonloats:edullm/memory-paper-fidelity \
   --title "Improve Engram and Lngram paper fidelity" \
   --body "Adds the sealed Dolma2 compression map, dilation-3 memory convolutions, Lngram initialization and gate fidelity, table-only optimizer scaling, corrected insertion indices, and checkpoint revision guards."
 ```
@@ -44,14 +47,17 @@ Use this only if repository policy permits direct branch updates:
 git fetch origin
 git switch edullm/lngram-triton-optimization
 git pull --ff-only origin edullm/lngram-triton-optimization
-git merge --ff-only origin/edullm/memory-paper-fidelity
+git fetch https://github.com/prestonloats/OLMo-core.git \
+  edullm/memory-paper-fidelity
+git merge --ff-only FETCH_HEAD
 git push origin HEAD:edullm/lngram-triton-optimization
 ```
 
 ## Verification
 
 ```bash
-git merge-base --is-ancestor 09c02401 origin/edullm/memory-paper-fidelity
+git merge-base --is-ancestor 09c02401 HEAD
+git merge-base --is-ancestor 18d34ccf HEAD
 python -m pytest -q \
   src/test/nn/memory \
   src/test/nn/test_memory_convolution.py \
