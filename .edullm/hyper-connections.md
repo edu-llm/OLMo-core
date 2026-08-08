@@ -791,16 +791,16 @@ Nothing below has been measured. These are the gates, not predictions.
 
 | quantity | stage that fills it | value |
 | --- | --- | --- |
-| σ̂ on held-out BPB at the final step, df = 4 | 1 | **not measured** |
-| σ̂ at each of the twelve intermediate checkpoints | 1 | **not measured** |
-| per-source σ̂ over the seven held-out sources, df = 4 each | 1 | **not measured** |
-| the per-source inverse-variance weights, and what they buy | 1 | **not measured** |
+| σ̂ on held-out BPB at the final step, df = 4 | 1 | **0.00627 BPB = 0.0199 nats; 0.0211 c₄-corrected** |
+| σ̂ at each of the twelve intermediate checkpoints | 1 | **measured; still falling at step 6,000** |
+| per-source σ̂ over the seven held-out sources, df = 4 each | 1 | **0.0047–0.0091 BPB, a 1.93× spread** |
+| the per-source inverse-variance weights, and what they buy | 1 | **0.1890 ×4 and 0.0813 ×3; 1.18× of variance** |
 | pooled σ̂ across all fifteen runs, df = 12 | 2 | **not measured** |
 | Bartlett p over the three within-arm variances | 2 | **not measured** |
 | ρ̂, the within-seed correlation the pairing exploits | 2 | **not measured** |
 | σ̂_Δ, the paired difference, from the H1 and H2a quintuples | 2 | **not measured** |
 | per-seed σ, downstream average | neither | **not measured** |
-| minimum detectable effect, per contrast, 80% power | 1 for σ̂, 2 for ρ̂ | **not measured** |
+| minimum detectable effect, per contrast, 80% power | 1 for σ̂, 2 for ρ̂ | **0.040 nats unpaired 5 v 5; the paired column still needs ρ̂** |
 
 Every row is computed by `.edullm/noise_floor.py`, which is committed with a test against a
 planted truth for each estimator. `--dry-run` reads whatever has landed and labels the reading
@@ -848,6 +848,134 @@ That file now carries the correction itself, as a labelled note beside the claim
 an edit to it. The 3.4 is left standing where it was written, for the reason the rest of that
 file gives about its own paragraphs: the five admitted cells launched from it, and a reader who
 saw the number needs to be able to tell that they did.
+
+### Stage 1 landed, and σ̂ is twice the value the design was priced against
+
+All five cells of `run_019fe2f4-f528` reached step 6,000 and finished, on `gpu-8xa100`, seeds
+0 through 4, thirteen evaluations each over seven sources. `.edullm/noise-floor.json` is the
+frozen artifact and names the five run ids behind every number in it. Nothing below was
+computed before all five were terminal, and no treatment cell existed when it was written.
+
+| | value |
+| --- | --- |
+| σ̂, held-out BPB, unweighted mean of seven sources, step 6,000 | **0.00627 BPB** |
+| the same in nats of held-out cross-entropy | **0.0199 nats** |
+| c₄-corrected point estimate, which every MDE below is taken from | **0.0211 nats** |
+| 95% chi-square interval, df = 4 | **0.0119 – 0.0571 nats**, a factor of 4.8 |
+| planning value the analysis plan is quoted at | 0.010 nats |
+
+**The point estimate is 2.1× the planning value and above the top of both stated ranges** —
+0.008–0.012 from the literature, 0.007–0.013 from DataDecide around a central 0.009. The band
+is not *excluded*: the low end of the 95% interval is 0.0119 nats, which still touches 0.013.
+But at df = 4 that interval excludes almost nothing, and a design has to be priced off the
+point estimate. **Every threshold in [The analysis plan](#the-analysis-plan) doubles**, because
+every one of them is linear in σ.
+
+#### Two of the five runs took a loss spike, and that is 99% of the variance
+
+σ̂ is not seed jitter. The five endpoints fall into two groups that do not overlap:
+
+| seed | held-out BPB at step 6,000 | post-warmup instability |
+| --- | --- | --- |
+| 0 | 0.68664 | steps 1376–1418, peak grad norm **9.30**, train CE to 6.46 |
+| 1 | 0.68789 | steps 1726–1773, peak grad norm **20.45**, train CE to 10.26 |
+| 2 | 0.67541 | none |
+| 3 | 0.67628 | none |
+| 4 | 0.67589 | none |
+
+Typical grad norm is 0.11–0.17 and `max_grad_norm` is 1, so clipping bounded each episode
+without preventing it; the optimizer is plain `AdamW` and no step was skipped. Every step
+counter is monotonic, so neither episode is a resume or an infrastructure artifact. Both fall
+in the same phase of training, near peak LR, roughly a quarter of the way through the cosine.
+
+The consequences are the whole of what stage 1 found.
+
+- **The spike costs 0.0114 BPB — 0.0361 nats — and it is permanent.** The gap between the two
+  groups was 0.0141 BPB at step 2,500 and 0.0114 at step 6,000. It is closing at a rate that
+  does not close it.
+- **It is larger than the effect the module is hunting.** ByteDance's whole ablation is 0.030
+  nats. One spike costs more than that.
+- **Within a group, σ is 0.00197 nats**, pooled on df = 3. The all-five σ̂ is **10.1×** that,
+  and **99.0% of the endpoint variance is the spike-or-not split** rather than run-to-run
+  scatter. This configuration is not noisy. It is bimodal.
+- **σ̂ is still falling at the horizon**: σ(6,000)/σ(3,000) = 0.88, bootstrap interval
+  [0.50, 0.94], which excludes 1. That verdict is real but it is not the endpoint settling —
+  it is the two spiked runs slowly failing to catch up. Read as a noise floor the number is
+  still moving; read as a spike gap it has essentially stopped.
+
+#### The code-versus-web ordering does not reproduce; it inverts
+
+DataDecide reports code-type sources several times noisier than web text, this corpus is
+code-heavy, and the weighting was justified on that basis. Measured here, at df = 4 each:
+
+| source | σ̂ (BPB) | stratum | weight | df behind the weight |
+| --- | --- | --- | --- | --- |
+| starcoder | 0.00472 | 0 | 0.1890 | 16 |
+| algebraic-stack | 0.00497 | 0 | 0.1890 | 16 |
+| arxiv | 0.00533 | 0 | 0.1890 | 16 |
+| open-web-math | 0.00553 | 0 | 0.1890 | 16 |
+| dclm | 0.00699 | 1 | 0.0813 | 12 |
+| pes2o | 0.00728 | 1 | 0.0813 | 12 |
+| wiki | 0.00911 | 1 | 0.0813 | 12 |
+
+**The two code sources are the two quietest and `wiki` is the noisiest**, and the whole spread
+is 1.93× rather than the 4–7× the literature claims. So the premise the weighting was argued
+from is not true of this configuration, and the weights are worth correspondingly little: a
+variance reduction of **1.18× in sample and 1.18× leave-one-seed-out**, which is 8% off a
+standard error. They are at least not over-fitted — the two figures agreeing is what that
+looks like.
+
+The reason the ceiling is so low is visible in one comparison. Mean per-source σ̂ is 0.00628
+and the composite of all seven is 0.00627, where seven independent sources would have given
+0.00237. **The sources move together almost exactly**, because what moves them is a whole-run
+event, and no diagonal weighting reaches a common-mode term. The weights are frozen and will be
+applied to stage 2 as a constant, which is what was committed; they are simply not the
+instrument the plan hoped for.
+
+#### What the tranche can now detect
+
+At the c₄-corrected σ̂, exact noncentral t, two-sided α = 0.05, 80% power. The funded design is
+four arms — `baseline`, `faithful`, `output-only`, `mhc` — so k = 4, and the error df is
+k(n−1) = 16 unpaired and (k−1)(n−1) = 12 paired. H1 is `faithful` − `baseline`, H2a is
+`faithful` − `output-only`, H5 is `mhc` − `faithful`; all three are 5 v 5 and all three share
+the pooled σ̂, so this one table is all of them.
+
+| analysis | df | MDE, unweighted | MDE, strata-weighted |
+| --- | --- | --- | --- |
+| unpaired | 16 | **0.0399** | 0.0368 |
+| paired, ρ = 0.0 | 12 | 0.0408 | 0.0376 |
+| paired, ρ = 0.3 | 12 | 0.0341 | 0.0315 |
+| paired, ρ = 0.5 | 12 | 0.0288 | 0.0266 |
+| paired, ρ = 0.7 | 12 | 0.0223 | 0.0206 |
+| paired, ρ = 0.9 | 12 | 0.0129 | 0.0119 |
+
+**Unpaired, the design detects 0.040 nats. ByteDance's effect is 0.030 and Tencent's is
+0.020.** The tranche as priced cannot resolve the literature effect at full strength, let
+alone the attenuation to ~0.010 that a 370M replication should expect. Pairing only reaches
+0.030 at ρ ≥ 0.5 and only reaches 0.020 at ρ ≥ 0.75, and ρ̂ cannot be measured from one arm —
+which is the pre-registered position and is not revised here.
+
+**The counterfactual is the reason this is worth acting on rather than absorbing.** At the
+within-group σ of 0.00197 nats the same 5 v 5 design detects **0.0040 nats unpaired**. That is
+a factor of ten, it is bought by removing an instability rather than by buying replicates, and
+`SkipStepAdamW` is in this library and is not enabled on any arm.
+
+**What is not concluded here.** Whether the spikes are driven by data order or by numerics is
+unknown and decides everything: `build_config` gives arm *a* seed *k* and arm *b* seed *k* the
+same data order, so a data-driven spike recurs at the same step in both arms, ρ goes near 1 and
+the paired analysis is excellent — and a numerics-driven one is independent across arms, ρ goes
+near 0, and pairing costs df for nothing. Both episodes here landed in the same phase of
+training on different data, which is suggestive of neither. It is cheaply testable and it has
+not been tested.
+
+**A treatment arm that changes spike propensity breaks the contrast rather than answering it.**
+This document already predicts `faithful` may be unstable, and the spectral radius climbing to
+1.196 by step 200 on the 96M probe is the same worry. An arm where four of five runs spike
+reads 0.029 nats worse than the baseline on the endpoint, which clears no gate in the right
+direction and would be written up as a decisive negative H1. It would be a finding about
+training stability wearing the clothes of a finding about loss. Five Bernoulli draws cannot
+separate them: spike propensity at n = 5 has a 95% interval about ±0.35 wide, so p = 0.2 and
+p = 0.6 are not distinguishable in the data the tranche would produce.
 
 ### Throughput
 

@@ -12,6 +12,7 @@ failure mode: the paired MDE table stood at the wrong df for as long as it stood
 found by recomputing it rather than by reading it.
 """
 
+import json
 import math
 import os
 import pathlib
@@ -194,6 +195,91 @@ def test_the_render_matches_the_estimator():
     rendered = nf.render_mde_table(0.010)
     assert "df 8" in rendered
     assert f"{nf.mde(0.010, 5, 3, 0.7, True):.3f}" in rendered
+
+
+# ---------------------------------------------------------------------------------------
+# The frozen artifact, and the document's account of it.
+# ---------------------------------------------------------------------------------------
+
+FROZEN = pathlib.Path(_HERE) / "noise-floor.json"
+
+
+def frozen() -> dict:
+    """
+    The frozen noise floor, or a skip where stage 1 has not been frozen yet.
+
+    Skipped rather than failed so this file still runs in a checkout made before the freeze,
+    which is most of the ones it was written in.
+    """
+    if not FROZEN.exists():
+        pytest.skip("stage 1 has not been frozen")
+    return json.loads(FROZEN.read_text())
+
+
+def test_the_frozen_artifact_is_the_thing_it_claims_to_be():
+    """
+    Five distinct seeds, the final step, nothing provisional, and the runs named.
+
+    ``--freeze`` refuses a provisional reading, so in principle this cannot fail. That is the
+    reason to assert it: the refusal is one ``if`` in one file, the artifact is what stage 2
+    is read against for the rest of the module, and a claim this cheap to check should not
+    rest on a code path nobody looks at again.
+    """
+    f = frozen()
+    assert f["label"] == "measured"
+    assert f["provisional"] == []
+    assert f["n_seeds"] == 5
+    assert f["sigma_df"] == 4
+    assert f["final_step"] == f["horizon"]
+    assert sorted(f["seeds"]) == [0, 1, 2, 3, 4]
+    assert len(set(f["runs"])) == 5, "the artifact has to name the five cells it was built on"
+    assert all(r.startswith(f["submission"]) for r in f["runs"])
+    assert f["sigma_bpb_unbiased"] == pytest.approx(f["sigma_bpb"] / nf.c4(4))
+    assert len(f["sources"]) == len(f["weights"]["weights"]) == 7
+    assert sum(f["weights"]["weights"]) == pytest.approx(1.0)
+
+
+def test_the_measured_mde_table_in_the_document_is_the_one_the_estimator_produces():
+    """
+    Cell by cell, at the frozen sigma, for the four-arm design that is actually funded.
+
+    THE SAME GUARD AS THE PLANNING TABLE ABOVE, POINTED AT THE MEASUREMENT. That table is the
+    one the tranche was priced against and this one is what it can actually detect, and the
+    second is the one a reader will quote. Both are generated numbers sitting in prose, so
+    both need the estimator asserting against them or they drift the way the paired table did.
+    """
+    f = frozen()
+    unweighted = f["sigma_bpb_unbiased"] * nf.NATS_PER_BPB
+    weighted = f["weights"]["weighted_sigma"] / nf.c4(f["sigma_df"]) * nf.NATS_PER_BPB
+
+    rows = markdown_table(
+        PRE_REGISTRATION.read_text(), "| analysis | df | MDE, unweighted | MDE, strata-weighted |"
+    )
+    assert len(rows) == 6
+
+    for row in rows:
+        analysis, df = row[0], int(row[1])
+        paired = analysis.startswith("paired")
+        rho = float(analysis.split("=")[1]) if paired else 0.0
+        assert df == nf.error_df(4, 5, paired), analysis
+        for column, sigma in enumerate((unweighted, weighted), start=2):
+            printed = float(row[column].strip("*"))
+            assert printed == pytest.approx(
+                nf.mde(sigma, 5, 4, rho, paired), abs=5e-5
+            ), f"{analysis}, column {column}"
+
+
+def test_the_document_reports_the_spike_split_rather_than_only_the_sigma_it_produced():
+    """
+    99% of the measured variance is two runs out of five taking a loss spike, and a σ̂ quoted
+    without that is a number a reader will take for seed jitter and plan against as if buying
+    replicates would average it down.
+    """
+    text = re.sub(r"\s+", " ", PRE_REGISTRATION.read_text())
+    assert "99.0% of the endpoint variance" in text
+    assert "1376–1418" in text and "1726–1773" in text, "the episodes have to be locatable"
+    assert "SkipStepAdamW" in text, "the mitigation that exists and is not enabled"
+    assert "0.0040 nats unpaired" in text, "the counterfactual is what makes the finding actionable"
 
 
 # ---------------------------------------------------------------------------------------
