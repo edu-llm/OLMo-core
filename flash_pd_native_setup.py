@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+import sysconfig
 
 from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
@@ -15,6 +16,14 @@ cuda_home = Path(os.environ.get("CUDA_HOME", "/usr/local/cuda"))
 cuda_library_dir = cuda_home / "lib64"
 if not cuda_library_dir.exists():
     cuda_library_dir = cuda_home / "lib"
+
+python_purelib = Path(sysconfig.get_path("purelib"))
+cuda_component_include_dirs: list[str] = []
+for component in ("cublas", "cusparse", "cusolver"):
+    include_dir = python_purelib / "nvidia" / component / "include"
+    if include_dir.is_dir():
+        cuda_component_include_dirs.append(str(include_dir))
+
 local_library_dirs: list[str] = []
 if not (cuda_library_dir / "libcudart.so").exists():
     versioned_cudart = cuda_library_dir / "libcudart.so.13"
@@ -42,6 +51,7 @@ setup(
                 "cxx": ["-O3"],
                 "nvcc": ["-O3", "--use_fast_math", "-lineinfo", "-Xptxas=-v"],
             },
+            include_dirs=cuda_component_include_dirs,
             library_dirs=local_library_dirs,
             extra_link_args=[f"-Wl,-rpath,{cuda_library_dir}"],
         )

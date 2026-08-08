@@ -1,5 +1,9 @@
 from pathlib import Path
 import re
+import runpy
+import sys
+import sysconfig
+from types import ModuleType
 
 import pytest
 import torch
@@ -55,6 +59,43 @@ def test_strict_cuda_never_silently_falls_back():
     with pytest.raises(RuntimeError, match=capability.reason):
         flash_pd_scan(destination, routes, *values, backend="cuda")
     assert get_backend_counters()["cuda_rejected"] >= 1
+
+
+def test_native_extension_build_includes_cuda_wheel_component_headers(tmp_path, monkeypatch):
+    purelib = tmp_path / "site-packages"
+    expected_include_dirs = []
+    for component, header in (
+        ("cublas", "cublas_v2.h"),
+        ("cusparse", "cusparse.h"),
+        ("cusolver", "cusolverDn.h"),
+    ):
+        include_dir = purelib / "nvidia" / component / "include"
+        include_dir.mkdir(parents=True)
+        include_dir.joinpath(header).touch()
+        expected_include_dirs.append(str(include_dir))
+
+    cuda_home = tmp_path / "cuda"
+    cuda_home.joinpath("lib").mkdir(parents=True)
+    cuda_home.joinpath("lib", "libcudart.so").touch()
+    monkeypatch.setenv("CUDA_HOME", str(cuda_home))
+    monkeypatch.setattr(sysconfig, "get_path", lambda name: str(purelib))
+
+    captured = {}
+    setuptools = ModuleType("setuptools")
+    setuptools.setup = lambda **kwargs: captured.update(kwargs)
+    cpp_extension = ModuleType("torch.utils.cpp_extension")
+    cpp_extension.BuildExtension = type(
+        "BuildExtension",
+        (),
+        {"with_options": staticmethod(lambda **kwargs: kwargs)},
+    )
+    cpp_extension.CUDAExtension = lambda **kwargs: kwargs
+    monkeypatch.setitem(sys.modules, "setuptools", setuptools)
+    monkeypatch.setitem(sys.modules, "torch.utils.cpp_extension", cpp_extension)
+
+    runpy.run_path("flash_pd_native_setup.py", run_name="__main__")
+
+    assert captured["ext_modules"][0]["include_dirs"] == expected_include_dirs
 
 
 def test_native_cuda_sources_encode_chunkwise_reverse_and_sm80_sm120_build():
