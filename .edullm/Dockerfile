@@ -58,7 +58,7 @@ RUN set -eux; \
       "requests==2.32.5" \
       "dataclass-extensions==0.3.0" \
       "PyYAML==6.0.3" \
-      "rich==14.2.0" \
+      "rich==13.9.4" \
       "safetensors==0.7.0" \
       "importlib-resources==6.5.2" \
       "bettermap==1.3.1" \
