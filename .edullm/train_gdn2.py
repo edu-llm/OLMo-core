@@ -292,28 +292,63 @@ def mixture_sources(opts, pool) -> list:
     ``--mixture-ratios`` names a YAML of ``{source: ratio}`` and is the faithful route when the
     ratios are known. ``--mixture water-fill`` derives them from the pool instead.
     """
-    from edullm_data.read import MixtureSource
+    # `_sum_counts` is private, and using it is deliberate rather than lazy. A ManifestEntry's
+    # `count` is `{"unit": ..., "value": N}` or absent -- NOT a number -- and only some units are
+    # summable at all, so a total is a judgement about units and not an addition. This function
+    # is where the reader makes that judgement, and re-deriving it here would be a second
+    # opinion that drifts. It is pinned along with the rest of edullm-data by the commit the
+    # image installs. Same argument as `_mixture_entries` below.
+    #
+    # The first version of this line read `int(count)` on the dict and died at
+    # THE_READER_FAILED_IN_SOME_OTHER_WAY, exit 67, on run_019fdf9d -- caught by the cpu-32vcpu
+    # dry run for $1.43 rather than by eight A100s.
+    from edullm_data.read import MixtureSource, _sum_counts
 
     key = opts.mixture_label_key
-    available: Dict[str, int] = {}
+    grouped: Dict[str, list] = {}
     for entry in pool:
-        labels = getattr(entry, "labels", None) or {}
-        name = labels.get(key)
-        count = getattr(entry, "count", None)
-        if name is None or not count:
+        name = (getattr(entry, "labels", None) or {}).get(key)
+        if name is not None:
+            grouped.setdefault(name, []).append(entry)
+
+    available: Dict[str, int] = {}
+    units: Dict[str, str] = {}
+    for name, entries in grouped.items():
+        total, unit = _sum_counts(entries)
+        if total is None or total <= 0:
+            # Named rather than skipped in silence: a source whose shards declare no summable
+            # count would otherwise contribute zero to the mixture and look deliberate.
+            toc.log.warning(
+                "source %r declares no summable count over %d shard(s); excluded from the "
+                "mixture",
+                name,
+                len(entries),
+            )
             continue
-        available[name] = available.get(name, 0) + int(count)
+        available[name] = total
+        units[name] = unit or "?"
+
     if not available:
         raise toc.Refusal(
             toc.Stage.THE_CORPUS_IS_NOT_WHERE_THE_REGISTRY_SAYS,
-            f"no shard in this corpus carries a {key!r} label with a count, so a mixture over "
-            f"{key} cannot be expressed. Pass --mixture-label-key with a key the shards do "
-            f"carry, or --mixture off to read the corpus flat.",
+            f"no shard in this corpus carries a {key!r} label with a summable count, so a "
+            f"mixture over {key} cannot be expressed. Pass --mixture-label-key with a key the "
+            f"shards do carry, or --mixture off to read the corpus flat.",
+        )
+    if len(set(units.values())) > 1:
+        raise toc.Refusal(
+            toc.Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"the sources disagree about the count unit ({sorted(set(units.values()))}), so a "
+            f"single token budget cannot span them. build_mixture refuses this too; saying it "
+            f"here names which source carries which unit: "
+            + ", ".join(f"{n}={u}" for n, u in sorted(units.items())),
         )
 
-    toc.log.info("mixture pool: %d sources over %s", len(available), key)
+    unit = next(iter(units.values()))
+    toc.log.info("mixture pool: %d sources over %r, counted in %s", len(available), key, unit)
     for name in sorted(available, key=lambda n: -available[n]):
-        toc.log.info("  %-28s %15d tokens", name, available[name])
+        toc.log.info("  %-28s %15d %s", name, available[name], unit)
+    toc.log.info("  %-28s %15d %s total", "(all sources)", sum(available.values()), unit)
 
     if opts.mixture_ratios:
         import yaml
