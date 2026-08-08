@@ -143,6 +143,10 @@ exclude = [
 
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["F401"]
+# This entry point puts its own clone's `src/` on sys.path before it imports olmo_core, so that
+# a run trains against the branch it was launched from rather than against the image's copy.
+# The file's header is where that is argued; E402 is what it costs.
+".edullm/train_on_corpus.py" = ["E402"]
 
 [tool.pyright]
 reportPrivateImportUsage = false

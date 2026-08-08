@@ -64,7 +64,47 @@ WHAT A RETRY HAS TO CLEAN UP BEFORE IT CAN GET PAST THE STEP THAT KILLED IT. See
 that skips an unfinished step directory on the way in still meets it on the way out, when
 the trainer reaches that step number again and refuses to write into a directory that is
 not empty.
+
+WHICH ``olmo_core`` THIS TRAINS AGAINST, WHICH IS NOT THE ONE THE BRANCH IS ON UNLESS THE
+BLOCK BELOW RUNS. The image sets ``ENV PYTHONPATH=/opt/olmo-core/src`` and also pip-installs
+the project, so a container carries two copies of the library and both are the commit the
+image was built from. The node clones this branch and mounts the whole tree at ``/work`` --
+``src/`` included, not just ``.edullm/`` -- but nothing puts ``/work/src`` on ``sys.path``, so
+``import olmo_core`` reaches the image's copy and the branch's library is present on disk and
+never executed. Nothing warns. The run trains, the loss goes down, and it goes down against a
+model this branch did not define.
+
+Today those two happen to compose, because the image was built from an ancestor of this
+branch. That is luck with an expiry date on it, and the failure when it expires is silent.
 """
+
+import os
+import sys
+
+#: The ``src/`` of the tree this file was cloned into, which is the library this branch means.
+#: Resolved from ``__file__`` rather than written as ``/work/src`` because the mount point is
+#: the caller's choice: the block nodes use ``/work``, a laptop uses a checkout, and a git
+#: worktree uses neither. All three want the ``src/`` that is a sibling of this file's parent.
+_BRANCH_LIBRARY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
+
+# AHEAD OF THE IMAGE RATHER THAN INSTEAD OF IT, WHICH IS THE WHOLE ARRANGEMENT. The image goes
+# on supplying torch, transformers, edullm_data and the rest; what it stops supplying is
+# `olmo_core`, because a regular package resolves entirely from the first `sys.path` entry that
+# holds it and never merges with a later one.
+#
+# HERE AND NOT AS `PYTHONPATH=/work/src` IN FRONT OF THE COMMAND IN `.edullm/run.yaml`, WHICH
+# IS THE SPELLING THAT LOOKS RIGHT AND CANNOT WORK. `block_multinode.torchrun_command` puts the
+# rendezvous form in front of that command, so the first word of it becomes torchrun's
+# positional `training_script`; torchrun then execs `python -u <that word> <the rest>`. An
+# environment assignment in that position is a filename Python cannot open, on all sixty-four
+# ranks at once. There is nowhere in a command torchrun prepends to that an env prefix can go,
+# so the process has to put its own library on its own path -- which it can, because it knows
+# where it was cloned to and a command string does not.
+#
+# `is_dir` rather than unconditional, so that a repository laid out some other way falls
+# through to whatever the image installed instead of prepending a path that holds nothing.
+if os.path.isdir(_BRANCH_LIBRARY):
+    sys.path.insert(0, _BRANCH_LIBRARY)
 
 import argparse
 import contextlib
@@ -73,9 +113,7 @@ import enum
 import functools
 import json
 import logging
-import os
 import re
-import sys
 import time
 import traceback
 from dataclasses import dataclass, field, replace
