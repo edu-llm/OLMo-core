@@ -245,8 +245,19 @@ def _s3_uri_list_for_sft(split: str) -> List[str]:
     return list(read.paths)
 
 
-def _open_maybe_gz(path: str):
-    if path.endswith(".gz"):
+def _is_gzip_file(path: str, *, source_uri: str = "") -> bool:
+    """
+    ``cached_path`` often stores objects under a hash name with no ``.gz`` suffix.
+    Prefer the source URI suffix, then sniff the gzip magic bytes.
+    """
+    if source_uri.endswith(".gz") or path.endswith(".gz"):
+        return True
+    with open(path, "rb") as bf:
+        return bf.read(2) == b"\x1f\x8b"
+
+
+def _open_maybe_gz(path: str, *, source_uri: str = ""):
+    if _is_gzip_file(path, source_uri=source_uri):
         return gzip.open(path, "rt", encoding="utf-8")
     return open(path, "rt", encoding="utf-8")
 
@@ -257,7 +268,7 @@ def load_conversation_rows(uris: Sequence[str], *, max_rows: int) -> List[Dict[s
     rows: List[Dict[str, Any]] = []
     for uri in uris:
         local = str(cached_path(uri))
-        with _open_maybe_gz(local) as f:
+        with _open_maybe_gz(local, source_uri=uri) as f:
             for line in f:
                 if not line.strip():
                     continue
