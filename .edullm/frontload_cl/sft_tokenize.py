@@ -128,58 +128,67 @@ def iter_conversation_rows(paths: Iterable[str]) -> Iterator[Dict[str, Any]]:
 
     for path in paths:
         local = _local_path(path)
-        opener = gzip.open if local.name.endswith(".gz") else open
-        with opener(local, "rt", encoding="utf-8") as fh:  # type: ignore[arg-type]
-            for line_no, line in enumerate(fh, start=1):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    row = json.loads(line)
-                except json.JSONDecodeError as exc:
-                    raise Refusal(
-                        Stage.THE_MANIFEST_IS_NOT_SAFE_TO_MEMMAP,
-                        f"bad JSON in {path}:{line_no}: {exc}",
-                    ) from exc
-                if not isinstance(row, dict) or "messages" not in row:
-                    raise Refusal(
-                        Stage.THE_MANIFEST_IS_NOT_SAFE_TO_MEMMAP,
-                        f"{path}:{line_no} missing messages[]",
-                    )
-                messages = row["messages"]
-                if not isinstance(messages, list):
-                    raise Refusal(
-                        Stage.THE_MANIFEST_IS_NOT_SAFE_TO_MEMMAP,
-                        f"{path}:{line_no} messages is {type(messages).__name__}, not a list",
-                    )
-                for message_no, message in enumerate(messages, start=1):
-                    if not isinstance(message, dict):
+        try:
+            with local.open("rb") as raw:
+                is_gzip = raw.read(2) == b"\x1f\x8b"
+            opener = gzip.open if is_gzip else open
+            with opener(local, "rt", encoding="utf-8") as fh:  # type: ignore[arg-type]
+                for line_no, line in enumerate(fh, start=1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError as exc:
                         raise Refusal(
                             Stage.THE_MANIFEST_IS_NOT_SAFE_TO_MEMMAP,
-                            f"{path}:{line_no} message {message_no} is "
-                            f"{type(message).__name__}, not an object",
-                        )
-                    role = message.get("role")
-                    if not isinstance(role, str) or role.lower() not in {
-                        "system",
-                        "user",
-                        "human",
-                        "assistant",
-                        "gpt",
-                    }:
+                            f"bad JSON in {path}:{line_no}: {exc}",
+                        ) from exc
+                    if not isinstance(row, dict) or "messages" not in row:
                         raise Refusal(
                             Stage.THE_MANIFEST_IS_NOT_SAFE_TO_MEMMAP,
-                            f"{path}:{line_no} message {message_no} has unsupported role "
-                            f"{role!r}",
+                            f"{path}:{line_no} missing messages[]",
                         )
-                    content = message.get("content")
-                    if not isinstance(content, str):
+                    messages = row["messages"]
+                    if not isinstance(messages, list):
                         raise Refusal(
                             Stage.THE_MANIFEST_IS_NOT_SAFE_TO_MEMMAP,
-                            f"{path}:{line_no} message {message_no} content is "
-                            f"{type(content).__name__}, not a string",
+                            f"{path}:{line_no} messages is {type(messages).__name__}, not a list",
                         )
-                yield row
+                    for message_no, message in enumerate(messages, start=1):
+                        if not isinstance(message, dict):
+                            raise Refusal(
+                                Stage.THE_MANIFEST_IS_NOT_SAFE_TO_MEMMAP,
+                                f"{path}:{line_no} message {message_no} is "
+                                f"{type(message).__name__}, not an object",
+                            )
+                        role = message.get("role")
+                        if not isinstance(role, str) or role.lower() not in {
+                            "system",
+                            "user",
+                            "human",
+                            "assistant",
+                            "gpt",
+                        }:
+                            raise Refusal(
+                                Stage.THE_MANIFEST_IS_NOT_SAFE_TO_MEMMAP,
+                                f"{path}:{line_no} message {message_no} has unsupported role "
+                                f"{role!r}",
+                            )
+                        content = message.get("content")
+                        if not isinstance(content, str):
+                            raise Refusal(
+                                Stage.THE_MANIFEST_IS_NOT_SAFE_TO_MEMMAP,
+                                f"{path}:{line_no} message {message_no} content is "
+                                f"{type(content).__name__}, not a string",
+                            )
+                    yield row
+        except Refusal:
+            raise
+        except (OSError, UnicodeError) as exc:
+            raise Refusal(
+                read_failure(exc), f"reading conversation shard {path}: {type(exc).__name__}: {exc}"
+            ) from exc
 
 
 def resolve_conversation_paths(
@@ -222,7 +231,9 @@ def resolve_conversation_paths(
             Stage.THE_MANIFEST_IS_NOT_SAFE_TO_MEMMAP,
             f"{dataset_id}/{version} split={split} resolved to no shards",
         )
-    return version, list(read.paths)
+    # Keep the conversion contract stable across the tokenize-only and torchrun
+    # phases even if a storage client returns equivalent objects in another order.
+    return version, sorted(str(path) for path in read.paths)
 
 
 def find_tokenized_shards(tokens_dir: str | Path) -> Tuple[List[str], List[str]]:

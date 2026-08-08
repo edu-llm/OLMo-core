@@ -5,9 +5,9 @@
 # Control-arm SFT: same command with that arm's checkpoints/ URI.
 #
 #   edullm check  --json --spec .edullm/run-sft.yaml --team pre-training \
-#     --experiment frontload-cl --dataset none --compute gpu-8xa100
+#     --experiment frontload-cl --dataset none --compute gpu-8xa100 --hours 3 --attempts 1
 #   edullm submit --spec .edullm/run-sft.yaml --team pre-training \
-#     --experiment frontload-cl --dataset none --compute gpu-8xa100
+#     --experiment frontload-cl --dataset none --compute gpu-8xa100 --hours 3 --attempts 1
 schema_version: 1
 workload_profile: olmo-core-train
 suggested_compute: gpu-8xa100

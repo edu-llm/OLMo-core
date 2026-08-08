@@ -2,9 +2,9 @@
 # Same mix/hparams as .edullm/run-sft.yaml; only --checkpoint differs.
 #
 #   edullm check  --json --spec .edullm/run-sft-control.yaml --team pre-training \
-#     --experiment frontload-cl --dataset none --compute gpu-8xa100
+#     --experiment frontload-cl --dataset none --compute gpu-8xa100 --hours 3 --attempts 1
 #   edullm submit --spec .edullm/run-sft-control.yaml --team pre-training \
-#     --experiment frontload-cl --dataset none --compute gpu-8xa100
+#     --experiment frontload-cl --dataset none --compute gpu-8xa100 --hours 3 --attempts 1
 schema_version: 1
 workload_profile: olmo-core-train
 suggested_compute: gpu-8xa100

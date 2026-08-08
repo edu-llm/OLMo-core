@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import sys
 from pathlib import Path
 
@@ -147,6 +148,32 @@ def test_sft_hparams():
     assert "<|assistant|>" in C.SFT_CHAT_TEMPLATE
 
 
+def test_sft_pretrain_transfer_loads_weights_only():
+    """PT Adam moments/groups must not leak into the different SFT optimizer."""
+    tree = ast.parse((_DIR / "frontload_cl" / "train_sft.py").read_text(encoding="utf-8"))
+    load_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "load_checkpoint"
+    ]
+
+    def explicitly_false(call: ast.Call, name: str) -> bool:
+        return any(
+            keyword.arg == name
+            and isinstance(keyword.value, ast.Constant)
+            and keyword.value.value is False
+            for keyword in call.keywords
+        )
+
+    assert any(
+        explicitly_false(call, "load_trainer_state")
+        and explicitly_false(call, "load_optim_state")
+        for call in load_calls
+    )
+
+
 class _FakeTok:
     """Minimal encoder: each distinct string maps to a fixed id sequence."""
 
@@ -156,6 +183,8 @@ class _FakeTok:
 
     def encode(self, text, add_special_tokens=False):
         del add_special_tokens
+        if text == self.eos_token:
+            return [100257]
         # Stable per-string ids so assistant spans are identifiable.
         return [abs(hash(text)) % 10_000 + 1]
 
@@ -207,6 +236,25 @@ def test_tokenize_messages_matches_olmo2_multiturn_boundaries():
     # The official template inserts one untrained newline after a non-final
     # assistant EOS, before the next user header.
     assert mask == [False, False, False, True, True, False, False, False, True, True]
+
+
+def test_iter_conversation_rows_detects_extensionless_cached_gzip(tmp_path):
+    import gzip
+    import json
+
+    from frontload_cl.sft_tokenize import iter_conversation_rows
+
+    cached = tmp_path / "hashed-cache-entry"
+    expected = {
+        "messages": [
+            {"role": "user", "content": "q"},
+            {"role": "assistant", "content": "a"},
+        ]
+    }
+    with gzip.open(cached, "wt", encoding="utf-8") as fh:
+        fh.write(json.dumps(expected) + "\n")
+
+    assert list(iter_conversation_rows([str(cached)])) == [expected]
 
 
 def test_tokenize_conversations_writes_npy_shards(tmp_path, monkeypatch):

@@ -456,8 +456,15 @@ def train(config: ExperimentConfig, opts) -> None:
 
     remove_torn_checkpoints(trainer.save_folder)
     if not trainer.maybe_load_checkpoint(trainer.save_folder):
-        log.info("loading pretrain weights from %s (no trainer state)", opts.checkpoint)
-        trainer.load_checkpoint(opts.checkpoint, load_trainer_state=False)
+        log.info(
+            "loading pretrain weights from %s (no trainer or optimizer state)",
+            opts.checkpoint,
+        )
+        trainer.load_checkpoint(
+            opts.checkpoint,
+            load_trainer_state=False,
+            load_optim_state=False,
+        )
 
     started = time.monotonic()
     trainer.fit()
