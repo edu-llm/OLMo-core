@@ -108,6 +108,94 @@ def _fuse_moe_expert_weights(
     return remaining
 
 
+def _split_moe_expert_weights(hf_state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    """Unstack fused MoE parameters back into the per-expert weights the mapping reads.
+
+    THE FIX FOR THE OUTBOUND LAYOUT LEFT THE INBOUND ONE BROKEN, AND THE INBOUND ONE IS
+    THE POST-TRAINING PATH. :func:`_fuse_moe_expert_weights` stacks per-expert tensors on
+    the way out because that is what ``transformers`` wants; nothing does the reverse, so
+    :func:`convert_state_from_hf` -- which still reads
+    ``mlp.experts.{i}.gate_proj.weight`` -- meets a 3D ``mlp.experts.gate_up_proj`` it has
+    no template for and raises ``Some state keys were not converted``. Every exported MoE
+    checkpoint is therefore write-only, which matters because ``open_instruct``'s
+    ``olmo_core_finetune`` reloads weights through :func:`load_hf_model` and nothing else.
+    Measured on a 32-expert export on 2026-08-08: eight unconverted keys, four layers,
+    both projections.
+
+    KEYED ON THE TENSOR'S RANK RATHER THAN ON A VERSION TEST, for the same reason its
+    outbound twin keys on the target model's own parameter names: a ``transformers`` that
+    moves back, or a model type that never moved, presents 2D per-expert weights and this
+    is then a no-op. The expert count comes from the leading dimension, so nothing here
+    needs the config.
+
+    ``gate_up_proj`` splits in half along the fused axis, gate first, which is the order
+    the outbound concatenation used and the order ``FlexOlmoExperts.forward`` reads with
+    ``.chunk(2, dim=-1)``. Getting it backwards produces a model that loads clean and
+    computes the gate from the up projection, which no shape check can catch.
+    """
+    split: Dict[str, torch.Tensor] = {}
+    consumed: set = set()
+    for key, value in hf_state_dict.items():
+        prefix, _, projection = key.rpartition(".")
+        parts = _FUSED_MOE_EXPERT_PARTS.get(projection)
+        if parts is None or not prefix.endswith(".experts"):
+            continue
+        if not isinstance(value, torch.Tensor) or value.dim() != 3:
+            continue
+
+        for expert, weights in enumerate(value):
+            for part, chunk in zip(parts, weights.chunk(len(parts), dim=0)):
+                split[f"{prefix}.{expert}.{part}.weight"] = chunk.contiguous()
+        consumed.add(key)
+
+    if not consumed:
+        return hf_state_dict
+
+    log.info(
+        "Split %d fused MoE parameters into %d per-expert weights, which is the layout "
+        "the OLMo-core state mapping reads",
+        len(consumed),
+        len(split),
+    )
+    remaining = {key: value for key, value in hf_state_dict.items() if key not in consumed}
+    remaining.update(split)
+    return remaining
+
+
+@beta_feature
+def undo_dropless_moe_reshape(
+    model_state_dict: Dict[str, torch.Tensor], *, num_experts: int
+) -> Dict[str, torch.Tensor]:
+    """Invert the reshape ``convert_checkpoint_to_hf`` applies to a dropless MoE.
+
+    ``DroplessMoEMLP`` holds ``w1`` and ``w3`` as ``(experts x intermediate, d_model)``
+    while the regular MoE holds them transposed, and the state mapping cannot tell the two
+    apart, so ``convert_checkpoint_to_hf`` permutes them into the regular layout on its way
+    to :func:`save_hf_model`. Nothing undoes that, and :func:`load_hf_model` cannot: the
+    permutation is a fact about the OLMo-core module and the only things in scope there are
+    a directory and a state dict.
+
+    SO IT LIVES BESIDE THE EXPORT RATHER THAN INSIDE THE IMPORT, WHICH IS WHERE ITS TWIN
+    LIVES. A caller reloading a dropless MoE calls this on the state dict
+    :func:`load_hf_model` filled, exactly as the exporter calls the forward reshape on the
+    state dict it is about to save. The asymmetry of doing it in one place and not the
+    other is what left every exported MoE readable only as noise, which is worse than
+    unreadable because the shapes match.
+
+    :param model_state_dict: An OLMo-core state dict as :func:`load_hf_model` left it.
+    :param num_experts: The routed expert count of the model being loaded into.
+    """
+    for key, value in list(model_state_dict.items()):
+        if not (key.endswith(".experts.mlp.w1") or key.endswith(".experts.mlp.w3")):
+            continue
+        assert isinstance(value, torch.Tensor), (key, value)
+        d_model = value.shape[0] // num_experts
+        model_state_dict[key] = (
+            value.reshape(num_experts, d_model, -1).permute(0, 2, 1).reshape(-1, d_model)
+        )
+    return model_state_dict
+
+
 @beta_feature
 def load_hf_model(
     model_name_or_path: PathOrStr,
@@ -178,7 +266,7 @@ def load_hf_model(
 
     converted_state_dict: Dict[str, torch.Tensor] = convert_state_from_hf(
         hf_model.config,
-        hf_model.state_dict(),
+        _split_moe_expert_weights(hf_model.state_dict()),
         model_type=getattr(hf_model.config, "model_type", None),
     )
 

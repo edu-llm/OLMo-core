@@ -8,8 +8,10 @@ from transformers import AutoModelForCausalLM, Olmo2Config
 
 from olmo_core.nn.hf.checkpoint import (
     _fuse_moe_expert_weights,
+    _split_moe_expert_weights,
     load_hf_model,
     save_hf_model,
+    undo_dropless_moe_reshape,
 )
 from olmo_core.nn.moe.moe import MoEType
 from olmo_core.nn.transformer.config import TransformerBlockConfig, TransformerConfig
@@ -194,6 +196,89 @@ def test_the_exported_expert_weights_compute_what_the_olmo_core_experts_compute(
             got.append(F.linear(F.silu(gate) * up, experts.down_proj[expert]))
 
         torch.testing.assert_close(torch.cat(got), expected, rtol=0, atol=1e-5)
+
+
+def test_splitting_is_a_no_op_on_the_layout_that_needs_no_splitting():
+    """Rank rather than a version test, so an unmoved model type is left alone.
+
+    The inbound twin of the no-op above. Per-expert weights are 2D and fused ones are 3D,
+    and keying on that means a ``transformers`` that moves back needs no change here.
+    """
+    per_expert = {
+        "model.layers.0.mlp.experts.0.gate_proj.weight": torch.zeros(4, 2),
+        "model.layers.0.mlp.experts.0.down_proj.weight": torch.zeros(2, 4),
+    }
+
+    assert _split_moe_expert_weights(per_expert) is per_expert
+
+
+def test_splitting_undoes_fusing_exactly():
+    """Mutation: split the fused projection in the other order, or off the wrong axis.
+
+    Reversing gate and up here is invisible to every shape check downstream and produces a
+    model that computes ``silu(up) * gate``. Comparing against the fuse rather than against
+    hand-written expectations is what makes the two halves impossible to drift apart.
+    """
+    torch.manual_seed(0)
+    per_expert = {
+        f"model.layers.0.mlp.experts.{expert}.{part}.weight": torch.randn(shape)
+        for expert in range(3)
+        for part, shape in (("gate_proj", (4, 2)), ("up_proj", (4, 2)), ("down_proj", (2, 4)))
+    }
+
+    fused = _fuse_moe_expert_weights(
+        per_expert,
+        {"model.layers.0.mlp.experts.gate_up_proj", "model.layers.0.mlp.experts.down_proj"},
+    )
+    assert fused["model.layers.0.mlp.experts.gate_up_proj"].shape == (3, 8, 2)
+
+    recovered = _split_moe_expert_weights(fused)
+
+    assert set(recovered) == set(per_expert)
+    for key, value in per_expert.items():
+        torch.testing.assert_close(recovered[key], value)
+
+
+@pytest.mark.skipif(FlexOlmoConfig is None, reason="transformers has no FlexOlmo")
+def test_an_exported_moe_can_be_read_back_into_olmo_core(tmp_path: Path):
+    """The round trip post-training needs, and the one the outbound fix left broken.
+
+    ``open_instruct``'s ``olmo_core_finetune`` builds an OLMo-core model and pours HF
+    weights into it with :func:`load_hf_model`, so an export nothing can read back is a
+    checkpoint no arm can be post-trained from. Before the split this raised ``Some state
+    keys were not converted`` naming both fused projections of every layer.
+
+    Weights rather than logits, because a MoE forward pass routes through Triton and this
+    suite runs on CPU. Every expert tensor surviving the trip is the whole of what the
+    layout change put at risk.
+
+    Both halves are exercised together deliberately. The fused-parameter split and the
+    dropless permutation each look correct alone and each leaves the other's damage in
+    place, and only a comparison against the weights that went in catches either.
+    """
+    torch.manual_seed(0)
+    config = moe_config(vocab_size=128)
+    model = config.build()
+
+    options = dist_cp_sd.StateDictOptions(flatten_optimizer_state_dict=True, cpu_offload=True)
+    exported = dist_cp_sd.get_model_state_dict(model, options=options)
+    for key, value in list(exported.items()):
+        if key.endswith(".experts.mlp.w1") or key.endswith(".experts.mlp.w3"):
+            exported[key] = (
+                value.reshape(NUM_EXPERTS, EXPERT_HIDDEN, -1)
+                .permute(0, 2, 1)
+                .reshape(-1, EXPERT_HIDDEN)
+            )
+    save_hf_model(tmp_path / "hf", exported, model, vocab_size=128)
+
+    reloaded = config.build()
+    into = dist_cp_sd.get_model_state_dict(reloaded, options=options)
+    load_hf_model(tmp_path / "hf", into, num_embeddings=128)
+    undo_dropless_moe_reshape(into, num_experts=NUM_EXPERTS)
+    reloaded.load_state_dict(into)
+
+    for key, value in model.state_dict().items():
+        torch.testing.assert_close(reloaded.state_dict()[key], value, rtol=0, atol=1e-6, msg=key)
 
 
 def test_save_hf_model(tmp_path: Path):
