@@ -430,7 +430,35 @@ def resolve_corpus(*, dataset_id: str, version: str, tokenizer_id: str):
         # loud, because a source that came up short changes the mixture that was asked for.
         toc.log.warning("mixture shortfall by source: %s", dict(resolved.shortfall))
 
+    # Kept for `show` to re-emit at the very end. `edullm logs` returns THE LAST FIFTY LINES the
+    # container printed, and --dry-run prints a config far longer than that, so everything above
+    # scrolls out of the only window anybody can read -- which is how run_019fdfdf proved the
+    # mixture resolves without being able to say what it resolved to.
+    global _MIXTURE_SUMMARY
+    _MIXTURE_SUMMARY = [
+        f"MIXTURE {dataset_id}/{corpus.version}: {len(resolved.paths)} of {len(corpus.paths)} "
+        f"shards, {resolved.total:,} {resolved.unit} against a {opts.mixture_total:,} budget "
+        f"(seed {opts.mixture_seed}, ratios "
+        f"{'from ' + opts.mixture_ratios if opts.mixture_ratios else 'water-filled'})"
+    ] + [
+        f"  {name:<28} {count:>15,} {resolved.unit}  requested {resolved.requested_ratios[name]:.6f}"
+        f"  actual {resolved.actual_ratios[name]:.6f}"
+        + (f"  SHORT {resolved.shortfall[name]:,}" if resolved.shortfall.get(name) else "")
+        for name, count in sorted(resolved.counts_by_source.items(), key=lambda kv: -kv[1])
+    ]
+
     return replace(corpus, paths=list(resolved.paths))
+
+
+def show(config) -> None:
+    """`train_on_corpus.show`, then the mixture again so it survives the log window.
+
+    Printed AFTER the config rather than instead of it: the config is the thing worth having in
+    the record, and the mixture is the thing worth having in the fifty lines a person can read.
+    """
+    _base_show(config)
+    for line in _MIXTURE_SUMMARY:
+        print(line)
 
 
 def build_config(opts, overrides: List[str]):
@@ -442,16 +470,19 @@ def build_config(opts, overrides: List[str]):
 
 
 _MIXTURE_OPTS = None
+_MIXTURE_SUMMARY: List[str] = []
 _base_build_parser = toc.build_parser
 _base_build_config = toc.build_config
 _base_resolve_corpus = toc.resolve_corpus
+_base_show = toc.show
 
-# The three seams. `toc.main` and `toc.build_config` call these by name off their own module,
+# The four seams. `toc.main` and `toc.build_config` call these by name off their own module,
 # so patching the module attributes is what puts this file's behaviour inside the whole of
 # train_on_corpus's error handling, precision refusal, dry-run path and exit-code contract.
 toc.build_parser = build_parser
 toc.build_config = build_config
 toc.resolve_corpus = resolve_corpus
+toc.show = show
 
 
 if __name__ == "__main__":
