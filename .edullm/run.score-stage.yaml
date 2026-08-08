@@ -117,11 +117,20 @@
 #
 # `olmo-core-check` is the better contract on every axis but one and the one is decisive:
 # `--hours` may only LOWER a workload's bound, so its one hour is a hard per-attempt
-# ceiling with one attempt behind it. A cell is an image pull, a 1.5 GB checkpoint fetch,
-# thirteen task builds and single-digit minutes of arithmetic; the arithmetic fits an hour
-# many times over and the pull and the fetch are the parts nobody has measured on this shape.
-# Being killed at 60 minutes with no second attempt is not a risk worth taking to get a
-# tidier contract, so this runs under `olmo-core-train` at `--hours 2`.
+# ceiling with one attempt behind it -- `--hours 2` against it is refused with
+# `runtime_above_the_workload_bound`, checked rather than assumed. A cell is an image pull,
+# a 1.5 GB checkpoint fetch, thirteen task builds and single-digit minutes of arithmetic;
+# the arithmetic fits an hour many times over and the pull and the fetch are the parts
+# nobody has measured on this shape. Being killed at 60 minutes with no second attempt is
+# not a risk worth taking to get a tidier contract, so this runs under `olmo-core-train` at
+# `--hours 2`.
+#
+# THE TWO ARE $32.19 AND $16.10 OF CEILING AND THE WAY TO EARN THE CHEAPER ONE IS TO MEASURE
+# RATHER THAN TO GUESS. Submit one cell first -- the same spec with `--fanout-size 1`, which
+# is baseline seed 0 and a $1.61 ceiling -- and read the wall clock out of
+# `edullm status --json`. If a cell comes in under about half an hour, `--workload
+# olmo-core-check --hours 1` is a one-word change that halves the ceiling and drops the
+# waiver below along with the contract that needs it.
 #
 # What that costs is honesty in the record rather than money: the profile declares a
 # 30-minute checkpoint interval and `resume_required: true` for a job that writes no
