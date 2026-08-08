@@ -596,6 +596,45 @@ TRANCHE_SAVE_INTERVAL = 500
 TRANCHE_EVAL_INTERVAL = 500
 TRANCHE_MONITOR_INTERVAL = 50
 
+#: The throughput probe, which is the other thing ``.edullm/run.yaml`` is ever allowed to be.
+#:
+#: A probe is not an arm and trains nothing anybody reads. It exists because the step time on
+#: a shape nobody has run is the only input to :data:`FULL_HORIZON_STEPS` being reachable at
+#: all, and the difference between reaching it and not is 10B tokens against 4.72B.
+#:
+#: These are here rather than only in run.yaml for the same reason the tranche's intervals
+#: are: ``test_the_committed_command_is_a_shape_this_table_prices`` reads run.yaml and matches
+#: it against one of the two sets, so a command that is neither the tranche nor the probe --
+#: a half-edited file, most likely -- fails on a laptop rather than on a machine.
+PROBE_STEPS = 100
+PROBE_SAVE_INTERVAL = 100
+PROBE_EVAL_INTERVAL = 50
+PROBE_WARMUP_STEPS = 20
+
+#: GPUs per compute profile, for the two shapes this experiment submits against.
+#:
+#: COPIED FROM THE PLATFORM'S ``CONTAINER_SHAPES`` RATHER THAN IMPORTED, because
+#: ``edullm_platform`` is a uv tool install in its own environment and is not a dependency of
+#: this repository's test run. Copied rather than derived from the profile name, because the
+#: platform's own launchers.py says in as many words that the name is a convention nothing
+#: enforces and that deriving a device count from it is "tempting and wrong".
+#:
+#: What this buys is the refusal that already cost a submission: ``process_per_device`` fires
+#: when the command's ``--nproc-per-node`` is not exactly this number.
+GPUS_PER_COMPUTE_PROFILE = {
+    "gpu-4xl40s": 4,
+    "gpu-8xa100": 8,
+}
+
+#: What one A100 step has to come in under for a full 12,715-step arm to fit 24 hours with
+#: 10% of the ceiling still unspent.
+#:
+#: WRITTEN DOWN BEFORE THE PROBE RUNS, WHICH IS THE ONLY TIME A THRESHOLD IS WORTH ANYTHING.
+#: A number chosen after the measurement is a number chosen to agree with it. Derived by
+#: :func:`seconds_per_step_to_fit`; the argument for moving the tranche to A100 is that the
+#: probe's clean median comes in under this, and nothing else.
+A100_STEP_SECONDS_FOR_FULL_HORIZON = 5.76
+
 #: Tokens per optimizer step: a 786,432-token global batch.
 TRANCHE_TOKENS_PER_STEP = 768 * 1024
 
@@ -626,6 +665,47 @@ def arm_seconds(arm: Arm, steps: int = TRANCHE_STEPS) -> float:
         + checkpoints * MEASURED_CHECKPOINT_SECONDS
         + monitor
     )
+
+
+def seconds_per_step_to_fit(
+    hours: float,
+    steps: int = FULL_HORIZON_STEPS,
+    arm: Optional["Arm"] = None,
+    margin: float = 0.10,
+) -> float:
+    """
+    The slowest step that still lands an arm inside a runtime bound.
+
+    Everything an arm spends that is not a step is fixed by the interval settings rather than
+    by the shape -- the evaluations are the same seven shards, the checkpoints are the same
+    model to the same bucket, and the lane monitor fires the same number of times -- so
+    moving to a faster card moves the step term and nothing else. Subtracting the fixed part
+    first is what makes the answer a threshold a measurement can be held against, rather than
+    ``hours / steps``, which is out by the 1.24 hours those instruments cost at the full
+    horizon.
+
+    :param hours: The runtime bound the run will be submitted under.
+    :param steps: How many optimizer steps it has to complete.
+    :param arm: The arm, which decides whether the lane monitor is paid for. Defaults to
+        ``faithful``, the more expensive of the two funded arms that has lanes.
+    :param margin: Fraction of the bound to leave unspent.
+
+    :returns: Seconds per step. A negative result means the fixed costs alone exceed the
+        bound, so no step time is fast enough.
+    """
+    arm = ARMS["faithful"] if arm is None else arm
+    evaluations = 2 + steps // TRANCHE_EVAL_INTERVAL
+    checkpoints = 1 + steps // TRANCHE_SAVE_INTERVAL
+    monitor = 0.0
+    if arm.hyper_connections is not None:
+        monitor = (steps // TRANCHE_MONITOR_INTERVAL) * MONITOR_SECONDS_PER_FIRING
+    fixed = (
+        MEASURED_STARTUP_SECONDS
+        + evaluations * MEASURED_EVAL_SECONDS
+        + checkpoints * MEASURED_CHECKPOINT_SECONDS
+        + monitor
+    )
+    return (hours * 3600.0 * (1.0 - margin) - fixed) / steps
 
 
 def tranche_hours(steps: int = TRANCHE_STEPS) -> float:

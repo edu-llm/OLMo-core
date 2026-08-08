@@ -552,18 +552,35 @@ def test_the_committed_command_carries_no_seed():
     assert opts.seed is None
 
 
-def test_the_committed_command_is_the_tranche_the_arm_table_priced():
+def test_the_committed_command_is_a_shape_this_table_prices():
     """
     The arm table's cost model and the submitted command are two statements of the same run,
     and nothing at submission compares them: `edullm check` prices a ceiling out of the
     workload profile and never reads either. So they are compared here.
+
+    TWO SHAPES ARE ALLOWED HERE AND NOT ONE, because run.yaml legitimately holds either the
+    tranche or a throughput probe -- see ``PROBE_STEPS`` in hyper_connection_arms.py for why
+    the probe exists. Which one it is, is read off the step count and then every other
+    interval is pinned against that choice, so a file half-edited from one into the other is
+    a failure here rather than a run that saves on the wrong interval. What both share is
+    checked once, below the branch.
     """
     opts, _ = entry.build_parser().parse_known_args(committed_argv())
 
+    if opts.steps == arms.TRANCHE_STEPS:
+        assert opts.save_interval == arms.TRANCHE_SAVE_INTERVAL
+        assert opts.eval_interval == arms.TRANCHE_EVAL_INTERVAL
+    elif opts.steps == arms.PROBE_STEPS:
+        assert opts.save_interval == arms.PROBE_SAVE_INTERVAL
+        assert opts.eval_interval == arms.PROBE_EVAL_INTERVAL
+        assert opts.warmup_steps == arms.PROBE_WARMUP_STEPS
+    else:
+        raise AssertionError(
+            f"run.yaml runs {opts.steps} steps, which is neither the tranche's "
+            f"{arms.TRANCHE_STEPS} nor the probe's {arms.PROBE_STEPS}, so nothing has priced it"
+        )
+
     assert opts.arm in arms.FUNDED, "run.yaml runs an arm the tranche does not fund"
-    assert opts.steps == arms.TRANCHE_STEPS
-    assert opts.save_interval == arms.TRANCHE_SAVE_INTERVAL
-    assert opts.eval_interval == arms.TRANCHE_EVAL_INTERVAL
     assert opts.monitor_interval == arms.TRANCHE_MONITOR_INTERVAL
     assert opts.global_batch_size == arms.TRANCHE_TOKENS_PER_STEP
     assert opts.model_factory == "hc_370M"
@@ -572,13 +589,65 @@ def test_the_committed_command_is_the_tranche_the_arm_table_priced():
     assert "--param-dtype" in committed_argv()
 
 
+def test_the_committed_command_starts_one_process_per_device():
+    """
+    THE REFUSAL THIS CATCHES HAS ALREADY COST A SUBMISSION. `edullm check` refused the 4-rank
+    command against gpu-8xa100 with ``process_per_device``.
+
+    The platform's ``launchers.require_a_process_for_every_device`` reads
+    ``CONTAINER_SHAPES[profile].gpus`` and compares it against the count it parses out of the
+    command -- and it parses it the way a shell would, opening the ``bash -lc`` wrapper,
+    finding ``python`` in command position, recognising ``-m torch.distributed.run``, then
+    scanning for ``--nproc-per-node`` or ``--nproc_per_node`` in either spelling. Fewer
+    processes than devices bills cards that idle; more puts two ranks on one card.
+
+    So this reads the same two facts out of the same file. ``suggested_compute`` is what the
+    submission defaults to, and a command whose rank count was left behind by a change of
+    shape is exactly the file this catches.
+    """
+    spec = yaml.safe_load((pathlib.Path(_HERE) / "run.yaml").read_text())
+    profile = spec["suggested_compute"]
+    assert profile in arms.GPUS_PER_COMPUTE_PROFILE, (
+        f"run.yaml suggests {profile!r}, whose device count is not recorded in "
+        "GPUS_PER_COMPUTE_PROFILE, so nothing here can check the rank count against it"
+    )
+
+    tokens = committed_command()
+    assert "--standalone" in tokens, "a single-host launcher needs no rendezvous endpoint"
+    ranks = [t for t in tokens if t.startswith("--nproc-per-node")]
+    assert len(ranks) == 1, tokens
+    assert int(ranks[0].split("=")[1]) == arms.GPUS_PER_COMPUTE_PROFILE[profile]
+
+
 def test_the_committed_run_fits_one_attempt_of_the_bound_it_will_be_submitted_under():
     """
     A cell killed by the attempt timeout is not reliably retried -- the platform's retry table
     grants a second attempt for a lost host and reaches a timeout only through a
     no-exit-code fall-through that torchrun's non-zero exit on SIGTERM races. So the committed
     command has to finish inside one attempt, with room for eighteen hours of drift.
+
+    Priced at the L40S step time whatever shape the command names, which is conservative in
+    the direction that matters: the probe exists precisely because nobody knows the A100
+    number yet, and assuming a faster card before measuring one is the assumption this whole
+    branch is trying to avoid making.
     """
     opts, _ = entry.build_parser().parse_known_args(committed_argv())
     hours = arms.arm_seconds(arms.ARMS[opts.arm], opts.steps) / 3600
     assert hours < 0.9 * 21.0, f"{opts.arm} needs {hours:.1f}h against a 21h attempt"
+
+
+def test_the_step_time_that_would_buy_the_full_horizon_is_written_down_in_advance():
+    """
+    A threshold chosen after the measurement is a threshold chosen to agree with it.
+
+    This pins the number the probe will be read against: the slowest A100 step that still
+    lands a 12,715-step arm inside 24 hours with a tenth of the bound unspent. It is not
+    ``24 * 3600 * 0.9 / 12715``, which would be 6.11 s and wrong by the 1.24 hours the 27
+    evaluations, 26 checkpoints and 254 monitor firings cost whatever card they run on.
+    """
+    assert arms.seconds_per_step_to_fit(24.0) == pytest.approx(
+        arms.A100_STEP_SECONDS_FOR_FULL_HORIZON, abs=0.01
+    )
+    # The measured L40S step is the reason this branch exists at all: it does not clear the
+    # threshold, so the tranche cannot reach the full horizon on that shape.
+    assert arms.MEASURED_SECONDS_PER_STEP > arms.A100_STEP_SECONDS_FOR_FULL_HORIZON

@@ -1,127 +1,191 @@
-# What this commit runs on the platform: the first arm of the nine-run tranche, at full
-# length, as one three-cell fan-out.
-#
-# Nine runs: `baseline` x3, `faithful` x3, `output-only` x3. Three commits and three
-# submissions, not nine -- the seeds are a fan-out and the arms are not, because the arm is a
-# property of the code and the seed is a property of the cell. Change `--arm` below and commit
-# before submitting the next one, so that the commit and the arm cannot disagree.
+# WHAT THIS COMMIT RUNS: a 100-step throughput probe on gpu-8xa100, and nothing else. It is
+# not an arm, it trains nothing anybody will read, and it exists to answer one question that
+# gates roughly $4,000 of the nine-run tranche.
 #
 #   edullm submit --experiment hyper-connections-370m --dataset regmix-10b-v1 \
-#     --team <team> --hours 21 --fanout-size 3 --fanout-index-parameter seed
+#     --team input-core --hours 3 --compute gpu-8xa100
 #
-# THERE IS NO `--seed` IN THE COMMAND AND THAT IS THE POINT. Every cell of a fan-out is handed
-# the same command, so a `--seed` written here would run one replicate three times: three
-# bit-identical models, a measured noise floor of zero, and a tranche in which every arm
-# clears the significance gate. `train_hyper_connections.py` reads
-# $AWS_BATCH_JOB_ARRAY_INDEX instead, refuses to run if a fan-out index arrives alongside an
-# explicit --seed or under a label other than `seed`, and prints which replicate it resolved
-# to before it builds anything. See `resolve_seed` there.
+# THE TRANCHE CONFIG THIS REPLACED IS NOT LOST. The 6,000-step L40S baseline that was here is
+# the whole of `.edullm/run.yaml` at commit d63dbb592, and one command puts it back:
 #
-# WHY 6,000 STEPS AND NOT THE 12,715 THAT WOULD BE 10B TOKENS. This is the one number in this
-# file that is not what the experiment wants, and it is worth reading the whole reason.
+#   git show d63dbb592:.edullm/run.yaml > .edullm/run.yaml
 #
-# At the measured 10.32 s/step, 12,715 steps plus its 27 evaluations and 27 checkpoints is
-# 37.7 hours. `olmo-core-train` declares maximum_runtime_hours: 24, and `--hours` only lowers
-# it -- an override above the workload bound is refused with `runtime_above_the_workload_bound`
-# and raising it for everybody is a pull request against the platform's
-# config/workload-catalog.yaml. So a 10B-token arm cannot finish in one attempt.
+# It is also reproduced verbatim at the bottom of this file, under RECOVERING THE L40S
+# TRANCHE, so that a reader who has this file and no history can still see it. If the probe
+# says A100 is not better, restore it, commit, and the tranche is exactly where it was.
 #
-# The two-attempt path was the plan and it does not survive reading the retry rules. The
-# resume itself is sound -- Trainer.fit loads from the save folder with load_trainer_state and
-# load_optim_state hard-coded true, the fan-out prologue gives each cell a checkpoint prefix
-# that a retry re-derives identically, and step, token count, data order, optimizer state and
-# RNG all come back. What is not sound is being granted the attempt.
-# RETRY_ONLY_WHAT_A_RETRY_FIXES is, in order, `OnStatusReason "Host EC2*" RETRY`, `OnReason
-# "OutOfMemoryError*" EXIT`, `OnExitCode "*" EXIT`. A timeout reaches the retry only by
-# recording no container exit code at all, so that nothing matches and Batch's documented
-# fall-through applies -- and torchrun's elastic agent re-raises SignalException and exits
-# non-zero on SIGTERM, racing the container stop timeout to decide whether an exit code gets
-# recorded. Winning that race means rule three fires and the arm is not retried, having spent
-# 21 hours and reached step 7,000. It is a coin flip with a whole arm on each side.
+# ---------------------------------------------------------------------------------------
+# WHY A100 IS WORTH 100 STEPS OF SOMEBODY'S MONEY
+# ---------------------------------------------------------------------------------------
 #
-# 6,000 steps is 4.72B tokens, 17.9 hours, and fits one attempt of 21 with three hours spare.
-# Every arm and every seed runs the same 6,000, so nothing inside the tranche has a horizon
-# confound; what is deferred is the comparison to the published 10B results, alongside mhc.
+# The 370M arms are bound by the wire and not by the card. gpu-4xl40s is a g6e box with no
+# NVLink and no GPU peer-to-peer, so every FSDP collective stages over PCIe at about
+# 4.4 GB/s, and the measured clean median there is 10.32 s/step. A 12,715-step arm -- the
+# 10B-token horizon the pre-registration is written against -- is 36.4 hours at that rate,
+# against a 24-hour per-attempt ceiling `--hours` can only lower. That is why the committed
+# tranche is 6,000 steps and 4.72B tokens: not money, reach.
 #
-# WHY --hours 21 AND NOT THE 24 THE PROFILE ALLOWS. The budget is $4,000 and `edullm check`
-# prices a ceiling rather than an expectation: attempts x the runtime bound x the rate x the
-# cell count. At 24 hours that is $503.64 a cell and $4,532.79 for nine, which is over. At 21
-# it is $440.69 a cell and $3,966.21 for nine, which is under, and 42 hours of allowance still
-# covers a host lost at hour 20 and resumed. Read the rate and the ceiling out of
-# `edullm check --json`; the numbers in this paragraph are what it reported on 2026-08-08 and
-# they live in reviewed configuration that moves without anybody being told.
+# gpu-8xa100 is a p4d.24xlarge and has NVLink. If the wire stops binding, the step becomes
+# compute-bound, and the two shapes are 2,496 TF against 1,448 TF. That is 1.72x of compute
+# against the 1.79x of step time a full arm needs, so the answer is genuinely close and is
+# not worth arguing about further -- it is worth measuring for a few dollars.
 #
-# THE TRAFFIC ARITHMETIC, WHICH IS WHY THE MICROBATCH IS 16384 AND WHY THE STEP IS WHAT IT IS.
+# THE NUMBER THIS PROBE IS READ AGAINST, DECIDED HERE, BEFORE IT RUNS. Fixed overhead for a
+# 12,715-step arm at the tranche's own intervals is 27 held-out evaluations at 104 s, 26
+# checkpoints at 46 s, 254 lane-monitor firings at 1.37 s and 118 s of start-up: 4,470 s, or
+# 1.24 hours. What is left for the steps themselves is:
 #
-# The step is bound by the wire and not by the card. The global batch is 786,432 tokens over 4
-# ranks, which is 196,608 tokens per rank; at a rank microbatch of 16,384 that is 12
-# gradient-accumulation microbatches per optimizer step. FSDP moves the whole model across the
-# interconnect on every one of them, and the model is 474,220,352 parameters:
+#   <= 6.44 s/step   fits 24 hours exactly, with no margin at all. Not a decision to make.
+#   <= 5.76 s/step   fits 24 hours with 10% spare. THIS IS THE THRESHOLD. At or under it,
+#                    move the tranche to A100 at the full 12,715 steps and 10B tokens. It is
+#                    `A100_STEP_SECONDS_FOR_FULL_HORIZON` in hyper_connection_arms.py, and a
+#                    test pins it so that it cannot be quietly moved to meet a result.
+#   <= 5.00 s/step   fits the 21-hour submission the $4,000 ceiling actually allows, with
+#                    10% spare. Under this, the horizon is bought without also having to
+#                    re-price the tranche against a 24-hour ceiling.
 #
-#   all-gather parameters for the forward    474,220,352 x 2 (bf16) x 3/4 =   711 MB
-#   all-gather them again for the backward                                    711 MB
-#   reduce-scatter gradients                 474,220,352 x 4 (fp32) x 3/4 = 1,423 MB
-#                                                                          ----------
-#                                            per rank, per microbatch        2,845 MB
+# Above 5.76 s/step, restore the L40S tranche and run 6,000 steps as planned. Between 5.00
+# and 5.76 the horizon fits the workload bound but the budget has to be re-read out of
+# `edullm check --json` at `--hours 24`, because the ceiling it prices is attempts x the
+# runtime bound x the rate x the cell count and 24 is over $4,000 at the L40S rate.
 #
-# Twelve of those is 34.1 GB per rank per step, and 34.1 GB in 10.32 s is 3.31 GB/s sustained.
-# g6e has no NVLink, so every collective goes out through the host and no kernel choice
-# reaches a number set by how many times the model crosses the wire. The first probe ran 24
-# microbatches of 8,192 for 68.3 GB and 15.54 s; halving the crossings bought 33% of the step,
-# which is what a wire-bound step looks like when the wire does less.
+# HOW TO READ THE STEP TIME OFF THIS RUN, AND THE MISTAKE THAT MUST NOT HAPPEN AGAIN.
+# THE LANE MONITOR COSTS ABOUT 1.37 s ON EVERY STEP IT FIRES ON. The first 370M probe was
+# priced at 11.69 s/step, which was wrong, and it was wrong because the rows read were the
+# five carrying `hc/*` keys -- which are exactly the monitor's firing steps. That number was
+# the cost of the instrument, sampled five times, and not the cost of a step. It sent a whole
+# tranche to be re-planned against a horizon it did not need.
 #
-# 786,432 / 4 / 16,384 = 12 exactly, so the global batch, the token budget, the schedule and
-# the optimizer-step count are identical to the first probe and the two are comparable. They
-# are not bit-identical: a sum of 12 partials is not the same floating-point object as a sum
-# of 24, and the difference propagates through the optimizer. Expect agreement to noise.
+# So: `--monitor-interval 50` and `--eval-interval 50` fire on the same steps here, 50 and
+# 100, deliberately. Take the median of the steps that are neither -- 2 through 49 and 51
+# through 99, which is 97 of them -- and drop step 1, which pays for torch.compile. Any
+# median that includes step 50 or step 100 is measuring an instrument.
 #
-# `reduce_dtype` stays float32, and it is the largest of the three rows above -- bf16 would
-# take the step to roughly 7.7 s on the same argument, which still does not reach 24 hours at
-# 12,715 steps. train_on_corpus.py argues in a comment beside that field that fp32 is "the
-# numerically safe answer at every scale this platform runs", and changing the numerics of the
-# gradient reduction underneath an experiment about how gradients flow through lanes is a
-# decision for a person rather than for a throughput patch. The dotted override is
-# `train_module.dp_config.reduce_dtype=bfloat16`.
+# ---------------------------------------------------------------------------------------
+# WHY --rank-microbatch-size IS 12288, WHICH IS NOT THE 16384 THAT WAS SAFE ON L40S
+# ---------------------------------------------------------------------------------------
 #
-# `PLATFORM_ATTN_BACKEND` stays "torch". flash-attn is in the image now, but whether flash-2
-# beats the FA2 kernels torch vendors at d_model 1024, 16 heads, head_dim 64 and sequence
-# length 4096 has not been measured, and this tranche is not the place to find out.
+# 786,432 tokens over 8 ranks is 98,304 per rank. Three values divide it exactly: 24,576 (4
+# microbatches), 16,384 (6) and 12,288 (8). Bigger is better for this probe -- fewer
+# gradient-accumulation microbatches is fewer crossings of the interconnect, which is the
+# variable under test -- so the question is only how big will fit, and an A100-40GB has 40 GB
+# where the L40S has 48. There is no activation checkpointing configured anywhere in
+# train_on_corpus.py, so nothing absorbs the difference.
 #
-# WHAT EACH REMAINING FLAG IS FOR.
+# THE LM HEAD DOMINATES, AND THE LOGITS TENSOR IS TOUCHED FIVE TIMES OVER, NOT ONCE. The
+# default loss implementation materializes the whole thing: `LMHead.forward` computes bf16
+# logits of (microbatch x 100,352), and `nn/functional/cross_entropy_loss.py` opens with
+# `logits = logits.float()` and then runs both `F.cross_entropy` and, because this tranche
+# sets `--z-loss-multiplier`, `logits.logsumexp(-1)`. So in units of the bf16 tensor:
 #
-# `--model-factory hc_370M` is the 370M OLMo-3 shape with this platform's two forced attention
-# settings. It is not `olmo3_370M`, which asks for flash-2 by default. The first attempt at a
-# 370M run earned its keep in eighteen minutes by dying on exactly that.
+#   bf16 logits out of w_out                                       1x
+#   fp32 upcast, saved for backward by cross_entropy AND logsumexp 2x
+#   log_softmax result, saved by F.cross_entropy for its backward  2x
+#                                                                  ---
+#   forward peak                                                   5x
+#   backward: grad wrt the fp32 logits arrives while both saved
+#   fp32 tensors are still live, and the bf16 tensor has been freed 6x
 #
-# `--save-interval 500` is 1.43 hours of exposure at 10.32 s/step, and 13 checkpoints over the
-# run. All of them are kept; the workload role cannot prune.
+# At 12,288 the bf16 tensor is 12,288 x 100,352 x 2 = 2.30 GiB, so the head peaks at 13.8 GiB.
+# The rest of the model, for the `faithful` arm at n_lanes 4, saves roughly 32K elements per
+# token per layer -- 4x d_model in and out of each block because the residual stream carries
+# four lanes, plus qkv, the qk-norms, the attention output and 4x the 4,096-wide MLP -- which
+# is 1.0 MiB per token over 16 layers, or 12.0 GiB. Sharded state over 8 ranks is small: fp32
+# master weights, two AdamW moments and the fp32 gradient shard are 0.22 GiB each, and the LM
+# head is fully_shard'd with reshard_after_forward=False so its 0.19 GiB of unsharded bf16
+# weights stay resident. Add roughly 1.8 GiB for the CUDA context, NCCL buffers and inductor
+# workspace.
 #
-# `--eval-interval 500` gives 14 held-out evaluations over the corpus's own seven declared
-# validation shards, reported as bits-per-byte per source. About 104 seconds each.
+#   rank microbatch    LM head peak    other activations    total      of a 40 GB card
+#   12,288 (8 micro)      13.8 GiB           12.0 GiB      ~28.9 GiB    73%   <- chosen
+#   16,384 (6 micro)      18.4 GiB           16.0 GiB      ~35.7 GiB    90%
+#   24,576 (4 micro)      27.6 GiB           24.0 GiB      ~54.7 GiB    over
 #
-# `--monitor-interval 50` costs about 1.37 s on each of the 120 steps it fires on, and only on
-# the arms that have lanes. There is no `--fail-closed-by-step`: the baseline has no lanes to
-# differentiate, so the guard has nothing to read. PUT IT BACK FOR `faithful` AND
-# `output-only` -- `--fail-closed-by-step 400` there, which is after warmup and inside the
-# first checkpoint interval, so an inert mechanism costs 70 minutes rather than 18 hours.
+# 16,384 IS THE ONE THAT LOOKS FINE AND IS NOT. The same arithmetic puts it at ~38.8 GiB on
+# the L40S, where it ran -- a 48 GB card had 5.7 GiB of slack and used some of it. Move that
+# to a 40 GB card and the slack is what disappears; 90% of a card before fragmentation is not
+# a margin, it is a coin flip. And it is the expensive coin flip: `RETRY_ONLY_WHAT_A_RETRY_
+# FIXES` in the platform's execution.py reads `OnReason "OutOfMemoryError*" EXIT`, so an OOM
+# is not retried. It costs the queue wait, the machine, and the day this probe is meant to
+# save. 12,288 leaves 10.6 GiB spare, which is 27%.
 #
-# `--param-dtype bfloat16` is spelled out in the command text on purpose. The platform reads
-# command words to decide what a shape can do, and cannot see a dtype set in code.
+# The cost of choosing 12,288 over 16,384 is 8 microbatches per rank instead of 6, so 33%
+# more collectives. On PCIe that would be the whole result; on NVLink it is what the probe is
+# measuring the absence of, and 8 crossings of a 2,845 MB payload is 22.8 GB per rank per
+# step against the 34.1 GB the L40S arm moves at 12 crossings. If A100 cannot beat 5.80 s/step
+# while moving a third less traffic over a link two orders of magnitude faster, it will not
+# beat it at 6 microbatches either.
+#
+# ---------------------------------------------------------------------------------------
+# WHY --nproc-per-node=8, AND WHAT ACTUALLY READS IT
+# ---------------------------------------------------------------------------------------
+#
+# `edullm check` refused the 4-process command against this shape with `process_per_device`.
+# The rule is in the platform's launchers.py: `require_a_process_for_every_device` looks up
+# CONTAINER_SHAPES[compute_profile].gpus -- gpu-8xa100 is 8 -- and compares it against
+# `read_launch_plan(command).processes`. That plan is built by opening the `bash -lc` wrapper
+# with shlex, finding `python` in command position, reading `-m torch.distributed.run` as the
+# launcher, and then scanning every remaining word for `--nproc-per-node` or `--nproc_per_node`
+# in either the `=value` or the ` value` spelling. The count it reads has to equal 8 exactly:
+# fewer idles cards that are billed, more puts two ranks on one device.
+#
+# Three things that would look like a fix and are not. The profile's *name* is never parsed,
+# so `gpu-8xa100` reading like eight devices is not what satisfies this. An absent flag is
+# read as 1, not as "unspecified", so naming a launcher without a count is the original defect
+# with a launcher in front of it. And `auto`, `gpu`, `cpu` or a shell variable make the count
+# unreadable, which is not refused -- that is a hole and using it would be a lie, not a fix.
+# The eight below is a number, in a word the guard reads, and `test_the_committed_command_
+# starts_one_process_per_device` in test_train_hyper_connections.py holds it against the
+# suggested_compute in this file.
 schema_version: 1
 workload_profile: olmo-core-train
-suggested_compute: gpu-4xl40s
+suggested_compute: gpu-8xa100
 command: >-
-  bash -lc 'python -m torch.distributed.run --nproc-per-node=4 --standalone
+  bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone
   .edullm/train_hyper_connections.py "$EDULLM_RUN_ID"
   --save-folder "$EDULLM_CHECKPOINT_DIR"
-  --arm baseline
+  --arm faithful
   --model-factory hc_370M
   --sequence-length 4096
   --global-batch-size 786432
-  --rank-microbatch-size 16384
-  --steps 6000
-  --save-interval 500
-  --warmup-steps 120
+  --rank-microbatch-size 12288
+  --steps 100
+  --save-interval 100
+  --warmup-steps 20
   --monitor-interval 50
-  --eval-interval 500
+  --eval-interval 50
   --param-dtype bfloat16'
+
+# ---------------------------------------------------------------------------------------
+# RECOVERING THE L40S TRANCHE
+# ---------------------------------------------------------------------------------------
+#
+# `git show d63dbb592:.edullm/run.yaml > .edullm/run.yaml` restores the file below along with
+# the several hundred lines of argument that came with it -- why 6,000 steps and not 12,715,
+# why --hours 21 and not 24, why the microbatch is 16,384 on that shape, and why there is no
+# --seed. Prefer that to retyping this. What follows is the spec only, so that a reader
+# holding this file and no history can still see what the tranche was:
+#
+#   schema_version: 1
+#   workload_profile: olmo-core-train
+#   suggested_compute: gpu-4xl40s
+#   command: >-
+#     bash -lc 'python -m torch.distributed.run --nproc-per-node=4 --standalone
+#     .edullm/train_hyper_connections.py "$EDULLM_RUN_ID"
+#     --save-folder "$EDULLM_CHECKPOINT_DIR"
+#     --arm baseline
+#     --model-factory hc_370M
+#     --sequence-length 4096
+#     --global-batch-size 786432
+#     --rank-microbatch-size 16384
+#     --steps 6000
+#     --save-interval 500
+#     --warmup-steps 120
+#     --monitor-interval 50
+#     --eval-interval 500
+#     --param-dtype bfloat16'
+#
+# submitted with:
+#
+#   edullm submit --experiment hyper-connections-370m --dataset regmix-10b-v1 \
+#     --team <team> --hours 21 --fanout-size 3 --fanout-index-parameter seed
