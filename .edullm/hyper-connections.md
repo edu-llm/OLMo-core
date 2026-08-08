@@ -1529,7 +1529,25 @@ cells at seeds 0, 1 and 3 whose losses differ at every shared step, clean median
 8.076 and 8.259 s/step over 750, 760 and 740 rows, 14.37 projected hours against the 19-hour
 bound, z-loss written on all three, and seven per-source metrics with bits-per-byte beside every
 cross-entropy at both the startup evaluation and the one at step 500. It does **not** report
-`go`, because two of the five cells have logged nothing — see below.
+`go`, because two of the five cells have logged nothing.
+
+**It never did report `go`, and the reason it eventually reported `no-go` is not any of the
+things it was watching for.** At 19:58Z, at step ~900 of 6,000 and 2h18m in, all three live cells
+took a SIGTERM within thirty seconds of each other — `RuntimeError: DataLoader worker (pid …) is
+killed by signal: Terminated`, logged by each cell as `TRAINING_ITSELF_FAILED` — and the array
+parent now reads `FAILED`, `Why: Array Child Job failed`. Three cells on three nodes dying inside
+one thirty-second window is not three faults; the account that fits is the one the migration
+commit above diagnoses from the other end, which is that twenty cells were asked of a six-node
+pool, so the two children that never placed are the likeliest thing to have failed the array and
+taken their running siblings down with them. That is inference from the timing and the signal,
+not something the platform reported, and `edullm logs` would settle it.
+
+So **stage 1 measured no noise floor.** σ̂ at the final step is what stage 2 is gated on and the
+run stopped at 15% of the horizon, which is why the numbers in this section are all instrument
+readings — step time, MFU, metric coverage — and none of them is a variance. What the run does
+establish is that the configuration is sound: the arm, the seeds, the seven sources, the
+evaluator across a checkpoint boundary and the fit against the bound were all verified before it
+died, and none of them has to be re-established on the shape it moves to.
 
 ### The MFU is right, and this is the first run for which that can be said
 
