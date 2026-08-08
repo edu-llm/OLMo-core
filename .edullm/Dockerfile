@@ -88,10 +88,14 @@ RUN set -eux; \
 # FlashAttention source build on the research-image runner.
 RUN set -eux; \
     TORCH_CUDA_ARCH_LIST="8.0" MAMBA_FORCE_BUILD=TRUE \
-      python -m pip install --no-cache-dir --no-build-isolation \
+      python -m pip install --no-cache-dir --no-build-isolation --no-deps \
       "mamba-ssm @ https://github.com/state-spaces/mamba/archive/e9594ce1c732d97440f0332fdc43170a2294dbfa.tar.gz"; \
+    python -c "import torch; assert torch.version.cuda == '12.8', torch.version.cuda"; \
     python -m pip install --no-cache-dir --no-build-isolation \
-      "xlstm==2.0.5" "mlstm-kernels==2.0.4" "flashrnn==1.0.6"
+      --extra-index-url https://download.pytorch.org/whl/cu128 \
+      "torch==2.10.0+cu128" \
+      "xlstm==2.0.5" "mlstm-kernels==2.0.4" "flashrnn==1.0.6"; \
+    python -c "import torch; assert torch.version.cuda == '12.8', torch.version.cuda"
 
 # Build the repository's current native PD extension without invalidating the
 # dependency layers when unrelated Python source changes.
