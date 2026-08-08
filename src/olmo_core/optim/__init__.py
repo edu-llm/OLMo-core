@@ -8,6 +8,13 @@ from .config import (
     OptimGroupOverride,
 )
 from .dion import DionConfig
+from .hyperball import (
+    MuonConstraint,
+    MuonH,
+    MuonHConfig,
+    MuonWConfig,
+    newton_schulz_msign,
+)
 from .lion import Lion, LionConfig, SkipStepLion, SkipStepLionConfig
 from .muon import MuonConfig, NorMuonConfig
 from .noop import NoOpConfig, NoOpOptimizer
@@ -42,6 +49,11 @@ __all__ = [
     "Lion",
     "MuonConfig",
     "NorMuonConfig",
+    "MuonConstraint",
+    "MuonH",
+    "MuonHConfig",
+    "MuonWConfig",
+    "newton_schulz_msign",
     "DionConfig",
     "SkipStepLionConfig",
     "SkipStepLion",

@@ -95,7 +95,15 @@ from olmo_core.distributed.utils import barrier, get_rank
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.io import clear_directory, list_directory, normalize_path
 from olmo_core.nn.transformer import TransformerConfig
-from olmo_core.optim import AdamWConfig, CosWithWarmup, OptimGroupOverride
+from olmo_core.nn.transformer.init import InitMethod
+from olmo_core.optim import (
+    AdamWConfig,
+    CosWithWarmup,
+    MuonHConfig,
+    MuonWConfig,
+    OptimConfig,
+    OptimGroupOverride,
+)
 from olmo_core.train import (
     Duration,
     TrainerConfig,
@@ -561,6 +569,45 @@ def remove_torn_checkpoints(save_folder: str) -> List[str]:
     return removed
 
 
+OPTIMIZERS = ("adamw", "muon_w", "muon_h")
+
+
+def build_optim_config(opts) -> OptimConfig:
+    """
+    The optimizer named by ``--optimizer``.
+
+    ``adamw`` is what this file has always built and stays the default, so a run that does not
+    ask for anything else is unaffected.
+
+    ``muon_w`` and ``muon_h`` are the two arms of a Muon-versus-MuonH comparison. They differ
+    only in what happens to a matrix after its update has been orthogonalized -- weight decay
+    for one, Hyperball's norm constraint for the other -- and share every other line of
+    :mod:`olmo_core.optim.hyperball`, which is the point of comparing them. Both split the
+    parameters themselves: matrices to Muon, embeddings and gains and the LM head to AdamW,
+    with MoE expert weights blocked one matrix per expert.
+
+    ``--learning-rate`` means different things to the three. For AdamW it is the learning rate.
+    For ``muon_w`` it is scaled per matrix by ``adjust_lr``. For ``muon_h`` it is a *relative*
+    step size, dimensionless, and the update has length ``lr * ||W||_F``. Do not carry a value
+    across from one to another and expect it to mean anything; ``--adamw-learning-rate`` sets
+    the rate for the AdamW-side groups separately, and defaults to ``--learning-rate`` only
+    because there has to be a default.
+    """
+    if opts.optimizer == "adamw":
+        return AdamWConfig(
+            lr=opts.learning_rate,
+            group_overrides=[
+                OptimGroupOverride(params=["embeddings.weight"], opts=dict(weight_decay=0.0))
+            ],
+        )
+
+    config_cls = MuonWConfig if opts.optimizer == "muon_w" else MuonHConfig
+    adamw_lr = (
+        opts.adamw_learning_rate if opts.adamw_learning_rate is not None else opts.learning_rate
+    )
+    return config_cls(lr=opts.learning_rate, adamw_lr=adamw_lr)
+
+
 def build_config(opts, overrides: List[str]):
     corpus = resolve_corpus(
         dataset_id=opts.dataset_id,
@@ -585,7 +632,14 @@ def build_config(opts, overrides: List[str]):
     # padded rather than exact for the same reason the example pads: a vocab that is a
     # multiple of 128 keeps the embedding matmul on a fast path. dolma2's 100,278 pads to
     # 100,352.
-    model_config = factory(vocab_size=corpus.tokenizer.padded_vocab_size())
+    #
+    # init_method is passed through rather than left at the factory's default because for the
+    # Hyperball optimizers it is part of the method: the radius they hold fixed is
+    # ||W_0||_F, so the initializer sets the step scale. See --init-method.
+    model_kwargs: Dict[str, object] = {}
+    if opts.init_method is not None:
+        model_kwargs["init_method"] = InitMethod(opts.init_method)
+    model_config = factory(vocab_size=corpus.tokenizer.padded_vocab_size(), **model_kwargs)
 
     dataset_config = NumpyFSLDatasetConfig(
         paths=corpus.paths,
@@ -605,12 +659,7 @@ def build_config(opts, overrides: List[str]):
     train_module_config = TransformerTrainModuleConfig(
         rank_microbatch_size=opts.rank_microbatch_size,
         max_sequence_length=opts.sequence_length,
-        optim=AdamWConfig(
-            lr=opts.learning_rate,
-            group_overrides=[
-                OptimGroupOverride(params=["embeddings.weight"], opts=dict(weight_decay=0.0))
-            ],
-        ),
+        optim=build_optim_config(opts),
         # On, because the image now carries a C compiler. It was off in the platform's
         # getting-started command only because a run without one dies on the first compiled
         # region, which is a workaround that costs throughput on every run forever.
@@ -859,6 +908,34 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--save-interval", type=int, default=100)
     parser.add_argument("--warmup-steps", type=int, default=20)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
+    parser.add_argument(
+        "--optimizer",
+        default="adamw",
+        choices=list(OPTIMIZERS),
+        help="adamw is what this file has always built. muon_w is standard Muon with decoupled "
+        "weight decay; muon_h is the same thing wrapped in Hyperball "
+        "(https://arxiv.org/abs/2606.16899). The two Muon arms differ only in that wrapper, so "
+        "they are comparable to each other -- and --learning-rate does NOT mean the same thing "
+        "across the three. See build_optim_config.",
+    )
+    parser.add_argument(
+        "--adamw-learning-rate",
+        type=float,
+        default=None,
+        help="Learning rate for the AdamW-side groups (embeddings, gains, LM head) under "
+        "--optimizer muon_w/muon_h. Defaults to --learning-rate, which is a Muon-scale rate "
+        "and almost certainly too large for these; set it. Ignored for --optimizer adamw.",
+    )
+    parser.add_argument(
+        "--init-method",
+        default=None,
+        choices=[m.value for m in InitMethod],
+        help="Weight initialization. None leaves the model factory's own default (normal, "
+        "std 0.02). This is not a cosmetic choice under --optimizer muon_h: Hyperball fixes "
+        "each matrix's norm at its value on step 0, so the initializer sets the absolute step "
+        "length. fan_in is std=1/sqrt(d_in), which is what the Hyperball paper uses and what "
+        "its theory assumes. Whatever you pick, pick the same one for every arm.",
+    )
     parser.add_argument("--global-batch-size", type=int, default=256 * 1024)
     parser.add_argument("--rank-microbatch-size", type=int, default=16 * 1024)
     parser.add_argument("--data-seed", type=int, default=0)

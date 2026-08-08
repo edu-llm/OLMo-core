@@ -1,0 +1,41 @@
+# SMOKE, arm D/H: dense 370M, Muon wrapped in Hyperball
+#
+#   edullm check --json --spec .edullm/run-smoke-dense-muonh.yaml --experiment muonh-smoke \
+#     --dataset olmo-150b-dolma2-v1 --team scratch --compute gpu-1xl40s --hours 1 --attempts 1
+#   edullm submit <same flags>
+#
+# PURPOSE IS MEASUREMENT, NOT A RESULT. 120 steps says nothing about which optimizer is better --
+# the paper's own finding is that Hyperball trails early and overtakes as the LR decays, so a
+# truncated run is biased toward the weight-decay arm. What this proves is that the arm trains on
+# real data under FSDP without diverging, and what it MEASURES is tokens/s, which is what sizes
+# the real runs against the 24 h attempt bound. See .edullm/muon-hyperball.md.
+#
+# --hours AND --attempts ARE NOT OPTIONAL. The workload profile's defaults are its maximums
+# (24 h x 2), which price high enough to park the run waiting for an approver rather than start
+# it. Read the actual figure from `check --json`, never from a file.
+#
+# --init-method fan_in ON EVERY ARM, including the weight-decay ones. Hyperball's radius is
+# measured from W_0, so the initializer sets the absolute step length; fan_in is the paper's
+# std=1/sqrt(d_in). An arm on a different initializer is not a control.
+#
+# --param-dtype bfloat16 is written into the command text on purpose: the platform's precision
+# guard reads command words and cannot see a dtype set in code, so naming it turns a T4
+# submission into a free refusal instead of a billed machine that dies on its first kernel.
+#
+# --learning-rate 0.01 is a MuonH rate and means something different: under Hyperball it is
+# a RELATIVE step size, ||dW||/||W|| ~ eta, dimensionless. It is not comparable to the
+# muon_w arm's number and neither is tuned yet -- both are sweep starting points.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-1xl40s
+command: >-
+  bash -lc 'python -m torch.distributed.run --nproc-per-node=1 --standalone
+  .edullm/train_on_corpus.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --model-factory olmo2_370M --init-method fan_in
+  --optimizer muon_h --learning-rate 0.01 --adamw-learning-rate 8.2e-4
+  --param-dtype bfloat16
+  --sequence-length 2048 --steps 120 --warmup-steps 20
+  --global-batch-size 262144 --rank-microbatch-size 8192
+  --save-interval 100 --data-seed 0 --work-dir /tmp/dataset-cache
+  trainer.callbacks.checkpointer.max_checkpoints=null'
