@@ -1,0 +1,67 @@
+# THE 18-CELL MIXER BAKE-OFF. Six mixers x three seeds, one command, one image.
+#
+# Copy this over `.edullm/run.yaml` to submit it, or point the submission at this file. It is kept
+# separate so that `run.yaml` stays the cheap sm_80 gated-conv smoke gate: the gate has to be
+# submittable at any moment without editing the file the science run lives in.
+#
+# WHAT THIS ANSWERS. Which linear-attention mixer should the next large production run use? The
+# endpoint is deliberately three numbers, not one: held-out CE, steady-state throughput, and peak
+# memory. At 1.0B tokens/cell the CE differences between these arms are likely to sit under what
+# three seeds can resolve, so throughput and memory are co-primary rather than decoration -- an
+# arm that ties on loss and costs 2x the step time is not a tie.
+#
+# THE CELL INDEX IS THE ONLY THING THAT VARIES ACROSS THE FAN-OUT, and it maps to (arm, seed) via
+# two literal arrays rather than arithmetic. Arithmetic would be shorter and is how an off-by-one
+# becomes an arm that ran twice while another never ran at all -- silently, because every cell
+# still exits zero. The arrays are transcribed from docs/mixer-bakeoff/seeds.json, which is frozen
+# and whose arm names are verified against ARMS in core6_arms.py.
+#
+# Index layout is ARM-MAJOR: cells 0-2 are the first arm's three seeds, 3-5 the second's, and so
+# on. That matters if the run is cut short -- a truncated arm-major fan-out loses whole arms and
+# keeps the rest complete, where a seed-major one loses one seed from every arm and leaves nothing
+# with n=3.
+#
+#   idx  0  1  2   3  4  5   6  7  8   9 10 11  12 13 14  15 16 17
+#   arm  KDA_BASE  KDA_NOACT KDA_GCONV  GDN2     KDA_R1    KDA_R2
+#
+# The three data seeds repeat across arms on purpose: data order is a function of
+# (data_seed + epoch, len(dataset)) and is independent of the model, so the same data seed gives
+# every arm the identical token stream in the identical order -- provided sequence length, global
+# batch size and DP world size also match, which they do because they are literals below rather
+# than per-arm. Init seeds are unique per arm and are NOT paired across arms: arms have different
+# tensor inventories, so a shared init stream diverges at the first differing tensor. They are
+# recorded so run 2 can reproduce any arm exactly.
+#
+# THE LAUNCHER COMES FIRST IN THE COMMAND AND THAT IS A PLATFORM CONSTRAINT, not a style choice.
+# Leading shell assignments hide the launcher from the admission check, which then reads the
+# command as one process on eight GPUs and refuses it. So `export ... && python -m
+# torch.distributed.run ...` with the export ahead of the launcher inside one `bash -lc`, and the
+# per-cell values computed inline from the arrays.
+#
+# TRITON_F32_DEFAULT=ieee is already set in the image's ENV, which is where it has to be to
+# participate in Triton kernel codegen. It is exported again here so the command is
+# self-documenting: a reader should not have to open the Dockerfile to learn that the fp32 matmuls
+# in every FLA kernel are at 1e-6 rather than 1e-3.
+#
+# --attempts 1 IS PINNED AT SUBMIT TIME, NOT HERE. The olmo-core-train profile defaults to
+# maximum_attempts: 2, which doubles the declared cost and can flip the approval class. Measured:
+# the same command at --hours 12 costs $263.49 with attempts 1 and $526.98 without it.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'export TRITON_F32_DEFAULT=ieee &&
+  I=${AWS_BATCH_JOB_ARRAY_INDEX:-0} &&
+  ARMS=(KDA_BASE KDA_BASE KDA_BASE KDA_NOACT KDA_NOACT KDA_NOACT KDA_GCONV KDA_GCONV KDA_GCONV
+  GDN2 GDN2 GDN2 KDA_R1 KDA_R1 KDA_R1 KDA_R2 KDA_R2 KDA_R2) &&
+  DSEEDS=(210007 220014 230021 210007 220014 230021 210007 220014 230021 210007 220014 230021
+  210007 220014 230021 210007 220014 230021) &&
+  ISEEDS=(110007 120014 130021 113008 123015 133022 116009 126016 136023 119010 129017 139024
+  122011 132018 142025 125012 135019 145026) &&
+  python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/train_core6_arm.py "$EDULLM_RUN_ID"
+  --arm "${ARMS[$I]}" --data-seed "${DSEEDS[$I]}" --init-seed "${ISEEDS[$I]}"
+  --sequence-length 4096 --steps 1907 --warmup-steps 191 --learning-rate 1.4e-3
+  --global-batch-size 524288 --rank-microbatch-size 8192 --save-interval 954
+  --lm-loss-implementation chunked_linear
+  --save-folder "$EDULLM_CHECKPOINT_DIR"'
