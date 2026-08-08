@@ -61,14 +61,36 @@ def test_gate_liveness_fails_on_a_dead_branch_and_passes_on_a_live_one():
     alive, why = mod.gate_is_alive(1e-2, reference)
     assert alive, why
 
-    # Exactly at the floor is NOT alive: 2**-9 down from the reference is already lost to bf16
-    # accumulation, so the boundary must be exclusive.
-    at_floor = mod.GATE_LIVENESS_RATIO * reference
+    # Exactly at the floor is NOT alive, so the boundary is exclusive.
+    at_floor = mod.GATE_LIVENESS_MULTIPLE * mod.ADAMW_EPS
     alive, why = mod.gate_is_alive(at_floor, reference)
     assert not alive, why
 
     alive, why = mod.gate_is_alive(0.0, reference)
-    assert not alive and "cannot accumulate" in why
+    assert not alive and "cannot train" in why
+
+
+def test_gate_liveness_does_not_scale_with_the_reference_gradient():
+    """
+    The threshold must be ABSOLUTE, against AdamW's epsilon, not relative to another parameter.
+
+    The relative version false-alarmed on job 1677746: it failed ``kda-gated-silu`` at a gradient of
+    9.477e-06 against a floor of 1.043e-05, on the same run where that arm's gate **moved 0.0219 off
+    neutral** -- more than the passing arm's 0.0212. A guard that calls an arm dead while the run
+    watches it train is a defect in the guard.
+
+    The cause is the optimizer: AdamW normalizes by each parameter's own second moment, so a
+    uniformly smaller gradient takes the same step. A gradient's ratio to some *other* parameter's
+    gradient does not enter the update at all.
+
+    This pins that: the same gate gradient must give the same verdict no matter how large the
+    reference is. Under the old relative rule the 1e6 case would fail.
+    """
+    mod = _load()
+    gate_grad = 9.477e-06  # the exact value that false-alarmed
+    for reference in (1e-3, 5.341e-03, 1.0, 1e6):
+        alive, why = mod.gate_is_alive(gate_grad, reference)
+        assert alive, f"reference={reference}: {why}"
 
 
 def test_gate_liveness_fails_closed_when_the_reference_is_itself_dead():
@@ -82,7 +104,7 @@ def test_gate_liveness_fails_closed_when_the_reference_is_itself_dead():
     for reference in (None, 0.0):
         alive, why = mod.gate_is_alive(1e-3, reference)
         assert not alive, why
-        assert "unmeasurable" in why
+        assert "not measuring" in why
 
 
 def test_gate_liveness_fails_when_no_gate_gradient_was_recorded():

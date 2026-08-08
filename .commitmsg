@@ -1,79 +1,53 @@
-fix(nn): the arm set needed FOUR cells -- the depthwise pre-gate is a SiLU
+fix(smoke): the liveness guard called a training gate dead
 
-Two adversarial reviews of the previous two commits. The first finding
-invalidates the experiment as designed; the rest are guards that could not fire.
+Job 1677746 (oat-06, L40S sm_89). THE MODULE PASSED EVERY OPERATOR CHECK. Both
+remaining failures were in the harness.
 
-THE DEPTHWISE PRE-GATE IS NOT A GATE, IT IS A SiLU WITH A LEARNABLE SLOPE.
-Since silu(y) = y*sigmoid(y), substituting y = a*u gives
+WHAT THE GPU CONFIRMED, and none of it was verifiable offline:
 
-    2 * sigmoid(a*u) * u  ==  (2/a) * silu(a*u)     for every a != 0
+  fla honours activation=None       max|diff| vs 'silu' = 9.336e-01, not 0
+  gated == plain at init, None      max|diff| = 0.000e+00
+  gated == plain at init, silu      max|diff| = 0.000e+00
+  conv path                         all 360 of 360 fused, both gated arms
+  gate movement                     0.0212 and 0.0219 off neutral in 30 steps
+  memory prediction vs measured     2.250 GiB vs 2.250 GiB
 
-verified to 8.9e-16 in float64. The amplitude 2/a is constant per channel, so by
-this module's own absorption argument it folds into that channel's depthwise
-taps. What the pre-gate buys is ONE number per channel: the slope of a SiLU,
-moved from after the convolution to before it, initialized at a=0 where it is
-the identity. Only the POST gate is a genuinely new term, because it reads
-position t while the conv output mixes t-j.
+The first line is the one that could have collapsed the design: fla's kernel
+matches its activation string exactly and ignores anything else without error,
+so if it had ignored None too, kda-gated and kda-gated-silu would have been the
+same model. It does not. The second and third close the gap where the arms'
+bit-identical init was only ever checked on the reference path -- a path the
+experiment never executes.
 
-So "gated_conv=True, gated_conv_activation=None" is NOT activation-free under a
-depthwise gate, and kda-gated minus kda-plain varies the activation's position,
-its learnability, AND the post gate together. Against this project's measured
-within-arm SD of 0.01463 nats that yields a real effect nobody can attribute.
+THE LIVENESS GUARD WAS WRONG, AND ITS OWN RUN PROVED IT. It failed
+kda-gated-silu at a gradient of 9.477e-06 against a floor of 1.043e-05, on the
+same run where that arm's gate MOVED 0.0219 off neutral -- more than the passing
+arm's 0.0212. A guard that calls an arm dead while the run watches it train is a
+defect in the guard, not conservatism.
 
-The arm that isolates the gate -- plain conv with NO activation -- was
-unbuildable: _build_conv hard-coded activation=silu with no config knob. Adds
-conv_activation (default "silu", so nothing existing moves) and a fourth cell:
+The threshold was relative to another parameter's gradient. That is the wrong
+denominator under an adaptive optimizer: AdamW normalizes each parameter by its
+own second moment, so the step is lr*m/(sqrt(v)+eps) and a uniformly smaller
+gradient takes the same step. A gradient's ratio to some other parameter's
+gradient does not enter the update at all. Only two things make a parameter
+untrainable: an exactly-zero gradient, or one small enough that eps dominates
+sqrt(v). So the floor is now absolute, 10x AdamW's eps. reference_grad is still
+taken and still used to fail closed, because a dead reference means the harness
+is not measuring anything.
 
-    kda-plain        gated=False  conv_activation="silu"   as shipped
-    kda-plain-noact  gated=False  conv_activation=None     THE BASELINE
-    kda-gated        gated=True   gated_activation=None
-    kda-gated-silu   gated=True   gated_activation="silu"
+A test pins it: the same gate gradient must give the same verdict for references
+spanning 1e-3 to 1e6. Under the old rule the 1e6 case fails.
 
-The gate contrast is kda-gated minus kda-plain-noact, and those two are
-parameter-matched to exactly the 12,288/layer the gate costs.
+Also: the gated-conv count keyed on 'kda-plain' exactly, so it failed
+kda-plain-noact for being the control it is -- left over from the three-arm
+version. And the memory prediction is now a GATE rather than a printed number,
+since it matched to three decimal places; a prediction that drifts low is what
+gets a paid run OOM-killed.
 
-FIVE MORE GUARDS THAT COULD NOT FIRE, OR FIRED ON THE WRONG THING:
+Measured cost of the depthwise gate at d=2048, T=4096, bf16, eager: peak memory
+2.929 -> 5.179 GiB, a 1.768x increase for 49,152 parameters (0.0687%). The
+parameter delta is not the cost, and now there is a measurement saying so.
 
-- An unrecognised activation was accepted. fla's kernel matches 'silu'/'swish'
-  EXACTLY and otherwise runs activation-free WITHOUT ERROR, so "Silu" raised on
-  the reference path (what a CPU test exercises) and silently computed the
-  None arm on GPU -- collapsing kda-gated-silu onto kda-gated while the config,
-  the logs and the arm name all said silu. Now refused in __init__.
-- The gated_conv=False guard did not check gate_structure -- the exact case its
-  own comment was written about. gate_structure="lowrank" with gated_conv=False
-  built three plain convolutions: two identically-trained controls under
-  different arm names, i.e. a guaranteed null.
-- No reset_parameters, so Transformer.init_weights' to_empty() + sweep left the
-  gates as uninitialized memory for anything that skips a mixer's init_weights.
-  short_conv.py documents shipping exactly this on the MQAR calibration.
-- gate_source was accepted and then silently overwritten. Now derived from
-  gate_structure, and a contradiction raises.
-- The depthwise gate FLOPs term double-counted by 2x. Under 0.01% of the layer
-  and the test bound is <1%, so it could not bite -- but arms are matched on
-  this quantity.
-
-MEMORY WAS UNDER-COUNTED BY 1.5x. Walking what autograd retains for
-post*conv(pre*u): sigmoid saves its output, the scalar multiply's result is
-retained as an operand, and pre*u is retained as the conv input -- 3 stream
-tensors per gate in eager, not 2. So 576 MiB/layer and 15.75 GiB over 28 layers
-against KDA's measured 5.169 GiB peak, about 4x rather than 3x. The default is
-now the eager count, because an optimistic memory figure is the one that gets a
-paid run OOM-killed. Also documents the two other 2x assumptions the estimate
-hides: bf16 (mul type-promotes, so an fp32 param dtype doubles it) and no
-activation checkpointing (which makes it ~free).
-
-The lowrank RNG hazard is now recorded rather than half-stated: beyond the
-disclosed gate_down draw, Transformer.init_weights runs its reset_parameters
-sweep on the GLOBAL RNG at model.py:290, before the seeded generator exists at
-:299 -- and lowrank adds nine nn.Linear submodules per layer. So a lowrank arm
-is not seed-comparable to a plain arm. Depthwise is exempt (bare Parameters,
-one Conv1d, matching what CausalConv1d is).
-
-The GPU smoke now checks the two things no test covered: that the arms are
-bit-identical at init THROUGH THE FUSED KERNEL (every CPU test compares the
-reference path against a hand-written helper, i.e. a path the run never
-executes), and that fla honours activation=None at all.
-
-65 CPU tests, 7 fla-gated. 19 mutations, 0 survived, 0 no-op.
+66 CPU tests, 7 fla-gated. 19 mutations, 0 survived, 0 no-op.
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>

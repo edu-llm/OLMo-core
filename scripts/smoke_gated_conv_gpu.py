@@ -85,13 +85,21 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
-#: How far below a known-live parameter's gradient a gate gradient may sit before the branch is
-#: dead in practice. bf16 keeps 8 mantissa bits, so anything more than 2**-9 down is lost to
-#: accumulation. Relative, because an absolute threshold fires on the input's variance instead.
-GATE_LIVENESS_RATIO = 2.0**-9
+#: AdamW's epsilon. This is the correct denominator for a liveness check under an adaptive
+#: optimizer, and comparing against another parameter's gradient is not -- see
+#: :func:`gate_is_alive`.
+ADAMW_EPS = 1e-8
 
-#: How far the gate must have moved off its neutral 1.0 by the end of the run. A gate that gets
-#: gradient and does not move is decorative, and reports a clean null.
+#: How far above AdamW's epsilon a gate gradient must sit for the normalized step to be within an
+#: order of magnitude of the learning rate.
+GATE_LIVENESS_MULTIPLE = 10.0
+
+#: How far the gate must have moved off its neutral 1.0 by the end of the run.
+#:
+#: This is the STRONGER of the two liveness checks and the one to trust: it observes the parameter
+#: actually change rather than inferring that it could. The gradient check is a step-1 early
+#: warning; this is the receipt. On job 1677746 the gradient check false-alarmed on an arm whose
+#: gate had moved 0.0219, which is how the gradient threshold's bug was found.
 GATE_MOVEMENT_FLOOR = 1e-4
 
 #: A fresh model on uniform-random targets must start near ln(vocab). Wider than it looks because
@@ -117,30 +125,50 @@ def loss_band(vocab_size: int) -> tuple[float, float]:
 
 def gate_is_alive(gate_grad: Optional[float], reference_grad: Optional[float]) -> tuple[bool, str]:
     """
-    Whether a gate's gradient is large enough to produce a usable update.
+    Whether a gate's gradient is large enough to produce a usable update under AdamW.
 
-    Extracted so a CPU test can call it, and so the threshold is one named thing rather than an
-    inline comparison in the middle of a training loop.
+    .. important::
+        **The threshold is absolute, against AdamW's epsilon -- NOT relative to another
+        parameter's gradient.** The relative version was wrong and this run proved it: it failed
+        ``kda-gated-silu`` at a gradient of ``9.477e-06`` against a floor of ``1.043e-05``, on the
+        same run where that arm's gate **moved 0.0219 off neutral** -- more than the passing arm's
+        0.0212. A guard that calls an arm dead while the same run watches it train is a defect in
+        the guard.
+
+        The reason is the optimizer. AdamW normalizes each parameter by its own second moment, so
+        the step size is ``lr * m / (sqrt(v) + eps)`` and a gradient's *ratio to some other
+        parameter's gradient* does not enter it. A uniformly smaller gradient produces the same
+        step. Only two things make a parameter untrainable: an exactly-zero gradient, or one small
+        enough that ``eps`` dominates ``sqrt(v)`` and shrinks the step.
+
+        So the floor is ``GATE_LIVENESS_MULTIPLE * ADAMW_EPS``. ``reference_grad`` is still taken,
+        and it is still used to fail closed when the reference is itself dead -- if a parameter that
+        must be training has no gradient, the harness is broken and no liveness verdict from it
+        means anything.
 
     :param gate_grad: Max absolute gradient on the gate parameters.
-    :param reference_grad: Max absolute gradient on a parameter known to be training.
+    :param reference_grad: Max absolute gradient on a parameter known to be training. Used only as
+        a sanity check on the harness, not as the scale for the threshold.
 
     :returns: ``(alive, explanation)``.
     """
     if gate_grad is None:
         return False, "no gate gradient was recorded"
     if reference_grad is None or reference_grad <= 0.0:
-        # Fail closed. If the reference is itself dead the comparison carries no information, and
-        # calling that a pass is the guard-that-cannot-fire failure.
-        return False, "the reference gradient is zero or missing, so liveness is unmeasurable"
-    floor = GATE_LIVENESS_RATIO * reference_grad
+        # Fail closed. If the reference is itself dead the harness is broken, and calling that a
+        # pass is the guard-that-cannot-fire failure.
+        return False, "the reference gradient is zero or missing, so the harness is not measuring"
+    floor = GATE_LIVENESS_MULTIPLE * ADAMW_EPS
     if gate_grad <= floor:
         return False, (
             f"gate gradient {gate_grad:.3e} is at or below {floor:.3e} "
-            f"({GATE_LIVENESS_RATIO:.1e} of the reference {reference_grad:.3e}): "
-            "the branch cannot accumulate a usable update"
+            f"({GATE_LIVENESS_MULTIPLE:g}x AdamW's eps of {ADAMW_EPS:.0e}): eps dominates the "
+            "second moment, so the normalized step collapses and the branch cannot train"
         )
-    return True, f"gate gradient {gate_grad:.3e} vs floor {floor:.3e}"
+    return True, (
+        f"gate gradient {gate_grad:.3e} vs floor {floor:.3e}, "
+        f"reference {reference_grad:.3e} is nonzero"
+    )
 
 
 def conv_path_is_fused(realised_paths: List[str], *, allow_eager: bool) -> tuple[bool, str]:
@@ -303,7 +331,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             for c in (m.q_conv1d, m.k_conv1d, m.v_conv1d)
             if isinstance(c, GatedCausalConv1d)
         ]
-        expected_gated = 0 if arm == "kda-plain" else 3 * opts.n_layers
+        # Both plain arms have zero gated convolutions. Keying on 'kda-plain' alone was left over
+        # from the three-arm version and failed 'kda-plain-noact' for being the control it is.
+        expected_gated = 0 if arm.startswith("kda-plain") else 3 * opts.n_layers
         if len(gated_convs) != expected_gated:
             failures.append(
                 f"{arm}: found {len(gated_convs)} gated convolutions, expected {expected_gated}"
@@ -356,7 +386,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 step1_gate_grad = max(grads) if grads else None
 
             optim.step()
-            losses.append(float(loss))
+            losses.append(loss.detach().item())
             if step % 10 == 0 or step == opts.steps - 1:
                 print(f"  step {step:3d}  loss {loss:.4f}")
 
@@ -548,6 +578,20 @@ def main(argv: Optional[List[str]] = None) -> int:
                 f"the gated arm used LESS peak memory than the plain arm ({mem_ratio:.3f}x). The "
                 "gates retain backward activations, so this means the measurement is wrong, not "
                 "that gating is free."
+            )
+
+        # The prediction is what a run gets sized from, so it must track the measurement rather
+        # than merely be printed next to it. On job 1677746 at d=2048/T=4096 the two agreed to
+        # 2.250 GiB against 2.250 GiB, which is what validated the corrected eager count of three
+        # retained tensors per gate. A prediction that drifts LOW is the dangerous direction: it is
+        # what lets a paid run get OOM-killed.
+        predicted_gib = g["gate_bytes_predicted"] / 2**30
+        measured_gib = g["peak_gib"] - p["peak_gib"]
+        if predicted_gib > 0 and measured_gib > predicted_gib * 1.15:
+            failures.append(
+                f"the measured activation increase ({measured_gib:.3f} GiB) exceeds the prediction "
+                f"({predicted_gib:.3f} GiB) by more than 15%. Any run sized from the prediction "
+                "would be under-provisioned."
             )
 
     if {"kda-gated", "kda-gated-silu"} <= by_arm.keys():
