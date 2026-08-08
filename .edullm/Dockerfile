@@ -26,11 +26,12 @@ WORKDIR /opt/olmo-core
 
 # Build tools are fixed to the compiler major used for the CUDA 12.8 extensions.
 # NVIDIA's CUDA 12 wheel named ``nvidia-cuda-nvcc-cu12`` contains ptxas but not
-# the nvcc driver, so install nvcc from NVIDIA's signed Debian 13 repository.
+# the nvcc driver. NVIDIA's Debian 13 repository carries only CUDA 13, so use
+# its signed Debian 12 repository, which still publishes the 12.8 compiler.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends ca-certificates wget gcc-14 g++-14; \
-    wget -q https://developer.download.nvidia.com/compute/cuda/repos/debian13/x86_64/cuda-keyring_1.1-1_all.deb; \
+    wget -q https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-keyring_1.1-1_all.deb; \
     dpkg -i cuda-keyring_1.1-1_all.deb; \
     rm cuda-keyring_1.1-1_all.deb; \
     apt-get update; \
