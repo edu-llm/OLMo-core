@@ -118,9 +118,21 @@ def test_the_template_renders_a_two_turn_exchange() -> None:
     )
     assert rendered.endswith("Assistant:")
     assert rendered.count("User: ") == 2
-    # The turn ending the server stops on has to be a string this template actually
-    # produces, or every reply runs to the token cap.
-    assert any(ending.strip() in rendered for ending in serve.TURN_ENDINGS)
+
+    # EVERY STOP STRING HAS TO BE A STRING THIS TEMPLATE ACTUALLY PRODUCES, OR IT STOPS
+    # NOTHING. Rendered without the generation prompt, the transcript is exactly what the
+    # model is being asked to continue, so each ending must appear in it -- a stop the
+    # template never writes is a reply that runs to the token cap, and the two files are far
+    # enough apart that editing one and not the other is easy.
+    transcript = template.render(
+        messages=[
+            {"role": "user", "content": "What is the capital of Japan?"},
+            {"role": "assistant", "content": "Tokyo."},
+        ],
+        add_generation_prompt=False,
+    )
+    for ending in serve.TURN_ENDINGS:
+        assert ending.lower() in transcript.lower(), ending
 
 
 class _Upstream(BaseHTTPRequestHandler):
