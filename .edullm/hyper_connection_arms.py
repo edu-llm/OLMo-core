@@ -282,13 +282,14 @@ def install() -> None:
             setattr(TransformerConfig, name, staticmethod(factory))
 
 
-#: Shards of the 41 in ``regmix-10b-v1`` reserved for evaluation rather than training.
+#: Shards to carve out of training when a corpus declares no validation split of its own.
 #:
-#: The corpus declares no validation split, so without this the only loss in the run is
-#: training loss -- and the seeds deliberately vary the data order, so its variance across
-#: seeds is partly just a different sample of the corpus rather than the run-to-run noise the
-#: decision rule needs. Two of 41 is about 490M tokens, enough for a stable estimate and under
-#: 5% of the budget.
+#: This is the fallback and not the path regmix-10b takes. That corpus declares seven val
+#: shards, one per source, which is strictly better than carving: no training tokens are lost,
+#: the split is the publisher's rather than ours, and it is stratified by source for free.
+#: A carve is what is left for a corpus with nothing declared, and it is worse in a way worth
+#: naming -- shard paths sort by source, so taking the last two would draw the entire
+#: evaluation set from one source category and measure BPB on that one alone.
 HELD_OUT_SHARDS = 2
 
 #: Bytes per token for dolma2 on English web text.
@@ -299,6 +300,24 @@ HELD_OUT_SHARDS = 2
 #: this is. Measure it off the corpus and correct it if the absolute number ever has to mean
 #: something on its own.
 DOLMA2_BYTES_PER_TOKEN = 4.57
+
+
+def source_label(path: str) -> str:
+    """
+    The corpus source a shard belongs to, which the LM evaluator needs as its metric label.
+
+    Shards live at ``.../tokens/<source>/<split>-000NN.u32le.bin`` and the manifest carries the
+    same value as ``labels.source`` on each entry, so the directory is the label rather than a
+    guess about one. Using it means the run reports bits-per-byte per source instead of one
+    pooled number -- and a pooled number over seven very different distributions is the kind of
+    average that hides the effect it is supposed to measure.
+
+    :param path: A shard URI or path.
+
+    :returns: The source name, or ``"held_out"`` if the path has no source directory.
+    """
+    parts = [p for p in path.replace("\\", "/").split("/") if p]
+    return parts[-2] if len(parts) >= 2 else "held_out"
 
 
 def split_held_out(paths: List[str], n_held_out: int = HELD_OUT_SHARDS) -> Tuple[list, list]:

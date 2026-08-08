@@ -61,6 +61,7 @@ hyper_connection_arms.install()
 _build_parser = train_on_corpus.build_parser
 _build_config = train_on_corpus.build_config
 _train = train_on_corpus.train
+_show = train_on_corpus.show
 
 #: The 370M run. 10B dolma2 tokens at seq 4096 over a 768K-token batch.
 DEFAULT_STEPS = 12_715
@@ -168,7 +169,51 @@ def build_parser():
         "downstream number from an inert mechanism is not interpretable either way -- better "
         "to find that out for a few dollars than for a few hundred.",
     )
+    parser.add_argument(
+        "--preflight",
+        action="store_true",
+        help="Build the config AND the held-out dataset, say what they came out as, and exit "
+        "without training. Needs corpus credentials but no GPU, so it runs in seconds on a "
+        "laptop. THREE SUBMISSIONS DIED ON THINGS THIS CATCHES: a backend the image lacks, a "
+        "dataset class the evaluator refuses, and a missing metadata label. Each cost a queue "
+        "wait and a container to discover.",
+    )
     return parser
+
+
+def preflight(config) -> None:
+    """
+    Build everything a run builds before its first step, and print what came out.
+
+    The evaluator validates its dataset by building it and then checking the result, so its
+    refusals arrive inside a running container rather than at submission. This does the same
+    work on a laptop.
+
+    :raises Exception: Whatever the real run would have raised, unchanged.
+    """
+    print(f"corpus       {config.dataset_id}/{config.dataset_version}")
+    print(f"train shards {len(config.dataset.paths)}")
+
+    mixer = config.model.block.sequence_mixer
+    print(
+        f"model        {config.model.d_model}d x {config.model.n_layers}L, "
+        f"{config.model.num_params:,} params"
+    )
+    print(f"attention    backend={mixer.backend}, sliding_window={mixer.sliding_window}")
+    print(f"callbacks    {', '.join(sorted(config.trainer.callbacks))}")
+
+    held_out = config.trainer.callbacks.get("held_out")
+    if held_out is None:
+        print("held out     none")
+    else:
+        dataset = held_out.eval_dataset.build()
+        print(f"held out     {type(dataset).__name__}, {len(dataset.paths)} shard(s)")
+        for path, meta in zip(dataset.paths, dataset.metadata):
+            if "label" not in meta:
+                raise RuntimeError(f"shard has no 'label' metadata, evaluator will refuse: {path}")
+            print(f"             {meta['label']:16s} {str(path).rsplit('/', 1)[-1]}")
+
+    print("preflight OK")
 
 
 def build_config(opts, overrides):
@@ -196,17 +241,66 @@ def build_config(opts, overrides):
             )
 
     _add_held_out_evaluation(config, opts)
+
+    # Ride the dry-run path rather than exiting here. main() initializes the distributed
+    # environment between build_config and train, so preflight has to stop before that, and
+    # `during()` turns a bare SystemExit into a refusal with a non-zero status -- a preflight
+    # that passed would report as a failure to anything scripting it.
+    if getattr(opts, "preflight", False):
+        _PREFLIGHT.append(True)
+        opts.dry_run = True
+
     return config
+
+
+#: Set by `build_config` so the rebound `show` below knows which summary to print. A list
+#: because `main` resolves module globals at call time and rebinding a bool would not be seen.
+_PREFLIGHT: list = []
+
+
+def show(config):
+    """
+    Replace the dry run's full config dump with the preflight summary when asked for one.
+    """
+    if _PREFLIGHT:
+        preflight(config)
+        return
+    return _show(config)
+
+
+def declared_validation_paths(config) -> list:
+    """
+    The validation shards the corpus publishes, or an empty list if it publishes none.
+
+    ``train_on_corpus.resolve_corpus`` deliberately asks the reader for trainable shards only,
+    and its comment says held-out shards need "a corpus that declares one, which regmix-10b
+    does not". That is not true of regmix-10b: it declares seven val shards, one per source,
+    totalling about 15M tokens. The reader resolves every split whatever you ask it for, so
+    this reads ``.val`` off a second, cheap resolve rather than changing the first one.
+
+    :returns: Validation shard URIs, sorted.
+    """
+    from edullm_data.read import dataset_paths
+    from edullm_data.s3 import Boto3S3
+
+    read = dataset_paths(config.dataset_id, config.dataset_version, s3=Boto3S3.default())
+    return sorted(read.val or [])
 
 
 def _add_held_out_evaluation(config, opts):
     """
-    Reserve shards from the sealed corpus and evaluate on them, plus report bits-per-byte.
+    Evaluate on held-out shards from the same sealed corpus, and report bits-per-byte.
 
-    A local held-out set rather than the stock LM evaluator's default, which reads a C4 shard
-    from olmo-data.org: a public-internet fetch in the middle of a run whose whole claim is
-    that it read a sealed corpus, and one whose failure would look like a training failure.
-    These shards come out of the same manifest as the training data.
+    Local shards rather than the stock LM evaluator's default, which reads a C4 shard from
+    olmo-data.org: a public-internet fetch in the middle of a run whose whole claim is that it
+    read a sealed corpus, and one whose failure would look like a training failure.
+
+    Preferring the corpus's own declared validation split over carving one out of training is
+    better on three counts at once. No training tokens are lost, so the budget stays at the
+    full 10B. The split is the publisher's rather than an arbitrary slice of ours. And it comes
+    stratified by source, which turns one pooled bits-per-byte into seven -- an average over
+    arxiv, code, web text and Wikipedia together is exactly the kind that hides the effect it
+    is meant to measure.
     """
     from olmo_core.data import NumpyPaddedFSLDatasetConfig
     from olmo_core.train.callbacks import LMEvaluatorCallbackConfig
@@ -216,23 +310,33 @@ def _add_held_out_evaluation(config, opts):
         hyper_connection_arms.BitsPerByteCallback(bytes_per_token=opts.bytes_per_token),
     )
 
-    if opts.held_out_shards < 1:
+    if opts.eval_interval < 1:
         return
 
-    train_paths, eval_paths = hyper_connection_arms.split_held_out(
-        config.dataset.paths, opts.held_out_shards
-    )
-    config.dataset.paths = train_paths
+    eval_paths = declared_validation_paths(config)
+    if not eval_paths:
+        # Nothing declared, so carve. Worse on every count above, and only correct at all
+        # because every arm and seed carves identically.
+        if opts.held_out_shards < 1:
+            return
+        train_paths, eval_paths = hyper_connection_arms.split_held_out(
+            config.dataset.paths, opts.held_out_shards
+        )
+        config.dataset.paths = train_paths
 
     # A padded dataset rather than the training dataset's shape, and the evaluator refuses
     # anything else. It is also the right shape for this: one padded instance per document
     # scores each document on its own, where the training dataset's contiguous blocks would
     # cut documents across instance boundaries and score the fragments.
+    #
+    # One metadata label per path, because the evaluator names its metrics after them and
+    # raises on a path that has none.
     config.trainer = config.trainer.with_callback(
         "held_out",
         LMEvaluatorCallbackConfig(
             eval_dataset=NumpyPaddedFSLDatasetConfig(
                 paths=eval_paths,
+                metadata=[{"label": hyper_connection_arms.source_label(p)} for p in eval_paths],
                 sequence_length=config.dataset.sequence_length,
                 tokenizer=config.dataset.tokenizer,
                 dtype=config.dataset.dtype,
@@ -260,6 +364,7 @@ def train(config, opts=None):
 train_on_corpus.build_parser = build_parser
 train_on_corpus.build_config = build_config
 train_on_corpus.train = train
+train_on_corpus.show = show
 
 
 if __name__ == "__main__":

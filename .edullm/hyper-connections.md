@@ -102,9 +102,27 @@ depth-routing change. So the effect is intervention-dependent, and if arms 2 thr
 flat this is a clean scale-boundary result rather than a failure — but that is said here, in
 advance, rather than afterwards.
 
-## What the first rehearsal found, in eighteen minutes for about $4
+## Preflight, and why it exists
 
-It died, which is what it was for.
+```bash
+AWS_PROFILE=sbsandbox python .edullm/train_hyper_connections.py pf --preflight --arm faithful \
+  --dataset-id pretrain/regmix-10b --dataset-version v1 \
+  --dataset-tokenizer tokenizer/dolma2-bpe --save-folder /tmp/x --work-dir /tmp/cache
+```
+
+Builds the config *and* the held-out dataset, prints what they came out as, exits without
+training. Needs corpus credentials, no GPU, runs in about four seconds.
+
+Three submissions died on things this catches: an attention backend the image does not carry,
+a dataset class the evaluator refuses, and a missing metadata label. Each cost a queue wait and
+a container to find, and each was a config error visible before a single token moved. The
+evaluator in particular validates by *building* its dataset and then checking the result, so
+its refusals can only ever arrive inside a running container — unless something builds it
+first, which is what this does. Run it before every submission.
+
+## What the rehearsals found, for about $4 each
+
+They died, which is what they were for.
 
 **`flash_2` does not exist on this platform.** `RuntimeError: 'FlashAttention2Backend' is
 missing the flash-attn package or is not supported on this platform.` The training image
@@ -120,6 +138,16 @@ the windowed layers are exactly full causal attention — provably the same mode
 approximation. Keeping it would not change a logit, but it would make the torch backend build
 an explicit mask, and SDPA with an explicit mask gives up the fused causal kernel it would
 otherwise use. Free to drop, not free to keep.
+
+**The LM evaluator refuses a plain FSL dataset**, and it refuses it after building rather than
+at configuration time. The held-out set has to be a `NumpyPaddedFSLDatasetConfig`, which is
+also the right shape: one padded instance per document scores each document whole, where the
+training dataset's contiguous blocks would cut documents across instance boundaries and score
+the fragments.
+
+**Every held-out shard needs a `label` in its metadata.** The evaluator names each metric after
+it and raises on a shard without one. The label is the shard's source directory, which is the
+same value the manifest carries as `labels.source`.
 
 ## Where the runs land, and what they log
 
@@ -138,11 +166,23 @@ metric families each clause of the decision rule rests on and names what is miss
 non-zero when a required family is absent, so it can gate a submission rather than only
 inform one. `--report` builds the panels over the families that exist.
 
-**The corpus declares no validation split**, so the arms carve one: `--held-out-shards 2`
-reserves two of `regmix-10b-v1`'s 41 shards, sorted and taken from the end so every arm and
-every seed evaluates on exactly the same data. Without it the only loss in the run is training
-loss, and since `--seed` moves the shuffle, its variance across seeds is partly a different
-sample of the corpus rather than the run-to-run noise σ is supposed to measure.
+**The corpus does declare a validation split**, contrary to the comment in `train_on_corpus.py`
+that says it does not. `regmix-10b-v1` publishes seven `val-00000` shards — one each for
+algebraic-stack, arxiv, dclm, open-web-math, pes2o, starcoder and wiki — totalling 15,007,207
+tokens. The reader resolves every declared split whatever you ask it for, so they come back on
+`.val` even though `resolve_corpus` asks only for trainable shards.
+
+Using them beats carving on three counts. No training tokens are lost, so the budget stays at
+the full 9,989,799,834. The split is the publisher's rather than an arbitrary slice of ours.
+And it arrives stratified by source, so the run reports bits-per-byte per source rather than
+one pooled number — an average over arxiv, code, web text and Wikipedia together is exactly
+the kind that hides the effect it is meant to measure. Carving survives only as a fallback for
+a corpus that declares nothing, and it is worse in a specific way: shard paths sort by source,
+so taking the last two would draw the whole evaluation set from one source category.
+
+Without any held-out set the only loss in the run is training loss, and since `--seed` moves
+the shuffle, its variance across seeds is partly a different sample of the corpus rather than
+the run-to-run noise σ is supposed to measure.
 
 Bits-per-byte is reported beside every cross-entropy metric, as CE in nats over
 `bytes_per_token × ln 2`. That constant sets the absolute level only — it is identical across

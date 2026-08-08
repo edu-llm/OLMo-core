@@ -53,6 +53,11 @@ def stub_corpus(monkeypatch, tmp_path):
 
     monkeypatch.setattr(train_on_corpus, "resolve_corpus", resolve_corpus)
 
+    # By default the corpus declares its own validation split, which is what regmix-10b does:
+    # seven shards, one per source. Tests that want the carve fallback override this.
+    val = [str(tmp_path / src / "val-00000.npy") for src in ("arxiv", "dclm", "wiki")]
+    monkeypatch.setattr(entry, "declared_validation_paths", lambda config: sorted(val))
+
 
 def build(argv):
     opts, overrides = entry.build_parser().parse_known_args(argv)
@@ -160,26 +165,48 @@ def test_dotted_overrides_still_reach_the_config():
     assert config.train_module.max_grad_norm == 0.5
 
 
-def test_held_out_shards_come_out_of_training_and_are_the_same_for_every_arm():
+def test_the_declared_validation_split_is_used_and_costs_no_training_data():
     """
-    regmix-10b declares no validation split, so the eval set is carved from the training
-    shards. It has to be the *same* carve on every arm and every seed -- arms evaluated on
-    different data are not comparable, which is the one way this could quietly go wrong.
+    regmix-10b publishes seven val shards, one per source, which train_on_corpus's own comment
+    says it does not. Using them keeps the full token budget, makes the split the publisher's
+    rather than an arbitrary slice of ours, and arrives stratified. The eval set also has to be
+    identical across arms and seeds -- arms scored on different data are not comparable, which
+    is the one way this goes quietly wrong.
     """
-    carves = []
-    for argv in (
-        ["--arm", "baseline"],
-        ["--arm", "faithful"],
-        ["--arm", "mhc", "--seed", "2"],
-    ):
+    seen = []
+    for argv in (["--arm", "baseline"], ["--arm", "faithful"], ["--arm", "mhc", "--seed", "2"]):
         config, _ = build(BASE_ARGV + argv)
         held = config.trainer.callbacks["held_out"]
-        assert len(config.dataset.paths) == SHARD_COUNT - 2
-        assert len(held.eval_dataset.paths) == 2
+        assert len(config.dataset.paths) == SHARD_COUNT, "training data was carved into"
         assert not set(config.dataset.paths) & set(held.eval_dataset.paths)
-        carves.append(tuple(held.eval_dataset.paths))
+        seen.append(tuple(held.eval_dataset.paths))
 
-    assert len(set(carves)) == 1, "the held-out set moved between arms"
+    assert len(set(seen)) == 1, "the held-out set moved between arms"
+
+
+def test_every_held_out_shard_is_labelled_with_its_source():
+    """
+    The evaluator names each metric after the shard's label and raises on a shard without one,
+    which is what killed the third submission. Labelling by source is also what turns one
+    pooled bits-per-byte into one per source, and a single average over arxiv, code, web text
+    and Wikipedia hides the effect it is supposed to measure.
+    """
+    config, _ = build(BASE_ARGV + ["--arm", "faithful"])
+    dataset = config.trainer.callbacks["held_out"].eval_dataset
+
+    labels = [m["label"] for m in dataset.metadata]
+    assert len(labels) == len(dataset.paths)
+    assert sorted(labels) == ["arxiv", "dclm", "wiki"]
+
+
+def test_a_corpus_with_no_declared_split_falls_back_to_carving(monkeypatch):
+    monkeypatch.setattr(entry, "declared_validation_paths", lambda config: [])
+
+    config, _ = build(BASE_ARGV + ["--arm", "baseline"])
+    held = config.trainer.callbacks["held_out"]
+    assert len(config.dataset.paths) == SHARD_COUNT - 2
+    assert len(held.eval_dataset.paths) == 2
+    assert all("label" in m for m in held.eval_dataset.metadata)
 
 
 def test_the_held_out_dataset_is_the_shape_the_evaluator_demands():
@@ -200,7 +227,7 @@ def test_the_held_out_dataset_is_the_shape_the_evaluator_demands():
 
 
 def test_held_out_can_be_turned_off():
-    config, _ = build(BASE_ARGV + ["--arm", "baseline", "--held-out-shards", "0"])
+    config, _ = build(BASE_ARGV + ["--arm", "baseline", "--eval-interval", "0"])
     assert "held_out" not in config.trainer.callbacks
     assert len(config.dataset.paths) == SHARD_COUNT
     # BPB still attaches, so a run without a held-out set still reports it for training loss.
