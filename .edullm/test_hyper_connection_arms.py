@@ -4,6 +4,7 @@ Run with ``pytest -v .edullm/test_hyper_connection_arms.py``.
 """
 
 import os
+import pathlib
 import sys
 
 import pytest
@@ -41,28 +42,52 @@ def test_every_arm_in_the_plan_is_present_and_numbered_once():
 
 def test_the_seed_allocation_is_the_one_the_pre_registration_argues_for():
     """
-    Three seeds where sigma itself is estimated and where a three-versus-three difference is
-    claimed, two on the arms carrying H2 and H3 whose minimum detectable effect at one seed sat
-    above the literature's effect size, one for reconnaissance that carries no claim, and zero
-    for the two arms whose runs paid for those second seeds.
+    Three arms at three seeds and nothing else. The tranche buys H1 (arm 2 against arm 1) and
+    H2a (arm 3 against arm 2) at three versus three, which is the smallest design in which
+    sigma is estimated rather than assumed, and gives up the six partial answers the previous
+    allocation spread the same money over.
     """
     by_seeds = {}
     for name, arm in arms.ARMS.items():
         by_seeds.setdefault(arm.seeds, set()).add(name)
 
-    assert by_seeds[3] == {"baseline", "faithful", "mhc"}
-    assert by_seeds[2] == {"output-only", "no-output-init"}
-    assert by_seeds[1] == {"decay-everything", "n1", "tied-faithful", "tied-baseline"}
-    assert by_seeds[0] == {"n2", "n8"}
+    assert set(by_seeds) == {0, 3}, "the tranche funds an arm at three seeds or not at all"
+    assert by_seeds[3] == {"baseline", "faithful", "output-only"}
+    assert sorted(arms.FUNDED) == ["baseline", "faithful", "output-only"]
 
 
-def test_the_budget_did_not_move_when_the_seeds_were_reallocated():
+def test_the_tranche_is_nine_runs_and_says_so():
     """
-    Seventeen runs before and after. Two second seeds were funded by two arms giving up their
-    only one, so the reallocation costs nothing and needs no new approval.
+    Nine, because that is what the budget buys and nothing else in this repository states it.
+    ``edullm check`` prices a ceiling from the workload profile and never reads the arm table,
+    so if this number is wrong nothing downstream disagrees with it.
     """
-    assert arms.total_runs() == 17
+    assert arms.total_runs() == 9
     assert str(arms.total_runs()) in arms.describe()
+
+
+def test_mhc_is_deferred_rather_than_dropped_and_the_table_says_which():
+    """
+    H5 is the best-designed hypothesis in the module. Carrying zero seeds is a budget
+    decision; being last in the cut order is what makes it a deferral, because the cut order
+    read backwards is the order a second tranche restores arms in.
+    """
+    assert arms.ARMS["mhc"].seeds == 0
+    assert arms.CUT_ORDER[-1] == "mhc"
+    assert "DEFERRED" in arms.ARMS["mhc"].isolates
+    assert "deferred" in arms.describe().lower() or "DEFERRED" in arms.describe()
+
+
+def test_the_output_only_arm_records_that_it_was_degenerate_until_it_was_fixed():
+    """
+    Before b7983ea9 this arm dropped the paper's fixed staggered read along with the learned
+    input map, so every lane read the same vector and the arm was the baseline with dead
+    parameters. Three seeds of that would have measured nothing, twice: no effect, and no
+    signal that there was no effect. The table has to carry the reason it is runnable.
+    """
+    summary = arms.ARMS["output-only"].summary
+    assert "b7983ea9" in summary
+    assert arms.ARMS["output-only"].seeds == 3
 
 
 @pytest.mark.parametrize("name", sorted(arms.ARMS))
@@ -183,8 +208,12 @@ def test_every_arm_builds_and_runs_a_forward_pass(name: str):
 
 def test_cut_order_names_real_arms_and_spares_the_core():
     assert set(arms.CUT_ORDER) <= set(arms.ARMS)
-    core = {"baseline", "faithful", "n1", "mhc"}
+    # The core is now the three arms the tranche funds. It was {baseline, faithful, n1, mhc}
+    # when the budget stretched to seventeen runs; n1 and mhc were cut when it stopped, and
+    # this line moving is the record of that rather than a test being loosened.
+    core = {"baseline", "faithful", "output-only"}
     assert not core & set(arms.CUT_ORDER)
+    assert set(arms.FUNDED) == core
 
 
 def test_the_unfunded_arms_are_the_head_of_the_cut_order():
@@ -201,3 +230,60 @@ def test_describe_lists_every_arm():
     table = arms.describe()
     for name in arms.ARMS:
         assert name in table
+
+
+def test_the_tranche_fits_one_attempt_of_the_workload_ceiling():
+    """
+    THE CONSTRAINT THAT SET THE STEP COUNT, ASSERTED SO THAT MOVING EITHER ONE FAILS HERE.
+
+    ``olmo-core-train`` declares maximum_runtime_hours: 24 and ``--hours`` only lowers it.
+    The second attempt exists for a lost host, not for a run that outgrows the bound: the
+    platform's retry table is ``OnStatusReason "Host EC2*" RETRY`` then two EXITs, and a
+    timed-out attempt reaches a retry only through the no-exit-code fall-through, which
+    torchrun's non-zero exit on SIGTERM races. So the tranche has to finish inside ONE
+    attempt, and the margin below is what pays for step-time drift over eighteen hours.
+    """
+    longest = max(arms.arm_seconds(arm) for arm in arms.ARMS.values() if arm.seeds) / 3600
+
+    assert longest < 21.0, "a cell would be killed before it finished"
+    assert longest < 0.9 * 21.0, "under 21h but with no margin for drift"
+    # And the horizon this replaces genuinely does not fit, which is the whole argument.
+    full = arms.arm_seconds(arms.ARMS["faithful"], arms.FULL_HORIZON_STEPS) / 3600
+    assert full > 24.0
+
+
+def test_the_cost_model_is_built_from_the_measurement_and_not_from_a_price():
+    """
+    The rate is an argument. Prices live in reviewed platform configuration that changes
+    without anybody being told, so the only honest source is ``edullm check --json``, and a
+    number copied into this repository would be right until it silently was not.
+    """
+    source = pathlib.Path(arms.__file__).read_text()
+    assert "10.4926" not in source, "an hourly rate was written into the arm table"
+
+    hours = arms.tranche_hours()
+    assert arms.estimated_cost_usd(10.0) == pytest.approx(hours * 10.0)
+    # Nine runs of about eighteen hours, so the expected spend is well under the ceiling
+    # `edullm check` prices and approves against. Both numbers matter and they are different.
+    assert 150 < hours < 175
+
+
+def test_the_arm_seconds_model_reproduces_the_probe_it_was_measured_from():
+    """
+    The probe was 100 steps with an eval every 50 and a checkpoint at 0 and at 100, and it
+    took 1,513.5 seconds of wall clock. Rebuilding that shape out of the constants has to land
+    on it, or the constants are not the thing they claim to be.
+    """
+    steps = 100
+    evaluations = 3  # on startup, at 50, at 100
+    checkpoints = 2  # at 0 and at 100
+    monitor = 5 * arms.MONITOR_SECONDS_PER_FIRING  # --monitor-interval 20 on that probe
+
+    modelled = (
+        arms.MEASURED_STARTUP_SECONDS
+        + steps * arms.MEASURED_SECONDS_PER_STEP
+        + evaluations * arms.MEASURED_EVAL_SECONDS
+        + checkpoints * arms.MEASURED_CHECKPOINT_SECONDS
+        + monitor
+    )
+    assert modelled == pytest.approx(1513.5, rel=0.05)

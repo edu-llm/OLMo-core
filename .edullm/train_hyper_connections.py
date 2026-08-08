@@ -12,12 +12,22 @@ So this is a wrapper that rebinds three module globals that ``train_on_corpus.ma
 at call time:
 
   ``build_parser``  adds ``--arm`` and ``--seed``, and re-points ``--model-factory`` at
-                    olmo3_370M, so that an arm cannot silently train the platform's default
+                    hc_370M, so that an arm cannot silently train the platform's default
                     190M.
-  ``build_config``  applies the arm to the model config, moves all three seeds together, and
-                    installs the weight-decay split.
+  ``build_config``  resolves which replicate this process is, applies the arm to the model
+                    config, moves all three seeds together, and installs the weight-decay
+                    split.
   ``train``         attaches the lane monitor, which has nowhere else to go: the trainer is
                     built inside ``train``.
+
+THREE SEEDS ARE ONE SUBMISSION, WHICH IS WHAT ``resolve_seed`` IS FOR. The platform fans a
+submission out with ``--fanout-size N --fanout-index-parameter seed`` and gives each cell its
+own ``AWS_BATCH_JOB_ARRAY_INDEX``, its own checkpoint prefix and its own W&B run id. So the
+command in ``.edullm/run.yaml`` carries no ``--seed`` at all and each cell reads its replicate
+number out of the environment. The precedence rules, and the two combinations that are refused
+rather than resolved, are in ``resolve_seed``'s docstring; the reason they are refusals is that
+three cells landing on one seed produces three identical runs, a measured noise floor of zero,
+and nine loss curves that look better than they have any right to.
 
 The weight-decay split is worth spelling out, because it is one of the five candidate causes
 rather than a detail. ByteDance: "the static component does not utilize weight decay, whereas
@@ -63,10 +73,102 @@ _build_config = train_on_corpus.build_config
 _train = train_on_corpus.train
 _show = train_on_corpus.show
 
-#: The 370M run. 10B dolma2 tokens at seq 4096 over a 768K-token batch.
-DEFAULT_STEPS = 12_715
+#: The 370M run, at the horizon that fits one attempt. 4.72B dolma2 tokens at seq 4096 over a
+#: 768K-token batch. See ``TRANCHE_STEPS`` in hyper_connection_arms.py for why this is 6,000
+#: and not the 12,715 that would be 10B: 12,715 is 37.7 hours and the workload's per-attempt
+#: ceiling is 24, and the second attempt that would cover the difference is not one this
+#: platform's retry rules reliably grant.
+DEFAULT_STEPS = hyper_connection_arms.TRANCHE_STEPS
 DEFAULT_LEARNING_RATE = 7.8e-4
 DEFAULT_WEIGHT_DECAY = 0.033
+
+#: What Batch sets in each child of an array job, and the only place a cell's own index
+#: exists. The platform's ``execution.py`` names the same variable and assigns it per child,
+#: so a fan-out of three cells is three processes reading 0, 1 and 2 out of here.
+FANOUT_INDEX_VARIABLE = "AWS_BATCH_JOB_ARRAY_INDEX"
+
+#: What the platform says the index *means*, set beside the index itself from
+#: ``--fanout-index-parameter``. A label and not a variable name -- a cell varying the
+#: checkpoint and a cell varying the seed read the same integer out of the same place, and
+#: this is the only thing that tells them apart.
+FANOUT_PARAMETER_VARIABLE = "EDULLM_FANOUT_INDEX_PARAMETER"
+
+#: The one value of that label this program is willing to read an index under.
+FANOUT_INDEX_PARAMETER = "seed"
+
+
+def resolve_seed(explicit, environ=None):
+    """
+    Work out which replicate this process is, and say where the answer came from.
+
+    THE FAILURE THIS IS SHAPED AROUND IS SILENT AND IT DESTROYS THE TRANCHE. Three seeds of an
+    arm exist to estimate sigma; three cells that all resolved to seed 0 are three
+    bit-identical runs, and the noise floor they report is zero. Every contrast in the
+    analysis plan is then divided by zero variance and every arm looks significant. Nothing
+    about the loss curves would look wrong -- they would look *perfect*, three lines on top of
+    each other -- so there is no downstream check that catches it. It has to be refused here.
+
+    Precedence, in order:
+
+    1. ``--seed`` on the command line wins, so a single run can be reproduced by hand. But a
+       command that carries an explicit ``--seed`` **and** lands in a fan-out is refused
+       rather than resolved: that is exactly the collapse above, and "the explicit one wins"
+       is the reasoning that produces it.
+    2. Otherwise the fan-out index, if Batch set one -- and only if the platform also said the
+       index means the seed. An index under any other label is refused, because reading a
+       checkpoint sweep's index as a replicate number is the same accident wearing a
+       different hat.
+    3. Otherwise 0, which is what a laptop, a preflight and a single submitted run all get.
+
+    :param explicit: The value of ``--seed``, or ``None`` if it was not passed.
+    :param environ: The environment to read. Defaults to ``os.environ``.
+
+    :returns: ``(seed, provenance)``, where the provenance is one sentence naming where the
+        number came from. It goes into the log and into the preflight summary.
+
+    :raises train_on_corpus.Refusal: If a fan-out index is present alongside an explicit
+        ``--seed``, if it is present under the wrong label, or if it is not an integer.
+    """
+    environ = os.environ if environ is None else environ
+    raw = environ.get(FANOUT_INDEX_VARIABLE)
+    label = environ.get(FANOUT_PARAMETER_VARIABLE)
+
+    if raw is None or raw == "":
+        if explicit is not None:
+            return explicit, f"--seed {explicit} on the command line"
+        return 0, "the default, since no --seed was given and this is not a fan-out cell"
+
+    if explicit is not None:
+        raise train_on_corpus.Refusal(
+            train_on_corpus.Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"this is cell {raw} of a fan-out and the command also passes --seed {explicit}. "
+            "Every cell of a fan-out is handed the same command, so honouring the explicit "
+            "seed would run the whole array on one replicate: identical models, identical "
+            "data order, and a measured noise floor of zero that would make every arm in the "
+            f"tranche look significant. Drop --seed from the command in .edullm/run.yaml and "
+            f"let ${FANOUT_INDEX_VARIABLE} choose, or submit without --fanout-size.",
+        )
+
+    if label != FANOUT_INDEX_PARAMETER:
+        raise train_on_corpus.Refusal(
+            train_on_corpus.Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"this is cell {raw} of a fan-out whose index means {label!r}, and this program "
+            f"only reads a fan-out index that means {FANOUT_INDEX_PARAMETER!r}. Submit with "
+            f"--fanout-index-parameter {FANOUT_INDEX_PARAMETER}. An index read under the "
+            "wrong label is a replicate number taken from something that was never counting "
+            "replicates, and nothing downstream would notice.",
+        )
+
+    try:
+        seed = int(raw)
+    except ValueError:
+        raise train_on_corpus.Refusal(
+            train_on_corpus.Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"${FANOUT_INDEX_VARIABLE} is {raw!r}, which is not an integer, so this cell has "
+            "no replicate number to be.",
+        ) from None
+
+    return seed, f"${FANOUT_INDEX_VARIABLE}={seed}, the fan-out cell index"
 
 
 class _ListArms(argparse.Action):
@@ -92,20 +194,20 @@ def build_parser():
     # hc_370M rather than olmo3_370M because the latter asks for a flash-attn backend this
     # image does not carry, which is what killed the first rehearsal.
     # save_interval is 500 and not the 2000 it was, because 2000 was priced against nothing.
-    # At the 15.55 s/step the first 370M probe measured, 2000 steps is 8.6 hours, so a run
-    # that hit the platform's runtime ceiling or lost its host threw away up to 8.6 hours of
-    # paid compute and resumed from that far back -- against a workload profile that declares
-    # a 30-minute checkpoint interval, which is roughly 115 steps at that speed. 500 does not
-    # reach the declared interval either; it reaches it only if the step time comes down to
-    # about 3.6 s, which is what the microbatch probe in run.yaml is trying to find out. It
-    # is the value that keeps the worst loss under a fifth of what it was without making a
-    # checkpoint the dominant cost of a step.
+    # At the 10.32 s/step the 370M probe measured at rank microbatch 16,384, 500 steps is 1.43
+    # hours, which is what a lost host throws away. The workload profile declares a 30-minute
+    # checkpoint interval and 500 does not reach it -- that would need about 175 steps -- but
+    # the interval is a declaration nothing enforces, and 500 is where the loss stops being
+    # the dominant risk without making a 46-second checkpoint a visible fraction of the run.
     #
-    # It buys 26 checkpoints per arm -- 25 on the interval plus the one at max_steps, from
-    # 12,715 steps -- where 2000 bought 7. Nothing anywhere else states that count, so it is
-    # stated here. All 26 are kept: CheckpointerCallback runs with max_checkpoints=None
-    # because the workload role cannot prune, for the reason train_on_corpus.py gives beside
-    # that field, so the storage grows by the same factor as the count.
+    # It buys 13 checkpoints per arm at the tranche's 6,000 steps: one at step zero and twelve
+    # on the interval, the last of which is the final step. Nothing anywhere else states that
+    # count, so it is stated here, and `arm_seconds` in hyper_connection_arms.py prices it.
+    # All 13 are kept: CheckpointerCallback runs with max_checkpoints=None because the
+    # workload role cannot prune, for the reason train_on_corpus.py gives beside that field.
+    #
+    # warmup_steps stays at 2% of the run rather than at the 254 it was, so the schedule keeps
+    # its shape when the horizon moves. At 6,000 steps that is 120.
     parser.set_defaults(
         model_factory="hc_370M",
         sequence_length=4096,
@@ -132,11 +234,15 @@ def build_parser():
     parser.add_argument(
         "--seed",
         type=int,
-        default=0,
+        default=None,
         help="Replicate index. Moves parameter initialization, the shuffle and the global RNG "
-        "together, because a 'seed' that only reshuffles the data measures less variance than "
-        "the run actually has and would understate the noise floor everything else is "
-        "compared against.",
+        f"together, because a 'seed' that only reshuffles the data measures less variance "
+        f"than the run actually has and would understate the noise floor everything else is "
+        f"compared against. LEAVE THIS UNSET IN A FAN-OUT: each cell then takes its replicate "
+        f"number from ${FANOUT_INDEX_VARIABLE}, which is the only per-cell value that exists. "
+        f"Passing it explicitly inside a fan-out is refused rather than honoured, because one "
+        f"command reaching three cells would run one replicate three times. See "
+        f"`resolve_seed`. Unset outside a fan-out means 0.",
     )
     parser.add_argument(
         "--weight-decay",
@@ -229,6 +335,19 @@ def preflight(config) -> None:
     print(f"corpus       {config.dataset_id}/{config.dataset_version}")
     print(f"train shards {len(config.dataset.paths)}")
 
+    # WHICH REPLICATE THIS CELL BECAME, AND WHERE THE NUMBER CAME FROM. Three cells resolving
+    # to the same seed is the one failure in this tranche that produces no error and no
+    # visibly wrong curve, so it is checked by looking, on a laptop, before anything is
+    # submitted -- and the three init seeds are printed beside it so a fan-out can be
+    # verified by running the preflight three times with a different index in the
+    # environment.
+    if _SEED_PROVENANCE:
+        print(f"seed         {_SEED_PROVENANCE[0]}")
+    print(
+        f"seeded       init={config.init_seed}, model.init={config.model.init_seed}, "
+        f"data={config.data_loader.seed}"
+    )
+
     mixer = config.model.block.sequence_mixer
     print(
         f"model        {config.model.d_model}d x {config.model.n_layers}L, "
@@ -253,6 +372,14 @@ def preflight(config) -> None:
 
 def build_config(opts, overrides):
     arm = ARMS[opts.arm]
+
+    # FIRST, AND LOUDLY. Everything below reads opts.seed, and a run that resolved the wrong
+    # one is not recoverable from its own output -- see `resolve_seed`. The line goes to the
+    # log on every run and to the preflight summary, so which replicate a cell became is
+    # written down somewhere a person will actually look.
+    opts.seed, provenance = resolve_seed(opts.seed)
+    _SEED_PROVENANCE[:] = [f"seed {opts.seed}, from {provenance}"]
+    print(f"seed         {_SEED_PROVENANCE[0]}", flush=True)
 
     # Before the delegate, because it builds the data loader with this.
     opts.data_seed = opts.data_seed + opts.seed
@@ -297,6 +424,10 @@ def build_config(opts, overrides):
 #: Set by `build_config` so the rebound `show` below knows which summary to print. A list
 #: because `main` resolves module globals at call time and rebinding a bool would not be seen.
 _PREFLIGHT: list = []
+
+#: How this process worked out which replicate it is, in one sentence, for the preflight
+#: summary. A list for the same reason `_PREFLIGHT` is one.
+_SEED_PROVENANCE: list = []
 
 
 def show(config):

@@ -62,6 +62,16 @@ def stub_corpus(monkeypatch, tmp_path):
     monkeypatch.setattr(entry, "declared_validation_paths", lambda config: sorted(val))
 
 
+@pytest.fixture(autouse=True)
+def not_a_fanout_cell(monkeypatch):
+    """
+    Nothing here is a fan-out unless the test says so. Without this a developer machine that
+    happened to export either variable would change what every other test in the file means.
+    """
+    monkeypatch.delenv(entry.FANOUT_INDEX_VARIABLE, raising=False)
+    monkeypatch.delenv(entry.FANOUT_PARAMETER_VARIABLE, raising=False)
+
+
 def build(argv):
     opts, overrides = entry.build_parser().parse_known_args(argv)
     return entry.build_config(opts, overrides), opts
@@ -90,7 +100,21 @@ def test_defaults_are_the_370m_run_not_the_platforms_190m():
     assert config.model.d_model == 1024
     assert config.model.n_layers == 16
     assert opts.sequence_length == 4096
-    assert opts.global_batch_size * opts.steps == pytest.approx(10e9, rel=0.05)
+
+
+def test_the_default_horizon_is_the_tranche_and_not_the_full_10b():
+    """
+    The two horizons are both real and they are different numbers, so the default has to say
+    which one it is. 12,715 steps is the 10B the experiment wants and 37.7 hours, which does
+    not fit the workload's 24-hour attempt; 6,000 is what this tranche runs. The default comes
+    from the arm table so that the cost model and the parser cannot drift apart.
+    """
+    _, opts = build(BASE_ARGV + ["--arm", "baseline"])
+    assert opts.steps == arms.TRANCHE_STEPS == 6_000
+    assert opts.global_batch_size * opts.steps == pytest.approx(4.72e9, rel=0.01)
+    assert arms.FULL_HORIZON_STEPS * opts.global_batch_size == pytest.approx(10e9, rel=0.05)
+    # Warmup follows the horizon rather than being pinned to the number it was at 12,715.
+    assert opts.warmup_steps == round(arms.TRANCHE_STEPS * 0.02) == 120
 
 
 @pytest.mark.parametrize("name", sorted(arms.ARMS))
@@ -149,6 +173,93 @@ def test_seed_moves_initialization_shuffle_and_the_global_rng_together():
     assert two.init_seed == zero.init_seed + 2
     assert two.model.init_seed == zero.model.init_seed + 2
     assert opts_two.data_seed == opts_zero.data_seed + 2
+
+
+def fanout_env(index, parameter="seed"):
+    return {
+        entry.FANOUT_INDEX_VARIABLE: str(index),
+        entry.FANOUT_PARAMETER_VARIABLE: parameter,
+    }
+
+
+@pytest.mark.parametrize("index", [0, 1, 2])
+def test_a_fanout_cell_takes_its_replicate_number_from_the_array_index(index: int):
+    """
+    THE WHOLE POINT OF THE FAN-OUT. One submission, one command, three cells, three different
+    replicates. Batch is the only thing that knows which cell a process is, and it says so in
+    AWS_BATCH_JOB_ARRAY_INDEX and nowhere else.
+    """
+    seed, provenance = entry.resolve_seed(None, fanout_env(index))
+    assert seed == index
+    assert entry.FANOUT_INDEX_VARIABLE in provenance
+
+
+def test_the_three_cells_of_a_fanout_are_actually_three_different_models(monkeypatch):
+    """
+    A test that reads the seed back is not enough: the failure this guards is three cells
+    training the same model, so what has to differ is the three numbers the model, the global
+    RNG and the shuffle are actually drawn from.
+    """
+    seen = set()
+    for index in (0, 1, 2):
+        for name, value in fanout_env(index).items():
+            monkeypatch.setenv(name, value)
+        config, opts = build(BASE_ARGV + ["--arm", "faithful"])
+        seen.add((config.init_seed, config.model.init_seed, opts.data_seed))
+
+    assert len(seen) == 3, f"cells collided onto the same seeds: {seen}"
+
+
+def test_an_explicit_seed_inside_a_fanout_is_refused_rather_than_honoured(monkeypatch):
+    """
+    THE WORST FAILURE AVAILABLE HERE AND THE ONLY ONE THAT PRODUCES NO SYMPTOM. Every cell of
+    a fan-out is handed the same command, so honouring a --seed written into run.yaml would
+    run one replicate three times: three bit-identical models, a measured noise floor of
+    zero, and nine curves lying exactly on top of each other in W&B, which reads as a very
+    clean experiment rather than as a broken one.
+    """
+    with pytest.raises(train_on_corpus.Refusal) as refused:
+        entry.resolve_seed(1, fanout_env(2))
+
+    assert refused.value.stage == train_on_corpus.Stage.THE_CONFIG_WOULD_NOT_BUILD
+    assert "noise floor of zero" in refused.value.explanation
+
+    for name, value in fanout_env(2).items():
+        monkeypatch.setenv(name, value)
+    with pytest.raises(train_on_corpus.Refusal):
+        build(BASE_ARGV + ["--arm", "baseline", "--seed", "1"])
+
+
+def test_an_index_that_does_not_mean_the_seed_is_refused():
+    """
+    The index is one integer and the label beside it is the only thing that says what it
+    counts. A checkpoint sweep's cell number read as a replicate number is the same accident
+    as the one above, arriving under a different name.
+    """
+    with pytest.raises(train_on_corpus.Refusal, match="only reads a fan-out index"):
+        entry.resolve_seed(None, fanout_env(2, parameter="checkpoint"))
+    with pytest.raises(train_on_corpus.Refusal, match="only reads a fan-out index"):
+        entry.resolve_seed(None, {entry.FANOUT_INDEX_VARIABLE: "2"})
+    with pytest.raises(train_on_corpus.Refusal, match="not an integer"):
+        entry.resolve_seed(None, fanout_env("two"))
+
+
+def test_outside_a_fanout_the_command_line_wins_and_the_default_is_zero():
+    assert entry.resolve_seed(None, {})[0] == 0
+    assert entry.resolve_seed(2, {})[0] == 2
+    assert "--seed 2" in entry.resolve_seed(2, {})[1]
+
+
+def test_the_resolved_seed_is_visible_before_anything_expensive_happens(capsys):
+    """
+    A silent wrong seed is unrecoverable from the run's own output, so the resolution is
+    printed by build_config -- which runs on the platform and under --preflight alike, before
+    the process group, the model or the corpus.
+    """
+    build(BASE_ARGV + ["--arm", "baseline", "--seed", "2"])
+    printed = capsys.readouterr().out
+    assert "seed 2" in printed
+    assert entry._SEED_PROVENANCE and "seed 2" in entry._SEED_PROVENANCE[0]
 
 
 def test_weight_decay_reaches_both_the_model_and_the_dynamic_group():
@@ -419,8 +530,55 @@ def test_the_default_save_interval_is_priced_in_wall_clock():
     """
     Pins the checkpoint count an arm writes, which is stated nowhere else. It is the number
     the interval was chosen for, and the thing that changes if somebody moves the interval or
-    the step count without pricing the loss a timeout would take.
+    the step count without pricing the loss a lost host would take.
     """
     _, opts = build(BASE_ARGV + ["--arm", "baseline"])
-    assert opts.save_interval == 500
-    assert opts.steps // opts.save_interval + 1 == 26
+    assert opts.save_interval == arms.TRANCHE_SAVE_INTERVAL == 500
+    assert opts.steps // opts.save_interval + 1 == 13
+    exposure_hours = opts.save_interval * arms.MEASURED_SECONDS_PER_STEP / 3600
+    assert exposure_hours == pytest.approx(1.43, abs=0.05)
+
+
+def test_the_committed_command_carries_no_seed():
+    """
+    THE ONE WORD THAT MUST NOT BE IN run.yaml. This tranche submits three seeds as one
+    three-cell fan-out, and every cell is handed this exact command. A --seed here would run
+    one replicate three times and report a noise floor of zero. `resolve_seed` refuses that
+    combination at run time; this catches it on a laptop, before a queue wait.
+    """
+    assert "--seed" not in committed_argv()
+
+    opts, _ = entry.build_parser().parse_known_args(committed_argv())
+    assert opts.seed is None
+
+
+def test_the_committed_command_is_the_tranche_the_arm_table_priced():
+    """
+    The arm table's cost model and the submitted command are two statements of the same run,
+    and nothing at submission compares them: `edullm check` prices a ceiling out of the
+    workload profile and never reads either. So they are compared here.
+    """
+    opts, _ = entry.build_parser().parse_known_args(committed_argv())
+
+    assert opts.arm in arms.FUNDED, "run.yaml runs an arm the tranche does not fund"
+    assert opts.steps == arms.TRANCHE_STEPS
+    assert opts.save_interval == arms.TRANCHE_SAVE_INTERVAL
+    assert opts.eval_interval == arms.TRANCHE_EVAL_INTERVAL
+    assert opts.monitor_interval == arms.TRANCHE_MONITOR_INTERVAL
+    assert opts.global_batch_size == arms.TRANCHE_TOKENS_PER_STEP
+    assert opts.model_factory == "hc_370M"
+    # The platform reads command words to decide what a shape can do and cannot see a dtype
+    # set in code, so the dtype has to be in the text or a T4 would accept this.
+    assert "--param-dtype" in committed_argv()
+
+
+def test_the_committed_run_fits_one_attempt_of_the_bound_it_will_be_submitted_under():
+    """
+    A cell killed by the attempt timeout is not reliably retried -- the platform's retry table
+    grants a second attempt for a lost host and reaches a timeout only through a
+    no-exit-code fall-through that torchrun's non-zero exit on SIGTERM races. So the committed
+    command has to finish inside one attempt, with room for eighteen hours of drift.
+    """
+    opts, _ = entry.build_parser().parse_known_args(committed_argv())
+    hours = arms.arm_seconds(arms.ARMS[opts.arm], opts.steps) / 3600
+    assert hours < 0.9 * 21.0, f"{opts.arm} needs {hours:.1f}h against a 21h attempt"

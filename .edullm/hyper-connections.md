@@ -60,9 +60,19 @@ and each one is an arm.
 ## Configuration
 
 370M OLMo-3: `d_model` 1024, 16 layers, 16 heads, head_dim 64, SwiGLU, RMSNorm, reordered norm,
-QK-norm, RoPE, z-loss, dolma2 at vocab 100,278 (padded to 100,352), untied embeddings. 10B
-dolma2 tokens at sequence length 4096, which is 12,715 steps of a 786,432-token batch.
-**3.0e19 FLOPs per arm**, from the run's own accounting rather than from a rule of thumb: the
+QK-norm, RoPE, z-loss, dolma2 at vocab 100,278 (padded to 100,352), untied embeddings, at
+sequence length 4096 over a 786,432-token batch.
+
+**The first tranche runs 6,000 steps and 4.72B tokens, not the 10B and 12,715 steps the rest of
+this section is written against.** The full horizon is 37.7 hours at the measured step time and
+the workload's per-attempt ceiling is 24, and the second attempt that would cover the
+difference is not one the platform's retry rules reliably grant — the whole argument is in
+[What a full arm actually costs](#what-a-full-arm-actually-costs-and-why-it-cannot-be-submitted-as-one-run).
+All nine runs share the shorter horizon, so no contrast inside the tranche is confounded by it.
+The figures below are for the full horizon and are what a second tranche needs.
+
+10B dolma2 tokens is 12,715 steps of that batch. **3.0e19 FLOPs per arm**, from the run's own
+accounting rather than from a rule of thumb: the
 370M probe billed 238.74 petaflops over 78,643,200 tokens, which is 3.036e9 FLOPs per token,
 and 12,715 steps of 786,432 tokens comes to 3.04e19. The 2.2e19 that stood here was 6ND read
 off the name plate, and it is low on both factors — the model is 474,220,352 parameters once
@@ -76,33 +86,46 @@ trusting the table.
 
 | # | arm | seeds | params | vs baseline | FLOPs/token vs baseline |
 | --- | --- | --- | --- | --- | --- |
-| 1 | `baseline` | 3 | 474,022,912 | +0.0000% | +0.0000% |
-| 2 | `faithful` | 3 | 474,220,352 | +0.0417% | +0.0994% |
-| 3 | `output-only` | 2 | 474,187,456 | +0.0347% | +0.0908% |
-| 4 | `no-output-init` | 2 | 474,220,352 | +0.0417% | +0.0994% |
-| 5 | `decay-everything` | 1 | 474,220,352 | +0.0417% | +0.0994% |
-| 6 | `n1` | 1 | 474,121,376 | +0.0208% | +0.0119% |
+| 1 | `baseline` | **3** | 474,022,912 | +0.0000% | +0.0000% |
+| 2 | `faithful` | **3** | 474,220,352 | +0.0417% | +0.0994% |
+| 3 | `output-only` | **3** | 474,187,456 | +0.0347% | +0.0908% |
+| 4 | `no-output-init` | 0 | 474,220,352 | +0.0417% | +0.0994% |
+| 5 | `decay-everything` | 0 | 474,220,352 | +0.0417% | +0.0994% |
+| 6 | `n1` | 0 | 474,121,376 | +0.0208% | +0.0119% |
 | 7 | `n2` | 0 | 474,154,304 | +0.0277% | +0.0324% |
 | 8 | `n8` | 0 | 474,353,216 | +0.0697% | +0.3371% |
-| 9 | `mhc` | 3 | 474,220,352 | +0.0417% | +0.0994% |
-| 10 | `tied-faithful` | 1 | 339,871,136 | −28.3007% | +0.0994% |
-| 11 | `tied-baseline` | 1 | 339,772,416 | −28.3215% | +0.0000% |
+| 9 | `mhc` | 0 | 474,220,352 | +0.0417% | +0.0994% |
+| 10 | `tied-faithful` | 0 | 339,871,136 | −28.3007% | +0.0994% |
+| 11 | `tied-baseline` | 0 | 339,772,416 | −28.3215% | +0.0000% |
 
 Every untied arm is iso-parameter to within 0.07% and iso-FLOP to within 0.34%. The tied arms
 are deliberately not iso-parameter — that is what they test — but they are iso-FLOP with their
 own control, because they are matched on *effective* depth: 16 layers running 8 distinct
 blocks twice on a cycle.
 
-Seventeen runs in total once seeds are counted. The number is now
-`hyper_connection_arms.total_runs()` with a test on it, because the "fifteen" that stood here
-was wrong from the day it was written and nothing in the repository could say so. Cut order if
-the budget does not stretch: `n8`, then `n2`, then `tied-faithful` and `tied-baseline` as a
-pair. The first two are already cut, and [Where the seeds went](#where-the-seeds-went) says
-what bought what.
+**Nine runs in the first tranche**, and the number is `hyper_connection_arms.total_runs()` with
+a test on it rather than a sentence, because the "fifteen" and then the "seventeen" that stood
+here were each wrong for as long as they were written and nothing in the repository could say
+so. Three arms at three seeds and nothing at one or two: see
+[Where the seeds went](#where-the-seeds-went).
 
-A zero in the seeds column is not the same as an absent row. Arms 7 and 8 are still specified,
-still build, and still have to pass every property the other arms pass; funding them later
-costs a number in one file and no design work at all.
+**Arm 3 is only worth running because of `b7983ea9`.** Until that commit `output-only` dropped
+the paper's fixed staggered one-hot read along with the learned input map, which left every
+lane reading the same vector — the baseline with dead parameters, not a crippled
+hyper-connection. Three seeds of that would have measured nothing and given no sign that it had
+measured nothing. The fix restores the staggered read so that the learned input map is the only
+difference from arm 2, which is exactly the difference H2a is about. The arm's `summary` field
+carries the commit hash so this cannot be forgotten again.
+
+**Cut order** is now all eight unfunded arms, and read backwards it is the order a second
+tranche restores them in: `n8`, `n2`, `tied-faithful`, `tied-baseline`, `decay-everything`,
+`n1`, `no-output-init`, **`mhc` last**. A test asserts the unfunded set is exactly the head of
+that list, so the budget cannot be balanced by quietly cutting something the plan never
+nominated.
+
+A zero in the seeds column is not the same as an absent row. Every one of those eight still
+builds, still stays iso-parameter and iso-FLOP, and still passes every property test the funded
+three pass; funding one later costs a number in one file and no design work at all.
 
 ## Pre-registered hypotheses
 
@@ -352,6 +375,52 @@ neither of which a second seed rescues, since the equivalence claim it would hav
 needs three seeds and a measured ρ. The review this revision came from suggested second seeds
 on arms 3, 4 *and* 6, which is eighteen runs rather than seventeen; the third one is the one
 that buys the least, so it is the one left out.
+
+### The first tranche is nine runs, and the reallocation above is superseded
+
+Everything above this heading was written against seventeen runs. Seventeen is no longer the
+budget: at $4,000 and the measured cost of an arm, nine is. That is not a proportional trim of
+the seventeen — a design that answered six hypotheses at two seeds each now answers two at
+three, which is a different experiment and is written down as one.
+
+**What nine buys.**
+
+| | contrast | seeds | what it settles |
+| --- | --- | --- | --- |
+| **H1** | arm 2 vs arm 1 | 3 v 3 | replication. Does DHC ×4 beat the baseline at 370M at all. |
+| **H2a** | arm 3 vs arm 2 | 3 v 3 | the implementation-artifact question. Whether the field's negative result is an artifact of a reimplementation that kept the output mixing and dropped the input map. |
+
+Three against three is the smallest design in which σ is estimated from the data instead of
+assumed, and it is what [the gate](#the-gate-two-standard-errors-of-the-contrast-under-test)
+was written against. Both contrasts share the same three baseline runs, so σ̂ is pooled across
+all nine and neither hypothesis is paying for its own noise floor. Every arm runs the same
+horizon, so neither contrast has a horizon confound.
+
+**What nine gives up, and why in this order.** Nothing at one seed and nothing at two. An arm
+at one seed cannot separate its effect from the seed it drew; an arm at two estimates σ from a
+single difference. Six partial answers at 0.031–0.055 nats MDE against literature effects of
+0.020–0.030 is the same failure the section above diagnosed, arrived at by spending the money
+more thinly rather than by spending it wrong. So H3, H4 and Cause 5 leave together.
+
+**`mhc` and H5 are deferred to a second tranche and are not abandoned.** This is the one cut
+worth arguing with. H5 is the best-designed hypothesis in the module: mHC's claim is
+mechanistic rather than empirical — the lane-mixing matrix normalized towards the Birkhoff
+polytope has a spectral radius the monitor already measures, and the composite condition number
+across depth is instrumented too, so a null there is a *readable* null rather than a shrug. It
+ships in DeepSeek V4, so both directions are publishable. It goes because it is the only
+three-seed arm whose question does not presuppose H1, and because H2a is worth more when H1 is
+undecided: if the method does nothing at 370M, knowing whether a constraint would have rescued
+it is a smaller question than knowing whether the field measured the method at all. It is last
+in `CUT_ORDER`, which makes it the first three runs a second tranche buys, and a test asserts
+that position so the deferral cannot silently become a deletion.
+
+**The horizon moved too, and that is a separate cut with a separate reason.** Each of the nine
+runs 6,000 steps and 4.72B tokens rather than 12,715 and 10B. It is not a budget decision —
+see [What a full arm actually costs](#what-a-full-arm-actually-costs-and-why-it-cannot-be-submitted-as-one-run),
+where the constraint is the platform's per-attempt runtime ceiling and the retry rules behind
+it. Inside the tranche nothing is confounded, because all nine share it; what is deferred is
+the comparison to ByteDance's 500B-token and Tencent's 1.2B-scale results, which now needs the
+second tranche as well.
 
 **What is still reported alongside.** Downstream, wherever it exists, because loss and
 downstream decouple by 6 to 16 points for changes in this class and a loss-only readout can
@@ -675,15 +744,35 @@ Measured, not planned. Read from run history at the steady state rather than fro
 summary — the last logged value is taken during the end-of-run evaluation, where the model is
 not training and throughput reads near zero.
 
-| run | config | steps | MFU logged | MFU L40S | device TPS | s/step |
-| --- | --- | --- | --- | --- | --- | --- |
-| `run_019fdfe9-e6c0` | `hc_rehearsal`, `faithful` | 200 | 9.12% | 7.86% | 57,354 | 1.14 |
-| `run_019fe008-5877` | `hc_370M`, `faithful` | 100 | 12.30% | 10.60% | 12,645 | 15.55 |
+| run | config | µbatch | steps | device TPS | s/step |
+| --- | --- | --- | --- | --- | --- |
+| `run_019fdfe9-e6c0` | `hc_rehearsal`, `faithful` | 8,192 | 200 | 57,354 | 1.14 |
+| `run_019fe008-5877` | `hc_370M`, `faithful` | 8,192 | 100 | 12,645 | 15.54 |
+| `run_019fe1f6-8692` | `hc_370M`, `faithful` | **16,384** | 100 | **19,051** | **10.32** |
 
-Both on `gpu-4xl40s`, and all four medians are over the logged steps of each run. TPS is per
-device, so the shape's total is four times it, and seconds per step is the batch over that
-total: 786,432 / (4 × 12,645) = 15.55 at 370M, and 262,144 / (4 × 57,354) = 1.14 at the
-rehearsal size.
+All on `gpu-4xl40s`. TPS is per device, so the shape's total is four times it, and seconds per
+step is the batch over that total: 786,432 / (4 × 19,051) = 10.32.
+
+**Every median here is over *clean* steps, and getting that filter wrong is what produced the
+number this tranche was first priced at.** A clean step is one on which neither the held-out
+evaluator nor the lane monitor ran. In `run_019fe1f6` that is 93 of the 100 steps and the
+median is 10.32 s, with an interquartile spread under 0.05 s and a wall-clock cross-check of
+10.40 s from the run's flush timestamps. The four steps the monitor fired on cost 11.65–11.80 s
+and the two the evaluator ran on cost 115 s and 121 s.
+
+**Where 11.69 s/step came from.** Reading the same run's history filtered to rows carrying
+`hc/*` keys returns exactly five rows — steps 20, 40, 60, 80 and 100, which are the monitor's
+firing steps at `--monitor-interval 20` — whose median is 11.6956. That is the cost of the
+*instrument*, sampled five times, not the cost of a step, and the "only about five throughput
+points were logged" caveat that came with it is the filter describing itself. The device TPS of
+16,822 and MFU of 14.11% quoted with it are step 80 exactly.
+
+The correction matters twice over. It is 11.7% off the runtime, which is four hours on an
+eighteen-hour run. And it means the two 370M probes were never compared the same way: the
+superseded probe's headline 15.55 is *its* clean median, so doubling the rank microbatch bought
+15.54 → 10.32, a 33.6% reduction, not 15.55 → 11.69. That is the number the wire arithmetic in
+`run.yaml` predicts — halving the model's crossings of a PCIe interconnect — and it is
+reassuring that it lands there.
 
 **The two MFU columns.** Both runs fell through `SpeedMonitorCallback`'s device table to its
 A100 default and were scored against a 312 TF peak — that is exactly the ratio of the logged
@@ -707,25 +796,110 @@ slower per token.
 
 ### What a full arm actually costs, and why it cannot be submitted as one run
 
-At 15.55 seconds a step, 12,715 steps is **197,700 seconds, or 54.9 hours** of training steps
-alone, before in-loop evaluation and checkpointing. `edullm check --json` on 2026-08-08 priced
-`gpu-4xl40s` at $10.4926 an hour for one node, which puts an arm near **$580**. Read those two
-figures out of `check --json` again before anybody acts on them; the rate is reviewed
-configuration and changes without notice, and the hours are the only half of this that belongs
-to the branch.
+`hyper_connection_arms.arm_seconds` builds a run out of the measured constants — 10.32 s a
+step, 104 s an evaluation, 46 s a checkpoint, 118 s of start-up and shutdown, and 1.37 s on
+each step the lane monitor fires on — and a test checks that rebuilding the probe's own shape
+out of them lands on the probe's own wall clock.
 
-**The 21 hours and $220 that stood here is wrong by a factor of 2.6.** It implies 5.95 seconds
-a step, which is not a number this configuration has ever produced on this card. And the same
-`check --json` reports a maximum runtime of 24 hours, so at the measured step time **a full arm
-cannot be admitted at all** — it is not a matter of cost. Something has to change before arm 1
-seed 0 is submitted, and the options are a faster attention backend, fewer tokens, a bigger
-shape, or splitting each arm across resumed segments under the ceiling. That is a decision for
-the throughput work and not for this document, but it is the binding constraint on the whole
-module and it only became visible once the throughput number was right.
+| horizon | tokens | hours per run |
+| --- | --- | --- |
+| 12,715 steps (10B, what the experiment wants) | 10.0B | **37.7** |
+| 6,000 steps (what the tranche runs) | 4.72B | **17.9** |
 
-The `gpu-8xa100` figures that stood beside them — about 6 hours and $135 — are removed rather
-than corrected. Nothing in this branch has run on an A100, so there is nothing to correct them
-against, and a second unmeasured number beside a corrected one is worse than no number.
+**37.7 hours does not fit and cannot be made to.** `olmo-core-train` declares
+`maximum_runtime_hours: 24`, and `--hours` only lowers it: an override above the workload bound
+is refused with `runtime_above_the_workload_bound`, whose detail says raising it for everybody
+is a pull request against the platform's `config/workload-catalog.yaml`. The 54.9 hours and
+$580 that stood here were the same fact through the wrong step time; the conclusion survives
+the correction, which is the only reason that paragraph is not simply deleted.
+
+**The two-attempt plan does not survive reading the retry rules, and this is the finding that
+set the step count.** The resume is sound — see
+[Resuming across attempts](#resuming-across-attempts-what-holds-and-what-does-not) — but the
+attempt has to be granted, and `RETRY_ONLY_WHAT_A_RETRY_FIXES` in the platform's
+`execution.py` is, in the order Batch reads them:
+
+```
+OnStatusReason "Host EC2*"     RETRY
+OnReason       "OutOfMemoryError*"  EXIT
+OnExitCode     "*"                  EXIT
+```
+
+A timed-out attempt carries `Job attempt duration exceeded timeout`, which is not `Host EC2*`,
+so it reaches a second attempt only by recording no container exit code at all — nothing
+matches, and Batch's documented fall-through retries. The platform's own catalog says exactly
+that, citing an observed timeout whose `container_exit_code` was null. **But an attempt that
+records any exit code falls to rule three and is not retried**, and torchrun is a program that
+exits non-zero on SIGTERM: its elastic agent raises `SignalException`, forwards the signal to
+the four ranks, waits 30 s, kills them and re-raises, and the launcher lets it out. That is a
+dead heat with the container stop timeout. Losing it costs the arm at hour 21, at step ~7,000,
+having paid for the whole ceiling. Nine cells makes it nine coin flips.
+
+**So the tranche fits one attempt.** 6,000 steps is 17.9 hours against a 21-hour bound, which
+is 15% of margin for step-time drift over eighteen hours. The second attempt is still asked
+for and still worth its ceiling: it covers the one thing rule one *does* retry, a host going
+away, and the resume then does exactly what it is supposed to.
+
+**The cost, both numbers, because they are different and both bind.** Expected spend is 160.6
+node-hours for the nine runs, which `estimated_cost_usd` will multiply by whatever rate
+`edullm check --json` reports. What gets *approved* is a ceiling: attempts × the runtime bound
+× the rate × the cell count, reported as `cost.maximum_compute_cost_usd`. At 24 hours that
+ceiling is $4,532.79 for nine cells and over budget; at `--hours 21` it is $3,966.21 and under.
+Read both out of `check --json` rather than out of this paragraph.
+
+The `gpu-8xa100` figures that once stood here — about 6 hours and $135 — are still removed
+rather than corrected. Nothing in this branch has run on an A100. It is the obvious way to buy
+the 10B horizon back, since an NVLink shape is not bound by the wire this one is, but that is a
+claim with no measurement under it and the honest next step is a 100-step probe there for a few
+dollars, not a $4,000 tranche.
+
+### Resuming across attempts: what holds, and what does not
+
+Read out of the code rather than assumed, because the whole two-attempt argument rested on it.
+
+**The resume itself holds.** `Trainer.fit` calls
+`maybe_load_checkpoint(self.save_folder, load_trainer_state=True, load_optim_state=True)`
+before anything else and only then falls back to `load_path`
+(`src/olmo_core/train/trainer.py:694-713`). `load_state_dict` restores the data loader's
+position, `global_step`, `global_train_tokens_seen`, `global_train_petaflops`, the epoch, every
+callback's state and the per-rank RNG (`trainer.py:836-881`), so step, token count, data order,
+optimizer state and shuffle all come back. `.edullm/train_on_corpus.py:819-824` clears torn
+step directories and calls `maybe_load_checkpoint()` before `fit()` for the reason
+`remove_torn_checkpoints` gives. Under a fan-out each cell has its own checkpoint prefix —
+the platform's `FANOUT_PROLOGUE` re-exports `EDULLM_CHECKPOINT_DIR` as
+`…/cell-$AWS_BATCH_JOB_ARRAY_INDEX/checkpoints/` — and the array index is stable across
+attempts of the same child, so a retry resumes its own seed and not a sibling's.
+
+**The learning-rate trap is real and is not handled for you.** `Trainer.state_dict` writes
+`max_steps` into the checkpoint (`trainer.py:828`) and `load_state_dict` never reads it back —
+the key is simply absent from `trainer.py:836-881`. `max_steps` is a property recomputed from
+`max_duration` (`trainer.py:476-481`), which `.edullm/train_on_corpus.py:653` sets from
+`--steps` at construction, and `Scheduler.set_lr` reads `trainer.max_steps` live on every step
+(`src/olmo_core/optim/scheduler.py:68-77`). **So every attempt must be launched with the same
+`--steps`.** A second attempt given a smaller number does not resume a cosine, it starts a new
+one from wherever the first left off and collapses the remaining decay into that segment — and
+because the loss curve continues smoothly it looks like a run that finished. The command lives
+in `.edullm/run.yaml` and a Batch retry re-runs the identical container, so this is safe as
+long as nobody edits the file between attempts, which is worth knowing before somebody does.
+
+**The clean-exit race is lost in OLMo-core and won by torchrun, which is not the same as being
+safe.** `Trainer._handle_os_signal` turns SIGTERM into `cancel_run` (`trainer.py:1267-1283`),
+which sets a cancelling rank but no `_error`; `_check_if_canceled` broadcasts
+`(reason, self._error is not None)` so `_canceled_by_error` stays false
+(`trainer.py:1435-1444`); and `fit` raises only when that flag is set (`trainer.py:770-776`),
+otherwise running `post_train`, `_shutdown` and returning normally. `train_on_corpus.cli` then
+returns 0. **A trainer that catches Batch's SIGTERM exits successfully.** What stops that
+reaching Batch is the launcher: the elastic agent re-raises `SignalException` after shutting
+the workers down (`torch/distributed/elastic/agent/server/api.py:738-742`), `launch_agent`
+re-raises it again, and torchrun exits non-zero. The trainer would not have finished in time
+anyway — `cancel_check_interval` is 5, so it needs up to five steps (52 s) just to notice, and
+then a synchronous 46-second checkpoint, against a 30-second grace period.
+
+Both halves of that are worth stating because they point opposite ways. Under `torchrun` the
+container exits non-zero, so nothing is ever mistaken for success — but that same non-zero exit
+is what makes rule three fire and the timeout *not* retry. And a future entry point that ran
+`train_hyper_connections.py` directly on one device, without the launcher, would exit 0 on a
+cancellation and report a half-finished run as a completed one.
 
 ### Noise floor
 
@@ -760,18 +934,31 @@ of this document. The 19-minute median queue is the one figure here that `check 
 confirms, alongside a worst observed wait of 6.4 hours. Nothing on `gpu-8xa100` has been
 re-derived, because nothing in this branch has run there.
 
+**What `check --json` reported on 2026-08-08** for a three-cell fan-out of this repository on
+`gpu-4xl40s`: `approval_class: routine`, `approving_environment: run-approval-lead`,
+`maximum_attempts: 2`, `maximum_runtime_hours: 24`. A fan-out never self-releases whatever it
+totals, which the platform's own catalog states, so all three submissions go to a lead
+regardless. Re-read it rather than quoting this.
+
 ## Order of operations
 
 1. **Rehearse.** Done: `run_019fdfe9-e6c0`, `faithful` at the rehearsal size, 200 steps,
    `gpu-4xl40s`. It fails closed if the lanes have not differentiated by step 150.
-2. **Probe throughput** at 370M. Done: `run_019fe008-5877`, 100 steps, and the table above.
-3. **Get an arm under the 24-hour ceiling**, which the probe says it is not. Nothing below can
-   be submitted until this is settled, and the flash-attention backend is the first thing to
-   try because the wheel is already in the image.
-4. **Three seeds of arm 1.** Fill the noise floor table above, including ρ̂ and Bartlett.
-5. **Three seeds of arm 2 and of arm 9**, which complete the pooled σ̂ and answer H1 and H5.
-6. **Only then** the arms that borrow σ̂_Δ from those triples: 3 and 4 at two seeds each, then
-   5 and 6, then the tied pair 10 and 11. Arms 7 and 8 carry no seeds and are not submitted.
+2. **Probe throughput** at 370M. Done twice: `run_019fe008-5877` at rank microbatch 8,192 and
+   `run_019fe1f6-8692` at 16,384, and the table above.
+3. **Get an arm under the 24-hour ceiling.** Settled, by shortening the horizon to 6,000 steps
+   rather than by making the step faster — see
+   [What a full arm actually costs](#what-a-full-arm-actually-costs-and-why-it-cannot-be-submitted-as-one-run).
+   Flash-attention and a bfloat16 gradient reduction are both still on the table and neither
+   closes a gap this size on its own; an NVLink shape would, and is unmeasured.
+4. **Arm 1, three seeds, as one three-cell fan-out.** Fills the noise floor table above,
+   including ρ̂ and Bartlett. It is also the first submission, so it is the one that finds out
+   whether the fan-out resolves three different seeds — check that before submitting the
+   other two, by reading the three cells' `init_seed` out of their W&B configs.
+5. **Arm 2, three seeds**, which answers H1 against those three.
+6. **Arm 3, three seeds**, which answers H2a against arm 2.
+7. **Second tranche**, in `CUT_ORDER` read backwards: `mhc` first, then `no-output-init`. The
+   10B horizon comes back here too, and on a shape that can hold it.
 
 ## One ambiguity in the source, recorded because it is an arm
 
@@ -836,9 +1023,36 @@ pytest -v src/test/nn/transformer/hyper_connection_test.py \
           src/test/nn/transformer/block_reuse_test.py \
           src/test/train/callbacks/hyper_connection_monitor_test.py
 
-# On the platform: edit --arm in .edullm/run.yaml, commit, push, then
-edullm check --json && edullm submit
+# Preflight, on a laptop, before anything is submitted. Needs corpus credentials, no GPU.
+for arm in baseline faithful output-only; do
+  AWS_PROFILE=sbsandbox PYTHONPATH=src python .edullm/train_hyper_connections.py pf \
+    --preflight --arm "$arm" \
+    --dataset-id pretrain/regmix-10b --dataset-version v1 \
+    --dataset-tokenizer tokenizer/dolma2-bpe \
+    --save-folder /tmp/x --work-dir /tmp/hc-cache
+done
+
+# And that a fan-out cell resolves the seed it should. Three different init seeds or stop.
+for i in 0 1 2; do
+  AWS_BATCH_JOB_ARRAY_INDEX=$i EDULLM_FANOUT_INDEX_PARAMETER=seed \
+  AWS_PROFILE=sbsandbox PYTHONPATH=src python .edullm/train_hyper_connections.py pf \
+    --preflight --arm baseline \
+    --dataset-id pretrain/regmix-10b --dataset-version v1 \
+    --dataset-tokenizer tokenizer/dolma2-bpe \
+    --save-folder /tmp/x --work-dir /tmp/hc-cache | grep -E '^seed'
+done
+
+# On the platform: edit --arm in .edullm/run.yaml, commit, push to edullm/**, then
+edullm check --json --experiment hyper-connections-370m --dataset regmix-10b-v1 \
+  --team <team> --hours 21 --fanout-size 3 --fanout-index-parameter seed
 ```
 
 The command lives in `.edullm/run.yaml` rather than in a flag, so the commit and the arm cannot
-disagree about what was run.
+disagree about what was run. The **seed** is not in it, for the opposite reason: every cell of
+a fan-out is handed one command, so a seed written down there would run one replicate three
+times. `resolve_seed` refuses that combination rather than honouring it, and a test asserts
+that `run.yaml` carries no `--seed`.
+
+`--hours 21` rather than the 24 the profile allows, because `check` prices a ceiling and nine
+cells at 24 hours is $4,532.79 against a $4,000 budget. Twenty-one is $3,966.21 and still
+leaves 42 hours of allowance for a 17.9-hour run that may lose a host.

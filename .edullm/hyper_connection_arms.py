@@ -14,6 +14,36 @@ setups, one per arm.
 
 An arm is applied to a size rather than being its own size, so the same eleven arms run at the
 rehearsal size and at 370M without a second table to keep in sync.
+
+WHAT THE FIRST TRANCHE FUNDS, AND WHY IT IS THREE ARMS RATHER THAN SEVEN.
+
+Nine runs: ``baseline`` x3, ``faithful`` x3, ``output-only`` x3, and zero everywhere else.
+That buys exactly two hypotheses, both at full power and both against the same noise floor:
+
+  H1   replication          arm 2 against arm 1, three seeds against three.
+  H2a  implementation       arm 3 against arm 2, three seeds against three. Whether the
+                            field's negative result is an artifact of a reimplementation
+                            that kept the output mixing and dropped the input map.
+
+Three against three is the smallest design in which sigma is estimated from the data rather
+than assumed, and it is what the analysis plan's gate -- two standard errors of the contrast
+-- was written against. Two arms at two seeds and two more at one, which is what the previous
+allocation bought, gives four underpowered answers instead of two sharp ones.
+
+``mhc`` / H5 IS DEFERRED TO A SECOND TRANCHE AND IS NOT ABANDONED. It is the best-designed
+hypothesis in this module: the Sinkhorn-Knopp normalization towards the Birkhoff polytope is
+a mechanism claim with a spectral prediction the monitor already instruments, and it ships in
+DeepSeek V4, so a null there is publishable and a positive is load-bearing. It is last in
+:data:`CUT_ORDER` for that reason -- the last thing cut and the first thing a second tranche
+restores. Dropping it silently would be the loss; dropping it in writing, with the three runs
+it needs already specified and tested, costs a number and not a design.
+
+``output-only`` IS ONLY WORTH RUNNING BECAUSE OF COMMIT ``b7983ea9``. Before that commit the
+arm replaced both the learned input map and the paper's fixed staggered one-hot read, which
+left every lane reading the same vector: degenerate rather than crippled, an exact re-run of
+the baseline with dead parameters, and a null result that meant nothing. b7983ea9 put the
+staggered read back so that only the learned input map goes, which is the one difference H2a
+is about. Nine runs of a degenerate arm is the shape of mistake this note exists to prevent.
 """
 
 import math
@@ -57,13 +87,17 @@ class Arm:
 
     seeds: int
     """
-    How many seeds this arm is funded for.
+    How many seeds this arm is funded for in the tranche that is about to run.
 
-    Three where a difference gets claimed against the baseline, two where a claim rests on the
-    arm but a single seed would not resolve the literature's effect size, one for
-    reconnaissance that carries no claim, and zero for an arm that is specified here but is not
-    in the budget. Zero is not the same as absent: the arm still has to build, stay
-    iso-parameter and pass every test, so funding it later costs a number and not a design.
+    Three where a three-versus-three difference is claimed against the baseline, and zero
+    everywhere else. There is no longer a one and no longer a two: an arm at one seed cannot
+    separate its effect from the seed it drew, and an arm at two estimates sigma from a single
+    difference. The budget buys two hypotheses at full power rather than six at partial, and
+    :data:`CUT_ORDER` records which order the rest come back in.
+
+    Zero is not the same as absent: the arm still has to build, stay iso-parameter, stay
+    iso-FLOP and pass every test in ``test_hyper_connection_arms.py``, so funding it later
+    costs a number and not a design.
     """
 
     hyper_connections: Optional[HyperConnectionConfig] = None
@@ -138,24 +172,27 @@ ARMS: Dict[str, Arm] = {
         number=3,
         summary="DHC x4 with output-side mixing only, which is what a shared residual "
         "interface forces. The read stays on the paper's fixed staggered one-hot; only the "
-        "learned input map goes, or the arm is degenerate rather than crippled.",
-        isolates="Cause 1. Whether the field's negative result is an artifact of an "
+        "learned input map goes, or the arm is degenerate rather than crippled. IT WAS "
+        "DEGENERATE UNTIL COMMIT b7983ea9, which put the staggered read back: before it, "
+        "every lane read the same vector and this arm was the baseline with dead parameters. "
+        "It is in the tranche because of that fix and would not otherwise be worth a run.",
+        isolates="Cause 1, and H2a. Whether the field's negative result is an artifact of an "
         "incomplete reimplementation.",
-        seeds=2,
+        seeds=3,
         hyper_connections=_hc(mode=HyperConnectionMode.output),
     ),
     "no-output-init": Arm(
         number=4,
         summary="Faithful, but without the sqrt(n) output-module initialization scaling.",
         isolates="Cause 2. Whether that scaling is load-bearing or cosmetic.",
-        seeds=2,
+        seeds=0,
         hyper_connections=_hc(output_init_exponent=0.0),
     ),
     "decay-everything": Arm(
         number=5,
         summary="Faithful, but with weight decay on the static component too.",
         isolates="Cause 3. The parameter-group split the replication does not mention.",
-        seeds=1,
+        seeds=0,
         # The split lives in the optimizer, so this arm is the faithful model with
         # `optim_group_overrides` deliberately not applied. See `train_hyper_connections.py`.
         hyper_connections=_hc(),
@@ -167,7 +204,7 @@ ARMS: Dict[str, Arm] = {
         isolates="The seesaw control. ByteDance found n=1 does not beat the baseline; if it "
         "does here, their mechanism story is incomplete at this scale. Read against arm 4 and "
         "not arm 2, since arm 2 carries the rescale that this arm cannot have.",
-        seeds=1,
+        seeds=0,
         hyper_connections=_hc(n_lanes=1),
     ),
     "n2": Arm(
@@ -189,15 +226,17 @@ ARMS: Dict[str, Arm] = {
         summary="mHC x4: the lane-mixing matrix normalized towards the Birkhoff polytope by "
         "Sinkhorn-Knopp, which at eight sweeps lands column-stochastic rather than doubly "
         "stochastic and carries the spectral radius mHC argues from either way.",
-        isolates="Whether the constraint is what rescues the method. It ships in DeepSeek V4.",
-        seeds=3,
+        isolates="H5. Whether the constraint is what rescues the method. It ships in DeepSeek "
+        "V4. DEFERRED TO A SECOND TRANCHE AND NOT ABANDONED: it is last in CUT_ORDER, which "
+        "makes it the first three runs a second tranche buys.",
+        seeds=0,
         hyper_connections=_hc(doubly_stochastic=True),
     ),
     "tied-faithful": Arm(
         number=10,
         summary="Tied blocks on a cycle, with DHC x4.",
         isolates="Cause 5. Whether lane value tracks parameter reuse rather than model size.",
-        seeds=1,
+        seeds=0,
         hyper_connections=_hc(),
         reuse_factor=REUSE_FACTOR,
     ),
@@ -205,21 +244,52 @@ ARMS: Dict[str, Arm] = {
         number=11,
         summary="Tied blocks on a cycle, standard residual stream.",
         isolates="The control for arm 10. Without it arm 10 measures tying, not lanes.",
-        seeds=1,
+        seeds=0,
         reuse_factor=REUSE_FACTOR,
     ),
 }
 
 
-#: The order to cut arms in if the budget does not stretch, from the plan.
+#: The order to cut arms in if the budget does not stretch, and therefore the order a second
+#: tranche restores them in, read from the end.
 #:
-#: The first two entries are already cut: ``n2`` and ``n8`` carry zero seeds, and the two runs
-#: they were holding went into second seeds for arms 3 and 4. The expansion-rate curve was the
-#: cheapest thing to give up, because it is the only claim in the plan that nothing else in it
-#: depends on, while arms 3 and 4 carry H2 and H3. A test asserts that the unfunded arms are
-#: exactly the head of this list, so the budget cannot be balanced by quietly cutting something
-#: that was never nominated for it.
-CUT_ORDER = ["n8", "n2", "tied-faithful", "tied-baseline"]
+#: Eight of the eleven arms are now unfunded, and this list is all eight of them followed by
+#: nothing: the three that remain -- ``baseline``, ``faithful``, ``output-only`` -- are the
+#: tranche, and a test asserts that whatever carries zero seeds is exactly the head of this
+#: list. That is what stops the budget being balanced by quietly cutting something the plan
+#: never nominated for cutting.
+#:
+#: The order, and why each one is where it is:
+#:
+#:   ``n8``, ``n2``            The expansion-rate curve. The only claim in the plan that
+#:                             nothing else in it depends on, so it is the cheapest thing to
+#:                             give up and has been given up longest.
+#:   ``tied-*``                Cause 5 needs both arms or neither, so it is two runs minimum
+#:                             for a question nothing downstream reads.
+#:   ``decay-everything``      Cause 3. One run at one seed could never have separated the
+#:                             parameter-group split from the seed it drew.
+#:   ``n1``                    The seesaw control. Reconnaissance, no claim attached.
+#:   ``no-output-init``        Cause 2 / H3. A real hypothesis, and the first non-mhc thing a
+#:                             second tranche should want -- but it asks whether a scaling is
+#:                             load-bearing, which only means something once H1 says the
+#:                             method does anything at all.
+#:   ``mhc``                   H5. LAST, DELIBERATELY. It is the best-designed hypothesis in
+#:                             the module and the three runs it needs are specified, tested
+#:                             and iso-parameter today. Being last here is the record that it
+#:                             was deferred rather than dropped.
+CUT_ORDER = [
+    "n8",
+    "n2",
+    "tied-faithful",
+    "tied-baseline",
+    "decay-everything",
+    "n1",
+    "no-output-init",
+    "mhc",
+]
+
+#: The arms the first tranche actually runs, derived rather than written down twice.
+FUNDED = [name for name, arm in ARMS.items() if arm.seeds > 0]
 
 
 #: The only attention backend this platform's training image can run.
@@ -438,6 +508,164 @@ class BitsPerByteCallback(Callback):
                 metrics[name.removesuffix("CE loss") + "BPB"] = value / scale
 
 
+# ---------------------------------------------------------------------------------------
+# What the tranche costs. `edullm check` reads none of this: it prices a ceiling from the
+# workload profile and knows nothing about steps, so the arm table is the only place the
+# experiment's own arithmetic is written down.
+# ---------------------------------------------------------------------------------------
+
+#: Seconds per optimizer step at the 370M shape on gpu-4xl40s, rank microbatch 16,384.
+#:
+#: MEASURED, AND NOT THE NUMBER THE BUDGET WAS FIRST WRITTEN AGAINST. Re-derived from W&B run
+#: ``run_019fe1f6-8692-70d3-a6cf-97c4756624e3`` (entity eduLLM, project pre-training, group
+#: hyper-connections-370m): 93 clean steps -- every step of the 100 except the two that ran
+#: held-out evaluation and the four the lane monitor fired on -- give a median of 10.32 s and
+#: an interquartile spread under 0.05 s. The flush-group wall clock agrees at 10.40 s.
+#:
+#: The 11.69 s/step this tranche was first priced at is the same run read through a filter
+#: that kept only the five rows carrying ``hc/*`` keys, which are steps 20, 40, 60, 80 and
+#: 100 -- exactly the monitor's firing steps at ``--monitor-interval 20``. A monitor step
+#: costs about 1.37 s more than an ordinary one, so that median is the cost of the
+#: instrument, sampled five times, and not the cost of a step. The superseded 8,192-microbatch
+#: probe's headline 15.55 s/step is its *clean* median, so the two probes were never compared
+#: the same way: the real improvement is 15.54 -> 10.32, not 15.55 -> 11.69.
+MEASURED_SECONDS_PER_STEP = 10.32
+
+#: What one lane-monitor firing adds to the step it fires on. Median of steps 20, 40, 60 and
+#: 80 (11.69 s) against the clean median. Only the hyper-connection arms pay it.
+MONITOR_SECONDS_PER_FIRING = 1.37
+
+#: One held-out evaluation over the seven declared validation shards. Measured 103.58 s and
+#: 103.70 s in the steady state; the first one of a run took 124.9 s warming up.
+MEASURED_EVAL_SECONDS = 104.0
+
+#: One permanent checkpoint. Measured 47.94 s and 45.71 s on the same run, and again on the
+#: superseded probe, so it is a property of the model and the bucket rather than of the step.
+#:
+#: CHARGED ON EVERY CHECKPOINT EVEN THOUGH MOST OF THEM ARE FREE, DELIBERATELY. The
+#: checkpointer runs with ``save_async=True``, and at a 500-step interval -- 86 minutes -- the
+#: previous write has long finished, so the ``_await_last_checkpoint`` at the top of the next
+#: one costs nothing and only the final synchronous save in ``post_train`` really blocks.
+#: Counting all thirteen anyway pads the estimate by about nine minutes. The asymmetry is
+#: worth paying for: over-estimating the runtime costs an hour of unused ceiling and
+#: under-estimating it costs the arm.
+MEASURED_CHECKPOINT_SECONDS = 46.0
+
+#: Container start to the first optimizer step, plus the shutdown after the last one, with the
+#: start-up evaluation and the step-zero checkpoint taken out because they are counted
+#: separately below.
+#:
+#: Derived rather than read off a single field. On the probe the 99 reported step times sum to
+#: 1,240.7 s and the three evaluations to 332.2 s, against 1,513.5 s of wall clock; the two
+#: evaluations inside the loop are already inside the first figure, so what is left over for
+#: start-up, the unmeasured first step, the final blocking checkpoint and the shutdown is
+#: 164.5 s. Take one checkpoint and one step out of that and the rest is this.
+MEASURED_STARTUP_SECONDS = 118.0
+
+#: The horizon the experiment wants: 12,715 steps x 786,432 tokens is 10.0B dolma2 tokens.
+FULL_HORIZON_STEPS = 12_715
+
+#: The horizon this tranche runs, and it is shorter than the one above for a reason that has
+#: nothing to do with money.
+#:
+#: A full arm is 12,715 steps x 10.32 s plus its evaluations and checkpoints, which is 37.9
+#: hours. ``olmo-core-train`` declares ``maximum_runtime_hours: 24`` and ``--hours`` may only
+#: lower it -- the platform refuses an override above the workload bound with
+#: ``runtime_above_the_workload_bound`` and says that raising it is a pull request against
+#: config/workload-catalog.yaml. So a full arm cannot finish in one attempt.
+#:
+#: THE TWO-ATTEMPT PLAN DOES NOT SURVIVE READING THE RETRY RULES. A second attempt would
+#: resume correctly -- see the resume section of hyper-connections.md, which cites the lines
+#: -- but it has to be granted first, and ``RETRY_ONLY_WHAT_A_RETRY_FIXES`` in the platform's
+#: execution.py is ``OnStatusReason "Host EC2*" RETRY`` then ``OnReason "OutOfMemoryError*"
+#: EXIT`` then ``OnExitCode "*" EXIT``. A timeout is granted a retry only because it records
+#: no container exit code, so nothing matches and Batch's documented fall-through applies. An
+#: attempt that records any exit code at all falls to rule three and is not retried -- and
+#: torchrun's elastic agent re-raises ``SignalException`` and exits non-zero on SIGTERM, in a
+#: dead heat with the container stop timeout. That is a coin flip with a whole arm on it.
+#:
+#: 6,000 steps is 4.72B tokens, 17.9 hours at the measured step time, and fits one attempt of
+#: 21 hours with three hours to spare. Every arm and every seed runs the same 6,000, so no
+#: contrast in the tranche has a horizon confound; what is given up is the comparison to the
+#: published 10B-token results, which becomes a second tranche's job along with mhc.
+TRANCHE_STEPS = 6_000
+
+#: The intervals the tranche runs at, here rather than only in run.yaml so the cost model and
+#: the command cannot disagree. A test asserts the committed command matches these.
+TRANCHE_SAVE_INTERVAL = 500
+TRANCHE_EVAL_INTERVAL = 500
+TRANCHE_MONITOR_INTERVAL = 50
+
+#: Tokens per optimizer step: a 786,432-token global batch.
+TRANCHE_TOKENS_PER_STEP = 768 * 1024
+
+
+def arm_seconds(arm: Arm, steps: int = TRANCHE_STEPS) -> float:
+    """
+    How long one run of this arm takes, from the measurements above.
+
+    Counts what the probe showed a run actually spends time on: the steps, one held-out
+    evaluation on startup and one on finish and one every ``TRANCHE_EVAL_INTERVAL``, a
+    checkpoint at step zero and one every ``TRANCHE_SAVE_INTERVAL``, the container's start-up,
+    and -- for an arm that has lanes to watch -- the lane monitor's own cost.
+
+    :param arm: The arm.
+    :param steps: How many optimizer steps it runs for.
+
+    :returns: Seconds.
+    """
+    evaluations = 2 + steps // TRANCHE_EVAL_INTERVAL
+    checkpoints = 1 + steps // TRANCHE_SAVE_INTERVAL
+    monitor = 0.0
+    if arm.hyper_connections is not None:
+        monitor = (steps // TRANCHE_MONITOR_INTERVAL) * MONITOR_SECONDS_PER_FIRING
+    return (
+        MEASURED_STARTUP_SECONDS
+        + steps * MEASURED_SECONDS_PER_STEP
+        + evaluations * MEASURED_EVAL_SECONDS
+        + checkpoints * MEASURED_CHECKPOINT_SECONDS
+        + monitor
+    )
+
+
+def tranche_hours(steps: int = TRANCHE_STEPS) -> float:
+    """
+    GPU-node hours for every funded run in the table, seeds counted.
+    """
+    return sum(arm.seeds * arm_seconds(arm, steps) for arm in ARMS.values()) / 3600.0
+
+
+def estimated_cost_usd(hourly_rate_usd: float, steps: int = TRANCHE_STEPS) -> float:
+    """
+    What the tranche is expected to spend, at a rate the caller supplies.
+
+    THE RATE IS AN ARGUMENT AND IS NOT WRITTEN DOWN IN THIS FILE. Prices live in reviewed
+    platform configuration that changes without anybody being told, so the only honest source
+    is ``edullm check --json``, which reports ``cost.hourly_rate_usd`` for the compute profile
+    a submission actually names. A number copied in here would be right until it was not, and
+    nothing would say when.
+
+    This is also not what a submission is approved against. ``edullm check`` prices a
+    *ceiling* -- attempts x the runtime bound x the rate, for every cell -- which is a larger
+    number and the one the budget has to clear. This is the expected spend if the runs behave
+    the way the probe did.
+
+    :param hourly_rate_usd: ``cost.hourly_rate_usd`` from ``edullm check --json``.
+    :param steps: How many optimizer steps each run does.
+
+    :returns: Dollars.
+    """
+    return tranche_hours(steps) * hourly_rate_usd
+
+
+def total_runs() -> int:
+    """
+    How many runs the table asks for. Counted rather than written down, because the number
+    written down in the plan was wrong for as long as it was written down.
+    """
+    return sum(arm.seeds for arm in ARMS.values())
+
+
 def describe() -> str:
     """
     The table, for ``--list-arms`` and for the run log.
@@ -447,12 +675,16 @@ def describe() -> str:
     for name, arm in ARMS.items():
         lines.append(f"{name.ljust(width)}  {arm.number:<2}  {arm.seeds:<5}  {arm.isolates}")
     lines.append(f"{'total'.ljust(width)}      {total_runs():<5}  runs, once seeds are counted")
+    lines.append("")
+    lines.append(
+        f"tranche: {total_runs()} runs x {TRANCHE_STEPS:,} steps "
+        f"({TRANCHE_STEPS * TRANCHE_TOKENS_PER_STEP / 1e9:.2f}B tokens each), "
+        f"{max(arm_seconds(a) for a in ARMS.values() if a.seeds) / 3600:.1f} h per run, "
+        f"{tranche_hours():.1f} node-hours in total."
+    )
+    lines.append(
+        "Multiply those hours by cost.hourly_rate_usd from `edullm check --json` for the "
+        "expected spend; the ceiling that gets approved is attempts x the runtime bound x "
+        "the rate x the cell count, which check reports as cost.maximum_compute_cost_usd."
+    )
     return "\n".join(lines)
-
-
-def total_runs() -> int:
-    """
-    How many runs the table asks for. Counted rather than written down, because the number
-    written down in the plan was wrong for as long as it was written down.
-    """
-    return sum(arm.seeds for arm in ARMS.values())
