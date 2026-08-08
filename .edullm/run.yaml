@@ -5,19 +5,10 @@
 # Workload profiles registered for OLMo-core: olmo-core-check, olmo-core-train.
 # edullm check prices this and lists every refusal, without dispatching anything.
 #
-# Does frontloading math change the early loss trajectory of a 190M model?
-# olmo-core-train rather than olmo-core-check, because this opens a corpus.
-#
-# --param-dtype and --save-folder are both named even though the file already
-# defaults to each. The platform reads the words of the command and can see
-# neither a dtype set in code nor an environment variable read in code. A
-# command that does not say where it saves is one the checkpoint contract
-# cannot check, and a retry then resumes from nothing at full price.
+# olmo-core-check rather than olmo-core-train, because this measures the card and
+# the shape rather than training anything, so it opens no corpus and needs none.
 schema_version: 1
-workload_profile: olmo-core-train
-suggested_compute: gpu-1xl4
+workload_profile: olmo-core-check
+suggested_compute: gpu-1xt4
 command: >-
-  bash -lc 'python .edullm/train_on_corpus.py "$EDULLM_RUN_ID"
-  --save-folder "$EDULLM_CHECKPOINT_DIR"
-  --sequence-length 2048 --steps 2000 --save-interval 500
-  --warmup-steps 200 --param-dtype bfloat16'
+  bash -lc 'python .edullm/time_attention.py "$EDULLM_RUN_ID"'
