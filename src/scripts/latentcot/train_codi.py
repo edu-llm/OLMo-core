@@ -32,14 +32,23 @@ from olmo_core.latentcot.arms import ARMS
 from olmo_core.latentcot.data.dataset import LatentCotDataset
 from olmo_core.latentcot.evaluate import overall_accuracy, solve_rate_by_depth
 from olmo_core.latentcot.moe import describe_moe
+from olmo_core.latentcot.techniques import (
+    TECHNIQUES,
+    as_arm,
+    describe_techniques,
+    get_technique,
+)
+from olmo_core.latentcot.tokens import assert_control_tokens_fit
 from olmo_core.latentcot.tracking import ArmTracker, resolve_project
 from olmo_core.latentcot.train_driver import (
     PRECISIONS,
     autocast_ctx,
     build_model,
+    build_model_from_config,
     is_remote,
     load_checkpoint,
     publish_artifact,
+    read_model_config,
     resolve_device,
     train_arm,
 )
@@ -47,7 +56,25 @@ from olmo_core.latentcot.train_driver import (
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--arm", required=True, choices=sorted(ARMS))
+    selector = parser.add_mutually_exclusive_group(required=False)
+    selector.add_argument(
+        "--technique",
+        choices=sorted(TECHNIQUES),
+        help="which latent-reasoning post-training technique to fine-tune with. This is the "
+        "selector for a real run: pick whichever the experiment showed wins. See "
+        "--list-techniques.",
+    )
+    selector.add_argument(
+        "--arm",
+        choices=sorted(ARMS),
+        help="the experiment-arm selector (A0-A4), kept so the study's runs stay reproducible. "
+        "--technique is the same recipes under readable names, plus two that were never arms.",
+    )
+    parser.add_argument(
+        "--list-techniques",
+        action="store_true",
+        help="print the technique catalog and exit",
+    )
     parser.add_argument(
         "--rung",
         default="olmo2_370M",
@@ -65,8 +92,9 @@ def main() -> None:
         "none) -- pass 'torch' there. Same attention math, different kernel; the 4096 sliding "
         "window is a no-op at our ~300-token sequences.",
     )
-    parser.add_argument("--train-data", required=True)
-    parser.add_argument("--test-data", required=True)
+    # Not `required=True`: --list-techniques must work without them. Checked below instead.
+    parser.add_argument("--train-data")
+    parser.add_argument("--test-data")
     parser.add_argument(
         "--num-continuous-thoughts",
         type=int,
@@ -168,18 +196,48 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    device = resolve_device(args.device)
-    arm = ARMS[args.arm]
-    if args.vocab_reg_entropy_floor is not None:
-        # Whitelisted field, so this keeps the confound check valid (arms may differ in it).
-        arm = replace(arm, vocab_reg_entropy_floor=args.vocab_reg_entropy_floor)
+    if args.list_techniques:
+        print(describe_techniques())
+        return
+    if not (args.technique or args.arm):
+        parser.error("one of --technique or --arm is required (see --list-techniques)")
+    for required in ("train_data", "test_data"):
+        if getattr(args, required) is None:
+            parser.error(f"--{required.replace('_', '-')} is required to train")
 
-    model = build_model(
-        args.rung, init_seed=args.init_seed, device=device, attn_backend=args.attn_backend
-    )
+    device = resolve_device(args.device)
+    distill_weight = 1.0
+    if args.technique:
+        technique = get_technique(
+            args.technique,
+            num_continuous_thoughts=args.num_continuous_thoughts,
+            vocab_reg_entropy_floor=args.vocab_reg_entropy_floor,
+        )
+        arm, distill_weight = as_arm(technique), technique.distill_weight
+    else:
+        arm = ARMS[args.arm]
+        if args.vocab_reg_entropy_floor is not None:
+            # Whitelisted field, so this keeps the confound check valid (arms may differ in it).
+            arm = replace(arm, vocab_reg_entropy_floor=args.vocab_reg_entropy_floor)
+
+    # Build from the CHECKPOINT'S OWN config when there is one. A strict load requires the
+    # architecture to match the weights exactly, and --rung can only name a registered factory
+    # with this project's vocab size -- fine for the study's own rungs, not for an arbitrary
+    # pretrained model (an MoE especially, whose expert shape lives in its config). The saved
+    # config is the only description guaranteed to match. --rung stays the fallback.
+    model_config = read_model_config(args.init_checkpoint) if args.init_checkpoint else None
+    if model_config is not None:
+        print("[model] building from the checkpoint's own config.json (ignoring --rung)")
+        model = build_model_from_config(model_config, device=device, attn_backend=args.attn_backend)
+    else:
+        model = build_model(
+            args.rung, init_seed=args.init_seed, device=device, attn_backend=args.attn_backend
+        )
     if args.init_checkpoint:
-        # Fork the shared base (the "best model") — a .pt state_dict or a local/S3 ckpt dir.
         load_checkpoint(model, args.init_checkpoint)
+        # The control tokens live in dolma2's padding; fail loudly here rather than index out of
+        # the embedding mid-training if this checkpoint's vocab is smaller.
+        assert_control_tokens_fit(model)
 
     train_ds = LatentCotDataset(args.train_data, args.num_continuous_thoughts)
 
@@ -202,7 +260,9 @@ def main() -> None:
     # --out may be a remote URI (the platform passes $EDULLM_CHECKPOINT_DIR, an s3:// prefix).
     # Path() would silently rewrite that to a relative local dir named "s3:" and the artifacts
     # would vanish with the container, so stage locally and mirror every write to the URI.
-    leaf = f"{args.arm}-seed{args.seed}"
+    # "A2-seed1" for an experiment arm, "codi-r1-seed1" for a technique -- args.arm is None in
+    # the latter case, so key off whichever selector was used.
+    leaf = f"{args.arm or args.technique}-seed{args.seed}"
     remote_dir: Optional[str] = None
     if is_remote(args.out):
         remote_dir = f"{str(args.out).rstrip('/')}/{leaf}"
@@ -218,7 +278,9 @@ def main() -> None:
     # confound control is *about*, so they have to be visible on the run.
     run_config = {
         "arm": arm.name,
+        "technique": args.technique,
         "rung": args.rung,
+        "built_from_checkpoint_config": model_config is not None,
         "init_seed": args.init_seed,
         "seed": args.seed,
         "steps": args.steps,
@@ -266,6 +328,7 @@ def main() -> None:
             steps=args.steps,
             batch_size=args.batch_size,
             lr=args.lr,
+            distill_weight=distill_weight,
             warmup_steps=args.warmup_steps,
             seed=args.seed,
             log_every=args.log_every,

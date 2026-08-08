@@ -41,6 +41,8 @@ from .moe import (
 
 __all__ = [
     "PRECISIONS",
+    "build_model_from_config",
+    "read_model_config",
     "autocast_ctx",
     "build_model",
     "configure_precision",
@@ -163,6 +165,85 @@ def autocast_ctx(precision: str, device: str) -> ContextManager:
     if _check_precision(precision) == "bf16" and device.startswith("cuda"):
         return torch.autocast(device_type="cuda", dtype=torch.bfloat16)
     return contextlib.nullcontext()
+
+
+def read_model_config(checkpoint_path: str) -> Optional[Dict[str, Any]]:
+    """
+    Read the model config OLMo-core saves beside a checkpoint, if there is one.
+
+    :class:`~olmo_core.train.callbacks.ConfigSaverCallback` writes the whole experiment config to
+    ``config.json`` in the checkpoint directory, and its ``model`` key is a serialized
+    :class:`~olmo_core.nn.transformer.TransformerConfig`. That is the only description of the
+    architecture that is guaranteed to match the weights.
+
+    Probed at the checkpoint directory and one level up, because a caller may legitimately point
+    at the step directory, at the ``model_and_optim/`` inside it, or straight at a ``.pt`` file
+    (whose parent directory is where the config would be).
+
+    :param checkpoint_path: A checkpoint directory or URI (a plain ``.pt`` file has no config).
+    :returns: The ``model`` sub-config as a dict, or ``None`` if no ``config.json`` was found.
+    """
+    import json
+
+    from olmo_core.io import file_exists
+
+    root = str(checkpoint_path).rstrip("/")
+    # A caller may point at a step directory, at the `model_and_optim/` inside it, or straight at
+    # a `.pt` file. Build the candidate list by walking up rather than appending "..", which does
+    # not resolve past a non-directory component and silently found nothing for the `.pt` case.
+    if Path(root).is_file():
+        root = str(Path(root).parent)
+    parent = root.rsplit("/", 1)[0] if "/" in root else root
+    for candidate in (f"{root}/config.json", f"{parent}/config.json"):
+        if not file_exists(candidate):
+            continue
+        from cached_path import cached_path
+
+        try:
+            config = json.loads(Path(str(cached_path(candidate))).read_text())
+        except BaseException:  # noqa: BLE001 -- an unreadable config is a "not found", not a crash
+            continue
+        model_config = config.get("model") if isinstance(config, dict) else None
+        if isinstance(model_config, dict):
+            return model_config
+    return None
+
+
+def build_model_from_config(
+    model_config: Dict[str, Any], *, device: str = "cpu", attn_backend: Optional[str] = None
+):
+    """
+    Build a model from a serialized ``TransformerConfig`` — the way to load an *arbitrary*
+    pretrained checkpoint.
+
+    Prefer this over :func:`build_model` for post-training a real model. ``build_model`` can only
+    name a registered ``TransformerConfig`` factory and hardcodes this project's vocab size, so it
+    can only reproduce architectures that happen to have a factory. Loading is ``strict=True``, so
+    the built architecture has to match the weights exactly; reading the checkpoint's own config is
+    the only way to guarantee that. Verified to round-trip exactly for MoE configs too, which
+    rebuild as :class:`~olmo_core.nn.transformer.MoETransformer` with their expert parameters.
+
+    No ``init_seed``: every parameter is about to be overwritten by a strict load, so a
+    deterministic init buys nothing here. (It mattered for the experiment, where arms had to share
+    a random start.)
+
+    :param model_config: From :func:`read_model_config`.
+    :param device: Where to build.
+    :param attn_backend: Optional override, for an image whose kernels do not match what the
+        checkpoint's config asks for (see :func:`build_model`).
+
+    :returns: The built, randomly-initialized model, ready for :func:`load_checkpoint`.
+    """
+    from olmo_core.nn.transformer import TransformerConfig
+
+    config = TransformerConfig.from_dict(model_config)
+    if attn_backend is not None:
+        # Only where the config actually carries a backend, so this cannot invent a field.
+        block = getattr(config, "block", None)
+        attention = getattr(block, "attention", None)
+        if attention is not None and hasattr(attention, "backend"):
+            attention.backend = attn_backend
+    return config.build(init_device=device)
 
 
 def load_checkpoint(model, path: str, *, strict: bool = True) -> None:

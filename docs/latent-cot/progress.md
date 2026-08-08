@@ -217,3 +217,58 @@ no CUDA and cannot install triton. They need one GPU run before the MoE pilot is
 still open: `--rung` must name an MoE factory that takes `(vocab_size, **kwargs)` (e.g.
 `olmoe_1B_7B`); `llama_like_moe` needs explicit expert args and cannot be reached through that flag
 as written. Exact MoE hyperparameters are pending from the user.
+
+## 2026-08-08 — Reframed as post-training techniques (new: `techniques.py`)
+
+The experiment is no longer the deliverable; the **final model** is. The five arms are now a catalog
+of **selectable post-training techniques**, so that when the results say which one wins, naming it
+is a flag rather than a code change. The experiment path (`--arm A0..A4`) is kept intact so the
+study's runs stay reproducible.
+
+**Where this sits:** post-training, SFT stage. Every technique starts from a pretrained checkpoint.
+
+- **`latentcot/techniques.py`** (new): `TECHNIQUES` keyed by readable name, `get_technique(name,
+  **overrides)`, `as_arm()` (so selection changes nothing downstream), `describe_techniques()` for
+  `--list-techniques`. Seven entries — the five arms plus the two combinations that were implemented
+  and wired to no arm: `codi-r2` (nearest-embedding reg) and `codi-r1-entropy` (R1's anti-collapse
+  entropy floor). A test pins that the five arm-derived techniques still mean exactly what those
+  arms meant, so the study's results keep applying.
+- **`train_codi.py`**: `--technique` (mutually exclusive with `--arm`), `--list-techniques`, and the
+  run label / `metrics.json` / W&B config now record which technique was used.
+
+**`Technique.needs_cot_data` is not decoration.** CODI trains a teacher branch on the written-out
+chain of thought and aligns the latent thoughts to its `<distill>` hidden state, so every `codi-*`
+technique needs examples carrying *both* views. On post-training data with no reasoning traces the
+distillation term has nothing to distill from and the latent techniques degrade to a slower
+`no-cot`. Only `no-cot` runs on ordinary SFT data. **This is a data requirement for the final
+model**, and the synthetic BFS traces the study used will not be there.
+
+### Loading an arbitrary pretrained model (the gap that blocked "yes")
+
+`build_model` can only name a registered `TransformerConfig` factory and hardcodes this project's
+vocab size. Loading is `strict=True`, so the built architecture has to match the weights exactly —
+fine for the study's own rungs, useless for an arbitrary pretrained MoE whose expert shape lives in
+its own config, and `--rung` cannot reach `llama_like_moe` at all.
+
+- **`read_model_config(path)`** reads the `model` key out of the `config.json` that
+  `ConfigSaverCallback` writes beside every checkpoint. Probes the step dir, one level up, and the
+  parent of a `.pt` file.
+- **`build_model_from_config(cfg)`** rebuilds from it. Verified: `TransformerConfig.from_dict` round-
+  trips exactly, including MoE configs, which rebuild as `MoETransformer` with their expert
+  parameters and strict-load cleanly.
+- `train_codi.py` prefers the checkpoint's config over `--rung` automatically, and says so.
+- **`tokens.assert_control_tokens_fit(model)`** runs after the load. The four control tokens sit at
+  `padded_vocab_size - 1..4`, safe only because dolma2 pads 100278 real tokens to 100352 and leaves
+  those rows unused. A checkpoint with a smaller vocab would index off the end of the embedding
+  mid-training; now it fails at load, naming the assumption.
+
+Verified end-to-end on CPU: a fixture checkpoint (weights + `config.json`) with `--rung` deliberately
+naming a factory that does not exist trains under `--technique codi-r1`, building from the config,
+strict-loading, and recording `built_from_checkpoint_config: true`.
+
+**Still not confirmable from here:** whether a real pretrained MoE loads. Two unknowns remain — an
+expert-parallel-sharded checkpoint relies on DCP resharding into a single-GPU non-EP model, and the
+tokenizer must actually be dolma2 (confirmed as the intent; the guard now enforces the vocab size).
+`verify_checkpoint.py` settles both on real hardware in about a minute and should be the first thing
+run against the real checkpoint. Suite: **207 passed, 9 skipped** (the 9 are the GPU MoE tests,
+still never executed).

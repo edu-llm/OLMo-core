@@ -27,6 +27,7 @@ __all__ = [
     "SPECIAL_TOKENS",
     "load_tokenizer",
     "encode",
+    "assert_control_tokens_fit",
 ]
 
 TOKENIZER_CONFIG = TokenizerConfig.dolma2()
@@ -39,6 +40,46 @@ EOT = PADDED_VOCAB_SIZE - 2  # end-of-thought (end of the reasoning region)
 DISTILL = PADDED_VOCAB_SIZE - 3  # alignment token; hidden state distilled teacher->student
 THOUGHT = PADDED_VOCAB_SIZE - 4  # placeholder for a student latent slot (embedding overwritten)
 SPECIAL_TOKENS = {"BOT": BOT, "EOT": EOT, "DISTILL": DISTILL, "THOUGHT": THOUGHT}
+
+
+def assert_control_tokens_fit(model) -> None:
+    """
+    Check a loaded model can actually host the control tokens, and say so clearly if not.
+
+    The four control tokens are placed at ``padded_vocab_size - 1 .. -4``, which is safe *only*
+    because dolma2 pads 100278 real tokens up to 100352 embedding rows and leaves those last rows
+    unused. Two things therefore have to hold of any checkpoint fine-tuned here, and neither is
+    guaranteed by a strict weight load:
+
+    1. The model has at least :data:`PADDED_VOCAB_SIZE` embedding rows. Fewer, and the control ids
+       are out of range — an index error deep in the embedding lookup rather than anything
+       readable. More is fine.
+    2. Those rows are genuinely spare. If a checkpoint's tokenizer used them for real tokens, the
+       run would train ``<bot>`` on top of a real embedding and quietly corrupt it. This function
+       cannot see the checkpoint's tokenizer, so it checks what it can and names the assumption in
+       the message.
+
+    Call it after :func:`~olmo_core.latentcot.train_driver.load_checkpoint`, before training.
+
+    :param model: A built transformer with its weights loaded.
+
+    :raises ValueError: If the embedding is too small for the control tokens, naming the shape
+        found, the shape needed, and the tokenizer assumption behind it.
+    """
+    embeddings = getattr(model, "embeddings", None)
+    weight = getattr(embeddings, "weight", None)
+    if weight is None:
+        return  # no embedding to check (a pipeline-parallel stage); nothing to assert
+    rows = int(weight.shape[0])
+    if rows < PADDED_VOCAB_SIZE:
+        raise ValueError(
+            f"this checkpoint's embedding has {rows} rows, but the latent-CoT control tokens "
+            f"({', '.join(f'{k}={v}' for k, v in SPECIAL_TOKENS.items())}) need at least "
+            f"{PADDED_VOCAB_SIZE}. Those ids are the top four rows of dolma2's padded vocab "
+            f"({VOCAB_SIZE} real tokens padded to {PADDED_VOCAB_SIZE}), which this module assumes "
+            "are unused. A checkpoint on a different tokenizer needs the control tokens replaced "
+            "in olmo_core.latentcot.tokens, not this check relaxed."
+        )
 
 
 @lru_cache(maxsize=1)
