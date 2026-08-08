@@ -170,6 +170,16 @@ def build_parser():
         "to find that out for a few dollars than for a few hundred.",
     )
     parser.add_argument(
+        "--z-loss-multiplier",
+        type=float,
+        default=1e-5,
+        help="Auxiliary loss on the log-partition, which the 370M configuration calls for and "
+        "which train_on_corpus leaves unset. It is the cheapest instrument for the failure "
+        "this architecture is most exposed to: RMSNorm readouts are scale-invariant, so "
+        "cross-entropy cannot see hidden-state scale at all, and the rehearsal's hidden norms "
+        "swung by 50% with nothing in the loss curve reflecting it. Set to 0 to disable.",
+    )
+    parser.add_argument(
         "--partial-rotary-factor",
         type=float,
         default=None,
@@ -241,6 +251,9 @@ def build_config(opts, overrides):
     # shuffle, set above.
     config.init_seed = config.init_seed + opts.seed
     config.model.init_seed = config.model.init_seed + opts.seed
+
+    if opts.z_loss_multiplier > 0:
+        config.train_module.z_loss_multiplier = opts.z_loss_multiplier
 
     config.train_module.optim.weight_decay = opts.weight_decay
     if opts.arm != "decay-everything":
@@ -356,6 +369,7 @@ def _add_held_out_evaluation(config, opts):
                 work_dir=config.dataset.work_dir,
             ),
             eval_interval=opts.eval_interval,
+            eval_on_startup=True,
             eval_on_finish=True,
         ),
     )

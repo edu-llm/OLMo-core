@@ -60,14 +60,21 @@ class HyperConnectionMonitorCallback(Callback):
     been answered.
     """
 
-    min_lane_norm_spread: float = 1e-3
+    min_lane_norm_spread: float = 5e-3
     """
     The relative spread -- standard deviation of the per-lane norms over their mean -- below
     which the lanes count as identical and the mechanism as inert.
+
+    Set from measurement rather than from caution. The rehearsal read 6.4e-4 at step 10, while
+    the lanes were still separating, and settled in the 2e-2 to 4e-2 band once they had. The
+    original 1e-3 sat below everything it would ever see and could only have caught a total
+    failure; this sits an order of magnitude above the inert reading and four times below the
+    working one.
     """
 
     _handles: Optional[list] = dataclasses.field(default=None, repr=False)
     _lane_spreads: Dict[str, float] = dataclasses.field(default_factory=dict, repr=False)
+    _in_training_step: bool = dataclasses.field(default=False, repr=False)
 
     def post_attach(self):
         if not self.enabled:
@@ -94,6 +101,16 @@ class HyperConnectionMonitorCallback(Callback):
     def _measuring(self) -> bool:
         return self.enabled and self.step % self.interval == 0
 
+    def pre_step(self, batch):
+        del batch
+        self._in_training_step = True
+
+    def post_train_batch(self):
+        # Cleared before post_step, which is where the evaluators run. Everything below this
+        # line in the step is a forward pass over held-out data, and the forward hook must not
+        # read it.
+        self._in_training_step = False
+
     def pre_train(self):
         if not self.enabled:
             return
@@ -108,6 +125,13 @@ class HyperConnectionMonitorCallback(Callback):
     @torch.no_grad()
     def _activation_hook(self, module, args, output, block_name: str):
         del module, args
+        # `_in_training_step` and not `module.training`: the evaluator's own comment says it
+        # means to put the model in eval mode and the line is commented out, so the module
+        # flag stays True through an evaluation. Reading the eval forward pass instead of the
+        # training one understated lane spread by 11-50% in the rehearsal, worst at the step
+        # that lands in the run summary.
+        if not self._in_training_step:
+            return
         if not self._measuring() or not isinstance(output, torch.Tensor) or output.ndim != 4:
             return
 

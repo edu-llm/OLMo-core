@@ -76,6 +76,20 @@ def attach(model, **kwargs) -> HyperConnectionMonitorCallback:
     return callback
 
 
+def training_step(callback, model, batch=None, micro_batches: int = 1):
+    """
+    A forward pass bracketed the way the trainer brackets one. The monitor only reads
+    activations between `pre_step` and `post_train_batch`, so a bare `model(...)` is invisible
+    to it by design -- that is what keeps the evaluator's forward pass out of the metrics.
+    """
+    batch = torch.randint(0, VOCAB_SIZE, (2, SEQ_LEN)) if batch is None else batch
+    callback.pre_step({"input_ids": batch})
+    for _ in range(micro_batches):
+        out = model(batch)
+    callback.post_train_batch()
+    return out
+
+
 def test_optim_group_overrides_split_static_from_dynamic():
     """
     "The static component does not utilize weight decay, whereas the dynamic component does."
@@ -113,7 +127,7 @@ def test_monitor_records_the_four_diagnostics():
     model = build_model(HyperConnectionConfig(n_lanes=4))
     callback = attach(model)
 
-    model(torch.randint(0, VOCAB_SIZE, (2, SEQ_LEN)))
+    training_step(callback, model)
     callback.pre_optim_step()
 
     metrics = callback.trainer.metrics  # type: ignore[attr-defined]
@@ -143,7 +157,7 @@ def test_doubly_stochastic_pins_the_spectral_radius_at_one():
             for stream in (block.attention_residual_stream, block.feed_forward_residual_stream):
                 stream.hc_static_alpha_r.add_(torch.randn_like(stream.hc_static_alpha_r))
 
-    model(torch.randint(0, VOCAB_SIZE, (2, SEQ_LEN)))
+    training_step(callback, model)
     callback.pre_optim_step()
 
     metrics = callback.trainer.metrics  # type: ignore[attr-defined]
@@ -159,7 +173,7 @@ def test_fail_closed_when_the_lanes_never_differentiate():
     model = build_model(HyperConnectionConfig(n_lanes=4))
     callback = attach(model, fail_closed_by_step=0)
 
-    model(torch.randint(0, VOCAB_SIZE, (2, SEQ_LEN)))
+    training_step(callback, model)
     with pytest.raises(RuntimeError, match="lanes are still identical"):
         callback.pre_optim_step()
 
@@ -173,7 +187,7 @@ def test_fail_closed_passes_once_the_lanes_differentiate():
             for stream in (block.attention_residual_stream, block.feed_forward_residual_stream):
                 stream.hc_static_beta.add_(torch.randn_like(stream.hc_static_beta) * 0.3)
 
-    model(torch.randint(0, VOCAB_SIZE, (2, SEQ_LEN)))
+    training_step(callback, model)
     callback.pre_optim_step()
 
     assert callback.fail_closed_by_step is None
@@ -200,10 +214,39 @@ def test_monitor_only_measures_on_the_interval():
     callback.post_attach()
     callback.pre_train()
 
-    model(torch.randint(0, VOCAB_SIZE, (2, SEQ_LEN)))
+    training_step(callback, model)
     callback.pre_optim_step()
 
     assert callback.trainer.metrics == {}  # type: ignore[attr-defined]
+
+
+def test_the_monitor_ignores_forward_passes_that_are_not_training_steps():
+    """
+    An evaluator runs a forward pass in post_step, after post_train_batch. The forward hook
+    fires on it too, and it is over held-out padded sequences rather than the training batch.
+    In the rehearsal that understated lane spread by 11-50%, worst at the last step of the run
+    -- which is the value that lands in the run summary.
+
+    Gating on the training step rather than on `module.training`, because the evaluator's own
+    comment says it means to switch the model to eval mode and the line is commented out.
+    """
+    model = build_model(HyperConnectionConfig(n_lanes=4))
+    callback = attach(model)
+    batch = torch.randint(0, VOCAB_SIZE, (2, SEQ_LEN))
+
+    # A forward pass before any training step -- eval_on_startup does exactly this.
+    model(batch)
+    assert callback.trainer.metrics == {}, "captured a forward pass outside a training step"  # type: ignore[attr-defined]
+
+    callback.pre_step({"input_ids": batch})
+    model(batch)
+    callback.post_train_batch()
+    captured = dict(callback.trainer.metrics)  # type: ignore[attr-defined]
+    assert captured, "did not capture the training step"
+
+    # The evaluator's forward pass, after post_train_batch. Must change nothing.
+    model(batch * 0 + 1)
+    assert callback.trainer.metrics == captured  # type: ignore[attr-defined]
 
 
 def test_gradient_accumulation_does_not_drop_the_lane_metrics():
@@ -216,9 +259,7 @@ def test_gradient_accumulation_does_not_drop_the_lane_metrics():
     model = build_model(HyperConnectionConfig(n_lanes=4))
     callback = attach(model)
 
-    batch = torch.randint(0, VOCAB_SIZE, (2, SEQ_LEN))
-    for _ in range(8):  # eight micro-batches inside one optimizer step
-        model(batch)
+    training_step(callback, model, micro_batches=8)
     callback.pre_optim_step()
 
     assert "hc/block 00/lane 0 norm" in callback.trainer.metrics  # type: ignore[attr-defined]
@@ -236,7 +277,7 @@ def test_reduce_type_is_stable_for_every_metric_across_steps():
     for step in range(3):
         callback.trainer.global_step = step  # type: ignore[attr-defined]
         callback.trainer.seen_this_step.clear()  # type: ignore[attr-defined]
-        model(torch.randint(0, VOCAB_SIZE, (2, SEQ_LEN)))
+        training_step(callback, model)
         callback.pre_optim_step()
 
     assert len(callback.trainer.reduce_types) > 10  # type: ignore[attr-defined]
@@ -245,7 +286,7 @@ def test_reduce_type_is_stable_for_every_metric_across_steps():
 def test_metric_names_are_stable_across_layers():
     model = build_model(HyperConnectionConfig(n_lanes=2))
     callback = attach(model)
-    model(torch.randint(0, VOCAB_SIZE, (2, SEQ_LEN)))
+    training_step(callback, model)
     callback.pre_optim_step()
 
     labels: List[str] = sorted(

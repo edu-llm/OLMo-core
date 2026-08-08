@@ -188,6 +188,43 @@ open-web-math 1.74, starcoder 1.98, dclm 2.03, pes2o 2.06, wiki 2.17 at step 200
 therefore high, but already spread by a wide enough margin that a pooled average over them
 would be the wrong statistic.
 
+### What analysing it changed
+
+Three findings from the run's own telemetry, two of them bugs in this branch.
+
+**The monitor was reading the evaluator's forward pass.** The hook fires on every forward, and
+the held-out evaluation runs in `post_step` — so on eval steps the lane norms came from padded
+held-out sequences rather than the training batch, reading 11% to 50% low. Worst at step 200,
+which is the value that lands in the run summary: block 02's spread reads 0.0237 there against
+a true 0.0470 ten steps earlier. Gating on `module.training` would not have worked, because the
+evaluator's own `self.trainer.model.eval()` line is commented out. It now gates on being
+between `pre_step` and `post_train_batch` instead.
+
+**The fail-closed floor was unreachable.** 1e-3 sat below anything the run ever produced —
+6.4e-4 while the lanes were still separating, 2e-2 to 4e-2 once they had. It could only have
+caught total failure. Now 5e-3: an order of magnitude above the inert reading, four times below
+the working one.
+
+**z-loss was off, though the configuration calls for it.** `train_on_corpus` never sets
+`z_loss_multiplier`, so `train/Z loss` was never written. That matters more here than usual:
+RMSNorm readouts are scale-invariant, so cross-entropy cannot see hidden-state scale at all,
+and the rehearsal's hidden norms rose 50% and then gave back a third with nothing in the loss
+curve reflecting either move. Now on at 1e-5.
+
+Two more worth recording without a code change. Lane differentiation **peaks mid-run and then
+retreats**, correlating with the learning rate at r = 0.72 — so a short run's endpoint
+understates it, and thresholds should not be ported from this rehearsal to a differently-shaped
+schedule. And **block 0's attention spectral radius is the only one of sixteen that never turns
+over**: every other block peaks by step 160 and decays, while block 0 climbs monotonically to
+1.196. It sits at the input end, where its amplification compounds through everything above it.
+That is the one to watch at 370M.
+
+Still outstanding: `bytes_per_token` is a single constant across all seven sources, so the
+per-source BPB is a rigid rescaling of CE and carries no cross-source information. Arm-to-arm
+comparison *within* a source is unaffected, which is what the decision rule actually rests on,
+so this is a reporting defect rather than a scientific one — but the cross-source ordering
+above should not be read as bits-per-byte until the per-source constants are measured.
+
 ## What the first three rehearsals found, for about $4 each
 
 They died, which is what they were for.
