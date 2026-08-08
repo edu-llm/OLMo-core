@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `l2_normalize` no longer returns `NaN` for an all-zero slice. It was a bare `x / ||x||`, so `0/0` produced `NaN` in the forward and non-finite gradients in the backward — measured on a recurrent mixer, a single all-zero query row poisoned the gradients of 4 of 5 operator inputs and all 19 module parameters. The divisor is now clamped below by a new `eps` argument (default `1e-6`), matching the guard `torch.nn.functional.normalize` already applies; pass `eps=0.0` for the previous behavior. Normal inputs are unaffected: measured `max|before - after| = 0.0` over float32 and bfloat16 batches at scales 1.0, 1e-2 and 1e-4. This also covers the three other call sites — `FeedForward`/`LMHead` weight normalization and nGPT's `L2Norm` — where a zero row was silently corrupting rather than raising.
 - The CPU `Test` CI job now caches `HF_HOME` across runs so the HuggingFace roundtrip tests (Qwen3-0.6B, Gemma-3-270m) don't re-download their checkpoints every run.
 - Excluded `mark_dynamic` from `torch.compile` tracing (`@torch.compiler.disable`).
 - Clearer error messages (now include the offending values) when a rank batch size isn't divisible by the sequence length, or `max_target_sequence_length` isn't a multiple of `sequence_length`.

@@ -1,0 +1,62 @@
+scope	seed	length	triton_pp	torch_pp	triton_minus_torch	claimed	abs_delta	status
+per_seed	0	40	100.0000	100.0000	0.0000	0.00	0.0000	EXACT
+per_seed	0	64	100.0000	100.0000	0.0000	0.00	0.0000	EXACT
+per_seed	0	128	84.8145	89.7583	-4.9438	-4.94	0.0038	EXACT
+per_seed	0	256	43.1885	46.8872	-3.6987	-3.70	0.0013	EXACT
+per_seed	0	512	21.3043	23.8159	-2.5116	-2.51	0.0016	EXACT
+per_seed	1	40	100.0000	100.0000	0.0000	0.00	0.0000	EXACT
+per_seed	1	64	100.0000	100.0000	0.0000	0.00	0.0000	EXACT
+per_seed	1	128	87.9517	93.7012	-5.7495	-5.75	0.0005	EXACT
+per_seed	1	256	46.8567	52.0508	-5.1941	-5.19	0.0041	EXACT
+per_seed	1	512	23.7549	25.4730	-1.7181	-1.72	0.0019	EXACT
+per_seed	2	40	100.0000	100.0000	0.0000	0.00	0.0000	EXACT
+per_seed	2	64	100.0000	100.0000	0.0000	0.00	0.0000	EXACT
+per_seed	2	128	95.8496	94.2139	1.6357	1.64	0.0043	EXACT
+per_seed	2	256	54.9072	53.5278	1.3794	1.38	0.0006	EXACT
+per_seed	2	512	28.6316	26.8677	1.7639	1.76	0.0039	EXACT
+per_seed	3	40	100.0000	100.0000	0.0000	0.00	0.0000	EXACT
+per_seed	3	64	100.0000	100.0000	0.0000	0.00	0.0000	EXACT
+per_seed	3	128	89.0259	94.0186	-4.9927	-4.99	0.0027	EXACT
+per_seed	3	256	47.6440	51.1658	-3.5217	-3.52	0.0017	EXACT
+per_seed	3	512	24.4965	26.1169	-1.6205	-1.62	0.0005	EXACT
+per_seed	4	40	100.0000	100.0000	0.0000	0.00	0.0000	EXACT
+per_seed	4	64	99.7070	100.0000	-0.2930	-0.29	0.0030	EXACT
+per_seed	4	128	68.2617	76.8066	-8.5449	-8.54	0.0049	EXACT
+per_seed	4	256	34.8267	39.1052	-4.2786	-4.28	0.0014	EXACT
+per_seed	4	512	17.7826	20.0195	-2.2369	-2.24	0.0031	EXACT
+per_seed	5	40	100.0000	100.0000	0.0000	0.00	0.0000	EXACT
+per_seed	5	64	100.0000	100.0000	0.0000	0.00	0.0000	EXACT
+per_seed	5	128	95.7397	94.2871	1.4526	1.45	0.0026	EXACT
+per_seed	5	256	53.2288	51.0559	2.1729	2.17	0.0029	EXACT
+per_seed	5	512	27.4017	26.0620	1.3397	1.34	0.0003	EXACT
+per_seed	6	40	100.0000	100.0000	0.0000	0.00	0.0000	EXACT
+per_seed	6	64	100.0000	100.0000	0.0000	0.00	0.0000	EXACT
+per_seed	6	128	91.1133	93.9575	-2.8442	-2.84	0.0042	EXACT
+per_seed	6	256	49.9817	52.9297	-2.9480	-2.95	0.0020	EXACT
+per_seed	6	512	24.5605	26.9409	-2.3804	-2.38	0.0004	EXACT
+per_seed	7	40	100.0000	100.0000	0.0000	0.00	0.0000	EXACT
+per_seed	7	64	100.0000	100.0000	0.0000	0.00	0.0000	EXACT
+per_seed	7	128	96.0693	92.4805	3.5889	3.59	0.0011	EXACT
+per_seed	7	256	54.3457	51.6968	2.6489	2.65	0.0011	EXACT
+per_seed	7	512	28.1311	26.4191	1.7120	1.71	0.0020	EXACT
+per_seed_mean_nonceiling	0	64|128|256|512	NA	NA	-2.7885	-2.79	0.0015	EXACT
+per_seed_mean_nonceiling	1	64|128|256|512	NA	NA	-3.1654	-3.17	0.0046	EXACT
+per_seed_mean_nonceiling	2	64|128|256|512	NA	NA	1.1948	1.19	0.0048	EXACT
+per_seed_mean_nonceiling	3	64|128|256|512	NA	NA	-2.5337	-2.53	0.0037	EXACT
+per_seed_mean_nonceiling	4	64|128|256|512	NA	NA	-3.8383	-3.84	0.0017	EXACT
+per_seed_mean_nonceiling	5	64|128|256|512	NA	NA	1.2413	1.24	0.0013	EXACT
+per_seed_mean_nonceiling	6	64|128|256|512	NA	NA	-2.0432	-2.04	0.0032	EXACT
+per_seed_mean_nonceiling	7	64|128|256|512	NA	NA	1.9875	1.99	0.0025	EXACT
+#--- per-length tests (n = seeds) ---
+scope	length	n	mean_pp	sd	ci_lo	ci_hi	t	p	verdict	author_verdict	note
+per_length	40	8	0.0000	0.0000	0.0000	0.0000	NA	1.000e+00	ns_IDENTICAL	ns	all_seeds_identical
+per_length	64	8	-0.0366	0.1036	-0.1232	0.0500	-1.0000	3.506e-01	ns	ns	
+per_length	128	8	-2.5497	4.2960	-6.1413	1.0418	-1.6787	1.371e-01	ns	ns	
+per_length	256	8	-1.6800	3.1875	-4.3448	0.9848	-1.4907	1.796e-01	ns	ns	
+per_length	512	8	-0.7065	1.9420	-2.3301	0.9171	-1.0289	3.377e-01	ns	ns	
+#--- pooled ---
+pooled	64|128|256|512	8	-1.2432	2.3200	-3.1828	0.6964	-1.5157	1.734e-01	ns	ns	claimed_-1.24_[-3.18,0.7]
+#--- sign test ---
+sign_test	NA	8	n_negative=5	NA	NA	NA	NA	0.7266	NA	NA	claimed_5/8_p=0.73
+#--- cluster structure ---
+clusters	NA	8	negative_n=5	range=[-3.84,-2.04]	positive_n=3	range=[1.19,1.99]	NA	NA	NA	NA	claimed_5_at_-2..-4_and_3_at_+1.2..+2

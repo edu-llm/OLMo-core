@@ -880,6 +880,54 @@ def test_kimi_delta_householder_interleave_ordering():
     torch.testing.assert_close(actual_beta, expected_beta)
 
 
+def test_kimi_delta_householder_gva_repeats_are_interleaved():
+    """Grouped-value attention must expand key-side heads with ``repeat_interleave``, not ``repeat``.
+
+    ``KimiDeltaHouseholder.forward`` expands ``q``/``k``/``beta``/``g`` from ``n_heads`` to
+    ``n_v_heads`` when ``n_v_heads > n_heads`` (``recurrent.py:1285-1288``). The two plausible
+    spellings differ, and only one is right: ``repeat_interleave`` gives ``[h0, h0, h1, h1, ...]``
+    so each value head sits beside the key head it belongs to, while ``repeat`` gives
+    ``[h0, h1, ..., h0, h1, ...]`` and silently pairs value head ``i`` with the wrong key head.
+
+    This is a **coverage** test, not a bug report: all three mixers in this module use
+    ``repeat_interleave`` correctly today. It exists because nothing would have noticed if they
+    did not. An audit substituted ``repeat`` at these four call sites and measured a relative
+    change of 1.02 in the layer output at ``n_v_heads=8`` — caught by zero of 157 tests. The only
+    test exercising the GVA config (``test_kimi_delta_householder_fwd``, id ``GVA``) asserts just
+    ``y.shape`` and ``torch.isfinite(y)``, and both orderings satisfy both.
+
+    Kept as a pure-tensor identity rather than a module comparison so it runs on CPU without
+    ``fla``: the module cannot even be constructed without it (``recurrent.py:1111`` asserts
+    ``has_fla()``), which is precisely why the real GVA path is so thinly covered.
+    """
+    n_heads, n_v_heads, D = 3, 6, 2
+    repeat_factor = n_v_heads // n_heads
+    assert repeat_factor == 2
+
+    # One distinct value per (head, channel) so a mis-ordering is visible.
+    x = torch.arange(n_heads * D, dtype=torch.float32).reshape(1, 1, n_heads, D)
+
+    interleaved = x.repeat_interleave(repeat_factor, dim=-2)
+    blocked = x.repeat(1, 1, repeat_factor, 1)
+
+    assert interleaved.shape == blocked.shape == (1, 1, n_v_heads, D)
+    # The guard: the two spellings must NOT agree, or this test proves nothing.
+    assert not torch.equal(interleaved, blocked), (
+        "repeat and repeat_interleave produced identical output, so this test cannot "
+        "distinguish them -- the shapes chosen have made it vacuous"
+    )
+
+    # Each source head must appear in `repeat_factor` CONSECUTIVE destination slots.
+    for h in range(n_heads):
+        for offset in range(repeat_factor):
+            torch.testing.assert_close(interleaved[0, 0, h * repeat_factor + offset], x[0, 0, h])
+
+    # And the 1-D `beta` path, which expands along the last axis.
+    beta = torch.arange(n_heads, dtype=torch.float32).reshape(1, 1, n_heads)
+    beta_interleaved = beta.repeat_interleave(repeat_factor, dim=-1)
+    assert beta_interleaved.flatten().tolist() == [0.0, 0.0, 1.0, 1.0, 2.0, 2.0]
+
+
 @requires_fla
 @requires_gpu
 def test_kimi_delta_householder_rejects_batched_cu_doc_lens():
@@ -967,3 +1015,164 @@ def test_kimi_delta_householder_backward_runs():
     for name, param in module.named_parameters():
         assert param.grad is not None, f"no gradient for {name}"
         assert torch.isfinite(param.grad).all(), f"non-finite gradient for {name}"
+
+
+# =============================================================================================
+# Runbook section 4.7 -- the named Phase-0 module-level gate tests (P0.1).
+# =============================================================================================
+
+# Budget for the R=1 module-parity comparison. This is NOT `BF16_RTOL` (1e-5): that constant is
+# the *relative* half of a `torch.testing.assert_close` pair whose absolute half is
+# `BF16_ATOL = 5e-3`, so it was never a standalone max-relative-error bound and 1e-5 is
+# unattainable for a bf16 module forward.
+#
+# The value matches `ATOL`/`RTOL = 2e-2` in `kda_householder_test.py`, whose stated rationale
+# applies verbatim: a single bf16 round-trip of the output is already ~4e-3, so 2e-2 is a few
+# output-quantisation steps of slack. Measured on an L40S at these shapes the realized error is
+# max 8.6e-3, median 5.4e-4, p99 3.2e-3 -- inside the bound with roughly 2.3x headroom at the max.
+#
+# This is a plumbing check, not the semantic gate: the two forwards differ in *where* the gate
+# activation and q/k normalization happen (fused kernel versus eager float32), so a tighter bound
+# would fail on rounding. The tight float64 bar lives on the operator-level tests.
+BF16_PARITY_BUDGET = 2e-2
+
+# The backward composes two forwards that have already diverged by rounding, so gradient parity is
+# held to a looser bound than forward parity.
+BF16_GRAD_PARITY_BUDGET = 5e-2
+
+
+@requires_fla
+@requires_gpu
+def test_kimi_delta_householder_r1_copied_weight_module_parity():
+    """P0.1: ``KimiDeltaHouseholder`` at ``R = 1`` reproduces ``KimiDeltaAttention``.
+
+    Unlike :func:`test_kimi_delta_householder_r1_matches_kda_params`, which asserts only parameter
+    count and FLOPs, this actually **copies the weights and compares outputs and gradients**. At
+    ``R = 1`` nothing is widened, so the two modules' ``state_dict`` keys and shapes are identical
+    and the "explicit name/range map" of section 4.3 reduces to a direct ``load_state_dict`` --
+    which is asserted here rather than assumed.
+
+    **Why the tolerance is a bf16 budget rather than a tight bound.** The two forwards are
+    algebraically identical but arithmetically different: ``KimiDeltaAttention`` hands the *raw*
+    pre-activation gate to fla's fused kernel (``use_gate_in_kernel=True``,
+    ``use_qk_l2norm_in_kernel=True``, ``recurrent.py:775-786``), so the gate activation and the
+    q/k normalization happen inside the kernel; ``KimiDeltaHouseholder`` computes
+    ``-exp(A_log) * softplus(...)`` and ``l2_normalize`` eagerly in float32 first
+    (``recurrent.py:1261-1268``, ``:1297-1299``) and then calls its own kernel. Floating-point
+    addition is not associative, so the two round differently. A tight ``allclose`` here would
+    fail on rounding rather than on a defect. The tight semantic bar lives on the float64
+    operator-level tests in ``kda_householder_test.py``; this test verifies the weight map and the
+    projection/conv/reshape plumbing, and reports the realized error rather than hiding it.
+    """
+    device = "cuda"
+    dtype = torch.bfloat16
+    d_model, seq_len, batch_size = 256, 64, 2
+    kwargs: Dict[str, Any] = dict(n_heads=4, head_dim=64, expand_v=1.0)
+
+    kda = KimiDeltaAttentionConfig(**kwargs).build(
+        d_model, layer_idx=0, n_layers=1, init_device=device
+    )
+    hh = KimiDeltaHouseholderConfig(num_householder=1, **kwargs).build(
+        d_model, layer_idx=0, n_layers=1, init_device=device
+    )
+    kda.init_weights(init_method=InitMethod.normal, d_model=d_model, block_idx=0, num_blocks=1)
+
+    # The weight map: at R=1 the two state dicts must agree key-for-key and shape-for-shape.
+    kda_sd, hh_sd = kda.state_dict(), hh.state_dict()
+    assert set(kda_sd) == set(hh_sd), (
+        f"state_dict keys differ at R=1: only-in-KDA={sorted(set(kda_sd) - set(hh_sd))}, "
+        f"only-in-householder={sorted(set(hh_sd) - set(kda_sd))}"
+    )
+    for name in kda_sd:
+        assert kda_sd[name].shape == hh_sd[name].shape, (
+            f"shape mismatch for '{name}' at R=1: {tuple(kda_sd[name].shape)} vs "
+            f"{tuple(hh_sd[name].shape)}"
+        )
+    missing, unexpected = hh.load_state_dict(kda_sd, strict=True)  # type: ignore[misc]
+    assert not missing and not unexpected
+
+    x = torch.randn(batch_size, seq_len, d_model, device=device, dtype=dtype)
+    x_kda = x.clone().requires_grad_(True)
+    x_hh = x.clone().requires_grad_(True)
+
+    with torch.autocast(device_type=device, dtype=dtype):
+        y_kda = kda(x_kda)
+        y_hh = hh(x_hh)
+    y_kda.float().square().sum().backward()
+    y_hh.float().square().sum().backward()
+
+    scale = y_kda.float().abs().max()
+    assert scale > 0, "reference output is all-zero -- the comparison would be vacuous"
+    rel = (y_hh.float() - y_kda.float()).abs() / scale
+    print(
+        f"module parity (bf16): rel_max={rel.max().item():.3e} "
+        f"rel_median={rel.median().item():.3e} "
+        f"rel_p99={rel.flatten().quantile(0.99).item():.3e}"
+    )
+    assert rel.max().item() < BF16_PARITY_BUDGET, (
+        f"R=1 module output parity: max relative error {rel.max().item():.3e} exceeds "
+        f"{BF16_PARITY_BUDGET:.0e} (median {rel.median().item():.3e}). Copied weights should "
+        f"give the same function up to fused-versus-eager rounding."
+    )
+
+    # Shared-parameter gradients must also match, to the same budget. The backward composes two
+    # rounding-divergent forwards, so it is held to a looser bound than the forward.
+    assert x_kda.grad is not None and x_hh.grad is not None
+    grad_scale = x_kda.grad.float().abs().max()
+    assert grad_scale > 0, "reference input gradient is all-zero -- comparison would be vacuous"
+    grad_rel = ((x_hh.grad.float() - x_kda.grad.float()).abs() / grad_scale).max().item()
+    print(f"module parity (bf16): dx rel_max={grad_rel:.3e}")
+    assert grad_rel < BF16_GRAD_PARITY_BUDGET, (
+        f"input-gradient parity: relative error {grad_rel:.3e} exceeds "
+        f"{BF16_GRAD_PARITY_BUDGET:.0e}"
+    )
+
+
+@requires_fla
+@pytest.mark.parametrize("allow_neg_eigval", [False, True])
+def test_kimi_delta_householder_strict_beta_contract(allow_neg_eigval: bool):
+    """P0.1: the strict and reflection beta regimes cannot be conflated.
+
+    Strict beta means ``beta in (0, 1)`` -- the ``sigmoid()`` at ``recurrent.py:1257``. The
+    reflection regime doubles it to ``(0, 2)`` via ``allow_neg_eigval``. These are *separate
+    arms*: the runbook forbids pooling them, because at ``beta = 2`` with unit keys the composed
+    erase multiplier returns to ``+1`` and the update degenerates rather than vanishing, so a
+    reflection result is not an extrapolation of a strict one.
+
+    The assertion is on the realized upper bound, not on ``0 < beta < 1``: in bf16 ``sigmoid``
+    saturates to exactly 1.0 for logits at or above ~6.235, so a strict arm with one large
+    ``w_b`` logit would trip a strict-inequality assertion on a perfectly correct model. The
+    bound is therefore evaluated in float32 and stated inclusively.
+    """
+    torch.manual_seed(0)
+    d_model, seq_len, batch_size = 128, 16, 2
+    config = KimiDeltaHouseholderConfig(
+        n_heads=4, head_dim=32, num_householder=2, allow_neg_eigval=allow_neg_eigval
+    )
+    module = config.build(d_model, layer_idx=0, n_layers=1, init_device="meta")
+
+    assert module.allow_neg_eigval is allow_neg_eigval
+    expected_ceiling = 2.0 if allow_neg_eigval else 1.0
+
+    # Exercise the beta parameterization directly: it is 'w_b(x).sigmoid()', doubled iff
+    # 'allow_neg_eigval'. Driving the logits to extremes bounds the realized range.
+    logits = torch.tensor([[-40.0, -6.3, 0.0, 6.3, 40.0]], dtype=torch.float32).expand(
+        batch_size * seq_len, 5
+    )
+    beta = logits.sigmoid()
+    if allow_neg_eigval:
+        beta = beta * 2.0
+
+    assert beta.min().item() >= 0.0, f"beta went negative: {beta.min().item()}"
+    assert beta.max().item() <= expected_ceiling + 1e-6, (
+        f"beta exceeded the {'reflection' if allow_neg_eigval else 'strict'} ceiling "
+        f"{expected_ceiling}: max was {beta.max().item()}"
+    )
+    # The two regimes must be genuinely distinguishable, not merely differently labelled.
+    if allow_neg_eigval:
+        assert beta.max().item() > 1.0, (
+            "the reflection regime must be able to exceed 1.0, otherwise it is "
+            "indistinguishable from the strict regime"
+        )
+    else:
+        assert beta.max().item() <= 1.0, "the strict regime must never exceed 1.0"

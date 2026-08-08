@@ -206,9 +206,22 @@ COPY . .
 # passed against on 2026-08-01 (129 tests, fp32 rel err 6.786e-06 with TRITON_F32_DEFAULT
 # set above), and reproducing that gate is the only evidence these kernels are correct here.
 #
-# The import assertion follows the same rule as the ones below it: naming the module a
-# workload reaches for, not the distribution. `import fla` would pass while the KDA kernel
-# module was broken.
+# MERGE NOTE (edullm/mixer-bakeoff, 2026-08-08): both parents pinned fla ==0.5.1 and disagreed
+# only on which assertions to make and whether to take the [cuda] extra. This block is the UNION
+# of the two, because each side checked something the other did not and both checks are cheap:
+#
+#   * `[cuda]` extra is kept from the core6 side -- that is the exact spelling the sm_80 KDA run
+#     (run_019fd7ad, exit 0 through training AND a 229.9M-token eval) was built with.
+#   * BOTH version assertions are kept. They read different sources: `importlib.metadata.version`
+#     reads the INSTALLED DISTRIBUTION, `fla.__version__` reads the IMPORTED MODULE. A resolver
+#     that satisfies the `.[fla]` extra with 0.4.1 alongside can make those two disagree, which
+#     is exactly the failure worth catching, and a record that derived one from the other could
+#     not fail.
+#   * The kernel-module import is kept from the core6 side: `import fla` passes while
+#     `fla.ops.kda` is broken.
+#   * `has_fla()` and the gated-KDA build assertion are kept from the kdaliv side: `has_fla()` is
+#     the function every mixer constructor actually calls, and building a `gated_conv=True`
+#     config is the only check that the NEW code path in this image is reachable at all.
 RUN set -eux; \
     python -m pip install --no-cache-dir "torch==2.9.0"; \
     python -m pip install --no-cache-dir ".[wandb]" boto3; \
@@ -217,7 +230,10 @@ RUN set -eux; \
     python -c "import torch; assert torch.__version__.startswith('2.9.0'), f'torch was moved off the pin: {torch.__version__}'"; \
     python -c "import torch; assert torch.version.cuda, 'the CUDA build of torch was replaced by a CPU wheel'"; \
     python -c "from importlib.metadata import version; v=version('flash-linear-attention'); assert v=='0.5.1', f'fla moved off the pin: {v}'"; \
+    python -c "import fla; assert fla.__version__ == '0.5.1', f'fla was moved off the pin: {fla.__version__}. 0.4.1 is exposed to fla #802, an illegal memory access in KDA backward.'"; \
     python -c "from fla.ops.kda import chunk_kda; from fla.ops.kda.naive import naive_recurrent_kda; print(chunk_kda.__module__)"; \
+    python -c "from olmo_core.nn.attention.flash_linear_attn_api import has_fla; assert has_fla(), 'fla is installed but has_fla() is False, so every recurrent mixer will refuse to build'"; \
+    python -c "from olmo_core.nn.attention import KimiDeltaAttentionConfig; from olmo_core.nn.gated_convolution import GatedCausalConv1d; c = KimiDeltaAttentionConfig(n_heads=8, gated_conv=True); m = c.build(512, layer_idx=0, n_layers=1, init_device='meta'); assert isinstance(m.q_conv1d, GatedCausalConv1d), 'gated_conv=True did not produce a gated convolution'; print('gated KDA builds, params:', c.num_params(512))"; \
     python -c "import boto3, wandb; from olmo_core.data import TokenizerConfig; from olmo_core.nn.transformer import TransformerConfig; print(TransformerConfig.olmo2_190M(vocab_size=TokenizerConfig.gpt2().padded_vocab_size()).__class__.__name__)"; \
     python -c "from olmo_core.nn.attention import KimiDeltaAttentionConfig; print(KimiDeltaAttentionConfig(n_heads=16, head_dim=64).num_params(1024))"; \
     python -c "from edullm_data.read import dataset_paths, resolve_latest; print(dataset_paths.__module__)"

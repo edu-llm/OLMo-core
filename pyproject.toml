@@ -112,9 +112,12 @@ multi_line_output = 3
 
 [tool.ruff]
 line-length = 100
-
-[tool.ruff.lint]
-ignore = ["F403", "F405", "E501"]
+# NOTE: 'exclude' belongs HERE, on [tool.ruff], and NOT on [tool.ruff.lint]. Ruff reads file
+# exclusion only from the top-level table, so the copy that used to sit under [tool.ruff.lint]
+# excluded nothing -- 'ruff check .' walked build/, dist/, doc/ and every research scratch
+# directory in the tree. That is why the platform's image build failed on 132 errors in files
+# nobody had touched: the build runs 'ruff check --no-cache .' at the repo root, and no agent/**
+# branch had ever triggered a build to notice.
 exclude = [
     ".bzr",
     ".direnv",
@@ -139,7 +142,17 @@ exclude = [
     "doc",
     "pretrain_data",
     "inference",
+    # Research scratch: one-off analysis and probe scripts kept for provenance, not for reuse.
+    # They are not imported by the package, not in the wheel, and not run by CI. Holding them to
+    # the library's lint rules would mean rewriting another agent's evidence trail to ship an
+    # image, which is a worse trade than excluding them.
+    "docs/dp2-kda",
+    "docs/kda-householder",
+    "probes",
 ]
+
+[tool.ruff.lint]
+ignore = ["F403", "F405", "E501"]
 
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["F401"]

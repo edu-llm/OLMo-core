@@ -61,3 +61,6 @@ site/
 /scratch/
 core
 /dataset-cache/
+
+# Scratch commit-message files; committing one is how a stale message ships as a tracked file.
+.commitmsg

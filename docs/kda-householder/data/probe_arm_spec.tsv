@@ -1,0 +1,34 @@
+# ARMS ARE REAL. --num-householder R is plumbed argv -> KimiDeltaHouseholderConfig(num_householder=R)
+#   -> KimiDeltaHouseholder.__init__ (recurrent.py:1098,1118,1140) widening w_k/w_v/w_b and k/v convs by R
+#   -> forward reshapes to the interleaved [B, T*R, H, D] layout (recurrent.py:1275-1295)
+#   -> chunk_kda_householder(..., num_householder=R) -> triton kernel loops tl.static_range(R) applying
+#      R sequential rank-1 delta updates per token (kda_householder.py:191 fwd, 377/425/440 bwd).
+#   NO aliasing: all 16 published n_params reproduced EXACTLY by an independent analytic model, and
+#   R1/R2/R4 accuracies differ substantially at every seed (checked, not assumed).
+# n_params in the JSON is the TOTAL (incl. embedding + head). mixer_only_params is derived here.
+#   The "~2.3x mixer params" claim is slightly overstated: true mixer ratio R4/R1 = 2.2108x, total 2.1729x.
+# NOTE wall_seconds in the all_night JSONs is FLAT in R (~42s for all of R=1,2,4) because s5_words CPU
+#   data generation costs ~25.8s of it (Python double loop). Wall time there is CPU-bound and is NOT
+#   evidence about R. The p12 grid (same configs, less CPU contention) DOES scale: parity R1=90.5s,
+#   R2=128.3s, R4=200.0s -- confirming R changes real GPU work.
+arm	mixer	R_num_householder	task	n_layers	total_params_json	mixer_only_params	embedding_params	head_params	norm_params	mixer_frac_of_total	total_ratio_vs_R1	mixer_ratio_vs_R1	n_seeds	seeds	backend	steps	allow_neg_eigval	analytic_param_model_matches_json	param_matched_control_exists
+kda_hhR1	kda_hh	1	s5_words	3	1029324	997068	512	30720	1024	0.9687	1.0000	1.0000	8	0-7	triton	2000	TRUE (hardcoded in published train_probe.py:48)	yes	NO
+kda_hhR2	kda_hh	2	s5_words	3	1431756	1399500	512	30720	1024	0.9775	1.3910	1.4036	8	0-7	triton	2000	TRUE (hardcoded in published train_probe.py:48)	yes	NO
+kda_hhR4	kda_hh	4	s5_words	3	2236620	2204364	512	30720	1024	0.9856	2.1729	2.2108	8	0-7	triton	2000	TRUE (hardcoded in published train_probe.py:48)	yes	NO
+kda_hhR1	kda_hh	1	parity	3	999116	997068	512	512	1024	0.9980	1.0000	1.0000	8	0-7	triton	2000	TRUE	yes	NO
+kda_hhR2	kda_hh	2	parity	3	1401548	1399500	512	512	1024	0.9985	1.4028	1.4036	8	0-7	triton	2000	TRUE	yes	NO
+kda_hhR4	kda_hh	4	parity	3	2206412	2204364	512	512	1024	0.9991	2.2084	2.2108	8	0-7	triton	2000	TRUE	yes	NO
+kda_hhR1	kda_hh	1	s3_words	3	1000140	997068	512	1536	1024	0.9969	1.0000	1.0000	5	0-4	triton	2000	TRUE	yes	NO
+kda_hhR4	kda_hh	4	s3_words	3	2207436	2204364	512	1536	1024	0.9986	2.2071	2.2108	5	0-4	triton	2000	TRUE	yes	NO
+kda_hhR1	kda_hh	1	s4_words	3	1004748	997068	512	6144	1024	0.9924	1.0000	1.0000	5	0-4	triton	2000	TRUE	yes	NO
+kda_hhR4	kda_hh	4	s4_words	3	2212044	2204364	512	6144	1024	0.9965	2.2016	2.2108	5	0-4	triton	2000	TRUE	yes	NO
+kda_hhR1	kda_hh	1	s5_words	1	364100	332356	512	30720	512	0.9128	1.0000	1.0000	5	0-4	triton	2000	TRUE	yes	NO
+kda_hhR4	kda_hh	4	s5_words	1	766532	734788	512	30720	512	0.9586	2.1053	2.2108	5	0-4	triton	2000	TRUE	yes	NO
+kda_hhR1	kda_hh	1	s5_words	2	696712	664712	512	30720	768	0.9541	1.0000	1.0000	5	0-4	triton	2000	TRUE	yes	NO
+kda_hhR4	kda_hh	4	s5_words	2	1501576	1469576	512	30720	768	0.9787	2.1553	2.2108	5	0-4	triton	2000	TRUE	yes	NO
+kda_hhR1	kda_hh	1	s5_words	4	1361936	1329424	512	30720	1280	0.9761	1.0000	1.0000	5	0-4	triton	2000	TRUE	yes	NO
+kda_hhR4	kda_hh	4	s5_words	4	2971664	2939152	512	30720	1280	0.9891	2.1819	2.2108	5	0-4	triton	2000	TRUE	yes	NO
+kda	kda	n/a (KimiDeltaAttention, no R)	s5_words	3 (NOT recorded in JSON, only in filename absence)	1029324	n/a (different class)	512	30720	1024	n/a	1.0000 (equals kda_hhR1 exactly)	n/a	8	0-7	NOT RECORDED (field absent in these older JSONs)	2000	TRUE (published train_probe.py:34)	n/a	NO
+kda	kda	n/a (KimiDeltaAttention, no R)	parity	3 (NOT recorded in JSON)	999116	n/a (different class)	512	512	1024	n/a	1.0000 (equals kda_hhR1 exactly)	n/a	8	0-7	NOT RECORDED	2000	TRUE (published train_probe.py:34)	n/a	NO
+gdn	gdn	n/a (GatedDeltaNet, no R)	s5_words	3 (NOT recorded in JSON)	1030872	n/a (different class)	512	30720	1024	n/a	1.0015	n/a	8	0-7	NOT RECORDED	2000	TRUE (published train_probe.py:36)	n/a	NO
+gdn	gdn	n/a (GatedDeltaNet, no R)	parity	3 (NOT recorded in JSON)	1000664	n/a (different class)	512	512	1024	n/a	1.0015	n/a	8	0-7	NOT RECORDED	2000	TRUE (published train_probe.py:36)	n/a	NO

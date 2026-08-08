@@ -1,0 +1,728 @@
+"""
+GPU smoke test for the gated short convolution inside KDA.
+
+WHAT THIS PROVES, AND WHAT IT DOES NOT
+    It proves the four arms **build, run forward and backward, and produce live gradients on a real
+    GPU with the fused kernels**, and it measures the peak memory each one costs. It does **not**
+    measure quality: 30 steps on synthetic tokens says nothing about held-out CE, and any loss
+    difference at this length is noise.
+
+WHY FOUR ARMS
+    With ``gate_structure="depthwise"`` the pre-gate is *exactly* a per-channel-temperature SiLU,
+    because ``2*sigmoid(a*u)*u == (2/a)*silu(a*u)`` and the ``2/a`` amplitude folds into the
+    depthwise taps. So ``gated_conv=True, activation=None`` is **not** activation-free, and
+    ``kda-gated`` minus ``kda-plain`` varies the activation's position, its learnability, and the
+    post gate all at once. ``kda-plain-noact`` is the cell that isolates the gate, and the
+    cross-arm comparisons below are taken against it.
+
+    This box is L40S / sm_89. The training target is A100 / sm_80. So a pass here means the stack
+    works, not that the numbers transfer -- ``fla``'s Triton kernels are compiled per architecture
+    and KDA's backward had an sm-dependent illegal-access bug (fla #802, fixed in 0.5.0). The
+    A100 probe is a separate, paid run.
+
+THE CHECKS THAT CAN ACTUALLY FAIL
+    Each is a gate with a stated threshold, and each is reachable in this regime -- a guard that
+    cannot fire in the regime it runs in is worse than no guard, because it reads as a pass.
+
+    1. **The fused kernel is really used.** The gated module falls back to ``torch.nn.Conv1d`` when
+       ``fla`` is missing or the tensor is on CPU. If the plain arm got the fused path and the
+       gated arm got the fallback, the arms would differ in numerics and speed for a reason that
+       has nothing to do with gating. This project has already been burned by exactly that
+       (``short_conv.py`` defaulting ``use_fla=True`` against an absent ``fla``). Asserted by
+       reading the realised path, not by assuming it.
+    2. **The gate is alive after one real optimizer step.** Against a floor relative to a
+       known-live parameter, not an absolute number, and not ``is not None``.
+    3. **The gate has actually moved off neutral by the end.** A gate that receives gradient and
+       still sits at exactly 1.0 after 30 steps is decorative.
+    4. **Peak memory is recorded per arm.** This is the real cost of the experiment and the number
+       a run gets sized from. Predicted against measured, so a bad prediction is visible.
+    5. **The loss is in the right absolute band.** A fresh model on a uniform-random vocabulary
+       must start near ``ln(vocab)``. Checking only that loss *decreased* passes for a model
+       reading its own targets.
+
+USAGE
+    srun -p gpu --gres=gpu:1 -c 8 --mem=64G -t 00:40:00 \
+        python scripts/smoke_gated_conv_gpu.py --out smoke.json
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import re
+import sys
+from typing import Any, Dict, List, Optional
+
+# Argv handling stays ABOVE the torch import so --help and the refusals work without a GPU, and so
+# a test can reach them. Putting them below is how a guard becomes unreachable.
+
+#: The four cells. See "WHY FOUR ARMS" in the module docstring: ``kda-plain-noact`` is not optional
+#: padding, it is the only baseline against which the gate is the single variable.
+_ARMS = ("kda-plain", "kda-plain-noact", "kda-gated", "kda-gated-silu")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
+    ap.add_argument("--arms", default=",".join(_ARMS))
+    ap.add_argument("--gate-structure", default="depthwise", choices=("depthwise", "lowrank"))
+    ap.add_argument("--gate-rank", type=int, default=128)
+    ap.add_argument("--d-model", type=int, default=1024)
+    ap.add_argument("--n-heads", type=int, default=8)
+    ap.add_argument("--n-layers", type=int, default=4)
+    ap.add_argument("--seq-len", type=int, default=1024)
+    ap.add_argument("--batch-size", type=int, default=2)
+    ap.add_argument("--vocab-size", type=int, default=1024)
+    ap.add_argument("--steps", type=int, default=30)
+    ap.add_argument("--lr", type=float, default=1e-3)
+    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--out", default=None)
+    ap.add_argument(
+        "--allow-eager-conv",
+        action="store_true",
+        help="permit the unfused torch.nn.Conv1d fallback; without this a fallback is a refusal",
+    )
+    return ap
+
+
+#: AdamW's epsilon. This is the correct denominator for a liveness check under an adaptive
+#: optimizer, and comparing against another parameter's gradient is not -- see
+#: :func:`gate_is_alive`.
+ADAMW_EPS = 1e-8
+
+#: How far above AdamW's epsilon a gate gradient must sit for the normalized step to be within an
+#: order of magnitude of the learning rate.
+GATE_LIVENESS_MULTIPLE = 10.0
+
+#: How far the gate must have moved off its neutral 1.0 by the end of the run.
+#:
+#: This is the STRONGER of the two liveness checks and the one to trust: it observes the parameter
+#: actually change rather than inferring that it could. The gradient check is a step-1 early
+#: warning; this is the receipt. On job 1677746 the gradient check false-alarmed on an arm whose
+#: gate had moved 0.0219, which is how the gradient threshold's bug was found.
+GATE_MOVEMENT_FLOOR = 1e-4
+
+#: A fresh model on uniform-random targets must start near ln(vocab). Wider than it looks because
+#: a few steps have already run by the time the first loss is recorded.
+INITIAL_LOSS_TOLERANCE = 0.5
+
+
+def loss_band(vocab_size: int) -> tuple[float, float]:
+    """
+    The absolute band a fresh model's first loss must land in.
+
+    Gating on "loss decreased" is what let a ``targets == inputs`` bug pass 74 tests in this
+    project, because a model reading its own input decreases beautifully. ``ln(vocab)`` is the
+    entropy of a uniform draw, which is what an untrained model on random data must score.
+
+    :param vocab_size: The vocabulary size.
+
+    :returns: The ``(low, high)`` band.
+    """
+    expected = math.log(vocab_size)
+    return expected - INITIAL_LOSS_TOLERANCE, expected + INITIAL_LOSS_TOLERANCE
+
+
+def gate_is_alive(gate_grad: Optional[float], reference_grad: Optional[float]) -> tuple[bool, str]:
+    """
+    Whether a gate's gradient is large enough to produce a usable update under AdamW.
+
+    .. important::
+        **The threshold is absolute, against AdamW's epsilon -- NOT relative to another
+        parameter's gradient.** The relative version was wrong and this run proved it: it failed
+        ``kda-gated-silu`` at a gradient of ``9.477e-06`` against a floor of ``1.043e-05``, on the
+        same run where that arm's gate **moved 0.0219 off neutral** -- more than the passing arm's
+        0.0212. A guard that calls an arm dead while the same run watches it train is a defect in
+        the guard.
+
+        The reason is the optimizer. AdamW normalizes each parameter by its own second moment, so
+        the step size is ``lr * m / (sqrt(v) + eps)`` and a gradient's *ratio to some other
+        parameter's gradient* does not enter it. A uniformly smaller gradient produces the same
+        step. Only two things make a parameter untrainable: an exactly-zero gradient, or one small
+        enough that ``eps`` dominates ``sqrt(v)`` and shrinks the step.
+
+        So the floor is ``GATE_LIVENESS_MULTIPLE * ADAMW_EPS``. ``reference_grad`` is still taken,
+        and it is still used to fail closed when the reference is itself dead -- if a parameter that
+        must be training has no gradient, the harness is broken and no liveness verdict from it
+        means anything.
+
+    :param gate_grad: Max absolute gradient on the gate parameters.
+    :param reference_grad: Max absolute gradient on a parameter known to be training. Used only as
+        a sanity check on the harness, not as the scale for the threshold.
+
+    :returns: ``(alive, explanation)``.
+    """
+    if gate_grad is None:
+        return False, "no gate gradient was recorded"
+    if reference_grad is None or reference_grad <= 0.0:
+        # Fail closed. If the reference is itself dead the harness is broken, and calling that a
+        # pass is the guard-that-cannot-fire failure.
+        return False, "the reference gradient is zero or missing, so the harness is not measuring"
+    floor = GATE_LIVENESS_MULTIPLE * ADAMW_EPS
+    if gate_grad <= floor:
+        return False, (
+            f"gate gradient {gate_grad:.3e} is at or below {floor:.3e} "
+            f"({GATE_LIVENESS_MULTIPLE:g}x AdamW's eps of {ADAMW_EPS:.0e}): eps dominates the "
+            "second moment, so the normalized step collapses and the branch cannot train"
+        )
+    return True, (
+        f"gate gradient {gate_grad:.3e} vs floor {floor:.3e}, "
+        f"reference {reference_grad:.3e} is nonzero"
+    )
+
+
+def _write_payload(destination: str, payload: dict) -> str:
+    """
+    Write the result JSON, to a local path or to ``s3://``.
+
+    ``$EDULLM_CHECKPOINT_DIR`` on the platform is an ``s3://`` URL, and :func:`open` cannot write
+    to one -- it raises ``FileNotFoundError`` naming the URL as a directory that does not exist.
+    That is what turned a fully green sm_80 validation into exit 1 on ``run_019fe037``.
+
+    :param destination: A local path, or an ``s3://bucket/key`` URL.
+    :param payload: The document to serialize.
+
+    :returns: Where it was actually written.
+
+    :raises RuntimeError: If an ``s3://`` destination is given and ``boto3`` is unavailable.
+    """
+    body = json.dumps(payload, indent=2)
+    if not destination.startswith("s3://"):
+        with open(destination, "w") as fh:
+            fh.write(body)
+        return destination
+
+    try:
+        import boto3
+    except ImportError as exc:  # pragma: no cover - boto3 is in the platform image
+        raise RuntimeError(f"an s3:// destination needs boto3, which is not importable: {exc}")
+
+    # Collapse any '//' the caller's string concatenation produced -- the platform's
+    # EDULLM_CHECKPOINT_DIR already ends in a slash, so 'dir/' + '/file' is easy to produce and S3
+    # would treat the doubled slash as a real (and different) key.
+    bucket, _, key = destination[len("s3://") :].partition("/")
+    key = re.sub(r"/{2,}", "/", key)
+    boto3.client("s3").put_object(Bucket=bucket, Key=key, Body=body.encode())
+    return f"s3://{bucket}/{key}"
+
+
+def conv_path_is_fused(realised_paths: List[str], *, allow_eager: bool) -> tuple[bool, str]:
+    """
+    Whether every convolution ran the fused kernel.
+
+    A mixed run is the dangerous case: the arms then differ in numerics *and* speed for a reason
+    unrelated to the gate, and nothing in a loss curve shows it. An empty list is a refusal, not a
+    pass -- an empty comparison set reporting success is a failure mode this project has shipped
+    four times in one build.
+
+    :param realised_paths: One entry per convolution actually executed.
+    :param allow_eager: Whether the unfused fallback is permitted.
+
+    :returns: ``(ok, explanation)``.
+    """
+    if not realised_paths:
+        return False, "no convolution path was recorded, so this check proves nothing"
+    kinds = sorted(set(realised_paths))
+    if kinds == ["fused"]:
+        return True, f"all {len(realised_paths)} convolutions fused"
+    if allow_eager:
+        return True, f"paths {kinds} (eager permitted by --allow-eager-conv)"
+    return False, (
+        f"convolution paths were {kinds} across {len(realised_paths)} calls; an unfused "
+        "fallback makes the arms incomparable in numerics and speed"
+    )
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    opts = build_parser().parse_args(argv)
+
+    arms = [a.strip() for a in opts.arms.split(",") if a.strip()]
+    unknown = [a for a in arms if a not in _ARMS]
+    if unknown:
+        print(f"ERROR: unknown arms {unknown}; choose from {list(_ARMS)}", file=sys.stderr)
+        return 2
+    if len(arms) < 2:
+        print(
+            "ERROR: at least two arms are needed. One arm cannot show that the gate changes "
+            "anything, so a single-arm run reports a pass while measuring nothing.",
+            file=sys.stderr,
+        )
+        return 2
+
+    # TRITON_F32_DEFAULT is checked before torch, because it participates in kernel codegen: a
+    # cache built without it is not reusable with it. The torch tf32 flag does NOT control Triton.
+    triton_f32 = os.environ.get("TRITON_F32_DEFAULT")
+
+    import torch
+    import torch.nn.functional as F
+
+    if not torch.cuda.is_available():
+        print(
+            "ERROR: no GPU. This script exists to exercise the fused fla kernels, which do not "
+            "run on CPU -- a CPU pass here would be the unfused fallback and would prove nothing.",
+            file=sys.stderr,
+        )
+        return 3
+
+    from olmo_core.nn.attention import KimiDeltaAttentionConfig
+    from olmo_core.nn.attention.flash_linear_attn_api import has_fla
+    from olmo_core.nn.gated_convolution import GatedCausalConv1d
+    from olmo_core.nn.transformer.init import InitMethod
+
+    if not has_fla():
+        # Name the fix, not just the symptom. This refusal fired on the first A100 submission
+        # (run_019fdff4, exit 3 after seven seconds) and the message alone did not say what to do
+        # about it -- the platform image installs `.[wandb]`, which does not pull fla.
+        print(
+            "ERROR: fla is not importable, so KimiDeltaAttention cannot be built. Every recurrent "
+            "mixer in this library asserts has_fla() in its constructor.\n"
+            "  If this is a platform image: it installs '.[wandb]', which does NOT pull fla. Add "
+            "'flash-linear-attention==0.5.1' to .edullm/Dockerfile.\n"
+            "  Do NOT use the '.[fla]' extra: it pins 0.4.1, which is exposed to fla #802 (an "
+            "illegal memory access in KDA's backward, fixed in 0.5.0).",
+            file=sys.stderr,
+        )
+        return 3
+
+    # The version is REPORTED, not merely required, because 0.4.1 and 0.5.1 differ in whether
+    # KDA's backward corrupts memory -- and that failure does not announce itself in a loss curve.
+    try:
+        import fla
+
+        fla_version = fla.__version__
+    except Exception as exc:  # pragma: no cover - has_fla() already passed
+        fla_version = f"<unreadable: {exc}>"
+
+    device = torch.device("cuda")
+    props = torch.cuda.get_device_properties(0)
+    print(f"device: {props.name} sm_{props.major}{props.minor}, {props.total_memory/2**30:.1f} GiB")
+    print(f"torch {torch.__version__}, fla {fla_version}, TRITON_F32_DEFAULT={triton_f32!r}")
+    if str(fla_version).startswith("0.4."):
+        print(
+            "  WARNING: fla 0.4.x is exposed to #802, an illegal memory access in "
+            "chunk_kda_bwd_kernel_wy_dqkg_fused whose reproducer is KimiDeltaAttention. Results "
+            "from this version are not trustworthy for KDA. Upgrade to >=0.5.0."
+        )
+    if triton_f32 != "ieee":
+        print(
+            "  NOTE: TRITON_F32_DEFAULT is not 'ieee'. Triton lowers tl.dot to TF32 on Ampere+ by "
+            "its own default, which measured 166x worse fp32 accuracy in this project. It does "
+            "not affect this smoke test's verdicts, but a real run must set it."
+        )
+    print(f"loss band for vocab {opts.vocab_size}: {loss_band(opts.vocab_size)}")
+    print()
+
+    def make_config(arm: str) -> KimiDeltaAttentionConfig:
+        common: Dict[str, Any] = dict(
+            n_heads=opts.n_heads,
+            head_dim=opts.d_model // opts.n_heads,
+            expand_v=1.0,
+            conv_size=4,
+        )
+        if arm == "kda-plain":
+            return KimiDeltaAttentionConfig(**common)
+        if arm == "kda-plain-noact":
+            return KimiDeltaAttentionConfig(**common, conv_activation=None)
+        cfg: Dict[str, Any] = dict(
+            common,
+            gated_conv=True,
+            gate_structure=opts.gate_structure,
+            gated_conv_activation="silu" if arm == "kda-gated-silu" else None,
+        )
+        if opts.gate_structure == "lowrank":
+            cfg["gate_rank"] = opts.gate_rank
+        return KimiDeltaAttentionConfig(**cfg)
+
+    class TinyLM(torch.nn.Module):
+        """Embedding, N KDA layers with a residual and a norm, and a tied-free head."""
+
+        def __init__(self, cfg: KimiDeltaAttentionConfig):
+            super().__init__()
+            self.embed = torch.nn.Embedding(opts.vocab_size, opts.d_model)
+            self.norms = torch.nn.ModuleList(
+                [torch.nn.RMSNorm(opts.d_model) for _ in range(opts.n_layers)]
+            )
+            self.mixers = torch.nn.ModuleList(
+                [
+                    cfg.build(opts.d_model, layer_idx=i, n_layers=opts.n_layers)
+                    for i in range(opts.n_layers)
+                ]
+            )
+            self.out_norm = torch.nn.RMSNorm(opts.d_model)
+            self.head = torch.nn.Linear(opts.d_model, opts.vocab_size, bias=False)
+
+        def forward(self, tokens: "torch.Tensor") -> "torch.Tensor":
+            h = self.embed(tokens)
+            for norm, mixer in zip(self.norms, self.mixers):
+                h = h + mixer(norm(h))
+            return self.head(self.out_norm(h))
+
+    records: List[Dict[str, Any]] = []
+    failures: List[str] = []
+
+    for arm in arms:
+        print(f"=== {arm}")
+        torch.manual_seed(opts.seed)
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+
+        cfg = make_config(arm)
+        # Built ON THE DEVICE and initialized there, with a device-matched generator. torch's
+        # 'uniform_' refuses a CPU generator against a CUDA tensor, so building on CPU and moving
+        # afterwards would work while initializing on the device would not -- the failure is
+        # 'Expected a cuda device type for generator but found cpu' and it fires on the FIRST arm,
+        # which means nothing about the module itself gets exercised.
+        model = TinyLM(cfg).to(device)
+        gen = torch.Generator(device=device).manual_seed(opts.seed)
+        for i, mixer in enumerate(model.mixers):
+            mixer.init_weights(
+                init_method=InitMethod.normal,
+                d_model=opts.d_model,
+                block_idx=i,
+                num_blocks=opts.n_layers,
+                generator=gen,
+            )
+        model = model.to(torch.bfloat16)
+
+        gated_convs = [
+            c
+            for m in model.mixers
+            for c in (m.q_conv1d, m.k_conv1d, m.v_conv1d)
+            if isinstance(c, GatedCausalConv1d)
+        ]
+        # Both plain arms have zero gated convolutions. Keying on 'kda-plain' alone was left over
+        # from the three-arm version and failed 'kda-plain-noact' for being the control it is.
+        expected_gated = 0 if arm.startswith("kda-plain") else 3 * opts.n_layers
+        if len(gated_convs) != expected_gated:
+            failures.append(
+                f"{arm}: found {len(gated_convs)} gated convolutions, expected {expected_gated}"
+            )
+
+        # Record which path each convolution really takes, by instrumenting the module rather than
+        # inferring it from a flag. 'use_fla=True' records the REQUEST; this records the execution.
+        realised: List[str] = []
+        for conv in gated_convs:
+            original = conv._conv
+
+            def wrapped(u, cu, _conv=conv, _orig=original):
+                realised.append("fused" if (_conv.use_fla and has_fla() and u.is_cuda) else "eager")
+                return _orig(u, cu)
+
+            conv._conv = wrapped  # type: ignore[method-assign]
+
+        gate_params = [
+            p for c in gated_convs for n, p in c.named_parameters() if not n.startswith("conv.")
+        ]
+        gate_at_init = (
+            None
+            if not gate_params
+            else max(float(p.detach().float().abs().max()) for p in gate_params)
+        )
+
+        optim = torch.optim.AdamW(model.parameters(), lr=opts.lr)
+        losses: List[float] = []
+        step1_gate_grad: Optional[float] = None
+        step1_ref_grad: Optional[float] = None
+
+        for step in range(opts.steps):
+            tokens = torch.randint(
+                0, opts.vocab_size, (opts.batch_size, opts.seq_len + 1), device=device
+            )
+            logits = model(tokens[:, :-1])
+            loss = F.cross_entropy(
+                logits.float().reshape(-1, opts.vocab_size), tokens[:, 1:].reshape(-1)
+            )
+            optim.zero_grad(set_to_none=True)
+            loss.backward()
+
+            if step == 0:
+                # The reference is the head, which is unambiguously training.
+                if model.head.weight.grad is not None:
+                    step1_ref_grad = float(model.head.weight.grad.float().abs().max())
+                grads = [
+                    float(p.grad.float().abs().max()) for p in gate_params if p.grad is not None
+                ]
+                step1_gate_grad = max(grads) if grads else None
+
+            optim.step()
+            losses.append(loss.detach().item())
+            if step % 10 == 0 or step == opts.steps - 1:
+                print(f"  step {step:3d}  loss {loss:.4f}")
+
+        peak_gib = torch.cuda.max_memory_allocated() / 2**30
+        gate_now = (
+            None
+            if not gate_params
+            else max(float(p.detach().float().abs().max()) for p in gate_params)
+        )
+        gate_moved = None if gate_now is None or gate_at_init is None else gate_now - gate_at_init
+
+        low, high = loss_band(opts.vocab_size)
+        rec: Dict[str, Any] = {
+            "arm": arm,
+            "gate_structure": opts.gate_structure if arm != "kda-plain" else None,
+            "num_params": sum(p.numel() for p in model.parameters()),
+            "mixer_params_predicted": cfg.num_params(opts.d_model) * opts.n_layers,
+            "mixer_params_actual": sum(p.numel() for m in model.mixers for p in m.parameters()),
+            "gate_params": cfg.gate_params(opts.d_model) * opts.n_layers,
+            "gate_bytes_predicted": cfg.gate_activation_bytes(
+                opts.d_model, batch_size=opts.batch_size, seq_len=opts.seq_len
+            )
+            * opts.n_layers,
+            "peak_gib": peak_gib,
+            "loss_first": losses[0],
+            "loss_last": losses[-1],
+            "gate_grad_step1": step1_gate_grad,
+            "ref_grad_step1": step1_ref_grad,
+            "gate_movement": gate_moved,
+            "conv_paths": sorted(set(realised)),
+            "conv_calls": len(realised),
+            "gated_conv_count": len(gated_convs),
+        }
+
+        # --- the gates, each with a stated threshold and each reachable in this regime ---
+
+        if rec["mixer_params_predicted"] != rec["mixer_params_actual"]:
+            failures.append(
+                f"{arm}: config predicts {rec['mixer_params_predicted']} mixer params, "
+                f"module has {rec['mixer_params_actual']}"
+            )
+
+        if not (low <= losses[0] <= high):
+            failures.append(
+                f"{arm}: first loss {losses[0]:.4f} is outside [{low:.3f}, {high:.3f}] = "
+                f"ln({opts.vocab_size}) +/- {INITIAL_LOSS_TOLERANCE}. A fresh model on random "
+                "targets must start at the uniform entropy; outside the band means the data or "
+                "the target alignment is wrong, and 'loss went down' would not have caught it."
+            )
+
+        if not math.isfinite(losses[-1]):
+            failures.append(f"{arm}: final loss is {losses[-1]}")
+
+        if arm.startswith("kda-gated"):
+            ok, why = conv_path_is_fused(realised, allow_eager=opts.allow_eager_conv)
+            print(f"  conv path: {why}")
+            if not ok:
+                failures.append(f"{arm}: {why}")
+
+            ok, why = gate_is_alive(step1_gate_grad, step1_ref_grad)
+            print(f"  gate liveness: {why}")
+            if not ok:
+                failures.append(f"{arm}: {why}")
+
+            print(f"  gate moved {gate_moved!r} off neutral over {opts.steps} steps")
+            if gate_moved is None or gate_moved < GATE_MOVEMENT_FLOOR:
+                failures.append(
+                    f"{arm}: the gate moved {gate_moved!r}, below {GATE_MOVEMENT_FLOOR}. It "
+                    "receives gradient but is not actually changing the function, so the arm is "
+                    "the control wearing a different name."
+                )
+
+        print(f"  peak memory {peak_gib:.3f} GiB, params {rec['num_params']:,}")
+        print()
+        records.append(rec)
+
+        del model, optim
+        torch.cuda.empty_cache()
+
+    # --- THE OPERATOR-IDENTITY CHECK, ON THE PATH THE RUN ACTUALLY EXECUTES ---
+    #
+    # Every CPU test compares GatedCausalConv1d's REFERENCE path against a hand-written helper.
+    # The experiment runs the FUSED fla kernel, so the load-bearing claim -- "the gated arm starts
+    # from the same function as the plain arm" -- was verified only on a path that never runs.
+    # This closes that, and also answers a question the repo cannot: does fla's kernel honour
+    # activation=None, or does it apply silu regardless? If it ignores None, kda-gated and
+    # kda-gated-silu are the SAME MODEL and the design collapses.
+    print("=== operator identity on the fused CUDA path")
+    from olmo_core.nn.convolution import CausalConv1d
+
+    torch.manual_seed(opts.seed)
+    ch = 256
+    u = torch.randn(1, 128, ch, device=device, dtype=torch.bfloat16)
+    taps = torch.randn(ch, 1, 4, device=device, dtype=torch.bfloat16) * 0.1
+
+    def _fused(activation, gated: bool):
+        if gated:
+            m = GatedCausalConv1d(
+                hidden_size=ch, kernel_size=4, activation=activation, dtype=torch.bfloat16
+            ).to(device)
+            m.init_gate_weights()
+            inner = m.conv
+        else:
+            m = CausalConv1d(
+                hidden_size=ch, kernel_size=4, activation=activation, dtype=torch.bfloat16
+            ).to(device)
+            inner = m
+        with torch.no_grad():
+            inner.weight.copy_(taps)
+        with torch.no_grad():
+            return m(u) if gated else m(x=u)
+
+    plain_none = _fused(None, gated=False)
+    plain_silu = _fused("silu", gated=False)
+    gated_none = _fused(None, gated=True)
+    gated_silu = _fused("silu", gated=True)
+
+    # 1. fla must honour activation=None. If plain_none == plain_silu the kernel ignores the
+    #    argument, every "activation-free" arm is silently silu, and two arms are one arm.
+    d_act = (plain_none - plain_silu).abs().max().item()
+    print(f"  fla activation=None vs 'silu' on the SAME weights: max|diff| = {d_act:.3e}")
+    if d_act == 0.0:
+        failures.append(
+            "fla's fused kernel produced identical output for activation=None and 'silu', so it "
+            "IGNORES the argument. Every activation-free arm is secretly silu and kda-gated is "
+            "the same model as kda-gated-silu -- the arm set collapses."
+        )
+
+    # 2. At init the gate is exactly 1.0, so the gated module must reproduce the ungated one with
+    #    the same weights and the same activation, THROUGH THE FUSED KERNEL. Exact equality: both
+    #    call the identical kernel, and 2*sigmoid(0) is exactly 1.0 in bf16.
+    for label, a, b in (
+        ("activation=None", gated_none, plain_none),
+        ("activation=silu", gated_silu, plain_silu),
+    ):
+        d = (a - b).abs().max().item()
+        print(f"  gated-at-init vs plain, {label}: max|diff| = {d:.3e}")
+        if d != 0.0:
+            failures.append(
+                f"at init the gated module does not reproduce the plain convolution on the fused "
+                f"path ({label}, max|diff| {d:.3e}). The gate is exactly 1.0 at zero-init, so the "
+                "two arms are supposed to start from the same function -- they do not, and the "
+                "contrast is not an ablation."
+            )
+
+    # 3. And the depthwise pre-gate is a per-channel-temperature SiLU, which is WHY the arm set
+    #    needs kda-plain-noact. Asserted here on device so the claim is not laptop-only.
+    a_val = 1.7
+    ident = 2.0 * torch.sigmoid(a_val * u.float()) * u.float() - (2.0 / a_val) * F.silu(
+        a_val * u.float()
+    )
+    print(f"  2*sigmoid(a*u)*u == (2/a)*silu(a*u): max|diff| = {ident.abs().max().item():.3e}")
+    if ident.abs().max().item() > 1e-5:
+        failures.append("the pre-gate/SiLU identity does not hold on this device")
+    print()
+
+    # --- cross-arm checks. These need every arm, so they are here rather than in the loop. ---
+
+    by_arm = {r["arm"]: r for r in records}
+    # The gate-isolating baseline is kda-plain-noact, not kda-plain: against kda-plain the contrast
+    # also varies the activation's position and its learnability. Falls back to kda-plain only so a
+    # two-arm invocation still reports something, and says so.
+    baseline = "kda-plain-noact" if "kda-plain-noact" in by_arm else "kda-plain"
+    if baseline == "kda-plain":
+        print(
+            "NOTE: comparing against kda-plain, which also differs in activation position and "
+            "learnability. Include kda-plain-noact to isolate the gate.\n"
+        )
+    if baseline in by_arm and "kda-gated" in by_arm:
+        p, g = by_arm[baseline], by_arm["kda-gated"]
+        delta = g["mixer_params_actual"] - p["mixer_params_actual"]
+        print(
+            f"parameter delta gated - {baseline}: {delta:,} "
+            f"({delta/p['mixer_params_actual']:.4%})"
+        )
+        if delta != g["gate_params"]:
+            failures.append(
+                f"the measured parameter delta {delta} does not equal the predicted gate cost "
+                f"{g['gate_params']}"
+            )
+        mem_ratio = g["peak_gib"] / p["peak_gib"] if p["peak_gib"] else float("inf")
+        print(f"peak memory ratio gated / {baseline}: {mem_ratio:.3f}x")
+        print(
+            f"  predicted gate activation bytes: {g['gate_bytes_predicted']/2**30:.3f} GiB, "
+            f"measured increase: {g['peak_gib']-p['peak_gib']:.3f} GiB"
+        )
+        if mem_ratio < 1.0:
+            failures.append(
+                f"the gated arm used LESS peak memory than the plain arm ({mem_ratio:.3f}x). The "
+                "gates retain backward activations, so this means the measurement is wrong, not "
+                "that gating is free."
+            )
+
+        # The prediction is what a run gets sized from, so it must track the measurement rather
+        # than merely be printed next to it. On job 1677746 at d=2048/T=4096 the two agreed to
+        # 2.250 GiB against 2.250 GiB, which is what validated the corrected eager count of three
+        # retained tensors per gate. A prediction that drifts LOW is the dangerous direction: it is
+        # what lets a paid run get OOM-killed.
+        # The tolerance is PER STRUCTURE, because the estimate is a prediction for one and a floor
+        # for the other -- a single number would either fail lowrank for a documented reason or let
+        # a real depthwise omission through.
+        #
+        # depthwise: 5%. The first version used 15% and passed a lowrank cell that was 11.4% short.
+        #   A tolerance wide enough to admit a real omission is not a gate. Job 1677750's depthwise
+        #   cells matched to three decimal places (2.250 vs 2.250 GiB), so 5% is comfortable.
+        # lowrank: 10%, and this is an acknowledged floor. The bottleneck term explains 6.5 of the
+        #   11.4 points; 4.7 remain unexplained, most likely the up-projections' saved inputs. The
+        #   number is documented as a floor rather than tuned until it looks right.
+        tolerance = 1.10 if opts.gate_structure == "lowrank" else 1.05
+        predicted_gib = g["gate_bytes_predicted"] / 2**30
+        measured_gib = g["peak_gib"] - p["peak_gib"]
+        if predicted_gib > 0 and measured_gib > predicted_gib * tolerance:
+            failures.append(
+                f"the measured activation increase ({measured_gib:.3f} GiB) exceeds the prediction "
+                f"({predicted_gib:.3f} GiB) by {measured_gib/predicted_gib - 1:.1%}, above the "
+                f"{tolerance - 1:.0%} tolerance for gate_structure={opts.gate_structure!r}. Any run "
+                "sized from the prediction would be under-provisioned, which is how a paid run gets "
+                "OOM-killed."
+            )
+
+    if {"kda-gated", "kda-gated-silu"} <= by_arm.keys():
+        a, b = by_arm["kda-gated"], by_arm["kda-gated-silu"]
+        if a["mixer_params_actual"] != b["mixer_params_actual"]:
+            failures.append(
+                "kda-gated and kda-gated-silu must be parameter-identical, so that any difference "
+                "between them is the activation and nothing else"
+            )
+        if a["loss_last"] == b["loss_last"]:
+            failures.append(
+                "kda-gated and kda-gated-silu produced an identical final loss, which means the "
+                "activation is not reaching the module and the two arms are the same run"
+            )
+
+    payload = {
+        "device": props.name,
+        "sm": f"{props.major}{props.minor}",
+        "torch": torch.__version__,
+        "triton_f32_default": triton_f32,
+        "opts": vars(opts),
+        "loss_band": list(loss_band(opts.vocab_size)),
+        "records": records,
+        "failures": failures,
+    }
+    # THE VERDICT IS PRINTED BEFORE THE ARTIFACT IS WRITTEN, AND THE WRITE CANNOT KILL THE RUN.
+    #
+    # On the first A100 attempt (run_019fe037) every check passed and the process still exited 1,
+    # because $EDULLM_CHECKPOINT_DIR is an s3:// URL and `open()` cannot write to one. The
+    # traceback landed where the verdict should have been, so a fully green sm_80 validation read
+    # as a failure and the numbers survived only in the container log.
+    #
+    # Two lessons, both applied here. An artifact write is reporting, not measurement, so it must
+    # never change the outcome. And the verdict goes to the log first, because the log is the one
+    # channel that exists whatever happens to the destination.
+    print()
+    if failures:
+        print(f"FAILED ({len(failures)}):", file=sys.stderr)
+        for f in failures:
+            print(f"  - {f}", file=sys.stderr)
+    else:
+        print(f"All checks passed on sm_{props.major}{props.minor} ({props.name}).")
+
+    if opts.out:
+        try:
+            written = _write_payload(opts.out, payload)
+            print(f"wrote {written}")
+        except Exception as exc:
+            # Loud, and NOT fatal. The full payload goes to stdout so the run is still readable.
+            print(
+                f"WARNING: could not write {opts.out} ({type(exc).__name__}: {exc}). "
+                "The JSON follows on stdout, and the verdict above stands regardless.",
+                file=sys.stderr,
+            )
+            print(json.dumps(payload, indent=2))
+
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

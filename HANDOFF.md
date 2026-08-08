@@ -1,8 +1,94 @@
 # HANDOFF — DP2-KDA Phase 0/1 preparation
 
-**Last updated:** 2026-07-31 (second session). **Status: runbook audited and corrected; DP2 source
-committed and pushed; all three P0.0 prerequisites now closed; no test written, no GPU work started,
-no image built, no AWS resource created.**
+**Last updated:** 2026-08-01. **Status: runbook audited and corrected; DP2 source committed and
+pushed; all three P0.0 prerequisites closed; all 13 named Phase-0 tests green on an L40S via
+FarmShare. `origin/main` merged — the program is now on the eduLLM platform path, not Slurm. No
+image built, no AWS resource created, no money spent.**
+
+## ⚠️ AUDIT 2026-08-01: sound math, correct kernel, NOT production-viable
+
+An orchestrated audit (39 mutants, three independent implementations, run through the real test
+suite) found the mixer **mathematically sound and the kernel correct** — but not ready for a real
+training run, with the weakest link in **module wiring, not math**.
+
+**What is genuinely right, measured:** three independently-written implementations agree to
+≤2.79e-15; the Triton backward matches float64 autograd to ≤4.4e-7 across 49 shapes; R=1 reduces
+exactly to KDA at all three levels; the R-factor product is non-expansive (spectral norm exactly
+1.000000, R=1–8, both β regimes); no error growth to T=65536; determinism bit-identical.
+
+**Fix before any training run — verified independently in this session:**
+
+1. **`l2_normalize` has no epsilon** (`nn/functional/__init__.py:18`, a bare `x/‖x‖`). One all-zero
+   q/k row NaNs the output *and the gradients*. Measured: `l2_normalize(zeros)` → NaN, and the NaN
+   reaches **4 of 5 operator input gradients**. Reachable because `conv_bias=False` is the default
+   and `silu(0) = 0` **exactly** (both confirmed). ⚠️ `l2_normalize` is **shared** with
+   `feed_forward.py:283`, `layer_norm.py:386` (nGPT) and `lm_head.py:568`, so patching it in place
+   touches production paths beyond DP2 — this is a judgement call, not a drop-in fix.
+2. **6.9–9.5× slower and ~10× more memory than fla's `chunk_kda` at R=1** — roughly **127 extra
+   GPU-hours** per 2T-token 1B run. Note this *reverses* the earlier "406× faster" claim, which
+   compared against the author's own Python-loop reference. A separate earlier claim that Triton was
+   7% *slower* was a no-warmup artifact and is also wrong (reversed: 123×).
+3. **TBPTT silently yields gradients wrong by 29–39%** and nothing raises.
+4. **Double-backward returns a finite but wrong HVP at module level** (rel 0.9962) — the
+   `once_differentiable` docstring promise is false where users actually call it.
+5. **Unguarded OOM cliff** — bare `OutOfMemoryError` faulting at `:587`, not at `hs`.
+6. **`dt_bias.zero_()`** (`:1378`) gives a 0.12-token median memory half-life, ~90× shorter than
+   fla's. Relevant to any run that expects long-range retention.
+
+**Novelty: novel-but-thin.** fla's existing `generalized_delta_rule.dplr` computes this operator
+**exactly** (verified 1.11e-16 at R=1–4). The docstring at `kda_householder.py:54-55` overstates.
+
+**Test-suite health.** Of 19 module tests, **exactly one** compares module output to a reference,
+and it is R=1 only — which is why four module mutants (rel 0.94–1.40) were caught by zero of 157
+tests. Two of those are now fixed (`0bdf578` GVA coverage, `92a2bed` oracle fail-open). The
+oracle/reference circularity is a **real structural fact** (0.9625 similarity, same einsums) but
+does **not** blind the suite: a bug injected into all three implementations still fails 19–20 tests.
+Independent force comes from the §4.5 algebraic oracle and the external fla anchor.
+
+**Untested:** one GPU arch only (L40S sm_89 — the `tl.debug_barrier` question is arch-dependent),
+no multi-rank FSDP/CP, and the B8/T4096 reference shape exceeds 44 GiB so its memory figure is
+analytical (validated within 1% across 9 points).
+
+## ⚠️ FIRST RUN: the arms are `Reflection` and `R1-P` — NOT `DP2-strict`
+
+**Decided 2026-08-01.** The first platform training run is the pair **`Reflection`** (treatment)
+and **`R1-P`** (control). `DP2-strict` is explicitly *not* the first run, which reverses this
+document's original framing, so the reasons are recorded here rather than left to inference:
+
+1. **Strict-beta DP2 is structurally barred from the primary state-tracking task.** With keys
+   L2-normalized (`recurrent.py:1299-1300`) each erase factor has `det(I − βkkᵀ) = 1−β` *exactly*
+   (verified to 12 decimals). Strict β ∈ (0,1) ⟹ every factor has positive determinant ⟹ the
+   composed state map has **det > 0 at every R** — measured 0 of 4000 trials negative at R=1,2,4.
+   `s5_words` requires odd permutations, `det = −1`. Adding factors cannot escape this: it is
+   closed under composition. Reflection β ∈ (0,2) crosses zero ~50% of the time.
+2. **Reflection is the only arm with measured signal.** 0.978 vs 0.598–0.640 for every strict arm
+   at L40; `R1-P|Reflection|64` = 56.5 vs **95.9** (`docs/dp2-kda/evidence/`). It also *trains* β
+   to 1.92–1.98 — it uses the negative range rather than merely being permitted it.
+3. **`R1-P`, not `R1`, is the honest control.** It spends the same parameter budget in FFN width,
+   separating mechanism from capacity. FFN width alone buys +1.9pp; without `R1-P` the program
+   records a spurious win.
+4. **The LM null is what a real run can actually resolve.** The one parameter-matched LM pair was
+   **+0.0053 nats** — a clean null. Whether probe effects survive at LM scale is precisely what
+   free FarmShare probe work *cannot* answer.
+
+**Caveat, stated plainly:** the reflection numbers are n=1 harness smoke at 150–1000 steps, not
+calibration. They justify *choosing* reflection over strict for a first run; they do not establish
+that reflection works. Note also that §3.2 of the runbook forbids *pooling* strict and reflection
+results — running reflection first is not pooling, but any writeup must keep the regimes separate.
+
+Sizing: `olmo-core-check-cpu` first (~$1.43, proves the path), then the pair on
+`olmo-core-train-1gpu` ($1.01/hr). Not 4-GPU — the launcher and checkpoint guards are easier to get
+wrong there, and $136 worst case vs $12 is the wrong place to debug a command string.
+
+**Blocker for any DP2/KDA run:** the mixer is **not reachable from the command line.**
+`--model-factory` resolves attributes on `TransformerConfig` and there is no KDA/Householder
+factory there. Dot-notation also fails — `block.sequence_mixer.type=kimi_delta_householder` raises
+`OLMoConfigurationError: class 'AttentionConfig' has no attribute 'num_householder'`, because
+`merge()` applies overrides against the existing `AttentionConfig` without re-resolving the type,
+even as a separate merge step. The working path is to assemble in a script:
+`replace(cfg.block, sequence_mixer=KimiDeltaHouseholderConfig(...))` — verified to give a 269.6M
+model at R=2 with strict beta. This is the guide's "level two starts from a copy". No library edit
+is needed: `kimi_delta_householder` is already a registered mixer name.
 
 **Scope:** this file covers **only** the DP2-KDA (strict-beta delta-product, R=2) experiment
 program. Sibling handoffs are independent and still current — do not overwrite them:
@@ -62,11 +148,13 @@ Phase 2 is **not authorized** by that document (`docs/dp2-kda/phase-2-deferred.m
 
 ### Not done — nothing has run
 
-- **Zero of the 13 named Phase-0 tests exist** (re-verified this session: 0 grep hits against the
-  61 existing test functions — 36 in `recurrent_test.py`, 25 in `kda_householder_test.py`).
-  P0.1, the R1-equivalence gate, is entirely unwritten. **This is now the top of the queue.**
-- No GPU work, **no image built** (the sm_89 edit is unproven until one builds), no AWS resource.
-- Phase-1 harness is largely unbuilt (see Next Steps).
+- **No image built** — the sm_89 edit is unproven until one builds. Note the DP2 gate tests do
+  **not** depend on it: `kda_householder.py` is Triton JIT (compiled at runtime for whatever GPU
+  is present) and the gate files reference neither `flash_attn` nor `grouped_gemm`. The two edited
+  lines govern exactly those two packages. So the image is needed for P0.0 provenance and Phase-1
+  carry-through, not to make P0.1–P0.5 executable.
+- No AWS resource, no spend.
+- Phase-1 harness is largely unbuilt (see Next Steps) — **this is now the top of the queue.**
 
 ---
 
@@ -199,24 +287,52 @@ The durable fix is to widen the test's own path resolution (it has a two-candida
 `../../Capstone_LLM/probes` candidate would resolve from any worktree) or, better, to make the
 oracle-missing case **fail** rather than skip. Not done — it edits a file inside `6b75c06`.
 
-### 3. Write the 13 named Phase-0 tests (§4.7) — the real Phase-0 effort
+### 3. ✅ DONE — the 13 named Phase-0 tests (§4.7), commit `4f747f5`
 
-All absent. Note `test_kimi_delta_householder_r1_matches_kda_params`
-(`recurrent_test.py:639-653`) is a **misleading neighbor** — it asserts only parameter count and
-FLOPs, never copies weights, never compares outputs or gradients.
+**All 13 written; 156 passed / 0 skipped / 1 sanctioned deselect on an NVIDIA L40S.** All four
+§4.7 skip-discipline assertions pass. `make style-check`/`lint-check` clean; mypy clean for these
+files (2 remaining errors are pre-existing in `kda_householder.py:595` and `hf/config.py:114` —
+no production source was touched).
 
-Traps the runbook now documents, each verified numerically:
-- **§4.5's rank-two oracle is correct** — 4e-15 over 200 float64 trials; all three plausible
-  corruptions fail by ~15 orders. Do not "simplify" any term.
-- **A zero query NaNs the oracle.** `l2_normalize` (`functional/__init__.py:16-18`) is a bare
-  `x/‖x‖`, no epsilon, applied at `recurrent.py:1299` — *after* §4.4's injection point. Inject
-  after normalization or use a unit dummy query and discard its output.
-- **Negative controls need asserted separation floors.** Factor-order-swap separation scales as
-  `O(K^{-1/2})` and is **0.0** at orthogonal keys; the `v₂=0` control is 0.0 when `S_prev=0`.
-- **Final-state comparison is blind to readout position** — `S` is invariant to which microstep you
-  read; outputs differ median 11%, max 46%. Compare `o`, not just `S`.
-- **P0.5 must assert zero skips**, with `test_context_parallel_gdn_ulysses` deselected by name
-  (`@requires_multi_gpu`, always skips on a 1-GPU node).
+**FarmShare has the Phase-0 GPU, free.** This is the session's most reusable finding. The `oat`
+partition (6 nodes × 4 GPUs) is **NVIDIA L40S, compute capability 8.9** — exactly §4.1's Phase-0
+target. Allocation took seconds. Working tree:
+
+```
+/scratch/users/ericrcwu/agent-runs/dp2-kda-p0/{OLMo-core, probes, venv, results}
+srun --ntasks=1 --partition=gpu --gres=gpu:1 --cpus-per-task=8 --mem=32G --exclude=wheat-01
+```
+
+The venv layers `pytest` + `pip install -e .` onto the prior `kda-phase0` env via a `.pth` file,
+so the original is unmutated. Stack: python 3.12.3, torch 2.9.1+cu128, triton 3.5.1, **fla 0.5.1**.
+
+⚠️ **This is not a P0.5 pass.** P0.0 needs the pinned image and its digest, and FarmShare runs
+**fla 0.5.1 against the repo's pinned 0.4.1**. Re-verify the external anchor on the pinned image
+specifically — its conventions were measured against 0.5.1.
+
+**Two runbook claims were wrong and are now corrected in place:**
+
+1. **fla's `naive_recurrent_gated_delta_product` ignores its own `scale` argument** (never applied
+   to `q`; `scale=1.0` and `scale=K**-0.5` give byte-identical output) **and casts inputs to
+   float32** internally. So "agrees to float64 ulp" is unattainable by construction. Written to the
+   original spec, the anchor test fails at **0.82 relative** on correct code. It now compares at
+   `scale=1.0` against a float32 floor computed in-test (measured 6.4e-8 vs floor 1.0e-7).
+2. **`BF16_RTOL` (1e-5) is not a standalone bound** — it's the relative half of an `assert_close`
+   pair whose absolute half is 5e-3. Module parity uses 2e-2 (realized: max 8.6e-3, median 5.4e-4).
+
+Traps the runbook documents, all confirmed numerically while implementing:
+- **§4.5's rank-two oracle is correct** — reproduced at **1.4e-16**; all three corruptions
+  (`drop_rho`, `rho_on_u2`, `plain_k`) fail by ~**1e15×**. Do not "simplify" any term.
+- **Negative controls need asserted floors.** Both zero-difference regimes were reproduced
+  exactly: the `v₂=0` control gives **0.000e+00** when `S_prev=0`, and factor-order separation is
+  0.0 at orthogonal keys. The swap keys are now built with an *exact* inner product
+  (`_tied_angle_key`) so `|k₁·k₂|` is assertable rather than luck-of-the-draw.
+- **Compare `o`, not just `S`** — `S` is invariant to readout microstep.
+- **The zero-query NaN is module-level only.** `l2_normalize` NaNs on zeros, but the operator is
+  *downstream* of it — a zero query there yields a zero output, not NaN. Verified: substituting a
+  zero dummy does **not** fail the operator tests. The unit dummy is kept for reuse safety, and
+  the docstring says plainly that it is not load-bearing at this level. Do not cite this as a
+  passing check that the NaN is handled.
 
 ### 4. Phase-1 harness (largest block; all in `Capstone_LLM/probes/`, not this worktree)
 
@@ -235,8 +351,15 @@ Traps the runbook now documents, each verified numerically:
 ### 5. Open items I did not do
 
 - **No PR opened.** Branch is pushed; GitHub offered the link.
-- **`docs/dp2-kda/README.md` still says `Reflection / EDA2`** where the runbook says `Reflection`,
-  and `EDA2` is undefined anywhere in the doc set.
+- ✅ `docs/dp2-kda/README.md` `Reflection / EDA2` → `Reflection`, matching the runbook.
+- **`Capstone_LLM/docs/` is unversioned** — same class of problem as `probes/` was. Three
+  governing documents were edited across these two sessions with no history and no way to diff.
+  The runbook alone is 84 KB of audited reasoning. Worth a `git init`.
+- **`probes/` has no remote.** `93b60d7` is the manifest's checksum but is local-only, so it is
+  not independently fetchable. Push it somewhere durable before Phase 1.
+- **The `_load_oracle` fail-open is still fail-open** (`kda_householder_test.py:34-58`). Mitigated
+  operationally (`KDA_PROBES_DIR` set everywhere + zero-skip assertion), not fixed — the fix edits
+  a file inside `6b75c06`.
 - Your uncommitted `CLAUDE.md` edit (the worktree convention) sits on the canonical checkout,
   untouched. It is also inside `55704ca` here.
 - **`claude-01` is already used as an agent-id in the `edullm-data` repo** (worktree

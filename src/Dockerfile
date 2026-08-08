@@ -55,8 +55,15 @@ ARG GROUPED_GEMM_SHA="f1429a3c44c98f7912aa4b00125144cdf4e7fdb2"
 RUN TORCH_CUDA_ARCH_LIST="8.9 9.0 10.0" GROUPED_GEMM_CUTLASS="1" pip install --no-build-isolation --no-cache-dir "grouped_gemm @ git+https://git@github.com/tgale96/grouped_gemm.git@${GROUPED_GEMM_SHA}"
 
 # Install flash-attn 2
+# NOTE: use "80", not "89", to cover Ada/L40S (sm_89). flash-attn 2.8.2's setup.py tests
+# 'cuda_archs()' against four hard-coded literals -- "80", "90", "100", "120" -- and the token
+# "89" matches none of them, so passing it emits no -gencode for Ada at all: the built .so then
+# carries only sm_90/sm_100 SASS and *no* PTX, so there is no JIT fallback either. Verified by
+# building this layer and inspecting the result with 'cuobjdump'. sm_80 SASS runs on sm_89
+# (binary compatibility holds upward within a major version), so "80" is what actually delivers
+# L40S support. Note that upstream's own default is "80;90;100;120".
 ARG FLASH_ATTN_VERSION=2.8.2
-RUN FLASH_ATTN_CUDA_ARCHS="89;90;100" pip install --no-build-isolation --no-cache-dir flash-attn==${FLASH_ATTN_VERSION}
+RUN FLASH_ATTN_CUDA_ARCHS="80;90;100" pip install --no-build-isolation --no-cache-dir flash-attn==${FLASH_ATTN_VERSION}
 
 # Install flash-attn 3.
 ARG FLASH_ATTN_3_SHA="92ca9da8d66f7b34ff50dc080ec0fef9661260d6"
