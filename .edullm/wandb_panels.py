@@ -162,7 +162,7 @@ def _as_regex(pattern: str) -> str:
     return "^" + "".join(".*" if ch == "*" else re.escape(ch) for ch in pattern) + "$"
 
 
-def build_report(entity: str, project: str, group: str) -> str:
+def build_report(entity: str, project: str, group: str, dry_run: bool = False) -> str:
     """
     Build a report over the group, with one section per question the module asks.
 
@@ -213,6 +213,21 @@ def build_report(entity: str, project: str, group: str) -> str:
         width="fluid",
         blocks=blocks,  # type: ignore[arg-type]
     )
+
+    if dry_run:
+        # Constructing a Report is local until save() runs, so this shows exactly what would
+        # be published without leaving a draft behind in a shared project.
+        sections = [b.text for b in blocks if isinstance(b, wr.H2)]
+        panels = sum(len(b.panels) for b in blocks if isinstance(b, wr.PanelGrid))
+        print(f"would publish: {len(sections)} section(s), {panels} panel(s)")
+        for block in blocks:
+            if isinstance(block, wr.H2):
+                print(f"  [{block.text}]")
+            elif isinstance(block, wr.PanelGrid):
+                for panel in block.panels:
+                    print(f"      panel  {panel.title}")
+        return "(dry run, nothing saved)"
+
     report.save(draft=True)
     return report.url
 
@@ -224,6 +239,12 @@ def main() -> int:
     parser.add_argument("--group", required=True, help="The experiment slug.")
     parser.add_argument("--verify", action="store_true")
     parser.add_argument("--report", action="store_true")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="With --report, print the sections and panels that would be published without "
+        "saving anything.",
+    )
     opts = parser.parse_args()
 
     if not opts.verify and not opts.report:
@@ -233,7 +254,7 @@ def main() -> int:
     if opts.verify:
         status = verify(opts.entity, opts.project, opts.group)
     if opts.report:
-        print("report:", build_report(opts.entity, opts.project, opts.group))
+        print("report:", build_report(opts.entity, opts.project, opts.group, opts.dry_run))
     return status
 
 
