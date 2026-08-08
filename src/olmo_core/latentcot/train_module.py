@@ -26,6 +26,14 @@ from olmo_core.train.train_module import (
 )
 
 from .loss import VocabReg, arm_loss
+from .moe import (
+    collect_router_metrics,
+    count_forwards,
+    finish_step,
+    is_moe_model,
+    normalized_aux_losses,
+    reset_router_state,
+)
 
 __all__ = ["CodiTransformerTrainModule", "CodiTransformerTrainModuleConfig"]
 
@@ -53,22 +61,40 @@ class CodiTransformerTrainModule(TransformerTrainModule):
         self.vocab_reg_entropy_floor = vocab_reg_entropy_floor
 
     def train_batch(self, batch: Dict[str, Any], dry_run: bool = False) -> None:
-        """Compute + backprop the arm's loss for a batch of encoded examples."""
+        """
+        Compute + backprop the arm's loss for a batch of encoded examples.
+
+        This overrides :meth:`TransformerTrainModule.train_batch` wholesale rather than extending
+        it, because the CODI loss is per-example rather than over a token-array microbatch. That
+        means the parent's MoE bookkeeping is *not* inherited, so it is repeated here — see
+        :mod:`olmo_core.latentcot.moe` for what each piece is for and why the missing
+        ``normalized_aux_losses`` would be an arm-dependent confound rather than a rough edge.
+        """
         examples = batch["examples"]
-        with self._train_microbatch_context(0, 1), self._model_forward_context():
-            loss, metrics = arm_loss(
-                self.model,
-                examples,
-                mode=self.arm_mode,
-                distill_weight=self.distill_weight,
-                vocab_reg=self.vocab_reg,
-                vocab_reg_weight=self.vocab_reg_weight,
-                vocab_reg_entropy_floor=self.vocab_reg_entropy_floor,
-                label_ignore_index=self.label_ignore_index,
-            )
+        moe = is_moe_model(self.model)
+        if moe:
+            reset_router_state(self.model)
+        forwards = count_forwards(examples, mode=self.arm_mode) if moe else 1
+        with normalized_aux_losses(self.model, forwards):
+            with self._train_microbatch_context(0, 1), self._model_forward_context():
+                loss, metrics = arm_loss(
+                    self.model,
+                    examples,
+                    mode=self.arm_mode,
+                    distill_weight=self.distill_weight,
+                    vocab_reg=self.vocab_reg,
+                    vocab_reg_weight=self.vocab_reg_weight,
+                    vocab_reg_entropy_floor=self.vocab_reg_entropy_floor,
+                    label_ignore_index=self.label_ignore_index,
+                )
         loss.backward()
 
+        # The bias_gamma score-bias update, which the parent would have done here.
+        finish_step(self.model, dry_run=dry_run)
+
         if dry_run:
+            if moe:
+                reset_router_state(self.model)
             return
 
         # Primary CE (for the SkipStepOptimizer): student for CODI, else the anchor's CE.
@@ -76,6 +102,10 @@ class CodiTransformerTrainModule(TransformerTrainModule):
         if primary is not None:
             self.record_ce_loss(torch.tensor(primary, device=self.device), ReduceType.mean)
         for name, value in metrics.items():
+            self.record_metric(
+                name, torch.tensor(value, device=self.device), ReduceType.mean, namespace="train"
+            )
+        for name, value in collect_router_metrics(self.model).items():
             self.record_metric(
                 name, torch.tensor(value, device=self.device), ReduceType.mean, namespace="train"
             )

@@ -31,6 +31,7 @@ import torch
 from olmo_core.latentcot.arms import ARMS
 from olmo_core.latentcot.data.dataset import LatentCotDataset
 from olmo_core.latentcot.evaluate import overall_accuracy, solve_rate_by_depth
+from olmo_core.latentcot.moe import describe_moe
 from olmo_core.latentcot.tracking import ArmTracker, resolve_project
 from olmo_core.latentcot.train_driver import (
     PRECISIONS,
@@ -47,7 +48,14 @@ from olmo_core.latentcot.train_driver import (
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arm", required=True, choices=sorted(ARMS))
-    parser.add_argument("--rung", default="olmo2_370M", help="TransformerConfig factory name")
+    parser.add_argument(
+        "--rung",
+        default="olmo2_370M",
+        help="TransformerConfig factory name. Dense (olmo2_370M, olmo3_370M, ...) or MoE "
+        "(olmoe_1B_7B, smallmoe, ...) -- both are supported and the MoE-specific bookkeeping "
+        "switches on automatically (see olmo_core.latentcot.moe). NOTE: every MoE path in this "
+        "repo routes through Triton kernels, so an MoE rung needs CUDA and cannot run on CPU.",
+    )
     parser.add_argument(
         "--attn-backend",
         default=None,
@@ -225,6 +233,10 @@ def main() -> None:
         "vocab_reg_entropy_floor": arm.vocab_reg_entropy_floor,
         "save_every": args.save_every,
         "val_fraction": args.val_fraction if val_examples else 0.0,
+        # None on a dense base. Recorded rather than assumed: the arms fork a pretrained
+        # checkpoint whose expert count and top-k come from ITS config, so "what did we
+        # actually load" should be on the run rather than inferred later.
+        "moe": describe_moe(model),
     }
 
     # Start tracking BEFORE training, so a run that dies mid-way still has its curve and its

@@ -85,6 +85,33 @@ Stays untracked.
 5. One commit, crediting philote-dev. **No push until asked.**
 6. Update `progress.md`.
 
+## 4b. MoE base
+
+The pretrained checkpoint is a **Mixture-of-Experts** model. The continuous-thought path needs no
+change for that — `MoETransformerBlock.forward` returns a plain tensor, so the last-block hook reads
+it exactly as it reads a dense block — but three things the framework `Trainer` does for an MoE run
+were nobody's job in the direct Phase-8 loop, and the first is a confound:
+
+1. **Auxiliary losses are per-forward.** A0/A1 do 1 forward per example, A2–A4 do `K+2`. Because
+   `attach_auxiliary_loss` hands the aux loss gradient `1.0` per forward, the latent arms were
+   pushed ~12× harder on load balancing than the baselines — on exactly the `A2 − A0` comparison
+   Gate A is defined on. `moe.normalized_aux_losses` divides the routers' `lb`/`z` weights by the
+   step's forward count. **Not `loss_div_factor`**, which also divides the cross-entropy and would
+   silently rescale the LM objective (measured: a factor of 1234 moved a dense loss from 11.67 to
+   0.00945).
+2. **`post_batch()`** was never called, so `bias_gamma` (aux-loss-free balancing) was inert.
+3. **`reset_auxiliary_metrics()`** was never called, so the expert-balance numbers described the
+   whole run rather than a step. They now reset per step and stream to W&B under `moe/…`.
+
+All of it lives in `latentcot/moe.py` and is a no-op on a dense model, so the dense rungs are
+unaffected. `CodiTransformerTrainModule.train_batch` overrides its parent wholesale and so had the
+same gap; it carries the same bookkeeping now.
+
+**MoE requires CUDA.** Every MoE path routes through `olmo_core.kernels.moe`, which is Triton;
+`import triton` fails on macOS and both the dropless and capacity-factor paths assert the kernels
+are present. So MoE tests are `@requires_gpu`, matching this repo's own MoE tests, and **they have
+not been executed** — that needs one GPU run before the MoE pilot is trusted.
+
 ## 5. Done when
 
 - `git diff origin/main --stat` names only the four owned directories plus `.edullm/{Dockerfile,run.yaml}`

@@ -151,10 +151,69 @@ repo reaches W&B — was simply not in play. Metrics existed only as stdout and 
   built from the commit — so `edullm submit --wandb-project latent-cot-superposition` remains the
   right way to launch.
 
-**Found while doing this, pre-existing, NOT fixed:** `run.yaml` does
+**Found while doing this, pre-existing, NOT fixed (W&B section):** `run.yaml` does
 `mkdir -p "$EDULLM_CHECKPOINT_DIR/A$i"` and `> "$EDULLM_CHECKPOINT_DIR/A$i/train.log"` where that
 variable is an `s3://` URI. Those are *shell* operations, so they hit a local relative path
 (`s3:/bucket/...`) that dies with the container — the same `Path()`-mangling trap the file documents
 for Python, one layer out where no Python guard can catch it. The per-arm logs are therefore not
 durable. Verified end-to-end against a fake `wandb`: config, per-step logs, group-from-env, summary,
 `finish(0)`, and both untracked paths completing normally.
+
+## 2026-08-08 — MoE base support (new: `moe.py`)
+
+The pretrained checkpoint the arms fork will be a **Mixture-of-Experts** model, not a dense one.
+The continuous-thought path itself needed no change — `MoETransformerBlock.forward` returns a plain
+tensor, so `cot._capture_last_block` reads it exactly as it reads a dense block. What did need
+changing is everything the framework `Trainer` does for an MoE run and the Phase-8 direct loop
+never did.
+
+**The real bug: the MoE auxiliary losses were an arm-dependent confound.** Each router computes a
+load-balancing loss per forward and welds it to the activation with `attach_auxiliary_loss`, whose
+backward hands the aux loss gradient `1.0` *regardless of how the main loss was scaled*. Each
+forward also normalizes by its own token count, so the aux pressure per step scales with the
+**number of forwards** — and `codi_loss`'s `/n` over examples does not touch it. Forwards per
+example: **1** for A0/A1, **K+2 = 12** for A2/A3/A4. So the router would be pushed ~12× harder in
+the latent arms than in the baselines — on exactly the `acc(A2) − acc(A0)` comparison Gate A is
+defined on. Same species as the pre-run thought-norm drift, and it would have been just as
+invisible.
+
+- **`latentcot/moe.py`** (new): `is_moe_model`, `count_forwards`, `normalized_aux_losses`,
+  `reset_router_state`, `finish_step`, `collect_router_metrics`, `describe_moe`. Every one is a
+  no-op on a dense model, so nothing changes for the dense rungs.
+- **`normalized_aux_losses(model, n)`** divides each router's `lb_loss_weight`/`z_loss_weight` by
+  the step's forward count for the duration of the step, restoring them in a `finally` so a failed
+  step cannot leave the model detuned. `None` weights stay `None` — off must stay off.
+- **`post_batch()` is now called** each step (the `bias_gamma` score-bias update, i.e. aux-loss-free
+  balancing). Nothing in the loop called it, so that mechanism was silently inert.
+- **Router metrics reset per step and land in `train_history`** under `moe/…`, so they stream to
+  W&B. A fine-tune can quietly collapse the routing and these are the series that show it. Per-block
+  series are dropped; only the totals are logged.
+- **`CodiTransformerTrainModule.train_batch` had the same gap** — it overrides the parent wholesale
+  (the CODI loss is per-example, not a token-array microbatch), so it inherited none of the parent's
+  MoE bookkeeping. Now repeated there too.
+- `metrics.json` and the W&B config record `describe_moe(model)` — expert count, top-k, aux weights
+  as actually built. The arms fork a checkpoint whose MoE shape comes from *its* config, so "what
+  did we load" should be on the record rather than reconstructed later.
+
+**A wrong design, caught by a test.** The first attempt threaded `loss_div_factor` through every
+forward, which is the obvious-looking lever. It is the wrong one: `LMHead` passes it to
+`_finalize_loss`, so it divides the **cross-entropy** too — measured on a dense 2-layer model,
+`loss_div_factor=1234` moved the loss from 11.67 to 0.00945, exactly 1/1234, silently rescaling the
+LM objective and the effective LR. That threading was reverted; scaling the router weights is the
+only knob that moves the aux term alone. A GPU test now pins that CE is unchanged by the
+correction.
+
+**MoE needs CUDA, so MoE tests are GPU-only.** Every MoE path here routes through
+`olmo_core.kernels.moe`, which is Triton — `import triton` fails outright on macOS, and both the
+dropless and capacity-factor paths assert `kernels is not None`. This repo's own MoE tests are all
+`@requires_gpu`; ours follow. 21 new tests in `test_moe.py`: 12 run on CPU (the forward-count
+arithmetic, the weight scale/restore including the raising case, the dense no-ops), 9 are
+`@requires_gpu` and cover a real MoE — thoughts on MoE blocks, all five arms training, router
+metrics reaching the history, the aux loss actually shrinking, and CE not moving. Suite total
+**174 passed, 9 skipped** on CPU.
+
+**Not verified, and cannot be here:** the GPU-marked tests have never executed — this machine has
+no CUDA and cannot install triton. They need one GPU run before the MoE pilot is trusted. Also
+still open: `--rung` must name an MoE factory that takes `(vocab_size, **kwargs)` (e.g.
+`olmoe_1B_7B`); `llama_like_moe` needs explicit expert args and cannot be reached through that flag
+as written. Exact MoE hyperparameters are pending from the user.

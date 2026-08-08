@@ -30,6 +30,14 @@ import torch
 from .arms import Arm
 from .data.dataset import codi_collate
 from .loss import arm_loss
+from .moe import (
+    collect_router_metrics,
+    count_forwards,
+    finish_step,
+    is_moe_model,
+    normalized_aux_losses,
+    reset_router_state,
+)
 
 __all__ = [
     "PRECISIONS",
@@ -367,12 +375,22 @@ def train_arm(
     # min(...) keeps warmup < horizon on the short smoke runs; decay_fraction matches the WSD default.
     scheduler = WSD(warmup=max(1, min(warmup_steps, steps - 1)), decay_fraction=0.1)
     history: List[dict] = []
+    # On an MoE base the routers' auxiliary losses are per-forward, and the arms do very
+    # different numbers of forwards (1 for A0/A1, K+2 for A2-A4), so without correction A2-A4
+    # feel ~K times the balancing pressure A0/A1 do -- an arm-dependent confound on exactly the
+    # comparison gate A is defined on. See olmo_core.latentcot.moe. All a no-op when dense.
+    moe = is_moe_model(model)
     for step, batch in enumerate(iter_batches(dataset, batch_size, steps, seed)):
         lr_t = scheduler.get_lr(lr, step, steps)
         for group in opt.param_groups:
             group["lr"] = lr_t
         opt.zero_grad(set_to_none=True)
-        with autocast_ctx(precision, device):
+        if moe:
+            # Read back per STEP, so the logged expert-balance numbers describe this step
+            # rather than the whole run to date.
+            reset_router_state(model)
+        forwards = count_forwards(batch["examples"], mode=arm.arm_mode) if moe else 1
+        with normalized_aux_losses(model, forwards), autocast_ctx(precision, device):
             loss, metrics = arm_loss(
                 model,
                 batch["examples"],
@@ -388,6 +406,10 @@ def train_arm(
         # the earliest warning that the latent path is diverging.
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
         opt.step()
+        if moe:
+            # The bias_gamma score-bias update (aux-loss-free load balancing). Nothing else in
+            # this loop calls it, so without this that mechanism silently does nothing.
+            finish_step(model)
         if step % log_every == 0 or step == steps - 1:
             history.append(
                 {
@@ -405,6 +427,9 @@ def train_arm(
                         else 0.0
                     ),
                     **metrics,
+                    # Expert-balance telemetry on an MoE base ({} when dense). A fine-tune can
+                    # quietly collapse the routing, and these are the series that show it.
+                    **(collect_router_metrics(model) if moe else {}),
                 }
             )
             # Print it too, flushed. `train_history` only reaches disk in metrics.json at the
