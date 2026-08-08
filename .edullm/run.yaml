@@ -23,6 +23,16 @@
 # config's shape. It is not 20M in total and cannot be: dolma2 is 100,278 tokens and OLMo-3
 # unties the embeddings, so the two tables alone are 77M.
 #
+# The first attempt at this earned its keep in eighteen minutes: it died with
+# "'FlashAttention2Backend' is missing the flash-attn package", because olmo3_370M asks for
+# flash-2 and this image installs torch 2.9.0 and no flash-attn. Both factories now pin the
+# torch backend. That would have been a 21-hour arm dying at startup.
+#
+# `--held-out-shards 2` carves an evaluation set out of the corpus, which declares none of its
+# own. Without it the only loss in the run is training loss, and --seed moves the shuffle, so
+# its variance across seeds is partly a different sample of the corpus rather than run-to-run
+# noise. Bits-per-byte is reported beside every CE loss.
+#
 # `--param-dtype bfloat16` is spelled out in the command text on purpose. The platform reads
 # command words to decide what a shape can do, and cannot see a dtype set in code.
 schema_version: 1
@@ -41,5 +51,7 @@ command: >-
   --save-interval 100
   --warmup-steps 20
   --monitor-interval 10
+  --eval-interval 100
+  --held-out-shards 2
   --fail-closed-by-step 150
   --param-dtype bfloat16'

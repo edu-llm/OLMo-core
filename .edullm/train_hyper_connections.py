@@ -88,8 +88,10 @@ def build_parser():
 
     # Re-point rather than add: the platform's default is olmo2_190M, and an arm that quietly
     # trained a 190M would be hard to notice from the loss curve and impossible to compare.
+    # hc_370M rather than olmo3_370M because the latter asks for a flash-attn backend this
+    # image does not carry, which is what killed the first rehearsal.
     parser.set_defaults(
-        model_factory="olmo3_370M",
+        model_factory="hc_370M",
         sequence_length=4096,
         global_batch_size=768 * 1024,
         rank_microbatch_size=8 * 1024,
@@ -135,6 +137,29 @@ def build_parser():
         "condition number.",
     )
     parser.add_argument(
+        "--held-out-shards",
+        type=int,
+        default=hyper_connection_arms.HELD_OUT_SHARDS,
+        help="Shards reserved from the corpus for evaluation. regmix-10b declares no "
+        "validation split, and without one the only loss in the run is training loss -- whose "
+        "variance across seeds is partly just a different sample of the corpus, since --seed "
+        "moves the shuffle. Set to 0 to train on everything and measure nothing held out.",
+    )
+    parser.add_argument(
+        "--eval-interval",
+        type=int,
+        default=500,
+        help="How often, in steps, to run the held-out evaluation.",
+    )
+    parser.add_argument(
+        "--bytes-per-token",
+        type=float,
+        default=hyper_connection_arms.DOLMA2_BYTES_PER_TOKEN,
+        help="Used to report bits-per-byte beside every CE loss. Sets the absolute level "
+        "only: it is the same for every arm, so a BPB difference between arms is a CE "
+        "difference times a fixed factor whatever this is.",
+    )
+    parser.add_argument(
         "--fail-closed-by-step",
         type=int,
         default=None,
@@ -170,7 +195,44 @@ def build_config(opts, overrides):
                 list(config.train_module.optim.group_overrides or []) + overrides_for_hc
             )
 
+    _add_held_out_evaluation(config, opts)
     return config
+
+
+def _add_held_out_evaluation(config, opts):
+    """
+    Reserve shards from the sealed corpus and evaluate on them, plus report bits-per-byte.
+
+    A local held-out set rather than the stock LM evaluator's default, which reads a C4 shard
+    from olmo-data.org: a public-internet fetch in the middle of a run whose whole claim is
+    that it read a sealed corpus, and one whose failure would look like a training failure.
+    These shards come out of the same manifest as the training data.
+    """
+    from dataclasses import replace
+
+    from olmo_core.train.callbacks import LMEvaluatorCallbackConfig
+
+    config.trainer = config.trainer.with_callback(
+        "bits_per_byte",
+        hyper_connection_arms.BitsPerByteCallback(bytes_per_token=opts.bytes_per_token),
+    )
+
+    if opts.held_out_shards < 1:
+        return
+
+    train_paths, eval_paths = hyper_connection_arms.split_held_out(
+        config.dataset.paths, opts.held_out_shards
+    )
+    config.dataset.paths = train_paths
+
+    config.trainer = config.trainer.with_callback(
+        "held_out",
+        LMEvaluatorCallbackConfig(
+            eval_dataset=replace(config.dataset, paths=eval_paths),
+            eval_interval=opts.eval_interval,
+            eval_on_finish=True,
+        ),
+    )
 
 
 def train(config, opts=None):

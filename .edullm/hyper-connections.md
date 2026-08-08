@@ -102,6 +102,58 @@ depth-routing change. So the effect is intervention-dependent, and if arms 2 thr
 flat this is a clean scale-boundary result rather than a failure — but that is said here, in
 advance, rather than afterwards.
 
+## What the first rehearsal found, in eighteen minutes for about $4
+
+It died, which is what it was for.
+
+**`flash_2` does not exist on this platform.** `RuntimeError: 'FlashAttention2Backend' is
+missing the flash-attn package or is not supported on this platform.` The training image
+installs `torch==2.9.0` and never installs flash-attn, so this is a property of the image and
+not of the card — L40S is Ada and flash-2 supports it. `TransformerConfig.olmo3_370M` asks for
+flash-2 by default, so **every arm would have died at startup**, 21 hours and $220 at a time.
+Both factories now pin the torch backend, and `hc_370M` exists so that the flash-2 default
+cannot come back the next time somebody copies a command.
+
+The sliding window goes with it. OLMo-3's pattern is `[4096, 4096, 4096, -1]` and these runs
+are at sequence length 4096, so a window of 4096 covers every position's entire history and
+the windowed layers are exactly full causal attention — provably the same model, not an
+approximation. Keeping it would not change a logit, but it would make the torch backend build
+an explicit mask, and SDPA with an explicit mask gives up the fused causal kernel it would
+otherwise use. Free to drop, not free to keep.
+
+## Where the runs land, and what they log
+
+| | |
+| --- | --- |
+| Entity | `eduLLM` |
+| Project | `pre-training` |
+| Group | the `--experiment` slug, e.g. `hyper-connections-370m` |
+| Run name | the platform run id |
+
+Per-topic project rather than per-team, which is the convention across the lab's other work
+and puts these arms next to the other 370M runs.
+
+`python .edullm/wandb_panels.py --verify --group <slug>` checks a group's runs against the
+metric families each clause of the decision rule rests on and names what is missing; it exits
+non-zero when a required family is absent, so it can gate a submission rather than only
+inform one. `--report` builds the panels over the families that exist.
+
+**The corpus declares no validation split**, so the arms carve one: `--held-out-shards 2`
+reserves two of `regmix-10b-v1`'s 41 shards, sorted and taken from the end so every arm and
+every seed evaluates on exactly the same data. Without it the only loss in the run is training
+loss, and since `--seed` moves the shuffle, its variance across seeds is partly a different
+sample of the corpus rather than the run-to-run noise σ is supposed to measure.
+
+Bits-per-byte is reported beside every cross-entropy metric, as CE in nats over
+`bytes_per_token × ln 2`. That constant sets the absolute level only — it is identical across
+arms, so a BPB difference between two arms is a CE difference times a fixed factor whatever
+the constant turns out to be.
+
+Downstream is **not** produced in-loop, and that is deliberate: the downstream evaluator
+fetches from the public internet, which does not belong inside a run whose claim is that it
+read a sealed corpus, and whose failure would look like a training failure. It comes from a
+separate job over saved checkpoints, which is what checkpoint-as-input is for.
+
 ## Measurements still to be taken
 
 Nothing below has been measured. These are the gates, not predictions.
