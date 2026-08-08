@@ -1305,3 +1305,180 @@ def test_a_run_with_no_wandb_reports_a_blank_url_rather_than_failing(monkeypatch
 
     assert watcher.wandb_url == ""
     assert watcher.first == 6.9
+
+
+# ---------------------------------------------------------------------------------------
+# The base run specification, driven end to end rather than read.
+#
+# `.edullm/run.yaml` is the only thing a block node reads out of this branch, and everything
+# that can be wrong with it is quiet: a flag argparse does not recognise becomes a config
+# override, a mesh that multiplies to the wrong world size trains at full speed over the wrong
+# fabric, and an export that declares the wrong context window serves. So the command is parsed
+# by the parser that will parse it, on the numbers it actually carries.
+# ---------------------------------------------------------------------------------------
+
+REPOSITORY = Path(__file__).parent.parent.parent
+
+#: The two meshes the platform will append for eight nodes of eight cards. `with_mesh_flags`
+#: puts one of these pairs on the end; neither may be written into the file itself.
+MESHES = (("8", "8"), ("32", "2"))
+
+
+def base_run_command() -> str:
+    import yaml
+
+    return yaml.safe_load((REPOSITORY / ".edullm" / "run.yaml").read_text())["command"]
+
+
+def base_run_arguments(shard_degree: str, replicas: str) -> List[str]:
+    """The command as argparse will see it: the launcher words gone, the mesh appended."""
+    words = base_run_command().split()
+    assert words[0] == "python" and words[1] == ".edullm/train_on_corpus.py", words[:2]
+    return words[2:] + [
+        "--moe-shard-degree",
+        shard_degree,
+        "--moe-num-replicas",
+        replicas,
+    ]
+
+
+@pytest.mark.parametrize("shard_degree,replicas", MESHES)
+def test_the_base_run_command_leaves_no_token_the_parser_did_not_want(shard_degree, replicas):
+    """A LEFTOVER IS NOT AN ERROR HERE, WHICH IS THE WHOLE REASON TO ASSERT ON IT.
+
+    ``main`` calls ``parse_known_args`` and hands what is left to ``config.merge`` as dotted
+    overrides. A misspelled flag therefore does not fail; it becomes an override that either
+    names nothing or, worse, names something. Both meshes are checked because the mesh flags
+    are appended by the platform rather than written here, and appending is where a duplicate
+    or a stray word would arrive.
+    """
+    opts, leftover = entry.build_parser().parse_known_args(
+        base_run_arguments(shard_degree, replicas)
+    )
+
+    assert leftover == []
+    assert opts.moe_shard_degree == int(shard_degree)
+    assert opts.moe_num_replicas == int(replicas)
+
+
+@pytest.mark.parametrize("shard_degree,replicas", MESHES)
+def test_the_base_run_mesh_is_accepted_at_64_ranks_and_refused_at_56(
+    shard_degree, replicas, monkeypatch
+):
+    """Both meshes multiply to 64, and the refusal is what catches a fleet that came up short.
+
+    56 is seven nodes of eight cards: the shape a launch lands on when one machine of the eight
+    never became ready. Accepted, it would train on a mesh nobody chose.
+    """
+    opts, _ = entry.build_parser().parse_known_args(base_run_arguments(shard_degree, replicas))
+
+    monkeypatch.setenv("WORLD_SIZE", "64")
+    entry.validate_olmoe_parallelism(opts)
+
+    monkeypatch.setenv("WORLD_SIZE", "56")
+    with pytest.raises(entry.Refusal, match="WORLD_SIZE"):
+        entry.validate_olmoe_parallelism(opts)
+
+
+def test_the_base_run_token_budget_is_the_arithmetic_it_claims():
+    """The three numbers the file's own comment derives, recomputed from the file's own flags."""
+    opts, _ = entry.build_parser().parse_known_args(base_run_arguments(*MESHES[0]))
+
+    assert opts.global_batch_size == 2**22 == 4_194_304
+    assert opts.global_batch_size % opts.sequence_length == 0
+    assert opts.steps == -(-100_000_000_000 // opts.global_batch_size) == 23_842
+    assert opts.steps * opts.global_batch_size == 100_000_595_968
+    # Every export has a core checkpoint beside it, which is what --hf-export-interval promises.
+    assert opts.hf_export_interval % opts.save_interval == 0
+
+
+def test_the_exported_context_window_is_the_length_the_run_trained_at(monkeypatch):
+    """CORRECTION: `get_hf_config` HARDCODES -1 AND SOMETHING HAS TO REPLACE IT.
+
+    A ``Transformer`` carries no sequence length, so the config builder cannot know one and
+    writes -1. What replaces it is this callback argument, and vLLM reads the field it lands in
+    as the context window before it reads anything else. Left at -1 the demo serves a model
+    declaring a nonsense context.
+
+    Pinned against ``--sequence-length`` rather than against 4096 so that a run at another
+    length stays consistent rather than staying at this number.
+    """
+    monkeypatch.setattr(
+        entry,
+        "resolve_corpus",
+        lambda **kwargs: entry.corpus_from_manifest(
+            FakeManifest(),
+            dataset_id=kwargs["dataset_id"],
+            version=kwargs["version"],
+            tokenizer_id=kwargs["tokenizer_id"],
+            # The base run carries --require-val, so a corpus without one is refused before a
+            # config exists to inspect.
+            val_paths=["s3://edullm-data/x/v1/tokens/val-00000.u32le.bin"],
+        ),
+    )
+    opts, overrides = entry.build_parser().parse_known_args(
+        base_run_arguments(*MESHES[0])
+        + ["--save-folder=s3://outputs/teams/platform/runs/a-run-id/checkpoints/"]
+    )
+    config = entry.build_config(opts, overrides)
+
+    exporter = config.trainer.callbacks["hf_converter"]
+    assert exporter.max_sequence_length == opts.sequence_length == 4096
+
+
+def test_the_committed_tokenizer_would_declare_a_context_twice_the_trained_one():
+    """WHY THE ASSERTION ABOVE IS NOT REDUNDANT, WHICH IS THE PART THAT IS EASY TO GET WRONG.
+
+    ``convert_checkpoint_to_hf`` falls back to the tokenizer's ``model_max_length`` when it is
+    given no length. The tokenizer committed beside this run declares 8192. So dropping the
+    wiring would not produce a visible -1 in ``config.json``; it would produce 8192 on a model
+    trained at 4096 -- served, plausible, and wrong by exactly a factor of two.
+    """
+    import json
+
+    tokenizer_config = json.loads(
+        (REPOSITORY / ".edullm" / "tokenizer" / "dolma2" / "tokenizer_config.json").read_text()
+    )
+    opts, _ = entry.build_parser().parse_known_args(base_run_arguments(*MESHES[0]))
+
+    assert tokenizer_config["model_max_length"] != opts.sequence_length
+
+
+def test_the_entry_point_imports_the_branchs_library_rather_than_the_images(tmp_path):
+    """CORRECTION: THE IMAGE CARRIES ``olmo_core`` AND WOULD OTHERWISE WIN.
+
+    The image sets ``PYTHONPATH=/opt/olmo-core/src`` and pip-installs the project as well, so
+    both copies are the commit the image was built from, and the branch's ``src/`` -- mounted
+    at ``/work/src`` along with the rest of the clone -- is on disk and never imported. Nothing
+    warns about it. The run trains against the image's model definition and the loss goes down.
+
+    Driven as a subprocess against a decoy that refuses to be imported, because the assertion
+    is about ``sys.path`` order in a fresh interpreter and this one has already imported the
+    module under test. ``--help`` is the cheapest path through the file that still executes
+    every import at the top of it.
+    """
+    import os
+    import subprocess
+
+    decoy = tmp_path / "image" / "src" / "olmo_core"
+    decoy.mkdir(parents=True)
+    (decoy / "__init__.py").write_text(
+        "raise ImportError('the image copy of olmo_core was imported instead of the branch one')"
+    )
+
+    environment = dict(os.environ, PYTHONPATH=str(tmp_path / "image" / "src"))
+    finished = subprocess.run(
+        [sys.executable, str(REPOSITORY / ".edullm" / "train_on_corpus.py"), "--help"],
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert finished.returncode == 0, finished.stderr
+    assert "the image copy of olmo_core" not in finished.stderr
+
+
+def test_the_branch_library_is_the_src_beside_this_entry_point():
+    """Resolved from ``__file__`` rather than hardcoded to /work, so a worktree works too."""
+    assert Path(entry._BRANCH_LIBRARY) == REPOSITORY / "src"
+    assert (Path(entry._BRANCH_LIBRARY) / "olmo_core" / "__init__.py").is_file()

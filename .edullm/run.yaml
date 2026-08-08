@@ -22,6 +22,19 @@
 #     prefix, and that derivation is what lets a second attempt resume the first instead of
 #     repeating it at full price.
 #
+#   * NO ENVIRONMENT ASSIGNMENT IN FRONT OF IT, AND `PYTHONPATH=/work/src` IN PARTICULAR. The
+#     problem it is reaching for is real: the image carries `olmo_core` on its own PYTHONPATH
+#     and pip-installs it as well, so `import olmo_core` finds the commit the image was built
+#     from and the `src/` this branch mounts at /work/src is never executed. The spelling does
+#     not work. `torchrun_command` prepends the rendezvous form, so the first word of this
+#     value becomes torchrun's positional `training_script` and torchrun execs
+#     `python -u <that word> <the rest>` -- an assignment there is a filename Python cannot
+#     open, on all 64 ranks. Read from torch/distributed/run.py `config_from_args`, which is
+#     the function that builds that argv. The fix is in `train_on_corpus.py`, which puts its
+#     own clone's `src/` on `sys.path` before importing anything; see its header. It needs no
+#     word here, works the same under torchrun and under `edullm-node run`, and does not
+#     hardcode /work.
+#
 # WHAT IT MUST CONTAIN THAT LOOKS LIKE IT COULD COME FROM THE ENVIRONMENT. The three dataset
 # variables cannot. `main` refuses at exit 64 when `EDULLM_DATASET_ID`, `EDULLM_DATASET_VERSION`
 # or `EDULLM_DATASET_TOKENIZER` is unset, and the block bootstrap sets none of the three -- it
@@ -59,9 +72,22 @@ command: >-
 # 2048 and its own help says why it stays there: every submission predating the MoE factory got
 # that value, and moving a default makes a sweep spanning the change two experiments reported
 # as one. `src/scripts/train/OLMoE-1B-7B.py` -- which d4b97fe aligned this entry point with --
-# is at 4096. It also becomes `max_position_embeddings` on every exported HuggingFace
-# checkpoint, so a run that forgets it hands the downstream lane a model declaring half the
-# context it was trained at.
+# is at 4096.
+#
+# IT IS ALSO THE EXPORTED CONTEXT WINDOW, AND THERE IS NO SECOND FLAG FOR THAT. `get_hf_config`
+# builds every config with `max_position_embeddings=-1`, because a `Transformer` carries no
+# sequence length to read one off. What replaces it is `HFConverterCallback(max_sequence_length=...)`,
+# which `train_on_corpus.py` fills from `--sequence-length` rather than exposing a separate
+# `--max-sequence-length` -- that flag exists, but on the offline `convert_checkpoint_to_hf`
+# script, not here, and a run declaring a context it was not trained at is not a thing anybody
+# wants to be able to ask for. vLLM reads that field as the context window before it reads
+# anything else, so the value is load-bearing rather than descriptive.
+#
+# THE FALLBACK IF IT WERE EVER NOT PASSED IS WORSE THAN -1 AND LOOKS FINE. `convert_checkpoint_to_hf`
+# falls back to the tokenizer's `model_max_length`, and the tokenizer committed under
+# `.edullm/tokenizer/dolma2` declares 8192. So an export that lost this wiring would not
+# announce itself with a nonsense -1; it would serve a model claiming exactly twice the context
+# it was trained at. `src/test/edullm_train_on_corpus_test.py` pins the wiring for that reason.
 #
 # --steps 23842 AND THE TOKEN BUDGET.
 #   4,194,304 tokens/step  =  2^22, and 4,194,304 / 4,096 = 1,024 sequences a step
@@ -107,6 +133,12 @@ command: >-
 # weights at steps no resumable checkpoint exists for.
 #   2,400 = 3 x 800                = 10.07B tokens, 90.6 min apart
 #   23,842 / 2,400                 = 9 exports in-run, plus one at the end from `post_train`
+# WHOEVER READS THOSE NINE WHILE THE RUN IS STILL GOING MUST NOT TAKE THE HIGHEST STEP OFF A
+# LISTING. `hf/step{N}` exists from the moment its first object lands and is whole minutes
+# later, and the gap is where a poller spends most of its time. The rule for exports is
+# `olmo_core.nn.hf.latest_complete_export` and for core checkpoints it is
+# `Checkpointer.latest_checkpoint`; they are two functions because `dir_is_checkpoint` answers
+# False for a complete export, so the checkpoint rule applied to `hf/` rejects everything.
 # The cost is real and is why this is not simply the save interval: `_get_full_model_state_dict`
 # gathers all 7,123,109,888 parameters to rank 0 with `cpu_offload=True` and every other rank
 # waits at a barrier while rank 0 builds an HF model and writes it. At bfloat16 that is 13.27
