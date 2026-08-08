@@ -292,11 +292,20 @@ COPY . .
 # 0xE3069283 and the platform's checkpoints.py asserts against the same constant. It costs a
 # microsecond and it is the difference between "botocore will use this" and "and the number
 # it gets is right".
+#
+# THE SFT TOKENIZER IS AN IMAGE INPUT, NOT A RUNTIME DOWNLOAD. The import check that first
+# accompanied the transformers extra proved only that the class existed; the next run still
+# had to reach Hugging Face before it could tokenize one row. Save the reviewed Dolma2
+# revision into the image and point train_sft.py at that local directory. The second check
+# exercises the experiment's actual loader and assistant mask, so an incompatible
+# transformers/tokenizer pair fails the image build instead of a paid training job.
+ENV EDULLM_SFT_HF_TOKENIZER=/opt/edullm/tokenizers/dolma2
 RUN set -eux; \
     python -m pip install --no-cache-dir ".[wandb,transformers]"; \
+    python -c "import os, sys; sys.path.insert(0, '.edullm'); from transformers import AutoTokenizer; from frontload_cl.constants import SFT_HF_TOKENIZER, SFT_HF_TOKENIZER_REVISION; tok = AutoTokenizer.from_pretrained(SFT_HF_TOKENIZER, revision=SFT_HF_TOKENIZER_REVISION, trust_remote_code=False); assert tok.vocab_size == 100278 and tok.eos_token_id == 100257 and tok.pad_token_id == 100277; tok.save_pretrained(os.environ['EDULLM_SFT_HF_TOKENIZER'])"; \
     python -c "import torch; assert torch.__version__.startswith('2.9.0'), f'torch was moved off the pin: {torch.__version__}'"; \
     python -c "import torch; assert torch.version.cuda, 'the CUDA build of torch was replaced by a CPU wheel'"; \
-    python -c "import boto3, wandb; from transformers import AutoTokenizer; from olmo_core.data import TokenizerConfig; from olmo_core.nn.transformer import TransformerConfig; print(TransformerConfig.olmo2_190M(vocab_size=TokenizerConfig.gpt2().padded_vocab_size()).__class__.__name__)"; \
+    python -c "import boto3, os, sys, wandb; sys.path.insert(0, '.edullm'); from frontload_cl.sft_tokenize import load_hf_tokenizer, tokenize_messages; from olmo_core.data import TokenizerConfig; from olmo_core.nn.transformer import TransformerConfig; tok = load_hf_tokenizer(os.environ['EDULLM_SFT_HF_TOKENIZER']); ids, mask = tokenize_messages(tok, [{'role': 'user', 'content': '2+2?'}, {'role': 'assistant', 'content': '4'}]); assert ids and len(ids) == len(mask) and any(mask); print(TransformerConfig.olmo2_190M(vocab_size=TokenizerConfig.gpt2().padded_vocab_size()).__class__.__name__)"; \
     python -c "import boto3; from botocore import UNSIGNED; from botocore.config import Config; from botocore.stub import Stubber; client = boto3.client('s3', region_name='us-east-1', config=Config(signature_version=UNSIGNED)); stub = Stubber(client); stub.add_response('put_object', {}); stub.activate(); client.put_object(Bucket='b', Key='k', Body=b'123456789', ChecksumAlgorithm='CRC32C')"; \
     python -c "from awscrt.checksums import crc32c; assert crc32c(b'123456789') == 0xE3069283, 'awscrt computes something other than CRC-32C'"; \
     python -c "from edullm_data.read import dataset_paths, resolve_latest; print(dataset_paths.__module__)"

@@ -151,16 +151,21 @@ SFT_WEIGHT_DECAY = 0.0
 SFT_EPOCHS = 1
 SFT_SAVE_INTERVAL = 500
 SFT_HF_TOKENIZER = "allenai/dolma2-tokenizer"
+SFT_HF_TOKENIZER_REVISION = "5292e5d6c0f40b67cc765fe41bec991cf4345b5c"
 # Classic OLMo 2 / Tülu chat markers (not the ChatML template on dolma2-tokenizer alone).
 SFT_CHAT_TEMPLATE = (
-    "{{ eos_token }}"
+    "{{ bos_token }}"
     "{% for message in messages %}"
     "{% if message['role'] == 'system' %}"
     "{{ '<|system|>\\n' + message['content'] + '\\n' }}"
     "{% elif message['role'] == 'user' %}"
     "{{ '<|user|>\\n' + message['content'] + '\\n' }}"
     "{% elif message['role'] in ['assistant', 'gpt'] %}"
+    "{% if not loop.last %}"
+    "{{ '<|assistant|>\\n' + message['content'] + eos_token + '\\n' }}"
+    "{% else %}"
     "{{ '<|assistant|>\\n' + message['content'] + eos_token }}"
+    "{% endif %}"
     "{% endif %}"
     "{% if loop.last and add_generation_prompt %}"
     "{{ '<|assistant|>\\n' }}"

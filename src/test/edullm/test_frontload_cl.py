@@ -150,6 +150,7 @@ def test_sft_hparams():
 class _FakeTok:
     """Minimal encoder: each distinct string maps to a fixed id sequence."""
 
+    bos_token = "<|endoftext|>"
     eos_token = "<|endoftext|>"
     vocab_size = 100278
 
@@ -191,6 +192,23 @@ def test_tokenize_messages_truncates():
     assert mask[-1] is True  # assistant body kept; closing eos truncated
 
 
+def test_tokenize_messages_matches_olmo2_multiturn_boundaries():
+    tok = _FakeTok()
+    ids, mask = tokenize_messages(
+        tok,
+        [
+            {"role": "user", "content": "q1"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": "q2"},
+            {"role": "assistant", "content": "a2"},
+        ],
+    )
+    assert len(ids) == len(mask) == 10
+    # The official template inserts one untrained newline after a non-final
+    # assistant EOS, before the next user header.
+    assert mask == [False, False, False, True, True, False, False, False, True, True]
+
+
 def test_tokenize_conversations_writes_npy_shards(tmp_path, monkeypatch):
     import gzip
     import json
@@ -226,12 +244,144 @@ def test_tokenize_conversations_writes_npy_shards(tmp_path, monkeypatch):
     assert len(token_paths) == 1 and len(mask_paths) == 1
     import numpy as np
 
-    tokens = np.load(token_paths[0])
-    masks = np.load(mask_paths[0])
+    tokens = np.fromfile(token_paths[0], dtype=np.uint32)
+    masks = np.fromfile(mask_paths[0], dtype=np.bool_)
     assert len(tokens) == len(masks)
     assert masks.dtype == np.bool_
     assert masks.any()
+    assert Path(token_paths[0]).stat().st_size == len(tokens) * np.dtype(np.uint32).itemsize
+    assert not Path(token_paths[0]).read_bytes().startswith(b"\x93NUMPY")
 
-    # Second call reuses shards.
-    stats2 = st.tokenize_conversations_to_dir([str(conv)], out)
+    # Exercise the reader used by train_sft.py, not np.load (which would accept
+    # the header-bearing format that OLMo's raw memmap reader rejects).
+    if sys.platform == "win32":
+        import multiprocessing as mp
+        import multiprocessing.context as mp_context
+
+        original_get_context = mp.get_context
+        monkeypatch.setattr(mp_context, "ForkProcess", mp_context.SpawnProcess, raising=False)
+        monkeypatch.setattr(
+            mp,
+            "get_context",
+            lambda method=None: original_get_context("spawn" if method == "fork" else method),
+        )
+    from olmo_core.data import (
+        NumpyDatasetDType,
+        NumpyFSLDatasetConfig,
+        TokenizerConfig,
+    )
+
+    dataset = NumpyFSLDatasetConfig(
+        paths=token_paths,
+        label_mask_paths=mask_paths,
+        tokenizer=TokenizerConfig.dolma2(),
+        dtype=NumpyDatasetDType.uint32,
+        sequence_length=4,
+    ).build()
+    item = dataset[0]
+    assert item["input_ids"].shape == item["label_mask"].shape == (4,)
+
+    # A second call with the same input contract reuses the committed shards.
+    stats2 = st.tokenize_conversations_to_dir(
+        [str(conv)],
+        out,
+        max_seq_length=64,
+        tokens_per_shard=1_000_000,
+        seed=0,
+    )
     assert stats2["reused"] is True
+
+
+def test_tokenize_limit_does_not_materialize_the_input(tmp_path, monkeypatch):
+    from frontload_cl import sft_tokenize as st
+
+    def rows(_paths):
+        for i in range(2):
+            yield {
+                "messages": [
+                    {"role": "user", "content": f"q{i}"},
+                    {"role": "assistant", "content": f"a{i}"},
+                ]
+            }
+        raise AssertionError("tokenizer consumed beyond --tokenize-limit")
+
+    monkeypatch.setattr(st, "iter_conversation_rows", rows)
+    monkeypatch.setattr(st, "load_hf_tokenizer", lambda _name=None: _FakeTok())
+    stats = st.tokenize_conversations_to_dir(
+        ["unused.jsonl"],
+        tmp_path / "tokens",
+        limit=2,
+        tokens_per_shard=1_000_000,
+    )
+    assert stats["num_input_conversations"] == 2
+    assert stats["num_conversations"] == 2
+
+
+def test_incomplete_tokenization_is_rebuilt(tmp_path, monkeypatch):
+    import numpy as np
+    from frontload_cl import sft_tokenize as st
+
+    out = tmp_path / "tokens"
+    out.mkdir()
+    np.save(out / "token_ids_part_0000.npy", np.asarray([123], dtype=np.uint32))
+    np.save(out / "labels_mask_part_0000.npy", np.asarray([True], dtype=np.bool_))
+
+    monkeypatch.setattr(
+        st,
+        "iter_conversation_rows",
+        lambda _paths: iter(
+            [
+                {
+                    "messages": [
+                        {"role": "user", "content": "q"},
+                        {"role": "assistant", "content": "a"},
+                    ]
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(st, "load_hf_tokenizer", lambda _name=None: _FakeTok())
+    stats = st.tokenize_conversations_to_dir(
+        ["unused.jsonl"],
+        out,
+        tokens_per_shard=1_000_000,
+    )
+    assert stats["reused"] is False
+    tokens = np.fromfile(stats["token_paths"][0], dtype=np.uint32)
+    assert tokens.tolist() != [123]
+
+
+def test_changed_tokenization_contract_rebuilds(tmp_path, monkeypatch):
+    from frontload_cl import sft_tokenize as st
+
+    monkeypatch.setattr(
+        st,
+        "iter_conversation_rows",
+        lambda _paths: iter(
+            [
+                {
+                    "messages": [
+                        {"role": "user", "content": "q"},
+                        {"role": "assistant", "content": "a"},
+                    ]
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(st, "load_hf_tokenizer", lambda _name=None: _FakeTok())
+    out = tmp_path / "tokens"
+    first = st.tokenize_conversations_to_dir(
+        ["unused.jsonl"],
+        out,
+        max_seq_length=64,
+        tokens_per_shard=1_000_000,
+    )
+    second = st.tokenize_conversations_to_dir(
+        ["unused.jsonl"],
+        out,
+        max_seq_length=32,
+        tokens_per_shard=1_000_000,
+    )
+    assert first["reused"] is False
+    assert second["reused"] is False
+    assert second["max_seq_length"] == 32

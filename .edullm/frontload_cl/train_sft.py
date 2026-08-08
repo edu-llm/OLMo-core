@@ -18,8 +18,10 @@ Examples::
       --tokenize-only --save-folder "$EDULLM_CHECKPOINT_DIR" \\
       --tokens-dir /tmp/frontload-cl-sft-tokens
 
-    # Train one epoch from a pretrain arm checkpoint (8 GPUs)
-    bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone \\
+    # Tokenize once, then train one epoch from a pretrain arm checkpoint (8 GPUs)
+    bash -lc 'python .edullm/frontload_cl/train_sft.py "$EDULLM_RUN_ID" \\
+      --tokenize-only --save-folder "$EDULLM_CHECKPOINT_DIR" && \\
+      python -m torch.distributed.run --nproc-per-node=8 --standalone \\
       .edullm/frontload_cl/train_sft.py "$EDULLM_RUN_ID" \\
       --checkpoint "$PT_CKPT" --save-folder "$EDULLM_CHECKPOINT_DIR" \\
       --param-dtype bfloat16'
@@ -54,13 +56,8 @@ if _PARENT not in sys.path:
 
 from frontload_cl import constants as C  # noqa: E402
 from frontload_cl.attn import resolve_attn_backend  # noqa: E402
-from frontload_cl.corpus import (  # noqa: E402
-    Refusal,
-    Stage,
-    default_run_name,
-)
+from frontload_cl.corpus import Refusal, Stage, default_run_name  # noqa: E402
 from frontload_cl.sft_tokenize import (  # noqa: E402
-    find_tokenized_shards,
     resolve_conversation_paths,
     tokenize_conversations_to_dir,
 )
@@ -74,7 +71,11 @@ from olmo_core.data import (  # noqa: E402
 )
 from olmo_core.data.types import LongDocStrategy  # noqa: E402
 from olmo_core.distributed.parallel import DataParallelType  # noqa: E402
-from olmo_core.distributed.utils import barrier, get_rank  # noqa: E402
+from olmo_core.distributed.utils import (  # noqa: E402
+    barrier,
+    broadcast_object,
+    get_rank,
+)
 from olmo_core.exceptions import OLMoConfigurationError  # noqa: E402
 from olmo_core.io import clear_directory, list_directory, normalize_path  # noqa: E402
 from olmo_core.nn.lm_head import LMLossImplementation  # noqa: E402
@@ -211,7 +212,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--model-factory", default=C.MODEL_FACTORY)
     p.add_argument(
         "--hf-tokenizer",
-        default=C.SFT_HF_TOKENIZER,
+        default=os.environ.get("EDULLM_SFT_HF_TOKENIZER", C.SFT_HF_TOKENIZER),
         help="HF id / path used for chat-template tokenization.",
     )
     p.add_argument(
@@ -254,47 +255,69 @@ def require_sft_env(opts) -> None:
 
 
 def ensure_tokenized(opts) -> Dict:
-    """Resolve conversation shards and tokenize into ``opts.tokens_dir`` if needed."""
-    version, paths = resolve_conversation_paths(
-        dataset_id=opts.dataset_id,
-        version=opts.dataset_version,
-        split="train",
-    )
+    """Resolve/tokenize on rank 0 and report the same outcome on every rank."""
+    outcome: Optional[Dict] = None
+    if get_rank() == 0:
+        try:
+            version, paths = resolve_conversation_paths(
+                dataset_id=opts.dataset_id,
+                version=opts.dataset_version,
+                split="train",
+            )
+            log.info(
+                "resolved %s/%s train → %d conversation shards",
+                opts.dataset_id,
+                version,
+                len(paths),
+            )
+            stats = tokenize_conversations_to_dir(
+                paths,
+                opts.tokens_dir,
+                tokenizer_name=opts.hf_tokenizer,
+                max_seq_length=opts.sequence_length,
+                seed=opts.data_seed,
+                limit=opts.tokenize_limit,
+            )
+            outcome = {
+                "ok": True,
+                "version": version,
+                "conversation_paths": paths,
+                "stats": stats,
+            }
+        except BaseException as exc:
+            if isinstance(exc, Refusal):
+                stage = exc.stage
+                explanation = exc.explanation
+            else:
+                stage = Stage.THE_CONFIG_WOULD_NOT_BUILD
+                explanation = f"{type(exc).__name__}: {exc}"
+            log.exception("rank 0 SFT tokenization failed")
+            outcome = {
+                "ok": False,
+                "stage": int(stage),
+                "explanation": explanation,
+            }
+
+    outcome = broadcast_object(outcome, src=0)
+    if not outcome or not outcome.get("ok"):
+        stage_value = (
+            outcome.get("stage", int(Stage.THE_CONFIG_WOULD_NOT_BUILD))
+            if outcome
+            else int(Stage.THE_CONFIG_WOULD_NOT_BUILD)
+        )
+        raise Refusal(
+            Stage(stage_value),
+            "rank 0 SFT tokenization failed: "
+            + (outcome.get("explanation", "no outcome was broadcast") if outcome else "no outcome"),
+        )
+
+    version = outcome["version"]
+    paths = outcome["conversation_paths"]
+    stats = outcome["stats"]
+    token_paths = stats["token_paths"]
+    mask_paths = stats["mask_paths"]
     opts._dataset_version = version  # type: ignore[attr-defined]
     opts._conversation_paths = paths  # type: ignore[attr-defined]
-    log.info(
-        "resolved %s/%s train → %d conversation shards",
-        opts.dataset_id,
-        version,
-        len(paths),
-    )
-
-    # Rank 0 tokenizes; others wait. Shards are local to the node work dir.
-    stats: Optional[Dict] = None
-    if get_rank() == 0:
-        stats = tokenize_conversations_to_dir(
-            paths,
-            opts.tokens_dir,
-            tokenizer_name=opts.hf_tokenizer,
-            max_seq_length=opts.sequence_length,
-            seed=opts.data_seed,
-            limit=opts.tokenize_limit,
-        )
-    barrier()
-    token_paths, mask_paths = find_tokenized_shards(opts.tokens_dir)
-    if not token_paths:
-        raise Refusal(
-            Stage.THE_CONFIG_WOULD_NOT_BUILD,
-            f"no tokenized shards under {opts.tokens_dir} after tokenize",
-        )
-    if stats is None:
-        stats = {
-            "output_dir": opts.tokens_dir,
-            "num_shards": len(token_paths),
-            "token_paths": token_paths,
-            "mask_paths": mask_paths,
-            "reused": True,
-        }
     opts._token_paths = token_paths  # type: ignore[attr-defined]
     opts._mask_paths = mask_paths  # type: ignore[attr-defined]
     return stats

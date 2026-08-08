@@ -12,7 +12,13 @@ schema_version: 1
 workload_profile: olmo-core-train
 suggested_compute: gpu-8xa100
 command: >-
-  bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone
+  bash -lc 'set -euo pipefail;
+  export EDULLM_LAUNCH_CHECK=waived ;
+  python .edullm/frontload_cl/train_sft.py "$EDULLM_RUN_ID"
+  --tokenize-only
+  --dataset-id sft/frontload-cl-chat-sft
+  --save-folder "$EDULLM_CHECKPOINT_DIR";
+  python -m torch.distributed.run --nproc-per-node=8 --standalone
   .edullm/frontload_cl/train_sft.py "$EDULLM_RUN_ID"
   --checkpoint s3://sbsandbox-intern-edullm-outputs/teams/pre-training/runs/run_019fddc9-44a6-705e-a70d-013aa2e92d10/checkpoints/
   --dataset-id sft/frontload-cl-chat-sft
