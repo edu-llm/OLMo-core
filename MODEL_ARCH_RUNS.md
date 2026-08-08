@@ -116,10 +116,12 @@ Ten steps are sufficient only for a pass/fail smoke. The audited throughput
 reporter excludes steps 1–50, so `throughput_tok_s_steady` is intentionally
 null in this run. Do not rank arms using its whole-run or last-step rate.
 
-### Throughput smoke: 70 steps
+### Throughput smoke: 100 steps
 
-`.edullm/run-throughput-smoke.yaml` uses the same five cells for 70 steps.
-After the fixed 50-step compile/allocator warmup, it reports 20 measured steps.
+`.edullm/run-throughput-smoke.yaml` uses the same five cells for 100 steps.
+After the fixed 50-step compile/allocator warmup, it reports 50 measured steps.
+Its save interval is 101, so periodic checkpoint dispatch cannot contaminate a
+timed step; the post-train hook still writes the final checkpoint.
 The contemporaneous GDN cell is the only valid parity baseline for these
 12-recurrent/4-attention models; the older mixer-bakeoff used different layer
 roles and cannot supply this denominator.
@@ -139,7 +141,7 @@ edullm check --json \
 
 Rank this smoke only by `throughput_tok_s_steady` and
 `throughput_tok_s_steady_per_device`. It is useful for finding a grossly slow
-arm before the 20-cell run, but one seed and 20 measured steps are not a final
+arm before the 20-cell run, but one seed and 50 measured steps are not a final
 performance estimate.
 
 ### One A100
@@ -165,7 +167,7 @@ python -m torch.distributed.run --nproc-per-node=1 --standalone \
 ```
 
 Substitute the arm and matching init seed from `docs/mamba-comparison/seeds.json`.
-Use 70 steps instead of 10 for throughput. This one-A100 path is configuration-
+Use 100 steps instead of 10 for throughput. This one-A100 path is configuration-
 valid and targets sm80, but it remains unverified on real A100 hardware until
 that smoke actually runs.
 

@@ -123,10 +123,12 @@ def test_smoke_specs_separate_functional_and_throughput_measurements():
     assert "ARMS=(mamba-b3 xlstm mamba3-siso-pd native-pd gdn)" in functional
 
     throughput = THROUGHPUT_SMOKE_SPEC.read_text()
-    assert "--steps 70" in throughput
+    assert "--steps 100" in throughput
+    assert "--save-interval 101" in throughput
     assert "--skip-heldout-eval" in throughput
     assert "--nproc-per-node=8" in throughput
     assert "WARMUP_STEPS_EXCLUDED=50" in throughput
+    assert "TORCH_LOGS=graph_breaks,recompiles" in throughput
     assert "ARMS=(mamba-b3 xlstm mamba3-siso-pd native-pd gdn)" in throughput
 
 
