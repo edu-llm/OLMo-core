@@ -84,6 +84,94 @@ respend.
     <td class="n">+22,688</td><td class="n">2,512,375,232</td></tr>
 </table>
 
+<h2>1b · Pros and cons, per operator — every claim is a measured number from this run</h2>
+<table>
+<tr><th style="width:20%">Arm</th><th style="width:40%">Pros</th><th style="width:40%">Cons</th></tr>
+
+<tr class="best"><td class="arm">KDA, no conv activation<br><span class="cfg">KDA_NOACT</span></td>
+  <td class="diff">
+   <b>+</b> Best CE of all six (3.0400), −0.0114 vs reference.<br>
+   <b>+</b> <b>Most reproducible arm in the run</b> — sd 0.00258, 4.2× tighter than the reference.<br>
+   <b>+</b> Free: same params (−10,080), same peak <i>and</i> reserved memory (9.153 / 10.721 GiB), 0.998× throughput.<br>
+   <b>+</b> Simplest change in the set — one config field, no new tensors, no new kernel.<br>
+   <b>+</b> Runs fla's fused <code>chunk_kda</code>, so it inherits the numerics gate that already passed.</td>
+  <td class="diff">
+   <b>−</b> CE advantage <b>does not clear the MDE</b> (CI [−0.0597, +0.0370] spans zero) — a bound, not a win.<br>
+   <b>−</b> Removing the SiLU is an unexplained gain: no mechanism is proposed for why it should help, so it may be noise that happened to land favourably.<br>
+   <b>−</b> Only tested at TPP 1.5; an activation may matter more with more tokens.<br>
+   <b>−</b> Exists as a control, so it has had no design attention as a candidate.</td></tr>
+
+<tr><td class="arm">KDA + LIV gated convolution<br><span class="cfg">KDA_GCONV</span></td>
+  <td class="diff">
+   <b>+</b> Second-best CE (3.0451).<br>
+   <b>+</b> Parameter-matched at +2,208 (0.0006% of the model) — quality is not bought with capacity.<br>
+   <b>+</b> Gate verified <i>live</i> on sm_80: 360/360 convolutions fused, gate gradients 1.4e-05 against a 1.0e-07 floor, gates moved 0.020 off neutral.<br>
+   <b>+</b> Bit-identical to the plain operator at init (0.000e+00), so the ablation is exact.</td>
+  <td class="diff">
+   <b>−</b> <b>Against its correct control the post-gate is +0.0051 nats — nominally worse</b>, CI [−0.0312, +0.0414], p = 0.765.<br>
+   <b>−</b> Highest peak memory of any arm: <b>9.434 GiB, +3.1%</b>.<br>
+   <b>−</b> Slowest of the four fla-kernel arms: 0.979×, MFU 40.7%.<br>
+   <b>−</b> Second-widest seed spread (sd 0.01678) — 6.5× the no-activation arm.<br>
+   <b>−</b> The depthwise pre-gate is <b>algebraically a SiLU</b>, so only 1 real dof/channel is new; the headline −0.0062 vs the reference is an artefact of the wrong comparator.<br>
+   <b>−</b> Lowrank variant is unusable: +2,359,296 params (12× tolerance) and it forfeits seed pairing.</td></tr>
+
+<tr><td class="arm">KDA, as shipped (reference)<br><span class="cfg">KDA_BASE</span></td>
+  <td class="diff">
+   <b>+</b> Fastest arm measured (419,288 tok/s) and joint-lowest memory (9.153 / 10.721 GiB).<br>
+   <b>+</b> Highest MFU tier (41.5%) alongside the other fla-kernel arms.<br>
+   <b>+</b> Best-supported path: fla's fused chunked kernel, already numerics-gated, already run on sm_80 at exit 0.<br>
+   <b>+</b> No CE contrast in this run beats it by a resolvable margin — it is not shown to be worse than anything.<br>
+   <b>+</b> Zero integration risk; it is the operator already in the tree.</td>
+  <td class="diff">
+   <b>−</b> Mid-table on CE (3.0514); three arms have lower point estimates, none resolvably so.<br>
+   <b>−</b> Seed spread sd 0.01075, 4.2× wider than the no-activation arm — the reference is itself not especially stable.<br>
+   <b>−</b> Its per-channel forget gate keeps β in (0,1), so the update is a contraction and no reflection mechanism is available.<br>
+   <b>−</b> Paper variant, not the K3 variant: no lower-bounded gate, low-rank output gate.</td></tr>
+
+<tr><td class="arm">KDA-Householder, negative eigenvalues, R=2<br><span class="cfg">KDA_R2</span></td>
+  <td class="diff">
+   <b>+</b> Tight seed spread (sd 0.00642), 1.7× better than the reference — the mechanism trains consistently.<br>
+   <b>+</b> Parameter-matched at +6,304 despite a mixer 47% larger (6,608,976 vs 4,487,248), respent in FFN width.<br>
+   <b>+</b> Does <i>fewer</i> FLOPs/token than the reference (2,457,037,312 vs 2,473,388,544), so its slowness is provably kernel inefficiency and not extra work.<br>
+   <b>+</b> The marginal cost of the second Householder factor is only <b>10.9%</b> — the arity itself is cheap.<br>
+   <b>+</b> β∈(0,2) makes (I − βkkᵀ) a true reflection: the state-tracking mechanism is genuinely present.</td>
+  <td class="diff">
+   <b>−</b> <b>Worst efficiency in the run: 0.705× throughput, MFU 29.1%</b> — a 29% tax.<br>
+   <b>−</b> CE is +0.0067 vs the reference: <b>no quality gain at any measurable level</b>.<br>
+   <b>−</b> Reserved memory <b>13.391 GiB, +24.9%</b> — the O(B·T·H·K·V) fp32 backward workspace, invisible in the peak figure and an OOM risk at longer context.<br>
+   <b>−</b> Custom non-chunked Triton kernel: not covered by fla's numerics gate, no CP/TP support, <code>torch.compile</code>-disabled.<br>
+   <b>−</b> Would need the chunking rewrite (~4–7 eng-days) before it is shippable.</td></tr>
+
+<tr><td class="arm">KDA-Householder, negative eigenvalues, R=1<br><span class="cfg">KDA_R1</span></td>
+  <td class="diff">
+   <b>+</b> Scientifically the most valuable arm in the run: it is the <b>only</b> way the Householder result could be split into kernel cost vs arity cost.<br>
+   <b>+</b> Parameter- and FLOP-identical to the reference, which doubles as an equivalence check on the implementation.<br>
+   <b>+</b> β∈(0,2) reflection regime available at nominally KDA-equivalent maths.</td>
+  <td class="diff">
+   <b>−</b> <b>Never ship this.</b> Same function as the reference, 0.779× the speed (MFU 32.4% vs 41.5%) — the 28.6% is pure kernel overhead for zero mathematical difference.<br>
+   <b>−</b> <b>Least reproducible arm by a wide margin: sd 0.04516</b>, 17× the no-activation arm, on identical mathematics. One seed landed at 3.1267 against siblings at 3.0542/3.0439.<br>
+   <b>−</b> That single arm's variance <b>inflated the pooled σ̂ from 0.01025 to 0.02042</b> and dissolved GDN2's otherwise-significant contrast — it damaged the whole run's power.<br>
+   <b>−</b> Worst CE of the KDA family (3.0749).<br>
+   <b>−</b> Reserved memory 13.260 GiB (+23.7%) for no mechanism the reference lacks.</td></tr>
+
+<tr class="worst"><td class="arm">Gated DeltaNet-2<br><span class="cfg">GDN2</span></td>
+  <td class="diff">
+   <b>+</b> Second-most reproducible (sd 0.00404) and highest MFU in the run (42.0%).<br>
+   <b>+</b> Throughput essentially free at 0.994× — it uses fla's fused <code>chunk_gdn2</code>, not a custom kernel.<br>
+   <b>+</b> Genuinely different mechanism: erase and write gates decoupled from one scalar β, plus per-channel decay through a low-rank bottleneck.<br>
+   <b>+</b> Best-tested implementation in the tree — its kernel-contract test transcribes the paper's recurrence independently and reduces to KDA when the gates are tied.</td>
+  <td class="diff">
+   <b>−</b> <b>Worst CE of all six (3.0884), +0.0371 vs the reference</b> — the largest effect measured in the run, in the wrong direction, and replicated across all three seeds (3.0838/3.0910/3.0905).<br>
+   <b>−</b> The only arm whose contrast is significant under <i>any</i> test (Welch/T3 CI [+0.0262, +0.0479], p = 0.0005), so this is the least likely result to be noise.<br>
+   <b>−</b> Costs +2.0% peak memory (9.333 GiB) for that.<br>
+   <b>−</b> Largest parameter surplus to respend (+22,688 after <code>solve_widths</code>).<br>
+   <b>−</b> Not param-matched to anything at its defaults; <code>expand_v</code> and <code>allow_neg_eigval</code> both had to be pinned by hand.</td></tr>
+</table>
+<p class="note">Reproducibility is read from the per-arm seed sd: an arm whose three seeds disagree by
+more than the effect being hunted cannot support a production decision, whatever its mean.
+<b>Reserved</b> memory is quoted alongside peak for the Householder arms because their fp32 backward
+workspace shows up there and not in the peak-allocated figure.</p>
+
 <h2>2 · Results — held-out cross-entropy (primary) and cost (co-primary)</h2>
 <table>
 <tr><th style="width:24%">Arm</th><th class="n">n</th><th class="n">val_ce (nats)</th>
