@@ -1,0 +1,13 @@
+diff --git a/src/edullm/ssh.py b/src/edullm/ssh.py
+index 8238ddb..d29c8da 100644
+--- a/src/edullm/ssh.py
++++ b/src/edullm/ssh.py
+@@ -18,7 +18,7 @@ from pathlib import Path
+ 
+ from edullm.secure_publish import SecurePublishError, capture_file, compare_and_publish
+ 
+-COMMAND_TIMEOUT_SECONDS = 30.0
++COMMAND_TIMEOUT_SECONDS = 120.0  # local bump: 30s was too short to complete Duo 2FA
+ _ALIAS = "orcd-login"
+ _HOSTNAME = "orcd-login.mit.edu"
+ _USERNAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")

@@ -102,6 +102,39 @@ that the platform syncs on exit, or adding the "is this actually written?" check
 evidence (a run that declared the contract and left the prefix empty is detectable after the
 fact, which is where a text check cannot reach).
 
+## 4b. The base checkpoint the pilot forks may name a bucket that does not exist
+
+The pilot is currently blocked here, and it is the one item on this list we cannot resolve from
+the repo side. Run `run_019fdf04-990d-7010-91c3-643fb5b94aef` (gpu-8xa100) reached the
+`verify_checkpoint` gate and stopped in 23 seconds:
+
+```
+FileNotFoundError: no distributed checkpoint found. Probed for '.metadata' under:
+  s3://edullm-olmo-370m-ckpts/olmo3-370m/run-10b-equal/step12716
+  s3://edullm-olmo-370m-ckpts/olmo3-370m/run-10b-equal/step12716/model_and_optim
+```
+
+Both layouts `Checkpointer.dir_is_checkpoint` recognises were probed. Three things suggest the
+**bucket itself** is the problem rather than the prefix:
+
+- `s3://edullm-olmo-370m-ckpts` appears **nowhere** outside this repository's own PRD and runbook —
+  not in `config/`, not in any other registered repository.
+- `edullm-alt-cl`'s 370M configs record that "Platform writes under
+  `s3://sbsandbox-intern-edullm-outputs/teams/{team}/runs/{run_id}/`", so a baseline trained on this
+  platform should live under the **outputs** bucket keyed by its run id.
+- `workload-catalog.yaml` documents the same mistake once already: its `destination_prefix` was
+  "Repointed from `s3://sbsandbox-intern-edullm-checkpoints/runs/`, which named a bucket that has
+  never existed."
+
+So the working hypothesis is that this path was invented rather than observed, and the real
+artifact is at `s3://sbsandbox-intern-edullm-outputs/teams/<team>/runs/<run_id>/checkpoints/`.
+
+**What would settle it:** the run id of the pretraining run that produced the 370M baseline (the
+one trained with the 10B config on `pretrain/olmo-150b-dolma2`), or a listing of whichever bucket
+holds it. Note that a *denied* S3 read arrives as `FileNotFoundError` through `cached_path`, so
+from inside the container a missing grant and a wrong path are indistinguishable — which is why
+this is being asked rather than guessed at a fourth time.
+
 ## 5. Smaller items
 
 - **The `edullm` CLI is broken.** `.venv/bin/edullm` is a console script importing `edullm.cli`,

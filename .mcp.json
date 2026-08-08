@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "sb-aws": {
+      "type": "stdio",
+      "command": "sb-aws-creds",
+      "args": [
+        "mcp"
+      ],
+      "env": {}
+    }
+  }
+}
