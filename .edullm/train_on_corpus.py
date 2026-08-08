@@ -115,6 +115,7 @@ from olmo_core.train.callbacks import (
     Callback,
     CheckpointerCallback,
     ConfigSaverCallback,
+    ConsoleLoggerCallback,
     GPUMemoryMonitorCallback,
     SpeedMonitorCallback,
     WandBCallback,
@@ -745,6 +746,35 @@ def build_config(opts, overrides: List[str]):
         )
         .with_callback("config_saver", ConfigSaverCallback())
         .with_callback("muon_metrics", MuonMetricsCallback())
+        # THE INVARIANT HAS TO REACH stdout, NOT ONLY W&B. MuonMetricsCallback records
+        # optim/radius_relative_drift_max every step, but ConsoleLoggerCallback prints an
+        # ALLOWLIST -- "optim/total grad norm", "optim/step skipped", "optim/LR*" -- and the
+        # drift matches none of those patterns. So the one number that says whether a MuonH arm
+        # is testing Hyperball at all was reachable only from a W&B dashboard, while the
+        # channel this platform actually gives you for a running job (`edullm logs`, or the
+        # Batch log stream behind it) carried everything EXCEPT it. Measured on
+        # run_019fdfa2-52d2: fifty lines of throughput, load imbalance and LR, no drift.
+        #
+        # That is the same failure MuonMetricsCallback exists to prevent, one layer out. A
+        # broken constraint still trains and still prints a plausible loss, so a reader with
+        # only the log stream cannot tell a Hyperball result from a Hyperball bug -- which is
+        # exactly the confusion the callback's own docstring calls indistinguishable.
+        #
+        # Extended from the default list rather than retyped, so an upstream change to what the
+        # console prints is inherited instead of silently pinned to whatever it was today.
+        # metrics_log_interval mirrors what Trainer's auto-added instance would have used
+        # (metrics_collect_interval), because configuring this explicitly opts out of that.
+        .with_callback(
+            "console_logger",
+            ConsoleLoggerCallback(
+                metrics_log_interval=5,
+                metrics=[
+                    *ConsoleLoggerCallback().metrics,
+                    "optim/radius_relative_drift_max",
+                    "optim/matrix_norm_*",
+                ],
+            ),
+        )
         # THIS WAS MISSING, AND ITS ABSENCE IS WHY NO RUN HERE HAS EVER REPORTED tok/s OR MFU.
         # Not a cosmetic gap: sizing a run against a 24 h attempt bound, or choosing a machine,
         # or reading a throughput regression, all need a number that nothing was producing. The
