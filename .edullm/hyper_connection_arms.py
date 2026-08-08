@@ -56,7 +56,15 @@ class Arm:
     """What it is for. An arm that cannot answer this is not an arm."""
 
     seeds: int
-    """How many seeds it needs. Three where a difference gets claimed, one for reconnaissance."""
+    """
+    How many seeds this arm is funded for.
+
+    Three where a difference gets claimed against the baseline, two where a claim rests on the
+    arm but a single seed would not resolve the literature's effect size, one for
+    reconnaissance that carries no claim, and zero for an arm that is specified here but is not
+    in the budget. Zero is not the same as absent: the arm still has to build, stay
+    iso-parameter and pass every test, so funding it later costs a number and not a design.
+    """
 
     hyper_connections: Optional[HyperConnectionConfig] = None
     """``None`` for an ordinary residual stream."""
@@ -132,14 +140,14 @@ ARMS: Dict[str, Arm] = {
         "interface forces.",
         isolates="Cause 1. Whether the field's negative result is an artifact of an "
         "incomplete reimplementation.",
-        seeds=1,
+        seeds=2,
         hyper_connections=_hc(mode=HyperConnectionMode.output),
     ),
     "no-output-init": Arm(
         number=4,
         summary="Faithful, but without the sqrt(n) output-module initialization scaling.",
         isolates="Cause 2. Whether that scaling is load-bearing or cosmetic.",
-        seeds=1,
+        seeds=2,
         hyper_connections=_hc(output_init_exponent=0.0),
     ),
     "decay-everything": Arm(
@@ -163,14 +171,14 @@ ARMS: Dict[str, Arm] = {
         number=7,
         summary="DHC x2.",
         isolates="The expansion-rate curve.",
-        seeds=1,
+        seeds=0,
         hyper_connections=_hc(n_lanes=2),
     ),
     "n8": Arm(
         number=8,
         summary="DHC x8.",
         isolates="The expansion-rate curve, at the point where they found returns flatten.",
-        seeds=1,
+        seeds=0,
         hyper_connections=_hc(n_lanes=8),
     ),
     "mhc": Arm(
@@ -200,6 +208,13 @@ ARMS: Dict[str, Arm] = {
 
 
 #: The order to cut arms in if the budget does not stretch, from the plan.
+#:
+#: The first two entries are already cut: ``n2`` and ``n8`` carry zero seeds, and the two runs
+#: they were holding went into second seeds for arms 3 and 4. The expansion-rate curve was the
+#: cheapest thing to give up, because it is the only claim in the plan that nothing else in it
+#: depends on, while arms 3 and 4 carry H2 and H3. A test asserts that the unfunded arms are
+#: exactly the head of this list, so the budget cannot be balanced by quietly cutting something
+#: that was never nominated for it.
 CUT_ORDER = ["n8", "n2", "tied-faithful", "tied-baseline"]
 
 
@@ -427,4 +442,13 @@ def describe() -> str:
     lines = [f"{'arm'.ljust(width)}  #   seeds  isolates"]
     for name, arm in ARMS.items():
         lines.append(f"{name.ljust(width)}  {arm.number:<2}  {arm.seeds:<5}  {arm.isolates}")
+    lines.append(f"{'total'.ljust(width)}      {total_runs():<5}  runs, once seeds are counted")
     return "\n".join(lines)
+
+
+def total_runs() -> int:
+    """
+    How many runs the table asks for. Counted rather than written down, because the number
+    written down in the plan was wrong for as long as it was written down.
+    """
+    return sum(arm.seeds for arm in ARMS.values())

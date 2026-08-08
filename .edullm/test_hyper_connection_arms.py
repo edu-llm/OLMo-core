@@ -39,13 +39,30 @@ def test_every_arm_in_the_plan_is_present_and_numbered_once():
     assert all(arm.isolates and arm.summary for arm in arms.ARMS.values())
 
 
-def test_the_three_seed_arms_are_the_ones_that_get_claimed():
+def test_the_seed_allocation_is_the_one_the_pre_registration_argues_for():
     """
-    Baseline, faithful and mHC carry claims, so they get three seeds. Everything else is
-    single-seed reconnaissance and has to be reported as such.
+    Three seeds where sigma itself is estimated and where a three-versus-three difference is
+    claimed, two on the arms carrying H2 and H3 whose minimum detectable effect at one seed sat
+    above the literature's effect size, one for reconnaissance that carries no claim, and zero
+    for the two arms whose runs paid for those second seeds.
     """
-    three = {name for name, arm in arms.ARMS.items() if arm.seeds == 3}
-    assert three == {"baseline", "faithful", "mhc"}
+    by_seeds = {}
+    for name, arm in arms.ARMS.items():
+        by_seeds.setdefault(arm.seeds, set()).add(name)
+
+    assert by_seeds[3] == {"baseline", "faithful", "mhc"}
+    assert by_seeds[2] == {"output-only", "no-output-init"}
+    assert by_seeds[1] == {"decay-everything", "n1", "tied-faithful", "tied-baseline"}
+    assert by_seeds[0] == {"n2", "n8"}
+
+
+def test_the_budget_did_not_move_when_the_seeds_were_reallocated():
+    """
+    Seventeen runs before and after. Two second seeds were funded by two arms giving up their
+    only one, so the reallocation costs nothing and needs no new approval.
+    """
+    assert arms.total_runs() == 17
+    assert str(arms.total_runs()) in arms.describe()
 
 
 @pytest.mark.parametrize("name", sorted(arms.ARMS))
@@ -168,6 +185,16 @@ def test_cut_order_names_real_arms_and_spares_the_core():
     assert set(arms.CUT_ORDER) <= set(arms.ARMS)
     core = {"baseline", "faithful", "n1", "mhc"}
     assert not core & set(arms.CUT_ORDER)
+
+
+def test_the_unfunded_arms_are_the_head_of_the_cut_order():
+    """
+    A budget balanced by cutting something that was never nominated for cutting is a different
+    experiment from the one that was pre-registered. Whatever carries zero seeds has to be a
+    prefix of the order the plan committed to in advance.
+    """
+    unfunded = [name for name in arms.ARMS if arms.ARMS[name].seeds == 0]
+    assert sorted(unfunded) == sorted(arms.CUT_ORDER[: len(unfunded)])
 
 
 def test_describe_lists_every_arm():
