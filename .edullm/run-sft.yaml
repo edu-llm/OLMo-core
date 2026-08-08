@@ -1,0 +1,20 @@
+# Frontload-cl shared post-PT SFT (one epoch) from the primer arm final checkpoint.
+# Conversations live under sft/frontload-cl-chat-sft; do NOT name that release as
+# --dataset (no tokenizer → exit 69). Pass --dataset none and keep --dataset-id.
+#
+# Control-arm SFT: same command with that arm's checkpoints/ URI.
+#
+#   edullm check  --json --spec .edullm/run-sft.yaml --team pre-training \
+#     --experiment frontload-cl --dataset none --compute gpu-8xa100
+#   edullm submit --spec .edullm/run-sft.yaml --team pre-training \
+#     --experiment frontload-cl --dataset none --compute gpu-8xa100
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/frontload_cl/train_sft.py "$EDULLM_RUN_ID"
+  --checkpoint s3://sbsandbox-intern-edullm-outputs/teams/pre-training/runs/run_019fddc9-44a6-705e-a70d-013aa2e92d10/checkpoints/
+  --dataset-id sft/frontload-cl-chat-sft
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --param-dtype bfloat16'
