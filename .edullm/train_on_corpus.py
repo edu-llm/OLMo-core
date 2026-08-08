@@ -106,6 +106,7 @@ from olmo_core.optim import (
 )
 from olmo_core.train import (
     Duration,
+    ReduceType,
     TrainerConfig,
     prepare_training_environment,
     teardown_training_environment,
@@ -731,6 +732,7 @@ def build_config(opts, overrides: List[str]):
             WandBCallback(
                 name=opts.run_name,
                 project=os.environ.get("EDULLM_WANDB_PROJECT"),
+                tags=wandb_tags(opts),
                 # No `group`. The platform puts the experiment in WANDB_RUN_GROUP, which the
                 # wandb client reads on its own; passing it again from an environment variable
                 # that does not exist would set it to None and look deliberate.
@@ -741,6 +743,7 @@ def build_config(opts, overrides: List[str]):
             ),
         )
         .with_callback("config_saver", ConfigSaverCallback())
+        .with_callback("muon_metrics", MuonMetricsCallback())
     )
 
     # No lm_evaluator and no downstream_evaluator, and their absence is a decision. The
@@ -791,6 +794,51 @@ class LossWatcher(Callback):
         if self.first is None:
             self.first = float(loss)
         self.last = float(loss)
+
+
+class MuonMetricsCallback(Callback):
+    """Put the Hyperball constraint's own invariant on the dashboard, every step.
+
+    WITHOUT THIS, A BROKEN CONSTRAINT LOOKS LIKE A BAD OPTIMIZER. MuonH's claim is that
+    ``||W_b||_F`` stays at ``R_b`` for the whole run. If it does not -- a shard boundary that
+    splits an expert, a dtype that cannot hold the projection, a resume that recovered the wrong
+    radius -- the run still trains, still reports a loss curve, and loses to MuonW. That reads as
+    a result about Hyperball and is a result about a bug, and the two are indistinguishable from
+    the loss alone.
+
+    ``optim/radius_relative_drift_max`` is the number that separates them: it should sit at the
+    floor of fp32 accumulation for the entire run. Anything that climbs means the arm stopped
+    testing what it claims to, and the run should be thrown away rather than interpreted.
+
+    Free to compute -- the optimizer's step already formed both norms to do the projection, so
+    this only reads them back. Rank-local (a sharded matrix contributes its own slice), hence
+    ``ReduceType.max`` on the drift: the worst rank is the one worth seeing.
+    """
+
+    def post_step(self) -> None:
+        optim = getattr(self.trainer.train_module, "optim", None)
+        metrics = getattr(optim, "latest_metrics", None)
+        if metrics is None:
+            return
+        for name, value in metrics().items():
+            reduce_type = ReduceType.max if name.endswith("_max") else ReduceType.mean
+            self.trainer.record_metric(f"optim/{name}", value, reduce_type=reduce_type)
+
+
+def wandb_tags(opts) -> List[str]:
+    """Tags that make one arm of a campaign identifiable without opening its config.
+
+    The run *name* is the platform's run id, which is the right name -- it is what `edullm
+    status` and the lineage record use -- and it says nothing about which arm ran. The
+    experiment slug arrives separately as the W&B run group. So the arm itself goes on as tags,
+    which is what a W&B filter and a grouped chart read.
+    """
+    tags = [opts.optimizer, opts.model_factory]
+    if opts.init_method is not None:
+        tags.append(f"init-{opts.init_method}")
+    if opts.optimizer != "adamw":
+        tags.append(f"lr-{opts.learning_rate:g}")
+    return tags
 
 
 def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> None:

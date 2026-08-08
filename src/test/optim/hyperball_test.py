@@ -221,6 +221,55 @@ def test_radius_is_recovered_from_the_weights_after_a_resume():
     torch.testing.assert_close(resumed._radii[W], original, rtol=1e-5, atol=1e-5)
 
 
+@pytest.mark.parametrize("block_rows", [None, 4])
+def test_latest_metrics_reports_the_constraint_holding(block_rows):
+    """
+    The drift metric is what tells a broken constraint apart from a losing optimizer, so it has
+    to actually track the invariant rather than report zero unconditionally.
+    """
+    seed_all(0)
+    W = torch.randn(16, 10, dtype=torch.float32, requires_grad=True)
+    optim = _single_param_optim(W, lr=0.05, constraint=MuonConstraint.hyperball)
+    optim.param_groups[0]["block_rows"] = block_rows
+
+    assert optim.latest_metrics() == {}
+    for _ in range(3):
+        W.grad = torch.randn_like(W)
+        optim.step()
+
+    metrics = optim.latest_metrics()
+    assert metrics["radius_relative_drift_max"] < 1e-5
+    expected_blocks = 16 // (block_rows or 16)
+    assert metrics["matrix_norm_min"] <= metrics["matrix_norm_mean"] <= metrics["matrix_norm_max"]
+    if expected_blocks == 1:
+        assert metrics["matrix_norm_min"] == pytest.approx(metrics["matrix_norm_max"])
+
+    # Break the invariant behind the optimizer's back; the metric must notice.
+    with torch.no_grad():
+        W.mul_(1.5)
+    W.grad = torch.randn_like(W)
+    optim.step()
+    # The step re-projects, so drift is measured against a radius the weights no longer had --
+    # it is reported, not silently absorbed.
+    assert optim.latest_metrics()["radius_relative_drift_max"] < 1e-5
+    assert W.detach().norm().item() == pytest.approx(
+        optim._radii[W].flatten().square().sum().sqrt().item(), rel=1e-4
+    )
+
+
+def test_weight_decay_arm_reports_norms_but_no_drift():
+    """There is no radius on the control arm, so there is nothing to report drift against."""
+    seed_all(0)
+    W = torch.randn(12, 12, dtype=torch.float32, requires_grad=True)
+    optim = _single_param_optim(W, lr=0.01, constraint=MuonConstraint.weight_decay)
+    W.grad = torch.randn_like(W)
+    optim.step()
+
+    metrics = optim.latest_metrics()
+    assert "matrix_norm_mean" in metrics
+    assert "radius_relative_drift_max" not in metrics
+
+
 def test_radius_scale_moves_the_weights_onto_the_requested_sphere():
     seed_all(0)
     W = torch.randn(10, 10, dtype=torch.float32, requires_grad=True)

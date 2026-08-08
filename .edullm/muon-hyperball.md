@@ -57,6 +57,30 @@ communication. Dense attention/MLP matrices are all-gathered instead.
 32 experts × hidden 512, `top_k=4`, no shared MLP. Everything else — `d_model`, depth, heads,
 QK-norm, RoPE theta, reordered-norm blocks — is held equal to the dense config.
 
+## What lands in W&B
+
+The platform supplies the project (`EDULLM_WANDB_PROJECT`) and puts the experiment slug in
+`WANDB_RUN_GROUP`, so every arm of one `--experiment` groups on its own. The run *name* is the
+platform run id, which is what `edullm status` and the lineage record use and which says nothing
+about the arm — so the arm goes on as **tags**: `muon_h` / `muon_w`, the model factory,
+`init-fan_in`, and `lr-<value>`. Filter or group on those.
+
+Alongside the usual loss and throughput, `MuonMetricsCallback` logs every step:
+
+| metric | reads as |
+|---|---|
+| `optim/radius_relative_drift_max` | `max\|‖W_b‖_F / R_b − 1\|`. **MuonH only.** Should sit at the fp32 accumulation floor for the whole run. |
+| `optim/matrix_norm_{mean,min,max}` | Frobenius norms over constrained blocks. Pinned on MuonH by construction; free to move on MuonW, and where it settles is what Hyperball pins. |
+
+**Check the drift metric before reading any loss curve.** If it climbs, the constraint stopped
+holding — a shard boundary splitting an expert, a resume that recovered the wrong radius — and
+the arm is no longer testing Hyperball. The run still trains and still reports a loss, and it
+will probably lose; that reads as a result about the method and is a result about a bug. Both
+are invisible in the loss alone, which is the entire reason this metric is logged.
+
+These are rank-local: a sharded matrix contributes its own slice, so the drift is reduced with
+`max` (the worst rank is the one worth seeing) and the norms with `mean`.
+
 ## Running it
 
 Stage 1, smoke: four short single-GPU runs, one per arm, to prove each path trains on real data

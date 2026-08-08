@@ -329,6 +329,27 @@ class MuonH(Optimizer):
         # checkpointed optimizer state stays shape-compatible with plain Muon's. See the
         # class docstring for why losing it on resume is harmless.
         self._radii: Dict[torch.Tensor, torch.Tensor] = {}
+        self._last_step_metrics: Dict[str, float] = {}
+        self._norm_accumulator: List[torch.Tensor] = []
+        self._drift_accumulator: List[torch.Tensor] = []
+
+    def latest_metrics(self) -> Dict[str, float]:
+        """
+        Diagnostics from the most recent :meth:`step`, for logging.
+
+        Every number here is a by-product of the step itself rather than extra work, which is
+        why it is worth logging every step.
+
+        ``matrix_norm_mean`` is the mean Frobenius norm over constrained blocks.
+        ``radius_relative_drift_max`` is the largest ``| ||W_b||_F / R_b - 1 |`` over blocks and
+        is only present under Hyperball -- it is the constraint's own invariant, so it should sit
+        at the floor of fp32 accumulation for the whole run. If it climbs, the constraint is not
+        holding and the arm is no longer testing what it claims to.
+
+        Values are this rank's blocks only. For a sharded parameter that means a slice, so
+        treat these as a monitor rather than a global reduction.
+        """
+        return dict(self._last_step_metrics)
 
     @torch.no_grad()
     def step(self, closure=None) -> None:
@@ -336,11 +357,26 @@ class MuonH(Optimizer):
             with torch.enable_grad():
                 closure()
 
+        self._norm_accumulator = []
+        self._drift_accumulator = []
+
         for group in self.param_groups:
             if group.get("algorithm", "muon") == "adamw":
                 self._adamw_group_step(group)
             else:
                 self._muon_group_step(group)
+
+        metrics: Dict[str, float] = {}
+        if self._norm_accumulator:
+            norms = torch.cat(self._norm_accumulator)
+            metrics["matrix_norm_mean"] = norms.mean().item()
+            metrics["matrix_norm_min"] = norms.min().item()
+            metrics["matrix_norm_max"] = norms.max().item()
+        if self._drift_accumulator:
+            metrics["radius_relative_drift_max"] = torch.cat(self._drift_accumulator).max().item()
+        self._last_step_metrics = metrics
+        self._norm_accumulator = []
+        self._drift_accumulator = []
 
     def _adamw_group_step(self, group: Dict[str, Any]) -> None:
         for p in group["params"]:
@@ -457,10 +493,17 @@ class MuonH(Optimizer):
 
             weight_blocks.add_((ortho * (-lr * radius)).to(weight_blocks.dtype))
             # Radial projection back onto the sphere: W <- R * W / ||W||_F.
-            scale = radius / weight_blocks.norm(dim=(-2, -1), keepdim=True).to(
-                torch.float32
-            ).clamp_min(1e-30)
-            weight_blocks.mul_(scale.to(weight_blocks.dtype))
+            unprojected = weight_blocks.norm(dim=(-2, -1), keepdim=True).to(torch.float32)
+            weight_blocks.mul_((radius / unprojected.clamp_min(1e-30)).to(weight_blocks.dtype))
+
+            # Free: the projection already needed both norms. The drift is measured AFTER the
+            # projection, so it reports what the constraint actually achieved rather than what
+            # it was handed.
+            projected = weight_blocks.norm(dim=(-2, -1)).to(torch.float32)
+            self._norm_accumulator.append(projected.flatten())
+            self._drift_accumulator.append(
+                (projected / radius.flatten().clamp_min(1e-30) - 1.0).abs().flatten()
+            )
         else:
             factor = _adjust_lr_factor(
                 weight_blocks.shape[-2], weight_blocks.shape[-1], group["adjust_lr"]
@@ -469,6 +512,11 @@ class MuonH(Optimizer):
             # the same split dion's Muon makes.
             weight_blocks.mul_(1 - lr * group["weight_decay"])
             weight_blocks.add_(ortho.to(weight_blocks.dtype), alpha=-lr * factor)
+            # No radius to compare against on this arm, but the norm itself is the interesting
+            # half: weight decay lets it move, and where it settles is what Hyperball pins.
+            self._norm_accumulator.append(
+                weight_blocks.norm(dim=(-2, -1)).to(torch.float32).flatten()
+            )
 
 
 @dataclass
