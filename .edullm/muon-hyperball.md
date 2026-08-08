@@ -223,7 +223,52 @@ the MoE result is not automatically a dense result given that per-expert blockin
 this that needed new library code.
 
 The obvious next experiment is a √2 LR sweep on both arms at this scale, which is what would turn
-this into a comparison of optimizers rather than of two points.
+this into a comparison of optimizers rather than of two points. It is specified below.
+
+## Tuning the learning rate
+
+The sweep that makes the result above a claim about optimizers rather than about two points. Specs:
+`run-sweep-{muonh,muonw}-*.yaml`.
+
+**Three points per arm, and only four of the six are new runs.** The finished runs at `muon_h=0.01`
+and `muon_w=0.02` are already points on this grid — same corpus, seed, batch, microbatch, dtype,
+initializer, steps and warmup — so they are the centres and the sweep only adds the brackets:
+
+| arm | lower (÷√2) | centre | upper (×√2) |
+|---|---|---|---|
+| `muon_h` | **0.00707107** | 0.01 *(done)* | **0.01414214** |
+| `muon_w` | **0.01414214** | 0.02 *(done)* | **0.02828427** |
+
+Reusing the finished runs is only legitimate because every non-LR parameter is identical, which is
+checked rather than asserted: each sweep spec's command normalises to its baseline's command exactly
+when the swept LR is substituted back. Change any other flag in one of these files and the centre
+stops being a grid point, which quietly costs two more runs.
+
+**`muon_h`'s upper bracket and `muon_w`'s lower bracket are both 0.01414214, and this means
+nothing.** They are different quantities — MuonW's is scaled per matrix by `adjust_lr`, MuonH's is a
+dimensionless relative step size. Neither run can stand in for the other. Called out in both spec
+headers because it is exactly the kind of thing that looks like a free saving.
+
+**The horizon is not shortened, and that is the expensive decision.** A cheaper sweep would locate
+each optimum at ~1B tokens and confirm at 4B. Two reasons not to. The comparison is defined at a
+*completed* cosine decay — the whole finding concerns what happens as the LR decays — so a 1B-token
+point cannot be compared against the finished 4B runs without discarding them and re-running the
+centres too. And the LR optimum moves with the horizon, so a short sweep optimises the wrong problem:
+it hands back a best-LR for 1B tokens and invites exactly the "untuned" objection the sweep exists to
+close.
+
+**Read it as a bracket test, not a curve fit.** Three points per arm can only say "the centre beats
+both neighbours" or "an edge wins". If an edge wins, the grid has not bracketed that arm's optimum
+and it needs one more run beyond that edge before any cross-arm number is quoted — a fifth and
+possibly sixth run, and not optional. Only once both arms are bracketed does "MuonH beats MuonW by X
+at each arm's own optimum" mean anything.
+
+**`--adamw-learning-rate 8.2e-4` is held fixed at every point.** Only the muon-group LR is swept;
+scaling both together sweeps two variables and locates neither.
+
+Cost and approvals: read them from `edullm check --json` per spec, never from this file. Budget one
+human approval cycle per submission regardless of what `approval_class` says, for the reason in
+"Running it" above.
 
 ### A defect this run exposed
 
