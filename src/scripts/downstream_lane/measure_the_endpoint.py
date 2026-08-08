@@ -69,6 +69,15 @@ def one_stream(endpoint: str, model: str, prompt: str, *, max_tokens: int) -> St
             "stream": True,
             "max_tokens": max_tokens,
             "temperature": 0.0,
+            # AN EMPTY STOP LIST, EXPLICITLY, BECAUSE A SHORT REPLY IS NOT A MEASUREMENT.
+            # The chat page supplies stop strings to any request that names none, and they
+            # work: a base model asked the capital of Japan answers in one token. A rate
+            # computed over one token is arithmetic on scheduling noise -- the first run of
+            # this through the proxy reported forty-two thousand tokens per second -- and
+            # the two paths could not be compared because only one of them was truncating.
+            # Naming the list overrides that default and makes every case generate
+            # max_tokens, which is what a throughput figure has to be measured over.
+            "stop": [],
         }
     ).encode()
     request = urllib.request.Request(
@@ -156,9 +165,14 @@ def main() -> int:
         )
     _report(f"{arguments.concurrency} people at once", together)
 
-    alone = statistics.median([s.tokens_per_second for s in short])
-    crowded = statistics.median([s.tokens_per_second for s in together])
-    if alone:
+    # Refused rather than printed when the samples are too short to divide. A percentage
+    # over a handful of tokens is a number somebody will quote in a meeting.
+    thin = min(s.tokens for s in short + together)
+    if thin < 16:
+        print(f"\nno slowdown figure: the shortest reply was {thin} tokens, which is not a rate")
+    else:
+        alone = statistics.median([s.tokens_per_second for s in short])
+        crowded = statistics.median([s.tokens_per_second for s in together])
         print(f"\nthree at once costs each of them {100 * (1 - crowded / alone):.0f}% of their speed")
     print(f"\nsample reply:\n{short[0].text.strip()[:400]}")
     return 0

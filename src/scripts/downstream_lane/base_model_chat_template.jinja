@@ -13,10 +13,11 @@
 
   NOTHING HERE IS A SPECIAL TOKEN, WHICH IS ALSO HOW GENERATION STOPS. A base model has
   never been taught to emit an end-of-turn marker and will not emit one, so a template
-  relying on a stop token produces a reply that runs to max_tokens every time. "\nUser:" is
-  a string the model reaches on its own when it has finished a turn, because that is how the
-  transcripts it read continue, and a stop string catches it. serve_a_checkpoint.py installs
-  the matching stop strings beside this file for exactly that reason.
+  relying on a stop token produces a reply that runs to max_tokens every time. The blank
+  line between turns is doing double duty: it is what separates speakers here, and it is
+  what serve_a_checkpoint.py stops on, because a model that has finished an answer starts a
+  new paragraph before it starts drifting. The turn markers alone were measured to be too
+  weak a stop -- the reasoning is beside TURN_ENDINGS in that file.
 
   A system message is folded into the preamble rather than given a marker of its own. A
   third speaker label the model has not seen costs more than it buys, and one instruction

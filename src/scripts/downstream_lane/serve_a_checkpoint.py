@@ -58,11 +58,20 @@ TEMPLATE_FILE = HERE / "base_model_chat_template.jinja"
 #: A BASE MODEL EMITS NO END-OF-TURN TOKEN, SO A STOP STRING IS NOT A REFINEMENT. Nothing
 #: in pretraining teaches a model to close a turn, so a reply relying on ``eos`` runs to
 #: ``max_tokens`` every time -- forty seconds of a demonstration spent watching a model
-#: answer a question it already answered. What a base model does do, reliably, is start
-#: the next speaker's turn, because that is how the transcripts it read continue. These
-#: catch that. Both spellings of the newline appear because a model that has been reading
-#: its own output decides the blank line for itself.
-TURN_ENDINGS = ("\nUser:", "\n\nUser:", "\nuser:")
+#: answer a question it already answered.
+#:
+#: THE BLANK LINE IS THE ONE THAT ACTUALLY CATCHES IT, AND STOPPING ON "User:" ALONE WAS
+#: MEASURED NOT TO. Asked what language is spoken in Tokyo, OLMoE-1B-7B-0924 answered
+#: "Japanese." and then, having finished, carried on into a Slashdot comment thread --
+#: correct answer, ninety seconds of forum posts after it, and no "User:" anywhere in the
+#: three hundred tokens that followed. That is not a failure of the model; a base model
+#: continues the document it was given, and once the answer is done the most likely
+#: continuation is whatever usually follows a paragraph on the internet. What it does not
+#: do is run two paragraphs together, so the blank line after the answer is the boundary
+#: that is reliably there. Cutting a genuinely multi-paragraph reply short is the cost, and
+#: for a model that has not been taught to write one it is close to free. Post-training
+#: replaces the whole set with a token the model emits on purpose.
+TURN_ENDINGS = ("\n\n", "\nUser:", "\nuser:", "\nAssistant:")
 
 #: Where the front end binds. **8888 IS THE ONE PORT ON A LANE MACHINE THAT A LAPTOP CAN
 #: REACH, AND IT IS NOT A COINCIDENCE.** The lane's security group holds zero ingress
@@ -116,14 +125,24 @@ def _looks_like_a_hub_id(uri: str) -> bool:
 
 
 def _read_json(uri: str) -> dict | None:
+    """A small file, from wherever it is, without importing the training library to do it.
+
+    The local branch is pathlib on purpose. Serving an export that is already on the disk
+    should not require ``olmo_core`` to be installed, and on a machine that has vLLM and
+    nothing else -- which is a reasonable machine to serve from -- importing it is a
+    failure before the first useful line runs. Remote paths genuinely need the library's
+    client, and a remote path is also a case where this repository is already present.
+    """
+    if not _is_remote(uri):
+        local = Path(uri)
+        return json.loads(local.read_text()) if local.is_file() else None
+
     from olmo_core.io import file_exists, resource_path
 
     if not file_exists(uri):
         return None
-    if _is_remote(uri):
-        parent, _, name = uri.rpartition("/")
-        return json.loads(resource_path(parent, name).read_text())
-    return json.loads(Path(uri).read_text())
+    parent, _, name = uri.rpartition("/")
+    return json.loads(resource_path(parent, name).read_text())
 
 
 def latest_servable_checkpoint(directory: str) -> tuple[int, str] | None:
@@ -157,9 +176,11 @@ def _all_step_directories(directory: str) -> list[int]:
 
 
 def resolve(uri: str) -> Resolved:
-    """Decide what was handed in, cheaply, before anything is downloaded or allocated."""
-    from olmo_core.train.checkpoint import Checkpointer
+    """Decide what was handed in, cheaply, before anything is downloaded or allocated.
 
+    The two cases that need no training library are settled first, so that a machine
+    carrying only a server can still serve.
+    """
     uri = uri.rstrip("/")
 
     if _looks_like_a_hub_id(uri):
@@ -168,6 +189,8 @@ def resolve(uri: str) -> Resolved:
     written = _read_json(f"{uri}/config.json")
     if written is not None and written.get("architectures"):
         return Resolved(Shape.HUGGINGFACE_EXPORT, uri)
+
+    from olmo_core.train.checkpoint import Checkpointer
 
     if Checkpointer.dir_is_checkpoint(uri):
         return Resolved(Shape.OLMO_CORE_CHECKPOINT, uri)
@@ -303,6 +326,15 @@ def serve(
     diverge, and the one that diverges is always the one nobody ran this week.
     """
     environment = dict(os.environ)
+    # THE `vllm` COMMAND IS OFTEN NOT ON PATH ON A MACHINE THAT HAS vLLM INSTALLED. A lane
+    # image carries no virtualenv on purpose, so pip installs into the user site and puts
+    # console scripts in ~/.local/bin, which Ubuntu's default profile only adds when that
+    # directory already existed at login. A fresh `pip install vllm` therefore leaves an
+    # importable library and no command, and the launcher below fails with "not found"
+    # while `python3 -c "import vllm"` succeeds -- a contradiction that costs a while.
+    environment["PATH"] = os.pathsep.join(
+        (str(Path.home() / ".local" / "bin"), environment.get("PATH", ""))
+    )
     environment["MAX_MODEL_LEN"] = str(max_model_len)
     environment["GPU_FRACTION"] = str(gpu_fraction)
     environment["SERVE_LOG"] = str(log)
@@ -312,8 +344,13 @@ def serve(
             f"--chat-template {TEMPLATE_FILE}",
         )
     ).strip()
+    # THROUGH `bash` RATHER THAN ON THE EXECUTABLE BIT, WHICH DOES NOT SURVIVE THE TRIP. The
+    # lane ships a working tree by syncing it to S3 and back, and an object store has no
+    # mode to carry, so a script committed executable arrives on the machine at 644 and
+    # fails with "Permission denied" -- on a machine where the file plainly exists and
+    # `git ls-files -s` plainly says 755. Measured here on 2026-08-08.
     subprocess.run(
-        [str(HERE / "serve_exported_checkpoint.sh"), model, str(port), served_name],
+        ["bash", str(HERE / "serve_exported_checkpoint.sh"), model, str(port), served_name],
         env=environment,
         check=True,
     )
@@ -359,7 +396,15 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8000, help="where vLLM answers")
     parser.add_argument("--served-name", default="edullm", help="the name the endpoint reports and clients ask for")
     parser.add_argument("--max-model-len", type=int, help="context window; read off the export when absent")
-    parser.add_argument("--work-dir", type=Path, default=Path("/work/serve"), help="where a conversion or a staged copy lands")
+    parser.add_argument(
+        "--work-dir",
+        type=Path,
+        default=Path.home() / ".cache" / "edullm-serve",
+        # Under the home directory rather than under /work, which reads like the obvious
+        # place and is not writable: the lane grants a machine exactly one directory there,
+        # the project's own, and a sibling of it fails at mkdir.
+        help="where a conversion or a staged copy lands",
+    )
     parser.add_argument("--gpu-fraction", type=float, default=0.90, help="fraction of the card vLLM may hold")
     parser.add_argument("--device", default=None, help="where a conversion runs; cuda when a card is present")
     parser.add_argument("--chat-page-port", type=int, default=DEFAULT_CHAT_PAGE_PORT, help="where the front end binds")
