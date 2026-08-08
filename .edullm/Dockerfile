@@ -28,6 +28,7 @@ WORKDIR /opt/olmo-core
 # NVIDIA's CUDA 12 wheel named ``nvidia-cuda-nvcc-cu12`` contains ptxas but not
 # the nvcc driver. NVIDIA's Debian 13 repository carries only CUDA 13, so use
 # its signed Debian 12 repository, which still publishes the 12.8 compiler.
+COPY .edullm/patch_cuda_glibc241.py /tmp/patch_cuda_glibc241.py
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends ca-certificates wget gpgv gcc-14 g++-14; \
@@ -36,6 +37,8 @@ RUN set -eux; \
     rm cuda-keyring_1.1-1_all.deb; \
     apt-get -o APT::Key::GPGVCommand=/usr/bin/gpgv update; \
     apt-get install -y --no-install-recommends cuda-nvcc-12-8=12.8.93-1; \
+    python /tmp/patch_cuda_glibc241.py; \
+    rm /tmp/patch_cuda_glibc241.py; \
     rm -rf /var/lib/apt/lists/*; \
     gcc-14 --version; \
     nvcc --version
