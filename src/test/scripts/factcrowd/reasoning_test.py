@@ -403,3 +403,40 @@ def test_the_batch_size_changes_nothing_about_the_score(batches):
         )
     assert answers[small] == answers[large], answers
     assert answers[small][0] == n  # and every item was scored, not just the whole batches
+
+
+def test_collapse_to_any_constant_is_detected_not_just_the_best_one():
+    """
+    The defect the first grid hid in plain sight.
+
+    `n_degenerate` matches one pre-measured answer -- the best fact-free policy -- so a model that
+    settles on a *different* constant reports `degenerate_rate` 0.0 while being entirely constant. Eleven
+    cells of the first grid scored exactly 1,342/30,000, which is the number of eval items answered
+    `<n0>`; one scored 1,339, the count for `<n12>`. All of them reported zero degeneracy. The single cell
+    flagged at 99.86% is the one that happened to pick `<n16>`, the answer the detector checks -- and its
+    accuracy was consequently the *highest* in the table.
+
+    `modal_rate` asks a question that needs no pre-measured answer: how often did this model give its own
+    most common reply?
+    """
+    best = ("<n16>",)
+    other = ("<n0>",)
+    acc = EndpointAccumulator("mano", floor=0.04695, degenerate_answer=best)
+    for index in range(500):
+        acc.add(predicted=other, expected=best if index < 23 else ("<n7>",), ce_bits=4.5)
+    result = acc.result()
+    assert result.degenerate_rate == 0.0  # the old signal says nothing is wrong
+    assert result.modal_rate == 1.0  # the new one says the model is a constant function
+    assert result.n_modal == 500
+
+
+def test_the_modal_rate_of_a_model_that_actually_answers_is_low():
+    """A discriminating model's most common reply is just its most common reply, not its only one."""
+    acc = EndpointAccumulator("mano", floor=0.04695, degenerate_answer=("<n16>",))
+    answers = [(f"<n{index % 20}>",) for index in range(400)]
+    for answer in answers:
+        acc.add(predicted=answer, expected=answer, ce_bits=1.0)
+    result = acc.result()
+    assert result.accuracy == 1.0
+    assert result.modal_rate == pytest.approx(1 / 20, abs=1e-9)
+    assert result.n_modal == 20

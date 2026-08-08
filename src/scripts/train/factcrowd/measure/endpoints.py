@@ -14,6 +14,7 @@ by reporting these together rather than a bare accuracy:
   information just because both are in bits (PRD 16.5).
 """
 
+from collections import Counter
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
@@ -28,6 +29,9 @@ class EndpointResult:
     :param name: Slice name, e.g. ``"mano"``.
     :param n_total: Items scored.
     :param n_correct: Items whose predicted answer span matched exactly.
+    :param n_modal: Items where the prediction equalled this model's own most common prediction. Catches
+        collapse to *any* constant, which ``n_degenerate`` cannot: it matches one pre-measured answer, so a
+        model that settled on a different constant reports zero degeneracy while being entirely constant.
     :param n_degenerate: Items where the prediction matched the endpoint's best fact-free policy. Not a
         subset of the incorrect ones -- a degenerate answer is sometimes right, which is the whole point
         of measuring the floor.
@@ -46,6 +50,8 @@ class EndpointResult:
     n_unparseable: int
     answer_ce_bits: float
     floor: float
+    #: Defaulted so records written before this field existed still load.
+    n_modal: int = 0
 
     def __post_init__(self) -> None:
         if self.n_total <= 0:
@@ -53,6 +59,7 @@ class EndpointResult:
         for field, value in (
             ("n_correct", self.n_correct),
             ("n_degenerate", self.n_degenerate),
+            ("n_modal", self.n_modal),
             ("n_unparseable", self.n_unparseable),
         ):
             if not 0 <= value <= self.n_total:
@@ -68,6 +75,17 @@ class EndpointResult:
     def accuracy(self) -> float:
         """Fraction of items answered exactly."""
         return self.n_correct / self.n_total
+
+    @property
+    def modal_rate(self) -> float:
+        """
+        Share of items answered with this model's own most common prediction.
+
+        1.0 means the model is a constant function, whatever that constant is. Read this before accuracy:
+        a collapsed model still scores the frequency of its chosen answer, which on a 23-way task is a few
+        percent and looks like a floor rather than like a failure to answer at all.
+        """
+        return 0.0 if self.n_total == 0 else self.n_modal / self.n_total
 
     @property
     def degenerate_rate(self) -> float:
@@ -110,6 +128,8 @@ class EndpointResult:
             "n_total": self.n_total,
             "n_correct": self.n_correct,
             "n_degenerate": self.n_degenerate,
+            "n_modal": self.n_modal,
+            "modal_rate": round(self.modal_rate, 6),
             "n_unparseable": self.n_unparseable,
             "accuracy": round(self.accuracy, 6),
             "degenerate_rate": round(self.degenerate_rate, 6),
@@ -144,6 +164,13 @@ class EndpointAccumulator:
         self._degenerate = 0
         self._unparseable = 0
         self._ce_bits = 0.0
+        # COLLAPSE TO *ANY* CONSTANT, NOT JUST THE BEST ONE. `n_degenerate` matches one pre-measured
+        # answer -- the best fact-free policy -- so a model that collapses to a different constant reads
+        # as perfectly non-degenerate. Observed across the first grid: eleven cells scored exactly
+        # 1,342/30,000, which is the number of eval items answered `<n0>`, and one scored 1,339, the count
+        # for `<n12>`. Every one of them reported degenerate_rate 0.0. The single cell that *was* flagged
+        # at 99.86% is the one that happened to pick `<n16>`, the answer the detector checks.
+        self._predictions: Counter = Counter()
 
     def add(
         self,
@@ -170,6 +197,7 @@ class EndpointAccumulator:
             self._correct += 1
         if self.degenerate_answer is not None and predicted == self.degenerate_answer:
             self._degenerate += 1
+        self._predictions[predicted] += 1
 
     def result(self) -> EndpointResult:
         """
@@ -184,6 +212,7 @@ class EndpointAccumulator:
             n_total=self._total,
             n_correct=self._correct,
             n_degenerate=self._degenerate,
+            n_modal=(max(self._predictions.values()) if self._predictions else 0),
             n_unparseable=self._unparseable,
             answer_ce_bits=self._ce_bits / max(1, self._total),
             floor=self.floor,
