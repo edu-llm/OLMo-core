@@ -214,9 +214,36 @@ COPY pyproject.toml ./
 # The import assertion below is the same argument as the one above it: `import edullm_data`
 # would prove the distribution installed, and `from edullm_data.read import dataset_paths`
 # proves the module a training run actually reaches for loads.
+# THE `fla` EXTRA IS READ OUT OF pyproject.toml ALONGSIDE `wandb`, AND IT IS NOT OPTIONAL FOR
+# EVERY RUN ON THIS IMAGE -- ONLY FOR THE ONES THAT NEED IT, WHICH IS WHY IT IS HERE.
+#
+# `flash-linear-attention` carries the Triton kernels behind every recurrent sequence mixer in
+# this repository: `fla.ops.gated_delta_rule` for GatedDeltaNet and `fla.ops.gdn2` for
+# GatedDeltaNet2. Both layers open with `assert has_fla()` in their constructors, so without
+# this the failure is a bare AssertionError with no message, raised while the model is being
+# built -- after the image is pulled and the instance is billed, and looking for all the world
+# like a bug in the model config rather than a missing package.
+#
+# READ FROM THE MANIFEST RATHER THAN NAMED HERE, for exactly the reason the paragraph above
+# gives for the other two: a version written into this file is a second place the pin lives
+# and the first one to go stale. pyproject.toml pins `flash-linear-attention==0.5.2`, and 0.5.2
+# is a floor as much as a pin -- `fla.ops.gdn2` does not exist before 0.5.0, and from 0.5.0 the
+# ops moved out of `flash-linear-attention` into the `fla-core` distribution it depends on, so
+# an older resolution answers `import fla` successfully and `fla.ops.gdn2` with ImportError.
+#
+# NO `[cuda]` EXTRA, WHICH WOULD BE THE OBVIOUS ADDITION AND IS THE WRONG ONE. `fla-core[cuda]`
+# resolves to `torch>=2.7.0` and `triton>=3.3`; asking pip for a torch range here is asking it
+# to reconsider the exact pin two lines up, which is the one thing this layer's assertions
+# exist to prevent. The bare install needs only `einops`, and Triton is already on disk because
+# the CUDA torch wheel vendors it.
+#
+# The import assertion is `from fla.ops.gdn2 import chunk_gdn2` rather than `import fla`, for
+# the same reason the olmo_core check below reaches into `olmo_core.nn`: the top-level package
+# imports lazily and proves the distribution is installed, not that the kernel a run reaches
+# for loads. This is the line that fails the build on a resolution that quietly went backwards.
 RUN set -eux; \
     python -m pip install --no-cache-dir "torch==2.9.0"; \
-    python -c "import tomllib; project = tomllib.load(open('pyproject.toml', 'rb'))['project']; open('/tmp/dependencies.txt', 'w').write('\n'.join(project['dependencies'] + project['optional-dependencies']['wandb']) + '\n')"; \
+    python -c "import tomllib; project = tomllib.load(open('pyproject.toml', 'rb'))['project']; open('/tmp/dependencies.txt', 'w').write('\n'.join(project['dependencies'] + project['optional-dependencies']['wandb'] + project['optional-dependencies']['fla']) + '\n')"; \
     python -m pip install --no-cache-dir -r /tmp/dependencies.txt boto3 "botocore[crt]"; \
     rm /tmp/dependencies.txt; \
     python -m pip install --no-cache-dir "edullm-data @ https://github.com/edu-llm/edullm-data/archive/38bf831a6c3f445e394784018441fd59288b876c.tar.gz"
@@ -226,13 +253,18 @@ RUN set -eux; \
 COPY . .
 
 # THE PROJECT ITSELF, AFTER ITS SOURCE AND AFTER ITS DEPENDENCIES, AND THE RESOLUTION IS
-# THE SAME ONE IT ALWAYS WAS. This is still `.[wandb]` rather than `--no-deps .`, which
+# THE SAME ONE IT ALWAYS WAS. This is `.[wandb,fla]` rather than `--no-deps .`, which
 # would be the faster spelling and the wrong one: --no-deps would install the project
 # without checking that the layer above actually covered its requirements, so a dependency
 # added to pyproject.toml and missed by the extraction would go absent from the image
-# instead of being installed here. Asking for the extra means pip verifies the whole set,
+# instead of being installed here. Asking for the extras means pip verifies the whole set,
 # finds it satisfied by the layer above, and reaches the network for nothing -- and if it
 # ever does reach the network, that is the extraction having drifted and worth the cost.
+#
+# The extra list has to name every extra the layer above extracted, which is why `fla` is
+# here as well. Naming fewer would leave that extra's packages installed but unverified: the
+# whole point of this spelling is that the set pip checks and the set the layer above wrote
+# are the same set, and a mismatch is the drift it exists to catch going undetected.
 #
 # The layer this produces is the project's own files. Measured on 2026-08-05 by building
 # this file twice against the registered base with only a source file changed between the
@@ -288,10 +320,11 @@ COPY . .
 # microsecond and it is the difference between "botocore will use this" and "and the number
 # it gets is right".
 RUN set -eux; \
-    python -m pip install --no-cache-dir ".[wandb]"; \
+    python -m pip install --no-cache-dir ".[wandb,fla]"; \
     python -c "import torch; assert torch.__version__.startswith('2.9.0'), f'torch was moved off the pin: {torch.__version__}'"; \
     python -c "import torch; assert torch.version.cuda, 'the CUDA build of torch was replaced by a CPU wheel'"; \
     python -c "import boto3, wandb; from olmo_core.data import TokenizerConfig; from olmo_core.nn.transformer import TransformerConfig; print(TransformerConfig.olmo2_190M(vocab_size=TokenizerConfig.gpt2().padded_vocab_size()).__class__.__name__)"; \
+    python -c "from fla.ops.gdn2 import chunk_gdn2; from fla.ops.gated_delta_rule import chunk_gated_delta_rule; print(chunk_gdn2.__module__)"; \
     python -c "import boto3; from botocore import UNSIGNED; from botocore.config import Config; from botocore.stub import Stubber; client = boto3.client('s3', region_name='us-east-1', config=Config(signature_version=UNSIGNED)); stub = Stubber(client); stub.add_response('put_object', {}); stub.activate(); client.put_object(Bucket='b', Key='k', Body=b'123456789', ChecksumAlgorithm='CRC32C')"; \
     python -c "from awscrt.checksums import crc32c; assert crc32c(b'123456789') == 0xE3069283, 'awscrt computes something other than CRC-32C'"; \
     python -c "from edullm_data.read import dataset_paths, resolve_latest; print(dataset_paths.__module__)"
