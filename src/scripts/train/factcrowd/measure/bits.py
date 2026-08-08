@@ -243,6 +243,7 @@ def demanded_vs_achieved(
     quoted the axis on different definitions of the name term.
 
     :param achieved: The measurement.
+    :param entity_offset: First entity to sample. Non-zero avoids the ``<compare>`` probe window.
     :param n_entities: Entities in the corpus.
     :param bits_per_entity: The schema's attribute bits.
     :param name_space: Name universe, or ``None`` to drop the name term.
@@ -265,6 +266,7 @@ def score_checkpoint(
     forward,
     *,
     n_entities: int = 2_000,
+    entity_offset: int = 0,
     batch_size: int = 32,
     exposure: int = 0,
     is_upper_bound: bool = True,
@@ -299,13 +301,23 @@ def score_checkpoint(
         return None  # the control: no entities, so nothing to have stored
 
     total = loaded.resolved.n_entities
-    sampled = min(n_entities, total)
+    # THE DEFAULT COHORT IS THE ONE <compare> SUPERVISES, WHICH IS WHY THIS IS A PARAMETER.
+    # `CompareTask` draws its pairs from entities 0..24,999 and its answer is the earlier *birth year*,
+    # so every entity in that window receives ~211 direct year constraints. Measured on the first count
+    # grid, birth_year then reconstructs at 328x chance in a cell where the best other attribute is
+    # 1.1x -- so a prefix sample beginning at 0 measures Compare's supervision as much as biography
+    # storage. An offset above the probe window gives an uncontaminated cohort from the same checkpoint.
+    first = max(0, entity_offset)
+    sampled = max(0, min(n_entities, total - first))
     prior = corpus.corpus_schema.schema.bits_per_entity
 
     residuals: List[float] = []
     for start in range(0, sampled, batch_size):
         stop = min(start + batch_size, sampled)
-        rendered = [corpus.renderer.render(entity, exposure) for entity in range(start, stop)]
+        rendered = [
+            corpus.renderer.render(entity, exposure)
+            for entity in range(first + start, first + stop)
+        ]
         width = max(tokens.size for tokens, _ in rendered)
         # Right-padded with the pad id and charged only over the value spans, so the padding never
         # enters the sum. Ragged biographies are the norm on the count axis -- the templates span

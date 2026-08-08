@@ -105,6 +105,7 @@ def score_recall(
     forward,
     *,
     n_entities: int = 1_000,
+    entity_offset: int = 0,
     batch_size: int = 32,
     exposure: int = 0,
 ) -> Tuple[RecallResult, ...]:
@@ -117,6 +118,7 @@ def score_recall(
     :param loaded: An opened checkpoint from :func:`factcrowd.measure.checkpoint.load`.
     :param forward: The ``(ce_loss, logits)`` callable from
         :func:`factcrowd.measure.checkpoint.forward_fn`.
+    :param entity_offset: First entity to sample. Non-zero avoids the ``<compare>`` probe window.
     :param n_entities: Entities to probe, capped at the corpus size.
     :param batch_size: Biographies per forward pass.
     :param exposure: Which phrasing to render, fixed so the probe is not also sampling templates.
@@ -137,10 +139,17 @@ def score_recall(
     }
     probed: Dict[str, List[Tuple[bool, bool]]] = {name: [] for name in spec_pools}
 
-    total = min(n_entities, loaded.resolved.n_entities)
+    # Offset for the same reason bits.py carries one: entities 0..24,999 are the `<compare>` probe
+    # window and receive direct birth-year supervision, so a prefix sample measures that as well as
+    # biography storage.
+    first = max(0, entity_offset)
+    total = max(0, min(n_entities, loaded.resolved.n_entities - first))
     for start in range(0, total, batch_size):
         stop = min(start + batch_size, total)
-        rendered = [corpus.renderer.render(entity, exposure) for entity in range(start, stop)]
+        rendered = [
+            corpus.renderer.render(entity, exposure)
+            for entity in range(first + start, first + stop)
+        ]
         width = max(tokens.size for tokens, _ in rendered)
         batch = np.full((len(rendered), width), corpus.vocabulary.pad_id, dtype=np.int64)
         for row, (tokens, _) in enumerate(rendered):

@@ -143,6 +143,7 @@ def score_checkpoint(
     device: str,
     eval_items: int,
     bit_entities: int,
+    bit_offset: int = 0,
     batch_size: int,
     corpus: Any = None,
 ) -> Scored:
@@ -168,7 +169,11 @@ def score_checkpoint(
         for task in loaded.corpus.tasks
     ]
     achieved = bits_module.score_checkpoint(
-        loaded, forward, n_entities=bit_entities, batch_size=batch_size
+        loaded,
+        forward,
+        n_entities=bit_entities,
+        entity_offset=bit_offset,
+        batch_size=batch_size,
     )
     warning = None
     if achieved is not None:
@@ -187,7 +192,11 @@ def score_checkpoint(
             log.warning("  %s", warning)
 
     recalls = recall_module.score_recall(
-        loaded, forward, n_entities=bit_entities, batch_size=batch_size
+        loaded,
+        forward,
+        n_entities=bit_entities,
+        entity_offset=bit_offset,
+        batch_size=batch_size,
     )
     recall_row: dict = {}
     for result in recalls:
@@ -210,6 +219,7 @@ def score_checkpoint(
                 ],
                 "eval_items": eval_items,
                 "bit_entities": bit_entities,
+                "bit_offset": bit_offset,
                 "capacity_warning": warning or "",
                 # The cell's own plan, so completeness is judged per cell rather than against a number
                 # passed in from outside. `select_complete` reads it.
@@ -268,6 +278,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         default=25_000,
         help="Entities for the bit count and the template probe. 25,000 matches the fixed probe subset "
         "PRD 3.3 holds constant across cells.",
+    )
+    parser.add_argument(
+        "--bit-offset",
+        type=int,
+        default=0,
+        help="First entity the bit and reconstruction cohorts sample. 0 -- the default, and what the "
+        "first grid used -- is exactly the <compare> probe window (entities 0..24,999), which receives "
+        "direct birth-year supervision: birth_year then reconstructs at 328x chance where the best other "
+        "attribute is 1.1x. Pass 25000 for an uncontaminated cohort from the same checkpoints.",
     )
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument(
@@ -363,6 +382,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 device=args.device,
                 eval_items=args.eval_items,
                 bit_entities=args.bit_entities,
+                bit_offset=args.bit_offset,
                 batch_size=args.batch_size,
                 dtype=_torch_dtype(args.dtype),
                 corpus=corpus,
