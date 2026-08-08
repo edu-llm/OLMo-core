@@ -1438,7 +1438,65 @@ column name, so a rename could mangle the output and every fast test still passe
 assert the exact column set through ``ScoredCheckpoint.rows()``, and they assert the set rather than a
 pattern -- a test accepting "something containing chance" would have passed on the mangled names too.
 
-### 16.9 Deferred, with reasons
+### 16.9 M0 ran, and G4 refused the endpoint
+
+The gate report exists. `run_019fdf85` scored the sigma block, the dilution ladder and the round-two
+re-runs in seven minutes and wrote `gates-mano.json`. It does not pass, and the reason is not one of the
+three unbuilt gates:
+
+```
+G8: ladder on row 13M with doses [100, 95, 90, 80, 60] (complete)
+G6: controls at 3 width(s) [12595456, 28330368, 63729216], 3 replicates each
+G4: ceiling from the row-13M control, 4.44% (mean of 3)
+G7: 3 replicates of 13m_ctrl
+does not pass: G1, G2, G3, G4, G6, G8
+```
+
+**The `<mano>` endpoint has no dynamic range.** Its degenerate floor -- the best constant policy, always
+answering `<n16>` -- is **4.695%**. The reasoning-only control, which carries no facts and has every
+parameter the ladder can give it, reaches **4.44%**: a quarter of a point *below* the floor. The achievable
+range is **-0.26 pp** where G4 requires 10 pp and the design needs to resolve 2 pp.
+
+Three failures follow from that one fact rather than being independent:
+
+- **G4** -- floor-to-ceiling is negative.
+- **G6** -- accuracy cannot rise with width when every width sits at the floor.
+- **G8** -- the ladder is *complete* at all five doses and still cannot produce a 2 pp decline, because
+  there is nothing above the floor to decline from.
+
+**G7 passes, and its pass is the most misleading number in the report.** It measures run-to-run sigma over
+three replicates, and three runs pinned at a constant-policy floor agree with each other beautifully. A
+resolution gate cannot distinguish "precise" from "stuck", which is an argument for reading G4 before G7
+and not the reverse.
+
+The training curves said this before the endpoint did, and nobody was reading them for it. The
+reasoning-only control's final train CE is **1.6892 / 1.6891 / 1.6890** at 13M / 28M / 64M -- 2.44 bits,
+about 5.4 equiprobable answers, and **five times the parameters moves it by 0.0002 nats**. A task that
+does not respond to width is a task the model is not learning; it is fitting the marginal distribution of
+answers. §16.8's note that `train/CE` is not the endpoint remains true, and this is the one thing the
+control's CE *was* telling us.
+
+**What this does and does not invalidate.** The crowding hypothesis is untested rather than refuted: with
+the endpoint at its floor, every cell's `<mano>` accuracy is noise about a constant, so a null on the count
+axis or the entropy axis would mean nothing. That is exactly the failure PRD 1 catalogues four times in the
+prior literature and exactly what §8.6 exists to catch, and it was caught before a null was published
+rather than after. The storage half is unaffected: achieved bits against demanded is measured from value
+spans and needs no reasoning endpoint at all.
+
+**Before any more training.** `<mano>` at L=10 is unlearnable at these widths on 1.0B reasoning tokens, so
+the design needs an endpoint that moves before a crowding claim is possible. In rough order of cost:
+
+1. Read `<compare>` from the confirmatory scoring. It is a two-entity comparison answering a single birth
+   year against a 0.70% floor, and it is absent from the controls only because a control has no facts to
+   order -- so M0 never saw it. If it has range, the design has an endpoint today.
+2. Retune `<mano>` down from L=10. PRD 12's M0 already contemplated this ("Retune Mano to L=10"); the
+   measurement says go further, and the cost is one ladder rerun.
+3. The in-context endpoints §8.3 names, which trade a memorised task for a read-and-answer one.
+
+None of that is worth spending on until `<compare>` has been read, which the confirmatory scoring gives
+for free.
+
+### 16.10 Deferred, with reasons
 
 FLD's 1,700 core-hours and 51.1% floor — decided in M0, not now. The exposure placebo and the
 mechanism battery — M4. Qwen3-0.6B continuation — after M3. Retiring
