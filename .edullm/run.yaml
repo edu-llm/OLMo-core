@@ -1,14 +1,13 @@
-# MoE checkpoint-transfer smoke v2 (Ben / Lin et al.).
-# 4-of-40 MoE at smoke width, real math-frontload tokens, held-out CE retention.
-# Branch: edullm/** only — never main. Cap submit with --hours 4 --attempts 1 (~$3.22).
+# Checkpoint-transfer smoke v3 — real 370M Ms→Mt + assistant-masked SFT Δ fit.
+# Branch: edullm/** only — never main. Cap submit so edullm check ceiling ≤ $20.
 schema_version: 1
 workload_profile: olmo-core-train
 suggested_compute: gpu-1xl4
 command: >-
   bash -lc 'python .edullm/ckpt_transfer_smoke.py
   --save-folder "$EDULLM_CHECKPOINT_DIR"
-  --steps-pre 200 --steps-gap 200 --steps-sft 400
-  --seq-len 256 --batch-size 4
-  --train-batches 32 --sft-batches 16 --eval-batches 8
-  --num-experts 40 --top-k 4 --d-model 512 --n-layers 8 --n-heads 8
+  --ms-uri s3://edullm-checkpoints/olmo2-370m-cpt/edullm-370M-30B/step15000-unsharded
+  --mt-uri s3://edullm-checkpoints/olmo2-370m-cpt/edullm-370M-30B/step20000-unsharded
+  --steps-sft 800 --seq-len 512 --batch-size 2
+  --sft-train-rows 2048 --sft-eval-rows 256 --sft-lr 5e-5
   --param-dtype float32'

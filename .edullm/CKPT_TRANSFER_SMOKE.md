@@ -1,21 +1,32 @@
-# Checkpoint transfer smoke (v2, MoE)
+# Checkpoint transfer smoke (v3)
 
-Ben’s idea: post-train earlier base $M_s$, apply $\Delta=\mathrm{FT}-M_s$ onto later $M_t$.
+Ben’s idea: post-train an **early** pretrain checkpoint \(M_s\) in parallel, then **fit** that post-train onto a later base \(M_t\) via \(\Delta = \mathrm{FT}-M_s\), \(M_t+\Delta\).
 
 Paper: https://arxiv.org/abs/2503.20110
 
-## v2 (accurate-enough smoke)
+## v3 (what this run answers)
 
-- **MoE** `top_k=4` / `num_experts=40` at d_model=512 (same routing pattern as team 4/40; not full 7B)
-- **Real tokens** from `math-frontload-100m` (dolma2), not random ids
-- Held-out CE on a disjoint shard region
-- Requires SFT gain ≥ 0.05 CE before calling transfer decisive
+| Piece | Choice |
+|-------|--------|
+| Bases | Real `edullm-370M-30B` **step15000 → step20000** |
+| Post-train | Full-weight **assistant-masked SFT** on `math-sft-60m` |
+| Fit | Zero-shot \(M_t+\Delta\) only (no continue-finetune) |
+| Metric | Held-out assistant CE retention |
+| Not in this run | DPO, RLVR, MoE final, generation evals |
+
+**Go claim:** early SFT on our close-gap pair can be fitted onto the later base and keep >25% of the SFT gain.
+
+**Not claimed:** full SFT→DPO→RLVR on Joe’s MoE will transfer.
 
 ## Launch (not main)
 
+Use branch `edullm/ckpt-transfer-smoke` only.
+
 ```bash
-# on edullm/ckpt-transfer-smoke
-edullm check --experiment ckpt-transfer-smoke-moe --dataset math-frontload-100m-v1 --hours 4 --attempts 1
-# ceiling should be ~$3.22; only submit if under $50
-edullm submit --experiment ckpt-transfer-smoke-moe --dataset math-frontload-100m-v1 --hours 4 --attempts 1
+# platform still needs a runnable dolma2 dataset for admission; SFT JSONL is fetched inside the job
+edullm check --experiment ckpt-transfer-sft-v3 --dataset math-frontload-100m-v1 --hours 12 --attempts 1
+# abort if ceiling > $20
+edullm submit --experiment ckpt-transfer-sft-v3 --dataset math-frontload-100m-v1 --hours 12 --attempts 1
 ```
+
+Size `--hours` so check ceiling stays **≤ $20**. Prefer the smallest hours that still finishes.
