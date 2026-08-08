@@ -293,6 +293,55 @@ def configure(*extra: str):
     return opts, entry.build_config(opts, overrides)
 
 
+def test_the_platform_moe_recipe_has_two_shared_experts_of_capacity(corpus):
+    """The shared MLP is one unconditional 4096-wide MLP, i.e. two 2048-wide experts."""
+    _, config = configure(
+        "--model-factory=olmoe_7b_32x4_shared2",
+        "--sequence-length=4096",
+        "--steps=23842",
+        "--global-batch-size=4194304",
+        "--rank-microbatch-size=8192",
+        "--learning-rate=0.0004",
+        "--warmup-steps=2000",
+    )
+
+    assert config.model.d_model == 2048
+    assert config.model.n_layers == 16
+    assert config.model.block.feed_forward_moe is not None
+    moe = config.model.block.feed_forward_moe
+    assert moe.num_experts == 32
+    assert moe.hidden_size == 2048
+    assert moe.router.top_k == 4
+    assert moe.shared_mlp is not None
+    assert moe.shared_mlp.hidden_size == 4096
+    assert moe.shared_mlp.bias is False
+    assert (
+        config.model.as_config_dict()["block"]["feed_forward_moe"]["shared_mlp"]["hidden_size"]
+        == 4096
+    )
+    assert config.train_module.dp_config is not None
+    assert config.train_module.dp_config.name is entry.DataParallelType.hsdp
+    assert config.train_module.dp_config.num_replicas == 2
+    assert config.train_module.dp_config.shard_degree == 32
+    assert config.train_module.ep_config is not None
+    assert config.train_module.ep_config.degree == 32
+
+
+def test_the_platform_moe_recipe_rejects_an_expert_mesh_that_cannot_own_32_experts(corpus):
+    with pytest.raises(entry.Refusal, match="32 routed experts do not divide"):
+        configure(
+            "--model-factory=olmoe_7b_32x4_shared2",
+            "--moe-shard-degree=24",
+        )
+
+
+def test_the_platform_moe_recipe_requires_the_64_rank_production_mesh(corpus, monkeypatch):
+    monkeypatch.setenv("WORLD_SIZE", "8")
+
+    with pytest.raises(entry.Refusal, match="expects WORLD_SIZE=64"):
+        configure("--model-factory=olmoe_7b_32x4_shared2")
+
+
 @pytest.fixture
 def submitted(monkeypatch):
     """``main`` reached the way the platform reaches it: four variables and a run id."""

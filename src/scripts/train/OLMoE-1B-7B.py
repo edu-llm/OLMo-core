@@ -1,6 +1,6 @@
 """
-Train a 7B OLMoE-style model with 32 routed experts and top-4 routing for
-100B tokens.
+Train a ~7.5B OLMoE-style model with 32 routed experts, top-4 routing, and two
+always-on shared experts for 100B tokens.
 
 Run this script without any arguments to see usage info.
 """
@@ -29,9 +29,11 @@ NUM_LAYERS = 16
 NUM_HEADS = 16
 NUM_ROUTED_EXPERTS = 32
 TOP_K = 4
-# This is the 32-expert/top-4 OLMoE granularity: it keeps the routed MLP's
-# active capacity close to OLMoE-1B-7B while avoiding an always-on shared MLP.
 ROUTED_EXPERT_HIDDEN_SIZE = 2048
+# OLMo-core represents shared experts as one always-on MLP. Giving that MLP
+# twice a routed expert's intermediate width is two shared experts' worth of
+# capacity, not a second routed expert pool.
+SHARED_EXPERT_HIDDEN_SIZE = 2 * ROUTED_EXPERT_HIDDEN_SIZE
 
 
 def build_model_config(common: CommonComponents) -> TransformerConfig:
@@ -43,6 +45,7 @@ def build_model_config(common: CommonComponents) -> TransformerConfig:
         num_experts=NUM_ROUTED_EXPERTS,
         top_k=TOP_K,
         expert_hidden_size=ROUTED_EXPERT_HIDDEN_SIZE,
+        shared_expert_hidden_size=SHARED_EXPERT_HIDDEN_SIZE,
         dropless=True,
         lb_loss_weight=0.01,
         z_loss_weight=0.001,

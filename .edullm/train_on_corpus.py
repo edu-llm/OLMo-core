@@ -112,6 +112,7 @@ from olmo_core.train.callbacks import (
 from olmo_core.train.checkpoint import Checkpointer
 from olmo_core.train.train_module import (
     TransformerDataParallelConfig,
+    TransformerExpertParallelConfig,
     TransformerTrainModuleConfig,
     validate_precision_support,
 )
@@ -319,6 +320,92 @@ TOKENIZERS = {
     "tokenizer/gigatoken-bpe": _gigatoken_bpe,
     "tokenizer/gigatoken-superbpe": _gigatoken_superbpe,
 }
+
+
+# This is deliberately a platform entrypoint recipe rather than a legacy
+# ``src/scripts/train`` recipe. It receives its corpus and checkpoint location
+# from eduLLM, so a submitted run cannot quietly read the upstream AI2 mix.
+OLMOE_7B_32X4_SHARED2_FACTORY = "olmoe_7b_32x4_shared2"
+OLMOE_7B_32X4_SHARED2_ROUTED_EXPERTS = 32
+OLMOE_7B_32X4_SHARED2_ROUTED_HIDDEN_SIZE = 2048
+OLMOE_7B_32X4_SHARED2_SHARED_HIDDEN_SIZE = 2 * OLMOE_7B_32X4_SHARED2_ROUTED_HIDDEN_SIZE
+
+
+def olmoe_7b_32x4_shared2(vocab_size: int) -> TransformerConfig:
+    """Build the ~7.5B total / 32x4 routed MoE with two shared experts' capacity.
+
+    A shared expert in OLMo-core is one unconditional MLP, so its intermediate
+    width is the number of shared experts times one routed expert's width.
+    ``4096`` therefore means two 2048-wide shared experts, evaluated for every
+    token in addition to the top-four routed experts.
+    """
+    return TransformerConfig.llama_like_moe(
+        vocab_size=vocab_size,
+        d_model=2048,
+        n_layers=16,
+        n_heads=16,
+        num_experts=OLMOE_7B_32X4_SHARED2_ROUTED_EXPERTS,
+        top_k=4,
+        expert_hidden_size=OLMOE_7B_32X4_SHARED2_ROUTED_HIDDEN_SIZE,
+        shared_expert_hidden_size=OLMOE_7B_32X4_SHARED2_SHARED_HIDDEN_SIZE,
+        dropless=True,
+        lb_loss_weight=0.01,
+        z_loss_weight=0.001,
+        reordered_norm=True,
+        qk_norm=True,
+        rope_theta=500_000,
+        layer_norm_eps=1e-6,
+    )
+
+
+def is_olmoe_7b_32x4_shared2(opts) -> bool:
+    """Whether ``opts`` selects the fixed MoE recipe this entrypoint owns."""
+    return opts.model_factory == OLMOE_7B_32X4_SHARED2_FACTORY
+
+
+def validate_olmoe_parallelism(opts) -> None:
+    """Reject an impossible expert mesh before GPU work starts.
+
+    The intended 64-rank layout is two HSDP replicas with 32 ranks in each
+    expert-parallel shard. Each shard owns the 32 routed experts exactly once.
+    ``WORLD_SIZE`` is set by torchrun, but intentionally absent from unit tests
+    and config inspection, so only validate the product when it is known.
+    """
+    if opts.moe_shard_degree <= 0:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            "--moe-shard-degree must be positive",
+        )
+    if opts.moe_num_replicas <= 0:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            "--moe-num-replicas must be positive",
+        )
+    if OLMOE_7B_32X4_SHARED2_ROUTED_EXPERTS % opts.moe_shard_degree:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"{OLMOE_7B_32X4_SHARED2_ROUTED_EXPERTS} routed experts do not divide "
+            f"--moe-shard-degree={opts.moe_shard_degree}",
+        )
+
+    world_size = os.environ.get("WORLD_SIZE")
+    if world_size is None:
+        return
+    try:
+        world_size_int = int(world_size)
+    except ValueError:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"WORLD_SIZE must be an integer, got {world_size!r}",
+        ) from None
+    expected_world_size = opts.moe_num_replicas * opts.moe_shard_degree
+    if world_size_int != expected_world_size:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            "the 32x4 MoE recipe expects WORLD_SIZE="
+            f"{expected_world_size} from --moe-num-replicas={opts.moe_num_replicas} "
+            f"x --moe-shard-degree={opts.moe_shard_degree}, got {world_size_int}",
+        )
 
 
 @dataclass
@@ -576,11 +663,15 @@ def build_config(opts, overrides: List[str]):
         opts.dataset_tokenizer,
     )
 
-    factory = getattr(TransformerConfig, opts.model_factory, None)
-    if factory is None:
-        raise Refusal(
-            Stage.THE_CONFIG_WOULD_NOT_BUILD, f"unknown model factory: {opts.model_factory}"
-        )
+    if is_olmoe_7b_32x4_shared2(opts):
+        validate_olmoe_parallelism(opts)
+        factory = olmoe_7b_32x4_shared2
+    else:
+        factory = getattr(TransformerConfig, opts.model_factory, None)
+        if factory is None:
+            raise Refusal(
+                Stage.THE_CONFIG_WOULD_NOT_BUILD, f"unknown model factory: {opts.model_factory}"
+            )
 
     # padded rather than exact for the same reason the example pads: a vocab that is a
     # multiple of 128 keeps the embedding matmul on a fast path. dolma2's 100,278 pads to
@@ -602,38 +693,66 @@ def build_config(opts, overrides: List[str]):
         num_workers=4,
     )
 
-    train_module_config = TransformerTrainModuleConfig(
-        rank_microbatch_size=opts.rank_microbatch_size,
-        max_sequence_length=opts.sequence_length,
-        optim=AdamWConfig(
-            lr=opts.learning_rate,
-            group_overrides=[
-                OptimGroupOverride(params=["embeddings.weight"], opts=dict(weight_decay=0.0))
-            ],
-        ),
-        # On, because the image now carries a C compiler. It was off in the platform's
-        # getting-started command only because a run without one dies on the first compiled
-        # region, which is a workaround that costs throughput on every run forever.
-        compile_model=True,
-        # param_dtype comes from --param-dtype, whose default is bfloat16 and therefore is
-        # exactly what this line said before the flag existed. The flag is here so the choice
-        # can be made rather than only rejected, and so that it appears in the command text --
-        # the platform reads command words and cannot see a dtype set in code, so `--param-dtype
-        # bfloat16` on a T4 shape is refused at submission and never reaches an instance.
-        #
-        # reduce_dtype stays float32 and has no flag. It is the gradient reduction, fp32 is the
-        # numerically safe answer at every scale this platform runs, and the dotted override
-        # `train_module.dp_config.reduce_dtype=...` reaches it for anyone who disagrees.
-        dp_config=TransformerDataParallelConfig(
-            name=DataParallelType.fsdp,
-            param_dtype=DType(opts.param_dtype),
-            reduce_dtype=DType.float32,
-        ),
-        max_grad_norm=1.0,
-        # `warmup`, not the `warmup_steps` the example still passes -- that spelling is
-        # deprecated upstream and warns on every construction.
-        scheduler=CosWithWarmup(warmup=opts.warmup_steps),
-    )
+    if is_olmoe_7b_32x4_shared2(opts):
+        train_module_config = TransformerTrainModuleConfig(
+            rank_microbatch_size=opts.rank_microbatch_size,
+            max_sequence_length=opts.sequence_length,
+            optim=AdamWConfig(
+                lr=opts.learning_rate,
+                weight_decay=0.1,
+                betas=(0.9, 0.95),
+                group_overrides=[
+                    OptimGroupOverride(params=["embeddings.weight"], opts=dict(weight_decay=0.0))
+                ],
+            ),
+            compile_model=True,
+            # HSDP is required for expert parallelism. In the production layout, two
+            # replicas each shard the model and the 32 routed experts over 32 ranks.
+            dp_config=TransformerDataParallelConfig(
+                name=DataParallelType.hsdp,
+                param_dtype=DType(opts.param_dtype),
+                reduce_dtype=DType.float32,
+                num_replicas=opts.moe_num_replicas,
+                shard_degree=opts.moe_shard_degree,
+            ),
+            ep_config=TransformerExpertParallelConfig(degree=opts.moe_shard_degree),
+            z_loss_multiplier=1e-5,
+            max_grad_norm=1.0,
+            scheduler=CosWithWarmup(warmup=opts.warmup_steps),
+        )
+    else:
+        train_module_config = TransformerTrainModuleConfig(
+            rank_microbatch_size=opts.rank_microbatch_size,
+            max_sequence_length=opts.sequence_length,
+            optim=AdamWConfig(
+                lr=opts.learning_rate,
+                group_overrides=[
+                    OptimGroupOverride(params=["embeddings.weight"], opts=dict(weight_decay=0.0))
+                ],
+            ),
+            # On, because the image now carries a C compiler. It was off in the platform's
+            # getting-started command only because a run without one dies on the first compiled
+            # region, which is a workaround that costs throughput on every run forever.
+            compile_model=True,
+            # param_dtype comes from --param-dtype, whose default is bfloat16 and therefore is
+            # exactly what this line said before the flag existed. The flag is here so the choice
+            # can be made rather than only rejected, and so that it appears in the command text --
+            # the platform reads command words and cannot see a dtype set in code, so `--param-dtype
+            # bfloat16` on a T4 shape is refused at submission and never reaches an instance.
+            #
+            # reduce_dtype stays float32 and has no flag. It is the gradient reduction, fp32 is the
+            # numerically safe answer at every scale this platform runs, and the dotted override
+            # `train_module.dp_config.reduce_dtype=...` reaches it for anyone who disagrees.
+            dp_config=TransformerDataParallelConfig(
+                name=DataParallelType.fsdp,
+                param_dtype=DType(opts.param_dtype),
+                reduce_dtype=DType.float32,
+            ),
+            max_grad_norm=1.0,
+            # `warmup`, not the `warmup_steps` the example still passes -- that spelling is
+            # deprecated upstream and warns on every construction.
+            scheduler=CosWithWarmup(warmup=opts.warmup_steps),
+        )
 
     trainer_config = (
         TrainerConfig(
@@ -853,7 +972,14 @@ def build_parser() -> argparse.ArgumentParser:
         "prefix; a run that writes anywhere else cannot be resumed by its own retry.",
     )
     parser.add_argument("--work-dir", default="/tmp/dataset-cache")
-    parser.add_argument("--model-factory", default="olmo2_190M")
+    parser.add_argument(
+        "--model-factory",
+        default="olmo2_190M",
+        help=(
+            "A TransformerConfig factory, or "
+            f"{OLMOE_7B_32X4_SHARED2_FACTORY!r} for the platform-native ~7.5B 32x4 MoE recipe"
+        ),
+    )
     parser.add_argument("--sequence-length", type=int, default=2048)
     parser.add_argument("--steps", type=int, default=200)
     parser.add_argument("--save-interval", type=int, default=100)
@@ -861,6 +987,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--global-batch-size", type=int, default=256 * 1024)
     parser.add_argument("--rank-microbatch-size", type=int, default=16 * 1024)
+    parser.add_argument(
+        "--moe-shard-degree",
+        type=int,
+        default=32,
+        help=(
+            "HSDP and expert-parallel shard degree for "
+            f"{OLMOE_7B_32X4_SHARED2_FACTORY}; ignored by other model factories"
+        ),
+    )
+    parser.add_argument(
+        "--moe-num-replicas",
+        type=int,
+        default=2,
+        help=(
+            "HSDP replica count for "
+            f"{OLMOE_7B_32X4_SHARED2_FACTORY}; ignored by other model factories"
+        ),
+    )
     parser.add_argument("--data-seed", type=int, default=0)
     parser.add_argument(
         "--param-dtype",
