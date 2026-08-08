@@ -64,3 +64,8 @@ core
 
 # latent-cot generated datasets (reproducible via gen_graph_data.py; also published to edullm-data)
 /data/
+
+# Scratch analysis scripts: untracked on purpose. The image build lints the WHOLE
+# repository (ruff check .), so a throwaway script here can and did block the pilot from
+# getting an image (commit e0dff82a).
+/local/
