@@ -1,0 +1,86 @@
+# Written by edullm check, from config/workload-catalog.yaml, then filled in by hand.
+# Everything here is a property of the code and travels with it in git.
+# The machine, the corpus and the experiment are supplied at submit time,
+# because one commit run by two people belongs to two teams.
+#
+# Workload profiles registered for OLMo-core: olmo-core-check, olmo-core-train.
+# edullm check prices this and lists every refusal, without dispatching anything.
+#
+# ---------------------------------------------------------------------------
+# Gated DeltaNet-2 pretraining. TWO THINGS ARE STILL OPEN and are marked below:
+# the model rung (--model-factory and the GDN-2 geometry) and the corpus, which
+# is a submit-time flag rather than a field here. Everything else is settled.
+#
+# The recipe follows the paper's section 4 setup where it is size-independent:
+# AdamW, peak LR 4e-4, cosine decay, gradient clip 1.0 (train_on_corpus sets the
+# last one), 4K sequence length, and a global batch of 0.5M tokens. The paper
+# warms up over 1B tokens, which at 524,288 tokens/step is 1,908 steps.
+#
+# --steps 19073 is a 10B-token budget at that batch size (19073 * 524288 = 10.0B).
+#
+# WHY EIGHT CARDS. A 370M model over 10B tokens is about 2.2e19 FLOPs at 6ND.
+# One L4 at a realistic MFU does not finish that inside the profile's 24h ceiling,
+# and neither does one L40S; eight A100s bring it to roughly six hours. Read the
+# rate and the worst-case total out of `edullm check --json`, never from here.
+# --nproc-per-node MUST equal the device count of the shape, or the submission is
+# refused with the corrected command.
+#
+# THE MIXTURE, AND WHAT IT CAN AND CANNOT REPRODUCE. --mixture on draws a 10B
+# weighted subset through the reader's own build_mixture rather than reading the
+# corpus flat. With no --mixture-ratios the ratios are water-filled from the
+# per-source token counts, which is a function of the corpus and the budget alone.
+#
+# It is NOT bit-identical to the baseline's 10B slice, and the reason is in
+# build_mixture's own docstring: the legacy SourceMixtureDatasetConfig took
+# `ceil(available * ratio)` from the FRONT of every shard, which the reader calls a
+# systematic skew, and build_mixture instead draws WHOLE shards in a seeded order.
+# So even with the baseline's exact ratios the token subset differs by design.
+# Matching source proportions is achievable; matching the token set is not.
+#
+# WHY --param-dtype IS ON THE LINE rather than left to the default that already
+# is bfloat16: the platform's precision guard reads the command text and cannot
+# see a dtype set in code, so naming it turns a card with no bfloat16 into a free
+# refusal at check time instead of a billed machine. See AGENTS.md.
+#
+# It has a second job here. `SpeedMonitorCallback` only sets a device peak when
+# param_dtype or autocast is bfloat16, so a float32 run reports NO MFU at all --
+# not a wrong one. Naming bf16 is what makes the throughput number exist.
+#
+# TRITON_F32_DEFAULT=ieee IS A CORRECTNESS SETTING, NOT A SPEED ONE, and GDN-2 is
+# the exact case it exists for: the whole mixer is Triton, via fla.ops.gdn2.
+# `torch.backends.cuda.matmul.allow_tf32 = False` does NOT reach Triton -- Triton
+# lowers tl.dot to TF32 on Ampere+ by its own default -- so a run can truthfully
+# report tf32-disabled for torch and still compute every recurrence at reduced
+# precision. A100-MFU-PLAYBOOK.md B9 measures 1.145e-03 relative error unset
+# against 6.892e-06 with ieee: 166x, from one environment variable.
+#
+# `export` in the same shell that execs python, deliberately: torchrun passes its
+# own environment to the workers, so this reaches them, whereas a separate
+# bootstrap shell would not. It participates in kernel codegen, so a Triton cache
+# built without it must not be reused.
+#
+# --rank-microbatch-size IS 8192 AND 16384 WOULD HAVE BEEN AN OOM WITH NO RETRY.
+# Playbook B3 measured the 16,384 default at 131-142% of usable A100-40GB memory,
+# and B4 explains why: the stock loss path holds FIVE (N,V) fp32 tensors at once,
+# ~16.84 GiB at N=8192 with this vocab of 100,352, so ~33.7 GiB at N=16384 for
+# the logits chain alone against ~37.99 GiB usable. The chunked-CE lever that
+# would make 16,384 fit is not on main. AWS Batch retries fire only on `Host
+# EC2*`, so an OOM gets no second attempt and reads like a model defect.
+#
+# The cost is comms: 524,288 / 8 ranks / 8,192 = 8 micro-steps, and FSDP
+# all-gathers params once per forward and once per backward PER micro-step. The
+# gradient-sync fix that would collapse that to one reduce-scatter per step
+# (playbook B2) is also not on main, so expect MFU below the 31.4% the playbook
+# measured for a ~400M dense model on this shape.
+# ---------------------------------------------------------------------------
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'export TRITON_F32_DEFAULT=ieee &&
+  python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/train_gdn2.py "$EDULLM_RUN_ID" --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --model-factory olmo2_370M --n-heads 16 --head-dim 64 --expand-v 1.0
+  --sequence-length 4096 --global-batch-size 524288 --rank-microbatch-size 8192
+  --learning-rate 4e-4 --warmup-steps 1908 --steps 19073 --save-interval 500
+  --mixture on --mixture-total 10000000000 --param-dtype bfloat16'

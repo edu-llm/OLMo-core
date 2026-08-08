@@ -23,6 +23,7 @@ from olmo_core.nn.attention.short_conv import ShortConvConfig
 from olmo_core.nn.feed_forward import FeedForwardConfig
 from olmo_core.nn.transformer.config import TransformerConfig
 from olmo_core.nn.transformer.core6_arms import (
+    ARM_L0_DELTA,
     ARMS,
     ATTENTION_LAYERS,
     D_MODEL,
@@ -39,6 +40,8 @@ from olmo_core.nn.transformer.core6_arms import (
     WIDTH_TOLERANCE,
     Core6Arm,
     build_arm,
+    mixer_config,
+    mixer_params,
     solve_widths,
 )
 
@@ -89,6 +92,184 @@ def test_the_same_residual_survives_the_ablation():
     ablated = build_arm("G4R2").num_params - build_arm("G4R0").num_params
     released = build_arm("K2").num_params - build_arm("L0").num_params
     assert ablated == released == K2_L0_DELTA
+
+
+def test_every_arm_has_a_declared_delta():
+    """
+    A new arm cannot land in ``ARMS`` without an exact declared residual.
+
+    The same guard as ``test_every_arm_has_a_declared_topology``, for the ledger. Without it the
+    tolerance test below still runs on a new arm -- it parametrizes over ``ARMS`` -- but tolerance
+    is a band, and a band is what this module spent seven arms refusing to settle for.
+    """
+    assert set(ARM_L0_DELTA) == set(ARMS), (
+        f"declared but with no expected delta: {sorted(set(ARMS) - set(ARM_L0_DELTA))}; "
+        f"expected but not declared: {sorted(set(ARM_L0_DELTA) - set(ARMS))}"
+    )
+
+
+@pytest.mark.parametrize("name", list(ARMS))
+def test_every_arm_lands_on_its_declared_delta(name):
+    """
+    EVERY arm's residual is asserted EXACTLY, not within the tolerance band.
+
+    This is the generalisation of ``test_k2_anchors_down_to_l0_by_exactly_the_frozen_residual``,
+    and the bake-off is what forced it. One shared ``K2_L0_DELTA`` worked while every KDA-slot arm
+    ran the same operator; six arms running six operators need six numbers. The alternative on the
+    table was to loosen the exact assertion to ``abs(delta) <= tolerance``, which would have
+    covered the whole bake-off and checked nothing about any individual arm -- a 195,068-parameter
+    band that every arm here clears by two orders of magnitude.
+
+    The declared numbers are derived by hand from the config classes' own ``num_params`` algebra.
+    A disagreement means the hand arithmetic and the solver have diverged, and the message says by
+    how much rather than just that they differ.
+    """
+    delta = build_arm(name).num_params - L0_PARAM_TARGET
+    assert delta == ARM_L0_DELTA[name], (
+        f"{name} lands at {delta:+,} against L0 but declares {ARM_L0_DELTA[name]:+,} "
+        f"(off by {delta - ARM_L0_DELTA[name]:+,})"
+    )
+
+
+def test_the_solver_is_what_holds_the_big_mixers_on_the_anchor():
+    """
+    Pins the reason ``solve_widths`` grew a mixer term, so it cannot be removed as dead code.
+
+    KDA_R2 and GDN2 carry mixers roughly 2.1M and 2.08M parameters larger than KDA, in two slots
+    each. Without the correction they land about +1.09% and +1.06% against a declared tolerance of
+    0.05% -- some 21x outside it, and in the direction that gives the bigger operator extra FFN
+    capacity and then reports the result as mixer quality.
+
+    Asserted as "the uncorrected arm would be far out of tolerance", computed from the mixer sizes
+    rather than from a second copy of the solver, so this test cannot pass by re-deriving the
+    formula it is checking.
+    """
+    for name in ("KDA_R2", "GDN2"):
+        surplus = len(ARMS[name].kda_layers) * (mixer_params(name) - mixer_params("KDA_BASE"))
+        assert surplus > 0, name
+        # What the arm WOULD deviate by if that surplus were never respent.
+        uncorrected = surplus / L0_PARAM_TARGET
+        assert uncorrected > 20 * WIDTH_TOLERANCE, (
+            f"{name}'s mixer surplus is only {uncorrected:+.4%}, so this test is no longer "
+            "demonstrating why the solver's mixer term exists"
+        )
+        # And what it actually deviates by, once the solver has respent it.
+        assert abs(ARM_L0_DELTA[name]) / L0_PARAM_TARGET <= WIDTH_TOLERANCE
+
+
+def test_r1_householder_is_parameter_identical_to_shipped_kda():
+    """
+    At R=1 the Householder class is documented to reduce to KimiDeltaAttention exactly.
+
+    That equivalence is what makes KDA_R1 an arity control: if it held only approximately, then
+    KDA_R2 - KDA_R1 would mix the second Householder factor with a parameter difference, and
+    KDA_R1 - KDA_BASE would not be the reflection regime alone. Checked on the configs' own
+    algebra, so it runs without a GPU and fails loudly if either class is reparameterized.
+    """
+    assert mixer_params("KDA_R1") == mixer_params("KDA_BASE") == 4_487_248
+    assert ARM_L0_DELTA["KDA_R1"] == ARM_L0_DELTA["KDA_BASE"] == K2_L0_DELTA
+
+
+def test_the_gated_conv_arm_pays_only_the_depthwise_price():
+    """
+    The depthwise gate must cost 6,144 per layer, and the lowrank one must not be what shipped.
+
+    Two things are asserted because the arm's validity rests on both. The gate has to be small
+    enough that KDA_GCONV stays parameter-matched -- at 2 * 3 * 2 * hidden it is 6,144 per layer
+    and the arm lands at +2,208. And it must not be ``"lowrank"``, which would cost 2,359,296
+    (12x the declared tolerance) AND forfeit seed pairing, because its nine nn.Linear per layer
+    draw from the global rng before the seeded generator is built.
+    """
+    cfg = mixer_config("KDA_GCONV")
+    assert cfg.gated_conv is True
+    assert cfg.gate_structure == "depthwise"
+    assert cfg.gate_rank is None
+
+    per_layer = mixer_params("KDA_GCONV") - mixer_params("KDA_BASE")
+    assert per_layer == 6_144, per_layer
+    assert cfg.gate_params(D_MODEL) == 6_144
+
+    # The counterfactual, so the 12x claim in the arm's notes is checked rather than asserted in
+    # prose. A lowrank gate at the same rank the memory estimate uses is far outside tolerance.
+    lowrank = replace(cfg, gate_structure="lowrank", gate_rank=256)
+    assert (lowrank.num_params(D_MODEL) - mixer_params("KDA_BASE")) == 2_359_296
+    assert 2_359_296 / L0_PARAM_TARGET > 10 * WIDTH_TOLERANCE
+
+
+def test_the_gate_isolating_contrast_exists_and_is_parameter_free():
+    """
+    KDA_GCONV - KDA_NOACT must be the POST GATE and nothing else.
+
+    The depthwise pre-gate is algebraically a SiLU -- ``2*sigmoid(a*u)*u == (2/a)*silu(a*u)``
+    exactly, with ``2/a`` absorbed into the convolution taps -- so ``gated_conv=True,
+    activation=None`` is NOT activation-free and KDA_GCONV - KDA_BASE conflates three changes:
+    the post gate, a learnable activation slope, and the activation's position. KDA_NOACT exists
+    to make the attributable contrast available, and this test is what stops it being deleted as
+    a redundant-looking duplicate of KDA_BASE.
+
+    Also asserts that removing the activation costs no parameters, which is what makes NOACT a
+    free control rather than a second capacity condition.
+    """
+    for required in ("KDA_BASE", "KDA_NOACT", "KDA_GCONV"):
+        assert required in ARMS, f"{required} is required for the gate-isolating contrast"
+
+    base, noact = mixer_config("KDA_BASE"), mixer_config("KDA_NOACT")
+    assert base.conv_activation == "silu" and base.gated_conv is False
+    assert noact.conv_activation is None and noact.gated_conv is False
+    # An activation is not a parameter, so the control is free.
+    assert mixer_params("KDA_NOACT") == mixer_params("KDA_BASE")
+    assert ARM_L0_DELTA["KDA_NOACT"] == ARM_L0_DELTA["KDA_BASE"]
+
+
+def test_both_householder_arms_allow_negative_eigenvalues():
+    """
+    ``allow_neg_eigval=True`` is the mechanism, and the class default is ``False``.
+
+    With it, ``beta`` reaches (0, 2) and ``(I - beta k k^T)`` can be a true Householder
+    reflection. Without it ``beta`` stays in (0, 1), the update is a contraction, and the arm
+    trains stably at the same cost while the mechanism it is named for is simply absent. Nothing
+    downstream would look wrong. This is the check that the flag was actually passed.
+    """
+    for name in ("KDA_R1", "KDA_R2"):
+        assert mixer_config(name).allow_neg_eigval is True, name
+    assert mixer_config("KDA_R1").num_householder == 1
+    assert mixer_config("KDA_R2").num_householder == 2
+
+
+def test_gdn2_pins_the_defaults_that_invert_gdn1():
+    """
+    GDN-2's defaults deliberately invert GatedDeltaNet's, so this arm writes them down.
+
+    ``expand_v`` 1.0 against GDN1's 2.0 and ``allow_neg_eigval`` False against GDN1's True. At
+    ``expand_v=2.0`` the mixer is 10,112,144 parameters rather than 6,568,016 and the widths the
+    solver would need are far enough from 4,608 to be a different model, so the value is pinned
+    rather than inherited.
+    """
+    cfg = mixer_config("GDN2")
+    assert cfg.expand_v == 1.0
+    assert cfg.allow_neg_eigval is False, "the paper's headline model keeps the erase gate in [0,1]"
+    assert mixer_params("GDN2") == 6_568_016
+
+
+def test_every_bakeoff_arm_keeps_the_full_attention_budget():
+    """
+    All six bake-off arms carry L0's six global-attention layers.
+
+    THE REASON IS MECHANICAL, not aesthetic. ``model.py`` emits RoPE buffers only for
+    ``Attention``/``FusedAttention`` blocks, so an arm with fewer attention layers loses positional
+    encoding along with them, and its loss gap would be mostly missing position rather than mixer
+    quality -- a large and entirely uninterpretable number. Asserted on the built config rather
+    than on the declaration, so a solver or override bug that dropped an attention layer is caught
+    too.
+    """
+    bakeoff = [n for n in ARMS if ARMS[n].kda_layers and n not in ("K2", "G4R2")]
+    assert len(bakeoff) == 6, f"expected the six bake-off arms, got {sorted(bakeoff)}"
+    for name in bakeoff:
+        blocks = build_arm(name).resolved_block_configs
+        idx = tuple(
+            i for i, b in enumerate(blocks) if isinstance(b.sequence_mixer, AttentionConfig)
+        )
+        assert idx == ATTENTION_LAYERS, f"{name} has global attention at {idx}"
 
 
 @pytest.mark.parametrize("name", list(ARMS))
@@ -143,6 +324,17 @@ ARM_TOPOLOGY = {
     "G2R0": (2, 0, 0, 14),
     "S14": (2, 0, 14, 0),
     "G0R0": (0, 0, 0, 16),
+    # The bake-off arms. Every one is L0's topology with slots {6,11} taken by a linear-attention
+    # mixer, so all six rows are identical -- and that is the point being asserted, not a
+    # copy-paste: the arms must differ in the OPERATOR and in nothing structural. A row that
+    # drifted from (6, 2, 0, 8) would mean an arm quietly changed its attention budget, and its
+    # loss gap would then be mostly missing RoPE rather than mixer quality.
+    "KDA_BASE": (6, 2, 0, 8),
+    "KDA_NOACT": (6, 2, 0, 8),
+    "KDA_GCONV": (6, 2, 0, 8),
+    "KDA_R1": (6, 2, 0, 8),
+    "KDA_R2": (6, 2, 0, 8),
+    "GDN2": (6, 2, 0, 8),
 }
 
 
@@ -177,7 +369,15 @@ def test_arm_topology(name, n_global, n_kda, n_swa, n_liv):
 
     kinds = [type(b.sequence_mixer).__name__ for b in blocks]
     assert kinds.count("ShortConvConfig") == n_liv
-    assert kinds.count("KimiDeltaAttentionConfig") == n_kda
+
+    # The KDA slots are counted against the class the ARM DECLARES, not against
+    # `KimiDeltaAttentionConfig` by name. The bake-off puts three different operator classes in
+    # those two slots -- KDA, KimiDeltaHouseholder and GatedDeltaNet2 -- so a hard-coded class
+    # name would silently count zero for four of the arms and this row would then be asserting
+    # that they have no mixer at all, which is the same shape of vacuous pass the module docstring
+    # warns about.
+    expected_cls = type(mixer_config(name))
+    assert kinds.count(expected_cls.__name__) == n_kda
 
     attn = [b.sequence_mixer for b in blocks if isinstance(b.sequence_mixer, AttentionConfig)]
     windowed = [a for a in attn if a.sliding_window is not None]
@@ -222,6 +422,24 @@ def test_kda_lands_in_the_declared_slots():
             if isinstance(b.sequence_mixer, KimiDeltaAttentionConfig)
         )
         assert idx == KDA_LAYERS, name
+
+
+@pytest.mark.parametrize("name", [n for n in ARMS if ARMS[n].kda_layers])
+def test_every_mixer_arm_places_its_operator_in_the_frozen_slots(name):
+    """
+    Every arm with a mixer puts it in {6, 11} and puts the RIGHT CLASS there.
+
+    Two failures in one check, because they are indistinguishable in a loss curve. Placing the
+    operator in different slots per arm would make the bake-off a comparison of positions as much
+    as of operators; placing the wrong class there -- which a mis-keyed `MIXERS` entry does
+    silently, since every value is a zero-argument callable returning *some* valid config -- gives
+    two arms that are secretly the same model and a guaranteed null between them.
+    """
+    arm = ARMS[name]
+    expected_cls = type(mixer_config(name))
+    blocks = build_arm(name).resolved_block_configs
+    idx = tuple(i for i, b in enumerate(blocks) if isinstance(b.sequence_mixer, expected_cls))
+    assert idx == arm.kda_layers == KDA_LAYERS, name
 
 
 def test_g0r0_has_no_attention_at_all():
@@ -277,9 +495,18 @@ def test_kda_slots_are_never_touched_by_the_solver():
     """
     The KDA slots carry the frozen -10,080 residual. If the solver moved their width, that
     residual would drift and the capacity match with L0 would be lost.
+
+    Covers EVERY arm with a mixer, not just K2 and G4R2. The bake-off arms make this sharper
+    rather than merely broader: the solver now respends a mixer surplus of millions of parameters
+    for KDA_R2 and GDN2, and if it were allowed to spend any of that inside the slot it was
+    correcting for, the two slots would no longer be the same FFN width across arms -- so the
+    contrast would be operator plus width instead of operator.
     """
-    for name in ("K2", "G4R2"):
+    for name in (n for n in ARMS if ARMS[n].kda_layers):
         assert not (set(solve_widths(name)) & set(KDA_LAYERS)), name
+        widths = build_arm(name).resolved_block_configs
+        for i in KDA_LAYERS:
+            assert widths[i].feed_forward.hidden_size == KDA_SLOT_SWIGLU_WIDTH, name
 
 
 def test_solver_reduces_width_for_attention_ablated_arms():

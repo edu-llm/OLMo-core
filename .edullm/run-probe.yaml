@@ -1,0 +1,32 @@
+# A DRY RUN THAT COSTS PENNIES AND ANSWERS THE ONE QUESTION NOBODY CAN ANSWER FROM A LAPTOP.
+#
+# `edullm check --spec .edullm/run-probe.yaml` prices this; submit it the same way. It resolves
+# the corpus, builds the full config, prints it, and trains nothing.
+#
+# WHAT IT IS FOR. Reproducing the baseline's 10B mixture needs the per-source token counts of
+# olmo-150b-dolma2, and those live in the sealed manifest in s3://edullm-data, which only a
+# workload role may read. So the source names, their sizes and the water-filled allocation
+# cannot be known before a container has looked -- and this is the cheapest container that can.
+# Its log is the input to deciding whether the derived mixture matches the baseline's.
+#
+# cpu-32vcpu, because there is no accelerator to ask for: --dry-run resolves the manifest and
+# assembles configs. olmo-core-check rather than olmo-core-train, because a run that trains
+# nothing has no checkpoint to promise and needs no second attempt.
+#
+# --mixture on with no --mixture-ratios derives the ratios by water-filling. Whether that is
+# the baseline's mixture is exactly what the log settles.
+#
+# The flags are held identical to run.yaml's, minus the training ones, so that what this
+# resolves is what the real run resolves. That includes --rank-microbatch-size 8192 and
+# TRITON_F32_DEFAULT=ieee even though a dry run allocates nothing and runs no kernel: a probe
+# whose command differs from the run's is a probe of a different run.
+schema_version: 1
+workload_profile: olmo-core-check
+suggested_compute: cpu-32vcpu
+command: >-
+  bash -lc 'export TRITON_F32_DEFAULT=ieee &&
+  python .edullm/train_gdn2.py "$EDULLM_RUN_ID" --save-folder
+  "$EDULLM_CHECKPOINT_DIR" --model-factory olmo2_370M --n-heads 16 --head-dim 64
+  --expand-v 1.0 --sequence-length 4096 --global-batch-size 524288
+  --rank-microbatch-size 8192 --mixture on --mixture-total 10000000000
+  --param-dtype bfloat16 --dry-run'

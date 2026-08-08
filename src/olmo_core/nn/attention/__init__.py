@@ -18,6 +18,8 @@ from olmo_core.nn.attention.base import SequenceMixer, SequenceMixerConfig
 from olmo_core.nn.attention.kv_cache import KVCacheManager
 from olmo_core.nn.attention.recurrent import (
     GatedDeltaNet,
+    GatedDeltaNet2,
+    GatedDeltaNet2Config,
     GatedDeltaNetConfig,
     KimiDeltaAttention,
     KimiDeltaAttentionConfig,
@@ -84,6 +86,8 @@ __all__ = [
     "UlyssesContextParallelStyle",
     "GatedDeltaNetConfig",
     "GatedDeltaNet",
+    "GatedDeltaNet2Config",
+    "GatedDeltaNet2",
     "KimiDeltaAttentionConfig",
     "KimiDeltaAttention",
     "KimiDeltaHouseholderConfig",

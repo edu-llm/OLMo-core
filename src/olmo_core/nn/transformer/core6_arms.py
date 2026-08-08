@@ -62,7 +62,7 @@ so ``G4R0`` is the denominator and must never be dropped while ``G4R2`` is kept.
 """
 
 from dataclasses import dataclass, replace
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from olmo_core.config import DType
 from olmo_core.nn.attention import (
@@ -80,6 +80,10 @@ __all__ = [
     "build_arm",
     "arm_report",
     "solve_widths",
+    "mixer_config",
+    "mixer_params",
+    "MIXERS",
+    "ARM_L0_DELTA",
     "L0_PARAM_TARGET",
     "K2_L0_DELTA",
     "WIDTH_TOLERANCE",
@@ -116,9 +120,114 @@ K2_L0_DELTA = -10_080
 WIDTH_TOLERANCE = 5e-4
 """Declared arm-matching tolerance: +/-0.05% of :data:`L0_PARAM_TARGET`."""
 
+#: Every arm's **exact** parameter residual against ``L0``, declared rather than tolerated.
+#:
+#: :data:`K2_L0_DELTA` used to be the only such constant, and the bake-off is what forced this to
+#: become a table. ``K2_L0_DELTA`` is asserted with ``==`` because an anchor that drifts silently
+#: is the failure this whole module exists to prevent -- but a single shared constant only works
+#: while every KDA-slot arm has the *same* mixer. ``KDA_GCONV`` adds ``2 * 3 * 2 * hidden`` gate
+#: parameters and lands at ``+2,208``; ``KDA_R2`` and ``GDN2`` carry mixers millions of parameters
+#: larger and land where the /32 width grid can put them. Loosening the exact assertion to a
+#: tolerance would have covered all of that and thrown away the check; giving each arm its own
+#: declared exact number keeps every arm's ledger asserted.
+#:
+#: These are hand-derived from the config classes' own ``num_params`` algebra and verified against
+#: it by ``test_every_arm_lands_on_its_declared_delta``. A number here that disagrees with the
+#: solver is a bug in one of the two, and the test says which.
+ARM_L0_DELTA: Dict[str, int] = {
+    "L0": 0,
+    "K2": K2_L0_DELTA,
+    "G4R0": 38_656,
+    "G4R2": 28_576,
+    "G2R0": 77_312,
+    "S14": 3_328,
+    "G0R0": 17_664,
+    # The bake-off arms. All six put their mixer in the same two slots as K2, so they differ from
+    # K2 by exactly (their mixer - KDA) x 2, respent on the /32 grid by `solve_widths`.
+    "KDA_R2": 6_304,
+    "KDA_R1": K2_L0_DELTA,
+    "GDN2": 22_688,
+    "KDA_BASE": K2_L0_DELTA,
+    "KDA_GCONV": 2_208,
+    "KDA_NOACT": K2_L0_DELTA,
+}
+
 #: Per-layer parameter cost of each mixer at the frozen geometry, for the width solver.
 #: A LIV block is *larger* than a GQA block, which is why removing attention adds parameters.
-_BLOCK_PARAMS = {"liv": 18_355_200, "gqa": 17_303_680}
+#: ``kda`` is the BARE MIXER, not a block: it is the reference the bake-off's width solver
+#: measures each arm's operator against, and the two shipped-KDA arms are matched by
+#: :data:`KDA_SLOT_SWIGLU_WIDTH` rather than by the solver.
+_BLOCK_PARAMS = {"liv": 18_355_200, "gqa": 17_303_680, "kda": 4_487_248}
+
+
+# --- the mixers under test ------------------------------------------------------------------
+#
+# Each entry is a zero-argument factory rather than a config instance, because a config is
+# mutable and a shared instance would let one arm's `replace` reach another arm. The factory is
+# also what keeps the GDN-2 import lazy -- see `mixer_config`.
+
+
+def _kda(**kwargs) -> KimiDeltaAttentionConfig:
+    """A :class:`KimiDeltaAttentionConfig` at the frozen head geometry."""
+    return KimiDeltaAttentionConfig(n_heads=N_HEADS, head_dim=HEAD_DIM, **kwargs)
+
+
+def _kda_householder(*, num_householder: int):
+    """
+    A :class:`KimiDeltaHouseholderConfig` at the frozen head geometry.
+
+    ``allow_neg_eigval=True`` IS THE MECHANISM AND IS NOT A DEFAULT. The class defaults it to
+    ``False``, which keeps ``beta`` in ``(0, 1)`` -- and ``(I - beta k k^T)`` with ``beta < 1`` is
+    a contraction, not a reflection. The Householder *reflection* the arm is named for needs
+    ``beta`` to reach 2, which is exactly what this flag buys. An arm built with the default would
+    train stably, cost the same, and answer a different question, so it is passed explicitly here
+    rather than left to the class.
+    """
+    from olmo_core.nn.attention import KimiDeltaHouseholderConfig
+
+    return KimiDeltaHouseholderConfig(
+        n_heads=N_HEADS,
+        head_dim=HEAD_DIM,
+        num_householder=num_householder,
+        allow_neg_eigval=True,
+    )
+
+
+def _gdn2():
+    """
+    A :class:`GatedDeltaNet2Config` at the frozen head geometry.
+
+    ``expand_v`` IS PASSED EXPLICITLY EVEN THOUGH 1.0 IS THE DEFAULT. GDN-2's defaults deliberately
+    invert :class:`GatedDeltaNetConfig`'s -- ``expand_v`` 1.0 against 2.0, ``allow_neg_eigval``
+    ``False`` against ``True`` -- so "the default" is an ambiguous instruction here and a reader
+    comparing the two arms cannot tell which convention this one followed. Writing it down costs
+    one line and removes the ambiguity. At 1.0 the mixer is 6,568,016 parameters, which
+    :func:`solve_widths` matches back to the anchor; at 2.0 it is 10,112,144 and the widths the
+    solver would need are far enough from 4,608 to be a different model.
+
+    ``allow_neg_eigval`` is left at the class default of ``False`` ON PURPOSE, and that is not an
+    oversight mirrored from the Householder arms: the GDN-2 paper's headline model keeps the erase
+    gate in ``[0, 1]`` and its Table 5 reports the widened range as an ablation with no consistent
+    gain at 1.3B. This arm is the paper's model, so it takes the paper's setting.
+    """
+    from olmo_core.nn.attention import GatedDeltaNet2Config
+
+    return GatedDeltaNet2Config(n_heads=N_HEADS, head_dim=HEAD_DIM, expand_v=1.0)
+
+
+#: The mixer each arm drops into its KDA slots, by name.
+#:
+#: Registered as factories so that :data:`ARMS` can name a mixer without importing it. ``GDN2``
+#: and the Householder arms live in modules that are still landing on this branch, and a
+#: module-level instance would make the whole arm registry unimportable while that is true.
+MIXERS: Dict[str, Callable[[], object]] = {
+    "kda": lambda: _kda(),
+    "kda_noact": lambda: _kda(conv_activation=None),
+    "kda_gconv": lambda: _kda(gated_conv=True, gate_structure="depthwise"),
+    "kda_householder_r1": lambda: _kda_householder(num_householder=1),
+    "kda_householder_r2": lambda: _kda_householder(num_householder=2),
+    "gdn2": _gdn2,
+}
 
 
 @dataclass(frozen=True)
@@ -131,8 +240,11 @@ class Core6Arm:
     :param role: What this arm is for -- baseline, treatment, control, or instrument.
     :param attention_layers: Indices using **global** attention. Every index not listed here
         and not in ``kda_layers`` or ``swa_layers`` uses :class:`ShortConv` (LIV).
-    :param kda_layers: Indices using :class:`KimiDeltaAttention`.
+    :param kda_layers: Indices using the arm's ``mixer``.
     :param swa_layers: Indices using sliding-window attention.
+    :param mixer: Key into :data:`MIXERS` naming the operator that fills ``kda_layers``.
+        Defaults to ``"kda"``, the shipped Kimi Delta Attention, so every arm that predates the
+        bake-off keeps exactly the mixer it was measured with.
     :param seeds: Number of seeds this arm is run with.
     :param tokens: Training tokens per seed.
     :param notes: Why the arm exists. Dropping an arm whose note names another arm's
@@ -145,6 +257,7 @@ class Core6Arm:
     attention_layers: Tuple[int, ...] = ATTENTION_LAYERS
     kda_layers: Tuple[int, ...] = ()
     swa_layers: Tuple[int, ...] = ()
+    mixer: str = "kda"
     seeds: int = 3
     tokens: int = 7_100_000_000
     notes: str = ""
@@ -164,6 +277,18 @@ class Core6Arm:
         for i in claimed:
             if not 0 <= i < N_LAYERS:
                 raise ValueError(f"arm {self.name!r}: layer index {i} out of range")
+        if self.mixer not in MIXERS:
+            raise ValueError(
+                f"arm {self.name!r}: unknown mixer {self.mixer!r}; known: {sorted(MIXERS)}"
+            )
+        # A mixer named but never placed is an arm that silently IS its own control: it builds,
+        # trains, and produces a curve identical to the arm it was supposed to differ from.
+        if self.mixer != "kda" and not self.kda_layers:
+            raise ValueError(
+                f"arm {self.name!r}: mixer {self.mixer!r} is declared but 'kda_layers' is empty, "
+                "so the mixer is never placed and this arm is a duplicate of L0 under a "
+                "different name"
+            )
 
 
 # --- the arms -------------------------------------------------------------------------------
@@ -244,8 +369,147 @@ ARMS: Dict[str, Core6Arm] = {
             "Deliberately cheap -- 1 seed at 1B tokens. If L0 - G0R0 is not large, nothing "
             "downstream is interpretable.",
         ),
+        # --- the mixer bake-off ---------------------------------------------------------------
+        #
+        # Six arms that differ from each other in the OPERATOR filling slots {6, 11} and in
+        # nothing else. They keep L0's six global-attention layers, L0's LIV layers everywhere
+        # else, and the same two slots K2 uses.
+        #
+        # THE SIX GLOBAL LAYERS ARE NOT NEGOTIABLE AND THE REASON IS MECHANICAL, not stylistic.
+        # `model.py:257` emits RoPE buffers only for `Attention`/`FusedAttention` blocks, so an
+        # arm that drops attention layers drops POSITIONAL ENCODING with them. Its loss gap would
+        # then be mostly missing position rather than mixer quality -- a large, believable,
+        # entirely uninterpretable number. Every arm here therefore carries the same a=6.
+        #
+        # THE SLOTS STAY {6, 11}. That is `KDA_LAYERS`, the placement K2 and G4R2 already use, and
+        # holding it fixed is what makes this a bake-off: with the slot set constant, arm minus
+        # arm is the operator and only the operator. Widening the treatment to more slots would
+        # buy statistical power and spend the thing being measured -- the difference would then
+        # confound "which mixer" with "how much mixer", and it could not be compared against the
+        # K2/G4R2 numbers already taken at two slots. No document in this tree justifies more, so
+        # two it stays.
+        Core6Arm(
+            "KDA_BASE",
+            "Kimi Delta Attention (shipped)",
+            "bake-off reference",
+            kda_layers=KDA_LAYERS,
+            mixer="kda",
+            notes="The shipped KDA operator, 'gated_conv=False', in slots {6,11}. Geometrically "
+            "identical to K2 -- same mixer, same slots, same -10,080 residual -- and kept under "
+            "its own name because it is the REFERENCE every other bake-off arm subtracts. K2 is "
+            "declared by the sigma protocol and must not be renamed or re-pointed to serve this "
+            "comparison; an arm that two protocols both depend on is an arm neither can change.",
+        ),
+        Core6Arm(
+            "KDA_NOACT",
+            "KDA, Convolution Activation Removed",
+            "bake-off isolating control",
+            kda_layers=KDA_LAYERS,
+            mixer="kda_noact",
+            notes="KDA with 'conv_activation=None' and NO gate. Exists so that the gate can be "
+            "measured on its own. THE DEPTHWISE PRE-GATE IS ALGEBRAICALLY A SiLU: "
+            "2*sigmoid(a*u)*u == (2/a)*silu(a*u) exactly, with the 2/a absorbed into the "
+            "convolution taps (verified to 8.9e-16 in fp64). So 'gated_conv=True, "
+            "activation=None' is NOT activation-free, and KDA_GCONV - KDA_BASE moves three "
+            "things at once: it adds the post gate, it makes the activation's slope learnable, "
+            "and it moves the activation to before the convolution. That difference cannot be "
+            "attributed to any of them. KDA_GCONV - KDA_NOACT is the contrast that can: against "
+            "this arm the only remaining degree of freedom is the POST gate, 1 real dof per "
+            "channel rather than 2. Same parameter count as KDA_BASE (-10,080): removing an "
+            "activation removes no parameters, which is what makes this a free control.",
+        ),
+        Core6Arm(
+            "KDA_GCONV",
+            "KDA + LIV-Style Gated Convolution",
+            "bake-off treatment",
+            kda_layers=KDA_LAYERS,
+            mixer="kda_gconv",
+            notes="KDA whose three short convolutions carry LFM2/LIV-style depthwise gates. "
+            "Read against KDA_NOACT, not KDA_BASE -- see that arm. DEPTHWISE, NOT LOWRANK, and "
+            "the choice is forced twice over: lowrank costs +2,359,296 parameters, 12x the "
+            "declared tolerance, so the arm would not be parameter-matched at all; and it adds "
+            "nine nn.Linear per layer whose reset_parameters draw from the GLOBAL rng before the "
+            "seeded generator exists, so its random stream diverges from every other arm and "
+            "seed pairing is forfeited. Depthwise costs 6,144 per layer, landing this arm at "
+            "+2,208 against L0 -- inside tolerance and asserted exactly.",
+        ),
+        Core6Arm(
+            "KDA_R1",
+            "KDA-Householder, R=1",
+            "bake-off arity control",
+            kda_layers=KDA_LAYERS,
+            mixer="kda_householder_r1",
+            notes="The Householder operator at R=1, with allow_neg_eigval=True. Isolates ARITY "
+            "from the reflection regime: at R=1 this class is documented to have identical "
+            "parameters, FLOPs and state_dict to KimiDeltaAttention, so KDA_R1 - KDA_BASE is the "
+            "beta-in-(0,2) reflection regime ALONE, at KDA's throughput, and KDA_R2 - KDA_R1 is "
+            "the second Householder factor alone. Without this arm the two are confounded and "
+            "R2's result cannot be split. Parameter-identical to KDA_BASE at -10,080, which is "
+            "itself a check: if this arm's count ever moves, the R=1 equivalence has broken.",
+        ),
+        Core6Arm(
+            "KDA_R2",
+            "KDA-Householder, R=2",
+            "bake-off treatment (best quality/param)",
+            kda_layers=KDA_LAYERS,
+            mixer="kda_householder_r2",
+            notes="Two Householder factors per token, allow_neg_eigval=True. The best "
+            "quality-per-parameter result to date and the reason this bake-off exists. "
+            "allow_neg_eigval IS LOAD-BEARING: it puts beta in (0,2) so (I - beta k k^T) can be "
+            "a true reflection; at the class default of False beta stays in (0,1), the update is "
+            "a contraction, and the mechanism the arm is named for is absent while everything "
+            "still trains. The R=2 mixer is 6,608,976 params against KDA's 4,487,248, and "
+            "solve_widths respends the 4,233,376 difference in FFN width to land the arm at "
+            "+6,304 -- inside tolerance, so quality here is not bought with capacity.",
+        ),
+        Core6Arm(
+            "GDN2",
+            "Gated DeltaNet-2",
+            "bake-off competitor",
+            kda_layers=KDA_LAYERS,
+            mixer="gdn2",
+            notes="GDN-2, which decouples the erase and write gates that KDA drives from one "
+            "scalar beta. NOT PARAM-MATCHED TO ANYTHING BY DEFAULT and its defaults deliberately "
+            "invert GatedDeltaNet's (expand_v 1.0 against 2.0, allow_neg_eigval False against "
+            "True), so both are written out explicitly in '_gdn2' rather than inherited. At "
+            "expand_v=1.0 the mixer is 6,568,016 params; solve_widths respends the surplus and "
+            "the arm lands at +22,688, inside tolerance. allow_neg_eigval stays False because "
+            "that is the paper's headline model -- its Table 5 finds no consistent gain from "
+            "widening the erase gate at 1.3B.",
+        ),
     ]
 }
+
+
+def mixer_config(arm: "Core6Arm | str"):
+    """
+    Build a fresh config for the operator this arm puts in its KDA slots.
+
+    A new instance every call: :func:`build_arm` hands the result to ``dataclasses.replace`` and a
+    shared instance would let one arm's block config alias another's.
+
+    :param arm: A :class:`Core6Arm` or the name of one in :data:`ARMS`.
+
+    :returns: The mixer config, e.g. a :class:`KimiDeltaAttentionConfig`.
+    """
+    if isinstance(arm, str):
+        arm = ARMS[arm]
+    return MIXERS[arm.mixer]()
+
+
+def mixer_params(arm: "Core6Arm | str", *, d_model: int = D_MODEL) -> int:
+    """
+    Parameters in ONE of this arm's KDA-slot mixers, from the config's own ``num_params``.
+
+    Read from the config class rather than hard-coded here, so that a change to a mixer's
+    parameterization moves the solver with it instead of silently breaking the anchor.
+
+    :param arm: A :class:`Core6Arm` or the name of one in :data:`ARMS`.
+    :param d_model: The model dimensionality.
+
+    :returns: The mixer's parameter count.
+    """
+    return mixer_config(arm).num_params(d_model)  # type: ignore[attr-defined]
 
 
 def solve_widths(arm: "Core6Arm | str", *, vocab_size: int = VOCAB_SIZE) -> Dict[int, int]:
@@ -275,6 +539,18 @@ def solve_widths(arm: "Core6Arm | str", *, vocab_size: int = VOCAB_SIZE) -> Dict
     n_global_l0 = len(ATTENTION_LAYERS)
     n_global = len(arm.attention_layers) + len(arm.swa_layers)
     surplus = (n_global_l0 - n_global) * (_BLOCK_PARAMS["liv"] - _BLOCK_PARAMS["gqa"])
+
+    # ...plus whatever the arm's own KDA-slot operator costs over the shipped KDA. This term was
+    # ADDED FOR THE BAKE-OFF and it is not cosmetic. The solver used to correct the attention
+    # schedule only, which was sufficient while every KDA-slot arm ran the same mixer -- the slot
+    # width `KDA_SLOT_SWIGLU_WIDTH` absorbed that single operator's cost by construction. The
+    # bake-off breaks that assumption: the R=2 Householder mixer is 6,608,976 parameters and GDN-2
+    # is 6,568,016, against KDA's 4,487,248. Uncorrected, KDA_R2 lands +1.085% and GDN2 +1.064%
+    # against a declared tolerance of 0.05% -- roughly 21x outside it, and in the direction that
+    # hands the bigger operator extra capacity and calls the result mixer quality.
+    if arm.kda_layers:
+        surplus += len(arm.kda_layers) * (mixer_params(arm) - _BLOCK_PARAMS["kda"])
+
     if surplus == 0:
         return {}
 
@@ -374,14 +650,23 @@ def build_arm(
             overrides[i] = replace(cfg.block, feed_forward=_ff(i))
 
     # KDA slots also narrow the SwiGLU branch, so they need their own block config rather
-    # than a shared one.
-    kda_block = replace(
-        cfg.block,
-        sequence_mixer=KimiDeltaAttentionConfig(n_heads=N_HEADS, head_dim=HEAD_DIM, dtype=dtype),
-        feed_forward=FeedForwardConfig(hidden_size=KDA_SLOT_SWIGLU_WIDTH, bias=False, dtype=dtype),
-    )
-    for i in arm.kda_layers:
-        overrides[i] = kda_block
+    # than a shared one. The operator comes from the arm's `mixer`, which is "kda" for every arm
+    # that predates the bake-off, so those arms are byte-for-byte what they were.
+    if arm.kda_layers:
+        slot_mixer = mixer_config(arm)
+        # The registry builds mixers at the frozen head geometry but cannot know the run's dtype,
+        # which `build_arm` takes as an argument. Set it here so a bf16 run does not silently get
+        # fp32 mixers in exactly the two slots under test.
+        slot_mixer = replace(slot_mixer, dtype=dtype)  # type: ignore[type-var]
+        kda_block = replace(
+            cfg.block,
+            sequence_mixer=slot_mixer,  # type: ignore[arg-type]
+            feed_forward=FeedForwardConfig(
+                hidden_size=KDA_SLOT_SWIGLU_WIDTH, bias=False, dtype=dtype
+            ),
+        )
+        for i in arm.kda_layers:
+            overrides[i] = kda_block
 
     if arm.swa_layers:
         assert isinstance(cfg.block.sequence_mixer, AttentionConfig)
