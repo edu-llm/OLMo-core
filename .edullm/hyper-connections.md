@@ -974,8 +974,9 @@ This document already predicts `faithful` may be unstable, and the spectral radi
 reads 0.029 nats worse than the baseline on the endpoint, which clears no gate in the right
 direction and would be written up as a decisive negative H1. It would be a finding about
 training stability wearing the clothes of a finding about loss. Five Bernoulli draws cannot
-separate them: spike propensity at n = 5 has a 95% interval about ±0.35 wide, so p = 0.2 and
-p = 0.6 are not distinguishable in the data the tranche would produce.
+separate them: the two spikes in five runs measured here put spike propensity at 0.4 with an
+exact 95% interval of **0.053 to 0.853**, so the tranche cannot tell an arm that spikes half as
+often from one that spikes twice as often, in either direction.
 
 ### Throughput
 
