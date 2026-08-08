@@ -86,6 +86,89 @@ when the device peak is known. The inherited KDA/GDN decode microbenchmark is
 disabled because it cannot measure these four operators honestly; it records
 that omission rather than publishing a mismatched serving number.
 
+## Smoke tests before the full wave
+
+Use two different smoke tests; ten steps cannot answer the throughput question.
+
+### Functional smoke: 10 steps
+
+`.edullm/run-smoke.yaml` runs one seed of all four experiment arms plus a
+parameter-matched GDN diagnostic control for ten steps. It checks the image,
+strict CUDA backend selection, forward/backward, optimizer, distributed
+collectives, and checkpoint writing. It explicitly skips the full held-out
+pass, so `val_ce` is null. GDN is smoke-only and does not change the frozen
+four-arm science wave.
+
+```bash
+edullm check --json \
+  --experiment mamba-comparison-smoke \
+  --dataset reservoir-dolma2-v1 \
+  --team memory-split \
+  --spec .edullm/run-smoke.yaml \
+  --compute gpu-8xa100 \
+  --hours 1 \
+  --attempts 1 \
+  --fanout-size 5 \
+  --fanout-index-parameter AWS_BATCH_JOB_ARRAY_INDEX
+```
+
+Ten steps are sufficient only for a pass/fail smoke. The audited throughput
+reporter excludes steps 1–50, so `throughput_tok_s_steady` is intentionally
+null in this run. Do not rank arms using its whole-run or last-step rate.
+
+### Throughput smoke: 70 steps
+
+`.edullm/run-throughput-smoke.yaml` uses the same five cells for 70 steps.
+After the fixed 50-step compile/allocator warmup, it reports 20 measured steps.
+The contemporaneous GDN cell is the only valid parity baseline for these
+12-recurrent/4-attention models; the older mixer-bakeoff used different layer
+roles and cannot supply this denominator.
+
+```bash
+edullm check --json \
+  --experiment mamba-comparison-throughput-smoke \
+  --dataset reservoir-dolma2-v1 \
+  --team memory-split \
+  --spec .edullm/run-throughput-smoke.yaml \
+  --compute gpu-8xa100 \
+  --hours 1 \
+  --attempts 1 \
+  --fanout-size 5 \
+  --fanout-index-parameter AWS_BATCH_JOB_ARRAY_INDEX
+```
+
+Rank this smoke only by `throughput_tok_s_steady` and
+`throughput_tok_s_steady_per_device`. It is useful for finding a grossly slow
+arm before the 20-cell run, but one seed and 20 measured steps are not a final
+performance estimate.
+
+### One A100
+
+The code supports a one-rank A100 functional smoke, but the eduLLM catalog has
+no `gpu-1xa100` profile: its only A100 target is the eight-card
+`gpu-8xa100` p4d node. Therefore the supported platform smoke above uses all
+eight cards. Do not reserve that node and silently use only one card.
+
+On a separately controlled single A100 with the built image, dataset reader
+credentials, and the platform-provided `EDULLM_*` environment, use one process
+and reduce the global batch so each optimizer step still has eight B2
+microbatches:
+
+```bash
+python -m torch.distributed.run --nproc-per-node=1 --standalone \
+  .edullm/train_core6_arm.py single-a100-smoke \
+  --arm mamba-b3 --data-seed 210007 --init-seed 110007 \
+  --sequence-length 4096 --steps 10 --warmup-steps 1 \
+  --global-batch-size 65536 --rank-microbatch-size 8192 \
+  --save-interval 10 --save-folder "$EDULLM_CHECKPOINT_DIR" \
+  --param-dtype bfloat16 --skip-heldout-eval --no-decode-probe
+```
+
+Substitute the arm and matching init seed from `docs/mamba-comparison/seeds.json`.
+Use 70 steps instead of 10 for throughput. This one-A100 path is configuration-
+valid and targets sm80, but it remains unverified on real A100 hardware until
+that smoke actually runs.
+
 ## Image and dataset contract
 
 One sm80 image contains Mamba-3, both native PD kernels, `mlstm-kernels==2.0.4`,

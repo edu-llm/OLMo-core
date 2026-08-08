@@ -1,0 +1,20 @@
+# Throughput smoke: four experiment arms plus a diagnostic GDN control, one seed,
+# and 70 steps on 8xA100.
+# WARMUP_STEPS_EXCLUDED=50 is fixed in train_core6_arm.py, leaving 20 measured
+# post-warmup steps. This is long enough to rank gross throughput, but it is not
+# a replacement for the five-seed quality run.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'export TRITON_F32_DEFAULT=ieee PYTHONDONTWRITEBYTECODE=1 &&
+  I=${AWS_BATCH_JOB_ARRAY_INDEX:-0} &&
+  ARMS=(mamba-b3 xlstm mamba3-siso-pd native-pd gdn) &&
+  ISEEDS=(110007 113008 116009 119010 122011) &&
+  python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/train_core6_arm.py "$EDULLM_RUN_ID"
+  --arm "${ARMS[$I]}" --data-seed 210007 --init-seed "${ISEEDS[$I]}"
+  --sequence-length 4096 --steps 70 --warmup-steps 7 --learning-rate 1.4e-3
+  --global-batch-size 524288 --rank-microbatch-size 8192 --save-interval 70
+  --save-folder "$EDULLM_CHECKPOINT_DIR" --param-dtype bfloat16
+  --skip-heldout-eval --no-decode-probe'

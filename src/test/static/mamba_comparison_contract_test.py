@@ -7,6 +7,8 @@ ROOT = Path(__file__).parents[3]
 ENTRYPOINT = ROOT / ".edullm/model_arch_tests.py"
 TRAIN_RUNNER = ROOT / ".edullm/train_core6_arm.py"
 RUN_SPEC = ROOT / ".edullm/run-comparison.yaml"
+FUNCTIONAL_SMOKE_SPEC = ROOT / ".edullm/run-smoke.yaml"
+THROUGHPUT_SMOKE_SPEC = ROOT / ".edullm/run-throughput-smoke.yaml"
 SEEDS = ROOT / "docs/mamba-comparison/seeds.json"
 DOCKERFILE = ROOT / ".edullm/Dockerfile"
 
@@ -107,6 +109,25 @@ def test_runner_preserves_the_audited_bakeoff_endpoints():
         assert endpoint in source
     assert "evaluate_val_aggregate(" in source
     assert "WARMUP_STEPS_EXCLUDED = 50" in source
+
+
+def test_smoke_specs_separate_functional_and_throughput_measurements():
+    source = TRAIN_RUNNER.read_text()
+    assert '"--skip-heldout-eval"' in source
+    assert "if opts.skip_heldout_eval:" in source
+
+    functional = FUNCTIONAL_SMOKE_SPEC.read_text()
+    assert "--steps 10" in functional
+    assert "--skip-heldout-eval" in functional
+    assert "--nproc-per-node=8" in functional
+    assert "ARMS=(mamba-b3 xlstm mamba3-siso-pd native-pd gdn)" in functional
+
+    throughput = THROUGHPUT_SMOKE_SPEC.read_text()
+    assert "--steps 70" in throughput
+    assert "--skip-heldout-eval" in throughput
+    assert "--nproc-per-node=8" in throughput
+    assert "WARMUP_STEPS_EXCLUDED=50" in throughput
+    assert "ARMS=(mamba-b3 xlstm mamba3-siso-pd native-pd gdn)" in throughput
 
 
 def test_one_sm80_image_contains_every_required_kernel_family():

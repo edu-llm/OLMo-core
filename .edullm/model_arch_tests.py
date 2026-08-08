@@ -71,6 +71,8 @@ from olmo_core.utils import seed_all
 log = logging.getLogger(__name__)
 
 ARMS = ("mamba-b3", "xlstm", "mamba3-siso-pd", "native-pd")
+DIAGNOSTIC_ARMS = ("gdn",)
+RUNNABLE_ARMS = ARMS + DIAGNOSTIC_ARMS
 ARM_ORDER = ARMS
 DATA_SEEDS = (210007, 220014, 230021, 240028, 250035)
 INIT_SEEDS_BY_ARM = {
@@ -102,6 +104,13 @@ INIT_SEEDS_BY_ARM = {
         240028: 149031,
         250035: 159038,
     },
+    "gdn": {
+        210007: 122011,
+        220014: 132018,
+        230021: 142025,
+        240028: 152032,
+        250035: 162039,
+    },
 }
 
 D_MODEL = 1024
@@ -124,6 +133,7 @@ EXACT_PARAMETER_COUNTS = {
     "mamba3-siso-pd": 390_169_664,
     "native-pd": 390_142_976,
 }
+DIAGNOSTIC_PARAMETER_COUNTS = {"gdn": 390_144_128}
 
 
 class Stage(enum.IntEnum):
@@ -306,6 +316,8 @@ def _slstm_mixer() -> SLSTMMixerConfig:
 
 
 def _treatment_mixer(arm: str, layer_index: int):
+    if arm == "gdn":
+        return _gdn_mixer()
     if arm == "mamba-b3":
         return Mamba3MixerConfig(
             n_heads=16,
@@ -366,7 +378,7 @@ def _block(mixer, width: int) -> TransformerBlockConfig:
 
 
 def _model_for_widths(arm: str, widths: tuple[int, ...], init_seed: int) -> TransformerConfig:
-    if arm not in ARMS:
+    if arm not in RUNNABLE_ARMS:
         raise ValueError(f"unsupported arm: {arm}")
     if len(widths) != len(RECURRENT_LAYERS):
         raise ValueError(
@@ -424,7 +436,7 @@ def solve_widths(arm: str) -> tuple[int, ...]:
 def build_model_config(arm: str, init_seed: int) -> TransformerConfig:
     """Build and assert the frozen geometry and exact arm parameter count."""
     config = _model_for_widths(arm, solve_widths(arm), init_seed)
-    expected = EXACT_PARAMETER_COUNTS[arm]
+    expected = {**EXACT_PARAMETER_COUNTS, **DIAGNOSTIC_PARAMETER_COUNTS}[arm]
     if config.num_params != expected:
         raise RuntimeError(f"{arm} parameter count drifted: {config.num_params:,} != {expected:,}")
     if abs(config.num_params - PARAMETER_TARGET) > PARAMETER_TOLERANCE:
@@ -433,7 +445,7 @@ def build_model_config(arm: str, init_seed: int) -> TransformerConfig:
 
 
 def valid_init_seeds(arm: str) -> tuple[int, ...]:
-    if arm not in ARMS:
+    if arm not in RUNNABLE_ARMS:
         raise ValueError(f"unsupported arm: {arm}")
     return tuple(INIT_SEEDS_BY_ARM[arm][seed] for seed in DATA_SEEDS)
 
@@ -575,7 +587,7 @@ def train(config: ExperimentConfig) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run frozen model-architecture comparison cells.")
     parser.add_argument("run_name", nargs="?", default=os.environ.get("EDULLM_RUN_ID", "local"))
-    parser.add_argument("--arm", required=True, choices=ARMS)
+    parser.add_argument("--arm", required=True, choices=RUNNABLE_ARMS)
     parser.add_argument("--data-seed", required=True, type=int, choices=DATA_SEEDS)
     parser.add_argument("--init-seed", required=True, type=int)
     parser.add_argument("--dataset-id", default=os.environ.get("EDULLM_DATASET_ID", ""))

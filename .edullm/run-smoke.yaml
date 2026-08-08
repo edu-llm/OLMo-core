@@ -1,0 +1,20 @@
+# Functional smoke: four experiment arms plus a diagnostic GDN control, one seed,
+# and 10 steps on the supported 8xA100 shape.
+# This verifies image imports, strict kernel dispatch, forward/backward, optimizer,
+# collectives, and checkpoint writing. Ten steps are NOT a throughput measurement:
+# the audited reporter excludes its first 50 steps.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'export TRITON_F32_DEFAULT=ieee PYTHONDONTWRITEBYTECODE=1 &&
+  I=${AWS_BATCH_JOB_ARRAY_INDEX:-0} &&
+  ARMS=(mamba-b3 xlstm mamba3-siso-pd native-pd gdn) &&
+  ISEEDS=(110007 113008 116009 119010 122011) &&
+  python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/train_core6_arm.py "$EDULLM_RUN_ID"
+  --arm "${ARMS[$I]}" --data-seed 210007 --init-seed "${ISEEDS[$I]}"
+  --sequence-length 4096 --steps 10 --warmup-steps 1 --learning-rate 1.4e-3
+  --global-batch-size 524288 --rank-microbatch-size 8192 --save-interval 10
+  --save-folder "$EDULLM_CHECKPOINT_DIR" --param-dtype bfloat16
+  --skip-heldout-eval --no-decode-probe'

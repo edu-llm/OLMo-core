@@ -335,3 +335,15 @@ def test_single_platform_image_bundles_all_four_accelerated_backends():
     assert "mamba3_siso_combined" in dockerfile
     assert "olmo_xlstm" in dockerfile
     assert "olmo_slstm" in dockerfile
+
+
+def test_throughput_diagnostic_gdn_matches_the_four_arm_shell():
+    module = load_entrypoint()
+    from olmo_core.nn.attention import AttentionConfig, GatedDeltaNetConfig
+
+    assert module.DIAGNOSTIC_ARMS == ("gdn",)
+    config = module.build_model_config("gdn", module.valid_init_seeds("gdn")[0])
+    mixers = [block.sequence_mixer for block in config.resolved_block_configs]
+    assert sum(isinstance(mixer, AttentionConfig) for mixer in mixers) == 4
+    assert sum(isinstance(mixer, GatedDeltaNetConfig) for mixer in mixers) == 12
+    assert abs(config.num_params - module.PARAMETER_TARGET) <= module.PARAMETER_TOLERANCE

@@ -608,12 +608,12 @@ def build_config(opts, overrides: list[str]):
     # Every comparison arm is built by the one frozen geometry ledger beside this
     # runner. Keeping arm construction out of the fan-out command ensures every cell
     # differs only by its explicit arm and seeds.
-    from model_arch_tests import ARMS, build_model_config
+    from model_arch_tests import RUNNABLE_ARMS, build_model_config
 
-    if opts.arm not in ARMS:
+    if opts.arm not in RUNNABLE_ARMS:
         raise Refusal(
             Stage.THE_CONFIG_WOULD_NOT_BUILD,
-            f"unknown arm: {opts.arm}. Declared arms: {', '.join(ARMS)}",
+            f"unknown arm: {opts.arm}. Declared arms: {', '.join(RUNNABLE_ARMS)}",
         )
 
     # The frozen comparison is parameter-matched at the Dolma2 padded vocabulary. Refuse a
@@ -3061,28 +3061,24 @@ def train(config, opts) -> None:
     trainer.fit()
     elapsed = time.monotonic() - started
 
-    # THE HELD-OUT ENDPOINT, ON EVERY RANK, WITH NO FLAG TO TURN IT ON AND NO `except` AROUND
-    # IT. Everything the experiment reports is a difference of this number between arms, so a
-    # run that trained and produced no CE produced a checkpoint nobody can use to answer the
-    # question -- and the version of this code that did exactly that exited 0 with a null field,
-    # which reads in the record as "this arm was measured".
-    #
-    # It runs BEFORE summarise() because summarise() prints it, and before the `finally` in
-    # main() that tears the process group down, because it needs collectives.
-    val = evaluate_val_aggregate(
-        model=trainer.train_module.model,
-        vocab_size=config.model.vocab_size,
-        val_paths=list(config.val_paths),
-        work_dir=opts.work_dir,
-        seq_len=opts.sequence_length,
-        dtype=config.dataset.dtype.as_np_dtype(),
-        declared_tokens=config.val_rows,
-    )
-    # A MAGNITUDE CHECK ON THE ENDPOINT, RAISED RATHER THAN LOGGED. A CE over a quarter of the
-    # val set is in the normal range and would be believed. Every rank calls this on the same
-    # all-reduced numbers, so either all of them raise or none do -- there is no topology in
-    # which one rank refuses and the others go on to a collective it left.
-    assert_val_tokens_account_for_the_corpus(val)
+    val = None
+    if opts.skip_heldout_eval:
+        log.warning("held-out evaluation skipped by explicit smoke-test flag; val_ce will be null")
+    else:
+        # THE HELD-OUT ENDPOINT, ON EVERY RANK, WITH NO `except` AROUND IT. Everything the
+        # full experiment reports is a difference of this number between arms, so only the
+        # explicit smoke-test flag above may skip it.
+        val = evaluate_val_aggregate(
+            model=trainer.train_module.model,
+            vocab_size=config.model.vocab_size,
+            val_paths=list(config.val_paths),
+            work_dir=opts.work_dir,
+            seq_len=opts.sequence_length,
+            dtype=config.dataset.dtype.as_np_dtype(),
+            declared_tokens=config.val_rows,
+        )
+        # Every rank checks the same all-reduced denominator before a CE can be reported.
+        assert_val_tokens_account_for_the_corpus(val)
 
     # THE SLICED EVALUATION, ON EVERY RANK. It is SECONDARY -- it decomposes CE by gap band and
     # reads frozen masks that must be built first -- but secondary does not mean rank-zero.
@@ -3100,7 +3096,7 @@ def train(config, opts) -> None:
     # measurement, and it is now safe in a way it was not before: every rank runs the same code,
     # so every rank raises the same refusal at the same collective and none is left waiting.
     sliced = None
-    if opts.slice_mask_uri:
+    if opts.slice_mask_uri and not opts.skip_heldout_eval:
         try:
             # Sharded by rank: the union over ranks is the whole mask set, each object fetched
             # once. The manifest's band layout is checked on every rank. Wrapped so that one
@@ -3242,6 +3238,12 @@ def build_parser() -> argparse.ArgumentParser:
     # arm have logged correctly, so it reads like a config bug rather than a typo. Grepping for a
     # flag string is not enough either: run 1's `--lm-loss-implementation` appeared in a prose
     # comment and nowhere in any `add_argument` call.
+    parser.add_argument(
+        "--skip-heldout-eval",
+        action="store_true",
+        help="Smoke-test only: train and report speed/memory with val_ce=null. The full "
+        "comparison must never pass this flag.",
+    )
     parser.add_argument(
         "--no-decode-probe",
         dest="decode_probe",
