@@ -23,11 +23,7 @@ from ..functional import l2_normalize
 from ..layer_norm import LayerNormConfig
 from ..moe import MoEConfig, MoERouter
 from ..moe.parallel_mlp import ParallelMLPBase
-from ..residual_stream import (
-    HyperConnectionConfig,
-    HyperConnectionMode,
-    ResidualStream,
-)
+from ..residual_stream import HyperConnectionConfig, HyperConnectionMode, ResidualStream
 from .config import TransformerDataParallelWrappingStrategy
 
 if TYPE_CHECKING:

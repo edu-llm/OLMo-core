@@ -64,10 +64,12 @@ from .block import (
     TransformerBlockBase,
 )
 from .config import (
+    BlockReuseConfig,
     TransformerActivationCheckpointingMode,
     TransformerBlockConfig,
     TransformerDataParallelWrappingStrategy,
     resolve_block_configs,
+    resolve_block_execution_order,
 )
 from .init import InitMethod, scale_output_modules
 
@@ -128,6 +130,7 @@ class Transformer(nn.Module):
         embedding_init_std: Optional[float] = None,
         block_overrides: Optional[Dict[int, TransformerBlockConfig]] = None,
         block_pattern: Optional[List[str]] = None,
+        block_reuse: Optional[BlockReuseConfig] = None,
         embed_scale: Optional[float] = None,
         tie_word_embeddings: bool = False,
     ):
@@ -151,15 +154,23 @@ class Transformer(nn.Module):
             )
         )
 
+        # Under reuse the model has fewer distinct blocks than layers, and `self.blocks` holds
+        # only the distinct ones. `block_execution_order` says which one runs at each depth, so
+        # every maintenance pass over `self.blocks` -- FSDP wrapping, compilation, activation
+        # checkpointing, initialization -- still touches each block exactly once.
+        self.block_reuse = block_reuse
+        self.block_execution_order: List[int] = resolve_block_execution_order(n_layers, block_reuse)
+        n_unique_blocks = 1 + max(self.block_execution_order)
+
         block_configs: List[TransformerBlockConfig] = resolve_block_configs(
-            n_layers=n_layers,
+            n_layers=n_unique_blocks,
             block=block,
             block_pattern=block_pattern,
             block_overrides=block_overrides,
         )
 
         self.blocks = nn.ModuleDict()
-        for block_idx in range(n_layers):
+        for block_idx in range(n_unique_blocks):
             self.blocks[str(block_idx)] = self._validate_block(
                 block_configs[block_idx].build(
                     d_model=d_model,
@@ -667,9 +678,11 @@ class Transformer(nn.Module):
         if self.hyper_connections is not None and h.ndim == 3:
             h = expand_residual_lanes(h, self.residual_lanes)
 
-        # Run each block.
-        for block_key, block in self.blocks.items():
-            block_idx = int(block_key)
+        # Run each block. Under reuse the same block appears more than once here, which is the
+        # whole point; a pipeline stage owns a contiguous slice of `self.blocks` and its own
+        # execution order covers exactly that slice.
+        for block_idx in self.block_execution_order:
+            block = self.blocks[str(block_idx)]
             block_kwargs = per_block_kwargs.get(block_idx, {})
             # Mark sizes as dynamic for torch.compile().
             if self.compile_enabled:
@@ -718,6 +731,11 @@ class Transformer(nn.Module):
         """
         Prepare the model for pipeline parallelism after it's been split into stages.
         """
+        if self.block_reuse is not None:
+            raise NotImplementedError(
+                "Pipeline parallelism is not supported with block reuse: a stage owns a slice of "
+                "the blocks, but a reused block runs at depths that can fall in several stages."
+            )
         for block in self.blocks.values():
             block = cast(TransformerBlockBase, block)
             block.apply_pp(pp_mesh)
@@ -1065,8 +1083,8 @@ class Transformer(nn.Module):
         does not account for wasted flops due to padding, recomputation, etc.
         """
         flops_per_token = 0
-        blocks = cast(List[TransformerBlockBase], list(self.blocks.values()))
-        for block in blocks:
+        for block_idx in self.block_execution_order:
+            block = cast(TransformerBlockBase, self.blocks[str(block_idx)])
             flops_per_token += block.num_flops_per_token(seq_len)
         if self.lm_head is not None:
             flops_per_token += self.lm_head.num_flops_per_token(seq_len)

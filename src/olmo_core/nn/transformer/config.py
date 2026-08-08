@@ -6,7 +6,7 @@ from fnmatch import fnmatch
 from itertools import cycle, islice
 from typing import TYPE_CHECKING, Dict, List, Optional, cast
 
-from olmo_core.config import UNSET, DType, StrEnum
+from olmo_core.config import UNSET, Config, DType, StrEnum
 from olmo_core.doc_utils import beta_feature
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.nn.attention.base import SequenceMixerConfig
@@ -27,7 +27,7 @@ from ..feed_forward import ActivationFunction, FeedForwardConfig, FeedForwardTyp
 from ..layer_norm import LayerNormConfig, LayerNormType
 from ..lm_head import LMHeadConfig, LMHeadType
 from ..moe import MoEConfig, MoERouterConfig, MoEType
-from ..residual_stream import HyperConnectionConfig, HyperConnectionMode
+from ..residual_stream import HyperConnectionConfig
 from ..rope import RoPEConfig, RoPEScalingConfig, RoPEType
 from .init import InitMethod
 
@@ -329,6 +329,70 @@ class TransformerBlockConfig(ModuleConfig):
         return num_params - num_inactive_params
 
 
+class BlockReusePattern(StrEnum):
+    """
+    How a smaller set of blocks is spread over a larger effective depth.
+    """
+
+    cycle = "cycle"
+    """
+    ``0, 1, ..., U-1, 0, 1, ...``. The best of the three reuse patterns in Virtual Logical Depth
+    (`arXiv 2506.18233 <https://arxiv.org/abs/2506.18233>`_).
+    """
+
+    middle_cycle = "middle_cycle"
+    """
+    The first and last blocks stay unique and only the middle cycles, which is what
+    Mixture-of-Recursions found best independently.
+    """
+
+
+@dataclass
+class BlockReuseConfig(Config):
+    """
+    Run fewer distinct blocks than the model has layers, by applying the same parameters more
+    than once.
+
+    Depth here is *effective* depth: ``n_layers`` is how many times a block runs, so a reused
+    model is matched on compute to an ordinary one of the same ``n_layers`` and differs only in
+    how many distinct parameters it has. That is the comparison worth making -- it isolates
+    weight sharing rather than confounding it with depth.
+    """
+
+    n_unique_blocks: int
+    """
+    How many distinct blocks to build. Must divide into ``n_layers``.
+    """
+
+    pattern: BlockReusePattern = BlockReusePattern.cycle
+    """
+    Which reuse pattern to use.
+    """
+
+    def execution_order(self, n_layers: int) -> List[int]:
+        """
+        The index of the block to run at each depth.
+
+        :param n_layers: The effective depth.
+        """
+        unique = self.n_unique_blocks
+        if unique < 1 or unique > n_layers:
+            raise OLMoConfigurationError(
+                f"n_unique_blocks must be between 1 and n_layers ({n_layers}), got {unique}"
+            )
+
+        if self.pattern == BlockReusePattern.cycle:
+            return [i % unique for i in range(n_layers)]
+
+        if unique < 3 or n_layers < 3:
+            raise OLMoConfigurationError(
+                "The middle_cycle pattern needs at least 3 unique blocks and 3 layers, since it "
+                f"holds the first and last out of the cycle. Got {unique} and {n_layers}."
+            )
+        middle = [1 + (i % (unique - 2)) for i in range(n_layers - 2)]
+        return [0] + middle + [unique - 1]
+
+
 @dataclass
 class TransformerConfig(ModelConfig):
     """
@@ -354,6 +418,7 @@ class TransformerConfig(ModelConfig):
     freeze_params: Optional[List[str]] = None
     block_pattern: Optional[List[str]] = None
     block_overrides: Optional[Dict[int, TransformerBlockConfig]] = None
+    block_reuse: Optional[BlockReuseConfig] = None
     embed_scale: Optional[float] = None
     tie_word_embeddings: bool = False
 
@@ -362,8 +427,18 @@ class TransformerConfig(ModelConfig):
             raise OLMoConfigurationError(
                 "Tying word embeddings is not supported with the normalized transformer"
             )
+        if self.block_reuse is not None:
+            if self.block_pattern is not None or self.block_overrides is not None:
+                raise OLMoConfigurationError(
+                    "`block_reuse` cannot be combined with `block_pattern` or `block_overrides`, "
+                    "because they index blocks by layer and under reuse a layer and a block are "
+                    "no longer the same thing."
+                )
+            # Raises if the reuse pattern does not fit the depth.
+            self.block_reuse.execution_order(self.n_layers)
+
         validate_block_resolution_config(
-            n_layers=self.n_layers,
+            n_layers=self.n_unique_blocks,
             block=self.block,
             block_pattern=self.block_pattern,
             block_overrides=self.block_overrides,
@@ -411,6 +486,7 @@ class TransformerConfig(ModelConfig):
                 embedding_init_std=self.embedding_init_std,
                 block_overrides=self.block_overrides,
                 block_pattern=self.block_pattern,
+                block_reuse=self.block_reuse,
                 embed_scale=self.embed_scale,
                 tie_word_embeddings=self.tie_word_embeddings,
             )
@@ -473,9 +549,17 @@ class TransformerConfig(ModelConfig):
         return model
 
     @property
+    def n_unique_blocks(self) -> int:
+        """
+        How many distinct blocks the model has, which is fewer than :data:`n_layers` when
+        :data:`block_reuse` is set.
+        """
+        return self.n_layers if self.block_reuse is None else self.block_reuse.n_unique_blocks
+
+    @property
     def resolved_block_configs(self) -> list[TransformerBlockConfig]:
         return resolve_block_configs(
-            n_layers=self.n_layers,
+            n_layers=self.n_unique_blocks,
             block=self.block,
             block_pattern=self.block_pattern,
             block_overrides=self.block_overrides,
@@ -2090,3 +2174,19 @@ def resolve_block_configs(
 
     assert len(block_configs) == n_layers
     return block_configs
+
+
+def resolve_block_execution_order(
+    n_layers: int, block_reuse: Optional["BlockReuseConfig"]
+) -> List[int]:
+    """
+    Resolve which block runs at each depth.
+
+    :param n_layers: The *effective* depth, i.e. how many times a block runs.
+    :param block_reuse: The reuse config, or ``None`` for one block per layer.
+
+    :returns: A list of length ``n_layers`` holding the index of the block to run at each depth.
+    """
+    if block_reuse is None:
+        return list(range(n_layers))
+    return block_reuse.execution_order(n_layers)

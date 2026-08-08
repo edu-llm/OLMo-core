@@ -185,9 +185,7 @@ class HyperConnectionConfig(ModuleConfig):
         """
         from ..optim import OptimGroupOverride
 
-        overrides = [
-            OptimGroupOverride(params=[HC_STATIC_PARAM_GLOB], opts=dict(weight_decay=0.0))
-        ]
+        overrides = [OptimGroupOverride(params=[HC_STATIC_PARAM_GLOB], opts=dict(weight_decay=0.0))]
         if self.dynamic:
             overrides.append(
                 OptimGroupOverride(
@@ -409,9 +407,7 @@ class HyperConnectionStream(nn.Module):
     def _squash(self, x: torch.Tensor) -> torch.Tensor:
         return torch.tanh(x) if self.tanh else x
 
-    def coefficients(
-        self, hidden: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def coefficients(self, hidden: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Compute ``(A_m, B, A_r)`` for this token, per eqs. 11-13.
 
@@ -458,9 +454,7 @@ class HyperConnectionStream(nn.Module):
 
         return alpha_m.to(dtype), beta.to(dtype), alpha_r.to(dtype)
 
-    def read(
-        self, hidden: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def read(self, hidden: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Collapse the lanes into the vector the sublayer sees, ``h_0 = A_m^T H`` (eq. 3).
 

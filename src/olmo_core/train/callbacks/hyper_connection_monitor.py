@@ -85,9 +85,7 @@ class HyperConnectionMonitorCallback(Callback):
         blocks = []
         for name, module in model.named_modules():
             streams = [
-                child
-                for child in module.children()
-                if isinstance(child, HyperConnectionStream)
+                child for child in module.children() if isinstance(child, HyperConnectionStream)
             ]
             if streams:
                 blocks.append((name, module))
@@ -183,9 +181,7 @@ class HyperConnectionMonitorCallback(Callback):
             self.fail_closed_by_step = None
             return
 
-        inert = sorted(
-            n for n, s in self._lane_spreads.items() if s < self.min_lane_norm_spread
-        )
+        inert = sorted(n for n, s in self._lane_spreads.items() if s < self.min_lane_norm_spread)
         raise RuntimeError(
             f"Hyper-connection lanes are still identical at step {self.step}: the smallest "
             f"relative spread across lanes is {worst:.3g}, under the {self.min_lane_norm_spread:.3g} "

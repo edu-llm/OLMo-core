@@ -14,6 +14,8 @@ from .block import (
     TransformerBlockBase,
 )
 from .config import (
+    BlockReuseConfig,
+    BlockReusePattern,
     TransformerActivationCheckpointingMode,
     TransformerBlockConfig,
     TransformerBlockType,
@@ -47,5 +49,7 @@ __all__ = [
     "MoEReorderedNormTransformerBlock",
     "TransformerDataParallelWrappingStrategy",
     "TransformerActivationCheckpointingMode",
+    "BlockReuseConfig",
+    "BlockReusePattern",
     "InitMethod",
 ]

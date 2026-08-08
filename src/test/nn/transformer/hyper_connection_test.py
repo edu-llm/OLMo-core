@@ -92,9 +92,7 @@ def test_mhc_init_is_also_equivalent(n_lanes: int):
     The Birkhoff projection reads ``A_r`` as logits, so the identity has to survive a round trip
     through Sinkhorn-Knopp for arm 9 to start from the same place as the others.
     """
-    hc = HyperConnectionConfig(
-        n_lanes=n_lanes, doubly_stochastic=True, output_init_exponent=0.0
-    )
+    hc = HyperConnectionConfig(n_lanes=n_lanes, doubly_stochastic=True, output_init_exponent=0.0)
     baseline = build_model(build_config())
     treated = build_model(build_config(hyper_connections=hc))
 
@@ -224,9 +222,7 @@ def test_output_init_scale(n_lanes: int, exponent: float, expected: float):
 def test_output_init_scaling_shrinks_the_output_modules():
     hc = HyperConnectionConfig(n_lanes=4, output_init_exponent=0.5)
     scaled = build_model(build_config(hyper_connections=hc))
-    unscaled = build_model(
-        build_config(hyper_connections=replace(hc, output_init_exponent=0.0))
-    )
+    unscaled = build_model(build_config(hyper_connections=replace(hc, output_init_exponent=0.0)))
 
     torch.testing.assert_close(
         scaled.blocks["0"].feed_forward.w2.weight,
@@ -244,10 +240,9 @@ def test_added_flops_keep_the_arms_iso_flop():
     shape the paper's Table 8 puts the overhead near 0.2%; anything approaching a percent would
     mean the arms are not matched on compute.
     """
-    shape = dict(d_model=1024, n_heads=16, n_layers=1)
     hc = HyperConnectionConfig(n_lanes=4)
-    treated = build_model(build_config(hyper_connections=hc, **shape))
-    baseline = build_model(build_config(**shape))
+    treated = build_model(build_config(hyper_connections=hc, d_model=1024, n_heads=16, n_layers=1))
+    baseline = build_model(build_config(d_model=1024, n_heads=16, n_layers=1))
 
     assert isinstance(treated.blocks["0"], HyperConnectionReorderedNormTransformerBlock)
     base_flops = baseline.blocks["0"].num_flops_per_token(4096)
