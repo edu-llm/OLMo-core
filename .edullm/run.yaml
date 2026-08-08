@@ -9,6 +9,16 @@
 #   EDULLM_LAUNCH_CHECK=waived   5 processes on 8 cards; launchers.LAUNCH_CHECK_WAIVER matches
 #                                this literally. It is not silent -- waived_launch_check_note
 #                                tells the approving lead the run bills for 8 and starts 5.
+#                                THE SPACE BEFORE THE SEMICOLON IS LOAD-BEARING.
+#                                carries_the_token matches an EXACT WORD after shlex splitting,
+#                                so `EDULLM_LAUNCH_CHECK=waived;` splits as one word carrying
+#                                the semicolon and never matches -- `edullm check` refused with
+#                                `process_per_device` until the space was added. Moving it out
+#                                to an `env` prefix also matches, but then argv[0] is `env`
+#                                rather than a shell, the platform stops recursing into the
+#                                script, and `checkpoint_path_not_in_command` refuses instead.
+#                                Both guards are satisfied only by keeping `bash -lc` AND
+#                                spacing the token off the semicolon.
 #   "$EDULLM_CHECKPOINT_DIR/A$i" require_a_save_folder_a_retry_can_find reads the command TEXT
 #                                for this variable. It expands to an s3:// URI, which
 #                                train_codi.py handles by staging locally and mirroring each
@@ -26,7 +36,7 @@ schema_version: 1
 workload_profile: olmo-core-train
 suggested_compute: gpu-8xa100
 command: >-
-  bash -lc 'EDULLM_LAUNCH_CHECK=waived; set -uo pipefail;
+  bash -lc 'EDULLM_LAUNCH_CHECK=waived ; set -uo pipefail;
   DATA=data/latentcot/graph-reachability-depth/conversations;
   BASE=s3://edullm-olmo-370m-ckpts/olmo3-370m/run-10b-equal/step12716/;
   ARMS=(A0 A1 A2 A3 A4);
