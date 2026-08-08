@@ -11,6 +11,7 @@ PRD 13 asks for "a passing *and* a failing fixture for **each** of G1-G8". These
 boundary values, where inclusive-versus-exclusive is a decision and is stated as one.
 """
 
+import inspect
 import math
 from typing import Any, Dict
 
@@ -696,3 +697,78 @@ def test_g8_refuses_a_ladder_that_runs_backwards():
     )
     assert not verdict.passed
     assert "not ordered" in verdict.detail
+
+
+# --- admission must fail closed ---------------------------------------------------------------------
+
+
+def test_a_report_must_carry_exactly_the_gates_and_not_a_subset():
+    """
+    An admission gate that a truncated file satisfies is not a gate.
+
+    `passed` asked only that the results be non-empty and all pass, so a report carrying a single passing
+    G1 admitted every row -- and so did one carrying every real gate plus an invented G99, because nothing
+    compared the set against `GATES`. Coverage is part of the test, and `coverage_problem` says which way
+    it failed: "G7 failed" and "G7 is absent" send a reader to different places.
+    """
+
+    def report(names):
+        return gates.GateReport(
+            version=gates.GATE_REPORT_VERSION,
+            endpoint="mano",
+            results=tuple(gates.GateResult(gate=n, passed=True, detail="") for n in names),
+        )
+
+    assert not report(("G1",)).passed
+    assert "missing" in report(("G1",)).coverage_problem()
+
+    assert not report(gates.GATES + ("G99",)).passed
+    assert "not a gate: ['G99']" in report(gates.GATES + ("G99",)).coverage_problem()
+
+    assert not report(gates.GATES + ("G7",)).passed
+    assert "repeated ['G7']" in report(gates.GATES + ("G7",)).coverage_problem()
+
+    whole = report(gates.GATES)
+    assert whole.passed and whole.coverage_problem() == ""
+
+
+def test_a_verdict_that_is_not_a_boolean_is_refused_rather_than_coerced():
+    """
+    `bool("false")` is True.
+
+    A report whose JSON spells its verdicts as strings -- which a hand-written or cross-language producer
+    may well do -- would otherwise read as all-passing and admit the entire grid. Refused at the parse,
+    where the file is still identifiable, rather than silently at the verdict.
+    """
+    raw = {
+        "version": gates.GATE_REPORT_VERSION,
+        "endpoint": "mano",
+        "commit": "",
+        "results": [{"gate": g, "passed": "false", "detail": ""} for g in gates.GATES],
+    }
+    with pytest.raises(OLMoConfigurationError, match="not a boolean"):
+        gates.GateReport.from_dict(raw)
+
+    # The same file with real booleans parses, and its verdict is the one it states.
+    raw["results"] = [{"gate": g, "passed": False, "detail": ""} for g in gates.GATES]
+    assert not gates.GateReport.from_dict(raw).passed
+    raw["results"] = [{"gate": g, "passed": True, "detail": ""} for g in gates.GATES]
+    assert gates.GateReport.from_dict(raw).passed
+
+
+def test_a_gate_report_can_live_in_object_storage():
+    """
+    The defect that lost the first real gate report.
+
+    `Path("s3://bucket/key")` collapses to `s3:/bucket/key`, so writing created a **local directory named
+    `s3:`** inside the container and reading looked for one. The M0 job logged that it had written its
+    report to S3; nothing was there, and the next job would have failed reading it. `--out` had branched
+    on `is_url` since the beginning -- the same concern, the same file, two treatments.
+    """
+    from olmo_core.io import is_url
+
+    assert is_url("s3://bucket/key.json")
+    assert not is_url("/tmp/key.json")
+    # The reader dispatches on that rather than assuming a filesystem.
+    source = inspect.getsource(gates._read_text)
+    assert "is_url" in source and "get_bytes_range" in source

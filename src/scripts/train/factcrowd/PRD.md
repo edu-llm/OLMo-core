@@ -1454,8 +1454,10 @@ does not pass: G1, G2, G3, G4, G6, G8
 
 **The `<mano>` endpoint has no dynamic range.** Its degenerate floor -- the best constant policy, always
 answering `<n16>` -- is **4.695%**. The reasoning-only control, which carries no facts and has every
-parameter the ladder can give it, reaches **4.44%**: a quarter of a point *below* the floor. The achievable
-range is **-0.26 pp** where G4 requires 10 pp and the design needs to resolve 2 pp.
+parameter the ladder can give it, reaches **4.44%**: *at* the floor. (The 4.695% is the best-constant policy over the item
+generator; the same policy on the frozen 30,000-item set is about 4.62%, so the control sits within the
+baseline's own uncertainty of it rather than provably beneath it -- see §16.10.) The achievable range is
+**~0 pp** where G4 requires 10 pp and the design needs to resolve 2 pp.
 
 Three failures follow from that one fact rather than being independent:
 
@@ -1470,8 +1472,11 @@ resolution gate cannot distinguish "precise" from "stuck", which is an argument 
 and not the reverse.
 
 The training curves said this before the endpoint did, and nobody was reading them for it. The
-reasoning-only control's final train CE is **1.6892 / 1.6891 / 1.6890** at 13M / 28M / 64M -- 2.44 bits,
-about 5.4 equiprobable answers, and **five times the parameters moves it by 0.0002 nats**. A task that
+reasoning-only control's final train CE is **1.6892 / 1.6891 / 1.6890** at 13M / 28M / 64M, and **five
+times the parameters moves it by 0.0002 nats**. (An earlier draft converted that to "about 5.4
+equiprobable answers". It cannot be: whole-sequence CE averages syntax, operands, operators and the
+answer, so it describes the sequence and not the answer distribution. The invariance to width is the part
+that needed no conversion and is the part that holds.) A task that
 does not respond to width is a task the model is not learning; it is fitting the marginal distribution of
 answers. §16.8's note that `train/CE` is not the endpoint remains true, and this is the one thing the
 control's CE *was* telling us.
@@ -1496,7 +1501,84 @@ the design needs an endpoint that moves before a crowding claim is possible. In 
 None of that is worth spending on until `<compare>` has been read, which the confirmatory scoring gives
 for free.
 
-### 16.10 Deferred, with reasons
+### 16.10 What a re-audit of `a6e7074` found, and what it changes
+
+An independent re-audit reached the same verdict this file reached in §16.9 -- crowding is untested, not
+refuted -- and found several things §16.9 did not. Everything below was reproduced here before acting on
+it.
+
+**The gate report never existed.** `--write-gate-report` used `Path(...).write_text()`, and
+`Path("s3://bucket/key")` collapses to `s3:/bucket/key`, so the M0 job created a **local directory named
+`s3:`** in container scratch and wrote there. The log line said the report had been written to S3; nothing
+was. `load_reports` read the same way, so the pending confirmatory job -- which passed that URI as
+`--gate-report` -- would have died on `FileNotFoundError` after paying for the machine. `--out` had
+branched on `is_url` and uploaded since it was written: the same concern, in the same file, handled two
+ways. Both now go through `olmo_core.io`.
+
+**`<compare>` cannot rescue the design, and the reason is a leak I introduced.** §16.9 named it the
+cheapest next read. It is not readable. The answer is the earlier person's *birth-year value* -- changed
+from a name in an earlier revision, to kill a 50.2% copy-policy floor -- so every training item states
+`min(year(A), year(B)) = Y`. An entity's own year is therefore the **maximum answer over the items it
+appears in**, exactly, whenever it is the earlier one at least once.
+
+Measured on `13m_d0p3`, using 400,000 of the 2.63M training items the 50M-token slice buys (32 mentions
+per entity against ~211 at full budget):
+
+| | |
+|---|---|
+| entity years recovered by `max(answers)` | **97.09%** of 25,000 |
+| eval accuracy from those alone, no biographies, no model | **99.72%** |
+
+A model can score ~99.7% on `<compare>` without reading a single biography. It measures its own
+supervision, not retrieval or composition. Promoting it after `<mano>` failed would also have been
+outcome-contingent endpoint switching; the leak makes the question moot.
+
+**The bit-measurement cohort is the contaminated one.** `CompareTask._probe_ids` is entities `0..24,999`,
+and `--bit-entities` defaults to the first 25,000. So the storage sample is precisely the cohort receiving
+~211 extra birth-year constraints each. Storage from that cohort must not be extrapolated to the corpus;
+probe and non-probe cohorts have to be reported separately.
+
+**Admission failed open in four ways**, all reproduced and all now refused: a report carrying a single
+passing `G1` passed, because coverage against `GATES` was never checked; so did one carrying every gate
+plus an invented `G99`; so did one carrying a gate twice; and `"passed": "false"` in JSON became Python
+`True`, because `bool("false")` is truthy. `coverage_problem()` now distinguishes "G7 failed" from "G7 is
+absent". The real M0 report contains every gate and fails, so none of this changes §16.9's verdict -- but
+all four would have mattered for a positive one.
+
+**Provenance was blank for a reason that is fixable.** The runtime image excludes `.git`, so every git
+call inside a run fails and `train_commit` was empty on every checkpoint. The platform injects
+`EDULLM_COMMIT_SHA`; `provenance.commit()` now prefers it and falls back to git on a laptop.
+
+**Two table defects that would have biased an analysis rather than broken it.** Six prefixes carry 19
+physical checkpoint directories for 18 logical cells, because crashed `13m_d0p6` and its re-run both
+wrote -- and `--last-only` means "highest checkpoint in this prefix", which for the crashed one is a
+partially-trained model in the same column as finished ones. `select_complete` now keeps one checkpoint
+per `(cell_id, replicate)` and drops any that never reached the cell's own planned final step, and
+`--expect-cells` refuses a short grid. Separately, storage is per checkpoint while the table is per
+endpoint, so `achieved_bits_per_param` repeated on both rows of every two-endpoint cell; averaging that
+column over rows double-weights exactly the fact-bearing count cells and none of the controls. One row per
+checkpoint now carries `storage_row=True`.
+
+**Where the audit overstates, slightly.** It says "below floor is slightly overstated -- the baseline is
+estimated", and that is right: 4.695% is the best-constant policy computed over the item generator, and
+the same policy on the frozen 30,000-item set is about 4.62%. The control's 4.44% is therefore at the
+floor rather than provably beneath it. The conclusion does not move -- the achievable range is ~0 against
+a required 10pp -- but §16.9's "a quarter of a point below the floor" should read "at the floor, within
+the baseline's own uncertainty".
+
+It is also right that whole-sequence training CE of 1.689 cannot be read as "5.4 possible answers": that
+average covers syntax, operands, operators and the answer together, so the arithmetic in §16.9 describes
+the sequence and not the answer distribution. The observation that survives is the one that needed no
+conversion -- five times the parameters moves that CE by 0.0002 nats.
+
+**The storage quantity needs its honest name.** It measures teacher-forced attribute-value CE reduction on
+a fixed sampled cohort, conditioned on the gold biography prefix, at exposure 0, clamped at zero, over
+non-embedding parameters. It is not Allen-Zhu R(F): the name term is absent, so at entropy `b=0` the
+demand is ~0.200 b/param entirely from names while achieved storage is identically zero, and
+`check_against_demand` cannot fire because value storage is capped below value-plus-name demand by
+construction. Report it as a proxy, signed as well as clamped, with both denominators.
+
+### 16.11 Deferred, with reasons
 
 FLD's 1,700 core-hours and 51.1% floor — decided in M0, not now. The exposure placebo and the
 mechanism battery — M4. Qwen3-0.6B continuation — after M3. Retiring

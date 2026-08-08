@@ -1216,8 +1216,42 @@ class GateReport:
 
     @property
     def passed(self) -> bool:
-        """Whether every gate passed. A report with no gates does not pass."""
-        return bool(self.results) and all(result.passed for result in self.results)
+        """
+        Whether this report admits its endpoint: every gate in :data:`GATES`, each one passing.
+
+        **Coverage is part of the test, and leaving it out made the check fail open.** The earlier version
+        asked only that the results be non-empty and all pass, so a report carrying a single passing ``G1``
+        admitted a row -- and so did one carrying every real gate plus an invented ``G99``, since nothing
+        compared the set against :data:`GATES`. An admission gate that a truncated file satisfies is not a
+        gate. The set must match exactly: no gate missing, no gate invented, and no gate twice.
+        """
+        seen = [result.gate for result in self.results]
+        if sorted(seen) != sorted(GATES):
+            return False
+        return all(result.passed for result in self.results)
+
+    def coverage_problem(self) -> str:
+        """
+        Why the result set is not exactly :data:`GATES`, or ``""`` when it is.
+
+        Separate from :attr:`failures` because "G7 failed" and "G7 is absent" send a reader to different
+        places, and a report that fails on coverage would otherwise look like a report where everything
+        passed.
+
+        :returns: A description, or the empty string.
+        """
+        seen = [result.gate for result in self.results]
+        missing = sorted(set(GATES) - set(seen))
+        unknown = sorted(set(seen) - set(GATES))
+        repeated = sorted({g for g in seen if seen.count(g) > 1})
+        parts = []
+        if missing:
+            parts.append(f"missing {missing}")
+        if unknown:
+            parts.append(f"not a gate: {unknown}")
+        if repeated:
+            parts.append(f"repeated {repeated}")
+        return "; ".join(parts)
 
     @property
     def failures(self) -> Tuple[str, ...]:
@@ -1266,7 +1300,10 @@ class GateReport:
             results.append(
                 GateResult(
                     gate=str(entry.get("gate", "?")),
-                    passed=bool(entry.get("passed", False)),
+                    # STRICTLY A BOOLEAN. `bool("false")` is True, so a report whose JSON spelled its
+                    # verdicts as strings -- which any hand-written or cross-language producer may do --
+                    # read as all-passing and admitted every row.
+                    passed=_strict_bool(entry.get("passed"), entry.get("gate", "?")),
                     detail=str(entry.get("detail", "")),
                 )
             )
@@ -1277,6 +1314,47 @@ class GateReport:
             commit=str(raw.get("commit", "")),
             note=str(raw.get("note", "")),
         )
+
+
+def _strict_bool(value: object, gate: object) -> bool:
+    """
+    A verdict, refusing anything that is not already a boolean.
+
+    :param value: The raw value.
+    :param gate: Which gate, for the message.
+
+    :returns: The verdict.
+
+    :raises OLMoConfigurationError: If it is not a ``bool``.
+    """
+    if not isinstance(value, bool):
+        raise OLMoConfigurationError(
+            f"gate {gate!r} has passed={value!r}, which is {type(value).__name__} and not a boolean. "
+            f"`bool('false')` is True, so this is refused rather than coerced."
+        )
+    return value
+
+
+def _read_text(path: str) -> str:
+    """
+    Read a file that may be local or in object storage.
+
+    ``Path("s3://b/k").read_text()`` does not fail usefully -- ``Path`` collapses the double slash to
+    ``s3:/b/k`` and looks for a *local relative directory called* ``s3:``. Writing took the same route and
+    silently put a gate report in ephemeral container storage, so a report that a log said had been written
+    did not exist anywhere afterwards.
+
+    :param path: A local path or a URL.
+
+    :returns: The contents.
+    """
+    from pathlib import Path
+
+    from olmo_core.io import get_bytes_range, get_file_size, is_url
+
+    if not is_url(path):
+        return Path(path).read_text()
+    return get_bytes_range(path, 0, get_file_size(path)).decode("utf-8")
 
 
 def load_reports(path: str) -> Dict[str, GateReport]:
@@ -1290,9 +1368,8 @@ def load_reports(path: str) -> Dict[str, GateReport]:
     :raises OLMoConfigurationError: If the file is unreadable or two reports claim one endpoint.
     """
     import json
-    from pathlib import Path
 
-    raw = json.loads(Path(path).read_text())
+    raw = json.loads(_read_text(path))
     entries = raw if isinstance(raw, list) else [raw]
     out: Dict[str, GateReport] = {}
     for entry in entries:

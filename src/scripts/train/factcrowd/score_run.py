@@ -49,6 +49,26 @@ from olmo_core.exceptions import OLMoConfigurationError  # noqa: E402
 log = logging.getLogger(__name__)
 
 
+def _write_text(text: str, target: str, work_dir: Path) -> None:
+    """
+    Write text to a local path or upload it to a URL.
+
+    :param text: What to write.
+    :param target: A local path or a URL.
+    :param work_dir: Somewhere to stage a remote write from.
+    """
+    from olmo_core.io import is_url, upload
+
+    if not is_url(target):
+        Path(target).parent.mkdir(parents=True, exist_ok=True)
+        Path(target).write_text(text)
+        return
+    staged = work_dir / Path(target).name
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    staged.write_text(text)
+    upload(staged, target, save_overwrite=True)
+
+
 def _torch_dtype(name: str) -> Any:
     """
     Resolve a dtype name to a ``torch.dtype``.
@@ -191,6 +211,9 @@ def score_checkpoint(
                 "eval_items": eval_items,
                 "bit_entities": bit_entities,
                 "capacity_warning": warning or "",
+                # The cell's own plan, so completeness is judged per cell rather than against a number
+                # passed in from outside. `select_complete` reads it.
+                "checkpoint_steps": list(loaded.record.get("checkpoint_steps") or []),
                 # The commit that *trained* these weights, not the one scoring them. A table pooling two
                 # revisions is a real risk on a grid this long, and it is invisible without this column.
                 "train_commit": str((loaded.record.get("provenance") or {}).get("commit", "")),
@@ -280,6 +303,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         default="mano",
         help="Which endpoint --write-gate-report is about.",
     )
+    parser.add_argument(
+        "--expect-cells",
+        type=int,
+        default=0,
+        help="Refuse to write the table unless exactly this many complete cells were scored. A "
+        "confirmatory table is a claim about a whole grid, and nothing else notices a short one.",
+    )
     parser.add_argument("--json", action="store_true", help="Also print each row as JSON")
     args = parser.parse_args(argv)
 
@@ -348,8 +378,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
         for note in assignment.notes:
             log.info("  gate evidence: %s", note)
-        Path(args.write_gate_report).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.write_gate_report).write_text(json.dumps(gate_report.as_dict(), indent=2))
+        # THE SAME is_url BRANCH `--out` ALREADY USED, AND THE ABSENCE OF IT HERE COST A REPORT.
+        # `Path("s3://b/k").write_text(...)` writes to a local relative directory named `s3:`, so the M0
+        # report went to container scratch and vanished while the log said it had been written.
+        _write_text(json.dumps(gate_report.as_dict(), indent=2), args.write_gate_report, work_dir)
         verdict = (
             "passes" if gate_report.passed else f"does not pass: {', '.join(gate_report.failures)}"
         )
@@ -363,6 +395,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "run. Score the confirmatory grid with --gate-report %s.",
                 args.write_gate_report,
             )
+
+    scored, completeness = collect_module.select_complete(scored)
+    for note in completeness:
+        log.warning("  completeness: %s", note)
+    if args.expect_cells and len(scored) != args.expect_cells:
+        raise OLMoConfigurationError(
+            f"{len(scored)} complete cells were scored but --expect-cells said {args.expect_cells}. "
+            f"A confirmatory table is a claim about a grid, so a short one is refused rather than "
+            f"written. The notes above name what was dropped."
+        )
+    log.info("scored %d complete cell(s)", len(scored))
 
     rows = collect_module.collect(scored)
     # Admission is granted per endpoint by a report, or not at all. A row that cannot name a passing

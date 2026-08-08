@@ -137,8 +137,73 @@ class ScoredCheckpoint:
         measured.update(self.recall)
 
         if not self.endpoints:
-            return [{**identity, **measured}]
-        return [{**identity, **measured, **result.summary()} for result in self.endpoints]
+            return [{**identity, **measured, "storage_row": True}]
+        # STORAGE IS PER CHECKPOINT AND THE TABLE IS PER ENDPOINT, SO THE STORAGE FIELDS REPEAT.
+        # A cell carrying two endpoints emits two rows with identical `achieved_bits_per_param`, and any
+        # analysis that averages or sums that column over rows double-weights exactly those cells -- on
+        # the count axis every fact-bearing cell and none of the controls, so the bias is systematic
+        # rather than noisy. `storage_row` is True on exactly one row per checkpoint; filter on it before
+        # touching a storage column.
+        return [
+            {**identity, **measured, **result.summary(), "storage_row": index == 0}
+            for index, result in enumerate(self.endpoints)
+        ]
+
+
+def select_complete(
+    scored: Sequence[ScoredCheckpoint],
+) -> Tuple[List[ScoredCheckpoint], List[str]]:
+    """
+    Keep one checkpoint per ``(cell_id, replicate)`` and only where training actually finished.
+
+    Three things go wrong without this, and all three are quiet.
+
+    **A crashed cell and its re-run are two prefixes and one cell.** ``13m_d0p6`` died at step 3,441 and
+    was re-run to 10,732; both wrote checkpoints, both are under prefixes the scorer is pointed at, and
+    the table then carries the cell twice with different numbers.
+
+    **``--last-only`` means "the highest checkpoint in this prefix", not "the planned final step".** For a
+    crashed run the highest checkpoint is the one before it died, which is a partially-trained model
+    presented in the same column as fully-trained ones.
+
+    **A short grid still writes a table.** Nothing compared what was scored against what should exist, so
+    an analysis could be run on fifteen cells believing it had eighteen.
+
+    Completion is judged against the cell's own recorded plan -- the last entry of
+    ``checkpoint_steps`` -- rather than against a number passed in, because each cell has its own.
+
+    :param scored: Scored checkpoints, possibly several per cell and possibly partial.
+
+    :returns: The kept checkpoints, one per cell, and a list of human-readable notes about what was
+        dropped and why. The notes are returned rather than logged so a caller can put them in the record.
+    """
+    by_cell: Dict[Tuple[str, int], List[ScoredCheckpoint]] = {}
+    for entry in scored:
+        key = (str(entry.stated("cell_id")), int(entry.stated("replicate", 0)))
+        by_cell.setdefault(key, []).append(entry)
+
+    kept: List[ScoredCheckpoint] = []
+    notes: List[str] = []
+    for (cell_id, replicate), entries in sorted(by_cell.items()):
+        planned = 0
+        for entry in entries:
+            steps = entry.extra.get("checkpoint_steps") or []
+            if steps:
+                planned = max(planned, int(max(steps)))
+        best = max(entries, key=lambda e: e.ref.step)
+        if planned and best.ref.step < planned:
+            notes.append(
+                f"{cell_id} r{replicate}: highest checkpoint is step {best.ref.step:,} but the cell "
+                f"planned {planned:,}, so this run never finished and is dropped"
+            )
+            continue
+        if len(entries) > 1:
+            notes.append(
+                f"{cell_id} r{replicate}: {len(entries)} runs found "
+                f"(steps {sorted(e.ref.step for e in entries)}); kept step {best.ref.step:,}"
+            )
+        kept.append(best)
+    return kept, notes
 
 
 def write_csv(rows: Sequence[Dict[str, Any]], path: Path) -> Path:

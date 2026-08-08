@@ -55,10 +55,22 @@ def _git(*args: str) -> Optional[str]:
 
 def commit() -> Optional[str]:
     """
-    The short commit hash, or ``None`` if it cannot be read.
+    The commit this code came from, or ``None`` if nothing can say.
 
-    :returns: The hash.
+    **The platform is asked before git, and that ordering is the fix.** The runtime image excludes
+    ``.git``, so inside a run every git command fails and the field came back empty on every checkpoint
+    this project has written -- which is exactly the case the field exists for. The platform injects
+    ``EDULLM_COMMIT_SHA``, which is authoritative there: it is the commit the image was built from, and it
+    is what the lineage record already seals.
+
+    Git remains the fallback for a laptop, where the environment variable is absent and the working tree
+    is the truth.
+
+    :returns: The hash, full from the platform and short from git.
     """
+    from_platform = os.environ.get("EDULLM_COMMIT_SHA")
+    if from_platform:
+        return from_platform
     return _git("rev-parse", "--short", "HEAD") or None
 
 
@@ -72,6 +84,10 @@ def is_dirty() -> Optional[bool]:
 
     :returns: True when dirty.
     """
+    if os.environ.get("EDULLM_COMMIT_SHA"):
+        # On the platform the tree is a fresh clone of that commit, so it is clean by construction --
+        # and git cannot be asked anyway, because the image carries no `.git`.
+        return False
     status = _git("status", "--porcelain")
     return None if status is None else bool(status)
 

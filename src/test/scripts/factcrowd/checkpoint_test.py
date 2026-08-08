@@ -13,8 +13,10 @@ from pathlib import Path
 import pytest
 from factcrowd import cells as C
 from factcrowd.measure import checkpoint as CK
+from factcrowd.measure import collect
 from factcrowd.measure import collect as CO
 from factcrowd.measure.bits import achieved_bits
+from factcrowd.measure.collect import ScoredCheckpoint
 from factcrowd.measure.endpoints import EndpointResult
 
 from olmo_core.exceptions import OLMoConfigurationError
@@ -404,3 +406,79 @@ def test_a_corpus_may_only_be_reused_for_the_cell_it_was_built_for(tmp_path):
             with_model=False,
             corpus=wrong,
         )
+
+
+# --- completeness and double counting ---------------------------------------------------------------
+
+
+def _cp(cell_id, replicate, step, planned, endpoints=("mano",)):
+    from factcrowd.measure.checkpoint import CheckpointRef
+    from factcrowd.measure.endpoints import EndpointResult
+
+    return ScoredCheckpoint(
+        ref=CheckpointRef(step=step, path=f"/p/{cell_id}/step{step}"),
+        cell={"cell_id": cell_id, "row": "13M", "replicate": replicate},
+        endpoints=tuple(
+            EndpointResult(
+                name=n,
+                n_total=100,
+                n_correct=5,
+                n_degenerate=0,
+                n_unparseable=0,
+                answer_ce_bits=1.0,
+                floor=0.05,
+            )
+            for n in endpoints
+        ),
+        extra={"checkpoint_steps": list(planned), "achieved_bits_per_param": 1.23},
+    )
+
+
+def test_a_crashed_run_and_its_rerun_are_one_cell_and_the_partial_one_loses():
+    """
+    `13m_d0p6` died at 3,441 and was re-run to 10,732. Both wrote checkpoints, both sit under prefixes the
+    scorer is pointed at, and without this the cell appears twice with different numbers -- one of them a
+    partially-trained model in the same column as fully-trained ones.
+
+    `--last-only` does not solve it: it means "highest checkpoint in *this* prefix", and the crashed
+    prefix's highest is the one before it died.
+    """
+    planned = [53, 107, 214, 429, 858, 1717, 3434, 5366, 8049, 10732]
+    kept, notes = collect.select_complete(
+        [_cp("13m_d0p6", 0, 3434, planned), _cp("13m_d0p6", 0, 10732, planned)]
+    )
+    assert [c.ref.step for c in kept] == [10732]
+    assert any("2 runs found" in n for n in notes)
+
+
+def test_a_cell_that_never_reached_its_planned_final_step_is_dropped_and_named():
+    """
+    Completion is judged against the cell's *own* recorded plan, because each cell has a different one.
+    Dropped rather than flagged: a partially-trained model in a confirmatory table is not a weaker
+    measurement of the same thing, it is a measurement of something else.
+    """
+    planned = [53, 107, 3434, 10732]
+    kept, notes = collect.select_complete([_cp("13m_d0p6", 0, 3434, planned)])
+    assert kept == []
+    assert any("never finished" in n and "3,434" in n and "10,732" in n for n in notes)
+
+
+def test_replicates_of_one_cell_are_kept_apart():
+    """The inferential unit is the replicate, so two of them are two rows and not a duplicate."""
+    planned = [19, 3814]
+    kept, _ = collect.select_complete(
+        [_cp("13m_ctrl", 0, 3814, planned), _cp("13m_ctrl", 1, 3814, planned)]
+    )
+    assert sorted(c.stated("replicate") for c in kept) == [0, 1]
+
+
+def test_the_storage_fields_are_flagged_on_one_row_per_checkpoint():
+    """
+    Storage is per checkpoint; the table is per endpoint. So a two-endpoint cell repeats its
+    `achieved_bits_per_param`, and averaging that column over rows double-weights exactly the
+    fact-bearing count cells and none of the controls -- a systematic bias, not noise.
+    """
+    rows = _cp("13m_d1p2", 0, 100, [100], endpoints=("mano", "compare")).rows()
+    assert len(rows) == 2
+    assert sum(1 for r in rows if r["storage_row"]) == 1
+    assert len({r["achieved_bits_per_param"] for r in rows}) == 1  # repeated, hence the flag
