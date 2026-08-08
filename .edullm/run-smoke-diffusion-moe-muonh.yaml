@@ -1,0 +1,64 @@
+# SMOKE: does the diffusion arm run at all, and does it fit? 200 steps, then stop.
+#
+#   edullm check --json --spec .edullm/run-smoke-diffusion-moe-muonh.yaml \
+#     --experiment diffusion-esdllm --dataset regmix-10b-v1 --team scratch \
+#     --compute gpu-8xa100 --hours 1 --attempts 1
+#   edullm submit <same flags>
+#
+# THIS SPEC EXISTS BECAUSE THREE THINGS IN THIS BRANCH CANNOT BE TESTED ON A LAPTOP, AND ALL
+# THREE WOULD FAIL AT THE FIRST MICRO-STEP OF A TWENTY-HOUR RUN. `flash-linear-attention` is not
+# installable here, so every assertion about the GDN-2 layer itself -- that a reversed scan equals
+# the causal scan viewed backwards, that the zero-initialised noise projections are a no-op at
+# initialisation -- is marked `requires_fla` and skipped locally. The corpus reader is not
+# installable here either, so `build_config` cannot resolve a corpus. And memory at
+# `--rank-microbatch-size 8192` on a 40 GB card is not a thing anybody can compute honestly.
+# Everything else was verified locally and is listed in `.edullm/diffusion-esdllm.md`.
+#
+# WHAT TO READ OUT OF THE LOG, IN ORDER. `edullm logs <run-id>`; the status stays ADMITTED either
+# way, so the log is the only outcome.
+#
+#   1. "hybrid mixer schedule: 12 bidirectional GDN-2 blocks (6 forward, 6 reverse) and 4
+#      non-causal attention blocks over 16 layers". If the counts differ, the schedule did not
+#      install and this is training something else.
+#   2. "MASK token id 100278, taken from the padding between vocab_size 100278 and padded size
+#      100352". A different id here means the mask is colliding with a real token.
+#   3. "masked diffusion training: schedule=linear, ...". Absent means the autoregressive train
+#      module was built and the objective is not diffusion at all.
+#   4. train/masked labels (%) near 0.5 and moving. This is the proportion of positions the loss
+#      IGNORES, so under a linear schedule with t ~ U(0,1) it should average about 0.5 and vary
+#      from batch to batch. Pinned at 0.0 means the corruption never ran; pinned anywhere at all
+#      means `t` is not being redrawn.
+#   5. optim/radius_relative_drift_max, small and not growing. This is the Hyperball invariant and
+#      MuonH is not being tested if it drifts.
+#   6. throughput and MFU from the speed monitor, against the ~36.6% that 8xA100 reached on the
+#      autoregressive baseline. A large gap is the reversed scan or the non-causal attention
+#      costing more than expected, and it is what decides whether the 10B run fits in 24 hours.
+#   7. CE loss descending. 200 steps is not long enough to mean much, but a diffusion loss that is
+#      flat at ln(vocab) is a model that is not learning to denoise.
+#
+# WHAT THIS SMOKE RUN DOES NOT TELL YOU. Whether the hybrid is any good at 370M. DiffuMamba finds
+# linear-attention diffusion losing to plain attention below 0.5B, and 200 steps cannot speak to
+# that. That is what the 10B run is for.
+#
+# EVERY NUMBER HERE IS THE 10B SPEC'S, EXCEPT --steps AND --save-interval. That is deliberate:
+# a smoke test on a smaller batch or a shorter sequence would not exercise the memory ceiling
+# that is the main thing it is being asked about.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'export TRITON_F32_DEFAULT=ieee
+  && python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/train_diffusion.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --model-factory olmo2_370M_moe --init-method fan_in
+  --n-heads 16 --head-dim 64 --expand-v 1.0
+  --moe-top-k 8 --moe-num-experts 32 --moe-hidden-size 512
+  --noise-schedule linear --antithetic-sampling --noise-conditioned
+  --optimizer muon_h --learning-rate 0.01 --adamw-learning-rate 8.2e-4
+  --param-dtype bfloat16
+  --sequence-length 4096 --steps 200 --warmup-steps 20
+  --global-batch-size 524288 --rank-microbatch-size 8192
+  --save-interval 100 --data-seed 0 --work-dir /tmp/dataset-cache
+  --mixture on --mixture-total 10000000000
+  trainer.callbacks.checkpointer.max_checkpoints=null'

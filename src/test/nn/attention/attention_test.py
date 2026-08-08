@@ -1377,3 +1377,83 @@ def test_fused_attention_num_flops_per_token():
     # Larger models should be more expensive.
     fused_large = FusedAttention(d_model=256, n_heads=n_heads, init_device="cuda")
     assert fused_large.num_flops_per_token(32) > fused_small.num_flops_per_token(32)
+
+
+def test_causal_defaults_to_true_and_is_omitted_from_the_config():
+    """Every existing autoregressive config must be untouched by the new option.
+
+    `AttentionConfig.causal` is `Optional[bool]` and `None` by default so that
+    `as_dict(exclude_none=True)` drops it entirely and `Attention.__init__`'s own default applies.
+    A field that defaulted to `True` instead would appear in every saved config and change the
+    serialised form of runs that have nothing to do with diffusion.
+    """
+    config = AttentionConfig(n_heads=4)
+    assert config.causal is None
+    assert "causal" not in config.as_config_dict()
+
+    attention = config.build(d_model=64, layer_idx=0, n_layers=2)
+    assert attention.causal is True
+    assert attention.backend.causal is True
+
+
+def test_non_causal_attention_lets_a_position_see_the_future():
+    """The property the diffusion arm depends on, checked by observation rather than by flag.
+
+    Perturbing the last token must move the first output when the mask is off, and must not when
+    it is on. A `causal` flag that reached the config but not the kernel would pass an
+    attribute assertion and fail this.
+    """
+    torch.manual_seed(0)
+    d_model, seq_len = 64, 6
+    x = torch.randn(1, seq_len, d_model)
+    perturbed = x.clone()
+    perturbed[:, -1, :] += 5.0
+
+    for causal, should_move in ((True, False), (False, True)):
+        attention = AttentionConfig(n_heads=4, causal=causal).build(
+            d_model=d_model, layer_idx=0, n_layers=2
+        )
+        with torch.no_grad():
+            first_before = attention(x.clone())[:, 0]
+            first_after = attention(perturbed.clone())[:, 0]
+        moved = not torch.allclose(first_before, first_after, atol=1e-5)
+        assert moved is should_move, f"causal={causal} should_move={should_move}"
+
+
+def test_non_causal_attention_accepts_and_ignores_a_noise_level():
+    """A diffusion model forwards the noise level to every block, attention included."""
+    attention = AttentionConfig(n_heads=4, causal=False).build(d_model=64, layer_idx=0, n_layers=2)
+    x = torch.randn(2, 6, 64)
+    with torch.no_grad():
+        without = attention(x.clone())
+        with_level = attention(x.clone(), noise_level=torch.tensor([0.3, 0.7]))
+    torch.testing.assert_close(without, with_level)
+
+
+def test_sliding_window_with_non_causal_is_refused():
+    """The window translation here is left-only, which is not what a bidirectional layer means."""
+    with pytest.raises(OLMoConfigurationError, match="window_size"):
+        AttentionConfig(
+            n_heads=4,
+            causal=False,
+            sliding_window=SlidingWindowAttentionConfig(
+                pattern=[4],
+                force_full_attention_on_first_layer=False,
+                force_full_attention_on_last_layer=False,
+            ),
+        ).build(d_model=64, layer_idx=0, n_layers=2)
+
+
+def test_fused_attention_refuses_non_causal():
+    with pytest.raises(OLMoConfigurationError, match="causal=False"):
+        AttentionConfig(n_heads=4, name=AttentionType.fused, causal=False).build(
+            d_model=64, layer_idx=0, n_layers=2
+        )
+
+
+def test_te_backend_refuses_non_causal():
+    """TE names its mask rather than flagging it, and guessing the name is a silently wrong mask."""
+    from olmo_core.nn.attention.backend import TEAttentionBackend
+
+    with pytest.raises(RuntimeError, match="non-causal"):
+        TEAttentionBackend.assert_supports_non_causal()

@@ -628,6 +628,43 @@ class TransformerConfig(ModelConfig):
         )
 
     @classmethod
+    def olmo2_370M_moe(cls, vocab_size: int, **kwargs) -> "TransformerConfig":
+        """
+        A sparse counterpart to :meth:`olmo2_370M`, matched on *active* parameters rather than
+        total ones: 32 experts of hidden size 512 with ``top_k=4`` puts 373.9M non-embedding
+        parameters in play per token against the dense config's 371.3M, out of 975.8M total.
+
+        Everything the dense config decides -- ``d_model``, depth, head count, QK-norm, RoPE
+        theta, reordered-norm blocks -- is held equal, so the only difference is the
+        feed-forward. Intended for running an optimizer comparison over both a dense and a
+        sparse model without the two differing in anything else.
+        """
+        d_model = kwargs.pop("d_model", 1024)
+        return cls.llama_like(
+            d_model=d_model,
+            n_layers=kwargs.pop("n_layers", 16),
+            n_heads=kwargs.pop("n_heads", 16),
+            vocab_size=vocab_size,
+            name=kwargs.pop("name", TransformerType.moe),
+            block_name=kwargs.pop("block_name", TransformerBlockType.moe_reordered_norm),
+            qk_norm=kwargs.pop("qk_norm", True),
+            rope_theta=kwargs.pop("rope_theta", 500_000),
+            layer_norm_eps=1e-6,
+            feed_forward_moe=kwargs.pop(
+                "feed_forward_moe",
+                MoEConfig(
+                    name=MoEType.default,
+                    num_experts=32,
+                    hidden_size=int(0.5 * d_model),
+                    router=MoERouterConfig(top_k=4),
+                    lb_loss_weight=0.01,
+                    z_loss_weight=0.001,
+                ),
+            ),
+            **kwargs,
+        )
+
+    @classmethod
     def olmo2_600M(cls, vocab_size: int, **kwargs) -> "TransformerConfig":
         return cls.llama_like(
             d_model=kwargs.pop("d_model", 1344),

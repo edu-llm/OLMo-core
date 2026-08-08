@@ -518,6 +518,14 @@ class Transformer(nn.Module):
         if "cu_doc_lens" in all_block_kwargs:
             mark_dynamic(all_block_kwargs["cu_doc_lens"], 0, strict=False)  # type: ignore[arg-type]
 
+        # The diffusion noise level, forwarded to every block so a noise-conditioned sequence
+        # mixer can read it. Named explicitly rather than passed through with the rest of
+        # `kwargs`, because everything left in `kwargs` at this point is dropped -- and a
+        # noise level that silently vanishes is a diffusion model quietly training as though
+        # every batch were equally corrupted.
+        if (noise_level := kwargs.pop("noise_level", None)) is not None:
+            all_block_kwargs["noise_level"] = move_to_device(noise_level, self.device)
+
         return (
             input_ids,
             labels,

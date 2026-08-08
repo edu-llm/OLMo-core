@@ -14,6 +14,7 @@ from olmo_core.distributed.parallel.context_parallel import (
     all_to_all_single_cp2hp,
     all_to_all_single_hp2cp,
 )
+from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.nn.attention.base import SequenceMixer, SequenceMixerConfig
 from olmo_core.nn.attention.flash_linear_attn_api import (
     dispatch_chunk_gated_delta_rule,
@@ -30,6 +31,48 @@ from olmo_core.nn.feed_forward import ActivationFunction
 
 if TYPE_CHECKING:
     from olmo_core.nn.transformer.init import InitMethod
+
+
+def document_reversal_index(
+    seq_len: int,
+    cu_doc_lens: Optional[torch.Tensor],
+    device: torch.device,
+) -> torch.Tensor:
+    """
+    Build the index that reverses token order *within each document*.
+
+    A linear recurrence is directional, so the only way to give one a right-to-left view is to
+    run it over reversed input. Reversing the whole packed sequence would be wrong: OLMo-core
+    packs many documents into one row, so a whole-row flip moves tokens across document
+    boundaries and the first document's tokens end up conditioning on the last document's. This
+    is the same distinction `DeltaFlow <https://arxiv.org/abs/2608.01240>`_ draws when it
+    reverses only the *body* tokens and leaves its prefix in place.
+
+    The returned index is an involution -- applying it twice is the identity -- which is what
+    lets the caller use one index to reverse on the way in and un-reverse on the way out.
+    Document spans are unchanged by the reversal, so ``cu_doc_lens`` stays valid for the
+    convolutions and the kernel downstream.
+
+    :param seq_len: The (packed) sequence length to build the index over.
+    :param cu_doc_lens: Cumulative document lengths, a 1D tensor with one more element than
+        there are documents, whose first element is ``0``. When ``None`` there is no
+        intra-document structure to respect and the whole sequence is reversed.
+    :param device: The device to build the index on.
+
+    :returns: A 1D ``int64`` tensor of length ``seq_len``.
+    """
+    pos = torch.arange(seq_len, device=device)
+    if cu_doc_lens is None:
+        return pos.flip(0)
+
+    # `cu_doc_lens[1:]` are the exclusive ends, so the number of ends at or below a position is
+    # that position's document index. `right=True` puts a position that equals an end into the
+    # *next* document, which is what an exclusive end means.
+    doc = torch.searchsorted(cu_doc_lens[1:].contiguous(), pos, right=True)
+    start = cu_doc_lens[doc].long()
+    end = cu_doc_lens[doc + 1].long()
+    # Reflect each position through the midpoint of its own document.
+    return start + end - 1 - pos
 
 
 class GatedDeltaNet(SequenceMixer):
@@ -496,8 +539,33 @@ class GatedDeltaNet2(SequenceMixer):
     :param conv_size: The kernel size of the short convolution. Default: 4.
     :param conv_bias: Whether to use bias in the short convolution. Default: ``False``.
     :param norm_eps: The epsilon value for the normalization layer. Default: 1e-5.
+    :param reverse_scan: Run the recurrence right-to-left within each document instead of
+        left-to-right. This is what makes a bidirectional stack possible: alternate the flag
+        across layers and the stack sees both directions, which is DeltaFlow's *alternating
+        scan* variant. Costs nothing over the causal layer -- it is one scan either way.
+        Default: ``False``, so an unconfigured layer is the causal one, unchanged.
+    :param noise_conditioned: Condition the decay and gate logits on a diffusion noise level
+        passed to :meth:`forward` as ``noise_level``. Required for diffusion training; see the
+        note below. Default: ``False``.
+    :param noise_embed_dim: Width of the sinusoidal noise-level embedding, used only when
+        ``noise_conditioned`` is set. Default: 64.
     :param dtype: The default data type to use for parameters.
     :param init_device: The device to initialize weights on.
+
+    .. note::
+        **On bidirectionality and diffusion.** A causal recurrence cannot carry a masked
+        diffusion objective: DeltaFlow reports that unidirectional GDN "suffers from entropy
+        collapse". ``reverse_scan`` supplies the missing direction, and the short convolutions
+        need no change to follow -- fed reversed input, a
+        :class:`~olmo_core.nn.convolution.CausalConv1d` is an anti-causal convolution in the
+        original coordinates, which is the pairing DiffuMamba describes.
+
+        DeltaFlow also finds the bidirectional core *alone* insufficient: it lowers perplexity
+        but "still produces overly concentrated generations", and restoring diversity needs the
+        decay to know how corrupted its input is. That is ``noise_conditioned``. The projections
+        are zero-initialised, so at initialisation the layer is bit-exactly the
+        noise-independent one and the conditioning is something the model learns to use rather
+        than something imposed on it.
     """
 
     def __init__(
@@ -512,6 +580,9 @@ class GatedDeltaNet2(SequenceMixer):
         conv_size: int = 4,
         conv_bias: bool = False,
         norm_eps: float = 1e-5,
+        reverse_scan: bool = False,
+        noise_conditioned: bool = False,
+        noise_embed_dim: int = 64,
         dtype: torch.dtype = torch.float32,
         init_device: str = "cpu",
     ):
@@ -526,6 +597,9 @@ class GatedDeltaNet2(SequenceMixer):
         self.expand_v = expand_v
         self.allow_neg_eigval = allow_neg_eigval
         self.conv_size = conv_size
+        self.reverse_scan = reverse_scan
+        self.noise_conditioned = noise_conditioned
+        self.noise_embed_dim = noise_embed_dim
 
         self.head_k_dim = self.head_dim
         self.head_v_dim = int(self.head_dim * self.expand_v)
@@ -553,6 +627,32 @@ class GatedDeltaNet2(SequenceMixer):
         # Per-QK-head decay rate, and a per-key-channel softplus bias.
         self.A_log = nn.Parameter(torch.empty(self.n_heads, dtype=dtype, device=init_device))
         self.dt_bias = nn.Parameter(torch.empty(self.key_dim, dtype=dtype, device=init_device))
+
+        # Noise-adaptive memory control. DeltaFlow shifts two logits -- its decay `a` and its
+        # write rate `beta` -- by a per-head function of the noise level. GDN-2 has decoupled
+        # `beta` into an erase gate over the key axis and a write gate over the value axis, so
+        # `beta`'s single shift becomes two here and all three are declared together.
+        #
+        # These are the only parameters in the layer deliberately initialised to zero, and
+        # `reset_parameters` leaves them alone for that reason.
+        if noise_conditioned:
+            if noise_embed_dim % 2 != 0:
+                raise OLMoConfigurationError(
+                    f"noise_embed_dim must be even, since the sinusoidal embedding splits it "
+                    f"into a cosine and a sine half (got {noise_embed_dim})"
+                )
+            self.u_a = nn.Linear(
+                noise_embed_dim, self.n_heads, bias=True, dtype=dtype, device=init_device
+            )
+            self.u_b = nn.Linear(
+                noise_embed_dim, self.n_heads, bias=True, dtype=dtype, device=init_device
+            )
+            self.u_w = nn.Linear(
+                noise_embed_dim, self.n_v_heads, bias=True, dtype=dtype, device=init_device
+            )
+            for proj in (self.u_a, self.u_b, self.u_w):
+                nn.init.zeros_(proj.weight)
+                nn.init.zeros_(proj.bias)
 
         self.q_conv1d = CausalConv1d(
             hidden_size=self.key_dim,
@@ -595,10 +695,44 @@ class GatedDeltaNet2(SequenceMixer):
 
         self.cp_enabled = False
 
+    def _noise_embedding(self, noise_level: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+        """
+        Sinusoidally embed a per-sequence noise level.
+
+        :param noise_level: The noise level per sequence, shape ``(batch_size,)``.
+        :param dtype: The dtype to return, matching whichever projection consumes it.
+
+        :returns: Shape ``(batch_size, noise_embed_dim)``.
+        """
+        half = self.noise_embed_dim // 2
+        freqs = torch.exp(
+            -math.log(10000.0)
+            * torch.arange(half, device=noise_level.device, dtype=torch.float32)
+            / half
+        )
+        args = noise_level.float().reshape(-1, 1) * freqs.reshape(1, -1)
+        return torch.cat([args.cos(), args.sin()], dim=-1).to(dtype)
+
+    def _noise_shift(
+        self, proj: nn.Linear, noise_level: torch.Tensor, per_head_dim: int
+    ) -> torch.Tensor:
+        """
+        Per-head logit shift from the noise level, broadcast to a channel-wise logit's shape.
+
+        :param proj: The zero-initialised projection for this logit.
+        :param noise_level: The noise level per sequence, shape ``(batch_size,)``.
+        :param per_head_dim: How many channels each head owns in the logit being shifted.
+
+        :returns: Shape ``(batch_size, 1, n_heads * per_head_dim)``, broadcasting over sequence.
+        """
+        emb = self._noise_embedding(noise_level, dtype=proj.weight.dtype)
+        return proj(emb).repeat_interleave(per_head_dim, dim=-1).unsqueeze(1)
+
     def forward(
         self,
         x: torch.Tensor,
         cu_doc_lens: Optional[torch.Tensor] = None,
+        noise_level: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> torch.Tensor:
         """
@@ -608,11 +742,43 @@ class GatedDeltaNet2(SequenceMixer):
         :param cu_doc_lens: Cumulative document lengths in the input ``x``, a 1D
             :class:`torch.int32` tensor that should always have one more element than there
             are documents (the first element in the tensor should always be ``0``).
+        :param noise_level: The diffusion noise level per sequence, shape ``(batch_size,)``.
+            Required when the layer was built with ``noise_conditioned``, ignored otherwise.
 
         :returns: The output with shape ``(batch_size, seq_len, d_model)``.
+
+        :raises RuntimeError: If ``noise_conditioned`` was set and no ``noise_level`` arrived,
+            or if a reversed scan is combined with context parallelism.
         """
         del kwargs  # Ignore any extra kwargs passed from attention interface
         B, T_og, _ = x.shape
+
+        if self.noise_conditioned and noise_level is None:
+            raise RuntimeError(
+                "this GatedDeltaNet2 was built with noise_conditioned=True but forward() got no "
+                "noise_level, so the decay and gates would silently fall back to the "
+                "noise-independent recurrence -- which is a diffusion run quietly training the "
+                "wrong model rather than a slower one"
+            )
+
+        # A reversed scan needs the whole document in one place to reflect it. Under context
+        # parallelism each rank holds a slice, so the reflection would run inside the slice and
+        # produce something that is neither direction. Refuse rather than compute it.
+        if self.reverse_scan and self.cp_enabled:
+            raise RuntimeError(
+                "reverse_scan is not supported together with context parallelism: each rank "
+                "holds a slice of the sequence, so reversing within the slice is not reversing "
+                "within the document"
+            )
+
+        rev_index: Optional[torch.Tensor] = None
+        if self.reverse_scan:
+            # One index reverses on the way in and un-reverses on the way out, because
+            # `document_reversal_index` is an involution. Everything between these two calls --
+            # projections, convolutions, the kernel -- runs in reversed coordinates, which is
+            # what turns the CausalConv1d into an anti-causal one in the original order.
+            rev_index = document_reversal_index(T_og, cu_doc_lens, x.device)
+            x = x.index_select(1, rev_index)
 
         # shape: (batch_size, seq_len, n_heads * head_k_dim),
         #        (batch_size, seq_len, n_heads * head_k_dim),
@@ -620,18 +786,25 @@ class GatedDeltaNet2(SequenceMixer):
         q, k, v = self.w_q(x), self.w_k(x), self.w_v(x)
 
         # Channel-wise gates, both squashed to [0, 1]. `b` erases along K, `w` writes along V.
-        b = self.w_b(x).sigmoid()
+        b_logit = self.w_b(x)
+        w_logit = self.w_w(x)
+        a_logit = self.w_a(x).float() + self.dt_bias
+        if self.noise_conditioned:
+            assert noise_level is not None
+            b_logit = b_logit + self._noise_shift(self.u_b, noise_level, self.head_k_dim)
+            w_logit = w_logit + self._noise_shift(self.u_w, noise_level, self.head_v_dim)
+            a_logit = a_logit + self._noise_shift(self.u_a, noise_level, self.head_k_dim).float()
+
+        b = b_logit.sigmoid()
         if self.allow_neg_eigval:
             b = b * 2.0
-        w = self.w_w(x).sigmoid()
+        w = w_logit.sigmoid()
 
         # Channel-wise log-decay in fp32, kept flat over `key_dim`. The per-head A_log rate is
         # folded in here, *before* any context-parallel exchange: after the exchange only
         # n_heads/CP heads are local, so a per-head multiply would have to be sliced to match.
         # shape: (batch_size, seq_len, n_heads * head_k_dim)
-        g = -self.A_log.float().exp().repeat_interleave(self.head_k_dim) * F.softplus(
-            self.w_a(x).float() + self.dt_bias
-        )
+        g = -self.A_log.float().exp().repeat_interleave(self.head_k_dim) * F.softplus(a_logit)
 
         if self.cp_enabled and self.uly is not None:
             assert self._cp_group is not None
@@ -672,7 +845,14 @@ class GatedDeltaNet2(SequenceMixer):
         g_out = self.w_g(x).view(B, T_og, -1, self.head_v_dim)
 
         # shape: (batch_size, seq_len, d_model)
-        return self.w_out(self.o_norm(o, g_out).view(B, T_og, -1))
+        out = self.w_out(self.o_norm(o, g_out).view(B, T_og, -1))
+
+        if rev_index is not None:
+            # Back to the original token order, so the residual stream this returns into is in
+            # the same coordinates every other layer reads.
+            out = out.index_select(1, rev_index)
+
+        return out
 
     def apply_tp(
         self,
@@ -732,22 +912,34 @@ class GatedDeltaNet2(SequenceMixer):
     ) -> None:
         from olmo_core.nn.transformer.init import InitMethod, init_linear
 
-        if init_method == InitMethod.fan_in:
-            raise NotImplementedError(
-                f"init method '{init_method}' is not supported for GatedDeltaNet2"
-            )
+        # `fan_in` is std = 1/sqrt(d_in) read off each layer's own input width, which is what it
+        # means everywhere else in `transformer/init.py`. It is implemented here rather than
+        # refused because MuonH needs it: Hyperball fixes each constrained matrix's radius at
+        # R = ||W_0||_F, so the initialiser sets the absolute step length and a run on a
+        # different one is not running the method the paper describes.
+        fan_in = init_method == InitMethod.fan_in
 
         if init_method == InitMethod.normalized:
             std = d_model**-0.5
 
+        def linear_std(module: nn.Linear) -> float:
+            return module.in_features**-0.5 if fan_in else std
+
         for w in (self.w_q, self.w_k, self.w_v, self.w_b, self.w_w):
-            init_linear(w, std=std, generator=generator)
+            init_linear(w, std=linear_std(w), generator=generator)
         # `w_a` and `w_g` are two-layer bottlenecks, so init each leaf rather than the container.
+        # Under `fan_in` the two leaves get different widths, which is the point of asking each.
         for seq in (self.w_a, self.w_g):
             for w in seq:
-                init_linear(w, std=std, generator=generator)
+                init_linear(w, std=linear_std(w), generator=generator)
         for w in (self.q_conv1d, self.k_conv1d, self.v_conv1d):
-            init_linear(w, std=std, generator=generator)
+            # Depthwise (`groups=hidden_size`), so an output channel sees `conv_size` inputs and
+            # not the full width.
+            init_linear(w, std=self.conv_size**-0.5 if fan_in else std, generator=generator)
+
+        # `u_a`, `u_b` and `u_w` are deliberately absent from every loop above. They are the
+        # noise-conditioning shifts and must stay at the zeros `__init__` gave them, so that an
+        # untrained model is exactly the noise-independent recurrence.
 
         # Uniform on (1, 16) rather than (0, 16): log(0) is -inf, and exp(A_log) is the decay
         # rate, so a zero sample would silently freeze one head's state.
@@ -769,7 +961,7 @@ class GatedDeltaNet2(SequenceMixer):
         elif init_method == InitMethod.normalized:
             std = std / (2 * num_blocks) ** 0.5
 
-        init_linear(self.w_out, std=std, generator=generator)
+        init_linear(self.w_out, std=linear_std(self.w_out), generator=generator)
 
     def num_flops_per_token(self, seq_len: int) -> int:
         """
@@ -860,6 +1052,30 @@ class GatedDeltaNet2Config(SequenceMixerConfig[GatedDeltaNet2]):
     """
     The epsilon value for the normalization layer.
     """
+    reverse_scan: bool = False
+    """
+    Run the recurrence right-to-left within each document rather than left-to-right.
+
+    Alternating this across the GDN-2 layers of a stack is DeltaFlow's *alternating scan*, and is
+    how a stack of linear recurrences comes to see both directions at all. It costs nothing over
+    the causal layer, because it is still one scan per layer. Not usable with context
+    parallelism, which splits the sequence a reversal needs whole.
+    """
+    noise_conditioned: bool = False
+    """
+    Condition the decay and both gates on a diffusion noise level supplied to
+    :meth:`GatedDeltaNet2.forward` as ``noise_level``.
+
+    Set this for diffusion training. DeltaFlow finds a bidirectional core alone lowers perplexity
+    but "still produces overly concentrated generations": the decay has to know how corrupted its
+    input is before it can tell a correction from noise. The projections are zero-initialised, so
+    this adds nothing to the function computed at initialisation.
+    """
+    noise_embed_dim: int = 64
+    """
+    Width of the sinusoidal noise-level embedding. Must be even. Only read when
+    ``noise_conditioned`` is set.
+    """
     dtype: DType = DType.float32
     """
     The default data type to use for parameters.
@@ -908,6 +1124,13 @@ class GatedDeltaNet2Config(SequenceMixerConfig[GatedDeltaNet2]):
         # FusedRMSNormGated (weight only, no bias)
         params += head_v_dim  # o_norm
 
+        # Noise-conditioning shifts: one per-head bias-carrying projection for the decay, the
+        # erase gate and the write gate. Counted because they are parameters, negligible because
+        # they are `noise_embed_dim x n_heads` and nothing else.
+        if self.noise_conditioned:
+            params += 2 * (self.noise_embed_dim * n_heads + n_heads)  # u_a, u_b
+            params += self.noise_embed_dim * n_v_heads + n_v_heads  # u_w
+
         return params
 
     def build(
@@ -940,6 +1163,9 @@ class GatedDeltaNet2Config(SequenceMixerConfig[GatedDeltaNet2]):
             conv_size=self.conv_size,
             conv_bias=self.conv_bias,
             norm_eps=self.norm_eps,
+            reverse_scan=self.reverse_scan,
+            noise_conditioned=self.noise_conditioned,
+            noise_embed_dim=self.noise_embed_dim,
             dtype=self.dtype.as_pt(),
             init_device=init_device,
         )

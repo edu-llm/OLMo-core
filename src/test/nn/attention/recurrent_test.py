@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.tensor import DTensor, Shard
 
+from olmo_core.config import DType
 from olmo_core.distributed.checkpoint import (
     load_model_and_optim_state,
     save_model_and_optim_state,
@@ -17,9 +18,14 @@ from olmo_core.nn.attention import (
     GatedDeltaNet2Config,
     GatedDeltaNetConfig,
 )
-from olmo_core.nn.attention.recurrent import GatedDeltaNet, GatedDeltaNet2
+from olmo_core.nn.attention.recurrent import (
+    GatedDeltaNet,
+    GatedDeltaNet2,
+    document_reversal_index,
+)
 from olmo_core.nn.attention.ring import UlyssesContextParallelStyle
 from olmo_core.nn.functional import l2_normalize
+from olmo_core.nn.transformer.init import InitMethod
 from olmo_core.testing import requires_gpu, run_distributed_test
 from olmo_core.testing.utils import requires_fla, requires_multi_gpu
 from olmo_core.utils import get_default_device, seed_all
@@ -315,3 +321,126 @@ def test_context_parallel_gdn2_ulysses(tmp_path):
         start_method="spawn",
         func_args=(checkpoint_dir, inputs_path, outputs_path, gdn_kwargs, GatedDeltaNet2),
     )
+
+
+@pytest.mark.parametrize(
+    "cu_doc_lens,expected",
+    [
+        pytest.param(None, [4, 3, 2, 1, 0], id="whole-sequence"),
+        pytest.param([0, 5], [4, 3, 2, 1, 0], id="one-document"),
+        pytest.param([0, 2, 5], [1, 0, 4, 3, 2], id="two-documents"),
+        pytest.param([0, 1, 2, 5], [0, 1, 4, 3, 2], id="singletons-then-a-document"),
+    ],
+)
+def test_document_reversal_index(cu_doc_lens, expected):
+    """Reversal has to stop at document boundaries.
+
+    A whole-row flip across a packed sequence moves tokens between documents, so the first
+    document would be denoised while conditioned on the last one. Nothing raises when that
+    happens, which is why the boundary case is enumerated rather than spot-checked.
+    """
+    cu = None if cu_doc_lens is None else torch.tensor(cu_doc_lens, dtype=torch.int32)
+    idx = document_reversal_index(5, cu, torch.device("cpu"))
+    assert idx.tolist() == expected
+
+
+@pytest.mark.parametrize("cu_doc_lens", [None, [0, 7], [0, 3, 7], [0, 1, 4, 7], [0, 3, 4, 5, 7]])
+def test_document_reversal_index_is_an_involution(cu_doc_lens):
+    """The caller reverses on the way in and un-reverses on the way out with the *same* index."""
+    cu = None if cu_doc_lens is None else torch.tensor(cu_doc_lens, dtype=torch.int32)
+    idx = document_reversal_index(7, cu, torch.device("cpu"))
+    x = torch.arange(7)
+    torch.testing.assert_close(x[idx][idx], x)
+    # And it is a permutation, not just self-inverse on this input.
+    assert sorted(idx.tolist()) == list(range(7))
+
+
+@requires_fla
+@requires_gpu
+def test_gdn2_reverse_scan_equals_reversed_causal_scan():
+    """A reversed layer must be exactly the causal layer viewed backwards.
+
+    This is the whole correctness claim of ``reverse_scan``: it reuses every parameter and every
+    kernel and changes only the order tokens arrive in. If the two sides of this disagree, the
+    reversed layers are computing something that is neither direction.
+    """
+    device = get_default_device()
+    seed_all(0)
+    d_model, T = 256, 32
+    cfg = GatedDeltaNet2Config(n_heads=4, head_dim=64, dtype=DType.float32)
+
+    causal = cfg.build(d_model, layer_idx=0, n_layers=4, init_device=str(device)).to(device)
+    causal.init_weights(init_method=InitMethod.normal, d_model=d_model, block_idx=0, num_blocks=4)
+
+    reverse_cfg = cfg.copy()
+    reverse_cfg.reverse_scan = True
+    reversed_layer = reverse_cfg.build(
+        d_model, layer_idx=0, n_layers=4, init_device=str(device)
+    ).to(device)
+    reversed_layer.load_state_dict(causal.state_dict())
+
+    x = torch.randn(1, T, d_model, device=device)
+    flip = document_reversal_index(T, None, device)
+    with torch.no_grad():
+        got = reversed_layer(x)
+        want = causal(x.index_select(1, flip)).index_select(1, flip)
+
+    torch.testing.assert_close(got, want, atol=BF16_ATOL, rtol=BF16_RTOL)
+
+
+@requires_fla
+@requires_gpu
+def test_gdn2_noise_conditioning_is_a_no_op_at_init():
+    """Zero-initialised shifts mean an untrained model is exactly the unconditioned recurrence.
+
+    Stated in the layer's docstring as a property of the design, so it is pinned: if
+    ``init_weights`` ever starts touching ``u_a``/``u_b``/``u_w``, a diffusion run would begin
+    from a different function than the autoregressive checkpoints it is compared against.
+    """
+    device = get_default_device()
+    seed_all(0)
+    d_model, T = 256, 16
+    plain_cfg = GatedDeltaNet2Config(n_heads=4, head_dim=64, dtype=DType.float32)
+    noisy_cfg = plain_cfg.copy()
+    noisy_cfg.noise_conditioned = True
+
+    plain = plain_cfg.build(d_model, layer_idx=0, n_layers=4, init_device=str(device)).to(device)
+    plain.init_weights(init_method=InitMethod.normal, d_model=d_model, block_idx=0, num_blocks=4)
+    noisy = noisy_cfg.build(d_model, layer_idx=0, n_layers=4, init_device=str(device)).to(device)
+    noisy.load_state_dict(plain.state_dict(), strict=False)
+
+    for proj in (noisy.u_a, noisy.u_b, noisy.u_w):
+        assert not proj.weight.any(), "noise projections must start at zero"
+        assert not proj.bias.any()
+
+    x = torch.randn(2, T, d_model, device=device)
+    with torch.no_grad():
+        # Any noise level at all must give the same answer as the layer that cannot see one.
+        for level in (0.0, 0.5, 1.0):
+            noise = torch.full((2,), level, device=device)
+            torch.testing.assert_close(noisy(x, noise_level=noise), plain(x), atol=0.0, rtol=0.0)
+
+
+@requires_fla
+def test_gdn2_refuses_noise_conditioning_without_a_noise_level():
+    """Silently falling back to the unconditioned recurrence is the failure worth refusing."""
+    cfg = GatedDeltaNet2Config(n_heads=4, head_dim=64)
+    cfg.noise_conditioned = True
+    layer = cfg.build(256, layer_idx=0, n_layers=4, init_device="cpu")
+    with pytest.raises(RuntimeError, match="noise_level"):
+        layer(torch.randn(1, 8, 256))
+
+
+@requires_fla
+def test_gdn2_fan_in_init_is_supported_because_muonh_needs_it():
+    """Hyperball reads its radius off ``||W_0||_F``, so the initialiser is part of the method."""
+    d_model = 256
+    cfg = GatedDeltaNet2Config(n_heads=4, head_dim=64, dtype=DType.float32)
+    layer = cfg.build(d_model, layer_idx=0, n_layers=4, init_device="cpu")
+    layer.init_weights(init_method=InitMethod.fan_in, d_model=d_model, block_idx=0, num_blocks=4)
+
+    # fan_in is std = 1/sqrt(d_in) read off each layer's own input width, so projections with
+    # different input widths must end up with visibly different scales.
+    for linear in (layer.w_q, layer.w_k, layer.w_v, layer.w_out):
+        expected = linear.in_features**-0.5
+        assert 0.4 * expected < linear.weight.std().item() < 1.6 * expected, linear

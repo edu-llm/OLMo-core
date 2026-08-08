@@ -208,6 +208,15 @@ class AttentionConfig(SequenceMixerConfig["SequenceMixer"]):
     dtype: DType = DType.float32
     sliding_window: Optional[SlidingWindowAttentionConfig] = None
     use_head_qk_norm: Optional[bool] = None
+    causal: Optional[bool] = None
+    """
+    Whether to mask out future positions. Defaults to ``True``, which is every autoregressive
+    config in this file and leaves them unchanged.
+
+    Set ``False`` for the attention blocks of a diffusion language model, which have to see the
+    whole (partially masked) sequence in both directions. Not compatible with ``sliding_window``,
+    and not implemented on the ``te`` backend.
+    """
 
     def num_params(self, d_model: int) -> int:
         """
@@ -309,6 +318,15 @@ class AttentionConfig(SequenceMixerConfig["SequenceMixer"]):
                     raise OLMoConfigurationError(
                         "'window_size' is not supported with fused attention"
                     )
+                # `FusedAttention` builds its own backend from a packed QKV and does not take a
+                # `causal` flag. Rather than thread one through a path no diffusion config needs,
+                # refuse it here so the failure names the option instead of arriving as a
+                # TypeError about keyword arguments.
+                if not kwargs.pop("causal", True):
+                    raise OLMoConfigurationError(
+                        "'causal=False' is not supported with fused attention; use the default "
+                        "attention implementation for a diffusion model"
+                    )
                 return FusedAttention(**kwargs)
             elif self.name == "normalized":
                 if "window_size" in kwargs:
@@ -368,6 +386,7 @@ class Attention(SequenceMixer):
         use_flash: Optional[bool] = None,
         backend: Optional[AttentionBackendName] = None,
         window_size: Optional[int] = None,
+        causal: bool = True,
         dtype: torch.dtype = torch.float32,
         init_device: str = "cpu",
         cache: Optional[BufferCache] = None,
@@ -453,10 +472,22 @@ class Attention(SequenceMixer):
 
         # Translate window size so that we only look left, not right.
         self.window_size = window_size
+        self.causal = causal
         window_size_tuple: Tuple[int, int] = (-1, -1)
         if window_size is not None:
             if window_size <= 0:
                 raise OLMoConfigurationError(f"'window_size' must be positive (got {window_size})")
+
+            if not causal:
+                # The translation below is `(window - 1, 0)` -- left-only, because that is what a
+                # causal LM wants. A bidirectional layer asking for a window almost certainly
+                # means a symmetric one, and silently getting the left half is the kind of bug
+                # that costs a whole run to notice.
+                raise OLMoConfigurationError(
+                    "'window_size' with causal=False is not implemented: the window here is "
+                    "left-only by construction, which is not what a bidirectional layer means "
+                    "by a window"
+                )
 
             if backend is None and flash_attn_api.has_flash_attn_2():
                 # note: flash_3, flash_4, and te backends are faster than flash_2 and also support SWA
@@ -483,6 +514,7 @@ class Attention(SequenceMixer):
             scale=softmax_scale,
             dropout_p=dropout,
             window_size=window_size_tuple,
+            causal=causal,
             cache=cache,
         )
         self.kv_cache_manager: Optional[KVCacheManager] = None
@@ -567,6 +599,7 @@ class Attention(SequenceMixer):
         pos_cos: Optional[torch.Tensor] = None,
         freqs_cis: Optional[torch.Tensor] = None,
         cache_leftpad: Optional[torch.Tensor] = None,
+        noise_level: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Apply attention to the input.
@@ -578,9 +611,16 @@ class Attention(SequenceMixer):
             Required together with ``max_doc_len`` when using intra-document masking.
         :param max_doc_len: The maximum document length in the input ``x``.
             Required together with ``cu_doc_lens`` when using intra-document masking.
+        :param noise_level: Accepted and ignored. A diffusion model forwards the noise level to
+            every block, and attention is the one mixer that does not need it: whether it looks
+            both ways is decided once by ``causal`` at build time, and the corruption is already
+            visible in the mask tokens of its input. A recurrence needs the noise level because
+            its decay gate has to choose how much of its state to trust; see
+            :class:`~olmo_core.nn.attention.recurrent.GatedDeltaNet2`.
 
         :returns: The output of attention with shape ``(batch_size, seq_len, d_model)``.
         """
+        del noise_level
         B, T, _ = x.shape
 
         # shape: (batch_size, seq_len, n_heads * head_dim),
@@ -886,7 +926,9 @@ class NormalizedAttention(Attention):
         pos_cos: Optional[torch.Tensor] = None,
         freqs_cis: Optional[torch.Tensor] = None,
         cache_leftpad: Optional[torch.Tensor] = None,
+        noise_level: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        del noise_level  # See `Attention.forward`: attention does not consume the noise level.
         if cache_leftpad:
             raise NotImplementedError(
                 "cache_leftpad is not supported for the normalized attention variant"
@@ -1052,6 +1094,7 @@ class FusedAttention(SequenceMixer):
         pos_cos: Optional[torch.Tensor] = None,
         freqs_cis: Optional[torch.Tensor] = None,
         cache_leftpad: Optional[torch.Tensor] = None,
+        noise_level: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Apply attention to the input.
@@ -1066,6 +1109,7 @@ class FusedAttention(SequenceMixer):
 
         :returns: The output of attention with shape ``(batch_size, seq_len, d_model)``.
         """
+        del noise_level  # See `Attention.forward`: attention does not consume the noise level.
         if cache_leftpad:
             raise NotImplementedError(
                 "cache_leftpad is not supported for the fused attention variant"

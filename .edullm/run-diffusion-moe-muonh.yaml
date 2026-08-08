@@ -1,0 +1,90 @@
+# THE RUN: 370M-active masked-diffusion MoE, bidirectional GDN-2 / attention hybrid, MuonH, 10B
+# tokens on regmix-10b, against the autoregressive GDN-2 baseline that read the same corpus.
+#
+#   edullm check --json --spec .edullm/run-diffusion-moe-muonh.yaml \
+#     --experiment diffusion-esdllm --dataset regmix-10b-v1 --team scratch \
+#     --compute gpu-8xa100 --hours 24 --attempts 2
+#   edullm submit <same flags>
+#
+# DO NOT SUBMIT THIS BEFORE run-smoke-diffusion-moe-muonh.yaml HAS COME BACK CLEAN. Three things
+# in this branch are only reachable on a GPU with `flash-linear-attention` installed, and all
+# three fail at the first micro-step. The smoke spec lists what to read out of the log.
+#
+# --steps 19073 x --global-batch-size 524288 = 10.0B TOKENS, AND EVERY ONE OF THOSE NUMBERS IS THE
+# BASELINE'S. The autoregressive arm this is compared against is `olmo2_370M` with GDN-2 in all 16
+# layers, and its spec on `edullm/gated-delta-net-2` reads `--steps 19073 --global-batch-size
+# 524288 --sequence-length 4096 --rank-microbatch-size 8192 --mixture on --mixture-total
+# 10000000000`. Steps, batch, sequence length, microbatch, corpus, mixture and dtype are held
+# equal here so that the difference between the two runs is the thing being tested rather than a
+# budget. The baseline's own runs took 11-12 hours on this shape, which is what sets --hours below.
+#
+# --moe-top-k 8, WHICH IS NOT olmo2_370M_moe's OWN 4, AND IS A SCIENCE PARAMETER. At top_k=4 this
+# arm has 299.6M active non-embedding parameters against the baseline's 409.2M -- 73% -- so a loss
+# gap would be mostly the size difference. At top_k=8 it is 400.3M, a ratio of 0.978. Total
+# parameters are 1107.0M either way, so MuonH's per-expert blocking is unaffected and the
+# comparison is against a model of the same active width. Measured locally, not estimated; the
+# assertion is in the verification script named in .edullm/diffusion-esdllm.md.
+#
+# --rank-microbatch-size 8192 IS PINNED, AND FOR A MoE IT PERTURBS THE MODEL AND NOT ONLY THE
+# SPEED. expert_capacity derives from max_local_microbatch_size, so a different microbatch enforces
+# capacity over a different token pool and drops a different number of tokens. It must be identical
+# to the baseline's and must never move mid-run. 8192 rather than 16384 because the loss path holds
+# ~5 (N,V) fp32 tensors at once -- ~16.8 GiB at N=8192, V=100352 -- against ~37.99 GiB usable on
+# the 40 GB A100 in this account. `fused_linear` would relieve it and needs Liger, which is absent
+# from the image and raises at the first micro-step rather than degrading.
+#
+# gpu-8xa100 AND NOT A CHEAPER PCIe SHAPE. Measured elsewhere in this project on the same code and
+# corpus: 4xL40S (PCIe, no NVLink) reached 4.66% MFU where 8xA100 (NVSwitch) reached 36.6% -- 7.9x
+# from interconnect topology alone, on a communication-bound workload. Per hour the L40S shape looks
+# cheap; per token it is roughly an order of magnitude dearer AND produces a number not comparable
+# to the baseline. gpu-8xh100 is documented unobtainable in this account.
+#
+# --hours 24 --attempts 2, WHICH IS THE POLICY CEILING AND WILL NOT PRICE AS AUTOMATIC. The
+# baseline took 11-12h; this arm adds a reversed scan (free -- still one scan per layer), non-causal
+# attention in 4 of 16 layers (roughly double those four), and top_k=8 rather than 4. Call it 13-16h
+# with headroom. Two attempts because at that length a spot reclamation is likely enough to plan
+# for, and the checkpoint interval is what bounds the loss. Read the real figure and the approval
+# class out of `check --json`, never from this comment.
+#
+# TRITON_F32_DEFAULT=ieee IS EXPORTED BEFORE PYTHON STARTS, because it participates in kernel
+# codegen. Triton lowers tl.dot to TF32 on Ampere+ by its own default and
+# torch.backends.cuda.matmul.allow_tf32 does not reach it, so a run can truthfully report "tf32
+# disabled" for torch and still execute every Triton kernel at reduced precision -- 1.145e-03
+# relative error against 6.892e-06, measured. Both the MoE dispatch and the GDN-2 kernel are
+# Triton, so this is what keeps this arm numerically comparable to the baseline.
+#
+# --init-method fan_in BECAUSE MuonH's RADIUS IS READ OFF THE INITIALISED WEIGHT. Hyperball fixes
+# each constrained matrix at R = ||W_0||_F, so the initialiser sets the absolute step length, and
+# fan_in is the paper's std = 1/sqrt(d_in). GatedDeltaNet2 refused this initialiser until this
+# branch; implementing it was a prerequisite for combining GDN-2 with MuonH at all.
+#
+# --learning-rate 0.01 IS A MuonH RATE AND IS A DIFFERENT QUANTITY from the baseline's 4e-4. Under
+# Hyperball it is a relative step size, ||dW||/||W|| ~ eta, dimensionless. It is also UNTUNED here,
+# carried over from the MuonH work on this repository, and that is the weakest number in this file:
+# a first result should be read as "does this train and does the constraint hold", not as a tuned
+# comparison. The MuonH branch's own notes say the same about it.
+#
+# WHAT THIS RUN CANNOT ATTRIBUTE, STATED SO THAT THE WRITE-UP DOES NOT OVERCLAIM. It differs from
+# the baseline in three ways at once: MoE against dense, MuonH against the baseline's optimizer, and
+# diffusion against autoregression. Active parameters are matched and everything else in the budget
+# is held equal, but no single run can say which of the three a difference belongs to. Isolating
+# them needs further arms and they are not in this branch.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'export TRITON_F32_DEFAULT=ieee
+  && python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/train_diffusion.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --model-factory olmo2_370M_moe --init-method fan_in
+  --n-heads 16 --head-dim 64 --expand-v 1.0
+  --moe-top-k 8 --moe-num-experts 32 --moe-hidden-size 512
+  --noise-schedule linear --antithetic-sampling --noise-conditioned
+  --optimizer muon_h --learning-rate 0.01 --adamw-learning-rate 8.2e-4
+  --param-dtype bfloat16
+  --sequence-length 4096 --steps 19073 --warmup-steps 1908
+  --global-batch-size 524288 --rank-microbatch-size 8192
+  --save-interval 500 --data-seed 0 --work-dir /tmp/dataset-cache
+  --mixture on --mixture-total 10000000000
+  trainer.callbacks.checkpointer.max_checkpoints=null'

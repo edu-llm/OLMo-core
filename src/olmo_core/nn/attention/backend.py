@@ -97,6 +97,7 @@ class AttentionBackendName(StrEnum):
         scale: Optional[float] = None,
         dropout_p: float = 0.0,
         window_size: Tuple[int, int] = (-1, -1),
+        causal: bool = True,
         cache: Optional[BufferCache] = None,
     ) -> "AttentionBackend":
         return self.get_class()(
@@ -106,6 +107,7 @@ class AttentionBackendName(StrEnum):
             scale=scale,
             dropout_p=dropout_p,
             window_size=window_size,
+            causal=causal,
             cache=(cache.with_namespace(f"attn_backend={self}") if cache else None),
         )
 
@@ -127,6 +129,9 @@ class AttentionBackendName(StrEnum):
     def assert_supports_kv_cache(self):
         self.get_class().assert_supports_kv_cache()
 
+    def assert_supports_non_causal(self):
+        self.get_class().assert_supports_non_causal()
+
 
 class AttentionBackend(nn.Module):
     """
@@ -142,11 +147,14 @@ class AttentionBackend(nn.Module):
         scale: Optional[float] = None,
         dropout_p: float = 0.0,
         window_size: Tuple[int, int] = (-1, -1),
+        causal: bool = True,
         cache: Optional[BufferCache] = None,
     ):
         self.assert_supported()
         if window_size != (-1, -1):
             self.assert_supports_swa()
+        if not causal:
+            self.assert_supports_non_causal()
         super().__init__()
         self.head_dim = head_dim
         self.n_heads = n_heads
@@ -154,6 +162,7 @@ class AttentionBackend(nn.Module):
         self.scale = scale
         self.dropout_p = dropout_p
         self.window_size = window_size
+        self.causal = causal
         self.cache = cache
         self.cp_pg: Optional[dist.ProcessGroup] = None
         self.cp_enabled = False
@@ -210,6 +219,18 @@ class AttentionBackend(nn.Module):
         """
         Validates that this backend supports KV caching.
         Raises an error if not supported.
+        """
+        pass
+
+    @classmethod
+    def assert_supports_non_causal(cls):
+        """
+        Validates that this backend can run without a causal mask, which is what a diffusion
+        language model's attention blocks need. Raises an error if not supported.
+
+        Defaults to supported, because for every flash-attention backend it is the ``causal``
+        flag already being forwarded to the kernel. Backends that describe their mask some other
+        way override this.
         """
         pass
 
@@ -368,7 +389,10 @@ class TorchAttentionBackend(AttentionBackend):
             v,
             attn_mask=attn_mask,
             dropout_p=self.dropout_p,
-            is_causal=attn_mask is None,
+            # `is_causal` and `attn_mask` are mutually exclusive in SDPA, so a built mask means
+            # the causality (if any) is already inside it. With no mask, this flag is the only
+            # thing distinguishing a causal LM from a bidirectional one.
+            is_causal=self.causal and attn_mask is None,
             scale=self.scale,
         )
 
@@ -390,7 +414,10 @@ class TorchAttentionBackend(AttentionBackend):
         device: torch.device,
         window_size: Tuple[int, int],
     ) -> torch.Tensor:
-        key = f"seq_len_q={seq_len_q},seq_len_kv={seq_len_kv},window_size={window_size}"
+        key = (
+            f"seq_len_q={seq_len_q},seq_len_kv={seq_len_kv},window_size={window_size},"
+            f"causal={self.causal}"
+        )
         if self.cache is not None:
             if (mask := self.cache.get_for_device(key, device)) is not None:
                 return mask
@@ -400,6 +427,7 @@ class TorchAttentionBackend(AttentionBackend):
                 seq_len_kv=seq_len_kv,
                 device=device,
                 window_size=window_size,
+                causal=self.causal,
             )
             self.cache[key] = attn_mask
 
@@ -410,6 +438,7 @@ class TorchAttentionBackend(AttentionBackend):
             seq_len_kv=seq_len_kv,
             device=device,
             window_size=window_size,
+            causal=self.causal,
         )
 
     @classmethod
@@ -419,8 +448,17 @@ class TorchAttentionBackend(AttentionBackend):
         seq_len_kv: int,
         device: torch.device,
         window_size: Tuple[int, int],
+        causal: bool = True,
     ) -> torch.Tensor:
-        causal_mask = torch.tril(torch.ones(seq_len_q, seq_len_kv, device=device, dtype=torch.bool))
+        # The base the window is intersected with: the lower triangle for a causal LM, everything
+        # for a bidirectional one. Getting this wrong is silent -- a full mask still trains, just
+        # not the model anybody asked for -- so it is the one line the non-causal tests pin.
+        if causal:
+            causal_mask = torch.tril(
+                torch.ones(seq_len_q, seq_len_kv, device=device, dtype=torch.bool)
+            )
+        else:
+            causal_mask = torch.ones(seq_len_q, seq_len_kv, device=device, dtype=torch.bool)
 
         if window_size != (-1, -1):
             sliding_window_left_mask = torch.ones_like(
@@ -513,7 +551,7 @@ class FlashAttention2Backend(AttentionBackend):
                         max_seqlen=max_doc_len,
                         dropout_p=self.dropout_p,
                         softmax_scale=self.scale,
-                        causal=True,
+                        causal=self.causal,
                         window_size=self.window_size,
                     )
                 elif self.uly is not None:
@@ -532,7 +570,7 @@ class FlashAttention2Backend(AttentionBackend):
                         max_seqlen=max_doc_len,
                         dropout_p=self.dropout_p,
                         softmax_scale=self.scale,
-                        causal=True,
+                        causal=self.causal,
                         window_size=self.window_size,
                     )
 
@@ -548,7 +586,7 @@ class FlashAttention2Backend(AttentionBackend):
                     max_seqlen=max_doc_len,
                     dropout_p=self.dropout_p,
                     softmax_scale=self.scale,
-                    causal=True,
+                    causal=self.causal,
                     window_size=self.window_size,
                 )
 
@@ -565,7 +603,7 @@ class FlashAttention2Backend(AttentionBackend):
                 k=k,
                 v=v,
                 softmax_scale=self.scale,
-                causal=True,
+                causal=self.causal,
                 window_size=self.window_size,
                 k_cache=kv_cache_manager.k_cache,  # updated in-place
                 v_cache=kv_cache_manager.v_cache,  # updated in-place
@@ -593,7 +631,7 @@ class FlashAttention2Backend(AttentionBackend):
                     heads_k_stride=self.ring.head_stride,
                     local_k_slice=local_k_slice,
                     dropout_p=self.dropout_p,
-                    causal=True,
+                    causal=self.causal,
                     softmax_scale=self.scale,
                     window_size=self.window_size,
                 )
@@ -620,7 +658,7 @@ class FlashAttention2Backend(AttentionBackend):
                     max_seqlen_q=max_doc_len_q,
                     max_seqlen_k=max_doc_len_k,
                     dropout_p=self.dropout_p,
-                    causal=True,
+                    causal=self.causal,
                     softmax_scale=self.scale,
                     window_size=self.window_size,
                 )
@@ -643,7 +681,7 @@ class FlashAttention2Backend(AttentionBackend):
             max_seqlen_k=max_doc_len_k,
             dropout_p=self.dropout_p,
             softmax_scale=self.scale,
-            causal=True,
+            causal=self.causal,
             window_size=self.window_size,
         )
 
@@ -662,6 +700,7 @@ class FlashAttention3Backend(AttentionBackend):
         scale: Optional[float] = None,
         dropout_p: float = 0.0,
         window_size: Tuple[int, int] = (-1, -1),
+        causal: bool = True,
         cache: Optional[BufferCache] = None,
     ):
         if dropout_p > 0.0:
@@ -673,6 +712,7 @@ class FlashAttention3Backend(AttentionBackend):
             scale=scale,
             dropout_p=dropout_p,
             window_size=window_size,
+            causal=causal,
             cache=cache,
         )
 
@@ -747,7 +787,7 @@ class FlashAttention3Backend(AttentionBackend):
                         cu_seqlens=cu_doc_lens,
                         max_seqlen=max_doc_len,
                         softmax_scale=self.scale,
-                        causal=True,
+                        causal=self.causal,
                         window_size=self.window_size,
                     )
 
@@ -762,7 +802,7 @@ class FlashAttention3Backend(AttentionBackend):
                 cu_seqlens=cu_doc_lens,
                 max_seqlen=max_doc_len,
                 softmax_scale=self.scale,
-                causal=True,
+                causal=self.causal,
                 window_size=self.window_size,
             )
 
@@ -778,7 +818,7 @@ class FlashAttention3Backend(AttentionBackend):
                 k=k,
                 v=v,
                 softmax_scale=self.scale,
-                causal=True,
+                causal=self.causal,
                 window_size=self.window_size,
                 k_cache=kv_cache_manager.k_cache,  # updated in-place
                 v_cache=kv_cache_manager.v_cache,  # updated in-place
@@ -818,7 +858,7 @@ class FlashAttention3Backend(AttentionBackend):
                     max_seqlen_q=max_doc_len_q,
                     max_seqlen_k=max_doc_len_k,
                     softmax_scale=self.scale,
-                    causal=True,
+                    causal=self.causal,
                     window_size=self.window_size,
                 )
 
@@ -839,7 +879,7 @@ class FlashAttention3Backend(AttentionBackend):
             max_seqlen_q=max_doc_len_q,
             max_seqlen_k=max_doc_len_k,
             softmax_scale=self.scale,
-            causal=True,
+            causal=self.causal,
             window_size=self.window_size,
         )
 
@@ -858,6 +898,7 @@ class FlashAttention4Backend(AttentionBackend):
         scale: Optional[float] = None,
         dropout_p: float = 0.0,
         window_size: Tuple[int, int] = (-1, -1),
+        causal: bool = True,
         cache: Optional[BufferCache] = None,
     ):
         if dropout_p > 0.0:
@@ -869,6 +910,7 @@ class FlashAttention4Backend(AttentionBackend):
             scale=scale,
             dropout_p=dropout_p,
             window_size=window_size,
+            causal=causal,
             cache=cache,
         )
 
@@ -932,7 +974,7 @@ class FlashAttention4Backend(AttentionBackend):
                 kv_cache_manager.v_cache,
                 seqused_k=seqused_k,
                 softmax_scale=self.scale,
-                causal=True,
+                causal=self.causal,
                 window_size=self.window_size,
             )
 
@@ -966,7 +1008,7 @@ class FlashAttention4Backend(AttentionBackend):
                     max_seqlen_q=max_doc_len_q,
                     max_seqlen_k=max_doc_len_k,
                     softmax_scale=self.scale,
-                    causal=True,
+                    causal=self.causal,
                     window_size=self.window_size,
                 )
 
@@ -987,12 +1029,23 @@ class FlashAttention4Backend(AttentionBackend):
             max_seqlen_q=max_doc_len_q,
             max_seqlen_k=max_doc_len_k,
             softmax_scale=self.scale,
-            causal=True,
+            causal=self.causal,
             window_size=self.window_size,
         )
 
 
 class TEAttentionBackend(AttentionBackend):
+    @classmethod
+    def assert_supports_non_causal(cls):
+        # TE takes a named mask type rather than a boolean, and its `window_size` is interpreted
+        # relative to that name. Choosing between "no_mask", "padding" and the arbitrary variants
+        # is a decision about TE's semantics, not about diffusion, and guessing it wrong is a
+        # silently wrong mask. Refuse until somebody who needs TE here reads that contract.
+        raise RuntimeError(
+            f"'{cls.__name__}' does not implement non-causal attention; use the flash_2/flash_3 "
+            "or torch backend for a diffusion model"
+        )
+
     def __init__(
         self,
         *,
@@ -1002,6 +1055,7 @@ class TEAttentionBackend(AttentionBackend):
         scale: Optional[float] = None,
         dropout_p: float = 0.0,
         window_size: Tuple[int, int] = (-1, -1),
+        causal: bool = True,
         cache: Optional[BufferCache] = None,
     ):
         super().__init__(
@@ -1011,6 +1065,7 @@ class TEAttentionBackend(AttentionBackend):
             scale=scale,
             dropout_p=dropout_p,
             window_size=window_size,
+            causal=causal,
             cache=cache,
         )
         if not has_te_attn():
