@@ -120,7 +120,32 @@ evaluator in particular validates by *building* its dataset and then checking th
 its refusals can only ever arrive inside a running container — unless something builds it
 first, which is what this does. Run it before every submission.
 
-## What the rehearsals found, for about $4 each
+## The rehearsal passed, on the fourth attempt
+
+`run_019fdfe9-e6c0`, 200 steps, `faithful` at the rehearsal size on `gpu-4xl40s`. Every metric
+family the decision rule rests on is present, and the guard cleared.
+
+**The lanes differentiate, and they start identical.** The relative spread across lanes reads
+0.00064 at the first logged step and rises to a median of 0.0298 — twenty-five times the 1e-3
+floor the run would have failed closed at. Starting near zero is the initialization equivalence
+of eq. 14 confirmed in a real run rather than in a unit test: at step zero every lane holds the
+same vector, exactly as the ordinary residual stack would, and they separate once the mixing
+matrix moves. The mechanism is live, not inert.
+
+**The spectral radius is already above 1.** ρ(A_r) on block 0's attention stream reads 1.001 at
+the first step — the identity, as initialized — and climbs to 1.196 by step 200. Parcae's
+signature for a diverging run is ρ ≥ 1, and Tencent's 3B divergence had a multi-lane drift.
+Two hundred steps of a 96M model predicts nothing about a 370M run, and this is exactly the
+quantity the instrumentation exists to watch. It is also the sharp prediction for arm 9: mHC
+pins ρ at exactly 1 by construction, so if unconstrained HC drifts and mHC does not, H5 has a
+mechanism rather than a correlation.
+
+**Bits-per-byte arrives per source**, seven of them: arxiv 1.66, algebraic-stack 1.75,
+open-web-math 1.74, starcoder 1.98, dclm 2.03, pes2o 2.06, wiki 2.17 at step 200. Early and
+therefore high, but already spread by a wide enough margin that a pooled average over them
+would be the wrong statistic.
+
+## What the first three rehearsals found, for about $4 each
 
 They died, which is what they were for.
 
@@ -211,17 +236,27 @@ nats. That is an estimate from the literature, not a measurement of this configu
 three baseline seeds exist to replace it. **No treatment arm is submitted until this table has
 numbers in it.**
 
-### Throughput and cost
+### Throughput
 
-| shape | arm | measured s/step | measured MFU | hours for 12,715 steps | cost |
+Measured, not planned. Read from run history at the steady state rather than from the run
+summary — the last logged value is taken during the end-of-run evaluation, where the model is
+not training and throughput reads near zero.
+
+| shape | config | steps | MFU (median) | TPS (median) | source |
 | --- | --- | --- | --- | --- | --- |
-| gpu-4xl40s | baseline | **not measured** | | | |
-| gpu-4xl40s | faithful | **not measured** | | | |
+| gpu-4xl40s | `hc_rehearsal`, `faithful` | 200 | 7.89% | 49,620 | `run_019fdfe9-e6c0` |
+| gpu-4xl40s | `hc_370M` | — | **not measured** | | |
 
-The planning figures are roughly 21 hours and $220 per arm on `gpu-4xl40s` at $10.493/hour, and
-about 6 hours and $135 on `gpu-8xa100`. Those are the plan's numbers, not this branch's. Fill
-this table from a 200-step probe at 370M — about 2% of an arm, so a few dollars each — before
-proposing any full submission.
+The rehearsal figure is not a prediction for 370M: it is a 96M model of which 77M is embedding
+and unembedding, so it spends an unusually large share of its time in two matmuls that do not
+grow with depth. The 370M probe is what fills the row below it.
+
+The planning figures for a full arm remain roughly 21 hours and $220 on `gpu-4xl40s`, and about
+6 hours and $135 on `gpu-8xa100`. Both are the plan's, not this branch's.
+
+### Noise floor
+
+Still not measured. See above — it needs arm 1's three seeds.
 
 Two notes on reading throughput numbers here. OLMo-core v2.5.0 fixed an A100 peak-FLOPs
 constant in `SpeedMonitorCallback` that was 2× too low and had been inflating reported MFU by

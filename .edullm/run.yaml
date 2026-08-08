@@ -1,4 +1,15 @@
-# What this commit runs on the platform: the rehearsal, not an arm.
+# What this commit runs on the platform: the 370M throughput probe, not a full arm.
+#
+# 100 steps of the real thing -- real model, real batch, real sequence length -- which is 0.8%
+# of an arm and about $4. It exists to measure seconds per step and MFU at the shape the arms
+# will actually run at, because everything downstream is priced off that number and it is
+# currently a planning figure. The rehearsal's 7.89% MFU does not transfer: that model is 96M
+# of which 77M is embedding and unembedding.
+#
+# It also runs the guard again at the real width. Lane differentiation at d_model 384 over 8
+# blocks is not the same measurement as at 1024 over 16.
+#
+# THE HISTORY BELOW IS WHY THIS FILE CHANGES RATHER THAN A FLAG.
 #
 # The command lives HERE and not in a flag, because it is a property of the code, while
 # everything a run is charged against -- team, experiment, dataset, machine -- is supplied at
@@ -43,15 +54,14 @@ command: >-
   .edullm/train_hyper_connections.py "$EDULLM_RUN_ID"
   --save-folder "$EDULLM_CHECKPOINT_DIR"
   --arm faithful
-  --model-factory hc_rehearsal
+  --model-factory hc_370M
   --sequence-length 4096
-  --global-batch-size 262144
+  --global-batch-size 786432
   --rank-microbatch-size 8192
-  --steps 200
+  --steps 100
   --save-interval 100
   --warmup-steps 20
-  --monitor-interval 10
-  --eval-interval 100
-  --held-out-shards 2
-  --fail-closed-by-step 150
+  --monitor-interval 20
+  --eval-interval 50
+  --fail-closed-by-step 80
   --param-dtype bfloat16'
