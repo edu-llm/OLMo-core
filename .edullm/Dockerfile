@@ -158,10 +158,14 @@ COPY pyproject.toml ./
 # Installed before the project so pip sees the constraint already satisfied and has no
 # reason to resolve torch again.
 #
-# wandb comes from the extra the project already declares. boto3 is named directly because
-# olmo_core.io imports it lazily for s3:// paths and the project declares it only under the
-# dev extra, which would drag in pytest, mypy, sphinx and the rest of a contributor's
-# toolchain -- none of which belongs in an image an untrusted training command runs inside.
+# wandb and transformers come from extras the project already declares. Pretrain never
+# imports HuggingFace; frontload-cl SFT does (`sft_tokenize.load_hf_tokenizer` →
+# `transformers.AutoTokenizer` for the Dolma2 chat template). Leaving the transformers
+# extra out is how run_019fdf9f died at stage 70 with ModuleNotFoundError before any
+# step ran. boto3 is named directly because olmo_core.io imports it lazily for s3://
+# paths and the project declares it only under the dev extra, which would drag in pytest,
+# mypy, sphinx and the rest of a contributor's toolchain -- none of which belongs in an
+# image an untrusted training command runs inside.
 #
 # botocore's `crt` EXTRA IS BESIDE boto3 BECAUSE THE CHECKSUM A CHECKPOINT WRITE ASKS FOR IS
 # NOT IN botocore ITSELF. The platform commits a checkpoint by putting the payload with
@@ -216,7 +220,7 @@ COPY pyproject.toml ./
 # proves the module a training run actually reaches for loads.
 RUN set -eux; \
     python -m pip install --no-cache-dir "torch==2.9.0"; \
-    python -c "import tomllib; project = tomllib.load(open('pyproject.toml', 'rb'))['project']; open('/tmp/dependencies.txt', 'w').write('\n'.join(project['dependencies'] + project['optional-dependencies']['wandb']) + '\n')"; \
+    python -c "import tomllib; project = tomllib.load(open('pyproject.toml', 'rb'))['project']; od = project['optional-dependencies']; open('/tmp/dependencies.txt', 'w').write('\n'.join(project['dependencies'] + od['wandb'] + od['transformers']) + '\n')"; \
     python -m pip install --no-cache-dir -r /tmp/dependencies.txt boto3 "botocore[crt]"; \
     rm /tmp/dependencies.txt; \
     python -m pip install --no-cache-dir "edullm-data @ https://github.com/edu-llm/edullm-data/archive/38bf831a6c3f445e394784018441fd59288b876c.tar.gz"
@@ -226,13 +230,14 @@ RUN set -eux; \
 COPY . .
 
 # THE PROJECT ITSELF, AFTER ITS SOURCE AND AFTER ITS DEPENDENCIES, AND THE RESOLUTION IS
-# THE SAME ONE IT ALWAYS WAS. This is still `.[wandb]` rather than `--no-deps .`, which
-# would be the faster spelling and the wrong one: --no-deps would install the project
-# without checking that the layer above actually covered its requirements, so a dependency
-# added to pyproject.toml and missed by the extraction would go absent from the image
-# instead of being installed here. Asking for the extra means pip verifies the whole set,
-# finds it satisfied by the layer above, and reaches the network for nothing -- and if it
-# ever does reach the network, that is the extraction having drifted and worth the cost.
+# THE SAME ONE IT ALWAYS WAS. This is still `.[wandb,transformers]` rather than
+# `--no-deps .`, which would be the faster spelling and the wrong one: --no-deps would
+# install the project without checking that the layer above actually covered its
+# requirements, so a dependency added to pyproject.toml and missed by the extraction
+# would go absent from the image instead of being installed here. Asking for the extras
+# means pip verifies the whole set, finds it satisfied by the layer above, and reaches
+# the network for nothing -- and if it ever does reach the network, that is the
+# extraction having drifted and worth the cost.
 #
 # The layer this produces is the project's own files. Measured on 2026-08-05 by building
 # this file twice against the registered base with only a source file changed between the
@@ -288,10 +293,10 @@ COPY . .
 # microsecond and it is the difference between "botocore will use this" and "and the number
 # it gets is right".
 RUN set -eux; \
-    python -m pip install --no-cache-dir ".[wandb]"; \
+    python -m pip install --no-cache-dir ".[wandb,transformers]"; \
     python -c "import torch; assert torch.__version__.startswith('2.9.0'), f'torch was moved off the pin: {torch.__version__}'"; \
     python -c "import torch; assert torch.version.cuda, 'the CUDA build of torch was replaced by a CPU wheel'"; \
-    python -c "import boto3, wandb; from olmo_core.data import TokenizerConfig; from olmo_core.nn.transformer import TransformerConfig; print(TransformerConfig.olmo2_190M(vocab_size=TokenizerConfig.gpt2().padded_vocab_size()).__class__.__name__)"; \
+    python -c "import boto3, wandb; from transformers import AutoTokenizer; from olmo_core.data import TokenizerConfig; from olmo_core.nn.transformer import TransformerConfig; print(TransformerConfig.olmo2_190M(vocab_size=TokenizerConfig.gpt2().padded_vocab_size()).__class__.__name__)"; \
     python -c "import boto3; from botocore import UNSIGNED; from botocore.config import Config; from botocore.stub import Stubber; client = boto3.client('s3', region_name='us-east-1', config=Config(signature_version=UNSIGNED)); stub = Stubber(client); stub.add_response('put_object', {}); stub.activate(); client.put_object(Bucket='b', Key='k', Body=b'123456789', ChecksumAlgorithm='CRC32C')"; \
     python -c "from awscrt.checksums import crc32c; assert crc32c(b'123456789') == 0xE3069283, 'awscrt computes something other than CRC-32C'"; \
     python -c "from edullm_data.read import dataset_paths, resolve_latest; print(dataset_paths.__module__)"
