@@ -1,6 +1,11 @@
-# MuonH (Hyperball) vs MuonW, dense and MoE, at 370M
+# MuonH (Hyperball) vs MuonW on a 370M-active MoE
 
-Four arms: `{olmo2_370M, olmo2_370M_moe} × {muon_w, muon_h}`.
+Two arms: `olmo2_370M_moe × {muon_w, muon_h}`.
+
+The dense specs (`run-dense-*.yaml`, `run-smoke-dense-*.yaml`) are committed and unused. They
+are kept rather than deleted because `olmo2_370M` is the config the MoE one is parameter-matched
+*against*, so the dense pair is the obvious follow-up if the MoE result needs a dense
+counterpart to be interpretable. Nothing in the current experiment reads them.
 
 ## What is being tested
 
@@ -25,7 +30,14 @@ the wrapper. The dion-backed `MuonConfig` is untouched.
 2. **`--learning-rate` is not the same quantity across arms.** For `muon_w` it is scaled per
    matrix by `adjust_lr` (Moonlight's `0.2·√max(d_in,d_out)`). For `muon_h` it is a *relative*
    step size — dimensionless, `||ΔW||/||W|| ≈ η`. A single LR shared between the arms compares
-   nothing, so each arm needs its own value. See "LR sweep" below.
+   nothing, so each arm carries its own.
+
+   **Neither value is tuned, and this is the weakest part of the experiment as it stands.**
+   `muon_w=0.02` / `muon_h=0.01` are starting points, not optima. The paper sweeps per scale on a
+   √2 grid and reports the *best* LR per arm, because that is the only comparison that is about
+   the optimizer rather than about two arbitrary points. A single pair of untuned rates can favour
+   either arm, so read a first result as "does this run at all and does the constraint hold",
+   and treat a loss difference as provisional until each arm has been swept.
 
 3. **`--init-method fan_in` on every arm.** `R` is measured from `W_0`, so the initializer sets
    the absolute step length. The paper uses `std = 1/√d_in`, which is `fan_in` here;
@@ -83,21 +95,27 @@ These are rank-local: a sharded matrix contributes its own slice, so the drift i
 
 ## Running it
 
-Stage 1, smoke: four short single-GPU runs, one per arm, to prove each path trains on real data
-under FSDP and to **measure tokens/s** so the full runs can be sized against the 24 h attempt
-bound rather than guessed at.
-
 ```bash
-for arm in dense-muonw dense-muonh moe-muonw moe-muonh; do
-  edullm check --json --spec .edullm/run-smoke-$arm.yaml \
-    --experiment muonh-smoke --dataset olmo-150b-dolma2-v1 \
-    --team scratch --compute gpu-1xl40s --hours 1 --attempts 1
+for arm in moe-muonh moe-muonw; do
+  edullm submit --spec .edullm/run-$arm.yaml --experiment muonh-370m \
+    --dataset olmo-150b-dolma2-v1 --team scratch --compute gpu-8xa100 \
+    --hours 7 --attempts 1
 done
 ```
 
-Always pass `--hours` and `--attempts`. The workload profile's defaults are the maximums, which
-price high enough to park the run waiting for an approver instead of starting it. Read the real
-number out of `check --json` (`cost`, `approval_class`) — never from this file.
+Always pass `--hours` and `--attempts`. The profile's defaults are its maximums (24 h × 2), which
+price past the automatic threshold and park the run for a lead instead of starting it. Read the
+real figures out of `check --json` (`cost`, `approval_class`) — never from this file.
 
-Stage 2, the comparison itself: sized from stage 1, one spec per arm, `--data-seed` held equal
-across arms and varied only to add seeds.
+**`check`'s `approval_class` is not the gate.** Measured 2026-08-08: `check` reported
+`automatic` for both arms and the submission still parked at `run-approval-lead`. The deferred
+checks are why — `image_scan_findings_unreviewed` is decided after `check` has already answered,
+and a freshly built image has no reviewed findings. So budget an approval cycle per submission
+regardless of what `check` said, and read the real state from `edullm status --json` (`gate`,
+`admitted`, `you_can_release`).
+
+The `run-smoke-*.yaml` specs are 120-step single-GPU versions. They measure tokens/s and prove
+the path runs; they do **not** rank the optimizers, for the decay reason above. A cheap thing to
+run first if the sharded path has changed — every distributed test in
+`src/test/optim/hyperball_test.py` is `requires_multi_gpu` and does not execute on a CPU box, so
+the first real exercise of the FSDP gather path is a GPU run.
