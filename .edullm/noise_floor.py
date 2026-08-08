@@ -51,6 +51,7 @@ import argparse
 import json
 import math
 import os
+import re
 import sys
 from dataclasses import asdict, dataclass, field
 from functools import lru_cache
@@ -1010,6 +1011,10 @@ def render_mde_table(
 # ---------------------------------------------------------------------------------------
 
 
+#: How a fan-out cell's W&B run id ends, matched exactly as ``tranche_watch`` matches it.
+CELL_SUFFIX = re.compile(r"^(?P<submission>.+)-cell-(?P<index>\d+)$")
+
+
 @dataclass
 class SeedSeries:
     """One run of one arm, reduced to what the estimators need."""
@@ -1021,6 +1026,54 @@ class SeedSeries:
     last_step: int
     per_source: Dict[int, Dict[str, float]] = field(default_factory=dict)
     """Evaluation step -> source -> bits-per-byte."""
+
+    run_id: str = ""
+    """
+    The W&B run id, which is the only thing that identifies a cell. Recorded so the frozen
+    artifact names the exact five runs it was computed from rather than a group that will
+    keep acquiring members after the freeze.
+    """
+
+
+def belongs_to_submission(run_id: str, submission: Optional[str]) -> bool:
+    """
+    Whether one run is a cell of the named submission.
+
+    MATCHED ON THE RUN ID AND NEVER ON THE DISPLAY NAME, for the reason ``tranche_watch``
+    gives: the cells of a fan-out share a display name and differ only in the id's
+    ``-cell-<index>`` suffix, and the name is not even stable, since the cancelled L40S cells
+    were all renamed to ``...-died`` after the fact. The prefix is compared against the id
+    with that suffix removed, so naming a submission selects all of its cells and none of
+    anything else's.
+
+    :param run_id: The W&B run id.
+    :param submission: A platform run id, or a unique prefix of one. None or empty accepts
+        every run, which is the behaviour from before this argument existed.
+
+    :returns: Whether the run belongs.
+    """
+    if not submission:
+        return True
+    match = CELL_SUFFIX.match(run_id)
+    stem = match.group("submission") if match else run_id
+    return stem.startswith(submission)
+
+
+def contributing(series: Sequence["SeedSeries"]) -> List["SeedSeries"]:
+    """
+    The runs that carry an evaluation, which are the only ones any estimator can use.
+
+    A run that logged none contributes an empty step set and would take the intersection in
+    :func:`aligned_matrix` to nothing, which is what a group holding two dead runs from an
+    earlier submission looks like. Defined once and used both there and by the caller that
+    records which runs the frozen numbers came from, so the artifact cannot name a different
+    set from the one that was measured.
+
+    :param series: One entry per run.
+
+    :returns: The subset with at least one evaluation, in the order given.
+    """
+    return [entry for entry in series if entry.per_source]
 
 
 def sources_from_config(config: Mapping) -> Tuple[str, ...]:
@@ -1060,6 +1113,7 @@ def read_seed_series(
     group: str,
     arm: str = "baseline",
     metric: str = PRIMARY_METRIC,
+    submission: Optional[str] = None,
 ) -> Tuple[List[SeedSeries], Tuple[str, ...]]:
     """
     Pull every seed of one arm out of W&B, with its per-source endpoint at every evaluation.
@@ -1071,11 +1125,24 @@ def read_seed_series(
     failure ``resolve_seed`` exists to refuse, and the one that would report a noise floor of
     exactly zero.
 
+    A GROUP IS NOT AN EXPERIMENTAL UNIT, WHICH IS WHY ``submission`` EXISTS. Every attempt at
+    this arm shares one experiment slug, so ``hyper-connections-370m`` holds the five live A100
+    cells, the three cancelled L40S cells, two submissions that died before logging a step, and
+    the probes. Reading the group whole returns eight baseline entries carrying seeds
+    ``0, 0, 1, 1, 2, 3, 3, 4``, which trips the distinct-seed refusal in :func:`main` -- and
+    that refusal is right to fire, because the duplicates are real. What it is diagnosing is the
+    query and not the fan-out. Naming the submission is how the pre-registered choice of *which*
+    baseline is the comparator gets executed rather than left to whatever else shares the slug;
+    it is not a filter chosen after seeing a number, and the id it selects is recorded in the
+    frozen artifact.
+
     :param entity: W&B entity.
     :param project: W&B project.
     :param group: The experiment slug the runs are grouped under.
     :param arm: Which arm to collect. Matched against the run's own config.
     :param metric: A format string with a ``{source}`` field.
+    :param submission: A platform run id, or a unique prefix of one, restricting the read to
+        the cells of that one submission. None reads the whole group.
 
     :returns: ``(one series per run, the source names)``.
     """
@@ -1087,6 +1154,8 @@ def read_seed_series(
     series: List[SeedSeries] = []
     sources: Tuple[str, ...] = HELD_OUT_SOURCES
     for run in runs:
+        if not belongs_to_submission(run.id, submission):
+            continue
         config = run.config or {}
         if _arm_of(config) != arm:
             continue
@@ -1098,6 +1167,7 @@ def read_seed_series(
             arm=arm,
             state=run.state,
             last_step=int(run.summary.get("_step") or -1),
+            run_id=run.id,
         )
         for row in run.scan_history(keys=["_step", *keys]):
             step = row.get("_step")
@@ -1146,10 +1216,7 @@ def aligned_matrix(
 
     :returns: ``(values, steps, seeds)``.
     """
-    # A run that logged no evaluation contributes an empty set and would take the intersection
-    # to nothing, which is what a group containing two dead runs from an earlier submission
-    # looks like. Drop them here rather than at the call site, so no caller can forget.
-    usable = [entry for entry in series if entry.per_source]
+    usable = contributing(series)
     if not usable:
         return np.zeros((0, 0, len(sources))), (), ()
     common = set(usable[0].per_source)
@@ -1606,6 +1673,12 @@ def main() -> int:
     parser.add_argument("--group", help="The experiment slug the baseline seeds are grouped under.")
     parser.add_argument("--arm", default="baseline")
     parser.add_argument(
+        "--submission",
+        help="Restrict the read to the cells of one platform run id. The slug holds every "
+        "attempt at this arm, including cancelled ones with the same seeds, so a freeze "
+        "should name the submission it is freezing.",
+    )
+    parser.add_argument(
         "--scheme",
         default="strata",
         choices=("strata", "inverse-variance"),
@@ -1664,18 +1737,25 @@ def main() -> int:
     sources: Tuple[str, ...] = HELD_OUT_SOURCES
     steps: Tuple[int, ...] = ()
     seeds: Tuple[int, ...] = ()
+    contributors: List[str] = []
     label = "measured"
 
     if opts.group:
-        series, sources = read_seed_series(opts.entity, opts.project, opts.group, opts.arm)
-        print(f"{opts.entity}/{opts.project}  group={opts.group}  arm={opts.arm}")
+        series, sources = read_seed_series(
+            opts.entity, opts.project, opts.group, opts.arm, submission=opts.submission
+        )
+        print(
+            f"{opts.entity}/{opts.project}  group={opts.group}  arm={opts.arm}"
+            + (f"  submission={opts.submission}" if opts.submission else "  (whole group)")
+        )
         if not series:
             print(f"no runs of arm '{opts.arm}' in this group yet.")
         for entry in series:
             print(
-                f"  {entry.run_name}  seed {entry.seed}  {entry.state}  "
+                f"  {entry.run_id or entry.run_name}  seed {entry.seed}  {entry.state}  "
                 f"last step {entry.last_step}  {len(entry.per_source)} evaluation(s)"
             )
+        contributors = [e.run_id or e.run_name for e in contributing(series)]
         candidate, steps, seeds = aligned_matrix(series, sources)
         if len(set(seeds)) != len(seeds):
             print()
@@ -1706,6 +1786,14 @@ def main() -> int:
         values, seeds, label = synthetic, tuple(range(synthetic.shape[0])), "synthetic"
 
     frozen = report(values, sources, steps, seeds, opts.scheme, label, opts.horizon)
+    frozen["entity"] = opts.entity
+    frozen["project"] = opts.project
+    frozen["group"] = opts.group
+    frozen["arm"] = opts.arm
+    frozen["submission"] = opts.submission
+    frozen["runs"] = contributors
+    frozen["metric"] = PRIMARY_METRIC
+    frozen["horizon"] = opts.horizon
 
     if opts.freeze:
         if label != "measured" or frozen["provisional"]:

@@ -598,6 +598,58 @@ def test_aligned_matrix_is_empty_when_nothing_overlaps():
     assert values.size == 0
 
 
+def test_contributing_is_the_same_subset_aligned_matrix_keeps():
+    """
+    The frozen artifact names the runs it was computed from, and it would be worth nothing if
+    that list were assembled by a second copy of this rule that could drift from the first.
+    """
+    live = {0: {"arxiv": 1.0}, 500: {"arxiv": 0.9}}
+    entries = [series(0, {}), series(1, live), series(2, live)]
+    _, _, seeds = nf.aligned_matrix(entries, ["arxiv"])
+    assert tuple(entry.seed for entry in nf.contributing(entries)) == seeds
+
+
+# The three cancelled L40S cells and the five live A100 ones, exactly as W&B holds them: one
+# experiment slug, two submissions, and a display name that says nothing because the cells of
+# a fan-out share it and the cancelled ones were all renamed to '...-died'.
+L40S = "run_019fe279-4ef0-7035-9432-4e24d23fba97"
+A100 = "run_019fe2f4-f528-70a8-9242-d22f358ede0a"
+
+
+@pytest.mark.parametrize(
+    "run_id, submission, expected",
+    [
+        (f"{A100}-cell-0", "run_019fe2f4-f528", True),
+        (f"{A100}-cell-4", "run_019fe2f4-f528", True),
+        (f"{L40S}-cell-0", "run_019fe2f4-f528", False),
+        (f"{L40S}-cell-3", "run_019fe279", True),
+        ("run_019fdf85-b356-7060-be18-c5fcd4119776", "run_019fe2f4-f528", False),
+        # A run that is not a fan-out cell still answers for its own id.
+        ("run_019fe008-5877-7048-8078-525707d6ae32", "run_019fe008", True),
+        # No submission named is the behaviour from before the argument existed.
+        (f"{L40S}-cell-0", None, True),
+        (f"{L40S}-cell-0", "", True),
+    ],
+)
+def test_belongs_to_submission_matches_the_id_and_not_the_name(run_id, submission, expected):
+    assert nf.belongs_to_submission(run_id, submission) is expected
+
+
+def test_naming_the_submission_is_what_separates_two_attempts_at_the_same_seeds():
+    """
+    THE FAILURE THIS EXISTS TO STOP, AND IT IS NOT THE ONE IT LOOKS LIKE. Reading the slug
+    whole returns seeds 0, 0, 1, 1, 2, 3, 3, 4 across the two submissions, and the
+    distinct-seed refusal in ``main`` fires on it. That refusal is correct and the duplicates
+    are real -- but they are two attempts at the same replicate rather than one attempt run
+    twice, so the thing at fault is the query. Selecting the submission resolves it to the
+    five cells the pre-registration names, and leaves the refusal free to catch the failure it
+    was written for.
+    """
+    whole_group = [f"{L40S}-cell-{i}" for i in (0, 1, 3)] + [f"{A100}-cell-{i}" for i in range(5)]
+    selected = [r for r in whole_group if nf.belongs_to_submission(r, "run_019fe2f4-f528")]
+    assert selected == [f"{A100}-cell-{i}" for i in range(5)]
+
+
 def test_sources_come_out_of_the_run_config_through_source_label():
     """
     Read back through the same function that put the labels there, so a config whose paths and
