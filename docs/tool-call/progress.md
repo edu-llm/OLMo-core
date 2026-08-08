@@ -120,4 +120,41 @@ Anything longer belongs in [`prd.md`](prd.md) or [`dataset-design.md`](dataset-d
   - Note for the harness: the jinja env must use **transformers' `tojson`**, not jinja's builtin —
     the builtin is HTML-safe and escapes `< > & '`, which would corrupt schemas.
 
+- **Three must-haves mandated** (arithmetic tools, web search, pedagogy focus). Respent the domain
+  axis rather than adding a path level: `<domain>` ∈ `general` | `arithmetic` | `web-search` |
+  `pedagogy` (`edu` **renamed**, not added), so each must-have is independently glob-sliceable.
+  **Still exactly two path levels** — only the vocabularies changed.
+- **Eighth category added: `answer-directly`.** Forced, not cosmetic: `no-suitable-tool` *deletes* the
+  gold function (BFCL `irrelevance`), whereas `answer-directly` keeps a plausible tool **present** and
+  calling it is still wrong because the answer is settled knowledge. That is exactly the "know
+  learning science, don't search for it" requirement. 32-cell grid, no holes.
+- **Irreversible labelling rule:** a row's domain is the **gold tool's** domain, not the user turn's
+  topic. Gate 34 enforces it. Domain totals therefore measure gold-tool domain, not inventory mix.
+- Composition rebuilt as a 32-cell grid at 40,000: general 15,000 / arithmetic 7,000 /
+  web-search 7,000 / pedagogy 11,000. Abstention held at **exactly 10%**, now split three ways.
+  Provenance moves to **24% reformat / 14.25% derived / 61.75% fresh** — the honest price of the
+  mandate, since the three new domains have **no reusable upstream at all** (+4,300 rows of work).
+- **Two new tracked docs:** `tool-inventories.md` (64 schemas across 4 domains, 10 held out, with the
+  raw-expression-vs-operands and single-turn-search decisions) and `pedagogy.md` (pedagogy tools vs
+  prose vs knowledge; the principle taxonomy; the myth negatives).
+- **Fixed six stale gates in §10** — they still named `<tools>`/`<tool_call>`, the `tool` role, and a
+  name-first JSON payload, all superseded by §3. Left alone they would have mis-gated all 40,000 rows.
+  Added gates 17–35 (value execution, expression safety, freshness agreement, taxonomy closure, myth
+  bank, domain↔gold-tool, reasoning-prefix shape).
+- **Honesty items recorded rather than smoothed over:** only **11 of 20** learning-science principles
+  are decidable on a single-turn row (publish 11); **0 of 14** web-search tools are value-executable;
+  `multi-tool-select` heldout 845 **< `live_multiple` 1,037**, so the "never worse CI" rule now fails
+  for that one category; domain is **confounded with provenance**; and `calculator`/`web_search`
+  cannot be held out, so "heldout measures schema generalization" is false for those cells.
+- **Alpha School / 2 Hour Learning claims go in `web-search/*`, never `answer-directly`** — the 2.6×
+  MAP figure is company-sourced and not independently reviewed, and `MYTH.10` is the Bloom 2-sigma
+  claim itself, so the canon and the caution are the same rows. An educational model repeating an
+  unreviewed effect size about its own vendor is the failure most worth designing out.
+- Dolci sampling (100 rows): **only 10% are 3-turn**, so the single-turn filter is severe (~22,750
+  usable, enough for 8,100). Every sampled row's `dataset_source` is
+  `allenai/olmo-toolu-sft-mix-…-bfclv3-decontaminated` — **Dolci is the public release of the private
+  401 mix**, and it already contains arithmetic-shaped tools (`cosine_similarity`,
+  `combinatorics.permutation_count`, `physics.final_velocity`) and search-shaped ones
+  (`top_headlines`). Pedagogy: essentially nothing, hence 100% fresh there.
+
 <!-- next entry goes below -->

@@ -15,6 +15,13 @@ Teach the final OLMo MoE (**~4B active parameters**) to call tools: given a set 
 a user request, emit a **well-formed, schema-valid call with correct arguments** — or decline to
 call anything when no tool fits.
 
+**Three mandated must-haves** (2026-08-08), each at path level 1 so each is independently
+measurable: **arithmetic tools**, **web search**, and a **pedagogy focus**. The third is three
+separable things — pedagogy *tools*, pedagogical *prose*, and learning-science *knowledge* — treated
+separately in [`pedagogy.md`](pedagogy.md), because only the first two are tool calls. The knowledge
+requirement ("know learning science if it isn't web-searchable") is what the new `answer-directly`
+category exists for.
+
 The deliverable of *this* workstream is **the dataset**, not the trained model. A post-training
 pipeline is expected shortly; this work makes sure that when it lands, the data is already the
 right shape and does not need regenerating.
@@ -31,7 +38,8 @@ right shape and does not need regenerating.
 
 | Decision | Choice | Why |
 | --- | --- | --- |
-| Tool domain | **Both** general-purpose APIs **and** edu/tutoring tools, split in the object path | General gives comparability to published baselines; edu is the actual product surface. Path nesting keeps either subtree independently trainable and measurable, and costs nothing now |
+| Tool domain | **Four, at path level 1: `general` · `arithmetic` · `web-search` · `pedagogy`** | Revised 2026-08-08 for the three mandated must-haves. Each sits at level 1 so each is independently trainable, ablatable and measurable by glob. `edu` was **renamed** to `pedagogy`, not added alongside. **Irreversible labelling rule:** a row's domain is the domain of the **gold tool**, not the topic of the user turn — so a pedagogy-topic question answered by `web_search` is `web-search/*`. Domain totals therefore measure gold-tool domain, not inventory composition |
+| Capability axis | **8 categories, identical in all four domains** (32-cell grid) | The eighth, **`answer-directly`**, is forced not cosmetic: `no-suitable-tool` deletes the gold function (BFCL `irrelevance`), whereas `answer-directly` keeps a plausible-looking tool present and calling it is *still* wrong because the answer is settled knowledge. That is the whole "know learning science, don't search for it" requirement, and folding it into `no-suitable-tool` makes it unmeasurable |
 | Capability scope | **Single-turn + irrelevance first.** Multi-turn deferred to a second dataset | Covers the BFCL simple/multiple/parallel/relevance axes. Multi-turn roughly triples generation and verification cost and is where small models are weakest — not the place to discover pipeline bugs |
 | Provenance | **Hybrid: 31.5% reformat / 17.5% derived / 51% fresh synthesis** | Revised 2026-08-08. The five `allenai/olmo-toolu-*` mixes named in `src/scripts/train/sft/README.md` are **all HTTP 401** — foreclosed. But their **public non-thinking equivalent** `allenai/Dolci-Instruct-SFT-Tool-Use` (**227,579 rows**, ungated) is not, and it is already in OLMo's convention, so 10,600 filtered rows come in as a *lift* rather than a translation. ToolACE keeps 2,000 as a provenance hedge; **Hermes is dropped**; xLAM still blocked |
 | **Wire format** | **Adopt OLMo 3's convention verbatim** — `<functions>` / `<function_calls>` / role `environment` | Not invented: those delimiters are **single token ids 100266–100269** in the OLMo-3 instruct tokenizer, carved in place over `<|extra_id_1..4|>` at **unchanged vocab 100278**. Swapping the tokenizer costs no resize and no new embedding rows, and any dolma2-pretrained checkpoint stays byte-compatible |
@@ -82,14 +90,22 @@ The dataset is done when all of these hold:
 
 A row is written only if it passes, in order:
 
-1. **Parse** — the `<tool_call>` payload is valid JSON.
-2. **Resolve** — the named function is one of the tools offered in that row's system message.
+1. **Parse** — the Pythonic call parses to a single **keyword-only** `ast.Call` (calls are not JSON).
+2. **Resolve** — the named function is one of the tools offered in that row's `<functions>` block.
 3. **Schema** — arguments validate against the tool's JSON Schema: required present, no extras,
    types right.
 4. **Abstention rows invert 1–3** — assert that **no** call was emitted.
 5. **Leakage** — the row's dedup key is absent from the opposite partition.
+6. **Value execution** where the gold tool is value-executable — 15 of 18 arithmetic tools and 2
+   pedagogy schedulers. `expected_result` is written by running the stub, never typed, so correctness
+   is a value comparison rather than a shape check. **0 of 14 web-search tools are executable** —
+   that is a stated limit, not a gap.
+7. **Pedagogy tagging** against the frozen taxonomy, and the **myth negatives** — a myth asserted in
+   assistant content is a hard reject unless the row is a correction naming the id and carrying a
+   required refutation token.
 
-Anything not mechanically checkable is not claimed as a quality property.
+Anything not mechanically checkable is not claimed as a quality property. In particular: **11 of 20
+learning-science principles are decidable on a single-turn row** — publish 11, never 20.
 
 ## 7. Hard constraints
 
@@ -117,6 +133,10 @@ Anything not mechanically checkable is not claimed as a quality property.
 | Path layout wrong → republish every byte | **Closed.** Two nesting levels, capability as level 2, forward-compatible with the newer label feature |
 | Upstream data licensing unfit for an open model | ToolACE + Hermes only (both `apache-2.0`); xLAM blocked pending a human decision; ToolBench and Glaive excluded. Record provenance in `sources[]` |
 | Argument-value hallucination | `additionalProperties: false` forced during schema validation, plus an **executable Python stub** for `nested-args`. Argument fidelity is the measured weak slot at ~4B (Hammer-4b: AST simple 62.58, Exec simple 67.79) |
+| **Domain is confounded with provenance** | All 9,600 reformat rows land in `general`; the three new domains are 0% reformat. So any general-vs-pedagogy delta is partly human-curated-vs-synthetic. Unfixable by path — carry a `provenance` row field and **state the confound wherever a cross-domain number appears** |
+| `answer-directly` is the only category where the assistant **asserts facts** | 1,500 rows. k=8 self-consistency is a proxy and k is UNVERIFIED. Needs a **curated fact bank** before publish — the cell most likely to install a confident falsehood |
+| Repeating the org's own unreviewed claims as fact | Any question about Alpha School / 2 Hour Learning results goes in **`web-search/*`, never `pedagogy/answer-directly`**. The 2.6× MAP figure is company-sourced and not independently reviewed. `MYTH.10` *is* the Bloom 2-sigma claim, so the canon and the caution are the same rows |
+| Two domains **cannot** carve heldout by schema | `calculator` and `web_search` must be in train. Substitute axes: operand-magnitude band (arithmetic), entity + parameter bank (web-search). For those cells "heldout measures schema generalization" is **false** and must not be written |
 | Deferring multi-turn defers the **largest** headroom | Accepted deliberately, and stated plainly: multi-turn gaps run −50 to −87 pts below non-live AST, and it is the axis most responsive to data (ToolACE-8B 87.54/**7.75** vs xLAM-2-8b 84.35/**69.25** at identical size — a +61.5 pt swing from data alone). This dataset **cannot move** the categories dominating BFCL v3/v4 scoring |
 | JSON call syntax may be worse than code for small models | Every controlled *inference-time* comparison favours code (programmatic ≥ JSON on 11/14 models, BFCL v4). But all of those test models **not SFT'd for the format**, and JSON is proven at 1.3–1.5B (xLAM, Hammer). No matched small-model JSON-vs-Python SFT comparison exists — **UNVERIFIED**. Hedge: keep the verifier's tool representation format-agnostic so a Python-syntax arm can be emitted from the same verified rows |
 

@@ -3,6 +3,11 @@
 Companion to [`prd.md`](prd.md). This is the *shape* document — what the bytes look like, where
 they sit, and what the validator does to them. Log changes in [`progress.md`](progress.md).
 
+Split out for length: **[`tool-inventories.md`](tool-inventories.md)** (the 64 tool schemas, per
+domain, with held-out siblings and the arithmetic/web-search design decisions) and
+**[`pedagogy.md`](pedagogy.md)** (how "educational" shows up in the bytes — pedagogy tools vs prose
+vs learning-science knowledge, the principle taxonomy, and the myth negatives).
+
 > **Evidence policy.** Claims here are either (a) executed against the installed
 > `edullm-data==0.2.0`, (b) cited to a repo `file:line`, or (c) cited to a paper/dataset card.
 > Anything else is marked **UNVERIFIED**. Two claims in the first draft of this document were
@@ -112,9 +117,11 @@ drops** such messages. Emit `environment`.
   JSON-encoded. Verbatim from a real row: `weather.forecast_weather_api(q="Paris", days=5)`.
 - **Parallel calls are ONE block**, calls joined by a bare `\n` inside it — not two blocks.
 - **No newlines** immediately inside either tag, and nothing after `</function_calls>`.
-- **One leading space before `<functions>`** in system content. AI2's own training bytes went
-  through the legacy `message['functions']` path, which emits `' <functions>'`; the row-level
-  `tools` path emits no separator. INFERRED from template + schema — settle it with §15 Q1.
+- **One leading space before `<functions>`** in system content. Read from the template source, not
+  inferred: the per-message `message['functions']` path emits `' <functions>'`, the row-level `tools`
+  path emits `'<functions>'` with no separator. AI2's own training bytes went through the former, so
+  we match the former. Proven byte-identical by
+  [`verify/verify_render_identity.py`](verify/verify_render_identity.py).
 - **Abstention** = ordinary prose with **zero** occurrences of `<function_calls>`. No positive
   marker; that would be a second thing to get wrong.
 - **No call ids.** Results correlate to calls **positionally** only. This is a real expressiveness
@@ -201,17 +208,68 @@ being outside the dedup key is correct for a grading key.
 conversations/<domain>/<category>/<split>-<NNNNN>.jsonl
 ```
 
-- `<domain>` ∈ `general` | `edu`.
-- **`<category>` is a CAPABILITY band, not a tool family.** The first draft used
-  `edu/gradebook`, `edu/curriculum` — that was a mistake and is corrected here. Two levels is the
-  entire budget; spending level 2 on tool family makes it impossible to ask "is parallel calling
-  worse on edu tools", which is the one cross-domain question the domain split exists to answer.
-  **Tool family rides as a top-level row field.** Category vocabulary is identical in both domains
-  so the subtrees are comparable.
+**Revised 2026-08-08** for the three mandated must-haves — arithmetic tools, web search, pedagogy.
+Only the two *vocabularies* changed; **depth is untouched at exactly two levels.**
+
+- **`<domain>` ∈ `general` | `arithmetic` | `web-search` | `pedagogy`.** `edu` is **renamed** to
+  `pedagogy`, not added alongside it. Each must-have sits at level 1, so each is independently
+  trainable, ablatable and measurable by glob.
+- **`<category>` is a CAPABILITY band, not a tool family** — now **8 values, identical across all
+  four domains**, so the 32-cell grid is a real cross-tab with no holes: `single-call` ·
+  `multi-tool-select` · `parallel-call` · `nested-args` · `relevance-hard` · `no-suitable-tool` ·
+  `missing-args` · **`answer-directly`**. (The first draft used `edu/gradebook` — tool family in the
+  path. That was a mistake; tool family rides as a top-level row field and is **not** sliceable.)
+
+### Why the eighth category is forced, not cosmetic
+
+`no-suitable-tool` is BFCL `irrelevance` — the gold function was **deleted**, so correctness is
+constructive. **`answer-directly` is the opposite construction:** the tool is *present and
+applicable-looking*, and calling it is still wrong because the answer is settled parametric
+knowledge. That is the whole fresh-vs-parametric boundary, and it is precisely what the mandate
+asks for — the model should *know* learning science, not search for it. Folded into
+`no-suitable-tool` it becomes unmeasurable and unreweightable.
+
+### Why the inventory axis belongs at level 1
+
+Globs work either way (`fnmatch` matches basename *or* full path), so the argument is operational:
+**the tool inventory is a property of the domain, not the capability.** Held-out schema carving,
+gate 5 (no function name may carry two schemas corpus-wide), gate 12 (schema-pool disjointness) and
+new gate 34 (domain ↔ gold-tool agreement) are all inventory-scoped. With inventory at level 1 a
+schema-pool audit is a per-directory operation; with capability at level 1 every directory mixes all
+four inventories and the audit can only go through a row field.
+
+*Rejected:* a five-value set adding `learning-science` as its own domain — it would be an
+almost-pure-prose domain whose `parallel-call` and `nested-args` cells are empty or nonsensical,
+destroying the identical-vocabulary property that makes the cross-tab interpretable.
+
+### IRREVERSIBLE labelling rule
+
+**A row's `<domain>` is the domain of the GOLD tool** — for abstention rows, of the deleted or
+tempting tool. Not the topic of the user turn, not the union of the offered inventory. A
+pedagogy-topic question answered by `web_search` is `web-search/single-call`. Quote this whenever a
+domain total is quoted: **domain totals measure gold-tool domain, not inventory composition.**
+
+### What spending the domain axis this way costs
+
+- **Domain is now confounded with provenance.** All 9,600 reformat rows can only land in `general`;
+  the three new domains are **0% reformat**. So any general-vs-pedagogy delta is partly a
+  human-curated-vs-synthetic delta. Unfixable by path — mitigate with a `provenance` row field and
+  **state the confound wherever a cross-domain number appears.** Biggest single cost.
+- **The "general subtree alone sits at ToolACE's controlled 25k" claim dies.** `general` is 15,000.
+  Honest replacement: **general + arithmetic + web-search = 29,000 ≥ 25,000**, because a calculator
+  and a search tool *are* general-purpose tools. Say it that way or not at all.
+- **The axis is dimensionally inhomogeneous** — `arithmetic` and `web-search` are roughly single
+  families promoted to level 1; `pedagogy` holds six; `general` is a catch-all.
+- **Pedagogy tools and pedagogy prose are not separately sliceable.** Partially recovered: since the
+  dichotomy gate forbids prose-plus-call in one turn, *prose-only* pedagogy rows are definitionally
+  abstention rows and land in `pedagogy/{no-suitable-tool,missing-args,answer-directly}`, which are.
 - **Exactly two levels below the group.** 0.2.0 has no `labels_from_path` so a third level would
   not raise *today*, but the newer pipeline derives exactly two label levels and **raises on a
   third**. Two levels keeps us forward-compatible with a feature we would otherwise have to
   republish every byte to adopt.
+
+**Renaming `edu` → `pedagogy` is free right now and never again** — no bytes are published, and path
+is hashed into `manifest_sha256`.
 - **`<split>-<NNNNN>`, no `-of-NNNNN`.** Verified: `train-00000.jsonl` → `('train', 0)`. Both
   `conversations/train.jsonl` (no index) and `train-00000-of-00004.jsonl` are **rejected**.
 - Format `container: "jsonl", codec: "none"`. Declaring `gzip` on a `.jsonl` name is rejected.
@@ -231,81 +289,135 @@ conversations/<domain>/<category>/<split>-<NNNNN>.jsonl
 Verified: those globs match through all nesting levels and are disjoint, as
 `coverage: "partition"` requires. `rows` is emitted by the writer, never hand-typed.
 
-**Heldout is carved by held-out tool schema, before generation** (~12% of schemas per domain →
-~4,000 rows / 10%). The row fraction is a *consequence* of the schema carve, not a knob. A random
-row split leaves the same functions on both sides and measures memorization.
+**Heldout is carved by held-out tool schema, before generation.** A random row split leaves the same
+functions on both sides and measures memorization. Carve rates: **≈9.4% on non-abstention cells,
+15% on abstention cells** — the uplift exists because abstention cells are the smallest *and* the
+ones we must report; without it `no-suitable-tool` heldout falls below BFCL `irrelevance`'s n=240.
+**64 authored schemas, 10 held out (15.6%)**, plus ~12% of the inherited `general` pool
+(data-dependent, UNVERIFIED until the filter runs) — see
+[`tool-inventories.md`](tool-inventories.md).
+
+**Carve rule: hold out the sibling, not the orphan.** A held-out orphan measures nothing; a held-out
+sibling of a trained tool measures schema generalization. Worked examples: `differentiate_expression`
+held out against a trained `integrate_expression`; `openai_web_search` (filters nested) against a
+trained `web_search_configured` (filters flat); `bulk_update_grades` against a trained
+`grade_submission_with_rubric`.
 
 **Schema carving alone is not sufficient.** If heldout user turns come from the same template bank
 as train, heldout measures template recall with a new function name pasted in. **Carve the query
 template bank alongside the schema pool**, or generate heldout queries with a different
 generator/prompt. Nothing in the pipeline can see this.
 
+**Two domains cannot carve by schema at all.** `calculator` and `web_search` are single dominant
+tools that must be in train, so for those cells **"heldout measures schema generalization" is false
+and must not be written.** Substitute axes, which measure a *different* claim and must be named as
+such: arithmetic uses an **operand-magnitude band** (train ≤4-digit, heldout 5–7-digit) and an
+operator-depth band; web-search uses a held-out **entity bank** plus held-out **parameter
+combinations**.
+
+So `carved_by` in the publish call names **four** axes, not one: held-out tool schemas, the query
+template bank, the operand-magnitude band, and the entity bank.
+
 ---
 
-## 6. Composition — 40,000 rows
+## 6. Composition — 40,000 rows across a 32-cell grid
 
-`<category>` = capability. Domain split **general 27,900 (69.75%) / edu 12,100 (30.25%)**.
+**Rules:** total 40,000 · train 36,000 / heldout 4,000 · abstention
+(`no-suitable-tool` + `missing-args` + `answer-directly`) exactly **4,000 = 10.00%** · heldout carve
+**≈9.4% on non-abstention cells, 15% on abstention cells** (the uplift exists because abstention
+cells are the smallest *and* the ones we must report — without it `no-suitable-tool` heldout falls
+below BFCL `irrelevance`'s n=240).
 
-| path (`conversations/…`) | capability / BFCL analogue | rows | % | source |
-| --- | --- | --- | --- | --- |
-| `general/single-call` | 1 tool offered, 1 call — `simple` | 6,300 | 15.75 | reformat 2,400 / synth 3,900 |
-| `general/multi-tool-select` | 3–20 offered, 1 call — `multiple`, `live_multiple` | 7,000 | 17.50 | reformat 2,300 / synth 4,700 |
-| `general/parallel-call` | ≥2 calls in one turn — `parallel`, `parallel_multiple` | 4,500 | 11.25 | reformat 1,200 / synth 3,300 |
-| `general/nested-args` | argument fidelity: nested objects, arrays, enums, unit/date coercion | 5,200 | 13.00 | synth, schema-first + executable stub |
-| `general/relevance-hard` | a tool *does* apply, behind near-miss distractors — `live_relevance` | 2,100 | 5.25 | derive from verified positives |
-| `general/no-suitable-tool` | **abstention**: gold function deleted from inventory — `irrelevance` | 1,960 | 4.90 | derive (Hammer deletion) |
-| `general/missing-args` | **abstention**: required arg absent → clarifying question | 840 | 2.10 | derive (arg elision) |
-| `edu/single-call` | ” | 2,700 | 6.75 | synth |
-| `edu/multi-tool-select` | ” | 3,000 | 7.50 | synth |
-| `edu/parallel-call` | ” | 1,500 | 3.75 | synth |
-| `edu/nested-args` | ” (edu args are richest: rubrics, date ranges, roster filters) | 2,800 | 7.00 | synth |
-| `edu/relevance-hard` | ” | 900 | 2.25 | derive |
-| `edu/no-suitable-tool` | ” | 840 | 2.10 | derive |
-| `edu/missing-args` | ” | 360 | 0.90 | derive |
-| **TOTAL** | | **40,000** | **100** | see revised provenance below |
+| path (`conversations/…`) | rows | % | train | heldout | provenance |
+| --- | --- | --- | --- | --- | --- |
+| `general/single-call` | 3,600 | 9.00 | 3,260 | 340 | reformat 2,600 (Dolci 2,200 / ToolACE 400) + fresh 1,000 |
+| `general/multi-tool-select` | 4,000 | 10.00 | 3,620 | 380 | reformat 3,400 (Dolci 2,800 / ToolACE 600) + fresh 600 |
+| `general/parallel-call` | 2,200 | 5.50 | 1,990 | 210 | reformat 1,700 (Dolci 1,400 / ToolACE 300) + fresh 500 |
+| `general/nested-args` | 2,800 | 7.00 | 2,540 | 260 | reformat 1,900 (Dolci 1,700 / ToolACE 200) + fresh 900 |
+| `general/relevance-hard` | 1,200 | 3.00 | 1,090 | 110 | derived (distractor injection off reformatted positives) |
+| `general/no-suitable-tool` | 700 | 1.75 | 595 | 105 | derived (Hammer schema deletion) |
+| `general/missing-args` | 300 | 0.75 | 255 | 45 | derived (arg elision) |
+| `general/answer-directly` | 200 | 0.50 | 170 | 30 | fresh-curated (conversational / creative only) |
+| **general** | **15,000** | **37.50** | **13,520** | **1,480** | reformat 9,600 / derived 2,200 / fresh 3,200 |
+| `arithmetic/single-call` | 2,400 | 6.00 | 2,175 | 225 | fresh, schema-first, **value-executed** |
+| `arithmetic/multi-tool-select` | 1,300 | 3.25 | 1,180 | 120 | fresh |
+| `arithmetic/parallel-call` | 700 | 1.75 | 635 | 65 | fresh |
+| `arithmetic/nested-args` | 1,600 | 4.00 | 1,450 | 150 | fresh, value-executed (arrays / precision / units / large operands) |
+| `arithmetic/relevance-hard` | 450 | 1.13 | 405 | 45 | derived |
+| `arithmetic/no-suitable-tool` | 250 | 0.63 | 210 | 40 | derived |
+| `arithmetic/missing-args` | 100 | 0.25 | 85 | 15 | derived |
+| `arithmetic/answer-directly` | 200 | 0.50 | 170 | 30 | fresh-curated (mental-arithmetic band) |
+| **arithmetic** | **7,000** | **17.50** | **6,310** | **690** | derived 800 / fresh 6,200 |
+| `web-search/single-call` | 1,900 | 4.75 | 1,720 | 180 | fresh (query built *from* a target document) |
+| `web-search/multi-tool-select` | 1,300 | 3.25 | 1,180 | 120 | fresh |
+| `web-search/parallel-call` | 800 | 2.00 | 725 | 75 | fresh (multi-entity comparison) |
+| `web-search/nested-args` | 1,500 | 3.75 | 1,360 | 140 | fresh (`filters`, `user_location`, date filters) |
+| `web-search/relevance-hard` | 500 | 1.25 | 455 | 45 | derived (provider-spelling near-misses) |
+| `web-search/no-suitable-tool` | 350 | 0.88 | 300 | 50 | derived (all retrieval tools removed) |
+| `web-search/missing-args` | 150 | 0.38 | 125 | 25 | derived |
+| `web-search/answer-directly` | 500 | 1.25 | 420 | 80 | fresh-curated (parametric fact bank, k=8 consistency) |
+| **web-search** | **7,000** | **17.50** | **6,285** | **715** | derived 1,000 / fresh 6,000 |
+| `pedagogy/single-call` | 2,200 | 5.50 | 1,995 | 205 | fresh |
+| `pedagogy/multi-tool-select` | 2,400 | 6.00 | 2,175 | 225 | fresh |
+| `pedagogy/parallel-call` | 900 | 2.25 | 815 | 85 | fresh |
+| `pedagogy/nested-args` | 3,200 | 8.00 | 2,890 | 310 | fresh (`rubric_assessment`, `grade_data`, Caliper envelopes) |
+| `pedagogy/relevance-hard` | 1,050 | 2.63 | 950 | 100 | derived |
+| `pedagogy/no-suitable-tool` | 400 | 1.00 | 340 | 60 | derived |
+| `pedagogy/missing-args` | 250 | 0.63 | 210 | 40 | derived (learner state unspecified) |
+| `pedagogy/answer-directly` | 600 | 1.50 | 510 | 90 | fresh-curated (myth / low-utility / contested bank) |
+| **pedagogy** | **11,000** | **27.50** | **9,885** | **1,115** | derived 1,700 / fresh 9,300 |
+| **TOTAL** | **40,000** | **100.00** | **36,000** | **4,000** | |
 
-**Provenance, revised 2026-08-08** once `allenai/Dolci-Instruct-SFT-Tool-Use` was found public
-(§8). Fresh synthesis drops from 67.75% → **51.0%**; roughly 8,000 rows of generate-and-verify work
-becomes a filter-and-lift pass over data already in the exact target shape.
+**Category totals (rows / heldout):** single-call 10,100 / 950 · multi-tool-select 9,000 / 845 ·
+parallel-call 4,600 / 435 · nested-args 9,100 / 860 · relevance-hard 3,200 / 300 ·
+no-suitable-tool 1,700 / 255 · missing-args 800 / 125 · answer-directly 1,500 / 230.
 
-| Provenance | Rows | % | Where |
-| --- | --- | --- | --- |
-| Reformat — AI2 `Dolci-Instruct-SFT-Tool-Use` | **10,600** | 26.5 | `general/single-call` 4,000 · `general/multi-tool-select` 4,200 · `general/parallel-call` 2,400 |
-| Reformat — `Team-ACE/ToolACE` (provenance hedge) | **2,000** | 5.0 | 800 / 800 / 400 across the same three |
-| Derived (schema deletion, arg elision, distractor injection — now off *reformatted* positives) | **7,000** | 17.5 | `*/relevance-hard` 3,000 · `*/no-suitable-tool` 2,800 · `*/missing-args` 1,200 |
-| Fresh synthesis | **20,400** | 51.0 | all 12,100 edu less its 2,100 derived → 10,000 · `general/nested-args` 5,200 · general top-up 5,200 |
-| **TOTAL** | **40,000** | 100 | **31.5% reformat / 17.5% derived / 51.0% fresh** |
+### Provenance roll-up
 
-Deriving negatives from 227K human-curated AI2 positives is also strictly better than deriving them
-from our own synthesis — it breaks the circularity of grading a synth generator against negatives
-derived from that same generator.
+| Provenance | Rows | % |
+| --- | --- | --- |
+| Reformat — AI2 `Dolci-Instruct-SFT-Tool-Use` 8,100 + `ToolACE` 1,500 | **9,600** | **24.00** |
+| Derived (schema deletion, arg elision, distractor injection) | **5,700** | **14.25** |
+| Fresh synthesis (23,200 schema-first + 1,500 curated `answer-directly`) | **24,700** | **61.75** |
 
-**Abstention = 10.0%** (`no-suitable-tool` 2,800 + `missing-args` 1,200 = 4,000). Best-evidenced
-number here: Hammer swept the ratio on 10,000 sampled instances fine-tuning **Qwen2-1.5B-Instruct**,
-found the optimum ≈10%, shipped 7,500/67,500 = 11.1%. The per-ratio curve is **figure-only,
-UNVERIFIED**, so what 5% vs 20% costs is not knowable from the literature. Split 70/30 between the
-two flavours because "no suitable tool" is what BFCL `irrelevance` actually scores.
+Fresh rises from 51.0% → **61.75%**. That is the honest price of the mandate: the three new domains
+have **no reusable upstream at all**, so roughly +4,300 rows of generate-and-verify work. The
+reformat commitment *drops* from 12,600 to 9,600, deliberately leaving **24% headroom** for the
+single-turn filter, the ≤2%-per-function cap, our own BFCL decontamination and the role-set
+assertion. **Measured:** only **10 of 100** sampled Dolci rows are 3-turn, so the single-turn yield
+is ~10% (≈22,750 rows) — enough for 8,100, but the filter is severe and the estimate is a sample.
+Opportunistic upside: Dolci rows whose tools are semantically arithmetic or retrieval (the sample
+shows `cosine_similarity`, `is_power_of_two`, `physics.final_velocity`,
+`combinatorics.permutation_count`, `top_headlines`) can be **rerouted** to those domains, displacing
+fresh synthesis. Yield UNVERIFIED — **plan on zero**.
 
-**Why 40,000 — stated honestly: there is no published data-quantity sweep for function-calling SFT
-at any scale.**
+### Per-domain totals, justified
 
-- **Floor 25,000** — the only *controlled* datapoint: ToolACE's matched 25k SFT on
-  Llama-3.1-8B-Instruct → BFCL-v3 overall 58.19 / non-live AST 86.96 / irrelevance 86.42, beating
-  xLAM-25k (40.51 / 81.94 / 11.87) and ToolLLM-25k (24.90 / 42.46 / 4.41) at identical size.
-- **40,000 recommended** — the general subtree alone (27,900) already sits at that controlled
-  point, so the domain we want comparability for is independently at a demonstrated size; edu adds
-  on top. Inside the 25k–67.5k band every leaderboard-competitive small-model recipe occupies.
-- **Ceiling 67,500** — Hammer (60k xLAM + 7.5k irrelevance); 60k is the only size with a
-  demonstrated sub-2B success. Reachable only if xLAM licensing resolves permissively (§8).
-- **Not a target: ~100 rows.** "Awakening the Sleeping Agent" moves a model 0% → 83.8% BFCL with
-  ~100 traces, but that is *format reactivation* on a model with latent tool ability. It bounds the
-  cheapness of the syntax component, not capability acquisition.
+`general` 15,000 keeps the whole reformat slice plus enough fresh top-up that no single upstream
+exceeds ~54% of the domain. `arithmetic` and `web-search` at 7,000 each have the narrowest tool
+surface, so rows buy less new schema coverage and go instead into argument fidelity and the
+abstention boundary — **7,000 is a judgement, not evidence: there is no published data-quantity
+sweep for a multi-domain function-calling split. UNVERIFIED.** Because domain is level 1, reweighting
+is a glob change with no regeneration, which makes this the cheapest thing in the design to be wrong
+about. `pedagogy` 11,000 is the largest non-general domain because it carries 20 schemas with the
+deepest nesting *and* the learning-science surface.
 
-Category weighting is **directional only**. The one size-matched signal is Hammer-4b's per-slot
-table: AST simple **62.58** vs multiple 77.72 / parallel 69.12 / parallel-multiple 68.92, and Exec
-simple **67.79**. At ~4B the weak slot is *argument-value fidelity*, not function selection —
-which is why `nested-args` gets 8,000 rows (20%) despite having no BFCL category, and why
-`single-call` is not the largest cell.
+**`nested-args` = 9,100 (22.75%)**, up from 8,000, because the two new domains contribute the deepest
+*real* nesting in the corpus (Canvas `rubric_assessment` criterion maps, Perplexity's 13 constrained
+params, Anthropic `user_location`) and because argument-value fidelity is the measured weak slot at
+~4B (Hammer-4b AST simple **62.58** vs multiple 77.72; Exec simple **67.79**).
+
+**Abstention stays exactly 10.00%**, now split three ways: `no-suitable-tool` 1,700 +
+`missing-args` 800 + `answer-directly` 1,500. Note train abstention is 9.42% while *total* is
+10.00%, a consequence of the 15% carve uplift. The Hammer evidence for ~10% was a **two-way**
+call/no-call sweep at 1.5B; a three-way split at 4B active is a different question — UNVERIFIED, and
+still the best ablation candidate, re-weightable by three globs.
+
+**Smallest cell is `arithmetic/missing-args` at 100 rows / 15 heldout** — below the 200-row
+reporting floor. Pool it into a domain-pooled abstention column; never report it alone.
+
+Deriving negatives from human-curated AI2 positives rather than from our own synthesis also breaks
+the circularity of grading a synth generator against negatives derived from that same generator.
 
 ---
 
@@ -404,22 +516,22 @@ incoherence.
 Fixes required on ToolACE rows: drop empty `{"from":"assistant","value":""}` rows (documented, and
 trains the model to emit `""`); repair find-replace corruption in API **names and param names**
 (`valistring`←`valid`, `start_string`←`date`); convert bracket calls
-`[Quotes by Keywords(word="inspiration")]` → our JSON-in-`content`; parse tool specs out of the
-free-text `system` string; classify the four modes ourselves (unannotated); fix temporal
+`[Quotes by Keywords(word="inspiration")]` → our inlined `<function_calls>` form; parse tool specs
+out of the free-text `system` string; classify the four modes ourselves (unannotated); fix temporal
 incoherence ("last financial year"→2025, "past month"→2022).
 
-Fixes on Hermes: **shuffle before splitting** (rows are grouped by category, ~15 consecutive "IoT
-and Home Automation"); undo doubled JSON escaping; pick one key order — the card shows
-`{"arguments":…,"name":…}` inside `<tool_call>` but `{"name":…,"arguments":…}` in history. We are
-name-first everywhere.
+**Dolci is the public release of the private mix.** Measured on 100 sampled rows: every one carries
+`dataset_source: "allenai/olmo-toolu-sft-mix-T2-S2-f2-bfclv3-decontaminated"` — the same name as the
+401 dataset in `src/scripts/train/sft/README.md:52`, minus the `-200K-thinking-id-fixed` suffix. So
+the rows themselves assert the BFCL-v3 decontamination provenance. That is a **producer assertion we
+do not recompute**, which is exactly why gate 15's decontamination stays on our side of the line —
+but it is materially stronger than "unverified".
 
-**Not yet investigated, and possibly the most valuable source of all:** AI2's own OLMo-3 SFT mix
-already contains tool-use data — `src/scripts/train/sft/README.md:52-56` lists
-`allenai/olmo-toolu-sft-mix-T2-S2-f2-bfclv3-decontaminated-200K-thinking-id-fixed` plus four
-`allenai/olmo-toolu-s2-sft-*` mixes, and the tokenizer
-`allenai/dolma-2-tokenizer-olmo-3-instruct-final` **carries its own chat template** (line 64: "the
-chat template is loaded from the tokenizer"). If that template already defines tool-call
-delimiters, §3 and §7 should **match OLMo's own convention rather than invent one**. See §12 Q1.
+**Tool families actually present** (100-row sample): arithmetic-shaped tools already exist
+(`cosine_similarity`, `is_power_of_two`, `physics.final_velocity`,
+`combinatorics.permutation_count`, `cell_density`), and search-shaped ones (`top_headlines`,
+`searchjobs`, `matricula.api.search`). **Pedagogy: essentially nothing** — which is why all 11,000
+pedagogy rows are fresh synthesis.
 
 ---
 
@@ -435,20 +547,36 @@ better thing to publish anyway.
 Heldout rows keep the full conversation including the gold assistant turn (the leakage check must
 see the call — that is why it is in `content`); the harness truncates at the last `user` message.
 
-| our heldout shards | BFCL category | BFCL n | ours (gen) | ours (edu) |
-| --- | --- | --- | --- | --- |
-| `*/single-call/heldout-*` | `simple_python` | 400 | 630 | 270 |
-| `*/multi-tool-select/heldout-*` | `multiple` / `live_multiple` | 200 / 1037 | 700 | 300 |
-| `*/parallel-call/heldout-*` | `parallel` / `parallel_multiple` | 200 / 200 | 450 | 150 |
-| `*/nested-args/heldout-*` | none — grades *into* AST arg checking | — | 520 | 280 |
-| `*/relevance-hard/heldout-*` | `live_relevance` | ~41 (UNVERIFIED) | 210 | 90 |
-| `*/no-suitable-tool/heldout-*` | `irrelevance` / `live_irrelevance` | 240 / 875 | 196 | 84 |
-| `*/missing-args/heldout-*` | `multi_turn_miss_param` (multi-turn only) | 200 | 84 | 36 |
-| **total** | | | **2,790** | **1,210** |
+Heldout rows also carry a top-level **`answer_key`** with per-slot *sets* of acceptable values,
+mirroring BFCL's `possible_answer/` — without it AST exact-match under-reports, because BFCL
+explicitly allows multiple correct values per slot.
+
+| our heldout shards (all 4 domains) | BFCL category | BFCL n | ours |
+| --- | --- | --- | --- |
+| `*/single-call/heldout-*` | `simple_python` | 400 | **950** |
+| `*/multi-tool-select/heldout-*` | `multiple` / `live_multiple` | 200 / 1037 | **845** |
+| `*/parallel-call/heldout-*` | `parallel` / `parallel_multiple` | 200 / 200 | **435** |
+| `*/nested-args/heldout-*` | none — grades *into* AST arg checking | — | **860** |
+| `*/relevance-hard/heldout-*` | `live_relevance` | ~41 (UNVERIFIED) | **300** |
+| `*/no-suitable-tool/heldout-*` | `irrelevance` / `live_irrelevance` | 240 / 875 | **255** |
+| `*/missing-args/heldout-*` | `multi_turn_miss_param` (multi-turn only) | 200 | **125** |
+| `*/answer-directly/heldout-*` | **none** | — | **230** |
+| **total** | | | **4,000** |
 
 Sizing rule: **each category ≥ its BFCL counterpart's n** where one exists, so our confidence
 interval is never worse than the number we compare against. Deliberately not replicated:
 `live_parallel` at 16 cases, where one flip moves the column 6.25 pts.
+
+**Two comparability regressions to state, not bury.** `multi-tool-select` at **845 < live_multiple's
+1,037** — the "never worse CI" rule now fails for that one category; either accept the wider interval
+or move ~200 rows in from `general/single-call`. `missing-args` at **125 < 200**, though
+`multi_turn_miss_param` is multi-turn-only so the comparison was always notional. The win bought by
+the 15% abstention carve: `no-suitable-tool` **255 ≥ 240** ✓.
+
+**`answer-directly` has no BFCL counterpart.** Report it as its own column and **never fold it into
+Hallucination** — it is a different construction from `irrelevance` (§4). Also:
+`arithmetic/heldout-*` is the only slice with non-AST ground truth, so it is the only one that can
+carry an Exec-style number.
 
 Reporting rules that make the numbers comparable rather than merely similar:
 
@@ -459,8 +587,9 @@ Reporting rules that make the numbers comparable rather than merely similar:
   and Live and reports them separately as Hallucination.
 - **Grade AST-only and say so.** BFCL v4 comments out `exec_*`/`rest`/`sql` from default scoring,
   so AST-only is now the *same shape* as v4 default — we do not need live APIs to be comparable.
-- **Pool any cell under 200 rows** before reporting (`edu/no-suitable-tool` 84,
-  `edu/missing-args` 36, `edu/relevance-hard` 90) → report domain-pooled at 280 / 120 / 300.
+- **Pool any cell under 200 rows** before reporting. With 32 cells this now bites hard: 6 of the 12
+  abstention cells are under the floor (smallest is `arithmetic/missing-args` at 100 rows / 15
+  heldout). Report those domain-pooled, never alone.
 - **Do not claim a BFCL overall.** v4's stated weighting (Agentic 40% + Multi-Turn 30% + Live 10% +
   Non-Live 10% + Hallucination 10%) conflicts with the leaderboard's "unweighted average" text, and
   this dataset touches **0%** of Agentic and Multi-Turn.
@@ -470,62 +599,153 @@ Reporting rules that make the numbers comparable rather than merely similar:
 ## 10. Generation + verification
 
 No LLM judge in the write path; a judge's verdict is advisory and never decides admissibility.
-Cheap gates first. **Per row, dropped if any fails:**
+Cheap gates first.
 
-1. **Container** — line parses; `messages` non-empty; every message has non-empty string `role` and
-   a present `content`. We additionally require `content` to be a **non-empty string** (§2) and
-   `role ∈ {system,user,assistant,tool}` (the profile enforces neither).
-2. **Schema block** — exactly one `system` at index 0, exactly one `<tools>…</tools>`, parses as a
-   JSON array, each `parameters` validates against the JSON Schema 2020-12 metaschema.
-3. **Assistant dichotomy** — assistant `content` is *either* only `<tool_call>` blocks separated by
-   single newlines, *or* contains zero `<tool_call>`/`</tool_call>`. Mixed prose-plus-call is
-   rejected: unambiguous for a 4B model, exact for the verifier.
-4. **Call payload** — body is a JSON object with exactly `{name, arguments}`, `arguments` an object,
-   **name-first** checked by compact re-serialisation and byte comparison.
-5. **Resolve** — `name` is declared in *that row's* `<tools>`. Plus globally: no function name may
-   appear anywhere in the corpus with two different schemas (Glaive's documented defect).
-6. **Schema validation** — `jsonschema` validate `arguments` with `additionalProperties: false`
+> **Gates 1–8 were corrected 2026-08-08.** They still named the first draft's invented
+> `<tools>`/`<tool_call>` delimiters and its name-first JSON payload, all of which §3 superseded.
+> Left as they were, every one of the 40,000 rows would have been mis-gated. Do not reintroduce the
+> old strings.
+
+**Per row, dropped if any fails:**
+
+1. **Container** — line parses; `messages` non-empty; every message has a non-empty string `role` and
+   a present `content`. We additionally require `content` to be a **non-empty string** (§2, since the
+   profile accepts `null`) and `role ∈ {system, user, assistant, `**`environment`**`}` — **not
+   `tool`** — because the profile enforces no role set and the Think template silently drops `tool`.
+2. **Schema block** — exactly one `system` at index 0, exactly one `<functions>…</functions>`, whose
+   body parses as a **single-line JSON array**; each `parameters` validates against the JSON Schema
+   2020-12 metaschema.
+3. **Assistant shape** — see gate 35: `prose? <function_calls>…</function_calls>` with nothing after,
+   *or* zero occurrences of `<function_calls>`. Note OLMo uses **one** block with calls joined by a
+   bare `\n` *inside* it, never multiple blocks.
+4. **Call payload** — calls are **Pythonic, not JSON**. `ast.parse(body, mode="eval")` must yield a
+   single `ast.Call` whose `func` is an `ast.Name`/`ast.Attribute`, with **keyword arguments only**
+   (no positional), each value a JSON-decodable literal.
+5. **Resolve** — the called name is declared in *that row's* `<functions>`. Plus globally: no function
+   name may appear anywhere in the corpus with two different schemas (Glaive's documented defect).
+6. **Schema validation** — `jsonschema` validate the arguments with `additionalProperties: false`
    forced (catches invented params); all `required` present; types/`enum`/`format` correct.
 7. **Value plausibility, partial** — enum membership, declared numeric bounds, ISO-8601 parse where
    `format: date-time`, unit consistency where a unit enum exists. Not general semantics.
-8. **Abstention rows invert 3–6** — zero `<tool_call>`; the intended function is **absent** from
-   `<tools>` (the Hammer deletion, so correctness is *constructive*, not judged); assistant content
-   contains no function name from the global inventory.
+8. **Abstention rows invert 3–6** — zero `<function_calls>`; for `no-suitable-tool` the intended
+   function is **absent** from `<functions>` (the Hammer deletion, so correctness is *constructive*,
+   not judged); assistant content contains no function name from the global inventory.
 9. **`missing-args` rows** — no call; content contains `?` and names ≥1 `required` parameter of the
    intended tool that is absent from the user turn. A mechanical proxy, and the strongest available.
-10. **Executable stub, `nested-args` only** — every synthesised tool ships a type-annotated Python
-    stub; `inspect.signature(stub).bind(**arguments)` then call it; admissible only if it returns.
-    The one place execution earns its cost: it catches coercion and range errors JSON Schema
-    cannot, and argument fidelity is the measured weak slot at 4B.
+10. **Executable stub** — `nested-args` **plus every row whose gold tool is value-executable**;
+    `inspect.signature(stub).bind(**arguments)` then call it. Compared **by value** where possible
+    (gate 17), not merely "it returned".
 11. **Token budget** — tokenize with dolma2, record `n_tokens_dolma2` as a top-level field, reject
     over the SFT sequence length. That length is UNVERIFIED until post-training fixes it; recording
-    the field lets the trainer filter later without re-tokenizing. A 20-schema `system` message can
-    blow the window on its own.
+    the field lets the trainer filter later without re-tokenizing. A 20-schema `system` message plus
+    Perplexity's 13-parameter schema plus a reasoning prefix can blow the window on its own.
 
 **Pre-publish, over the whole build directory:**
 
-12. **Schema-pool disjointness** — every tool name in a row's `<tools>` belongs to the pool matching
-    that file's split. This converts "heldout carved by schema" from an intention into a fact.
-    Nothing in the pipeline checks it for us.
+12. **Schema-pool disjointness** — every tool name in a row's `<functions>` belongs to the pool
+    matching that file's split. Converts "heldout carved by schema" from intention into fact.
 13. **Recompute the profile's leakage key locally** — sha256 over `role \x1f content` per message;
-    assert `train ∩ heldout = ∅` **before** uploading. With `max_leakage: 0`, 40,000 rows and a
-    finite schema pool, one accidental duplicate refuses the entire publish. Do not discover this in
-    landing. Also report the within-partition duplicate rate.
+    assert `train ∩ heldout = ∅` **before** uploading. With `max_leakage: 0`, 40,000 rows and a finite
+    schema pool, one accidental duplicate refuses the entire publish. Do not discover this in landing.
 14. **Naming and depth** — `parse_shard_name` on every basename; reject `-of-NNNNN` and index-less
     names; assert the path is exactly `conversations/<domain>/<category>/<split>-NNNNN.jsonl` so a
     third nesting level can never slip in.
 15. **Diversity caps** — no single function >**2%** of its category's rows; no single user-turn
-    5-gram >**0.5%**. These are Glaive's exact failure modes (`generate_password`/`calculate_tip`
-    dominance; "Can you order a pizza for me?" as the sole refusal trigger, which teaches
-    pizza-refusal rather than relevance).
-16. **Temporal coherence** — each row carries a top-level `as_of`; every date-typed argument falls
-    in a declared window around it.
+    5-gram >**0.5%**. Glaive's exact failure modes (`calculate_tip` dominance; "Can you order a pizza
+    for me?" as the sole refusal trigger, which teaches pizza-refusal rather than relevance).
+16. **Temporal coherence** — each row carries a top-level `as_of`; every date-typed argument falls in
+    a declared window around it.
 
-**Not machine-checkable — do not claim it:** whether the chosen tool is the one a competent human
-would choose (mitigated *constructively*: generate the query **from** the chosen schema so the label
-is true by construction, and reject rows where ≥2 tools validate the same `arguments`); whether a
-user turn is natural; whether a tool *result* payload is realistic; whether a clarifying question
-is the *best* one.
+### Domain-specific gates (17–35)
+
+**Arithmetic**
+
+17. **Value-execution** — for every row whose gold tool is value-executable (15 of 18 arithmetic
+    tools, 2 pedagogy schedulers): bind, run the stub, compare against top-level `expected_result`.
+    Strictly stronger than gate 10. `expected_result` is stub-written, never hand-typed.
+18. **Operand-magnitude consistency** — in `arithmetic/answer-directly`: ≤2 operands, both |x| ≤ 12,
+    operator ∈ {+, −, ×}. In `arithmetic/{single-call,nested-args,parallel-call}`: ≥1 operand >12
+    **or** ≥3 operators. Stops the two mirror cells teaching contradictory thresholds.
+19. **Numeric formatting** — an integer-valued result must not render as `…​.0`; an irrational result
+    must carry `precision`/`digits` or route through `round_and_format`. Targets the documented
+    `551368 / 82 → 6724.0` class of failure.
+20. **Expression safety** — every `expression` string must evaluate under
+    `numexpr.evaluate(expr, global_dict={}, local_dict={"pi":…, "e":…})`; any identifier outside that
+    set rejects the row. This makes the LangChain calculator-exfiltration shape
+    (`os.environ["OPENAI_API_KEY"]` through the expression) **unrepresentable in the corpus**, so we
+    never train it. `sympify` is assumed **not** hardened for this threat model — UNVERIFIED.
+
+**Web search**
+
+21. **Domain-filter shape** — `allowed_domains` and `blocked_domains` together → reject (providers
+    return 400). No scheme in domain strings; ≤100 entries (OpenAI); ≤20 entries and ≤253 chars each
+    (Perplexity `search_domain_filter`).
+22. **`user_location`** — `type` exactly `approximate`; ≥1 of city/region/country/timezone; `country`
+    a valid ISO 3166-1 alpha-2; `timezone` ∈ `zoneinfo.available_timezones()`.
+23. **Date format** — Perplexity `search_*_date_filter` must match `MM/DD/YYYY`; no filter may name a
+    date after the row's `as_of`.
+24. **Freshness agreement** — every web-search row carries `freshness ∈ {static, slow, fast}`.
+    Assert `*/answer-directly ⟹ static` and `web-search/{single-call,parallel-call} ⟹ {slow, fast}`.
+25. **Parametric-knowledge consistency** — every `*/answer-directly` assertion is either in the
+    curated fact bank or survives **k=8 samples at 8/8 agreement**; failures are demoted to
+    `web-search/single-call`. This is a *consistency measurement*, not an LLM judge, so it does not
+    violate the no-judge-in-the-write-path rule. **k=8 is a choice; the optimal k is UNVERIFIED.**
+
+**Pedagogy**
+
+26. **Taxonomy closure** — every id in `principles_present` / `principles_violated` /
+    `myths_asserted` / `myth_corrected` must appear in the frozen v1 id list (§17). Unknown → reject.
+    Never renumber; deprecate.
+27. **Tool→principle entailment** — `principles_present ⊆ map[gold_tool] ∪ arg_conditioned(...)`
+    using §17's frozen map. A row claiming spaced repetition without a scheduling tool and without an
+    explicit named interval in prose is rejected.
+28. **Expertise-reversal matched pair** — `pair_id` appears exactly twice; the arms differ in
+    `learner_level`; their assistant `content` differs; computed support density is strictly greater
+    in the novice arm. The only pairwise gate, and the only way scaffolding/fading is reachable in v1.
+29. **Myth gate** — frozen regex bank over **assistant content only**. A hit rejects, *unless* the row
+    is in `*/answer-directly`, names the id in `myth_corrected`, **and** matches ≥1 token from that
+    myth's frozen refutation bank. Without the co-occurrence requirement, "learning styles" in a
+    correction is indistinguishable from an assertion.
+30. **Overclaim policy** — reject: `(immediate|delayed) feedback is (better|superior)` without a
+    conditioning token from {procedural, conceptual, novice, expert, acquisition, retention,
+    transfer}; "2 sigma"/"2σ" without a confound token; the 0.4–0.7 formative figure presented as an
+    effect size; germane load asserted as a third additive load; "10,000 hours" outside a correction.
+31. **Unlabelable-tag guard** — assert the four structurally undecidable tags are absent from
+    `principles_present` unless their precondition is met in-row. If the format has no session
+    boundary, do not fake spacing.
+32. **Citation closure** — citations must be ids in §17's frozen table, and a row **may not emit
+    volume or page numbers for an entry flagged unverified**.
+
+**Cross-domain**
+
+33. **`abstain_reason` ↔ path** — `abstain_reason ∈ {no_tool_matches, required_arg_absent,
+    answer_is_parametric}` must match the category segment (`no-suitable-tool` / `missing-args` /
+    `answer-directly`). One shared negative-example schema across all four domains, auditable.
+34. **Domain ↔ gold tool** — the gold tool's domain, from §17's frozen tool→domain registry, must
+    equal the `<domain>` path segment; for abstention rows, the deleted or tempting tool's must.
+    **This is the gate that keeps the domain axis honest**; without it §4's labelling rule is an
+    intention rather than a fact.
+35. **Reasoning-prefix shape** — assistant content containing a call must match exactly
+    `prose? <function_calls>…</function_calls>` with nothing after; prose ≤2 sentences and ≤40 dolma2
+    tokens, zero `<function_calls>` inside it, `reasoning_prefix_tokens` recorded. Replaces the strict
+    dichotomy formerly in gate 3. The prefix is mechanically strippable, so the
+    with-prefix/without-prefix ablation stays free — but the claim that it *helps* is **UNVERIFIED**
+    (the supporting evidence is inference-time, on models not trained for the format).
+
+### Not machine-checkable — do not claim it
+
+- Whether the chosen tool is the one a competent human would choose. Mitigated **constructively**:
+  generate the user turn *from* the chosen schema so the label is true by construction, and reject
+  rows where ≥2 tools validate the same arguments.
+- Whether a pedagogical move is right **for this learner**; whether prose is level-appropriate;
+  whether a hedge on a contested claim is *proportionate* (we check a conditioning token is present —
+  presence is not sufficiency).
+- Whether a citation is **correct** — only that its id is in the frozen table.
+- Whether a user turn is natural, a tool result realistic, or a clarifying question the *best* one.
+- **Search-query quality has no established scorer.** BFCL grades the `answer` field and deliberately
+  ignores free-text justification; we have no environment turn, so the emitted query *is* the graded
+  object. Our `query_required_terms` / `query_forbidden_terms` scorer is **ours alone** — never
+  present it as a BFCL number.
 
 ---
 
@@ -650,8 +870,9 @@ from edullm_data.s3 import Boto3S3
 publish(
     "data/tool-call/",                                  # gitignored via /data/
     dataset_id="sft/tool-call-single-turn",
-    purpose="Single-turn tool-call SFT conversations, general + edu tool inventories with a "
-            "held-out API split, to teach function calling to the ~4B-active OLMo MoE",
+    purpose="Single-turn tool-call SFT conversations across general, arithmetic, web-search and "
+            "pedagogy tool inventories with a held-out schema split, to teach function calling "
+            "to the ~4B-active OLMo MoE",
     profile="sft-conversations/v1",
     s3=Boto3S3.default(),
     created_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -665,7 +886,9 @@ publish(
             ],
             "dedup":   {"method": "sha256-of-role-and-content", "scope": "within-group"},
             "leakage": {"method": "train-heldout-key-intersection", "max_leakage": 0,
-                        "carved_by": "held-out tool schemas + query templates, before generation"},
+                        "carved_by": "held-out tool schemas; query-template bank; "
+                                     "operand-magnitude band (arithmetic); entity bank "
+                                     "(web-search) — all fixed before generation"},
         }
     },
     sources=[...],   # AI2 Dolci (ODC-BY attribution) + ToolACE — record scope honestly
@@ -697,10 +920,16 @@ at unchanged vocab 100278. `allenai/dolma-2-tokenizer-olmo-3-instruct-final` is 
 The `olmo-toolu-*` mixes are **all 401**, but the public non-thinking equivalent
 `allenai/Dolci-Instruct-SFT-Tool-Use` (227,579 rows) replaces them.
 
+**Answered 2026-08-08** (was Q1): byte-identity is **proven**, not inferred —
+[`verify/verify_render_identity.py`](verify/verify_render_identity.py) renders 5 real Dolci rows both
+as AI2 publishes them and as we inline them, `IDENTICAL=True` on all 5 including a 27-turn row. The
+leading space is read from the template source: per-message `functions` emits `' <functions>'`, the
+row-level `tools` path emits `'<functions>'`.
+
 | # | Question | Blocks |
 | --- | --- | --- |
-| 1 | **Render one Dolci row through `Olmo-3-7B-Instruct/chat_template.jinja` and diff against the same row inlined per §3.** Settles the leading-space question and proves byte-identity in one command | **The reformat pass. Do not start it before this passes** |
-| 2 | Held-out schema list + fraction, **and** the held-out query-template bank (§5) | **Generation start** |
+| 1 | **Does the registry chat template corrupt our inlined rows?** The README's `olmo123` is a placeholder that falls back to the tokenizer's own template, but the *registry's* `olmo` template reportedly appends `" You do not currently have access to any functions. <functions></functions>"` when a system message carries no `functions` **field** — which every one of our rows deliberately lacks. **UNVERIFIED, one-command check.** It would corrupt all 40,000 rows | The tokenization run, not the publish. Run it before any GPU time is spent |
+| 2 | The **curated fact bank** for the 1,500 `answer-directly` rows. k=8 consistency is a proxy and k is UNVERIFIED | Publishing `answer-directly`. This is the cell most likely to install a confident falsehood |
 | 3 | **Dolci licence sign-off** — ODC-BY is stated in the description prose with **no `license:` key** in frontmatter. Weaker than a tagged licence; needs a human, same decision class as xLAM | All 10,600 reformat rows, i.e. 26.5% of the corpus |
 | 4 | **xLAM licensing** — `cc-by-4.0` tag vs research-only prose | Whether the total can reach 67,500 |
 | 5 | Post-training **sequence length** | §10 gate 11, and max tools per row |
@@ -739,3 +968,27 @@ Every private `olmo-toolu-*` mix is named `thinking`, and the one public thinkin
 - **Keep CODI and tool-call as separate `dataset_id`s.** A with-trace and without-trace version of
   the same row do *not* collide under `_dedup_key` (different `content`), so the validator would
   accept both in one dataset. That is a hash artifact, not a licence to do it.
+
+---
+
+## 17. Frozen artifacts
+
+Gates 26–32 and 34 read from these. They are **code inputs, not documentation** — versioned,
+diffable, and frozen at first publish. Living under `docs/tool-call/frozen/` when written.
+
+| Artifact | Consumed by | Note |
+| --- | --- | --- |
+| Learning-science principle id list (`LS.*`) | gates 26, 27, 31 | 20 ids, **11 decidable on a v1 row** — publish 11, never 20 |
+| Myth + low-utility id list (`MYTH.*`, `LOWU.*`) | gates 26, 29 | 10 myths + 5 low-utility strategies |
+| Myth → required-refutation-token bank | gate 29 | without the co-occurrence requirement a correction is indistinguishable from an assertion |
+| Bloom verb → level table | gate 26 | the labeller may not improvise verbs |
+| Citation table, **with a per-entry `verified` flag** | gate 32 | a row may not emit volume/page numbers for an unverified entry |
+| Tool → domain registry | **gate 34** | this is what keeps the domain axis honest; without it §4's labelling rule is an intention, not a fact |
+| Tool → allowed-principle map | gate 27 | plus the argument-conditioned extensions |
+
+**Never renumber an id — deprecate it.** Ids are baked into published rows, and a renumber silently
+re-labels history.
+
+Pin a **retrieval date per schema** in the tool registry: third-party schemas drift (Anthropic ships
+three `web_search_*` versions with different defaults; several CASE and Eedi field lists are already
+UNVERIFIED). Nothing about this blocks a publish, but it blocks any claim the schemas are *current*.
