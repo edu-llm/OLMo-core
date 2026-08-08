@@ -47,6 +47,9 @@ def cells_by_run(project: str = WANDB_PROJECT) -> Dict[str, List[Tuple[str, int,
         # The cell's identity is its seed, not its name: every cell of a fan-out shares the
         # run id and the suffix is the same for all of them, so a name-based label would
         # print the same string five times and hide exactly what this is here to show.
+        # The arm is not in the logged config -- train_on_corpus writes the model and trainer
+        # configs but not which arm chose them -- so the caller supplies the label and this
+        # only distinguishes the replicates within a submission.
         seed = run.config.get("init_seed", "?")
         grouped.setdefault(short, []).append(
             (f"seed {seed}", int(step) if step is not None else -1, run.state)
@@ -82,7 +85,8 @@ def report(run_prefix: str, expected_cells: int, total_steps: int) -> str:
     for name, step, state in cells:
         pct = 100.0 * step / total_steps if total_steps and step >= 0 else 0.0
         lines.append(
-            f"   {name[-14:]:16} {state:9} step {step:>6}/{total_steps} {_bar(step, total_steps)} {pct:5.1f}%"
+            f"   {name:26} {state:9} step {step:>6}/{total_steps} "
+            f"{_bar(step, total_steps)} {pct:5.1f}%"
         )
     if len(cells) < expected_cells:
         lines.append(
@@ -97,11 +101,18 @@ def report(run_prefix: str, expected_cells: int, total_steps: int) -> str:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("run_prefix", help="platform run id, e.g. run_019fe279-4ef0")
-    parser.add_argument("--cells", type=int, default=5, help="how many cells were submitted")
+    parser.add_argument(
+        "run_prefix",
+        nargs="+",
+        help="platform run ids, optionally as arm=run_id so the arm is named in the output",
+    )
+    parser.add_argument("--cells", type=int, default=5, help="how many cells each submission has")
     parser.add_argument("--steps", type=int, default=6000, help="steps each cell runs to")
     opts = parser.parse_args(argv)
-    print(report(opts.run_prefix, opts.cells, opts.steps))
+    for entry in opts.run_prefix:
+        label, _, prefix = entry.rpartition("=")
+        line = report(prefix, opts.cells, opts.steps)
+        print(f"{label + '  ' if label else ''}{line}")
     return 0
 
 
