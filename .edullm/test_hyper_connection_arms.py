@@ -6,6 +6,7 @@ Run with ``pytest -v .edullm/test_hyper_connection_arms.py``.
 import os
 import pathlib
 import sys
+from typing import Dict, Set
 
 import pytest
 import torch
@@ -52,7 +53,7 @@ def test_the_seed_allocation_is_the_one_the_pre_registration_argues_for():
     and costs the same. Funding one arm out of step with the others is the shape of mistake
     this asserts against.
     """
-    by_seeds = {}
+    by_seeds: Dict[int, Set[str]] = {}
     for name, arm in arms.ARMS.items():
         by_seeds.setdefault(arm.seeds, set()).add(name)
 

@@ -1069,12 +1069,13 @@ def test_the_one_option_the_stages_differ_in_besides_the_arm_is_unreachable_on_t
     residual stream, say, which is a reasonable thing to want -- the exemption stops being
     sound and this fails, which is the whole reason it is a test and not a paragraph.
     """
-    seen = {}
-    monkeypatch.setattr(
-        entry,
-        "_train",
-        lambda config, opts=None: seen.update(callbacks=set(config.trainer.callbacks)),
-    )
+    seen: set = set()
+
+    def fake_train(config, opts=None):
+        seen.clear()
+        seen.update(config.trainer.callbacks)
+
+    monkeypatch.setattr(entry, "_train", fake_train)
 
     for name in STAGES:
         stage = arms.STAGE_SPECS[name]
@@ -1082,7 +1083,7 @@ def test_the_one_option_the_stages_differ_in_besides_the_arm_is_unreachable_on_t
         opts, overrides = entry.build_parser().parse_known_args(argv)
         entry.train(entry.build_config(opts, overrides), opts)
 
-        reachable = "hyper_connections" in seen["callbacks"]
+        reachable = "hyper_connections" in seen
         if name == "baseline":
             assert not reachable, "the baseline now runs the monitor, so the exemption is unsound"
             assert opts.fail_closed_by_step is None
