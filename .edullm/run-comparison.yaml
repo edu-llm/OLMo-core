@@ -1,0 +1,32 @@
+# Four-arm mixer comparison. Submit as one 20-cell fan-out:
+#   edullm submit --experiment mamba-comparison --dataset reservoir-dolma2-v1 \
+#     --team memory-split \
+#     --spec .edullm/run-comparison.yaml --fanout-size 20 \
+#     --fanout-index-parameter AWS_BATCH_JOB_ARRAY_INDEX --attempts 1
+#
+# The arrays are deliberately arm-major. If a platform limit truncates the fan-out,
+# whole arms are lost while completed arms retain all five replicates.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'export TRITON_F32_DEFAULT=ieee PYTHONDONTWRITEBYTECODE=1 &&
+  I=${AWS_BATCH_JOB_ARRAY_INDEX:-0} &&
+  ARMS=(mamba-b3 mamba-b3 mamba-b3 mamba-b3 mamba-b3
+  xlstm xlstm xlstm xlstm xlstm
+  mamba3-siso-pd mamba3-siso-pd mamba3-siso-pd mamba3-siso-pd mamba3-siso-pd
+  native-pd native-pd native-pd native-pd native-pd) &&
+  DSEEDS=(210007 220014 230021 240028 250035
+  210007 220014 230021 240028 250035
+  210007 220014 230021 240028 250035
+  210007 220014 230021 240028 250035) &&
+  ISEEDS=(110007 120014 130021 140028 150035
+  113008 123015 133022 143029 153036
+  116009 126016 136023 146030 156037
+  119010 129017 139024 149031 159038) &&
+  python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/train_core6_arm.py "$EDULLM_RUN_ID"
+  --arm "${ARMS[$I]}" --data-seed "${DSEEDS[$I]}" --init-seed "${ISEEDS[$I]}"
+  --sequence-length 4096 --steps 3721 --warmup-steps 372 --learning-rate 1.4e-3
+  --global-batch-size 524288 --rank-microbatch-size 8192 --save-interval 1861
+  --save-folder "$EDULLM_CHECKPOINT_DIR" --param-dtype bfloat16 --no-decode-probe'

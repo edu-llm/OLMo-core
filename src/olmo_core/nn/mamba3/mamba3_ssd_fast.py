@@ -30,9 +30,13 @@ So the speedups here are all in that preprocessing:
    plus few Hillis-Steele levels, far too fine-grained at short ``T`` and too coarse at long ``T``.
    The ``~T/128`` rule (chunk 8 at ``T<=1024`` up to 64 at ``T>=8192``) tracks the measured
    optimum -- this is the ``(d)`` "batch the block-diagonal matmuls harder" lever.
-3. **One fused rotation einsum for** ``B`` **and** ``C`` instead of two, since both are rotated
-   by the same ``Q^T``.
-4. **A selective fp32 floor** (``selective_fp32``). The float32 requirement is on the *prefix
+3. **A four-value quaternion pointwise scan with analytic backward** at ``b == 3``. The custom
+   backward reduces the reverse adjoint to one reverse cumsum, avoiding the prototype pointwise
+   scan's one-copy-per-timestep OOM. The quaternion is applied directly to ``B``/``C`` instead of
+   materializing every cumulative 3x3 matrix.
+4. **One fused rotation einsum for** ``B`` **and** ``C`` on the matrix fallback paths, since both
+   are rotated by the same ``Q^T``.
+5. **A selective fp32 floor** (``selective_fp32``). The float32 requirement is on the *prefix
    product*, where orthogonality drift accumulates as ``O(T * eps)``. Applying the resulting
    rotation to ``B``/``C`` in float32 is wasted work, because ``mamba3_siso_combined`` hard-casts
    ``Q``/``K`` to bfloat16 on the next line anyway. This keeps the floor where it earns its
@@ -653,29 +657,119 @@ def _quaternion_pointwise_combine(a, b):
     )
 
 
+def _quaternion_multiply(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
+    """Hamilton product ``left ⊗ right`` for tensors ending in ``(w, x, y, z)``."""
+    lw, lx, ly, lz = left.unbind(dim=-1)
+    rw, rx, ry, rz = right.unbind(dim=-1)
+    return torch.stack(
+        (
+            lw * rw - lx * rx - ly * ry - lz * rz,
+            lw * rx + lx * rw + ly * rz - lz * ry,
+            lw * ry - lx * rz + ly * rw + lz * rx,
+            lw * rz + lx * ry - ly * rx + lz * rw,
+        ),
+        dim=-1,
+    )
+
+
+def _quaternion_conjugate(q: torch.Tensor) -> torch.Tensor:
+    """Quaternion conjugate, with no unit-norm assumption."""
+    return torch.cat((q[..., :1], -q[..., 1:]), dim=-1)
+
+
+class _QuaternionPrefix(torch.autograd.Function):
+    """
+    Pointwise quaternion prefix product with an analytic linear-memory backward.
+
+    The prototype autograd for ``associative_scan(..., combine_mode="pointwise")`` saves one
+    full scan level per token and OOMs at the production shape. For prefixes
+    ``p_t = q_t ⊗ ... ⊗ q_0``, the reverse adjoint recurrence has the closed form
+
+    ``a_t = p_t / |p_t|² ⊗ sum_{k>=t}(conj(p_k) ⊗ g_k)``.
+
+    A reverse cumsum therefore replaces the scan operator's O(T)-copy backward while retaining
+    its faster pointwise forward. The final input gradient is
+    ``dq_t = a_t ⊗ conj(p_{t-1})``.
+    """
+
+    @staticmethod
+    def forward(ctx, q: torch.Tensor) -> torch.Tensor:
+        prefix = _quaternion_prefix_forward(q)
+        ctx.save_for_backward(prefix)
+        return prefix
+
+    @staticmethod
+    def backward(ctx, grad_prefix: torch.Tensor) -> tuple[torch.Tensor]:
+        (prefix,) = ctx.saved_tensors
+        return (_quaternion_prefix_backward(prefix, grad_prefix),)
+
+
+def _quaternion_prefix_forward(q: torch.Tensor) -> torch.Tensor:
+    """Pointwise quaternion prefix forward shared by both custom-autograd boundaries."""
+    if q.shape[1] == 1:
+        return q
+
+    from torch._higher_order_ops.associative_scan import associative_scan
+
+    leaves = tuple(q[..., i].contiguous() for i in range(4))
+    combine_mode = "pointwise" if q.device.type in ("cuda", "xpu") else "generic"
+    scanned = associative_scan(
+        _quaternion_pointwise_combine,
+        leaves,
+        dim=1,
+        combine_mode=combine_mode,
+    )
+    return torch.stack(scanned, dim=-1)
+
+
+def _quaternion_prefix_backward(prefix: torch.Tensor, grad_prefix: torch.Tensor) -> torch.Tensor:
+    """Analytic reverse adjoint for the newest-left quaternion prefix product."""
+    weighted = _quaternion_multiply(
+        _quaternion_conjugate(prefix),
+        grad_prefix,
+    )
+    suffix_sum = torch.flip(
+        torch.cumsum(torch.flip(weighted, dims=(1,)), dim=1),
+        dims=(1,),
+    )
+    norm_sq = prefix.square().sum(dim=-1, keepdim=True)
+    adjoint = _quaternion_multiply(prefix / norm_sq, suffix_sum)
+
+    identity = torch.zeros_like(prefix[:, :1])
+    identity[..., 0] = 1
+    previous = torch.cat((identity, prefix[:, :-1]), dim=1)
+    return _quaternion_multiply(adjoint, _quaternion_conjugate(previous))
+
+
+def _quaternion_prefix(q: torch.Tensor) -> torch.Tensor:
+    """Inclusive newest-left quaternion prefix product over sequence dimension 1."""
+    if q.shape[-1] != 4:
+        raise ValueError(f"expected quaternions with width 4, got {q.shape[-1]}")
+    if q.shape[1] < 1:
+        raise ValueError("quaternion prefix scan requires a non-empty sequence")
+    if q.shape[1] == 1:
+        return q
+    return _QuaternionPrefix.apply(q)
+
+
 def quaternion_cumulative_block_rotation(theta: torch.Tensor, block_size: int) -> torch.Tensor:
     """
     Inclusive prefix product ``Q_t = R_t R_{t-1} ... R_1`` for ``b == 3``, carried as quaternions.
 
-    Builds a unit quaternion per step straight from the *angles* (never from a pre-built matrix,
-    which is the point -- the carry is 4 values, not 9), runs one :func:`torch.associative_scan`
-    over the 4 quaternion leaves with :func:`_quaternion_pointwise_combine`, then converts the
-    cumulative quaternion back to a rotation matrix. The result is identical in shape and
-    convention to :func:`associative_cumulative_block_rotation` and the chunked path, so the caller
-    reuses :func:`_rotate_bc_fused` unchanged.
+    Builds a unit quaternion per step straight from the *angles* (never from a pre-built matrix),
+    runs the pointwise four-leaf prefix scan through :class:`_QuaternionPrefix`, then converts the
+    cumulative quaternion to a matrix for this compatibility API. The production B/C path consumes
+    the prefix quaternion directly and skips this conversion.
 
-    The gradient is left to ``associative_scan``'s own autograd: the forward is quaternion-compose
-    + quaternion->matrix, all standard differentiable ops, so no custom ``autograd.Function`` is
-    needed (the analytic-backward wrapper exists only because the *matrix* forward's autograd was
-    the part observed to miscompile under pointwise on CUDA).
+    :class:`_QuaternionPrefix` supplies the analytic backward that makes the pointwise forward
+    trainable at production sequence lengths; the prototype scan backward otherwise materializes
+    one full copy per timestep and OOMs.
 
     :param theta: Per-step angles of shape ``(batch, seq_len, n_groups, n_blocks, 3)``.
     :param block_size: The rotation block size; must be 3.
 
     :returns: Inclusive prefix products of shape ``(batch, seq_len, n_groups, n_blocks, 3, 3)``.
     """
-    from torch._higher_order_ops.associative_scan import associative_scan
-
     if block_size != 3:
         # Only the b == 3 quaternion form is written out. A larger block silently handled would
         # truncate the rotation and still return orthogonal-looking output, so refuse it -- exactly
@@ -685,26 +779,161 @@ def quaternion_cumulative_block_rotation(theta: torch.Tensor, block_size: int) -
             f"got {block_size}; use the chunked path for other block sizes"
         )
 
-    q = _angles_to_quaternion(theta)
-    if q.shape[1] == 1:
-        # A length-1 scan is the identity; convert the single per-step quaternion straight to its
-        # matrix without entering the scan op at all.
-        return _quaternion_to_matrix(q)
+    return _quaternion_to_matrix(_quaternion_prefix(_angles_to_quaternion(theta)))
 
-    # Pinned generic. Measured on a B200 (32,4096,1,64,3, fp32): pointwise-quaternion's *forward* is
-    # faster (7.4 vs 10.8 ms) but its **backward OOMs** (512 GiB = one full copy per timestep) -- the
-    # same O(T) materialization the 9-leaf pointwise hit, only halved by the smaller carry, so it is
-    # NOT a register-fit problem and no representation shrink fixes it (it is `associative_scan`'s
-    # prototype pointwise-autograd, not our combine). generic-quaternion is 29.2 ms fwd+bwd -- 7.07x
-    # over chunked and 3.4x over the 9-leaf associative-generic -- finite-grad and no OOM: the fastest
-    # *trainable* form. (To reclaim the pointwise forward you'd need a custom quaternion analytic
-    # backward, like `associative_autograd` does for matrices; not worth it over generic's 7x.)
-    combine_mode = "generic"
-    leaves = tuple(q[..., i].contiguous() for i in range(4))
-    scanned = associative_scan(
-        _quaternion_pointwise_combine, leaves, dim=1, combine_mode=combine_mode
+
+def _quaternion_rotate(q: torch.Tensor, vectors: torch.Tensor) -> torch.Tensor:
+    """Apply unit-quaternion rotations directly to 3-vectors without building matrices."""
+    q_vector = q[..., 1:]
+    twice_cross = 2.0 * torch.linalg.cross(q_vector, vectors, dim=-1)
+    return vectors + q[..., :1] * twice_cross + torch.linalg.cross(q_vector, twice_cross, dim=-1)
+
+
+def _quaternion_rotate_backward(
+    q: torch.Tensor,
+    vectors: torch.Tensor,
+    grad_rotated: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Analytic gradients of :func:`_quaternion_rotate` without a unit-norm approximation."""
+    w, u = q[..., :1], q[..., 1:]
+    u_dot_v = (u * vectors).sum(dim=-1, keepdim=True)
+    grad_dot_u = (grad_rotated * u).sum(dim=-1, keepdim=True)
+    grad_dot_v = (grad_rotated * vectors).sum(dim=-1, keepdim=True)
+
+    grad_w = 2.0 * (grad_rotated * torch.linalg.cross(u, vectors, dim=-1)).sum(dim=-1, keepdim=True)
+    grad_u = 2.0 * w * torch.linalg.cross(vectors, grad_rotated, dim=-1)
+    grad_u = grad_u + 2.0 * (grad_rotated * u_dot_v + vectors * grad_dot_u - 2.0 * u * grad_dot_v)
+    grad_q = torch.cat((grad_w, grad_u), dim=-1)
+    grad_vectors = _quaternion_rotate(_quaternion_conjugate(q), grad_rotated)
+    return grad_q, grad_vectors
+
+
+def _angles_to_quaternion_backward(
+    theta: torch.Tensor,
+    grad_q: torch.Tensor,
+) -> torch.Tensor:
+    """Analytic gradient of :func:`_angles_to_quaternion`, including its small-angle branch."""
+    t1, t2, t3 = theta[..., 0], theta[..., 1], theta[..., 2]
+    grad_w, grad_x, grad_y, grad_z = grad_q.unbind(dim=-1)
+    phi_sq = (theta * theta).sum(dim=-1)
+    phi = torch.sqrt(phi_sq.clamp_min(_SMALL_ANGLE_SQ))
+    half = phi / 2.0
+    small = phi_sq < _SMALL_ANGLE_SQ
+
+    axis_scale = torch.where(
+        small,
+        0.5 - phi_sq / 48.0 + phi_sq * phi_sq / 3840.0,
+        torch.sin(half) / phi,
     )
-    return _quaternion_to_matrix(torch.stack(scanned, dim=-1))
+    w_prime = torch.where(
+        small,
+        -0.125 + phi_sq / 192.0,
+        -torch.sin(half) / (4.0 * phi),
+    )
+    axis_scale_prime = torch.where(
+        small,
+        -1.0 / 48.0 + phi_sq / 1920.0,
+        (phi * torch.cos(half) - 2.0 * torch.sin(half)) / (4.0 * phi * phi * phi),
+    )
+
+    axis_dot_grad = -t3 * grad_x + t2 * grad_y - t1 * grad_z
+    radial = 2.0 * (grad_w * w_prime + axis_dot_grad * axis_scale_prime)
+    return torch.stack(
+        (
+            radial * t1 - axis_scale * grad_z,
+            radial * t2 + axis_scale * grad_y,
+            radial * t3 - axis_scale * grad_x,
+        ),
+        dim=-1,
+    )
+
+
+def _rotate_bc_quaternion(
+    B: torch.Tensor,
+    C: torch.Tensor,
+    cumulative_q: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Apply cumulative ``Q_t^T`` to B/C directly from prefix quaternions."""
+    d_state = B.shape[-1]
+    rank = B.shape[-2]
+    block_size = 3
+    if d_state % block_size != 0:
+        raise ValueError(f"d_state ({d_state}) must be divisible by quaternion block size 3")
+
+    both = torch.cat((B, C), dim=-2)
+    blocks = both.reshape(*both.shape[:-1], d_state // block_size, block_size)
+    # B/C use Q^T. For a unit quaternion, conjugation represents the inverse rotation.
+    inverse_q = _quaternion_conjugate(cumulative_q).unsqueeze(-3)
+    rotated = _quaternion_rotate(inverse_q, blocks)
+    rotated = rotated.reshape(*both.shape[:-1], d_state)
+    return rotated[..., :rank, :], rotated[..., rank:, :]
+
+
+class _FusedQuaternionRotateBC(torch.autograd.Function):
+    """Fuse angle conversion, quaternion prefix, and direct B/C rotation."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        B: torch.Tensor,
+        C: torch.Tensor,
+        theta: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        d_state = B.shape[-1]
+        rank = B.shape[-2]
+        if d_state % 3 != 0:
+            raise ValueError(f"d_state ({d_state}) must be divisible by quaternion block size 3")
+
+        both = torch.cat((B, C), dim=-2)
+        vectors = both.reshape(*both.shape[:-1], d_state // 3, 3)
+        prefix = _quaternion_prefix_forward(_angles_to_quaternion(theta))
+        inverse_q = _quaternion_conjugate(prefix.to(B.dtype)).unsqueeze(-3)
+        rotated = _quaternion_rotate(inverse_q, vectors)
+        rotated = rotated.reshape(*both.shape[:-1], d_state)
+
+        # Save input references rather than ``vectors``: the latter aliases ``both``, so retaining
+        # it pins the full materialized B/C concatenation until backward. B and C are already live
+        # autograd inputs; rebuilding the cheap reshape/concatenation lets compiled forward release
+        # (or fuse away) its largest temporary while keeping the expensive quaternion prefix.
+        ctx.save_for_backward(B, C, theta, prefix)
+        return rotated[..., :rank, :], rotated[..., rank:, :]
+
+    @staticmethod
+    @torch.autograd.function.once_differentiable
+    def backward(
+        ctx,
+        grad_B: torch.Tensor,
+        grad_C: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        B, C, theta, prefix = ctx.saved_tensors
+        rank = B.shape[-2]
+        d_state = grad_B.shape[-1]
+        both = torch.cat((B, C), dim=-2)
+        vectors = both.reshape(*both.shape[:-1], d_state // 3, 3)
+        grad_rotated = torch.cat((grad_B, grad_C), dim=-2)
+        grad_rotated = grad_rotated.reshape(*grad_rotated.shape[:-1], d_state // 3, 3)
+
+        inverse_q = _quaternion_conjugate(prefix.to(vectors.dtype)).unsqueeze(-3)
+        grad_inverse_q, grad_vectors = _quaternion_rotate_backward(
+            inverse_q,
+            vectors,
+            grad_rotated,
+        )
+        grad_prefix = _quaternion_conjugate(grad_inverse_q.sum(dim=-3)).to(prefix.dtype)
+        grad_step_q = _quaternion_prefix_backward(prefix, grad_prefix)
+        grad_theta = _angles_to_quaternion_backward(theta, grad_step_q)
+
+        grad_both = grad_vectors.reshape(*grad_B.shape[:-2], 2 * rank, d_state)
+        return grad_both[..., :rank, :], grad_both[..., rank:, :], grad_theta
+
+
+def _fused_quaternion_rotate_bc(
+    B: torch.Tensor,
+    C: torch.Tensor,
+    theta: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Run complete b=3 quaternion preprocessing under one analytic-autograd boundary."""
+    return _FusedQuaternionRotateBC.apply(B, C, theta)
 
 
 def _rotate_bc_fused(
@@ -767,15 +996,13 @@ def _fast_rotate_bc_pair(
             f"for block_size={block_size}, got shape {tuple(theta.shape)}"
         )
     if impl == "quaternion" and block_size == 3:
-        # The quaternion scan builds its 4-value carry from the angles directly, so it branches
-        # here -- where `theta` is still in hand -- rather than inside
-        # `fast_cumulative_block_rotation`, which only ever sees pre-built 3x3 matrices. Every other
-        # block size falls through to the matrix scans, which refuse to truncate a bigger block.
-        cumulative_rot = quaternion_cumulative_block_rotation(theta, block_size)
-    else:
-        cumulative_rot = fast_cumulative_block_rotation(
-            fast_block_rotations(theta, block_size), chunk_size=chunk_size, scan_impl=impl
-        )
+        return _fused_quaternion_rotate_bc(B, C, theta)
+
+    cumulative_rot = fast_cumulative_block_rotation(
+        fast_block_rotations(theta, block_size),
+        chunk_size=chunk_size,
+        scan_impl=impl,
+    )
     return _rotate_bc_fused(B, C, cumulative_rot.to(B.dtype))
 
 
@@ -816,6 +1043,9 @@ def mamba3_ssd_fast(
         ``B``/``C`` in the kernel's own dtype. ``False`` applies it in float32, matching
         ``mamba3_ssd_official`` to float32 precision at the cost of a wasted upcast.
     """
+    # Validate the public option before probing an optional runtime dependency, so a malformed
+    # config reports its own actionable error in CPU-only dry runs.
+    scan_impl = resolve_rotation_scan_impl(rotation_scan_impl)
     if not fast_mamba3_is_available():
         raise RuntimeError("the official mamba-ssm Mamba-3 SISO kernel is not installed")
 
@@ -831,10 +1061,6 @@ def mamba3_ssd_fast(
         )
     if d_state % block_size != 0:
         raise ValueError(f"d_state ({d_state}) must be divisible by block_size ({block_size})")
-    # Resolved here rather than where it is consumed so a typo names this argument in the
-    # traceback instead of surfacing several frames down inside the rotation.
-    scan_impl = resolve_rotation_scan_impl(rotation_scan_impl)
-
     device_type = x.device.type
     autocast_on = torch.is_autocast_enabled(device_type)
     out_dtype = torch.get_autocast_dtype(device_type) if autocast_on else x.dtype

@@ -1,0 +1,108 @@
+ARG BASE_IMAGE
+
+FROM ${BASE_IMAGE}
+
+ENV PYTHONPATH=/opt/olmo-core/src \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    TRITON_F32_DEFAULT=ieee \
+    OLMO_FLASH_ATTN2_CUDA_ARCHS=80 \
+    CC=gcc-14 \
+    CXX=g++-14 \
+    CUDA_HOME=/opt/cuda \
+    PATH=/opt/cuda/bin:${PATH} \
+    TORCH_CUDA_ARCH_LIST="8.0"
+
+LABEL ai.edullm.mamba-comparison="true" \
+      ai.edullm.xlstm.license="NXAI Community License; organizational approval confirmed" \
+      ai.edullm.cuda-architecture="sm_80"
+
+WORKDIR /opt/olmo-core
+
+# Build tools are fixed to the compiler major used for the CUDA 12.8 extensions.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends gcc-14 g++-14; \
+    rm -rf /var/lib/apt/lists/*; \
+    gcc-14 --version
+
+# The xLSTM kernels are distributed under the NXAI Community License. Keep the
+# organizational research approval and upstream attribution in the image.
+RUN mkdir -p /usr/local/share/licenses/nxai && \
+    printf '%s\n' \
+      'Built with technology from NXAI.' \
+      'This image contains mlstm-kernels and FlashRNN under the NXAI Community License.' \
+      'Copyright © NXAI GmbH. All Rights Reserved.' \
+      'Organizational approval for this research image is confirmed.' \
+      > /usr/local/share/licenses/nxai/NOTICE
+
+# Runtime and build dependencies precede source copies so ordinary research edits
+# retain the expensive Torch, FlashAttention, Mamba-3, and CUDA-extension layers.
+RUN set -eux; \
+    python -m pip install --no-cache-dir \
+      "pip==25.2" \
+      "setuptools==69.5.1" \
+      "wheel==0.45.1" \
+      "ninja==1.13.0" \
+      "packaging==25.0"; \
+    python -m pip install --no-cache-dir \
+      "torch==2.10.0" \
+      "numpy==2.3.5" \
+      "cached-path==1.8.0" \
+      "filelock==3.20.0" \
+      "requests==2.32.5" \
+      "dataclass-extensions==0.3.0" \
+      "PyYAML==6.0.3" \
+      "rich==14.2.0" \
+      "safetensors==0.7.0" \
+      "importlib-resources==6.5.2" \
+      "bettermap==0.3.2" \
+      "pandas==2.3.3" \
+      "boto3==1.40.70" \
+      "botocore[crt]==1.40.70" \
+      "wandb==0.23.0" \
+      "flash-linear-attention==0.4.1" \
+      "nvidia-cuda-nvcc-cu12==12.8.93" \
+      "nvidia-cuda-runtime-cu12==12.8.90"; \
+    NVIDIA_ROOT="$(python -c 'import site; print(site.getsitepackages()[0] + "/nvidia")')"; \
+    mkdir -p /opt/cuda; \
+    ln -s "${NVIDIA_ROOT}/cuda_nvcc/bin" /opt/cuda/bin; \
+    ln -s "${NVIDIA_ROOT}/cuda_nvcc/nvvm" /opt/cuda/nvvm; \
+    ln -s "${NVIDIA_ROOT}/cuda_runtime/include" /opt/cuda/include; \
+    ln -s "${NVIDIA_ROOT}/cuda_runtime/lib" /opt/cuda/lib64; \
+    /opt/cuda/bin/nvcc --version; \
+    python -m pip install --no-cache-dir \
+      "edullm-data @ https://github.com/edu-llm/edullm-data/archive/38bf831a6c3f445e394784018441fd59288b876c.tar.gz"
+
+# FlashAttention and the official Mamba-3 source revision build only for A100 sm80.
+RUN set -eux; \
+    TORCH_CUDA_ARCH_LIST="8.0" python -m pip install --no-cache-dir --no-build-isolation \
+      "flash-attn==2.8.2"; \
+    TORCH_CUDA_ARCH_LIST="8.0" MAMBA_FORCE_BUILD=TRUE \
+      python -m pip install --no-cache-dir --no-build-isolation \
+      "mamba-ssm @ https://github.com/state-spaces/mamba/archive/e9594ce1c732d97440f0332fdc43170a2294dbfa.tar.gz"; \
+    python -m pip install --no-cache-dir --no-build-isolation \
+      "xlstm==2.0.5" "mlstm-kernels==2.0.4" "flashrnn==1.0.6"
+
+# Build the repository's current native PD extension without invalidating the
+# dependency layers when unrelated Python source changes.
+COPY flash_pd_native_setup.py ./
+COPY src/olmo_core/nn/flash_pd_native/csrc ./src/olmo_core/nn/flash_pd_native/csrc
+RUN set -eux; \
+    TORCH_CUDA_ARCH_LIST="8.0" python flash_pd_native_setup.py bdist_wheel; \
+    python -m pip install --no-cache-dir --no-deps dist/flash_pd_native_kernels-*.whl; \
+    rm -rf build dist
+
+COPY . .
+RUN set -eux; \
+    python -m pip install --no-cache-dir --no-deps .; \
+    python -c "import torch; assert torch.__version__.startswith('2.10.0'); assert torch.version.cuda; assert 'sm_80' in torch.cuda.get_arch_list()"; \
+    python -c "from mamba_ssm.ops.triton.mamba3.mamba3_siso_combined import mamba3_siso_combined; assert callable(mamba3_siso_combined)"; \
+    python -c "import _flash_pd_native_cuda; assert callable(_flash_pd_native_cuda.forward); assert callable(_flash_pd_native_cuda.backward); assert callable(_flash_pd_native_cuda.mamba3_forward); assert callable(_flash_pd_native_cuda.paper_backward)"; \
+    python -c "import importlib.metadata as m; expected={'xlstm':'2.0.5','mlstm-kernels':'2.0.4','flashrnn':'1.0.6'}; assert {k:m.version(k) for k in expected} == expected"; \
+    python -c "from olmo_core.nn.xlstm.olmo_xlstm import XLSTMMixerConfig; from olmo_core.nn.xlstm.olmo_slstm import SLSTMMixerConfig; assert XLSTMMixerConfig().chunkwise_kernel == 'chunkwise--triton_xl_chunk'; assert SLSTMMixerConfig(backend='cuda_fused').backend == 'cuda_fused'"; \
+    python -c "from edullm_data.profiles.registry import available; assert sorted(available()) == ['eval-results/v1', 'pretrain-tokens/v1', 'sft-conversations/v1', 'token-order/v1', 'tokenizer/v1']"; \
+    python -c "from edullm_data.read import dataset_paths, resolve_latest; print(dataset_paths.__module__, resolve_latest.__module__)"; \
+    test -s /usr/local/share/licenses/nxai/NOTICE
+
+# The platform supplies the command; this image deliberately defines no CMD.

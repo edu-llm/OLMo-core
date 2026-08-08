@@ -309,6 +309,14 @@ class TransformerTrainModuleConfig(TrainModuleConfig):
     # Optimizer settings.
 
     optim: OptimConfig
+    accumulate_grads_without_comm: bool = False
+    """
+    Delay FSDP gradient synchronization until the final microbatch of an optimizer step.
+
+    This reduces communication during gradient accumulation but retains unsharded gradients
+    between microbatches, which can increase peak memory. ``False`` preserves the historical
+    per-microbatch reduce-scatter behavior as a memory escape hatch.
+    """
     max_grad_norm: Optional[float] = None
     scheduler: Optional[Scheduler] = None
 
@@ -361,6 +369,11 @@ class TransformerTrainModuleConfig(TrainModuleConfig):
             kwargs["state_dict_load_opts"] = dist_cp_sd.StateDictOptions(**state_dict_load_opts)
 
         if self.pp_config is not None:
+            if self.accumulate_grads_without_comm:
+                raise OLMoConfigurationError(
+                    "'accumulate_grads_without_comm' is not supported with pipeline parallelism"
+                )
+            kwargs.pop("accumulate_grads_without_comm")
             return TransformerPipelineTrainModule(
                 model=model,
                 device=device,

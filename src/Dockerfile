@@ -12,6 +12,9 @@ ARG DEVEL_BASE_IMAGE=nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu${UBUNTU_VERS
 
 FROM ${DEVEL_BASE_IMAGE} AS build
 
+ENV TRITON_F32_DEFAULT=ieee
+ENV TORCH_LOGS=recompiles,graph_breaks
+
 WORKDIR /app/build
 
 # Install system dependencies.
@@ -56,7 +59,7 @@ RUN TORCH_CUDA_ARCH_LIST="9.0 10.0" GROUPED_GEMM_CUTLASS="1" pip install --no-bu
 
 # Install flash-attn 2
 ARG FLASH_ATTN_VERSION=2.8.2
-RUN FLASH_ATTN_CUDA_ARCHS="90;100" pip install --no-build-isolation --no-cache-dir flash-attn==${FLASH_ATTN_VERSION}
+RUN FLASH_ATTN_CUDA_ARCHS="80;90;100" pip install --no-build-isolation --no-cache-dir flash-attn==${FLASH_ATTN_VERSION}
 
 # Install flash-attn 3.
 ARG FLASH_ATTN_3_SHA="92ca9da8d66f7b34ff50dc080ec0fef9661260d6"
@@ -94,6 +97,16 @@ RUN pip install --no-build-isolation --no-cache-dir ring-flash-attn==${RING_FLAS
 ARG LIGER_KERNEL_VERSION=0.6.4
 RUN pip install --no-build-isolation --no-cache-dir liger-kernel==${LIGER_KERNEL_VERSION}
 
+# Install the exact upstream Mamba-3 kernel revision used by the integrated mixer.
+# Mamba-3 is not available in a release wheel, and its CUDA extension needs the existing
+# torch/CUDA environment rather than an isolated build environment.
+ARG MAMBA3_COMMIT=e9594ce1c732d97440f0332fdc43170a2294dbfa
+ARG MAMBA3_CUDA_ARCHS="8.0;9.0;10.0"
+RUN TORCH_CUDA_ARCH_LIST="${MAMBA3_CUDA_ARCHS}" MAMBA_FORCE_BUILD=TRUE \
+    pip install --no-build-isolation --no-cache-dir \
+    "mamba-ssm @ git+https://github.com/state-spaces/mamba.git@${MAMBA3_COMMIT}"
+RUN python -c "import mamba_ssm; import triton; import liger_kernel; from mamba_ssm.ops.triton.mamba3.mamba3_siso_combined import mamba3_siso_combined; assert callable(mamba3_siso_combined)"
+
 # Optionally install Quack kernels.
 ARG QUACK_VERSION=""
 RUN if [ -n "${QUACK_VERSION}" ]; then \
@@ -106,6 +119,16 @@ COPY src/olmo_core/version.py src/olmo_core/version.py
 RUN pip install --no-cache-dir '.[all]' && \
     pip uninstall -y ai2-olmo-core && \
     rm -rf *
+
+# Build and install the native Flash PD extension into the image. Training-time source
+# installs intentionally do not compile it; the top-level extension remains importable
+# beside an editable olmo_core checkout.
+COPY flash_pd_native_setup.py .
+COPY src/olmo_core/nn/flash_pd_native/csrc src/olmo_core/nn/flash_pd_native/csrc
+RUN TORCH_CUDA_ARCH_LIST="8.0;12.0" python flash_pd_native_setup.py bdist_wheel && \
+    pip install --no-cache-dir dist/flash_pd_native_kernels-*.whl && \
+    python -c "import _flash_pd_native_cuda; assert callable(_flash_pd_native_cuda.forward)" && \
+    rm -rf build dist flash_pd_native_setup.py src
 
 #########################################################################
 # Release image
@@ -161,6 +184,8 @@ RUN wget --quiet https://content.mellanox.com/ofed/MLNX_OFED-${MOFED_VER}/MLNX_O
 # Copy conda environment.
 COPY --from=build /opt/conda /opt/conda
 
+ENV TRITON_F32_DEFAULT=ieee
+ENV TORCH_LOGS=recompiles,graph_breaks
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 ENV LD_LIBRARY_PATH=/usr/local/nvidia/lib:/usr/local/nvidia/lib64

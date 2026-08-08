@@ -80,6 +80,8 @@ class TransformerTrainModule(TrainModule):
             parallel world size. If this is less than the global batch divided by the data
             parallel world size then gradient accumulation is used.
     :param max_sequence_length: The maximum expected sequence length during training and evaluation.
+    :param accumulate_grads_without_comm: Delay FSDP gradient synchronization until the final
+        microbatch. This reduces communication but can increase peak memory.
     :param compile_model: Whether to compile to the model.
     :param float8_config: Float8 configuration for the model.
     :param dp_config: Data parallel configuration for the model.
@@ -121,6 +123,7 @@ class TransformerTrainModule(TrainModule):
         state_dict_load_opts: Optional[dist_cp_sd.StateDictOptions] = None,
         load_key_mapping: Optional[Dict[str, str]] = None,
         label_ignore_index: int = -100,
+        accumulate_grads_without_comm: bool = False,
     ):
         super().__init__()
 
@@ -173,6 +176,8 @@ class TransformerTrainModule(TrainModule):
             ep_config=ep_config,
             ac_config=ac_config,
         )
+        self.attention_backend_identity = self.model.assert_uniform_attention_backend()
+        log.info("Uniform realized attention backend: %s", self.attention_backend_identity)
         self._model_mode: Optional[Literal["train", "eval"]] = None
 
         self._dp_config = dp_config
@@ -183,6 +188,7 @@ class TransformerTrainModule(TrainModule):
         self.z_loss_multiplier = z_loss_multiplier
         self.rank_microbatch_size = rank_microbatch_size
         self.max_sequence_length = max_sequence_length
+        self.accumulate_grads_without_comm = accumulate_grads_without_comm
         self.autocast_precision = autocast_precision
         self.max_grad_norm = max_grad_norm
         self.scheduler = scheduler
@@ -567,21 +573,30 @@ class TransformerTrainModule(TrainModule):
         self, micro_batch_idx: int, num_micro_batches: int
     ) -> Generator[None, None, None]:
         is_last_mb = micro_batch_idx == num_micro_batches - 1
-        with contextlib.ExitStack() as stack:
-            if isinstance(self.model, FSDPModule):
-                assert self.dp_config is not None
-                # On the last backward FSDP waits on pending gradient reduction and clears internal data
-                # data structures for backward prefetching.
-                self.model.set_is_last_backward(is_last_mb)
-                # For HSDP we can delay the gradients all-reduce until the final micro-batch.
-                if self.dp_config.name == DataParallelType.hsdp:
-                    self.model.set_requires_all_reduce(is_last_mb)
-            elif isinstance(self.model, DDP):
-                # For DDP, only sync gradients on the final micro-batch.
-                if not is_last_mb:
-                    stack.enter_context(self.model.no_sync())
+        restore_gradient_sync = False
+        try:
+            with contextlib.ExitStack() as stack:
+                if isinstance(self.model, FSDPModule):
+                    assert self.dp_config is not None
+                    if self.accumulate_grads_without_comm and num_micro_batches > 1:
+                        self.model.set_requires_gradient_sync(is_last_mb)
+                        restore_gradient_sync = not is_last_mb
+                    # On the last backward FSDP waits on pending gradient reduction and clears internal data
+                    # data structures for backward prefetching.
+                    self.model.set_is_last_backward(is_last_mb)
+                    # For HSDP we can delay the gradients all-reduce until the final micro-batch.
+                    if self.dp_config.name == DataParallelType.hsdp:
+                        self.model.set_requires_all_reduce(is_last_mb)
+                elif isinstance(self.model, DDP):
+                    # For DDP, only sync gradients on the final micro-batch.
+                    if not is_last_mb:
+                        stack.enter_context(self.model.no_sync())
 
-            yield
+                yield
+        except BaseException:
+            if restore_gradient_sync:
+                self.model.set_requires_gradient_sync(True)
+            raise
 
     @contextlib.contextmanager
     def _eval_batch_context(self) -> Generator[None, None, None]:

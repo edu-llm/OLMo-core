@@ -244,6 +244,24 @@ class Transformer(nn.Module):
     def compile_enabled(self) -> bool:
         return self._compile_enabled
 
+    def assert_uniform_attention_backend(self) -> Optional[str]:
+        """Return the one realized attention backend identity, or fail on a mixed stack."""
+        backend_layers: Dict[str, List[str]] = defaultdict(list)
+        for block_name, block in self.blocks.items():
+            sequence_mixer = getattr(block, "attention", None)
+            backend = getattr(sequence_mixer, "backend", None)
+            if not isinstance(backend, nn.Module):
+                continue
+            identity = f"{type(backend).__module__}.{type(backend).__qualname__}"
+            backend_layers[identity].append(block_name)
+        if len(backend_layers) > 1:
+            details = ", ".join(
+                f"{identity} at layers {layers}"
+                for identity, layers in sorted(backend_layers.items())
+            )
+            raise OLMoConfigurationError(f"mixed attention backends realized at runtime: {details}")
+        return next(iter(backend_layers), None)
+
     def get_rope_buffers(
         self, seq_len: int, device: Optional[torch.device] = None
     ) -> Dict[int, Optional[RoPEBuffers]]:
@@ -864,6 +882,7 @@ class Transformer(nn.Module):
         pp_enabled: bool = False,
         prefetch_factor: int = 0,
         wrapping_strategy: TransformerDataParallelWrappingStrategy = TransformerDataParallelWrappingStrategy.full,
+        reshard_after_forward: Optional[bool] = None,
     ):
         """
         Apply FSDP(2) to the model.
@@ -879,14 +898,18 @@ class Transformer(nn.Module):
         :prefetch_factor: For tuning the prefetch settings. 0 is the default, and higher values result
             in more aggressive prefetching.
         :wrapping_strategy: The wrapping strategy.
+        :param reshard_after_forward: Override whether FSDP reshards parameters after forward.
+            ``False`` avoids backward re-all-gathers by retaining full parameters and using more
+            memory. ``None`` preserves topology-dependent defaults.
         """
         mp_policy = MixedPrecisionPolicy(
             param_dtype=param_dtype or self.dtype, reduce_dtype=reduce_dtype
         )
         fsdp_config = dict(mesh=dp_mesh, mp_policy=mp_policy)
-        # For PP, do not reshard after forward to avoid per-microbatch all-gathers,
-        # which can be expensive and non-overlapped
-        reshard_after_forward = False if pp_enabled else True
+        resolved_reshard_after_forward = _resolve_reshard_after_forward(
+            reshard_after_forward,
+            retain_reasons=("pipeline parallelism",) if pp_enabled else (),
+        )
 
         for block in self.blocks.values():
             block = cast(TransformerBlockBase, block)
@@ -894,7 +917,7 @@ class Transformer(nn.Module):
                 dp_mesh=dp_mesh,
                 prefetch_factor=prefetch_factor,
                 wrapping_strategy=wrapping_strategy,
-                reshard_after_forward=reshard_after_forward,
+                reshard_after_forward=resolved_reshard_after_forward,
                 mp_policy=mp_policy,
             )
 
@@ -903,7 +926,7 @@ class Transformer(nn.Module):
         if self.embeddings is not None and not self.tie_word_embeddings:
             fully_shard(
                 self.embeddings,
-                reshard_after_forward=reshard_after_forward,
+                reshard_after_forward=resolved_reshard_after_forward,
                 **fsdp_config,
             )
             # Embedding params are not needed for backwards computation.
@@ -911,11 +934,25 @@ class Transformer(nn.Module):
 
         if wrapping_strategy != TransformerDataParallelWrappingStrategy.blocks:
             if self.embedding_norm is not None:
-                fully_shard(self.embedding_norm, **fsdp_config)
+                fully_shard(
+                    self.embedding_norm,
+                    reshard_after_forward=resolved_reshard_after_forward,
+                    **fsdp_config,
+                )
             if self.lm_head is not None and not self.tie_word_embeddings:
-                fully_shard(self.lm_head, reshard_after_forward=False, **fsdp_config)
+                fully_shard(
+                    self.lm_head,
+                    reshard_after_forward=(
+                        False if reshard_after_forward is None else resolved_reshard_after_forward
+                    ),
+                    **fsdp_config,
+                )
 
-        fully_shard(self, reshard_after_forward=reshard_after_forward, **fsdp_config)
+        fully_shard(
+            self,
+            reshard_after_forward=resolved_reshard_after_forward,
+            **fsdp_config,
+        )
         # Some inputs need to be on CPU initially, but FSDP will move everything to model's
         # device if we don't hide it.
         self.register_forward_pre_hook(_hide_cpu_inputs_from_torch, prepend=True, with_kwargs=True)
@@ -1171,20 +1208,29 @@ class MoETransformer(Transformer):
         param_dtype: Optional[torch.dtype] = None,
         reduce_dtype: torch.dtype = torch.float32,
         pp_enabled: bool = False,
+        reshard_after_forward: Optional[bool] = None,
     ):
         for block in self.blocks.values():
             if not block.is_moe:
                 continue
             block = cast(MoETransformerBlock, block)
-            reshard_after_forward = True
-            if pp_enabled or block.ep_enabled or block.tp_enabled:
-                reshard_after_forward = False
+            retain_reasons = []
+            if pp_enabled:
+                retain_reasons.append("pipeline parallelism")
+            if block.ep_enabled:
+                retain_reasons.append("expert parallelism")
+            if block.tp_enabled:
+                retain_reasons.append("tensor parallelism")
+            resolved_reshard_after_forward = _resolve_reshard_after_forward(
+                reshard_after_forward,
+                retain_reasons=tuple(retain_reasons),
+            )
             block.feed_forward_moe.prepare_experts_for_fsdp(
                 world_mesh=world_mesh,
                 mp_policy=MixedPrecisionPolicy(
                     param_dtype=param_dtype or self.dtype, reduce_dtype=reduce_dtype
                 ),
-                reshard_after_forward=reshard_after_forward,
+                reshard_after_forward=resolved_reshard_after_forward,
             )
 
     def prepare_experts_for_ddp(self, world_mesh: DeviceMesh):
@@ -1201,6 +1247,22 @@ class MoETransformer(Transformer):
                 continue
             block = cast(MoETransformerBlock, block)
             block.feed_forward_moe.post_batch(dry_run=dry_run)
+
+
+def _resolve_reshard_after_forward(
+    policy: Optional[bool],
+    *,
+    retain_reasons: Tuple[str, ...],
+) -> bool:
+    if retain_reasons:
+        if policy is True:
+            reasons = ", ".join(retain_reasons)
+            raise OLMoConfigurationError(
+                f"{reasons} requires FSDP to retain full parameters after forward, "
+                "so 'reshard_after_forward=True' is invalid"
+            )
+        return False
+    return True if policy is None else policy
 
 
 def _hide_cpu_inputs_from_torch(m, args, kwargs) -> Optional[Tuple[Any, Dict[str, Any]]]:

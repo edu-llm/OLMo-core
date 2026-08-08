@@ -69,12 +69,17 @@ fa4 = ["flash-attn-4>=4.0.0b4 ; sys_platform == 'linux'"]
 fla = ["flash-linear-attention==0.4.1"]
 # NOTE: Mamba-3 fast kernels only live on mamba-ssm `main` (no clean wheel) and require a source
 # build (`MAMBA_FORCE_BUILD=TRUE pip install ... --no-build-isolation`) with a CUDA toolchain, so
-# this is intentionally kept OUT of the `all` extra. The Mamba-3 mixer works without it via the
-# in-repo reference kernel; use is gated behind `olmo_core.nn.mamba3.has_mamba3()`.
-mamba3 = ["mamba-ssm @ git+https://github.com/state-spaces/mamba.git ; sys_platform == 'linux'"]
+# this is intentionally kept OUT of the `all` extra. `src/Dockerfile` installs the pinned source
+# revision separately with build isolation disabled; local reference-only installs need not build it.
+mamba3 = ["mamba-ssm @ git+https://github.com/state-spaces/mamba.git@e9594ce1c732d97440f0332fdc43170a2294dbfa ; sys_platform == 'linux'"]
 torchao = ["torchao==0.15.0"]
 transformers = ["transformers>=5.4.0"]
 wandb = ["wandb"]
+xlstm-experiment = [
+    "mlstm-kernels==2.0.4",
+    "xlstm==2.0.5",
+]
+flashrnn = ["flashrnn==1.0.6"]
 all = ["ai2-olmo-core[dev,beaker,comet,dion,eval,fa4,fla,torchao,transformers,wandb]"]
 
 [tool.uv]

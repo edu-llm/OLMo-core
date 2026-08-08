@@ -800,6 +800,116 @@ def test_quaternion_combine_matches_matrix_compose():
     torch.testing.assert_close(got, expected, rtol=0, atol=1e-13)
 
 
+def _sequential_quaternion_prefix(q: torch.Tensor) -> torch.Tensor:
+    """Differentiable oracle for newest-left Hamilton prefix products."""
+    prefix = q[:, 0]
+    outputs = [prefix]
+    for step in q[:, 1:].unbind(dim=1):
+        prefix = fast_mod._quaternion_multiply(step, prefix)
+        outputs.append(prefix)
+    return torch.stack(outputs, dim=1)
+
+
+@pytest.mark.parametrize("seq_len", [2, 7, 33])
+def test_quaternion_prefix_analytic_backward_matches_sequential(seq_len: int):
+    """The custom pointwise scan backward must equal ordinary autograd exactly."""
+    torch.manual_seed(53)
+    raw = torch.randn(2, seq_len, 1, 3, 4, dtype=torch.float64)
+    q = raw / raw.norm(dim=-1, keepdim=True)
+    weight = torch.randn_like(q)
+
+    expected_q = q.clone().requires_grad_(True)
+    expected = _sequential_quaternion_prefix(expected_q)
+    (expected * weight).sum().backward()
+
+    actual_q = q.clone().requires_grad_(True)
+    actual = fast_mod._quaternion_prefix(actual_q)
+    (actual * weight).sum().backward()
+
+    torch.testing.assert_close(actual, expected, rtol=0, atol=1e-12)
+    torch.testing.assert_close(actual_q.grad, expected_q.grad, rtol=0, atol=1e-11)
+
+
+def test_quaternion_scan_uses_generic_cpu_fallback(monkeypatch):
+    """CPU validation must retain the only combine mode associative_scan supports there."""
+    import importlib
+
+    scan_module = importlib.import_module("torch._higher_order_ops.associative_scan")
+    real_scan = scan_module.associative_scan
+
+    combine_modes = []
+
+    def scan_spy(*args, **kwargs):
+        combine_modes.append(kwargs["combine_mode"])
+        return real_scan(*args, **kwargs)
+
+    monkeypatch.setattr(scan_module, "associative_scan", scan_spy)
+    theta = torch.randn(1, 8, 1, 2, 3, dtype=torch.float64)
+
+    quaternion_cumulative_block_rotation(theta, 3)
+
+    assert combine_modes == ["generic"]
+
+
+@requires_gpu
+def test_quaternion_scan_requests_pointwise_combine_on_gpu(monkeypatch):
+    """The custom backward must make the fast pointwise CUDA forward safe to select."""
+    import importlib
+
+    scan_module = importlib.import_module("torch._higher_order_ops.associative_scan")
+    real_scan = scan_module.associative_scan
+    combine_modes = []
+
+    def scan_spy(*args, **kwargs):
+        combine_modes.append(kwargs["combine_mode"])
+        return real_scan(*args, **kwargs)
+
+    monkeypatch.setattr(scan_module, "associative_scan", scan_spy)
+    theta = torch.randn(1, 8, 1, 2, 3, device="cuda")
+
+    quaternion_cumulative_block_rotation(theta, 3)
+
+    assert combine_modes == ["pointwise"]
+
+
+def test_direct_quaternion_rotation_matches_matrix_path():
+    """Rotating vectors directly must avoid changing the established Q-transpose convention."""
+    torch.manual_seed(54)
+    theta = torch.randn(2, 17, 1, 4, 3, dtype=torch.float64) * 0.3
+    q_prefix = fast_mod._quaternion_prefix(_angles_to_quaternion(theta))
+    B = torch.randn(2, 17, 1, 2, 12, dtype=torch.float64)
+    C = torch.randn_like(B)
+
+    actual_b, actual_c = fast_mod._rotate_bc_quaternion(B, C, q_prefix)
+    expected_b, expected_c = _rotate_bc_fused(B, C, _quaternion_to_matrix(q_prefix))
+
+    torch.testing.assert_close(actual_b, expected_b, rtol=0, atol=1e-12)
+    torch.testing.assert_close(actual_c, expected_c, rtol=0, atol=1e-12)
+
+
+def test_quaternion_dispatch_does_not_materialize_rotation_matrices(monkeypatch):
+    """The production quaternion route must apply the prefix directly to B/C."""
+    torch.manual_seed(55)
+    B = torch.randn(1, 9, 1, 1, 12, dtype=torch.float64)
+    C = torch.randn_like(B)
+    theta = torch.randn(1, 9, 1, 4, 3, dtype=torch.float64) * 0.3
+
+    def forbidden(*args, **kwargs):
+        del args, kwargs
+        raise AssertionError("quaternion dispatch materialized a 3x3 matrix")
+
+    monkeypatch.setattr(fast_mod, "_quaternion_to_matrix", forbidden)
+
+    fast_mod._fast_rotate_bc_pair(
+        B,
+        C,
+        theta,
+        3,
+        None,
+        scan_impl="quaternion",
+    )
+
+
 @pytest.mark.parametrize("scale", [0.01, 1.0, 3.0])
 def test_quaternion_to_matrix_is_in_so3(scale: float):
     """``_quaternion_to_matrix`` of a unit quaternion is orthogonal with determinant +1."""
@@ -1181,13 +1291,13 @@ def test_explicit_scan_impl_beats_the_module_default(monkeypatch):
     """
     monkeypatch.setattr(fast_mod, "_ROTATION_SCAN_IMPL", "chunked")
     called: list[str] = []
-    real = fast_mod.quaternion_cumulative_block_rotation
+    real = fast_mod._fused_quaternion_rotate_bc
 
-    def spy(theta, block_size):
+    def spy(*args):
         called.append("quaternion")
-        return real(theta, block_size)
+        return real(*args)
 
-    monkeypatch.setattr(fast_mod, "quaternion_cumulative_block_rotation", spy)
+    monkeypatch.setattr(fast_mod, "_fused_quaternion_rotate_bc", spy)
 
     theta = torch.randn(1, 8, 1, 2, 3) * 0.1
     B = torch.randn(1, 8, 1, 1, 6)

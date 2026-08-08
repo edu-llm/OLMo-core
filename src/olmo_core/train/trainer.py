@@ -58,6 +58,7 @@ from ..utils import cuda_sync_debug_mode, gc_cuda, get_default_thread_count
 from .callbacks import (
     Callback,
     CheckpointerCallback,
+    CompileMonitorCallback,
     ConsoleLoggerCallback,
     EvaluatorCallback,
     GarbageCollectorCallback,
@@ -388,6 +389,8 @@ class Trainer:
             self.callbacks.setdefault("checkpointer", CheckpointerCallback())
         if not self.has_callback(SpeedMonitorCallback):
             self.callbacks.setdefault("speed_monitor", SpeedMonitorCallback())
+        if not self.has_callback(CompileMonitorCallback):
+            self.callbacks.setdefault("compile_monitor", CompileMonitorCallback())
         if not self.has_callback(GarbageCollectorCallback):
             self.callbacks.setdefault("garbage_collector", GarbageCollectorCallback())
 

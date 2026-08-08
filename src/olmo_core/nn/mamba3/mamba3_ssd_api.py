@@ -27,16 +27,33 @@ The reference implements the three Mamba-3 innovations from
    uses the state-size-preserving matmul form and is the fast path.
 """
 
+from collections import Counter
 from typing import Optional
 
 import torch
+
+from .compatibility import assert_official_mamba3_runtime_compatible
 
 __all__ = [
     "has_mamba3",
     "kernel_padded_width",
     "mamba3_ssd_reference",
     "dispatch_mamba3_ssd",
+    "get_backend_counters",
+    "reset_backend_counters",
 ]
+
+_BACKEND_COUNTERS: Counter[str] = Counter()
+
+
+def reset_backend_counters() -> None:
+    """Reset process-local Mamba-3 backend realization counters."""
+    _BACKEND_COUNTERS.clear()
+
+
+def get_backend_counters() -> dict[str, int]:
+    """Return process-local Mamba-3 backend realization counters."""
+    return dict(_BACKEND_COUNTERS)
 
 
 def kernel_padded_width(dim: int, *, min_width: int = 16) -> int:
@@ -69,14 +86,23 @@ def has_mamba3() -> bool:
     """
     Check if a Mamba-3 fast kernel is installed.
 
-    Unlike a plain ``import mamba_ssm`` check, this probes the specific Mamba-3 module,
-    since older ``mamba-ssm`` releases only ship Mamba-1/2. The Mamba-3 kernels currently
-    live on ``mamba-ssm`` ``main`` and require a source build.
+    Unlike a plain ``import mamba_ssm`` check, this imports the exact fused entry point used by
+    the adapter, since older ``mamba-ssm`` releases only ship Mamba-1/2. Only a genuinely absent
+    top-level package returns ``False``. Transitive dependency failures, missing Mamba-3 APIs, and
+    binary/ABI import errors are re-raised with their original diagnostics instead of being
+    misclassified as an optional-kernel absence and silently falling back.
     """
     try:
-        import mamba_ssm.modules.mamba3  # type: ignore  # noqa: F401
-    except Exception:
-        return False
+        from mamba_ssm.ops.triton.mamba3.mamba3_siso_combined import (  # type: ignore  # noqa: F401
+            mamba3_siso_combined,
+        )
+    except ModuleNotFoundError as e:
+        if e.name == "mamba_ssm":
+            return False
+        raise
+    import triton
+
+    assert_official_mamba3_runtime_compatible(torch.__version__, triton.__version__)
     return True
 
 
@@ -430,17 +456,21 @@ def dispatch_mamba3_ssd(
     :param rotation_scan_impl: Which of
         :data:`~olmo_core.nn.mamba3.mamba3_ssd_fast.ROTATION_SCAN_IMPLS` computes the ``b >= 3``
         prefix product on the fast-rotation path; ``None`` (the default) takes the
-        ``MAMBA3_ROTATION_SCAN_IMPL`` default. It reaches only ``mamba3_ssd_fast`` -- the
-        official and chunked backends have their own scan and ignore this argument, so a caller
-        that sets it *and* passes ``prefer_fast_rotation=False``, or that lands on the chunked
-        fallback, gets the default scan regardless. That is stated rather than enforced because
-        the argument is a preference like ``prefer_fast_kernel``; raising would make a config
-        field that is harmless on the reference path fatal on it.
+        ``MAMBA3_ROTATION_SCAN_IMPL`` default. An explicit non-chunked implementation is a strict
+        request: if the eligible fast-rotation kernel cannot run, dispatch raises instead of
+        silently benchmarking or training a different scan.
     """
     if not prefer_fast_kernel:
-        return mamba3_ssd_reference(
+        if rotation_scan_impl is not None:
+            raise RuntimeError(
+                f"rotation_scan_impl={rotation_scan_impl!r} was requested, but "
+                "prefer_fast_kernel=False selects the sequential reference"
+            )
+        output = mamba3_ssd_reference(
             x, B, C, dt, A, lam, theta, heads_per_group=heads_per_group, block_size=block_size
         )
+        _BACKEND_COUNTERS["reference"] += 1
+        return output
 
     if prefer_official_kernel and not _official_kernel_eligible(x, B):
         # An explicit request must not be silently downgraded. `mamba3_ssd_official` itself
@@ -456,12 +486,18 @@ def dispatch_mamba3_ssd(
             "chunked fallback."
         )
 
+    if rotation_scan_impl is not None and not prefer_fast_rotation:
+        raise RuntimeError(
+            f"rotation_scan_impl={rotation_scan_impl!r} was requested, but "
+            "prefer_fast_rotation=False selects the unmodified official rotation"
+        )
+
     if prefer_official_kernel is not False and _official_kernel_eligible(x, B):
         if prefer_official_kernel or _reduced_precision_requested(x):
             if prefer_fast_rotation:
                 from .mamba3_ssd_fast import mamba3_ssd_fast
 
-                return mamba3_ssd_fast(
+                output = mamba3_ssd_fast(
                     x,
                     B,
                     C,
@@ -473,10 +509,12 @@ def dispatch_mamba3_ssd(
                     block_size=block_size,
                     rotation_scan_impl=rotation_scan_impl,
                 )
+                _BACKEND_COUNTERS["official_fast"] += 1
+                return output
 
             from .mamba3_ssd_official import mamba3_ssd_official
 
-            return mamba3_ssd_official(
+            output = mamba3_ssd_official(
                 x,
                 B,
                 C,
@@ -487,12 +525,20 @@ def dispatch_mamba3_ssd(
                 heads_per_group=heads_per_group,
                 block_size=block_size,
             )
+            _BACKEND_COUNTERS["official"] += 1
+            return output
+
+    if rotation_scan_impl not in (None, "chunked"):
+        raise RuntimeError(
+            f"rotation_scan_impl={rotation_scan_impl!r} was requested, but the fast rotation "
+            "kernel is unavailable for this call; refusing the silent chunked fallback"
+        )
 
     # Imported here rather than at module scope: the chunked module imports the rotation
     # helpers from this one, so a top-level import would be circular.
     from .mamba3_ssd_chunked import mamba3_ssd_chunked
 
-    return mamba3_ssd_chunked(
+    output = mamba3_ssd_chunked(
         x,
         B,
         C,
@@ -504,6 +550,8 @@ def dispatch_mamba3_ssd(
         block_size=block_size,
         chunk_size=chunk_size,
     )
+    _BACKEND_COUNTERS["chunked"] += 1
+    return output
 
 
 def _maybe_fast_kernel_available() -> Optional[str]:

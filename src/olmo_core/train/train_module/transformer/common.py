@@ -125,6 +125,7 @@ def parallelize_model(
                         param_dtype=param_dtype,
                         reduce_dtype=dp_config.reduce_dtype.as_pt(),
                         pp_enabled=pp_enabled,
+                        reshard_after_forward=dp_config.reshard_after_forward,
                     )
                 m.apply_fsdp(
                     dp_mesh=dp_mesh,
@@ -133,6 +134,7 @@ def parallelize_model(
                     wrapping_strategy=dp_config.wrapping_strategy,
                     pp_enabled=pp_enabled,
                     prefetch_factor=dp_config.prefetch_factor,
+                    reshard_after_forward=dp_config.reshard_after_forward,
                 )
             log.info(f"Applied FSDP to the model with {get_device_mesh_info(dp_mesh)}")
         elif dp_config.name == DataParallelType.ddp:

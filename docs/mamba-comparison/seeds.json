@@ -1,0 +1,194 @@
+{
+  "schema_version": 1,
+  "status": "prepared-not-submitted",
+  "branch": "edullm/mamba-comparison",
+  "entrypoint": ".edullm/train_core6_arm.py",
+  "run_spec": ".edullm/run-comparison.yaml",
+  "arms": [
+    "mamba-b3",
+    "xlstm",
+    "mamba3-siso-pd",
+    "native-pd"
+  ],
+  "control": "mamba-b3",
+  "replicates_per_arm": 5,
+  "fanout_size": 20,
+  "cell_ordering": "arm-major",
+  "cell_order": [
+    "mamba-b3",
+    "mamba-b3",
+    "mamba-b3",
+    "mamba-b3",
+    "mamba-b3",
+    "xlstm",
+    "xlstm",
+    "xlstm",
+    "xlstm",
+    "xlstm",
+    "mamba3-siso-pd",
+    "mamba3-siso-pd",
+    "mamba3-siso-pd",
+    "mamba3-siso-pd",
+    "mamba3-siso-pd",
+    "native-pd",
+    "native-pd",
+    "native-pd",
+    "native-pd",
+    "native-pd"
+  ],
+  "data_seeds": [
+    210007,
+    220014,
+    230021,
+    240028,
+    250035
+  ],
+  "init_seeds_by_arm": {
+    "mamba-b3": [
+      110007,
+      120014,
+      130021,
+      140028,
+      150035
+    ],
+    "xlstm": [
+      113008,
+      123015,
+      133022,
+      143029,
+      153036
+    ],
+    "mamba3-siso-pd": [
+      116009,
+      126016,
+      136023,
+      146030,
+      156037
+    ],
+    "native-pd": [
+      119010,
+      129017,
+      139024,
+      149031,
+      159038
+    ]
+  },
+  "geometry": {
+    "layers": 16,
+    "d_model": 1024,
+    "vocab_size": 100352,
+    "sequence_length": 4096,
+    "attention_layers": [
+      3,
+      7,
+      11,
+      15
+    ],
+    "attention": "4 identical GQA FlashAttention-2 layers in every arm",
+    "mamba-b3": "12 Mamba-3 SISO layers with rotation block size 3",
+    "xlstm": "10 mLSTM + 2 sLSTM layers in [m,m,m,a,m,m,s,a] x 2",
+    "mamba3-siso-pd": "12 Mamba-3-improved native SISO PD-SSM layers",
+    "native-pd": "12 published native Flash PD-SSM layers"
+  },
+  "parameter_target": 390135552,
+  "parameter_tolerance": 195068,
+  "parameters_by_arm": {
+    "mamba-b3": 390148736,
+    "xlstm": 390143056,
+    "mamba3-siso-pd": 390169664,
+    "native-pd": 390142976
+  },
+  "recurrent_ffn_widths_by_arm": {
+    "mamba-b3": [
+      4800,
+      4800,
+      4800,
+      4800,
+      4800,
+      4800,
+      4800,
+      4768,
+      4768,
+      4768,
+      4768,
+      4768
+    ],
+    "xlstm": [
+      4672,
+      4672,
+      4672,
+      4672,
+      4672,
+      4672,
+      4672,
+      4672,
+      4640,
+      4640,
+      4640,
+      4640
+    ],
+    "mamba3-siso-pd": [
+      2752,
+      2752,
+      2752,
+      2752,
+      2752,
+      2752,
+      2752,
+      2752,
+      2752,
+      2752,
+      2752,
+      2720
+    ],
+    "native-pd": [
+      2432,
+      2432,
+      2432,
+      2432,
+      2432,
+      2432,
+      2400,
+      2400,
+      2400,
+      2400,
+      2400,
+      2400
+    ]
+  },
+  "steps": 3721,
+  "global_batch_size": 524288,
+  "tokens_per_cell": 1950875648,
+  "target_tokens_per_parameter": 5.0,
+  "tokens_per_parameter_by_arm": {
+    "mamba-b3": 5.00033825,
+    "xlstm": 5.00041105,
+    "mamba3-siso-pd": 5.00007004,
+    "native-pd": 5.00041207
+  },
+  "warmup_steps": 372,
+  "learning_rate": 0.0014,
+  "rank_microbatch_size": 8192,
+  "save_interval": 1861,
+  "compute": "gpu-8xa100",
+  "attempts": 1,
+  "dataset_release": "reservoir-dolma2-v1",
+  "dataset_contract": {
+    "edullm_data_commit": "38bf831a6c3f445e394784018441fd59288b876c",
+    "profile": "pretrain-tokens/v1",
+    "live_profiles": [
+      "eval-results/v1",
+      "pretrain-tokens/v1",
+      "sft-conversations/v1",
+      "token-order/v1",
+      "tokenizer/v1"
+    ]
+  },
+  "primary_endpoints": [
+    "val_ce",
+    "throughput_tok_s_steady",
+    "throughput_tok_s_steady_per_device",
+    "peak_memory_gib",
+    "peak_memory_reserved_gib"
+  ]
+}

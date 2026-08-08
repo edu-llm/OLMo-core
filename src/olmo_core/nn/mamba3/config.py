@@ -183,6 +183,7 @@ class Mamba3Config(TransformerConfig):
         prefer_official_kernel: Optional[bool] = None,
         rotation_scan_impl: Optional[str] = None,
         theta_max: Optional[float] = None,
+        fuse_input_projections: Optional[bool] = None,
         block_pattern: Optional[list[str]] = None,
         block_name: Mamba3BlockType = Mamba3BlockType.reordered_norm,
         use_rope: bool = False,
@@ -239,6 +240,8 @@ class Mamba3Config(TransformerConfig):
             :attr:`~olmo_core.nn.mamba3.mixer.Mamba3MixerConfig.theta_max`). ``None`` leaves it
             unbounded. Set to about ``1/sqrt(sequence_length)`` so the random walk's mixing time
             stays past the sequence length.
+        :param fuse_input_projections: Pack compatible mixer projections into three GEMMs.
+            ``None`` preserves the legacy seven-projection layout.
         :param block_pattern: Override the repeating block pattern. Pass ``["mamba3"]`` for a
             pure Mamba-3 stack; the default hybrid's attention layers can memorize short
             sequences and confound state-tracking evaluations.
@@ -277,6 +280,7 @@ class Mamba3Config(TransformerConfig):
                 prefer_official_kernel=prefer_official_kernel,
                 rotation_scan_impl=rotation_scan_impl,
                 theta_max=theta_max,
+                fuse_input_projections=fuse_input_projections,
                 dtype=dtype,
             ),
             feed_forward=FeedForwardConfig(hidden_size=intermediate_size, bias=False, dtype=dtype),

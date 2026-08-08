@@ -37,6 +37,16 @@ class DataParallelConfig(Config):
     reduce_dtype: DType = DType.float32
     num_replicas: Optional[int] = None
     shard_degree: Optional[int] = None
+    reshard_after_forward: Optional[bool] = None
+    """
+    Override FSDP's post-forward reshard policy. ``False`` retains full parameters until
+    backward, avoiding re-all-gathers at the cost of higher peak memory. ``None`` preserves
+    topology-dependent defaults.
+    """
+
+    def __post_init__(self):
+        if self.name == DataParallelType.ddp and self.reshard_after_forward is not None:
+            raise OLMoConfigurationError("'reshard_after_forward' is only valid for FSDP or HSDP")
 
     def get_replicate_and_shard_degree(self, dp_world_size: int) -> Tuple[int, int]:
         """

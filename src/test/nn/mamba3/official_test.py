@@ -13,10 +13,18 @@ measured relative RMS deviation is ~4e-3 forward and ~4-8e-3 backward; the gates
 error any genuine mapping mistake produces.
 """
 
+import importlib
+
 import pytest
 import torch
 
-from olmo_core.nn.mamba3.mamba3_ssd_api import dispatch_mamba3_ssd, mamba3_ssd_reference
+import olmo_core.nn.mamba3.mamba3_ssd_api as api
+from olmo_core.nn.mamba3.mamba3_ssd_api import (
+    dispatch_mamba3_ssd,
+    get_backend_counters,
+    mamba3_ssd_reference,
+    reset_backend_counters,
+)
 from olmo_core.nn.mamba3.mamba3_ssd_fast import mamba3_ssd_fast
 from olmo_core.nn.mamba3.mamba3_ssd_official import (
     mamba3_ssd_official,
@@ -24,10 +32,26 @@ from olmo_core.nn.mamba3.mamba3_ssd_official import (
 )
 from olmo_core.testing import requires_gpu
 
+fast_module = importlib.import_module("olmo_core.nn.mamba3.mamba3_ssd_fast")
+
 requires_official_mamba3 = pytest.mark.skipif(
     not official_mamba3_is_available(),
     reason="the official mamba-ssm Mamba-3 SISO kernel is not installed",
 )
+
+
+def test_dispatch_counter_proves_the_official_fast_backend_ran(monkeypatch):
+    kwargs = _inputs(device="cpu", block_size=3, d_state=6)
+    expected = torch.randn_like(kwargs["x"])
+    monkeypatch.setattr(api, "_official_kernel_eligible", lambda _x, _b: True)
+    monkeypatch.setattr(api, "_reduced_precision_requested", lambda _x: True)
+    monkeypatch.setattr(fast_module, "mamba3_ssd_fast", lambda *_args, **_kwargs: expected)
+    reset_backend_counters()
+
+    actual = dispatch_mamba3_ssd(**kwargs)
+
+    assert actual is expected
+    assert get_backend_counters() == {"official_fast": 1}
 
 
 def _inputs(
@@ -237,6 +261,19 @@ def test_dispatch_falls_back_to_chunked_on_cpu():
     )
     chunked = mamba3_ssd_chunked(**kwargs, heads_per_group=heads_per_group, block_size=block_size)
     assert torch.equal(dispatched, chunked), "CPU call did not fall back to the chunked path"
+
+
+def test_dispatch_rejects_silent_quaternion_fallback():
+    """An explicit quaternion request must not run a different scan implementation."""
+    kwargs, block_size, heads_per_group = _split(_inputs(device="cpu"))
+
+    with pytest.raises(RuntimeError, match="rotation_scan_impl='quaternion'"):
+        dispatch_mamba3_ssd(
+            **kwargs,
+            heads_per_group=heads_per_group,
+            block_size=block_size,
+            rotation_scan_impl="quaternion",
+        )
 
 
 @pytest.mark.parametrize(

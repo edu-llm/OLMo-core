@@ -93,7 +93,7 @@ docker-image :
 		--target release \
 		-t olmo-core:$(IMAGE_TAG) .
 	@docker run --rm olmo-core:$(IMAGE_TAG) python -c \
-		'import torch; import transformer_engine.pytorch; import flash_attn; import flash_attn_3.flash_attn_interface'
+		'import torch; import _flash_pd_native_cuda; import transformer_engine.pytorch; import flash_attn; import flash_attn_3.flash_attn_interface; import mamba_ssm; import triton; import liger_kernel; from mamba_ssm.ops.triton.mamba3.mamba3_siso_combined import mamba3_siso_combined; assert callable(mamba3_siso_combined); assert callable(_flash_pd_native_cuda.forward)'
 	@echo "✓ Image validated. Python environment:"
 	@echo ""
 	@docker run --rm olmo-core:$(IMAGE_TAG) pip list

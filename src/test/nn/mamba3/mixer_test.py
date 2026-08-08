@@ -6,6 +6,7 @@ import torch
 from olmo_core.config import DType
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.nn.attention import AttentionConfig
+from olmo_core.nn.buffer_cache import BufferCache
 from olmo_core.nn.mamba3 import Mamba3Mixer, Mamba3MixerConfig
 from olmo_core.nn.mamba3.mamba3_ssd_api import mamba3_ssd_reference
 from olmo_core.nn.transformer.init import InitMethod
@@ -675,6 +676,43 @@ def test_mamba3_mixer_fwd_bwd_cuda_bf16():
         assert torch.isfinite(p.grad).all(), f"non-finite grad for {name}"
 
     torch.testing.assert_close(y_bf16.float(), y_fp32, rtol=1.6e-2, atol=5e-3)
+
+
+def test_b3_one_token_decode_cache_matches_full_sequence_oracle():
+    torch.manual_seed(902)
+    config = Mamba3MixerConfig(
+        n_heads=2,
+        head_dim=4,
+        d_state=6,
+        n_groups=1,
+        mimo_rank=1,
+        rotation_block_size=3,
+        prefer_official_kernel=False,
+        fuse_input_projections=True,
+    )
+    prefill = config.build(d_model=8, layer_idx=0, n_layers=2)
+    cache = BufferCache()
+    decode = config.build(d_model=8, layer_idx=0, n_layers=2, cache=cache)
+    prefill.init_weights(
+        init_method=InitMethod.normal,
+        d_model=8,
+        block_idx=0,
+        num_blocks=2,
+        generator=torch.Generator().manual_seed(903),
+    )
+    decode.load_state_dict(prefill.state_dict())
+    x = torch.randn(2, 7, 8)
+
+    expected = prefill(x)
+    actual = torch.cat(
+        [decode(x[:, index : index + 1], decode=True) for index in range(x.shape[1])],
+        dim=1,
+    )
+
+    torch.testing.assert_close(actual, expected, rtol=2e-5, atol=2e-5)
+    assert decode._cache["cumulative_quaternion"].shape[-1] == 4
+    assert decode._cache["state"].shape == (2, 2, 1, 6, 4)
+    assert decode._cache["prior_state_input"].shape == (2, 2, 1, 6, 4)
 
 
 # ---------------------------------------------------------------------------------------

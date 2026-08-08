@@ -11,27 +11,33 @@ All Mamba-3 specifics live here:
      **rotation block size b=3** -- the NC^1 (non-solvable ``A_5 subset SO(3)``) arm, "my version".
      Pass ``--rotation-block-size 2`` for the TC^0 baseline; ``--d-state`` overrides the SSM state
      size (default 192, which admits b in {2,3,4}).
-  2. **Larger per-rank microbatch** (32 sequences vs the dense script's default). A 370M model is
-     tiny for a B200 and the Mamba mixer is latency/launch-bound, so a bigger microbatch buys
-     arithmetic intensity. It only changes gradient-accumulation granularity, not the global batch,
-     so it is resume-safe. Raise further with ``--rank-microbatch-size`` if memory allows.
-  3. **fp8 training** on the FLOP-heavy GEMMs only. MXFP8 by default (B200-native). The
-     recurrence-parameterising projections (``in_B``/``in_C``/``dt_proj``/``lam_proj``/
+  2. **A100-safe per-rank microbatch** (2 sequences / 8192 tokens at the default 4096 sequence
+     length). The former 32-sequence default OOMed even on a 183 GB B200 with the ordinary loss
+     path. Larger batches remain available through an explicit ``--rank-microbatch-size``; the
+     old B200-tuned envelope is an explicit ``--b200-optimized`` profile.
+  3. **bf16 by default**, with opt-in fp8 on the FLOP-heavy GEMMs only. ``--b200-optimized``
+     selects B200-native MXFP8, a 32-sequence microbatch, activation checkpointing, and fused
+     cross-entropy. The recurrence-parameterising projections
+     (``in_B``/``in_C``/``dt_proj``/``lam_proj``/
      ``theta_proj`` -- see :attr:`Mamba3Mixer.FP8_SENSITIVE_PROJECTIONS`) are kept in high
      precision, so decay, the trapezoidal blend, and the NC^1 rotation never see fp8 rounding.
-     ``--fp8 off`` trains in pure bf16; ``--fp8 rowwise`` uses scaled-mm fp8 (any fp8-capable GPU,
-     e.g. for local validation) instead of MXFP8.
+     ``--fp8 rowwise`` uses scaled-mm fp8 (any fp8-capable GPU) instead of MXFP8.
   4. **Activation checkpointing** (opt-in, ``--activation-checkpointing``). Recomputes each block's
      SwiGLU MLP in the backward pass instead of storing it, trading roughly one extra MLP forward
      for a large drop in block-activation memory (this is what lets the rank microbatch grow past
      ~24 seqs). It targets ``blocks.*.feed_forward`` only, so the Mamba-3 mixer -- and thus the fast
      official kernel -- is never wrapped. It does **not** shrink the LM-head logits, which dominate
      memory at large microbatch; pair it with fused cross-entropy for that.
-  5. **Fused cross-entropy** (opt-in, ``--fused-ce``). Switches the LM head to Liger-Kernel's fused
-     linear cross-entropy, which computes the loss in tiles over the vocab instead of materializing
-     the ``[tokens x vocab]`` logits and their gradient -- the memory term activation checkpointing
-     cannot touch, and the one that binds at a 64-seq microbatch. Requires the ``liger-kernel``
-     package (``RuntimeError`` at step 0 without it), and the model then returns no logits.
+  5. **Fused cross-entropy** (production default; ``--native-ce`` is the explicit control).
+     Switches the LM head to Liger-Kernel's fused linear cross-entropy, which computes the loss in
+     tiles over the vocab instead of materializing the ``[tokens x vocab]`` logits and their
+     gradient -- the memory term activation checkpointing cannot touch, and the one that binds at
+     a 64-seq microbatch. Requires the pinned ``liger-kernel`` package (preflighted before model
+     allocation), and the model then returns no logits.
+  6. **No packed-document reset yet.** The Mamba-3 mixer deliberately raises when
+     ``cu_doc_lens`` describes multiple packed documents, because carrying SSD state across a
+     boundary would leak context. Keep packing/reset disabled until recurrence-level reset support
+     exists; this script does not weaken that fail-closed contract.
 
 fp8 only swaps ``nn.Linear`` layers; it never touches the Mamba-3 SSD Triton kernel, so it is
 orthogonal to the kernel/AC choice. Activation checkpointing has two flavours here:
@@ -41,10 +47,9 @@ smoke tests' ``--activation-checkpointing`` escape hatch) wraps the mixer too an
 incompatible with the official kernel's ``autograd.Function``, so it must use the chunked path. The
 b>=3 rotation is served by the sequence-length-adaptive prefix-scan in ``mamba3_ssd_fast`` (the
 dispatch selects it automatically for the fast path); ``--rotation-scan-impl`` picks *which* scan,
-and unlike the ``MAMBA3_ROTATION_SCAN_IMPL`` environment variable it also defaults to, the flag is
-recorded in the saved config and the startup banner. That matters on resume: the environment-only
-form fell back to ``chunked`` whenever a relaunch forgot the export, which is 33,468 tok/s against
-``quaternion``'s 75,040 and raises nothing.
+defaults explicitly to ``quaternion``, and is recorded in the saved config and startup banner.
+That matters on resume: the environment-only form fell back to ``chunked`` whenever a relaunch
+forgot the export, which is 33,468 tok/s against ``quaternion``'s 75,040 and raises nothing.
 
 Learning rate: the dense builder sets the ladder LR from the model's parameter count. Because the
 two ablation arms have slightly different parameter counts (b=3 carries a wider angle projection
@@ -52,19 +57,24 @@ than b=2), this gives them slightly different LRs. That is preserved here for pa
 original recipe -- pass an explicit ``--lr`` to both arms if you want LR held fixed across the
 comparison. See the runbook's "decision divergence" note.
 
-Launch with torchrun, e.g. on a single B200:
+Launch the safe default with torchrun:
 
     torchrun --standalone --nproc-per-node=1 src/scripts/train/OLMo3/OLMo3-370M-mamba3.py my-run \\
         --rotation-block-size 3 --save-folder=s3://<bucket>/<run> --work-dir=/mnt/nvme/olmo-work
+
+Add ``--b200-optimized`` only on a B200 to opt into MXFP8, B32, activation checkpointing, and fused
+cross-entropy.
 
 Validate the config on CPU first (needs a local --data-config to stay offline):
 
     python src/scripts/train/OLMo3/OLMo3-370M-mamba3.py my-run --dry-run --data-config <local.yaml>
 """
 
+import importlib
 import importlib.util
 import os
 import sys
+from importlib import metadata
 from pathlib import Path
 from typing import Optional
 
@@ -87,7 +97,7 @@ from olmo_core.nn.mamba3.mamba3_ssd_fast import (
 from olmo_core.nn.transformer import TransformerActivationCheckpointingMode
 from olmo_core.nn.utils import no_weight_decay_param_names
 from olmo_core.optim import OptimGroupOverride
-from olmo_core.train.callbacks import ProfilerCallback
+from olmo_core.train.callbacks import Mamba3BackendMonitorCallback, ProfilerCallback
 from olmo_core.train.train_module import TransformerActivationCheckpointingConfig
 
 # The dense script is the single source of the config builder, training loop, argparse, and
@@ -112,18 +122,39 @@ log = dolma2.log
 
 # --- Mamba-3 arm defaults (override any of them from the CLI) --------------------------------
 FP8_RECIPES = ("mxfp8", "rowwise", "tensorwise", "off")
-DEFAULT_FP8_RECIPE = "mxfp8"  # B200-native; use "rowwise" for local (non-SM100) validation
+DEFAULT_FP8_RECIPE = "off"
 DEFAULT_MODEL_FACTORY = "mamba3_olmo3_370M"
 # NC^1 arm by default; pass --rotation-block-size 2 for the TC^0 baseline.
 # MAMBA3_ROTATION_BLOCK_SIZE is kept only as a fallback default for existing launch scripts; the
 # smoke tests take the flag alone.
 DEFAULT_ROTATION_BLOCK_SIZE = int(os.environ.get("MAMBA3_ROTATION_BLOCK_SIZE", 3))
-# 32 sequences/rank: divides the 192-seq global batch (6 accum steps) and raises arithmetic intensity
-# above the dense default. This default does NOT fit on its own -- at 32 seqs the LM head's
-# [tokens x vocab] logits gradient OOMs a B200 (183 GB) on the default loss path (observed). The real
-# runs pass --activation-checkpointing --fused-ce with a 64-seq microbatch instead; without those two,
-# drop to 24 or 16. Memory is constant per step at fixed seq length, so an OOM always hits at step 0.
-DEFAULT_RANK_MICROBATCH_SIZE = 32 * dolma2.DEFAULT_SEQUENCE_LENGTH
+DEFAULT_ROTATION_SCAN_IMPL = "quaternion"
+# Two sequences/rank is the verified safe A100 launch envelope at T=4096. The former B32 default
+# OOMed even on a 183 GB B200 without fused CE, so it survives only behind --b200-optimized.
+DEFAULT_RANK_MICROBATCH_SIZE = 2 * dolma2.DEFAULT_SEQUENCE_LENGTH
+B200_RANK_MICROBATCH_SIZE = 32 * dolma2.DEFAULT_SEQUENCE_LENGTH
+LIGER_KERNEL_VERSION = "0.6.4"
+
+
+def preflight_liger_fused_ce() -> str:
+    """Resolve the exact bundled Liger fused-linear CE symbol before model allocation."""
+    try:
+        installed_version = metadata.version("liger-kernel")
+        module = importlib.import_module("liger_kernel.ops.fused_linear_cross_entropy")
+        function = getattr(module, "LigerFusedLinearCrossEntropyFunction")
+        apply = function.apply
+    except (metadata.PackageNotFoundError, ImportError, AttributeError) as exc:
+        raise RuntimeError(
+            "Liger fused linear cross-entropy is the production default but its exact "
+            "bundled kernel is unavailable; use --native-ce only as an explicit control"
+        ) from exc
+    if installed_version != LIGER_KERNEL_VERSION:
+        raise RuntimeError(
+            f"expected liger-kernel=={LIGER_KERNEL_VERSION}, found {installed_version}"
+        )
+    if not callable(apply):
+        raise RuntimeError("LigerFusedLinearCrossEntropyFunction.apply is not callable")
+    return f"liger-kernel=={installed_version}:" "LigerFusedLinearCrossEntropyFunction.apply"
 
 
 def make_float8_config(recipe: str, modules_to_ignore):
@@ -221,7 +252,10 @@ def build_mamba_model_config(opts):
             f"admissible sizes are {admissible}"
         )
 
-    kwargs = {"rotation_block_size": opts.rotation_block_size}
+    kwargs = {
+        "rotation_block_size": opts.rotation_block_size,
+        "fuse_input_projections": opts.fuse_input_projections,
+    }
     if opts.d_state is not None:
         kwargs["d_state"] = opts.d_state
     if opts.rotation_scan_impl is not None:
@@ -312,6 +346,8 @@ def build_config(opts, overrides):
     ``TransformerConfig``, so the field accepts it) and re-derive the ladder LR from the Mamba
     model's parameter count, matching what the dense builder does for its own model.
     """
+    if getattr(opts, "fused_ce", False):
+        log.info("Liger fused CE preflight: %s", preflight_liger_fused_ce())
     config = dolma2.build_config(opts, overrides)
 
     model_config, d_state = build_mamba_model_config(opts)
@@ -330,9 +366,8 @@ def build_config(opts, overrides):
         config.train_module.optim, model_config.build(init_device="meta")
     )
 
-    # The scan is logged *resolved*, not as it was typed: an unset flag still runs a specific
-    # implementation, and "which scan did this run use" is exactly the question the environment-only
-    # version left unanswerable after the fact.
+    # The scan is logged *resolved*, not as it was typed. The dedicated b=3 script defaults to an
+    # explicit quaternion selection so the CLI, saved config, preflight guard above, and banner agree.
     log.info(
         "Mamba-3 arm: rotation_block_size=%d (%s), d_state=%d, rotation_scan_impl=%s, "
         "theta_max=%s, a_log_init_range=(%s, %s), lr=%.3e",
@@ -378,15 +413,25 @@ def build_config(opts, overrides):
             "(fast Mamba-3 kernel preserved; MLP recomputed in backward)"
         )
 
-    # Fused cross-entropy (opt-in via --fused-ce). This is the memory term AC above cannot reach: the
-    # default LM head materializes the full [tokens x vocab] logits AND their gradient, which at a
-    # 64-seq microbatch is the binding constraint. The fused_linear path (Liger-Kernel) computes the
-    # loss in tiles over the vocab and never materializes logits at all. It requires the
-    # `liger-kernel` package -- missing, the first step dies with RuntimeError -- and the LM head then
-    # returns logits=None, so nothing downstream may ask for logits back.
+    # Fused cross-entropy is the production default. This is the memory term AC above cannot reach:
+    # the native LM head materializes the full [tokens x vocab] logits AND their gradient, which at
+    # a 64-seq microbatch is the binding constraint. The fused_linear path (Liger-Kernel) computes
+    # the loss in tiles over the vocab and never materializes logits at all. Its exact pinned symbol
+    # is preflighted before model allocation, and the LM head returns logits=None, so nothing
+    # downstream may ask for logits back.
     if getattr(opts, "fused_ce", False):
         config.model.lm_head.loss_implementation = LMLossImplementation.fused_linear
         log.info("fused cross-entropy ON: LM head returns no logits (requires liger-kernel)")
+
+    config.train_module.accumulate_grads_without_comm = opts.accumulate_grads_without_comm
+    if config.train_module.dp_config is None:
+        raise RuntimeError("Mamba-3 A100 defaults require an explicit data-parallel config")
+    config.train_module.dp_config.reshard_after_forward = opts.reshard_after_forward
+    log.info(
+        "FSDP communication policy: accumulate_grads_without_comm=%s " "reshard_after_forward=%s",
+        opts.accumulate_grads_without_comm,
+        opts.reshard_after_forward,
+    )
 
     # Silent-failure guard: at pre_train it re-checks rotation_block_size on the built model (a backstop
     # behind the post-build guard), then watches grad-norm / skip-rate / plateau / decay-horizon each
@@ -400,6 +445,10 @@ def build_config(opts, overrides):
             sequence_length=config.train_module.max_sequence_length,
             cancel_on_alert=True,
         ),
+    )
+    config.trainer = config.trainer.with_callback(
+        "mamba3_backend_monitor",
+        Mamba3BackendMonitorCallback(expected_backend="official_fast"),
     )
 
     # --profile: torch.profiler over steps 7-9 (wait=1, warmup=5, active=3), which then logs the top-32
@@ -454,11 +503,11 @@ def parse_args(argv=None):
     """
     Parse args by delegating to the dense script, with the Mamba-3 options handled here.
 
-    ``--fp8``, ``--model-factory``, ``--rotation-block-size``, ``--d-state`` and
-    ``--rotation-scan-impl`` are consumed here and kept away from the dense parser (which, being
-    the pristine dense script, does not know the Mamba factories or the block-size flag).
-    ``--rank-microbatch-size`` is injected as a default but left for the dense parser to validate.
-    Everything else is the dense script's argparse.
+    ``--fp8``, ``--model-factory``, ``--rotation-block-size``, ``--d-state``,
+    ``--rotation-scan-impl`` and ``--b200-optimized`` are consumed here and kept away from the
+    dense parser (which, being the pristine dense script, does not know the Mamba factories or the
+    block-size flag). ``--rank-microbatch-size`` is injected as a safe default but left for the
+    dense parser to validate. Everything else is the dense script's argparse.
 
     :returns: ``(opts, overrides)`` with ``opts.fp8`` / ``opts.model_factory`` /
         ``opts.rotation_block_size`` / ``opts.d_state`` / ``opts.rotation_scan_impl`` set.
@@ -476,9 +525,8 @@ def parse_args(argv=None):
             f"  --d-state N                SSM state size (default: {DEFAULT_D_STATE}; admits b in "
             f"{admissible_block_sizes(DEFAULT_D_STATE)})\n"
             f"  --rotation-scan-impl NAME  b>=3 prefix scan, one of "
-            f"{{{'|'.join(ROTATION_SCAN_IMPLS)}}} (default: unset, i.e. "
-            f"{resolve_rotation_scan_impl(None)} from MAMBA3_ROTATION_SCAN_IMPL). Recorded in the "
-            f"saved config and the startup log; the env var is not.\n"
+            f"{{{'|'.join(ROTATION_SCAN_IMPLS)}}} (default: "
+            f"{DEFAULT_ROTATION_SCAN_IMPL}). Recorded in the saved config and startup log.\n"
             f"  --theta-max FLOAT          Bound the per-step rotation angle as "
             f"theta_max*tanh(theta/theta_max), at every b. The cumulative rotation is a random "
             f"walk on a compact group that mixes to its Haar measure in ~1/||theta||^2 steps and "
@@ -493,30 +541,52 @@ def parse_args(argv=None):
             f"averaging the document instead of modelling locally. INIT ONLY.\n"
             f"  --fp8 {{{'|'.join(FP8_RECIPES)}}}  fp8 recipe (default: {DEFAULT_FP8_RECIPE}); SSM "
             f"projections stay high-precision\n"
+            f"  --b200-optimized           explicit B200-only profile: MXFP8, 32 sequences/rank, "
+            f"activation checkpointing, and fused CE. Off by default.\n"
             f"  --activation-checkpointing  recompute MLPs in backward (blocks.*.feed_forward); "
             f"keeps the fast kernel. Off by default.\n"
-            f"  --fused-ce                 fused linear cross-entropy: drops the [tokens x vocab] "
-            f"logits. Needs liger-kernel; no logits returned. Off by default.\n"
+            f"  --fused-ce                 fused linear cross-entropy (production default): drops "
+            f"the [tokens x vocab] logits. Needs bundled liger-kernel.\n"
+            f"  --native-ce                explicit native CE control; materializes full logits.\n"
+            f"  --unfused-input-projections  use the legacy seven-projection execution/checkpoint "
+            f"layout. Off by default.\n"
             f"  --profile                  torch.profiler over steps 7-9; logs the top-32 CUDA ops "
             f"and writes a trace to <work-dir>/profiler. Off by default.\n"
+            f"  --sync-every-microbatch    memory escape: restore FSDP gradient synchronization "
+            f"on every microbatch. Off by default.\n"
+            f"  --reshard-after-forward    memory escape: release full FSDP parameters after "
+            f"forward. Off by default.\n"
             f"  --rank-microbatch-size defaults to {DEFAULT_RANK_MICROBATCH_SIZE} "
-            f"(32 seqs) for this script.\n"
+            f"(2 seqs) for this script; larger values are an explicit memory opt-in.\n"
         )
 
-    recipe, argv = _pop_opt(argv, "--fp8", DEFAULT_FP8_RECIPE)
+    b200_optimized, argv = _pop_flag(argv, "--b200-optimized")
+    recipe_default = "mxfp8" if b200_optimized else DEFAULT_FP8_RECIPE
+    recipe, argv = _pop_opt(argv, "--fp8", recipe_default)
     factory, argv = _pop_opt(argv, "--model-factory", DEFAULT_MODEL_FACTORY)
     block_size_str, argv = _pop_opt(argv, "--rotation-block-size", None)
     d_state_str, argv = _pop_opt(argv, "--d-state", None)
-    rotation_scan_impl, argv = _pop_opt(argv, "--rotation-scan-impl", None)
+    rotation_scan_impl, argv = _pop_opt(argv, "--rotation-scan-impl", DEFAULT_ROTATION_SCAN_IMPL)
     theta_max_str, argv = _pop_opt(argv, "--theta-max", None)
     a_log_init_min_str, argv = _pop_opt(argv, "--a-log-init-min", None)
     a_log_init_max_str, argv = _pop_opt(argv, "--a-log-init-max", None)
     ac_enabled, argv = _pop_flag(argv, "--activation-checkpointing")
     fused_ce, argv = _pop_flag(argv, "--fused-ce")
+    native_ce, argv = _pop_flag(argv, "--native-ce")
+    unfused_input_projections, argv = _pop_flag(argv, "--unfused-input-projections")
     profile, argv = _pop_flag(argv, "--profile")
+    sync_every_microbatch, argv = _pop_flag(argv, "--sync-every-microbatch")
+    reshard_after_forward, argv = _pop_flag(argv, "--reshard-after-forward")
 
     if recipe not in FP8_RECIPES:
         raise SystemExit(f"--fp8 must be one of {FP8_RECIPES}, got {recipe!r}")
+    if recipe == "mxfp8" and not b200_optimized:
+        raise SystemExit(
+            "--fp8 mxfp8 is B200-only; pass --b200-optimized to acknowledge the hardware "
+            "and memory profile"
+        )
+    if fused_ce and native_ce:
+        raise SystemExit("--fused-ce and --native-ce are mutually exclusive")
 
     # Precedence for the block size: explicit flag > MAMBA3_ROTATION_BLOCK_SIZE env > default (3).
     if block_size_str is None:
@@ -545,7 +615,10 @@ def parse_args(argv=None):
             raise SystemExit(f"--rotation-scan-impl: {e}")
 
     if not _has_flag(argv, "--rank-microbatch-size"):
-        argv += ["--rank-microbatch-size", str(DEFAULT_RANK_MICROBATCH_SIZE)]
+        rank_microbatch_size = (
+            B200_RANK_MICROBATCH_SIZE if b200_optimized else DEFAULT_RANK_MICROBATCH_SIZE
+        )
+        argv += ["--rank-microbatch-size", str(rank_microbatch_size)]
 
     saved_argv = sys.argv
     try:
@@ -558,6 +631,7 @@ def parse_args(argv=None):
     # produces a valid config; the Mamba factory is carried separately and swapped in by
     # build_config -> build_mamba_model_config. This is what keeps the dense script untouched.
     opts.fp8 = recipe
+    opts.b200_optimized = b200_optimized
     opts.mamba_factory = factory
     opts.rotation_block_size = rotation_block_size
     opts.d_state = d_state
@@ -598,9 +672,20 @@ def parse_args(argv=None):
             f"--a-log-init-min must be < --a-log-init-max, got "
             f"({opts.a_log_init_min}, {opts.a_log_init_max})"
         )
-    opts.activation_checkpointing = ac_enabled
-    opts.fused_ce = fused_ce
+    opts.activation_checkpointing = ac_enabled or b200_optimized
+    opts.fused_ce = not native_ce
+    opts.fuse_input_projections = not unfused_input_projections
     opts.profile = profile
+    opts.accumulate_grads_without_comm = not sync_every_microbatch
+    opts.reshard_after_forward = reshard_after_forward
+    if opts.rank_microbatch_size > DEFAULT_RANK_MICROBATCH_SIZE and (
+        not opts.fused_ce or not opts.activation_checkpointing
+    ):
+        raise SystemExit(
+            f"--rank-microbatch-size above {DEFAULT_RANK_MICROBATCH_SIZE} tokens is "
+            "unverified on A100-40GB and requires both fused CE and "
+            "--activation-checkpointing"
+        )
     return opts, overrides
 
 

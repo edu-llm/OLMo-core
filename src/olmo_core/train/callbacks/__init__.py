@@ -6,6 +6,7 @@ from .batch_size_scheduler import BatchSizeSchedulerCallback
 from .beaker import BeakerCallback
 from .callback import Callback, CallbackConfig
 from .checkpointer import CheckpointerCallback, CheckpointRemovalStrategy
+from .compile_monitor import CompileMonitorCallback
 from .comet import CometCallback, CometNotificationSetting
 from .config_saver import ConfigSaverCallback
 from .console_logger import ConsoleLoggerCallback
@@ -19,6 +20,7 @@ from .garbage_collector import GarbageCollectorCallback
 from .gpu_memory_monitor import GPUMemoryMonitorCallback
 from .hf_converter import HFConverterCallback
 from .list_checkpointer import ListCheckpointerCallback
+from .mamba3_backend_monitor import Mamba3BackendMonitorCallback
 from .metric_saver import MetricSaverCallback
 from .model_merger import ModelMergeCallback
 from .monkey_patcher import MonkeyPatcherCallback
@@ -34,6 +36,7 @@ __all__ = [
     "CallbackConfig",
     "CheckpointerCallback",
     "CheckpointRemovalStrategy",
+    "CompileMonitorCallback",
     "CometCallback",
     "CometNotificationSetting",
     "ConfigSaverCallback",
@@ -56,6 +59,7 @@ __all__ = [
     "BatchSizeSchedulerCallback",
     "MonkeyPatcherCallback",
     "MetricSaverCallback",
+    "Mamba3BackendMonitorCallback",
     "ModelMergeCallback",
     "ListCheckpointerCallback",
 ]

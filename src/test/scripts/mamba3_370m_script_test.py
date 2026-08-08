@@ -101,17 +101,14 @@ def test_fp8_config_for_model_off_returns_none(script):
 
 
 # ------------------------------------------------------------------------------------------
-# Defaults: this script is the NC^1 arm, fed harder, in fp8
+# Defaults: this script is the NC^1 arm with an A100-safe launch envelope
 # ------------------------------------------------------------------------------------------
 
 
-def test_defaults_are_the_nc1_mamba_arm_fed_harder_in_fp8(script):
+def test_defaults_are_the_nc1_mamba_arm_with_safe_precision_and_batch(script):
     """
-    The whole point of a separate script is that its *defaults* differ from the dense one.
-
-    Model factory is the Mamba-3 hybrid, the rotation block size is the NC^1 arm (b=3), fp8 is on,
-    and the per-rank microbatch is larger than the dense script's so the small 370M is not left
-    memory-underfed on a B200.
+    The default must be runnable on A100 rather than silently selecting B200-only MXFP8 or a
+    32-sequence microbatch that OOMs even on a 183 GB B200.
     """
     opts, _ = script.parse_args(["my-run", "--dry-run"])
 
@@ -122,9 +119,114 @@ def test_defaults_are_the_nc1_mamba_arm_fed_harder_in_fp8(script):
     assert opts.mamba_factory == "mamba3_olmo3_370M"
     assert opts.model_factory == "olmo3_370M"
     assert opts.rotation_block_size == 3
-    assert opts.fp8 == "mxfp8"
+    assert opts.fp8 == "off"
     assert opts.rank_microbatch_size == script.DEFAULT_RANK_MICROBATCH_SIZE
-    assert script.DEFAULT_RANK_MICROBATCH_SIZE > script.dolma2.DEFAULT_RANK_MICROBATCH_SIZE
+    assert opts.rotation_scan_impl == "quaternion"
+    assert opts.accumulate_grads_without_comm is True
+    assert opts.reshard_after_forward is False
+    assert opts.fused_ce is True
+    assert opts.fuse_input_projections is True
+
+
+def test_default_microbatch_is_two_4096_token_sequences_per_rank(script):
+    opts, _ = script.parse_args(["my-run", "--dry-run"])
+
+    assert script.dolma2.DEFAULT_SEQUENCE_LENGTH == 4096
+    assert opts.rank_microbatch_size == 2 * script.dolma2.DEFAULT_SEQUENCE_LENGTH == 8192
+
+
+def test_b200_profile_explicitly_restores_the_optimized_precision_and_batch(script):
+    """The former risky defaults remain available only behind a clearly named opt-in."""
+    opts, _ = script.parse_args(["my-run", "--dry-run", "--b200-optimized"])
+
+    assert opts.b200_optimized is True
+    assert opts.fp8 == "mxfp8"
+    assert opts.rank_microbatch_size == script.B200_RANK_MICROBATCH_SIZE
+    assert opts.rank_microbatch_size == 32 * script.dolma2.DEFAULT_SEQUENCE_LENGTH
+    assert opts.activation_checkpointing is True
+    assert opts.fused_ce is True
+
+
+def test_b200_only_mxfp8_requires_the_explicit_profile(script):
+    with pytest.raises(SystemExit, match="B200|b200"):
+        script.parse_args(["my-run", "--dry-run", "--fp8", "mxfp8"])
+
+
+def test_a100_memory_escape_flags_restore_per_microbatch_sync_and_resharding(script):
+    opts, _ = script.parse_args(
+        [
+            "my-run",
+            "--dry-run",
+            "--sync-every-microbatch",
+            "--reshard-after-forward",
+        ]
+    )
+
+    assert opts.accumulate_grads_without_comm is False
+    assert opts.reshard_after_forward is True
+
+
+def test_native_cross_entropy_remains_an_explicit_control(script):
+    opts, _ = script.parse_args(["my-run", "--dry-run", "--native-ce"])
+
+    assert opts.fused_ce is False
+
+
+def test_projection_packing_is_the_production_default_with_an_escape_hatch(script):
+    default_opts, _ = script.parse_args(["my-run", "--dry-run"])
+    default_model, _ = script.build_mamba_model_config(default_opts)
+    default_blocks = default_model.block
+    assert isinstance(default_blocks, dict)
+    assert default_blocks["mamba3"].sequence_mixer.fuse_input_projections is True
+
+    control_opts, _ = script.parse_args(["my-run", "--dry-run", "--unfused-input-projections"])
+    control_model, _ = script.build_mamba_model_config(control_opts)
+    control_blocks = control_model.block
+    assert isinstance(control_blocks, dict)
+    assert control_blocks["mamba3"].sequence_mixer.fuse_input_projections is False
+
+
+def test_default_liger_path_preflights_the_exact_bundled_symbol(script, monkeypatch):
+    class MockLigerFusedLinearCrossEntropyFunction:
+        @staticmethod
+        def apply(*args, **kwargs):
+            del args, kwargs
+
+    imported = []
+
+    module = ModuleType("liger_kernel.ops.fused_linear_cross_entropy")
+    module.LigerFusedLinearCrossEntropyFunction = MockLigerFusedLinearCrossEntropyFunction
+    monkeypatch.setattr(
+        script.importlib,
+        "import_module",
+        lambda name: imported.append(name) or module,
+    )
+    monkeypatch.setattr(script.metadata, "version", lambda _name: "0.6.4")
+
+    assert (
+        script.preflight_liger_fused_ce()
+        == "liger-kernel==0.6.4:LigerFusedLinearCrossEntropyFunction.apply"
+    )
+    assert imported == ["liger_kernel.ops.fused_linear_cross_entropy"]
+
+
+def test_larger_a100_microbatch_requires_both_fused_ce_and_checkpointing(script):
+    large_batch = [
+        "my-run",
+        "--dry-run",
+        "--rank-microbatch-size",
+        str(8 * script.dolma2.DEFAULT_SEQUENCE_LENGTH),
+    ]
+
+    with pytest.raises(SystemExit, match="unverified on A100-40GB"):
+        script.parse_args(large_batch)
+
+    opts, _ = script.parse_args([*large_batch, "--activation-checkpointing"])
+    assert opts.fused_ce is True
+    assert opts.activation_checkpointing is True
+
+    with pytest.raises(SystemExit, match="requires both"):
+        script.parse_args([*large_batch, "--activation-checkpointing", "--native-ce"])
 
 
 def test_weight_decay_exemption_survives_resuming_an_older_checkpoint(script):
@@ -154,12 +256,24 @@ def test_weight_decay_exemption_survives_resuming_an_older_checkpoint(script):
 
 
 def test_explicit_flags_override_the_mamba_defaults(script):
-    """A user must still be able to run the b=2 baseline or turn fp8 off from this same script."""
+    """A user must still be able to run the b=2 baseline or choose a larger A100 batch."""
     opts, _ = script.parse_args(
-        ["my-run", "--dry-run", "--rotation-block-size", "2", "--fp8", "off"]
+        [
+            "my-run",
+            "--dry-run",
+            "--rotation-block-size",
+            "2",
+            "--fp8",
+            "off",
+            "--rank-microbatch-size",
+            "16384",
+            "--activation-checkpointing",
+        ]
     )
     assert opts.rotation_block_size == 2
     assert opts.fp8 == "off"
+    assert opts.rank_microbatch_size == 16384
+    assert opts.activation_checkpointing is True
 
 
 # ------------------------------------------------------------------------------------------
@@ -172,10 +286,13 @@ def test_explicit_flags_override_the_mamba_defaults(script):
 # ------------------------------------------------------------------------------------------
 
 
-def test_rotation_scan_impl_defaults_to_unset(script):
-    """Unset must stay unset rather than being resolved here, so the env var still decides."""
+def test_rotation_scan_impl_defaults_to_quaternion_in_the_saved_model_config(script):
+    """A relaunch must not silently fall back to the environment's chunked scan."""
     opts, _ = script.parse_args(["my-run", "--dry-run"])
-    assert opts.rotation_scan_impl is None
+    assert opts.rotation_scan_impl == "quaternion"
+
+    model_config, _ = script.build_mamba_model_config(opts)
+    assert script._rotation_scan_impl_of(model_config) == "quaternion"
 
 
 @pytest.mark.parametrize("form", ["space", "equals"])

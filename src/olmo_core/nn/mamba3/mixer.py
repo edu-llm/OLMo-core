@@ -1,6 +1,6 @@
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Optional, Sequence
 
 import torch
 import torch.nn as nn
@@ -18,7 +18,13 @@ from olmo_core.nn.attention.ring import (
 from olmo_core.nn.buffer_cache import BufferCache
 
 from .mamba3_ssd_api import dispatch_mamba3_ssd, kernel_padded_width
-from .mamba3_ssd_fast import resolve_rotation_scan_impl
+from .mamba3_ssd_fast import (
+    _angles_to_quaternion,
+    _quaternion_conjugate,
+    _quaternion_multiply,
+    _quaternion_rotate,
+    resolve_rotation_scan_impl,
+)
 
 if TYPE_CHECKING:
     from olmo_core.nn.transformer.init import InitMethod
@@ -96,7 +102,7 @@ def mamba3_modules_to_ignore_for_fp8(model: nn.Module) -> set:
     ignore = set()
     for name, module in model.named_modules():
         if isinstance(module, Mamba3Mixer):
-            for proj in Mamba3Mixer.FP8_SENSITIVE_PROJECTIONS:
+            for proj in module.fp8_sensitive_projections():
                 if isinstance(getattr(module, proj, None), nn.Linear):
                     ignore.add(f"{name}.{proj}" if name else proj)
     return ignore
@@ -235,6 +241,7 @@ class Mamba3Mixer(SequenceMixer):
         "lam_proj",
         "theta_proj",
     )
+    FUSED_FP8_SENSITIVE_PROJECTIONS: tuple[str, ...] = ("in_bc", "in_dynamics")
     """
     Projections that parameterise the state-space recurrence and must stay out of fp8.
 
@@ -267,6 +274,8 @@ class Mamba3Mixer(SequenceMixer):
         theta_max: Optional[float] = None,
         dtype: torch.dtype = torch.float32,
         init_device: str = "cpu",
+        fuse_input_projections: bool = False,
+        cache: Optional[BufferCache] = None,
     ):
         super().__init__()
         _validate_dims(
@@ -317,27 +326,53 @@ class Mamba3Mixer(SequenceMixer):
         if theta_max is not None and theta_max <= 0:
             raise OLMoConfigurationError(f"theta_max must be positive, got {theta_max}")
         self.theta_max = theta_max
+        self.fuse_input_projections = fuse_input_projections
+        self._cache = cache if cache is not None else BufferCache()
 
         inner = self.n_heads * self.head_dim
         bc_out = self.n_groups * self.mimo_rank * self.d_state
+        theta_out = self.n_groups * self.n_rotation_blocks * self.angles_per_block
 
-        self.in_x = nn.Linear(d_model, inner, bias=False, dtype=dtype, device=init_device)
-        self.in_z = nn.Linear(d_model, inner, bias=False, dtype=dtype, device=init_device)
-        self.in_B = nn.Linear(d_model, bc_out, bias=bc_bias, dtype=dtype, device=init_device)
-        self.in_C = nn.Linear(d_model, bc_out, bias=bc_bias, dtype=dtype, device=init_device)
-        self.dt_proj = nn.Linear(d_model, self.n_heads, bias=False, dtype=dtype, device=init_device)
-        self.lam_proj = nn.Linear(
-            d_model, self.n_heads, bias=False, dtype=dtype, device=init_device
-        )
-        # b*(b-1)//2 angles per block spans so(b). At b == 2 this is one angle per channel pair,
-        # i.e. exactly the output width of the pre-blocked implementation.
-        self.theta_proj = nn.Linear(
-            d_model,
-            self.n_groups * self.n_rotation_blocks * self.angles_per_block,
-            bias=False,
-            dtype=dtype,
-            device=init_device,
-        )
+        self.in_x: Optional[nn.Linear] = None
+        self.in_z: Optional[nn.Linear] = None
+        self.in_B: Optional[nn.Linear] = None
+        self.in_C: Optional[nn.Linear] = None
+        self.dt_proj: Optional[nn.Linear] = None
+        self.lam_proj: Optional[nn.Linear] = None
+        self.theta_proj: Optional[nn.Linear] = None
+        self.in_xz: Optional[nn.Linear] = None
+        self.in_bc: Optional[nn.Linear] = None
+        self.in_dynamics: Optional[nn.Linear] = None
+        if fuse_input_projections:
+            self.in_xz = nn.Linear(d_model, 2 * inner, bias=False, dtype=dtype, device=init_device)
+            self.in_bc = nn.Linear(
+                d_model, 2 * bc_out, bias=bc_bias, dtype=dtype, device=init_device
+            )
+            self.in_dynamics = nn.Linear(
+                d_model,
+                2 * self.n_heads + theta_out,
+                bias=False,
+                dtype=dtype,
+                device=init_device,
+            )
+        else:
+            self.in_x = nn.Linear(d_model, inner, bias=False, dtype=dtype, device=init_device)
+            self.in_z = nn.Linear(d_model, inner, bias=False, dtype=dtype, device=init_device)
+            self.in_B = nn.Linear(d_model, bc_out, bias=bc_bias, dtype=dtype, device=init_device)
+            self.in_C = nn.Linear(d_model, bc_out, bias=bc_bias, dtype=dtype, device=init_device)
+            self.dt_proj = nn.Linear(
+                d_model, self.n_heads, bias=False, dtype=dtype, device=init_device
+            )
+            self.lam_proj = nn.Linear(
+                d_model, self.n_heads, bias=False, dtype=dtype, device=init_device
+            )
+            self.theta_proj = nn.Linear(
+                d_model,
+                theta_out,
+                bias=False,
+                dtype=dtype,
+                device=init_device,
+            )
         self.out_proj = nn.Linear(inner, d_model, bias=False, dtype=dtype, device=init_device)
 
         # SSM parameters are kept in float32 for stability, like GatedDeltaNet.
@@ -362,6 +397,73 @@ class Mamba3Mixer(SequenceMixer):
             self.register_parameter("bc_norm_b", None)
             self.register_parameter("bc_norm_c", None)
 
+    def fp8_sensitive_projections(self) -> tuple[str, ...]:
+        """Return recurrence-sensitive projection names for the active layout."""
+        if self.fuse_input_projections:
+            return self.FUSED_FP8_SENSITIVE_PROJECTIONS
+        return self.FP8_SENSITIVE_PROJECTIONS
+
+    def _convert_projection_state_dict(self, state_dict: dict, prefix: str) -> None:
+        """Convert the alternate projection layout in-place before strict loading."""
+
+        def fuse(target: str, sources: tuple[str, ...]) -> None:
+            target = prefix + target
+            sources = tuple(prefix + source for source in sources)
+            if target not in state_dict and all(source in state_dict for source in sources):
+                state_dict[target] = torch.cat(
+                    [state_dict.pop(source) for source in sources], dim=0
+                )
+
+        def unfuse(source: str, targets: tuple[str, ...], sizes: tuple[int, ...]) -> None:
+            source = prefix + source
+            targets = tuple(prefix + target for target in targets)
+            if source in state_dict and not any(target in state_dict for target in targets):
+                state_dict.update(zip(targets, state_dict.pop(source).split(sizes, dim=0)))
+
+        inner = self.n_heads * self.head_dim
+        bc_out = self.n_groups * self.mimo_rank * self.d_state
+        theta_out = self.n_groups * self.n_rotation_blocks * self.angles_per_block
+        if self.fuse_input_projections:
+            fuse("in_xz.weight", ("in_x.weight", "in_z.weight"))
+            fuse("in_bc.weight", ("in_B.weight", "in_C.weight"))
+            if self.bc_bias:
+                fuse("in_bc.bias", ("in_B.bias", "in_C.bias"))
+            fuse(
+                "in_dynamics.weight",
+                ("dt_proj.weight", "lam_proj.weight", "theta_proj.weight"),
+            )
+        else:
+            unfuse("in_xz.weight", ("in_x.weight", "in_z.weight"), (inner, inner))
+            unfuse("in_bc.weight", ("in_B.weight", "in_C.weight"), (bc_out, bc_out))
+            if self.bc_bias:
+                unfuse("in_bc.bias", ("in_B.bias", "in_C.bias"), (bc_out, bc_out))
+            unfuse(
+                "in_dynamics.weight",
+                ("dt_proj.weight", "lam_proj.weight", "theta_proj.weight"),
+                (self.n_heads, self.n_heads, theta_out),
+            )
+
+    def _load_from_state_dict(
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ):
+        self._convert_projection_state_dict(state_dict, prefix)
+        super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
+
     def forward(
         self,
         x: torch.Tensor,
@@ -381,6 +483,7 @@ class Mamba3Mixer(SequenceMixer):
 
         :returns: The output of shape ``(batch_size, seq_len, d_model)``.
         """
+        decode = bool(kwargs.pop("decode", False))
         del kwargs
 
         if cu_doc_lens is not None and cu_doc_lens.numel() > 2:
@@ -405,16 +508,38 @@ class Mamba3Mixer(SequenceMixer):
             self.mimo_rank,
         )
 
-        xv = self.in_x(x).view(batch, seq_len, H, P)
-        z = self.in_z(x).view(batch, seq_len, H, P)
-        Bm = self.in_B(x).view(batch, seq_len, G, R, N)
-        Cm = self.in_C(x).view(batch, seq_len, G, R, N)
+        if self.fuse_input_projections:
+            assert self.in_xz is not None
+            assert self.in_bc is not None
+            assert self.in_dynamics is not None
+            xv, z = self.in_xz(x).split((H * P, H * P), dim=-1)
+            Bm, Cm = self.in_bc(x).split((G * R * N, G * R * N), dim=-1)
+            dt_logits, lam_logits, theta = self.in_dynamics(x).split(
+                (H, H, G * self.n_rotation_blocks * self.angles_per_block), dim=-1
+            )
+        else:
+            assert self.in_x is not None
+            assert self.in_z is not None
+            assert self.in_B is not None
+            assert self.in_C is not None
+            assert self.dt_proj is not None
+            assert self.lam_proj is not None
+            assert self.theta_proj is not None
+            xv = self.in_x(x)
+            z = self.in_z(x)
+            Bm = self.in_B(x)
+            Cm = self.in_C(x)
+            dt_logits = self.dt_proj(x)
+            lam_logits = self.lam_proj(x)
+            theta = self.theta_proj(x)
 
-        dt = F.softplus(self.dt_proj(x).float() + self.dt_bias)  # (batch, T, H), > 0
-        lam = torch.sigmoid(self.lam_proj(x))  # (batch, T, H) in (0, 1)
-        theta = self.theta_proj(x).view(
-            batch, seq_len, G, self.n_rotation_blocks, self.angles_per_block
-        )
+        xv = xv.view(batch, seq_len, H, P)
+        z = z.view(batch, seq_len, H, P)
+        Bm = Bm.view(batch, seq_len, G, R, N)
+        Cm = Cm.view(batch, seq_len, G, R, N)
+        dt = F.softplus(dt_logits.float() + self.dt_bias)  # (batch, T, H), > 0
+        lam = torch.sigmoid(lam_logits)  # (batch, T, H) in (0, 1)
+        theta = theta.view(batch, seq_len, G, self.n_rotation_blocks, self.angles_per_block)
         if self.theta_max is not None:
             # Bound the per-step rotation angle, because an unbounded one silently
             # destroys the state channel it exists to carry. The cumulative rotation
@@ -450,24 +575,113 @@ class Mamba3Mixer(SequenceMixer):
             Bm = _rms_norm(Bm, self.bc_norm_b, self.norm_eps)
             Cm = _rms_norm(Cm, self.bc_norm_c, self.norm_eps)
 
-        y = dispatch_mamba3_ssd(
-            xv,
-            Bm,
-            Cm,
-            dt,
-            A,
-            lam,
-            theta,
-            heads_per_group=self.heads_per_group,
-            block_size=self.rotation_block_size,
-            prefer_official_kernel=self.prefer_official_kernel,
-            rotation_scan_impl=self.rotation_scan_impl,
-        )  # (batch, T, H, P)
+        if decode:
+            y = self._decode_step(xv, Bm, Cm, dt, A, lam, theta)
+        else:
+            y = dispatch_mamba3_ssd(
+                xv,
+                Bm,
+                Cm,
+                dt,
+                A,
+                lam,
+                theta,
+                heads_per_group=self.heads_per_group,
+                block_size=self.rotation_block_size,
+                prefer_official_kernel=self.prefer_official_kernel,
+                rotation_scan_impl=self.rotation_scan_impl,
+            )  # (batch, T, H, P)
 
         # Gated RMS norm (Mamba-style): normalize the gated output.
         y = _rms_norm(y * F.silu(z), self.o_norm_weight, self.norm_eps)
         y = y.reshape(batch, seq_len, H * P)
         return self.out_proj(y)
+
+    def _decode_step(
+        self,
+        x: torch.Tensor,
+        B: torch.Tensor,
+        C: torch.Tensor,
+        dt: torch.Tensor,
+        A: torch.Tensor,
+        lam: torch.Tensor,
+        theta: torch.Tensor,
+    ) -> torch.Tensor:
+        """Apply one b=3 recurrent update using cached state and cumulative quaternion."""
+        if x.shape[1] != 1:
+            raise ValueError(f"Mamba3 decode requires exactly one token, got {x.shape[1]}")
+        if self.rotation_block_size != 3:
+            raise NotImplementedError("one-token Mamba3 decode is currently implemented for b=3")
+
+        batch, _, n_heads, head_dim = x.shape
+        n_groups, rank, d_state = B.shape[2], B.shape[3], B.shape[4]
+        device_type = x.device.type
+        output_dtype = x.dtype
+        with torch.autocast(device_type=device_type, enabled=False):
+            x_token = x[:, 0].float()
+            B_token = B[:, 0].float()
+            C_token = C[:, 0].float()
+            step_quaternion = _angles_to_quaternion(theta[:, 0].float())
+            previous_quaternion = self._cache.get_for_device("cumulative_quaternion", x.device)
+            if previous_quaternion is None:
+                previous_quaternion = torch.zeros_like(step_quaternion)
+                previous_quaternion[..., 0] = 1
+            if previous_quaternion.shape != step_quaternion.shape:
+                raise ValueError(
+                    "cached Mamba3 quaternion shape does not match the decode batch: "
+                    f"{tuple(previous_quaternion.shape)} != {tuple(step_quaternion.shape)}"
+                )
+            cumulative_quaternion = _quaternion_multiply(step_quaternion, previous_quaternion)
+
+            both = torch.cat((B_token, C_token), dim=-2)
+            vectors = both.reshape(
+                batch,
+                n_groups,
+                2 * rank,
+                d_state // self.rotation_block_size,
+                self.rotation_block_size,
+            )
+            inverse = _quaternion_conjugate(cumulative_quaternion).unsqueeze(-3)
+            rotated = _quaternion_rotate(inverse, vectors).reshape(
+                batch, n_groups, 2 * rank, d_state
+            )
+            B_token, C_token = rotated.split((rank, rank), dim=-2)
+            if self.heads_per_group != 1:
+                B_token = B_token.repeat_interleave(self.heads_per_group, dim=1)
+                C_token = C_token.repeat_interleave(self.heads_per_group, dim=1)
+
+            expected_state_shape = (batch, n_heads, rank, d_state, head_dim)
+            state = self._cache.get_for_device("state", x.device)
+            prior_state_input = self._cache.get_for_device("prior_state_input", x.device)
+            if state is None:
+                state = torch.zeros(expected_state_shape, dtype=torch.float32, device=x.device)
+            if prior_state_input is None:
+                prior_state_input = torch.zeros_like(state)
+            if (
+                state.shape != expected_state_shape
+                or prior_state_input.shape != expected_state_shape
+            ):
+                raise ValueError(
+                    "cached Mamba3 state shape does not match the decode batch: "
+                    f"expected {expected_state_shape}, found "
+                    f"state={tuple(state.shape)}, prior={tuple(prior_state_input.shape)}"
+                )
+
+            alpha = torch.exp(dt[:, 0].float() * A.float())
+            gamma = lam[:, 0].float() * dt[:, 0].float()
+            beta = (1.0 - lam[:, 0].float()) * dt[:, 0].float() * alpha
+            state_input = B_token.unsqueeze(-1) * x_token.unsqueeze(2).unsqueeze(2)
+            state = (
+                alpha.view(batch, n_heads, 1, 1, 1) * state
+                + gamma.view(batch, n_heads, 1, 1, 1) * state_input
+                + beta.view(batch, n_heads, 1, 1, 1) * prior_state_input
+            )
+            output = (C_token.unsqueeze(-1) * state).sum(dim=(2, 3))
+
+        self._cache["cumulative_quaternion"] = cumulative_quaternion.detach()
+        self._cache["state"] = state.detach()
+        self._cache["prior_state_input"] = state_input.detach()
+        return output.unsqueeze(1).to(output_dtype)
 
     def apply_tp(
         self,
@@ -515,11 +729,58 @@ class Mamba3Mixer(SequenceMixer):
         if init_method == InitMethod.normalized:
             std = d_model**-0.5
 
-        for w in (self.in_x, self.in_z, self.in_B, self.in_C, self.dt_proj, self.lam_proj):
-            init_linear(w, std=std, generator=generator)
-        # Rotation angle projection starts small so early training is near-identity. This holds
-        # for any block size: small angles put exp(S) near I regardless of b.
-        init_linear(self.theta_proj, std=std * 0.1, generator=generator)
+        if self.fuse_input_projections:
+            assert self.in_xz is not None
+            assert self.in_bc is not None
+            assert self.in_dynamics is not None
+
+            def init_slice(
+                weight: torch.Tensor,
+                bias: Optional[torch.Tensor] = None,
+                *,
+                slice_std: float = std,
+            ) -> None:
+                nn.init.trunc_normal_(
+                    weight,
+                    mean=0.0,
+                    std=slice_std,
+                    a=-3 * slice_std,
+                    b=3 * slice_std,
+                    generator=generator,
+                )
+                if bias is not None:
+                    nn.init.zeros_(bias)
+
+            inner = self.n_heads * self.head_dim
+            bc_out = self.n_groups * self.mimo_rank * self.d_state
+            theta_out = self.n_groups * self.n_rotation_blocks * self.angles_per_block
+            x_weight, z_weight = self.in_xz.weight.split((inner, inner), dim=0)
+            init_slice(x_weight)
+            init_slice(z_weight)
+            b_weight, c_weight = self.in_bc.weight.split((bc_out, bc_out), dim=0)
+            if self.in_bc.bias is None:
+                b_bias = c_bias = None
+            else:
+                b_bias, c_bias = self.in_bc.bias.split((bc_out, bc_out), dim=0)
+            init_slice(b_weight, b_bias)
+            init_slice(c_weight, c_bias)
+            dt_weight, lam_weight, theta_weight = self.in_dynamics.weight.split(
+                (self.n_heads, self.n_heads, theta_out), dim=0
+            )
+            init_slice(dt_weight)
+            init_slice(lam_weight)
+            init_slice(theta_weight, slice_std=std * 0.1)
+        else:
+            assert self.in_x is not None
+            assert self.in_z is not None
+            assert self.in_B is not None
+            assert self.in_C is not None
+            assert self.dt_proj is not None
+            assert self.lam_proj is not None
+            assert self.theta_proj is not None
+            for w in (self.in_x, self.in_z, self.in_B, self.in_C, self.dt_proj, self.lam_proj):
+                init_linear(w, std=std, generator=generator)
+            init_linear(self.theta_proj, std=std * 0.1, generator=generator)
 
         # A = -Uniform(a_log_init_min, a_log_init_max), stored as its log. The lower bound is
         # load-bearing: at 0 a head can draw A ~ 0, which never decays and turns that channel
@@ -601,9 +862,21 @@ class Mamba3Mixer(SequenceMixer):
 
         Both show up correctly as extra wall-clock against an unchanged numerator.
         """
-        linear_flops = 2 * sum(
-            m.weight.numel()
-            for m in (
+        projections: Sequence[nn.Linear]
+        if self.fuse_input_projections:
+            assert self.in_xz is not None
+            assert self.in_bc is not None
+            assert self.in_dynamics is not None
+            projections = (self.in_xz, self.in_bc, self.in_dynamics, self.out_proj)
+        else:
+            assert self.in_x is not None
+            assert self.in_z is not None
+            assert self.in_B is not None
+            assert self.in_C is not None
+            assert self.dt_proj is not None
+            assert self.lam_proj is not None
+            assert self.theta_proj is not None
+            projections = (
                 self.in_x,
                 self.in_z,
                 self.in_B,
@@ -613,7 +886,7 @@ class Mamba3Mixer(SequenceMixer):
                 self.theta_proj,
                 self.out_proj,
             )
-        )
+        linear_flops = 2 * sum(m.weight.numel() for m in projections)
         # State-input outer product + readout, each ~2 FLOPs per element of the rank-R state.
         state_size = self.n_heads * self.mimo_rank * self.d_state * self.head_dim
         recurrent_flops = 2 * 2 * state_size
@@ -728,6 +1001,11 @@ class Mamba3MixerConfig(SequenceMixerConfig[Mamba3Mixer]):
     """
     dtype: DType = DType.float32
     """The default parameter dtype."""
+    fuse_input_projections: Optional[bool] = None
+    """
+    Fuse ``x/z``, ``B/C``, and ``dt/lambda/theta`` into three input GEMMs. ``None`` preserves
+    the original seven-projection checkpoint layout, execution path, and serialized config.
+    """
 
     def num_params(self, d_model: int) -> int:
         """
@@ -782,7 +1060,10 @@ class Mamba3MixerConfig(SequenceMixerConfig[Mamba3Mixer]):
         cache: Optional[BufferCache] = None,
     ) -> Mamba3Mixer:
         """Build the :class:`Mamba3Mixer` module."""
-        del layer_idx, n_layers, cache  # unused
+        del n_layers
+        mixer_cache = (cache if cache is not None else BufferCache()).with_namespace(
+            f"mamba3_layer_{layer_idx}"
+        )
         return Mamba3Mixer(
             d_model=d_model,
             n_heads=self.n_heads,
@@ -800,6 +1081,8 @@ class Mamba3MixerConfig(SequenceMixerConfig[Mamba3Mixer]):
             prefer_official_kernel=self.prefer_official_kernel,
             rotation_scan_impl=self.rotation_scan_impl,
             theta_max=self.theta_max,
+            fuse_input_projections=bool(self.fuse_input_projections),
+            cache=mixer_cache,
             dtype=self.dtype.as_pt(),
             init_device=init_device,
         )

@@ -1,0 +1,10 @@
+# Representative 8xA100 architecture-comparison cell. The dataset release is
+# supplied separately as reservoir-dolma2-v1 on the platform form.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/model_arch_tests.py "$EDULLM_RUN_ID"
+  --arm mamba-b3 --data-seed 210007 --init-seed 41000000
+  --save-folder "$EDULLM_CHECKPOINT_DIR" --param-dtype bfloat16'
