@@ -49,6 +49,7 @@ dev = [
     "pytest-sphinx",
     "pytest-xdist",
     "ruff==0.15.22",
+    "scipy",
     "setuptools",
     "Sphinx>=6.0,<=8.1.3",
     "sphinx-autobuild",
