@@ -19,7 +19,7 @@ ARMS = {
     "engram": engram_moe,
     "lngram": lngram_moe,
 }
-MEMORY_OPTIMIZER_PARAMS = ["blocks.*.memory.*"]
+MEMORY_OPTIMIZER_PARAMS = ["blocks.*.memory.tables.*"]
 
 
 def test_all_arms_have_exact_model_shapes_overrides_and_parameter_counts():
@@ -40,7 +40,7 @@ def test_all_arms_have_exact_model_shapes_overrides_and_parameter_counts():
         assert model.block.name is TransformerBlockType.moe_reordered_norm
         assert model.block.memory is None
         assert model.block_overrides is not None
-        assert list(model.block_overrides) == [2, 6]
+        assert list(model.block_overrides) == [1, 5]
         assert all(
             override.name is block_type and isinstance(override.memory, memory_type)
             for override in model.block_overrides.values()
@@ -53,6 +53,7 @@ def test_all_arms_have_exact_model_shapes_overrides_and_parameter_counts():
     counts = {}
     for name, model in models.items():
         arm = ARMS[name]
+        assert model.checkpoint_revision == common.EXPERIMENT_REVISION
         expected_total, expected_active = common.parameter_counts(model)
         assert (arm.EXPECTED_TOTAL_PARAMETERS, arm.EXPECTED_ACTIVE_PARAMETERS) == (
             expected_total,

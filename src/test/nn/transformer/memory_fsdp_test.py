@@ -1,5 +1,4 @@
 import torch
-import torch.nn as nn
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
     checkpoint_wrapper,
 )
@@ -13,19 +12,17 @@ from olmo_core.testing.utils import requires_gpu
 from olmo_core.utils import get_default_device
 
 
-class _ZeroConv(nn.Module):
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.zeros_like(x)
-
-
 def _run_lngram_with_fsdp2() -> None:
     device = get_default_device()
-    memory = LngramConfig(memory_dim=61, require_triton=True).build(
+    memory = LngramConfig(
+        memory_dim=61,
+        conv_dilation=3,
+        require_triton=True,
+    ).build(
         8,
         init_device=device.type,
         dtype=torch.bfloat16,
     )
-    memory.conv = _ZeroConv()
     wrapped = checkpoint_wrapper(
         memory,
         context_fn=selective_checkpointing_context_fn,
@@ -72,12 +69,15 @@ def test_lngram_triton_with_fsdp2() -> None:
 
 @requires_gpu
 def test_lngram_triton_with_compile_and_activation_checkpointing() -> None:
-    memory = LngramConfig(memory_dim=61, require_triton=True).build(
+    memory = LngramConfig(
+        memory_dim=61,
+        conv_dilation=3,
+        require_triton=True,
+    ).build(
         8,
         init_device="cuda",
         dtype=torch.bfloat16,
     )
-    memory.conv = _ZeroConv()
     wrapped = checkpoint_wrapper(
         memory,
         context_fn=selective_checkpointing_context_fn,

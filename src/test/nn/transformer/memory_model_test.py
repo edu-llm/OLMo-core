@@ -1,3 +1,4 @@
+import hashlib
 import importlib
 from collections import defaultdict
 from types import MethodType
@@ -5,6 +6,7 @@ from typing import Any
 
 import pytest
 import torch
+import torch.distributed.checkpoint.state_dict as dist_cp_sd
 import torch.nn as nn
 
 transformer_model = importlib.import_module("olmo_core.nn.transformer.model")
@@ -270,3 +272,51 @@ def test_model_rejects_heterogeneous_engram_hash_configs() -> None:
 
     with pytest.raises(OLMoConfigurationError, match="identical hash"):
         config.build(init_device="meta")
+
+
+def test_checkpoint_revision_is_atomic_model_state() -> None:
+    revision = "memory-paper-fidelity-v1"
+    config = TransformerConfig.llama_like(
+        d_model=16,
+        vocab_size=32,
+        n_layers=1,
+        n_heads=2,
+        checkpoint_revision=revision,
+    )
+    model = config.build(init_device="meta")
+    model.init_weights(device=torch.device("cpu"))
+    expected = torch.tensor(
+        list(hashlib.sha256(revision.encode("utf-8")).digest()),
+        dtype=torch.uint8,
+    )
+
+    torch.testing.assert_close(model._checkpoint_revision_digest, expected)
+    assert "_checkpoint_revision_digest" in model.state_dict()
+
+    matching = config.build(init_device="cpu")
+    matching.load_state_dict(model.state_dict(), strict=True)
+    legacy = TransformerConfig.llama_like(
+        d_model=16,
+        vocab_size=32,
+        n_layers=1,
+        n_heads=2,
+    ).build(init_device="cpu")
+    with pytest.raises(RuntimeError, match="_checkpoint_revision_digest"):
+        matching.load_state_dict(legacy.state_dict(), strict=True)
+
+    mismatched = TransformerConfig.llama_like(
+        d_model=16,
+        vocab_size=32,
+        n_layers=1,
+        n_heads=2,
+        checkpoint_revision="another-revision",
+    ).build(init_device="cpu")
+    with pytest.raises(RuntimeError, match="revision digest does not match"):
+        matching.load_state_dict(mismatched.state_dict(), strict=True)
+
+    matching_dcp = config.build(init_device="cpu")
+    with pytest.raises(RuntimeError, match="revision digest does not match"):
+        dist_cp_sd.set_model_state_dict(
+            matching_dcp,
+            dist_cp_sd.get_model_state_dict(mismatched),
+        )

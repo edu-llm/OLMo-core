@@ -1,0 +1,26 @@
+{
+  "artifact": "dolma2_compression_map.u32",
+  "byte_order": "little",
+  "canonical_tokenizer_vocab_size": 62347,
+  "collapsed_tokenizer_entries": 37931,
+  "compressed_padded_vocab_size": 62421,
+  "dtype": "uint32",
+  "entries": 100352,
+  "invalid_decode_fallback": "raw_token_string",
+  "normalization": "engram-nfkc-nfd-lower-whitespace-v1",
+  "normalization_steps": [
+    "NFKC",
+    "NFD",
+    "strip_accents",
+    "lowercase",
+    "collapse_whitespace",
+    "preserve_single_space",
+    "strip"
+  ],
+  "padded_rows": "unique",
+  "padded_vocab_size": 100352,
+  "sha256": "04d0b8396da748fb67f6b4b8d909c2f1600c2f27c237f1e4a55cab134a7c7f29",
+  "tokenizer_id": "allenai/dolma2-tokenizer",
+  "tokenizer_revision": "5292e5d6c0f40b67cc765fe41bec991cf4345b5c",
+  "tokenizer_vocab_size": 100278
+}

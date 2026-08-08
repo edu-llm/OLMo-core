@@ -22,7 +22,7 @@ from olmo_core.train.callbacks import (
     ConfigSaverCallback,
     WandBCallback,
 )
-from scripts.train.engram_experiment import common
+from scripts.train.engram_experiment import common, smoke
 
 
 def tiny_model_config() -> TransformerConfig:
@@ -65,6 +65,7 @@ def test_default_config_is_local_config_only_and_records_the_data_contract(monke
     assert config.dataset_id == common.SEALED_DATASET_ID
     assert config.dataset_version == common.SEALED_DATASET_VERSION
     assert config.dataset_tokenizer == common.SEALED_DATASET_TOKENIZER
+    assert config.experiment_revision == common.EXPERIMENT_REVISION
     assert config.dataset_paths == [common.LOCAL_DATASET_PLACEHOLDER]
     assert config.dataset.paths == config.dataset_paths
     assert config.dataset.dtype is NumpyDatasetDType.uint32
@@ -103,18 +104,38 @@ def test_memory_optimizer_override_is_opt_in_and_five_times_base_lr():
     assert isinstance(without_memory, AdamWConfig)
     assert isinstance(with_memory, AdamWConfig)
     assert all(
-        override.params != ["blocks.*.memory.*"]
+        override.params != ["blocks.*.memory.tables.*"]
         for override in (without_memory.group_overrides or [])
     )
     memory_override = next(
         override
         for override in (with_memory.group_overrides or [])
-        if override.params == ["blocks.*.memory.*"]
+        if override.params == ["blocks.*.memory.tables.*"]
     )
     assert memory_override.opts == {
         "lr": pytest.approx(common.BASE_LEARNING_RATE * 5),
         "weight_decay": 0.0,
     }
+
+
+def test_memory_optimizer_accelerates_only_lookup_tables() -> None:
+    model = smoke.build_smoke_config("lngram").build(init_device="cpu")
+    optim_config = common.build_train_module_config(with_memory_optimizer=True).optim
+    groups = optim_config.build_groups(model)
+    names_by_id = {id(parameter): name for name, parameter in model.named_parameters()}
+    table_group = next(group for group in groups if "lr" in group)
+    table_names = {names_by_id[id(parameter)] for parameter in table_group["params"]}
+    default_names = {
+        names_by_id[id(parameter)]
+        for group in groups
+        if "lr" not in group
+        for parameter in group["params"]
+    }
+
+    assert len(table_names) == 4
+    assert all(".memory.tables." in name for name in table_names)
+    assert any(".memory.w_q.weight" in name for name in default_names)
+    assert any(".memory.w_v.weight" in name for name in default_names)
 
 
 def test_trainer_checkpoint_and_wandb_callbacks_follow_platform_environment(monkeypatch):
@@ -320,11 +341,14 @@ def test_fit_trainer_sets_saved_config_then_repairs_resumes_and_fits(monkeypatch
         "remove_torn_checkpoints",
         lambda folder: events.append(("repair", folder)) or [],
     )
-
     common.fit_trainer(config, FakeTrainer())
 
     assert config_saver.config == config.as_config_dict()
-    assert events == [("repair", "s3://checkpoints/run"), "load", "fit"]
+    assert events == [
+        ("repair", "s3://checkpoints/run"),
+        "load",
+        "fit",
+    ]
 
 
 def test_torn_step_detection_keeps_complete_checkpoints_and_unrelated_directories(monkeypatch):

@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.nn.config import ModuleConfig
 from olmo_core.nn.convolution import CausalConv1d
-from olmo_core.nn.memory.engram import Engram, EngramConfig
+from olmo_core.nn.memory.engram import DOLMA2_COMPRESSION_MAP_NAME, Engram, EngramConfig
 
 
 def _config(**kwargs) -> EngramConfig:
@@ -77,6 +77,7 @@ def test_config_defaults_and_clean_serialization() -> None:
     assert defaults.num_hash_heads == 8
     assert defaults.vocab_size == 100352
     assert defaults.tokenizer_compression is True
+    assert defaults.conv_dilation == 1
 
     config = _config(compression_map=(0, 0, 1, 2, 3))
     dumped = config.as_config_dict()
@@ -102,6 +103,16 @@ def test_config_defaults_and_clean_serialization() -> None:
         {"compression_map": (0, 1, 2, 3, 5)},
         {"compression_map": (0, 0, 2, 2, 2)},
         {"tokenizer_compression": False, "compression_map": (0, 0, 1, 2, 3)},
+        {"compression_map_name": "unknown"},
+        {
+            "compression_map": (0, 0, 1, 2, 3),
+            "compression_map_name": DOLMA2_COMPRESSION_MAP_NAME,
+        },
+        {
+            "tokenizer_compression": False,
+            "compression_map_name": DOLMA2_COMPRESSION_MAP_NAME,
+        },
+        {"conv_dilation": 0},
     ],
 )
 def test_invalid_config_is_rejected(kwargs: dict) -> None:
@@ -130,6 +141,7 @@ def test_cpu_meta_construction_and_exact_parameter_accounting() -> None:
     assert isinstance(module, Engram)
     assert isinstance(module.conv, CausalConv1d)
     assert module.conv.kernel_size == (4,)
+    assert module.conv.dilation == (1,)
     assert module.conv.bias is None
     assert module.conv.activation is None
     assert torch.count_nonzero(module.conv.weight) == 0
@@ -182,6 +194,51 @@ def test_compression_map_config_override_hook_and_identity_fallback() -> None:
 
     disabled = _config(tokenizer_compression=False).build(4)
     torch.testing.assert_close(disabled.compression_map, torch.arange(5))
+
+
+def test_sealed_dolma2_compression_map_is_loaded_and_surjective() -> None:
+    config = EngramConfig(
+        orders=(2,),
+        num_hash_heads=1,
+        table_sizes=(5,),
+        embedding_dim=1,
+        vocab_size=100_352,
+        compression_map_name=DOLMA2_COMPRESSION_MAP_NAME,
+    )
+    module = config.build(4)
+    unique_ids = torch.unique(module.compression_map)
+
+    assert module.compression_map_persistent is False
+    assert "compression_map" not in module.state_dict()
+    assert module.compression_map.shape == (100_352,)
+    assert unique_ids.numel() == 62_421
+    assert unique_ids[0].item() == 0
+    assert unique_ids[-1].item() == 62_420
+    torch.testing.assert_close(unique_ids, torch.arange(62_421))
+    padded = module.compression_map[100_278:]
+    assert torch.unique(padded).numel() == 74
+
+    explicit = EngramConfig(
+        orders=(2,),
+        num_hash_heads=1,
+        table_sizes=(5,),
+        embedding_dim=1,
+        vocab_size=5,
+        compression_map=(0, 0, 1, 2, 3),
+    ).build(4)
+    assert explicit.compression_map_persistent is True
+    assert "compression_map" in explicit.state_dict()
+
+    legacy = EngramConfig(
+        orders=(2,),
+        num_hash_heads=1,
+        table_sizes=(5,),
+        embedding_dim=1,
+        vocab_size=100_352,
+        compression_map=tuple(range(100_352)),
+    ).build(4)
+    with pytest.raises(RuntimeError, match="Unexpected key"):
+        module.load_state_dict(legacy.state_dict(), strict=True)
 
 
 def test_compute_hash_indices_is_exact_deterministic_and_masks_prefixes() -> None:

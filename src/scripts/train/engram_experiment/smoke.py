@@ -91,7 +91,7 @@ def build_smoke_config(arm: str) -> TransformerConfig:
         return config
 
     config.block_overrides = {}
-    for layer_idx in (2, config.n_layers // 2):
+    for layer_idx in (1, config.n_layers // 2 - 1):
         block = config.block.copy()
         if arm == "engram":
             block.name = TransformerBlockType.moe_engram_reordered_norm
@@ -102,6 +102,7 @@ def build_smoke_config(arm: str) -> TransformerConfig:
                 embedding_dim=4,
                 vocab_size=VOCAB_SIZE,
                 tokenizer_compression=False,
+                conv_dilation=3,
             )
         else:
             block.name = TransformerBlockType.moe_lngram_reordered_norm
@@ -109,6 +110,7 @@ def build_smoke_config(arm: str) -> TransformerConfig:
                 orders=(2, 3),
                 bits_per_route=4,
                 memory_dim=2,
+                conv_dilation=3,
             )
         config.block_overrides[layer_idx] = block
     return config

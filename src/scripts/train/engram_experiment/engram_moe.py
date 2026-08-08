@@ -2,7 +2,7 @@
 
 from typing import Optional, Sequence
 
-from olmo_core.nn.memory import EngramConfig
+from olmo_core.nn.memory import DOLMA2_COMPRESSION_MAP_NAME, EngramConfig
 from olmo_core.nn.transformer import TransformerConfig
 from olmo_core.nn.transformer.config import TransformerBlockType
 from scripts.train.engram_experiment import common
@@ -34,9 +34,11 @@ def build_model_config() -> TransformerConfig:
     assert model.block.feed_forward_moe is not None
     model.block.feed_forward_moe.num_experts = NUM_EXPERTS
     model.block.feed_forward_moe.hidden_size = EXPERT_HIDDEN_SIZE
+    model.checkpoint_revision = common.EXPERIMENT_REVISION
 
     model.block_overrides = {}
-    for layer_idx in (2, model.n_layers // 2):
+    # Paper layers 2 and 6 expressed as zero-based OLMo block indices.
+    for layer_idx in (1, model.n_layers // 2 - 1):
         block = model.block.copy()
         block.name = TransformerBlockType.moe_engram_reordered_norm
         block.memory = EngramConfig(
@@ -45,9 +47,9 @@ def build_model_config() -> TransformerConfig:
             table_sizes=TABLE_SIZES,
             embedding_dim=EMBEDDING_DIM,
             vocab_size=100_352,
-            # Keep the compression hook enabled; without a committed Dolma2 map this
-            # scaffold intentionally uses EngramConfig's documented identity fallback.
             tokenizer_compression=True,
+            compression_map_name=DOLMA2_COMPRESSION_MAP_NAME,
+            conv_dilation=3,
         )
         model.block_overrides[layer_idx] = block
 

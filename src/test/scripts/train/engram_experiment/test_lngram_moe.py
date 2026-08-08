@@ -21,7 +21,7 @@ def test_model_has_exact_copied_lngram_overrides_and_reduced_experts():
     assert lngram_moe.NUM_EXPERTS == 51 < base_moe.NUM_EXPERTS
     assert model.block.feed_forward_moe.hidden_size == base_moe.EXPERT_HIDDEN_SIZE == 336
     assert model.block_overrides is not None
-    assert set(model.block_overrides) == {2, model.n_layers // 2}
+    assert set(model.block_overrides) == {1, model.n_layers // 2 - 1}
 
     first, second = model.block_overrides.values()
     for override in (first, second):
@@ -31,6 +31,8 @@ def test_model_has_exact_copied_lngram_overrides_and_reduced_experts():
         assert override.memory.orders == (2, 3)
         assert override.memory.bits_per_route == 4
         assert override.memory.memory_dim == lngram_moe.MEMORY_DIM
+        assert override.memory.conv_dilation == 3
+        assert override.memory.norm_eps == 1e-6
         assert override.memory.require_triton is True
         assert override.sequence_mixer is not model.block.sequence_mixer
         assert override.feed_forward_moe is not model.block.feed_forward_moe
@@ -47,8 +49,8 @@ def test_model_has_exact_copied_lngram_overrides_and_reduced_experts():
 def test_parameter_accounting_is_exact_and_near_400m():
     model = lngram_moe.build_model_config()
 
-    assert model.num_params == lngram_moe.EXPECTED_TOTAL_PARAMETERS == 392_197_248
-    assert model.num_active_params == lngram_moe.EXPECTED_ACTIVE_PARAMETERS == 122_941_440
+    assert model.num_params == lngram_moe.EXPECTED_TOTAL_PARAMETERS == 392_198_016
+    assert model.num_active_params == lngram_moe.EXPECTED_ACTIVE_PARAMETERS == 122_942_208
     assert "dense" in lngram_moe.ACTIVE_PARAMETER_BUMP_REASON
     assert (
         abs(model.num_params - base_moe.EXPECTED_TOTAL_PARAMETERS)
@@ -76,7 +78,7 @@ def test_build_config_uses_shared_pipeline_and_memory_optimizer():
     memory_override = next(
         override
         for override in (config.train_module.optim.group_overrides or [])
-        if override.params == ["blocks.*.memory.*"]
+        if override.params == ["blocks.*.memory.tables.*"]
     )
     assert memory_override.opts == {
         "lr": common.BASE_LEARNING_RATE * 5,

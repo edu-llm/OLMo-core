@@ -73,12 +73,13 @@ WARMUP_STEPS = 1_000
 SAVE_INTERVAL = 1_000
 DATA_SEED = 34521
 INIT_SEED = 12536
+EXPERIMENT_REVISION = "memory-paper-fidelity-v1"
 DATASET_WORK_DIR = "/tmp/dataset-cache"
 
 # This path exists only so a serializable NumpyFSLDatasetConfig can be inspected locally. It is
 # intentionally not created and config-only mode never calls ``dataset.build()``.
 LOCAL_DATASET_PLACEHOLDER = "__CONFIG_ONLY_DO_NOT_READ__/regmix-10b-v1.u32le.bin"
-LOCAL_SAVE_FOLDER = "/tmp/engram-experiment-checkpoints"
+LOCAL_SAVE_FOLDER = f"/tmp/engram-experiment-checkpoints-{EXPERIMENT_REVISION}"
 
 if PADDED_VOCAB_SIZE != 100_352:
     raise RuntimeError(f"dolma2 padded vocabulary changed: {PADDED_VOCAB_SIZE}")
@@ -114,6 +115,7 @@ class ExperimentConfig(Config):
     dataset_version: str
     dataset_tokenizer: str
     dataset_paths: List[str]
+    experiment_revision: str = EXPERIMENT_REVISION
     init_seed: int = INIT_SEED
 
 
@@ -203,10 +205,10 @@ def resolve_corpus_from_environment(
 def memory_optim_group_override(
     learning_rate: float = BASE_LEARNING_RATE,
 ) -> OptimGroupOverride:
-    """Return the shared five-times-LR, zero-decay memory parameter group."""
+    """Return the paper-style five-times-LR, zero-decay table group."""
 
     return OptimGroupOverride(
-        params=["blocks.*.memory.*"],
+        params=["blocks.*.memory.tables.*"],
         opts={"lr": learning_rate * 5, "weight_decay": 0.0},
     )
 

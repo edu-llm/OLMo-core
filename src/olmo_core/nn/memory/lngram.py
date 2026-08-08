@@ -52,6 +52,8 @@ class LngramConfig(ModuleConfig):
     surrogate_temperature: float = 1.0
     surrogate_scale: float = 1.0
     conv_kernel_size: int = 4
+    conv_dilation: int = 1
+    norm_eps: float = 1e-6
     require_triton: bool = False
 
     def __post_init__(self) -> None:
@@ -104,6 +106,19 @@ class LngramConfig(ModuleConfig):
             raise OLMoConfigurationError(
                 f"'conv_kernel_size' must be a positive integer (got {self.conv_kernel_size!r})"
             )
+        if not _is_integer(self.conv_dilation) or self.conv_dilation <= 0:
+            raise OLMoConfigurationError(
+                f"'conv_dilation' must be a positive integer (got {self.conv_dilation!r})"
+            )
+        if (
+            not isinstance(self.norm_eps, Real)
+            or isinstance(self.norm_eps, bool)
+            or not math.isfinite(float(self.norm_eps))
+            or self.norm_eps <= 0
+        ):
+            raise OLMoConfigurationError(
+                f"'norm_eps' must be positive and finite (got {self.norm_eps!r})"
+            )
         if not isinstance(self.require_triton, bool):
             raise OLMoConfigurationError("'require_triton' must be a bool")
 
@@ -112,7 +127,7 @@ class LngramConfig(ModuleConfig):
         routes = d_model // self.bits_per_route
         readout_dim = routes * self.memory_dim
         return (
-            3 * d_model  # input/query, key, and convolution RMSNorms
+            4 * d_model  # routing, query, key, and convolution RMSNorms
             + d_model * d_model  # discretization projection
             + 2 * (d_model * readout_dim + d_model)  # shared W_K and W_V, with bias
             + d_model * self.conv_kernel_size  # bias-free depthwise convolution
@@ -158,6 +173,8 @@ class LngramConfig(ModuleConfig):
             surrogate_temperature=float(self.surrogate_temperature),
             surrogate_scale=float(self.surrogate_scale),
             conv_kernel_size=self.conv_kernel_size,
+            conv_dilation=self.conv_dilation,
+            norm_eps=float(self.norm_eps),
             require_triton=self.require_triton,
             init_device=init_device,
             dtype=torch.float32 if dtype is None else dtype,
@@ -189,6 +206,8 @@ class Lngram(nn.Module):
         surrogate_temperature: float = 1.0,
         surrogate_scale: float = 1.0,
         conv_kernel_size: int = 4,
+        conv_dilation: int = 1,
+        norm_eps: float = 1e-6,
         require_triton: bool = False,
         init_device: str | torch.device = "cpu",
         dtype: torch.dtype = torch.float32,
@@ -201,6 +220,8 @@ class Lngram(nn.Module):
             surrogate_temperature=surrogate_temperature,
             surrogate_scale=surrogate_scale,
             conv_kernel_size=conv_kernel_size,
+            conv_dilation=conv_dilation,
+            norm_eps=norm_eps,
             require_triton=require_triton,
         )
         _validate_d_model(d_model)
@@ -212,6 +233,8 @@ class Lngram(nn.Module):
         self.surrogate_temperature = float(config.surrogate_temperature)
         self.surrogate_scale = float(config.surrogate_scale)
         self.conv_kernel_size = config.conv_kernel_size
+        self.conv_dilation = config.conv_dilation
+        self.norm_eps = float(config.norm_eps)
         self.require_triton = config.require_triton
         self.num_routes = self.d_model // self.bits_per_route
         self.alphabet_size = 2**self.bits_per_route
@@ -219,6 +242,7 @@ class Lngram(nn.Module):
 
         self.input_norm = RMSNorm(
             size=self.d_model,
+            eps=self.norm_eps,
             elementwise_affine=True,
             bias=False,
             dtype=dtype,
@@ -262,8 +286,17 @@ class Lngram(nn.Module):
             dtype=dtype,
             device=init_device,
         )
+        self.query_norm = RMSNorm(
+            size=self.d_model,
+            eps=self.norm_eps,
+            elementwise_affine=True,
+            bias=False,
+            dtype=dtype,
+            init_device=init_device,
+        )
         self.key_norm = RMSNorm(
             size=self.d_model,
+            eps=self.norm_eps,
             elementwise_affine=True,
             bias=False,
             dtype=dtype,
@@ -271,6 +304,7 @@ class Lngram(nn.Module):
         )
         self.conv_norm = RMSNorm(
             size=self.d_model,
+            eps=self.norm_eps,
             elementwise_affine=True,
             bias=False,
             dtype=dtype,
@@ -279,6 +313,7 @@ class Lngram(nn.Module):
         self.conv = CausalConv1d(
             hidden_size=self.d_model,
             kernel_size=self.conv_kernel_size,
+            dilation=self.conv_dilation,
             bias=False,
             activation=None,
             dtype=dtype,
@@ -288,13 +323,18 @@ class Lngram(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        """Reset all parameters and keep the convolution branch closed."""
+        """Reset parameters with a no-op memory residual."""
         for table in self.tables:
-            nn.init.normal_(table, mean=0.0, std=0.02)
+            nn.init.zeros_(table)
         self.w_q.reset_parameters()
         self.w_k.reset_parameters()
         self.w_v.reset_parameters()
+        if self.w_k.bias is not None:
+            nn.init.zeros_(self.w_k.bias)
+        if self.w_v.bias is not None:
+            nn.init.zeros_(self.w_v.bias)
         self.input_norm.reset_parameters()
+        self.query_norm.reset_parameters()
         self.key_norm.reset_parameters()
         self.conv_norm.reset_parameters()
         nn.init.zeros_(self.conv.weight)
@@ -358,14 +398,20 @@ class Lngram(nn.Module):
         )
         memories = self._validate_retrievals(retrievals, hidden_states)
 
+        query = self.query_norm(hidden_states)
         gated: torch.Tensor | None = None
         for order, memory in zip(self.orders, memories):
             key = self.w_k(memory)
             value = self.w_v(memory)
-            alpha = torch.sigmoid(
-                (normalized_h * self.key_norm(key)).sum(dim=-1, keepdim=True)
-                / math.sqrt(self.d_model)
-            )
+            normalized_key = self.key_norm(key)
+            with torch.autocast(
+                device_type=hidden_states.device.type,
+                enabled=False,
+            ):
+                gate_logits = (query.float() * normalized_key.float()).sum(
+                    dim=-1, keepdim=True
+                ) / math.sqrt(self.d_model)
+                alpha = torch.sigmoid(gate_logits).to(value.dtype)
             contribution = alpha * value
             # The affine readout biases must not turn an incomplete n-gram
             # prefix into a real memory contribution.

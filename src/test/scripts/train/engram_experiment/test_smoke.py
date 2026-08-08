@@ -28,7 +28,7 @@ def test_tiny_config_preserves_arm_architecture_and_cpu_backend(arm: str) -> Non
         return
 
     assert config.block_overrides is not None
-    assert tuple(config.block_overrides) == (2, config.n_layers // 2)
+    assert tuple(config.block_overrides) == (1, config.n_layers // 2 - 1)
     first, second = config.block_overrides.values()
     assert first is not second
     assert first.memory is not second.memory

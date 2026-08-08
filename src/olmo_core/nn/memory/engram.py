@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
+import struct
 from array import array
 from dataclasses import dataclass
+from functools import lru_cache
+from importlib import resources
 from numbers import Integral
 from typing import Callable, Iterable, Sequence
 
@@ -19,6 +23,11 @@ from ..convolution import CausalConv1d
 from ..layer_norm import RMSNorm
 
 __all__ = ["EngramConfig", "Engram"]
+
+DOLMA2_COMPRESSION_MAP_NAME = "dolma2_nfkc_v1"
+DOLMA2_COMPRESSION_MAP_RESOURCE = "dolma2_compression_map.u32"
+DOLMA2_COMPRESSION_METADATA_RESOURCE = "dolma2_compression_map.u32.metadata.json"
+DOLMA2_COMPRESSION_MAP_SHA256 = "04d0b8396da748fb67f6b4b8d909c2f1600c2f27c237f1e4a55cab134a7c7f29"
 
 
 def _positive(name: str, value: object) -> int:
@@ -59,6 +68,37 @@ def _compression_map(values: Sequence[int], vocab_size: int) -> tuple[int, ...]:
     return result
 
 
+@lru_cache(maxsize=1)
+def _load_dolma2_compression_map(vocab_size: int) -> tuple[int, ...]:
+    package = resources.files(__package__)
+    payload = package.joinpath(DOLMA2_COMPRESSION_MAP_RESOURCE).read_bytes()
+    metadata = json.loads(
+        package.joinpath(DOLMA2_COMPRESSION_METADATA_RESOURCE).read_text(encoding="utf-8")
+    )
+    if metadata["entries"] != vocab_size:
+        raise OLMoConfigurationError(
+            "Dolma2 compression-map size does not match the configured vocabulary: "
+            f"{metadata['entries']} != {vocab_size}"
+        )
+    expected_size = vocab_size * 4
+    if len(payload) != expected_size:
+        raise OLMoConfigurationError(
+            f"Dolma2 compression-map payload has {len(payload)} bytes, " f"expected {expected_size}"
+        )
+    digest = hashlib.sha256(payload).hexdigest()
+    if metadata["sha256"] != DOLMA2_COMPRESSION_MAP_SHA256:
+        raise OLMoConfigurationError(
+            "Dolma2 compression-map metadata does not match the sealed checksum"
+        )
+    if digest != DOLMA2_COMPRESSION_MAP_SHA256:
+        raise OLMoConfigurationError(
+            "Dolma2 compression-map checksum mismatch: "
+            f"{digest} != {DOLMA2_COMPRESSION_MAP_SHA256}"
+        )
+    values = struct.unpack(f"<{vocab_size}I", payload)
+    return _compression_map(values, vocab_size)
+
+
 @dataclass
 class EngramConfig(ModuleConfig):
     """Configure Engram conditional memory from arXiv:2601.07372.
@@ -75,7 +115,9 @@ class EngramConfig(ModuleConfig):
     vocab_size: int = 100352
     tokenizer_compression: bool = True
     compression_map: tuple[int, ...] | None = None
+    compression_map_name: str | None = None
     conv_kernel_size: int = 4
+    conv_dilation: int = 1
 
     def __post_init__(self) -> None:
         self.orders = tuple(self.orders)
@@ -101,11 +143,20 @@ class EngramConfig(ModuleConfig):
         _positive("embedding_dim", self.embedding_dim)
         _positive("vocab_size", self.vocab_size)
         _positive("conv_kernel_size", self.conv_kernel_size)
+        _positive("conv_dilation", self.conv_dilation)
         if not isinstance(self.tokenizer_compression, bool):
             raise OLMoConfigurationError("'tokenizer_compression' must be a bool")
-        if not self.tokenizer_compression and self.compression_map is not None:
+        if self.compression_map is not None and self.compression_map_name is not None:
             raise OLMoConfigurationError(
-                "'compression_map' cannot be set when tokenizer compression is disabled"
+                "specify only one of 'compression_map' and 'compression_map_name'"
+            )
+        if self.compression_map_name not in (None, DOLMA2_COMPRESSION_MAP_NAME):
+            raise OLMoConfigurationError(f"unknown compression map {self.compression_map_name!r}")
+        if not self.tokenizer_compression and (
+            self.compression_map is not None or self.compression_map_name is not None
+        ):
+            raise OLMoConfigurationError(
+                "compression maps cannot be set when tokenizer compression is disabled"
             )
         if self.compression_map is not None:
             self.compression_map = _compression_map(self.compression_map, self.vocab_size)
@@ -160,8 +211,16 @@ class EngramConfig(ModuleConfig):
             resolved = compression_map_hook(self.vocab_size)
         elif self.compression_map is not None:
             resolved = self.compression_map
+        elif self.compression_map_name == DOLMA2_COMPRESSION_MAP_NAME:
+            resolved = _load_dolma2_compression_map(self.vocab_size)
         else:
             resolved = range(self.vocab_size)
+        named_map = (
+            compression_map is None
+            and compression_map_hook is None
+            and self.compression_map is None
+            and self.compression_map_name is not None
+        )
         return Engram(
             d_model=d_model,
             orders=self.orders,
@@ -170,7 +229,9 @@ class EngramConfig(ModuleConfig):
             embedding_dim=self.embedding_dim,
             vocab_size=self.vocab_size,
             compression_map=_compression_map(resolved, self.vocab_size),
+            compression_map_persistent=not named_map,
             conv_kernel_size=self.conv_kernel_size,
+            conv_dilation=self.conv_dilation,
             init_device=init_device,
             dtype=torch.float32 if dtype is None else dtype,
         )
@@ -197,7 +258,9 @@ class Engram(nn.Module):
         embedding_dim: int,
         vocab_size: int,
         compression_map: Sequence[int],
+        compression_map_persistent: bool = True,
         conv_kernel_size: int = 4,
+        conv_dilation: int = 1,
         init_device: str | torch.device = "cpu",
         dtype: torch.dtype = torch.float32,
     ):
@@ -209,8 +272,10 @@ class Engram(nn.Module):
         self.embedding_dim = embedding_dim
         self.vocab_size = vocab_size
         self.conv_kernel_size = conv_kernel_size
+        self.conv_dilation = conv_dilation
         self.retrieval_dim = len(self.orders) * num_hash_heads * embedding_dim
         self._compression_map_values = tuple(int(value) for value in compression_map)
+        self.compression_map_persistent = compression_map_persistent
         self.register_buffer(
             "compression_map",
             torch.tensor(
@@ -218,6 +283,7 @@ class Engram(nn.Module):
                 dtype=torch.long,
                 device=init_device,
             ),
+            persistent=compression_map_persistent,
         )
 
         max_order = max(self.orders)
@@ -278,6 +344,7 @@ class Engram(nn.Module):
         self.conv = CausalConv1d(
             hidden_size=d_model,
             kernel_size=conv_kernel_size,
+            dilation=conv_dilation,
             bias=False,
             activation=None,
             dtype=dtype,

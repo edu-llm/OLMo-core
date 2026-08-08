@@ -11,6 +11,10 @@ This directory defines an iso-token comparison of three reordered-norm MoE desig
   ([arXiv:2605.24869](https://arxiv.org/abs/2605.24869)). It likewise uses 51 experts and
   adds order-2/order-3, 4-bit latent routing with memory dimension 61 to layers 2 and 6.
 
+Both memory arms use the papers' dilation-3, kernel-4 causal convolution. Lngram starts as an
+exact no-op through zero tables/readout biases, uses separate routing and gate-query RMSNorms,
+and accumulates gate similarity in float32.
+
 The arm modules print these values from `TransformerConfig` during config-only inspection.
 The constants in each arm pin the same values as a regression check.
 
@@ -18,20 +22,21 @@ The constants in each arm pin the same values as a regression check.
 | --- | ---: | ---: |
 | Base MoE control | 392,373,120 | 113,681,280 |
 | Engram MoE | 392,372,864 | 114,414,208 |
-| Lngram MoE | 392,197,248 | 122,941,440 |
+| Lngram MoE | 392,198,016 | 122,942,208 |
 
-The maximum total-parameter spread is 175,872 parameters, about 0.045% of the control and
+The maximum total-parameter spread is 175,104 parameters, about 0.045% of the control and
 therefore **<= 1%**. The memory modules hold about 60.4M Engram parameters and 60.3M
 Lngram parameters, within the intended 60–75M conditional-memory budget. Lngram's active
-count is 9,260,160 (8.15%) above the control. This is a
+count is 9,260,928 (8.15%) above the control. This is a
 projection-driven active-parameter bump, not an assertion that the whole latent table is
 active: accounting includes Lngram's dense normalization, discretization, shared key/value
 readout, and convolution parameters, plus only one selected table row per route and order.
 
-`tokenizer_compression=True` keeps the Engram compression hook enabled. This scaffold does not
-commit a generated Dolma2 token-normalization map, so it deliberately uses the documented
-identity fallback. Supply a precomputed NFKC/lowercase Dolma2 map through `EngramConfig` to test
-the paper's compressed-key variant; do not describe the fallback arm as having collapsed tokens.
+Engram uses a committed compression map generated from the pinned Dolma2 tokenizer revision
+`5292e5d6c0f40b67cc765fe41bec991cf4345b5c`. It applies NFKC, NFD, accent stripping,
+lowercasing, and whitespace normalization, collapsing 100,278 tokenizer entries into 62,347
+canonical IDs. The 74 padded matrix rows remain distinct, for 62,421 compressed IDs total.
+The binary artifact is verified by SHA-256 before model construction.
 
 ## Lngram CUDA acceleration
 
@@ -42,8 +47,8 @@ computes forced-bit table differences and upstream dot products without material
 counterfactual retrieval tensors. It uses bfloat16/float16 loads with float32 accumulation.
 
 CPU runs, missing Triton, unsupported shapes or dtypes, and higher-order gradients continue to
-use the reference implementation. Model parameters, optimizer state, FSDP2 ownership, activation
-checkpointing, and the three AWS run specs are unchanged.
+use the reference implementation. FSDP2 ownership, activation checkpointing, and the three AWS
+run specs are unchanged.
 
 Benchmark the isolated backward at the production shape on one CUDA device with:
 
@@ -62,8 +67,8 @@ All arms consume exactly the same target schedule:
   TP, CP, PP, and EP are disabled for this experiment.
 - AdamW uses learning rate `4e-4`, weight decay `0.1`, betas `(0.9, 0.95)`, fused updates,
   cosine decay, 1,000 warmup steps, gradient norm 1.0, and z-loss multiplier `1e-5`.
-  Embeddings have zero weight decay. Memory parameters in Engram and Lngram use five times
-  the base learning rate and zero weight decay.
+  Embeddings have zero weight decay. Engram and Lngram lookup tables use five times the base
+  learning rate and zero weight decay; dense memory parameters use the backbone optimizer.
 - Compilation and selected-op activation checkpointing are enabled. Initialization seed
   12536 and data seed 34521 are common to all arms.
 - There are **no evals**. This is a controlled pretraining comparison, not an evaluation
@@ -75,6 +80,13 @@ training setup. The explicit `train` path resolves the corpus, prepares distribu
 builds the native dataset and trainer, and then trains. A run is valid only if all three arms
 use the unchanged scripts and specs from the same commit and the same registered corpus
 release.
+
+This architecture is revision `memory-paper-fidelity-v1`. It changes tokenizer addressing,
+memory-layer placement, convolution behavior, Lngram parameters, initialization, and optimizer
+groups. It therefore requires fresh run IDs/checkpoint prefixes for every arm and must not resume
+from checkpoints produced by the earlier experiment revision. A persistent revision digest is
+stored atomically with model state, so strict checkpoint loading rejects missing or mismatched
+revisions even when a fallback `load_path` is supplied.
 
 ## Corpus contract
 
@@ -149,7 +161,9 @@ retained.
 Before resume, rank zero removes only a `step<N>` directory that the canonical checkpointer
 identifies as torn, then all ranks synchronize. Complete checkpoints and unrelated
 directories are preserved. The trainer then uses `maybe_load_checkpoint()` to resume the
-latest valid state before fitting.
+latest valid state before fitting. Resume is supported only within the same
+`experiment_revision` and immutable run commit; cross-revision checkpoints are intentionally
+incompatible.
 
 ConfigSaver receives the complete serialized experiment config, including the resolved
 dataset identity and shard list, before checkpoint loading. W&B is opt-in: it is absent

@@ -365,6 +365,7 @@ class TransformerConfig(ModelConfig):
     block_overrides: Optional[Dict[int, TransformerBlockConfig]] = None
     embed_scale: Optional[float] = None
     tie_word_embeddings: bool = False
+    checkpoint_revision: Optional[str] = None
 
     def __post_init__(self):
         if self.tie_word_embeddings and self.name == TransformerType.normalized:
@@ -422,6 +423,7 @@ class TransformerConfig(ModelConfig):
                 block_pattern=self.block_pattern,
                 embed_scale=self.embed_scale,
                 tie_word_embeddings=self.tie_word_embeddings,
+                checkpoint_revision=self.checkpoint_revision,
             )
         elif self.name == TransformerType.normalized:
             assert self.embedding_norm is None
@@ -439,6 +441,7 @@ class TransformerConfig(ModelConfig):
                 embedding_init_std=self.embedding_init_std,
                 block_overrides=self.block_overrides,
                 block_pattern=self.block_pattern,
+                checkpoint_revision=self.checkpoint_revision,
             )
         elif self.name == TransformerType.moe:
             model = MoETransformer(
@@ -457,6 +460,7 @@ class TransformerConfig(ModelConfig):
                 block_overrides=self.block_overrides,
                 block_pattern=self.block_pattern,
                 tie_word_embeddings=self.tie_word_embeddings,
+                checkpoint_revision=self.checkpoint_revision,
             )
         else:
             raise NotImplementedError(self.name)

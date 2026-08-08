@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import warnings
 from collections import defaultdict
@@ -125,6 +126,7 @@ class Transformer(nn.Module):
         block_pattern: Optional[List[str]] = None,
         embed_scale: Optional[float] = None,
         tie_word_embeddings: bool = False,
+        checkpoint_revision: Optional[str] = None,
     ):
         super().__init__()
 
@@ -135,6 +137,22 @@ class Transformer(nn.Module):
         self.n_layers = n_layers
         self.dtype = dtype
         self.embed_scale = embed_scale
+        self.checkpoint_revision = checkpoint_revision
+        self._checkpoint_revision_values: Optional[Tuple[int, ...]] = None
+        if checkpoint_revision is not None:
+            self._checkpoint_revision_values = tuple(
+                hashlib.sha256(checkpoint_revision.encode("utf-8")).digest()
+            )
+            self.register_buffer(
+                "_checkpoint_revision_digest",
+                torch.tensor(
+                    self._checkpoint_revision_values,
+                    dtype=torch.uint8,
+                    device=init_device,
+                ),
+                persistent=True,
+            )
+            self.register_load_state_dict_post_hook(self._validate_loaded_checkpoint_revision)
 
         self.embeddings = nn.Embedding(vocab_size, d_model, dtype=dtype, device=init_device)
         self.embedding_norm = (
@@ -209,6 +227,25 @@ class Transformer(nn.Module):
         # later, like for pipeline parallelism.
         self.num_params
         self.num_non_embedding_params
+
+    def _validate_loaded_checkpoint_revision(
+        self,
+        module: nn.Module,
+        incompatible_keys: Any,
+    ) -> None:
+        del incompatible_keys
+        assert module is self
+        if self._checkpoint_revision_values is None:
+            return
+        expected = torch.tensor(
+            self._checkpoint_revision_values,
+            dtype=torch.uint8,
+            device=self._checkpoint_revision_digest.device,
+        )
+        if not torch.equal(self._checkpoint_revision_digest, expected):
+            raise RuntimeError(
+                f"checkpoint revision digest does not match {self.checkpoint_revision!r}"
+            )
 
     def _tie_weights(self) -> None:
         if self.embeddings is None or self.lm_head is None:
@@ -308,6 +345,17 @@ class Transformer(nn.Module):
         """
         device = device or self.device
         self.to_empty(device=device)
+        if (
+            self._checkpoint_revision_values is not None
+            and not self._checkpoint_revision_digest.is_meta
+        ):
+            self._checkpoint_revision_digest.copy_(
+                torch.tensor(
+                    self._checkpoint_revision_values,
+                    dtype=torch.uint8,
+                    device=device,
+                )
+            )
 
         memory_modules: List[nn.Module] = []
         for block in self.blocks.values():
@@ -1109,6 +1157,7 @@ class NormalizedTransformer(Transformer):
         embedding_init_std: Optional[float] = None,
         block_overrides: Optional[Dict[int, TransformerBlockConfig]] = None,
         block_pattern: Optional[List[str]] = None,
+        checkpoint_revision: Optional[str] = None,
     ):
         super().__init__(
             d_model=d_model,
@@ -1124,6 +1173,7 @@ class NormalizedTransformer(Transformer):
             embedding_init_std=embedding_init_std,
             block_overrides=block_overrides,
             block_pattern=block_pattern,
+            checkpoint_revision=checkpoint_revision,
         )
 
     def _validate_block(self, block: TransformerBlockBase) -> TransformerBlockBase:

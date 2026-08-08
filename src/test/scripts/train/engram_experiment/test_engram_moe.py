@@ -1,6 +1,6 @@
 from unittest.mock import Mock
 
-from olmo_core.nn.memory import EngramConfig
+from olmo_core.nn.memory import DOLMA2_COMPRESSION_MAP_NAME, EngramConfig
 from olmo_core.nn.transformer import TransformerConfig
 from olmo_core.nn.transformer.config import TransformerBlockType
 from scripts.train.engram_experiment import base_moe, common, engram_moe
@@ -18,7 +18,7 @@ def test_model_has_exact_independent_engram_overrides():
     assert model.block.feed_forward_moe.num_experts == engram_moe.NUM_EXPERTS
     assert engram_moe.NUM_EXPERTS < base_moe.NUM_EXPERTS
     assert model.block_overrides is not None
-    assert list(model.block_overrides) == [2, model.n_layers // 2]
+    assert list(model.block_overrides) == [1, model.n_layers // 2 - 1]
 
     first, second = model.block_overrides.values()
     for override in (first, second):
@@ -30,6 +30,8 @@ def test_model_has_exact_independent_engram_overrides():
         assert override.memory.table_sizes == engram_moe.TABLE_SIZES
         assert override.memory.embedding_dim == engram_moe.EMBEDDING_DIM
         assert override.memory.vocab_size == common.PADDED_VOCAB_SIZE
+        assert override.memory.compression_map_name == DOLMA2_COMPRESSION_MAP_NAME
+        assert override.memory.conv_dilation == 3
         assert override.sequence_mixer is not model.block.sequence_mixer
         assert override.feed_forward_moe is not model.block.feed_forward_moe
 
@@ -74,7 +76,7 @@ def test_build_config_uses_shared_pipeline_and_memory_optimizer():
     memory_override = next(
         override
         for override in (config.train_module.optim.group_overrides or [])
-        if override.params == ["blocks.*.memory.*"]
+        if override.params == ["blocks.*.memory.tables.*"]
     )
     assert memory_override.opts == {
         "lr": common.BASE_LEARNING_RATE * 5,
