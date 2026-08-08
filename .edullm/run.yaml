@@ -14,6 +14,10 @@ suggested_compute: gpu-1xa10g
 # `--dtype float32` is named because the platform's precision guard reads the command's text and cannot
 # see a dtype chosen in code. `--last-only` scores each cell's final checkpoint, which is where every
 # endpoint number is read.
+#
+# `--json` prints every scored row to stdout, which is the only way to read the numbers without calling
+# AWS: there is no `edullm` verb that fetches a run's output, but `edullm logs` relays what the program
+# printed. The rows are printed just before the three upload lines, so a 50-line tail reaches them.
 command: >-
   bash -lc 'B=s3://sbsandbox-intern-edullm-outputs/teams/memory-split/runs;
   G=$B/run_019fdf85-2644-702e-b1f2-c94186fc7c49/gates-mano.json;
@@ -25,4 +29,4 @@ command: >-
   $B/run_019fd3c2-9cb5-70d1-8aa4-7412df51bc6c/checkpoints/
   $B/run_019fd3c1-1d5f-7071-9171-a0c93f7dd0cc/
   --out ${EDULLM_OUTPUT_PREFIX}confirmatory.csv --work-dir /tmp/s
-  --device cuda --dtype float32 --batch-size 512 --last-only --gate-report $G'
+  --device cuda --dtype float32 --batch-size 512 --last-only --gate-report $G --json'
