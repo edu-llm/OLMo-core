@@ -5,7 +5,8 @@ schema_version: 1
 workload_profile: olmo-core-train
 suggested_compute: gpu-1xl4
 command: >-
-  bash -lc 'python .edullm/ckpt_transfer_smoke.py
+  bash -lc 'python -m pip install -q "transformers>=4.40" &&
+  python .edullm/ckpt_transfer_smoke.py
   --save-folder "$EDULLM_CHECKPOINT_DIR"
   --steps-pre 200 --steps-gap 200 --steps-sft 400
   --seq-len 256 --batch-size 4

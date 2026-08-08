@@ -16,6 +16,8 @@ Paper: https://arxiv.org/abs/2503.20110
 
 **Not in this run:** DPO, RLVR, real team MoE intermediates, generation evals.
 
+**Image note:** research image may omit `transformers`; `run.yaml` pip-installs it, and the script also falls back to the `tokenizers` package / tokenizer.json.
+
 ## Launch (only when approved — never main)
 
 ```bash

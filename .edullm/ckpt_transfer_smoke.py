@@ -281,29 +281,131 @@ def load_conversation_rows(uris: Sequence[str], *, max_rows: int) -> List[Dict[s
     return rows
 
 
-def _get_hf_tokenizer():
+class _EncodeAdapter:
+    """Minimal encode() surface used by :func:`tokenize_conversations`."""
+
+    def __init__(self, encode_fn):
+        self._encode_fn = encode_fn
+
+    def encode(self, text: str, add_special_tokens: bool = False) -> List[int]:
+        del add_special_tokens
+        return list(self._encode_fn(text))
+
+
+def _tokenizer_candidate_paths() -> List[str]:
+    paths: List[str] = []
+    for key in (
+        "EDULLM_TOKENIZER_PATH",
+        "EDULLM_DATASET_TOKENIZER_PATH",
+        "EDULLM_TOKENIZER_DIR",
+    ):
+        val = os.environ.get(key)
+        if val:
+            paths.append(val)
+    paths.append("allenai/dolma2-tokenizer")
+    return paths
+
+
+def _try_transformers_tokenizer(name: str) -> Optional[_EncodeAdapter]:
     try:
         from transformers import AutoTokenizer
-    except ImportError as e:
-        raise RuntimeError("transformers is required to tokenize SFT conversations") from e
+    except ImportError:
+        return None
+    tok = AutoTokenizer.from_pretrained(name, trust_remote_code=True)
 
-    local = os.environ.get("EDULLM_TOKENIZER_PATH") or os.environ.get(
-        "EDULLM_DATASET_TOKENIZER_PATH"
-    )
+    def _encode(text: str) -> List[int]:
+        return list(tok.encode(text, add_special_tokens=False))
+
+    return _EncodeAdapter(_encode)
+
+
+def _try_tokenizers_lib(name: str) -> Optional[_EncodeAdapter]:
+    """Load dolma2 via the lightweight ``tokenizers`` package (no transformers)."""
+    try:
+        from tokenizers import Tokenizer
+    except ImportError:
+        return None
+
+    from olmo_core.io import cached_path
+
     candidates = []
-    if local:
-        candidates.append(local)
-    candidates.append("allenai/dolma2-tokenizer")
+    p = Path(name)
+    if p.is_dir():
+        candidates.append(p / "tokenizer.json")
+    elif p.is_file():
+        candidates.append(p)
+    else:
+        # HuggingFace-style id → raw tokenizer.json URL (works with cached_path).
+        candidates.append(
+            f"https://huggingface.co/{name}/resolve/main/tokenizer.json"
+        )
+
     last_err: Optional[Exception] = None
-    for name in candidates:
+    for cand in candidates:
         try:
-            tok = AutoTokenizer.from_pretrained(name, trust_remote_code=True)
-            log.info("loaded tokenizer %s", name)
-            return tok
+            local = str(cached_path(str(cand))) if not Path(str(cand)).is_file() else str(cand)
+            tok = Tokenizer.from_file(local)
+
+            def _encode(text: str, _tok=tok) -> List[int]:
+                return list(_tok.encode(text).ids)
+
+            log.info("loaded tokenizers.Tokenizer from %s", cand)
+            return _EncodeAdapter(_encode)
         except Exception as e:  # noqa: BLE001
             last_err = e
-            log.warning("tokenizer load failed for %s: %s", name, e)
-    raise RuntimeError(f"could not load dolma2 tokenizer: {last_err}")
+            log.warning("tokenizers load failed for %s: %s", cand, e)
+    if last_err is not None:
+        log.warning("tokenizers fallback exhausted: %s", last_err)
+    return None
+
+
+def _ensure_transformers_installed() -> None:
+    """Last resort on research images that omit the optional transformers extra."""
+    import subprocess
+    import sys
+
+    log.info("pip-installing transformers (not present in image)")
+    subprocess.check_call(
+        [sys.executable, "-m", "pip", "install", "-q", "transformers>=4.40"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.STDOUT,
+    )
+
+
+def get_sft_tokenizer() -> _EncodeAdapter:
+    """
+    Resolve a dolma2 encoder without assuming ``transformers`` is installed.
+
+    Order: transformers → tokenizers lib + tokenizer.json → pip install transformers.
+    """
+    last_err: Optional[Exception] = None
+    for name in _tokenizer_candidate_paths():
+        try:
+            tok = _try_transformers_tokenizer(name)
+            if tok is not None:
+                log.info("loaded transformers tokenizer %s", name)
+                return tok
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            log.warning("transformers tokenizer failed for %s: %s", name, e)
+        try:
+            tok = _try_tokenizers_lib(name)
+            if tok is not None:
+                return tok
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            log.warning("tokenizers lib failed for %s: %s", name, e)
+
+    _ensure_transformers_installed()
+    for name in _tokenizer_candidate_paths():
+        try:
+            tok = _try_transformers_tokenizer(name)
+            if tok is not None:
+                log.info("loaded transformers tokenizer after pip install: %s", name)
+                return tok
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+    raise RuntimeError(f"could not load dolma2 tokenizer for SFT: {last_err}")
 
 
 def tokenize_conversations(
@@ -545,12 +647,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     eval_rows = load_conversation_rows(
         _s3_uri_list_for_sft("val"), max_rows=args.sft_eval_rows
     )
-    hf_tok = _get_hf_tokenizer()
+    sft_tok = get_sft_tokenizer()
     train_ids, train_mask = tokenize_conversations(
-        train_rows, hf_tok, seq_len=args.seq_len, eos_token_id=eos_id, pad_token_id=pad_id
+        train_rows, sft_tok, seq_len=args.seq_len, eos_token_id=eos_id, pad_token_id=pad_id
     )
     eval_ids, eval_mask = tokenize_conversations(
-        eval_rows, hf_tok, seq_len=args.seq_len, eos_token_id=eos_id, pad_token_id=pad_id
+        eval_rows, sft_tok, seq_len=args.seq_len, eos_token_id=eos_id, pad_token_id=pad_id
     )
     sft_batches = make_sft_batches(train_ids, train_mask, batch_size=args.batch_size)
     eval_batches = make_sft_batches(eval_ids, eval_mask, batch_size=args.batch_size)
