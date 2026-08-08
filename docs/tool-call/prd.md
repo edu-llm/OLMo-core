@@ -33,8 +33,9 @@ right shape and does not need regenerating.
 | --- | --- | --- |
 | Tool domain | **Both** general-purpose APIs **and** edu/tutoring tools, split in the object path | General gives comparability to published baselines; edu is the actual product surface. Path nesting keeps either subtree independently trainable and measurable, and costs nothing now |
 | Capability scope | **Single-turn + irrelevance first.** Multi-turn deferred to a second dataset | Covers the BFCL simple/multiple/parallel/relevance axes. Multi-turn roughly triples generation and verification cost and is where small models are weakest — not the place to discover pipeline bugs |
-| Provenance | **Hybrid** — but under a strict licence read the split is **~15% reformat / ~17% derived / ~68% fresh synthesis** | The decision stands; the *wording* "synthesize only the gaps" understated the work by ~25,000 rows. Only ToolACE (`apache-2.0`, ~4,000 usable rows) and Hermes single-turn (`apache-2.0`, ~1,890) are cleanly reusable. xLAM is **blocked** on a licence question, ToolBench and Glaive are excluded on quality. Re-cost the schedule on 27,100 synthesised rows |
-| Record format | **Tool call serialized into the assistant message `content`** | Forced by the validator, with measured evidence — see `dataset-design.md` §2. Not a style choice |
+| Provenance | **Hybrid: 31.5% reformat / 17.5% derived / 51% fresh synthesis** | Revised 2026-08-08. The five `allenai/olmo-toolu-*` mixes named in `src/scripts/train/sft/README.md` are **all HTTP 401** — foreclosed. But their **public non-thinking equivalent** `allenai/Dolci-Instruct-SFT-Tool-Use` (**227,579 rows**, ungated) is not, and it is already in OLMo's convention, so 10,600 filtered rows come in as a *lift* rather than a translation. ToolACE keeps 2,000 as a provenance hedge; **Hermes is dropped**; xLAM still blocked |
+| **Wire format** | **Adopt OLMo 3's convention verbatim** — `<functions>` / `<function_calls>` / role `environment` | Not invented: those delimiters are **single token ids 100266–100269** in the OLMo-3 instruct tokenizer, carved in place over `<|extra_id_1..4|>` at **unchanged vocab 100278**. Swapping the tokenizer costs no resize and no new embedding rows, and any dolma2-pretrained checkpoint stays byte-compatible |
+| Record layout | **Tool call serialized into the assistant message `content`** — we adopt OLMo's *rendered bytes*, not its *row layout* | Forced by the validator, measured against a real Dolci row: AI2 parks the call in a sibling `function_calls` field with `content: null`, which makes two rows with different calls hash identically (`COLLIDE=True`). Inlining renders byte-identical output while keeping the call where the leakage key can see it. See `dataset-design.md` §2–§3 |
 | Category axis | `<category>` in the path is a **capability band**, not a tool family | Two path levels is the entire budget. Tool family in the path would make "is parallel calling worse on edu tools" unanswerable — the one cross-domain question the domain split exists to answer |
 
 ## 4. Deliverables
@@ -121,20 +122,28 @@ Anything not mechanically checkable is not claimed as a quality property.
 
 ## 9. Open questions
 
-Full list with what each blocks: [`dataset-design.md`](dataset-design.md) §15. The three that need
-a **human**, not another research pass:
+Full list with what each blocks: [`dataset-design.md`](dataset-design.md) §15. The two that need a
+**human with authority**, not another research pass:
 
-1. **Does AI2's OLMo-3 instruct tokenizer already define tool-call delimiters?**
-   `src/scripts/train/sft/README.md:52-64` shows the OLMo-3 SFT mix already contains tool-use data
-   (`allenai/olmo-toolu-sft-mix-…-bfclv3-decontaminated-200K`, four `olmo-toolu-s2-sft-*` mixes) and
-   loads its chat template **from the tokenizer**. If that template defines a tool-call convention,
-   we should **match it rather than invent one** — and those mixes may be directly reusable. This is
-   the highest-value unknown and it could change §3, §7 and §8 of the design.
-2. **xLAM licensing** — the card is tagged `cc-by-4.0` but the gated prose says "research purposes
-   only in support of an academic paper." Blocks 60,000 rows and ~a week of reformat work either way.
-3. **Held-out schema list + query-template bank** — blocks generation start; nothing can be written
-   until both pools are disjoint and fixed.
+1. **Dolci licence sign-off.** `allenai/Dolci-Instruct-SFT-Tool-Use` states ODC-BY **in its
+   description prose with no `license:` key in the frontmatter**. That is weaker than a tagged
+   licence, and it gates 26.5% of the corpus.
+2. **xLAM licensing** — tagged `cc-by-4.0`, but the gated prose says "research purposes only in
+   support of an academic paper." Decides whether the total can reach 67,500.
 
-Answered since the first draft: size (40,000), abstention fraction (10%), mixing ratio (1:1),
-special tokens (plain text; **74** free dolma2 ids at `100278`–`100351`, **zero** claimed by any
-registry in this repo), and the SFT path (consumption wired, producer external).
+The load-bearing *technical* unknown is cheap and must be done first: **render one Dolci row through
+`Olmo-3-7B-Instruct/chat_template.jinja` and diff it against the same row inlined per design §3.**
+That proves byte-identity and settles the leading-space question in one command. Do not start the
+reformat pass before it passes.
+
+**Answered since the first draft:** the OLMo-3 instruct tokenizer **does** define tool-call
+delimiters (single ids `100266`–`100269`, vocab unchanged at 100278;
+`allenai/dolma-2-tokenizer-olmo-3-instruct-final` is a 307 alias for
+`allenai/olmo-3-tokenizer-instruct-dev`, sha `55f211df…` — pin it); the `olmo-toolu-*` mixes are all
+401 but a public equivalent exists; size 40,000; abstention 10%; mixing 1:1; and the SFT path
+(consumption wired, producer external, **multi-turn currently un-tokenizable** — see design §12).
+
+Two things to inherit deliberately rather than by accident: **register `100269`
+(`</function_calls>`) as an explicit stop token** — it is `special: false`, so tool calls otherwise
+do not terminate — and **run our own BFCL decontamination**, because only the *private* 200K mix is
+named `decontaminated` and the public cut's status is unverified.

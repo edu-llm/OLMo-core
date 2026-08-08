@@ -90,51 +90,103 @@ non-empty-string check (§10) is load-bearing.
 
 ---
 
-## 3. Record format
+## 3. Record format — OLMo 3's convention, inlined into `content`
 
-Roles `system` · `user` · `assistant` · `tool` — we enforce this set ourselves, since the profile
-does not. **Pin the whitespace**: `<tool_call>` and `<tool_call>\n` tokenize differently, so the
-spec is the bytes.
+**Superseded 2026-08-08.** The first draft invented `<tools>`/`<tool_call>`/`<tool_response>` with
+name-first JSON calls. OLMo 3 already has a convention, it ships as **single token ids**, and we
+adopt it verbatim. Retrieved and independently confirmed from
+`allenai/olmo-3-tokenizer-instruct-dev` (see §7).
 
-- **Schema block** — inside `system` `content`, once, at index 0:
-  `<tools>\n` + one compact JSON object per line + `</tools>`, each
-  `{"type":"function","function":{"name":…,"description":…,"parameters":{JSON Schema 2020-12}}}`.
-  The OpenAI/Hermes wrapper, chosen so the one clean upstream source needs no schema conversion.
-  **Pick one wrapper and never mix.**
-- **Call** — inside `assistant` `content`:
-  `<tool_call>\n{"name":"…","arguments":{…}}\n</tool_call>`, **name-first always**. Parallel calls
-  are ≥2 blocks joined by a single `\n`.
-- **Result** — inside a `tool`-role message: `<tool_response>\n{…}\n</tool_response>` plus a
-  per-message `name`. Fixed now so the deferred multi-turn set agrees.
-- **Abstention** — ordinary prose with **zero** occurrences of `<tool_call>`. No positive marker;
-  that would be a second thing to get wrong.
+Roles `system` · `user` · `assistant` · **`environment`** — we enforce this set ourselves, since
+the profile does not. **Tool results come back on `environment`, not `tool`.** The Instruct chat
+template aliases `tool` → `environment`; the Think template has no `tool` branch and **silently
+drops** such messages. Emit `environment`.
+
+| Element | Exact bytes | Token id |
+| --- | --- | --- |
+| Schema block, in `system` `content` | `<functions>` + **single-line** JSON array + `</functions>` | 100266 / 100267 |
+| Call block, in `assistant` `content` | `<function_calls>` + Pythonic call(s) + `</function_calls>` | 100268 / 100269 |
+| Result, in `environment` `content` | **no wrapper at all** — raw content | — |
+
+- **Calls are Pythonic, not JSON**: `name(k="v", k2=3)`, with argument *values* individually
+  JSON-encoded. Verbatim from a real row: `weather.forecast_weather_api(q="Paris", days=5)`.
+- **Parallel calls are ONE block**, calls joined by a bare `\n` inside it — not two blocks.
+- **No newlines** immediately inside either tag, and nothing after `</function_calls>`.
+- **One leading space before `<functions>`** in system content. AI2's own training bytes went
+  through the legacy `message['functions']` path, which emits `' <functions>'`; the row-level
+  `tools` path emits no separator. INFERRED from template + schema — settle it with §15 Q1.
+- **Abstention** = ordinary prose with **zero** occurrences of `<function_calls>`. No positive
+  marker; that would be a second thing to get wrong.
+- **No call ids.** Results correlate to calls **positionally** only. This is a real expressiveness
+  loss we accept — it also means the deferred multi-turn set cannot express interleaved or
+  out-of-order results.
+
+### We adopt OLMo's rendered bytes, NOT its row layout
+
+This is the crux. AI2's rows park the call in a **sibling `function_calls` field** and the schema in
+a sibling `functions` field, with **`content: null`** on the calling assistant turn. Confirmed
+against a real row:
+
+```
+--- message 2 role= assistant
+    content: <None>
+    function_calls: weather.forecast_weather_api(q="Paris", days=5)
+                    weather.forecast_weather_api(q="Madrid", days=5)
+```
+
+**That layout is exactly what our validator cannot see** (§2): `_dedup_key` hashes
+`role \x1f content`, so two rows differing only in the sibling call collide, and `max_leakage: 0`
+would refuse the whole publish. It is also the `content: null` trap that passes well-formedness
+while teaching the model to emit nothing.
+
+So we **inline**: the literal `<functions>…</functions>` goes inside `system` `content`, the literal
+`<function_calls>…</function_calls>` inside `assistant` `content`, the raw result inside
+`environment` `content`, and we emit **no `functions`, no `function_calls`, and no row-level
+`tools`** field at all.
+
+The chat template emits `content` verbatim and skips all three conditional branches, so **the
+rendered token stream is byte-identical to AI2's** — the added-token trie still resolves the four
+delimiters to single ids — while every payload sits inside `content` where the leakage key can
+reach it. Reformatting a Dolci row is therefore a *lift*, not a translation.
+
+Two consequences worth naming: `content` is never `null` on any row, which independently satisfies
+§2's non-null requirement; and because the call is inside assistant `content`, **the call tokens are
+trainable and the schema tokens are masked** (§12) — exactly what we want.
 
 **(a) single call**
 
 ```json
 {"messages":[
- {"role":"system","content":"<tools>\n{\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"description\":\"Current conditions for a city.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"]}}}\n</tools>"},
+ {"role":"system","content":"You are a helpful function-calling AI assistant. … <functions>[{\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"description\":\"Current conditions for a city.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"]}}}]</functions>"},
  {"role":"user","content":"weather in Boston?"},
- {"role":"assistant","content":"<tool_call>\n{\"name\":\"get_weather\",\"arguments\":{\"city\":\"Boston\"}}\n</tool_call>"}
+ {"role":"assistant","content":"<function_calls>get_weather(city=\"Boston\")</function_calls>"}
 ]}
 ```
 
-**(b) multi-turn with the result fed back** (deferred to v2, format fixed now)
+**(b) parallel calls** — one block, bare `\n` between calls:
+
+```json
+{"role":"assistant","content":"<function_calls>get_weather(city=\"Paris\")\nget_weather(city=\"Madrid\")</function_calls>"}
+```
+
+**(c) multi-turn with the result fed back** (deferred to v2 — and see §12, the converter currently
+**cannot tokenize** ≥2 assistant turns; format fixed now so v2 agrees)
 
 ```json
 {"messages":[
- {"role":"system","content":"<tools>…</tools>"},
+ {"role":"system","content":"… <functions>[…]</functions>"},
  {"role":"user","content":"weather in Boston?"},
- {"role":"assistant","content":"<tool_call>\n{\"name\":\"get_weather\",\"arguments\":{\"city\":\"Boston\"}}\n</tool_call>"},
- {"role":"tool","name":"get_weather","content":"<tool_response>\n{\"temp_f\":54}\n</tool_response>"},
+ {"role":"assistant","content":"<function_calls>get_weather(city=\"Boston\")</function_calls>"},
+ {"role":"environment","content":"{\"temp_f\":54}"},
  {"role":"assistant","content":"It's 54°F in Boston."}
 ]}
 ```
 
-**(c) abstention** — tools offered, the applicable one deliberately absent, assistant answers or
-asks; no `<tool_call>` substring anywhere.
+**(d) abstention** — tools offered, the applicable one deliberately absent; no `<function_calls>`
+substring anywhere.
 
-All shapes were run through `_messages_wellformed` and pass.
+Every row must **end on an assistant turn** — the template only emits EOS there, and OLMo-core finds
+document boundaries by EOS (§12).
 
 Heldout rows additionally carry a **top-level `answer_key`** with per-slot *sets* of acceptable
 values, mirroring BFCL's `possible_answer/`. Without it AST exact-match under-reports, because
@@ -210,7 +262,23 @@ generator/prompt. Nothing in the pipeline can see this.
 | `edu/relevance-hard` | ” | 900 | 2.25 | derive |
 | `edu/no-suitable-tool` | ” | 840 | 2.10 | derive |
 | `edu/missing-args` | ” | 360 | 0.90 | derive |
-| **TOTAL** | | **40,000** | **100** | reformat 5,900 (14.75%) / derived 7,000 (17.5%) / **fresh synthesis 27,100 (67.75%)** |
+| **TOTAL** | | **40,000** | **100** | see revised provenance below |
+
+**Provenance, revised 2026-08-08** once `allenai/Dolci-Instruct-SFT-Tool-Use` was found public
+(§8). Fresh synthesis drops from 67.75% → **51.0%**; roughly 8,000 rows of generate-and-verify work
+becomes a filter-and-lift pass over data already in the exact target shape.
+
+| Provenance | Rows | % | Where |
+| --- | --- | --- | --- |
+| Reformat — AI2 `Dolci-Instruct-SFT-Tool-Use` | **10,600** | 26.5 | `general/single-call` 4,000 · `general/multi-tool-select` 4,200 · `general/parallel-call` 2,400 |
+| Reformat — `Team-ACE/ToolACE` (provenance hedge) | **2,000** | 5.0 | 800 / 800 / 400 across the same three |
+| Derived (schema deletion, arg elision, distractor injection — now off *reformatted* positives) | **7,000** | 17.5 | `*/relevance-hard` 3,000 · `*/no-suitable-tool` 2,800 · `*/missing-args` 1,200 |
+| Fresh synthesis | **20,400** | 51.0 | all 12,100 edu less its 2,100 derived → 10,000 · `general/nested-args` 5,200 · general top-up 5,200 |
+| **TOTAL** | **40,000** | 100 | **31.5% reformat / 17.5% derived / 51.0% fresh** |
+
+Deriving negatives from 227K human-curated AI2 positives is also strictly better than deriving them
+from our own synthesis — it breaks the circularity of grading a synth generator against negatives
+derived from that same generator.
 
 **Abstention = 10.0%** (`no-suitable-tool` 2,800 + `missing-args` 1,200 = 4,000). Best-evidenced
 number here: Hammer swept the ratio on 10,000 sampled instances fine-tuning **Qwen2-1.5B-Instruct**,
@@ -241,54 +309,54 @@ which is why `nested-args` gets 8,000 rows (20%) despite having no BFCL category
 
 ---
 
-## 7. Special tokens — plain text now, reserve the option
+## 7. Special tokens — nothing to reserve, nothing to resize
 
-**CORRECTION.** The first draft of this document claimed "a control-token block already occupies
-slots at the top of that range." **That is false for this branch.** `grep -rn
-"control_tokens\|assert_control_tokens_fit\|reserved_special\|CONTROL_TOKEN" src/` returns **zero
-hits**. (The registry that claim came from lives on the unmerged `latent-superposition-module`
-branch, not on `main`.)
+**Two corrections to earlier drafts of this section. Do not restore either.**
 
-Verified headroom, `src/olmo_core/data/tokenizer.py:84-94`:
+1. Draft 1 claimed "a control-token block already occupies slots at the top of that range." False on
+   this branch — `grep -rn "control_tokens\|assert_control_tokens_fit\|reserved_special\|
+   CONTROL_TOKEN" src/` returns **zero hits**. (That registry is on the unmerged
+   `latent-superposition-module`.)
+2. Draft 2 proposed reserving ids `100344`–`100351` for our own delimiters. **Obsolete and
+   inferior.** OLMo already carved its four tool delimiters *inside the real vocab*, over previously
+   unused `<|extra_id_*|>` slots. There is nothing to reserve.
 
-| Quantity | Value |
-| --- | --- |
-| `vocab_size` | **100278** (max real id 100277) |
-| `eos_token_id` | **100257** |
-| `pad_token_id` | **100277** |
-| `bos_token_id` | **None** |
-| `padded_vocab_size()` | **100352** (`pad_multiple` 128) |
-| **Free ids** | **74 — `100278`–`100351` inclusive, 0 claimed by any registry** |
+Independently verified against the live tokenizers:
 
-Those 74 embedding and `lm_head` rows are **already allocated** by every training script and are
-currently garbage-initialised.
+```
+allenai/dolma-2-tokenizer-olmo-3-instruct-final  ->  HTTP 307 (rename alias)
+    canonical: allenai/olmo-3-tokenizer-instruct-dev   sha 55f211dfda3974963b869e490617447045069a64
 
-**Recommendation: plain-text delimiters for the dataset. Spend zero ids now.**
+olmo-3-tokenizer-instruct-dev            dolma2-tokenizer
+  100264 '<|im_start|>'      special=True
+  100265 '<|im_end|>'        special=True
+  100266 '<functions>'       special=False      100266 '<|extra_id_1|>'
+  100267 '</functions>'      special=False      100267 '<|extra_id_2|>'
+  100268 '<function_calls>'  special=False      100268 '<|extra_id_3|>'
+  100269 '</function_calls>' special=False      100269 '<|extra_id_4|>'
+  max added id: 100277
+```
 
-1. **The JSONL is byte-identical either way** — only tokenization is affected. Deciding late costs
-   nothing; deciding wrong costs a republish.
-2. **No study isolates the variable** — nobody holds tool-call semantics fixed and varies
-   reserved-id vs plain text, at any scale. Any claimed win is UNVERIFIED.
-3. **Cold embedding rows are a documented failure mode.** Llama's untrained reserved slots behave
-   badly — models effectively refuse to emit them. Our 74 rows are untrained. Claiming an id at
-   *SFT* time on a model whose pretraining never emitted it is exactly that failure. Reserving ≠
-   training.
-4. **Both sides of the efficiency ledger are rounding errors** — ~16–20 ids saved of a 150–400-id
-   exchange; 8 tokens × d≈2560 × 2 ≈ 41k params ≈ 1e-5 of a 4B model.
-5. **Revealed preference:** every family that spent real compute on tool use converged on
-   *envelope as token, schema and args as plain-text JSON*. Nobody tokenizes `<tools>` or a schema.
+**The delimiters cost nothing.** Same `vocab_size` **100278** as plain dolma2 — the extras were
+renumbered in place, so vocab did **not** grow. Any checkpoint pretrained with `dolma2-tokenizer` is
+embedding-compatible byte-for-byte; `TokenizerConfig.dolma2()`
+(`src/olmo_core/data/tokenizer.py:84-94`: `vocab_size=100278, eos=100257, pad=100277`,
+`padded_vocab_size()` = **100352**) is already numerically correct for the instruct tokenizer. Only
+the `identifier` string differs. **No resize, no new rows, no registry needed.**
 
-**Reserved-id option, for pretraining/mid-training only, never SFT:** `100344 <tools>`,
-`100345 </tools>`, `100346 <tool_call>`, `100347 </tool_call>`, `100348 <tool_response>`,
-`100349 </tool_response>`, `100350`–`100351` spare — 8 of 74, no embedding resize. **This needs a
-control-token registry that does not exist in this repo.** Claiming ids without one is how two
-workstreams collide on the same id — and `latent-superposition-module` already claims ids at the
-top of this block. Write the registry before any run.
+For the record on the 74 embedding rows at `100278`–`100351`: they do exist (padding to a multiple
+of 128) and remain unclaimed, but the tokenizer's max id is **100277**, so nothing can emit them
+without adding tokens to the tokenizer itself. That option is now moot — carving inside the real
+vocab, as OLMo did, is strictly better.
 
-**Measure, do not guess:** the contents of dolma2 ids **100258–100276** (19 unnamed ids between
-`eos` and `pad`; needs HF `allenai/dolma2-tokenizer` `added_tokens`, not resolvable from this repo
-— UNVERIFIED). In cl100k-derived vocabs these are typically FIM / `<|endofprompt|>` specials. If
-one is a usable control token, reuse beats append.
+**`special: false` on the four tool tags is deliberate and load-bearing.** They are atomic
+added-tokens (one id, never split) that **survive `skip_special_tokens=True`** on decode and are
+absent from `all_special_tokens`. One consequence to inherit deliberately rather than by accident:
+**`</function_calls>` (100269) is not a stop token.** The eval harness must register it explicitly,
+or generated tool calls will not terminate.
+
+`<think>` / `</think>` are **not tokens** in any repo checked — plain multi-token BPE text, absent
+from every `added_tokens_decoder`. See §16.
 
 ---
 
@@ -299,11 +367,39 @@ at all."
 
 | dataset | license | rows we can take | verdict |
 | --- | --- | --- | --- |
-| **Team-ACE/ToolACE** | `apache-2.0`, cleanest in the survey; generator models undisclosed (UNVERIFIED whether OpenAI output is in the release) | ≤11,300 total; single-turn fraction **UNVERIFIED**; est. **~4,000** after scope + quality filters | **TAKE** — the only source whose bytes can go into an open release, and the only negatives source with published transfer evidence |
-| **NousResearch/hermes-function-calling-v1** | `apache-2.0` | **~1,890** (`func_calling_singleturn` only — exactly system+user+assistant) | **TAKE-SMALL**, and use as the **format reference**: the only upstream already in our target shape |
-| **Salesforce/xlam-function-calling-60k** | `cc-by-4.0` **tag** vs gated "research purposes only … in support of an academic paper" **prose** | **0 today**; 60,000 if a human resolves it | **BLOCKED** — needs a decision, not more research |
-| **ToolBench / ToolLLM** | see card | — | **EXCLUDE** — dead endpoints, hallucinated APIs |
-| **glaiveai/glaive-function-calling-v2** | see card | — | **EXCLUDE** — quality; also the source Hermes' `glaive_*` subset re-derives |
+| **`allenai/olmo-toolu-*`** (all five named in `src/scripts/train/sft/README.md:52-56`) | UNVERIFIED — unobtainable | **0** | **FORECLOSED — all five return HTTP 401.** Control: `allenai/tulu-3-sft-mixture` returns 200 from the same client, so the 401 is real. Private and nonexistent are indistinguishable from outside; neither is obtainable |
+| **`allenai/Dolci-Instruct-SFT-Tool-Use`** | **ODC-BY stated in the description prose only — no `license:` key in frontmatter** | **227,579 rows** available (2.54 GB, public, ungated, `private:false gated:false`); we take **10,600** filtered | **TAKE — and it becomes the format reference.** The public, non-thinking equivalent of the private mixes: already AI2-native, already in OLMo's convention, needs zero call-syntax and zero schema conversion |
+| **`allenai/Dolci-Think-SFT-Olmo-Hybrid-Tool-Use-SA`** | **CONFLICT**: frontmatter `cc-by-sa-4.0` vs description "ODC-By" | **0** | **EXCLUDE for bytes.** 1,597 rows of deep-research browse trajectories, and a self-contradictory licence is the worst provenance case for an open model. See §16 |
+| **Team-ACE/ToolACE** | `apache-2.0` | **2,000** (down from ~4,000) | **TAKE — as a provenance hedge**, so 26.5% of the corpus does not come from one source and the ≤2%-per-function cap has something to bite on |
+| **NousResearch/hermes-function-calling-v1** | `apache-2.0` | **0** | **DROPPED.** Its only unique value was being "the only upstream already in our target shape." Once the target shape is OLMo's, Dolci holds that role with 120× the rows and none of Hermes' doubled-escaping or key-order repair |
+| **Salesforce/xlam-function-calling-60k** | `cc-by-4.0` **tag** vs gated "research purposes only" **prose** | **0 today** | **BLOCKED** — needs a human decision, not more research |
+| **ToolBench / ToolLLM** · **glaiveai/glaive-function-calling-v2** | see cards | — | **EXCLUDE** — dead endpoints and hallucinated APIs; quality |
+
+**Reformatting Dolci is a lift, not a translation.** Rows are already `messages` with `functions` as
+a JSON string and Pythonic calls; we move those two sibling fields into `content` per §3 and the
+semantics are unchanged. Compare the repair list ToolACE still needs (below) — Dolci needs none of
+it.
+
+**Filters that must be applied to the Dolci slice** (in addition to §10):
+
+- **Single-turn only.** The corpus is multi-turn (a real row runs system → user → assistant →
+  environment → …). Our v1 scope is `system + user + assistant`, and §12's converter blocker makes
+  that a hard requirement, not a preference.
+- **Our own BFCL decontamination.** Only the *private* 200K mix is named `bfclv3-decontaminated`.
+  The public cut's status is **UNVERIFIED** — run n-gram decontamination ourselves before claiming a
+  BFCL number.
+- **The ≤2% per-function cap** as a *filter on the slice*, not an assumption about it.
+- **Role-set assertion.** An unrecognised role emits nothing from the template and the row is then
+  silently deleted downstream (§12). Assert `{system,user,assistant,environment}` ourselves.
+- **No `is_refusal` column exists** on the Instruct cut (only the 1,597-row thinking set has one),
+  so its abstention content is UNVERIFIED and cannot be assumed. All 4,000 abstention rows stay
+  derived by our own deletion/elision.
+
+ToolACE repairs still required on its 2,000: drop empty `{"from":"assistant","value":""}` rows;
+repair find-replace corruption in API **names and param names** (`valistring`←`valid`,
+`start_string`←`date`); convert bracket calls `[Quotes by Keywords(word="inspiration")]`; parse tool
+specs out of the free-text `system` string; classify the four modes ourselves; fix temporal
+incoherence.
 
 Fixes required on ToolACE rows: drop empty `{"from":"assistant","value":""}` rows (documented, and
 trains the model to emit `""`); repair find-replace corruption in API **names and param names**
@@ -468,20 +564,64 @@ something to measure, not inherit.
 
 This blocks *use*, not publishing, and it is worth knowing before anyone plans a run.
 
-- **There is no `.jsonl` reader under `src/olmo_core/`.** Verified: the only matches are path
-  strings inside data-mix files that point at `.npy`. Everything starts from pre-tokenized arrays.
+- **There is no `.jsonl` reader under `src/olmo_core/`.** The only matches are path strings inside
+  data-mix files that point at `.npy`. Everything starts from pre-tokenized arrays.
 - **The consumption side is fully wired.** `label_mask_paths` on `numpy_dataset.py:406`; the masked
-  fill lives in `src/olmo_core/data/utils.py` `get_labels()`; `src/scripts/train/sft/Olmo-2-7B-SFT.py`
-  shows the working configuration.
-- **The producer is external.** `src/scripts/train/sft/README.md:19-61` points at open-instruct's
-  `scripts/data/convert_sft_data_for_olmocore.py`, run with `--chat_template_name` and a tokenizer
-  that carries the template.
-- **Cheapest path: extend nothing.** Emit the two flat arrays offline and point
-  `NumpyPackedFSLDatasetConfig` at them, exactly as the 7B SFT script does.
-- **One trap:** packing finds document boundaries by **EOS**, so emit exactly **one EOS per
-  conversation**. A converter emitting EOS per turn corrupts packing silently. Readers also memmap
-  from byte 0 and derive counts from file size, so those arrays must be **headerless** despite a
-  `.npy` extension.
+  fill in `src/olmo_core/data/utils.py` `get_labels()`; `src/scripts/train/sft/Olmo-3-7B-SFT.py`
+  shows the working configuration (`token_ids_part_*.npy` + `labels_mask_*.npy`,
+  `NumpyPackedFSLDatasetConfig`, `generate_doc_lengths=True`).
+- **The producer is external** — open-instruct's `scripts/data/convert_sft_data_for_olmocore.py`
+  (`src/scripts/train/sft/README.md:19-61`). Cheapest path: extend nothing, emit the arrays offline.
+
+### Field deltas our `.jsonl` must satisfy
+
+1. **The field must literally be `messages`.** `TokenizerConfig.sft_messages_key` exists and
+   defaults to `"messages"`, but the tokenize path **hardcodes `row["messages"]`** —
+   `--sft_messages_key conversations` is silently ignored. Our profile already requires `messages`;
+   just never rename it.
+2. **`role` and `content` must be plain strings.** Templates concatenate `message['content']`
+   directly, so no OpenAI content-block lists, and `null` content on a `system`/`user` turn raises
+   `TypeError`. Our §3 inlining makes `content` non-null everywhere, which covers this.
+3. **Roles must be in `{system, user, assistant, environment}`.** The templates have **no `else`
+   branch — an unrecognised role emits nothing, silently.** A row whose only assistant turn had a
+   typo'd role becomes all-`-100` labels and is then **deleted** by the row filter. Silent row loss;
+   assert the role set ourselves.
+4. **Do not supply `dataset_source`** (injected) and **do not supply a row-level `tools` column** —
+   with an `olmo*` template it is normalised, passed, and then ignored. §3's inlining makes this moot.
+
+### The EOS rule
+
+Tokenization passes `add_special_tokens=False`, so every special token comes from the template.
+A non-final assistant turn closes with `<|im_end|>\n`; the **final** assistant turn closes with
+`eos_token` = `<|endoftext|>` (**100257**), *not* `<|im_end|>`. If a conversation ends on `user` or
+`environment`, **no EOS is emitted at all** — and OLMo-core finds document boundaries by EOS, so
+packing would corrupt silently. **Every row must end on an assistant turn.** Ours do.
+
+### The multi-turn blocker — and why v1 is safe
+
+Label masking is offset-mapping based: labels start fully `-100`, and for each assistant message `i`
+a trainable span is derived from `apply_chat_template(messages[:i], add_generation_prompt=True)`
+versus `apply_chat_template(messages[:i+1])`. The converter **raises** if the render is not
+prefix-stable. For a **non-final** assistant turn, the sub-render makes that turn `loop.last` → it
+emits `eos_token`, while the full render has `<|im_end|>\n` at the same position. So prefix-stability
+holds **only if `eos_token == "<|im_end|>"`** — and here eos is `<|endoftext|>`.
+
+**INFERRED, not executed:** any conversation with ≥2 assistant turns should fail with *"the rendered
+conversation is not prefix-stable"*. Our v1 is `system + user + assistant` — exactly one assistant
+turn, and it is final, so v1 is safe. **The deferred multi-turn set is blocked on this, and it is a
+converter bug our data format cannot dodge.** Confirm empirically before planning v2 (§15 Q6).
+
+### What the mask means for us
+
+System, user, `environment`, the inlined tool schemas, and the assistant *header* are all `-100`.
+Only assistant content plus its closing token is trainable. Because §3 inlines the call into
+assistant `content`, **the call tokens are trainable and the schema tokens are not** — exactly right,
+and a second dividend of the inlining decision.
+
+**Outputs** are `token_ids_part_%04d.npy` (`uint32`), `labels_mask_part_%04d.npy` (`bool`), plus
+doc-boundary CSVs and a tokenizer dir. **Those `.npy` files are not real `.npy`** — written via
+`np.memmap(mode="w+")`, headerless flat binary. `np.load` fails on them; read with
+`np.memmap`/`np.fromfile`, which is what `NumpyDatasetBase` does.
 
 ---
 
@@ -528,11 +668,17 @@ publish(
                         "carved_by": "held-out tool schemas + query templates, before generation"},
         }
     },
-    sources=[...],   # ToolACE, Hermes — record scope honestly
+    sources=[...],   # AI2 Dolci (ODC-BY attribution) + ToolACE — record scope honestly
     license={...},
     about="...",     # backfillable; never block a publish on it
 )
 ```
+
+`sources[]` must name AI2 Dolci with its ODC-BY attribution, pin the tokenizer sha
+(`55f211dfda3974963b869e490617447045069a64`), and state that our record layout is a **reformat** of
+AI2's row schema into `sft-conversations/v1` (call inlined into `content`), **not** a verbatim copy.
+There is no `vendored/v1` profile in the installed registry, which is precisely why a reformat rather
+than a mirror is the only publishable form.
 
 No `tokenizer=`: this is an `sft` group of raw `.jsonl`, not packed shards, so the vocab check that
 requires a tokenizer never runs on this profile.
@@ -544,13 +690,52 @@ which nobody here can write. On refusal, read the `_REJECTED.json` beside the up
 
 ## 15. Open questions
 
+**Answered 2026-08-08** (was Q1): the OLMo-3 instruct tokenizer **does** define tool-call
+delimiters — four single non-`special` ids `100266`–`100269`, carved in place over `<|extra_id_1..4|>`
+at unchanged vocab 100278. `allenai/dolma-2-tokenizer-olmo-3-instruct-final` is a **307 alias** for
+`allenai/olmo-3-tokenizer-instruct-dev`, sha `55f211dfda3974963b869e490617447045069a64` (pin it).
+The `olmo-toolu-*` mixes are **all 401**, but the public non-thinking equivalent
+`allenai/Dolci-Instruct-SFT-Tool-Use` (227,579 rows) replaces them.
+
 | # | Question | Blocks |
 | --- | --- | --- |
-| 1 | **Does `allenai/dolma-2-tokenizer-olmo-3-instruct-final` already define tool-call delimiters, and are the `allenai/olmo-toolu-*` mixes usable?** (§8) | §3 and §7 conventions. Highest-value unknown: matching OLMo's own format beats inventing one |
+| 1 | **Render one Dolci row through `Olmo-3-7B-Instruct/chat_template.jinja` and diff against the same row inlined per §3.** Settles the leading-space question and proves byte-identity in one command | **The reformat pass. Do not start it before this passes** |
 | 2 | Held-out schema list + fraction, **and** the held-out query-template bank (§5) | **Generation start** |
-| 3 | **xLAM licensing** — `cc-by-4.0` tag vs research-only prose. Needs a human with authority | Whether the total can be 67,500 instead of 40,000; ~1 week of reformat work |
-| 4 | ToolACE single-turn (2-message) fraction — UNVERIFIED, cheap to count | The reformat vs synthesis budget in §6 |
+| 3 | **Dolci licence sign-off** — ODC-BY is stated in the description prose with **no `license:` key** in frontmatter. Weaker than a tagged licence; needs a human, same decision class as xLAM | All 10,600 reformat rows, i.e. 26.5% of the corpus |
+| 4 | **xLAM licensing** — `cc-by-4.0` tag vs research-only prose | Whether the total can reach 67,500 |
 | 5 | Post-training **sequence length** | §10 gate 11, and max tools per row |
-| 6 | Who writes the JSONL → `(tokens, label_mask)` producer, in-repo or offline (§12) | **Any use** of the dataset; not the publish |
-| 7 | Does a dolma2 control-token registry get written, and what are ids 100258–100276? | The reserved-token option only |
-| 8 | Does the ~10% abstention optimum move at 4B active? | Nothing now — re-weightable by path glob. Best ablation candidate |
+| 6 | **Confirm the multi-turn prefix-stability failure** — one row with two assistant turns through the converter. Expected `ValueError: … not prefix-stable` (§12) | The deferred multi-turn set; nothing in v1 |
+| 7 | Which chat template the tokenization run uses. The README's `olmo123` is a deliberate placeholder that falls back to the tokenizer's own template; the *registry's* `olmo` template reportedly appends `" You do not currently have access to any functions. <functions></functions>"` when a system message carries no `functions` field — which would corrupt every one of our inlined rows. **UNVERIFIED, one-command check** | The tokenization run, not the publish |
+| 8 | Who writes the JSONL → `(tokens, label_mask)` producer, in-repo or offline (§12) | **Any use** of the dataset; not the publish |
+| 9 | Does the ~10% abstention optimum move at 4B active? | Nothing now — re-weightable by path glob. Best ablation candidate |
+
+---
+
+## 16. The thinking-trace question
+
+Every private `olmo-toolu-*` mix is named `thinking`, and the one public thinking tool-use set is
+`allenai/Dolci-Think-SFT-Olmo-Hybrid-Tool-Use-SA`. We take **none** of it, deliberately.
+
+- **`<think>`/`</think>` are not tokens** — plain multi-token BPE text in every repo checked, absent
+  from every `added_tokens_decoder`. So traces live inside `content` as ordinary text and stripping
+  them is a content-level span deletion: the delimiters, the `environment` role, the EOS rule and the
+  label-mask spans are all untouched. Format-wise, adopting their data would **not** force us into
+  reasoning mode.
+- **But the evidence does not support paying for it.** The entire published BFCL evidence for OLMo 3
+  is a single number: **7B Instruct = 49.8**, against Qwen 3 8B at 60.2, and RLVR moved it **+0.9**
+  over SFT. **There is no BFCL number for any Think model at any size** — the Think tables have no
+  Tool Use row. Paying a multiplier on target tokens to teach an inference-time behaviour we do not
+  intend to serve on a non-reasoning ~4B-active model is not defensible.
+- **Stripping has a real quality cost.** In a multi-step trajectory the trace often carries the
+  derivation justifying specific argument values; delete it and the row is underdetermined — a bare
+  call that does not follow from the visible prompt. Stripped rows need a re-verification pass (does
+  every argument value appear in, or follow deterministically from, the surviving turns?), not a
+  regex.
+- **It would not serve the latent-reasoning / CODI work either**, and should not be planned as
+  dual-purpose: 1,597 rows is the whole public supply; they are deep-research browse trajectories
+  (`serper_google_webpage_search`, `\boxed{}` answers), a retrieval-agent shape rather than the
+  deductive shape CODI distillation is evaluated on; and the licence is **self-contradictory**
+  (`cc-by-sa-4.0` frontmatter vs ODC-BY prose) on that exact set.
+- **Keep CODI and tool-call as separate `dataset_id`s.** A with-trace and without-trace version of
+  the same row do *not* collide under `_dedup_key` (different `content`), so the validator would
+  accept both in one dataset. That is a hash artifact, not a licence to do it.

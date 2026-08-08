@@ -1,107 +1,134 @@
-"""Probe the real sft-conversations/v1 checks with candidate tool-call record shapes.
+"""Probe the real sft-conversations/v1 checks with our tool-call record shapes.
 
 Run with the venv that has edullm-data installed:
-    <repo>/.venv/bin/python3 scratch/verify_record_shape.py
+    <repo>/.venv/bin/python3 docs/tool-call/verify/verify_record_shape.py
 
-This exists to settle, empirically, the one irreversible record-format decision: whether a
-tool call lives in ``content`` or in a sibling ``tool_calls`` field. The leakage check hashes
-message ``content`` only, so the answer is not a matter of taste.
+Settles the one irreversible record-format decision: whether the tool call lives in ``content``
+or in a sibling field. The profile's leakage check hashes message ``content`` only, so the answer
+is not a matter of taste.
+
+Format is OLMo 3's convention (``<functions>`` 100266/100267, ``<function_calls>`` 100268/100269,
+results on role ``environment``), with all three payloads INLINED into ``content`` -- see
+docs/tool-call/dataset-design.md sections 2, 3 and 7.
 """
 
-from edullm_data.profiles.sft_conversations_v1 import _messages_wellformed, _dedup_key
+from edullm_data.profiles.sft_conversations_v1 import _dedup_key, _messages_wellformed
 
-SYS = "You have tools."
+SCHEMAS = (
+    '[{"type":"function","function":{"name":"get_weather","description":"Current conditions'
+    ' for a city.","parameters":{"type":"object","properties":{"city":{"type":"string"}},'
+    '"required":["city"]}}}]'
+)
+SYS = f"You are a helpful function-calling AI assistant. <functions>{SCHEMAS}</functions>"
 USER = "weather in Boston?"
 
-# A: OpenAI style — call in a SIBLING field, content=None
-A = {
+CALL_A = '<function_calls>get_weather(city="Boston")</function_calls>'
+CALL_B = '<function_calls>get_forecast(city="Boston", days=7)</function_calls>'
+
+# --- OURS: OLMo convention, call inlined into assistant content ---------------------
+OURS = {
     "messages": [
         {"role": "system", "content": SYS},
         {"role": "user", "content": USER},
-        {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [{"name": "get_weather", "arguments": {"city": "Boston"}}],
-        },
+        {"role": "assistant", "content": CALL_A},
     ]
 }
-# A2: same conversation text, DIFFERENT tool call
-A2 = {
-    "messages": [
-        {"role": "system", "content": SYS},
-        {"role": "user", "content": USER},
-        {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [
-                {"name": "get_forecast", "arguments": {"city": "Boston", "days": 7}}
-            ],
-        },
-    ]
-}
-# B: call SERIALIZED INTO content
-CALL_B = '<tool_call>{"name":"get_weather","arguments":{"city":"Boston"}}</tool_call>'
-CALL_B2 = '<tool_call>{"name":"get_forecast","arguments":{"city":"Boston","days":7}}</tool_call>'
-B = {
+# same conversation text, DIFFERENT call
+OURS_ALT = {
     "messages": [
         {"role": "system", "content": SYS},
         {"role": "user", "content": USER},
         {"role": "assistant", "content": CALL_B},
     ]
 }
-B2 = {
+
+# --- AI2's Dolci row layout: call in a SIBLING field, content is null ---------------
+# Verified against a real allenai/Dolci-Instruct-SFT-Tool-Use row.
+THEIRS = {
     "messages": [
-        {"role": "system", "content": SYS},
-        {"role": "user", "content": USER},
-        {"role": "assistant", "content": CALL_B2},
+        {"role": "system", "content": SYS, "function_calls": None, "functions": SCHEMAS},
+        {"role": "user", "content": USER, "function_calls": None, "functions": None},
+        {
+            "role": "assistant",
+            "content": None,
+            "function_calls": 'get_weather(city="Boston")',
+            "functions": None,
+        },
     ]
 }
-# C: missing content KEY entirely
-C = {"messages": [{"role": "assistant", "tool_calls": [{"name": "f", "arguments": {}}]}]}
-# D: full multi-turn with a tool result fed back
-D = {
+THEIRS_ALT = {
+    "messages": [
+        {"role": "system", "content": SYS, "function_calls": None, "functions": SCHEMAS},
+        {"role": "user", "content": USER, "function_calls": None, "functions": None},
+        {
+            "role": "assistant",
+            "content": None,
+            "function_calls": 'get_forecast(city="Boston", days=7)',
+            "functions": None,
+        },
+    ]
+}
+
+PARALLEL = {
+    "messages": [
+        {"role": "system", "content": SYS},
+        {"role": "user", "content": "weather in Paris and Madrid?"},
+        {
+            "role": "assistant",
+            "content": '<function_calls>get_weather(city="Paris")\n'
+                       'get_weather(city="Madrid")</function_calls>',
+        },
+    ]
+}
+MULTITURN = {
     "messages": [
         {"role": "system", "content": SYS},
         {"role": "user", "content": USER},
-        {"role": "assistant", "content": CALL_B},
-        {"role": "tool", "content": '{"temp_f":54}', "name": "get_weather"},
+        {"role": "assistant", "content": CALL_A},
+        {"role": "environment", "content": '{"temp_f":54}'},
         {"role": "assistant", "content": "It's 54F in Boston."},
     ]
 }
-# E: irrelevance / abstention — no call at all
-E = {
+ABSTAIN = {
     "messages": [
         {"role": "system", "content": SYS},
         {"role": "user", "content": "who wrote Hamlet?"},
         {"role": "assistant", "content": "Shakespeare. No tool is needed for that."},
     ]
 }
+NO_CONTENT_KEY = {"messages": [{"role": "assistant", "function_calls": "f()"}]}
 
-print("=== well-formedness (None == PASSES the check) ===")
-cases = [
-    ("A  tool_calls + content:None", A),
-    ("B  call-in-content", B),
-    ("C  no content key", C),
-    ("D  multi-turn + tool role", D),
-    ("E  abstention / no call", E),
-]
-for name, row in cases:
-    print(f"  {name:30s} -> {_messages_wellformed(row['messages'])}")
+print("=== well-formedness (None == PASSES) ===")
+for name, row in [
+    ("ours: call inlined", OURS),
+    ("ours: parallel, one block", PARALLEL),
+    ("ours: multi-turn + environment", MULTITURN),
+    ("ours: abstention", ABSTAIN),
+    ("AI2 layout: content=None", THEIRS),
+    ("no content KEY at all", NO_CONTENT_KEY),
+]:
+    print(f"  {name:32s} -> {_messages_wellformed(row['messages'])}")
+print("  NOTE: the AI2 layout PASSES well-formedness -- null content is accepted.")
+print("        Only the leakage test below shows why we cannot use it as-is.")
 
 print()
-print("=== leakage-key collision (default dedup key) ===")
-a, a2 = _dedup_key(A, None), _dedup_key(A2, None)
-b, b2 = _dedup_key(B, None), _dedup_key(B2, None)
-print("  A vs A2  same text, DIFFERENT call in SIBLING field:")
-print(f"    {a[:16]}  {a2[:16]}   COLLIDE={a == a2}")
-print("  B vs B2  same text, DIFFERENT call INSIDE content:")
-print(f"    {b[:16]}  {b2[:16]}   COLLIDE={b == b2}")
+print("=== leakage-key collision: the decision ===")
+o, oa = _dedup_key(OURS, None), _dedup_key(OURS_ALT, None)
+t, ta = _dedup_key(THEIRS, None), _dedup_key(THEIRS_ALT, None)
+print("  AI2 layout  (call in sibling field, content=None):")
+print(f"    {t[:16]}  {ta[:16]}   COLLIDE={t == ta}   <-- validator is BLIND to the call")
+print("  Ours        (call inlined into content):")
+print(f"    {o[:16]}  {oa[:16]}   COLLIDE={o == oa}   <-- validator sees the call")
+print()
+print("  With max_leakage=0, a train/heldout pair differing only in the call would")
+print("  refuse the entire publish under the AI2 layout. Hence the inlining decision.")
 
 print()
 print("=== dedup_key override reads TOP-LEVEL row fields, not message fields ===")
-row = {"messages": A["messages"], "tools": [{"name": "get_weather"}], "id": "x1"}
+row = {"messages": OURS["messages"], "tools": [{"name": "get_weather"}], "id": "x1"}
 print(f"  dedup_key=['messages'] -> {_dedup_key(row, ['messages'])[:16]}")
-print("  (docstring says 'message fields'; code does str(row.get(f,'')) -> top level only)")
+print("  (docstring says 'message fields'; code does str(row.get(f,'')) -> top level only,")
+print("   so it cannot reach inside messages and is NOT an escape hatch)")
 
 print()
 print("=== .jsonl extension / format honesty ===")
@@ -113,8 +140,6 @@ from edullm_data.manifest import (  # noqa: E402
 
 print("  .jsonl    claims:", EXTENSION_FORMAT[".jsonl"])
 print("  .jsonl.gz claims:", EXTENSION_FORMAT[".jsonl.gz"])
-good = Format(container="jsonl", codec="none")
-mismatch = Format(container="jsonl", codec="gzip")
-p = "conversations/train-00000.jsonl"
-print("  .jsonl + codec=none ->", check_extension_matches_format(p, good) or "OK")
-print("  .jsonl + codec=gzip ->", check_extension_matches_format(p, mismatch) or "OK")
+p = "conversations/general/single-call/train-00000.jsonl"
+print("  codec=none ->", check_extension_matches_format(p, Format(container="jsonl", codec="none")) or "OK")
+print("  codec=gzip ->", check_extension_matches_format(p, Format(container="jsonl", codec="gzip")) or "OK")

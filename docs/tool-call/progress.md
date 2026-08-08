@@ -65,5 +65,44 @@ Anything longer belongs in [`prd.md`](prd.md) or [`dataset-design.md`](dataset-d
   `EnterWorktree` inside this worktree-isolated session and wedged it. Relaunched read-only.
 - Moved the two verification probes from gitignored `scratch/` into tracked `docs/tool-call/verify/`
   — the design doc cites them as reproducible evidence, so they cannot be gitignored.
+- Pushed `593fa970` to `origin/tool-call-amy`. **Fixed a footgun:** `git worktree add -b … origin/main`
+  left the branch tracking `origin/main`, so a bare `git push` would have targeted **main**. Re-pointed
+  upstream with `git push -u origin tool-call-amy`. (Note for later: a GPU run needs a branch named
+  `edullm/<something>` for the platform to build an image — `tool-call-amy` will not do for that.)
+
+- Chased the `allenai/olmo-toolu-*` lead. **All five are HTTP 401** (control: `tulu-3-sft-mixture`
+  returns 200 from the same client, so the 401 is real). "Use their dataset" is foreclosed for those.
+- **But their public non-thinking equivalent exists:** `allenai/Dolci-Instruct-SFT-Tool-Use` —
+  **227,579 rows**, 2.54 GB, `private:false gated:false`, features `messages`/`dataset_source`/`id`.
+  ODC-BY is stated **only in the description prose; no `license:` key in frontmatter**.
+- **Adopted OLMo 3's wire format, verbatim.** Verified against the live tokenizer: `<functions>` /
+  `</functions>` / `<function_calls>` / `</function_calls>` are **single non-special token ids
+  100266–100269**, carved in place over `<|extra_id_1..4|>` at **unchanged vocab 100278**. So
+  `dolma-2-tokenizer-olmo-3-instruct-final` (a **307 alias** → `olmo-3-tokenizer-instruct-dev`,
+  sha `55f211df…`) is embedding-compatible with any dolma2-pretrained checkpoint — no resize.
+  Calls are **Pythonic** (`get_weather(city="Boston")`), parallel calls share **one** block joined by
+  a bare `\n`, and tool results come back on role **`environment`** with **no wrapper**.
+- **Third correction to §7:** the draft-2 proposal to reserve ids `100344`–`100351` is deleted. There
+  is nothing to reserve — OLMo already carved the delimiters inside the real vocab. (Max tokenizer id
+  is 100277; the 74 padding rows above it exist but nothing can emit them without tokenizer surgery.)
+- **We adopt OLMo's rendered bytes, not its row layout.** Verified against a real Dolci row: AI2 puts
+  the call in a sibling `function_calls` field with **`content: null`** — measured `COLLIDE=True`, so
+  our validator would be blind to it and `max_leakage: 0` could refuse the publish. We inline all
+  three payloads into `content`; the template emits `content` verbatim so the token stream is
+  byte-identical, and the call tokens end up **trainable** while schema tokens stay masked.
+- **Provenance revised:** 31.5% reformat / 17.5% derived / **51% fresh** (was 15/17/68). Dolci 10,600
+  + ToolACE 2,000; **Hermes dropped** (its only value was being the format reference, which Dolci now
+  is, with 120× the rows).
+- **Rejected the thinking traces.** `<think>` is not a token (plain text, strippable), but OLMo 3's
+  only published tool-use BFCL number is 7B Instruct **49.8** vs Qwen3-8B 60.2, with **no Think
+  number at any size** — no evidence traces buy tool accuracy here. The one public thinking tool set
+  has a **self-contradictory licence** (`cc-by-sa-4.0` frontmatter vs ODC-BY prose) and is 1,597
+  browse trajectories, so it will not serve the latent-reasoning work either. CODI keeps its own id.
+- **New blocker found for v2:** the open-instruct converter's prefix-stability check should **fail on
+  any conversation with ≥2 assistant turns**, because a non-final assistant turn renders `<|im_end|>`
+  in the full pass but `eos_token` (`<|endoftext|>`) in the sub-pass. v1 is single-turn so it is safe.
+  INFERRED — confirm empirically before planning multi-turn.
+- Rewrote `dataset-design.md` §3, §6, §7, §8, §12, §14, §15 and added §16; updated `prd.md` and
+  `docs/tool-call/verify/verify_record_shape.py` (now diffs our layout against AI2's real one).
 
 <!-- next entry goes below -->
