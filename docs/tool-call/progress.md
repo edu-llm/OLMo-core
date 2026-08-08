@@ -174,4 +174,43 @@ Anything longer belongs in [`prd.md`](prd.md) or [`dataset-design.md`](dataset-d
     a non-final assistant turn and still raise. Forcing `eos = <|im_end|>` also fixes stability but
     drops the 100257 document boundary that packing depends on.
 
+- **Dolci DROPPED — it has no licence tag at all.** `cardData.license` is **absent** (not "ODC-BY in
+  prose", which is what the earlier entry assumed), so it fails our own standard and the pending human
+  sign-off is **withdrawn, not deferred**. That removed 8,100 rows = 20.25% of the dataset.
+- **A wider hunt more than replaced it**, all frontmatter-tagged and verified via
+  `verify/verify_sources.py`: `argilla/Synth-APIGen-v0.1` (apache-2.0, 49,402, **100% single-turn**),
+  `MadeAgents/xlam-irrelevance-7.5k` (cc-by-4.0, 7,500 — exactly our two hardest categories),
+  `nvidia/When2Call` (cc-by-4.0, 27,952), `Agent-Ark/Toucan-1.5M` (apache-2.0),
+  `MU-NLPC/Calc-gsm8k` + `openai/gsm8k` (mit — the only real arithmetic reformat source),
+  `allenai/math_qa` (apache-2.0), `aialt/RetrievalQA` (mit — the **only** clean-licensed
+  search-vs-memory label in existence), `eth-nlped/mathdial` (cc-by-4.0), `allenai/mathfish` (odc-by,
+  CCSS metadata only), `allenai/tutormoments-preview` (cc-by-4.0).
+- **Provenance: 28.75% reformat / 30% derived / 41.25% fresh** (was 24 / 14.25 / 61.75). Reformat
+  *rose* while dropping the source that needed sign-off. ~59% of rows now trace to a licensed record.
+  **Reformat is capped near 29% structurally** — web-search and pedagogy have no upstream containing a
+  tool call at all, which pins 18,000 of 40,000 rows at 0% reformat.
+- **Corrected the framing:** this is not "half synthetic, half scraped". We **scrape nothing** — we
+  reformat published datasets under licence. And **only 33% of rows need an LLM at all**; the other 67%
+  is field mapping, DSL interpretation, or programmatic generation.
+- **Generator: `Qwen/Qwen3-235B-A22B-Instruct-2507`** (primary), `Mistral-Small-3.2-24B` (fallback,
+  fits one 80 GB card if the 8×H100 shape is refused or queued). Verified **at the LICENSE file, not
+  the tag** — and that check earned its keep: `Qwen2.5-72B-Instruct` has tag `other` and a file reading
+  "Qwen LICENSE AGREEMENT" with a "Built with Qwen" display requirement, despite being widely assumed
+  Apache. Gemma is **viral** for this use (its ToU counts synthetic-data training as a Model
+  Derivative); Anthropic/Google/OpenAI API terms all bar training a competing model; Llama 3.3 permits
+  outputs but would force `Llama-` into our model's name.
+- **BFCL numbers for the candidates are UNVERIFIED and we stop chasing them** (leaderboard renders
+  client-side, aggregators bot-wall). Replaced with a 200-prompt bake-off in our own units — schema-valid
+  rate, correct-abstention, argument-name fidelity, distinct-n — including OLMo-3-Instruct as an arm.
+- **OLMo-3-Instruct: discriminator, not generator.** The format argument for self-distillation
+  dissolves once you notice **no model should emit the delimiters at all** — the generator returns
+  structured JSON and *our serializer* renders the wire format, which is correct by construction. And
+  its characteristic failure is **over-calling**, which is precisely what `relevance-hard`,
+  `no-suitable-tool` and `missing-args` exist to cure. Use it instead as a **difficulty filter**
+  (prefer rows it gets wrong) and as the serializer's round-trip check.
+- **Two sources we consume are themselves evals** and taking them burns them for this model:
+  `aialt/RetrievalQA` (no train split at all) and `nvidia/When2Call` (train only). Recorded here and
+  destined for the dataset card. Also noted: `Eedi/…-Tutoring-Dialogues-2k` is the best pedagogy
+  content in existence, is `cc-by-nc-4.0`, and is therefore unusable — do not revisit.
+
 <!-- next entry goes below -->

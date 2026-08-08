@@ -372,24 +372,40 @@ below BFCL `irrelevance`'s n=240).
 parallel-call 4,600 / 435 · nested-args 9,100 / 860 · relevance-hard 3,200 / 300 ·
 no-suitable-tool 1,700 / 255 · missing-args 800 / 125 · answer-directly 1,500 / 230.
 
-### Provenance roll-up
+### Provenance roll-up — revised 2026-08-08
 
 | Provenance | Rows | % |
 | --- | --- | --- |
-| Reformat — AI2 `Dolci-Instruct-SFT-Tool-Use` 8,100 + `ToolACE` 1,500 | **9,600** | **24.00** |
-| Derived (schema deletion, arg elision, distractor injection) | **5,700** | **14.25** |
-| Fresh synthesis (23,200 schema-first + 1,500 curated `answer-directly`) | **24,700** | **61.75** |
+| **Reformat** from licence-verified upstreams (§8) | **11,500** | **28.75** |
+| **Derived** (schema deletion, arg elision, distractor injection, DSL interpretation) | **12,000** | **30.00** |
+| **Fresh** (of which ~3,800 is programmatic, not model-generated) | **16,500** | **41.25** |
 
-Fresh rises from 51.0% → **61.75%**. That is the honest price of the mandate: the three new domains
-have **no reusable upstream at all**, so roughly +4,300 rows of generate-and-verify work. The
-reformat commitment *drops* from 12,600 to 9,600, deliberately leaving **24% headroom** for the
-single-turn filter, the ≤2%-per-function cap, our own BFCL decontamination and the role-set
-assertion. **Measured:** only **10 of 100** sampled Dolci rows are 3-turn, so the single-turn yield
-is ~10% (≈22,750 rows) — enough for 8,100, but the filter is severe and the estimate is a sample.
-Opportunistic upside: Dolci rows whose tools are semantically arithmetic or retrieval (the sample
-shows `cosine_similarity`, `is_power_of_two`, `physics.final_velocity`,
-`combinatorics.permutation_count`, `top_headlines`) can be **rerouted** to those domains, displacing
-fresh synthesis. Yield UNVERIFIED — **plan on zero**.
+Two things changed at once. The incumbent 8,100-row Dolci slice is **dropped** — it has no
+frontmatter licence tag at all (§8) — and the hunt found a **verified-single-turn, tagged pool of
+56,902 rows** for general alone (`Synth-APIGen` 49,402 + `xlam-irrelevance` 7,500), which is 5.4× what
+we allocate. So reformat *rises* from 24% → 28.75% while dropping the one source that needed a human
+sign-off. Fresh falls from 61.75% → **41.25%**.
+
+**Reformat is capped near 29%, and the cap is structural, not a dial we left low:**
+
+1. **Wire-format eligibility.** v1 takes `system + user + assistant`, exactly one assistant turn, last.
+   Toucan, ToolACE, and every tutoring-dialogue set are multi-turn by construction. Anything salvaged
+   by lifting a first exchange is **derived**, not reformat, because we chose where to cut.
+2. **Licence.** In three of four domains the best content is unusable — see §8's reject list. The
+   single most painful: `Eedi/…-Tutoring-Dialogues-2k` is the best pedagogy content in existence and
+   is `cc-by-nc-4.0`.
+3. **Domain coverage.** Reformat needs the upstream to *already contain a tool call*. True for
+   general, true in a foreign syntax for arithmetic, **false by construction for web-search and
+   pedagogy**. That alone pins 18,000 of 40,000 rows at 0% reformat.
+4. **Held-out hygiene.** Every reformatted row imports an upstream schema, so pushing reformat higher
+   shrinks the pool we can credibly hold out — the generalization claim degrades exactly as the reuse
+   number improves.
+
+**The general plan no longer depends on any UNVERIFIED yield.** `Synth-APIGen` and
+`xlam-irrelevance` are both 100% single-turn and tagged. Toucan is load-bearing for one thing only —
+`nested-args`, where Synth-APIGen's flatter schemas will not stretch — and if its single-turn yield
+disappoints we derive those rows from first exchanges instead, moving rows from reformat to derived
+without changing any domain total.
 
 ### Per-domain totals, justified
 
@@ -474,80 +490,90 @@ from every `added_tokens_decoder`. See §16.
 
 ## 8. Reusable upstream sources
 
-The test is not "does the card say Apache-2.0" but "could the uploader grant model-training rights
-at all."
+**Rewritten 2026-08-08 after a wider hunt.** The standard: a **frontmatter `license:` tag** is
+acceptable; prose-only needs a human read; **no tag at all is a reject**; NC and share-alike are
+rejects because copyleft propagates onto the whole mix; gated research-only is a reject.
 
-**Tagged vs prose-only, measured** — [`verify/verify_licenses.py`](verify/verify_licenses.py):
+All rows below verified live — [`verify/verify_sources.py`](verify/verify_sources.py).
+
+### The incumbent is dropped
 
 ```
-Team-ACE/ToolACE                        license: apache-2.0    tags: ['license:apache-2.0']  TAGGED
-NousResearch/hermes-function-calling-v1 license: apache-2.0    tags: ['license:apache-2.0']  TAGGED
-allenai/Dolci-Instruct-SFT-Tool-Use     license: <ABSENT>      tags: <NONE>            PROSE-ONLY
-allenai/Dolci-Think-…-Tool-Use-SA       license: cc-by-sa-4.0  tags: ['license:cc-by-sa-4.0']  ← conflicts with its own ODC-BY prose
-Salesforce/xlam-function-calling-60k    license: cc-by-4.0     gated: auto             ← tag vs research-only gate prose
+allenai/Dolci-Instruct-SFT-Tool-Use    public   <NO TAG>   227,579   REJECT (no frontmatter tag)
 ```
 
-A **tagged** licence is a `license:` key in the card's YAML frontmatter, drawn from HF's controlled
-vocabulary: the Hub parses it, badges it, exposes it as a `license:*` API tag, and makes it
-filterable. A licence named only in the README prose is none of those things — nothing parses it, so
-it is a materially weaker statement of the uploader's intent. That is why our largest single source
-needs a human sign-off (§15 Q3) and ToolACE does not.
+Earlier drafts had this at **8,100 rows — 20.25% of the whole dataset** — pending a human licence
+sign-off. That sign-off is no longer worth seeking: `cardData.license` is **absent entirely**, which
+is weaker than the "ODC-BY in prose" reading, and better-licensed sources with *verified single-turn
+content* now cover the same ground. **Do not revisit it.** Its `-SA` sibling is `cc-by-sa-4.0` —
+share-alike, also out.
 
-| dataset | license | rows we can take | verdict |
-| --- | --- | --- | --- |
-| **`allenai/olmo-toolu-*`** (all five named in `src/scripts/train/sft/README.md:52-56`) | UNVERIFIED — unobtainable | **0** | **FORECLOSED — all five return HTTP 401.** Control: `allenai/tulu-3-sft-mixture` returns 200 from the same client, so the 401 is real. Private and nonexistent are indistinguishable from outside; neither is obtainable |
-| **`allenai/Dolci-Instruct-SFT-Tool-Use`** | **ODC-BY stated in the description prose only — no `license:` key in frontmatter** | **227,579 rows** available (2.54 GB, public, ungated, `private:false gated:false`); we take **10,600** filtered | **TAKE — and it becomes the format reference.** The public, non-thinking equivalent of the private mixes: already AI2-native, already in OLMo's convention, needs zero call-syntax and zero schema conversion |
-| **`allenai/Dolci-Think-SFT-Olmo-Hybrid-Tool-Use-SA`** | **CONFLICT**: frontmatter `cc-by-sa-4.0` vs description "ODC-By" | **0** | **EXCLUDE for bytes.** 1,597 rows of deep-research browse trajectories, and a self-contradictory licence is the worst provenance case for an open model. See §16 |
-| **Team-ACE/ToolACE** | `apache-2.0` | **2,000** (down from ~4,000) | **TAKE — as a provenance hedge**, so 26.5% of the corpus does not come from one source and the ≤2%-per-function cap has something to bite on |
-| **NousResearch/hermes-function-calling-v1** | `apache-2.0` | **0** | **DROPPED.** Its only unique value was being "the only upstream already in our target shape." Once the target shape is OLMo's, Dolci holds that role with 120× the rows and none of Hermes' doubled-escaping or key-order repair |
-| **Salesforce/xlam-function-calling-60k** | `cc-by-4.0` **tag** vs gated "research purposes only" **prose** | **0 today** | **BLOCKED** — needs a human decision, not more research |
-| **ToolBench / ToolLLM** · **glaiveai/glaive-function-calling-v2** | see cards | — | **EXCLUDE** — dead endpoints and hallucinated APIs; quality |
+### Verified usable
 
-**Reformatting Dolci is a lift, not a translation.** Rows are already `messages` with `functions` as
-a JSON string and Pythonic calls; we move those two sibling fields into `content` per §3 and the
-semantics are unchanged. Compare the repair list ToolACE still needs (below) — Dolci needs none of
-it.
+| id | tag | rows | what we take | cost | domain |
+| --- | --- | --- | --- | --- | --- |
+| `argilla/Synth-APIGen-v0.1` | **apache-2.0** | 49,402 | `query`+`tools`+`answers` → single-call, multi-tool-select, parallel-call. **100% single-turn**, clean-room APIGen, `hash_id` for dedup | low | general |
+| `MadeAgents/xlam-irrelevance-7.5k` | **cc-by-4.0** | 7,500 | all of it → relevance-hard, no-suitable-tool. **100% single-turn**, and exactly our two hardest categories | low | general |
+| `nvidia/When2Call` | **cc-by-4.0** | 27,952 | **train split only** → answer-directly, no-suitable-tool | med | general |
+| `Agent-Ark/Toucan-1.5M` | **apache-2.0** (tag *and* prose) | 1,646,546 | rich nested MCP schemas → nested-args. Single-turn fraction **UNVERIFIED** | med | general |
+| `Team-ACE/ToolACE` | **apache-2.0** | 11,300 | first exchange of multi-turn rows. Keep at 1,500; do not grow | med | general |
+| `MU-NLPC/Calc-gsm8k` | **mit** | 7,273 train | `<gadget id="calculator">expr</gadget>` → our `<function_calls>`. **The only real reformat source in arithmetic** | low | arithmetic |
+| `openai/gsm8k` | **mit** | 7,473 train | `<<a op b=c>>` spans → ordered calls with genuine operand *dependency chains*, plus natural phrasing | low | arithmetic |
+| `allenai/math_qa` | **apache-2.0** | 29,837 train | `linear_formula` operator DSL → multi-call programs. Cost is a ~60-op interpreter | med | arithmetic |
+| `ChilleD/SVAMP` | **mit** | 700 train | `Equation` → single-op wrap; phrasing diversity | low | arithmetic |
+| `aialt/RetrievalQA` | **mit** | 2,785 | `param_knowledge_answerable ∈ {0,1}` — the **only** clean-licensed explicit search-vs-memory label that exists | med | web-search |
+| `xanhho/2WikiMultihopQA` | **apache-2.0** | UNVERIFIED | gold supporting paragraphs → per-hop sub-question search calls | med | web-search |
+| `ChilleD/StrategyQA` | **mit** | 1,603 train | implicit decomposition → query | med | web-search |
+| `spacemanidol/orcas` | **mit** | 10,405,341 | real Bing query **phrasing distribution** — taken as a prior, not as rows, so it contributes 0 to the provenance ratio | low | web-search |
+| `eth-nlped/mathdial` | **cc-by-4.0** | 2,262 train | real tutor–student dialogue → learner-state phrasing and misconception surface forms | med | pedagogy |
+| `allenai/mathfish` | **odc-by** | UNVERIFIED | **CCSS codes + grade/unit/lesson metadata ONLY** — never `problem_activity_html` or `text` (those bodies are compiled from Illustrative Mathematics / Fishtank, and are live curriculum content) | med | pedagogy |
+| `allenai/tutormoments-preview` | **cc-by-4.0** | 10,053 | `transcripts` + `annotations` configs only. **Exclude `moments`, `ground_truth`, `benchmark_520`** — a derived benchmark | med | pedagogy |
 
-**Filters that must be applied to the Dolci slice** (in addition to §10):
+### Rejected, with the reason visible
 
-- **Single-turn only.** The corpus is multi-turn (a real row runs system → user → assistant →
-  environment → …). Our v1 scope is `system + user + assistant`, and §12's converter blocker makes
-  that a hard requirement, not a preference.
-- **Our own BFCL decontamination.** Only the *private* 200K mix is named `bfclv3-decontaminated`.
-  The public cut's status is **UNVERIFIED** — run n-gram decontamination ourselves before claiming a
-  BFCL number.
-- **The ≤2% per-function cap** as a *filter on the slice*, not an assumption about it.
-- **Role-set assertion.** An unrecognised role emits nothing from the template and the row is then
-  silently deleted downstream (§12). Assert `{system,user,assistant,environment}` ourselves.
-- **No `is_refusal` column exists** on the Instruct cut (only the 1,597-row thinking set has one),
-  so its abstention content is UNVERIFIED and cannot be assumed. All 4,000 abstention rows stay
-  derived by our own deletion/elision.
+- **No frontmatter tag:** `allenai/Dolci-Instruct-SFT-Tool-Use` (227,579) · `MU-NLPC/Calc-X`
+  (319,169) · `Calc-X-big-numbers` (224,409 — conceptually the closest thing to what we want) ·
+  MuSiQue · TutorChat · `VityaVitalich/adaptive_rag_*` (which has literally our ideal schema) ·
+  `THUDM/AgentInstruct` · `driaforall/pythonic-function-calling` · `interstellarninja/tool-calls-multiturn`.
+- **NC:** `Eedi/Question-Anchored-Tutoring-Dialogues-2k` (`cc-by-nc-4.0`, 79,574 — **the best pedagogy
+  content in existence**, 10,857 diagnostic questions with all four real distractors, and unusable in
+  an open release. Do not revisit) · `Salesforce/APIGen-MT-5k` · `EleutherAI/asdiv` · DrawEduMath.
+- **Share-alike:** `allenai/Dolci-…-SA` · HotpotQA (90,447) · Natural Questions · BeIR-msmarco.
+- **Gated:** `Salesforce/xlam-function-calling-60k` (`gated: auto` + research-only prose that
+  contradicts its CC-BY tag) · `Trelis/*` · `alucent/mirror-*`.
+- **Relabels that do not cure the parent:** `argilla/apigen-function-calling` (CC-BY over an
+  xlam-60k merge) · `Locutusque/function-calling-chatml` (glaive-v2) · `internlm/Agent-FLAN`.
+- **Reasoning traces** (we are not training a reasoning model):
+  `interstellarninja/hermes_reasoning_tool_use` (51,004) and `tool-use-relevance-reasoning` (15,218).
+- **Needs a human read:** `nvidia/OpenMathInstruct-1` (`license: other` = NVIDIA License; a grep
+  found no NC clause, but `other` is not a tag we accept on faith; also ~114 GB and `<llm-code>` is
+  code-as-action, not a named-function call). v2 upside only.
+- **Verified to contain no tool calls:** `nvidia/OpenMathInstruct-2` (13.97M, pure LaTeX CoT).
+- **Do not exist** as public HF datasets: ToRA, MathCoder, ToolQA.
 
-ToolACE repairs still required on its 2,000: drop empty `{"from":"assistant","value":""}` rows;
-repair find-replace corruption in API **names and param names** (`valistring`←`valid`,
-`start_string`←`date`); convert bracket calls `[Quotes by Keywords(word="inspiration")]`; parse tool
-specs out of the free-text `system` string; classify the four modes ourselves; fix temporal
-incoherence.
+### Eval sets we must never ingest
 
-Fixes required on ToolACE rows: drop empty `{"from":"assistant","value":""}` rows (documented, and
-trains the model to emit `""`); repair find-replace corruption in API **names and param names**
-(`valistring`←`valid`, `start_string`←`date`); convert bracket calls
-`[Quotes by Keywords(word="inspiration")]` → our inlined `<function_calls>` form; parse tool specs
-out of the free-text `system` string; classify the four modes ourselves (unannotated); fix temporal
-incoherence ("last financial year"→2025, "past month"→2022).
+BFCL is **eval-only**: `gorilla-llm/Berkeley-Function-Calling-Leaderboard`, `BFCL_v3_*`, `BFCL_v4_*`
+(including `BFCL_v4_web_search`), `MadeAgents/HammerBench`, `gorilla-llm/APIBench`,
+`Nexusflow/NexusRaven_API_evaluation`, `google/frames-benchmark`, `allenai/mathfish-tasks`.
 
-**Dolci is the public release of the private mix.** Measured on 100 sampled rows: every one carries
-`dataset_source: "allenai/olmo-toolu-sft-mix-T2-S2-f2-bfclv3-decontaminated"` — the same name as the
-401 dataset in `src/scripts/train/sft/README.md:52`, minus the `-200K-thinking-id-fixed` suffix. So
-the rows themselves assert the BFCL-v3 decontamination provenance. That is a **producer assertion we
-do not recompute**, which is exactly why gate 15's decontamination stays on our side of the line —
-but it is materially stronger than "unverified".
+**Two sources we consume are themselves evals**, and taking them burns them for this model:
+`aialt/RetrievalQA` (no train split at all) and `nvidia/When2Call` (train split only). Accept both —
+RetrievalQA is the only clean-licensed search-vs-memory label there is — but **record it in the
+dataset card.** Deciding this quietly is how a benchmark number becomes meaningless a year later.
 
-**Tool families actually present** (100-row sample): arithmetic-shaped tools already exist
-(`cosine_similarity`, `is_power_of_two`, `physics.final_velocity`,
-`combinatorics.permutation_count`, `cell_density`), and search-shaped ones (`top_headlines`,
-`searchjobs`, `matricula.api.search`). **Pedagogy: essentially nothing** — which is why all 11,000
-pedagogy rows are fresh synthesis.
+### Decontamination must key on tool identity, not text
+
+For a function-calling dataset the leak that matters is a repeated **API**, not a repeated question.
+Build one canonical key per row — normalized `(function_name, sorted(param_name_set))` plus a MinHash
+of the user turn — and run it against every BFCL v3/v4 category **and** our own held-out schema pool.
+Text-only decontamination passes rows that teach the exact APIs BFCL scores.
+
+Highest collision risk: `MadeAgents/xlam-irrelevance-7.5k` shares lineage with xlam-60k, which shares
+provenance with BFCL simple/multiple, and Hammer trained on it. Also: **the arithmetic held-out set
+must be programmatically generated, never drawn from GSM8K/MathQA/SVAMP** — those problems sit in
+every base model's pretraining data, so a held-out slice from them measures memorization, not tool use.
+Allocate each GSM8K problem **once**: `Calc-gsm8k` and `openai/gsm8k` are the same problems.
 
 ---
 
@@ -1055,3 +1081,110 @@ re-labels history.
 Pin a **retrieval date per schema** in the tool registry: third-party schemas drift (Anthropic ships
 three `web_search_*` versions with different defaults; several CASE and Eedi field lists are already
 UNVERIFIED). Nothing about this blocks a publish, but it blocks any claim the schemas are *current*.
+
+---
+
+## 18. The generator model
+
+### Read this first: two thirds of the corpus needs no model at all
+
+| provenance class | rows | needs an LLM? |
+| --- | --- | --- |
+| Reformat, all domains | 11,500 | **No** — field mapping + serializer |
+| Derived where the language comes from upstream | 11,500 | **No** — upstream supplies the prose; we compute or author the call |
+| Derived needing new phrasing | 500 | Yes |
+| Fresh but programmatic (operand generators, CCSS recombination, entity/date pools) | 3,800 | **No** — template + Python stub |
+| Fresh needing natural-language generation | 12,700 | Yes |
+| **Needs an LLM** | **13,200 (33%)** | |
+| **Needs no LLM** | **26,800 (67%)** | |
+
+Where the 13,200 sits: pedagogy ~6,000 (student utterances, misconception surface forms), web-search
+~4,000 (questions with a genuine search-necessity boundary), general ~2,000, arithmetic ~1,200
+(**surface phrasing only** — every operand and every `expected_result` comes from the generator script
+and the Python stub, never from a model).
+
+**So the generator governs 33% of the corpus and 0% of its correctness.** Schemas are authored,
+held-out pools are fixed, arithmetic truth is computed, and the wire format is emitted by a
+deterministic serializer. It is a *phrasing and scenario* engine. Calibrate the effort accordingly.
+
+### Primary: `Qwen/Qwen3-235B-A22B-Instruct-2507`. Fallback: `mistralai/Mistral-Small-3.2-24B-Instruct-2506`.
+
+**Licence — verified at the file level, not the tag.** Both are `apache-2.0`, and the defence is the
+**absence** of any output clause: Apache 2.0 has no provision covering model outputs, no naming
+condition, no MAU gate. **We checked the LICENSE file itself**, because the tag is not sufficient —
+[`verify/verify_sources.py`](verify/verify_sources.py):
+
+```
+Qwen/Qwen3-235B-A22B-Instruct-2507   tag: apache-2.0   file: Apache License Version 2.0, January 2004
+Qwen/Qwen2.5-72B-Instruct            tag: other        file: Qwen LICENSE AGREEMENT ...
+```
+
+That second line is why the check exists. Qwen2.5-72B is widely assumed Apache and is not; its
+agreement adds a "Built with Qwen" display requirement, a 100M-MAU gate and Hangzhou jurisdiction.
+
+Disqualified, with the governing clause:
+
+| Model | Clause | Verdict |
+| --- | --- | --- |
+| Anthropic API | Commercial ToS §D.4: may not *"train competing AI models"* — even though §B grants that the customer *owns its Outputs* | Out. Output ownership does not license this use |
+| Google Gemini API | *"You may not use the Services to develop models that compete with the Services"* | Out |
+| OpenAI API | *"use output from the Services to develop models that compete with OpenAI"* — **UNVERIFIED by primary fetch** (openai.com returns 403 here); sourced secondarily | Out |
+| **Gemma** | ToU "Model Derivatives" expressly reaches *"the generation of synthetic data Outputs by Gemma for training that model"* — so our model would be a Model Derivative and must propagate Google's use restrictions into our licence | Out — **viral** |
+| Qwen2.5-72B | §5.b "Built with Qwen" display requirement + MAU gate | Out |
+| Llama 3.3 | Outputs are permitted (the old prohibition is gone), but §1.b.i requires *"Llama" at the beginning of any such AI model name* | Declined — forces `Llama-…` on a model whose weights are not Llama-derived |
+| `deepseek-ai/DeepSeek-V3` | `cardData.license` is **null** | Out |
+| `deepseek-ai/DeepSeek-R1` | `mit`, zero obligations — licence-clean | Reserve only: it is a **reasoning** model, so every output arrives wrapped in a trace to strip, and its register is the opposite of a terse tool-caller |
+
+**Tool-calling ability: UNVERIFIED, and we should stop trying to source it.** No authoritative
+per-model BFCL number could be obtained — the leaderboard renders client-side and the aggregators
+serve bot walls. Circulating figures are vendor self-reported, do not name the variant, and are v3
+while the board is on v4. **Do not cite one in the dataset card.**
+
+Replace it with a measurement in our own units: **a 200-prompt bake-off** across Qwen3-235B,
+Mistral-Small-3.2 and OLMo-3-Instruct, scored by our own schema validator plus the arithmetic stub —
+schema-valid rate, correct-abstention rate, argument-name fidelity against the given schema, and
+distinct-n over user turns. One afternoon, and it answers the only question that matters.
+
+**Machine shape, not token cost, is the real discriminator.** 13,200 rows at ~2× overgeneration ≈
+26,400 generations ≈ 90M tokens — a rounding error that does not distinguish the candidates.
+But Qwen3-235B-A22B is 235B total / 22B active ≈ 470 GB in bf16, so it wants **8×H100-80 minimum**
+under vLLM with expert parallelism, whereas Mistral-Small-3.2-24B is ≈48 GB and **fits one 80 GB
+card**. That is the actual argument for the fallback: if the 8-GPU shape is refused or queued, a 24B
+Apache model on one card unblocks the same 13,200 rows the same day.
+
+**Platform rules that apply to the generation run:** price and approval class come from
+`edullm check --json` and nowhere else — quote nothing from a doc. **Write the dtype into the command
+text** (`--param-dtype bfloat16`), because the precision guard reads the command and cannot see a
+dtype set in code. Pass the literal `--dataset none`, since the generation run reads no corpus release.
+
+### Self-distillation with OLMo-3-Instruct: use it as a discriminator, not a generator
+
+The format-fidelity argument for self-distillation **dissolves on inspection.** Our wire format is
+deterministic string assembly from three inputs (schema list, call name, kwargs). **No LLM should be
+emitting those literals at all** — the generator returns structured JSON
+(`{"user": …, "call": {"name": …, "args": {…}}}`) and *our serializer* renders it. A serializer is
+100% format-correct by construction; a model is not, and every format error OLMo-3 did make would
+arrive pre-blessed as correct because it came from the reference model. The strongest argument for
+self-distillation turns out to be an argument for writing a serializer — which we need anyway.
+
+The licence argument is real but non-differentiating: OLMo-3-Instruct and Qwen3-235B are both Apache
+with no output obligations.
+
+**The case against is decisive.** A 49.8-BFCL teacher caps any capability for which it is the sole
+label source, and the student is **4B-active** — we would be capping a smaller model below an already
+mediocre teacher. Worse, self-distillation amplifies *systematic* error rather than averaging random
+error, and OLMo-3-Instruct's characteristic failure is **over-calling**: invoking a tool when none
+fits, inventing parameters, drifting argument names off the schema. Those are exactly our
+`relevance-hard`, `no-suitable-tool` and `missing-args` categories — the three that justify the
+dataset existing. Training a model to reproduce its predecessor's over-calling bias, in the categories
+designed to cure over-calling, is the one outcome that makes the exercise worse than not doing it.
+
+**What it is genuinely good for:**
+
+1. **Difficulty filter.** Run it over every candidate row from any source and **prefer rows it gets
+   wrong.** A row the current model already answers carries almost no gradient. This turns its 49.8
+   ceiling from a liability into a free, exactly-calibrated hardness signal at one forward pass per row.
+2. **Serializer round-trip check.** If OLMo-3-Instruct cannot parse a row we emitted, the serializer
+   is wrong.
+3. **Third arm in the bake-off.** If Qwen3-235B does not beat it on schema-valid rate and
+   correct-abstention, that is worth knowing *before* we spend the 8-GPU shape.
