@@ -42,6 +42,15 @@
 #
 # --attempts 1 at submit time: there is no --resume, so a second attempt would restart from the
 # base checkpoint and bill a second full run for one result.
+#
+# 2,000 STEPS RATHER THAN 5,000, AND THE REASON IS THE CAP RATHER THAN THE SCIENCE. metrics.json
+# is written last, after the final eval, so a run killed at the 24 h wall leaves checkpoints and
+# NO reported number -- a day spent for nothing. Runtime is still unmeasured: ~13 h at an assumed
+# 5% MFU, ~33 h at 2%, and only the second of those busts the cap. 2,000 steps lands near 5 h at
+# 5% and still under the cap at 2%, so it finishes under any plausible throughput. At batch 16
+# that is ~32k examples over a 2,400-example train set (~13 epochs), which is ample to separate
+# the arms if they separate at all. --save-every 500 is kept deliberately: if this is killed
+# anyway, best.pt and stepN.pt are already mirrored to S3 and eval.py can be pointed at them.
 schema_version: 1
 workload_profile: olmo-core-train
 suggested_compute: gpu-8xa100
@@ -58,7 +67,7 @@ command: >-
   pids=(); for i in 0 1 2 3 4; do mkdir -p "$EDULLM_CHECKPOINT_DIR/A$i";
   CUDA_VISIBLE_DEVICES=$i python src/scripts/latentcot/train_codi.py
   --arm ${ARMS[$i]} --rung olmo3_370M --init-checkpoint "$BASE"
-  --steps 5000 --batch-size 16 --precision bf16 --lr 2e-5
+  --steps 2000 --batch-size 16 --precision bf16 --lr 2e-5
   --init-seed 0 --seed 1 --log-every 50
   --train-data $DATA/train-00000.jsonl --test-data $DATA/heldout-00000.jsonl
   --out "$EDULLM_CHECKPOINT_DIR/A$i"

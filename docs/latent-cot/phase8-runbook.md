@@ -212,6 +212,10 @@ per GPU, `CUDA_VISIBLE_DEVICES=$i`) and wall-clock becomes the slowest single ar
 sum. There is no multi-GPU parallelism *within* an arm (the direct loop has no DDP/FSDP), so more
 GPUs than arms buys nothing here. See §0b for sizing.
 
+**The submitted pilot runs `--steps 2000`, not 5,000** (see `.edullm/run.yaml`), so divide the
+§0b hour estimates by 2.5. The reason is the 24 h cap, not the science: `metrics.json` is written
+after the final eval, so a run killed at the wall reports nothing at all.
+
 **On partial capacity, order the arms `A2` then `A0`.** Gate A is the A2−A0 depth curve, so those
 two alone produce the headline signal (~9 h combined at 5% MFU on one A100); A3/A4 (Gate B) and A1
 (the floor) can follow on the same GPU or on capacity that frees up later. One ≥40 GB bf16 GPU is
