@@ -1,0 +1,42 @@
+# Written by edullm check, from config/workload-catalog.yaml, then filled in by hand.
+# Everything here is a property of the code and travels with it in git.
+# The machine, the corpus and the experiment are supplied at submit time,
+# because one commit run by two people belongs to two teams.
+#
+# Workload profiles registered for OLMo-core: olmo-core-check, olmo-core-train.
+# edullm check prices this and lists every refusal, without dispatching anything.
+#
+# ---------------------------------------------------------------------------
+# Gated DeltaNet-2 pretraining. TWO THINGS ARE STILL OPEN and are marked below:
+# the model rung (--model-factory and the GDN-2 geometry) and the corpus, which
+# is a submit-time flag rather than a field here. Everything else is settled.
+#
+# The recipe follows the paper's section 4 setup where it is size-independent:
+# AdamW, peak LR 4e-4, cosine decay, gradient clip 1.0 (train_on_corpus sets the
+# last one), 4K sequence length, and a global batch of 0.5M tokens. The paper
+# warms up over 1B tokens, which at 524,288 tokens/step is 1,908 steps.
+#
+# --steps 19073 is a 10B-token budget at that batch size (19073 * 524288 = 10.0B).
+#
+# WHY EIGHT CARDS. A 370M model over 10B tokens is about 2.2e19 FLOPs at 6ND.
+# One L4 at a realistic MFU does not finish that inside the profile's 24h ceiling,
+# and neither does one L40S; eight A100s bring it to roughly six hours. Read the
+# rate and the worst-case total out of `edullm check --json`, never from here.
+# --nproc-per-node MUST equal the device count of the shape, or the submission is
+# refused with the corrected command.
+#
+# WHY --param-dtype IS ON THE LINE rather than left to the default that already
+# is bfloat16: the platform's precision guard reads the command text and cannot
+# see a dtype set in code, so naming it turns a card with no bfloat16 into a free
+# refusal at check time instead of a billed machine. See AGENTS.md.
+# ---------------------------------------------------------------------------
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/train_gdn2.py "$EDULLM_RUN_ID" --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --model-factory olmo2_370M --n-heads 16 --head-dim 64 --expand-v 1.0
+  --sequence-length 4096 --global-batch-size 524288 --rank-microbatch-size 16384
+  --learning-rate 4e-4 --warmup-steps 1908 --steps 19073 --save-interval 500
+  --param-dtype bfloat16'
