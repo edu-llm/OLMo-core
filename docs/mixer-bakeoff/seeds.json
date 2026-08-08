@@ -1,227 +1,367 @@
 {
+ "$comment": [
+  "FROZEN SEED SCHEDULE for the two-run mixer bake-off. This file is the CONTRACT between",
+  "run 1 (submitted first) and run 2 (submitted days later). Run 2 re-runs the base/paper KDA",
+  "arm on THESE EXACT integers so the K3-vs-paper contrast is within-run and a cross-run drift",
+  "check is free. Edit only to correct an error found BEFORE run 1 dispatches; after that this",
+  "file is read-only and a change invalidates the pairing.",
+  "Prose, reasoning and the analysis plan: docs/mixer-bakeoff/PREREGISTRATION.md"
+ ],
+ "schema_version": 1,
+ "frozen_on": "2026-08-08",
+ "status": "frozen",
+ "entrypoint": ".edullm/train_core6_arm.py",
+ "arm_names_unverified": {
   "$comment": [
-    "FROZEN SEED SCHEDULE for the two-run mixer bake-off. This file is the CONTRACT between",
-    "run 1 (submitted first) and run 2 (submitted days later). Run 2 re-runs the base/paper KDA",
-    "arm on THESE EXACT integers so the K3-vs-paper contrast is within-run and a cross-run drift",
-    "check is free. Edit only to correct an error found BEFORE run 1 dispatches; after that this",
-    "file is read-only and a change invalidates the pairing.",
-    "Prose, reasoning and the analysis plan: docs/mixer-bakeoff/PREREGISTRATION.md"
+   "UNVERIFIED -- confirm against ARMS in src/olmo_core/nn/transformer/core6_arms.py BEFORE",
+   "submitting. As of the freeze, ARMS on branch edullm/mixer-bakeoff still holds ONLY the",
+   "CORE-6 layer-schedule arms (L0, K2, G4R0, G4R2, G2R0, S14, G0R0). The six mixer arms below",
+   "are NOT in ARMS yet; another agent is adding them. The `arm` key in `schedule` is the",
+   "placeholder token. Reconcile every one of them, then set status to 'frozen'.",
+   "The SEED INTEGERS are frozen regardless -- reconciliation renames rows, it does not renumber",
+   "them. Bind each placeholder to a real ARMS key by its `mixer_config` fingerprint below,",
+   "which IS verified against src/olmo_core/nn/attention/recurrent.py on this branch."
   ],
-  "schema_version": 1,
-  "frozen_on": "2026-08-08",
-  "status": "frozen-pending-arm-name-reconciliation",
-  "entrypoint": ".edullm/train_core6_arm.py",
-
-  "arm_names_unverified": {
-    "$comment": [
-      "UNVERIFIED -- confirm against ARMS in src/olmo_core/nn/transformer/core6_arms.py BEFORE",
-      "submitting. As of the freeze, ARMS on branch edullm/mixer-bakeoff still holds ONLY the",
-      "CORE-6 layer-schedule arms (L0, K2, G4R0, G4R2, G2R0, S14, G0R0). The six mixer arms below",
-      "are NOT in ARMS yet; another agent is adding them. The `arm` key in `schedule` is the",
-      "placeholder token. Reconcile every one of them, then set status to 'frozen'.",
-      "The SEED INTEGERS are frozen regardless -- reconciliation renames rows, it does not renumber",
-      "them. Bind each placeholder to a real ARMS key by its `mixer_config` fingerprint below,",
-      "which IS verified against src/olmo_core/nn/attention/recurrent.py on this branch."
-    ],
-    "reconciled": false
-  },
-
-  "pairing_preconditions": {
-    "$comment": [
-      "Data order is a function of (data_seed + epoch, len(dataset)) ONLY -- it does not depend on",
-      "the model. Verified on this branch: NumpyDataLoaderBase._build_global_indices does",
-      "get_rng(self.seed + self.epoch).shuffle(arange(len(dataset))) (data_loader.py ~line 674),",
-      "and get_rng is np.random.Generator(PCG64(seed)) (data/utils.py:585-586).",
-      "So the SAME --data-seed gives every arm a byte-identical token stream IF AND ONLY IF all of",
-      "the following also match. Any one of them differing silently breaks the pairing while every",
-      "run still trains and reports a plausible number."
-    ],
-    "must_match_across_every_cell_being_paired": {
-      "sequence_length": "identical (enters total_size via instances_per_batch = global_batch_size // sequence_length)",
-      "global_batch_size": "identical (same reason)",
-      "dp_world_size": "identical (indices[:, dp_rank::dp_world_size] -- data_loader.py:707)",
-      "dataset_release": "identical -- len(dataset) is in the shuffle domain AND in the indices-cache filename",
-      "steps": "identical (a shorter arm consumes a prefix, not the same stream)",
-      "chunk_size_and_shuffle": "left at config defaults; do not override per arm"
-    },
-    "consequence": "A cell that changes ANY of these is not paired with the others on data order and must be analysed as an independent sample."
-  },
-
-  "init_seed_semantics": {
-    "$comment": [
-      "Init seeds CANNOT be paired ACROSS arms. Arms have different tensor inventories (KDA-HH R=2",
-      "widens w_k/w_v/w_b and the k/v convs by R; GDN2 has w_w that KDA does not; the gated-conv",
-      "arm adds gate tensors), so a single RNG stream diverges at the first differing tensor and",
-      "every draw after it is unrelated. Reusing one integer across arms buys NO variance reduction",
-      "and must not be claimed to.",
-      "It is recorded, and REUSED IDENTICALLY FOR THE SAME ARM IN RUN 2, because that is what makes",
-      "run 2's repeated base-KDA arm a true replicate of run 1's rather than a fresh sample."
-    ],
-    "plumbing_verified_on_this_branch": {
-      ".edullm/train_core6_arm.py": "PLUMBED. build_config passes init_seed=opts.init_seed into build_arm -> TransformerConfig.llama_like -> cls(...) -> TransformerConfig.init_seed, which reaches the Transformer constructor and the generator that actually draws weights (see the comment block at train_core6_arm.py:623-640). --init-seed default 12536.",
-      ".edullm/train_on_corpus.py": "NOT PLUMBED. It exposes --data-seed only; there is no --init-seed. Its config carries init_seed=12536 (line 341) and calls seed_all(config.init_seed) (line 803), but weights come from TransformerConfig.init_seed, whose default is 0 (nn/transformer/config.py:326). Every 'n seeds' on that entrypoint is n data orderings of ONE initialisation.",
-      "run_1_entrypoint": ".edullm/train_core6_arm.py -- REQUIRED. train_on_corpus.py cannot vary the init component at all."
-    },
-    "guard": "train_core6_arm.py:1582 refuses the run when config.init_seed != config.model.init_seed. Both are set together from --init-seed, so they can only diverge via a dotlist override (`init_seed=99` or `model.init_seed=42`) that moves one. NEVER override either field; pass --init-seed.",
-    "weight_draw_default_never_used": "None of the integers below is 0 or 12536, so a cell that silently fell back to a default is visible in the summary JSON rather than indistinguishable from a real cell."
-  },
-
-  "seed_choice_rationale": {
-    "not_small_sequential_integers": [
-      "0 and 12536 are the two defaults on this entrypoint; using them makes 'the flag did not reach the draw' indistinguishable from 'the flag reached the draw'.",
-      "Data order is keyed on (seed + epoch). With seeds 0,1,2 a cell at epoch 1 draws the same order as a cell at seed 1 epoch 0 -- an alias that a multi-epoch or resumed run can hit silently. Spacing the data seeds 10,007 apart makes aliasing impossible at any epoch count this study can reach.",
-      "Distinct decimal digits make a transposed seed in a submitted command visible by eye against the table."
-    ],
-    "construction": "data_seed(r) = 200000 + 10007*r ; init_seed(arm_i, r) = 100000 + 3001*i + 10007*r  (i = arm_index below). 10007 and 3001 are primes, so no two cells collide -- verified: 24 integers, 0 duplicates. RECORDED AS LITERALS BELOW; the formula is documentation, not the source of truth.",
-    "replicate_index_is_1_based": true
-  },
-
-  "data_seeds_by_replicate": {
-    "1": 210007,
-    "2": 220014,
-    "3": 230021
-  },
-
-  "schedule": [
-    {
-      "arm": "kda-paper",
-      "arm_index": 0,
-      "role": "SHARED CONTROL -- Dunnett reference. Re-run identically in run 2.",
-      "in_run": [1, 2],
-      "arm_name_status": "UNVERIFIED -- confirm against ARMS",
-      "mixer_config": "KimiDeltaAttentionConfig(allow_neg_eigval=False, conv_activation='silu', gated_conv=False) -- the Kimi Linear paper / fla variant, NOT K3. These are the shipped defaults on this branch (recurrent.py:1088,1100,1108).",
-      "cells": [
-        {"replicate": 1, "data_seed": 210007, "init_seed": 110007},
-        {"replicate": 2, "data_seed": 220014, "init_seed": 120014},
-        {"replicate": 3, "data_seed": 230021, "init_seed": 130021}
-      ]
-    },
-    {
-      "arm": "kda-noact",
-      "arm_index": 1,
-      "role": "no-activation KDA control -- the arm that isolates the gate",
-      "in_run": [1],
-      "arm_name_status": "UNVERIFIED -- confirm against ARMS",
-      "mixer_config": "KimiDeltaAttentionConfig(gated_conv=False, conv_activation=None). recurrent.py:1100-1106 says conv_activation exists precisely so None is reachable and this arm can be built.",
-      "cells": [
-        {"replicate": 1, "data_seed": 210007, "init_seed": 113008},
-        {"replicate": 2, "data_seed": 220014, "init_seed": 123015},
-        {"replicate": 3, "data_seed": 230021, "init_seed": 133022}
-      ]
-    },
-    {
-      "arm": "kda-gated-conv",
-      "arm_index": 2,
-      "role": "gated-conv KDA (LFM2/LIV-style gated short convolutions)",
-      "in_run": [1],
-      "arm_name_status": "UNVERIFIED -- confirm against ARMS",
-      "mixer_config": "KimiDeltaAttentionConfig(gated_conv=True, gated_conv_activation=None, gate_structure='depthwise'). NOTE recurrent.py:1119-1130: with gate_structure='depthwise', gated_conv_activation=None does NOT mean activation-free -- the depthwise pre-gate is exactly a SiLU with a learnable per-channel slope. That is why kda-noact is the correct comparator for the gate, not kda-paper.",
-      "cells": [
-        {"replicate": 1, "data_seed": 210007, "init_seed": 116009},
-        {"replicate": 2, "data_seed": 220014, "init_seed": 126016},
-        {"replicate": 3, "data_seed": 230021, "init_seed": 136023}
-      ]
-    },
-    {
-      "arm": "gdn2",
-      "arm_index": 3,
-      "role": "Gated DeltaNet-2 competitor",
-      "in_run": [1],
-      "arm_name_status": "UNVERIFIED -- confirm against ARMS",
-      "mixer_config": "GatedDeltaNet2Config(expand_v=1.0, allow_neg_eigval=False) -- the GDN-2 paper's headline settings and the class defaults on this branch (recurrent.py:2352-2369).",
-      "cells": [
-        {"replicate": 1, "data_seed": 210007, "init_seed": 119010},
-        {"replicate": 2, "data_seed": 220014, "init_seed": 129017},
-        {"replicate": 3, "data_seed": 230021, "init_seed": 139024}
-      ]
-    },
-    {
-      "arm": "kda-hh-r1",
-      "arm_index": 4,
-      "role": "KDA Householder R=1",
-      "in_run": [1],
-      "arm_name_status": "UNVERIFIED -- confirm against ARMS",
-      "mixer_config": "KimiDeltaHouseholderConfig(num_householder=1, allow_neg_eigval=True, backend='triton'). NOTE the class default is allow_neg_eigval=False (recurrent.py:1850) -- True must be set explicitly.",
-      "cells": [
-        {"replicate": 1, "data_seed": 210007, "init_seed": 122011},
-        {"replicate": 2, "data_seed": 220014, "init_seed": 132018},
-        {"replicate": 3, "data_seed": 230021, "init_seed": 142025}
-      ]
-    },
-    {
-      "arm": "kda-hh-r2",
-      "arm_index": 5,
-      "role": "KDA Householder R=2",
-      "in_run": [1],
-      "arm_name_status": "UNVERIFIED -- confirm against ARMS",
-      "mixer_config": "KimiDeltaHouseholderConfig(num_householder=2, allow_neg_eigval=True, backend='triton'). Same explicit-True note as R=1.",
-      "cells": [
-        {"replicate": 1, "data_seed": 210007, "init_seed": 125012},
-        {"replicate": 2, "data_seed": 220014, "init_seed": 135019},
-        {"replicate": 3, "data_seed": 230021, "init_seed": 145026}
-      ]
-    },
-    {
-      "arm": "kda-k3",
-      "arm_index": 6,
-      "role": "K3-variant KDA -- RUN 2 ONLY. Its baseline is kda-paper re-run in run 2 on the same seeds.",
-      "in_run": [2],
-      "arm_name_status": "UNVERIFIED -- confirm against ARMS. The K3 gate fields DO NOT EXIST on this branch: grep for gate_lower_bound / scaled-sigmoid / full-rank output gate in src/olmo_core/nn/attention/recurrent.py returns nothing. Run 2 needs an implementation first.",
-      "mixer_config": "UNVERIFIED -- intended: scaled-sigmoid forget gate with gate_lower_bound=-5.0, A_log zero-init, full-rank output gate. Contrast with kda-paper, whose gate is -exp(A_log)*softplus(f(x)+dt_bias) with A_log = log(U(1,16)) (recurrent.py:985-986) and a LOW-RANK output gate bottlenecked through head_v_dim.",
-      "cells": [
-        {"replicate": 1, "data_seed": 210007, "init_seed": 128013},
-        {"replicate": 2, "data_seed": 220014, "init_seed": 138020},
-        {"replicate": 3, "data_seed": 230021, "init_seed": 148027}
-      ]
-    }
-  ],
-
-  "run_1": {
-    "arms": ["kda-paper", "kda-noact", "kda-gated-conv", "gdn2", "kda-hh-r1", "kda-hh-r2"],
-    "n_arms": 6,
-    "replicates_per_arm": 3,
-    "cells": 18,
-    "pooled_within_arm_df": 12,
-    "dunnett_k": 5,
-    "locked_run_parameters": {
-      "$comment": "Locked 2026-08-08. These are pairing preconditions, not just cost inputs -- see pairing_preconditions above. A cell that differs on any of them is not paired.",
-      "tokens_per_cell": 1000000000,
-      "global_batch_size": 524288,
-      "sequence_length": 4096,
-      "steps": 1907,
-      "realised_tokens": 999817216,
-      "parameters": 390135552,
-      "tokens_per_param": 2.56,
-      "compute_profile": "gpu-8xa100",
-      "attempts": 1,
-      "attempts_note": "PINNED. The olmo-core-train profile defaults to 2, which doubles cost and flips the approval gate.",
-      "declared_hours_per_cell": 2.6,
-      "worst_case_ceiling_usd": 1014,
-      "throughput_basis_tok_s": 303072,
-      "throughput_basis_note": "Conservative 20-step figure. A 200-step run read 455,789; that higher number is a run-length artifact and is NOT the planning basis.",
-      "makespan_hours": 3.2,
-      "makespan_note": "6-way concurrency. Batch array jobs refill slots as they free, so makespan is sum-of-cells/concurrency, not serial waves. The 3 kda-hh-r2 cells run ~2x slower (non-chunked sequential Triton kernel) and are the long pole."
-    }
-  },
-  "run_2": {
-    "arms": ["kda-paper", "kda-k3"],
-    "n_arms": 2,
-    "replicates_per_arm": 3,
-    "cells": 6,
-    "pooled_within_arm_df": 4,
-    "dunnett_k": 1,
-    "note": "kda-paper is re-run on the IDENTICAL (data_seed, init_seed) pairs from run 1. Its purpose is twofold: it is run 2's internal baseline for the within-run K3 contrast, AND run1(kda-paper,r) minus run2(kda-paper,r) is a free per-replicate drift check on image, kernel and platform changes."
-  },
-
-  "endpoint_keys": {
-    "$comment": "Exact keys in the JSON that .edullm/train_core6_arm.py summarise() prints on rank 0 (train_core6_arm.py:1471-1543). This is the only channel the platform reads results back through.",
-    "primary": "val_ce",
-    "primary_denominators_that_must_match": ["val_tokens", "val_tokens_present", "val_tokens_declared", "val_shards"],
-    "co_primary_throughput_per_device": "tps_device_avg",
-    "co_primary_throughput_total": "tps_total_avg",
-    "co_primary_peak_memory_gib": "peak_memory_gib",
-    "provenance": ["run_id", "arm", "data_seed", "init_seed", "parameters", "steps", "tokens_trained", "world_size", "gpu", "torch", "cuda", "seconds", "wandb_url", "checkpoint_uri"],
-    "secondary_trajectory": "sliced_eval (null when --slice-mask-uri is empty); plus the W&B 'train/CE loss' series",
-    "must_not_be_used_as_an_endpoint": "last_loss (final TRAIN loss). A decay-to-zero LR schedule ends at a mechanically lower train loss at equal held-out quality, and can invert the comparison. first_loss is kept only as an init sanity check (expect ~ln(vocab) = 11.52 at vocab 100,352)."
+  "reconciled": {
+   "reconciled_on": "2026-08-08",
+   "mapping": {
+    "kda-paper": "KDA_BASE",
+    "kda-noact": "KDA_NOACT",
+    "kda-gated-conv": "KDA_GCONV",
+    "gdn2": "GDN2",
+    "kda-hh-r1": "KDA_R1",
+    "kda-hh-r2": "KDA_R2",
+    "kda-k3": "KDA_K3"
+   },
+   "note": "Placeholders replaced with the real ARMS keys. Every run-1 arm was confirmed present in core6_arms.py. KDA_K3 is deliberately absent: the K3 gate does not exist in this tree yet, so it is a run-2 arm only."
   }
+ },
+ "pairing_preconditions": {
+  "$comment": [
+   "Data order is a function of (data_seed + epoch, len(dataset)) ONLY -- it does not depend on",
+   "the model. Verified on this branch: NumpyDataLoaderBase._build_global_indices does",
+   "get_rng(self.seed + self.epoch).shuffle(arange(len(dataset))) (data_loader.py ~line 674),",
+   "and get_rng is np.random.Generator(PCG64(seed)) (data/utils.py:585-586).",
+   "So the SAME --data-seed gives every arm a byte-identical token stream IF AND ONLY IF all of",
+   "the following also match. Any one of them differing silently breaks the pairing while every",
+   "run still trains and reports a plausible number."
+  ],
+  "must_match_across_every_cell_being_paired": {
+   "sequence_length": "identical (enters total_size via instances_per_batch = global_batch_size // sequence_length)",
+   "global_batch_size": "identical (same reason)",
+   "dp_world_size": "identical (indices[:, dp_rank::dp_world_size] -- data_loader.py:707)",
+   "dataset_release": "identical -- len(dataset) is in the shuffle domain AND in the indices-cache filename",
+   "steps": "identical (a shorter arm consumes a prefix, not the same stream)",
+   "chunk_size_and_shuffle": "left at config defaults; do not override per arm"
+  },
+  "consequence": "A cell that changes ANY of these is not paired with the others on data order and must be analysed as an independent sample."
+ },
+ "init_seed_semantics": {
+  "$comment": [
+   "Init seeds CANNOT be paired ACROSS arms. Arms have different tensor inventories (KDA-HH R=2",
+   "widens w_k/w_v/w_b and the k/v convs by R; GDN2 has w_w that KDA does not; the gated-conv",
+   "arm adds gate tensors), so a single RNG stream diverges at the first differing tensor and",
+   "every draw after it is unrelated. Reusing one integer across arms buys NO variance reduction",
+   "and must not be claimed to.",
+   "It is recorded, and REUSED IDENTICALLY FOR THE SAME ARM IN RUN 2, because that is what makes",
+   "run 2's repeated base-KDA arm a true replicate of run 1's rather than a fresh sample."
+  ],
+  "plumbing_verified_on_this_branch": {
+   ".edullm/train_core6_arm.py": "PLUMBED. build_config passes init_seed=opts.init_seed into build_arm -> TransformerConfig.llama_like -> cls(...) -> TransformerConfig.init_seed, which reaches the Transformer constructor and the generator that actually draws weights (see the comment block at train_core6_arm.py:623-640). --init-seed default 12536.",
+   ".edullm/train_on_corpus.py": "NOT PLUMBED. It exposes --data-seed only; there is no --init-seed. Its config carries init_seed=12536 (line 341) and calls seed_all(config.init_seed) (line 803), but weights come from TransformerConfig.init_seed, whose default is 0 (nn/transformer/config.py:326). Every 'n seeds' on that entrypoint is n data orderings of ONE initialisation.",
+   "run_1_entrypoint": ".edullm/train_core6_arm.py -- REQUIRED. train_on_corpus.py cannot vary the init component at all."
+  },
+  "guard": "train_core6_arm.py:1582 refuses the run when config.init_seed != config.model.init_seed. Both are set together from --init-seed, so they can only diverge via a dotlist override (`init_seed=99` or `model.init_seed=42`) that moves one. NEVER override either field; pass --init-seed.",
+  "weight_draw_default_never_used": "None of the integers below is 0 or 12536, so a cell that silently fell back to a default is visible in the summary JSON rather than indistinguishable from a real cell."
+ },
+ "seed_choice_rationale": {
+  "not_small_sequential_integers": [
+   "0 and 12536 are the two defaults on this entrypoint; using them makes 'the flag did not reach the draw' indistinguishable from 'the flag reached the draw'.",
+   "Data order is keyed on (seed + epoch). With seeds 0,1,2 a cell at epoch 1 draws the same order as a cell at seed 1 epoch 0 -- an alias that a multi-epoch or resumed run can hit silently. Spacing the data seeds 10,007 apart makes aliasing impossible at any epoch count this study can reach.",
+   "Distinct decimal digits make a transposed seed in a submitted command visible by eye against the table."
+  ],
+  "construction": "data_seed(r) = 200000 + 10007*r ; init_seed(arm_i, r) = 100000 + 3001*i + 10007*r  (i = arm_index below). 10007 and 3001 are primes, so no two cells collide -- verified: 24 integers, 0 duplicates. RECORDED AS LITERALS BELOW; the formula is documentation, not the source of truth.",
+  "replicate_index_is_1_based": true
+ },
+ "data_seeds_by_replicate": {
+  "1": 210007,
+  "2": 220014,
+  "3": 230021
+ },
+ "schedule": [
+  {
+   "arm": "KDA_BASE",
+   "arm_index": 0,
+   "role": "SHARED CONTROL -- Dunnett reference. Re-run identically in run 2.",
+   "in_run": [
+    1,
+    2
+   ],
+   "arm_name_status": "VERIFIED against ARMS in core6_arms.py on 2026-08-08",
+   "mixer_config": "KimiDeltaAttentionConfig(allow_neg_eigval=False, conv_activation='silu', gated_conv=False) -- the Kimi Linear paper / fla variant, NOT K3. These are the shipped defaults on this branch (recurrent.py:1088,1100,1108).",
+   "cells": [
+    {
+     "replicate": 1,
+     "data_seed": 210007,
+     "init_seed": 110007
+    },
+    {
+     "replicate": 2,
+     "data_seed": 220014,
+     "init_seed": 120014
+    },
+    {
+     "replicate": 3,
+     "data_seed": 230021,
+     "init_seed": 130021
+    }
+   ],
+   "placeholder_was": "kda-paper"
+  },
+  {
+   "arm": "KDA_NOACT",
+   "arm_index": 1,
+   "role": "no-activation KDA control -- the arm that isolates the gate",
+   "in_run": [
+    1
+   ],
+   "arm_name_status": "VERIFIED against ARMS in core6_arms.py on 2026-08-08",
+   "mixer_config": "KimiDeltaAttentionConfig(gated_conv=False, conv_activation=None). recurrent.py:1100-1106 says conv_activation exists precisely so None is reachable and this arm can be built.",
+   "cells": [
+    {
+     "replicate": 1,
+     "data_seed": 210007,
+     "init_seed": 113008
+    },
+    {
+     "replicate": 2,
+     "data_seed": 220014,
+     "init_seed": 123015
+    },
+    {
+     "replicate": 3,
+     "data_seed": 230021,
+     "init_seed": 133022
+    }
+   ],
+   "placeholder_was": "kda-noact"
+  },
+  {
+   "arm": "KDA_GCONV",
+   "arm_index": 2,
+   "role": "gated-conv KDA (LFM2/LIV-style gated short convolutions)",
+   "in_run": [
+    1
+   ],
+   "arm_name_status": "VERIFIED against ARMS in core6_arms.py on 2026-08-08",
+   "mixer_config": "KimiDeltaAttentionConfig(gated_conv=True, gated_conv_activation=None, gate_structure='depthwise'). NOTE recurrent.py:1119-1130: with gate_structure='depthwise', gated_conv_activation=None does NOT mean activation-free -- the depthwise pre-gate is exactly a SiLU with a learnable per-channel slope. That is why kda-noact is the correct comparator for the gate, not kda-paper.",
+   "cells": [
+    {
+     "replicate": 1,
+     "data_seed": 210007,
+     "init_seed": 116009
+    },
+    {
+     "replicate": 2,
+     "data_seed": 220014,
+     "init_seed": 126016
+    },
+    {
+     "replicate": 3,
+     "data_seed": 230021,
+     "init_seed": 136023
+    }
+   ],
+   "placeholder_was": "kda-gated-conv"
+  },
+  {
+   "arm": "GDN2",
+   "arm_index": 3,
+   "role": "Gated DeltaNet-2 competitor",
+   "in_run": [
+    1
+   ],
+   "arm_name_status": "VERIFIED against ARMS in core6_arms.py on 2026-08-08",
+   "mixer_config": "GatedDeltaNet2Config(expand_v=1.0, allow_neg_eigval=False) -- the GDN-2 paper's headline settings and the class defaults on this branch (recurrent.py:2352-2369).",
+   "cells": [
+    {
+     "replicate": 1,
+     "data_seed": 210007,
+     "init_seed": 119010
+    },
+    {
+     "replicate": 2,
+     "data_seed": 220014,
+     "init_seed": 129017
+    },
+    {
+     "replicate": 3,
+     "data_seed": 230021,
+     "init_seed": 139024
+    }
+   ],
+   "placeholder_was": "gdn2"
+  },
+  {
+   "arm": "KDA_R1",
+   "arm_index": 4,
+   "role": "KDA Householder R=1",
+   "in_run": [
+    1
+   ],
+   "arm_name_status": "VERIFIED against ARMS in core6_arms.py on 2026-08-08",
+   "mixer_config": "KimiDeltaHouseholderConfig(num_householder=1, allow_neg_eigval=True, backend='triton'). NOTE the class default is allow_neg_eigval=False (recurrent.py:1850) -- True must be set explicitly.",
+   "cells": [
+    {
+     "replicate": 1,
+     "data_seed": 210007,
+     "init_seed": 122011
+    },
+    {
+     "replicate": 2,
+     "data_seed": 220014,
+     "init_seed": 132018
+    },
+    {
+     "replicate": 3,
+     "data_seed": 230021,
+     "init_seed": 142025
+    }
+   ],
+   "placeholder_was": "kda-hh-r1"
+  },
+  {
+   "arm": "KDA_R2",
+   "arm_index": 5,
+   "role": "KDA Householder R=2",
+   "in_run": [
+    1
+   ],
+   "arm_name_status": "VERIFIED against ARMS in core6_arms.py on 2026-08-08",
+   "mixer_config": "KimiDeltaHouseholderConfig(num_householder=2, allow_neg_eigval=True, backend='triton'). Same explicit-True note as R=1.",
+   "cells": [
+    {
+     "replicate": 1,
+     "data_seed": 210007,
+     "init_seed": 125012
+    },
+    {
+     "replicate": 2,
+     "data_seed": 220014,
+     "init_seed": 135019
+    },
+    {
+     "replicate": 3,
+     "data_seed": 230021,
+     "init_seed": 145026
+    }
+   ],
+   "placeholder_was": "kda-hh-r2"
+  },
+  {
+   "arm": "KDA_K3",
+   "arm_index": 6,
+   "role": "K3-variant KDA -- RUN 2 ONLY. Its baseline is kda-paper re-run in run 2 on the same seeds.",
+   "in_run": [
+    2
+   ],
+   "arm_name_status": "NOT YET IN ARMS -- run-2 arm, needs the K3 gate implemented (safe_gate/lower_bound + full-rank output gate). Do not submit in run 1.",
+   "mixer_config": "UNVERIFIED -- intended: scaled-sigmoid forget gate with gate_lower_bound=-5.0, A_log zero-init, full-rank output gate. Contrast with kda-paper, whose gate is -exp(A_log)*softplus(f(x)+dt_bias) with A_log = log(U(1,16)) (recurrent.py:985-986) and a LOW-RANK output gate bottlenecked through head_v_dim.",
+   "cells": [
+    {
+     "replicate": 1,
+     "data_seed": 210007,
+     "init_seed": 128013
+    },
+    {
+     "replicate": 2,
+     "data_seed": 220014,
+     "init_seed": 138020
+    },
+    {
+     "replicate": 3,
+     "data_seed": 230021,
+     "init_seed": 148027
+    }
+   ],
+   "placeholder_was": "kda-k3"
+  }
+ ],
+ "run_1": {
+  "arms": [
+   "kda-paper",
+   "kda-noact",
+   "kda-gated-conv",
+   "gdn2",
+   "kda-hh-r1",
+   "kda-hh-r2"
+  ],
+  "n_arms": 6,
+  "replicates_per_arm": 3,
+  "cells": 18,
+  "pooled_within_arm_df": 12,
+  "dunnett_k": 5,
+  "locked_run_parameters": {
+   "$comment": "Locked 2026-08-08. These are pairing preconditions, not just cost inputs -- see pairing_preconditions above. A cell that differs on any of them is not paired.",
+   "tokens_per_cell": 1000000000,
+   "global_batch_size": 524288,
+   "sequence_length": 4096,
+   "steps": 1907,
+   "realised_tokens": 999817216,
+   "parameters": 390135552,
+   "tokens_per_param": 2.56,
+   "compute_profile": "gpu-8xa100",
+   "attempts": 1,
+   "attempts_note": "PINNED. The olmo-core-train profile defaults to 2, which doubles cost and flips the approval gate.",
+   "declared_hours_per_cell": 2.6,
+   "worst_case_ceiling_usd": 1014,
+   "throughput_basis_tok_s": 303072,
+   "throughput_basis_note": "Conservative 20-step figure. A 200-step run read 455,789; that higher number is a run-length artifact and is NOT the planning basis.",
+   "makespan_hours": 3.2,
+   "makespan_note": "6-way concurrency. Batch array jobs refill slots as they free, so makespan is sum-of-cells/concurrency, not serial waves. The 3 kda-hh-r2 cells run ~2x slower (non-chunked sequential Triton kernel) and are the long pole."
+  }
+ },
+ "run_2": {
+  "arms": [
+   "kda-paper",
+   "kda-k3"
+  ],
+  "n_arms": 2,
+  "replicates_per_arm": 3,
+  "cells": 6,
+  "pooled_within_arm_df": 4,
+  "dunnett_k": 1,
+  "note": "kda-paper is re-run on the IDENTICAL (data_seed, init_seed) pairs from run 1. Its purpose is twofold: it is run 2's internal baseline for the within-run K3 contrast, AND run1(kda-paper,r) minus run2(kda-paper,r) is a free per-replicate drift check on image, kernel and platform changes."
+ },
+ "endpoint_keys": {
+  "$comment": "Exact keys in the JSON that .edullm/train_core6_arm.py summarise() prints on rank 0 (train_core6_arm.py:1471-1543). This is the only channel the platform reads results back through.",
+  "primary": "val_ce",
+  "primary_denominators_that_must_match": [
+   "val_tokens",
+   "val_tokens_present",
+   "val_tokens_declared",
+   "val_shards"
+  ],
+  "co_primary_throughput_per_device": "tps_device_avg",
+  "co_primary_throughput_total": "tps_total_avg",
+  "co_primary_peak_memory_gib": "peak_memory_gib",
+  "provenance": [
+   "run_id",
+   "arm",
+   "data_seed",
+   "init_seed",
+   "parameters",
+   "steps",
+   "tokens_trained",
+   "world_size",
+   "gpu",
+   "torch",
+   "cuda",
+   "seconds",
+   "wandb_url",
+   "checkpoint_uri"
+  ],
+  "secondary_trajectory": "sliced_eval (null when --slice-mask-uri is empty); plus the W&B 'train/CE loss' series",
+  "must_not_be_used_as_an_endpoint": "last_loss (final TRAIN loss). A decay-to-zero LR schedule ends at a mechanically lower train loss at equal held-out quality, and can invert the comparison. first_loss is kept only as an init sanity check (expect ~ln(vocab) = 11.52 at vocab 100,352)."
+ }
 }
