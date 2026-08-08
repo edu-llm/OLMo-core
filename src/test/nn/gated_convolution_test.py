@@ -696,19 +696,53 @@ def test_gate_options_without_gated_conv_are_refused():
     ``gate_structure="lowrank"`` with ``gated_conv=False`` looks like a treatment arm in a YAML
     diff. Building it must fail rather than quietly run the control twice.
     """
-    with pytest.raises(ValueError, match="gate_rank"):
-        _cfg(gate_rank=GATE_RANK).build(D_MODEL, layer_idx=0, n_layers=1, init_device="meta")
-    with pytest.raises(ValueError, match="gated_conv_activation"):
-        _cfg(gated_conv_activation="silu").build(
-            D_MODEL, layer_idx=0, n_layers=1, init_device="meta"
-        )
+    # Via 'validate_gate_options' rather than 'build', so the refusal is verifiable without 'fla'.
+    # Through 'build' these would raise AssertionError from 'assert has_fla()' on any CPU host,
+    # which passes 'pytest.raises' for the wrong reason and hides a deleted check.
+    with pytest.raises(ValueError, match="'gate_rank' is set but 'gated_conv' is False"):
+        _cfg(gate_rank=GATE_RANK).validate_gate_options()
+    with pytest.raises(
+        ValueError, match="'gated_conv_activation' is set but 'gated_conv' is False"
+    ):
+        _cfg(gated_conv_activation="silu").validate_gate_options()
 
 
 def test_lowrank_without_a_rank_is_refused():
-    with pytest.raises(ValueError, match="gate_rank"):
-        _cfg(gated_conv=True, gate_structure="lowrank").build(
-            D_MODEL, layer_idx=0, n_layers=1, init_device="meta"
-        )
+    """
+    The config must refuse a lowrank arm with no rank, **without needing to build anything**.
+
+    Found by mutation M12, whose history is the whole reason ``validate_gate_options`` exists as a
+    separate method. Deleting the config's check produced:
+
+    * on a laptop, an ``AssertionError`` from ``KimiDeltaAttention``'s ``assert has_fla()``, which
+      fires before the check under test -- so ``pytest.raises(ValueError)`` failed for an unrelated
+      reason and the mutation read as "caught";
+    * on a GPU host, nothing, because ``GatedCausalConv1d``'s own identically-worded ``ValueError``
+      satisfied the assertion while the config check was gone.
+
+    Calling ``validate_gate_options`` directly removes both escapes: it needs no ``fla``, so this
+    runs on CPU, and it carries wording no other path emits. Note the check matters beyond
+    tidiness -- it fires on ``meta`` before any convolution is allocated, where the module's fires
+    after three are.
+    """
+    cfg = _cfg(gated_conv=True, gate_structure="lowrank")
+    with pytest.raises(ValueError, match="refused by KimiDeltaAttentionConfig"):
+        cfg.validate_gate_options()
+    # And the same refusal must reach anything that consumes the config, not just 'build'.
+    with pytest.raises(ValueError, match="refused by KimiDeltaAttentionConfig"):
+        cfg.num_params(D_MODEL)
+
+
+def test_an_unknown_gate_structure_is_refused_by_the_config():
+    """
+    A typo in ``gate_structure`` must not read as ``"depthwise"``.
+
+    ``gate_structure`` is a plain ``str`` on the dataclass (a ``Literal`` is not enforced at
+    runtime and this config is built from YAML), so ``"low_rank"`` or ``"lowrank "`` would
+    otherwise fall through to whatever branch happens to be last.
+    """
+    with pytest.raises(ValueError, match="unknown gate structure"):
+        _cfg(gated_conv=True, gate_structure="low_rank").validate_gate_options()
 
 
 def test_config_reports_the_memory_cost_only_when_gated():

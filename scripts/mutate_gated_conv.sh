@@ -31,10 +31,30 @@ trap restore EXIT INT TERM
 
 caught=0
 survived=0
+noop=0
 
+# A MUTATION THAT DOES NOT APPLY IS THE WORST OUTCOME, AND IT LOOKS LIKE A RESULT.
+#
+# M12's perl regex stopped matching after the source was reworded, so the "mutation" was a no-op
+# and the run reported SURVIVED -- which reads as an unguarded defect that was not there. Reword it
+# the other way and the same no-op reports "caught", i.e. a green from a test that was never
+# challenged. Either way the number is fiction, and nothing in the output said so.
+#
+# So run_case now diffs the source against the pristine copy FIRST. No change means NO-OP, which is
+# a hard failure, not a verdict.
 run_case() {
   local name="$1" expect="$2"
   local out
+  if cmp -s "$SRC" "$SRC.orig" && cmp -s "$REC" "$REC.orig"; then
+    echo "  NO-OP     $name"
+    echo "            neither source file changed, so the pattern matched nothing."
+    echo "            A verdict here would be fiction whichever way it fell -- fix the pattern."
+    noop=$((noop + 1))
+    restore
+    cp "$SRC" "$SRC.orig"
+    cp "$REC" "$REC.orig"
+    return
+  fi
   out=$(PYTHONNOUSERSITE=1 PYTHONPATH=src "$PY" -m pytest -q "$TESTS" -p no:randomly 2>&1)
   if grep -qE "^[0-9]+ passed" <<<"$out" && ! grep -q "failed" <<<"$out"; then
     echo "  SURVIVED  $name"
@@ -54,6 +74,28 @@ run_case() {
   cp "$SRC" "$SRC.orig"
   cp "$REC" "$REC.orig"
 }
+
+# A MUTATION RESULT IS ONLY VALID FOR THE HOST IT RAN ON.
+#
+# M12 was CAUGHT on a laptop without 'fla' and SURVIVED on a GPU host with it -- the most
+# misleading shape a result can take, because the laptop reported a pass. Cause: without 'fla',
+# KimiDeltaAttention's 'assert has_fla()' fires before the check under test, so the laptop failed
+# for an unrelated reason. So the environment is printed with the verdicts, and every claim about
+# this script's output must name the host it came from.
+echo "Environment (a mutation verdict does not transfer between these):"
+PYTHONNOUSERSITE=1 PYTHONPATH=src "$PY" - <<'PYEOF'
+import torch
+try:
+    import fla
+    fla_v = fla.__version__
+except ImportError:
+    fla_v = None
+print(f"  torch {torch.__version__}  cuda={torch.cuda.is_available()}  fla={fla_v}")
+if fla_v is None:
+    print("  WARNING: fla is absent, so the 7 fla-gated tests SKIP and any mutation they")
+    print("           would have caught will report as SURVIVED-or-caught by accident.")
+PYEOF
+echo
 
 echo "Baseline (must be fully green before any mutation means anything):"
 base=$(PYTHONNOUSERSITE=1 PYTHONPATH=src "$PY" -m pytest -q "$TESTS" -p no:randomly 2>&1 | tail -1)
@@ -140,17 +182,33 @@ run_case "gate omitted from num_params" "test_depthwise_gate_costs_12288_params_
 
 # M12: a lowrank config without a rank is accepted instead of refused, so it builds something
 # unintended rather than failing.
+# M12: the config stops refusing a lowrank arm with no rank. Matched on the CONDITION line alone,
+# not on the multi-line raise, because the message text is the thing most likely to be reworded --
+# and a pattern that stops matching turns this into a no-op with a fictional verdict.
 echo "M12 lowrank without a rank is accepted"
-perl -0pi -e 's/        elif self\.gate_structure == "lowrank" and self\.gate_rank is None:\n            raise ValueError\("\x27gate_rank\x27 is required when gate_structure=\x27lowrank\x27"\)/        elif False:\n            pass/' "$REC"
+perl -pi -e 's/^        if self\.gate_structure == "lowrank" and self\.gate_rank is None:$/        if False:/' "$REC"
 run_case "missing rank accepted" "test_lowrank_without_a_rank_is_refused"
+
+# M13: the "gate options set but gated_conv is False" refusal is removed, so a config that reads as
+# a treatment arm in a YAML diff trains as the control.
+echo "M13 gate options without gated_conv are silently ignored"
+perl -pi -e 's/^            if self\.gate_rank is not None:$/            if False:/' "$REC"
+run_case "gate options ignored" "test_gate_options_without_gated_conv_are_refused"
 
 echo
 echo "=========================================="
 echo "caught   $caught"
 echo "SURVIVED $survived"
+echo "NO-OP    $noop"
+if [ "$noop" -gt 0 ]; then
+  echo
+  echo "$noop mutation(s) did not apply. Their verdicts are fiction, so the totals above do not"
+  echo "mean what they say. Fix the patterns before reading anything else here."
+  exit 1
+fi
 if [ "$survived" -gt 0 ]; then
   echo
   echo "A surviving mutation is an unguarded defect. Add the assertion before trusting the suite."
   exit 1
 fi
-echo "Every mutation was caught."
+echo "Every mutation applied, and every one was caught."

@@ -1136,7 +1136,13 @@ class KimiDeltaAttentionConfig(SequenceMixerConfig[KimiDeltaAttention]):
         :param d_model: The model dimensionality.
 
         :returns: The number of gate parameters.
+
+        :raises ValueError: Via :meth:`validate_gate_options`. An incoherent config must not be
+            able to produce a plausible-looking parameter count -- ``num_params`` is what solves
+            FFN widths for parameter matching, so a number returned here from a config that could
+            never build would move the anchor for every arm in the ledger.
         """
+        self.validate_gate_options()
         if not self.gated_conv:
             return 0
 
@@ -1258,6 +1264,42 @@ class KimiDeltaAttentionConfig(SequenceMixerConfig[KimiDeltaAttention]):
             for h in (key_dim, key_dim, value_dim)
         )
 
+    def validate_gate_options(self) -> None:
+        """
+        Check the gate options for coherence, without building anything.
+
+        **Separate from :meth:`build` on purpose, and it is not a style choice.**
+        :class:`KimiDeltaAttention`'s constructor opens with ``assert has_fla()``, and ``fla``
+        needs CUDA — so a check living inside ``build`` is unreachable on any machine without a
+        GPU, and no cheap test can show it fires. Mutation M12 exploited exactly that: deleting
+        the check produced an ``AssertionError`` on a laptop (which read as "caught, for the wrong
+        reason") and nothing at all on a GPU host, where
+        :class:`~olmo_core.nn.gated_convolution.GatedCausalConv1d`'s own identically-worded error
+        satisfied the test.
+
+        Callable on a bare config, so the refusals are verifiable for free.
+
+        :raises ValueError: If gate options are set while :attr:`gated_conv` is ``False`` — a
+            config that reads as a treatment arm in a diff and trains as the control — or if
+            ``gate_structure="lowrank"`` carries no :attr:`gate_rank`.
+        """
+        if not self.gated_conv:
+            if self.gate_rank is not None:
+                raise ValueError("'gate_rank' is set but 'gated_conv' is False")
+            if self.gated_conv_activation is not None:
+                raise ValueError("'gated_conv_activation' is set but 'gated_conv' is False")
+            return
+        if self.gate_structure not in ("depthwise", "lowrank"):
+            raise ValueError(f"unknown gate structure '{self.gate_structure}'")
+        if self.gate_structure == "lowrank" and self.gate_rank is None:
+            # Worded differently from GatedCausalConv1d's check for the same condition, so a test
+            # can tell which one fired. Both are real; this one fires first, on 'meta', before any
+            # convolution is allocated.
+            raise ValueError(
+                "'gate_rank' is required when gate_structure='lowrank' "
+                "(refused by KimiDeltaAttentionConfig before the module is constructed)"
+            )
+
     def build(
         self,
         d_model: int,
@@ -1278,22 +1320,11 @@ class KimiDeltaAttentionConfig(SequenceMixerConfig[KimiDeltaAttention]):
 
         :returns: The built module.
 
-        :raises ValueError: If ``gate_structure="lowrank"`` without a ``gate_rank``, or if gate
-            options are set while :attr:`gated_conv` is ``False`` (which would read as a
-            configured gate that silently does nothing).
+        :raises ValueError: Via :meth:`validate_gate_options`.
         """
         del layer_idx, n_layers, cache  # Unused
 
-        if not self.gated_conv:
-            # Fail loudly rather than ignore. A config carrying 'gate_structure="lowrank"' with
-            # 'gated_conv=False' looks like a gated arm in a YAML diff and trains as a plain one,
-            # which is the single cheapest way to run an ablation against itself.
-            if self.gate_rank is not None:
-                raise ValueError("'gate_rank' is set but 'gated_conv' is False")
-            if self.gated_conv_activation is not None:
-                raise ValueError("'gated_conv_activation' is set but 'gated_conv' is False")
-        elif self.gate_structure == "lowrank" and self.gate_rank is None:
-            raise ValueError("'gate_rank' is required when gate_structure='lowrank'")
+        self.validate_gate_options()
 
         return KimiDeltaAttention(
             d_model=d_model,

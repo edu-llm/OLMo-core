@@ -1,0 +1,50 @@
+fix(nn): three defects the L40S smoke found, and a mutation harness that lied
+
+Job 1677742 on oat-06 (L40S sm_89, torch 2.9.1+cu128, fla 0.5.1) failed all
+three GPU cells and one mutation. Every finding was real.
+
+1. THE GPU HARNESS NEVER REACHED THE MODULE. init_weights was passed a CPU
+   generator against CUDA parameters, so torch raised "Expected a cuda device
+   type for generator but found cpu" on the FIRST arm (kda-plain). Nothing about
+   the gated convolution was exercised on a GPU at all -- the run failed for a
+   reason that had nothing to do with what it was testing.
+
+2. THE M12 MUTATION WAS A NO-OP, AND ITS VERDICT WAS FICTION. Its perl pattern
+   stopped matching after the source was reworded, so no mutation was applied and
+   the script reported SURVIVED -- reading as an unguarded defect that did not
+   exist. Reword the source the other way and the identical no-op would have
+   reported "caught": a green from a test that was never challenged. Nothing in
+   the output distinguished the two.
+
+   run_case now diffs both source files against the pristine copy before running
+   the suite. No change is a NO-OP, which is a hard failure with its own counter,
+   not a verdict. The pattern is also now anchored on the condition line rather
+   than the message text, since messages are what get reworded.
+
+3. THE CONFIG'S REFUSALS WERE UNVERIFIABLE ON ANY CPU HOST. They lived inside
+   build(), which constructs KimiDeltaAttention, which opens with
+   assert has_fla(). So on a laptop the AssertionError fired before the check
+   under test -- pytest.raises(ValueError) failed for an unrelated reason and the
+   mutation read as caught. On a GPU host, GatedCausalConv1d's own
+   identically-worded ValueError satisfied the same assertion while the config
+   check was gone. The check was untestable in both directions.
+
+   Extracted to KimiDeltaAttentionConfig.validate_gate_options(), callable on a
+   bare config with no fla, and called from num_params as well as build so an
+   incoherent config cannot return a plausible parameter count. num_params is
+   what solves FFN widths for parameter matching, so a number from a config that
+   could never build would move the anchor for every arm. The config's message
+   now names itself, so a test can tell which of the two checks fired.
+
+Also adds M13 (the gated_conv=False refusal) and a test that an unknown
+gate_structure is refused rather than falling through to the last branch --
+gate_structure is a plain str on the dataclass and this config is built from
+YAML, so "low_rank" would otherwise read as "depthwise".
+
+The mutation script now prints torch/cuda/fla with its verdicts, because M12
+was caught on a laptop and survived on a GPU host: a mutation verdict does not
+transfer between environments and the output must say which one it came from.
+
+54 CPU tests, 7 fla-gated. 15 mutations, 0 survived, 0 no-op.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
