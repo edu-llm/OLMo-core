@@ -132,7 +132,7 @@ Both arms ran to completion on `gpu-8xa100`, 7630/7630 steps, 4,000,317,440 toke
 | PPL at that loss | **17.39** | 18.13 |
 | MFU (actual avg) | 27.82% | 28.04% |
 | wall clock | 3 h 16 m 44 s | 3 h 15 m 14 s |
-| `optim/matrix_norm_mean`, first → last | 26.947 → 26.947 | 26.946 → **117.879** |
+| `optim/matrix_norm_mean`, first → peak → last | 26.947 → 26.947 → 26.947 | 26.946 → **242.6** (step ~1350) → 117.879 |
 | `optim/radius_relative_drift_max` | 1.19e-07 | absent, as designed |
 
 **The constraint held, so the loss comparison means something.** Over all 7630 steps the drift
@@ -181,6 +181,29 @@ of it do not, and both are worth more than the headline number:
    mechanism is that Hyperball "overtakes WD as the learning rate decays", which implies the gap
    widens as the LR falls. Here it narrows. Whatever MuonH is winning on, this run does not
    support decay as the cause.
+
+### A hypothesis for the erosion, from the norm trajectory
+
+`optim/matrix_norm_mean` on the MuonW arm is not the monotone climb it would be easy to assume.
+It overshoots to **242.6 by step ~1350** — 9.0× MuonH's pinned 26.947, while the LR is still near
+peak — and then falls back monotonically for the remaining 82% of the run, ending at 117.9, or
+4.4×. Under decoupled weight decay the equilibrium norm is set by the ratio of step size to decay
+strength, so it tracks a target that the cosine schedule is dragging downward; the constraint arm
+has no such transient because `R` is fixed at `‖W_0‖_F` from step 0 (constant to twelve digits
+across the whole run — 26.946675515 to 26.946676034).
+
+So over the second half the two arms' weight geometries are *converging*, and the loss gap narrows
+over exactly the same stretch: −0.0704 at the widest, −0.0414 at the end, while the norm ratio goes
+9.0× → 4.4×. That is a coherent story — MuonW spends the decay phase approaching the norm scale
+MuonH was pinned to from the start, and gets some of MuonH's advantage back as it arrives.
+
+**It is a hypothesis and not a finding.** Two series moving together on one seed is a correlation,
+and the causal test is not in this data: it needs a MuonW arm swept over `weight_decay` so the
+equilibrium norm is set deliberately rather than incidentally, and ideally a MuonH arm whose `R` is
+scaled away from `‖W_0‖_F`. If it survives that, the interesting claim is not "Hyperball wins" but
+"the norm scale is the active variable and Hyperball is one way to set it" — which would also
+explain why the crossover lands at step 1818 with the LR barely moved, since by then MuonW is
+already far from the norm it started at.
 
 ### What this result does not establish
 
