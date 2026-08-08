@@ -1,0 +1,31 @@
+{
+  "epochs": 13,
+  "train_rows": 181652,
+  "unique_premises": 120377,
+  "total_premise_uses": 1517520,
+  "median_exposures": 26,
+  "mean_exposures": 163.8831338212449,
+  "max_exposures": 239226,
+  "thresholds": {
+    "80": {
+      "premises": 23267,
+      "share_premises": 0.19328443141131613,
+      "share_uses": 0.8652630607833834
+    },
+    "100": {
+      "premises": 20566,
+      "share_premises": 0.17084659029548835,
+      "share_uses": 0.8528039169170752
+    },
+    "200": {
+      "premises": 10531,
+      "share_premises": 0.0874834893708931,
+      "share_uses": 0.7827613474616479
+    },
+    "500": {
+      "premises": 4573,
+      "share_premises": 0.03798898460669397,
+      "share_uses": 0.68942221519321
+    }
+  }
+}

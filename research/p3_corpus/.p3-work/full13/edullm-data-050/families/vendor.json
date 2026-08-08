@@ -1,0 +1,31 @@
+{
+  "schema_version": "edullm-family/v1",
+  "family": "vendor",
+  "owner": "edullm-data@alphaaiengineering.com",
+  "license": {
+    "id": null,
+    "basis": "unknown"
+  },
+  "sources": [],
+  "defaults": {
+    "profile": "vendored/v1",
+    "mutability": "frozen",
+    "reproducibility": "logical",
+    "naming_exempt": true,
+    "preserve_upstream_layout": true,
+    "vendor_root": "TODO-verify per dataset: the prefix under which the upstream tree is reproduced verbatim. Required by vendored/v1, never defaulted, because it is the boundary between our bytes and theirs.",
+    "upstream": {
+      "name": "TODO-verify per dataset: upstream name preserved verbatim.",
+      "uri": "TODO-verify per dataset: the URI actually fetched from, not a homepage.",
+      "revision": "TODO-verify per dataset: upstream release tag, commit, or snapshot date - whatever upstream itself uses to identify this exact tree.",
+      "retrieved_at": "TODO-verify per dataset: set by publish(), never typed."
+    },
+    "sentinels": [],
+    "tags": {
+      "Project": "edullm"
+    },
+    "validation_required": false,
+    "validation_not_required_because": "A vendored tree keeps upstream's structure verbatim; imposing our split layout on it would destroy the byte-for-byte correspondence that makes it verifiable."
+  },
+  "notes": "Third-party data mirrored byte-for-byte, with upstream's own layout and filenames intact (vendor/dclm-hero-run-fasttext). The vendored/v1 profile grants two exemptions that exist nowhere else in this standard and both are deliberate: shard naming is EXEMPT because renaming destroys upstream verifiability - the whole point of a mirror is that our checksums can be compared against theirs - and the section 5 <split>-<NNNNN> convention would make that impossible. Content-addressed groups are exempt for the same underlying reason (section 5): mandating ordinals over a CAS forces the same block under two names, making copying the compliant path. The exemptions are from naming rules ONLY. Everything else applies in full: the manifest must still be exhaustive in both directions, every object still carries bytes and sha256, magic bytes must still agree with the declared format, and the honesty rule still holds - if upstream shipped headerless uint32 under a .npy extension, declare it headerless and note the lie in notes rather than propagating the claim. sentinels[] records upstream's own completion markers (_SUCCESS, .done, checksum files) so they are described rather than mistaken for payload; it defaults to empty because guessing them per-upstream would be fabrication. license.basis is 'unknown' with a null id AND THIS IS THE FAMILY WHERE THAT MATTERS MOST: vendored data is exactly the case where a convenient guess creates real legal exposure, and where 'inherited' is only defensible once somebody has actually read upstream's terms. Set id and switch basis to 'inherited' per dataset when that has happened, and not before. upstream{} is required by the profile and left as TODO-verify placeholders rather than invented, because a mirror whose upstream pointer is wrong is worse than no mirror. Note the section 7 Gate B warning that lands hardest here: sources[].uri rot is the failure mode this family cannot avoid - edullm-dataset-refhq is 404 today while a live manifest still cites it - so wu-fsck re-resolving upstream URIs nightly is what keeps a vendored tree honest after publication."
+}

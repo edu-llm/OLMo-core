@@ -1,0 +1,44 @@
+<html prefix="oo: http://omdoc.org/ontology#">
+<body>
+<div about="#T1" typeof="oo:Theorem">
+<span class="kw">theorem </span><span class="lab"><font>Th1</font></span>:
+<a NAME="T1"><span class="comment"><font>:: SAMPLE:1</font></span><br></a>
+<div class="add">
+ for <font title="b1">x</font> being set holds
+ <font title="b1">x</font> = <font title="b1">x</font> &amp; y &lt;= z
+ <span class="kw">by</span> <span class="lab">SAMPLE:2</span>;
+ <span class="comment">:: source comment must not enter plain text</span><br>
+</div>
+<div about="#PF1" typeof="oo:Proof">
+<span rel="oo:proves" resource="#T1"></span>
+<a title="1"><span class="kw">proof </span></a><span>proof payload is not a statement</span>
+<span class="kw">end;</span>
+</div>
+</div>
+
+<div about="#T2" typeof="oo:Theorem">
+<span class="kw">theorem </span>
+<a name="T2"><span class="comment"><font>:: SAMPLE:2</font></span><br></a>
+<div class="add">for q being set holds q = q;<br></div>
+</div>
+
+<div about="#DT1" typeof="oo:Definition">::
+<span class="kw">deftheorem </span><span class="lab"><font>DefThing</font></span>
+defines <a>F</a> <a>SAMPLE:def 1 : <br></a>
+<span class="hide">
+ for <font title="b1">x</font> being set holds F(<font title="b1">x</font>) = x &amp; x = x;<br>
+</span>
+</div>
+
+<div about="#S1" typeof="oo:Theorem"><div>
+<a name="S1"><span class="kw">scheme </span>
+<span class="comment"><font>:: SAMPLE:sch 1</font></span><br></a>
+<span class="lab"><font>SampleScheme</font></span>{
+<font>F<sub>1</sub></font>() <span class="kw">-&gt; </span>set } :<br>
+<div class="add">ex x being set st x = <font>F<sub>1</sub></font>()</div>
+<span class="kw">provided</span>
+<div class="add"><span class="lab">A1</span>: <font>F<sub>1</sub></font>() = <font>F<sub>1</sub></font>()</div>
+<div about="#PF2" typeof="oo:Proof"><span class="kw">proof </span>ignored<span class="kw">end;</span></div>
+</div></div>
+</body>
+</html>

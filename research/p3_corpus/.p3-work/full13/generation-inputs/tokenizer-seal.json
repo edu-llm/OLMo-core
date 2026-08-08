@@ -1,0 +1,9 @@
+{
+  "behavior_digest": "aa90434a251a434bbc938ddb3be6683a73fa94150377b5ccd2cbd7880358661a",
+  "eos_token_id": 151643,
+  "identity": "Qwen/Qwen2.5-0.5B",
+  "max_text_plus_eos_tokens": 16384,
+  "tokenizer_config_sha256": "ddb9f850ca6559a928bb25d511f72e3c6eff81395334a4e0eeec670448333d09",
+  "tokenizer_json_sha256": "3fd169731d2cbde95e10bf356d66d5997fd885dd8dbb6fb4684da3f23b2585d8",
+  "tokenizers_version": "0.22.2"
+}

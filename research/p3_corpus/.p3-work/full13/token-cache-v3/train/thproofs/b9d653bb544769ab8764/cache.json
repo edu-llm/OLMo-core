@@ -1,0 +1,146 @@
+{
+  "schema_version": "p3-encoding-cache-v3",
+  "code_version": "tokenize-corpus-v4",
+  "status": "complete",
+  "fingerprint": "b9d653bb544769ab876483de13efa1fedef51788acd6808b6f4bc4323107f996",
+  "build_fingerprint": "b9d653bb544769ab876483de13efa1fedef51788acd6808b6f4bc4323107f996",
+  "build": {
+    "schema_version": "p3-encoding-cache-v3",
+    "code_version": "tokenize-corpus-v4",
+    "source_jsonl": {
+      "name": "thproofs.jsonl",
+      "sha256": "87266b079608a42d4b2c4c3eaf49ec497ba29a31dc855aa5b78157ef0c64661b"
+    },
+    "tokenizer": {
+      "schema_version": "p3-tokenizer-four-part-seal-v1",
+      "tokenizer_artifact_id": "tokenizer/qwen25-vendored",
+      "tokenizer_artifact_version": "v1",
+      "tokenizer_file_sha256": {
+        "tokenizer.json": "3fd169731d2cbde95e10bf356d66d5997fd885dd8dbb6fb4684da3f23b2585d8",
+        "tokenizer_config.json": "ddb9f850ca6559a928bb25d511f72e3c6eff81395334a4e0eeec670448333d09"
+      },
+      "tokenizer_composite_sha256": "aa90434a251a434bbc938ddb3be6683a73fa94150377b5ccd2cbd7880358661a",
+      "tokenizers_version": "0.22.2",
+      "tokenizer_eos_token_id": 151643,
+      "tokenizer_pad_token_id": 151643,
+      "separator": "\n---\nGOAL ",
+      "separator_ids": [
+        10952,
+        15513,
+        969
+      ]
+    },
+    "eos_token_id": 151643
+  },
+  "source_jsonl": {
+    "name": "thproofs.jsonl",
+    "sha256": "87266b079608a42d4b2c4c3eaf49ec497ba29a31dc855aa5b78157ef0c64661b"
+  },
+  "documents": 584,
+  "tokens": 577342,
+  "straddling": 388,
+  "chunks": [
+    {
+      "index": 0,
+      "documents": {
+        "start": 0,
+        "end": 256
+      },
+      "tokens": {
+        "start": 0,
+        "end": 248930
+      },
+      "token_bytes": {
+        "start": 0,
+        "end": 995720
+      },
+      "offset_bytes": {
+        "start": 8,
+        "end": 2056
+      },
+      "tokens_sha256": "f09e71c1bc21de6c4a536efe62e6fb43f4b429ad72f978f610e88602d4f10c99",
+      "offsets_sha256": "9ef39ecd95f98e717fc5305df5d5e22d079fd922eafb4fe640d3be5ca3740f9a",
+      "source_rows_sha256": "7527cec982644844146346bff64f2b2f550d7d5bb187d4c168e9835f8481c926",
+      "straddling": 168
+    },
+    {
+      "index": 1,
+      "documents": {
+        "start": 256,
+        "end": 512
+      },
+      "tokens": {
+        "start": 248930,
+        "end": 492761
+      },
+      "token_bytes": {
+        "start": 995720,
+        "end": 1971044
+      },
+      "offset_bytes": {
+        "start": 2056,
+        "end": 4104
+      },
+      "tokens_sha256": "d4539bf6334f651f54cf00cf83b7acc6c3a62623558c0160f6632a854009d94c",
+      "offsets_sha256": "821e729014a2cfd3593d27127eec84f3b8e00f6d8e4b5755bf02e539ed513f01",
+      "source_rows_sha256": "66761cd7f97603917c577bc764c39af6e46efbc28814271a1f86fc9e841b8936",
+      "straddling": 166
+    },
+    {
+      "index": 2,
+      "documents": {
+        "start": 512,
+        "end": 584
+      },
+      "tokens": {
+        "start": 492761,
+        "end": 577342
+      },
+      "token_bytes": {
+        "start": 1971044,
+        "end": 2309368
+      },
+      "offset_bytes": {
+        "start": 4104,
+        "end": 4680
+      },
+      "tokens_sha256": "f72b61077816da7ee391bd511561e2d13398643342ceaef7d3d9540d812c1d23",
+      "offsets_sha256": "0cced96674e991700e8f156100cb6edf72816f05e8beed4ba1813d4a90d98bed",
+      "source_rows_sha256": "a539d08c0534df704b056c62c3b3f18de35243c6fd35bd92ae586b7a0fbaa0c5",
+      "straddling": 54
+    }
+  ],
+  "payloads": {
+    "tokens": {
+      "path": "tokens.u32le.bin",
+      "bytes": 2309368,
+      "sha256": "99cfc15c264ad919c74fec5c799ce76a70108467aa3bb739b8a9ddd1af857877",
+      "dtype": "uint32",
+      "byte_order": "little",
+      "documents": {
+        "start": 0,
+        "end": 584
+      },
+      "tokens": {
+        "start": 0,
+        "end": 577342
+      }
+    },
+    "offsets": {
+      "path": "offsets.u64le.bin",
+      "bytes": 4680,
+      "sha256": "c2f6b8ad38e598225b7156cdaec9dbf1fe996a4cd79c35ac08e3b1b4d4451f3d",
+      "dtype": "uint64",
+      "byte_order": "little",
+      "documents": {
+        "start": 0,
+        "end": 584
+      },
+      "tokens": {
+        "start": 0,
+        "end": 577342
+      }
+    }
+  },
+  "cache_root_sha256": "c4d9a007f4e543688d5e60ec52cb245c61ec34d6aa1899fecac823be86456ea8"
+}

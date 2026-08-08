@@ -1,0 +1,255 @@
+# =====================================================================================
+# eduLLM Dataset Standard v1 — Step 2 infrastructure, part 1 of 2: the airlock buckets.
+#
+# Implements DATASET-STANDARD.md §1 (the airlock) and §10 (governance table).
+#
+#   s3://edullm-landing   anything may write here. Nothing trains from here.
+#   s3://edullm-data      ONLY the validator role may write. Everyone reads.
+#
+# This template creates BUCKETS ONLY. It deliberately creates:
+#   * no IAM role  — iam:CreateRole is DENIED by the <PERMISSION_BOUNDARY> permissions
+#                    boundary. The validator identity is the pre-existing role
+#                    <BATCH_JOB_ROLE> (§1 "reuse, don't create").
+#   * no bucket policy — the edullm-data Deny statement lives in 02-bucket-policy.json and
+#                    is applied out-of-band with `s3api put-bucket-policy`. Keeping it out
+#                    of CFN means a bad policy can be repaired with one call instead of a
+#                    stack rollback, and a stack DELETE can never silently unlock the
+#                    published bucket.
+#   * no KMS key   — SSE-S3 (AES256) is the decided encryption mode; see the rationale
+#                    block on edullm-data below. Not a placeholder.
+#
+# ---------------------------------------------------------------------------------------
+# NOTE ON LIFECYCLE TRANSITIONS AND THE 128 KB SIDECAR TRAP (§10)
+#
+# §10 requires: "Never lifecycle-transition an object under 128 KB." Standard-IA and
+# Glacier IR bill a 128 KB minimum, so a 2 KB sidecar in IA bills as 128 KB — 12.8x
+# inflation, worse than STANDARD.
+#
+# Two independent protections are in force here:
+#   1. NO TRANSITIONS ARE CONFIGURED AT ALL in this template. Neither bucket has a
+#      Transition or NoncurrentVersionTransition rule. Nothing can be tiered.
+#   2. AWS now defaults `TransitionDefaultMinimumObjectSize` to `all_storage_classes_128K`
+#      on newly-created lifecycle configurations, which means that even if a transition
+#      rule is added later WITHOUT an explicit ObjectSizeGreaterThan filter, objects under
+#      128 KB are skipped by default. That default IS the sidecar protection §10 asks for.
+#      It is a property of the lifecycle configuration, not of the bucket, and CloudFormation
+#      does not expose it as a settable property on AWS::S3::Bucket — so it is inherited,
+#      not asserted, and must be re-checked with
+#         aws s3api get-bucket-lifecycle-configuration --bucket edullm-data
+#      (look for TransitionDefaultMinimumObjectSize) after any lifecycle change.
+#   If a transition is ever genuinely needed, ALSO add an explicit
+#   `ObjectSizeGreaterThan: 131072` filter — belt and braces, per §10.
+#
+# ---------------------------------------------------------------------------------------
+# NOTE ON DELETION POLICY
+#
+# Both buckets carry DeletionPolicy/UpdateReplacePolicy Retain. §10: "CDK/CFN auto-delete
+# buckets are never a dataset home — aws-cdk:auto-delete-objects=true empties the bucket
+# when the stack dies." Retain is the inverse of that failure mode: deleting this stack
+# leaves the data intact and orphans the buckets. Teardown is therefore deliberately
+# manual — see infra/DEPLOY.md.
+# =====================================================================================
+
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >-
+  eduLLM Dataset Standard v1 airlock buckets: edullm-landing (write-anything, 14-day
+  expiry, EventBridge-enabled) and edullm-data (validator-write-only, versioned,
+  no expiry). Buckets only - no IAM, no bucket policy, no KMS key.
+
+Resources:
+
+  # -----------------------------------------------------------------------------------
+  # edullm-data — the published bucket. Everyone reads; only the validator role writes.
+  # §10 row-by-row: Versioning on | Deny-delete all but break-glass (02-bucket-policy.json)
+  #                 | Expiry none | Abort incomplete MPU 7d | Transitions none
+  #                 | Encryption SSE-S3 (AES256) | Tags Project/Owner/DatasetId
+  # -----------------------------------------------------------------------------------
+  EdullmDataBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: edullm-data
+
+      # §10: Versioning "on". Together with the deny-delete bucket policy and the airlock,
+      # this is where immutability comes from. §10 explains at length why Object Lock is
+      # NOT used (protects a version not a path; blocks lifecycle; irreversible).
+      VersioningConfiguration:
+        Status: Enabled
+
+      # ---------------------------------------------------------------------------------
+      # Encryption: SSE-S3 (AES256). This is a DECIDED choice, not a placeholder.
+      #
+      # Both SSE-S3 and SSE-KMS encrypt at rest with AES-256; the difference is key
+      # custody. SSE-KMS buys revocation (disable the key -> data unreadable) and a
+      # CloudTrail record of every decrypt. Neither is needed here:
+      #   * The standard's No-PII assumption (document header) means the threat model is
+      #     accidental exposure and integrity, not confidentiality of personal data.
+      #     AES256 + PublicAccessBlock + the airlock covers that.
+      #   * A CMK adds a SECOND authorization system (the key policy) on top of IAM.
+      #     Readers need kms:Decrypt; get the key policy slightly wrong and the published
+      #     bucket becomes unreadable while the bytes are perfectly intact. For a bucket
+      #     whose entire purpose is being readable by trainers, that failure is worse than
+      #     AWS-managed key custody.
+      #   * kms:CreateKey / kms:PutKeyPolicy were never smoke-tested (see §1's verified
+      #     permissions table). Building on unverified permissions is what this standard
+      #     says not to do.
+      #
+      # BucketKeyEnabled is intentionally omitted: it only reduces KMS request costs and
+      # is a no-op under AES256.
+      #
+      # If this is ever revisited: set SSEAlgorithm: aws:kms + KMSMasterKeyID: <arn> +
+      # BucketKeyEnabled: true, and grant kms:GenerateDataKey to the validator role and
+      # kms:Decrypt to every reader. Nothing in the design blocks the switch.
+      # ---------------------------------------------------------------------------------
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+      # ACLs off — the bucket policy is the only access mechanism. Keeps the airlock's
+      # single point of enforcement actually single.
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+
+      LifecycleConfiguration:
+        Rules:
+          # §10: "Abort incomplete MPU: 7 d" for edullm-data. Note this is hygiene here,
+          # unlike on landing where it is load-bearing (§10) — nothing on edullm-data is
+          # sealed by a manifest arrival, because the validator is the only writer.
+          # This rule has NO Prefix/Filter, so it applies to every object in the bucket.
+          # There is deliberately NO ExpirationInDays and NO NoncurrentVersionExpiration:
+          # §10 says "Expiry: none" for the published bucket. Consequence to be aware of:
+          # with versioning on and no noncurrent expiry, superseded versions accumulate
+          # forever. That is the intended trade (a published dataset must never evaporate);
+          # noncurrent-version growth is monitored by wu-fsck (Gate B, §7, weekly) and S3 Inventory
+          # (§13 step 10), not by lifecycle.
+          - Id: abort-incomplete-multipart-uploads-7d
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+      # Bucket-level cost-allocation / ownership tags. §10's Tags row
+      # (Project, Owner, DatasetId) describes per-OBJECT tags written by the validator —
+      # DatasetId is meaningless at the bucket level.
+      Tags:
+        - Key: Project
+          Value: edullm
+        - Key: Owner
+          Value: edullm-data@alphaaiengineering.com
+        - Key: ManagedBy
+          Value: cloudformation/edullm-data/infra/01-buckets.yaml
+
+  # -----------------------------------------------------------------------------------
+  # edullm-landing — the only door. Any producer role may write. Nothing trains from here.
+  # §10 row-by-row: Versioning off | Expiry 14 d | Abort incomplete MPU 1 d (LOAD-BEARING)
+  #                 | Encryption SSE-S3 | Tags Project
+  # Plus EventBridgeConfiguration so a manifest.json arrival can fire the validator (§1).
+  # -----------------------------------------------------------------------------------
+  EdullmLandingBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: edullm-landing
+
+      # §10: Versioning "off". VersioningConfiguration is OMITTED rather than set to
+      # Suspended: S3 has three states (never-enabled / Enabled / Suspended) and
+      # "Suspended" is only reachable from "Enabled". Passing Status: Suspended on a bucket
+      # that was never versioned is rejected. Omitting the property leaves the bucket in
+      # the never-enabled state, which is what §10 means by "off".
+      # This is also correct on the merits: landing objects are written with
+      # IfNoneMatch:"*" (§6) and expire in 14 days, so there is nothing to version.
+
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+
+      LifecycleConfiguration:
+        Rules:
+          # §10: landing expiry 14 d. Rejected bytes "expire in 14 days" (§7), and a
+          # published dataset's landing copy is disposable the moment promotion succeeds.
+          - Id: expire-landing-objects-14d
+            Status: Enabled
+            ExpirationInDays: 14
+
+          # §10: "AbortIncompleteMultipartUpload on landing is LOAD-BEARING, not hygiene:
+          # an in-flight upload is invisible to LIST, so without it a manifest can be
+          # sealed while a member is still uploading. The audit found 116 orphaned uploads
+          # in one bucket, several against a prefix with zero completed objects."
+          # Do not raise this number without re-reading §6 "Order".
+          - Id: abort-incomplete-multipart-uploads-1d
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+
+      # EventBridge notification is applied OUT OF BAND, not here. CloudFormation rejects
+      # `NotificationConfiguration: {EventBridgeConfiguration: {}}` at template-validation
+      # time ("Validation failed with 1 error(s)", reproduced with a 6-line minimal
+      # template) even though the raw `s3api put-bucket-notification-configuration` API
+      # accepts the identical config — a real CFN-vs-API discrepancy, the exact reason
+      # smoke-testing beats trusting either surface. It is applied via the API in
+      # DEPLOY.md step 1b, the same pattern already used for the bucket policy. This keeps
+      # the event wiring's lifecycle decoupled from the stack too.
+      # `s3:PutBucketNotificationConfiguration` is verified-allowed (§1 table).
+
+      Tags:
+        - Key: Project
+          Value: edullm
+        - Key: Owner
+          Value: edullm-data@alphaaiengineering.com
+        - Key: ManagedBy
+          Value: cloudformation/edullm-data/infra/01-buckets.yaml
+
+Outputs:
+
+  DataBucketName:
+    Description: Name of the published (read-only-to-everyone) dataset bucket.
+    Value:
+      Ref: EdullmDataBucket
+    Export:
+      Name: edullm-data-bucket-name
+
+  DataBucketArn:
+    Description: ARN of the published dataset bucket. Target of 02-bucket-policy.json.
+    Value:
+      Fn::GetAtt:
+        - EdullmDataBucket
+        - Arn
+    Export:
+      Name: edullm-data-bucket-arn
+
+  LandingBucketName:
+    Description: Name of the landing (airlock inbox) bucket.
+    Value:
+      Ref: EdullmLandingBucket
+    Export:
+      Name: edullm-landing-bucket-name
+
+  LandingBucketArn:
+    Description: ARN of the landing bucket. Source of the Object Created events matched by 04-event-wiring.yaml.
+    Value:
+      Fn::GetAtt:
+        - EdullmLandingBucket
+        - Arn
+    Export:
+      Name: edullm-landing-bucket-arn

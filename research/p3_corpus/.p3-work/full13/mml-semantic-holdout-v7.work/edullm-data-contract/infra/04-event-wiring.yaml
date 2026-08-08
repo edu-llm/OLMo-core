@@ -1,0 +1,280 @@
+# =====================================================================================
+# eduLLM Dataset Standard v1 — Step 2 infrastructure, part 2 of 2: event wiring.
+#
+# Implements DATASET-STANDARD.md §1 "Event wiring — the verified path" and §13 step 9:
+#
+#   1. EventBridgeConfiguration on edullm-landing   <- done in 01-buckets.yaml
+#   2. a rule filtering detail.object.key suffix `manifest.json`   <- THIS FILE
+#   3. target = the Batch queue, BatchParameters.JobDefinition =
+#      <JOB_DEFINITION>, RoleArn = <BATCH_JOB_ROLE>
+#
+# Per §6 "Order", the per-group manifest.json is written LAST and is the commit point.
+# Its arrival is therefore the only correct trigger: dataset.json arriving means "a version
+# was reserved", payload objects arriving mean "an upload is in progress", and only
+# manifest.json means "this claim is complete, go check it".
+#
+# NO IAM ROLE IS CREATED HERE. iam:CreateRole is denied by <PERMISSION_BOUNDARY> (§1).
+# The rule reuses the existing <BATCH_JOB_ROLE> role — see the
+# large caveat on RuleTargetRoleArn below, which is the single biggest deployment risk
+# in this template.
+#
+# =====================================================================================
+# KNOWN LIMITATION (read this before enabling the rule)
+# =====================================================================================
+#
+# EventBridge CANNOT express a container override. The `BatchParameters` structure — in
+# both the PutTargets API and the CloudFormation AWS::Events::Rule Target schema — has
+# exactly four members:
+#
+#     BatchParameters:
+#       ArrayProperties: { Size }
+#       JobDefinition
+#       JobName
+#       RetryStrategy: { Attempts }
+#
+# There is no ContainerOverrides member, no Parameters member, and no way to reach either
+# one via Input / InputPath / InputTransformer on a Batch target. Consequently a job
+# submitted by this rule uses the job definition's defaults for BOTH of the things it
+# needs and does not have:
+#
+#   (a) RESOURCES. §1: "vcpus and memory are null on the definition, so every submission
+#       must supply them in the override or the job fails to place." Revision 1 of
+#       <JOB_DEFINITION> has both null. The override this rule cannot send
+#       is exactly the one from §1:
+#
+#           --container-overrides '{"command":["python","-m","edullm_data.validate",
+#                                              "--landing-uri","s3://edullm-landing/<prefix>/"],
+#                                   "vcpus":4,"memory":8192}'
+#
+#   (b) THE WORK ITEM. Even with resources solved, the rule cannot tell the container WHICH
+#       landing prefix to validate — `detail.object.key` from the event has nowhere to go.
+#       The definition's default command is
+#       `python -c 'print("<JOB_DEFINITION>: no command override was supplied")'`
+#       (§1), so an event-triggered job would, at best, print that and exit 0 — a validator
+#       that silently blesses nothing while looking healthy. That is the exact class of
+#       decorative mechanism this standard exists to eliminate.
+#
+# THEREFORE THE RULE IS CREATED DISABLED BY DEFAULT (see the RuleState parameter). An
+# enabled rule whose every invocation fails at SubmitJob produces failures that are
+# invisible without a DLQ, which is worse than no rule at all. Deploy it disabled, build a
+# dispatcher, then flip RuleState to ENABLED.
+#
+# RECOMMENDED FIX — a small dispatch wrapper, in preference order:
+#
+#   1. PREFERRED: EventBridge -> tiny dispatcher -> batch:SubmitJob with a full
+#      --container-overrides (vcpus, memory, and a command carrying the landing prefix
+#      derived from detail.object.key). ~20 lines. It is the only option that solves (a)
+#      and (b) together and preserves per-dataset job names for observability.
+#      Blocked on one admin ask: the dispatcher needs an execution role, and
+#      iam:CreateRole is denied. This is the same "one-line ask" as the dedicated
+#      DatasetValidator role in §1 / §13, so ask for both at once.
+#
+#   2. NO ADMIN NEEDED, UNTESTED PERMISSION: register a revision 2 of
+#      <JOB_DEFINITION> that bakes in resourceRequirements (VCPU 4,
+#      MEMORY 8192) and a default command that SELF-DISCOVERS work — i.e. lists
+#      s3://edullm-landing/ for manifests with no sibling _REJECTED.json and no
+#      corresponding _catalog entry, then validates each. Self-discovery dissolves problem
+#      (b) entirely: the job needs no input, so the fact that EventBridge cannot send one
+#      stops mattering, and the rule becomes a pure "wake up now" signal.
+#      Requires batch:RegisterJobDefinition, which §1 lists as "assume denied" — it was
+#      NEVER smoke-tested, and §1 also warns the IAM simulator lied about ten actions that
+#      actually work. Smoke-test it before assuming; it is one call.
+#
+#   3. NO ADMIN, NO NEW PERMISSIONS, WORKS TODAY: skip event dispatch and run the
+#      self-discovering sweep from option 2 as a periodically-submitted Batch job (submitted
+#      with the full --container-overrides from DEPLOY.md, which CAN express everything).
+#      Costs latency — a sweep interval instead of seconds — and §11 already budgets
+#      "seconds + ~1-2 min queue wait" for small datasets, so a 5-minute sweep is within
+#      the standard's own tolerance. Keep this rule deployed-but-disabled as the
+#      documented upgrade path.
+#
+# ALSO RECOMMENDED, NOT CREATED HERE: a DeadLetterConfig on the target (an SQS queue) so
+# failed invocations are visible. Omitted because sqs:CreateQueue is not in §1's verified
+# table, and this template creates nothing unverified. Add it when option 1 lands:
+#     Targets[0].DeadLetterConfig.Arn: <queue-arn>
+# Until then, watch the rule's FailedInvocations CloudWatch metric.
+#
+# =====================================================================================
+
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >-
+  eduLLM Dataset Standard v1 event wiring: EventBridge rule matching Object Created on
+  s3://edullm-landing for keys ending in manifest.json, targeting the
+  <JOB_QUEUE> Batch queue. Created DISABLED by default - EventBridge
+  cannot send the vcpus/memory container override the job definition requires. See the
+  KNOWN LIMITATION block at the top of this file.
+
+Parameters:
+
+  RuleState:
+    Type: String
+    Default: DISABLED
+    AllowedValues:
+      - DISABLED
+      - ENABLED
+    Description: >-
+      Leave DISABLED until a dispatch wrapper exists (see KNOWN LIMITATION). Every
+      invocation of the enabled rule as written will fail at SubmitJob, because revision 1
+      of <JOB_DEFINITION> has null vcpus and null memory and EventBridge
+      cannot override them. Flip to ENABLED only once the target can actually place a job.
+
+  LandingBucketName:
+    Type: String
+    Default: edullm-landing
+    Description: Bucket whose Object Created events are matched. Must have EventBridgeConfiguration enabled (01-buckets.yaml).
+
+  ManifestSuffix:
+    Type: String
+    Default: manifest.json
+    Description: >-
+      Key suffix that marks the commit point (DATASET-STANDARD.md §6 "Order" - the
+      per-group manifest.json is written last).
+
+  BatchJobQueueArn:
+    Type: String
+    Default: arn:aws:batch:us-east-1:<ACCOUNT_ID>:job-queue/<JOB_QUEUE>
+    Description: ARN of the existing, enabled Batch job queue. Verified live in §1.
+
+  BatchJobDefinition:
+    Type: String
+    Default: <JOB_DEFINITION>
+    Description: >-
+      Existing job definition (revision 1, type container, image digest-pinned). Reused
+      rather than registered - §1 "Running the validator without registering a job
+      definition". Unversioned name intentionally resolves to the highest active revision,
+      so recommended-fix option 2 (a revision with baked-in resourceRequirements) needs no
+      change here.
+
+  RuleTargetRoleArn:
+    Type: String
+    Default: arn:aws:iam::<ACCOUNT_ID>:role/<EVENTBRIDGE_INVOKE_ROLE>
+    Description: >-
+      Role EventBridge assumes to call batch:SubmitJob. MUST be assumable by
+      events.amazonaws.com. <BATCH_JOB_ROLE> is NOT (its trust policy
+      allows only ecs-tasks.amazonaws.com — verified), so it cannot be used here even though
+      the job RUNS as that role via the job definition's jobRoleArn. <EVENTBRIDGE_INVOKE_ROLE>
+      trusts events.amazonaws.com (verified) and is the correct invocation identity. The
+      writer to edullm-data is unchanged — it is still the job's jobRoleArn.
+
+Resources:
+
+  EdullmLandingManifestRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: edullm-landing-manifest-created
+      Description: >-
+        s3://edullm-landing Object Created with key suffix manifest.json -> submit the
+        dataset validator (Gate A) on the <JOB_QUEUE> queue.
+      State:
+        Ref: RuleState
+
+      # Matches the S3 -> EventBridge "Object Created" event shape. This fires for
+      # PutObject, POST, CompleteMultipartUpload and CopyObject alike, which is correct:
+      # §6 allows the manifest to be written by any of them.
+      #
+      # Suffix matching deliberately over-matches slightly: `foo-manifest.json` matches too.
+      # That is safe and preferable to a brittle exact-key pattern, because a dataset has
+      # ONE manifest PER GROUP (§4 "Why the profile is on the group") at
+      # unpredictable prefixes like tokens/manifest.json and sidecars/manifest.json.
+      # Gate A re-derives everything from dataset.json anyway (§7 "recompute, never read"),
+      # so a spurious trigger costs one queue wait and a fast no-op, not a bad publish.
+      #
+      # NO FEEDBACK LOOP: the validator's only write back to landing is
+      # `_REJECTED.json` (§7), which does not end in `manifest.json`. Do not ever name a
+      # validator-authored landing object `*manifest.json` or this rule becomes recursive.
+      #
+      # NOTE: a multi-group dataset fires this rule once PER GROUP manifest, so Gate A must
+      # be idempotent and must tolerate being invoked before the last group has sealed.
+      # That is a validator-side requirement, not something the pattern can fix.
+      EventPattern:
+        source:
+          - aws.s3
+        detail-type:
+          - Object Created
+        detail:
+          bucket:
+            name:
+              - Ref: LandingBucketName
+          object:
+            key:
+              - suffix:
+                  Ref: ManifestSuffix
+
+      Targets:
+        - Id: validator-batch-queue
+
+          # For a Batch target the target Arn is the JOB QUEUE arn; the job definition
+          # travels in BatchParameters.
+          Arn:
+            Ref: BatchJobQueueArn
+
+          # CAVEAT — THE LOAD-BEARING UNVERIFIED FACT IN THIS TEMPLATE.
+          # §1 records that attaching this target returned FailedEntryCount: 0. That proves
+          # the target was ACCEPTED; it does not prove EventBridge can USE it, because
+          # PutTargets does not validate that the role is assumable by events.amazonaws.com.
+          # And §1 also records that this role's "trust policy allows only
+          # ecs-tasks.amazonaws.com — no human, and no intern role, can assume it" — which
+          # is the fact the whole airlock rests on. events.amazonaws.com is not
+          # ecs-tasks.amazonaws.com, so this sts:AssumeRole is expected to FAIL at
+          # invocation time with AccessDenied, surfacing only as the rule's
+          # FailedInvocations metric.
+          #
+          # Do NOT "fix" this by adding events.amazonaws.com to the role's trust policy
+          # without thinking hard: that widens the identity that is the sole writer to
+          # edullm-data, and iam:UpdateAssumeRolePolicy is not in §1's verified table
+          # either. The right fix is a dedicated invocation role, which is part of the same
+          # one-line admin ask as recommended-fix option 1.
+          # This is the second independent reason the rule ships DISABLED.
+          RoleArn:
+            Ref: RuleTargetRoleArn
+
+          BatchParameters:
+            JobDefinition:
+              Ref: BatchJobDefinition
+
+            # JobName is REQUIRED by the API and must be a literal — EventBridge cannot
+            # template it from the event (no InputTransformer access to BatchParameters), so
+            # it cannot carry the dataset id the way the hand-submitted
+            # `--job-name validate-eval-mcq-arc-v1` in §1 does. Batch permits duplicate job
+            # names (job ids stay unique), so a static name is legal, just less legible in
+            # the console. Per-dataset names come back with the dispatcher (option 1).
+            JobName: edullm-validate-landing-manifest
+
+            # One attempt. Gate A failures are CLAIM failures (§7) — a bad manifest is not
+            # transient and retrying re-fails identically while burning queue capacity. The
+            # correct response to a rejection is `_REJECTED.json` plus a 14-day expiry
+            # (§7), not a retry. Raise this only for genuinely transient infrastructure
+            # faults, and only alongside idempotency in the validator.
+            RetryStrategy:
+              Attempts: 1
+
+Outputs:
+
+  RuleName:
+    Description: Name of the EventBridge rule.
+    Value:
+      Ref: EdullmLandingManifestRule
+
+  RuleArn:
+    Description: ARN of the EventBridge rule.
+    Value:
+      Fn::GetAtt:
+        - EdullmLandingManifestRule
+        - Arn
+
+  RuleStateDeployed:
+    Description: >-
+      State this stack deployed the rule in. DISABLED is correct until a dispatch wrapper
+      can supply vcpus/memory and the landing prefix - see the KNOWN LIMITATION block in
+      infra/04-event-wiring.yaml.
+    Value:
+      Ref: RuleState
+
+  DispatchGapSummary:
+    Description: >-
+      One-line statement of the gap, so it is visible in stack outputs and not only in
+      comments: EventBridge BatchParameters cannot express containerOverrides, so an
+      event-submitted job gets neither vcpus/memory (both null on revision 1, so it cannot
+      place) nor the landing prefix to validate. A dispatch wrapper is required.
+    Value: EventBridge-cannot-send-containerOverrides-dispatch-wrapper-required

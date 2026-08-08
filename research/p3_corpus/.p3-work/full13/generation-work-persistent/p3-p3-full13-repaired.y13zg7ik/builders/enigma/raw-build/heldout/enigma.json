@@ -1,0 +1,16 @@
+{
+ "facts": [],
+ "seed": 20260801,
+ "corpus": "enigma",
+ "family": "atp",
+ "shards": [
+  "enigma"
+ ],
+ "statement_hashes": [],
+ "canonicalization": {
+  "family": "atp",
+  "scheme": "tptp-layout-v2",
+  "version": 2
+ },
+ "policy": "premises cited 1-2x; citing proofs, all alternate proofs, and exact statement aliases removed"
+}

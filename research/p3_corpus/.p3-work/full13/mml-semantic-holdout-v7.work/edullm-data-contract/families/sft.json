@@ -1,0 +1,40 @@
+{
+  "schema_version": "edullm-family/v1",
+  "family": "sft",
+  "owner": "edullm-data@alphaaiengineering.com",
+  "license": {
+    "id": null,
+    "basis": "unknown"
+  },
+  "sources": [],
+  "defaults": {
+    "profile": "sft-conversations/v1",
+    "mutability": "frozen",
+    "reproducibility": "logical",
+    "format": {
+      "container": "jsonl",
+      "codec": "gzip"
+    },
+    "extension": ".jsonl.gz",
+    "shard_name_template": "<split>-<NNNNN>.jsonl.gz",
+    "partitions": [
+      {
+        "name": "train",
+        "by": "path",
+        "glob": "train-*.jsonl.gz"
+      },
+      {
+        "name": "val",
+        "by": "path",
+        "glob": "val-*.jsonl.gz"
+      }
+    ],
+    "coverage": "partition",
+    "count_unit": "rows",
+    "tags": {
+      "Project": "edullm"
+    },
+    "validation_required": true
+  },
+  "notes": "Instruction and conversation data for supervised fine-tuning: message-shaped records, one conversation per row. The sft-conversations/v1 profile requires a messages[] schema, a heldout partition, and a dedup plus leakage report - the heldout requirement is why partitions are defaulted here rather than left to each dataset, since an SFT set with no holdout cannot support any claim about the model trained on it, and section 7 notes the profiles legitimately disagree about split names (pretrain-tokens has no test, eval-items is entirely test, this family requires a heldout). Every partition declares rows, so one scan falsifies all of them at once, and that is how a train/heldout overlap gets caught rather than discovered six weeks later in a suspiciously good eval number. Storage default is gzipped JSONL because these sets are small and human-inspectable; count unit is rows, not tokens, because the tokenizer is a property of the training run and not of this artifact - deliberately no tokenizer block in this family. license.basis is an honest 'unknown': this family will mix upstream releases whose terms are known (sft/tulu3-mix inherits ODC-By-1.0), synthetic generations whose terms depend on the generating model's usage policy, and human-written pedagogical data whose terms nobody has written down - and section 3 is explicit that a false 'MIT' is worth less than a queryable unknown. Every dataset must override with its actual basis: 'inherited' for upstream mixes, 'declared' for anything generated in-house under a stated policy. Names carry the task plus the scale that defines it (sft/pedagogical-tutoring-100students) or preserve the upstream mix name verbatim (sft/tulu3-mix) rather than inventing one - see section 2. NOTE on the standard's No-PII assumption (document header): tutoring and pedagogical conversation data is the family most likely to break it. Synthetic student personas are in scope; real student records or parent communications are NOT covered by this standard and need a revision before publishing."
+}

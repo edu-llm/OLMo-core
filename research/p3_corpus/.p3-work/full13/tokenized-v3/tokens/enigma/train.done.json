@@ -1,0 +1,97 @@
+{
+  "schema_version": "p3-packed-group-v3",
+  "code_version": "tokenize-corpus-v4",
+  "cross_split_binding_schema_version": "p3-token-cross-split-binding-v1",
+  "fingerprint": "3dc7225111cca6fecfdfd68171b338cac76e33feb24a61403273c0935c12bb82",
+  "build": {
+    "schema_version": "p3-packed-group-v3",
+    "code_version": "tokenize-corpus-v4",
+    "source_jsonl": {
+      "family": "enigma",
+      "name": "enigma.jsonl",
+      "sha256": "0efd52a5679429f2405e9939322a8405a67143f145058fb0f3d12a754330ad49",
+      "schema": "atp-v2"
+    },
+    "tokenizer": {
+      "schema_version": "p3-tokenizer-four-part-seal-v1",
+      "tokenizer_artifact_id": "tokenizer/qwen25-vendored",
+      "tokenizer_artifact_version": "v1",
+      "tokenizer_file_sha256": {
+        "tokenizer.json": "3fd169731d2cbde95e10bf356d66d5997fd885dd8dbb6fb4684da3f23b2585d8",
+        "tokenizer_config.json": "ddb9f850ca6559a928bb25d511f72e3c6eff81395334a4e0eeec670448333d09"
+      },
+      "tokenizer_composite_sha256": "aa90434a251a434bbc938ddb3be6683a73fa94150377b5ccd2cbd7880358661a",
+      "tokenizers_version": "0.22.2",
+      "tokenizer_eos_token_id": 151643,
+      "tokenizer_pad_token_id": 151643,
+      "separator": "\n---\nGOAL ",
+      "separator_ids": [
+        10952,
+        15513,
+        969
+      ]
+    },
+    "encoding_cache_fingerprint": "54c6e026c2dfa619cb74fb5a06cd620eccf4e6701f540f38fc2fc370ad499523",
+    "packing": {
+      "algorithm": "largest-fit-decreasing-v1",
+      "split": "train",
+      "packed": true,
+      "sequence_length": 16384,
+      "shard_tokens": 250000000,
+      "tokens_dtype": "uint32",
+      "byte_order": "little",
+      "eos_token_id": 151643,
+      "pad_token_id": 151643,
+      "separator": "\n---\nGOAL ",
+      "separator_search": "---\nGOAL",
+      "separator_ids": [
+        10952,
+        15513,
+        969
+      ]
+    },
+    "corpus_generation": {
+      "schema_version": "p3-sealed-corpus-manifest-v1",
+      "logical_root_sha256": "60bb1867feb9c02ffe05e5ab388f6509fd785c77228010f676a1795375835148",
+      "manifest_root_sha256": "60bb1867feb9c02ffe05e5ab388f6509fd785c77228010f676a1795375835148",
+      "sealed_corpus_manifest": true
+    }
+  },
+  "cache_fingerprint": "54c6e026c2dfa619cb74fb5a06cd620eccf4e6701f540f38fc2fc370ad499523",
+  "cache_root_sha256": "2f85b439265025af01b567ecfccda74a58e55bb85be472da70871ed73979cc0d",
+  "corpus_generation": {
+    "schema_version": "p3-sealed-corpus-manifest-v1",
+    "logical_root_sha256": "60bb1867feb9c02ffe05e5ab388f6509fd785c77228010f676a1795375835148",
+    "manifest_root_sha256": "60bb1867feb9c02ffe05e5ab388f6509fd785c77228010f676a1795375835148",
+    "sealed_corpus_manifest": true
+  },
+  "name": "enigma",
+  "documents": 24652,
+  "source_documents": 24652,
+  "instances": 9615,
+  "real_tokens": 157291010,
+  "padding_fraction": 0.001531,
+  "dropped_over_length": 0,
+  "straddling": 23084,
+  "separator_ids": [
+    10952,
+    15513,
+    969
+  ],
+  "eos_token_id": 151643,
+  "pad_token_id": 151643,
+  "shards": [
+    {
+      "path": "tokens/enigma/train-00000.u32le.bin",
+      "instances": 9615,
+      "tokens": 157532160,
+      "bytes": 630128640,
+      "sha256": "6950b5a8f5cb6257858dc100e4d2675a68223d389146aa6f38c93112e44fdf6d",
+      "tokens_dtype": "uint32",
+      "byte_order": "little"
+    }
+  ],
+  "resumed_shards": 0,
+  "resumed_group": false,
+  "completion_sha256": "1efdf765b9efbc1ec4941e6b4c5730f67746aa5400047f6d50916f92f6edb26b"
+}

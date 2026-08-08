@@ -1,0 +1,15 @@
+{
+  "repository": "https://github.com/metamath/set.mm",
+  "commit": "82830c78861b96e906d9868c30c35dbd98be5db5",
+  "files": {
+    "set.mm": {
+      "sha256": "7695d59e1c5c9182231e002425c82c86569bc044f30770bb32c276f7bafbf644"
+    },
+    "iset.mm": {
+      "sha256": "2851ed617e011b08b4d61c8312f34183aaf4da6b06b19512dac1e397ce709e4f"
+    },
+    "nf.mm": {
+      "sha256": "727a3707545e13ec53f03502eb07dc4635a8c176f275d4014a17fbd823e66083"
+    }
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "schema_version": "edullm-family/v1",
+  "family": "pretrain",
+  "owner": "edullm-data@alphaaiengineering.com",
+  "license": {
+    "id": null,
+    "basis": "unknown"
+  },
+  "sources": [],
+  "defaults": {
+    "profile": "pretrain-tokens/v1",
+    "mutability": "frozen",
+    "reproducibility": "logical",
+    "tokenizer_dependency_optional": {
+      "_comment": "DO NOT set this unless your team genuinely tokenizes EVERY pretrain corpus with one canonical tokenizer. Tokenizers vary per dataset, so the primary path is per-dataset: pass tokenizer=\"tokenizer/<name>\" to publish() for each corpus. A family-wide default is dangerous precisely because a wrong tokenizer is hard to detect - vocab sizes are similar (~100k) so a mismatched tokenizer's ids usually still fall in range and the decode check passes while being semantically wrong. Only if standardized: set {role: tokenizer, dataset_id, version, manifest_sha256} of a published tokenizer/v1 dataset and publish() will attach it to any corpus that does not name its own.",
+      "role": null,
+      "dataset_id": null,
+      "version": null,
+      "manifest_sha256": null
+    },
+    "format": {
+      "container": "raw",
+      "dtype": "uint32",
+      "byte_order": "little",
+      "header_bytes": 0,
+      "codec": "none"
+    },
+    "extension": ".u32le.bin",
+    "shard_name_template": "<split>-<NNNNN>.u32le.bin",
+    "partitions": [
+      {
+        "name": "train",
+        "by": "path",
+        "glob": "train-*.u32le.bin"
+      },
+      {
+        "name": "val",
+        "by": "path",
+        "glob": "val-*.u32le.bin"
+      }
+    ],
+    "coverage": "partition",
+    "decode_smoke_test": {
+      "window_bytes": 65536,
+      "distinct_ids_min": 256,
+      "eos_fraction_max": 0.05,
+      "zero_run_max": 256
+    },
+    "tags": {
+      "Project": "edullm"
+    },
+    "validation_required": true
+  },
+  "notes": "Packed token shards ready to feed straight into OLMo-core pretraining runs: the raw fuel, in training order-agnostic form, with a tokenizer pinned hard enough that token counts are falsifiable. Names carry corpus plus token budget, because the budget is the axis that distinguishes siblings (pretrain/dolma2-150b, pretrain/fineweb-edu-10b) - see DATASET-STANDARD.md section 2. THE FORMAT DEFAULT IS THE POINT: uint32 little-endian, headerless, extension .u32le.bin, NEVER .npy. OLMo-core memmaps these files from byte 0 (olmo_core/data/utils.py:158) and derives token count from raw file size (:233), so a real 128-byte .npy header would corrupt the leading tokens AND the count, silently. OLMo-core also defaults to dtype uint16 while these corpora are uint32, which halves the count if dtype is inferred rather than read - hence dtype is declared here and read by dataset_paths(), never guessed. THE TOKENIZER IS A PUBLISHED DEPENDENCY, NAMED PER DATASET, NOT A HAND-TYPED PIN OR A FAMILY DEFAULT: there is no single canonical tokenizer for this family - different corpora use different tokenizers - so each corpus NAMES its own by passing tokenizer=\"tokenizer/<name>\" to publish() (publish it once with profile tokenizer/v1, then reference it). publish() pins it by manifest_sha256 and attaches it as the corpus's depends_on. The validator DERIVES vocab_size and eos_token_id from THAT published tokenizer.json (tokenizer_v1.derive_vocab) and the decode smoke test asserts every sampled id against the derived vocab_size (0 <= id < vocab_size) - computed from the real tokenizer this corpus actually used, never a guess and never a shared default that might not match. tokenizer_dependency_optional above is OFF by default and should stay that way unless a team genuinely standardizes on one tokenizer for every corpus - a wrong family-wide default is dangerous precisely because a mismatched tokenizer's ids usually still fall in range and pass silently. This replaces the old inline vocab_size/eos_token_id pins, which were unverifiable typed values. license.basis is an honest 'unknown' at the family level rather than a convenient 'ODC-By-1.0': this family will hold Dolma2 (ODC-By-1.0), FineWeb-Edu (ODC-By-1.0), and selection-method rebuilds of sources whose terms nobody has read, and section 3 is explicit that an honest unknown beats a false value and stays queryable in the catalog. Each dataset overrides license with its actual, checked terms. Per section 5 there is no -of-NNNNN in shard names: the surviving shard count is unknowable at write time because it depends on filtering that has not run yet; completeness is proven by path-set equality against the manifest instead. decode_smoke_test bounds are the section 7 defaults - they catch all-zeros shards, all-EOS shards, and the zero-filled tail a crashed writer leaves behind, all of which pass every checksum and size gate ever written."
+}

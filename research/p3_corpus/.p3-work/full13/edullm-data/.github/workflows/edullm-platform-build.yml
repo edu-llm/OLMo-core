@@ -1,0 +1,60 @@
+name: Build eduLLM research image
+
+# A thin caller and nothing else. Every decision that matters lives in edu-llm/platform;
+# this file exists to satisfy the two obligations a call site cannot inherit, and to say
+# when a build is allowed to fire. Both obligations fail as an AssumeRole denial that reads
+# like a broken role ARN rather than like its cause:
+#
+#   1. `id-token: write` has to be granted on the calling job below. A called workflow can
+#      only downgrade the permissions its caller hands it, so the id-token grant on the
+#      platform's publish job cannot create itself.
+#   2. The `uses:` reference has to be `@main`. The publisher role's trust policy matches
+#      job_workflow_ref with StringEquals against `@refs/heads/main`, so a SHA-pinned or
+#      tag-pinned reference mints a claim the role will never accept. This is the one place
+#      where pinning a ref makes things worse rather than better.
+on:
+  workflow_dispatch:
+  # A deliberate opt-in namespace rather than every branch. Every accepted push spends
+  # runner time and publishes an immutable ECR tag that cannot be rewritten, so a build
+  # fires only from a branch whose name says it was meant to. push and workflow_dispatch
+  # are also the only events the reusable workflow accepts: on anything else github.ref
+  # names the default branch rather than the pushed commit, so the run would publish
+  # something other than what the caller meant.
+  push:
+    branches:
+      - "edullm/**"
+
+jobs:
+  publish:
+    permissions:
+      contents: read
+      id-token: write
+    uses: edu-llm/platform/.github/workflows/build-research-image.yml@main
+    with:
+      repository: edullm-data
+      publisher_role_arn: ${{ vars.AWS_ECR_PUBLISHER_ROLE_ARN }}
+      # Runs in the platform's gate job, which holds no AWS identity and only
+      # `contents: read`. That is why code chosen by whoever pushed the branch is acceptable
+      # here: it runs before anything can reach AWS, with nothing to steal.
+      #
+      # This project's own suite, whole, which it can be because the whole of it is pytest
+      # against boto3 and numpy. OLMo-core's caller runs lint alone and says why -- its
+      # conftest imports torch at module scope, so collection needs a multi-gigabyte install
+      # this runner does not have. Nothing here needs one, so nothing here is narrowed.
+      #
+      # A virtualenv rather than a bare `pip install`. The runner's system Python is
+      # externally managed, and the failure mode of ignoring that is an install that half
+      # succeeds. `--no-cache-dir` and a venv outside the checkout keep the tree clean, which
+      # the platform's source-identity check requires: it runs `git status` and refuses a
+      # dirty work tree, and a `.pytest_cache` left in the checkout is a dirty work tree.
+      #
+      # `-p no:cacheprovider` for the same reason, and it is not redundant with the venv
+      # location: pytest writes `.pytest_cache` beside the rootdir rather than beside the
+      # interpreter. The verification runs before this command, so a cache left behind would
+      # not fail this build -- it would fail the next thing to read the tree, which is worse
+      # for being deferred.
+      test_command: |
+        venv="$(mktemp -d)/tests"
+        python3 -m venv "${venv}"
+        "${venv}/bin/pip" install --quiet --disable-pip-version-check --no-cache-dir ".[test]"
+        "${venv}/bin/python" -m pytest -q -p no:cacheprovider

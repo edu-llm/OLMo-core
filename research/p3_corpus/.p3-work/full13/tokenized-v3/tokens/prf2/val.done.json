@@ -1,0 +1,97 @@
+{
+  "schema_version": "p3-packed-group-v3",
+  "code_version": "tokenize-corpus-v4",
+  "cross_split_binding_schema_version": "p3-token-cross-split-binding-v1",
+  "fingerprint": "e3638a78f6f92f7dbcd9ee09a47f516f4a859f32038f1e9f7a8f7a665070d4b5",
+  "build": {
+    "schema_version": "p3-packed-group-v3",
+    "code_version": "tokenize-corpus-v4",
+    "source_jsonl": {
+      "family": "prf2",
+      "name": "prf2.jsonl",
+      "sha256": "b32d1fd7cdbb74d3d2b4e9a7344ba0deddfc528ecbb6b9ac411a545742d9ed80",
+      "schema": "atp-v2"
+    },
+    "tokenizer": {
+      "schema_version": "p3-tokenizer-four-part-seal-v1",
+      "tokenizer_artifact_id": "tokenizer/qwen25-vendored",
+      "tokenizer_artifact_version": "v1",
+      "tokenizer_file_sha256": {
+        "tokenizer.json": "3fd169731d2cbde95e10bf356d66d5997fd885dd8dbb6fb4684da3f23b2585d8",
+        "tokenizer_config.json": "ddb9f850ca6559a928bb25d511f72e3c6eff81395334a4e0eeec670448333d09"
+      },
+      "tokenizer_composite_sha256": "aa90434a251a434bbc938ddb3be6683a73fa94150377b5ccd2cbd7880358661a",
+      "tokenizers_version": "0.22.2",
+      "tokenizer_eos_token_id": 151643,
+      "tokenizer_pad_token_id": 151643,
+      "separator": "\n---\nGOAL ",
+      "separator_ids": [
+        10952,
+        15513,
+        969
+      ]
+    },
+    "encoding_cache_fingerprint": "2817ed121e0e02d5c98824896b63344fc582da8ca0b2bdec9e4db8942fa200bb",
+    "packing": {
+      "algorithm": "largest-fit-decreasing-v1",
+      "split": "val",
+      "packed": true,
+      "sequence_length": 16384,
+      "shard_tokens": 250000000,
+      "tokens_dtype": "uint32",
+      "byte_order": "little",
+      "eos_token_id": 151643,
+      "pad_token_id": 151643,
+      "separator": "\n---\nGOAL ",
+      "separator_search": "---\nGOAL",
+      "separator_ids": [
+        10952,
+        15513,
+        969
+      ]
+    },
+    "corpus_generation": {
+      "schema_version": "p3-sealed-corpus-manifest-v1",
+      "logical_root_sha256": "60bb1867feb9c02ffe05e5ab388f6509fd785c77228010f676a1795375835148",
+      "manifest_root_sha256": "60bb1867feb9c02ffe05e5ab388f6509fd785c77228010f676a1795375835148",
+      "sealed_corpus_manifest": true
+    }
+  },
+  "cache_fingerprint": "2817ed121e0e02d5c98824896b63344fc582da8ca0b2bdec9e4db8942fa200bb",
+  "cache_root_sha256": "c8dc7e254a39255f4031788df253be09f6e958963d2eadfc280ae33d36941b44",
+  "corpus_generation": {
+    "schema_version": "p3-sealed-corpus-manifest-v1",
+    "logical_root_sha256": "60bb1867feb9c02ffe05e5ab388f6509fd785c77228010f676a1795375835148",
+    "manifest_root_sha256": "60bb1867feb9c02ffe05e5ab388f6509fd785c77228010f676a1795375835148",
+    "sealed_corpus_manifest": true
+  },
+  "name": "prf2",
+  "documents": 313,
+  "source_documents": 313,
+  "instances": 143,
+  "real_tokens": 2327660,
+  "padding_fraction": 0.00651,
+  "dropped_over_length": 0,
+  "straddling": 303,
+  "separator_ids": [
+    10952,
+    15513,
+    969
+  ],
+  "eos_token_id": 151643,
+  "pad_token_id": 151643,
+  "shards": [
+    {
+      "path": "tokens/prf2/val-00000.u32le.bin",
+      "instances": 143,
+      "tokens": 2342912,
+      "bytes": 9371648,
+      "sha256": "a4de96c6ed00d930ec8832bad4eb1304590513367933edb7478e80d760615e80",
+      "tokens_dtype": "uint32",
+      "byte_order": "little"
+    }
+  ],
+  "resumed_shards": 0,
+  "resumed_group": false,
+  "completion_sha256": "76b6174445097d9fc48f9e4f891f92c31fa910a4fd1a4162f7cde0cee704d79b"
+}

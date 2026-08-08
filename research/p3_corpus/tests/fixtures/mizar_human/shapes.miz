@@ -1,0 +1,48 @@
+:: Direct-human Mizar parser fixture. This is synthetic syntax, not MML content.
+
+begin
+
+theorem Def5a:
+  P
+proof
+  assume A0: H;
+  now
+    per cases;
+    suppose A1: C;
+      thus thesis by EXT:1, A0, A1;
+    end;
+    suppose A2: not C;
+      per cases;
+      case B1;
+        hereby
+          thus thesis by TARSKI:def 3;
+        end;
+      end;
+      case B2;
+        thus thesis by ORDINAL1:sch 1(A0);
+      end;
+    end;
+  end;
+end;
+
+theorem
+  Q by EXT:2;
+
+theorem Gone:
+  canceled;
+
+theorem Bare:
+  R;
+
+theorem Bad:
+  S
+proof
+  now
+    thus thesis by EXT:1;
+  end;
+
+theorem Good:
+  T
+proof
+  thus thesis by EXT:1;
+end;

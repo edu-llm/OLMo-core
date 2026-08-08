@@ -1,0 +1,90 @@
+{
+  "canonicalization": {
+    "family": "isabelle",
+    "scheme": "quoted-layout-v2",
+    "version": 2
+  },
+  "corpus": "isabelle",
+  "eligible_fact_names": [
+    "Alias.one",
+    "Alias.two",
+    "Common.fact",
+    "Held.fact"
+  ],
+  "facts": [
+    "Held.fact"
+  ],
+  "family": "isabelle",
+  "filter_counts": {
+    "accepted_rows": 8,
+    "ambiguous_global_names": 0,
+    "dropped_aborted_trajectories": 0,
+    "dropped_ambiguous_fact": 0,
+    "dropped_duplicate": 0,
+    "dropped_empty_field": 0,
+    "dropped_final_transition": 7,
+    "dropped_malformed_premises": 0,
+    "dropped_malformed_trajectory": 0,
+    "dropped_no_global_fact": 0,
+    "dropped_overlength": 0,
+    "dropped_paste": 0,
+    "dropped_unchanged_state": 0,
+    "trajectories_seen": 7,
+    "transitions_seen": 15
+  },
+  "mode": "family_local_heldout",
+  "policy": "stable statement-unique facts cited 1-2 times are sampled; only direct citing rows enter eval, while every sibling trajectory row and every local-statement, declaration-normalized own-proof, or target/state statement-exposure trajectory is excluded from train as a typed drop",
+  "requested_heldout": 1,
+  "row_counts": {
+    "dropped_local_statement_exposure": 0,
+    "dropped_own_proof": 1,
+    "dropped_own_proof_declaration_exposure": 1,
+    "dropped_siblings": 1,
+    "dropped_statement_exposure": 1,
+    "dropped_target_state_exposure": 0,
+    "eligible": 8,
+    "eval": 1,
+    "train": 5
+  },
+  "schema_version": "isabelle-transition-v2",
+  "seed": 9,
+  "source": {
+    "dataset": "Simontwice/premise_selection_in_isabelle",
+    "file": "raw_data/human_data/all_data.json",
+    "license": "Apache-2.0",
+    "revision": "f947ccc827ccd236464e19cd4cc23dfda7fc5575",
+    "sha256": "aa71609de90fee138835cfdf9e954becb1b231a293ac19bd98951e6d8bec8e7d",
+    "size_bytes": 2327313460
+  },
+  "statement_hashes": [
+    "bb0a898e8f37decce88d24c66770fe9a727a01cccd76049134656303b6b5272d"
+  ],
+  "statements": {
+    "Held.fact": "held statement"
+  },
+  "tail_citation_counts": [
+    1,
+    2
+  ],
+  "tail_size": 1,
+  "tokenizer": {
+    "behavior_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "eos_token_id": 151643,
+    "identity": "Qwen/Qwen2.5-0.5B (synthetic test double)",
+    "max_text_plus_eos_tokens": 16384,
+    "tokenizer_config_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "tokenizer_json_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "tokenizers_version": "synthetic-test-double"
+  },
+  "trajectory_counts": {
+    "direct_eval": 1,
+    "excluded_from_train": 2,
+    "local_statement_exposure": 0,
+    "own_proof": 1,
+    "own_proof_declaration_exposure": 1,
+    "statement_exposure_excluded": 1,
+    "target_state_exposure": 0,
+    "total": 7,
+    "train": 5
+  }
+}

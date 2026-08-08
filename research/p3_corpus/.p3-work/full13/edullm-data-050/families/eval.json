@@ -1,0 +1,15 @@
+{
+  "schema_version": "edullm-family/v1",
+  "family": "eval",
+  "owner": "edullm-data@alphaaiengineering.com",
+  "license": {
+    "id": null,
+    "basis": "unknown"
+  },
+  "sources": [],
+  "defaults": {
+    "validation_required": false,
+    "validation_not_required_because": "An eval set is entirely held out by construction — every item is test data, so there is no train side to hold anything out FROM. Splitting it would be splitting the yardstick."
+  },
+  "notes": "Benchmark inputs and model outputs: the items fed to a model, and the scores and generations that come back. This family deliberately carries NO defaults, and the empty object is a decision rather than an omission. Two reasons. First, the family is genuinely bimodal - eval-items/v1 (stable per-item ids, entirely test split, no model pin) and eval-results/v1 (model pin, decode params, failure accounting) share almost nothing worth defaulting, and per DATASET-STANDARD.md section 4 a default that has to cover both would have to be optional, and optional-everything checks nothing. Publishers pass the profile explicitly; that is one of the four hand-typed arguments and the one that must not be guessed. Second, there is no tokenizer block here on purpose: an eval set is consumed by whatever model is under test, so pinning a tokenizer at the family level would be a claim about somebody else's model. Decode parameters (temperature, top_p, max_tokens) are likewise per-dataset, because defaulting them invites a published result whose recorded decode settings are not the ones that produced it. THIS IS THE FAMILY THE AUDIT'S WORST FAILURES LIVED IN, and eval-results/v1 is the profile written specifically to kill them: 12 CSVs of 66 bytes each (header, zero rows) and 3 byte-identical files where every row read Finish Reason: 'error'. Both die on 'refuse if n_ok == 0'; the all-error trio had honest nonzero n_rows, so row-count validation alone would have waved them through. If you are publishing here, read section 4's second worked table before choosing bounds. Section 11 is also about this family: 92 objects and 869 MB is the high-volume case and the source of sprawl, so publishing correctly must stay near-free (about 2 seconds of hashing, 4 typed arguments) or these sets go back into scratch. license.basis is an honest 'unknown' because benchmark terms vary per benchmark and several are unstated upstream; override per dataset. Names must state the task type plus exactly which benchmarks (eval/mcq-arc-openbookqa-sciq) or the protocol and design shape (eval/judge-blinded-5x5) - never eval/results, which says nothing since every eval has results."
+}

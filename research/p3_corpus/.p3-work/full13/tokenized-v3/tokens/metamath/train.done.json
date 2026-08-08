@@ -1,0 +1,97 @@
+{
+  "schema_version": "p3-packed-group-v3",
+  "code_version": "tokenize-corpus-v4",
+  "cross_split_binding_schema_version": "p3-token-cross-split-binding-v1",
+  "fingerprint": "19c3a66c4d40f67c12245a7d78736dadf90da6d43097b030a66d4176d0cc38be",
+  "build": {
+    "schema_version": "p3-packed-group-v3",
+    "code_version": "tokenize-corpus-v4",
+    "source_jsonl": {
+      "family": "metamath",
+      "name": "train.jsonl",
+      "sha256": "7ef07b9eac63e55a9b31314d3384c181722052b5495b7adba1b7ceb644d3b171",
+      "schema": "metamath-proof-v2"
+    },
+    "tokenizer": {
+      "schema_version": "p3-tokenizer-four-part-seal-v1",
+      "tokenizer_artifact_id": "tokenizer/qwen25-vendored",
+      "tokenizer_artifact_version": "v1",
+      "tokenizer_file_sha256": {
+        "tokenizer.json": "3fd169731d2cbde95e10bf356d66d5997fd885dd8dbb6fb4684da3f23b2585d8",
+        "tokenizer_config.json": "ddb9f850ca6559a928bb25d511f72e3c6eff81395334a4e0eeec670448333d09"
+      },
+      "tokenizer_composite_sha256": "aa90434a251a434bbc938ddb3be6683a73fa94150377b5ccd2cbd7880358661a",
+      "tokenizers_version": "0.22.2",
+      "tokenizer_eos_token_id": 151643,
+      "tokenizer_pad_token_id": 151643,
+      "separator": "\n---\nGOAL ",
+      "separator_ids": [
+        10952,
+        15513,
+        969
+      ]
+    },
+    "encoding_cache_fingerprint": "41b9bc3a6df4206e0e298f7a4d4e82770ee8c032d16e236e9e8abe9d85d489bf",
+    "packing": {
+      "algorithm": "largest-fit-decreasing-v1",
+      "split": "train",
+      "packed": true,
+      "sequence_length": 16384,
+      "shard_tokens": 250000000,
+      "tokens_dtype": "uint32",
+      "byte_order": "little",
+      "eos_token_id": 151643,
+      "pad_token_id": 151643,
+      "separator": "\n---\nGOAL ",
+      "separator_search": "---\nGOAL",
+      "separator_ids": [
+        10952,
+        15513,
+        969
+      ]
+    },
+    "corpus_generation": {
+      "schema_version": "p3-sealed-corpus-manifest-v1",
+      "logical_root_sha256": "60bb1867feb9c02ffe05e5ab388f6509fd785c77228010f676a1795375835148",
+      "manifest_root_sha256": "60bb1867feb9c02ffe05e5ab388f6509fd785c77228010f676a1795375835148",
+      "sealed_corpus_manifest": true
+    }
+  },
+  "cache_fingerprint": "41b9bc3a6df4206e0e298f7a4d4e82770ee8c032d16e236e9e8abe9d85d489bf",
+  "cache_root_sha256": "88d9181c41f16c54dcd5c9fcb58d4f98e78c13b36158a22c0f0b1867c2feb237",
+  "corpus_generation": {
+    "schema_version": "p3-sealed-corpus-manifest-v1",
+    "logical_root_sha256": "60bb1867feb9c02ffe05e5ab388f6509fd785c77228010f676a1795375835148",
+    "manifest_root_sha256": "60bb1867feb9c02ffe05e5ab388f6509fd785c77228010f676a1795375835148",
+    "sealed_corpus_manifest": true
+  },
+  "name": "metamath",
+  "documents": 65122,
+  "source_documents": 65122,
+  "instances": 6701,
+  "real_tokens": 109768291,
+  "padding_fraction": 0.00019,
+  "dropped_over_length": 0,
+  "straddling": 60069,
+  "separator_ids": [
+    10952,
+    15513,
+    969
+  ],
+  "eos_token_id": 151643,
+  "pad_token_id": 151643,
+  "shards": [
+    {
+      "path": "tokens/metamath/train-00000.u32le.bin",
+      "instances": 6701,
+      "tokens": 109789184,
+      "bytes": 439156736,
+      "sha256": "7201b53efad3eb011045f5421b4f4ffa8f39e23dee18757619e3df5e6a67f2b8",
+      "tokens_dtype": "uint32",
+      "byte_order": "little"
+    }
+  ],
+  "resumed_shards": 0,
+  "resumed_group": false,
+  "completion_sha256": "cd3e1c02a6545659c5b5584ef50c9dcdaec8064a2828e220780c680676f7748c"
+}

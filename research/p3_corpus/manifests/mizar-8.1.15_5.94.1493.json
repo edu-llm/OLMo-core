@@ -1,0 +1,105 @@
+{
+  "crosscheck": {
+    "description": "Identity join plus literal .miz/thproof source-goal agreement; semantic HTML remains authoritative for expanded rendering.",
+    "generated_identities": [
+      "AFF_1:1"
+    ],
+    "sample_articles": [
+      "AFF_1",
+      "PARTPR_1",
+      "XBOOLE_1"
+    ]
+  },
+  "expected": {
+    "complete_explicit_proofs": 58658,
+    "definition_count": 14291,
+    "duplicate_identities": 0,
+    "duplicate_local_label_groups": 179,
+    "duplicate_local_label_records": 378,
+    "duplicate_statement_groups": 329,
+    "duplicate_statement_records": 16832,
+    "explicit_proof_bearing_extracts": 69698,
+    "html_article_files": 1500,
+    "local_label_count": 50648,
+    "missing_identity_numbers": 0,
+    "missing_thproof_identities": 0,
+    "mml_alignment": {
+      "generated_or_unmatched": 459,
+      "literal_goal_match": 76237
+    },
+    "mml_non_utf8_files": 1,
+    "proof_categories": {
+      "complete_explicit_proof": 58658,
+      "inline_justification": 5160,
+      "malformed_declaration": 150,
+      "malformed_explicit_proof": 11040,
+      "missing_theorem": 9,
+      "no_explicit_proof": 1679
+    },
+    "sample_agreement_count": 240,
+    "sample_candidate_count": 240,
+    "sample_generated_identity_count": 1,
+    "sample_mismatch_count": 0,
+    "sample_source_goal_match_count": 239,
+    "sample_thproof_join_count": 239,
+    "scheme_count": 912,
+    "statement_count": 106317,
+    "theorem_count": 91114,
+    "thproof_files": 76696,
+    "thproof_join_count": 76696
+  },
+  "licensing": {
+    "mml_source_notice": "Individual .miz headers reference GPL-3.0-or-later or CC-BY-SA-3.0-or-later subject to the MML COPYING.interpretation file.",
+    "redistribution_rights_asserted": false,
+    "semantic_html_archive": "No archive-specific redistribution grant was independently verified.",
+    "status": "Licensing and redistribution scope are uncertain; legal review is required before redistribution.",
+    "thproofs_archive": "No archive-specific redistribution grant was independently verified."
+  },
+  "proof_policy": {
+    "completion_denominator": "explicit_proof_bearing_extracts",
+    "minimum_explicit_completion_rate": 0.84,
+    "note": "No threshold is applied to all 76,696 files; inline, canceled, and no-proof declarations are reported outside the explicit-proof denominator."
+  },
+  "release": {
+    "mizar_version": "8.1.15",
+    "mml_version": "5.94.1493"
+  },
+  "schema_version": "mizar-current-sources-v1",
+  "sources": {
+    "html": {
+      "archive_bytes": 142518673,
+      "archive_sha256": "e988481577e4e5cc25a5c96c4e86a7de612447088b20781a2680b0e6fc974eee",
+      "archive_url": "http://grid01.ciirc.cvut.cz/~mptp/8.1.15_5.94.1493/html_abstr.8.1.15_5.94.1493.tar.gz",
+      "file_count": 1500,
+      "file_glob": "*.html",
+      "selected_tree": "direct html/*.html article files only",
+      "tree_bytes": 333192560,
+      "tree_sha256": "1f725c9943aeee2c21c6fe63484bc00336bdc442ec454ccfc810032d7de12781"
+    },
+    "mml": {
+      "archive_bytes": 55019520,
+      "archive_sha256": "cfc32c3e05d5d93c595934e26d4d3b4e399f95a75da7df08359eb9ee73ae6e2e",
+      "archive_url": "https://mizar.uwb.edu.pl/~softadm/pub/system/i386-linux/mizar-8.1.15_5.94.1493-i386-linux.tar",
+      "file_count": 1500,
+      "file_glob": "*.miz",
+      "selected_tree": "direct mml/*.miz files from the nested mizshare release",
+      "tree_bytes": 122186856,
+      "tree_sha256": "3d1af5b3e840aca5631541b42510b35c1b15dfa988af70ce463f58c899e88714"
+    },
+    "thproofs": {
+      "archive_bytes": 27640543,
+      "archive_sha256": "665b17fea382d23168998a4bd1fd91736baf59c1fa3927f8c656d9886fdc3433",
+      "archive_url": "http://grid01.ciirc.cvut.cz/~mptp/8.1.15_5.94.1493/thproofs.tar.gz",
+      "file_count": 76696,
+      "file_glob": "*",
+      "selected_tree": "direct thproofs/* regular files",
+      "tree_bytes": 98555762,
+      "tree_sha256": "fce0eda226231de221ff2e7b3c9fa0699ec259d3e647e53eb9589b181dbf7877"
+    }
+  },
+  "tree_hash": {
+    "description": "For each selected regular file sorted by basename: basename UTF-8, NUL, then raw 32-byte SHA-256(file); hash the concatenation. Reject symlinks and nested directories.",
+    "schema": "flat-basename-sha256-v1"
+  },
+  "transport_note": "The MPTP archives are served over HTTP; archive SHA-256 verification is mandatory when archive paths are available."
+}

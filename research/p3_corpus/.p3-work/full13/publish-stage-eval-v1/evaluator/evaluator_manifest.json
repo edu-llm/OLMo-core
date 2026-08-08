@@ -1,0 +1,125 @@
+{
+  "evaluator_root_sha256": "e54954386d85094fc8198c6530f094db505fc88025bfd779f95b419cc74442ba",
+  "families": {
+    "enigma": {
+      "eval": {
+        "bytes": 13171976,
+        "path": "eval/enigma.jsonl",
+        "rows": 263,
+        "sha256": "2d7882089c17a1c890e25305b9b1a840887ec76e64f3f07b4d0cf3a44366da5b"
+      },
+      "schema": "atp-v2",
+      "train": {
+        "bytes": 1183404591,
+        "path": "shards/enigma.jsonl",
+        "rows": 24652,
+        "sha256": "0efd52a5679429f2405e9939322a8405a67143f145058fb0f3d12a754330ad49"
+      }
+    },
+    "isabelle": {
+      "eval": {
+        "bytes": 4490035,
+        "path": "eval/isabelle.jsonl",
+        "rows": 590,
+        "sha256": "4dfa8182fb666936d15ff2c618efe42e5e791d68012570f5a146819b532621ba"
+      },
+      "schema": "isabelle-transition-v2",
+      "train": {
+        "bytes": 136153425,
+        "path": "shards/isabelle.jsonl",
+        "rows": 16576,
+        "sha256": "ea5f881afd84dd519de1a5bfc643d16dd89c794a4ac158680d95aa7cbad46b26"
+      }
+    },
+    "metamath": {
+      "eval": {
+        "bytes": 9967393,
+        "path": "eval/metamath.jsonl",
+        "rows": 494,
+        "sha256": "5a5ceeb7ea12b0447a652c07e7b8480ea994c92009099718c6735fd11a9e3896"
+      },
+      "schema": "metamath-proof-v2",
+      "train": {
+        "bytes": 712024130,
+        "path": "shards/metamath.jsonl",
+        "rows": 65122,
+        "sha256": "7ef07b9eac63e55a9b31314d3384c181722052b5495b7adba1b7ceb644d3b171"
+      }
+    },
+    "mizar": {
+      "eval": {
+        "bytes": 28272087,
+        "path": "eval/mizar.jsonl",
+        "rows": 2485,
+        "sha256": "fd0c587ba83e00777dbe7c3baf17212b2b8496ac0c7e78bfd0ac42419e9f41ac"
+      },
+      "schema": "mizar-proof-v2",
+      "train": {
+        "bytes": 400993819,
+        "path": "shards/mizar.jsonl",
+        "rows": 52868,
+        "sha256": "fe4d76ea91b34aa3390e7e482faaa8849b7d86317bf0be5727131b2ce9f9c309"
+      }
+    },
+    "prf2": {
+      "eval": {
+        "bytes": 17542546,
+        "path": "eval/prf2.jsonl",
+        "rows": 313,
+        "sha256": "b32d1fd7cdbb74d3d2b4e9a7344ba0deddfc528ecbb6b9ac411a545742d9ed80"
+      },
+      "schema": "atp-v2",
+      "train": {
+        "bytes": 1112580317,
+        "path": "shards/prf2.jsonl",
+        "rows": 21850,
+        "sha256": "a5608b7ae3ed4f541e156480bb8ba897861f99864659d77c467a814226501f03"
+      }
+    },
+    "thproofs": {
+      "eval": {
+        "bytes": 498313,
+        "path": "eval/thproofs.jsonl",
+        "rows": 46,
+        "sha256": "d9c90b6f436359b573649dafebdb3816cacf81e750a4294d7e832e8e93cf0d1d"
+      },
+      "schema": "mizar-proof-v2",
+      "train": {
+        "bytes": 4824295,
+        "path": "shards/thproofs.jsonl",
+        "rows": 584,
+        "sha256": "87266b079608a42d4b2c4c3eaf49ec497ba29a31dc855aa5b78157ef0c64661b"
+      }
+    }
+  },
+  "schema_version": "p3-evaluator-corpus-v1",
+  "sidecars": {
+    "heldout/atp.json": {
+      "bytes": 423421,
+      "sha256": "0b73af1dbadccd8bdebfc0e7ced057ea6ca1ed5e83159d7ad1f35fbb45990ce7"
+    },
+    "heldout/isabelle.json": {
+      "bytes": 812879,
+      "sha256": "78c03d731b1e5478c5755e023add4cf492760df8ac295b0cad9127b0eec10119"
+    },
+    "heldout/metamath.json": {
+      "bytes": 115188,
+      "sha256": "d309502b2484674b8b1e7ac3d4f7a25844325c1469d240ce00263b575bd75cfd"
+    },
+    "heldout/mizar.json": {
+      "bytes": 517364,
+      "sha256": "906e212ca1c122be6c20f613db135571dd9c92e81d7cb0038ee7c41416dc6add"
+    },
+    "metamath_sources.json": {
+      "bytes": 447,
+      "sha256": "b1dd96252b6cd9b524c034bf650726f097892041f4b45d99549e8811827bf5c3"
+    }
+  },
+  "source_seal": {
+    "manifest_file_sha256": "493d34d246fcb71f8f2a451342a43cdb87bb7d7e2a3ecfe83edf523e2e247d6d",
+    "manifest_root_sha256": "60bb1867feb9c02ffe05e5ab388f6509fd785c77228010f676a1795375835148",
+    "schema_version": "p3-sealed-corpus-manifest-v1"
+  },
+  "total_eval_rows": 4191,
+  "total_train_rows": 181652
+}

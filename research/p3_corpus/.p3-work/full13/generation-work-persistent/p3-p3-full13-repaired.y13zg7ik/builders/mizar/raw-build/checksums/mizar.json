@@ -1,0 +1,9 @@
+{
+  "files": {
+    "manifests/mizar.json": "dfda6cfb3815f8032044450b0d8378b1da8efd2ec0e793e05add13159ea7f551",
+    "raw/mizar.jsonl": "54206c1fe89d09dec7ec36c927612439b687814ba95e1086e4b09db036ad486f",
+    "reports/mizar.build.json": "a6de14653f3eb21b1061e71d5672cd4b018f8098dcec39a954be55f09f699712",
+    "reports/mizar.fact_frequencies.json": "d214c7e60492a2664fa9b96e83c304ba1fe62fec1ce8ad621cbd1fd9a2b3e8e0"
+  },
+  "schema_version": "mizar-human-output-checksums-v1"
+}

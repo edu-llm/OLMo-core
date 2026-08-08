@@ -1,0 +1,61 @@
+{
+  "Version": "2012-10-17",
+  "Id": "edullm-data-airlock-v2",
+  "Statement": [
+    {
+      "Sid": "OnlyValidatorWrites",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging",
+        "s3:AbortMultipartUpload"
+      ],
+      "Resource": "arn:aws:s3:::edullm-data/*",
+      "Condition": {
+        "ArnNotEqualsIfExists": {
+          "aws:PrincipalArn": [
+            "arn:aws:iam::<ACCOUNT_ID>:role/<BATCH_JOB_ROLE>",
+            "arn:aws:iam::<ACCOUNT_ID>:role/<INFRA_DEPLOYER_ROLE>"
+          ]
+        },
+        "BoolIfExists": {
+          "aws:PrincipalIsAWSService": "false"
+        }
+      }
+    },
+    {
+      "Sid": "NobodyDeletesPublishedData",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": [
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion"
+      ],
+      "Resource": "arn:aws:s3:::edullm-data/*",
+      "Condition": {
+        "BoolIfExists": {
+          "aws:PrincipalIsAWSService": "false"
+        }
+      }
+    },
+    {
+      "Sid": "AllowS3InventoryDelivery",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "s3.amazonaws.com"
+      },
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::edullm-data/_inventory/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:SourceAccount": "<ACCOUNT_ID>",
+          "s3:x-amz-acl": "bucket-owner-full-control"
+        },
+        "ArnLike": {
+          "aws:SourceArn": "arn:aws:s3:::edullm-data"
+        }
+      }
+    }
+  ]
+}

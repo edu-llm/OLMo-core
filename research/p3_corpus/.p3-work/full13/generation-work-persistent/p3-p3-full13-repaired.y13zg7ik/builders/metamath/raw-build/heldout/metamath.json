@@ -1,0 +1,74 @@
+{
+ "actual_heldout": 0,
+ "conflict_count": 394,
+ "conflict_map_sha256": "900adee09e42be5d7dda266a61e3095991825e9cf2612675e5589af932edc0c2",
+ "corpus": "metamath",
+ "eligibility": {
+  "accounting": {
+   "dropped_excess_tokens": 12262619,
+   "dropped_rows": 960,
+   "dropped_text_plus_eos_tokens": 27991259,
+   "eligible_rows": 66074,
+   "eligible_text_plus_eos_tokens": 113086656,
+   "source_rows": 67034,
+   "source_text_plus_eos_tokens": 141077915
+  },
+  "applied_before": [
+   "statement_class_exposure_counts",
+   "classifier_compatibility",
+   "tail_class_selection"
+  ],
+  "drop_ledger": {
+   "canonical_root_sha256": "40bf7758d2d1b16468edb47733c53d73e7284d04c8580236d69dc330957f46ff",
+   "entries_root_sha256": "7002b44dc4d4e6b93e8fa51f2f471cb561b5d5b371d7e5fc70c75929dda1b6da",
+   "path": "drops/metamath-overlength.json",
+   "schema_version": "metamath-overlength-drop-ledger-v1"
+  },
+  "max_text_plus_eos_tokens": 16384,
+  "policy": "drop-whole-row-before-heldout-selection-v1",
+  "schema_version": "metamath-text-plus-eos-eligibility-v1",
+  "tokenizer_root_sha256": "1ef4e9ceafca0107fe0f128ef92a2456748c0b08a068b0b5632e7f4a1b095158",
+  "tokenizer_seal": {
+   "behavior_digest": "aa90434a251a434bbc938ddb3be6683a73fa94150377b5ccd2cbd7880358661a",
+   "eos_token_id": 151643,
+   "identity": "Qwen/Qwen2.5-0.5B",
+   "max_text_plus_eos_tokens": 16384,
+   "tokenizer_config_sha256": "ddb9f850ca6559a928bb25d511f72e3c6eff81395334a4e0eeec670448333d09",
+   "tokenizer_json_sha256": "3fd169731d2cbde95e10bf356d66d5997fd885dd8dbb6fb4684da3f23b2585d8",
+   "tokenizers_version": "0.22.2"
+  }
+ },
+ "eligible_tail_classes": 14121,
+ "fact_identity_policy": "qualify-conflicting-statements-v1",
+ "facts": [],
+ "family": "metamath",
+ "local_assumptions": true,
+ "manifest_root_sha256": "bc3d33dbab3a5bbc543a2a47d429615f0af2210590b2e9e7d08b9d1dbd0a8cfa",
+ "mode": "family_local_heldout",
+ "partition_accounting": {
+  "drop_rows": 960,
+  "drop_text_plus_eos_tokens": 27991259,
+  "eval_rows": 0,
+  "eval_text_plus_eos_tokens": 0,
+  "source_rows": 67034,
+  "source_text_plus_eos_tokens": 141077915,
+  "train_rows": 66074,
+  "train_text_plus_eos_tokens": 113086656
+ },
+ "pinned_overlength_reproduction": {
+  "schema_version": "metamath-pinned-overlength-reproduction-v1",
+  "sorted_id_set_sha256": "a1b4bbdc271c9facbbcbc22d0c93661a093b9e17b6baf9c86c76aa62f89a2040",
+  "source_rows": 960,
+  "text_plus_eos_tokens": 27991259
+ },
+ "policy": "0 normalized full-statement classes with total visible eligible-row exposure 1-2; every name, fact, goal, target, local, alias, and own-proof exposure routed together using a metamath-heldout-v2 classifier-compatible representative",
+ "represented_eval_classes_root_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+ "requested_heldout": 0,
+ "schema_version": "metamath-heldout-v2",
+ "seed": 20260801,
+ "selected_statement_classes": [],
+ "selected_statement_classes_root_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+ "source_quality_root_sha256": "3f7922956b8809d8aecd06a2a6812ba909fb52617b76a0348fb32925d51b0549",
+ "source_schema_root_sha256": "912357bb616ac36f418a3e3e3855d31b4ff0150f6832306ce7ff0e38174479ed",
+ "statement_aliases": []
+}

@@ -1,0 +1,1253 @@
+{
+  "$defs": {
+    "bindings": {
+      "additionalProperties": false,
+      "properties": {
+        "corpus_logical_root_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "corpus_transaction_inventory_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "semantic_holdout_root_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "source_manifests_root_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "tokenizer_seal_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "corpus_logical_root_sha256",
+        "corpus_transaction_inventory_sha256",
+        "semantic_holdout_root_sha256",
+        "source_manifests_root_sha256",
+        "tokenizer_seal_sha256"
+      ],
+      "type": "object"
+    },
+    "inventoryBase": {
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "source_binding"
+          ]
+        },
+        {
+          "required": [
+            "derived_from_transaction_paths"
+          ]
+        }
+      ],
+      "properties": {
+        "bindings": {
+          "$ref": "#/$defs/bindings"
+        },
+        "bytes": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "derived_from_transaction_paths": {
+          "items": {
+            "$ref": "#/$defs/transactionPath"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "generation_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "logical_path": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "rows": {
+          "oneOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schema": {
+          "type": "string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "source_binding": {
+          "$ref": "#/$defs/sourceBinding"
+        }
+      },
+      "required": [
+        "bindings",
+        "bytes",
+        "generation_id",
+        "logical_path",
+        "role",
+        "rows",
+        "schema",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "provenance": {
+      "additionalProperties": false,
+      "properties": {
+        "corpus_generation": {
+          "additionalProperties": false,
+          "properties": {
+            "current_seal_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "generation_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "logical_root_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "manifest_file_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "transaction_inventory_sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          },
+          "required": [
+            "current_seal_sha256",
+            "generation_id",
+            "logical_root_sha256",
+            "manifest_file_sha256",
+            "transaction_inventory_sha256"
+          ],
+          "type": "object"
+        },
+        "semantic_holdout": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_inventory_root_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "manifest_root_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "production": {
+              "const": true
+            },
+            "source_policy_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "source_policy_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "source_root_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "tokenizer_root_sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          },
+          "required": [
+            "artifact_inventory_root_sha256",
+            "manifest_root_sha256",
+            "production",
+            "source_policy_id",
+            "source_policy_sha256",
+            "source_root_sha256",
+            "tokenizer_root_sha256"
+          ],
+          "type": "object"
+        },
+        "source_manifests": {
+          "additionalProperties": false,
+          "properties": {
+            "family_bindings": {
+              "const": {
+                "enigma": [
+                  "enigma"
+                ],
+                "isabelle": [
+                  "isabelle"
+                ],
+                "metamath": [
+                  "metamath"
+                ],
+                "mizar": [
+                  "mizar"
+                ],
+                "prf2": [
+                  "prf2"
+                ],
+                "thproofs": [
+                  "mizar",
+                  "thproofs"
+                ]
+              }
+            },
+            "root_sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          },
+          "required": [
+            "family_bindings",
+            "root_sha256"
+          ],
+          "type": "object"
+        },
+        "tokenizer": {
+          "additionalProperties": false,
+          "properties": {
+            "seal_sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          },
+          "required": [
+            "seal_sha256"
+          ],
+          "type": "object"
+        },
+        "train_source_sha256": {
+          "additionalProperties": false,
+          "properties": {
+            "enigma": {
+              "$ref": "#/$defs/sha256"
+            },
+            "isabelle": {
+              "$ref": "#/$defs/sha256"
+            },
+            "metamath": {
+              "$ref": "#/$defs/sha256"
+            },
+            "mizar": {
+              "$ref": "#/$defs/sha256"
+            },
+            "prf2": {
+              "$ref": "#/$defs/sha256"
+            },
+            "thproofs": {
+              "$ref": "#/$defs/sha256"
+            }
+          },
+          "required": [
+            "enigma",
+            "isabelle",
+            "metamath",
+            "mizar",
+            "prf2",
+            "thproofs"
+          ],
+          "type": "object"
+        },
+        "visibility_index_sha256": {
+          "additionalProperties": false,
+          "properties": {
+            "enigma": {
+              "$ref": "#/$defs/sha256"
+            },
+            "isabelle": {
+              "$ref": "#/$defs/sha256"
+            },
+            "metamath": {
+              "$ref": "#/$defs/sha256"
+            },
+            "mizar": {
+              "$ref": "#/$defs/sha256"
+            },
+            "prf2": {
+              "$ref": "#/$defs/sha256"
+            },
+            "thproofs": {
+              "$ref": "#/$defs/sha256"
+            }
+          },
+          "required": [
+            "enigma",
+            "isabelle",
+            "metamath",
+            "mizar",
+            "prf2",
+            "thproofs"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "corpus_generation",
+        "semantic_holdout",
+        "source_manifests",
+        "tokenizer",
+        "train_source_sha256",
+        "visibility_index_sha256"
+      ],
+      "type": "object"
+    },
+    "sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "sourceBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "logical_root_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "role": {
+          "enum": [
+            "eval",
+            "heldout",
+            "sidecar",
+            "train",
+            "transaction-current",
+            "transaction-manifest"
+          ]
+        },
+        "schema": {
+          "pattern": "(?:/|-)v[1-9][0-9]*$",
+          "type": "string"
+        },
+        "sibling": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "transaction_inventory_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "transaction_path": {
+          "$ref": "#/$defs/transactionPath"
+        }
+      },
+      "required": [
+        "logical_root_sha256",
+        "role",
+        "schema",
+        "sibling",
+        "transaction_inventory_sha256",
+        "transaction_path"
+      ],
+      "type": "object"
+    },
+    "transactionPath": {
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$",
+      "type": "string"
+    }
+  },
+  "$id": "https://edu-llm.invalid/schemas/p3-evaluator-release-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "dataset_id": {
+      "const": "eval/formal-proof-premises-500m"
+    },
+    "families": {
+      "const": [
+        "enigma",
+        "isabelle",
+        "metamath",
+        "mizar",
+        "prf2",
+        "thproofs"
+      ]
+    },
+    "generation_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "inventory": {
+      "items": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/inventoryBase"
+          },
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/eval-enigma.jsonl"
+                  },
+                  "role": {
+                    "const": "eval:enigma"
+                  },
+                  "schema": {
+                    "const": "p3-atp-proof-row/v2"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/eval-isabelle.jsonl"
+                  },
+                  "role": {
+                    "const": "eval:isabelle"
+                  },
+                  "schema": {
+                    "const": "p3-isabelle-transition/v2"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/eval-metamath.jsonl"
+                  },
+                  "role": {
+                    "const": "eval:metamath"
+                  },
+                  "schema": {
+                    "const": "p3-metamath-proof-row/v1"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/eval-mizar.jsonl"
+                  },
+                  "role": {
+                    "const": "eval:mizar"
+                  },
+                  "schema": {
+                    "const": "p3-mizar-proof-row/v1"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/eval-prf2.jsonl"
+                  },
+                  "role": {
+                    "const": "eval:prf2"
+                  },
+                  "schema": {
+                    "const": "p3-atp-proof-row/v2"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/eval-thproofs.jsonl"
+                  },
+                  "role": {
+                    "const": "eval:thproofs"
+                  },
+                  "schema": {
+                    "const": "p3-mizar-proof-row/v1"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/heldout-atp.json"
+                  },
+                  "role": {
+                    "const": "heldout:atp"
+                  },
+                  "schema": {
+                    "const": "p3-mml-holdout-projection/v2"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/heldout-isabelle.json"
+                  },
+                  "role": {
+                    "const": "heldout:isabelle"
+                  },
+                  "schema": {
+                    "const": "p3-isabelle-heldout/v2"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/heldout-metamath.json"
+                  },
+                  "role": {
+                    "const": "heldout:metamath"
+                  },
+                  "schema": {
+                    "const": "p3-metamath-heldout/v1"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/heldout-mizar.json"
+                  },
+                  "role": {
+                    "const": "heldout:mizar"
+                  },
+                  "schema": {
+                    "const": "p3-mml-holdout-projection/v2"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/heldout-mml.json"
+                  },
+                  "role": {
+                    "const": "heldout:mml"
+                  },
+                  "schema": {
+                    "const": "p3-mml-holdout-manifest/v2"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/provenance-corpus-current.json"
+                  },
+                  "role": {
+                    "const": "corpus-generation-current"
+                  },
+                  "schema": {
+                    "const": "corpus-generation-current/v2"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/provenance-corpus-manifest.json"
+                  },
+                  "role": {
+                    "const": "corpus-generation-manifest"
+                  },
+                  "schema": {
+                    "const": "corpus-generation-manifest/v2"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/provenance-source-enigma.json"
+                  },
+                  "role": {
+                    "const": "source-manifest:enigma"
+                  },
+                  "schema": {
+                    "const": "p3-enigma-sources/v1"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/provenance-source-isabelle.json"
+                  },
+                  "role": {
+                    "const": "source-manifest:isabelle"
+                  },
+                  "schema": {
+                    "const": "p3-isabelle-sources/v1"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/provenance-source-metamath.json"
+                  },
+                  "role": {
+                    "const": "source-manifest:metamath"
+                  },
+                  "schema": {
+                    "const": "p3-metamath-sources/v1"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/provenance-source-mizar.json"
+                  },
+                  "role": {
+                    "const": "source-manifest:mizar"
+                  },
+                  "schema": {
+                    "const": "p3-mizar-sources/v1"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/provenance-source-prf2.json"
+                  },
+                  "role": {
+                    "const": "source-manifest:prf2"
+                  },
+                  "schema": {
+                    "const": "p3-prf2-sources/v1"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/provenance-source-thproofs.json"
+                  },
+                  "role": {
+                    "const": "source-manifest:thproofs"
+                  },
+                  "schema": {
+                    "const": "p3-thproofs-sources/v1"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/provenance-tokenizer.json"
+                  },
+                  "role": {
+                    "const": "tokenizer-seal"
+                  },
+                  "schema": {
+                    "const": "p3-tokenizer-seal/v1"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/sidecar-cohort-enigma.jsonl"
+                  },
+                  "role": {
+                    "const": "cohort-ledger:enigma"
+                  },
+                  "schema": {
+                    "const": "p3-eval-cohort-ledger/v1"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/sidecar-cohort-isabelle.jsonl"
+                  },
+                  "role": {
+                    "const": "cohort-ledger:isabelle"
+                  },
+                  "schema": {
+                    "const": "p3-eval-cohort-ledger/v1"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/sidecar-cohort-metamath.jsonl"
+                  },
+                  "role": {
+                    "const": "cohort-ledger:metamath"
+                  },
+                  "schema": {
+                    "const": "p3-eval-cohort-ledger/v1"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/sidecar-cohort-mizar.jsonl"
+                  },
+                  "role": {
+                    "const": "cohort-ledger:mizar"
+                  },
+                  "schema": {
+                    "const": "p3-eval-cohort-ledger/v1"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/sidecar-cohort-prf2.jsonl"
+                  },
+                  "role": {
+                    "const": "cohort-ledger:prf2"
+                  },
+                  "schema": {
+                    "const": "p3-eval-cohort-ledger/v1"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/sidecar-cohort-thproofs.jsonl"
+                  },
+                  "role": {
+                    "const": "cohort-ledger:thproofs"
+                  },
+                  "schema": {
+                    "const": "p3-eval-cohort-ledger/v1"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/sidecar-drop-enigma.jsonl"
+                  },
+                  "role": {
+                    "const": "drop-ledger:enigma"
+                  },
+                  "schema": {
+                    "const": "p3-corpus-drop/v2"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/sidecar-drop-isabelle.jsonl"
+                  },
+                  "role": {
+                    "const": "drop-ledger:isabelle"
+                  },
+                  "schema": {
+                    "const": "p3-corpus-drop/v2"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/sidecar-drop-metamath.jsonl"
+                  },
+                  "role": {
+                    "const": "drop-ledger:metamath"
+                  },
+                  "schema": {
+                    "const": "p3-corpus-drop/v2"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/sidecar-drop-mizar.jsonl"
+                  },
+                  "role": {
+                    "const": "drop-ledger:mizar"
+                  },
+                  "schema": {
+                    "const": "p3-corpus-drop/v2"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/sidecar-drop-prf2.jsonl"
+                  },
+                  "role": {
+                    "const": "drop-ledger:prf2"
+                  },
+                  "schema": {
+                    "const": "p3-corpus-drop/v2"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/sidecar-drop-thproofs.jsonl"
+                  },
+                  "role": {
+                    "const": "drop-ledger:thproofs"
+                  },
+                  "schema": {
+                    "const": "p3-corpus-drop/v2"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/sidecar-mml-drop-reasons.jsonl"
+                  },
+                  "role": {
+                    "const": "semantic-sidecar:drop_reasons"
+                  },
+                  "schema": {
+                    "const": "p3-mml-drop-reasons/v1"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/sidecar-mml-exposure.jsonl"
+                  },
+                  "role": {
+                    "const": "semantic-sidecar:eval_exposure"
+                  },
+                  "schema": {
+                    "const": "p3-mml-eval-exposure/v1"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/sidecar-verifier-metamath.json"
+                  },
+                  "role": {
+                    "const": "verifier-manifest:metamath"
+                  },
+                  "schema": {
+                    "const": "p3-metamath-verifier/v1"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/visibility-corpus-union.jsonl"
+                  },
+                  "role": {
+                    "const": "corpus-union-visibility"
+                  },
+                  "schema": {
+                    "const": "p3-corpus-union-visibility/v2"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/visibility-enigma.jsonl"
+                  },
+                  "role": {
+                    "const": "train-visibility:enigma"
+                  },
+                  "schema": {
+                    "const": "p3-train-visibility/v2"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/visibility-isabelle.jsonl"
+                  },
+                  "role": {
+                    "const": "train-visibility:isabelle"
+                  },
+                  "schema": {
+                    "const": "p3-train-visibility/v2"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/visibility-metamath.jsonl"
+                  },
+                  "role": {
+                    "const": "train-visibility:metamath"
+                  },
+                  "schema": {
+                    "const": "p3-train-visibility/v2"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/visibility-mizar.jsonl"
+                  },
+                  "role": {
+                    "const": "train-visibility:mizar"
+                  },
+                  "schema": {
+                    "const": "p3-train-visibility/v2"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/visibility-prf2.jsonl"
+                  },
+                  "role": {
+                    "const": "train-visibility:prf2"
+                  },
+                  "schema": {
+                    "const": "p3-train-visibility/v2"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              },
+              {
+                "properties": {
+                  "logical_path": {
+                    "const": "evaluator/visibility-thproofs.jsonl"
+                  },
+                  "role": {
+                    "const": "train-visibility:thproofs"
+                  },
+                  "schema": {
+                    "const": "p3-train-visibility/v2"
+                  }
+                },
+                "required": [
+                  "logical_path",
+                  "role",
+                  "schema"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "minItems": 42,
+      "type": "array"
+    },
+    "inventory_root_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "manifest_root_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "profile": {
+      "const": "p3-evaluator-release-v1"
+    },
+    "provenance": {
+      "$ref": "#/$defs/provenance"
+    },
+    "roles": {
+      "const": {
+        "class_manifest_by_family": {
+          "enigma": "evaluator/heldout-atp.json",
+          "isabelle": "evaluator/heldout-isabelle.json",
+          "metamath": "evaluator/heldout-metamath.json",
+          "mizar": "evaluator/heldout-mizar.json",
+          "prf2": "evaluator/heldout-atp.json",
+          "thproofs": "evaluator/heldout-mizar.json"
+        },
+        "cohort_ledgers": {
+          "enigma": "evaluator/sidecar-cohort-enigma.jsonl",
+          "isabelle": "evaluator/sidecar-cohort-isabelle.jsonl",
+          "metamath": "evaluator/sidecar-cohort-metamath.jsonl",
+          "mizar": "evaluator/sidecar-cohort-mizar.jsonl",
+          "prf2": "evaluator/sidecar-cohort-prf2.jsonl",
+          "thproofs": "evaluator/sidecar-cohort-thproofs.jsonl"
+        },
+        "corpus_generation_current": "evaluator/provenance-corpus-current.json",
+        "corpus_generation_manifest": "evaluator/provenance-corpus-manifest.json",
+        "corpus_union_visibility": "evaluator/visibility-corpus-union.jsonl",
+        "drop_ledgers": {
+          "enigma": "evaluator/sidecar-drop-enigma.jsonl",
+          "isabelle": "evaluator/sidecar-drop-isabelle.jsonl",
+          "metamath": "evaluator/sidecar-drop-metamath.jsonl",
+          "mizar": "evaluator/sidecar-drop-mizar.jsonl",
+          "prf2": "evaluator/sidecar-drop-prf2.jsonl",
+          "thproofs": "evaluator/sidecar-drop-thproofs.jsonl"
+        },
+        "eval": {
+          "enigma": "evaluator/eval-enigma.jsonl",
+          "isabelle": "evaluator/eval-isabelle.jsonl",
+          "metamath": "evaluator/eval-metamath.jsonl",
+          "mizar": "evaluator/eval-mizar.jsonl",
+          "prf2": "evaluator/eval-prf2.jsonl",
+          "thproofs": "evaluator/eval-thproofs.jsonl"
+        },
+        "heldout": {
+          "atp": "evaluator/heldout-atp.json",
+          "isabelle": "evaluator/heldout-isabelle.json",
+          "metamath": "evaluator/heldout-metamath.json",
+          "mizar": "evaluator/heldout-mizar.json",
+          "mml": "evaluator/heldout-mml.json"
+        },
+        "oracle_manifests": {},
+        "semantic_sidecars": {
+          "drop_reasons": "evaluator/sidecar-mml-drop-reasons.jsonl",
+          "eval_exposure": "evaluator/sidecar-mml-exposure.jsonl"
+        },
+        "source_manifests": {
+          "enigma": "evaluator/provenance-source-enigma.json",
+          "isabelle": "evaluator/provenance-source-isabelle.json",
+          "metamath": "evaluator/provenance-source-metamath.json",
+          "mizar": "evaluator/provenance-source-mizar.json",
+          "prf2": "evaluator/provenance-source-prf2.json",
+          "thproofs": "evaluator/provenance-source-thproofs.json"
+        },
+        "tokenizer_seal": "evaluator/provenance-tokenizer.json",
+        "train_visibility": {
+          "enigma": "evaluator/visibility-enigma.jsonl",
+          "isabelle": "evaluator/visibility-isabelle.jsonl",
+          "metamath": "evaluator/visibility-metamath.jsonl",
+          "mizar": "evaluator/visibility-mizar.jsonl",
+          "prf2": "evaluator/visibility-prf2.jsonl",
+          "thproofs": "evaluator/visibility-thproofs.jsonl"
+        },
+        "verifier_manifests": {
+          "metamath": "evaluator/sidecar-verifier-metamath.json"
+        }
+      }
+    },
+    "schema_version": {
+      "const": "p3-evaluator-release-manifest/v2"
+    },
+    "version": {
+      "oneOf": [
+        {
+          "const": "__UNPUBLISHED__"
+        },
+        {
+          "pattern": "^v[1-9][0-9]*$",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "required": [
+    "dataset_id",
+    "families",
+    "generation_id",
+    "inventory",
+    "inventory_root_sha256",
+    "manifest_root_sha256",
+    "profile",
+    "provenance",
+    "roles",
+    "schema_version",
+    "version"
+  ],
+  "title": "P3 evaluator release manifest",
+  "type": "object"
+}

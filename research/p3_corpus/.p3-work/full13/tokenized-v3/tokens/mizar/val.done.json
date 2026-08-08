@@ -1,0 +1,97 @@
+{
+  "schema_version": "p3-packed-group-v3",
+  "code_version": "tokenize-corpus-v4",
+  "cross_split_binding_schema_version": "p3-token-cross-split-binding-v1",
+  "fingerprint": "e8a922a207369ce4523ed3273aab1a4f0e150d4646fa3c6f4e836306130282e4",
+  "build": {
+    "schema_version": "p3-packed-group-v3",
+    "code_version": "tokenize-corpus-v4",
+    "source_jsonl": {
+      "family": "mizar",
+      "name": "mizar.jsonl",
+      "sha256": "fd0c587ba83e00777dbe7c3baf17212b2b8496ac0c7e78bfd0ac42419e9f41ac",
+      "schema": "mizar-proof-v2"
+    },
+    "tokenizer": {
+      "schema_version": "p3-tokenizer-four-part-seal-v1",
+      "tokenizer_artifact_id": "tokenizer/qwen25-vendored",
+      "tokenizer_artifact_version": "v1",
+      "tokenizer_file_sha256": {
+        "tokenizer.json": "3fd169731d2cbde95e10bf356d66d5997fd885dd8dbb6fb4684da3f23b2585d8",
+        "tokenizer_config.json": "ddb9f850ca6559a928bb25d511f72e3c6eff81395334a4e0eeec670448333d09"
+      },
+      "tokenizer_composite_sha256": "aa90434a251a434bbc938ddb3be6683a73fa94150377b5ccd2cbd7880358661a",
+      "tokenizers_version": "0.22.2",
+      "tokenizer_eos_token_id": 151643,
+      "tokenizer_pad_token_id": 151643,
+      "separator": "\n---\nGOAL ",
+      "separator_ids": [
+        10952,
+        15513,
+        969
+      ]
+    },
+    "encoding_cache_fingerprint": "51a0850b83b48fac573c59f0ebd0c9a59ae4ff37dc1e1790b0d8c492bf10371c",
+    "packing": {
+      "algorithm": "largest-fit-decreasing-v1",
+      "split": "val",
+      "packed": true,
+      "sequence_length": 16384,
+      "shard_tokens": 250000000,
+      "tokens_dtype": "uint32",
+      "byte_order": "little",
+      "eos_token_id": 151643,
+      "pad_token_id": 151643,
+      "separator": "\n---\nGOAL ",
+      "separator_search": "---\nGOAL",
+      "separator_ids": [
+        10952,
+        15513,
+        969
+      ]
+    },
+    "corpus_generation": {
+      "schema_version": "p3-sealed-corpus-manifest-v1",
+      "logical_root_sha256": "60bb1867feb9c02ffe05e5ab388f6509fd785c77228010f676a1795375835148",
+      "manifest_root_sha256": "60bb1867feb9c02ffe05e5ab388f6509fd785c77228010f676a1795375835148",
+      "sealed_corpus_manifest": true
+    }
+  },
+  "cache_fingerprint": "51a0850b83b48fac573c59f0ebd0c9a59ae4ff37dc1e1790b0d8c492bf10371c",
+  "cache_root_sha256": "54d6343ccc902b66e67a0d570478dc35e341e4e7d8e30e5116bed3ac36011dd2",
+  "corpus_generation": {
+    "schema_version": "p3-sealed-corpus-manifest-v1",
+    "logical_root_sha256": "60bb1867feb9c02ffe05e5ab388f6509fd785c77228010f676a1795375835148",
+    "manifest_root_sha256": "60bb1867feb9c02ffe05e5ab388f6509fd785c77228010f676a1795375835148",
+    "sealed_corpus_manifest": true
+  },
+  "name": "mizar",
+  "documents": 2485,
+  "source_documents": 2485,
+  "instances": 212,
+  "real_tokens": 3462076,
+  "padding_fraction": 0.003263,
+  "dropped_over_length": 0,
+  "straddling": 1613,
+  "separator_ids": [
+    10952,
+    15513,
+    969
+  ],
+  "eos_token_id": 151643,
+  "pad_token_id": 151643,
+  "shards": [
+    {
+      "path": "tokens/mizar/val-00000.u32le.bin",
+      "instances": 212,
+      "tokens": 3473408,
+      "bytes": 13893632,
+      "sha256": "ee8d7787596f5e52990b7af724b11155e007d36482eac95ed4b6078f944bde4f",
+      "tokens_dtype": "uint32",
+      "byte_order": "little"
+    }
+  ],
+  "resumed_shards": 0,
+  "resumed_group": false,
+  "completion_sha256": "f0ea74d77e5e4c267d07e1aa7b8bf2c954f1c8194120e378c2243081d1b5b6d3"
+}

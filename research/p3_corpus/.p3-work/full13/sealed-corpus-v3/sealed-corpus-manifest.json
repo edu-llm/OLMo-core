@@ -1,0 +1,105 @@
+{
+  "families": {
+    "enigma": {
+      "eval": {
+        "bytes": 13171976,
+        "path": "/home/vs/AlphaAI/memorysplit-requery-exact/.p3-work/full13/mml-semantic-holdout-v7/eval/enigma.jsonl",
+        "rows": 263,
+        "sha256": "2d7882089c17a1c890e25305b9b1a840887ec76e64f3f07b4d0cf3a44366da5b"
+      },
+      "schema": "atp-v2",
+      "train": {
+        "bytes": 1183404591,
+        "path": "/home/vs/AlphaAI/memorysplit-requery-exact/.p3-work/full13/mml-semantic-holdout-v7/shards/enigma.jsonl",
+        "rows": 24652,
+        "sha256": "0efd52a5679429f2405e9939322a8405a67143f145058fb0f3d12a754330ad49"
+      }
+    },
+    "isabelle": {
+      "eval": {
+        "bytes": 4490035,
+        "path": "/home/vs/AlphaAI/memorysplit-requery-exact/.p3-work/full13/generation-work-persistent/p3-p3-full13-repaired.y13zg7ik/builders/isabelle/normalized-resume/eval.jsonl",
+        "rows": 590,
+        "sha256": "4dfa8182fb666936d15ff2c618efe42e5e791d68012570f5a146819b532621ba"
+      },
+      "schema": "isabelle-transition-v2",
+      "train": {
+        "bytes": 136153425,
+        "path": "/home/vs/AlphaAI/memorysplit-requery-exact/.p3-work/full13/generation-work-persistent/p3-p3-full13-repaired.y13zg7ik/builders/isabelle/normalized-resume/train.jsonl",
+        "rows": 16576,
+        "sha256": "ea5f881afd84dd519de1a5bfc643d16dd89c794a4ac158680d95aa7cbad46b26"
+      }
+    },
+    "metamath": {
+      "eval": {
+        "bytes": 9967393,
+        "path": "/home/vs/AlphaAI/memorysplit-requery-exact/.p3-work/full13/generation-work-persistent/p3-p3-full13-repaired.y13zg7ik/builders/metamath/normalized-resume/eval.jsonl",
+        "rows": 494,
+        "sha256": "5a5ceeb7ea12b0447a652c07e7b8480ea994c92009099718c6735fd11a9e3896"
+      },
+      "schema": "metamath-proof-v2",
+      "train": {
+        "bytes": 712024130,
+        "path": "/home/vs/AlphaAI/memorysplit-requery-exact/.p3-work/full13/generation-work-persistent/p3-p3-full13-repaired.y13zg7ik/builders/metamath/normalized-resume/train.jsonl",
+        "rows": 65122,
+        "sha256": "7ef07b9eac63e55a9b31314d3384c181722052b5495b7adba1b7ceb644d3b171"
+      }
+    },
+    "mizar": {
+      "eval": {
+        "bytes": 28272087,
+        "path": "/home/vs/AlphaAI/memorysplit-requery-exact/.p3-work/full13/mml-semantic-holdout-v7/eval/mizar.jsonl",
+        "rows": 2485,
+        "sha256": "fd0c587ba83e00777dbe7c3baf17212b2b8496ac0c7e78bfd0ac42419e9f41ac"
+      },
+      "schema": "mizar-proof-v2",
+      "train": {
+        "bytes": 400993819,
+        "path": "/home/vs/AlphaAI/memorysplit-requery-exact/.p3-work/full13/mml-semantic-holdout-v7/shards/mizar.jsonl",
+        "rows": 52868,
+        "sha256": "fe4d76ea91b34aa3390e7e482faaa8849b7d86317bf0be5727131b2ce9f9c309"
+      }
+    },
+    "prf2": {
+      "eval": {
+        "bytes": 17542546,
+        "path": "/home/vs/AlphaAI/memorysplit-requery-exact/.p3-work/full13/mml-semantic-holdout-v7/eval/prf2.jsonl",
+        "rows": 313,
+        "sha256": "b32d1fd7cdbb74d3d2b4e9a7344ba0deddfc528ecbb6b9ac411a545742d9ed80"
+      },
+      "schema": "atp-v2",
+      "train": {
+        "bytes": 1112580317,
+        "path": "/home/vs/AlphaAI/memorysplit-requery-exact/.p3-work/full13/mml-semantic-holdout-v7/shards/prf2.jsonl",
+        "rows": 21850,
+        "sha256": "a5608b7ae3ed4f541e156480bb8ba897861f99864659d77c467a814226501f03"
+      }
+    },
+    "thproofs": {
+      "eval": {
+        "bytes": 498313,
+        "path": "/home/vs/AlphaAI/memorysplit-requery-exact/.p3-work/full13/mml-semantic-holdout-v7/eval/thproofs.jsonl",
+        "rows": 46,
+        "sha256": "d9c90b6f436359b573649dafebdb3816cacf81e750a4294d7e832e8e93cf0d1d"
+      },
+      "schema": "mizar-proof-v2",
+      "train": {
+        "bytes": 4824295,
+        "path": "/home/vs/AlphaAI/memorysplit-requery-exact/.p3-work/full13/mml-semantic-holdout-v7/shards/thproofs.jsonl",
+        "rows": 584,
+        "sha256": "87266b079608a42d4b2c4c3eaf49ec497ba29a31dc855aa5b78157ef0c64661b"
+      }
+    }
+  },
+  "manifest_root_sha256": "60bb1867feb9c02ffe05e5ab388f6509fd785c77228010f676a1795375835148",
+  "schema_version": "p3-sealed-corpus-manifest-v1",
+  "tokenizer": {
+    "files": {
+      "tokenizer.json": "3fd169731d2cbde95e10bf356d66d5997fd885dd8dbb6fb4684da3f23b2585d8",
+      "tokenizer_config.json": "ddb9f850ca6559a928bb25d511f72e3c6eff81395334a4e0eeec670448333d09"
+    },
+    "path": "/home/vs/AlphaAI/memorysplit-requery-exact/tokenizers/qwen25-vendored"
+  },
+  "total_eval_rows": 4191,
+  "total_train_rows": 181652
+}

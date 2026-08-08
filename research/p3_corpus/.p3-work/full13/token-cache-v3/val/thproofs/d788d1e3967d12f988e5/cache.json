@@ -1,0 +1,100 @@
+{
+  "schema_version": "p3-encoding-cache-v3",
+  "code_version": "tokenize-corpus-v4",
+  "status": "complete",
+  "fingerprint": "d788d1e3967d12f988e59f06d75324cb1309747d7ac8a693055e5147eb3387a2",
+  "build_fingerprint": "d788d1e3967d12f988e59f06d75324cb1309747d7ac8a693055e5147eb3387a2",
+  "build": {
+    "schema_version": "p3-encoding-cache-v3",
+    "code_version": "tokenize-corpus-v4",
+    "source_jsonl": {
+      "name": "thproofs.jsonl",
+      "sha256": "d9c90b6f436359b573649dafebdb3816cacf81e750a4294d7e832e8e93cf0d1d"
+    },
+    "tokenizer": {
+      "schema_version": "p3-tokenizer-four-part-seal-v1",
+      "tokenizer_artifact_id": "tokenizer/qwen25-vendored",
+      "tokenizer_artifact_version": "v1",
+      "tokenizer_file_sha256": {
+        "tokenizer.json": "3fd169731d2cbde95e10bf356d66d5997fd885dd8dbb6fb4684da3f23b2585d8",
+        "tokenizer_config.json": "ddb9f850ca6559a928bb25d511f72e3c6eff81395334a4e0eeec670448333d09"
+      },
+      "tokenizer_composite_sha256": "aa90434a251a434bbc938ddb3be6683a73fa94150377b5ccd2cbd7880358661a",
+      "tokenizers_version": "0.22.2",
+      "tokenizer_eos_token_id": 151643,
+      "tokenizer_pad_token_id": 151643,
+      "separator": "\n---\nGOAL ",
+      "separator_ids": [
+        10952,
+        15513,
+        969
+      ]
+    },
+    "eos_token_id": 151643
+  },
+  "source_jsonl": {
+    "name": "thproofs.jsonl",
+    "sha256": "d9c90b6f436359b573649dafebdb3816cacf81e750a4294d7e832e8e93cf0d1d"
+  },
+  "documents": 46,
+  "tokens": 67922,
+  "straddling": 30,
+  "chunks": [
+    {
+      "index": 0,
+      "documents": {
+        "start": 0,
+        "end": 46
+      },
+      "tokens": {
+        "start": 0,
+        "end": 67922
+      },
+      "token_bytes": {
+        "start": 0,
+        "end": 271688
+      },
+      "offset_bytes": {
+        "start": 8,
+        "end": 376
+      },
+      "tokens_sha256": "4f81a23b222a55bd4b34f68bacd5f6eebedf899fd9cc523a71b4231036526a1e",
+      "offsets_sha256": "089f5113fff106528d84dafe0aae765a2c7a7221f07ae3f500b346fda5b093e6",
+      "source_rows_sha256": "d9c90b6f436359b573649dafebdb3816cacf81e750a4294d7e832e8e93cf0d1d",
+      "straddling": 30
+    }
+  ],
+  "payloads": {
+    "tokens": {
+      "path": "tokens.u32le.bin",
+      "bytes": 271688,
+      "sha256": "4f81a23b222a55bd4b34f68bacd5f6eebedf899fd9cc523a71b4231036526a1e",
+      "dtype": "uint32",
+      "byte_order": "little",
+      "documents": {
+        "start": 0,
+        "end": 46
+      },
+      "tokens": {
+        "start": 0,
+        "end": 67922
+      }
+    },
+    "offsets": {
+      "path": "offsets.u64le.bin",
+      "bytes": 376,
+      "sha256": "cc1c8a4c462e6feac3d315660afa19e9d87c5e02265bd1cae428c22f2fb69121",
+      "dtype": "uint64",
+      "byte_order": "little",
+      "documents": {
+        "start": 0,
+        "end": 46
+      },
+      "tokens": {
+        "start": 0,
+        "end": 67922
+      }
+    }
+  },
+  "cache_root_sha256": "9ba111199851aefb37359889d1532c510425414abdf8c0f9ba34489131dea39f"
+}

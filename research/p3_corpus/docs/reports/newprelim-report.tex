@@ -1,0 +1,618 @@
+\documentclass{article}
+
+\usepackage[final]{neurips_2019}
+\AtBeginDocument{
+  \newgeometry{
+    textwidth=6in,
+    top=0.85in,
+    headheight=12pt,
+    headsep=25pt,
+    footskip=30pt,
+    bottom=0.85in 
+  }
+}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{amsmath}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{multirow}
+\usepackage{graphicx}
+\usepackage{placeins}
+\usepackage{xcolor}
+\usepackage{lipsum}
+\usepackage[font=small,labelfont=bf]{caption}
+\setlength{\textfloatsep}{10pt}
+\setlength{\floatsep}{8pt}
+\setlength{\intextsep}{8pt}
+\raggedbottom
+
+\newcommand{\note}[1]{\textcolor{blue}{{#1}}}
+
+\title{
+    MemorySplit: On the Effects of Memory Externalization in Language Models \\
+  \vspace{0.9em}
+}
+
+\author{
+  Memory Architecture Team \\
+  EduLLM \\
+  Alpha AI Engineering \\
+}
+
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We investigate the benefits of separating factual knowledge from a language model by utilizing a schema of model pairs: one that learns facts as standard and another that offloads them into an external system. The split model keeps no fact values in its weights, which we verify mechanistically, while leaving the rest of its computation unchanged. It does moderately better on direct recall and two-hop composition, learns to use facts faster, and fabricates significantly less when it has no answer, though its two-hop advantage comes more from reliable fact access than from better chaining. Using oracle-supplied premise masking where facts are held equal across arms, we find a modest gain on formal proof generation and mathematical reasoning, even when both models are given access to the facts at inference time; however, the memorization pressure that the capacity argument depends on was never meaningfully active in any regime, so we treat the reasoning hypothesis as directionally supported under ideal retrieval conditions rather than completely negating the null. The split architecture is also beneficial in that it potentially allows for easy replacement of facts, such as in varying curricula, without the need for expensive retraining.
+\end{abstract}
+
+\section{Introduction}
+
+Modern large language models \citep{vaswani2017attention} store some facts and world knowledge in their parameters \citep{allenzhu2023storage}. Controlled experiments estimate that, under sufficient training and exposure, transformers can store approximately two bits of factual knowledge per parameter, implying a finite parametric knowledge budget \citep{allenzhu2024capacity}. Recall deteriorates when facts exceed this limit, and fine-tuning to add or edit facts in weights can interfere with previously learned skills, causing undesirable consequences such as factual staleness, hallucinations, and catastrophic forgetting \citep{gupta2024editing}.
+
+This highly optimized repurposing of weights in LLMs is convenient but makes clean separation of internal mechanics difficult. Microsoft's Phi-3 technical report attributes the model's weak factual accuracy (e.g., on the TriviaQA dataset) to its limited capacity to store knowledge at a small scale. Its authors deliberately filter highly specific facts from pretraining to ``leave more model capacity for reasoning'' and recommend search-engine augmentation instead \citep{abdin2024phi3}. In contrast, DeepSeek-AI's Engram-27B architecture reports gains not only in knowledge benchmarks but also in general reasoning, showing BBH $+5.0$ and ARC-Challenge $+3.7$, by adding a constant-time lookup memory that offloads static linguistic pattern reconstruction \citep{cheng2026engram}. These results suggest that separating patterns from dynamic computation can benefit reasoning, but do not directly show that externalizing factual knowledge itself is the cause of improved reasoning.
+
+Existing work therefore suggests that factual storage and reasoning may compete for model parameter use, but leaves unresolved whether externalizing knowledge itself improves a model's ability to reason with facts or simply improves its factual recall. Limited Memory Language Models show that fact values can be excluded from training loss and be supplied by an external database through queries without sacrificing recall or general language ability \citep{zhao2025lmlm}. Co-LMLM extends factual externalization by replacing string queries with continuous vector queries, but likewise focuses on perplexity, factuality, and language ability rather than comparing reasoning \citep{feldman2026colmlm}.
+
+Our experiments examine three related interventions: exact-store MemorySplit, oracle-supplied premise masking, and fact-span loss masking without retrieval. We reserve \emph{MemorySplit} for the exact-store architecture. We take inspiration from cognitive neuroscience, where Complementary Learning Systems theory (CLS) holds that intelligent behavior relies on two interacting systems: a hippocampal system that encodes specific experiences and facts and a neocortical system that distills a generalizable structure \citep{mcclelland1995cls}. In MemorySplit, a transformer-based ``split'' language model queries an external key-value database for entity-level facts. The retrieved fact values are masked from the training loss and supplied by the database at inference time. The dense arm does not receive lookup-formatted training and instead uses the same underlying examples.
+
+Our study contributes three complementary evaluations: fact retrieval, knowledge-based reasoning, and information saturation. Furthermore, we evaluate several other dimensions along which a split-memory model may differ from its dense counterpart, including training compute efficiency, model generalization performance, and hallucination.
+
+
+\section{Related Work}
+\textbf{Training-time factual externalization.} MemorySplit builds most directly on Limited Memory Language Models, which annotate pretraining text with relational database calls and mask retrieved values from the loss, teaching the model when and what to query rather than requiring it to memorize those values \citep{zhao2025lmlm}. A follow-up study, Co-LMLM, replaces these textual entity-relation queries with continuous vectors generated from the LLM's internal state. It also introduces an LLM-Asker baseline, which generates questions in natural-language corresponding to each fact in the annotated corpus and passes them through the LLM to produce continuous vector queries; the study finds that continuous queries significantly improve perplexity and knowledge \citep{feldman2026colmlm}. MemorySplit adopts the relational loss-masking approach, but intends to contribute a controlled study of how the externalization approach affects reasoning.
+
+\textbf{Inference-time retrieval and dedicated memory.} Inference-time augmentation methods such as nearest-neighbor language models (kNN-LM), RAG, and learned tool use improve factual access by consulting external documents or datastores at inference time \citep{khandelwal2020knnlm,lewis2020rag,schick2023toolformer}. Because the base model is still pretrained to predict factual content, these methods still leave the original parametric knowledge in the model. As such, comparing inference-time approaches with training-time factual externalization can provide a more concrete estimate of the effect of factual externalization on model reasoning performance.
+
+\textbf{Retrieval versus reasoning.} Simply externalizing facts does not necessarily, by itself, improve reasoning. kNN-LM improves memory-intensive tasks but can degrade reasoning even under oracle retrieval \citep{geng2025great}, and controlled studies similarly find that storing facts and manipulating them are distinct capabilities \citep{allenzhu2023manipulation}. More broadly, reasoning tasks such as multi-hop composition fail to generalize to novel structure even after grokking, and such grokking itself emerges only after optimization far beyond the point of overfitting \citep{wang2024grokked}.
+
+Together, these results establish that external memory can improve factual access, but cannot prove that removing factual storage pressure improves procedural reasoning. MemorySplit targets this gap through a paired dense–split comparison, equal-access reasoning conditions, and behavioral and mechanistic tests of where the facts reside.
+
+\section{Formulation}
+% \label{sec:definitions}
+
+Our overall goal is to evaluate the qualitative and quantitative differences between a split-memory LLM and a dense LLM. One of the main claims we wish to test is whether a model that does not store facts in its weights will reason better than one that does. Neither factual storage nor reasoning has a settled operational meaning in the literature, so in this section we fix working definitions to guide our experiments. These definitions are deliberately narrow: they are chosen so that each hypothesis can be tested using a measurement we can construct and so that null, inconclusive, and invalid outcomes can be distinguished.
+
+\subsection{Facts, storage, and retrieval}
+
+A \emph{fact} is an atomic (entity, relation, value) triple. In our setting, facts are attributes of individual entities, such as a city of birth of a person.
+
+We separate two properties that are easily conflated. Let \emph{fact storage} be the ability to produce a value from the weights alone, with no external resource available, and let \emph{fact retrieval} be the ability to obtain that value by whatever means the architecture provides. For a conventional dense model in the closed-book condition, the two coincide because the weights are the only channels available. For the split model, retrieval is supplied by an external store. Storage and retrieval are therefore distinct properties, and the two systems we compare differ in both.
+
+A closed-book dense model and a store-enabled split model differ in both where facts reside and how they are accessed. If the split model performs better, this may simply be because the store supplies facts that the dense model fails to recall, rather than because the split model reasons better with them. Therefore, we add an open-book dense condition that provides the same required facts in context. Comparing the two dense conditions shows how performance changes when facts are provided, while comparing split with open-book dense is the more relevant reasoning diagnostic because both have access to those facts. This remains an imperfect comparison, because the dense model was not trained to consume facts in the same format.
+
+Retrieval in the split model has two stages. \emph{Addressing} is the model's emission of a query key, and \emph{resolution} is the store's lookup of that key. The model learns addressing, but both stages must succeed for the retrieval to succeed.
+
+
+\subsection{Reasoning}
+
+Reasoning is difficult to identify from a single accuracy figure. The same number can be produced by a memorized mapping, by a prior over answer formats, or by a scoring harness that fails on one class of outputs. Rather than attempt a general definition of reasoning as an intrinsic property of a model, we define it operationally as a property of measurement. An endpoint measures reasoning to the extent that, with fact retrieval and surface form held fixed, it satisfies three conditions:
+
+\begin{quote}
+\begin{enumerate}
+\item \emph{Depth sensitivity}: performance is reported across derivation depths and, outside floor or ceiling regimes, generally declines as the number of serially dependent steps increases.
+\item \emph{Distractor invariance}: performance changes little, within some tolerance, when a (topically plausible but) logically irrelevant premise is added.
+\item \emph{Premise sensitivity}: changing a premise required by the derivation changes the answer, and removing that premise dramatically reduces performance.\end{enumerate}
+\end{quote}
+
+Each condition eliminates a specific false positive. Depth sensitivity distinguishes derivation from recall of a stored answer, as increased depth indicates a more difficult reasoning task. The distractor invariance tests whether the model uses relevant premises rather than superficial cues. Premise sensitivity establishes that the premises are necessary and sufficient rather than decorative. Together, these criteria should test for reasoning rather robustly.
+
+We considered a weaker criterion that is insufficient on its own: generalization to held out items, which does not establish reasoning because shortcuts can also generalize \citep{geirhos2020shortcut} and reasoning may be (strongly) context-dependent. Additionally, we must distinguish reasoning failures due to incorrect fact retrieval from true reasoning failures.
+
+As a result of our formulation, we ultimately selected multi-hop reasoning and proof-derivation as our two primary reasoning benchmarks. Multi-hop reasoning generally decays in performance as the number of hops increases since each hop is another chance at failure. A good multi-hop system should also follow the fact chain it is asked to find and ignore irrelevant questions in the prompt, which satisfies requirements two and three. Proof generation similarly meets requirement one because each subsequent token must be correct, distractor invariance because not all premises are necessary for proofs, and premise sensitivity because a logical proof can only flow from its premises.
+% We leave the verification of these criteria an exercise to the reader
+
+\subsection{Hypotheses}
+
+Having defined facts and reasoning, we test our main claims in the order of dependency.
+
+\paragraph{H1: Fact values can be moved out of the weights.}
+The split model's closed-book recall and the fact content recoverable from its parameters both fall to near zero, while its recall with the store available is at least comparable to the dense model's closed-book recall. H1 is a prerequisite rather than a result of interest in itself. If it fails, the treatment did not do what it was designed to do and the remaining hypotheses cannot be evaluated.
+
+\paragraph{H2: Moving facts out of the weights does not degrade general language ability.}
+Moving facts to an external store should not reduce the performance of tasks that do not depend on those facts. Otherwise, any apparent gains in reasoning may come at the expense of other abilities. We therefore interpret H3 only if the split model preserves its performance on these tasks. An apparent reasoning gain obtained by damaging the model in some other respect is not a gain, so H2 must hold for H3 to be worth interpreting.
+
+\paragraph{H3: The split model reasons better.}
+With all other factors held constant, the split model outperforms its dense twin on reasoning tasks when both have access to the required facts.
+
+H3 rests on a premise that we state separately because it is taken as fact in the original Incept proposal:
+
+\paragraph{H0: Competition.}
+Memorization and reasoning compete for limited capacity within the model, so decreasing one makes room for the other.
+
+We also record two secondary hypotheses, which are worth testing regardless of H3's results.
+
+\paragraph{H4: Sample efficiency.}
+The split model reaches a given level of task competence in fewer optimization steps than the dense model, even when its final accuracy is only comparable. This is a claim about the learning curve rather than its asymptote, and it is the benefit most relevant to training under a fixed compute budget.
+
+\paragraph{H5: Behavior on failure.}
+Because the split model receives no direct supervision to predict stored values, we hypothesize that it fabricates fewer values and produces a failure signal more often when a query cannot be resolved. The external store can be inspected and edited without retraining. Whether the model reliably uses those edits must be tested separately.
+
+
+\section{Architecture and Methodology}
+
+\subsection{The paired dense--split design}
+\label{sec:m0}
+Following LMLM \citep{zhao2025lmlm}, each exact-store experiment uses a pair of matched models. The two share an initialization seed, a data-order seed, a step count, a token budget, and the same underlying examples in the same order, but arm-specific renderings of facts in the data.
+
+The dense arm sees each fact as unannotated inline text and is graded on its value tokens, so it must memorize them; the split arm sees the same fact rewritten as a store lookup with the value tokens masked, so it is taught only to issue the query. Both arms can still use a fact during the forward pass. The intervention therefore combines arm-specific rendering with value-loss masking; initialization, data content, order, and token budget remain matched. We compare the two arms only on held-out evaluation sets.
+
+\paragraph{The split mechanism.} We extend the tokenizer with five control tokens:
+\begin{center}
+\texttt{<|db\_start|>}, \texttt{<|db\_retrieve|>}, \texttt{<|db\_end|>},\\
+\texttt{<|eot|>}, and \texttt{<|db\_fail|>}.
+\end{center}
+A fact is rendered as
+\[
+\texttt{<|db\_start|>}\,[\text{entity, relation}]\,\texttt{<|db\_retrieve|>}\,[\text{value}]\,\texttt{<|db\_end|>}.
+\]
+The loss is masked for the value and its closing \texttt{<|db\_end|>} token; gradients are calculated with the query but never the value. The store is an exact-match dictionary from a normalized ``entity, relation'' key to a value. At inference time, the harness intercepts the emitted query, looks it up, and injects the value back into the context; a query with no matching key returns \texttt{<|db\_fail|>}.
+
+%likely unnecessary information - maybe already to keep tho bc it's so short
+\paragraph{Backbone and optimization.} Both arms use \texttt{d160m}: a 12-layer, 12-head decoder with $d_{\text{model}}{=}768$ ($\approx$162M parameters), RMSNorm, RoPE, a SwiGLU MLP, context length 2048, and vocabulary padded to $50{,}304$. We train with AdamW ($\beta{=}(0.9,0.95)$, weight decay $0.1$, gradient clip $1.0$) in bf16 under a cosine schedule (peak $1.5\times10^{-3}$, 300-step warmup), consuming $524{,}288$ tokens per step for $\approx$6.1k steps ($\approx$3.2B tokens).
+
+\paragraph{Data.} Each arm sees the same corpus, mixed at fixed token shares: general web text from FineWeb-Edu \citep{penedo2024fineweb} ($54\%$) for language ability, synthetic biographies \citep{allenzhu2023storage} ($23\%$) as the fact source, iGSM-style arithmetic \citep{ye2024igsm} ($12\%$), RuleTaker-style deduction \citep{clark2020ruletaker} ($8\%$), and a fact-use QA training family ($3\%$) with a separate held-out evaluation split. Reasoning tasks are checked against an independent oracle that re-derives every answer.
+
+A biography entity is a synthetic person with a name and six attributes, each drawn uniformly from a closed pool of a few hundred values, giving about 53 bits per entity by construction. Each entity is rendered through many paraphrase templates rather than a single sentence pattern, since one phrasing lets the model bind a fact to that pattern instead of learning the fact itself. Generating the corpus rather than sourcing it gives exact knowledge of every fact, exact control over how often each is seen, and reasoning tasks that are knowledge-free by construction, at the cost of the external validity we return to in Section~\ref{sec:limitations}.
+
+\paragraph{The fact-load dial.} Fixing the biography budget ($\approx 0.736$B tokens) and varying the number of entities sets the number of exposures of each fact: $\approx 196, 49,$ and $12$ exposures for \texttt{n50k}, \texttt{n200k}, and \texttt{n800k} (Table~\ref{tab:dial}). This dials memorization pressure without changing model size or compute. Running the paired pretraining at these three loads yields the six base models on which the externalization tests in Section~\ref{sec:mech} are run directly.
+
+\begin{table}[!htbp]
+\centering
+\caption{The fact-load dial. Because the biography token budget is held fixed, entity count and exposures per entity are perfectly anti-correlated. We revisit this confound in Section~\ref{sec:exposure-results}.}
+\label{tab:dial}
+\begin{tabular}{lrrr}
+\toprule Setting & Entities & Facts & Exposures per entity \\
+\midrule
+\texttt{n50k}  & 50{,}000  & 0.3M & $\approx 196$ \\
+\texttt{n200k} & 200{,}000 & 1.2M & $\approx 49$ \\
+\texttt{n800k} & 800{,}000 & 4.8M & $\approx 12$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Two-hop composition}
+\label{sec:twohop-method}
+% (the task/notation/populations/training/eval paragraph you already have goes here)
+Beyond the base pretraining, this thread requires additional training in two forms. As an upper reference we train \emph{from scratch} a dense/split pair directly on the composition corpus, giving the accuracy each arm reaches when composition is present throughout training. The main experiment instead continues training from saved \texttt{n50k} checkpoints on the composition corpus, which tests whether the pretrained substrate (in-weight facts for dense and an addressing skill for split) transfers to a new compositional task. Both use the same corpus construction (bridge relations, composed vs.\ held-out populations, explicit reasoning traces) and the same three evaluation strata, detailed above.
+
+\subsection{Exposure and the training regime}
+\label{sec:m3}
+The dial from Section~\ref{sec:m0} is also the instrument for this thread: by moving exposures while holding model size and compute fixed, it lets us ask whether any change in stored content is due to externalization or merely to how often a fact was seen. Two quantities frame the regime. First, capacity: each entity carries $\approx$53 bits, so even the largest load ($\approx$42 Mbit) sits well under the $\approx$324 Mbit the model could in principle hold at 2 bits per parameter \citep{allenzhu2024capacity}. Second, compute: at $\approx$3.2B tokens the models train at $\approx$20 tokens per parameter, roughly the compute-optimal point \citep{hoffmann2022chinchilla}. We characterize the regime by measuring stored content across the dial and, within a run, tracking recall against training tokens (whether more optimization would store more). These measurements determine whether a null on the reasoning payoff (H3) reflects the architecture or simply the regime we can afford to train in.
+
+
+\FloatBarrier
+\subsection{Fact externalization and architecture validation}
+\label{sec:exp1}
+
+\subsubsection{Setup}
+This experiment tests H1, that the split model's facts are held in the store rather than in its weights.
+
+\paragraph{Recall probe.} For a trained entity, we prompt the model for one of its stored attributes (``$\langle$name$\rangle$'s $\langle$relation$\rangle$ is'') and count the response correct if the correct value appears in the continuation. Probes cover all six biography attributes. Because a drift in the entity generator can otherwise produce people the models never actually saw, we draw probe entities from the frozen training set rather than regenerating them, so that recall is measured only on entities the models were trained on.
+
+\paragraph{Conditions.} We score recall under three conditions that separate storage from retrieval: the split model with its store attached (its normal retrieval mode), the split model with the store detached (weights only), and the dense model closed-book. The attached-versus-detached contrast isolates whether the split model's recall comes from the store or from its parameters; the dense closed-book condition is the reference for how much a conventional model memorizes.
+
+\paragraph{Fact load and downstream use.} We run all three conditions at each fact load (\texttt{n50k}/\texttt{n200k}/\texttt{n800k}), which also shows how dense memorization changes with the number of times each fact is seen. To test whether externalization preserves downstream fact access as the load grows, we additionally score held-out fact-use questions that require retrieving one or two stored facts and comparing them.
+
+The internal and causal tests of fact externalization are membership inference, neuron and layer ablation, direct logit attribution, and a relearning attack. They are described with their results in Section~\ref{sec:mech}.
+
+
+\subsubsection{Validation}
+
+\label{sec:mech}
+
+The split model holds its facts entirely outside its weights, while the dense model builds a compact, localizable mechanism to store and emit them. We summarize the headline contrasts in Table~\ref{tab:mech_evidence} and the causal-localization results in Table~\ref{tab:mech_causal}, and develop each thread below. 
+
+\begin{table}[!htbp]
+\centering
+\small
+\caption{Mechanistic evidence that facts are externalized in the split arm (\texttt{n50k}). Recall, extractability, MIA, and selectivity use trained entities; value-token KL uses held-out people. Store-on/off recall, extractability, and the per-ability KL are behavioral; the position-decomposed membership-inference (MIA) AUC is statistical. Higher MIA AUC = the weights reveal which facts were in training; $0.5$ is chance.}
+\label{tab:mech_evidence}
+\begin{tabular}{lcc}
+\toprule Measure & Dense & Split \\
+\midrule Closed-book recall (store detached) & 0.62 & \textbf{0.00} \\
+Recall with store attached & N/A & \textbf{$\approx 1.00$} \\
+Extractability: generative recall / MC recognition & 0.64 / 0.90 & 0.00 / chance \\
+Position-decomposed MIA (AUC) & $\approx 0.99$ & \textbf{$\approx 0.50$} \\
+Per-ability KL between arms on \emph{value} tokens (nats) & \multicolumn{2}{c}{6.7 \; (vs $\leq$0.08 on all other abilities)} \\
+Own top-64 fact-neuron selectivity ($|d|$) & 7--11 & (dense units: 1.5--3 in split) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Behavioral.} We first test, purely from behavior, whether the split model can produce fact values on its own. We find that with MemorySplit attached it answers recall questions at roughly $100\%$, and with it detached recall drops to exactly $0\%$. To confirm the weights themselves hold no value information, we measure each model's loss on the value tokens of held-out people, in nats. With its store detached the split model is about $7$ nats more surprised than the dense model, meaning it assigns the correct values almost no probability. On knowledge-free text the two models have equal loss, so removing facts from the weights costs nothing in general language modeling. 
+
+\paragraph{Statistical.} We next ask, without generating anything, whether a model's weights alone reveal which facts it was trained on. We use a membership-inference test to check whether the model is more confident on an example it has seen than on a comparable unseen one \citep{shokri2017membership,carlini2022lira}. We measure it at the fact-value token positions and report the AUC, where $0.5$ means membership cannot be told apart from chance and $1.0$ means it is perfectly separable. 
+
+We find that the dense weights are highly revealing (AUC $\approx0.99$), while the split weights are at chance (AUC $\approx0.50$). KL divergence between the two models' next-token predictions, broken down by task, shows that the arms differ by about $6.7$ nats on biography-value tokens but by under $0.08$ nats on arithmetic, deduction, and ordinary text, so splitting changes the model only at the fact-value positions and leaves everything else untouched.
+
+\paragraph{Causal.} The tests above show facts are present in dense and absent in split; we now intervene on the network to show that dense uses specific components to store facts and that split has no such components. First, we ablate the $64$ units whose activity is most tied to fact recall: dense's closed-book recall falls from $0.66$ to $0.35$. Note that ablating $64$ random units barely changes recall ($\approx 0.64$), suggesting that the dense model allocates specific units for fact recall. Searching the split model for the closest behavioral match to each of these dense units turns up nothing fact-related, so dense's storage units have no counterpart in split. 
+
+Narrowing further, mean-ablating a single late feed-forward layer (L9) at the value position halves dense recall ($0.61\!\to\!0.20$), while doing the same to an earlier layer (L6) does not ($\to\!0.53$); the split arm has no closed-book recall to remove. Reading the network in the forward direction, we decompose its output for the value token into per-component contributions (direct logit attribution): in dense the value is written by the late feed-forward layers (L11 most, then L10 and L9), and every dense prompt produces a value, whereas the split model produces a value on $0$ of $100$ prompts, so there is nothing to attribute. A final check rules out that split has merely hidden the values in a form our probes cannot read: we fine-tune it to output values and find recall rises no faster than when we fine-tune it on brand-new entities it has never seen (both near zero after $40$ steps), while the dense model starts at $63\%$. 
+
+\begin{table}[!htbp]
+\centering
+\small
+\caption{Causal localization on the twins (\texttt{n50k}, trained entities, database banned). \emph{Matched ablation}: mean-ablating the dense late fact layer (L9) more than halves recall while a control layer (L6) does not; the split arm has no in-weight recall to ablate. \emph{DLA}: fraction of prompts committing a value token at the value position. \emph{Relearn}: closed-book recall after fine-tuning to emit values, at step 0 and step 40, with a fresh-entity control for split.}
+\label{tab:mech_causal}
+\begin{tabular}{lcc}
+\toprule Intervention & Dense & Split \\
+\midrule Fact-neuron ablation: recall (top-64 / random-64) & 0.35 / 0.64 & N/A \\
+Matched MLP ablation: recall (baseline / L9 / L6) & 0.61 / \textbf{0.20} / 0.53 & 0.00 / 0.00 / 0.00 \\
+DLA: prompts committing a value (of 100) & 100 & \textbf{0} \\
+DLA: top contributing components & MLP L11, L10, L9 & none \\
+Relearn: recall (step 0 $\rightarrow$ 40) & 0.63 $\rightarrow$ 0.48 & 0.00 $\rightarrow$ 0.003 \\
+\quad split fresh-entity control (step 0 $\rightarrow$ 40) & N/A & 0.00 $\rightarrow$ 0.003 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Query resolution and fact access}
+
+\paragraph{Query resolution and fresh-entity generalization.}
+The split model is able to learn to offload facts and perform queries. At 50K entities, 94.9 percent of its queries resolve to a fact present in the store, and disabling the store drives closed-book recall to zero. It generalizes to entities it never read, provided the query takes a form it has seen; in a 0.8B-token pilot at the 200,000-entity load it scores 0.996 on fresh-entity lookup with the store attached and 0.000 with it detached, against 0.002 to 0.008 for the dense arms across the three loads ($n = 500$ per cell).
+
+\paragraph{Fact-use pilot.}
+Table~\ref{tab:pilot_factqa} summarizes the held-out fact-use pilot by question family.
+
+\begin{table}[!htbp]
+\centering
+\small
+\caption{Held-out fact-use question answering at the 200k load, 0.8B-token pilot, by question family. Accuracies are percentages and the last column gives each family's contribution in points to the overall difference. The same-city row is a constant response in both arms, and the extraction row is at floor in both.}
+\label{tab:pilot_factqa}
+\begin{tabular}{lrrrr}
+\toprule Question family & Items & Dense (\%) & Split (\%) & Share of gap (pp)\\
+\midrule Date comparison       & 598     & 45.7 & 96.5 & $+20.3$\\
+Same-city check       & 481     & 40.5 & 59.5 & $+6.1$\\
+Attribute extraction  & 421     & 0.0  & 2.1  & $+0.6$\\
+\midrule All                   & 1{,}500 & 31.2 & 58.1 & $+26.9$\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Behavior on failure: hallucination and abstention}
+
+\paragraph{Preliminary hallucination and leakage audit.}
+When asked about a person not in the training data, a dense model hallucinates a wrong answer about 99\% of the time. Conversely, the split model does that essentially never (0\% at n50k/n200k, 0.08\% at n800k). Across 5,000 tries it also never once returned a real fact about the wrong person. Instead of guessing, it exhibits an emergent behavior of re-running the lookup or trailing off without naming a value.
+
+\paragraph{Abstention and editability as design properties.}
+Two properties of the split model follow from its construction rather than from a measurement. A value the model was never trained to produce cannot be revoked from its weights, so deleting or swapping knowledge reduces to editing the store, with no retraining. And because it never learned to generate values, we expect it to abstain rather than fabricate on an unanswerable query. The behavioral audit that would quantify the abstention claim is not reproducible in the current harness; we therefore state these as architectural expectations and flag the abstention rerun as the first measurement to restore.
+
+\FloatBarrier
+
+
+\section{Experiment 1: Facts and Reasoning under a Standard Training Regime}
+
+\subsection{Research Question and Hypothesis}
+
+We ask whether MemorySplit improves reasoning under a standard training regime. MemorySplit relies on three premises:
+\begin{enumerate}
+  \item Arbitrary facts occupy parameters in a small model;
+  \item Masking those facts frees those parameters; and
+  \item The freed parameters get taken up by reasoning.
+\end{enumerate}
+If all three hold, the split arm's advantage over its dense twin on held-out reasoning should widen as fact load rises, since the dense arm is most constrained at high load. We test this as a difference-in-differences between the lightest (50K) and heaviest loads (800K), against the null that the advantage does not vary with load.
+
+\subsection{Setup.}
+
+We use the paired design and corpus of Section~\ref{sec:m0} without modification. The 160M sweep crosses three fact loads with two arms at 3.2B tokens per run, roughly 20 tokens per parameter and therefore near compute-optimal. A 1B pair on AWS serves as a scaling check, with one seed pair due to compute constraints.
+
+\subsection{Validation}
+
+The split model is able to learn to offload facts and perform queries. At 50K entities, 94.9 percent of its queries resolve to a fact present in the store, and disabling the store drives closed-book recall to zero. It generalizes to entities it never read, provided the query takes a form it has seen; in a 0.8B-token pilot at the 200,000-entity load, it scores 0.996 on fresh-entity lookup with the store attached and 0.000 with it detached, against 0.002 to 0.008 for the dense arms across the three loads ($n = 500$ per cell). The corresponding knowledge in the dense arm is spatially localized: ablating its 64 most fact-selective units cuts closed-book recall from 0.66 to 0.35, a 47 percent reduction, against 3 percent for an equal number of random units. At the same indices in the split arm, selectivity is three to six times lower, with $|d|$ of 1.5 to 3 against 7 to 11.
+
+\subsection{Results}
+\label{sec:exposure-results}
+
+Under a standard training budget, split does not improve reasoning because the dense model does not appear to become overcrowded.
+
+On held-out deduction, the split arm scores 2.0 points below its dense twin at 50K entities, 3.1 above at 200K, and 5.5 below at 800K. There is no consistent advantage, and the sign reverses across the three loads. The hypothesis predicts that the advantage should grow as fact load grows, since that is when the dense twin should be most burdened, but the difference-in-differences is negative 3.5 points.
+
+Further investigation shows that the dense model's reasoning does not decline as it is shown more facts. Going from 50K to 800K entities multiplies the fact load by sixteen, and dense reasoning accuracy moves from 65.0 to 66.7 to 68.2. The crowding account predicts degradation, but reasoning is flat at worst, discrediting the crowding account. We assumed a model shown too many facts would compress them until something gave way, whereas what it actually seems to do is decline to learn them, and that costs it nothing.
+
+The storage measurements explain why we see these results. At 50K entities, the dense model holds around 33 of the roughly 53 bits per entity that we showed it, but at 200K and 800K it holds about 0.2 bits per entity, which is close to nothing. This is because, given the fixed token budget of 732M tokens, the number of exposures falls from about 196 to 49 and then 12 as the number of facts rises. The dense model only recalls facts when there are enough training tokens per fact.
+
+Nothing in our sweep came close to the capacity that crowding would require. Allen-Zhu and Li \citep{allenzhu2024capacity} measure achievable storage at two bits per parameter, giving a ceiling of 324M bits for our 162,220,800-parameter model, and each entity in our corpus carries roughly 53 bits by construction. At 800,000 entities, the demanded load is 42M bits, or 13 percent of that ceiling. Their two-bit figure is measured at 1,000 exposures per fact, however, and our budget allows only 12 to 196. At 100 exposures, the same work reports one bit per parameter, which halves the applicable ceiling and places even our heaviest load at 26 percent of capacity.
+
+\FloatBarrier
+
+
+\section{Experiment 2: Fact-Based Reasoning}
+
+\subsection{Two-hop composition}
+\label{sec:twohop-task}
+
+\subsubsection{Setup}
+
+\paragraph{Task.} Each biography entity has atomic attributes (its biographical facts) and, in the composition corpus, one bridge relation $r_1\in\{\texttt{mentor},\texttt{advisor}\}$ linking it to another entity. A two-hop item names a query person $P$ and a target attribute $r_2$ (e.g.,\
+\texttt{employer}) and asks for that attribute of $P$'s bridge. Writing $B=r_1(P)$ for the bridge entity and $V=r_2(B)$ for its attribute, the answer is $V$, and reaching it on the held-out set requires composing two separately stored facts, $r_1(P)=B$ and $r_2(B)=V$. Neither the pair $(P,V)$ nor the direct mapping $P\mapsto V$ ever appears in training for the held-out set, so the item cannot be answered by recalling a single memorized association.
+
+We train the model to emit an explicit reasoning trace; this is the regime in which two-hop questions are reliably learnable \citep{wei2022cot,press2023compgap}: ``\textit{Reasoning: $P$'s $r_1$ is $B$. Their $r_2$ is $V$. Answer: $V$}''. Composition thus decomposes into two learned sub-steps: recover the bridge $B$ from $P$, then pose the second query about $B$. The second step is an \emph{in-context copy}: the bridge $B$ the model has just written (or looked up) must be carried into the $r_2$ query. It is not a memorized $P\mapsto V$ shortcut, and we do not presuppose a pre-existing copy/induction mechanism.
+
+\paragraph{Data.} The composition corpus is built separately, not reused from the pretraining corpus of Section~\ref{sec:m0}. We add one bridge relation per entity over the biography population and generate two-hop documents in the trace format above. Following the synthetic-biography protocol of \citet{allenzhu2023manipulation} and its compositional extension \citep{karmim2026multihop}, we split the entities into a \emph{composed} population that appears in two-hop documents and a \emph{held-out} population $P_{\text{held}}$ that appears only in atomic single-hop biographies. As in pretraining, the two arms see identical traces and differ only in how the two facts are rendered. In the dense arm every token is in the loss, so the model must recall both $B$ and $V$ from its weights (closed-book chaining). In the split arm each fact is a store lookup: the first hop is written \texttt{<|db\_start|>}\,$P, r_1$\,\texttt{<|db\_retrieve|>}\,$B$\,\texttt{<|db\_end|>}, and the second, using that returned $B$, is \texttt{<|db\_start|>}\,$B, r_2$\,\texttt{<|db\_retrieve|>}\,$V$\,\texttt{<|db\_end|>}. The returned values $B$ and $V$ are masked from the loss; the query strings are not. The split arm is therefore graded on \emph{issuing} both lookups, including copying the store-returned bridge $B$ into the second query, but not on producing $B$ or $V$ from its weights.
+
+\paragraph{Training.} We use the composition corpus in two ways. In the \emph{from-scratch} setting we train a fresh dense/split pair directly on it, which gives the accuracy each arm reaches when composition is present throughout training and serves as an upper reference (final anchors: split $99.2\%$, dense $91.8\%$). In the \emph{fine-tuning} setting, our main experiment, we continue training from saved \texttt{n50k} checkpoints on the same corpus (10{,}000 composed entities, drawn from those the bases already store as facts), which tests whether the pretrained substrate (in-weight facts for the dense base and an addressing skill for the split base) transfers to a new compositional task. Within each setting the two arms are matched in data, order, and token budget.
+
+\paragraph{Evaluation.} We evaluate on three strata: (i) in-distribution composed pairs; (ii) $P_{\text{held}}$ (held-out compositions of entities seen only as atomic facts, the out-of-distribution test of the two-hop \emph{procedure}); and (iii) entities never seen at all. The split arm is evaluated with its store attached. To separate composition from fact access, which is the distinction at the heart of the compositionality gap \citep{press2023compgap}, the dense arm is evaluated both closed-book and open-book, with the two required facts supplied in context alongside distractors.
+
+\subsubsection{Results}
+\label{sec:twohop-results}
+
+\paragraph{Accuracy on seen and unseen entities.}
+We fine-tuned the \texttt{n50k} dense and split bases on two-hop composition and measured accuracy on held-out compositions of two kinds of entities: those the base had already seen as isolated facts (\emph{aligned}) and those it had never seen at all (\emph{novel}). The split arm answers with its store attached, while the dense arm is measured both closed-book and ``open-book'', with the two required facts placed in its context. On aligned entities all three settings compose well (Table~\ref{tab:twohop}: dense closed-book $86.6\%$, dense open $94.2\%$, split $99.8\%$).
+
+On these seen entities the split arm's advantage comes from fact retrieval, not from the chaining step. If we restrict the dense results to items where the model can actually recall both required facts, it composes at $88.8\%$; its lower unrestricted score reflects that it recalls both facts together only about $80\%$ of the time, whereas the store returns them exactly. Split's answers are also backed by a visible record: on aligned items it writes the correct lookup key for each hop about $99.8\%$ of the time, which matches its answer accuracy, so the answer comes from actually issuing the two queries rather than from a memorized person-to-answer association.
+
+\begin{table}[!htbp]
+\centering
+\small
+\caption{Two-hop composition after fine-tuning the \texttt{n50k} bases (chance $\approx 0.5\%$). Aligned entities were seen as facts by the base; novel entities never appeared in training. Dense is shown closed-book and ``open'' (the two facts supplied in context); split uses its store.}
+\label{tab:twohop}
+\begin{tabular}{lcc}
+\toprule Condition & Aligned OOD (\%) & Novel OOD (\%) \\
+\midrule Dense, closed-book & 86.6 & 0.5 \\
+Dense, open (facts in context) & 94.2 & 0.8 \\
+Split, external store & \textbf{99.8} & \textbf{53.5} \\
+\midrule
+\multicolumn{3}{l}{\emph{Split per-hop (aligned OOD):} hop-1 key 99.9, hop-2 key 99.8, both 99.8} \\
+\multicolumn{3}{l}{\emph{Split per-hop (novel):} both keys 26 (single-hop 38--60; composes 83.7 when addressed)} \\
+\multicolumn{3}{l}{\emph{Dense (aligned OOD):} both-fact access rate 80.3; conditioned accuracy 88.8} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{The dense arm genuinely chains its two hops.}
+To check that the dense arm truly composes, we overwrite the bridge entity in the model's own reasoning trace and see whether the final answer follows. Replacing the bridge $B_i$ the model wrote with a different bridge $B_j$ changes the answer every time ($100\%$) and turns it into $B_j$'s own attribute $94.2\%$ of the time, with no case of the answer staying on the original ($0\%$ shortcut). The dense arm therefore computes the second hop from the bridge it wrote, which also explains why its two-hop accuracy is higher than the product of its cold single-hop recall rates: the second hop reads the bridge already present in the context, which is more reliable than recalling it from scratch. (This test used self-elicited chains on the dense composition checkpoint and a single seed; the same test cannot be run on the split arm, whose reconstructed store does not contain the bridge relation, so split's genuine-composition evidence is the key trace above.)
+
+\paragraph{How each arm resolves the second hop.}
+Both arms carry out the second hop in their late layers, but by different means. In the dense arm, two read-outs of the internal state show a compact pathway. Activation patching splices one run's internal state into another to see whether the answer moves, while a logit lens decodes each layer's state to see when the answer becomes readable. Early layers build a representation of the written bridge at the bridge tokens; attention then carries that bridge identity to the final answer position (its contribution at the bridge tokens fades out by layer~9 while the contribution at the answer position rises, crossing over around layers~7--8); and the attribute is read out in the late layers (the answer is not decodable before layer~7 and appears at layers~8--9, complete by 9--11). By layer~9 the answer position alone carries essentially the whole computation. In the split arm, the corresponding late-layer machinery is a small control circuit: one attention head at layer~6 that fires the \emph{second} lookup, and a layer~11 MLP that copies the returned value into the answer. The shared part is that both arms move the bridge to the answer position and finish the second hop late; the difference is that dense reads the attribute from its own weights while split emits and copies a second external query, which is why split needs the layer-6 head that dense has no use for. We present these as converging evidence of \emph{where} each arm resolves the hop rather than a like-for-like comparison:
+the dense pathway was characterized on the composition checkpoint with position-level patching on self-elicited chains, and the split control circuit on its own fine-tuned run, and both are single-seed.
+
+\paragraph{Sample efficiency.}
+The split arm learns composition in far fewer fine-tuning tokens: it reaches its ceiling by about $25$M tokens, whereas the dense arm only begins composing around $100$M and plateaus near $86\%$ by about $370$M, a roughly $10$--$15\times$ difference. We suspect the split base already contained the lookup mechanism from pretraining, where it had learned to read an entity name, copy it into a query, and receive the value across hundreds of thousands of facts; the dense base had never done this. Split therefore enters the fine-tuning stage having only to learn the bridge, while dense must learn the whole procedure. Separating the format's own contribution from this head start would require comparing convergence when both arms are trained from scratch, which we did not run; we have only the final from-scratch accuracies (split $99.2\%$, dense $91.8\%$). The split arm's addressing skill also generalizes to unseen \emph{synthetic}
+entities (it writes the correct key about $100\%$ of the time) but not to real-world ones: on PopQA entities \citep{mallen2023popqa} the lookup rarely fires and never copies a real name.
+
+\paragraph{Caveats.}
+Two caveats limit what the novel-entity results can show. First, the dense arm was never trained to read facts supplied in its context, so the open-book condition puts it in an out-of-distribution input format, and its $0.8\%$ may reflect an inability to use in-context facts at all rather than an inability to compose them. 
+
+Second, and more importantly, the ``novel'' entities are only partly novel. The biography generator draws each attribute value from a small fixed pool, so a new random seed produces new \emph{names} but reuses the same \emph{values}: the novel population shares none of its names with the training set but all of its attribute values, each seen many times in training. Only the first hop (mapping an unfamiliar name to its bridge) is therefore out of distribution, so the $53.5\%$ versus $0.8\%$ gap measures first-hop \emph{access} for unfamiliar names, not the composition of genuinely new facts, in line with the first-hop bottleneck reported for latent multi-hop reasoning \citep{yang2024latent}. 
+
+\FloatBarrier
+\subsection{Oracle-supplied premise masking for mathematical reasoning}
+\label{sec:math-proof-reasoning}
+
+\subsubsection{Research Question and Hypothesis}
+
+While two-hop reasoning is fact-based, our implementation remains reducible to a fact-agnostic solving recipe, as it is the deterministic composition of two sequential queries. We therefore evaluate a stronger version of the same question by making the split model responsible for mathematical reasoning from a given block of premises. Unlike in two-hop reasoning, where the general approach is fact-invariant, the path taken to a mathematical proof changes on the basis of the axiomatic ``facts'' at hand. By making the problem space contingent on those facts, the model is more directly tested on fact-based reasoning in the stricter sense, where facts are directly used as premises for further reasoning. An oracle supplies exactly the required premises in context; no retrieval interface is executed. This abstracts away retrieval quality and isolates the effect of masking premise-block supervision \citep{zhao2025lmlm,feldman2026colmlm}.
+
+\subsubsection{Experimental Setup and Dataset}
+
+Rather than training from scratch and risking that both arms achieve zero mathematical success because of poor initial generalization, we begin from the same fully trained Qwen2.5-0.5B checkpoint and apply supervised fine-tuning to dense and split copies. The base model already predicts between $76.7\%$ and $91.8\%$ of held-out proof tokens under teacher forcing, depending on proof family, but generates no verifier-valid Metamath proofs. Qwen2.5-0.5B has consequently already learned some mathematical reasoning and potentially some mathematical facts. We accept this limitation because much of the corpus uses synthetic proof naming and because the base control lets us separate fine-tuning gains from pre-existing behavior.
+
+The dataset uses the Qwen2.5 tokenizer for compatibility with the pretrained checkpoint. Formal proofs are compiled from Metamath's \texttt{set.mm}, \texttt{iset.mm}, and \texttt{nf.mm}; Mizar; Magnushammer's solved Isabelle set; thproofs; ATP/E-prover prf2; and distinct Mizar runs from ENIGMA \texttt{mzr01/02/03/08}. The resulting training corpus contains $467.2$ million tokens and is repeated for 13 epochs, giving $6.07$ billion tokens seen by each model. Across that run, $17.08\%$ of unique premises receive at least 100 exposures, enough for partial memorization under the Knowledge Parameter Scaling Laws, and those premises account for $85.28\%$ of all premise uses \citep{allenzhu2024capacity}. Figure~\ref{fig:p3-premise-exposure} shows the resulting head-heavy exposure distribution.
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/premise-exposure-histogram.png}
+\caption{Premise exposure over 13 epochs in the P3 formal-proof corpus. Only a small head of unique premises crosses the approximate 100-exposure memorization threshold, but that head accounts for most premise uses.}
+\label{fig:p3-premise-exposure}
+\end{figure}
+
+Each training example begins with ``I know these mathematical statements:'', followed by the factual premises and local assumptions, and then a \texttt{---} separator. The supervised proof begins with a \texttt{GOAL} line. Both arms attend to the entire example, but the split arm masks the premise block and its wrapper from the loss, while the dense arm is also trained to predict the premises and is therefore encouraged to memorize them. Conceptually this resembles the loss masking used by Co-LMLM, except that the split model is not asked to learn when or what to query: the oracle supplies all required information directly in context \citep{feldman2026colmlm}.
+
+Because the split arm has fewer supervised tokens, averaging each arm's loss over only its supervised tokens would implicitly increase the learning rate on split's proof section. We instead sum cross-entropy over supervised tokens and divide both arms by the same fixed $262{,}144$ divisor, equal to the global token batch. Thus each supervised proof token receives the same weight in both arms, and the experimental difference is whether premise-token gradients are present rather than whether proof-token gradients are multiplied.
+
+\subsubsection{Evaluation}
+
+During training we monitor cross-entropy loss and supervised-token fraction. Split has loss on fewer tokens than dense because it is not trained to memorize the premise block, so its raw training loss is expected to be lower and is not treated as a performance comparison.
+
+The headline \texttt{facts\_present} evaluation contains 4,191 held-out proofs whose premise statements never occur in training as premises, intermediates, or goals. Both models receive the correct premise block. Two deterministic 10\% diagnostic cohorts test the proposed mechanism: \texttt{facts\_absent} removes the premise block, while \texttt{facts\_corrupted} keeps premise names but swaps their statements. Across all three conditions we measure teacher-forced target-token cross-entropy (negative log-likelihood) and next-token accuracy. We additionally free-generate the Metamath proofs under \texttt{facts\_present} and use a deterministic tri-state verifier which marks each proof valid, invalid, or unknown. The headline cohort contains $7.041$ million scored target tokens, or $8.46$ million including the diagnostics, and the unchanged Qwen2.5-0.5B checkpoint is evaluated as a base control.
+
+Confidence intervals are paired, example-level percentile bootstraps. For each family and condition, we resample the same example IDs with replacement 10,000 times, recompute the split-minus-dense endpoint on each resample, and take the 2.5th and 97.5th percentiles as the 95\% confidence interval. Resampling whole proofs avoids incorrectly treating correlated tokens within a proof as independent, while using the same resampled IDs for both arms cancels shared proof difficulty. The intervals therefore estimate uncertainty over the held-out examples conditional on the two seed-42 checkpoints, not variation across independent training runs.
+
+\subsubsection{Results}
+
+When the correct premise block is given to both models, split performs better than dense on every end-to-end Metamath endpoint, while the Qwen2.5-0.5B base does not generate a successful proof under any endpoint (Table~\ref{tab:p3-metamath}). Furthermore, the confidence intervals for each split--dense difference remain entirely above zero, suggesting that the advantage is not dependent on a small number of unusually easy proofs for split. While absolute whole-proof success remains relatively low, agreement between exact match and deterministic validity means the difference cannot be explained only by split producing a different but still invalid proof form. Thus, when access to factual premises is held equal, removing responsibility for memorizing those premises does not harm mathematical reasoning and instead appears to somewhat improve it.
+
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\caption{Generation-based Metamath endpoints under \texttt{facts\_present}. The last column reports split minus dense with paired 95\% confidence intervals.}
+\label{tab:p3-metamath}
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lrrrr}
+\toprule
+Endpoint & Base & Dense & Split & $\Delta$ split--dense [95\% CI] \\
+\midrule
+Exact match (evaluated)       & 0.00\% & 7.89\% & 10.93\% & $+3.04$ [$+1.21,+5.06$] \\
+Exact match (budget-eligible) & 0.00\% & 8.44\% & 11.69\% & $+3.25$ [$+1.30,+5.41$] \\
+Metamath validity (decided)   & 0.00\% & 9.11\% & 12.35\% & $+3.24$ [$+1.21,+5.26$] \\
+\bottomrule
+\end{tabular*}
+\end{table}
+
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\caption{\texttt{facts\_correct} condition (the evaluator's \texttt{facts\_present} cohort). NLL and token accuracy are shown for each arm; differences are split minus dense.}
+\label{tab:p3-facts-correct}
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lrrrrrr}
+\toprule
+Family & $n$ & \shortstack{Base NLL\\(acc.)} & \shortstack{Dense NLL\\(acc.)} & \shortstack{Split NLL\\(acc.)} & \shortstack{$\Delta$NLL\\\text{[95\% CI]}} & \shortstack{$\Delta$Acc.\\\text{[95\% CI]}} \\
+\midrule
+enigma    & 263   & \shortstack{0.3103\\(90.94\%)} & \shortstack{0.0371\\(98.67\%)} & \shortstack{0.0322\\(98.85\%)} & \shortstack{$-0.0050$\\$[-0.0053,-0.0047]$} & \shortstack{$+0.19\%$\\$[+0.17,+0.20]$} \\
+isabelle  & 590   & \shortstack{0.7581\\(84.17\%)} & \shortstack{0.3652\\(90.88\%)} & \shortstack{0.3552\\(91.21\%)} & \shortstack{$-0.0099$\\$[-0.0134,-0.0068]$} & \shortstack{$+0.33\%$\\$[+0.25,+0.42]$} \\
+metamath  & 494   & \shortstack{0.3020\\(91.82\%)} & \shortstack{0.0715\\(97.83\%)} & \shortstack{0.0625\\(98.08\%)} & \shortstack{$-0.0091$\\$[-0.0096,-0.0085]$} & \shortstack{$+0.25\%$\\$[+0.23,+0.28]$} \\
+mizar     & 2{,}485 & \shortstack{0.8917\\(76.90\%)} & \shortstack{0.4764\\(85.57\%)} & \shortstack{0.4488\\(86.39\%)} & \shortstack{$-0.0276$\\$[-0.0285,-0.0267]$} & \shortstack{$+0.82\%$\\$[+0.78,+0.85]$} \\
+prf2      & 313   & \shortstack{0.2978\\(91.24\%)} & \shortstack{0.0392\\(98.60\%)} & \shortstack{0.0342\\(98.78\%)} & \shortstack{$-0.0049$\\$[-0.0052,-0.0047]$} & \shortstack{$+0.18\%$\\$[+0.17,+0.20]$} \\
+thproofs  & 46    & \shortstack{0.9555\\(76.72\%)} & \shortstack{0.5412\\(85.00\%)} & \shortstack{0.5086\\(85.91\%)} & \shortstack{$-0.0326$\\$[-0.0408,-0.0264]$} & \shortstack{$+0.90\%$\\$[+0.71,+1.18]$} \\
+\bottomrule
+\end{tabular*}
+\end{table}
+
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\caption{\texttt{facts\_absent} diagnostic (header only). NLL and token accuracy are shown for each arm; differences are split minus dense.}
+\label{tab:p3-facts-absent}
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lrrrrrr}
+\toprule
+Family & $n$ & \shortstack{Base NLL\\(acc.)} & \shortstack{Dense NLL\\(acc.)} & \shortstack{Split NLL\\(acc.)} & \shortstack{$\Delta$NLL\\\text{[95\% CI]}} & \shortstack{$\Delta$Acc.\\\text{[95\% CI]}} \\
+\midrule
+enigma   & 27  & \shortstack{0.3080\\(91.29\%)} & \shortstack{0.0780\\(97.84\%)} & \shortstack{0.0835\\(97.88\%)} & \shortstack{$+0.0055$\\$[+0.0036,+0.0077]$} & \shortstack{$+0.04\%$\\$[-0.03,+0.10]$} \\
+isabelle & 59  & \shortstack{0.7679\\(83.78\%)} & \shortstack{0.4565\\(88.92\%)} & \shortstack{0.4462\\(89.39\%)} & \shortstack{$-0.0103$\\$[-0.0206,-0.0002]$} & \shortstack{$+0.46\%$\\$[+0.20,+0.80]$} \\
+metamath & 50  & \shortstack{0.5020\\(88.87\%)} & \shortstack{0.2910\\(93.22\%)} & \shortstack{0.3720\\(92.38\%)} & \shortstack{$+0.0811$\\$[+0.0676,+0.0987]$} & \shortstack{$-0.83\%$\\$[-1.03,-0.69]$} \\
+mizar    & 249 & \shortstack{1.0685\\(73.57\%)} & \shortstack{0.7197\\(80.06\%)} & \shortstack{0.7527\\(79.86\%)} & \shortstack{$+0.0330$\\$[+0.0256,+0.0421]$} & \shortstack{$-0.20\%$\\$[-0.33,-0.07]$} \\
+prf2     & 32  & \shortstack{0.3312\\(90.59\%)} & \shortstack{0.0883\\(97.60\%)} & \shortstack{0.0972\\(97.56\%)} & \shortstack{$+0.0089$\\$[+0.0064,+0.0118]$} & \shortstack{$-0.04\%$\\$[-0.10,+0.01]$} \\
+thproofs & 5   & \shortstack{0.9615\\(78.39\%)} & \shortstack{0.6666\\(83.80\%)} & \shortstack{0.6850\\(84.20\%)} & \shortstack{$+0.0184$\\$[+0.0061,+0.1249]$} & \shortstack{$+0.40\%$\\$[-0.27,+0.68]$} \\
+\bottomrule
+\end{tabular*}
+\end{table}
+
+When the premise block is removed, the result generally reverses: split does worse than dense for nearly every family, and the strongest loss in next-token accuracy occurs for Metamath (Table~\ref{tab:p3-facts-absent}). This is the behavior expected if dense stored part of the premise content in its weights while split learned to depend more heavily on externally supplied facts. The Isabelle exception and accuracy differences near zero for several families mean that this should not be interpreted as showing that split has no mathematical facts at all. Instead, considered alongside \texttt{facts\_present}, it demonstrates that a greater portion of split's performance is contingent on the premise block; the base model also likely carries some pre-existing knowledge of facts in the corpus. Also note that, because teacher-forcing is implemented, the model doesn't have to know facts to still be able to generate tokens with some precision. Notably, the split model also universally performs worse on the facts\_corrupted loss diagnostic compared to dense, reinforcing the idea that it is more dependent on the premises block than the dense model.
+
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\caption{\texttt{facts\_corrupted} diagnostic (premise names retained, statements swapped). Differences are split minus dense.}
+\label{tab:p3-facts-corrupted}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrr}
+\toprule
+Family & $n$ & \shortstack{Base NLL\\(acc.)} & \shortstack{Dense NLL\\(acc.)} & \shortstack{Split NLL\\(acc.)} & \shortstack{$\Delta$NLL\\\text{[95\% CI]}} & \shortstack{$\Delta$Acc.\\\text{[95\% CI]}} \\
+\midrule
+enigma   & 27  & \shortstack{0.3446\\(90.29\%)} & \shortstack{0.0793\\(97.69\%)} & \shortstack{0.0883\\(97.71\%)} & \shortstack{$+0.0090$\\$[+0.0062,+0.0122]$} & \shortstack{$+0.02\%$\\$[-0.06,+0.09]$} \\
+isabelle & 59  & \shortstack{1.0054\\(79.37\%)} & \shortstack{0.6061\\(85.75\%)} & \shortstack{0.6105\\(85.69\%)} & \shortstack{$+0.0044$\\$[-0.0061,+0.0189]$} & \shortstack{$-0.05\%$\\$[-0.28,+0.18]$} \\
+metamath & 50  & \shortstack{0.3741\\(90.43\%)} & \shortstack{0.2533\\(93.63\%)} & \shortstack{0.3074\\(92.88\%)} & \shortstack{$+0.0541$\\$[+0.0459,+0.0648]$} & \shortstack{$-0.76\%$\\$[-0.93,-0.62]$} \\
+mizar    & 249 & \shortstack{1.0065\\(75.12\%)} & \shortstack{0.6111\\(82.66\%)} & \shortstack{0.6146\\(82.80\%)} & \shortstack{$+0.0035$\\$[+0.0007,+0.0066]$} & \shortstack{$+0.14\%$\\$[+0.05,+0.24]$} \\
+prf2     & 32  & \shortstack{0.3186\\(90.69\%)} & \shortstack{0.0795\\(97.62\%)} & \shortstack{0.0851\\(97.70\%)} & \shortstack{$+0.0057$\\$[+0.0035,+0.0082]$} & \shortstack{$+0.08\%$\\$[+0.03,+0.12]$} \\
+thproofs & 5   & \shortstack{1.3109\\(69.77\%)} & \shortstack{0.7563\\(80.18\%)} & \shortstack{0.7896\\(80.23\%)} & \shortstack{$+0.0332$\\$[+0.0102,+0.0686]$} & \shortstack{$+0.05\%$\\$[-0.59,+0.65]$} \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\section{Experiment 3: Natural-Text Fact-Span Masking}
+
+\subsection{Hypothesis and Setup}
+Our primary focus was to test the hypothesis that preventing the memorization of facts in a language model's weights would allow it to reallocate those parameters for better reasoning. This experiment takes a similar approach to Co-LMLM to prevent memorization of facts by the fact-masked model \citep{feldman2026colmlm}.
+
+\subsection{Data}
+Using Co-LMLM's data annotation method, we first utilized a frontier model to identify fact spans in 45k FineWeb-Edu documents using the annotation prompt from Co-LMLM and then fine-tuned our own ModernBERT decoder model to make the same fact span identifications. We then ran the ModernBERT annotator model over 750M FineWeb-Edu tokens to create our corpus. The fact spans make up $\sim$7\% of the total tokens in the corpus. As defined in Co-LMLM,
+``a fact span is a sub-string of a pre-training document x that encodes world knowledge we want our model to externalize''. These fact spans are usually short self-contained bits of exact information such as ``Lycopene is a member of the <Fact>carotenoid family</Fact>''.
+
+\subsection{Experiment}
+We trained two 135M-parameter models with the SmolLM2 architecture: a base model and a fact-masked model. The base model was trained normally over the corpus. The fact-masked model was trained with the loss on the identified fact spans masked out so that it would not be trained to predict them and thus not memorize them in its weights.
+
+It is important to note that although we use several ideas about masking facts from Co-LMLM, we do not include their retrieval system. To isolate any reasoning change from fact masking, we do not include the extra burden of learning to generate queries to access a knowledge base like that in Co-LMLM.
+
+We then trained each model for 20B tokens over the corpus ($\sim$26.7 epochs), monitoring the models' performance in evaluations to watch for overfitting. We used this overtraining to obtain more fact exposures, which encourage the base model to memorize more facts.
+
+For reasoning, we evaluate on CSQA, HellaSwag, PIQA, SIQA, and ARC-Easy; for factual knowledge, we evaluate on TriviaQA and PopQA.
+
+\subsection{Results}
+
+\begin{table}[!htbp]
+\centering
+\small
+\caption{Fact-span-masking reasoning benchmarks, plateau average of the last 10 checkpoints (accuracy, mean $\pm$ std). Base is trained normally; Fact-masked masks the fact-span loss.}
+\label{tab:colmlm-reasoning}
+\begin{tabular}{lcccccc}
+\toprule
+Model & CSQA & HellaSwag & PIQA & SIQA & ARC-e & Avg \\
+\midrule
+Base  & $26.54 \pm 0.97$ & $31.24 \pm 0.12$ & $63.66 \pm 0.44$ & $40.81 \pm 0.25$ & $53.26 \pm 0.55$ & $43.10 \pm 0.26$ \\
+Fact-masked & $27.27 \pm 0.87$ & $31.33 \pm 0.16$ & $63.08 \pm 0.39$ & $40.70 \pm 0.27$ & $52.23 \pm 0.65$ & $42.92 \pm 0.20$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[!htbp]
+\centering
+\small
+\caption{Fact-span-masking factual-knowledge benchmarks, plateau average of the last 10 checkpoints (accuracy, mean $\pm$ std).}
+\label{tab:colmlm-factual}
+\begin{tabular}{lcc}
+\toprule
+Model & TriviaQA & PopQA \\
+\midrule
+Base  & $7.13 \pm 0.26$ & $7.71 \pm 0.47$ \\
+Fact-masked & $6.06 \pm 0.20$ & $6.92 \pm 0.42$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Conclusions.}
+The base model was consistently higher than the fact-masked model on fact recall while both models performed the same on reasoning. The fact-masked model's lower fact recall demonstrates reduced memorization of facts due to fact masking during training. Since the reasoning ability of the models stayed the same, the fact-masked model did not gain an advantage over the base model from less stored factual information. This is likely due to the fact spans usually being small, self-contained pieces of knowledge like names or dates instead of the dense relations of ideas and reasoning that are far more difficult to isolate and mask. For example, with our annotation method, we may identify and mask out the names ``Adam Smith'' and ``Wealth of Nations'' but not their ideas of economics and free markets. Therefore, the fact-masked model is still trained to memorize the economic ideas and reasoning of Adam Smith and \emph{The Wealth of Nations} but does not have to memorize their names. Since the fact-masked model knows less but the reasoning ability remains the same, it indicates that these pieces of information likely only make up a small component of the total information a model memorizes and thus masking them out does not free up a significant portion of model weights to be used elsewhere.
+
+\FloatBarrier
+
+
+\section{Discussion}
+
+\subsection{Implications for the Field}
+
+Our clearest contribution is a separation rather than a performance result. When fact values are withheld from the loss and supplied externally, the resulting model keeps the targeted fact values out of its parameters in a way that is both behaviorally and mechanistically verifiable, while leaving the rest of its computation largely unchanged. The value of this separation appears to lie less in reasoning than in the governance of knowledge: editing, deleting, or replacing those values becomes an operation on an external table rather than a modification of weights, and the lack of a parametric copy limits what the weights can expose about those training facts. For settings where knowledge must be corrected, revoked, or audited, this seems a more tractable target than post-hoc weight editing.
+
+Recent interest in external and retrieval-augmented memory is often motivated by reported gains in reasoning, and our results suggest some caution in attributing such gains to freed capacity. In our setting the advantages on fact recall and two-hop composition are better explained by preserved fact access and by the transfer of an addressing skill acquired during pretraining than by any change in reasoning ability. However, in the oracle-supplied premise-masking experiment, the premise-masked arm modestly outperformed dense when both received the same premises. Taken together, these results support a narrower version of H3: withholding supervision on task-relevant premises can help reasoning over those premises, even though masking unrelated facts does not produce a general reasoning benefit.
+
+One possible explanation for the formal-proof result comes from \citet{barron2025toobig}, who find that Transformers trained jointly on factual memorization and arithmetic extrapolation favor memorization and fail to extrapolate even when either behavior can be learned separately. In our experiment, each proof token received the same weight in both arms, but dense additionally received gradients to predict the premise block; masking those gradients may have let the premise-masked arm focus its supervised objective on using the premises rather than reproducing them. This expectation need not extend to fact-span masking because the masked spans were not premises of the reasoning benchmarks; the model was not trained to memorize and reason over the same information.
+
+Engram provides convergent but not equivalent evidence: its hashed $n$-gram memory offloads static pattern reconstruction and reports gains on BBH and ARC-Challenge, while its mechanistic analysis suggests that the lookup relieves early Transformer layers of semantic reconstruction work and preserves effective depth for reasoning \citep{cheng2026engram}. Unlike MemorySplit, however, Engram stores local linguistic patterns rather than externally supplied fact premises and changes the model's architectural allocation, so it does not isolate the same intervention or provide an explanation for why unrelated fact learning doesn't harm reasoning performance.
+
+Holding fact access equal is necessary to distinguish gains from better access or interface familiarity from gains in reasoning itself. An equal-access control is easy to omit, but omitting it changes the interpretation. We suggest that claims relating memory to reasoning be reported alongside this control and an explicit account of the training regime.
+
+\subsection{Limitations}
+\label{sec:limitations}
+Although we had some interesting results, we were never able to rigorously test H0, the fact-crowding premise; none of these experiments actually reached fact saturation, and thus potential capacity competition effects could not be observed. We therefore treat the freed-capacity explanation as untested here rather than as refuted, and we avoid generalizing the null beyond this regime. 
+
+Further limitations bound the positive results. Our conclusions rest on one model scale and, for most comparisons, a single seed, so the effects we report are best read as directions. Because the proof, biography, and information-saturation experiments also differ in model, corpus, and training regime, their contrast does not establish that fact category itself caused the different outcomes. The difficulty the split model shows in addressing open-vocabulary, real-world entities also suggests that the interface, and not only the model, governs how far the approach transfers. We do not claim that these findings at scales where realistic knowledge and multi-step reasoning interact more strongly.
+
+Additionally, the formal-proof experiment supplies premises by oracle rather than implementing retrieval. It therefore demonstrates premise-loss masking under equal context, not a functional externalization system. A separate retriever would be needed to realize this setup. Furthermore, while the result on mathematical reasoning is highly promising for further research, it alone is insufficient to conclusively demonstrate a categorical superiority of fact externalization for premise-based reasoning.
+
+Overall, there are a breadth of split-memory architectures, each of which have nontrivial impacts on model performance and behavior (i.e. the memory store, in general, cannot be simply abstracted away), and must be designed with tight integration with the training regime. It also remains to be seen whether our results here can be extrapolated to larger LLMs and more diverse tasks.
+
+\subsection{Future Work}
+Beyond replication with more model sizes and seeds, the most informative next step is to construct the regime this study lacked: hold the number of times each fact is seen near the level at which a dense model does memorize, and grow the token budget with the number of facts, so that the dense arm carries a genuine memorization burden and the capacity question can be posed directly. Because reasoning in current models is shaped largely after pretraining, carrying the comparison through instruction tuning and reinforcement learning is a natural way to look for an effect that pretraining alone may not surface. The store itself deserves treatment as a design variable rather than a fixed component; continuous or approximate lookups, as in Co-LMLM \citep{feldman2026colmlm}, may ease the open-vocabulary addressing limit we observed. The governance properties described in implications above also warrant a direct, adversarial evaluation on the paired models, alongside a study of whether externalization can be retrofitted onto an already-pretrained dense model rather than trained from scratch, which would determine much of its practical value. Finally, to more conclusively establish the value of fact offloading for premise reasoning, variations of the mathematical proof experiment should be conducted with more categories and implementable retrievers.
+
+\subsubsection{Proposed demand-axis (fact-crowding) design.}
+The regime named above is under construction rather than merely proposed. A companion study places cells
+along demanded fact bits per non-embedding parameter, swept geometrically, and departs from the present
+work in the two respects that make the crowding question answerable. Exposures are held at 200 per fact,
+above the level at which storage collapsed in our measurements, so the dense arm carries a genuine
+memorization burden, and the token budget grows with the entity count instead of being held fixed against
+it. Reasoning volume is specified in absolute tokens rather than as a share of the corpus: a fixed share
+would make reasoning tokens grow with fact load, confounding the comparison in whichever direction the
+effect ran. Fixing exposures rather than total tokens also avoids the conflation of entity count with
+exposure starvation that limits our own 160M sweep (\S\ref{sec:limitations}).
+
+Training for that design is complete and the measurement pipeline runs end to end, but we report no
+crowding result here. A first pass showed the reasoning endpoint failing its pre-registered calibration
+check: the reasoning-only control, which carries no facts at all, reached the accuracy of the best
+constant-answer policy, leaving effectively no range between floor and ceiling for a treatment effect to
+occupy. A null measured on such an endpoint would be uninformative, so the axis is held until the endpoint
+is recalibrated. We state this explicitly because it is the failure mode our admission criteria were
+written to catch, and because it is a check that reported nulls in this area do not commonly include.
+
+\section{Conclusion}
+Overall, our results seem to indicate that the tested masking interventions do not significantly degrade natural-language or reasoning performance relative to their dense controls. They do not show a consistent advantage on reasoning tasks unrelated to the masked facts, but oracle-supplied premise masking modestly improves fact-based reasoning when both models receive the same premises. MemorySplit may also converge with less compute, as it does not need to spend as much time or as many tokens memorizing facts. Similarly, since the memory store is independently updatable and replaceable, it may proffer advantages for quickly modifying an LM's knowledge without expensive retraining. Conversely, the method and content of the store may require specialized upkeep and independent verification, which could negate the above advantages.
+
+We have also seen that the actual design of the memory store has an outsized impact on the model's performance; the memory store cannot simply be abstracted away and must be engineered in conjunction with the rest of the model design (e.g., modern Hopfield networks, cosine similarity, exact key-value lookup, fuzzy key-value lookup, and continuous lookup).
+
+Our firmest findings concern where facts live and how the model behaves without them. The split model keeps essentially no fact values in its weights and solely retrieves them from the store; this externalization is complete rather than partial, and it preserves fact access as the fact load grows, whereas the dense model's recall collapses once each fact is seen too few times. The addressing skill it learns transfers to unseen synthetic entities but not to real-world ones, where copying an open-vocabulary name into a query is the limiting step. Because it was never trained to produce a value, it tends to abstain rather than fabricate when it has no answer, which is a useful property for controlling what a model reports. We did not find a general reasoning benefit from masking unrelated facts, but the formal-proof result supports a narrower version of H3: masking supervision on oracle-supplied premises may help reasoning over those premises. We do not yet attribute this gain to freed capacity; in the standard pretraining regime, the memorization pressure that explanation depends on was never present.
+
+Several directions follow. The most important is to train where the premise actually holds by keeping exposures near the level at which memorization occurs and scaling the token budget with the number of facts rather than against it, so that the dense model carries a real memorization burden and any freed capacity refers to something that exists. A second is broader post-training: although the formal-proof result comes from supervised fine-tuning, reinforcement learning and instruction tuning are where reasoning ability is usually refined and therefore are a natural place for a freed-capacity effect to appear if there is one. Finally, the editability and abstention properties of the store make it a promising basis for unlearning and privacy, which we have begun to examine and intend to test directly on the paired models.
+
+
+\FloatBarrier
+\bibliographystyle{unsrtnat}  
+\bibliography{references}
+
+
+
+\end{document}

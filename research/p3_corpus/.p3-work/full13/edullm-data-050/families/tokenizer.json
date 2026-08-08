@@ -1,0 +1,17 @@
+{
+  "schema_version": "edullm-family/v1",
+  "family": "tokenizer",
+  "owner": "edullm-data@alphaaiengineering.com",
+  "license": {
+    "id": null,
+    "basis": "unknown"
+  },
+  "sources": [],
+  "defaults": {
+    "profile": "tokenizer/v1",
+    "mutability": "frozen",
+    "validation_required": false,
+    "validation_not_required_because": "A tokenizer is a model artifact, not a corpus. There are no rows to split."
+  },
+  "notes": "Published tokenizers, as first-class owned artifacts. A tokenizer is the single most essential dependency of a token corpus - the shards are meaningless integers without it - so it is published INTO the airlock and pretrain/curriculum datasets depends_on it, rather than pinned by reference to a HuggingFace repo that can be force-pushed, gated, or deleted out from under every dataset that relied on it. That reference-pin was the exact dangling-dependency failure the standard exists to kill (DATASET-STANDARD.md sections 0 and 7), just pointed at HF instead of /scratch. THE PAYOFF: vocab_size and eos_token_id stop being hand-typed guesses. The validator loads the published tokenizer.json (a few MB, published once, referenced by everything) and COMPUTES them via tokenizer_v1.derive_vocab - rule 0.4, recompute-never-trust - and the pretrain-tokens decode smoke test asserts every sampled token id against that DERIVED bound, so a wrong-dtype or corrupted shard is caught against the real vocabulary rather than a placeholder. A tokenizer group must contain tokenizer.json; other HF tokenizer files (merges.txt, special_tokens_map.json, tokenizer_config.json) may ride along. Name it corpus/method plus the axis that distinguishes it (tokenizer/dolma2-bpe, tokenizer/cosmo2-tokenizer) - never a bare word. license.basis is an honest 'unknown' because tokenizer terms vary upstream; override per tokenizer with the actual, checked license. No token format defaults here on purpose: a tokenizer is not token data, it is the key that makes token data legible."
+}

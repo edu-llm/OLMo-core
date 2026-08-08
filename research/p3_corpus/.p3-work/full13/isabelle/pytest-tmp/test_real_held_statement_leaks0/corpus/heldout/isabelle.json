@@ -1,0 +1,92 @@
+{
+  "canonicalization": {
+    "family": "isabelle",
+    "scheme": "quoted-layout-v2",
+    "version": 2
+  },
+  "corpus": "isabelle",
+  "eligible_fact_names": [
+    "Common.fact",
+    "MonoidalCategory.elementary_monoidal_category.iso_assoc",
+    "Rel.substClosedSubset"
+  ],
+  "facts": [
+    "MonoidalCategory.elementary_monoidal_category.iso_assoc",
+    "Rel.substClosedSubset"
+  ],
+  "family": "isabelle",
+  "filter_counts": {
+    "accepted_rows": 10,
+    "ambiguous_global_names": 0,
+    "dropped_aborted_trajectories": 0,
+    "dropped_ambiguous_fact": 0,
+    "dropped_duplicate": 0,
+    "dropped_empty_field": 0,
+    "dropped_final_transition": 9,
+    "dropped_malformed_premises": 0,
+    "dropped_malformed_trajectory": 0,
+    "dropped_no_global_fact": 0,
+    "dropped_overlength": 0,
+    "dropped_paste": 0,
+    "dropped_unchanged_state": 0,
+    "trajectories_seen": 9,
+    "transitions_seen": 19
+  },
+  "mode": "family_local_heldout",
+  "policy": "stable statement-unique facts cited 1-2 times are sampled; only direct citing rows enter eval, while every sibling trajectory row and every local-statement, declaration-normalized own-proof, or target/state statement-exposure trajectory is excluded from train as a typed drop",
+  "requested_heldout": 2,
+  "row_counts": {
+    "dropped_local_statement_exposure": 2,
+    "dropped_own_proof": 1,
+    "dropped_own_proof_declaration_exposure": 1,
+    "dropped_siblings": 0,
+    "dropped_statement_exposure": 5,
+    "dropped_target_state_exposure": 2,
+    "eligible": 10,
+    "eval": 2,
+    "train": 3
+  },
+  "schema_version": "isabelle-transition-v2",
+  "seed": 20260801,
+  "source": {
+    "dataset": "Simontwice/premise_selection_in_isabelle",
+    "file": "raw_data/human_data/all_data.json",
+    "license": "Apache-2.0",
+    "revision": "f947ccc827ccd236464e19cd4cc23dfda7fc5575",
+    "sha256": "aa71609de90fee138835cfdf9e954becb1b231a293ac19bd98951e6d8bec8e7d",
+    "size_bytes": 2327313460
+  },
+  "statement_hashes": [
+    "5bc6452531e93a880d1249db6d7169b05f73dbbca5fd842106489da87c892791",
+    "7d2ba2243dda8789923bf63919163c9853630e9ba585ae2c20d816ac712ae5a4"
+  ],
+  "statements": {
+    "MonoidalCategory.elementary_monoidal_category.iso_assoc": "iso_assoc: fixes a :: \"'a\" and b :: \"'a\" and c :: \"'a\" assumes \"ide a\" and \"ide b\" and \"ide c\" shows \"local.iso \\<a>[a, b, c]\"",
+    "Rel.substClosedSubset": "substClosedSubset: fixes Rel :: \"(pi \\<times> pi) set\" shows \"substClosed Rel \\<subseteq> Rel\""
+  },
+  "tail_citation_counts": [
+    1,
+    2
+  ],
+  "tail_size": 2,
+  "tokenizer": {
+    "behavior_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "eos_token_id": 151643,
+    "identity": "Qwen/Qwen2.5-0.5B (synthetic test double)",
+    "max_text_plus_eos_tokens": 16384,
+    "tokenizer_config_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "tokenizer_json_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "tokenizers_version": "synthetic-test-double"
+  },
+  "trajectory_counts": {
+    "direct_eval": 2,
+    "excluded_from_train": 6,
+    "local_statement_exposure": 1,
+    "own_proof": 1,
+    "own_proof_declaration_exposure": 1,
+    "statement_exposure_excluded": 4,
+    "target_state_exposure": 2,
+    "total": 9,
+    "train": 3
+  }
+}

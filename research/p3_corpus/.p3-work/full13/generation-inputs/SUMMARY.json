@@ -1,0 +1,13 @@
+{
+  "policy_root_sha256": "af995b88454c094e9f26b8ad96faf9c0a213952c61111ac31b6e3d8e676f8cc7",
+  "schema_version": "p3-generation-input-summary-v1",
+  "source_manifest_roots": {
+    "enigma": "9abb35c0b020275a8e3cd24cd8eef0590eb046b769647d466e965eedcf806ccb",
+    "isabelle": "f178640caac9edb6b557bf8f152d88be6f6a10ceca91caa03814042fa7a08453",
+    "metamath": "8a6869be6b1ddf24e2f2c8a43cfc102286d61bdc2373f188114bda795d68cb7c",
+    "mizar": "fa21f98fa551ae3e54b17e4e31aacebfde48c0be3ea8b99f5ff85f4ee08fb762",
+    "prf2": "10e92e3cad2484febe4b62aedf8760e85e57df9ff6679c34ed18f4c67828a2d5",
+    "thproofs": "dcabda695240f504657454825b31c9b55792459f5f99fbfb44e798120f4fca9e"
+  },
+  "tokenizer_root_sha256": "7faed2211ad1122ba7af8be5d939ea4f2cdfb137483f9955616b7d266dd2b1aa"
+}

@@ -1,0 +1,22 @@
+{
+  "command": [
+    "python",
+    "/home/vs/AlphaAI/memorysplit-requery-exact/scripts/build_isabelle_shard.py",
+    "--src",
+    "/tmp/p3-sources/isabelle/raw_data/human_data/all_data.json",
+    "--out",
+    "/home/vs/AlphaAI/memorysplit-requery-exact/.p3-work/full13/isabelle",
+    "--name",
+    "isabelle",
+    "--heldout",
+    "500",
+    "--seed",
+    "20260801",
+    "--tokenizer-path",
+    "/home/vs/AlphaAI/memorysplit-requery-exact/tokenizers/qwen25-vendored"
+  ],
+  "elapsed_seconds": 828.466372444,
+  "exit_code": 0,
+  "peak_rss_kib": 242632,
+  "started_unix": 1785849033.2256973
+}

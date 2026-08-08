@@ -1,0 +1,34 @@
+{
+  "families": [
+    "metamath",
+    "mizar",
+    "thproofs",
+    "prf2",
+    "enigma",
+    "isabelle"
+  ],
+  "isabelle": {
+    "heldout_facts": 500,
+    "mode": "family_local_heldout",
+    "row_schema": "isabelle-transition-v2",
+    "trajectory_drops": true
+  },
+  "metamath": {
+    "heldout_facts": 500,
+    "local_assumptions": true,
+    "mode": "family_local_heldout"
+  },
+  "mml": {
+    "classes": 1000,
+    "mode": "pooled_semantic_1000",
+    "policy_pins": {
+      "atp_deduplication_sha256": "5bda25c7da8a7c4a629e431d1d763cf4e968ab6501f8163749b1073ca4ed9f64",
+      "mapping_sha256": "235bc3db9711d10321e8a9b76c33e9e07dfd25c1b8c5ed6f30141e7a453b20c4",
+      "policy_sha256": "c64df6601f9bb7a961a0894a0008e85a53ae45035473c8dc7876466fbfa73092"
+    },
+    "seed": 20260801
+  },
+  "policy_root_sha256": "af995b88454c094e9f26b8ad96faf9c0a213952c61111ac31b6e3d8e676f8cc7",
+  "schema_version": "p3-generation-policies/v2",
+  "test_only": false
+}

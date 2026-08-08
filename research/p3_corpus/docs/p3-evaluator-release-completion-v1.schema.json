@@ -1,0 +1,71 @@
+{
+  "$defs": {
+    "sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    }
+  },
+  "$id": "https://edu-llm.invalid/schemas/p3-evaluator-release-completion-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "dataset_id": {
+      "const": "eval/formal-proof-premises-500m"
+    },
+    "generation_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "inventory_entries": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "inventory_root_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "manifest_file_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "manifest_path": {
+      "const": "evaluator/release-manifest.json"
+    },
+    "manifest_root_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "profile": {
+      "const": "p3-evaluator-release-v1"
+    },
+    "schema_version": {
+      "const": "p3-evaluator-release-completion/v2"
+    },
+    "status": {
+      "const": "complete"
+    },
+    "version": {
+      "oneOf": [
+        {
+          "const": "__UNPUBLISHED__"
+        },
+        {
+          "pattern": "^v[1-9][0-9]*$",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "required": [
+    "dataset_id",
+    "generation_id",
+    "inventory_entries",
+    "inventory_root_sha256",
+    "manifest_file_sha256",
+    "manifest_path",
+    "manifest_root_sha256",
+    "profile",
+    "schema_version",
+    "status",
+    "version"
+  ],
+  "title": "P3 evaluator release completion seal",
+  "type": "object"
+}

@@ -1,0 +1,987 @@
+% =====================================================================
+%  references.bib
+%  Bibliography for the P3 / Memory-Split team log (2026-07-19 -- 2026-08-02)
+%
+%  Every entry below is cited, named, or directly relied upon somewhere in
+%  the team log. Entries are grouped by the section of the log that invokes
+%  them. Verified against arXiv metadata where an ID was given or findable.
+%
+%  Usage with the NeurIPS style file:
+%      \usepackage[numbers]{natbib}     % neurips_20xx.sty loads natbib
+%      \bibliographystyle{unsrtnat}     % or plainnat
+%      \bibliography{references}
+% =====================================================================
+
+
+% ---------------------------------------------------------------------
+% 1. MODEL ARCHITECTURE AND TRAINING PRIMITIVES
+%    (train/model.py, train/trainer.py, train/tokenizer.py)
+% ---------------------------------------------------------------------
+
+@inproceedings{vaswani2017attention,
+  title     = {Attention Is All You Need},
+  author    = {Vaswani, Ashish and Shazeer, Noam and Parmar, Niki and Uszkoreit, Jakob
+               and Jones, Llion and Gomez, Aidan N. and Kaiser, {\L}ukasz and Polosukhin, Illia},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  volume    = {30},
+  year      = {2017},
+}
+
+@techreport{radford2019gpt2,
+  title       = {Language Models are Unsupervised Multitask Learners},
+  author      = {Radford, Alec and Wu, Jeffrey and Child, Rewon and Luan, David
+                 and Amodei, Dario and Sutskever, Ilya},
+  institution = {OpenAI},
+  year        = {2019},
+  note        = {GPT-2; source of the byte-pair encoding and 50257-token vocabulary},
+}
+
+@inproceedings{zhang2019rmsnorm,
+  title     = {Root Mean Square Layer Normalization},
+  author    = {Zhang, Biao and Sennrich, Rico},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  volume    = {32},
+  year      = {2019},
+}
+@inproceedings{wei2022cot,
+  title     = {Chain-of-Thought Prompting Elicits Reasoning in Large Language Models},
+  author    = {Wei, Jason and Wang, Xuezhi and Schuurmans, Dale and Bosma, Maarten
+               and Ichter, Brian and Xia, Fei and Chi, Ed H. and Le, Quoc V.
+               and Zhou, Denny},
+  booktitle = {Advances in Neural Information Processing Systems},
+  volume    = {35},
+  pages     = {24824--24837},
+  year      = {2022},
+}
+
+@inproceedings{press2023compgap,
+  title     = {Measuring and Narrowing the Compositionality Gap in Language Models},
+  author    = {Press, Ofir and Zhang, Muru and Min, Sewon and Schmidt, Ludwig
+               and Smith, Noah A. and Lewis, Mike},
+  booktitle = {Findings of the Association for Computational Linguistics: EMNLP 2023},
+  pages     = {5687--5711},
+  year      = {2023},
+  doi       = {10.18653/v1/2023.findings-emnlp.378},
+}
+@article{su2024roformer,
+  title   = {{RoFormer}: Enhanced Transformer with Rotary Position Embedding},
+  author  = {Su, Jianlin and Ahmed, Murtadha and Lu, Yu and Pan, Shengfeng
+             and Bo, Wen and Liu, Yunfeng},
+  journal = {Neurocomputing},
+  volume  = {568},
+  pages   = {127063},
+  year    = {2024},
+  note    = {arXiv:2104.09864},
+}
+
+@article{shazeer2020glu,
+  title   = {{GLU} Variants Improve Transformer},
+  author  = {Shazeer, Noam},
+  journal = {arXiv preprint arXiv:2002.05202},
+  year    = {2020},
+}
+
+@inproceedings{loshchilov2019adamw,
+  title     = {Decoupled Weight Decay Regularization},
+  author    = {Loshchilov, Ilya and Hutter, Frank},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2019},
+}
+
+@inproceedings{loshchilov2017sgdr,
+  title     = {{SGDR}: Stochastic Gradient Descent with Warm Restarts},
+  author    = {Loshchilov, Ilya and Hutter, Frank},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2017},
+}
+
+@inproceedings{hoffmann2022chinchilla,
+  title     = {Training Compute-Optimal Large Language Models},
+  author    = {Hoffmann, Jordan and Borgeaud, Sebastian and Mensch, Arthur
+               and Buchatskaya, Elena and Cai, Trevor and Rutherford, Eliza
+               and de Las Casas, Diego and Hendricks, Lisa Anne and Welbl, Johannes
+               and Clark, Aidan and others},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2022},
+  note      = {arXiv:2203.15556; the ``20 tokens/parameter'' compute-optimal rule},
+}
+
+
+% ---------------------------------------------------------------------
+% 2. CORPUS COMPONENTS
+%    (corpusgen/build.py: bed / bio / igsm / deduction / factqa)
+% ---------------------------------------------------------------------
+
+@inproceedings{penedo2024fineweb,
+  title     = {The {FineWeb} Datasets: Decanting the Web for the Finest Text Data at Scale},
+  author    = {Penedo, Guilherme and Kydl{\'i}{\v{c}}ek, Hynek and Ben allal, Loubna
+               and Lozhkov, Anton and Mitchell, Margaret and Raffel, Colin
+               and Von Werra, Leandro and Wolf, Thomas},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS),
+               Datasets and Benchmarks Track},
+  year      = {2024},
+  note      = {arXiv:2406.17557; FineWeb-Edu sample-10BT background corpus},
+}
+
+@article{ye2024igsm,
+  title   = {Physics of Language Models: Part 2.1, Grade-School Math and the Hidden Reasoning Process},
+  author  = {Ye, Tian and Xu, Zicheng and Li, Yuanzhi and Allen-Zhu, Zeyuan},
+  journal = {arXiv preprint arXiv:2407.20311},
+  year    = {2024},
+  note    = {Source of the iGSM synthetic arithmetic task},
+}
+
+@inproceedings{clark2020ruletaker,
+  title     = {Transformers as Soft Reasoners over Language},
+  author    = {Clark, Peter and Tafjord, Oyvind and Richardson, Kyle},
+  booktitle = {Proceedings of the Twenty-Ninth International Joint Conference on
+               Artificial Intelligence (IJCAI)},
+  pages     = {3882--3890},
+  year      = {2020},
+  note      = {RuleTaker; source of the depth 1--2 yes/no deduction task},
+}
+
+@article{allenzhu2023storage,
+  title   = {Physics of Language Models: Part 3.1, Knowledge Storage and Extraction},
+  author  = {Allen-Zhu, Zeyuan and Li, Yuanzhi},
+  journal = {arXiv preprint arXiv:2309.14316},
+  year    = {2023},
+  note    = {bioS/bioD synthetic biographies; the augmentation--extraction gap},
+}
+
+
+% ---------------------------------------------------------------------
+% 3. THE MEMORY-SPLIT / LOOKUP-LANGUAGE-MODEL LINE
+% ---------------------------------------------------------------------
+
+@article{zhao2025lmlm,
+  title   = {Pre-training Limited Memory Language Models with Internal and External Knowledge},
+  author  = {Zhao, Linxi and Zalouk, Sofian and Belardi, Christian K. and Lovelace, Justin
+             and Zhou, Jin Peng and Noonan, Ryan Thomas and Go, Dongyoung
+             and Weinberger, Kilian Q. and Artzi, Yoav and Sun, Jennifer J.},
+  journal = {arXiv preprint arXiv:2505.15962},
+  year    = {2025},
+  note    = {LMLM; the ``never learn it'' strategy},
+}
+
+@article{feldman2026colmlm,
+  title   = {{Co-LMLM}: Continuous-Query Limited Memory Language Models},
+  author  = {Feldman, Yair and Zhao, Linxi and Godey, Nathan and Go, Dongyoung
+             and Hua, Yilun and Weinberger, Kilian Q. and Sun, Jennifer J. and Artzi, Yoav},
+  journal = {arXiv preprint arXiv:2607.07707},
+  year    = {2026},
+  note    = {Basis of Experiment 2},
+}
+
+@article{raeesi2026auditing,
+  title   = {Auditing Forgetting in Limited Memory Language Models},
+  author  = {Raeesi, Arya and Roed, Hanna},
+  journal = {arXiv preprint arXiv:2607.00605},
+  year    = {2026},
+  note    = {Independent audit measuring parametric leakage at 0.11\% across 12,228 deletions},
+}
+
+@article{cheng2026engram,
+  title   = {Conditional Memory via Scalable Lookup: A New Axis of Sparsity for Large Language Models},
+  author  = {Cheng, Xin and Tian, Rui and Zeng, Wangding and Dai, Damai and Chen, Qinyu
+             and Wang, Bingxuan and Xie, Zhenda and Huang, Kezhao and Yu, Xingkai
+             and Deng, Chengqi and Zhou, Shangyan and Zhao, Chenggang and Hao, Zhewen
+             and Li, Yukun and Zhang, Han and Zhang, Zhengyan and Wei, Yixu and Xu, M. Y.
+             and Zhang, Huishuai and Zhao, Dongyan and Liang, Wenfeng},
+  journal = {arXiv preprint arXiv:2601.07372},
+  year    = {2026},
+  note    = {DeepSeek Engram},
+}
+
+@inproceedings{houliston2026tool,
+  title     = {Tool Use is Provably More Scalable than In-Weight Memory for Large Language Models},
+  author    = {Houliston, Sam and Odonnat, Ambroise and Arnal, Charles and Cabannes, Vivien},
+  booktitle = {ICLR 2026 Workshop MemAgents},
+  year      = {2026},
+  note      = {arXiv:2508.20755},
+  url       = {https://openreview.net/forum?id=s7IRNX6FUs},
+}
+
+
+% ---------------------------------------------------------------------
+% 4. MULTI-HOP AND LATENT REASONING
+% ---------------------------------------------------------------------
+
+@inproceedings{yang2024latent,
+  title     = {Do Large Language Models Latently Perform Multi-Hop Reasoning?},
+  author    = {Yang, Sohee and Gribovskaya, Elena and Kassner, Nora and Geva, Mor
+               and Riedel, Sebastian},
+  booktitle = {Proceedings of the 62nd Annual Meeting of the Association for
+               Computational Linguistics (ACL)},
+  year      = {2024},
+  note      = {arXiv:2402.16837; the first-hop bottleneck},
+}
+
+@inproceedings{wang2024grokked,
+  title     = {Grokked Transformers are Implicit Reasoners: A Mechanistic Journey to
+               the Edge of Generalization},
+  author    = {Wang, Boshi and Yue, Xiang and Su, Yu and Sun, Huan},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2024},
+  note      = {arXiv:2405.15071; composition emerges after loss saturates, 0\% on 3-hop},
+}
+
+@inproceedings{geng2025great,
+  title     = {Great Memory, Shallow Reasoning: Limits of {$k$NN-LMs}},
+  author    = {Geng, Shangyi and Zhao, Wenting and Rush, Alexander M.},
+  booktitle = {Proceedings of the 2025 Conference of the Nations of the Americas Chapter
+               of the Association for Computational Linguistics: Human Language
+               Technologies (Volume 2: Short Papers)},
+  pages     = {471--482},
+  year      = {2025},
+  doi       = {10.18653/v1/2025.naacl-short.40},
+}
+
+@article{geirhos2020shortcut,
+  title   = {Shortcut Learning in Deep Neural Networks},
+  author  = {Geirhos, Robert and Jacobsen, J{\"o}rn-Henrik and Michaelis, Claudio
+             and Zemel, Richard and Brendel, Wieland and Bethge, Matthias
+             and Wichmann, Felix A.},
+  journal = {Nature Machine Intelligence},
+  volume  = {2},
+  number  = {11},
+  pages   = {665--673},
+  year    = {2020},
+  doi     = {10.1038/s42256-020-00257-z},
+}
+
+@article{karmim2026multihop,
+  title   = {Multi-Hop Knowledge Composition is Bound by Pretraining Exposure},
+  author  = {Karmim, Yannis and Marti, Luis and Seddah, Djam{\'e} and Barri{\`e}re, Valentin},
+  journal = {arXiv preprint arXiv:2606.09338},
+  year    = {2026},
+}
+
+@article{power2022grokking,
+  title   = {Grokking: Generalization Beyond Overfitting on Small Algorithmic Datasets},
+  author  = {Power, Alethea and Burda, Yuri and Edwards, Harri and Babuschkin, Igor
+             and Misra, Vedant},
+  journal = {arXiv preprint arXiv:2201.02177},
+  year    = {2022},
+}
+
+@inproceedings{doshi2024grok,
+  title     = {To Grok or not to Grok: Disentangling Generalization and Memorization
+               on Corrupted Algorithmic Datasets},
+  author    = {Doshi, Darshil and Das, Aritra and He, Tianyu and Gromov, Andrey},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2024},
+  note      = {arXiv:2310.13061},
+  url       = {https://openreview.net/forum?id=UHjE5v5MB7},
+}
+
+@article{openai2024o1,
+  title   = {{OpenAI} o1 System Card},
+  author  = {{OpenAI}},
+  journal = {arXiv preprint arXiv:2412.16720},
+  year    = {2024},
+  note    = {Explicit CoT reasoning elicited by RL on verifiable rewards},
+}
+
+@inproceedings{cao2022kqapro,
+  title     = {{KQA Pro}: A Dataset with Explicit Compositional Programs for Complex
+               Question Answering over Knowledge Base},
+  author    = {Cao, Shulin and Shi, Jiaxin and Pan, Liangming and Nie, Lunyiu
+               and Xiang, Yutong and Hou, Lei and Li, Juanzi and He, Bin and Zhang, Hanwang},
+  booktitle = {Proceedings of the 60th Annual Meeting of the Association for
+               Computational Linguistics (ACL)},
+  pages     = {6101--6119},
+  year      = {2022},
+  note      = {arXiv:2007.03875},
+}
+
+@inproceedings{lewis2020bart,
+  title     = {{BART}: Denoising Sequence-to-Sequence Pre-training for Natural Language
+               Generation, Translation, and Comprehension},
+  author    = {Lewis, Mike and Liu, Yinhan and Goyal, Naman and Ghazvininejad, Marjan
+               and Mohamed, Abdelrahman and Levy, Omer and Stoyanov, Veselin
+               and Zettlemoyer, Luke},
+  booktitle = {Proceedings of the 58th Annual Meeting of the Association for
+               Computational Linguistics (ACL)},
+  pages     = {7871--7880},
+  year      = {2020},
+  note      = {BART-base, the KQA Pro reference model},
+}
+
+@article{stojanovski2025reasoninggym,
+  title   = {Reasoning Gym: Reasoning Environments for Reinforcement Learning with
+             Verifiable Rewards},
+  author  = {Stojanovski, Zafir and Stanley, Oliver and Sharratt, Joe and Jones, Richard
+             and Adefioye, Abdulhakeem and Kaddour, Jean and K{\"o}pf, Andreas},
+  journal = {arXiv preprint arXiv:2505.24760},
+  year    = {2025},
+}
+
+
+% ---------------------------------------------------------------------
+% 5. CAPACITY, CROWDING AND SATURATION  (Experiment 0)
+% ---------------------------------------------------------------------
+
+@article{abdin2024phi3,
+  title   = {Phi-3 Technical Report: A Highly Capable Language Model Locally on Your Phone},
+  author  = {Abdin, Marah and Aneja, Jyoti and Awadalla, Hany and Awadallah, Ahmed
+             and Awan, Ammar Ahmad and Bach, Nguyen and others},
+  journal = {arXiv preprint arXiv:2404.14219},
+  year    = {2024},
+  note    = {Origin of the ``facts crowd out reasoning'' capacity-ceiling conjecture},
+}
+
+@article{abdin2024phi4,
+  title   = {Phi-4 Technical Report},
+  author  = {Abdin, Marah and Aneja, Jyoti and Behl, Harkirat and Bubeck, S{\'e}bastien
+             and Eldan, Ronen and Gunasekar, Suriya and others},
+  journal = {arXiv preprint arXiv:2412.08905},
+  year    = {2024},
+  note    = {Drops the capacity framing; data-mixture ablation gives a token-budget trade-off},
+}
+
+@article{allenzhu2024capacity,
+  title   = {Physics of Language Models: Part 3.3, Knowledge Capacity Scaling Laws},
+  author  = {Allen-Zhu, Zeyuan and Li, Yuanzhi},
+  journal = {arXiv preprint arXiv:2404.05405},
+  year    = {2024},
+  note    = {2 bits/parameter law; the bit-counting protocol and the junk-data finding},
+}
+
+@article{allenzhu2025canon,
+  title   = {Physics of Language Models: Part 4.1, Architecture Design and the Magic of
+             Canon Layers},
+  author  = {Allen-Zhu, Zeyuan},
+  journal = {arXiv preprint arXiv:2512.17351},
+  year    = {2025},
+  note    = {Source of the Mano mental-arithmetic endpoint},
+}
+
+@article{marek2026forgetting,
+  title   = {Forgetting in Language Models: Capacity, Optimization, and Self-Generated Replay},
+  author  = {Marek, Martin and Cho, Dongkyu and Qiu, Shikai and Chunara, Rumi
+             and Izmailov, Pavel and Wilson, Andrew Gordon},
+  journal = {arXiv preprint arXiv:2605.26097},
+  year    = {2026},
+}
+
+@article{zhu2025ouro,
+  title   = {Scaling Latent Reasoning via Looped Language Models},
+  author  = {Zhu, Rui-Jie and Wang, Zixuan and Hua, Kai and Zhang, Tianyu and Li, Ziniu
+             and Que, Haoran and Wei, Boyi and Wen, Zixin and Yin, Fan and Xing, He
+             and others},
+  journal = {arXiv preprint arXiv:2510.25741},
+  year    = {2025},
+  note    = {Ouro; iGSM op15 46.3\% $\to$ 70.7\% at unchanged knowledge capacity},
+}
+
+@article{johnston2025twohop,
+  title   = {Examining Two Hop Reasoning Through Information Content Scaling},
+  author  = {Johnston, David and Belrose, Nora},
+  journal = {arXiv preprint arXiv:2502.03490},
+  year    = {2025},
+}
+
+@article{jelassi2024parrots,
+  title   = {Mixture of Parrots: Experts Improve Memorization More than Reasoning},
+  author  = {Jelassi, Samy and Mohri, Clara and Brandfonbrener, David and Gu, Alex
+             and Vyas, Nikhil and Anand, Nikhil and Alvarez-Melis, David and Li, Yuanzhi
+             and Kakade, Sham M. and Malach, Eran},
+  journal = {arXiv preprint arXiv:2410.19034},
+  year    = {2024},
+}
+
+@article{barron2025toobig,
+  title   = {Too Big to Think: Capacity, Memorization, and Generalization in
+             Pre-Trained Transformers},
+  author  = {Barron, Joshua and White, Devin},
+  journal = {arXiv preprint arXiv:2506.09099},
+  year    = {2025},
+}
+
+@article{morris2025memorize,
+  title   = {How Much Do Language Models Memorize?},
+  author  = {Morris, John X. and Sitawarin, Chawin and Guo, Chuan and Kokhlikyan, Narine
+             and Suh, G. Edward and Rush, Alexander M. and Chaudhuri, Kamalika
+             and Mahloujifar, Saeed},
+  journal = {arXiv preprint arXiv:2505.24832},
+  year    = {2025},
+  note    = {Generalization begins when data capacity exceeds model capacity},
+}
+
+@inproceedings{nakkiran2020doubledescent,
+  title     = {Deep Double Descent: Where Bigger Models and More Data Hurt},
+  author    = {Nakkiran, Preetum and Kaplun, Gal and Bansal, Yamini and Yang, Tristan
+               and Barak, Boaz and Sutskever, Ilya},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2020},
+}
+
+@inproceedings{biderman2023pythia,
+  title     = {Pythia: A Suite for Analyzing Large Language Models Across Training and Scaling},
+  author    = {Biderman, Stella and Schoelkopf, Hailey and Anthony, Quentin and
+               Bradley, Herbie and O'Brien, Kyle and Hallahan, Eric and Khan, Mohammad Aflah
+               and Purohit, Shivanshu and Prashanth, USVSN Sai and Raff, Edward and others},
+  booktitle = {International Conference on Machine Learning (ICML)},
+  year      = {2023},
+  note      = {arXiv:2304.01373; candidate open checkpoints for the continued-pretraining route},
+}
+
+
+% ---------------------------------------------------------------------
+% 6. BENCHMARKS AND EVALUATION SETS REFERENCED IN RESULTS
+% ---------------------------------------------------------------------
+
+@inproceedings{hendrycks2021mmlu,
+  title     = {Measuring Massive Multitask Language Understanding},
+  author    = {Hendrycks, Dan and Burns, Collin and Basart, Steven and Zou, Andy
+               and Mazeika, Mantas and Song, Dawn and Steinhardt, Jacob},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2021},
+}
+
+@inproceedings{joshi2017triviaqa,
+  title     = {{TriviaQA}: A Large Scale Distantly Supervised Challenge Dataset for
+               Reading Comprehension},
+  author    = {Joshi, Mandar and Choi, Eunsol and Weld, Daniel S. and Zettlemoyer, Luke},
+  booktitle = {Proceedings of the 55th Annual Meeting of the Association for
+               Computational Linguistics (ACL)},
+  pages     = {1601--1611},
+  year      = {2017},
+}
+
+@inproceedings{hendrycks2021math,
+  title     = {Measuring Mathematical Problem Solving With the {MATH} Dataset},
+  author    = {Hendrycks, Dan and Burns, Collin and Kadavath, Saurav and Arora, Akul
+               and Basart, Steven and Tang, Eric and Song, Dawn and Steinhardt, Jacob},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS),
+               Datasets and Benchmarks Track},
+  year      = {2021},
+}
+
+@article{cobbe2021gsm8k,
+  title   = {Training Verifiers to Solve Math Word Problems},
+  author  = {Cobbe, Karl and Kosaraju, Vineet and Bavarian, Mohammad and Chen, Mark
+             and Jun, Heewoo and Kaiser, Lukasz and Plappert, Matthias and Tworek, Jerry
+             and Hilton, Jacob and Nakano, Reiichiro and Hesse, Christopher and Schulman, John},
+  journal = {arXiv preprint arXiv:2110.14168},
+  year    = {2021},
+  note    = {GSM8k},
+}
+
+@article{chen2021humaneval,
+  title   = {Evaluating Large Language Models Trained on Code},
+  author  = {Chen, Mark and Tworek, Jerry and Jun, Heewoo and Yuan, Qiming and
+             de Oliveira Pinto, Henrique Ponde and Kaplan, Jared and Edwards, Harri
+             and Burda, Yuri and Joseph, Nicholas and Brockman, Greg and others},
+  journal = {arXiv preprint arXiv:2107.03374},
+  year    = {2021},
+  note    = {HumanEval},
+}
+
+@article{clark2018arc,
+  title   = {Think You Have Solved Question Answering? Try {ARC}, the {AI2} Reasoning Challenge},
+  author  = {Clark, Peter and Cowhey, Isaac and Etzioni, Oren and Khot, Tushar
+             and Sabharwal, Ashish and Schoenick, Carissa and Tafjord, Oyvind},
+  journal = {arXiv preprint arXiv:1803.05457},
+  year    = {2018},
+}
+
+@inproceedings{zellers2019hellaswag,
+  title     = {{HellaSwag}: Can a Machine Really Finish Your Sentence?},
+  author    = {Zellers, Rowan and Holtzman, Ari and Bisk, Yonatan and Farhadi, Ali
+               and Choi, Yejin},
+  booktitle = {Proceedings of the 57th Annual Meeting of the Association for
+               Computational Linguistics (ACL)},
+  pages     = {4791--4800},
+  year      = {2019},
+}
+
+@inproceedings{sakaguchi2020winogrande,
+  title     = {{WinoGrande}: An Adversarial Winograd Schema Challenge at Scale},
+  author    = {Sakaguchi, Keisuke and Le Bras, Ronan and Bhagavatula, Chandra and Choi, Yejin},
+  booktitle = {Proceedings of the AAAI Conference on Artificial Intelligence},
+  volume    = {34},
+  pages     = {8732--8740},
+  year      = {2020},
+}
+
+@inproceedings{welbl2017sciq,
+  title     = {Crowdsourcing Multiple Choice Science Questions},
+  author    = {Welbl, Johannes and Liu, Nelson F. and Gardner, Matt},
+  booktitle = {Proceedings of the 3rd Workshop on Noisy User-generated Text (W-NUT)},
+  pages     = {94--106},
+  year      = {2017},
+  note      = {SciQ},
+}
+
+@inproceedings{talmor2019commonsenseqa,
+  title     = {{CommonsenseQA}: A Question Answering Challenge Targeting Commonsense Knowledge},
+  author    = {Talmor, Alon and Herzig, Jonathan and Lourie, Nicholas and Berant, Jonathan},
+  booktitle = {Proceedings of the 2019 Conference of the North American Chapter of the
+               Association for Computational Linguistics (NAACL)},
+  pages     = {4149--4158},
+  year      = {2019},
+}
+
+@inproceedings{mallen2023popqa,
+  title     = {When Not to Trust Language Models: Investigating Effectiveness of Parametric
+               and Non-Parametric Memories},
+  author    = {Mallen, Alex and Asai, Akari and Zhong, Victor and Das, Rajarshi
+               and Khashabi, Daniel and Hajishirzi, Hannaneh},
+  booktitle = {Proceedings of the 61st Annual Meeting of the Association for
+               Computational Linguistics (ACL)},
+  pages     = {9802--9822},
+  year      = {2023},
+  note      = {PopQA; arXiv:2212.10511},
+}
+
+@inproceedings{elsahar2018trex,
+  title     = {{T-REx}: A Large Scale Alignment of Natural Language with Knowledge Base Triples},
+  author    = {ElSahar, Hady and Vougiouklis, Pavlos and Remaci, Arslen and Gravier, Christophe
+               and Hare, Jonathon and Laforest, Frederique and Simperl, Elena},
+  booktitle = {Proceedings of the Eleventh International Conference on Language Resources
+               and Evaluation (LREC)},
+  year      = {2018},
+}
+
+@article{jiang2023mistral,
+  title   = {Mistral 7B},
+  author  = {Jiang, Albert Q. and Sablayrolles, Alexandre and Mensch, Arthur and
+             Bamford, Chris and Chaplot, Devendra Singh and de las Casas, Diego
+             and Bressand, Florian and Lengyel, Gianna and Lample, Guillaume
+             and Saulnier, Lucile and others},
+  journal = {arXiv preprint arXiv:2310.06825},
+  year    = {2023},
+}
+
+@article{gemma2024,
+  title   = {Gemma: Open Models Based on Gemini Research and Technology},
+  author  = {{Gemma Team}},
+  journal = {arXiv preprint arXiv:2403.08295},
+  year    = {2024},
+}
+
+
+% ---------------------------------------------------------------------
+% 7. RETRIEVAL, INDEXING AND THE EXTERNAL STORE  (SPANN benchmark)
+% ---------------------------------------------------------------------
+
+@inproceedings{chen2021spann,
+  title     = {{SPANN}: Highly-efficient Billion-scale Approximate Nearest Neighbor Search},
+  author    = {Chen, Qi and Zhao, Bing and Wang, Haidong and Li, Mingqin and Liu, Chuanjie
+               and Li, Zengzhong and Yang, Mao and Wang, Jingdong},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2021},
+  note      = {arXiv:2111.08566},
+}
+
+@article{johnson2021faiss,
+  title   = {Billion-Scale Similarity Search with {GPUs}},
+  author  = {Johnson, Jeff and Douze, Matthijs and J{\'e}gou, Herv{\'e}},
+  journal = {IEEE Transactions on Big Data},
+  volume  = {7},
+  number  = {3},
+  pages   = {535--547},
+  year    = {2021},
+  note    = {FAISS; the IVF baseline},
+}
+
+@article{jegou2011pq,
+  title   = {Product Quantization for Nearest Neighbor Search},
+  author  = {J{\'e}gou, Herv{\'e} and Douze, Matthijs and Schmid, Cordelia},
+  journal = {IEEE Transactions on Pattern Analysis and Machine Intelligence},
+  volume  = {33},
+  number  = {1},
+  pages   = {117--128},
+  year    = {2011},
+}
+
+@inproceedings{lewis2020rag,
+  title     = {Retrieval-Augmented Generation for Knowledge-Intensive {NLP} Tasks},
+  author    = {Lewis, Patrick and Perez, Ethan and Piktus, Aleksandra and Petroni, Fabio
+               and Karpukhin, Vladimir and Goyal, Naman and K{\"u}ttler, Heinrich
+               and Lewis, Mike and Yih, Wen-tau and Rockt{\"a}schel, Tim and others},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2020},
+  note      = {The RAG baseline for the hallucination mini-experiment},
+}
+
+@inproceedings{khandelwal2020knnlm,
+  title     = {Generalization through Memorization: Nearest Neighbor Language Models},
+  author    = {Khandelwal, Urvashi and Levy, Omer and Jurafsky, Dan
+               and Zettlemoyer, Luke and Lewis, Mike},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2020},
+  note      = {arXiv:1911.00172; the kNN-LM method},
+}
+
+@inproceedings{schick2023toolformer,
+  title     = {{Toolformer}: Language Models Can Teach Themselves to Use Tools},
+  author    = {Schick, Timo and Dwivedi-Yu, Jane and Dess{\`i}, Roberto
+               and Raileanu, Roberta and Lomeli, Maria and Hambro, Eric
+               and Zettlemoyer, Luke and Cancedda, Nicola and Scialom, Thomas},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2023},
+  note      = {arXiv:2302.04761},
+}
+
+@article{wang2021kepler,
+  title   = {{KEPLER}: A Unified Model for Knowledge Embedding and Pre-trained Language
+             Representation},
+  author  = {Wang, Xiaozhi and Gao, Tianyu and Zhu, Zhaocheng and Zhang, Zhengyan
+             and Liu, Zhiyuan and Li, Juanzi and Tang, Jian},
+  journal = {Transactions of the Association for Computational Linguistics},
+  volume  = {9},
+  pages   = {176--194},
+  year    = {2021},
+  note    = {Source of the Wikidata5M triple set},
+}
+
+
+% ---------------------------------------------------------------------
+% 8. PRIVACY, MEMORIZATION AND UNLEARNING  (Experiment 4)
+% ---------------------------------------------------------------------
+
+@inproceedings{gupta2024editing,
+  title     = {Model Editing at Scale leads to Gradual and Catastrophic Forgetting},
+  author    = {Gupta, Akshat and Rao, Anurag and Anumanchipalli, Gopala},
+  booktitle = {Findings of the Association for Computational Linguistics: ACL 2024},
+  pages     = {15202--15232},
+  year      = {2024},
+  doi       = {10.18653/v1/2024.findings-acl.902},
+}
+
+@inproceedings{carlini2021extracting,
+  title     = {Extracting Training Data from Large Language Models},
+  author    = {Carlini, Nicholas and Tramer, Florian and Wallace, Eric and Jagielski, Matthew
+               and Herbert-Voss, Ariel and Lee, Katherine and Roberts, Adam and Brown, Tom
+               and Song, Dawn and Erlingsson, Ulfar and Oprea, Alina and Raffel, Colin},
+  booktitle = {30th USENIX Security Symposium (USENIX Security)},
+  pages     = {2633--2650},
+  year      = {2021},
+  note      = {arXiv:2012.07805},
+}
+
+@inproceedings{maini2024tofu,
+  title     = {{TOFU}: A Task of Fictitious Unlearning for {LLMs}},
+  author    = {Maini, Pratyush and Feng, Zhili and Schwarzschild, Avi and Lipton, Zachary C.
+               and Kolter, J. Zico},
+  booktitle = {Conference on Language Modeling (COLM)},
+  year      = {2024},
+  note      = {arXiv:2401.06121},
+}
+
+@article{zhang2024npo,
+  title   = {Negative Preference Optimization: From Catastrophic Collapse to Effective Unlearning},
+  author  = {Zhang, Ruiqi and Lin, Licong and Bai, Yu and Mei, Song},
+  journal = {arXiv preprint arXiv:2404.05868},
+  year    = {2024},
+}
+
+@article{chen2026privun,
+  title   = {{PrivUn}: Unveiling Latent Ripple Effects and Shallow Forgetting in
+             Privacy Unlearning},
+  author  = {Chen, Xiaoyi and Wang, Haoyuan and Tang, Siyuan and Liu, Sijia and Su, Liya
+             and Wang, XiaoFeng and Tang, Haixu},
+  journal = {arXiv preprint arXiv:2604.22076},
+  year    = {2026},
+}
+
+@article{sondej2026repselect,
+  title   = {{RepSelect}: Robust {LLM} Unlearning via Representation Selectivity},
+  author  = {Sondej, Filip and Yang, Yushi and Mahdi, Adam},
+  journal = {arXiv preprint arXiv:2606.17168},
+  year    = {2026},
+  note    = {The ``impossible triangle'' of removal, capability preservation and
+             relearning resistance},
+}
+
+@inproceedings{shokri2017membership,
+  title     = {Membership Inference Attacks Against Machine Learning Models},
+  author    = {Shokri, Reza and Stronati, Marco and Song, Congzheng and Shmatikov, Vitaly},
+  booktitle = {IEEE Symposium on Security and Privacy (S\&P)},
+  pages     = {3--18},
+  year      = {2017},
+}
+
+@inproceedings{carlini2022lira,
+  title     = {Membership Inference Attacks From First Principles},
+  author    = {Carlini, Nicholas and Chien, Steve and Nasr, Milad and Song, Shuang
+               and Terzis, Andreas and Tramer, Florian},
+  booktitle = {IEEE Symposium on Security and Privacy (S\&P)},
+  pages     = {1897--1914},
+  year      = {2022},
+  note      = {LiRA; the MIA instrument for the absence measurement},
+}
+
+@misc{gdpr2016,
+  title        = {Regulation (EU) 2016/679 of the European Parliament and of the Council
+                  (General Data Protection Regulation)},
+  author       = {{European Parliament and Council of the European Union}},
+  year         = {2016},
+  howpublished = {Official Journal of the European Union L 119/1},
+  note         = {Article 17, right to erasure},
+}
+
+@misc{ccpa2018,
+  title        = {California Consumer Privacy Act of 2018},
+  author       = {{State of California}},
+  year         = {2018},
+  howpublished = {Cal. Civ. Code {\S}{\S} 1798.100 et seq.},
+}
+
+@misc{pipl2021,
+  title        = {Personal Information Protection Law of the People's Republic of China},
+  author       = {{National People's Congress of the People's Republic of China}},
+  year         = {2021},
+}
+
+
+% ---------------------------------------------------------------------
+% 9. MODERN HOPFIELD NETWORKS AND EMBEDDINGS  (Experiment 3)
+% ---------------------------------------------------------------------
+
+@article{hopfield1982neural,
+  title   = {Neural Networks and Physical Systems with Emergent Collective
+             Computational Abilities},
+  author  = {Hopfield, John J.},
+  journal = {Proceedings of the National Academy of Sciences},
+  volume  = {79},
+  number  = {8},
+  pages   = {2554--2558},
+  year    = {1982},
+}
+
+@inproceedings{ramsauer2021hopfield,
+  title     = {Hopfield Networks is All You Need},
+  author    = {Ramsauer, Hubert and Sch{\"a}fl, Bernhard and Lehner, Johannes and Seidl, Philipp
+               and Widrich, Michael and Adler, Thomas and Gruber, Lukas and Holzleitner, Markus
+               and Pavlovi{\'c}, Milena and Sandve, Geir Kjetil and others},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2021},
+  note      = {arXiv:2008.02217},
+}
+
+@article{mcclelland1995cls,
+  title   = {Why There Are Complementary Learning Systems in the Hippocampus and
+             Neocortex: Insights from the Successes and Failures of Connectionist
+             Models of Learning and Memory},
+  author  = {McClelland, James L. and McNaughton, Bruce L. and O'Reilly, Randall C.},
+  journal = {Psychological Review},
+  volume  = {102},
+  number  = {3},
+  pages   = {419--457},
+  year    = {1995},
+  doi     = {10.1037/0033-295X.102.3.419},
+}
+
+@inproceedings{jun2025cls,
+  title     = {A Neural Network Model of Complementary Learning Systems: Pattern Separation
+               and Completion for Continual Learning},
+  author    = {Jun, James P. and Marupudi, Vijay and Shah, Raj Sanjay and Varma, Sashank},
+  booktitle = {Proceedings of the Annual Meeting of the Cognitive Science Society (CogSci)},
+  year      = {2025},
+  note      = {arXiv:2507.11393; the VAE + Hopfield memory design},
+}
+
+@article{kashyap2024hopfield,
+  title   = {Modern Hopfield Networks meet Encoded Neural Representations --
+             Addressing Practical Considerations},
+  author  = {Kashyap, Satyananda and D'Souza, Niharika S. and Shi, Luyao and Wong, Ken C. L.
+             and Wang, Hongzhi and Syeda-Mahmood, Tanveer},
+  journal = {arXiv preprint arXiv:2409.16408},
+  year    = {2024},
+}
+
+@article{farooq2025nonlinear,
+  title   = {A Framework for Non-Linear Attention via Modern Hopfield Networks},
+  author  = {Farooq, Ahmed},
+  journal = {arXiv preprint arXiv:2506.11043},
+  year    = {2025},
+}
+
+@inproceedings{masumura2025hidden,
+  title     = {On the Role of Hidden States of Modern Hopfield Network in Transformer},
+  author    = {Masumura, Tsubasa and Taki, Masato},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2025},
+  note      = {arXiv:2511.20698},
+}
+
+@article{santos2024hfyn,
+  title   = {Hopfield-Fenchel-Young Networks: A Unified Framework for Associative
+             Memory Retrieval},
+  author  = {Santos, Saul and Niculae, Vlad and McNamee, Daniel and Martins, Andr{\'e} F. T.},
+  journal = {arXiv preprint arXiv:2411.08590},
+  year    = {2024},
+}
+
+@inproceedings{noroozizadeh2026geometric,
+  title     = {Deep Sequence Models Tend to Memorize Geometrically; It Is Unclear Why},
+  author    = {Noroozizadeh, Shahriar and Nagarajan, Vaishnavh and Rosenfeld, Elan
+               and Kumar, Sanjiv},
+  booktitle = {International Conference on Machine Learning (ICML)},
+  year      = {2026},
+  note      = {arXiv:2510.26745; the spectral-bias motivation},
+}
+
+@inproceedings{kingma2014vae,
+  title     = {Auto-Encoding Variational Bayes},
+  author    = {Kingma, Diederik P. and Welling, Max},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2014},
+}
+
+@inproceedings{mikolov2013word2vec,
+  title     = {Distributed Representations of Words and Phrases and their Compositionality},
+  author    = {Mikolov, Tomas and Sutskever, Ilya and Chen, Kai and Corrado, Greg S.
+               and Dean, Jeff},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  volume    = {26},
+  year      = {2013},
+  note      = {Word2Vec and skip-gram with negative sampling (SGNS)},
+}
+
+@inproceedings{grover2016node2vec,
+  title     = {node2vec: Scalable Feature Learning for Networks},
+  author    = {Grover, Aditya and Leskovec, Jure},
+  booktitle = {Proceedings of the 22nd ACM SIGKDD International Conference on
+               Knowledge Discovery and Data Mining (KDD)},
+  pages     = {855--864},
+  year      = {2016},
+}
+
+@article{oord2018cpc,
+  title   = {Representation Learning with Contrastive Predictive Coding},
+  author  = {van den Oord, Aaron and Li, Yazhe and Vinyals, Oriol},
+  journal = {arXiv preprint arXiv:1807.03748},
+  year    = {2018},
+  note    = {The InfoNCE objective},
+}
+
+@inproceedings{meng2019jose,
+  title     = {Spherical Text Embedding},
+  author    = {Meng, Yu and Huang, Jiaxin and Wang, Guangyuan and Zhang, Chao
+               and Zhuang, Honglei and Kaplan, Lance and Han, Jiawei},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2019},
+  note      = {JoSE; arXiv:1911.01196},
+}
+
+@inproceedings{martins2016sparsemax,
+  title     = {From Softmax to Sparsemax: A Sparse Model of Attention and Multi-Label
+               Classification},
+  author    = {Martins, Andr{\'e} F. T. and Astudillo, Ram{\'o}n Fernandez},
+  booktitle = {International Conference on Machine Learning (ICML)},
+  pages     = {1614--1623},
+  year      = {2016},
+}
+
+@inproceedings{peters2019entmax,
+  title     = {Sparse Sequence-to-Sequence Models},
+  author    = {Peters, Ben and Niculae, Vlad and Martins, Andr{\'e} F. T.},
+  booktitle = {Proceedings of the 57th Annual Meeting of the Association for
+               Computational Linguistics (ACL)},
+  pages     = {1504--1519},
+  year      = {2019},
+  note      = {entmax},
+}
+
+@inproceedings{nickel2017poincare,
+  title     = {Poincar{\'e} Embeddings for Learning Hierarchical Representations},
+  author    = {Nickel, Maximilian and Kiela, Douwe},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2017},
+  note      = {The hyperbolic-embedding variant},
+}
+
+
+% ---------------------------------------------------------------------
+% 10. MATH REASONING SUBSTRATE AND BASE MODELS  (Experiment 1)
+% ---------------------------------------------------------------------
+
+@inproceedings{demoura2021lean4,
+  title     = {The {Lean} 4 Theorem Prover and Programming Language},
+  author    = {de Moura, Leonardo and Ullrich, Sebastian},
+  booktitle = {Automated Deduction -- CADE 28},
+  pages     = {625--635},
+  year      = {2021},
+  publisher = {Springer},
+}
+
+@inproceedings{mathlib2020,
+  title     = {The {Lean} Mathematical Library},
+  author    = {{The mathlib Community}},
+  booktitle = {Proceedings of the 9th ACM SIGPLAN International Conference on
+               Certified Programs and Proofs (CPP)},
+  pages     = {367--381},
+  year      = {2020},
+}
+
+@article{wang2024mambabyte,
+  title   = {{MambaByte}: Token-free Selective State Space Model},
+  author  = {Wang, Junxiong and Gangavarapu, Tushaar and Yan, Jing Nathan and Rush, Alexander M.},
+  journal = {arXiv preprint arXiv:2401.13660},
+  year    = {2024},
+  note    = {Byte-level alternative for symbol-heavy proof corpora},
+}
+
+@article{olmo3,
+  title   = {Olmo 3},
+  author  = {{Team Olmo}},
+  journal = {arXiv preprint arXiv:2512.13961},
+  year    = {2025},
+  note    = {Olmo 3 core 370M, the Experiment 1 base model},
+}
+
+@article{diao2025climb,
+  title   = {Nemotron-{CLIMB}: {CL}ustering-based {I}terative Data {M}ixture
+             {B}ootstrapping for Language Model Pre-training},
+  author  = {Diao, Shizhe and Yang, Yu and Fu, Yonggan and Dong, Xin and Su, Dan
+             and Kliegl, Markus and others},
+  journal = {arXiv preprint arXiv:2504.13161},
+  year    = {2025},
+  note    = {Source of the ClimbMix corpus},
+}
+
+@article{qwen2024qwen25,
+  title   = {Qwen2.5 Technical Report},
+  author  = {{Qwen Team}},
+  journal = {arXiv preprint arXiv:2412.15115},
+  year    = {2024},
+}
+
+@inproceedings{warner2025modernbert,
+  title     = {Smarter, Better, Faster, Longer: A Modern Bidirectional Encoder for Fast,
+               Memory Efficient, and Long Context Finetuning and Inference},
+  author    = {Warner, Benjamin and Chaffin, Antoine and Clavi{\'e}, Benjamin and Weller, Orion
+               and Hallstr{\"o}m, Oskar and Taghadouini, Said and Gallagher, Alexis
+               and Biswas, Raja and others},
+  booktitle = {Proceedings of the 63rd Annual Meeting of the Association for
+               Computational Linguistics (ACL)},
+  year      = {2025},
+  note      = {ModernBERT; the Co-LMLM fact-identification annotator},
+}
+
+
+% ---------------------------------------------------------------------
+% 11. MECHANISTIC INTERPRETABILITY INSTRUMENTS  (the 20-probe suite)
+% ---------------------------------------------------------------------
+
+@inproceedings{kornblith2019cka,
+  title     = {Similarity of Neural Network Representations Revisited},
+  author    = {Kornblith, Simon and Norouzi, Mohammad and Lee, Honglak and Hinton, Geoffrey},
+  booktitle = {International Conference on Machine Learning (ICML)},
+  pages     = {3519--3529},
+  year      = {2019},
+  note      = {CKA, used by the geometry\_cka probe},
+}
+
+@article{allenzhu2023manipulation,
+  title   = {Physics of Language Models: Part 3.2, Knowledge Manipulation},
+  author  = {Allen-Zhu, Zeyuan and Li, Yuanzhi},
+  journal = {arXiv preprint arXiv:2309.14402},
+  year    = {2023},
+  note    = {Companion to 3.1/3.3 on downstream use of stored knowledge},
+}

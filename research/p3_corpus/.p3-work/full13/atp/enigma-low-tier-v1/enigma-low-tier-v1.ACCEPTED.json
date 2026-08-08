@@ -1,0 +1,43 @@
+{
+  "audit": {
+    "bytes": 888080,
+    "path": "enigma-low-tier-v1.audit.json",
+    "sha256": "b3189c4a8589beb7d066c27246adf3257adadccb0729fecd2732a4c10165c5c8"
+  },
+  "gates": [
+    "accepted_prefix_byte_identity",
+    "exact_source_inventory_accounting",
+    "source_closure_and_final_refutation",
+    "atp_v2_schema_replay",
+    "fixed_tokenizer_contract",
+    "conservative_policy_exact_counts",
+    "global_text_and_signature_deduplication",
+    "theorem_variant_normalization",
+    "deterministic_occurrence_root"
+  ],
+  "roots": {
+    "policy_root_sha256": "646a531f28aeb7c5a8ef78de97e8000e866816508a6e8413b51474d6c5cf4669",
+    "selected_occurrence_root_sha256": "587b81fa01ba84b4245745f10e83c89d9fa46771558c907148a00864afdee7e0",
+    "source_manifest_root_sha256": "c33d5b87696e56276f8c2eb81fd1acb274ab766308e60a96e6ee999d6d76fd2e"
+  },
+  "rows": {
+    "added": 2087,
+    "base": 27079,
+    "total": 29166
+  },
+  "run_distribution": {
+    "mzr02": 1115,
+    "mzr03": 256,
+    "mzr08": 716
+  },
+  "schema_version": "enigma-alternative-proof-low-tier-acceptance-v1",
+  "shard": {
+    "bytes": 1607320322,
+    "sha256": "7fddf832938404f6e76f33fae06a6e8731b923cde65d9c32795288ac4250a3f7"
+  },
+  "status": "ACCEPTED",
+  "tokens": {
+    "added_packed_16384": 9666560,
+    "added_text_plus_eos": 9655618
+  }
+}

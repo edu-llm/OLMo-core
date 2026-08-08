@@ -1,0 +1,146 @@
+{
+  "schema_version": "p3-encoding-cache-v3",
+  "code_version": "tokenize-corpus-v4",
+  "status": "complete",
+  "fingerprint": "22c23f1907ec20e9afa83290475ed57df47d5f10ad4a80054fe947f73219043a",
+  "build_fingerprint": "22c23f1907ec20e9afa83290475ed57df47d5f10ad4a80054fe947f73219043a",
+  "build": {
+    "schema_version": "p3-encoding-cache-v3",
+    "code_version": "tokenize-corpus-v4",
+    "source_jsonl": {
+      "name": "eval.jsonl",
+      "sha256": "4dfa8182fb666936d15ff2c618efe42e5e791d68012570f5a146819b532621ba"
+    },
+    "tokenizer": {
+      "schema_version": "p3-tokenizer-four-part-seal-v1",
+      "tokenizer_artifact_id": "tokenizer/qwen25-vendored",
+      "tokenizer_artifact_version": "v1",
+      "tokenizer_file_sha256": {
+        "tokenizer.json": "3fd169731d2cbde95e10bf356d66d5997fd885dd8dbb6fb4684da3f23b2585d8",
+        "tokenizer_config.json": "ddb9f850ca6559a928bb25d511f72e3c6eff81395334a4e0eeec670448333d09"
+      },
+      "tokenizer_composite_sha256": "aa90434a251a434bbc938ddb3be6683a73fa94150377b5ccd2cbd7880358661a",
+      "tokenizers_version": "0.22.2",
+      "tokenizer_eos_token_id": 151643,
+      "tokenizer_pad_token_id": 151643,
+      "separator": "\n---\nGOAL ",
+      "separator_ids": [
+        10952,
+        15513,
+        969
+      ]
+    },
+    "eos_token_id": 151643
+  },
+  "source_jsonl": {
+    "name": "eval.jsonl",
+    "sha256": "4dfa8182fb666936d15ff2c618efe42e5e791d68012570f5a146819b532621ba"
+  },
+  "documents": 590,
+  "tokens": 461426,
+  "straddling": 590,
+  "chunks": [
+    {
+      "index": 0,
+      "documents": {
+        "start": 0,
+        "end": 256
+      },
+      "tokens": {
+        "start": 0,
+        "end": 179953
+      },
+      "token_bytes": {
+        "start": 0,
+        "end": 719812
+      },
+      "offset_bytes": {
+        "start": 8,
+        "end": 2056
+      },
+      "tokens_sha256": "262fc184f198e67e139b2c02e1ad10a1bbb747a323b7fa974c7bfbe684f98b98",
+      "offsets_sha256": "b2393db7aa512883dbdadf08a22f0729c4ff360f19f7057655a165ad7340d9e8",
+      "source_rows_sha256": "7dafa2761035b53d2f2b2950bbdf57e0d5c76a4b5c8373efc30b06dda5760348",
+      "straddling": 256
+    },
+    {
+      "index": 1,
+      "documents": {
+        "start": 256,
+        "end": 512
+      },
+      "tokens": {
+        "start": 179953,
+        "end": 389675
+      },
+      "token_bytes": {
+        "start": 719812,
+        "end": 1558700
+      },
+      "offset_bytes": {
+        "start": 2056,
+        "end": 4104
+      },
+      "tokens_sha256": "afa2d33e1967f2d684b0b11c6ec886eeeafde7a4f6919015acacd66393e6f60f",
+      "offsets_sha256": "d46d32db59321adb2b703f8868bb1bd0741bd86bd581d9ad2908aea37394a122",
+      "source_rows_sha256": "216f2efba157d5be07eef968d40590fde0ac709a61aff7f693817a826c74deb9",
+      "straddling": 256
+    },
+    {
+      "index": 2,
+      "documents": {
+        "start": 512,
+        "end": 590
+      },
+      "tokens": {
+        "start": 389675,
+        "end": 461426
+      },
+      "token_bytes": {
+        "start": 1558700,
+        "end": 1845704
+      },
+      "offset_bytes": {
+        "start": 4104,
+        "end": 4728
+      },
+      "tokens_sha256": "73edcd1a23c7bc37bf1de68dadcb1d5d6dd475cbee1c0441c5b011e93e63433b",
+      "offsets_sha256": "226b092fc86933971ba9ec8f7c5ac9fd8c481f3ddc8564dc5f0e4e7d506f41ab",
+      "source_rows_sha256": "e8541776f35de7f10508127e31adee5a1a6dee58dbdcc7ae9490f98e611fa57e",
+      "straddling": 78
+    }
+  ],
+  "payloads": {
+    "tokens": {
+      "path": "tokens.u32le.bin",
+      "bytes": 1845704,
+      "sha256": "05c9f13f4f3f401fe81ab360bd58300ead81452fb84f214fa9879046cbff6eb7",
+      "dtype": "uint32",
+      "byte_order": "little",
+      "documents": {
+        "start": 0,
+        "end": 590
+      },
+      "tokens": {
+        "start": 0,
+        "end": 461426
+      }
+    },
+    "offsets": {
+      "path": "offsets.u64le.bin",
+      "bytes": 4728,
+      "sha256": "2450c9c8b0ae141d615e3caad6f7870bd9e8e9df7620093453e30465500ff271",
+      "dtype": "uint64",
+      "byte_order": "little",
+      "documents": {
+        "start": 0,
+        "end": 590
+      },
+      "tokens": {
+        "start": 0,
+        "end": 461426
+      }
+    }
+  },
+  "cache_root_sha256": "136af6faa1ad346ed63adc59d0ab5b9afd078f121b781f02d68b5f76ed8e6e51"
+}

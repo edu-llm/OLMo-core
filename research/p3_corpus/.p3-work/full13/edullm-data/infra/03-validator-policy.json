@@ -1,0 +1,59 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PromoteIntoPublishedBucket",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging",
+        "s3:AbortMultipartUpload"
+      ],
+      "Resource": "arn:aws:s3:::edullm-data/*"
+    },
+    {
+      "Sid": "ReadPublishedBucketForIdempotencyAndCatalog",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket",
+        "s3:GetBucketLocation"
+      ],
+      "Resource": "arn:aws:s3:::edullm-data"
+    },
+    {
+      "Sid": "ReadPublishedObjectsForDependsOnResolution",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:GetObjectAttributes"
+      ],
+      "Resource": "arn:aws:s3:::edullm-data/*"
+    },
+    {
+      "Sid": "ReadLandingPayloadAndManifests",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:GetObjectAttributes"
+      ],
+      "Resource": "arn:aws:s3:::edullm-landing/*"
+    },
+    {
+      "Sid": "ListLandingForExhaustivenessCheck",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket",
+        "s3:GetBucketLocation"
+      ],
+      "Resource": "arn:aws:s3:::edullm-landing"
+    },
+    {
+      "Sid": "WriteRejectionSentinelToLanding",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject"
+      ],
+      "Resource": "arn:aws:s3:::edullm-landing/*"
+    }
+  ]
+}
