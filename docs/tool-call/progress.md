@@ -105,4 +105,19 @@ Anything longer belongs in [`prd.md`](prd.md) or [`dataset-design.md`](dataset-d
 - Rewrote `dataset-design.md` §3, §6, §7, §8, §12, §14, §15 and added §16; updated `prd.md` and
   `docs/tool-call/verify/verify_record_shape.py` (now diffs our layout against AI2's real one).
 
+- **§15 Q1 ANSWERED — byte-identity proven.** New tracked check
+  `docs/tool-call/verify/verify_render_identity.py` fetches the real
+  `Olmo-3-7B-Instruct/chat_template.jinja` and 5 real Dolci rows, renders each **as AI2 publishes it**
+  (sibling `functions`/`function_calls`, `content: null`) and **as we inline it**, then byte-compares:
+  `IDENTICAL=True` on all 5, including a 27-turn row. The inlining is lossless.
+  - The leading-space question is settled **from the template source**, not inferred: the
+    per-message path emits `' <functions>'` **with** a space, the row-level `tools` path emits
+    `'<functions>'` **without** one. We use the per-message spacing, which is the path AI2's own
+    training bytes took.
+  - Also read out of the template: `tool` role **is** aliased to `<|im_start|>environment`; a
+    `tool_calls` branch exists that builds Pythonic calls as `name(k=v, …)` joined by `', '` with
+    parallel calls joined by `\n` — confirming our serialization exactly.
+  - Note for the harness: the jinja env must use **transformers' `tojson`**, not jinja's builtin —
+    the builtin is HTML-safe and escapes `< > & '`, which would corrupt schemas.
+
 <!-- next entry goes below -->
