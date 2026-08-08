@@ -61,7 +61,7 @@ RUN set -eux; \
       "rich==14.2.0" \
       "safetensors==0.7.0" \
       "importlib-resources==6.5.2" \
-      "bettermap==0.3.2" \
+      "bettermap==1.3.1" \
       "pandas==2.3.3" \
       "boto3==1.40.70" \
       "botocore[crt]==1.40.70" \
