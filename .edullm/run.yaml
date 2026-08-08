@@ -1,0 +1,42 @@
+# What this commit runs on the platform.
+#
+# The command lives HERE and not in a flag: it is a property of the code, while everything a run
+# is charged against (team, experiment, dataset, machine) is supplied at submit time, because one
+# commit run by two people belongs to two teams.
+#
+# WHAT THIS RUN IS FOR, AND WHY IT IS NOT REDUNDANT WITH THE FARMSHARE SMOKE
+#   The same harness passed on FarmShare (L40S, sm_89, job 1677831): all four arms build, both
+#   gated arms run 100% fused kernels, the gated and plain arms are bit-identical at init through
+#   the fused path, and the memory prediction matched the measurement to three decimal places.
+#
+#   None of that transfers to sm_80. fla's Triton kernels are compiled per architecture, and KDA's
+#   backward carried an sm-dependent illegal-memory-access bug (fla #802) whose reproducer was
+#   literally KimiDeltaAttention -- fixed in 0.5.0, which is why the pin matters. gpu-8xa100 is
+#   the only A100 this account prices, so this is the only way to learn whether the gated
+#   convolution's backward is correct on the card the training runs will actually use.
+#
+# `EDULLM_LAUNCH_CHECK=waived` is required and is not a formality. The platform refuses one
+# process on a multi-GPU shape, and there is no single-A100 profile on the form. This harness
+# builds and trains one model at a time on ONE device, so seven cards sit idle for ~10 minutes.
+# That is the honest cost of validating on sm_80 at all, and a benchmark on one card is exactly
+# the case the waiver exists for.
+#
+# No `EDULLM_CHECKPOINT_CHECK` waiver: olmo-core-check declares `checkpoint: null`, so nothing is
+# promised and there is nothing to waive. `$EDULLM_CHECKPOINT_DIR` is still expanded for the JSON
+# output, which is the run's only artifact.
+#
+# Both gate structures run, because they have different failure modes: "depthwise" is the cheap
+# floor whose memory estimate is exact, and "lowrank" is the faithful one whose init draws
+# randomness and whose memory estimate is only a floor. A pass on one says nothing about the other.
+schema_version: 1
+workload_profile: olmo-core-check
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'export EDULLM_LAUNCH_CHECK=waived TRITON_F32_DEFAULT=ieee &&
+  python scripts/smoke_gated_conv_gpu.py --gate-structure depthwise
+  --out "$EDULLM_CHECKPOINT_DIR/smoke_depthwise_$EDULLM_RUN_ID.json" &&
+  python scripts/smoke_gated_conv_gpu.py --gate-structure lowrank --gate-rank 128
+  --out "$EDULLM_CHECKPOINT_DIR/smoke_lowrank_$EDULLM_RUN_ID.json" &&
+  python scripts/smoke_gated_conv_gpu.py --d-model 2048 --n-heads 16 --n-layers 4
+  --seq-len 4096 --batch-size 2 --steps 6 --gate-structure depthwise
+  --out "$EDULLM_CHECKPOINT_DIR/smoke_memory_$EDULLM_RUN_ID.json"'
