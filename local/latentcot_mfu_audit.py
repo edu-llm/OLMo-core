@@ -44,14 +44,12 @@ def main():
     counts = Counter(prefix_len)
     print(f"  {len(counts)} distinct prefix lengths over {len(examples)} examples")
     top = counts.most_common(8)
-    print("  most common: " + ", ".join(f"len{l}x{c}" for l, c in top))
+    print("  most common: " + ", ".join(f"len{length}x{count}" for length, count in top))
     print(f"  a batch of {BATCH} drawn at random would split into ~"
           f"{min(BATCH, len(counts))} buckets on average")
 
     # ---- forwards per optimizer step, as written (batch dim 1 per example) ----
     print("\nforwards per optimizer step (batch_size=16), CODI arm A2/A3/A4:")
-    per_ex_thought_tokens = sum(p + i for p, i in
-                                [(sum(prefix_len) / len(prefix_len), i) for i in range(K)])
     print(f"  teacher forward            : 1 per example  -> {BATCH:4d} forwards @ batch=1")
     print(f"  thought loop (K={K})        : {K} per example -> {BATCH * K:4d} forwards @ batch=1")
     print(f"  final student forward      : 1 per example  -> {BATCH:4d} forwards @ batch=1")
@@ -72,7 +70,7 @@ def main():
     mean_student = sum(student_len) / len(student_len)
     tokens_per_step = BATCH * (mean_student + sum(mean_prefix + i for i in range(K)))
     flops_per_step = 6 * PARAMS * tokens_per_step  # 6ND fwd+bwd
-    print(f"\nrough FLOPs accounting (6*N*D):")
+    print("\nrough FLOPs accounting (6*N*D):")
     print(f"  token-positions per step (all branches): {tokens_per_step:,.0f}")
     print(f"  FLOPs per step                         : {flops_per_step:.3e}")
     for name, tflops in [("A100 bf16 (312 TF)", 312e12), ("A100 fp32 no-TF32 (19.5 TF)", 19.5e12)]:
