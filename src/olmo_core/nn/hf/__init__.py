@@ -24,6 +24,12 @@ from .convert_checkpoint import (
     load_config,
     validate_conversion,
 )
+from .exports import (
+    export_is_complete,
+    export_weight_files,
+    find_exports,
+    latest_complete_export,
+)
 
 __all__ = [
     "convert_checkpoint_to_hf",
@@ -31,12 +37,16 @@ __all__ = [
     "convert_qwen3_5_state_from_hf",
     "convert_state_from_hf",
     "convert_state_to_hf",
+    "export_is_complete",
+    "export_weight_files",
+    "find_exports",
     "get_converter_from_hf",
     "get_converter_to_hf",
     "get_hf_config",
     "get_hybrid_hf_config",
     "get_hybrid_layer_types",
     "is_olmo_hybrid_model",
+    "latest_complete_export",
     "load_config",
     "load_hf_model",
     "save_hf_hybrid_model",

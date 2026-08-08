@@ -1,6 +1,15 @@
 """Decide whether a HuggingFace export gathered the experts, from the export alone.
 
     python .edullm/verify_hf_export.py s3://.../runs/<run>/hf/step4
+    python .edullm/verify_hf_export.py s3://.../runs/<run>/hf
+
+THE SECOND FORM IS THE ONE TO USE WHILE THE RUN IS STILL GOING. Named a prefix rather than one
+export, this takes the highest step under it that is WHOLE -- see
+``olmo_core.nn.hf.latest_complete_export`` -- and not the highest step there is. Those differ
+for the minutes it takes to write 13.27 GiB, which on a 2,400-step export interval is most of
+the time somebody is likely to ask. Taking the maximum off a listing instead would read the
+export currently being written, on almost every attempt, and this file's whole subject is
+tensors that are wrong without looking wrong.
 
 WHAT THIS IS FOR, AND WHY IT IS NOT A UNIT TEST. ``HFConverterCallback`` gathers the model with
 ``get_model_state_dict(full_state_dict=True)``. On a dense FSDP model that is a well-travelled
@@ -39,6 +48,20 @@ from typing import Dict, List
 import torch
 
 from olmo_core.io import file_exists, resource_path
+from olmo_core.nn.hf import export_is_complete, latest_complete_export
+
+
+def resolve_export(named: str) -> str:
+    """The export to read, whether the caller named one or the prefix they all live under.
+
+    Tried in that order rather than by inspecting the name, because ``step{N}`` is a convention
+    of where the callback writes and not a promise about what somebody types -- a copy pulled
+    down to ``/scratch/candidate`` is still one export.
+    """
+    named = named.rstrip("/")
+    if export_is_complete(named):
+        return named
+    return latest_complete_export(named)
 
 
 def _local(uri: str, name: str):
@@ -82,13 +105,23 @@ def duplicate_groups(tensor: torch.Tensor) -> List[List[int]]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("export", help="The hf/step{N} directory the run wrote.")
+    parser.add_argument(
+        "export", help="An hf/step{N} directory, or the hf/ prefix holding several."
+    )
     parser.add_argument("--experts", type=int, default=32)
     options = parser.parse_args()
 
-    tensors = expert_tensors(options.export)
+    try:
+        export = resolve_export(options.export)
+    except FileNotFoundError as exc:
+        print(f"FAIL: {exc}")
+        return 1
+    if export != options.export.rstrip("/"):
+        print(f"reading {export}, the highest whole export under {options.export}")
+
+    tensors = expert_tensors(export)
     if not tensors:
-        print(f"FAIL: {options.export} holds no stacked expert parameters at all")
+        print(f"FAIL: {export} holds no stacked expert parameters at all")
         return 1
 
     failures = 0
@@ -96,7 +129,9 @@ def main() -> int:
     for name in sorted(tensors):
         tensor = tensors[name]
         if tensor.shape[0] != options.experts:
-            print(f"FAIL {name}: {tensor.shape[0]} experts on dimension zero, not {options.experts}")
+            print(
+                f"FAIL {name}: {tensor.shape[0]} experts on dimension zero, not {options.experts}"
+            )
             failures += 1
             continue
         repeats = duplicate_groups(tensor)
