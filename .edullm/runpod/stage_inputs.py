@@ -98,7 +98,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path("/workspace/aws-session.env"),
     )
-    parser.add_argument("--arm-index", type=int, choices=range(5), required=True)
+    parser.add_argument("--arm-index", type=int, choices=range(7), required=True)
     parser.add_argument("--curriculum-version")
     parser.add_argument(
         "--stage-root",
@@ -146,8 +146,8 @@ def main() -> None:
             parent_dataset_id=PARENT_DATASET_ID,
             parent_version=PARENT_VERSION,
             parent_manifest_sha256=PARENT_MANIFEST_SHA256,
-            order_dataset_id=ORDER_DATASET_ID,
-            order_version=args.curriculum_version,
+            order_dataset_id=None if arm.pacing == "control" else ORDER_DATASET_ID,
+            order_version=None if arm.pacing == "control" else args.curriculum_version,
             order_group=arm.order_group,
         )
         ordered_uris = list(parent.paths) + (list(order.paths) if order else [])

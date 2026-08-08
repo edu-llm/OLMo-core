@@ -1,6 +1,6 @@
 # Curriculum on RunPod (8 × A100)
 
-This additive adapter preserves the reduced five-arm curriculum implementation.
+This additive adapter preserves the seven-arm curriculum implementation.
 It resolves and downloads one arm's immutable parent/order inputs before
 training, then substitutes those local files through a wrapper.
 
@@ -40,10 +40,11 @@ PYTHONPATH="$PWD/src:$PWD/.edullm" python3 .edullm/runpod/stage_inputs.py \
 ```
 
 For a paced arm, add its pinned `--curriculum-version`. Staging reads only
-`s3://edullm-data/pretrain/regmix-10b/v1/` and the selected sealed
-`s3://edullm-data/curriculum/regmix-370m/<version>/` order. It publishes
-`ready.json` only after all size checks pass, then removes and unsets the AWS
-session. Restage when changing arms.
+`s3://edullm-data/pretrain/regmix-10b/v1/` and, for paced arms, the selected
+sealed `s3://edullm-data/curriculum/regmix-370m/<version>/` order. Control
+(`--arm-index 5`) stages the parent only. It publishes `ready.json` only after
+all size checks pass, then removes and unsets the AWS session. Restage when
+changing arms.
 
 Copy `/workspace/wandb-session.env` separately over SSH with mode 0600:
 

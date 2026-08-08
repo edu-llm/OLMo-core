@@ -41,8 +41,8 @@ fi
 
 export PYTHONPATH="${REPO_DIR}/src:${REPO_DIR}/.edullm"
 case "${ARM_INDEX}" in
-  0|1|2|3|4) ;;
-  *) echo "ARM_INDEX must be 0..4" >&2; exit 2 ;;
+  0|1|2|3|4|5|6) ;;
+  *) echo "ARM_INDEX must be 0..6" >&2; exit 2 ;;
 esac
 arm_name="$(
   ARM_INDEX="${ARM_INDEX}" "${PYTHON}" -c \

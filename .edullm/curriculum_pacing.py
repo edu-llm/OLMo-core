@@ -13,10 +13,13 @@ from typing import Sequence
 TOTAL_STEPS = 2384
 N_BUCKETS = 10
 SEGMENT_BOUNDARIES = (0, 250, 500, 750, 1000, 1250, 1500, 1750, 2000, 2250, 2384)
+# Weights 1..10 scaled to TOTAL_STEPS via largest-remainder (unit ≈ 43.345).
+QUADRATIC_SEGMENT_BOUNDARIES = (0, 43, 130, 260, 433, 650, 910, 1213, 1560, 1950, 2384)
 CURRICULUM_DATASET_ID = "curriculum/regmix-370m"
 PACING_NAMES = (
     "control",
     "linear_n10",
+    "quadratic_n10",
     "expanding_25_1000",
     "warmup_1000",
     "interleave_i10_linear",
@@ -114,6 +117,9 @@ def pool_for_step(step: int, size: int, pacing: str) -> PoolSpec:
     buckets = split_equal_mass(size)
     if pacing == "linear_n10":
         start, end = buckets[segment_index(step)]
+        return PoolSpec(start, max(start + 1, end) if start == end else end)
+    if pacing == "quadratic_n10":
+        start, end = buckets[segment_index(step, QUADRATIC_SEGMENT_BOUNDARIES)]
         return PoolSpec(start, max(start + 1, end) if start == end else end)
     if pacing == "expanding_25_1000":
         end = min(size, max(1, round(expanding_eligible_fraction(step) * size)))

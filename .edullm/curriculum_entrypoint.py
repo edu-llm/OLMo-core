@@ -19,10 +19,7 @@ from olmo_core.config import DType
 from olmo_core.distributed.parallel import DataParallelType
 from olmo_core.distributed.utils import barrier, get_fs_local_rank, get_rank, get_world_size
 from olmo_core.float8 import Float8Config
-from olmo_core.nn.transformer import (
-    TransformerConfig,
-    TransformerDataParallelWrappingStrategy,
-)
+from olmo_core.nn.transformer import TransformerDataParallelWrappingStrategy
 from olmo_core.optim import CosWithWarmup, OptimGroupOverride, SkipStepAdamWConfig
 from olmo_core.train import (
     Duration,
@@ -49,6 +46,7 @@ from curriculum_data import (
     stage_input,
 )
 from curriculum_loader import CurriculumDataLoader, ParentChunkDataset
+from curriculum_model import MODEL_IDENTITY, build_model_config
 from curriculum_pacing import DIFFICULTY_METRICS, ORDER_GROUPS, PACING_NAMES
 from curriculum_ema import EMA_WANDB_STEP, build_ema_checkpoint, finalize_ema_production
 from production_contract import checkpoint as checkpoint_contract
@@ -153,11 +151,13 @@ def load_recipe(path: Path = RECIPE_PATH) -> tuple[Arm, ...]:
         (2, "linear10-learn", "linear_n10", "learnability", "learnability"),
         (3, "warmup-flesch", "warmup_1000", "flesch", "flesch"),
         (4, "interleave-flesch", "interleave_i10_linear", "flesch", "flesch"),
+        (5, "control", "control", None, None),
+        (6, "quadratic10-mtld", "quadratic_n10", "mtld", "mtld"),
     )
     if tuple(
         (arm.index, arm.name, arm.pacing, arm.metric, arm.order_group) for arm in arms
     ) != expected_arms:
-        raise CurriculumConfigError("recipe arms differ from the approved five-arm matrix")
+        raise CurriculumConfigError("recipe arms differ from the approved seven-arm matrix")
     for arm in arms:
         if arm.pacing not in PACING_NAMES:
             raise CurriculumConfigError(f"{arm.name}: unknown pacing {arm.pacing}")
@@ -220,8 +220,7 @@ def train_module_config(
 def build_train_module(
     rank_microbatch_tokens: int = RANK_MICROBATCH_TOKENS,
 ) -> Any:
-    tokenizer_vocab = 100_352
-    model = TransformerConfig.olmo2_370M(vocab_size=tokenizer_vocab).build(init_device="meta")
+    model = build_model_config().build(init_device="meta")
     return train_module_config(rank_microbatch_tokens).build(model)
 
 
@@ -480,7 +479,7 @@ def resolve_and_stage(
             parent_version=PARENT_VERSION,
             parent_manifest_sha256=PARENT_MANIFEST_SHA256,
             order_dataset_id=None if arm.pacing == "control" else ORDER_DATASET_ID,
-            order_version=order_version,
+            order_version=None if arm.pacing == "control" else order_version,
             order_group=arm.order_group,
         )
         parent_paths = stage_input(parent, cache_dir)
@@ -527,7 +526,7 @@ def scientific_identity(
         "difficulty_metric": arm.metric,
         "parent": parent.identity,
         "order": order.identity if order is not None else None,
-        "model": "TransformerConfig.olmo2_370M",
+        "model": MODEL_IDENTITY,
         "sequence_length": SEQUENCE_LENGTH,
         "global_batch_tokens": GLOBAL_BATCH_TOKENS,
         "rank_microbatch_tokens": int(rank_microbatch_tokens),

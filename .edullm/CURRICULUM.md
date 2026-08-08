@@ -1,16 +1,18 @@
 # Curriculum 370M migration
 
-This branch implements the five approved arms in `curriculum_recipe.json` without edits
+This branch implements the seven approved arms in `curriculum_recipe.json` without edits
 under `src/olmo_core`. The methodology source is
 `edu-llm/edullm/experiments/curriculum`: current README and pacing tests take
 precedence over older control scripts.
 
 Fixed contract:
 
-- OLMo2-370M (`d_model=1024`, 16 layers, 16 heads, reordered norm,
-  gated-SiLU 4096 MLP, full attention, QK-RMSNorm, RoPE theta 500,000),
-  Dolma2 tokenizer/vocabulary 100,352, sequence length 2,048, global batch
-  4,194,304 tokens, rank microbatch 32,768 tokens
+- MoE config A matched to OLMo2-370M compute (`d_model=1024`, 16 layers,
+  16 heads, reordered norm, 8 experts / top-2 with expert hidden 2048 so
+  active MLP width matches dense gated-SiLU 4096, full attention,
+  QK-RMSNorm, RoPE theta 500,000), Dolma2 tokenizer/vocabulary 100,352,
+  sequence length 2,048, global batch 4,194,304 tokens, rank microbatch
+  32,768 tokens
 - SkipStepAdamW at `4e-4`, betas `(0.9, 0.95)`, weight decay `0.1`
   except embeddings at `0`, 24-step warmup, `alpha_f=1.0`
 - HSDP bf16 parameters/fp32 reductions, z-loss `1e-5`, max grad norm `1`,
@@ -30,6 +32,8 @@ Only the loader's pacing/ordering policy differs between arms:
 | 2 | `linear10-learn` | `linear_n10` | `learnability` / `learnability` |
 | 3 | `warmup-flesch` | `warmup_1000` | `flesch` / `flesch` |
 | 4 | `interleave-flesch` | `interleave_i10_linear` | `flesch` / `flesch` |
+| 5 | `control` | `control` | none (deterministic no-replacement shuffle) |
+| 6 | `quadratic10-mtld` | `quadratic_n10` | `mtld` / `mtld` |
 
 The table index is exactly the `--arm-index` CLI value. All arms log to the
 shared W&B project `curriculum`; runs are distinguished by run name/group.
@@ -201,7 +205,7 @@ not an estimate; a timeout is not a valid measurement.
 
 The 8×A100 environment may admit only one job. Submit production arms in index
 order, waiting for each to finish before submitting the next whenever capacity
-is constrained. Do not submit the five-arm matrix as fan-out on that profile.
+is constrained. Do not submit the seven-arm matrix as fan-out on that profile.
 After all arms finish, perform each arm's EMA workflow sequentially if it also
 needs the same worker capacity.
 

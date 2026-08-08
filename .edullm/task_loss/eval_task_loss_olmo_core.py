@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exact 20-label OLMES BPB evaluation for OLMo-core OLMo2-370M checkpoints.
+"""Exact 20-label OLMES BPB evaluation for curriculum MoE checkpoints.
 
 This is a self-contained branch packaging of the evaluator used by the
 curriculum methodology at edu-llm/edullm commit
@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import shutil
+import sys
 import tempfile
 import time
 from datetime import timedelta
@@ -33,7 +34,11 @@ from olmo.torch_util import get_local_rank
 from olmo.util import prepare_cli_environment
 from olmo_core.distributed.checkpoint import unshard_checkpoint
 from olmo_core.nn.attention import AttentionBackendName
-from olmo_core.nn.transformer import TransformerConfig
+
+_EDULLM = Path(__file__).resolve().parents[1]
+if str(_EDULLM) not in sys.path:
+    sys.path.insert(0, str(_EDULLM))
+from curriculum_model import build_model_config  # noqa: E402
 
 try:
     from olmo.util import add_cached_path_clients
@@ -77,7 +82,7 @@ def build_model() -> torch.nn.Module:
     kwargs: dict[str, Any] = {"vocab_size": EMBEDDING_SIZE}
     if backend is not None:
         kwargs["attn_backend"] = backend
-    model = TransformerConfig.olmo2_370M(**kwargs).build(init_device="cuda")
+    model = build_model_config(**kwargs).build(init_device="cuda")
     model.eval()
     for parameter in model.parameters():
         parameter.requires_grad_(False)

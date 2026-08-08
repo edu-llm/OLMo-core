@@ -64,7 +64,7 @@ import torchaudio
 import torchvision
 from olmo.eval.downstream import label_to_task_map
 from edullm_data.read import dataset_paths
-from olmo_core.nn.transformer import TransformerConfig
+from curriculum_model import MODEL_IDENTITY, build_model_config
 
 assert torch.__version__.startswith("2.9.0"), torch.__version__
 assert torchvision.__version__.startswith("0.24.0"), torchvision.__version__
@@ -72,8 +72,11 @@ assert torchaudio.__version__.startswith("2.9.0"), torchaudio.__version__
 assert torch.version.cuda, "CPU-only torch wheel installed"
 assert torch.cuda.device_count() == 8, torch.cuda.device_count()
 assert "arc_easy_val_rc_5shot_bpb" in label_to_task_map
+cfg = build_model_config()
+assert cfg.block.feed_forward_moe is not None
+assert cfg.block.feed_forward_moe.num_experts == 8
 print("RunPod bootstrap ready:", torch.__version__, torch.version.cuda, dataset_paths.__module__)
-print(TransformerConfig.olmo2_370M(vocab_size=100352).__class__.__name__)
+print(MODEL_IDENTITY, cfg.__class__.__name__)
 PY
 
 mkdir -p /workspace/edullm-bootstrap

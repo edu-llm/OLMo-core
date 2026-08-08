@@ -47,6 +47,7 @@ from curriculum_loader import (  # noqa: E402
 from curriculum_pacing import (  # noqa: E402
     CURRICULUM_DATASET_ID,
     CURRICULUM_ORDER_GROUP_FOR_METRIC,
+    QUADRATIC_SEGMENT_BOUNDARIES,
     SEGMENT_BOUNDARIES,
     curriculum_order_group,
     expanding_eligible_fraction,
@@ -104,20 +105,24 @@ def _loader(
     )
 
 
-def test_recipe_is_exact_approved_five_arm_matrix() -> None:
+def test_recipe_is_exact_approved_seven_arm_matrix() -> None:
     arms = entrypoint.load_recipe()
-    assert tuple(arm.index for arm in arms) == tuple(range(5))
+    assert tuple(arm.index for arm in arms) == tuple(range(7))
     assert tuple((arm.name, arm.pacing, arm.metric, arm.order_group) for arm in arms) == (
         ("linear10-flesch", "linear_n10", "flesch", "flesch"),
         ("linear10-mtld", "linear_n10", "mtld", "mtld"),
         ("linear10-learn", "linear_n10", "learnability", "learnability"),
         ("warmup-flesch", "warmup_1000", "flesch", "flesch"),
         ("interleave-flesch", "interleave_i10_linear", "flesch", "flesch"),
+        ("control", "control", None, None),
+        ("quadratic10-mtld", "quadratic_n10", "mtld", "mtld"),
     )
     assert {arm.pacing for arm in arms} == {
         "linear_n10",
+        "quadratic_n10",
         "warmup_1000",
         "interleave_i10_linear",
+        "control",
     }
     assert all(arm.wandb_project == "curriculum" for arm in arms)
     assert CURRICULUM_DATASET_ID == "curriculum/regmix-370m"
@@ -146,7 +151,16 @@ def test_fixed_olmo2_recipe_and_checkpoint_ladder() -> None:
     assert config.scheduler.warmup == 24
     assert config.z_loss_multiplier == 1e-5
     assert config.max_grad_norm == 1.0
-
+    model = entrypoint.build_model_config()
+    moe = model.block.feed_forward_moe
+    assert moe is not None
+    assert moe.num_experts == 8
+    assert moe.router.top_k == 2
+    assert moe.hidden_size == 2048
+    assert model.d_model == 1024
+    assert model.n_layers == 16
+    assert "llama_like_moe" in entrypoint.MODEL_IDENTITY
+    assert "num_experts=8" in entrypoint.MODEL_IDENTITY
 
 @pytest.mark.parametrize(
     ("step", "expected"),
@@ -171,6 +185,29 @@ def test_pacing_modes_match_methodology_boundaries() -> None:
     assert interleave_subbucket_index(249) == 9
     assert interleave_subbucket_index(250) == 0
     assert interleave_subbucket_index(2263) == 1
+    assert QUADRATIC_SEGMENT_BOUNDARIES == (
+        0,
+        43,
+        130,
+        260,
+        433,
+        650,
+        910,
+        1213,
+        1560,
+        1950,
+        2384,
+    )
+    assert sum(
+        end - start
+        for start, end in zip(QUADRATIC_SEGMENT_BOUNDARIES, QUADRATIC_SEGMENT_BOUNDARIES[1:])
+    ) == 2384
+    assert pool_for_step(0, 1000, "quadratic_n10").end == 100
+    assert pool_for_step(42, 1000, "quadratic_n10").start == 0
+    assert pool_for_step(43, 1000, "quadratic_n10").start == 100
+    assert pool_for_step(1949, 1000, "quadratic_n10").start == 800
+    assert pool_for_step(1950, 1000, "quadratic_n10").start == 900
+    assert pool_for_step(2383, 1000, "quadratic_n10").start == 900
 
 
 def test_parent_coordinates_are_shard_local_and_reserve_next_token(
@@ -391,7 +428,7 @@ def test_platform_fixture_and_docker_are_branch_specific() -> None:
     handoff = (EDULLM / "CURRICULUM.md").read_text(encoding="utf-8")
     assert "1.25 * T" in handoff
     assert "run-approval-admin" in handoff
-    assert "Do not submit the five-arm matrix as fan-out" in handoff
+    assert "Do not submit the seven-arm matrix as fan-out" in handoff
 
 
 def test_production_recipe_statically_assembles_public_olmo_apis() -> None:
@@ -399,7 +436,7 @@ def test_production_recipe_statically_assembles_public_olmo_apis() -> None:
     tree = ast.parse(source)
     calls = {ast.unparse(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
     assert {
-        "TransformerConfig.olmo2_370M",
+        "build_model_config",
         "TransformerTrainModuleConfig",
         "CurriculumDataLoader",
         "TrainerConfig",
@@ -409,6 +446,10 @@ def test_production_recipe_statically_assembles_public_olmo_apis() -> None:
         "trainer_config.build",
         "trainer.fit",
     } <= calls
+    assert "TransformerConfig.llama_like_moe" in (
+        EDULLM / "curriculum_model.py"
+    ).read_text(encoding="utf-8")
+    assert "num_experts=8" in (EDULLM / "curriculum_model.py").read_text(encoding="utf-8")
     assert "DataParallelType.hsdp" in source
     assert "max_duration=Duration.steps(total_steps)" in source
     assert "load_trainer_state=True, load_optim_state=True" in source
