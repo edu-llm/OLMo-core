@@ -103,19 +103,30 @@ def test_gate_activation_bytes_matches_the_documented_kda_geometry():
     """
     Guards the memory figure the run will be sized from.
 
-    384 MiB per layer at 8192 tokens per rank, bf16, three 2048-channel streams -- so 28 layers
-    cost 10.5 GiB on top of KDA's measured 5.169 GiB peak. This is ~3x peak, and the parameter
-    delta (12,288/layer) invites exactly the wrong conclusion about cost.
+    576 MiB per layer in EAGER at 8192 tokens per rank, bf16, three 2048-channel streams -- so 28
+    layers cost 15.75 GiB on top of KDA's measured 5.169 GiB peak, about 4x. Compiled it drops to
+    10.5 GiB (3x), because inductor fuses the ``sigmoid -> mul -> mul`` chain.
+
+    The default is the **eager** count, so the estimate errs pessimistic rather than optimistic --
+    an optimistic memory figure is the one that gets a paid run OOM-killed. The parameter delta
+    (12,288/layer, 0.07%) invites exactly the wrong conclusion about cost.
     """
     per_conv = gate_activation_bytes(
         hidden_size=2048, batch_size=1, seq_len=8192, bytes_per_element=2
     )
-    assert per_conv == 2 * 2 * 1 * 8192 * 2048 * 2
-    assert per_conv == 134_217_728  # 128 MiB
+    # 2 gates x 3 retained tensors x one 32 MiB stream tensor.
+    assert per_conv == 2 * 3 * 1 * 8192 * 2048 * 2
+    assert per_conv == 201_326_592  # 192 MiB
 
     per_layer = 3 * per_conv
-    assert per_layer == 402_653_184  # 384 MiB
-    assert 28 * per_layer / 2**30 == pytest.approx(10.5, abs=0.05)
+    assert per_layer == 603_979_776  # 576 MiB
+    assert 28 * per_layer / 2**30 == pytest.approx(15.75, abs=0.05)
+
+    # And the compiled figure, which is the other number a run might be sized from.
+    compiled = gate_activation_bytes(
+        hidden_size=2048, batch_size=1, seq_len=8192, bytes_per_element=2, tensors_per_gate=2
+    )
+    assert 28 * 3 * compiled / 2**30 == pytest.approx(10.5, abs=0.05)
 
 
 def test_gate_activation_bytes_scales_as_documented():
@@ -123,8 +134,10 @@ def test_gate_activation_bytes_scales_as_documented():
     b = gate_activation_bytes(**base)  # type: ignore[arg-type]
     assert gate_activation_bytes(**{**base, "seq_len": 256}) == 2 * b  # type: ignore[arg-type]
     assert gate_activation_bytes(**{**base, "bytes_per_element": 4}) == 2 * b  # type: ignore[arg-type]
-    # A recompute-in-backward implementation would retain one tensor per gate, not two.
-    assert gate_activation_bytes(**{**base, "tensors_per_gate": 1}) == b // 2  # type: ignore[arg-type]
+    # The default is 3 (eager). A compiled run fuses down to about 2, and a
+    # recompute-in-backward implementation to 1, so the figure scales linearly in that count.
+    assert gate_activation_bytes(**{**base, "tensors_per_gate": 1}) == b // 3  # type: ignore[arg-type]
+    assert gate_activation_bytes(**{**base, "tensors_per_gate": 2}) == 2 * b // 3  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------------------------
@@ -505,6 +518,90 @@ def test_unsupported_activation_raises_rather_than_silently_skipping():
         conv(torch.randn(1, 4, 4))
 
 
+@pytest.mark.parametrize("bad", ["gelu", "Silu", "SILU", "relu"])
+def test_an_unrecognised_activation_is_refused_at_construction(bad):
+    """
+    Rejected in ``__init__``, because the fused kernel will not reject it.
+
+    ``fla``'s ``causal_conv1d`` applies swish only when the string is exactly ``"swish"`` or
+    ``"silu"`` and otherwise runs **activation-free with no error**. So ``"Silu"`` raises on the
+    reference path — which is the path a CPU test exercises — and silently computes the
+    activation-free operator on GPU. That collapses ``kda-gated-silu`` onto ``kda-gated`` while the
+    config, the logs and the arm name all say silu.
+
+    Case matters here, which is why the capitalized spellings are in the set.
+    """
+    with pytest.raises(ValueError, match="unsupported activation"):
+        GatedCausalConv1d(hidden_size=4, kernel_size=3, activation=bad)  # type: ignore[arg-type]
+
+
+def test_gate_source_is_derived_and_a_contradiction_is_refused():
+    """
+    ``gate_source`` must not be accepted and then silently overwritten.
+
+    Only one source is coherent with each structure: a depthwise gate's parameters are per
+    convolution channel, and a lowrank gate projects the layer input. Overriding a caller's value
+    without complaint would let a config request one operator and receive another.
+    """
+    assert GatedCausalConv1d(hidden_size=8, kernel_size=3).gate_source == "stream"
+    lr = GatedCausalConv1d(
+        hidden_size=8, kernel_size=3, gate_structure="lowrank", d_model=16, gate_rank=4
+    )
+    assert lr.gate_source == "input"
+
+    with pytest.raises(ValueError, match="requires gate_source='stream'"):
+        GatedCausalConv1d(hidden_size=8, kernel_size=3, gate_source="input")
+    with pytest.raises(ValueError, match="requires gate_source='input'"):
+        GatedCausalConv1d(
+            hidden_size=8,
+            kernel_size=3,
+            gate_structure="lowrank",
+            d_model=16,
+            gate_rank=4,
+            gate_source="stream",
+        )
+
+
+@pytest.mark.parametrize("structure", ["depthwise", "lowrank"])
+def test_reset_parameters_leaves_the_gate_neutral(structure):
+    """
+    The module must be usable before ``init_weights`` runs.
+
+    ``Transformer.init_weights`` calls ``to_empty(device)`` — which discards the ``torch.zeros``
+    from ``__init__`` — and then sweeps every submodule's ``reset_parameters``. Without one, a
+    probe that builds the module and skips the mixer's ``init_weights`` gets **uninitialized
+    memory** for the gates. ``short_conv.py`` documents having shipped exactly this on the MQAR
+    calibration.
+
+    Simulated by filling the gates with garbage first, so the test proves ``reset_parameters``
+    actually writes them rather than passing on memory that happened to be zero.
+    """
+    conv = GatedCausalConv1d(
+        hidden_size=32,
+        kernel_size=CONV_SIZE,
+        gate_structure=structure,
+        d_model=16,
+        gate_rank=8,
+        use_fla=False,
+    )
+    with torch.no_grad():
+        for name, p in conv.named_parameters():
+            if not name.startswith("conv."):
+                p.fill_(3.3)
+
+    conv.reset_parameters()
+
+    # The gate's PRE-ACTIVATION must be zero, so the gate is exactly 1.0. For lowrank that means
+    # the up-projections are zero while the drawn down-projection is not.
+    u = torch.randn(1, 8, 32)
+    x = torch.randn(1, 8, 16)
+    pre, post = conv._gates(u, x if structure == "lowrank" else None)
+    torch.testing.assert_close(pre, torch.ones_like(pre), rtol=0, atol=0)
+    torch.testing.assert_close(post, torch.ones_like(post), rtol=0, atol=0)
+    if structure == "lowrank":
+        assert torch.count_nonzero(conv.gate_down.weight) > 0, "the down-projection was not drawn"
+
+
 def test_kda_constructor_default_is_also_ungated():
     """
     The config default and the **constructor** default must both be ``False``.
@@ -550,19 +647,23 @@ def test_kda_build_conv_honours_the_configured_activation():
         gate_structure = "depthwise"
         gate_rank = None
 
-    for gated, activation, expected_type, expected_activation in (
-        (False, None, CausalConv1d, "silu"),
-        (True, None, GatedCausalConv1d, None),
-        (True, "silu", GatedCausalConv1d, "silu"),
+    # (gated_conv, gated_conv_activation, conv_activation) -> (type, realised activation)
+    for gated, gated_act, plain_act, expected_type, expected in (
+        (False, None, "silu", CausalConv1d, "silu"),
+        (False, None, None, CausalConv1d, None),
+        (True, None, "silu", GatedCausalConv1d, None),
+        (True, "silu", "silu", GatedCausalConv1d, "silu"),
     ):
         stub = _Stub()
         stub.gated_conv = gated  # type: ignore[attr-defined]
-        stub.gated_conv_activation = activation  # type: ignore[attr-defined]
+        stub.gated_conv_activation = gated_act  # type: ignore[attr-defined]
+        stub.conv_activation = plain_act  # type: ignore[attr-defined]
         conv = KimiDeltaAttention._build_conv(
             stub, hidden_size=64, dtype=torch.float32, init_device="meta"  # type: ignore[arg-type]
         )
-        assert isinstance(conv, expected_type), (gated, activation)
-        assert conv.activation == expected_activation, (gated, activation)
+        case = (gated, gated_act, plain_act)
+        assert isinstance(conv, expected_type), case
+        assert conv.activation == expected, case
 
 
 def test_kda_conv_kwargs_thread_gate_input_only_for_lowrank():
@@ -705,6 +806,12 @@ def test_gate_options_without_gated_conv_are_refused():
         ValueError, match="'gated_conv_activation' is set but 'gated_conv' is False"
     ):
         _cfg(gated_conv_activation="silu").validate_gate_options()
+    # And 'gate_structure', which the guard originally MISSED -- the very case its own comment was
+    # written about. 'gate_structure="lowrank", gated_conv=False' with no gate_rank passes both
+    # checks above and builds three PLAIN convolutions, giving two identically-trained controls
+    # under different arm names and therefore a guaranteed null.
+    with pytest.raises(ValueError, match="'gate_structure' is .* but 'gated_conv' is False"):
+        _cfg(gate_structure="lowrank").validate_gate_options()
 
 
 def test_lowrank_without_a_rank_is_refused():
@@ -751,27 +858,103 @@ def test_config_reports_the_memory_cost_only_when_gated():
     kw = dict(batch_size=1, seq_len=8192, bytes_per_element=2)
 
     assert plain.gate_activation_bytes(D_MODEL, **kw) == 0  # type: ignore[arg-type]
-    # 384 MiB per layer at the microbatch KDA's throughput was measured at.
-    assert gated.gate_activation_bytes(D_MODEL, **kw) == 402_653_184  # type: ignore[arg-type]
+    # 576 MiB per layer in eager, at the microbatch KDA's throughput was measured at.
+    assert gated.gate_activation_bytes(D_MODEL, **kw) == 603_979_776  # type: ignore[arg-type]
 
 
-def test_the_three_arms_are_three_distinct_configurations():
+def test_the_depthwise_pre_gate_is_exactly_a_per_channel_temperature_silu():
     """
-    LIV changes two things at once -- it adds gating and removes the activation. Three arms.
+    The identity that forced a fourth arm, asserted numerically rather than argued.
 
-    Without ``kda-gated-silu`` a win cannot be attributed to either change, so the arms must be
-    distinguishable at the config level and not collapse onto each other.
+    ``2*sigmoid(a*u)*u == (2/a)*silu(a*u)`` for every ``a != 0``, because
+    ``silu(y) = y*sigmoid(y)``. The amplitude ``2/a`` is constant per channel, so it folds into
+    the depthwise convolution's taps -- leaving the pre-gate as a SiLU with a learnable slope,
+    moved to before the convolution.
+
+    So ``gated_conv=True, gated_conv_activation=None`` is **not** activation-free with a depthwise
+    gate, and ``kda-gated`` minus ``kda-plain`` varies three things at once. Checked in float64,
+    where the residual is at machine epsilon and not at a tolerance anyone chose.
+    """
+    torch.manual_seed(0)
+    u = torch.randn(4000, dtype=torch.float64)
+    for a in (0.3, 1.0, 2.7, -1.4):
+        gate_form = 2.0 * torch.sigmoid(a * u) * u
+        silu_form = (2.0 / a) * F.silu(a * u)
+        assert (gate_form - silu_form).abs().max() < 1e-14, a
+
+
+def test_the_arm_set_has_four_cells_and_the_gate_contrast_is_parameter_matched():
+    """
+    Four arms, because with a depthwise gate LIV's "removes the activation" half does not happen.
+
+    The contrast that isolates the gate is ``kda-gated`` minus ``kda-plain-noact``. This asserts
+    the four cells are distinct configurations, that the two plain arms are parameter-identical to
+    each other, and that the gate contrast costs exactly the 12,288/layer the gate predicts --
+    so any effect cannot be attributed to capacity.
     """
     arms = {
         "kda-plain": _cfg(),
+        "kda-plain-noact": _cfg(conv_activation=None),
         "kda-gated": _cfg(gated_conv=True, gated_conv_activation=None),
         "kda-gated-silu": _cfg(gated_conv=True, gated_conv_activation="silu"),
     }
-    assert len({(a.gated_conv, a.gated_conv_activation) for a in arms.values()}) == 3
-    # The two gated arms are parameter-identical, so any difference between them is the
-    # activation and nothing else.
-    assert arms["kda-gated"].num_params(D_MODEL) == arms["kda-gated-silu"].num_params(D_MODEL)
-    assert arms["kda-gated"].num_params(D_MODEL) - arms["kda-plain"].num_params(D_MODEL) == 12_288
+    for cfg in arms.values():
+        cfg.validate_gate_options()
+
+    keys = {(a.gated_conv, a.gated_conv_activation, a.conv_activation) for a in arms.values()}
+    assert len(keys) == 4, keys
+
+    n = {k: v.num_params(D_MODEL) for k, v in arms.items()}
+    # Dropping the activation changes no parameters, so the two plain arms are matched exactly and
+    # the activation is the only thing that varies between them.
+    assert n["kda-plain"] == n["kda-plain-noact"]
+    # The two gated arms are likewise matched, so their difference is the activation alone.
+    assert n["kda-gated"] == n["kda-gated-silu"]
+    # And the gate-isolating contrast costs exactly the gate.
+    assert n["kda-gated"] - n["kda-plain-noact"] == 12_288
+
+
+def test_the_no_activation_plain_arm_is_buildable():
+    """
+    The arm that isolates the gate must be reachable from the config.
+
+    It previously was not: the activation was hard-coded to ``silu`` in ``_build_conv``, so the
+    only cell that separates "gating helps" from "moving the activation helps" could not be
+    constructed at all. Exercised through the real unbound method, on CPU.
+    """
+    from olmo_core.nn.attention.recurrent import KimiDeltaAttention
+
+    class _Stub:
+        conv_size = CONV_SIZE
+        conv_bias = False
+        d_model = D_MODEL
+        gate_structure = "depthwise"
+        gate_rank = None
+        gated_conv = False
+        gated_conv_activation = None
+        conv_activation = None
+
+    conv = KimiDeltaAttention._build_conv(
+        _Stub(), hidden_size=64, dtype=torch.float32, init_device="meta"  # type: ignore[arg-type]
+    )
+    assert isinstance(conv, CausalConv1d)
+    assert conv.activation is None, "the no-activation arm silently kept an activation"
+
+
+@pytest.mark.parametrize("field", ["conv_activation", "gated_conv_activation"])
+def test_an_unsupported_activation_name_is_refused_by_the_config(field):
+    """
+    ``"gelu"`` must be refused, not silently ignored.
+
+    These are plain ``str`` fields built from YAML, and ``CausalConv1d`` passes the value straight
+    into the fused kernel -- so an unrecognised name is either a late crash on a paid run or a
+    silently different operator.
+    """
+    kwargs = {field: "gelu"}
+    if field == "gated_conv_activation":
+        kwargs["gated_conv"] = True  # type: ignore[assignment]
+    with pytest.raises(ValueError, match="unsupported"):
+        _cfg(**kwargs).validate_gate_options()
 
 
 # ---------------------------------------------------------------------------------------------

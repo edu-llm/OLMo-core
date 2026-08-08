@@ -2,10 +2,18 @@
 GPU smoke test for the gated short convolution inside KDA.
 
 WHAT THIS PROVES, AND WHAT IT DOES NOT
-    It proves the three arms **build, run forward and backward, and produce live gradients on a
-    real GPU with the fused kernels**, and it measures the peak memory each one costs. It does
-    **not** measure quality: 30 steps on synthetic tokens says nothing about held-out CE, and any
-    loss difference at this length is noise.
+    It proves the four arms **build, run forward and backward, and produce live gradients on a real
+    GPU with the fused kernels**, and it measures the peak memory each one costs. It does **not**
+    measure quality: 30 steps on synthetic tokens says nothing about held-out CE, and any loss
+    difference at this length is noise.
+
+WHY FOUR ARMS
+    With ``gate_structure="depthwise"`` the pre-gate is *exactly* a per-channel-temperature SiLU,
+    because ``2*sigmoid(a*u)*u == (2/a)*silu(a*u)`` and the ``2/a`` amplitude folds into the
+    depthwise taps. So ``gated_conv=True, activation=None`` is **not** activation-free, and
+    ``kda-gated`` minus ``kda-plain`` varies the activation's position, its learnability, and the
+    post gate all at once. ``kda-plain-noact`` is the cell that isolates the gate, and the
+    cross-arm comparisons below are taken against it.
 
     This box is L40S / sm_89. The training target is A100 / sm_80. So a pass here means the stack
     works, not that the numbers transfer -- ``fla``'s Triton kernels are compiled per architecture
@@ -48,7 +56,10 @@ from typing import Any, Dict, List, Optional
 
 # Argv handling stays ABOVE the torch import so --help and the refusals work without a GPU, and so
 # a test can reach them. Putting them below is how a guard becomes unreachable.
-_ARMS = ("kda-plain", "kda-gated", "kda-gated-silu")
+
+#: The four cells. See "WHY FOUR ARMS" in the module docstring: ``kda-plain-noact`` is not optional
+#: padding, it is the only baseline against which the gate is the single variable.
+_ARMS = ("kda-plain", "kda-plain-noact", "kda-gated", "kda-gated-silu")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -223,6 +234,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         if arm == "kda-plain":
             return KimiDeltaAttentionConfig(**common)
+        if arm == "kda-plain-noact":
+            return KimiDeltaAttentionConfig(**common, conv_activation=None)
         cfg: Dict[str, Any] = dict(
             common,
             gated_conv=True,
@@ -397,7 +410,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not math.isfinite(losses[-1]):
             failures.append(f"{arm}: final loss is {losses[-1]}")
 
-        if arm != "kda-plain":
+        if arm.startswith("kda-gated"):
             ok, why = conv_path_is_fused(realised, allow_eager=opts.allow_eager_conv)
             print(f"  conv path: {why}")
             if not ok:
@@ -423,20 +436,109 @@ def main(argv: Optional[List[str]] = None) -> int:
         del model, optim
         torch.cuda.empty_cache()
 
+    # --- THE OPERATOR-IDENTITY CHECK, ON THE PATH THE RUN ACTUALLY EXECUTES ---
+    #
+    # Every CPU test compares GatedCausalConv1d's REFERENCE path against a hand-written helper.
+    # The experiment runs the FUSED fla kernel, so the load-bearing claim -- "the gated arm starts
+    # from the same function as the plain arm" -- was verified only on a path that never runs.
+    # This closes that, and also answers a question the repo cannot: does fla's kernel honour
+    # activation=None, or does it apply silu regardless? If it ignores None, kda-gated and
+    # kda-gated-silu are the SAME MODEL and the design collapses.
+    print("=== operator identity on the fused CUDA path")
+    from olmo_core.nn.convolution import CausalConv1d
+
+    torch.manual_seed(opts.seed)
+    ch = 256
+    u = torch.randn(1, 128, ch, device=device, dtype=torch.bfloat16)
+    taps = torch.randn(ch, 1, 4, device=device, dtype=torch.bfloat16) * 0.1
+
+    def _fused(activation, gated: bool):
+        if gated:
+            m = GatedCausalConv1d(
+                hidden_size=ch, kernel_size=4, activation=activation, dtype=torch.bfloat16
+            ).to(device)
+            m.init_gate_weights()
+            inner = m.conv
+        else:
+            m = CausalConv1d(
+                hidden_size=ch, kernel_size=4, activation=activation, dtype=torch.bfloat16
+            ).to(device)
+            inner = m
+        with torch.no_grad():
+            inner.weight.copy_(taps)
+        with torch.no_grad():
+            return m(u) if gated else m(x=u)
+
+    plain_none = _fused(None, gated=False)
+    plain_silu = _fused("silu", gated=False)
+    gated_none = _fused(None, gated=True)
+    gated_silu = _fused("silu", gated=True)
+
+    # 1. fla must honour activation=None. If plain_none == plain_silu the kernel ignores the
+    #    argument, every "activation-free" arm is silently silu, and two arms are one arm.
+    d_act = (plain_none - plain_silu).abs().max().item()
+    print(f"  fla activation=None vs 'silu' on the SAME weights: max|diff| = {d_act:.3e}")
+    if d_act == 0.0:
+        failures.append(
+            "fla's fused kernel produced identical output for activation=None and 'silu', so it "
+            "IGNORES the argument. Every activation-free arm is secretly silu and kda-gated is "
+            "the same model as kda-gated-silu -- the arm set collapses."
+        )
+
+    # 2. At init the gate is exactly 1.0, so the gated module must reproduce the ungated one with
+    #    the same weights and the same activation, THROUGH THE FUSED KERNEL. Exact equality: both
+    #    call the identical kernel, and 2*sigmoid(0) is exactly 1.0 in bf16.
+    for label, a, b in (
+        ("activation=None", gated_none, plain_none),
+        ("activation=silu", gated_silu, plain_silu),
+    ):
+        d = (a - b).abs().max().item()
+        print(f"  gated-at-init vs plain, {label}: max|diff| = {d:.3e}")
+        if d != 0.0:
+            failures.append(
+                f"at init the gated module does not reproduce the plain convolution on the fused "
+                f"path ({label}, max|diff| {d:.3e}). The gate is exactly 1.0 at zero-init, so the "
+                "two arms are supposed to start from the same function -- they do not, and the "
+                "contrast is not an ablation."
+            )
+
+    # 3. And the depthwise pre-gate is a per-channel-temperature SiLU, which is WHY the arm set
+    #    needs kda-plain-noact. Asserted here on device so the claim is not laptop-only.
+    a_val = 1.7
+    ident = 2.0 * torch.sigmoid(a_val * u.float()) * u.float() - (2.0 / a_val) * F.silu(
+        a_val * u.float()
+    )
+    print(f"  2*sigmoid(a*u)*u == (2/a)*silu(a*u): max|diff| = {ident.abs().max().item():.3e}")
+    if ident.abs().max().item() > 1e-5:
+        failures.append("the pre-gate/SiLU identity does not hold on this device")
+    print()
+
     # --- cross-arm checks. These need every arm, so they are here rather than in the loop. ---
 
     by_arm = {r["arm"]: r for r in records}
-    if "kda-plain" in by_arm and "kda-gated" in by_arm:
-        p, g = by_arm["kda-plain"], by_arm["kda-gated"]
+    # The gate-isolating baseline is kda-plain-noact, not kda-plain: against kda-plain the contrast
+    # also varies the activation's position and its learnability. Falls back to kda-plain only so a
+    # two-arm invocation still reports something, and says so.
+    baseline = "kda-plain-noact" if "kda-plain-noact" in by_arm else "kda-plain"
+    if baseline == "kda-plain":
+        print(
+            "NOTE: comparing against kda-plain, which also differs in activation position and "
+            "learnability. Include kda-plain-noact to isolate the gate.\n"
+        )
+    if baseline in by_arm and "kda-gated" in by_arm:
+        p, g = by_arm[baseline], by_arm["kda-gated"]
         delta = g["mixer_params_actual"] - p["mixer_params_actual"]
-        print(f"parameter delta gated - plain: {delta:,} ({delta/p['mixer_params_actual']:.4%})")
+        print(
+            f"parameter delta gated - {baseline}: {delta:,} "
+            f"({delta/p['mixer_params_actual']:.4%})"
+        )
         if delta != g["gate_params"]:
             failures.append(
                 f"the measured parameter delta {delta} does not equal the predicted gate cost "
                 f"{g['gate_params']}"
             )
         mem_ratio = g["peak_gib"] / p["peak_gib"] if p["peak_gib"] else float("inf")
-        print(f"peak memory ratio gated / plain: {mem_ratio:.3f}x")
+        print(f"peak memory ratio gated / {baseline}: {mem_ratio:.3f}x")
         print(
             f"  predicted gate activation bytes: {g['gate_bytes_predicted']/2**30:.3f} GiB, "
             f"measured increase: {g['peak_gib']-p['peak_gib']:.3f} GiB"

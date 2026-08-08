@@ -1,50 +1,79 @@
-fix(nn): three defects the L40S smoke found, and a mutation harness that lied
+fix(nn): the arm set needed FOUR cells -- the depthwise pre-gate is a SiLU
 
-Job 1677742 on oat-06 (L40S sm_89, torch 2.9.1+cu128, fla 0.5.1) failed all
-three GPU cells and one mutation. Every finding was real.
+Two adversarial reviews of the previous two commits. The first finding
+invalidates the experiment as designed; the rest are guards that could not fire.
 
-1. THE GPU HARNESS NEVER REACHED THE MODULE. init_weights was passed a CPU
-   generator against CUDA parameters, so torch raised "Expected a cuda device
-   type for generator but found cpu" on the FIRST arm (kda-plain). Nothing about
-   the gated convolution was exercised on a GPU at all -- the run failed for a
-   reason that had nothing to do with what it was testing.
+THE DEPTHWISE PRE-GATE IS NOT A GATE, IT IS A SiLU WITH A LEARNABLE SLOPE.
+Since silu(y) = y*sigmoid(y), substituting y = a*u gives
 
-2. THE M12 MUTATION WAS A NO-OP, AND ITS VERDICT WAS FICTION. Its perl pattern
-   stopped matching after the source was reworded, so no mutation was applied and
-   the script reported SURVIVED -- reading as an unguarded defect that did not
-   exist. Reword the source the other way and the identical no-op would have
-   reported "caught": a green from a test that was never challenged. Nothing in
-   the output distinguished the two.
+    2 * sigmoid(a*u) * u  ==  (2/a) * silu(a*u)     for every a != 0
 
-   run_case now diffs both source files against the pristine copy before running
-   the suite. No change is a NO-OP, which is a hard failure with its own counter,
-   not a verdict. The pattern is also now anchored on the condition line rather
-   than the message text, since messages are what get reworded.
+verified to 8.9e-16 in float64. The amplitude 2/a is constant per channel, so by
+this module's own absorption argument it folds into that channel's depthwise
+taps. What the pre-gate buys is ONE number per channel: the slope of a SiLU,
+moved from after the convolution to before it, initialized at a=0 where it is
+the identity. Only the POST gate is a genuinely new term, because it reads
+position t while the conv output mixes t-j.
 
-3. THE CONFIG'S REFUSALS WERE UNVERIFIABLE ON ANY CPU HOST. They lived inside
-   build(), which constructs KimiDeltaAttention, which opens with
-   assert has_fla(). So on a laptop the AssertionError fired before the check
-   under test -- pytest.raises(ValueError) failed for an unrelated reason and the
-   mutation read as caught. On a GPU host, GatedCausalConv1d's own
-   identically-worded ValueError satisfied the same assertion while the config
-   check was gone. The check was untestable in both directions.
+So "gated_conv=True, gated_conv_activation=None" is NOT activation-free under a
+depthwise gate, and kda-gated minus kda-plain varies the activation's position,
+its learnability, AND the post gate together. Against this project's measured
+within-arm SD of 0.01463 nats that yields a real effect nobody can attribute.
 
-   Extracted to KimiDeltaAttentionConfig.validate_gate_options(), callable on a
-   bare config with no fla, and called from num_params as well as build so an
-   incoherent config cannot return a plausible parameter count. num_params is
-   what solves FFN widths for parameter matching, so a number from a config that
-   could never build would move the anchor for every arm. The config's message
-   now names itself, so a test can tell which of the two checks fired.
+The arm that isolates the gate -- plain conv with NO activation -- was
+unbuildable: _build_conv hard-coded activation=silu with no config knob. Adds
+conv_activation (default "silu", so nothing existing moves) and a fourth cell:
 
-Also adds M13 (the gated_conv=False refusal) and a test that an unknown
-gate_structure is refused rather than falling through to the last branch --
-gate_structure is a plain str on the dataclass and this config is built from
-YAML, so "low_rank" would otherwise read as "depthwise".
+    kda-plain        gated=False  conv_activation="silu"   as shipped
+    kda-plain-noact  gated=False  conv_activation=None     THE BASELINE
+    kda-gated        gated=True   gated_activation=None
+    kda-gated-silu   gated=True   gated_activation="silu"
 
-The mutation script now prints torch/cuda/fla with its verdicts, because M12
-was caught on a laptop and survived on a GPU host: a mutation verdict does not
-transfer between environments and the output must say which one it came from.
+The gate contrast is kda-gated minus kda-plain-noact, and those two are
+parameter-matched to exactly the 12,288/layer the gate costs.
 
-54 CPU tests, 7 fla-gated. 15 mutations, 0 survived, 0 no-op.
+FIVE MORE GUARDS THAT COULD NOT FIRE, OR FIRED ON THE WRONG THING:
+
+- An unrecognised activation was accepted. fla's kernel matches 'silu'/'swish'
+  EXACTLY and otherwise runs activation-free WITHOUT ERROR, so "Silu" raised on
+  the reference path (what a CPU test exercises) and silently computed the
+  None arm on GPU -- collapsing kda-gated-silu onto kda-gated while the config,
+  the logs and the arm name all said silu. Now refused in __init__.
+- The gated_conv=False guard did not check gate_structure -- the exact case its
+  own comment was written about. gate_structure="lowrank" with gated_conv=False
+  built three plain convolutions: two identically-trained controls under
+  different arm names, i.e. a guaranteed null.
+- No reset_parameters, so Transformer.init_weights' to_empty() + sweep left the
+  gates as uninitialized memory for anything that skips a mixer's init_weights.
+  short_conv.py documents shipping exactly this on the MQAR calibration.
+- gate_source was accepted and then silently overwritten. Now derived from
+  gate_structure, and a contradiction raises.
+- The depthwise gate FLOPs term double-counted by 2x. Under 0.01% of the layer
+  and the test bound is <1%, so it could not bite -- but arms are matched on
+  this quantity.
+
+MEMORY WAS UNDER-COUNTED BY 1.5x. Walking what autograd retains for
+post*conv(pre*u): sigmoid saves its output, the scalar multiply's result is
+retained as an operand, and pre*u is retained as the conv input -- 3 stream
+tensors per gate in eager, not 2. So 576 MiB/layer and 15.75 GiB over 28 layers
+against KDA's measured 5.169 GiB peak, about 4x rather than 3x. The default is
+now the eager count, because an optimistic memory figure is the one that gets a
+paid run OOM-killed. Also documents the two other 2x assumptions the estimate
+hides: bf16 (mul type-promotes, so an fp32 param dtype doubles it) and no
+activation checkpointing (which makes it ~free).
+
+The lowrank RNG hazard is now recorded rather than half-stated: beyond the
+disclosed gate_down draw, Transformer.init_weights runs its reset_parameters
+sweep on the GLOBAL RNG at model.py:290, before the seeded generator exists at
+:299 -- and lowrank adds nine nn.Linear submodules per layer. So a lowrank arm
+is not seed-comparable to a plain arm. Depthwise is exempt (bare Parameters,
+one Conv1d, matching what CausalConv1d is).
+
+The GPU smoke now checks the two things no test covered: that the arms are
+bit-identical at init THROUGH THE FUSED KERNEL (every CPU test compares the
+reference path against a hand-written helper, i.e. a path the run never
+executes), and that fla honours activation=None at all.
+
+65 CPU tests, 7 fla-gated. 19 mutations, 0 survived, 0 no-op.
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>

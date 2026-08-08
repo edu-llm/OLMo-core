@@ -53,11 +53,30 @@ def _init_short_conv(
     The ``"depthwise"`` gate draws nothing, so a ``depthwise`` gated arm shares the entire random
     stream with the plain arm and differs only by the gate. The ``"lowrank"`` gate **must** draw
     its shared down-projection -- zeroing both factors of a product kills the branch permanently
-    -- so a ``lowrank`` arm's later parameters do differ from the plain arm's. That is unavoidable
-    and it is reported: :meth:`~olmo_core.nn.gated_convolution.GatedCausalConv1d.init_gate_weights`
-    returns whether it drew, and this function surfaces it on the module as
-    ``_gate_init_consumed_randomness`` so a test or a run summary can assert on it instead of
-    guessing.
+    -- so a ``lowrank`` arm's later parameters do differ from the plain arm's. That is reported
+    rather than assumed:
+    :meth:`~olmo_core.nn.gated_convolution.GatedCausalConv1d.init_gate_weights` returns whether it
+    drew, and this function surfaces it on the module as ``_gate_init_consumed_randomness``.
+
+    .. warning::
+        ``"lowrank"`` has a **second, separate** divergence channel that this function cannot fix.
+        :meth:`~olmo_core.nn.transformer.model.Transformer.init_weights` runs
+        ``for module in self.modules(): module.reset_parameters()`` (``model.py:290``) **before**
+        the seeded generator is created at ``:299``, so that sweep draws from the **global** RNG.
+        ``"lowrank"`` adds three ``nn.Linear`` submodules per convolution -- nine per layer -- each
+        with its own ``reset_parameters``, so the global RNG lands in a different state than the
+        plain arm's. Parameter *values* are still safe (they all come from the passed generator),
+        but anything downstream that draws from the global RNG is not.
+
+        ``"depthwise"`` is exempt: ``pre_scale`` and ``post_scale`` are bare
+        :class:`torch.nn.Parameter` objects with no ``reset_parameters``, and
+        :class:`~olmo_core.nn.gated_convolution.GatedCausalConv1d` holds exactly one
+        :class:`torch.nn.Conv1d`, matching what
+        :class:`~olmo_core.nn.convolution.CausalConv1d` *is*.
+
+        So a ``"lowrank"`` arm is **not seed-comparable** to a plain arm. Pair its cells on data
+        seed and treat the init draw as a nuisance, or accept that the two arms differ by more than
+        the gate.
 
     :param conv: The convolution module.
     :param std: The standard deviation for the convolution weight.
@@ -672,6 +691,7 @@ class KimiDeltaAttention(SequenceMixer):
         allow_neg_eigval: bool = False,
         conv_size: int = 4,
         conv_bias: bool = False,
+        conv_activation: Optional[str] = ActivationFunction.silu.value,
         gated_conv: bool = False,
         gated_conv_activation: Optional[str] = None,
         gate_structure: "GateStructure" = "depthwise",
@@ -692,6 +712,7 @@ class KimiDeltaAttention(SequenceMixer):
         self.allow_neg_eigval = allow_neg_eigval
         self.conv_size = conv_size
         self.conv_bias = conv_bias
+        self.conv_activation = conv_activation
         self.gated_conv = gated_conv
         self.gated_conv_activation = gated_conv_activation
         self.gate_structure: "GateStructure" = gate_structure
@@ -779,7 +800,10 @@ class KimiDeltaAttention(SequenceMixer):
                 hidden_size=hidden_size,
                 kernel_size=self.conv_size,
                 bias=self.conv_bias,
-                activation=ActivationFunction.silu.value,
+                # From the config, NOT hard-coded to silu. Hard-coding it made the
+                # no-activation arm unbuildable, and that arm is the only one that isolates the
+                # gate -- see 'conv_activation' on the config.
+                activation=self.conv_activation,  # type: ignore[arg-type]
                 dtype=dtype,
                 init_device=init_device,
             )
@@ -1016,8 +1040,11 @@ class KimiDeltaAttention(SequenceMixer):
                 gate_flops += 2 * 3 * self.d_model * self.gate_rank
                 gate_flops += 2 * 2 * self.gate_rank * conv_channels
             else:
-                # One multiply per channel to form the gate's pre-activation.
-                gate_flops += 2 * 2 * conv_channels
+                # ONE multiply per channel per gate to form the pre-activation, so 2 FLOPs each
+                # over 2 gates -- not '2 * 2 * channels', which double-counted. Under 0.01% of the
+                # layer either way, but the test bound is '< 1%' and so cannot catch it; arms are
+                # matched on this quantity, so it should be honest rather than merely harmless.
+                gate_flops += 2 * conv_channels
             # The elementwise 2*sigmoid and the multiply onto the stream, both gates.
             gate_flops += 2 * 2 * conv_channels
 
@@ -1074,6 +1101,14 @@ class KimiDeltaAttentionConfig(SequenceMixerConfig[KimiDeltaAttention]):
     """
     Whether to use bias in the short convolution.
     """
+    conv_activation: Optional[str] = "silu"
+    """
+    The activation inside the *plain* short convolution. ``"silu"`` is what KDA ships.
+
+    Exists so ``None`` -- a convolution with no activation at all -- is reachable. Without it the
+    activation was hard-coded and the only arm that **isolates the gate** could not be built. See
+    :attr:`gated_conv_activation` for why that arm is necessary rather than nice to have.
+    """
     gated_conv: bool = False
     """
     Replace the three plain short convolutions with LFM2/LIV-style *gated* ones.
@@ -1087,21 +1122,31 @@ class KimiDeltaAttentionConfig(SequenceMixerConfig[KimiDeltaAttention]):
     """
     The activation inside the gated convolution, ignored when :attr:`gated_conv` is ``False``.
 
-    ``None`` matches LFM2, whose LIV block is activation-free. ``"silu"`` keeps KDA's shipped
-    activation *and* adds the gate.
+    .. important::
+        **With ``gate_structure="depthwise"``, ``None`` does NOT mean activation-free.** The
+        depthwise pre-gate satisfies ``2*sigmoid(a*u)*u == (2/a)*silu(a*u)`` exactly, so it *is* a
+        SiLU with a learnable per-channel slope, moved to before the convolution, with its
+        amplitude absorbed into the convolution taps. See
+        :data:`~olmo_core.nn.gated_convolution.GateStructure` for the derivation.
 
-    Both are needed, because the LIV formulation makes two changes at once — it adds gating and
-    it removes the activation. Three arms separate them:
+        This is why the arm set needs **four** cells, not three. LIV changes two things at once --
+        it adds gating and it removes the activation -- and with a depthwise gate the "removes the
+        activation" half does not actually happen:
 
-    ============================  ==============  ==========================
-    arm                           ``gated_conv``  ``gated_conv_activation``
-    ============================  ==============  ==========================
-    ``kda-plain`` (as shipped)    ``False``       n/a (silu)
-    ``kda-gated``                 ``True``        ``None``
-    ``kda-gated-silu``            ``True``        ``"silu"``
-    ============================  ==============  ==========================
+    ==============================  ================  ==========================  ==================
+    arm                             ``gated_conv``    ``gated_conv_activation``   ``conv_activation``
+    ==============================  ================  ==========================  ==================
+    ``kda-plain`` (as shipped)      ``False``         n/a                         ``"silu"``
+    ``kda-plain-noact``             ``False``         n/a                         ``None``
+    ``kda-gated``                   ``True``          ``None``                    n/a
+    ``kda-gated-silu``              ``True``          ``"silu"``                  n/a
+    ==============================  ================  ==========================  ==================
 
-    Without the third arm a win cannot be attributed, so it is not optional.
+    The contrast that isolates the gate is **``kda-gated`` minus ``kda-plain-noact``**, not
+    ``kda-gated`` minus ``kda-plain``: the latter varies the activation's position, its
+    learnability, and the post gate all together, so a difference cannot be attributed. Against
+    this project's measured within-arm SD of 0.01463 nats you would see a real effect and be
+    unable to say what caused it.
     """
     gate_structure: str = "depthwise"
     """
@@ -1283,11 +1328,29 @@ class KimiDeltaAttentionConfig(SequenceMixerConfig[KimiDeltaAttention]):
             config that reads as a treatment arm in a diff and trains as the control — or if
             ``gate_structure="lowrank"`` carries no :attr:`gate_rank`.
         """
+        if self.conv_activation not in (None, "silu", "swish"):
+            raise ValueError(
+                f"unsupported conv_activation '{self.conv_activation}'; use None, 'silu' or 'swish'"
+            )
+        if self.gated_conv_activation not in (None, "silu", "swish"):
+            raise ValueError(
+                f"unsupported gated_conv_activation '{self.gated_conv_activation}'; "
+                "use None, 'silu' or 'swish'"
+            )
         if not self.gated_conv:
             if self.gate_rank is not None:
                 raise ValueError("'gate_rank' is set but 'gated_conv' is False")
             if self.gated_conv_activation is not None:
                 raise ValueError("'gated_conv_activation' is set but 'gated_conv' is False")
+            if self.gate_structure != "depthwise":
+                # This is the case the comment above was written for and the guard originally
+                # missed: 'gate_structure="lowrank", gated_conv=False' reads as a treatment arm in
+                # a YAML diff, builds three plain convolutions, and gives two identically-trained
+                # controls with different names -- a guaranteed null. "depthwise" is the field
+                # default, so it is the only value that can mean "not set".
+                raise ValueError(
+                    f"'gate_structure' is {self.gate_structure!r} but 'gated_conv' is False"
+                )
             return
         if self.gate_structure not in ("depthwise", "lowrank"):
             raise ValueError(f"unknown gate structure '{self.gate_structure}'")
@@ -1335,6 +1398,7 @@ class KimiDeltaAttentionConfig(SequenceMixerConfig[KimiDeltaAttention]):
             allow_neg_eigval=self.allow_neg_eigval,
             conv_size=self.conv_size,
             conv_bias=self.conv_bias,
+            conv_activation=self.conv_activation,
             gated_conv=self.gated_conv,
             gated_conv_activation=self.gated_conv_activation,
             gate_structure=self.gate_structure,  # type: ignore[arg-type]

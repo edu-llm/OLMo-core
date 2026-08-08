@@ -65,6 +65,13 @@ THE INIT IS EXACTLY NEUTRAL AND STILL ALIVE, WHICH TOOK TWO TRIES
     ``init_gate_weights`` returns whether it drew, so a caller can report that rather than assume
     it.
 
+NOT HUGGING FACE CONVERTIBLE, DELIBERATELY
+    ``nn/hf/convert.py`` maps ``attention.q_conv1d.weight``; a gated convolution's key is
+    ``attention.q_conv1d.conv.weight`` and its gate parameters have no counterpart in any released
+    architecture. So a gated checkpoint cannot round-trip to HF, and no mapping is added -- there is
+    nothing on the other side to map to, and a fabricated entry would silently drop the gates. If a
+    gated arm ever needs exporting, that is a new HF architecture, not a key rename.
+
 MEMORY IS THE REAL COST, AND IT IS NOT IN THE PARAMETER COUNT
     Gating is nearly free in parameters and expensive in activation memory: each gate retains
     stream-sized tensors for the backward pass. At KDA's geometry (``d_model=2048``,
@@ -72,20 +79,21 @@ MEMORY IS THE REAL COST, AND IT IS NOT IN THE PARAMETER COUNT
     bf16, and **8192 tokens per rank** -- the microbatch KDA's throughput was actually measured at
     -- one stream tensor is 32 MiB, so :func:`gate_activation_bytes` gives
 
-    ===================================  ===============
-    2 gates x 2 tensors x 32 MiB          128 MiB per convolution
-    x 3 convolutions (q, k, v)            **384 MiB per layer**
-    x 28 layers                           **10.5 GiB**
-    ===================================  ===============
+    =====================================  ==============================
+    2 gates x 3 tensors x 32 MiB            192 MiB per convolution (eager)
+    x 3 convolutions (q, k, v)              **576 MiB per layer**
+    x 28 layers                             **15.75 GiB**
+    =====================================  ==============================
 
-    KDA's measured peak on ``gpu-8xa100`` (40 GiB cards) is **5.169 GiB**, so this is not a
-    trim -- it is roughly **3x the peak**, landing near 15.7 GiB. That still fits, but it is
-    large enough to change the largest admissible ``rank_microbatch_size``, and at ``T=32768``
-    it would not fit at all.
+    KDA's measured peak on ``gpu-8xa100`` (40 GiB cards) is **5.169 GiB**, so eager gating is
+    roughly **4x the peak**. Compiled it is nearer 10.5 GiB, i.e. 3x. Either way this is not a
+    rounding error: it fits on a 40 GiB card and would not fit at ``seq_len=32768``.
 
-    **Size any run from a measurement of peak memory on the gated arm, not from the parameter
-    table.** The parameter delta for the depthwise gate is 12,288 per layer, which is ~0.06% and
-    invites exactly the wrong conclusion about cost.
+    **Size any run from a measured peak on the gated arm, not from the parameter table and not
+    from this estimate.** The parameter delta for the depthwise gate is 12,288 per layer, about
+    0.07%, and it invites exactly the wrong conclusion about cost. The estimate itself carries
+    three assumptions (eager, bf16, no activation checkpointing) that each move it by 2x --
+    :func:`gate_activation_bytes` documents them.
 """
 
 from typing import Literal, Optional
@@ -122,16 +130,43 @@ How the two gates are parameterized.
     CE (``[-0.0097, +0.0020]`` nats, n=12 paired). A low-rank gate is the *established*
     parameterization, not a weakened one.
 
-``"depthwise"`` -- **cheapest, and NOT LIV's gate.**
+``"depthwise"`` -- **cheapest, NOT LIV's gate, and its pre-gate is a SiLU in disguise.**
     One scalar per channel per gate, applied to the stream: ``pre = 2*sigmoid(a * u)``. Costs
-    ``2 * hidden_size`` per convolution, about 0.06% of a KDA layer's projections.
+    ``2 * hidden_size`` per convolution, about 0.07% of a KDA layer's projections.
 
     .. warning::
-        This gate **cannot mix channels and cannot read anything but its own channel of its own
-        stream.** LIV's gates are channel-mixing projections of the layer input. So a null result
-        on ``"depthwise"`` does not license any conclusion about LIV-style gating -- it only says
-        that a per-channel input-varying rescale does nothing. Use ``"depthwise"`` as a cheap
-        floor or a mechanism control, and ``"lowrank"`` for the actual claim.
+        **THE PRE-GATE IS EXACTLY A PER-CHANNEL-TEMPERATURE SiLU, NOT A GATE.** Since
+        ``silu(y) = y * sigmoid(y)``, substituting ``y = a*u`` gives the identity
+
+        .. code-block:: text
+
+            2 * sigmoid(a*u) * u  ==  (2/a) * silu(a*u)        for every a != 0
+
+        verified to machine precision (``8.9e-16`` in float64). The amplitude ``2/a_c`` is
+        **constant per channel**, so it folds straight into that channel's convolution taps. What
+        the pre-gate actually buys is *one* number per channel: the slope of a SiLU, applied
+        **before** the convolution instead of after, initialized at ``a = 0`` where it is the
+        identity.
+
+        So ``gated_conv=True`` with ``activation=None`` is **not activation-free** under this
+        structure. It moves an activation from after the convolution to before it and makes its
+        slope learnable. Only the *post* gate is a genuinely new term, because it reads position
+        ``t`` while the convolution output mixes ``t-j`` -- that is 1 real degree of freedom per
+        channel, not 2.
+
+        Consequence for experiment design: contrasting ``"depthwise"`` against the shipped
+        silu-after-conv arm varies the activation's position, its learnability, **and** the post
+        gate, all at once. Isolating the gate needs an arm with **no** activation at all, which is
+        what :attr:`~olmo_core.nn.attention.recurrent.KimiDeltaAttentionConfig.conv_activation`
+        exists for.
+
+        This gate also cannot mix channels or read anything but its own channel of its own stream,
+        where LIV's gates are channel-mixing projections of the layer input.
+
+        Use ``"depthwise"`` as a cheap floor or a mechanism control. Use ``"lowrank"`` for any
+        claim about LIV-style gating -- it gates on ``x`` rather than on ``u``, so
+        ``2*sigmoid(W h(x)) * u`` is not of the form ``f(u)*u`` and the identity above does not
+        apply to it.
 
 A third option, a full dense ``d_model -> hidden_size`` projection per gate, is deliberately
 **not** implemented. At KDA's geometry (``d_model=2048``, three 2048-channel streams, two gates
@@ -206,22 +241,41 @@ def gate_activation_bytes(
     batch_size: int,
     seq_len: int,
     bytes_per_element: int = 2,
-    tensors_per_gate: int = 2,
+    tensors_per_gate: int = 3,
 ) -> int:
     """
     Extra activation bytes one gated convolution holds for its backward pass.
 
-    The parameter delta is negligible and the *memory* delta is not, so this is reported
-    alongside it rather than left implicit. Two gates, and for each one autograd retains the
-    gate's own output and the product it forms with the stream.
+    The parameter delta is negligible and the *memory* delta is not, so this is reported alongside
+    it rather than left implicit.
+
+    .. important::
+        **This is an estimate with three assumptions, each of which can move it by 2x. Size a run
+        from a measured peak, not from this number.**
+
+        *Eager, and this is the default.* Walking what autograd retains for
+        ``post * conv(pre * u)`` with ``pre = 2*sigmoid(a*u)``: ``sigmoid`` saves its own output,
+        the scalar multiply's result is retained as an operand, and the product ``pre * u`` is
+        retained as the convolution's input. That is **3 stream-sized tensors per gate** in eager,
+        which is the default here. Under :mod:`torch.compile` inductor fuses the
+        ``sigmoid -> mul -> mul`` chain and the count drops to about 2, so the honest figure is
+        compile-dependent rather than a fixed property of the operator.
+
+        *dtype.* ``bytes_per_element=2`` assumes the gate chain runs in bf16. ``pre_scale * u`` is
+        a parameter-times-activation product and ``mul`` type-promotes rather than being on
+        autocast's cast list, so with a float32 parameter dtype and no ``param_dtype`` override the
+        whole chain lands in **fp32** and this figure doubles.
+
+        *Activation checkpointing.* With an ``ac_config`` set, the gate chain is recomputed in
+        backward and costs approximately nothing at peak, making this figure wildly pessimistic.
 
     :param hidden_size: The convolution's channel count.
     :param batch_size: The batch size.
     :param seq_len: The sequence length.
     :param bytes_per_element: 2 for bf16/fp16, 4 for fp32.
-    :param tensors_per_gate: Stream-sized tensors retained per gate. Defaults to 2 (the gate
-        value and the product). An implementation that recomputed the gate in backward would
-        pass 1; a fused kernel could reach 0.
+    :param tensors_per_gate: Stream-sized tensors retained per gate. Defaults to 3, which is the
+        eager count. Pass 2 for a compiled run, 1 for a recompute-in-backward implementation, 0
+        for a fully fused kernel.
 
     :returns: The number of extra bytes.
     """
@@ -274,8 +328,9 @@ class GatedCausalConv1d(nn.Module):
         channel counts are equal.
     :param kernel_size: Number of convolution taps.
     :param gate_structure: ``"depthwise"`` or ``"lowrank"``. See :data:`GateStructure`.
-    :param gate_source: ``"stream"`` or ``"input"``. See :data:`GateSource`. Forced to
-        ``"input"`` for ``"lowrank"``.
+    :param gate_source: ``"stream"`` or ``"input"``. See :data:`GateSource`. Leave ``None`` to
+        derive it from ``gate_structure``, which is the only coherent choice in each case; passing
+        a conflicting value **raises** rather than being silently overridden.
     :param d_model: The mixer's model dimension, required for ``"lowrank"``.
     :param gate_rank: The bottleneck width, required for ``"lowrank"``.
     :param bias: Whether the convolution has a bias. LFM2 uses ``False``.
@@ -297,7 +352,7 @@ class GatedCausalConv1d(nn.Module):
         hidden_size: int,
         kernel_size: int,
         gate_structure: GateStructure = "depthwise",
-        gate_source: GateSource = "stream",
+        gate_source: Optional[GateSource] = None,
         d_model: Optional[int] = None,
         gate_rank: Optional[int] = None,
         bias: bool = False,
@@ -310,8 +365,31 @@ class GatedCausalConv1d(nn.Module):
         super().__init__()
         if gate_structure not in ("depthwise", "lowrank"):
             raise ValueError(f"unknown gate structure '{gate_structure}'")
-        if gate_source not in ("stream", "input"):
+        # Derived from the structure when not given, because only one value is coherent with each.
+        implied: GateSource = "stream" if gate_structure == "depthwise" else "input"
+        if gate_source is None:
+            gate_source = implied
+        elif gate_source not in ("stream", "input"):
             raise ValueError(f"unknown gate source '{gate_source}'")
+        # VALIDATED HERE, because the fused kernel does NOT validate it. fla's 'causal_conv1d'
+        # applies swish only when the activation string is exactly 'swish' or 'silu' and otherwise
+        # runs activation-free WITHOUT ERROR. So "Silu", "SILU" or "gelu" raises on the reference
+        # path (which is what a CPU test exercises) and silently computes the activation-free
+        # operator on GPU -- collapsing the gated-silu arm onto the gated arm while the config, the
+        # logs and the arm name all say otherwise.
+        if activation not in (None, "silu", "swish"):
+            raise ValueError(
+                f"unsupported activation {activation!r}; use None, 'silu' or 'swish'. "
+                "The fused kernel matches these exactly and silently ignores anything else."
+            )
+        # A contradiction, rather than a silent override. 'gate_source' is determined by
+        # 'gate_structure' (depthwise gates are per-channel on the stream; lowrank gates project
+        # the layer input), so accepting a conflicting value and then overwriting it would let a
+        # config request one operator and get another.
+        if gate_structure == "depthwise" and gate_source != "stream":
+            raise ValueError("gate_structure='depthwise' requires gate_source='stream'")
+        if gate_structure == "lowrank" and gate_source not in ("input",):
+            raise ValueError("gate_structure='lowrank' requires gate_source='input'")
 
         self.hidden_size = hidden_size
         self.kernel_size = kernel_size
@@ -519,6 +597,36 @@ class GatedCausalConv1d(nn.Module):
         start = cp_mesh.get_local_rank() * local_channels
         self._cp_channel_slice = slice(start, start + local_channels)
         self.cp_enabled = True
+
+    @torch.no_grad()
+    def reset_parameters(self) -> None:
+        """
+        Put the gates in the neutral state, so the module is usable before ``init_weights`` runs.
+
+        :meth:`~olmo_core.nn.transformer.model.Transformer.init_weights` calls ``to_empty(device)``
+        and then sweeps every submodule's ``reset_parameters``. Without this method the gate
+        parameters would be **uninitialized memory** for anything that builds the module and never
+        calls a mixer's ``init_weights`` -- a probe, a benchmark, a direct instantiation. The
+        ``torch.zeros`` in ``__init__`` does not protect against that, because ``to_empty``
+        discards it.
+
+        That is not a hypothetical: ``short_conv.py`` documents having shipped exactly this on the
+        MQAR calibration, where a grouped arm ran at a fraction of dense's activation scale because
+        the probe built the module directly. Uninitialized memory is often all zeros, which makes a
+        broken module look merely inert.
+
+        Zeroing is also the *correct* neutral state here, so this is not a placeholder: the gate
+        becomes exactly ``1.0``. The convolution's own ``reset_parameters`` is inherited from
+        :class:`torch.nn.Conv1d` and left alone.
+        """
+        self.conv.reset_parameters()
+        if self.gate_structure == "depthwise":
+            self.pre_scale.zero_()
+            self.post_scale.zero_()
+        else:
+            self.gate_down.reset_parameters()
+            self.gate_up_pre.weight.zero_()
+            self.gate_up_post.weight.zero_()
 
     @torch.no_grad()
     def init_gate_weights(

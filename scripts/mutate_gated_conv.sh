@@ -195,6 +195,31 @@ echo "M13 gate options without gated_conv are silently ignored"
 perl -pi -e 's/^            if self\.gate_rank is not None:$/            if False:/' "$REC"
 run_case "gate options ignored" "test_gate_options_without_gated_conv_are_refused"
 
+# M14: the plain convolution's activation is hard-coded again, so the arm that ISOLATES the gate
+# becomes unbuildable and the arm set silently drops to three cells that vary three things at once.
+echo "M14 plain conv activation hard-coded to silu"
+perl -pi -e 's/^                activation=self\.conv_activation,  # type: ignore\[arg-type\]$/                activation="silu",/' "$REC"
+run_case "no-activation arm unbuildable" "test_the_no_activation_plain_arm_is_buildable"
+
+# M15: an unrecognised activation string is accepted. fla's kernel matches 'silu'/'swish' EXACTLY
+# and otherwise runs activation-free without error, so "Silu" would silently be the None arm.
+echo "M15 unrecognised activation accepted at construction"
+perl -0pi -e 's/        if activation not in \(None, "silu", "swish"\):/        if False:/' "$SRC"
+run_case "bad activation accepted" "test_an_unrecognised_activation_is_refused_at_construction"
+
+# M16: reset_parameters stops zeroing the gates, so anything that builds the module without calling
+# a mixer's init_weights runs on uninitialized memory -- which is often all zeros, making a broken
+# module look merely inert.
+echo "M16 reset_parameters leaves the gates uninitialised"
+perl -0pi -e 's/            self\.pre_scale\.zero_\(\)\n            self\.post_scale\.zero_\(\)/            pass/' "$SRC"
+run_case "gates left uninitialised" "test_reset_parameters_leaves_the_gate_neutral"
+
+# M17: gate_structure is no longer checked against gated_conv=False, so a config reading as a
+# lowrank treatment arm trains as the plain control.
+echo "M17 gate_structure ignored when gated_conv is False"
+perl -0pi -e 's/            if self\.gate_structure != "depthwise":/            if False:/' "$REC"
+run_case "lowrank-labelled control" "test_gate_options_without_gated_conv_are_refused"
+
 echo
 echo "=========================================="
 echo "caught   $caught"
