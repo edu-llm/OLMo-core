@@ -52,6 +52,15 @@
 #      zero compute. Estimated after seeing a treatment arm they would be a researcher degree
 #      of freedom, which is why they are estimated in this stage and committed before stage 2.
 #
+# THE 3.4 IN ITEM 1 IS THE WRONG NUMBER, AND ITEM 1 IS STRONGER WITHOUT IT. Written here rather
+# than fixed in place, for the reason the note further down gives: the run launched from this
+# file. 3.4 is the span at df = 6 -- the pooled figure, which hyper-connections.md quotes
+# correctly where it argues for pooling. At the df = 2 a baseline triple would have given, the
+# 95% interval runs from 0.52 to 6.28 times the point estimate, which is a factor of **12.1**
+# end to end; at the df = 4 five seeds actually buy it is **4.8**. So the interval this stage
+# exists to escape is three and a half times wider than item 1 said it was, and the gate built
+# on it is correspondingly further from being a gate. "A rumour of one" was an understatement.
+#
 # ---------------------------------------------------------------------------------------
 # THE FLAGS THAT ARE NOT HERE
 # ---------------------------------------------------------------------------------------

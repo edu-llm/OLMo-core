@@ -844,6 +844,11 @@ is **12.1**; at the df = 4 five seeds actually buy, it is **4.8**. The argument 
 — that five seeds are worth it — is strengthened rather than weakened by the correction, since
 the interval it is escaping is three and a half times wider than it claimed.
 
+That file now carries the correction itself, as a labelled note beside the claim rather than as
+an edit to it. The 3.4 is left standing where it was written, for the reason the rest of that
+file gives about its own paragraphs: the five admitted cells launched from it, and a reader who
+saw the number needs to be able to tell that they did.
+
 ### Throughput
 
 Measured, not planned. Read from run history at the steady state rather than from the run
@@ -856,10 +861,34 @@ not training and throughput reads near zero.
 | `run_019fe008-5877` | `gpu-4xl40s` | `hc_370M`, `faithful` | 8,192 | 100 | 12,645 | 15.54 |
 | `run_019fe1f6-8692` | `gpu-4xl40s` | `hc_370M`, `faithful` | **16,384** | 100 | **19,051** | **10.32** |
 | `run_019fe262-778d` | `gpu-8xa100` | `hc_370M`, `faithful` | 12,288 | 74 of 100 | **33,803** | **2.91** |
+| `run_019fe279-4ef0` | `gpu-4xl40s` | `hc_370M`, **`baseline`** | 16,384 | 370 of 6,000 | 23,977 | **8.20** |
 
 TPS is per device, so the shape's total is the device count times it, and seconds per step is
 the batch over that total: 786,432 / (4 × 19,051) = 10.32 on the L40S, and
 786,432 / (8 × 33,803) = 2.91 on the A100.
+
+**The last row is the only `baseline` measurement there is, it is provisional, and the gap
+between it and the row above `run_019fe262-778d` is worth more than either.** It is stage 1
+running: three of five cells live, clean medians of 8.201, 8.071 and 8.256 s/step over 372, 372
+and 362 rows with interquartile spreads of 0.041 to 0.056, one warm-up step dropped, and no lane
+monitor attached at all because `train` only attaches it to an arm that has lanes. Every other
+row in this table is `faithful`. So on one shape, at one microbatch, at one world size, the
+**hyper-connection arms cost about 26% of wall clock against the baseline — 10.32 s against
+8.20 — for the +0.0994% of FLOPs the arm table reports.** Iso-FLOP is not iso-time here and was
+never going to be: `n_lanes` 4 makes the residual stream four times wider, and at `d_model` 1024
+this model is bound by what it moves rather than by what it multiplies, so a change that is a
+rounding error in FLOPs is a quarter of the step in bytes.
+
+Two consequences and one thing not to conclude. The tranche's own pricing is unaffected, because
+`arm_seconds` prices the treatment arms at 10.32 and that is the arm the bound has to hold: the
+faithful cells are 17.85 hours against a 19-hour bound and the baseline cells come in at 14.36,
+which is spare the plan did not budget and does not need. And `MONITOR_SECONDS_PER_FIRING` at
+1.37 s is the cost of a firing and is *not* the cost of the instrument, since the forward hook
+is registered on every block for the whole run — it returns early off its firing steps, but
+`@torch._dynamo.disable()` means it is a graph break at every block boundary whether it measures
+or not, and the blocks are compiled. What must **not** be concluded is which of those two the
+26% is. The lanes and the always-registered hook are confounded in every run this branch has,
+and separating them is one 100-step `faithful` probe with the monitor off, for about $4.
 
 **Every median here is over *clean* steps, and getting that filter wrong is what produced the
 number this tranche was first priced at.** A clean step is one on which neither the held-out
@@ -900,10 +929,45 @@ It is the TPS number that every runtime and cost projection is built on.
 #### The A100 probe, read with the same filter, and what it says
 
 `run_019fe262-778d` on `gpu-8xa100`, rank microbatch 12,288, 8 processes, `faithful`. **It
-crashed at step 74 of 100** rather than finishing — the last row W&B holds is step 74, the run
-state is `crashed`, and GPU reserved memory was sitting at 58% of the card, so it was not an
-OOM. The cause is inside AWS and reading it costs a workflow dispatch, which nothing here
-needs: 74 steps is more than the measurement takes.
+stopped at step 74 of 100.** The paragraph that stood here said it crashed, that reserved memory
+at 58% of the card ruled out an OOM, and that the cause was inside AWS behind a workflow
+dispatch "which nothing here needs: 74 steps is more than the measurement takes." The dispatch
+was worth spending, because it did not crash.
+
+`edullm status run_019fe262-778d` returns `FAILED`, **exit code 137**, and `Why: Cancelled by
+philote-dev`, carrying the reason recorded on the cancellation:
+
+> Not decision-relevant. A power analysis on Ai2 DataDecide (1,050 models, 3 seeds) measures
+> seed sigma scaling as D^-0.17, not D^-0.5, so at fixed budget standard error scales as
+> D^+0.33 and seeds dominate horizon. A100 and L40S also price within 1.5% per token ($47.78/B
+> vs $47.08/B), so clearing the probe would not have made tokens cheaper, only a longer run
+> legal. The tranche goes to L40S at more seeds regardless of what this measures. Cancelling
+> returns $131.75 to a $4,000 ceiling.
+
+**The instrument was switched off by the decision it was measuring for, on the number it was
+measuring.** The probe was queued at 17:20:29, started at 17:23:39 and stopped at 17:30:34 —
+six minutes fifty-five seconds, attempt 1 of 2 — and by then it had already produced the median
+this section is written around. Neither figure in that reason is a measurement: 1.5% is the gap
+at the 5.00 s/step `run.yaml` nominates as a budget threshold, and $47.78/B and $47.08/B are
+about a quarter above the measured per-token prices in the table below even for the L40S, which
+is a second sign they were derived from a bound rather than read off a run.
+
+**Nothing about the shape failed, and nothing here would recur on a long run.** 137 is
+128 + SIGKILL, which is what Batch terminating a job looks like from inside the container; it
+is not the program's own code and it is not a stage of the platform. There was no OOM, no host
+loss and no timeout. `RETRY_ONLY_WHAT_A_RETRY_FIXES` never came into it either — a cancellation
+does not reach the retry rules at all, which is why the second attempt the submission had paid
+a ceiling for was never taken. Of the three failure modes worth fearing on a new shape, an OOM
+is the one this run positively rules out at 58% of the card, a lost host is the one rule one
+does retry, and a timeout is the one that only retries by recording no exit code — and none of
+them is what happened.
+
+**What the 74 steps do not establish, stated because it is the residual risk on this shape.**
+`--save-interval 100` was never reached, so this branch has never written a distributed
+checkpoint from eight ranks and has never resumed one, and stage 4 reads a `step6000` checkpoint
+back on a single L4. The evaluator, which is the other thing that had to work at a new world
+size, did run: it fired at step 50 and the whole step took 39.63 s against the L40S's 104 s for
+an evaluation alone.
 
 **2.91 s/step, over 72 rows.** Steps 2–49 and 51–74, which is every step except step 0, step 1
 and step 50. Step 1 pays for `torch.compile`; step 50 is where `--monitor-interval 50` and
@@ -956,6 +1020,17 @@ order they bind.
    admin at any duration against a lead for `gpu-4xl40s`, and its median queue is 89 minutes
    against 19.
 
+**Reason 3 is stale and reason 2 is no longer the whole of it.** `edullm check --json` on
+2026-08-08 returns `approval_class: routine` and `approving_environment: run-approval-lead` for
+a five-cell fan-out on `gpu-8xa100`: policy v5 removed the $20 rate ceiling deliberately, on the
+argument that a rate cannot rank two requests by what they commit and a worst-case total can, so
+both shapes go to a lead. The same output puts the A100 queue at a **61-minute** median against
+the L40S's 19, with a worst observed 12.6 hours against 6.4 — and, which matters more than
+either median, fourteen A100 nodes arrived over three days with nothing ever cancelled for want
+of capacity, against six L40S nodes of which two of ten queued runs were cancelled by hand while
+stuck in `RUNNABLE`. Reason 2 stands but has to be argued rather than asserted, and it is, in
+[The shape for stages 2, 3 and 4](#the-shape-for-stages-2-3-and-4).
+
 Recorded because it is worth money to the next module rather than to this one. A 370M-class run
 on this corpus is 41% cheaper per token and 3.55× faster per step on the NVLink shape, and the
 wire hypothesis in `run.yaml` — that the L40S step is bound by PCIe and not by the card — is
@@ -967,6 +1042,148 @@ The rehearsal figure was never a prediction for 370M: it is a 96M model of which
 embedding and unembedding, so it spends an unusually large share of its time in two matmuls
 that do not grow with depth. The probe row is the one to plan against, and it is 4.5 times
 slower per token.
+
+### The shape for stages 2, 3 and 4
+
+**Stages 2 and 3 stay on `gpu-4xl40s`. Stage 4 is on `gpu-1xl4` and this does not touch it.**
+The A100 is 41% cheaper per token and that is a real number, correctly measured, and it is not
+enough. What follows is the arithmetic rather than the assertion, because the decision is close
+and the case against it is not the one the record has been making.
+
+**What the saving is worth, on the axis that actually gates a submission.** Two numbers price a
+tranche and they behave differently. The *bill* is wall clock — `run_costs._attempt_seconds`
+times the rate — and there the A100 keeps its whole advantage. The *ceiling* is what admission
+prices and what an approver reads, `rate × nodes × hours × attempts × cells`, and there it does
+not, because the bound has to hold the run with margin whatever the run costs, and a 5.50-hour
+cell under a 7-hour bound wastes 21% of its ceiling where a 17.85-hour cell under a 19-hour
+bound wastes 6%.
+
+| | `gpu-4xl40s` | `gpu-8xa100` | A100 |
+| --- | --- | --- | --- |
+| s/step, `faithful`, measured | 10.32 | 2.91 | 3.55× faster |
+| $ per 1M tokens, steps only | 0.0382 | 0.0226 | **41% cheaper** |
+| hours per 6,000-step cell, `arm_seconds` | 17.85 | 5.50 | 3.25× faster |
+| bill per cell | $187.28 | $120.74 | 36% cheaper |
+| ceiling per cell, 2 attempts | $398.72 (19 h) | $307.41 (7 h) | **23% cheaper** |
+
+So **41% per token is 23% per approval**, and 23% is what the budget sees. In seeds, for the
+four funded arms at 4.72B tokens each:
+
+| budget, as ceiling | `gpu-4xl40s` | `gpu-8xa100` |
+| --- | --- | --- |
+| $4,000 | 10 cells — **2 seeds** an arm | 13 cells — **3 seeds** an arm |
+| $8,000 | 20 cells — **5 seeds** an arm | 26 cells — **6 seeds** an arm |
+
+Two things fall out of that table and the first one is not about shapes at all. **Four arms at
+five seeds has not fitted $4,000 since `mhc` was funded**: it is $7,974 of L40S ceiling, of
+which stage 1 has already committed $1,993.59, and the grant that bought the fourth arm is what
+the design is actually running on. At that grant the A100 buys **one more seed per arm**, which
+by `noise_floor.mde` at four arms takes the unpaired MDE from **0.0189 nats to 0.0170** — a 10%
+improvement, real, and the right kind of thing to buy under D^(+0.328). At $4,000 it buys
+0.0376 against 0.0261, which is the difference between a design the analysis plan calls
+inadequate and a design the analysis plan calls inadequate: both are above the 0.020 literature
+effect this module exists to detect.
+
+**Now the confound, which is the crux, and which is not a numerics problem.** Running stages 2
+and 3 on eight ranks at microbatch 12,288 while stage 1 ran on four at 16,384 changes four
+things, and three of them are rounding.
+
+- *The global batch is identical.* `NumpyFSLDataLoader` shuffles `np.arange` with
+  `seed + epoch` and nothing else, truncates to a multiple of the global batch, reshapes, and
+  only then shards with `indices[:, dp_rank :: dp_world_size]` — so both world sizes see the
+  same documents in the same global batch at every step, partitioned differently.
+- *Gradient accumulation is split-invariant in exact arithmetic.* Microbatches run with
+  `loss_reduction="sum"` against one shared `loss_div_factor`, the rank's own non-ignore token
+  count, so 8 microbatches and 12 microbatches give the same gradient up to summation order. The
+  FSDP reduce is fp32 — `reduce_dtype=DType.float32`, set explicitly in `train_on_corpus.py` and
+  also the library default — so the cross-rank average is not a bf16 accumulation over 8 terms
+  against 4.
+- *The initial draw does not move.* `_apply_init` materializes the full tensor, initializes it,
+  and copies out the local shard, so the weights a seed draws are world-size independent and
+  only their layout changes.
+- *bf16 is bf16.* A100 is sm_80 and L40S is sm_89; both accumulate bf16 matmuls in fp32 in the
+  tensor cores. Different kernels get selected and different split-K reductions get taken, which
+  moves results at the 1e-3 relative level per op, in no particular direction.
+
+All of that is rounding, it is mean-zero, and — this is the part worth saying out loud — **it is
+already inside the quantity the design measures.** The pre-registration states that what survives
+the seed pairing is "initialization plus kernel non-determinism", so σ̂ is an estimate of a spread
+that already contains kernel-level irreproducibility. A shape change adds more of the same kind
+of thing to a term the noise floor is measuring anyway.
+
+**One difference is systematic, and it is in the instrument rather than in the model.**
+`LMEvaluator` runs on a `NumpyFSLDataLoader`, which drops the tail so the instance count divides
+the batch, and the evaluator's global batch is `rank_microbatch_size × dp_world_size`. That is
+**16 padded documents per eval batch on four L40S ranks and 24 on eight A100 ranks.** Unless a
+held-out source holds a multiple of 48 documents, the two shapes **score a different set of
+documents**, deterministically, for the whole run. Within a shape it cancels exactly and no
+contrast can see it; across shapes it is a fixed offset. The size is probably small — dropping
+k tail documents out of N shifts a token-weighted mean by about σ_doc·√k⁄N, which at a few
+thousand documents a source and a few tenths of a nat of per-document spread is order 0.001
+nats, well under a tenth of the 0.016 gate — and `--preflight` builds the held-out set and
+prints it, so the document counts are checkable on a laptop for free. But it is systematic, it
+lands wholly inside **H1**, which is the module's replication claim, and no cell in the design
+can bound it, because arm and machine would be perfectly aliased.
+
+**Which leaves three options, and the honest arithmetic kills the cheap one and prices the clean
+one at par.**
+
+| | ceiling | bill | wall clock | H1 |
+| --- | --- | --- | --- | --- |
+| (a) 15 remaining cells on L40S | $5,981 | $2,809 | ~55 h over a 6-node pool | clean |
+| (b) 15 remaining cells on A100 | $4,611 | $1,811 | ~13 h over a 14-node pool | **aliased with the machine** |
+| (c) those 15 plus a 5-cell A100 baseline | $6,148 | $2,415 | ~13 h | clean |
+
+Option (c) is the one to take seriously, and it is the one that shows what the saving is really
+worth: making the A100 move *scientifically clean* costs a baseline re-run, and the re-run eats
+the saving. Against (a) it is **$167 more ceiling and $394 less bill** — par, inside the error on
+any of these figures — in exchange for about forty hours of wall clock and a deeper capacity
+pool. Its five A100 baseline cells are priced here at the `faithful` step time, which is
+conservative by roughly the 26% the row above measures. And it is not obviously wrong: forty
+hours is forty hours, and 14 nodes that never starved is a better place to put 15 cells than
+6 nodes that have already stranded two runs in `RUNNABLE`.
+
+**What decides it against (c) is the noise floor, and it is a pre-registration argument rather
+than a cost one.** Stage 2 is gated on σ̂ and the per-source inverse-variance weights being
+frozen from the baseline *before any treatment arm exists*, and that gate is the entire reason
+stage 1 went out on its own. Under (c) there would be two baselines: the L40S one, which lands
+in about twelve hours, and an A100 one, which lands later. Whichever gets frozen is then a choice
+made with both visible — and pre-committing now to freeze the A100 one is a commitment to
+discard a measurement already in hand in favour of one that does not exist yet, justified by the
+shape being right, which is the thing under decision. That is circular, and it re-opens by hand
+the one degree of freedom this design spent a whole stage and $1,993.59 of ceiling closing.
+Option (b) does not have that problem and has the worse one. Option (a) has neither.
+
+So: **10% off the MDE, or a clean freeze and a clean H1.** The freeze wins, and it is not close
+once the saving is priced at 23% rather than 41%.
+
+**The running L40S baseline is untouched.** It stays the H1 and H2a comparator, `noise_floor.py
+--freeze` reads it as planned, and stages 2 and 3 go out on `gpu-4xl40s` at
+`--rank-microbatch-size 16384`, `--nproc-per-node=4` and `--hours 19` — identical to stage 1 in
+everything but `--arm`, which is what
+`test_the_three_stage_specs_differ_in_the_arm_and_in_nothing_else` exists to hold. Nothing is
+re-run, nothing is discarded, and nothing is kept as a cross-shape check, because under this
+recommendation there is no second shape to check against.
+
+**Two conditions flip it, and both are worth watching for rather than arguing about.**
+
+1. **Stage 1 loses a cell.** If a baseline cell is cancelled in `RUNNABLE`, lost to the 19-hour
+   bound, or has to be re-run for any reason, the noise floor has to be re-measured anyway,
+   there is no incumbent estimate to discard, and the circularity above evaporates. At that
+   point take option (c) whole: all 20 cells on `gpu-8xa100` at 12,288 and eight ranks, freeze
+   from the A100 baseline, and keep whatever L40S cells completed as a cross-shape measurement
+   of exactly the offset this section could only bound by argument. That is the better
+   experiment and the only thing standing in front of it is that stage 1 is currently fine.
+2. **The budget is re-based on the bill, or the runtime bound can be lowered per submission.**
+   The 41%-to-23% dilution is entirely an artifact of the ceiling pricing a bound that a fast
+   run does not use. Price on wall clock and the A100 saving is $1,331 on a four-arm five-seed
+   tranche, which is about two more seeds an arm rather than one — 0.0189 nats to 0.0156, a 17%
+   improvement — and two seeds is worth re-opening the freeze for in a way that one is not.
+
+A third thing would not flip it but would change what (c) costs: **nothing in this branch has
+written a distributed checkpoint from eight ranks**, because the probe was cancelled 26 steps
+before `--save-interval 100`. Any move to A100 should find that out in the first ten minutes of
+the first cell rather than at step 6,000 of fifteen of them.
 
 ### What a full arm actually costs, and why it cannot be submitted as one run
 
@@ -1021,11 +1238,21 @@ node-hours for the nine runs, which `estimated_cost_usd` will multiply by whatev
 ceiling is $4,532.79 for nine cells and over budget; at `--hours 21` it is $3,966.21 and under.
 Read both out of `check --json` rather than out of this paragraph.
 
-The `gpu-8xa100` figures that once stood here — about 6 hours and $135 — are still removed
-rather than corrected. Nothing in this branch has run on an A100. It is the obvious way to buy
-the 10B horizon back, since an NVLink shape is not bound by the wire this one is, but that is a
-claim with no measurement under it and the honest next step is a 100-step probe there for a few
-dollars, not a $4,000 tranche.
+The `gpu-8xa100` figures that once stood here — about 6 hours and $135 — were removed for having
+no measurement under them, and the honest next step was called as a 100-step probe there for a
+few dollars rather than a $4,000 tranche. **That probe ran, and it says the reach constraint is
+an L40S constraint and not a physical one.** At the measured 2.91 s/step the full 12,715-step
+arm is **11.5 hours and about $253 a cell** on `gpu-8xa100`, against 37.7 hours and $395 on
+`gpu-4xl40s` — comfortably inside the 24-hour workload bound, with no second attempt needed and
+none of the `RETRY_ONLY_WHAT_A_RETRY_FIXES` reasoning above coming into play at all. The removed
+figures were low by about half and were right about the conclusion.
+
+This changes nothing for this tranche and everything for the sentence that says the 10B horizon
+"needs a second tranche as well". The horizon is still the wrong purchase — D^(+0.328) is not a
+statement about what a machine costs — but it is no longer *unreachable*, and the deferral
+should be read as a choice rather than as the platform's ceiling. See
+[The shape for stages 2, 3 and 4](#the-shape-for-stages-2-3-and-4) for why the money it would
+cost still buys replicates instead.
 
 ### Resuming across attempts: what holds, and what does not
 
@@ -1108,6 +1335,21 @@ of this document. The 19-minute median queue is the one figure here that `check 
 confirms, alongside a worst observed wait of 6.4 hours. Nothing on `gpu-8xa100` has been
 re-derived, because nothing in this branch has run there.
 
+**A third caveat, which retires most of the second.** Something has now run there —
+`run_019fe262-778d`, 74 steps — and `check --json` has been read against that shape. **The $20
+admin threshold no longer exists.** Policy v5 removed it deliberately, on the argument that an
+hourly rate cannot rank two requests by what they commit and a worst-case total can, and
+`classify_request` cannot return `EXCEPTION` at all under v5 or v6; `run-approval-admin` is
+reserved for capacity blocks, which nothing has designed. A five-cell fan-out on `gpu-8xa100`
+comes back `approval_class: routine`, `approving_environment: run-approval-lead` — the same gate
+as the L40S, which is also what released the probe. **The 89-minute queue figure is stale too**:
+`check` now reports a 61-minute median over thirteen runs on that shape, worst observed 12.6
+hours, fourteen nodes arrived over three days and none of the thirteen was ever cancelled for
+want of capacity. Against the L40S's own line — six nodes, ten queued runs, eight started at a
+19-minute median, and two cancelled by hand while stuck in `RUNNABLE`, one at a hundred minutes
+— the A100 is the slower queue and the deeper pool, and only the first of those two was ever
+written down here. Read both out of `check --json` rather than out of this paragraph.
+
 **What `check --json` reported on 2026-08-08** for a three-cell fan-out of this repository on
 `gpu-4xl40s`: `approval_class: routine`, `approving_environment: run-approval-lead`,
 `maximum_attempts: 2`, `maximum_runtime_hours: 24`. A fan-out never self-releases whatever it
@@ -1124,7 +1366,11 @@ regardless. Re-read it rather than quoting this.
    rather than by making the step faster — see
    [What a full arm actually costs](#what-a-full-arm-actually-costs-and-why-it-cannot-be-submitted-as-one-run).
    Flash-attention and a bfloat16 gradient reduction are both still on the table and neither
-   closes a gap this size on its own; an NVLink shape would, and is unmeasured.
+   closes a gap this size on its own; an NVLink shape would, and is unmeasured. **It is measured
+   now** — `run_019fe262-778d` puts the full horizon at 11.5 hours on `gpu-8xa100` — and the
+   horizon still does not come back, for the reason in
+   [The shape for stages 2, 3 and 4](#the-shape-for-stages-2-3-and-4), which is that a fixed
+   budget spends it better on replicates.
 4. **Arm 1, three seeds, as one three-cell fan-out.** Fills the noise floor table above,
    including ρ̂ and Bartlett. It is also the first submission, so it is the one that finds out
    whether the fan-out resolves three different seeds — check that before submitting the

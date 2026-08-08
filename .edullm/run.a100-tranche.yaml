@@ -8,9 +8,27 @@
 # seed sigma against token count directly on 1,050 models and it falls as D^-0.172, bootstrap
 # CI [0.088, 0.306]. A run costs in proportion to D, so a fixed budget buys n = C/D runs and
 # the standard error of an arm mean goes as D^(+0.328) -- positive across the whole interval.
-# Every dollar moved from seeds into horizon makes the experiment LESS sensitive. Combined with
-# the finding that the two shapes price within 1.5% per token, the A100 could only ever have
-# made a longer run legal, never cheaper, and a longer run is not what the money should buy.
+# Every dollar moved from seeds into horizon makes the experiment LESS sensitive, and no machine
+# moves that exponent, so a longer run is not what the money should buy at any price.
+#
+# THE SENTENCE THAT STOOD HERE ALSO SAID "COMBINED WITH THE FINDING THAT THE TWO SHAPES PRICE
+# WITHIN 1.5% PER TOKEN, THE A100 COULD ONLY EVER HAVE MADE A LONGER RUN LEGAL, NEVER CHEAPER."
+# THERE WAS NO SUCH FINDING AND THE CLAIM IS FALSE. 1.5% is the gap at 5.00 s/step, which is the
+# budget threshold `run.yaml` nominates and which no instrument ever reported; it was read as
+# though it were a measurement, and it went into the message of commit 38b665919 and into the
+# reason `run_019fe262-778d` was cancelled at step 74 of 100. The probe had by then measured
+# 2.91 s/step, and at the $10.4926 and $21.9576 an hour `edullm check --json` reports, that is
+# $0.0226 per million tokens against the L40S's $0.0382. The A100 is 41% cheaper per token and
+# 3.55x faster per step. It could have made the tranche cheaper, and the claim that it could not
+# is the reason nobody read the probe before killing it.
+#
+# THE CONCLUSION SURVIVES ON ITS FIRST LEG AND ONLY ON ITS FIRST LEG, WHICH IS WHY THIS FILE IS
+# STILL SUPERSEDED. D^(+0.328) is a statement about horizon and a cheaper machine does not touch
+# it, so this file's 12,715 steps are still the wrong purchase. What the price leg was doing was
+# closing off the other thing a cheaper machine buys -- more replicates at the SAME horizon,
+# which is the one purchase the exponent argues for. That question is live and is settled in
+# hyper-connections.md under "The shape for stages 2, 3 and 4", on the confound rather than on
+# the price.
 #
 # So the horizon stayed at 6,000 steps and the money bought five seeds an arm instead of three:
 # MDE 0.018 nats against this file's 0.022, for less money. A later grant above the original
