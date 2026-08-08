@@ -63,5 +63,4 @@ command: >-
   --arm "${ARMS[$I]}" --data-seed "${DSEEDS[$I]}" --init-seed "${ISEEDS[$I]}"
   --sequence-length 4096 --steps 1907 --warmup-steps 191 --learning-rate 1.4e-3
   --global-batch-size 524288 --rank-microbatch-size 8192 --save-interval 954
-  --lm-loss-implementation chunked_linear
   --save-folder "$EDULLM_CHECKPOINT_DIR"'
