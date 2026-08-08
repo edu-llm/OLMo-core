@@ -106,6 +106,16 @@ _BRANCH_LIBRARY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(_
 if os.path.isdir(_BRANCH_LIBRARY):
     sys.path.insert(0, _BRANCH_LIBRARY)
 
+# AND THIS FILE'S OWN DIRECTORY, FOR ITS SIBLINGS. Running `python .edullm/train_on_corpus.py`
+# already puts `.edullm/` on the path as the script's directory, so on the block this line
+# changes nothing. It is here for every other way in -- `python -m`, an exec from another
+# directory, a debugger, a test that imports the module -- because a sibling import that works
+# only under one invocation is a thing that breaks the first time somebody invokes it another
+# way, which on this schedule would be somebody debugging at 07:00.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
 # THE CACHING ALLOCATOR IS CONFIGURED HERE BECAUSE THERE IS NOWHERE ELSE TO PUT IT.
 #
 # `expandable_segments:True` lets the allocator grow a segment rather than reserving a new
@@ -145,6 +155,11 @@ from typing import Dict, Iterator, List, Optional, cast
 
 import rich
 import torch
+
+# A sibling of this file rather than a package, because the clone is what the block reads and
+# `.edullm/` is what rides it. It imports torch and nothing else, so the same substitution can
+# be verified on a bare machine with a card -- see `.edullm/verify_grouped_mm.py`.
+from moe_kernel import install_grouped_mm
 
 from olmo_core.config import Config, DType
 from olmo_core.data import (
@@ -1219,69 +1234,6 @@ def show(config) -> None:
     shown = copy.copy(config.dataset)
     shown.paths = [f"<{len(config.dataset.paths)} objects>"]
     rich.print(replace(config, dataset=shown))
-
-
-def grouped_mm_gmm(a, b, batch_sizes, trans_b: bool = False):
-    """A drop-in for ``grouped_gemm.ops.gmm``, backed by a kernel torch already ships.
-
-    Same signature and same result, so it can be substituted for the module-level ``gmm``
-    that :class:`DroplessMoEMLP` captures in its constructor.
-
-    ``batch_sizes`` is the token count per *local* expert and ``torch._grouped_mm`` wants the
-    inclusive cumulative sum of those counts, as int32, on the same device as the activations.
-    Computing it with ``torch.cumsum`` rather than in Python is most of why this is faster:
-    the loop it replaces calls ``batch_sizes.cpu()``, and a device-to-host copy is a
-    synchronisation the whole stream waits on.
-
-    ``trans_b`` transposes the weight per expert. The transposed view is passed through
-    without a copy -- verified accepted by the kernel in the image rather than assumed, since
-    the view is not contiguous and a kernel that rejected it would have cost a 33 MB copy per
-    call on every one of the 192 calls a step makes.
-    """
-    offsets = torch.cumsum(batch_sizes, dim=0).to(device=a.device, dtype=torch.int32)
-    return torch._grouped_mm(a, b.transpose(-2, -1) if trans_b else b, offs=offsets)
-
-
-def install_grouped_mm(*, enabled: bool = True) -> str:
-    """Route the dropless MoE through ``torch._grouped_mm``. Returns what it decided, for the log.
-
-    WHY THIS IS A MONKEYPATCH AND NOT AN EDIT TO ``mlp.py``. On the block, only ``.edullm/``
-    is read from the branch clone. ``import olmo_core`` resolves to the copy baked into the
-    image, so a change under ``src/olmo_core/`` would sit in the repository looking applied
-    and never run. Patching from here is not a shortcut around review; it is the only place
-    the change can be made without rebuilding the image.
-
-    WHAT IT IS WORTH. ``grouped_gemm`` is absent from the training image -- observed by
-    running the container, not inferred -- so ``DroplessMoEMLP`` takes its fallback: a Python
-    loop over local experts, one GEMM each, with a device-to-host synchronisation per call, in
-    a region ``torch.compile`` is explicitly disabled for. At expert-parallel degree 8 each
-    rank holds four local experts rather than 32, which is why the fallback costs an estimated
-    1.1x-1.35x rather than the order of magnitude it would at degree 1. On a 50B-token run the
-    central estimate is worth about an hour and a half.
-
-    WHAT IT MUST NOT DO. Take effect when the fast package is present. ``gmm`` is ``None``
-    exactly when ``grouped_gemm`` failed to import, so a future image that carries the package
-    keeps using it and this function reports ``grouped_gemm`` and returns.
-
-    THE ESCAPE. ``--no-moe-grouped-mm`` puts the run back on the loop the library shipped,
-    which is slow and is known to work. If anything about the MoE looks wrong in the first
-    hundred steps, that flag is the first thing to try, because it is the only part of the
-    numerical path this file changes.
-    """
-    try:
-        from olmo_core.nn.moe import mlp as moe_mlp
-    except ImportError:
-        return "no MoE module, nothing to patch"
-
-    if getattr(moe_mlp, "gmm", None) is not None:
-        return "grouped_gemm is present, left alone"
-    if not enabled:
-        return "disabled by --no-moe-grouped-mm, using the library's Python loop"
-    if not hasattr(torch, "_grouped_mm"):
-        return f"torch {torch.__version__} has no _grouped_mm, using the library's Python loop"
-
-    moe_mlp.gmm = grouped_mm_gmm
-    return "grouped_gemm absent, routed through torch._grouped_mm"
 
 
 def train(config, opts=None) -> None:

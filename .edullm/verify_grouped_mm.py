@@ -101,7 +101,11 @@ def check(name, device, num_experts, counts, k, n, trans_b, grouped_mm_gmm) -> b
 
 def main() -> int:
     sys.path.insert(0, __file__.rsplit("/", 1)[0])
-    from train_on_corpus import grouped_mm_gmm, install_grouped_mm
+    # `moe_kernel` and not `train_on_corpus`. The entrypoint reaches olmo_core, edullm_data,
+    # rich and wandb, so importing it would confine this check to a machine carrying the whole
+    # training image -- which is not where a spare GPU is easiest to find. The twenty lines
+    # under test live in a module that imports torch and nothing else, for exactly this.
+    from moe_kernel import grouped_mm_gmm, install_grouped_mm
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     # Full size on a GPU always, and on CPU only when asked, because emulated it does not
