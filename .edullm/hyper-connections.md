@@ -102,6 +102,49 @@ depth-routing change. So the effect is intervention-dependent, and if arms 2 thr
 flat this is a clean scale-boundary result rather than a failure — but that is said here, in
 advance, rather than afterwards.
 
+## Track B: MHAR, scoped but not yet wired into a model
+
+`MHARRoutingSite` and `MHARConfig` are built and tested in
+`src/olmo_core/nn/residual_stream.py`. What is *not* built is the model-level threading, and
+that is deliberate: it changes the block contract from `Tensor -> Tensor` to
+`List[Tensor] -> List[Tensor]`, which is shared code that Track A's runs pass through. It waits
+until the baseline seeds are launched.
+
+Four things the scoping turned up that change how this has to be run.
+
+**"Zero added parameters" is only true against single-head AttnRes.** The `H` queries are a
+reshape of the same `d_model` numbers, so `H=8` is iso-parameter, iso-FLOP *and* iso-wall-clock
+with `H=1` — an unusually clean control, and the paper's real contribution. Against a plain
+transformer it adds `(2L+1) × 2 × d_model`, which is 67,584 parameters here, 0.014%. The test
+suite reproduces the paper's own +100K at 350M and +187K at 1B from that formula, which is what
+confirms the site count is right. Write it up as parameter-matched, not zero-parameter.
+
+**MHAR needs its own baseline.** It is specified and validated under pre-norm: the routed
+mixture goes through the sublayer's pre-norm before the sublayer. OLMo-2 and OLMo-3 use
+reordered norm, where the sublayer receives its input unnormalized — and the routed mixture is
+a convex combination of *raw sublayer outputs*, whose scale is nothing like a residual sum's.
+This is the same trap `HyperConnectionStream` documents when it reads the lanes with a mean
+rather than a sum. So Track B cannot share Track A's baseline, and that is one more three-seed
+run in the budget.
+
+**There is no free kernel.** `flash-linear-attention` does ship AttnRes at
+`fla.ops.attnres.fused_attnres`, but it is strictly single-head — the online softmax state is
+scalar and there is no head axis anywhere in the signature. It also first appears in fla 0.5.1
+and this repo pins 0.4.1.
+
+**Never stack the sources.** At `d_model` 1024, 16 layers, sequence 4096, batch 8, the 33
+sources are 2.1 GiB held once each and 35 GiB if each site materializes its own stacked copy
+for autograd. That quadratic is what makes the authors' own reference implementation run out of
+memory above 1B, and `torch.compile` does not remove it. `MHARRoutingSite.forward` takes a list
+and scores it in two passes for exactly this reason.
+
+The arms, once it is wired: pre-norm baseline, single-head AttnRes, MHAR `H=8`, then `H=16` and
+a random-init-query control conditional on `H=8` clearing the noise floor. Not `H=4` versus
+`H=8` — the paper's own 1B numbers put those 0.003 nats apart, which this scale cannot resolve.
+The interesting arm is single-head: the paper's thesis is not "MHAR is better" but "single-head
+AttnRes is not robust and the free reshape fixes it", and that claim is corpus-dependent.
+Dolma2 is a third corpus, neither of theirs.
+
 ## Preflight, and why it exists
 
 ```bash

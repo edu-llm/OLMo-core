@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Tuple
+from typing import List, Tuple
 
 import torch
 import torch.nn as nn
@@ -14,6 +14,8 @@ __all__ = [
     "HyperConnectionMode",
     "HyperConnectionConfig",
     "HyperConnectionStream",
+    "MHARConfig",
+    "MHARRoutingSite",
     "expand_residual_lanes",
     "reduce_residual_lanes",
     "output_init_scale",
@@ -195,6 +197,148 @@ class HyperConnectionConfig(ModuleConfig):
                 )
             )
         return overrides
+
+
+@dataclass
+class MHARConfig(ModuleConfig):
+    """
+    A config for :class:`MHARRoutingSite`, multi-head attention residuals
+    (`arXiv 2607.27230 <https://arxiv.org/abs/2607.27230>`_).
+
+    :param n_route_heads: ``H``. The paper's optimum is flat over 4-8, and their own 1B numbers
+        put ``H=4`` and ``H=8`` 0.003 nats apart -- inside anyone's noise -- so a sweep should
+        step further than that to learn anything.
+    """
+
+    n_route_heads: int = 8
+    eps: float = 1e-6
+    zero_init_query: bool = True
+    """
+    Zero-initialized queries make every depth softmax start as a uniform average over sources.
+    Load-bearing rather than tidy: a random query makes the softmax arbitrarily peaked at step
+    zero, and the paper's own web-corpus tables were measured before they fixed this.
+    """
+
+    def build(self, *, d_model: int, init_device: str = "cpu") -> "MHARRoutingSite":
+        return MHARRoutingSite(
+            d_model=d_model,
+            n_route_heads=self.n_route_heads,
+            eps=self.eps,
+            zero_init_query=self.zero_init_query,
+            init_device=init_device,
+        )
+
+    def num_params(self, d_model: int) -> int:
+        """
+        Per routing site: one query and one key-norm gain, both of width ``d_model``.
+
+        There are ``2L + 1`` sites in a model -- two per block plus one after the stack -- so a
+        16-layer model at ``d_model`` 1024 adds 67,584 parameters, about 0.014%.
+
+        This is where the widely repeated "zero added parameters" claim needs care. It is true
+        of ``H`` specifically: the ``H`` queries are a reshape of the same ``d_model`` numbers,
+        so ``H=8`` is iso-parameter, iso-FLOP and iso-wall-clock with ``H=1``. It is not true
+        against a plain transformer, which has no routing sites at all.
+        """
+        return 2 * d_model
+
+
+class MHARRoutingSite(nn.Module):
+    """
+    One depth-routing site: a softmax over every preceding sublayer output, per head.
+
+    Replaces the additive residual rather than augmenting it. Where an ordinary block reads
+    ``x`` and writes ``x + T(norm(x))``, a routed block reads a learned mixture of *all* sources
+    produced so far and appends its output as a new source. Eq. 3 of the paper, with ``s_i``
+    the sources and coordinates split into ``H`` contiguous heads of width ``d/H``:
+
+    .. code-block::
+
+        alpha_i^(h) = softmax_i( q_h . RMSNorm(s_i)_[h] )
+        out_[h]     = sum_i alpha_i^(h) s_i,[h]
+
+    Three details decide whether this is the published mechanism or something near it. The
+    normalization is over the **full** ``d_model`` row and then sliced, not per head -- the
+    authors' reference and their fused kernel agree on this against their own paper figure, and
+    per-head normalization would strip the magnitude signal the logits read. The **values are
+    raw**, only the keys are normalized. And there is no ``1/sqrt(d)`` on the logits.
+
+    Sources are taken as a list and never stacked. Stacking is not a style preference: at
+    ``d_model`` 1024, 16 layers, sequence 4096 and batch 8, the 33 sources are 2.1 GiB held once
+    each, and 35 GiB if every site materializes its own stacked copy for autograd. That
+    quadratic is what makes the reference implementation run out of memory above 1B.
+    """
+
+    def __init__(
+        self,
+        *,
+        d_model: int,
+        n_route_heads: int = 8,
+        eps: float = 1e-6,
+        zero_init_query: bool = True,
+        init_device: str = "cpu",
+    ):
+        super().__init__()
+        if d_model % n_route_heads != 0:
+            raise ValueError(f"d_model {d_model} is not divisible by n_route_heads {n_route_heads}")
+        self.d_model = d_model
+        self.n_route_heads = n_route_heads
+        self.head_dim = d_model // n_route_heads
+        self.eps = eps
+        self.zero_init_query = zero_init_query
+
+        self.mhar_query = nn.Parameter(torch.empty(d_model, device=init_device))
+        self.mhar_key_gain = nn.Parameter(torch.empty(d_model, device=init_device))
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        with torch.no_grad():
+            if self.zero_init_query:
+                nn.init.zeros_(self.mhar_query)
+            else:
+                nn.init.normal_(self.mhar_query, mean=0.0, std=0.02)
+            nn.init.ones_(self.mhar_key_gain)
+
+    def extra_repr(self) -> str:
+        return f"d_model={self.d_model}, n_route_heads={self.n_route_heads}"
+
+    def _logits(self, source: torch.Tensor) -> torch.Tensor:
+        """Per-head scores for one source, shape ``(batch_size, seq_len, n_route_heads)``."""
+        variance = source.float().pow(2).mean(dim=-1, keepdim=True)
+        key = (source.float() * torch.rsqrt(variance + self.eps)).to(source.dtype)
+        key = key * self.mhar_key_gain
+        shape = (*key.shape[:-1], self.n_route_heads, self.head_dim)
+        return torch.einsum(
+            "hk,...hk->...h",
+            self.mhar_query.view(self.n_route_heads, self.head_dim),
+            key.view(shape),
+        )
+
+    def forward(self, sources: List[torch.Tensor]) -> torch.Tensor:
+        """
+        Route the sources into the vector the next sublayer sees.
+
+        :param sources: Every sublayer output so far, plus the embeddings, each of shape
+            ``(batch_size, seq_len, d_model)``. Never stacked; see the class docstring.
+
+        :returns: The routed mixture, of the same shape as one source.
+        """
+        if not sources:
+            raise ValueError("MHAR needs at least one source to route")
+
+        # Two passes over the list. The first is over (batch, seq, heads) scores, which are
+        # d_model/head_dim times smaller than a source, so the only full-size tensors alive at
+        # once are the sources themselves -- which the caller already holds.
+        weights = torch.softmax(
+            torch.stack([self._logits(s) for s in sources], dim=0).float(), dim=0
+        )
+
+        routed = torch.zeros_like(sources[0])
+        flat = (*routed.shape[:-1], self.n_route_heads, self.head_dim)
+        view = routed.view(flat)
+        for i, source in enumerate(sources):
+            view = view + weights[i].unsqueeze(-1).to(source.dtype) * source.view(flat)
+        return view.reshape(routed.shape)
 
 
 def _set_full(param: torch.Tensor, value: torch.Tensor):
