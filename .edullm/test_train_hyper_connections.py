@@ -182,6 +182,23 @@ def test_held_out_shards_come_out_of_training_and_are_the_same_for_every_arm():
     assert len(set(carves)) == 1, "the held-out set moved between arms"
 
 
+def test_the_held_out_dataset_is_the_shape_the_evaluator_demands():
+    """
+    LMEvaluator refuses anything but a padded FSL dataset, and it refuses it at build time --
+    which on this platform means eighteen minutes into a run, not at submission. The first
+    attempt at the held-out set died exactly there.
+    """
+    from olmo_core.data import NumpyPaddedFSLDatasetConfig
+
+    config, _ = build(BASE_ARGV + ["--arm", "baseline"])
+    eval_dataset = config.trainer.callbacks["held_out"].eval_dataset
+
+    assert isinstance(eval_dataset, NumpyPaddedFSLDatasetConfig)
+    assert eval_dataset.sequence_length == config.dataset.sequence_length
+    assert eval_dataset.tokenizer == config.dataset.tokenizer
+    assert eval_dataset.dtype == config.dataset.dtype
+
+
 def test_held_out_can_be_turned_off():
     config, _ = build(BASE_ARGV + ["--arm", "baseline", "--held-out-shards", "0"])
     assert "held_out" not in config.trainer.callbacks

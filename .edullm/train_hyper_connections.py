@@ -208,8 +208,7 @@ def _add_held_out_evaluation(config, opts):
     that it read a sealed corpus, and one whose failure would look like a training failure.
     These shards come out of the same manifest as the training data.
     """
-    from dataclasses import replace
-
+    from olmo_core.data import NumpyPaddedFSLDatasetConfig
     from olmo_core.train.callbacks import LMEvaluatorCallbackConfig
 
     config.trainer = config.trainer.with_callback(
@@ -225,10 +224,20 @@ def _add_held_out_evaluation(config, opts):
     )
     config.dataset.paths = train_paths
 
+    # A padded dataset rather than the training dataset's shape, and the evaluator refuses
+    # anything else. It is also the right shape for this: one padded instance per document
+    # scores each document on its own, where the training dataset's contiguous blocks would
+    # cut documents across instance boundaries and score the fragments.
     config.trainer = config.trainer.with_callback(
         "held_out",
         LMEvaluatorCallbackConfig(
-            eval_dataset=replace(config.dataset, paths=eval_paths),
+            eval_dataset=NumpyPaddedFSLDatasetConfig(
+                paths=eval_paths,
+                sequence_length=config.dataset.sequence_length,
+                tokenizer=config.dataset.tokenizer,
+                dtype=config.dataset.dtype,
+                work_dir=config.dataset.work_dir,
+            ),
             eval_interval=opts.eval_interval,
             eval_on_finish=True,
         ),
