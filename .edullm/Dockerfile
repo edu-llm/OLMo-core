@@ -85,9 +85,41 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*; \
     cc --version
 
-# The build context is the repository root, so the root .dockerignore is what keeps .git
-# out of this layer, and out of the context entirely.
-COPY . .
+# THE DEPENDENCIES ARE INSTALLED ABOVE THE SOURCE COPY, AND THE REASON IS MEASURED.
+#
+# This step used to sit below `COPY . .`, which put the four-gigabyte dependency install
+# downstream of every source edit. Docker invalidates a layer and everything after it when
+# an input changes, so a one-line change to a training script rebuilt the whole tree and
+# pushed a four-gigabyte layer that deduplicated against nothing already in the registry.
+# Read out of ECR on 2026-08-05: 59 images of this repository, 243.52 GiB stored, 2.39 GiB
+# of it shared, and the per-image dependency layer distinct in all 59 -- 4335.7 MiB apiece,
+# differing only because the commit differed.
+#
+# Above the copy the layer is keyed on pyproject.toml and on this file, so it is shared by
+# every image built from one dependency set and rebuilt only when the dependencies
+# themselves move. edullm-data is the control: its dependency install has been above its
+# source copy all along, and its 40.0 MiB dependency layer is one blob shared by every
+# image that runs it, where the same repository's earlier `pip install .` below the copy
+# produced twelve distinct 36.2 MiB blobs for twelve builds.
+#
+# ONLY pyproject.toml IS COPIED HERE, WHICH IS THE POINT RATHER THAN AN ECONOMY. Copying
+# more of the tree would key this layer on files that do not determine the dependency set,
+# and each one would be another way for a source edit to throw the install away again.
+#
+# THE REQUIREMENTS ARE READ OUT OF pyproject.toml RATHER THAN RESTATED HERE. Writing the
+# thirteen dependencies and the wandb extra into this file would duplicate the manifest and
+# let the copy drift from it in silence -- a dependency added to the project would simply
+# not be installed in this layer, and would be picked up later by the project install
+# below, quietly restoring the four-gigabyte layer this step exists to prevent. tomllib is
+# in the standard library at the 3.12.13 the registered base carries, so reading the
+# manifest costs no package.
+#
+# The project itself is deliberately NOT installed here. Installing it would need the
+# source, which is the thing this step is above, and a stub build would put an
+# `ai2-olmo-core 2.5.0` on disk that the real install below would then find already
+# satisfied and skip -- leaving an image whose package list looks right and whose code is
+# absent.
+COPY pyproject.toml ./
 
 # TORCH IS PINNED TO AN EXACT VERSION AND INSTALLED FIRST, WHICH IS THE WHOLE ARGUMENT.
 #
@@ -131,15 +163,32 @@ COPY . .
 # dev extra, which would drag in pytest, mypy, sphinx and the rest of a contributor's
 # toolchain -- none of which belongs in an image an untrusted training command runs inside.
 #
-# THE ASSERTION IS THE POINT OF THIS STEP, not the install. pip is free to decide some
-# dependency's metadata is better served by a different torch and replace a CUDA build with
-# a CPU wheel. Nothing would fail: the image builds, the container starts, the job runs, and
-# it trains on the CPU at GPU prices while every log line looks ordinary. torch.version.cuda
-# is None on a CPU build and a string on a CUDA one, so this turns the most expensive silent
-# failure available here into a failed build.
+# botocore's `crt` EXTRA IS BESIDE boto3 BECAUSE THE CHECKSUM A CHECKPOINT WRITE ASKS FOR IS
+# NOT IN botocore ITSELF. The platform commits a checkpoint by putting the payload with
+# `ChecksumAlgorithm="CRC32C"` and then a `_SUCCESS` object carrying the digest S3 attested
+# back; its reader compares the two and calls a checkpoint it cannot verify corrupt. So the
+# algorithm is load-bearing rather than incidental, and CRC-32C is the one S3 offers as a
+# whole-object checksum on a multipart upload where SHA-256 is composite-only. botocore has
+# no pure-Python CRC-32C: `botocore.httpchecksum` adds it to the supported set only when
+# `awscrt` imports, which is what the extra installs.
 #
-# The version is re-asserted alongside it, because the pin above only binds if nothing later
-# in the resolution moved it.
+# Found the way these things are, again, and at the end rather than the start. Run
+# run_019fcf53 on 2026-08-05 pulled the image, built the model, trained twenty steps on a
+# T4, logged every one of them to W&B, and then died on the first line after the training
+# loop with `botocore.exceptions.MissingDependencyException: Missing Dependency: Using
+# CRC32C requires an additional dependency. You will need to pip install botocore[crt]
+# before proceeding.` A whole run's compute, and nothing kept.
+#
+# NAMED HERE RATHER THAN LEFT TO boto3, which depends on botocore without extras, and no
+# other dependency in this image asks for this one. It sits on the same pip invocation as
+# boto3 deliberately: one resolution then picks the botocore both agree on, where a separate
+# later install can move botocore under boto3's feet.
+#
+# UNPINNED, LIKE boto3 ABOVE AND UNLIKE torch BELOW, AND THE LINE BETWEEN THEM IS WHAT A
+# RESOLVED VERSION CHANGES. A different torch changes what the model computes and so what a
+# rebuild of one commit produces. A different awscrt changes how fast a CRC-32C is arrived
+# at, not what it is -- the value is Castagnoli's and is fixed by the standard, which is why
+# the check value below can be written down here at all.
 #
 # THE DATASET READER IS INSTALLED HERE BECAUSE A TRAINING RUN CANNOT OPEN A CORPUS WITHOUT
 # IT. `edullm-data` publishes the platform corpora into s3://edullm-data behind a validator,
@@ -165,8 +214,50 @@ COPY . .
 # The import assertion below is the same argument as the one above it: `import edullm_data`
 # would prove the distribution installed, and `from edullm_data.read import dataset_paths`
 # proves the module a training run actually reaches for loads.
+RUN set -eux; \
+    python -m pip install --no-cache-dir "torch==2.9.0"; \
+    python -c "import tomllib; project = tomllib.load(open('pyproject.toml', 'rb'))['project']; open('/tmp/dependencies.txt', 'w').write('\n'.join(project['dependencies'] + project['optional-dependencies']['wandb']) + '\n')"; \
+    python -m pip install --no-cache-dir -r /tmp/dependencies.txt boto3 "botocore[crt]"; \
+    rm /tmp/dependencies.txt; \
+    python -m pip install --no-cache-dir "edullm-data @ https://github.com/edu-llm/edullm-data/archive/38bf831a6c3f445e394784018441fd59288b876c.tar.gz"
+
+# The build context is the repository root, so the root .dockerignore is what keeps .git
+# out of this layer, and out of the context entirely.
+COPY . .
+
+# THE PROJECT ITSELF, AFTER ITS SOURCE AND AFTER ITS DEPENDENCIES, AND THE RESOLUTION IS
+# THE SAME ONE IT ALWAYS WAS. This is still `.[wandb]` rather than `--no-deps .`, which
+# would be the faster spelling and the wrong one: --no-deps would install the project
+# without checking that the layer above actually covered its requirements, so a dependency
+# added to pyproject.toml and missed by the extraction would go absent from the image
+# instead of being installed here. Asking for the extra means pip verifies the whole set,
+# finds it satisfied by the layer above, and reaches the network for nothing -- and if it
+# ever does reach the network, that is the extraction having drifted and worth the cost.
 #
-# THE LAST LINE IMPORTS SUBMODULES, AND THE SHALLOW VERSION OF IT ALREADY FAILED ONCE.
+# The layer this produces is the project's own files. Measured on 2026-08-05 by building
+# this file twice against the registered base with only a source file changed between the
+# two, and pushing both to a registry: the second image added 4.4 MiB of blobs, where the
+# combined step below the source copy wrote 4335.7 MiB that shared with nothing. The second
+# build also took 26 seconds against roughly 400 for the first, because the dependency
+# layer above is a cache hit rather than a re-resolution.
+#
+# THE ASSERTIONS RUN HERE, BELOW THE LAST INSTALL, WHICH IS THE ONLY PLACE THEY MEAN
+# ANYTHING. Every one of them describes the state the image ships in, and this install is
+# the last step that can change it: pip resolving the project is free to move a dependency
+# the layer above put there. An assertion above the copy would be checking a state no
+# container ever runs.
+#
+# THE CUDA CHECK IS THE POINT OF THE PAIR, not the install. pip is free to decide some
+# dependency's metadata is better served by a different torch and replace a CUDA build with
+# a CPU wheel. Nothing would fail: the image builds, the container starts, the job runs, and
+# it trains on the CPU at GPU prices while every log line looks ordinary. torch.version.cuda
+# is None on a CPU build and a string on a CUDA one, so this turns the most expensive silent
+# failure available here into a failed build.
+#
+# The version is re-asserted alongside it, because the pin above only binds if nothing later
+# in the resolution moved it.
+#
+# THE SUBMODULE IMPORT IS THE LAST LINE'S SHALLOW VERSION MADE DEEP, AND IT ALREADY FAILED ONCE.
 #
 # It used to read `import olmo_core, boto3, wandb`, which passed on an image whose first
 # GPU training run then died at startup: the top-level package imports lazily, so nothing
@@ -176,13 +267,33 @@ COPY . .
 #
 # So it names what a training workload actually reaches for. Anything that breaks between
 # the pinned torch and this library now breaks the build, where it costs a runner minute.
+#
+# THE CRC-32C LINE IS THE FAILED RUN, MADE INTO A BUILD STEP, AND IT IS TWO CHECKS BECAUSE
+# THERE ARE TWO WAYS TO GET THIS WRONG. `pip install botocore[crt]` succeeding proves a
+# distribution is on disk; it does not prove botocore reached it. botocore imports awscrt
+# inside a try/except and sets HAS_CRT False on any failure -- an incompatible version, a
+# wheel built for another libc -- so an image can carry awscrt and refuse CRC32C anyway,
+# silently, until a training run has already been paid for.
+#
+# The first check is therefore the exact call that died: put_object with
+# ChecksumAlgorithm="CRC32C". Stubber answers it, so it costs no network, no credentials and
+# no bucket -- but botocore resolves the checksum before the stub is consulted, which is
+# precisely the frame the run's traceback names, so the check raises the run's own
+# MissingDependencyException when the CRT is not reachable. Verified both ways on
+# 2026-08-05: it raises on the image published from this file's parent commit and passes
+# once the extra is installed.
+#
+# The second is awscrt's own answer to CRC-32C of b"123456789", which the standard fixes at
+# 0xE3069283 and the platform's checkpoints.py asserts against the same constant. It costs a
+# microsecond and it is the difference between "botocore will use this" and "and the number
+# it gets is right".
 RUN set -eux; \
-    python -m pip install --no-cache-dir "torch==2.9.0"; \
-    python -m pip install --no-cache-dir ".[wandb]" boto3; \
-    python -m pip install --no-cache-dir "edullm-data @ https://github.com/edu-llm/edullm-data/archive/38bf831a6c3f445e394784018441fd59288b876c.tar.gz"; \
+    python -m pip install --no-cache-dir ".[wandb]"; \
     python -c "import torch; assert torch.__version__.startswith('2.9.0'), f'torch was moved off the pin: {torch.__version__}'"; \
     python -c "import torch; assert torch.version.cuda, 'the CUDA build of torch was replaced by a CPU wheel'"; \
     python -c "import boto3, wandb; from olmo_core.data import TokenizerConfig; from olmo_core.nn.transformer import TransformerConfig; print(TransformerConfig.olmo2_190M(vocab_size=TokenizerConfig.gpt2().padded_vocab_size()).__class__.__name__)"; \
+    python -c "import boto3; from botocore import UNSIGNED; from botocore.config import Config; from botocore.stub import Stubber; client = boto3.client('s3', region_name='us-east-1', config=Config(signature_version=UNSIGNED)); stub = Stubber(client); stub.add_response('put_object', {}); stub.activate(); client.put_object(Bucket='b', Key='k', Body=b'123456789', ChecksumAlgorithm='CRC32C')"; \
+    python -c "from awscrt.checksums import crc32c; assert crc32c(b'123456789') == 0xE3069283, 'awscrt computes something other than CRC-32C'"; \
     python -c "from edullm_data.read import dataset_paths, resolve_latest; print(dataset_paths.__module__)"
 
 # FLASH-ATTENTION, AS A PREBUILT WHEEL, BECAUSE THE olmo3_* CONFIGS CANNOT BE BUILT WITHOUT IT.

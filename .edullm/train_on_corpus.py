@@ -40,6 +40,19 @@ that is merely worse than it should be, which is indistinguishable from a bad hy
      header decodes that header as tokens. The headerless ``.u32le.bin`` form is zero here,
      and anything else is refused rather than read wrong.
 
+THE FOURTH THING, WHICH DOES NOT CORRUPT ANYTHING AND IS EXPENSIVE FOR THE OPPOSITE REASON.
+This file trains in bfloat16 by default and a T4 has none: Turing is the one NVIDIA generation
+with tensor cores and without that format. That failure is loud, and it is loud several minutes
+and one billed instance too late, because every stage before the first bfloat16 kernel
+succeeds. The obvious guard does not work either -- ``torch.cuda.is_bf16_supported()`` returns
+true on a T4. So ``main`` reads the device's compute capability against the config it has just
+built and refuses in the first seconds. The check is
+``olmo_core.train.train_module.validate_precision_support``, which lives in the library rather
+than in this file so that every entry point in this repository inherits it when a train module
+is built -- this file is not the only one, and a branch that has never touched
+``src/olmo_core/`` still gets it on the rebase it has to do anyway. See ``--param-dtype`` for
+asking for something the card does have.
+
 HOW THIS SAYS WHAT WENT WRONG, GIVEN THAT NOBODY CAN READ ITS LOG. A container that fails
 before training writes its explanation to a CloudWatch stream that no credential on the
 platform side may read, and Batch reports only ``exitCode`` and "Essential container in task
@@ -79,6 +92,7 @@ from olmo_core.data import (
 )
 from olmo_core.distributed.parallel import DataParallelType
 from olmo_core.distributed.utils import barrier, get_rank
+from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.io import clear_directory, list_directory, normalize_path
 from olmo_core.nn.transformer import TransformerConfig
 from olmo_core.optim import AdamWConfig, CosWithWarmup, OptimGroupOverride
@@ -99,6 +113,7 @@ from olmo_core.train.checkpoint import Checkpointer
 from olmo_core.train.train_module import (
     TransformerDataParallelConfig,
     TransformerTrainModuleConfig,
+    validate_precision_support,
 )
 from olmo_core.utils import seed_all
 
@@ -138,6 +153,11 @@ class Stage(enum.IntEnum):
     THE_CONFIG_WOULD_NOT_BUILD = 70
     THE_TRAINING_ENVIRONMENT_WOULD_NOT_START = 71
     TRAINING_ITSELF_FAILED = 72
+    # Appended rather than slotted in beside 70, where it belongs in time. The numbers are
+    # already in circulation -- they are in the platform's guide and in whatever notes people
+    # kept from diagnosing a dead container -- so renumbering the three stages after it would
+    # silently change the meaning of codes somebody has written down.
+    THE_DEVICE_CANNOT_DO_THE_REQUESTED_PRECISION = 73
 
 
 class Refusal(SystemExit):
@@ -255,8 +275,49 @@ def leave_the_reason_in_wandb(*, run_name: str, stage: Stage, explanation: str) 
 # a 256-entry TokenizerConfig here would produce exactly the uint16 inference described above.
 # The platform already keeps that corpus off the submission form for the same reason; if a
 # byte tokenizer lands upstream, adding a line here is what makes the corpus runnable.
+#
+# TOKENIZER/GIGATOKEN-{BPE,SUPERBPE} ARE EXPLICIT CONFIGS, NOT from_hf. They are Plan A scale
+# tokenizers published under s3://edullm-data/tokenizer/gigatoken-*/v1/ with no HuggingFace
+# source -- vocab 100000 merge ids 0..99999, no added special tokens. Packed Plan B shards
+# concatenate encode().ids with no inserted EOS.
+#
+# identifier IS None ON PURPOSE. TokenizerConfig.identifier is consumed as a local path or
+# HuggingFace id by evaluator_callback (HFTokenizer), generate/chat (AutoTokenizer), and
+# convert_checkpoint -- none accept an s3:// URI. Training on pre-tokenized shards never
+# builds a concrete tokenizer from this field, so a fake s3 path would only fail later at
+# in-loop eval / HF export. Fail immediately if something asks for the files; vendor
+# tokenizer.json into the image and point identifier at that local dir before BPB evals.
+#
+# eos/pad sit PAST the merge range (100000 / 100001) with vocab_size=100002. Using 99999
+# would fingerprint a real merge as a special; nothing in this config emits those ids today
+# (generate_doc_lengths defaults False; labels come from label_mask), but the ids land in
+# the dataset fingerprint and the saved checkpoint config.
+#
+# STYLE: callables rather than bound classmethods, matching smollm2. Lookup is separated from
+# build so a KeyError inside a factory exits 70 (config would not build) rather than 69
+# (unknown tokenizer) -- see the try block in corpus_from_manifest.
+def _gigatoken_bpe() -> TokenizerConfig:
+    return TokenizerConfig(
+        vocab_size=100002,
+        eos_token_id=100000,
+        pad_token_id=100001,
+        identifier=None,
+    )
+
+
+def _gigatoken_superbpe() -> TokenizerConfig:
+    return TokenizerConfig(
+        vocab_size=100002,
+        eos_token_id=100000,
+        pad_token_id=100001,
+        identifier=None,
+    )
+
+
 TOKENIZERS = {
     "tokenizer/dolma2-bpe": TokenizerConfig.dolma2,
+    "tokenizer/gigatoken-bpe": _gigatoken_bpe,
+    "tokenizer/gigatoken-superbpe": _gigatoken_superbpe,
 }
 
 
@@ -326,14 +387,19 @@ def corpus_from_manifest(read, *, dataset_id: str, version: str, tokenizer_id: s
             "in-range-looking id.",
         )
 
+    # Lookup is outside the build call on purpose. A KeyError from TOKENIZERS[...] means the
+    # id is unknown (exit 69). A KeyError raised *inside* a factory (e.g. from_hf missing
+    # vocab_size) must not be rewritten as "unknown tokenizer" -- that lists the id it claims
+    # not to know and loses the real cause. Let factory failures propagate to exit 70.
     try:
-        tokenizer = TOKENIZERS[tokenizer_id]()
+        build_tokenizer = TOKENIZERS[tokenizer_id]
     except KeyError:
         known = ", ".join(sorted(TOKENIZERS)) or "none"
         raise Refusal(
             Stage.THIS_IMAGE_HAS_NO_CONFIG_FOR_THAT_TOKENIZER,
             f"no OLMo-core config for {tokenizer_id}; this image knows: {known}",
         ) from None
+    tokenizer = build_tokenizer()
 
     return Corpus(
         dataset_id=dataset_id,
@@ -549,8 +615,19 @@ def build_config(opts, overrides: List[str]):
         # getting-started command only because a run without one dies on the first compiled
         # region, which is a workaround that costs throughput on every run forever.
         compile_model=True,
+        # param_dtype comes from --param-dtype, whose default is bfloat16 and therefore is
+        # exactly what this line said before the flag existed. The flag is here so the choice
+        # can be made rather than only rejected, and so that it appears in the command text --
+        # the platform reads command words and cannot see a dtype set in code, so `--param-dtype
+        # bfloat16` on a T4 shape is refused at submission and never reaches an instance.
+        #
+        # reduce_dtype stays float32 and has no flag. It is the gradient reduction, fp32 is the
+        # numerically safe answer at every scale this platform runs, and the dotted override
+        # `train_module.dp_config.reduce_dtype=...` reaches it for anyone who disagrees.
         dp_config=TransformerDataParallelConfig(
-            name=DataParallelType.fsdp, param_dtype=DType.bfloat16, reduce_dtype=DType.float32
+            name=DataParallelType.fsdp,
+            param_dtype=DType(opts.param_dtype),
+            reduce_dtype=DType.float32,
         ),
         max_grad_norm=1.0,
         # `warmup`, not the `warmup_steps` the example still passes -- that spelling is
@@ -785,6 +862,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--global-batch-size", type=int, default=256 * 1024)
     parser.add_argument("--rank-microbatch-size", type=int, default=16 * 1024)
     parser.add_argument("--data-seed", type=int, default=0)
+    parser.add_argument(
+        "--param-dtype",
+        default=DType.bfloat16.value,
+        choices=[DType.bfloat16.value, DType.float16.value, DType.float32.value],
+        help="The parameter dtype FSDP holds and computes in. THE DEFAULT IS THE DTYPE THIS "
+        "FILE ALWAYS USED and changing it is not a free choice: it changes the numerics of "
+        "the run, so a sweep half of which predates this flag is not a comparison. float32 "
+        "is the answer on a T4, whose Turing silicon has no bfloat16 at all -- see the "
+        "refusal at startup. float16 is faster there and OLMo-core ships no gradient scaler, "
+        "so it is fp16 without loss scaling.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Resolve and print, do not train.")
     return parser
 
@@ -814,6 +902,34 @@ def main() -> None:
 
     with during(Stage.THE_CONFIG_WOULD_NOT_BUILD):
         config = build_config(opts, overrides)
+
+    # THE CHECK ITSELF LIVES IN olmo_core, AND IS CALLED AGAIN FROM
+    # TransformerTrainModuleConfig.build, WHICH IS WHERE IT CATCHES EVERY OTHER ENTRY POINT
+    # IN THIS REPOSITORY. It is called here too because two things are only true here: this
+    # is before the process group rather than after it, and this file has a stage number and
+    # a W&B write to turn the refusal into something visible from outside a dead container.
+    #
+    # AFTER build_config BECAUSE IT NEEDS THE MERGED CONFIG, AND STILL BEFORE ANYTHING
+    # EXPENSIVE. Everything above this line is local except a HEAD and a GET against the
+    # manifest, so the whole of it is a few seconds; everything below it is the process
+    # group, the model, the data loader and the run. This is the last point at which a
+    # container costs nothing to stop, and the first at which what it is going to do is
+    # settled -- reading argv earlier would be guessing at the same fact from its spelling.
+    #
+    # The whole config rather than config.train_module, because a `model.dtype=bfloat16`
+    # override is reachable from the command line and is not a field of the train module.
+    try:
+        validate_precision_support(config)
+    except OLMoConfigurationError as unusable:
+        # A dry run trains nothing and would succeed on this card, so stopping it would be
+        # this file refusing a run that works. Saying so is still the point of a dry run.
+        if opts.dry_run:
+            log.warning("%s", unusable)
+        else:
+            raise Refusal(
+                Stage.THE_DEVICE_CANNOT_DO_THE_REQUESTED_PRECISION, str(unusable)
+            ) from None
+
     if opts.dry_run:
         show(config)
         return
