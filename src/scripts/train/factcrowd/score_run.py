@@ -370,6 +370,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             corpus = result.corpus
             scored.append(result.scored)
 
+    # BEFORE THE GATE REPORT, NOT AFTER. A gate must never read a partially-trained model. `assign_roles`
+    # keeps the highest step per (cell_id, replicate), which happens to pick a re-run over the crash it
+    # replaced -- but only where a re-run exists. A cell that crashed and was never re-run has one
+    # checkpoint, that checkpoint is its highest, and it would feed G7's sigma or G4's ceiling as though
+    # training had finished.
+    scored, completeness = collect_module.select_complete(scored)
+    for note in completeness:
+        log.warning("  completeness: %s", note)
+    if args.expect_cells and len(scored) != args.expect_cells:
+        raise OLMoConfigurationError(
+            f"{len(scored)} complete cells were scored but --expect-cells said {args.expect_cells}. "
+            f"A table is a claim about a grid, so a short one is refused rather than written. The notes "
+            f"above name what was dropped."
+        )
+    log.info("scored %d complete cell(s)", len(scored))
+
     if args.write_gate_report:
         # Assembled from the runs just scored, so the report cannot claim evidence that was not measured.
         # Written before the rows so a failure here does not leave a CSV that looks admitted.
@@ -395,17 +411,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "run. Score the confirmatory grid with --gate-report %s.",
                 args.write_gate_report,
             )
-
-    scored, completeness = collect_module.select_complete(scored)
-    for note in completeness:
-        log.warning("  completeness: %s", note)
-    if args.expect_cells and len(scored) != args.expect_cells:
-        raise OLMoConfigurationError(
-            f"{len(scored)} complete cells were scored but --expect-cells said {args.expect_cells}. "
-            f"A confirmatory table is a claim about a grid, so a short one is refused rather than "
-            f"written. The notes above name what was dropped."
-        )
-    log.info("scored %d complete cell(s)", len(scored))
 
     rows = collect_module.collect(scored)
     # Admission is granted per endpoint by a report, or not at all. A row that cannot name a passing

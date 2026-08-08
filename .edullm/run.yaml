@@ -3,38 +3,23 @@ workload_profile: olmo-core-check
 suggested_compute: gpu-1xa10g
 # ONE COMMAND PER REPOSITORY, SO THIS FILE IS EDITED PER SUBMISSION.
 #
-# Currently: score the confirmatory grid -- the count axis and the entropy sweep.
+# Currently: re-run M0 to produce a gate report that survives the container.
 #
-# NO --gate-report, DELIBERATELY. run_019fdf85's report was written with Path().write_text() against an
-# s3:// URI, which creates a *local directory named `s3:`* inside the container; the file the log claims
-# to have written does not exist. Remote gate I/O is fixed now, so the M0 job has to be re-run to produce
-# a report that can be read. Without one every row is confirmatory=False, which is the correct answer
-# here regardless: G4 refused the endpoint.
+# WHY THIS HAS TO RUN AGAIN. run_019fdf85 scored the same three prefixes and reported the same verdict,
+# but `--write-gate-report` used Path().write_text() against an s3:// URI -- which Path collapses to
+# `s3:/...`, so it created a *local directory named `s3:`* and wrote there. The log said the report had
+# been written to S3; nothing was. The file that the whole admission mechanism depends on does not exist.
 #
-# --expect-cells 18 refuses a short table. Six prefixes carry 19 physical checkpoint directories for 18
-# logical cells, because the crashed 13m_d0p6 and its re-run both wrote; select_complete drops the
-# partial one and this asserts what is left.
-#
-# SINGLE PROCESS, NOT A FAN-OUT, AND THAT IS THE POINT OF THE CHANGE. The six-way fan-out submitted as
-# run_019fdeab sat 28 hours without its children starting, while the single-process gate job submitted
-# four hours later started in 4 minutes and finished in 7. `--prefix` takes several roots, so one process
-# covers all six submissions and needs no array at all.
-#
-# `--dtype float32` is named because the platform's precision guard reads the command's text and cannot
-# see a dtype chosen in code. `--last-only` scores each cell's final checkpoint, which is where every
-# endpoint number is read.
-#
-# `--json` prints every scored row to stdout, which is the only way to read the numbers without calling
-# AWS: there is no `edullm` verb that fetches a run's output, but `edullm logs` relays what the program
-# printed. The rows are printed just before the three upload lines, so a 50-line tail reaches them.
+# Three prefixes, and all three are needed: the sigma block has no dilution ladder, the ladder has one
+# replicate where G7 needs three, and round two carries the re-runs of the three cells that crashed.
+# `select_complete` resolves each of those to the finished run and drops the crash, so 14 unique cells.
 command: >-
   bash -lc 'B=s3://sbsandbox-intern-edullm-outputs/teams/memory-split/runs;
   python src/scripts/train/factcrowd/score_run.py --prefix
-  $B/run_019fcfc6-c6cd-70be-aec5-e3e10d9fc2c4/
-  $B/run_019fcfc8-14dd-706c-a2fa-ab2492af0bbb/
-  $B/run_019fcfc8-acca-70c6-9345-f3674a37f8b0/checkpoints/
-  $B/run_019fd3c2-ebb6-7038-85b6-eb508275feb4/checkpoints/
-  $B/run_019fd3c2-9cb5-70d1-8aa4-7412df51bc6c/checkpoints/
-  $B/run_019fd3c1-1d5f-7071-9171-a0c93f7dd0cc/
-  --out ${EDULLM_OUTPUT_PREFIX}confirmatory.csv --work-dir /tmp/s
-  --device cuda --dtype float32 --batch-size 512 --last-only --expect-cells 18 --json'
+  $B/run_019fd3c0-8d2c-70ce-873e-4c2e333856b6/
+  $B/run_019fd3bf-ece6-708d-9706-08967ddbd557/
+  $B/run_019fdd84-9e11-707b-bcd3-adbadb4468ea/
+  --out ${EDULLM_OUTPUT_PREFIX}m0.csv --work-dir /tmp/g
+  --device cuda --dtype float32 --batch-size 512 --last-only
+  --expect-cells 14
+  --write-gate-report ${EDULLM_OUTPUT_PREFIX}gates-mano.json --gate-endpoint mano --json'
