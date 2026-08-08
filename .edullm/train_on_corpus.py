@@ -106,6 +106,30 @@ _BRANCH_LIBRARY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(_
 if os.path.isdir(_BRANCH_LIBRARY):
     sys.path.insert(0, _BRANCH_LIBRARY)
 
+# THE CACHING ALLOCATOR IS CONFIGURED HERE BECAUSE THERE IS NOWHERE ELSE TO PUT IT.
+#
+# `expandable_segments:True` lets the allocator grow a segment rather than reserving a new
+# block of the size class it needs, which is what keeps a long run from fragmenting itself
+# into an out-of-memory on a step that allocated no more than the thousand before it. This
+# model fragments for a specific reason: the top-4 expansion in the MoE path allocates six
+# tensors per layer whose size depends on how the router happened to distribute that batch,
+# so the size classes move every step.
+#
+# It reaches the allocator only if it is set before the first CUDA allocation, and it is read
+# from the environment rather than from an API, so a call would be no better placed than this.
+# The natural home is the launch script -- but that lives in the platform repository, arrives
+# by a different route, and would have to be merged and the fleet relaunched for a change to
+# take effect. This file rides the clone. Set the variable outside and that wins: `setdefault`
+# is deliberate, so anyone tuning the allocator from the launch environment is not overridden
+# by a default written weeks earlier.
+#
+# `PYTORCH_ALLOC_CONF` AND NOT `PYTORCH_CUDA_ALLOC_CONF`. torch renamed it. The old spelling is
+# still honoured by the 2.9.0 this image pins, but it logs `PYTORCH_CUDA_ALLOC_CONF is
+# deprecated` when it reads it -- once per process, which on this run is sixty-four warnings in
+# the first seconds of the log, at the moment somebody is scanning that log for the reason a
+# rank did not come up. Both spellings were tried against the real image; the new one is silent.
+os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
+
 import argparse
 import contextlib
 import copy
@@ -414,10 +438,20 @@ def is_olmoe_7b_32x4(opts) -> bool:
 def validate_olmoe_parallelism(opts) -> None:
     """Reject an impossible expert mesh before GPU work starts.
 
-    The intended 64-rank layout is two HSDP replicas with 32 ranks in each
-    expert-parallel shard. Each shard owns the 32 routed experts exactly once.
-    ``WORLD_SIZE`` is set by torchrun, but intentionally absent from unit tests
-    and config inspection, so only validate the product when it is known.
+    THE INTENDED 64-RANK LAYOUT IS EIGHT HSDP REPLICAS OF EIGHT, NOT TWO OF
+    THIRTY-TWO. This docstring said the latter until 2026-08-08 and was
+    describing a layout that was considered and rejected. At shard degree 8 the
+    expert-parallel group is exactly one machine's cards, so the MoE all-to-all
+    stays on NVLink; at 32 the group spans four machines and every all-to-all
+    crosses the fabric. Nothing about that reads as wrong from inside the run --
+    it starts, the loss falls, and each step takes several times what it should
+    -- which is why the number is worth stating correctly in the one place
+    somebody reads to find out what it should be. The platform's dispatch
+    computes the pair and refuses a command that names it differently.
+
+    The checks below are generic and were always correct; only the prose was
+    wrong. ``WORLD_SIZE`` is set by torchrun, but intentionally absent from unit
+    tests and config inspection, so only validate the product when it is known.
     """
     if opts.moe_shard_degree <= 0:
         raise Refusal(
@@ -1187,11 +1221,80 @@ def show(config) -> None:
     rich.print(replace(config, dataset=shown))
 
 
+def grouped_mm_gmm(a, b, batch_sizes, trans_b: bool = False):
+    """A drop-in for ``grouped_gemm.ops.gmm``, backed by a kernel torch already ships.
+
+    Same signature and same result, so it can be substituted for the module-level ``gmm``
+    that :class:`DroplessMoEMLP` captures in its constructor.
+
+    ``batch_sizes`` is the token count per *local* expert and ``torch._grouped_mm`` wants the
+    inclusive cumulative sum of those counts, as int32, on the same device as the activations.
+    Computing it with ``torch.cumsum`` rather than in Python is most of why this is faster:
+    the loop it replaces calls ``batch_sizes.cpu()``, and a device-to-host copy is a
+    synchronisation the whole stream waits on.
+
+    ``trans_b`` transposes the weight per expert. The transposed view is passed through
+    without a copy -- verified accepted by the kernel in the image rather than assumed, since
+    the view is not contiguous and a kernel that rejected it would have cost a 33 MB copy per
+    call on every one of the 192 calls a step makes.
+    """
+    offsets = torch.cumsum(batch_sizes, dim=0).to(device=a.device, dtype=torch.int32)
+    return torch._grouped_mm(a, b.transpose(-2, -1) if trans_b else b, offs=offsets)
+
+
+def install_grouped_mm(*, enabled: bool = True) -> str:
+    """Route the dropless MoE through ``torch._grouped_mm``. Returns what it decided, for the log.
+
+    WHY THIS IS A MONKEYPATCH AND NOT AN EDIT TO ``mlp.py``. On the block, only ``.edullm/``
+    is read from the branch clone. ``import olmo_core`` resolves to the copy baked into the
+    image, so a change under ``src/olmo_core/`` would sit in the repository looking applied
+    and never run. Patching from here is not a shortcut around review; it is the only place
+    the change can be made without rebuilding the image.
+
+    WHAT IT IS WORTH. ``grouped_gemm`` is absent from the training image -- observed by
+    running the container, not inferred -- so ``DroplessMoEMLP`` takes its fallback: a Python
+    loop over local experts, one GEMM each, with a device-to-host synchronisation per call, in
+    a region ``torch.compile`` is explicitly disabled for. At expert-parallel degree 8 each
+    rank holds four local experts rather than 32, which is why the fallback costs an estimated
+    1.1x-1.35x rather than the order of magnitude it would at degree 1. On a 50B-token run the
+    central estimate is worth about an hour and a half.
+
+    WHAT IT MUST NOT DO. Take effect when the fast package is present. ``gmm`` is ``None``
+    exactly when ``grouped_gemm`` failed to import, so a future image that carries the package
+    keeps using it and this function reports ``grouped_gemm`` and returns.
+
+    THE ESCAPE. ``--no-moe-grouped-mm`` puts the run back on the loop the library shipped,
+    which is slow and is known to work. If anything about the MoE looks wrong in the first
+    hundred steps, that flag is the first thing to try, because it is the only part of the
+    numerical path this file changes.
+    """
+    try:
+        from olmo_core.nn.moe import mlp as moe_mlp
+    except ImportError:
+        return "no MoE module, nothing to patch"
+
+    if getattr(moe_mlp, "gmm", None) is not None:
+        return "grouped_gemm is present, left alone"
+    if not enabled:
+        return "disabled by --no-moe-grouped-mm, using the library's Python loop"
+    if not hasattr(torch, "_grouped_mm"):
+        return f"torch {torch.__version__} has no _grouped_mm, using the library's Python loop"
+
+    moe_mlp.gmm = grouped_mm_gmm
+    return "grouped_gemm absent, routed through torch._grouped_mm"
+
+
 def train(config, opts=None) -> None:
     if get_rank() == 0:
         show(config)
 
     seed_all(config.init_seed)
+
+    # Before the build and not after it. `DroplessMoEMLP.__init__` reads the module-level
+    # `gmm` into `self._gmm`, so a patch applied after the model exists changes nothing and
+    # would leave every rank on the slow path while the log said otherwise.
+    verdict = install_grouped_mm(enabled=getattr(opts, "moe_grouped_mm", True))
+    log.info("MoE kernel: %s", verdict)
 
     model = config.model.build(init_device="meta")
     train_module = config.train_module.build(model)
@@ -1380,6 +1483,20 @@ def build_parser() -> argparse.ArgumentParser:
         "refusal at startup. float16 is faster there and OLMo-core ships no gradient scaler, "
         "so it is fp16 without loss scaling.",
     )
+    parser.add_argument(
+        "--no-moe-grouped-mm",
+        dest="moe_grouped_mm",
+        action="store_false",
+        help="Put the dropless MoE back on the Python loop the library falls back to when the "
+        "grouped_gemm package is missing, which it is in this image. ON BY DEFAULT, because "
+        "the loop costs an estimated 1.1x-1.35x of the whole run and torch already ships the "
+        "kernel that replaces it. THIS FLAG IS THE ESCAPE: the substitution is verified "
+        "bit-exact in forward and backward, including experts that receive no tokens, but it "
+        "is the only part of the numerical path this file touches, so if the MoE looks wrong "
+        "in the first hundred steps this is the first thing to turn off. Has no effect on an "
+        "image that carries grouped_gemm -- the package wins either way.",
+    )
+    parser.set_defaults(moe_grouped_mm=True)
     parser.add_argument("--dry-run", action="store_true", help="Resolve and print, do not train.")
     return parser
 
