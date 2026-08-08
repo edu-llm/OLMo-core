@@ -169,6 +169,7 @@ class Transformer(nn.Module):
             for block_idx, block in self.blocks.items()
             if isinstance(block, MoEEngramReorderedNormTransformerBlock)
         ]
+        self._engram_block_indices = tuple(block_idx for block_idx, _ in engram_blocks)
         if engram_blocks:
             expected_signature = engram_blocks[0][1].memory.hash_signature
             for block_idx, engram_block in engram_blocks[1:]:
@@ -649,14 +650,10 @@ class Transformer(nn.Module):
             **kwargs,
         )
 
-        engram_blocks: list[tuple[int, MoEEngramReorderedNormTransformerBlock]] = []
-        for block_key, block in self.blocks.items():
-            if isinstance(block, MoEEngramReorderedNormTransformerBlock):
-                engram_blocks.append((int(block_key), block))
-
-        if engram_blocks:
-            engram_hash_indices = engram_blocks[0][1].memory.compute_hash_indices(input_ids)
-            for block_idx, _ in engram_blocks:
+        if self._engram_block_indices:
+            first_engram_block = self.blocks[str(self._engram_block_indices[0])]
+            engram_hash_indices = first_engram_block.memory.compute_hash_indices(input_ids)
+            for block_idx in self._engram_block_indices:
                 per_block_kwargs.setdefault(block_idx, {})[
                     "engram_hash_indices"
                 ] = engram_hash_indices

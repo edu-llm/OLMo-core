@@ -12,6 +12,9 @@ TransformerConfig = importlib.import_module("olmo_core.nn.transformer.config").T
 TransformerBlockType = importlib.import_module(
     "olmo_core.nn.transformer.config"
 ).TransformerBlockType
+TransformerActivationCheckpointingMode = importlib.import_module(
+    "olmo_core.nn.transformer.config"
+).TransformerActivationCheckpointingMode
 EngramConfig = importlib.import_module("olmo_core.nn.memory").EngramConfig
 OLMoConfigurationError = importlib.import_module("olmo_core.exceptions").OLMoConfigurationError
 MoETransformer = transformer_model.MoETransformer
@@ -87,6 +90,9 @@ def _build_forward_harness(
     model.embeddings = nn.Embedding(model.vocab_size, model.d_model)
     model.embedding_norm = None
     model.blocks = nn.ModuleDict({str(idx): block for idx, block in enumerate(blocks)})
+    model._engram_block_indices = tuple(
+        idx for idx, block in enumerate(blocks) if isinstance(block, _FakeEngramBlock)
+    )
     model.lm_head = None
     model._cp_load_balancer = None
     model._compile_enabled = False
@@ -167,6 +173,31 @@ def test_forward_does_not_compute_hashes_without_engram_blocks(
     assert lngram_memory.input_ids == []
     assert ordinary.kwargs == [{}]
     assert lngram.kwargs == [{}]
+
+
+def test_forward_routes_engram_hashes_after_activation_checkpoint_wrapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        transformer_model,
+        "MoEEngramReorderedNormTransformerBlock",
+        _FakeEngramBlock,
+        raising=False,
+    )
+    shared_hash_indices = object()
+    engram = _FakeEngramBlock(shared_hash_indices)
+    model = _build_forward_harness(
+        Transformer,
+        [_RecordingBlock(), engram],
+    )
+    model.apply_activation_checkpointing(TransformerActivationCheckpointingMode.selected_ops)
+
+    assert not isinstance(model.blocks["1"], _FakeEngramBlock)
+    output = model(torch.tensor([[1, 2]]))
+    output.sum().backward()
+
+    assert len(engram.memory.input_ids) == 1
+    assert engram.kwargs[0]["engram_hash_indices"] is shared_hash_indices
 
 
 class _ResetTrackingMemory(nn.Module):
