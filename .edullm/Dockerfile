@@ -107,7 +107,7 @@ RUN set -eux; \
 # and each one would be another way for a source edit to throw the install away again.
 #
 # THE REQUIREMENTS ARE READ OUT OF pyproject.toml RATHER THAN RESTATED HERE. Writing the
-# thirteen dependencies and the wandb extra into this file would duplicate the manifest and
+# dependencies and the wandb/hpo extras into this file would duplicate the manifest and
 # let the copy drift from it in silence -- a dependency added to the project would simply
 # not be installed in this layer, and would be picked up later by the project install
 # below, quietly restoring the four-gigabyte layer this step exists to prevent. tomllib is
@@ -158,7 +158,7 @@ COPY pyproject.toml ./
 # Installed before the project so pip sees the constraint already satisfied and has no
 # reason to resolve torch again.
 #
-# wandb comes from the extra the project already declares. boto3 is named directly because
+# wandb and hpo come from extras the project already declares. boto3 is named directly because
 # olmo_core.io imports it lazily for s3:// paths and the project declares it only under the
 # dev extra, which would drag in pytest, mypy, sphinx and the rest of a contributor's
 # toolchain -- none of which belongs in an image an untrusted training command runs inside.
@@ -216,17 +216,26 @@ COPY pyproject.toml ./
 # proves the module a training run actually reaches for loads.
 RUN set -eux; \
     python -m pip install --no-cache-dir "torch==2.9.0"; \
-    python -c "import tomllib; project = tomllib.load(open('pyproject.toml', 'rb'))['project']; open('/tmp/dependencies.txt', 'w').write('\n'.join(project['dependencies'] + project['optional-dependencies']['wandb']) + '\n')"; \
+    python -c "import tomllib; project = tomllib.load(open('pyproject.toml', 'rb'))['project']; groups = ('wandb', 'hpo'); dependencies = project['dependencies'] + [dependency for group in groups for dependency in project['optional-dependencies'][group]]; open('/tmp/dependencies.txt', 'w').write('\n'.join(dependencies) + '\n')"; \
     python -m pip install --no-cache-dir -r /tmp/dependencies.txt boto3 "botocore[crt]"; \
     rm /tmp/dependencies.txt; \
     python -m pip install --no-cache-dir "edullm-data @ https://github.com/edu-llm/edullm-data/archive/38bf831a6c3f445e394784018441fd59288b876c.tar.gz"
+
+# Bake the checksum-verified public FT-PFN model into a cache layer that is independent of
+# ordinary source edits. Runtime provisioning uses this same path and therefore becomes a
+# checksum-validated cache hit instead of requiring outbound network access.
+COPY src/olmo_core/hpo/artifacts.py /tmp/ftpfn_artifacts.py
+ENV OLMO_CORE_HPO_ARTIFACT_CACHE=/opt/olmo-artifacts
+RUN set -eux; \
+    PYTHONPATH=/tmp python -c "from ftpfn_artifacts import ensure_ftpfn_artifact; print(ensure_ftpfn_artifact())"; \
+    rm /tmp/ftpfn_artifacts.py
 
 # The build context is the repository root, so the root .dockerignore is what keeps .git
 # out of this layer, and out of the context entirely.
 COPY . .
 
 # THE PROJECT ITSELF, AFTER ITS SOURCE AND AFTER ITS DEPENDENCIES, AND THE RESOLUTION IS
-# THE SAME ONE IT ALWAYS WAS. This is still `.[wandb]` rather than `--no-deps .`, which
+# THE SAME ONE IT ALWAYS WAS. This is still `.[wandb,hpo]` rather than `--no-deps .`, which
 # would be the faster spelling and the wrong one: --no-deps would install the project
 # without checking that the layer above actually covered its requirements, so a dependency
 # added to pyproject.toml and missed by the extraction would go absent from the image
@@ -288,9 +297,11 @@ COPY . .
 # microsecond and it is the difference between "botocore will use this" and "and the number
 # it gets is right".
 RUN set -eux; \
-    python -m pip install --no-cache-dir ".[wandb]"; \
+    python -m pip install --no-cache-dir ".[wandb,hpo]"; \
     python -c "import torch; assert torch.__version__.startswith('2.9.0'), f'torch was moved off the pin: {torch.__version__}'"; \
     python -c "import torch; assert torch.version.cuda, 'the CUDA build of torch was replaced by a CPU wheel'"; \
+    python -c "import ifbo, unit_scaling"; \
+    python -c "from olmo_core.hpo.artifacts import ensure_ftpfn_artifact; print(ensure_ftpfn_artifact())"; \
     python -c "import boto3, wandb; from olmo_core.data import TokenizerConfig; from olmo_core.nn.transformer import TransformerConfig; print(TransformerConfig.olmo2_190M(vocab_size=TokenizerConfig.gpt2().padded_vocab_size()).__class__.__name__)"; \
     python -c "import boto3; from botocore import UNSIGNED; from botocore.config import Config; from botocore.stub import Stubber; client = boto3.client('s3', region_name='us-east-1', config=Config(signature_version=UNSIGNED)); stub = Stubber(client); stub.add_response('put_object', {}); stub.activate(); client.put_object(Bucket='b', Key='k', Body=b'123456789', ChecksumAlgorithm='CRC32C')"; \
     python -c "from awscrt.checksums import crc32c; assert crc32c(b'123456789') == 0xE3069283, 'awscrt computes something other than CRC-32C'"; \

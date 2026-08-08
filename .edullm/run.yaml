@@ -1,0 +1,16 @@
+# Committed run command for the hybrid FT-PFN HPO controller.
+#
+# This is a starting point that `edullm check` reconciles/prices; do not edit it to silence a
+# refusal without reading what the refusal says (see AGENTS.md).
+#
+# The controller is CPU-only and spawns its own WORLD_SIZE=1 single-GPU trial workers, so the
+# command is a plain `python ...` invocation -- never `torchrun --nproc-per-node=N`.
+#
+# The dtype token is explicit on purpose: the platform's precision guard reads the words of the
+# command and cannot see a precision set in code, so naming it turns a dead machine into a free
+# refusal at check time. Use float32 instead of bfloat16 on hardware without bfloat16 (e.g. T4).
+# EDULLM_HPO_SPEC must point to the committed, preregistered controller JSON for this run.
+command: >-
+  python .edullm/hpo_on_corpus.py "$EDULLM_RUN_ID"
+  --param-dtype bfloat16
+  --controller-spec "${EDULLM_HPO_SPEC:?set EDULLM_HPO_SPEC to the controller JSON}"
