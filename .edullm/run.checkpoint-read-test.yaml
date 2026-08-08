@@ -1,0 +1,87 @@
+# THROWAWAY. One cell, about $1.61, to answer one question before fifteen cells depend on it:
+# can a checkpoint written by eight ranks be read back by one?
+#
+#   edullm submit --experiment hyper-connections-370m --dataset none \
+#     --team input-core --spec .edullm/run.checkpoint-read-test.yaml \
+#     --compute gpu-1xl4 --hours 2 --attempts 1
+#
+# --dataset none, and the word is deliberate rather than an omission: this run reads no
+# corpus. It reads one checkpoint and a task suite that is inside the image.
+#
+# ---------------------------------------------------------------------------------------
+# WHAT IS UNPROVEN, AND WHY IT IS WORTH $1.61 TO PROVE IT NOW
+# ---------------------------------------------------------------------------------------
+#
+# The tranche trains on gpu-8xa100 and writes its checkpoints from EIGHT ranks under FSDP.
+# The downstream scoring job reads them on ONE gpu-1xl4. That asymmetry has never been
+# exercised on this branch.
+#
+# The write half is not in doubt. `load_model_and_optim_state` is documented as agnostic to
+# the distributed topology, it goes through `dist_cp.state_dict_loader.load`, and another
+# team's frontload-cl runs wrote eight-rank distributed checkpoints twenty-six times per run
+# at this model size to this bucket yesterday. What is untested is the read at world size 1,
+# and the cost of testing it after the fact is twenty trained cells and no way to score them.
+#
+# THE FAILURE THIS IS REALLY FOR IS THE QUIET ONE. A load that raises is free to diagnose.
+# A load that silently populates nothing leaves a randomly-initialized model that scores at
+# chance -- which looks like a 370M model doing badly on hard tasks, not like a bug, and
+# which would be believed. So the test is read against a number, not against an exit code:
+#
+#   an untrained model scores gold-continuation BPB near ln(100352) / (ln 2 x 4.57 bytes
+#     per token), which is about 3.6 bits per byte
+#   this checkpoint is step 500, where the run's own logged CE is about 3.0 nats, so it
+#     should score near 3.0 / (ln 2 x 4.57), which is about 0.95
+#
+# Those differ by a factor of nearly four. Anything landing near 3.6 means the weights did
+# not arrive, whatever the exit code said.
+#
+# ---------------------------------------------------------------------------------------
+# WHY step500, AND WHY READING A LIVE RUN'S CHECKPOINT IS SAFE HERE
+# ---------------------------------------------------------------------------------------
+#
+# run_019fe2f4-f528 is still training as this runs, and reading a checkpoint a trainer may
+# be concurrently rotating is a different failure from the one under test -- it would look
+# like a corrupt read and would be diagnosed as one.
+#
+# It cannot happen here. `CheckpointerCallback.remove` defaults to
+# `CheckpointRemovalStrategy.ephemeral_only`, and `ephemeral_save_interval` is unset, so the
+# run creates no ephemeral checkpoints and removes nothing. Every checkpoint `--save-interval
+# 500` writes is permanent. step500 was finished hours before this runs and nothing will
+# touch it again.
+#
+# step500 rather than the latest for the same reason: it is the one furthest from whatever
+# the trainer is doing now, and `save_async: true` on this platform means the newest
+# checkpoint is the one most likely to be mid-write.
+#
+# ---------------------------------------------------------------------------------------
+# WHAT THIS PROVES AND WHAT IT DOES NOT
+# ---------------------------------------------------------------------------------------
+#
+# Proves: an 8-rank distributed write loads at world size 1 with no missing or unexpected
+# keys; the rebuilt model config agrees with the config.json the run wrote beside its
+# weights (the scorer's exit 75); the task data really is inside the image with no network;
+# and the whole load-score-report path emits its JSON document.
+#
+# Does not prove: the h2b suite's runtime, because --suite smoke is two tasks and
+# --limit-batches truncates them. A truncated task is not a score and the output document
+# says so itself. This is a path test, and the number it produces is only ever read against
+# the factor-of-four question above.
+#
+# --arm and --seed are passed explicitly, which the scorer refuses inside a fan-out and
+# allows outside one. This is not a fan-out: it is one cell, scoring cell 0 of the baseline.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-1xl4
+command: >-
+  bash -lc 'EDULLM_CHECKPOINT_CHECK=waived python .edullm/score_checkpoints.py "$EDULLM_RUN_ID"
+  --arm-run baseline=s3://sbsandbox-intern-edullm-outputs/teams/input-core/runs/run_019fe2f4-f528-70a8-9242-d22f358ede0a/
+  --arm baseline
+  --seed 0
+  --step 500
+  --suite smoke
+  --limit-batches 20
+  --model-factory hc_370M
+  --max-sequence-length 4096
+  --batch-tokens 8192
+  --output-dir "$EDULLM_OUTPUT_PREFIX"
+  --param-dtype bfloat16'
