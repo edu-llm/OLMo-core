@@ -801,10 +801,15 @@ def _noncentral_t_cdf(t: float, df: int, ncp: float) -> float:
         P(T <= t) = E_U[ Phi(t sqrt(U/df) - ncp) ],  U ~ chi-square(df)
 
     which is an integral of a bounded smooth function against a density. The scipy value is
-    still used wherever it is finite, because it is faster and the two agree to under 1e-6
-    where both exist -- which is about 1e-8 nats on a minimum detectable effect, four orders
-    below the last digit anything here prints.
-    ``test_the_quadrature_agrees_with_scipy_wherever_scipy_is_finite`` holds that agreement,
+    still used wherever it is finite, and not only because it is faster:
+    **where scipy answers at all it is the more accurate of the two.** Checked against an
+    8,192-node rule, scipy sits within 3e-9 and the 512-node rule below within 2.3e-7, so the
+    sub-1e-6 disagreement between them is this function's own truncation error and not
+    scipy's. That is worth stating because the obvious reading of a fallback is that it is the
+    reference, and here it is the approximation -- which is fine, since 2.3e-7 of power is
+    about 1e-8 nats on a minimum detectable effect, four orders below the last digit anything
+    here prints, but it is not fine to have backwards.
+    ``test_the_quadrature_agrees_with_scipy_wherever_scipy_is_finite`` holds the agreement,
     and it is what makes the fallback a repair of scipy rather than a second opinion about it.
 
     :param t: The quantile.
@@ -839,6 +844,10 @@ def _quadrature(df: int, order: int = 512) -> Tuple[np.ndarray, np.ndarray]:
     :param df: Degrees of freedom.
     :param order: Nodes. 512 holds agreement with scipy to under 1e-6 across df 1 to 20 and
         noncentralities out to 12, and costs about 60 microseconds after the first call.
+        Raising it is a bad trade and was measured rather than assumed: 2,048 nodes cut the
+        truncation error from 2.3e-7 to 1.4e-8 but cost 3.5 seconds to build per distinct df
+        against 0.45 for 512, because building the rule is quadratic in the node count while
+        the error it buys down is already four orders below anything printed.
 
     :returns: ``(chi-square quantiles at the nodes, weights)``.
     """
