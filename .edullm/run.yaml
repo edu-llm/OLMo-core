@@ -1,13 +1,14 @@
-# Checkpoint-transfer smoke v3 — real 370M Ms→Mt + assistant-masked SFT Δ fit.
+# Checkpoint-transfer smoke v4 — MoE 4/40 + real assistant-masked SFT Δ fit.
 # Branch: edullm/** only — never main. Cap submit so edullm check ceiling ≤ $20.
+# Do not submit until explicitly approved.
 schema_version: 1
 workload_profile: olmo-core-train
 suggested_compute: gpu-1xl4
 command: >-
   bash -lc 'python .edullm/ckpt_transfer_smoke.py
   --save-folder "$EDULLM_CHECKPOINT_DIR"
-  --ms-uri s3://edullm-checkpoints/olmo2-370m-cpt/edullm-370M-30B/step15000-unsharded
-  --mt-uri s3://edullm-checkpoints/olmo2-370m-cpt/edullm-370M-30B/step20000-unsharded
-  --steps-sft 800 --seq-len 512 --batch-size 2
-  --sft-train-rows 2048 --sft-eval-rows 256 --sft-lr 5e-5
-  --param-dtype float32'
+  --steps-pre 200 --steps-gap 200 --steps-sft 400
+  --seq-len 256 --batch-size 4
+  --train-batches 32 --sft-train-rows 1024 --sft-eval-rows 128
+  --num-experts 40 --top-k 4 --d-model 512 --n-layers 8 --n-heads 8
+  --sft-lr 5e-5 --param-dtype float32'
