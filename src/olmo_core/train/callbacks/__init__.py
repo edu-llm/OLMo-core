@@ -18,6 +18,7 @@ from .gap_monitor import GAPMonitorCallback
 from .garbage_collector import GarbageCollectorCallback
 from .gpu_memory_monitor import GPUMemoryMonitorCallback
 from .hf_converter import HFConverterCallback
+from .hyper_connection_monitor import HyperConnectionMonitorCallback
 from .list_checkpointer import ListCheckpointerCallback
 from .metric_saver import MetricSaverCallback
 from .model_merger import ModelMergeCallback
@@ -45,6 +46,7 @@ __all__ = [
     "GarbageCollectorCallback",
     "GPUMemoryMonitorCallback",
     "HFConverterCallback",
+    "HyperConnectionMonitorCallback",
     "ProfilerCallback",
     "SlackNotifierCallback",
     "SlackNotificationSetting",

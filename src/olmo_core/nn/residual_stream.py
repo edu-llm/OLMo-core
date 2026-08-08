@@ -168,6 +168,34 @@ class HyperConnectionConfig(ModuleConfig):
             d_model=d_model, n_lanes=self.n_lanes, mode=self.mode, dynamic=self.dynamic
         )
 
+    def optim_group_overrides(self, weight_decay: float = 0.0) -> list:
+        """
+        The parameter-group split ByteDance describe: "the static component does not utilize
+        weight decay, whereas the dynamic component does".
+
+        The dynamic group is named explicitly rather than left to fall through to the default
+        group, so that a run whose parameter names drift will fail loudly at
+        :meth:`~olmo_core.optim.OptimConfig.build_groups` instead of quietly decaying ``A_r``.
+
+        :param weight_decay: Weight decay for the dynamic component. Should match the value the
+            rest of the model is trained with.
+
+        :returns: Overrides to extend
+            :data:`~olmo_core.optim.OptimConfig.group_overrides` with.
+        """
+        from ..optim import OptimGroupOverride
+
+        overrides = [
+            OptimGroupOverride(params=[HC_STATIC_PARAM_GLOB], opts=dict(weight_decay=0.0))
+        ]
+        if self.dynamic:
+            overrides.append(
+                OptimGroupOverride(
+                    params=[HC_DYNAMIC_PARAM_GLOB], opts=dict(weight_decay=weight_decay)
+                )
+            )
+        return overrides
+
 
 def expand_residual_lanes(h: torch.Tensor, n_lanes: int) -> torch.Tensor:
     """
