@@ -134,6 +134,7 @@ def load(
     device: str = "cpu",
     verify: bool = True,
     with_model: bool = True,
+    dtype: Optional[Any] = None,
     corpus: Optional[BuiltCorpus] = None,
 ) -> LoadedCheckpoint:
     """
@@ -144,6 +145,8 @@ def load(
     :param device: Where to put the model.
     :param verify: Check the rebuilt corpus against the saved fingerprints. Leave this on; it is the
         only thing standing between a wrong rebuild and a plausible-looking score.
+    :param dtype: Cast the built model to this ``torch.dtype`` before loading. ``None`` leaves it at the
+        config's own, which is float32.
     :param with_model: Load the weights. ``False`` rebuilds the corpus alone, which is enough for tests
         and for inspecting what a run trained on.
     :param corpus: A corpus already built for this cell, to reuse across the cell's checkpoints. Only the
@@ -189,6 +192,13 @@ def load(
         # init_device="cpu" rather than "meta": a meta model cannot be copied into, and the checkpoint
         # overwrites every parameter anyway, so there is nothing to gain by deferring allocation.
         model = model_config.build(init_device=device)
+        if dtype is not None:
+            # Stated rather than defaulted. Training set bfloat16 through FSDP's `param_dtype`, which is a
+            # mixed-precision setting and not the dtype the shards hold, so scoring has always run in
+            # float32 and nothing said so. The platform's precision guard reads the *text* of a command and
+            # cannot see a precision chosen in code, so a submission that does not name one can be admitted
+            # onto a card whose hardware lacks it -- and then dies on the first kernel that needs it.
+            model = model.to(dtype=dtype)
         load_model_and_optim_state(
             ref.model_dir,
             model,

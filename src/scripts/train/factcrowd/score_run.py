@@ -49,6 +49,22 @@ from olmo_core.exceptions import OLMoConfigurationError  # noqa: E402
 log = logging.getLogger(__name__)
 
 
+def _torch_dtype(name: str) -> Any:
+    """
+    Resolve a dtype name to a ``torch.dtype``.
+
+    Imported here rather than at module scope so ``--help`` and the argument parsing still work on a
+    machine with no torch, which is what makes a dry read of this program cheap.
+
+    :param name: ``"float32"``, ``"bfloat16"`` or ``"float16"``.
+
+    :returns: The dtype.
+    """
+    import torch
+
+    return {"float32": torch.float32, "bfloat16": torch.bfloat16, "float16": torch.float16}[name]
+
+
 def cell_prefixes(prefix: str) -> Tuple[str, ...]:
     """
     Every checkpoint directory under ``prefix``, whether it is one cell's or a fan-out's parent.
@@ -102,6 +118,7 @@ def _slug(prefix: str) -> str:
 def score_checkpoint(
     ref: checkpoint_module.CheckpointRef,
     *,
+    dtype: Optional[Any] = None,
     work_dir: Path,
     device: str,
     eval_items: int,
@@ -122,7 +139,7 @@ def score_checkpoint(
     :returns: The scored checkpoint, ready for :func:`factcrowd.measure.collect.collect`.
     """
     loaded = checkpoint_module.load(
-        ref, work_dir=work_dir, device=device, verify=True, corpus=corpus
+        ref, work_dir=work_dir, device=device, verify=True, corpus=corpus, dtype=dtype
     )
     forward = checkpoint_module.forward_fn(loaded.model, device=device)
 
@@ -204,6 +221,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--out", required=True, help="Where to write the CSV")
     parser.add_argument("--work-dir", default="/tmp/factcrowd-score", help="Local scratch")
     parser.add_argument("--device", default="cpu", help="cpu or cuda")
+    parser.add_argument(
+        "--dtype",
+        default="float32",
+        choices=("float32", "bfloat16", "float16"),
+        help="Precision to score in. Named on the command line on purpose: the platform's precision "
+        "guard reads the command's text and cannot see a dtype chosen in code, so a submission that "
+        "does not say one can be admitted onto a card whose hardware lacks it. Scoring has always run "
+        "in float32 -- training's bfloat16 was FSDP's param_dtype, a mixed-precision setting rather "
+        "than the dtype the shards hold -- so float32 is the default and the honest word for it.",
+    )
     parser.add_argument(
         "--eval-items",
         type=int,
@@ -307,6 +334,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 eval_items=args.eval_items,
                 bit_entities=args.bit_entities,
                 batch_size=args.batch_size,
+                dtype=_torch_dtype(args.dtype),
                 corpus=corpus,
             )
             corpus = result.corpus

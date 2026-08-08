@@ -1,104 +1,107 @@
-# Scoring — the last two jobs, 2026-08-07
+# Scoring — the last two submissions, 2026-08-08
 
-**All 32 cells have trained.** count 12/12, entropy 6/6, σ 9/9, ladder 5/5. Nothing else needs a GPU for
-training; these two jobs turn checkpoints into the table you analyse.
+**All 32 cells have trained.** count 12/12, entropy 6/6, σ 9/9, ladder 5/5. These two submissions turn
+checkpoints into the table you analyse.
 
-## On migrating off 4×A10G
+## Corrections to earlier revisions of this file
 
-Not needed, and the evidence is direct rather than inferred. Of 39 runs, **33 ran on four physical A10Gs**
-— system metrics report GPU indices `0,1,2,3`, not a derived number — and three of those finished today at
-19:12 UTC. `config/capacity.yaml` classes `gpu-4xa10g` as `after_a_wait`: nineteen nodes arrived between
-01 and 05 August, all eleven runs that queued for them started, median wait 7 minutes, worst 1.5 hours,
-and *none was ever cancelled for want of capacity*.
+Earlier versions of this document, and of `SUBMIT.md` and `ROUND2.md`, gave three instructions that
+`CLAUDE.md` and `AGENTS.md` forbid. They are wrong and the commands below replace them:
 
-It is also moot: **scoring is single-process**, so it does not want four devices at all.
-`require_a_process_for_every_device` would refuse a one-process command on any multi-GPU shape.
+- **`gh workflow run` is not the submission path.** `edullm` is. What a run does travels in
+  `.edullm/run.yaml`; the compute profile, experiment and dataset are supplied at submit time.
+- **Never read a price, a runtime bound, a cost ceiling or an approval class out of a document —
+  including this one.** Every `$` figure in the earlier revisions was my own arithmetic over
+  configuration that changes without notice. Run `edullm check --json` and read `cost` and
+  `approval_class`.
+- **Do not call AWS.** A Colab plan that set `AWS_ACCESS_KEY_ID` and ran `aws s3 ls` was drafted here and
+  has been deleted. For most people it fails for want of a role; for the few it works for, it leaves no run
+  anybody can cite. The sanctioned "my own machine" route is `edullm run` / `edullm shell`, which ships this
+  tree to a machine — ungated, and likewise not citable, so use it to explore and not to produce the result.
 
-For the record, the A100 route is not available even if wanted: there is no `gpu-1xa100` or `gpu-4xa100`
-in the profile list, only `gpu-8xa100` — which refuses single-process commands, costs $21.96/h against
-$1.006/h, and queues a 61-minute median against `gpu-1xa10g`'s reliable placement.
+A fourth correction, about hardware: I offered `gpu-1xt4` as a cheap substitute. For **training** that is
+dangerous — a T4 is Turing and has no bfloat16 in hardware, `torch.cuda.is_bf16_supported()` lies about it,
+and training sets bfloat16 in code where the platform's guard cannot see it. For **scoring** it is fine,
+because scoring runs in float32; `--dtype float32` now says so in the command, which is what lets the guard
+do its job either way.
 
-`gpu-1xa10g`, `gpu-1xl4` and `gpu-1xt4` all place **reliably**. If A10G is ever contended, `gpu-1xl4`
-($0.8048/h) is a drop-in substitute — change one field.
+## Is the queue actually the problem?
+
+A fan-out's **parent job runs no container.** It has no attempts, no log stream and no `startedAt`, and
+Batch marks it `SUCCEEDED` when its children succeed — which is exactly what a report reading
+`Status: SUCCEEDED`, `Attempts 0 of 1`, `Log stream: not yet assigned` looks like. Read a *child* before
+concluding anything:
+
+```bash
+edullm status --json <run-id>      # free, answers from GitHub, may be polled
+edullm logs <run-id>               # slow by construction; not for a loop
+```
+
+If the children have run, the six CSVs are already under that run's output prefix and nothing below is
+needed.
 
 ## 1. Score the confirmatory data
 
-Eighteen cells over six prefixes, one per fan-out index. `--last-only` scores each cell's final checkpoint,
-which is where every endpoint number is read; drop it when you want the bit curve over training.
-
-Ceiling **$24.14** = 1.006 × 1 × 4 × 1 × 6.
+`.edullm/run.yaml` in this commit already holds this submission: `workload_profile: olmo-core-check`
+(scoring writes a CSV and no checkpoint, so no checkpoint contract), a six-way fan-out on
+`index_parameter: cell`, and one prefix per index.
 
 ```bash
-gh workflow run submit-run.yml -R edu-llm/platform \
-  -f repository=OLMo-core \
-  -f commit_sha=edullm/fact-crowding \
-  -f workload_profile=olmo-core-check \
-  -f compute_profile=gpu-1xa10g \
-  -f dataset_release=none \
-  -f team=memory-split \
-  -f experiment=fact-crowding \
-  -f wandb_project=fact-crowding \
-  -f maximum_runtime_hours=4 \
-  -f maximum_attempts=1 \
-  -f fanout_size=6 \
-  -f fanout_index_parameter=cell \
-  -f command='bash -lc '"'"'B=s3://sbsandbox-intern-edullm-outputs/teams/memory-split/runs; P=(run_019fcfc6-c6cd-70be-aec5-e3e10d9fc2c4/ run_019fcfc8-14dd-706c-a2fa-ab2492af0bbb/ run_019fcfc8-acca-70c6-9345-f3674a37f8b0/checkpoints/ run_019fd3c2-ebb6-7038-85b6-eb508275feb4/checkpoints/ run_019fd3c2-9cb5-70d1-8aa4-7412df51bc6c/checkpoints/ run_019fd3c1-1d5f-7071-9171-a0c93f7dd0cc/); N=(count-13m count-28m-short count-28m-d2p4 count-28m-d4p8 count-13m-d0p6 entropy-28m); I=${AWS_BATCH_JOB_ARRAY_INDEX:-0}; python src/scripts/train/factcrowd/score_run.py --prefix $B/${P[$I]} --out ${EDULLM_OUTPUT_PREFIX}${N[$I]}.csv --work-dir /tmp/s --device cuda --batch-size 512 --last-only'"'"''
+# Commit and push first -- the platform builds the image from the last commit on an edullm/* branch.
+git push origin edullm/fact-crowding
+
+edullm check --json --experiment fact-crowding --dataset none --compute gpu-1xa10g
+# exit 0 stands; 1 is refused on the merits, match on `code`; 2 the command or install is wrong;
+# 3 the platform could not be asked, and is the only one worth retrying.
+# Read `cost` and `approval_class` out of that JSON. Do not take them from here.
+
+edullm submit --experiment fact-crowding --dataset none --compute gpu-1xa10g
 ```
+
+`--dataset none` is deliberate and is a statement, not an omission: scoring reads existing checkpoints and
+no published corpus.
 
 | index | prefix | cells |
 |---|---|---|
 | 0 | `…fcfc6-c6cd…` | 13M count: ctrl, d0p3, d1p2, d2p4, d4p8 (plus the crashed d0p6, harmless) |
 | 1 | `…fcfc8-14dd…` | 28M count: ctrl, d0p3, d0p6, d1p2 |
 | 2 | `…fcfc8-acca…` | `28m_d2p4` |
-| 3 | `…fd3c2-ebb6…` | `28m_d4p8`, the clean 4-device re-run |
+| 3 | `…fd3c2-ebb6…` | `28m_d4p8`, the clean four-device re-run |
 | 4 | `…fd3c2-9cb5…` | `13m_d0p6`, the clean re-run |
 | 5 | `…fd3c1-1d5f…` | the whole entropy sweep |
 
-Each cell writes under its own `cell-N/` output prefix, so collect six CSVs.
-
 ## 2. Build the gate report
 
-**One job, three prefixes, single process** — a gate report is assembled from one `score_run` invocation,
-and its evidence is spread across three submissions:
+Edit `.edullm/run.yaml`: drop the `fanout` block, and replace the command with the one below. One file holds
+one command, so a second submission is a second commit — which is also what makes each one citable.
 
-- σ block `…fd3c0-8d2c…` — G4 ceiling, G6 width sweep, and `13m_ctrl` replicate 2
-- ladder `…fd3bf-ece6…` — G8 doses 100 / 90 / 80 / 60
-- round two `…fdd84-9e11…` — `13m_ctrl` replicates 0 and 1, and the missing dose 95
-
-Neither of the first two alone yields a usable report: the σ block has no ladder, the ladder has one
-replicate, and G7 needs three. Together they supply all four feedable gates.
-
-The crashed originals sit inside those same prefixes and are handled rather than avoided — `assign_roles`
-keys on `(cell_id, replicate)` and keeps the **highest step**, so `13m_ctrl` r0 resolves to the 3,814-step
-re-run rather than the 19-step corpse, and `13m_dil95` to 3,623 rather than 589.
-
-Ceiling **$4.02** = 1.006 × 1 × 4 × 1 × 1.
-
-```bash
-gh workflow run submit-run.yml -R edu-llm/platform \
-  -f repository=OLMo-core \
-  -f commit_sha=edullm/fact-crowding \
-  -f workload_profile=olmo-core-check \
-  -f compute_profile=gpu-1xa10g \
-  -f dataset_release=none \
-  -f team=memory-split \
-  -f experiment=fact-crowding \
-  -f wandb_project=fact-crowding \
-  -f maximum_runtime_hours=4 \
-  -f maximum_attempts=1 \
-  -f command='bash -lc '"'"'B=s3://sbsandbox-intern-edullm-outputs/teams/memory-split/runs; O="$EDULLM_OUTPUT_PREFIX"; python src/scripts/train/factcrowd/score_run.py --prefix $B/run_019fd3c0-8d2c-70ce-873e-4c2e333856b6/ $B/run_019fd3bf-ece6-708d-9706-08967ddbd557/ $B/run_019fdd84-9e11-707b-bcd3-adbadb4468ea/ --out ${O}m0.csv --work-dir /tmp/g --device cuda --batch-size 512 --last-only --write-gate-report ${O}gates-mano.json --gate-endpoint mano'"'"''
+```
+command: >-
+  bash -lc 'B=s3://sbsandbox-intern-edullm-outputs/teams/memory-split/runs;
+  python src/scripts/train/factcrowd/score_run.py --prefix
+  $B/run_019fd3c0-8d2c-70ce-873e-4c2e333856b6/
+  $B/run_019fd3bf-ece6-708d-9706-08967ddbd557/
+  $B/run_019fdd84-9e11-707b-bcd3-adbadb4468ea/
+  --out ${EDULLM_OUTPUT_PREFIX}m0.csv --work-dir /tmp/g
+  --device cuda --dtype float32 --batch-size 512 --last-only
+  --write-gate-report ${EDULLM_OUTPUT_PREFIX}gates-mano.json --gate-endpoint mano'
 ```
 
-Expect the report **not to pass**. G4, G6, G7 and G8 now have their evidence; G1 (task-depth sweep), G2
-(untrained checkpoint) and G3 (premise-ablated probe) need task and corpus variants that are not built, so
-they report as owed and no row is admitted. The report is the checklist, not the verdict.
+All three prefixes are needed: the σ block has no dilution ladder, the ladder has one replicate, and G7
+needs three. Together they supply every gate that can currently be fed.
 
-Run both together — they are independent, both on a reliably-placing shape, ~$28 all in.
+The crashed originals sit inside those same prefixes and are handled rather than avoided —
+`assign_roles` keys on `(cell_id, replicate)` and keeps the **highest step**, so `13m_ctrl` r0 resolves to
+the 3,814-step re-run rather than the 19-step corpse, and `13m_dil95` to 3,623 rather than 589.
+
+Expect the report **not** to pass. G4, G6, G7 and G8 have their evidence now; G1 (task-depth sweep), G2
+(untrained checkpoint) and G3 (premise-ablated probe) need task and corpus variants that are not built, so
+they report as owed and no row is admitted. That is the checklist, not the verdict.
 
 ## Then
 
-Feed `gates-mano.json` back as `--gate-report` when you want rows marked confirmatory, and read the CSVs.
-The first question to put to them is the one the training curves could not answer: on the entropy axis,
-`28m_b32`'s CE sits 0.50 nats *below* its no-memorisation floor while every other cell sits 0.31–0.45
-*above* theirs. If b32's Mano accuracy and achieved-bits curve track that drop, it is a real late-training
-phase change; if they do not, the CE drop is about the training mixture and not about storage.
+Feed `gates-mano.json` back as `--gate-report` to mark rows confirmatory, and read the CSVs. The first
+question to put to them is the one the training curves could not answer: on the entropy axis, `28m_b32`'s CE
+sits 0.50 nats *below* its no-memorisation floor while every other cell sits 0.31–0.45 *above* theirs. If
+b32's Mano accuracy and achieved-bits curve track that drop, it is a real late-training phase change; if
+they do not, the drop is about the training mixture and not about storage.
