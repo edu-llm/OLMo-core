@@ -189,7 +189,12 @@ def factory_with_hybrid(
         return
 
     def wrapped(**kwargs):
-        if moe is not None:
+        # Only a sparse factory takes `feed_forward_moe`; handing it to a dense one is a
+        # TypeError from inside `llama_like`, which reads as a bug in this file rather than as
+        # "that factory has no experts". A dense factory is a legitimate thing to point this
+        # script at -- `olmo2_190M` is 12 layers, so it lays out as DeltaFlow's own
+        # [GDN, GDN, GDN, Attn] x 3 and is the cheap way to exercise the kernels.
+        if moe is not None and "moe" in factory_name:
             # Passed into the factory rather than edited onto the built config, because
             # `olmo2_370M_moe` derives the expert hidden size from the `d_model` it also chooses.
             kwargs.setdefault("feed_forward_moe", moe)

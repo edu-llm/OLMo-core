@@ -1,0 +1,59 @@
+# KERNELS: does any of this run on a GPU at all? 20 steps, one A10G, dense 190M.
+#
+#   edullm check --json --spec .edullm/run-kernels-diffusion-1xa10g.yaml \
+#     --experiment diffusion-esdllm --dataset regmix-10b-v1 --team scratch \
+#     --compute gpu-1xa10g --hours 1 --attempts 1
+#   edullm submit <same flags>
+#
+# WHY THIS EXISTS SEPARATELY FROM run-smoke-diffusion-moe-muonh.yaml, WHICH IS THE SAME IDEA ON
+# THE REAL SHAPE. That spec asks two questions at once -- "does the code run" and "does it fit at
+# microbatch 8192 on a 40 GB card, and how fast" -- and only the second needs `gpu-8xa100`. That
+# queue is contended: run_019fe7de-a636 sat RUNNABLE for over ninety minutes without being given a
+# machine, behind this account's own concurrent work. Meanwhile three code paths in this branch
+# have never executed anywhere, because `flash-linear-attention` cannot be installed on a laptop
+# and every test that would cover them is marked `requires_fla` and skips:
+#
+#   * the reversed GDN-2 scan, and whether it equals the causal scan viewed backwards;
+#   * the noise-conditioned decay and gate logits, reached through the model's kwargs;
+#   * non-causal flash attention in the same stack as a recurrence.
+#
+# Two submissions have now died before reaching a single training step, both in the GDN-2 x MuonH
+# seam that nothing had ever exercised together. Waiting hours on a contended queue to find the
+# third one is the wrong trade when an A10G answers it in minutes.
+#
+# DENSE olmo2_190M RATHER THAN THE MoE, AND NOT ONLY TO FIT. 12 layers lays out as exactly
+# DeltaFlow's [GDN, GDN, GDN, Attn] x 3 -- 9 bidirectional GDN-2 blocks and 3 non-causal attention
+# blocks -- so the arrangement under test is the published one rather than a scaled variant of it.
+# The MoE dispatch path is the one thing this does NOT cover, and `gpu-8xa100` still has to.
+#
+# --rank-microbatch-size 2048 AND --sequence-length 512 ARE MEMORY, NOT SCIENCE. The loss path
+# holds ~5 (N,V) fp32 tensors and V is 100352 here as everywhere, so N=2048 is ~4.1 GiB against
+# the A10G's 22. Nothing about this run is comparable to anything; it is a question about whether
+# kernels launch.
+#
+# WHAT TO READ, IN ORDER. `edullm logs <run-id>`:
+#   1. "hybrid mixer schedule: 9 bidirectional GDN-2 blocks (5 forward, 4 reverse) and 3
+#      non-causal attention blocks over 12 layers" -- note 5/4, not 6/6: 9 is odd.
+#   2. "masked diffusion training: schedule=linear, ..."
+#   3. train/masked labels (%) near 0.5 and MOVING between readings.
+#   4. optim/radius_relative_drift_max small -- and specifically NOT 1.0, which is what a
+#      zero-radius Hyperball block reports and is the bug the last fix was for.
+#   5. CE loss descending from about ln(100352) = 11.52.
+# Throughput here means nothing. That number only counts on the shape the baseline ran on.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-1xa10g
+command: >-
+  bash -lc 'export TRITON_F32_DEFAULT=ieee
+  && python -m torch.distributed.run --nproc-per-node=1 --standalone
+  .edullm/train_diffusion.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --model-factory olmo2_190M --init-method fan_in
+  --n-heads 12 --head-dim 64 --expand-v 1.0
+  --noise-schedule linear --antithetic-sampling --noise-conditioned
+  --optimizer muon_h --learning-rate 0.01 --adamw-learning-rate 8.2e-4
+  --param-dtype bfloat16
+  --sequence-length 512 --steps 20 --warmup-steps 2
+  --global-batch-size 8192 --rank-microbatch-size 2048
+  --save-interval 20 --data-seed 0 --work-dir /tmp/dataset-cache
+  trainer.callbacks.checkpointer.max_checkpoints=null'
