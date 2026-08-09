@@ -15,8 +15,8 @@ at call time:
                     hc_370M, so that an arm cannot silently train the platform's default
                     190M.
   ``build_config``  resolves which replicate this process is, applies the arm to the model
-                    config, moves all three seeds together, and installs the weight-decay
-                    split.
+                    config, moves all three seeds together, installs the optimizer and the
+                    weight-decay split.
   ``train``         attaches the lane monitor, which has nowhere else to go: the trainer is
                     built inside ``train``.
 
@@ -71,7 +71,11 @@ import hyper_connection_arms  # noqa: E402
 import train_on_corpus  # noqa: E402
 from hyper_connection_arms import ARMS  # noqa: E402
 
-from olmo_core.train.callbacks import HyperConnectionMonitorCallback  # noqa: E402
+from olmo_core.optim import SkipStepAdamWConfig  # noqa: E402
+from olmo_core.train.callbacks import (  # noqa: E402
+    HyperConnectionMonitorCallback,
+    SkipStepMonitorCallback,
+)
 
 hyper_connection_arms.install()
 
@@ -88,6 +92,42 @@ _show = train_on_corpus.show
 DEFAULT_STEPS = hyper_connection_arms.TRANCHE_STEPS
 DEFAULT_LEARNING_RATE = 7.8e-4
 DEFAULT_WEIGHT_DECAY = 0.033
+
+#: The two optimizers ``--optimizer`` chooses between, by their ``OptimConfig`` registry names.
+ADAMW = "adamw"
+SKIP_STEP_ADAMW = "skip_step_adamw"
+
+#: The default, and it is an amendment made after stage 1 -- see "The amendment of 2026-08-08"
+#: in hyper-connections.md. Two of five baseline cells took a post-warmup loss spike that cost
+#: 0.036 nats and never came back, and 99% of the measured endpoint variance was the
+#: spike-or-not split rather than seed scatter. Plain ``AdamW`` skipped nothing.
+DEFAULT_OPTIMIZER = SKIP_STEP_ADAMW
+
+#: ``SkipStepOptimizer.get_step_factor`` skips a step when either the batch loss or the
+#: pre-clipping gradient norm is more than this many standard deviations above its own rolling
+#: mean.
+#:
+#: THE LIBRARY'S OWN DEFAULT, TAKEN UNCHANGED, AND THAT IS THE ARGUMENT FOR IT. Every official
+#: OLMo-2 and OLMo-3 pre-training script in ``src/scripts/official/`` builds
+#: ``SkipStepAdamWConfig`` and not one of them overrides either constant, so these are the
+#: settings the library ships and the published runs used. A number chosen here instead would
+#: be a number chosen after seeing which cells spiked, on an arm that is the comparator for
+#: every hypothesis in the module.
+#:
+#: Replayed against stage 1's own five histories it catches both episodes at their onset, on
+#: the gradient-norm channel: step 1,374 at z = +10.7 and step 1,726 at z = +26.0, against a
+#: rolling gradient norm of 0.153 +/- 0.017. The loss channel is blind at both (z = +0.4 and
+#: z = -1.4), which is why the rule has to skip when *either* signal fires. Onset detection is
+#: insensitive to the constant -- 4, 5, 6, 8 and 10 all catch both -- so what it trades is the
+#: false-positive rate on a healthy run, which at 6 is 7, 13 and 14 steps of 6,000 on the three
+#: cells that never spiked, at triggering norms of 0.12 to 0.35.
+SKIP_STEP_SIGMA_FACTOR = 6
+
+#: How many previous steps that rolling mean and standard deviation are taken over. The
+#: library's default, unchanged, for the same reason. Nothing can be skipped until half of it
+#: has accumulated, which is step 64 -- long before either observed episode and well past the
+#: 120-step learning-rate warmup, whose fall would otherwise dominate the window.
+SKIP_STEP_ROLLING_INTERVAL = 128
 
 #: What Batch sets in each child of an array job, and the only place a cell's own index
 #: exists. The platform's ``execution.py`` names the same variable and assigns it per child,
@@ -360,6 +400,32 @@ def build_parser():
         "component is excluded from it on every arm but decay-everything.",
     )
     parser.add_argument(
+        "--optimizer",
+        choices=(ADAMW, SKIP_STEP_ADAMW),
+        default=DEFAULT_OPTIMIZER,
+        help="Which optimizer to train with. IT HAS TO BE THE SAME ON EVERY ARM: an optimizer "
+        "that differs between arms confounds the contrast far worse than the noise skipping "
+        "removes, and `STAGE_CONTRAST_EXEMPT` does not exempt it, so the resolved-options diff "
+        "test refuses a tranche whose arms disagree here. skip_step_adamw declines an update "
+        "whose loss or pre-clipping gradient norm is a long way above its own recent history; "
+        "see SKIP_STEP_SIGMA_FACTOR for what a long way is and why the number is not ours.",
+    )
+    parser.add_argument(
+        "--skip-step-sigma-factor",
+        type=int,
+        default=SKIP_STEP_SIGMA_FACTOR,
+        help="Standard deviations above the rolling mean, of either the batch loss or the "
+        "pre-clipping gradient norm, at which skip_step_adamw declines the update. Ignored "
+        "under --optimizer adamw.",
+    )
+    parser.add_argument(
+        "--skip-step-rolling-interval",
+        type=int,
+        default=SKIP_STEP_ROLLING_INTERVAL,
+        help="How many previous steps that rolling mean and standard deviation cover. Nothing "
+        "is skipped until half of it has accumulated. Ignored under --optimizer adamw.",
+    )
+    parser.add_argument(
         "--monitor-interval",
         type=int,
         default=50,
@@ -456,6 +522,16 @@ def preflight(config) -> None:
         f"data={config.data_loader.seed}"
     )
 
+    # WHICH OPTIMIZER, AND AT WHAT THRESHOLD. It has to be the same on all four arms or the
+    # contrast is confounded by it, and the failure is silent: an arm that trained under plain
+    # AdamW produces a loss curve that looks like a loss curve and a skip count of zero that
+    # reads as a stable run rather than as an absent measurement.
+    optim = config.train_module.optim
+    detail = ""
+    if hasattr(optim, "sigma_factor"):
+        detail = f", {optim.sigma_factor} sigma over a {optim.rolling_interval_length}-step window"
+    print(f"optimizer    {type(optim).__name__}{detail}")
+
     mixer = config.model.block.sequence_mixer
     print(
         f"model        {config.model.d_model}d x {config.model.n_layers}L, "
@@ -478,6 +554,51 @@ def preflight(config) -> None:
     print("preflight OK")
 
 
+def install_optimizer(config, opts):
+    """
+    Put the arm's optimizer on the config, carrying every shared setting across unchanged.
+
+    UNIFORMLY ON EVERY ARM OR NOT AT ALL. Skipping suppresses an event this document predicts
+    ``faithful`` may produce more of than ``baseline`` does, so an optimizer that differed
+    between arms would not reduce the confound -- it would *be* one, and a larger one than the
+    noise it was brought in to remove. The choice is therefore a single flag with a single
+    value across the tranche, pinned in :data:`hyper_connection_arms.A100_STAGE_PINNED` and
+    held there by the resolved-options diff test.
+
+    THE SWAP MOVES ONE THING. ``lr``, ``betas``, ``eps``, ``weight_decay``, ``group_overrides``
+    and ``compile`` are copied off the config ``train_on_corpus`` built rather than restated,
+    so the two optimizers cannot come to disagree about a shared hyper-parameter through a
+    default moving under one of them. ``AdamWConfig`` and ``SkipStepAdamWConfig`` happen to
+    declare identical defaults for all four scalars today; copying is what keeps that from
+    being load-bearing.
+
+    THE WEIGHT-DECAY SPLIT SURVIVES IT, which is the one interaction worth checking before
+    believing any of this. ``SkipStepAdamW`` reads ``lr``, ``betas``, ``eps`` and
+    ``weight_decay`` out of each param group exactly as ``torch.optim.AdamW`` does, and the
+    skip factor is computed once per ``step()`` and multiplied into every group's update and
+    into its decay term alike. So the hyper-connection static component still takes no decay,
+    the dynamic component still takes the run's, and a skipped step decays nothing -- which is
+    the correct reading of a step that did not happen.
+
+    :param config: The experiment config, mutated in place.
+    :param opts: Parsed options, for ``--optimizer`` and its two constants.
+    """
+    if opts.optimizer == ADAMW:
+        return
+
+    built = config.train_module.optim
+    config.train_module.optim = SkipStepAdamWConfig(
+        lr=built.lr,
+        betas=built.betas,
+        eps=built.eps,
+        weight_decay=built.weight_decay,
+        group_overrides=built.group_overrides,
+        compile=built.compile,
+        rolling_interval_length=opts.skip_step_rolling_interval,
+        sigma_factor=opts.skip_step_sigma_factor,
+    )
+
+
 def build_config(opts, overrides):
     # FIRST, AND LOUDLY. Everything below reads opts.arm and opts.seed, and a run that
     # resolved either one wrongly is not recoverable from its own output -- see
@@ -493,6 +614,11 @@ def build_config(opts, overrides):
     opts.data_seed = opts.data_seed + opts.seed
 
     config = _build_config(opts, overrides)
+
+    # Before anything reads `config.train_module.optim`: the weight-decay split below extends
+    # `group_overrides` on whatever object is there, and doing it in the other order would
+    # apply the split to a config that is then thrown away.
+    install_optimizer(config, opts)
 
     arm.apply(config.model)
 
@@ -638,6 +764,17 @@ def train(config, opts=None):
                 interval=opts.monitor_interval,
                 fail_closed_by_step=opts.fail_closed_by_step,
             ),
+        )
+
+    # ON EVERY ARM, UNLIKE THE LANE MONITOR ABOVE, AND THAT IS THE POINT OF IT. Skipping is now
+    # part of what a cell does, so how often it happened is part of what a cell measured, and a
+    # count that existed on the treatments but not on the comparator would be a stability
+    # outcome with nothing to compare against. The callback refuses to attach to a run whose
+    # optimizer cannot skip, so an arm that lost the setting fails at start-up rather than
+    # reporting a clean zero for six thousand steps.
+    if opts is not None and opts.optimizer == SKIP_STEP_ADAMW:
+        config.trainer = config.trainer.with_callback(
+            "skip_step_monitor", SkipStepMonitorCallback()
         )
     return _train(config, opts)
 

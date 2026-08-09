@@ -2,7 +2,16 @@
 #
 #   edullm check  --json --experiment hyper-connections-370m --dataset regmix-10b-v1 \
 #     --team input-core --spec .edullm/run.baseline-a100.yaml --compute gpu-8xa100 \
-#     --hours 7 --attempts 2 --fanout-size 5 --fanout-index-parameter seed
+#     --hours 4 --attempts 2 --fanout-size 5 --fanout-index-parameter seed
+#
+# THIS BASELINE HAS RUN ONCE ALREADY AND HAS TO RUN AGAIN. `run_019fe2f4-f528` completed all
+# five cells from an earlier version of this file and is what `.edullm/noise-floor.json` was
+# frozen from. It measured sigma-hat at 0.0211 nats, 2.1x what the design was priced against,
+# and found that 99% of that variance was two of the five cells taking a post-warmup loss
+# spike they never recovered from. The amendment those numbers forced is the --optimizer line
+# below, and an arm trained with it cannot be compared to one trained without it. So the
+# frozen artifact stays as the record of what was seen, and the comparator is re-measured.
+# The whole argument is in hyper-connections.md under "The amendment of 2026-08-08".
 #
 # WHY THIS FILE EXISTS. `run.baseline-stage.yaml` is the L40S submission and is not edited
 # after the fact, because five cells were admitted from it. This is the same stage on the
@@ -36,11 +45,30 @@
 # zero, and make every later arm significant against it. `resolve_seed` refuses the
 # combination rather than resolving it.
 #
-# --hours 7 COVERS A 5.5-HOUR CELL. At the probe's clean median of 2.91 s/step a lane cell is
-# 5.50 hours and a baseline cell is 5.45, so 7 leaves about 21% spare. It is not 8 because the
-# approved ceiling is rate x hours x attempts x cells and every unneeded hour is multiplied by
-# twenty. 2.91 is the `faithful` measurement and is therefore conservative here: the baseline
-# arm has no lanes to mix and measured 21% faster than `faithful` on the L40S.
+# --hours 4 COVERS A 3.00-HOUR CELL, AND 7 WAS A CEILING ON A NEED NOBODY HAD MEASURED. The
+# 7 that stood here was derived from the A100 probe's 2.91 s/step, which predicted 5.5 hours.
+# The five cells of run_019fe2f4-f528 then ran 2.92 to 3.00 hours each, so the prediction was
+# high by 1.8x and the bound on top of it was high by 2.3x. Four leaves 33% over the slowest
+# cell observed, which is more margin than the L40S stages carried at --hours 19.
+#
+# THE THREE HOURS MATTER BECAUSE THE CEILING IS A PRODUCT. Approved cost is rate x hours x
+# attempts x cells, so an unneeded hour is charged twice for each of twenty cells. Dropping
+# 7 to 4 takes the four-arm ceiling from about $6,148 to about $3,513 without shortening any
+# run: nothing here changes what a cell does, only what it is allowed to spend doing it.
+#
+# SKIPPING STEPS DOES NOT LENGTHEN A CELL. A declined update costs the optimizer step and not
+# the forward-backward, and replayed over the five measured cells the rule declines 0.12% to
+# 0.52% of steps. That is under a minute on a three-hour run.
+#
+# --optimizer skip_step_adamw IS THE AMENDMENT, AND IT IS IDENTICAL ON ALL FOUR ARMS. It has
+# to be: hyper-connections are one of the candidate explanations for the instability, so an
+# optimizer that differed between arms would confound the contrast far worse than the noise
+# it removes. The two constants are the library's own defaults, unchanged, which is what
+# keeps them from being numbers chosen after seeing which cells spiked -- every official
+# OLMo-2 and OLMo-3 pre-training script builds SkipStepAdamWConfig and none overrides either.
+# `.edullm/skip_step_calibration.py` replays the rule over stage 1's own histories: it catches
+# both spike onsets on the gradient-norm channel, at step 1,374 (z = +10.7) and step 1,726
+# (z = +26.0), and costs 7, 13 and 14 steps of 6,000 on the three cells that never spiked.
 schema_version: 1
 workload_profile: olmo-core-train
 suggested_compute: gpu-8xa100
@@ -63,4 +91,7 @@ command: >-
   --bytes-per-token 4.57
   --monitor-interval 50
   --eval-interval 500
+  --optimizer skip_step_adamw
+  --skip-step-sigma-factor 6
+  --skip-step-rolling-interval 128
   --param-dtype bfloat16'

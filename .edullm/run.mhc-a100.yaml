@@ -2,7 +2,14 @@
 #
 #   edullm check  --json --experiment hyper-connections-370m --dataset regmix-10b-v1 \
 #     --team input-core --spec .edullm/run.mhc-a100.yaml --compute gpu-8xa100 \
-#     --hours 7 --attempts 2 --fanout-size 5 --fanout-index-parameter seed
+#     --hours 4 --attempts 2 --fanout-size 5 --fanout-index-parameter seed
+#
+# --hours 4 AND --optimizer skip_step_adamw ARE THE AMENDMENT OF 2026-08-08, and both are
+# identical on all four arms. `run.baseline-a100.yaml` carries the full argument for each:
+# briefly, the measured cells ran 3.00 hours against a 7-hour bound, and two of the five
+# baseline cells spiked in a way that supplied 99% of the endpoint variance. The optimizer
+# line is the intervention and it is the same on every arm because an optimizer that differed
+# between them would confound the contrast far worse than the noise it removes.
 #
 # The L40S spec this is derived from is `run.mhc-stage.yaml` and it is not edited:
 # `run_019fe2c2-f498` was admitted from it. See `run.baseline-a100.yaml` for why the shape
@@ -35,4 +42,7 @@ command: >-
   --bytes-per-token 4.57
   --monitor-interval 50
   --eval-interval 500
+  --optimizer skip_step_adamw
+  --skip-step-sigma-factor 6
+  --skip-step-rolling-interval 128
   --param-dtype bfloat16'

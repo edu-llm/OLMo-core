@@ -10,6 +10,7 @@ Run with ``pytest -v .edullm/test_train_hyper_connections.py``.
 import math
 import os
 import pathlib
+import re
 import shlex
 import sys
 
@@ -31,6 +32,7 @@ from olmo_core.nn.residual_stream import (  # noqa: E402
     HC_STATIC_PARAM_GLOB,
 )
 from olmo_core.nn.transformer import TransformerBlockType  # noqa: E402
+from olmo_core.optim import AdamWConfig, SkipStepAdamWConfig  # noqa: E402
 
 SHARD_COUNT = 6
 
@@ -272,6 +274,114 @@ def test_weight_decay_reaches_both_the_model_and_the_dynamic_group():
         if HC_DYNAMIC_PARAM_GLOB in override.params
     ]
     assert dynamic[0].opts == dict(weight_decay=0.1)
+
+
+# ---------------------------------------------------------------------------------------
+# The amendment of 2026-08-08: spike skipping, uniformly.
+
+
+@pytest.mark.parametrize("name", sorted(arms.FUNDED))
+def test_every_funded_arm_gets_an_optimizer_that_can_skip(name: str):
+    """
+    THE UNIFORMITY IS THE WHOLE OF IT. Skipping suppresses an event the pre-registration says
+    ``faithful`` may produce more of than ``baseline`` does, so an optimizer present on some
+    arms and absent on others would not remove a confound, it would be one -- and a larger one
+    than the seed noise it was brought in for. The default therefore has to hold on every arm
+    without any spec asking for it.
+    """
+    config, _ = build(BASE_ARGV + ["--arm", name])
+    optim = config.train_module.optim
+    assert isinstance(optim, SkipStepAdamWConfig)
+    assert optim.sigma_factor == entry.SKIP_STEP_SIGMA_FACTOR
+    assert optim.rolling_interval_length == entry.SKIP_STEP_ROLLING_INTERVAL
+
+
+def test_the_swap_carries_every_shared_hyperparameter_across_unchanged():
+    """
+    The optimizer is swapped after ``train_on_corpus`` has built one, so the settings it
+    already resolved are copied rather than restated. A restated default is a default that can
+    move under one of the two classes and not the other, and the symptom would be a tranche
+    trained at a learning rate nobody chose.
+    """
+    argv = BASE_ARGV + ["--arm", "faithful", "--learning-rate", "1e-4", "--weight-decay", "0.2"]
+    skipping, _ = build(argv)
+    plain, _ = build(argv + ["--optimizer", "adamw"])
+
+    assert isinstance(plain.train_module.optim, AdamWConfig)
+    shared = ("lr", "betas", "eps", "weight_decay", "compile")
+    for field_name in shared:
+        assert getattr(skipping.train_module.optim, field_name) == getattr(
+            plain.train_module.optim, field_name
+        ), field_name
+
+
+def test_the_weight_decay_split_survives_the_swap():
+    """
+    THE ONE INTERACTION WORTH CHECKING BEFORE BELIEVING ANY OF THIS. The hyper-connection
+    static component is excluded from decay through ``group_overrides``, and the swap replaces
+    the object those overrides live on. Losing them would decay a parameter the design says
+    must not be decayed, on every arm at once, and nothing downstream would report it.
+    """
+    argv = BASE_ARGV + ["--arm", "faithful", "--weight-decay", "0.2"]
+    skipping, _ = build(argv)
+    plain, _ = build(argv + ["--optimizer", "adamw"])
+
+    def split(config):
+        return {tuple(sorted(o.params)): o.opts for o in config.train_module.optim.group_overrides}
+
+    assert split(skipping) == split(plain)
+    assert any(
+        HC_STATIC_PARAM_GLOB in params and opts.get("weight_decay") == 0.0
+        for params, opts in split(skipping).items()
+    )
+
+
+def test_the_skip_thresholds_are_settable_and_the_defaults_are_the_librarys_own():
+    """
+    The two constants are ``SkipStepAdamWConfig``'s own defaults, taken unchanged, and that is
+    the argument for them: a number chosen here would be a number chosen after seeing which
+    cells spiked, on the arm that is the comparator for every hypothesis in the module. This
+    is where that claim is checked rather than asserted, so a library release that moves
+    either default is a failing test and a decision to make, not a silent change of threshold.
+    """
+    shipped = SkipStepAdamWConfig(lr=1e-3)
+    assert entry.SKIP_STEP_SIGMA_FACTOR == shipped.sigma_factor
+    assert entry.SKIP_STEP_ROLLING_INTERVAL == shipped.rolling_interval_length
+
+    config, _ = build(
+        BASE_ARGV
+        + [
+            "--arm",
+            "baseline",
+            "--skip-step-sigma-factor",
+            "4",
+            "--skip-step-rolling-interval",
+            "64",
+        ]
+    )
+    assert config.train_module.optim.sigma_factor == 4
+    assert config.train_module.optim.rolling_interval_length == 64
+
+
+def test_the_skip_monitor_is_attached_on_every_arm_and_only_when_it_can_measure(monkeypatch):
+    """
+    The count is an outcome, so it has to exist on the comparator too: a skip count reported
+    by the treatments and not by ``baseline`` is a stability result with nothing to compare
+    against. And under ``--optimizer adamw`` there is nothing to count, so the callback stays
+    off rather than reporting a constant zero that reads like a stable run.
+    """
+    monkeypatch.setattr(entry, "_train", lambda config, opts: config)
+
+    for name in sorted(arms.FUNDED):
+        opts, overrides = entry.build_parser().parse_known_args(BASE_ARGV + ["--arm", name])
+        config = entry.train(entry.build_config(opts, overrides), opts)
+        assert "skip_step_monitor" in config.trainer.callbacks, name
+
+    opts, overrides = entry.build_parser().parse_known_args(
+        BASE_ARGV + ["--arm", "baseline", "--optimizer", "adamw"]
+    )
+    config = entry.train(entry.build_config(opts, overrides), opts)
+    assert "skip_step_monitor" not in config.trainer.callbacks
 
 
 def test_dotted_overrides_still_reach_the_config():
@@ -1061,6 +1171,173 @@ def test_the_pinned_table_still_agrees_with_the_design_constants_it_froze():
     # pinned seed would be five cells of one replicate and a pinned checkpoint directory would
     # be five cells writing over each other.
     assert not {"arm", "seed", "data_seed", "save_folder", "run_name"} & set(arms.STAGE_PINNED)
+
+
+# ---------------------------------------------------------------------------------------
+# The A100 tranche, which is the one that will actually be submitted.
+#
+# The four L40S specs above are the text three admitted submissions were built from and are
+# not edited after the fact, so the A100 tranche is a second set of files and gets a second
+# set of these tests rather than a widened parametrize. Everything the L40S tests protect,
+# these protect for the files that will carry the twenty cells.
+
+A100_STAGES = list(arms.A100_STAGE_SPECS)
+
+
+def test_the_a100_specs_differ_in_the_arm_and_in_nothing_else():
+    """
+    THE SAME TEST AS ``test_the_stage_specs_differ_in_the_arm_and_in_nothing_else``, ON THE
+    FILES THAT WILL BE SUBMITTED. See that docstring for why the comparison is over the whole
+    resolved option set and not over a checked list.
+
+    It has a job the L40S copy did not. The amendment of 2026-08-08 adds three optimizer
+    options to all four commands, and spike skipping is an intervention on precisely the
+    behaviour ``faithful`` is hypothesised to change. An optimizer that differed between arms
+    would therefore not reduce the confound, it would be one, and a larger one than the noise
+    it was brought in to remove. None of the three is in ``STAGE_CONTRAST_EXEMPT``, so a
+    single arm losing or nudging one of them fails here.
+    """
+    options = {name: resolved(arms.A100_STAGE_SPECS[name].spec) for name in A100_STAGES}
+
+    keys = {frozenset(o) for o in options.values()}
+    assert len(keys) == 1, "the specs parse to different option sets"
+
+    differ = {key for key in next(iter(keys)) if len({repr(o[key]) for o in options.values()}) > 1}
+    assert differ == set(arms.STAGE_CONTRAST_EXEMPT), (
+        "the A100 stages differ in "
+        + ", ".join(sorted(differ))
+        + " and the only differences the arm table permits are "
+        + ", ".join(sorted(arms.STAGE_CONTRAST_EXEMPT))
+        + ". Every option outside that set has to be identical across all four, or the "
+        "twenty runs were not trained at the same settings and the contrast is not one."
+    )
+
+    assert {o["arm"] for o in options.values()} == set(arms.FUNDED)
+    for name, opts in options.items():
+        assert opts["arm"] == name == arms.A100_STAGE_SPECS[name].arm
+
+
+@pytest.mark.parametrize("name", A100_STAGES)
+def test_every_a100_stage_is_pinned_to_the_amended_tranche(name: str):
+    """
+    Every option in ``A100_STAGE_PINNED`` resolves to the value pinned there, on every arm.
+
+    The diff test above says the four agree with *each other*, which four specs that drifted
+    together still satisfy. This says they agree with the table, which is what makes the
+    tranche readable a year from now.
+    """
+    options = resolved(arms.A100_STAGE_SPECS[name].spec)
+    for option, value in arms.A100_STAGE_PINNED.items():
+        assert options[option] == value, (
+            f"{name} resolves {option} to {options[option]!r} and the tranche is pinned to "
+            f"{value!r}"
+        )
+
+
+def test_the_a100_pinned_table_is_the_l40s_one_plus_the_shape_and_the_amendment():
+    """
+    The A100 table is the L40S table with four deltas and no fifth.
+
+    Spelling the deltas out here is the point: it is a reviewable statement that moving to
+    A100 and turning skipping on changed the microbatch and the optimizer and nothing else.
+    A learning rate that drifted in with them would be caught by this and by nothing else,
+    because the diff test only sees four files agreeing with each other.
+    """
+    deltas = {
+        key
+        for key in set(arms.A100_STAGE_PINNED) | set(arms.STAGE_PINNED)
+        if arms.A100_STAGE_PINNED.get(key) != arms.STAGE_PINNED.get(key)
+    }
+    assert deltas == {
+        "rank_microbatch_size",
+        "optimizer",
+        "skip_step_sigma_factor",
+        "skip_step_rolling_interval",
+    }
+
+    # And the amendment's three are the parser's own defaults, so the specs state what they
+    # would have got anyway. That is deliberate -- a spec that leans on a default changes when
+    # the default does -- and this is where the two are compared.
+    assert arms.A100_STAGE_PINNED["optimizer"] == entry.DEFAULT_OPTIMIZER == entry.SKIP_STEP_ADAMW
+    assert arms.A100_STAGE_PINNED["skip_step_sigma_factor"] == entry.SKIP_STEP_SIGMA_FACTOR
+    assert arms.A100_STAGE_PINNED["skip_step_rolling_interval"] == entry.SKIP_STEP_ROLLING_INTERVAL
+
+
+@pytest.mark.parametrize("name", A100_STAGES)
+def test_every_a100_spec_names_its_own_hours_and_they_are_all_four(name: str):
+    """
+    THE ``--hours`` A PERSON WILL COPY IS IN A COMMENT, WHICH NOTHING ELSE CHECKS. It is not
+    in the spec body and the parser never sees it, so ``A100_STAGE_HOURS`` and the four
+    headers can disagree in silence and the disagreement only surfaces as a submission priced
+    against the wrong ceiling -- or, if the four headers disagree with each other, as one
+    stage under a looser bound than another, which kills the slowest cell of one arm and no
+    cell of the rest.
+
+    Four hours covers the slowest cell this shape has been measured at with a third to spare,
+    and 7 -- what stood here before the measurement existed -- was a 2.3x ceiling on a need
+    nobody had observed.
+    """
+    header = (pathlib.Path(_HERE) / arms.A100_STAGE_SPECS[name].spec).read_text()
+    header = header.split("schema_version:")[0]
+
+    quoted = re.findall(r"--hours\s+(\d+(?:\.\d+)?)\s+--attempts\s+(\d+)", header)
+    assert quoted, f"{name} does not quote the command it is submitted with"
+    for hours, attempts in quoted:
+        assert float(hours) == arms.A100_STAGE_HOURS
+        assert int(attempts) == arms.A100_STAGE_ATTEMPTS
+
+    assert "gpu-8xa100" in header
+    assert "--fanout-size 5" in header
+
+
+def test_four_hours_covers_the_slowest_cell_that_has_actually_been_measured():
+    """
+    ``--hours`` is a kill, so the margin is the whole of the argument for lowering it.
+
+    It is also the hours factor of the approved ceiling, multiplied by attempts and by every
+    cell, so three unneeded hours are three hours of ceiling charged forty times across the
+    tranche. Both directions are checked: enough margin to survive drift, and not so much that
+    the tranche is approved against a number nothing will spend.
+    """
+    spare = 1.0 - arms.A100_MEASURED_CELL_HOURS / arms.A100_STAGE_HOURS
+    assert spare >= 0.2, (
+        f"a cell measured at {arms.A100_MEASURED_CELL_HOURS:.2f}h against a "
+        f"{arms.A100_STAGE_HOURS:.0f}h attempt leaves only {spare:.0%}"
+    )
+    assert spare <= 0.5, (
+        f"{arms.A100_STAGE_HOURS:.0f}h is {spare:.0%} above a measured "
+        f"{arms.A100_MEASURED_CELL_HOURS:.2f}h cell, and every unneeded hour is charged to the "
+        "ceiling twice for each of twenty cells"
+    )
+    assert arms.A100_STAGE_HOURS <= 24.0, "--hours may only lower the workload's own bound"
+
+    # Skipping does not lengthen a cell: a declined update costs the optimizer step and not
+    # the forward-backward. So the margin measured under plain AdamW still stands.
+
+
+@pytest.mark.parametrize("name", A100_STAGES)
+def test_every_a100_stage_still_names_the_dtype_in_its_command(name: str):
+    """
+    The precision guard reads the words of the command. Adding three options to four commands
+    is exactly the kind of edit that drops a fourth, and the failure mode is a run admitted
+    onto a card with no bfloat16 in the hardware.
+    """
+    assert "--param-dtype" in committed_argv(arms.A100_STAGE_SPECS[name].spec)
+    assert resolved(arms.A100_STAGE_SPECS[name].spec)["param_dtype"] == "bfloat16"
+
+
+def test_the_a100_baseline_is_not_marked_as_already_submitted():
+    """
+    ``run_019fe2f4-f528`` ran all five baseline cells on this shape and is what the frozen
+    noise floor was measured from, and it is *not* this stage's ``run_id``.
+
+    It trained under plain ``AdamW``. Reading it as stage 1 of the amended tranche would
+    compare treatments that skip against a comparator that could not, which is the confound
+    the amendment exists to remove -- so the baseline is re-run and nothing here is marked
+    submitted until it has been.
+    """
+    assert arms.A100_STAGE_SPECS["baseline"].run_id is None
+    assert all(stage.run_id is None for stage in arms.A100_STAGE_SPECS.values())
 
 
 def test_the_two_stages_that_omit_the_lane_guard_omit_it_for_the_reasons_claimed(monkeypatch):

@@ -1287,6 +1287,84 @@ STAGE_CONTRAST_EXEMPT: Dict[str, str] = {
 }
 
 
+#: The four submissions the tranche actually goes out as, after the capacity stall of
+#: 2026-08-08 moved it to ``gpu-8xa100`` and after the amendment of the same date turned spike
+#: skipping on.
+#:
+#: WHY THESE ARE A SECOND TABLE AND NOT AN EDIT TO :data:`STAGE_SPECS`. The four L40S specs are
+#: the text three admitted submissions were built from and are not edited after the fact, for
+#: the reason their own headers give. These are the live ones.
+#:
+#: THE BASELINE HAS ALREADY RUN ONCE HERE AND ITS ``run_id`` IS STILL ``None``, WHICH IS THE
+#: POINT. ``run_019fe2f4-f528`` completed all five cells on this shape and is what
+#: ``.edullm/noise-floor.json`` was frozen from. It trained under plain ``AdamW``, so it is not
+#: comparable to anything submitted from these files and it is not a stage-1 that stage 2 can
+#: be read against. It stays in the record as the measurement that forced the amendment; the
+#: baseline it replaced has to be run again, which is why nothing here is marked submitted.
+A100_STAGE_SPECS: Dict[str, StageSpec] = {
+    "baseline": StageSpec(spec="run.baseline-a100.yaml", arm="baseline", stage=1),
+    "faithful": StageSpec(spec="run.faithful-a100.yaml", arm="faithful", stage=2),
+    "output-only": StageSpec(spec="run.output-only-a100.yaml", arm="output-only", stage=2),
+    "mhc": StageSpec(spec="run.mhc-a100.yaml", arm="mhc", stage=3),
+}
+
+
+#: The ``--hours`` every A100 stage is submitted under.
+#:
+#: FOUR, DOWN FROM SEVEN, AND IT IS A MEASUREMENT RATHER THAN A TRIM. The five baseline cells
+#: of ``run_019fe2f4-f528`` ran 2.92 to 3.00 hours each, so 7 was a 2.3x ceiling on a need
+#: nobody had yet measured when it was chosen. Four leaves 33% over the slowest observed cell,
+#: which is more margin than the L40S stages carried, and it is the hours factor of the
+#: approved ceiling -- multiplied by the attempts and by every one of the twenty cells -- so
+#: three unneeded hours are three hours charged to the ceiling twenty times over.
+#:
+#: IT DOES NOT BOUND THE AMENDED RUN ANY TIGHTER THAN IT BOUNDS THE MEASURED ONE. Skipping a
+#: step costs the optimizer update and not the forward-backward, so a skipped step takes the
+#: same wall clock as a taken one; replayed over the five measured cells the rule declines
+#: 0.12% to 0.52% of steps, which moves no cell by so much as a minute.
+#:
+#: IT HAS TO BE THE SAME ACROSS THE STAGES, for the reason :data:`STAGE_HOURS` gives: a bound
+#: is what kills a cell that runs long, so a stage under a looser bound survives drift that
+#: another dies of, and a treatment arm missing a cell is missing its slowest one rather than
+#: a random one.
+A100_STAGE_HOURS = 4.0
+
+#: The longest of the five baseline cells of ``run_019fe2f4-f528``, in hours, which is the
+#: only wall clock this shape has ever been measured at rather than predicted at. The five ran
+#: 2.92, 2.94, 2.97, 2.99 and 3.00. :data:`A100_STAGE_HOURS` is checked against it, so a
+#: ``--hours`` that stops covering the slowest observed cell is a failing test rather than a
+#: tranche that dies at the bound.
+A100_MEASURED_CELL_HOURS = 3.00
+
+#: The ``--attempts`` every A100 stage is submitted under. Two, unchanged, and it still buys
+#: only what ``OnStatusReason "Host EC2*" RETRY`` grants -- a lost host.
+A100_STAGE_ATTEMPTS = 2
+
+#: What all four A100 commands must resolve to, and therefore what all twenty cells are
+#: compared at.
+#:
+#: THE L40S TABLE PLUS EXACTLY FOUR DELTAS, WRITTEN AS A SPREAD SO THE DELTAS ARE THE REVIEWABLE
+#: THING. Everything not listed below is stage 1's own resolution, held as literals in
+#: :data:`STAGE_PINNED` for the reason its docstring gives.
+#:
+#: ``rank_microbatch_size`` is the shape: 16,384 ran on a 48 GB L40S and the same arithmetic
+#: puts it at 90% of a 40 GB A100, so this shape is 12,288 and an OOM is not retried.
+#:
+#: The three optimizer entries are the amendment of 2026-08-08. They are pinned rather than
+#: left to the parser because a spec that leans on a default is a spec that changes when the
+#: default does, and because this is the one setting whose whole justification is that it is
+#: identical on all four arms: an optimizer that differed between arms would confound the
+#: contrast far worse than the noise it removes. ``STAGE_CONTRAST_EXEMPT`` does not exempt any
+#: of the three, so the diff test refuses a tranche whose arms disagree about them.
+A100_STAGE_PINNED: Dict[str, object] = {
+    **STAGE_PINNED,
+    "rank_microbatch_size": 12_288,
+    "optimizer": "skip_step_adamw",
+    "skip_step_sigma_factor": 6,
+    "skip_step_rolling_interval": 128,
+}
+
+
 def seconds_per_step_within_budget(
     budget_usd: float,
     hourly_rate_usd: float,

@@ -162,6 +162,14 @@ same quantity divided by a constant. "Beats" means the paired difference defined
   effect is larger when the same parameters run twice. Reported as an estimate with an
   interval and no gate applied — at one seed on each tied arm the contrast cannot resolve
   anything the literature predicts, and pretending otherwise is worse than saying so.
+- **H7 (stability), secondary, and added after stage 1 rather than before it.** Arm 2 declines
+  more optimizer updates than arm 1, and at larger triggering gradient norms. It exists because
+  every arm now trains under `SkipStepAdamW`, which moves an instability out of the loss and
+  would otherwise take it out of the measurement entirely. It is listed here so that the
+  hypothesis list is complete, and the fact that it is post-hoc is part of the entry: the
+  statistic, the test and what it cannot resolve are all fixed in [The amendment of
+  2026-08-08](#the-amendment-of-2026-08-08-spike-skipping-on-every-arm). No primary conclusion
+  is conditioned on it.
 
 **H2b, and why it is marked blocked rather than quietly dropped.** The result H2 sets out to
 explain is Tencent's −0.020 on a *downstream average* at 1.2B, and arm 3 produces in-loop
@@ -977,6 +985,189 @@ training stability wearing the clothes of a finding about loss. Five Bernoulli d
 separate them: the two spikes in five runs measured here put spike propensity at 0.4 with an
 exact 95% interval of **0.053 to 0.853**, so the tranche cannot tell an arm that spikes half as
 often from one that spikes twice as often, in either direction.
+
+### The amendment of 2026-08-08: spike skipping on every arm
+
+**This is a change to the pre-registration made after seeing data, and it is recorded as one.**
+Everything above this line was written before any treatment cell existed; this section was not.
+It was written after `run_019fe2f4-f528` finished, because of what that submission measured,
+and no reader should be asked to work that out for themselves. What follows says what was seen,
+what changed, what the change costs, and what is now claimed that was not claimed before.
+
+`.edullm/noise-floor.json` is **not** revised, regenerated or deleted. It is the frozen record
+of what the design's own comparator did under plain `AdamW`, it is what forced this amendment,
+and an amendment that quietly replaced the evidence for itself would be worth nothing. Every
+number in the two sections above still stands as measured.
+
+#### What changed
+
+One setting, and one bound.
+
+| | before | after |
+| --- | --- | --- |
+| optimizer, all four arms | `AdamW` | **`SkipStepAdamW`**, σ-factor 6, rolling window 128 |
+| `--hours`, all four stages | 7 | **4** |
+
+The optimizer is `--optimizer skip_step_adamw` in all four A100 specs and is the parser's
+default, so an arm cannot lose it by omission. `SkipStepOptimizer.get_step_factor` declines an
+update whose batch loss **or** pre-clipping gradient norm is more than six standard deviations
+above its own rolling mean of the previous 128 steps. Nothing else about any arm moves. The
+`--hours` change is unrelated bookkeeping and is [argued in the spec
+header](run.baseline-a100.yaml): the five measured cells ran 2.92 to 3.00 hours against a
+7-hour bound, and `--hours` is the hours factor of the approved ceiling, multiplied by attempts
+and by every cell.
+
+#### Why, and why the number is not ours
+
+The case is entirely in [Two of the five runs took a loss
+spike](#two-of-the-five-runs-took-a-loss-spike-and-that-is-99-of-the-variance) and is not
+restated. In one line: 99.0% of the endpoint variance was the spike-or-not split, one episode
+costs 0.036 nats permanently, that is more than ByteDance's entire effect, and the optimizer
+that would have declined those updates ships in this library and was not enabled.
+
+**The two constants are `SkipStepAdamWConfig`'s own defaults, taken unchanged, and that is the
+argument for them.** Every official OLMo-2 and OLMo-3 pre-training script in
+`src/scripts/official/` builds `SkipStepAdamWConfig` and not one overrides either. A threshold
+chosen here instead would be a threshold chosen after seeing which cells spiked, on the arm
+that is the comparator for every hypothesis in the module, and there would be no way to
+distinguish it from one tuned until the comparator looked good.
+
+The defaults were nevertheless *checked* against the episodes rather than assumed to cover
+them. `.edullm/skip_step_calibration.py` drives the real `get_step_factor` over the five
+recorded histories, step by step:
+
+| seed | steps declined of 6,000 | largest triggering grad norm | episode onset |
+| --- | --- | --- | --- |
+| 0 | 26 | **9.30** | 1376–1418, first declined step **1,374** |
+| 1 | 31 | **20.45** | 1726–1773, first declined step **1,726** |
+| 2 | 7 | 0.35 | none |
+| 3 | 13 | 0.24 | none |
+| 4 | 14 | 0.33 | none |
+
+Both episodes are caught **at or before their first step**, on the gradient-norm channel, at
+z = +10.7 and z = +26.0 against a rolling norm of 0.153 ± 0.017. The loss channel is blind at
+both onsets (z = +0.4 and z = −1.4), which is why the rule has to fire when *either* signal
+does and why a loss-only guard would have changed nothing. Onset detection is insensitive to
+the constant — 4, 5, 6, 8 and 10 all catch both — so the choice trades only the false-positive
+rate on a healthy run, which at 6 is 0.12% to 0.23% of steps.
+
+**This is a replay and not a counterfactual, and the distinction bounds what it licenses.** The
+trajectory replayed is the one that spiked; declining an update changes every step after it, so
+none of this says what the loss would have become. It says the rule fires at the onset rather
+than after the damage, and what it costs a clean run. Both are read off the recorded history.
+Neither is a prediction that the spikes are gone.
+
+#### Why uniformly, which is the part that is not optional
+
+Turning skipping on for the arms suspected of instability and not for the comparator would be
+the worst available choice. This document [already
+predicts](#what-the-tranche-can-now-detect) that `faithful` may spike more than `baseline`
+does, so the optimizer would be correlated with the treatment, and every H1 and H2a number
+would mix the mechanism with the intervention meant to clean up after it. That is a larger
+confound than the noise it removes. So the setting is identical on all twenty cells, pinned in
+`A100_STAGE_PINNED`, exempt from nothing in `STAGE_CONTRAST_EXEMPT`, and
+`test_the_a100_specs_differ_in_the_arm_and_in_nothing_else` fails on a laptop if one arm
+disagrees.
+
+**The comparator has to be run again, which is the real price of this amendment.** An arm that
+can decline updates is not comparable to one that cannot, so `run_019fe2f4-f528` cannot serve
+as stage 1 of the amended tranche however good its data is. All four `A100_STAGE_SPECS` carry
+`run_id=None` and the baseline goes first, exactly as the original ordering requires. σ̂ is
+re-measured from the new baseline; the frozen artifact is not carried forward as if the change
+had not happened.
+
+#### The confound this creates, and the outcome that replaces it
+
+Suppressing an instability does not make it not have happened; it moves it out of the loss and
+into nothing at all, unless something records it. An arm that would have spiked in four runs of
+five now reads a couple of hundredths of a nat worse and gets written up as a **result about
+quality**, when it is a result about **stability**. Those are different claims and the tranche
+would silently return the wrong one.
+
+So skipping is logged as a first-class per-arm outcome, on every arm including the comparator,
+by `SkipStepMonitorCallback`:
+
+- `stability/steps skipped` — cumulative, so the last value is the run's total.
+- `stability/grad norm at a skipped step` — recorded **only** on a declined step, so the steps
+  at which the key exists *are* the list of declined steps and no separate index is needed.
+- `stability/largest grad norm at a skipped step` — running maximum, because the count alone
+  does not separate a run that declined a dozen unremarkable steps from one that declined the
+  onset of a spike. Magnitude does: measured above, the largest trigger on a clean run was 0.35
+  against 9.30 and 20.45 on the two that spiked.
+
+The callback reads values the train module has already recorded and reduced, so it adds no
+collective and no host-device sync, and it cannot disagree with the optimizer because it
+reports the decision taken rather than re-deriving one. It refuses to attach to a run whose
+optimizer cannot skip, so an arm that lost the setting fails at start-up instead of reporting a
+clean zero for six thousand steps.
+
+#### H7 (stability), pre-registered here rather than after the fact
+
+**H7. `faithful` declines more updates than `baseline`, and at larger triggering gradient
+norms.** Directional, against the same comparator as H1, on the twenty cells of the amended
+tranche.
+
+- **Primary statistic:** per-run count of declined steps over the 6,000-step horizon.
+- **Test:** exact two-sided permutation test on the 5 + 5 per-run counts, α = 0.05. Counts
+  cluster within a run and are not 6,000 independent draws, so no Poisson or negative-binomial
+  parameterisation is assumed and none is fitted.
+- **Secondary statistic:** the per-run maximum triggering gradient norm, same test. This is the
+  one that separates "declined a few noisy steps" from "declined the onset of a spike", and a
+  count that moves without it is not evidence of instability.
+- **Reported regardless of outcome**, with the per-arm counts in full, because a null here is
+  informative and is one of the things stage 1 could not produce at all.
+
+**What H7 can and cannot resolve, stated now.** With 5 v 5 the smallest attainable two-sided
+permutation p is 2/C(10,5) = **0.0079**, so complete separation between the arms *is*
+detectable at α = 0.05 and partial separation mostly is not. This is nonetheless a strict
+improvement on what the tranche could say before: a spiked-or-not indicator is one bit per run
+and put spike propensity at 0.4 with an exact interval of [0.053, 0.853], which resolves
+nothing, whereas a count over 6,000 steps carries considerably more. H7 is a **secondary**
+hypothesis and no primary conclusion is conditioned on it.
+
+#### What the fix buys, if it works
+
+At the within-group σ of the three clean cells — 0.00197 nats, 0.00214 after the df = 3 c₄
+correction — the same 5 v 5 design detects **0.0040 nats unpaired**, a factor of ten.
+**That number is the ceiling and should not be the expectation.** It is estimated on three runs
+and is four to five times smaller than the lowest σ anyone has published for this class of
+model; believing it means believing this configuration is quieter than anything DataDecide
+measured. The honest range:
+
+| residual σ, if the spikes are gone | unpaired MDE | paired, ρ = 0.5 |
+| --- | --- | --- |
+| 0.0021, the clean-cell floor | 0.0040 | 0.0027 |
+| 0.0063, mid | 0.0119 | 0.0086 |
+| 0.0105, half the measured σ̂ | 0.0198 | 0.0143 |
+| 0.0211, unchanged | 0.0398 | 0.0288 |
+
+**The pre-registered expectation is the literature band, σ ≈ 0.008–0.012, so an unpaired MDE
+near 0.015–0.020 nats.** That resolves ByteDance's 0.030 comfortably, sits right at Tencent's
+0.020, and still does **not** resolve the ~0.010 a 370M replication should expect from
+attenuation. The amendment makes the tranche able to answer H1 at full strength. It does not
+make it able to answer H1 attenuated, and nothing in this section should be read as claiming
+otherwise.
+
+#### If it does not work
+
+Three outcomes, and the response to each is fixed now so that none of them becomes a second
+post-hoc adjustment.
+
+- **Episodes still occur at the same rate.** The replay says the rule fires at the onset of
+  both known episodes, so this would mean new episodes with a signature neither channel sees.
+  **Do not re-tune the threshold.** A second threshold chosen after a second look at the
+  comparator is fitting, not fixing. Publish σ̂ as measured, and treat the instability as the
+  finding — it is a more interesting one than the effect the tranche went looking for.
+- **Episodes are suppressed but σ̂ stays high.** Then the variance was never only spikes, and
+  the answer is replicates rather than another intervention. At σ = 0.0105 an unpaired 0.010
+  needs 18 seeds per arm; at the measured 0.0211 it needs 71. Both are re-scoping decisions
+  with a price, and the right response is to state the price rather than to keep adjusting the
+  design until the number looks affordable.
+- **Skipping suppresses the episodes but changes the endpoint.** Watch for it: the three clean
+  cells declined 7, 13 and 14 steps apiece, so `baseline` under this rule is not quite the
+  `baseline` that was measured. It is the same comparison for all four arms, so the contrasts
+  are unaffected, but any comparison drawn to `run_019fe2f4-f528`'s absolute numbers is not
+  like-for-like and is not to be made.
 
 ### Throughput
 
@@ -1917,10 +2108,18 @@ correction off either way.
 python .edullm/train_hyper_connections.py --list-arms
 
 # Tests, none of which need a GPU.
-pytest -v .edullm/test_hyper_connection_arms.py .edullm/test_train_hyper_connections.py
+pytest -v .edullm/test_hyper_connection_arms.py .edullm/test_train_hyper_connections.py \
+          .edullm/test_skip_step_calibration.py
 pytest -v src/test/nn/transformer/hyper_connection_test.py \
           src/test/nn/transformer/block_reuse_test.py \
-          src/test/train/callbacks/hyper_connection_monitor_test.py
+          src/test/train/callbacks/hyper_connection_monitor_test.py \
+          src/test/train/callbacks/skip_step_monitor_test.py
+
+# What the amendment's skip threshold would have done to the runs that are already finished.
+# --self-test needs no network; the replay needs W&B and reads the histories of one submission.
+python .edullm/skip_step_calibration.py --self-test
+python .edullm/skip_step_calibration.py --submission run_019fe2f4-f528 \
+  --cache /tmp/hc-history.json --sigma 4,5,6,8,10 --episodes 0:1376-1418,1:1726-1773
 
 # Preflight, on a laptop, before anything is submitted. Needs corpus credentials, no GPU.
 for arm in baseline faithful output-only; do
