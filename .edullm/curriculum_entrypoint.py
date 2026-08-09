@@ -18,7 +18,7 @@ import torch.distributed as dist
 from olmo_core.config import DType
 from olmo_core.distributed.parallel import DataParallelType
 from olmo_core.distributed.utils import barrier, get_fs_local_rank, get_rank, get_world_size
-from olmo_core.float8 import Float8Config
+from olmo_core.float8 import AOFloat8LinearConfig, Float8Config
 from olmo_core.nn.transformer import TransformerDataParallelWrappingStrategy
 from olmo_core.optim import CosWithWarmup, OptimGroupOverride, SkipStepAdamWConfig
 from olmo_core.train import (
@@ -35,6 +35,7 @@ from olmo_core.train.callbacks import (
 )
 from olmo_core.train.train_module import (
     TransformerDataParallelConfig,
+    TransformerExpertParallelConfig,
     TransformerTrainModuleConfig,
 )
 
@@ -48,7 +49,6 @@ from curriculum_data import (
 from curriculum_loader import CurriculumDataLoader, ParentChunkDataset
 from curriculum_model import MODEL_IDENTITY, build_model_config
 from curriculum_pacing import DIFFICULTY_METRICS, ORDER_GROUPS, PACING_NAMES
-from curriculum_ema import EMA_WANDB_STEP, build_ema_checkpoint, finalize_ema_production
 from production_contract import checkpoint as checkpoint_contract
 from production_contract import task_loss
 from production_contract import wandb_artifacts
@@ -56,10 +56,10 @@ from production_contract import wandb_artifacts
 RECIPE_PATH = Path(__file__).with_name("curriculum_recipe.json")
 PACKAGED_TASK_LOSS_SCRIPT = Path(__file__).with_name("task_loss") / "eval_task_loss_olmo_core.py"
 PACKAGED_LADDER_CONFIG = Path(__file__).with_name("task_loss") / "ladder_base_config.yaml"
-PARENT_DATASET_ID = "pretrain/regmix-10b"
+PARENT_DATASET_ID = "pretrain/opt-with-synthetic-10b"
 PARENT_VERSION = "v1"
-PARENT_MANIFEST_SHA256 = "a24992f53dc4a900bacf8fa571d77e343fd28ffa9054c14b93d54204b0a38cb4"
-ORDER_DATASET_ID = "curriculum/regmix-370m"
+PARENT_MANIFEST_SHA256 = "e4eb0ce47b27c5d923b97e593a0fdc51edf4a78710caedc4557ae3488777f797"
+ORDER_DATASET_ID = "curriculum/opt-with-synthetic-10b"
 SEQUENCE_LENGTH = 2048
 GLOBAL_BATCH_TOKENS = 4_194_304
 RANK_MICROBATCH_TOKENS = 32_768
@@ -67,13 +67,11 @@ TOTAL_STEPS = 2384
 SEED = 42
 PEAK_LR = 4e-4
 WARMUP_STEPS = 24
-LR_ALPHA_F = 1.0
+LR_ALPHA_F = 0.1
 CHECKPOINT_INTERVAL = 125
-EMA_STEPS = (2000, 2125, 2250, 2384)
-EMA_ALPHA = 0.8
-WANDB_PROJECT_NAME = "curriculum"
-WANDB_PROJECT_EXT_NAME = "curriculum-ext"
-WANDB_PROJECT_NAMES = frozenset((WANDB_PROJECT_NAME, WANDB_PROJECT_EXT_NAME))
+WANDB_PROJECT_NAME = "curriculum-moe"
+WANDB_PROJECT_NAMES = frozenset((WANDB_PROJECT_NAME,))
+CHECKPOINT_RESTART_REQUEST = "restart_after_checkpoint.json"
 
 
 def _wandb_project_name() -> str:
@@ -131,9 +129,6 @@ def load_recipe(path: Path = RECIPE_PATH) -> tuple[Arm, ...]:
         "warmup_steps": WARMUP_STEPS,
         "alpha_f": LR_ALPHA_F,
         "checkpoint_interval": CHECKPOINT_INTERVAL,
-        "ema_steps": list(EMA_STEPS),
-        "ema_alpha": EMA_ALPHA,
-        "ema_wandb_step": EMA_WANDB_STEP,
     }
     if training != fixed:
         raise CurriculumConfigError("recipe training fields differ from the approved recipe")
@@ -155,11 +150,13 @@ def load_recipe(path: Path = RECIPE_PATH) -> tuple[Arm, ...]:
         (4, "interleave-flesch", "interleave_i10_linear", "flesch", "flesch"),
         (5, "control", "control", None, None),
         (6, "quadratic10-mtld", "quadratic_n10", "mtld", "mtld"),
+        (7, "warmup-mtld", "warmup_1000", "mtld", "mtld"),
+        (8, "warmup-linear10-mtld", "warmup_linear_n10_1000", "mtld", "mtld"),
     )
     if tuple(
         (arm.index, arm.name, arm.pacing, arm.metric, arm.order_group) for arm in arms
     ) != expected_arms:
-        raise CurriculumConfigError("recipe arms differ from the approved seven-arm matrix")
+        raise CurriculumConfigError("recipe arms differ from the approved nine-arm matrix")
     for arm in arms:
         if arm.pacing not in PACING_NAMES:
             raise CurriculumConfigError(f"{arm.name}: unknown pacing {arm.pacing}")
@@ -194,6 +191,20 @@ def checkpoint_steps(total_steps: int) -> list[int]:
 def train_module_config(
     rank_microbatch_tokens: int = RANK_MICROBATCH_TOKENS,
 ) -> TransformerTrainModuleConfig:
+    dp_name = (
+        DataParallelType.fsdp
+        if os.environ.get("EDULLM_BENCH_DP") == "fsdp"
+        else DataParallelType.hsdp
+    )
+    reduce_dtype = (
+        DType.bfloat16
+        if os.environ.get("EDULLM_BENCH_REDUCE_BF16") == "1"
+        else DType.float32
+    )
+    ep_degree = int(os.environ.get("EDULLM_BENCH_EP_DEGREE", "0"))
+    dp_options: dict[str, Any] = {}
+    if ep_degree and dp_name == DataParallelType.hsdp:
+        dp_options["num_replicas"] = 1
     return TransformerTrainModuleConfig(
         rank_microbatch_size=int(rank_microbatch_tokens),
         max_sequence_length=SEQUENCE_LENGTH,
@@ -208,12 +219,21 @@ def train_module_config(
         scheduler=CosWithWarmup(warmup=WARMUP_STEPS, alpha_f=LR_ALPHA_F),
         compile_model=True,
         dp_config=TransformerDataParallelConfig(
-            name=DataParallelType.hsdp,
+            name=dp_name,
             param_dtype=DType.bfloat16,
-            reduce_dtype=DType.float32,
+            reduce_dtype=reduce_dtype,
+            prefetch_factor=int(os.environ.get("EDULLM_BENCH_PREFETCH", "0")),
             wrapping_strategy=TransformerDataParallelWrappingStrategy.full,
+            **dp_options,
         ),
-        float8_config=Float8Config(enabled=False),
+        ep_config=(
+            TransformerExpertParallelConfig(degree=ep_degree) if ep_degree else None
+        ),
+        float8_config=(
+            Float8Config(ao=AOFloat8LinearConfig.recommended())
+            if os.environ.get("EDULLM_BENCH_FLOAT8") == "1"
+            else Float8Config(enabled=False)
+        ),
         z_loss_multiplier=1e-5,
         max_grad_norm=1.0,
     )
@@ -285,17 +305,12 @@ class CurriculumCheckpointCallback(Callback):
         self.fingerprint_path = fingerprint_path
         self.module_builder = module_builder
         self._completed: set[int] = set()
-        self._ema_completed = False
 
     def state_dict(self) -> dict[str, Any]:
-        return {
-            "completed_steps": sorted(self._completed),
-            "ema_completed": self._ema_completed,
-        }
+        return {"completed_steps": sorted(self._completed)}
 
     def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         self._completed = {int(step) for step in state_dict.get("completed_steps", [])}
-        self._ema_completed = bool(state_dict.get("ema_completed", False))
 
     def _release(self) -> None:
         old_module = self.trainer.train_module
@@ -337,64 +352,9 @@ class CurriculumCheckpointCallback(Callback):
             else f"curriculum:{self.arm.pacing}"
         )
 
-    def _finalize_ema(self) -> None:
-        """Build the post-hoc EMA, eval it, and publish it as the final model.
-
-        Intermediate permanent steps never upload a model artifact. After the
-        true final training step, this merges EMA_STEPS, runs the full 20-label
-        task-loss suite on the merged weights, and uploads that EMA checkpoint
-        plus its eval to the same W&B run at step EMA_WANDB_STEP (2385).
-        """
-        if self._ema_completed:
-            return
-        if self.eval_script is None:
-            if self.production:
-                raise checkpoint_contract.CheckpointContractError(
-                    "production runs require automatic EMA finalization with task loss"
-                )
-            return
-        if not all(step in self._completed for step in EMA_STEPS):
-            return
-
-        ema_dir = self.save_folder / "step2384-ema"
-        if get_rank() == 0:
-            build_ema_checkpoint(
-                self.save_folder,
-                arm=self.arm.name,
-                output_dir=ema_dir,
-                overwrite=True,
-            )
-        barrier()
-
-        self._release()
-        barrier()
-
-        failure: str | None = None
-        if get_rank() == 0:
-            try:
-                finalize_ema_production(
-                    checkpoints_root=self.save_folder,
-                    arm=self.arm.name,
-                    run_name=self.run_name,
-                    task_loss_dir=self.task_loss_dir,
-                    eval_script=self.eval_script,
-                    task_loss_nproc=self.task_loss_nproc,
-                    progress_dir=self.progress_dir,
-                    fingerprint_path=self.fingerprint_path,
-                    wandb_run=wandb_artifacts.wandb_run_from_trainer(self.trainer),
-                    wandb_mode=self.wandb_mode,
-                    production=self.production,
-                    method=self._method_name(),
-                    ema_dir=ema_dir,
-                    evaluate=self._evaluate,
-                )
-                self._ema_completed = True
-            except BaseException as exc:  # noqa: BLE001
-                failure = f"EMA finalization failed: {type(exc).__name__}: {exc}"
-        _broadcast_failure(failure)
-        barrier()
-
     def _finalize(self, step: int) -> None:
+        if not self.production and self.eval_script is None:
+            return
         step = int(step)
         if step in self._completed or step not in checkpoint_steps(self.total_steps):
             return
@@ -434,7 +394,7 @@ class CurriculumCheckpointCallback(Callback):
                     wandb_run=wandb_artifacts.wandb_run_from_trainer(self.trainer),
                     wandb_mode=self.wandb_mode,
                     production=self.production,
-                    upload_checkpoint=False,
+                    upload_checkpoint=step == self.total_steps,
                     run_evaluator=self._already_evaluated,
                 )
             except BaseException as exc:  # noqa: BLE001
@@ -442,8 +402,30 @@ class CurriculumCheckpointCallback(Callback):
         _broadcast_failure(failure)
         self._completed.add(step)
         barrier()
-        if step == self.total_steps:
-            self._finalize_ema()
+        if 0 < step < self.total_steps:
+            if get_rank() == 0:
+                request = self.progress_dir / CHECKPOINT_RESTART_REQUEST
+                request.parent.mkdir(parents=True, exist_ok=True)
+                temporary = request.with_suffix(".tmp")
+                temporary.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": 1,
+                            "durable_step": step,
+                            "reason": "clear_cuda_state_after_task_loss_eval",
+                        },
+                        indent=2,
+                        sort_keys=True,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                os.replace(temporary, request)
+            barrier()
+            # Reloading after the synchronous evaluator leaves compiled CUDA state
+            # resident. End this process cleanly at the durable boundary; the RunPod
+            # supervisor resumes from the kept checkpoint in a fresh CUDA process.
+            self.trainer.hard_stop = Duration.steps(step)
 
     def pre_train(self) -> None:
         self._finalize(0)
@@ -538,9 +520,6 @@ def scientific_identity(
         "warmup_steps": WARMUP_STEPS,
         "alpha_f": LR_ALPHA_F,
         "checkpoint_steps": checkpoint_steps(total_steps),
-        "ema_steps": list(EMA_STEPS),
-        "ema_alpha": EMA_ALPHA,
-        "ema_wandb_step": EMA_WANDB_STEP,
     }
 
 
@@ -686,7 +665,10 @@ def run_worker(args: argparse.Namespace) -> None:
             cancel_check_interval=10,
             save_overwrite=False,
         )
-        .with_callback("checkpointer", CheckpointerCallback(**checkpointer_options))
+        .with_callback(
+            "checkpointer",
+            CheckpointerCallback(enabled=not args.local_smoke, **checkpointer_options),
+        )
         .with_callback(
             "wandb",
             WandBCallback(

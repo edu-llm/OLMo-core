@@ -171,8 +171,16 @@ def load_model(checkpoint: Path, model: torch.nn.Module) -> int:
     payload = torch.load(path, map_location="cpu", weights_only=False)
     state = _model_state(payload)
     embeddings = state.get("embeddings.weight")
-    if embeddings is not None and tuple(embeddings.shape) != (EMBEDDING_SIZE, 1024):
-        raise RuntimeError(f"invalid embeddings.weight shape: {tuple(embeddings.shape)}")
+    expected_embeddings = model.state_dict().get("embeddings.weight")
+    if embeddings is not None:
+        if expected_embeddings is None:
+            raise RuntimeError("model has no embeddings.weight parameter")
+        expected_shape = tuple(expected_embeddings.shape)
+        if tuple(embeddings.shape) != expected_shape:
+            raise RuntimeError(
+                f"invalid embeddings.weight shape: {tuple(embeddings.shape)}; "
+                f"expected {expected_shape}"
+            )
     missing, unexpected = model.load_state_dict(state, strict=False)
     if len(missing) > max(4, int(0.05 * (len(state) + len(missing)))):
         raise RuntimeError(f"too many missing model keys ({len(missing)}): {missing[:8]}")
@@ -189,7 +197,7 @@ def load_base_config(path: Path) -> TrainConfig:
     tokenizer = raw.get("tokenizer") or {}
     config = TrainConfig(
         model=ModelConfig(
-            d_model=int(model.get("d_model", 1024)),
+            d_model=int(model.get("d_model", 2048)),
             n_heads=int(model.get("n_heads", 16)),
             n_layers=int(model.get("n_layers", 16)),
             mlp_ratio=int(model.get("mlp_ratio", 8)),

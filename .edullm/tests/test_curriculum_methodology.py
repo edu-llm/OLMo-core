@@ -49,6 +49,7 @@ from curriculum_pacing import (  # noqa: E402
     CURRICULUM_ORDER_GROUP_FOR_METRIC,
     QUADRATIC_SEGMENT_BOUNDARIES,
     SEGMENT_BOUNDARIES,
+    WARMUP_LINEAR_SEGMENT_BOUNDARIES,
     curriculum_order_group,
     expanding_eligible_fraction,
     interleave_subbucket_durations,
@@ -105,9 +106,9 @@ def _loader(
     )
 
 
-def test_recipe_is_exact_approved_seven_arm_matrix() -> None:
+def test_recipe_is_exact_approved_nine_arm_matrix() -> None:
     arms = entrypoint.load_recipe()
-    assert tuple(arm.index for arm in arms) == tuple(range(7))
+    assert tuple(arm.index for arm in arms) == tuple(range(9))
     assert tuple((arm.name, arm.pacing, arm.metric, arm.order_group) for arm in arms) == (
         ("linear10-flesch", "linear_n10", "flesch", "flesch"),
         ("linear10-mtld", "linear_n10", "mtld", "mtld"),
@@ -116,16 +117,19 @@ def test_recipe_is_exact_approved_seven_arm_matrix() -> None:
         ("interleave-flesch", "interleave_i10_linear", "flesch", "flesch"),
         ("control", "control", None, None),
         ("quadratic10-mtld", "quadratic_n10", "mtld", "mtld"),
+        ("warmup-mtld", "warmup_1000", "mtld", "mtld"),
+        ("warmup-linear10-mtld", "warmup_linear_n10_1000", "mtld", "mtld"),
     )
     assert {arm.pacing for arm in arms} == {
         "linear_n10",
         "quadratic_n10",
         "warmup_1000",
+        "warmup_linear_n10_1000",
         "interleave_i10_linear",
         "control",
     }
-    assert all(arm.wandb_project == "curriculum" for arm in arms)
-    assert entrypoint.WANDB_PROJECT_NAMES == {"curriculum", "curriculum-ext"}
+    assert all(arm.wandb_project == "curriculum-moe" for arm in arms)
+    assert entrypoint.WANDB_PROJECT_NAMES == {"curriculum-moe"}
     assert CURRICULUM_DATASET_ID == "curriculum/regmix-370m"
     assert CURRICULUM_ORDER_GROUP_FOR_METRIC == {
         "compression_ratio": "compression",
@@ -139,7 +143,7 @@ def test_recipe_is_exact_approved_seven_arm_matrix() -> None:
 def test_fixed_olmo2_recipe_and_checkpoint_ladder() -> None:
     assert entrypoint.TOTAL_STEPS == 2384
     assert entrypoint.SEED == 42
-    assert entrypoint.LR_ALPHA_F == 1.0
+    assert entrypoint.LR_ALPHA_F == 0.1
     assert entrypoint.GLOBAL_BATCH_TOKENS == 4_194_304
     assert entrypoint.RANK_MICROBATCH_TOKENS == 32_768
     assert entrypoint.production_steps(None) == 2384
@@ -148,20 +152,20 @@ def test_fixed_olmo2_recipe_and_checkpoint_ladder() -> None:
     assert 2250 in steps and 2375 not in steps
     assert set(EMA_STEPS).issubset(steps)
     config = entrypoint.train_module_config()
-    assert config.scheduler.alpha_f == 1.0
+    assert config.scheduler.alpha_f == 0.1
     assert config.scheduler.warmup == 24
     assert config.z_loss_multiplier == 1e-5
     assert config.max_grad_norm == 1.0
     model = entrypoint.build_model_config()
     moe = model.block.feed_forward_moe
     assert moe is not None
-    assert moe.num_experts == 8
-    assert moe.router.top_k == 2
-    assert moe.hidden_size == 2048
-    assert model.d_model == 1024
+    assert moe.num_experts == 64
+    assert moe.router.top_k == 8
+    assert moe.hidden_size == 1024
+    assert model.d_model == 2048
     assert model.n_layers == 16
-    assert "llama_like_moe" in entrypoint.MODEL_IDENTITY
-    assert "num_experts=8" in entrypoint.MODEL_IDENTITY
+    assert "olmoe_1B_7B" in entrypoint.MODEL_IDENTITY
+    assert "num_experts=64" in entrypoint.MODEL_IDENTITY
 
 @pytest.mark.parametrize(
     ("step", "expected"),
@@ -181,6 +185,31 @@ def test_pacing_modes_match_methodology_boundaries() -> None:
     assert pool_for_step(1000, 1000, "expanding_25_1000").end == 1000
     assert pool_for_step(999, 100, "warmup_1000").ordered
     assert not pool_for_step(1000, 100, "warmup_1000").ordered
+    assert WARMUP_LINEAR_SEGMENT_BOUNDARIES == (
+        0,
+        100,
+        200,
+        300,
+        400,
+        500,
+        600,
+        700,
+        800,
+        900,
+        1000,
+    )
+    assert pool_for_step(0, 1000, "warmup_linear_n10_1000").end == 100
+    assert pool_for_step(99, 1000, "warmup_linear_n10_1000").start == 0
+    assert pool_for_step(100, 1000, "warmup_linear_n10_1000").start == 100
+    assert pool_for_step(900, 1000, "warmup_linear_n10_1000").start == 900
+    assert pool_for_step(999, 1000, "warmup_linear_n10_1000").start == 900
+    assert not pool_for_step(999, 1000, "warmup_linear_n10_1000").ordered
+    assert pool_for_step(1000, 1000, "warmup_linear_n10_1000") == pool_for_step(
+        1000, 1000, "warmup_1000"
+    )
+    assert pool_for_step(1000, 1000, "warmup_linear_n10_1000").start == 0
+    assert pool_for_step(1000, 1000, "warmup_linear_n10_1000").end == 1000
+    assert not pool_for_step(1000, 1000, "warmup_linear_n10_1000").ordered
     assert interleave_subbucket_durations(250) == [25] * 10
     assert interleave_subbucket_durations(134) == [13] * 9 + [17]
     assert interleave_subbucket_index(249) == 9
@@ -447,10 +476,10 @@ def test_production_recipe_statically_assembles_public_olmo_apis() -> None:
         "trainer_config.build",
         "trainer.fit",
     } <= calls
-    assert "TransformerConfig.llama_like_moe" in (
+    assert "TransformerConfig.olmoe_1B_7B" in (
         EDULLM / "curriculum_model.py"
     ).read_text(encoding="utf-8")
-    assert "num_experts=8" in (EDULLM / "curriculum_model.py").read_text(encoding="utf-8")
+    assert "num_experts=64" in (EDULLM / "curriculum_model.py").read_text(encoding="utf-8")
     assert "DataParallelType.hsdp" in source
     assert "max_duration=Duration.steps(total_steps)" in source
     assert "load_trainer_state=True, load_optim_state=True" in source
@@ -560,7 +589,7 @@ def test_run_worker_builds_concrete_eight_gpu_trainer_and_fits(
                 callback.trainer = trainer
             return trainer
 
-    monkeypatch.setenv("EDULLM_WANDB_PROJECT", "curriculum")
+    monkeypatch.setenv("EDULLM_WANDB_PROJECT", "curriculum-moe")
     monkeypatch.setenv("WANDB_API_KEY", "test-only")
     monkeypatch.setattr(
         entrypoint,
@@ -624,5 +653,43 @@ def test_run_worker_builds_concrete_eight_gpu_trainer_and_fits(
     contract = built_callbacks["curriculum_contract"]
     assert contract.task_loss_nproc == 8
     assert contract.eval_script == entrypoint.PACKAGED_TASK_LOSS_SCRIPT
-    assert built_callbacks["wandb"].project == "curriculum"
+    assert built_callbacks["wandb"].project == "curriculum-moe"
     assert entrypoint.TOTAL_STEPS in built_callbacks["checkpointer"].fixed_steps
+
+
+def test_checkpoint_callback_requests_clean_restart_after_durable_eval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    callback = entrypoint.CurriculumCheckpointCallback(
+        arm=entrypoint.ARMS[5],
+        total_steps=250,
+        save_folder=tmp_path / "checkpoints",
+        progress_dir=tmp_path / "progress",
+        task_loss_dir=tmp_path / "task-loss",
+        eval_script=tmp_path / "eval.py",
+        task_loss_nproc=8,
+        production=True,
+        wandb_mode="online",
+        run_name="unit",
+        fingerprint_path=tmp_path / "fingerprint.json",
+    )
+    trainer = types.SimpleNamespace(hard_stop=None)
+    callback.trainer = trainer
+    monkeypatch.setattr(entrypoint, "get_rank", lambda: 0)
+    monkeypatch.setattr(entrypoint, "barrier", lambda: None)
+    monkeypatch.setattr(
+        task_loss,
+        "pause_eval_reload_distributed",
+        lambda *_args, **_kwargs: (object(), {"labels": {}}),
+    )
+    monkeypatch.setattr(checkpoint, "finalize_permanent_checkpoint", lambda **_kwargs: None)
+
+    callback._finalize(125)
+
+    request = json.loads(
+        (tmp_path / "progress" / entrypoint.CHECKPOINT_RESTART_REQUEST).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert request["durable_step"] == 125
+    assert trainer.hard_stop == entrypoint.Duration.steps(125)

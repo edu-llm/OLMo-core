@@ -1,20 +1,19 @@
 # Curriculum 370M migration
 
-This branch implements the seven approved arms in `curriculum_recipe.json` without edits
+This branch implements the nine approved arms in `curriculum_recipe.json` without edits
 under `src/olmo_core`. The methodology source is
 `edu-llm/edullm/experiments/curriculum`: current README and pacing tests take
 precedence over older control scripts.
 
 Fixed contract:
 
-- MoE config A matched to OLMo2-370M compute (`d_model=1024`, 16 layers,
-  16 heads, reordered norm, 8 experts / top-2 with expert hidden 2048 so
-  active MLP width matches dense gated-SiLU 4096, full attention,
-  QK-RMSNorm, RoPE theta 500,000), Dolma2 tokenizer/vocabulary 100,352,
-  sequence length 2,048, global batch 4,194,304 tokens, rank microbatch
-  32,768 tokens
+- Stock OLMoE-1B-7B (`TransformerConfig.olmoe_1B_7B`: `d_model=2048`,
+  16 layers, 16 heads, dropless MoE with 64 experts / top-8 and expert
+  hidden 1024, reordered RMSNorm, QK-RMSNorm, RoPE theta 500,000),
+  Dolma2 tokenizer/vocabulary 100,352, sequence length 2,048, global
+  batch 4,194,304 tokens, rank microbatch 32,768 tokens
 - SkipStepAdamW at `4e-4`, betas `(0.9, 0.95)`, weight decay `0.1`
-  except embeddings at `0`, 24-step warmup, `alpha_f=1.0`
+  except embeddings at `0`, 24-step warmup, cosine decay to `alpha_f=0.1`
 - HSDP bf16 parameters/fp32 reductions, z-loss `1e-5`, max grad norm `1`,
   compiled model, random initialization
 - seed 42 and 2,384 production steps
@@ -34,6 +33,8 @@ Only the loader's pacing/ordering policy differs between arms:
 | 4 | `interleave-flesch` | `interleave_i10_linear` | `flesch` / `flesch` |
 | 5 | `control` | `control` | none (deterministic no-replacement shuffle) |
 | 6 | `quadratic10-mtld` | `quadratic_n10` | `mtld` / `mtld` |
+| 7 | `warmup-mtld` | `warmup_1000` | `mtld` / `mtld` |
+| 8 | `warmup-linear10-mtld` | `warmup_linear_n10_1000` | `mtld` / `mtld` |
 
 The table index is exactly the `--arm-index` CLI value. All arms log to the
 shared W&B project `curriculum`; runs are distinguished by run name/group.
@@ -85,7 +86,7 @@ ARM_INDEX=0 NPROC=1 FRESH=1 LOCAL_SMOKE=1 WANDB_MODE=disabled \
 ```
 
 Production additionally requires `WANDB_API_KEY`. The exact 20-label OLMES BPB
-evaluator and its OLMo2-370M base config are packaged under
+evaluator and its OLMoE-1B-7B ladder base config are packaged under
 `.edullm/task_loss/`; the Dockerfile pins the compatible `ai2-olmo` commit and
 evaluation dependencies and exports both paths. Curriculum arms may pin
 `CURRICULUM_DATASET_VERSION`; if omitted, the sealed latest version is resolved
@@ -110,7 +111,7 @@ ceiling, compilation correctly routes it to the admin exception gate.
 ## Checkpoint, evaluator, resume, and artifacts
 
 The evaluator is self-contained under `.edullm/task_loss/`: the checked-in
-script, OLMo2-370M ladder config, fixed 20 `*_rc_5shot_bpb` labels, and pinned
+script, OLMoE-1B-7B ladder config, fixed 20 `*_rc_5shot_bpb` labels, and pinned
 evaluation dependencies are copied into the image. At every permanent
 checkpoint all ranks pause, release the train module, run the complete suite,
 reload the checkpoint, and only then continue. Partial suites fail closed.

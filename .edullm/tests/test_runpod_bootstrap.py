@@ -78,19 +78,25 @@ def test_cli_error_still_deletes_session(tmp_path, monkeypatch) -> None:
 
 def test_runpod_stager_accepts_only_kept_curriculum_indices(monkeypatch) -> None:
     module = load_stager()
-    monkeypatch.setattr(sys, "argv", ["stage_inputs.py", "--arm-index", "6"])
-    assert module.parse_args().arm_index == 6
-    monkeypatch.setattr(sys, "argv", ["stage_inputs.py", "--arm-index", "7"])
+    monkeypatch.setattr(sys, "argv", ["stage_inputs.py", "--arm-index", "8"])
+    assert module.parse_args().arm_index == 8
+    monkeypatch.setattr(sys, "argv", ["stage_inputs.py", "--arm-index", "9"])
     with pytest.raises(SystemExit):
         module.parse_args()
 
     launch = (STAGER.parent / "launch.sh").read_text(encoding="utf-8")
-    assert "0|1|2|3|4|5|6" in launch
-    assert "ARM_INDEX must be 0..6" in launch
+    assert "0|1|2|3|4|5|6|7|8" in launch
+    assert "ARM_INDEX must be 0..8" in launch
     assert "control" in (STAGER.parents[1] / "curriculum_recipe.json").read_text(
         encoding="utf-8"
     )
     assert "quadratic10-mtld" in (STAGER.parents[1] / "curriculum_recipe.json").read_text(
+        encoding="utf-8"
+    )
+    assert "warmup-mtld" in (STAGER.parents[1] / "curriculum_recipe.json").read_text(
+        encoding="utf-8"
+    )
+    assert "warmup-linear10-mtld" in (STAGER.parents[1] / "curriculum_recipe.json").read_text(
         encoding="utf-8"
     )
 

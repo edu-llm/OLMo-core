@@ -8,6 +8,8 @@ INPUT_MANIFEST="${EDULLM_RUNPOD_INPUT_MANIFEST:-/workspace/edullm-inputs/curricu
 WANDB_ENV_FILE="${WANDB_ENV_FILE:-/workspace/wandb-session.env}"
 ARM_INDEX="${ARM_INDEX:-0}"
 RECOVERY_MODE="${RECOVERY_MODE:-fresh}"
+CURRICULUM_VERSION="${CURRICULUM_VERSION:-v1}"
+DEVICE_BATCH_SIZE="${DEVICE_BATCH_SIZE:-8}"
 
 [[ -f "${INPUT_MANIFEST}" ]] || { echo "stage inputs first: ${INPUT_MANIFEST}" >&2; exit 2; }
 if [[ -e "${AWS_ENV_FILE:-/workspace/aws-session.env}" ]]; then
@@ -29,8 +31,8 @@ fi
 
 export PYTHONPATH="${REPO_DIR}/src:${REPO_DIR}/.edullm"
 case "${ARM_INDEX}" in
-  0|1|2|3|4|5|6) ;;
-  *) echo "ARM_INDEX must be 0..6" >&2; exit 2 ;;
+  0|1|2|3|4|5|6|7|8) ;;
+  *) echo "ARM_INDEX must be 0..8" >&2; exit 2 ;;
 esac
 arm_name="$(
   ARM_INDEX="${ARM_INDEX}" python3 -c \
@@ -79,15 +81,19 @@ esac
 source "${identity_file}"
 
 export EDULLM_RUNPOD_INPUT_MANIFEST="${INPUT_MANIFEST}"
-export EDULLM_DATASET_ID="pretrain/regmix-10b"
+export EDULLM_DATASET_ID="pretrain/opt-with-synthetic-10b"
 export EDULLM_DATASET_VERSION="v1"
-export EDULLM_WANDB_PROJECT="${EDULLM_WANDB_PROJECT:-curriculum}"
+export EDULLM_WANDB_PROJECT="${EDULLM_WANDB_PROJECT:-curriculum-moe}"
 export WANDB_PROJECT="${EDULLM_WANDB_PROJECT}"
+export WANDB_RUN_GROUP="${WANDB_RUN_GROUP:-lgbm-synthetic-mtld}"
+export EDULLM_BENCH_REDUCE_BF16=1
 
 args=(
   --train-worker
   --arm-index "${ARM_INDEX}"
   --nproc 8
+  --device-batch-size "${DEVICE_BATCH_SIZE}"
+  --curriculum-version "${CURRICULUM_VERSION}"
   --run-dir "${arm_root}"
   --save-folder "${arm_root}/checkpoints"
   --progress-dir "${arm_root}/progress"
@@ -96,11 +102,44 @@ args=(
   --task-loss-eval-script "${REPO_DIR}/.edullm/task_loss/eval_task_loss_olmo_core.py"
   --ladder-base-config "${REPO_DIR}/.edullm/task_loss/ladder_base_config.yaml"
   --task-loss-nproc 8
-  "${recovery[@]}"
 )
 if [[ -n "${LENGTH_TOKENS:-}" ]]; then
   args+=(--length-tokens "${LENGTH_TOKENS}")
 fi
 
-exec python3 -m torch.distributed.run --standalone --nproc-per-node=8 -- \
-  "${REPO_DIR}/.edullm/runpod/entrypoint.py" "${args[@]}"
+restart_request="${arm_root}/progress/restart_after_checkpoint.json"
+while true; do
+  set +e
+  python3 -m torch.distributed.run --standalone --nproc-per-node=8 -- \
+    "${REPO_DIR}/.edullm/runpod/entrypoint.py" "${args[@]}" "${recovery[@]}"
+  status=$?
+  set -e
+  if [[ ${status} -ne 0 ]]; then
+    exit "${status}"
+  fi
+  if [[ ! -f "${restart_request}" ]]; then
+    exit 0
+  fi
+
+  durable_step="$(
+    python3 -c \
+      'import json,sys; print(int(json.load(open(sys.argv[1]))["durable_step"]))' \
+      "${restart_request}"
+  )"
+  marker_step="$(
+    python3 -c \
+      'import json,sys; print(int(json.load(open(sys.argv[1]))["last_durable_step"]))' \
+      "${arm_root}/progress/last_durable_step.json"
+  )"
+  [[ "${durable_step}" == "${marker_step}" ]] || {
+    echo "restart request step ${durable_step} != durable marker ${marker_step}" >&2
+    exit 2
+  }
+
+  PYTHONPATH="${REPO_DIR}/src:${REPO_DIR}/.edullm" \
+    python3 "${REPO_DIR}/.edullm/runpod/prune_old_checkpoints.py" "${arm_root}"
+  rm -f "${restart_request}"
+  export WANDB_RESUME=must
+  recovery=(--load-path "${arm_root}/checkpoints")
+  echo "Resuming ${arm_name} from durable step ${durable_step} in a fresh process"
+done

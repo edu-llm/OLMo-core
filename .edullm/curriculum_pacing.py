@@ -15,6 +15,8 @@ N_BUCKETS = 10
 SEGMENT_BOUNDARIES = (0, 250, 500, 750, 1000, 1250, 1500, 1750, 2000, 2250, 2384)
 # Weights 1..10 scaled to TOTAL_STEPS via largest-remainder (unit ≈ 43.345).
 QUADRATIC_SEGMENT_BOUNDARIES = (0, 43, 130, 260, 433, 650, 910, 1213, 1560, 1950, 2384)
+# Linear 10-bucket schedule compressed into the first 1000 warmup steps.
+WARMUP_LINEAR_SEGMENT_BOUNDARIES = (0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000)
 CURRICULUM_DATASET_ID = "curriculum/regmix-370m"
 PACING_NAMES = (
     "control",
@@ -22,6 +24,7 @@ PACING_NAMES = (
     "quadratic_n10",
     "expanding_25_1000",
     "warmup_1000",
+    "warmup_linear_n10_1000",
     "interleave_i10_linear",
 )
 DIFFICULTY_METRICS = ("compression_ratio", "flesch", "mtld", "learnability")
@@ -127,6 +130,11 @@ def pool_for_step(step: int, size: int, pacing: str) -> PoolSpec:
     if pacing == "warmup_1000":
         if int(step) < 1000:
             return PoolSpec(0, size, ordered=True, ordered_step=int(step))
+        return PoolSpec(0, size)
+    if pacing == "warmup_linear_n10_1000":
+        if int(step) < 1000:
+            start, end = buckets[segment_index(step, WARMUP_LINEAR_SEGMENT_BOUNDARIES)]
+            return PoolSpec(start, max(start + 1, end) if start == end else end)
         return PoolSpec(0, size)
     if pacing == "interleave_i10_linear":
         start, end = buckets[interleave_subbucket_index(step)]

@@ -98,7 +98,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path("/workspace/aws-session.env"),
     )
-    parser.add_argument("--arm-index", type=int, choices=range(7), required=True)
+    parser.add_argument("--arm-index", type=int, choices=range(9), required=True)
     parser.add_argument("--curriculum-version")
     parser.add_argument(
         "--stage-root",

@@ -4,13 +4,20 @@ The ordering is strict: materialize the checkpoint, complete the 20-label
 task-loss suite, upload required W&B artifacts, then advance the local durable
 step marker. Production online runs fail before advancing the marker if any
 required operation fails.
+
+After the durable marker advances, older local ``step*`` directories are pruned so
+only the most recent durable checkpoint remains. That keeps resume pointed at
+the latest complete checkpoint and bounds disk use for large MoE runs.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
+import re
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
@@ -19,6 +26,8 @@ DEFAULT_CHECKPOINT_INTERVAL = 125
 RUN_FINGERPRINT_FILENAME = "run_fingerprint.json"
 LAST_DURABLE_STEP_FILENAME = "last_durable_step.json"
 FINGERPRINT_SCHEMA_VERSION = 2
+_STEP_DIR_RE = re.compile(r"^step(\d+)$")
+log = logging.getLogger(__name__)
 
 
 class CheckpointContractError(RuntimeError):
@@ -229,6 +238,65 @@ def assert_checkpoint_materialized(checkpoint_dir: str | Path) -> Path:
     return checkpoint
 
 
+def list_step_checkpoint_dirs(save_folder: str | Path) -> list[tuple[int, Path]]:
+    """Return ``(step, path)`` pairs for local ``stepN`` checkpoint directories."""
+    root = Path(save_folder)
+    if not root.is_dir():
+        return []
+    found: list[tuple[int, Path]] = []
+    for child in root.iterdir():
+        if not child.is_dir():
+            continue
+        match = _STEP_DIR_RE.fullmatch(child.name)
+        if match is None:
+            continue
+        found.append((int(match.group(1)), child))
+    return sorted(found, key=lambda item: item[0])
+
+
+def discard_regenerable_eval_weights(checkpoint_dir: str | Path) -> bool:
+    """Remove ``model_eval.pt`` after eval; DCP can rematerialize it later."""
+    path = Path(checkpoint_dir) / "model_eval.pt"
+    if not path.is_file():
+        return False
+    path.unlink()
+    return True
+
+
+def prune_older_permanent_checkpoints(
+    save_folder: str | Path,
+    *,
+    keep_step: int,
+) -> list[Path]:
+    """Delete local ``step*`` checkpoints with step strictly less than ``keep_step``.
+
+    Call only after the kept checkpoint is materialized and the durable-step
+    marker has advanced to ``keep_step``. Newer directories are left untouched so a
+    mid-finalize newer checkpoint cannot be removed by a stale prune. The kept
+    directory is never removed, so resume still finds the latest durable
+    checkpoint.
+    """
+    keep_step = int(keep_step)
+    if keep_step < 0:
+        raise ValueError(f"keep_step must be >= 0, got {keep_step}")
+    root = Path(save_folder)
+    kept = root / f"step{keep_step}"
+    if not kept.is_dir():
+        raise CheckpointContractError(
+            f"refusing to prune checkpoints: missing kept checkpoint {kept}"
+        )
+    assert_checkpoint_materialized(kept)
+
+    removed: list[Path] = []
+    for step, path in list_step_checkpoint_dirs(root):
+        if step >= keep_step:
+            continue
+        log.info("Pruning older permanent checkpoint at %s (keeping step %d)", path, keep_step)
+        shutil.rmtree(path)
+        removed.append(path)
+    return removed
+
+
 def finalize_permanent_checkpoint(
     *,
     arm: str,
@@ -248,7 +316,12 @@ def finalize_permanent_checkpoint(
     upload_checkpoint: bool,
     run_evaluator: Optional[Callable[..., Any]] = None,
 ) -> Optional[dict[str, Any]]:
-    """Publish every evaluation and only an explicitly selected checkpoint."""
+    """Publish every evaluation and only an explicitly selected checkpoint.
+
+    After the durable-step marker advances, regenerable ``model_eval.pt`` weights
+    are discarded and every older local ``step*`` directory under the save folder
+    is pruned so only ``step`` remains for resume.
+    """
     from . import task_loss
     from . import wandb_artifacts as artifacts
 
@@ -276,6 +349,16 @@ def finalize_permanent_checkpoint(
 
     if fingerprint_path is not None:
         copy_fingerprint_into_checkpoint(fingerprint_path, checkpoint)
+
+    # W&B stages a full copy of model artifacts before upload. On fixed-size
+    # training volumes, release regenerable eval weights and the previous
+    # checkpoint before staging the true-final artifact. The new checkpoint is
+    # already materialized and evaluated, so it remains locally resume-safe if
+    # the upload itself needs to be retried.
+    if upload_checkpoint:
+        if task_loss_enabled:
+            discard_regenerable_eval_weights(checkpoint)
+        prune_older_permanent_checkpoints(checkpoint.parent, keep_step=int(step))
 
     artifact_ref: Optional[str] = None
     if upload_checkpoint:
@@ -330,4 +413,11 @@ def finalize_permanent_checkpoint(
             "fingerprint_schema_version": FINGERPRINT_SCHEMA_VERSION,
         },
     )
+    # Eval weights are regenerable from DCP; drop them after the suite succeeds so
+    # the kept checkpoint stays resume-safe without holding a second full copy.
+    if task_loss_enabled:
+        discard_regenerable_eval_weights(checkpoint)
+    # Only the latest durable checkpoint is retained locally. Resume loads from
+    # the save-folder parent and still finds keep_step after older dirs are gone.
+    prune_older_permanent_checkpoints(checkpoint.parent, keep_step=int(step))
     return payload

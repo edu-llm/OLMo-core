@@ -1,8 +1,9 @@
 # Curriculum 370M on FarmShare (8 × L40S)
 
-Seven approved arms via `ARM_INDEX` 0–6:
+Nine approved arms via `ARM_INDEX` 0–8:
 `linear10-flesch`, `linear10-mtld`, `linear10-learn`, `warmup-flesch`,
-`interleave-flesch`, `control`, `quadratic10-mtld`.
+`interleave-flesch`, `control`, `quadratic10-mtld`, `warmup-mtld`,
+`warmup-linear10-mtld`.
 
 ```bash
 cd /mnt/c/alpha_ai/OLMo-core-curriculum-370m

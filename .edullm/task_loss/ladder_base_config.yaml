@@ -1,8 +1,8 @@
-# Packaged OLMES evaluation base for OLMo2-370M curriculum checkpoints.
-run_name: curriculum-370m-ladder
+# Packaged OLMES evaluation base for stock OLMoE-1B-7B curriculum checkpoints.
+run_name: curriculum-olmoe-1b-7b-ladder
 seed: 42
 model:
-  d_model: 1024
+  d_model: 2048
   n_heads: 16
   n_layers: 16
   mlp_ratio: 8

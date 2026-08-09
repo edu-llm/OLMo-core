@@ -307,3 +307,114 @@ def test_durable_marker_advances_only_after_required_uploads(
             run_evaluator=evaluator,
         )
     assert checkpoint.read_last_durable_step(progress_dir) is None
+
+
+def test_prune_keeps_only_latest_durable_checkpoint(tmp_path: Path) -> None:
+    save_folder = tmp_path / "checkpoints"
+    for step in (0, 125, 250):
+        checkpoint_dir = save_folder / f"step{step}"
+        checkpoint_dir.mkdir(parents=True)
+        (checkpoint_dir / "state.pt").write_bytes(b"state")
+        (checkpoint_dir / "model_eval.pt").write_bytes(b"eval")
+
+    assert checkpoint.discard_regenerable_eval_weights(save_folder / "step250") is True
+    assert not (save_folder / "step250" / "model_eval.pt").is_file()
+
+    removed = checkpoint.prune_older_permanent_checkpoints(save_folder, keep_step=250)
+    assert sorted(path.name for path in removed) == ["step0", "step125"]
+    assert [path.name for _, path in checkpoint.list_step_checkpoint_dirs(save_folder)] == [
+        "step250"
+    ]
+    assert (save_folder / "step250" / "state.pt").is_file()
+
+
+def test_prune_leaves_newer_incomplete_checkpoints_alone(tmp_path: Path) -> None:
+    save_folder = tmp_path / "checkpoints"
+    for step in (0, 125, 250):
+        checkpoint_dir = save_folder / f"step{step}"
+        checkpoint_dir.mkdir(parents=True)
+        (checkpoint_dir / "state.pt").write_bytes(b"state")
+
+    removed = checkpoint.prune_older_permanent_checkpoints(save_folder, keep_step=125)
+    assert [path.name for path in removed] == ["step0"]
+    assert [path.name for _, path in checkpoint.list_step_checkpoint_dirs(save_folder)] == [
+        "step125",
+        "step250",
+    ]
+
+
+def test_prune_refuses_to_delete_missing_keep_step(tmp_path: Path) -> None:
+    save_folder = tmp_path / "checkpoints"
+    checkpoint_dir = save_folder / "step125"
+    checkpoint_dir.mkdir(parents=True)
+    (checkpoint_dir / "state.pt").write_bytes(b"state")
+    with pytest.raises(checkpoint.CheckpointContractError, match="missing kept checkpoint"):
+        checkpoint.prune_older_permanent_checkpoints(save_folder, keep_step=250)
+
+
+def test_finalize_prunes_older_checkpoints_after_durable_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    save_folder = tmp_path / "checkpoints"
+    progress_dir = tmp_path / "progress"
+    progress_dir.mkdir()
+    for step in (0, 125):
+        checkpoint_dir = save_folder / f"step{step}"
+        checkpoint_dir.mkdir(parents=True)
+        (checkpoint_dir / "state.pt").write_bytes(b"state")
+        (checkpoint_dir / "model_eval.pt").write_bytes(b"eval-weights")
+
+    def evaluator(_checkpoint, *, out_path, **_kwargs):
+        output = Path(out_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps({"labels": _labels()}), encoding="utf-8")
+
+    class FakeArtifact:
+        def __init__(self, name, type, metadata=None):
+            self.name = name
+
+        def add_dir(self, path):
+            self.path = path
+
+        def add_file(self, path, name=None):
+            self.path = path
+
+    class Uploaded:
+        def wait(self):
+            pass
+
+    class FakeRun:
+        name = "unit"
+        project = "unit-project"
+        entity = None
+
+        def log(self, *_args, **_kwargs):
+            pass
+
+        def log_artifact(self, artifact, aliases=None):
+            return Uploaded()
+
+    monkeypatch.setattr(artifacts, "_wandb", type("Wandb", (), {"Artifact": FakeArtifact})())
+    checkpoint.finalize_permanent_checkpoint(
+        arm="probe",
+        checkpoint_dir=save_folder / "step125",
+        step=125,
+        run_name="unit",
+        task_loss_dir=tmp_path / "task-loss",
+        task_loss_enabled=True,
+        progress_dir=progress_dir,
+        wandb_run=FakeRun(),
+        wandb_mode="online",
+        production=True,
+        upload_checkpoint=False,
+        run_evaluator=evaluator,
+    )
+
+    durable = checkpoint.read_last_durable_step(progress_dir)
+    assert durable is not None
+    assert durable["last_durable_step"] == 125
+    assert [path.name for _, path in checkpoint.list_step_checkpoint_dirs(save_folder)] == [
+        "step125"
+    ]
+    assert not (save_folder / "step125" / "model_eval.pt").is_file()
+    assert (save_folder / "step125" / "state.pt").is_file()
