@@ -54,7 +54,16 @@ none of these substitutions.
 
 Each job is one arm (or the proxy cohort) on `gpu-8xa100` with team `pre-training` and
 dataset `reservoir-dolma2-v1`. Expected wall time is about 1–1.5 hours per arm; pass
-`--hours 4` as the hard runtime bound at `edullm check` and `edullm submit`.
+`--hours 4` as the hard runtime bound and `--attempts 2` (the `olmo-core-train` maximum).
+
+Runtime secrets:
+
+| Secret | Proxy cohort | Arm 1 / 3 | Arm 2 (`no_centaur`) |
+|--------|--------------|-----------|----------------------|
+| `WANDB_API_KEY` | required | required | required |
+| `OPENAI_API_KEY` | not used | required (30% Centaur) | not used |
+
+HPO artifacts mirror to W&B project `hpo-probe` (not the platform `wandb_project`).
 
 Proxy cohort first:
 
@@ -66,7 +75,7 @@ edullm check --json \
   --spec .edullm/run-hpo-proxy-cohort.yaml \
   --compute gpu-8xa100 \
   --hours 4 \
-  --attempts 1
+  --attempts 2
 ```
 
 Then each arm separately (distinct `EDULLM_RUN_ID`, set `EDULLM_HPO_SPEC` to the arm JSON):
@@ -80,5 +89,5 @@ edullm check --json \
   --team pre-training \
   --compute gpu-8xa100 \
   --hours 4 \
-  --attempts 1
+  --attempts 2
 ```

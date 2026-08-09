@@ -5,7 +5,7 @@
 # EDULLM_CHECKPOINT_DIR before frozen-arm HPO may rank candidates.
 #
 # Expected wall time is well under one hour on 8×A100; pass --hours 4 at check/submit as
-# the hard runtime bound.
+# the hard runtime bound. Pass --attempts 2, the maximum olmo-core-train allows.
 schema_version: 1
 workload_profile: olmo-core-train
 suggested_compute: gpu-8xa100
