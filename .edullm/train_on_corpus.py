@@ -82,6 +82,7 @@ from typing import Dict, Iterator, List, Optional, cast
 
 import rich
 import torch
+import torch.distributed as dist
 
 from olmo_core.config import Config, DType
 from olmo_core.data import (
@@ -91,7 +92,7 @@ from olmo_core.data import (
     TokenizerConfig,
 )
 from olmo_core.distributed.parallel import DataParallelType
-from olmo_core.distributed.utils import barrier, get_rank
+from olmo_core.distributed.utils import all_reduce_value, barrier, get_rank
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.io import clear_directory, list_directory, normalize_path
 from olmo_core.nn.transformer import TransformerConfig
@@ -855,6 +856,13 @@ class MuonMetricsCallback(Callback):
     ``ReduceType.max`` on the drift: the worst rank is the one worth seeing.
     """
 
+    #: Worst ``radius_relative_drift_max`` over the whole run and every rank, or ``None`` if this
+    #: arm has no radius. Set in :meth:`post_train`; read by :func:`summarise`.
+    worst_drift: Optional[float] = None
+
+    def pre_train(self) -> None:
+        self._worst_drift_local: Optional[float] = None
+
     def post_step(self) -> None:
         optim = getattr(self.trainer.train_module, "optim", None)
         metrics = getattr(optim, "latest_metrics", None)
@@ -863,6 +871,39 @@ class MuonMetricsCallback(Callback):
         for name, value in metrics().items():
             reduce_type = ReduceType.max if name.endswith("_max") else ReduceType.mean
             self.trainer.record_metric(f"optim/{name}", value, reduce_type=reduce_type)
+            if name == "radius_relative_drift_max":
+                previous = getattr(self, "_worst_drift_local", None)
+                self._worst_drift_local = value if previous is None else max(previous, value)
+
+    def post_train(self) -> None:
+        """Reduce the worst drift to one number, so the run can print it as it exits.
+
+        WITHOUT THIS THE INVARIANT IS UNREADABLE ONCE THE RUN IS OVER, which is the case that
+        matters. ``post_step`` puts the drift on the console every few steps, but the platform's
+        log verb returns only the last fifty lines a container printed, and the last fifty lines
+        of a *finished* run are W&B's teardown and this program's own summary -- never a
+        mid-training metrics block. Measured on run_019fe212-d83d: not one metric line in the
+        window. So the per-step console metric answers "is it holding right now" for a job still
+        running, and answers nothing at all afterwards.
+
+        A single number in the closing summary is in the window by construction, because that
+        summary is the last thing printed. It is the difference between reading the invariant
+        from the platform and needing a W&B dashboard to know whether the run meant anything.
+
+        Reduced with MAX across ranks and not left rank-local: the drift is computed per rank over
+        that rank's own blocks, so rank zero's worst is not the run's worst, and a constraint that
+        broke on one shard is exactly the failure this exists to catch. Called on every rank --
+        ``all_reduce_value`` is a collective and would hang if it were not.
+        """
+        local = getattr(self, "_worst_drift_local", None)
+        if local is None:
+            # No radius on this arm (MuonW), or no constrained blocks. Absence is the correct
+            # answer here and must not be reported as a drift of zero.
+            self.worst_drift = None
+            return
+        self.worst_drift = float(
+            all_reduce_value(float(local), self.trainer.device, op=dist.ReduceOp.MAX)
+        )
 
 
 def wandb_tags(opts) -> List[str]:
@@ -893,6 +934,10 @@ def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> 
         return
     device = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"
     peak = torch.cuda.max_memory_allocated() / 1024**3 if torch.cuda.is_available() else 0.0
+    # getattr rather than an index: a run whose optimizer has no radius still has the callback,
+    # and a config that dropped the callback should not take the summary down with it.
+    muon_metrics = trainer.callbacks.get("muon_metrics")
+    worst_drift = getattr(muon_metrics, "worst_drift", None)
     print(
         json.dumps(
             {
@@ -913,6 +958,10 @@ def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> 
                 "checkpoint_uri": opts.save_folder,
                 "wandb_project": os.environ.get("EDULLM_WANDB_PROJECT", ""),
                 "wandb_url": losses.wandb_url,
+                # The Hyperball invariant, as one number, in the only place a finished run's
+                # output is reachable from. null on an arm with no radius -- see
+                # MuonMetricsCallback.post_train for why this is here rather than only on a chart.
+                "radius_relative_drift_max": worst_drift,
             },
             indent=2,
         ),
