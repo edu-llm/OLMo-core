@@ -1,0 +1,16 @@
+# Paired first-rung proxy admission cohort for Arms 1–2.
+#
+# Compares the u-μP-plus-freezing bundle against the stock olmo2_190M reference at
+# exactly 50,003,968 tokens per configuration and writes proxy-evidence.json under
+# EDULLM_CHECKPOINT_DIR before frozen-arm HPO may rank candidates.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'export PYTHONDONTWRITEBYTECODE=1 EDULLM_LAUNCH_CHECK=waived &&
+  python .edullm/hpo_on_corpus.py "$EDULLM_RUN_ID"
+  --run-proxy-cohort
+  --proxy-spec .edullm/hpo-full-acronym-soup.json
+  --reference-spec .edullm/hpo-no-proxy.json
+  --checkpoint-root "$EDULLM_CHECKPOINT_DIR"
+  --param-dtype bfloat16'
