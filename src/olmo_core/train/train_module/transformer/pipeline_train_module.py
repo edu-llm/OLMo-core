@@ -49,7 +49,7 @@ from olmo_core.utils import (
     warn_once,
 )
 
-from ...common import MetricMergeStrategy, ReduceType
+from ...common import OPTIM_STEP_SKIPPED_METRIC, MetricMergeStrategy, ReduceType
 from ..train_module import EvalBatchSizeUnit, EvalBatchSpec, TrainModule
 from .common import parallelize_model
 from .config import (
@@ -536,9 +536,8 @@ class TransformerPipelineTrainModule(TrainModule):
             optim.step()
             if isinstance(optim, SkipStepOptimizer):
                 self.record_metric(
-                    "step skipped",
+                    OPTIM_STEP_SKIPPED_METRIC,
                     optim.step_skipped,
-                    namespace="optim",
                     merge_strategy=MetricMergeStrategy.latest,
                 )
 

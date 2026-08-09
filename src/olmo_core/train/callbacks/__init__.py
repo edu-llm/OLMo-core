@@ -25,6 +25,7 @@ from .model_merger import ModelMergeCallback
 from .monkey_patcher import MonkeyPatcherCallback
 from .profiler import ProfilerCallback
 from .sequence_length_scheduler import SequenceLengthSchedulerCallback
+from .skip_step_monitor import SkipStepMonitorCallback
 from .slack_notifier import SlackNotificationSetting, SlackNotifierCallback
 from .speed_monitor import SpeedMonitorCallback
 from .stability_monitor import StabilityMonitorCallback
@@ -51,6 +52,7 @@ __all__ = [
     "SlackNotifierCallback",
     "SlackNotificationSetting",
     "SequenceLengthSchedulerCallback",
+    "SkipStepMonitorCallback",
     "SpeedMonitorCallback",
     "StabilityMonitorCallback",
     "WandBCallback",

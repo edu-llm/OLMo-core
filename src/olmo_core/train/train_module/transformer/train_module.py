@@ -48,7 +48,7 @@ from olmo_core.utils import (
     warn_once,
 )
 
-from ...common import ReduceType
+from ...common import OPTIM_STEP_SKIPPED_METRIC, ReduceType
 from ..train_module import EvalBatchSpec, TrainModule
 from .common import parallelize_model
 from .config import (
@@ -531,7 +531,7 @@ class TransformerTrainModule(TrainModule):
         # Step optimizer.
         self.optim.step()
         if isinstance(self.optim, SkipStepOptimizer):
-            self.record_metric("step skipped", self.optim.step_skipped, namespace="optim")
+            self.record_metric(OPTIM_STEP_SKIPPED_METRIC, self.optim.step_skipped)
 
         self.model.post_optim_step()
 
