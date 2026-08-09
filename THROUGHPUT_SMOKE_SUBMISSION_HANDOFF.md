@@ -12,7 +12,7 @@ capacity; obtain those from a fresh `edullm check --json`.
 - Repository: `edu-llm/OLMo-core`
 - Local checkout: `/home/vs/AlphaAI/eduLLM/OLMo-core-flash-pd`
 - Branch: `edullm/mamba-comparison`
-- Current pushed commit: `8ebee6c96b4b25c42654185a1b607ad6aebbd35d`
+- Current pushed commit: `6f5048645de57f5d755e44da82bc30c3642f3762`
 - CLI observed while writing this handoff: `edullm 4.5.0`
 - Smoke spec: `.edullm/run-throughput-smoke.yaml`
 - Entrypoint: `.edullm/train_core6_arm.py`
@@ -24,22 +24,54 @@ capacity; obtain those from a fresh `edullm check --json`.
 The commit is pushed, and the local remote-tracking ref now contains it. The
 latest image build did **not** publish an image:
 
-- [failed image workflow for `8ebee6c`](https://github.com/edu-llm/OLMo-core/actions/runs/31283819693)
-- The native extension now compiles, confirming that the CUDA wheel-header fix
-  worked.
-- The new failure is the final image assertion using
-  `torch.cuda.get_arch_list()`. That public helper returns an empty list on the
-  GPU-less image builder, so it cannot verify a wheel's compiled sm80 support.
+- [failed image workflow for `6f50486`](https://github.com/edu-llm/OLMo-core/actions/runs/31284131601)
+- The native extension compiles and the GPU-independent sm80 assertion passes.
+- The new failure is the final standalone extension import:
+  `ImportError: libc10.so: cannot open shared object file`. The extension links
+  Torch libraries from `torch/lib`, but only the CUDA directory is in its
+  RPATH, and that validation process did not import Torch first.
 
 Therefore the throughput smoke is **not submit-ready**. A local check can have
 no refusals while image questions remain deferred; do not submit until a newer
 commit's image workflow is green and has published exactly one image.
 
-The local working tree now contains an uncommitted follow-up in
-`.edullm/Dockerfile`: it reads Torch's compiled architecture flags directly
-with `torch._C._cuda_getArchFlags()` instead of querying visible devices. Its
-focused contract test passes, but this working-tree fix has not built or
+The local working tree now contains a consolidated, uncommitted follow-up:
+
+- the image imports Torch before `_flash_pd_native_cuda`, loading `libc10.so`;
+- bare/default submissions now run a bounded ten-step functional smoke through
+  the same preflighted runner rather than a full 3,721-step cell;
+- every arm stores uniform FP32 master parameters while FSDP supplies BF16
+  compute parameters, eliminating mixed-original-dtype FSDP failures;
+- all accelerated arms require rank-local A100 sm80, BF16 hardware support,
+  and their exact kernel/package contract before training;
+- the `gdn` diagnostic key now realizes the frozen mixer-bakeoff GDN2 control
+  with FLA/fla-core 0.5.1;
+- xLSTM prewarms after rank-local device selection and converts vanilla sLSTM
+  parameters into the exact FlashRNN layout on every forward, with coherent
+  BF16 kernel roles and no stale FSDP cache;
+- native PD saves forward-contiguous operands and performs no hot-path host
+  readbacks;
+- Mamba3-SISO-PD keeps complex diagonals in FP32, uses a chunk-parallel
+  backward, and performs no temperature-buffer host readbacks;
+- `.dockerignore` excludes local native artifacts, and source builds use a
+  fully pinned, non-isolated build-tool closure.
+
+CPU/static tests pass, but this combined working tree has not built or
 published an image.
+
+### Current Mamba-b3 contract
+
+`mamba-b3` deliberately remains the custom static-A, group-shared SO(3)
+trapezoidal mixer. It is not claimed to be pinned Mamba-3 with only SO(2)
+replaced. The user chose measured throughput/results over architectural
+fidelity, so this distinction is documentation rather than a submission
+blocker.
+
+The historical `official_fast` backend remains the default. An experimental
+`simple_gla` backend is strict, explicit, and checkpoint-recorded but is not
+selected by the arm. Local production-geometry mixer measurements found it
+5.98% faster with lower peak allocation; promotion still requires a
+whole-model/A100 result.
 
 ## What the smoke measures
 
@@ -49,7 +81,7 @@ The fan-out has five cells, selected by `AWS_BATCH_JOB_ARRAY_INDEX`:
 - index 1: `xlstm`, init seed `113008`
 - index 2: `mamba3-siso-pd`, init seed `116009`
 - index 3: `native-pd`, init seed `119010`
-- index 4: `gdn`, init seed `122011`
+- index 4: `gdn` (frozen GDN2), init seed `122011`
 
 All cells use data seed `210007`, sequence length 4096, 100 optimizer steps,
 a 524,288-token global batch, an 8,192-token rank microbatch, bfloat16, and
@@ -69,9 +101,29 @@ steps define:
 
 Rank arms only by the two steady-throughput fields. Do not rank them by the
 whole-run rate, the final step, platform history, or startup-inclusive timing.
-GDN is the contemporaneous speed control, not a fifth science arm. One seed and
-50 measured steps detect gross speed problems; they do not replace the
-five-seed comparison.
+GDN2 is the contemporaneous frozen speed control, not a fifth science arm. Its
+implementation and FLA 0.5.1 dependency are copied from mixer-bakeoff commit
+`092f2c2bd582c4daa9b3bbfae0effce76b0f833a` and must not be optimized further.
+One seed and 50 measured steps detect gross speed problems; they do not replace
+the five-seed comparison.
+
+### Local CUDA sanity result
+
+On 2026-08-08, the frozen single GDN2 mixer completed a local BF16
+forward+backward benchmark on an RTX 5050 Laptop GPU at
+`B=2,T=4096,D=1024,H=16,K=V=64`:
+
+- backend: `fla.ops.gdn2.chunk_gdn2`, FLA/fla-core 0.5.1;
+- 20 warmups and 50 CUDA-event measurements;
+- median 36.553 ms, p90 37.853 ms;
+- 224,115 tokens/s and 9.273 achieved TFLOP/s under the mixer's declared
+  forward+backward FLOP convention;
+- peak allocated 908,104,704 bytes and reserved 922,746,880 bytes.
+
+MFU is intentionally absent because no documented dense BF16 peak was found
+for this laptop GPU's power configuration. This is a mixer-only local sanity
+result, not a five-arm model comparison and not comparable to the 8xA100
+throughput smoke.
 
 The CLI argument `--warmup-steps 10` belongs to the training schedule. It does
 not replace the runner's fixed 50-step throughput exclusion.
@@ -217,9 +269,10 @@ extension fails earlier.
 
 The image is intended to contain Torch 2.10 built for CUDA 12.8 and sm80,
 Mamba-3 at revision `e9594ce1c732d97440f0332fdc43170a2294dbfa`,
-`xlstm==2.0.5`, `mlstm-kernels==2.0.4`, `flashrnn==1.0.6`, both native PD
-entrypoints, and PyTorch fused SDPA. The image workflow, not this statement,
-must prove that contract for the submitted SHA.
+`flash-linear-attention==0.5.1`, `fla-core==0.5.1`, `xlstm==2.0.5`,
+`mlstm-kernels==2.0.4`, `flashrnn==1.0.6`, both native PD entrypoints, and
+PyTorch fused SDPA. The image workflow, not this statement, must prove that
+contract for the submitted SHA.
 
 ## Failure routing
 
@@ -237,6 +290,12 @@ must prove that contract for the submitted SHA.
 
 : Do not guess an image digest. The submission/admission workflow resolves
   these against the registry; a failed gate is a stop condition.
+
+`THE_DEVICE_CANNOT_DO_THE_REQUESTED_PRECISION` (exit 75)
+
+: The rank-local device cannot execute the explicit BF16 contract. This is
+  distinct from held-out corpus failures and is not retryable on the same
+  hardware.
 
 Training cell failure
 
@@ -259,7 +318,9 @@ Training cell failure
 
 ## Immediate next action
 
-Commit the GPU-independent architecture assertion, its contract test, and this
-updated handoff; push the new SHA to `edullm/mamba-comparison`; then wait for a
-green image workflow. Only after the image publishes should the exact-ref
-fetch, `check`, and `submit` sequence above be repeated.
+Review and commit the consolidated working tree, including this handoff, then
+push the final SHA and wait for a green image workflow. Local sm120 tests have
+verified FlashRNN BF16 forward/backward, native-PD parity and zero-sync
+dispatch, Mamba-PD mixed/tail parity, and the scatter deadlock fix; sm80 image
+execution remains required. Once the image is green, repeat the exact-ref
+fetch, `check`, and `submit` sequence above.

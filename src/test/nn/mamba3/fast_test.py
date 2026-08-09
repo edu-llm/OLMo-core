@@ -8,7 +8,10 @@ parity check is the small-angle regime, which is where ``theta_proj`` initialise
 naive Rodrigues implementation produces NaN gradients on the first training step.
 """
 
+import builtins
 import importlib
+import inspect
+from typing import Any
 
 import pytest
 import torch
@@ -19,6 +22,7 @@ from olmo_core.nn.mamba3.mamba3_ssd_api import (
     _rotate_bc_blocks,
     _skew_from_angles,
     dispatch_mamba3_ssd,
+    mamba3_ssd_reference,
 )
 from olmo_core.nn.mamba3.mamba3_ssd_fast import (
     _ROTATION_SCAN_IMPL,
@@ -40,6 +44,7 @@ from olmo_core.nn.mamba3.mamba3_ssd_fast import (
     mamba3_ssd_fast,
     quaternion_cumulative_block_rotation,
     resolve_rotation_scan_impl,
+    simple_gla_is_available,
 )
 from olmo_core.nn.mamba3.mamba3_ssd_official import mamba3_ssd_official
 from olmo_core.testing import requires_gpu
@@ -47,6 +52,11 @@ from olmo_core.testing import requires_gpu
 requires_official_mamba3 = pytest.mark.skipif(
     not fast_mamba3_is_available(),
     reason="the official mamba-ssm Mamba-3 SISO kernel is not installed",
+)
+
+requires_simple_gla = pytest.mark.skipif(
+    not simple_gla_is_available(),
+    reason="fla's chunk_simple_gla is not installed",
 )
 
 # The package `__init__` re-exports the `mamba3_ssd_fast` *function* under the same name as the
@@ -1369,6 +1379,385 @@ def test_passing_the_default_scan_impl_explicitly_is_bit_identical(dtype, block_
 
     for got, want, name in zip(explicit, implicit, ("B", "C")):
         torch.testing.assert_close(got, want, rtol=0, atol=0, msg=f"{name} moved")
+
+
+# ---------------------------------------------------------------------------------------
+# The alternate high-occupancy SSD backend (`simple_gla`)
+#
+# `official_fast` runs `mamba3_siso_combined`, whose grid is `(nheads, batch)`. At the
+# production geometry that is 32 thread blocks against an A100's 108 SMs. `chunk_simple_gla`
+# grids over chunk tiles as well, so the same work fills the SM array. The two must compute
+# the same function; the tests below are the proof, split into a CPU half that pins the
+# trapezoidal fold algebra and a CUDA half that pins the kernel against `official_fast`.
+# ---------------------------------------------------------------------------------------
+
+
+def _naive_simple_gla(q, k, v, g):
+    """
+    ``fla``'s documented simple-GLA recurrence, written out one timestep at a time.
+
+    ``S_t = exp(g_t) S_{t-1} + k_t (x) v_t``, ``o_t = q_t S_t`` -- read off
+    ``fla/ops/common/fused_recurrent.py``, where ``b_h = b_h * exp(b_g)`` precedes
+    ``b_h += b_k[:, None] * b_v[None, :]``. This is the contract the fold in
+    :func:`_simple_gla_operands` is written against, so the CPU tests can check the algebra
+    without a GPU or a Triton kernel.
+    """
+    batch, seq_len, n_heads, d_k = q.shape
+    state = q.new_zeros(batch, n_heads, d_k, v.shape[-1])
+    outputs = []
+    for t in range(seq_len):
+        state = torch.exp(g[:, t]).unsqueeze(-1).unsqueeze(-1) * state
+        state = state + k[:, t].unsqueeze(-1) * v[:, t].unsqueeze(-2)
+        outputs.append((q[:, t].unsqueeze(-1) * state).sum(dim=-2))
+    return torch.stack(outputs, dim=1)
+
+
+def _cpu_inputs(*, seq_len=40, n_heads=4, head_dim=8, n_groups=1, d_state=12, block_size=3, seed=0):
+    return _inputs(
+        seq_len=seq_len,
+        n_heads=n_heads,
+        head_dim=head_dim,
+        n_groups=n_groups,
+        d_state=d_state,
+        block_size=block_size,
+        device="cpu",
+        seed=seed,
+    )
+
+
+@pytest.mark.parametrize("scan_impl", ["chunked", "quaternion"])
+@pytest.mark.parametrize(
+    "cfg",
+    [
+        pytest.param(dict(d_state=12, block_size=3, n_groups=1), id="b3-g1"),
+        pytest.param(dict(d_state=24, block_size=3, n_groups=2, seq_len=96), id="b3-g2-t96"),
+        pytest.param(dict(d_state=16, block_size=2, n_groups=1), id="b2-g1"),
+        pytest.param(dict(d_state=12, block_size=3, n_groups=4), id="b3-g4-hpg1"),
+    ],
+)
+def test_trapezoidal_fold_recovers_the_reference_on_cpu(cfg, scan_impl: str):
+    """
+    The whole backend swap rests on one identity, and it is checkable without a GPU.
+
+    Unrolling the reference gives ``y_t = sum_{s<t} exp(L_t - L_s) scale_s <q_t,k_s> x_s +
+    gamma_t <q_t,k_t> x_t``, which is a simple-GLA scan with ``scale_s`` folded into the values
+    -- except on the diagonal, where the scan carries ``scale_t`` and the reference wants
+    ``gamma_t``. The difference is the additive correction the operands also return. If either
+    the fold or the correction is wrong the error is O(1), not a tolerance question.
+
+    The gate is float32 reassociation drift, nothing more: the reference applies ``gamma`` and
+    ``beta`` on separate steps while the fold pre-combines them into ``scale``, so the two sum
+    the same terms in a different order. Measured relative RMS is 5e-6 at T=40 and 1.1e-5 at
+    T=96 (growing to 5e-5 by T=512, so a longer case would need a T-scaled tolerance), against
+    the 1e-2 that dropping the diagonal correction costs -- see
+    ``test_trapezoidal_diagonal_correction_is_load_bearing``.
+
+    ``b3-g4-hpg1`` is the ``n_groups == n_heads`` layout ``mamba3_hybrid_like`` recommends for
+    state tracking, and it is the only case here that takes the ``heads_per_group == 1`` branch
+    of ``_simple_gla_operands`` -- the one that skips ``repeat_interleave`` on ``key``, ``query``
+    and the diagonal entirely.
+    """
+    kwargs = _cpu_inputs(**cfg)
+    heads_per_group = 4 // cfg["n_groups"]
+    block_size = cfg["block_size"]
+
+    expected = mamba3_ssd_reference(
+        **kwargs, heads_per_group=heads_per_group, block_size=block_size
+    )
+    query, key, value, g, correction = fast_mod._simple_gla_operands(
+        **kwargs,
+        heads_per_group=heads_per_group,
+        block_size=block_size,
+        scan_impl=scan_impl,
+    )
+    actual = _naive_simple_gla(query, key, value, g) + correction
+
+    _assert_matches(actual, expected, rms=5e-5, peak=1e-4, msg=f"fold b={block_size}")
+
+
+def test_trapezoidal_diagonal_correction_is_load_bearing():
+    """
+    Guard against a correction that is accidentally zero.
+
+    A fold that dropped the diagonal term would still look right on ``lam == 1`` data, so pin
+    that removing the correction actually breaks parity at the random ``lam`` the other tests
+    use. Otherwise the test above would pass for the wrong reason.
+    """
+    kwargs = _cpu_inputs(d_state=12, block_size=3)
+    expected = mamba3_ssd_reference(**kwargs, heads_per_group=4, block_size=3)
+    query, key, value, g, correction = fast_mod._simple_gla_operands(
+        **kwargs, heads_per_group=4, block_size=3
+    )
+    uncorrected = _naive_simple_gla(query, key, value, g)
+
+    assert correction.abs().max() > 0, "the diagonal correction is identically zero"
+    rel = ((uncorrected - expected).pow(2).mean().sqrt() / expected.pow(2).mean().sqrt()).item()
+    assert rel > 1e-2, f"dropping the diagonal correction changed nothing (relative RMS {rel})"
+
+
+def test_trapezoidal_fold_needs_no_division_by_dt():
+    """
+    Why ``chunk_simple_gla`` and not the same package's ``mamba_chunk_scan_combined``.
+
+    ``mamba_chunk_scan_combined`` drives the decay *and* the input scale from a single ``dt``,
+    so the trapezoidal ``scale_s`` can only be folded in as ``x * (scale / dt)``. ``dt`` is
+    ``softplus(...)`` and underflows to exactly ``0.0`` in float32 below about ``-104``, which
+    turns that fold into ``nan`` and poisons the run. ``chunk_simple_gla`` takes the decay and
+    the values as separate arguments, so the fold is a multiplication and stays finite.
+    """
+    torch.manual_seed(3)
+    logits = torch.randn(1, 64, 4) * 60.0
+    dt = torch.nn.functional.softplus(logits)
+    lam = torch.rand(1, 64, 4)
+    A = -torch.rand(4) - 0.5
+    assert (dt == 0).any(), "the probe did not reach the softplus underflow it is testing"
+
+    _, v_scale, _ = fast_mod._simple_gla_trapezoidal_terms(dt, A, lam)
+    mamba2_style_fold = v_scale / dt
+
+    assert torch.isfinite(v_scale).all(), "the simple-GLA fold went non-finite"
+    assert not torch.isfinite(mamba2_style_fold).all(), (
+        "the dt-division fold stayed finite, so this rejection no longer holds and "
+        "mamba_chunk_scan_combined should be reconsidered"
+    )
+
+
+def test_simple_gla_backend_refuses_to_run_without_the_kernel():
+    """
+    A named backend is a strict request. Quietly running a different one is the failure mode
+    every selector in this module exists to prevent -- it produces a benchmark that measured
+    something else.
+    """
+    kwargs = _cpu_inputs(d_state=12, block_size=3)
+    with pytest.raises(RuntimeError, match="simple_gla"):
+        fast_mod.mamba3_ssd_simple_gla(**kwargs, heads_per_group=4, block_size=3)
+
+
+def test_simple_gla_backend_rejects_mimo():
+    """``chunk_simple_gla`` is SISO, the same restriction the official kernel carries."""
+    kwargs = _cpu_inputs(d_state=12, block_size=3)
+    kwargs["B"] = kwargs["B"].repeat(1, 1, 1, 2, 1)
+    kwargs["C"] = kwargs["C"].repeat(1, 1, 1, 2, 1)
+    with pytest.raises(ValueError, match="mimo_rank"):
+        fast_mod._simple_gla_operands(**kwargs, heads_per_group=4, block_size=3)
+
+
+def _fla_import_raising(error: BaseException):
+    """A ``builtins.__import__`` that fails on ``fla`` and defers everything else to the real one.
+
+    Patching the builtin rather than ``sys.modules`` is what makes this work whichever the host
+    is: the import statement calls ``__import__`` before the module cache is consulted, so this
+    reaches a host where ``fla`` really is installed and imports cleanly.
+    """
+    real_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "fla" or name.startswith("fla."):
+            raise error
+        return real_import(name, globals, locals, fromlist, level)
+
+    return fake_import
+
+
+def test_simple_gla_availability_is_false_only_for_a_genuinely_absent_fla(monkeypatch):
+    """An uninstalled optional dependency is the one case that may answer ``False``."""
+    absent = ModuleNotFoundError("No module named 'fla'", name="fla")
+    monkeypatch.setattr(builtins, "__import__", _fla_import_raising(absent))
+
+    assert simple_gla_is_available() is False
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(
+            ImportError("/site-packages/fla/ops/_C.so: undefined symbol: _ZN3c104impl8"),
+            id="abi",
+        ),
+        pytest.param(
+            ModuleNotFoundError("No module named 'triton'", name="triton"),
+            id="transitive",
+        ),
+    ],
+)
+def test_simple_gla_availability_re_raises_a_broken_fla(error, monkeypatch):
+    """
+    A broken ``fla`` is not an absent one, and reporting it as absent disarms the parity suite.
+
+    This is
+    :func:`~olmo_core.nn.mamba3.mamba3_ssd_api.has_mamba3`'s policy, and it is here for the same
+    reason: only a genuinely missing top-level package is an optional-dependency absence, while an
+    ABI failure or a broken transitive dependency has to keep its own diagnostics. Two things go
+    wrong when it does not. The strict-request error then blames "an installed
+    flash-linear-attention" for a package that *is* installed, and -- the one that costs more --
+    ``requires_simple_gla`` skips ``test_simple_gla_matches_official_fast_*``, the only checks of
+    this backend against ``official_fast``, so CI reports green having verified nothing about it.
+    """
+    monkeypatch.setattr(builtins, "__import__", _fla_import_raising(error))
+
+    with pytest.raises(ImportError) as raised:
+        simple_gla_is_available()
+    assert raised.value is error, "the original import diagnostics were not preserved"
+
+
+def test_simple_gla_keeps_the_official_fast_signature():
+    """
+    ``mamba3_ssd_simple_gla`` claims to be a drop-in for ``mamba3_ssd_fast``, and
+    ``dispatch_mamba3_ssd`` hands both the same keywords, so a parameter added to one and
+    forgotten on the other is a ``TypeError`` on whichever backend a run happened to name.
+    ``mamba3_ssd_fast`` already carries a pin of its own in ``b3_speed_saved_state_test``; this
+    is the matching one, expressed as the difference between the two.
+
+    ``chunk_size`` is the single documented divergence: it is the official kernel's own chunk
+    length and ``chunk_simple_gla`` has no analogue.
+    """
+
+    def names(fn, kind):
+        return [p.name for p in inspect.signature(fn).parameters.values() if p.kind is kind]
+
+    positional = inspect.Parameter.POSITIONAL_OR_KEYWORD
+    keyword_only = inspect.Parameter.KEYWORD_ONLY
+    simple_gla = fast_mod.mamba3_ssd_simple_gla
+
+    assert names(simple_gla, positional) == ["x", "B", "C", "dt", "A", "lam", "theta"]
+    assert names(simple_gla, keyword_only) == [
+        "heads_per_group",
+        "block_size",
+        "rotation_scan_chunk",
+        "rotation_scan_impl",
+        "selective_fp32",
+    ]
+    assert names(simple_gla, positional) == names(mamba3_ssd_fast, positional)
+    assert names(simple_gla, keyword_only) == [
+        name for name in names(mamba3_ssd_fast, keyword_only) if name != "chunk_size"
+    ]
+
+
+# ---------------------------------------------------------------------------------------
+# `simple_gla` against `official_fast` at the production geometry (GPU)
+# ---------------------------------------------------------------------------------------
+
+PRODUCTION_GEOMETRY: dict[str, Any] = dict(
+    batch=2, seq_len=4096, n_heads=16, head_dim=64, n_groups=1, d_state=96, block_size=3
+)
+
+
+@requires_gpu
+@requires_official_mamba3
+@requires_simple_gla
+@pytest.mark.parametrize(
+    "cfg",
+    [
+        pytest.param(dict(d_state=12, block_size=3, n_groups=1), id="b3-g1"),
+        pytest.param(dict(d_state=24, block_size=3, n_groups=2, seq_len=96), id="b3-g2-t96"),
+        pytest.param(dict(d_state=16, block_size=2, n_groups=1), id="b2-g1"),
+    ],
+)
+def test_simple_gla_matches_official_fast_forward(cfg):
+    kwargs = _inputs(**cfg)
+    heads_per_group = 4 // cfg["n_groups"]
+    block_size = cfg["block_size"]
+
+    expected = mamba3_ssd_fast(
+        **kwargs, heads_per_group=heads_per_group, block_size=block_size, selective_fp32=False
+    )
+    actual = fast_mod.mamba3_ssd_simple_gla(
+        **kwargs, heads_per_group=heads_per_group, block_size=block_size, selective_fp32=False
+    )
+    _assert_matches(actual, expected, rms=2e-2, peak=5e-2, msg=f"simple_gla b={block_size}")
+
+
+@requires_gpu
+@requires_official_mamba3
+@requires_simple_gla
+def test_simple_gla_matches_official_fast_forward_at_the_production_geometry():
+    """bf16 at the shape the arm actually runs: B=2, T=4096, H=16, P=64, G=1, N=96, b=3."""
+    kwargs = _inputs(**PRODUCTION_GEOMETRY)
+    kwargs = {k: v.bfloat16() if v.is_floating_point() else v for k, v in kwargs.items()}
+
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        expected = mamba3_ssd_fast(**kwargs, heads_per_group=16, block_size=3)
+        actual = fast_mod.mamba3_ssd_simple_gla(**kwargs, heads_per_group=16, block_size=3)
+
+    _assert_matches(actual, expected, rms=3e-2, peak=8e-2, msg="production forward")
+
+
+@requires_gpu
+@requires_official_mamba3
+@requires_simple_gla
+def test_simple_gla_matches_official_fast_on_every_gradient():
+    """
+    Every input the mixer differentiates has to agree, not just ``x``.
+
+    ``dt``, ``A`` and ``lam`` reach ``simple_gla`` through a different route than they reach
+    ``mamba3_siso_combined`` -- the trapezoidal coefficients are computed in PyTorch here and
+    inside the kernel there -- so their gradients are the ones most likely to diverge.
+    """
+    kwargs = _inputs(d_state=24, block_size=3, n_groups=1, seq_len=128)
+    torch.manual_seed(99)
+    grad_out = torch.randn(kwargs["x"].shape, device="cuda")
+
+    grads = {}
+    for name, fn in (
+        ("official_fast", mamba3_ssd_fast),
+        ("simple_gla", fast_mod.mamba3_ssd_simple_gla),
+    ):
+        args = {k: v.clone().requires_grad_(True) for k, v in kwargs.items()}
+        out = fn(**args, heads_per_group=4, block_size=3, selective_fp32=False)
+        (out.float() * grad_out).sum().backward()
+        grads[name] = {k: v.grad for k, v in args.items()}
+
+    for key, expected in grads["official_fast"].items():
+        actual = grads["simple_gla"][key]
+        assert actual is not None, f"simple_gla produced no gradient for {key}"
+        _assert_matches(actual, expected, rms=5e-2, peak=1.5e-1, msg=f"grad {key}")
+
+
+@requires_gpu
+@requires_official_mamba3
+@requires_simple_gla
+def test_simple_gla_and_official_fast_both_run_at_the_production_geometry(capsys):
+    """
+    Time both backends forward+backward at the arm's geometry and report.
+
+    Deliberately asserts nothing about which is faster: the arm default does not move without
+    a whole-model throughput measurement, and a microbenchmark of one mixer call is not that.
+    What it does assert is that both backends complete and stay finite at B=2, T=4096, H=16,
+    P=64, G=1, N=96 in bf16, which the smaller parity configurations do not cover.
+    """
+    kwargs = _inputs(**PRODUCTION_GEOMETRY)
+    kwargs = {k: v.bfloat16() if v.is_floating_point() else v for k, v in kwargs.items()}
+    grad_out = torch.randn(kwargs["x"].shape, device="cuda", dtype=torch.bfloat16)
+
+    def step(fn):
+        args = {k: v.clone().requires_grad_(v.is_floating_point()) for k, v in kwargs.items()}
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            out = fn(**args, heads_per_group=16, block_size=3)
+        (out.float() * grad_out.float()).sum().backward()
+        return out
+
+    timings = {}
+    for name, fn in (
+        ("official_fast", mamba3_ssd_fast),
+        ("simple_gla", fast_mod.mamba3_ssd_simple_gla),
+    ):
+        for _ in range(5):
+            out = step(fn)
+        assert torch.isfinite(out.float()).all(), f"{name} produced a non-finite output"
+        start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+        torch.cuda.synchronize()
+        start.record()
+        for _ in range(20):
+            step(fn)
+        end.record()
+        torch.cuda.synchronize()
+        timings[name] = start.elapsed_time(end) / 20
+
+    with capsys.disabled():
+        print(
+            "\nmamba3 SSD backend fwd+bwd at B=2 T=4096 H=16 P=64 G=1 N=96 bf16: "
+            + ", ".join(f"{name} {ms:.3f} ms" for name, ms in timings.items())
+        )
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])

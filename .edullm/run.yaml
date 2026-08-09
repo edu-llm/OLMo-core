@@ -1,10 +1,31 @@
-# Representative 8xA100 architecture-comparison cell. The dataset release is
-# supplied separately as reservoir-dolma2-v1 on the platform form.
+# The default spec, and therefore what a submission that names no --spec runs.
+#
+# It is the ten-step functional smoke of ONE arm, not a comparison cell. The file used to
+# call model_arch_tests.py with no --steps, and that program's default is the frozen 3721
+# steps, so the cheapest possible mistake -- omitting --spec -- bought the whole measured
+# run on eight A100s. A default that bills that much by omission is the wrong default even
+# when every other field in it is right.
+#
+# It goes through train_core6_arm.py for the same reason run-smoke.yaml and
+# run-throughput-smoke.yaml do: that runner preflights the arm's strict kernel and refuses
+# with a sentence naming the package, where model_arch_tests.py has no such guard and dies
+# inside the first step with whatever error the kernel itself raises.
+#
+# The geometry, seeds and precision are the measured run's, so what this exercises is what
+# the comparison will use. Ten steps are NOT a throughput measurement: the audited reporter
+# excludes its first 50. The save interval lands on the last step, so the checkpoint path
+# is exercised once and no dispatch happens mid-run.
+#
+# The dataset release is supplied separately as reservoir-dolma2-v1 on the platform form.
 schema_version: 1
 workload_profile: olmo-core-train
 suggested_compute: gpu-8xa100
 command: >-
-  bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone
-  .edullm/model_arch_tests.py "$EDULLM_RUN_ID"
-  --arm mamba-b3 --data-seed 210007 --init-seed 41000000
-  --save-folder "$EDULLM_CHECKPOINT_DIR" --param-dtype bfloat16'
+  bash -lc 'export TRITON_F32_DEFAULT=ieee PYTHONDONTWRITEBYTECODE=1 &&
+  python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/train_core6_arm.py "$EDULLM_RUN_ID"
+  --arm mamba-b3 --data-seed 210007 --init-seed 110007
+  --sequence-length 4096 --steps 10 --warmup-steps 1 --learning-rate 1.4e-3
+  --global-batch-size 524288 --rank-microbatch-size 8192 --save-interval 10
+  --save-folder "$EDULLM_CHECKPOINT_DIR" --param-dtype bfloat16
+  --skip-heldout-eval --no-decode-probe'

@@ -45,6 +45,18 @@ So the speedups here are all in that preprocessing:
 Rodrigues also removes a latent hazard rather than just being faster: ``torch.matrix_exp``
 accepts bfloat16 and returns silent ``NaN``/``Inf`` rather than raising, so the "it crashes
 loudly" guard assumed elsewhere does not exist. The closed form stays finite in bfloat16.
+
+An alternate scan: :func:`mamba3_ssd_simple_gla`
+------------------------------------------------
+Everything above optimises the preprocessing in front of ``mamba3_siso_combined``. The scan
+itself has a different problem, which no amount of preprocessing touches: its grid is
+``(nheads, batch)``, so the 370M arm's geometry puts 32 thread blocks on an A100's 108 SMs and
+each of them walks 64 chunks in sequence. :func:`mamba3_ssd_simple_gla` computes the same
+recurrence through ``fla``'s ``chunk_simple_gla``, whose grid also spans chunk tiles.
+
+It is a *second backend*, not a replacement: nothing selects it by default, both are reachable
+by name through :data:`~olmo_core.nn.mamba3.mamba3_ssd_api.SSD_BACKENDS`, and they share this
+module's rotation, so the choice is only which scan runs behind it.
 """
 
 import os
@@ -63,6 +75,8 @@ from .mamba3_ssd_api import (
 __all__ = [
     "fast_mamba3_is_available",
     "mamba3_ssd_fast",
+    "mamba3_ssd_simple_gla",
+    "simple_gla_is_available",
     "fast_block_rotations",
     "fast_cumulative_block_rotation",
     "associative_cumulative_block_rotation",
@@ -218,6 +232,30 @@ def fast_mamba3_is_available() -> bool:
     from .mamba3_ssd_official import official_mamba3_is_available
 
     return official_mamba3_is_available()
+
+
+def simple_gla_is_available() -> bool:
+    """
+    Whether ``fla``'s chunked simple-GLA Triton entry point can be imported.
+
+    Only a genuinely absent top-level ``fla`` returns ``False`` -- the same policy, for the same
+    reason, as :func:`~olmo_core.nn.mamba3.mamba3_ssd_api.has_mamba3`. Broken transitive
+    dependencies, a missing ``simple_gla`` API, and binary/ABI import errors are re-raised with
+    their original diagnostics rather than reported as an optional-kernel absence.
+
+    Misclassifying those was quiet in both directions: the strict-request refusal in
+    :func:`_require_simple_gla` blamed "an installed flash-linear-attention" for a package that
+    was installed, and ``requires_simple_gla`` skipped the ``simple_gla`` vs ``official_fast``
+    parity tests -- this backend's only correctness gate -- leaving CI green having checked
+    nothing.
+    """
+    try:
+        from fla.ops.simple_gla import chunk_simple_gla  # noqa: F401
+    except ModuleNotFoundError as e:
+        if e.name == "fla":
+            return False
+        raise
+    return True
 
 
 def _rodrigues_so3(theta: torch.Tensor) -> torch.Tensor:
@@ -1124,6 +1162,228 @@ def mamba3_ssd_fast(
     if head_dim_padded != head_dim:
         y = y[..., :head_dim]
     return y.to(out_dtype)
+
+
+# `chunk_simple_gla` accepts the dtypes its Triton kernels are compiled for. float64 reaches this
+# path only from a test that forgot `selective_fp32`, and the resulting Triton error names none of
+# the arguments the caller actually set.
+_SIMPLE_GLA_DTYPES = (torch.bfloat16, torch.float16, torch.float32)
+
+
+def _require_simple_gla(x: torch.Tensor, B: torch.Tensor) -> None:
+    """Refuse a ``simple_gla`` call this host cannot run, rather than answering with another."""
+    if x.is_cuda and B.shape[3] == 1 and simple_gla_is_available():
+        return
+    raise RuntimeError(
+        "the simple_gla backend cannot run this call: it needs CUDA (got "
+        f"{x.device.type}), mimo_rank == 1 (got {B.shape[3]}), and an installed "
+        "flash-linear-attention. Naming a backend is a strict request, so this raises rather "
+        "than quietly running official_fast or the chunked form."
+    )
+
+
+def _simple_gla_trapezoidal_terms(
+    dt: torch.Tensor, A: torch.Tensor, lam: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Split the exponential-trapezoidal discretization into simple-GLA's three per-head scalars.
+
+    Unrolling the reference recurrence and reindexing the trapezoidal term by one step (the same
+    derivation :mod:`~olmo_core.nn.mamba3.mamba3_ssd_official` writes out for the upstream
+    kernel) gives::
+
+        y_t = sum_{s<t} exp(L_t - L_s) scale_s <q_t, k_s> x_s  +  gamma_t <q_t, k_t> x_t
+        gamma_s = lam_s dt_s          scale_s = gamma_s + (1 - lam_{s+1}) dt_{s+1}
+
+    ``fla``'s simple GLA computes ``S_t = exp(g_t) S_{t-1} + k_t (x) v_t``, ``o_t = q_t S_t``,
+    i.e. ``o_t = sum_{s<=t} exp(L_t - L_s) <q_t, k_s> v_s`` once ``g_t = dt_t A``. So ``scale_s``
+    folds into the values and the whole difference is the diagonal, where the scan carries
+    ``scale_t`` and the reference wants ``gamma_t``.
+
+    Nothing here divides. That is the reason this backend uses ``chunk_simple_gla`` rather than
+    the pinned package's own ``mamba_chunk_scan_combined``: that kernel drives the decay and the
+    input scale from one ``dt``, so the only fold available is ``x * (scale / dt)``, and ``dt``
+    is a ``softplus`` output that reaches exactly ``0.0`` in float32 (see
+    ``test_trapezoidal_fold_needs_no_division_by_dt``).
+
+    :param dt: Discretization step, shape ``(batch, seq_len, n_heads)``.
+    :param A: Per-head log-decay, shape ``(n_heads,)``.
+    :param lam: Trapezoidal mixing coefficient, shape ``(batch, seq_len, n_heads)``.
+
+    :returns: ``(g, v_scale, diag_scale)``, each float32 and shaped like ``dt``. ``g`` is the
+        per-step log decay, ``v_scale`` multiplies the values, and ``diag_scale`` weights the
+        ``s == t`` correction that turns ``scale_t`` back into ``gamma_t``.
+    """
+    dt = dt.float()
+    lam = lam.float()
+    trailing = (1.0 - lam) * dt
+    # The last position has no successor and the reference reads it through gamma alone, so the
+    # shifted term is zero there -- which the same zero-fill also makes true of the correction.
+    carried = F.pad(trailing[:, 1:], (0, 0, 0, 1))
+    return dt * A.float(), lam * dt + carried, -carried
+
+
+def _simple_gla_operands(
+    x: torch.Tensor,
+    B: torch.Tensor,
+    C: torch.Tensor,
+    dt: torch.Tensor,
+    A: torch.Tensor,
+    lam: torch.Tensor,
+    theta: torch.Tensor,
+    *,
+    heads_per_group: int,
+    block_size: int = 2,
+    rotation_scan_chunk: Optional[int] = None,
+    scan_impl: Optional[str] = None,
+    bc_dtype: Optional[torch.dtype] = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Build everything :func:`mamba3_ssd_simple_gla` hands to ``chunk_simple_gla``, plus the
+    diagonal correction added to its output.
+
+    Pure PyTorch and device-agnostic on purpose: the trapezoidal fold is the only genuinely new
+    algebra in this backend, and keeping it here lets a CPU test check it against
+    :func:`~olmo_core.nn.mamba3.mamba3_ssd_api.mamba3_ssd_reference` without a GPU or a Triton
+    kernel. The rotation is the *same* ``_fast_rotate_bc_pair`` the official-kernel path uses, so
+    ``rotation_scan_impl`` -- quaternion included -- behaves identically on both backends.
+
+    :param bc_dtype: Dtype the rotation is applied in and the kernel operands are built in;
+        ``None`` follows ``x``.
+
+    :returns: ``(query, key, value, g, correction)``. ``query``/``key`` are per-head
+        ``(batch, seq_len, n_heads, d_state)``, ``value`` is
+        ``(batch, seq_len, n_heads, head_dim)``, ``g`` is float32
+        ``(batch, seq_len, n_heads)``, and ``correction`` is float32 and shaped like the output.
+    """
+    n_heads = x.shape[2]
+    n_groups, rank, d_state = B.shape[2], B.shape[3], B.shape[4]
+
+    if rank != 1:
+        raise ValueError(f"the simple_gla backend needs mimo_rank == 1, got {rank}")
+    if n_groups * heads_per_group != n_heads:
+        raise ValueError(
+            f"n_groups ({n_groups}) * heads_per_group ({heads_per_group}) must equal n_heads "
+            f"({n_heads})"
+        )
+    if d_state % block_size != 0:
+        raise ValueError(f"d_state ({d_state}) must be divisible by block_size ({block_size})")
+
+    bc_dtype = x.dtype if bc_dtype is None else bc_dtype
+
+    # Autocast intercepts at the op level, so the rotation and the discretization have to be
+    # computed with it off or they run in bfloat16 whatever dtype they were handed.
+    with torch.autocast(device_type=x.device.type, enabled=False):
+        key, query = _fast_rotate_bc_pair(
+            B.to(bc_dtype),
+            C.to(bc_dtype),
+            theta,
+            block_size,
+            rotation_scan_chunk,
+            scan_impl=scan_impl,
+        )
+        # Index the rank axis away rather than `squeeze`: rank is pinned at 1 above.
+        key, query = key[:, :, :, 0], query[:, :, :, 0]
+        # Take the diagonal before broadcasting groups to heads -- it is a group quantity, and
+        # <q_t, k_t> from the rounded operands is exactly what the scan puts on its own diagonal.
+        diagonal = (query.float() * key.float()).sum(-1)
+        if heads_per_group != 1:
+            key = key.repeat_interleave(heads_per_group, dim=2)
+            query = query.repeat_interleave(heads_per_group, dim=2)
+            diagonal = diagonal.repeat_interleave(heads_per_group, dim=2)
+
+        g, v_scale, diag_scale = _simple_gla_trapezoidal_terms(dt, A, lam)
+        # Scale in float32 and round once. Rounding `v_scale` first instead would put a second
+        # bf16 rounding straight onto the recurrence's input weight, which the official path
+        # never pays -- it hands the kernel `delta` and `trap` in float32 and forms the
+        # trapezoidal coefficients internally.
+        x_fp32 = x.float()
+        value = (x_fp32 * v_scale.unsqueeze(-1)).to(bc_dtype)
+        correction = (diag_scale * diagonal).unsqueeze(-1) * x_fp32
+
+    return query, key, value, g, correction
+
+
+def mamba3_ssd_simple_gla(
+    x: torch.Tensor,
+    B: torch.Tensor,
+    C: torch.Tensor,
+    dt: torch.Tensor,
+    A: torch.Tensor,
+    lam: torch.Tensor,
+    theta: torch.Tensor,
+    *,
+    heads_per_group: int,
+    block_size: int = 2,
+    rotation_scan_chunk: Optional[int] = None,
+    rotation_scan_impl: Optional[str] = None,
+    selective_fp32: bool = True,
+) -> torch.Tensor:
+    """
+    Run the Mamba-3 recurrence through ``fla``'s chunked simple-GLA kernel.
+
+    Drop-in for :func:`mamba3_ssd_fast`: same arguments, same semantics, different scan. See
+    :func:`~olmo_core.nn.mamba3.mamba3_ssd_api.mamba3_ssd_reference` for the argument contract
+    and :func:`_simple_gla_trapezoidal_terms` for the fold that makes the substitution exact.
+
+    The motivation is occupancy, not arithmetic. ``mamba3_siso_combined`` grids over
+    ``(nheads, batch)``, which at the 370M arm's geometry is 32 thread blocks against an A100's
+    108 SMs, each running a 64-iteration serial chunk loop; ``chunk_simple_gla`` grids over chunk
+    tiles as well. It also masks the state dimension, so ``d_state=96`` runs unpadded instead of
+    at the power-of-two width :func:`~olmo_core.nn.mamba3.mamba3_ssd_api.kernel_padded_width`
+    forces on the official path. Against that, ``B``/``C`` have to be broadcast to heads because
+    the kernel has no GQA, which the official path gets for free.
+
+    Whether any of that is a whole-model win is a measurement, not a claim: this backend is
+    opt-in and nothing selects it by default.
+
+    :param rotation_scan_chunk: Sequential-product chunk for the ``b >= 3`` prefix scan; ``None``
+        picks it per sequence length via :func:`_adaptive_scan_chunk`.
+    :param rotation_scan_impl: Which of :data:`ROTATION_SCAN_IMPLS` computes the ``b >= 3``
+        prefix product. Reaches the same :func:`_fast_rotate_bc_pair` as the official path.
+    :param selective_fp32: Keep the prefix product in float32 but build the kernel operands in
+        the ambient dtype. ``False`` builds them in float32.
+
+    :raises RuntimeError: If CUDA, ``mimo_rank == 1`` or ``flash-linear-attention`` is missing.
+        A named backend is a strict request and is never silently downgraded.
+    """
+    # Validate the public option before probing an optional runtime dependency, so a malformed
+    # config reports its own actionable error in CPU-only dry runs.
+    scan_impl = resolve_rotation_scan_impl(rotation_scan_impl)
+    _require_simple_gla(x, B)
+
+    device_type = x.device.type
+    autocast_on = torch.is_autocast_enabled(device_type)
+    out_dtype = torch.get_autocast_dtype(device_type) if autocast_on else x.dtype
+    kernel_dtype = out_dtype if selective_fp32 else torch.float32
+    if kernel_dtype not in _SIMPLE_GLA_DTYPES:
+        raise ValueError(
+            f"the simple_gla backend runs in {_SIMPLE_GLA_DTYPES}, got {kernel_dtype}; pass "
+            "selective_fp32=False to run a float64 call in float32"
+        )
+
+    query, key, value, g, correction = _simple_gla_operands(
+        x,
+        B,
+        C,
+        dt,
+        A,
+        lam,
+        theta,
+        heads_per_group=heads_per_group,
+        block_size=block_size,
+        rotation_scan_chunk=rotation_scan_chunk,
+        scan_impl=scan_impl,
+        bc_dtype=kernel_dtype,
+    )
+
+    # Imported here rather than at module scope: `fla` is an optional dependency, and resolving
+    # the symbol per call is what lets the tests patch it.
+    from fla.ops.simple_gla import chunk_simple_gla
+
+    # `scale` defaults to `K ** -0.5` inside fla, which this recurrence does not want.
+    output, _ = chunk_simple_gla(q=query, k=key, v=value, g=g, scale=1.0)
+    return (output.float() + correction).to(out_dtype)
 
 
 def fast_rotation_speedup_note() -> str:

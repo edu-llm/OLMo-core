@@ -17,7 +17,11 @@ from olmo_core.nn.attention.ring import (
 )
 from olmo_core.nn.buffer_cache import BufferCache
 
-from .mamba3_ssd_api import dispatch_mamba3_ssd, kernel_padded_width
+from .mamba3_ssd_api import (
+    dispatch_mamba3_ssd,
+    kernel_padded_width,
+    resolve_ssd_backend,
+)
 from .mamba3_ssd_fast import (
     _angles_to_quaternion,
     _quaternion_conjugate,
@@ -230,6 +234,16 @@ class Mamba3Mixer(SequenceMixer):
         historical behaviour is unchanged; naming it here instead puts the choice in the config a
         checkpoint saves and a run logs. It only reaches the fast official-kernel path, so on CPU
         or under activation checkpointing it is recorded and ignored.
+    :param ssd_backend: Which of
+        :data:`~olmo_core.nn.mamba3.mamba3_ssd_api.SSD_BACKENDS` runs the scan. ``None`` (the
+        default) keeps the historical routing, i.e. ``official_fast`` wherever the official
+        kernel is eligible. It changes no parameter, so a checkpoint is portable across the two.
+        A named backend is a strict request and never silently falls back.
+
+        Both named backends need ``prefer_official_kernel is not False``, and an
+        activation-checkpointed run must set ``prefer_official_kernel=False`` -- so **a named
+        backend is unreachable under activation checkpointing**, and naming one alongside
+        ``prefer_official_kernel=False`` is rejected here rather than on the first forward.
     :param dtype: The default parameter dtype.
     :param init_device: The device to initialize parameters on.
     """
@@ -271,6 +285,7 @@ class Mamba3Mixer(SequenceMixer):
         a_log_init_max: float = 16.0,
         prefer_official_kernel: Optional[bool] = None,
         rotation_scan_impl: Optional[str] = None,
+        ssd_backend: Optional[str] = None,
         theta_max: Optional[float] = None,
         dtype: torch.dtype = torch.float32,
         init_device: str = "cpu",
@@ -323,6 +338,24 @@ class Mamba3Mixer(SequenceMixer):
                 # `ValueError` the kernel module raises is the runtime-contract flavour.
                 raise OLMoConfigurationError(str(e)) from e
         self.rotation_scan_impl = rotation_scan_impl
+        # Same reasoning as `rotation_scan_impl`: validated at build so a typo costs a model
+        # construction rather than a compile warmup and a step on a rented GPU.
+        try:
+            self.ssd_backend = resolve_ssd_backend(ssd_backend)
+        except ValueError as e:
+            raise OLMoConfigurationError(str(e)) from e
+        # The cross-flag contradiction, checked here for the same reason and with more at stake.
+        # `dispatch_mamba3_ssd` refuses this pair too, but only once a batch reaches the mixer --
+        # and `prefer_official_kernel=False` is the setting an activation-checkpointed run is told
+        # to use, so it is the pair a large run reaches for.
+        if self.ssd_backend is not None and prefer_official_kernel is False:
+            raise OLMoConfigurationError(
+                f"ssd_backend={self.ssd_backend!r} cannot be combined with "
+                "prefer_official_kernel=False, which forces the chunked PyTorch form and so "
+                "reaches neither named backend. Since prefer_official_kernel=False is what an "
+                "activation-checkpointed run must set, a named ssd_backend is unreachable under "
+                "activation checkpointing at all: leave ssd_backend=None there."
+            )
         if theta_max is not None and theta_max <= 0:
             raise OLMoConfigurationError(f"theta_max must be positive, got {theta_max}")
         self.theta_max = theta_max
@@ -590,6 +623,7 @@ class Mamba3Mixer(SequenceMixer):
                 block_size=self.rotation_block_size,
                 prefer_official_kernel=self.prefer_official_kernel,
                 rotation_scan_impl=self.rotation_scan_impl,
+                ssd_backend=self.ssd_backend,
             )  # (batch, T, H, P)
 
         # Gated RMS norm (Mamba-style): normalize the gated output.
@@ -971,6 +1005,10 @@ class Mamba3MixerConfig(SequenceMixerConfig[Mamba3Mixer]):
     runs -- the official kernel's ``autograd.Function`` is incompatible with non-reentrant
     activation checkpointing, so AC runs must take the chunked PyTorch path. ``True`` forces the
     official kernel and errors if it cannot run.
+
+    ``False`` also forecloses :attr:`ssd_backend`: both named backends run behind the official
+    kernel's eligibility, so the chunked path reaches neither. The two cannot be combined and
+    :meth:`build` says so.
     """
     rotation_scan_impl: Optional[str] = None
     """
@@ -982,6 +1020,24 @@ class Mamba3MixerConfig(SequenceMixerConfig[Mamba3Mixer]):
     fresh shell that lost the export silently fell back to ``chunked`` at 33,468 tok/s instead of
     ``quaternion``'s 75,040 -- a 2.2x regression that raised nothing and left no record of which
     scan the run had actually used.
+    """
+    ssd_backend: Optional[str] = None
+    """
+    Which of :data:`~olmo_core.nn.mamba3.mamba3_ssd_api.SSD_BACKENDS` runs the scan, or ``None``
+    (the default) to keep the historical routing.
+
+    ``official_fast`` is the baseline every published run took. ``simple_gla`` swaps
+    ``mamba_ssm``'s ``mamba3_siso_combined`` for ``fla``'s ``chunk_simple_gla``, which computes
+    the same recurrence on a grid that also spans chunk tiles rather than only ``(head, batch)``.
+    Neither moves a parameter, so a checkpoint is portable across both, and the output differs
+    only by kernel rounding.
+
+    Requires ``prefer_official_kernel`` to be ``None`` or ``True``, and therefore **cannot be
+    used with activation checkpointing**, which needs ``prefer_official_kernel=False``. The
+    combination is rejected at :meth:`build` rather than on the first forward.
+
+    Left at ``None`` until a whole-model throughput measurement says otherwise: a mixer
+    microbenchmark is not evidence that the arm default should move.
     """
     theta_max: Optional[float] = None
     """
@@ -1080,6 +1136,7 @@ class Mamba3MixerConfig(SequenceMixerConfig[Mamba3Mixer]):
             a_log_init_max=self.a_log_init_max,
             prefer_official_kernel=self.prefer_official_kernel,
             rotation_scan_impl=self.rotation_scan_impl,
+            ssd_backend=self.ssd_backend,
             theta_max=self.theta_max,
             fuse_input_projections=bool(self.fuse_input_projections),
             cache=mixer_cache,

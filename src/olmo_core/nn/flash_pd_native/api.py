@@ -21,6 +21,10 @@ from .routes import compact_hard_selection, prove_selected_maps_bijective
 
 _BACKEND_COUNTERS: Counter[str] = Counter()
 
+# Scratch floats the corrected-replay kernel reserves for its fused block
+# reductions: kPhaseCReductions * kMaximumWarps in flash_pd_native_cuda.cu.
+_REPLAY_REDUCTION_ELEMENTS = 3 * 32
+
 
 def reset_backend_counters() -> None:
     """Reset process-local native scan dispatch counters."""
@@ -298,6 +302,7 @@ def mamba3_siso_surrogate_scan(
         value_real,
         value_imag,
         chunk_size=chunk_size,
+        allow_mixed_diagonal_payload=True,
     )
     use_cuda = capability.available and requested_backend != NativePDBackend.REFERENCE
     if requested_backend == NativePDBackend.CUDA and not capability.available:
@@ -350,15 +355,28 @@ def mamba3_siso_surrogate_scan(
     batch, heads, time, state = diagonal_real.shape
     chunks = (time + chunk_size - 1) // chunk_size
     dictionary_size = dictionary_logits.shape[1]
+    # The reverse scan is chunk-parallel like the forward: a local-aggregate launch,
+    # a scan over chunk boundaries, a corrected replay, then the dictionary and
+    # router gradients. It stages one int16 map and six FP32 planes per (row, chunk)
+    # — the composed local affine map plus the exclusive chunk carry — against the
+    # forward's one map and four planes.
+    replay_dictionary_elements = (
+        dictionary_size * state
+        if dictionary_size * state <= 12000 - 2 * state - _REPLAY_REDUCTION_ELEMENTS
+        else 0
+    )
     metadata = ScanMetadata(
         backend=metadata.backend,
         mode=metadata.mode,
         forward_launches=3 if use_cuda else 0,
-        backward_launches=2 if use_cuda else 0,
+        backward_launches=5 if use_cuda else 0,
         state_shape=metadata.state_shape,
-        scratch_elements=5 * batch * heads * chunks * state,
-        shared_memory_bytes=max(28 * state, 16 * state),
-        training_sequence_elements=(heads * dictionary_size * state),
+        scratch_elements=7 * batch * heads * chunks * state,
+        shared_memory_bytes=max(
+            28 * state,
+            4 * (2 * state + replay_dictionary_elements + _REPLAY_REDUCTION_ELEMENTS),
+        ),
+        training_sequence_elements=(batch * heads * time + heads * dictionary_size * state),
         dictionary_storage_elements=(heads * dictionary_size * state * state),
     )
     return output[0], output[1], metadata

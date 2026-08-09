@@ -41,9 +41,50 @@ __all__ = [
     "dispatch_mamba3_ssd",
     "get_backend_counters",
     "reset_backend_counters",
+    "SSD_BACKENDS",
+    "resolve_ssd_backend",
 ]
 
 _BACKEND_COUNTERS: Counter[str] = Counter()
+
+#: The CUDA scan backends :func:`dispatch_mamba3_ssd` can be pointed at explicitly.
+#:
+#: ``official_fast`` is :func:`~olmo_core.nn.mamba3.mamba3_ssd_fast.mamba3_ssd_fast` over
+#: ``mamba_ssm``'s ``mamba3_siso_combined`` -- the path every existing run takes, and the baseline
+#: any replacement is measured against. ``simple_gla`` is
+#: :func:`~olmo_core.nn.mamba3.mamba3_ssd_fast.mamba3_ssd_simple_gla` over ``fla``'s
+#: ``chunk_simple_gla``, which grids over chunk tiles as well as ``(head, batch)`` and so fills
+#: an SM array the 32-block official grid leaves mostly idle.
+#:
+#: Naming one is a *strict request*: dispatch raises rather than answering with the other, because
+#: a benchmark that silently measured a different backend is worse than one that failed.
+SSD_BACKENDS = ("official_fast", "simple_gla")
+
+
+def resolve_ssd_backend(backend: Optional[str]) -> Optional[str]:
+    """
+    Canonicalise an explicit SSD-backend request.
+
+    ``None`` is not a synonym for any entry in :data:`SSD_BACKENDS`: it means "route as this
+    module always has", which keeps every caller predating the selector -- and every run in
+    flight -- on exactly the path it was on. Only a named backend changes routing.
+
+    :param backend: One of :data:`SSD_BACKENDS`, or ``None`` for the historical routing.
+
+    :returns: The canonical lower-case name, or ``None``.
+
+    :raises ValueError: If ``backend`` names no known backend. Rejected rather than defaulted,
+        for the same reason the request is strict.
+    """
+    if backend is None:
+        return None
+    normalised = backend.strip().lower()
+    if normalised not in SSD_BACKENDS:
+        raise ValueError(
+            f"ssd_backend must be one of {SSD_BACKENDS}, or None to keep the historical "
+            f"routing; got {backend!r}"
+        )
+    return normalised
 
 
 def reset_backend_counters() -> None:
@@ -376,6 +417,15 @@ def _official_kernel_eligible(x: torch.Tensor, B: torch.Tensor) -> bool:
     return official_mamba3_is_available()
 
 
+def _simple_gla_eligible(x: torch.Tensor, B: torch.Tensor) -> bool:
+    """Whether ``fla``'s chunked simple-GLA kernel can run this call at all."""
+    if not x.is_cuda or B.shape[3] != 1:  # CUDA-only, and SISO-only (mimo_rank == 1)
+        return False
+    from .mamba3_ssd_fast import simple_gla_is_available
+
+    return simple_gla_is_available()
+
+
 # The mamba-ssm Triton kernel uses TMA descriptors (`tl.make_tensor_descriptor`) that Inductor
 # cannot lower on torch 2.13 / Triton 3.7.1 -- it fails in `identify_accessed_tensors` and then
 # crashes graph lowering with an InductorError. This wrapper is the only thing held out of
@@ -424,6 +474,7 @@ def dispatch_mamba3_ssd(
     prefer_official_kernel: Optional[bool] = None,
     prefer_fast_rotation: bool = True,
     rotation_scan_impl: Optional[str] = None,
+    ssd_backend: Optional[str] = None,
 ) -> torch.Tensor:
     """
     Run the Mamba-3 SSD recurrence, preferring the fastest form that fits the call.
@@ -459,7 +510,28 @@ def dispatch_mamba3_ssd(
         ``MAMBA3_ROTATION_SCAN_IMPL`` default. An explicit non-chunked implementation is a strict
         request: if the eligible fast-rotation kernel cannot run, dispatch raises instead of
         silently benchmarking or training a different scan.
+    :param ssd_backend: Which of :data:`SSD_BACKENDS` runs the scan. ``None`` (the default) keeps
+        the routing described above exactly as it was, which is what makes this parameter a no-op
+        for every existing caller. A named backend is a strict request and never falls back.
     """
+    backend = resolve_ssd_backend(ssd_backend)
+    if backend is not None:
+        if not prefer_fast_kernel:
+            raise RuntimeError(
+                f"ssd_backend={backend!r} was requested, but prefer_fast_kernel=False selects "
+                "the sequential reference"
+            )
+        if prefer_official_kernel is False:
+            raise RuntimeError(
+                f"ssd_backend={backend!r} was requested, but prefer_official_kernel=False "
+                "forces the chunked PyTorch form"
+            )
+        if not prefer_fast_rotation:
+            raise RuntimeError(
+                f"ssd_backend={backend!r} was requested, but prefer_fast_rotation=False selects "
+                "the unmodified official rotation; both named backends use the fast one"
+            )
+
     if not prefer_fast_kernel:
         if rotation_scan_impl is not None:
             raise RuntimeError(
@@ -472,15 +544,47 @@ def dispatch_mamba3_ssd(
         _BACKEND_COUNTERS["reference"] += 1
         return output
 
-    if prefer_official_kernel and not _official_kernel_eligible(x, B):
+    # A named backend answers ahead of the preference ladder below, and answers for its own
+    # eligibility: `prefer_official_kernel=True` alongside `ssd_backend='simple_gla'` means "a
+    # kernel backend is required, and it is that one", so a missing mamba-ssm must not be what
+    # this call complains about.
+    if backend == "simple_gla":
+        if not _simple_gla_eligible(x, B):
+            raise RuntimeError(
+                "ssd_backend='simple_gla' was requested, but it cannot run this call: it needs "
+                f"CUDA (got {x.device.type}), mimo_rank == 1 (got {B.shape[3]}), and an "
+                "installed flash-linear-attention. Pass ssd_backend=None to allow the "
+                "historical routing."
+            )
+        from .mamba3_ssd_fast import mamba3_ssd_simple_gla
+
+        output = mamba3_ssd_simple_gla(
+            x,
+            B,
+            C,
+            dt,
+            A,
+            lam,
+            theta,
+            heads_per_group=heads_per_group,
+            block_size=block_size,
+            rotation_scan_impl=rotation_scan_impl,
+        )
+        _BACKEND_COUNTERS["simple_gla"] += 1
+        return output
+
+    if (prefer_official_kernel or backend == "official_fast") and not _official_kernel_eligible(
+        x, B
+    ):
         # An explicit request must not be silently downgraded. `mamba3_ssd_official` itself
         # raises when it cannot run, so swallowing the same condition one level up meant
         # `prefer_official_kernel=True` could quietly return a chunked result -- exactly the
         # failure mode where a benchmark or a parity test believes it exercised the kernel and
         # did not. `None` (the default) still falls through to the chunked path silently,
         # because that is a preference rather than a request.
+        requested = "ssd_backend='official_fast'" if backend else "prefer_official_kernel=True"
         raise RuntimeError(
-            "prefer_official_kernel=True but the official kernel cannot run this call: it "
+            f"{requested} but the official kernel cannot run this call: it "
             f"needs CUDA (got {x.device.type}), mimo_rank == 1 (got {B.shape[3]}), and an "
             "installed mamba-ssm Mamba-3 build. Pass prefer_official_kernel=None to allow the "
             "chunked fallback."
@@ -493,7 +597,7 @@ def dispatch_mamba3_ssd(
         )
 
     if prefer_official_kernel is not False and _official_kernel_eligible(x, B):
-        if prefer_official_kernel or _reduced_precision_requested(x):
+        if backend == "official_fast" or prefer_official_kernel or _reduced_precision_requested(x):
             if prefer_fast_rotation:
                 from .mamba3_ssd_fast import mamba3_ssd_fast
 

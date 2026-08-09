@@ -54,6 +54,81 @@ def test_dispatch_counter_proves_the_official_fast_backend_ran(monkeypatch):
     assert get_backend_counters() == {"official_fast": 1}
 
 
+# ---------------------------------------------------------------------------------------
+# Explicit SSD backend selection
+#
+# `official_fast` runs `mamba3_siso_combined` on a `(nheads, batch)` grid -- 32 blocks at the
+# arm's geometry. `simple_gla` runs `fla`'s `chunk_simple_gla`, which also grids over chunk
+# tiles. Selecting between them is explicit and never inferred, and the receipt below is how a
+# benchmark proves which one it measured.
+# ---------------------------------------------------------------------------------------
+
+
+def test_dispatch_counter_proves_the_simple_gla_backend_ran(monkeypatch):
+    kwargs = _inputs(device="cpu", block_size=3, d_state=6)
+    expected = torch.randn_like(kwargs["x"])
+    monkeypatch.setattr(api, "_simple_gla_eligible", lambda _x, _b: True)
+    monkeypatch.setattr(fast_module, "mamba3_ssd_simple_gla", lambda *_args, **_kwargs: expected)
+    reset_backend_counters()
+
+    actual = dispatch_mamba3_ssd(**kwargs, ssd_backend="simple_gla")
+
+    assert actual is expected
+    assert get_backend_counters() == {"simple_gla": 1}
+
+
+def test_the_default_backend_is_still_official_fast(monkeypatch):
+    """
+    The arm default does not move. ``ssd_backend=None`` has to route exactly where it routed
+    before the selector existed, or every run in flight silently changes backend.
+    """
+    kwargs = _inputs(device="cpu", block_size=3, d_state=6)
+    expected = torch.randn_like(kwargs["x"])
+    monkeypatch.setattr(api, "_official_kernel_eligible", lambda _x, _b: True)
+    monkeypatch.setattr(api, "_reduced_precision_requested", lambda _x: True)
+    monkeypatch.setattr(fast_module, "mamba3_ssd_fast", lambda *_args, **_kwargs: expected)
+    reset_backend_counters()
+
+    dispatch_mamba3_ssd(**kwargs, ssd_backend=None)
+
+    assert get_backend_counters() == {"official_fast": 1}
+    assert api.resolve_ssd_backend(None) is None
+
+
+@pytest.mark.parametrize("backend", api.SSD_BACKENDS)
+def test_resolve_ssd_backend_accepts_every_documented_name(backend: str):
+    assert api.resolve_ssd_backend(f"  {backend.upper()} ") == backend
+
+
+def test_resolve_ssd_backend_rejects_an_unknown_name():
+    """A typo must fail loudly rather than quietly benchmarking the other backend."""
+    with pytest.raises(ValueError, match="simple_gla"):
+        api.resolve_ssd_backend("simplegla")
+
+
+def test_dispatch_refuses_a_named_backend_it_cannot_run():
+    """
+    Named backends are strict requests. On CPU ``simple_gla`` cannot run, and answering with
+    the chunked form would hand back a parity test that believed it exercised the kernel.
+    """
+    kwargs = _inputs(device="cpu", block_size=3, d_state=6)
+    with pytest.raises(RuntimeError, match="simple_gla"):
+        dispatch_mamba3_ssd(**kwargs, ssd_backend="simple_gla")
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param(dict(prefer_fast_kernel=False), id="reference"),
+        pytest.param(dict(prefer_official_kernel=False), id="chunked"),
+    ],
+)
+def test_dispatch_refuses_a_named_backend_that_contradicts_the_kernel_flags(overrides):
+    kwargs = _inputs(device="cpu", block_size=3, d_state=6)
+    with pytest.raises(RuntimeError, match="ssd_backend"):
+        dispatch_mamba3_ssd(**kwargs, ssd_backend="simple_gla", **overrides)
+
+
 def _inputs(
     *,
     batch: int = 2,
@@ -547,3 +622,126 @@ def test_mixer_reaches_the_official_kernel_under_autocast(rotation_block_size: i
 
     y.float().pow(2).mean().backward()
     assert torch.isfinite(y).all() and x.grad is not None and torch.isfinite(x.grad).all()
+
+
+@pytest.mark.parametrize("backend", [None, *api.SSD_BACKENDS], ids=lambda b: b or "default")
+def test_the_mixer_forwards_its_ssd_backend_to_dispatch(monkeypatch, backend):
+    """
+    A selector the mixer never passes on is decorative, which is the exact shape of the bug
+    ``rotation_scan_impl`` was introduced to fix.
+
+    The value therefore goes on the *config* and the module is built from it, so all of
+    ``Mamba3MixerConfig`` -> ``build()`` -> ``Mamba3Mixer`` -> ``dispatch`` is under test.
+    Assigning to an already-built mixer -- which this test used to do -- pins only the last hop
+    and would pass unchanged if :meth:`Mamba3MixerConfig.build` dropped the field on the floor.
+
+    ``None`` is a case rather than an omission: the default has to arrive at dispatch as ``None``,
+    which is what keeps every run in flight on its historical routing.
+    """
+    from olmo_core.nn.mamba3 import Mamba3MixerConfig
+    from olmo_core.nn.transformer.init import InitMethod
+
+    torch.manual_seed(0)
+    d_model = 32
+    mixer = Mamba3MixerConfig(
+        n_heads=2,
+        head_dim=8,
+        d_state=6,
+        n_groups=1,
+        mimo_rank=1,
+        rotation_block_size=3,
+        ssd_backend=backend,
+    ).build(d_model, layer_idx=0, n_layers=2)
+    mixer.init_weights(init_method=InitMethod.normal, d_model=d_model, block_idx=0, num_blocks=2)
+
+    assert mixer.ssd_backend == backend, "build() did not carry ssd_backend onto the mixer"
+
+    seen: list = []
+    import olmo_core.nn.mamba3.mixer as mixer_module
+
+    def spy(*_args, **kwargs):
+        seen.append(kwargs.get("ssd_backend"))
+        return torch.zeros(2, 16, 2, 8)
+
+    monkeypatch.setattr(mixer_module, "dispatch_mamba3_ssd", spy)
+    mixer(torch.randn(2, 16, d_model))
+
+    assert seen == [backend], "the mixer did not forward ssd_backend to dispatch"
+
+
+def test_the_mixer_rejects_an_unknown_ssd_backend_at_build():
+    """Fail at model construction, not after a compile warmup and a step on a rented GPU."""
+    from olmo_core.exceptions import OLMoConfigurationError
+    from olmo_core.nn.mamba3 import Mamba3MixerConfig
+
+    with pytest.raises(OLMoConfigurationError, match="ssd_backend"):
+        Mamba3MixerConfig(
+            n_heads=2,
+            head_dim=8,
+            d_state=6,
+            mimo_rank=1,
+            rotation_block_size=3,
+            ssd_backend="simplegla",
+        ).build(32, layer_idx=0, n_layers=2)
+
+
+@pytest.mark.parametrize("backend", api.SSD_BACKENDS)
+def test_the_mixer_rejects_a_named_backend_with_prefer_official_kernel_false(backend: str):
+    """
+    The contradictory pair has to fail at build, exactly like the unknown name above.
+
+    ``dispatch_mamba3_ssd`` already refuses it, but only once a batch reaches the mixer. That is
+    the worst place for it: ``prefer_official_kernel=False`` is precisely what
+    :class:`~olmo_core.nn.mamba3.mixer.Mamba3MixerConfig` documents an activation-checkpointed run
+    must set, so this is the combination a large run reaches for, and it would surface after the
+    model build, the compile warmup and a step on a rented GPU. The consequence the error has to
+    state is that a named backend is unreachable under activation checkpointing at all -- there is
+    no setting of these two fields that gives both.
+    """
+    from olmo_core.exceptions import OLMoConfigurationError
+    from olmo_core.nn.mamba3 import Mamba3MixerConfig
+
+    with pytest.raises(OLMoConfigurationError, match="prefer_official_kernel"):
+        Mamba3MixerConfig(
+            n_heads=2,
+            head_dim=8,
+            d_state=6,
+            mimo_rank=1,
+            rotation_block_size=3,
+            ssd_backend=backend,
+            prefer_official_kernel=False,
+        ).build(32, layer_idx=0, n_layers=2)
+
+
+@pytest.mark.parametrize(
+    "ssd_backend, prefer_official_kernel",
+    [
+        pytest.param(None, False, id="chunked-default-backend"),
+        pytest.param(None, None, id="both-default"),
+        pytest.param("simple_gla", None, id="named-default-kernel"),
+        pytest.param("simple_gla", True, id="named-official-required"),
+        pytest.param("official_fast", True, id="official-official-required"),
+    ],
+)
+def test_the_mixer_still_builds_every_non_contradictory_kernel_pair(
+    ssd_backend, prefer_official_kernel
+):
+    """
+    The rejection above must not widen. ``prefer_official_kernel=False`` with no named backend is
+    the activation-checkpointed default and has to keep building, and a named backend still builds
+    under both of the settings that leave the official kernel reachable.
+    """
+    from olmo_core.nn.mamba3 import Mamba3MixerConfig
+
+    mixer = Mamba3MixerConfig(
+        n_heads=2,
+        head_dim=8,
+        d_state=6,
+        mimo_rank=1,
+        rotation_block_size=3,
+        ssd_backend=ssd_backend,
+        prefer_official_kernel=prefer_official_kernel,
+    ).build(32, layer_idx=0, n_layers=2)
+
+    assert mixer.ssd_backend == ssd_backend
+    assert mixer.prefer_official_kernel is prefer_official_kernel

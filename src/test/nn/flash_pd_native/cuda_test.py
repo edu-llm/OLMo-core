@@ -96,3 +96,65 @@ def test_native_cuda_production_length_probe():
     capability = native_cuda_capability()
     assert capability.available, capability.reason
     _parity_case(state=128, time=1025, dtype=torch.bfloat16, collision=False)
+
+
+# Parity alone only catches an interleaving that actually lost. Run the test under
+# this command on a CUDA host to have racecheck report the hazard itself, whether or
+# not the run it watches happens to lose.
+RACECHECK_COMMAND = (
+    "compute-sanitizer --tool racecheck --racecheck-detect-level analysis "
+    "python -m pytest -q -p no:cacheprovider "
+    "src/test/nn/flash_pd_native/cuda_test.py -k multiwarp_permutation_inverse"
+)
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("state", [64, 128])
+def test_native_cuda_multiwarp_permutation_inverse_matches_reference_on_every_repeat(state: int):
+    """
+    A state above 32 spreads the block over several warps, and the in-place
+    inversion of the routed map then has one warp writing slots another warp has
+    yet to read. The reversing map makes every one of those writes cross a warp
+    boundary. A losing interleaving corrupts the gather source for the lanes it
+    catches, so the run disagrees with the reference and successive runs disagree
+    with each other.
+    """
+    capability = native_cuda_capability()
+    assert capability.available, capability.reason
+
+    torch.manual_seed(97 + state)
+    device = torch.device("cuda")
+    identity = torch.arange(state, dtype=torch.int16, device=device)
+    destination = torch.stack((identity, identity.flip(0))).unsqueeze(0)
+    time = 257
+    routes = torch.ones((1, 1, time), device=device, dtype=torch.int16)
+    routes[..., ::2] = 0
+    values = [torch.randn(1, 1, time, state, device=device) * 0.1 for _ in range(4)]
+    values[0].add_(0.9)
+
+    expected = flash_pd_scan(
+        destination,
+        routes,
+        *values,
+        mode=NativePDMode.PERMUTATION_GATHER,
+        backend="reference",
+    )
+
+    first = None
+    for _ in range(8):
+        real, imag = flash_pd_scan(
+            destination,
+            routes,
+            *values,
+            mode=NativePDMode.PERMUTATION_GATHER,
+            backend="cuda",
+        )
+        torch.testing.assert_close(real, expected[0], atol=4e-4, rtol=4e-4)
+        torch.testing.assert_close(imag, expected[1], atol=4e-4, rtol=4e-4)
+        if first is None:
+            first = (real.clone(), imag.clone())
+        else:
+            assert torch.equal(real, first[0]) and torch.equal(imag, first[1]), (
+                "repeated permutation_gather runs over identical inputs disagree, which "
+                f"is the inversion race; reproduce it with: {RACECHECK_COMMAND}"
+            )

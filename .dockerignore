@@ -27,6 +27,18 @@ build
 dist
 pip-wheel-metadata
 
+# Compiled native artefacts. The image puts src/ on PYTHONPATH and builds its own
+# _flash_pd_native_cuda wheel before COPY . ., so an extension a developer compiled here
+# against a different Torch would arrive later and shadow it -- an import that resolves to
+# the wrong binary rather than an error anyone can see. Nothing native is tracked, so this
+# removes no source; the .cu and .cpp the image compiles from are untouched.
+**/*.so
+**/*.so.*
+**/*.pyd
+**/*.dylib
+**/*.o
+**/*.a
+
 # Virtual environments and local worktrees
 **/.venv
 **/venv

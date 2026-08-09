@@ -1,5 +1,6 @@
 import itertools
 import math
+from typing import Callable
 
 import pytest
 import torch
@@ -240,8 +241,12 @@ def _mixer_config(**kwargs) -> NativeFlashPDMamba3SISOMixerConfig:
     return NativeFlashPDMamba3SISOMixerConfig(**values)
 
 
-def _initialized_mixer(*, fused: bool) -> NativeFlashPDMamba3SISOMixer:
-    mixer = _mixer_config(fuse_input_projections=fused).build(32, layer_idx=1, n_layers=3)
+def _initialized_mixer(
+    *, fused: bool, dtype: DType = DType.float32
+) -> NativeFlashPDMamba3SISOMixer:
+    mixer = _mixer_config(fuse_input_projections=fused, dtype=dtype).build(
+        32, layer_idx=1, n_layers=3
+    )
     mixer.init_weights(
         init_method=InitMethod.normal,
         d_model=32,
@@ -252,10 +257,97 @@ def _initialized_mixer(*, fused: bool) -> NativeFlashPDMamba3SISOMixer:
     return mixer
 
 
-def test_full_mixer_scan_boundary_receives_contiguous_bht_recurrence_tensors(monkeypatch):
-    mixer = _initialized_mixer(fused=True)
+# Every way a tensor element reaches the host as a Python scalar. Each one drains the
+# stream on an accelerator, which is what the temperature tests below forbid.
+_SCALAR_READBACKS = ("item", "tolist", "__bool__", "__float__", "__index__", "__int__")
+
+
+class _ScalarReadbackCounter:
+    """Record every device-to-host scalar read made inside the ``with`` block."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self._originals: dict[str, Callable] = {}
+
+    def __enter__(self) -> "_ScalarReadbackCounter":
+        for name in _SCALAR_READBACKS:
+            original = getattr(torch.Tensor, name)
+            self._originals[name] = original
+            self._install(name, original)
+        return self
+
+    def __exit__(self, *exc_info) -> None:
+        for name, original in self._originals.items():
+            setattr(torch.Tensor, name, original)
+
+    def _install(self, name: str, original: Callable) -> None:
+        def wrapper(tensor, *args, **kwargs):
+            self.calls.append(name)
+            return original(tensor, *args, **kwargs)
+
+        setattr(torch.Tensor, name, wrapper)
+
+
+def _explicit_mode_mixer(**kwargs) -> NativeFlashPDMamba3SISOMixer:
+    """
+    Build an initialized mixer whose dispatch mode is pinned.
+
+    ``AUTO`` proves the selected maps bijective on every call and that proof reads a route
+    index back to the host, which would mask the temperature reads under measurement.
+    """
+    mixer = _mixer_config(mode=NativePDMode.GENERAL_SCATTER, **kwargs).build(
+        32, layer_idx=0, n_layers=1
+    )
+    mixer.init_weights(
+        init_method=InitMethod.normal,
+        d_model=32,
+        block_idx=0,
+        num_blocks=1,
+        generator=torch.Generator().manual_seed(23),
+    )
+    return mixer
+
+
+def _annealing_mixer_config() -> NativeFlashPDMamba3SISOMixerConfig:
+    return _mixer_config(
+        mode=NativePDMode.GENERAL_SCATTER,
+        dictionary_temperature=2.0,
+        router_temperature=1.0,
+        dictionary_temperature_end=0.5,
+        router_temperature_end=0.25,
+        temperature_schedule_steps=100,
+    )
+
+
+def _temperatures_seen_by_scan(mixer: NativeFlashPDMamba3SISOMixer) -> tuple[float, float]:
+    """Return the temperatures one forward hands to the scan boundary."""
+    original_scan = mamba3_siso_module.mamba3_siso_surrogate_scan
+    seen: dict[str, float] = {}
+
+    def capture_scan(*args, **kwargs):
+        seen["dictionary"] = kwargs["dictionary_temperature"]
+        seen["router"] = kwargs["router_temperature"]
+        return original_scan(*args, **kwargs)
+
+    mamba3_siso_module.mamba3_siso_surrogate_scan = capture_scan
+    try:
+        mixer(torch.randn(1, 7, mixer.d_model))
+    finally:
+        mamba3_siso_module.mamba3_siso_surrogate_scan = original_scan
+    return seen["dictionary"], seen["router"]
+
+
+@pytest.mark.parametrize("dtype", [DType.float32, DType.bfloat16])
+@pytest.mark.parametrize("fused", [True, False])
+def test_full_mixer_scan_boundary_receives_contiguous_recurrence_and_selection_tensors(
+    monkeypatch,
+    fused: bool,
+    dtype: DType,
+):
+    mixer = _initialized_mixer(fused=fused, dtype=dtype)
     original_scan = mamba3_siso_module.mamba3_siso_surrogate_scan
     recurrence_tensors = {}
+    selection_tensors = {}
 
     def capture_scan(
         dictionary_logits,
@@ -268,6 +360,10 @@ def test_full_mixer_scan_boundary_receives_contiguous_bht_recurrence_tensors(mon
         gamma,
         **kwargs,
     ):
+        selection_tensors.update(
+            dictionary_logits=dictionary_logits,
+            selector_logits=selector_logits,
+        )
         recurrence_tensors.update(
             diagonal_real=diagonal_real,
             diagonal_imag=diagonal_imag,
@@ -290,7 +386,8 @@ def test_full_mixer_scan_boundary_receives_contiguous_bht_recurrence_tensors(mon
 
     monkeypatch.setattr(mamba3_siso_module, "mamba3_siso_surrogate_scan", capture_scan)
 
-    mixer(torch.randn(2, 35, 32))
+    x = torch.randn(2, 35, 32, dtype=dtype.as_pt())
+    mixer(x)
 
     assert set(recurrence_tensors) == {
         "diagonal_real",
@@ -304,6 +401,145 @@ def test_full_mixer_scan_boundary_receives_contiguous_bht_recurrence_tensors(mon
         expected_shape = (2, 4, 35, 8) if tensor.ndim == 4 else (2, 4, 35)
         assert tensor.shape == expected_shape, name
         assert tensor.is_contiguous(), name
+
+    # The CUDA dictionary and router gradients walk both logit tensors by raw pointer
+    # under a dense (H,K,N,N) and (B,T,H,K) layout. A fused projection hands the scan a
+    # strided split view of one activation, and reading it that way would silently pick
+    # up the neighbouring projections instead of the selector.
+    assert set(selection_tensors) == {"dictionary_logits", "selector_logits"}
+    assert selection_tensors["dictionary_logits"].shape == (4, 4, 8, 8)
+    assert selection_tensors["selector_logits"].shape == (2, 35, 4, 4)
+    for name, tensor in selection_tensors.items():
+        assert tensor.dtype == torch.float32, name
+        assert tensor.is_contiguous(), name
+        # Read each buffer the way the kernel does, straight off the pointer, and
+        # require it to hold the logits rather than whatever else the projection
+        # left in between them.
+        detached = tensor.detach()
+        torch.testing.assert_close(
+            torch.as_strided(detached, (detached.numel(),), (1,)),
+            detached.flatten(),
+            msg=lambda default, name=name: f"pointer walk over {name}: {default}",
+        )
+    torch.testing.assert_close(
+        selection_tensors["selector_logits"],
+        mixer._prepare_recurrence(x)[4].float(),
+    )
+
+
+def test_bfloat16_mixer_keeps_complex_diagonal_fp32_at_scan_boundary(monkeypatch):
+    decay_steps = 4096
+    time = decay_steps + 1
+    state = 8
+    mixer = _mixer_config(
+        n_heads=1,
+        d_state=state,
+        dictionary_size=1,
+        dtype=DType.bfloat16,
+    ).build(state, layer_idx=0, n_layers=1)
+    with torch.no_grad():
+        mixer.dictionary_logits.fill_(-1)
+        index = torch.arange(state)
+        mixer.dictionary_logits[0, 0, index, index] = 1
+
+    recurrence_shape = (1, time, 1, state)
+    payload_dtype = torch.bfloat16
+    diagonal_real = torch.full(
+        recurrence_shape,
+        math.exp(-5e-4),
+        dtype=torch.float32,
+    )
+    diagonal_imag = torch.zeros_like(diagonal_real)
+    value_real = torch.zeros(recurrence_shape, dtype=payload_dtype)
+    value_imag = torch.zeros_like(value_real)
+    value_real[:, 0] = 1
+    beta = torch.zeros((1, time, 1), dtype=payload_dtype)
+    gamma = torch.zeros_like(beta)
+    gamma[:, 0] = 1
+    captured = {}
+
+    def prepare_recurrence(x):
+        value_input = torch.zeros_like(value_real)
+        gate = x.new_zeros(x.shape)
+        c_real = torch.zeros_like(value_real)
+        c_imag = torch.zeros_like(value_real)
+        selector_logits = x.new_zeros((1, time, 1, 1))
+        return (
+            value_input,
+            gate,
+            c_real,
+            c_imag,
+            selector_logits,
+            diagonal_real,
+            diagonal_imag,
+            value_real,
+            value_imag,
+            beta,
+            gamma,
+        )
+
+    original_scan = mamba3_siso_module.mamba3_siso_surrogate_scan
+
+    def capture_scan(
+        dictionary_logits,
+        selector_logits,
+        scan_diagonal_real,
+        scan_diagonal_imag,
+        scan_value_real,
+        scan_value_imag,
+        scan_beta,
+        scan_gamma,
+        **kwargs,
+    ):
+        captured.update(
+            diagonal_real=scan_diagonal_real,
+            diagonal_imag=scan_diagonal_imag,
+            value_real=scan_value_real,
+            value_imag=scan_value_imag,
+            beta=scan_beta,
+            gamma=scan_gamma,
+        )
+        result = original_scan(
+            dictionary_logits,
+            selector_logits,
+            scan_diagonal_real,
+            scan_diagonal_imag,
+            scan_value_real,
+            scan_value_imag,
+            scan_beta,
+            scan_gamma,
+            **kwargs,
+        )
+        captured["output_real"] = result[0]
+        captured["output_imag"] = result[1]
+        return result
+
+    def readout(
+        x_dtype,
+        value_input,
+        gate,
+        c_real,
+        c_imag,
+        states_real,
+        states_imag,
+    ):
+        del value_input, gate, c_real, c_imag, states_imag
+        return states_real.permute(0, 2, 1, 3).reshape(1, time, state).to(x_dtype)
+
+    monkeypatch.setattr(mixer, "_prepare_recurrence", prepare_recurrence)
+    monkeypatch.setattr(mixer, "_readout", readout)
+    monkeypatch.setattr(mamba3_siso_module, "mamba3_siso_surrogate_scan", capture_scan)
+
+    output = mixer(torch.zeros((1, time, state), dtype=payload_dtype))
+
+    assert captured["diagonal_real"].dtype == torch.float32
+    assert captured["diagonal_imag"].dtype == torch.float32
+    for name in ("value_real", "value_imag", "beta", "gamma", "output_real", "output_imag"):
+        assert captured[name].dtype == payload_dtype, name
+    expected_decay = math.exp(-5e-4 * decay_steps)
+    actual_decay = output[0, -1, 0].float().item()
+    assert actual_decay == pytest.approx(expected_decay, rel=5e-3, abs=5e-4)
+    assert actual_decay != pytest.approx(1.0, abs=0.1)
 
 
 def test_transformer_init_weights_restores_configured_siso_temperatures_and_zero_step():
@@ -494,6 +730,122 @@ def test_separate_temperature_schedule_state_roundtrips_and_resumes_exactly():
     assert rebuilt.router_temperature == pytest.approx(0.25)
 
 
+def test_mixer_forward_reads_temperatures_without_any_host_scalar_readback():
+    mixer = _explicit_mode_mixer()
+    x = torch.randn(2, 9, 32)
+
+    with _ScalarReadbackCounter() as counter:
+        output = mixer(x)
+        temperatures = (mixer.dictionary_temperature, mixer.router_temperature)
+
+    assert counter.calls == []
+    assert temperatures == (1.0, 1.0)
+    assert output.shape == x.shape
+
+
+def test_mixer_forward_compiles_fullgraph_through_the_reference_scan():
+    mixer = _explicit_mode_mixer()
+    x = torch.randn(1, 9, 32)
+    torch._dynamo.reset()
+
+    # Grad-mode tracing of this path is blocked by a separate dynamo limitation on the
+    # reference scan's autograd.Function, so inference is what the temperatures gate.
+    with torch.no_grad():
+        expected = mixer(x)
+        actual = torch.compile(mixer, backend="eager", fullgraph=True)(x)
+
+    torch.testing.assert_close(actual, expected)
+
+
+@pytest.mark.parametrize(
+    ("step", "dictionary", "router"),
+    [(0, 2.0, 1.0), (40, 1.4, 0.7), (100, 0.5, 0.25), (250, 0.5, 0.25)],
+)
+def test_temperature_schedule_step_moves_buffers_and_hot_path_values_together(
+    step: int,
+    dictionary: float,
+    router: float,
+):
+    mixer = _annealing_mixer_config().build(32, layer_idx=0, n_layers=1)
+
+    mixer.set_temperature_schedule_step(step)
+    with _ScalarReadbackCounter() as counter:
+        temperatures = (mixer.dictionary_temperature, mixer.router_temperature)
+
+    assert counter.calls == []
+    assert temperatures == (pytest.approx(dictionary), pytest.approx(router))
+    assert mixer._dictionary_temperature.item() == temperatures[0]
+    assert mixer._router_temperature.item() == temperatures[1]
+    assert mixer.temperature_schedule_state() == {
+        "step": step,
+        "dictionary_temperature": temperatures[0],
+        "router_temperature": temperatures[1],
+    }
+    assert _temperatures_seen_by_scan(mixer) == temperatures
+
+
+def test_resumed_mixer_takes_hot_path_temperatures_from_the_persisted_buffers():
+    config = _annealing_mixer_config()
+    mixer = config.build(32, layer_idx=0, n_layers=1)
+    mixer.set_temperature_schedule_step(40)
+    checkpoint = {name: tensor.clone() for name, tensor in mixer.state_dict().items()}
+    resumed = config.build(32, layer_idx=0, n_layers=1)
+    assert resumed.dictionary_temperature == pytest.approx(2.0)
+
+    resumed.load_state_dict(checkpoint, strict=True)
+    with _ScalarReadbackCounter() as counter:
+        temperatures = (resumed.dictionary_temperature, resumed.router_temperature)
+
+    assert counter.calls == []
+    assert temperatures == (mixer.dictionary_temperature, mixer.router_temperature)
+    assert resumed._dictionary_temperature.item() == temperatures[0]
+    assert resumed._router_temperature.item() == temperatures[1]
+    assert resumed.temperature_schedule_state() == mixer.temperature_schedule_state()
+    assert _temperatures_seen_by_scan(resumed) == _temperatures_seen_by_scan(mixer)
+
+    resumed.set_temperature_schedule_step(100)
+    assert _temperatures_seen_by_scan(resumed) == (
+        pytest.approx(0.5),
+        pytest.approx(0.25),
+    )
+
+
+@pytest.mark.filterwarnings("ignore:.*copying from a non-meta parameter.*:UserWarning")
+def test_loading_into_an_unmaterialized_meta_mixer_leaves_hot_path_and_buffers_agreeing():
+    config = _annealing_mixer_config()
+    mixer = config.build(32, layer_idx=0, n_layers=1)
+    mixer.set_temperature_schedule_step(40)
+    unmaterialized = config.build(32, layer_idx=0, n_layers=1, init_device="meta")
+
+    # Copying into meta storage is a no-op, so there is nothing to mirror and the
+    # configured start temperatures are still what both sides hold.
+    unmaterialized.load_state_dict(mixer.state_dict(), strict=True)
+
+    assert unmaterialized.dictionary_temperature == pytest.approx(2.0)
+    assert unmaterialized.router_temperature == pytest.approx(1.0)
+
+
+@pytest.mark.gpu
+def test_cuda_mixer_temperature_hot_path_never_drains_the_stream():
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    mixer = _annealing_mixer_config().build(32, layer_idx=0, n_layers=1, init_device="cuda")
+    mixer.set_temperature_schedule_step(40)
+
+    with _ScalarReadbackCounter() as counter:
+        mixer(torch.randn(1, 9, 32, device="cuda"))
+    torch.cuda.synchronize()
+    previous_mode = torch.cuda.get_sync_debug_mode()
+    torch.cuda.set_sync_debug_mode("error")
+    try:
+        temperatures = (mixer.dictionary_temperature, mixer.router_temperature)
+    finally:
+        torch.cuda.set_sync_debug_mode(previous_mode)
+
+    assert counter.calls == []
+    assert temperatures == (pytest.approx(1.4), pytest.approx(0.7))
+
+
 @pytest.mark.parametrize("chunk_size", [32, 64, 128])
 def test_exact_parameter_flop_saved_tensor_and_workspace_accounting(chunk_size: int):
     mixer = _mixer_config(chunk_size=chunk_size).build(32, layer_idx=0, n_layers=1)
@@ -525,7 +877,8 @@ def test_exact_parameter_flop_saved_tensor_and_workspace_accounting(chunk_size: 
         26 * chunk_state + 4 * (mixer.n_heads * mixer.dictionary_size * mixer.d_state + rows * time)
     )
     expected_saved = (
-        6 * sequence_state * dtype_bytes
+        8 * sequence_state
+        + 4 * sequence_state * dtype_bytes
         + 2 * rows * time * dtype_bytes
         + 4
         * (

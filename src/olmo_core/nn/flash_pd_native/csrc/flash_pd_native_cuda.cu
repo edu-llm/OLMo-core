@@ -13,9 +13,16 @@ constexpr int kPermutationGather = 1;
 
 #define FLASH_PD_LAUNCH(kernel, grid, block, shared, stream, ...) \
     kernel<<<grid, block, shared, stream>>>(__VA_ARGS__)
-#define MAMBA3_PHASE_A(scalar, mode) mamba3_phase_a_kernel<scalar, mode>
+#define MAMBA3_PHASE_A(diagonal, payload, mode) \
+    mamba3_phase_a_kernel<diagonal, payload, mode>
 #define MAMBA3_PHASE_B(mode) mamba3_phase_b_kernel<mode>
-#define MAMBA3_PHASE_C(scalar, mode) mamba3_phase_c_kernel<scalar, mode>
+#define MAMBA3_PHASE_C(diagonal, payload, mode) \
+    mamba3_phase_c_kernel<diagonal, payload, mode>
+
+// A block never exceeds one thread per state channel, and state stays below 1024.
+constexpr int kMaximumWarps = 32;
+// Selector score plus the beta and gamma coefficient gradients.
+constexpr int kPhaseCReductions = 3;
 
 template <typename scalar_t>
 __device__ __forceinline__ float as_float(scalar_t value) {
@@ -58,11 +65,18 @@ __device__ __forceinline__ void scatter_step(
     const unsigned peers = __match_any_sync(active, destination);
     float aggregate_real = 0.0f;
     float aggregate_imag = 0.0f;
+    // Every shuffle below names `peers`, never the whole warp. A colliding
+    // dictionary gives the lanes of one warp peer groups of different sizes, so
+    // they run different numbers of rounds here; a mask naming the whole warp
+    // would make the longer groups wait on lanes that already left the loop, and
+    // the block would never clear. Lanes of one peer group share the mask and the
+    // round count, and distinct peer groups name disjoint lanes, so no group ever
+    // waits on another.
     unsigned remaining = peers;
     while (remaining != 0) {
         const int source_lane = __ffs(remaining) - 1;
-        const float peer_real = __shfl_sync(active, value_real, source_lane);
-        const float peer_imag = __shfl_sync(active, value_imag, source_lane);
+        const float peer_real = __shfl_sync(peers, value_real, source_lane);
+        const float peer_imag = __shfl_sync(peers, value_imag, source_lane);
         aggregate_real += peer_real;
         aggregate_imag += peer_imag;
         remaining &= remaining - 1;
@@ -134,6 +148,7 @@ __global__ void phase_a_kernel(
 
         const int old_destination = accumulator_destination;
         const int next_destination = shared_map[old_destination];
+        const int token_destination = shared_map[lane];
         float next_diagonal_real;
         float next_diagonal_imag;
         complex_product(
@@ -155,8 +170,7 @@ __global__ void phase_a_kernel(
         float next_bias_real;
         float next_bias_imag;
         if (mode == kPermutationGather) {
-            const int destination = shared_map[lane];
-            shared_map[destination] = lane;
+            shared_map[token_destination] = lane;
             __syncthreads();
             permutation_step(
                 lane,
@@ -251,6 +265,7 @@ __global__ void phase_b_kernel(
 
         const int old_destination = accumulator_destination;
         const int next_destination = shared_map[old_destination];
+        const int chunk_destination = shared_map[lane];
         float next_diagonal_real;
         float next_diagonal_imag;
         complex_product(
@@ -272,8 +287,7 @@ __global__ void phase_b_kernel(
         float next_bias_real;
         float next_bias_imag;
         if (mode == kPermutationGather) {
-            const int destination = shared_map[lane];
-            shared_map[destination] = lane;
+            shared_map[chunk_destination] = lane;
             __syncthreads();
             permutation_step(
                 lane,
@@ -366,13 +380,13 @@ __global__ void phase_c_kernel(
             state_imag,
             shared_value_real[lane],
             shared_value_imag[lane]);
+        const int token_destination = shared_map[lane];
         __syncthreads();
 
         float next_real;
         float next_imag;
         if (mode == kPermutationGather) {
-            const int destination = shared_map[lane];
-            shared_map[destination] = lane;
+            shared_map[token_destination] = lane;
             __syncthreads();
             permutation_step(
                 lane,
@@ -404,19 +418,19 @@ __global__ void phase_c_kernel(
     }
 }
 
-template <typename scalar_t>
+template <typename diagonal_t, typename payload_t>
 __global__ void mamba3_preprocess_kernel(
     const int16_t* __restrict__ dictionary_destination,
     const int16_t* __restrict__ inverse_destination,
     const int16_t* __restrict__ routes,
-    const scalar_t* __restrict__ diagonal_real,
-    const scalar_t* __restrict__ diagonal_imag,
-    const scalar_t* __restrict__ value_real,
-    const scalar_t* __restrict__ value_imag,
-    const scalar_t* __restrict__ beta,
-    const scalar_t* __restrict__ gamma,
-    scalar_t* __restrict__ bias_real,
-    scalar_t* __restrict__ bias_imag,
+    const diagonal_t* __restrict__ diagonal_real,
+    const diagonal_t* __restrict__ diagonal_imag,
+    const payload_t* __restrict__ value_real,
+    const payload_t* __restrict__ value_imag,
+    const payload_t* __restrict__ beta,
+    const payload_t* __restrict__ gamma,
+    payload_t* __restrict__ bias_real,
+    payload_t* __restrict__ bias_imag,
     int heads,
     int dictionary_size,
     int time,
@@ -476,22 +490,22 @@ __global__ void mamba3_preprocess_kernel(
     }
     __syncthreads();
     bias_real[token_offset] =
-        static_cast<scalar_t>(shared_output_real[lane]);
+        static_cast<payload_t>(shared_output_real[lane]);
     bias_imag[token_offset] =
-        static_cast<scalar_t>(shared_output_imag[lane]);
+        static_cast<payload_t>(shared_output_imag[lane]);
 }
 
-template <typename scalar_t, int mode>
+template <typename diagonal_t, typename payload_t, int mode>
 __global__ void mamba3_phase_a_kernel(
     const int16_t* __restrict__ dictionary_destination,
     const int16_t* __restrict__ inverse_destination,
     const int16_t* __restrict__ routes,
-    const scalar_t* __restrict__ diagonal_real,
-    const scalar_t* __restrict__ diagonal_imag,
-    const scalar_t* __restrict__ value_real,
-    const scalar_t* __restrict__ value_imag,
-    const scalar_t* __restrict__ beta,
-    const scalar_t* __restrict__ gamma,
+    const diagonal_t* __restrict__ diagonal_real,
+    const diagonal_t* __restrict__ diagonal_imag,
+    const payload_t* __restrict__ value_real,
+    const payload_t* __restrict__ value_imag,
+    const payload_t* __restrict__ beta,
+    const payload_t* __restrict__ gamma,
     int16_t* __restrict__ aggregate_destination,
     float* __restrict__ aggregate_diagonal_real,
     float* __restrict__ aggregate_diagonal_imag,
@@ -718,21 +732,21 @@ __global__ void mamba3_phase_b_kernel(
     }
 }
 
-template <typename scalar_t, int mode>
+template <typename diagonal_t, typename payload_t, int mode>
 __global__ void mamba3_phase_c_kernel(
     const int16_t* __restrict__ dictionary_destination,
     const int16_t* __restrict__ inverse_destination,
     const int16_t* __restrict__ routes,
-    const scalar_t* __restrict__ diagonal_real,
-    const scalar_t* __restrict__ diagonal_imag,
-    const scalar_t* __restrict__ value_real,
-    const scalar_t* __restrict__ value_imag,
-    const scalar_t* __restrict__ beta,
-    const scalar_t* __restrict__ gamma,
+    const diagonal_t* __restrict__ diagonal_real,
+    const diagonal_t* __restrict__ diagonal_imag,
+    const payload_t* __restrict__ value_real,
+    const payload_t* __restrict__ value_imag,
+    const payload_t* __restrict__ beta,
+    const payload_t* __restrict__ gamma,
     const float* __restrict__ prefix_bias_real,
     const float* __restrict__ prefix_bias_imag,
-    scalar_t* __restrict__ output_real,
-    scalar_t* __restrict__ output_imag,
+    payload_t* __restrict__ output_real,
+    payload_t* __restrict__ output_imag,
     int heads,
     int dictionary_size,
     int time,
@@ -843,8 +857,8 @@ __global__ void mamba3_phase_c_kernel(
 
         state_real = next_real;
         state_imag = next_imag;
-        output_real[token_offset] = static_cast<scalar_t>(state_real);
-        output_imag[token_offset] = static_cast<scalar_t>(state_imag);
+        output_real[token_offset] = static_cast<payload_t>(state_real);
+        output_imag[token_offset] = static_cast<payload_t>(state_imag);
     }
 }
 
@@ -922,14 +936,14 @@ __global__ void backward_kernel(
     }
 }
 
-template <typename scalar_t>
+template <typename diagonal_t, typename payload_t>
 __global__ void paper_backward_phase_a_kernel(
     const int16_t* __restrict__ dictionary_destination,
     const int16_t* __restrict__ routes,
-    const scalar_t* __restrict__ diagonal_real,
-    const scalar_t* __restrict__ diagonal_imag,
-    const scalar_t* __restrict__ grad_output_real,
-    const scalar_t* __restrict__ grad_output_imag,
+    const diagonal_t* __restrict__ diagonal_real,
+    const diagonal_t* __restrict__ diagonal_imag,
+    const payload_t* __restrict__ grad_output_real,
+    const payload_t* __restrict__ grad_output_imag,
     int16_t* __restrict__ aggregate_destination,
     float* __restrict__ aggregate_diagonal_real,
     float* __restrict__ aggregate_diagonal_imag,
@@ -1064,312 +1078,72 @@ __global__ void paper_backward_phase_b_kernel(
     }
 }
 
-__device__ __forceinline__ float block_sum(
-    float value,
+// Replaces every lane's entry of `values` with that entry summed over the block.
+// Reducing the whole set in one pass keeps the per-token barrier count flat as
+// callers ask for more sums, and the leading barrier is what makes back-to-back
+// calls safe to issue against a single `warp_sums` buffer.
+template <int count>
+__device__ __forceinline__ void block_sums(
+    float (&values)[count],
     float* warp_sums,
     int state) {
-    const int lane = threadIdx.x;
-    const int warp_lane = lane & 31;
-    const int warp = lane >> 5;
-    const int warp_start = warp << 5;
-    const int warp_width = min(32, state - warp_start);
+    const int warp_lane = threadIdx.x & 31;
+    const int warp = static_cast<int>(threadIdx.x) >> 5;
+    const int warp_width = min(32, state - (warp << 5));
+    const int warps = (state + 31) / 32;
     const unsigned active = __activemask();
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        const float other = __shfl_down_sync(active, value, offset);
-        if (warp_lane + offset < warp_width) {
-            value += other;
-        }
-    }
-    if (warp_lane == 0) {
-        warp_sums[warp] = value;
-    }
-    __syncthreads();
-
-    if (warp == 0) {
-        const int warps = (state + 31) / 32;
-        float total = warp_lane < warps ? warp_sums[warp_lane] : 0.0f;
-        const unsigned first_warp = __activemask();
+    for (int index = 0; index < count; ++index) {
+        float value = values[index];
         for (int offset = 16; offset > 0; offset >>= 1) {
-            const float other = __shfl_down_sync(first_warp, total, offset);
-            if (warp_lane + offset < warps) {
-                total += other;
+            const float other = __shfl_down_sync(active, value, offset);
+            if (warp_lane + offset < warp_width) {
+                value += other;
             }
         }
-        if (warp_lane == 0) {
-            warp_sums[0] = total;
-        }
+        values[index] = __shfl_sync(active, value, 0);
     }
-    __syncthreads();
-    return warp_sums[0];
-}
+    if (warps == 1) {
+        return;
+    }
 
-__device__ __forceinline__ float state_sum(
-    float value,
-    float* warp_sums,
-    int state) {
-    const int lane = threadIdx.x;
-    const int warp_lane = lane & 31;
-    const int warp = lane >> 5;
-    const int warp_start = warp << 5;
-    const int warp_width = min(32, state - warp_start);
-    const unsigned active = __activemask();
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        const float other = __shfl_down_sync(active, value, offset);
-        if (warp_lane + offset < warp_width) {
-            value += other;
-        }
-    }
-    if (state <= 32) {
-        return __shfl_sync(active, value, 0);
-    }
+    __syncthreads();
     if (warp_lane == 0) {
-        warp_sums[warp] = value;
-    }
-    __syncthreads();
-
-    if (warp == 0) {
-        const int warps = (state + 31) / 32;
-        float total = warp_lane < warps ? warp_sums[warp_lane] : 0.0f;
-        const unsigned first_warp = __activemask();
-        for (int offset = 16; offset > 0; offset >>= 1) {
-            const float other = __shfl_down_sync(first_warp, total, offset);
-            if (warp_lane + offset < warps) {
-                total += other;
-            }
-        }
-        if (warp_lane == 0) {
-            warp_sums[0] = total;
+        for (int index = 0; index < count; ++index) {
+            warp_sums[index * kMaximumWarps + warp] = values[index];
         }
     }
     __syncthreads();
-    return warp_sums[0];
-}
-
-template <typename scalar_t>
-__global__ void mamba3_backward_fused_kernel(
-    const float* __restrict__ selector_logits,
-    const int16_t* __restrict__ dictionary_destination,
-    const int16_t* __restrict__ routes,
-    const scalar_t* __restrict__ diagonal_real,
-    const scalar_t* __restrict__ diagonal_imag,
-    const scalar_t* __restrict__ output_real,
-    const scalar_t* __restrict__ output_imag,
-    const scalar_t* __restrict__ grad_output_real,
-    const scalar_t* __restrict__ grad_output_imag,
-    const scalar_t* __restrict__ value_real,
-    const scalar_t* __restrict__ value_imag,
-    const scalar_t* __restrict__ beta,
-    const scalar_t* __restrict__ gamma,
-    scalar_t* __restrict__ grad_diagonal_real,
-    scalar_t* __restrict__ grad_diagonal_imag,
-    scalar_t* __restrict__ grad_value_real,
-    scalar_t* __restrict__ grad_value_imag,
-    scalar_t* __restrict__ grad_beta,
-    scalar_t* __restrict__ grad_gamma,
-    float* __restrict__ active_dictionary_gradient,
-    float* __restrict__ grad_selector_logits,
-    int heads,
-    int dictionary_size,
-    int time,
-    int state,
-    bool aggregate_dictionary,
-    float router_inverse_temperature) {
-    const int row = blockIdx.x;
-    const int lane = threadIdx.x;
-    const int batch = row / heads;
-    const int head = row % heads;
-    extern __shared__ float shared[];
-    float* shared_gradient_real = shared;
-    float* shared_gradient_imag = shared_gradient_real + state;
-    float* shared_active_dictionary = shared_gradient_imag + state;
-    const int local_dictionary_elements =
-        aggregate_dictionary ? dictionary_size * state : 0;
-    float* shared_warp_sums =
-        shared_active_dictionary + local_dictionary_elements;
-    float* shared_router = shared_warp_sums + 32;
-    for (int index = lane; index < local_dictionary_elements; index += state) {
-        shared_active_dictionary[index] = 0.0f;
-    }
-    __syncthreads();
-
-    float carry_real = 0.0f;
-    float carry_imag = 0.0f;
-    for (int token = time - 1; token >= 0; --token) {
-        const int token_offset = (row * time + token) * state + lane;
-        const float total_real =
-            as_float(grad_output_real[token_offset]) + carry_real;
-        const float total_imag =
-            as_float(grad_output_imag[token_offset]) + carry_imag;
-        shared_gradient_real[lane] = total_real;
-        shared_gradient_imag[lane] = total_imag;
-        __syncthreads();
-
-        const int route = static_cast<int>(routes[row * time + token]);
-        const int dictionary_offset = (head * dictionary_size + route) * state;
-        const int destination =
-            static_cast<int>(dictionary_destination[dictionary_offset + lane]);
-        const float destination_gradient_real =
-            shared_gradient_real[destination];
-        const float destination_gradient_imag =
-            shared_gradient_imag[destination];
-        const float previous_real =
-            token == 0 ? 0.0f : as_float(output_real[token_offset - state]);
-        const float previous_imag =
-            token == 0 ? 0.0f : as_float(output_imag[token_offset - state]);
-        const float previous_value_real =
-            token == 0 ? 0.0f : as_float(value_real[token_offset - state]);
-        const float previous_value_imag =
-            token == 0 ? 0.0f : as_float(value_imag[token_offset - state]);
-        const float token_beta = as_float(beta[row * time + token]);
-        const float transition_input_real =
-            previous_real + token_beta * previous_value_real;
-        const float transition_input_imag =
-            previous_imag + token_beta * previous_value_imag;
-        const float token_diagonal_real = as_float(diagonal_real[token_offset]);
-        const float token_diagonal_imag = as_float(diagonal_imag[token_offset]);
-        float transformed_input_real;
-        float transformed_input_imag;
-        complex_product(
-            token_diagonal_real,
-            token_diagonal_imag,
-            transition_input_real,
-            transition_input_imag,
-            transformed_input_real,
-            transformed_input_imag);
-        const float active =
-            destination_gradient_real * transformed_input_real +
-            destination_gradient_imag * transformed_input_imag;
-        if (aggregate_dictionary) {
-            shared_active_dictionary[route * state + lane] += active;
-        } else {
-            atomicAdd(
-                active_dictionary_gradient + dictionary_offset + lane,
-                active);
+    for (int index = 0; index < count; ++index) {
+        float total = 0.0f;
+        for (int other = 0; other < warps; ++other) {
+            total += warp_sums[index * kMaximumWarps + other];
         }
-
-        const float selector_score =
-            state_sum(active, shared_warp_sums, state);
-        const int logits_offset =
-            ((batch * time + token) * heads + head) * dictionary_size;
-        if (lane == 0) {
-            float maximum = -INFINITY;
-            for (int dictionary = 0; dictionary < dictionary_size; ++dictionary) {
-                maximum = fmaxf(
-                    maximum,
-                    selector_logits[logits_offset + dictionary] *
-                        router_inverse_temperature);
-            }
-            float denominator = 0.0f;
-            for (int dictionary = 0; dictionary < dictionary_size; ++dictionary) {
-                denominator += expf(
-                    selector_logits[logits_offset + dictionary] *
-                            router_inverse_temperature -
-                        maximum);
-            }
-            shared_router[0] = maximum;
-            shared_router[1] = denominator;
-            shared_router[2] = expf(
-                                   selector_logits[logits_offset + route] *
-                                           router_inverse_temperature -
-                                       maximum) /
-                denominator;
-            shared_router[3] = selector_score;
-            shared_router[4] = static_cast<float>(route);
-        }
-        __syncthreads();
-        for (int dictionary = lane;
-             dictionary < dictionary_size;
-             dictionary += state) {
-            const float probability =
-                expf(selector_logits[logits_offset + dictionary] *
-                             router_inverse_temperature -
-                     shared_router[0]) /
-                shared_router[1];
-            const float indicator =
-                dictionary == static_cast<int>(shared_router[4]) ? 1.0f : 0.0f;
-            grad_selector_logits[logits_offset + dictionary] =
-                shared_router[3] * shared_router[2] *
-                (indicator - probability) * router_inverse_temperature;
-        }
-
-        grad_diagonal_real[token_offset] = static_cast<scalar_t>(
-            destination_gradient_real * transition_input_real +
-            destination_gradient_imag * transition_input_imag);
-        grad_diagonal_imag[token_offset] = static_cast<scalar_t>(
-            -destination_gradient_real * transition_input_imag +
-            destination_gradient_imag * transition_input_real);
-        const float future_carry_real = carry_real;
-        const float future_carry_imag = carry_imag;
-        carry_real =
-            destination_gradient_real * token_diagonal_real +
-            destination_gradient_imag * token_diagonal_imag;
-        carry_imag =
-            -destination_gradient_real * token_diagonal_imag +
-            destination_gradient_imag * token_diagonal_real;
-        const float token_gamma = as_float(gamma[row * time + token]);
-        const float next_beta =
-            token + 1 < time ? as_float(beta[row * time + token + 1]) : 0.0f;
-        grad_value_real[token_offset] = static_cast<scalar_t>(
-            token_gamma * total_real + next_beta * future_carry_real);
-        grad_value_imag[token_offset] = static_cast<scalar_t>(
-            token_gamma * total_imag + next_beta * future_carry_imag);
-        const float beta_component =
-            carry_real * previous_value_real +
-            carry_imag * previous_value_imag;
-        const float gamma_component =
-            total_real * as_float(value_real[token_offset]) +
-            total_imag * as_float(value_imag[token_offset]);
-        const float beta_gradient =
-            state_sum(beta_component, shared_warp_sums, state);
-        const float gamma_gradient =
-            state_sum(gamma_component, shared_warp_sums, state);
-        if (lane == 0) {
-            grad_beta[row * time + token] =
-                static_cast<scalar_t>(beta_gradient);
-            grad_gamma[row * time + token] =
-                static_cast<scalar_t>(gamma_gradient);
-        }
-        __syncthreads();
-    }
-
-    if (aggregate_dictionary) {
-        for (int dictionary = 0; dictionary < dictionary_size; ++dictionary) {
-            const float active =
-                shared_active_dictionary[dictionary * state + lane];
-            if (active != 0.0f) {
-                atomicAdd(
-                    active_dictionary_gradient +
-                        (head * dictionary_size + dictionary) * state + lane,
-                    active);
-            }
-        }
+        values[index] = total;
     }
 }
 
-template <typename scalar_t>
+template <typename diagonal_t, typename payload_t>
 __global__ void paper_backward_phase_c_kernel(
     const int16_t* __restrict__ dictionary_destination,
     const int16_t* __restrict__ routes,
-    const scalar_t* __restrict__ diagonal_real,
-    const scalar_t* __restrict__ diagonal_imag,
-    const scalar_t* __restrict__ bias_real,
-    const scalar_t* __restrict__ bias_imag,
-    const scalar_t* __restrict__ output_real,
-    const scalar_t* __restrict__ output_imag,
-    const scalar_t* __restrict__ grad_output_real,
-    const scalar_t* __restrict__ grad_output_imag,
-    const scalar_t* __restrict__ value_real,
-    const scalar_t* __restrict__ value_imag,
-    const scalar_t* __restrict__ beta,
-    const scalar_t* __restrict__ gamma,
+    const diagonal_t* __restrict__ diagonal_real,
+    const diagonal_t* __restrict__ diagonal_imag,
+    const payload_t* __restrict__ output_real,
+    const payload_t* __restrict__ output_imag,
+    const payload_t* __restrict__ grad_output_real,
+    const payload_t* __restrict__ grad_output_imag,
+    const payload_t* __restrict__ value_real,
+    const payload_t* __restrict__ value_imag,
+    const payload_t* __restrict__ beta,
+    const payload_t* __restrict__ gamma,
     const float* __restrict__ chunk_carry_real,
     const float* __restrict__ chunk_carry_imag,
-    scalar_t* __restrict__ grad_diagonal_real,
-    scalar_t* __restrict__ grad_diagonal_imag,
-    scalar_t* __restrict__ grad_bias_real,
-    scalar_t* __restrict__ grad_bias_imag,
-    scalar_t* __restrict__ grad_beta,
-    scalar_t* __restrict__ grad_gamma,
+    diagonal_t* __restrict__ grad_diagonal_real,
+    diagonal_t* __restrict__ grad_diagonal_imag,
+    payload_t* __restrict__ grad_bias_real,
+    payload_t* __restrict__ grad_bias_imag,
+    payload_t* __restrict__ grad_beta,
+    payload_t* __restrict__ grad_gamma,
     float* __restrict__ active_dictionary_gradient,
     float* __restrict__ selector_score,
     int heads,
@@ -1412,8 +1186,8 @@ __global__ void paper_backward_phase_c_kernel(
         shared_gradient_real[lane] = total_real;
         shared_gradient_imag[lane] = total_imag;
         if (!mamba3_siso) {
-            grad_bias_real[token_offset] = static_cast<scalar_t>(total_real);
-            grad_bias_imag[token_offset] = static_cast<scalar_t>(total_imag);
+            grad_bias_real[token_offset] = static_cast<payload_t>(total_real);
+            grad_bias_imag[token_offset] = static_cast<payload_t>(total_imag);
         }
         __syncthreads();
 
@@ -1464,17 +1238,10 @@ __global__ void paper_backward_phase_c_kernel(
                 active_dictionary_gradient + dictionary_offset + lane,
                 active);
         }
-        const float score = block_sum(
-            active,
-            shared_warp_sums,
-            state);
-        if (lane == 0) {
-            selector_score[row * time + token] = score;
-        }
-        grad_diagonal_real[token_offset] = static_cast<scalar_t>(
+        grad_diagonal_real[token_offset] = static_cast<diagonal_t>(
             destination_gradient_real * transition_input_real +
             destination_gradient_imag * transition_input_imag);
-        grad_diagonal_imag[token_offset] = static_cast<scalar_t>(
+        grad_diagonal_imag[token_offset] = static_cast<diagonal_t>(
             -destination_gradient_real * transition_input_imag +
             destination_gradient_imag * transition_input_real);
         const float future_carry_real = carry_real;
@@ -1485,33 +1252,30 @@ __global__ void paper_backward_phase_c_kernel(
         carry_imag =
             -destination_gradient_real * token_diagonal_imag +
             destination_gradient_imag * token_diagonal_real;
+        float reductions[kPhaseCReductions] = {active, 0.0f, 0.0f};
         if (mamba3_siso) {
             const float token_gamma = as_float(gamma[row * time + token]);
             const float next_beta =
                 token + 1 < time ? as_float(beta[row * time + token + 1]) : 0.0f;
-            grad_bias_real[token_offset] = static_cast<scalar_t>(
+            grad_bias_real[token_offset] = static_cast<payload_t>(
                 token_gamma * total_real + next_beta * future_carry_real);
-            grad_bias_imag[token_offset] = static_cast<scalar_t>(
+            grad_bias_imag[token_offset] = static_cast<payload_t>(
                 token_gamma * total_imag + next_beta * future_carry_imag);
-            const float beta_component =
+            reductions[1] =
                 carry_real * previous_value_real +
                 carry_imag * previous_value_imag;
-            const float gamma_component =
+            reductions[2] =
                 total_real * as_float(value_real[token_offset]) +
                 total_imag * as_float(value_imag[token_offset]);
-            const float beta_gradient = block_sum(
-                beta_component,
-                shared_warp_sums,
-                state);
-            const float gamma_gradient = block_sum(
-                gamma_component,
-                shared_warp_sums,
-                state);
-            if (lane == 0) {
+        }
+        block_sums<kPhaseCReductions>(reductions, shared_warp_sums, state);
+        if (lane == 0) {
+            selector_score[row * time + token] = reductions[0];
+            if (mamba3_siso) {
                 grad_beta[row * time + token] =
-                    static_cast<scalar_t>(beta_gradient);
+                    static_cast<payload_t>(reductions[1]);
                 grad_gamma[row * time + token] =
-                    static_cast<scalar_t>(gamma_gradient);
+                    static_cast<payload_t>(reductions[2]);
             }
         }
         __syncthreads();
@@ -1652,7 +1416,8 @@ void validate_forward_inputs(
     const torch::Tensor& bias_real,
     const torch::Tensor& bias_imag,
     int64_t chunk_size,
-    int64_t mode) {
+    int64_t mode,
+    bool allow_mixed_diagonal_payload = false) {
     TORCH_CHECK(destination.is_cuda(), "destination must be CUDA");
     TORCH_CHECK(destination.scalar_type() == torch::kInt16, "destination must be int16");
     TORCH_CHECK(inverse_destination.scalar_type() == torch::kInt16, "inverse must be int16");
@@ -1668,11 +1433,20 @@ void validate_forward_inputs(
     TORCH_CHECK(
         diagonal_real.scalar_type() == torch::kFloat32 ||
             diagonal_real.scalar_type() == torch::kBFloat16,
-        "native kernel supports float32 and bfloat16");
+        "native diagonal supports float32 and bfloat16");
     TORCH_CHECK(
-        diagonal_real.scalar_type() == diagonal_imag.scalar_type() &&
-            diagonal_real.scalar_type() == bias_real.scalar_type() &&
-            diagonal_real.scalar_type() == bias_imag.scalar_type(),
+        bias_real.scalar_type() == torch::kFloat32 ||
+            bias_real.scalar_type() == torch::kBFloat16,
+        "native payload supports float32 and bfloat16");
+    TORCH_CHECK(
+        diagonal_real.scalar_type() == diagonal_imag.scalar_type(),
+        "diagonal real/imag dtypes must match");
+    TORCH_CHECK(
+        bias_real.scalar_type() == bias_imag.scalar_type(),
+        "payload real/imag dtypes must match");
+    TORCH_CHECK(
+        allow_mixed_diagonal_payload ||
+            diagonal_real.scalar_type() == bias_real.scalar_type(),
         "split value dtypes must match");
     TORCH_CHECK(diagonal_real.size(3) < 1024, "state must be below 1024");
     TORCH_CHECK(diagonal_real.size(3) > 0, "state must be positive");
@@ -1833,7 +1607,8 @@ std::vector<torch::Tensor> flash_pd_native_mamba3_forward_cuda(
         value_real,
         value_imag,
         chunk_size,
-        mode);
+        mode,
+        true);
     TORCH_CHECK(
         beta.sizes() ==
                 torch::IntArrayRef(
@@ -1841,9 +1616,9 @@ std::vector<torch::Tensor> flash_pd_native_mamba3_forward_cuda(
             gamma.sizes() == beta.sizes(),
         "beta and gamma must have shape (B,H,T)");
     TORCH_CHECK(
-        beta.scalar_type() == diagonal_real.scalar_type() &&
-            gamma.scalar_type() == diagonal_real.scalar_type(),
-        "beta, gamma, and split values must use one dtype");
+        beta.scalar_type() == value_real.scalar_type() &&
+            gamma.scalar_type() == value_real.scalar_type(),
+        "beta, gamma, and split payload values must use one dtype");
     c10::cuda::CUDAGuard device_guard(diagonal_real.device());
     const int batch = diagonal_real.size(0);
     const int heads = diagonal_real.size(1);
@@ -1862,70 +1637,84 @@ std::vector<torch::Tensor> flash_pd_native_mamba3_forward_cuda(
     auto aggregate_diagonal_imag = torch::empty_like(aggregate_diagonal_real);
     auto aggregate_bias_real = torch::empty_like(aggregate_diagonal_real);
     auto aggregate_bias_imag = torch::empty_like(aggregate_diagonal_real);
-    auto output_real = torch::empty_like(diagonal_real);
-    auto output_imag = torch::empty_like(diagonal_imag);
+    auto output_real = torch::empty_like(value_real);
+    auto output_imag = torch::empty_like(value_imag);
     const auto stream = at::cuda::getCurrentCUDAStream();
 
     AT_DISPATCH_FLOATING_TYPES_AND(
         at::ScalarType::BFloat16,
         diagonal_real.scalar_type(),
-        "flash_pd_native_mamba3_local_aggregate",
+        "flash_pd_native_mamba3_local_aggregate_diagonal",
         [&] {
-            if (mode == kPermutationGather) {
-                FLASH_PD_LAUNCH(
-                    MAMBA3_PHASE_A(scalar_t, kPermutationGather),
-                    dim3(rows, chunks),
-                    state,
-                    shared_bytes,
-                    stream,
-                    destination.data_ptr<int16_t>(),
-                    inverse_destination.data_ptr<int16_t>(),
-                    routes.data_ptr<int16_t>(),
-                    diagonal_real.data_ptr<scalar_t>(),
-                    diagonal_imag.data_ptr<scalar_t>(),
-                    value_real.data_ptr<scalar_t>(),
-                    value_imag.data_ptr<scalar_t>(),
-                    beta.data_ptr<scalar_t>(),
-                    gamma.data_ptr<scalar_t>(),
-                    aggregate_destination.data_ptr<int16_t>(),
-                    aggregate_diagonal_real.data_ptr<float>(),
-                    aggregate_diagonal_imag.data_ptr<float>(),
-                    aggregate_bias_real.data_ptr<float>(),
-                    aggregate_bias_imag.data_ptr<float>(),
-                    heads,
-                    dictionary_size,
-                    time,
-                    state,
-                    chunks,
-                    chunk_size);
-            } else {
-                FLASH_PD_LAUNCH(
-                    MAMBA3_PHASE_A(scalar_t, kGeneralScatter),
-                    dim3(rows, chunks),
-                    state,
-                    shared_bytes,
-                    stream,
-                    destination.data_ptr<int16_t>(),
-                    inverse_destination.data_ptr<int16_t>(),
-                    routes.data_ptr<int16_t>(),
-                    diagonal_real.data_ptr<scalar_t>(),
-                    diagonal_imag.data_ptr<scalar_t>(),
-                    value_real.data_ptr<scalar_t>(),
-                    value_imag.data_ptr<scalar_t>(),
-                    beta.data_ptr<scalar_t>(),
-                    gamma.data_ptr<scalar_t>(),
-                    aggregate_destination.data_ptr<int16_t>(),
-                    aggregate_diagonal_real.data_ptr<float>(),
-                    aggregate_diagonal_imag.data_ptr<float>(),
-                    aggregate_bias_real.data_ptr<float>(),
-                    aggregate_bias_imag.data_ptr<float>(),
-                    heads,
-                    dictionary_size,
-                    time,
-                    state,
-                    chunks,
-                    chunk_size);
-            }
+            using diagonal_t = scalar_t;
+            AT_DISPATCH_FLOATING_TYPES_AND(
+                at::ScalarType::BFloat16,
+                value_real.scalar_type(),
+                "flash_pd_native_mamba3_local_aggregate_payload",
+                [&] {
+                    using payload_t = scalar_t;
+                    if (mode == kPermutationGather) {
+                        FLASH_PD_LAUNCH(
+                            MAMBA3_PHASE_A(
+                                diagonal_t,
+                                payload_t,
+                                kPermutationGather),
+                            dim3(rows, chunks),
+                            state,
+                            shared_bytes,
+                            stream,
+                            destination.data_ptr<int16_t>(),
+                            inverse_destination.data_ptr<int16_t>(),
+                            routes.data_ptr<int16_t>(),
+                            diagonal_real.data_ptr<diagonal_t>(),
+                            diagonal_imag.data_ptr<diagonal_t>(),
+                            value_real.data_ptr<payload_t>(),
+                            value_imag.data_ptr<payload_t>(),
+                            beta.data_ptr<payload_t>(),
+                            gamma.data_ptr<payload_t>(),
+                            aggregate_destination.data_ptr<int16_t>(),
+                            aggregate_diagonal_real.data_ptr<float>(),
+                            aggregate_diagonal_imag.data_ptr<float>(),
+                            aggregate_bias_real.data_ptr<float>(),
+                            aggregate_bias_imag.data_ptr<float>(),
+                            heads,
+                            dictionary_size,
+                            time,
+                            state,
+                            chunks,
+                            chunk_size);
+                    } else {
+                        FLASH_PD_LAUNCH(
+                            MAMBA3_PHASE_A(
+                                diagonal_t,
+                                payload_t,
+                                kGeneralScatter),
+                            dim3(rows, chunks),
+                            state,
+                            shared_bytes,
+                            stream,
+                            destination.data_ptr<int16_t>(),
+                            inverse_destination.data_ptr<int16_t>(),
+                            routes.data_ptr<int16_t>(),
+                            diagonal_real.data_ptr<diagonal_t>(),
+                            diagonal_imag.data_ptr<diagonal_t>(),
+                            value_real.data_ptr<payload_t>(),
+                            value_imag.data_ptr<payload_t>(),
+                            beta.data_ptr<payload_t>(),
+                            gamma.data_ptr<payload_t>(),
+                            aggregate_destination.data_ptr<int16_t>(),
+                            aggregate_diagonal_real.data_ptr<float>(),
+                            aggregate_diagonal_imag.data_ptr<float>(),
+                            aggregate_bias_real.data_ptr<float>(),
+                            aggregate_bias_imag.data_ptr<float>(),
+                            heads,
+                            dictionary_size,
+                            time,
+                            state,
+                            chunks,
+                            chunk_size);
+                    }
+                });
         });
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
@@ -1963,61 +1752,75 @@ std::vector<torch::Tensor> flash_pd_native_mamba3_forward_cuda(
     AT_DISPATCH_FLOATING_TYPES_AND(
         at::ScalarType::BFloat16,
         diagonal_real.scalar_type(),
-        "flash_pd_native_mamba3_corrected_replay",
+        "flash_pd_native_mamba3_corrected_replay_diagonal",
         [&] {
-            if (mode == kPermutationGather) {
-                FLASH_PD_LAUNCH(
-                    MAMBA3_PHASE_C(scalar_t, kPermutationGather),
-                    dim3(rows, chunks),
-                    state,
-                    shared_bytes,
-                    stream,
-                    destination.data_ptr<int16_t>(),
-                    inverse_destination.data_ptr<int16_t>(),
-                    routes.data_ptr<int16_t>(),
-                    diagonal_real.data_ptr<scalar_t>(),
-                    diagonal_imag.data_ptr<scalar_t>(),
-                    value_real.data_ptr<scalar_t>(),
-                    value_imag.data_ptr<scalar_t>(),
-                    beta.data_ptr<scalar_t>(),
-                    gamma.data_ptr<scalar_t>(),
-                    aggregate_bias_real.data_ptr<float>(),
-                    aggregate_bias_imag.data_ptr<float>(),
-                    output_real.data_ptr<scalar_t>(),
-                    output_imag.data_ptr<scalar_t>(),
-                    heads,
-                    dictionary_size,
-                    time,
-                    state,
-                    chunks,
-                    chunk_size);
-            } else {
-                FLASH_PD_LAUNCH(
-                    MAMBA3_PHASE_C(scalar_t, kGeneralScatter),
-                    dim3(rows, chunks),
-                    state,
-                    shared_bytes,
-                    stream,
-                    destination.data_ptr<int16_t>(),
-                    inverse_destination.data_ptr<int16_t>(),
-                    routes.data_ptr<int16_t>(),
-                    diagonal_real.data_ptr<scalar_t>(),
-                    diagonal_imag.data_ptr<scalar_t>(),
-                    value_real.data_ptr<scalar_t>(),
-                    value_imag.data_ptr<scalar_t>(),
-                    beta.data_ptr<scalar_t>(),
-                    gamma.data_ptr<scalar_t>(),
-                    aggregate_bias_real.data_ptr<float>(),
-                    aggregate_bias_imag.data_ptr<float>(),
-                    output_real.data_ptr<scalar_t>(),
-                    output_imag.data_ptr<scalar_t>(),
-                    heads,
-                    dictionary_size,
-                    time,
-                    state,
-                    chunks,
-                    chunk_size);
-            }
+            using diagonal_t = scalar_t;
+            AT_DISPATCH_FLOATING_TYPES_AND(
+                at::ScalarType::BFloat16,
+                value_real.scalar_type(),
+                "flash_pd_native_mamba3_corrected_replay_payload",
+                [&] {
+                    using payload_t = scalar_t;
+                    if (mode == kPermutationGather) {
+                        FLASH_PD_LAUNCH(
+                            MAMBA3_PHASE_C(
+                                diagonal_t,
+                                payload_t,
+                                kPermutationGather),
+                            dim3(rows, chunks),
+                            state,
+                            shared_bytes,
+                            stream,
+                            destination.data_ptr<int16_t>(),
+                            inverse_destination.data_ptr<int16_t>(),
+                            routes.data_ptr<int16_t>(),
+                            diagonal_real.data_ptr<diagonal_t>(),
+                            diagonal_imag.data_ptr<diagonal_t>(),
+                            value_real.data_ptr<payload_t>(),
+                            value_imag.data_ptr<payload_t>(),
+                            beta.data_ptr<payload_t>(),
+                            gamma.data_ptr<payload_t>(),
+                            aggregate_bias_real.data_ptr<float>(),
+                            aggregate_bias_imag.data_ptr<float>(),
+                            output_real.data_ptr<payload_t>(),
+                            output_imag.data_ptr<payload_t>(),
+                            heads,
+                            dictionary_size,
+                            time,
+                            state,
+                            chunks,
+                            chunk_size);
+                    } else {
+                        FLASH_PD_LAUNCH(
+                            MAMBA3_PHASE_C(
+                                diagonal_t,
+                                payload_t,
+                                kGeneralScatter),
+                            dim3(rows, chunks),
+                            state,
+                            shared_bytes,
+                            stream,
+                            destination.data_ptr<int16_t>(),
+                            inverse_destination.data_ptr<int16_t>(),
+                            routes.data_ptr<int16_t>(),
+                            diagonal_real.data_ptr<diagonal_t>(),
+                            diagonal_imag.data_ptr<diagonal_t>(),
+                            value_real.data_ptr<payload_t>(),
+                            value_imag.data_ptr<payload_t>(),
+                            beta.data_ptr<payload_t>(),
+                            gamma.data_ptr<payload_t>(),
+                            aggregate_bias_real.data_ptr<float>(),
+                            aggregate_bias_imag.data_ptr<float>(),
+                            output_real.data_ptr<payload_t>(),
+                            output_imag.data_ptr<payload_t>(),
+                            heads,
+                            dictionary_size,
+                            time,
+                            state,
+                            chunks,
+                            chunk_size);
+                    }
+                });
         });
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return {output_real, output_imag};
@@ -2136,98 +1939,30 @@ std::vector<torch::Tensor> flash_pd_native_paper_backward_cuda(
         "selector logits must have shape (B,T,H,K)");
     c10::cuda::CUDAGuard device_guard(diagonal_real.device());
     const auto stream = at::cuda::getCurrentCUDAStream();
-    if (mamba3_siso) {
-        // MAMBA3_FUSED_BACKWARD_BEGIN
-        auto grad_diagonal_real = torch::empty_like(diagonal_real);
-        auto grad_diagonal_imag = torch::empty_like(diagonal_imag);
-        auto grad_value_real = torch::empty_like(value_real);
-        auto grad_value_imag = torch::empty_like(value_imag);
-        auto grad_beta = torch::empty_like(beta);
-        auto grad_gamma = torch::empty_like(gamma);
-        auto active_dictionary_gradient = torch::zeros(
-            {heads, dictionary_size, state},
-            dictionary_logits.options());
-        auto grad_dictionary_logits = torch::empty_like(dictionary_logits);
-        auto grad_selector_logits = torch::empty_like(selector_logits);
-        const bool aggregate_dictionary =
-            dictionary_size * state <= 12000 - 2 * state - 32 - 5;
-        const int local_dictionary_elements =
-            aggregate_dictionary ? dictionary_size * state : 0;
-        const size_t fused_shared_bytes =
-            static_cast<size_t>(
-                2 * state + local_dictionary_elements + 32 + 5) *
-            sizeof(float);
-        const float router_inverse_temperature =
-            1.0f / static_cast<float>(router_temperature);
-        AT_DISPATCH_FLOATING_TYPES_AND(
-            at::ScalarType::BFloat16,
-            diagonal_real.scalar_type(),
-            "flash_pd_native_mamba3_backward_fused",
-            [&] {
-                FLASH_PD_LAUNCH(
-                    mamba3_backward_fused_kernel<scalar_t>,
-                    rows,
-                    state,
-                    fused_shared_bytes,
-                    stream,
-                    selector_logits.data_ptr<float>(),
-                    destination.data_ptr<int16_t>(),
-                    routes.data_ptr<int16_t>(),
-                    diagonal_real.data_ptr<scalar_t>(),
-                    diagonal_imag.data_ptr<scalar_t>(),
-                    output_real.data_ptr<scalar_t>(),
-                    output_imag.data_ptr<scalar_t>(),
-                    grad_output_real.data_ptr<scalar_t>(),
-                    grad_output_imag.data_ptr<scalar_t>(),
-                    value_real.data_ptr<scalar_t>(),
-                    value_imag.data_ptr<scalar_t>(),
-                    beta.data_ptr<scalar_t>(),
-                    gamma.data_ptr<scalar_t>(),
-                    grad_diagonal_real.data_ptr<scalar_t>(),
-                    grad_diagonal_imag.data_ptr<scalar_t>(),
-                    grad_value_real.data_ptr<scalar_t>(),
-                    grad_value_imag.data_ptr<scalar_t>(),
-                    grad_beta.data_ptr<scalar_t>(),
-                    grad_gamma.data_ptr<scalar_t>(),
-                    active_dictionary_gradient.data_ptr<float>(),
-                    grad_selector_logits.data_ptr<float>(),
-                    heads,
-                    dictionary_size,
-                    time,
-                    state,
-                    aggregate_dictionary,
-                    router_inverse_temperature);
-            });
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
-
-        const float dictionary_inverse_temperature =
-            1.0f / static_cast<float>(dictionary_temperature);
-        FLASH_PD_LAUNCH(
-            paper_dictionary_gradient_kernel,
-            dim3(heads, dictionary_size, state),
-            state,
-            5 * sizeof(float),
-            stream,
-            dictionary_logits.data_ptr<float>(),
-            destination.data_ptr<int16_t>(),
-            active_dictionary_gradient.data_ptr<float>(),
-            grad_dictionary_logits.data_ptr<float>(),
-            dictionary_size,
-            state,
-            dictionary_inverse_temperature);
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
-        std::vector<torch::Tensor> gradients = {
-            grad_dictionary_logits,
-            grad_selector_logits,
-            grad_diagonal_real,
-            grad_diagonal_imag,
-            grad_value_real,
-            grad_value_imag,
-            grad_beta,
-            grad_gamma};
-        // MAMBA3_FUSED_BACKWARD_END
-        return gradients;
-    }
+    TORCH_CHECK(
+        diagonal_real.scalar_type() == diagonal_imag.scalar_type(),
+        "diagonal real/imag dtypes must match");
+    TORCH_CHECK(
+        diagonal_real.scalar_type() == torch::kFloat32 ||
+            diagonal_real.scalar_type() == torch::kBFloat16,
+        "native diagonal supports float32 and bfloat16");
+    // The Mamba-3 SISO caller passes an FP32 diagonal with a BF16 payload, so the
+    // reverse scan is specialized on both storage dtypes rather than on one.
+    const auto payload_type = bias_real.scalar_type();
+    TORCH_CHECK(
+        payload_type == torch::kFloat32 || payload_type == torch::kBFloat16,
+        "native payload supports float32 and bfloat16");
+    TORCH_CHECK(
+        bias_imag.scalar_type() == payload_type &&
+            output_real.scalar_type() == payload_type &&
+            output_imag.scalar_type() == payload_type &&
+            grad_output_real.scalar_type() == payload_type &&
+            grad_output_imag.scalar_type() == payload_type &&
+            value_real.scalar_type() == payload_type &&
+            value_imag.scalar_type() == payload_type &&
+            beta.scalar_type() == payload_type &&
+            gamma.scalar_type() == payload_type,
+        "payload, coefficients, outputs, and output gradients must use one dtype");
 
     auto grad_diagonal_real = torch::empty_like(diagonal_real);
     auto grad_diagonal_imag = torch::empty_like(diagonal_imag);
@@ -2261,30 +1996,38 @@ std::vector<torch::Tensor> flash_pd_native_paper_backward_cuda(
     AT_DISPATCH_FLOATING_TYPES_AND(
         at::ScalarType::BFloat16,
         diagonal_real.scalar_type(),
-        "flash_pd_native_paper_backward_local_aggregate",
+        "flash_pd_native_paper_backward_local_aggregate_diagonal",
         [&] {
-            paper_backward_phase_a_kernel<scalar_t><<<
-                dim3(rows, chunks),
-                state,
-                static_cast<size_t>(28) * state,
-                stream>>>(
-                destination.data_ptr<int16_t>(),
-                routes.data_ptr<int16_t>(),
-                diagonal_real.data_ptr<scalar_t>(),
-                diagonal_imag.data_ptr<scalar_t>(),
-                grad_output_real.data_ptr<scalar_t>(),
-                grad_output_imag.data_ptr<scalar_t>(),
-                aggregate_destination.data_ptr<int16_t>(),
-                aggregate_diagonal_real.data_ptr<float>(),
-                aggregate_diagonal_imag.data_ptr<float>(),
-                aggregate_bias_real.data_ptr<float>(),
-                aggregate_bias_imag.data_ptr<float>(),
-                heads,
-                dictionary_size,
-                time,
-                state,
-                chunks,
-                chunk_size);
+            using diagonal_t = scalar_t;
+            AT_DISPATCH_FLOATING_TYPES_AND(
+                at::ScalarType::BFloat16,
+                payload_type,
+                "flash_pd_native_paper_backward_local_aggregate_payload",
+                [&] {
+                    using payload_t = scalar_t;
+                    paper_backward_phase_a_kernel<diagonal_t, payload_t><<<
+                        dim3(rows, chunks),
+                        state,
+                        static_cast<size_t>(28) * state,
+                        stream>>>(
+                        destination.data_ptr<int16_t>(),
+                        routes.data_ptr<int16_t>(),
+                        diagonal_real.data_ptr<diagonal_t>(),
+                        diagonal_imag.data_ptr<diagonal_t>(),
+                        grad_output_real.data_ptr<payload_t>(),
+                        grad_output_imag.data_ptr<payload_t>(),
+                        aggregate_destination.data_ptr<int16_t>(),
+                        aggregate_diagonal_real.data_ptr<float>(),
+                        aggregate_diagonal_imag.data_ptr<float>(),
+                        aggregate_bias_real.data_ptr<float>(),
+                        aggregate_bias_imag.data_ptr<float>(),
+                        heads,
+                        dictionary_size,
+                        time,
+                        state,
+                        chunks,
+                        chunk_size);
+                });
         });
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
@@ -2304,55 +2047,63 @@ std::vector<torch::Tensor> flash_pd_native_paper_backward_cuda(
         chunks);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
+    const int reduction_elements = kPhaseCReductions * kMaximumWarps;
     const bool aggregate_dictionary =
-        dictionary_size * state <= 12000 - 2 * state - 32;
+        dictionary_size * state <= 12000 - 2 * state - reduction_elements;
     const int local_dictionary_elements =
         aggregate_dictionary ? dictionary_size * state : 0;
     const size_t replay_shared_bytes =
-        static_cast<size_t>(2 * state + local_dictionary_elements + 32) *
+        static_cast<size_t>(
+            2 * state + local_dictionary_elements + reduction_elements) *
         sizeof(float);
     AT_DISPATCH_FLOATING_TYPES_AND(
         at::ScalarType::BFloat16,
         diagonal_real.scalar_type(),
-        "flash_pd_native_paper_backward_corrected_replay",
+        "flash_pd_native_paper_backward_corrected_replay_diagonal",
         [&] {
-            paper_backward_phase_c_kernel<scalar_t><<<
-                dim3(rows, chunks),
-                state,
-                replay_shared_bytes,
-                stream>>>(
-                destination.data_ptr<int16_t>(),
-                routes.data_ptr<int16_t>(),
-                diagonal_real.data_ptr<scalar_t>(),
-                diagonal_imag.data_ptr<scalar_t>(),
-                bias_real.data_ptr<scalar_t>(),
-                bias_imag.data_ptr<scalar_t>(),
-                output_real.data_ptr<scalar_t>(),
-                output_imag.data_ptr<scalar_t>(),
-                grad_output_real.data_ptr<scalar_t>(),
-                grad_output_imag.data_ptr<scalar_t>(),
-                value_real.data_ptr<scalar_t>(),
-                value_imag.data_ptr<scalar_t>(),
-                beta.data_ptr<scalar_t>(),
-                gamma.data_ptr<scalar_t>(),
-                chunk_carry_real.data_ptr<float>(),
-                chunk_carry_imag.data_ptr<float>(),
-                grad_diagonal_real.data_ptr<scalar_t>(),
-                grad_diagonal_imag.data_ptr<scalar_t>(),
-                grad_value_real.data_ptr<scalar_t>(),
-                grad_value_imag.data_ptr<scalar_t>(),
-                grad_beta.data_ptr<scalar_t>(),
-                grad_gamma.data_ptr<scalar_t>(),
-                active_dictionary_gradient.data_ptr<float>(),
-                selector_score.data_ptr<float>(),
-                heads,
-                dictionary_size,
-                time,
-                state,
-                chunks,
-                chunk_size,
-                aggregate_dictionary,
-                mamba3_siso);
+            using diagonal_t = scalar_t;
+            AT_DISPATCH_FLOATING_TYPES_AND(
+                at::ScalarType::BFloat16,
+                payload_type,
+                "flash_pd_native_paper_backward_corrected_replay_payload",
+                [&] {
+                    using payload_t = scalar_t;
+                    paper_backward_phase_c_kernel<diagonal_t, payload_t><<<
+                        dim3(rows, chunks),
+                        state,
+                        replay_shared_bytes,
+                        stream>>>(
+                        destination.data_ptr<int16_t>(),
+                        routes.data_ptr<int16_t>(),
+                        diagonal_real.data_ptr<diagonal_t>(),
+                        diagonal_imag.data_ptr<diagonal_t>(),
+                        output_real.data_ptr<payload_t>(),
+                        output_imag.data_ptr<payload_t>(),
+                        grad_output_real.data_ptr<payload_t>(),
+                        grad_output_imag.data_ptr<payload_t>(),
+                        value_real.data_ptr<payload_t>(),
+                        value_imag.data_ptr<payload_t>(),
+                        beta.data_ptr<payload_t>(),
+                        gamma.data_ptr<payload_t>(),
+                        chunk_carry_real.data_ptr<float>(),
+                        chunk_carry_imag.data_ptr<float>(),
+                        grad_diagonal_real.data_ptr<diagonal_t>(),
+                        grad_diagonal_imag.data_ptr<diagonal_t>(),
+                        grad_value_real.data_ptr<payload_t>(),
+                        grad_value_imag.data_ptr<payload_t>(),
+                        grad_beta.data_ptr<payload_t>(),
+                        grad_gamma.data_ptr<payload_t>(),
+                        active_dictionary_gradient.data_ptr<float>(),
+                        selector_score.data_ptr<float>(),
+                        heads,
+                        dictionary_size,
+                        time,
+                        state,
+                        chunks,
+                        chunk_size,
+                        aggregate_dictionary,
+                        mamba3_siso);
+                });
         });
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     const float dictionary_inverse_temperature =

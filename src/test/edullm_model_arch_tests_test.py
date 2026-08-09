@@ -1,3 +1,5 @@
+import contextlib
+import gc
 import importlib.util
 import sys
 from pathlib import Path
@@ -8,6 +10,7 @@ ROOT = Path(__file__).parents[2]
 ENTRYPOINT = ROOT / ".edullm/model_arch_tests.py"
 TRAIN_RUNNER = ROOT / ".edullm/train_core6_arm.py"
 DOCKERFILE = ROOT / ".edullm/Dockerfile"
+PYPROJECT = ROOT / "pyproject.toml"
 RUN_CONFIG = ROOT / ".edullm/run.yaml"
 COMPARISON_RUN_CONFIG = ROOT / ".edullm/run-comparison.yaml"
 SEED_SCHEDULE = ROOT / "docs/mamba-comparison/seeds.json"
@@ -23,6 +26,54 @@ def load_entrypoint():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def build_or_skip(build):
+    """Build an arm artifact, skipping only when an arm's kernel package is absent here."""
+    try:
+        return build()
+    except ImportError as exc:
+        pytest.skip(f"arm kernel package is not installed in this environment: {exc}")
+
+
+def materialized_block(module, block_config, index):
+    """Build one block the way training does, then give its meta parameters storage."""
+    block = build_or_skip(
+        lambda: block_config.build(
+            d_model=module.D_MODEL,
+            block_idx=index,
+            n_layers=module.N_LAYERS,
+            init_device="meta",
+        )
+    )
+    block.to_empty(device="cpu")
+    return block
+
+
+def root_unit_parameters(model):
+    """The parameters FSDP keeps in the root unit, which are the ones outside any block."""
+    return {
+        name: parameter
+        for name, parameter in model.named_parameters()
+        if not name.startswith("blocks.")
+    }
+
+
+@contextlib.contextmanager
+def single_rank_gloo_group(tmp_path):
+    """A world-size-1 CPU process group, the smallest thing FSDP2 will shard against."""
+    import torch.distributed as dist
+
+    if not dist.is_available():
+        pytest.skip("torch.distributed is unavailable")
+    assert not dist.is_initialized(), "another test left a process group initialized"
+    dist.init_process_group(
+        backend="gloo", init_method=f"file://{tmp_path / 'pg'}", world_size=1, rank=0
+    )
+    try:
+        yield
+    finally:
+        dist.destroy_process_group()
 
 
 def test_platform_artifacts_exist():
@@ -115,6 +166,13 @@ def test_treatment_mixers_are_strict_and_parameter_matched():
             names = [type(mixer).__name__ for mixer in mixers]
             assert names.count("XLSTMMixerConfig") == 10
             assert names.count("SLSTMMixerConfig") == 2
+            slstm = [mixer for mixer in mixers if type(mixer).__name__ == "SLSTMMixerConfig"]
+            # FlashRNN compiles one pointer type per tensor role, so its kernel dtype has to
+            # be the bfloat16 that FSDP hands the persistent kernel.
+            assert all(mixer.kernel_dtype == "bfloat16" for mixer in slstm)
+            assert all(mixer.backend == "cuda_fused" for mixer in slstm)
+            assert all(mixer.batch_size == 2 for mixer in slstm)
+            assert all(mixer.fuse_input_projections is True for mixer in slstm)
         elif arm == "native-pd":
             assert all(isinstance(mixer, NativeFlashPDMixerConfig) for mixer in mixers)
         else:
@@ -167,6 +225,7 @@ def test_five_seed_four_arm_matrix_and_parser_rejects_mismatches():
 
 def test_reader_environment_checkpoint_and_dry_config_guards(monkeypatch, tmp_path):
     module = load_entrypoint()
+    from olmo_core.config import DType
     from olmo_core.data import NumpyDatasetDType, TokenizerConfig
 
     opts, _ = module.parse_args(
@@ -205,6 +264,10 @@ def test_reader_environment_checkpoint_and_dry_config_guards(monkeypatch, tmp_pa
     assert config.train_module.compile_model is True
     assert config.train_module.accumulate_grads_without_comm is True
     assert config.train_module.dp_config.reshard_after_forward is False
+    # Parameters are stored in float32 and FSDP is what casts them to bfloat16 for compute.
+    assert config.model.dtype == DType.float32
+    assert config.train_module.dp_config.param_dtype == DType.bfloat16
+    assert config.train_module.dp_config.reduce_dtype == DType.float32
     assert config.trainer.save_folder == "s3://checkpoint-contract/"
     assert config.trainer.max_duration.value == 3721
     assert config.trainer.callbacks["checkpointer"].save_interval == 1861
@@ -247,6 +310,7 @@ def test_commands_docs_and_reader_contract_are_complete():
 
 def test_platform_dockerfile_pins_builds_and_asserts_sm80_symbols():
     dockerfile = DOCKERFILE.read_text()
+    pyproject = PYPROJECT.read_text()
 
     assert dockerfile.startswith("ARG BASE_IMAGE\n\nFROM ${BASE_IMAGE}")
     assert "38bf831a6c3f445e394784018441fd59288b876c" in dockerfile
@@ -254,13 +318,20 @@ def test_platform_dockerfile_pins_builds_and_asserts_sm80_symbols():
     assert "torch==2.10.0" in dockerfile
     assert 'TORCH_CUDA_ARCH_LIST="8.0"' in dockerfile
     assert "flash_pd_native_setup.py bdist_wheel" in dockerfile
-    assert "import _flash_pd_native_cuda" in dockerfile
+    assert "_flash_pd_native_cuda" in dockerfile
+    assert "import torch, _flash_pd_native_cuda" in dockerfile
+    assert 'python -c "import _flash_pd_native_cuda' not in dockerfile
     for symbol in ("forward", "backward", "mamba3_forward", "paper_backward"):
         assert f"callable(_flash_pd_native_cuda.{symbol})" in dockerfile
     assert "mamba3_siso_combined" in dockerfile
     assert "sm_80" in dockerfile
     assert "torch._C._cuda_getArchFlags()" in dockerfile
     assert "torch.cuda.get_arch_list()" not in dockerfile
+    assert 'fla = ["flash-linear-attention==0.5.1"]' in pyproject
+    assert '"flash-linear-attention==0.5.1"' in dockerfile
+    assert "v=version('flash-linear-attention'); assert v=='0.5.1'" in dockerfile
+    assert "v=version('fla-core'); assert v=='0.5.1'" in dockerfile
+    assert "from fla.ops.gdn2 import chunk_gdn2; assert callable(chunk_gdn2)" in dockerfile
     assert "aws " not in dockerfile.lower()
 
 
@@ -340,13 +411,173 @@ def test_single_platform_image_bundles_all_four_accelerated_backends():
     assert "olmo_slstm" in dockerfile
 
 
-def test_throughput_diagnostic_gdn_matches_the_four_arm_shell():
+def test_throughput_diagnostic_gdn_is_exact_measured_gdn2():
     module = load_entrypoint()
-    from olmo_core.nn.attention import AttentionConfig, GatedDeltaNetConfig
+    from olmo_core.nn.attention import (
+        AttentionConfig,
+        GatedDeltaNet2,
+        GatedDeltaNet2Config,
+    )
 
     assert module.DIAGNOSTIC_ARMS == ("gdn",)
+    assert module.DIAGNOSTIC_PARAMETER_COUNTS == {"gdn": 390_119_360}
+    assert module.solve_widths("gdn") == (3808,) + (3776,) * 11
     config = module.build_model_config("gdn", module.valid_init_seeds("gdn")[0])
     mixers = [block.sequence_mixer for block in config.resolved_block_configs]
     assert sum(isinstance(mixer, AttentionConfig) for mixer in mixers) == 4
-    assert sum(isinstance(mixer, GatedDeltaNetConfig) for mixer in mixers) == 12
+    gdn2_mixers = [mixer for mixer in mixers if isinstance(mixer, GatedDeltaNet2Config)]
+    assert len(gdn2_mixers) == 12
+    assert all(type(mixer) is GatedDeltaNet2Config for mixer in gdn2_mixers)
+    assert all(mixer.n_heads == 16 for mixer in gdn2_mixers)
+    assert all(mixer.head_dim == 64 for mixer in gdn2_mixers)
+    assert all(mixer.expand_v == 1.0 for mixer in gdn2_mixers)
+    assert all(mixer.allow_neg_eigval is False for mixer in gdn2_mixers)
+    assert all(mixer.conv_size == 4 for mixer in gdn2_mixers)
+    realized = gdn2_mixers[0].build(module.D_MODEL, layer_idx=0, n_layers=module.N_LAYERS)
+    assert type(realized) is GatedDeltaNet2
+    assert config.num_params == module.DIAGNOSTIC_PARAMETER_COUNTS["gdn"]
     assert abs(config.num_params - module.PARAMETER_TARGET) <= module.PARAMETER_TOLERANCE
+
+
+def test_every_arm_declares_one_fp32_master_dtype_and_keeps_its_bf16_kernels():
+    module = load_entrypoint()
+    from olmo_core.config import DType
+    from olmo_core.nn.attention import AttentionBackendName
+    from olmo_core.nn.flash_pd_native import NativePDBackend, NativePDMode
+
+    assert module.RUNNABLE_ARMS == ("mamba-b3", "xlstm", "mamba3-siso-pd", "native-pd", "gdn")
+    for arm in module.RUNNABLE_ARMS:
+        config = module.build_model_config(arm, module.valid_init_seeds(arm)[0])
+        assert config.dtype == DType.float32, arm
+        assert config.lm_head.dtype == DType.float32, arm
+        assert config.lm_head.layer_norm.dtype == DType.float32, arm
+        for index, block in enumerate(config.resolved_block_configs):
+            assert block.layer_norm.dtype == DType.float32, (arm, index)
+            assert block.feed_forward.dtype == DType.float32, (arm, index)
+            assert block.sequence_mixer.dtype == DType.float32, (arm, index)
+
+    # Master storage moving to float32 must not move any kernel off bfloat16, and must not
+    # relax an accelerated backend into a portable one.
+    attention = module._attention_mixer()
+    assert attention.backend == AttentionBackendName.torch
+    assert attention.qk_norm.dtype == DType.float32
+    assert module._mlstm_mixer().autocast_kernel_dtype == "bfloat16"
+    assert module._mlstm_mixer().chunkwise_kernel == "chunkwise--triton_xl_chunk"
+    assert module._slstm_mixer().kernel_dtype == "bfloat16"
+    assert module._slstm_mixer().backend == "cuda_fused"
+    assert module._treatment_mixer("mamba-b3", 0).prefer_official_kernel is True
+    for arm in ("native-pd", "mamba3-siso-pd"):
+        mixer = module._treatment_mixer(arm, 0)
+        assert mixer.backend == NativePDBackend.CUDA
+        assert mixer.mode == NativePDMode.GENERAL_SCATTER
+
+
+@pytest.mark.parametrize("arm", ["mamba-b3", "xlstm", "mamba3-siso-pd", "native-pd", "gdn"])
+def test_every_built_block_holds_exactly_one_fp32_parameter_dtype(arm):
+    module = load_entrypoint()
+    import torch
+
+    assert arm in module.RUNNABLE_ARMS
+    expected = {**module.EXACT_PARAMETER_COUNTS, **module.DIAGNOSTIC_PARAMETER_COUNTS}[arm]
+    config = module.build_model_config(arm, module.valid_init_seeds(arm)[0])
+    assert config.num_params == expected
+
+    model = build_or_skip(lambda: config.build(init_device="meta"))
+    assert sum(parameter.numel() for parameter in model.parameters()) == expected
+    assert {parameter.dtype for parameter in model.parameters()} == {torch.float32}
+    for name, block in model.blocks.items():
+        assert {parameter.dtype for parameter in block.parameters()} == {torch.float32}, (
+            arm,
+            name,
+        )
+
+
+@pytest.mark.parametrize("arm", ["mamba-b3", "xlstm", "mamba3-siso-pd", "native-pd", "gdn"])
+def test_single_rank_fsdp2_full_wrap_lazy_init_keeps_fp32_master_and_bf16_compute(arm, tmp_path):
+    module = load_entrypoint()
+    import torch
+    from torch.distributed.device_mesh import init_device_mesh
+    from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+
+    config = module.build_model_config(arm, module.valid_init_seeds(arm)[0])
+    block_configs = list(config.resolved_block_configs)
+
+    with single_rank_gloo_group(tmp_path):
+        mesh = init_device_mesh("cpu", (1,))
+        policy = MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.float32)
+
+        # The full wrapping strategy makes every block its own FSDP unit, and lazy init
+        # rejects a unit whose parameters were not all built in one dtype. Each block is
+        # released before the next one is built so the whole model is never resident.
+        for index, block_config in enumerate(block_configs):
+            block = materialized_block(module, block_config, index)
+            fully_shard(block, mesh=mesh, mp_policy=policy, reshard_after_forward=False)
+            block.unshard()
+            assert {parameter.dtype for parameter in block.parameters()} == {torch.bfloat16}, (
+                arm,
+                index,
+            )
+            block.reshard()
+            assert {parameter.dtype for parameter in block.parameters()} == {torch.float32}, (
+                arm,
+                index,
+            )
+            del block
+            gc.collect()
+
+        # The remaining FSDP unit is the root, which holds the tied embedding weight and the
+        # final layer norm. Its blocks stay on meta because they are already their own units.
+        model = build_or_skip(lambda: config.build(init_device="meta"))
+        for block in model.blocks.values():
+            fully_shard(block, mesh=mesh, mp_policy=policy, reshard_after_forward=False)
+        assert list(root_unit_parameters(model)) == ["embeddings.weight", "lm_head.norm.weight"]
+        model.embeddings.to_empty(device="cpu")
+        model.lm_head.to_empty(device="cpu")
+        # `to_empty` allocates fresh storage, so restore the tie the way `init_weights` does.
+        model.lm_head.w_out.weight = model.embeddings.weight
+
+        fully_shard(model, mesh=mesh, mp_policy=policy, reshard_after_forward=False)
+        model.unshard()
+        root = root_unit_parameters(model)
+        assert {parameter.dtype for parameter in root.values()} == {torch.bfloat16}, arm
+        model.reshard()
+        root = root_unit_parameters(model)
+        assert {parameter.dtype for parameter in root.values()} == {torch.float32}, arm
+        del model, root
+        gc.collect()
+
+
+def test_single_rank_fsdp2_forward_backward_trains_fp32_masters_through_bf16_math(tmp_path):
+    module = load_entrypoint()
+    import torch
+    from torch.distributed.device_mesh import init_device_mesh
+    from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+
+    # Every arm shares one attention block, and it is the only block whose kernels run without
+    # a GPU, so it is the block that can carry a real forward and backward here.
+    config = module.build_model_config("mamba-b3", module.valid_init_seeds("mamba-b3")[0])
+    block_config = config.resolved_block_configs[module.ATTENTION_LAYERS[0]]
+
+    with single_rank_gloo_group(tmp_path):
+        block = materialized_block(module, block_config, module.ATTENTION_LAYERS[0])
+        generator = torch.Generator().manual_seed(0)
+        with torch.no_grad():
+            for parameter in block.parameters():
+                parameter.normal_(0.0, 0.02, generator=generator)
+
+        fully_shard(
+            block,
+            mesh=init_device_mesh("cpu", (1,)),
+            mp_policy=MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.float32),
+            reshard_after_forward=False,
+        )
+        output = block(torch.randn(1, 32, module.D_MODEL, generator=generator))
+        assert output.dtype == torch.bfloat16
+        output.float().pow(2).mean().backward()
+
+        gradients = [
+            parameter.grad for parameter in block.parameters() if parameter.grad is not None
+        ]
+        assert len(gradients) == len(list(block.parameters()))
+        assert {gradient.dtype for gradient in gradients} == {torch.float32}
+        assert all(torch.isfinite(gradient.to_local()).all() for gradient in gradients)

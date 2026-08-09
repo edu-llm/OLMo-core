@@ -1,4 +1,4 @@
-"""Build the four frozen full-architecture arms for the Mamba comparison."""
+"""Build the four frozen comparison arms and the exact measured GDN2 diagnostic control."""
 
 import argparse
 import contextlib
@@ -29,7 +29,7 @@ from olmo_core.nn.attention import (
     AttentionBackendName,
     AttentionConfig,
     AttentionType,
-    GatedDeltaNetConfig,
+    GatedDeltaNet2Config,
 )
 from olmo_core.nn.feed_forward import FeedForwardConfig
 from olmo_core.nn.flash_pd_native import (
@@ -113,6 +113,12 @@ INIT_SEEDS_BY_ARM = {
     },
 }
 
+# Every parameter in every arm is built in this one dtype. FSDP2 refuses to shard a block
+# whose parameters were built in more than one, and the recurrent mixers keep their state
+# parameters (A_log, dt_bias, D, the B/C biases) in float32 whatever the block asks for.
+# bfloat16 compute comes from the data-parallel param_dtype, not from how the model is stored.
+MASTER_DTYPE = DType.float32
+
 D_MODEL = 1024
 VOCAB_SIZE = 100352
 N_LAYERS = 16
@@ -133,7 +139,7 @@ EXACT_PARAMETER_COUNTS = {
     "mamba3-siso-pd": 390_169_664,
     "native-pd": 390_142_976,
 }
-DIAGNOSTIC_PARAMETER_COUNTS = {"gdn": 390_144_128}
+DIAGNOSTIC_PARAMETER_COUNTS = {"gdn": 390_119_360}
 
 
 class Stage(enum.IntEnum):
@@ -252,12 +258,12 @@ def _layer_norm() -> LayerNormConfig:
         name=LayerNormType.rms,
         eps=1e-6,
         bias=False,
-        dtype=DType.bfloat16,
+        dtype=MASTER_DTYPE,
     )
 
 
 def _feed_forward(width: int) -> FeedForwardConfig:
-    return FeedForwardConfig(hidden_size=width, bias=False, dtype=DType.bfloat16)
+    return FeedForwardConfig(hidden_size=width, bias=False, dtype=MASTER_DTYPE)
 
 
 def _attention_mixer() -> AttentionConfig:
@@ -272,22 +278,13 @@ def _attention_mixer() -> AttentionConfig:
         qk_norm=norm,
         use_head_qk_norm=False,
         backend=AttentionBackendName.torch,
-        dtype=DType.bfloat16,
+        dtype=MASTER_DTYPE,
     )
 
 
-def _gdn_mixer() -> GatedDeltaNetConfig:
-    return GatedDeltaNetConfig(
-        n_heads=16,
-        n_v_heads=None,
-        head_dim=32,
-        expand_v=2.0,
-        allow_neg_eigval=True,
-        conv_size=4,
-        conv_bias=False,
-        norm_eps=1e-6,
-        dtype=DType.bfloat16,
-    )
+def _gdn_mixer() -> GatedDeltaNet2Config:
+    """Build the frozen measured GDN2 control behind the legacy ``gdn`` CLI key."""
+    return GatedDeltaNet2Config(n_heads=16, head_dim=64, expand_v=1.0, dtype=MASTER_DTYPE)
 
 
 def _mlstm_mixer() -> XLSTMMixerConfig:
@@ -299,7 +296,7 @@ def _mlstm_mixer() -> XLSTMMixerConfig:
         chunkwise_kernel="chunkwise--triton_xl_chunk",
         chunk_size=256,
         autocast_kernel_dtype="bfloat16",
-        dtype=DType.bfloat16,
+        dtype=MASTER_DTYPE,
     )
 
 
@@ -309,9 +306,9 @@ def _slstm_mixer() -> SLSTMMixerConfig:
         conv_size=4,
         backend="cuda_fused",
         batch_size=2,
-        kernel_dtype="float32",
+        kernel_dtype="bfloat16",
         fuse_input_projections=True,
-        dtype=DType.bfloat16,
+        dtype=MASTER_DTYPE,
     )
 
 
@@ -333,7 +330,7 @@ def _treatment_mixer(arm: str, layer_index: int):
             rotation_scan_impl="quaternion",
             theta_max=1 / math.sqrt(SEQUENCE_LENGTH),
             fuse_input_projections=True,
-            dtype=DType.bfloat16,
+            dtype=MASTER_DTYPE,
         )
     if arm == "xlstm":
         return _slstm_mixer() if layer_index in XLSTM_SLSTM_LAYERS else _mlstm_mixer()
@@ -347,7 +344,7 @@ def _treatment_mixer(arm: str, layer_index: int):
             mode=NativePDMode.GENERAL_SCATTER,
             backend=NativePDBackend.CUDA,
             conv_kernel_size=4,
-            dtype=DType.bfloat16,
+            dtype=MASTER_DTYPE,
         )
     if arm == "mamba3-siso-pd":
         return NativeFlashPDMamba3SISOMixerConfig(
@@ -363,7 +360,7 @@ def _treatment_mixer(arm: str, layer_index: int):
             norm_eps=1e-6,
             output_norm=False,
             fuse_input_projections=True,
-            dtype=DType.bfloat16,
+            dtype=MASTER_DTYPE,
         )
     raise ValueError(f"unsupported arm: {arm}")
 
@@ -400,8 +397,8 @@ def _model_for_widths(arm: str, widths: tuple[int, ...], init_seed: int) -> Tran
         n_layers=N_LAYERS,
         block=blocks,
         block_pattern=pattern,
-        lm_head=LMHeadConfig(layer_norm=_layer_norm(), bias=False, dtype=DType.bfloat16),
-        dtype=DType.bfloat16,
+        lm_head=LMHeadConfig(layer_norm=_layer_norm(), bias=False, dtype=MASTER_DTYPE),
+        dtype=MASTER_DTYPE,
         init_seed=init_seed,
         tie_word_embeddings=True,
     )

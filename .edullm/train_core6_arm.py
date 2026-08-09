@@ -152,6 +152,14 @@ class Stage(enum.IntEnum):
     # exit 0 with a null field in the JSON, which is the failure these numbers exist to end.
     THE_CORPUS_DECLARES_NO_HELD_OUT_SPLIT = 73
     THE_HELD_OUT_EVALUATION_SCORED_NOTHING = 74
+    # ITS OWN NUMBER, AND DELIBERATELY NOT 73. A card that cannot do the format the run is
+    # built in is not a missing kernel package: the image is right and the machine is wrong, so
+    # the fix is a different shape rather than a different build, and folding it into 71 would
+    # send somebody to rebuild an image that was never the problem. 73 and 74 are the held-out
+    # endpoint, and reusing either would tell every reader of the exit code -- and every grep
+    # of this file -- that a corpus declared no held-out split, about a failure that never got
+    # as far as opening the corpus.
+    THE_DEVICE_CANNOT_DO_THE_REQUESTED_PRECISION = 75
 
 
 class Refusal(SystemExit):
@@ -2980,42 +2988,318 @@ def show(config) -> None:
     rich.print(replace(config, dataset=shown))
 
 
-def preflight_accelerated_arm(opts) -> None:
-    """Fail before distributed startup if the selected strict backend is unavailable."""
-    if opts.arm != "xlstm":
-        return
+#: The xLSTM stack's three distributions, pinned together because they are compiled against
+#: each other and a mixed set produces wrong numbers rather than an import error.
+XLSTM_PINNED_VERSIONS = {
+    "xlstm": "2.0.5",
+    "mlstm-kernels": "2.0.4",
+    "flashrnn": "1.0.6",
+}
 
+#: The two distributions the GDN2 kernel is split across, at the version the diagnostic control
+#: was measured on. ``flash-linear-attention`` is the front end and ``fla-core`` carries the ops;
+#: they are released in lockstep and checking only one leaves the other free to move.
+GDN2_PINNED_VERSIONS = {
+    "flash-linear-attention": "0.5.1",
+    "fla-core": "0.5.1",
+}
+
+#: Which ahead-of-time Flash-PD CUDA entry points each PD arm actually calls.
+#:
+#: PER ARM RATHER THAN ONE UNION, because the two mixers use different halves of the build and a
+#: wheel that carries one arm's symbols is no evidence for the other's. ``native-pd`` runs
+#: ``_NativeFlashPDPaperTraining`` (``forward`` for the scan, ``paper_backward`` for the
+#: Appendix-C gradient) and ``mamba3-siso-pd`` runs the ``flash_pd_native::mamba3_siso`` op
+#: (``mamba3_forward``, with ``paper_backward`` behind its autograd). A union would refuse a
+#: build that is perfectly able to run the arm that was selected.
+NATIVE_PD_EXTENSION_SYMBOLS = {
+    "native-pd": ("forward", "paper_backward"),
+    "mamba3-siso-pd": ("mamba3_forward", "paper_backward"),
+}
+
+#: The one card this comparison is defined on.
+#:
+#: A PROPERTY OF THE COMPARISON RATHER THAN OF ANY ONE ARM, which is why it is checked in one
+#: place for all five. Every arm here asks for a hand-written kernel built for sm_80 and none
+#: of them falls back, so "at least sm_80" is not the rule either: a newer card runs a kernel
+#: that was never compiled for it, or does not run it at all.
+REQUIRED_DEVICE_CAPABILITY = (8, 0)
+
+
+def _environment_refusal(explanation: str) -> Refusal:
+    return Refusal(Stage.THE_TRAINING_ENVIRONMENT_WOULD_NOT_START, explanation)
+
+
+def _sm_name(capability: tuple[int, int]) -> str:
+    return f"sm_{capability[0]}{capability[1]}"
+
+
+def _preflight_device(arm: str) -> None:
+    """The card, asked about once for every arm, before any question about a package.
+
+    ONLY xLSTM USED TO ASK. The other four went straight to their own kernel probe, and a probe
+    of a package answers the same on any machine -- a wheel's symbols are in the wheel whatever
+    it was unpacked on, and ``importlib.metadata`` has never seen a GPU. So a cell landing on
+    the wrong shape was admitted, priced, given a machine and pulled an image, and then died
+    inside the first step with an error out of a kernel compiled for a shape this host does not
+    have. That is the same failure the per-arm preflights exist to turn into a sentence, one
+    layer further down.
+
+    Read off THIS RANK's device, the same as the prewarm below: ``get_device_capability`` with
+    no argument is the current device, which ``prepare_training_environment`` has already set
+    from the local rank by the time ``main`` gets here.
+    """
+    if not torch.cuda.is_available():
+        raise _environment_refusal(
+            f"the strict {arm} backend runs a hand-written CUDA kernel and torch reports no "
+            "CUDA device on this host"
+        )
+    capability = torch.cuda.get_device_capability()
+    if tuple(capability) != REQUIRED_DEVICE_CAPABILITY:
+        raise _environment_refusal(
+            f"the strict {arm} backend requires an A100 {_sm_name(REQUIRED_DEVICE_CAPABILITY)} "
+            f"CUDA device and this host reports {_sm_name(capability)}"
+        )
+
+
+def _preflight_param_dtype(opts) -> None:
+    """Ask the card itself whether it has the format this run is built in. Defense two.
+
+    DEFENSE ONE IS THE PLATFORM'S PRECISION GUARD, and it reads the WORDS of the command --
+    which is why ``--param-dtype bfloat16`` is written into the submitted command text rather
+    than left to the default this file already carries. That guard refuses a shape with no
+    bfloat16 in the hardware for free, before anything is billed, and it is the one that
+    matters. What it cannot do is see the machine: it checks the shape that was requested, not
+    the one that turned up.
+
+    This is the same question put to the device in front of us, and it is worth asking even
+    though the sm_80 check above already implies it. ``torch.cuda.is_bf16_supported()`` returns
+    true on cards that have no bfloat16 in the hardware at all -- a T4 answers yes -- so the
+    interesting direction is the other one: a false here means torch itself has ruled the
+    format out, and a run that continued past it would die on its first kernel.
+    """
+    if opts.param_dtype == "bfloat16" and not torch.cuda.is_bf16_supported():
+        raise Refusal(
+            Stage.THE_DEVICE_CANNOT_DO_THE_REQUESTED_PRECISION,
+            "this run trains in bfloat16 and torch reports that the visible device does not "
+            "support it. The dtype is in the submitted command so the platform can refuse the "
+            "shape before a machine is billed; reaching this line means the card that was "
+            "handed out is not the card the command was checked against.",
+        )
+
+
+def _refuse_unpinned_packages(expected: dict[str, str]) -> None:
+    """Refuse unless every named distribution is installed at exactly its pin.
+
+    ``PackageNotFoundError`` is turned into a refusal at the same stage rather than left to
+    escape. ``main()`` wraps this call in ``during(THE_TRAINING_ENVIRONMENT_WOULD_NOT_START)``
+    so the exit code was already going to be the same either way; what changes is that the
+    person reading stderr is told which package is missing instead of being handed a traceback
+    out of ``importlib.metadata``.
+    """
     from importlib import metadata
 
-    expected = {
-        "xlstm": "2.0.5",
-        "mlstm-kernels": "2.0.4",
-        "flashrnn": "1.0.6",
-    }
     for package, version in expected.items():
-        actual = metadata.version(package)
+        try:
+            actual = metadata.version(package)
+        except metadata.PackageNotFoundError:
+            raise _environment_refusal(
+                f"{package}=={version} is required and no distribution of it is installed"
+            ) from None
         if actual != version:
-            raise Refusal(
-                Stage.THE_TRAINING_ENVIRONMENT_WOULD_NOT_START,
-                f"{package}=={version} is required, found {actual}",
-            )
-    if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (8, 0):
-        raise Refusal(
-            Stage.THE_TRAINING_ENVIRONMENT_WOULD_NOT_START,
-            "the strict xLSTM comparison backend requires an A100 sm_80 CUDA device",
+            raise _environment_refusal(f"{package}=={version} is required, found {actual}")
+
+
+class SLSTMPrewarmContract(NamedTuple):
+    """The model's half of FlashRNN's compile cache key: one shape, one dtype, one artifact."""
+
+    n_heads: int
+    head_dim: int
+    batch_size: int
+    kernel_dtype: str
+
+
+def _slstm_prewarm_contract(opts) -> SLSTMPrewarmContract:
+    """The FlashRNN shape and dtype this run's own sLSTM layers are built with.
+
+    READ OFF THE ARM RATHER THAN NAMED AGAIN HERE, because it was named again here and the
+    copies drifted. The arm's sLSTM layers moved to ``bfloat16`` while this file went on asking
+    the prewarm for ``float32``, so the preflight compiled an all-fp32 artifact that no step
+    ever called and the kernel training does call was still JIT-compiled inside the first step
+    -- with the compile landing in the measured window that ranks the arms. The dtype was then
+    read off the arm and the head count, the head dimension and the batch were left behind as
+    ``4``, ``1024 // 4`` and a division of the command line, which is the same drift with three
+    more places to start from: every one of them is in the cache key, so any one of them being
+    a copy compiles a second artifact rather than warming the one the arm runs.
+
+    The model is built by the same ``build_model_config(arm, init_seed)`` call ``build_config``
+    made a moment earlier, so this is the trained model rather than a second one that can
+    disagree with it, and ``solve_widths`` is already cached by then.
+
+    THE BATCH IS THE LAYER'S AND THE COMMAND LINE HAS TO AGREE WITH IT. A persistent FlashRNN
+    layer is built for one batch and refuses every other at its first forward, while the
+    trainer hands it ``rank_microbatch_size // sequence_length`` sequences at a time. Those are
+    two independent numbers that have to be one, so the disagreement is refused here rather
+    than left to surface as a shape error thirty seconds into a billed machine.
+    """
+    from model_arch_tests import build_model_config
+
+    from olmo_core.nn.xlstm import SLSTMMixerConfig
+
+    model = build_model_config(opts.arm, opts.init_seed)
+    contracts = {
+        SLSTMPrewarmContract(
+            n_heads=block.sequence_mixer.n_heads,
+            # What the layer computes for itself: xlstm's sLSTMLayerConfig divides the
+            # embedding dimension by the head count, and the mixer refuses a pair that does
+            # not divide, so this is a reading of the built layer and not a second rule.
+            head_dim=model.d_model // block.sequence_mixer.n_heads,
+            batch_size=block.sequence_mixer.batch_size,
+            kernel_dtype=block.sequence_mixer.kernel_dtype,
         )
+        for block in model.resolved_block_configs
+        if isinstance(block.sequence_mixer, SLSTMMixerConfig)
+    }
+    # One prewarm compiles one artifact. Zero sLSTM layers or two contracts both mean the thing
+    # this preflight is warming is not the thing the arm runs, which is the failure it exists to
+    # prevent and not something to guess a shape through.
+    if len(contracts) != 1:
+        raise _environment_refusal(
+            f"the FlashRNN prewarm compiles one shape at one dtype and arm {opts.arm} declares "
+            f"{sorted(contracts) if contracts else 'no sLSTM layer'}"
+        )
+    contract = contracts.pop()
+
+    sequences_per_rank, remainder = divmod(opts.rank_microbatch_size, opts.sequence_length)
+    if remainder or sequences_per_rank != contract.batch_size:
+        raise _environment_refusal(
+            f"the arm's sLSTM layers are built for a batch of {contract.batch_size} sequences "
+            "and the persistent FlashRNN layer refuses every other, while "
+            f"--rank-microbatch-size {opts.rank_microbatch_size} over --sequence-length "
+            f"{opts.sequence_length} feeds {opts.rank_microbatch_size / opts.sequence_length:g}"
+        )
+    return contract
+
+
+def _preflight_xlstm(opts) -> None:
+    """The strict xLSTM backend: pinned kernels and a compiled FlashRNN.
+
+    The sm_80 check that used to sit here is now ``_preflight_device``, which runs for all five
+    arms rather than for this one. Leaving a copy behind would be a second place for the shape
+    to be written down, and the four arms that never had one are the reason it moved.
+    """
+    _refuse_unpinned_packages(XLSTM_PINNED_VERSIONS)
+
+    # Resolved before FlashRNN is so much as imported: an arm whose layers disagree, or a
+    # command line that feeds a batch they were not built for, is a refusal that wants nothing
+    # loaded to reach it.
+    contract = _slstm_prewarm_contract(opts)
 
     from olmo_core.nn.xlstm import _preflight_flashrnn, _prewarm_flashrnn
 
     _preflight_flashrnn()
     _prewarm_flashrnn(
-        batch_size=opts.rank_microbatch_size // opts.sequence_length,
+        batch_size=contract.batch_size,
         seq_len=opts.sequence_length,
-        n_heads=4,
-        head_dim=1024 // 4,
-        kernel_dtype="float32",
+        n_heads=contract.n_heads,
+        head_dim=contract.head_dim,
+        kernel_dtype=contract.kernel_dtype,
+        # This rank's own card, not ordinal zero: on an eight-GPU node every other rank would
+        # compile and warm a card belonging to somebody else and then measure a cold one.
         device=torch.device("cuda", torch.cuda.current_device()),
     )
+
+
+def _preflight_flash_pd(arm: str) -> None:
+    """The two Flash-PD arms: the extension loaded, a CUDA device, and this arm's symbols."""
+    from olmo_core.nn.flash_pd_native import cuda as native_cuda
+
+    # The library's own answer to "can this host use the native path", rather than that rule
+    # restated here. With no tensors it reports exactly the two things that are knowable
+    # before a model exists: whether the extension imported, and whether CUDA is present.
+    capability = native_cuda.native_cuda_capability()
+    if not capability.available:
+        raise _environment_refusal(
+            f"the strict {arm} backend needs the ahead-of-time Flash-PD CUDA extension: "
+            f"{capability.reason}"
+        )
+
+    required = NATIVE_PD_EXTENSION_SYMBOLS[arm]
+    # The extension object the mixer's autograd Function will call into, not a fresh import of
+    # the same name, so what is probed here is what will run. A build that answers the
+    # capability probe and is missing an entry point dies on the first step that reaches it.
+    extension = getattr(native_cuda, "_EXTENSION", None)
+    missing = [symbol for symbol in required if not callable(getattr(extension, symbol, None))]
+    if missing:
+        raise _environment_refusal(
+            f"the strict {arm} backend calls {', '.join(required)} and this build of the "
+            f"Flash-PD CUDA extension exports no callable {', '.join(missing)}"
+        )
+
+
+def _preflight_gdn2() -> None:
+    """The measured GDN2 control: a pinned ``fla`` whose build ships ``chunk_gdn2``."""
+    from olmo_core.nn.attention.flash_linear_attn_api import has_fla
+
+    if not has_fla():
+        raise _environment_refusal(
+            "the measured GDN2 control runs fla's chunk_gdn2 and flash-linear-attention is "
+            "not importable"
+        )
+    _refuse_unpinned_packages(GDN2_PINNED_VERSIONS)
+    try:
+        from fla.ops.gdn2 import chunk_gdn2
+    except ImportError as error:
+        raise _environment_refusal(
+            "the measured GDN2 control needs fla.ops.gdn2.chunk_gdn2 and this build does not "
+            f"import it: {type(error).__name__}: {error}"
+        ) from error
+    if not callable(chunk_gdn2):
+        raise _environment_refusal(
+            "fla.ops.gdn2.chunk_gdn2 is not callable in this build of flash-linear-attention"
+        )
+
+
+def _preflight_mamba3_kernel() -> None:
+    """The custom mamba-b3 arm, which is built with ``prefer_official_kernel=True``."""
+    from olmo_core.nn.mamba3.mamba3_ssd_api import has_mamba3
+
+    # `has_mamba3` re-raises an ABI or transitive-dependency failure rather than reporting it
+    # as an absence, and that is left alone: those need their own diagnostics, and `during()`
+    # in main() already tags them with this same stage.
+    if not has_mamba3():
+        raise _environment_refusal(
+            "the mamba-b3 arm is built with prefer_official_kernel=True and mamba_ssm's "
+            "mamba3_siso_combined is not installed"
+        )
+
+
+def preflight_accelerated_arm(opts) -> None:
+    """Fail before training if the selected strict backend is unavailable.
+
+    EVERY ARM IN THIS COMPARISON IS STRICT AND ONLY xLSTM USED TO BE CHECKED. The other four
+    ask for a specific kernel by name -- ``prefer_official_kernel=True``,
+    ``NativePDBackend.CUDA``, ``fla``'s ``chunk_gdn2`` -- and none of them falls back, so an
+    image missing one produces a run that is admitted, priced, given a machine, and then dies
+    somewhere inside the first step with whatever the kernel's own error happens to be. That
+    failure costs the image pull and the queue wait, and it arrives as an exception from three
+    libraries down rather than as a sentence naming the package.
+
+    THE DEVICE COMES FIRST, AND FOR EVERY ARM. The card is the one precondition all five share,
+    and a package probe cannot see it -- so the kernel checks below are only worth running once
+    the machine they are checking a build against is the machine the build was made for.
+    """
+    _preflight_device(opts.arm)
+    _preflight_param_dtype(opts)
+
+    if opts.arm == "xlstm":
+        _preflight_xlstm(opts)
+    elif opts.arm in NATIVE_PD_EXTENSION_SYMBOLS:
+        _preflight_flash_pd(opts.arm)
+    elif opts.arm == "gdn":
+        _preflight_gdn2()
+    elif opts.arm == "mamba-b3":
+        _preflight_mamba3_kernel()
 
 
 def train(config, opts) -> None:
@@ -3318,9 +3602,10 @@ def main() -> None:
         return
 
     with during(Stage.THE_TRAINING_ENVIRONMENT_WOULD_NOT_START):
-        preflight_accelerated_arm(opts)
         prepare_training_environment()
     try:
+        with during(Stage.THE_TRAINING_ENVIRONMENT_WOULD_NOT_START):
+            preflight_accelerated_arm(opts)
         with during(Stage.TRAINING_ITSELF_FAILED):
             train(config, opts)
     finally:

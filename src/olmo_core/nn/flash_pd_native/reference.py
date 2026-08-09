@@ -32,6 +32,8 @@ def _validate_values(
     destination: torch.Tensor,
     routes: torch.Tensor,
     values: tuple[torch.Tensor, ...],
+    *,
+    allow_mixed_diagonal_payload: bool = False,
 ) -> tuple[int, int, int, int]:
     _validate_compact_shapes(destination, routes)
     if len(values) != 4:
@@ -50,7 +52,12 @@ def _validate_values(
         raise ValueError("destination heads/state dimensions must match value tensors")
     if any(not value.is_floating_point() for value in values):
         raise TypeError("split real/imag tensors must use floating-point dtypes")
-    if any(value.dtype != values[0].dtype for value in values):
+    if allow_mixed_diagonal_payload:
+        if values[1].dtype != values[0].dtype:
+            raise TypeError("diagonal real/imag tensors must use one dtype")
+        if values[3].dtype != values[2].dtype:
+            raise TypeError("payload real/imag tensors must use one dtype")
+    elif any(value.dtype != values[0].dtype for value in values):
         raise TypeError("split real/imag tensors must use one common dtype")
     if any(value.device != values[0].device for value in values):
         raise ValueError("split real/imag tensors must be on one device")
@@ -206,6 +213,7 @@ def trapezoidal_reference_scan(
         destination,
         routes,
         (diagonal_real, diagonal_imag, value_real, value_imag),
+        allow_mixed_diagonal_payload=True,
     )
     if chunk_size not in (32, 64, 128):
         raise ValueError(f"chunk_size must be one of (32, 64, 128), got {chunk_size}")
@@ -214,8 +222,8 @@ def trapezoidal_reference_scan(
             f"beta and gamma must have shape {(batch, heads, time)}, got "
             f"{tuple(beta.shape)} and {tuple(gamma.shape)}"
         )
-    if beta.dtype != diagonal_real.dtype or gamma.dtype != diagonal_real.dtype:
-        raise TypeError("beta, gamma, and split complex values must use one common dtype")
+    if beta.dtype != value_real.dtype or gamma.dtype != value_real.dtype:
+        raise TypeError("beta, gamma, and split payload values must use one common dtype")
     if beta.device != diagonal_real.device or gamma.device != diagonal_real.device:
         raise ValueError("beta, gamma, and split complex values must be on one device")
 
@@ -232,17 +240,21 @@ def trapezoidal_reference_scan(
         mode = NativePDMode.PERMUTATION_GATHER if proof.proven else NativePDMode.GENERAL_SCATTER
 
     cache_shape = (batch, heads, state)
+    payload_dtype = value_real.dtype
+    compute_dtype = torch.promote_types(diagonal_real.dtype, payload_dtype)
     if initial_cache is None:
-        current_real = diagonal_real.new_zeros(cache_shape)
-        current_imag = diagonal_imag.new_zeros(cache_shape)
-        previous_value_real = value_real.new_zeros(cache_shape)
-        previous_value_imag = value_imag.new_zeros(cache_shape)
+        current_real = torch.zeros(cache_shape, dtype=compute_dtype, device=diagonal_real.device)
+        current_imag = torch.zeros_like(current_real)
+        previous_value_real = torch.zeros_like(current_real)
+        previous_value_imag = torch.zeros_like(current_real)
     else:
         cache_tensors = tuple(initial_cache)
         if any(tensor.shape != cache_shape for tensor in cache_tensors):
             raise ValueError(f"cache tensors must have shape {cache_shape}")
-        if any(tensor.dtype != diagonal_real.dtype for tensor in cache_tensors):
-            raise TypeError("cache and scan values must use one common dtype")
+        if any(tensor.dtype != compute_dtype for tensor in cache_tensors[:2]):
+            raise TypeError("cached state must use the scan accumulation dtype")
+        if any(tensor.dtype != payload_dtype for tensor in cache_tensors[2:]):
+            raise TypeError("cached previous value must use the payload dtype")
         if any(tensor.device != diagonal_real.device for tensor in cache_tensors):
             raise ValueError("cache and scan values must be on one device")
         (
@@ -251,20 +263,27 @@ def trapezoidal_reference_scan(
             previous_value_real,
             previous_value_imag,
         ) = cache_tensors
+        current_real = current_real.to(compute_dtype)
+        current_imag = current_imag.to(compute_dtype)
+        previous_value_real = previous_value_real.to(compute_dtype)
+        previous_value_imag = previous_value_imag.to(compute_dtype)
 
     output_real = []
     output_imag = []
     for token in range(time):
         token_destination = _selected_destination(destination, routes, token)
-        transition_input_real = current_real + beta[:, :, token, None] * previous_value_real
-        transition_input_imag = current_imag + beta[:, :, token, None] * previous_value_imag
+        token_beta = beta[:, :, token, None].to(compute_dtype)
+        transition_input_real = current_real + token_beta * previous_value_real
+        transition_input_imag = current_imag + token_beta * previous_value_imag
+        token_diagonal_real = diagonal_real[:, :, token].to(compute_dtype)
+        token_diagonal_imag = diagonal_imag[:, :, token].to(compute_dtype)
         product_real = (
-            diagonal_real[:, :, token] * transition_input_real
-            - diagonal_imag[:, :, token] * transition_input_imag
+            token_diagonal_real * transition_input_real
+            - token_diagonal_imag * transition_input_imag
         )
         product_imag = (
-            diagonal_real[:, :, token] * transition_input_imag
-            + diagonal_imag[:, :, token] * transition_input_real
+            token_diagonal_real * transition_input_imag
+            + token_diagonal_imag * transition_input_real
         )
         if mode == NativePDMode.GENERAL_SCATTER:
             next_real = torch.zeros_like(current_real).scatter_add(
@@ -278,18 +297,19 @@ def trapezoidal_reference_scan(
             inverse = _selected_destination(proof.inverse_destination, routes, token)
             next_real = torch.gather(product_real, -1, inverse)
             next_imag = torch.gather(product_imag, -1, inverse)
-        current_real = next_real + gamma[:, :, token, None] * value_real[:, :, token]
-        current_imag = next_imag + gamma[:, :, token, None] * value_imag[:, :, token]
-        previous_value_real = value_real[:, :, token]
-        previous_value_imag = value_imag[:, :, token]
-        output_real.append(current_real)
-        output_imag.append(current_imag)
+        token_gamma = gamma[:, :, token, None].to(compute_dtype)
+        current_real = next_real + token_gamma * value_real[:, :, token].to(compute_dtype)
+        current_imag = next_imag + token_gamma * value_imag[:, :, token].to(compute_dtype)
+        previous_value_real = value_real[:, :, token].to(compute_dtype)
+        previous_value_imag = value_imag[:, :, token].to(compute_dtype)
+        output_real.append(current_real.to(payload_dtype))
+        output_imag.append(current_imag.to(payload_dtype))
 
     cache = SISOScanCache(
         h_real=current_real,
         h_imag=current_imag,
-        v_real=previous_value_real,
-        v_imag=previous_value_imag,
+        v_real=previous_value_real.to(payload_dtype),
+        v_imag=previous_value_imag.to(payload_dtype),
     )
     if time:
         outputs = torch.stack(output_real, dim=2), torch.stack(output_imag, dim=2)

@@ -156,6 +156,10 @@ class NativeFlashPDMamba3SISOMixer(SequenceMixer):
             torch.tensor(router_temperature, dtype=torch.float32, device=init_device),
             persistent=True,
         )
+        # The buffers above are what a checkpoint carries. These mirrors are what the
+        # forward reads, so no step of the hot path drains the device for a scalar.
+        self._dictionary_temperature_value = self._persisted_float(dictionary_temperature)
+        self._router_temperature_value = self._persisted_float(router_temperature)
 
         factory = {"dtype": dtype, "device": init_device}
         self.dictionary_logits = nn.Parameter(
@@ -213,15 +217,39 @@ class NativeFlashPDMamba3SISOMixer(SequenceMixer):
             self.n_heads,
         )
 
+    def _persisted_float(self, value: float) -> float:
+        """
+        Round ``value`` on the host to the dtype the temperature buffers persist.
+
+        The forward reads Python floats while a checkpoint carries the buffers, and the
+        two only stay bit-identical across a save and load if the mirror is already
+        representable in the buffer's dtype.
+
+        :param value: Temperature computed in Python double precision.
+
+        :returns: The same temperature as the buffer would store it.
+        """
+        return float(torch.tensor(value, dtype=self._dictionary_temperature.dtype))
+
+    @torch.no_grad()
+    def _mirror_temperatures_from_buffers(self) -> None:
+        """Refresh the forward's Python temperatures from the persisted buffers."""
+        if self._dictionary_temperature.device.type == "meta":
+            # A load into unmaterialized storage copies nothing, so the buffers still
+            # hold what the constructor put there and the mirrors already agree.
+            return
+        self._dictionary_temperature_value = float(self._dictionary_temperature.item())
+        self._router_temperature_value = float(self._router_temperature.item())
+
     @property
     def dictionary_temperature(self) -> float:
         """Current dictionary hardmax-surrogate temperature."""
-        return float(self._dictionary_temperature.item())
+        return self._dictionary_temperature_value
 
     @property
     def router_temperature(self) -> float:
         """Current token-router hardmax-surrogate temperature."""
-        return float(self._router_temperature.item())
+        return self._router_temperature_value
 
     @torch.no_grad()
     def set_temperature_schedule_step(self, step: int) -> None:
@@ -239,8 +267,10 @@ class NativeFlashPDMamba3SISOMixer(SequenceMixer):
         router = self.router_temperature_start + fraction * (
             self.router_temperature_end - self.router_temperature_start
         )
-        self._dictionary_temperature.fill_(dictionary)
-        self._router_temperature.fill_(router)
+        self._dictionary_temperature_value = self._persisted_float(dictionary)
+        self._router_temperature_value = self._persisted_float(router)
+        self._dictionary_temperature.fill_(self._dictionary_temperature_value)
+        self._router_temperature.fill_(self._router_temperature_value)
 
     def temperature_schedule_state(self) -> dict[str, int | float]:
         """Return the checkpointed schedule position and realized temperatures."""
@@ -395,6 +425,7 @@ class NativeFlashPDMamba3SISOMixer(SequenceMixer):
             unexpected_keys,
             error_msgs,
         )
+        self._mirror_temperatures_from_buffers()
 
     def forward(
         self,
@@ -427,11 +458,16 @@ class NativeFlashPDMamba3SISOMixer(SequenceMixer):
         batch, time = x.shape[:2]
 
         kernel_dtype = x.dtype if x.dtype in (torch.float32, torch.bfloat16) else torch.float32
+        # The CUDA router gradient indexes the selector logits off a raw pointer under a
+        # dense (batch, time, head, dictionary) layout, and a fused projection hands the
+        # scan a strided split view of one activation. Densifying after the cast keeps
+        # this free in bfloat16, where the cast already writes a dense buffer.
+        dense_selector_logits = selector_logits.float().contiguous()
         states_real, states_imag, self.last_metadata = mamba3_siso_surrogate_scan(
             self.dictionary_logits.float(),
-            selector_logits.float(),
-            diagonal_real.permute(0, 2, 1, 3).to(kernel_dtype).contiguous(),
-            diagonal_imag.permute(0, 2, 1, 3).to(kernel_dtype).contiguous(),
+            dense_selector_logits,
+            diagonal_real.permute(0, 2, 1, 3).float().contiguous(),
+            diagonal_imag.permute(0, 2, 1, 3).float().contiguous(),
             value_real.permute(0, 2, 1, 3).to(kernel_dtype).contiguous(),
             value_imag.permute(0, 2, 1, 3).to(kernel_dtype).contiguous(),
             beta.permute(0, 2, 1).to(kernel_dtype).contiguous(),
@@ -669,10 +705,11 @@ class NativeFlashPDMamba3SISOMixer(SequenceMixer):
         backward_workspace = 26 * chunk_state + 4 * (
             self.n_heads * self.dictionary_size * self.d_state + rows * sequence_length
         )
-        # Autograd retains complex diagonal/value/output (six sequence-state arrays),
-        # beta/gamma, FP32 dictionary/router logits, and compact int16 maps/routes.
+        # Autograd retains the complex diagonal in FP32, complex value/output in the
+        # payload dtype, beta/gamma, FP32 logits, and compact int16 maps/routes.
         saved_tensors = (
-            6 * sequence_state * element_size
+            8 * sequence_state
+            + 4 * sequence_state * element_size
             + 2 * rows * sequence_length * element_size
             + 4
             * (

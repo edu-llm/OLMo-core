@@ -98,6 +98,74 @@ def test_native_extension_build_includes_cuda_wheel_component_headers(tmp_path, 
     assert captured["ext_modules"][0]["include_dirs"] == expected_include_dirs
 
 
+def test_scatter_step_aggregates_peers_under_the_peer_mask():
+    """
+    A warp routing a colliding dictionary holds peer groups of different sizes, so
+    ``__match_any_sync`` hands its lanes loop trip counts that differ and the lanes
+    in the small groups leave the aggregation loop first. Every warp intrinsic in
+    that loop therefore has to name the peer group. Naming the whole warp instead
+    makes the surviving lanes wait on lanes that have already left, which wedges
+    the block on every architecture with independent thread scheduling.
+    """
+    source = Path("src/olmo_core/nn/flash_pd_native/csrc/flash_pd_native_cuda.cu").read_text()
+    start = source.index("void scatter_step(")
+    body = source[start : source.index("\n}\n", start)]
+
+    assert "__match_any_sync" in body
+    masks = re.findall(r"__shfl\w*_sync\(\s*([A-Za-z_]\w*)", body)
+    assert masks, "scatter_step no longer aggregates its peers with warp shuffles"
+    assert set(masks) == {"peers"}, (
+        "scatter_step must shuffle under the peer mask so that every lane naming a "
+        f"mask is still inside the loop; found {sorted(set(masks))}"
+    )
+
+
+def _kernel_body(source: str, kernel: str) -> str:
+    start = source.index(f"__global__ void {kernel}(")
+    return source[start : source.index("\n}\n", start)]
+
+
+@pytest.mark.parametrize(
+    "kernel",
+    ["phase_a_kernel", "phase_b_kernel", "phase_c_kernel", "mamba3_phase_b_kernel"],
+)
+def test_permutation_inverse_is_read_into_a_register_before_any_warp_overwrites_it(kernel: str):
+    """
+    ``permutation_gather`` inverts the routed map in place: a lane reads the
+    destination held in its own slot and then writes its lane index into the slot
+    that destination names. A block runs one warp per 32 state channels, so above
+    a state of 32 the warps are not in lockstep and the write of one warp lands in
+    a slot another warp has not read yet. The read therefore has to be hoisted
+    into a register and a barrier has to separate it from the write, which is the
+    shape ``mamba3_phase_b_kernel`` already carries.
+    """
+    source = Path("src/olmo_core/nn/flash_pd_native/csrc/flash_pd_native_cuda.cu").read_text()
+    body = _kernel_body(source, kernel)
+    branch_at = body.index("kPermutationGather")
+    branch = body[branch_at : body.index("} else {", branch_at)]
+
+    write = re.search(r"shared_map\[(\w+)\]\s*=\s*lane;", branch)
+    assert write, f"{kernel} no longer inverts the routed map in shared memory"
+    assert "shared_map[" not in branch[: write.start()], (
+        f"{kernel} still reads shared_map inside the permutation branch before writing "
+        "the inverse, so a peer warp overwrites the slot before that read retires"
+    )
+
+    hoisted = re.search(rf"const int {write.group(1)} = shared_map\[lane\];", body)
+    assert hoisted, (
+        f"{kernel} must hoist the destination of its own slot into a register while the "
+        "map still holds the forward direction"
+    )
+    assert (
+        "__syncthreads();" in body[hoisted.end() : branch_at + write.start()]
+    ), f"{kernel} must place a barrier between the hoisted read and the inverse write"
+    tail = branch[write.end() :]
+    assert tail.index("__syncthreads();") < tail.index("permutation_step("), (
+        f"{kernel} must place a barrier between the inverse write and the gather that "
+        "reads the inverted map"
+    )
+
+
 def test_native_cuda_sources_encode_chunkwise_reverse_and_sm80_sm120_build():
     package = Path("src/olmo_core/nn/flash_pd_native")
     source = (package / "csrc/flash_pd_native_cuda.cu").read_text()
@@ -117,13 +185,15 @@ def test_native_cuda_sources_encode_chunkwise_reverse_and_sm80_sm120_build():
         "paper_dictionary_gradient_kernel",
         "paper_selector_gradient_kernel",
     ):
-        assert re.search(rf"{kernel}(?:<scalar_t>)?\s*<<<", source)
+        assert re.search(rf"{kernel}(?:<[\w:, ]+>)?\s*<<<", source)
     assert "paper_sequence_backward_kernel" not in source
     assert "__match_any_sync" in source
     assert "chunk_carry_real" in source
     assert "chunk_carry_imag" in source
     assert "shared_active_dictionary" in source
-    assert "dictionary_size * state <= 12000 - 2 * state - 32" in source
+    assert "constexpr int kPhaseCReductions = 3;" in source
+    assert "constexpr int kMaximumWarps = 32;" in source
+    assert "dictionary_size * state <= 12000 - 2 * state - reduction_elements" in source
     assert "paper backward chunk_size must be in [1, 128]" in source
     assert (
         "atomicAdd" not in source[source.index("permutation_step") : source.index("scatter_step")]

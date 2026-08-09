@@ -54,13 +54,25 @@ RUN mkdir -p /usr/local/share/licenses/nxai && \
 
 # Runtime and build dependencies precede source copies so ordinary research edits
 # retain the expensive Torch, FlashAttention, Mamba-3, and CUDA-extension layers.
+#
+# edullm-data is installed from a source tarball at a fixed commit and declares boto3 and
+# numpy with no bound, so a resolver left to itself may move either off the pins above --
+# and numpy's is the one the native extension is compiled against. --no-deps forbids that;
+# it is safe only because both are installed explicitly a few lines up. --no-build-isolation
+# keeps pip from fetching an unpinned copy of the sdist's backend, which is why hatchling is
+# pinned here beside setuptools and wheel: without it in the image the layer fails outright
+# with BackendUnavailable rather than falling back to an isolated build.
 RUN set -eux; \
     python -m pip install --no-cache-dir \
       "pip==25.2" \
       "setuptools==69.5.1" \
       "wheel==0.45.1" \
       "ninja==1.13.0" \
-      "packaging==25.0"; \
+      "packaging==25.0" \
+      "hatchling==1.27.0" \
+      "pathspec==1.1.1" \
+      "pluggy==1.6.0" \
+      "trove-classifiers==2026.6.1.19"; \
     python -m pip install --no-cache-dir \
       --index-url https://download.pytorch.org/whl/cu128 \
       "torch==2.10.0"; \
@@ -79,8 +91,9 @@ RUN set -eux; \
       "boto3==1.40.70" \
       "botocore[crt]==1.40.70" \
       "wandb==0.23.0" \
-      "flash-linear-attention==0.4.1"; \
-    python -m pip install --no-cache-dir \
+      "flash-linear-attention==0.5.1" \
+      "fla-core==0.5.1"; \
+    python -m pip install --no-cache-dir --no-build-isolation --no-deps \
       "edullm-data @ https://github.com/edu-llm/edullm-data/archive/38bf831a6c3f445e394784018441fd59288b876c.tar.gz"
 
 # The official Mamba-3 source revision and xLSTM kernels build only for A100 sm80.
@@ -106,13 +119,18 @@ RUN set -eux; \
     python -m pip install --no-cache-dir --no-deps dist/flash_pd_native_kernels-*.whl; \
     rm -rf build dist
 
+# Build isolation would fetch an unpinned setuptools and wheel; this project's
+# wheel is built against the ones pinned in the dependency layer above.
 COPY . .
 RUN set -eux; \
-    python -m pip install --no-cache-dir --no-deps .; \
+    python -m pip install --no-cache-dir --no-build-isolation --no-deps .; \
     python -c "import torch; arch_flags = torch._C._cuda_getArchFlags(); assert torch.__version__.startswith('2.10.0'); assert torch.version.cuda == '12.8', torch.version.cuda; assert arch_flags and 'sm_80' in arch_flags.split(), arch_flags"; \
     python -c "from mamba_ssm.ops.triton.mamba3.mamba3_siso_combined import mamba3_siso_combined; assert callable(mamba3_siso_combined)"; \
-    python -c "import _flash_pd_native_cuda; assert callable(_flash_pd_native_cuda.forward); assert callable(_flash_pd_native_cuda.backward); assert callable(_flash_pd_native_cuda.mamba3_forward); assert callable(_flash_pd_native_cuda.paper_backward)"; \
+    python -c "import torch, _flash_pd_native_cuda; assert callable(_flash_pd_native_cuda.forward); assert callable(_flash_pd_native_cuda.backward); assert callable(_flash_pd_native_cuda.mamba3_forward); assert callable(_flash_pd_native_cuda.paper_backward)"; \
     python -c "import importlib.metadata as m; expected={'xlstm':'2.0.5','mlstm-kernels':'2.0.4','flashrnn':'1.0.6'}; assert {k:m.version(k) for k in expected} == expected"; \
+    python -c "from importlib.metadata import version; v=version('flash-linear-attention'); assert v=='0.5.1', f'fla moved off the pin: {v}'"; \
+    python -c "from importlib.metadata import version; v=version('fla-core'); assert v=='0.5.1', f'fla-core moved off the pin: {v}'"; \
+    python -c "from fla.ops.gdn2 import chunk_gdn2; assert callable(chunk_gdn2)"; \
     python -c "from olmo_core.nn.xlstm.olmo_xlstm import XLSTMMixerConfig; from olmo_core.nn.xlstm.olmo_slstm import SLSTMMixerConfig; assert XLSTMMixerConfig().chunkwise_kernel == 'chunkwise--triton_xl_chunk'; assert SLSTMMixerConfig(backend='cuda_fused').backend == 'cuda_fused'"; \
     python -c "from edullm_data.profiles.registry import available; assert sorted(available()) == ['eval-results/v1', 'pretrain-tokens/v1', 'sft-conversations/v1', 'token-order/v1', 'tokenizer/v1']"; \
     python -c "from edullm_data.read import dataset_paths, resolve_latest; print(dataset_paths.__module__, resolve_latest.__module__)"; \

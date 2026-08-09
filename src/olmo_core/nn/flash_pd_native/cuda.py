@@ -206,8 +206,6 @@ def _mamba3_siso_fake(
         destination,
         inverse_destination,
         routes,
-        value_real,
-        value_imag,
         beta,
         gamma,
         dictionary_temperature,
@@ -215,7 +213,8 @@ def _mamba3_siso_fake(
         chunk_size,
         mode,
     )
-    return torch.empty_like(diagonal_real), torch.empty_like(diagonal_imag)
+    del diagonal_real, diagonal_imag
+    return torch.empty_like(value_real), torch.empty_like(value_imag)
 
 
 def _mamba3_siso_setup_context(ctx: Any, inputs: tuple, output: tuple) -> None:
@@ -302,6 +301,7 @@ def native_cuda_capability(
     bias_imag: Optional[torch.Tensor] = None,
     *,
     chunk_size: int = 128,
+    allow_mixed_diagonal_payload: bool = False,
 ) -> NativeCUDACapability:
     """Probe extension and tensor constraints without dispatching or falling back."""
     if _EXTENSION is None:
@@ -333,6 +333,7 @@ def native_cuda_capability(
             destination,
             routes,
             (diagonal_real, diagonal_imag, bias_real, bias_imag),
+            allow_mixed_diagonal_payload=allow_mixed_diagonal_payload,
         )
     except (TypeError, ValueError) as error:
         return NativeCUDACapability(False, str(error))
@@ -342,6 +343,11 @@ def native_cuda_capability(
         return NativeCUDACapability(False, "native CUDA kernel requires state below 1024")
     if diagonal_real.dtype not in (torch.float32, torch.bfloat16):
         return NativeCUDACapability(False, "native CUDA kernel supports float32 and bfloat16")
+    if bias_real.dtype not in (torch.float32, torch.bfloat16):
+        return NativeCUDACapability(
+            False,
+            "native CUDA payload supports float32 and bfloat16",
+        )
     tensors = (
         destination,
         routes,
@@ -370,22 +376,29 @@ class _NativeFlashPD(torch.autograd.Function):
         mode: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         assert _EXTENSION is not None
+        destination_contiguous = destination.contiguous()
+        inverse_destination_contiguous = inverse_destination.contiguous()
+        routes_contiguous = routes.contiguous()
+        diagonal_real_contiguous = diagonal_real.contiguous()
+        diagonal_imag_contiguous = diagonal_imag.contiguous()
+        bias_real_contiguous = bias_real.contiguous()
+        bias_imag_contiguous = bias_imag.contiguous()
         output_real, output_imag = _EXTENSION.forward(
-            destination.contiguous(),
-            inverse_destination.contiguous(),
-            routes.contiguous(),
-            diagonal_real.contiguous(),
-            diagonal_imag.contiguous(),
-            bias_real.contiguous(),
-            bias_imag.contiguous(),
+            destination_contiguous,
+            inverse_destination_contiguous,
+            routes_contiguous,
+            diagonal_real_contiguous,
+            diagonal_imag_contiguous,
+            bias_real_contiguous,
+            bias_imag_contiguous,
             chunk_size,
             mode,
         )
         ctx.save_for_backward(
-            destination,
-            routes,
-            diagonal_real,
-            diagonal_imag,
+            destination_contiguous,
+            routes_contiguous,
+            diagonal_real_contiguous,
+            diagonal_imag_contiguous,
             output_real,
             output_imag,
         )
@@ -437,26 +450,33 @@ class _NativeFlashPDPaperTraining(torch.autograd.Function):
         mode: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         assert _EXTENSION is not None
+        destination_contiguous = destination.contiguous()
+        inverse_destination_contiguous = inverse_destination.contiguous()
+        routes_contiguous = routes.contiguous()
+        diagonal_real_contiguous = diagonal_real.contiguous()
+        diagonal_imag_contiguous = diagonal_imag.contiguous()
+        bias_real_contiguous = bias_real.contiguous()
+        bias_imag_contiguous = bias_imag.contiguous()
         output_real, output_imag = _EXTENSION.forward(
-            destination.contiguous(),
-            inverse_destination.contiguous(),
-            routes.contiguous(),
-            diagonal_real.contiguous(),
-            diagonal_imag.contiguous(),
-            bias_real.contiguous(),
-            bias_imag.contiguous(),
+            destination_contiguous,
+            inverse_destination_contiguous,
+            routes_contiguous,
+            diagonal_real_contiguous,
+            diagonal_imag_contiguous,
+            bias_real_contiguous,
+            bias_imag_contiguous,
             chunk_size,
             mode,
         )
         ctx.save_for_backward(
             dictionary_logits,
             selector_logits,
-            destination,
-            routes,
-            diagonal_real,
-            diagonal_imag,
-            bias_real,
-            bias_imag,
+            destination_contiguous,
+            routes_contiguous,
+            diagonal_real_contiguous,
+            diagonal_imag_contiguous,
+            bias_real_contiguous,
+            bias_imag_contiguous,
             output_real,
             output_imag,
         )
@@ -604,13 +624,14 @@ def native_cuda_mamba3_siso_surrogate_scan(
         value_real,
         value_imag,
         chunk_size=chunk_size,
+        allow_mixed_diagonal_payload=True,
     )
     if not capability.available:
         raise RuntimeError(capability.reason)
     if beta.shape != diagonal_real.shape[:3] or gamma.shape != beta.shape:
         raise ValueError("beta and gamma must have shape (batch, heads, time)")
-    if beta.dtype != diagonal_real.dtype or gamma.dtype != diagonal_real.dtype:
-        raise TypeError("beta, gamma, and split recurrence values must use one dtype")
+    if beta.dtype != value_real.dtype or gamma.dtype != value_real.dtype:
+        raise TypeError("beta, gamma, and split payload values must use one dtype")
     if mode == NativePDMode.PERMUTATION_GATHER:
         proof = prove_selected_maps_bijective(destination, routes)
         if not proof.proven or proof.inverse_destination is None:

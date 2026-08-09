@@ -435,6 +435,20 @@ def _flashrnn_opaque(
     config_class=None,
 ):
     """Execute the external persistent kernel eagerly inside compiled surrounding regions."""
+    try:
+        dtype = getattr(torch, kernel_dtype)
+    except AttributeError as exc:
+        raise ValueError(f"unsupported FlashRNN kernel dtype '{kernel_dtype}'") from exc
+    # FlashRNN compiles one pointer type per tensor role, and an unnamed role inherits
+    # another role instead of the kernel dtype. Describing the roles by the dtype the
+    # tensors happen to carry -- bfloat16 once FSDP casts the parameters -- builds a kernel
+    # whose own arguments do not fit its signature, so the kernel dtype names every role
+    # and the tensors are cast to it.
+    gate_inputs = gate_inputs.to(dtype)
+    recurrent = recurrent.to(dtype)
+    bias = bias.to(dtype)
+    if flash_state is not None:
+        flash_state = flash_state.to(dtype)
     kwargs = {
         "states": flash_state,
         "function": "slstm",
@@ -449,28 +463,18 @@ def _flashrnn_opaque(
             function="slstm",
             backend="cuda_fused",
             dtype=kernel_dtype,
-            dtype_w=str(gate_inputs.dtype).removeprefix("torch."),
-            dtype_r=str(recurrent.dtype).removeprefix("torch."),
-            dtype_b=str(bias.dtype).removeprefix("torch."),
+            dtype_w=kernel_dtype,
+            dtype_r=kernel_dtype,
+            dtype_b=kernel_dtype,
+            dtype_g=kernel_dtype,
+            dtype_s=kernel_dtype,
+            dtype_a=kernel_dtype,
             input_shape="TBHDG",
             output_shape="SBHTD",
             recurrent_shape="HDGP",
             bias_shape="HDG",
         )
     return flashrnn(gate_inputs, recurrent, bias, **kwargs)
-
-
-class _CachedNativeLayout(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, parameter: torch.Tensor, cached: torch.Tensor, permutation):
-        ctx.inverse_permutation = tuple(
-            sorted(range(len(permutation)), key=permutation.__getitem__)
-        )
-        return cached
-
-    @staticmethod
-    def backward(ctx, grad_output: torch.Tensor):
-        return grad_output.permute(ctx.inverse_permutation), None, None
 
 
 class _FlashRNNPersistentSLSTMLayer(nn.Module):
@@ -505,19 +509,6 @@ class _FlashRNNPersistentSLSTMLayer(nn.Module):
         self.raw_gate_weight = nn.Parameter(
             torch.stack((layer.zgate.weight, layer.ogate.weight), dim=1)
         )
-        self._native_recurrent_cache = None
-        self._native_recurrent_cache_key = None
-        self._native_bias_cache = None
-        self._native_bias_cache_key = None
-
-    @staticmethod
-    def _parameter_cache_key(parameter: torch.Tensor) -> tuple:
-        return (
-            id(parameter),
-            parameter._version,
-            parameter.device,
-            parameter.dtype,
-        )
 
     def _project_gates(self, x: torch.Tensor, x_conv: torch.Tensor) -> torch.Tensor:
         batch_size, seq_len, _ = x.shape
@@ -541,38 +532,26 @@ class _FlashRNNPersistentSLSTMLayer(nn.Module):
             4,
         )
 
-    def _cached_native_parameter(
-        self,
-        parameter: torch.Tensor,
-        *,
-        permutation: tuple[int, ...],
-        cache_name: str,
-        key_name: str,
-    ) -> torch.Tensor:
-        cache_key = self._parameter_cache_key(parameter)
-        if getattr(self, key_name) != cache_key:
-            setattr(
-                self,
-                cache_name,
-                parameter.detach().permute(permutation).contiguous(),
-            )
-            setattr(self, key_name, cache_key)
-        cached = getattr(self, cache_name)
-        assert cached is not None
-        return _CachedNativeLayout.apply(parameter, cached, permutation)
-
     def _flashrnn_parameters(self) -> tuple[torch.Tensor, torch.Tensor]:
-        recurrent = self._cached_native_parameter(
-            self.slstm_cell._recurrent_kernel_,
-            permutation=(0, 3, 2, 1),
-            cache_name="_native_recurrent_cache",
-            key_name="_native_recurrent_cache_key",
+        # Reconverted on every call rather than cached across calls. Under FSDP2 the
+        # unsharded parameter is one persistent object whose storage is repointed at each
+        # all-gather buffer with its version counter held fixed, so its id, version, device
+        # and dtype are the same on every step and no key drawn from them can tell a
+        # rematerialized value from a stale one.
+        recurrent = (
+            self.slstm_cell._recurrent_kernel_.view(
+                self.config.num_heads,
+                4,
+                self.config.head_dim,
+                self.config.head_dim,
+            )
+            .permute(0, 2, 1, 3)
+            .contiguous()
         )
-        bias = self._cached_native_parameter(
-            self.slstm_cell._bias_,
-            permutation=(0, 2, 1),
-            cache_name="_native_bias_cache",
-            key_name="_native_bias_cache_key",
+        bias = (
+            self.slstm_cell._bias_.view(4, self.config.num_heads, self.config.head_dim)
+            .permute(1, 2, 0)
+            .contiguous()
         )
         return recurrent, bias
 

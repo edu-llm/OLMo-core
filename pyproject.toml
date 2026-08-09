@@ -63,7 +63,21 @@ comet = ["comet_ml"]
 dion = ["dion @ git+https://github.com/microsoft/dion.git@7452a5823cf9655b93c3f1d8020b4ebb2535239b ; sys_platform == 'linux'"]
 eval = ["ai2-olmo-eval==0.9.0"]
 fa4 = ["flash-attn-4>=4.0.0b4 ; sys_platform == 'linux'"]
-fla = ["flash-linear-attention==0.4.1"]
+# THE PROJECT FLA PIN. The research Dockerfile installs its dependencies directly, so it mirrors
+# this version and then asserts both this shim and the resolved `fla-core` distribution at build.
+#
+# 0.5.1 rather than 0.4.1: `fla.ops.gdn2`, which GatedDeltaNet2 needs, does not exist before
+# 0.5.0, and from 0.5.0 the ops moved into the `fla-core` distribution this one depends on.
+# 0.4.1 is also exposed to fla #802, an illegal memory access in KDA's backward whose
+# reproducer is literally KimiDeltaAttention.
+#
+# 0.5.1 rather than 0.5.2, verified by diffing the wheels on 2026-08-08: `fla/ops/gdn2/chunk.py`
+# and `fla/layers/gdn2.py` are byte-identical between the two, so 0.5.2 buys GDN-2 nothing.
+# 0.5.1 is the version the sm_89 numerics gate passed against (2026-08-01, 129 tests, fp32 rel
+# err 6.786e-06), and 0.5.2 rewrote the KDA kernels from `tl.make_block_ptr` to manual pointer
+# arithmetic -- identical math, different emitted PTX -- so taking it would mean re-running that
+# gate for no gain.
+fla = ["flash-linear-attention==0.5.1"]
 # NOTE: Mamba-3 fast kernels only live on mamba-ssm `main` (no clean wheel) and require a source
 # build (`MAMBA_FORCE_BUILD=TRUE pip install ... --no-build-isolation`) with a CUDA toolchain, so
 # this is intentionally kept OUT of the `all` extra. `src/Dockerfile` installs the pinned source
