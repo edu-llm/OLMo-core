@@ -6,6 +6,8 @@
 #   .edullm/hpo-no-proxy.json
 #
 # Run the proxy cohort first when starting Arms 1–2; see run-hpo-proxy-cohort.yaml.
+# Expected wall time is about 1–1.5 hours on 8×A100; pass --hours 4 at check/submit as
+# the hard runtime bound (the workload ceiling is 24h, but this study should not need it).
 # The dtype token is explicit so the platform's precision guard can price it at check time.
 schema_version: 1
 workload_profile: olmo-core-train
