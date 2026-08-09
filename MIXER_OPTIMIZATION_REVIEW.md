@@ -124,7 +124,7 @@ on a `/32` grid to keep every model near 390,135,552 parameters.
 - 12 Mamba-3 SISO layers.
 - `d_state=96`, one B/C group, MIMO rank 1.
 - `rotation_block_size=3`, `rotation_scan_impl="quaternion"`.
-- Official Mamba-3 SISO scan selected; fused input projections enabled.
+- High-occupancy `simple_gla` scan selected; fused input projections enabled.
 - Recurrent FFNs: seven at 4800, five at 4768.
 
 ### xLSTM
@@ -288,13 +288,13 @@ already optimized.
 
 ### P1: Mamba-b3
 
-1. Keep `official_fast + quaternion` as the active default. It won the stable
-   local comparison against simple-GLA.
-2. Re-evaluate simple-GLA only on an 8xA100 whole-model smoke. Existing parity
-   tests make it a valid candidate, not a proven winner.
-3. The official kernel pads state 96 to 128 because its state width is
-   power-of-two. Avoiding that 25% lane waste requires a new state-96 kernel;
-   no b=3-admissible power-of-two state removes it through configuration alone.
+1. The active comparison arm now uses `simple_gla + quaternion`, explicitly to
+   test its higher-occupancy chunk-tiled grid on A100.
+2. Validate that choice on an 8xA100 whole-model smoke before the full wave.
+   Existing parity tests make it scientifically valid, while the RTX 5050 result
+   still has `official_fast` ahead by 0.6%.
+3. Keep `official_fast` reachable as the named fallback. It pads state 96 to 128
+   because its state width is power-of-two, wasting 25% of those lanes.
 4. Preserve Rodrigues, quaternion prefix, BCNorm ordering, and selective FP32
    prefix accumulation. Those are intentional b=3 semantics/stability work.
 

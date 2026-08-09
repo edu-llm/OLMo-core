@@ -61,12 +61,12 @@ green image for that new SHA before submitting.
 
 ### Current Mamba-b3 contract
 
-`mamba-b3` selects the official Mamba-3 SISO scan with
-`rotation_block_size=3`, fused projections, and the quaternion/Rodrigues
-rotation path. `simple_gla` remains strict and opt-in. In the latest
-source-hashed RTX 5050 layer benchmark, `official_fast` was 0.6% faster than
-`simple_gla`; neither result may select the A100 default without a whole-model
-A100 comparison.
+`mamba-b3` selects the strict `simple_gla` scan with `rotation_block_size=3`,
+fused projections, and the quaternion/Rodrigues rotation path. `official_fast`
+remains available by name but is no longer the comparison-arm default. The
+switch is an A100 occupancy hypothesis: the latest source-hashed RTX 5050 layer
+benchmark put `official_fast` 0.6% ahead, so the 8xA100 whole-model smoke must
+validate the choice before a full comparison wave.
 
 ## What the smoke measures
 
