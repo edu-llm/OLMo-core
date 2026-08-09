@@ -1,7 +1,7 @@
 # The default spec, and therefore what a submission that names no --spec runs.
 #
 # It is the ten-step functional smoke of ONE arm, not a comparison cell. The file used to
-# call model_arch_tests.py with no --steps, and that program's default is the frozen 3721
+# call model_arch_tests.py with no --steps, and that program's default is the frozen 1144
 # steps, so the cheapest possible mistake -- omitting --spec -- bought the whole measured
 # run on eight A100s. A default that bills that much by omission is the wrong default even
 # when every other field in it is right.

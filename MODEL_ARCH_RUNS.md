@@ -6,10 +6,12 @@ Everything needed for the four-arm comparison lives on
 staged changes are not part of that image. None of the commands in this
 document dispatches a GPU job unless `edullm submit` is used explicitly.
 
-The fan-out follows `edullm/mixer-bakeoff` at remote commit
+The fan-out structure follows `edullm/mixer-bakeoff` at remote commit
 `092f2c2bd582c4daa9b3bbfae0effce76b0f833a`: one image, one entrypoint, literal
-arm/data/init arrays, arm-major ordering, matched token streams, a fixed step
-count, and machine-readable seeds. The source of truth is
+arm/data/init arrays, arm-major ordering, matched token streams, a fixed common
+step count, and machine-readable seeds. The per-cell budget deliberately matches
+the bakeoff's measured Run 1 rather than that commit's later Run 2: 1,144 steps
+and TPP about 1.54. The source of truth is
 `docs/mamba-comparison/seeds.json`; the platform command is
 `.edullm/run-comparison.yaml`.
 
@@ -44,11 +46,13 @@ There are 20 cells: four arms by five replicates. Data seeds
 sees the same token order in every arm. Init seeds remain arm-specific because
 the tensor inventories differ.
 
-Each cell runs 3,721 steps at a 524,288-token global batch:
+Each cell runs 1,144 steps at a 524,288-token global batch:
 
-`3,721 × 524,288 = 1,950,875,648 tokens`.
+`1,144 × 524,288 = 599,785,472 tokens`.
 
-That is TPP 5.00007–5.00041 across the four exact parameter totals. The step
+That is TPP 1.53724–1.53735 across the four exact parameter totals. This is the
+measured Run 1 budget; the bakeoff's original 1,907-step plan would have been
+TPP about 2.56, while its later Run 2 used 3,721 steps and TPP about 5. The step
 count, corpus release, sequence length, global batch, DP world size, and data
 seed must remain identical across all cells; changing one cell alone breaks
 the paired token-stream contract.

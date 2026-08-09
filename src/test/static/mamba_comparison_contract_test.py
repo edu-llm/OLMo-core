@@ -118,7 +118,7 @@ def test_entrypoint_freezes_four_full_architecture_arms():
     values = _literal_assignments(ENTRYPOINT)
     assert values["ARMS"] == ("mamba-b3", "xlstm", "mamba3-siso-pd", "native-pd")
     assert values["ATTENTION_LAYERS"] == (3, 7, 11, 15)
-    assert values["FROZEN_STEPS"] == 3721
+    assert values["FROZEN_STEPS"] == 1144
     assert values["FROZEN_GLOBAL_BATCH_SIZE"] == 524288
 
 
@@ -131,14 +131,18 @@ def test_arm_major_five_seed_wave_is_machine_readable():
     assert schedule["replicates_per_arm"] == 5
     assert schedule["fanout_size"] == 20
     assert schedule["cell_order"] == [arm for arm in expected_arms for _ in range(5)]
-    assert schedule["steps"] == 3721
+    assert schedule["steps"] == 1144
     assert schedule["global_batch_size"] == 524288
-    assert schedule["tokens_per_cell"] == 1_950_875_648
-    assert schedule["target_tokens_per_parameter"] == 5.0
+    assert schedule["tokens_per_cell"] == 599_785_472
+    assert schedule["target_tokens_per_parameter"] == 1.5373
+    assert schedule["warmup_steps"] == 114
+    assert schedule["save_interval"] == 572
 
     run_yaml = RUN_SPEC.read_text()
     assert "AWS_BATCH_JOB_ARRAY_INDEX" in run_yaml
-    assert "--steps 3721" in run_yaml
+    assert "--steps 1144" in run_yaml
+    assert "--warmup-steps 114" in run_yaml
+    assert "--save-interval 572" in run_yaml
     assert "--global-batch-size 524288" in run_yaml
 
     def shell_array(name: str) -> list[str]:
@@ -184,7 +188,7 @@ def test_default_spec_is_a_short_functional_smoke_on_one_mamba_b3_cell():
 
     # TEN STEPS IS A BOUND, NOT A PREFERENCE. This file is what a bare submission runs, and
     # the runner's own --steps default is the frozen comparison cell, so a default command
-    # that leaves the flag off bills the whole 3721-step run by omission.
+    # that leaves the flag off bills the whole 1144-step run by omission.
     steps = int(flags["--steps"])
     assert 0 < steps <= 10
     assert steps != values["FROZEN_STEPS"]

@@ -127,10 +127,10 @@ BASE_FFN_WIDTH = 4608
 ATTENTION_LAYERS = (3, 7, 11, 15)
 RECURRENT_LAYERS = tuple(index for index in range(N_LAYERS) if index not in ATTENTION_LAYERS)
 XLSTM_SLSTM_LAYERS = (6, 14)
-FROZEN_STEPS = 3721
+FROZEN_STEPS = 1144
 FROZEN_GLOBAL_BATCH_SIZE = 524288
-FROZEN_WARMUP_STEPS = 372
-FROZEN_SAVE_INTERVAL = 1861
+FROZEN_WARMUP_STEPS = 114
+FROZEN_SAVE_INTERVAL = 572
 PARAMETER_TARGET = 390_135_552
 PARAMETER_TOLERANCE = 195_068
 EXACT_PARAMETER_COUNTS = {
@@ -140,6 +140,50 @@ EXACT_PARAMETER_COUNTS = {
     "native-pd": 390_142_976,
 }
 DIAGNOSTIC_PARAMETER_COUNTS = {"gdn": 390_119_360}
+
+# Which of an arm's own parameters stay out of weight decay, BEYOND the embeddings every arm
+# exempts. This is a per-arm list rather than one shared list, and both halves of that are
+# load-bearing.
+#
+# THE MIXERS' `_no_weight_decay` TAGS DO NOTHING BY THEMSELVES. `OptimConfig.build_groups`
+# reads `group_overrides` and never looks at the tag, so an arm whose recurrence marks
+# `A_log`/`dt_bias`/`D` still has AdamW's 0.01 applied to them unless a pattern names them.
+# That pulls |A| toward 1 and moves `dt` for eleven hours, in the one set of parameters the
+# comparison is about, while every printed field still reads correctly.
+#
+# AND A PATTERN THAT MATCHES NOTHING IS FATAL, NOT INERT. TransformerTrainModule builds the
+# optimizer with `strict=True`, and `_expand_param_globs` raises OLMoConfigurationError for a
+# pattern with no match. So the one shared four-pattern list this file used to carry could not
+# run: `xlstm` has no such parameter at all, and `mamba-b3` has no `D`. Each arm therefore
+# names exactly what it has, and `test_every_arm_exempts_exactly_its_tagged_timescale_parameters_from_weight_decay`
+# rebuilds every arm and asserts this table against the tags themselves.
+#
+# `gdn` is deliberately empty even though GatedDeltaNet2 HAS `A_log` and `dt_bias`: it does not
+# tag them, and it is the frozen mixer-bakeoff control. Exempting them here would silently make
+# the diagnostic a different model from the one it is the baseline for.
+WEIGHT_DECAY_EXEMPT_PATTERNS_BY_ARM: dict[str, tuple[str, ...]] = {
+    "mamba-b3": ("*.A_log", "*.dt_bias"),
+    "xlstm": (),
+    "mamba3-siso-pd": ("*.A_log", "*.dt_bias", "*.D"),
+    "native-pd": ("*.A_log", "*.dt_bias", "*.D"),
+    "gdn": (),
+}
+
+
+def weight_decay_group_overrides(arm: str) -> list[OptimGroupOverride]:
+    """
+    Return the zero-weight-decay optimizer group for one arm.
+
+    :param arm: A runnable arm name.
+
+    :returns: One override naming the embeddings plus that arm's tagged timescale parameters.
+
+    :raises ValueError: If the arm is not runnable.
+    """
+    if arm not in RUNNABLE_ARMS:
+        raise ValueError(f"unsupported arm: {arm}")
+    patterns = ["embeddings.weight", *WEIGHT_DECAY_EXEMPT_PATTERNS_BY_ARM[arm]]
+    return [OptimGroupOverride(params=patterns, opts={"weight_decay": 0.0})]
 
 
 class Stage(enum.IntEnum):
@@ -471,12 +515,7 @@ def build_config(opts, overrides: list[str]) -> ExperimentConfig:
         max_sequence_length=opts.sequence_length,
         optim=AdamWConfig(
             lr=opts.learning_rate,
-            group_overrides=[
-                OptimGroupOverride(
-                    params=["embeddings.weight", "*.A_log", "*.dt_bias", "*.D"],
-                    opts={"weight_decay": 0.0},
-                )
-            ],
+            group_overrides=weight_decay_group_overrides(opts.arm),
         ),
         accumulate_grads_without_comm=True,
         compile_model=True,

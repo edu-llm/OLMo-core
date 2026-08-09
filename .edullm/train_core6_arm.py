@@ -616,7 +616,11 @@ def build_config(opts, overrides: list[str]):
     # Every comparison arm is built by the one frozen geometry ledger beside this
     # runner. Keeping arm construction out of the fan-out command ensures every cell
     # differs only by its explicit arm and seeds.
-    from model_arch_tests import RUNNABLE_ARMS, build_model_config
+    from model_arch_tests import (
+        RUNNABLE_ARMS,
+        build_model_config,
+        weight_decay_group_overrides,
+    )
 
     if opts.arm not in RUNNABLE_ARMS:
         raise Refusal(
@@ -672,11 +676,22 @@ def build_config(opts, overrides: list[str]):
     train_module_config = TransformerTrainModuleConfig(
         rank_microbatch_size=opts.rank_microbatch_size,
         max_sequence_length=opts.sequence_length,
+        # THE TIMESCALE PARAMETERS COME OFF WEIGHT DECAY, AND THE LIST IS THE LEDGER'S.
+        #
+        # This used to exempt `embeddings.weight` alone, which it inherited from the bake-off
+        # -- whose arms had no such parameter. Three of these arms do: the mixers tag
+        # `A_log`, `dt_bias` and `D` with `_no_weight_decay`, and that tag is INERT on its own
+        # because `OptimConfig.build_groups` only reads `group_overrides`. So AdamW's 0.01 was
+        # decaying the decay rates for the whole run, in exactly the parameters the comparison
+        # is about, while nothing printed looked wrong.
+        #
+        # The list is per arm and it comes from the ledger rather than being retyped here: a
+        # pattern that matches no parameter is not ignored, it RAISES, because the train
+        # module builds the optimizer with `strict=True`. `xlstm` has none of these and
+        # `mamba-b3` has no `D`, so one shared list cannot be right for five arms.
         optim=AdamWConfig(
             lr=opts.learning_rate,
-            group_overrides=[
-                OptimGroupOverride(params=["embeddings.weight"], opts={"weight_decay": 0.0})
-            ],
+            group_overrides=weight_decay_group_overrides(opts.arm),
         ),
         # On, because the image now carries a C compiler. It was off in the platform's
         # getting-started command only because a run without one dies on the first compiled
@@ -3512,9 +3527,9 @@ def build_parser() -> argparse.ArgumentParser:
         "and the run produces a checkpoint only.",
     )
     parser.add_argument("--sequence-length", type=int, default=4096)
-    parser.add_argument("--steps", type=int, default=3721)
-    parser.add_argument("--save-interval", type=int, default=1861)
-    parser.add_argument("--warmup-steps", type=int, default=372)
+    parser.add_argument("--steps", type=int, default=1144)
+    parser.add_argument("--save-interval", type=int, default=572)
+    parser.add_argument("--warmup-steps", type=int, default=114)
     parser.add_argument("--learning-rate", type=float, default=1.4e-3)
     parser.add_argument("--global-batch-size", type=int, default=524288)
     parser.add_argument("--rank-microbatch-size", type=int, default=8192)

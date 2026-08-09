@@ -36,6 +36,53 @@ def build_or_skip(build):
         pytest.skip(f"arm kernel package is not installed in this environment: {exc}")
 
 
+def test_every_arm_exempts_exactly_its_tagged_timescale_parameters_from_weight_decay():
+    """The exempt globs must equal the arm's own ``_no_weight_decay`` tags, and must all match.
+
+    Two independent failures live here, and both cost a billed machine.
+
+    The tags are INERT ON THEIR OWN: ``OptimConfig.build_groups`` reads ``group_overrides``
+    and nothing else, so a mixer that marks ``A_log``/``dt_bias``/``D`` still has weight
+    decay applied to them unless a pattern names them. That silently shrinks the recurrence
+    timescales the arms are supposed to be compared on.
+
+    A pattern that matches NOTHING is the opposite failure and it is fatal:
+    ``TransformerTrainModule`` builds the optimizer with ``strict=True``, and
+    ``_expand_param_globs`` raises ``OLMoConfigurationError`` for an unmatched pattern. So
+    one shared list across arms cannot be right -- ``xlstm`` has no such parameter at all,
+    and ``mamba-b3`` has no ``D``.
+    """
+    module = load_entrypoint()
+    from fnmatch import fnmatch
+
+    from olmo_core.nn.utils import no_weight_decay_param_names
+
+    for arm in module.RUNNABLE_ARMS:
+        config = module.build_model_config(arm, module.valid_init_seeds(arm)[0])
+        model = build_or_skip(lambda config=config: config.build(init_device="meta"))
+        names = [name for name, _ in model.named_parameters()]
+        tagged = set(no_weight_decay_param_names(model))
+
+        overrides = module.weight_decay_group_overrides(arm)
+        assert len(overrides) == 1, arm
+        assert overrides[0].opts == {"weight_decay": 0.0}, arm
+        patterns = list(overrides[0].params)
+
+        # Embeddings are exempt in every arm, exactly as the bake-off runner had them.
+        assert patterns[0] == "embeddings.weight", arm
+
+        # Every pattern matches something, or the optimizer build raises under strict=True.
+        for pattern in patterns:
+            assert any(fnmatch(name, pattern) for name in names), (arm, pattern)
+
+        # And the exempted set is exactly the tagged set, plus the embeddings.
+        exempted = {name for name in names if any(fnmatch(name, p) for p in patterns)}
+        assert exempted == tagged | {"embeddings.weight"}, arm
+
+        del model
+        gc.collect()
+
+
 def materialized_block(module, block_config, index):
     """Build one block the way training does, then give its meta parameters storage."""
     block = build_or_skip(
@@ -268,9 +315,12 @@ def test_reader_environment_checkpoint_and_dry_config_guards(monkeypatch, tmp_pa
     assert config.model.dtype == DType.float32
     assert config.train_module.dp_config.param_dtype == DType.bfloat16
     assert config.train_module.dp_config.reduce_dtype == DType.float32
+    assert config.train_module.optim.group_overrides == module.weight_decay_group_overrides(
+        "mamba-b3"
+    )
     assert config.trainer.save_folder == "s3://checkpoint-contract/"
-    assert config.trainer.max_duration.value == 3721
-    assert config.trainer.callbacks["checkpointer"].save_interval == 1861
+    assert config.trainer.max_duration.value == 1144
+    assert config.trainer.callbacks["checkpointer"].save_interval == 572
     assert config.trainer.callbacks["checkpointer"].max_checkpoints is None
     assert "lm_evaluator" not in config.trainer.callbacks
     assert "downstream_evaluator" not in config.trainer.callbacks
@@ -304,7 +354,7 @@ def test_commands_docs_and_reader_contract_are_complete():
     assert "reservoir-dolma2-v1" in guide
     assert "20 cells" in guide
     assert "10 mLSTM" in guide
-    assert "TPP 5.00007–5.00041" in guide
+    assert "TPP 1.53724–1.53735" in guide
     assert "--fanout-size 20" in guide
 
 
@@ -346,7 +396,7 @@ def test_four_arm_comparison_uses_full_3_to_1_architectures_at_matched_tpp():
 
     assert module.ARMS == ("mamba-b3", "xlstm", "mamba3-siso-pd", "native-pd")
     assert module.ATTENTION_LAYERS == (3, 7, 11, 15)
-    assert module.FROZEN_STEPS == 3721
+    assert module.FROZEN_STEPS == 1144
     assert module.FROZEN_GLOBAL_BATCH_SIZE == 524288
 
     for arm in module.ARMS:
@@ -356,7 +406,7 @@ def test_four_arm_comparison_uses_full_3_to_1_architectures_at_matched_tpp():
         assert sum(isinstance(mixer, AttentionConfig) for mixer in mixers) == 4
         assert abs(config.num_params - module.PARAMETER_TARGET) <= module.PARAMETER_TOLERANCE
         tpp = module.FROZEN_STEPS * module.FROZEN_GLOBAL_BATCH_SIZE / config.num_params
-        assert tpp == pytest.approx(5.0, abs=0.003)
+        assert tpp == pytest.approx(1.5373, abs=0.0001)
 
         recurrent = [
             mixer for index, mixer in enumerate(mixers) if index not in module.ATTENTION_LAYERS
@@ -386,14 +436,18 @@ def test_comparison_wave_is_arm_major_five_seed_single_image_fanout():
     assert schedule["cell_order"] == [
         arm for arm in expected_arms for _ in range(schedule["replicates_per_arm"])
     ]
-    assert schedule["steps"] == 3721
+    assert schedule["steps"] == 1144
     assert schedule["global_batch_size"] == 524288
-    assert schedule["tokens_per_cell"] == 1_950_875_648
-    assert schedule["target_tokens_per_parameter"] == 5.0
+    assert schedule["tokens_per_cell"] == 599_785_472
+    assert schedule["target_tokens_per_parameter"] == 1.5373
+    assert schedule["warmup_steps"] == 114
+    assert schedule["save_interval"] == 572
 
     assert "AWS_BATCH_JOB_ARRAY_INDEX" in run_yaml
     assert ".edullm/train_core6_arm.py" in run_yaml
-    assert "--steps 3721" in run_yaml
+    assert "--steps 1144" in run_yaml
+    assert "--warmup-steps 114" in run_yaml
+    assert "--save-interval 572" in run_yaml
     assert "--global-batch-size 524288" in run_yaml
     assert run_yaml.count("mamba-b3") == 5
     assert run_yaml.count("xlstm") == 5

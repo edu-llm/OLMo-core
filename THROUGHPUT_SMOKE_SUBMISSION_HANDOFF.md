@@ -1,6 +1,6 @@
 # Throughput smoke submission handoff
 
-Snapshot: 2026-08-08
+Snapshot: 2026-08-09
 
 This is the operational handoff for the five-cell Mamba comparison throughput
 smoke. It records the submission path, the measurement contract, and the
@@ -12,7 +12,7 @@ capacity; obtain those from a fresh `edullm check --json`.
 - Repository: `edu-llm/OLMo-core`
 - Local checkout: `/home/vs/AlphaAI/eduLLM/OLMo-core-flash-pd`
 - Branch: `edullm/mamba-comparison`
-- Current pushed commit: `6f5048645de57f5d755e44da82bc30c3642f3762`
+- Current pushed commit: `dac343fe232d6d7ee57f17cba5ccfd2235bbd8f9`
 - CLI observed while writing this handoff: `edullm 4.5.0`
 - Smoke spec: `.edullm/run-throughput-smoke.yaml`
 - Entrypoint: `.edullm/train_core6_arm.py`
@@ -21,25 +21,17 @@ capacity; obtain those from a fresh `edullm check --json`.
 - Team and W&B project: `memory-split`
 - Recent `edullm status --json` contains no Mamba comparison throughput run.
 
-The commit is pushed, and the local remote-tracking ref now contains it. The
-latest image build did **not** publish an image:
+The pushed commit has a successful image publication:
 
-- [failed image workflow for `6f50486`](https://github.com/edu-llm/OLMo-core/actions/runs/31284131601)
-- The native extension compiles and the GPU-independent sm80 assertion passes.
-- The new failure is the final standalone extension import:
-  `ImportError: libc10.so: cannot open shared object file`. The extension links
-  Torch libraries from `torch/lib`, but only the CUDA directory is in its
-  RPATH, and that validation process did not import Torch first.
+- [green image workflow for `dac343f`](https://github.com/edu-llm/OLMo-core/actions/runs/31322456424)
+- all three checks, including `Build and publish image`, completed successfully.
 
-Therefore the throughput smoke is **not submit-ready**. A local check can have
-no refusals while image questions remain deferred; do not submit until a newer
-commit's image workflow is green and has published exactly one image.
-
-The local working tree now contains a consolidated, uncommitted follow-up:
+The local working tree now contains a later, uncommitted comparison-budget and
+review update. Those bytes are **not** in the `dac343f` image:
 
 - the image imports Torch before `_flash_pd_native_cuda`, loading `libc10.so`;
 - bare/default submissions now run a bounded ten-step functional smoke through
-  the same preflighted runner rather than a full 3,721-step cell;
+  the same preflighted runner rather than a full 1,144-step cell;
 - every arm stores uniform FP32 master parameters while FSDP supplies BF16
   compute parameters, eliminating mixed-original-dtype FSDP failures;
 - all accelerated arms require rank-local A100 sm80, BF16 hardware support,
@@ -54,24 +46,27 @@ The local working tree now contains a consolidated, uncommitted follow-up:
 - Mamba3-SISO-PD keeps complex diagonals in FP32, uses a chunk-parallel
   backward, and performs no temperature-buffer host readbacks;
 - `.dockerignore` excludes local native artifacts, and source builds use a
-  fully pinned, non-isolated build-tool closure.
+  fully pinned, non-isolated build-tool closure;
+- the full comparison now matches mixer-bakeoff Run 1's measured per-cell
+  budget: 1,144 steps, 599,785,472 tokens, TPP 1.53724–1.53735;
+- `MIXER_OPTIMIZATION_REVIEW.md` records the independently checked architecture
+  and remaining optimization gates.
 
-CPU/static tests pass, but this combined working tree has not built or
-published an image.
+The latest non-dispatching check was run while only two red-first test files had
+been edited. It correctly refused `uncommitted_changes` and
+`commit_not_pushed`. The branch already contains `dac343f` on GitHub, but this
+checkout's narrow remote-tracking ref is stale. Commit the complete intended
+working tree, push the resulting new SHA, fetch the exact ref, and require a
+green image for that new SHA before submitting.
 
 ### Current Mamba-b3 contract
 
-`mamba-b3` deliberately remains the custom static-A, group-shared SO(3)
-trapezoidal mixer. It is not claimed to be pinned Mamba-3 with only SO(2)
-replaced. The user chose measured throughput/results over architectural
-fidelity, so this distinction is documentation rather than a submission
-blocker.
-
-The historical `official_fast` backend remains the default. An experimental
-`simple_gla` backend is strict, explicit, and checkpoint-recorded but is not
-selected by the arm. Local production-geometry mixer measurements found it
-5.98% faster with lower peak allocation; promotion still requires a
-whole-model/A100 result.
+`mamba-b3` selects the official Mamba-3 SISO scan with
+`rotation_block_size=3`, fused projections, and the quaternion/Rodrigues
+rotation path. `simple_gla` remains strict and opt-in. In the latest
+source-hashed RTX 5050 layer benchmark, `official_fast` was 0.6% faster than
+`simple_gla`; neither result may select the A100 default without a whole-model
+A100 comparison.
 
 ## What the smoke measures
 
@@ -87,6 +82,13 @@ All cells use data seed `210007`, sequence length 4096, 100 optimizer steps,
 a 524,288-token global batch, an 8,192-token rank microbatch, bfloat16, and
 eight A100 processes. Held-out evaluation and the decode probe are disabled.
 The checkpoint interval is 101, outside the timed run.
+
+`gpu-8xa100` means one eight-A100 node **per fan-out cell**. A five-cell smoke
+can therefore occupy up to 5 nodes / 40 A100s if every cell is admitted
+concurrently. The twenty-cell full wave can occupy up to 20 nodes / 160 A100s.
+Actual concurrency is controlled by the platform and capacity queue; cells may
+start in staggered groups. The `nodes: 1` field in a check is per cell, not for
+the entire fan-out.
 
 `WARMUP_STEPS_EXCLUDED=50` in the runner excludes compilation, allocator
 growth, and the first 50 steps from the throughput endpoint. The remaining 50
@@ -131,6 +133,16 @@ not replace the runner's fixed 50-step throughput exclusion.
 ## Submission procedure
 
 Run every command from the comparison checkout.
+
+There are three sequential gates:
+
+1. `.edullm/run-smoke.yaml`: 10-step functional smoke, five cells.
+2. `.edullm/run-throughput-smoke.yaml`: 100-step throughput smoke, five cells.
+3. `.edullm/run-comparison.yaml`: full 1,144-step comparison, twenty cells.
+
+Use the same commit, image, dataset release, compute profile, and
+`--attempts 1` contract for all three. Replace the `--spec`, experiment name,
+and fan-out size only as shown below.
 
 ### 1. Commit and push the exact source
 
@@ -247,6 +259,81 @@ cells completed and that each rank-0 JSON record names the expected arm,
 data/init seeds, world size, steady-state step count, throughput, memory,
 FLOPs/token, and MFU basis.
 
+## Functional smoke and full comparison commands
+
+The ten-step functional smoke uses:
+
+```bash
+edullm check --json \
+  --experiment mamba-comparison-smoke \
+  --dataset reservoir-dolma2-v1 \
+  --team memory-split \
+  --spec .edullm/run-smoke.yaml \
+  --compute gpu-8xa100 \
+  --attempts 1 \
+  --fanout-size 5 \
+  --fanout-index-parameter AWS_BATCH_JOB_ARRAY_INDEX
+```
+
+After a clean check, use the identical arguments with `edullm submit`. Require
+all five cells to complete before the throughput smoke.
+
+After both five-cell smokes pass, check the twenty-cell science wave:
+
+```bash
+edullm check --json \
+  --experiment mamba-comparison \
+  --dataset reservoir-dolma2-v1 \
+  --team memory-split \
+  --spec .edullm/run-comparison.yaml \
+  --compute gpu-8xa100 \
+  --attempts 1 \
+  --fanout-size 20 \
+  --fanout-index-parameter AWS_BATCH_JOB_ARRAY_INDEX
+```
+
+Then submit with the same arguments, changing only `check --json` to `submit`.
+The full wave is arm-major: five Mamba-b3 cells, five xLSTM cells, five
+Mamba3-SISO-PD cells, then five native-PD cells.
+
+### Running only Mamba-b3 and xLSTM
+
+Because the wave is arm-major, the first ten cells of the same spec are exactly
+Mamba-b3 and xLSTM, five seeds each. No separate spec is needed; lower the
+fan-out and leave everything else identical:
+
+```bash
+edullm check --json \
+  --experiment mamba-comparison \
+  --dataset reservoir-dolma2-v1 \
+  --team memory-split \
+  --spec .edullm/run-comparison.yaml \
+  --compute gpu-8xa100 \
+  --attempts 1 \
+  --fanout-size 10 \
+  --fanout-index-parameter AWS_BATCH_JOB_ARRAY_INDEX
+```
+
+Indices 0-4 are Mamba-b3 and 5-9 are xLSTM, on the same corpus, budget, seeds,
+and geometry as the four-arm wave, so the two arms stay comparable to each other
+and to the remaining arms if those are run later.
+
+For one arm only, `--fanout-size 5` gives Mamba-b3. xLSTM has no contiguous
+prefix of its own, so run it inside the ten-cell subset above.
+
+### Local verification standing behind this state
+
+On a local RTX 5050 (sm120, not the sm80 submission target), the xLSTM,
+Mamba-3, platform-entrypoint, runner, and static contract suites report 608
+passed and 2 failed. Both failures are `fp8_test.py` raising
+`ModuleNotFoundError: torchao`, an optional package absent from that laptop
+environment; no arm enables FP8 and the runner never imports Float8.
+
+FlashRNN's sLSTM BF16 kernel compiles and backpropagates locally only when the
+cuBLAS, cuSPARSE, and cuSOLVER include directories are on `CPATH`. Without them
+its just-in-time build fails in a way that reads like a kernel defect and is
+not one.
+
 ## Dataset and image contract
 
 The platform supplies the published release `reservoir-dolma2-v1`; do not
@@ -263,9 +350,9 @@ at that exact commit and ships:
 - `token-order/v1`
 - `tokenizer/v1`
 
-The Dockerfile repeats that list as a build-time assertion. No image has yet
-reached that final assertion for the current commit because the native CUDA
-extension fails earlier.
+The Dockerfile repeats that list as a build-time assertion. The `dac343f`
+image workflow reached and passed the final build checks. Any new commit still
+requires its own green publication.
 
 The image is intended to contain Torch 2.10 built for CUDA 12.8 and sm80,
 Mamba-3 at revision `e9594ce1c732d97440f0332fdc43170a2294dbfa`,
@@ -319,8 +406,9 @@ Training cell failure
 ## Immediate next action
 
 Review and commit the consolidated working tree, including this handoff, then
-push the final SHA and wait for a green image workflow. Local sm120 tests have
-verified FlashRNN BF16 forward/backward, native-PD parity and zero-sync
-dispatch, Mamba-PD mixed/tail parity, and the scatter deadlock fix; sm80 image
-execution remains required. Once the image is green, repeat the exact-ref
-fetch, `check`, and `submit` sequence above.
+push the final SHA and wait for its green image workflow. Fetch the exact
+remote-tracking ref, repeat the non-dispatching check, and submit only after
+`refusals` is empty. Local sm120 tests cover FlashRNN BF16
+forward/backward, native-PD parity and zero-sync dispatch, Mamba-PD mixed/tail
+parity, and the scatter deadlock fix; the five-cell sm80 functional smoke is
+still the end-to-end runtime gate.

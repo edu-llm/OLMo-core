@@ -1052,6 +1052,55 @@ def test_a_real_run_reaches_the_preflight_once_the_training_environment_is_up(ru
     assert run_main.run() == ["build_config", "prepare", "preflight", "train", "teardown"]
 
 
+@pytest.mark.parametrize("arm", arms.RUNNABLE_ARMS)
+def test_the_runner_exempts_the_same_timescale_parameters_the_ledger_declares(arm, monkeypatch):
+    """The runner is what every spec dispatches, so its optimizer is the one that trains.
+
+    The ledger beside it already declares which parameters each arm keeps out of weight
+    decay. This asserts the runner asks the ledger rather than carrying a second, shorter
+    list -- the shape of drift that decays ``A_log``/``dt_bias``/``D`` for eleven hours while
+    every printed field still reads correctly.
+    """
+    from olmo_core.data import NumpyDatasetDType, TokenizerConfig
+
+    corpus = entry.Corpus(
+        dataset_id="pretrain/reservoir-dolma2",
+        version="v1",
+        paths=["s3://reader-owned/train-00000.u32le.bin"],
+        dtype=NumpyDatasetDType.uint32,
+        tokenizer=TokenizerConfig.dolma2(),
+        rows=250_242_924_544,
+        val_paths=["s3://reader-owned/val-00000.u32le.bin"],
+        val_rows=975_077_376,
+    )
+    monkeypatch.setattr(entry, "resolve_corpus", lambda **_: corpus)
+
+    data_seed = arms.DATA_SEEDS[0]
+    opts, overrides = entry.build_parser().parse_known_args(
+        [
+            "a-run-id",
+            "--arm",
+            arm,
+            "--data-seed",
+            str(data_seed),
+            "--init-seed",
+            str(arms.INIT_SEEDS_BY_ARM[arm][data_seed]),
+            "--save-folder",
+            "s3://bucket/checkpoints/",
+            "--dataset-id",
+            "pretrain/reservoir-dolma2",
+            "--dataset-version",
+            "v1",
+            "--dataset-tokenizer",
+            "tokenizer/dolma2-bpe",
+        ]
+    )
+
+    config = entry.build_config(opts, overrides)
+
+    assert config.train_module.optim.group_overrides == arms.weight_decay_group_overrides(arm)
+
+
 def test_a_refused_preflight_still_tears_the_training_environment_down(run_main, monkeypatch):
     def refuse(*_) -> None:
         raise entry.Refusal(

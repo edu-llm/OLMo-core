@@ -18,9 +18,11 @@ replicates, ordered arm-major. Every replicate shares its data seed across all
 four arms. Init seeds are not paired across arms because the parameter names,
 shapes, and draw order differ.
 
-Every cell consumes exactly 1,950,875,648 tokens: 3,721 steps at global batch
+Every cell consumes exactly 599,785,472 tokens: 1,144 steps at global batch
 524,288. The exact models contain 390,142,976–390,169,664 parameters, giving
-TPP 5.00007–5.00041. Sequence length is 4096 and every cell uses eight A100
+TPP 1.53724–1.53735. This matches the measured mixer-bakeoff Run 1 budget;
+its original 1,907-step plan would have been TPP about 2.56, and the later
+3,721-step Run 2 used TPP about 5. Sequence length is 4096 and every cell uses eight A100
 GPUs, BF16 parameters, FP32 gradient reduction, compilation, the same
 optimizer and schedule, and the same published dataset release.
 
@@ -81,4 +83,7 @@ submission, so any later replacement is a documented deviation.
 
 ## Deviations
 
-None. The experiment has not dispatched.
+- Before dispatch, the prepared 3,721-step / TPP≈5 budget copied from
+  mixer-bakeoff Run 2 was replaced with measured Run 1's 1,144-step budget.
+  All 20 cells moved together; the five-replicate arm-major design, data
+  release, sequence length, batch sizes, LR, hardware, and seeds are unchanged.
