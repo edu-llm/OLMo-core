@@ -181,6 +181,12 @@ def test_launcher_enforces_secrets_proxy_gate_and_four_hour_total_limit():
     assert "torch.distributed.run" not in launch
 
 
+def test_final_validation_launcher_allows_a_new_wandb_project():
+    launch = (RUNPOD / "launch_final_validation.sh").read_text(encoding="utf-8")
+    assert 'EDULLM_WANDB_PROJECT="${EDULLM_WANDB_PROJECT:-hpo-final-validation}"' in launch
+    assert 'WANDB_PROJECT="${EDULLM_WANDB_PROJECT}"' in launch
+
+
 def test_bootstrap_pins_commit_and_installs_hpo_extras():
     bootstrap = (RUNPOD / "bootstrap.sh").read_text(encoding="utf-8")
     assert "4f385fe54918b96756042a89d504ac19b928e1b4" in bootstrap

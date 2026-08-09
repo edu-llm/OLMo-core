@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import os
 
-import pytest
-
 from olmo_core.hpo.runtime_secrets import (
     OPENAI_HOME_KEY_FILE,
     WANDB_HOME_KEY_FILE,
