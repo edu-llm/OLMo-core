@@ -220,6 +220,35 @@ def test_official_umup_executes_cpu_forward_and_backward():
     assert model.lm_head.norm.weight.mup_type == "norm"
 
 
+def test_official_umup_supports_unreduced_eval_loss():
+    from olmo_core.nn.transformer import TransformerConfig
+    from olmo_core.nn.transformer.config import TransformerBlockType
+
+    config = TransformerConfig.llama_like(
+        d_model=32,
+        hidden_size_multiplier=2.0,
+        n_layers=2,
+        n_heads=4,
+        vocab_size=64,
+        block_name=TransformerBlockType.reordered_norm,
+        qk_norm=True,
+    )
+    model = config.build(init_device="meta")
+    apply_umup_model(model, n_layers=config.n_layers)
+    model.to_empty(device=torch.device("cpu"))
+    model.init_weights(device=torch.device("cpu"))
+
+    input_ids = torch.randint(0, config.vocab_size, (2, 8))
+    labels = input_ids.roll(-1, dims=1)
+    labels[:, -1] = -100
+    output = model(input_ids, labels=labels, loss_reduction="none")
+
+    assert output.loss.shape == labels.shape
+    assert output.ce_loss.shape == labels.shape
+    assert torch.isfinite(output.loss).all()
+    assert torch.equal(output.loss[:, -1], torch.zeros(2))
+
+
 def test_umup_metadata_is_complete_and_marks_depth_and_readout():
     model = torch.nn.Module()
     model.blocks = torch.nn.ModuleList([torch.nn.Linear(4, 4, bias=False)])

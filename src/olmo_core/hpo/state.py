@@ -265,9 +265,12 @@ class ControllerState:
                     raise ValueError(
                         f"inherited START references unknown parent {alloc.parent_trial_id}"
                     )
-                if parent.current_fidelity != alloc.current_fidelity:
+                # An IPBT descendant may wait in the candidate pool while its donor advances.
+                # The allocation remains valid when it references an earlier completed donor
+                # checkpoint; it must only be forbidden from claiming future donor fidelity.
+                if parent.current_fidelity < alloc.current_fidelity:
                     raise ValueError(
-                        "inherited START must begin at its parent's completed fidelity"
+                        "inherited START cannot begin beyond its parent's completed fidelity"
                     )
             rec = self._trial(alloc.trial_id)
             rec.parent_trial_id = alloc.parent_trial_id
@@ -288,7 +291,22 @@ class ControllerState:
                     f"trial {alloc.trial_id} completed fidelity {rec.current_fidelity}, "
                     f"allocation claims {alloc.current_fidelity}"
                 )
-            if rec.latest_verdict is None or not rec.latest_verdict.is_eligible_for_resume():
+            full_fidelity_rescue = bool(
+                (alloc.transition or {}).get("full_fidelity_rescue", False)
+            )
+            saturated_rescue = (
+                full_fidelity_rescue
+                and rec.latest_verdict is not None
+                and rec.latest_verdict.kind is BTTVerdictKind.SATURATED
+                and rec.latest_verdict.disposition is BTTDisposition.COMPLETE
+            )
+            if (
+                rec.latest_verdict is None
+                or (
+                    not rec.latest_verdict.is_eligible_for_resume()
+                    and not saturated_rescue
+                )
+            ):
                 raise ValueError(f"trial {alloc.trial_id} is not eligible to resume")
             if (
                 alloc.verdict_id is not None

@@ -284,3 +284,40 @@ def test_completed_boundary_checkpoint_recovers_observation_without_retraining()
     )
     assert result.tokens == 1024
     assert result.checkpoint_ref == "/ckpt/t0/step1"
+
+
+def test_completed_redispatch_reports_checkpoint_loaded_from_trial_folder():
+    diagnostics = HpoDiagnosticsCallback()
+    diagnostics.heldout_ce = 3.5
+    diagnostics.heldout_tokens_seen = 1024
+
+    class FakeTrainer:
+        load_path = "/donor/t0/step0"
+        save_folder = "/ckpt/t0"
+
+        def __init__(self):
+            self.global_train_tokens_seen = 0
+            self.callbacks = {"checkpointer": SimpleNamespace(_latest_checkpoint_path="")}
+            self.checkpointer = SimpleNamespace(
+                latest_checkpoint=lambda path: f"{path}/step1",
+            )
+
+        def maybe_load_checkpoint(self, *args, **kwargs):
+            self.global_train_tokens_seen = 1024
+            return True
+
+        def fit(self):
+            raise AssertionError("completed allocation must not retrain")
+
+    result = execute_segment(
+        FakeTrainer(),
+        diagnostics=diagnostics,
+        spec=SegmentSpec(
+            trial_id="t0",
+            target_tokens=2048,
+            hard_stop_tokens=1024,
+            lineage_global_batch_size=1024,
+        ),
+        actual_global_batch_size=1024,
+    )
+    assert result.checkpoint_ref == "/ckpt/t0/step1"

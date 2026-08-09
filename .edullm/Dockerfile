@@ -120,6 +120,7 @@ RUN set -eux; \
 # satisfied and skip -- leaving an image whose package list looks right and whose code is
 # absent.
 COPY pyproject.toml ./
+COPY .edullm/requirements-task-loss-eval.txt /tmp/requirements-task-loss-eval.txt
 
 # TORCH IS PINNED TO AN EXACT VERSION AND INSTALLED FIRST, WHICH IS THE WHOLE ARGUMENT.
 #
@@ -218,6 +219,7 @@ RUN set -eux; \
     python -m pip install --no-cache-dir "torch==2.9.0"; \
     python -c "import tomllib; project = tomllib.load(open('pyproject.toml', 'rb'))['project']; groups = ('wandb', 'hpo'); dependencies = project['dependencies'] + [dependency for group in groups for dependency in project['optional-dependencies'][group]]; open('/tmp/dependencies.txt', 'w').write('\n'.join(dependencies) + '\n')"; \
     python -m pip install --no-cache-dir -r /tmp/dependencies.txt boto3 "botocore[crt]"; \
+    python -m pip install --no-cache-dir -r /tmp/requirements-task-loss-eval.txt; \
     rm /tmp/dependencies.txt; \
     python -m pip install --no-cache-dir "edullm-data @ https://github.com/edu-llm/edullm-data/archive/38bf831a6c3f445e394784018441fd59288b876c.tar.gz"
 
@@ -301,6 +303,7 @@ RUN set -eux; \
     python -c "import torch; assert torch.__version__.startswith('2.9.0'), f'torch was moved off the pin: {torch.__version__}'"; \
     python -c "import torch; assert torch.version.cuda, 'the CUDA build of torch was replaced by a CPU wheel'"; \
     python -c "import ifbo, unit_scaling"; \
+    python -c "from olmo.eval.downstream import label_to_task_map; assert 'arc_easy_val_rc_5shot_bpb' in label_to_task_map"; \
     python -c "from olmo_core.hpo.artifacts import ensure_ftpfn_artifact; print(ensure_ftpfn_artifact())"; \
     python -c "import boto3, wandb; from olmo_core.data import TokenizerConfig; from olmo_core.nn.transformer import TransformerConfig; print(TransformerConfig.olmo2_190M(vocab_size=TokenizerConfig.gpt2().padded_vocab_size()).__class__.__name__)"; \
     python -c "import boto3; from botocore import UNSIGNED; from botocore.config import Config; from botocore.stub import Stubber; client = boto3.client('s3', region_name='us-east-1', config=Config(signature_version=UNSIGNED)); stub = Stubber(client); stub.add_response('put_object', {}); stub.activate(); client.put_object(Bucket='b', Key='k', Body=b'123456789', ChecksumAlgorithm='CRC32C')"; \

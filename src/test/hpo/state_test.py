@@ -558,3 +558,52 @@ def test_inherited_start_preserves_transition_lineage():
     record = replay(log.events).trials["child"]
     assert record.lineage_id == "L-child"
     assert record.parent_lineage_id == "L-parent"
+
+
+def test_inherited_start_may_use_historical_parent_checkpoint():
+    parent = _alloc(0, "parent", ActionKind.START, 0, 20)
+    child = replace(
+        _alloc(1, "child", ActionKind.START, 10, 20, parent="parent"),
+        checkpoint_ref="/checkpoints/parent/step10",
+    )
+    log = EventLog()
+    log.append(Event(0, EventKind.ALLOCATION, parent.to_dict()))
+    log.append(
+        Event(
+            1,
+            EventKind.OBSERVATION,
+            {
+                "trial_id": "parent",
+                "tokens": 20,
+                "ce": 3.0,
+                "observation_hash": observation_hash("parent", 20, 3.0),
+            },
+        )
+    )
+    log.append(Event(2, EventKind.ALLOCATION, child.to_dict()))
+
+    state = replay(log.events)
+    assert state.trials["child"].current_fidelity == 10
+
+
+def test_inherited_start_rejects_future_parent_fidelity():
+    parent = _alloc(0, "parent", ActionKind.START, 0, 10)
+    child = _alloc(1, "child", ActionKind.START, 20, 30, parent="parent")
+    log = EventLog()
+    log.append(Event(0, EventKind.ALLOCATION, parent.to_dict()))
+    log.append(
+        Event(
+            1,
+            EventKind.OBSERVATION,
+            {
+                "trial_id": "parent",
+                "tokens": 10,
+                "ce": 4.0,
+                "observation_hash": observation_hash("parent", 10, 4.0),
+            },
+        )
+    )
+    log.append(Event(2, EventKind.ALLOCATION, child.to_dict()))
+
+    with pytest.raises(ValueError, match="cannot begin beyond"):
+        replay(log.events)

@@ -79,6 +79,7 @@ def test_hpo_probe_session_mirrors_only_ephemeral_files(tmp_path, monkeypatch):
     durable.write_text("{}")
 
     logged_artifacts = []
+    logged_metrics = []
 
     class FakeArtifact:
         def __init__(self, name, type):
@@ -96,6 +97,7 @@ def test_hpo_probe_session_mirrors_only_ephemeral_files(tmp_path, monkeypatch):
     class FakeRun:
         def __init__(self):
             self.summary = {}
+            self.step = 7
 
         def log_artifact(self, artifact):
             logged_artifacts.append(artifact)
@@ -109,7 +111,7 @@ def test_hpo_probe_session_mirrors_only_ephemeral_files(tmp_path, monkeypatch):
             return FakeWandb.run
 
         def log(self, metrics, step):
-            del metrics, step
+            logged_metrics.append((metrics, step))
 
         def finish(self, exit_code=0, quiet=True):
             del exit_code, quiet
@@ -126,11 +128,14 @@ def test_hpo_probe_session_mirrors_only_ephemeral_files(tmp_path, monkeypatch):
     )
     session.record_study_result({"arm": "no_proxy"}, ephemeral)
     session.record_proxy_cohort({"decision": "prune_promote", "metrics": {}}, output_path=durable)
+    session.log_heartbeat()
     session.close()
 
     assert len(logged_artifacts) == 1
     assert logged_artifacts[0].name == "study-result"
     assert logged_artifacts[0].files == [str(ephemeral.resolve())]
+    assert logged_metrics[0][0]["hpo/controller_alive"] == 1
+    assert logged_metrics[0][1] == 7
 
 
 def test_hpo_probe_session_requires_api_key(monkeypatch):

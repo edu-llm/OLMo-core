@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Optional, Sequence
@@ -141,7 +142,20 @@ class HpoProbeSession:
             config=dict(config or {}),
         )
         self._durable_roots = tuple(durable_roots)
-        self._step = 0
+        # ``run.step`` can remain zero after a resume even when the backend has
+        # existing history. Query its last durable step so new heartbeats are
+        # not discarded as out-of-order history.
+        self._step = int(self._run.step)
+        try:
+            public_run = self._wandb.Api().run(
+                f"{self._run.entity}/{self._run.project}/{self._run.id}"
+            )
+            last_step = int(public_run._attrs.get("historyKeys", {}).get("lastStep", -1))
+            self._step = max(self._step, last_step + 1)
+        except Exception:
+            # Probe initialization already succeeded; transient public-API
+            # metadata failures should not prevent controller recovery.
+            pass
         self._finished = False
         self._mirrored_paths: set[str] = set()
 
@@ -172,6 +186,18 @@ class HpoProbeSession:
 
         metrics = collect_controller_metrics(controller, step=self._step)
         self._wandb.log(metrics, step=self._step)
+        self._step += 1
+
+    def log_heartbeat(self) -> None:
+        """Keep W&B aware that the controller is alive while workers run."""
+
+        self._wandb.log(
+            {
+                "hpo/controller_alive": 1,
+                "hpo/heartbeat_unix_seconds": time.time(),
+            },
+            step=self._step,
+        )
         self._step += 1
 
     def record_study_result(self, payload: Mapping[str, Any], path: str | Path) -> None:

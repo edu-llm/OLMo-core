@@ -230,6 +230,29 @@ def apply_umup_parameter_metadata(model, *, n_layers: int) -> None:
             raise RuntimeError(f"failed to attach unit_scaling metadata to parameter {name}")
 
 
+def _umup_apply_init(init_fun, weight, *, generator=None) -> None:
+    """Initialize sharded u-μP weights without illegal inplace writes to autograd views."""
+
+    import torch
+    from torch.distributed.tensor import DTensor
+
+    from ..distributed.utils import distribute_like
+
+    def initialize(tensor) -> None:
+        if generator is None:
+            init_fun(tensor)
+        else:
+            init_fun(tensor, generator=generator)
+
+    with torch.no_grad():
+        if not isinstance(weight, DTensor):
+            initialize(weight)
+            return
+        full = torch.empty(weight.shape, dtype=weight.dtype, device=weight.device)
+        initialize(full)
+        weight.copy_(distribute_like(weight, full))
+
+
 def apply_umup_model(model, *, n_layers: int) -> None:
     """Install explicit official unit-scaled operations on a dense OLMo2 transformer.
 
@@ -254,8 +277,6 @@ def apply_umup_model(model, *, n_layers: int) -> None:
     from ..nn.layer_norm import RMSNorm
     from ..nn.lm_head import LMHead, LMLossImplementation, LMOutputWithLoss
     from ..nn.transformer.block import ReorderedNormTransformerBlock
-    from ..nn.transformer.init import _apply_init
-
     if getattr(model, "_umup_execution_backend", None) == UMUP_EXECUTION_BACKEND:
         return
     if n_layers <= 0 or len(model.blocks) != n_layers:
@@ -393,26 +414,48 @@ def apply_umup_model(model, *, n_layers: int) -> None:
             if return_logits is False:
                 raise RuntimeError("'return_logits=False' is only valid when labels are provided")
             return module.w_out(hidden)
-        if loss_reduction not in ("mean", "sum"):
-            raise RuntimeError("official unit-scaled cross entropy supports mean or sum reduction")
+        if loss_reduction not in ("mean", "sum", "none"):
+            raise RuntimeError("unsupported unit-scaled cross entropy reduction")
 
         logits = module.w_out(hidden)
         local_logits = get_local_tensor(logits).float().view(-1, module.vocab_size)
         local_labels = get_local_tensor(labels).contiguous().view(-1)
-        ce_loss = U.cross_entropy(
-            local_logits,
-            local_labels,
-            ignore_index=ignore_index,
-            reduction=loss_reduction,
-        )
+        if loss_reduction == "none":
+            # unit_scaling.functional.cross_entropy hard-codes a summed PyTorch loss and
+            # therefore only accepts "mean" or "sum". Evaluation needs one loss per token.
+            # Reproduce that public implementation's unit-scaling transforms, then leave
+            # PyTorch's cross entropy unreduced.
+            import torch.nn.functional as F
+
+            vocab_size = local_logits.shape[-1]
+            scaled_logits = U.scale_bwd(
+                local_logits,
+                vocab_size / math.sqrt(vocab_size - 1),
+            )
+            scaled_logits = U.scale_fwd(scaled_logits, 1.0)
+            ce_loss = F.cross_entropy(
+                scaled_logits,
+                local_labels,
+                ignore_index=ignore_index,
+                reduction="none",
+            )
+        else:
+            ce_loss = U.cross_entropy(
+                local_logits,
+                local_labels,
+                ignore_index=ignore_index,
+                reduction=loss_reduction,
+            )
         z_loss = None
         if z_loss_multiplier is not None:
             z_squared = local_logits.logsumexp(-1).pow(2)
             mask = local_labels != ignore_index
             if loss_reduction == "mean":
                 z_squared = (z_squared * mask).sum() / mask.sum()
-            else:
+            elif loss_reduction == "sum":
                 z_squared = (z_squared * mask).sum()
+            else:
+                z_squared = z_squared * mask
             z_loss = z_loss_multiplier * z_squared
         loss = ce_loss if z_loss is None else ce_loss + z_loss
         if return_logits is False:
@@ -483,10 +526,10 @@ def apply_umup_model(model, *, n_layers: int) -> None:
         initialized = set()
         for child in module.modules():
             if isinstance(child, (nn.Linear, nn.Embedding)) and id(child.weight) not in initialized:
-                _apply_init(nn.init.normal_, child.weight, generator=generator)
+                _umup_apply_init(nn.init.normal_, child.weight, generator=generator)
                 initialized.add(id(child.weight))
             if isinstance(child, nn.Linear) and child.bias is not None:
-                _apply_init(nn.init.zeros_, child.bias)
+                _umup_apply_init(nn.init.zeros_, child.bias)
         # ``to_empty()`` and FSDP materialization replace Parameter objects, so restore the
         # official optimizer protocol on the final parameters rather than trusting meta tensors.
         apply_umup_parameter_metadata(module, n_layers=n_layers)

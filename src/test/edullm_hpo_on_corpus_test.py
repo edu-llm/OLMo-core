@@ -540,6 +540,137 @@ def test_worker_oom_returns_typed_fatal_observation(monkeypatch, tmp_path):
     assert result.heldout_ce != result.heldout_ce
 
 
+def test_single_resume_opt_in_uses_eight_rank_finalist_and_charges_all_gpus(
+    monkeypatch, tmp_path
+):
+    allocation = SimpleNamespace(
+        trial_id="winner",
+        decision_id=41,
+        kind="resume",
+        target_fidelity=250_019_840,
+        realized_hps={"global_batch_mult": 0.5},
+        checkpoint_ref="/ckpt/trials/winner/step12208",
+        transition={"full_fidelity_rescue": True},
+    )
+    spec = {
+        "base_global_batch_size": 32_768,
+        "experiment_factory": "module:factory",
+        "factory_kwargs": {
+            "sequence_length": 2_048,
+            "rank_microbatch_size": 4_096,
+        },
+        "controller": {
+            "target_tokens": 500_039_680,
+            "quantum": 50_003_968,
+            "checkpoint_root": "/ckpt",
+            "worker_count": 8,
+        },
+        "search_validation_callback": "search_validation",
+        "untouched_evaluator": "final_evaluation",
+        "heldout_metric": "eval/search_validation/val/CE loss",
+        "gpu_ids": list(range(8)),
+        "segment_spec_dir": str(tmp_path),
+        "finalist_continuation": {
+            "enabled": True,
+            "world_size": 8,
+            "rank_microbatch_size": 2_048,
+        },
+    }
+    captured = {}
+
+    def run(argv, *, env, **kwargs):
+        captured.update(argv=argv, env=env, kwargs=kwargs)
+        return SimpleNamespace(
+            returncode=0,
+            stderr="",
+            stdout=json.dumps(
+                {
+                    "trial_id": "winner",
+                    "tokens": 250_019_840,
+                    "heldout_ce": 3.25,
+                    "train_ce_history": [3.4, 3.3],
+                    "grad_norm_history": [0.9],
+                    "activation_ratio": None,
+                    "numeric_failure": False,
+                    "checkpoint_ref": "/ckpt/trials/winner/step15260",
+                }
+            ),
+        )
+
+    ticks = iter((100.0, 103.0))
+    monkeypatch.setattr(entry.subprocess, "run", run)
+    monkeypatch.setattr(entry.time, "perf_counter", lambda: next(ticks))
+    result = entry._dispatch_allocations(
+        allocations=[allocation],
+        controller_spec=spec,
+        run_id="same-run",
+        param_dtype="bfloat16",
+    )[0]
+
+    assert captured["argv"][1:3] == ["-m", "torch.distributed.run"]
+    assert "--nproc-per-node=8" in captured["argv"]
+    assert captured["env"]["CUDA_VISIBLE_DEVICES"] == "0,1,2,3,4,5,6,7"
+    assert captured["env"]["EDULLM_FINALIST_CONTINUATION"] == "1"
+    assert "WORLD_SIZE" not in captured["env"]  # torchrun owns rank metadata
+    payload = json.loads((tmp_path / "decision-41.json").read_text())
+    assert payload["global_batch_size"] == 16_384
+    assert payload["factory_kwargs"]["rank_microbatch_size"] == 2_048
+    assert payload["finalist_continuation"]["world_size"] == 8
+    assert result.checkpoint_ref.endswith("step15260")
+    assert result.accelerator_seconds == pytest.approx(24.0)
+
+
+def test_finalist_opt_in_never_collapses_a_multi_allocation_batch():
+    allocations = [
+        SimpleNamespace(
+            kind="resume",
+            checkpoint_ref=f"/ckpt/t{index}",
+            transition=None,
+        )
+        for index in range(2)
+    ]
+    assert (
+        entry._eligible_finalist_continuation(
+            allocations,
+            controller_spec={
+                "finalist_continuation": {
+                    "enabled": True,
+                    "world_size": 8,
+                    "rank_microbatch_size": 2_048,
+                }
+            },
+            gpu_ids=list(range(8)),
+        )
+        is None
+    )
+
+
+def test_finalist_opt_in_preserves_an_indivisible_lineage_on_one_gpu():
+    allocation = SimpleNamespace(
+        kind="resume",
+        checkpoint_ref="/ckpt/t0",
+        transition=None,
+        realized_hps={"global_batch_mult": 0.875},
+    )
+    assert (
+        entry._eligible_finalist_continuation(
+            [allocation],
+            controller_spec={
+                "base_global_batch_size": 32_768,
+                "factory_kwargs": {"rank_microbatch_size": 4_096},
+                "controller": {"quantum": 50_003_968, "target_tokens": 500_039_680},
+                "finalist_continuation": {
+                    "enabled": True,
+                    "world_size": 8,
+                    "rank_microbatch_size": 2_048,
+                },
+            },
+            gpu_ids=list(range(8)),
+        )
+        is None
+    )
+
+
 def test_controller_runs_untouched_evaluator_once(monkeypatch):
     calls = []
 
@@ -696,8 +827,12 @@ def test_frozen_evidence_is_reporting_only_until_common_cohort_passes():
         entry._validate_evidence_gates(tampered)
 
 
+@pytest.mark.parametrize(
+    ("proxy_seconds", "expected_decision"),
+    [(8.0, "prune_promote"), (12.0, "reporting_only")],
+)
 def test_proxy_cohort_executes_paired_first_rung_and_persists_admission(
-    monkeypatch, tmp_path, capsys
+    monkeypatch, tmp_path, capsys, proxy_seconds, expected_decision
 ):
     root = Path(__file__).resolve().parents[2] / ".edullm"
     monkeypatch.setenv("EDULLM_CHECKPOINT_DIR", str(tmp_path / "checkpoints"))
@@ -723,7 +858,7 @@ def test_proxy_cohort_executes_paired_first_rung_and_persists_admission(
                     activation_ratio=None,
                     numeric_failure=False,
                     checkpoint_ref=f"/ckpt/{allocation.trial_id}",
-                    accelerator_seconds=10.0 if reference else 8.0,
+                    accelerator_seconds=10.0 if reference else proxy_seconds,
                 )
             )
         return results
@@ -744,13 +879,25 @@ def test_proxy_cohort_executes_paired_first_rung_and_persists_admission(
     )
     assert entry.run_proxy_cohort(args) == 0
     artifact = json.loads(output.read_text())
-    assert artifact["decision"] == "prune_promote"
+    assert artifact["decision"] == expected_decision
     assert set(artifact["proxy_observations"]) == set(artifact["reference_observations"])
     assert len(artifact["proxy_observations"]) == 16
     assert artifact["metrics"]["proxy_kind"] == "umup_frozen_layer"
-    assert artifact["metrics"]["net_compute_savings"] == pytest.approx(0.2)
+    assert artifact["metrics"]["net_compute_savings"] == pytest.approx(
+        1.0 - proxy_seconds / 10.0
+    )
     assert len(calls) == 4  # two 8-worker batches for each side
     assert json.loads(capsys.readouterr().out)["output_path"] == str(output)
+
+    monkeypatch.setattr(
+        entry,
+        "_dispatch_allocations",
+        lambda **kwargs: pytest.fail(f"existing evidence was recomputed: {kwargs}"),
+    )
+    assert entry.run_proxy_cohort(args) == 0
+    reused = json.loads(capsys.readouterr().out)
+    assert reused["decision"] == expected_decision
+    assert reused["reused_existing_evidence"] is True
 
 
 def test_proxy_cohort_fails_before_dispatch_when_official_umup_is_unavailable(
@@ -1105,11 +1252,29 @@ def test_three_arm_specs_have_shared_2b_contract_and_only_declared_ablations():
     assert entry._validate_evidence_gates(no_proxy).value == "prune_promote"
 
 
+def test_posthoc_no_centaur_variant_removes_the_failed_proxy():
+    from olmo_core.hpo.arms import Arm
+
+    contract = entry._arm_contract(
+        Arm.NO_CENTAUR,
+        "proxy_removed_after_failed_admission",
+    )
+    assert contract["model_parameterization"] == "stock_olmo2_190m"
+    assert contract["freeze_first_n_blocks"] == 0
+    assert contract["llm_ratio"] == 0.0
+    assert contract["llm_scope"] == "none"
+
+
 def test_global_batch_search_is_aligned_to_every_fidelity_rung():
     quantum = 50_003_968
     for requested in (16_384.0, 30_000.0, 32_768.0, 60_000.0, 65_536.0):
-        realized = entry._aligned_global_batch_size(requested, quantum=quantum)
+        realized = entry._aligned_global_batch_size(
+            requested,
+            quantum=quantum,
+            multiple=4_096,
+        )
         assert quantum % realized == 0
+        assert realized % 4_096 == 0
 
 
 def test_study_result_persists_winner_top_five_and_a100_seconds(tmp_path):

@@ -35,7 +35,7 @@ import tempfile
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 # Environment variables that betray an outer (torchrun/torchelastic) launcher.
 _TORCHRUN_MARKERS = (
@@ -138,6 +138,28 @@ def build_worker_argv(
     if segment_spec is not None:
         argv.extend(["--segment-spec", segment_spec])
     return argv
+
+
+def build_finalist_worker_argv(
+    worker_argv: List[str],
+    *,
+    world_size: int,
+    master_port: int,
+) -> List[str]:
+    """Wrap one segment worker in a single-node ``torchrun`` finalist launch."""
+    if world_size <= 1:
+        raise ValueError("finalist world size must be greater than one")
+    if len(worker_argv) < 2:
+        raise ValueError("worker argv must name a Python executable and script")
+    return [
+        worker_argv[0],
+        "-m",
+        "torch.distributed.run",
+        f"--nproc-per-node={world_size}",
+        "--master-addr=127.0.0.1",
+        f"--master-port={master_port}",
+        *worker_argv[1:],
+    ]
 
 
 def _parse_args(argv: Optional[List[str]]) -> argparse.Namespace:
@@ -250,8 +272,26 @@ def _run_configured_segment(
         teardown_training_environment()
 
 
-def _build_controller_from_spec(spec: Dict[str, Any]):
+def _arm_contract(arm, posthoc_variant: Optional[str]):
+    """Resolve a preregistered arm or an explicitly named post-hoc variant."""
+
     from olmo_core.hpo.arms import Arm, ablation_matrix
+
+    if posthoc_variant is None:
+        return ablation_matrix()[arm]
+    if arm is Arm.NO_CENTAUR and posthoc_variant == "proxy_removed_after_failed_admission":
+        # Use the exact no-proxy training contract while retaining the no-Centaur
+        # controller ablation requested after the proxy failed admission.
+        return {
+            **ablation_matrix()[Arm.NO_PROXY],
+            "llm_ratio": 0.0,
+            "llm_scope": "none",
+        }
+    raise ValueError(f"unsupported post-hoc arm variant: {posthoc_variant!r}")
+
+
+def _build_controller_from_spec(spec: Dict[str, Any]):
+    from olmo_core.hpo.arms import Arm
     from olmo_core.hpo.artifacts import ensure_ftpfn_artifact
     from olmo_core.hpo.bttackler import (
         BTTCalibrationProfile,
@@ -308,7 +348,7 @@ def _build_controller_from_spec(spec: Dict[str, Any]):
     arm_name = spec.get("arm")
     arm = None if arm_name is None else Arm(arm_name)
     if arm is not None:
-        contract = ablation_matrix()[arm]
+        contract = _arm_contract(arm, spec.get("posthoc_variant"))
         expected_fidelity = (
             {"kind": "exact"}
             if int(contract["freeze_first_n_blocks"]) == 0
@@ -444,6 +484,7 @@ def _build_controller_from_spec(spec: Dict[str, Any]):
             failure_penalty=float(controller_values.get("failure_penalty", 0.0)),
             restart_mode=restart_mode,
             btt_restart_fraction=float(controller_values.get("btt_restart_fraction", 0.5)),
+            ensure_full_fidelity=bool(spec.get("require_final_winner", False)),
         ),
         centaur=centaur,
         advisor=advisor,
@@ -458,17 +499,26 @@ def _build_controller_from_spec(spec: Dict[str, Any]):
     return controller
 
 
-def _aligned_global_batch_size(requested: float, *, quantum: int) -> int:
-    """Choose the nearest batch size that exactly divides every fidelity quantum."""
+def _aligned_global_batch_size(
+    requested: float,
+    *,
+    quantum: int,
+    multiple: int = 1,
+) -> int:
+    """Choose the nearest valid batch size that divides every fidelity quantum."""
 
-    if not math.isfinite(requested) or requested <= 0.0 or quantum <= 0:
-        raise ValueError("requested batch size and quantum must be positive")
+    if not math.isfinite(requested) or requested <= 0.0 or quantum <= 0 or multiple <= 0:
+        raise ValueError("requested batch size, quantum, and multiple must be positive")
     divisors = []
     for candidate in range(1, math.isqrt(quantum) + 1):
         if quantum % candidate == 0:
-            divisors.append(candidate)
-            if candidate * candidate != quantum:
-                divisors.append(quantum // candidate)
+            paired = quantum // candidate
+            if candidate % multiple == 0:
+                divisors.append(candidate)
+            if paired != candidate and paired % multiple == 0:
+                divisors.append(paired)
+    if not divisors:
+        raise ValueError(f"quantum {quantum} has no divisor aligned to multiple {multiple}")
     return min(divisors, key=lambda value: (abs(value - requested), value))
 
 
@@ -476,11 +526,15 @@ def _segment_payload(
     allocation,
     *,
     controller_spec: Dict[str, Any],
+    finalist_continuation: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     base_batch = int(controller_spec["base_global_batch_size"])
     realized_hps = dict(controller_spec.get("fixed_hps", {}))
     realized_hps.update(allocation.realized_hps)
     multiplier = float(realized_hps.get("global_batch_mult", 1.0))
+    rank_microbatch_size = int(
+        controller_spec.get("factory_kwargs", {}).get("rank_microbatch_size", 1)
+    )
     global_batch_size = _aligned_global_batch_size(
         base_batch * multiplier,
         quantum=int(
@@ -488,11 +542,17 @@ def _segment_payload(
                 "quantum", controller_spec["controller"]["target_tokens"]
             )
         ),
+        multiple=rank_microbatch_size,
     )
     target_tokens = int(controller_spec["controller"]["target_tokens"])
+    factory_kwargs = copy.deepcopy(controller_spec.get("factory_kwargs", {}))
+    if finalist_continuation is not None:
+        factory_kwargs["rank_microbatch_size"] = int(
+            finalist_continuation["rank_microbatch_size"]
+        )
     payload = {
         "experiment_factory": controller_spec["experiment_factory"],
-        "factory_kwargs": controller_spec.get("factory_kwargs", {}),
+        "factory_kwargs": factory_kwargs,
         "target_tokens": target_tokens,
         "global_batch_size": global_batch_size,
         "realized_hps": realized_hps,
@@ -507,6 +567,8 @@ def _segment_payload(
             "model_parameterization", {"kind": "standard"}
         ),
     }
+    if finalist_continuation is not None:
+        payload["finalist_continuation"] = dict(finalist_continuation)
     payload["config_hash"] = _segment_config_hash(payload)
     return payload
 
@@ -521,6 +583,7 @@ def _segment_config_hash(payload: Mapping[str, Any]) -> str:
         "experiment_factory": payload["experiment_factory"],
         "factory_kwargs": payload.get("factory_kwargs", {}),
         "transition": payload.get("transition"),
+        "finalist_continuation": payload.get("finalist_continuation"),
     }
     canonical = json.dumps(
         contract,
@@ -536,9 +599,15 @@ def _dispatch_allocations(
     controller_spec: Dict[str, Any],
     run_id: str,
     param_dtype: str,
+    heartbeat: Optional[Callable[[], None]] = None,
+    heartbeat_interval_seconds: float = 60.0,
 ):
     from olmo_core.hpo.types import WorkerObservation
-    from olmo_core.hpo.worker import trial_namespace, world_size_one_env
+    from olmo_core.hpo.worker import (
+        finalist_distributed_env,
+        trial_namespace,
+        world_size_one_env,
+    )
 
     gpu_ids = controller_spec.get(
         "gpu_ids",
@@ -546,6 +615,11 @@ def _dispatch_allocations(
     )
     if len(gpu_ids) < len(allocations):
         raise ValueError("controller spec provides fewer GPU ids than allocations")
+    finalist_continuation = _eligible_finalist_continuation(
+        allocations,
+        controller_spec=controller_spec,
+        gpu_ids=gpu_ids,
+    )
     spec_dir = Path(
         controller_spec.get(
             "segment_spec_dir",
@@ -555,7 +629,11 @@ def _dispatch_allocations(
     spec_dir.mkdir(parents=True, exist_ok=True)
     launches = []
     for index, allocation in enumerate(allocations):
-        payload = _segment_payload(allocation, controller_spec=controller_spec)
+        payload = _segment_payload(
+            allocation,
+            controller_spec=controller_spec,
+            finalist_continuation=finalist_continuation,
+        )
         spec_path = spec_dir / f"decision-{allocation.decision_id}.json"
         spec_path.write_text(json.dumps(payload, sort_keys=True))
         checkpoint_dir = trial_namespace(
@@ -570,14 +648,25 @@ def _dispatch_allocations(
             hard_stop_tokens=allocation.target_fidelity,
             segment_spec=str(spec_path),
         )
-        env = world_size_one_env(
-            int(gpu_ids[index]),
-            int(controller_spec.get("master_port_base", 29500)) + index,
-        )
-        launches.append((allocation, argv, env))
+        master_port = int(controller_spec.get("master_port_base", 29500)) + index
+        if finalist_continuation is None:
+            env = world_size_one_env(int(gpu_ids[index]), master_port)
+            accelerator_count = 1
+        else:
+            accelerator_count = int(finalist_continuation["world_size"])
+            argv = build_finalist_worker_argv(
+                argv,
+                world_size=accelerator_count,
+                master_port=master_port,
+            )
+            env = finalist_distributed_env(
+                [int(gpu) for gpu in gpu_ids[:accelerator_count]],
+                world_size=accelerator_count,
+            )
+        launches.append((allocation, argv, env, accelerator_count))
 
     def run_one(launch):
-        allocation, argv, env = launch
+        allocation, argv, env, accelerator_count = launch
         started = time.perf_counter()
         completed = subprocess.run(
             argv,
@@ -586,7 +675,7 @@ def _dispatch_allocations(
             capture_output=True,
             check=False,
         )
-        accelerator_seconds = time.perf_counter() - started
+        accelerator_seconds = (time.perf_counter() - started) * accelerator_count
         if completed.returncode != 0:
             error_text = completed.stderr.lower()
             if "out of memory" in error_text or "outofmemoryerror" in error_text:
@@ -601,9 +690,11 @@ def _dispatch_allocations(
                     checkpoint_ref=None,
                     accelerator_seconds=accelerator_seconds,
                 )
+            stdout_tail = completed.stdout.strip()[-8000:]
+            stderr_tail = completed.stderr.strip()[-8000:]
             raise RuntimeError(
-                f"trial {allocation.trial_id} exited {completed.returncode}: "
-                f"{completed.stderr.strip()}"
+                f"trial {allocation.trial_id} exited {completed.returncode}; "
+                f"stdout tail:\n{stdout_tail}\nstderr tail:\n{stderr_tail}"
             )
         payload = None
         for line in reversed(completed.stdout.splitlines()):
@@ -630,7 +721,70 @@ def _dispatch_allocations(
         )
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(launches)) as executor:
-        return list(executor.map(run_one, launches))
+        futures = [executor.submit(run_one, launch) for launch in launches]
+        pending = set(futures)
+        while pending:
+            _, pending = concurrent.futures.wait(
+                pending,
+                timeout=heartbeat_interval_seconds,
+                return_when=concurrent.futures.ALL_COMPLETED,
+            )
+            if pending and heartbeat is not None:
+                heartbeat()
+        return [future.result() for future in futures]
+
+
+def _eligible_finalist_continuation(
+    allocations,
+    *,
+    controller_spec: Mapping[str, Any],
+    gpu_ids,
+) -> Optional[Dict[str, Any]]:
+    """Resolve an opt-in distributed continuation without changing ordinary HPO dispatch."""
+    configured = controller_spec.get("finalist_continuation")
+    if not isinstance(configured, Mapping) or not bool(configured.get("enabled", False)):
+        return None
+    if len(allocations) != 1:
+        return None
+    allocation = allocations[0]
+    kind = getattr(allocation, "kind", None)
+    kind_value = getattr(kind, "value", kind)
+    transition = getattr(allocation, "transition", None)
+    plain_or_rescue = transition is None or transition == {"full_fidelity_rescue": True}
+    if (
+        kind_value != "resume"
+        or getattr(allocation, "checkpoint_ref", None) is None
+        or not plain_or_rescue
+    ):
+        return None
+    world_size = int(configured.get("world_size", 8))
+    rank_microbatch_size = int(configured.get("rank_microbatch_size", 0))
+    if world_size <= 1 or world_size > len(gpu_ids):
+        raise ValueError("finalist continuation world size exceeds the configured GPU set")
+    if rank_microbatch_size <= 0:
+        raise ValueError("finalist continuation rank_microbatch_size must be positive")
+    realized_hps = dict(controller_spec.get("fixed_hps", {}))
+    realized_hps.update(allocation.realized_hps)
+    global_batch_size = _aligned_global_batch_size(
+        int(controller_spec["base_global_batch_size"])
+        * float(realized_hps.get("global_batch_mult", 1.0)),
+        quantum=int(
+            controller_spec["controller"].get(
+                "quantum", controller_spec["controller"]["target_tokens"]
+            )
+        ),
+        multiple=int(
+            controller_spec.get("factory_kwargs", {}).get("rank_microbatch_size", 1)
+        ),
+    )
+    if global_batch_size % (world_size * rank_microbatch_size):
+        # Preserve the lineage batch exactly. An indivisible winner safely remains on one GPU.
+        return None
+    return {
+        "enabled": True,
+        "world_size": world_size,
+        "rank_microbatch_size": rank_microbatch_size,
+    }
 
 
 def _persist_controller_log(controller, path: str, remote_root: Optional[str] = None) -> None:
@@ -1084,6 +1238,48 @@ def _run_cohort_side(
     return observations
 
 
+def _validated_existing_cohort_artifact(
+    path: str,
+    *,
+    contract,
+    admission_values: Mapping[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Load a complete local cohort artifact and rederive its admission decision."""
+
+    from olmo_core.hpo.proxy import ProxyAdmission, evaluate_paired_proxy_observations
+    from olmo_core.io import is_url
+
+    if is_url(path):
+        return None
+    target = Path(path)
+    if not target.is_file():
+        return None
+    artifact = json.loads(target.read_text())
+    expected_contract = {
+        **asdict(contract),
+        "config_ids": list(contract.config_ids),
+    }
+    if (
+        artifact.get("schema_version") != 1
+        or artifact.get("contract") != expected_contract
+        or artifact.get("admission") != dict(admission_values)
+    ):
+        raise ValueError("existing proxy evidence does not match the preregistered cohort")
+    metrics = evaluate_paired_proxy_observations(
+        contract,
+        proxy_observations=artifact.get("proxy_observations", {}),
+        reference_observations=artifact.get("reference_observations", {}),
+    )
+    expected_metrics = {
+        **asdict(metrics),
+        "proxy_kind": metrics.proxy_kind.value,
+    }
+    decision = ProxyAdmission(**admission_values).decide(metrics)
+    if artifact.get("metrics") != expected_metrics or artifact.get("decision") != decision.value:
+        raise ValueError("existing proxy evidence metrics or decision failed local recomputation")
+    return artifact
+
+
 def run_proxy_cohort(args: argparse.Namespace) -> int:
     """Execute and persist the preregistered common first-rung paired cohort."""
 
@@ -1092,6 +1288,9 @@ def run_proxy_cohort(args: argparse.Namespace) -> int:
     proxy_spec = _expand_environment(json.loads(Path(args.proxy_spec).read_text()))
     reference_spec = _expand_environment(json.loads(Path(args.reference_spec).read_text()))
     contract, admission_values = _validate_paired_cohort_specs(proxy_spec, reference_spec)
+    output_path = args.cohort_output or proxy_spec.get("proxy_evidence_path")
+    if output_path is None:
+        raise ValueError("the proxy cohort requires --cohort-output or proxy_evidence_path")
     from olmo_core.hpo.umup import require_official_umup_forward
 
     require_official_umup_forward()
@@ -1105,6 +1304,26 @@ def run_proxy_cohort(args: argparse.Namespace) -> int:
     exit_code = 0
     controller = None
     try:
+        existing_artifact = _validated_existing_cohort_artifact(
+            str(output_path),
+            contract=contract,
+            admission_values=admission_values,
+        )
+        if existing_artifact is not None:
+            probe.record_proxy_cohort(existing_artifact, output_path=output_path)
+            print(
+                json.dumps(
+                    {
+                        "cohort_id": contract.cohort_id,
+                        "decision": existing_artifact["decision"],
+                        "output_path": str(output_path),
+                        "reused_existing_evidence": True,
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
+            return 0
         reference_observations = _run_cohort_side(
             reference_spec,
             side="reference",
@@ -1127,9 +1346,6 @@ def run_proxy_cohort(args: argparse.Namespace) -> int:
             reference_observations=reference_observations,
         )
         decision = ProxyAdmission(**admission_values).decide(metrics)
-        output_path = args.cohort_output or proxy_spec.get("proxy_evidence_path")
-        if output_path is None:
-            raise ValueError("the proxy cohort requires --cohort-output or proxy_evidence_path")
         artifact = {
             "schema_version": 1,
             "contract": {
@@ -1158,8 +1374,6 @@ def run_proxy_cohort(args: argparse.Namespace) -> int:
             ),
             flush=True,
         )
-        if decision.value != "prune_promote":
-            raise RuntimeError("paired proxy cohort did not pass the pre-registered admission gate")
         return 0
     except Exception:
         exit_code = 1
@@ -1315,6 +1529,7 @@ def run_controller(args: argparse.Namespace) -> int:
                 controller_spec=spec,
                 run_id=args.run_id,
                 param_dtype=args.param_dtype,
+                heartbeat=probe.log_heartbeat,
             )
             controller.ingest(results)
             _persist_controller_log(controller, state_path, remote_root)
@@ -1336,6 +1551,7 @@ def run_controller(args: argparse.Namespace) -> int:
                 controller_spec=spec,
                 run_id=args.run_id,
                 param_dtype=args.param_dtype,
+                heartbeat=probe.log_heartbeat,
             )
             controller.ingest(results)
             _persist_controller_log(controller, state_path, remote_root)
@@ -1423,7 +1639,7 @@ def run_segment(args: argparse.Namespace) -> int:
         raise ValueError("segment trial config hash mismatch")
     if spec.get("checkpoint_ref") is not None:
         config.trainer.load_path = spec["checkpoint_ref"]
-        reset_optim = bool(spec.get("transition", {}).get("optimizer_reset", False))
+        reset_optim = bool((spec.get("transition") or {}).get("optimizer_reset", False))
         config.trainer.load_optim_state = not reset_optim
     result = _run_configured_segment(
         config=config,
@@ -1438,7 +1654,10 @@ def run_segment(args: argparse.Namespace) -> int:
     payload = asdict(result)
     if not math.isfinite(payload["heldout_ce"]):
         payload["heldout_ce"] = None
-    print(json.dumps(payload, sort_keys=True, allow_nan=False), flush=True)
+    from olmo_core.hpo.worker import should_emit_worker_result
+
+    if should_emit_worker_result(os.environ):
+        print(json.dumps(payload, sort_keys=True, allow_nan=False), flush=True)
     return 0
 
 
@@ -1449,11 +1668,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = _parse_args(argv)
     if args.run_segment and args.run_proxy_cohort:
         raise ValueError("--run-segment and --run-proxy-cohort are mutually exclusive")
-    # A trial-segment subprocess is world-size-one by construction; the controller is not.
+    # Trial segments are world-size-one unless explicitly marked as a finalist continuation.
     if args.run_segment:
-        from olmo_core.hpo.worker import assert_single_process_topology
+        from olmo_core.hpo.worker import assert_worker_topology
 
-        assert_single_process_topology(os.environ)
+        assert_worker_topology(os.environ)
     else:
         assert_controller_is_cpu_only(os.environ)
     if args.dry_run:

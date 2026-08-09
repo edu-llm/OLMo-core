@@ -42,6 +42,7 @@ def build(
     action_advisor=None,
     restart_mode=PopulationRestartMode.IPBT_REFERENCE,
     btt_restart_fraction=0.5,
+    ensure_full_fidelity=False,
 ):
     space = SearchSpaceConfig(
         dims=[SearchDimConfig("x", 0.0, 1.0), SearchDimConfig("y", 0.0, 1.0)]
@@ -61,6 +62,7 @@ def build(
         seed=seed,
         restart_mode=restart_mode,
         btt_restart_fraction=btt_restart_fraction,
+        ensure_full_fidelity=ensure_full_fidelity,
     )
     return (
         HpoController(
@@ -118,6 +120,52 @@ def test_every_allocation_charges_exactly_one_quantum_and_respects_budget():
     for a in allocs:
         assert 0 < a.target_fidelity - a.current_fidelity <= 2
     assert state.tokens_charged <= 10  # never exceeds the cap
+
+
+def test_budget_reserves_a_path_to_one_full_fidelity_result():
+    c, obj = build(budget=10, workers=4, rounds_target=8, quantum=2)
+    c.run(rounds=20, simulate=obj.ce)
+    state = c.state()
+    assert state.tokens_charged == 10
+    assert any(record.current_fidelity == 8 for record in state.trials.values())
+
+
+def test_full_fidelity_reserve_continues_a_saturated_incumbent():
+    controller, _ = build(
+        budget=4,
+        workers=1,
+        rounds_target=4,
+        quantum=2,
+        ensure_full_fidelity=True,
+    )
+    first = controller.propose_round()[0]
+    controller.ingest(
+        [
+            WorkerObservation(
+                trial_id=first.trial_id,
+                tokens=first.target_fidelity,
+                heldout_ce=3.0,
+                train_ce_history=(3.0, 3.01),
+                grad_norm_history=(1.0, 1.0),
+                activation_ratio=0.5,
+                numeric_failure=False,
+                checkpoint_ref="/ckpt/saturated/step1",
+            )
+        ]
+    )
+    assert controller.state().trials[first.trial_id].latest_verdict.kind is BTTVerdictKind.SATURATED
+
+    rescue = controller.propose_round()
+    assert len(rescue) == 1
+    assert rescue[0].kind is ActionKind.RESUME
+    assert rescue[0].transition == {"full_fidelity_rescue": True}
+    assert rescue[0].target_fidelity == 4
+    assert controller.state().tokens_charged == 4
+
+
+def test_budget_must_fund_one_full_fidelity_result():
+    with pytest.raises(ValueError, match="full-fidelity"):
+        build(budget=7, rounds_target=8)
 
 
 def test_resume_only_targets_currently_eligible_trials():
@@ -698,6 +746,9 @@ def test_partial_batch_failure_keeps_earlier_grants_recoverable():
         action_centaur=CentaurOverlay(warmup=0, ratio=0.5),
         action_advisor=FailScheduledTurn(),
     )
+    # Reproduce a real recovery log where a valid snapshot predates the
+    # allocations granted before a later slot fails.
+    controller._snapshot_controller()
     with pytest.raises(Exception):
         controller.propose_round()
     pending = controller.pending_allocations()

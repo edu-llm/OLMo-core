@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "dataset": {
+    "dataset_id": "pretrain/regmix-10b",
+    "version": "v1",
+    "tokenizer_id": "tokenizer/dolma2-bpe"
+  },
+  "vectors": [
+    {
+      "name": "no-proxy-winner",
+      "probe_arm": "no_proxy",
+      "probe_run_id": "904ea39d368dfe412048a6063c1600df",
+      "probe_trial_id": "t9_0",
+      "hps": {
+        "lr": 0.0004125460019173203,
+        "weight_decay": 0.01473432082609167,
+        "beta2_gap": 0.0014689794923786166,
+        "eps": 1.4798352708540092e-12,
+        "warmup_fraction": 0.01131976840436488,
+        "decay_fraction": 0.05,
+        "terminal_lr_ratio": 0.021488995515927797,
+        "global_batch_mult": 0.5,
+        "max_grad_norm": 0.3
+      }
+    },
+    {
+      "name": "no-centaur-winner",
+      "probe_arm": "no_centaur",
+      "probe_run_id": "06e12699f744b8d2e562e78afa003b7f",
+      "probe_trial_id": "t8_0",
+      "hps": {
+        "lr": 0.00030060095254686933,
+        "weight_decay": 0.01,
+        "beta2_gap": 0.001,
+        "eps": 1e-12,
+        "warmup_fraction": 0.007007066567546487,
+        "decay_fraction": 0.05,
+        "terminal_lr_ratio": 0.0,
+        "global_batch_mult": 0.5,
+        "max_grad_norm": 0.34844106730841967
+      }
+    }
+  ]
+}

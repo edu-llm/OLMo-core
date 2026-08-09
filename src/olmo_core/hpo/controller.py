@@ -75,10 +75,13 @@ class ControllerConfig:
     failure_penalty: float = 0.0
     restart_mode: PopulationRestartMode = PopulationRestartMode.IPBT_REFERENCE
     btt_restart_fraction: float = 0.5
+    ensure_full_fidelity: bool = False
 
     def __post_init__(self) -> None:
         if not 0.0 < self.btt_restart_fraction <= 1.0:
             raise ValueError("btt_restart_fraction must be in (0, 1]")
+        if self.budget_tokens < self.target_tokens:
+            raise ValueError("budget_tokens must fund at least one full-fidelity trial")
 
 
 class _Proposer(Protocol):  # structural type for RandomProposer / CMAESProposer
@@ -257,6 +260,11 @@ class HpoController:
         self.log = restored
         snapshot = state.controller_snapshot
         if snapshot is not None:
+            snapshot_seq = max(
+                event.seq
+                for event in restored
+                if event.kind is EventKind.CONTROLLER_SNAPSHOT
+            )
             self._rng.bit_generator.state = snapshot["rng_state"]
             proposer_state = snapshot.get("proposer_state")
             load_state_dict = getattr(self.proposer, "load_state_dict", None)
@@ -313,6 +321,40 @@ class HpoController:
                 self.cma_replacement_proposer,
                 snapshot.get("cma_replacement_proposer_state"),
             )
+            # Allocation events are appended as a round is assembled. If a later
+            # slot fails before the round-end snapshot, those grants are durable
+            # but absent from the restored controller-local bookkeeping.
+            for event in restored:
+                if event.seq <= snapshot_seq or event.kind is not EventKind.ALLOCATION:
+                    continue
+                allocation = Allocation.from_dict(event.payload)
+                if allocation.kind is ActionKind.START and allocation.trial_id not in self._configs:
+                    self._configs[allocation.trial_id] = allocation.unit_config
+                    self._curve_ids[allocation.trial_id] = self._next_curve_id
+                    self._next_curve_id += 1
+                    self._trial_counter += 1
+                self._batch_counter = max(self._batch_counter, allocation.batch_id + 1)
+                if self.action_centaur is not None:
+                    self._action_proposal_counter += 1
+
+            # Rebuild this from the authoritative event-sourced state even when
+            # a snapshot exists, since that snapshot may predate trailing grants.
+            pending_ids = {
+                trial_id
+                for trial_id, record in state.trials.items()
+                if record.pending_target_fidelity is not None
+            }
+            latest_pending: Dict[str, Allocation] = {}
+            for event in restored:
+                if event.kind is EventKind.ALLOCATION:
+                    allocation = Allocation.from_dict(event.payload)
+                    if allocation.trial_id in pending_ids:
+                        latest_pending[allocation.trial_id] = allocation
+            self._pending_batches = {}
+            for allocation in latest_pending.values():
+                self._pending_batches.setdefault(allocation.batch_id, set()).add(
+                    allocation.trial_id
+                )
             return
 
         # Backward-compatible deterministic reconstruction for logs predating snapshots.
@@ -473,6 +515,96 @@ class HpoController:
                 )
             )
         return cands
+
+    def _preserves_full_fidelity_reserve(
+        self,
+        state: ControllerState,
+        candidate: Candidate,
+    ) -> bool:
+        """
+        Return whether granting ``candidate`` still funds one full-fidelity result.
+
+        The ordinary acquisition policy may keep preferring broad first-rung exploration until
+        the global token budget is exhausted. Reserve the cheapest path from an eligible or
+        pending trial to the target so a comparison run cannot finish without a reportable
+        winner. Near the end of the budget this naturally forces successive quanta onto the
+        furthest-progressed viable trial.
+        """
+
+        projected_fidelity = 0
+        for record in state.trials.values():
+            if record.pending_target_fidelity is not None:
+                projected_fidelity = max(projected_fidelity, record.pending_target_fidelity)
+                continue
+            if record.current_fidelity >= self.config.target_tokens:
+                return True
+            verdict = record.latest_verdict
+            if (
+                record.status is TrialStatus.PAUSED
+                and verdict is not None
+                and verdict.is_eligible_for_resume()
+            ):
+                projected_fidelity = max(projected_fidelity, record.current_fidelity)
+
+        if candidate.is_continuation:
+            current_fidelity = state.trials[candidate.key].current_fidelity
+            candidate_target = min(
+                current_fidelity + self.config.quantum,
+                self.config.target_tokens,
+            )
+        else:
+            transition = self._ipbt_metadata.get(candidate.key)
+            if transition is None:
+                current_fidelity = 0
+                candidate_target = min(self.config.quantum, self.config.target_tokens)
+            else:
+                current_fidelity = int(transition["current_fidelity"])
+                candidate_target = int(transition["target_fidelity"])
+
+        charge = candidate_target - current_fidelity
+        projected_fidelity = max(projected_fidelity, candidate_target)
+        completion_reserve = self.config.target_tokens - projected_fidelity
+        return (
+            state.tokens_charged + charge + completion_reserve
+            <= self.config.budget_tokens
+        )
+
+    def _full_fidelity_rescue_candidate(self, state: ControllerState) -> Optional[Candidate]:
+        """Continue the best saturated incumbent when it is the only funded completion path."""
+        if not self.config.ensure_full_fidelity:
+            return None
+        if any(
+            record.current_fidelity >= self.config.target_tokens
+            for record in state.trials.values()
+        ):
+            return None
+        viable = []
+        for trial_id, record in state.trials.items():
+            verdict = record.latest_verdict
+            if (
+                trial_id not in self._configs
+                or record.pending_target_fidelity is not None
+                or record.current_fidelity <= 0
+                or record.latest_checkpoint_ref is None
+                or verdict is None
+                or verdict.kind is not BTTVerdictKind.SATURATED
+            ):
+                continue
+            completion_cost = self.config.target_tokens - record.current_fidelity
+            if state.tokens_charged + completion_cost > self.config.budget_tokens:
+                continue
+            viable.append((record.current_fidelity, record.curve[-1][1], trial_id))
+        if not viable:
+            return None
+        _, _, trial_id = min(viable, key=lambda item: (-item[0], item[1], item[2]))
+        return Candidate(
+            key=trial_id,
+            curve_id=self._curve_ids[trial_id],
+            unit_config=self._configs[trial_id],
+            base_tokens=state.trials[trial_id].current_fidelity,
+            is_continuation=True,
+            source=ProposalSource.IFBO,
+        )
 
     def _maybe_plan_ipbt(self) -> None:
         if self.ipbt is None or self.ipbt_meta_proposer is None:
@@ -994,6 +1126,7 @@ class HpoController:
         batch_id = self._batch_counter
         fantasy_context = self._observed(self.state())
         for slot in range(available_workers):
+            rescue_key: Optional[str] = None
             state = self.state()
             f_best = observed_f_best(fantasy_context, self.normalizer)
             incumbent_trial = min(
@@ -1043,7 +1176,16 @@ class HpoController:
                     self._new_candidate_pool.pop(key, None)
                     self._ipbt_metadata.pop(key, None)
                     self._candidate_ask_ids.pop(key, None)
-            candidates = self._eligible_continuations(state) + new_candidates
+            candidates = [
+                candidate
+                for candidate in self._eligible_continuations(state) + new_candidates
+                if self._preserves_full_fidelity_reserve(state, candidate)
+            ]
+            if not candidates:
+                rescue = self._full_fidelity_rescue_candidate(state)
+                if rescue is not None:
+                    candidates = [rescue]
+                    rescue_key = rescue.key
             if not candidates:
                 break
             sel = self.mfpi.select_batch(
@@ -1195,6 +1337,11 @@ class HpoController:
                     source=ProposalSource.IFBO,
                     verdict_id=None if verdict is None else verdict.observation_hash,
                     batch_id=batch_id,
+                    transition=(
+                        {"full_fidelity_rescue": True}
+                        if cand.key == rescue_key
+                        else None
+                    ),
                 )
             else:
                 trial_id = f"t{self._trial_counter}_0"
@@ -1262,6 +1409,9 @@ class HpoController:
                     ),
                 )
             )
+            # Make every successfully assembled grant recoverable even if a
+            # later slot in this same proposal round raises.
+            self._snapshot_controller()
         self._snapshot_controller()
         return allocations
 
