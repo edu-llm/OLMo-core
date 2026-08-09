@@ -213,4 +213,24 @@ Anything longer belongs in [`prd.md`](prd.md) or [`dataset-design.md`](dataset-d
   destined for the dataset card. Also noted: `Eedi/…-Tutoring-Dialogues-2k` is the best pedagogy
   content in existence, is `cc-by-nc-4.0`, and is therefore unusable — do not revisit.
 
+- **Multi-turn fix BUILT** — `src/scripts/data/tool_call_sft_producer.py`, with 24 tests in
+  `src/test/scripts/tool_call_sft_producer_test.py`. Mask is built **by construction**: segments with
+  known character spans, tokenize the concatenation **once**, mark a token trainable when its span
+  overlaps a trainable segment. No prefix re-render, so the `loop.last` divergence cannot arise and
+  **every assistant turn stays trainable** (verified: 5 assistant turns → 5 trainable spans, where
+  `last_turn_only` would give 1).
+  - Safety property, asserted by `--self-check`: the concatenated segments equal what the real
+    `chat_template.jinja` renders, **byte for byte**, on single-turn, multi-turn, abstention and
+    5-assistant-turn cases. A template change becomes a loud failure, not a silent mis-mask.
+  - End-to-end with the real tokenizer: exactly **one EOS per conversation** (packing boundary
+    intact), arrays **headerless**, equal lengths, delimiters resolving to 100266/100268/100269, max
+    id 100269 ≤ 100277, terminator trainable, and **no `<|im_start|>` ever trainable**.
+  - Guardrails: rewrites `tool` → `environment`; rejects unknown roles, null/empty `content`, and any
+    conversation not ending on an assistant turn — each with the reason it corrupts something.
+- **Token budget MEASURED** (`verify/measure_token_budget.py`, 100 real rows + real tokenizer):
+  single-turn rows are **median 485 / mean 513 tokens**, and the masked schema block alone is a
+  **median 49% of the row**. 40,000 rows ⇒ **~19.4–20.5M tokens**, of which only the assistant turns
+  train. Treat as a **floor** — our pedagogy schemas nest deeper than Dolci's general-purpose ones.
+  `seq_len=4096` fits every sampled row; 2048 would clip 9% of multi-turn.
+
 <!-- next entry goes below -->
