@@ -10,6 +10,8 @@ from pathlib import Path
 import pytest
 
 RUNPOD = Path(__file__).resolve().parents[2] / ".edullm" / "runpod"
+if str(RUNPOD) not in sys.path:
+    sys.path.insert(0, str(RUNPOD))
 
 
 def load_script(name: str):
@@ -126,8 +128,11 @@ def test_runtime_spec_args_rewrite_all_cohort_specs(tmp_path):
         job_root=tmp_path / "job",
         shared_root=tmp_path / "shared",
     )
-    assert result[2].endswith("runtime-specs/hpo-full-acronym-soup.json")
-    assert result[3].endswith("runtime-specs/hpo-no-proxy.json")
+    assert Path(result[2]).parts[-2:] == ("runtime-specs", "hpo-full-acronym-soup.json")
+    assert Path(result[3].split("=", 1)[1]).parts[-2:] == (
+        "runtime-specs",
+        "hpo-no-proxy.json",
+    )
     assert Path(result[2]).is_file()
     assert Path(result[3].split("=", 1)[1]).is_file()
 
@@ -187,9 +192,41 @@ def test_final_validation_launcher_allows_a_new_wandb_project():
     assert 'WANDB_PROJECT="${EDULLM_WANDB_PROJECT}"' in launch
 
 
-def test_bootstrap_pins_commit_and_installs_hpo_extras():
+def test_final_validation_routes_torchrun_workers_through_staged_reader():
+    module = load_script("final_validation_entrypoint.py")
+    validation_script = RUNPOD.parent / "final_validation.py"
+
+    class FinalValidation:
+        __file__ = str(validation_script)
+
+        @staticmethod
+        def torchrun_command(vector_name, length_tokens):
+            return [
+                sys.executable,
+                "-m",
+                "torch.distributed.run",
+                str(validation_script),
+                "--vector",
+                vector_name,
+                "--length-tokens",
+                str(length_tokens),
+            ]
+
+    module._patch_validation_worker_entrypoint(FinalValidation)
+    command = FinalValidation.torchrun_command("no-proxy-winner", 16_384)
+
+    assert command[3] == str((RUNPOD / "final_validation_entrypoint.py").resolve())
+    assert str(validation_script) not in command
+    assert command[-4:] == ["--vector", "no-proxy-winner", "--length-tokens", "16384"]
+
+
+def test_bootstrap_pins_commit_and_installs_runtime_dependencies():
     bootstrap = (RUNPOD / "bootstrap.sh").read_text(encoding="utf-8")
     assert "4f385fe54918b96756042a89d504ac19b928e1b4" in bootstrap
     assert '"${REPO_DIR}[wandb,hpo]"' in bootstrap
+    assert '-r "${REPO_DIR}/.edullm/requirements-task-loss-eval.txt"' in bootstrap
+    assert bootstrap.index("requirements-task-loss-eval.txt") < bootstrap.index(
+        'PYTHONPATH="${REPO_DIR}/src:${REPO_DIR}/.edullm"'
+    )
     assert "torch.cuda.device_count() == 8" in bootstrap
     assert 'FLASH_ATTN_CUDA_ARCHS="80"' in bootstrap

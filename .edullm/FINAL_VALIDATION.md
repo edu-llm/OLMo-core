@@ -42,6 +42,11 @@ RUN_SLOT=no-centaur-v1 \
 bash /workspace/OLMo-core/.edullm/runpod/launch_final_validation.sh
 ```
 
+The first launch for a new `RUN_SLOT` must use the default `RECOVERY_MODE=fresh`. Do not
+use `retry-startup` for that initial attempt: it can reuse startup identity while the
+step-0 evaluator is still waiting for the pre-train checkpoint. Use `resume` only after
+the run has created checkpoint state.
+
 Resume the same checkpoint and W&B identities after interruption:
 
 ```bash

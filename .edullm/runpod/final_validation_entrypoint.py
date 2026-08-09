@@ -20,6 +20,20 @@ from entrypoint import (  # noqa: E402
 )
 
 
+def _patch_validation_worker_entrypoint(final_validation_module) -> None:
+    """Route torchrun workers through this file so the staged reader is installed."""
+
+    original = final_validation_module.torchrun_command
+    entrypoint = str(Path(__file__).resolve())
+
+    def torchrun_command(vector_name: str, length_tokens: int | None) -> list[str]:
+        command = original(vector_name, length_tokens)
+        script = str(Path(final_validation_module.__file__).resolve())
+        return [entrypoint if part == script else part for part in command]
+
+    final_validation_module.torchrun_command = torchrun_command
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Install the staged reader and delegate to the fixed validation entrypoint."""
 
@@ -34,6 +48,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     import final_validation
 
+    _patch_validation_worker_entrypoint(final_validation)
     return final_validation.main(list(argv) if argv is not None else None)
 
 

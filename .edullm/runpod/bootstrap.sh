@@ -65,6 +65,8 @@ TORCH_CUDA_ARCH_LIST="8.0" FLASH_ATTN_CUDA_ARCHS="80" MAX_JOBS="${MAX_JOBS:-32}"
   boto3 "botocore[crt]"
 "${PYTHON}" -m pip install --quiet --no-cache-dir \
   "edullm-data @ https://github.com/edu-llm/edullm-data/archive/38bf831a6c3f445e394784018441fd59288b876c.tar.gz"
+"${PYTHON}" -m pip install --quiet --no-cache-dir \
+  -r "${REPO_DIR}/.edullm/requirements-task-loss-eval.txt"
 
 export OLMO_CORE_HPO_ARTIFACT_CACHE="${OLMO_CORE_HPO_ARTIFACT_CACHE:-/workspace/olmo-artifacts}"
 PYTHONPATH="${REPO_DIR}/src:${REPO_DIR}/.edullm" "${PYTHON}" - <<'PY'
