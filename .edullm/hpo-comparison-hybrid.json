@@ -90,7 +90,7 @@
   },
   "search_validation_callback": "search_validation",
   "untouched_evaluator": "final_evaluation",
-  "heldout_metric": "eval/lm/opt-with-synthetic-10b-val/CE loss",
+  "heldout_metric": "eval/lm/regmix-10b-val/CE loss",
   "fidelity": {
     "kind": "exact"
   },

@@ -53,8 +53,7 @@ none of these substitutions.
 ## Platform submission
 
 Each job is one arm (or the proxy cohort) on `gpu-8xa100` with team `pre-training` and
-dataset `opt-with-synthetic-10b-v1` (`pretrain/opt-with-synthetic-10b` v1, the
-LGBM-optimized 10B mix with Nemotron synthetic data). Expected wall time is about
+dataset `regmix-10b-v1` (`pretrain/regmix-10b` v1). Expected wall time is about
 1–1.5 hours per arm; pass `--hours 4` as the hard runtime bound and `--attempts 2`
 (the `olmo-core-train` maximum).
 
@@ -81,7 +80,7 @@ Proxy cohort first:
 ```bash
 edullm check --json \
   --experiment hpo-proxy-cohort \
-  --dataset opt-with-synthetic-10b-v1 \
+  --dataset regmix-10b-v1 \
   --team pre-training \
   --spec .edullm/run-hpo-proxy-cohort.yaml \
   --compute gpu-8xa100 \
@@ -96,7 +95,7 @@ export EDULLM_HPO_SPEC=.edullm/hpo-no-proxy.json
 
 edullm check --json \
   --experiment hpo-three-arm-no-proxy \
-  --dataset opt-with-synthetic-10b-v1 \
+  --dataset regmix-10b-v1 \
   --team pre-training \
   --compute gpu-8xa100 \
   --hours 4 \

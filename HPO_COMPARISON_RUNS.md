@@ -11,8 +11,8 @@ job; only `edullm submit` does.
 
 ## Frozen comparison contract
 
-- Dataset release: `opt-with-synthetic-10b-v1`.
-- Published dataset: `pretrain/opt-with-synthetic-10b/v1`.
+- Dataset release: `regmix-10b-v1`.
+- Published dataset: `pretrain/regmix-10b/v1`.
 - Profile: `pretrain-tokens/v1`.
 - Tokenizer: `tokenizer/dolma2-bpe`.
 - Model: OLMo2-190M.
@@ -74,7 +74,7 @@ and only exit 3 is retryable. Match refusal codes, never prose.
 ```bash
 edullm check --json \
   --experiment hpo-default-smoke \
-  --dataset opt-with-synthetic-10b-v1 \
+  --dataset regmix-10b-v1 \
   --team memory-split \
   --spec .edullm/run-hpo-comparison-baseline.yaml \
   --compute gpu-1xa10g \
@@ -85,7 +85,7 @@ edullm check --json \
 ```bash
 edullm check --json \
   --experiment hpo-hybrid-smoke \
-  --dataset opt-with-synthetic-10b-v1 \
+  --dataset regmix-10b-v1 \
   --team memory-split \
   --spec .edullm/run-hpo-comparison-hybrid.yaml \
   --compute gpu-4xa10g \
@@ -101,7 +101,7 @@ image state, and current capacity. Do not copy those values into this document.
 ```bash
 edullm submit \
   --experiment hpo-default-smoke \
-  --dataset opt-with-synthetic-10b-v1 \
+  --dataset regmix-10b-v1 \
   --team memory-split \
   --spec .edullm/run-hpo-comparison-baseline.yaml \
   --compute gpu-1xa10g \
@@ -112,7 +112,7 @@ edullm submit \
 ```bash
 edullm submit \
   --experiment hpo-hybrid-smoke \
-  --dataset opt-with-synthetic-10b-v1 \
+  --dataset regmix-10b-v1 \
   --team memory-split \
   --spec .edullm/run-hpo-comparison-hybrid.yaml \
   --compute gpu-4xa10g \

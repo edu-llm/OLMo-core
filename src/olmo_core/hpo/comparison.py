@@ -42,8 +42,8 @@ __all__ = [
     "smoke_final_evaluator",
 ]
 
-COMPARISON_DATASET_ID = "pretrain/opt-with-synthetic-10b"
-COMPARISON_DATASET_REFERENCE = "opt-with-synthetic-10b-v1"
+COMPARISON_DATASET_ID = "pretrain/regmix-10b"
+COMPARISON_DATASET_REFERENCE = "regmix-10b-v1"
 
 
 def comparison_heldout_label(dataset_id: str) -> str:
