@@ -50,10 +50,13 @@ from olmo_core.testing.utils import requires_fla, requires_gpu
 #: failure mode ``test_every_arm_has_a_declared_topology`` exists to prevent on the ledger side.
 MIXER_ARMS: List[str] = [name for name in ARMS if ARMS[name].kda_layers]
 
-#: bf16 keeps 8 explicit mantissa bits. A parameter whose update is smaller than this fraction of
-#: its own magnitude cannot survive accumulation in a bf16 optimizer state: it rounds away and the
-#: parameter is frozen in practice however healthy its gradient looks.
-BF16_ENGAGEMENT_FLOOR = 2**-8
+#: REMOVED, DELIBERATELY: a `BF16_ENGAGEMENT_FLOOR = 2**-8` constant used as `moved <= FLOOR *
+#: |p|max`. That form flags a parameter for being LARGE rather than for being inert, and no step
+#: size can rescue it -- SGD movement is exactly linear in lr and so is the bar, so the ratio is
+#: invariant (K2's `dt_bias` moved 0.005938 at lr=10 and 0.059384 at lr=100, and failed both).
+#: :func:`_engagement_floor` replaces it with the bf16 half-ulp, which asks the question the
+#: comment always claimed to: can this update survive accumulation at all? Do not reintroduce the
+#: constant; the guard and its self-test now share one function so they cannot drift apart.
 
 #: ``ln(100352) = 11.5164``. A model at init predicts near-uniform over the vocabulary, so this is
 #: what step-0 cross entropy has to be.
@@ -63,6 +66,24 @@ BF16_ENGAGEMENT_FLOOR = 2**-8
 #: :func:`test_step_0_loss_would_reject_the_wrong_tokenizer` is what covers that case explicitly.
 #: Below about 10 means the targets are wrong (a model cannot beat uniform before it has trained).
 STEP0_LOSS_BAND: Tuple[float, float] = (11.016, 12.016)
+
+
+def _engagement_floor(scale: float, *, device: torch.device) -> float:
+    """The smallest update to a parameter of magnitude ``scale`` that bf16 can still represent.
+
+    ONE DEFINITION, USED BY BOTH THE GUARD AND ITS SELF-TEST. bf16 carries 8 mantissa bits, so
+    ``p + d`` is distinguishable from ``p`` only once ``d`` exceeds a half-ulp of ``p``;
+    ``torch.nextafter`` reports that spacing exactly, per parameter, with no tunable in it.
+
+    A parameter initialised to exactly zero has no magnitude to take a ulp of, so it keeps an
+    absolute floor. Judging it relatively would divide by zero and, worse, would call any movement
+    at all infinite engagement -- a free pass for exactly the zero-initialised branches this hunts.
+    """
+    if scale <= 0:
+        return 1e-12
+    base = torch.tensor(scale, dtype=torch.bfloat16, device=device)
+    inf = torch.tensor(float("inf"), dtype=torch.bfloat16, device=device)
+    return float(torch.nextafter(base, inf) - base) / 2.0
 
 
 def _tiny_mixer(name: str, *, device: torch.device, dtype=torch.bfloat16):
@@ -303,11 +324,20 @@ def test_every_parameter_engages_after_one_step(name: str):
     #   GDN2 @ lr=100  every parameter clears its floor. Same for K2 and KDA_BASE at both rates.
     #
     # Sitting at 0.63-0.79x of a threshold is the signature of a marginal threshold, not a dead
-    # branch -- and `K2` passed the probe at lr=10 while failing the gate at lr=10, i.e. it was
-    # oscillating across the line run to run. A guard whose verdict depends on run-to-run noise
-    # decides nothing. 100 puts the healthy population an order of magnitude clear while a
-    # zero-gradient parameter stays pinned at exactly zero.
-    optimizer = torch.optim.SGD(mixer.parameters(), lr=100.0)
+    # branch. But note lr alone could never have fixed the RELATIVE form of this floor: SGD
+    # movement is exactly linear in lr and so was that bar, so the ratio was invariant -- K2's
+    # `dt_bias` moved 0.005938 at lr=10 and 0.059384 at lr=100, a precise 10x, and failed both
+    # times. The floor below was changed to bf16 representability for that reason; this step size
+    # only has to make a HEALTHY update clear one bf16 tick.
+    #
+    # 1000 IS CHOSEN AGAINST THE MEASURED POPULATION, not picked. Scaling the probe's numbers (all
+    # linear in lr) against each parameter's own half-ulp, the worst healthy parameter clears its
+    # floor by 0.19x at lr=10, 1.90x at lr=100, and 19.0x at lr=1000. 100 would leave the tightest
+    # case a factor of two from the line -- close enough for run-to-run noise to decide the verdict,
+    # which is how `K2` came to pass a probe and fail the gate at the same lr. 1000 puts the whole
+    # healthy population an order of magnitude clear, and a zero-gradient parameter still moves
+    # EXACTLY ZERO, which never exceeds a positive half-ulp at any step size whatsoever.
+    optimizer = torch.optim.SGD(mixer.parameters(), lr=1000.0)
 
     torch.manual_seed(0)
     x = torch.randn(1, 32, d_model, device=device, dtype=torch.bfloat16)
@@ -319,11 +349,29 @@ def test_every_parameter_engages_after_one_step(name: str):
     for n, p in mixer.named_parameters():
         moved = (p.detach() - before[n]).abs().max().item()
         scale = before[n].abs().max().item()
-        # A parameter initialised to exactly zero has no magnitude of its own to be relative to,
-        # so it is judged against an absolute step instead. Judging it relatively would divide by
-        # zero and, worse, would call any movement at all "infinite engagement" -- a free pass for
-        # exactly the zero-initialised branches this guard exists to catch.
-        floor = BF16_ENGAGEMENT_FLOOR * scale if scale > 0 else 1e-12
+        # THE FLOOR IS bf16 REPRESENTABILITY, NOT RELATIVE SIZE, and the distinction is what makes
+        # this guard fireable at all.
+        #
+        # The relative form -- `moved <= 2**-8 * scale` -- cannot be satisfied by raising the step
+        # size, because SGD movement is exactly linear in lr and so is the bar: K2's `dt_bias`
+        # moved 0.005938 at lr=10 and 0.059384 at lr=100, a precise 10x, and failed BOTH times.
+        # The ratio is invariant in lr. What the relative form actually measures is the parameter's
+        # own MAGNITUDE: `dt_bias` is a softplus bias with |p|max ~ 15, so any honest update is
+        # small beside it, while `o_norm.weight` sits at 1.0 and `w_b.weight` near 0.09. Flagging a
+        # parameter for being large is not a liveness finding.
+        #
+        # What this guard exists to catch is an update that ROUNDS AWAY -- a gradient so small
+        # relative to the parameter that a bf16 optimizer state cannot represent the sum, leaving
+        # the branch decorative while its gradient looks healthy. That is a precision question with
+        # a precise answer: bf16 carries 8 mantissa bits, so `p + d` is distinguishable from `p`
+        # only when `d` exceeds a half-ulp of `p`. `torch.nextafter` in bf16 gives that spacing
+        # directly, per parameter, with no tunable in it.
+        #
+        # A dead parameter still fails: a zero gradient moves EXACTLY 0 at any lr, and 0 never
+        # exceeds a positive half-ulp. A parameter initialised to exactly zero keeps the absolute
+        # floor, since it has no magnitude to take a ulp of and a relative test would call any
+        # movement infinite engagement -- a free pass for the zero-init branches this hunts.
+        floor = _engagement_floor(scale, device=p.device)
         if moved <= floor:
             below_floor[n] = moved
 
@@ -371,8 +419,12 @@ def test_the_liveness_floor_can_fail():
     below_floor = {}
     for n, p in m.named_parameters():
         moved = (p.detach() - before[n]).abs().max().item()
-        scale = before[n].abs().max().item()
-        floor = BF16_ENGAGEMENT_FLOOR * scale if scale > 0 else 1e-12
+        # THE SAME FUNCTION THE GUARD USES, not a second copy of the formula. This self-test's only
+        # job is to prove the guard can condemn something; if it computed its own floor it would go
+        # on certifying a rule the guard had stopped applying -- which is exactly what happened
+        # when the guard moved from a relative floor to bf16 representability and this block did
+        # not.
+        floor = _engagement_floor(before[n].abs().max().item(), device=p.device)
         if moved <= floor:
             below_floor[n] = moved
 

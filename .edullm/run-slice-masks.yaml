@@ -1,0 +1,35 @@
+schema_version: 1
+
+# Build the frozen gap-band masks that run 2's SECONDARY endpoint reads.
+#
+# WHY THIS IS A BATCH JOB AND NOT A LAPTOP OR FARMSHARE SCRIPT, and none of the three reasons is
+# size. (a) The shards live in `s3://edullm-data` and the Batch workload role is the principal that
+# holds `s3:GetObject` there; FarmShare has no such credential and this project does not put one
+# there. (b) The output must land on S3 for `--slice-mask-uri` to fetch it, and the airlock means a
+# job role is the writer. (c) 3.9 GB should not transit a laptop to end up back in the same account.
+#
+# CPU PROFILE, NOT GPU. Labelling is one dict lookup, one shift-or and one comparison per token.
+# The builder prints its own tokens/sec after every shard, so the estimate becomes a MEASUREMENT
+# inside the first minute rather than a surprise at the timeout -- and `realized_mass` per band
+# arrives with it, which is what says whether band 4096 clears its 25M-token floor (2.56% of the
+# 974,917,632 scored tokens) or the recall endpoint has a dead cell.
+#
+# `--sequence-length 4096` IS REQUIRED AND UNDEFAULTED, by the builder and now by the consumer too.
+# A gap band is a distance measured INSIDE one evaluation window, so masks built at one window and
+# scored at another attribute every token to a band computed against a context the model never saw
+# -- a full, credible, wrong table. `fetch_slice_inputs` refuses on the mismatch as of this branch.
+#
+# The `verify` pass re-reads what was written from its own bytes before anything downstream trusts
+# it, and it is cheap next to the build.
+
+workload_profile: olmo-core-check-cpu
+suggested_compute: cpu-8x
+
+command: >-
+  bash -lc 'set -euo pipefail &&
+  OUT="$EDULLM_CHECKPOINT_DIR/slice-masks-v1" &&
+  python scripts/build_slice_masks.py build
+  --dataset-id reservoir-dolma2 --dataset-version v1
+  --sequence-length 4096 --jobs 8
+  --out "$OUT" < /dev/null &&
+  python scripts/build_slice_masks.py verify "$OUT" < /dev/null'
