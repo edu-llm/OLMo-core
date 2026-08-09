@@ -41,6 +41,7 @@ from olmo_core.nn.transformer.core6_arms import (
     VOCAB_SIZE,
     mixer_config,
 )
+from olmo_core.nn.transformer.init import InitMethod
 from olmo_core.testing.utils import requires_fla, requires_gpu
 
 # --- shared machinery -------------------------------------------------------------------------
@@ -101,6 +102,30 @@ def _tiny_mixer(name: str, *, device: torch.device, dtype=torch.bfloat16):
     cfg = type(cfg)(**{**cfg.__dict__, "n_heads": 2, "head_dim": 64})
     d_model = 2 * 64
     mixer = cfg.build(d_model=d_model, layer_idx=0, n_layers=1, init_device=str(device))
+    # `build` ALLOCATES BUT DOES NOT INITIALISE, and without this line the probe reads garbage.
+    # `A_log` and `dt_bias` are `torch.empty` (`recurrent.py:1532-1533`), so a mixer that is built
+    # and never initialised holds whatever bytes the caching allocator recycles. Measured: this
+    # probe drew `A_log = [1.566e17, 7.698e17]`, where the second value was VERBATIM a float
+    # printed by the immediately preceding test -- a recycled block, deterministic given allocation
+    # history, which is why it replicated cleanly instead of looking like noise.
+    #
+    # The consequence is not noise, it is a false DEAD reading. The gate is
+    # `g = -exp(A_log) * softplus(...)`, so a large garbage `A_log` underflows `exp(g)` to exactly
+    # zero and the entire gate chain -- A_log, dt_bias, f_proj.0, f_proj.1 -- reports a gradient of
+    # exactly 0.0 while the rest of the layer stays alive. Forcing `A_log = 10.0` reproduces that
+    # signature exactly (4096/4096 positions at `exp(g) == 0`); at the real init range
+    # `log(U(1,16))`, nothing is dead. A finite-difference check confirms autograd is correct and
+    # the hand-written kernel's backward returns all ten gradients with `dg` in slot 4.
+    #
+    # So this one missing call cost a false "the decay gate never trains" alarm against a shipped
+    # operator, and the guard's own lr was calibrated against the garbage population.
+    mixer.init_weights(
+        init_method=InitMethod.normal,
+        d_model=d_model,
+        block_idx=0,
+        num_blocks=1,
+        generator=torch.Generator(device=device).manual_seed(0),
+    )
     return mixer.to(device=device, dtype=dtype), d_model
 
 
@@ -330,13 +355,18 @@ def test_every_parameter_engages_after_one_step(name: str):
     # times. The floor below was changed to bf16 representability for that reason; this step size
     # only has to make a HEALTHY update clear one bf16 tick.
     #
-    # 1000 IS CHOSEN AGAINST THE MEASURED POPULATION, not picked. Scaling the probe's numbers (all
-    # linear in lr) against each parameter's own half-ulp, the worst healthy parameter clears its
-    # floor by 0.19x at lr=10, 1.90x at lr=100, and 19.0x at lr=1000. 100 would leave the tightest
-    # case a factor of two from the line -- close enough for run-to-run noise to decide the verdict,
-    # which is how `K2` came to pass a probe and fail the gate at the same lr. 1000 puts the whole
-    # healthy population an order of magnitude clear, and a zero-gradient parameter still moves
-    # EXACTLY ZERO, which never exceeds a positive half-ulp at any step size whatsoever.
+    # 1000 was chosen against a measured population -- but THAT POPULATION WAS MEASURED ON
+    # UNINITIALISED PARAMETERS, before `_tiny_mixer` was fixed to call `init_weights`. Scaling
+    # those numbers gave the worst healthy parameter 0.19x its floor at lr=10, 1.90x at lr=100 and
+    # 19.0x at lr=1000, so 1000 was the defensible choice AT THE TIME and it is kept here as the
+    # starting point rather than silently re-guessed.
+    #
+    # IT IS NOT YET RE-CALIBRATED AGAINST INITIALISED PARAMETERS, and that is a known gap rather
+    # than an oversight: a probe on correctly-initialised mixers reported this guard failing on all
+    # nine arms, which says the threshold and the step size both need re-measuring together on real
+    # weights. Do that before trusting a PASS here. A FAIL remains meaningful in the meantime,
+    # because a zero-gradient parameter moves EXACTLY ZERO at any step size and never clears a
+    # positive half-ulp.
     optimizer = torch.optim.SGD(mixer.parameters(), lr=1000.0)
 
     torch.manual_seed(0)
