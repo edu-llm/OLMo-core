@@ -84,8 +84,10 @@ print("=== corpus projection, 40,000 single-turn rows ===")
 print(f"  {'domain':14s} {'rows':>7s} {'tokens @median':>16s} {'tokens @mean':>15s}")
 for d, r in PLAN.items():
     print(f"  {d:14s} {r:7,} {r * median_single:16,} {r * mean_single:15,}")
-print(f"  {'TOTAL':14s} {TOTAL_ROWS:7,} "
-      f"{TOTAL_ROWS * median_single:16,} {TOTAL_ROWS * mean_single:15,}")
+print(
+    f"  {'TOTAL':14s} {TOTAL_ROWS:7,} "
+    f"{TOTAL_ROWS * median_single:16,} {TOTAL_ROWS * mean_single:15,}"
+)
 
 print()
 print("  NOTE Dolci's schema blocks are general-purpose APIs. Our pedagogy tools nest deeper")
@@ -105,5 +107,7 @@ print("=== how this lands against a sequence length ===")
 for seq in (2048, 4096, 8192, 16384, 32768):
     over_all = sum(1 for n in all_tokens if n > seq)
     over_single = sum(1 for n in single_turn if n > seq)
-    print(f"  seq_len={seq:6,}  rows over limit: {over_all:3d}/100 all, "
-          f"{over_single}/{len(single_turn)} single-turn")
+    print(
+        f"  seq_len={seq:6,}  rows over limit: {over_all:3d}/100 all, "
+        f"{over_single}/{len(single_turn)} single-turn"
+    )

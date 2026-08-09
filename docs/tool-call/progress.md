@@ -233,4 +233,19 @@ Anything longer belongs in [`prd.md`](prd.md) or [`dataset-design.md`](dataset-d
   train. Treat as a **floor** — our pedagogy schemas nest deeper than Dolci's general-purpose ones.
   `seq_len=4096` fits every sampled row; 2048 would clip 9% of multi-turn.
 
+- **Corpus token count settled two ways, and they agree: ~19.4M tokens for 40,000 rows** (mean **485
+  tokens/row**). Top-down was a median over real Dolci rows; bottom-up
+  (`verify/estimate_corpus_tokens.py`) tokenizes real schemas from our own inventories and sums the
+  32 cells. The methods share nothing and land within rounding of each other.
+- **Correction: trainable tokens are ~1.12M, i.e. 5.8% of the corpus — not the ~15% estimated earlier**
+  from a 3-row toy sample. A tool call is 20–40 tokens while its schema block is hundreds, so **94% of
+  the corpus is context the model reads and never predicts.** That is inherent to tool calling, but it
+  means the effective gradient signal is small and **argues for more rows rather than fewer**.
+- **The single biggest token lever is unpinned:** `multi-tool-select` is specified as "3–20 schemas
+  offered" and modelled at 8. That one choice swings the category between **3.35M and 16.6M** tokens,
+  i.e. the corpus between roughly **15.5M and 28.7M**. Pin it before budgeting a generation run.
+- Token share by domain is **not** row share: pedagogy is 27.5% of rows but **39.3% of tokens**
+  (its schemas are the largest — `grade_submission_with_rubric` is 201 tokens, `post_score` 145,
+  against `calculator` at 51). general 34.8%, arithmetic 12.9%, web-search 12.9%.
+
 <!-- next entry goes below -->
