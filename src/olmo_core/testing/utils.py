@@ -26,6 +26,8 @@ has_grouped_gemm = False
 has_te = False
 has_dion = False
 has_quack = False
+has_sympy = False
+has_ddgs = False
 
 
 try:
@@ -65,6 +67,22 @@ try:
 
     has_quack = True
     del quack
+except ImportError:
+    pass
+
+try:
+    import sympy  # type: ignore
+
+    has_sympy = True
+    del sympy
+except ImportError:
+    pass
+
+try:
+    import ddgs  # type: ignore
+
+    has_ddgs = True
+    del ddgs
 except ImportError:
     pass
 
@@ -194,6 +212,12 @@ def requires_quack(func):
     for mark in QUACK_MARKS:
         func = mark(func)
     return func
+
+
+# These two run on CPU, so unlike the marks above they carry no GPU requirement.
+requires_sympy = pytest.mark.skipif(not has_sympy, reason="Requires sympy")
+
+requires_ddgs = pytest.mark.skipif(not has_ddgs, reason="Requires ddgs")
 
 
 MPS_MARKS = (pytest.mark.skipif(not has_mps, reason="Requires MPS"),)
