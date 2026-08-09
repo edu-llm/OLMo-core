@@ -1,17 +1,32 @@
+from contextlib import ExitStack
+from unittest import mock
+
 import pytest
+import torch
 
 from olmo_core.hpo.proxy import (
     AdmitDecision,
     ExactTokenScreen,
     FrozenLayerProxy,
     ProxyAdmission,
+    ProxyEvidenceContract,
     ProxyKind,
     ProxyMetrics,
     UMuPArm,
+    evaluate_paired_proxy_bundle,
+    evaluate_paired_proxy_observations,
     lcb,
     output_suffix_freeze_patterns,
+    preregistered_cohort,
     rank_correlation,
     top_k_recall,
+)
+from olmo_core.hpo.umup import (
+    UMuPAdamWConfig,
+    apply_umup_model,
+    apply_umup_parameter_metadata,
+    build_same_depth_umup_proxy,
+    require_official_umup_forward,
 )
 
 
@@ -65,6 +80,70 @@ def test_frozen_layer_proxy_requires_full_retrain_and_freezes_prefix():
     assert "embedding_norm.*" in patterns
 
 
+def test_half_layer_proxy_freezes_embeddings_and_exactly_first_eight_blocks():
+    patterns = FrozenLayerProxy(n_layers=16, train_last_k=8).freeze_patterns()
+    frozen_blocks = [pattern for pattern in patterns if pattern.startswith("blocks.")]
+    assert frozen_blocks == [f"blocks.{index}.*" for index in range(8)]
+    assert "embeddings.*" in patterns
+
+
+def test_paired_proxy_evidence_requires_common_preregistered_cohort():
+    contract = ProxyEvidenceContract(
+        cohort_id="v1",
+        config_ids=("a", "b", "c", "d", "e", "f"),
+        first_rung_tokens=50_003_968,
+        top_k=2,
+    )
+    cohort = preregistered_cohort(contract)
+    assert set(cohort) == set(contract.config_ids)
+    assert all(len(unit_config) == 9 for unit_config in cohort.values())
+    reference = {"a": 1.0, "b": 2.0, "c": 3.0, "d": 4.0, "e": 5.0, "f": 6.0}
+    proxy = {"a": 1.1, "b": 2.1, "c": 4.0, "d": 3.0, "e": 5.1, "f": 6.1}
+    metrics = evaluate_paired_proxy_bundle(
+        contract,
+        proxy_ce=proxy,
+        reference_ce=reference,
+        net_compute_savings=0.2,
+    )
+    assert metrics.proxy_kind is ProxyKind.PROXY_BUNDLE
+    assert metrics.paired_reference_complete is True
+    assert metrics.n == 6
+    assert metrics.top_k_recall == 1.0
+    with pytest.raises(ValueError, match="cohort"):
+        evaluate_paired_proxy_bundle(
+            contract,
+            proxy_ce={key: value for key, value in proxy.items() if key != "f"},
+            reference_ce=reference,
+            net_compute_savings=0.2,
+        )
+
+    proxy_observations = {
+        key: {"tokens": contract.first_rung_tokens, "ce": value, "accelerator_seconds": 8.0}
+        for key, value in proxy.items()
+    }
+    reference_observations = {
+        key: {"tokens": contract.first_rung_tokens, "ce": value, "accelerator_seconds": 10.0}
+        for key, value in reference.items()
+    }
+    raw_metrics = evaluate_paired_proxy_observations(
+        contract,
+        proxy_observations=proxy_observations,
+        reference_observations=reference_observations,
+    )
+    assert raw_metrics.net_compute_savings == pytest.approx(0.2)
+    assert (
+        ProxyAdmission(min_rank_corr=0.5, min_top_k_recall=0.5, min_samples=6).decide(raw_metrics)
+        is AdmitDecision.PRUNE_PROMOTE
+    )
+    proxy_observations["a"]["tokens"] -= 1
+    with pytest.raises(ValueError, match="tokens"):
+        evaluate_paired_proxy_observations(
+            contract,
+            proxy_observations=proxy_observations,
+            reference_observations=reference_observations,
+        )
+
+
 def test_umup_arm_forbids_depth_reduction():
     UMuPArm(width_factor=0.5, depth_factor=1.0)  # width-reduced, same depth: ok
     with pytest.raises(ValueError):
@@ -72,6 +151,91 @@ def test_umup_arm_forbids_depth_reduction():
     with pytest.raises(TypeError):
         UMuPArm(width_factor=0.5, depth_factor=1.0, validate_parity_first=False)
     assert UMuPArm(width_factor=0.5, depth_factor=1.0).validate_parity_first is True
+
+
+def test_same_depth_umup_is_counted_from_370m_and_near_190m_target():
+    config, metadata = build_same_depth_umup_proxy(vocab_size=100_352)
+    assert config.n_layers == metadata.source_depth == metadata.proxy_depth == 16
+    assert metadata.source_architecture == "olmo2_370M"
+    assert metadata.backend == "unit-scaling"
+    assert metadata.proxy_non_embedding_params == config.num_non_embedding_params
+    assert metadata.relative_parameter_error <= metadata.parity_tolerance
+    assert config.d_model != 768  # not the stock, depth-confounded 12-layer 190M config
+
+
+def test_official_umup_forward_path_is_available():
+    require_official_umup_forward()
+
+
+def test_official_umup_executes_cpu_forward_and_backward():
+    import unit_scaling.functional as U
+
+    from olmo_core.nn.transformer import TransformerConfig
+    from olmo_core.nn.transformer.config import TransformerBlockType
+
+    config = TransformerConfig.llama_like(
+        d_model=32,
+        hidden_size_multiplier=2.0,
+        n_layers=2,
+        n_heads=4,
+        vocab_size=64,
+        block_name=TransformerBlockType.reordered_norm,
+        qk_norm=True,
+    )
+    model = config.build(init_device="meta")
+    apply_umup_model(model, n_layers=config.n_layers)
+    model.to_empty(device=torch.device("cpu"))
+    model.init_weights(device=torch.device("cpu"))
+
+    operation_names = (
+        "cross_entropy",
+        "embedding",
+        "linear",
+        "linear_readout",
+        "residual_add",
+        "residual_split",
+        "rms_norm",
+        "scaled_dot_product_attention",
+        "silu_glu",
+    )
+    with ExitStack() as stack:
+        operations = {
+            name: stack.enter_context(mock.patch.object(U, name, wraps=getattr(U, name)))
+            for name in operation_names
+        }
+        input_ids = torch.randint(0, config.vocab_size, (2, 8))
+        labels = input_ids.roll(-1, dims=1)
+        labels[:, -1] = -100
+        output = model(input_ids, labels=labels)
+        output.loss.backward()
+
+    assert torch.isfinite(output.loss)
+    assert all(operation.call_count > 0 for operation in operations.values())
+    assert all(
+        parameter.grad is None or torch.isfinite(parameter.grad).all()
+        for parameter in model.parameters()
+    )
+    assert model.embeddings.weight.std().item() == pytest.approx(1.0, rel=0.15)
+    assert model.lm_head.w_out.weight.mup_type == "output"
+    assert model.lm_head.norm.weight.mup_type == "norm"
+
+
+def test_umup_metadata_is_complete_and_marks_depth_and_readout():
+    model = torch.nn.Module()
+    model.blocks = torch.nn.ModuleList([torch.nn.Linear(4, 4, bias=False)])
+    model.lm_head = torch.nn.Linear(4, 8, bias=False)
+    apply_umup_parameter_metadata(model, n_layers=16)
+    metadata = {
+        name: (parameter.mup_type, parameter.mup_scaling_depth)
+        for name, parameter in model.named_parameters()
+    }
+    assert metadata["blocks.0.weight"] == ("weight", 16)
+    assert metadata["lm_head.weight"] == ("output", None)
+
+    groups = UMuPAdamWConfig(lr=1.0, weight_decay=0.1).build_groups(model)
+    lrs = [group["lr"] for group in groups]
+    assert min(lrs) < max(lrs)
+    assert max(lrs) == pytest.approx(1.0)  # readout uses the width-stable base LR
 
 
 def test_admission_requires_beating_exact_screen_at_equal_budget():

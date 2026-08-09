@@ -1324,6 +1324,7 @@ class HpoController:
                     "numeric_failure": result.numeric_failure,
                     "observation_hash": obs_hash,
                     "checkpoint_ref": result.checkpoint_ref,
+                    "accelerator_seconds": result.accelerator_seconds,
                 },
             )
 
@@ -1420,10 +1421,13 @@ class HpoController:
                 )
             self.ingest(results)
 
-    def best(self) -> Tuple[str, Tuple[float, ...], float]:
-        """The incumbent: the observed point with the lowest CE (highest objective)."""
+    def top_candidates(self, limit: int = 5) -> List[Tuple[str, Tuple[float, ...], float]]:
+        """Return the best full-fidelity candidates in ascending CE order."""
+
+        if limit <= 0:
+            raise ValueError("limit must be positive")
         state = self.state()
-        best: Optional[Tuple[str, Tuple[float, ...], float]] = None
+        candidates: List[Tuple[str, Tuple[float, ...], float]] = []
         for tid, rec in state.trials.items():
             if tid not in self._configs or not rec.curve:
                 continue
@@ -1435,8 +1439,14 @@ class HpoController:
             if not final_values:
                 continue
             final_ce = final_values[-1]
-            if best is None or final_ce < best[2]:
-                best = (tid, self._configs[tid], final_ce)
-        if best is None:
+            candidates.append((tid, self._configs[tid], final_ce))
+        candidates.sort(key=lambda candidate: (candidate[2], candidate[0]))
+        return candidates[:limit]
+
+    def best(self) -> Tuple[str, Tuple[float, ...], float]:
+        """The incumbent: the observed point with the lowest CE (highest objective)."""
+
+        candidates = self.top_candidates(1)
+        if not candidates:
             raise RuntimeError("no completed observations to report a best from")
-        return best
+        return candidates[0]

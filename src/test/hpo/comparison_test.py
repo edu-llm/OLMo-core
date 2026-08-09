@@ -12,6 +12,7 @@ from olmo_core.hpo.comparison import (
     COMPARISON_HELDOUT_METRIC,
     DEFAULT_RECIPE_HPS,
     build_comparison_experiment,
+    build_umup_hpo_experiment,
     comparison_dataset_from_read,
 )
 
@@ -134,7 +135,21 @@ def test_comparison_factory_builds_matched_train_and_eval_config(
     assert config.data_loader.global_batch_size == 32768
     assert config.init_seed == 110007
     assert config.train_module.compile_model is False
+    assert config.model.n_layers == 12
+    assert config.umup_backend is None
     assert COMPARISON_HELDOUT_METRIC == (f"eval/lm/{COMPARISON_HELDOUT_LABEL}/CE loss")
+
+    umup_config = build_umup_hpo_experiment(
+        sequence_length=2048,
+        global_batch_size=32768,
+        rank_microbatch_size=4096,
+        eval_steps=2,
+    )
+    assert umup_config.model.n_layers == 16
+    assert umup_config.umup_backend == "unit-scaling"
+    assert umup_config.umup_parity_validated is True
+    assert umup_config.umup_metadata["proxy_depth"] == 16
+    assert umup_config.train_module.optim.__class__.__name__ == "UMuPAdamWConfig"
 
 
 def test_comparison_specs_match_aggregate_budget_and_platform_contract():

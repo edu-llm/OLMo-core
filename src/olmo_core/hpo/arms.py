@@ -1,19 +1,4 @@
-"""
-Preregistered ablation arms and equal-budget accounting.
-
-The plan's evidence rests on comparing arms *at equal total budget*, where "budget" is charged
-accelerator-seconds and training tokens across **every** category of work -- including failed,
-screened, reset, retrained, LLM-controller, and proxy-selection compute, not just the main
-trials. :class:`BudgetLedger` makes that accounting explicit and refuses a comparison until every
-category has been counted; :func:`equal_budget` compares two ledgers within a tolerance.
-
-:class:`Arm` enumerates the controls and staged ablations so an experiment driver can iterate
-them, and :func:`ablation_matrix` records the LLM ratio/scope that makes the incremental LLM
-effect identifiable (CMA-only ``r=0`` vs configuration-only Centaur vs the broader multi-action
-advisor).
-
-Pure ``math`` + standard library.
-"""
+"""Preregistered three-arm HPO study and complete resource accounting."""
 
 from __future__ import annotations
 
@@ -26,19 +11,11 @@ __all__ = ["Arm", "EQUAL_BUDGET_CATEGORIES", "BudgetLedger", "equal_budget", "ab
 
 
 class Arm(str, Enum):
-    RANDOM_FIXED_RECIPE = "random_fixed_recipe"
-    RANDOM_DYNAMIC_SCHEDULE = "random_dynamic_schedule"
-    RANDOM_TOKEN_SCREEN = "random_token_screen"
-    IFBO_OFFICIAL = "ifbo_official"
-    IPBT_REFERENCE = "ipbt_reference"
-    IPBT_RESTART_BTT_2X2 = "ipbt_restart_x_btt_2x2"
-    IPBT_IFBO = "ipbt_ifbo"
-    NOVEL_AGGREGATE_BTT = "novel_aggregate_btt"
-    CMA_ONLY = "cma_only"
-    CONFIG_ONLY_CENTAUR = "config_only_centaur"
-    MULTI_ACTION_ADVISOR = "multi_action_advisor"
-    FROZEN_LAYER_PROXY = "frozen_layer_proxy"
-    UMUP_PROXY = "umup_proxy"
+    """The only registered arms in the preregistered study."""
+
+    FULL_ACRONYM_SOUP = "full_acronym_soup"
+    NO_CENTAUR = "no_centaur"
+    NO_PROXY = "no_proxy"
 
 
 # Every category of compute that must be counted toward an arm's budget.
@@ -119,31 +96,37 @@ def equal_budget(a: BudgetLedger, b: BudgetLedger, *, rel_tol: float = 0.05) -> 
 
 
 def ablation_matrix() -> Dict[Arm, Dict[str, object]]:
-    """The preregistered arm settings that make the LLM contribution identifiable."""
+    """Return the exact controller and model contract for each study arm."""
+
+    shared = {
+        "ftpfn": True,
+        "ifbo": True,
+        "ipbt": True,
+        "btt_aggregate_restarts": True,
+    }
     return {
-        Arm.RANDOM_FIXED_RECIPE: {"dynamic_schedule": False, "llm_ratio": 0.0, "llm_scope": "none"},
-        Arm.RANDOM_DYNAMIC_SCHEDULE: {
-            "dynamic_schedule": True,
-            "llm_ratio": 0.0,
-            "llm_scope": "none",
-        },
-        Arm.RANDOM_TOKEN_SCREEN: {"dynamic_schedule": False, "llm_ratio": 0.0, "llm_scope": "none"},
-        Arm.IFBO_OFFICIAL: {"dynamic_schedule": True, "llm_ratio": 0.0, "llm_scope": "none"},
-        Arm.IPBT_REFERENCE: {"dynamic_schedule": True, "llm_ratio": 0.0, "llm_scope": "none"},
-        Arm.IPBT_RESTART_BTT_2X2: {"dynamic_schedule": True, "llm_ratio": 0.0, "llm_scope": "none"},
-        Arm.IPBT_IFBO: {"dynamic_schedule": True, "llm_ratio": 0.0, "llm_scope": "none"},
-        Arm.NOVEL_AGGREGATE_BTT: {"dynamic_schedule": True, "llm_ratio": 0.0, "llm_scope": "none"},
-        Arm.CMA_ONLY: {"dynamic_schedule": True, "llm_ratio": 0.0, "llm_scope": "none"},
-        Arm.CONFIG_ONLY_CENTAUR: {
-            "dynamic_schedule": True,
-            "llm_ratio": 0.3,
-            "llm_scope": "config_only",
-        },
-        Arm.MULTI_ACTION_ADVISOR: {
-            "dynamic_schedule": True,
+        Arm.FULL_ACRONYM_SOUP: {
+            **shared,
+            "model_parameterization": "umup_190m_same_depth",
+            "target_depth": 16,
+            "freeze_first_n_blocks": 8,
             "llm_ratio": 0.3,
             "llm_scope": "multi_action",
         },
-        Arm.FROZEN_LAYER_PROXY: {"dynamic_schedule": True, "llm_ratio": 0.0, "llm_scope": "none"},
-        Arm.UMUP_PROXY: {"dynamic_schedule": True, "llm_ratio": 0.0, "llm_scope": "none"},
+        Arm.NO_CENTAUR: {
+            **shared,
+            "model_parameterization": "umup_190m_same_depth",
+            "target_depth": 16,
+            "freeze_first_n_blocks": 8,
+            "llm_ratio": 0.0,
+            "llm_scope": "none",
+        },
+        Arm.NO_PROXY: {
+            **shared,
+            "model_parameterization": "stock_olmo2_190m",
+            "target_depth": 12,
+            "freeze_first_n_blocks": 0,
+            "llm_ratio": 0.3,
+            "llm_scope": "multi_action",
+        },
     }

@@ -263,32 +263,38 @@ def test_configure_applies_frozen_layer_fidelity_to_model():
     ]
 
 
-def test_configure_umup_requires_official_configurator_marker():
+def test_configure_umup_parameterization_rejects_metadata_only_optimizer():
     config, worker = _fidelity_config_fixture()
-    with pytest.raises(RuntimeError, match="unit-scaling"):
+    config.umup_backend = "unit-scaling"
+    config.umup_parity_validated = True
+    config.umup_metadata = {"proxy_depth": config.model.n_layers}
+    with pytest.raises(RuntimeError, match="scaled AdamW"):
         configure_hpo_experiment(
             config,
             worker=worker,
             hard_stop_tokens=2048,
             heldout_metric="eval/search_validation/val/CE loss",
-            fidelity={"kind": "umup", "width_factor": 0.5, "depth_factor": 1.0},
+            fidelity={"kind": "frozen_layer", "train_last_k": 4},
+            model_parameterization={"kind": "umup", "backend": "unit-scaling"},
         )
+
     config, worker = _fidelity_config_fixture()
-    config.umup_backend = "unit-scaling"
-    config.umup_parity_validated = True
-    configure_hpo_experiment(
-        config,
-        worker=worker,
-        hard_stop_tokens=2048,
-        heldout_metric="eval/search_validation/val/CE loss",
-        fidelity={"kind": "umup", "width_factor": 0.5, "depth_factor": 1.0},
-    )
+    with pytest.raises(ValueError, match="fidelity"):
+        configure_hpo_experiment(
+            config,
+            worker=worker,
+            hard_stop_tokens=2048,
+            heldout_metric="eval/search_validation/val/CE loss",
+            fidelity={"kind": "umup"},
+        )
 
 
 def test_umup_model_validation_requires_official_parameter_metadata():
-    with pytest.raises(RuntimeError, match="unit_scaling"):
+    with pytest.raises(RuntimeError, match="execution backend"):
         validate_umup_model(torch.nn.Linear(2, 2))
-    validate_umup_model(uu.Linear(2, 2))
+    model = uu.Linear(2, 2)
+    model._umup_execution_backend = "unit-scaling-public-functional"
+    validate_umup_model(model)
 
 
 def _fidelity_config_fixture():

@@ -17,7 +17,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional, Sequence
+from typing import List, Mapping, Optional, Sequence
 
 import numpy as np
 
@@ -29,6 +29,10 @@ __all__ = [
     "ProxyMetrics",
     "AdmitDecision",
     "ProxyAdmission",
+    "ProxyEvidenceContract",
+    "preregistered_cohort",
+    "evaluate_paired_proxy_bundle",
+    "evaluate_paired_proxy_observations",
     "rank_correlation",
     "top_k_recall",
     "lcb",
@@ -72,6 +76,51 @@ class FrozenLayerProxy:
 
 
 @dataclass(frozen=True)
+class ProxyEvidenceContract:
+    """Pre-registered common first-rung cohort for proxy-bundle/reference evidence."""
+
+    cohort_id: str
+    config_ids: tuple[str, ...]
+    first_rung_tokens: int
+    proxy_arm: str = "full_acronym_soup"
+    reference_arm: str = "no_proxy"
+    top_k: int = 5
+    search_dimensions: int = 9
+    seed: int = 20260808
+
+    def __post_init__(self) -> None:
+        if not self.cohort_id:
+            raise ValueError("proxy evidence cohort_id must be non-empty")
+        if len(self.config_ids) < 3 or len(set(self.config_ids)) != len(self.config_ids):
+            raise ValueError("proxy evidence requires at least three unique common configurations")
+        if self.first_rung_tokens <= 0:
+            raise ValueError("first_rung_tokens must be positive")
+        if not 0 < self.top_k <= len(self.config_ids):
+            raise ValueError("top_k must be in (0, cohort size]")
+        if self.proxy_arm != "full_acronym_soup":
+            raise ValueError("the paired proxy cohort must use full_acronym_soup")
+        if self.reference_arm != "no_proxy":
+            raise ValueError("the combined proxy must use the conventional no_proxy reference")
+        if self.search_dimensions != 9:
+            raise ValueError("the three-arm proxy cohort must use the shared 9-D search space")
+
+
+def preregistered_cohort(contract: ProxyEvidenceContract) -> dict[str, tuple[float, ...]]:
+    """Materialize the deterministic Latin-hypercube cohort shared by all arms."""
+
+    rng = np.random.default_rng(contract.seed)
+    size = len(contract.config_ids)
+    columns = []
+    for _ in range(contract.search_dimensions):
+        columns.append((rng.permutation(size) + 0.5) / size)
+    matrix = np.stack(columns, axis=1)
+    return {
+        config_id: tuple(float(value) for value in matrix[index])
+        for index, config_id in enumerate(contract.config_ids)
+    }
+
+
+@dataclass(frozen=True)
 class UMuPArm:
     """A u-muP transfer arm: width-reduced, *same-depth* proxy with parity validated first.
 
@@ -94,6 +143,7 @@ class ProxyKind(str, Enum):
     EXACT = "exact"
     FROZEN_LAYER = "frozen_layer"
     UMUP = "umup"
+    PROXY_BUNDLE = "umup_frozen_layer"
 
 
 @dataclass(frozen=True)
@@ -107,6 +157,7 @@ class ProxyMetrics:
     top_k_recall_std: Optional[float] = None
     proxy_kind: ProxyKind = ProxyKind.FROZEN_LAYER
     parity_validated: bool = False
+    paired_reference_complete: bool = False
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.rank_corr_mean) or not -1.0 <= self.rank_corr_mean <= 1.0:
@@ -123,6 +174,117 @@ class ProxyMetrics:
             raise ValueError("n must be a positive integer")
         if not math.isfinite(self.net_compute_savings):
             raise ValueError("net_compute_savings must be finite")
+
+
+def evaluate_paired_proxy_bundle(
+    contract: ProxyEvidenceContract,
+    *,
+    proxy_ce: Mapping[str, float],
+    reference_ce: Mapping[str, float],
+    net_compute_savings: float,
+) -> ProxyMetrics:
+    """Compute combined-proxy ranking evidence against the conventional reference.
+
+    Uncertainty is estimated with a deterministic leave-one-out jackknife. Missing, additional,
+    or non-finite observations fail closed instead of silently changing the cohort.
+    """
+
+    expected = set(contract.config_ids)
+    if set(proxy_ce) != expected or set(reference_ce) != expected:
+        raise ValueError(
+            "proxy and reference evidence must exactly match the pre-registered cohort"
+        )
+    proxy_values = [float(proxy_ce[key]) for key in contract.config_ids]
+    reference_values = [float(reference_ce[key]) for key in contract.config_ids]
+    if not all(math.isfinite(value) for value in proxy_values + reference_values):
+        raise ValueError("proxy evidence values must be finite")
+
+    rank_corr = rank_correlation(proxy_values, reference_values)
+    proxy_order = sorted(contract.config_ids, key=proxy_ce.__getitem__)
+    reference_order = sorted(contract.config_ids, key=reference_ce.__getitem__)
+    recall = top_k_recall(proxy_order, reference_order, contract.top_k)
+
+    jackknife_rank = []
+    jackknife_recall = []
+    for omitted in contract.config_ids:
+        ids = [key for key in contract.config_ids if key != omitted]
+        try:
+            jackknife_rank.append(
+                rank_correlation(
+                    [float(proxy_ce[key]) for key in ids],
+                    [float(reference_ce[key]) for key in ids],
+                )
+            )
+        except ValueError:
+            continue
+        k = min(contract.top_k, len(ids))
+        jackknife_recall.append(
+            top_k_recall(
+                sorted(ids, key=proxy_ce.__getitem__),
+                sorted(ids, key=reference_ce.__getitem__),
+                k,
+            )
+        )
+    rank_std = float(np.std(jackknife_rank, ddof=1)) if len(jackknife_rank) > 1 else math.inf
+    recall_std = float(np.std(jackknife_recall, ddof=1)) if len(jackknife_recall) > 1 else math.inf
+    return ProxyMetrics(
+        rank_corr_mean=rank_corr,
+        rank_corr_std=rank_std,
+        top_k_recall=recall,
+        top_k_recall_std=recall_std,
+        n=len(contract.config_ids),
+        net_compute_savings=net_compute_savings,
+        beats_exact_at_equal_budget=False,
+        proxy_kind=ProxyKind.PROXY_BUNDLE,
+        parity_validated=True,
+        paired_reference_complete=True,
+    )
+
+
+def evaluate_paired_proxy_observations(
+    contract: ProxyEvidenceContract,
+    *,
+    proxy_observations: Mapping[str, Mapping[str, float]],
+    reference_observations: Mapping[str, Mapping[str, float]],
+) -> ProxyMetrics:
+    """Validate raw first-rung observations and derive all admission metrics locally."""
+
+    expected = set(contract.config_ids)
+    if set(proxy_observations) != expected or set(reference_observations) != expected:
+        raise ValueError("paired observations must exactly match the pre-registered cohort")
+
+    def validate(
+        observations: Mapping[str, Mapping[str, float]], *, label: str
+    ) -> tuple[dict[str, float], float]:
+        ce: dict[str, float] = {}
+        accelerator_seconds = 0.0
+        for config_id in contract.config_ids:
+            observation = observations[config_id]
+            tokens = int(observation["tokens"])
+            value = float(observation["ce"])
+            seconds = float(observation["accelerator_seconds"])
+            if tokens != contract.first_rung_tokens:
+                raise ValueError(
+                    f"{label} observation {config_id} has {tokens} tokens, "
+                    f"expected {contract.first_rung_tokens}"
+                )
+            if not math.isfinite(value):
+                raise ValueError(f"{label} observation {config_id} has non-finite CE")
+            if not math.isfinite(seconds) or seconds <= 0.0:
+                raise ValueError(f"{label} observation {config_id} has invalid accelerator seconds")
+            ce[config_id] = value
+            accelerator_seconds += seconds
+        return ce, accelerator_seconds
+
+    proxy_ce, proxy_seconds = validate(proxy_observations, label="proxy")
+    reference_ce, reference_seconds = validate(reference_observations, label="reference")
+    net_compute_savings = 1.0 - proxy_seconds / reference_seconds
+    return evaluate_paired_proxy_bundle(
+        contract,
+        proxy_ce=proxy_ce,
+        reference_ce=reference_ce,
+        net_compute_savings=net_compute_savings,
+    )
 
 
 class AdmitDecision(str, Enum):
@@ -212,7 +374,17 @@ class ProxyAdmission:
             rank_lcb >= self.min_rank_corr
             and recall_lcb >= self.min_top_k_recall
             and metrics.net_compute_savings > 0.0
-            and metrics.beats_exact_at_equal_budget
-            and (metrics.proxy_kind is not ProxyKind.UMUP or metrics.parity_validated)
+            and (
+                (
+                    metrics.proxy_kind is ProxyKind.PROXY_BUNDLE
+                    and metrics.paired_reference_complete
+                    and metrics.parity_validated
+                )
+                or (
+                    metrics.proxy_kind is not ProxyKind.PROXY_BUNDLE
+                    and metrics.beats_exact_at_equal_budget
+                    and (metrics.proxy_kind is not ProxyKind.UMUP or metrics.parity_validated)
+                )
+            )
         )
         return AdmitDecision.PRUNE_PROMOTE if ok else AdmitDecision.REPORTING_ONLY

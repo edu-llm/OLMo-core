@@ -634,85 +634,154 @@ def test_proxy_winner_is_retrained_from_scratch_on_exact_model(
     assert result.checkpoint_ref == "/ckpt/winner-exact/step10"
 
 
-def test_controller_evidence_gate_rejects_unvalidated_proxy_and_unequal_budget():
-    with pytest.raises(ValueError):
-        entry._validate_evidence_gates({"fidelity": {"kind": "frozen_layer", "train_last_k": 4}})
-    valid_proxy = {
-        "admission": {
+def test_frozen_evidence_is_reporting_only_until_common_cohort_passes():
+    with pytest.raises(ValueError, match="cohort"):
+        entry._validate_evidence_gates(
+            {
+                "fidelity": {"kind": "frozen_layer", "train_last_k": 8},
+                "controller": {"quantum": 50},
+            }
+        )
+    pending = {
+        "fidelity": {"kind": "frozen_layer", "train_last_k": 8},
+        "controller": {"quantum": 50},
+        "proxy_evidence_contract": {
+            "cohort_id": "v1",
+            "config_ids": ["a", "b", "c"],
+            "first_rung_tokens": 50,
+            "proxy_arm": "full_acronym_soup",
+            "reference_arm": "no_proxy",
+            "top_k": 2,
+            "search_dimensions": 9,
+            "seed": 20260808,
+        },
+        "proxy_admission": {
             "min_rank_corr": 0.7,
             "min_top_k_recall": 0.6,
+            "min_samples": 3,
         },
-        "metrics": {
-            "rank_corr_mean": 0.9,
-            "rank_corr_std": 0.01,
-            "top_k_recall": 0.9,
-            "top_k_recall_std": 0.01,
-            "n": 20,
-            "net_compute_savings": 0.2,
-            "beats_exact_at_equal_budget": True,
-            "proxy_kind": "frozen_layer",
+        "frozen_ranking_policy": "reporting_only_until_admitted",
+    }
+    assert entry._validate_evidence_gates(pending).value == "reporting_only"
+
+    contract = pending["proxy_evidence_contract"]
+    proxy_observations = {
+        key: {"tokens": 50, "ce": value, "accelerator_seconds": 8.0}
+        for key, value in {"a": 1.0, "b": 2.0, "c": 3.0}.items()
+    }
+    reference_observations = {
+        key: {"tokens": 50, "ce": value, "accelerator_seconds": 10.0}
+        for key, value in {"a": 1.1, "b": 2.1, "c": 3.1}.items()
+    }
+    admitted = {
+        **pending,
+        "proxy_evidence": {
+            "schema_version": 1,
+            "contract": contract,
+            "admission": pending["proxy_admission"],
+            "proxy_observations": proxy_observations,
+            "reference_observations": reference_observations,
+            "decision": "prune_promote",
         },
     }
-    with pytest.raises(ValueError, match="budget"):
-        entry._validate_evidence_gates(
-            {
-                "fidelity": {"kind": "frozen_layer", "train_last_k": 4},
-                "proxy_evidence": valid_proxy,
-            }
-        )
-    with pytest.raises(ValueError, match="kind"):
-        entry._validate_evidence_gates(
-            {
-                "fidelity": {"kind": "umup", "width_factor": 0.5},
-                "proxy_evidence": valid_proxy,
-                "budget_comparison": {},
-            }
-        )
-    with pytest.raises(ValueError):
-        entry._validate_evidence_gates(
-            {
-                "proxy_evidence": {
-                    "admission": {
-                        "min_rank_corr": 0.7,
-                        "min_top_k_recall": 0.6,
-                    },
-                    "metrics": {
-                        "rank_corr_mean": 0.5,
-                        "rank_corr_std": 0.1,
-                        "top_k_recall": 0.5,
-                        "top_k_recall_std": 0.1,
-                        "n": 20,
-                        "net_compute_savings": 0.2,
-                        "beats_exact_at_equal_budget": True,
-                    },
-                }
-            }
-        )
+    assert entry._validate_evidence_gates(admitted).value == "prune_promote"
+    tampered = {
+        **admitted,
+        "proxy_evidence": {
+            **admitted["proxy_evidence"],
+            "contract": {**contract, "seed": 9},
+        },
+    }
+    with pytest.raises(ValueError, match="contract"):
+        entry._validate_evidence_gates(tampered)
 
-    categories = [
-        "main",
-        "failed",
-        "screened",
-        "reset",
-        "retrained",
-        "llm_controller",
-        "proxy_selection",
-    ]
-    with pytest.raises(ValueError):
-        entry._validate_evidence_gates(
-            {
-                "budget_comparison": {
-                    "candidate": {
-                        "accelerator_seconds": {name: 1.0 for name in categories},
-                        "tokens": {name: 1 for name in categories},
-                    },
-                    "control": {
-                        "accelerator_seconds": {name: 1.0 for name in categories},
-                        "tokens": {name: 1000 for name in categories},
-                    },
-                }
-            }
-        )
+
+def test_proxy_cohort_executes_paired_first_rung_and_persists_admission(
+    monkeypatch, tmp_path, capsys
+):
+    root = Path(__file__).resolve().parents[2] / ".edullm"
+    monkeypatch.setenv("EDULLM_CHECKPOINT_DIR", str(tmp_path / "checkpoints"))
+    monkeypatch.setenv("EDULLM_RUN_ID", "cohort-test")
+    import olmo_core.hpo.umup as umup
+
+    monkeypatch.setattr(umup, "require_official_umup_forward", lambda: None)
+    calls = []
+
+    def fake_dispatch(*, allocations, controller_spec, run_id, param_dtype):
+        del controller_spec, run_id, param_dtype
+        calls.append(tuple(allocation.trial_id for allocation in allocations))
+        results = []
+        for allocation in allocations:
+            reference = "-reference-" in allocation.trial_id
+            results.append(
+                WorkerObservation(
+                    trial_id=allocation.trial_id,
+                    tokens=allocation.target_fidelity,
+                    heldout_ce=float(allocation.decision_id + 1),
+                    train_ce_history=(),
+                    grad_norm_history=(),
+                    activation_ratio=None,
+                    numeric_failure=False,
+                    checkpoint_ref=f"/ckpt/{allocation.trial_id}",
+                    accelerator_seconds=10.0 if reference else 8.0,
+                )
+            )
+        return results
+
+    monkeypatch.setattr(entry, "_dispatch_allocations", fake_dispatch)
+    output = tmp_path / "proxy-evidence.json"
+    args = entry._parse_args(
+        [
+            "cohort-test",
+            "--run-proxy-cohort",
+            "--proxy-spec",
+            str(root / "hpo-full-acronym-soup.json"),
+            "--reference-spec",
+            str(root / "hpo-no-proxy.json"),
+            "--cohort-output",
+            str(output),
+        ]
+    )
+    assert entry.run_proxy_cohort(args) == 0
+    artifact = json.loads(output.read_text())
+    assert artifact["decision"] == "prune_promote"
+    assert set(artifact["proxy_observations"]) == set(artifact["reference_observations"])
+    assert len(artifact["proxy_observations"]) == 16
+    assert artifact["metrics"]["proxy_kind"] == "umup_frozen_layer"
+    assert artifact["metrics"]["net_compute_savings"] == pytest.approx(0.2)
+    assert len(calls) == 4  # two 8-worker batches for each side
+    assert json.loads(capsys.readouterr().out)["output_path"] == str(output)
+
+
+def test_proxy_cohort_fails_before_dispatch_when_official_umup_is_unavailable(
+    monkeypatch, tmp_path
+):
+    root = Path(__file__).resolve().parents[2] / ".edullm"
+    monkeypatch.setenv("EDULLM_CHECKPOINT_DIR", str(tmp_path / "checkpoints"))
+    monkeypatch.setenv("EDULLM_RUN_ID", "cohort-blocked")
+    import olmo_core.hpo.umup as umup
+
+    def unavailable():
+        raise RuntimeError("unit-scaling lacks required public operations")
+
+    monkeypatch.setattr(umup, "require_official_umup_forward", unavailable)
+    monkeypatch.setattr(
+        entry,
+        "_dispatch_allocations",
+        lambda **kwargs: pytest.fail(f"unexpected dispatch: {kwargs}"),
+    )
+    args = entry._parse_args(
+        [
+            "cohort-blocked",
+            "--run-proxy-cohort",
+            "--proxy-spec",
+            str(root / "hpo-full-acronym-soup.json"),
+            "--reference-spec",
+            str(root / "hpo-no-proxy.json"),
+        ]
+    )
+    with pytest.raises(RuntimeError, match="lacks required public operations"):
+        entry.run_proxy_cohort(args)
 
 
 def test_brainlift_builder_uses_ifbo_and_rejects_cma(monkeypatch):
@@ -766,6 +835,21 @@ def test_brainlift_builder_uses_ifbo_and_rejects_cma(monkeypatch):
     assert controller.config.restart_mode.value == "btt_aggregate"
     assert controller._ask_ledger is None
     assert {allocation.source.value for allocation in controller.propose_round()} == {"ifbo"}
+    deterministic = entry._build_controller_from_spec(
+        {
+            **base,
+            "arm": "no_centaur",
+            "centaur": None,
+            "model_parameterization": {
+                "kind": "umup",
+                "source_architecture": "olmo2_370M",
+                "depth": 16,
+            },
+            "fidelity": {"kind": "frozen_layer", "train_last_k": 8},
+        }
+    )
+    assert deterministic.action_centaur is None
+    assert deterministic.action_advisor is None
     with pytest.raises(ValueError, match="CMA-ES"):
         entry._build_controller_from_spec(
             {**base, "proposer": {"kind": "cma", "population_size": 4}}
@@ -945,3 +1029,124 @@ def test_run_yaml_exists_with_explicit_dtype_token():
     assert "hpo_on_corpus.py" in text
     # The platform's precision guard reads the command text; a dtype token must be present.
     assert ("bfloat16" in text) or ("float32" in text)
+
+
+def test_three_arm_specs_have_shared_2b_contract_and_only_declared_ablations():
+    root = Path(__file__).resolve().parents[2] / ".edullm"
+    specs = {
+        name: json.loads((root / f"hpo-{name.replace('_', '-')}.json").read_text())
+        for name in ("full_acronym_soup", "no_centaur", "no_proxy")
+    }
+    assert {spec["arm"] for spec in specs.values()} == set(specs)
+    for spec in specs.values():
+        controller = spec["controller"]
+        assert controller["budget_tokens"] == 2_000_158_720
+        assert controller["target_tokens"] == 10 * controller["quantum"] == 500_039_680
+        assert controller["n_fidelity_bins"] == 10
+        assert controller["worker_count"] == 8
+        assert spec["ipbt"]["population_size"] == 16
+        assert len(spec["search_space"]) == 9
+
+    full = specs["full_acronym_soup"]
+    no_centaur = specs["no_centaur"]
+    no_proxy = specs["no_proxy"]
+    assert full["centaur"] == no_proxy["centaur"]
+    assert full["centaur"] == {
+        "scope": "multi_action",
+        "model": "gpt-5.6-sol",
+        "ratio": 0.3,
+        "warmup": 0,
+        "advisor_factory": "olmo_core.hpo.openai_advisor:build_openai_advisor",
+    }
+    assert no_centaur["centaur"] is None
+    assert (
+        full["fidelity"]
+        == no_centaur["fidelity"]
+        == {
+            "kind": "frozen_layer",
+            "train_last_k": 8,
+        }
+    )
+    assert no_proxy["fidelity"] == {"kind": "exact"}
+    assert full["model_parameterization"]["kind"] == "umup"
+    assert no_centaur["model_parameterization"]["depth"] == 16
+    assert no_proxy["model_parameterization"] == {
+        "kind": "standard",
+        "architecture": "olmo2_190M",
+        "depth": 12,
+        "backend": "none",
+    }
+    assert full["experiment_factory"].endswith(":build_umup_hpo_experiment")
+    assert no_proxy["experiment_factory"].endswith(":build_comparison_experiment")
+    assert full["proxy_evidence_contract"] == no_proxy["proxy_evidence_contract"]
+    assert "proxy_evidence_path" not in no_proxy
+    assert "frozen_ranking_policy" not in no_proxy
+
+    def without(spec, *keys):
+        return {key: value for key, value in spec.items() if key not in keys}
+
+    assert without(full, "arm", "centaur") == without(no_centaur, "arm", "centaur")
+    for key in (
+        "seed",
+        "search_space",
+        "normalizer",
+        "posterior",
+        "proposer",
+        "btt",
+        "ipbt",
+        "controller",
+        "factory_kwargs",
+        "base_global_batch_size",
+        "heldout_metric",
+    ):
+        assert full[key] == no_proxy[key]
+    assert entry._validate_evidence_gates(full).value == "reporting_only"
+    assert entry._validate_evidence_gates(no_centaur).value == "reporting_only"
+    assert entry._validate_evidence_gates(no_proxy).value == "prune_promote"
+
+
+def test_global_batch_search_is_aligned_to_every_fidelity_rung():
+    quantum = 50_003_968
+    for requested in (16_384.0, 30_000.0, 32_768.0, 60_000.0, 65_536.0):
+        realized = entry._aligned_global_batch_size(requested, quantum=quantum)
+        assert quantum % realized == 0
+
+
+def test_study_result_persists_winner_top_five_and_a100_seconds(tmp_path):
+    candidates = [(f"trial-{index}", (index / 10,), 2.0 + index / 10) for index in range(5)]
+    controller = SimpleNamespace(
+        top_candidates=lambda limit: candidates[:limit],
+        search_space=SimpleNamespace(from_unit=lambda unit: {"lr": unit[0]}),
+        state=lambda: SimpleNamespace(
+            accelerator_seconds_charged=7200.0,
+            tokens_charged=2_000_158_720,
+            final_evaluations=[],
+        ),
+    )
+    result_path = tmp_path / "result.json"
+    exact_result = WorkerObservation(
+        trial_id="trial-0-exact-retrain",
+        tokens=500_039_680,
+        heldout_ce=2.0,
+        train_ce_history=(),
+        grad_norm_history=(),
+        activation_ratio=None,
+        numeric_failure=False,
+        checkpoint_ref="/ckpt/trial-0-exact-retrain",
+        accelerator_seconds=1800.0,
+    )
+    entry._persist_study_result(
+        controller,
+        {"arm": "no_proxy", "study_result_path": str(result_path)},
+        SimpleNamespace(value="prune_promote"),
+        exact_result=exact_result,
+    )
+    payload = json.loads(result_path.read_text())
+    assert payload["winner"]["trial_id"] == "trial-0"
+    assert len(payload["top_five_full_fidelity"]) == 5
+    assert payload["search_a100_seconds"] == 7200.0
+    assert payload["exact_retrain_a100_seconds"] == 1800.0
+    assert payload["total_a100_seconds"] == 9000.0
+    assert payload["total_a100_hours"] == 2.5
+    assert payload["total_tokens_charged"] == 2_500_198_400
+    assert payload["trusted_for_selection"] is True

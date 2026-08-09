@@ -226,6 +226,7 @@ class WorkerObservation:
     activation_ratio: Optional[float]
     numeric_failure: bool
     checkpoint_ref: Optional[str]
+    accelerator_seconds: float = 0.0
 
     def __post_init__(self) -> None:
         if not self.trial_id:
@@ -234,6 +235,8 @@ class WorkerObservation:
             raise ValueError("WorkerObservation.tokens must be a positive integer")
         if not self.numeric_failure and not math.isfinite(self.heldout_ce):
             raise ValueError("non-finite heldout_ce requires numeric_failure=True")
+        if not math.isfinite(self.accelerator_seconds) or self.accelerator_seconds < 0.0:
+            raise ValueError("accelerator_seconds must be finite and non-negative")
 
 
 @dataclass(frozen=True)

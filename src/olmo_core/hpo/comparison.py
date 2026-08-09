@@ -34,6 +34,7 @@ __all__ = [
     "ComparisonExperimentConfig",
     "comparison_dataset_from_read",
     "build_comparison_experiment",
+    "build_umup_hpo_experiment",
     "smoke_final_evaluator",
 ]
 
@@ -73,6 +74,9 @@ class ComparisonExperimentConfig(Config):
     dataset_id: str
     dataset_version: str
     init_seed: int
+    umup_backend: str | None = None
+    umup_parity_validated: bool = False
+    umup_metadata: dict[str, Any] | None = None
 
 
 def comparison_dataset_from_read(
@@ -97,8 +101,7 @@ def comparison_dataset_from_read(
     byte_order = read.byte_order
     if byte_order is not None and byte_order != sys.byteorder:
         raise ValueError(
-            f"comparison dataset byte order {byte_order!r} "
-            f"does not match host {sys.byteorder!r}"
+            f"comparison dataset byte order {byte_order!r} does not match host {sys.byteorder!r}"
         )
     if read.dtype is None:
         raise ValueError("comparison dataset declares no fixed-width dtype")
@@ -243,6 +246,41 @@ def build_comparison_experiment(
         dataset_version=version,
         init_seed=init_seed,
     )
+
+
+def build_umup_hpo_experiment(**kwargs: Any) -> ComparisonExperimentConfig:
+    """Build the same-depth u-μP proxy requested by Arms 1 and 2."""
+
+    from .umup import (
+        UMUP_BACKEND,
+        UMuPAdamWConfig,
+        build_same_depth_umup_proxy,
+        require_official_umup_forward,
+        validate_umup_parity,
+    )
+
+    require_official_umup_forward()
+    config = build_comparison_experiment(**kwargs)
+    proxy, metadata = build_same_depth_umup_proxy(config.model.vocab_size)
+    validate_umup_parity(proxy, metadata)
+    config.model = proxy
+    base_optim = config.train_module.optim
+    if not isinstance(base_optim, AdamWConfig):
+        raise TypeError("the shared u-μP proxy requires AdamW")
+    config.train_module.optim = UMuPAdamWConfig(
+        group_overrides=base_optim.group_overrides,
+        compile=base_optim.compile,
+        lr=base_optim.lr,
+        betas=base_optim.betas,
+        eps=base_optim.eps,
+        weight_decay=base_optim.weight_decay,
+        foreach=base_optim.foreach,
+        fused=base_optim.fused,
+    )
+    config.umup_backend = UMUP_BACKEND
+    config.umup_parity_validated = True
+    config.umup_metadata = metadata.as_dict()
+    return config
 
 
 def smoke_final_evaluator(**kwargs: Any) -> dict[str, Any]:

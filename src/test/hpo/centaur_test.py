@@ -17,6 +17,7 @@ from olmo_core.hpo.centaur import (
     validate_action,
     validate_start_config,
 )
+from olmo_core.hpo.openai_advisor import OpenAICompatibleAdvisor
 from olmo_core.hpo.types import ProposalSource
 
 
@@ -105,6 +106,34 @@ def test_llm_intervention_schedule_is_deterministic_and_hits_ratio():
     for ratio in (-0.1, 1.1, float("nan")):
         with pytest.raises(ValueError):
             should_llm_intervene(0, warmup=0, ratio=ratio)
+
+
+def test_openai_compatible_advisor_uses_structured_multi_action_output():
+    calls = []
+
+    class Completions:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return types.SimpleNamespace(
+                model="gpt-5.6-sol",
+                system_fingerprint="sol-v1",
+                choices=[
+                    types.SimpleNamespace(
+                        message=types.SimpleNamespace(
+                            content='{"kind":"resume","trial_id":"trial-1"}'
+                        )
+                    )
+                ],
+            )
+
+    client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=Completions()))
+    response = OpenAICompatibleAdvisor(client=client).advise(
+        {"default_action": {"kind": "resume", "trial_id": "trial-1"}}
+    )
+    assert response.action == {"kind": "resume", "trial_id": "trial-1"}
+    assert response.model == "gpt-5.6-sol"
+    assert calls[0]["response_format"]["type"] == "json_schema"
+    assert calls[0]["temperature"] == 0
 
 
 def test_validate_start_config_rejects_non_finite_and_out_of_bounds():

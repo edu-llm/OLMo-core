@@ -205,6 +205,7 @@ class ControllerState:
 
     next_decision_id: int = 0
     tokens_charged: int = 0
+    accelerator_seconds_charged: float = 0.0
     trials: Dict[str, TrialRecord] = field(default_factory=dict)
     controller_snapshot: Optional[Dict[str, Any]] = None
     advisor_events: List[Dict[str, Any]] = field(default_factory=list)
@@ -331,6 +332,10 @@ class ControllerState:
         rec.latest_observation_fidelity = tokens
         rec.latest_observation_hash = computed_hash
         rec.latest_checkpoint_ref = payload.get("checkpoint_ref")
+        accelerator_seconds = float(payload.get("accelerator_seconds", 0.0))
+        if not math.isfinite(accelerator_seconds) or accelerator_seconds < 0.0:
+            raise ValueError("observation accelerator_seconds must be finite and non-negative")
+        self.accelerator_seconds_charged += accelerator_seconds
         if math.isfinite(ce):
             rec.curve.append([tokens, ce])
 
@@ -382,6 +387,7 @@ class ControllerState:
         return {
             "next_decision_id": self.next_decision_id,
             "tokens_charged": self.tokens_charged,
+            "accelerator_seconds_charged": self.accelerator_seconds_charged,
             "controller_snapshot": copy.deepcopy(self.controller_snapshot),
             "advisor_events": copy.deepcopy(self.advisor_events),
             "ipbt_transitions": copy.deepcopy(self.ipbt_transitions),

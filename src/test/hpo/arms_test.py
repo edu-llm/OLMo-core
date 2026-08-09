@@ -10,30 +10,28 @@ from olmo_core.hpo.arms import (
 
 
 def test_all_preregistered_arms_are_registered():
-    names = {a.value for a in Arm}
-    for expected in (
-        "random_fixed_recipe",
-        "random_dynamic_schedule",
-        "random_token_screen",
-        "ifbo_official",
-        "ipbt_reference",
-        "ipbt_ifbo",
-        "novel_aggregate_btt",
-        "cma_only",
-        "config_only_centaur",
-        "multi_action_advisor",
-        "frozen_layer_proxy",
-        "umup_proxy",
-    ):
-        assert expected in names
+    assert {arm.value for arm in Arm} == {
+        "full_acronym_soup",
+        "no_centaur",
+        "no_proxy",
+    }
 
 
-def test_llm_arms_are_identifiable_in_the_matrix():
+def test_only_declared_centaur_and_complete_proxy_bundle_ablations_vary():
     matrix = ablation_matrix()
-    assert matrix[Arm.CMA_ONLY]["llm_ratio"] == 0.0
-    # config-only vs multi-action differ in the action scope the LLM may take.
-    assert matrix[Arm.CONFIG_ONLY_CENTAUR]["llm_scope"] == "config_only"
-    assert matrix[Arm.MULTI_ACTION_ADVISOR]["llm_scope"] == "multi_action"
+    full = matrix[Arm.FULL_ACRONYM_SOUP]
+    no_centaur = matrix[Arm.NO_CENTAUR]
+    no_proxy = matrix[Arm.NO_PROXY]
+    assert full["llm_ratio"] == 0.3
+    assert full["llm_scope"] == "multi_action"
+    assert no_centaur["llm_ratio"] == 0.0
+    assert no_proxy["freeze_first_n_blocks"] == 0
+    assert no_proxy["model_parameterization"] == "stock_olmo2_190m"
+    assert no_proxy["target_depth"] == 12
+    for key in set(full) - {"llm_ratio", "llm_scope"}:
+        assert full[key] == no_centaur[key]
+    for key in {"ftpfn", "ifbo", "ipbt", "btt_aggregate_restarts", "llm_ratio", "llm_scope"}:
+        assert full[key] == no_proxy[key]
 
 
 def test_budget_ledger_counts_every_category_and_totals():

@@ -32,6 +32,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
@@ -147,12 +148,20 @@ def _parse_args(argv: Optional[List[str]]) -> argparse.Namespace:
     parser.add_argument(
         "--run-segment", action="store_true", help="Internal: run one trial segment."
     )
+    parser.add_argument(
+        "--run-proxy-cohort",
+        action="store_true",
+        help="Run the preregistered paired first-rung proxy/reference cohort.",
+    )
     parser.add_argument("--trial-id", default=None)
     parser.add_argument("--checkpoint-dir", default=None)
     parser.add_argument("--hard-stop-tokens", type=int, default=None)
     parser.add_argument("--segment-spec", default=None)
     parser.add_argument("--controller-spec", default=os.environ.get("EDULLM_HPO_SPEC"))
     parser.add_argument("--controller-state", default=None)
+    parser.add_argument("--proxy-spec", default=None)
+    parser.add_argument("--reference-spec", default=None)
+    parser.add_argument("--cohort-output", default=None)
     parser.add_argument(
         "--checkpoint-root",
         default=os.environ.get("EDULLM_CHECKPOINT_DIR"),
@@ -190,6 +199,7 @@ def _run_configured_segment(
     param_dtype: str,
     transition: Optional[Mapping[str, Any]] = None,
     fidelity: Optional[Mapping[str, Any]] = None,
+    model_parameterization: Optional[Mapping[str, Any]] = None,
 ):
     from olmo_core.config import DType
     from olmo_core.hpo.worker import (
@@ -211,13 +221,17 @@ def _run_configured_segment(
         hard_stop_tokens=hard_stop_tokens,
         heldout_metric=heldout_metric,
         fidelity=fidelity,
+        model_parameterization=model_parameterization,
     )
     validate_precision_support(config)
     prepare_training_environment()
     try:
         seed_all(config.init_seed)
         model = config.model.build(init_device="meta")
-        if fidelity is not None and fidelity.get("kind") == "umup":
+        if model_parameterization is not None and model_parameterization.get("kind") == "umup":
+            from olmo_core.hpo.umup import apply_umup_model
+
+            apply_umup_model(model, n_layers=int(config.model.n_layers))
             validate_umup_model(model)
         train_module = config.train_module.build(model)
         dataset = config.dataset.build()
@@ -237,6 +251,7 @@ def _run_configured_segment(
 
 
 def _build_controller_from_spec(spec: Dict[str, Any]):
+    from olmo_core.hpo.arms import Arm, ablation_matrix
     from olmo_core.hpo.artifacts import ensure_ftpfn_artifact
     from olmo_core.hpo.bttackler import (
         BTTCalibrationProfile,
@@ -290,6 +305,31 @@ def _build_controller_from_spec(spec: Dict[str, Any]):
 
     algorithm = spec.get("algorithm", "brainlift")
     is_brainlift = algorithm in ("brainlift", "brainlift_test")
+    arm_name = spec.get("arm")
+    arm = None if arm_name is None else Arm(arm_name)
+    if arm is not None:
+        contract = ablation_matrix()[arm]
+        expected_fidelity = (
+            {"kind": "exact"}
+            if int(contract["freeze_first_n_blocks"]) == 0
+            else {"kind": "frozen_layer", "train_last_k": 8}
+        )
+        if spec.get("fidelity", {"kind": "exact"}) != expected_fidelity:
+            raise ValueError(f"arm {arm.value} does not match its freezing contract")
+        parameterization = spec.get("model_parameterization", {})
+        if contract["model_parameterization"] == "umup_190m_same_depth":
+            if (
+                parameterization.get("kind") != "umup"
+                or parameterization.get("source_architecture") != "olmo2_370M"
+                or int(parameterization.get("depth", -1)) != 16
+            ):
+                raise ValueError(f"arm {arm.value} requires the same-depth u-muP proxy")
+        elif (
+            parameterization.get("kind") != "standard"
+            or parameterization.get("architecture") != "olmo2_190M"
+            or int(parameterization.get("depth", -1)) != 12
+        ):
+            raise ValueError(f"arm {arm.value} requires conventional stock olmo2_190M")
     if algorithm == "brainlift" and posterior_spec["kind"] != "ftpfn":
         raise ValueError("production Brainlift mode requires the real FT-PFN posterior")
     proposer_spec = spec.get("proposer", {"kind": "ifbo"})
@@ -336,17 +376,18 @@ def _build_controller_from_spec(spec: Dict[str, Any]):
     if is_brainlift:
         if spec.get("ipbt") is None:
             raise ValueError("Brainlift mode requires the IPBT population shell")
-        if centaur_spec is None:
+        if centaur_spec is None and arm is not Arm.NO_CENTAUR:
             raise ValueError("Brainlift mode requires 5.6 Sol Centaur")
-        if (
+        if arm is Arm.NO_CENTAUR and centaur_spec is not None:
+            raise ValueError("the no_centaur arm must disable Centaur entirely")
+        if centaur_spec is not None and (
             centaur_spec.get("scope") != "multi_action"
             or centaur_spec.get("model") != "gpt-5.6-sol"
             or float(centaur_spec.get("ratio", -1.0)) != 0.3
             or int(centaur_spec.get("warmup", -1)) != 0
         ):
             raise ValueError(
-                "Brainlift Centaur must use multi_action gpt-5.6-sol at ratio 0.3 "
-                "with zero warmup"
+                "Brainlift Centaur must use multi_action gpt-5.6-sol at ratio 0.3 with zero warmup"
             )
     if centaur_spec is not None:
         overlay = CentaurOverlay(
@@ -417,6 +458,20 @@ def _build_controller_from_spec(spec: Dict[str, Any]):
     return controller
 
 
+def _aligned_global_batch_size(requested: float, *, quantum: int) -> int:
+    """Choose the nearest batch size that exactly divides every fidelity quantum."""
+
+    if not math.isfinite(requested) or requested <= 0.0 or quantum <= 0:
+        raise ValueError("requested batch size and quantum must be positive")
+    divisors = []
+    for candidate in range(1, math.isqrt(quantum) + 1):
+        if quantum % candidate == 0:
+            divisors.append(candidate)
+            if candidate * candidate != quantum:
+                divisors.append(quantum // candidate)
+    return min(divisors, key=lambda value: (abs(value - requested), value))
+
+
 def _segment_payload(
     allocation,
     *,
@@ -426,7 +481,14 @@ def _segment_payload(
     realized_hps = dict(controller_spec.get("fixed_hps", {}))
     realized_hps.update(allocation.realized_hps)
     multiplier = float(realized_hps.get("global_batch_mult", 1.0))
-    global_batch_size = int(round(base_batch * multiplier))
+    global_batch_size = _aligned_global_batch_size(
+        base_batch * multiplier,
+        quantum=int(
+            controller_spec["controller"].get(
+                "quantum", controller_spec["controller"]["target_tokens"]
+            )
+        ),
+    )
     target_tokens = int(controller_spec["controller"]["target_tokens"])
     payload = {
         "experiment_factory": controller_spec["experiment_factory"],
@@ -441,6 +503,9 @@ def _segment_payload(
         "checkpoint_ref": allocation.checkpoint_ref,
         "transition": allocation.transition,
         "fidelity": controller_spec.get("fidelity", {"kind": "exact"}),
+        "model_parameterization": controller_spec.get(
+            "model_parameterization", {"kind": "standard"}
+        ),
     }
     payload["config_hash"] = _segment_config_hash(payload)
     return payload
@@ -452,6 +517,7 @@ def _segment_config_hash(payload: Mapping[str, Any]) -> str:
         "global_batch_size": payload["global_batch_size"],
         "target_tokens": payload["target_tokens"],
         "fidelity": payload.get("fidelity", {"kind": "exact"}),
+        "model_parameterization": payload.get("model_parameterization", {"kind": "standard"}),
         "experiment_factory": payload["experiment_factory"],
         "factory_kwargs": payload.get("factory_kwargs", {}),
         "transition": payload.get("transition"),
@@ -512,6 +578,7 @@ def _dispatch_allocations(
 
     def run_one(launch):
         allocation, argv, env = launch
+        started = time.perf_counter()
         completed = subprocess.run(
             argv,
             env=env,
@@ -519,6 +586,7 @@ def _dispatch_allocations(
             capture_output=True,
             check=False,
         )
+        accelerator_seconds = time.perf_counter() - started
         if completed.returncode != 0:
             error_text = completed.stderr.lower()
             if "out of memory" in error_text or "outofmemoryerror" in error_text:
@@ -531,6 +599,7 @@ def _dispatch_allocations(
                     activation_ratio=None,
                     numeric_failure=True,
                     checkpoint_ref=None,
+                    accelerator_seconds=accelerator_seconds,
                 )
             raise RuntimeError(
                 f"trial {allocation.trial_id} exited {completed.returncode}: "
@@ -557,6 +626,7 @@ def _dispatch_allocations(
             ),
             numeric_failure=bool(payload["numeric_failure"]),
             checkpoint_ref=payload["checkpoint_ref"],
+            accelerator_seconds=accelerator_seconds,
         )
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(launches)) as executor:
@@ -632,18 +702,14 @@ def _run_exact_retrain(
 ):
     if spec.get("fidelity", {}).get("kind", "exact") == "exact":
         return None
-    exact_factory = spec.get("exact_experiment_factory")
-    if exact_factory is None:
-        raise RuntimeError(
-            "proxy fidelity requires exact_experiment_factory for fresh winner retraining"
-        )
+    exact_factory = spec.get("exact_experiment_factory", spec["experiment_factory"])
     from olmo_core.hpo.types import ActionKind, Allocation, ProposalSource
 
     winner_id, unit_config, _ = controller.best()
     exact_spec = copy.deepcopy(spec)
     exact_spec["fidelity"] = {"kind": "exact"}
     exact_spec["experiment_factory"] = exact_factory
-    exact_spec["factory_kwargs"] = spec.get("exact_factory_kwargs", {})
+    exact_spec["factory_kwargs"] = spec.get("exact_factory_kwargs", spec.get("factory_kwargs", {}))
     allocation = Allocation(
         decision_id=0,
         kind=ActionKind.START,
@@ -723,49 +789,471 @@ def _enforce_required_winner(controller, spec: Mapping[str, Any]) -> None:
         raise RuntimeError("comparison run completed without a full-fidelity winner")
 
 
-def _validate_evidence_gates(spec: Dict[str, Any]) -> None:
+def _persist_study_result(
+    controller,
+    spec: Mapping[str, Any],
+    evidence_decision,
+    *,
+    exact_result=None,
+) -> None:
+    """Persist the winner, top five, and measured single-A100 time for one arm."""
+
+    result_path = spec.get("study_result_path")
+    if result_path is None:
+        raise RuntimeError("three-arm study specs require study_result_path")
+    top = controller.top_candidates(5)
+    if not top:
+        raise RuntimeError("cannot persist study result without a full-fidelity candidate")
+
+    def candidate_payload(candidate):
+        trial_id, unit_config, search_validation_ce = candidate
+        return {
+            "trial_id": trial_id,
+            "unit_config": list(unit_config),
+            "hyperparameters": controller.search_space.from_unit(unit_config),
+            "search_validation_ce": search_validation_ce,
+        }
+
+    state = controller.state()
+    exact_retrain = None if exact_result is None else asdict(exact_result)
+    if exact_retrain is None and state.final_evaluations:
+        exact_retrain = state.final_evaluations[-1].get("exact_retrain")
+    search_seconds = float(state.accelerator_seconds_charged)
+    retrain_seconds = 0.0 if exact_retrain is None else float(exact_retrain["accelerator_seconds"])
+    retrain_tokens = 0 if exact_retrain is None else int(exact_retrain["tokens"])
+    if (
+        not math.isfinite(search_seconds)
+        or search_seconds < 0.0
+        or not math.isfinite(retrain_seconds)
+        or retrain_seconds < 0.0
+        or retrain_tokens < 0
+    ):
+        raise RuntimeError("study result contains invalid accelerator or token accounting")
+    total_seconds = search_seconds + retrain_seconds
+    payload = {
+        "arm": spec["arm"],
+        "winner": candidate_payload(top[0]),
+        "top_five_full_fidelity": [candidate_payload(candidate) for candidate in top],
+        "search_a100_seconds": search_seconds,
+        "exact_retrain_a100_seconds": retrain_seconds,
+        "total_a100_seconds": total_seconds,
+        "total_a100_hours": total_seconds / 3600.0,
+        "search_tokens_charged": state.tokens_charged,
+        "exact_retrain_tokens": retrain_tokens,
+        "total_tokens_charged": state.tokens_charged + retrain_tokens,
+        "frozen_ranking_status": evidence_decision.value,
+        "trusted_for_selection": evidence_decision.value == "prune_promote",
+    }
+    target = Path(str(result_path))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_suffix(target.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, sort_keys=True, indent=2))
+    os.replace(temporary, target)
+    return payload
+
+
+def _probe_durable_roots(spec: Mapping[str, Any], checkpoint_root: Optional[str]) -> tuple[str, ...]:
+    from olmo_core.hpo.wandb_probe import durable_storage_roots
+
+    extra_roots = [
+        str(spec.get("controller_snapshot_root", "")),
+        str(spec["controller"]["checkpoint_root"]),
+    ]
+    return durable_storage_roots(checkpoint_dir=checkpoint_root, extra_roots=extra_roots)
+
+
+def _open_hpo_probe_session(
+    *,
+    run_id: str,
+    job_type: str,
+    spec: Mapping[str, Any],
+    checkpoint_root: Optional[str],
+    tags: Optional[List[str]] = None,
+):
+    from olmo_core.hpo.wandb_probe import HpoProbeSession
+
+    return HpoProbeSession.open(
+        run_id=run_id,
+        job_type=job_type,
+        durable_roots=_probe_durable_roots(spec, checkpoint_root),
+        arm=spec.get("arm"),
+        config={
+            "arm": spec.get("arm"),
+            "algorithm": spec.get("algorithm"),
+            "controller_spec": spec.get("controller"),
+            "model_parameterization": spec.get("model_parameterization"),
+            "fidelity": spec.get("fidelity"),
+        },
+        tags=tags,
+    )
+
+
+def _finalize_hpo_probe_session(
+    probe,
+    *,
+    controller,
+    state_path: Optional[str],
+    segment_spec_dir: Optional[Path],
+    exit_code: int,
+) -> None:
+    if probe is None:
+        return
+    if controller is not None:
+        probe.log_controller(controller)
+    if state_path:
+        probe.mirror_ephemeral_path(
+            state_path,
+            artifact_name="controller-state",
+            artifact_type="hpo-controller-state",
+        )
+    if segment_spec_dir is not None and segment_spec_dir.exists():
+        probe.mirror_ephemeral_directory(
+            segment_spec_dir,
+            artifact_name="segment-specs",
+            artifact_type="hpo-segment-spec",
+        )
+    probe.close(exit_code=exit_code)
+
+
+def _write_json_artifact(path: str, payload: Mapping[str, Any]) -> None:
+    """Atomically persist a JSON artifact locally or through OLMo's URL backend."""
+
+    text = json.dumps(payload, sort_keys=True, indent=2, allow_nan=False)
+    from olmo_core.io import is_url
+
+    if is_url(path):
+        from olmo_core.io import upload
+
+        with tempfile.TemporaryDirectory(prefix="hpo-proxy-evidence-") as temp_dir:
+            local = Path(temp_dir) / "proxy-evidence.json"
+            local.write_text(text)
+            upload(local, path, save_overwrite=False)
+        return
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_suffix(target.suffix + ".tmp")
+    temporary.write_text(text)
+    os.replace(temporary, target)
+
+
+def _cohort_contract(spec: Mapping[str, Any]):
+    from olmo_core.hpo.proxy import ProxyEvidenceContract
+
+    values = dict(spec["proxy_evidence_contract"])
+    values["config_ids"] = tuple(values["config_ids"])
+    return ProxyEvidenceContract(**values)
+
+
+def _validate_paired_cohort_specs(proxy_spec: Mapping[str, Any], reference_spec: Mapping[str, Any]):
+    from olmo_core.hpo.arms import Arm
+
+    if proxy_spec.get("arm") != Arm.FULL_ACRONYM_SOUP.value:
+        raise ValueError("the paired cohort proxy spec must be full_acronym_soup")
+    if reference_spec.get("arm") != Arm.NO_PROXY.value:
+        raise ValueError("the paired cohort reference spec must be no_proxy")
+    proxy_contract = _cohort_contract(proxy_spec)
+    reference_contract = _cohort_contract(reference_spec)
+    if proxy_contract != reference_contract:
+        raise ValueError("proxy and reference specs must use the identical cohort contract")
+    if proxy_spec.get("fidelity") != {"kind": "frozen_layer", "train_last_k": 8}:
+        raise ValueError("the paired proxy must use half-layer freezing")
+    proxy_parameterization = proxy_spec.get("model_parameterization", {})
+    if (
+        proxy_parameterization.get("kind") != "umup"
+        or proxy_parameterization.get("source_architecture") != "olmo2_370M"
+        or int(proxy_parameterization.get("depth", -1)) != 16
+        or proxy_parameterization.get("backend") != "unit-scaling"
+    ):
+        raise ValueError("the paired proxy must use same-depth u-muP")
+    if reference_spec.get("fidelity") != {"kind": "exact"}:
+        raise ValueError("the paired reference must be fully trainable")
+    reference_parameterization = reference_spec.get("model_parameterization", {})
+    if reference_parameterization != {
+        "kind": "standard",
+        "architecture": "olmo2_190M",
+        "depth": 12,
+        "backend": "none",
+    }:
+        raise ValueError("the paired reference must be conventional stock olmo2_190M")
+    for key in (
+        "seed",
+        "search_space",
+        "normalizer",
+        "posterior",
+        "proposer",
+        "btt",
+        "ipbt",
+        "factory_kwargs",
+        "base_global_batch_size",
+        "search_validation_callback",
+        "heldout_metric",
+    ):
+        if proxy_spec.get(key) != reference_spec.get(key):
+            raise ValueError(f"paired cohort specs differ in shared field {key!r}")
+    if int(proxy_spec["controller"]["quantum"]) != proxy_contract.first_rung_tokens:
+        raise ValueError("proxy controller quantum does not match the cohort first rung")
+    if int(reference_spec["controller"]["quantum"]) != proxy_contract.first_rung_tokens:
+        raise ValueError("reference controller quantum does not match the cohort first rung")
+    if len(proxy_spec["search_space"]) != proxy_contract.search_dimensions:
+        raise ValueError("proxy search space does not match the cohort dimensionality")
+    if len(reference_spec["search_space"]) != proxy_contract.search_dimensions:
+        raise ValueError("reference search space does not match the cohort dimensionality")
+    admission = proxy_spec.get("proxy_admission")
+    if admission is None:
+        raise ValueError("the proxy spec must pre-register an admission gate")
+    return proxy_contract, dict(admission)
+
+
+def _cohort_allocations(spec: Mapping[str, Any], *, side: str, contract):
+    from olmo_core.hpo.proxy import preregistered_cohort
+    from olmo_core.hpo.types import (
+        ActionKind,
+        Allocation,
+        ProposalSource,
+        SearchDim,
+        SearchSpace,
+    )
+
+    search_space = SearchSpace(
+        tuple(
+            SearchDim(
+                name=str(value["name"]),
+                low=float(value["low"]),
+                high=float(value["high"]),
+                log=bool(value.get("log", False)),
+            )
+            for value in spec["search_space"]
+        )
+    )
+    allocations = []
+    for decision_id, (config_id, unit_config) in enumerate(preregistered_cohort(contract).items()):
+        allocations.append(
+            Allocation(
+                decision_id=decision_id,
+                kind=ActionKind.START,
+                trial_id=f"proxy-cohort-{side}-{config_id}",
+                parent_trial_id=None,
+                unit_config=tuple(unit_config),
+                realized_hps=search_space.from_unit(unit_config),
+                current_fidelity=0,
+                target_fidelity=contract.first_rung_tokens,
+                checkpoint_ref=None,
+                horizon=0,
+                threshold=0.0,
+                mfpi_score=0.0,
+                tie_break=(float(decision_id), config_id),
+                source=ProposalSource.IFBO,
+            )
+        )
+    return allocations
+
+
+def _run_cohort_side(
+    spec: Dict[str, Any],
+    *,
+    side: str,
+    contract,
+    run_id: str,
+    param_dtype: str,
+) -> Dict[str, Dict[str, float]]:
+    allocations = _cohort_allocations(spec, side=side, contract=contract)
+    worker_count = int(spec["controller"]["worker_count"])
+    results = []
+    for start in range(0, len(allocations), worker_count):
+        results.extend(
+            _dispatch_allocations(
+                allocations=allocations[start : start + worker_count],
+                controller_spec=spec,
+                run_id=f"{run_id}-proxy-cohort-{side}",
+                param_dtype=param_dtype,
+            )
+        )
+    observations: Dict[str, Dict[str, float]] = {}
+    prefix = f"proxy-cohort-{side}-"
+    for result in results:
+        if result.numeric_failure or not math.isfinite(result.heldout_ce):
+            raise RuntimeError(f"paired cohort {side} observation {result.trial_id} failed")
+        if not result.trial_id.startswith(prefix):
+            raise RuntimeError("paired cohort worker returned an unexpected trial id")
+        config_id = result.trial_id[len(prefix) :]
+        observations[config_id] = {
+            "tokens": result.tokens,
+            "ce": result.heldout_ce,
+            "accelerator_seconds": result.accelerator_seconds,
+        }
+    return observations
+
+
+def run_proxy_cohort(args: argparse.Namespace) -> int:
+    """Execute and persist the preregistered common first-rung paired cohort."""
+
+    if not args.proxy_spec or not args.reference_spec:
+        raise ValueError("--run-proxy-cohort requires --proxy-spec and --reference-spec")
+    proxy_spec = _expand_environment(json.loads(Path(args.proxy_spec).read_text()))
+    reference_spec = _expand_environment(json.loads(Path(args.reference_spec).read_text()))
+    contract, admission_values = _validate_paired_cohort_specs(proxy_spec, reference_spec)
+    from olmo_core.hpo.umup import require_official_umup_forward
+
+    require_official_umup_forward()
+    probe = _open_hpo_probe_session(
+        run_id=args.run_id,
+        job_type="proxy-cohort",
+        spec=proxy_spec,
+        checkpoint_root=args.checkpoint_root,
+        tags=["proxy-cohort"],
+    )
+    exit_code = 0
+    controller = None
+    try:
+        reference_observations = _run_cohort_side(
+            reference_spec,
+            side="reference",
+            contract=contract,
+            run_id=args.run_id,
+            param_dtype=args.param_dtype,
+        )
+        proxy_observations = _run_cohort_side(
+            proxy_spec,
+            side="proxy",
+            contract=contract,
+            run_id=args.run_id,
+            param_dtype=args.param_dtype,
+        )
+        from olmo_core.hpo.proxy import ProxyAdmission, evaluate_paired_proxy_observations
+
+        metrics = evaluate_paired_proxy_observations(
+            contract,
+            proxy_observations=proxy_observations,
+            reference_observations=reference_observations,
+        )
+        decision = ProxyAdmission(**admission_values).decide(metrics)
+        output_path = args.cohort_output or proxy_spec.get("proxy_evidence_path")
+        if output_path is None:
+            raise ValueError("the proxy cohort requires --cohort-output or proxy_evidence_path")
+        artifact = {
+            "schema_version": 1,
+            "contract": {
+                **asdict(contract),
+                "config_ids": list(contract.config_ids),
+            },
+            "admission": admission_values,
+            "proxy_observations": proxy_observations,
+            "reference_observations": reference_observations,
+            "metrics": {
+                **asdict(metrics),
+                "proxy_kind": metrics.proxy_kind.value,
+            },
+            "decision": decision.value,
+        }
+        _write_json_artifact(str(output_path), artifact)
+        probe.record_proxy_cohort(artifact, output_path=output_path)
+        print(
+            json.dumps(
+                {
+                    "cohort_id": contract.cohort_id,
+                    "decision": decision.value,
+                    "output_path": str(output_path),
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+        if decision.value != "prune_promote":
+            raise RuntimeError("paired proxy cohort did not pass the pre-registered admission gate")
+        return 0
+    except Exception:
+        exit_code = 1
+        raise
+    finally:
+        for side in ("reference", "proxy"):
+            segment_spec_dir = Path(
+                proxy_spec.get(
+                    "segment_spec_dir",
+                    os.path.join(tempfile.gettempdir(), f"edullm-hpo-{args.run_id}-proxy-cohort-{side}"),
+                )
+            )
+            probe.mirror_ephemeral_directory(
+                segment_spec_dir,
+                artifact_name=f"segment-specs-{side}",
+                artifact_type="hpo-segment-spec",
+            )
+        _finalize_hpo_probe_session(
+            probe,
+            controller=controller,
+            state_path=None,
+            segment_spec_dir=None,
+            exit_code=exit_code,
+        )
+
+
+def _validate_evidence_gates(spec: Dict[str, Any]):
+    from olmo_core.hpo.proxy import AdmitDecision
+
     proxy_evidence = spec.get("proxy_evidence")
+    proxy_evidence_path = spec.get("proxy_evidence_path")
+    if proxy_evidence is not None and proxy_evidence_path is not None:
+        raise ValueError("configure proxy_evidence or proxy_evidence_path, not both")
+    if proxy_evidence_path is not None:
+        try:
+            proxy_evidence = json.loads(_read_controller_text(str(proxy_evidence_path)))
+        except FileNotFoundError:
+            proxy_evidence = None
     fidelity_kind = spec.get("fidelity", {}).get("kind", "exact")
-    if fidelity_kind != "exact" and proxy_evidence is None:
-        raise ValueError(f"{fidelity_kind} fidelity requires preregistered admitted proxy evidence")
+    decision = AdmitDecision.PRUNE_PROMOTE
+    contract = None
+    if fidelity_kind == "frozen_layer":
+        from olmo_core.hpo.proxy import ProxyEvidenceContract
+
+        contract_values = spec.get("proxy_evidence_contract")
+        if contract_values is None:
+            raise ValueError("frozen_layer fidelity requires a pre-registered paired cohort")
+        contract_values = dict(contract_values)
+        contract_values["config_ids"] = tuple(contract_values["config_ids"])
+        contract = ProxyEvidenceContract(**contract_values)
+        if contract.first_rung_tokens != int(spec["controller"]["quantum"]):
+            raise ValueError("proxy evidence cohort must be evaluated at the common first rung")
+        if proxy_evidence is None:
+            if spec.get("frozen_ranking_policy") != "reporting_only_until_admitted":
+                raise ValueError("pending frozen evidence must remain reporting-only")
+            decision = AdmitDecision.REPORTING_ONLY
+    elif fidelity_kind != "exact":
+        raise ValueError(f"unknown training fidelity kind: {fidelity_kind}")
+
     if proxy_evidence is not None:
         from olmo_core.hpo.proxy import (
-            AdmitDecision,
             ProxyAdmission,
-            ProxyKind,
-            ProxyMetrics,
+            evaluate_paired_proxy_observations,
         )
 
-        metric_values = dict(proxy_evidence["metrics"])
-        if fidelity_kind != "exact":
-            expected_proxy_kind = {
-                "frozen_layer": ProxyKind.FROZEN_LAYER,
-                "umup": ProxyKind.UMUP,
-            }[fidelity_kind]
-            if metric_values.get("proxy_kind") != expected_proxy_kind.value:
-                raise ValueError("proxy evidence kind does not match configured fidelity kind")
-        if "proxy_kind" in metric_values:
-            metric_values["proxy_kind"] = ProxyKind(metric_values["proxy_kind"])
-        decision = ProxyAdmission(**proxy_evidence["admission"]).decide(
-            ProxyMetrics(**metric_values)
-        )
-        if decision is not AdmitDecision.PRUNE_PROMOTE:
+        if fidelity_kind != "frozen_layer" or contract is None:
+            raise ValueError("proxy evidence is only valid for the frozen_layer fidelity")
+        expected_contract = asdict(contract)
+        expected_contract["config_ids"] = list(contract.config_ids)
+        if proxy_evidence.get("schema_version") != 1:
+            raise ValueError("proxy evidence has an unsupported schema version")
+        if proxy_evidence.get("contract") != expected_contract:
+            raise ValueError("proxy evidence does not match the pre-registered cohort contract")
+        admission_values = spec.get("proxy_admission")
+        if admission_values is None or proxy_evidence.get("admission") != admission_values:
+            raise ValueError("proxy evidence does not match the pre-registered admission gate")
+        try:
+            metrics = evaluate_paired_proxy_observations(
+                contract,
+                proxy_observations=proxy_evidence["proxy_observations"],
+                reference_observations=proxy_evidence["reference_observations"],
+            )
+        except KeyError as error:
+            raise ValueError(f"proxy evidence is missing paired field {error.args[0]!r}") from error
+        decision = ProxyAdmission(**admission_values).decide(metrics)
+        if proxy_evidence.get("decision") != decision.value:
+            raise ValueError("persisted proxy decision does not match recomputed evidence")
+        if (
+            decision is not AdmitDecision.PRUNE_PROMOTE
+            and spec.get("frozen_ranking_policy") != "reporting_only_until_admitted"
+        ):
             raise ValueError("proxy evidence did not pass the preregistered admission gate")
 
-    comparison = spec.get("budget_comparison")
-    if fidelity_kind != "exact" and comparison is None:
-        raise ValueError("proxy fidelity requires an equal-budget comparison")
-    if comparison is not None:
-        from olmo_core.hpo.arms import BudgetLedger, equal_budget
-
-        candidate = BudgetLedger(**comparison["candidate"])
-        control = BudgetLedger(**comparison["control"])
-        if not equal_budget(
-            candidate,
-            control,
-            rel_tol=float(comparison.get("rel_tol", 0.05)),
-        ):
-            raise ValueError("candidate and control arms do not have equal total budgets")
+    return decision
 
 
 def run_controller(args: argparse.Namespace) -> int:
@@ -778,65 +1266,119 @@ def run_controller(args: argparse.Namespace) -> int:
         configured_root = str(spec["controller"]["checkpoint_root"])
         if not configured_root.startswith(required_prefix):
             raise ValueError("controller checkpoint_root must be under --checkpoint-root")
-    _validate_evidence_gates(spec)
+    evidence_decision = _validate_evidence_gates(spec)
+    if (
+        spec.get("fidelity", {}).get("kind") == "frozen_layer"
+        and evidence_decision.value != "prune_promote"
+    ):
+        raise RuntimeError(
+            "frozen-layer rankings are reporting-only until the pre-registered common "
+            "first-rung cohort passes the proxy admission gate"
+        )
+    if spec.get("model_parameterization", {}).get("kind") == "umup":
+        from olmo_core.hpo.umup import require_official_umup_forward
+
+        require_official_umup_forward()
     controller = _build_controller_from_spec(spec)
     state_path = args.controller_state or spec.get(
         "controller_state_path",
         os.path.join(tempfile.gettempdir(), f"edullm-hpo-{args.run_id}.jsonl"),
     )
+    segment_spec_dir = Path(
+        spec.get(
+            "segment_spec_dir",
+            os.path.join(tempfile.gettempdir(), f"edullm-hpo-{args.run_id}"),
+        )
+    )
     remote_root = spec.get("controller_snapshot_root")
-    restored_log = _load_controller_log(state_path, remote_root)
-    if restored_log is not None:
-        controller.restore_log(restored_log)
-    retry_tell = getattr(controller, "retry_pending_tell", None)
-    if callable(retry_tell):
-        retry_tell()
-    pending_method = getattr(controller, "pending_allocations", None)
-    pending_allocations = pending_method() if callable(pending_method) else []
-    if pending_allocations:
-        results = _dispatch_allocations(
-            allocations=pending_allocations,
-            controller_spec=spec,
-            run_id=args.run_id,
-            param_dtype=args.param_dtype,
-        )
-        controller.ingest(results)
-        _persist_controller_log(controller, state_path, remote_root)
-    max_rounds = int(spec.get("max_rounds", 10_000))
-    for _ in range(max_rounds):
-        try:
-            allocations = controller.propose_round()
-        except Exception:
+    probe = _open_hpo_probe_session(
+        run_id=args.run_id,
+        job_type="controller",
+        spec=spec,
+        checkpoint_root=args.checkpoint_root,
+    )
+    exit_code = 0
+    study_payload = None
+    study_result_path = spec.get("study_result_path")
+    try:
+        restored_log = _load_controller_log(state_path, remote_root)
+        if restored_log is not None:
+            controller.restore_log(restored_log)
+        retry_tell = getattr(controller, "retry_pending_tell", None)
+        if callable(retry_tell):
+            retry_tell()
+        pending_method = getattr(controller, "pending_allocations", None)
+        pending_allocations = pending_method() if callable(pending_method) else []
+        if pending_allocations:
+            results = _dispatch_allocations(
+                allocations=pending_allocations,
+                controller_spec=spec,
+                run_id=args.run_id,
+                param_dtype=args.param_dtype,
+            )
+            controller.ingest(results)
             _persist_controller_log(controller, state_path, remote_root)
-            raise
+            probe.log_controller(controller)
+        max_rounds = int(spec.get("max_rounds", 10_000))
+        for _ in range(max_rounds):
+            try:
+                allocations = controller.propose_round()
+            except Exception:
+                _persist_controller_log(controller, state_path, remote_root)
+                probe.log_controller(controller)
+                raise
+            _persist_controller_log(controller, state_path, remote_root)
+            probe.log_controller(controller)
+            if not allocations:
+                break
+            results = _dispatch_allocations(
+                allocations=allocations,
+                controller_spec=spec,
+                run_id=args.run_id,
+                param_dtype=args.param_dtype,
+            )
+            controller.ingest(results)
+            _persist_controller_log(controller, state_path, remote_root)
+            probe.log_controller(controller)
+        final_completed_method = getattr(controller, "final_evaluation_completed", None)
+        final_completed = bool(final_completed_method()) if callable(final_completed_method) else False
+        exact_result = None
+        if not final_completed:
+            exact_result = _run_exact_retrain(
+                controller,
+                spec,
+                run_id=args.run_id,
+                param_dtype=args.param_dtype,
+            )
+            _run_untouched_evaluation(
+                controller,
+                spec,
+                exact_result=exact_result,
+            )
         _persist_controller_log(controller, state_path, remote_root)
-        if not allocations:
-            break
-        results = _dispatch_allocations(
-            allocations=allocations,
-            controller_spec=spec,
-            run_id=args.run_id,
-            param_dtype=args.param_dtype,
+        probe.log_controller(controller)
+        _enforce_required_winner(controller, spec)
+        if spec.get("arm") is not None:
+            study_payload = _persist_study_result(
+                controller,
+                spec,
+                evidence_decision,
+                exact_result=exact_result,
+            )
+            if study_result_path is not None:
+                probe.record_study_result(study_payload, study_result_path)
+        return 0
+    except Exception:
+        exit_code = 1
+        raise
+    finally:
+        _finalize_hpo_probe_session(
+            probe,
+            controller=controller,
+            state_path=state_path,
+            segment_spec_dir=segment_spec_dir,
+            exit_code=exit_code,
         )
-        controller.ingest(results)
-        _persist_controller_log(controller, state_path, remote_root)
-    final_completed_method = getattr(controller, "final_evaluation_completed", None)
-    final_completed = bool(final_completed_method()) if callable(final_completed_method) else False
-    if not final_completed:
-        exact_result = _run_exact_retrain(
-            controller,
-            spec,
-            run_id=args.run_id,
-            param_dtype=args.param_dtype,
-        )
-        _run_untouched_evaluation(
-            controller,
-            spec,
-            exact_result=exact_result,
-        )
-    _persist_controller_log(controller, state_path, remote_root)
-    _enforce_required_winner(controller, spec)
-    return 0
 
 
 def run_segment(args: argparse.Namespace) -> int:
@@ -846,22 +1388,14 @@ def run_segment(args: argparse.Namespace) -> int:
     if not args.trial_id or not args.checkpoint_dir or args.hard_stop_tokens is None:
         raise ValueError("segment mode requires trial id, checkpoint directory, and hard stop")
     spec = json.loads(Path(args.segment_spec).read_text())
+    model_parameterization = spec.get("model_parameterization", {"kind": "standard"})
+    if model_parameterization.get("kind") == "umup":
+        from olmo_core.hpo.umup import require_official_umup_forward
+
+        require_official_umup_forward()
     factory = _load_object(spec["experiment_factory"])
     config = factory(**spec.get("factory_kwargs", {}))
     fidelity = spec.get("fidelity", {"kind": "exact"})
-    if fidelity.get("kind") == "umup":
-        import unit_scaling  # noqa: F401
-
-        configurator_ref = fidelity.get("configurator")
-        if configurator_ref is None:
-            raise ValueError("u-muP fidelity requires a configurator")
-        configured = _load_object(configurator_ref)(
-            config,
-            width_factor=float(fidelity["width_factor"]),
-            depth_factor=float(fidelity.get("depth_factor", 1.0)),
-        )
-        if configured is not None:
-            config = configured
 
     from olmo_core.hpo.objective import EvaluatorGate
     from olmo_core.hpo.worker import WorkerConfig, trial_namespace
@@ -899,6 +1433,7 @@ def run_segment(args: argparse.Namespace) -> int:
         param_dtype=args.param_dtype,
         transition=spec.get("transition"),
         fidelity=fidelity,
+        model_parameterization=model_parameterization,
     )
     payload = asdict(result)
     if not math.isfinite(payload["heldout_ce"]):
@@ -909,6 +1444,8 @@ def run_segment(args: argparse.Namespace) -> int:
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = _parse_args(argv)
+    if args.run_segment and args.run_proxy_cohort:
+        raise ValueError("--run-segment and --run-proxy-cohort are mutually exclusive")
     # A trial-segment subprocess is world-size-one by construction; the controller is not.
     if args.run_segment:
         from olmo_core.hpo.worker import assert_single_process_topology
@@ -918,7 +1455,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         assert_controller_is_cpu_only(os.environ)
     if args.dry_run:
         return 0
-    return run_segment(args) if args.run_segment else run_controller(args)
+    if args.run_segment:
+        return run_segment(args)
+    if args.run_proxy_cohort:
+        return run_proxy_cohort(args)
+    return run_controller(args)
 
 
 if __name__ == "__main__":  # pragma: no cover

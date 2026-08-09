@@ -40,7 +40,7 @@ from ..optim.scheduler import WSD, SchedulerUnits
 from ..train.callbacks import Callback, EvaluatorCallback, LMEvaluatorCallbackConfig
 from ..train.common import Duration
 from .objective import EvaluatorGate
-from .proxy import FrozenLayerProxy, UMuPArm
+from .proxy import FrozenLayerProxy
 from .types import WorkerObservation
 
 __all__ = [
@@ -613,8 +613,9 @@ def configure_hpo_experiment(
     hard_stop_tokens: int,
     heldout_metric: str,
     fidelity: Optional[Mapping[str, Any]] = None,
+    model_parameterization: Optional[Mapping[str, Any]] = None,
 ) -> HpoDiagnosticsCallback:
-    """Apply one immutable trial config to an unbuilt OLMo experiment configuration."""
+    """Apply model parameterization and training fidelity as independent dimensions."""
     callbacks = config.trainer.callbacks
     worker.assert_evaluator_ready(set(callbacks))
     if worker.evaluator_gate.untouched in callbacks:
@@ -629,6 +630,32 @@ def configure_hpo_experiment(
     config.data_loader.global_batch_size = worker.global_batch_size
     if not 0 < hard_stop_tokens <= worker.target_tokens:
         raise ValueError("hard_stop_tokens must be positive and at most target_tokens")
+    model_parameterization = (
+        {"kind": "standard"} if model_parameterization is None else dict(model_parameterization)
+    )
+    parameterization_kind = model_parameterization.get("kind", "standard")
+    if parameterization_kind == "umup":
+        from .umup import UMuPAdamWConfig, require_official_umup_forward
+
+        require_official_umup_forward()
+        if getattr(config, "umup_backend", None) != "unit-scaling" or not bool(
+            getattr(config, "umup_parity_validated", False)
+        ):
+            raise RuntimeError(
+                "u-muP parameterization requires the official unit-scaling configurator "
+                "with validated parameter-count parity"
+            )
+        metadata = getattr(config, "umup_metadata", None)
+        if (
+            not isinstance(metadata, Mapping)
+            or metadata.get("proxy_depth") != config.model.n_layers
+        ):
+            raise RuntimeError("u-muP parameterization metadata is missing or inconsistent")
+        if not isinstance(config.train_module.optim, UMuPAdamWConfig):
+            raise RuntimeError("u-muP parameterization requires official scaled AdamW groups")
+    elif parameterization_kind != "standard":
+        raise ValueError(f"unknown model parameterization kind: {parameterization_kind}")
+
     fidelity = {"kind": "exact"} if fidelity is None else dict(fidelity)
     fidelity_kind = fidelity.get("kind", "exact")
     if fidelity_kind == "frozen_layer":
@@ -636,19 +663,10 @@ def configure_hpo_experiment(
             n_layers=int(config.model.n_layers),
             train_last_k=int(fidelity["train_last_k"]),
         )
-        config.model.freeze_params = proxy.freeze_patterns()
-    elif fidelity_kind == "umup":
-        UMuPArm(
-            width_factor=float(fidelity["width_factor"]),
-            depth_factor=float(fidelity.get("depth_factor", 1.0)),
+        existing_patterns = list(config.model.freeze_params or [])
+        config.model.freeze_params = list(
+            dict.fromkeys(existing_patterns + proxy.freeze_patterns())
         )
-        if getattr(config, "umup_backend", None) != "unit-scaling" or not bool(
-            getattr(config, "umup_parity_validated", False)
-        ):
-            raise RuntimeError(
-                "u-muP fidelity requires an official unit-scaling configurator "
-                "with validated parameterization parity"
-            )
     elif fidelity_kind != "exact":
         raise ValueError(f"unknown HPO fidelity kind: {fidelity_kind}")
 
@@ -686,9 +704,13 @@ def configure_hpo_experiment(
 
 
 def validate_umup_model(model) -> None:
-    """Require official ``unit_scaling`` metadata on every trainable parameter."""
+    """Require official unit-scaled execution and metadata on every trainable parameter."""
     from unit_scaling.parameter import has_parameter_data
 
+    from .umup import UMUP_EXECUTION_BACKEND
+
+    if getattr(model, "_umup_execution_backend", None) != UMUP_EXECUTION_BACKEND:
+        raise RuntimeError("u-muP model has no verified official unit-scaled execution backend")
     untagged = [
         name
         for name, parameter in model.named_parameters()
@@ -697,5 +719,5 @@ def validate_umup_model(model) -> None:
     if untagged:
         preview = ", ".join(untagged[:5])
         raise RuntimeError(
-            "u-muP model contains parameters without official unit_scaling metadata: " f"{preview}"
+            f"u-muP model contains parameters without official unit_scaling metadata: {preview}"
         )
