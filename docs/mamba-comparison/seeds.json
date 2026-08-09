@@ -194,5 +194,17 @@
     "throughput_tok_s_steady_per_device",
     "peak_memory_gib",
     "peak_memory_reserved_gib"
-  ]
+  ],
+  "secondary_endpoints": [
+    "decode_latency_ms",
+    "decode_state_bytes_per_seq"
+  ],
+  "decode_probe": {
+    "enabled": true,
+    "batch_sizes": [1, 8, 32],
+    "steps_per_measurement": 64,
+    "warmup_steps": 8,
+    "runs_on": "rank 0, inside summarise(), after training",
+    "why_it_cannot_bias_throughput": "It runs after the timed training loop and outside the steady-state window, drives one fused operator on one device with no collectives, and records failures as a reason rather than raising."
+  }
 }

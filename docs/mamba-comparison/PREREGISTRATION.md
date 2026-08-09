@@ -96,3 +96,13 @@ submission, so any later replacement is a documented deviation.
   twelve mixer layers per arm are what is being relied on for a larger effect.
   Throughput and peak memory are budget- and replicate-robust and are the
   endpoints this wave is expected to settle.
+- Before dispatch, the decode probe was enabled by dropping `--no-decode-probe`,
+  adding decode latency and recurrent-state bytes as secondary endpoints. This
+  follows mixer-bakeoff Run 2, which added the measurement because training
+  throughput does not predict serving cost. It cannot bias the primary
+  throughput endpoint: it runs on rank zero inside `summarise()` after the timed
+  loop and outside the steady-state window, drives one operator on one device
+  with no collectives, and records failures as a reason rather than raising. Its
+  cost is 216 single-token passes per cell. Unlike Run 2's two-slot arms, whose
+  six attention layers dominated their decode footprint, all twelve recurrent
+  layers here carry the arm's operator, so the measurement separates the arms.

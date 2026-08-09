@@ -10,6 +10,12 @@
 #
 # The arrays are deliberately arm-major. If a platform limit truncates the fan-out,
 # whole arms are lost while completed arms retain all three replicates.
+#
+# The decode probe is ON: `--no-decode-probe` is deliberately not passed. Decode latency and
+# recurrent-state bytes are the serving-side cost, which training throughput does not predict --
+# a mixer's state is fixed per sequence where attention's KV cache grows with context. It costs
+# 216 single-token passes on rank zero after training, outside the steady-state window, and
+# `decode_probe` records every failure as a reason rather than raising.
 schema_version: 1
 workload_profile: olmo-core-train
 suggested_compute: gpu-8xa100
@@ -33,4 +39,4 @@ command: >-
   --arm "${ARMS[$I]}" --data-seed "${DSEEDS[$I]}" --init-seed "${ISEEDS[$I]}"
   --sequence-length 4096 --steps 1144 --warmup-steps 114 --learning-rate 1.4e-3
   --global-batch-size 524288 --rank-microbatch-size 8192 --save-interval 572
-  --save-folder "$EDULLM_CHECKPOINT_DIR" --param-dtype bfloat16 --no-decode-probe'
+  --save-folder "$EDULLM_CHECKPOINT_DIR" --param-dtype bfloat16'

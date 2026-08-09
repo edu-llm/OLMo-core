@@ -145,6 +145,12 @@ def test_arm_major_three_seed_wave_is_machine_readable():
     assert "--save-interval 572" in run_yaml
     assert "--global-batch-size 524288" in run_yaml
 
+    # The decode probe is the serving-side endpoint, and it is measured. It runs on rank zero
+    # inside `summarise`, after training and outside the steady-state window, so it cannot move
+    # the throughput figure the arms are ranked on. Checked against the command rather than the
+    # file, so the comment explaining the choice does not satisfy the assertion.
+    assert "--no-decode-probe" not in shlex.split(_shell_body(RUN_SPEC))
+
     def shell_array(name: str) -> list[str]:
         match = re.search(rf"{name}=\((.*?)\) &&", run_yaml, flags=re.DOTALL)
         assert match is not None
