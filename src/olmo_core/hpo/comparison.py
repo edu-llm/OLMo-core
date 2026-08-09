@@ -27,19 +27,42 @@ from ..train.train_module import (
 )
 
 __all__ = [
+    "COMPARISON_DATASET_ID",
+    "COMPARISON_DATASET_REFERENCE",
     "COMPARISON_HELDOUT_LABEL",
     "COMPARISON_HELDOUT_METRIC",
     "DEFAULT_RECIPE_HPS",
     "ComparisonDataset",
     "ComparisonExperimentConfig",
     "comparison_dataset_from_read",
+    "comparison_heldout_label",
+    "comparison_heldout_metric",
     "build_comparison_experiment",
     "build_umup_hpo_experiment",
     "smoke_final_evaluator",
 ]
 
-COMPARISON_HELDOUT_LABEL = "reservoir-dolma2-val"
-COMPARISON_HELDOUT_METRIC = f"eval/lm/{COMPARISON_HELDOUT_LABEL}/CE loss"
+COMPARISON_DATASET_ID = "pretrain/opt-with-synthetic-10b"
+COMPARISON_DATASET_REFERENCE = "opt-with-synthetic-10b-v1"
+
+
+def comparison_heldout_label(dataset_id: str) -> str:
+    """Return the LM-evaluator label for a sealed pretrain corpus."""
+
+    name = dataset_id.rsplit("/", 1)[-1]
+    if not name:
+        raise ValueError("dataset_id must be non-empty")
+    return f"{name}-val"
+
+
+def comparison_heldout_metric(dataset_id: str) -> str:
+    """Return the held-out CE metric key for a sealed pretrain corpus."""
+
+    return f"eval/lm/{comparison_heldout_label(dataset_id)}/CE loss"
+
+
+COMPARISON_HELDOUT_LABEL = comparison_heldout_label(COMPARISON_DATASET_ID)
+COMPARISON_HELDOUT_METRIC = comparison_heldout_metric(COMPARISON_DATASET_ID)
 
 DEFAULT_RECIPE_HPS = {
     "lr": 1e-3,
@@ -172,7 +195,9 @@ def build_comparison_experiment(
     )
     eval_dataset = NumpyPaddedFSLDatasetConfig(
         paths=list(corpus.val_paths),
-        metadata=[{"label": COMPARISON_HELDOUT_LABEL} for _ in corpus.val_paths],
+        metadata=[
+            {"label": comparison_heldout_label(dataset_id)} for _ in corpus.val_paths
+        ],
         sequence_length=sequence_length,
         tokenizer=tokenizer,
         dtype=corpus.dtype,

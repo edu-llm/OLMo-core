@@ -53,8 +53,10 @@ none of these substitutions.
 ## Platform submission
 
 Each job is one arm (or the proxy cohort) on `gpu-8xa100` with team `pre-training` and
-dataset `reservoir-dolma2-v1`. Expected wall time is about 1–1.5 hours per arm; pass
-`--hours 4` as the hard runtime bound and `--attempts 2` (the `olmo-core-train` maximum).
+dataset `opt-with-synthetic-10b-v1` (`pretrain/opt-with-synthetic-10b` v1, the
+LGBM-optimized 10B mix with Nemotron synthetic data). Expected wall time is about
+1–1.5 hours per arm; pass `--hours 4` as the hard runtime bound and `--attempts 2`
+(the `olmo-core-train` maximum).
 
 Runtime secrets:
 
@@ -63,6 +65,15 @@ Runtime secrets:
 | `WANDB_API_KEY` | required | required | required |
 | `OPENAI_API_KEY` | not used | required (30% Centaur) | not used |
 
+On the platform, inject these as job environment variables. Locally, unset keys
+fall back to `~/.wandb_api_key` and `~/.openai_api_key`. On RunPod, copy the
+same `/workspace/wandb-session.env` file used by the curriculum adapter.
+
+Centaur defaults to the TrueFoundry AI Gateway
+(`OPENAI_BASE_URL=https://gateway.truefoundry.ai/v1`, route model
+`openai-group/gpt-5.6-sol`) while keeping the Brainlift logical model id
+`gpt-5.6-sol`.
+
 HPO artifacts mirror to W&B project `hpo-probe` (not the platform `wandb_project`).
 
 Proxy cohort first:
@@ -70,7 +81,7 @@ Proxy cohort first:
 ```bash
 edullm check --json \
   --experiment hpo-proxy-cohort \
-  --dataset reservoir-dolma2-v1 \
+  --dataset opt-with-synthetic-10b-v1 \
   --team pre-training \
   --spec .edullm/run-hpo-proxy-cohort.yaml \
   --compute gpu-8xa100 \
@@ -85,7 +96,7 @@ export EDULLM_HPO_SPEC=.edullm/hpo-no-proxy.json
 
 edullm check --json \
   --experiment hpo-three-arm-no-proxy \
-  --dataset reservoir-dolma2-v1 \
+  --dataset opt-with-synthetic-10b-v1 \
   --team pre-training \
   --compute gpu-8xa100 \
   --hours 4 \

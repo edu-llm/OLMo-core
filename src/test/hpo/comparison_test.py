@@ -14,11 +14,22 @@ from olmo_core.hpo.comparison import (
     build_comparison_experiment,
     build_umup_hpo_experiment,
     comparison_dataset_from_read,
+    comparison_heldout_label,
+    comparison_heldout_metric,
 )
 
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
+
+
+def test_comparison_heldout_helpers_follow_dataset_id():
+    assert comparison_heldout_label("pretrain/opt-with-synthetic-10b") == (
+        "opt-with-synthetic-10b-val"
+    )
+    assert comparison_heldout_metric("pretrain/opt-with-synthetic-10b") == (
+        "eval/lm/opt-with-synthetic-10b-val/CE loss"
+    )
 
 
 def test_comparison_dataset_uses_sealed_train_and_heldout_splits():
@@ -32,7 +43,7 @@ def test_comparison_dataset_uses_sealed_train_and_heldout_splits():
     )
     dataset = comparison_dataset_from_read(
         read,
-        dataset_id="pretrain/reservoir-dolma2",
+        dataset_id="pretrain/opt-with-synthetic-10b",
         version="v1",
         tokenizer_id="tokenizer/dolma2-bpe",
     )
@@ -56,7 +67,7 @@ def test_comparison_dataset_uses_reader_hardened_train_paths():
     )
     dataset = comparison_dataset_from_read(
         read,
-        dataset_id="pretrain/reservoir-dolma2",
+        dataset_id="pretrain/opt-with-synthetic-10b",
         version="v1",
         tokenizer_id="tokenizer/dolma2-bpe",
     )
@@ -84,7 +95,7 @@ def test_comparison_dataset_rejects_unsafe_or_missing_validation(changes, match)
     with pytest.raises(ValueError, match=match):
         comparison_dataset_from_read(
             SimpleNamespace(**values),
-            dataset_id="pretrain/reservoir-dolma2",
+            dataset_id="pretrain/opt-with-synthetic-10b",
             version="v1",
             tokenizer_id="tokenizer/dolma2-bpe",
         )
@@ -115,7 +126,7 @@ def test_comparison_factory_builds_matched_train_and_eval_config(
     monkeypatch.setitem(sys.modules, "edullm_data", fake_package)
     monkeypatch.setitem(sys.modules, "edullm_data.read", fake_read)
     monkeypatch.setitem(sys.modules, "edullm_data.s3", fake_s3)
-    monkeypatch.setenv("EDULLM_DATASET_ID", "pretrain/reservoir-dolma2")
+    monkeypatch.setenv("EDULLM_DATASET_ID", "pretrain/opt-with-synthetic-10b")
     monkeypatch.setenv("EDULLM_DATASET_VERSION", "v1")
     monkeypatch.setenv("EDULLM_DATASET_TOKENIZER", "tokenizer/dolma2-bpe")
     monkeypatch.setenv("EDULLM_CHECKPOINT_DIR", "/tmp/checkpoints")
@@ -190,7 +201,7 @@ def test_runbook_has_non_dispatching_checks_and_pinned_dataset_contract():
     assert text.count("edullm check --json") >= 2
     assert "edullm submit" in text
     assert text.count("--hours 1") >= 4
-    assert "reservoir-dolma2-v1" in text
+    assert "opt-with-synthetic-10b-v1" in text
     assert "38bf831a6c3f445e394784018441fd59288b876c" in text
     assert "pretrain-tokens/v1" in text
     assert "functional smoke" in text.lower()

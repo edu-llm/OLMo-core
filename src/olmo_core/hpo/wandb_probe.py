@@ -15,8 +15,9 @@ __all__ = [
     "storage_path_is_durable",
 ]
 
+from .runtime_secrets import WANDB_API_KEY_ENV_VAR, load_wandb_api_key
+
 HPO_PROBE_PROJECT = "hpo-probe"
-WANDB_API_KEY_ENV_VAR = "WANDB_API_KEY"
 
 
 def durable_storage_roots(
@@ -117,6 +118,7 @@ class HpoProbeSession:
         config: Optional[Mapping[str, Any]] = None,
         tags: Optional[Sequence[str]] = None,
     ) -> None:
+        load_wandb_api_key()
         if WANDB_API_KEY_ENV_VAR not in os.environ:
             raise RuntimeError(
                 f"missing env var {WANDB_API_KEY_ENV_VAR!r}; ephemeral HPO artifacts must be "

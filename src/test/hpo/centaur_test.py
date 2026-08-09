@@ -115,7 +115,8 @@ def test_openai_compatible_advisor_uses_structured_multi_action_output():
         def create(self, **kwargs):
             calls.append(kwargs)
             return types.SimpleNamespace(
-                model="gpt-5.6-sol",
+                # Gateway may echo the routed model id; advisor still reports the logical one.
+                model="openai-group/gpt-5.6-sol",
                 system_fingerprint="sol-v1",
                 choices=[
                     types.SimpleNamespace(
@@ -132,8 +133,53 @@ def test_openai_compatible_advisor_uses_structured_multi_action_output():
     )
     assert response.action == {"kind": "resume", "trial_id": "trial-1"}
     assert response.model == "gpt-5.6-sol"
+    assert calls[0]["model"] == "openai-group/gpt-5.6-sol"
     assert calls[0]["response_format"]["type"] == "json_schema"
     assert calls[0]["temperature"] == 0
+    required = calls[0]["response_format"]["json_schema"]["schema"]["required"]
+    assert set(required) == {
+        "kind",
+        "unit_config",
+        "trial_id",
+        "donor_id",
+        "target_slot_id",
+        "restart_id",
+    }
+
+
+def test_openai_advisor_strips_null_optional_fields_before_validation():
+    class Completions:
+        def create(self, **kwargs):
+            return types.SimpleNamespace(
+                model="gpt-5.6-sol",
+                system_fingerprint="sol-v1",
+                choices=[
+                    types.SimpleNamespace(
+                        message=types.SimpleNamespace(
+                            content=(
+                                '{"kind":"resume","unit_config":null,"trial_id":"trial-1",'
+                                '"donor_id":null,"target_slot_id":null,"restart_id":null}'
+                            )
+                        )
+                    )
+                ],
+            )
+
+    client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=Completions()))
+    response = OpenAICompatibleAdvisor(client=client).advise({})
+    assert response.action == {"kind": "resume", "trial_id": "trial-1"}
+
+
+def test_centaur_defaults_to_truefoundry_gateway(monkeypatch):
+    from olmo_core.hpo.openai_advisor import (
+        TRUEFOUNDRY_DEFAULT_BASE_URL,
+        resolve_centaur_base_url,
+    )
+
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    assert resolve_centaur_base_url() == TRUEFOUNDRY_DEFAULT_BASE_URL
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.test/v1/")
+    assert resolve_centaur_base_url() == "https://example.test/v1"
 
 
 def test_validate_start_config_rejects_non_finite_and_out_of_bounds():

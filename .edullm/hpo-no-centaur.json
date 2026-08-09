@@ -86,7 +86,7 @@
   "frozen_ranking_policy": "reporting_only_until_admitted",
   "search_validation_callback": "search_validation",
   "untouched_evaluator": "final_evaluation",
-  "heldout_metric": "eval/lm/reservoir-dolma2-val/CE loss",
+  "heldout_metric": "eval/lm/opt-with-synthetic-10b-val/CE loss",
   "final_evaluator_factory": "olmo_core.hpo.comparison:smoke_final_evaluator",
   "controller_state_path": "/tmp/hpo-three-arm-${EDULLM_RUN_ID}.jsonl",
   "controller_snapshot_root": "${EDULLM_CHECKPOINT_DIR}/three-arm/${EDULLM_RUN_ID}",

@@ -1443,6 +1443,9 @@ def run_segment(args: argparse.Namespace) -> int:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    from olmo_core.hpo.runtime_secrets import load_runtime_secrets
+
+    load_runtime_secrets()
     args = _parse_args(argv)
     if args.run_segment and args.run_proxy_cohort:
         raise ValueError("--run-segment and --run-proxy-cohort are mutually exclusive")
