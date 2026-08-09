@@ -43,6 +43,21 @@ failure.
    weakest number in the spec. Under Hyperball it is a relative step size and is not comparable to
    the baseline's `4e-4`. Read a first result as "does this train and does the constraint hold".
 
+## The per-document reversal is dormant in this run, and that is fine
+
+`document_reversal_index` reflects each position through the midpoint of its own document, and it
+is tested over five boundary layouts — but **it never sees a boundary here.**
+`NumpyFSLDatasetConfig` leaves `generate_doc_lengths` at `False` and the entry script does not
+enable it, so no `doc_lens` reach the batch, `cu_doc_lens` is `None`, and the reversal is a plain
+whole-row flip of all 4096 positions.
+
+That is symmetric with the baseline rather than a regression against it. Without intra-document
+masking a causal scan already carries state across the concatenated documents in a packed row, so
+the reversed layers do the same thing in the other direction. What *would* be wrong is flipping a
+row whose boundaries were supplied, because that moves tokens between documents — and that is the
+case the boundary-aware path and its tests exist for. Turning on `generate_doc_lengths` activates
+them; nothing here depends on it.
+
 ## Why the architecture is what it is
 
 **A causal recurrence cannot carry a diffusion objective.**
