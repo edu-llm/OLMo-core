@@ -627,6 +627,37 @@ class XLSTMMixer(SequenceMixer):
             return
         raise NotImplementedError("Context parallelism is not implemented for XLSTMMixer")
 
+    def _init_value_and_output_gate(
+        self,
+        weight: torch.Tensor,
+        *,
+        std: float,
+        generator: torch.Generator | None = None,
+    ) -> None:
+        """Draw the packed v/output-gate weight, then zero the output-gate half."""
+        nn.init.trunc_normal_(
+            weight,
+            mean=0.0,
+            std=std,
+            a=-3 * std,
+            b=3 * std,
+            generator=generator,
+        )
+        weight[self.value_dim :].zero_()
+
+    def _init_gate_biases(self, bias: torch.Tensor) -> None:
+        """Write the constant input-gate bias and the head-wise forget-gate ramp."""
+        bias[: self.n_heads].fill_(self.input_gate_bias)
+        bias[self.n_heads :].copy_(
+            torch.linspace(
+                self.forget_gate_bias_min,
+                self.forget_gate_bias_max,
+                steps=self.n_heads,
+                dtype=bias.dtype,
+                device=bias.device,
+            )
+        )
+
     @torch.no_grad()
     def init_weights(
         self,
@@ -638,7 +669,7 @@ class XLSTMMixer(SequenceMixer):
         std: float = 0.02,
         generator: torch.Generator | None = None,
     ) -> None:
-        from olmo_core.nn.transformer.init import InitMethod, init_linear
+        from olmo_core.nn.transformer.init import InitMethod, _apply_init, init_linear
 
         if init_method == InitMethod.fan_in:
             raise NotImplementedError(
@@ -647,22 +678,22 @@ class XLSTMMixer(SequenceMixer):
         if init_method == InitMethod.normalized:
             std = d_model**-0.5
 
-        for projection in (self.w_qk, self.w_vo):
-            init_linear(projection, std=std, generator=generator)
-        self.w_vo.weight[self.value_dim :].zero_()
+        init_linear(self.w_qk, std=std, generator=generator)
+        # The packed v/output-gate weight and the packed gate bias are each written one
+        # half at a time. Once FSDP has turned them into `DTensor`s sharded on exactly the
+        # dimension those halves index, indexing them yields a redistributed copy rather
+        # than a view, so the write lands nowhere. `_apply_init` builds the whole
+        # parameter locally, writes both halves there, and copies this rank's shard in.
+        _apply_init(
+            self._init_value_and_output_gate,
+            self.w_vo.weight,
+            std=std,
+            generator=generator,
+        )
         init_linear(self.conv1d, std=std, generator=generator)
         self.w_if.weight.zero_()
         assert self.w_if.bias is not None
-        self.w_if.bias[: self.n_heads].fill_(self.input_gate_bias)
-        self.w_if.bias[self.n_heads :].copy_(
-            torch.linspace(
-                self.forget_gate_bias_min,
-                self.forget_gate_bias_max,
-                steps=self.n_heads,
-                dtype=self.w_if.bias.dtype,
-                device=self.w_if.bias.device,
-            )
-        )
+        _apply_init(self._init_gate_biases, self.w_if.bias)
         self.o_norm.weight.fill_(1.0)
 
         if init_method == InitMethod.llama:

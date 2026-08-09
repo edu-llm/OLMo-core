@@ -5,6 +5,7 @@ from typing import Callable
 import pytest
 import torch
 from torch.nn import functional as F
+from torch.utils._python_dispatch import TorchDispatchMode
 
 import olmo_core.nn.flash_pd_native.mamba3_siso as mamba3_siso_module
 from olmo_core.config import DType
@@ -25,6 +26,7 @@ from olmo_core.nn.transformer import (
     TransformerBlockType,
     TransformerConfig,
 )
+from olmo_core.testing import run_distributed_test
 
 
 def _selected_map(destination: torch.Tensor, routes: torch.Tensor, token: int) -> torch.Tensor:
@@ -427,6 +429,293 @@ def test_full_mixer_scan_boundary_receives_contiguous_recurrence_and_selection_t
     )
 
 
+class _NonContiguousCastRecorder(TorchDispatchMode):
+    """Record every dtype conversion that materializes a non-contiguous buffer."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.casts: list[tuple[tuple[int, ...], torch.dtype]] = []
+
+    def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+        result = func(*args, **(kwargs or {}))
+        if func is torch.ops.aten._to_copy.default and isinstance(result, torch.Tensor):
+            if not result.is_contiguous():
+                self.casts.append((tuple(result.shape), result.dtype))
+        return result
+
+
+def test_bfloat16_scan_boundary_casts_write_contiguous_buffers_once(monkeypatch):
+    batch, time, d_model = 2, 33, 32
+    mixer = _initialized_mixer(fused=True, dtype=DType.bfloat16)
+    x = torch.randn(batch, time, d_model, dtype=torch.bfloat16)
+    recorder = _NonContiguousCastRecorder()
+    original_scan = mamba3_siso_module.mamba3_siso_surrogate_scan
+    boundary_casts: list = []
+
+    def capture_scan(*args, **kwargs):
+        boundary_casts.extend(recorder.casts)
+        return original_scan(*args, **kwargs)
+
+    monkeypatch.setattr(mamba3_siso_module, "mamba3_siso_surrogate_scan", capture_scan)
+    with recorder:
+        mixer(x)
+
+    # A cast of a permuted operand preserves the permuted strides, so pairing it with a
+    # separate contiguous() writes the payload twice and throws the first buffer away.
+    # Every conversion feeding the scan has to land in its final layout directly.
+    assert boundary_casts == [], f"discarded non-contiguous buffers: {boundary_casts}"
+
+
+class _CastTargetRecorder(TorchDispatchMode):
+    """Record ``(source dtype, target dtype, element count)`` for every conversion."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.casts: list[tuple[torch.dtype, torch.dtype, int]] = []
+
+    def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+        result = func(*args, **(kwargs or {}))
+        if func is torch.ops.aten._to_copy.default and isinstance(result, torch.Tensor):
+            self.casts.append((args[0].dtype, result.dtype, result.numel()))
+        return result
+
+
+def test_bfloat16_readout_consumes_the_scan_states_without_promoting_them():
+    batch, time, d_model = 2, 35, 32
+    mixer = _initialized_mixer(fused=True, dtype=DType.bfloat16)
+    heads, state = mixer.n_heads, mixer.d_state
+    torch.manual_seed(53)
+    value_input = torch.randn(batch, time, heads, state)
+    gate = torch.randn(batch, time, d_model, dtype=torch.bfloat16)
+    c_real = torch.randn(batch, time, heads, state)
+    c_imag = torch.randn(batch, time, heads, state)
+    states_real = torch.randn(batch, heads, time, state, dtype=torch.bfloat16)
+    states_imag = torch.randn(batch, heads, time, state, dtype=torch.bfloat16)
+    recorder = _CastTargetRecorder()
+
+    with recorder:
+        actual = mixer._readout(
+            torch.bfloat16, value_input, gate, c_real, c_imag, states_real, states_imag
+        )
+
+    # The states arrive transposed, so promoting them writes a whole activation in the
+    # scan's layout and reads it back in the readout's. Multiplying them against the
+    # fp32 C projection promotes them in the same pass and costs nothing.
+    expected = mixer._readout(
+        torch.bfloat16,
+        value_input,
+        gate,
+        c_real,
+        c_imag,
+        states_real.float(),
+        states_imag.float(),
+    )
+    torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+    tokens = batch * time * d_model
+    assert recorder.casts == [
+        (torch.bfloat16, torch.float32, tokens),
+        (torch.float32, torch.bfloat16, tokens),
+    ], recorder.casts
+
+
+def test_bfloat16_recurrence_promotes_each_full_size_activation_at_most_once():
+    batch, time, d_model = 2, 35, 32
+    mixer = _initialized_mixer(fused=True, dtype=DType.bfloat16)
+    x = torch.randn(batch, time, d_model, dtype=torch.bfloat16)
+    recorder = _CastTargetRecorder()
+
+    with recorder:
+        mixer._prepare_recurrence(x)
+
+    # An operand that meets an fp32 tensor in a product or a sum is promoted by that
+    # kernel, so a separate conversion in front of it writes a full activation for
+    # nothing. What is left is BCNorm reading B and C, the imaginary C the readout
+    # needs in fp32, the value input, and the phase logits behind the diagonal.
+    promotions = [
+        cast
+        for cast in recorder.casts
+        if cast[1] == torch.float32 and cast[2] == batch * time * mixer.n_heads * mixer.d_state
+    ]
+    assert len(promotions) == 7, promotions
+
+
+@pytest.mark.parametrize("dtype", [DType.float32, DType.bfloat16])
+def test_prepared_recurrence_builds_the_complex_diagonal_in_the_scan_layout(dtype: DType):
+    batch, time, d_model = 2, 35, 32
+    mixer = _initialized_mixer(fused=True, dtype=dtype)
+    x = torch.randn(batch, time, d_model, dtype=dtype.as_pt())
+
+    (
+        _value_input,
+        _gate,
+        _c_real,
+        _c_imag,
+        _selector_logits,
+        diagonal_real,
+        diagonal_imag,
+        _value_real,
+        _value_imag,
+        beta,
+        gamma,
+    ) = mixer._prepare_recurrence(x)
+
+    # Every factor behind the diagonal is either per-head or broadcast over the state,
+    # so the whole chain can be evaluated head-major and land in the layout the scan
+    # reads. Transposing the two finished planes instead rewrites them both.
+    for name, tensor in (("diagonal_real", diagonal_real), ("diagonal_imag", diagonal_imag)):
+        assert tensor.shape == (batch, mixer.n_heads, time, mixer.d_state), name
+        assert tensor.dtype == torch.float32, name
+        assert tensor.is_contiguous(), name
+    for name, tensor in (("beta", beta), ("gamma", gamma)):
+        assert tensor.shape == (batch, mixer.n_heads, time), name
+        assert tensor.dtype == torch.float32, name
+        assert tensor.is_contiguous(), name
+
+
+def test_float32_forward_hands_the_scan_the_prepared_operands_unchanged(monkeypatch):
+    mixer = _initialized_mixer(fused=True)
+    x = torch.randn(2, 35, 32)
+    prepared: dict[str, torch.Tensor] = {}
+    scanned: dict[str, torch.Tensor] = {}
+    original_prepare = mixer._prepare_recurrence
+    original_scan = mamba3_siso_module.mamba3_siso_surrogate_scan
+
+    def capture_prepare(value):
+        result = original_prepare(value)
+        prepared.update(
+            diagonal_real=result[5],
+            diagonal_imag=result[6],
+            beta=result[9],
+            gamma=result[10],
+        )
+        return result
+
+    def capture_scan(
+        dictionary_logits,
+        selector_logits,
+        diagonal_real,
+        diagonal_imag,
+        value_real,
+        value_imag,
+        beta,
+        gamma,
+        **kwargs,
+    ):
+        scanned.update(
+            diagonal_real=diagonal_real,
+            diagonal_imag=diagonal_imag,
+            beta=beta,
+            gamma=gamma,
+        )
+        return original_scan(
+            dictionary_logits,
+            selector_logits,
+            diagonal_real,
+            diagonal_imag,
+            value_real,
+            value_imag,
+            beta,
+            gamma,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(mixer, "_prepare_recurrence", capture_prepare)
+    monkeypatch.setattr(mamba3_siso_module, "mamba3_siso_surrogate_scan", capture_scan)
+    mixer(x)
+
+    # Nothing may stand between where an operand is built and where the kernel reads
+    # it. In the payload dtype the recurrence already computes in, a permute paired
+    # with a contiguous() there is a second full write of a finished tensor.
+    for name, tensor in scanned.items():
+        assert tensor is prepared[name], name
+
+
+def _token_major_mixer_oracle(mixer: NativeFlashPDMamba3SISOMixer, x: torch.Tensor) -> torch.Tensor:
+    """Recompute the fused mixer from its parameters, token-major throughout."""
+    batch, time, _ = x.shape
+    heads, state = mixer.n_heads, mixer.d_state
+    assert mixer.in_proj is not None
+    (
+        value_input,
+        gate,
+        b_projection,
+        c_projection,
+        selector_logits,
+        dt_logits,
+        phase_logits,
+        lambda_logits,
+    ) = mixer.in_proj(x).split(mixer._projection_sizes(), dim=-1)
+    b_real, b_imag = b_projection.view(batch, time, heads, state, 2).unbind(dim=-1)
+    c_real, c_imag = c_projection.view(batch, time, heads, state, 2).unbind(dim=-1)
+    b_real, b_imag = mamba3_siso_module._complex_rms_norm(
+        b_real, b_imag, mixer.bc_norm_b, mixer.norm_eps
+    )
+    c_real, c_imag = mamba3_siso_module._complex_rms_norm(
+        c_real, c_imag, mixer.bc_norm_c, mixer.norm_eps
+    )
+    b_real = b_real.float() + mixer.B_bias.view(1, 1, heads, state)
+    c_real = c_real.float() + mixer.C_bias.view(1, 1, heads, state)
+    value_input = value_input.view(batch, time, heads, state).float()
+    dt = F.softplus(dt_logits.float() + mixer.dt_bias.view(1, 1, heads))
+    lam = torch.sigmoid(lambda_logits.float())
+    magnitude = torch.exp(-dt[..., None] * torch.exp(mixer.A_log).view(1, 1, heads, 1))
+    theta = math.pi * torch.tanh(phase_logits.float().view(batch, time, heads, state))
+    phase = dt[..., None] * theta
+    payload = x.dtype if x.dtype in (torch.float32, torch.bfloat16) else torch.float32
+    states_real, states_imag = mamba3_siso_module.mamba3_siso_surrogate_scan(
+        mixer.dictionary_logits.float(),
+        selector_logits.view(batch, time, heads, mixer.dictionary_size).float().contiguous(),
+        (magnitude * torch.cos(phase)).permute(0, 2, 1, 3).contiguous(),
+        (magnitude * torch.sin(phase)).permute(0, 2, 1, 3).contiguous(),
+        (b_real * value_input).permute(0, 2, 1, 3).to(payload).contiguous(),
+        (b_imag.float() * value_input).permute(0, 2, 1, 3).to(payload).contiguous(),
+        ((1.0 - lam) * dt).permute(0, 2, 1).to(payload).contiguous(),
+        (lam * dt).permute(0, 2, 1).to(payload).contiguous(),
+        dictionary_temperature=mixer.dictionary_temperature,
+        router_temperature=mixer.router_temperature,
+        chunk_size=mixer.chunk_size,
+        mode=mixer.mode,
+        backend=mixer.backend,
+    )
+    readout = (
+        c_real * states_real.permute(0, 2, 1, 3).float()
+        - c_imag.float() * states_imag.permute(0, 2, 1, 3).float()
+    )
+    y = readout + mixer.D.view(1, 1, heads, 1) * value_input
+    y = y * F.silu(gate.view(batch, time, heads, state).float())
+    return mixer.out_proj(y.reshape(batch, time, mixer.d_model).to(x.dtype))
+
+
+@pytest.mark.parametrize("dtype", [DType.float32, DType.bfloat16])
+def test_mixer_forward_and_every_gradient_match_the_token_major_oracle(dtype: DType):
+    mixer = _initialized_mixer(fused=True, dtype=dtype)
+    torch.manual_seed(37)
+    x = torch.randn(2, 35, 32, dtype=dtype.as_pt(), requires_grad=True)
+    weight = torch.randn(2, 35, 32, dtype=dtype.as_pt())
+    leaves = (x, *mixer.parameters())
+    names = ["input", *(name for name, _ in mixer.named_parameters())]
+
+    actual = mixer(x)
+    actual_gradients = torch.autograd.grad((actual * weight).sum(), leaves)
+    expected = _token_major_mixer_oracle(mixer, x)
+    expected_gradients = torch.autograd.grad((expected * weight).sum(), leaves)
+
+    # The forward is the same arithmetic on the same values and has to agree bit for
+    # bit. The gradients cannot: dt, the value input and the projections each feed
+    # several consumers, and a re-expressed graph sums those contributions in its own
+    # order, so the two answers differ by the rounding of that sum.
+    torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+    assert len(names) == len(actual_gradients)
+    for name, actual_gradient, expected_gradient in zip(
+        names, actual_gradients, expected_gradients
+    ):
+        torch.testing.assert_close(
+            actual_gradient,
+            expected_gradient,
+            msg=lambda default, name=name: f"gradient of {name}: {default}",
+        )
+
+
 def test_bfloat16_mixer_keeps_complex_diagonal_fp32_at_scan_boundary(monkeypatch):
     decay_steps = 4096
     time = decay_steps + 1
@@ -442,10 +731,13 @@ def test_bfloat16_mixer_keeps_complex_diagonal_fp32_at_scan_boundary(monkeypatch
         index = torch.arange(state)
         mixer.dictionary_logits[0, 0, index, index] = 1
 
+    # The payload stays token-major and is transposed at the boundary; the diagonal and
+    # the trapezoidal weights are built head-major and handed over as they are.
     recurrence_shape = (1, time, 1, state)
+    scan_shape = (1, 1, time, state)
     payload_dtype = torch.bfloat16
     diagonal_real = torch.full(
-        recurrence_shape,
+        scan_shape,
         math.exp(-5e-4),
         dtype=torch.float32,
     )
@@ -453,9 +745,9 @@ def test_bfloat16_mixer_keeps_complex_diagonal_fp32_at_scan_boundary(monkeypatch
     value_real = torch.zeros(recurrence_shape, dtype=payload_dtype)
     value_imag = torch.zeros_like(value_real)
     value_real[:, 0] = 1
-    beta = torch.zeros((1, time, 1), dtype=payload_dtype)
+    beta = torch.zeros((1, 1, time), dtype=payload_dtype)
     gamma = torch.zeros_like(beta)
-    gamma[:, 0] = 1
+    gamma[..., 0] = 1
     captured = {}
 
     def prepare_recurrence(x):
@@ -649,6 +941,76 @@ def test_fused_and_unfused_projection_checkpoints_convert_both_directions_exactl
     rebuilt_unfused = _mixer_config(fuse_input_projections=False).build(32, layer_idx=1, n_layers=3)
     rebuilt_unfused.load_state_dict(fused.state_dict(), strict=True)
     torch.testing.assert_close(rebuilt_unfused(x), expected)
+
+
+def test_fused_and_unfused_projection_layouts_initialize_identically_from_one_seed():
+    unfused = _initialized_mixer(fused=False)
+    fused = _initialized_mixer(fused=True)
+    assert fused.in_proj is not None
+
+    stacked = torch.cat(
+        [getattr(unfused, name).weight for name in unfused._UNFUSED_PROJECTIONS], dim=0
+    )
+    assert torch.equal(fused.in_proj.weight, stacked)
+
+
+def _fused_projection_slice_stds(
+    mixer: NativeFlashPDMamba3SISOMixer, weight: torch.Tensor
+) -> dict[str, float]:
+    """Return the sample standard deviation of every logical slice of a fused weight."""
+    return {
+        name: chunk.std().item()
+        for name, chunk in zip(
+            mixer._UNFUSED_PROJECTIONS,
+            weight.split(mixer._projection_sizes(), dim=0),
+        )
+    }
+
+
+def _run_sharded_fused_projection_init(world_size: int, reference: dict[str, float]) -> None:
+    from torch.distributed.fsdp import fully_shard
+    from torch.distributed.tensor import DTensor, init_device_mesh
+
+    from olmo_core.distributed.utils import get_full_tensor
+
+    mixer = _mixer_config(fuse_input_projections=True).build(32, layer_idx=1, n_layers=3)
+    fully_shard(mixer, mesh=init_device_mesh("cpu", (world_size,)))
+    assert mixer.in_proj is not None
+    # The defect only exists once the fused weight is sharded on the dimension the
+    # logical projection sizes address, which is exactly what training does before it
+    # initializes anything.
+    assert isinstance(mixer.in_proj.weight, DTensor)
+    assert mixer.in_proj.weight.to_local().shape[0] < sum(mixer._projection_sizes())
+
+    mixer.init_weights(
+        init_method=InitMethod.normal,
+        d_model=32,
+        block_idx=1,
+        num_blocks=3,
+        generator=torch.Generator().manual_seed(17),
+    )
+
+    observed = _fused_projection_slice_stds(mixer, get_full_tensor(mixer.in_proj.weight.detach()))
+    for name, expected in reference.items():
+        assert observed[name] == pytest.approx(expected, rel=0.25), (name, observed, reference)
+    assert observed["phase_proj"] < 0.2 * min(
+        value for name, value in observed.items() if name != "phase_proj"
+    )
+
+
+def test_sharded_fused_projection_gives_every_slice_its_own_standard_deviation():
+    reference_mixer = _initialized_mixer(fused=True)
+    assert reference_mixer.in_proj is not None
+    reference = _fused_projection_slice_stds(
+        reference_mixer, reference_mixer.in_proj.weight.detach()
+    )
+
+    run_distributed_test(
+        _run_sharded_fused_projection_init,
+        world_size=2,
+        backend="gloo",
+        func_args=(2, reference),
+    )
 
 
 def test_mixer_tiny_prefill_then_one_token_decode_matches_full_sequence():

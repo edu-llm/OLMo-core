@@ -9,7 +9,7 @@ the dependency or required CUDA capabilities are unavailable.
 
 import importlib
 import shutil
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from importlib import metadata
 from typing import TYPE_CHECKING, Any
@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 import torch
 from torch import nn
 from torch.distributed.device_mesh import DeviceMesh
-from torch.distributed.tensor import Placement
+from torch.distributed.tensor import DTensor, Placement
 
 from olmo_core.config import DType
 from olmo_core.nn.attention.base import SequenceMixer, SequenceMixerConfig
@@ -80,6 +80,111 @@ def _reset_parameters_with_generator(
         raise NotImplementedError(
             f"sLSTM initialization with a generator on '{device.type}' is not supported"
         )
+
+
+@torch.no_grad()
+def _reset_parameters_on_unsharded_copies(
+    module: nn.Module,
+    reset: Callable[[], None],
+) -> None:
+    """
+    Run ``reset`` against unsharded copies of ``module``'s parameters, then copy each
+    rank's own shard back.
+
+    The cell initializes one head and one gate at a time, and its ``ParameterProxy``
+    finishes every such write by reassigning ``.data``. Once FSDP2 has made those
+    parameters sharded :class:`~torch.distributed.tensor.DTensor`\\ s, indexing one yields
+    a redistributed copy rather than a view and reassigning ``.data`` would put a whole
+    tensor where a shard belongs, so the initialization either lands nowhere or raises.
+
+    This is :func:`olmo_core.nn.transformer.init._apply_init` widened from one tensor to a
+    module: the unmodified upstream code runs against full-size local tensors seeded with
+    the values the parameters already hold, and then every rank copies its own shard in.
+    Because every rank draws the whole tensor, the result matches a single-rank run
+    element for element rather than varying with the number of shards.
+
+    Nothing is staged when no parameter is sharded, so single-rank numerics are untouched
+    and nesting one of these inside another costs nothing.
+
+    Grad is off throughout. A parameter's shard is reached through ``to_local``, whose
+    output autograd treats as a view of a custom function's, and writing into that is
+    forbidden while grad is on. Initialization has no business being recorded anyway, and
+    doing it here rather than relying on the caller keeps one rank and many alike.
+
+    :param module: The module whose parameters ``reset`` writes.
+    :param reset: The initialization to run. Takes no arguments.
+    """
+    if not any(isinstance(parameter, DTensor) for parameter in module.parameters()):
+        reset()
+        return
+
+    from olmo_core.distributed.utils import (
+        distribute_like,
+        get_full_tensor,
+        get_local_tensor,
+    )
+
+    owners = [
+        (submodule, name, parameter)
+        for submodule in module.modules()
+        for name, parameter in submodule.named_parameters(recurse=False)
+    ]
+    unsharded = [
+        nn.Parameter(get_full_tensor(parameter.detach()).clone(), requires_grad=False)
+        for _, _, parameter in owners
+    ]
+    # Swapping the registrations rather than the parameter objects leaves every reference
+    # FSDP holds pointing at the same objects it sharded.
+    for (submodule, name, _), replacement in zip(owners, unsharded):
+        submodule._parameters[name] = replacement
+    try:
+        reset()
+    finally:
+        for submodule, name, parameter in owners:
+            submodule._parameters[name] = parameter
+    for (_, _, parameter), replacement in zip(owners, unsharded):
+        get_local_tensor(parameter).copy_(
+            get_local_tensor(distribute_like(parameter, replacement.detach()))
+        )
+
+
+class _ShardingSafeReset:
+    """
+    A module's own ``reset_parameters``, staged onto unsharded copies before it writes.
+
+    ``Transformer.init_weights`` sweeps ``reset_parameters`` over every module it can
+    reach and only afterwards dispatches to each mixer's ``init_weights``, so every one of
+    these has to survive being called on its own rather than only when reached through
+    :meth:`SLSTMMixer.init_weights`. That includes the upstream ``sLSTMCell``, which the
+    sweep reaches directly, so the staging is installed per instance: subclassing the
+    ``xlstm`` modules would move the checkpoint keys they own.
+
+    :param module: The module the reset belongs to.
+    :param reset: The unbound ``reset_parameters`` it would otherwise have run.
+    """
+
+    def __init__(self, module: nn.Module, reset: Callable[..., None]):
+        self.module = module
+        self.reset = reset
+
+    def __call__(self, *args: Any, **kwargs: Any) -> None:
+        _reset_parameters_on_unsharded_copies(
+            self.module,
+            lambda: self.reset(self.module, *args, **kwargs),
+        )
+
+
+def _make_reset_parameters_sharding_safe(module: nn.Module) -> None:
+    """
+    Route ``reset_parameters`` on ``module`` and every submodule through unsharded staging.
+
+    :param module: Root of the subtree to make safe.
+    """
+    for submodule in module.modules():
+        reset = getattr(type(submodule), "reset_parameters", None)
+        if reset is None:
+            continue
+        submodule.reset_parameters = _ShardingSafeReset(submodule, reset)  # type: ignore[assignment]
 
 
 def convert_slstm_official_to_packed_state_dict(
@@ -727,14 +832,15 @@ def _build_slstm_layer(
                 raise ValueError(
                     "the sLSTM cuda_fused backend requires direct fused input projections"
                 )
-            return _FlashRNNPersistentSLSTMLayer(
+            layer = _FlashRNNPersistentSLSTMLayer(
                 layer,
                 batch_size=batch_size,
                 kernel_dtype=kernel_dtype,
             )
-        if fuse_input_projections:
-            return _FusedInputSLSTMLayer(layer)
-        return layer
+        elif fuse_input_projections:
+            layer = _FusedInputSLSTMLayer(layer)
+    _make_reset_parameters_sharding_safe(layer)
+    return layer
 
 
 class SLSTMMixer(SequenceMixer):
@@ -909,6 +1015,8 @@ class SLSTMMixer(SequenceMixer):
             raise NotImplementedError(
                 f"init method '{init_method}' is not supported for SLSTMMixer"
             )
+        # The layer's `reset_parameters` stages its own writes whenever the parameters are
+        # sharded, so this is one call at one rank and at many.
         _reset_parameters_with_generator(self.layer, generator)
 
     def num_flops_per_token(self, seq_len: int) -> int:

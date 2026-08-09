@@ -134,11 +134,18 @@ def reference_scan(
     *,
     mode: NativePDMode | str,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Evaluate with O(N) state and explicit scatter/gather semantics."""
-    _, _, time, state = _validate_values(
+    """
+    Evaluate with O(N) state and explicit scatter/gather semantics.
+
+    The diagonal may be stored more precisely than the payload. Accumulation runs in
+    the promoted dtype so a near-unit decay survives, while the emitted states keep
+    the payload dtype the caller asked for.
+    """
+    batch, heads, time, state = _validate_values(
         destination,
         routes,
         (diagonal_real, diagonal_imag, bias_real, bias_imag),
+        allow_mixed_diagonal_payload=True,
     )
     mode = NativePDMode(mode)
     proof = None
@@ -152,18 +159,20 @@ def reference_scan(
         proof = prove_selected_maps_bijective(destination, routes)
         mode = NativePDMode.PERMUTATION_GATHER if proof.proven else NativePDMode.GENERAL_SCATTER
 
-    current_real = torch.zeros_like(diagonal_real[:, :, 0]) if time else diagonal_real[:, :, :0]
-    current_imag = torch.zeros_like(diagonal_imag[:, :, 0]) if time else diagonal_imag[:, :, :0]
+    payload_dtype = bias_real.dtype
+    compute_dtype = torch.promote_types(diagonal_real.dtype, payload_dtype)
+    current_real = torch.zeros(
+        (batch, heads, state), dtype=compute_dtype, device=diagonal_real.device
+    )
+    current_imag = torch.zeros_like(current_real)
     output_real = []
     output_imag = []
     for token in range(time):
         token_destination = _selected_destination(destination, routes, token)
-        product_real = (
-            diagonal_real[:, :, token] * current_real - diagonal_imag[:, :, token] * current_imag
-        )
-        product_imag = (
-            diagonal_real[:, :, token] * current_imag + diagonal_imag[:, :, token] * current_real
-        )
+        token_diagonal_real = diagonal_real[:, :, token].to(compute_dtype)
+        token_diagonal_imag = diagonal_imag[:, :, token].to(compute_dtype)
+        product_real = token_diagonal_real * current_real - token_diagonal_imag * current_imag
+        product_imag = token_diagonal_real * current_imag + token_diagonal_imag * current_real
         if mode == NativePDMode.GENERAL_SCATTER:
             next_real = torch.zeros_like(current_real).scatter_add(
                 -1, token_destination, product_real
@@ -176,10 +185,10 @@ def reference_scan(
             inverse = _selected_destination(proof.inverse_destination, routes, token)
             next_real = torch.gather(product_real, -1, inverse)
             next_imag = torch.gather(product_imag, -1, inverse)
-        current_real = next_real + bias_real[:, :, token]
-        current_imag = next_imag + bias_imag[:, :, token]
-        output_real.append(current_real)
-        output_imag.append(current_imag)
+        current_real = next_real + bias_real[:, :, token].to(compute_dtype)
+        current_imag = next_imag + bias_imag[:, :, token].to(compute_dtype)
+        output_real.append(current_real.to(payload_dtype))
+        output_imag.append(current_imag.to(payload_dtype))
 
     if not output_real:
         return bias_real.clone(), bias_imag.clone()

@@ -439,6 +439,63 @@ def test_eligible_cuda_training_dispatch_is_native(backend: str):
 
 
 @pytest.mark.gpu
+@pytest.mark.parametrize("collision", [False, True])
+def test_cuda_paper_surrogate_accepts_fp32_diagonal_with_bfloat16_payload(collision: bool):
+    state, time = 32, 129
+    mode = "general_scatter" if collision else "permutation_gather"
+    dictionary, selector, cpu_values = _case(
+        collision=collision,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        state=state,
+        time=time,
+    )
+    expected = paper_surrogate_scan(
+        dictionary, selector, *cpu_values, backend="reference", mode=mode
+    )
+    weights = [torch.randn_like(output) for output in expected]
+    expected_gradients = torch.autograd.grad(
+        sum((output * weight).sum() for output, weight in zip(expected, weights)),
+        (dictionary, selector, *cpu_values),
+    )
+
+    cuda_dictionary = dictionary.detach().cuda().requires_grad_()
+    cuda_selector = selector.detach().cuda().requires_grad_()
+    scan_dtypes = (torch.float32, torch.float32, torch.bfloat16, torch.bfloat16)
+    cuda_values = [
+        value.detach().cuda().to(dtype).requires_grad_()
+        for value, dtype in zip(cpu_values, scan_dtypes)
+    ]
+    actual = paper_surrogate_scan(
+        cuda_dictionary, cuda_selector, *cuda_values, backend="cuda", mode=mode
+    )
+    actual_gradients = torch.autograd.grad(
+        sum((output.float() * weight.cuda()).sum() for output, weight in zip(actual, weights)),
+        (cuda_dictionary, cuda_selector, *cuda_values),
+    )
+
+    assert all(output.dtype == torch.bfloat16 for output in actual)
+    assert tuple(gradient.dtype for gradient in actual_gradients) == (
+        torch.float32,
+        torch.float32,
+        *scan_dtypes,
+    )
+    for tensor in (*actual, *actual_gradients):
+        assert torch.isfinite(tensor).all()
+    for actual_output, expected_output in zip(actual, expected):
+        torch.testing.assert_close(
+            actual_output.float().cpu(), expected_output, atol=8e-2, rtol=8e-2
+        )
+    for actual_gradient, expected_gradient in zip(actual_gradients, expected_gradients):
+        torch.testing.assert_close(
+            actual_gradient.float().cpu(),
+            expected_gradient,
+            atol=1e-1,
+            rtol=1e-1,
+        )
+
+
+@pytest.mark.gpu
 @pytest.mark.parametrize(("state", "time"), [(16, 1), (32, 129), (128, 257)])
 def test_bfloat16_paper_training_tails_are_finite_and_match_oracle(state: int, time: int):
     dictionary, selector, cpu_values = _case(

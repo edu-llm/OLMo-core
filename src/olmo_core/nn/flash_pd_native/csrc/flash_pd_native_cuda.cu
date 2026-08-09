@@ -88,14 +88,17 @@ __device__ __forceinline__ void scatter_step(
     }
 }
 
-template <typename scalar_t>
+// The diagonal and the payload are specialized separately: a bfloat16 activation
+// dtype cannot hold a near-unit per-token decay, so callers keep the diagonal in
+// FP32 while the payload stays in the activation dtype.
+template <typename diagonal_t, typename payload_t>
 __global__ void phase_a_kernel(
     const int16_t* __restrict__ dictionary_destination,
     const int16_t* __restrict__ routes,
-    const scalar_t* __restrict__ diagonal_real,
-    const scalar_t* __restrict__ diagonal_imag,
-    const scalar_t* __restrict__ bias_real,
-    const scalar_t* __restrict__ bias_imag,
+    const diagonal_t* __restrict__ diagonal_real,
+    const diagonal_t* __restrict__ diagonal_imag,
+    const payload_t* __restrict__ bias_real,
+    const payload_t* __restrict__ bias_imag,
     int16_t* __restrict__ aggregate_destination,
     float* __restrict__ aggregate_diagonal_real,
     float* __restrict__ aggregate_diagonal_imag,
@@ -320,18 +323,18 @@ __global__ void phase_b_kernel(
     }
 }
 
-template <typename scalar_t>
+template <typename diagonal_t, typename payload_t>
 __global__ void phase_c_kernel(
     const int16_t* __restrict__ dictionary_destination,
     const int16_t* __restrict__ routes,
-    const scalar_t* __restrict__ diagonal_real,
-    const scalar_t* __restrict__ diagonal_imag,
-    const scalar_t* __restrict__ bias_real,
-    const scalar_t* __restrict__ bias_imag,
+    const diagonal_t* __restrict__ diagonal_real,
+    const diagonal_t* __restrict__ diagonal_imag,
+    const payload_t* __restrict__ bias_real,
+    const payload_t* __restrict__ bias_imag,
     const float* __restrict__ prefix_bias_real,
     const float* __restrict__ prefix_bias_imag,
-    scalar_t* __restrict__ output_real,
-    scalar_t* __restrict__ output_imag,
+    payload_t* __restrict__ output_real,
+    payload_t* __restrict__ output_imag,
     int heads,
     int dictionary_size,
     int time,
@@ -413,8 +416,8 @@ __global__ void phase_c_kernel(
 
         state_real = next_real;
         state_imag = next_imag;
-        output_real[token_offset] = static_cast<scalar_t>(state_real);
-        output_imag[token_offset] = static_cast<scalar_t>(state_imag);
+        output_real[token_offset] = static_cast<payload_t>(state_real);
+        output_imag[token_offset] = static_cast<payload_t>(state_imag);
     }
 }
 
@@ -1478,7 +1481,8 @@ std::vector<torch::Tensor> flash_pd_native_forward_cuda(
         bias_real,
         bias_imag,
         chunk_size,
-        mode);
+        mode,
+        true);
     c10::cuda::CUDAGuard device_guard(diagonal_real.device());
     const int batch = diagonal_real.size(0);
     const int heads = diagonal_real.size(1);
@@ -1503,38 +1507,48 @@ std::vector<torch::Tensor> flash_pd_native_forward_cuda(
     auto prefix_diagonal_imag = torch::empty_like(aggregate_diagonal_real);
     auto prefix_bias_real = torch::empty_like(aggregate_diagonal_real);
     auto prefix_bias_imag = torch::empty_like(aggregate_diagonal_real);
-    auto output_real = torch::empty_like(diagonal_real);
-    auto output_imag = torch::empty_like(diagonal_imag);
+    // The states this scan emits are payload, not diagonal: the caller may hand in an
+    // FP32 diagonal alongside a bfloat16 payload.
+    auto output_real = torch::empty_like(bias_real);
+    auto output_imag = torch::empty_like(bias_imag);
     const auto stream = at::cuda::getCurrentCUDAStream();
 
     AT_DISPATCH_FLOATING_TYPES_AND(
         at::ScalarType::BFloat16,
         diagonal_real.scalar_type(),
-        "flash_pd_native_forward",
+        "flash_pd_native_forward_diagonal",
         [&] {
-            phase_a_kernel<scalar_t><<<
-                dim3(rows, chunks),
-                state,
-                shared_bytes,
-                stream>>>(
-                destination.data_ptr<int16_t>(),
-                routes.data_ptr<int16_t>(),
-                diagonal_real.data_ptr<scalar_t>(),
-                diagonal_imag.data_ptr<scalar_t>(),
-                bias_real.data_ptr<scalar_t>(),
-                bias_imag.data_ptr<scalar_t>(),
-                aggregate_destination.data_ptr<int16_t>(),
-                aggregate_diagonal_real.data_ptr<float>(),
-                aggregate_diagonal_imag.data_ptr<float>(),
-                aggregate_bias_real.data_ptr<float>(),
-                aggregate_bias_imag.data_ptr<float>(),
-                heads,
-                dictionary_size,
-                time,
-                state,
-                chunks,
-                chunk_size,
-                mode);
+            using diagonal_t = scalar_t;
+            AT_DISPATCH_FLOATING_TYPES_AND(
+                at::ScalarType::BFloat16,
+                bias_real.scalar_type(),
+                "flash_pd_native_forward_payload",
+                [&] {
+                    using payload_t = scalar_t;
+                    phase_a_kernel<diagonal_t, payload_t><<<
+                        dim3(rows, chunks),
+                        state,
+                        shared_bytes,
+                        stream>>>(
+                        destination.data_ptr<int16_t>(),
+                        routes.data_ptr<int16_t>(),
+                        diagonal_real.data_ptr<diagonal_t>(),
+                        diagonal_imag.data_ptr<diagonal_t>(),
+                        bias_real.data_ptr<payload_t>(),
+                        bias_imag.data_ptr<payload_t>(),
+                        aggregate_destination.data_ptr<int16_t>(),
+                        aggregate_diagonal_real.data_ptr<float>(),
+                        aggregate_diagonal_imag.data_ptr<float>(),
+                        aggregate_bias_real.data_ptr<float>(),
+                        aggregate_bias_imag.data_ptr<float>(),
+                        heads,
+                        dictionary_size,
+                        time,
+                        state,
+                        chunks,
+                        chunk_size,
+                        mode);
+                });
         });
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
@@ -1557,30 +1571,38 @@ std::vector<torch::Tensor> flash_pd_native_forward_cuda(
     AT_DISPATCH_FLOATING_TYPES_AND(
         at::ScalarType::BFloat16,
         diagonal_real.scalar_type(),
-        "flash_pd_native_replay",
+        "flash_pd_native_replay_diagonal",
         [&] {
-            phase_c_kernel<scalar_t><<<
-                dim3(rows, chunks),
-                state,
-                shared_bytes,
-                stream>>>(
-                destination.data_ptr<int16_t>(),
-                routes.data_ptr<int16_t>(),
-                diagonal_real.data_ptr<scalar_t>(),
-                diagonal_imag.data_ptr<scalar_t>(),
-                bias_real.data_ptr<scalar_t>(),
-                bias_imag.data_ptr<scalar_t>(),
-                prefix_bias_real.data_ptr<float>(),
-                prefix_bias_imag.data_ptr<float>(),
-                output_real.data_ptr<scalar_t>(),
-                output_imag.data_ptr<scalar_t>(),
-                heads,
-                dictionary_size,
-                time,
-                state,
-                chunks,
-                chunk_size,
-                mode);
+            using diagonal_t = scalar_t;
+            AT_DISPATCH_FLOATING_TYPES_AND(
+                at::ScalarType::BFloat16,
+                bias_real.scalar_type(),
+                "flash_pd_native_replay_payload",
+                [&] {
+                    using payload_t = scalar_t;
+                    phase_c_kernel<diagonal_t, payload_t><<<
+                        dim3(rows, chunks),
+                        state,
+                        shared_bytes,
+                        stream>>>(
+                        destination.data_ptr<int16_t>(),
+                        routes.data_ptr<int16_t>(),
+                        diagonal_real.data_ptr<diagonal_t>(),
+                        diagonal_imag.data_ptr<diagonal_t>(),
+                        bias_real.data_ptr<payload_t>(),
+                        bias_imag.data_ptr<payload_t>(),
+                        prefix_bias_real.data_ptr<float>(),
+                        prefix_bias_imag.data_ptr<float>(),
+                        output_real.data_ptr<payload_t>(),
+                        output_imag.data_ptr<payload_t>(),
+                        heads,
+                        dictionary_size,
+                        time,
+                        state,
+                        chunks,
+                        chunk_size,
+                        mode);
+                });
         });
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return {output_real, output_imag};
@@ -1835,6 +1857,15 @@ std::vector<torch::Tensor> flash_pd_native_backward_cuda(
     torch::Tensor output_imag,
     torch::Tensor grad_output_real,
     torch::Tensor grad_output_imag) {
+    // Unlike the Appendix-C backward, this analytic reverse pass is specialized on one
+    // storage dtype, so a mixed diagonal and payload has to be refused here.
+    TORCH_CHECK(
+        diagonal_imag.scalar_type() == diagonal_real.scalar_type() &&
+            output_real.scalar_type() == diagonal_real.scalar_type() &&
+            output_imag.scalar_type() == diagonal_real.scalar_type() &&
+            grad_output_real.scalar_type() == diagonal_real.scalar_type() &&
+            grad_output_imag.scalar_type() == diagonal_real.scalar_type(),
+        "native backward requires one dtype for the diagonal, states, and gradients");
     c10::cuda::CUDAGuard device_guard(diagonal_real.device());
     const int batch = diagonal_real.size(0);
     const int heads = diagonal_real.size(1);

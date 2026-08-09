@@ -32,17 +32,58 @@ The exemption is now per arm and derived from those tags. GDN2 stays empty on
 purpose: it has `A_log` and `dt_bias` but does not tag them, and it is the frozen
 bake-off control, so exempting them would change the baseline.
 
+### Fixed: BF16 rounded the native Flash-PD decay away entirely
+
+The paper mixer cast the complex diagonal to the activation dtype before the
+scan. Just below 1.0 bfloat16 spaces its values about 1.95e-3 apart, so the
+intended per-token decay exp(-5e-4) = 0.99950012 rounded to exactly 1.0. Over a
+4096-token context the arm applied an attenuation of 1.0 rather than the
+intended exp(-2.048) = 0.129, so it trained with no long-horizon decay at all.
+
+The diagonal now crosses the scan boundary in FP32 while the payload stays
+BF16, which is the mixed ABI the Mamba3-SISO mixer already used. The forward
+kernels are templated on the two dtypes separately. FP32 accumulation, complex
+semantics, collision routing, the Appendix-C surrogate gradients, and the
+three-launch forward with five-launch backward are all unchanged, and no public
+signature moved. The cost is one scan-boundary buffer at double width, which is
+what the sibling arm already pays.
+
 ### Not a code defect: local CUDA test failures
 
-Running the CUDA-marked tests inside the restricted sandbox fails with "Found no
-NVIDIA driver". Those tests need GPU access, not a code change.
+Two separate environment effects have masqueraded as defects here.
 
-### Known latent issue, not on the submitted path
+Running CUDA tests inside the restricted sandbox fails with "Found no NVIDIA
+driver", because the sandbox hides the GPU.
 
-`_decode_geometry` imports `olmo_core.nn.transformer.core6_arms`, which does not
-exist in this tree. Every committed spec passes `--no-decode-probe`, and the
-probe already records a failure rather than raising, so it cannot break the
-wave. It must be repointed at the ledger before decode is ever enabled.
+Running the whole `flash_pd_native` directory in one process reports roughly a
+hundred failures both before and after any change. `host_sync_test.py`
+deliberately fires an asynchronous device-side assertion to prove that
+rejecting out-of-range indices needs no host readback, and a device-side assert
+poisons the CUDA context for the rest of the process. Run that directory file
+by file; per file it is 170 passed with one skip, and the skip wants a 16 GiB
+device.
+
+### Fixed: decode geometry read a registry that is not in this tree
+
+`_decode_geometry` imported `olmo_core.nn.transformer.core6_arms`, a module that
+left with the previous bake-off. Every committed spec passes
+`--no-decode-probe` and the probe records failures rather than raising, so this
+could not break the wave; it would instead have reported a missing decode
+measurement the moment anyone enabled the probe, against the old study's
+geometry of two mixer slots in sixteen layers.
+
+The probe now reads the frozen ledger, exactly as the sLSTM prewarm contract
+already does, and reports this study's real geometry: twelve recurrent layers
+and four attention layers. No reference to the old registry remains in any code
+path, and a test asserts the module is absent so the import cannot return.
+
+Per-head decode state resolves only for arms whose mixer declares a head
+dimension: `gdn` at 16 x 64 x 64 per layer and `mamba-b3` at 16 x 96 x 64.
+`xlstm`, `native-pd`, and `mamba3-siso-pd` declare none, so those fields are
+null with a stated reason rather than a plausible guess, because that number
+sizes a serving fleet.
+
+The probe remains off by default and no run spec changed.
 
 ## Executive conclusions
 

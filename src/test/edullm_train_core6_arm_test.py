@@ -1116,3 +1116,109 @@ def test_a_refused_preflight_still_tears_the_training_environment_down(run_main,
     # A refusal that leaves the process group up hangs the container instead of exiting with
     # the number the refusal exists to report.
     assert run_main.called == ["build_config", "prepare", "teardown"]
+
+
+# --- the decode geometry, which is this study's and not the previous bake-off's --------------
+
+
+def _recurrent_mixers(arm: str) -> list:
+    """The mixer configuration the ledger actually builds into each of an arm's non-attention
+    layers, read off the built model rather than described a second time here."""
+    model = arms.build_model_config(arm, arms.INIT_SEEDS_BY_ARM[arm][arms.DATA_SEEDS[0]])
+    return [
+        block.sequence_mixer
+        for index, block in enumerate(model.resolved_block_configs)
+        if index not in set(arms.ATTENTION_LAYERS)
+    ]
+
+
+@pytest.mark.parametrize("arm", arms.RUNNABLE_ARMS)
+def test_the_decode_geometry_reads_this_studys_layers_off_the_ledger(arm):
+    """The decode probe's geometry is the ledger's, and the ledger is the only one in the tree.
+
+    It used to be read out of an ``olmo_core.nn.transformer.core6_arms`` registry belonging to
+    the previous mixer bake-off, which describes two mixer slots of sixteen and does not exist
+    here at all. Every committed spec passes ``--no-decode-probe``, so the import error was
+    swallowed into ``decode_fast_path_taken: false`` and cost nothing -- until the first person
+    who turns the probe on and is handed a missing measurement with a plausible-looking reason.
+    """
+    assert importlib.util.find_spec("olmo_core.nn.transformer.core6_arms") is None
+
+    geometry = entry._decode_geometry(arm)
+
+    assert geometry["mixer_layers"] == len(arms.RECURRENT_LAYERS) == 12
+    assert geometry["attention_layers"] == len(arms.ATTENTION_LAYERS) == 4
+    assert geometry["total_layers"] == arms.N_LAYERS == 16
+    # Every recurrence the arm carries is named. ``xlstm`` runs two of them, and one of the two
+    # quietly standing in for both is how a decode figure comes to describe a model nobody ran.
+    for mixer in _recurrent_mixers(arm):
+        assert type(mixer).__name__ in geometry["config_class"]
+
+
+@pytest.mark.parametrize("arm", arms.RUNNABLE_ARMS)
+def test_the_decode_probe_reports_the_ledger_geometry_on_a_host_with_no_device(arm, monkeypatch):
+    """No GPU means no latency, and it does not mean no geometry.
+
+    The footprint and the KV-cache contrast are arithmetic on the arm's own layers, which is
+    why they are emitted with no device present. The probe still records nothing measured, and
+    it must not be recording that because it could not find out what the arm is.
+    """
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    probe = entry.decode_probe(arm_name=arm)
+
+    assert "geometry could not be read" not in probe["decode_basis"]
+    assert probe["decode_fast_path_taken"] is False
+    assert probe["decode_mixer_layers"] == len(arms.RECURRENT_LAYERS)
+    assert probe["decode_attention_layers"] == len(arms.ATTENTION_LAYERS)
+    assert probe["decode_total_layers"] == arms.N_LAYERS
+    assert probe["decode_kv_bytes_per_token"] > 0
+
+
+@pytest.mark.parametrize("arm", ("gdn", "mamba-b3"))
+def test_the_decode_footprint_is_the_head_geometry_the_arm_itself_declares(arm, monkeypatch):
+    """Over twelve layers, not two, and with the state axis each mixer actually accumulates on.
+
+    Mamba-3 accumulates over ``d_state`` per head where the delta-rule control accumulates over
+    its head dimension, so a single literal here would report one of the two arms wrong.
+    """
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    shapes = {
+        (
+            mixer.n_heads,
+            getattr(mixer, "d_state", None) or mixer.head_dim,
+            int(mixer.head_dim * getattr(mixer, "expand_v", 1.0)),
+        )
+        for mixer in _recurrent_mixers(arm)
+    }
+    assert len(shapes) == 1
+    heads, head_k, head_v = shapes.pop()
+
+    probe = entry.decode_probe(arm_name=arm)
+
+    assert probe["decode_head_k_dim"] == head_k
+    assert probe["decode_head_v_dim"] == head_v
+    assert probe["decode_state_elems_per_layer"] == heads * head_k * head_v
+    # fp32 state over every layer that carries the recurrence -- the field a serving fleet is
+    # sized with, and the one the bake-off's two slots would have reported at a sixth of.
+    assert probe["decode_state_bytes_per_seq"] == (
+        heads * head_k * head_v * len(arms.RECURRENT_LAYERS) * 4
+    )
+
+
+@pytest.mark.parametrize("arm", ("xlstm", "native-pd", "mamba3-siso-pd"))
+def test_an_arm_whose_mixer_declares_no_head_dimension_reports_no_footprint(arm, monkeypatch):
+    """A null footprint with a stated cause, never ``d_model // n_heads`` standing in for one."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    # Read off the ledger rather than asserted about it: these mixers declare heads and, where
+    # they have one, a state width, and no head dimension at all. Dividing d_model by the head
+    # count would guess the layout of a state this file has never seen -- wrong in the field
+    # that decides serving batch size, and entirely reasonable-looking while it is wrong.
+    assert not any(getattr(mixer, "head_dim", None) for mixer in _recurrent_mixers(arm))
+
+    probe = entry.decode_probe(arm_name=arm)
+
+    assert probe["decode_state_elems_per_layer"] is None
+    assert probe["decode_state_bytes_per_seq"] is None
+    assert probe["decode_mixer_layers"] == len(arms.RECURRENT_LAYERS)
+    assert "geometry could not be read" not in probe["decode_basis"]

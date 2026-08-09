@@ -108,6 +108,7 @@ class NativeFlashPDMixer(SequenceMixer):
     """
 
     state_contract = ("batch", "head", "time", "state")
+    _UNFUSED_PROJECTIONS = ("B_proj", "C_proj", "selector_proj", "dt_proj", "phase_proj")
 
     def __init__(
         self,
@@ -121,6 +122,7 @@ class NativeFlashPDMixer(SequenceMixer):
         mode: NativePDMode | str = NativePDMode.AUTO,
         backend: NativePDBackend | str = NativePDBackend.AUTO,
         conv_kernel_size: int = 4,
+        fuse_input_projections: bool = True,
         dtype: torch.dtype = torch.float32,
         init_device: str = "cpu",
     ):
@@ -144,6 +146,7 @@ class NativeFlashPDMixer(SequenceMixer):
         self.mode = NativePDMode(mode)
         self.backend = NativePDBackend(backend)
         self.conv_kernel_size = conv_kernel_size
+        self.fuse_input_projections = fuse_input_projections
         self.last_metadata: Optional[ScanMetadata] = None
 
         factory = {"dtype": dtype, "device": init_device}
@@ -159,11 +162,17 @@ class NativeFlashPDMixer(SequenceMixer):
             bias=True,
             **factory,
         )
-        self.B_proj = nn.Linear(d_model, 2 * d_model, bias=False, **factory)
-        self.C_proj = nn.Linear(d_model, 2 * d_model, bias=False, **factory)
-        self.selector_proj = nn.Linear(d_model, n_heads * dictionary_size, bias=False, **factory)
-        self.dt_proj = nn.Linear(d_model, d_model, bias=False, **factory)
-        self.phase_proj = nn.Linear(d_model, d_model, bias=False, **factory)
+        # Every projection below reads the same convolved activation and carries no bias,
+        # so one GEMM over the concatenated output width holds exactly the same weights.
+        projection_sizes = self._projection_sizes()
+        self.u_proj: Optional[nn.Linear] = None
+        for name in self._UNFUSED_PROJECTIONS:
+            setattr(self, name, None)
+        if fuse_input_projections:
+            self.u_proj = nn.Linear(d_model, sum(projection_sizes), bias=False, **factory)
+        else:
+            for name, size in zip(self._UNFUSED_PROJECTIONS, projection_sizes):
+                setattr(self, name, nn.Linear(d_model, size, bias=False, **factory))
         self.out_proj = nn.Linear(d_model, d_model, bias=False, **factory)
         self.A_log = nn.Parameter(torch.empty(d_model, dtype=torch.float32, device=init_device))
         self.dt_bias = nn.Parameter(torch.empty(d_model, dtype=torch.float32, device=init_device))
@@ -171,6 +180,55 @@ class NativeFlashPDMixer(SequenceMixer):
         self.A_log._no_weight_decay = True  # type: ignore[attr-defined]
         self.dt_bias._no_weight_decay = True  # type: ignore[attr-defined]
         self.D._no_weight_decay = True  # type: ignore[attr-defined]
+
+    def _projection_sizes(self) -> tuple[int, ...]:
+        """Return the output width of each post-convolution projection, in order."""
+        return (
+            2 * self.d_model,
+            2 * self.d_model,
+            self.n_heads * self.dictionary_size,
+            self.d_model,
+            self.d_model,
+        )
+
+    def _project(self, u: torch.Tensor) -> tuple[torch.Tensor, ...]:
+        """Project the convolved activation once, or once per projection."""
+        if self.fuse_input_projections:
+            assert self.u_proj is not None
+            return self.u_proj(u).split(self._projection_sizes(), dim=-1)
+        return tuple(getattr(self, name)(u) for name in self._UNFUSED_PROJECTIONS)
+
+    def _convert_projection_state_dict(self, state_dict: dict, prefix: str) -> None:
+        """Reshape a checkpoint written in the other projection layout in place."""
+        fused = prefix + "u_proj.weight"
+        separate = tuple(prefix + name + ".weight" for name in self._UNFUSED_PROJECTIONS)
+        if self.fuse_input_projections:
+            if fused not in state_dict and all(name in state_dict for name in separate):
+                state_dict[fused] = torch.cat([state_dict.pop(name) for name in separate], dim=0)
+        elif fused in state_dict and not any(name in state_dict for name in separate):
+            pieces = state_dict.pop(fused).split(self._projection_sizes(), dim=0)
+            state_dict.update(zip(separate, pieces))
+
+    def _load_from_state_dict(
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ):
+        self._convert_projection_state_dict(state_dict, prefix)
+        super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
 
     def forward(
         self,
@@ -197,28 +255,42 @@ class NativeFlashPDMixer(SequenceMixer):
         ]
         u = F.silu(convolved.transpose(1, 2))
 
-        bias = self.B_proj(u).view(batch, time, self.n_heads, self.d_state, 2)
-        readout = self.C_proj(u).view(batch, time, self.n_heads, self.d_state, 2)
-        selector_logits = self.selector_proj(u).view(
-            batch, time, self.n_heads, self.dictionary_size
-        )
-        dt = F.softplus(self.dt_proj(u).float() + self.dt_bias.view(1, 1, self.d_model))
+        (
+            bias_projection,
+            readout_projection,
+            selector_projection,
+            dt_logits,
+            phase_logits,
+        ) = self._project(u)
+        bias = bias_projection.view(batch, time, self.n_heads, self.d_state, 2)
+        readout = readout_projection.view(batch, time, self.n_heads, self.d_state, 2)
+        selector_logits = selector_projection.view(batch, time, self.n_heads, self.dictionary_size)
+        dt = F.softplus(dt_logits.float() + self.dt_bias.view(1, 1, self.d_model))
         magnitude = torch.exp(-dt * torch.exp(self.A_log).view(1, 1, self.d_model))
-        phase = self.phase_proj(u).float()
+        phase = phase_logits.float()
         diagonal_real = (magnitude * torch.cos(phase)).view(batch, time, self.n_heads, self.d_state)
         diagonal_imag = (magnitude * torch.sin(phase)).view(batch, time, self.n_heads, self.d_state)
 
+        # The diagonal crosses into the scan in FP32 while the payload keeps the
+        # activation dtype. A near-unit per-token decay such as exp(-5e-4) is not
+        # representable in bfloat16 and rounds to exactly 1.0, which would erase the
+        # long-horizon decay this recurrence is built on.
         kernel_dtype = x.dtype if x.dtype in (torch.float32, torch.bfloat16) else torch.float32
         split_values = (
-            diagonal_real.permute(0, 2, 1, 3).to(kernel_dtype),
-            diagonal_imag.permute(0, 2, 1, 3).to(kernel_dtype),
+            diagonal_real.permute(0, 2, 1, 3).float(),
+            diagonal_imag.permute(0, 2, 1, 3).float(),
             bias[..., 0].permute(0, 2, 1, 3).to(kernel_dtype),
             bias[..., 1].permute(0, 2, 1, 3).to(kernel_dtype),
         )
+        # The CUDA router gradient indexes the selector logits off a raw pointer under a
+        # dense (batch, time, head, dictionary) layout, and a fused projection hands the
+        # scan a strided split view. Densifying after the cast keeps this free in bfloat16,
+        # where the cast already writes a dense buffer.
+        dense_selector_logits = selector_logits.float().contiguous()
         if self.backend == NativePDBackend.REFERENCE:
             states_real, states_imag = _dense_ste_scan(
                 self.dictionary_logits.float(),
-                selector_logits.float(),
+                dense_selector_logits,
                 *split_values,
                 temperature=self.ste_temperature,
             )
@@ -235,7 +307,7 @@ class NativeFlashPDMixer(SequenceMixer):
         else:
             states_real, states_imag, self.last_metadata = paper_surrogate_scan(
                 self.dictionary_logits.float(),
-                selector_logits.float(),
+                dense_selector_logits,
                 *split_values,
                 temperature=self.ste_temperature,
                 chunk_size=self.chunk_size,
@@ -276,6 +348,19 @@ class NativeFlashPDMixer(SequenceMixer):
         if cp_mesh.size() != 1:
             raise NotImplementedError("context parallelism is not implemented")
 
+    def _init_fused_projection(
+        self,
+        weight: torch.Tensor,
+        *,
+        std: float,
+        generator: Optional[torch.Generator] = None,
+    ) -> None:
+        """Fill the fused weight one projection slice at a time."""
+        for chunk in weight.split(self._projection_sizes(), dim=0):
+            nn.init.trunc_normal_(
+                chunk, mean=0.0, std=std, a=-3 * std, b=3 * std, generator=generator
+            )
+
     @torch.no_grad()
     def init_weights(
         self,
@@ -288,22 +373,30 @@ class NativeFlashPDMixer(SequenceMixer):
         generator: Optional[torch.Generator] = None,
     ) -> None:
         """Initialize projections, dictionary, convolution, and stable diagonal."""
-        from olmo_core.nn.transformer.init import InitMethod, init_linear
+        from olmo_core.nn.transformer.init import InitMethod, _apply_init, init_linear
 
         if init_method == InitMethod.fan_in:
             raise NotImplementedError("fan_in initialization is not implemented")
         if init_method == InitMethod.normalized:
             std = d_model**-0.5
         nn.init.normal_(self.dictionary_logits, std=std, generator=generator)
-        for projection in (
-            self.in_proj,
-            self.B_proj,
-            self.C_proj,
-            self.selector_proj,
-            self.dt_proj,
-            self.phase_proj,
-        ):
-            init_linear(projection, std=std, generator=generator)
+        init_linear(self.in_proj, std=std, generator=generator)
+        if self.fuse_input_projections:
+            assert self.u_proj is not None
+            # Drawn slice by slice, in the order the separate projections are drawn, so
+            # one seed produces the same weights in either layout. `_apply_init` keeps
+            # that true once FSDP has turned the fused weight into a sharded `DTensor`:
+            # it draws the whole projection locally and copies out this rank's shard,
+            # rather than splitting a `DTensor` along the dimension it is sharded on.
+            _apply_init(
+                self._init_fused_projection,
+                self.u_proj.weight,
+                std=std,
+                generator=generator,
+            )
+        else:
+            for name in self._UNFUSED_PROJECTIONS:
+                init_linear(getattr(self, name), std=std, generator=generator)
         nn.init.normal_(self.conv.weight, std=std, generator=generator)
         nn.init.zeros_(self.conv.bias)
         self.A_log.copy_(
@@ -323,17 +416,13 @@ class NativeFlashPDMixer(SequenceMixer):
 
     def num_flops_per_token(self, seq_len: int) -> int:
         """Estimate projection, sparse recurrence, selector, and readout work."""
+        if self.fuse_input_projections:
+            assert self.u_proj is not None
+            post_convolution: tuple[nn.Linear, ...] = (self.u_proj,)
+        else:
+            post_convolution = tuple(getattr(self, name) for name in self._UNFUSED_PROJECTIONS)
         projection = 2 * sum(
-            layer.weight.numel()
-            for layer in (
-                self.in_proj,
-                self.B_proj,
-                self.C_proj,
-                self.selector_proj,
-                self.dt_proj,
-                self.phase_proj,
-                self.out_proj,
-            )
+            layer.weight.numel() for layer in (self.in_proj, *post_convolution, self.out_proj)
         )
         recurrence = 16 * self.d_model
         dictionary = (self.n_heads * self.dictionary_size * self.d_state * self.d_state) // max(
@@ -355,6 +444,7 @@ class NativeFlashPDMixerConfig(SequenceMixerConfig[NativeFlashPDMixer]):
     mode: NativePDMode = NativePDMode.AUTO
     backend: NativePDBackend = NativePDBackend.AUTO
     conv_kernel_size: int = 4
+    fuse_input_projections: bool = True
     dtype: DType = DType.float32
 
     def num_params(self, d_model: int) -> int:
@@ -368,6 +458,8 @@ class NativeFlashPDMixerConfig(SequenceMixerConfig[NativeFlashPDMixer]):
             ste_temperature=self.ste_temperature,
         )
         dictionary = self.n_heads * self.dictionary_size * self.d_state**2
+        # Fusing the post-convolution projections concatenates their output widths, so
+        # this total is the same in either layout.
         linear_weights = d_model * (
             2 * d_model
             + 2 * d_model
@@ -402,6 +494,7 @@ class NativeFlashPDMixerConfig(SequenceMixerConfig[NativeFlashPDMixer]):
             mode=self.mode,
             backend=self.backend,
             conv_kernel_size=self.conv_kernel_size,
+            fuse_input_projections=self.fuse_input_projections,
             dtype=self.dtype.as_pt(),
             init_device=init_device,
         )

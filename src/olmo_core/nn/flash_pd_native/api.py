@@ -210,6 +210,7 @@ def paper_surrogate_scan(
         bias_real,
         bias_imag,
         chunk_size=chunk_size,
+        allow_mixed_diagonal_payload=True,
     )
     use_cuda = capability.available and requested_backend != NativePDBackend.REFERENCE
     if requested_backend == NativePDBackend.CUDA and not capability.available:

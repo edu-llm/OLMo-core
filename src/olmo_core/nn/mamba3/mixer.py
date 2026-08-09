@@ -742,6 +742,25 @@ class Mamba3Mixer(SequenceMixer):
         # sequence via all-to-all; this is left as a follow-up.
         raise NotImplementedError("Context parallelism is not yet implemented for Mamba3Mixer")
 
+    def _init_fused_projection(
+        self,
+        weight: torch.Tensor,
+        *,
+        sizes: Sequence[int],
+        stds: Sequence[float],
+        generator: Optional[torch.Generator] = None,
+    ) -> None:
+        """Fill a fused input projection one logical slice at a time, each at its own scale."""
+        for chunk, slice_std in zip(weight.split(tuple(sizes), dim=0), stds):
+            nn.init.trunc_normal_(
+                chunk,
+                mean=0.0,
+                std=slice_std,
+                a=-3 * slice_std,
+                b=3 * slice_std,
+                generator=generator,
+            )
+
     @torch.no_grad()
     def init_weights(
         self,
@@ -753,7 +772,7 @@ class Mamba3Mixer(SequenceMixer):
         std: float = 0.02,
         generator: Optional[torch.Generator] = None,
     ) -> None:
-        from olmo_core.nn.transformer.init import InitMethod, init_linear
+        from olmo_core.nn.transformer.init import InitMethod, _apply_init, init_linear
 
         if init_method == InitMethod.fan_in:
             raise NotImplementedError(
@@ -768,42 +787,40 @@ class Mamba3Mixer(SequenceMixer):
             assert self.in_bc is not None
             assert self.in_dynamics is not None
 
-            def init_slice(
-                weight: torch.Tensor,
-                bias: Optional[torch.Tensor] = None,
-                *,
-                slice_std: float = std,
-            ) -> None:
-                nn.init.trunc_normal_(
-                    weight,
-                    mean=0.0,
-                    std=slice_std,
-                    a=-3 * slice_std,
-                    b=3 * slice_std,
-                    generator=generator,
-                )
-                if bias is not None:
-                    nn.init.zeros_(bias)
-
             inner = self.n_heads * self.head_dim
             bc_out = self.n_groups * self.mimo_rank * self.d_state
             theta_out = self.n_groups * self.n_rotation_blocks * self.angles_per_block
-            x_weight, z_weight = self.in_xz.weight.split((inner, inner), dim=0)
-            init_slice(x_weight)
-            init_slice(z_weight)
-            b_weight, c_weight = self.in_bc.weight.split((bc_out, bc_out), dim=0)
-            if self.in_bc.bias is None:
-                b_bias = c_bias = None
-            else:
-                b_bias, c_bias = self.in_bc.bias.split((bc_out, bc_out), dim=0)
-            init_slice(b_weight, b_bias)
-            init_slice(c_weight, c_bias)
-            dt_weight, lam_weight, theta_weight = self.in_dynamics.weight.split(
-                (self.n_heads, self.n_heads, theta_out), dim=0
+            # Each fused weight is drawn slice by slice, in the order the unfused projections
+            # are drawn, so one seed produces the same weights in either layout. `_apply_init`
+            # is what keeps that true once FSDP has turned the weight into a sharded `DTensor`:
+            # it draws the whole projection into a local buffer and copies this rank's shard out
+            # of it. Splitting the `DTensor` here instead redistributes it, so every write lands
+            # in a temporary and the projection silently keeps `nn.Linear`'s default init --
+            # which for `in_dynamics` is 8.8x too wide and sets dt, A and the rotation angles.
+            _apply_init(
+                self._init_fused_projection,
+                self.in_xz.weight,
+                sizes=(inner, inner),
+                stds=(std, std),
+                generator=generator,
             )
-            init_slice(dt_weight)
-            init_slice(lam_weight)
-            init_slice(theta_weight, slice_std=std * 0.1)
+            _apply_init(
+                self._init_fused_projection,
+                self.in_bc.weight,
+                sizes=(bc_out, bc_out),
+                stds=(std, std),
+                generator=generator,
+            )
+            if self.in_bc.bias is not None:
+                # Both halves are zeroed, so the whole bias is zeroed at once rather than split.
+                nn.init.zeros_(self.in_bc.bias)
+            _apply_init(
+                self._init_fused_projection,
+                self.in_dynamics.weight,
+                sizes=(self.n_heads, self.n_heads, theta_out),
+                stds=(std, std, std * 0.1),
+                generator=generator,
+            )
         else:
             assert self.in_x is not None
             assert self.in_z is not None
@@ -819,17 +836,25 @@ class Mamba3Mixer(SequenceMixer):
         # A = -Uniform(a_log_init_min, a_log_init_max), stored as its log. The lower bound is
         # load-bearing: at 0 a head can draw A ~ 0, which never decays and turns that channel
         # into a document-mean accumulator.
-        self.A_log.copy_(
-            nn.init.uniform_(
-                self.A_log, a=self.a_log_init_min, b=self.a_log_init_max, generator=generator
-            ).log()
+        #
+        # Drawn through `_apply_init` for the same reason as the projections, avoiding a
+        # different failure: a random op on a sharded `DTensor` has no RNG tracker to use on a
+        # mesh that does not support one, so it ignores `generator` and draws from the process
+        # default. Every rank then fills its shard with the same numbers -- half the heads are
+        # duplicates of the other half -- and a seeded run stops being reproducible.
+        _apply_init(
+            nn.init.uniform_,
+            self.A_log,
+            a=self.a_log_init_min,
+            b=self.a_log_init_max,
+            generator=generator,
         )
+        self.A_log.copy_(self.A_log.log())
 
         dt_min, dt_max, dt_init_floor = 0.001, 0.1, 1e-4
+        _apply_init(nn.init.uniform_, self.dt_bias, generator=generator)
         dt = torch.exp(
-            nn.init.uniform_(self.dt_bias, generator=generator)
-            * (math.log(dt_max) - math.log(dt_min))
-            + math.log(dt_min),
+            self.dt_bias * (math.log(dt_max) - math.log(dt_min)) + math.log(dt_min),
         ).clamp(min=dt_init_floor)
         # Inverse of softplus.
         inv_dt = dt + torch.log(-torch.expm1(-dt))

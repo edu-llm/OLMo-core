@@ -491,7 +491,9 @@ class _NativeFlashPDPaperTraining(torch.autograd.Function):
         grad_output_imag: torch.Tensor,
     ):
         assert _EXTENSION is not None
-        empty = ctx.saved_tensors[4].new_empty((0,))
+        # The Mamba-3 SISO operands the paper path does not use still have to carry the
+        # payload dtype, which is not the diagonal dtype once the diagonal is kept in FP32.
+        empty = ctx.saved_tensors[6].new_empty((0,))
         gradients = _EXTENSION.paper_backward(
             *ctx.saved_tensors,
             grad_output_real.contiguous(),

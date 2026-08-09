@@ -46,6 +46,20 @@ def _complex_rms_norm(
     return real * scale.to(real.dtype), imag * scale.to(imag.dtype)
 
 
+def _to_scan_operand(tensor: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    """
+    Put a permuted tensor into the dense layout the scan reads, in one write.
+
+    A plain cast preserves the permuted strides, so following it with
+    ``contiguous()`` writes the operand twice and discards the first buffer.
+    Asking for the layout in the cast itself avoids that, but the cast is skipped
+    entirely when the dtype already matches, which would leave the operand strided.
+    """
+    if tensor.dtype == dtype:
+        return tensor.contiguous()
+    return tensor.to(dtype, memory_format=torch.contiguous_format)
+
+
 class NativeFlashPDMamba3SISOMixer(SequenceMixer):
     """
     Native PD-SSM with Mamba-3 SISO discretization and architecture defaults.
@@ -319,6 +333,17 @@ class NativeFlashPDMamba3SISOMixer(SequenceMixer):
         return tuple(getattr(self, name)(x) for name in self._UNFUSED_PROJECTIONS)
 
     def _prepare_recurrence(self, x: torch.Tensor) -> tuple[torch.Tensor, ...]:
+        """
+        Build every operand of one scan from the projections of ``x``.
+
+        The two layouts are deliberate. Anything the readout consumes stays token-major
+        as ``(batch, time, head, state)``; the complex diagonal and the trapezoidal
+        weights, which only the scan reads, are built head-major as
+        ``(batch, head, time, state)`` so no finished tensor has to be transposed
+        afterwards. The split payload is the exception: it is built from the value
+        input the readout needs as well, so it stays token-major here and is transposed
+        at the boundary, where the cast to the payload dtype pays for that write anyway.
+        """
         batch, time, _ = x.shape
         (
             value_input,
@@ -338,22 +363,37 @@ class NativeFlashPDMamba3SISOMixer(SequenceMixer):
             assert self.bc_norm_b is not None and self.bc_norm_c is not None
             b_real, b_imag = _complex_rms_norm(b_real, b_imag, self.bc_norm_b, self.norm_eps)
             c_real, c_imag = _complex_rms_norm(c_real, c_imag, self.bc_norm_c, self.norm_eps)
-        b_real = b_real.float() + self.B_bias.view(1, 1, self.n_heads, self.d_state)
-        c_real = c_real.float() + self.C_bias.view(1, 1, self.n_heads, self.d_state)
-        b_imag = b_imag.float()
+        # The fp32 biases promote their own sums and the imaginary B only ever meets the
+        # fp32 value input, so a conversion in front of any of those three would write a
+        # whole activation that the kernel behind it immediately writes again.
+        b_real = b_real + self.B_bias.view(1, 1, self.n_heads, self.d_state)
+        c_real = c_real + self.C_bias.view(1, 1, self.n_heads, self.d_state)
         c_imag = c_imag.float()
         value_input = value_input.view(batch, time, self.n_heads, self.d_state).float()
         value_real = b_real * value_input
         value_imag = b_imag * value_input
 
+        # The scan reads head-major, and the complex diagonal has to reach it in fp32:
+        # in bfloat16 a per-token decay of exp(-5e-4) rounds to exactly 1.0 and the arm
+        # would train with no long-horizon decay at all. The phase logits transpose
+        # inside the conversion the diagonal needs anyway, so every tensor built from
+        # them below lands dense, fp32, and in the layout it is read in.
+        phase_logits = _to_scan_operand(
+            phase_logits.view(batch, time, self.n_heads, self.d_state).permute(0, 2, 1, 3),
+            torch.float32,
+        )
+        # dt and lambda transpose after their nonlinearity rather than before it. Given
+        # a long contiguous run those two take a vectorized kernel instead of the scalar
+        # one a handful of contiguous heads select, and the last bit of every decay
+        # moves with them. Both tensors are one state wide, so the extra copy is small.
         dt = F.softplus(dt_logits.float() + self.dt_bias.view(1, 1, self.n_heads))
         lam = torch.sigmoid(lambda_logits.float())
+        dt = dt.permute(0, 2, 1).contiguous()
+        lam = lam.permute(0, 2, 1).contiguous()
         beta = (1.0 - lam) * dt
         gamma = lam * dt
-        magnitude = torch.exp(-dt[..., None] * torch.exp(self.A_log).view(1, 1, self.n_heads, 1))
-        theta = math.pi * torch.tanh(
-            phase_logits.float().view(batch, time, self.n_heads, self.d_state)
-        )
+        magnitude = torch.exp(-dt[..., None] * torch.exp(self.A_log).view(1, self.n_heads, 1, 1))
+        theta = math.pi * torch.tanh(phase_logits)
         phase = dt[..., None] * theta
         diagonal_real = magnitude * torch.cos(phase)
         diagonal_imag = magnitude * torch.sin(phase)
@@ -383,9 +423,12 @@ class NativeFlashPDMamba3SISOMixer(SequenceMixer):
         states_imag: torch.Tensor,
     ) -> torch.Tensor:
         batch, time = value_input.shape[:2]
+        # The scan returns its states head-major. Multiplying them straight against the
+        # fp32 C projection promotes them inside that kernel, in the readout's own
+        # layout, so nothing here writes a transposed copy of a whole activation.
         states_real = states_real.permute(0, 2, 1, 3)
         states_imag = states_imag.permute(0, 2, 1, 3)
-        readout = c_real * states_real.float() - c_imag * states_imag.float()
+        readout = c_real * states_real - c_imag * states_imag
         skip = self.D.view(1, 1, self.n_heads, 1) * value_input
         y = readout + skip
         if self.output_norm_enabled:
@@ -466,12 +509,12 @@ class NativeFlashPDMamba3SISOMixer(SequenceMixer):
         states_real, states_imag, self.last_metadata = mamba3_siso_surrogate_scan(
             self.dictionary_logits.float(),
             dense_selector_logits,
-            diagonal_real.permute(0, 2, 1, 3).float().contiguous(),
-            diagonal_imag.permute(0, 2, 1, 3).float().contiguous(),
-            value_real.permute(0, 2, 1, 3).to(kernel_dtype).contiguous(),
-            value_imag.permute(0, 2, 1, 3).to(kernel_dtype).contiguous(),
-            beta.permute(0, 2, 1).to(kernel_dtype).contiguous(),
-            gamma.permute(0, 2, 1).to(kernel_dtype).contiguous(),
+            diagonal_real,
+            diagonal_imag,
+            _to_scan_operand(value_real.permute(0, 2, 1, 3), kernel_dtype),
+            _to_scan_operand(value_imag.permute(0, 2, 1, 3), kernel_dtype),
+            _to_scan_operand(beta, kernel_dtype),
+            _to_scan_operand(gamma, kernel_dtype),
             dictionary_temperature=self.dictionary_temperature,
             router_temperature=self.router_temperature,
             chunk_size=self.chunk_size,
@@ -523,12 +566,12 @@ class NativeFlashPDMamba3SISOMixer(SequenceMixer):
         states_real, states_imag, next_cache = trapezoidal_reference_scan(
             selection.destination,
             selection.routes,
-            diagonal_real.permute(0, 2, 1, 3),
-            diagonal_imag.permute(0, 2, 1, 3),
+            diagonal_real,
+            diagonal_imag,
             value_real.permute(0, 2, 1, 3),
             value_imag.permute(0, 2, 1, 3),
-            beta.permute(0, 2, 1),
-            gamma.permute(0, 2, 1),
+            beta,
+            gamma,
             chunk_size=self.chunk_size,
             mode=self.mode,
             initial_cache=cache,
@@ -578,6 +621,28 @@ class NativeFlashPDMamba3SISOMixer(SequenceMixer):
         if cp_mesh.size() != 1:
             raise NotImplementedError("context parallelism is not implemented")
 
+    def _init_fused_projection(
+        self,
+        weight: torch.Tensor,
+        *,
+        std: float,
+        generator: Optional[torch.Generator] = None,
+    ) -> None:
+        """Fill the fused weight one projection slice at a time."""
+        for name, chunk in zip(
+            self._UNFUSED_PROJECTIONS,
+            weight.split(self._projection_sizes(), dim=0),
+        ):
+            slice_std = std * 0.1 if name == "phase_proj" else std
+            nn.init.trunc_normal_(
+                chunk,
+                mean=0.0,
+                std=slice_std,
+                a=-3 * slice_std,
+                b=3 * slice_std,
+                generator=generator,
+            )
+
     @torch.no_grad()
     def init_weights(
         self,
@@ -590,7 +655,7 @@ class NativeFlashPDMamba3SISOMixer(SequenceMixer):
         generator: Optional[torch.Generator] = None,
     ) -> None:
         """Initialize projections, BC biases/norms, decay, and output."""
-        from olmo_core.nn.transformer.init import InitMethod, init_linear
+        from olmo_core.nn.transformer.init import InitMethod, _apply_init, init_linear
 
         self.set_temperature_schedule_step(0)
         if init_method == InitMethod.fan_in:
@@ -600,19 +665,17 @@ class NativeFlashPDMamba3SISOMixer(SequenceMixer):
         nn.init.normal_(self.dictionary_logits, std=std, generator=generator)
         if self.fuse_input_projections:
             assert self.in_proj is not None
-            for name, weight in zip(
-                self._UNFUSED_PROJECTIONS,
-                self.in_proj.weight.split(self._projection_sizes(), dim=0),
-            ):
-                slice_std = std * 0.1 if name == "phase_proj" else std
-                nn.init.trunc_normal_(
-                    weight,
-                    mean=0.0,
-                    std=slice_std,
-                    a=-3 * slice_std,
-                    b=3 * slice_std,
-                    generator=generator,
-                )
+            # Drawn slice by slice, in the order the separate projections are drawn, so
+            # one seed produces the same weights in either layout. `_apply_init` keeps
+            # that true once FSDP has turned the fused weight into a sharded `DTensor`:
+            # it draws the whole projection locally and copies out this rank's shard,
+            # rather than splitting a `DTensor` along the dimension it is sharded on.
+            _apply_init(
+                self._init_fused_projection,
+                self.in_proj.weight,
+                std=std,
+                generator=generator,
+            )
         else:
             for name in self._UNFUSED_PROJECTIONS:
                 projection = getattr(self, name)

@@ -2215,7 +2215,7 @@ def recurrent_state_bytes(
     :param n_heads: Value heads carrying state (``n_v_heads`` where GVA applies).
     :param head_k_dim: The key-side head dimension.
     :param head_v_dim: The value-side head dimension (``head_dim * expand_v``).
-    :param n_layers: How many layers carry this mixer -- 2 here, not 16. See the note in
+    :param n_layers: How many layers carry this mixer -- 12 here, not 16. See the note in
         :func:`decode_report`.
     :param bytes_per_element: 4 for fp32 state, 2 for bf16.
 
@@ -2243,11 +2243,11 @@ def kv_cache_bytes(
     32K" is a decision. Reported beside it so the contrast is in the record rather than left for a
     reader to work out.
 
-    IT IS ALSO THE HONEST HALF OF THE STORY, BECAUSE THESE ARMS ARE HYBRIDS. Every arm keeps SIX
+    IT IS ALSO THE HONEST HALF OF THE STORY, BECAUSE THESE ARMS ARE HYBRIDS. Every arm keeps FOUR
     global-attention layers, and those layers' KV cache grows with context exactly as it always
-    did. Only the 2 mixer slots have a fixed state. So the arms do not remove the KV cache, they
-    shrink the part of the model that needs one -- and a summary that printed only the fixed state
-    would imply a pure linear-attention model this study is not testing.
+    did. Only the 12 recurrent layers have a fixed state. So the arms do not remove the KV cache,
+    they shrink the part of the model that needs one -- and a summary that printed only the fixed
+    state would imply a pure linear-attention model this study is not testing.
 
     Two tensors per layer, K and V, at ``n_kv_heads * head_dim`` each per token. bf16 by default
     because a KV cache is stored at the activation dtype, unlike the fp32 recurrent state.
@@ -2318,7 +2318,7 @@ def decode_basis_string(
         f"COVERS the {mixer_layers} mixer layer(s) of {total_layers} only, x{mixer_layers} per "
         "model token. EXCLUDES the QKV/gate/output projections, the short convolutions, the "
         f"{total_layers} layers' norms and FFNs, the {total_layers - (mixer_layers or 0)} "
-        "non-mixer layers entirely (including the 6 global-attention layers whose KV cache DOES "
+        "non-mixer layers entirely (including the global-attention layers whose KV cache DOES "
         "grow with context), the embedding, the LM head and sampling. NOT a whole-model serving "
         "throughput and must not be quoted as one; it isolates the mixer so arms can be ranked "
         "against each other. A whole-model number needs an incremental step() path, which no "
@@ -2327,7 +2327,7 @@ def decode_basis_string(
 
 
 #: Which fused recurrent kernel decodes each mixer, keyed by its CONFIG CLASS NAME rather than by
-#: the mixer string `core6_arms.MIXERS` registers.
+#: an arm name or a registry string.
 #:
 #: KEYED ON THE CLASS BECAUSE THE REGISTRY STRINGS ARE NOT A CLOSED SET AND RUN 2 IS ADDING ONE.
 #: `KDA_NEGEIG` is new this wave and its registry key is being written by another agent right now.
@@ -2360,40 +2360,93 @@ DECODE_CALL_STYLE = {
 }
 
 
-def _decode_geometry(arm_name: str):
-    """The mixer under test, its head geometry, and how many layers carry it.
+def _mixer_state_shape(mixer) -> tuple[int, int, int] | None:
+    """``(state heads, key dimension, value dimension)`` of one mixer's state, or ``None``.
 
-    Read off the ARM'S OWN CONFIG rather than from constants in this file. The geometry is frozen
-    at n_heads=16 head_dim=64 today, and a decode figure computed from a literal would keep
-    reporting that after somebody changed the arm -- a wrong state size that still looks right.
+    ``None`` where the mixer DECLARES no head dimension. ``d_model // n_heads`` is available to
+    the caller -- the ledger's model is right there -- and is still not an answer: it guesses the
+    layout of a state this file has never seen, and a guessed footprint is wrong in the one field
+    that decides serving batch size while looking entirely reasonable. A null with a stated cause
+    is the honest result; a plausible number is not.
+
+    The key axis is the mixer's own ``d_state`` where it carries one, because Mamba-3 accumulates
+    over the SSM state per head, and the head dimension otherwise, which is what the delta-rule
+    families' outer product accumulates over.
     """
-    from olmo_core.nn.transformer.core6_arms import ARMS, mixer_config
-
-    arm = ARMS[arm_name]
-    config = mixer_config(arm)
-    n_heads = config.n_heads
-    n_v_heads = getattr(config, "n_v_heads", None) or n_heads
-    head_dim = getattr(config, "head_dim", None)
+    head_dim = getattr(mixer, "head_dim", None)
     if not head_dim:
-        # `head_dim=None` means "derive d_model // n_heads", which this function cannot do
-        # without knowing d_model. Every bake-off arm passes it explicitly, so None here means
-        # the registry changed shape -- refused rather than defaulted, because a guessed head
-        # dimension produces a state size that is wrong and looks right.
-        raise ValueError(
-            f"mixer for arm {arm_name!r} declares no head_dim, so its state size cannot be "
-            "computed without d_model"
-        )
-    expand_v = getattr(config, "expand_v", 1.0)
+        return None
+    return (
+        getattr(mixer, "n_v_heads", None) or mixer.n_heads,
+        getattr(mixer, "d_state", None) or head_dim,
+        int(head_dim * getattr(mixer, "expand_v", 1.0)),
+    )
+
+
+def _decode_geometry(arm_name: str) -> dict[str, Any]:
+    """The mixers under test, their state geometry, and how many of the arm's layers carry them.
+
+    READ OFF THE ARM'S OWN BUILT MODEL, exactly as :func:`_slstm_prewarm_contract` reads it.
+    ``model_arch_tests`` is this study's single statement of what the five arms are, and a decode
+    figure computed from a literal goes on reporting the old shape after somebody changes an arm
+    -- a wrong state size that still looks right.
+
+    IT USED TO READ A ``core6_arms`` REGISTRY THAT IS NOT IN THIS TREE AT ALL. That registry
+    belonged to the previous mixer bake-off and described two mixer slots of sixteen; this study
+    runs twelve recurrent layers of sixteen. Every committed spec passes ``--no-decode-probe`` and
+    :func:`decode_probe` records a failed geometry rather than raising, so the import error cost
+    nothing and said nothing -- what it would have cost is the first measurement anybody turned
+    the probe on for.
+
+    The LAYER COUNTS ALWAYS RESOLVE, because they are the ledger's own and true whatever the mixer
+    is. The head geometry does not always exist: see :func:`_mixer_state_shape`.
+    """
+    from model_arch_tests import ATTENTION_LAYERS, N_LAYERS, RUNNABLE_ARMS, build_model_config
+
+    if arm_name not in RUNNABLE_ARMS:
+        raise ValueError(f"{arm_name!r} is not one of this study's arms {RUNNABLE_ARMS}")
+
+    # The same call `build_config` makes, so `solve_widths` is already cached by the time a probe
+    # runs. The initialisation seed moves no shape, and a probe is handed an arm and not a run.
+    model = build_model_config(arm_name, 0)
+    attention_layers = set(ATTENTION_LAYERS)
+    recurrent = []
+    attention: set[tuple[int, int]] = set()
+    for index, block in enumerate(model.resolved_block_configs):
+        mixer = block.sequence_mixer
+        if index in attention_layers:
+            attention.add((mixer.n_kv_heads or mixer.n_heads, mixer.head_dim))
+        else:
+            recurrent.append(mixer)
+
+    counts: dict[str, int] = {}
+    for mixer in recurrent:
+        counts[type(mixer).__name__] = counts.get(type(mixer).__name__, 0) + 1
+
+    # ONE SHAPE OR NONE. `xlstm` runs two different recurrences -- mLSTM in ten layers and sLSTM
+    # in two -- and has no single state geometry; one of the two standing in for both would
+    # report a footprint for a model nobody trains.
+    shapes = {_mixer_state_shape(mixer) for mixer in recurrent}
+    shape = shapes.pop() if len(shapes) == 1 else None
+    n_v_heads, head_k_dim, head_v_dim = shape or (None, None, None)
+    head_counts = {mixer.n_heads for mixer in recurrent}
+    kv_heads, kv_head_dim = attention.pop() if len(attention) == 1 else (None, None)
+
     return {
-        # The registry key, for the record. The KERNEL is chosen by class below, not by this.
-        "mixer": arm.mixer,
-        "config_class": type(config).__name__,
-        "n_heads": n_heads,
+        # Every recurrence the arm carries, counted. The KERNEL is chosen by `config_class`
+        # below, and a two-mixer arm matches no kernel by construction, which is correct.
+        "mixer": ", ".join(f"{name} x{count}" for name, count in counts.items()),
+        "config_class": "+".join(counts),
+        "n_heads": head_counts.pop() if len(head_counts) == 1 else None,
         "n_v_heads": n_v_heads,
-        "head_k_dim": head_dim,
-        "head_v_dim": int(head_dim * expand_v),
-        "mixer_layers": len(arm.kda_layers),
-        "allow_neg_eigval": bool(getattr(config, "allow_neg_eigval", False)),
+        "head_k_dim": head_k_dim,
+        "head_v_dim": head_v_dim,
+        "mixer_layers": len(recurrent),
+        "attention_layers": len(ATTENTION_LAYERS),
+        "total_layers": N_LAYERS,
+        "attention_n_kv_heads": kv_heads,
+        "attention_head_dim": kv_head_dim,
+        "allow_neg_eigval": any(getattr(m, "allow_neg_eigval", False) for m in recurrent),
     }
 
 
@@ -2448,7 +2501,25 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
 
     mixer = geometry["mixer"]
     config_class = geometry["config_class"]
-    state_elems_per_layer = geometry["n_v_heads"] * geometry["head_k_dim"] * geometry["head_v_dim"]
+    mixer_layers = geometry["mixer_layers"]
+    n_v_heads = geometry["n_v_heads"]
+    head_k_dim = geometry["head_k_dim"]
+    head_v_dim = geometry["head_v_dim"]
+    # Null rather than guessed for an arm whose mixer declares no head dimension. See
+    # `_mixer_state_shape`: this is the field a serving fleet is sized with, so a plausible
+    # number derived from a state layout nobody has read is the worst of the three outcomes.
+    state_elems_per_layer = None if head_k_dim is None else n_v_heads * head_k_dim * head_v_dim
+    state_bytes_per_seq = (
+        None
+        if state_elems_per_layer is None
+        else recurrent_state_bytes(
+            n_heads=n_v_heads,
+            head_k_dim=head_k_dim,
+            head_v_dim=head_v_dim,
+            n_layers=mixer_layers,
+            bytes_per_element=4,
+        )
+    )
 
     # The computed footprint. Emitted even with no GPU: it is arithmetic on the geometry, it is
     # the field that decides serving batch size, and it does not need a kernel to be true.
@@ -2457,20 +2528,14 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
         "decode_config_class": config_class,
         "decode_allow_neg_eigval": geometry["allow_neg_eigval"],
         "decode_n_heads": geometry["n_heads"],
-        "decode_n_v_heads": geometry["n_v_heads"],
-        "decode_head_k_dim": geometry["head_k_dim"],
-        "decode_head_v_dim": geometry["head_v_dim"],
-        "decode_mixer_layers": geometry["mixer_layers"],
+        "decode_n_v_heads": n_v_heads,
+        "decode_head_k_dim": head_k_dim,
+        "decode_head_v_dim": head_v_dim,
+        "decode_mixer_layers": mixer_layers,
         "decode_state_elems_per_layer": state_elems_per_layer,
         # THE HEADLINE FIELD. fp32 because that is what `fla` keeps the state in; the realised
         # dtype below is what proves it.
-        "decode_state_bytes_per_seq": recurrent_state_bytes(
-            n_heads=geometry["n_v_heads"],
-            head_k_dim=geometry["head_k_dim"],
-            head_v_dim=geometry["head_v_dim"],
-            n_layers=geometry["mixer_layers"],
-            bytes_per_element=4,
-        ),
+        "decode_state_bytes_per_seq": state_bytes_per_seq,
         "decode_kernel_requested": None,
         "decode_kernel_resolved": None,
         "decode_fast_path_taken": False,
@@ -2483,29 +2548,26 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
     }
 
     # The KV-cache contrast, which is what makes the state figure a decision rather than a number.
-    # Computed from the arm's attention geometry, not the mixer's.
+    # Computed from the arm's attention layers, not from its mixer's.
+    result["decode_attention_layers"] = geometry["attention_layers"]
+    result["decode_total_layers"] = geometry["total_layers"]
     try:
-        from olmo_core.nn.transformer.core6_arms import (
-            ATTENTION_LAYERS,
-            HEAD_DIM,
-            N_KV_HEADS,
-            N_LAYERS,
-        )
-
         kv_per_token = kv_cache_bytes(
-            n_kv_heads=N_KV_HEADS,
-            head_dim=HEAD_DIM,
-            n_layers=len(ATTENTION_LAYERS),
+            n_kv_heads=geometry["attention_n_kv_heads"],
+            head_dim=geometry["attention_head_dim"],
+            n_layers=geometry["attention_layers"],
             seq_len=1,
         )
-        result["decode_attention_layers"] = len(ATTENTION_LAYERS)
-        result["decode_total_layers"] = N_LAYERS
         result["decode_kv_bytes_per_token"] = kv_per_token
         result["decode_kv_bytes_per_seq_at"] = {
             str(t): kv_per_token * t for t in (1024, 4096, 8192, 32768)
         }
-        result["decode_state_vs_kv_crossover_tokens"] = decode_state_crossover_tokens(
-            state_bytes=result["decode_state_bytes_per_seq"], kv_bytes_per_token=kv_per_token
+        result["decode_state_vs_kv_crossover_tokens"] = (
+            None
+            if state_bytes_per_seq is None
+            else decode_state_crossover_tokens(
+                state_bytes=state_bytes_per_seq, kv_bytes_per_token=kv_per_token
+            )
         )
     except Exception as exc:  # noqa: BLE001 -- a contrast, not the endpoint
         log.warning("could not compute the KV-cache contrast: %r", exc)
@@ -2514,9 +2576,9 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
         result["decode_basis"] = decode_basis_string(
             measured=False,
             reason=(
-                f"no fused recurrent kernel is known for {config_class} (arm mixer {mixer!r}). "
-                "The Householder operator is a custom in-tree kernel with no fla recurrent form, "
-                "so there is nothing to time rather than a number to substitute."
+                f"no fused recurrent kernel is known for {config_class} (the arm's recurrent "
+                f"layers are {mixer}), so there is nothing to time rather than a number to "
+                "substitute"
             ),
         )
         return result
@@ -2548,8 +2610,8 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
         # bf16 inputs, matching the run's `param_dtype`, with an fp32 state -- which is the
         # combination `fla` uses and the one a server would run.
         dtype = torch.bfloat16
-        H, HV = geometry["n_heads"], geometry["n_v_heads"]
-        K, V = geometry["head_k_dim"], geometry["head_v_dim"]
+        H, HV = geometry["n_heads"], n_v_heads
+        K, V = head_k_dim, head_v_dim
 
         for batch_size in batch_sizes:
             B, T = batch_size, 1  # one token per step: this is decode
@@ -2670,9 +2732,7 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
                 result["decode_state_dtype_realised"] = str(threaded.dtype)
                 # Per sequence, across the mixer layers -- the same quantity the computed field
                 # above reports, measured off the tensor the kernel returned.
-                realised = int(
-                    threaded.numel() * threaded.element_size() // B * geometry["mixer_layers"]
-                )
+                realised = int(threaded.numel() * threaded.element_size() // B * mixer_layers)
                 result["decode_state_bytes_realised"] = realised
                 # THE TWO NUMBERS MUST AGREE, AND THE COMPARISON IS RECORDED RATHER THAN LEFT FOR
                 # A READER TO DO. `decode_state_bytes_per_seq` is computed from the geometry with
@@ -2725,9 +2785,7 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
                 "tokens_per_second": decode_tokens_per_second(
                     seconds_per_token=median, batch_size=B
                 ),
-                "state_bytes_total": int(
-                    threaded.numel() * threaded.element_size() * geometry["mixer_layers"]
-                ),
+                "state_bytes_total": int(threaded.numel() * threaded.element_size() * mixer_layers),
             }
 
         result["decode_fast_path_taken"] = True
@@ -2735,11 +2793,11 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
             measured=True,
             operator=mixer,
             kernel=result["decode_kernel_resolved"],
-            n_heads=geometry["n_v_heads"],
+            n_heads=n_v_heads,
             head_k_dim=K,
             head_v_dim=V,
-            mixer_layers=geometry["mixer_layers"],
-            total_layers=result.get("decode_total_layers", 16),
+            mixer_layers=mixer_layers,
+            total_layers=geometry["total_layers"],
         )
     except BaseException as exc:  # noqa: BLE001 -- never lose the CE endpoint to a benchmark
         log.warning("decode probe failed (%s: %s)", type(exc).__name__, exc)
@@ -2761,9 +2819,9 @@ def decode_report(*, arm_name: str, world_size: int) -> dict[str, Any]:
     left for a reader to assume -- a decode number silently divided by 8 would rank every arm
     identically wrongly.
 
-    ``decode_state_bytes_per_seq`` counts the MIXER LAYERS ONLY -- 2 of 16 -- because those are
-    the layers whose state is fixed. The other 14 are 6 global attention (whose KV cache grows)
-    and 8 LIV short convolutions, and folding them into one "state" figure would merge a
+    ``decode_state_bytes_per_seq`` counts the RECURRENT LAYERS ONLY -- 12 of 16 -- because those
+    are the layers whose state is fixed. The other 4 are global attention, whose KV cache grows
+    with the context, and folding the two into one "state" figure would merge a
     context-independent cost with a context-dependent one.
     """
     probe = decode_probe(arm_name=arm_name)

@@ -731,6 +731,7 @@ class Attention(SequenceMixer):
         """
         self.backend.apply_cp(cp_mesh, ring=ring, uly=uly)
 
+    @torch.no_grad()
     def init_weights(
         self,
         *,
@@ -1123,6 +1124,7 @@ class FusedAttention(SequenceMixer):
     ):
         self.backend.apply_cp(cp_mesh, ring=ring, uly=uly)
 
+    @torch.no_grad()
     def init_weights(
         self,
         *,
