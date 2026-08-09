@@ -388,7 +388,7 @@ The `nodes: 1` field in a check describes one cell, not the fan-out. Actual
 concurrency is set by the platform queue, so cells may start in groups.
 
 Arm-major ordering is deliberate: a truncated fan-out loses whole arms rather
-than reducing every arm below five replicates.
+than reducing every arm below three replicates.
 
 ## Required gates for future code changes
 

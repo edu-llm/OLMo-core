@@ -41,10 +41,11 @@ the frozen ±195,068 tolerance.
 
 ## Matched budget and wave
 
-There are 20 cells: four arms by five replicates. Data seeds
-210007/220014/230021/240028/250035 repeat across all arms, so replicate `r`
-sees the same token order in every arm. Init seeds remain arm-specific because
-the tensor inventories differ.
+There are 12 cells: four arms by three replicates. Data seeds
+210007/220014/230021 repeat across all arms, so replicate `r` sees the same
+token order in every arm. Init seeds remain arm-specific because the tensor
+inventories differ. Seeds 240028/250035 stay reserved in the ledger, so a later
+wave can add depth without reissuing a seed.
 
 Each cell runs 1,144 steps at a 524,288-token global batch:
 
@@ -59,13 +60,13 @@ the paired token-stream contract.
 
 Cells are arm-major:
 
-- indices 0–4: `mamba-b3` (control);
-- 5–9: `xlstm`;
-- 10–14: `mamba3-siso-pd`;
-- 15–19: `native-pd`.
+- indices 0–2: `mamba-b3` (control);
+- 3–5: `xlstm`;
+- 6–8: `mamba3-siso-pd`;
+- 9–11: `native-pd`.
 
 Arm-major order is deliberate: truncation loses whole arms instead of reducing
-every arm below five replicates.
+every arm below three replicates.
 
 ## Platform preparation
 
@@ -77,7 +78,7 @@ edullm check --json \
   --dataset reservoir-dolma2-v1 \
   --team memory-split \
   --spec .edullm/run-comparison.yaml \
-  --fanout-size 20 \
+  --fanout-size 12 \
   --fanout-index-parameter AWS_BATCH_JOB_ARRAY_INDEX \
   --attempts 1
 ```
@@ -155,7 +156,7 @@ edullm check --json \
 
 Rank this smoke only by `throughput_tok_s_steady` and
 `throughput_tok_s_steady_per_device`. It is useful for finding a grossly slow
-arm before the 20-cell run, but one seed and 50 measured steps are not a final
+arm before the 12-cell run, but one seed and 50 measured steps are not a final
 performance estimate.
 
 ### One A100

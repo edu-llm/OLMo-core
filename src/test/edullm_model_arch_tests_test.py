@@ -424,7 +424,7 @@ def test_four_arm_comparison_uses_full_3_to_1_architectures_at_matched_tpp():
             assert names.count("SLSTMMixerConfig") == 2
 
 
-def test_comparison_wave_is_arm_major_five_seed_single_image_fanout():
+def test_comparison_wave_is_arm_major_three_seed_single_image_fanout():
     assert COMPARISON_RUN_CONFIG.is_file()
     assert SEED_SCHEDULE.is_file()
     run_yaml = COMPARISON_RUN_CONFIG.read_text()
@@ -432,8 +432,8 @@ def test_comparison_wave_is_arm_major_five_seed_single_image_fanout():
 
     expected_arms = ["mamba-b3", "xlstm", "mamba3-siso-pd", "native-pd"]
     assert schedule["arms"] == expected_arms
-    assert schedule["replicates_per_arm"] == 5
-    assert schedule["fanout_size"] == 20
+    assert schedule["replicates_per_arm"] == 3
+    assert schedule["fanout_size"] == 12
     assert schedule["cell_order"] == [
         arm for arm in expected_arms for _ in range(schedule["replicates_per_arm"])
     ]
@@ -450,10 +450,10 @@ def test_comparison_wave_is_arm_major_five_seed_single_image_fanout():
     assert "--warmup-steps 114" in run_yaml
     assert "--save-interval 572" in run_yaml
     assert "--global-batch-size 524288" in run_yaml
-    assert run_yaml.count("mamba-b3") == 5
-    assert run_yaml.count("xlstm") == 5
-    assert run_yaml.count("mamba3-siso-pd") == 5
-    assert run_yaml.count("native-pd") == 5
+    assert run_yaml.count("mamba-b3") == 3
+    assert run_yaml.count("xlstm") == 3
+    assert run_yaml.count("mamba3-siso-pd") == 3
+    assert run_yaml.count("native-pd") == 3
 
 
 def test_single_platform_image_bundles_all_four_accelerated_backends():

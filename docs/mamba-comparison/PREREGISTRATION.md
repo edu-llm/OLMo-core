@@ -71,7 +71,7 @@ submission, so any later replacement is a documented deviation.
 ## Preconditions
 
 - One commit and one image must contain all four implementations.
-- The 20 literal arm/data/init tuples in the run spec must agree with
+- The 12 literal arm/data/init tuples in the run spec must agree with
   `seeds.json`.
 - Exact parameter counts and the 10m/2s/4attention xLSTM role inventory must
   pass their tests.
@@ -79,11 +79,20 @@ submission, so any later replacement is a documented deviation.
   on sm80 and carry the required license notice.
 - `edullm check --json` must stand without `--force`.
 - Any change to steps, batch, sequence length, corpus, world size, or seed
-  schedule applies to all 20 cells and is recorded here before dispatch.
+  schedule applies to all 12 cells and is recorded here before dispatch.
 
 ## Deviations
 
 - Before dispatch, the prepared 3,721-step / TPP≈5 budget copied from
   mixer-bakeoff Run 2 was replaced with measured Run 1's 1,144-step budget.
-  All 20 cells moved together; the five-replicate arm-major design, data
-  release, sequence length, batch sizes, LR, hardware, and seeds are unchanged.
+  All cells moved together; the arm-major design, data release, sequence
+  length, batch sizes, LR, hardware, and seeds are unchanged.
+- Before dispatch, replicates per arm were cut from five to three (20 cells to
+  12), matching mixer-bakeoff Run 1's three-seed shape and saving 40% of the
+  node-hours. Data seeds 240028/250035 and their init seeds stay reserved and
+  unissued. This widens the 95% interval on a per-arm CE mean by about 2x,
+  because both the sample size and the t degrees of freedom fall; Run 1 could
+  not resolve CE at three seeds with two mixer slots, and this design's
+  twelve mixer layers per arm are what is being relied on for a larger effect.
+  Throughput and peak memory are budget- and replicate-robust and are the
+  endpoints this wave is expected to settle.

@@ -122,15 +122,15 @@ def test_entrypoint_freezes_four_full_architecture_arms():
     assert values["FROZEN_GLOBAL_BATCH_SIZE"] == 524288
 
 
-def test_arm_major_five_seed_wave_is_machine_readable():
+def test_arm_major_three_seed_wave_is_machine_readable():
     assert RUN_SPEC.is_file()
     assert SEEDS.is_file()
     schedule = json.loads(SEEDS.read_text())
     expected_arms = ["mamba-b3", "xlstm", "mamba3-siso-pd", "native-pd"]
     assert schedule["arms"] == expected_arms
-    assert schedule["replicates_per_arm"] == 5
-    assert schedule["fanout_size"] == 20
-    assert schedule["cell_order"] == [arm for arm in expected_arms for _ in range(5)]
+    assert schedule["replicates_per_arm"] == 3
+    assert schedule["fanout_size"] == 12
+    assert schedule["cell_order"] == [arm for arm in expected_arms for _ in range(3)]
     assert schedule["steps"] == 1144
     assert schedule["global_batch_size"] == 524288
     assert schedule["tokens_per_cell"] == 599_785_472

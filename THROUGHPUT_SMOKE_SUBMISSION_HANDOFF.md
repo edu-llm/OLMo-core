@@ -288,18 +288,18 @@ edullm check --json \
   --spec .edullm/run-comparison.yaml \
   --compute gpu-8xa100 \
   --attempts 1 \
-  --fanout-size 20 \
+  --fanout-size 12 \
   --fanout-index-parameter AWS_BATCH_JOB_ARRAY_INDEX
 ```
 
 Then submit with the same arguments, changing only `check --json` to `submit`.
-The full wave is arm-major: five Mamba-b3 cells, five xLSTM cells, five
-Mamba3-SISO-PD cells, then five native-PD cells.
+The full wave is arm-major: three Mamba-b3 cells, three xLSTM cells, three
+Mamba3-SISO-PD cells, then three native-PD cells.
 
 ### Running only Mamba-b3 and xLSTM
 
-Because the wave is arm-major, the first ten cells of the same spec are exactly
-Mamba-b3 and xLSTM, five seeds each. No separate spec is needed; lower the
+Because the wave is arm-major, the first six cells of the same spec are exactly
+Mamba-b3 and xLSTM, three seeds each. No separate spec is needed; lower the
 fan-out and leave everything else identical:
 
 ```bash
@@ -310,16 +310,16 @@ edullm check --json \
   --spec .edullm/run-comparison.yaml \
   --compute gpu-8xa100 \
   --attempts 1 \
-  --fanout-size 10 \
+  --fanout-size 6 \
   --fanout-index-parameter AWS_BATCH_JOB_ARRAY_INDEX
 ```
 
-Indices 0-4 are Mamba-b3 and 5-9 are xLSTM, on the same corpus, budget, seeds,
+Indices 0-2 are Mamba-b3 and 3-5 are xLSTM, on the same corpus, budget, seeds,
 and geometry as the four-arm wave, so the two arms stay comparable to each other
 and to the remaining arms if those are run later.
 
-For one arm only, `--fanout-size 5` gives Mamba-b3. xLSTM has no contiguous
-prefix of its own, so run it inside the ten-cell subset above.
+For one arm only, `--fanout-size 3` gives Mamba-b3. xLSTM has no contiguous
+prefix of its own, so run it inside the six-cell subset above.
 
 ### Local verification standing behind this state
 

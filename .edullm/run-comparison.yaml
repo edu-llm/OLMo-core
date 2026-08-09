@@ -1,29 +1,33 @@
-# Four-arm mixer comparison. Submit as one 20-cell fan-out:
+# Four-arm mixer comparison. Submit as one 12-cell fan-out:
 #   edullm submit --experiment mamba-comparison --dataset reservoir-dolma2-v1 \
 #     --team memory-split \
-#     --spec .edullm/run-comparison.yaml --fanout-size 20 \
+#     --spec .edullm/run-comparison.yaml --fanout-size 12 \
 #     --fanout-index-parameter AWS_BATCH_JOB_ARRAY_INDEX --attempts 1
 #
+# Three replicates per arm, using the first three of the five seeds the ledger in
+# `model_arch_tests.py` admits. The remaining two stay valid, so a later wave can add
+# depth without reissuing seeds.
+#
 # The arrays are deliberately arm-major. If a platform limit truncates the fan-out,
-# whole arms are lost while completed arms retain all five replicates.
+# whole arms are lost while completed arms retain all three replicates.
 schema_version: 1
 workload_profile: olmo-core-train
 suggested_compute: gpu-8xa100
 command: >-
   bash -lc 'export TRITON_F32_DEFAULT=ieee PYTHONDONTWRITEBYTECODE=1 &&
   I=${AWS_BATCH_JOB_ARRAY_INDEX:-0} &&
-  ARMS=(mamba-b3 mamba-b3 mamba-b3 mamba-b3 mamba-b3
-  xlstm xlstm xlstm xlstm xlstm
-  mamba3-siso-pd mamba3-siso-pd mamba3-siso-pd mamba3-siso-pd mamba3-siso-pd
-  native-pd native-pd native-pd native-pd native-pd) &&
-  DSEEDS=(210007 220014 230021 240028 250035
-  210007 220014 230021 240028 250035
-  210007 220014 230021 240028 250035
-  210007 220014 230021 240028 250035) &&
-  ISEEDS=(110007 120014 130021 140028 150035
-  113008 123015 133022 143029 153036
-  116009 126016 136023 146030 156037
-  119010 129017 139024 149031 159038) &&
+  ARMS=(mamba-b3 mamba-b3 mamba-b3
+  xlstm xlstm xlstm
+  mamba3-siso-pd mamba3-siso-pd mamba3-siso-pd
+  native-pd native-pd native-pd) &&
+  DSEEDS=(210007 220014 230021
+  210007 220014 230021
+  210007 220014 230021
+  210007 220014 230021) &&
+  ISEEDS=(110007 120014 130021
+  113008 123015 133022
+  116009 126016 136023
+  119010 129017 139024) &&
   python -m torch.distributed.run --nproc-per-node=8 --standalone
   .edullm/train_core6_arm.py "$EDULLM_RUN_ID"
   --arm "${ARMS[$I]}" --data-seed "${DSEEDS[$I]}" --init-seed "${ISEEDS[$I]}"

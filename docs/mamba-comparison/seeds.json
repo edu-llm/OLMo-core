@@ -11,27 +11,19 @@
     "native-pd"
   ],
   "control": "mamba-b3",
-  "replicates_per_arm": 5,
-  "fanout_size": 20,
+  "replicates_per_arm": 3,
+  "fanout_size": 12,
   "cell_ordering": "arm-major",
   "cell_order": [
     "mamba-b3",
     "mamba-b3",
     "mamba-b3",
-    "mamba-b3",
-    "mamba-b3",
-    "xlstm",
-    "xlstm",
     "xlstm",
     "xlstm",
     "xlstm",
     "mamba3-siso-pd",
     "mamba3-siso-pd",
     "mamba3-siso-pd",
-    "mamba3-siso-pd",
-    "mamba3-siso-pd",
-    "native-pd",
-    "native-pd",
     "native-pd",
     "native-pd",
     "native-pd"
@@ -39,7 +31,9 @@
   "data_seeds": [
     210007,
     220014,
-    230021,
+    230021
+  ],
+  "reserved_data_seeds": [
     240028,
     250035
   ],
@@ -47,28 +41,38 @@
     "mamba-b3": [
       110007,
       120014,
-      130021,
-      140028,
-      150035
+      130021
     ],
     "xlstm": [
       113008,
       123015,
-      133022,
-      143029,
-      153036
+      133022
     ],
     "mamba3-siso-pd": [
       116009,
       126016,
-      136023,
-      146030,
-      156037
+      136023
     ],
     "native-pd": [
       119010,
       129017,
-      139024,
+      139024
+    ]
+  },
+  "reserved_init_seeds_by_arm": {
+    "mamba-b3": [
+      140028,
+      150035
+    ],
+    "xlstm": [
+      143029,
+      153036
+    ],
+    "mamba3-siso-pd": [
+      146030,
+      156037
+    ],
+    "native-pd": [
       149031,
       159038
     ]
