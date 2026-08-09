@@ -89,7 +89,7 @@ from olmo_core.distributed.utils import (
 )
 from olmo_core.io import clear_directory, list_directory, normalize_path
 from olmo_core.nn.transformer import TransformerConfig
-from olmo_core.optim import AdamWConfig, CosWithWarmup, OptimGroupOverride
+from olmo_core.optim import AdamWConfig, CosWithWarmup
 from olmo_core.train import (
     Duration,
     TrainerConfig,
