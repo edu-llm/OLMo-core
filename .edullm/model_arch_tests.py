@@ -372,6 +372,7 @@ def _treatment_mixer(arm: str, layer_index: int):
             bc_bias=True,
             prefer_official_kernel=True,
             rotation_scan_impl="quaternion",
+            ssd_backend="simple_gla",
             theta_max=1 / math.sqrt(SEQUENCE_LENGTH),
             fuse_input_projections=True,
             dtype=MASTER_DTYPE,

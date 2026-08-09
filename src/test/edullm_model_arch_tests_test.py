@@ -209,6 +209,7 @@ def test_treatment_mixers_are_strict_and_parameter_matched():
             assert all(mixer.mimo_rank == 1 for mixer in mixers)
             assert all(mixer.rotation_scan_impl == "quaternion" for mixer in mixers)
             assert all(mixer.prefer_official_kernel is True for mixer in mixers)
+            assert all(mixer.ssd_backend == "simple_gla" for mixer in mixers)
         elif arm == "xlstm":
             names = [type(mixer).__name__ for mixer in mixers]
             assert names.count("XLSTMMixerConfig") == 10
