@@ -50,6 +50,7 @@ from curriculum_pacing import (  # noqa: E402
     QUADRATIC_SEGMENT_BOUNDARIES,
     SEGMENT_BOUNDARIES,
     WARMUP_LINEAR_SEGMENT_BOUNDARIES,
+    WARMUP_QUADRATIC_SEGMENT_BOUNDARIES,
     curriculum_order_group,
     expanding_eligible_fraction,
     interleave_subbucket_durations,
@@ -106,9 +107,9 @@ def _loader(
     )
 
 
-def test_recipe_is_exact_approved_nine_arm_matrix() -> None:
+def test_recipe_is_exact_approved_ten_arm_matrix() -> None:
     arms = entrypoint.load_recipe()
-    assert tuple(arm.index for arm in arms) == tuple(range(9))
+    assert tuple(arm.index for arm in arms) == tuple(range(10))
     assert tuple((arm.name, arm.pacing, arm.metric, arm.order_group) for arm in arms) == (
         ("linear10-flesch", "linear_n10", "flesch", "flesch"),
         ("linear10-mtld", "linear_n10", "mtld", "mtld"),
@@ -119,12 +120,14 @@ def test_recipe_is_exact_approved_nine_arm_matrix() -> None:
         ("quadratic10-mtld", "quadratic_n10", "mtld", "mtld"),
         ("warmup-mtld", "warmup_1000", "mtld", "mtld"),
         ("warmup-linear10-mtld", "warmup_linear_n10_1000", "mtld", "mtld"),
+        ("warmup-quadratic10-mtld", "warmup_quadratic_n10_1000", "mtld", "mtld"),
     )
     assert {arm.pacing for arm in arms} == {
         "linear_n10",
         "quadratic_n10",
         "warmup_1000",
         "warmup_linear_n10_1000",
+        "warmup_quadratic_n10_1000",
         "interleave_i10_linear",
         "control",
     }
@@ -210,6 +213,38 @@ def test_pacing_modes_match_methodology_boundaries() -> None:
     assert pool_for_step(1000, 1000, "warmup_linear_n10_1000").start == 0
     assert pool_for_step(1000, 1000, "warmup_linear_n10_1000").end == 1000
     assert not pool_for_step(1000, 1000, "warmup_linear_n10_1000").ordered
+    assert WARMUP_QUADRATIC_SEGMENT_BOUNDARIES == (
+        0,
+        18,
+        54,
+        109,
+        182,
+        273,
+        382,
+        509,
+        654,
+        818,
+        1000,
+    )
+    assert sum(
+        end - start
+        for start, end in zip(
+            WARMUP_QUADRATIC_SEGMENT_BOUNDARIES, WARMUP_QUADRATIC_SEGMENT_BOUNDARIES[1:]
+        )
+    ) == 1000
+    assert pool_for_step(0, 1000, "warmup_quadratic_n10_1000").end == 100
+    assert pool_for_step(17, 1000, "warmup_quadratic_n10_1000").start == 0
+    assert pool_for_step(18, 1000, "warmup_quadratic_n10_1000").start == 100
+    assert pool_for_step(817, 1000, "warmup_quadratic_n10_1000").start == 800
+    assert pool_for_step(818, 1000, "warmup_quadratic_n10_1000").start == 900
+    assert pool_for_step(999, 1000, "warmup_quadratic_n10_1000").start == 900
+    assert not pool_for_step(999, 1000, "warmup_quadratic_n10_1000").ordered
+    assert pool_for_step(1000, 1000, "warmup_quadratic_n10_1000") == pool_for_step(
+        1000, 1000, "warmup_1000"
+    )
+    assert pool_for_step(1000, 1000, "warmup_quadratic_n10_1000").start == 0
+    assert pool_for_step(1000, 1000, "warmup_quadratic_n10_1000").end == 1000
+    assert not pool_for_step(1000, 1000, "warmup_quadratic_n10_1000").ordered
     assert interleave_subbucket_durations(250) == [25] * 10
     assert interleave_subbucket_durations(134) == [13] * 9 + [17]
     assert interleave_subbucket_index(249) == 9

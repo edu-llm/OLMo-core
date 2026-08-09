@@ -1,6 +1,6 @@
 # Curriculum 370M migration
 
-This branch implements the nine approved arms in `curriculum_recipe.json` without edits
+This branch implements the ten approved arms in `curriculum_recipe.json` without edits
 under `src/olmo_core`. The methodology source is
 `edu-llm/edullm/experiments/curriculum`: current README and pacing tests take
 precedence over older control scripts.
@@ -35,6 +35,7 @@ Only the loader's pacing/ordering policy differs between arms:
 | 6 | `quadratic10-mtld` | `quadratic_n10` | `mtld` / `mtld` |
 | 7 | `warmup-mtld` | `warmup_1000` | `mtld` / `mtld` |
 | 8 | `warmup-linear10-mtld` | `warmup_linear_n10_1000` | `mtld` / `mtld` |
+| 9 | `warmup-quadratic10-mtld` | `warmup_quadratic_n10_1000` | `mtld` / `mtld` |
 
 The table index is exactly the `--arm-index` CLI value. All arms log to the
 shared W&B project `curriculum`; runs are distinguished by run name/group.

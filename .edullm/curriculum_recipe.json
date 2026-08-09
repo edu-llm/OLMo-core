@@ -34,6 +34,7 @@
     {"index": 5, "name": "control", "pacing": "control", "metric": null, "order_group": null},
     {"index": 6, "name": "quadratic10-mtld", "pacing": "quadratic_n10", "metric": "mtld", "order_group": "mtld"},
     {"index": 7, "name": "warmup-mtld", "pacing": "warmup_1000", "metric": "mtld", "order_group": "mtld"},
-    {"index": 8, "name": "warmup-linear10-mtld", "pacing": "warmup_linear_n10_1000", "metric": "mtld", "order_group": "mtld"}
+    {"index": 8, "name": "warmup-linear10-mtld", "pacing": "warmup_linear_n10_1000", "metric": "mtld", "order_group": "mtld"},
+    {"index": 9, "name": "warmup-quadratic10-mtld", "pacing": "warmup_quadratic_n10_1000", "metric": "mtld", "order_group": "mtld"}
   ]
 }

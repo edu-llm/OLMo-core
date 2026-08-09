@@ -152,11 +152,12 @@ def load_recipe(path: Path = RECIPE_PATH) -> tuple[Arm, ...]:
         (6, "quadratic10-mtld", "quadratic_n10", "mtld", "mtld"),
         (7, "warmup-mtld", "warmup_1000", "mtld", "mtld"),
         (8, "warmup-linear10-mtld", "warmup_linear_n10_1000", "mtld", "mtld"),
+        (9, "warmup-quadratic10-mtld", "warmup_quadratic_n10_1000", "mtld", "mtld"),
     )
     if tuple(
         (arm.index, arm.name, arm.pacing, arm.metric, arm.order_group) for arm in arms
     ) != expected_arms:
-        raise CurriculumConfigError("recipe arms differ from the approved nine-arm matrix")
+        raise CurriculumConfigError("recipe arms differ from the approved ten-arm matrix")
     for arm in arms:
         if arm.pacing not in PACING_NAMES:
             raise CurriculumConfigError(f"{arm.name}: unknown pacing {arm.pacing}")
