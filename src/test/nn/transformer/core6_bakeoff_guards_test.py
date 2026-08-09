@@ -275,7 +275,21 @@ def test_every_parameter_engages_after_one_step(name: str):
     mixer, d_model = _tiny_mixer(name, device=device, dtype=torch.float32)
 
     before = {n: p.detach().clone() for n, p in mixer.named_parameters()}
-    optimizer = torch.optim.SGD(mixer.parameters(), lr=0.1)
+    # THE STEP SIZE HAD TO BE RAISED, AND RAISING IT DOES NOT WEAKEN THE GUARD.
+    # The objective below is a `.mean()` over B*T*d_model = 32,768 elements, so every gradient
+    # carries a 2/N = 6.1e-05 damping factor. At the original lr=0.1 a HEALTHY parameter moved
+    # ~2.2e-04 while its floor (2^-8 relative to a max-magnitude of ~0.1) is ~3.9e-04 -- so the
+    # guard fired on all eight arms at once, including `KDA_BASE`, `K2` and `KDA_R1`, which
+    # trained perfectly well in run 1. A guard that condemns the shipped reference is measuring
+    # its own step size, not liveness.
+    #
+    # Raising lr is safe BECAUSE OF WHAT THIS GUARD HUNTS: a parameter with a zero or vanishing
+    # gradient -- a zero-initialised branch, a detached path, a decorative gate -- moves EXACTLY
+    # ZERO at any learning rate whatsoever. Rescaling rescues only the parameters that had a real
+    # gradient all along. The failure mode this test exists to catch is untouched; the false
+    # positive is removed. Margin after the change is ~55x floor for a healthy parameter, and the
+    # fireability assertion below proves the guard can still condemn something.
+    optimizer = torch.optim.SGD(mixer.parameters(), lr=10.0)
 
     torch.manual_seed(0)
     x = torch.randn(1, 32, d_model, device=device, dtype=torch.bfloat16)
@@ -444,9 +458,20 @@ def test_step_0_loss_is_in_band(name: str):
     model.init_weights(device=device)
 
     torch.manual_seed(0)
-    input_ids = torch.randint(0, VOCAB_SIZE, (1, 128), device=device)
+    ids = torch.randint(0, VOCAB_SIZE, (1, 129), device=device)
+    # THE LABELS MUST BE SHIFTED ONE LEFT, AND THE MODEL DOES NOT DO IT FOR YOU.
+    # `Transformer.forward` says so (`model.py:555-559`): "The caller is responsible for shifting
+    # these one position left of ``input_ids``; this method does not shift them." The real
+    # entrypoint shifts (`train_core6_arm.py:1148-1149`: `xs=seg[:-1]`, `ys=seg[1:]`). An earlier
+    # version of THIS test passed `labels=input_ids` unshifted, scoring position t on a token the
+    # model had just been handed as input; a one-layer model copies it through the residual stream
+    # and the loss collapses. Measured 6.0423 against ln(100,352) = 11.5164 -- an effective
+    # vocabulary of ~421 -- on ALL EIGHT arms, including three that trained correctly in run 1 at a
+    # real first_loss of 11.712. Failing identically on every arm including the shipped reference
+    # is the signature of a broken harness, not a broken operator. 129 ids so xs/ys are 128 wide.
+    xs, ys = ids[:, :-1], ids[:, 1:]
     with torch.autocast("cuda", dtype=torch.bfloat16):
-        out = model(input_ids, labels=input_ids)
+        out = model(xs, labels=ys)
     loss = float(out.loss if hasattr(out, "loss") else out[0])
 
     low, high = STEP0_LOSS_BAND
