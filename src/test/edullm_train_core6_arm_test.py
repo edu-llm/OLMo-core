@@ -297,7 +297,16 @@ def test_the_band_mask_lines_up_with_the_targets_and_not_the_inputs(tmp_path):
                 reduction="none",
             )
         )
-    assert out["bands"]["0"]["sum"] == pytest.approx(expected, rel=1e-5), (
+    # rel=1e-3, AND THE NUMBER IS SIZED AGAINST BOTH SIDES RATHER THAN WIDENED UNTIL GREEN.
+    # The evaluator runs the model under CUDA autocast while this independent answer runs it in
+    # plain float32, so the two agree only to bf16 accumulation noise: measured 5.733294 against
+    # 5.731090, a relative 3.85e-4 that a rel=1e-5 tolerance rejects. That is precision, not
+    # position. The defect this test exists to catch -- reading `mask[off:off+seq]` instead of
+    # `mask[off+1:off+seq+1]`, i.e. scoring the NEIGHBOURING token -- moves the CE by O(0.1-1)
+    # nats, because per-position CEs of an untrained model are independent draws around
+    # ln(512) = 6.24. So rel=1e-3 (tolerance 5.7e-3) sits 17x above the precision noise and still
+    # 17x below the smallest defect signal; the guard keeps its teeth on both sides.
+    assert out["bands"]["0"]["sum"] == pytest.approx(expected, rel=1e-3), (
         "the mask selected a different position than the target it indexes"
     )
 
