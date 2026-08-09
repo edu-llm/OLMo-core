@@ -353,10 +353,10 @@ def test_commands_docs_and_reader_contract_are_complete():
     assert "$EDULLM_CHECKPOINT_DIR" in run_yaml
     assert "--param-dtype bfloat16" in run_yaml
     assert "reservoir-dolma2-v1" in guide
-    assert "20 cells" in guide
+    assert "12 cells" in guide
     assert "10 mLSTM" in guide
     assert "TPP 1.53724–1.53735" in guide
-    assert "--fanout-size 20" in guide
+    assert "--fanout-size 12" in guide
 
 
 def test_platform_dockerfile_pins_builds_and_asserts_sm80_symbols():
