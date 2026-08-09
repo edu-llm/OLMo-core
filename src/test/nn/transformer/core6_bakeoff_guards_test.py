@@ -287,9 +287,27 @@ def test_every_parameter_engages_after_one_step(name: str):
     # gradient -- a zero-initialised branch, a detached path, a decorative gate -- moves EXACTLY
     # ZERO at any learning rate whatsoever. Rescaling rescues only the parameters that had a real
     # gradient all along. The failure mode this test exists to catch is untouched; the false
-    # positive is removed. Margin after the change is ~55x floor for a healthy parameter, and the
-    # fireability assertion below proves the guard can still condemn something.
-    optimizer = torch.optim.SGD(mixer.parameters(), lr=10.0)
+    # positive is removed, and the fireability assertion below proves the guard can still condemn
+    # something.
+    #
+    # 100, NOT 10, AND THE NUMBER IS MEASURED RATHER THAN GUESSED. At lr=10 this still failed on
+    # `K2` (dt_bias alone) and on `GDN2` (six parameters). A direct gradient probe on the GPU --
+    # same `_tiny_mixer`, same float32, same objective -- showed every one of those parameters has
+    # a real non-zero gradient and is merely LARGE, so a genuine update lands under a floor that is
+    # RELATIVE to the parameter's own magnitude:
+    #
+    #   GDN2 @ lr=10   dt_bias    grad 2.79e-05  |p| 0.0961  moved 2.79e-04  floor 3.76e-04  0.74x
+    #                  w_a.1      grad 3.41e-05  |p| 0.1250  moved 3.41e-04  floor 4.88e-04  0.70x
+    #                  q_conv1d   grad 1.54e-04  |p| 0.5000  moved 1.54e-03  floor 1.95e-03  0.79x
+    #                  o_norm     grad 2.48e-04  |p| 1.0000  moved 2.48e-03  floor 3.91e-03  0.63x
+    #   GDN2 @ lr=100  every parameter clears its floor. Same for K2 and KDA_BASE at both rates.
+    #
+    # Sitting at 0.63-0.79x of a threshold is the signature of a marginal threshold, not a dead
+    # branch -- and `K2` passed the probe at lr=10 while failing the gate at lr=10, i.e. it was
+    # oscillating across the line run to run. A guard whose verdict depends on run-to-run noise
+    # decides nothing. 100 puts the healthy population an order of magnitude clear while a
+    # zero-gradient parameter stays pinned at exactly zero.
+    optimizer = torch.optim.SGD(mixer.parameters(), lr=100.0)
 
     torch.manual_seed(0)
     x = torch.randn(1, 32, d_model, device=device, dtype=torch.bfloat16)
@@ -384,7 +402,12 @@ def test_the_lowrank_gate_down_projection_is_zero_then_wakes_up():
     conv = GatedCausalConv1d(
         hidden_size=32, kernel_size=4, gate_structure="lowrank", d_model=16, gate_rank=8
     ).to(device)
-    conv.init_gate_weights(std=0.02, generator=torch.Generator().manual_seed(0))
+    # The generator must live on the module's device. `torch.Generator()` defaults to the CPU, and
+    # the init draws into CUDA parameters -- "Expected a 'cuda' device type for generator but found
+    # 'cpu'". Invisible on a laptop, where both are the CPU.
+    conv.init_gate_weights(
+        std=0.02, generator=torch.Generator(device=device).manual_seed(0)
+    )
     with torch.no_grad():
         conv.conv.weight.normal_(0.0, 0.1)
 

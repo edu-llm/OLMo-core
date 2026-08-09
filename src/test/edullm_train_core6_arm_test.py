@@ -284,12 +284,16 @@ def test_the_band_mask_lines_up_with_the_targets_and_not_the_inputs(tmp_path):
     assert out["bands"]["0"]["n"] == 1, "exactly one position was marked"
 
     # The independent answer: CE of the target at `marked`, which is predicted from `marked-1`.
+    # Built on the MODEL's device, not the default one: `TinyLM` now places itself on cuda when a
+    # GPU is visible (see its docstring), so a CPU `arange` here reproduces the same mismatch in
+    # reverse -- "index is on cpu, different from other tensors on cuda:0" inside F.embedding.
+    dev = next(model.parameters()).device
     with torch.no_grad():
-        logits = model(torch.arange(n_tokens - 1, dtype=torch.int64).unsqueeze(0))[0]
+        logits = model(torch.arange(n_tokens - 1, dtype=torch.int64, device=dev).unsqueeze(0))[0]
         expected = float(
             torch.nn.functional.cross_entropy(
                 logits[marked - 1].unsqueeze(0),
-                torch.tensor([marked]),
+                torch.tensor([marked], device=dev),
                 reduction="none",
             )
         )
