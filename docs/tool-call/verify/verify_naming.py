@@ -26,9 +26,7 @@ print("=== partition glob matching (fnmatch on basename OR full path) ===")
 GLOBS = {"train": "train-*.jsonl", "heldout": "heldout-*.jsonl"}
 for name, glob in GLOBS.items():
     matched = [
-        p
-        for p in PATHS
-        if fnmatch.fnmatch(p, glob) or fnmatch.fnmatch(p.rsplit("/", 1)[-1], glob)
+        p for p in PATHS if fnmatch.fnmatch(p, glob) or fnmatch.fnmatch(p.rsplit("/", 1)[-1], glob)
     ]
     print(f"  {name:8s} glob={glob!r} matches {len(matched)}:")
     for m in matched:
@@ -36,8 +34,8 @@ for name, glob in GLOBS.items():
 
 print()
 print("=== disjointness (coverage='partition' requires no overlap) ===")
-t = {p for p in PATHS if fnmatch.fnmatch(p.rsplit('/', 1)[-1], GLOBS['train'])}
-h = {p for p in PATHS if fnmatch.fnmatch(p.rsplit('/', 1)[-1], GLOBS['heldout'])}
+t = {p for p in PATHS if fnmatch.fnmatch(p.rsplit("/", 1)[-1], GLOBS["train"])}
+h = {p for p in PATHS if fnmatch.fnmatch(p.rsplit("/", 1)[-1], GLOBS["heldout"])}
 print(f"  train={len(t)} heldout={len(h)} overlap={t & h or 'none'}")
 
 print()

@@ -34,10 +34,14 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Sequence
 
-CALL_OPEN = "<function_calls>"
-CALL_CLOSE = "</function_calls>"
-FUNCS_OPEN = "<functions>"
-FUNCS_CLOSE = "</functions>"
+# Take the delimiters from the runtime rather than restating them. `olmo_core.tools.protocol` is
+# what actually parses the model's output at inference, so if these ever diverge the dataset trains
+# a format the runtime cannot read. Importing is the cheapest way to make that impossible.
+from olmo_core.tools.protocol import FUNCTION_CALLS_END as CALL_CLOSE  # noqa: E402
+from olmo_core.tools.protocol import FUNCTION_CALLS_START as CALL_OPEN  # noqa: E402
+from olmo_core.tools.protocol import FUNCTIONS_END as FUNCS_CLOSE  # noqa: E402
+from olmo_core.tools.protocol import FUNCTIONS_START as FUNCS_OPEN  # noqa: E402
+from olmo_core.tools.protocol import parse_function_calls  # noqa: E402
 
 #: The template emits ``' <functions>'`` — with a leading space — on the per-message path, which is
 #: the path AI2's own training bytes took. Proven byte-identical in
@@ -54,7 +58,12 @@ DEFAULT_PREAMBLE = (
 #: JSON spellings of the three values whose Python and JSON forms differ.
 _JSON_NAMES = {"true": True, "false": False, "null": None}
 
-_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")
+#: Flat identifiers only. The runtime parser requires ``ast.Name`` for the callee
+#: (`olmo_core/tools/protocol.py`, ``_parse_call``), so a dotted name like
+#: ``weather.forecast_weather_api`` raises ``ToolCallParseError`` at inference. Upstream corpora are
+#: full of dotted names, so reformatting must flatten them with :func:`flatten_tool_name` rather
+#: than pass them through — otherwise we train the model to emit calls our own runtime rejects.
+_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 @dataclass(frozen=True)
@@ -110,6 +119,22 @@ class Call:
     arguments: dict[str, Any] = field(default_factory=dict)
 
 
+def flatten_tool_name(name: str) -> str:
+    """
+    Turn a dotted upstream tool name into the flat form the runtime can parse.
+
+    Upstream corpora are full of names like ``weather.forecast_weather_api`` and
+    ``combinatorics.permutation_count``. The runtime's parser requires a plain ``ast.Name``, so a
+    dotted call raises at inference. Reformatting must rename rather than pass through, and the
+    rename has to be applied to the *schema* as well as the call so the two still agree.
+
+    :param name: The upstream name, possibly dotted.
+
+    :returns: The same name with dots replaced by underscores.
+    """
+    return name.replace(".", "_")
+
+
 def serialize_call(call: Call) -> str:
     """
     Render one call in OLMo 3's Pythonic form.
@@ -125,9 +150,13 @@ def serialize_call(call: Call) -> str:
         argument name is not an identifier, or a value is not JSON-serialisable.
     """
     if not _NAME_RE.match(call.name):
-        raise ValueError(
-            f"function name {call.name!r} is not a plain (optionally dotted) identifier"
-        )
+        hint = ""
+        if "." in call.name:
+            hint = (
+                f" The runtime parser requires a flat name; use "
+                f"flatten_tool_name({call.name!r}) -> {flatten_tool_name(call.name)!r}."
+            )
+        raise ValueError(f"function name {call.name!r} is not a flat identifier.{hint}")
     parts = []
     for key, value in call.arguments.items():
         if not key.isidentifier():
@@ -164,7 +193,8 @@ def _literal(node: ast.AST) -> Any:
         return {_literal(k): _literal(v) for k, v in zip(node.keys, node.values) if k is not None}
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
         inner = _literal(node.operand)
-        if isinstance(inner, (int, float)):
+        # bool subclasses int, so guard it explicitly or `-true` silently becomes -1.
+        if isinstance(inner, (int, float)) and not isinstance(inner, bool):
             return -inner
     raise ValueError(f"argument value is not a JSON literal: {ast.dump(node)[:80]}")
 
@@ -401,6 +431,38 @@ def parse_row(row: dict[str, Any]) -> ParsedRow:
     return ParsedRow(schemas=schemas, user=users[-1]["content"], calls=calls, prose=None)
 
 
+def assert_runtime_parseable(row: dict[str, Any]) -> None:
+    """
+    Assert the runtime can read what we wrote.
+
+    This is the train/serve contract, and it is the one check worth running on every row. The
+    dataset teaches the model to emit a string; ``olmo_core.tools.protocol.parse_function_calls``
+    is what turns that string back into a call at inference. If a row we ship cannot survive that
+    function, we are training a behaviour our own runtime rejects — and the failure would only show
+    up after training, as a model that emits something nothing can execute.
+
+    :param row: A row from :func:`build_row`.
+
+    :raises ValueError: If the runtime parser refuses the assistant turn, or recovers a different
+        call than we serialised.
+    """
+    content = row["messages"][-1]["content"]
+    ours = parse_row(row).calls
+    try:
+        theirs = parse_function_calls(content)
+    except Exception as e:  # ToolCallParseError, but do not couple to the type here
+        raise ValueError(f"the runtime parser rejects this row: {e}") from e
+
+    if len(ours) != len(theirs):
+        raise ValueError(f"we serialised {len(ours)} call(s); the runtime recovered {len(theirs)}")
+    for mine, runtime in zip(ours, theirs):
+        if mine.name != runtime.name or mine.arguments != runtime.arguments:
+            raise ValueError(
+                f"runtime disagreement: we wrote {mine.name}({mine.arguments!r}), "
+                f"the runtime read {runtime.name}({runtime.arguments!r})"
+            )
+
+
 def assert_round_trip(row: dict[str, Any]) -> ParsedRow:
     """
     Parse a row and re-render it, asserting the bytes are unchanged.
@@ -435,4 +497,5 @@ def iter_jsonl(rows: Iterable[dict[str, Any]]) -> Iterable[str]:
     """
     for row in rows:
         assert_round_trip(row)
+        assert_runtime_parseable(row)
         yield json.dumps(row, ensure_ascii=False)

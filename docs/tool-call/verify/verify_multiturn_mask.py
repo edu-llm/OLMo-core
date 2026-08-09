@@ -35,8 +35,8 @@ ROWS_URL = (
     "https://datasets-server.huggingface.co/first-rows"
     "?dataset=allenai%2FDolci-Instruct-SFT-Tool-Use&config=default&split=train"
 )
-REAL_EOS = "<|endoftext|>"   # dolma2 / olmo-3-instruct eos, id 100257
-IM_END = "<|im_end|>"        # id 100265
+REAL_EOS = "<|endoftext|>"  # dolma2 / olmo-3-instruct eos, id 100257
+IM_END = "<|im_end|>"  # id 100265
 
 
 def fetch(url: str) -> bytes:
@@ -107,8 +107,10 @@ MULTI = SINGLE + [
 print("=" * 72)
 print("1. THE MECHANISM")
 print("=" * 72)
-for name, msgs in [("single-turn (1 assistant, final)", SINGLE),
-                   ("multi-turn (2 assistants)", MULTI)]:
+for name, msgs in [
+    ("single-turn (1 assistant, final)", SINGLE),
+    ("multi-turn (2 assistants)", MULTI),
+]:
     ok, notes = prefix_stable(msgs, eos=REAL_EOS)
     print(f"\n  {name}  eos={REAL_EOS!r}  ->  {'OK' if ok else 'RAISES'}")
     for n in notes:
@@ -141,8 +143,10 @@ print(f"\n  {len(MULTI)}-message conversation -> {len(splits)} prefix rows")
 for s in splits:
     ok, _ = prefix_stable(s, eos=REAL_EOS)
     n_asst = sum(1 for m in s if m["role"] == "assistant")
-    print(f"    {len(s)} msgs, {n_asst} assistant turn(s), roles="
-          f"{'/'.join(m['role'][:4] for m in s)}  -> {'OK' if ok else 'RAISES'}")
+    print(
+        f"    {len(s)} msgs, {n_asst} assistant turn(s), roles="
+        f"{'/'.join(m['role'][:4] for m in s)}  -> {'OK' if ok else 'RAISES'}"
+    )
 print("\n  The longer prefix row STILL RAISES, because it still contains a NON-FINAL")
 print("  assistant turn. Splitting at assistant boundaries does not remove the problem;")
 print("  it only removes it from the shortest row. Rejected on evidence, not on taste.")
@@ -157,7 +161,8 @@ print()
 print("=" * 72)
 print("4. THE ACTUAL FIX — open-instruct already has a flag for this")
 print("=" * 72)
-print("""
+print(
+    """
   Read from open_instruct/dataset_transformation.py (fetched, not recalled):
 
     1212:  last_turn_only: bool = False,
@@ -178,7 +183,8 @@ print("""
   that only the FINAL assistant turn is trainable; earlier tool calls become
   masked context. On a 21-message Dolci row with 10 assistant turns that trains
   1 of 10.
-""")
+"""
+)
 
 print()
 print("=" * 72)
@@ -187,17 +193,26 @@ print("=" * 72)
 rows = json.loads(fetch(ROWS_URL))["rows"]
 affected = 0
 for idx, e in enumerate(rows[:8]):
-    msgs = [{"role": m["role"],
-             "content": (m.get("content") or "")
-             + (f"<function_calls>{m['function_calls']}</function_calls>"
-                if m.get("function_calls") else "")}
-            for m in e["row"]["messages"]]
+    msgs = [
+        {
+            "role": m["role"],
+            "content": (m.get("content") or "")
+            + (
+                f"<function_calls>{m['function_calls']}</function_calls>"
+                if m.get("function_calls")
+                else ""
+            ),
+        }
+        for m in e["row"]["messages"]
+    ]
     n_asst = sum(1 for m in msgs if m["role"] == "assistant")
     ok, _ = prefix_stable(msgs, eos=REAL_EOS)
     if not ok:
         affected += 1
-    print(f"  row {idx}: {len(msgs):2d} msgs, {n_asst:2d} assistant turns -> "
-          f"{'OK' if ok else 'RAISES'}")
+    print(
+        f"  row {idx}: {len(msgs):2d} msgs, {n_asst:2d} assistant turns -> "
+        f"{'OK' if ok else 'RAISES'}"
+    )
 print(f"\n  {affected}/8 sampled real rows fail under last_turn_only=False.")
 print("  All 8 would PASS under last_turn_only=True, since only the final turn is checked.")
 
@@ -209,8 +224,10 @@ single_ok, _ = prefix_stable(SINGLE, eos=REAL_EOS)
 multi_ok, _ = prefix_stable(MULTI, eos=REAL_EOS)
 print(f"  single-turn, real eos, default transform : {'OK' if single_ok else 'RAISES'}")
 print(f"  multi-turn,  real eos, default transform : {'OK' if multi_ok else 'RAISES'}")
-print(f"  multi-turn,  eos forced to <|im_end|>    : "
-      f"{'OK' if prefix_stable(MULTI, eos=IM_END)[0] else 'RAISES'}  (but loses the 100257 doc boundary)")
+print(
+    f"  multi-turn,  eos forced to <|im_end|>    : "
+    f"{'OK' if prefix_stable(MULTI, eos=IM_END)[0] else 'RAISES'}  (but loses the 100257 doc boundary)"
+)
 print("  multi-turn,  last_turn_only=True         : OK (only the final turn is checked)")
 print()
 print("  Ranked fixes:")

@@ -51,9 +51,20 @@ def test_call_matches_the_template_form():
     assert ser.serialize_call(call) == 'get_weather(city="Boston", days=5)'
 
 
-def test_dotted_function_names_survive():
-    call = ser.Call("weather.forecast_weather_api", {"q": "Paris"})
-    assert ser.serialize_call(call) == 'weather.forecast_weather_api(q="Paris")'
+def test_dotted_function_names_are_refused():
+    """The runtime parser requires ``ast.Name``, so a dotted call raises at inference.
+
+    Upstream corpora are full of them, so this must fail loudly at write time rather than produce
+    a row that trains the model to emit something our own runtime rejects.
+    """
+    with pytest.raises(ValueError, match="flat identifier"):
+        ser.serialize_call(ser.Call("weather.forecast_weather_api", {"q": "Paris"}))
+
+
+def test_flatten_gives_a_name_that_serializes():
+    flat = ser.flatten_tool_name("weather.forecast_weather_api")
+    assert flat == "weather_forecast_weather_api"
+    call = ser.Call(flat, {"q": "Paris"})
     assert ser.parse_call(ser.serialize_call(call)) == call
 
 
@@ -269,6 +280,35 @@ def test_iter_jsonl_emits_one_valid_line_per_row():
 
 
 # ==================== it feeds the producer ====================
+
+
+def test_the_runtime_parser_reads_back_exactly_what_we_wrote():
+    """The train/serve contract: olmo_core.tools is what parses the model's output at inference."""
+    calls = [
+        ser.Call("calculator", {"expression": "5219 * 47"}),
+        ser.Call("web_search", {"query": "olmo 3", "max_results": 3}),
+    ]
+    row = ser.build_row(schemas=[WEATHER], user="q", calls=calls)
+    ser.assert_runtime_parseable(row)  # raises if the runtime disagrees
+
+    recovered = ser.parse_function_calls(row["messages"][-1]["content"])
+    assert [(c.name, c.arguments) for c in recovered] == [(c.name, c.arguments) for c in calls]
+
+
+def test_runtime_parser_sees_no_calls_in_an_abstention_row():
+    row = ser.build_row(schemas=[WEATHER], user="who wrote Hamlet?", prose="Shakespeare.")
+    assert ser.parse_function_calls(row["messages"][-1]["content"]) == []
+    ser.assert_runtime_parseable(row)
+
+
+def test_iter_jsonl_enforces_the_runtime_contract():
+    """Every emitted line has been through the runtime parser, not just our own."""
+    rows = [
+        ser.build_row(
+            schemas=[WEATHER], user="a", calls=[ser.Call("calculator", {"expression": "1+1"})]
+        )
+    ]
+    assert len(list(ser.iter_jsonl(rows))) == 1
 
 
 def test_serialized_rows_are_accepted_by_the_producer():

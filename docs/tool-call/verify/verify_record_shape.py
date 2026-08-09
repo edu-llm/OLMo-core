@@ -76,7 +76,7 @@ PARALLEL = {
         {
             "role": "assistant",
             "content": '<function_calls>get_weather(city="Paris")\n'
-                       'get_weather(city="Madrid")</function_calls>',
+            'get_weather(city="Madrid")</function_calls>',
         },
     ]
 }
@@ -141,5 +141,11 @@ from edullm_data.manifest import (  # noqa: E402
 print("  .jsonl    claims:", EXTENSION_FORMAT[".jsonl"])
 print("  .jsonl.gz claims:", EXTENSION_FORMAT[".jsonl.gz"])
 p = "conversations/general/single-call/train-00000.jsonl"
-print("  codec=none ->", check_extension_matches_format(p, Format(container="jsonl", codec="none")) or "OK")
-print("  codec=gzip ->", check_extension_matches_format(p, Format(container="jsonl", codec="gzip")) or "OK")
+print(
+    "  codec=none ->",
+    check_extension_matches_format(p, Format(container="jsonl", codec="none")) or "OK",
+)
+print(
+    "  codec=gzip ->",
+    check_extension_matches_format(p, Format(container="jsonl", codec="gzip")) or "OK",
+)

@@ -11,17 +11,19 @@ them as inputs:
 **Tools.** Some tools appear only in the test set. A test question then offers a function the model
 has never seen and asks it to call it correctly from the description alone. The rule is *hold out
 the sibling, not the orphan*: holding out a lone tool nobody trained on measures nothing, whereas
-holding out ``differentiate_expression`` while training ``integrate_expression`` measures whether
-the model transfers what it learned about one to the other.
+holding out ``percent_change`` while training ``compound_interest`` measures whether the model
+transfers what it learned about one to the other.
 
 **Question phrasings.** Unseen tools are not enough on their own. If test questions come from the
 same phrase templates as training, the model can match the sentence shape and slot the new name in.
 That looks like generalisation and is really template recall. So the phrasing bank is split too.
 
-Two tools cannot be held out at all: ``calculator`` and ``web_search`` are each the dominant tool of
-their domain and have to be in training. For their cells the substitute axis on the domain applies
-(operand magnitude for arithmetic, an entity bank for web-search), and "heldout measures schema
-generalisation" is simply false there and must not be claimed.
+**The three tools that really exist are never held out.** ``calculator``, ``symbolic_math`` and
+``web_search`` ship in ``olmo_core.tools`` and the served model can actually invoke them, so they
+are what it most needs to be good at — holding one out would trade real capability for a
+measurement. Their cells fall back to the substitute axis recorded on the domain (operand magnitude
+for arithmetic, an entity bank for web-search), and for those cells "heldout measures schema
+generalisation" is simply false and must not be claimed.
 """
 
 from __future__ import annotations
@@ -34,6 +36,36 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 REGISTRY_PATH = Path("docs/tool-call/frozen/tool_registry.json")
+
+#: Tools that exist and run in `olmo_core.tools`. These are the ones the served model can actually
+#: invoke, so they are the ones it most needs to be good at — and two of them execute, which means
+#: rows targeting them can be verified by comparing against a computed result rather than only
+#: checking the call's shape. None of them may be held out: holding out a tool the product ships
+#: would trade real capability for a measurement.
+IMPLEMENTED_TOOLS = ("calculator", "symbolic_math", "web_search")
+
+
+def implemented_schemas() -> dict[str, dict[str, Any]]:
+    """
+    Read the live tool schemas out of ``olmo_core.tools``.
+
+    Transcribing them into the frozen registry would let the dataset drift away from the runtime
+    silently — the model would train against one description and meet another at inference. So the
+    schemas are read from the code that serves them.
+
+    :returns: Name -> the ``function`` half of each tool's JSON schema.
+
+    :raises ImportError: If the tools package is unavailable.
+    """
+    from olmo_core.tools import CalculatorTool, StaticBackend, SymbolicMathTool, WebSearchTool
+
+    tools = [
+        CalculatorTool(),
+        SymbolicMathTool(),
+        WebSearchTool(backend=StaticBackend(results=[])),
+    ]
+    return {t.json_schema()["function"]["name"]: t.json_schema()["function"] for t in tools}
+
 
 #: Fraction of the phrasing bank reserved for the test set.
 HELDOUT_TEMPLATE_FRACTION = 0.15
@@ -61,6 +93,7 @@ class Tool:
     held_out: bool = False
     sibling_of: str | None = None
     cannot_hold_out: bool = False
+    implemented: bool = False
 
 
 @dataclass(frozen=True)
@@ -127,6 +160,7 @@ def load_registry(path: Path = REGISTRY_PATH) -> Registry:
             held_out=bool(t.get("held_out", False)),
             sibling_of=t.get("sibling_of"),
             cannot_hold_out=bool(t.get("cannot_hold_out", False)),
+            implemented=bool(t.get("implemented", False)),
         )
         for t in raw["tools"]
     )
@@ -136,6 +170,16 @@ def load_registry(path: Path = REGISTRY_PATH) -> Registry:
         if t.name in seen:
             raise ValueError(f"duplicate tool name {t.name!r}; gate 5 forbids two schemas per name")
         seen.add(t.name)
+        if "." in t.name:
+            raise ValueError(
+                f"tool name {t.name!r} is dotted. The runtime parser requires a flat name, so a "
+                f"dotted tool would train the model to emit calls inference cannot read."
+            )
+        if t.implemented and t.held_out:
+            raise ValueError(
+                f"{t.name!r} is implemented and shipped, so holding it out trades real capability "
+                f"for a measurement. Hold out an authored sibling instead."
+            )
 
     for t in tools:
         if t.held_out and t.cannot_hold_out:
@@ -160,6 +204,35 @@ def load_registry(path: Path = REGISTRY_PATH) -> Registry:
                 raise ValueError(f"{t.name!r} and sibling {sib.name!r} are in different domains")
 
     return Registry(tools=tools, domains=raw.get("domains", {}))
+
+
+def validate_against_runtime(registry: Registry) -> None:
+    """
+    Check the registry still agrees with the tools ``olmo_core.tools`` actually ships.
+
+    Kept separate from :func:`load_registry` so unit tests can build small fixture registries, and
+    so this can run as its own CI gate. If someone adds a tool to the runtime, or renames one, this
+    is what notices before the dataset is generated against a stale name.
+
+    :param registry: A loaded registry.
+
+    :raises ValueError: If the implemented set disagrees with the runtime, or a schema differs.
+    """
+    declared = {t.name for t in registry.tools if t.implemented}
+    if declared != set(IMPLEMENTED_TOOLS):
+        raise ValueError(
+            f"registry marks {sorted(declared)} as implemented but olmo_core.tools ships "
+            f"{sorted(IMPLEMENTED_TOOLS)}"
+        )
+    live = implemented_schemas()
+    missing = set(IMPLEMENTED_TOOLS) - set(live)
+    if missing:
+        raise ValueError(f"olmo_core.tools no longer exposes {sorted(missing)}")
+    for name in declared:
+        tool = registry.by_name(name)
+        assert tool is not None
+        if tool.domain not in {"arithmetic", "web-search"}:
+            raise ValueError(f"implemented tool {name!r} sits in unexpected domain {tool.domain!r}")
 
 
 def split_templates(
@@ -296,6 +369,18 @@ def summarise(registry: Registry) -> str:
     lines.append(
         f"\nTOTAL {total} tools, {held_total} held out ({100.0 * held_total / total:.1f}%)"
     )
+    impl = [t for t in registry.tools if t.implemented]
+    lines.append(
+        f"\n{len(impl)} are IMPLEMENTED in olmo_core.tools, so the served model can really call "
+        f"them:"
+    )
+    for t in impl:
+        runs = "EXECUTES - verify by value" if t.exec_kind == "value" else "no deterministic result"
+        lines.append(f"    {t.name:16s} {t.domain:12s} {runs}")
+    lines.append(
+        f"\nThe other {total - len(impl)} are authored schemas, there so the model learns to read a"
+        f"\ntool description it has never seen. A model trained on three tools memorises three."
+    )
     return "\n".join(lines)
 
 
@@ -308,7 +393,14 @@ def main() -> None:
     args = p.parse_args()
     registry = load_registry(args.registry)
     print(summarise(registry))
-    print("\nregistry validates: every held-out tool has a trained sibling, no duplicate names.")
+    print("\nregistry validates: flat names, no duplicates, every held-out tool has a trained")
+    print("sibling, and no implemented tool is held out.")
+    try:
+        validate_against_runtime(registry)
+    except ImportError as e:
+        print(f"\ncould not check against olmo_core.tools: {e}")
+    else:
+        print("and it agrees with the tools olmo_core.tools actually ships.")
 
 
 if __name__ == "__main__":

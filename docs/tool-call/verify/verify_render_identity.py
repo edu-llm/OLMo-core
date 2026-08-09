@@ -58,9 +58,7 @@ def build_env(source: str):
 
 
 def render(tmpl, messages, tools=None) -> str:
-    return tmpl.render(
-        messages=messages, tools=tools, eos_token=EOS, add_generation_prompt=False
-    )
+    return tmpl.render(messages=messages, tools=tools, eos_token=EOS, add_generation_prompt=False)
 
 
 def inline(messages: list[dict]) -> list[dict]:
@@ -117,8 +115,10 @@ for idx, entry in enumerate(rows[:5]):
     same = theirs == ours
 
     roles = "/".join(m["role"][:4] for m in theirs_msgs)
-    print(f"row {idx}  turns={len(theirs_msgs):2d} [{roles}]  bytes={len(theirs):6d}  "
-          f"IDENTICAL={same}")
+    print(
+        f"row {idx}  turns={len(theirs_msgs):2d} [{roles}]  bytes={len(theirs):6d}  "
+        f"IDENTICAL={same}"
+    )
     if not same:
         allsame = False
         show_diff(theirs, ours)
@@ -138,7 +138,10 @@ print(f"  any content None? {any(m['content'] is None for m in ours0)}")
 
 print()
 print("=== VERDICT ===")
-print("  byte-identical on every row checked:" if allsame else "  MISMATCH -- see diffs above:", allsame)
+print(
+    "  byte-identical on every row checked:" if allsame else "  MISMATCH -- see diffs above:",
+    allsame,
+)
 if allsame:
     print("  => we inherit OLMo's exact token stream, and the call sits inside `content`")
     print("     where sft-conversations/v1's leakage key can reach it.")

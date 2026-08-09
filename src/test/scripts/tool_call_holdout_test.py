@@ -37,8 +37,8 @@ def registry():
 
 
 def test_shipped_registry_loads_and_matches_the_design(registry):
-    assert len(registry.tools) == 64
-    assert len(registry.heldout_names()) == 10
+    assert len(registry.tools) == 57
+    assert len(registry.heldout_names()) == 9
 
 
 def test_every_held_out_tool_has_a_trained_sibling(registry):
@@ -51,12 +51,28 @@ def test_every_held_out_tool_has_a_trained_sibling(registry):
         assert sibling.domain == tool.domain
 
 
+def test_registry_agrees_with_the_tools_olmo_core_actually_ships(registry):
+    """If someone adds or renames a runtime tool, this fails before data is generated."""
+    holdout.validate_against_runtime(registry)
+
+
+def test_no_implemented_tool_is_held_out(registry):
+    """Holding out a tool the product ships trades real capability for a measurement."""
+    for name in holdout.IMPLEMENTED_TOOLS:
+        assert not registry.by_name(name).held_out
+
+
+def test_every_registry_name_is_flat(registry):
+    """A dotted name raises in the runtime parser, so it must never reach the data."""
+    assert [t.name for t in registry.tools if "." in t.name] == []
+
+
 def test_training_pool_never_contains_a_held_out_tool(registry):
     assert not (registry.pool(split="train") & registry.heldout_names())
 
 
 def test_dominant_tools_are_flagged_as_unholdable(registry):
-    for name in ("calculator", "web_search"):
+    for name in ("calculator", "symbolic_math", "web_search"):
         tool = registry.by_name(name)
         assert tool.cannot_hold_out
         assert not tool.held_out
@@ -140,10 +156,8 @@ def test_growing_the_bank_never_moves_an_existing_template():
 # ==================== corpus checking ====================
 
 
-TOOL = ser.ToolSchema("integrate_expression", "Integrate.", {"type": "object", "properties": {}})
-HELD = ser.ToolSchema(
-    "differentiate_expression", "Differentiate.", {"type": "object", "properties": {}}
-)
+TOOL = ser.ToolSchema("compound_interest", "Future value.", {"type": "object", "properties": {}})
+HELD = ser.ToolSchema("percent_change", "Percent change.", {"type": "object", "properties": {}})
 
 
 def _row(schemas, call_name):
@@ -154,11 +168,11 @@ def test_clean_corpus_reports_no_violations(registry):
     rows = [
         (
             "conversations/arithmetic/single-call/train-00000.jsonl",
-            _row([TOOL], "integrate_expression"),
+            _row([TOOL], "compound_interest"),
         ),
         (
             "conversations/arithmetic/single-call/heldout-00000.jsonl",
-            _row([HELD, TOOL], "differentiate_expression"),
+            _row([HELD, TOOL], "percent_change"),
         ),
     ]
     report = holdout.check_corpus(rows, registry, parse_row=ser.parse_row)
@@ -171,7 +185,7 @@ def test_catches_a_held_out_tool_offered_in_training(registry):
     rows = [
         (
             "conversations/arithmetic/single-call/train-00000.jsonl",
-            _row([HELD], "differentiate_expression"),
+            _row([HELD], "percent_change"),
         )
     ]
     report = holdout.check_corpus(rows, registry, parse_row=ser.parse_row)
@@ -208,7 +222,7 @@ def test_catches_a_row_filed_under_the_wrong_domain(registry):
     rows = [
         (
             "conversations/pedagogy/single-call/train-00000.jsonl",
-            _row([TOOL], "integrate_expression"),
+            _row([TOOL], "compound_interest"),
         )
     ]
     report = holdout.check_corpus(rows, registry, parse_row=ser.parse_row)

@@ -47,6 +47,31 @@ right shape and does not need regenerating.
 | Record layout | **Tool call serialized into the assistant message `content`** — we adopt OLMo's *rendered bytes*, not its *row layout* | Forced by the validator, measured against a real Dolci row: AI2 parks the call in a sibling `function_calls` field with `content: null`, which makes two rows with different calls hash identically (`COLLIDE=True`). Inlining renders byte-identical output while keeping the call where the leakage key can see it. See `dataset-design.md` §2–§3 |
 | Category axis | `<category>` in the path is a **capability band**, not a tool family | Two path levels is the entire budget. Tool family in the path would make "is parallel calling worse on edu tools" unanswerable — the one cross-domain question the domain split exists to answer |
 
+## 3b. The runtime already exists — generate against it
+
+`src/olmo_core/tools/` (merged to `main` from the `toolCall` branch) is the **inference** half of
+this problem: a parser, a registry, an agentic loop, and three working tools — `calculator`,
+`symbolic_math` and `web_search`. It arrived at the same wire format independently.
+
+Two consequences the dataset must honour:
+
+1. **Schemas come from the code, never from a doc.** The three implemented tools' schemas are read
+   out of `olmo_core.tools` at validation time. Transcribing them would let the dataset drift, and
+   the model would train against one description and meet another at serving time.
+2. **Flat tool names only.** The runtime parser requires `ast.Name`, so a dotted name like
+   `weather.forecast_weather_api` **raises at inference**. Upstream corpora are full of them, so the
+   reformat pass flattens with `flatten_tool_name()`. The serializer refuses dotted names outright.
+
+**The contract is enforced, not documented:** every row goes through
+`olmo_core.tools.protocol.parse_function_calls` and must yield the same call we wrote. And because
+`calculator` and `symbolic_math` genuinely execute, their rows' `expected_result` is *computed*
+rather than authored — the executable-verification step the design asked for already exists.
+
+`calculator`, `symbolic_math` and `web_search` are **never held out**: holding out a tool the product
+ships would trade real capability for a measurement. The other 54 schemas are authored, and they earn
+their place because a model trained on three tools memorises three tools — the skill is reading a
+description it has never seen.
+
 ## 4. Deliverables
 
 1. **`sft/tool-call-single-turn`** — profile `sft-conversations/v1`, **40,000 rows** (train 36,000 /

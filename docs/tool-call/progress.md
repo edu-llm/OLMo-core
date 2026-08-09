@@ -276,4 +276,33 @@ Anything longer belongs in [`prd.md`](prd.md) or [`dataset-design.md`](dataset-d
   any. **Our producer is unaffected** (it reproduces the shipped template, not the registry one);
   `verify/verify_template_choice.py` demonstrates the damage so nobody reintroduces it.
 
+- **Merged `main`, and rewired the dataset onto the tools that actually exist.** A parallel branch
+  (`toolCall`, already merged to `main`) built the **inference** half: `src/olmo_core/tools/` with a
+  format parser, a tool registry, an agentic loop, and three working tools —
+  **`calculator`**, **`symbolic_math`** (both of which *execute*) and **`web_search`**. Independent
+  convergence on the wire format, and they hit the **same `true`/`false`/`null` AST bug** we did and
+  fixed it the same way.
+- **Train/serve mismatch found and closed: dotted tool names.** Their parser requires `ast.Name`
+  (`protocol.py` `_parse_call`), so `weather.forecast_weather_api(...)` **raises at inference** — and
+  upstream corpora are full of dotted names. Our serializer now **refuses** them at write time and
+  ships `flatten_tool_name()` for the reformat pass. The registry validator refuses them too, and it
+  immediately caught one we had copied verbatim from a Dolci row.
+- **New check, and it is the one that matters:** `assert_runtime_parseable` runs every row through
+  `olmo_core.tools.protocol.parse_function_calls` and asserts the runtime recovers *the same call*.
+  It is wired into `iter_jsonl`, so no row can be written that our own runtime cannot read.
+  `verify/verify_runtime_contract.py` proves the whole loop end to end, including **executing** the
+  recovered calls: `5219 * 47 -> 245293`, `x**2-4 solve -> [-2, 2]`, `x**3+2x diff -> 3*x**2 + 2`.
+  Those executed answers *are* the `expected_result` the design asked for — no stub to write.
+- **Serializer now imports the runtime's delimiters** rather than restating them, so the two cannot
+  drift. Also fixed: `-true` was silently becoming `-1` (bool subclasses int); now rejected.
+- **Registry v2, anchored on reality.** 64 → **57 tools, 9 held out (15.8%)**. Removed the invented
+  sympy/matrix tools that `symbolic_math`'s `operation` enum already covers. Three tools are marked
+  **`implemented`**, their schemas are **read from the live code** rather than transcribed, and
+  **none may be held out** — holding out a tool the product ships would trade real capability for a
+  measurement. `validate_against_runtime()` fails if anyone adds or renames a runtime tool.
+- **Kept 54 authored schemas deliberately.** A model trained on three tools memorises three tools;
+  the skill is reading a description it has never seen. So implemented tools carry the capability and
+  the execution-verified rows, while authored ones carry generalisation and the held-out carve.
+- Dataset size (40,000) and the general-SFT mixing ratio are unchanged, as instructed.
+
 <!-- next entry goes below -->

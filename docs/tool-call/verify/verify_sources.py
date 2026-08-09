@@ -86,8 +86,12 @@ for ds, _domain in CANDIDATES:
 print()
 print("=== Qwen3 generator: frontmatter tag vs the actual LICENSE file ===")
 print("(Qwen2.5-72B is the cautionary case — tag and file disagreed)")
-for model in ["Qwen/Qwen3-235B-A22B-Instruct-2507", "Qwen/Qwen2.5-72B-Instruct",
-              "mistralai/Mistral-Small-3.2-24B-Instruct-2506", "allenai/Olmo-3-7B-Instruct"]:
+for model in [
+    "Qwen/Qwen3-235B-A22B-Instruct-2507",
+    "Qwen/Qwen2.5-72B-Instruct",
+    "mistralai/Mistral-Small-3.2-24B-Instruct-2506",
+    "allenai/Olmo-3-7B-Instruct",
+]:
     try:
         m = api(f"models/{model}")
         tag = (m.get("cardData") or {}).get("license", "<NO TAG>")
