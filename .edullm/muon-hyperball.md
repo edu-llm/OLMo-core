@@ -270,6 +270,37 @@ Cost and approvals: read them from `edullm check --json` per spec, never from th
 human approval cycle per submission regardless of what `approval_class` says, for the reason in
 "Running it" above.
 
+### First grid, 2026-08-09 — MuonH brackets, MuonW does not
+
+All four bracket runs completed 7630/7630. Mean CE over the last 800 steps, the same statistic the
+headline result uses:
+
+| arm | LR | last-800 CE | PPL | |
+|---|---|---|---|---|
+| `muon_h` | 0.00707107 | 2.8639 | 17.529 | |
+| `muon_h` | **0.01** | **2.8561** | **17.393** | **best — centre, bracketed** |
+| `muon_h` | 0.01414214 | 2.8704 | 17.644 | |
+| `muon_w` | 0.01414214 | **2.8780** | **17.778** | **best — LOWER EDGE, not bracketed** |
+| `muon_w` | 0.02 | 2.8978 | 18.134 | |
+| `muon_w` | 0.02828427 | 2.9312 | 18.749 | |
+
+**MuonH is bracketed at 0.01.** The centre beats both neighbours, so 0.01 is its optimum to within a
+√2 step, and the original run was — by luck — already tuned. The invariant held on all three MuonH
+points: drift max 1.788e-07, 1.788e-07 and 2.384e-07, all still integer multiples of 2⁻²³ and all
+four orders below the 1e-5 threshold.
+
+**MuonW is not bracketed, and the trend is steeply monotone downward** — 2.9312 → 2.8978 → 2.8780 as
+the LR falls, with no sign of turning. Its optimum is at or below 0.01414214 and this grid says
+nothing about where. Extension runs at 0.01 and 0.00707107 are submitted together rather than
+serially, because the trend makes it likely both are needed and a serial round costs another 3h20m
+to learn what two parallel runs learn at once.
+
+**Do not quote a cross-arm number yet.** For the record, comparing each arm at its best *so far*
+gives MuonH ahead by 0.0219 nats (2.8561 vs 2.8780) — roughly **half** the 0.042 in the headline
+result above, which compared MuonH at its optimum against MuonW at a point now known to be
+mistuned. That 0.0219 is an upper bound on MuonH's advantage and will only shrink if MuonW improves
+further below 0.01414214. Whether anything survives is exactly what the extension runs decide.
+
 ### A defect this run exposed
 
 `optim/radius_relative_drift_max` reached W&B and nothing else. `ConsoleLoggerCallback` prints an
