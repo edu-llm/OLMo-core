@@ -1,0 +1,100 @@
+{
+  "_comment": [
+    "Frozen tool registry. Code reads this; docs/tool-call/tool-inventories.md describes it.",
+    "Gate 34 (domain must match the gold tool's domain) and the held-out carve both read it.",
+    "NEVER rename or renumber an entry once bytes are published - deprecate instead.",
+    "held_out: the tool appears ONLY in heldout rows, never in train.",
+    "sibling_of: the trained tool this one is held out against. Holding out an orphan measures",
+    "nothing; holding out the sibling of a trained tool measures schema generalization.",
+    "cannot_hold_out: a single dominant tool that must be in train, so its cells fall back to the",
+    "substitute carve axis recorded on the domain."
+  ],
+  "version": 1,
+  "domains": {
+    "general": {
+      "substitute_carve_axis": null,
+      "note": "Inventory is inherited from upstream too; hold out ~12% of the observed pool by name."
+    },
+    "arithmetic": {
+      "substitute_carve_axis": "operand magnitude band (train <=4 digit, heldout 5-7 digit) and operator depth",
+      "note": "calculator cannot be held out, so 'heldout measures schema generalization' is FALSE for its cells."
+    },
+    "web-search": {
+      "substitute_carve_axis": "held-out entity bank and held-out parameter combinations",
+      "note": "web_search cannot be held out; same caveat as arithmetic."
+    },
+    "pedagogy": {
+      "substitute_carve_axis": null,
+      "note": null
+    }
+  },
+  "tools": [
+    {"name": "weather.forecast_weather_api", "domain": "general", "exec": "bind"},
+    {"name": "create_calendar_event", "domain": "general", "exec": "bind"},
+    {"name": "create_github_issue", "domain": "general", "exec": "bind"},
+    {"name": "translate_text", "domain": "general", "exec": "bind"},
+    {"name": "get_directions", "domain": "general", "exec": "bind"},
+    {"name": "currency_convert", "domain": "general", "exec": "bind"},
+    {"name": "send_email", "domain": "general", "exec": "bind"},
+    {"name": "create_reminder", "domain": "general", "exec": "bind"},
+    {"name": "book_flight", "domain": "general", "exec": "bind"},
+    {"name": "query_sql", "domain": "general", "exec": "bind"},
+    {"name": "set_thermostat", "domain": "general", "exec": "bind", "held_out": true, "sibling_of": "create_reminder"},
+    {"name": "place_order", "domain": "general", "exec": "bind", "held_out": true, "sibling_of": "book_flight"},
+
+    {"name": "calculator", "domain": "arithmetic", "exec": "value", "cannot_hold_out": true},
+    {"name": "wolfram_alpha_query", "domain": "arithmetic", "exec": "bind"},
+    {"name": "evaluate_wolfram_language", "domain": "arithmetic", "exec": "bind"},
+    {"name": "introduce_expression", "domain": "arithmetic", "exec": "value"},
+    {"name": "simplify_expression", "domain": "arithmetic", "exec": "value"},
+    {"name": "solve_algebraically", "domain": "arithmetic", "exec": "value"},
+    {"name": "integrate_expression", "domain": "arithmetic", "exec": "value"},
+    {"name": "differentiate_expression", "domain": "arithmetic", "exec": "value", "held_out": true, "sibling_of": "integrate_expression"},
+    {"name": "create_matrix", "domain": "arithmetic", "exec": "value"},
+    {"name": "matrix_determinant", "domain": "arithmetic", "exec": "value"},
+    {"name": "matrix_eigenvalues", "domain": "arithmetic", "exec": "value", "held_out": true, "sibling_of": "matrix_determinant"},
+    {"name": "convert_units", "domain": "arithmetic", "exec": "value"},
+    {"name": "statistics_summary", "domain": "arithmetic", "exec": "value"},
+    {"name": "percent_change", "domain": "arithmetic", "exec": "value", "held_out": true, "sibling_of": "compound_interest"},
+    {"name": "compound_interest", "domain": "arithmetic", "exec": "value"},
+    {"name": "date_difference", "domain": "arithmetic", "exec": "value"},
+    {"name": "round_and_format", "domain": "arithmetic", "exec": "value"},
+    {"name": "code_interpreter", "domain": "arithmetic", "exec": "bind"},
+
+    {"name": "web_search", "domain": "web-search", "exec": "bind", "cannot_hold_out": true},
+    {"name": "web_search_configured", "domain": "web-search", "exec": "bind"},
+    {"name": "openai_web_search", "domain": "web-search", "exec": "bind", "held_out": true, "sibling_of": "web_search_configured"},
+    {"name": "perplexity_search", "domain": "web-search", "exec": "bind"},
+    {"name": "duckduckgo_search", "domain": "web-search", "exec": "bind"},
+    {"name": "fetch_url_content", "domain": "web-search", "exec": "bind"},
+    {"name": "news_search", "domain": "web-search", "exec": "bind", "held_out": true, "sibling_of": "perplexity_search"},
+    {"name": "academic_search", "domain": "web-search", "exec": "bind"},
+    {"name": "local_search", "domain": "web-search", "exec": "bind"},
+    {"name": "image_search", "domain": "web-search", "exec": "bind"},
+    {"name": "wikipedia_lookup", "domain": "web-search", "exec": "bind"},
+    {"name": "stock_quote", "domain": "web-search", "exec": "bind"},
+    {"name": "sports_scores", "domain": "web-search", "exec": "bind"},
+    {"name": "get_web_search_usage", "domain": "web-search", "exec": "bind"},
+
+    {"name": "search_academic_standards", "domain": "pedagogy", "exec": "bind"},
+    {"name": "get_standards_framework_package", "domain": "pedagogy", "exec": "bind"},
+    {"name": "get_standard_item", "domain": "pedagogy", "exec": "bind"},
+    {"name": "get_standard_associations", "domain": "pedagogy", "exec": "bind", "held_out": true, "sibling_of": "get_standard_item"},
+    {"name": "resolve_standard_uri", "domain": "pedagogy", "exec": "bind"},
+    {"name": "get_user_grade_items", "domain": "pedagogy", "exec": "bind"},
+    {"name": "list_competency_progress", "domain": "pedagogy", "exec": "bind"},
+    {"name": "list_line_item_results", "domain": "pedagogy", "exec": "bind"},
+    {"name": "create_line_item", "domain": "pedagogy", "exec": "bind"},
+    {"name": "post_score", "domain": "pedagogy", "exec": "bind"},
+    {"name": "get_submission_summary", "domain": "pedagogy", "exec": "bind"},
+    {"name": "list_multi_assignment_submissions", "domain": "pedagogy", "exec": "bind"},
+    {"name": "grade_submission_with_rubric", "domain": "pedagogy", "exec": "bind"},
+    {"name": "bulk_update_grades", "domain": "pedagogy", "exec": "bind", "held_out": true, "sibling_of": "grade_submission_with_rubric"},
+    {"name": "list_student_submissions", "domain": "pedagogy", "exec": "bind"},
+    {"name": "list_course_roster", "domain": "pedagogy", "exec": "bind"},
+    {"name": "schedule_review_sm2", "domain": "pedagogy", "exec": "value"},
+    {"name": "schedule_review_fsrs", "domain": "pedagogy", "exec": "value", "held_out": true, "sibling_of": "schedule_review_sm2"},
+    {"name": "diagnose_misconception_from_distractor", "domain": "pedagogy", "exec": "bind"},
+    {"name": "compute_step_by_step", "domain": "pedagogy", "exec": "bind"}
+  ]
+}

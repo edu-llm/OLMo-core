@@ -248,4 +248,32 @@ Anything longer belongs in [`prd.md`](prd.md) or [`dataset-design.md`](dataset-d
   (its schemas are the largest — `grade_submission_with_rubric` is 201 tokens, `post_score` 145,
   against `calculator` at 51). general 34.8%, arithmetic 12.9%, web-search 12.9%.
 
+## 2026-08-09
+
+- **Serializer built** — `src/scripts/data/tool_call_serializer.py`, 41 tests. Generators now return
+  structured data (`schemas`, `user`, `call` or `prose`) and *this* renders the wire format, so format
+  correctness is a property of code rather than something a model got right. Includes `parse_row` /
+  `assert_round_trip`, used as a build-time assertion: a row we wrote must read back identically.
+- **Two real bugs caught while building it, both silent:**
+  - **Design gate 4 was wrong.** Argument values are JSON, so a boolean is `true`, not `True`.
+    `ast.parse` reads `true` as a *variable name* and `ast.literal_eval` raises on it, so the gate as
+    written would have rejected **every row with a boolean or null argument** — `excuse`, `inclusive`,
+    `peer_reviewed`, `open_now`, `keep_integer` … The parser is now JSON-aware. Gate 4 corrected.
+  - **The preamble contains the literal `<functions></functions>`** (it tells the model that is where
+    signatures live), so a naive `find` locates the decoration instead of the real block and fails on
+    every row. `extract_schema_array` now anchors on the end and walks candidate tags right-to-left.
+    Regression-tested, including a tool *description* containing the literal.
+- **Held-out carve built and frozen** — `docs/tool-call/frozen/tool_registry.json` (64 tools) plus
+  `src/scripts/data/tool_call_holdout.py`, 17 tests. Validates the registry (no duplicate names, no
+  held-out orphans, no pair with both halves held out) and checks a built corpus for the three ways
+  the carve fails silently: a held-out tool offered in training, a test row whose gold tool was
+  trained, and a row filed under the wrong domain. **64 tools, 10 held out (15.6%)**, matching design.
+  Phrasing bank is split by **hash, not shuffle**, so growing the bank never moves an existing
+  template across the boundary and leaks a previously held-out phrasing.
+- **Open question 1 ANSWERED, and it was a real hazard.** `dataset_transformation.py:203-209` appends
+  *"You do not currently have access to any functions."* whenever a system message lacks a `functions`
+  **field** — which ours never have, by design. Every row would list its tools and then deny having
+  any. **Our producer is unaffected** (it reproduces the shipped template, not the registry one);
+  `verify/verify_template_choice.py` demonstrates the damage so nobody reintroduces it.
+
 <!-- next entry goes below -->

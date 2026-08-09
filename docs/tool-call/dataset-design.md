@@ -684,7 +684,16 @@ Cheap gates first.
    bare `\n` *inside* it, never multiple blocks.
 4. **Call payload** — calls are **Pythonic, not JSON**. `ast.parse(body, mode="eval")` must yield a
    single `ast.Call` whose `func` is an `ast.Name`/`ast.Attribute`, with **keyword arguments only**
-   (no positional), each value a JSON-decodable literal.
+   (no positional), each value a literal.
+   **Corrected 2026-08-09 — the obvious implementation is wrong.** Argument *values* are JSON, so a
+   boolean serialises as `true`, not Python's `True`. `ast.parse` reads `true` as a **`Name` node**
+   (a variable reference), and `ast.literal_eval` raises on it outright. A naive
+   "`ast.literal_eval` each value" gate would therefore **reject every row carrying a boolean or
+   null argument** — and those are everywhere in our schemas (`excuse`, `inclusive`,
+   `peer_reviewed`, `open_now`, `keep_integer`, `grades_released`, `external_web_access`…).
+   The parser must map `Name` nodes `true`/`false`/`null` to their values and recurse through lists
+   and dicts. Implemented and tested as `parse_call` in
+   [`src/scripts/data/tool_call_serializer.py`](../../src/scripts/data/tool_call_serializer.py).
 5. **Resolve** — the called name is declared in *that row's* `<functions>`. Plus globally: no function
    name may appear anywhere in the corpus with two different schemas (Glaive's documented defect).
 6. **Schema validation** — `jsonschema` validate the arguments with `additionalProperties: false`
@@ -1039,7 +1048,7 @@ row-level `tools` path emits `'<functions>'`.
 
 | # | Question | Blocks |
 | --- | --- | --- |
-| 1 | **Does the registry chat template corrupt our inlined rows?** The README's `olmo123` is a placeholder that falls back to the tokenizer's own template, but the *registry's* `olmo` template reportedly appends `" You do not currently have access to any functions. <functions></functions>"` when a system message carries no `functions` **field** — which every one of our rows deliberately lacks. **UNVERIFIED, one-command check.** It would corrupt all 40,000 rows | The tokenization run, not the publish. Run it before any GPU time is spent |
+| 1 | ~~Does the registry chat template corrupt our inlined rows?~~ **ANSWERED — yes, and we are unaffected.** `dataset_transformation.py:203-209` does append `" You do not currently have access to any functions. <functions></functions>"` whenever a system message has no `functions` **field**, which ours never do. Demonstrated in [`verify/verify_template_choice.py`](verify/verify_template_choice.py): the row lists its tools and then denies having any. **Our producer never calls that template** — it reproduces the shipped `chat_template.jinja`, proven byte-identical. The check is kept so nobody reintroduces the hazard via open-instruct's converter | Nothing now |
 | 2 | The **curated fact bank** for the 1,500 `answer-directly` rows. k=8 consistency is a proxy and k is UNVERIFIED | Publishing `answer-directly`. This is the cell most likely to install a confident falsehood |
 | 3 | **Dolci licence sign-off** — ODC-BY is stated in the description prose with **no `license:` key** in frontmatter. Weaker than a tagged licence; needs a human, same decision class as xLAM | All 10,600 reformat rows, i.e. 26.5% of the corpus |
 | 4 | **xLAM licensing** — `cc-by-4.0` tag vs research-only prose | Whether the total can reach 67,500 |
