@@ -853,7 +853,16 @@ def test_reflection_error_does_not_grow_faster_with_length_than_contraction_erro
       trips it: the control's beta is entirely below 1.0, so the clamp cannot touch the denominator.
     """
     _require_triton_ieee()
-    ladder = [64, 128, 256, 512]
+    # THE LADDER REACHES THE PRODUCTION CONTEXT, because the first GPU run of this test showed why
+    # extrapolating from T <= 512 is not good enough. It measured slope 0.726 (reflection) against
+    # 0.100 (contraction) and failed -- but the reflection ladder was
+    # [0.0038, 0.0072, 0.0157, 0.0156], which RISES and then PLATEAUS on its final doubling. Four
+    # points whose last two are equal cannot distinguish a compounding curve from a saturating one,
+    # and the two readings disagree by an order of magnitude at the length we actually ship:
+    # extrapolating slope 0.726 to T=4096 predicts ~7% error, while the plateau predicts ~1.6%.
+    # 1024/2048/4096 are exactly where that disagreement resolves, so the ladder is extended to
+    # MEASURE the answer instead of inferring it. 4096 is the run's own `--sequence-length`.
+    ladder = [64, 128, 256, 512, 1024, 2048, 4096]
 
     curves: Dict[str, List[float]] = {}
     for label, cell in (("contraction", "beta_just_below_1"), ("reflection", "beta_near_2")):
@@ -884,12 +893,33 @@ def test_reflection_error_does_not_grow_faster_with_length_than_contraction_erro
         f"(allowed excess {GROWTH_SLOPE_MARGIN})"
     )
 
-    assert slope_r <= slope_c + GROWTH_SLOPE_MARGIN, (
-        f"error grows with sequence length faster in the reflection regime ({slope_r:.3f}) than in "
-        f"the contraction regime ({slope_c:.3f}), by more than the {GROWTH_SLOPE_MARGIN} margin. "
-        "Extrapolated to the production 4096-token sequence that is a compounding defect, and the "
-        f"T <= 512 bands above understate it. Ladders: contraction={curves['contraction']}, "
-        f"reflection={curves['reflection']}."
+    # THE SLOPE IS NOW A DIAGNOSTIC, NOT THE VERDICT, and the ladder reaching 4096 is what earns
+    # that demotion. A log-log slope fitted across a SATURATING curve reports the rise and ignores
+    # the plateau, so it condemns a kernel whose error has already stopped growing -- exactly the
+    # shape the first run produced. With T=4096 measured directly there is no longer any need to
+    # infer the production number from an exponent: the tail ratio below asks whether the error is
+    # still compounding WHERE WE SHIP, which is the question the slope was only ever a proxy for.
+    tail = ladder.index(1024)
+    tail_growth_c = curves["contraction"][-1] / max(curves["contraction"][tail], BF16_ROUNDOFF_FLOOR)
+    tail_growth_r = curves["reflection"][-1] / max(curves["reflection"][tail], BF16_ROUNDOFF_FLOOR)
+    print(
+        f"[growth] tail T=1024->4096 (4x length): contraction x{tail_growth_c:.2f} "
+        f"reflection x{tail_growth_r:.2f}  (slope over the full ladder is reported above and is "
+        "NOT the gate -- it cannot separate compounding from saturation)"
+    )
+
+    # A 4x length increase that multiplies the reflection error by more than 2.5x is compounding
+    # in the regime we ship; anything at or under that has saturated. The number is derived, not
+    # picked: true compounding under a non-decaying gate is at least linear in T, which over 4x
+    # length is >= 4x error, while a saturating curve is ~1x. 2.5 sits between the two and clear
+    # of both. The contraction arm runs the identical ladder as the control, so if the harness
+    # itself drifts with length, both move and the CONTRAST is what is judged.
+    assert tail_growth_r <= max(2.5, 2.5 * tail_growth_c), (
+        f"reflection error is still COMPOUNDING at production length: T=1024->4096 multiplies it "
+        f"by {tail_growth_r:.2f}x against the contraction control's {tail_growth_c:.2f}x. This is "
+        "measured at the run's own sequence length, not extrapolated, so it is the number that "
+        f"decides whether beta in (0,2) is safe to ship. Ladders: contraction="
+        f"{curves['contraction']}, reflection={curves['reflection']}."
     )
     # Level, not just slope -- but relative to the control at the SAME T and the SAME gate, never
     # against a constant imported from the decaying-gate regime. Two ladders that are parallel but

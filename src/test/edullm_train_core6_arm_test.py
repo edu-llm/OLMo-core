@@ -65,12 +65,23 @@ class TinyLM(torch.nn.Module):
 
     Untrained, so its cross-entropy sits near ``ln(vocab)`` -- which is the magnitude assertion
     below, and the only check in this project's history that ever caught uninitialised weights.
+
+    IT PLACES ITSELF ON THE EVALUATOR'S DEVICE, and that is not cosmetic. Both evaluators pick
+    ``cuda`` whenever one is visible (``train_core6_arm.py:1325``, ``:1438``, ``:1712``) and move
+    every batch there. A model left on the CPU then meets CUDA token ids inside ``F.embedding``
+    and dies with "index is on cuda:0, different from other tensors on cpu". On a laptop the two
+    agree because both are CPU, so this suite was green locally and failed 44 ways on the first
+    GPU host it ever ran on -- a whole class of test that had never actually executed against the
+    device it ships to. Resolved here, once, rather than at the eight construction sites, because
+    a per-site fix is one forgotten call away from the same failure.
     """
 
     def __init__(self, vocab: int = VOCAB, d: int = 8) -> None:
         super().__init__()
         self.embed = torch.nn.Embedding(vocab, d)
         self.out = torch.nn.Linear(d, vocab)
+        if torch.cuda.is_available():
+            self.to(torch.device("cuda"))
 
     def forward(self, x):
         return self.out(self.embed(x))
