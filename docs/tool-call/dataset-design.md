@@ -503,10 +503,32 @@ allenai/Dolci-Instruct-SFT-Tool-Use    public   <NO TAG>   227,579   REJECT (no 
 ```
 
 Earlier drafts had this at **8,100 rows — 20.25% of the whole dataset** — pending a human licence
-sign-off. That sign-off is no longer worth seeking: `cardData.license` is **absent entirely**, which
-is weaker than the "ODC-BY in prose" reading, and better-licensed sources with *verified single-turn
-content* now cover the same ground. **Do not revisit it.** Its `-SA` sibling is `cc-by-sa-4.0` —
-share-alike, also out.
+sign-off.
+
+**The full picture, since this is a judgment call and should stay reversible.** The card's frontmatter
+carries `dataset_info` but **no `license:` key**. The licence appears only in the body:
+
+> This dataset is licensed under ODC-BY. It is intended for research and educational use in
+> accordance with Ai2's Responsible Use Guidelines.
+
+Both halves of that matter. **ODC-BY is permissive** — attribution, essentially — and "intended for
+research and **educational** use" arguably *describes* an educational organisation rather than
+excluding one. So there is a real argument that Dolci is usable here.
+
+**Why we dropped it anyway, and it is not the licence on its own:**
+
+1. Nothing machine-readable. A prose licence plus a narrowing phrase of unclear legal weight is the
+   weakest form of the claim, and this would have been our single largest source.
+2. **A fully-tagged alternative covers the same ground better.** `argilla/Synth-APIGen-v0.1` is
+   `apache-2.0` as a real tag, 49,402 rows, **100% single-turn**.
+3. **Measured: only ~10% of Dolci rows are 3-message**, so its 227,579 headline is really ~22,750
+   usable rows for v1 — *less* than Synth-APIGen, before any licence question.
+
+So the sign-off went from "worth asking" to "asking for permission we no longer need." **If someone
+decides to use Dolci regardless** — it is AI2's own tool-use data, `dataset_source` names the
+BFCL-v3-decontaminated mix, and 227k rows is real — that is a defensible position; it just puts the
+sign-off back on the list. Its `-SA` sibling stays out either way: `cc-by-sa-4.0` share-alike would
+propagate copyleft onto the whole mix.
 
 ### Verified usable
 
