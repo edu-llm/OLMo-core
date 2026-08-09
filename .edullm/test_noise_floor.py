@@ -269,6 +269,102 @@ def test_the_measured_mde_table_in_the_document_is_the_one_the_estimator_produce
             ), f"{analysis}, column {column}"
 
 
+AMENDED = pathlib.Path(_HERE) / "noise-floor-skip-step.json"
+
+
+def amended() -> dict:
+    """The noise floor of the amended tranche, or a skip where it has not been frozen yet."""
+    if not AMENDED.exists():
+        pytest.skip("the amended baseline has not been frozen")
+    return json.loads(AMENDED.read_text())
+
+
+def test_the_amended_artifact_is_the_thing_it_claims_to_be():
+    """The same assertions as the stage-1 artifact, pointed at the one stage 2 is read against."""
+    f = amended()
+    assert f["label"] == "measured"
+    assert f["provisional"] == []
+    assert f["n_seeds"] == 5
+    assert f["sigma_df"] == 4
+    assert f["final_step"] == f["horizon"]
+    assert sorted(f["seeds"]) == [0, 1, 2, 3, 4]
+    assert len(set(f["runs"])) == 5
+    assert all(r.startswith(f["submission"]) for r in f["runs"])
+    assert f["sigma_bpb_unbiased"] == pytest.approx(f["sigma_bpb"] / nf.c4(4))
+    assert len(f["sources"]) == len(f["weights"]["weights"]) == 7
+    assert sum(f["weights"]["weights"]) == pytest.approx(1.0)
+
+
+def test_the_amendment_added_a_second_artifact_rather_than_revising_the_first():
+    """
+    THE AMENDMENT'S CENTRAL COMMITMENT, AS A TEST. ``noise-floor.json`` is the record of what
+    plain ``AdamW`` did and it is what forced the optimizer change; an amendment that
+    regenerated the evidence for itself in place would be worth nothing, and the section
+    that makes that promise cannot keep it on its own.
+    """
+    first, second = frozen(), amended()
+    assert first["submission"] != second["submission"]
+    assert not set(first["runs"]) & set(second["runs"]), "the two artifacts share no cell"
+    assert first["group"] == second["group"] and first["arm"] == second["arm"]
+    assert first["metric"] == second["metric"] and first["horizon"] == second["horizon"]
+    assert second["sigma_bpb"] < first["sigma_bpb"], "the amendment is the one that lowered it"
+
+
+def test_the_amended_mde_table_in_the_document_is_the_one_the_estimator_produces():
+    """
+    Cell by cell, at the amended floor. The same guard as the two tables above and for the
+    same reason: this is the table the go decision was taken on, so it is the one a reader
+    will quote back, and a generated number sitting in prose drifts from its generator.
+    """
+    f = amended()
+    unweighted = f["sigma_bpb_unbiased"] * nf.NATS_PER_BPB
+    weighted = f["weights"]["weighted_sigma"] / nf.c4(f["sigma_df"]) * nf.NATS_PER_BPB
+
+    rows = markdown_table(
+        PRE_REGISTRATION.read_text(),
+        "| analysis | error df | MDE, unweighted | MDE, strata-weighted |",
+    )
+    assert len(rows) == 6
+
+    for row in rows:
+        analysis, df = row[0], int(row[1])
+        paired = analysis.startswith("paired")
+        rho = float(analysis.split("=")[1]) if paired else 0.0
+        assert df == nf.error_df(4, 5, paired), analysis
+        for column, sigma in enumerate((unweighted, weighted), start=2):
+            printed = float(row[column].strip("*"))
+            assert printed == pytest.approx(
+                nf.mde(sigma, 5, 4, rho, paired), abs=5e-5
+            ), f"{analysis}, column {column}"
+
+
+def test_the_document_prices_the_design_across_the_whole_interval_and_not_only_the_point():
+    """
+    A sigma-hat at df = 4 spans a factor of 4.8, and a go decision quoted off the point
+    estimate alone is a decision that does not know its own interval. The unpaired MDE at the
+    top of the interval is the number that has to be affordable, so it has to be in the text.
+    """
+    f = amended()
+    text = re.sub(r"\s+", " ", PRE_REGISTRATION.read_text())
+    pessimistic = nf.mde(f["sigma_ci_bpb"][1] * nf.NATS_PER_BPB, 5, 4, 0.0, False)
+    assert (
+        f"{pessimistic:.4f} nats" in text
+    ), "the MDE at the pessimistic end of the interval is what the decision rests on"
+    assert "0.0039 nats" in text, "the point estimate belongs beside it, not instead of it"
+
+
+def test_the_document_records_that_the_reading_it_nearly_acted_on_was_synthetic():
+    """
+    A near miss that leaves no trace is a near miss that recurs. The refusal below is one line
+    of argparse; the reason it exists is a paragraph, and the paragraph is the part that stops
+    the next tool in this directory from accepting an id and then not using it.
+    """
+    text = re.sub(r"\s+", " ", PRE_REGISTRATION.read_text())
+    assert "--submission` without `--group` is now an argparse error" in text
+    assert "0.0544 nats" in text, "the synthetic MDE has to be locatable beside the real one"
+    assert "0.06073" in text, "and so does the planted per-source sigma it came from"
+
+
 def test_the_document_reports_the_spike_split_rather_than_only_the_sigma_it_produced():
     """
     99% of the measured variance is two runs out of five taking a loss spike, and a σ̂ quoted
@@ -795,6 +891,64 @@ def test_the_arm_is_recovered_from_the_model_and_not_from_a_label():
         nf._arm_of({"model": {"block": {"hyper_connections": {"mode": "output"}}}}) == "output-only"
     )
     assert nf._arm_of({"model": {"block": {"hyper_connections": {"mode": "full"}}}}) == "faithful"
+
+
+# ---------------------------------------------------------------------------------------
+# The command line, and the one way it was read as saying something it did not say.
+# ---------------------------------------------------------------------------------------
+
+
+def run_main(monkeypatch, capsys, *argv):
+    """Drive ``main`` with an argv, returning ``(exit code or SystemExit code, stdout)``."""
+    monkeypatch.setattr(sys, "argv", ["noise_floor.py", *argv])
+    try:
+        code = nf.main()
+    except SystemExit as exit_:
+        code = exit_.code
+    return code, capsys.readouterr().out
+
+
+def test_naming_a_submission_without_a_group_is_refused_rather_than_answered_synthetically(
+    monkeypatch, capsys
+):
+    """
+    THE FAILURE THIS WHOLE FILE EXISTS TO PREVENT, ARRIVING THROUGH THE ARGUMENT PARSER.
+
+    ``--submission run_x --dry-run`` names a specific submission and reads none of it: the
+    W&B read is behind ``--group``, so the run falls through to the synthetic generator and
+    prints a complete, correctly computed report of a fiction. Every number in it is
+    plausible and one of them -- a per-source spread with the code sources an order of
+    magnitude above the rest, which is the generator's planted truth and not this corpus --
+    is exactly the kind of finding somebody would re-plan around. It happened, it cost about
+    twelve hours, and the fix is that naming a submission with nothing to narrow is an error.
+    """
+    code, out = run_main(monkeypatch, capsys, "--submission", "run_019fe40f-c71e", "--dry-run")
+    assert code == 2, "argparse's usage error, not a report"
+    assert "SYNTHETIC" not in out.upper(), "nothing may be printed under a submission's name"
+
+
+def test_the_synthetic_fallback_says_so_at_the_bottom_as_well_as_the_top(monkeypatch, capsys):
+    """
+    A banner on line one is a banner below the fold by the time the MDE table is on screen,
+    and the MDE table is the last thing in the report and the reason anybody runs it.
+    """
+    code, out = run_main(monkeypatch, capsys, "--dry-run")
+    assert code == 0
+    head, _, tail = out.partition("minimum detectable effect")
+    assert "SYNTHETIC" in head.upper(), "the banner at the top has gone"
+    assert "ALL SYNTHETIC" in tail.upper(), "nothing warns a reader who scrolled to the numbers"
+
+
+def test_a_measured_read_carries_no_such_warning(monkeypatch, capsys):
+    """
+    The trailing banner is conditioned on the label, so a real read stays clean. Checked
+    against the banner's own wording rather than the word 'synthetic', which appears in every
+    report: the rho-hat block is a sanity check on synthetic data by construction, and a test
+    that could not tell the two apart would fail the moment either one was reworded.
+    """
+    values, sources, steps = nf.synthetic_baseline(rng_seed=3)
+    nf.report(values, sources, steps, tuple(range(5)), "strata", "measured", 6000)
+    assert "ALL SYNTHETIC" not in capsys.readouterr().out.upper()
 
 
 # ---------------------------------------------------------------------------------------

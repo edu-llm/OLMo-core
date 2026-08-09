@@ -1507,6 +1507,17 @@ def report(
                 f"{value:.4f} nats"
             )
 
+    # REPEATED AT THE BOTTOM BECAUSE THE BANNER AT THE TOP SCROLLS OFF. A reader arrives at
+    # this report for the MDE table, which is the last thing in it, and a warning sixty lines
+    # above the number being read is a warning that has already been missed once.
+    if label != "measured":
+        print()
+        print(
+            f"    ^ ALL {label.upper()}. Nothing above was measured; it is the generator's "
+            "planted truth, and its per-source spread is a DataDecide-shaped fiction with the "
+            "code sources at the noisy end. Pass --group to read W&B."
+        )
+
     return {
         "label": label,
         "provisional": reasons,
@@ -1717,6 +1728,22 @@ def main() -> int:
 
     if opts.self_test:
         return self_test()
+
+    # --submission NARROWS A READ, AND THERE IS NOTHING TO NARROW WITHOUT --group. Naming one
+    # without the other used to be accepted in silence and fall through to the synthetic
+    # fallback below, which is a complete report -- per-source sigma, weights, variance
+    # reductions, MDEs -- computed off a generator whose planted spread puts the two code
+    # sources an order of magnitude above the rest. It says `[synthetic]` on every block and
+    # it was read as a measurement of the submission that had been named, which cost about
+    # twelve hours and came within one commit of freezing a weighting that deleted the code
+    # sources on the strength of noise that was never in the data. The refusal is one line and
+    # it is the whole of the fix.
+    if opts.submission and not opts.group:
+        parser.error(
+            f"--submission {opts.submission} selects cells within a group, and no --group was "
+            "given, so nothing would have been read. Add --group, or drop --submission to run "
+            "the synthetic self-check."
+        )
 
     if opts.mde_table:
         print(

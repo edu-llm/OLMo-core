@@ -1169,6 +1169,236 @@ post-hoc adjustment.
   are unaffected, but any comparison drawn to `run_019fe2f4-f528`'s absolute numbers is not
   like-for-like and is not to be made.
 
+### The amended baseline landed, and the first outcome of the three above is the one that happened
+
+`run_019fe40f-c71e`, five cells, seeds 0 through 4, `gpu-8xa100`, 6,000 steps, thirteen
+evaluations each over seven sources, all five terminal. It differs from `run_019fe2f4-f528` in
+the optimizer and in nothing else, which is checked rather than asserted: both submissions
+carry the same `init_seed` 12536–12540 and the same `data_loader.seed` 0–4 cell for cell, no
+cell of either carries a `hyper_connections` block, and the configs read
+`AdamWConfig` against `SkipStepAdamWConfig` with `sigma_factor` 6 and
+`rolling_interval_length` 128.
+
+**`.edullm/noise-floor-skip-step.json` is the frozen floor for the amended tranche.**
+`.edullm/noise-floor.json` is not touched, for the reason the amendment already gives about
+itself: it is the record of what forced the change and it is what the change is read against.
+The two artifacts sit side by side and name their own submissions.
+
+| | `run_019fe2f4-f528`, `AdamW` | `run_019fe40f-c71e`, `SkipStepAdamW` |
+| --- | --- | --- |
+| σ̂, held-out BPB, unweighted mean of seven sources, step 6,000 | 0.00627 | **0.00061** |
+| the same in nats of held-out cross-entropy | 0.0199 | **0.00193** |
+| c₄-corrected point estimate, which every MDE below is taken from | 0.0211 | **0.00205** |
+| 95% chi-square interval, df = 4 | 0.0119 – 0.0571 nats | **0.00116 – 0.00555 nats** |
+| σ(6,000)/σ(3,000) | 0.88 [0.50, 0.94], still moving | **0.89 [0.28, 1.54], settled** |
+
+**σ̂ fell by 10.3×**, and the second of the three outcomes above — episodes suppressed but σ̂
+still high — did not happen. Neither did the third. What happened is that the variance really
+was the spikes, in the proportion the earlier section measured it at, and removing them leaves
+the floor the three clean cells had already implied.
+
+That last point is the reason to believe a number this small. The clean-cell floor was
+estimated on three runs and this document said plainly that it was the ceiling, should not be
+the expectation, and was four to five times smaller than the lowest σ published for this class
+of model. It has now been measured a second time, on five runs, on the two seeds that had
+previously spiked as well as the three that had not, and the two estimates agree. That is not
+proof that the configuration is quiet; it is two independent samples saying so, which is more
+than the design needed and more than it expected.
+
+#### The endpoint, cell by cell, and what the skipping cost a clean run
+
+| seed | `AdamW` BPB | `SkipStepAdamW` BPB | Δ | declined steps of 6,000 | largest triggering grad norm |
+| --- | --- | --- | --- | --- | --- |
+| 0 | 0.68664 | 0.67565 | −0.01098 | 19 | 0.712 |
+| 1 | 0.68789 | 0.67521 | −0.01268 | 10 | 0.485 |
+| 2 | 0.67541 | 0.67566 | +0.00024 | 16 | 0.387 |
+| 3 | 0.67628 | 0.67684 | +0.00056 | 18 | 0.465 |
+| 4 | 0.67589 | 0.67600 | +0.00011 | 20 | 0.420 |
+| σ̂ over the five | **0.00627** | **0.00061** | | | |
+| range, best to worst | 0.01248 | 0.00163 | | | |
+
+**The bimodality is gone and the two cells that produced it are now the two best.** Seeds 0 and
+1 are the pair that spiked; under the amended optimizer they finish at 0.67565 and 0.67521,
+which are the lowest two of the five, and their movement is −0.011 and −0.013 BPB, or −0.035
+and −0.040 nats. That is the whole of the spike penalty this document priced at 0.0114 BPB,
+recovered.
+
+**The largest triggering gradient norm across all five cells is 0.712, against 9.30 and
+20.45.** No cell of the amended run ever put a gradient norm above 1.0 after warmup: the
+per-cell maxima of 3.33 to 3.75 all occur at steps 1 to 3, before the rolling window has half
+filled, and the identical maxima appear at the identical steps in the `AdamW` run, so they are
+the initialization transient and not an episode. Declining continues at a low rate to the end
+of every cell — last declined steps 5663 to 5897 — and every trigger after step 3,000 is at or
+below 0.291. There is no late episode in any cell, and the check is at step 6,000 rather than
+at the ~2,700 the mid-run read covered.
+
+**Skipping did not move the endpoint, which is the third outcome the section above said to
+watch for.** The five amended cells average 0.67587 BPB; the three clean `AdamW` cells average
+0.67586. The difference is +0.00001 BPB, +0.00003 nats. Per seed the three clean cells moved by
++0.00024, +0.00056 and +0.00011 BPB — all one sign, all inside the floor, and consistent with
+declining 16 to 20 updates costing a hair of progress rather than nothing. This is the
+comparison the section above forbids drawing conclusions from, and none is drawn from it: it is
+reported because that section asked for it to be watched, and what it establishes is the
+absence of an effect rather than the presence of one.
+
+#### Per source, and what the frozen weights are now worth
+
+| source | σ̂ (BPB) | stratum | weight | df behind the weight | σ̂ under `AdamW` |
+| --- | --- | --- | --- | --- | --- |
+| starcoder | 0.00102 | 1 | 0.0892 | 16 | 0.00472 |
+| dclm | 0.00075 | 1 | 0.0892 | 16 | 0.00699 |
+| arxiv | 0.00073 | 1 | 0.0892 | 16 | 0.00533 |
+| algebraic-stack | 0.00068 | 1 | 0.0892 | 16 | 0.00497 |
+| open-web-math | 0.00057 | 0 | 0.2144 | 12 | 0.00553 |
+| pes2o | 0.00057 | 0 | 0.2144 | 12 | 0.00728 |
+| wiki | 0.00040 | 0 | 0.2144 | 12 | 0.00911 |
+
+Every source fell. The spread is **2.55×** end to end against the `AdamW` run's 1.93×, the
+weights run from 0.0892 to 0.2144, and **no source is down-weighted to anything near zero**.
+`starcoder` is now nominally the noisiest rather than the quietest, which is a reordering
+inside a factor of two and a half at df = 4 — under true equality the largest of seven such
+estimates exceeds the smallest by about this much routinely, and nothing should be read into
+it in either direction.
+
+The weighting buys **1.33× of variance in sample and 1.08× leave-one-seed-out**, which is 3.6%
+off a standard error. Plain inverse-variance would give 1.70× in sample and 1.15× out. Both
+gaps between the in-sample and out-of-sample figures are the over-fitting the tool prints them
+to expose, and both out-of-sample figures are small enough that the choice does not matter.
+
+**The primary endpoint stays the unweighted mean of the seven sources, which is what
+[Pre-registered hypotheses](#pre-registered-hypotheses) named before any of this.** The
+weighted composite is frozen in the artifact and reported beside every contrast as a
+secondary, because that is what was committed and a committed number is reported whatever it
+turns out to be worth. Making it primary would be the deviation, it would be a deviation
+adopted after seeing that it flatters the design, and it would buy 3.6%.
+
+Three post-hoc diagnostics, run because a per-source reordering is the kind of thing that
+turns out to be one bad cell, and recorded here as post-hoc because they were chosen after
+seeing the data and no hypothesis rests on them.
+
+- **No cell is an outlier on any source.** The largest studentized residual over all
+  forty-nine cell-by-source values is 1.67, at seed 3 on `open-web-math`; the Grubbs 5%
+  critical value at n = 5 is 1.72. Seed 3 is the highest of the five on six of the seven
+  sources, which is what the maximum of five draws looks like and not what one anomalous run
+  looks like.
+- **No single deletion carries the floor.** Dropping each cell in turn gives σ̂ of 0.00218,
+  0.00177, 0.00218, 0.00104 and 0.00221 nats. The worst of the five still prices the unpaired
+  design at 0.0044 nats.
+- **The code sources are not where the residual variance lives.** Over the five non-code
+  sources alone σ̂ is 0.00052 BPB, 0.00165 nats; over the two code sources alone it is 0.00085
+  BPB. Under `AdamW` those two figures were 0.00684 and 0.00484 — the non-code sources were the
+  noisier group then, and they are the quieter group now, and both orderings are inside the
+  scatter that df = 4 produces.
+
+The sources still move together, and less than they did: the mean pairwise correlation across
+the seven fell from +0.997 to +0.685. That is the common-mode term the earlier section
+identified as the ceiling on any diagonal weighting, and it is what still holds the composite
+at 2.3× the value seven independent sources would give.
+
+#### What the tranche can now detect
+
+At the c₄-corrected σ̂ of 0.00205 nats, exact noncentral t, two-sided α = 0.05, 80% power, four
+arms and five seeds, so error df is k(n−1) = 16 unpaired and (k−1)(n−1) = 12 paired.
+
+| analysis | error df | MDE, unweighted | MDE, strata-weighted |
+| --- | --- | --- | --- |
+| unpaired | 16 | **0.0039** | 0.0034 |
+| paired, ρ = 0.0 | 12 | 0.0040 | 0.0034 |
+| paired, ρ = 0.3 | 12 | 0.0033 | 0.0029 |
+| paired, ρ = 0.5 | 12 | 0.0028 | 0.0024 |
+| paired, ρ = 0.7 | 12 | 0.0022 | 0.0019 |
+| paired, ρ = 0.9 | 12 | 0.0013 | 0.0011 |
+
+**Unpaired, the design detects 0.0039 nats.** ByteDance's effect is 0.030, Tencent's is 0.020,
+and the attenuation to roughly 0.010 that a 370M replication should expect — the one this
+document has said twice that no affordable allocation reaches — is resolved with a factor of
+2.6 to spare. The pairing is no longer load-bearing for anything, which retires the risk that
+ρ̂ lands under the 0.09 break-even and the primary analysis has to be swapped.
+
+**The design survives the whole 95% interval on σ̂, which is the reading that should carry the
+decision rather than the point estimate.** At df = 4 the interval spans a factor of 4.8, and at
+its pessimistic end σ is 0.00555 nats and the unpaired MDE is **0.0105 nats** — still inside
+Tencent's 0.020 and still at the attenuated 0.010. At its optimistic end it is 0.0022. There is
+no point in that interval at which the tranche cannot answer H1 and H2a against the published
+effects, and that is what changed: the earlier reading could not answer them anywhere in its
+interval.
+
+Two things this does not buy. It does not buy H2b, which needs downstream scoring that is not
+in this plan or this budget. And it does not make H7 resolvable beyond what
+[H7 (stability)](#h7-stability-pre-registered-here-rather-than-after-the-fact) already
+states — with no cell of the comparator spiking, the per-run counts are 10 to 20 and the
+largest triggers 0.387 to 0.712, so a treatment arm that spikes will separate on the secondary
+statistic and one that merely declines a few more steps will not.
+
+#### The reading this decision was nearly made on was synthetic, and the tool now refuses it
+
+**`python .edullm/noise_floor.py --submission run_019fe40f-c71e --dry-run` reads nothing.** The
+W&B query sits behind `--group`; `--submission` narrows that query and does nothing on its own.
+With no `--group` the run fell through to the synthetic generator and printed a complete,
+internally consistent report — per-source σ, strata, weights, in-sample and leave-one-seed-out
+variance reductions, a settling verdict, and both MDE columns — of a fiction, under the
+submission id it had been handed on the command line.
+
+It said so. `falling back to SYNTHETIC data with a known truth. Nothing below is measured.` is
+the first line, and every block below it is prefixed `[synthetic]`. It was read as a
+measurement anyway, and the numbers in it are worth writing down beside the real ones because
+of how nearly they were acted on:
+
+| | synthetic, read as measured | measured |
+| --- | --- | --- |
+| unweighted composite σ | 0.00836 BPB | **0.00061 BPB** |
+| strata-weighted composite σ | 0.00242 BPB | **0.00053 BPB** |
+| variance reduction | 11.95× in sample, 9.18× out | **1.33× in sample, 1.08× out** |
+| per-source spread | 36× | **2.55×** |
+| σ̂ on `starcoder` | 0.06073 | **0.00102** |
+| unpaired MDE, unweighted | 0.0544 nats | **0.0039 nats** |
+
+The generator plants a DataDecide-shaped spread with the code sources at the noisy end —
+`starcoder` at 0.0300 and `algebraic-stack` at 0.0240 against `dclm` at 0.0035 — so the
+"finding" that the two code sources had become thirteen times noisier than everything else was
+the generator's own parameters read back out, and the 12× variance reduction was the weighting
+correctly deleting sources whose noise was never in this corpus. Acting on it would have made
+the weighted composite the primary endpoint of a module whose two hypotheses are about a
+residual-topology change, on a weighting that suppressed the two sources such a change would
+most plausibly show up on, to buy a factor that does not exist. It cost about twelve hours and
+it stopped one commit short of the freeze.
+
+Two changes, both in `noise_floor.py`, both tested:
+
+- **`--submission` without `--group` is now an argparse error.** It named a submission and read
+  none of it, and there is no reading under which that combination means anything.
+- **The synthetic banner is repeated at the foot of the report.** The report is sixty lines and
+  the MDE table is the last thing in it, so a warning on line one is a warning below the fold
+  by the time anybody is looking at the number they came for.
+
+This is the same failure as
+[`wandb_panels.py --verify` passing for the wrong reason](#wandb_panelspy---verify-passed-for-the-wrong-reason-and-now-scopes-to-a-submission),
+and it is the second time a tool in this directory has answered a question about one submission
+using data that was not that submission's. The pattern is worth naming: every one of these
+tools takes a submission id, and the ones that got it wrong were the ones where the id was
+accepted and then not used.
+
+#### Go, on the unweighted endpoint
+
+The three treatment arms are cleared to submit. `edullm check --json` on
+`.edullm/run.{faithful,output-only,mhc}-a100.yaml` at `--compute gpu-8xa100 --hours 4
+--attempts 2 --fanout-size 5 --fanout-index-parameter seed` returns `refused: false` with an
+empty `refusals` list and exit 0 for all three, `approval_class: routine`,
+`approving_environment: run-approval-lead`. Read `cost` out of that output rather than out of
+this paragraph.
+
+The pre-registered gate is unchanged and is now read at σ̂ = 0.00205 nats: a claim needs
+|Δ̂| ≥ 2 × SÊ(Δ̂), which at 5 v 5 on the pooled σ̂ is 0.0026 nats, with the exact two-sided t
+p-value reported beside it and the 5% line at 2.45 SE. The primary analysis is the paired
+difference if ρ̂ clears 0.09 and the unpaired difference if it does not, exactly as
+[Paired by seed](#paired-by-seed-is-the-primary-analysis-and-it-is-free) commits; the design
+now clears every literature effect under both, so that choice no longer decides anything.
+
+**σ̂ is re-pooled across all twenty cells once the treatment arms land, and Bartlett is run on
+the four within-arm variances**, as the plan commits. The frozen floor prices the design; it is
+not the σ the contrasts are tested against. A treatment arm that is noisier than the comparator
+raises the gate, which is the correct behaviour and is why the pooling was pre-registered.
+
 ### Throughput
 
 Measured, not planned. Read from run history at the steady state rather than from the run
