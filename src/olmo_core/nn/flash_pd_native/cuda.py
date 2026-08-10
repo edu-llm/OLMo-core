@@ -600,6 +600,7 @@ def native_cuda_paper_surrogate_scan(
     )
 
 
+@torch.compiler.disable
 def native_cuda_mamba3_siso_surrogate_scan(
     dictionary_logits: torch.Tensor,
     selector_logits: torch.Tensor,
@@ -617,7 +618,25 @@ def native_cuda_mamba3_siso_surrogate_scan(
     chunk_size: int,
     mode: NativePDMode,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Run fused trapezoidal preprocessing and chunkwise native training."""
+    """
+    Run fused trapezoidal preprocessing and chunkwise native training.
+
+    Held out of the caller's compiled graph on purpose. Every run spec sets
+    ``compile_model=True``, and this scan is the one native entry point Dynamo can
+    trace all the way through, because it reaches CUDA through a registered custom
+    op rather than a raw pybind call. Traced, the pointwise prologue, the scan, and
+    the readout become one joint graph, and the arm gets nothing at all out of being
+    compiled: 74.6 ms compiled against 75.2 ms eager for one bfloat16 forward and
+    backward at the production shape ``B=2, T=4096, D=1024``. Left opaque, the two
+    pointwise regions are fused and partitioned on their own, the same step takes
+    44.4 ms, and its peak allocation falls from 1066 MiB to 633 MiB. The paper mixer
+    has always had this by accident -- its pybind forward is untraceable -- and
+    measures no further gain from asking for it explicitly. Eager is unaffected: the
+    wrapper costs 0.03 ms of a 75 ms step, which is inside the noise.
+
+    The reference scan is deliberately not covered: it is a host-side diagnostic with
+    nothing to gain here, and it is required to trace as a single graph.
+    """
     capability = native_cuda_capability(
         destination,
         routes,

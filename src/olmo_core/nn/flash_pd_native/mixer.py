@@ -276,11 +276,30 @@ class NativeFlashPDMixer(SequenceMixer):
         # representable in bfloat16 and rounds to exactly 1.0, which would erase the
         # long-horizon decay this recurrence is built on.
         kernel_dtype = x.dtype if x.dtype in (torch.float32, torch.bfloat16) else torch.float32
+        # Densified here rather than at the kernel boundary. The scan reaches CUDA through a
+        # raw pybind call, so Dynamo breaks the graph in front of it and the `contiguous()`
+        # calls inside the autograd function run as eager ATen copies Inductor never sees.
+        # Neither cast prevents that: the diagonal is already FP32 and in bfloat16 the payload
+        # already carries the activation dtype, so `.float()` and `.to(kernel_dtype)` return
+        # the very same permuted view. Those four eager copies measure 0.876 ms together at the
+        # production shape, the two bfloat16 ones at 133 GB/s against a 307 GB/s copy rate
+        # because the interleaved real/imaginary axis leaves them a stride of two.
+        #
+        # Asking for the dense layout inside the traced region instead lets the pointwise chain
+        # that builds the diagonal store `(batch, head, time, state)` directly. Interleaved
+        # against the strided form at the production shape: 0.9804, 0.9827, 0.9848 of its
+        # forward-and-backward time, and 0.969 of the forward alone -- the backward gives a
+        # little back, which is why densifying only the diagonal pair measured no better.
+        #
+        # Densifying all four is also what keeps the compiled prologue from returning views
+        # that alias its own inputs. Left strided, AOTAutograd has to regenerate those aliases
+        # on every call, and that path intermittently replayed corrupt view metadata and
+        # aborted with an impossible shape.
         split_values = (
-            diagonal_real.permute(0, 2, 1, 3).float(),
-            diagonal_imag.permute(0, 2, 1, 3).float(),
-            bias[..., 0].permute(0, 2, 1, 3).to(kernel_dtype),
-            bias[..., 1].permute(0, 2, 1, 3).to(kernel_dtype),
+            diagonal_real.permute(0, 2, 1, 3).float().contiguous(),
+            diagonal_imag.permute(0, 2, 1, 3).float().contiguous(),
+            bias[..., 0].permute(0, 2, 1, 3).to(kernel_dtype).contiguous(),
+            bias[..., 1].permute(0, 2, 1, 3).to(kernel_dtype).contiguous(),
         )
         # The CUDA router gradient indexes the selector logits off a raw pointer under a
         # dense (batch, time, head, dictionary) layout, and a fused projection hands the
@@ -444,7 +463,25 @@ class NativeFlashPDMixerConfig(SequenceMixerConfig[NativeFlashPDMixer]):
     mode: NativePDMode = NativePDMode.AUTO
     backend: NativePDBackend = NativePDBackend.AUTO
     conv_kernel_size: int = 4
-    fuse_input_projections: bool = True
+    # False, MEASURED, NOT THE True THIS BLOCK WAS FIRST WRITTEN WITH. Fusing the five
+    # post-convolution projections saves four kernel launches in the forward and costs far
+    # more than that in the backward: `split` is a view, so its gradient is a `cat` across
+    # the whole 6400-wide projection, and Inductor lowers that concatenation to a single
+    # kernel whose `tl.where` chain evaluates all five gradient expressions for every one of
+    # its (batch, time, 6400) elements. Unfused, each projection's gradient lands in its own
+    # weight and no concatenation is built at all.
+    #
+    # Interleaved against the fused layout in one process at the production shape
+    # (B=2, T=4096, d_model=1024, bfloat16, forward and backward): 0.9469, 0.9453, 0.9477 of
+    # the fused time, and 0.9857 of it with the backward excluded, so seven eighths of the
+    # win is the concatenation that is no longer built. Absolute milliseconds on this card
+    # drift by tens of percent between processes and are not quotable; the ratio is.
+    #
+    # This moves no weight and no number. `num_params` is the same in either layout because
+    # fusing only concatenates output widths, one seed draws bit-identical weights either way
+    # (`test_projection_layouts_initialize_identically_from_one_seed`), and
+    # `_convert_projection_state_dict` converts a checkpoint written in either layout exactly.
+    fuse_input_projections: bool = False
     dtype: DType = DType.float32
 
     def num_params(self, d_model: int) -> int:

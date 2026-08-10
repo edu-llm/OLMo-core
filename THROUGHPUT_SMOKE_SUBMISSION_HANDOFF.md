@@ -2,17 +2,18 @@
 
 Snapshot: 2026-08-09
 
-This is the operational handoff for the five-cell Mamba comparison throughput
-smoke. It records the submission path, the measurement contract, and the
-current blocker. It is not an authority for price, runtime limits, approval, or
-capacity; obtain those from a fresh `edullm check --json`.
+This is the operational handoff for the eight-cell Mamba comparison throughput
+smoke, which rehearses every one of the wave's eight arms. It records the
+submission path, the measurement contract, and the current blocker. It is not an
+authority for price, runtime limits, approval, or capacity; obtain those from a
+fresh `edullm check --json`.
 
 ## Current state
 
 - Repository: `edu-llm/OLMo-core`
 - Local checkout: `/home/vs/AlphaAI/eduLLM/OLMo-core-flash-pd`
 - Branch: `edullm/mamba-comparison`
-- Current pushed commit: `dac343fe232d6d7ee57f17cba5ccfd2235bbd8f9`
+- Current pushed commit: `25fd8b1b0f74a48d19fb16a6555877f6c79fedcc`
 - CLI observed while writing this handoff: `edullm 4.5.0`
 - Smoke spec: `.edullm/run-throughput-smoke.yaml`
 - Entrypoint: `.edullm/train_core6_arm.py`
@@ -23,8 +24,15 @@ capacity; obtain those from a fresh `edullm check --json`.
 
 The pushed commit has a successful image publication:
 
-- [green image workflow for `dac343f`](https://github.com/edu-llm/OLMo-core/actions/runs/31322456424)
+- [green image workflow for `25fd8b1`](https://github.com/edu-llm/OLMo-core/actions/runs/31337817052)
 - all three checks, including `Build and publish image`, completed successfully.
+
+That image predates the uncommitted eight-arm/KDA/PD-optimization work described
+below and cannot run it. Fresh non-dispatching checks against all three current
+specs report only `uncommitted_changes`; no manifest, profile, kernel, compute,
+or policy refusal remains. Commit and push the complete tree, wait for a green
+image workflow on that exact SHA, fetch the remote-tracking ref, and rerun the
+checks before submitting.
 
 The local working tree now contains a later, uncommitted comparison-budget and
 review update. Those bytes are **not** in the `dac343f` image:
@@ -36,8 +44,15 @@ review update. Those bytes are **not** in the `dac343f` image:
   compute parameters, eliminating mixed-original-dtype FSDP failures;
 - all accelerated arms require rank-local A100 sm80, BF16 hardware support,
   and their exact kernel/package contract before training;
-- the `gdn` diagnostic key now realizes the frozen mixer-bakeoff GDN2 control
-  with FLA/fla-core 0.5.1;
+- the `gdn` key realizes the frozen mixer-bakeoff GDN2 with FLA/fla-core 0.5.1,
+  and is now a fifth comparison arm rather than a diagnostic beside the wave;
+- three Kimi Delta Attention arms — `kda`, `kda-hh-r2`, and `kda-gconv` — were
+  appended after `gdn`, taking the wave to eight arms and 24 cells, each with a
+  kernel preflight of its own and a cell in both smoke specs;
+- both smoke specs went from five cells to eight, appending the KDA arms so
+  indices 0–4 are the cells they always ran; submit them with `--fanout-size 8`;
+- `native-pd` scans in chunks of 64 rather than 128, on a measured 0.3 ms per
+  layer-step in `paper_backward`, with no change to its parameter count;
 - xLSTM prewarms after rank-local device selection and converts vanilla sLSTM
   parameters into the exact FlashRNN layout on every forward, with coherent
   BF16 kernel roles and no stale FSDP cache;
@@ -48,7 +63,7 @@ review update. Those bytes are **not** in the `dac343f` image:
 - `.dockerignore` excludes local native artifacts, and source builds use a
   fully pinned, non-isolated build-tool closure;
 - the full comparison now matches mixer-bakeoff Run 1's measured per-cell
-  budget: 1,144 steps, 599,785,472 tokens, TPP 1.53724–1.53735;
+  budget: 1,144 steps, 599,785,472 tokens, TPP 1.53724–1.53754 over eight arms;
 - `MIXER_OPTIMIZATION_REVIEW.md` records the independently checked architecture
   and remaining optimization gates.
 
@@ -70,22 +85,39 @@ validate the choice before a full comparison wave.
 
 ## What the smoke measures
 
-The fan-out has five cells, selected by `AWS_BATCH_JOB_ARRAY_INDEX`:
+The fan-out has eight cells, selected by `AWS_BATCH_JOB_ARRAY_INDEX`:
 
 - index 0: `mamba-b3`, init seed `110007`
 - index 1: `xlstm`, init seed `113008`
 - index 2: `mamba3-siso-pd`, init seed `116009`
 - index 3: `native-pd`, init seed `119010`
 - index 4: `gdn` (frozen GDN2), init seed `122011`
+- index 5: `kda`, init seed `125012`
+- index 6: `kda-hh-r2`, init seed `128013`
+- index 7: `kda-gconv`, init seed `131014`
+
+That is one cell for every arm the full wave runs, so passing both smokes
+clears all 24 wave cells. The three KDA arms were appended rather than
+interleaved, so indices 0–4 are the five cells earlier smokes ran and
+`--fanout-size 5` reproduces that submission unchanged. Their throughput
+numbers are only comparable with the other five when all eight are measured on
+one submission: these are wall-clock rates and two submissions are two
+different sets of machines.
+
+The same init seeds are used in the wave itself, and deliberately: a smoke cell
+and a wave cell that share an arm, a data seed and an init seed are the same
+run truncated, which is what makes a smoke failure diagnostic of the wave cell
+rather than of a configuration only the smoke has.
 
 All cells use data seed `210007`, sequence length 4096, 100 optimizer steps,
 a 524,288-token global batch, an 8,192-token rank microbatch, bfloat16, and
 eight A100 processes. Held-out evaluation and the decode probe are disabled.
 The checkpoint interval is 101, outside the timed run.
 
-`gpu-8xa100` means one eight-A100 node **per fan-out cell**. A five-cell smoke
-can therefore occupy up to 5 nodes / 40 A100s if every cell is admitted
-concurrently. The twenty-cell full wave can occupy up to 20 nodes / 160 A100s.
+`gpu-8xa100` means one eight-A100 node **per fan-out cell**. An eight-cell smoke
+can therefore occupy up to 8 nodes / 64 A100s if every cell is admitted
+concurrently. The twenty-four-cell full wave can occupy up to 24 nodes / 192
+A100s.
 Actual concurrency is controlled by the platform and capacity queue; cells may
 start in staggered groups. The `nodes: 1` field in a check is per cell, not for
 the entire fan-out.
@@ -103,11 +135,13 @@ steps define:
 
 Rank arms only by the two steady-throughput fields. Do not rank them by the
 whole-run rate, the final step, platform history, or startup-inclusive timing.
-GDN2 is the contemporaneous frozen speed control, not a fifth science arm. Its
-implementation and FLA 0.5.1 dependency are copied from mixer-bakeoff commit
+GDN2 is a science arm of the wave now, and it remains the contemporaneous frozen
+speed reference precisely because it is frozen: its implementation and FLA 0.5.1
+dependency are copied from mixer-bakeoff commit
 `092f2c2bd582c4daa9b3bbfae0effce76b0f833a` and must not be optimized further.
+Speeding it up would remove the reference and change the arm at the same time.
 One seed and 50 measured steps detect gross speed problems; they do not replace
-the five-seed comparison.
+the three-seed comparison.
 
 ### Local CUDA sanity result
 
@@ -124,7 +158,7 @@ forward+backward benchmark on an RTX 5050 Laptop GPU at
 
 MFU is intentionally absent because no documented dense BF16 peak was found
 for this laptop GPU's power configuration. This is a mixer-only local sanity
-result, not a five-arm model comparison and not comparable to the 8xA100
+result, not a full-model comparison and not comparable to the 8xA100
 throughput smoke.
 
 The CLI argument `--warmup-steps 10` belongs to the training schedule. It does
@@ -136,9 +170,9 @@ Run every command from the comparison checkout.
 
 There are three sequential gates:
 
-1. `.edullm/run-smoke.yaml`: 10-step functional smoke, five cells.
-2. `.edullm/run-throughput-smoke.yaml`: 100-step throughput smoke, five cells.
-3. `.edullm/run-comparison.yaml`: full 1,144-step comparison, twenty cells.
+1. `.edullm/run-smoke.yaml`: 10-step functional smoke, eight cells.
+2. `.edullm/run-throughput-smoke.yaml`: 100-step throughput smoke, eight cells.
+3. `.edullm/run-comparison.yaml`: full 1,144-step comparison, twenty-four cells.
 
 Use the same commit, image, dataset release, compute profile, and
 `--attempts 1` contract for all three. Replace the `--spec`, experiment name,
@@ -200,7 +234,7 @@ edullm check --json \
   --spec .edullm/run-throughput-smoke.yaml \
   --compute gpu-8xa100 \
   --attempts 1 \
-  --fanout-size 5 \
+  --fanout-size 8 \
   --fanout-index-parameter AWS_BATCH_JOB_ARRAY_INDEX
 ```
 
@@ -233,7 +267,7 @@ edullm submit \
   --spec .edullm/run-throughput-smoke.yaml \
   --compute gpu-8xa100 \
   --attempts 1 \
-  --fanout-size 5 \
+  --fanout-size 8 \
   --fanout-index-parameter AWS_BATCH_JOB_ARRAY_INDEX
 ```
 
@@ -254,7 +288,7 @@ Use logs once when diagnosis or the final stdout record is needed:
 edullm logs <run-id>
 ```
 
-The run also reports to W&B project `memory-split`. Confirm that all five array
+The run also reports to W&B project `memory-split`. Confirm that all eight array
 cells completed and that each rank-0 JSON record names the expected arm,
 data/init seeds, world size, steady-state step count, throughput, memory,
 FLOPs/token, and MFU basis.
@@ -271,14 +305,14 @@ edullm check --json \
   --spec .edullm/run-smoke.yaml \
   --compute gpu-8xa100 \
   --attempts 1 \
-  --fanout-size 5 \
+  --fanout-size 8 \
   --fanout-index-parameter AWS_BATCH_JOB_ARRAY_INDEX
 ```
 
 After a clean check, use the identical arguments with `edullm submit`. Require
-all five cells to complete before the throughput smoke.
+all eight cells to complete before the throughput smoke.
 
-After both five-cell smokes pass, check the twenty-cell science wave:
+After both eight-cell smokes pass, check the twenty-four-cell science wave:
 
 ```bash
 edullm check --json \
@@ -288,13 +322,17 @@ edullm check --json \
   --spec .edullm/run-comparison.yaml \
   --compute gpu-8xa100 \
   --attempts 1 \
-  --fanout-size 12 \
+  --fanout-size 24 \
   --fanout-index-parameter AWS_BATCH_JOB_ARRAY_INDEX
 ```
 
 Then submit with the same arguments, changing only `check --json` to `submit`.
 The full wave is arm-major: three Mamba-b3 cells, three xLSTM cells, three
-Mamba3-SISO-PD cells, then three native-PD cells.
+Mamba3-SISO-PD cells, three native-PD cells, three GDN2 cells, then three cells
+each of `kda`, `kda-hh-r2`, and `kda-gconv`. Every arm after the fourth was
+appended, so `--fanout-size 12` still runs exactly the four-arm study and
+`--fanout-size 15` the five-arm one, with the same seeds and the same cell
+numbering.
 
 ### Running only Mamba-b3 and xLSTM
 
@@ -315,11 +353,13 @@ edullm check --json \
 ```
 
 Indices 0-2 are Mamba-b3 and 3-5 are xLSTM, on the same corpus, budget, seeds,
-and geometry as the four-arm wave, so the two arms stay comparable to each other
+and geometry as the full wave, so the two arms stay comparable to each other
 and to the remaining arms if those are run later.
 
-For one arm only, `--fanout-size 3` gives Mamba-b3. xLSTM has no contiguous
-prefix of its own, so run it inside the six-cell subset above.
+For one arm only, `--fanout-size 3` gives Mamba-b3. Every other arm has no
+contiguous prefix of its own, so reaching it means running the prefix that ends
+with it: 6 for xLSTM, 9 for Mamba3-SISO-PD, 12 for native-PD, 15 for GDN2, 18
+for `kda`, 21 for `kda-hh-r2`, and 24 for `kda-gconv`.
 
 ### Local verification standing behind this state
 
@@ -398,7 +438,7 @@ Training cell failure
 - Keep `bfloat16` in the command text so the platform precision guard can see
   it.
 - Keep check and submit arguments identical.
-- Keep the five arms, seeds, fan-out size, sequence length, batches, step
+- Keep the eight arms, seeds, fan-out size, sequence length, batches, step
   count, and compute profile matched.
 - `edullm run` and `edullm shell` are exploratory and do not create a citable
   comparison run.
@@ -410,5 +450,6 @@ push the final SHA and wait for its green image workflow. Fetch the exact
 remote-tracking ref, repeat the non-dispatching check, and submit only after
 `refusals` is empty. Local sm120 tests cover FlashRNN BF16
 forward/backward, native-PD parity and zero-sync dispatch, Mamba-PD mixed/tail
-parity, and the scatter deadlock fix; the five-cell sm80 functional smoke is
-still the end-to-end runtime gate.
+parity, and the scatter deadlock fix; the eight-cell sm80 functional smoke is
+still the end-to-end runtime gate, and it is now the first place any of the
+three KDA arms runs on this platform at all.

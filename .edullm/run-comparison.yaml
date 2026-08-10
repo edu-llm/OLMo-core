@@ -1,7 +1,7 @@
-# Four-arm mixer comparison. Submit as one 12-cell fan-out:
+# Eight-arm mixer comparison. Submit as one 24-cell fan-out:
 #   edullm submit --experiment mamba-comparison --dataset reservoir-dolma2-v1 \
 #     --team memory-split \
-#     --spec .edullm/run-comparison.yaml --fanout-size 12 \
+#     --spec .edullm/run-comparison.yaml --fanout-size 24 \
 #     --fanout-index-parameter AWS_BATCH_JOB_ARRAY_INDEX --attempts 1
 #
 # Three replicates per arm, using the first three of the five seeds the ledger in
@@ -11,11 +11,18 @@
 # The arrays are deliberately arm-major. If a platform limit truncates the fan-out,
 # whole arms are lost while completed arms retain all three replicates.
 #
+# EVERY ARM AFTER THE FOURTH IS APPENDED, NEVER INSERTED. Indices 0-11 are byte for byte the
+# four-arm wave they always were and 12-14 the fifth arm, so `--fanout-size 12` still runs
+# exactly the original study, `15` the five-arm one, and `24` the extended one. The control is
+# still the first arm.
+#
 # The decode probe is ON: `--no-decode-probe` is deliberately not passed. Decode latency and
 # recurrent-state bytes are the serving-side cost, which training throughput does not predict --
 # a mixer's state is fixed per sequence where attention's KV cache grows with context. It costs
 # 216 single-token passes on rank zero after training, outside the steady-state window, and
-# `decode_probe` records every failure as a reason rather than raising.
+# `decode_probe` records every failure as a reason rather than raising. The Householder arm has
+# no fused recurrent kernel in `fla`, so its three cells record a stated absence there; that is
+# the honest result and not a gap to be filled with another arm's number.
 schema_version: 1
 workload_profile: olmo-core-train
 suggested_compute: gpu-8xa100
@@ -25,15 +32,27 @@ command: >-
   ARMS=(mamba-b3 mamba-b3 mamba-b3
   xlstm xlstm xlstm
   mamba3-siso-pd mamba3-siso-pd mamba3-siso-pd
-  native-pd native-pd native-pd) &&
+  native-pd native-pd native-pd
+  gdn gdn gdn
+  kda kda kda
+  kda-hh-r2 kda-hh-r2 kda-hh-r2
+  kda-gconv kda-gconv kda-gconv) &&
   DSEEDS=(210007 220014 230021
+  210007 220014 230021
+  210007 220014 230021
+  210007 220014 230021
+  210007 220014 230021
   210007 220014 230021
   210007 220014 230021
   210007 220014 230021) &&
   ISEEDS=(110007 120014 130021
   113008 123015 133022
   116009 126016 136023
-  119010 129017 139024) &&
+  119010 129017 139024
+  122011 132018 142025
+  125012 135019 145026
+  128013 138020 148027
+  131014 141021 151028) &&
   python -m torch.distributed.run --nproc-per-node=8 --standalone
   .edullm/train_core6_arm.py "$EDULLM_RUN_ID"
   --arm "${ARMS[$I]}" --data-seed "${DSEEDS[$I]}" --init-seed "${ISEEDS[$I]}"

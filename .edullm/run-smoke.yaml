@@ -1,16 +1,23 @@
-# Functional smoke: four experiment arms plus a diagnostic GDN control, one seed,
-# and 10 steps on the supported 8xA100 shape.
+# Functional smoke: one cell for each of the wave's eight arms, one seed, and 10 steps
+# on the supported 8xA100 shape. Submit with --fanout-size 8.
 # This verifies image imports, strict kernel dispatch, forward/backward, optimizer,
 # collectives, and checkpoint writing. Ten steps are NOT a throughput measurement:
 # the audited reporter excludes its first 50 steps.
+#
+# EVERY ARM OF THE WAVE HAS A CELL HERE, and the three KDA arms are why that had to be
+# said out loud: they were appended to the wave while this spec still ran five, so nine
+# of the wave's twenty-four cells would have reached a machine with no rehearsal at all,
+# on a study whose --attempts is pinned to 1. The arms are appended in the wave's own
+# order, so indices 0-4 are the five-cell smoke unchanged and --fanout-size 5 still runs
+# exactly it.
 schema_version: 1
 workload_profile: olmo-core-train
 suggested_compute: gpu-8xa100
 command: >-
   bash -lc 'export TRITON_F32_DEFAULT=ieee PYTHONDONTWRITEBYTECODE=1 &&
   I=${AWS_BATCH_JOB_ARRAY_INDEX:-0} &&
-  ARMS=(mamba-b3 xlstm mamba3-siso-pd native-pd gdn) &&
-  ISEEDS=(110007 113008 116009 119010 122011) &&
+  ARMS=(mamba-b3 xlstm mamba3-siso-pd native-pd gdn kda kda-hh-r2 kda-gconv) &&
+  ISEEDS=(110007 113008 116009 119010 122011 125012 128013 131014) &&
   python -m torch.distributed.run --nproc-per-node=8 --standalone
   .edullm/train_core6_arm.py "$EDULLM_RUN_ID"
   --arm "${ARMS[$I]}" --data-seed 210007 --init-seed "${ISEEDS[$I]}"

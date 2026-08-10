@@ -114,9 +114,25 @@ def _excluded_from_build_context(path: str) -> bool:
     return False
 
 
-def test_entrypoint_freezes_four_full_architecture_arms():
+def test_entrypoint_freezes_eight_full_architecture_arms():
     values = _literal_assignments(ENTRYPOINT)
-    assert values["ARMS"] == ("mamba-b3", "xlstm", "mamba3-siso-pd", "native-pd")
+    # EVERY ARM AFTER THE FOURTH IS APPENDED, NEVER INSERTED, and the prefixes below are the
+    # whole reason why. The fan-out index selects a cell by position, so `--fanout-size 12`
+    # still reproduces the original four-arm wave byte for byte, `15` the five-arm one, and
+    # `24` the eight-arm one. Inserting an arm anywhere earlier renumbers every cell after it
+    # and silently repoints any fan-out already described in a document or a submission.
+    assert values["ARMS"] == (
+        "mamba-b3",
+        "xlstm",
+        "mamba3-siso-pd",
+        "native-pd",
+        "gdn",
+        "kda",
+        "kda-hh-r2",
+        "kda-gconv",
+    )
+    assert values["ARMS"][:4] == ("mamba-b3", "xlstm", "mamba3-siso-pd", "native-pd")
+    assert values["ARMS"][:5] == ("mamba-b3", "xlstm", "mamba3-siso-pd", "native-pd", "gdn")
     assert values["ATTENTION_LAYERS"] == (3, 7, 11, 15)
     assert values["FROZEN_STEPS"] == 1144
     assert values["FROZEN_GLOBAL_BATCH_SIZE"] == 524288
@@ -126,10 +142,19 @@ def test_arm_major_three_seed_wave_is_machine_readable():
     assert RUN_SPEC.is_file()
     assert SEEDS.is_file()
     schedule = json.loads(SEEDS.read_text())
-    expected_arms = ["mamba-b3", "xlstm", "mamba3-siso-pd", "native-pd"]
+    expected_arms = [
+        "mamba-b3",
+        "xlstm",
+        "mamba3-siso-pd",
+        "native-pd",
+        "gdn",
+        "kda",
+        "kda-hh-r2",
+        "kda-gconv",
+    ]
     assert schedule["arms"] == expected_arms
     assert schedule["replicates_per_arm"] == 3
-    assert schedule["fanout_size"] == 12
+    assert schedule["fanout_size"] == 24
     assert schedule["cell_order"] == [arm for arm in expected_arms for _ in range(3)]
     assert schedule["steps"] == 1144
     assert schedule["global_batch_size"] == 524288
@@ -163,6 +188,43 @@ def test_arm_major_three_seed_wave_is_machine_readable():
     assert shell_array("ISEEDS") == [
         str(seed) for arm in expected_arms for seed in schedule["init_seeds_by_arm"][arm]
     ]
+
+
+def test_the_seed_schedule_restates_the_entrypoint_ledger_rather_than_a_second_one():
+    """``seeds.json`` is a publication of the entrypoint's ledger, so it must not disagree.
+
+    The run spec is checked against ``seeds.json`` above and the runner builds from
+    ``model_arch_tests``, so nothing in the chain compares those two ends to each other. A
+    schedule that named an init seed the entrypoint does not admit would pass every check here
+    and be refused by ``parse_args`` on the machine, one cell at a time; one that named a
+    parameter count the ledger no longer holds would simply be read and believed.
+    """
+    values = _literal_assignments(ENTRYPOINT)
+    schedule = json.loads(SEEDS.read_text())
+
+    # `ARMS` and not `ARM_ORDER`, which is an alias of it and so is not a literal this file can
+    # evaluate. `test_five_seed_eight_arm_matrix_and_parser_rejects_mismatches` imports the
+    # module and pins the two to each other.
+    assert schedule["arms"] == list(values["ARMS"])
+    assert schedule["control"] == values["ARMS"][0]
+    assert schedule["fanout_size"] == len(schedule["arms"]) * schedule["replicates_per_arm"]
+    assert schedule["data_seeds"] == list(values["DATA_SEEDS"][:3])
+    assert schedule["reserved_data_seeds"] == list(values["DATA_SEEDS"][3:])
+    assert schedule["parameter_target"] == values["PARAMETER_TARGET"]
+    assert schedule["parameter_tolerance"] == values["PARAMETER_TOLERANCE"]
+    assert schedule["parameters_by_arm"] == values["EXACT_PARAMETER_COUNTS"]
+
+    issued = []
+    for arm in schedule["arms"]:
+        ledger = values["INIT_SEEDS_BY_ARM"][arm]
+        assert schedule["init_seeds_by_arm"][arm] == [ledger[s] for s in schedule["data_seeds"]]
+        assert schedule["reserved_init_seeds_by_arm"][arm] == [
+            ledger[s] for s in schedule["reserved_data_seeds"]
+        ]
+        issued += schedule["init_seeds_by_arm"][arm]
+        issued += schedule["reserved_init_seeds_by_arm"][arm]
+    assert len(set(issued)) == len(issued)
+    assert set(issued).isdisjoint(values["DATA_SEEDS"])
 
 
 def test_every_fanout_flag_is_declared_by_the_runner():
@@ -264,7 +326,13 @@ def test_smoke_fanout_seeds_match_the_frozen_arm_table():
 
         arms = shell_array("ARMS")
         init_seeds = [int(seed) for seed in shell_array("ISEEDS")]
-        assert len(arms) == len(init_seeds) == 5
+        # EVERY ARM OF THE WAVE, IN THE WAVE'S OWN ORDER, rather than a count of cells.
+        # A count is what let the three KDA arms be appended to the wave while both smokes
+        # went on rehearsing five, which would have sent nine of the twenty-four cells to a
+        # machine unrehearsed on a study with --attempts pinned to 1. Requiring the wave's
+        # order too is what keeps --fanout-size 5 the same five cells it has always been.
+        assert arms == list(values["ARMS"])
+        assert len(init_seeds) == len(arms)
         assert init_seeds == [expected_by_arm[arm][data_seed] for arm in arms]
         assert int(_flag_values(_shell_body(spec))["--data-seed"]) == data_seed
 
@@ -347,11 +415,17 @@ def test_smoke_specs_separate_functional_and_throughput_measurements():
     assert '"--skip-heldout-eval"' in source
     assert "if opts.skip_heldout_eval:" in source
 
+    # One literal for both specs, because a smoke that rehearses a different set of arms from
+    # the other smoke is worse than either of them alone: the functional gate would clear an
+    # arm the timed one never runs, and nothing would say so.
+    wave_arms = "ARMS=(mamba-b3 xlstm mamba3-siso-pd native-pd gdn kda kda-hh-r2 kda-gconv)"
+
     functional = FUNCTIONAL_SMOKE_SPEC.read_text()
     assert "--steps 10" in functional
     assert "--skip-heldout-eval" in functional
+    assert "--no-decode-probe" in functional
     assert "--nproc-per-node=8" in functional
-    assert "ARMS=(mamba-b3 xlstm mamba3-siso-pd native-pd gdn)" in functional
+    assert wave_arms in functional
 
     throughput = THROUGHPUT_SMOKE_SPEC.read_text()
     assert "--steps 100" in throughput
@@ -360,7 +434,7 @@ def test_smoke_specs_separate_functional_and_throughput_measurements():
     assert "--nproc-per-node=8" in throughput
     assert "WARMUP_STEPS_EXCLUDED=50" in throughput
     assert "TORCH_LOGS=graph_breaks,recompiles" in throughput
-    assert "ARMS=(mamba-b3 xlstm mamba3-siso-pd native-pd gdn)" in throughput
+    assert wave_arms in throughput
 
 
 def test_one_sm80_image_contains_every_required_kernel_family():

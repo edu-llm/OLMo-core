@@ -21,6 +21,10 @@ from olmo_core.nn.attention.recurrent import (
     GatedDeltaNet2,
     GatedDeltaNet2Config,
     GatedDeltaNetConfig,
+    KimiDeltaAttention,
+    KimiDeltaAttentionConfig,
+    KimiDeltaHouseholder,
+    KimiDeltaHouseholderConfig,
 )
 
 from ..buffer_cache import BufferCache
@@ -84,6 +88,10 @@ __all__ = [
     "GatedDeltaNet",
     "GatedDeltaNet2Config",
     "GatedDeltaNet2",
+    "KimiDeltaAttentionConfig",
+    "KimiDeltaAttention",
+    "KimiDeltaHouseholderConfig",
+    "KimiDeltaHouseholder",
 ]
 
 log = logging.getLogger(__name__)

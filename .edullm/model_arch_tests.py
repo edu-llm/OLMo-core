@@ -1,4 +1,4 @@
-"""Build the four frozen comparison arms and the exact measured GDN2 diagnostic control."""
+"""Build the eight frozen comparison arms of the mixer wave."""
 
 import argparse
 import contextlib
@@ -30,6 +30,8 @@ from olmo_core.nn.attention import (
     AttentionConfig,
     AttentionType,
     GatedDeltaNet2Config,
+    KimiDeltaAttentionConfig,
+    KimiDeltaHouseholderConfig,
 )
 from olmo_core.nn.feed_forward import FeedForwardConfig
 from olmo_core.nn.flash_pd_native import (
@@ -70,9 +72,32 @@ from olmo_core.utils import seed_all
 
 log = logging.getLogger(__name__)
 
-ARMS = ("mamba-b3", "xlstm", "mamba3-siso-pd", "native-pd")
-DIAGNOSTIC_ARMS = ("gdn",)
-RUNNABLE_ARMS = ARMS + DIAGNOSTIC_ARMS
+# NEW ARMS ARE APPENDED, NEVER INSERTED, AND THE ORDER OF THIS TUPLE IS THE WAVE. It is
+# arm-major and the fan-out index selects a cell by position, so each prefix stays runnable:
+# `--fanout-size 12` reproduces the original four-arm study exactly, `15` the five-arm one, and
+# `24` the whole thing. Inserting an arm anywhere earlier would renumber every cell after it and
+# silently repoint any fan-out already described in a document or a submitted run.
+#
+# Every arm after the first is a peer treatment, not a control: the control is `mamba-b3`. GDN2
+# was previously carried as a throughput diagnostic beside the wave, which is why the smoke specs
+# already name it.
+#
+# THE LAST THREE ARE ONE FAMILY AND THEIR CONTRASTS ARE PAIRWISE. `kda` is the shipped Kimi Delta
+# Attention operator and the baseline the other two are read against; `kda-hh-r2` adds a second
+# Householder factor and negative eigenvalues; `kda-gconv` replaces the three plain short
+# convolutions with LIV-style gated ones. Each moves one mechanism away from `kda`, so a
+# difference against it is attributable; a difference between `kda-hh-r2` and `kda-gconv` is not.
+ARMS = (
+    "mamba-b3",
+    "xlstm",
+    "mamba3-siso-pd",
+    "native-pd",
+    "gdn",
+    "kda",
+    "kda-hh-r2",
+    "kda-gconv",
+)
+RUNNABLE_ARMS = ARMS
 ARM_ORDER = ARMS
 DATA_SEEDS = (210007, 220014, 230021, 240028, 250035)
 INIT_SEEDS_BY_ARM = {
@@ -111,6 +136,31 @@ INIT_SEEDS_BY_ARM = {
         240028: 152032,
         250035: 162039,
     },
+    # The three KDA rows continue the schedule the first five were issued on -- arm `k` and data
+    # seed `j` take `110007 + 3001*k + 10007*j` -- so no arm above had to give up an integer and
+    # no integer is used twice across the forty. The last two columns of every row stay reserved
+    # and unissued, exactly as they are for the arms that came before.
+    "kda": {
+        210007: 125012,
+        220014: 135019,
+        230021: 145026,
+        240028: 155033,
+        250035: 165040,
+    },
+    "kda-hh-r2": {
+        210007: 128013,
+        220014: 138020,
+        230021: 148027,
+        240028: 158034,
+        250035: 168041,
+    },
+    "kda-gconv": {
+        210007: 131014,
+        220014: 141021,
+        230021: 151028,
+        240028: 161035,
+        250035: 171042,
+    },
 }
 
 # Every parameter in every arm is built in this one dtype. FSDP2 refuses to shard a block
@@ -138,8 +188,11 @@ EXACT_PARAMETER_COUNTS = {
     "xlstm": 390_143_056,
     "mamba3-siso-pd": 390_169_664,
     "native-pd": 390_142_976,
+    "gdn": 390_119_360,
+    "kda": 390_119_360,
+    "kda-hh-r2": 390_119_360,
+    "kda-gconv": 390_094_784,
 }
-DIAGNOSTIC_PARAMETER_COUNTS = {"gdn": 390_119_360}
 
 # Which of an arm's own parameters stay out of weight decay, BEYOND the embeddings every arm
 # exempts. This is a per-arm list rather than one shared list, and both halves of that are
@@ -158,15 +211,29 @@ DIAGNOSTIC_PARAMETER_COUNTS = {"gdn": 390_119_360}
 # names exactly what it has, and `test_every_arm_exempts_exactly_its_tagged_timescale_parameters_from_weight_decay`
 # rebuilds every arm and asserts this table against the tags themselves.
 #
-# `gdn` is deliberately empty even though GatedDeltaNet2 HAS `A_log` and `dt_bias`: it does not
-# tag them, and it is the frozen mixer-bakeoff control. Exempting them here would silently make
-# the diagnostic a different model from the one it is the baseline for.
+# `gdn` USED TO BE EMPTY, AND THAT WAS AN ASYMMETRY RATHER THAN A CHOICE. It has twelve `A_log`
+# and twelve `dt_bias` parameters -- and no `D` -- but `GatedDeltaNet2` in
+# `olmo_core.nn.attention.recurrent` did not set `_no_weight_decay` on them where Mamba-3 and
+# both PD mixers did, so the arm decayed its recurrence timescales under AdamW's 0.01 while the
+# other three recurrent arms did not: an optimizer difference wearing the costume of an operator
+# difference. The mixer now tags both, so the row names both. `*.D` stays off this row because
+# GDN-2 has no `D` and an unmatched pattern is fatal under `strict=True`.
+#
+# THE POLICY IS NOW UNIFORM: every arm exempts the timescales it has, and no arm exempts a name
+# it does not have. `xlstm` is the empty row because its two recurrences carry no such parameter
+# at all, not because it is treated differently. All three KDA classes tag `A_log` and `dt_bias`
+# and none of them has a `D`, so the three KDA rows are the same two patterns as `gdn`'s -- and
+# copying Mamba-3's three-pattern row onto them would not read as a smaller mistake in a diff
+# while being a fatal one at optimizer-build time.
 WEIGHT_DECAY_EXEMPT_PATTERNS_BY_ARM: dict[str, tuple[str, ...]] = {
     "mamba-b3": ("*.A_log", "*.dt_bias"),
     "xlstm": (),
     "mamba3-siso-pd": ("*.A_log", "*.dt_bias", "*.D"),
     "native-pd": ("*.A_log", "*.dt_bias", "*.D"),
-    "gdn": (),
+    "gdn": ("*.A_log", "*.dt_bias"),
+    "kda": ("*.A_log", "*.dt_bias"),
+    "kda-hh-r2": ("*.A_log", "*.dt_bias"),
+    "kda-gconv": ("*.A_log", "*.dt_bias"),
 }
 
 
@@ -327,8 +394,61 @@ def _attention_mixer() -> AttentionConfig:
 
 
 def _gdn_mixer() -> GatedDeltaNet2Config:
-    """Build the frozen measured GDN2 control behind the legacy ``gdn`` CLI key."""
+    """Build the frozen measured GDN2 mixer of the ``gdn`` arm."""
     return GatedDeltaNet2Config(n_heads=16, head_dim=64, expand_v=1.0, dtype=MASTER_DTYPE)
+
+
+def _kda_mixer() -> KimiDeltaAttentionConfig:
+    """Build the shipped Kimi Delta Attention mixer of the ``kda`` arm.
+
+    The baseline of the KDA family: one delta factor per token, plain SiLU short convolutions,
+    non-negative eigenvalues. Every option the other two arms move is left at its default here,
+    so that each of them differs from this arm in exactly one mechanism.
+    """
+    return KimiDeltaAttentionConfig(n_heads=16, head_dim=64, dtype=MASTER_DTYPE)
+
+
+def _kda_householder_mixer() -> KimiDeltaHouseholderConfig:
+    """Build the R=2, negative-eigenvalue DeltaProduct mixer of the ``kda-hh-r2`` arm.
+
+    Two rank-1 updates per token instead of one, which widens ``w_k``, ``w_v``, ``w_b`` and the
+    ``k``/``v`` convolutions by that factor and makes this the widest mixer in the wave at
+    6,608,976 parameters a layer. ``allow_neg_eigval`` lets each factor reflect rather than only
+    contract, which is the point of the variant and not a tuning knob.
+
+    ``backend="triton"`` is the fused recurrent path. The ``"torch"`` reference is the only one
+    that runs on CPU and is far slower; a cell that quietly selected it would be ranked on
+    throughput against seven fused arms.
+    """
+    return KimiDeltaHouseholderConfig(
+        n_heads=16,
+        head_dim=64,
+        num_householder=2,
+        allow_neg_eigval=True,
+        backend="triton",
+        dtype=MASTER_DTYPE,
+    )
+
+
+def _kda_gated_conv_mixer() -> KimiDeltaAttentionConfig:
+    """Build the LIV-style gated-convolution mixer of the ``kda-gconv`` arm.
+
+    The same class and head geometry as :func:`_kda_mixer` with the three plain short
+    convolutions replaced by gated ones, so the arm's whole per-layer difference from ``kda`` is
+    the 6,144 gate parameters -- about 0.14% of the layer, which is what keeps the contrast a
+    mechanism rather than a capacity difference.
+
+    ``gate_structure="depthwise"`` leaves ``gated_conv_activation`` at ``None``, and that is not
+    an activation-free convolution: the depthwise pre-gate is a SiLU with a learnable per-channel
+    slope moved ahead of the convolution. See :class:`KimiDeltaAttentionConfig` for the identity.
+    """
+    return KimiDeltaAttentionConfig(
+        n_heads=16,
+        head_dim=64,
+        gated_conv=True,
+        gate_structure="depthwise",
+        dtype=MASTER_DTYPE,
+    )
 
 
 def _mlstm_mixer() -> XLSTMMixerConfig:
@@ -359,6 +479,12 @@ def _slstm_mixer() -> SLSTMMixerConfig:
 def _treatment_mixer(arm: str, layer_index: int):
     if arm == "gdn":
         return _gdn_mixer()
+    if arm == "kda":
+        return _kda_mixer()
+    if arm == "kda-hh-r2":
+        return _kda_householder_mixer()
+    if arm == "kda-gconv":
+        return _kda_gated_conv_mixer()
     if arm == "mamba-b3":
         return Mamba3MixerConfig(
             n_heads=16,
@@ -384,11 +510,19 @@ def _treatment_mixer(arm: str, layer_index: int):
             n_heads=16,
             d_state=64,
             dictionary_size=16,
-            chunk_size=128,
+            # 64, MEASURED, NOT THE 128 THIS ARM WAS FIRST WRITTEN WITH. `paper_backward` took
+            # 2.98-3.00 ms a layer-step at 128 against 2.59-2.72 ms at 64, with the forwards
+            # level: about 0.3 ms a layer-step across twelve layers. The chunk blocks the scan
+            # and shapes no weight, so this moved no parameter -- the arm's solved widths and
+            # its 390,142,976 exact count are the ones the four-arm study was described with,
+            # and `test_native_pd_chunk_size_is_64_and_the_change_shaped_no_weights` asserts
+            # exactly that rather than leaving it assumed.
+            chunk_size=64,
             ste_temperature=1.0,
             mode=NativePDMode.GENERAL_SCATTER,
             backend=NativePDBackend.CUDA,
             conv_kernel_size=4,
+            fuse_input_projections=False,
             dtype=MASTER_DTYPE,
         )
     if arm == "mamba3-siso-pd":
@@ -478,7 +612,7 @@ def solve_widths(arm: str) -> tuple[int, ...]:
 def build_model_config(arm: str, init_seed: int) -> TransformerConfig:
     """Build and assert the frozen geometry and exact arm parameter count."""
     config = _model_for_widths(arm, solve_widths(arm), init_seed)
-    expected = {**EXACT_PARAMETER_COUNTS, **DIAGNOSTIC_PARAMETER_COUNTS}[arm]
+    expected = EXACT_PARAMETER_COUNTS[arm]
     if config.num_params != expected:
         raise RuntimeError(f"{arm} parameter count drifted: {config.num_params:,} != {expected:,}")
     if abs(config.num_params - PARAMETER_TARGET) > PARAMETER_TOLERANCE:

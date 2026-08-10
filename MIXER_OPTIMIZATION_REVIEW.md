@@ -327,18 +327,18 @@ The branch contains two different bakeoff budgets:
 - Run 1's original unexecuted plan: 1,907 steps, TPP about 2.56.
 - Branch-head Run 2: 3,721 steps, 1,950,875,648 tokens/cell, TPP about 5.
 
-The current four-arm wave now uses the measured Run 1 per-cell budget:
+The current eight-arm wave uses the measured Run 1 per-cell budget:
 
 - 1,144 steps.
 - 114 warmup steps.
 - Save interval 572.
 - Global batch 524,288 tokens.
 - 599,785,472 tokens/cell.
-- TPP 1.53724–1.53735 across exact arm parameter counts.
+- TPP 1.53724–1.53754 across exact arm parameter counts.
 
-It retains the stronger Run 2-style wave structure: four arms by five
-replicates, arm-major, with five shared data seeds. It is therefore
-**budget-aligned to Run 1**, not a copy of Run 1's six-arm/three-seed study.
+It uses eight arms by three replicates, arm-major, with three shared data seeds.
+It is therefore **budget- and seed-count-aligned to Run 1**, not a copy of Run
+1's two-treatment-slot architecture.
 
 Other contracts remain aligned: sequence length 4096, rank microbatch 8192,
 LR 1.4e-3, 10% warmup, eight A100s, BF16 compute, FP32 reduction, attempts 1,
@@ -380,9 +380,9 @@ Every cell launches `--nproc-per-node=8` on one `gpu-8xa100` node:
 
 | Wave | Cells | GPUs per cell | Maximum concurrent GPUs |
 | --- | ---: | ---: | ---: |
-| Functional smoke | 5 | 8 | 40 |
-| Throughput smoke | 5 | 8 | 40 |
-| Full comparison | 20 | 8 | 160 |
+| Functional smoke | 8 | 8 | 64 |
+| Throughput smoke | 8 | 8 | 64 |
+| Full comparison | 24 | 8 | 192 |
 
 The `nodes: 1` field in a check describes one cell, not the fan-out. Actual
 concurrency is set by the platform queue, so cells may start in groups.

@@ -1062,3 +1062,44 @@ def test_mamba3_siso_cuda_tails_have_bounded_linear_workspace(state: int, time: 
     assert metadata.payload_axes == ()
     assert metadata.scratch_elements == 7 * chunks * state
     assert metadata.training_sequence_elements == time + 3 * state
+
+
+@pytest.mark.gpu
+def test_cuda_forward_compiles_the_pointwise_regions_apart_from_the_scan():
+    """
+    Compiled, a CUDA forward must not put the prologue, the scan, and the readout in
+    one graph.
+
+    It did, because the scan reaches CUDA through a custom op Dynamo can follow, and
+    the arm then got nothing at all out of ``compile_model=True``: 74.6 ms compiled
+    against 75.2 ms eager, one bfloat16 forward and backward at the production shape
+    ``B=2, T=4096, D=1024``. With the CUDA scan left opaque the two pointwise regions
+    are fused and partitioned by themselves and the same step takes 44.4 ms. A host
+    forward keeps compiling as one graph, which
+    ``test_mixer_forward_compiles_fullgraph_through_the_reference_scan`` holds.
+    """
+    from torch._dynamo.utils import counters
+
+    mixer = (
+        NativeFlashPDMamba3SISOMixerConfig(
+            n_heads=1,
+            d_state=32,
+            dictionary_size=3,
+            chunk_size=32,
+            mode=NativePDMode.GENERAL_SCATTER,
+            backend=NativePDBackend.CUDA,
+            dtype=DType.float32,
+        )
+        .build(32, layer_idx=0, n_layers=1)
+        .cuda()
+    )
+    x = torch.randn(1, 64, 32, device="cuda")
+
+    torch._dynamo.reset()
+    counters.clear()
+    with torch.no_grad():
+        expected = mixer(x)
+        actual = torch.compile(mixer, backend="eager")(x)
+
+    torch.testing.assert_close(actual, expected)
+    assert counters["stats"]["unique_graphs"] > 1

@@ -2401,7 +2401,12 @@ def _decode_geometry(arm_name: str) -> dict[str, Any]:
     The LAYER COUNTS ALWAYS RESOLVE, because they are the ledger's own and true whatever the mixer
     is. The head geometry does not always exist: see :func:`_mixer_state_shape`.
     """
-    from model_arch_tests import ATTENTION_LAYERS, N_LAYERS, RUNNABLE_ARMS, build_model_config
+    from model_arch_tests import (
+        ATTENTION_LAYERS,
+        N_LAYERS,
+        RUNNABLE_ARMS,
+        build_model_config,
+    )
 
     if arm_name not in RUNNABLE_ARMS:
         raise ValueError(f"{arm_name!r} is not one of this study's arms {RUNNABLE_ARMS}")
@@ -2645,6 +2650,7 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
                 # along V. Passing one scalar beta for both would silently time KDA's operator.
                 erase = randn(B, T, HV, K).sigmoid()
                 write = randn(B, T, HV, V).sigmoid()
+
                 def call(
                     s,
                     kernel=kernel,
@@ -2671,6 +2677,7 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
                         use_qk_l2norm_in_kernel=True,
                         use_gate_in_kernel=True,
                     )
+
             else:
                 # `allow_neg_eigval` IS APPLIED IN EAGER PYTORCH AND IS DELIBERATELY *NOT*
                 # FORWARDED TO THE KERNEL, BECAUSE THAT IS WHAT THE TRAINING FORWARD DOES.
@@ -3090,6 +3097,24 @@ NATIVE_PD_EXTENSION_SYMBOLS = {
     "mamba3-siso-pd": ("mamba3_forward", "paper_backward"),
 }
 
+#: Which recurrence each KDA arm actually calls, as ``(module, callable)``.
+#:
+#: PER ARM AND NOT ONE SHARED SYMBOL, because the three arms do not share a recurrence and only
+#: two of them are in ``fla`` at all. ``kda`` and ``kda-gconv`` are the same
+#: ``KimiDeltaAttention`` class differing in their short convolutions, and both reach
+#: ``fla.ops.kda.chunk_kda`` through ``olmo_core.nn.attention.kda_api``. ``kda-hh-r2`` is
+#: ``KimiDeltaHouseholder``, whose R-factor recurrence has no fused form in ``fla``: it runs the
+#: in-tree Triton kernel below, which ``KimiDeltaHouseholder.forward`` imports LAZILY -- so a
+#: build where that module cannot import (Triton is imported at its module scope) fails inside
+#: the first step rather than at startup, which is the whole failure this preflight removes.
+#: Checking ``chunk_kda`` for that arm would probe a kernel it never calls and pass a build that
+#: cannot run it.
+KDA_RECURRENCE_SYMBOLS = {
+    "kda": ("fla.ops.kda", "chunk_kda"),
+    "kda-gconv": ("fla.ops.kda", "chunk_kda"),
+    "kda-hh-r2": ("olmo_core.nn.attention.kda_householder", "chunk_kda_householder"),
+}
+
 #: The one card this comparison is defined on.
 #:
 #: A PROPERTY OF THE COMPARISON RATHER THAN OF ANY ONE ARM, which is why it is checked in one
@@ -3333,6 +3358,81 @@ def _preflight_gdn2() -> None:
         )
 
 
+def _preflight_kda(arm: str) -> None:
+    """The three KDA arms: a pinned ``fla`` for the gated norm, then this arm's own recurrence.
+
+    TWO DEPENDENCIES, REACHED AT TWO DIFFERENT TIMES, AND ALL THREE ARMS NEED BOTH.
+    ``KimiDeltaAttention.__init__`` and ``KimiDeltaHouseholder.__init__`` both open with
+    ``assert has_fla()`` and then ``from fla.modules import FusedRMSNormGated``, so ``fla`` is a
+    CONSTRUCTION-time dependency of every KDA arm even for the one whose recurrence is in-tree.
+    Without it the arm dies in ``config.model.build()``, before a single step, as a bare
+    ``AssertionError`` with no text.
+
+    The recurrence is the second dependency and it is reached on the first forward. It differs
+    per arm -- see :data:`KDA_RECURRENCE_SYMBOLS` -- and for ``kda-hh-r2`` it is an in-tree
+    Triton kernel rather than an ``fla`` one, so this imports the module named there rather than
+    assuming ``fla`` covers it.
+
+    WHAT THIS DOES NOT COVER, STATED RATHER THAN IMPLIED. Importing
+    ``kda_householder.chunk_kda_householder`` proves the module imports, that Triton imported
+    with it, and that the entry point is callable. It does NOT compile the kernel: Triton is
+    just-in-time, so a build whose Triton cannot emit PTX for this card gets past this check and
+    fails on the first forward. Compiling it here would need a real autograd-capable launch on
+    the rank's own card, which is what ``_prewarm_flashrnn`` does for xLSTM and what no other
+    Triton arm in this wave does either -- ``gdn`` has the same gap.
+    """
+    from olmo_core.nn.attention.flash_linear_attn_api import has_fla
+
+    if not has_fla():
+        raise _environment_refusal(
+            f"the {arm} arm builds fla's FusedRMSNormGated in its constructor and "
+            "flash-linear-attention is not importable"
+        )
+
+    # The same two distributions and the same pin as the GDN2 control, because there is one
+    # `fla` in the image and all four arms read their kernels out of it. The constant keeps its
+    # GDN2 name because that is the arm it was introduced for; it is not a copy-paste slip.
+    _refuse_unpinned_packages(GDN2_PINNED_VERSIONS)
+
+    try:
+        from fla.modules import FusedRMSNormGated
+    except ImportError as error:
+        raise _environment_refusal(
+            f"the {arm} arm needs fla.modules.FusedRMSNormGated and this build does not import "
+            f"it: {type(error).__name__}: {error}"
+        ) from error
+    if not callable(FusedRMSNormGated):
+        raise _environment_refusal(
+            "fla.modules.FusedRMSNormGated is not callable in this build of "
+            "flash-linear-attention"
+        )
+
+    # THE SHORT CONVOLUTIONS, AND THE ONLY ONE OF THESE CHECKS THAT IS ABOUT A NUMBER RATHER
+    # THAN A CRASH. All three KDA arms run three of them per layer. `CausalConv1d` calls
+    # `fla.modules.convolution.causal_conv1d` unconditionally, so `kda` and `kda-hh-r2` would
+    # simply die without it -- but `kda-gconv`'s `GatedCausalConv1d` takes the fused path only
+    # `if self.use_fla and has_fla() and u.is_cuda` and otherwise falls back to a reference
+    # convolution that is numerically fine and much slower. That is the worst shape a failure
+    # can take in a throughput study: the arm finishes, reports, and is ranked on a path no
+    # other arm was measured on, with nothing in the record saying so.
+    checks = [("fla.modules.convolution", "causal_conv1d"), KDA_RECURRENCE_SYMBOLS[arm]]
+    for module_name, func_name in checks:
+        try:
+            import importlib
+
+            module = importlib.import_module(module_name)
+        except Exception as error:  # noqa: BLE001 -- a Triton import failure is not an ImportError
+            raise _environment_refusal(
+                f"the {arm} arm runs {module_name}.{func_name} and importing {module_name} "
+                f"failed: {type(error).__name__}: {error}"
+            ) from error
+        if not callable(getattr(module, func_name, None)):
+            raise _environment_refusal(
+                f"the {arm} arm calls {module_name}.{func_name} and this build exports no "
+                f"callable {func_name} there"
+            )
+
+
 def _preflight_mamba3_kernel() -> None:
     """The custom mamba-b3 arm, which is built with ``prefer_official_kernel=True``."""
     from olmo_core.nn.mamba3.mamba3_ssd_api import has_mamba3
@@ -3350,17 +3450,23 @@ def _preflight_mamba3_kernel() -> None:
 def preflight_accelerated_arm(opts) -> None:
     """Fail before training if the selected strict backend is unavailable.
 
-    EVERY ARM IN THIS COMPARISON IS STRICT AND ONLY xLSTM USED TO BE CHECKED. The other four
+    EVERY ARM IN THIS COMPARISON IS STRICT AND ONLY xLSTM USED TO BE CHECKED. The other seven
     ask for a specific kernel by name -- ``prefer_official_kernel=True``,
-    ``NativePDBackend.CUDA``, ``fla``'s ``chunk_gdn2`` -- and none of them falls back, so an
-    image missing one produces a run that is admitted, priced, given a machine, and then dies
-    somewhere inside the first step with whatever the kernel's own error happens to be. That
-    failure costs the image pull and the queue wait, and it arrives as an exception from three
-    libraries down rather than as a sentence naming the package.
+    ``NativePDBackend.CUDA``, ``fla``'s ``chunk_gdn2`` and ``chunk_kda``, the in-tree Triton
+    Householder kernel -- and none of them falls back, so an image missing one produces a run
+    that is admitted, priced, given a machine, and then dies somewhere inside the first step
+    with whatever the kernel's own error happens to be. That failure costs the image pull and
+    the queue wait, and it arrives as an exception from three libraries down rather than as a
+    sentence naming the package.
 
-    THE DEVICE COMES FIRST, AND FOR EVERY ARM. The card is the one precondition all five share,
+    THE DEVICE COMES FIRST, AND FOR EVERY ARM. The card is the one precondition all eight share,
     and a package probe cannot see it -- so the kernel checks below are only worth running once
     the machine they are checking a build against is the machine the build was made for.
+
+    THE CHAIN HAS NO ``else``, AND THAT IS LOAD-BEARING RATHER THAN AN OVERSIGHT: an arm added to
+    ``RUNNABLE_ARMS`` with no branch here silently gets the device and dtype checks and no kernel
+    check at all. ``test_every_runnable_arm_is_refused_on_a_host_that_has_none_of_its_kernels``
+    is parametrized over ``RUNNABLE_ARMS`` and is what turns that omission into a red test.
     """
     _preflight_device(opts.arm)
     _preflight_param_dtype(opts)
@@ -3371,6 +3477,8 @@ def preflight_accelerated_arm(opts) -> None:
         _preflight_flash_pd(opts.arm)
     elif opts.arm == "gdn":
         _preflight_gdn2()
+    elif opts.arm in KDA_RECURRENCE_SYMBOLS:
+        _preflight_kda(opts.arm)
     elif opts.arm == "mamba-b3":
         _preflight_mamba3_kernel()
 

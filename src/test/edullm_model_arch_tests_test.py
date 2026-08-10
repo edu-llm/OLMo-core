@@ -1,6 +1,9 @@
 import contextlib
 import gc
+import hashlib
 import importlib.util
+import json
+import re
 import sys
 from pathlib import Path
 
@@ -57,11 +60,18 @@ def test_every_arm_exempts_exactly_its_tagged_timescale_parameters_from_weight_d
 
     from olmo_core.nn.utils import no_weight_decay_param_names
 
+    # An arm promoted into the wave with no ledger row would raise KeyError inside
+    # `weight_decay_group_overrides` on a billed machine, so the ledger's key set is pinned
+    # to the arm list rather than left to the loop below to discover arm by arm.
+    assert set(module.WEIGHT_DECAY_EXEMPT_PATTERNS_BY_ARM) == set(module.RUNNABLE_ARMS)
+
+    tagged_by_arm = {}
     for arm in module.RUNNABLE_ARMS:
         config = module.build_model_config(arm, module.valid_init_seeds(arm)[0])
         model = build_or_skip(lambda config=config: config.build(init_device="meta"))
         names = [name for name, _ in model.named_parameters()]
         tagged = set(no_weight_decay_param_names(model))
+        tagged_by_arm[arm] = tagged
 
         overrides = module.weight_decay_group_overrides(arm)
         assert len(overrides) == 1, arm
@@ -79,6 +89,47 @@ def test_every_arm_exempts_exactly_its_tagged_timescale_parameters_from_weight_d
         exempted = {name for name in names if any(fnmatch(name, p) for p in patterns)}
         assert exempted == tagged | {"embeddings.weight"}, arm
 
+        del model
+        gc.collect()
+
+    # `gdn` HAS twelve `A_log` AND TWELVE `dt_bias` PARAMETERS AND EXEMPTS ALL TWENTY-FOUR.
+    # `GatedDeltaNet2` was the one recurrent mixer that never set `_no_weight_decay`, so the only
+    # ledger row that could satisfy the equality above was the empty one, and the arm decayed its
+    # recurrence timescales under AdamW's 0.01 while Mamba-3 and both PD mixers did not. The
+    # mixer tags them now. The equality above already fails if a tag is dropped; what is pinned
+    # here is the *count*, so an arm rebuilt with fewer recurrent slots -- which would keep both
+    # sides of that equality consistent while quietly changing the comparison -- is caught too.
+    gdn = module.build_model_config("gdn", module.valid_init_seeds("gdn")[0])
+    gdn_model = build_or_skip(lambda: gdn.build(init_device="meta"))
+    gdn_names = [name for name, _ in gdn_model.named_parameters()]
+    assert len([name for name in gdn_names if name.endswith(".A_log")]) == 12
+    assert len([name for name in gdn_names if name.endswith(".dt_bias")]) == 12
+    # No `D`, so the row must not name one: an unmatched pattern is fatal under `strict=True`.
+    assert [name for name in gdn_names if name.endswith(".D")] == []
+    assert module.WEIGHT_DECAY_EXEMPT_PATTERNS_BY_ARM["gdn"] == ("*.A_log", "*.dt_bias")
+    assert tagged_by_arm["gdn"] == {
+        name for name in gdn_names if name.endswith((".A_log", ".dt_bias"))
+    }
+    assert len(tagged_by_arm["gdn"]) == 24
+    del gdn_model
+    gc.collect()
+
+    # THE THREE KDA ARMS CARRY THE SAME TWO-PATTERN ROW AND MUST NOT CARRY A THIRD. All three
+    # classes tag `A_log` and `dt_bias`, and none of them has a `D` -- so the row Mamba-3 and
+    # both PD mixers use, which names `*.D`, is fatal here rather than merely redundant:
+    # `_expand_param_globs` raises under `strict=True` for a pattern with no match, and it
+    # raises while building the optimizer on a machine that has already been billed. The
+    # Householder variant widens `w_k`/`w_v`/`w_b` by R and leaves the timescales alone, so its
+    # count of tagged parameters is the same twelve and twelve as the other two.
+    for arm in ("kda", "kda-hh-r2", "kda-gconv"):
+        assert module.WEIGHT_DECAY_EXEMPT_PATTERNS_BY_ARM[arm] == ("*.A_log", "*.dt_bias"), arm
+        config = module.build_model_config(arm, module.valid_init_seeds(arm)[0])
+        model = build_or_skip(lambda config=config: config.build(init_device="meta"))
+        names = [name for name, _ in model.named_parameters()]
+        assert len([name for name in names if name.endswith(".A_log")]) == 12, arm
+        assert len([name for name in names if name.endswith(".dt_bias")]) == 12, arm
+        assert [name for name in names if name.endswith(".D")] == [], arm
+        assert len(tagged_by_arm[arm]) == 24, arm
         del model
         gc.collect()
 
@@ -131,7 +182,7 @@ def test_platform_artifacts_exist():
     assert RUN_GUIDE.is_file()
 
 
-def test_four_arm_geometry_has_identical_attention_and_full_recurrent_treatments():
+def test_eight_arm_geometry_has_identical_attention_and_full_recurrent_treatments():
     module = load_entrypoint()
     from olmo_core.nn.attention import AttentionBackendName, AttentionConfig
 
@@ -161,17 +212,41 @@ def test_four_arm_geometry_has_identical_attention_and_full_recurrent_treatments
             else:
                 assert block.feed_forward.hidden_size == width_by_layer[index]
 
+    # THE INVARIANT THE WHOLE COMPARISON RESTS ON. Every arm's four attention blocks -- mixer,
+    # feed-forward and layer norm together -- must be one shared object, so that the only thing
+    # that differs between arms is the twelve recurrent slots. Parameter respend happens in
+    # recurrent-block FFN widths and nowhere else. Adding an arm must not move this, and the
+    # fingerprint below is pinned to the value the four-arm wave was first measured under: the
+    # three KDA arms are inside it now and it did not move.
+    assert len(configs) == 8
     reference = configs[module.ARMS[0]]
+    fingerprints = set()
     for arm, config in configs.items():
         for index, (expected, actual) in enumerate(
             zip(reference.resolved_block_configs, config.resolved_block_configs)
         ):
             if index in module.ATTENTION_LAYERS:
                 assert actual.as_config_dict() == expected.as_config_dict(), (arm, index)
+        attention_blocks = [
+            config.resolved_block_configs[index].as_config_dict()
+            for index in module.ATTENTION_LAYERS
+        ]
+        assert {block["feed_forward"]["hidden_size"] for block in attention_blocks} == {4608}, arm
+        fingerprints.add(
+            hashlib.blake2b(
+                json.dumps(attention_blocks, sort_keys=True).encode(), digest_size=8
+            ).hexdigest()
+        )
+    assert fingerprints == {"deb8ff528e7359fa"}
 
 
 def test_treatment_mixers_are_strict_and_parameter_matched():
     module = load_entrypoint()
+    from olmo_core.nn.attention import (
+        GatedDeltaNet2Config,
+        KimiDeltaAttentionConfig,
+        KimiDeltaHouseholderConfig,
+    )
     from olmo_core.nn.flash_pd_native import (
         NativeFlashPDMamba3SISOMixerConfig,
         NativeFlashPDMixerConfig,
@@ -185,12 +260,23 @@ def test_treatment_mixers_are_strict_and_parameter_matched():
         "xlstm": 390_143_056,
         "mamba3-siso-pd": 390_169_664,
         "native-pd": 390_142_976,
+        "gdn": 390_119_360,
+        "kda": 390_119_360,
+        "kda-hh-r2": 390_119_360,
+        "kda-gconv": 390_094_784,
     }
     expected_widths = {
         "mamba-b3": (4800,) * 7 + (4768,) * 5,
         "xlstm": (4672,) * 8 + (4640,) * 4,
         "mamba3-siso-pd": (2752,) * 11 + (2720,),
         "native-pd": (2432,) * 6 + (2400,) * 6,
+        "gdn": (3808,) + (3776,) * 11,
+        "kda": (4480,) * 3 + (4448,) * 9,
+        # KDA with two Householder factors is the widest mixer in the wave at 6,608,976
+        # parameters a layer, so it buys the least FFN back -- landing within 32 of GDN-2's
+        # solution, whose mixer is 6,568,016.
+        "kda-hh-r2": (3776,) * 8 + (3744,) * 4,
+        "kda-gconv": (4480,) * 2 + (4448,) * 10,
     }
     assert module.EXACT_PARAMETER_COUNTS == expected_counts
 
@@ -223,22 +309,101 @@ def test_treatment_mixers_are_strict_and_parameter_matched():
             assert all(mixer.fuse_input_projections is True for mixer in slstm)
         elif arm == "native-pd":
             assert all(isinstance(mixer, NativeFlashPDMixerConfig) for mixer in mixers)
+        elif arm == "gdn":
+            assert all(type(mixer) is GatedDeltaNet2Config for mixer in mixers)
+            assert all(mixer.n_heads == 16 for mixer in mixers)
+            assert all(mixer.head_dim == 64 for mixer in mixers)
+            assert all(mixer.expand_v == 1.0 for mixer in mixers)
+        elif arm == "kda":
+            # The shipped KDA operator: plain SiLU short convolutions, one delta factor,
+            # non-negative eigenvalues. It is the baseline the other two are read against, so
+            # every option that either of them moves is pinned to its default here.
+            assert all(type(mixer) is KimiDeltaAttentionConfig for mixer in mixers)
+            assert all(mixer.gated_conv is False for mixer in mixers)
+            assert all(mixer.conv_activation == "silu" for mixer in mixers)
+            assert all(mixer.allow_neg_eigval is False for mixer in mixers)
+        elif arm == "kda-hh-r2":
+            assert all(type(mixer) is KimiDeltaHouseholderConfig for mixer in mixers)
+            assert all(mixer.num_householder == 2 for mixer in mixers)
+            assert all(mixer.allow_neg_eigval is True for mixer in mixers)
+            # `torch` is the CPU reference recurrence and is far slower; a wave cell that
+            # silently ran it would be ranked on throughput against seven fused arms.
+            assert all(mixer.backend == "triton" for mixer in mixers)
+        elif arm == "kda-gconv":
+            assert all(type(mixer) is KimiDeltaAttentionConfig for mixer in mixers)
+            assert all(mixer.gated_conv is True for mixer in mixers)
+            assert all(mixer.gate_structure == "depthwise" for mixer in mixers)
+            assert all(mixer.gate_rank is None for mixer in mixers)
+            assert all(mixer.allow_neg_eigval is False for mixer in mixers)
         else:
+            assert arm == "mamba3-siso-pd"
             assert all(isinstance(mixer, NativeFlashPDMamba3SISOMixerConfig) for mixer in mixers)
+        if arm in ("kda", "kda-hh-r2", "kda-gconv"):
+            assert all(mixer.n_heads == 16 for mixer in mixers)
+            assert all(mixer.head_dim == 64 for mixer in mixers)
+            assert all(mixer.expand_v == 1.0 for mixer in mixers)
+            assert all(mixer.conv_size == 4 for mixer in mixers)
         if arm in ("native-pd", "mamba3-siso-pd"):
             assert all(mixer.backend == NativePDBackend.CUDA for mixer in mixers)
             assert all(mixer.mode == NativePDMode.GENERAL_SCATTER for mixer in mixers)
+        if arm == "native-pd":
+            # 64, not the 128 this arm was first written with. Measured `paper_backward` at
+            # 2.98-3.00 ms per layer-step on chunk 128 against 2.59-2.72 ms on 64, with the
+            # forwards level -- about 0.3 ms a layer-step. Asserted here beside the exact
+            # parameter count because the two facts belong together: the chunk blocks the scan
+            # and shapes no weight, so the count below must not have moved.
+            assert all(mixer.chunk_size == 64 for mixer in mixers)
 
 
-def test_five_seed_four_arm_matrix_and_parser_rejects_mismatches():
+def test_five_seed_eight_arm_matrix_and_parser_rejects_mismatches():
     module = load_entrypoint()
 
     assert module.DATA_SEEDS == (210007, 220014, 230021, 240028, 250035)
-    assert module.ARM_ORDER == ("mamba-b3", "xlstm", "mamba3-siso-pd", "native-pd")
+    assert module.ARM_ORDER == (
+        "mamba-b3",
+        "xlstm",
+        "mamba3-siso-pd",
+        "native-pd",
+        "gdn",
+        "kda",
+        "kda-hh-r2",
+        "kda-gconv",
+    )
     all_init_seeds = {
         seed for arm in module.ARM_ORDER for seed in module.INIT_SEEDS_BY_ARM[arm].values()
     }
-    assert len(all_init_seeds) == 20
+    # FORTY DISTINCT INTEGERS, EIGHT ARMS BY FIVE DATA SEEDS. A repeat would not fail anything
+    # at run time: two cells would simply draw the same weights while their records claimed
+    # otherwise, and the wave would report a replicate it never ran.
+    assert len(all_init_seeds) == 40
+
+    # The three arms appended after `gdn` must not have taken an integer that was already
+    # issued OR reserved, and none of the forty may collide with a data seed either -- the two
+    # ledgers are separate but both are printed into the same run record.
+    five_arm_seeds = {
+        seed
+        for arm in ("mamba-b3", "xlstm", "mamba3-siso-pd", "native-pd", "gdn")
+        for seed in module.INIT_SEEDS_BY_ARM[arm].values()
+    }
+    kda_seeds = {
+        seed
+        for arm in ("kda", "kda-hh-r2", "kda-gconv")
+        for seed in module.INIT_SEEDS_BY_ARM[arm].values()
+    }
+    assert len(five_arm_seeds) == 25
+    assert len(kda_seeds) == 15
+    assert five_arm_seeds & kda_seeds == set()
+    assert all_init_seeds & set(module.DATA_SEEDS) == set()
+
+    # And no existing arm's row moved, because a reissued init seed silently invalidates the
+    # five-arm cells that were already described off this ledger.
+    assert module.INIT_SEEDS_BY_ARM["gdn"] == {
+        210007: 122011,
+        220014: 132018,
+        230021: 142025,
+        240028: 152032,
+        250035: 162039,
+    }
 
     arm = "native-pd"
     data_seed = 220014
@@ -353,10 +518,14 @@ def test_commands_docs_and_reader_contract_are_complete():
     assert "$EDULLM_CHECKPOINT_DIR" in run_yaml
     assert "--param-dtype bfloat16" in run_yaml
     assert "reservoir-dolma2-v1" in guide
-    assert "12 cells" in guide
+    assert "24 cells" in guide
     assert "10 mLSTM" in guide
-    assert "TPP 1.53724–1.53735" in guide
+    assert "TPP 1.53724–1.53754" in guide
+    assert "--fanout-size 24" in guide
+    # The shorter prefixes stay runnable and documented, because that is the whole reason every
+    # arm after the fourth was appended rather than inserted.
     assert "--fanout-size 12" in guide
+    assert "--fanout-size 15" in guide
 
 
 def test_platform_dockerfile_pins_builds_and_asserts_sm80_symbols():
@@ -386,16 +555,30 @@ def test_platform_dockerfile_pins_builds_and_asserts_sm80_symbols():
     assert "aws " not in dockerfile.lower()
 
 
-def test_four_arm_comparison_uses_full_3_to_1_architectures_at_matched_tpp():
+def test_eight_arm_comparison_uses_full_3_to_1_architectures_at_matched_tpp():
     module = load_entrypoint()
-    from olmo_core.nn.attention import AttentionConfig
+    from olmo_core.nn.attention import (
+        AttentionConfig,
+        GatedDeltaNet2Config,
+        KimiDeltaAttentionConfig,
+        KimiDeltaHouseholderConfig,
+    )
     from olmo_core.nn.flash_pd_native import (
         NativeFlashPDMamba3SISOMixerConfig,
         NativeFlashPDMixerConfig,
     )
     from olmo_core.nn.mamba3 import Mamba3MixerConfig
 
-    assert module.ARMS == ("mamba-b3", "xlstm", "mamba3-siso-pd", "native-pd")
+    assert module.ARMS == (
+        "mamba-b3",
+        "xlstm",
+        "mamba3-siso-pd",
+        "native-pd",
+        "gdn",
+        "kda",
+        "kda-hh-r2",
+        "kda-gconv",
+    )
     assert module.ATTENTION_LAYERS == (3, 7, 11, 15)
     assert module.FROZEN_STEPS == 1144
     assert module.FROZEN_GLOBAL_BATCH_SIZE == 524288
@@ -407,17 +590,29 @@ def test_four_arm_comparison_uses_full_3_to_1_architectures_at_matched_tpp():
         assert sum(isinstance(mixer, AttentionConfig) for mixer in mixers) == 4
         assert abs(config.num_params - module.PARAMETER_TARGET) <= module.PARAMETER_TOLERANCE
         tpp = module.FROZEN_STEPS * module.FROZEN_GLOBAL_BATCH_SIZE / config.num_params
-        assert tpp == pytest.approx(1.5373, abs=0.0001)
+        # The band the run guide and the pre-registration both quote, and it is the arms that
+        # set it: `mamba3-siso-pd` is the low end at 1.53724 and `kda-gconv`, now the smallest
+        # exact model at 390,094,784, the high at 1.53754. The band is a REPORTED consequence of
+        # the ledger and not a constraint on it -- the frozen constraint is the +/-195,068
+        # parameter tolerance asserted above, and every arm is well inside it.
+        assert 1.53724 <= tpp <= 1.53754, (arm, tpp)
 
         recurrent = [
             mixer for index, mixer in enumerate(mixers) if index not in module.ATTENTION_LAYERS
         ]
+        assert len(recurrent) == 12
         if arm == "mamba-b3":
             assert all(isinstance(mixer, Mamba3MixerConfig) for mixer in recurrent)
         elif arm == "native-pd":
             assert all(isinstance(mixer, NativeFlashPDMixerConfig) for mixer in recurrent)
         elif arm == "mamba3-siso-pd":
             assert all(isinstance(mixer, NativeFlashPDMamba3SISOMixerConfig) for mixer in recurrent)
+        elif arm == "gdn":
+            assert all(type(mixer) is GatedDeltaNet2Config for mixer in recurrent)
+        elif arm in ("kda", "kda-gconv"):
+            assert all(type(mixer) is KimiDeltaAttentionConfig for mixer in recurrent)
+        elif arm == "kda-hh-r2":
+            assert all(type(mixer) is KimiDeltaHouseholderConfig for mixer in recurrent)
         else:
             names = [type(mixer).__name__ for mixer in recurrent]
             assert names.count("XLSTMMixerConfig") == 10
@@ -428,12 +623,21 @@ def test_comparison_wave_is_arm_major_three_seed_single_image_fanout():
     assert COMPARISON_RUN_CONFIG.is_file()
     assert SEED_SCHEDULE.is_file()
     run_yaml = COMPARISON_RUN_CONFIG.read_text()
-    schedule = __import__("json").loads(SEED_SCHEDULE.read_text())
+    schedule = json.loads(SEED_SCHEDULE.read_text())
 
-    expected_arms = ["mamba-b3", "xlstm", "mamba3-siso-pd", "native-pd"]
+    expected_arms = [
+        "mamba-b3",
+        "xlstm",
+        "mamba3-siso-pd",
+        "native-pd",
+        "gdn",
+        "kda",
+        "kda-hh-r2",
+        "kda-gconv",
+    ]
     assert schedule["arms"] == expected_arms
     assert schedule["replicates_per_arm"] == 3
-    assert schedule["fanout_size"] == 12
+    assert schedule["fanout_size"] == 24
     assert schedule["cell_order"] == [
         arm for arm in expected_arms for _ in range(schedule["replicates_per_arm"])
     ]
@@ -450,13 +654,29 @@ def test_comparison_wave_is_arm_major_three_seed_single_image_fanout():
     assert "--warmup-steps 114" in run_yaml
     assert "--save-interval 572" in run_yaml
     assert "--global-batch-size 524288" in run_yaml
-    assert run_yaml.count("mamba-b3") == 3
-    assert run_yaml.count("xlstm") == 3
-    assert run_yaml.count("mamba3-siso-pd") == 3
-    assert run_yaml.count("native-pd") == 3
+
+    # THE ARM NAMES ARE COUNTED AS SHELL WORDS, NOT AS SUBSTRINGS, and that is not fussiness:
+    # `kda` occurs inside `kda-hh-r2` and `kda-gconv`, so `run_yaml.count("kda") == 3` is false
+    # for a correct file and true for several wrong ones. The spec's own array is the thing the
+    # fan-out indexes, so it is the thing to count.
+    match = re.search(r"ARMS=\((.*?)\) &&", run_yaml, flags=re.DOTALL)
+    assert match is not None
+    spec_arms = match.group(1).split()
+    assert spec_arms == schedule["cell_order"]
+    for arm in expected_arms:
+        assert spec_arms.count(arm) == 3, arm
+
+    # EVERY ARM AFTER THE FOURTH OCCUPIES A SUFFIX AND NEVER AN INSERTION, so `--fanout-size 12`
+    # still reproduces the four-arm wave, `15` the five-arm one, and `24` the whole thing.
+    assert schedule["cell_order"][:12] == [
+        arm for arm in expected_arms[:4] for _ in range(schedule["replicates_per_arm"])
+    ]
+    assert schedule["cell_order"][12:15] == ["gdn"] * 3
+    assert schedule["cell_order"][15:] == ["kda"] * 3 + ["kda-hh-r2"] * 3 + ["kda-gconv"] * 3
+    assert spec_arms[:15] == schedule["cell_order"][:15]
 
 
-def test_single_platform_image_bundles_all_four_accelerated_backends():
+def test_single_platform_image_bundles_all_five_accelerated_backends():
     dockerfile = DOCKERFILE.read_text()
     for pin in ("xlstm==2.0.5", "mlstm-kernels==2.0.4", "flashrnn==1.0.6"):
         assert pin in dockerfile
@@ -464,9 +684,15 @@ def test_single_platform_image_bundles_all_four_accelerated_backends():
     assert "mamba3_siso_combined" in dockerfile
     assert "olmo_xlstm" in dockerfile
     assert "olmo_slstm" in dockerfile
+    # `gdn` is a comparison arm now, so FLA is a wave dependency and no longer only a
+    # smoke-time one. Its absence would strand twelve of the twenty-four cells rather than
+    # three: `kda` and `kda-gconv` run on `fla`'s KDA kernels out of the same pin, and only
+    # `kda-hh-r2` is an in-tree kernel with no `fla` counterpart.
+    assert '"flash-linear-attention==0.5.1"' in dockerfile
+    assert "from fla.ops.gdn2 import chunk_gdn2" in dockerfile
 
 
-def test_throughput_diagnostic_gdn_is_exact_measured_gdn2():
+def test_gdn_comparison_arm_is_exact_measured_gdn2():
     module = load_entrypoint()
     from olmo_core.nn.attention import (
         AttentionConfig,
@@ -474,8 +700,12 @@ def test_throughput_diagnostic_gdn_is_exact_measured_gdn2():
         GatedDeltaNet2Config,
     )
 
-    assert module.DIAGNOSTIC_ARMS == ("gdn",)
-    assert module.DIAGNOSTIC_PARAMETER_COUNTS == {"gdn": 390_119_360}
+    # `gdn` is a full arm of the wave now, not a diagnostic key alongside it. There is one
+    # arm list and one parameter ledger, and `gdn` is in both.
+    assert not hasattr(module, "DIAGNOSTIC_ARMS")
+    assert not hasattr(module, "DIAGNOSTIC_PARAMETER_COUNTS")
+    assert module.RUNNABLE_ARMS == module.ARMS
+    assert module.EXACT_PARAMETER_COUNTS["gdn"] == 390_119_360
     assert module.solve_widths("gdn") == (3808,) + (3776,) * 11
     config = module.build_model_config("gdn", module.valid_init_seeds("gdn")[0])
     mixers = [block.sequence_mixer for block in config.resolved_block_configs]
@@ -490,8 +720,89 @@ def test_throughput_diagnostic_gdn_is_exact_measured_gdn2():
     assert all(mixer.conv_size == 4 for mixer in gdn2_mixers)
     realized = gdn2_mixers[0].build(module.D_MODEL, layer_idx=0, n_layers=module.N_LAYERS)
     assert type(realized) is GatedDeltaNet2
-    assert config.num_params == module.DIAGNOSTIC_PARAMETER_COUNTS["gdn"]
+    assert config.num_params == module.EXACT_PARAMETER_COUNTS["gdn"]
     assert abs(config.num_params - module.PARAMETER_TARGET) <= module.PARAMETER_TOLERANCE
+
+
+def test_the_three_kda_arms_are_the_verified_mixers_at_the_frozen_head_geometry():
+    """Each KDA arm's twelve slots hold the exact config the ported mixer tests verified.
+
+    THE PER-LAYER COUNTS ARE THE JOIN. ``src/test/nn/attention/kda_test.py`` pins the same three
+    integers against the built modules, so if this file and that one ever describe different
+    operators the pair of them says so. Pinning only the model total would not: the solver moves
+    twelve FFN widths to absorb whatever the mixer costs, so a mixer that changed by a few
+    thousand parameters would produce a model total that still landed inside the tolerance and
+    still looked deliberate.
+    """
+    module = load_entrypoint()
+    from olmo_core.nn.attention import (
+        KimiDeltaAttentionConfig,
+        KimiDeltaHouseholderConfig,
+    )
+
+    expected_per_layer = {"kda": 4_487_248, "kda-hh-r2": 6_608_976, "kda-gconv": 4_493_392}
+    expected_types = {
+        "kda": KimiDeltaAttentionConfig,
+        "kda-hh-r2": KimiDeltaHouseholderConfig,
+        "kda-gconv": KimiDeltaAttentionConfig,
+    }
+
+    for arm, per_layer in expected_per_layer.items():
+        mixer = module._treatment_mixer(arm, module.RECURRENT_LAYERS[0])
+        assert type(mixer) is expected_types[arm], arm
+        assert (mixer.n_heads, mixer.head_dim) == (16, 64), arm
+        assert mixer.num_params(module.D_MODEL) == per_layer, arm
+
+        config = module.build_model_config(arm, module.valid_init_seeds(arm)[0])
+        recurrent = [
+            config.resolved_block_configs[index].sequence_mixer for index in module.RECURRENT_LAYERS
+        ]
+        assert len(recurrent) == 12, arm
+        assert all(type(m) is expected_types[arm] for m in recurrent), arm
+        assert all(m.num_params(module.D_MODEL) == per_layer for m in recurrent), arm
+        assert config.num_params == module.EXACT_PARAMETER_COUNTS[arm], arm
+        assert abs(config.num_params - module.PARAMETER_TARGET) <= module.PARAMETER_TOLERANCE, arm
+
+    # `kda-gconv` MINUS `kda` IS THE GATE AND NOTHING ELSE. Both are the same class at the same
+    # head geometry, so the whole per-layer difference has to be the three depthwise gates:
+    # 2 * (1024 + 1024 + 1024) = 6,144 parameters, about 0.14% of the layer. If this ever grows
+    # into the dense-projection regime the contrast stops isolating the mechanism and starts
+    # confounding it with capacity.
+    gated = module._treatment_mixer("kda-gconv", 0)
+    assert gated.gate_params(module.D_MODEL) == 6_144
+    assert expected_per_layer["kda-gconv"] - expected_per_layer["kda"] == 6_144
+    assert module._treatment_mixer("kda", 0).gate_params(module.D_MODEL) == 0
+
+
+def test_native_pd_chunk_size_is_64_and_the_change_shaped_no_weights():
+    """The measured chunk size, and proof that moving it did not move a single parameter.
+
+    A chunk size blocks the scan; it is not a shape of any weight. That is the reason the
+    ledger below did not have to be re-solved when the constant moved from 128 to 64, and it is
+    exactly the kind of claim that is cheap to assert and expensive to assume -- a chunk that
+    did size a buffer would have changed the arm's parameter count, forced new FFN widths, and
+    made `native-pd`'s cells incomparable with the four-arm study already described off them.
+    """
+    module = load_entrypoint()
+    from dataclasses import replace
+    from inspect import getsource
+
+    mixers = [module._treatment_mixer("native-pd", index) for index in module.RECURRENT_LAYERS]
+    assert all(mixer.chunk_size == 64 for mixer in mixers)
+    assert all(mixer.fuse_input_projections is False for mixer in mixers)
+    # This speed-sensitive choice belongs in the saved arm config, not in a library default that
+    # could drift invisibly for every caller.
+    assert "fuse_input_projections=False" in getsource(module._treatment_mixer)
+
+    at_128 = replace(mixers[0], chunk_size=128)
+    assert at_128.num_params(module.D_MODEL) == mixers[0].num_params(module.D_MODEL)
+
+    # And the arm's solved widths and exact total are the ones the four-arm study was
+    # described with, unchanged.
+    assert module.solve_widths("native-pd") == (2432,) * 6 + (2400,) * 6
+    assert module.EXACT_PARAMETER_COUNTS["native-pd"] == 390_142_976
+    config = module.build_model_config("native-pd", module.valid_init_seeds("native-pd")[0])
+    assert config.num_params == 390_142_976
 
 
 def test_every_arm_declares_one_fp32_master_dtype_and_keeps_its_bf16_kernels():
@@ -500,7 +811,16 @@ def test_every_arm_declares_one_fp32_master_dtype_and_keeps_its_bf16_kernels():
     from olmo_core.nn.attention import AttentionBackendName
     from olmo_core.nn.flash_pd_native import NativePDBackend, NativePDMode
 
-    assert module.RUNNABLE_ARMS == ("mamba-b3", "xlstm", "mamba3-siso-pd", "native-pd", "gdn")
+    assert module.RUNNABLE_ARMS == (
+        "mamba-b3",
+        "xlstm",
+        "mamba3-siso-pd",
+        "native-pd",
+        "gdn",
+        "kda",
+        "kda-hh-r2",
+        "kda-gconv",
+    )
     for arm in module.RUNNABLE_ARMS:
         config = module.build_model_config(arm, module.valid_init_seeds(arm)[0])
         assert config.dtype == DType.float32, arm
@@ -525,15 +845,28 @@ def test_every_arm_declares_one_fp32_master_dtype_and_keeps_its_bf16_kernels():
         mixer = module._treatment_mixer(arm, 0)
         assert mixer.backend == NativePDBackend.CUDA
         assert mixer.mode == NativePDMode.GENERAL_SCATTER
+    assert module._treatment_mixer("kda-hh-r2", 0).backend == "triton"
 
 
-@pytest.mark.parametrize("arm", ["mamba-b3", "xlstm", "mamba3-siso-pd", "native-pd", "gdn"])
+@pytest.mark.parametrize(
+    "arm",
+    [
+        "mamba-b3",
+        "xlstm",
+        "mamba3-siso-pd",
+        "native-pd",
+        "gdn",
+        "kda",
+        "kda-hh-r2",
+        "kda-gconv",
+    ],
+)
 def test_every_built_block_holds_exactly_one_fp32_parameter_dtype(arm):
     module = load_entrypoint()
     import torch
 
     assert arm in module.RUNNABLE_ARMS
-    expected = {**module.EXACT_PARAMETER_COUNTS, **module.DIAGNOSTIC_PARAMETER_COUNTS}[arm]
+    expected = module.EXACT_PARAMETER_COUNTS[arm]
     config = module.build_model_config(arm, module.valid_init_seeds(arm)[0])
     assert config.num_params == expected
 
@@ -547,7 +880,19 @@ def test_every_built_block_holds_exactly_one_fp32_parameter_dtype(arm):
         )
 
 
-@pytest.mark.parametrize("arm", ["mamba-b3", "xlstm", "mamba3-siso-pd", "native-pd", "gdn"])
+@pytest.mark.parametrize(
+    "arm",
+    [
+        "mamba-b3",
+        "xlstm",
+        "mamba3-siso-pd",
+        "native-pd",
+        "gdn",
+        "kda",
+        "kda-hh-r2",
+        "kda-gconv",
+    ],
+)
 def test_single_rank_fsdp2_full_wrap_lazy_init_keeps_fp32_master_and_bf16_compute(arm, tmp_path):
     module = load_entrypoint()
     import torch

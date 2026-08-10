@@ -8,11 +8,17 @@
     "mamba-b3",
     "xlstm",
     "mamba3-siso-pd",
-    "native-pd"
+    "native-pd",
+    "gdn",
+    "kda",
+    "kda-hh-r2",
+    "kda-gconv"
   ],
   "control": "mamba-b3",
   "replicates_per_arm": 3,
-  "fanout_size": 12,
+  "fanout_size": 24,
+  "four_arm_prefix_fanout_size": 12,
+  "five_arm_prefix_fanout_size": 15,
   "cell_ordering": "arm-major",
   "cell_order": [
     "mamba-b3",
@@ -26,7 +32,19 @@
     "mamba3-siso-pd",
     "native-pd",
     "native-pd",
-    "native-pd"
+    "native-pd",
+    "gdn",
+    "gdn",
+    "gdn",
+    "kda",
+    "kda",
+    "kda",
+    "kda-hh-r2",
+    "kda-hh-r2",
+    "kda-hh-r2",
+    "kda-gconv",
+    "kda-gconv",
+    "kda-gconv"
   ],
   "data_seeds": [
     210007,
@@ -57,6 +75,26 @@
       119010,
       129017,
       139024
+    ],
+    "gdn": [
+      122011,
+      132018,
+      142025
+    ],
+    "kda": [
+      125012,
+      135019,
+      145026
+    ],
+    "kda-hh-r2": [
+      128013,
+      138020,
+      148027
+    ],
+    "kda-gconv": [
+      131014,
+      141021,
+      151028
     ]
   },
   "reserved_init_seeds_by_arm": {
@@ -75,6 +113,22 @@
     "native-pd": [
       149031,
       159038
+    ],
+    "gdn": [
+      152032,
+      162039
+    ],
+    "kda": [
+      155033,
+      165040
+    ],
+    "kda-hh-r2": [
+      158034,
+      168041
+    ],
+    "kda-gconv": [
+      161035,
+      171042
     ]
   },
   "geometry": {
@@ -92,7 +146,11 @@
     "mamba-b3": "12 Mamba-3 SISO layers with rotation block size 3",
     "xlstm": "10 mLSTM + 2 sLSTM layers in [m,m,m,a,m,m,s,a] x 2",
     "mamba3-siso-pd": "12 Mamba-3-improved native SISO PD-SSM layers",
-    "native-pd": "12 published native Flash PD-SSM layers"
+    "native-pd": "12 published native Flash PD-SSM layers",
+    "gdn": "12 frozen measured GatedDeltaNet2 layers",
+    "kda": "12 shipped Kimi Delta Attention layers, plain SiLU short convolutions",
+    "kda-hh-r2": "12 Kimi Delta Attention layers with 2 Householder factors and negative eigenvalues",
+    "kda-gconv": "12 Kimi Delta Attention layers with LIV-style depthwise-gated short convolutions"
   },
   "parameter_target": 390135552,
   "parameter_tolerance": 195068,
@@ -100,7 +158,11 @@
     "mamba-b3": 390148736,
     "xlstm": 390143056,
     "mamba3-siso-pd": 390169664,
-    "native-pd": 390142976
+    "native-pd": 390142976,
+    "gdn": 390119360,
+    "kda": 390119360,
+    "kda-hh-r2": 390119360,
+    "kda-gconv": 390094784
   },
   "recurrent_ffn_widths_by_arm": {
     "mamba-b3": [
@@ -158,6 +220,62 @@
       2400,
       2400,
       2400
+    ],
+    "gdn": [
+      3808,
+      3776,
+      3776,
+      3776,
+      3776,
+      3776,
+      3776,
+      3776,
+      3776,
+      3776,
+      3776,
+      3776
+    ],
+    "kda": [
+      4480,
+      4480,
+      4480,
+      4448,
+      4448,
+      4448,
+      4448,
+      4448,
+      4448,
+      4448,
+      4448,
+      4448
+    ],
+    "kda-hh-r2": [
+      3776,
+      3776,
+      3776,
+      3776,
+      3776,
+      3776,
+      3776,
+      3776,
+      3744,
+      3744,
+      3744,
+      3744
+    ],
+    "kda-gconv": [
+      4480,
+      4480,
+      4448,
+      4448,
+      4448,
+      4448,
+      4448,
+      4448,
+      4448,
+      4448,
+      4448,
+      4448
     ]
   },
   "steps": 1144,
@@ -168,7 +286,11 @@
     "mamba-b3": 1.53732517,
     "xlstm": 1.53734755,
     "mamba3-siso-pd": 1.53724271,
-    "native-pd": 1.53734787
+    "native-pd": 1.53734787,
+    "gdn": 1.53744093,
+    "kda": 1.53744093,
+    "kda-hh-r2": 1.53744093,
+    "kda-gconv": 1.53753779
   },
   "warmup_steps": 114,
   "learning_rate": 0.0014,

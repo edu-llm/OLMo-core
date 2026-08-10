@@ -129,9 +129,15 @@ def test_fusing_the_post_convolution_projections_is_parameter_count_neutral():
     unfused_module = unfused.build(32, layer_idx=0, n_layers=2, init_device="meta")
     fused_module = fused.build(32, layer_idx=0, n_layers=2, init_device="meta")
 
-    # The shipped `native-pd` arm names no flag, so its parameter count is frozen to
-    # whatever this default produces.
-    assert NativeFlashPDMixerConfig().fuse_input_projections is True
+    # The shipped `native-pd` arm names no flag, so whatever this default produces is what it
+    # trains. Pinned here so the default cannot move without someone reading why it is where
+    # it is: unfused, because `split`'s gradient is a `cat` over the whole fused projection
+    # width and Inductor lowers it to one kernel that evaluates every branch for every
+    # element. That is worth 5.3% of a compiled forward and backward at the production shape,
+    # and it is free to take -- the two layouts hold the same weights, draw bit-identically
+    # from one seed, and convert to each other exactly, which the assertions below and the
+    # two tests after this one are what actually hold the parameter count still.
+    assert NativeFlashPDMixerConfig().fuse_input_projections is False
     assert unfused.num_params(32) == fused.num_params(32)
     assert sum(parameter.numel() for parameter in fused_module.parameters()) == unfused.num_params(
         32

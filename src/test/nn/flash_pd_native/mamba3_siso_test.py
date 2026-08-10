@@ -425,7 +425,7 @@ def test_full_mixer_scan_boundary_receives_contiguous_recurrence_and_selection_t
         )
     torch.testing.assert_close(
         selection_tensors["selector_logits"],
-        mixer._prepare_recurrence(x)[4].float(),
+        mixer._prepare_recurrence(x)[3].float(),
     )
 
 
@@ -487,15 +487,14 @@ def test_bfloat16_readout_consumes_the_scan_states_without_promoting_them():
     torch.manual_seed(53)
     value_input = torch.randn(batch, time, heads, state)
     gate = torch.randn(batch, time, d_model, dtype=torch.bfloat16)
-    c_real = torch.randn(batch, time, heads, state)
-    c_imag = torch.randn(batch, time, heads, state)
+    c_projection = torch.randn(batch, time, 2 * d_model)
     states_real = torch.randn(batch, heads, time, state, dtype=torch.bfloat16)
     states_imag = torch.randn(batch, heads, time, state, dtype=torch.bfloat16)
     recorder = _CastTargetRecorder()
 
     with recorder:
         actual = mixer._readout(
-            torch.bfloat16, value_input, gate, c_real, c_imag, states_real, states_imag
+            torch.bfloat16, value_input, gate, c_projection, states_real, states_imag
         )
 
     # The states arrive transposed, so promoting them writes a whole activation in the
@@ -505,14 +504,17 @@ def test_bfloat16_readout_consumes_the_scan_states_without_promoting_them():
         torch.bfloat16,
         value_input,
         gate,
-        c_real,
-        c_imag,
+        c_projection,
         states_real.float(),
         states_imag.float(),
     )
     torch.testing.assert_close(actual, expected, atol=0, rtol=0)
     tokens = batch * time * d_model
-    assert recorder.casts == [
+    # Per-channel norm weights are promoted too, but a `d_state`-wide conversion is not
+    # an activation; only conversions the size of a whole activation are the subject
+    # here, and exactly two of those are allowed: the gate up and the output back down.
+    activation_casts = [cast for cast in recorder.casts if cast[2] == tokens]
+    assert activation_casts == [
         (torch.bfloat16, torch.float32, tokens),
         (torch.float32, torch.bfloat16, tokens),
     ], recorder.casts
@@ -521,22 +523,32 @@ def test_bfloat16_readout_consumes_the_scan_states_without_promoting_them():
 def test_bfloat16_recurrence_promotes_each_full_size_activation_at_most_once():
     batch, time, d_model = 2, 35, 32
     mixer = _initialized_mixer(fused=True, dtype=DType.bfloat16)
+    heads, state = mixer.n_heads, mixer.d_state
     x = torch.randn(batch, time, d_model, dtype=torch.bfloat16)
-    recorder = _CastTargetRecorder()
+    activation = batch * time * heads * state
 
-    with recorder:
-        mixer._prepare_recurrence(x)
+    def promotions(run) -> list:
+        recorder = _CastTargetRecorder()
+        with recorder:
+            run()
+        return [
+            cast for cast in recorder.casts if cast[1] == torch.float32 and cast[2] == activation
+        ]
+
+    value_input, gate, c_projection = mixer._prepare_recurrence(x)[:3]
+    states = torch.randn(batch, heads, time, state, dtype=torch.bfloat16)
+    prologue = promotions(lambda: mixer._prepare_recurrence(x))
+    readout = promotions(
+        lambda: mixer._readout(torch.bfloat16, value_input, gate, c_projection, states, states)
+    )
 
     # An operand that meets an fp32 tensor in a product or a sum is promoted by that
     # kernel, so a separate conversion in front of it writes a full activation for
-    # nothing. What is left is BCNorm reading B and C, the imaginary C the readout
-    # needs in fp32, the value input, and the phase logits behind the diagonal.
-    promotions = [
-        cast
-        for cast in recorder.casts
-        if cast[1] == torch.float32 and cast[2] == batch * time * mixer.n_heads * mixer.d_state
-    ]
-    assert len(promotions) == 7, promotions
+    # nothing. The prologue is left with BCNorm reading B, the value input, and the
+    # phase logits behind the diagonal. C is not among them: nothing in the recurrence
+    # reads it, so the readout owns it and promotes it there, beside the gate.
+    assert len(prologue) == 4, prologue
+    assert len(readout) == 4, readout
 
 
 @pytest.mark.parametrize("dtype", [DType.float32, DType.bfloat16])
@@ -548,8 +560,7 @@ def test_prepared_recurrence_builds_the_complex_diagonal_in_the_scan_layout(dtyp
     (
         _value_input,
         _gate,
-        _c_real,
-        _c_imag,
+        _c_projection,
         _selector_logits,
         diagonal_real,
         diagonal_imag,
@@ -583,10 +594,10 @@ def test_float32_forward_hands_the_scan_the_prepared_operands_unchanged(monkeypa
     def capture_prepare(value):
         result = original_prepare(value)
         prepared.update(
-            diagonal_real=result[5],
-            diagonal_imag=result[6],
-            beta=result[9],
-            gamma=result[10],
+            diagonal_real=result[4],
+            diagonal_imag=result[5],
+            beta=result[8],
+            gamma=result[9],
         )
         return result
 
@@ -753,14 +764,12 @@ def test_bfloat16_mixer_keeps_complex_diagonal_fp32_at_scan_boundary(monkeypatch
     def prepare_recurrence(x):
         value_input = torch.zeros_like(value_real)
         gate = x.new_zeros(x.shape)
-        c_real = torch.zeros_like(value_real)
-        c_imag = torch.zeros_like(value_real)
+        c_projection = x.new_zeros((1, time, 2 * state))
         selector_logits = x.new_zeros((1, time, 1, 1))
         return (
             value_input,
             gate,
-            c_real,
-            c_imag,
+            c_projection,
             selector_logits,
             diagonal_real,
             diagonal_imag,
@@ -810,12 +819,11 @@ def test_bfloat16_mixer_keeps_complex_diagonal_fp32_at_scan_boundary(monkeypatch
         x_dtype,
         value_input,
         gate,
-        c_real,
-        c_imag,
+        c_projection,
         states_real,
         states_imag,
     ):
-        del value_input, gate, c_real, c_imag, states_imag
+        del value_input, gate, c_projection, states_imag
         return states_real.permute(0, 2, 1, 3).reshape(1, time, state).to(x_dtype)
 
     monkeypatch.setattr(mixer, "_prepare_recurrence", prepare_recurrence)

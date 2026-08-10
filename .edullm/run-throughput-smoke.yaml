@@ -1,10 +1,16 @@
-# Throughput smoke: four experiment arms plus a diagnostic GDN control, one seed,
-# and 100 steps on 8xA100.
+# Throughput smoke: one cell for each of the wave's eight arms, one seed, and 100 steps
+# on 8xA100. Submit with --fanout-size 8.
 # WARMUP_STEPS_EXCLUDED=50 is fixed in train_core6_arm.py, leaving 50 measured
 # post-warmup steps. The save interval is outside the run so checkpoint dispatch
 # cannot contaminate that window; post-train still writes the final checkpoint.
 # This is long enough to rank gross throughput, but it is not
-# a replacement for the five-seed quality run.
+# a replacement for the three-seed quality run.
+#
+# EVERY ARM OF THE WAVE HAS A CELL HERE. The three KDA arms are appended in the wave's
+# own order, so indices 0-4 remain the five cells this spec has always run and
+# --fanout-size 5 reproduces the earlier measurement. Ranking KDA against the other
+# five needs all eight measured on one submission anyway: these numbers are wall-clock
+# and are not comparable across two different sets of machines.
 schema_version: 1
 workload_profile: olmo-core-train
 suggested_compute: gpu-8xa100
@@ -12,8 +18,8 @@ command: >-
   bash -lc 'export TRITON_F32_DEFAULT=ieee PYTHONDONTWRITEBYTECODE=1
   TORCH_LOGS=graph_breaks,recompiles &&
   I=${AWS_BATCH_JOB_ARRAY_INDEX:-0} &&
-  ARMS=(mamba-b3 xlstm mamba3-siso-pd native-pd gdn) &&
-  ISEEDS=(110007 113008 116009 119010 122011) &&
+  ARMS=(mamba-b3 xlstm mamba3-siso-pd native-pd gdn kda kda-hh-r2 kda-gconv) &&
+  ISEEDS=(110007 113008 116009 119010 122011 125012 128013 131014) &&
   python -m torch.distributed.run --nproc-per-node=8 --standalone
   .edullm/train_core6_arm.py "$EDULLM_RUN_ID"
   --arm "${ARMS[$I]}" --data-seed 210007 --init-seed "${ISEEDS[$I]}"

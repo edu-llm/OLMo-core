@@ -343,6 +343,13 @@ class NativeFlashPDMamba3SISOMixer(SequenceMixer):
         afterwards. The split payload is the exception: it is built from the value
         input the readout needs as well, so it stays token-major here and is transposed
         at the boundary, where the cast to the payload dtype pays for that write anyway.
+
+        ``C`` is handed on as the raw projection slice rather than normalized here.
+        Nothing in the recurrence reads it -- it belongs entirely to the readout -- and
+        under ``torch.compile`` the opaque scan splits this function and the readout
+        into separate graphs, so a normalized ``C`` would be two finished activations
+        written here and read back there. :meth:`_readout` runs the same normalization
+        on the same values, in the graph that consumes them.
         """
         batch, time, _ = x.shape
         (
@@ -356,19 +363,14 @@ class NativeFlashPDMamba3SISOMixer(SequenceMixer):
             lambda_logits,
         ) = self._project(x)
         b_projection = b_projection.view(batch, time, self.n_heads, self.d_state, 2)
-        c_projection = c_projection.view(batch, time, self.n_heads, self.d_state, 2)
         b_real, b_imag = b_projection.unbind(dim=-1)
-        c_real, c_imag = c_projection.unbind(dim=-1)
         if self.bc_norm_enabled:
-            assert self.bc_norm_b is not None and self.bc_norm_c is not None
+            assert self.bc_norm_b is not None
             b_real, b_imag = _complex_rms_norm(b_real, b_imag, self.bc_norm_b, self.norm_eps)
-            c_real, c_imag = _complex_rms_norm(c_real, c_imag, self.bc_norm_c, self.norm_eps)
-        # The fp32 biases promote their own sums and the imaginary B only ever meets the
-        # fp32 value input, so a conversion in front of any of those three would write a
-        # whole activation that the kernel behind it immediately writes again.
+        # The fp32 bias promotes its own sum and the imaginary B only ever meets the
+        # fp32 value input, so a conversion in front of either would write a whole
+        # activation that the kernel behind it immediately writes again.
         b_real = b_real + self.B_bias.view(1, 1, self.n_heads, self.d_state)
-        c_real = c_real + self.C_bias.view(1, 1, self.n_heads, self.d_state)
-        c_imag = c_imag.float()
         value_input = value_input.view(batch, time, self.n_heads, self.d_state).float()
         value_real = b_real * value_input
         value_imag = b_imag * value_input
@@ -401,8 +403,7 @@ class NativeFlashPDMamba3SISOMixer(SequenceMixer):
         return (
             value_input,
             gate,
-            c_real,
-            c_imag,
+            c_projection,
             selector_logits,
             diagonal_real,
             diagonal_imag,
@@ -417,12 +418,18 @@ class NativeFlashPDMamba3SISOMixer(SequenceMixer):
         x_dtype: torch.dtype,
         value_input: torch.Tensor,
         gate: torch.Tensor,
-        c_real: torch.Tensor,
-        c_imag: torch.Tensor,
+        c_projection: torch.Tensor,
         states_real: torch.Tensor,
         states_imag: torch.Tensor,
     ) -> torch.Tensor:
         batch, time = value_input.shape[:2]
+        c_projection = c_projection.view(batch, time, self.n_heads, self.d_state, 2)
+        c_real, c_imag = c_projection.unbind(dim=-1)
+        if self.bc_norm_enabled:
+            assert self.bc_norm_c is not None
+            c_real, c_imag = _complex_rms_norm(c_real, c_imag, self.bc_norm_c, self.norm_eps)
+        c_real = c_real + self.C_bias.view(1, 1, self.n_heads, self.d_state)
+        c_imag = c_imag.float()
         # The scan returns its states head-major. Multiplying them straight against the
         # fp32 C projection promotes them inside that kernel, in the readout's own
         # layout, so nothing here writes a transposed copy of a whole activation.
@@ -488,8 +495,7 @@ class NativeFlashPDMamba3SISOMixer(SequenceMixer):
         (
             value_input,
             gate,
-            c_real,
-            c_imag,
+            c_projection,
             selector_logits,
             diagonal_real,
             diagonal_imag,
@@ -526,8 +532,7 @@ class NativeFlashPDMamba3SISOMixer(SequenceMixer):
             x.dtype,
             value_input,
             gate,
-            c_real,
-            c_imag,
+            c_projection,
             states_real,
             states_imag,
         )
@@ -549,8 +554,7 @@ class NativeFlashPDMamba3SISOMixer(SequenceMixer):
         (
             value_input,
             gate,
-            c_real,
-            c_imag,
+            c_projection,
             selector_logits,
             diagonal_real,
             diagonal_imag,
@@ -581,8 +585,7 @@ class NativeFlashPDMamba3SISOMixer(SequenceMixer):
             x.dtype,
             value_input,
             gate,
-            c_real,
-            c_imag,
+            c_projection,
             states_real,
             states_imag,
         )
