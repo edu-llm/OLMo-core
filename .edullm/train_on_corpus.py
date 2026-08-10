@@ -410,11 +410,21 @@ OLMOE_7B_32X4_FACTORY = "olmoe_7b_32x4"
 OLMOE_7B_32X4_ROUTED_EXPERTS = 32
 OLMOE_7B_32X4_ROUTED_HIDDEN_SIZE = 2048
 
+#: The recipe's own auxiliary loss weights, named so that the flags that vary them can state
+#: their default as this value rather than restating a literal that could drift from the
+#: factory. Both are divided by ``n_layers`` inside ``MoEBase.__init__`` when
+#: ``scale_loss_by_num_layers`` is set, which it is, so a router sees a sixteenth of what is
+#: written here.
+OLMOE_7B_32X4_LB_LOSS_WEIGHT = 0.01
+OLMOE_7B_32X4_Z_LOSS_WEIGHT = 0.001
+
 
 def olmoe_7b_32x4(
     vocab_size: int,
     shared_experts: int = 0,
     router_bias_gamma: Optional[float] = None,
+    lb_loss_weight: float = OLMOE_7B_32X4_LB_LOSS_WEIGHT,
+    z_loss_weight: float = OLMOE_7B_32X4_Z_LOSS_WEIGHT,
 ) -> TransformerConfig:
     """Build the ~7B total / 32x4 routed MoE that every arm is measured against.
 
@@ -432,6 +442,13 @@ def olmoe_7b_32x4(
     ``--moe-router-bias-gamma`` for what turning it on trades. It is set after
     construction because ``llama_like_moe`` builds the ``MoERouterConfig``
     itself and takes no argument that reaches it.
+
+    ``lb_loss_weight`` and ``z_loss_weight`` default to the recipe's own values
+    and are parameters so that a throughput arm can vary them without a dotted
+    override binding to ``run_name``. They differ from ``router_bias_gamma`` in
+    the way that matters: both are terms in the loss, so an arm that moves
+    either is optimising a different objective and not merely routing
+    differently.
     """
     config = TransformerConfig.llama_like_moe(
         vocab_size=vocab_size,
@@ -445,8 +462,8 @@ def olmoe_7b_32x4(
             shared_experts * OLMOE_7B_32X4_ROUTED_HIDDEN_SIZE if shared_experts else None
         ),
         dropless=True,
-        lb_loss_weight=0.01,
-        z_loss_weight=0.001,
+        lb_loss_weight=lb_loss_weight,
+        z_loss_weight=z_loss_weight,
         reordered_norm=True,
         qk_norm=True,
         rope_theta=500_000,
@@ -925,12 +942,23 @@ def build_config(opts, overrides: List[str]):
             olmoe_7b_32x4,
             shared_experts=opts.moe_shared_experts,
             router_bias_gamma=opts.moe_router_bias_gamma,
+            lb_loss_weight=opts.moe_lb_loss_weight,
+            z_loss_weight=opts.moe_z_loss_weight,
         )
     else:
-        if opts.moe_router_bias_gamma is not None:
+        recipe_only = [
+            name
+            for name, value, default in (
+                ("--moe-router-bias-gamma", opts.moe_router_bias_gamma, None),
+                ("--moe-lb-loss-weight", opts.moe_lb_loss_weight, OLMOE_7B_32X4_LB_LOSS_WEIGHT),
+                ("--moe-z-loss-weight", opts.moe_z_loss_weight, OLMOE_7B_32X4_Z_LOSS_WEIGHT),
+            )
+            if value != default
+        ]
+        if recipe_only:
             raise Refusal(
                 Stage.THE_CONFIG_WOULD_NOT_BUILD,
-                "--moe-router-bias-gamma is only wired for the "
+                f"{', '.join(recipe_only)} is only wired for the "
                 f"{OLMOE_7B_32X4_FACTORY!r} recipe, and {opts.model_factory!r} was asked for. "
                 "Reach the field directly instead, with "
                 "`<run-id> model.block.feed_forward_moe.router.bias_gamma=...`, and note that "
@@ -1041,6 +1069,17 @@ def build_config(opts, overrides: List[str]):
             metrics_collect_interval=5,
             cancel_check_interval=5,
             max_duration=Duration.steps(opts.steps),
+            # SEPARATE FROM max_duration ON PURPOSE, AND THAT SEPARATION IS THE WHOLE POINT OF
+            # THE FLAG. `Scheduler.set_lr` recomputes the rate every step from `global_step`
+            # against `max_steps`, which comes from `max_duration` and not from this -- so two
+            # arms that stop at different steps still ride the identical cosine, and a short
+            # arm is a prefix of a long one rather than a different experiment. Shortening
+            # `--steps` instead would decay the learning rate to nothing by the end of every
+            # arm, which on a router ablation reads as the imbalance settling when what has
+            # actually settled is the optimiser.
+            hard_stop=(
+                None if opts.hard_stop_steps is None else Duration.steps(opts.hard_stop_steps)
+            ),
         )
         .with_callback("gpu_monitor", GPUMemoryMonitorCallback())
         .with_callback(
@@ -1628,6 +1667,41 @@ def build_parser() -> argparse.ArgumentParser:
         "scores, which are on a different scale. IT CHANGES THE STATE DICT: the router "
         "registers a `score_bias` buffer only when this is set, so a checkpoint written "
         "without it does not resume into a run with it. Decide before step one.",
+    )
+    parser.add_argument(
+        "--moe-lb-loss-weight",
+        type=float,
+        default=OLMOE_7B_32X4_LB_LOSS_WEIGHT,
+        help="Weight on the classic auxiliary load-balancing loss. THIS IS A HEAVIER TRADE "
+        "THAN --moe-router-bias-gamma AND NOT THE SAME KIND OF THING. The bias adjusts top-k "
+        "selection and adds no term to the loss; this IS a term in the loss, so raising it "
+        "buys balance by spending gradient on something other than predicting the next token. "
+        "It is divided by the sixteen layers before a router sees it, so the default reaches "
+        "each router as 0.000625. It is here as a flag rather than a dotted override for the "
+        "reason --moe-router-bias-gamma is: a bare word appended to the command becomes the "
+        "run's name.",
+    )
+    parser.add_argument(
+        "--moe-z-loss-weight",
+        type=float,
+        default=OLMOE_7B_32X4_Z_LOSS_WEIGHT,
+        help="Weight on the router z-loss, which penalises the squared log-sum-exp of the "
+        "router logits and so keeps them small. ALSO A TERM IN THE LOSS. It does not balance "
+        "anything directly -- softmax is invariant to a shift and the argmax is unchanged by "
+        "shrinking logits uniformly -- but it flattens the score distribution, which changes "
+        "how much a given --moe-router-bias-gamma is worth relative to the gaps it has to "
+        "close. Divided by the sixteen layers like the load-balancing weight.",
+    )
+    parser.add_argument(
+        "--hard-stop-steps",
+        type=int,
+        default=None,
+        help="Stop at this step without moving the learning-rate schedule, which stays sized "
+        "by --steps. FOR ABLATIONS, AND THE ONLY WAY TO COMPARE ARMS OF DIFFERENT LENGTHS. "
+        "`Trainer.max_steps` comes from --steps and `Scheduler.set_lr` reads it every step, so "
+        "an arm shortened with --steps rides a different cosine and its last hundred steps run "
+        "at a learning rate near zero. Set --steps to the schedule every arm shares and this "
+        "to where each one stops.",
     )
     parser.add_argument("--dry-run", action="store_true", help="Resolve and print, do not train.")
     return parser
