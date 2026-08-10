@@ -451,6 +451,112 @@ def corpus_from_manifest(read, *, dataset_id: str, version: str, tokenizer_id: s
     )
 
 
+@dataclass
+class _RawRead:
+    """A duck-typed stand-in for the reader's ``ResolvedSplit``, for an UNSEALED corpus.
+
+    ``corpus_from_manifest`` promises in its own docstring that "anything carrying ``paths``,
+    ``dtype``, ``byte_order``, ``header_bytes`` and ``rows`` will do", and this is that. The
+    point of going through it rather than building a ``Corpus`` directly is that every
+    memmap-safety refusal -- dtype present, header_bytes zero, endianness matching the host,
+    no train/val overlap -- still runs. A raw prefix skips the *seal*, which is a provenance
+    check; it must not skip the checks that stop numpy decoding every token to a different
+    in-range-looking id.
+    """
+
+    paths: List[str]
+    dtype: str
+    byte_order: Optional[str]
+    header_bytes: int
+    rows: Optional[int]
+    val: List[str] = field(default_factory=list)
+
+
+def resolve_raw_corpus(
+    *,
+    uri: str,
+    tokenizer_id: str,
+    dtype: str,
+    byte_order: str,
+    header_bytes: int,
+    val_glob: str,
+) -> Corpus:
+    """Resolve a corpus from a RAW, UNSEALED S3 prefix by listing it.
+
+    WHY THIS EXISTS, AND WHAT IT GIVES UP. The sealed path (:func:`resolve_corpus`) is the
+    right one and stays the default: it reads a manifest the validator signed, so the run's
+    record names a corpus somebody can re-derive. This function is for a corpus whose bytes
+    exist but whose ``dataset.json`` / ``_VALIDATED.json`` do not --
+    ``pretrain/olmoe-mix-0824-600b`` in ``edullm-corpus-use2`` is the case it was written for.
+    It therefore gives up, explicitly:
+
+      * **the seal**, so nothing verifies these bytes are the ones anyone reviewed;
+      * **the catalog**, so the recorded version is not a resolvable one; and
+      * **the manifest's declared format**, which is why dtype/byte_order/header_bytes are
+        arguments here rather than facts. THAT IS THE ONE THING THAT CANNOT BE GUESSED: a
+        uint32 corpus read as uint16 yields ids that are all in range and a loss curve that
+        merely looks bad rather than an error.
+
+    The defaults its caller passes come from the ingest driver that wrote the corpus
+    (``edullm-data/artifacts/olmoe-mix-ingest/olmoe_ingest_driver.py:594-600``: raw uint32,
+    little-endian, ``header_bytes 0``, codec none), independently confirmed by a live
+    range-read of three objects across both splits -- ``train-00252`` carries id 78303 and
+    ``val-00000`` carries 38255, ids that do not fit a uint16, which positively confirms
+    uint32 rather than merely showing an absence of numpy magic bytes.
+    """
+    from olmo_core.io import deterministic_glob_directory
+
+    if not uri.startswith("s3://"):
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"--raw-corpus-uri must be an s3:// prefix, got {uri!r}",
+        )
+    prefix = uri.rstrip("/")
+
+    # LISTED, NOT ENUMERATED ON THE COMMAND LINE, and that is a hard constraint rather than a
+    # convenience: `ContainerOverrides` caps the command at 8192 bytes and this corpus's 253
+    # shards spell out to ~20.7 kB. One glob is also one fact to audit instead of 253.
+    try:
+        train_paths = deterministic_glob_directory(f"{prefix}/train-*")
+        val_paths = deterministic_glob_directory(f"{prefix}/{val_glob}") if val_glob else []
+    except BaseException as exc:
+        raise Refusal(
+            read_failure(exc),
+            f"listing {prefix}: {type(exc).__name__}: {exc}. A raw prefix is listed rather "
+            "than read from a manifest, so this is where a missing s3:ListBucket on the "
+            "corpus bucket shows up -- and note this bucket is NOT edullm-data.",
+        ) from exc
+
+    read = _RawRead(
+        paths=list(train_paths),
+        dtype=dtype,
+        byte_order=byte_order,
+        header_bytes=header_bytes,
+        # No manifest, so no row count. None means "unknown", which is honest.
+        rows=None,
+        val=list(val_paths),
+    )
+    # Reuses every memmap-safety refusal, including the train/val overlap check -- which is
+    # not theoretical for this corpus family: the already-published -51b and -98b releases
+    # have val shards that are TRAIN shards here.
+    corpus = corpus_from_manifest(
+        read, dataset_id=prefix, version="unsealed", tokenizer_id=tokenizer_id
+    )
+    log.warning(
+        "READING A RAW, UNSEALED CORPUS: %s (%d train shards, %d held-out). No _VALIDATED.json "
+        "and no dataset.json were consulted, so nothing verifies these bytes against a "
+        "reviewed manifest, and the recorded version is 'unsealed' rather than resolvable. "
+        "Format was ASSERTED as %s/%s-endian/header_bytes=%d, not read from a manifest.",
+        prefix,
+        len(corpus.paths),
+        len(corpus.val_paths),
+        dtype,
+        byte_order,
+        header_bytes,
+    )
+    return corpus
+
+
 def resolve_corpus(*, dataset_id: str, version: str, tokenizer_id: str) -> Corpus:
     # Imported here rather than at the top so that everything above can be exercised on a
     # host without the reader installed. In the image it is always present -- the Dockerfile
@@ -839,11 +945,25 @@ def build_scheduler(opts):
 
 
 def build_config(opts, overrides: List[str]):
-    corpus = resolve_corpus(
-        dataset_id=opts.dataset_id,
-        version=opts.dataset_version,
-        tokenizer_id=opts.dataset_tokenizer,
-    )
+    # The raw branch is chosen by the presence of the flag, and it REPLACES the sealed read
+    # rather than falling back to it. A fallback is the wrong shape here: it would turn "the
+    # seal is missing" into "we read something else", which is the failure this file's
+    # docstring is written against.
+    if getattr(opts, "raw_corpus_uri", ""):
+        corpus = resolve_raw_corpus(
+            uri=opts.raw_corpus_uri,
+            tokenizer_id=opts.dataset_tokenizer,
+            dtype=opts.raw_corpus_dtype,
+            byte_order=opts.raw_corpus_byte_order,
+            header_bytes=opts.raw_corpus_header_bytes,
+            val_glob=opts.raw_corpus_val_glob,
+        )
+    else:
+        corpus = resolve_corpus(
+            dataset_id=opts.dataset_id,
+            version=opts.dataset_version,
+            tokenizer_id=opts.dataset_tokenizer,
+        )
     log.info(
         "%s/%s: %d shards, dtype %s, tokenizer %s",
         corpus.dataset_id,
@@ -1666,7 +1786,36 @@ def build_parser() -> argparse.ArgumentParser:
         description="Train a transformer on a published eduLLM corpus.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("run_name", nargs="?", default=os.environ.get("EDULLM_RUN_ID", "local"))
+    # THE POSITIONAL TRAP, AND WHY `run_name` VALIDATES ITS OWN VALUE.
+    #
+    # `nargs="?"` plus `parse_known_args()` is a silent-corruption pair. Leftover argv words
+    # become the dotlist `overrides` that reach `config.merge(...)`, but argparse fills THIS
+    # positional from the first unmatched word first. So a command that omits the run name and
+    # ends in an override -- `... --model-factory maple_m7b model.ternary_comm=true` -- binds
+    # `run_name="model.ternary_comm=true"` and leaves `overrides` EMPTY. The setting vanishes
+    # with no error, the run is named after it, and the config saved beside the checkpoint says
+    # the flag was never requested. Reproduced in stdlib argparse before this guard was written.
+    #
+    # Two things make that unrepresentable rather than merely documented. A dotlist word is not
+    # a run name, so `_run_name` refuses it; and the platform always exports EDULLM_RUN_ID, so
+    # the legitimate case does not depend on argv position at all. The refusal names the fix
+    # because the failure is otherwise invisible -- it looks like a run that simply started.
+    def _run_name(value: str) -> str:
+        if "=" in value:
+            raise argparse.ArgumentTypeError(
+                f"run_name={value!r} contains '=', so it is a dotlist override that argparse "
+                "bound to the run-name positional instead of leaving it for config.merge(). "
+                "The override would have been SILENTLY DROPPED. Write the run name explicitly "
+                "as the first argument, before any override."
+            )
+        return value
+
+    parser.add_argument(
+        "run_name",
+        nargs="?",
+        type=_run_name,
+        default=os.environ.get("EDULLM_RUN_ID", "local"),
+    )
     parser.add_argument("--dataset-id", default=os.environ.get("EDULLM_DATASET_ID", ""))
     parser.add_argument("--dataset-version", default=os.environ.get("EDULLM_DATASET_VERSION", ""))
     parser.add_argument(
@@ -1677,6 +1826,50 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("EDULLM_CHECKPOINT_DIR", ""),
         help="Where checkpoints go. The platform sets EDULLM_CHECKPOINT_DIR to a per-run "
         "prefix; a run that writes anywhere else cannot be resumed by its own retry.",
+    )
+    # THE RAW-CORPUS ESCAPE HATCH. Default empty, so the sealed path stays the only one a
+    # normal run can take and this flag has to be typed to be used. See `resolve_raw_corpus`
+    # for what it gives up; in short, the seal and the catalog. It exists because a corpus can
+    # have bytes without having a manifest, and `pretrain/olmoe-mix-0824-600b` in
+    # `edullm-corpus-use2` is exactly that: shards only, no `_VALIDATED.json`, no
+    # `dataset.json`, so `dataset_paths()` refuses it before reading a byte.
+    parser.add_argument(
+        "--raw-corpus-uri",
+        default="",
+        help="An s3:// PREFIX of raw shards, read INSTEAD OF a sealed dataset id/version. "
+        "Skips the validator seal and the catalog, so the run's record cannot name a "
+        "re-derivable corpus version. Shards are listed as <uri>/train-* rather than "
+        "enumerated, because 253 URIs exceed the 8192-byte ContainerOverrides command cap.",
+    )
+    # uint32 IS THE DEFAULT AND IT IS STILL EXPLICIT, because the failure mode of getting this
+    # wrong is silent. `get_dtype()` elsewhere in this tree falls back to the NARROWEST dtype a
+    # vocab fits in, and reading a uint32 corpus at uint16 yields ids that are all in range --
+    # a loss curve that looks bad rather than an error.
+    parser.add_argument(
+        "--raw-corpus-dtype",
+        default="uint32",
+        choices=["uint8", "uint16", "uint32"],
+        help="Token width of the raw shards. NOT read from a manifest in raw mode, so it is "
+        "asserted here; a wrong width decodes every token to a different in-range id.",
+    )
+    parser.add_argument(
+        "--raw-corpus-byte-order",
+        default="little",
+        choices=["little", "big"],
+        help="Byte order of the raw shards, checked against this host's.",
+    )
+    parser.add_argument(
+        "--raw-corpus-header-bytes",
+        type=int,
+        default=0,
+        help="Header bytes to expect. OLMo-core memmaps from offset zero, so anything nonzero "
+        "is refused rather than skipped -- the header would be decoded as tokens.",
+    )
+    parser.add_argument(
+        "--raw-corpus-val-glob",
+        default="val-*",
+        help="Glob for held-out shards under the raw prefix, or empty for none. Overlap with "
+        "the training shards is refused.",
     )
     parser.add_argument("--work-dir", default="/tmp/dataset-cache")
     parser.add_argument("--model-factory", default="olmo2_190M")
@@ -1974,16 +2167,25 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     opts, overrides = build_parser().parse_known_args()
 
-    missing = [
-        name
-        for name, value in (
+    # In raw mode the corpus comes from --raw-corpus-uri, so a dataset id and version are not
+    # merely unnecessary -- requiring them would force a run to name a sealed corpus it does
+    # not read, which is the "the record says one corpus and the run read another" failure this
+    # file exists to prevent. The TOKENIZER is still required: nothing in a raw prefix declares
+    # one, and it is what sets the model's vocabulary.
+    required: Tuple[Tuple[str, str], ...]
+    if getattr(opts, "raw_corpus_uri", ""):
+        required = (
+            ("EDULLM_DATASET_TOKENIZER", opts.dataset_tokenizer),
+            ("EDULLM_CHECKPOINT_DIR", opts.save_folder),
+        )
+    else:
+        required = (
             ("EDULLM_DATASET_ID", opts.dataset_id),
             ("EDULLM_DATASET_VERSION", opts.dataset_version),
             ("EDULLM_DATASET_TOKENIZER", opts.dataset_tokenizer),
             ("EDULLM_CHECKPOINT_DIR", opts.save_folder),
         )
-        if not value
-    ]
+    missing = [name for name, value in required if not value]
     if missing:
         raise Refusal(
             Stage.THE_PLATFORM_DID_NOT_SET_THE_ENVIRONMENT,
