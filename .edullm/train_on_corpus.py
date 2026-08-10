@@ -92,7 +92,7 @@ from olmo_core.distributed.parallel import DataParallelType
 from olmo_core.distributed.utils import barrier, get_rank
 from olmo_core.io import clear_directory, list_directory, normalize_path
 from olmo_core.nn.lm_head import LMLossImplementation
-from olmo_core.nn.quantization import audit_quantization
+from olmo_core.nn.quantization import QuantBackend, audit_quantization
 from olmo_core.nn.transformer import TransformerConfig
 from olmo_core.optim import (
     AdamWConfig,
@@ -839,6 +839,14 @@ def build_scheduler(opts):
 
 
 def build_config(opts, overrides: List[str]):
+    if opts.quantize is None and (
+        opts.quant_backend != "fake_quant" or opts.native_packed_fallback != "fake_quant"
+    ):
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            "--quant-backend and --native-packed-fallback require --quantize "
+            "(use 'control' or 'ternary')",
+        )
     corpus = resolve_corpus(
         dataset_id=opts.dataset_id,
         version=opts.dataset_version,
@@ -874,6 +882,8 @@ def build_config(opts, overrides: List[str]):
     factory_kwargs: Dict[str, Any] = {}
     if opts.quantize is not None:
         factory_kwargs["quantize"] = opts.quantize
+        factory_kwargs["quant_backend"] = opts.quant_backend
+        factory_kwargs["native_packed_fallback"] = opts.native_packed_fallback == "fake_quant"
     model_config = factory(vocab_size=corpus.tokenizer.padded_vocab_size(), **factory_kwargs)
 
     # THE LOSS IMPLEMENTATION, WHICH IS A MEMORY DECISION MASQUERADING AS A NUMERICS ONE.
@@ -892,9 +902,7 @@ def build_config(opts, overrides: List[str]):
                 f"--lm-loss-implementation {opts.lm_loss_implementation} was passed but model "
                 f"factory {opts.model_factory} builds no lm_head",
             )
-        model_config.lm_head.loss_implementation = LMLossImplementation(
-            opts.lm_loss_implementation
-        )
+        model_config.lm_head.loss_implementation = LMLossImplementation(opts.lm_loss_implementation)
         model_config.lm_head.loss_chunk_size = opts.lm_loss_chunk_size
         log.info(
             "LM loss implementation: %s (chunk size %d)",
@@ -1432,6 +1440,8 @@ def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> 
                 "checkpoint_uri": opts.save_folder,
                 "wandb_project": os.environ.get("EDULLM_WANDB_PROJECT", ""),
                 "wandb_url": losses.wandb_url,
+                "quant_backend_requested": getattr(opts, "quant_backend", "fake_quant"),
+                "native_packed_fallback": getattr(opts, "native_packed_fallback", "fake_quant"),
             },
             indent=2,
         ),
@@ -1514,6 +1524,10 @@ def train(config, opts=None) -> None:
                 "num_full_precision": quant_audit["num_full_precision"],
                 "quantized_numel": quant_audit["quantized_numel"],
                 "full_precision_numel": quant_audit["full_precision_numel"],
+                "requested_backends": quant_audit["requested_backends"],
+                "resolved_backends": quant_audit["resolved_backends"],
+                "resolved_kernels": quant_audit["resolved_kernels"],
+                "fallback_reasons": quant_audit["fallback_reasons"],
             }
         ),
         flush=True,
@@ -1715,6 +1729,20 @@ def build_parser() -> argparse.ArgumentParser:
         "omitting the flag, but with the ternary arm's module tree, which is what makes the "
         "comparison paired; this is X4a's bf16 arm, NOT the same as omitting. 'ternary' is the "
         "quantized arm. 'off' is an explicit spelling of the default. Maple factories only.",
+    )
+    parser.add_argument(
+        "--quant-backend",
+        choices=[backend.value for backend in QuantBackend],
+        default=QuantBackend.fake_quant.value,
+        help="Execution backend for enabled ternary projections. native_packed is experimental "
+        "and opt-in; fake_quant remains the scientific reference and default.",
+    )
+    parser.add_argument(
+        "--native-packed-fallback",
+        choices=["fake_quant", "error"],
+        default="fake_quant",
+        help="What to do when native_packed cannot run because CUDA, Triton, or BF16 support is "
+        "unavailable. The selected/fallback backend is emitted in quantization telemetry.",
     )
     parser.add_argument("--sequence-length", type=int, default=2048)
     parser.add_argument("--steps", type=int, default=200)

@@ -1198,6 +1198,8 @@ class TransformerConfig(ModelConfig):
         *,
         rung: str = "R3",
         quantize: Optional[bool] = None,
+        quant_backend: str = "fake_quant",
+        native_packed_fallback: bool = True,
         **kwargs,
     ) -> "TransformerConfig":
         """
@@ -1230,6 +1232,10 @@ class TransformerConfig(ModelConfig):
             property `contracts/quant-surface.md` calls the cheapest thing to verify. So
             ``False`` is not a synonym for ``None``, and picking the wrong one produces a
             comparison that looks fine and is not paired.
+        :param quant_backend: ``fake_quant`` (the verified default) or opt-in
+            ``native_packed`` execution. This does not change the TWN recipe.
+        :param native_packed_fallback: Fall back to verified fake quantization if native
+            CUDA/Triton/BF16 execution is unavailable. False makes that condition fatal.
         """
         if rung not in cls.MAPLE_RUNGS:
             raise OLMoConfigurationError(
@@ -1254,7 +1260,7 @@ class TransformerConfig(ModelConfig):
         quant = None
         if quantize is not None:
             try:
-                from ..quantization import QuantConfig
+                from ..quantization import QuantBackend, QuantConfig
             except ImportError as e:
                 raise OLMoConfigurationError(
                     "`quantize` was requested but `olmo_core.nn.quantization` is not present "
@@ -1263,7 +1269,11 @@ class TransformerConfig(ModelConfig):
                     "a ternary arm that quietly ran in bf16 would look like a *successful* "
                     "paired comparison, which is the worst outcome for X4a."
                 ) from e
-            quant = QuantConfig(enabled=quantize)
+            quant = QuantConfig(
+                enabled=quantize,
+                backend=QuantBackend(quant_backend),
+                fallback_to_fake_quant=native_packed_fallback,
+            )
 
         config = cls._maple_config(
             quant=quant,
@@ -2568,9 +2578,11 @@ class TransformerConfig(ModelConfig):
                 hidden_size=expert_hidden_size,
                 capacity_factor=capacity_factor,
                 router=MoERouterConfig(top_k=top_k),
-                shared_mlp=None
-                if shared_expert_hidden_size is None
-                else FeedForwardConfig(hidden_size=shared_expert_hidden_size, bias=False),
+                shared_mlp=(
+                    None
+                    if shared_expert_hidden_size is None
+                    else FeedForwardConfig(hidden_size=shared_expert_hidden_size, bias=False)
+                ),
                 lb_loss_weight=lb_loss_weight,
                 z_loss_weight=z_loss_weight,
             ),

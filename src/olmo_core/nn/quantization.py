@@ -21,13 +21,13 @@ model was trained with".
 
 Cost model, stated because it is routinely gotten backwards
 -----------------------------------------------------------
-**Ternary QAT is not cheaper to train.** The forward matmul consumes a dequantized
-``alpha * sign(W) * 1[|W| > delta]`` tensor in the *compute* dtype, the backward runs full
-precision through the straight-through estimator, and the latent master weights are full size.
-There is no memory saving and no arithmetic saving during training; ``num_flops_per_token`` is
-deliberately unchanged. Ternary's win is at *inference*, which is out of scope for this work.
-Anyone budgeting ternary as a training-time saving is wrong, and that error would show up as a
-bogus expectation in the X4a MFU comparison.
+The verified ``fake_quant`` reference is not cheaper to train: it materializes
+``alpha * sign(W) * 1[|W| > delta]`` in the compute dtype and uses ordinary matmuls. The
+experimental ``native_packed`` backend avoids that materialization and replaces forward and
+input-gradient weight multiplies with packed add/subtract kernels, but identity STE still
+requires an ordinary BF16 latent-weight gradient GEMM and latent masters remain full size.
+``num_flops_per_token`` stays unchanged so existing MFU accounting remains comparable; only
+hardware benchmarks can establish whether the packed kernel lowers end-to-end step time.
 
 What stays full precision
 -------------------------
@@ -38,6 +38,7 @@ on a built model so a silently-dropped one cannot produce a wrong experiment tha
 """
 
 import math
+import warnings
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -45,13 +46,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ..config import Config
+from ..config import Config, StrEnum
 from ..exceptions import OLMoConfigurationError
+from ..ops.ternary import PackedTWNCache, native_packed_linear, native_packed_status
 
 __all__ = [
     "TWN_DELTA_FACTOR",
     "TWN_GAUSSIAN_ZERO_FRACTION",
     "BITNET_B158_GAUSSIAN_ZERO_FRACTION",
+    "QuantBackend",
+    "TWNStePolicy",
     "QuantConfig",
     "QuantLinear",
     "twn_threshold_and_scale",
@@ -93,6 +97,28 @@ b1.58 rounds ``W / mean|W|`` to the nearest integer, so its zero band is ``|W| <
 ``erf(0.3989423 / sqrt(2)) = 0.3100643``, matching the 31.0% in the plan document. Recorded so a
 test can assert we are *not* here.
 """
+
+
+class QuantBackend(StrEnum):
+    """Execution backend for enabled ternary projections."""
+
+    fake_quant = "fake_quant"
+    """Materialize the BF16 ternary weight and call the ordinary PyTorch matmul."""
+
+    native_packed = "native_packed"
+    """Use ephemeral two-bit packing and Triton add/subtract kernels."""
+
+
+class TWNStePolicy(StrEnum):
+    """
+    Backward policy for the latent weight.
+
+    ``identity`` is an explicit Maple replication hypothesis inherited from this branch. The
+    public DeepGrove converter and released tensors verify the forward TWN rule; they do not
+    disclose Maple's training backward rule.
+    """
+
+    identity = "identity"
 
 
 def _resolve_in_dim(w: torch.Tensor, in_dim: Optional[int]) -> int:
@@ -223,19 +249,28 @@ class _TWNQuantizeSTE(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, w: torch.Tensor, in_dim: int) -> torch.Tensor:  # type: ignore[override]
+    def forward(  # type: ignore[override]
+        ctx, w: torch.Tensor, in_dim: int, ste_policy: TWNStePolicy
+    ) -> torch.Tensor:
         del ctx
+        if ste_policy != TWNStePolicy.identity:
+            raise ValueError(f"unsupported TWN STE policy: {ste_policy}")
         return twn_quantize(w, in_dim=in_dim)
 
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor):  # type: ignore[override]
         del ctx
         # Identity STE: the gradient of the quantized weight is the gradient of the latent
-        # weight. `None` for the non-tensor `in_dim` argument.
-        return grad_output, None
+        # weight. `None` for the non-tensor `in_dim` and policy arguments.
+        return grad_output, None, None
 
 
-def twn_quantize_ste(w: torch.Tensor, *, in_dim: Optional[int] = None) -> torch.Tensor:
+def twn_quantize_ste(
+    w: torch.Tensor,
+    *,
+    in_dim: Optional[int] = None,
+    ste_policy: TWNStePolicy = TWNStePolicy.identity,
+) -> torch.Tensor:
     """
     :func:`twn_quantize` in the forward direction, identity straight-through in the backward.
 
@@ -243,7 +278,9 @@ def twn_quantize_ste(w: torch.Tensor, *, in_dim: Optional[int] = None) -> torch.
     :func:`twn_quantize` for the ``in_dim`` orientation table -- getting it wrong builds a
     different quantizer without erroring.
     """
-    return _TWNQuantizeSTE.apply(w, _resolve_in_dim(w, in_dim))  # type: ignore[no-any-return]
+    return _TWNQuantizeSTE.apply(  # type: ignore[no-any-return]
+        w, _resolve_in_dim(w, in_dim), TWNStePolicy(ste_policy)
+    )
 
 
 @dataclass
@@ -265,6 +302,21 @@ class QuantConfig(Config):
     enabled: bool = True
     """
     Whether the quantizer actually fires. ``False`` gives an exact-equality control arm.
+    """
+    backend: QuantBackend = QuantBackend.fake_quant
+    """
+    Enabled-projection execution backend. ``native_packed`` remains opt-in until SM80/SM90
+    parity and throughput gates pass.
+    """
+    ste_policy: TWNStePolicy = TWNStePolicy.identity
+    """
+    Latent-weight backward policy. Identity STE is a replication hypothesis, not a claim about
+    an undisclosed Maple training implementation.
+    """
+    fallback_to_fake_quant: bool = True
+    """
+    If ``native_packed`` is requested but CUDA/Triton/BF16 is unavailable, use the verified
+    fake-quant path. Set false to turn the same condition into a clear error.
     """
 
 
@@ -298,11 +350,70 @@ class QuantLinear(nn.Linear):
         bias: bool = False,
         *,
         enabled: bool = True,
+        backend: QuantBackend = QuantBackend.fake_quant,
+        ste_policy: TWNStePolicy = TWNStePolicy.identity,
+        fallback_to_fake_quant: bool = True,
         device: Any = None,
         dtype: Any = None,
     ):
         super().__init__(in_features, out_features, bias=bias, device=device, dtype=dtype)
         self.quant_enabled = enabled
+        self.quant_backend = QuantBackend(backend)
+        self.ste_policy = TWNStePolicy(ste_policy)
+        self.fallback_to_fake_quant = fallback_to_fake_quant
+        self._native_pack_cache = PackedTWNCache()
+        self._last_resolved_backend = (
+            "disabled_control" if not enabled else self.quant_backend.value
+        )
+        self._last_fallback_reason: Optional[str] = None
+        self._has_runtime_backend_resolution = False
+        self._warned_native_fallback = False
+        self.register_load_state_dict_post_hook(self._clear_native_cache_after_load)
+
+    def _clear_native_cache_after_load(self, module, incompatible_keys) -> None:
+        del module, incompatible_keys
+        self._native_pack_cache.clear()
+        self._has_runtime_backend_resolution = False
+
+    def backend_status(self) -> Dict[str, Optional[str]]:
+        """Return the requested and currently resolvable execution backend."""
+        if not self.quant_enabled:
+            return {
+                "requested": self.quant_backend.value,
+                "resolved": "disabled_control",
+                "fallback_reason": None,
+            }
+        if self.quant_backend == QuantBackend.fake_quant:
+            return {
+                "requested": self.quant_backend.value,
+                "resolved": QuantBackend.fake_quant.value,
+                "fallback_reason": None,
+            }
+        if self._has_runtime_backend_resolution and (
+            self._last_resolved_backend != QuantBackend.native_packed.value
+            or native_packed_status(self.weight)["available"]
+        ):
+            return {
+                "requested": self.quant_backend.value,
+                "resolved": self._last_resolved_backend,
+                "fallback_reason": self._last_fallback_reason,
+            }
+        status = native_packed_status(self.weight)
+        if status["available"]:
+            return {
+                "requested": self.quant_backend.value,
+                "resolved": QuantBackend.native_packed.value,
+                "fallback_reason": None,
+            }
+        return {
+            "requested": self.quant_backend.value,
+            "resolved": (
+                QuantBackend.fake_quant.value
+                if self.fallback_to_fake_quant
+                else "unavailable_error"
+            ),
+            "fallback_reason": str(status["reason"]),
+        }
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if not self.quant_enabled:
@@ -310,10 +421,61 @@ class QuantLinear(nn.Linear):
             # the quantized branch -- the exact-equality property is what makes the control
             # arm a control.
             return F.linear(x, self.weight, self.bias)
-        return F.linear(x, twn_quantize_ste(self.weight, in_dim=-1), self.bias)
+        if self.quant_backend == QuantBackend.fake_quant:
+            self._last_resolved_backend = QuantBackend.fake_quant.value
+            self._last_fallback_reason = None
+            self._has_runtime_backend_resolution = True
+            return F.linear(
+                x,
+                twn_quantize_ste(self.weight, in_dim=-1, ste_policy=self.ste_policy),
+                self.bias,
+            )
+
+        status = native_packed_status(self.weight, x)
+        if status["available"]:
+            # FSDP2 may reuse the same unsharded buffer and version counter after an optimizer
+            # update. Pointer/version cache keys cannot detect that mutation, so FSDP-managed
+            # modules repack every forward rather than risk frozen packed weights.
+            if getattr(self, "_is_fsdp_managed_module", False):
+                self._native_pack_cache.clear()
+            self._last_resolved_backend = QuantBackend.native_packed.value
+            self._last_fallback_reason = None
+            self._has_runtime_backend_resolution = True
+            return native_packed_linear(
+                x,
+                self.weight,
+                self.bias,
+                cache=self._native_pack_cache,
+                orientation="dense_out_in",
+            )
+
+        reason = str(status["reason"])
+        if not self.fallback_to_fake_quant:
+            raise OLMoConfigurationError(
+                f"QuantLinear requested native_packed but it cannot run: {reason}. "
+                "Use backend=fake_quant or enable fallback_to_fake_quant."
+            )
+        self._last_resolved_backend = QuantBackend.fake_quant.value
+        self._last_fallback_reason = reason
+        self._has_runtime_backend_resolution = True
+        if not self._warned_native_fallback:
+            warnings.warn(
+                f"native_packed ternary backend unavailable ({reason}); falling back to the "
+                "verified fake_quant BF16 path",
+                RuntimeWarning,
+            )
+            self._warned_native_fallback = True
+        return F.linear(
+            x,
+            twn_quantize_ste(self.weight, in_dim=-1, ste_policy=self.ste_policy),
+            self.bias,
+        )
 
     def extra_repr(self) -> str:
-        return f"{super().extra_repr()}, quant_enabled={self.quant_enabled}"
+        return (
+            f"{super().extra_repr()}, quant_enabled={self.quant_enabled}, "
+            f"quant_backend={self.quant_backend.value}, ste_policy={self.ste_policy.value}"
+        )
 
     def assert_no_tensor_parallel(self) -> None:
         """
@@ -382,6 +544,10 @@ class QuantAuditEntry:
     kind: str
     quantized: bool
     numel: int
+    requested_backend: str = "full_precision"
+    resolved_backend: str = "full_precision"
+    resolved_kernel: str = "full_precision"
+    fallback_reason: Optional[str] = None
 
 
 #: Substrings of a fully-qualified module/parameter name that identify a tensor which
@@ -430,9 +596,26 @@ def audit_quantization(model: nn.Module) -> Dict[str, Any]:
     for fqn, module in model.named_modules():
         quantized: Optional[bool] = None
         kind = type(module).__name__
+        requested_backend = "full_precision"
+        resolved_backend = "full_precision"
+        resolved_kernel = "full_precision"
+        fallback_reason = None
 
         if isinstance(module, QuantLinear):
             quantized = bool(module.quant_enabled)
+            linear_status = module.backend_status()
+            requested_backend = str(linear_status["requested"])
+            resolved_backend = str(linear_status["resolved"])
+            resolved_kernel = (
+                "triton_packed_add_sub"
+                if resolved_backend == QuantBackend.native_packed.value
+                else (
+                    "fake_quant_bf16"
+                    if resolved_backend == QuantBackend.fake_quant.value
+                    else resolved_backend
+                )
+            )
+            fallback_reason = linear_status["fallback_reason"]
         elif isinstance(module, nn.Linear):
             quantized = False
         elif _is_stacked_expert_mlp(module):
@@ -445,6 +628,36 @@ def audit_quantization(model: nn.Module) -> Dict[str, Any]:
             # FFN would be double-counted, inflating `num_quantized`.
             quant = getattr(module, "quant", None)
             quantized = bool(quant is not None and getattr(quant, "enabled", False))
+            if quant is not None:
+                requested_backend = str(getattr(quant, "backend", QuantBackend.fake_quant))
+                if not quantized:
+                    resolved_backend = "disabled_control"
+                    resolved_kernel = "disabled_control"
+                elif getattr(quant, "backend", QuantBackend.fake_quant) == QuantBackend.fake_quant:
+                    resolved_backend = QuantBackend.fake_quant.value
+                    resolved_kernel = "fake_quant_bf16"
+                elif getattr(module, "_has_runtime_backend_resolution", False):
+                    resolved_backend = str(getattr(module, "_last_resolved_backend"))
+                    resolved_kernel = (
+                        "triton_packed_add_sub"
+                        if resolved_backend == QuantBackend.native_packed.value
+                        else "fake_quant_bf16"
+                    )
+                    fallback_reason = getattr(module, "_last_fallback_reason", None)
+                else:
+                    weight = getattr(module, "w1")
+                    native_status = native_packed_status(weight)
+                    if native_status["available"]:
+                        resolved_backend = QuantBackend.native_packed.value
+                        resolved_kernel = "triton_packed_add_sub"
+                    elif getattr(quant, "fallback_to_fake_quant", True):
+                        resolved_backend = QuantBackend.fake_quant.value
+                        resolved_kernel = "fake_quant_bf16"
+                        fallback_reason = str(native_status["reason"])
+                    else:
+                        resolved_backend = "unavailable_error"
+                        resolved_kernel = "unavailable_error"
+                        fallback_reason = str(native_status["reason"])
         elif isinstance(module, nn.Embedding):
             quantized = False
 
@@ -452,7 +665,18 @@ def audit_quantization(model: nn.Module) -> Dict[str, Any]:
             continue
 
         numel = sum(p.numel() for p in module.parameters(recurse=False))
-        entries.append(QuantAuditEntry(fqn=fqn, kind=kind, quantized=quantized, numel=numel))
+        entries.append(
+            QuantAuditEntry(
+                fqn=fqn,
+                kind=kind,
+                quantized=quantized,
+                numel=numel,
+                requested_backend=requested_backend,
+                resolved_backend=resolved_backend,
+                resolved_kernel=resolved_kernel,
+                fallback_reason=fallback_reason,
+            )
+        )
 
         if quantized:
             lowered = fqn.lower()
@@ -479,12 +703,19 @@ def audit_quantization(model: nn.Module) -> Dict[str, Any]:
         )
 
     quantized_entries = [e for e in entries if e.quantized]
+    configured_entries = [e for e in entries if e.requested_backend != "full_precision"]
     return {
         "entries": entries,
         "num_quantized": len(quantized_entries),
         "num_full_precision": len(entries) - len(quantized_entries),
         "quantized_numel": sum(e.numel for e in quantized_entries),
         "full_precision_numel": sum(e.numel for e in entries if not e.quantized),
+        "requested_backends": sorted({e.requested_backend for e in configured_entries}),
+        "resolved_backends": sorted({e.resolved_backend for e in configured_entries}),
+        "resolved_kernels": sorted({e.resolved_kernel for e in configured_entries}),
+        "fallback_reasons": sorted(
+            {e.fallback_reason for e in configured_entries if e.fallback_reason is not None}
+        ),
     }
 
 

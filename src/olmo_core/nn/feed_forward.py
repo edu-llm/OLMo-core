@@ -229,6 +229,9 @@ class FeedForward(nn.Module):
                 out_features,
                 bias=bias,
                 enabled=quant.enabled,
+                backend=quant.backend,
+                ste_policy=quant.ste_policy,
+                fallback_to_fake_quant=quant.fallback_to_fake_quant,
                 dtype=dtype,
                 device=init_device,
             )

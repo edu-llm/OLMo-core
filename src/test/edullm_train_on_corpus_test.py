@@ -54,6 +54,57 @@ def resolve(manifest: FakeManifest, tokenizer: str = "tokenizer/dolma2-bpe"):
     )
 
 
+def test_native_packed_cli_reaches_maple_quant_config(monkeypatch):
+    monkeypatch.setattr(
+        entry,
+        "resolve_corpus",
+        lambda **kwargs: entry.corpus_from_manifest(
+            FakeManifest(),
+            dataset_id=kwargs["dataset_id"],
+            version=kwargs["version"],
+            tokenizer_id=kwargs["tokenizer_id"],
+        ),
+    )
+    opts, overrides = entry.build_parser().parse_known_args(
+        [
+            "native-test",
+            "--dataset-id=pretrain/regmix-10b",
+            "--dataset-version=v1",
+            "--dataset-tokenizer=tokenizer/dolma2-bpe",
+            "--save-folder=/tmp/native-test",
+            "--model-factory=maple_r0",
+            "--quantize=ternary",
+            "--quant-backend=native_packed",
+            "--native-packed-fallback=error",
+        ]
+    )
+    config = entry.build_config(opts, overrides)
+    attention_quant = config.model.block.sequence_mixer.quant
+    expert_quant = config.model.block.feed_forward_moe.quant
+    for quant in (attention_quant, expert_quant):
+        assert quant.backend.value == "native_packed"
+        assert quant.ste_policy.value == "identity"
+        assert quant.fallback_to_fake_quant is False
+
+
+def test_native_packed_cli_requires_explicit_quantization_arm():
+    opts, overrides = entry.build_parser().parse_known_args(
+        [
+            "native-test",
+            "--dataset-id=pretrain/regmix-10b",
+            "--dataset-version=v1",
+            "--dataset-tokenizer=tokenizer/dolma2-bpe",
+            "--save-folder=/tmp/native-test",
+            "--model-factory=maple_r0",
+            "--quant-backend=native_packed",
+        ]
+    )
+    with pytest.raises(entry.Refusal) as caught:
+        entry.build_config(opts, overrides)
+    assert caught.value.stage is entry.Stage.THE_CONFIG_WOULD_NOT_BUILD
+    assert "--quantize" in str(caught.value)
+
+
 class ReaderProtocolStub:
     """The four methods ``edullm_data.read`` calls on whatever it is handed.
 
@@ -750,7 +801,9 @@ def test_a_finished_checkpoint_is_not_a_candidate_for_removal(tmp_path):
     assert entry.remove_torn_checkpoints(str(tmp_path)) == [str(tmp_path / "step100")]
     assert not (tmp_path / "step100").exists()
     kept = tmp_path / "step50"
-    assert sorted(str(path.relative_to(kept)) for path in kept.rglob("*") if path.is_file()) == [
+    assert sorted(
+        path.relative_to(kept).as_posix() for path in kept.rglob("*") if path.is_file()
+    ) == [
         ".metadata.json",
         "model_and_optim/.metadata",
         "train/rank0.pt",
@@ -1632,8 +1685,9 @@ def test_a_cached_shard_of_the_right_size_is_not_downloaded_again(tmp_path, monk
     cached.parent.mkdir(parents=True, exist_ok=True)
     cached.write_bytes(payload)
 
-    with mock.patch.object(entry, "_download_to") as download, mock.patch(
-        "olmo_core.io.get_file_size", return_value=len(payload)
+    with (
+        mock.patch.object(entry, "_download_to") as download,
+        mock.patch("olmo_core.io.get_file_size", return_value=len(payload)),
     ):
         out = entry._localised_heldout_paths([url], _Opts())
     download.assert_not_called()
@@ -1641,8 +1695,9 @@ def test_a_cached_shard_of_the_right_size_is_not_downloaded_again(tmp_path, monk
 
     # Now truncate it: the same call must re-fetch rather than trust what is on disk.
     cached.write_bytes(payload[:4])
-    with mock.patch.object(entry, "_download_to") as download, mock.patch(
-        "olmo_core.io.get_file_size", return_value=len(payload)
+    with (
+        mock.patch.object(entry, "_download_to") as download,
+        mock.patch("olmo_core.io.get_file_size", return_value=len(payload)),
     ):
         entry._localised_heldout_paths([url], _Opts())
     download.assert_called_once()
@@ -1696,8 +1751,11 @@ def test_only_one_process_per_node_heads_or_downloads_the_heldout_shards(monkeyp
 
     # A non-zero local rank: no HEAD, no download, but still a usable local path.
     monkeypatch.setenv("LOCAL_RANK", "3")
-    with mock.patch.object(entry, "_download_to") as download, mock.patch(
-        "olmo_core.io.get_file_size", side_effect=AssertionError("rank 3 must not issue a HEAD")
+    with (
+        mock.patch.object(entry, "_download_to") as download,
+        mock.patch(
+            "olmo_core.io.get_file_size", side_effect=AssertionError("rank 3 must not issue a HEAD")
+        ),
     ):
         out = entry._localised_heldout_paths([url], _Opts())
     download.assert_not_called()
@@ -1713,8 +1771,9 @@ def test_only_one_process_per_node_heads_or_downloads_the_heldout_shards(monkeyp
     cached.write_bytes(b"\x00" * 8)
 
     heads = []
-    with mock.patch.object(entry, "_download_to") as download, mock.patch(
-        "olmo_core.io.get_file_size", side_effect=lambda u: (heads.append(u), 64)[1]
+    with (
+        mock.patch.object(entry, "_download_to") as download,
+        mock.patch("olmo_core.io.get_file_size", side_effect=lambda u: (heads.append(u), 64)[1]),
     ):
         out_zero = entry._localised_heldout_paths([url], _Opts())
     assert heads == [url], "local rank 0 issues exactly one HEAD per shard"
@@ -1739,8 +1798,9 @@ def test_a_single_process_invocation_still_fetches(monkeypatch, tmp_path):
     monkeypatch.delenv("LOCAL_RANK", raising=False)
     assert entry._may_fetch_heldout_shards() is True
 
-    with mock.patch.object(entry, "_download_to") as download, mock.patch(
-        "olmo_core.io.get_file_size", return_value=64
+    with (
+        mock.patch.object(entry, "_download_to") as download,
+        mock.patch("olmo_core.io.get_file_size", return_value=64),
     ):
         entry._localised_heldout_paths(["s3://bucket/x/val-00000.u32le.bin"], _Opts())
     download.assert_called_once()

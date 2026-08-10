@@ -14,7 +14,12 @@ from torch.distributed.tensor import Placement, Shard, distribute_tensor
 from olmo_core.distributed.parallel import get_device_mesh_info
 from olmo_core.distributed.utils import get_local_tensor
 from olmo_core.exceptions import OLMoConfigurationError
-from olmo_core.nn.quantization import QuantConfig, twn_quantize_ste
+from olmo_core.nn.quantization import QuantBackend, QuantConfig, twn_quantize_ste
+from olmo_core.ops.ternary import (
+    PackedTWNCache,
+    native_packed_grouped_linear,
+    native_packed_status,
+)
 from olmo_core.utils import log_once
 
 try:
@@ -54,6 +59,65 @@ class MoEMLPBase(nn.Module):
         self.hidden_sharding_degree = 1
         self.ep_mesh: Optional[DeviceMesh] = None
         self.ep_pg: Optional[dist.ProcessGroup] = None
+        self._native_pack_caches = {
+            "w1": PackedTWNCache(),
+            "w2": PackedTWNCache(),
+            "w3": PackedTWNCache(),
+        }
+        self._last_resolved_backend = (
+            "disabled_control"
+            if quant is not None and not quant.enabled
+            else (quant.backend.value if quant is not None else "full_precision")
+        )
+        self._last_fallback_reason: Optional[str] = None
+        self._has_runtime_backend_resolution = False
+        self._warned_native_fallback = False
+        self.register_load_state_dict_post_hook(self._clear_native_caches_after_load)
+
+    def _clear_native_caches_after_load(self, module, incompatible_keys) -> None:
+        del module, incompatible_keys
+        for cache in self._native_pack_caches.values():
+            cache.clear()
+        self._has_runtime_backend_resolution = False
+
+    def use_native_packed(self, weight: torch.Tensor, activation: torch.Tensor) -> bool:
+        """Resolve the requested expert backend for the current local weight storage."""
+        if (
+            self.quant is None
+            or not self.quant.enabled
+            or self.quant.backend != QuantBackend.native_packed
+        ):
+            return False
+        # FSDP2 can reuse an updated unsharded buffer without changing its data pointer or
+        # version counter. Repack every FSDP-managed forward; non-FSDP gradient accumulation
+        # still reuses the normal version-keyed cache.
+        if getattr(self, "_is_fsdp_managed_module", False):
+            for cache in self._native_pack_caches.values():
+                cache.clear()
+        status = native_packed_status(weight, activation)
+        if status["available"]:
+            self._last_resolved_backend = QuantBackend.native_packed.value
+            self._last_fallback_reason = None
+            self._has_runtime_backend_resolution = True
+            return True
+
+        reason = str(status["reason"])
+        if not self.quant.fallback_to_fake_quant:
+            raise OLMoConfigurationError(
+                f"{type(self).__name__} requested native_packed but it cannot run: {reason}. "
+                "Use backend=fake_quant or enable fallback_to_fake_quant."
+            )
+        self._last_resolved_backend = QuantBackend.fake_quant.value
+        self._last_fallback_reason = reason
+        self._has_runtime_backend_resolution = True
+        if not self._warned_native_fallback:
+            warnings.warn(
+                f"native_packed ternary backend unavailable ({reason}); falling back to the "
+                "verified fake_quant BF16 expert path",
+                RuntimeWarning,
+            )
+            self._warned_native_fallback = True
+        return False
 
     def maybe_quantize(self, w: torch.Tensor, *, in_dim: int) -> torch.Tensor:
         """
@@ -62,9 +126,9 @@ class MoEMLPBase(nn.Module):
         Expert weights here are bare stacked :class:`torch.nn.Parameter` tensors of shape
         ``(num_experts, a, b)``, not :class:`torch.nn.Linear` submodules, so
         :class:`~olmo_core.nn.quantization.QuantLinear` does not apply and the quantizer is
-        called on the tensor directly. This is a single hook at the top of ``forward`` rather
-        than a rewrite of the matmul sequence, which keeps the ``grouped_gemm``-versus-``bmm``
-        question entirely in L3's hands.
+        called on the tensor directly. This helper is the verified ``fake_quant`` path;
+        ``native_packed`` bypasses it and routes the same orientations through packed grouped
+        operations below.
 
         ``in_dim`` must be the axis the *forward pass* treats as input features, which is not
         the same axis for every weight here -- see the table in
@@ -77,7 +141,7 @@ class MoEMLPBase(nn.Module):
         """
         if self.quant is None or not self.quant.enabled:
             return w
-        return twn_quantize_ste(w, in_dim=in_dim)
+        return twn_quantize_ste(w, in_dim=in_dim, ste_policy=self.quant.ste_policy)
 
     def apply_ep(self, ep_mesh: DeviceMesh):
         """
@@ -235,6 +299,9 @@ class MoEMLP(MoEMLPBase):
             get_local_tensor(self.w3.view(self.num_experts, self.d_model, self.hidden_size)),
         )
 
+        x = x.type_as(w1)
+        native_packed = self.use_native_packed(w1, x)
+
         # Ternary QAT, if enabled. `in_dim=1` for all three because `torch.bmm(x, w)` contracts
         # `w`'s axis -2 UNCONDITIONALLY -- it is forced by the operator, not by the fact that
         # w1/w3 are (d_model, hidden) while w2 is (hidden, d_model). So this is NOT fragile to
@@ -248,20 +315,44 @@ class MoEMLP(MoEMLPBase):
         # The divisibility guard is what makes post-shard quantization equivalent to pre-shard,
         # not the shard axis alone. Verified under real DTensor, FSDP2, and stacked EP+FSDP2 in
         # `maple/agents/lanes/L4-ternary/verify/in-dim-orientation.md`.
-        w1 = self.maybe_quantize(w1, in_dim=1)
-        w2 = self.maybe_quantize(w2, in_dim=1)
-        w3 = self.maybe_quantize(w3, in_dim=1)
-
-        x = x.type_as(w1)
-
         # Compute the MLP.
-        gate = torch.bmm(x, w1)
-        up = torch.bmm(x, w3)
+        if native_packed:
+            gate = native_packed_grouped_linear(
+                x,
+                w1,
+                in_dim=1,
+                cache=self._native_pack_caches["w1"],
+                orientation="capacity_w1_in1",
+            )
+            up = native_packed_grouped_linear(
+                x,
+                w3,
+                in_dim=1,
+                cache=self._native_pack_caches["w3"],
+                orientation="capacity_w3_in1",
+            )
+        else:
+            w1 = self.maybe_quantize(w1, in_dim=1)
+            w2 = self.maybe_quantize(w2, in_dim=1)
+            w3 = self.maybe_quantize(w3, in_dim=1)
+            gate = torch.bmm(x, w1)
+            up = torch.bmm(x, w3)
         if self.swiglu_limit is not None:
             # gpt-oss's asymmetric SwiGLU outlier guard; see feed_forward.MAPLE_SWIGLU_LIMIT.
             gate = gate.clamp(max=self.swiglu_limit)
             up = up.clamp(min=-self.swiglu_limit, max=self.swiglu_limit)
-        return torch.bmm(F.silu(gate) * up, w2).to(dtype=og_dtype)
+        hidden = F.silu(gate) * up
+        if native_packed:
+            out = native_packed_grouped_linear(
+                hidden,
+                w2,
+                in_dim=1,
+                cache=self._native_pack_caches["w2"],
+                orientation="capacity_w2_in1",
+            )
+        else:
+            out = torch.bmm(hidden, w2)
+        return out.to(dtype=og_dtype)
 
 
 class DroplessMoEMLP(MoEMLPBase):
@@ -312,7 +403,10 @@ class DroplessMoEMLP(MoEMLPBase):
         )
 
         self._gmm = gmm
-        if self._gmm is None:
+        native_requested = (
+            quant is not None and quant.enabled and quant.backend == QuantBackend.native_packed
+        )
+        if self._gmm is None and not native_requested:
             # A WARNING IS NOT ENOUGH HERE ABOVE A CERTAIN EXPERT COUNT, AND THE NUMBERS ARE WHY.
             #
             # Without `grouped_gemm`, `gmm` below falls back to a Python loop over
@@ -368,6 +462,13 @@ class DroplessMoEMLP(MoEMLPBase):
             # grouped-gemm only accepts BF16
             return self._gmm(x.to(torch.bfloat16), w.to(torch.bfloat16), batch_sizes, trans_b=trans_b)  # type: ignore
         else:
+            if self.num_experts >= _GMM_FALLBACK_MAX_EXPERTS:
+                raise OLMoConfigurationError(
+                    f"native_packed fell back to fake_quant for DroplessMoEMLP with "
+                    f"num_experts={self.num_experts}, but grouped_gemm is unavailable. Refusing "
+                    "the per-expert host-sync fallback at this scale; install grouped_gemm, make "
+                    "native_packed available, or select capacity dispatch."
+                )
             out = []
             start = 0
             for i, size in enumerate(batch_sizes.cpu().numpy()):
@@ -392,6 +493,11 @@ class DroplessMoEMLP(MoEMLPBase):
             get_local_tensor(self.w3.view(self.num_experts, self.hidden_size, self.d_model)),
         )
 
+        native_x = x.type_as(w1)
+        native_packed = self.use_native_packed(w1, native_x)
+        if native_packed:
+            x = native_x
+
         # Ternary QAT, if enabled. Note `in_dim` differs between w1/w3 and w2 even though all
         # three tensors have the SAME shape (num_experts, hidden_size, d_model). The axis that
         # counts is the one the matmul consumes as input features, and `gmm` is called with
@@ -401,16 +507,42 @@ class DroplessMoEMLP(MoEMLPBase):
         # Using 2 for w2 would compute alpha across d_model for a matmul whose output rows are
         # indexed by d_model -- a per-input-row scale, i.e. a different quantizer that trains
         # without complaint. If L3 changes a `trans_b`, this must change with it.
-        w1 = self.maybe_quantize(w1, in_dim=2)
-        w3 = self.maybe_quantize(w3, in_dim=2)
-        w2 = self.maybe_quantize(w2, in_dim=1)
-
         # Compute the MLP.
-        x1 = self.gmm(x, w1, batch_size_per_expert, trans_b=True)
-        x2 = self.gmm(x, w3, batch_size_per_expert, trans_b=True)
+        if native_packed:
+            x1 = native_packed_grouped_linear(
+                x,
+                w1,
+                in_dim=2,
+                cache=self._native_pack_caches["w1"],
+                orientation="dropless_w1_in2_transpose",
+                batch_sizes=batch_size_per_expert,
+            )
+            x2 = native_packed_grouped_linear(
+                x,
+                w3,
+                in_dim=2,
+                cache=self._native_pack_caches["w3"],
+                orientation="dropless_w3_in2_transpose",
+                batch_sizes=batch_size_per_expert,
+            )
+        else:
+            w1 = self.maybe_quantize(w1, in_dim=2)
+            w3 = self.maybe_quantize(w3, in_dim=2)
+            w2 = self.maybe_quantize(w2, in_dim=1)
+            x1 = self.gmm(x, w1, batch_size_per_expert, trans_b=True)
+            x2 = self.gmm(x, w3, batch_size_per_expert, trans_b=True)
         if self.swiglu_limit is not None:
             # gpt-oss's asymmetric SwiGLU outlier guard; see feed_forward.MAPLE_SWIGLU_LIMIT.
             x1 = x1.clamp(max=self.swiglu_limit)
             x2 = x2.clamp(min=-self.swiglu_limit, max=self.swiglu_limit)
         x1 = F.silu(x1) * x2
+        if native_packed:
+            return native_packed_grouped_linear(
+                x1,
+                w2,
+                in_dim=1,
+                cache=self._native_pack_caches["w2"],
+                orientation="dropless_w2_in1",
+                batch_sizes=batch_size_per_expert,
+            )
         return self.gmm(x1, w2, batch_size_per_expert)
