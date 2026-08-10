@@ -770,13 +770,18 @@ class Attention(SequenceMixer):
 
         init_linear(self.w_out, std=std, generator=generator)
 
-    def init_kv_cache_manager(self, batch_size: int, max_seq_len: int):
+    def init_kv_cache_manager(
+        self, batch_size: int, max_seq_len: int, dtype: Optional[torch.dtype] = None
+    ):
         """
         Initialize the kv cache manager for attention. When the kv cache manager exists,
         kv caching will be used during the forward pass. This should only be called during inference.
 
         :param batch_size: The batch size for the cache.
         :param max_seq_len: The maximum sequence length for the cache.
+        :param dtype: The dtype to hold the cache in. Defaults to bfloat16, which is what the
+            flash kernels want; a model being served in another precision should say so, or
+            every step pays a conversion of the whole prefix.
         """
         self.backend.assert_supports_kv_cache()
 
@@ -786,6 +791,7 @@ class Attention(SequenceMixer):
             num_kv_heads=self.n_kv_heads,
             head_dim=self.head_dim,
             device=self.w_k.weight.device,
+            dtype=torch.bfloat16 if dtype is None else dtype,
         )
 
     def num_flops_per_token(self, seq_len: int) -> int:

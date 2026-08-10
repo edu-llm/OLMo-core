@@ -635,6 +635,98 @@ def test_attention_kv_cache_update(backend_name: AttentionBackendName):
         ).clone()
 
 
+def _torch_backend_attention(
+    *,
+    d_model: int = 128,
+    n_heads: int = 8,
+    n_kv_heads: int = 2,
+    window: Optional[int] = None,
+    use_rope: bool = True,
+) -> Attention:
+    sliding_window: Optional[SlidingWindowAttentionConfig] = None
+    if window is not None:
+        sliding_window = SlidingWindowAttentionConfig(
+            pattern=[window],
+            force_full_attention_on_first_layer=False,
+            force_full_attention_on_last_layer=False,
+        )
+    return AttentionConfig(
+        n_heads=n_heads,
+        n_kv_heads=n_kv_heads,
+        bias=False,
+        rope=RoPEConfig(name=RoPEType.default) if use_rope else None,
+        sliding_window=sliding_window,
+        backend=AttentionBackendName.torch,
+    ).build(d_model, layer_idx=0, n_layers=1, init_device="cpu")
+
+
+@pytest.mark.parametrize("window", [pytest.param(None, id="full"), pytest.param(8, id="SWA")])
+@pytest.mark.parametrize("prefill_len", [1, 11])
+@pytest.mark.parametrize("batch_size", [1, 3])
+def test_torch_backend_kv_cache_matches_uncached_forward(
+    batch_size: int, prefill_len: int, window: Optional[int]
+):
+    """
+    A prefill followed by decode steps has to produce exactly what one forward over the whole
+    sequence produces. This is the only property the cache has, and everything that reads a
+    latency or a memory number off this path depends on it holding.
+    """
+    seed_all(0)
+
+    total_len = 17
+    attention = _torch_backend_attention(window=window)
+    x = torch.randn(batch_size, total_len, attention.d_model)
+
+    with torch.no_grad():
+        uncached = attention(x)
+
+    attention.init_kv_cache_manager(batch_size, 32, dtype=torch.float32)
+    with torch.no_grad():
+        pieces = [attention(x[:, :prefill_len])]
+        for t in range(prefill_len, total_len):
+            pieces.append(attention(x[:, t : t + 1]))
+    cached = torch.cat(pieces, dim=1)
+
+    assert attention.kv_cache_manager is not None
+    assert int(attention.kv_cache_manager.cache_seqlens.item()) == total_len
+    torch.testing.assert_close(cached, uncached, rtol=1e-5, atol=1e-5)
+
+
+def test_torch_backend_kv_cache_ignores_left_padding():
+    """
+    The same content behind different amounts of left padding has to decode identically, which
+    is what makes a batch of unequal prompts servable.
+    """
+    seed_all(0)
+
+    content_len = 7
+    attention = _torch_backend_attention(use_rope=False)
+    content = torch.randn(1, content_len, attention.d_model)
+    next_token = torch.randn(1, 1, attention.d_model)
+
+    outputs = []
+    for pad in (0, 5):
+        x = torch.zeros(1, pad + content_len, attention.d_model)
+        x[:, pad:] = content
+        mask = torch.tensor([[0] * pad + [1] * content_len], dtype=torch.bool)
+        attention.init_kv_cache_manager(1, 32, dtype=torch.float32)
+        with torch.no_grad():
+            prefill = attention(x, cache_leftpad=attention_mask_to_cache_leftpad(mask))
+            outputs.append((prefill[:, pad:], attention(next_token)))
+
+    torch.testing.assert_close(outputs[0][0], outputs[1][0], rtol=1e-5, atol=1e-5)
+    torch.testing.assert_close(outputs[0][1], outputs[1][1], rtol=1e-5, atol=1e-5)
+
+
+def test_torch_backend_kv_cache_refuses_to_run_off_the_end():
+    seed_all(0)
+
+    attention = _torch_backend_attention()
+    attention.init_kv_cache_manager(1, 4, dtype=torch.float32)
+    with torch.no_grad(), pytest.raises(RuntimeError, match="holds 4 positions"):
+        attention(torch.randn(1, 5, attention.d_model))
+
+
 @requires_gpu
 @requires_flash_attn_2
 @pytest.mark.parametrize("batch_size", [1, 8])

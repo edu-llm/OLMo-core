@@ -286,7 +286,7 @@ class TorchAttentionBackend(AttentionBackend):
 
     @classmethod
     def assert_supports_kv_cache(cls):
-        raise RuntimeError(f"'{cls.__name__}' doesn't support KV caching")
+        pass
 
     def warmup_cache(self, max_seq_len: int, device: torch.device):
         self._get_sliding_window_mask(
@@ -315,17 +315,27 @@ class TorchAttentionBackend(AttentionBackend):
 
         q, k, v = qkv
 
-        if kv_cache_manager is not None:
-            raise RuntimeError(f"'{self.__class__.__name__}' doesn't support KV caching")
-
         attn_mask: Optional[torch.Tensor] = None
-        if self.window_size != (-1, -1):
+        # Causal unless a mask says otherwise, which is what the uncached path has always
+        # assumed. The cached path has to be able to say "no mask, and not causal either":
+        # a lone decode query attends to the whole prefix, and `is_causal` against a prefix
+        # it does not begin would hide all of it.
+        is_causal = True
+        if kv_cache_manager is not None:
+            if self.cp_enabled:
+                raise RuntimeError(
+                    f"'{self.__class__.__name__}' doesn't support KV caching with context "
+                    "parallelism"
+                )
+            k, v, attn_mask, is_causal = self._append_to_kv_cache(q, k, v, kv_cache_manager)
+        elif self.window_size != (-1, -1):
             attn_mask = self._get_sliding_window_mask(
                 seq_len_q=q.shape[1],
                 seq_len_kv=k.shape[1],
                 device=q.device,
                 window_size=self.window_size,
             )
+            is_causal = False
 
         if any(
             opt is not None
@@ -368,7 +378,7 @@ class TorchAttentionBackend(AttentionBackend):
             v,
             attn_mask=attn_mask,
             dropout_p=self.dropout_p,
-            is_causal=attn_mask is None,
+            is_causal=is_causal and attn_mask is None,
             scale=self.scale,
         )
 
@@ -382,6 +392,74 @@ class TorchAttentionBackend(AttentionBackend):
             att = all_to_all_single_hp2cp(att, self.cp_pg)
 
         return att.contiguous()
+
+    def _append_to_kv_cache(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        kv_cache_manager: KVCacheManager,
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor], bool]:
+        """
+        Write this step's keys and values into the cache and return the whole prefix to attend
+        over, plus how that prefix has to be masked.
+
+        The flash kernels take the cache and the offset and work the masking out themselves;
+        SDPA has neither argument, so it is decided here. The two shapes that matter to a server
+        need no mask tensor at all -- a prefill starts at position zero and is exactly causal, and
+        a single decode query attends to every position in the prefix -- which is worth the
+        branch: materializing a mask per step would allocate ``T_kv`` bools per layer per token
+        and put a dozen extra kernels in the hot loop.
+
+        :param q: Queries of shape ``(batch_size, seq_len, n_heads, head_dim)``, read only for
+            its length and device.
+        :param k: Keys of shape ``(batch_size, seq_len, n_kv_heads, head_dim)``.
+        :param v: Values of the same shape as ``k``.
+        :param kv_cache_manager: The cache, updated in place.
+
+        :returns: ``(k_prefix, v_prefix, attn_mask, is_causal)``.
+        """
+        pos = int(kv_cache_manager.cache_seqlens.item())
+        seq_len_q = q.shape[1]
+        seq_len_kv = pos + seq_len_q
+        if seq_len_kv > kv_cache_manager.k_cache.shape[1]:
+            raise RuntimeError(
+                f"KV cache holds {kv_cache_manager.k_cache.shape[1]} positions and this step "
+                f"would reach {seq_len_kv}"
+            )
+
+        cache_dtype = kv_cache_manager.k_cache.dtype
+        kv_cache_manager.k_cache[:, pos:seq_len_kv] = k.to(cache_dtype)
+        kv_cache_manager.v_cache[:, pos:seq_len_kv] = v.to(cache_dtype)
+        k_prefix = kv_cache_manager.k_cache[:, :seq_len_kv].to(k.dtype)
+        v_prefix = kv_cache_manager.v_cache[:, :seq_len_kv].to(v.dtype)
+
+        windowed = self.window_size != (-1, -1)
+        leftpad = kv_cache_manager.cache_leftpad
+        padded = bool(torch.any(leftpad != 0))
+        if not windowed and not padded:
+            if pos == 0:
+                return k_prefix, v_prefix, None, True
+            if seq_len_q == 1:
+                return k_prefix, v_prefix, None, False
+
+        # Query i sits at absolute position pos + i, so the causal boundary is offset by `pos`.
+        device = q.device
+        key_pos = torch.arange(seq_len_kv, device=device)
+        distance = torch.arange(pos, seq_len_kv, device=device).unsqueeze(-1) - key_pos.unsqueeze(0)
+        attn_mask = distance >= 0
+        if windowed:
+            if self.window_size[0] >= 0:
+                attn_mask = attn_mask & (distance <= self.window_size[0])
+            if self.window_size[1] >= 0:
+                attn_mask = attn_mask & (distance >= -self.window_size[1])
+        attn_mask = attn_mask.view(1, 1, seq_len_q, seq_len_kv)
+
+        if padded:
+            keep = key_pos.view(1, 1, 1, seq_len_kv) >= leftpad.view(-1, 1, 1, 1)
+            attn_mask = attn_mask & keep
+
+        return k_prefix, v_prefix, attn_mask, False
 
     def _get_sliding_window_mask(
         self,
