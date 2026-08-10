@@ -1,0 +1,52 @@
+# Kill a training run partway and let it start again, so that somebody has watched it.
+#
+#   edullm submit --spec .edullm/run-resume-proof.yaml \
+#     --experiment does-resume-work --dataset regmix-10b-v1 \
+#     --compute gpu-1xa10g --hours 0.75 --attempts 1
+#
+# WHY THIS FILE EXISTS RATHER THAN A PARAGRAPH SAYING RESUME WORKS. The platform grants
+# `olmo-core-train` a second attempt, and until 2026-08-07 the two checks behind that grant
+# were whether the workload profile declared a checkpoint contract and whether the command
+# expanded $EDULLM_CHECKPOINT_DIR. Both pass for a trainer that writes to that prefix and
+# never reads back from it, and two of the six registered repositories were measured doing
+# exactly that. The platform's `config/reports/resume-demonstrations.yaml` now wants two
+# integers per repository -- the step a resuming process started from and the step it
+# reached -- and this is what produces them.
+#
+# WHY BOTH PHASES PASS IDENTICAL FLAGS, WHICH IS THE PART THAT IS EASY TO GET WRONG.
+# `--steps` becomes `max_duration`, which becomes `Trainer.max_steps`, which is the
+# denominator `CosWithWarmup` divides by. OLMo-core's schedule is stateless: `set_lr` computes
+# the rate from `global_step` and `max_steps` on every step and stores nothing in the
+# checkpoint. So a second phase given a different `--steps` restores the right weights, the
+# right optimizer state and the right data position onto a different learning-rate curve, and
+# reports nothing wrong. A resume test whose two phases disagree about `--steps` is not a
+# resume test.
+#
+# WHY SIGKILL RATHER THAN SIGTERM. The trainer installs a SIGTERM handler and shuts down
+# gracefully, which is not what a lost host does. SIGKILL mid-run also leaves a torn `step{N}`
+# directory when it lands during an async save, which is the case `remove_torn_checkpoints`
+# exists for -- so the harsher signal tests more.
+#
+# WHAT THE TAIL PRINTS, AND WHY IT IS SHAPED FOR FIFTY LINES. `edullm logs` is `cancel-run.yml`
+# calling `get-log-events --limit 50 --no-start-from-head`, so anything the reader needs has to
+# be within fifty events of the end. Both phases are redirected to files and the report is
+# grepped out of them afterwards: where phase one stopped, how many checkpoints it wrote, what
+# phase two said about loading one, where phase two started, and its own summary JSON -- which
+# carries `resumed_from_step` and `steps`, the two integers the platform records.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-1xa10g
+command: >-
+  bash -lc 'A="--sequence-length 1024 --global-batch-size 131072 --steps 700
+  --save-interval 20 --warmup-steps 100 --param-dtype bfloat16";
+  timeout -s KILL 360 python .edullm/train_on_corpus.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR" $A >/tmp/p1.log 2>&1;
+  echo "phase1 exit=$?";
+  timeout -s KILL 1800 python .edullm/train_on_corpus.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR" $A >/tmp/p2.log 2>&1;
+  echo "phase2 exit=$?";
+  echo "=== P1 TAIL ==="; grep -E "eta=|train/CE loss=|optim/LR" /tmp/p1.log | tail -6;
+  echo "=== P1 SAVES ==="; grep -c "Saving checkpoint for step" /tmp/p1.log;
+  echo "=== P2 RESUME ==="; grep -E "resume|Loading checkpoint|No checkpoint found|not a checkpoint the loader accepts" /tmp/p2.log | head -5;
+  echo "=== P2 HEAD ==="; grep -E "eta=|train/CE loss=|optim/LR" /tmp/p2.log | head -6;
+  echo "=== P2 END ==="; tail -20 /tmp/p2.log'

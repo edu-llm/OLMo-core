@@ -1,0 +1,29 @@
+# What actually happens on attempt two, which nothing had ever run.
+#
+#   edullm submit --spec .edullm/run-retry-probe.yaml \
+#     --experiment does-resume-work --dataset regmix-10b-v1 \
+#     --compute gpu-1xa10g --hours 0.35 --attempts 2
+#
+# The platform's `checkpoint_commands.py` reasons that a Batch attempt stopped for outrunning
+# `attemptDurationSeconds` carries the status reason "Job attempt duration exceeded timeout"
+# and no container exit code, so the `EvaluateOnExit` rule globbing `*` has nothing to match
+# and Batch falls through to a retry. Every other arm of that rule set is `EXIT`, so this is
+# the only second attempt the platform reliably spends -- and the derivation had never been
+# executed.
+#
+# One ordinary training invocation with a step count it cannot finish inside its bound and a
+# save interval it can write several checkpoints inside. Attempt one is killed by the bound.
+# Read `edullm status <run-id>`, which prints "Attempts | N of M", and then `edullm logs`,
+# whose stream is the latest attempt's.
+#
+# `--steps 2000` is deliberately far beyond what the bound allows. A probe whose first attempt
+# finishes measures nothing, and the whole risk here is choosing a step count that turns out to
+# fit.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-1xa10g
+command: >-
+  bash -lc 'python .edullm/train_on_corpus.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --sequence-length 1024 --global-batch-size 131072 --steps 2000
+  --save-interval 20 --warmup-steps 100 --param-dtype bfloat16'
