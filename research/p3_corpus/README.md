@@ -7,11 +7,48 @@ publication evidence that produced:
 - `tokenizer/qwen25-vendored/v1`
 - `pretrain/formal-proof-premises-500m/v3`
 
+**Start here for agents:** [`AGENTS.md`](AGENTS.md) — scientific contract, data
+shapes, gates, thresholds, and the rebuild pipeline.
+
 The packed pretraining payload is already promoted in `edullm-data`; it is not
 duplicated in Git. The unpublished evaluator JSONL payload also remains outside
-Git. `provenance/evaluator-v3/` retains only its control JSON and README, while
-the local canonical payload remains `corpus-v3/` in the original build
-workspace until an evaluator dataset is validated and promoted.
+Git. `provenance/evaluator-v3/` retains only its control JSON and README.
+
+## Quick rebuild path
+
+```bash
+# Verify upstream sources (URLs + SHA-256 in source-lock.json)
+python scripts/bootstrap_sources.py --root /tmp/p3-sources --build-mizar-index
+
+# Resumable full pipeline. Also resolves the generation-input templates and
+# rebuilds the accepted ENIGMA base. See AGENTS.md for what each stage does.
+python scripts/orchestrate_rebuild.py \
+  --work-root /tmp/p3-rebuild-work \
+  --sources-root /tmp/p3-sources
+
+# Compare output to canonical v3 expectations
+python scripts/verify_rebuild.py \
+  --tokenized-root /tmp/p3-rebuild-work/tokenized-v3 \
+  --publish-root /tmp/p3-rebuild-work/publish-stage-v3
+```
+
+Skeleton CI tests (no multi-GB data):
+
+```bash
+PYTHONPATH=research/p3_corpus \
+python -m pytest -q research/p3_corpus/tests/test_rebuild_skeleton.py \
+                 research/p3_corpus/tests/test_archive_portability.py
+```
+
+## Key files
+
+| File | Purpose |
+| --- | --- |
+| `AGENTS.md` | Agent-oriented contract, structure, gates, thresholds |
+| `source-lock.json` | Immutable upstream URLs and SHA-256 pins |
+| `expected-release-v3.json` | Row/token counts and hashes for verification |
+| `PINNED_DEPENDENCIES.md` | edullm-data and runtime package pins |
+| `archive-inventory.json` | SHA-256 inventory of every tracked skeleton file |
 
 ## Package contract
 
@@ -29,23 +66,13 @@ own the published control files.
 
 ## Layout
 
-- `scripts/`: corpus construction, transaction, verification, staging, and
-  publisher sources.
-- `tests/`: the focused corpus/release tests and their small fixtures.
-- `tokenizers/qwen25-vendored/`: the exact tokenizer files used by local
-  byte-level verification.
-- `manifests/`: small source identity manifests.
-- `provenance/`: sealed corpus, tokenization, evaluator, and source-control
-  records. Historical absolute paths are retained here as evidence; payload
-  bytes are intentionally absent.
-- `docs/`: decision ledger, runbooks, schemas, reports, and figures.
-
-Run the archived tests from this directory's repository root with:
-
-```bash
-PYTHONPATH=research/p3_corpus \
-python -m pytest -q research/p3_corpus/tests
-```
+- `scripts/`: corpus construction, bootstrap, orchestrator, verification, staging, publisher
+- `tests/`: focused corpus/release/skeleton tests and small fixtures
+- `templates/generation-inputs/`: policies, tokenizer seal, six family manifests, SUMMARY
+- `tokenizers/qwen25-vendored/`: exact tokenizer files for local byte verification
+- `manifests/`: small source identity manifests
+- `provenance/`: sealed corpus, tokenization, evaluator, and source-control records
+- `docs/`: decision ledger, runbooks, schemas, reports, and figures
 
 Tests requiring multi-gigabyte source or evaluator payloads must be supplied
 those paths explicitly. The archive never substitutes generated fixture bytes

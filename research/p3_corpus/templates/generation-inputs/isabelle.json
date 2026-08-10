@@ -1,0 +1,165 @@
+{
+  "builder": {
+    "driver": "external-command-v2",
+    "partition_mode": "family-local-heldout-v2",
+    "raw": {
+      "argv": [
+        "{{PYTHON}}",
+        "{{P3_CORPUS_ROOT}}/scripts/build_isabelle_shard.py",
+        "--src",
+        "{{P3_SOURCES_ROOT}}/isabelle/raw_data/human_data/all_data.json",
+        "--name",
+        "isabelle",
+        "--seed",
+        "20260801",
+        "--tokenizer-path",
+        "{{P3_CORPUS_ROOT}}/tokenizers/qwen25-vendored",
+        "--heldout",
+        "0"
+      ],
+      "inventory": [
+        {
+          "kind": "directory",
+          "path": "eval"
+        },
+        {
+          "kind": "directory",
+          "path": "heldout"
+        },
+        {
+          "kind": "directory",
+          "path": "raw"
+        },
+        {
+          "kind": "directory",
+          "path": "shards"
+        },
+        {
+          "format": "jsonl",
+          "kind": "file",
+          "path": "raw/isabelle.jsonl",
+          "schema": "isabelle-transition-v2",
+          "source_manifest_root_sha256": "1d5dd6b6f7a58d4b4c6a6163f03014cd129712b8d3e96d786e0698f4bd37b995"
+        },
+        {
+          "format": "json",
+          "kind": "file",
+          "path": "heldout/isabelle.json",
+          "required_fields": [
+            "facts",
+            "family",
+            "mode",
+            "requested_heldout",
+            "statements"
+          ],
+          "schema": "isabelle-transition-v2"
+        }
+      ],
+      "outputs": {
+        "raw": "raw/isabelle.jsonl"
+      }
+    },
+    "split": {
+      "argv": [
+        "{{PYTHON}}",
+        "{{P3_CORPUS_ROOT}}/scripts/build_isabelle_shard.py",
+        "--src",
+        "{{P3_SOURCES_ROOT}}/isabelle/raw_data/human_data/all_data.json",
+        "--name",
+        "isabelle",
+        "--seed",
+        "20260801",
+        "--tokenizer-path",
+        "{{P3_CORPUS_ROOT}}/tokenizers/qwen25-vendored",
+        "--heldout",
+        "500"
+      ],
+      "inventory": [
+        {
+          "kind": "directory",
+          "path": "eval"
+        },
+        {
+          "kind": "directory",
+          "path": "heldout"
+        },
+        {
+          "kind": "directory",
+          "path": "raw"
+        },
+        {
+          "kind": "directory",
+          "path": "shards"
+        },
+        {
+          "format": "jsonl",
+          "kind": "file",
+          "path": "shards/isabelle.jsonl",
+          "schema": "isabelle-transition-v2",
+          "source_manifest_root_sha256": "1d5dd6b6f7a58d4b4c6a6163f03014cd129712b8d3e96d786e0698f4bd37b995"
+        },
+        {
+          "format": "jsonl",
+          "kind": "file",
+          "path": "eval/isabelle.jsonl",
+          "schema": "isabelle-transition-v2",
+          "source_manifest_root_sha256": "1d5dd6b6f7a58d4b4c6a6163f03014cd129712b8d3e96d786e0698f4bd37b995"
+        },
+        {
+          "format": "json",
+          "kind": "file",
+          "path": "heldout/isabelle.json",
+          "required_fields": [
+            "facts",
+            "family",
+            "mode",
+            "requested_heldout",
+            "statements"
+          ],
+          "schema": "isabelle-transition-v2"
+        }
+      ],
+      "outputs": {
+        "eval": "eval/isabelle.jsonl",
+        "heldout": "heldout/isabelle.json",
+        "train": "shards/isabelle.jsonl"
+      }
+    }
+  },
+  "family": "isabelle",
+  "license": {
+    "approved": false,
+    "identifier": "Apache-2.0",
+    "status": "Upstream metadata declares Apache-2.0; this records source evidence, not an independent legal conclusion."
+  },
+  "manifest_root_sha256": "f178640caac9edb6b557bf8f152d88be6f6a10ceca91caa03814042fa7a08453",
+  "row_schema_version": "isabelle-transition-v2",
+  "row_source_metadata": {
+    "index_roots": {},
+    "quality_filter_root_sha256": "ee441033ce8732fc9627918c0b09366e0e78e53d486bc335022903a991e3d7de",
+    "schema_generation_root_sha256": "37d7eeaf65fae23efed6d37ca24c031d0c59a7dc75eb65723aa5a65c52fdf432",
+    "schema_version": "isabelle-build-source-v2",
+    "source_manifest_root_sha256": "1d5dd6b6f7a58d4b4c6a6163f03014cd129712b8d3e96d786e0698f4bd37b995",
+    "source_roots": {
+      "magnushammer": {
+        "dataset": "Simontwice/premise_selection_in_isabelle",
+        "file": "raw_data/human_data/all_data.json",
+        "revision": "f947ccc827ccd236464e19cd4cc23dfda7fc5575",
+        "sha256": "aa71609de90fee138835cfdf9e954becb1b231a293ac19bd98951e6d8bec8e7d",
+        "size_bytes": 2327313460
+      }
+    }
+  },
+  "schema_version": "p3-family-source-manifest/v2",
+  "source_snapshots": [
+    {
+      "reference": "hf://datasets/Simontwice/premise_selection_in_isabelle@f947ccc827ccd236464e19cd4cc23dfda7fc5575/raw_data/human_data/all_data.json",
+      "sha256": "aa71609de90fee138835cfdf9e954becb1b231a293ac19bd98951e6d8bec8e7d"
+    }
+  ],
+  "source_verifier_acceptance": {
+    "accepted": true,
+    "status": "Accepted source-backed transition reconstruction and trajectory-isolation checks passed."
+  },
+  "test_only": false
+}

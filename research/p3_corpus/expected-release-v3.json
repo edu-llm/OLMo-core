@@ -1,0 +1,99 @@
+{
+  "schema": "p3-expected-release/v1",
+  "dataset_id": "pretrain/formal-proof-premises-500m",
+  "dataset_version": "v3",
+  "tokenizer": {
+    "artifact_id": "tokenizer/qwen25-vendored",
+    "artifact_version": "v1",
+    "composite_sha256": "aa90434a251a434bbc938ddb3be6683a73fa94150377b5ccd2cbd7880358661a",
+    "eos_token_id": 151643,
+    "pad_token_id": 151643,
+    "vocab_size": 151936,
+    "separator_ids": [10952, 15513, 969]
+  },
+  "training_constants": {
+    "sequence_length": 16384,
+    "epochs": 13,
+    "seed": 42,
+    "global_batch_tokens": 262144,
+    "rank_microbatch_tokens": 16384,
+    "learning_rate": 2e-5,
+    "warmup_steps": 2400
+  },
+  "sealed_jsonl": {
+    "manifest_root_sha256": "60bb1867feb9c02ffe05e5ab388f6509fd785c77228010f676a1795375835148",
+    "total_train_rows": 181652,
+    "total_eval_rows": 4191,
+    "families": {
+      "metamath": {
+        "train_rows": 65122,
+        "eval_rows": 494,
+        "train_sha256": "7ef07b9eac63e55a9b31314d3384c181722052b5495b7adba1b7ceb644d3b171",
+        "overlength_drops": 960
+      },
+      "mizar": {
+        "train_rows": 52868,
+        "eval_rows": 2485,
+        "train_sha256": "fe4d76ea91b34aa3390e7e482faaa8849b7d86317bf0be5727131b2ce9f9c309"
+      },
+      "thproofs": {
+        "train_rows": 584,
+        "eval_rows": 46,
+        "train_sha256": "87266b079608a42d4b2c4c3eaf49ec497ba29a31dc855aa5b78157ef0c64661b"
+      },
+      "prf2": {
+        "train_rows": 21850,
+        "eval_rows": 313,
+        "train_sha256": "a5608b7ae3ed4f541e156480bb8ba897861f99864659d77c467a814226501f03"
+      },
+      "enigma": {
+        "train_rows": 24652,
+        "eval_rows": 263,
+        "train_sha256": "0efd52a5679429f2405e9939322a8405a67143f145058fb0f3d12a754330ad49"
+      },
+      "isabelle": {
+        "train_rows": 16576,
+        "eval_rows": 590,
+        "train_sha256": "ea5f881afd84dd519de1a5bfc643d16dd89c794a4ac158680d95aa7cbad46b26"
+      }
+    }
+  },
+  "packed_tokens": {
+    "dtype": "uint32",
+    "byte_order": "little",
+    "train": {
+      "reader_rows": 467206144,
+      "instances": 28516,
+      "real_tokens": 466733493,
+      "complete_batches_per_epoch": 1782,
+      "steps_13_epochs": 23166,
+      "dropped_over_length": 0
+    },
+    "val": {
+      "reader_rows": 10059776,
+      "instances": 614,
+      "real_tokens": 9966430,
+      "dropped_over_length": 0
+    },
+    "published": {
+      "objects": 12,
+      "bytes": 1909063680,
+      "dataset_sha256": "7360db01af5cfc3ec7cea02ffaafc5c6b1b0b4536796c44e6b8c9b3da9862a69",
+      "token_manifest_sha256": "ef320b4345493de7fa38bf197e05756315ace192566eef76c56f88b292d42a58"
+    }
+  },
+  "heldout_policy": {
+    "mml_pooled_classes": 1000,
+    "mml_seed": 20260801,
+    "metamath_statement_classes": 500,
+    "isabelle_facts": 500
+  },
+  "supervised_fractions_v3": {
+    "dense": 0.99915,
+    "split": 0.83803
+  },
+  "v2_stale_do_not_use": {
+    "train_tokens": 494862336,
+    "steps_13_epochs": 24531
+  }
+}

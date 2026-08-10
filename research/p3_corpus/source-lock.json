@@ -1,0 +1,144 @@
+{
+  "schema": "p3-source-lock/v1",
+  "notes": [
+    "Archive SHA-256 verification is mandatory for every HTTP download.",
+    "Mizar nn_conj20 html2 must never be combined with MML 8.1.15 thproofs.",
+    "All four ENIGMA runs are load-bearing: the 27,079-row accepted base spans 231,520 files across mzr01/03/02/08, and mzr02 and mzr08 supply 1,831 of the 2,087 low-tier alternatives in the shipped v3 enigma family.",
+    "Isabelle requires Hugging Face access to Simontwice/premise_selection_in_isabelle.",
+    "Mizar redistribution rights are unresolved; record notices only, do not fabricate licenses."
+  ],
+  "sources": {
+    "metamath": {
+      "license": "CC0-1.0",
+      "repository": "https://github.com/metamath/set.mm",
+      "commit": "82830c78861b96e906d9868c30c35dbd98be5db5",
+      "files": [
+        {
+          "name": "set.mm",
+          "url": "https://raw.githubusercontent.com/metamath/set.mm/82830c78861b96e906d9868c30c35dbd98be5db5/set.mm",
+          "sha256": "7695d59e1c5c9182231e002425c82c86569bc044f30770bb32c276f7bafbf644",
+          "relative_path": "metamath/set.mm"
+        },
+        {
+          "name": "iset.mm",
+          "url": "https://raw.githubusercontent.com/metamath/set.mm/82830c78861b96e906d9868c30c35dbd98be5db5/iset.mm",
+          "sha256": "2851ed617e011b08b4d61c8312f34183aaf4da6b06b19512dac1e397ce709e4f",
+          "relative_path": "metamath/iset.mm"
+        },
+        {
+          "name": "nf.mm",
+          "url": "https://raw.githubusercontent.com/metamath/set.mm/82830c78861b96e906d9868c30c35dbd98be5db5/nf.mm",
+          "sha256": "727a3707545e13ec53f03502eb07dc4635a8c176f275d4014a17fbd823e66083",
+          "relative_path": "metamath/nf.mm"
+        }
+      ]
+    },
+    "mizar_current": {
+      "manifest": "manifests/mizar-8.1.15_5.94.1493.json",
+      "license_status": "unresolved_redistribution",
+      "archives": [
+        {
+          "name": "mml",
+          "url": "https://mizar.uwb.edu.pl/~softadm/pub/system/i386-linux/mizar-8.1.15_5.94.1493-i386-linux.tar",
+          "sha256": "cfc32c3e05d5d93c595934e26d4d3b4e399f95a75da7df08359eb9ee73ae6e2e",
+          "relative_path": "archives/mizar-8.1.15_5.94.1493-i386-linux.tar",
+          "extract": {
+            "kind": "tar",
+            "relative_path": "extract-mizar",
+            "selected_tree": "mml/*.miz",
+            "tree_sha256": "3d1af5b3e840aca5631541b42510b35c1b15dfa988af70ce463f58c899e88714"
+          }
+        },
+        {
+          "name": "html",
+          "url": "http://grid01.ciirc.cvut.cz/~mptp/8.1.15_5.94.1493/html_abstr.8.1.15_5.94.1493.tar.gz",
+          "sha256": "e988481577e4e5cc25a5c96c4e86a7de612447088b20781a2680b0e6fc974eee",
+          "relative_path": "archives/html-abstr-8.1.15_5.94.1493.tar.gz",
+          "extract": {
+            "kind": "tar.gz",
+            "relative_path": "extract-html-current",
+            "selected_tree": "html/*.html",
+            "tree_sha256": "1f725c9943aeee2c21c6fe63484bc00336bdc442ec454ccfc810032d7de12781"
+          }
+        },
+        {
+          "name": "thproofs",
+          "url": "http://grid01.ciirc.cvut.cz/~mptp/8.1.15_5.94.1493/thproofs.tar.gz",
+          "sha256": "665b17fea382d23168998a4bd1fd91736baf59c1fa3927f8c656d9886fdc3433",
+          "relative_path": "archives/thproofs-8.1.15_5.94.1493.tar.gz",
+          "extract": {
+            "kind": "tar.gz",
+            "relative_path": "extract-thproofs",
+            "selected_tree": "thproofs/*",
+            "tree_sha256": "fce0eda226231de221ff2e7b3c9fa0699ec259d3e647e53eb9589b181dbf7877"
+          }
+        }
+      ],
+      "derived": {
+        "semantic_index_sqlite": {
+          "relative_path": "derived/mizar-current-8.1.15.sqlite",
+          "sha256": "8deb18e7ab38d7d42d852828667a7f0b8000f3141b5bad7cbd940b617f9bd835",
+          "builder": "scripts/mizar_current_index.py"
+        }
+      }
+    },
+    "prf2": {
+      "license_status": "MPTP/nn_conj20 terms apply",
+      "archives": [
+        {
+          "name": "prf2",
+          "url": "http://grid01.ciirc.cvut.cz/~mptp/nn_conj20/datasets/prf2.tar.gz",
+          "sha256": "e57c9e799132ee0c05bb8e956620f8c9e49346b78eb8d1eaa0bf3d210d89a7d5",
+          "relative_path": "archives/prf2.tar.gz",
+          "extract": {"kind": "tar.gz", "relative_path": "extracted/prf2"}
+        }
+      ]
+    },
+    "enigma": {
+      "license_status": "MPTP/enig1 terms apply",
+      "archives": [
+        {
+          "name": "mzr01",
+          "url": "http://grid01.ciirc.cvut.cz/~mptp/enig1/mzr01.tar.gz",
+          "sha256": "06ddbf863ff7f6c3421d158f106a33b5932dc2b5dfee8d5ba0fb7bab027afcd0",
+          "relative_path": "archives/mzr01.tar.gz",
+          "extract": {"kind": "tar.gz", "relative_path": "extracted/mzr01"}
+        },
+        {
+          "name": "mzr02",
+          "url": "http://grid01.ciirc.cvut.cz/~mptp/enig1/mzr02.tar.gz",
+          "sha256": "5c02524146b90028712cda6fffae362ac5ea2d40f74b993ea4968edf1b4f06ba",
+          "relative_path": "archives/mzr02.tar.gz",
+          "extract": {"kind": "tar.gz", "relative_path": "extracted/mzr02"}
+        },
+        {
+          "name": "mzr03",
+          "url": "http://grid01.ciirc.cvut.cz/~mptp/enig1/mzr03.tar.gz",
+          "sha256": "4280e5ed25f5ec3052a53449c0959e8adae913ee8fb310afa4a8702ce9907dcd",
+          "relative_path": "archives/mzr03.tar.gz",
+          "extract": {"kind": "tar.gz", "relative_path": "extracted/mzr03"}
+        },
+        {
+          "name": "mzr08",
+          "url": "http://grid01.ciirc.cvut.cz/~mptp/enig1/mzr08.tar.gz",
+          "sha256": "8135d36c26e020f16d36a1dc7d1828d597fd92694bb538ef489fca568a42ff7d",
+          "relative_path": "archives/mzr08.tar.gz",
+          "extract": {"kind": "tar.gz", "relative_path": "extracted/mzr08"}
+        }
+      ]
+    },
+    "isabelle": {
+      "license": "Apache-2.0",
+      "dataset": "Simontwice/premise_selection_in_isabelle",
+      "revision": "f947ccc827ccd236464e19cd4cc23dfda7fc5575",
+      "files": [
+        {
+          "name": "all_data.json",
+          "hf_path": "raw_data/human_data/all_data.json",
+          "sha256": "aa71609de90fee138835cfdf9e954becb1b231a293ac19bd98951e6d8bec8e7d",
+          "relative_path": "isabelle/raw_data/human_data/all_data.json"
+        }
+      ]
+    }
+  }
+}
