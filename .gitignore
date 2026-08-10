@@ -61,3 +61,8 @@ site/
 /scratch/
 core
 /dataset-cache/
+
+# `analysis.py --out` writes its report, its JSON and its figures here. Regenerable from the
+# submission ids in one command, and a stale committed copy of a report whose numbers have moved
+# is worse than no copy.
+/analysis/

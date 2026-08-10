@@ -37,8 +37,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import analysis as an  # noqa: E402
 import noise_floor as nf  # noqa: E402
+
+import analysis as an  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FROZEN = os.path.join(HERE, "noise-floor-skip-step.json")
@@ -132,10 +133,14 @@ def _history(endpoint_bpb, *, arm="baseline", steps=(3000, 6000), declined=17, t
     and the lane monitor on an arm that has lanes.
     """
     rows = []
-    for index, step in enumerate(steps):
+    for step in steps:
         # Sources spread around the endpoint so that their unweighted mean is exactly it.
         offsets = np.linspace(-0.3, 0.3, len(an.HELD_OUT_SOURCES))
-        level = endpoint_bpb + (0.4 if index < len(steps) - 1 else 0.0)
+        # A falling curve keyed on the *step*, not on the row's position, so that two arms of
+        # different depths agree wherever they overlap. Keyed on position, every fixture would
+        # carry a gap at the shared step and would then "prove" the alignment bug it was
+        # written to catch.
+        level = endpoint_bpb + 0.4 * (an.HORIZON - step) / an.HORIZON
         row = {"_step": step, an.TRAIN_LOSS_METRIC: level * an.NATS_PER_BPB}
         for source, offset in zip(an.HELD_OUT_SOURCES, offsets):
             row[an.BPB_METRIC.format(source=source)] = level + offset
@@ -146,6 +151,17 @@ def _history(endpoint_bpb, *, arm="baseline", steps=(3000, 6000), declined=17, t
             for witness in an.LANE_WITNESS_METRICS:
                 row[witness] = 0.31
         rows.append(row)
+
+    # The individual declines behind that running total. A fixture with a total and no events
+    # under it is the inconsistency `stability_at` refuses, and rightly: the count over any
+    # prefix would be short by an unknown amount.
+    for index in range(declined):
+        rows.append(
+            {
+                "_step": 1 + index * max(steps[-1] // max(declined, 1), 1),
+                an.SKIP_TRIGGER_METRIC: trigger * (0.4 + 0.6 * (index + 1) / max(declined, 1)),
+            }
+        )
     return rows
 
 
@@ -500,7 +516,7 @@ def test_a_missing_stability_family_is_not_a_count_of_zero():
     """
     runs = healthy()
     for row in runs[0]._history:
-        del row[an.SKIPPED_COUNT_METRIC]
+        row.pop(an.SKIPPED_COUNT_METRIC, None)
 
     arm = an.assemble_arm(read(runs), "baseline", SUBMISSION)
     problems = " ".join(an.stability_refusals([arm]))
@@ -524,6 +540,111 @@ def test_a_crash_report_beside_a_cell_is_not_a_replicate():
 
 
 # ---------------------------------------------------------------------------------------
+# Comparing arms that are not the same age, which is where this tool invented a result.
+# ---------------------------------------------------------------------------------------
+
+
+#: What the fixture below plants between the two arms, at every step both of them reach.
+PLANTED_OFFSET_BPB = -0.004
+
+
+def _two_arms(baseline_steps, faithful_steps):
+    """
+    Two arms that reached different depths, carrying a constant, known offset wherever they
+    overlap. An aligned contrast must find that offset; a contrast that reads each arm at its
+    own last step finds the training curve instead, which is the failure being tested for.
+    """
+    left = an.assemble_arm(
+        read(
+            [
+                cell(i, value, history=_history(value, steps=baseline_steps))
+                for i, value in enumerate(BASELINE_ENDPOINTS_BPB)
+            ]
+        ),
+        "baseline",
+        SUBMISSION,
+    )
+    other = "run_019feaaa-0002"
+    right = an.assemble_arm(
+        read(
+            [
+                cell(
+                    i,
+                    value + PLANTED_OFFSET_BPB + jitter,
+                    arm="faithful",
+                    submission=other,
+                    history=_history(
+                        value + PLANTED_OFFSET_BPB + jitter, arm="faithful", steps=faithful_steps
+                    ),
+                )
+                # A shift with no seed-to-seed variation gives the contrast a standard error of
+                # exactly zero, which is a degenerate design and not a very sensitive one. The
+                # jitter sums to zero so the mean difference is still the planted offset.
+                for i, (value, jitter) in enumerate(
+                    zip(BASELINE_ENDPOINTS_BPB, (-2e-4, -1e-4, 0.0, 1e-4, 2e-4))
+                )
+            ]
+        ),
+        "faithful",
+        other,
+    )
+    return left, right
+
+
+def test_arms_of_different_ages_are_compared_at_the_step_they_share():
+    """
+    THE TOOL INVENTED A DECISIVE RESULT HERE AND THE TEST IS THAT IT CANNOT AGAIN. Reading the
+    complete baseline against a half-trained ``faithful``, each at its own last evaluation, gave
+    ``+0.159 nats``, ``t = 70``, ``p = 0.0000``, past every gate and in the opposite direction to
+    the prediction. It was step 6,000 against step 2,500 and the number was the training curve.
+
+    A warning above it saying the arms ended at different steps was already being printed, which
+    is why the fix is not another warning: the comparison is aligned, or it does not happen.
+    """
+    left, right = _two_arms((2500, 6000), (1500, 2500))
+    result = an.analyse([left, right])
+
+    assert result["compared_at_step"] == 2500
+    delta = next(
+        row["delta_nats"]
+        for entry in result["contrasts"]
+        for row in entry["rows"]
+        if entry["name"] == "H1" and row["analysis"] == "paired"
+    )
+    # The planted offset, and nothing else. Read at each arm's own last step instead, the same
+    # fixture gives about +1.3 nats -- the half of the training curve between 2,500 and 6,000,
+    # which is some three hundred times the offset and would swamp any real effect.
+    assert delta == pytest.approx(PLANTED_OFFSET_BPB * an.NATS_PER_BPB, rel=1e-9)
+
+
+def test_the_report_says_which_step_it_read_each_arm_at():
+    left, right = _two_arms((2500, 6000), (1500, 2500))
+    text = an.render(an.analyse([left, right]))
+
+    assert "every arm read at step 2500" in text
+    assert "reached 6000, read back" in text
+
+
+def test_arms_that_share_no_evaluation_step_cannot_be_compared_at_all():
+    left, right = _two_arms((5500, 6000), (1000, 1500))
+
+    with pytest.raises(an.Refusal, match="share no evaluation step"):
+        an.analyse([left, right])
+
+
+def test_the_age_difference_is_a_completeness_refusal_as_well_as_an_alignment():
+    """
+    Aligning makes the number coherent; it does not make it the pre-registered endpoint, and
+    the reader has to be told which of those they are looking at.
+    """
+    left, right = _two_arms((2500, 6000), (1500, 2500))
+    problems = " ".join(an.completeness_refusals([left, right]))
+
+    assert "every contrast is taken at step 2500" in problems
+    assert "is not the pre-registered endpoint" in problems
+
+
+# ---------------------------------------------------------------------------------------
 # The estimators, against planted truths.
 # ---------------------------------------------------------------------------------------
 
@@ -542,6 +663,63 @@ def test_the_block_fit_uses_the_randomized_block_error_df():
     assert fit.df_paired == (4 - 1) * (5 - 1) == 12
     assert fit.df_unpaired == 4 * (5 - 1) == 16
     assert fit.df_paired < fit.df_unpaired, "pairing is bought with degrees of freedom"
+
+
+def test_a_post_hoc_contrast_cannot_inflate_a_pre_registered_p_value():
+    """
+    The pre-registration fixes the family at the pre-registered contrasts and says the gate stays
+    uncorrected with Holm printed beside it. A contrast this module added after the endpoints were
+    visible, joining that family, would move every pre-registered adjusted p by an amount chosen
+    after the fact -- the multiplicity correction running backwards.
+    """
+    result = an.analyse(
+        an.synthetic_tranche({"faithful": -0.010, "output-only": -0.005, "mhc": -0.005}),
+        label="synthetic",
+    )
+    post_hoc = {entry["name"] for entry in result["contrasts"] if entry.get("post_hoc")}
+
+    assert post_hoc, "the post-hoc contrasts are the ones being checked, so there must be some"
+    assert not (
+        post_hoc & set(result["holm"]["family"])
+    ), f"{sorted(post_hoc)} joined the Holm family {result['holm']['family']}"
+    assert set(result["holm"]["family"]) <= {
+        h.name for h in an.HYPOTHESES if not h.post_hoc
+    }, "the family is the pre-registered contrasts and nothing else"
+
+
+def test_every_post_hoc_contrast_says_so_where_a_reader_will_see_it():
+    """
+    In the ledger at the foot of the report is not sufficient: a number lifted out of the middle
+    of a table carries whatever is on its own line and nothing else.
+    """
+    result = an.analyse(
+        an.synthetic_tranche({"faithful": -0.010, "output-only": -0.005, "mhc": -0.005}),
+        label="synthetic",
+    )
+    text = an.render(result)
+    for entry in result["contrasts"]:
+        if not entry.get("post_hoc"):
+            continue
+        heading = next(
+            line for line in text.splitlines() if f" {entry['name']}: " in line and "-" in line
+        )
+        assert "POST-HOC" in heading, f"{entry['name']} is headed as though pre-registered"
+        assert str(entry["post_hoc"]) in heading, "a post-hoc addition carries the date it was made"
+
+
+def test_the_per_source_panel_carries_the_pre_registered_contrasts_only():
+    """
+    The per-source series are drawn identically to one another, so a post-hoc one among them
+    reads as pre-registered. It is in the table with its label instead.
+    """
+    result = an.analyse(
+        an.synthetic_tranche({"faithful": -0.010, "output-only": -0.005, "mhc": -0.005}),
+        label="synthetic",
+    )
+    names = {entry["name"] for entry in result["per_source"]}
+
+    assert names, "the per-source panel is empty, so this test is asserting nothing"
+    assert not (names & {h.name for h in an.HYPOTHESES if h.post_hoc})
 
 
 @pytest.mark.parametrize("planted_rho", [0.0, 0.5])
@@ -706,6 +884,49 @@ def test_the_exact_test_agrees_with_an_independent_enumeration():
     assert permutation(left, right).p_value == pytest.approx(extreme / 252.0)
 
 
+def test_a_declined_step_count_is_taken_over_the_same_number_of_steps_on_both_arms():
+    """
+    A COUNT IS AN EXPOSURE STATISTIC AND THIS ONE ALMOST REPORTED THE OPPOSITE OF THE TRUTH.
+    ``stability/steps skipped`` is cumulative over a whole run, so reading each arm's own
+    running total compared a comparator's six thousand steps against a treatment's three
+    thousand. On the live tranche that gave complete separation at the floor of the test,
+    ``p = 0.0079``, with the treatment apparently the calmer arm; counted over the same first
+    3,000 steps on both, the same data give ``p = 0.0794`` and no separation. The entire result
+    was the treatment having had half as long to decline anything.
+    """
+    arms = an.synthetic_tranche({"faithful": -0.01}, declined={"faithful": (8, 9, 7, 8, 9)})
+    faithful = next(arm for arm in arms if arm.arm == "faithful")
+
+    early, _ = faithful.stability_at(1000)
+    whole, _ = faithful.stability_at(None)
+
+    assert all(a <= b for a, b in zip(early, whole)), "a prefix cannot hold more events"
+    assert sum(early) < sum(whole), "and over a sixth of the run it should hold fewer"
+    assert whole == [8, 9, 7, 8, 9], "over the whole run it is the count that was logged"
+
+
+def test_h7_counts_through_the_step_the_contrasts_were_taken_at():
+    arms = an.synthetic_tranche({"faithful": -0.01})
+    outcome = an.h7(arms, through_step=1500)
+
+    assert outcome["through_step"] == 1500
+    row = next(e for e in outcome["tests"] if e["arm"] == "faithful")
+    assert "in the first 1,500" in row["primary"]["statistic_name"]
+
+
+def test_a_running_total_that_disagrees_with_the_history_is_refused():
+    """
+    If the events behind the total are not all there, a count over any prefix is short by an
+    unknown amount -- and H7 is a test on exactly that count, so it cannot be run.
+    """
+    arms = an.synthetic_tranche({"faithful": -0.01})
+    faithful = next(arm for arm in arms if arm.arm == "faithful")
+    faithful.declined_steps[0] = faithful.declined_steps[0][:-1]
+
+    with pytest.raises(an.Refusal, match="appear in its per-step history"):
+        faithful.stability_at(None)
+
+
 def test_h7_runs_on_the_stability_families_and_names_its_own_floor():
     arms = an.synthetic_tranche(
         {"faithful": -0.01, "output-only": 0.0, "mhc": -0.005},
@@ -808,7 +1029,8 @@ def test_a_nats_column_that_disagrees_with_the_bpb_column_is_refused():
     runs = healthy()
     key = an.CE_METRIC.format(source=an.HELD_OUT_SOURCES[0])
     for row in runs[0]._history:
-        row[key] = row[key] * 1.05
+        if key in row:
+            row[key] = row[key] * 1.05
 
     arm = an.assemble_arm(read(runs), "baseline", SUBMISSION)
     assert an.check_the_nats_conversion([arm]), "a 5% drift in one source must be caught"

@@ -407,19 +407,80 @@ class ArmSeries:
     """Per-seed maximum triggering gradient norm. ``None`` where the key never arrived."""
 
     declined_steps: List[List[int]] = field(default_factory=list)
-    """Per-seed list of the steps that were declined, for the stability figure."""
+    """Per-seed list of the steps that were declined, ascending."""
+
+    declined_norms: List[List[float]] = field(default_factory=list)
+    """Per-seed gradient norm at each of those steps, in the same order."""
 
     train_curve_steps: List[List[int]] = field(default_factory=list)
     train_curve_loss: List[List[float]] = field(default_factory=list)
     """Per-seed training cross-entropy, downsampled, for the loss-curve figure."""
 
-    def endpoint_matrix(self) -> np.ndarray:
-        """``(n_seeds, n_sources)`` bits-per-byte at the last shared evaluation."""
-        return np.asarray([seed[-1] for seed in self.bpb], dtype=float)
+    def endpoint_matrix(self, step: Optional[int] = None) -> np.ndarray:
+        """
+        ``(n_seeds, n_sources)`` bits-per-byte at one evaluation step.
+
+        :param step: Which step, or None for this arm's own last shared one. A contrast must
+            always name the step rather than take the default on each arm separately -- see
+            :func:`common_endpoint_step`.
+
+        :returns: The matrix.
+
+        :raises Refusal: If this arm has no evaluation at ``step``.
+        """
+        if step is None:
+            return np.asarray([seed[-1] for seed in self.bpb], dtype=float)
+        if step not in self.steps:
+            raise Refusal(
+                f"arm '{self.arm}' has no held-out evaluation at step {step}, which is the step "
+                "the arms were to be compared at."
+            )
+        index = self.steps.index(step)
+        return np.asarray([seed[index] for seed in self.bpb], dtype=float)
 
     def trajectory(self) -> np.ndarray:
         """``(n_seeds, n_steps, n_sources)`` bits-per-byte."""
         return np.asarray(self.bpb, dtype=float)
+
+    def stability_at(self, step: Optional[int] = None) -> Tuple[List[int], List[float]]:
+        """
+        Per seed, how many updates were declined by ``step``, and the largest gradient norm
+        that triggered one.
+
+        BOTH ARMS MUST BE ASKED ABOUT THE SAME NUMBER OF OPTIMIZER STEPS OR THE COUNT IS NOT A
+        COMPARISON. ``stability/steps skipped`` is cumulative over a whole run, so reading it
+        off each arm's own last step asks "how many in six thousand" of one arm and "how many
+        in three thousand" of the other whenever they are different ages. Mid-tranche that is a
+        factor of two, it points the wrong way, and it reads a treatment that has simply had
+        less opportunity to decline anything as the more stable of the two -- which is the
+        endpoint misalignment again, in the one outcome that is counted rather than averaged.
+
+        :param step: Count up to this step, or None for the whole of what each seed logged.
+
+        :returns: ``(counts, largest norms)``, one entry per seed. A seed that declined nothing
+            by then has a largest norm of ``0.0``, which is an answer and not a gap.
+
+        :raises Refusal: If a seed's running total disagrees with the number of events in its
+            history, because then a count over any prefix is short by an unknown amount and H7
+            is a test on exactly that count.
+        """
+        counts: List[int] = []
+        peaks: List[float] = []
+        for index, steps in enumerate(self.declined_steps):
+            norms = self.declined_norms[index] if index < len(self.declined_norms) else []
+            logged = self.declined[index] if index < len(self.declined) else None
+            if logged is not None and len(steps) != logged:
+                raise Refusal(
+                    f"arm '{self.arm}' seed {self.seeds[index]} logged a running total of "
+                    f"{logged} declined steps but {len(steps)} of them appear in its per-step "
+                    f"history under '{SKIP_TRIGGER_METRIC}'. The two disagree, so a count taken "
+                    "at any step before the end is short by an unknown amount, and H7 is a test "
+                    "on exactly that count."
+                )
+            keep = [n for s, n in zip(steps, norms) if step is None or s <= step]
+            counts.append(len([s for s in steps if step is None or s <= step]))
+            peaks.append(max(keep) if keep else 0.0)
+        return counts, peaks
 
 
 def _last_finite(rows: Sequence[Mapping[str, object]], key: str) -> Optional[float]:
@@ -455,6 +516,7 @@ class CellRead:
     declined: Optional[int] = None
     largest_trigger: Optional[float] = None
     declined_steps: List[int] = field(default_factory=list)
+    declined_norms: List[float] = field(default_factory=list)
     train_steps: List[int] = field(default_factory=list)
     train_loss: List[float] = field(default_factory=list)
     sources: Tuple[str, ...] = HELD_OUT_SOURCES
@@ -510,11 +572,22 @@ def _read_cell(run, train_curve_samples: int) -> CellRead:
 
     stability = list(run.scan_history(keys=["_step", SKIPPED_COUNT_METRIC, MAX_TRIGGER_METRIC]))
     count = _last_finite(stability, SKIPPED_COUNT_METRIC)
-    declined_at = [
-        int(row["_step"])
-        for row in run.scan_history(keys=["_step", SKIP_TRIGGER_METRIC])
-        if row.get("_step") is not None and row.get(SKIP_TRIGGER_METRIC) is not None
-    ]
+    # THE INDIVIDUAL DECLINES, NOT ONLY THE RUNNING TOTAL, because the total is a number about
+    # a whole run and H7 has to compare arms that are not the same age. `stability/steps
+    # skipped` read off a comparator at step 6,000 and a treatment at step 3,000 answers "how
+    # many in six thousand" against "how many in three thousand", which is the endpoint
+    # misalignment again wearing different clothes. Held per event, the count over any prefix
+    # of the run is a filter, and the arms can be asked the same question.
+    declined_at: List[int] = []
+    declined_norms: List[float] = []
+    for row in run.scan_history(keys=["_step", SKIP_TRIGGER_METRIC]):
+        if row.get("_step") is None or row.get(SKIP_TRIGGER_METRIC) is None:
+            continue
+        declined_at.append(int(row["_step"]))
+        declined_norms.append(float(row[SKIP_TRIGGER_METRIC]))
+    order = sorted(range(len(declined_at)), key=lambda i: declined_at[i])
+    declined_at = [declined_at[i] for i in order]
+    declined_norms = [declined_norms[i] for i in order]
 
     curve = [
         row
@@ -550,11 +623,48 @@ def _read_cell(run, train_curve_samples: int) -> CellRead:
         ce=nats,
         declined=None if count is None else int(round(count)),
         largest_trigger=_last_finite(stability, MAX_TRIGGER_METRIC),
-        declined_steps=sorted(declined_at),
+        declined_steps=declined_at,
+        declined_norms=declined_norms,
         train_steps=[int(r["_step"]) for r in kept],
         train_loss=[float(r[TRAIN_LOSS_METRIC]) for r in kept],
         sources=sources,
     )
+
+
+def common_endpoint_step(arms: Sequence[ArmSeries]) -> int:
+    """
+    The deepest evaluation step every arm reached, which is the only step a contrast may be
+    taken at.
+
+    THIS EXISTS BECAUSE THE TOOL PRODUCED A DECISIVE NUMBER OUT OF NOTHING WHEN IT DID NOT.
+    Reading the complete ``baseline`` against ``faithful`` while ``faithful`` was halfway
+    through, each arm at its *own* last evaluation, gave ``+0.159 nats`` at ``p = 0.0000``,
+    a t of 70, past every gate, and in the opposite direction to the prediction. None of it
+    was an arm effect. It was step 6,000 against step 2,500 -- one model had seen 2.4 times the
+    tokens of the other -- and the difference was the training curve, which at that separation
+    dwarfs anything an architecture does by a factor of about forty.
+
+    A completeness warning saying "the arms end at different steps" was already printed above
+    it, and that is not enough and was never going to be. A warning describes a number; this
+    number should not exist. The two quantities are not a good comparison and a rough one, they
+    are a comparison and a different thing entirely, and the only honest reading mid-tranche is
+    at the deepest step both arms have actually reached.
+
+    :param arms: The arms as read.
+
+    :returns: The step. With one arm, that arm's own last.
+
+    :raises Refusal: If the arms share no evaluation step at all.
+    """
+    shared = set(arms[0].steps)
+    for arm in arms[1:]:
+        shared &= set(arm.steps)
+    if not shared:
+        raise Refusal(
+            "the arms share no evaluation step, so there is no step at which they can be "
+            "compared: " + "; ".join(f"{arm.arm} evaluated at {arm.steps}" for arm in arms)
+        )
+    return max(shared)
 
 
 def funded_arms(consistent: Sequence[str]) -> Tuple[str, ...]:
@@ -717,6 +827,7 @@ def assemble_arm(
         series.declined.append(cell.declined)
         series.largest_trigger.append(cell.largest_trigger)
         series.declined_steps.append(cell.declined_steps)
+        series.declined_norms.append(cell.declined_norms)
         series.train_curve_steps.append(cell.train_steps)
         series.train_curve_loss.append(cell.train_loss)
         series.sources = list(cell.sources)
@@ -960,8 +1071,10 @@ def completeness_refusals(
     shared_final = {arm.steps[-1] for arm in arms if arm.steps}
     if len(shared_final) > 1:
         problems.append(
-            f"the arms end at different steps {sorted(shared_final)}, so a contrast between "
-            "them would compare models that have seen different numbers of tokens"
+            f"the arms reach different steps {sorted(shared_final)}, so every contrast is "
+            f"taken at step {common_endpoint_step(arms)}, the deepest one all of them reached, "
+            "and the arms that went further are read back to it. That is a coherent comparison "
+            "and it is not the pre-registered endpoint"
         )
     return problems
 
@@ -1196,6 +1309,15 @@ def mde_from_se(se: float, df: int, alpha: float = 0.05, power: float = 0.80) ->
 
     :returns: The minimum detectable effect, in the units of ``se``.
     """
+    if not se > 0.0:
+        # Reached only when every replicate of a contrast is identical, which is a data problem
+        # rather than an infinitely sensitive design -- two cells on one seed, or a fixture. Say
+        # that, rather than let the root finder report that a bracket has the same sign twice.
+        raise Refusal(
+            "a contrast came out with a standard error of exactly zero, so its replicates do "
+            "not differ at all. That is not a design that can detect any effect; it is a "
+            "design where the same run was read more than once."
+        )
     corrected = se / c4(df)
     approximate = corrected * (stats.norm.ppf(1.0 - alpha / 2.0) + stats.norm.ppf(power))
     upper = max(approximate * 4.0, corrected)
@@ -1535,7 +1657,8 @@ def analyse(
     n_seeds = len(seeds)
     n_arms = len(ordered)
 
-    endpoints = {arm.arm: arm.endpoint_matrix() for arm in ordered}
+    at_step = common_endpoint_step(ordered)
+    endpoints = {arm.arm: arm.endpoint_matrix(at_step) for arm in ordered}
     unweighted = {name: matrix.mean(axis=1) for name, matrix in endpoints.items()}
     weighted = (
         {name: matrix @ weights for name, matrix in endpoints.items()}
@@ -1547,6 +1670,7 @@ def analyse(
         "label": label,
         "generated": date.today().isoformat(),
         "provisional": list(provisional),
+        "compared_at_step": at_step,
         "arms": [
             {
                 "arm": arm.arm,
@@ -1663,6 +1787,7 @@ def analyse(
                 {
                     "name": hypothesis.name,
                     "claim": hypothesis.claim,
+                    "post_hoc": hypothesis.post_hoc,
                     "status": "not analysable: "
                     + ", ".join(
                         arm
@@ -1760,6 +1885,7 @@ def analyse(
             {
                 "name": hypothesis.name,
                 "claim": hypothesis.claim,
+                "post_hoc": hypothesis.post_hoc,
                 "treatment": hypothesis.treatment,
                 "comparator": hypothesis.comparator,
                 "rho_pearson": rho,
@@ -1770,6 +1896,35 @@ def analyse(
             }
         )
     result["contrasts"] = contrasts
+
+    # Holm across the family, printed beside the raw p-values and not replacing them. The gate
+    # is uncorrected, as pre-registered; what the family-wise column exists for is that the gate
+    # is a 6.3% per-comparison test at df = 16 and the family grew from three comparisons to
+    # five when arm 4 was funded, so the reader who wants the corrected reading should not have
+    # to recompute it from a table.
+    #
+    # The family is the PRE-REGISTERED contrasts and nothing else. A post-hoc contrast joining it
+    # would inflate every pre-registered p-value in it by an amount this module chose after the
+    # endpoints were visible, which is the correction running backwards.
+    holm = dose_adjustment.holm_adjust(
+        {
+            str(entry_["name"]): float(row["p_value"])
+            for entry_ in contrasts
+            if "rows" in entry_ and not entry_.get("post_hoc")
+            for row in entry_["rows"]  # type: ignore[union-attr]
+            if row["primary"]
+        }
+    )
+    for entry_ in contrasts:
+        if str(entry_["name"]) in holm:
+            entry_["holm_adjusted_p"] = holm[str(entry_["name"])]
+    result["holm"] = {
+        "family": sorted(holm),
+        "adjusted": holm,
+        "note": "Holm-Bonferroni over the primary row of every analysable hypothesis. The gate "
+        "stays uncorrected, as pre-registered; this is reported beside it.",
+    }
+
     result["dose"] = {
         "pre_registered": "2026-08-10, before any treatment endpoint was visible",
         "nats_per_declined_step": dose_adjustment.PER_DECLINE_NATS,
@@ -1784,6 +1939,11 @@ def analyse(
     per_source: List[Dict[str, object]] = []
     for hypothesis in HYPOTHESES:
         if hypothesis.treatment not in by_name or hypothesis.comparator not in by_name:
+            continue
+        # Pre-registered contrasts only. The per-source panel is where an effect hiding in one
+        # source shows up, and it reads as one series per hypothesis; a post-hoc series drawn
+        # the same way as the pre-registered ones is a figure that argues for itself.
+        if hypothesis.post_hoc:
             continue
         sources = by_name[hypothesis.treatment].sources
         rows = []
@@ -1815,11 +1975,18 @@ def analyse(
     return result
 
 
-def h7(arms: Sequence[ArmSeries]) -> Dict[str, object]:
+def h7(arms: Sequence[ArmSeries], through_step: Optional[int] = None) -> Dict[str, object]:
     """
     The stability outcome, on the counts and on the trigger magnitudes.
 
+    COUNTED OVER THE SAME NUMBER OF OPTIMIZER STEPS ON BOTH ARMS -- see
+    :meth:`ArmSeries.stability_at`. A count is an exposure statistic, so the arms have to have
+    been exposed for the same length of run before the difference between them is about the
+    arms.
+
     :param arms: The arms, including the baseline, which is the comparator.
+    :param through_step: Count declines up to here. Defaults to the deepest step every arm
+        reached, which is what the contrasts are taken at.
 
     :returns: The tests, or a refusal note when the data are not there.
 
@@ -1829,6 +1996,8 @@ def h7(arms: Sequence[ArmSeries]) -> Dict[str, object]:
     if "baseline" not in by_name:
         raise Refusal("H7 is stated against the baseline and the baseline did not land.")
     base = by_name["baseline"]
+    at_step = common_endpoint_step(arms) if through_step is None else through_step
+    base_counts, base_peaks = base.stability_at(at_step)
 
     tests: List[Dict[str, object]] = []
     for arm in arms:
@@ -1843,34 +2012,37 @@ def h7(arms: Sequence[ArmSeries]) -> Dict[str, object]:
                 }
             )
             continue
-        counts = exact_permutation_test(
-            [float(v) for v in arm.declined if v is not None],
-            [float(v) for v in base.declined if v is not None],
-            "declined optimizer steps of 6,000",
-            arm.arm,
-            "baseline",
-        )
+        counts, peaks = arm.stability_at(at_step)
         entry: Dict[str, object] = {
             "arm": arm.arm,
             "pre_registered": arm.arm == "faithful",
-            "primary": asdict(counts),
-        }
-        if not any(v is None for v in arm.largest_trigger + base.largest_trigger):
-            entry["secondary"] = asdict(
+            "through_step": at_step,
+            "primary": asdict(
                 exact_permutation_test(
-                    [float(v) for v in arm.largest_trigger if v is not None],
-                    [float(v) for v in base.largest_trigger if v is not None],
-                    "largest triggering gradient norm",
+                    [float(v) for v in counts],
+                    [float(v) for v in base_counts],
+                    f"declined optimizer steps in the first {at_step:,}",
                     arm.arm,
                     "baseline",
                 )
-            )
+            ),
+            "secondary": asdict(
+                exact_permutation_test(
+                    [float(v) for v in peaks],
+                    [float(v) for v in base_peaks],
+                    f"largest triggering gradient norm in the first {at_step:,} steps",
+                    arm.arm,
+                    "baseline",
+                )
+            ),
+        }
         tests.append(entry)
 
     return {
         "statement": "H7. faithful declines more updates than baseline, and at larger "
         "triggering gradient norms. Secondary, added after stage 1 rather than before it, and "
         "no primary conclusion is conditioned on it.",
+        "through_step": at_step,
         "limit": "At 5 v 5 the smallest attainable two-sided permutation p is 2/C(10,5) = "
         "0.0079, so complete separation between the arms is detectable at alpha = 0.05 and "
         "partial separation mostly is not.",
@@ -1966,6 +2138,20 @@ def synthetic_tranche(
 
         counts = list((declined or {}).get(name, (19, 10, 16, 18, 20)))
         peaks = list((triggers or {}).get(name, (0.712, 0.485, 0.387, 0.465, 0.420)))
+        # The individual declines behind those two summaries, so that a synthetic arm answers
+        # `stability_at` the way a measured one does. Without them the generator produces a
+        # running total with no events under it, which is the inconsistency `stability_at`
+        # refuses -- and the whole H7 path would then be exercised only against real data.
+        event_steps: List[List[int]] = []
+        event_norms: List[List[float]] = []
+        for seed_index in range(n_seeds):
+            total = int(counts[seed_index])
+            when = sorted(rng.choice(np.arange(1, steps[-1]), size=total, replace=False).tolist())
+            magnitudes = list(
+                np.linspace(peaks[seed_index] * 0.45, peaks[seed_index], max(total, 1))[:total]
+            )
+            event_steps.append([int(s) for s in when])
+            event_norms.append([float(v) for v in magnitudes])
         arms.append(
             ArmSeries(
                 arm=name,
@@ -1984,7 +2170,8 @@ def synthetic_tranche(
                 sources=list(sources),
                 declined=counts[:n_seeds],
                 largest_trigger=peaks[:n_seeds],
-                declined_steps=[[] for _ in range(n_seeds)],
+                declined_steps=event_steps,
+                declined_norms=event_norms,
                 train_curve_steps=[list(steps) for _ in range(n_seeds)],
                 train_curve_loss=[
                     (values[i].mean(axis=1) * NATS_PER_BPB).tolist() for i in range(n_seeds)
@@ -2028,19 +2215,26 @@ def render(result: Mapping[str, object]) -> str:
     """
     label = str(result.get("label", "measured"))
     mark = "" if label == "measured" else f"[{label}] "
+    at_step = result.get("compared_at_step")
     out: List[str] = _banner(label, list(result.get("provisional") or []))
 
     out += [
         f"{mark}HYPER-CONNECTIONS AT 370M -- the pre-registered analysis",
         f"{mark}generated {result.get('generated')}, endpoint: unweighted mean of held-out "
-        "bits-per-byte over seven sources at the final step",
+        f"bits-per-byte over seven sources, every arm read at step {at_step}",
         "",
         f"{mark}ARMS",
     ]
     for arm in result["arms"]:  # type: ignore[index]
+        # `final_step` is how far the arm got; `compared_at_step` is where it is being read.
+        # Printing only the first invites the comparison the reader should not make, and it is
+        # the comparison this module made of itself once.
+        behind = (
+            "" if arm["final_step"] == at_step else f" (reached {arm['final_step']}, read back)"
+        )
         out.append(
             f"{mark}  {arm['arm']:<12} {arm['submission']:<22} seeds {arm['seeds']}  "
-            f"step {arm['final_step']}  mean {arm['mean_bpb']:.5f} BPB "
+            f"step {at_step}{behind}  mean {arm['mean_bpb']:.5f} BPB "
             f"({arm['mean_nats']:.4f} nats)  sd {arm['sd_bpb']:.5f}"
         )
         out.append(
@@ -2135,18 +2329,25 @@ def render(result: Mapping[str, object]) -> str:
         "5% test when",
         f"{mark}  sigma is estimated, so the exact two-sided t p-value and the 5% line are "
         "printed beside it.",
+        f"{mark}  The Holm-adjusted p is printed on the primary row of every pre-registered "
+        "contrast. The gate stays",
+        f"{mark}  uncorrected, as pre-registered; the family-wise column is there for a reader "
+        "who wants it.",
         "",
     ]
     for entry in result["contrasts"]:  # type: ignore[index]
         if "rows" not in entry:
             out += [f"{mark}  {entry['name']}: {entry['status']}", ""]
             continue
+        tag = f"  [POST-HOC, added {entry['post_hoc']}]" if entry.get("post_hoc") else ""
         out += [
-            f"{mark}  {entry['name']}: {entry['treatment']} - {entry['comparator']}",
+            f"{mark}  {entry['name']}: {entry['treatment']} - {entry['comparator']}{tag}",
             f"{mark}    {entry['claim']}",
         ]
         for row in entry["rows"]:
             star = " <- PRIMARY" if row["primary"] else ""
+            if row["primary"] and "holm_adjusted_p" in entry:
+                star += f"  (Holm over {len(result['holm']['family'])}: {entry['holm_adjusted_p']:.4f})"  # type: ignore[index]
             out.append(
                 f"{mark}    {row['endpoint']:<16} {row['analysis']:<18} "
                 f"delta {row['delta_nats']:+.5f} nats ({row['delta_bpb']:+.6f} BPB)  "

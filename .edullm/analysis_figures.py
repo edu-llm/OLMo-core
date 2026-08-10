@@ -58,6 +58,23 @@ MARKERS: Dict[str, str] = {
     "mhc": "D",
 }
 
+#: One colour and marker per hypothesis, for the panels whose rows are contrasts rather than
+#: arms.
+#:
+#: KEYED ON THE HYPOTHESIS AND NOT DERIVED FROM THE ARMS, because no rule over the arms works.
+#: H1 and H2a share ``faithful`` as their treatment, so colouring by treatment merges them; H1
+#: and H5 share ``baseline`` as their comparator, so colouring by "the arm that is not
+#: ``faithful``" merges those two instead and paints H1 in the comparator's grey, which reads
+#: as though the baseline were the thing being plotted. Three contrasts over four arms have no
+#: single distinguishing arm and the honest fix is to stop looking for one.
+HYPOTHESIS_PALETTE: Dict[str, str] = {
+    "H1": "#0b6fa4",
+    "H2a": "#c1651a",
+    "H5": "#5b8c2a",
+}
+
+HYPOTHESIS_MARKERS: Dict[str, str] = {"H1": "s", "H2a": "^", "H5": "D"}
+
 #: ``BPB = CE_nats / (bytes_per_token * ln 2)``, the same constant ``noise_floor`` carries.
 NATS_PER_BPB = 4.57 * math.log(2)
 
@@ -178,9 +195,26 @@ def loss_curves(arms: Sequence, result: Mapping[str, object], path: str) -> str:
             markersize=3.2,
             label=f"{arm.arm} (n={curves.shape[0]})",
         )
+    # Clipped to the range after the first evaluation. Step 0 is an untrained model at 3.7 BPB
+    # against an endpoint near 0.68, so on an axis that includes it the whole run after step 500
+    # is four pixels of flat line and the panel says only that training happened.
+    after_first = [
+        float(v)
+        for arm in ordered
+        for step, v in zip(arm.steps, np.asarray(arm.bpb, dtype=float).mean(axis=2).T.tolist())
+        if step > 0
+        for v in v
+    ]
+    if after_first:
+        low, high = min(after_first), max(after_first)
+        margin = 0.08 * (high - low) or 0.01
+        left.set_ylim(low - margin, high + margin)
     left.set_xlabel("training step (of 6,000; 4.72B dolma2 tokens)")
     left.set_ylabel("held-out bits-per-byte, unweighted mean of 7 sources")
-    left.set_title("The runs\nband is the range over seeds, not a standard error")
+    left.set_title(
+        "The runs, from the first evaluation after step 0\n"
+        "band is the range over seeds, not a standard error"
+    )
     left.legend(loc="upper right", fontsize=7.5)
 
     # THE MIDDLE PANEL IS THE ONE WORTH LOOKING AT, AND THE LEFT ONE IS WHY. The curve falls
@@ -190,6 +224,12 @@ def loss_curves(arms: Sequence, result: Mapping[str, object], path: str) -> str:
     # the shared data order at once, which leaves exactly the quantity the primary analysis
     # tests, plotted against step so that "the effect appears late" and "there is no effect"
     # are distinguishable rather than both reading as a flat line at the end.
+    # ARM BY ARM ON THE STEPS THAT ARM SHARES WITH THE BASELINE, rather than on one grid for
+    # all of them. Mid-tranche the arms are different ages -- the comparator has thirteen
+    # evaluations and a treatment three hours behind it has seven -- so a difference taken
+    # position by position subtracts step 6,000 from step 3,000 and draws the training curve as
+    # though it were an effect. That is the same mistake the contrast made before it was
+    # aligned, and here it would be drawn rather than printed.
     base = next((a for a in ordered if a.arm == "baseline"), None)
     if base is not None and len(ordered) > 1:
         reference = np.asarray(base.bpb, dtype=float).mean(axis=2)
@@ -197,8 +237,14 @@ def loss_curves(arms: Sequence, result: Mapping[str, object], path: str) -> str:
             if arm.arm == "baseline":
                 continue
             colour = PALETTE.get(arm.arm, "#888888")
-            differences = (np.asarray(arm.bpb, dtype=float).mean(axis=2) - reference) * NATS_PER_BPB
-            steps = np.asarray(arm.steps, dtype=float)
+            shared = [step for step in arm.steps if step in base.steps]
+            if not shared:
+                continue
+            mine = np.asarray(arm.bpb, dtype=float).mean(axis=2)
+            theirs = reference[:, [base.steps.index(step) for step in shared]]
+            mine = mine[:, [arm.steps.index(step) for step in shared]]
+            differences = (mine - theirs) * NATS_PER_BPB
+            steps = np.asarray(shared, dtype=float)
             middle.fill_between(
                 steps,
                 differences.min(axis=0),
@@ -281,6 +327,28 @@ def loss_curves(arms: Sequence, result: Mapping[str, object], path: str) -> str:
     return _finish(fig, result, path)
 
 
+def _at_step(arm, result: Mapping[str, object]) -> np.ndarray:
+    """
+    One arm's ``(n_seeds, n_sources)`` bits-per-byte at the step the analysis compared at.
+
+    NOT ``[:, -1, :]``, WHICH IS WHERE THIS FIGURE DREW A RESULT THAT WAS NOT THERE. Each arm's
+    own last evaluation is a different step whenever the arms are different ages, so a
+    mid-tranche endpoint chart put the finished comparator at step 6,000 and a treatment three
+    hours behind it at step 3,000, and drew the half of the training curve between them as the
+    gap between two arms. The contrast beside it had already been aligned; the figure had not,
+    so the two disagreed by a factor of thirty and the figure was the one people would have
+    looked at.
+
+    :param arm: An ``analysis.ArmSeries``.
+    :param result: What ``analysis.analyse`` returned, for ``compared_at_step``.
+
+    :returns: The matrix.
+    """
+    step = result.get("compared_at_step")
+    index = arm.steps.index(step) if step in arm.steps else -1
+    return np.asarray(arm.bpb, dtype=float)[:, index, :]
+
+
 def endpoint(arms: Sequence, result: Mapping[str, object], path: str) -> str:
     """
     The endpoint of every run, per arm, against the measured noise floor.
@@ -341,16 +409,21 @@ def endpoint(arms: Sequence, result: Mapping[str, object], path: str) -> str:
     # the `faithful` tick with no comparator named beside it, and that is a mislabelled figure
     # rather than a missing one.
     by_treatment: Dict[str, tuple] = {}
+    by_comparator: Dict[str, tuple] = {}
     for entry in result.get("contrasts", []):  # type: ignore[union-attr]
         row = primary.get(entry.get("name", ""))
-        if entry.get("treatment") and row and entry["treatment"] not in by_treatment:
-            by_treatment[entry["treatment"]] = (entry["name"], entry["comparator"], row)
+        if not row:
+            continue
+        if entry.get("treatment") and entry["treatment"] not in by_treatment:
+            by_treatment[entry["treatment"]] = (entry["name"], entry["comparator"], row, 1.0)
+        if entry.get("comparator") and entry["comparator"] not in by_comparator:
+            by_comparator[entry["comparator"]] = (entry["name"], entry["treatment"], row, -1.0)
 
     positions = np.arange(len(ordered), dtype=float)
     rng = np.random.default_rng(0)
     for position, arm in zip(positions, ordered):
         colour = PALETTE.get(arm.arm, "#888888")
-        values = np.asarray(arm.bpb, dtype=float)[:, -1, :].mean(axis=1)
+        values = _at_step(arm, result).mean(axis=1)
         jitter = position + rng.uniform(-0.11, 0.11, values.size)
         axis.scatter(
             jitter,
@@ -388,19 +461,30 @@ def endpoint(arms: Sequence, result: Mapping[str, object], path: str) -> str:
 
     labels = []
     for arm in ordered:
+        # An arm that is only ever a comparator -- `output-only` is H2a's -- would otherwise get
+        # a bare tick and sit in the middle of the panel with no number on it. Its contrast is
+        # written from its own side, with the sign turned round so the label means what it says.
+        # The arm the whole panel is centred on is left alone: the dashed line through it and the
+        # right-hand axis already say it is the zero, and H1 read backwards under its tick is the
+        # same number twice.
         entry = by_treatment.get(arm.arm)
+        if entry is None and arm.arm != (baseline or {}).get("arm"):
+            entry = by_comparator.get(arm.arm)
         if entry is None:
             labels.append(f"{arm.arm}\nn={len(arm.seeds)}")
             continue
-        name, comparator, row = entry
+        name, against, row, sign = entry
         verdict = "clears the gate" if row["clears_gate"] else "inside the gate"
         labels.append(
-            f"{arm.arm}\nn={len(arm.seeds)}\n{name} vs {comparator}\n"
-            f"{row['delta_nats']:+.4f} nats, {verdict}"
+            f"{arm.arm}\nn={len(arm.seeds)}\n{name} vs {against}\n"
+            f"{sign * row['delta_nats']:+.4f} nats, {verdict}"
         )
     axis.set_xticks(positions)
     axis.set_xticklabels(labels, fontsize=7.5)
-    axis.set_ylabel("held-out bits-per-byte at step 6,000\n(unweighted mean of 7 sources)")
+    axis.set_ylabel(
+        f"held-out bits-per-byte at step {result.get('compared_at_step'):,}\n"
+        "(unweighted mean of 7 sources)"
+    )
     secondary = axis.secondary_yaxis(
         "right",
         functions=(
@@ -447,7 +531,7 @@ def per_source(arms: Sequence, result: Mapping[str, object], path: str) -> str:
     base = np.arange(len(sources), dtype=float)
     for index, arm in enumerate(ordered):
         colour = PALETTE.get(arm.arm, "#888888")
-        matrix = np.asarray(arm.bpb, dtype=float)[:, -1, :]
+        matrix = _at_step(arm, result)
         offset = base + (index - (len(ordered) - 1) / 2.0) * width
         # Points and not bars, so the axis can be truncated to the data honestly. A bar chart
         # has to start at zero or it lies, and starting at zero on a range of 0.33 to 1.05 BPB
@@ -468,8 +552,14 @@ def per_source(arms: Sequence, result: Mapping[str, object], path: str) -> str:
     top.set_xticklabels(sources, rotation=12)
     top.set_ylabel("held-out bits-per-byte")
     top.set_title(
-        "Per source at step 6,000 -- marker is the arm mean, whisker is the range over 5 seeds"
+        f"Per source at step {result.get('compared_at_step'):,} -- marker is the arm mean, "
+        "whisker is the range over 5 seeds"
     )
+    # Headroom before the legend goes in, because dclm sits near 1.03 BPB and an upper-left
+    # legend on the default limits lands on top of it -- losing the highest-loss source from the
+    # panel whose whole subject is which source moved.
+    low, high = top.get_ylim()
+    top.set_ylim(low, high + 0.22 * (high - low))
     top.legend(loc="upper left", ncol=len(ordered))
 
     if entries:
@@ -484,24 +574,14 @@ def per_source(arms: Sequence, result: Mapping[str, object], path: str) -> str:
                 (c for c in result["contrasts"] if c["name"] == entry["name"]),  # type: ignore[index]
                 {},
             )
-            # Coloured by the arm that DISTINGUISHES the contrast rather than by its treatment:
-            # H1 and H2a share `faithful` as the treatment, so colouring by treatment would put
-            # two different contrasts in the same blue and the panel would be unreadable.
-            distinguishing = next(
-                (
-                    arm
-                    for arm in (contrast.get("comparator"), contrast.get("treatment"))
-                    if arm != "faithful"
-                ),
-                contrast.get("treatment", ""),
-            )
-            colour = PALETTE.get(str(distinguishing), "#888888")
+            name = str(entry["name"])
+            colour = HYPOTHESIS_PALETTE.get(name, "#888888")
             offset = base + (index - (len(entries) - 1) / 2.0) * span
             bottom.errorbar(
                 offset,
                 deltas,
                 yerr=errors,
-                fmt=MARKERS.get(str(distinguishing), "o"),
+                fmt=HYPOTHESIS_MARKERS.get(name, "o"),
                 color=colour,
                 capsize=3,
                 markersize=5,
@@ -513,9 +593,18 @@ def per_source(arms: Sequence, result: Mapping[str, object], path: str) -> str:
         bottom.set_xticklabels(sources, rotation=12)
         bottom.set_ylabel("difference from comparator\n(nats of held-out CE, negative is better)")
         bottom.set_title(
-            "Per-source contrast, paired on seed, with a 95% interval on the blocked error term"
+            "Per-source contrast, paired on seed, with a 95% interval on the blocked error " "term",
+            pad=26,
         )
-        bottom.legend(loc="upper left", ncol=len(entries), fontsize=7.5)
+        # Outside the axes. Inside, the legend's own sample marker sits at the top left of a
+        # panel whose leftmost source is also near zero, and it reads as an eighth data point.
+        bottom.legend(
+            loc="lower center",
+            bbox_to_anchor=(0.5, 1.02),
+            ncol=max(len(entries), 1),
+            fontsize=7.5,
+            frameon=False,
+        )
     else:
         bottom.set_axis_off()
         bottom.text(
@@ -555,19 +644,24 @@ def stability(arms: Sequence, result: Mapping[str, object], path: str) -> str:
     tests = {t["arm"]: t for t in (result.get("h7") or {}).get("tests", []) if "arm" in t}  # type: ignore[union-attr]
     fig, (left, right) = plt.subplots(1, 2, figsize=(10.2, 4.4))
 
+    # Counted through the step the analysis compared at, not through whatever step each arm
+    # happened to reach. A cumulative count over a longer run is a bigger count, so plotting
+    # each arm's own running total draws a treatment that is three hours behind as the calmer
+    # of the two -- and the panel would then disagree with the p-value printed on it.
+    through = result.get("h7", {}).get("through_step")  # type: ignore[union-attr]
     positions = np.arange(len(ordered), dtype=float)
     rng = np.random.default_rng(1)
     for axis, extract, ylabel, key in (
         (
             left,
-            lambda a: [v for v in a.declined if v is not None],
-            "declined optimizer steps of 6,000",
+            lambda a: a.stability_at(through)[0],
+            f"declined optimizer steps in the first {through:,}",
             "primary",
         ),
         (
             right,
-            lambda a: [v for v in a.largest_trigger if v is not None],
-            "largest gradient norm at a declined step",
+            lambda a: a.stability_at(through)[1],
+            f"largest gradient norm at a declined step,\nin the first {through:,} steps",
             "secondary",
         ),
     ):
@@ -577,9 +671,14 @@ def stability(arms: Sequence, result: Mapping[str, object], path: str) -> str:
                 continue
             colour = PALETTE.get(arm.arm, "#888888")
             jitter = position + rng.uniform(-0.12, 0.12, values.size)
+            # A seed that declined nothing has no largest trigger, and it is carried as 0.0 --
+            # which a log axis cannot draw, so it would vanish and take a replicate out of a
+            # panel whose whole subject is how many replicates fell where. Drawn hollow at the
+            # floor instead, and counted in the caption.
+            zero = values <= 0.0
             axis.scatter(
-                jitter,
-                values,
+                jitter[~zero],
+                values[~zero],
                 color=colour,
                 marker=MARKERS.get(arm.arm, "o"),
                 s=40,
@@ -587,6 +686,20 @@ def stability(arms: Sequence, result: Mapping[str, object], path: str) -> str:
                 edgecolor="white",
                 linewidth=0.6,
             )
+            if zero.any() and key == "secondary":
+                lowest = float(np.min(values[values > 0.0])) if (values > 0.0).any() else 1.0
+                axis.scatter(
+                    jitter[zero],
+                    np.full(int(zero.sum()), lowest * 0.72),
+                    facecolor="none",
+                    edgecolor=colour,
+                    marker=MARKERS.get(arm.arm, "o"),
+                    s=40,
+                    zorder=4,
+                    linewidth=1.0,
+                    label=f"{arm.arm}: declined nothing, so no trigger to report",
+                )
+                axis.legend(loc="lower left", fontsize=6.5, frameon=False)
             axis.hlines(
                 float(values.mean()),
                 position - 0.24,
@@ -615,7 +728,8 @@ def stability(arms: Sequence, result: Mapping[str, object], path: str) -> str:
 
     right.set_yscale("log")
     left.set_title(
-        "H7 primary: declined updates per run\nexact two-sided permutation test against the baseline"
+        f"H7 primary: declined updates in the first {through:,} steps\n"
+        "exact two-sided permutation test against the baseline"
     )
     right.set_title(
         "H7 secondary: largest triggering gradient norm\nthe statistic that separates a spike from noise"
