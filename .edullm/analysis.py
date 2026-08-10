@@ -85,6 +85,7 @@ import os
 import sys
 from dataclasses import asdict, dataclass, field
 from datetime import date
+from types import MappingProxyType
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
@@ -328,6 +329,40 @@ POST_HOC: Tuple[Tuple[str, str], ...] = (
         "the arithmetic difference of H1 and H2a, it is excluded from the Holm family so that it "
         "cannot inflate a pre-registered p-value, and it carries no gate of its own.",
     ),
+    (
+        "2026-08-10",
+        "the contrast re-read at equal WALL CLOCK beside the pre-registered one at equal steps. "
+        "A lane-carrying arm costs about 1.7x the baseline per step, so the two readings can "
+        "disagree in sign, and on this tranche they do. Nothing in it is extrapolated: the "
+        "budget is the comparator's measured runtime at the endpoint and the treatment is read "
+        "at the last step it had finished inside that budget.",
+    ),
+    (
+        "2026-08-10",
+        "the same contrast on training cross-entropy, and the gap between that and the held-out "
+        "endpoint stated as its own quantity with an interval. Added because this analysis "
+        "briefly described the two as corroborating each other, which they cannot: the endpoint "
+        "is unweighted over seven held-out sources and training CE is mixture-weighted. What "
+        "agreement in sign does establish is that the effect is not an evaluation artifact and "
+        "is not memorization.",
+    ),
+    (
+        "2026-08-10",
+        "per-source improvement as a fraction of each source's own loss, beside the absolute "
+        "nats. The absolute column spreads 3x across sources and reads as an effect "
+        "concentrated in wiki; the relative column is nearly uniform and reads as every source "
+        "improving by the same proportion. Both are printed because only the second is a "
+        "statement about the intervention rather than about the corpus.",
+    ),
+    (
+        "2026-08-10",
+        "the compound-symmetry check on the blocked error term. The pre-registered paired "
+        "analysis pools one seed effect across every arm; that is only the error term of a "
+        "given contrast if each pair of arms correlates across seeds by about the same amount. "
+        "The spread of the pairwise correlations is now printed, and where it is wide the report "
+        "names the unpaired row as the conservative interval. The pre-registered primary is "
+        "unchanged and is still marked as primary.",
+    ),
 )
 
 
@@ -415,6 +450,37 @@ class ArmSeries:
     train_curve_steps: List[List[int]] = field(default_factory=list)
     train_curve_loss: List[List[float]] = field(default_factory=list)
     """Per-seed training cross-entropy, downsampled, for the loss-curve figure."""
+
+    runtime: List[Dict[int, float]] = field(default_factory=list)
+    """Per-seed seconds elapsed at each evaluation step, for the equal-wall-clock reading."""
+
+    def seconds_at(self, step: int) -> Optional[float]:
+        """
+        Median seconds this arm's cells had been running when they reached ``step``.
+
+        :param step: The step.
+
+        :returns: The median, or None where no cell recorded a runtime there.
+        """
+        values = [r[step] for r in self.runtime if step in r]
+        return float(np.median(values)) if values else None
+
+    def step_within(self, seconds: float) -> Optional[int]:
+        """
+        The deepest evaluated step this arm had reached by ``seconds`` of wall clock.
+
+        THE PRE-REGISTERED ENDPOINT IS AT EQUAL STEPS AND THIS IS NOT A SUBSTITUTE FOR IT. It
+        answers the practitioner's question rather than the paper's: given a fixed machine for a
+        fixed time, which arm is further ahead. An arm that buys its improvement with more
+        compute per step can win the pre-registered comparison and lose this one, and on this
+        tranche exactly that happens.
+
+        :param seconds: The wall-clock budget.
+
+        :returns: The step, or None if the arm had not reached its first evaluation by then.
+        """
+        reached = [s for s in self.steps if (self.seconds_at(s) or float("inf")) <= seconds]
+        return max(reached) if reached else None
 
     def endpoint_matrix(self, step: Optional[int] = None) -> np.ndarray:
         """
@@ -519,6 +585,7 @@ class CellRead:
     declined_norms: List[float] = field(default_factory=list)
     train_steps: List[int] = field(default_factory=list)
     train_loss: List[float] = field(default_factory=list)
+    runtime: Dict[int, float] = field(default_factory=dict)
     sources: Tuple[str, ...] = HELD_OUT_SOURCES
 
     @property
@@ -561,7 +628,8 @@ def _read_cell(run, train_curve_samples: int) -> CellRead:
     ce_keys = [CE_METRIC.format(source=s) for s in sources]
     bpb: Dict[int, List[float]] = {}
     nats: Dict[int, List[float]] = {}
-    for row in run.scan_history(keys=["_step", *bpb_keys, *ce_keys]):
+    runtime: Dict[int, float] = {}
+    for row in run.scan_history(keys=["_step", "_runtime", *bpb_keys, *ce_keys]):
         step = row.get("_step")
         values = [row.get(k) for k in bpb_keys]
         losses = [row.get(k) for k in ce_keys]
@@ -569,6 +637,12 @@ def _read_cell(run, train_curve_samples: int) -> CellRead:
             continue
         bpb[int(step)] = [float(v) for v in values]
         nats[int(step)] = [float(v) for v in losses]
+        # Seconds since the cell started, as W&B stamps every row. Carried so the contrast can
+        # also be read at equal WALL CLOCK, which is a different and more practical question than
+        # the pre-registered one at equal steps -- and one the arms answer very differently,
+        # because a lane-carrying arm costs about 1.7x the baseline per step.
+        if row.get("_runtime") is not None:
+            runtime[int(step)] = float(row["_runtime"])
 
     stability = list(run.scan_history(keys=["_step", SKIPPED_COUNT_METRIC, MAX_TRIGGER_METRIC]))
     count = _last_finite(stability, SKIPPED_COUNT_METRIC)
@@ -627,6 +701,7 @@ def _read_cell(run, train_curve_samples: int) -> CellRead:
         declined_norms=declined_norms,
         train_steps=[int(r["_step"]) for r in kept],
         train_loss=[float(r[TRAIN_LOSS_METRIC]) for r in kept],
+        runtime=runtime,
         sources=sources,
     )
 
@@ -830,6 +905,7 @@ def assemble_arm(
         series.declined_norms.append(cell.declined_norms)
         series.train_curve_steps.append(cell.train_steps)
         series.train_curve_loss.append(cell.train_loss)
+        series.runtime.append(cell.runtime)
         series.sources = list(cell.sources)
         if cell.summary_was_clobbered:
             series.recovered.append(
@@ -888,6 +964,7 @@ def assemble_arm(
         "declined_steps",
         "train_curve_steps",
         "train_curve_loss",
+        "runtime",
     ):
         setattr(series, attribute, [getattr(series, attribute)[i] for i in order])
     series.bpb = [[kept[run].bpb[st] for st in series.steps] for run in series.run_ids]
@@ -1010,6 +1087,61 @@ def check_the_nats_conversion(arms: Sequence[ArmSeries], tolerance: float = 5e-5
     return complaints
 
 
+def seed_selection_bias(
+    arms: Sequence[ArmSeries],
+    short: ArmSeries,
+    expected_seeds: int = SEEDS_PER_ARM,
+) -> Optional[Dict[str, object]]:
+    """
+    How far a short arm's surviving seeds sit from the average seed, priced on the complete arms.
+
+    A SHORT ARM'S MEAN IS NOT AN UNBIASED ESTIMATE OF ITS FULL MEAN, AND THE SIZE OF THAT BIAS IS
+    MEASURABLE HERE RATHER THAN A CAVEAT. Seeds are not exchangeable in practice: the same seed is
+    the highest-loss one in every arm, because the seed sets the data order and some orders are
+    simply harder. So when an arm is missing seeds, whether its mean flatters it depends on which
+    seeds are missing, and the complete arms already say how much each seed is worth.
+
+    The estimate is the mean seed offset of the seeds the short arm *has*, averaged over the
+    complete arms, where a seed's offset is its endpoint minus its own arm's mean. It is a
+    first-order correction and is reported as a warning rather than applied: subtracting it would
+    be an adjustment fitted on the comparator arms and nobody pre-registered that. Its purpose is
+    to say whether waiting matters, and by how much.
+
+    :param arms: Every arm read, including the complete ones the offsets come from.
+    :param short: The arm that is missing cells.
+    :param expected_seeds: Cells per arm.
+
+    :returns: The missing seeds and the bias in nats, or None when no complete arm shares a step
+        with the short one, which is when there is nothing to price it against.
+    """
+    complete = [a for a in arms if a is not short and len(a.seeds) >= expected_seeds]
+    if not complete or not short.steps:
+        return None
+    step = short.steps[-1]
+    offsets: Dict[int, List[float]] = {}
+    for arm in complete:
+        if step not in arm.steps:
+            continue
+        values = arm.endpoint_matrix(step).mean(axis=1) * NATS_PER_BPB
+        centre = float(values.mean())
+        for seed, value in zip(arm.seeds, values):
+            offsets.setdefault(int(seed), []).append(float(value) - centre)
+    if not offsets:
+        return None
+
+    held = [int(s) for s in short.seeds if int(s) in offsets]
+    if not held:
+        return None
+    bias = float(np.mean([float(np.mean(offsets[s])) for s in held]))
+    return {
+        "missing": sorted(set(offsets) - set(held)),
+        "held": sorted(held),
+        "bias_nats": bias,
+        "priced_at_step": step,
+        "seed_offsets_nats": {s: float(np.mean(v)) for s, v in sorted(offsets.items())},
+    }
+
+
 def completeness_refusals(
     arms: Sequence[ArmSeries],
     horizon: int = HORIZON,
@@ -1053,6 +1185,16 @@ def completeness_refusals(
                 f"is over {len(arm.seeds)} seeds and the pooled df is short by "
                 f"{expected_seeds - len(arm.seeds)}"
             )
+            bias = seed_selection_bias(arms, arm)
+            if bias is not None:
+                problems.append(
+                    f"arm '{arm.arm}' is short the seeds {bias['missing']}, and those are not a "
+                    f"random subset: on the arms that are complete, the seeds it HAS average "
+                    f"{bias['bias_nats']:+.5f} nats against the arm mean. Its mean is therefore "
+                    f"biased by about that much in the direction of looking "
+                    f"{'BETTER' if bias['bias_nats'] < 0 else 'WORSE'} than it is, before any "
+                    "contrast is taken. Wait for the missing cells or carry this number."
+                )
         short = [
             f"{rid} ({state}, history reaches step {reached})"
             for rid, state, reached in zip(arm.run_ids, arm.states, arm.history_steps)
@@ -1410,6 +1552,19 @@ class Contrast:
     excluded_reference_effects: Tuple[str, ...] = ()
     """Literature effects the interval rules out, phrased as bounds and never as equivalence."""
 
+    sigma_nats: float = float("nan")
+    """
+    THE SIGMA THIS ROW'S INTERVAL IS ACTUALLY BUILT FROM, WHICH IS NOT ALWAYS THE ONE REPORTED
+    AT THE TOP OF THE REPORT. The pooled sigma in section (a) is over arms; the ``paired`` row's
+    interval comes from the blocked arm-plus-seed residual, which is smaller because the seed
+    effect has been taken out of it. Both are defensible and they differ by 30% on this tranche,
+    so a reader reconstructing ``delta +/- t x SE`` from the headline sigma gets a different
+    interval than the one printed beside it unless this column says which sigma was used.
+    """
+
+    sigma_df: int = 0
+    """The degrees of freedom of :attr:`sigma_nats`."""
+
 
 def _contrast(
     name: str,
@@ -1422,9 +1577,18 @@ def _contrast(
     predicted_sign: int,
     endpoint: str,
     primary: bool,
+    n_seeds: int,
     references: Sequence[Tuple[str, float]] = (),
 ) -> Contrast:
-    """Assemble one contrast from a difference, its standard error and its df."""
+    """
+    Assemble one contrast from a difference, its standard error and its df.
+
+    :param n_seeds: Seeds per arm, used only to invert the standard error back into the residual
+        sigma the interval rests on. Every estimator here has ``SE = sigma x sqrt(2 / n)``, so
+        reporting ``sigma`` beside the interval is what lets a reader check that the interval and
+        the sigma quoted at the top of the report are the same statement. On this tranche they
+        are not: the blocked residual is 30% smaller than the pooled one.
+    """
     t_statistic = delta / se if se > 0 else float("nan")
     p_value = float(2.0 * stats.t.sf(abs(t_statistic), df)) if se > 0 else float("nan")
     critical = float(stats.t.ppf(0.975, df))
@@ -1461,6 +1625,8 @@ def _contrast(
         predicted_sign=predicted_sign,
         direction_as_predicted=bool(np.sign(delta) == predicted_sign),
         excluded_reference_effects=excluded,
+        sigma_nats=se * math.sqrt(n_seeds / 2.0) * NATS_PER_BPB,
+        sigma_df=df,
     )
 
 
@@ -1768,6 +1934,19 @@ def analyse(
             pairwise[hypothesis.name] = asdict(estimate)
 
     recomputed = break_even_rho(n_arms, n_seeds)
+    # COMPOUND SYMMETRY IS WHAT THE BLOCKED ERROR TERM RESTS ON, AND IT IS CHECKABLE. Pooling one
+    # seed effect across every arm assumes each pair of arms correlates across seeds by the same
+    # amount. When they do not, the blocked residual is not the error term of any one contrast:
+    # it is an average of a pair that shares a lot with a pair that shares little, and it
+    # understates the error of the second. Every pairwise rho is already computed above, so the
+    # spread of them is free, and the interval a reader should trust is named on the strength of
+    # it rather than left implicit in a choice of estimator.
+    every_rho = {
+        f"{a}-{b}": float(paired_correlation(unweighted[a], unweighted[b]).rho_pearson)
+        for i, a in enumerate(present)
+        for b in present[i + 1 :]
+    }
+    rho_values = list(every_rho.values())
     result["pairing"] = {
         "block_fit": asdict(fit),
         "rho_by_hypothesis": pairwise,
@@ -1775,6 +1954,11 @@ def analyse(
         "pre_registered_break_even": PRE_REGISTERED_BREAK_EVEN_RHO,
         "recomputed_break_even": recomputed,
         "recomputed_break_even_is_post_hoc": True,
+        "rho_every_pair": every_rho,
+        "compound_symmetry_spread": (max(rho_values) - min(rho_values)) if rho_values else 0.0,
+        "compound_symmetry_doubtful": bool(
+            rho_values and (max(rho_values) - min(rho_values)) > 0.3
+        ),
     }
 
     # (c) the contrasts. The MDE of each is taken from that contrast's own standard error by
@@ -1849,6 +2033,7 @@ def analyse(
                         endpoint=endpoint_name,
                         primary=endpoint_name == "unweighted"
                         and analysis == ("paired" if paired_primary else "unpaired"),
+                        n_seeds=n_seeds,
                         references=hypothesis.reference_effects,
                     )
                 )
@@ -1959,6 +2144,13 @@ def analyse(
                     "source": source,
                     "delta_bpb": delta,
                     "delta_nats": delta * NATS_PER_BPB,
+                    # THE ABSOLUTE NATS AND THE PERCENTAGE ARE DIFFERENT FINDINGS AND ONLY ONE OF
+                    # THEM IS UNIFORM. In nats the sources spread 3x and the reading is "the
+                    # effect is concentrated in wiki"; as a fraction of each source's own loss
+                    # they agree closely, and the reading is "every source improved by the same
+                    # proportion", which is what more effective training looks like rather than a
+                    # new capability in one domain. Printing only the first invites the first.
+                    "relative": float(delta / b.mean()) if b.mean() else float("nan"),
                     "se_bpb": se,
                     "df": sub_fit.df_paired,
                     "p_value": float(2.0 * stats.t.sf(abs(delta / se), sub_fit.df_paired))
@@ -1972,7 +2164,178 @@ def analyse(
 
     # (e) H7.
     result["h7"] = h7(ordered)
+
+    # (f) the same contrast on the training loss, which is a DIFFERENT MEASUREMENT and not a
+    # corroboration of the endpoint.
+    result["train_loss_gap"] = train_loss_gap(ordered, at_step)
+
+    # (g) the same contrast at equal wall clock, which reverses it.
+    result["equal_compute"] = equal_compute(ordered, at_step)
     return result
+
+
+def equal_compute(arms: Sequence[ArmSeries], at_step: int) -> List[Dict[str, object]]:
+    """
+    The contrast re-read at the baseline's wall clock rather than at the baseline's step count.
+
+    SECONDARY, POST-HOC, AND THE ONLY READING A PRACTITIONER CAN ACT ON. The pre-registered
+    endpoint is at equal steps and equal tokens, which is the right comparison for the question
+    the two papers argue about -- does the mechanism learn more from the same data -- and it is
+    the wrong one for "should I use this". A lane-carrying arm costs more per step, so at a fixed
+    machine-hour budget it takes fewer steps, and the pre-registered win can become a loss.
+
+    NO EXTRAPOLATION IS INVOLVED, which is what makes this worth reporting where a horizon claim
+    would not be. Both numbers are measured: the comparator's total wall clock at the endpoint,
+    and the treatment's own evaluation near that budget.
+
+    THE BUDGET FALLS BETWEEN TWO EVALUATIONS AND BOTH ARE REPORTED, because picking one is
+    picking an answer. Evaluations land every 500 steps, so the treatment's true position at the
+    budget lies between the last step it finished and the next one it had not. Reading the lower
+    bracket understates it; reading the upper hands it compute it never got. The headline is the
+    UPPER bracket -- the reading that flatters the treatment -- so that the conclusion is the one
+    its best case supports, and the lower is printed beside it.
+
+    :param arms: The arms, ordered, including the baseline.
+    :param at_step: The pre-registered endpoint step.
+
+    :returns: One row per treatment arm, or an empty list where no runtime was recorded.
+    """
+    base = next((a for a in arms if a.arm == "baseline"), None)
+    if base is None:
+        return []
+    budget = base.seconds_at(at_step)
+    if budget is None:
+        return []
+    reference = base.endpoint_matrix(at_step).mean(axis=1) * NATS_PER_BPB
+
+    def against(arm: ArmSeries, step: int) -> Dict[str, object]:
+        # Paired on seed, like every other contrast here: the comparator is the same seed's
+        # baseline and not the baseline mean, so the seed effect cancels out of the interval.
+        differences = arm.endpoint_matrix(step).mean(axis=1) * NATS_PER_BPB - reference
+        se = float(differences.std(ddof=1) / math.sqrt(differences.size))
+        critical = float(stats.t.ppf(0.975, differences.size - 1))
+        centre = float(differences.mean())
+        return {
+            "step": step,
+            "gap_nats": centre,
+            "ci_nats": [centre - critical * se, centre + critical * se],
+        }
+
+    rows: List[Dict[str, object]] = []
+    for arm in arms:
+        if arm.arm == "baseline":
+            continue
+        below = arm.step_within(budget)
+        if below is None:
+            continue
+        above = next((s for s in arm.steps if s > below), None)
+        headline = against(arm, above if above is not None else below)
+        seconds = arm.seconds_at(below)
+        rows.append(
+            {
+                "arm": arm.arm,
+                "budget_seconds": budget,
+                "comparator_step": at_step,
+                "comparator_seconds_per_step": budget / at_step,
+                "seconds_per_step": (seconds / below) if seconds else float("nan"),
+                "step_at_budget": below,
+                "next_step": above,
+                "lower_bracket": against(arm, below),
+                "upper_bracket": headline,
+                "gap_nats": headline["gap_nats"],
+                "ci_nats": headline["ci_nats"],
+                "behind": bool(float(headline["gap_nats"]) > 0.0),
+            }
+        )
+    return rows
+
+
+def train_loss_gap(arms: Sequence[ArmSeries], at_step: int) -> List[Dict[str, object]]:
+    """
+    The contrast recomputed on training cross-entropy, beside the held-out endpoint.
+
+    NOT A SECOND OPINION ON THE ENDPOINT, AND IT WAS BRIEFLY WRITTEN UP AS ONE. The two agree in
+    sign and disagree in size by more than half of what H2a is worth in total, so "the training
+    loss corroborates" is a claim the numbers do not support. The reason they cannot corroborate
+    each other is structural rather than a defect: the endpoint is the *unweighted* mean over
+    seven held-out sources, as pre-registered, while training cross-entropy is the loss on the
+    training mixture in the proportions the mixture actually has. Those are two different
+    weightings of overlapping distributions, so an intervention that helps the sources unevenly
+    moves them by different amounts, which is exactly what per-source shows it does.
+
+    What the pair is good for is ruling out the failure where an effect lives only in the
+    evaluation: a held-out gap with no training gap behind it would be an eval artifact, and a
+    training gap larger than the held-out one would be memorization. Neither is the case here.
+
+    :param arms: The arms, ordered.
+    :param at_step: The step the endpoint is read at, so the training tail is taken to match.
+
+    :returns: One row per treatment arm against the baseline, or an empty list if the training
+        curve was not sampled.
+    """
+    base = next((a for a in arms if a.arm == "baseline"), None)
+    if base is None:
+        return []
+    window = (max(at_step - 1000, 0), at_step)
+
+    def tail(arm: ArmSeries) -> Optional[np.ndarray]:
+        values = []
+        for steps, losses in zip(arm.train_curve_steps, arm.train_curve_loss):
+            inside = [v for s, v in zip(steps, losses) if window[0] <= s <= window[1]]
+            if not inside:
+                return None
+            values.append(float(np.mean(inside)))
+        return np.asarray(values, dtype=float)
+
+    reference = tail(base)
+    if reference is None:
+        return []
+
+    rows: List[Dict[str, object]] = []
+    for arm in arms:
+        if arm.arm == "baseline":
+            continue
+        mine = tail(arm)
+        if mine is None or mine.size != reference.size:
+            continue
+        endpoint_gap = float(
+            (arm.endpoint_matrix(at_step).mean(axis=1) - base.endpoint_matrix(at_step).mean(axis=1))
+            .mean()
+            .item()
+            * NATS_PER_BPB
+        )
+        differences = mine - reference
+        train_gap = float(differences.mean())
+        disagreement = (
+            differences
+            - (
+                arm.endpoint_matrix(at_step).mean(axis=1)
+                - base.endpoint_matrix(at_step).mean(axis=1)
+            )
+            * NATS_PER_BPB
+        )
+        se = float(disagreement.std(ddof=1) / math.sqrt(disagreement.size))
+        critical = float(stats.t.ppf(0.975, disagreement.size - 1))
+        rows.append(
+            {
+                "arm": arm.arm,
+                "window": list(window),
+                "train_gap_nats": train_gap,
+                "endpoint_gap_nats": endpoint_gap,
+                "disagreement_nats": float(disagreement.mean()),
+                "disagreement_ci_nats": [
+                    float(disagreement.mean()) - critical * se,
+                    float(disagreement.mean()) + critical * se,
+                ],
+                "p_value": float(
+                    2.0 * stats.t.sf(abs(disagreement.mean() / se), disagreement.size - 1)
+                )
+                if se > 0
+                else float("nan"),
+                "same_sign": bool(np.sign(train_gap) == np.sign(endpoint_gap)),
+            }
+        )
+    return rows
 
 
 def h7(arms: Sequence[ArmSeries], through_step: Optional[int] = None) -> Dict[str, object]:
@@ -2066,6 +2429,15 @@ def synthetic_tranche(
     rng_seed: int = 0,
     steps: Sequence[int] = tuple(range(0, HORIZON + 1, 500)),
     sources: Sequence[str] = HELD_OUT_SOURCES,
+    seconds_per_step: Mapping[str, float] = MappingProxyType(
+        {
+            "baseline": 1.78,
+            "faithful": 3.07,
+            "output-only": 2.96,
+            "mhc": 3.11,
+            "no-output-init": 3.07,
+        }
+    ),
 ) -> List[ArmSeries]:
     """
     A four-arm tranche with a planted effect, a planted correlation and a planted noise floor.
@@ -2175,6 +2547,14 @@ def synthetic_tranche(
                 train_curve_steps=[list(steps) for _ in range(n_seeds)],
                 train_curve_loss=[
                     (values[i].mean(axis=1) * NATS_PER_BPB).tolist() for i in range(n_seeds)
+                ],
+                # A lane-carrying arm costs more per step than a bare residual stream, so the
+                # equal-wall-clock reading is exercised on the synthetic path too. Planted, like
+                # everything else here, so a test can assert the arm that costs more is the one
+                # that comes out behind.
+                runtime=[
+                    {int(s): float(s) * seconds_per_step.get(name, 1.8) for s in steps}
+                    for _ in range(n_seeds)
                 ],
             )
         )
@@ -2320,8 +2700,22 @@ def render(result: Mapping[str, object]) -> str:
         f"{mark}  break-even rho: {pairing['pre_registered_break_even']:.2f} as pre-registered "
         f"at three arms; {pairing['recomputed_break_even']:.3f} recomputed for the four that "
         "ran  [post-hoc; the pre-registered constant is the operative one]",
-        "",
+        f"{mark}  every pair: "
+        + ", ".join(f"{k} {v:+.3f}" for k, v in pairing["rho_every_pair"].items()),
     ]
+    if pairing["compound_symmetry_doubtful"]:
+        out += [
+            f"{mark}  COMPOUND SYMMETRY DOES NOT HOLD: those correlations span "
+            f"{pairing['compound_symmetry_spread']:.2f}, and the blocked error term below assumes "
+            "one seed",
+            f"{mark}  effect common to every arm. Where a contrast's own pair correlates less "
+            "than the design average, its",
+            f"{mark}  blocked interval is narrower than its own data supports. Read the unpaired "
+            "row, which rests on the",
+            f"{mark}  sigma reported in section (a), as the conservative interval. The gate "
+            "verdicts are unaffected here.",
+        ]
+    out.append("")
 
     out += [
         f"{mark}(c) THE CONTRASTS",
@@ -2356,7 +2750,8 @@ def render(result: Mapping[str, object]) -> str:
             )
             out.append(
                 f"{mark}    {'':<16} {'':<18} 95% CI [{row['ci_nats'][0]:+.5f}, "
-                f"{row['ci_nats'][1]:+.5f}] nats"
+                f"{row['ci_nats'][1]:+.5f}] nats, half-width {row['five_percent_bpb'] * NATS_PER_BPB:.5f}, "
+                f"built on sigma {row['sigma_nats']:.5f} at df {row['sigma_df']}"
             )
             out.append(
                 f"{mark}    {'':<16} {'':<18} gate {GATE_SIGMAS:.0f} SE = "
@@ -2388,14 +2783,33 @@ def render(result: Mapping[str, object]) -> str:
                     )
         out.append("")
 
-    out += [f"{mark}(d) PER SOURCE, because a pooled mean hides an effect in one source"]
+    out += [
+        f"{mark}(d) PER SOURCE, because a pooled mean hides an effect in one source",
+        f"{mark}  'of level' is the delta as a fraction of that source's own comparator loss, "
+        "and 'of total' is its",
+        f"{mark}  share of the summed effect. The two columns can tell opposite stories: an "
+        "effect uniform in the first",
+        f"{mark}  is concentrated in the second wherever the sources differ in difficulty, and "
+        "only the first is a",
+        f"{mark}  statement about the intervention rather than about the corpus.",
+    ]
     for entry in result["per_source"]:  # type: ignore[index]
         out.append(f"{mark}  {entry['name']}")
+        total = sum(abs(float(r["delta_nats"])) for r in entry["rows"]) or float("nan")
+        relatives = [100.0 * float(r["relative"]) for r in entry["rows"]]
         for row in entry["rows"]:
             out.append(
                 f"{mark}    {row['source']:<18} delta {row['delta_nats']:+.5f} nats  "
                 f"SE {row['se_bpb'] * NATS_PER_BPB:.5f}  p {row['p_value']:.4f}  "
+                f"{100.0 * float(row['relative']):+.3f}% of level  "
+                f"{100.0 * abs(float(row['delta_nats'])) / total:4.1f}% of total  "
                 f"{'clears the gate' if row['clears_gate'] else '-'}"
+            )
+        if len(relatives) > 1:
+            out.append(
+                f"{mark}    {'':<18} relative spread {min(relatives):+.3f}% to "
+                f"{max(relatives):+.3f}%, mean {float(np.mean(relatives)):+.3f}%, "
+                f"sd {float(np.std(relatives, ddof=1)):.3f} points"
             )
     out.append("")
 
@@ -2426,6 +2840,66 @@ def render(result: Mapping[str, object]) -> str:
                 + ("; the arms separate completely" if item["complete_separation"] else "")
             )
     out.append("")
+
+    gaps = result.get("train_loss_gap") or []
+    if gaps:
+        window = gaps[0]["window"]
+        out += [
+            f"{mark}(e2) THE SAME CONTRAST ON TRAINING LOSS -- a different measurement, not a "
+            "second opinion",
+            f"{mark}  Training CE is the mixture-weighted loss on the training proportions; the "
+            "endpoint is the UNWEIGHTED",
+            f"{mark}  mean over seven held-out sources. They are two weightings of overlapping "
+            "distributions, so they cannot",
+            f"{mark}  corroborate each other and the gap between them is a real quantity. What "
+            "agreement in SIGN does rule",
+            f"{mark}  out: an effect living only in the evaluation, and memorization, which "
+            "would put the training gap ahead.",
+        ]
+        for row in gaps:
+            verdict = "same sign" if row["same_sign"] else "OPPOSITE SIGN -- read no further"
+            out += [
+                f"{mark}    {row['arm']} vs baseline, training CE over steps "
+                f"{window[0]:,}-{window[1]:,}",
+                f"{mark}      held-out {row['endpoint_gap_nats']:+.5f} nats against training "
+                f"{row['train_gap_nats']:+.5f} nats: {verdict}",
+                f"{mark}      they differ by {row['disagreement_nats']:+.5f} "
+                f"[{row['disagreement_ci_nats'][0]:+.5f}, {row['disagreement_ci_nats'][1]:+.5f}], "
+                f"p = {row['p_value']:.4f}",
+            ]
+        out.append("")
+
+    budgets = result.get("equal_compute") or []
+    if budgets:
+        out += [
+            f"{mark}(e3) THE SAME CONTRAST AT EQUAL WALL CLOCK  [post-hoc 2026-08-10, secondary]",
+            f"{mark}  The pre-registered endpoint is at equal STEPS, which is the comparison the "
+            "two papers argue about. This",
+            f"{mark}  is the one a practitioner buys: same machine, same hours, which arm is "
+            "further ahead. Nothing here is",
+            f"{mark}  extrapolated. The budget lands between two evaluations, so both brackets "
+            "are given and the headline is",
+            f"{mark}  the upper one -- the reading that hands the treatment compute it did not "
+            "have.",
+        ]
+        for row in budgets:
+            verdict = "BEHIND the baseline" if row["behind"] else "ahead of the baseline"
+            low, high = row["lower_bracket"], row["upper_bracket"]
+            out += [
+                f"{mark}    {row['arm']}: the baseline's {row['comparator_step']:,} steps cost "
+                f"{row['budget_seconds']:,.0f} s at "
+                f"{row['comparator_seconds_per_step']:.3f} s/step;",
+                f"{mark}      {row['arm']} runs at {row['seconds_per_step']:.3f} s/step "
+                f"({row['seconds_per_step'] / row['comparator_seconds_per_step']:.2f}x), so in "
+                f"that budget it is between steps {row['step_at_budget']:,} and "
+                f"{(row['next_step'] or row['step_at_budget']):,}",
+                f"{mark}      at step {high['step']:,}, which it had NOT finished: "
+                f"{high['gap_nats']:+.5f} nats "
+                f"[{high['ci_nats'][0]:+.5f}, {high['ci_nats'][1]:+.5f}] -- {verdict}",
+                f"{mark}      at step {low['step']:,}, which it had: {low['gap_nats']:+.5f} nats "
+                f"[{low['ci_nats'][0]:+.5f}, {low['ci_nats'][1]:+.5f}]",
+            ]
+        out.append("")
 
     dose_block = str((result.get("dose") or {}).get("rendered") or "")
     if dose_block:
@@ -2695,7 +3169,14 @@ def _cache_load(path: str) -> List[ArmSeries]:
             f"{path} is not a cache of measured data -- it is labelled "
             f"{payload.get('label')!r}. Delete it and re-read W&B."
         )
-    return [ArmSeries(**entry) for entry in payload["arms"]]
+    arms = [ArmSeries(**entry) for entry in payload["arms"]]
+    for arm in arms:
+        # JSON has no integer keys, so a round trip turns `runtime` into a dict keyed by strings
+        # and every step lookup silently misses. Silently, because a miss reads as "this arm
+        # recorded no runtime here", which is indistinguishable from an arm that genuinely did
+        # not -- the equal-wall-clock section would just quietly disappear from a cached re-run.
+        arm.runtime = [{int(k): float(v) for k, v in cell.items()} for cell in arm.runtime]
+    return arms
 
 
 def _cache_save(path: str, arms: Sequence[ArmSeries]) -> None:

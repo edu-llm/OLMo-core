@@ -748,6 +748,92 @@ def stability(arms: Sequence, result: Mapping[str, object], path: str) -> str:
     return _finish(fig, result, path)
 
 
+def equal_compute(arms: Sequence, result: Mapping[str, object], path: str) -> str:
+    """
+    The same curves against wall clock instead of against steps, where the ordering reverses.
+
+    THE X AXIS IS THE WHOLE POINT. Every other figure here puts the step count on the bottom,
+    which is the pre-registered comparison and the one the two papers argue about. A reader who
+    sees only those figures will conclude the mechanism is worth having, because at equal steps
+    it plainly is. Drawn against hours on the same machine, the arm that costs 1.7x per step is
+    behind for the entire run and the conclusion inverts. Both are true; showing only one is the
+    misleading choice, so this is a figure rather than a paragraph.
+
+    :param arms: The arms as read.
+    :param result: What ``analysis.analyse`` returned.
+    :param path: Where to write the PNG.
+
+    :returns: The path written.
+    """
+    plt = _style()
+    ordered = _ordered(arms, result)
+    rows = {str(r["arm"]): r for r in (result.get("equal_compute") or [])}
+    fig, axis = plt.subplots(figsize=(7.8, 4.8))
+
+    budget = None
+    for arm in ordered:
+        hours, values, spread = [], [], []
+        for step in arm.steps:
+            seconds = arm.seconds_at(step)
+            if seconds is None or step == 0:
+                continue
+            column = np.asarray(arm.bpb, dtype=float)[:, arm.steps.index(step), :].mean(axis=1)
+            hours.append(seconds / 3600.0)
+            values.append(float(column.mean()) * NATS_PER_BPB)
+            spread.append((float(column.min()) * NATS_PER_BPB, float(column.max()) * NATS_PER_BPB))
+        if not hours:
+            continue
+        colour = PALETTE.get(arm.arm, "#888888")
+        axis.plot(
+            hours,
+            values,
+            color=colour,
+            marker=MARKERS.get(arm.arm, "o"),
+            markersize=3.4,
+            linewidth=1.5,
+            label=f"{arm.arm} (n={len(arm.seeds)})",
+        )
+        axis.fill_between(
+            hours,
+            [s[0] for s in spread],
+            [s[1] for s in spread],
+            color=colour,
+            alpha=0.16,
+            linewidth=0,
+        )
+        if arm.arm == "baseline":
+            budget = hours[-1]
+
+    if budget is not None:
+        axis.axvline(budget, color="#4d4d4d", linestyle="--", linewidth=1.0)
+        told = [
+            f"the baseline finishes its 6,000 steps at {budget:.1f} h,",
+            "and in that same budget",
+        ]
+        told += [
+            f"    {name} is {float(row['gap_nats']):+.4f} nats behind" for name, row in rows.items()
+        ]
+        axis.annotate(
+            "\n".join(told),
+            (budget, 0.42),
+            xycoords=("data", "axes fraction"),
+            textcoords="offset points",
+            xytext=(10, 0),
+            ha="left",
+            va="center",
+            fontsize=7.8,
+            color="#333333",
+        )
+    axis.set_xlabel("wall clock on the same 8xA100 node (hours)")
+    axis.set_ylabel("held-out cross-entropy (nats)\nunweighted mean of 7 sources")
+    axis.set_title(
+        "At equal compute the ordering reverses\n"
+        "band is the range over seeds; the pre-registered endpoint is at equal STEPS, not here"
+    )
+    axis.legend(loc="upper right")
+    return _finish(fig, result, path)
+
+
 def draw(
     arms: Sequence,
     result: Mapping[str, object],
@@ -770,10 +856,13 @@ def draw(
         "endpoint": endpoint,
         "per-source": per_source,
         "stability": stability,
+        "equal-compute": equal_compute,
     }
     written = []
     for name, function in wanted.items():
         if only and name not in only:
+            continue
+        if name == "equal-compute" and not result.get("equal_compute"):
             continue
         written.append(function(arms, result, os.path.join(out, f"{prefix}{name}.png")))
     return written

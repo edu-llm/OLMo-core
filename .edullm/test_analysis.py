@@ -34,6 +34,7 @@ import sys
 
 import numpy as np
 import pytest
+from scipy import stats
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -663,6 +664,127 @@ def test_the_block_fit_uses_the_randomized_block_error_df():
     assert fit.df_paired == (4 - 1) * (5 - 1) == 12
     assert fit.df_unpaired == 4 * (5 - 1) == 16
     assert fit.df_paired < fit.df_unpaired, "pairing is bought with degrees of freedom"
+
+
+def test_every_interval_names_the_sigma_it_was_built_from():
+    """
+    The report quotes a pooled sigma at the top and an interval below it that comes from the
+    blocked residual, which is 30% smaller on this tranche. Both are defensible; a reader
+    reconstructing ``delta +/- t x SE`` from the headline number and getting a narrower answer
+    than the one printed is not, and the only fix is for the row to say which sigma it used.
+    """
+    result = an.analyse(an.synthetic_tranche({"faithful": -0.010, "mhc": -0.005}))
+    seen = 0
+    for entry in result["contrasts"]:
+        for row in entry.get("rows", []):
+            half = row["ci_nats"][1] - row["delta_nats"]
+            implied = (
+                stats.t.ppf(0.975, row["sigma_df"])
+                * row["sigma_nats"]
+                * math.sqrt(2.0 / an.SEEDS_PER_ARM)
+            )
+            assert implied == pytest.approx(half, rel=1e-9), (
+                f"{entry['name']} {row['analysis']}: the stated sigma does not rebuild the "
+                "interval printed beside it"
+            )
+            seen += 1
+    assert seen, "no rows were checked, so this test asserts nothing"
+
+
+def test_the_blocked_interval_is_flagged_when_compound_symmetry_fails():
+    """
+    Pooling one seed effect across every arm is only the error term of a given contrast if each
+    pair of arms correlates across seeds by about the same amount. On the measured tranche they
+    span 0.25 to 0.75, so the blocked interval is narrower than H1's own pair supports, and the
+    report has to say so rather than leave it in the choice of estimator.
+    """
+    arms = an.synthetic_tranche({"faithful": -0.010, "output-only": -0.005, "mhc": -0.005})
+    # One arm whose seeds are re-drawn independently, so it shares no seed effect with the rest
+    # while the others still do.
+    stray = arms[-1]
+    rng = np.random.default_rng(11)
+    values = np.asarray(stray.bpb, dtype=float)
+    stray.bpb = (values + rng.normal(0.0, 0.002, (values.shape[0], 1, 1))).tolist()
+
+    result = an.analyse(arms)
+    pairing = result["pairing"]
+
+    assert len(pairing["rho_every_pair"]) == 6, "every pair of four arms should be reported"
+    assert pairing["compound_symmetry_doubtful"], pairing["rho_every_pair"]
+    assert "COMPOUND SYMMETRY DOES NOT HOLD" in an.render(result)
+
+
+def test_the_arm_that_costs_more_per_step_is_read_at_equal_wall_clock_too():
+    """
+    The pre-registered endpoint is at equal steps, which is the right comparison for the papers'
+    question and the wrong one for whether to use the thing. An arm at 1.7x the cost per step
+    gets 1.7x fewer steps for the same machine-hour, and the sign can flip.
+    """
+    result = an.analyse(an.synthetic_tranche({"faithful": -0.010, "mhc": -0.005}))
+    rows = {row["arm"]: row for row in result["equal_compute"]}
+
+    assert "faithful" in rows, "the equal-wall-clock reading did not run"
+    row = rows["faithful"]
+    assert row["seconds_per_step"] > row["comparator_seconds_per_step"]
+    assert (
+        row["step_at_budget"] < row["comparator_step"]
+    ), "an arm that costs more per step must reach a shallower step in the same wall clock"
+    assert row["behind"], "a 1.7x-cost arm cannot be ahead on a curve that is still falling"
+    # The headline is the bracket the treatment had NOT reached, so the verdict rests on the
+    # reading that flatters it.
+    assert row["upper_bracket"]["step"] > row["step_at_budget"]
+    assert row["gap_nats"] == row["upper_bracket"]["gap_nats"]
+    assert row["upper_bracket"]["gap_nats"] < row["lower_bracket"]["gap_nats"]
+
+
+def test_a_short_arm_says_which_seeds_it_is_missing_and_what_they_were_worth():
+    """
+    The hazard this exists for: three of five cells landed on `mhc` and they were its three
+    easiest seeds, because the same seed is the highest-loss one in every arm. A mean over the
+    survivors is biased and the size of the bias is measurable off the complete arms, so it is
+    reported rather than left as "n = 3".
+    """
+    arms = an.synthetic_tranche({"faithful": -0.010, "output-only": -0.005, "mhc": -0.005})
+    short = next(a for a in arms if a.arm == "mhc")
+    # Rank the seeds by how they score on the complete arms, then drop the two hardest, which is
+    # the shape of the real shortfall rather than an arbitrary one.
+    base = next(a for a in arms if a.arm == "baseline")
+    order = list(np.argsort(base.endpoint_matrix().mean(axis=1)))
+    keep = sorted(int(i) for i in order[:3])
+    for attribute in ("seeds", "run_ids", "states", "summary_steps", "history_steps", "bpb", "ce"):
+        setattr(short, attribute, [getattr(short, attribute)[i] for i in keep])
+    for attribute in ("declined", "largest_trigger", "declined_steps", "declined_norms"):
+        setattr(short, attribute, [getattr(short, attribute)[i] for i in keep])
+
+    bias = an.seed_selection_bias(arms, short)
+    assert bias is not None
+    assert bias["held"] == keep and len(bias["missing"]) == 2
+    assert bias["bias_nats"] < 0, "keeping the easiest seeds must flatter the arm"
+
+    problems = " ".join(an.completeness_refusals(arms))
+    assert "not a random subset" in problems
+    assert "BETTER" in problems, "the direction of the bias is the point of reporting it"
+
+
+def test_the_training_loss_is_reported_as_a_second_measurement_and_not_as_agreement():
+    """
+    The endpoint is unweighted over seven held-out sources and training CE is mixture-weighted,
+    so the two cannot corroborate each other -- and on the measured tranche they differ by more
+    than half of what H2a is worth. What agreement in sign does establish is narrower and is the
+    only thing claimed: the effect is not an evaluation artifact and is not memorization.
+    """
+    result = an.analyse(an.synthetic_tranche({"faithful": -0.010, "mhc": -0.005}))
+    rows = {row["arm"]: row for row in result["train_loss_gap"]}
+
+    assert "faithful" in rows
+    row = rows["faithful"]
+    assert row["same_sign"]
+    assert (
+        row["disagreement_ci_nats"][0] <= row["disagreement_nats"] <= row["disagreement_ci_nats"][1]
+    )
+    text = an.render(result)
+    assert "not a second opinion" in text
+    assert "corroborate" in text
 
 
 def test_a_post_hoc_contrast_cannot_inflate_a_pre_registered_p_value():
