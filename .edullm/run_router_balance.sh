@@ -30,14 +30,13 @@ mkdir -p "${RB_DIR}"
 say() { printf '\n===== %s :: %s =====\n' "$(date -u +%H:%M:%SZ)" "$*"; }
 
 say "router-balance sweep starting"
-python - <<'PY'
-import os, subprocess, sys
-print("nvidia-smi:")
-sys.stdout.flush()
-subprocess.run(["nvidia-smi", "--query-gpu=index,name,memory.total", "--format=csv"], check=False)
-for key in ("EDULLM_RUN_ID", "EDULLM_OUTPUT_PREFIX", "EDULLM_DATA_BUCKET", "EDULLM_CHECKPOINT_DIR"):
-    print(f"{key}={os.environ.get(key, '<unset>')}")
-PY
+command -v nvidia-smi >/dev/null 2>&1 \
+  && nvidia-smi --query-gpu=index,name,memory.total --format=csv \
+  || echo "no nvidia-smi on this image"
+for key in EDULLM_RUN_ID EDULLM_OUTPUT_PREFIX EDULLM_DATA_BUCKET EDULLM_CHECKPOINT_DIR; do
+  eval "printf '%s=%s\n' \"${key}\" \"\${${key}:-<unset>}\""
+done
+python -c "import torch; print('torch', torch.__version__, 'cuda', torch.cuda.is_available(), torch.cuda.device_count(), 'devices')"
 
 say "GATE 1/2: the three overrides the earlier report recommends still reach their modules"
 if ! python .edullm/verify_router_overrides.py; then
@@ -57,7 +56,16 @@ python .edullm/router_balance_arms.py --commands --nproc "${NPROC}"
 if [ "$#" -gt 0 ]; then
   ARMS=("$@")
 else
-  mapfile -t ARMS < <(python .edullm/router_balance_arms.py --names)
+  # A read loop rather than `mapfile`, which wants bash 4 and would fail on an older image in a
+  # way that reads as an empty arm list rather than as a missing builtin.
+  ARMS=()
+  while IFS= read -r name; do
+    [ -n "${name}" ] && ARMS+=("${name}")
+  done < <(python .edullm/router_balance_arms.py --names)
+fi
+if [ "${#ARMS[@]}" -eq 0 ]; then
+  say "no arms to run -- the table came back empty"
+  exit 2
 fi
 say "arms: ${ARMS[*]}"
 
