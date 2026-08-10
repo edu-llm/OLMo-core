@@ -106,9 +106,13 @@ command: >-
 #
 # It is left off because it changes the model. Routing differs from step one, so the control every
 # arm is compared against would no longer be plain OLMoE, and every arm would have to carry the
-# same flag or the comparison is confounded. That is the owner's call and not this file's. See
-# `docs-frank/working/final-model/mfu.md` in the platform repository for the evidence, and for the
-# twenty-minute experiment that would settle it before the money is spent.
+# same flag or the comparison is confounded. That is the owner's call and not this file's, and the
+# evidence for it is the paragraph above rather than a document somewhere else: 4.9-6.9 measured
+# imbalance a block, and an ablation on this architecture that put balanced routing 20% ahead of
+# learned token-choice routing. What nobody has is the figure for this model on this fleet, and
+# that is the cheap half -- a twenty-minute probe answers it, against the fifteen hours on 64
+# cards the run spends either way. Leaving the flag off is as much a decision as setting it, so
+# it is worth taking as one rather than by omission.
 #
 # WHICHEVER WAY IT GOES, IT HAS TO GO THAT WAY BEFORE STEP ONE. The router registers a
 # `score_bias` buffer only when gamma is set, so the flag changes the state dict: a checkpoint
