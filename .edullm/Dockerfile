@@ -214,12 +214,95 @@ COPY pyproject.toml ./
 # The import assertion below is the same argument as the one above it: `import edullm_data`
 # would prove the distribution installed, and `from edullm_data.read import dataset_paths`
 # proves the module a training run actually reaches for loads.
+#
+# ---------------------------------------------------------------------------------------------
+# flash-attn 2 IS INSTALLED HERE, AND IT IS AN ARITHMETIC FIX RATHER THAN A KERNEL PREFERENCE.
+#
+# Without it, `TorchAttentionBackend` is what every Maple layer runs, and its sliding-window
+# path is a PESSIMIZATION, not a saving. `nn/attention/backend.py:416-448` materializes a dense
+# `(s, s)` boolean mask, and `:371` reads `is_causal=attn_mask is None` -- so the moment a
+# window exists, `is_causal` goes False and SDPA loses its causal fast path. A sliding layer
+# then computes the FULL `s x s` score matrix and throws away `1 - 512/s` of it. Our 3:1
+# SWA:global layout therefore executes ~1.75x the attention arithmetic of plain global causal
+# attention: Maple's headline efficiency feature, inverted. flash-attn takes the window as a
+# native `window_size` argument instead (`backend.py:634-648`, `flash_attn_api.py`), so the
+# kernel never forms the masked-out blocks at all.
+#
+# It also removes a second, latent failure. torch SDPA raises on intra-document masking, so a
+# packed-corpus run with `generate_doc_lengths=True` dies at the first global layer; flash-attn
+# supports it.
+#
+# NOTHING IN THE CODE NEEDS A FLAG FOR THIS. `_maple_uniform_attn_backend()`
+# (`nn/transformer/config.py:40-62`) probes `flash_attn_api.has_flash_attn_2()` at call time and
+# returns `flash_2` when the import succeeds, `torch` otherwise. Installing the package is the
+# whole switch, and the choice stays uniform across sliding and global layers -- which is the
+# property that keeps MFU comparable, since MFU is the E-sweep's dependent variable.
+#
+# ############# READ BEFORE CHANGING THIS LINE: THE sm_80 TRAP. #############
+#
+# THIS MUST STAY A PREBUILT WHEEL. DO NOT "TIDY" IT INTO `pip install flash-attn==...`.
+#
+# `src/Dockerfile:58-59` -- the AI2 Beaker image, NOT this one -- does exactly that, and it
+# does it with `FLASH_ATTN_CUDA_ARCHS="90;100"`, which builds for Hopper and Blackwell and
+# EXCLUDES sm_80. Our funded target is 8xA100, which IS sm_80. Copying that line here would
+# produce an image that builds green and dies at the first A100 micro-step -- and on the
+# platform, a crash gets NO retry (retries fire only on `Host EC2*`), so the whole run is paid
+# for and lost.
+#
+# This is not hypothetical; it is the second occurrence of one bug. `grouped_gemm` was
+# installed with upstream's `TORCH_CUDA_ARCH_LIST="9.0 10.0"` (`src/Dockerfile:55`), built
+# clean, and failed at the first GPU call. A BUILD THAT SUCCEEDS IS NOT EVIDENCE THE KERNEL
+# RUNS ON OUR HARDWARE.
+#
+# Naming the release asset sidesteps the trap entirely: there is no compile step, so there is
+# no arch list to get wrong. And the published wheel does contain sm_80 -- upstream's
+# `publish.yml` sets no `FLASH_ATTN_CUDA_ARCHS`, so `setup.py`'s default `"80;90;100;120"`
+# applies and `-gencode arch=compute_80,code=sm_80` is emitted unconditionally at
+# `setup.py:180-181`. That is why this file pins the ASSET and the Beaker file pins a VERSION:
+# the asset is a decision already made correctly by someone else, and a version is an
+# invitation to remake it.
+#
+# THE FILENAME IS THE COMPATIBILITY CONTRACT, and every field in it is load-bearing:
+#   2.8.3          the newest release publishing a torch-2.9 wheel (2.8.2 stops at torch 2.8)
+#   cu12           against the `nvidia-*-cu12` stack torch 2.9.0's own wheel depends on
+#   torch2.9       matches the `torch==2.9.0` pin on the first line of this RUN
+#   cxx11abiTRUE   torch 2.9.0's manylinux wheels are C++11-ABI; FALSE would fail to link
+#   cp312          the registered base carries python 3.12.13
+#   linux_x86_64   the platform's A100 shape is `p4d.24xlarge`
+# If the torch pin above ever moves, THIS URL MOVES WITH IT or the extension will not load.
+#
+# `--no-deps` because the wheel's `install_requires` is `["torch", "einops"]`: torch is already
+# pinned above and must not be re-resolved by a bare `torch` requirement, and `einops` is
+# therefore named explicitly on the same invocation.
+#
+# THE HASH IS CHECKED, AND IT GOES THROUGH A REQUIREMENTS FILE BECAUSE IT HAS TO. `--hash` is
+# NOT a command-line option -- `pip install <url> --hash=sha256:...` fails with `no such option`
+# (verified against pip 25.1.1). It is only recognized inside a requirements file, and naming any
+# hash there implies `--require-hashes` for that file, which is the behaviour wanted: pip refuses
+# the install rather than warning. Written inline rather than committed as a separate file so the
+# URL and its digest cannot drift apart across two locations.
+#
+# ON ONE LINE, WITH NO `\` CONTINUATION, deliberately. A requirements file may continue a line with
+# a trailing backslash, but a backslash inside a Dockerfile RUN is already the shell's and Docker's
+# escape character, and getting it to survive both would need escaping that reads as a typo. One
+# long line has no such ambiguity. Verified with pip's own parser that this form binds the digest to
+# the requirement: `parse_requirements` yields the URL with
+# `options={'hashes': {'sha256': [...]}}`.
+#
+# Worth the ceremony because this is a 254 MiB binary fetched from a redirect chain outside PyPI
+# (GitHub hands the request to release-assets.githubusercontent.com), into an image an untrusted
+# training command runs inside. Digest read from the GitHub release API on 2026-08-09; it is the
+# asset's own recorded sha256, not one computed locally.
 RUN set -eux; \
     python -m pip install --no-cache-dir "torch==2.9.0"; \
     python -c "import tomllib; project = tomllib.load(open('pyproject.toml', 'rb'))['project']; open('/tmp/dependencies.txt', 'w').write('\n'.join(project['dependencies'] + project['optional-dependencies']['wandb']) + '\n')"; \
     python -m pip install --no-cache-dir -r /tmp/dependencies.txt boto3 "botocore[crt]"; \
     rm /tmp/dependencies.txt; \
-    python -m pip install --no-cache-dir "edullm-data @ https://github.com/edu-llm/edullm-data/archive/38bf831a6c3f445e394784018441fd59288b876c.tar.gz"
+    python -m pip install --no-cache-dir "edullm-data @ https://github.com/edu-llm/edullm-data/archive/38bf831a6c3f445e394784018441fd59288b876c.tar.gz"; \
+    python -m pip install --no-cache-dir einops; \
+    printf '%s\n' "flash-attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3%2Bcu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl --hash=sha256:4e2f9e39313266b1544b68138b15b91ee6221eccf14f7902b7c6620351340810" > /tmp/flash-attn.txt; \
+    python -m pip install --no-cache-dir --no-deps -r /tmp/flash-attn.txt; \
+    rm /tmp/flash-attn.txt
 
 # The build context is the repository root, so the root .dockerignore is what keeps .git
 # out of this layer, and out of the context entirely.
@@ -287,10 +370,44 @@ COPY . .
 # 0xE3069283 and the platform's checkpoints.py asserts against the same constant. It costs a
 # microsecond and it is the difference between "botocore will use this" and "and the number
 # it gets is right".
+#
+# THE flash-attn CHECK IS THE `import olmo_core` MISTAKE NOT REPEATED, and it is deliberately
+# TWO steps rather than one.
+#
+# `import flash_attn` alone is the shallow version: it would prove a 254 MiB directory is on
+# disk. What has to hold is that the COMPILED EXTENSION LOADS -- `flash_attn_2_cuda`, which
+# `flash_attn/flash_attn_interface.py:15` hard-imports and which is where an ABI or CUDA-stack
+# mismatch actually surfaces. So that submodule is named directly.
+#
+# The second step is the one that matters for this image's PURPOSE, because a loadable wheel
+# that the model never reaches is worth nothing: it asserts `_maple_uniform_attn_backend()`
+# actually resolves to `flash_2`. That function is the ONLY switch -- there is no config flag --
+# and it silently returns `torch` when the import fails, which is exactly the outcome this
+# install exists to prevent and exactly the outcome that leaves no trace in a config dump.
+# Before this line existed the failure mode was: image builds, run starts, every layer quietly
+# takes the dense-`(s, s)`-mask path, and the SWA layers burn ~1.75x the attention arithmetic of
+# global attention while the logs look ordinary.
+#
+# NOT ASSERTED HERE: that the sm_80 cubin runs. No build runner has a GPU, so nothing at build
+# time can establish it -- which is the whole reason the install above names a wheel whose arch
+# list is upstream's audited default instead of compiling with one written by hand.
+#
+# IF THE BUILD FAILS ON THIS PAIR, READ THIS BEFORE TOUCHING THE INSTALL. The runner has no NVIDIA
+# driver, so `libcuda.so.1` may be unresolvable there. A C-extension dlopen failure raises
+# ImportError, and `flash_attn_api` wraps its import in `try/except ImportError` -- so a driverless
+# runner would make `has_flash_attn_2()` answer False and trip the second assertion, on an image
+# that is perfectly good on a GPU host. THAT IS A FALSE NEGATIVE, NOT A BAD WHEEL, and the remedy
+# is to weaken THESE TWO LINES to a file-existence check
+# (`python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('flash_attn_2_cuda') else 1)"`)
+# -- NOT to drop the wheel and NOT to switch to a source build, which is how the sm_80 trap above
+# gets re-entered. Untested either way at the time of writing: this image has never loaded a CUDA
+# extension at build time, so which way it goes is unknown until the first build.
 RUN set -eux; \
     python -m pip install --no-cache-dir ".[wandb]"; \
     python -c "import torch; assert torch.__version__.startswith('2.9.0'), f'torch was moved off the pin: {torch.__version__}'"; \
     python -c "import torch; assert torch.version.cuda, 'the CUDA build of torch was replaced by a CPU wheel'"; \
+    python -c "import flash_attn, flash_attn_2_cuda; print('flash-attn', flash_attn.__version__)"; \
+    python -c "from olmo_core.nn.transformer.config import _maple_uniform_attn_backend; from olmo_core.nn.attention import AttentionBackendName; b = _maple_uniform_attn_backend(); assert b == AttentionBackendName.flash_2, f'Maple layers would fall back to the dense-mask SWA path: {b}'"; \
     python -c "import boto3, wandb; from olmo_core.data import TokenizerConfig; from olmo_core.nn.transformer import TransformerConfig; print(TransformerConfig.olmo2_190M(vocab_size=TokenizerConfig.gpt2().padded_vocab_size()).__class__.__name__)"; \
     python -c "import boto3; from botocore import UNSIGNED; from botocore.config import Config; from botocore.stub import Stubber; client = boto3.client('s3', region_name='us-east-1', config=Config(signature_version=UNSIGNED)); stub = Stubber(client); stub.add_response('put_object', {}); stub.activate(); client.put_object(Bucket='b', Key='k', Body=b'123456789', ChecksumAlgorithm='CRC32C')"; \
     python -c "from awscrt.checksums import crc32c; assert crc32c(b'123456789') == 0xE3069283, 'awscrt computes something other than CRC-32C'"; \
