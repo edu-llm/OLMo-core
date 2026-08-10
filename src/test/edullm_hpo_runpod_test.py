@@ -439,6 +439,34 @@ def test_stager_accepts_sealed_resolved_split_without_identity_attributes():
     ]
 
 
+def test_stager_omits_heldout_partition_from_curriculum_order_release():
+    module = load_script("stage_inputs.py")
+
+    class Read:
+        paths = ["s3://edullm-data/example/train.bin"]
+        val = ["s3://edullm-data/example/val.bin"]
+        dtype = "uint32"
+        byte_order = sys.byteorder
+        header_bytes = 0
+
+    def dataset_paths(dataset_id, version, *, s3, group=None):
+        del version, s3, group
+        read = Read()
+        if dataset_id == module.ORDER_DATASET_ID:
+            read.dtype = "uint64"
+        return read
+
+    releases = module.resolve_release_inputs(
+        dataset_paths,
+        object(),
+        release_set="curriculum",
+    )
+
+    parent, order = releases
+    assert parent["val_uris"] == ["s3://edullm-data/example/val.bin"]
+    assert order["val_uris"] == []
+
+
 def test_stager_rejects_registry_release_with_wrong_immutable_manifest():
     module = load_script("stage_inputs.py")
 

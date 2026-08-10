@@ -189,6 +189,7 @@ def resolve_release_inputs(
             "manifest_sha256": None,
             "tokenizer_id": TOKENIZER_ID,
             "require_val": True,
+            "stage_val": True,
         },
         {
             "dataset_id": PARENT_DATASET_ID,
@@ -199,6 +200,7 @@ def resolve_release_inputs(
             "manifest_sha256": PARENT_MANIFEST_SHA256,
             "tokenizer_id": TOKENIZER_ID,
             "require_val": True,
+            "stage_val": True,
         },
         {
             "dataset_id": ORDER_DATASET_ID,
@@ -209,6 +211,7 @@ def resolve_release_inputs(
             "manifest_sha256": ORDER_MANIFEST_SHA256,
             "tokenizer_id": None,
             "require_val": False,
+            "stage_val": False,
         },
     ]
     if release_set not in {"all", "legacy", "curriculum"}:
@@ -246,6 +249,8 @@ def resolve_release_inputs(
             label=f"{request['dataset_id']}/{request['version']}",
             require_val=bool(request["require_val"]),
         )
+        if not bool(request["stage_val"]):
+            val_uris = []
         releases.append(
             {
                 "dataset_id": request["dataset_id"],
