@@ -13,7 +13,7 @@ fresh `edullm check --json`.
 - Repository: `edu-llm/OLMo-core`
 - Local checkout: `/home/vs/AlphaAI/eduLLM/OLMo-core-flash-pd`
 - Branch: `edullm/mamba-comparison`
-- Current pushed commit: `25fd8b1b0f74a48d19fb16a6555877f6c79fedcc`
+- Current pushed commit: `b9e36c3061e531de006a306344a18f02a8220218`
 - CLI observed while writing this handoff: `edullm 4.5.0`
 - Smoke spec: `.edullm/run-throughput-smoke.yaml`
 - Entrypoint: `.edullm/train_core6_arm.py`
@@ -24,18 +24,18 @@ fresh `edullm check --json`.
 
 The pushed commit has a successful image publication:
 
-- [green image workflow for `25fd8b1`](https://github.com/edu-llm/OLMo-core/actions/runs/31337817052)
+- [green image workflow for `b9e36c3`](https://github.com/edu-llm/OLMo-core/actions/runs/31349315734)
 - all three checks, including `Build and publish image`, completed successfully.
 
-That image predates the uncommitted eight-arm/KDA/PD-optimization work described
-below and cannot run it. Fresh non-dispatching checks against all three current
-specs report only `uncommitted_changes`; no manifest, profile, kernel, compute,
-or policy refusal remains. Commit and push the complete tree, wait for a green
-image workflow on that exact SHA, fetch the remote-tracking ref, and rerun the
-checks before submitting.
+That image contains the eight-arm/KDA/GDN2 implementation and the underlying PD
+optimization code. It predates the five-file follow-up currently in the working
+tree: explicit unfused projection choices for both PD arms, their red-first
+contract assertions, and the corrected throughput/review/handoff records. Commit
+and push those bytes, wait for a green image workflow on that exact SHA, fetch
+the remote-tracking ref, and rerun the checks before submitting.
 
 The local working tree now contains a later, uncommitted comparison-budget and
-review update. Those bytes are **not** in the `dac343f` image:
+review update. Those bytes are **not** in the `b9e36c3` image:
 
 - the image imports Torch before `_flash_pd_native_cuda`, loading `libc10.so`;
 - bare/default submissions now run a bounded ten-step functional smoke through
@@ -56,10 +56,12 @@ review update. Those bytes are **not** in the `dac343f` image:
 - xLSTM prewarms after rank-local device selection and converts vanilla sLSTM
   parameters into the exact FlashRNN layout on every forward, with coherent
   BF16 kernel roles and no stale FSDP cache;
-- native PD saves forward-contiguous operands and performs no hot-path host
+- native PD saves forward-contiguous operands, uses explicit unfused projections
+  to avoid the fused split-backward concatenation, and performs no hot-path host
   readbacks;
 - Mamba3-SISO-PD keeps complex diagonals in FP32, uses a chunk-parallel
-  backward, and performs no temperature-buffer host readbacks;
+  backward, uses the same measured unfused-projection policy, and performs no
+  temperature-buffer host readbacks;
 - `.dockerignore` excludes local native artifacts, and source builds use a
   fully pinned, non-isolated build-tool closure;
 - the full comparison now matches mixer-bakeoff Run 1's measured per-cell
@@ -67,12 +69,12 @@ review update. Those bytes are **not** in the `dac343f` image:
 - `MIXER_OPTIMIZATION_REVIEW.md` records the independently checked architecture
   and remaining optimization gates.
 
-The latest non-dispatching check was run while only two red-first test files had
-been edited. It correctly refused `uncommitted_changes` and
-`commit_not_pushed`. The branch already contains `dac343f` on GitHub, but this
-checkout's narrow remote-tracking ref is stale. Commit the complete intended
-working tree, push the resulting new SHA, fetch the exact ref, and require a
-green image for that new SHA before submitting.
+Fresh non-dispatching checks against the functional smoke, throughput smoke and
+24-cell wave all report exactly one refusal: `uncommitted_changes`. The local
+remote-tracking ref and GitHub both contain `b9e36c3`, so there is currently no
+`commit_not_pushed` refusal. Commit the complete intended working tree, push the
+resulting new SHA, fetch the exact ref, and require a green image for that SHA
+before submitting.
 
 ### Current Mamba-b3 contract
 

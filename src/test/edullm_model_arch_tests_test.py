@@ -805,6 +805,24 @@ def test_native_pd_chunk_size_is_64_and_the_change_shaped_no_weights():
     assert config.num_params == 390_142_976
 
 
+def test_siso_pd_projection_layout_is_explicitly_unfused():
+    """The measured SISO layout is recorded in the arm, not inherited from a library default."""
+    module = load_entrypoint()
+    from inspect import getsource
+
+    mixers = [module._treatment_mixer("mamba3-siso-pd", index) for index in module.RECURRENT_LAYERS]
+    assert all(mixer.fuse_input_projections is False for mixer in mixers)
+
+    source = getsource(module._treatment_mixer)
+    siso_section = source.split('if arm == "mamba3-siso-pd":', 1)[1]
+    assert "fuse_input_projections=False" in siso_section
+
+    config = module.build_model_config(
+        "mamba3-siso-pd", module.valid_init_seeds("mamba3-siso-pd")[0]
+    )
+    assert config.num_params == 390_169_664
+
+
 def test_every_arm_declares_one_fp32_master_dtype_and_keeps_its_bf16_kernels():
     module = load_entrypoint()
     from olmo_core.config import DType

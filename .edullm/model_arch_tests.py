@@ -538,7 +538,7 @@ def _treatment_mixer(arm: str, layer_index: int):
             bc_norm=True,
             norm_eps=1e-6,
             output_norm=False,
-            fuse_input_projections=True,
+            fuse_input_projections=False,
             dtype=MASTER_DTYPE,
         )
     raise ValueError(f"unsupported arm: {arm}")

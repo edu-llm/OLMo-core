@@ -190,12 +190,13 @@ The canonical shipped model is OLMo-Hybrid-7B:
 The dense OLMo3-370M reference is not a linear-attention hybrid. It is 16
 attention layers with `[SWA, SWA, SWA, global] x 4`.
 
-## Stable local layer benchmark
+## Historical eager local layer benchmark
 
 Source hash was unchanged across the complete run. Measurements are one
-forward+backward mixer layer on an RTX 5050 Laptop GPU, BF16,
+**eager** forward+backward mixer layer on an RTX 5050 Laptop GPU, BF16,
 `B=2, T=1024, D=1024`, after 20 warmup iterations and over 50 measured
-iterations. They are not full-model or A100 results.
+iterations. They are not full-model, compiled, or A100 results and are retained
+only as a historical receipt.
 
 | Mixer | Median ms | Tokens/s |
 | --- | ---: | ---: |
@@ -207,9 +208,19 @@ iterations. They are not full-model or A100 results.
 | Mamba-b3 simple-GLA | 19.974 | 102,535 |
 | Mamba3-SISO-PD | 20.164 | 101,566 |
 
-At this shape native PD is 36.1% slower than GDN2 and Mamba3-SISO-PD is 39.6%
-slower. The official Mamba-b3 path beat simple-GLA by 0.6% locally, so
-simple-GLA must not be promoted from older microbench evidence.
+These numbers no longer describe the training path. Every run compiles each
+block, and parameter matching respends mixer parameters into FFN width. The
+paired compiled sweep in `MIXER_THROUGHPUT.md` supersedes this ranking:
+
+- Mamba-3 b=3 is 1.165x GDN2 in the final-model proxy.
+- Native PD is 1.120x.
+- Mamba3-SISO-PD is 1.067x after its unfused-projection A/B.
+- xLSTM and KDA are within 4% of GDN2.
+- KDA Householder R=2 is the one clear slow and memory-heavy outlier.
+
+The active Mamba-b3 arm selects `simple_gla` as an A100 occupancy hypothesis
+despite `official_fast` winning this old sm120 eager comparison by 0.6%. That
+choice remains gated on the 8xA100 throughput smoke.
 
 ## Why this does not reproduce the Flash PD paper
 
