@@ -8,7 +8,8 @@ OLMo2-370M run on the sealed `pretrain/regmix-10b/v1` corpus.
 - Model: `TransformerConfig.olmo2_370M`, Dolma2 tokenizer, 2,048-token sequences.
 - Data: `pretrain/regmix-10b/v1`.
 - Budget: the largest whole winner batch not exceeding 10B tokens
-  (`9,999,990,784` tokens, `610,351` steps for both registered winners).
+  (`9,999,990,784` tokens at the probe-default 16 Ki batch → `610,351` steps; at the
+  256 Ki batch used for eduLLM / RunPod validation → `38,146` steps).
 - Runtime: eight-rank HSDP, bf16 parameters, fp32 reductions, compilation enabled.
 - Stock optimization behavior retained: `SkipStepAdamWConfig`, embedding weight-decay
   exemption, z-loss `1e-5`, seed `12,536`, and float8 disabled.
@@ -39,8 +40,12 @@ bash /workspace/OLMo-core/.edullm/runpod/launch_final_validation.sh
 ```bash
 VECTOR=no-centaur-winner \
 RUN_SLOT=no-centaur-v1 \
+GLOBAL_BATCH_TOKENS=262144 \
 bash /workspace/OLMo-core/.edullm/runpod/launch_final_validation.sh
 ```
+
+eduLLM submissions use `.edullm/run-final-validation-no-centaur.yaml`, which passes
+`--global-batch-tokens 262144` to match the completed no-proxy validation batch.
 
 The first launch for a new `RUN_SLOT` must use the default `RECOVERY_MODE=fresh`. Do not
 use `retry-startup` for that initial attempt: it can reuse startup identity while the
