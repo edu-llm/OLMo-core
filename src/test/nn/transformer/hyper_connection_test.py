@@ -383,6 +383,64 @@ def test_output_init_scaling_shrinks_the_output_modules():
     )
 
 
+def _residual_rms_by_depth(model: torch.nn.Module, input_ids: torch.Tensor) -> dict:
+    """
+    RMS of the residual stream each block actually reads. The reordered-norm block normalizes
+    after its sublayer rather than before, so the sequence mixer receives the stream itself.
+    """
+    seen: dict = {}
+    handles = [
+        block.attention.register_forward_pre_hook(
+            lambda _mod, args, key=key: seen.__setitem__(
+                key, float(args[0].float().pow(2).mean().sqrt())
+            )
+        )
+        for key, block in model.blocks.items()
+    ]
+    try:
+        with torch.no_grad():
+            model(input_ids)
+    finally:
+        for handle in handles:
+            handle.remove()
+    return seen
+
+
+def test_output_init_scaling_reaches_the_forward_pass():
+    """
+    ``test_output_init_scaling_shrinks_the_output_modules`` checks two weight tensors and stops,
+    so it would pass on an implementation whose scaling never reached the forward pass. Arm 4
+    exists to separate this scaling from the mechanism and only buys something if the scaling
+    moves the model, so the size of the move is worth pinning.
+
+    It moves it a long way, and not in the direction the correction is named for. The lane sum
+    it compensates for is followed by a scale-invariant final norm, so with the correction off
+    the logits are already the baseline's -- which is what
+    ``test_init_is_equivalent_to_the_residual_stack_it_replaces`` asserts. What the correction
+    does instead is hold the residual stream well below the baseline's through the early blocks.
+    """
+    input_ids = torch.randint(0, VOCAB_SIZE, (2, SEQ_LEN))
+    hc = HyperConnectionConfig(n_lanes=4)
+
+    baseline_rms = _residual_rms_by_depth(build_model(build_config()), input_ids)
+    unscaled_rms = _residual_rms_by_depth(
+        build_model(build_config(hyper_connections=replace(hc, output_init_exponent=0.0))),
+        input_ids,
+    )
+    scaled_rms = _residual_rms_by_depth(
+        build_model(build_config(hyper_connections=replace(hc, output_init_exponent=0.5))),
+        input_ids,
+    )
+
+    # Off, the stream is the baseline's block for block.
+    for key, value in unscaled_rms.items():
+        assert value == pytest.approx(baseline_rms[key], rel=1e-4), key
+
+    # On, it is not, and the gap is far too large to be read as a scale the final norm absorbs.
+    assert scaled_rms["0"] == pytest.approx(baseline_rms["0"], rel=1e-4)
+    assert scaled_rms["1"] < 0.75 * baseline_rms["1"]
+
+
 def test_added_flops_keep_the_arms_iso_flop():
     """
     Every arm has to be iso-FLOP with the baseline for the comparison to be legal. At the 370M

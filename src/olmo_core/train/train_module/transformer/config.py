@@ -105,6 +105,12 @@ class TransformerPipelineParallelConfig(PipelineParallelConfig):
                 "share a weight."
             )
 
+        if model.block_reuse is not None:
+            raise NotImplementedError(
+                "Pipeline parallelism is not supported with block reuse: a stage owns a slice of "
+                "the blocks, but a reused block runs at depths that can fall in several stages."
+            )
+
         pp_rank = pp_mesh.get_local_rank()
 
         def build_stage(
@@ -127,6 +133,15 @@ class TransformerPipelineParallelConfig(PipelineParallelConfig):
                     drop_layers = True
                 if drop_layers:
                     del model_chunk.blocks[str(block_idx)]
+
+            # The execution order was resolved for the whole stack, and the chunk holds a slice
+            # of it. Left alone, the chunk's forward pass would look up a block that now lives
+            # on another rank.
+            model_chunk.block_execution_order = [
+                block_idx
+                for block_idx in model_chunk.block_execution_order
+                if str(block_idx) in model_chunk.blocks
+            ]
 
             if not is_last:
                 model_chunk.lm_head = None  # type: ignore

@@ -1,3 +1,5 @@
+from typing import List
+
 import torch
 
 from olmo_core.distributed.parallel import (
@@ -77,4 +79,68 @@ def _run_pp_num_flops_per_token():
 def test_pp_num_flops_per_token():
     run_distributed_test(
         _run_pp_num_flops_per_token, world_size=2, backend="gloo", start_method="spawn"
+    )
+
+
+def _run_pp_stage_runs_the_blocks_it_owns():
+    """
+    A stage holds a contiguous slice of the blocks and has to run that slice, all of it and
+    nothing else. ``num_flops_per_token`` cannot see this because the pipeline train module
+    binds the *unsplit* model's method before splitting, so the only thing that exercises a
+    stage's own block loop is a forward pass through it.
+    """
+    device = torch.device("cpu")
+    seq_len, vocab_size = 32, 128
+
+    transformer_config = TransformerConfig.llama_like(
+        d_model=64,
+        vocab_size=vocab_size,
+        n_layers=4,
+        n_heads=2,
+        feed_forward=FeedForwardConfig(hidden_size=128, bias=False),
+    )
+    train_module_config = TransformerTrainModuleConfig(
+        rank_microbatch_size=seq_len,
+        max_sequence_length=seq_len,
+        optim=AdamWConfig(),
+        pp_config=TransformerPipelineParallelConfig(
+            degree=2, schedule=PipelineScheduleType.single_1F1B, style=PipelineSplitStyle.loop
+        ),
+        dp_config=TransformerDataParallelConfig(name=DataParallelType.ddp),
+    )
+    train_module = train_module_config.build(
+        transformer_config.build(init_device="meta"), device=device
+    )
+
+    input_ids = torch.randint(0, vocab_size, (2, seq_len))
+    for part in train_module.model_parts:
+        part.init_weights(device=device, max_seq_len=seq_len)
+
+        ran: List[str] = []
+        handles = [
+            block.register_forward_hook(lambda *_, key=key: ran.append(key))
+            for key, block in part.blocks.items()
+        ]
+        try:
+            if part.embeddings is not None:
+                out = part(input_ids)
+            else:
+                out = part(
+                    input_ids,
+                    input_embeddings=torch.randn(*input_ids.shape, transformer_config.d_model),
+                )
+        finally:
+            for handle in handles:
+                handle.remove()
+
+        assert ran == list(
+            part.blocks.keys()
+        ), f"stage ran blocks {ran} but holds {list(part.blocks.keys())}"
+        expected_width = vocab_size if part.lm_head is not None else transformer_config.d_model
+        assert out.shape == (*input_ids.shape, expected_width)
+
+
+def test_pp_stage_runs_the_blocks_it_owns():
+    run_distributed_test(
+        _run_pp_stage_runs_the_blocks_it_owns, world_size=2, backend="gloo", start_method="spawn"
     )
