@@ -120,7 +120,19 @@ run first if the sharded path has changed — every distributed test in
 `src/test/optim/hyperball_test.py` is `requires_multi_gpu` and does not execute on a CPU box, so
 the first real exercise of the FSDP gather path is a GPU run.
 
-## Result, 2026-08-08
+## Result, 2026-08-08 — SUPERSEDED, read "Second grid" first
+
+> **The 0.042-nat MuonH win reported in this section did not survive tuning.** With both arms at
+> their own optimal learning rate the gap is **0.0003 nats**, which is 0.15 of the within-window
+> noise: MuonH and MuonW are indistinguishable at this scale. See
+> "Second grid — tuned, the two optimizers are indistinguishable" below.
+>
+> This section is kept because everything in it *except the cross-arm comparison* still stands and
+> is still the evidence: the constraint held at the fp32 floor, the arms were controlled to an
+> identical first loss, and the crossover/erosion shape is real. It is the interpretation of the
+> gap as a property of the optimizer that was wrong, and it was wrong for the reason this document
+> already named — the control was under-tuned. Left in place rather than rewritten so that the
+> correction is legible instead of invisible.
 
 Both arms ran to completion on `gpu-8xa100`, 7630/7630 steps, 4,000,317,440 tokens each.
 
@@ -198,6 +210,10 @@ So over the second half the two arms' weight geometries are *converging*, and th
 over exactly the same stretch: −0.0704 at the widest, −0.0414 at the end, while the norm ratio goes
 9.0× → 4.4×. That is a coherent story — MuonW spends the decay phase approaching the norm scale
 MuonH was pinned to from the start, and gets some of MuonH's advantage back as it arrives.
+
+> **REFUTED by the LR sweep — see "The norm-scale hypothesis does not survive this grid".** MuonW's
+> best learning rate leaves its norm at 95.34, still 3.5× `R`, and it matches MuonH's loss there.
+> The two series moving together here was the correlation it was labelled as, and nothing more.
 
 **It is a hypothesis and not a finding.** Two series moving together on one seed is a correlation,
 and the causal test is not in this data: it needs a MuonW arm swept over `weight_decay` so the
@@ -300,6 +316,58 @@ gives MuonH ahead by 0.0219 nats (2.8561 vs 2.8780) — roughly **half** the 0.0
 result above, which compared MuonH at its optimum against MuonW at a point now known to be
 mistuned. That 0.0219 is an upper bound on MuonH's advantage and will only shrink if MuonW improves
 further below 0.01414214. Whether anything survives is exactly what the extension runs decide.
+
+### Second grid — tuned, the two optimizers are indistinguishable
+
+Eight runs now, all 7630/7630. Mean CE over the last 800 steps:
+
+| arm | LR | last-800 CE | PPL | ‖W‖_F last | |
+|---|---|---|---|---|---|
+| `muon_h` | 0.00707107 | 2.8639 | 17.529 | 26.95 | |
+| `muon_h` | **0.01** | **2.8561** | **17.393** | 26.95 | **optimum — interior, bracketed** |
+| `muon_h` | 0.01414214 | 2.8704 | 17.644 | 26.95 | |
+| `muon_w` | **0.00707107** | **2.8564** | **17.399** | 95.34 | **best — still the LOWER EDGE** |
+| `muon_w` | 0.01 | 2.8601 | 17.464 | 102.75 | |
+| `muon_w` | 0.01414214 | 2.8780 | 17.778 | 109.85 | |
+| `muon_w` | 0.02 | 2.8978 | 18.134 | 117.88 | |
+| `muon_w` | 0.02828427 | 2.9312 | 18.749 | 127.06 | |
+
+**At each arm's own optimum the gap is −0.0003 nats — 2.8561 against 2.8564, +0.03% perplexity.**
+The within-window standard error of that difference is ±0.0022, so |gap|/sem = 0.15. **MuonH and
+MuonW are indistinguishable at this scale.** The honest summary of the whole experiment is that
+Hyperball matches decoupled weight decay here; it does not beat it.
+
+The 0.042 nats in the result above was almost entirely an under-tuned control:
+
+| comparison | gap |
+|---|---|
+| both arms untuned (the original pair) | 0.042 nats |
+| MuonH tuned vs MuonW mid-sweep | 0.0219 |
+| **both arms at their optima** | **0.0003** |
+
+That is what the "neither LR is tuned" caveat was worth, and it was load-bearing rather than
+boilerplate: the effect shrank by two orders of magnitude once the control had a fair learning rate.
+
+**MuonW is still not bracketed, and the rule still applies.** Its optimum has been at the lower edge
+twice now. `run-sweep-muonw-0.005.yaml` is the next step down. Note what that run can and cannot do:
+it cannot change the conclusion above, because any further MuonW improvement moves MuonW *ahead* —
+it can only erase a MuonH advantage, never create one. It runs to say where MuonW's optimum actually
+is. The decrements are flattening (0.0334, 0.0198, 0.0179, 0.0037 per √2 step down), so expect
+little movement; if 0.005 also wins, "MuonW keeps improving as its LR falls" is itself the finding
+and wants a different experiment, not a ninth run of this one.
+
+### The norm-scale hypothesis does not survive this grid
+
+The hypothesis recorded above — that the norm scale is the active variable and Hyperball is one way
+to set it — predicts MuonW does best where its equilibrium norm approaches MuonH's pinned
+`R = 26.95`. The grid contradicts it. MuonW's final norm does fall monotonically with LR (127.06 →
+95.34 across the five points), but its *best* point sits at **95.34, still 3.5× R**, and matches
+MuonH's loss there. The two arms reach the same loss at weight scales differing by three and a half.
+
+So the norm scale is **not** what the arms were differing on, and the earlier correlation between a
+closing norm ratio and a closing loss gap was the coincidence it was labelled as. Recorded as
+refuted rather than deleted, because the refutation is the more useful half: whatever the constraint
+is doing at this scale, it is not buying a better weight scale, and it is not buying lower loss.
 
 ### A defect this run exposed
 

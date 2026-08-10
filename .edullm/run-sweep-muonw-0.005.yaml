@@ -1,0 +1,55 @@
+# SWEEP POINT: muon_w at 0.02 / (4*sqrt(2)) = 0.005. Second extension -- still not bracketed.
+#
+# The MuonW optimum has now been at the lower edge of the grid twice: {0.01414,0.02,0.02828} was
+# won at 0.01414, and {0.00707,0.01,0.01414} is won at 0.00707. The rule has not changed and is
+# not weakened by having fired before -- an edge win means the arm is unbracketed and the number
+# at that edge is not this arm's optimum.
+#
+# WHAT THIS RUN IS AND IS NOT FOR. The cross-arm question is already answered: at each arm's best
+# so far the two are 0.0003 nats apart, which is 0.15 of the within-window noise, so MuonH and
+# MuonW are indistinguishable at this scale on one seed. This run cannot change that conclusion,
+# because any further MuonW improvement moves MuonW AHEAD -- it can only remove a MuonH advantage,
+# never create one. It runs to pin down where MuonW's optimum actually is, which the sweep
+# promised and has not yet delivered.
+#
+# The decrements are flattening -- 0.0334, 0.0198, 0.0179, 0.0037 per sqrt(2) step down -- so the
+# expected movement here is small. If this point wins too, say so and stop rather than walking the
+# grid down indefinitely: at that point 'MuonW keeps improving as its LR falls' is itself the
+# finding, and it wants a different experiment than one more step of the same one.
+#
+# round if it sits at 0.01, instead of discovering that serially. If THIS point wins, the arm is
+# still unbracketed and needs another run below it -- the same rule as before, and it does not
+# stop applying because the sweep has already been extended once.
+#
+# bracket in run-sweep-muonh-0.01414.yaml, and means something different there. See that file.
+#
+#   edullm check --json --spec .edullm/run-sweep-muonw-0.005.yaml --experiment muonh-370m \
+#     --dataset olmo-150b-dolma2-v1 --team scratch --compute gpu-8xa100 --hours 7 --attempts 1
+#
+# The grid, why it is only four new runs, and why the horizon is not shortened are all in
+# `.edullm/muon-hyperball.md`, section "Tuning the learning rate". Read that before changing a
+# number here. The three things that must NOT be edited per point:
+#
+#   1. --steps 7630 and --warmup-steps 380. The comparison is at a completed cosine decay, so a
+#      sweep point trained for fewer steps cannot be compared to the ones already finished, and
+#      a shorter horizon moves the LR optimum it is supposed to be locating.
+#   2. --adamw-learning-rate 8.2e-4, HELD FIXED ACROSS EVERY POINT. Only the muon-group LR is
+#      swept. Scaling both together would sweep two variables and locate neither.
+#   3. Everything else -- corpus, seed, batch, microbatch, dtype, initializer -- is identical to
+#      run-moe-muonw.yaml, because the already-finished run at 0.02 is a point ON this grid and
+#      stops being one the moment any of those differ.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'export TRITON_F32_DEFAULT=ieee
+  && python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/train_on_corpus.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --model-factory olmo2_370M_moe --init-method fan_in
+  --optimizer muon_w --learning-rate 0.00500000 --adamw-learning-rate 8.2e-4
+  --param-dtype bfloat16
+  --sequence-length 2048 --steps 7630 --warmup-steps 380
+  --global-batch-size 524288 --rank-microbatch-size 8192
+  --save-interval 1000 --data-seed 0 --work-dir /tmp/dataset-cache
+  trainer.callbacks.checkpointer.max_checkpoints=null'
