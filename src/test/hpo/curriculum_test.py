@@ -169,6 +169,23 @@ def test_resume_refuses_changed_identity_or_inconsistent_token_progress(tmp_path
         _loader(tmp_path).load_state_dict(inconsistent)
 
 
+def test_authorized_ipbt_resume_rebases_progress_for_a_changed_batch_size(tmp_path):
+    loader = _loader(tmp_path, global_batch_size=8)
+    loader.reshuffle()
+    iterator = iter(loader)
+    next(iterator)
+    next(iterator)
+    state = loader.state_dict()
+
+    resumed = _loader(tmp_path, global_batch_size=16)
+    resumed.allow_batch_size_rebase()
+    resumed.load_state_dict(state)
+
+    assert resumed.global_train_tokens_seen == 16
+    assert resumed.batches_processed == 1
+    assert next(iter(resumed))["index"].tolist() == resumed.global_indices_for_tokens(16).tolist()
+
+
 def test_read_contract_uses_existing_parent_train_val_and_pinned_mtld_order():
     parent = SimpleNamespace(
         paths=["/data/tokens/source-a/train-00000.bin"],

@@ -364,6 +364,7 @@ class CurriculumDataLoader(TextDataLoaderBase):
         self.parent_identity = parent_identity
         self.order_identity = order_identity
         self.ranked = np.asarray(ranked_chunk_indices, dtype=np.int64)
+        self._batch_size_rebase_allowed = False
         validate_complete_permutation(self.ranked, len(self.dataset))
 
     @property
@@ -414,7 +415,14 @@ class CurriculumDataLoader(TextDataLoaderBase):
             "epoch": self._epoch,
         }
 
+    def allow_batch_size_rebase(self) -> None:
+        """Allow one checkpoint load to rebase token progress onto this loader's batch size."""
+
+        self._batch_size_rebase_allowed = True
+
     def load_state_dict(self, state_dict: dict[str, Any]) -> None:
+        batch_size_rebase_allowed = self._batch_size_rebase_allowed
+        self._batch_size_rebase_allowed = False
         if state_dict.get("schema_version") != STATE_SCHEMA_VERSION:
             raise CurriculumDataError("unsupported curriculum loader state schema")
         identity = state_dict.get("identity")
@@ -422,17 +430,26 @@ class CurriculumDataLoader(TextDataLoaderBase):
             raise CurriculumDataError("loader state has no scientific identity")
         if state_dict.get("identity_sha256") != _identity_sha256(identity):
             raise CurriculumDataError("loader state identity checksum is invalid")
-        if dict(identity) != self.scientific_identity:
-            changed = sorted(
-                key
-                for key in set(identity) | set(self.scientific_identity)
-                if identity.get(key) != self.scientific_identity.get(key)
-            )
+        current_identity = self.scientific_identity
+        changed = sorted(
+            key
+            for key in set(identity) | set(current_identity)
+            if identity.get(key) != current_identity.get(key)
+        )
+        rebasing_batch_size = changed == ["lineage_global_batch_size"]
+        if changed and not (rebasing_batch_size and batch_size_rebase_allowed):
             raise CurriculumDataError(f"refusing loader resume with changed identity: {changed}")
         batches = int(state_dict.get("batches_processed", -1))
         tokens = int(state_dict.get("global_train_tokens_seen", -1))
-        if batches < 0 or tokens != batches * self.global_batch_size:
+        saved_batch_size = int(identity.get("lineage_global_batch_size", -1))
+        if batches < 0 or saved_batch_size <= 0 or tokens != batches * saved_batch_size:
             raise CurriculumDataError("loader state does not identify the next batch exactly")
+        if rebasing_batch_size:
+            if tokens % self.global_batch_size:
+                raise CurriculumDataError(
+                    "loader token progress is not aligned to the resumed lineage batch"
+                )
+            batches = tokens // self.global_batch_size
         self.batches_processed = batches
         self.tokens_processed = tokens
         self._epoch = int(state_dict.get("epoch") or 1)

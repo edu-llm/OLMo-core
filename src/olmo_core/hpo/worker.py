@@ -113,6 +113,20 @@ def execute_segment(
         fresh_parameters = [
             parameter.detach().clone() for parameter in trainer.train_module.model.parameters()
         ]
+    if (
+        transition is not None
+        and transition.get("transition_kind") == "generation"
+        and transition.get("parent_trial_id") is not None
+        and transition.get("weight_policy") == "shrink_perturb"
+        and transition.get("optimizer_reset") is True
+    ):
+        allow_batch_size_rebase = getattr(
+            getattr(trainer, "data_loader", None),
+            "allow_batch_size_rebase",
+            None,
+        )
+        if allow_batch_size_rebase is not None:
+            allow_batch_size_rebase()
 
     loaded = trainer.maybe_load_checkpoint()
     load_path = getattr(trainer, "load_path", None)

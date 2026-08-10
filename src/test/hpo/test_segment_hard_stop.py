@@ -248,6 +248,65 @@ def test_shrink_perturb_transition_changes_loaded_donor_weights():
     )
 
 
+def test_ipbt_batch_size_mutation_authorizes_loader_rebase_before_checkpoint_load():
+    diagnostics = HpoDiagnosticsCallback()
+    diagnostics.heldout_ce = 3.5
+    diagnostics.heldout_tokens_seen = 4096
+    diagnostics.tokens_seen = 4096
+    model = torch.nn.Linear(1, 1, bias=False)
+
+    class FakeLoader:
+        global_train_tokens_seen = 0
+        rebase_authorized = False
+
+        def allow_batch_size_rebase(self):
+            self.rebase_authorized = True
+
+    class FakeTrainer:
+        load_path = "/donor"
+        load_trainer_state = True
+        load_optim_state = False
+
+        def __init__(self):
+            self.data_loader = FakeLoader()
+            self.train_module = SimpleNamespace(model=model)
+            self.global_train_tokens_seen = 0
+            self.hard_stop = None
+            self.callbacks = {}
+
+        def maybe_load_checkpoint(self, *args, **kwargs):
+            assert self.data_loader.rebase_authorized
+            self.global_train_tokens_seen = 2048
+            self.data_loader.global_train_tokens_seen = 2048
+            return True
+
+        def fit(self):
+            self.global_train_tokens_seen = 4096
+            self.data_loader.global_train_tokens_seen = 4096
+
+        def save_checkpoint(self):
+            return "/ckpt/t0/step4"
+
+    execute_segment(
+        FakeTrainer(),
+        diagnostics=diagnostics,
+        spec=SegmentSpec(
+            trial_id="t0",
+            target_tokens=8192,
+            hard_stop_tokens=4096,
+            lineage_global_batch_size=2048,
+            transition={
+                "transition_kind": "generation",
+                "parent_trial_id": "donor",
+                "weight_policy": "shrink_perturb",
+                "weight_scale": 0.4,
+                "optimizer_reset": True,
+            },
+        ),
+        actual_global_batch_size=2048,
+    )
+
+
 def test_completed_boundary_checkpoint_recovers_observation_without_retraining():
     diagnostics = HpoDiagnosticsCallback()
     diagnostics.heldout_ce = 3.5
