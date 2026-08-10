@@ -29,6 +29,15 @@ mkdir -p "${RB_DIR}"
 
 say() { printf '\n===== %s :: %s =====\n' "$(date -u +%H:%M:%SZ)" "$*"; }
 
+# SIX RUNS IN ONE CONTAINER SHARE ONE WANDB_RUN_ID, AND THAT IS WORSE THAN NO CHARTS. The
+# dispatch form's `wandb_project` is `required: true` with a default, so an empty value on the
+# command line does not reach here as empty -- it arrives as `capacity-block`. Unsetting the
+# variable the entrypoint actually reads is the only lever on this side, and it is the right one:
+# `WandBCallback(enabled=bool(os.environ.get("EDULLM_WANDB_PROJECT")))`. Six sequential arms
+# logging into one run id produce a single chart that is their interleaving, which is not a
+# reading of anything. The numbers come out of the per-arm summaries below instead.
+unset EDULLM_WANDB_PROJECT WANDB_RUN_ID WANDB_RUN_GROUP
+
 say "router-balance sweep starting"
 command -v nvidia-smi >/dev/null 2>&1 \
   && nvidia-smi --query-gpu=index,name,memory.total --format=csv \
