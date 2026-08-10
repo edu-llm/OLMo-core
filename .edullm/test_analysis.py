@@ -787,6 +787,68 @@ def test_the_training_loss_is_reported_as_a_second_measurement_and_not_as_agreem
     assert "corroborate" in text
 
 
+def _monitored(arm: str, radius, dispersion: float, seeds: int = 5):
+    """One arm carrying a planted lane monitor, and nothing else the contrasts need."""
+    steps = list(range(50, 6001, 50))
+    series = {
+        an.COMPOSITE_RHO_METRIC: {s: float(radius(s)) for s in steps},
+        an.DISPERSION_METRIC: {s: dispersion for s in steps},
+        an.CONDITION_METRIC: {s: 1.0 + dispersion * 100.0 for s in steps},
+        an.DIFFERENTIATED_METRIC: {s: 1.0 for s in steps},
+    }
+    for key in an.BLOCK_RHO_METRICS:
+        series[key] = {s: float(radius(s)) for s in steps}
+    return an.ArmSeries(
+        arm=arm,
+        submission=f"SYNTHETIC-{arm}",
+        seeds=list(range(seeds)),
+        run_ids=[f"SYNTHETIC-{arm}-cell-{i}" for i in range(seeds)],
+        steps=steps,
+        monitor=[{k: dict(v) for k, v in series.items()} for _ in range(seeds)],
+    )
+
+
+def test_the_monitor_tells_a_pinned_radius_apart_from_a_free_one():
+    """
+    H5's whole readability rests on this. A contrast saying arm 9 scores worse than arm 2 is
+    equally consistent with the constraint having done nothing, and the only thing that separates
+    them is whether the radius the constraint pins actually stayed pinned while the free arm's
+    moved. If this check cannot tell the two apart, the interpretation is unfounded.
+    """
+    free = _monitored("faithful", lambda s: 1.0 + 3.0 * s / 6000.0, dispersion=0.23)
+    pinned = _monitored("mhc", lambda s: 1.0 + 1e-7, dispersion=0.06)
+    rows = {r["arm"]: r for r in an.h5_mechanism([free, pinned])["arms"]}
+
+    assert rows["mhc"]["pinned_at_one"], rows["mhc"]["max_abs_deviation_from_one"]
+    assert not rows["faithful"]["pinned_at_one"]
+    assert rows["faithful"]["composite_final"] > 3.0
+    assert rows["mhc"]["composite_final"] == pytest.approx(1.0, abs=1e-5)
+    # Every block of every seed is examined, not just the composite -- a projection that held on
+    # average while one block ran away would otherwise read as pinned.
+    assert rows["mhc"]["n_block_readings"] == len(an.BLOCK_RHO_METRICS) * 120 * 5
+
+
+def test_an_arm_whose_lanes_never_differentiate_is_not_reported_as_a_live_mechanism():
+    """
+    The other reading a bare contrast cannot exclude: if the constraint froze the lanes identical,
+    arm 9 is an ordinary residual stack and the contrast is not about mHC at all. Dispersion and
+    the differentiated-block fraction are what rule that out, so they have to be carried.
+    """
+    inert = _monitored("mhc", lambda s: 1.0, dispersion=0.0)
+    for cell in inert.monitor:
+        cell[an.DIFFERENTIATED_METRIC] = {s: 0.0 for s in cell[an.DIFFERENTIATED_METRIC]}
+    row = an.h5_mechanism([inert])["arms"][0]
+
+    assert row["pinned_at_one"]
+    assert row["differentiated_final"] == 0.0, "an inert arm must be visibly inert"
+    assert row["dispersion_final"] == 0.0
+
+
+def test_an_arm_with_no_lane_monitor_produces_no_mechanism_row():
+    """A baseline has no lanes, so it has nothing to say here and must not be invented a row."""
+    assert an.h5_mechanism(an.synthetic_tranche({"faithful": -0.010}))["arms"] == []
+
+
 def test_a_post_hoc_contrast_cannot_inflate_a_pre_registered_p_value():
     """
     The pre-registration fixes the family at the pre-registered contrasts and says the gate stays

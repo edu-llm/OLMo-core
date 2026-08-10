@@ -78,6 +78,8 @@ HYPOTHESIS_MARKERS: Dict[str, str] = {"H1": "s", "H2a": "^", "H5": "D"}
 #: ``BPB = CE_nats / (bytes_per_token * ln 2)``, the same constant ``noise_floor`` carries.
 NATS_PER_BPB = 4.57 * math.log(2)
 
+COMPOSITE_RHO_METRIC = "hc/composite spectral radius"
+
 
 def _style():
     """The house style, applied once per figure rather than set globally on import."""
@@ -834,6 +836,96 @@ def equal_compute(arms: Sequence, result: Mapping[str, object], path: str) -> st
     return _finish(fig, result, path)
 
 
+def spectral_radius(arms: Sequence, result: Mapping[str, object], path: str) -> str:
+    """
+    The quantity mHC constrains, on the arms that do and do not constrain it.
+
+    H5'S RESULT IS UNREADABLE WITHOUT THIS. The contrast says arm 9 scores worse than arm 2; on
+    its own that is compatible with the constraint having done nothing, with the constraint
+    having made the mechanism inert, and with the constraint having forbidden the thing that was
+    working. Only the monitor separates them, so the monitor gets the figure and the contrast
+    gets a number in the text.
+
+    :param arms: The arms as read.
+    :param result: What ``analysis.analyse`` returned.
+    :param path: Where to write the PNG.
+
+    :returns: The path written.
+    """
+    plt = _style()
+    ordered = [
+        a for a in _ordered(arms, result) if any(c.get(COMPOSITE_RHO_METRIC) for c in a.monitor)
+    ]
+    fig, (left, right) = plt.subplots(1, 2, figsize=(11.4, 4.6))
+
+    for arm in ordered:
+        cells = [c[COMPOSITE_RHO_METRIC] for c in arm.monitor if c.get(COMPOSITE_RHO_METRIC)]
+        steps = sorted(set.intersection(*(set(c) for c in cells)))
+        band = np.asarray([[c[s] for s in steps] for c in cells], dtype=float)
+        colour = PALETTE.get(arm.arm, "#888888")
+        left.plot(
+            steps,
+            band.mean(axis=0),
+            color=colour,
+            linewidth=1.6,
+            label=f"{arm.arm} (n={len(cells)})",
+        )
+        left.fill_between(
+            steps, band.min(axis=0), band.max(axis=0), color=colour, alpha=0.16, linewidth=0
+        )
+
+        finals = []
+        for block in range(16):
+            values = [
+                c[f"hc/block {block:02d}/rho(A_r) attention"][
+                    max(c[f"hc/block {block:02d}/rho(A_r) attention"])
+                ]
+                for c in arm.monitor
+                if c.get(f"hc/block {block:02d}/rho(A_r) attention")
+            ]
+            finals.append(float(np.mean(values)) if values else np.nan)
+        right.plot(
+            range(16),
+            finals,
+            color=colour,
+            marker=MARKERS.get(arm.arm, "o"),
+            markersize=4.2,
+            linewidth=1.4,
+            label=f"{arm.arm} (n={len(cells)})",
+        )
+
+    for axis in (left, right):
+        axis.axhline(1.0, color="#4d4d4d", linestyle=":", linewidth=1.1)
+        axis.set_yscale("log")
+        # A log axis spanning 1 to 8 labels only the decade by default, which hides the entire
+        # range the reader is here to see.
+        axis.set_yticks([1, 1.5, 2, 3, 4, 6, 8])
+        axis.set_yticklabels(["1", "1.5", "2", "3", "4", "6", "8"])
+        axis.minorticks_off()
+    left.annotate(
+        "radius 1 -- what mHC pins by construction",
+        (0.98, 1.0),
+        xycoords=("axes fraction", "data"),
+        textcoords="offset points",
+        xytext=(0, 6),
+        ha="right",
+        fontsize=7.6,
+        color="#4d4d4d",
+    )
+    left.set_xlabel("training step")
+    left.set_ylabel(r"composite spectral radius $\rho(A_r)$")
+    left.set_title(
+        "The constraint bound, and the free arms left 1 early\nband is the range over seeds"
+    )
+    left.legend(loc="upper left")
+
+    right.set_xlabel("block index (0 = first, 15 = last)")
+    right.set_ylabel(r"$\rho(A_r)$ on the attention stream, step 6,000")
+    right.set_title("And the drift is one sublayer, not a trend across depth\nmean over seeds")
+    right.legend(loc="upper right")
+    return _finish(fig, result, path)
+
+
 def draw(
     arms: Sequence,
     result: Mapping[str, object],
@@ -857,12 +949,15 @@ def draw(
         "per-source": per_source,
         "stability": stability,
         "equal-compute": equal_compute,
+        "spectral-radius": spectral_radius,
     }
     written = []
     for name, function in wanted.items():
         if only and name not in only:
             continue
         if name == "equal-compute" and not result.get("equal_compute"):
+            continue
+        if name == "spectral-radius" and not ((result.get("h5_mechanism") or {}).get("arms")):
             continue
         written.append(function(arms, result, os.path.join(out, f"{prefix}{name}.png")))
     return written

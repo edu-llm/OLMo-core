@@ -146,6 +146,26 @@ SKIP_TRIGGER_METRIC = "stability/grad norm at a skipped step"
 #: are exact keys and not the module's globbed families, because this is a history scan.
 LANE_WITNESS_METRICS = ("hc/min lane norm spread", "hc/composite spectral radius")
 
+COMPOSITE_RHO_METRIC = "hc/composite spectral radius"
+BLOCK_RHO_METRICS = tuple(
+    f"hc/block {block:02d}/rho(A_r) {stream}"
+    for block in range(16)
+    for stream in ("attention", "feed_forward")
+)
+DISPERSION_METRIC = "hc/median lane dispersion"
+CONDITION_METRIC = "hc/composite condition number"
+DIFFERENTIATED_METRIC = "hc/differentiated block fraction"
+"""
+The lane monitor, which is what makes H5's result readable rather than a bare contrast.
+
+Arm 9 differs from arm 2 by one constraint: the lane-mixing matrix is projected to be doubly
+stochastic, which pins its spectral radius at exactly 1. Every other arm's result is a number
+with no mechanism attached, but here the monitor can be asked directly whether the constraint
+bound and whether the mechanism survived it -- so a refutation can distinguish "the constraint
+did nothing" from "the constraint made the mechanism inert" from "the thing the constraint
+forbids is where the benefit was".
+"""
+
 #: The five funded arms, in the pre-registration's own numbering, which is the order every
 #: table and every figure in this module uses.
 ARM_ORDER: Tuple[str, ...] = ("baseline", "faithful", "output-only", "no-output-init", "mhc")
@@ -454,6 +474,9 @@ class ArmSeries:
     runtime: List[Dict[int, float]] = field(default_factory=list)
     """Per-seed seconds elapsed at each evaluation step, for the equal-wall-clock reading."""
 
+    monitor: List[Dict[str, Dict[int, float]]] = field(default_factory=list)
+    """Per-seed ``hc/*`` lane monitor, keyed by metric then by step. Empty on an arm without lanes."""
+
     def seconds_at(self, step: int) -> Optional[float]:
         """
         Median seconds this arm's cells had been running when they reached ``step``.
@@ -586,6 +609,9 @@ class CellRead:
     train_steps: List[int] = field(default_factory=list)
     train_loss: List[float] = field(default_factory=list)
     runtime: Dict[int, float] = field(default_factory=dict)
+    monitor: Dict[str, Dict[int, float]] = field(default_factory=dict)
+    """The ``hc/*`` lane monitor, keyed by metric then by step. Empty on an arm without lanes."""
+
     sources: Tuple[str, ...] = HELD_OUT_SOURCES
 
     @property
@@ -679,6 +705,22 @@ def _read_cell(run, train_curve_samples: int) -> CellRead:
     # with lanes and forbids them on one without, which is what makes their absence evidence.
     lane_rows = list(run.scan_history(keys=["_step", *LANE_WITNESS_METRICS]))
     saw_lane = any(row.get(key) is not None for row in lane_rows for key in LANE_WITNESS_METRICS)
+
+    monitor_keys = (
+        COMPOSITE_RHO_METRIC,
+        DISPERSION_METRIC,
+        CONDITION_METRIC,
+        DIFFERENTIATED_METRIC,
+        *BLOCK_RHO_METRICS,
+    )
+    monitor: Dict[str, Dict[int, float]] = {key: {} for key in monitor_keys}
+    for row in run.scan_history(keys=["_step", *monitor_keys], page_size=10_000):
+        step = row.get("_step")
+        if step is None:
+            continue
+        for key in monitor_keys:
+            if row.get(key) is not None:
+                monitor[key][int(step)] = float(row[key])
     return CellRead(
         run_id=run.id,
         index=int(match.group("index")) if match else None,
@@ -702,6 +744,7 @@ def _read_cell(run, train_curve_samples: int) -> CellRead:
         train_steps=[int(r["_step"]) for r in kept],
         train_loss=[float(r[TRAIN_LOSS_METRIC]) for r in kept],
         runtime=runtime,
+        monitor={k: v for k, v in monitor.items() if v},
         sources=sources,
     )
 
@@ -906,6 +949,7 @@ def assemble_arm(
         series.train_curve_steps.append(cell.train_steps)
         series.train_curve_loss.append(cell.train_loss)
         series.runtime.append(cell.runtime)
+        series.monitor.append(cell.monitor)
         series.sources = list(cell.sources)
         if cell.summary_was_clobbered:
             series.recovered.append(
@@ -965,6 +1009,7 @@ def assemble_arm(
         "train_curve_steps",
         "train_curve_loss",
         "runtime",
+        "monitor",
     ):
         setattr(series, attribute, [getattr(series, attribute)[i] for i in order])
     series.bpb = [[kept[run].bpb[st] for st in series.steps] for run in series.run_ids]
@@ -2171,7 +2216,89 @@ def analyse(
 
     # (g) the same contrast at equal wall clock, which reverses it.
     result["equal_compute"] = equal_compute(ordered, at_step)
+
+    # (h) the lane monitor, which is what makes H5 readable.
+    result["h5_mechanism"] = h5_mechanism(ordered)
     return result
+
+
+def h5_mechanism(arms: Sequence[ArmSeries]) -> Dict[str, object]:
+    """
+    What the lane monitor says about the constraint H5 is a test of.
+
+    H5 IS THE ONE HYPOTHESIS HERE WHOSE RESULT IS NOT A BARE NUMBER, and this is why. Arm 9
+    differs from arm 2 by a single constraint -- the lane-mixing matrix is projected to be doubly
+    stochastic, which pins its spectral radius at exactly 1 -- and the monitor logged that radius
+    per block throughout training on both arms. So three readings that a contrast alone cannot
+    tell apart can be told apart here:
+
+    - **the constraint did nothing**: arm 2's radius never left 1 either, so the arms are the same
+      model and any difference is noise;
+    - **the constraint made the mechanism inert**: arm 9's lanes never differentiated, so it is
+      not mHC against HC but an ordinary residual stack against HC;
+    - **the constraint bound, on a live mechanism**: arm 2 drifted, arm 9 could not, both
+      differentiated, and the contrast is then a measurement of what the drift is worth.
+
+    Only the third makes the contrast a statement about mHC's own claim. The premise is checked
+    rather than assumed, because everything the result is read as rests on it.
+
+    :param arms: The arms, ordered.
+
+    :returns: The monitor summary per arm carrying lanes, empty when none does.
+    """
+    rows: List[Dict[str, object]] = []
+    for arm in arms:
+        cells = [cell for cell in arm.monitor if cell.get(COMPOSITE_RHO_METRIC)]
+        if not cells:
+            continue
+
+        composite = [cell[COMPOSITE_RHO_METRIC] for cell in cells]
+        steps = sorted(set.intersection(*(set(c) for c in composite)))
+        every_rho = [
+            v for cell in cells for key in BLOCK_RHO_METRICS for v in cell.get(key, {}).values()
+        ]
+
+        def final(metric: str) -> Optional[float]:
+            values = [cell[metric][max(cell[metric])] for cell in cells if cell.get(metric)]
+            return float(np.mean(values)) if values else None
+
+        by_block: Dict[str, float] = {}
+        for key in BLOCK_RHO_METRICS:
+            values = [cell[key][max(cell[key])] for cell in cells if cell.get(key)]
+            if values:
+                by_block[key] = float(np.mean(values))
+
+        rows.append(
+            {
+                "arm": arm.arm,
+                "logged_steps": len(steps),
+                "first_step": steps[0] if steps else None,
+                "last_step": steps[-1] if steps else None,
+                "composite_first": float(np.mean([c[steps[0]] for c in composite]))
+                if steps
+                else None,
+                "composite_final": float(np.mean([c[steps[-1]] for c in composite]))
+                if steps
+                else None,
+                "composite_peak": float(max(max(c.values()) for c in composite)),
+                "n_block_readings": len(every_rho),
+                "block_rho_min": float(min(every_rho)) if every_rho else None,
+                "block_rho_max": float(max(every_rho)) if every_rho else None,
+                "max_abs_deviation_from_one": float(max(abs(v - 1.0) for v in every_rho))
+                if every_rho
+                else None,
+                # A radius that never leaves 1 to within a rounding error is a CONSTRAINT that
+                # bound, not an arm that happened to stay put. 1e-4 is far tighter than any drift
+                # a free matrix shows here and far looser than the 1e-6 a projection achieves.
+                "pinned_at_one": bool(every_rho and max(abs(v - 1.0) for v in every_rho) < 1e-4),
+                "largest_block": max(by_block, key=lambda k: by_block[k]) if by_block else None,
+                "largest_block_rho": max(by_block.values()) if by_block else None,
+                "dispersion_final": final(DISPERSION_METRIC),
+                "condition_final": final(CONDITION_METRIC),
+                "differentiated_final": final(DIFFERENTIATED_METRIC),
+            }
+        )
+    return {"arms": rows}
 
 
 def equal_compute(arms: Sequence[ArmSeries], at_step: int) -> List[Dict[str, object]]:
@@ -2869,6 +2996,59 @@ def render(result: Mapping[str, object]) -> str:
             ]
         out.append("")
 
+    monitor = ((result.get("h5_mechanism") or {}).get("arms")) or []
+    if monitor:
+        out += [
+            f"{mark}(e4) THE LANE MONITOR, which is what makes H5 readable rather than a bare "
+            "contrast",
+            f"{mark}  mHC's one difference from HC is that the lane-mixing matrix is projected "
+            "doubly stochastic, pinning its",
+            f"{mark}  spectral radius at 1. So the monitor can say whether the constraint BOUND, "
+            "and whether the mechanism",
+            f"{mark}  survived it -- which is the difference between 'mHC is worse than HC' and "
+            "'mHC is not really HC'.",
+        ]
+        for row in monitor:
+            # EVERY FIELD HERE IS OPTIONAL, because a cell can log the composite radius and not
+            # the per-block series, or the reverse, depending on which monitor version it ran. A
+            # report that raises on the absent one takes the whole analysis down over a figure.
+            if row["n_block_readings"]:
+                pinned = (
+                    f"PINNED at 1 to {row['max_abs_deviation_from_one']:.1e} over "
+                    f"{row['n_block_readings']:,} block readings"
+                    if row["pinned_at_one"]
+                    else f"FREE: drifts to {row['block_rho_max']:.3f} at the widest block reading"
+                )
+            else:
+                pinned = (
+                    "the per-block radii were not logged by this arm, so only the composite is "
+                    "evidence here"
+                )
+            out += [
+                f"{mark}    {row['arm']}: composite spectral radius "
+                f"{row['composite_first']:.3f} at step {row['first_step']:,} -> "
+                f"{row['composite_final']:.3f} at step {row['last_step']:,} "
+                f"(peak {row['composite_peak']:.3f})",
+                f"{mark}      {pinned}",
+            ]
+            lanes = [
+                f"{name} {value:{fmt}}"
+                for name, value, fmt in (
+                    ("blocks differentiated", row["differentiated_final"], ".0%"),
+                    ("median dispersion", row["dispersion_final"], ".4f"),
+                    ("mixing-matrix condition number", row["condition_final"], ".2f"),
+                )
+                if value is not None
+            ]
+            if lanes:
+                out.append(f"{mark}      lanes: " + ", ".join(lanes))
+            if row["largest_block"] and not row["pinned_at_one"]:
+                out.append(
+                    f"{mark}      the drift is not spread over depth: "
+                    f"{row['largest_block']} reaches {row['largest_block_rho']:.3f}"
+                )
+        out.append("")
+
     budgets = result.get("equal_compute") or []
     if budgets:
         out += [
@@ -3176,6 +3356,13 @@ def _cache_load(path: str) -> List[ArmSeries]:
         # recorded no runtime here", which is indistinguishable from an arm that genuinely did
         # not -- the equal-wall-clock section would just quietly disappear from a cached re-run.
         arm.runtime = [{int(k): float(v) for k, v in cell.items()} for cell in arm.runtime]
+        arm.monitor = [
+            {
+                metric: {int(s): float(v) for s, v in by_step.items()}
+                for metric, by_step in cell.items()
+            }
+            for cell in arm.monitor
+        ]
     return arms
 
 
