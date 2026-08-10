@@ -723,6 +723,50 @@ def test_fused_rotation_matches_two_separate_calls():
     torch.testing.assert_close(fused_c, _rotate_bc_blocks(C, rot), rtol=0, atol=1e-13)
 
 
+def test_fused_rotation_eval_bypasses_the_custom_autograd_boundary(monkeypatch):
+    """No-grad evaluation must not ask Inductor to lower the associative scan.
+
+    Training compiles this custom-autograd boundary successfully, while held-out evaluation
+    traces a separate no-grad graph and fails lowering ``associative_scan`` when Dynamo inlines
+    :class:`_FusedQuaternionRotateBC`. Evaluation needs the same arithmetic outside that
+    boundary; otherwise a completed training run dies before reporting its held-out CE.
+    """
+    torch.manual_seed(51)
+    B = torch.randn(2, 16, 1, 1, 12, dtype=torch.float64)
+    C = torch.randn(2, 16, 1, 1, 12, dtype=torch.float64)
+    theta = torch.randn(2, 16, 1, 4, 3, dtype=torch.float64) * 0.1
+
+    with torch.no_grad():
+        expected = fast_mod._FusedQuaternionRotateBC.apply(B, C, theta)
+
+    def refuse(*_args):
+        raise AssertionError("no-grad evaluation entered the custom-autograd boundary")
+
+    monkeypatch.setattr(fast_mod._FusedQuaternionRotateBC, "apply", refuse)
+    with torch.no_grad():
+        actual = fast_mod._fused_quaternion_rotate_bc(B, C, theta)
+
+    for got, want in zip(actual, expected):
+        torch.testing.assert_close(got, want, rtol=0, atol=1e-13)
+
+
+@requires_gpu
+def test_compiled_no_grad_fused_rotation_runs_at_repaired_geometry():
+    """Exercise the A100 failure shape: compiled eval, symbolic batch, T=4096, N=192."""
+    torch.manual_seed(52)
+    B = torch.randn(2, 4096, 1, 1, 192, device="cuda", dtype=torch.bfloat16)
+    C = torch.randn_like(B)
+    theta = torch.randn(2, 4096, 1, 64, 3, device="cuda", dtype=torch.bfloat16) * 0.01
+
+    with torch.no_grad():
+        expected = fast_mod._fused_quaternion_rotate_bc(B, C, theta)
+        compiled = torch.compile(fast_mod._fused_quaternion_rotate_bc, dynamic=True)
+        actual = compiled(B, C, theta)
+
+    for got, want in zip(actual, expected):
+        torch.testing.assert_close(got, want, rtol=0, atol=0)
+
+
 def test_fused_rotation_preserves_the_relative_transfer_identity():
     """
     The whole factorization rests on ``C~_t^T B~_s == C_t^T (R_t ... R_{s+1}) B_s``.
@@ -1638,7 +1682,7 @@ def test_simple_gla_keeps_the_official_fast_signature():
 # ---------------------------------------------------------------------------------------
 
 PRODUCTION_GEOMETRY: dict[str, Any] = dict(
-    batch=2, seq_len=4096, n_heads=16, head_dim=64, n_groups=1, d_state=96, block_size=3
+    batch=2, seq_len=4096, n_heads=16, head_dim=64, n_groups=1, d_state=192, block_size=3
 )
 
 
@@ -1671,7 +1715,7 @@ def test_simple_gla_matches_official_fast_forward(cfg):
 @requires_official_mamba3
 @requires_simple_gla
 def test_simple_gla_matches_official_fast_forward_at_the_production_geometry():
-    """bf16 at the shape the arm actually runs: B=2, T=4096, H=16, P=64, G=1, N=96, b=3."""
+    """bf16 at the repaired arm shape: B=2, T=4096, H=16, P=64, G=1, N=192, b=3."""
     kwargs = _inputs(**PRODUCTION_GEOMETRY)
     kwargs = {k: v.bfloat16() if v.is_floating_point() else v for k, v in kwargs.items()}
 
@@ -1723,7 +1767,7 @@ def test_simple_gla_and_official_fast_both_run_at_the_production_geometry(capsys
     Deliberately asserts nothing about which is faster: the arm default does not move without
     a whole-model throughput measurement, and a microbenchmark of one mixer call is not that.
     What it does assert is that both backends complete and stay finite at B=2, T=4096, H=16,
-    P=64, G=1, N=96 in bf16, which the smaller parity configurations do not cover.
+    P=64, G=1, N=192 in bf16, which the smaller parity configurations do not cover.
     """
     kwargs = _inputs(**PRODUCTION_GEOMETRY)
     kwargs = {k: v.bfloat16() if v.is_floating_point() else v for k, v in kwargs.items()}
@@ -1755,7 +1799,7 @@ def test_simple_gla_and_official_fast_both_run_at_the_production_geometry(capsys
 
     with capsys.disabled():
         print(
-            "\nmamba3 SSD backend fwd+bwd at B=2 T=4096 H=16 P=64 G=1 N=96 bf16: "
+            "\nmamba3 SSD backend fwd+bwd at B=2 T=4096 H=16 P=64 G=1 N=192 bf16: "
             + ", ".join(f"{name} {ms:.3f} ms" for name, ms in timings.items())
         )
 

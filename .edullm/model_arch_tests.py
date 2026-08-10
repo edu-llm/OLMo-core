@@ -184,7 +184,7 @@ FROZEN_SAVE_INTERVAL = 572
 PARAMETER_TARGET = 390_135_552
 PARAMETER_TOLERANCE = 195_068
 EXACT_PARAMETER_COUNTS = {
-    "mamba-b3": 390_148_736,
+    "mamba-b3": 390_153_344,
     "xlstm": 390_143_056,
     "mamba3-siso-pd": 390_169_664,
     "native-pd": 390_142_976,
@@ -489,7 +489,10 @@ def _treatment_mixer(arm: str, layer_index: int):
         return Mamba3MixerConfig(
             n_heads=16,
             head_dim=64,
-            d_state=96,
+            # Restore the state capacity of the successful July b=2/b=3 ablation. 196 is not
+            # admissible for SO(3): d_state must be divisible by rotation_block_size, and 192
+            # is the proven nearby value.
+            d_state=192,
             n_groups=1,
             mimo_rank=1,
             rotation_block_size=3,
@@ -498,7 +501,10 @@ def _treatment_mixer(arm: str, layer_index: int):
             bc_bias=True,
             prefer_official_kernel=True,
             rotation_scan_impl="quaternion",
-            ssd_backend="simple_gla",
+            # Exact fused Mamba-3 recurrence used by the successful run. ``simple_gla`` is an
+            # approximate algebraic fold with non-zero forward/gradient parity tolerances; it
+            # remains available as an explicit benchmark backend, not as this quality control.
+            ssd_backend="official_fast",
             theta_max=1 / math.sqrt(SEQUENCE_LENGTH),
             fuse_input_projections=True,
             dtype=MASTER_DTYPE,

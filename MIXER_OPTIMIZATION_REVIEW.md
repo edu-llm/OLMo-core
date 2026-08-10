@@ -5,6 +5,14 @@ below are not implemented. The comparison budget was separately corrected,
 before dispatch, to the measured mixer-bakeoff Run 1 budget, and one
 run-correctness defect found during the crash audit was fixed.
 
+Post-run correction (2026-08-10): the active Mamba-b3 arm no longer matches
+the `d_state=96`, `simple_gla` configuration reviewed below. It restores
+`d_state=192` and `official_fast`; held-out evaluation leaves the compiled
+custom-autograd boundary; and the image now carries the cuBLAS, cuSOLVER, and
+cuSPARSE development headers FlashRNN needs for xLSTM preflight. Historical
+recommendations remain below as the audit record, not as a description of the
+repaired arm.
+
 ## Run-correctness defects found and fixed
 
 ### Fixed: weight decay was applied to every recurrence timescale parameter

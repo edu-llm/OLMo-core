@@ -441,6 +441,14 @@ def test_one_sm80_image_contains_every_required_kernel_family():
     dockerfile = DOCKERFILE.read_text()
     for pin in ("xlstm==2.0.5", "mlstm-kernels==2.0.4", "flashrnn==1.0.6"):
         assert pin in dockerfile
+    for package in (
+        "libcublas-dev-12-8=12.8.4.1-1",
+        "libcusolver-dev-12-8=11.7.3.90-1",
+        "libcusparse-dev-12-8=12.5.8.93-1",
+    ):
+        assert package in dockerfile
+    for header in ("cublas_v2.h", "cusolverDn.h", "cusparse.h"):
+        assert f"/usr/local/cuda-12.8/include/{header}" in dockerfile
     assert "flash_pd_native_setup.py bdist_wheel" in dockerfile
     assert "mamba3_siso_combined" in dockerfile
     assert "olmo_xlstm" in dockerfile

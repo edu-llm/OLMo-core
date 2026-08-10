@@ -1230,7 +1230,7 @@ def test_the_decode_footprint_is_the_head_geometry_the_arm_itself_declares(arm, 
     )
 
 
-@pytest.mark.parametrize("arm", ("xlstm", "native-pd", "mamba3-siso-pd"))
+@pytest.mark.parametrize("arm", ("xlstm", "native-pd"))
 def test_an_arm_whose_mixer_declares_no_head_dimension_reports_no_footprint(arm, monkeypatch):
     """A null footprint with a stated cause, never ``d_model // n_heads`` standing in for one."""
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
@@ -1246,6 +1246,56 @@ def test_an_arm_whose_mixer_declares_no_head_dimension_reports_no_footprint(arm,
     assert probe["decode_state_bytes_per_seq"] is None
     assert probe["decode_mixer_layers"] == len(arms.RECURRENT_LAYERS)
     assert "geometry could not be read" not in probe["decode_basis"]
+
+
+def test_siso_pd_decode_reports_its_complex_state_and_previous_value_cache(monkeypatch):
+    """The exact decoder threads ``(h_real, h_imag, v_real, v_imag)`` per head and state lane."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    mixer = _recurrent_mixers("mamba3-siso-pd")[0]
+
+    probe = entry.decode_probe(arm_name="mamba3-siso-pd")
+
+    elements_per_layer = 4 * mixer.n_heads * mixer.d_state
+    assert probe["decode_state_layout"] == "complex h_t plus previous complex v_t"
+    assert probe["decode_state_elems_per_layer"] == elements_per_layer
+    assert probe["decode_state_bytes_per_seq"] == (
+        elements_per_layer * len(arms.RECURRENT_LAYERS) * 4
+    )
+    assert probe["decode_kernel_requested"].endswith(".trapezoidal_reference_scan")
+    assert entry.DECODE_CALL_STYLE[type(mixer).__name__] == "mamba3_siso_pd"
+
+
+def test_decode_state_receipts_cover_every_tensor_in_the_siso_cache():
+    from olmo_core.nn.flash_pd_native import SISOScanCache
+
+    cache = SISOScanCache(*(torch.randn(2, 3, 5) for _ in range(4)))
+    clone = entry._clone_decode_state(cache)
+
+    assert entry._decode_state_bytes(cache) == 4 * 2 * 3 * 5 * 4
+    assert entry._decode_state_dtype(cache) == "torch.float32"
+    assert entry._decode_state_advanced(cache, clone) is False
+
+    changed = SISOScanCache(
+        clone.h_real + 1,
+        clone.h_imag,
+        clone.v_real,
+        clone.v_imag,
+    )
+    assert entry._decode_state_advanced(cache, changed) is True
+
+
+@pytest.mark.gpu
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required for decode timing")
+def test_siso_pd_decode_probe_threads_the_real_cache_on_cuda():
+    """Exercise the same cached recurrence used by ``NativeFlashPDMamba3SISOMixer.decode_step``."""
+    probe = entry.decode_probe(arm_name="mamba3-siso-pd", batch_sizes=(1,))
+
+    assert probe["decode_path_taken"] is True
+    assert probe["decode_fast_path_taken"] is False
+    assert probe["decode_path_kind"] == "exact_reference_recurrent"
+    assert probe["decode_state_advanced"] is True
+    assert probe["decode_state_bytes_agree"] is True
+    assert probe["decode_batches"]["1"]["tokens_per_second"] > 0
 
 
 # --- where the end-of-run record lands, given that it is produced after W&B has closed -------

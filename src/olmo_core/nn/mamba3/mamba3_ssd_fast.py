@@ -907,6 +907,26 @@ def _rotate_bc_quaternion(
     return rotated[..., :rank, :], rotated[..., rank:, :]
 
 
+def _fused_quaternion_rotate_bc_forward(
+    B: torch.Tensor,
+    C: torch.Tensor,
+    theta: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Shared arithmetic for the training autograd boundary and eager evaluation path."""
+    d_state = B.shape[-1]
+    rank = B.shape[-2]
+    if d_state % 3 != 0:
+        raise ValueError(f"d_state ({d_state}) must be divisible by quaternion block size 3")
+
+    both = torch.cat((B, C), dim=-2)
+    vectors = both.reshape(*both.shape[:-1], d_state // 3, 3)
+    prefix = _quaternion_prefix_forward(_angles_to_quaternion(theta))
+    inverse_q = _quaternion_conjugate(prefix.to(B.dtype)).unsqueeze(-3)
+    rotated = _quaternion_rotate(inverse_q, vectors)
+    rotated = rotated.reshape(*both.shape[:-1], d_state)
+    return rotated[..., :rank, :], rotated[..., rank:, :], prefix
+
+
 class _FusedQuaternionRotateBC(torch.autograd.Function):
     """Fuse angle conversion, quaternion prefix, and direct B/C rotation."""
 
@@ -917,24 +937,14 @@ class _FusedQuaternionRotateBC(torch.autograd.Function):
         C: torch.Tensor,
         theta: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        d_state = B.shape[-1]
-        rank = B.shape[-2]
-        if d_state % 3 != 0:
-            raise ValueError(f"d_state ({d_state}) must be divisible by quaternion block size 3")
-
-        both = torch.cat((B, C), dim=-2)
-        vectors = both.reshape(*both.shape[:-1], d_state // 3, 3)
-        prefix = _quaternion_prefix_forward(_angles_to_quaternion(theta))
-        inverse_q = _quaternion_conjugate(prefix.to(B.dtype)).unsqueeze(-3)
-        rotated = _quaternion_rotate(inverse_q, vectors)
-        rotated = rotated.reshape(*both.shape[:-1], d_state)
+        rotated_B, rotated_C, prefix = _fused_quaternion_rotate_bc_forward(B, C, theta)
 
         # Save input references rather than ``vectors``: the latter aliases ``both``, so retaining
         # it pins the full materialized B/C concatenation until backward. B and C are already live
         # autograd inputs; rebuilding the cheap reshape/concatenation lets compiled forward release
         # (or fuse away) its largest temporary while keeping the expensive quaternion prefix.
         ctx.save_for_backward(B, C, theta, prefix)
-        return rotated[..., :rank, :], rotated[..., rank:, :]
+        return rotated_B, rotated_C
 
     @staticmethod
     @torch.autograd.function.once_differentiable
@@ -965,12 +975,29 @@ class _FusedQuaternionRotateBC(torch.autograd.Function):
         return grad_both[..., :rank, :], grad_both[..., rank:, :], grad_theta
 
 
+@torch.compiler.disable
+def _fused_quaternion_rotate_bc_eval(
+    B: torch.Tensor,
+    C: torch.Tensor,
+    theta: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Evaluate the quaternion scan eagerly so Inductor never lowers ``associative_scan``."""
+    rotated_B, rotated_C, _ = _fused_quaternion_rotate_bc_forward(B, C, theta)
+    return rotated_B, rotated_C
+
+
 def _fused_quaternion_rotate_bc(
     B: torch.Tensor,
     C: torch.Tensor,
     theta: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Run complete b=3 quaternion preprocessing under one analytic-autograd boundary."""
+    if not torch.is_grad_enabled():
+        # ``torch.compile`` traces a separate no-grad graph for held-out evaluation. Inductor
+        # cannot lower the pointwise associative scan in that graph because its symbolic batch
+        # size is lifted into the higher-order op. Keep the hot training graph unchanged and
+        # cross an eager graph break only for evaluation, which never needs the custom backward.
+        return _fused_quaternion_rotate_bc_eval(B, C, theta)
     return _FusedQuaternionRotateBC.apply(B, C, theta)
 
 

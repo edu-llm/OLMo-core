@@ -128,6 +128,12 @@ config, so either one separates them without counting indices.
 - recurrent-state bytes per sequence;
 - arm, data seed, init seed, world size, steps, parameter count, and image SHA.
 
+For `mamba3-siso-pd`, `decode_path_kind=exact_reference_recurrent`: it times the exact cached
+recurrence used by the mixer's `decode_step`, not a fused CUDA fast path. Its fixed cache is
+196,608 bytes per sequence across 12 layers (`h_real`, `h_imag`, and the previous complex
+value). Compare its latency only with that path label visible; `decode_fast_path_taken=false`
+is deliberate while `decode_path_taken=true` proves the state was threaded.
+
 ## Cancel
 
 ```bash

@@ -35,12 +35,19 @@ RUN set -eux; \
     dpkg -i cuda-keyring_1.1-1_all.deb; \
     rm cuda-keyring_1.1-1_all.deb; \
     apt-get -o APT::Key::GPGVCommand=/usr/bin/gpgv update; \
-    apt-get install -y --no-install-recommends cuda-nvcc-12-8=12.8.93-1; \
+    apt-get install -y --no-install-recommends \
+      cuda-nvcc-12-8=12.8.93-1 \
+      libcublas-dev-12-8=12.8.4.1-1 \
+      libcusolver-dev-12-8=11.7.3.90-1 \
+      libcusparse-dev-12-8=12.5.8.93-1; \
     python /tmp/patch_cuda_glibc241.py; \
     rm /tmp/patch_cuda_glibc241.py; \
     rm -rf /var/lib/apt/lists/*; \
     gcc-14 --version; \
-    nvcc --version
+    nvcc --version; \
+    test -f /usr/local/cuda-12.8/include/cublas_v2.h; \
+    test -f /usr/local/cuda-12.8/include/cusolverDn.h; \
+    test -f /usr/local/cuda-12.8/include/cusparse.h
 
 # The xLSTM kernels are distributed under the NXAI Community License. Keep the
 # organizational research approval and upstream attribution in the image.

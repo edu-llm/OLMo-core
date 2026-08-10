@@ -2,6 +2,12 @@
 
 Snapshot: 2026-08-09, current comparison tree.
 
+**Mamba-b3 repair note (2026-08-10):** every Mamba-b3 measurement below was taken with the
+superseded `d_state=96`, `simple_gla` arm. The active arm now restores `d_state=192` and the
+exact `official_fast` SSD backend after the smaller approximate arm showed severe gradient
+clipping in training. Its throughput has not been remeasured, so do not use the Mamba-b3 rows
+below to rank or cost the repaired arm. The other seven arms are unaffected.
+
 ## Method
 
 Hardware is an RTX 5050 Laptop GPU (sm120, 8 GiB). Every measurement uses
@@ -114,10 +120,12 @@ Every target is paired with a high-width GDN2 block in the same process.
 
 ## Interpretation
 
-Mamba-3 b=3 remains the fastest arm. Native PD is second in the final-model
-proxy despite being roughly tied with GDN2 per mixer, because its FFN is much
-narrower. The SISO PD arm is now about 6.7% ahead of GDN2 in the model proxy;
-xLSTM and KDA remain effectively tied with GDN2 at this resolution.
+The superseded Mamba-3 b=3 arm was the fastest measured arm; the repaired arm
+is not yet ranked. Native PD is second among the still-current measurements in
+the final-model proxy despite being roughly tied with GDN2 per mixer, because
+its FFN is much narrower. The SISO PD arm is now about 6.7% ahead of GDN2 in
+the model proxy; xLSTM and KDA remain effectively tied with GDN2 at this
+resolution.
 
 The two real outliers are:
 

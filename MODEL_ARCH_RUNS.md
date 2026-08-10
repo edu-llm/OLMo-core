@@ -21,7 +21,8 @@ Every arm has 16 layers, `d_model=1024`, a tied 100,352-token embedding/LM
 head, sequence length 4096, and identical PyTorch fused-SDPA GQA layers at
 indices 3, 7, 11, and 15.
 
-- `mamba-b3`: twelve Mamba-3 SISO layers with rotation block size 3.
+- `mamba-b3`: twelve Mamba-3 SISO layers with rotation block size 3,
+  `d_state=192`, and the exact `official_fast` SSD backend.
 - `xlstm`: `[mLSTM, mLSTM, mLSTM, attention, mLSTM, mLSTM, sLSTM, attention]`
   repeated twice, giving exactly 10 mLSTM, 2 sLSTM, and 4 attention layers.
 - `mamba3-siso-pd`: twelve native SISO PD-SSM layers with the Mamba-3
@@ -45,7 +46,7 @@ so the arm's parameter count and FFN widths did not move.
 Attention FFNs remain fixed at width 4608. A deterministic `/32` solver changes
 only recurrent-layer FFN widths. Exact totals are:
 
-- `mamba-b3`: 390,148,736 parameters.
+- `mamba-b3`: 390,153,344 parameters.
 - `xlstm`: 390,143,056 parameters.
 - `mamba3-siso-pd`: 390,169,664 parameters.
 - `native-pd`: 390,142,976 parameters.

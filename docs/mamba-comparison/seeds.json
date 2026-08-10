@@ -143,7 +143,7 @@
       15
     ],
     "attention": "4 identical GQA FlashAttention-2 layers in every arm",
-    "mamba-b3": "12 Mamba-3 SISO layers with rotation block size 3",
+    "mamba-b3": "12 Mamba-3 SISO layers with rotation block size 3, d_state 192, and official_fast SSD",
     "xlstm": "10 mLSTM + 2 sLSTM layers in [m,m,m,a,m,m,s,a] x 2",
     "mamba3-siso-pd": "12 Mamba-3-improved native SISO PD-SSM layers",
     "native-pd": "12 published native Flash PD-SSM layers",
@@ -155,7 +155,7 @@
   "parameter_target": 390135552,
   "parameter_tolerance": 195068,
   "parameters_by_arm": {
-    "mamba-b3": 390148736,
+    "mamba-b3": 390153344,
     "xlstm": 390143056,
     "mamba3-siso-pd": 390169664,
     "native-pd": 390142976,
@@ -166,18 +166,18 @@
   },
   "recurrent_ffn_widths_by_arm": {
     "mamba-b3": [
-      4800,
-      4800,
-      4800,
-      4800,
-      4800,
-      4800,
-      4800,
-      4768,
-      4768,
-      4768,
-      4768,
-      4768
+      4704,
+      4704,
+      4704,
+      4704,
+      4704,
+      4704,
+      4704,
+      4672,
+      4672,
+      4672,
+      4672,
+      4672
     ],
     "xlstm": [
       4672,

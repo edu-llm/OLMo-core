@@ -240,6 +240,21 @@ def test_eight_arm_geometry_has_identical_attention_and_full_recurrent_treatment
     assert fingerprints == {"deb8ff528e7359fa"}
 
 
+def test_mamba_b3_restores_the_successful_state_size_and_official_backend():
+    """Keep the repaired arm on the July run's state capacity and exact SSD implementation."""
+    module = load_entrypoint()
+    from olmo_core.nn.mamba3 import Mamba3MixerConfig
+
+    config = module.build_model_config("mamba-b3", module.valid_init_seeds("mamba-b3")[0])
+    mixers = [
+        config.resolved_block_configs[index].sequence_mixer for index in module.RECURRENT_LAYERS
+    ]
+
+    assert all(isinstance(mixer, Mamba3MixerConfig) for mixer in mixers)
+    assert all(mixer.d_state == 192 for mixer in mixers)
+    assert all(mixer.ssd_backend == "official_fast" for mixer in mixers)
+
+
 def test_treatment_mixers_are_strict_and_parameter_matched():
     module = load_entrypoint()
     from olmo_core.nn.attention import (
@@ -256,7 +271,7 @@ def test_treatment_mixers_are_strict_and_parameter_matched():
     from olmo_core.nn.mamba3 import Mamba3MixerConfig
 
     expected_counts = {
-        "mamba-b3": 390_148_736,
+        "mamba-b3": 390_153_344,
         "xlstm": 390_143_056,
         "mamba3-siso-pd": 390_169_664,
         "native-pd": 390_142_976,
@@ -266,7 +281,7 @@ def test_treatment_mixers_are_strict_and_parameter_matched():
         "kda-gconv": 390_094_784,
     }
     expected_widths = {
-        "mamba-b3": (4800,) * 7 + (4768,) * 5,
+        "mamba-b3": (4704,) * 7 + (4672,) * 5,
         "xlstm": (4672,) * 8 + (4640,) * 4,
         "mamba3-siso-pd": (2752,) * 11 + (2720,),
         "native-pd": (2432,) * 6 + (2400,) * 6,
@@ -291,11 +306,12 @@ def test_treatment_mixers_are_strict_and_parameter_matched():
 
         if arm == "mamba-b3":
             assert all(isinstance(mixer, Mamba3MixerConfig) for mixer in mixers)
+            assert all(mixer.d_state == 192 for mixer in mixers)
             assert all(mixer.rotation_block_size == 3 for mixer in mixers)
             assert all(mixer.mimo_rank == 1 for mixer in mixers)
             assert all(mixer.rotation_scan_impl == "quaternion" for mixer in mixers)
             assert all(mixer.prefer_official_kernel is True for mixer in mixers)
-            assert all(mixer.ssd_backend == "simple_gla" for mixer in mixers)
+            assert all(mixer.ssd_backend == "official_fast" for mixer in mixers)
         elif arm == "xlstm":
             names = [type(mixer).__name__ for mixer in mixers]
             assert names.count("XLSTMMixerConfig") == 10

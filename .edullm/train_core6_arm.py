@@ -2340,6 +2340,8 @@ def decode_basis_string(
     reason: str | None = None,
     operator: str | None = None,
     kernel: str | None = None,
+    path_kind: str | None = None,
+    state_layout: str | None = None,
     n_heads: int | None = None,
     head_k_dim: int | None = None,
     head_v_dim: int | None = None,
@@ -2359,12 +2361,13 @@ def decode_basis_string(
     if not measured:
         return f"decode not measured: {reason or 'no reason recorded'}"
     return (
-        f"operator-level microbenchmark of {kernel} ({operator}) at n_heads={n_heads}, "
-        f"head_k_dim={head_k_dim}, head_v_dim={head_v_dim}, one token per step, "
+        f"operator-level microbenchmark of {kernel} ({operator}), path_kind={path_kind}, "
+        f"state_layout={state_layout}, n_heads={n_heads}, head_k_dim={head_k_dim}, "
+        f"head_v_dim={head_v_dim}, one token per step, "
         f"{steps} timed steps, recurrent state threaded step to step. "
         f"COVERS the {mixer_layers} mixer layer(s) of {total_layers} only, x{mixer_layers} per "
         "model token. EXCLUDES the QKV/gate/output projections, the short convolutions, the "
-        f"{total_layers} layers' norms and FFNs, the {total_layers - (mixer_layers or 0)} "
+        f"{total_layers} layers' norms and FFNs, the {(total_layers or 0) - (mixer_layers or 0)} "
         "non-mixer layers entirely (including the global-attention layers whose KV cache DOES "
         "grow with context), the embedding, the LM head and sampling. NOT a whole-model serving "
         "throughput and must not be quoted as one; it isolates the mixer so arms can be ranked "
@@ -2373,8 +2376,8 @@ def decode_basis_string(
     )
 
 
-#: Which fused recurrent kernel decodes each mixer, keyed by its CONFIG CLASS NAME rather than by
-#: an arm name or a registry string.
+#: Which exact recurrent callable decodes each mixer, keyed by its CONFIG CLASS NAME rather than
+#: by an arm name or a registry string.
 #:
 #: KEYED ON THE CLASS BECAUSE THE REGISTRY STRINGS ARE NOT A CLOSED SET AND RUN 2 IS ADDING ONE.
 #: `KDA_NEGEIG` is new this wave and its registry key is being written by another agent right now.
@@ -2385,8 +2388,9 @@ def decode_basis_string(
 #: `KimiDeltaAttentionConfig` class decoding through the SAME kernel, so the class is the thing
 #: that actually determines the kernel, and keying on it makes a new arm work by construction.
 #:
-#: The arm's own `allow_neg_eigval` is read off its config and forwarded to the kernel, so
-#: `KDA_NEGEIG` decodes with the mechanism it is named for rather than with the class default.
+#: The two FLA entries are fused kernels. Mamba-3 SISO PD names the exact cached PyTorch recurrence
+#: its mixer currently uses; it is deliberately labelled ``exact_reference_recurrent`` rather than
+#: being promoted to a fast path it does not have.
 #:
 #: `KimiDeltaHouseholderConfig` IS DELIBERATELY ABSENT, and that is a finding rather than an
 #: omission: the Householder operator is a custom in-tree kernel
@@ -2396,14 +2400,19 @@ def decode_basis_string(
 DECODE_KERNELS = {
     "KimiDeltaAttentionConfig": ("fla.ops.kda.fused_recurrent", "fused_recurrent_kda"),
     "GatedDeltaNet2Config": ("fla.ops.gdn2.fused_recurrent", "fused_recurrent_gdn2"),
+    "NativeFlashPDMamba3SISOMixerConfig": (
+        "olmo_core.nn.flash_pd_native.reference",
+        "trapezoidal_reference_scan",
+    ),
 }
 
-#: Which of the two kernels' calling conventions a config class uses. GDN-2 takes two independent
+#: Which calling convention a config class uses. GDN-2 takes two independent
 #: channel-wise gates (`b` erases along K, `w` writes along V) where KDA takes one scalar `beta`;
 #: passing KDA's beta to GDN-2 would time a different operator than the arm trains with.
 DECODE_CALL_STYLE = {
     "KimiDeltaAttentionConfig": "kda",
     "GatedDeltaNet2Config": "gdn2",
+    "NativeFlashPDMamba3SISOMixerConfig": "mamba3_siso_pd",
 }
 
 
@@ -2474,6 +2483,7 @@ def _decode_geometry(arm_name: str) -> dict[str, Any]:
     counts: dict[str, int] = {}
     for mixer in recurrent:
         counts[type(mixer).__name__] = counts.get(type(mixer).__name__, 0) + 1
+    config_class = "+".join(counts)
 
     # ONE SHAPE OR NONE. `xlstm` runs two different recurrences -- mLSTM in ten layers and sLSTM
     # in two -- and has no single state geometry; one of the two standing in for both would
@@ -2481,6 +2491,27 @@ def _decode_geometry(arm_name: str) -> dict[str, Any]:
     shapes = {_mixer_state_shape(mixer) for mixer in recurrent}
     shape = shapes.pop() if len(shapes) == 1 else None
     n_v_heads, head_k_dim, head_v_dim = shape or (None, None, None)
+    if shape is None:
+        state_elems_per_layer = None
+    else:
+        assert n_v_heads is not None and head_k_dim is not None and head_v_dim is not None
+        state_elems_per_layer = n_v_heads * head_k_dim * head_v_dim
+    state_layout = None if shape is None else "(head, key, value) recurrent matrix"
+
+    # Mamba-3 SISO PD carries a COMPLEX VECTOR state plus the previous complex value. The
+    # previous value is not optional bookkeeping: trapezoidal discretization uses beta_t *
+    # v_{t-1}, so a decoder that threads h alone computes a different recurrence. This shape
+    # cannot be expressed as the matrix-state `(heads, K, V)` triple above without inventing a
+    # fake V axis, so state it directly from the one config class that defines it.
+    representative = recurrent[0] if len(counts) == 1 else None
+    if config_class == "NativeFlashPDMamba3SISOMixerConfig":
+        assert representative is not None
+        n_v_heads = representative.n_heads
+        head_k_dim = representative.d_state
+        head_v_dim = None
+        state_elems_per_layer = 4 * representative.n_heads * representative.d_state
+        state_layout = "complex h_t plus previous complex v_t"
+
     head_counts = {mixer.n_heads for mixer in recurrent}
     kv_heads, kv_head_dim = attention.pop() if len(attention) == 1 else (None, None)
 
@@ -2488,11 +2519,16 @@ def _decode_geometry(arm_name: str) -> dict[str, Any]:
         # Every recurrence the arm carries, counted. The KERNEL is chosen by `config_class`
         # below, and a two-mixer arm matches no kernel by construction, which is correct.
         "mixer": ", ".join(f"{name} x{count}" for name, count in counts.items()),
-        "config_class": "+".join(counts),
+        "config_class": config_class,
         "n_heads": head_counts.pop() if len(head_counts) == 1 else None,
         "n_v_heads": n_v_heads,
         "head_k_dim": head_k_dim,
         "head_v_dim": head_v_dim,
+        "state_elems_per_layer": state_elems_per_layer,
+        "state_layout": state_layout,
+        "dictionary_size": getattr(representative, "dictionary_size", None),
+        "chunk_size": getattr(representative, "chunk_size", None),
+        "native_pd_mode": getattr(representative, "mode", None),
         "mixer_layers": len(recurrent),
         "attention_layers": len(ATTENTION_LAYERS),
         "total_layers": N_LAYERS,
@@ -2500,6 +2536,42 @@ def _decode_geometry(arm_name: str) -> dict[str, Any]:
         "attention_head_dim": kv_head_dim,
         "allow_neg_eigval": any(getattr(m, "allow_neg_eigval", False) for m in recurrent),
     }
+
+
+def _decode_state_tensors(state) -> tuple[torch.Tensor, ...]:
+    """Flatten a tensor or iterable cache object into its realised tensor state."""
+    if isinstance(state, torch.Tensor):
+        return (state,)
+    tensors = tuple(state)
+    if not tensors or not all(isinstance(tensor, torch.Tensor) for tensor in tensors):
+        raise TypeError(f"decode state {type(state).__name__} is not a tensor cache")
+    return tensors
+
+
+def _clone_decode_state(state):
+    """Clone a threaded state without changing its tensor-vs-dataclass representation."""
+    tensors = tuple(tensor.clone() for tensor in _decode_state_tensors(state))
+    return tensors[0] if isinstance(state, torch.Tensor) else type(state)(*tensors)
+
+
+def _decode_state_advanced(before, after) -> bool:
+    """Whether any tensor in a like-shaped threaded state changed."""
+    before_tensors = _decode_state_tensors(before)
+    after_tensors = _decode_state_tensors(after)
+    if len(before_tensors) != len(after_tensors):
+        return False
+    return any(not torch.equal(old, new) for old, new in zip(before_tensors, after_tensors))
+
+
+def _decode_state_bytes(state) -> int:
+    """Realised bytes of every tensor the recurrent cache has to retain."""
+    return sum(tensor.numel() * tensor.element_size() for tensor in _decode_state_tensors(state))
+
+
+def _decode_state_dtype(state) -> str:
+    """One dtype name, or the explicit set when a cache mixes accumulation and payload dtypes."""
+    names = sorted({str(tensor.dtype) for tensor in _decode_state_tensors(state)})
+    return names[0] if len(names) == 1 else "+".join(names)
 
 
 @torch.no_grad()
@@ -2527,13 +2599,14 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
         ``initial_state=None`` every step would return plausible latencies for a kernel doing a
         different, cheaper thing -- and nothing in a timing would show it. So the returned state is
         compared against the one passed in, and if it never changed the whole probe is refused.
-      * ``decode_fast_path_taken`` is only ever True when all of the above were observed.
+      * ``decode_path_taken`` is only ever True when all of the above were observed.
+      * ``decode_fast_path_taken`` additionally requires a fused recurrent path. SISO-PD's exact
+        reference decoder records real timings while leaving this False.
 
-    WHAT HAPPENS IF THE FAST PATH IS NOT TAKEN. There is no fallback and no substitute number.
-    Every latency field is ``None``, ``decode_fast_path_taken`` is ``False``, and
-    ``decode_basis`` says which of the causes it was. A missing decode measurement must never
-    read as a fast one, and a partially-working probe must not average a real step with a
-    fallback step -- so the arms are comparable or they are absent.
+    WHAT HAPPENS IF NO PATH IS TAKEN. There is no fallback and no substitute number. Every
+    latency field is ``None``, both path receipts are ``False``, and ``decode_basis`` says which
+    cause. SISO-PD is the explicit exception to "not fast means absent": its exact reference
+    recurrence records timings with ``decode_path_taken=True`` and ``decode_fast_path_taken=False``.
 
     Never raises. A decode probe is a secondary measurement bolted onto a paid-for training run,
     and losing the CE endpoint to a benchmark bug would be a far worse trade than losing the
@@ -2544,6 +2617,7 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
     except BaseException as exc:  # noqa: BLE001 -- a benchmark must not cost the CE endpoint
         log.warning("could not read the decode geometry for %s: %r", arm_name, exc)
         return {
+            "decode_path_taken": False,
             "decode_fast_path_taken": False,
             "decode_basis": decode_basis_string(
                 measured=False,
@@ -2557,20 +2631,12 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
     n_v_heads = geometry["n_v_heads"]
     head_k_dim = geometry["head_k_dim"]
     head_v_dim = geometry["head_v_dim"]
-    # Null rather than guessed for an arm whose mixer declares no head dimension. See
-    # `_mixer_state_shape`: this is the field a serving fleet is sized with, so a plausible
+    # Null rather than guessed for an arm whose cache layout is not declared. See
+    # `_decode_geometry`: this is the field a serving fleet is sized with, so a plausible
     # number derived from a state layout nobody has read is the worst of the three outcomes.
-    state_elems_per_layer = None if head_k_dim is None else n_v_heads * head_k_dim * head_v_dim
+    state_elems_per_layer = geometry["state_elems_per_layer"]
     state_bytes_per_seq = (
-        None
-        if state_elems_per_layer is None
-        else recurrent_state_bytes(
-            n_heads=n_v_heads,
-            head_k_dim=head_k_dim,
-            head_v_dim=head_v_dim,
-            n_layers=mixer_layers,
-            bytes_per_element=4,
-        )
+        None if state_elems_per_layer is None else state_elems_per_layer * mixer_layers * 4
     )
 
     # The computed footprint. Emitted even with no GPU: it is arithmetic on the geometry, it is
@@ -2583,6 +2649,7 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
         "decode_n_v_heads": n_v_heads,
         "decode_head_k_dim": head_k_dim,
         "decode_head_v_dim": head_v_dim,
+        "decode_state_layout": geometry["state_layout"],
         "decode_mixer_layers": mixer_layers,
         "decode_state_elems_per_layer": state_elems_per_layer,
         # THE HEADLINE FIELD. fp32 because that is what `fla` keeps the state in; the realised
@@ -2590,6 +2657,8 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
         "decode_state_bytes_per_seq": state_bytes_per_seq,
         "decode_kernel_requested": None,
         "decode_kernel_resolved": None,
+        "decode_path_kind": None,
+        "decode_path_taken": False,
         "decode_fast_path_taken": False,
         "decode_state_dtype_realised": None,
         "decode_state_bytes_realised": None,
@@ -2628,7 +2697,7 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
         result["decode_basis"] = decode_basis_string(
             measured=False,
             reason=(
-                f"no fused recurrent kernel is known for {config_class} (the arm's recurrent "
+                f"no recurrent decode path is known for {config_class} (the arm's recurrent "
                 f"layers are {mixer}), so there is nothing to time rather than a number to "
                 "substitute"
             ),
@@ -2638,11 +2707,14 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
     module_name, func_name = DECODE_KERNELS[config_class]
     call_style = DECODE_CALL_STYLE[config_class]
     result["decode_kernel_requested"] = f"{module_name}.{func_name}"
+    result["decode_path_kind"] = (
+        "exact_reference_recurrent" if call_style == "mamba3_siso_pd" else "fused_recurrent"
+    )
 
     if not torch.cuda.is_available():
         result["decode_basis"] = decode_basis_string(
             measured=False,
-            reason="no CUDA device, and the fused recurrent kernels are Triton and CUDA-only",
+            reason="no CUDA device; decode latency is measured only on the target accelerator",
         )
         return result
 
@@ -2672,25 +2744,89 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
             def randn(*shape):
                 return torch.randn(*shape, device=device, dtype=dtype)
 
-            q = randn(B, T, H, K)
-            k = randn(B, T, H, K)
-            v = randn(B, T, HV, V)
-            # The gate is the RAW pre-activation and the kernel derives the decay itself, exactly
-            # as the training forward passes it (`use_gate_in_kernel=True`). A gate passed as an
-            # already-log-space decay would be a different, cheaper kernel path.
-            g = randn(B, T, HV, K)
-            # UNIFORM ON (1, 16) THEN log, WHICH IS `init_weights`' OWN RANGE AND NOT AN
-            # ARBITRARY ONE. `torch.rand` starts at 0 and log(0) is -inf, which makes exp(A_log)
-            # a zero decay: the state would be multiplied by nothing every step, never change,
-            # and the state-advanced receipt below would fail and abort the probe -- a benchmark
-            # bug wearing the costume of a kernel that does not thread state. recurrent.py's
-            # initialiser avoids log(0) for the same reason and says so.
-            A_log = (torch.rand(HV, device=device, dtype=torch.float32) * 15.0 + 1.0).log()
-            dt_bias = torch.rand(HV * K, device=device, dtype=torch.float32)
-            # Nonzero, so the FIRST step already has something to decay and transform. A state
-            # starting at exactly zero still advances here (the write term is nonzero), but a
-            # nonzero start also exercises the decay path the timing is meant to include.
-            state = torch.randn(B, HV, K, V, device=device, dtype=torch.float32)
+            call: Any = None
+            if call_style == "mamba3_siso_pd":
+                from olmo_core.nn.flash_pd_native import NativePDMode, SISOScanCache
+
+                N = K
+                dictionary_size = geometry["dictionary_size"]
+                destination = torch.randint(
+                    0,
+                    N,
+                    (H, dictionary_size, N),
+                    device=device,
+                    dtype=torch.int16,
+                )
+                routes = torch.randint(
+                    0,
+                    dictionary_size,
+                    (B, H, T),
+                    device=device,
+                    dtype=torch.int16,
+                )
+                phase = torch.randn(B, H, T, N, device=device, dtype=torch.float32) * 0.02
+                magnitude = torch.rand(B, H, T, N, device=device, dtype=torch.float32) * 0.1 + 0.85
+                diagonal_real = magnitude * torch.cos(phase)
+                diagonal_imag = magnitude * torch.sin(phase)
+                value_real = torch.randn(B, H, T, N, device=device, dtype=torch.float32)
+                value_imag = torch.randn_like(value_real)
+                beta = torch.rand(B, H, T, device=device, dtype=torch.float32) * 0.1
+                gamma = torch.rand_like(beta) * 0.1
+                state = SISOScanCache(
+                    h_real=torch.randn(B, H, N, device=device, dtype=torch.float32),
+                    h_imag=torch.randn(B, H, N, device=device, dtype=torch.float32),
+                    v_real=torch.randn(B, H, N, device=device, dtype=torch.float32),
+                    v_imag=torch.randn(B, H, N, device=device, dtype=torch.float32),
+                )
+                mode = NativePDMode(geometry["native_pd_mode"])
+                chunk_size = geometry["chunk_size"]
+
+                def siso_call(
+                    s,
+                    kernel=kernel,
+                    destination=destination,
+                    routes=routes,
+                    diagonal_real=diagonal_real,
+                    diagonal_imag=diagonal_imag,
+                    value_real=value_real,
+                    value_imag=value_imag,
+                    beta=beta,
+                    gamma=gamma,
+                    chunk_size=chunk_size,
+                    mode=mode,
+                ):
+                    output_real, output_imag, next_state = kernel(
+                        destination,
+                        routes,
+                        diagonal_real,
+                        diagonal_imag,
+                        value_real,
+                        value_imag,
+                        beta,
+                        gamma,
+                        chunk_size=chunk_size,
+                        mode=mode,
+                        initial_cache=s,
+                        return_cache=True,
+                    )
+                    return (output_real, output_imag), next_state
+
+                call = siso_call
+
+            else:
+                assert K is not None and V is not None
+                q = randn(B, T, H, K)
+                k = randn(B, T, H, K)
+                v = randn(B, T, HV, V)
+                # The gate is the RAW pre-activation and the kernel derives the decay itself,
+                # exactly as the training forward passes it (`use_gate_in_kernel=True`). A gate
+                # passed as an already-log-space decay would be a different, cheaper kernel path.
+                g = randn(B, T, HV, K)
+                # Uniform on (1, 16), then log: the mixer's own A_log initialization range.
+                A_log = (torch.rand(HV, device=device, dtype=torch.float32) * 15.0 + 1.0).log()
+                dt_bias = torch.rand(HV * K, device=device, dtype=torch.float32)
+                # Nonzero, so the first step exercises both decay and write paths.
+                state = torch.randn(B, HV, K, V, device=device, dtype=torch.float32)
 
             if call_style == "gdn2":
                 # GDN-2's two independent channel-wise gates: `b` erases along K, `w` writes
@@ -2698,7 +2834,7 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
                 erase = randn(B, T, HV, K).sigmoid()
                 write = randn(B, T, HV, V).sigmoid()
 
-                def call(
+                def gdn2_call(
                     s,
                     kernel=kernel,
                     q=q,
@@ -2725,7 +2861,9 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
                         use_gate_in_kernel=True,
                     )
 
-            else:
+                call = gdn2_call
+
+            elif call_style == "kda":
                 # `allow_neg_eigval` IS APPLIED IN EAGER PYTORCH AND IS DELIBERATELY *NOT*
                 # FORWARDED TO THE KERNEL, BECAUSE THAT IS WHAT THE TRAINING FORWARD DOES.
                 # `KimiDeltaAttention.forward` computes `beta = w_b(x).sigmoid()` and then, if the
@@ -2742,7 +2880,7 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
                 if geometry["allow_neg_eigval"]:
                     beta = beta * 2.0
 
-                def call(
+                def kda_call(
                     s,
                     kernel=kernel,
                     q=q,
@@ -2767,7 +2905,10 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
                         use_gate_in_kernel=True,
                     )
 
+                call = kda_call
+
             # Warmup: Triton compiles on the first call and the allocator is still growing.
+            assert call is not None
             threaded = state
             for _ in range(DECODE_WARMUP_STEPS):
                 _, threaded = call(threaded)
@@ -2777,16 +2918,16 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
             # the kernel cannot have written through the reference we are comparing to. A probe
             # that silently failed to thread would time a different, cheaper computation and no
             # latency would look wrong.
-            before = threaded.clone()
+            before = _clone_decode_state(threaded)
             _, threaded = call(threaded)
             torch.cuda.synchronize()
-            advanced = bool(not torch.equal(before, threaded))
+            advanced = _decode_state_advanced(before, threaded)
             if result["decode_state_advanced"] is None:
                 result["decode_state_advanced"] = advanced
-                result["decode_state_dtype_realised"] = str(threaded.dtype)
+                result["decode_state_dtype_realised"] = _decode_state_dtype(threaded)
                 # Per sequence, across the mixer layers -- the same quantity the computed field
-                # above reports, measured off the tensor the kernel returned.
-                realised = int(threaded.numel() * threaded.element_size() // B * mixer_layers)
+                # above reports, measured off every tensor the decoder returned in its cache.
+                realised = int(_decode_state_bytes(threaded) // B * mixer_layers)
                 result["decode_state_bytes_realised"] = realised
                 # THE TWO NUMBERS MUST AGREE, AND THE COMPARISON IS RECORDED RATHER THAN LEFT FOR
                 # A READER TO DO. `decode_state_bytes_per_seq` is computed from the geometry with
@@ -2804,7 +2945,7 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
                         "is the computed one and it is wrong",
                         result["decode_state_bytes_per_seq"],
                         realised,
-                        threaded.dtype,
+                        result["decode_state_dtype_realised"],
                     )
             if not advanced:
                 # No timings recorded at all: a latency for a kernel that is not advancing state
@@ -2839,14 +2980,17 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
                 "tokens_per_second": decode_tokens_per_second(
                     seconds_per_token=median, batch_size=B
                 ),
-                "state_bytes_total": int(threaded.numel() * threaded.element_size() * mixer_layers),
+                "state_bytes_total": int(_decode_state_bytes(threaded) * mixer_layers),
             }
 
-        result["decode_fast_path_taken"] = True
+        result["decode_path_taken"] = True
+        result["decode_fast_path_taken"] = result["decode_path_kind"] == "fused_recurrent"
         result["decode_basis"] = decode_basis_string(
             measured=True,
             operator=mixer,
             kernel=result["decode_kernel_resolved"],
+            path_kind=result["decode_path_kind"],
+            state_layout=result["decode_state_layout"],
             n_heads=n_v_heads,
             head_k_dim=K,
             head_v_dim=V,
@@ -2855,6 +2999,7 @@ def decode_probe(*, arm_name: str, batch_sizes=DECODE_BATCH_SIZES) -> dict[str, 
         )
     except BaseException as exc:  # noqa: BLE001 -- never lose the CE endpoint to a benchmark
         log.warning("decode probe failed (%s: %s)", type(exc).__name__, exc)
+        result["decode_path_taken"] = False
         result["decode_fast_path_taken"] = False
         result["decode_batches"] = {}
         result["decode_basis"] = decode_basis_string(
@@ -3000,6 +3145,7 @@ def summarise(
         decode = decode_report(arm_name=opts.arm, world_size=get_world_size())
     else:
         decode = {
+            "decode_path_taken": False,
             "decode_fast_path_taken": False,
             "decode_basis": decode_basis_string(
                 measured=False, reason="--no-decode-probe was passed, so decode was not measured"
@@ -3042,11 +3188,11 @@ def summarise(
         # instead of a KV cache that grows with context -- and run 1 never ran that path.
         # `decode_state_bytes_per_seq` is the field that decides serving batch size.
         #
-        # `decode_fast_path_taken` IS A RECEIPT, NOT A REQUEST: it is only True when the
-        # kernel was resolved by identity, the returned state was fp32, and the state was
-        # OBSERVED to advance across a step. If it is False every latency is null and
-        # `decode_basis` says which cause. Read `decode_basis` before quoting any of
-        # these -- it is an operator microbenchmark and not a serving throughput.
+        # `decode_path_taken` IS A RECEIPT, NOT A REQUEST: it is only True when the callable
+        # resolved by identity and the returned state was observed to advance. The stricter
+        # `decode_fast_path_taken` distinguishes fused kernels from SISO-PD's exact reference
+        # recurrence. Read `decode_basis` before quoting either -- this is an operator
+        # microbenchmark and not a whole-model serving throughput.
         **decode,
         # The SpeedMonitorCallback's own per-device averages, kept because the
         # preregistration names them and because they are an independent measurement of
@@ -3775,9 +3921,9 @@ def build_parser() -> argparse.ArgumentParser:
         dest="decode_probe",
         action="store_false",
         default=True,
-        help="Skip the fused-recurrent decode measurement. On by default; the whole reason run 2 "
+        help="Skip the recurrent decode measurement. On by default; the whole reason run 2 "
         "exists is that run 1 measured nothing about inference. Turning it off records "
-        "decode_fast_path_taken=false with a stated reason rather than a null field.",
+        "decode_path_taken=false with a stated reason rather than a null field.",
     )
     parser.add_argument("--dry-run", action="store_true", help="Resolve and print, do not train.")
     return parser
