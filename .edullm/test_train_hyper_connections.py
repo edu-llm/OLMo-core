@@ -1386,12 +1386,61 @@ def test_the_two_stages_that_omit_the_lane_guard_omit_it_for_the_reasons_claimed
             # the radius H5 is about; it is the abort threshold that is absent.
             assert reachable, "mhc without the monitor would leave H5 without its instrument"
             assert opts.fail_closed_by_step is None, (
-                "run.mhc-stage.yaml now sets --fail-closed-by-step, which would abort all five "
-                "cells at step 400; see MHC_LANE_DISPERSION_AT_GATE"
+                "run.mhc-stage.yaml now sets --fail-closed-by-step. That was expected to abort "
+                "all five cells at step 400; the arm has since run and would clear the gate, "
+                "so see MHC_DIFFERENTIATED_FRACTION_AT_GATE_370M before acting on either."
             )
         else:
             assert reachable, name
             assert opts.fail_closed_by_step == arms.TRANCHE_FAIL_CLOSED_BY_STEP == 400
+
+
+def test_the_two_a100_stages_that_omit_the_lane_guard_omit_it_for_the_reasons_claimed(monkeypatch):
+    """
+    THE SAME TEST AS ABOVE, ON THE FILES THE TWENTY CELLS WERE ACTUALLY SUBMITTED FROM.
+
+    The copy above walks ``STAGE_SPECS``, which is the L40S set: four files that are history
+    and are not edited again. So the one guarantee that says the guard is attached where each
+    arm needs it, and absent where it would be unsound, was being made about specs nobody is
+    running. The A100 set is what ``run_019fe90b-f99e``, ``run_019fe9f6-d060`` and
+    ``run_019fe9f6-d4f8`` carry, and it had no such test.
+
+    The two omissions are still two different facts and both are asserted by building the
+    config rather than by reading the command. On BASELINE the flag is UNREACHABLE, because
+    ``train`` attaches ``HyperConnectionMonitorCallback`` only where ``arm.hyper_connections``
+    is not ``None``. On MHC it is reachable and merely unset -- the monitor still runs and
+    still records the spectral radius H5 is about, and it is only the abort threshold that is
+    missing. See ``MHC_DIFFERENTIATED_FRACTION_AT_GATE_370M`` for why that omission no longer
+    rests on what it was granted for.
+    """
+    seen: set = set()
+
+    def fake_train(config, opts=None):
+        seen.clear()
+        seen.update(config.trainer.callbacks)
+
+    monkeypatch.setattr(entry, "_train", fake_train)
+
+    for name in A100_STAGES:
+        stage = arms.A100_STAGE_SPECS[name]
+        argv = committed_argv(stage.spec) + BASE_ARGV[1:]
+        opts, overrides = entry.build_parser().parse_known_args(argv)
+        entry.train(entry.build_config(opts, overrides), opts)
+
+        reachable = "hyper_connections" in seen
+        if name == "baseline":
+            assert not reachable, "the baseline now runs the monitor, so the exemption is unsound"
+            assert opts.fail_closed_by_step is None
+        elif name == "mhc":
+            assert reachable, "mhc without the monitor would leave H5 without its instrument"
+            assert opts.fail_closed_by_step is None, f"{stage.spec} now sets the abort threshold"
+        else:
+            assert reachable, name
+            assert opts.fail_closed_by_step == arms.TRANCHE_FAIL_CLOSED_BY_STEP == 400
+
+        # And the skip-step monitor is on every arm, unlike the lane monitor, because a skip
+        # count on the treatments with nothing to compare it against is not an outcome.
+        assert "skip_step_monitor" in seen, name
 
 
 @pytest.mark.parametrize("name", STAGES)
