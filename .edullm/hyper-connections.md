@@ -1736,7 +1736,8 @@ section said a per-block `n^-0.5` "is not a global rescale a norm can absorb —
 against depth". In a pre-norm stack that is right. In *this* stack it is wrong, and the
 difference is the reordered norm OLMo-2 and OLMo-3 use. A reordered-norm block normalizes
 **after** its sublayer, so a constant factor on `attention.w_out` or `feed_forward.w2` is divided
-straight back out by the very next operation. Three measurements say so:
+straight back out by the very next operation. Four measurements say so, of which only the first
+is the figure this section quotes:
 
 | at `hc_370M`, 4,096 tokens, seed 12,536 | logits, relative to `baseline` |
 | --- | --- |
