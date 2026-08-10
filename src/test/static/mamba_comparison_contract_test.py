@@ -266,7 +266,7 @@ def test_default_spec_is_a_short_functional_smoke_on_one_mamba_b3_cell():
     assert int(flags["--sequence-length"]) == 4096
     assert int(flags["--global-batch-size"]) == values["FROZEN_GLOBAL_BATCH_SIZE"]
     assert int(flags["--rank-microbatch-size"]) == 8192
-    assert float(flags["--learning-rate"]) == 1.4e-3
+    assert float(flags["--learning-rate"]) == 3e-4
 
     # At the end of the run or past it, so no mid-run checkpoint dispatch.
     assert int(flags["--save-interval"]) >= steps

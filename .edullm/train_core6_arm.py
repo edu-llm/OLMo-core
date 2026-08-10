@@ -3887,7 +3887,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--steps", type=int, default=1144)
     parser.add_argument("--save-interval", type=int, default=572)
     parser.add_argument("--warmup-steps", type=int, default=114)
-    parser.add_argument("--learning-rate", type=float, default=1.4e-3)
+    # 3e-4 IS GPT-3 350M's PEAK AT THIS BATCH SIZE, AND 1.4e-3 WAS 4.7 TIMES IT. The wave run
+    # at 1.4e-3 broke three of eight arms in three different ways: `mamba-b3` took gradient
+    # norms above 2,000 through warmup, clipped by three orders of magnitude, and settled at a
+    # held-out CE of 6.55 against ~3.0 for every arm that converged; `gdn` lost two of three
+    # seeds to NaN at steps 214 and 225; and the five that survived did so on a schedule nobody
+    # had justified. The July run that trained Mamba-3 b=3 well used 2e-4.
+    parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--global-batch-size", type=int, default=524288)
     parser.add_argument("--rank-microbatch-size", type=int, default=8192)
     parser.add_argument("--param-dtype", choices=("bfloat16",), default="bfloat16")

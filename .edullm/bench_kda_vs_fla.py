@@ -257,11 +257,20 @@ def kernel_sweep(
     results: dict[str, Any] = {}
     for name, extra, changes_numerics in KNOB_VARIANTS:
         kwargs = {**BASELINE_KWARGS, **extra}
-        # The kernel applies the sigmoid itself only when asked to; otherwise beta arrives
-        # already activated. Passing the raw tensor both ways would time two different betas.
-        beta = beta_raw if kwargs.get("use_beta_sigmoid_in_kernel") else beta_raw.sigmoid()
 
-        def run(kwargs: dict[str, Any] = kwargs, beta: torch.Tensor = beta) -> torch.Tensor:
+        def run(kwargs: dict[str, Any] = kwargs) -> torch.Tensor:
+            # The kernel applies the sigmoid itself only when asked to; otherwise beta arrives
+            # already activated, and passing the raw tensor both ways would time two different
+            # betas.
+            #
+            # COMPUTED INSIDE THE TIMED CALLABLE, NOT HOISTED ABOVE IT. Hoisting builds one
+            # non-leaf whose graph the first `.backward()` frees, so every step after the first
+            # raises "Trying to backward through the graph a second time" -- which is exactly
+            # what happened on 2026-08-10 and cost the four variants that take this branch,
+            # `baseline` among them, so no `speedup_vs_baseline` could be computed at all. It is
+            # also the more faithful placement: the mixer computes `self.w_b(x).sigmoid()` every
+            # step, so the activation belongs inside the measured window.
+            beta = beta_raw if kwargs.get("use_beta_sigmoid_in_kernel") else beta_raw.sigmoid()
             out, _ = chunk_kda(
                 q=q, k=k, v=v, g=g, beta=beta, A_log=a_log, dt_bias=dt_bias, **kwargs
             )

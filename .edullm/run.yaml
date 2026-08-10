@@ -25,7 +25,7 @@ command: >-
   python -m torch.distributed.run --nproc-per-node=8 --standalone
   .edullm/train_core6_arm.py "$EDULLM_RUN_ID"
   --arm mamba-b3 --data-seed 210007 --init-seed 110007
-  --sequence-length 4096 --steps 10 --warmup-steps 1 --learning-rate 1.4e-3
+  --sequence-length 4096 --steps 10 --warmup-steps 1 --learning-rate 3e-4
   --global-batch-size 524288 --rank-microbatch-size 8192 --save-interval 10
   --save-folder "$EDULLM_CHECKPOINT_DIR" --param-dtype bfloat16
   --skip-heldout-eval --no-decode-probe'

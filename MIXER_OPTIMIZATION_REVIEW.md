@@ -360,7 +360,7 @@ It is therefore **budget- and seed-count-aligned to Run 1**, not a copy of Run
 1's two-treatment-slot architecture.
 
 Other contracts remain aligned: sequence length 4096, rank microbatch 8192,
-LR 1.4e-3, 10% warmup, eight A100s, BF16 compute, FP32 reduction, attempts 1,
+LR 3e-4, 10% warmup, eight A100s, BF16 compute, FP32 reduction, attempts 1,
 and dataset release `reservoir-dolma2-v1`.
 
 The architecture necessarily differs from the old bakeoff. Run 1 used six

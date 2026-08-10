@@ -293,7 +293,7 @@
     "kda-gconv": 1.53753779
   },
   "warmup_steps": 114,
-  "learning_rate": 0.0014,
+  "learning_rate": 0.0003,
   "rank_microbatch_size": 8192,
   "save_interval": 572,
   "compute": "gpu-8xa100",
