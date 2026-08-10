@@ -157,6 +157,40 @@ def test_the_threshold_is_run_relative_so_the_count_is_not_monotone_in_instabili
     )
 
 
+def test_a_declined_step_poisons_its_own_detector_so_declines_cannot_cluster():
+    """
+    WHY ``Delta n`` ACCUMULATES AS A RATE AND NOT AS A BURST, which is what the amendment models.
+
+    The setters append the step's loss and gradient norm to the rolling window *before*
+    ``step()`` consults it, and nothing removes the value again when the step is declined. So a
+    spike stays in the window that judges the following ``rolling_interval_length`` steps and
+    lifts the very mean and standard deviation that declining it again would require.
+
+    The consequence is not a mild one. An isolated spike is declined exactly once and identical
+    spikes immediately after it are accepted, which is why the amendment declines to treat the
+    count as a measurement of the missing dose: the same instability yields a different count
+    depending on where in the window it lands.
+    """
+    parameter = torch.nn.Parameter(torch.ones(4))
+    optim = SkipStepAdamW(
+        [parameter], lr=0.1, rolling_interval_length=16, sigma_factor=6, foreach=False
+    )
+    for i in range(20):
+        _drive(optim, parameter, loss=2.5 + 0.001 * (i % 3), grad_norm=0.15 + 0.001 * (i % 3))
+
+    verdicts = []
+    for _ in range(3):
+        _drive(optim, parameter, loss=2.5, grad_norm=50.0)
+        verdicts.append(bool(float(optim.step_skipped)))
+
+    assert verdicts == [True, False, False], (
+        "three identical gradient-norm spikes were expected to cost exactly one declined step, "
+        "because the first one enters the window and raises the bar for the other two. Got "
+        f"{verdicts}. If this has changed, the amendment's claim that declines are anti-clustered "
+        "no longer holds and the way it models the dose difference needs revisiting."
+    )
+
+
 # ---------------------------------------------------------------------------------------
 # The frozen constants.
 # ---------------------------------------------------------------------------------------
@@ -374,3 +408,41 @@ def test_unequal_cell_counts_use_arm_means_rather_than_refusing():
 
     assert check.delta_declines == pytest.approx(12.0 - 20.0)
     assert math.isfinite(check.dose_nats)
+
+
+# ---------------------------------------------------------------------------------------
+# Multiplicity, which is the other half of the same amendment: funding arm 4 took the family
+# from three comparisons to five, and the gate is uncorrected by design.
+# ---------------------------------------------------------------------------------------
+
+
+def test_holm_is_reported_beside_the_gate_and_does_not_replace_it():
+    """
+    Holm-Bonferroni over the primary rows. Checked against the definition rather than against a
+    library, and checked for the two properties a step-down procedure has to have: it is at
+    least as large as the raw value, and it is monotone in rank so two adjusted values cannot
+    cross.
+    """
+    raw = {"H1": 0.001, "H1a": 0.02, "H1b": 0.30, "H2a": 0.04, "H5": 0.60}
+    adjusted = dose.holm_adjust(raw)
+
+    assert set(adjusted) == set(raw)
+    # (n - rank) * p, in ascending order of p, with a running maximum.
+    assert adjusted["H1"] == pytest.approx(5 * 0.001)
+    assert adjusted["H1a"] == pytest.approx(4 * 0.02)
+    assert adjusted["H2a"] == pytest.approx(max(4 * 0.02, 3 * 0.04))
+    assert adjusted["H1b"] == pytest.approx(max(3 * 0.04, 2 * 0.30))
+    assert adjusted["H5"] == pytest.approx(0.60)
+
+    for name, value in adjusted.items():
+        assert value >= raw[name], "an adjustment that lowers a p-value is not a correction"
+        assert value <= 1.0
+
+    ranked = sorted(raw, key=lambda k: raw[k])
+    values = [adjusted[name] for name in ranked]
+    assert values == sorted(values), "Holm has to be monotone in rank"
+
+
+def test_holm_on_an_empty_or_single_family_is_the_identity():
+    assert dose.holm_adjust({}) == {}
+    assert dose.holm_adjust({"H1": 0.03}) == pytest.approx({"H1": 0.03})

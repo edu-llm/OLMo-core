@@ -84,17 +84,25 @@ the lane mixing besides.
 Generated from `hyper_connection_arms.ARMS`; the tests assert these properties rather than
 trusting the table.
 
+> **Correction of 2026-08-10.** The seeds column said **3, 3, 3, 0** and every other arm 0, and
+> had said so since the design moved to five seeds. The sentence above was false of that column
+> in particular: the parameter and FLOP columns are parsed and asserted, and the seeds column —
+> the number this document's own history records as having been wrong twice before, as "fifteen"
+> and then "seventeen" — was not read by any test, so 186 tests passed with it wrong. It is
+> corrected here to the live values and
+> `test_the_arm_table_in_the_pre_registration_states_the_seeds_that_are_funded` now parses it.
+
 | # | arm | seeds | params | vs baseline | FLOPs/token vs baseline |
 | --- | --- | --- | --- | --- | --- |
-| 1 | `baseline` | **3** | 474,022,912 | +0.0000% | +0.0000% |
-| 2 | `faithful` | **3** | 474,220,352 | +0.0417% | +0.0994% |
-| 3 | `output-only` | **3** | 474,187,456 | +0.0347% | +0.0908% |
-| 4 | `no-output-init` | 0 | 474,220,352 | +0.0417% | +0.0994% |
+| 1 | `baseline` | **5** | 474,022,912 | +0.0000% | +0.0000% |
+| 2 | `faithful` | **5** | 474,220,352 | +0.0417% | +0.0994% |
+| 3 | `output-only` | **5** | 474,187,456 | +0.0347% | +0.0908% |
+| 4 | `no-output-init` | **5** | 474,220,352 | +0.0417% | +0.0994% |
 | 5 | `decay-everything` | 0 | 474,220,352 | +0.0417% | +0.0994% |
 | 6 | `n1` | 0 | 474,121,376 | +0.0208% | +0.0119% |
 | 7 | `n2` | 0 | 474,154,304 | +0.0277% | +0.0324% |
 | 8 | `n8` | 0 | 474,353,216 | +0.0697% | +0.3371% |
-| 9 | `mhc` | 0 | 474,220,352 | +0.0417% | +0.0994% |
+| 9 | `mhc` | **5** | 474,220,352 | +0.0417% | +0.0994% |
 | 10 | `tied-faithful` | 0 | 339,871,136 | −28.3007% | +0.0994% |
 | 11 | `tied-baseline` | 0 | 339,772,416 | −28.3215% | +0.0000% |
 
@@ -1165,9 +1173,16 @@ post-hoc adjustment.
   design until the number looks affordable.
 - **Skipping suppresses the episodes but changes the endpoint.** Watch for it: the three clean
   cells declined 7, 13 and 14 steps apiece, so `baseline` under this rule is not quite the
-  `baseline` that was measured. It is the same comparison for all four arms, so the contrasts
-  are unaffected, but any comparison drawn to `run_019fe2f4-f528`'s absolute numbers is not
+  `baseline` that was measured. ~~It is the same comparison for all four arms, so the contrasts
+  are unaffected~~, but any comparison drawn to `run_019fe2f4-f528`'s absolute numbers is not
   like-for-like and is not to be made.
+
+  **SUPERSEDED BY [The dose amendment of 2026-08-10](#the-dose-amendment-of-2026-08-10-a-declined-step-is-a-dose-and-the-dose-is-endogenous).**
+  The struck clause is the error. An identical *rule* is not an identical *treatment* when the
+  rule's action rate is endogenous to the treatment: `get_step_factor` compares each run against
+  a rolling window of that run's own previous 128 steps, so the number of declined steps is a
+  post-randomisation variable on the causal path from arm to endpoint, and an arm that declines
+  more has been trained less at the same nominal horizon. The rest of the bullet stands.
 
 ### The amended baseline landed, and the first outcome of the three above is the one that happened
 
@@ -1197,13 +1212,46 @@ still high — did not happen. Neither did the third. What happened is that the 
 was the spikes, in the proportion the earlier section measured it at, and removing them leaves
 the floor the three clean cells had already implied.
 
-That last point is the reason to believe a number this small. The clean-cell floor was
-estimated on three runs and this document said plainly that it was the ceiling, should not be
-the expectation, and was four to five times smaller than the lowest σ published for this class
-of model. It has now been measured a second time, on five runs, on the two seeds that had
-previously spiked as well as the three that had not, and the two estimates agree. That is not
-proof that the configuration is quiet; it is two independent samples saying so, which is more
-than the design needed and more than it expected.
+##### Correction of 2026-08-10: what the agreement establishes, and what it does not
+
+The paragraph that stood here claimed the clean-cell floor "has now been measured a second time
+… and the two estimates agree. That is not proof that the configuration is quiet; it is **two
+independent samples** saying so." That was wrong twice and the corrections are written before
+any treatment endpoint is visible.
+
+**The two samples are not independent and are not disjoint.** Both submissions run seeds 0
+through 4, at the same `init_seed` 12536–12540 and the same `data_loader.seed` cell for cell —
+this document says so itself two paragraphs above, and both frozen artifacts list
+`"seeds": [0,1,2,3,4]`. The clean-cell estimate is built on seeds 2, 3 and 4 plus the
+within-pair spread of 0 and 1; the amended estimate is built on seeds 0 through 4. **The second
+sample is a superset of the first, not a second draw.** σ is by definition the spread across
+seeds, so two estimates over the same seed draw share the entire quantity being estimated: if
+those five seeds happen to be a tight draw, both estimates are low together and their agreement
+says nothing about the population. **The degrees of freedom are 4, and stay 4.** The
+`test_noise_floor` assertion that the two artifacts share no run id is a provenance check and
+was read here as though it were an independence check; it is not one and cannot be.
+
+**What the agreement does establish, which is worth having and is a smaller thing.** It is a
+**reproducibility check on the whole pipeline**. On the three shared clean seeds the two
+submissions correlate at **r = 0.96** and reproduce each other to within +0.00011 to +0.00056
+BPB, under a change of optimizer, on different hosts, through a separate read of W&B. That says
+the endpoint is a stable function of the seed and that nothing in the reading path is adding
+noise of the size being measured. It does not say the five seeds are a representative draw, and
+no claim resting on that reading may be made.
+
+**And the mechanism the low σ̂ was attributed to never fired.** The largest triggering gradient
+norm across all five amended cells is 0.712, no cell put a gradient norm above 1.0 after warmup,
+and no episode began. The rule declined 10 to 20 ordinary steps per run and did not once decline
+a spike onset. So the 10.3× fall in σ̂ **cannot be attributed to spike suppression**: whatever
+prevented the episodes, it was not the pre-registered mechanism doing the thing the replay
+predicted. Three explanations fit the data equally well and this document commits to none of
+them — the handful of ordinary declined steps before step ~1,374 averted the episode; the
+changed kernel path did (`AdamWConfig` builds `torch.optim.AdamW` and `SkipStepAdamWConfig`
+builds this repository's own foreach re-implementation, so "differs in the optimizer and in
+nothing else" understates it to a numerics perturbation); or nothing averted it and 0 spikes in
+5 was a draw at p = 0.078 against the pre-amendment propensity of 0.4. **The sentence "the
+variance really was the spikes" above is retained as what was believed at the freeze and is not
+supported by the amended run.**
 
 #### The endpoint, cell by cell, and what the skipping cost a clean run
 
@@ -1230,7 +1278,16 @@ filled, and the identical maxima appear at the identical steps in the `AdamW` ru
 the initialization transient and not an episode. Declining continues at a low rate to the end
 of every cell — last declined steps 5663 to 5897 — and every trigger after step 3,000 is at or
 below 0.291. There is no late episode in any cell, and the check is at step 6,000 rather than
-at the ~2,700 the mid-run read covered.
+mid-flight.
+
+> **Provenance, 2026-08-10.** This sentence used to end "rather than at the ~2,700 the mid-run
+> read covered". That figure had no recorded invocation behind it. The only mid-flight read of
+> this submission on record is the synthetic one described under
+> [The reading this decision was nearly made on was synthetic](#the-reading-this-decision-was-nearly-made-on-was-synthetic-and-the-tool-now-refuses-it),
+> which read no data at all — so the clause was citing a step count from a report that had none,
+> in the same section that exists because a read of that submission had no provenance. The claim
+> it supported does not need it: "there is no late episode in any cell" is established directly
+> above, at step 6,000, from the frozen artifact. The clause is deleted rather than sourced.
 
 **Skipping did not move the endpoint, which is the third outcome the section above said to
 watch for.** The five amended cells average 0.67587 BPB; the three clean `AdamW` cells average
@@ -1398,6 +1455,295 @@ now clears every literature effect under both, so that choice no longer decides 
 the four within-arm variances**, as the plan commits. The frozen floor prices the design; it is
 not the σ the contrasts are tested against. A treatment arm that is noisier than the comparator
 raises the gate, which is the correct behaviour and is why the pooling was pre-registered.
+
+### The dose amendment of 2026-08-10: a declined step is a dose, and the dose is endogenous
+
+**Written while `run_019fe90b-f99e` had about three hours left to run and the other two
+treatment stages were queuing, so that no treatment arm had an endpoint to be tempted by.
+Committed later the same day, by which point `faithful` and `output-only` had joined `baseline`
+at 5/5 and `mhc` stood at two cells done and three running.** The gap between writing and
+committing is a machine timeout and nothing else, and it is recorded here rather than quietly
+closed, because the honest claim is not "no endpoint existed" — by the time of the commit three
+arms of endpoints did exist — but this:
+
+**No treatment arm's endpoint, per-source table, declined-step count or largest trigger has been
+read by the author of this amendment, at any point, and none was read before the commit that
+carries it.** The three completed arms were reported as *counts of finished cells* by the
+researcher; a cell count is not an endpoint. Every constant in the rule below is derived from
+the `baseline`-versus-`baseline` pair in [the cell-by-cell
+table](#the-endpoint-cell-by-cell-and-what-the-skipping-cost-a-clean-run), which is a
+control-arm reproducibility comparison that predates all of this and contains no treatment
+number.
+
+That distinction is the whole value of the section. Every choice below is free while it is
+unread and is a researcher degree of freedom the moment an arm mean is in front of you. The
+estimand does not move, and the rule added can only ever withhold a claim — so even a reader who
+disbelieves the paragraph above can check that the machinery has no channel through which a
+result could be manufactured, only one through which it can be refused.
+
+#### The finding, verified against the code rather than taken on report
+
+`SkipStepAdamW` declines a step by multiplying the entire update by a 0/1 factor. Verified
+directly, and asserted by
+[`test_dose_adjustment.py`](test_dose_adjustment.py) against the real optimizer on both kernel
+paths rather than restated from a reading:
+
+- the parameters do not move — `update.mul_(step_factor)` then `p.add_(update)`
+  (`src/olmo_core/optim/adamw.py:44-45`, and `:99-100` in the foreach kernel);
+- neither moment moves — the lerp weight is `step_factor * (1 - beta1)` and the second moment's
+  is `step_factor * (1 - beta2)` (`:32-34`, `:78-86`);
+- the decoupled weight decay does not apply — `p.mul_(1 - step_factor * (lr * weight_decay))`
+  (`:29`, `:71`);
+- **and the Adam step counter does not increment** — `step.add_(step_factor)` (`:47`, `:101-102`),
+  reached whenever `step_increment_bugfix` is true, which is `SkipStepAdamWConfig`'s default and
+  therefore this tranche's setting.
+
+The trainer's global step, the cosine schedule and the data loader advance regardless. **So a
+declined step consumes its tokens, moves the schedule along, and performs no optimization.** An
+arm that declines more is an arm that has been trained less at the same nominal horizon.
+
+The rule is identical on all four arms and that is what the earlier section argued from. It is
+the wrong thing to argue from. `get_step_factor` compares each step against the mean and
+standard deviation of **that run's own** previous 128 losses and gradient norms
+(`skip_step_optimizer.py:94-109`), so the *action rate* is endogenous to the treatment even
+though the *rule* is fixed. Declined count is a post-randomisation variable on the causal path
+from arm to endpoint. Holding the rule fixed converts a loss confound into a training-duration
+confound, and nothing in the design bounds it.
+
+Two consequences worth stating separately, because they cut in opposite directions.
+
+- **H7 is not rescued by this and is further damaged by it.** The threshold being run-relative
+  means an arm whose gradient norms are uniformly elevated but smooth raises its own bar and may
+  decline *fewer* steps than the baseline. The count is not monotone in instability, which
+  [`test_dose_adjustment.py`](test_dose_adjustment.py) demonstrates by rescaling a synthetic
+  run's gradient norms tenfold and getting an identical count. H7 stays secondary and stays
+  reported; nothing primary was ever conditioned on it.
+- **The dose is nonetheless the right variable for the contrasts**, precisely because it is a
+  count of updates not taken. Whatever it says about stability, it says something exact about how
+  much training happened.
+
+**A third mechanism fact, which bounds how large `Δn` can plausibly get.** The step's own loss
+and gradient norm are appended to the rolling window *before* `step()` consults it — the setters
+append unconditionally (`skip_step_optimizer.py:59-76`) and nothing removes the value when the
+step is declined. So a declined step stays in the window that judges the next 128 steps, and
+having declined once it raises the very mean and standard deviation that would be needed to
+decline again. Driven against the real optimizer, a spike is declined **once** and the two
+identical spikes that follow it are both accepted; the mechanism poisons its own detector.
+[`test_dose_adjustment.py`](test_dose_adjustment.py) asserts exactly that.
+
+Two things follow, and the second is the one that matters here.
+
+1. Declines are **anti-clustered**, not clustered. A single instability episode costs at most
+   one update per window rather than a run of them, so `Δn` accumulates as a slow difference in
+   rates over 6,000 steps rather than as a burst. The 49-step and 17-step gaps in the table below
+   remain reachable that way, so this tightens nothing in the rule — but it does mean a gap of
+   that size implies a *sustained* difference in behaviour between arms and not one bad minute.
+2. It is a **third independent reason not to use the count as a covariate**. A regression of
+   endpoint on declined count assumes the count measures the missing dose. Here the count is
+   censored by its own history — the same underlying instability yields a different count
+   depending on when in the window it arrived — so the count understates the dose by an
+   arm-dependent and unknowable amount. The rule below therefore uses the count only to bound a
+   contrast, never to correct one, and the bound is taken at the top of the slope interval.
+
+#### The calibration, and the interval nobody had put on it
+
+The only pre-existing measurement of what declining costs is the three baseline seeds that never
+spiked, run once under `AdamW` and once under `SkipStepAdamW` at the same `init_seed` and the
+same `data_loader.seed`. From this document's own
+[cell-by-cell table](#the-endpoint-cell-by-cell-and-what-the-skipping-cost-a-clean-run):
++0.00024, +0.00056 and +0.00011 BPB at 16, 18 and 20 declines.
+
+| | nats per declined step | the decline gap that spans the 0.0026 gate |
+| --- | --- | --- |
+| point estimate, ratio of means | 5.34e-05 | 49 steps |
+| **95% upper, t on df = 2** | **1.55e-04** | **17 steps** |
+| 95% lower | −4.79e-05 | — |
+
+**The point estimate is right and it is not the operative number.** The mean movement is
++0.00096 nats and it does not clear zero: t = 2.27 on df = 2, p = 0.15. The upper end of its
+interval is 2.9 times the point, and at that slope the entire pre-registered gate is spanned by
+a **seventeen-step** difference in declined counts — against an amended baseline whose own five
+cells declined between 10 and 20. A spread that size is inside what one arm has already
+produced.
+
+Three things are wrong with the estimator and all three are recorded rather than smoothed over.
+
+1. It is a **ratio of means through the origin**, not a regression: it attributes the whole
+   `AdamW`→`SkipStepAdamW` movement to declining. The two optimizers are also a different kernel
+   path, so part of that movement is numerics. The slope is therefore an **over-estimate**, which
+   is the direction a withholding rule wants and the reason the band is quoted at the top of the
+   interval rather than at the point.
+2. It rests on **three cells**, and the identification comes from the pairing — the same seed run
+   twice under a near-identity perturbation — rather than from the spread of the counts.
+3. The **within-sample regression** of movement on declined count over those same three cells is
+   **negative**, at −1.03e-04 nats per decline. Sixteen, eighteen and twenty declines carry
+   almost no leverage, so that number is noise; it is recorded because anybody who recomputes the
+   slope the obvious way will find it and should know it was seen and rejected on those grounds.
+
+The direction is certain — a declined step is strictly less optimization — and the magnitude is
+known to within about a factor of three.
+
+#### What was chosen, and what was rejected
+
+**The primary estimand does not move. It stays the total effect at 6,000 global steps.**
+Declining is part of what an arm does, so the intention-to-treat contrast is the quantity the
+module's question is about, and swapping it for a mediator-adjusted quantity after a review, on a
+slope this imprecise, would be the larger error. What is added is a band beside every contrast.
+
+- **Equal applied updates rather than equal global steps** is the clean fix and it is
+  unavailable. Three arms are already running to 6,000 *global* steps. Evaluations land every 500
+  steps, which is ten to fifty times coarser than the tens of steps the confound is made of. And
+  the cosine is indexed to the global step, so two cells matched on applied updates sit at
+  different points of their own schedules — it would remove one confound by introducing another.
+  It is the right definition for the *next* tranche and it is written down here for that reason.
+- **Declined count as a covariate in the contrast** conditions on a mediator. It estimates a
+  controlled direct effect rather than a total effect, under an unverifiable assumption, and if
+  hyper-connections genuinely destabilise training then the adjustment subtracts part of the real
+  effect. It is reported as a secondary and it is not primary.
+- **Adjusted and unadjusted side by side** is what is adopted — with the rule below, because two
+  numbers printed next to each other and no rule about what to do when they disagree is not a
+  pre-registration, it is a degree of freedom with a table.
+
+**The rule.** Let Δ̂ be the contrast in nats, signed so that negative is the treatment improving,
+and Δn the treatment's mean declined count minus the comparator's. The dose contributes +β·Δn
+nats to Δ̂.
+
+- When **β·Δn carries the same sign as the hypothesis's predicted effect**, the dose could have
+  manufactured the result. The claim stands only if |Δ̂| − |Δn|·β_high ≥ gate, with
+  β_high = 1.55e-04. Otherwise the contrast is reported as **dose-limited** and **the claim is
+  not made**.
+- When it carries the opposite sign, the treatment was trained less and scored well anyway. The
+  unadjusted estimate is conservative, the amount is reported, and **no penalty is applied**.
+- Δn and the critical gap `gate / β_high` are printed beside every contrast whatever the verdict,
+  so a reader can see how close the design came without reading this section.
+- The point-adjusted estimate Δ̂ − β̂·Δn is reported as a pre-committed secondary.
+
+**The assumptions, stated so they can be attacked.** That the per-declined-step cost is
+approximately linear in the count over the range that arises; that it does not depend strongly on
+*where* in the schedule the declines fall, which is false in detail — a declined step early is
+worth more than one at the horizon — and is why β is taken at the top of its interval rather than
+at the point; that β estimated on the comparator transfers to the treatment arms, which is the
+assumption the two optional calibration cells below would test; and that the endpoint is
+monotone in applied updates, which is what makes the rule one-sided.
+
+**Why it is safe to freeze a slope this poorly determined.** Because the rule is one-sided and
+can only subtract. Nothing it does can turn a contrast that failed the gate into one that passed
+— a property asserted over a grid of contrasts and dose gaps in
+[`test_dose_adjustment.py`](test_dose_adjustment.py). A constant that can only ever cost the
+experiment a claim is not a knob worth tuning.
+
+**Not funded, and available if anybody wants the slope narrowed.** Two baseline cells under
+`SkipStepAdamW` with `--skip-step-sigma-factor` set high enough that the rule never fires would
+separate the kernel path from the dose; two more at a factor low enough to force a target decline
+count would identify the slope on more than three points. Until one of them runs, the constants
+do not move: they are frozen literals in
+[`dose_adjustment.py`](dose_adjustment.py), a test re-derives them from the table above, and a
+second test asserts they have not drifted.
+
+#### The thirteen checkpoints are not horizon leverage, and the claim is dropped
+
+The adversarial review proposes pre-registering the H1 and H2a contrasts as trajectories over the
+thirteen evaluation checkpoints on the grounds that "a contrast growing at the horizon is
+evidence for cause 4" — the token-budget explanation, ByteDance's 500B against Tencent's 23B —
+and that it "is the only horizon leverage this tranche has". **That claim is dropped and the
+reason is the review's own.**
+
+The same review objects, correctly, that DataDecide's exponent is well supported as a within-run
+checkpoint slope and much less supported as a between-horizon substitution, because its
+intermediate checkpoints are "checkpoints of runs scheduled to a much longer horizon at a much
+higher LR" and "not the same object as the endpoint of a run whose cosine completes at 4.72B".
+Every one of these thirteen checkpoints is exactly that object: a point on a cosine scheduled to
+complete at step 6,000, at an LR the corresponding short run would never have had. The objection
+does not stop applying because it is this tranche's data. Beyond that, the trajectory spans 0 to
+4.72B and cause 4 is a question about 23B against 500B, so even a clean trend would be a two-order
+extrapolation from a single completing schedule; and thirteen points per cell are heavily
+autocorrelated and add no degrees of freedom to five seeds.
+
+**So: no horizon claim, no extrapolation, and nothing about cause 4 from this tranche.** An H2a
+gap will not support "the field's negative result is an implementation artifact" and this is the
+second place the document says so.
+
+What *is* pre-registered, now, is the weaker and genuinely free version. Both are secondary,
+descriptive, and carry no claim about horizon.
+
+- **The contrast trajectory as a specification check.** The H1, H2a and H5 contrasts are reported
+  at all thirteen checkpoints. A contrast that is present throughout and a contrast that appears
+  only at step 6,000 are different objects, and the second is the one that wants explaining
+  before it is believed. This is a plot and a table, not a test, and no p-value is computed from
+  the trajectory.
+- **The endpoint progress rate as a cross-check on β.** The local slope of held-out loss against
+  step over the last checkpoint interval bounds what one lost update can cost, from above, since
+  optimization partially recovers from a skipped step. If the frozen β_high exceeds that bound the
+  band is too wide and the report says so. This costs nothing and it is the only independent
+  handle on the dose constant the tranche has.
+
+### Arm 4 is funded, because H1 cannot be decomposed without it
+
+**Staged 2026-08-10, in the same window and under the same condition: no treatment endpoint was
+visible.**
+
+`faithful` differs from `baseline` in **two** things and this document has said so from the
+start — the mechanism, and a smaller initialization for every attention output projector and
+second feed-forward linear, at the paper's `output_init_exponent=0.5`. Same-seed logits differ by
+a relative 8.4e-01 against 7.2e-07 at 0.0, so it is not a rounding difference. The remedy was
+named in the same breath — "unless arm 4 comes back flat against arm 1" — and arm 4 then carried
+`seeds=0`, at the end of `CUT_ORDER`, on the reasoning that a question about whether a scaling is
+load-bearing "only means something once H1 says the method does anything at all".
+
+**That reasoning has the dependency backwards, and the amended σ̂ is what makes it matter.** H1 is
+a joint test of the mechanism and its initialization prescription whatever it returns. At the
+pre-amendment MDE the point was academic, because the design could not resolve the effect at all.
+At an unpaired MDE of 0.0039 nats it can now return a **significant** H1 attributable to either
+cause, with nothing in the tranche able to say which — and the scaling was put behind a flag in
+the original build order precisely so that arm 4 could turn it off. Arm 4 is not a follow-up to
+H1; it is a precondition for reading it.
+
+`no-output-init` therefore goes to five seeds, leaves `CUT_ORDER`, and is staged as
+[`run.no-output-init-a100.yaml`](run.no-output-init-a100.yaml) at `--compute gpu-8xa100
+--attempts 2 --fanout-size 5 --fanout-index-parameter seed`. The tranche is twenty-five cells.
+Read `cost` and `approval_class` out of `edullm check --json` rather than out of this paragraph.
+
+Three things about the spec that are not the other three stages'.
+
+- **`--hours 7`, and it is the only header that departs from the shared bound.** The four hours
+  the others quote is `A100_MEASURED_CELL_HOURS`, which is the *baseline's* cell at 1.700 s/step;
+  the lane arms run at 2.87 to 3.15 and every cell of all three treatment stages died at that
+  wall. Arm 4 is `faithful` with two module families initialized differently and nothing a kernel
+  sees, so its step time is `faithful`'s: slowest 3.074 s/step, projecting 5.17 hours. Seven
+  leaves 26%; six would leave 14%.
+- **The equal-bound rule is departed from deliberately and the departure is bounded.**
+  `STAGE_HOURS` records why a bound should be the same across stages — an arm under a looser bound
+  survives drift another dies of, so an arm missing its slowest cell is not missing a random one.
+  If a live arm loses a cell to its own bound and arm 4 does not, arm 4 carries a slow cell its
+  comparator does not, and the bias runs towards arm 4 looking *worse*, which reads as the
+  initialization being load-bearing — a false positive on the exact question the arm was funded to
+  answer. It needs a 16% rate excursion against a measured host-to-host spread of 1.8%. And
+  `A100_LANE_ARM_SURVIVORSHIP_HOURS` pre-registers, now, that **any arm-4 cell whose runtime
+  exceeds 6.0 hours is reported and the contrast recomputed without it**.
+- **`--fail-closed-by-step 400` is present, and that is measured rather than assumed.** It is on
+  `faithful` and `output-only`, off on `baseline` where the monitor never attaches, and off on
+  `mhc` where Sinkhorn compresses the statistic the guard reads. Turning the output scaling off
+  makes the module writes *larger*, so lane dispersion should read higher than `faithful` rather
+  than lower. Measured at the rehearsal size, arm 4 reads **0.0107 to 0.0243** against
+  `faithful`'s 0.0116 to 0.0188 and a floor of 5e-03 — four blocks of four over it on both. This
+  arm is the opposite of the `mhc` case and the flag belongs on it.
+
+**What arm 4 buys.** H1 stays as pre-registered and stays a joint test; it is not redefined after
+the fact. Two contrasts are added and both are pre-registered here rather than derived later:
+`no-output-init` against `baseline` isolates the mechanism without the initialization
+prescription, and `no-output-init` against `faithful` isolates the prescription itself. Both
+carry the same gate and the same dose band as H1, H2a and H5.
+
+**And both enlarge the multiplicity the design already declines to correct for.** The
+no-correction paragraph under
+[The gate](#the-gate-two-standard-errors-of-the-contrast-under-test) was written for a
+table of six hypotheses reported as a family of effect sizes; the live design leads with a
+2-SE gate, which at df = 16 is a 6.3% per-comparison test, and this takes the family from three
+comparisons to five. Nothing here changes the pre-registered rule — the gate stays uncorrected
+and every contrast is reported with its effect size, interval and exact p-value, as committed.
+What is added is that **the Holm-adjusted p-values are printed beside the raw ones**, so a reader
+who wants the family-wise reading has it without recomputing anything, and the growth of the
+family from three to five is visible rather than implicit.
 
 ### Throughput
 

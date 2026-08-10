@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The training-dose adjustment, pre-registered on 2026-08-10 before any treatment endpoint existed.
+"""The training-dose adjustment, pre-registered on 2026-08-10 before any treatment endpoint was read.
 
 WHAT THE PROBLEM IS. ``SkipStepAdamW`` declines a step by multiplying the whole update by a
 0/1 factor: the parameters do not move, the two moments do not move, the decoupled weight
@@ -18,6 +18,18 @@ declined steps is a post-randomisation variable on the causal path from arm to e
 an arm that declines more is an arm that has been trained less at the same nominal horizon. So
 the amount of training becomes a function of the arm, which is a confound of the same order as
 the effect being measured -- see :data:`GATE_NATS` against :data:`CRITICAL_DECLINE_GAP`.
+
+HOW THE COUNT ACCUMULATES, WHICH IS WHY IT BOUNDS RATHER THAN CORRECTS. The step's own loss and
+gradient norm go into the rolling window *before* ``step()`` reads it, and nothing takes them
+out again when the step is declined (``skip_step_optimizer.py:59-76``). A declined step therefore
+sits in the window judging the next 128 steps and lifts the mean and standard deviation that
+declining again would have to clear: driven against the real optimizer, an isolated spike is
+declined exactly once and identical spikes right behind it are accepted. Declines are
+anti-clustered, so ``delta_n`` is a slow difference in rates across 6,000 steps rather than a
+burst -- and, more to the point here, the count is censored by its own history. The same
+instability produces a different count depending on where in the window it arrives, by an
+arm-dependent amount nothing can recover. That is the third reason the count is used only to
+*bound* a contrast at the top of the slope interval and never to *correct* one.
 
 WHY THE PRIMARY ESTIMAND DOES NOT MOVE, WHICH IS THE DECISION THIS MODULE ENCODES. Three
 options were weighed and are recorded in ``hyper-connections.md`` under "The dose amendment of
@@ -85,7 +97,7 @@ table, and a second test asserts the frozen value has not drifted.
 
 import math
 from dataclasses import dataclass
-from typing import Optional, Sequence, Tuple
+from typing import Dict, Mapping, Optional, Sequence, Tuple
 
 #: Nats of held-out cross-entropy per bit-per-byte, at the tranche's ``--bytes-per-token 4.57``.
 #: Restated here rather than imported so this module can be read and tested without pulling in
@@ -333,6 +345,41 @@ def dose_check(
         critical_delta_declines=gate_nats / slope_high if slope_high > 0 else float("inf"),
         verdict=verdict,
     )
+
+
+def holm_adjust(p_values: Mapping[str, float]) -> Dict[str, float]:
+    """
+    Holm-Bonferroni step-down adjustment over a family of p-values.
+
+    THE OTHER HALF OF THE SAME AMENDMENT, AND IT IS HERE BECAUSE FUNDING ARM 4 IS WHAT MADE IT
+    URGENT. The pre-registration applies no multiplicity correction to the gate and says why:
+    the hypotheses are fixed in advance and each is reported with its effect size, interval and
+    p-value, so the table has not been selected on. That reasoning was written for a table read
+    as a family of effect sizes. The live design leads with a 2-SE gate, which at df = 16 is a
+    6.3% per-comparison test, over a family that went from three comparisons to five on
+    2026-08-10.
+
+    **REPORTED BESIDE THE GATE AND NEVER INSTEAD OF IT.** The decision rule is untouched; what
+    changes is that the family-wise reading is printed rather than left for a reader to
+    reconstruct.
+
+    Holm rather than Bonferroni because it is uniformly more powerful and assumes no less, and
+    the running maximum enforces monotonicity so two adjusted values cannot cross.
+
+    :param p_values: Raw two-sided p-values, keyed by hypothesis.
+
+    :returns: Adjusted p-values under the same keys, each capped at 1.
+    """
+    if not p_values:
+        return {}
+    ordered = sorted(p_values.items(), key=lambda item: item[1])
+    n = len(ordered)
+    adjusted: Dict[str, float] = {}
+    running = 0.0
+    for rank, (name, p) in enumerate(ordered):
+        running = max(running, min(1.0, (n - rank) * p))
+        adjusted[name] = running
+    return adjusted
 
 
 def render(checks: Sequence[DoseCheck]) -> str:
