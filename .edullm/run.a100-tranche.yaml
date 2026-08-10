@@ -33,14 +33,16 @@
 # So the horizon stayed at 6,000 steps and the money bought five seeds an arm instead of three:
 # MDE 0.018 nats against this file's 0.022, for less money. A later grant above the original
 # $4,000 bought a fourth arm on the same horizon rather than a longer one, which is the same
-# trade being taken the same way round a second time. The 20 cells went out as four five-cell
-# `--fanout-index-parameter seed` submissions -- run.baseline-stage.yaml,
-# run.faithful-stage.yaml, run.output-only-stage.yaml, run.mhc-stage.yaml.
+# trade being taken the same way round a second time. The first 20 cells went out as four
+# five-cell `--fanout-index-parameter seed` submissions -- run.baseline-stage.yaml,
+# run.faithful-stage.yaml, run.output-only-stage.yaml, run.mhc-stage.yaml -- and a fifth arm,
+# `no-output-init`, was funded on 2026-08-10, which takes `TRANCHE_CELLS` to 25.
 #
 # TWO THINGS BELOW ARE NOW ALSO ARITHMETICALLY WRONG AND ARE NOT CORRECTED. The file says nine
-# cells and `TRANCHE_CELLS` is 20, so the submit line's `--fanout-size 9` is wrong; and the
-# $4,742.84 ceiling it argues about becomes about $10,500 at 20 cells, which is not a number any
-# reading of the budget clears. Correcting them would make it look submittable, which it is not.
+# cells and `TRANCHE_CELLS` is 25, so the submit line's `--fanout-size 9` is wrong; and the
+# $4,742.84 ceiling it argues about becomes well over $10,500 at 25 cells, which is not a number
+# any reading of the budget clears. Correcting them would make it look submittable, which it is
+# not.
 #
 # Everything below is as it was written, including its own account of the budget conflict, which
 # reached the right conclusion for a reason that turned out not to be the binding one.

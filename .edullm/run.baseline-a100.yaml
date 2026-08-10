@@ -49,7 +49,17 @@
 # 7 that stood here was derived from the A100 probe's 2.91 s/step, which predicted 5.5 hours.
 # The five cells of run_019fe2f4-f528 then ran 2.92 to 3.00 hours each, so the prediction was
 # high by 1.8x and the bound on top of it was high by 2.3x. Four leaves 33% over the slowest
-# cell observed, which is more margin than the L40S stages carried at --hours 19.
+# cell observed, which is more margin than the L40S stages carried at --hours 19. This arm has
+# since reported five of five under it, so the four is right and stays.
+#
+# FOUR IS THIS ARM'S NUMBER AND NOTHING ELSE'S. DO NOT CARRY IT ONTO AN ARM WITH LANES. The
+# baseline computes no hyper-connection lanes and runs at 1.700 s/step; the lane arms run at
+# 2.87 to 3.15 and need five to five and a half hours for the same 6,000 steps. This four was
+# copied onto all three of them, and all fifteen of their cells died at the wall between
+# 22:27Z and 03:41Z on 2026-08-09, at steps 4,640 to 4,995 of 6,000, with a timeout measured
+# to forfeit its second attempt. They were resubmitted at six and seven hours. The bound is per
+# arm and lives in `hyper_connection_arms.A100_STAGE_HOURS_BY_ARM`; there is deliberately no
+# scalar `--hours` constant left in the tranche for anyone to copy again.
 #
 # THE THREE HOURS MATTER BECAUSE THE CEILING IS A PRODUCT. Approved cost is rate x hours x
 # attempts x cells, so an unneeded hour is charged twice for each of twenty cells. Dropping

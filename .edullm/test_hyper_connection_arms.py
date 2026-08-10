@@ -6,6 +6,7 @@ Run with ``pytest -v .edullm/test_hyper_connection_arms.py``.
 import os
 import pathlib
 import sys
+from statistics import median
 from typing import Dict, Set
 
 import pytest
@@ -17,6 +18,7 @@ if _HERE not in sys.path:
 
 import hyper_connection_arms as arms  # noqa: E402
 import train_hyper_connections as entry  # noqa: E402
+from test_noise_floor import PRE_REGISTRATION, markdown_table  # noqa: E402
 
 from olmo_core.nn.residual_stream import (  # noqa: E402
     HyperConnectionMode,
@@ -64,28 +66,40 @@ def test_the_seed_allocation_is_the_one_the_pre_registration_argues_for():
         by_seeds.setdefault(arm.seeds, set()).add(name)
 
     assert set(by_seeds) == {0, 5}, "the tranche funds an arm at five seeds or not at all"
-    assert by_seeds[5] == {"baseline", "faithful", "output-only", "mhc"}
-    assert sorted(arms.FUNDED) == ["baseline", "faithful", "mhc", "output-only"]
+    assert by_seeds[5] == {"baseline", "faithful", "output-only", "mhc", "no-output-init"}
+    assert sorted(arms.FUNDED) == [
+        "baseline",
+        "faithful",
+        "mhc",
+        "no-output-init",
+        "output-only",
+    ]
 
 
-def test_the_tranche_is_twenty_runs_and_says_so():
+def test_the_tranche_is_twenty_five_runs_and_says_so():
     """
-    Twenty, because that is what the budget buys and nothing else in this repository states
-    it. ``edullm check`` prices a ceiling from the workload profile and never reads the arm
-    table, so if this number is wrong nothing downstream disagrees with it.
+    Twenty-five, because that is what the budget buys and nothing else in this repository
+    states it. ``edullm check`` prices a ceiling from the workload profile and never reads the
+    arm table, so if this number is wrong nothing downstream disagrees with it.
 
     It was nine when the design assumed seed sigma fell as 1/sqrt(tokens). DataDecide measures
     it falling as D^-0.172, which makes horizon the worse thing to spend a fixed budget on and
     replicates the better one, so the same money buys five seeds at 6,000 steps instead of
-    three at 12,715, which was fifteen. The twentieth through sixteenth are ``mhc``, restored
-    from the end of the cut order by a grant above the original $4,000. See the module
-    docstring for both pieces of arithmetic.
+    three at 12,715, which was fifteen. The sixteenth through twentieth are ``mhc``, restored
+    from the end of the cut order by a grant above the original $4,000. The twenty-first
+    through twenty-fifth are ``no-output-init``, restored on 2026-08-10 because H1 is a joint
+    test of the mechanism and its initialization prescription and nothing else in the tranche
+    separates them. See the module docstring for the first two pieces of arithmetic and
+    ``run.no-output-init-a100.yaml`` for the third.
     """
-    assert arms.total_runs() == 20
+    assert arms.total_runs() == 25
     assert str(arms.total_runs()) in arms.describe()
-    # And the twenty went out as four five-cell submissions, which the table also has to say
-    # -- four separate submissions are the thing that can silently disagree with each other.
-    assert sum(stage.cells for stage in arms.STAGE_SPECS.values()) == arms.total_runs()
+    # And the twenty-five go out as five five-cell submissions, which the table also has to say
+    # -- five separate submissions are the thing that can silently disagree with each other.
+    # THE A100 TABLE IS THE LIVE ONE. ``STAGE_SPECS`` is the L40S staging of the original four
+    # arms, is the text three admitted submissions were built from, and is not edited after the
+    # fact; arm 4 never ran on L40S and does not belong in it.
+    assert sum(stage.cells for stage in arms.A100_STAGE_SPECS.values()) == arms.total_runs()
     for stage in arms.STAGE_SPECS.values():
         assert stage.spec in arms.describe()
 
@@ -106,7 +120,26 @@ def test_mhc_was_restored_from_the_end_of_the_cut_order_and_not_from_nowhere():
     assert "FUNDED AS STAGE 3" in arms.ARMS["mhc"].isolates
 
     # And it did not overtake anything: what remains cuttable is what was ahead of it.
-    assert arms.CUT_ORDER[-1] == "no-output-init"
+    # ``no-output-init`` stood here until 2026-08-10 and has since left the list the same way,
+    # so the arm now at the end is the one that was ahead of it.
+    assert arms.CUT_ORDER[-1] == "n1"
+
+
+def test_no_output_init_left_the_cut_order_by_being_funded_and_not_by_being_forgotten():
+    """
+    THE SAME ASSERTION AS THE ONE ABOVE, ON THE SECOND ARM TO LEAVE THE LIST, and the reason it
+    left is different from ``mhc``'s. ``mhc`` was bought with money. This one was bought with a
+    reading of the design: ``faithful`` differs from ``baseline`` in the mechanism AND in the
+    initialization prescription, so H1 is a joint test of the two however it comes out, and at
+    an unpaired MDE of 0.0039 nats the tranche can now return a significant H1 attributable to
+    either. An arm that is funded and still listed as cuttable is a budget that can be balanced
+    twice.
+    """
+    assert arms.ARMS["no-output-init"].seeds == arms.STAGE_CELLS
+    assert "no-output-init" not in arms.CUT_ORDER
+    assert "no-output-init" in arms.FUNDED
+    assert "FUNDED AS STAGE 4" in arms.ARMS["no-output-init"].isolates
+    assert arms.A100_STAGE_SPECS["no-output-init"].stage == 4
 
 
 def test_the_output_only_arm_records_that_it_was_degenerate_until_it_was_fixed():
@@ -269,6 +302,61 @@ def test_the_gate_the_mhc_arm_is_exempt_from_would_have_passed_at_370M():
     assert arms.TRANCHE_FAIL_CLOSED_BY_STEP >= 2 * arms.MHC_LANE_DISPERSION_CROSSES_FLOOR_BY_STEP
 
 
+def test_the_lane_gate_passes_arm_four_which_writes_larger_than_faithful_not_smaller():
+    """
+    WHY run.no-output-init-a100.yaml SETS ``--fail-closed-by-step`` WHEN run.mhc-a100.yaml
+    CANNOT, and it is measured here rather than argued from the direction of an inequality.
+
+    Arm 4 is the faithful mechanism with ``output_init_exponent`` at 0.0 instead of 0.5, so
+    every attention output projector and second feed-forward linear starts at full scale rather
+    than at 1/sqrt(n). The lanes are therefore written with LARGER contributions, and lane
+    dispersion is how far the lanes sit from their own mean, so this arm should read at or above
+    ``faithful`` on the statistic the guard tests. That is the opposite of ``mhc``, where
+    Sinkhorn contracts the mixing towards the lane mean and compresses the same statistic below
+    the floor.
+
+    The same short, small, CPU shape as the ``mhc`` test above and for the same reason: what is
+    under test is which side of a threshold an arm falls on, and the separation arrives within a
+    few dozen steps.
+    """
+    floor = HyperConnectionMonitorCallback.min_lane_norm_spread
+    needed = HyperConnectionMonitorCallback.min_differentiated_fraction
+
+    dispersions = {}
+    for name in ("no-output-init", "faithful"):
+        torch.manual_seed(17)
+        config = arms.ARMS[name].apply(
+            TransformerConfig.hc_rehearsal(
+                vocab_size=512, d_model=64, n_layers=4, n_heads=4, attn_backend=None
+            )
+        )
+        model = config.build()
+        model.init_weights(device=torch.device("cpu"), max_seq_len=32)
+        optim = torch.optim.AdamW(model.parameters(), lr=entry.DEFAULT_LEARNING_RATE)
+        for _ in range(30):
+            batch = torch.randint(0, 512, (2, 32))
+            logits = model(batch)[:, :-1].reshape(-1, config.vocab_size)
+            torch.nn.functional.cross_entropy(logits, batch[:, 1:].reshape(-1)).backward()
+            optim.step()
+            optim.zero_grad()
+        model.eval()
+        dispersions[name] = _lane_dispersions(model, torch.randint(0, 512, (2, 32)))
+
+    alive = sum(1 for v in dispersions["no-output-init"] if v >= floor) / len(
+        dispersions["no-output-init"]
+    )
+    assert alive >= needed, f"the gate would abort arm 4 at step 400: {dispersions}"
+
+    # And it is not marginal: every block clears the floor by a factor of two or more, which is
+    # what distinguishes "passes" from "passed this seed".
+    assert min(dispersions["no-output-init"]) > 2 * floor, dispersions
+
+    # The direction the argument above rests on. Asserted on the median rather than on every
+    # block, because four blocks of a 64-wide rehearsal model are a small sample and one of them
+    # crossing the other way is scatter rather than a refutation of the mechanism.
+    assert median(dispersions["no-output-init"]) >= median(dispersions["faithful"]), dispersions
+
+
 def _lane_dispersions(model, tokens) -> list:
     """
     Lane dispersion per block, computed the way ``HyperConnectionMonitorCallback`` computes it:
@@ -417,13 +505,44 @@ def test_every_arm_builds_and_runs_a_forward_pass(name: str):
     assert torch.isfinite(logits).all()
 
 
+def test_the_arm_table_in_the_pre_registration_states_the_seeds_that_are_funded():
+    """
+    THE COLUMN THAT SAID IT WAS ASSERTED AND WAS NOT. The arm table in ``hyper-connections.md``
+    is captioned "the tests assert these properties rather than trusting the table", and that
+    was true of the parameter and FLOP columns and false of the seeds column. It read 3, 3, 3
+    and 0 from before the design moved to five seeds until 2026-08-10, and 186 tests passed with
+    it wrong -- on the one number this document's own history records as having been wrong twice
+    already, as "fifteen" and then "seventeen".
+
+    A pre-registration that misstates how many runs each arm gets is a pre-registration a
+    reviewer stops believing, whatever else it gets right. Parsed rather than eyeballed.
+    """
+    rows = markdown_table(
+        PRE_REGISTRATION.read_text(),
+        "| # | arm | seeds | params | vs baseline | FLOPs/token vs baseline |",
+    )
+    assert len(rows) == len(arms.ARMS), "the table has lost or gained an arm"
+
+    stated = {}
+    for number, name, seeds, *_ in rows:
+        stated[name.strip("`")] = (int(number), int(seeds.strip("*")))
+
+    assert set(stated) == set(arms.ARMS)
+    for name, arm in arms.ARMS.items():
+        assert stated[name] == (arm.number, arm.seeds), (
+            f"the table says arm {name} is number {stated[name][0]} at {stated[name][1]} seeds "
+            f"and the arm table says number {arm.number} at {arm.seeds}"
+        )
+
+
 def test_cut_order_names_real_arms_and_spares_the_core():
     assert set(arms.CUT_ORDER) <= set(arms.ARMS)
-    # The core is now the four arms the tranche funds. It was {baseline, faithful, n1, mhc}
-    # when the budget stretched to seventeen runs; n1 and mhc were cut when it stopped, and mhc
-    # came back when a grant above $4,000 arrived. This line moving three times is the record
-    # of those three decisions rather than a test being loosened.
-    core = {"baseline", "faithful", "output-only", "mhc"}
+    # The core is now the five arms the tranche funds. It was {baseline, faithful, n1, mhc}
+    # when the budget stretched to seventeen runs; n1 and mhc were cut when it stopped, mhc
+    # came back when a grant above $4,000 arrived, and no-output-init came back on 2026-08-10
+    # because H1 cannot be decomposed without it. This line moving four times is the record of
+    # those four decisions rather than a test being loosened.
+    core = {"baseline", "faithful", "output-only", "mhc", "no-output-init"}
     assert not core & set(arms.CUT_ORDER)
     assert set(arms.FUNDED) == core
 
@@ -475,10 +594,10 @@ def test_the_cost_model_is_built_from_the_measurement_and_not_from_a_price():
 
     hours = arms.tranche_hours()
     assert arms.estimated_cost_usd(10.0) == pytest.approx(hours * 10.0)
-    # Twenty runs of about eighteen hours, so the expected spend is well under the ceiling
+    # Twenty-five runs of about eighteen hours, so the expected spend is well under the ceiling
     # `edullm check` prices and approves against. Both numbers matter and they are different:
     # the ceiling is what the budget has to clear, and this is what arrives on the bill.
-    assert 340 < hours < 380
+    assert 425 < hours < 475
     assert hours == pytest.approx(arms.total_runs() * 17.8, rel=0.05)
 
 

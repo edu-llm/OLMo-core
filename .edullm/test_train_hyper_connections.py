@@ -786,7 +786,7 @@ def test_every_cell_of_the_tranche_resolves_to_its_own_arm_and_seed(index: int):
 
 
 def test_the_cell_table_is_the_tranche_and_covers_each_arm_at_each_seed():
-    assert len(arms.TRANCHE_CELLS) == arms.total_runs() == 20
+    assert len(arms.TRANCHE_CELLS) == arms.total_runs() == 25
     assert arms.TRANCHE_CELLS[0] == ("baseline", 0)
     # The last cell follows the arm table's order, which is the pre-registration's numbering, so
     # funding arm 9 moved the tail from arm 3 to arm 9 without the list being edited.
@@ -1114,7 +1114,14 @@ def test_the_stage_specs_differ_in_the_arm_and_in_nothing_else():
 
     # And the difference in the one option the experiment is made of is the four arms
     # themselves, rather than two specs that happen to name the same one.
-    assert {o["arm"] for o in options.values()} == set(arms.FUNDED)
+    #
+    # AGAINST THIS TABLE'S OWN ARMS AND NOT AGAINST ``FUNDED``, since 2026-08-10. These four
+    # files are the L40S staging of the original four-arm tranche and three admitted
+    # submissions were built from them, so they are not edited after the fact. ``no-output-init``
+    # was funded onto the A100 shape and never ran on L40S, so it is absent here by construction
+    # and its presence in ``FUNDED`` is not a disagreement this test should report.
+    assert {o["arm"] for o in options.values()} == {s.arm for s in arms.STAGE_SPECS.values()}
+    assert set(arms.STAGE_SPECS) <= set(arms.FUNDED)
     for name, opts in options.items():
         assert opts["arm"] == name == arms.STAGE_SPECS[name].arm
 
@@ -1264,18 +1271,20 @@ def test_the_a100_pinned_table_is_the_l40s_one_plus_the_shape_and_the_amendment(
 
 
 @pytest.mark.parametrize("name", A100_STAGES)
-def test_every_a100_spec_names_its_own_hours_and_they_are_all_four(name: str):
+def test_every_a100_spec_names_the_hours_the_table_declares_for_it(name: str):
     """
     THE ``--hours`` A PERSON WILL COPY IS IN A COMMENT, WHICH NOTHING ELSE CHECKS. It is not
-    in the spec body and the parser never sees it, so ``A100_STAGE_HOURS`` and the four
-    headers can disagree in silence and the disagreement only surfaces as a submission priced
-    against the wrong ceiling -- or, if the four headers disagree with each other, as one
-    stage under a looser bound than another, which kills the slowest cell of one arm and no
-    cell of the rest.
+    in the spec body and the parser never sees it, so the table and the headers can disagree in
+    silence and the disagreement only surfaces as a submission priced against the wrong ceiling
+    -- or, if two headers disagree with each other, as one stage under a looser bound than
+    another, which kills the slowest cell of one arm and no cell of the rest.
 
-    Four hours covers the slowest cell this shape has been measured at with a third to spare,
-    and 7 -- what stood here before the measurement existed -- was a 2.3x ceiling on a need
-    nobody had observed.
+    IT WAS ONE NUMBER FOR ALL FOUR STAGES UNTIL 2026-08-10 AND IS NOW A DECLARED TABLE, because
+    a single bound turned out to be the wrong shape for a tranche whose arms differ in step time
+    by a factor of 1.8. The four hours here is the *baseline's* measured cell and it killed every
+    cell of all three lane arms. ``A100_STAGE_HOURS_BY_ARM`` carries the per-arm bound and the
+    reason for each departure; what this test enforces is that no spec quotes a bound the table
+    has not declared, which is the property the single constant used to give.
     """
     header = (pathlib.Path(_HERE) / arms.A100_STAGE_SPECS[name].spec).read_text()
     header = header.split("schema_version:")[0]
@@ -1283,14 +1292,113 @@ def test_every_a100_spec_names_its_own_hours_and_they_are_all_four(name: str):
     quoted = re.findall(r"--hours\s+(\d+(?:\.\d+)?)\s+--attempts\s+(\d+)", header)
     assert quoted, f"{name} does not quote the command it is submitted with"
     for hours, attempts in quoted:
-        assert float(hours) == arms.A100_STAGE_HOURS
+        assert float(hours) == arms.A100_STAGE_HOURS_BY_ARM[name], (
+            f"{name}'s header quotes --hours {hours} and the table declares "
+            f"{arms.A100_STAGE_HOURS_BY_ARM[name]}"
+        )
         assert int(attempts) == arms.A100_STAGE_ATTEMPTS
 
     assert "gpu-8xa100" in header
     assert "--fanout-size 5" in header
 
 
-def test_four_hours_covers_the_slowest_cell_that_has_actually_been_measured():
+def test_no_arm_is_bounded_on_another_arms_step_time():
+    """
+    THE TEST THAT WOULD HAVE SAVED FIFTEEN CELLS, and the reason it did not exist is worth more
+    than the test. There was one ``--hours`` and one measured cell, they were checked against
+    each other, and the check passed for a year of edits -- because both numbers were the
+    baseline's. The baseline computes no hyper-connection lanes and runs at 1.700 s/step; the
+    lane arms run at 2.87 to 3.15 and need five hours and more for the same 6,000 steps. One
+    measured cell can only ever validate one bound, so the pair was walked arm by arm.
+
+    Each arm's declared bound is checked against *that arm's own* projected cell. Too little
+    margin is a stage that dies at the wall with no second attempt; too much is ceiling charged
+    twice for each of five cells and spent by nothing.
+    """
+    bounds = arms.A100_STAGE_HOURS_BY_ARM
+    measured = arms.A100_MEASURED_CELL_HOURS_BY_ARM
+    assert set(bounds) == set(arms.A100_STAGE_SPECS), "every stage declares its own bound"
+    assert set(measured) == set(bounds), "every declared bound has a measured cell behind it"
+
+    for name, hours in sorted(bounds.items()):
+        spare = 1.0 - measured[name] / hours
+        assert spare >= 0.10, (
+            f"{name} is bounded at {hours:.0f}h against a projected {measured[name]:.2f}h cell, "
+            f"which leaves {spare:.0%}. A timeout forfeits its second attempt on this workload, "
+            "so a thin margin is a lost cell rather than a delay."
+        )
+        assert spare <= 0.50, (
+            f"{name} is bounded at {hours:.0f}h against a projected {measured[name]:.2f}h cell. "
+            f"{spare:.0%} is ceiling nothing will spend, charged attempts x cells."
+        )
+        assert hours <= 24.0, "--hours may only lower the workload's own bound"
+
+    assert arms.A100_FIRST_SUBMISSION_HOURS < min(
+        measured[name] for name in ("faithful", "output-only", "mhc")
+    ), (
+        "the four hours the lane stages were first submitted under is no longer below every "
+        "lane arm's projected cell, so this test has stopped describing the failure it exists "
+        "for"
+    )
+
+
+def test_the_bound_that_killed_fifteen_cells_is_quoted_by_nothing_that_could_be_submitted():
+    """
+    THE LANDMINE WAS THE NAME, NOT ONLY THE VALUE. ``A100_STAGE_HOURS = 4.0`` read like the
+    bound of the tranche and was the bound of one arm, and four spec headers quoted a submit
+    line carrying it. The stages were resubmitted at six and seven hours without those headers
+    changing, so for a day the repository's most copyable text -- a complete ``edullm check``
+    line, sitting at the top of the file it names -- would have rebuilt the accident.
+
+    So there is no scalar bound left to copy. The historical four survives under a name nobody
+    would paste into a submission, and this test pins that: it is not called
+    ``A100_STAGE_HOURS``, and no A100 header quotes it except the one arm it was correct for.
+    """
+    assert not hasattr(arms, "A100_STAGE_HOURS"), (
+        "A100_STAGE_HOURS is back. It reads like the tranche's bound and is one arm's; the "
+        "per-arm table is A100_STAGE_HOURS_BY_ARM"
+    )
+
+    quoting = {}
+    for name, spec in sorted(arms.A100_STAGE_SPECS.items()):
+        header = (pathlib.Path(_HERE) / spec.spec).read_text().split("schema_version:")[0]
+        for hours, _ in re.findall(r"--hours\s+(\d+(?:\.\d+)?)\s+--attempts\s+(\d+)", header):
+            if float(hours) == arms.A100_FIRST_SUBMISSION_HOURS:
+                quoting[name] = hours
+
+    assert set(quoting) <= {"baseline"}, (
+        "a spec header quotes a submit line at the four hours that killed every cell of all "
+        f"three lane arms: {quoting}. It is correct for the baseline, whose cell is 3.00h, and "
+        "for nothing else."
+    )
+
+
+def test_arm_four_is_bounded_on_a_lane_arms_step_time_and_not_on_the_baselines():
+    """
+    The four hours the other stages quote is ``A100_MEASURED_CELL_HOURS``, which is the
+    baseline's cell at 1.700 s/step. Fifteen lane-arm cells died against it. Arm 4 is
+    ``faithful`` with two module families initialized differently and nothing a kernel sees, so
+    it is bounded on ``faithful``'s projection instead.
+    """
+    hours = arms.A100_STAGE_HOURS_BY_ARM["no-output-init"]
+    spare = 1.0 - arms.A100_LANE_ARM_CELL_HOURS / hours
+
+    assert arms.A100_LANE_ARM_CELL_HOURS > arms.A100_FIRST_SUBMISSION_HOURS, (
+        "a lane arm's projected cell is longer than the four hours the lane stages were first "
+        "submitted under, which is the whole reason those fifteen cells died"
+    )
+    assert spare >= 0.2, f"{hours:.0f}h leaves only {spare:.0%} over a projected lane-arm cell"
+    assert spare <= 0.5, "more headroom than the drift needs, bought with ceiling"
+    assert hours <= 24.0, "--hours may only lower the workload's own bound"
+
+    # And the survivorship threshold sits between the projection and the bound, so it can
+    # actually fire: a cell that runs past it has run longer than a six-hour stage would allow
+    # and is reported, and one that does not is a cell the other arms' bound would also have
+    # survived.
+    assert arms.A100_LANE_ARM_CELL_HOURS < arms.A100_LANE_ARM_SURVIVORSHIP_HOURS < hours
+
+
+def test_four_hours_covers_the_slowest_baseline_cell_and_only_the_baselines():
     """
     ``--hours`` is a kill, so the margin is the whole of the argument for lowering it.
 
@@ -1298,18 +1406,24 @@ def test_four_hours_covers_the_slowest_cell_that_has_actually_been_measured():
     cell, so three unneeded hours are three hours of ceiling charged forty times across the
     tranche. Both directions are checked: enough margin to survive drift, and not so much that
     the tranche is approved against a number nothing will spend.
+
+    THE TITLE CARRIES THE CORRECTION. This test used to be called "the slowest cell that has
+    actually been measured", and the cell it read was the baseline's while the bound it checked
+    was every stage's. It is a baseline test and says so; the per-arm version is
+    ``test_no_arm_is_bounded_on_another_arms_step_time``.
     """
-    spare = 1.0 - arms.A100_MEASURED_CELL_HOURS / arms.A100_STAGE_HOURS
+    hours = arms.A100_STAGE_HOURS_BY_ARM["baseline"]
+    spare = 1.0 - arms.A100_MEASURED_CELL_HOURS / hours
     assert spare >= 0.2, (
         f"a cell measured at {arms.A100_MEASURED_CELL_HOURS:.2f}h against a "
-        f"{arms.A100_STAGE_HOURS:.0f}h attempt leaves only {spare:.0%}"
+        f"{hours:.0f}h attempt leaves only {spare:.0%}"
     )
     assert spare <= 0.5, (
-        f"{arms.A100_STAGE_HOURS:.0f}h is {spare:.0%} above a measured "
+        f"{hours:.0f}h is {spare:.0%} above a measured "
         f"{arms.A100_MEASURED_CELL_HOURS:.2f}h cell, and every unneeded hour is charged to the "
         "ceiling twice for each of twenty cells"
     )
-    assert arms.A100_STAGE_HOURS <= 24.0, "--hours may only lower the workload's own bound"
+    assert hours <= 24.0, "--hours may only lower the workload's own bound"
 
     # Skipping does not lengthen a cell: a declined update costs the optimizer step and not
     # the forward-backward. So the margin measured under plain AdamW still stands.
@@ -1533,13 +1647,18 @@ def test_every_stage_fits_one_attempt_of_the_bound_it_is_submitted_under(name: s
 
 def test_the_stages_are_the_whole_tranche_and_no_arm_is_left_out():
     """
-    Twenty cells in four submissions have to be the same twenty the arm table prices, or the
-    budget is for one design and the runs are another. The count is not written down here: it
-    is the arm table's, so a seed added to an arm and not to a stage fails.
+    Twenty-five cells in five submissions have to be the same twenty-five the arm table prices,
+    or the budget is for one design and the runs are another. The count is not written down
+    here: it is the arm table's, so a seed added to an arm and not to a stage fails.
+
+    IT IS THE A100 TABLE THAT HAS TO BE COMPLETE, since 2026-08-10. ``STAGE_SPECS`` is the L40S
+    staging of the original four arms and is a historical record; ``A100_STAGE_SPECS`` is what
+    the tranche is submitted from, so that is where a funded arm with no stage is a bug.
     """
-    assert sorted(arms.STAGE_SPECS) == sorted(arms.FUNDED)
-    assert sum(stage.cells for stage in arms.STAGE_SPECS.values()) == arms.total_runs() == 20
-    assert {stage.cells for stage in arms.STAGE_SPECS.values()} == {arms.STAGE_CELLS}
+    assert sorted(arms.A100_STAGE_SPECS) == sorted(arms.FUNDED)
+    assert sum(stage.cells for stage in arms.A100_STAGE_SPECS.values()) == arms.total_runs() == 25
+    assert {stage.cells for stage in arms.A100_STAGE_SPECS.values()} == {arms.STAGE_CELLS}
+    assert set(arms.STAGE_SPECS) < set(arms.A100_STAGE_SPECS)
 
     # Balanced, because an unbalanced contrast carries SE = sigma*sqrt(1/n_a + 1/n_b) and pays
     # for the smaller arm twice. mhc joining at five seeds rather than at three is what keeps

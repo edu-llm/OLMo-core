@@ -11,7 +11,8 @@
 # THE CELL COUNT IS READ OUT OF THE ARM TABLE RATHER THAN WRITTEN HERE, AND THAT IS A
 # CORRECTION RATHER THAN A FLOURISH. The tranche has been nine cells, then fifteen when the
 # design bought five seeds instead of three, then twenty when `mhc` was funded off the end
-# of CUT_ORDER. None of those edits touched anything that would have noticed a stale number
+# of CUT_ORDER, then twenty-five when `no-output-init` was funded off it on 2026-08-10 to
+# decompose H1. None of those edits touched anything that would have noticed a stale number
 # in this header, and a --fanout-size below the table's length is a submission that silently
 # does not score the last arm. `score_checkpoints.resolve_target` refuses an index past the
 # table, so too high fails loudly; too low fails not at all.
@@ -203,6 +204,7 @@ command: >-
   --arm-run faithful=s3://sbsandbox-intern-edullm-outputs/teams/input-core/runs/RUN_ID_OF_THE_FAITHFUL_STAGE/
   --arm-run output-only=s3://sbsandbox-intern-edullm-outputs/teams/input-core/runs/RUN_ID_OF_THE_OUTPUT_ONLY_STAGE/
   --arm-run mhc=s3://sbsandbox-intern-edullm-outputs/teams/input-core/runs/RUN_ID_OF_THE_MHC_STAGE/
+  --arm-run no-output-init=s3://sbsandbox-intern-edullm-outputs/teams/input-core/runs/RUN_ID_OF_THE_NO_OUTPUT_INIT_STAGE/
   --model-factory hc_370M
   --step 6000
   --suite h2b

@@ -1,12 +1,14 @@
 # SUPERSEDED AND NOT SUBMITTABLE AS IT STANDS. DO NOT SUBMIT THIS FILE.
 #
-# It says nine cells throughout, and the tranche is 20: the arm table went from three seeds an
+# It says nine cells throughout, and the tranche is 25: the arm table went from three seeds an
 # arm to five when DataDecide's measured seed sigma (D^-0.172, so a fixed budget's standard
-# error goes as D^(+0.328)) said replicates beat horizon, which made it fifteen, and then a
+# error goes as D^(+0.328)) said replicates beat horizon, which made it fifteen; then a
 # grant above the original $4,000 funded the `mhc` arm from the end of CUT_ORDER, which made it
-# 20. `TRANCHE_CELLS` followed the table both times without anybody editing it. At 20 cells,
-# `--hours 21 --attempts 2` prices a ceiling near $8,800, so the submit line below is wrong in
-# its fan-out size and wrong in what that size costs.
+# 20; then `no-output-init` was funded on 2026-08-10 because H1 is a joint test of the mechanism
+# and its initialization prescription and nothing else separates them, which made it 25.
+# `TRANCHE_CELLS` followed the table all three times without anybody editing it. At 25 cells,
+# `--hours 21 --attempts 2` prices a ceiling well over $8,800, so the submit line below is wrong
+# in its fan-out size and wrong in what that size costs.
 #
 # WHAT ACTUALLY RAN, AND WHY THE SHAPE HERE IS STILL WORTH KEEPING. The twenty went out as four
 # five-cell `--fanout-index-parameter seed` submissions -- run.baseline-stage.yaml,

@@ -441,6 +441,71 @@ def test_output_init_scaling_reaches_the_forward_pass():
     assert scaled_rms["1"] < 0.75 * baseline_rms["1"]
 
 
+def test_the_scaling_corrects_a_magnitude_the_final_norm_deletes_and_costs_the_equivalence():
+    """
+    WHICH ARM IS FAITHFUL TO THE PAPER DEPENDS ON WHICH SENTENCE OF THE PAPER YOU READ, and this
+    is the measurement that says so. It is why arm 4 is funded and why it is not "arm 2 minus a
+    flag".
+
+    The scaling exists to compensate the lane sum: with ``n_lanes=4`` the pre-unembedding hidden
+    is exactly 4x the baseline's without it. But an RMSNorm sits between that sum and the
+    unembedding and RMSNorm is scale-invariant, so a 4x on its input is a 1x on its output. The
+    quantity being corrected has no effect on the function.
+
+    So the correction does not restore the paper's section 2.3 equivalence to a standard
+    residual network -- it is what breaks it. Off, the logits *are* the baseline's to six
+    decimal places. On, at the shipped exponent of 0.5, they are most of a unit away in relative
+    terms, because a per-block factor of ``n ** -0.5`` is not a global rescale the final norm can
+    absorb; it reweights depth against depth, which the sibling test sees as block 1 sitting well
+    under the baseline's residual.
+
+    Arm 4 therefore satisfies the paper's equivalence claim and arm 2 satisfies its
+    Implementation paragraph. Both are faithful, to different and incompatible sentences, and H1
+    cannot be attributed to the mechanism until they are separated.
+    """
+    input_ids = torch.randint(0, VOCAB_SIZE, (2, SEQ_LEN))
+    hc = HyperConnectionConfig(n_lanes=4)
+
+    def hidden_and_logits(model):
+        captured = {}
+        handle = model.lm_head.norm.register_forward_pre_hook(
+            lambda _module, args: captured.__setitem__("hidden", args[0].detach().clone())
+        )
+        try:
+            with torch.no_grad():
+                logits = model(input_ids)
+        finally:
+            handle.remove()
+        return captured["hidden"], logits
+
+    baseline_hidden, baseline_logits = hidden_and_logits(build_model(build_config()))
+    off_hidden, off_logits = hidden_and_logits(
+        build_model(build_config(hyper_connections=replace(hc, output_init_exponent=0.0)))
+    )
+    on_hidden, on_logits = hidden_and_logits(
+        build_model(build_config(hyper_connections=replace(hc, output_init_exponent=0.5)))
+    )
+
+    def relative(actual, expected):
+        return float((actual - expected).norm() / expected.norm())
+
+    # The magnitude the correction is named for is real, and it is exactly the lane count.
+    assert float(off_hidden.norm() / baseline_hidden.norm()) == pytest.approx(4.0, rel=1e-4)
+
+    # And it is deleted by the norm that follows it: uncorrected, this IS the baseline.
+    assert relative(off_logits, baseline_logits) < 1e-5, (
+        "with the output-init scaling off the model is no longer the baseline at init, so the "
+        "paper's equivalence claim is not what arm 4 measures and its framing needs rewriting"
+    )
+
+    # Corrected, it is not the baseline, by a margin nothing numerical explains.
+    assert relative(on_logits, baseline_logits) > 0.1, (
+        "the shipped exponent no longer moves the logits, which would mean arm 2 and arm 4 are "
+        "the same experiment and one of them should be cancelled"
+    )
+    assert float(on_hidden.norm() / baseline_hidden.norm()) > 1.0
+
+
 def test_added_flops_keep_the_arms_iso_flop():
     """
     Every arm has to be iso-FLOP with the baseline for the comparison to be legal. At the 370M

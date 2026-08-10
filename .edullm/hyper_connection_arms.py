@@ -225,9 +225,30 @@ ARMS: Dict[str, Arm] = {
     ),
     "no-output-init": Arm(
         number=4,
-        summary="Faithful, but without the sqrt(n) output-module initialization scaling.",
-        isolates="Cause 2. Whether that scaling is load-bearing or cosmetic.",
-        seeds=0,
+        summary="The hyper-connection the paper's equivalence claim describes: at init this "
+        "model IS the baseline, because the sqrt(n) output scaling is off.",
+        isolates="Cause 2, and the confound in H1. `faithful` differs from `baseline` in TWO "
+        "things -- the mechanism and the initialization prescription -- so H1 alone cannot say "
+        "which of them moved the endpoint, and at an unpaired MDE of 0.0039 nats the design is "
+        "precise enough to return a significant H1 attributable to either. FUNDED AS STAGE 4, "
+        "restored from the end of the cut order, for that reason and not for cause 2 on its "
+        "own: the scaling was always behind a flag so that this arm could turn it off, and an "
+        "H1 that cannot be decomposed is the result the flag existed to prevent. "
+        "IT IS NOT `faithful` MINUS A FLAG, AND CALLING IT AN ABLATION GETS THE PAPER BACKWARDS. "
+        "The paper says a hyper-connection network is equivalent to a standard residual network "
+        "at initialization; its Implementation paragraph says to scale the output modules by "
+        "n**-0.5. Those are different models and only one of them is the equivalence. Measured "
+        "at n=4: with the scaling OFF the pre-unembedding hidden is exactly 4.0000x the "
+        "baseline's and the logits are the baseline's to about 1e-06 relative, because a "
+        "scale-invariant RMSNorm sits between the lane sum and the unembedding, so the "
+        "magnitude the correction exists to fix has no effect on the function. With the "
+        "scaling ON the logits are ~0.7 relative away and block 1 reads well under three "
+        "quarters of the baseline's residual, because a per-block n**-0.5 reweights depth "
+        "against depth and is not a global rescale any norm absorbs. So THIS arm satisfies the "
+        "paper's equivalence claim and `faithful` satisfies its Implementation paragraph; both "
+        "are faithful to a self-contradicting paper and the contradiction is the experiment. "
+        "`hyper_connection_test.py` asserts every number in this paragraph.",
+        seeds=5,
         hyper_connections=_hc(output_init_exponent=0.0),
     ),
     "decay-everything": Arm(
@@ -320,12 +341,16 @@ ARMS: Dict[str, Arm] = {
 #:                             for a question nothing downstream reads.
 #:   ``decay-everything``      Cause 3. One run at one seed could never have separated the
 #:                             parameter-group split from the seed it drew.
-#:   ``n1``                    The seesaw control. Reconnaissance, no claim attached.
-#:   ``no-output-init``        Cause 2 / H3. LAST, and therefore the next thing a further
-#:                             grant buys. A real hypothesis, and the strongest of the seven
-#:                             that remain -- but it asks whether a scaling is load-bearing,
-#:                             which only means something once H1 says the method does
-#:                             anything at all.
+#:   ``n1``                    The seesaw control. Reconnaissance, no claim attached. LAST,
+#:                             and therefore the next thing a further grant buys.
+#:
+#: ``no-output-init`` HAS ALSO LEFT THIS LIST BY BEING FUNDED, which is the second time the
+#: ordering has worked and the first time the reason was not money. It sat last because it asks
+#: whether a scaling is load-bearing, "which only means something once H1 says the method does
+#: anything at all" -- and that reasoning had the dependency backwards. ``faithful`` carries the
+#: mechanism *and* the scaling, so H1 is a joint test of the two whatever it returns, and the
+#: arm that separates them is not a follow-up to H1 but a precondition for reading it. It was
+#: restored on 2026-08-10, before any treatment endpoint was visible.
 CUT_ORDER = [
     "n8",
     "n2",
@@ -333,7 +358,6 @@ CUT_ORDER = [
     "tied-baseline",
     "decay-everything",
     "n1",
-    "no-output-init",
 ]
 
 #: The arms the first tranche actually runs, derived rather than written down twice.
@@ -1351,12 +1375,16 @@ A100_STAGE_SPECS: Dict[str, StageSpec] = {
     "faithful": StageSpec(spec="run.faithful-a100.yaml", arm="faithful", stage=2),
     "output-only": StageSpec(spec="run.output-only-a100.yaml", arm="output-only", stage=2),
     "mhc": StageSpec(spec="run.mhc-a100.yaml", arm="mhc", stage=3),
+    "no-output-init": StageSpec(spec="run.no-output-init-a100.yaml", arm="no-output-init", stage=4),
 }
 
 
-#: The ``--hours`` every A100 stage is submitted under.
+#: The ``--hours`` the FIRST A100 submission of every stage went out under. History, and a
+#: warning. Nothing should be submitted at this number; read :data:`A100_STAGE_HOURS_BY_ARM`.
 #:
-#: FOUR, DOWN FROM SEVEN, AND IT IS A MEASUREMENT RATHER THAN A TRIM. The five baseline cells
+#: FOUR, DOWN FROM SEVEN, AND IT IS A MEASUREMENT RATHER THAN A TRIM -- so ran the reasoning at
+#: the time, and it is left standing below because it is exactly right about the baseline and
+#: exactly wrong about everything else, which is the whole lesson. The five baseline cells
 #: of ``run_019fe2f4-f528`` ran 2.92 to 3.00 hours each, so 7 was a 2.3x ceiling on a need
 #: nobody had yet measured when it was chosen. Four leaves 33% over the slowest observed cell,
 #: which is more margin than the L40S stages carried, and it is the hours factor of the
@@ -1371,15 +1399,110 @@ A100_STAGE_SPECS: Dict[str, StageSpec] = {
 #: IT HAS TO BE THE SAME ACROSS THE STAGES, for the reason :data:`STAGE_HOURS` gives: a bound
 #: is what kills a cell that runs long, so a stage under a looser bound survives drift that
 #: another dies of, and a treatment arm missing a cell is missing its slowest one rather than
-#: a random one.
-A100_STAGE_HOURS = 4.0
+#: a random one. True, and it is what made a wrong scalar so expensive: sameness was enforced
+#: and correctness was not, so the error propagated to every stage at once.
+#:
+#: THIS NUMBER KILLED FIFTEEN CELLS AND IS KEPT ONLY SO THAT NOTHING CAN QUOTE IT AGAIN. It was
+#: the baseline's bound carried onto arms that compute lanes; see
+#: :data:`A100_LANE_ARM_CELL_HOURS`. It is deliberately no longer named ``A100_STAGE_HOURS``,
+#: because the failure mode this repository actually suffered is a person copying a plausible
+#: constant -- or a spec header quoting one -- into a resubmission. The bound each stage is
+#: submitted under is :data:`A100_STAGE_HOURS_BY_ARM` and there is no scalar to copy by mistake.
+A100_FIRST_SUBMISSION_HOURS = 4.0
+
+#: The ``--hours`` each A100 stage was ACTUALLY submitted under. Not a plan: a record.
+#:
+#: WHY THIS IS A TABLE AND NOT A SCALAR. It used to be a scalar, at four hours, on the argument
+#: :data:`STAGE_HOURS` gives -- a stage under a looser bound survives drift another dies of, so
+#: an arm missing a cell is missing its slowest one rather than a random one. That argument is
+#: real and it is the same species as the training-dose confound. It is also an argument about
+#: *differential survival*, and four hours is a bound that no lane arm survives at all. A bound
+#: that kills every cell of an arm is not a control for selection; it is the selection. The
+#: resubmissions therefore went out at six and seven hours, and for a day this file, all four
+#: spec headers and the test guarding them still said four -- the test passing because it read
+#: the same wrong headers it was meant to check.
+#:
+#: WHAT WAS SUBMITTED, WHICH IS WHAT THESE NUMBERS ARE. ``baseline`` at four, where a 3.00-hour
+#: cell leaves 33% and all five cells landed. ``faithful`` at six after its first stage died
+#: complete at the four-hour wall; ``run_019fe90b-f99e`` is the resubmission and
+#: ``hyper-connections.md`` records it going out at ``--hours 6``. ``output-only`` and ``mhc``
+#: at seven. Arm 4 at seven, matching the two most recent submissions rather than departing
+#: from anything.
+#:
+#: THE ONE ASYMMETRY LEFT, AND WHY IT IS NOW EMPTY. Arm 4's comparator in H1b is ``faithful``,
+#: which ran under six hours where arm 4 gets seven, so in principle ``faithful`` could lose a
+#: slow cell that arm 4 keeps and slow cells are not a random subset. In fact ``faithful``
+#: reported five of five under its six-hour bound, as did ``output-only`` at seven and
+#: ``baseline`` at four, so no comparator lost a cell to its bound and there is no differential
+#: survival to correct. The commitment stands anyway, because ``mhc`` is still running: any
+#: arm-4 cell whose runtime exceeds :data:`A100_LANE_ARM_SURVIVORSHIP_HOURS` is reported
+#: together with the contrast recomputed without it. Pre-registered before any endpoint was
+#: read, so that a looser bound cannot become a silent difference later.
+A100_STAGE_HOURS_BY_ARM: Dict[str, float] = {
+    "baseline": 4.0,
+    "faithful": 6.0,
+    "output-only": 7.0,
+    "mhc": 7.0,
+    "no-output-init": 7.0,
+}
+
+#: The runtime above which an arm-4 cell is reported as one a six-hour bound would have killed,
+#: and the contrast is recomputed without it. Pre-registered 2026-08-10 with the arm itself, so
+#: that the looser bound above cannot become a silent difference between arm 4 and the arms it
+#: is read against.
+A100_LANE_ARM_SURVIVORSHIP_HOURS = 6.0
 
 #: The longest of the five baseline cells of ``run_019fe2f4-f528``, in hours, which is the
 #: only wall clock this shape has ever been measured at rather than predicted at. The five ran
-#: 2.92, 2.94, 2.97, 2.99 and 3.00. :data:`A100_STAGE_HOURS` is checked against it, so a
-#: ``--hours`` that stops covering the slowest observed cell is a failing test rather than a
-#: tranche that dies at the bound.
+#: 2.92, 2.94, 2.97, 2.99 and 3.00. The ``baseline`` entry of :data:`A100_STAGE_HOURS_BY_ARM`
+#: is checked against it, so a ``--hours`` that stops covering the slowest observed cell is a
+#: failing test rather than a tranche that dies at the bound.
+#:
+#: IT IS THE BASELINE'S CELL AND THE BASELINE HAS NO LANES, WHICH IS THE WHOLE OF WHY FIFTEEN
+#: CELLS DIED. See :data:`A100_LANE_ARM_CELL_HOURS`.
 A100_MEASURED_CELL_HOURS = 3.00
+
+#: The same figure for an arm that has lanes, in hours, projected from the arms' own histories.
+#:
+#: ``A100_MEASURED_CELL_HOURS`` IS THE BASELINE'S AND WAS CARRIED ONTO ARMS THAT COMPUTE LANES.
+#: The baseline runs at 1.700 s/step and the three lane arms at 2.87 to 3.15, so four hours
+#: buys a lane arm about 4,950 steps of the 6,000 the tranche asks for. Every cell of all three
+#: treatment stages hit that wall -- fifteen of fifteen, at steps 4,640 to 4,995 -- and a
+#: timeout is measured to forfeit its second attempt on this workload, so a wall is not a delay
+#: but a lost cell. ``hyper-connections.md`` carries the table under "``--hours 4`` was the
+#: baseline's number carried onto arms that have lanes".
+#:
+#: Fitted per cell from step 200 onward, the slowest lane-arm rates are ``output-only`` 2.961,
+#: ``faithful`` 3.074 and ``mhc`` 3.149 s/step, projecting 4.98, 5.17 and 5.30 hours. This is
+#: ``faithful``'s, because arm 4 differs from ``faithful`` in the initialization of two module
+#: families and in nothing that a kernel sees -- the iso-FLOP test asserts as much -- so its
+#: step time is ``faithful``'s step time, and ``faithful``'s resubmission confirms the rate on
+#: new hosts at 3.027 to 3.083.
+A100_LANE_ARM_CELL_HOURS = 5.17
+
+#: What a 6,000-step cell of each arm actually takes, in hours, fitted per cell from step 200
+#: onward over the arms' own histories and projected to 6,000 plus the final evaluation and
+#: checkpoint. The slowest cell of each arm, not the mean, because a bound kills the slowest.
+#:
+#: THIS TABLE IS THE ONE THAT WOULD HAVE CAUGHT THE FOUR-HOUR BOUND. A single
+#: ``A100_MEASURED_CELL_HOURS`` of 3.00 was checked against a single ``--hours`` of 4.0 and the
+#: check passed, because both numbers were the baseline's and neither knew the other arms
+#: existed. The arms differ in step time by a factor of 1.8 -- 1.700 s/step with no lanes
+#: against 2.87 to 3.15 with them -- so one measured cell can only ever validate one bound.
+#: ``test_train_hyper_connections.py`` now walks this table against
+#: :data:`A100_STAGE_HOURS_BY_ARM` arm by arm.
+#:
+#: ``no-output-init`` is entered at ``faithful``'s figure. It differs from ``faithful`` in the
+#: initialization of two module families and in nothing a kernel sees -- the iso-FLOP test
+#: asserts as much -- so it has ``faithful``'s step time, and ``faithful``'s resubmission
+#: confirms that rate on new hosts at 3.027 to 3.083 s/step.
+A100_MEASURED_CELL_HOURS_BY_ARM: Dict[str, float] = {
+    "baseline": A100_MEASURED_CELL_HOURS,
+    "faithful": A100_LANE_ARM_CELL_HOURS,
+    "output-only": 4.98,
+    "mhc": 5.30,
+    "no-output-init": A100_LANE_ARM_CELL_HOURS,
+}
 
 #: The ``--attempts`` every A100 stage is submitted under. Two, unchanged, and it still buys
 #: only what ``OnStatusReason "Host EC2*" RETRY`` grants -- a lost host.

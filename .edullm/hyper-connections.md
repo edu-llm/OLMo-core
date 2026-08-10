@@ -1677,18 +1677,55 @@ descriptive, and carry no claim about horizon.
   band is too wide and the report says so. This costs nothing and it is the only independent
   handle on the dose constant the tranche has.
 
-### Arm 4 is funded, because H1 cannot be decomposed without it
+### Arm 4 is funded, and it is the arm the paper's equivalence claim describes
 
-**Staged 2026-08-10, in the same window and under the same condition: no treatment endpoint was
-visible.**
+**Staged 2026-08-10, under the same condition as the amendment above: no treatment endpoint has
+been read. `baseline`, `faithful` and `output-only` had reported five of five and `mhc` two of
+five when it was submitted, which is a count of finished cells and not a number about any of
+them.**
 
 `faithful` differs from `baseline` in **two** things and this document has said so from the
 start — the mechanism, and a smaller initialization for every attention output projector and
-second feed-forward linear, at the paper's `output_init_exponent=0.5`. Same-seed logits differ by
-a relative 8.4e-01 against 7.2e-07 at 0.0, so it is not a rounding difference. The remedy was
-named in the same breath — "unless arm 4 comes back flat against arm 1" — and arm 4 then carried
+second feed-forward linear, at the paper's `output_init_exponent=0.5`. The remedy was named in
+the same breath — "unless arm 4 comes back flat against arm 1" — and arm 4 then carried
 `seeds=0`, at the end of `CUT_ORDER`, on the reasoning that a question about whether a scaling is
 load-bearing "only means something once H1 says the method does anything at all".
+
+#### Which arm is faithful depends on which sentence of the paper you read
+
+This document has called arm 4 "faithful minus a flag" throughout and that is **backwards**. The
+correction is worth stating precisely, because it changes what a null on H1b would mean.
+
+The paper makes two claims that cannot both describe one model. §2.3 says a hyper-connection
+network is **equivalent to a standard residual network at initialization**. Its Implementation
+paragraph says to scale the output modules by `n^-0.5`. Measured at `n = 4` on identical seeds,
+with the pre-unembedding hidden captured at the final norm's input:
+
+| | pre-unembedding hidden, vs `baseline` | logits, relative to `baseline` |
+| --- | --- | --- |
+| scaling **off** — arm 4 | **exactly 4.0000×** | **1.3e-06** |
+| scaling **on** at 0.5 — `faithful` | 2.618× | 0.73 |
+
+**The scaling corrects a magnitude that has no effect on the model.** The lane sum is followed by
+an RMSNorm, and RMSNorm is scale-invariant, so a 4× on its input is a 1× on its output. With the
+correction *off* the logits already are the baseline's, to six decimal places. Applying the
+correction is what **breaks** the equivalence, because a per-block `n^-0.5` is not a global
+rescale a norm can absorb — it reweights depth against depth, which is why block 1 reads under
+three quarters of the baseline's residual.
+
+So **arm 4 satisfies the paper's §2.3 and `faithful` satisfies its Implementation paragraph.**
+Both are faithful, to sentences that contradict each other. Arm 4 is not an ablation of arm 2;
+they are two readings of a self-contradicting method description, and the contradiction is the
+experiment.
+
+`src/test/nn/transformer/hyper_connection_test.py` asserts every number in that table, in both
+directions — that off is equivalent, and that on is not — so a change to the scaling that
+silently made the two arms the same experiment fails a test rather than wasting five cells.
+
+The earlier figures in this section were 8.4e-01 and 7.2e-07 and are now 0.73 and 1.3e-06. Both
+pairs are the same measurement at different model shapes and neither is wrong; the conclusion is
+identical and does not depend on which is quoted, which is worth knowing before anyone reconciles
+them.
 
 **That reasoning has the dependency backwards, and the amended σ̂ is what makes it matter.** H1 is
 a joint test of the mechanism and its initialization prescription whatever it returns. At the
@@ -1705,21 +1742,23 @@ Read `cost` and `approval_class` out of `edullm check --json` rather than out of
 
 Three things about the spec that are not the other three stages'.
 
-- **`--hours 7`, and it is the only header that departs from the shared bound.** The four hours
-  the others quote is `A100_MEASURED_CELL_HOURS`, which is the *baseline's* cell at 1.700 s/step;
-  the lane arms run at 2.87 to 3.15 and every cell of all three treatment stages died at that
-  wall. Arm 4 is `faithful` with two module families initialized differently and nothing a kernel
-  sees, so its step time is `faithful`'s: slowest 3.074 s/step, projecting 5.17 hours. Seven
-  leaves 26%; six would leave 14%.
-- **The equal-bound rule is departed from deliberately and the departure is bounded.**
-  `STAGE_HOURS` records why a bound should be the same across stages — an arm under a looser bound
-  survives drift another dies of, so an arm missing its slowest cell is not missing a random one.
-  If a live arm loses a cell to its own bound and arm 4 does not, arm 4 carries a slow cell its
-  comparator does not, and the bias runs towards arm 4 looking *worse*, which reads as the
-  initialization being load-bearing — a false positive on the exact question the arm was funded to
-  answer. It needs a 16% rate excursion against a measured host-to-host spread of 1.8%. And
-  `A100_LANE_ARM_SURVIVORSHIP_HOURS` pre-registers, now, that **any arm-4 cell whose runtime
-  exceeds 6.0 hours is reported and the contrast recomputed without it**.
+- **`--hours 7`, which is what `output-only` and `mhc` were actually submitted at.** The four
+  hours the headers used to quote is `A100_MEASURED_CELL_HOURS`, which is the *baseline's* cell at
+  1.700 s/step; the lane arms run at 2.87 to 3.15 and every cell of all three treatment stages
+  died at that wall. Arm 4 is `faithful` with two module families initialized differently and
+  nothing a kernel sees, so its step time is `faithful`'s: slowest 3.074 s/step, projecting 5.17
+  hours. Seven leaves 26%. See
+  [the `--hours` correction](#the-hours-in-the-headers-were-not-the-hours-that-were-submitted).
+- **The one asymmetry left is against `faithful`, and it is empty.** Seven matches `output-only`
+  and `mhc` exactly. `faithful` ran at six, and `STAGE_HOURS` records why that could matter — an
+  arm under a looser bound survives drift another dies of, so an arm missing its slowest cell is
+  not missing a random one, and the bias would run towards arm 4 looking *worse*, a false positive
+  on the exact question the arm was funded to answer. It is empty because **`faithful` reported
+  five of five under six hours**, as did `output-only` at seven and `baseline` at four: no
+  comparator lost a cell to its bound, so there is no differential survival to correct. The
+  commitment stands anyway, because `mhc` is still running —
+  `A100_LANE_ARM_SURVIVORSHIP_HOURS` pre-registers that **any arm-4 cell whose runtime exceeds 6.0
+  hours is reported and the contrast recomputed without it**.
 - **`--fail-closed-by-step 400` is present, and that is measured rather than assumed.** It is on
   `faithful` and `output-only`, off on `baseline` where the monitor never attaches, and off on
   `mhc` where Sinkhorn compresses the statistic the guard reads. Turning the output scaling off
@@ -2637,6 +2676,46 @@ ran at 3.044, 3.074, 3.043, 3.065 and 3.043 s/step — a 1.0% spread over five d
 1.0% of 4,700 steps is 47. Same time, slightly different rates, therefore slightly different steps.
 A fault that caught five cells within 59 steps of one another would have had to be triggered *by*
 the step count, and then the runtimes are what would have disagreed.
+
+### The hours in the headers were not the hours that were submitted
+
+Corrected 2026-08-10. For a day after the resubmissions went out, `A100_STAGE_HOURS` was `4.0`,
+all four `run.*-a100.yaml` headers quoted a complete `edullm check` line carrying `--hours 4`, and
+the test guarding them passed — **because it read the same headers it was meant to check**. The
+one number in this repository most likely to be copied by a person in a hurry was the number that
+had just killed fifteen cells, sitting at the top of the file it names, in a line that runs.
+
+What was actually submitted:
+
+| arm | `--hours` submitted | slowest projected cell | spare |
+| --- | --- | --- | --- |
+| `baseline` | 4 | 3.00 h | 25% |
+| `faithful` | 6 | 5.17 h | 14% |
+| `output-only` | 7 | 4.98 h | 29% |
+| `mhc` | 7 | 5.30 h | 24% |
+| `no-output-init` | 7 | 5.17 h | 26% |
+
+Three changes, and the third is the one that matters.
+
+1. **`A100_STAGE_HOURS` is gone as a name.** The historical four survives as
+   `A100_FIRST_SUBMISSION_HOURS`, which nobody pastes into a submission. There is no scalar bound
+   left in the tranche to copy, because the arms differ in step time by a factor of 1.8 and a
+   scalar is the wrong shape: `A100_STAGE_HOURS_BY_ARM` is the record of what each stage went out
+   under.
+2. **The four headers now quote what was submitted**, each with the reason for its own number.
+   `--hours` appears in no `command:` field in any spec — it is a submit-time flag — so these
+   edits are to comments and cannot disturb a running cell.
+3. **The test compares each arm's bound to that arm's own measured cell.** The old one compared a
+   single bound to a single measured cell and passed for as long as it existed, because both
+   numbers were the baseline's. `A100_MEASURED_CELL_HOURS_BY_ARM` carries all five projections and
+   `test_no_arm_is_bounded_on_another_arms_step_time` walks them. Restoring `faithful` to four
+   hours now fails with `bounded at 4h against a projected 5.17h cell, which leaves -29%`, and a
+   second test refuses any header that quotes the four-hour line except `baseline`'s, where it was
+   correct.
+
+The general failure is worth naming, because it is not about hours. **A test that reads its
+expectation out of the artifact it is checking cannot fail.** The check existed, it was specific,
+it was maintained, and it asserted that two copies of one wrong number agreed with each other.
 
 ## A timeout gets no second attempt, and the run that proves the instrument got one
 

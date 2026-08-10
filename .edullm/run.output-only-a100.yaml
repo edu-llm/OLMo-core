@@ -2,14 +2,28 @@
 #
 #   edullm check  --json --experiment hyper-connections-370m --dataset regmix-10b-v1 \
 #     --team input-core --spec .edullm/run.output-only-a100.yaml --compute gpu-8xa100 \
-#     --hours 4 --attempts 2 --fanout-size 5 --fanout-index-parameter seed
+#     --hours 7 --attempts 2 --fanout-size 5 --fanout-index-parameter seed
 #
-# --hours 4 AND --optimizer skip_step_adamw ARE THE AMENDMENT OF 2026-08-08, and both are
-# identical on all four arms. `run.baseline-a100.yaml` carries the full argument for each:
-# briefly, the measured cells ran 3.00 hours against a 7-hour bound, and two of the five
-# baseline cells spiked in a way that supplied 99% of the endpoint variance. The optimizer
-# line is the intervention and it is the same on every arm because an optimizer that differed
-# between them would confound the contrast far worse than the noise it removes.
+# --hours 7, AND THE LINE ABOVE SAID 4 UNTIL 2026-08-10 WHILE THE RUN IT DESCRIBES WENT OUT AT
+# 7. Four hours is the baseline's bound. This arm computes hyper-connection lanes, runs at
+# 2.867-2.961 s/step against the baseline's 1.700, and needs 4.98 hours for 6,000 steps. The
+# first submission of this stage, `run_019fe7bc-53f3`, died complete at the four-hour wall
+# along with the other two lane stages -- fifteen cells between them, and a timeout is measured
+# to forfeit its second attempt on this workload. `run_019fe9f6-d060` is the resubmission, it
+# went out at seven, and it reported five of five.
+#
+# COPYING A SUBMIT LINE OUT OF A HEADER IS HOW FIFTEEN CELLS DIED, so this one is now the text
+# of what was actually submitted rather than of what was once planned, and
+# `hyper_connection_arms.A100_STAGE_HOURS_BY_ARM` is the machine-readable copy that
+# `test_train_hyper_connections.py` checks this line against. There is deliberately no single
+# `--hours` constant left to copy: the bound is per arm, because the arms have different step
+# times and pretending otherwise is what killed the stage.
+#
+# --optimizer skip_step_adamw IS THE AMENDMENT OF 2026-08-08 and is identical on all five arms.
+# `run.baseline-a100.yaml` carries the full argument: two of the five baseline cells spiked in
+# a way that supplied 99% of the endpoint variance. The optimizer line is the intervention and
+# it is the same on every arm because an optimizer that differed between them would confound
+# the contrast far worse than the noise it removes.
 #
 # The L40S spec this is derived from is `run.output-only-stage.yaml` and it is not edited:
 # `run_019fe2c2-bc91` was admitted from it. See `run.baseline-a100.yaml` for why the shape

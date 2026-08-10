@@ -1,0 +1,119 @@
+# STAGE 4 ON gpu-8xa100, ARM 4 OF 11: five seeds of the hyper-connection network that the
+# paper's own equivalence claim describes -- the mechanism, with the sqrt(n) output-module
+# initialization scaling OFF, which is the setting under which the model at init IS the baseline.
+#
+#   edullm check  --json --experiment hyper-connections-370m --dataset regmix-10b-v1 \
+#     --team input-core --spec .edullm/run.no-output-init-a100.yaml --compute gpu-8xa100 \
+#     --hours 7 --attempts 2 --fanout-size 5 --fanout-index-parameter seed
+#
+# WHY THIS ARM EXISTS, AND WHY IT IS NOT A FOLLOW-UP. `faithful` differs from `baseline` in TWO
+# things and the pre-registration has always said so: the mechanism, and a smaller
+# initialization for every attention output projector and second feed-forward linear. H1 is
+# therefore a joint test of hyper-connections AND their initialization prescription, and at an
+# unpaired MDE of 0.0039 nats the tranche is now precise enough to return a SIGNIFICANT H1
+# attributable to either one. This arm is the only thing that separates them. The scaling was put
+# behind a flag for exactly this, in the original build order, and the arm was then cut to the
+# end of CUT_ORDER on the reasoning that a question about a scaling "only means something once H1
+# says the method does anything at all" -- which has the dependency backwards. It is a
+# precondition for reading H1, not a follow-up to it.
+#
+# AND IT IS NOT AN ABLATION OF `faithful`, WHICH IS THE THING TO GET RIGHT BEFORE PRESENTING IT.
+# The paper says a hyper-connection network is equivalent to a standard residual network at
+# initialization. Its Implementation paragraph says to scale the output modules by n**-0.5. Those
+# are two different models and only one of them is the equivalence -- and it is this one, not the
+# one the paper ships. Measured at n=4 on identical seeds:
+#
+#   scaling OFF (this arm)  pre-unembedding hidden is EXACTLY 4.0000x the baseline's, and the
+#                           logits are the baseline's to ~1e-06 relative. The lane sum is
+#                           followed by a scale-invariant RMSNorm, so the magnitude the
+#                           correction exists to fix has no effect on the function at all.
+#   scaling ON (`faithful`) logits ~0.7 relative from the baseline's, block 1 reading well under
+#                           three quarters of the baseline's residual. A per-block n**-0.5 is not
+#                           a global rescale a norm can absorb; it reweights depth against depth.
+#
+# So the correction does not restore the equivalence, it is what breaks it. This arm satisfies
+# the paper's section 2.3 and `faithful` satisfies its Implementation paragraph; both are
+# faithful, to sentences that contradict each other, and the contradiction is what H1a and H1b
+# are for. `src/test/nn/transformer/hyper_connection_test.py` asserts every number above.
+#
+# STAGED BEFORE ANY TREATMENT ENDPOINT WAS VISIBLE, 2026-08-10. `run_019fe90b-f99e` had about
+# three hours left and the other two were queuing. Submitted after `baseline`, `faithful` and
+# `output-only` had reported five of five, which is a count of finished cells and not an
+# endpoint: no endpoint, per-source table, declined-step count or largest trigger from any
+# treatment arm had been read when this arm was designed, funded or staged. That distinction is
+# the only thing standing between adding an arm and choosing one with the answer in view.
+#
+# --hours 7, WHICH IS WHAT THE TWO MOST RECENT SUBMISSIONS WENT OUT AT. The rest of this file is
+# `run.faithful-a100.yaml` with one word changed.
+#
+#   The four hours the headers used to quote is the BASELINE's measured cell carried onto arms
+#   that compute lanes. The baseline runs at 1.700 s/step and the lane arms at 2.87 to 3.15, so
+#   four hours buys a lane arm about 4,950 of the 6,000 steps it is asked for. Every cell of all
+#   three treatment stages hit that wall -- fifteen of fifteen, at steps 4,640 to 4,995 -- and a
+#   timeout on this workload is measured to FORFEIT its second attempt, so a wall is a lost cell
+#   and not a delay. Those stages were resubmitted at six (`faithful`) and seven (`output-only`,
+#   `mhc`), and the four headers were only corrected to say so on 2026-08-10; until then the test
+#   guarding them passed by reading the same wrong headers. Arm 4 is `faithful` with two module
+#   families initialized differently and nothing a kernel sees, so its step time is `faithful`'s:
+#   slowest 3.074 s/step, projecting 5.17 hours. Seven leaves 26%.
+#
+#   THE ONE ASYMMETRY LEFT IS AGAINST `faithful`, AND IT IS EMPTY. Seven matches `output-only`
+#   and `mhc` exactly, so H1a's comparator chain is on one bound. `faithful` ran at six, and
+#   `STAGE_HOURS` records why that could matter: a stage under a looser bound survives drift
+#   another dies of, so an arm missing its slowest cell is not missing a random one, and the bias
+#   would run towards arm 4 looking worse -- a false positive on the exact question it was funded
+#   to answer. It is empty because `faithful` reported five of five under its six hours, as did
+#   `output-only` at seven and `baseline` at four: no comparator lost a cell to its bound, so
+#   there is no differential survival to correct. The commitment stands anyway, because `mhc` is
+#   still running: `A100_LANE_ARM_SURVIVORSHIP_HOURS` pre-registers, now, that any arm-4 cell
+#   whose runtime exceeds 6.0 hours is reported and the contrast recomputed without it.
+#
+# --fail-closed-by-step 400 IS HERE, AND IT IS MEASURED RATHER THAN ASSUMED. It is present on
+# `faithful` and `output-only`, absent on `baseline` where the monitor is never attached, and
+# absent on `mhc` where Sinkhorn compresses the very statistic the guard reads. Arm 4 has lanes,
+# so the guard is reachable and the question is real. Turning the output scaling OFF makes the
+# module writes LARGER, and lane dispersion is how far the lanes sit from their own mean, so it
+# should read higher than `faithful` rather than lower. It does:
+# `test_the_lane_gate_passes_arm_four_which_writes_larger_than_faithful_not_smaller` measures
+# 0.0107 to 0.0243 against `faithful`'s 0.0116 to 0.0188 and a floor of 5e-03, four blocks of
+# four over it on both. This arm is the opposite of the `mhc` case and the flag belongs on it.
+#
+# EVERY OTHER RESOLVED OPTION IS THE OTHER THREE STAGES', INCLUDING THE THREE OPTIMIZER LINES.
+# `run.baseline-a100.yaml` carries the full argument. Briefly: skip-step is the amendment of
+# 2026-08-08 and has to be identical on every arm, because hyper-connections are one of the
+# candidate explanations for the instability it suppresses and an optimizer that differed
+# between arms would confound the contrast far worse than the noise it removes.
+# `test_the_a100_specs_differ_in_the_arm_and_in_nothing_else` refuses this file if it disagrees
+# with the other four about anything outside `STAGE_CONTRAST_EXEMPT`.
+#
+# THERE IS NO L40S PREDECESSOR TO THIS FILE and that is not an omission. The other three A100
+# specs are derived from an L40S spec that a submission was admitted from, and are annotated
+# with which two words differ. This arm never ran on L40S, so it is derived from
+# `run.faithful-a100.yaml` instead and the one word that differs is `--arm`.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/train_hyper_connections.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --arm no-output-init
+  --model-factory hc_370M
+  --sequence-length 4096
+  --global-batch-size 786432
+  --rank-microbatch-size 12288
+  --steps 6000
+  --save-interval 500
+  --warmup-steps 120
+  --learning-rate 7.8e-4
+  --weight-decay 0.033
+  --z-loss-multiplier 1e-5
+  --held-out-shards 2
+  --bytes-per-token 4.57
+  --monitor-interval 50
+  --eval-interval 500
+  --fail-closed-by-step 400
+  --optimizer skip_step_adamw
+  --skip-step-sigma-factor 6
+  --skip-step-rolling-interval 128
+  --param-dtype bfloat16'
