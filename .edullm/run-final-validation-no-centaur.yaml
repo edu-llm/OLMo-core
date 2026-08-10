@@ -1,0 +1,10 @@
+# Stock OLMo2-370M / ~10B RegMix validation with the no-centaur probe winner vector.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'export PYTHONDONTWRITEBYTECODE=1 EDULLM_LAUNCH_CHECK=waived
+  EDULLM_WANDB_PROJECT=hpo-final-validation WANDB_PROJECT=hpo-final-validation
+  WANDB_RUN_GROUP=hpo-final-validation-370m-10b &&
+  python .edullm/final_validation.py --vector no-centaur-winner
+  train_module.dp_config.param_dtype=bfloat16'
