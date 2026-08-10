@@ -844,6 +844,22 @@ def remove_torn_checkpoints(save_folder: str) -> List[str]:
     return removed
 
 
+def see_the_source(path: str, fallback: str) -> str:
+    """Name the corpus component a validation shard came from, for the evaluator's label.
+
+    The sealed layout is ``<prefix>/tokens/<source>/val-<n>.<dtype>.bin``, so the directory
+    holding the shard is the source. Anything that does not look like that gets ``fallback``,
+    which is the dataset id -- an aggregate label rather than a wrong one.
+
+    A LABEL IS NOT COSMETIC HERE. ``LMEvaluator`` refuses to build without one, so this cannot
+    return an empty string, and the fallback exists for that reason rather than for tidiness.
+    """
+    parts = [part for part in path.split("/") if part]
+    if len(parts) >= 2 and parts[-2] not in ("", "tokens"):
+        return parts[-2]
+    return fallback
+
+
 def hf_export_folder(opts) -> str:
     """Where the HuggingFace exports go, which nobody downstream should have to be told.
 
@@ -1066,6 +1082,30 @@ def build_config(opts, overrides: List[str]):
             LMEvaluatorCallbackConfig(
                 eval_dataset=NumpyPaddedFSLDatasetConfig(
                     paths=corpus.val_paths,
+                    # EVERY VALIDATION SHARD NEEDS A `label` AND THE RUN DIES WITHOUT ONE.
+                    # `LMEvaluator.from_numpy_dataset` walks the shards and raises
+                    # `Missing dataset 'label' in metadata for '<path>'` on the first one that
+                    # has none (`eval/lm_evaluator.py:62`). It is the label the loss is
+                    # reported under, so there is no default it could pick for us.
+                    #
+                    # FOUND ON THE BLOCK RATHER THAN BEFORE IT, at 17:34 on 2026-08-10, by a
+                    # smoke run on eight H100s that had already resolved the corpus, built the
+                    # model and formed the mesh. `--dry-run` does not reach it because the
+                    # callback is built by the trainer and not by the config, so a clean check
+                    # says nothing about this. It would have killed the base run in its first
+                    # minute.
+                    #
+                    # LABELLED BY SOURCE, which costs nothing and is worth something: the
+                    # shards are laid out `.../tokens/<source>/val-<n>...`, so this reports a
+                    # held-out loss per corpus component as well as the average, and a module
+                    # that helps on code and hurts on prose becomes visible rather than
+                    # averaging out. `see_the_source` falls back to the dataset id for any
+                    # layout that does not carry a source directory, because a label that is
+                    # merely uninformative is much better than a run that will not start.
+                    metadata=[
+                        {"label": see_the_source(path, opts.dataset_id)}
+                        for path in corpus.val_paths
+                    ],
                     sequence_length=opts.sequence_length,
                     tokenizer=corpus.tokenizer,
                     # Same width as the training stream, passed rather than inferred, for the
