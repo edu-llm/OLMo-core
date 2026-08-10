@@ -145,9 +145,9 @@ SKIP_TRIGGER_METRIC = "stability/grad norm at a skipped step"
 #: are exact keys and not the module's globbed families, because this is a history scan.
 LANE_WITNESS_METRICS = ("hc/min lane norm spread", "hc/composite spectral radius")
 
-#: The four funded arms, in the pre-registration's own numbering, which is the order every
+#: The five funded arms, in the pre-registration's own numbering, which is the order every
 #: table and every figure in this module uses.
-ARM_ORDER: Tuple[str, ...] = ("baseline", "faithful", "output-only", "mhc")
+ARM_ORDER: Tuple[str, ...] = ("baseline", "faithful", "output-only", "no-output-init", "mhc")
 
 #: The step count the tranche was submitted for.
 HORIZON = 6000
@@ -192,6 +192,13 @@ class Hypothesis:
     equivalence claims, which this design cannot support and the pre-registration forbids.
     """
 
+    post_hoc: str = ""
+    """
+    Empty on a pre-registered hypothesis. On anything added later, the date it was added, which
+    is printed beside the contrast and listed in :data:`POST_HOC`. A contrast that is not in the
+    pre-registration and does not say so is the failure this whole module is built around.
+    """
+
 
 #: The literature this module exists to adjudicate, in nats of held-out cross-entropy, signed
 #: so that a negative number is an improvement.
@@ -201,20 +208,46 @@ H1_CLAIM = ("H1's own pre-registered effect", -0.025)
 ATTENUATED = ("the attenuation a 370M replication should expect", -0.010)
 
 
-#: The hypotheses the funded four arms can address. H2b, H3, H4 and H6 are not here because
-#: the tranche does not fund the arms or the scoring job they need; the pre-registration says
-#: so, and a hypothesis silently absent from an analysis script is one nobody notices was
-#: never answered.
+#: The hypotheses the funded five arms can address. H2b, H4 and H6 are not here because the
+#: tranche does not fund the arms or the scoring job they need; the pre-registration says so,
+#: and a hypothesis silently absent from an analysis script is one nobody notices was never
+#: answered.
+#:
+#: H1a AND H1b ARE THE DECOMPOSITION AND THEY ARE PRE-REGISTERED, NOT DERIVED LATER. ``faithful``
+#: differs from ``baseline`` in the mechanism AND in the sqrt(n) output-module initialization, so
+#: H1 is a joint test of the two however it comes out. Arm 4 was funded on 2026-08-10, before any
+#: treatment endpoint was visible, so that the two can be separated; H1 itself is unchanged and
+#: is still reported as the joint test it always was.
 HYPOTHESES: Tuple[Hypothesis, ...] = (
     Hypothesis(
         name="H1",
         treatment="faithful",
         comparator="baseline",
-        claim="Arm 2 beats arm 1 by >= 0.025 nats. CONFOUNDED with the output-init rescale, "
-        "which arm 4 would disentangle and which the tranche does not fund, so an effect here "
-        "is attributable to hyper-connections PLUS their initialization prescription.",
+        claim="Arm 2 beats arm 1 by >= 0.025 nats. JOINT in the mechanism and the output-init "
+        "rescale, so an effect here is attributable to hyper-connections PLUS their "
+        "initialization prescription. H1a and H1b decompose it; this one is not redefined.",
         predicted_sign=-1,
         reference_effects=(BYTEDANCE, H1_CLAIM, TENCENT, ATTENUATED),
+    ),
+    Hypothesis(
+        name="H1a",
+        treatment="no-output-init",
+        comparator="baseline",
+        claim="Arm 4 beats arm 1: the mechanism WITHOUT the initialization prescription. Read "
+        "beside H1, this is the part of H1 that the sqrt(n) rescale is not responsible for.",
+        predicted_sign=-1,
+        reference_effects=(BYTEDANCE, TENCENT, ATTENUATED),
+    ),
+    Hypothesis(
+        name="H1b",
+        treatment="faithful",
+        comparator="no-output-init",
+        claim="Arm 2 beats arm 4: the initialization prescription alone, at a fixed mechanism. "
+        "A null here is the reading that makes H1 a statement about hyper-connections; a "
+        "significant result is the reading that makes it a statement about how they are "
+        "initialized.",
+        predicted_sign=-1,
+        reference_effects=(TENCENT, ATTENUATED),
     ),
     Hypothesis(
         name="H2a",
@@ -226,6 +259,19 @@ HYPOTHESES: Tuple[Hypothesis, ...] = (
         "blocked.",
         predicted_sign=-1,
         reference_effects=(BYTEDANCE, TENCENT, ATTENUATED),
+    ),
+    Hypothesis(
+        name="H2a-level",
+        treatment="output-only",
+        comparator="baseline",
+        claim="POST-HOC AND DESCRIPTIVE. Arm 3 against arm 1: what the field's own "
+        "reimplementation scores at 370M. H2a says whether the input map is worth anything; "
+        "this says whether an arm without it still beats the baseline, which is the question a "
+        "published sign inversion actually turns on. It is the arithmetic difference of H1 and "
+        "H2a and carries no gate of its own.",
+        predicted_sign=-1,
+        reference_effects=(BYTEDANCE, TENCENT, ATTENUATED),
+        post_hoc="2026-08-10",
     ),
     Hypothesis(
         name="H5",
@@ -272,6 +318,15 @@ POST_HOC: Tuple[Tuple[str, str], ...] = (
         "faithful-against-baseline test is H7; the other two are descriptive and carry no "
         "claim, and they are here because an arm that destabilises training is worth seeing "
         "whichever arm it is.",
+    ),
+    (
+        "2026-08-10",
+        "the H2a-level contrast, output-only against baseline. H2a is pre-registered as arm 2 "
+        "against arm 3 and answers whether the learned input map is worth anything; it does not "
+        "answer whether an arm without the input map still beats the baseline, which is the "
+        "question a published SIGN INVERSION turns on and which this tranche can answer. It is "
+        "the arithmetic difference of H1 and H2a, it is excluded from the Holm family so that it "
+        "cannot inflate a pre-registered p-value, and it carries no gate of its own.",
     ),
 )
 

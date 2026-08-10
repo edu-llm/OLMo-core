@@ -1,4 +1,5 @@
 from dataclasses import replace
+from typing import Dict
 
 import pytest
 import torch
@@ -467,7 +468,7 @@ def test_the_scaling_corrects_a_magnitude_the_final_norm_deletes_and_costs_the_e
     hc = HyperConnectionConfig(n_lanes=4)
 
     def hidden_and_logits(model):
-        captured = {}
+        captured: Dict[str, torch.Tensor] = {}
         handle = model.lm_head.norm.register_forward_pre_hook(
             lambda _module, args: captured.__setitem__("hidden", args[0].detach().clone())
         )
