@@ -57,7 +57,7 @@ suggested_compute: gpu-8xa100
 command: >-
   bash -lc 'EDULLM_LAUNCH_CHECK=waived ; set -uo pipefail;
   DATA=data/latentcot/graph-reachability-depth/conversations;
-  BASE=s3://edullm-olmo-370m-ckpts/olmo3-370m/run-10b-equal/step12716/;
+  BASE=s3://edullm-checkpoints/olmo-370m/olmo3-370m/run-10b-equal/step12716/;
   ARMS=(A0 A1 A2 A3 A4);
   python src/scripts/latentcot/gen_graph_data.py;
   python src/scripts/latentcot/preflight.py --train-data $DATA/train-00000.jsonl
