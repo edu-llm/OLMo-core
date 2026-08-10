@@ -265,6 +265,53 @@ def leave_the_reason_in_wandb(*, run_name: str, stage: Stage, explanation: str) 
         print(f"could not leave the reason in W&B: {type(exc).__name__}: {exc}", file=sys.stderr)
 
 
+def leave_the_record_in_wandb(record: dict[str, Any]) -> None:
+    """Put the end-of-run record beside the loss curve, since the log it prints to is not read.
+
+    EVERY FIGURE IN THE RECORD IS PRODUCED AFTER W&B HAS ALREADY BEEN CLOSED, WHICH IS THE
+    WHOLE REASON THIS EXISTS. ``Trainer.fit`` ends in ``_shutdown``, which calls every
+    callback's ``close``, and ``WandBCallback.close`` calls ``wandb.finish``. The held-out CE,
+    the steady-state throughput, the peak memory and the decode probe are all measured after
+    that returns, so none of them can reach W&B through the callback that carried the loss
+    curve. Printing them was the only copy, and it lands on a CloudWatch stream no credential
+    on the platform side may read -- in a fan-out whose cells ``edullm logs`` cannot address
+    one at a time, since it takes a run id and a run id names all twenty-four.
+
+    RESUMED BY ``WANDB_RUN_ID`` RATHER THAN OPENED FRESH. The fan-out prologue sets that
+    variable to ``<run id>-cell-<index>``, so resuming writes into the cell's own run, beside
+    its own curves. A plain ``init`` would leave a second, curveless run per cell that somebody
+    would have to join back by hand. No ``name`` is passed for the same kind of reason: the
+    trainer's callback already named this run, and a name here would relabel exactly the cells
+    that got far enough to report.
+
+    The fields go in flat, under the names the JSON prints them under, so the runs table can
+    sort twenty-four cells on ``val_ce`` or ``throughput_tok_s_steady`` directly and one
+    vocabulary covers both copies of the record.
+
+    Every failure is swallowed, for the reason :func:`leave_the_reason_in_wandb` swallows its
+    own: the record is already on stdout by the time this runs, and a reporting channel that
+    can kill the run it reports on is worse than the gap it was added to close.
+    """
+    project = os.environ.get("EDULLM_WANDB_PROJECT")
+    if not project:
+        return
+    try:
+        import wandb
+
+        os.environ.setdefault("WANDB_INIT_TIMEOUT", "60")
+        run = wandb.run
+        if run is None:
+            run = wandb.init(
+                project=project,
+                id=os.environ.get("WANDB_RUN_ID"),
+                resume="allow",
+            )
+        run.summary.update(record)
+        run.finish()
+    except BaseException as exc:  # noqa: BLE001 -- see the docstring
+        print(f"could not leave the record in W&B: {type(exc).__name__}: {exc}", file=sys.stderr)
+
+
 # WHICH TOKENIZER EACH PUBLISHED ONE IS, SPELLED OUT RATHER THAN GUESSED.
 #
 # The left side is a published tokenizer id under s3://edullm-data; the right is the
@@ -2959,100 +3006,98 @@ def summarise(
             ),
         }
 
-    print(
-        json.dumps(
-            {
-                "run_id": opts.run_name,
-                "dataset_id": config.dataset_id,
-                "dataset_version": config.dataset_version,
-                # BOTH seeds, because a paired analysis is only possible if each result
-                # says which data order and which initialisation produced it. Recording
-                # one and defaulting the other is how "n seeds" came to mean n data
-                # orderings of a single init.
-                "data_seed": opts.data_seed,
-                "init_seed": config.init_seed,
-                "gpu": device,
-                "torch": torch.__version__,
-                "cuda": torch.version.cuda,
-                "parameters": sum(
-                    parameter.numel() for parameter in trainer.train_module.model.parameters()
-                ),
-                "steps": trainer.global_step,
-                "first_loss": losses.first,
-                "last_loss": losses.last,
-                "seconds": seconds,
-                "world_size": get_world_size(),
-                # CO-PRIMARY: SPEED. Two figures with deliberately unmistakable names --
-                # `throughput_tok_s_steady` ranks arms, `throughput_tok_s_whole_run` costs wall
-                # clock -- plus the counts behind them, the step-time distribution and MFU.
-                # Every one of them is null rather than zero when it could not be measured.
-                # See throughput_report for what each is and why they are not interchangeable.
-                **speed,
-                # CO-PRIMARY: MEMORY. `peak_memory_source` says WHICH read the figure is, and it
-                # is not decoration: the naive post-fit read is the last step's peak only,
-                # because the GPU monitor resets the counters every step. See memory_report.
-                **memory,
-                # THE INFERENCE HALF, WHICH RUN 1 DID NOT MEASURE AT ALL. The practical case for
-                # a linear-attention mixer is that generation is cheap -- a fixed recurrent state
-                # instead of a KV cache that grows with context -- and run 1 never ran that path.
-                # `decode_state_bytes_per_seq` is the field that decides serving batch size.
-                #
-                # `decode_fast_path_taken` IS A RECEIPT, NOT A REQUEST: it is only True when the
-                # kernel was resolved by identity, the returned state was fp32, and the state was
-                # OBSERVED to advance across a step. If it is False every latency is null and
-                # `decode_basis` says which cause. Read `decode_basis` before quoting any of
-                # these -- it is an operator microbenchmark and not a serving throughput.
-                **decode,
-                # The SpeedMonitorCallback's own per-device averages, kept because the
-                # preregistration names them and because they are an independent measurement of
-                # the same thing -- computed by upstream code, over a window that starts after
-                # step 1 rather than after the warmup cutoff. They should sit slightly BELOW
-                # `throughput_tok_s_steady_per_device`; a large gap means compilation or
-                # allocator growth leaked into upstream's average, which is the exact failure
-                # the cutoff exists for, so keeping both makes it visible instead of arguable.
-                "tps_device_avg": losses.tps_device_avg,
-                "tps_device_last": losses.tps_device_last,
-                "tps_total_avg": (
-                    None
-                    if losses.tps_device_avg is None
-                    else losses.tps_device_avg * get_world_size()
-                ),
-                # Kept for contrast, and it is the WRONG number for costing: it includes
-                # every fixed cost above. On a short probe it can be several times lower
-                # than the steady-state figure, and it penalises bigger shapes hardest.
-                "tps_naive_wall_clock": (
-                    None if not seconds else trainer.global_step * opts.global_batch_size / seconds
-                ),
-                "checkpoint_uri": opts.save_folder,
-                "wandb_project": os.environ.get("EDULLM_WANDB_PROJECT", ""),
-                "wandb_url": losses.wandb_url,
-                # The arm and its realized token count belong in the machine-readable record,
-                # not only in the log prose: a difference between two arms is only a paired
-                # difference if both trained on the same number of tokens, and that is checked
-                # by comparing these fields rather than by trusting the two commands matched.
-                "arm": opts.arm,
-                "tokens_trained": trainer.global_step * opts.global_batch_size,
-                # THE ENDPOINT, FLAT AND AT THE TOP LEVEL, because it is the field every
-                # downstream contrast reads. A difference of two arms' `val_ce` is only a paired
-                # difference if their `val_tokens` match, so the denominator ships beside the
-                # number instead of being assumed equal. `val_tokens_present` is the count that
-                # was asserted against the manifest -- if it is here at all, that assertion
-                # passed, because the run refuses rather than printing a number it could not
-                # account for.
-                "val_ce": None if val is None else val["ce"],
-                "val_tokens": None if val is None else val["tokens"],
-                "val_tokens_present": None if val is None else val["tokens_present"],
-                "val_tokens_declared": None if val is None else val["declared_tokens"],
-                "val_nll_sum": None if val is None else val["sum"],
-                "val_shards": None if val is None else val["shards"],
-                # null when no slice directories were passed, which is how a training-only run
-                # says so explicitly rather than by omission.
-                "sliced_eval": sliced,
-            },
-            indent=2,
+    record: dict[str, Any] = {
+        "run_id": opts.run_name,
+        "dataset_id": config.dataset_id,
+        "dataset_version": config.dataset_version,
+        # BOTH seeds, because a paired analysis is only possible if each result
+        # says which data order and which initialisation produced it. Recording
+        # one and defaulting the other is how "n seeds" came to mean n data
+        # orderings of a single init.
+        "data_seed": opts.data_seed,
+        "init_seed": config.init_seed,
+        "gpu": device,
+        "torch": torch.__version__,
+        "cuda": torch.version.cuda,
+        "parameters": sum(
+            parameter.numel() for parameter in trainer.train_module.model.parameters()
         ),
-        flush=True,
-    )
+        "steps": trainer.global_step,
+        "first_loss": losses.first,
+        "last_loss": losses.last,
+        "seconds": seconds,
+        "world_size": get_world_size(),
+        # CO-PRIMARY: SPEED. Two figures with deliberately unmistakable names --
+        # `throughput_tok_s_steady` ranks arms, `throughput_tok_s_whole_run` costs wall
+        # clock -- plus the counts behind them, the step-time distribution and MFU.
+        # Every one of them is null rather than zero when it could not be measured.
+        # See throughput_report for what each is and why they are not interchangeable.
+        **speed,
+        # CO-PRIMARY: MEMORY. `peak_memory_source` says WHICH read the figure is, and it
+        # is not decoration: the naive post-fit read is the last step's peak only,
+        # because the GPU monitor resets the counters every step. See memory_report.
+        **memory,
+        # THE INFERENCE HALF, WHICH RUN 1 DID NOT MEASURE AT ALL. The practical case for
+        # a linear-attention mixer is that generation is cheap -- a fixed recurrent state
+        # instead of a KV cache that grows with context -- and run 1 never ran that path.
+        # `decode_state_bytes_per_seq` is the field that decides serving batch size.
+        #
+        # `decode_fast_path_taken` IS A RECEIPT, NOT A REQUEST: it is only True when the
+        # kernel was resolved by identity, the returned state was fp32, and the state was
+        # OBSERVED to advance across a step. If it is False every latency is null and
+        # `decode_basis` says which cause. Read `decode_basis` before quoting any of
+        # these -- it is an operator microbenchmark and not a serving throughput.
+        **decode,
+        # The SpeedMonitorCallback's own per-device averages, kept because the
+        # preregistration names them and because they are an independent measurement of
+        # the same thing -- computed by upstream code, over a window that starts after
+        # step 1 rather than after the warmup cutoff. They should sit slightly BELOW
+        # `throughput_tok_s_steady_per_device`; a large gap means compilation or
+        # allocator growth leaked into upstream's average, which is the exact failure
+        # the cutoff exists for, so keeping both makes it visible instead of arguable.
+        "tps_device_avg": losses.tps_device_avg,
+        "tps_device_last": losses.tps_device_last,
+        "tps_total_avg": (
+            None if losses.tps_device_avg is None else losses.tps_device_avg * get_world_size()
+        ),
+        # Kept for contrast, and it is the WRONG number for costing: it includes
+        # every fixed cost above. On a short probe it can be several times lower
+        # than the steady-state figure, and it penalises bigger shapes hardest.
+        "tps_naive_wall_clock": (
+            None if not seconds else trainer.global_step * opts.global_batch_size / seconds
+        ),
+        "checkpoint_uri": opts.save_folder,
+        "wandb_project": os.environ.get("EDULLM_WANDB_PROJECT", ""),
+        "wandb_url": losses.wandb_url,
+        # The arm and its realized token count belong in the machine-readable record,
+        # not only in the log prose: a difference between two arms is only a paired
+        # difference if both trained on the same number of tokens, and that is checked
+        # by comparing these fields rather than by trusting the two commands matched.
+        "arm": opts.arm,
+        "tokens_trained": trainer.global_step * opts.global_batch_size,
+        # THE ENDPOINT, FLAT AND AT THE TOP LEVEL, because it is the field every
+        # downstream contrast reads. A difference of two arms' `val_ce` is only a paired
+        # difference if their `val_tokens` match, so the denominator ships beside the
+        # number instead of being assumed equal. `val_tokens_present` is the count that
+        # was asserted against the manifest -- if it is here at all, that assertion
+        # passed, because the run refuses rather than printing a number it could not
+        # account for.
+        "val_ce": None if val is None else val["ce"],
+        "val_tokens": None if val is None else val["tokens"],
+        "val_tokens_present": None if val is None else val["tokens_present"],
+        "val_tokens_declared": None if val is None else val["declared_tokens"],
+        "val_nll_sum": None if val is None else val["sum"],
+        "val_shards": None if val is None else val["shards"],
+        # null when no slice directories were passed, which is how a training-only run
+        # says so explicitly rather than by omission.
+        "sliced_eval": sliced,
+    }
+
+    # STDOUT FIRST AND W&B SECOND, AND THE ORDER IS LOAD-BEARING. The print is the copy that
+    # cannot fail; the W&B write reaches a network that a finishing container has no other
+    # need of, and it must never be able to cost the run the record it is copying.
+    print(json.dumps(record, indent=2), flush=True)
+    leave_the_record_in_wandb(record)
 
 
 def show(config) -> None:

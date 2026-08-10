@@ -19,6 +19,7 @@ meant to protect is a preflight nobody has tested.
 """
 
 import importlib.util
+import json
 import sys
 import types
 from collections import OrderedDict
@@ -533,23 +534,46 @@ def native_extension(monkeypatch):
 
 @pytest.fixture
 def fla_module(monkeypatch):
-    """Install a fake ``fla`` package, optionally carrying ``fla.ops.gdn2.chunk_gdn2``."""
+    """Install a fake ``fla`` carrying every name the four ``fla`` arms actually reach.
+
+    ONE FAKE FOR FOUR ARMS, BECAUSE THERE IS ONE ``fla`` IN THE IMAGE. The GDN2 control runs
+    ``fla.ops.gdn2.chunk_gdn2``. The three KDA arms build ``fla.modules.FusedRMSNormGated`` in
+    their constructors and run ``fla.modules.convolution.causal_conv1d`` in every layer, and
+    two of the three reach ``fla.ops.kda.chunk_kda`` on the first forward -- ``kda-hh-r2``
+    reaching an in-tree Triton module instead, which is real here and needs no fake.
+
+    A FAKE MISSING ONE OF THOSE MAKES THE PREFLIGHT REFUSE AN IMAGE THAT WOULD HAVE RUN, and
+    it did: this stubbed the GDN2 half alone, so the three KDA arms could not be shown to pass
+    on the card the comparison is defined on. The preflight was right and the fixture was
+    short, which is the direction that quietly retires an assertion rather than failing it.
+
+    Each submodule is registered under its dotted name in ``sys.modules`` as well as hung off
+    its parent, because a ``types.ModuleType`` has no ``__path__``: ``from fla.modules import
+    FusedRMSNormGated`` against a bare parent raises "'fla' is not a package", which reads
+    like a broken build rather than a thin fixture.
+    """
     from olmo_core.nn.attention import flash_linear_attn_api
 
     def install(*, gdn2=True):
+        def submodule(parent, name):
+            child = types.ModuleType(f"{parent.__name__}.{name}")
+            setattr(parent, name, child)
+            return child
+
         fla = types.ModuleType("fla")
-        ops = types.ModuleType("fla.ops")
-        gdn2_module = types.ModuleType("fla.ops.gdn2")
+        ops = submodule(fla, "ops")
+        gdn2_module = submodule(ops, "gdn2")
         if gdn2:
             setattr(gdn2_module, "chunk_gdn2", lambda *_, **__: None)
-        setattr(ops, "gdn2", gdn2_module)
-        setattr(fla, "ops", ops)
-        for name, module in (
-            ("fla", fla),
-            ("fla.ops", ops),
-            ("fla.ops.gdn2", gdn2_module),
-        ):
-            monkeypatch.setitem(sys.modules, name, module)
+        kda = submodule(ops, "kda")
+        setattr(kda, "chunk_kda", lambda *_, **__: None)
+        modules = submodule(fla, "modules")
+        setattr(modules, "FusedRMSNormGated", lambda *_, **__: None)
+        convolution = submodule(modules, "convolution")
+        setattr(convolution, "causal_conv1d", lambda *_, **__: None)
+
+        for module in (fla, ops, gdn2_module, kda, modules, convolution):
+            monkeypatch.setitem(sys.modules, module.__name__, module)
         monkeypatch.setattr(flash_linear_attn_api, "fla", fla)
         return fla
 
@@ -870,7 +894,7 @@ def test_mamba_b3_refuses_when_the_official_mamba3_kernel_is_absent(cuda_a100, m
 
 @pytest.fixture
 def every_kernel(monkeypatch, installed, flashrnn, native_extension, fla_module):
-    """An image carrying all five arms' kernels, so the device is the only thing left to refuse.
+    """An image carrying every arm's kernels, so the device is the only thing left to refuse.
 
     The mirror of ``no_kernels``: with every package present and pinned, a refusal below can
     only have come from the device, which is what makes these tests statements about the order
@@ -1222,3 +1246,160 @@ def test_an_arm_whose_mixer_declares_no_head_dimension_reports_no_footprint(arm,
     assert probe["decode_state_bytes_per_seq"] is None
     assert probe["decode_mixer_layers"] == len(arms.RECURRENT_LAYERS)
     assert "geometry could not be read" not in probe["decode_basis"]
+
+
+# --- where the end-of-run record lands, given that it is produced after W&B has closed -------
+
+
+class FakeWandBRun:
+    """Enough of a W&B run to say what was opened, what was written and whether it closed."""
+
+    def __init__(self, **opened) -> None:
+        self.opened = opened
+        self.summary: dict = {}
+        self.finished = False
+
+    def finish(self, *_, **__) -> None:
+        self.finished = True
+
+
+@pytest.fixture
+def fake_wandb(monkeypatch):
+    """A ``wandb`` whose run is already over, which is the only state ``summarise`` ever sees.
+
+    ``Trainer.fit`` ends in ``_shutdown``, which calls every callback's ``close``, and
+    ``WandBCallback.close`` calls ``wandb.finish``. Every figure ``summarise`` reports is
+    produced after that returns -- the held-out CE, the steady-state throughput over the whole
+    run, the peak memory, the decode probe -- so ``wandb.run`` is None by the time it is
+    asked for. A fixture handing back a live run would be testing a moment that never happens.
+    """
+    runs: list[FakeWandBRun] = []
+
+    def init(**opened):
+        run = FakeWandBRun(**opened)
+        runs.append(run)
+        module.run = run
+        return run
+
+    module = types.SimpleNamespace(run=None, init=init)
+    monkeypatch.setitem(sys.modules, "wandb", module)
+    monkeypatch.setenv("EDULLM_WANDB_PROJECT", "memory-split")
+    # What the fan-out prologue exports into cell 17, and the only identifier that separates
+    # one cell's W&B run from the other twenty-three.
+    monkeypatch.setenv("WANDB_RUN_ID", "run_0199-cell-17")
+    return types.SimpleNamespace(module=module, runs=runs)
+
+
+@pytest.fixture
+def summarised(fake_wandb, monkeypatch, capsys):
+    """Run ``summarise`` over the smallest fakes it reads, and hand back what it printed."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    def run():
+        losses = entry.LossWatcher()
+        losses.steps = [
+            entry.StepSample(step=step, seconds=0.5, tokens=524_288) for step in range(1, 61)
+        ]
+        losses.first, losses.last = 11.2, 3.4
+        losses.wandb_url = "https://wandb.ai/edu-llm/memory-split/runs/run_0199-cell-17"
+        entry.summarise(
+            opts=types.SimpleNamespace(
+                run_name="run_0199",
+                arm="gdn",
+                data_seed=arms.DATA_SEEDS[0],
+                save_folder="s3://bucket/teams/memory-split/runs/run_0199/cell-17/checkpoints/",
+                sequence_length=4096,
+                global_batch_size=524_288,
+                # Off, so the record under test is the cheap one. What reaches W&B is the
+                # dict, and which fields the dict holds is the decode probe's own business.
+                decode_probe=False,
+            ),
+            config=types.SimpleNamespace(
+                dataset_id="pretrain/reservoir-dolma2",
+                dataset_version="v1",
+                init_seed=arms.INIT_SEEDS_BY_ARM["gdn"][arms.DATA_SEEDS[0]],
+            ),
+            # No `num_flops_per_token`: `summarise` suppresses whatever the train module
+            # raises there and reports a null MFU with a stated reason, which is the path an
+            # arm with no flop count already takes.
+            trainer=types.SimpleNamespace(
+                global_step=1144,
+                train_module=types.SimpleNamespace(
+                    model=types.SimpleNamespace(parameters=lambda: [])
+                ),
+            ),
+            losses=losses,
+            seconds=900.0,
+            val={
+                "ce": 3.1416,
+                "tokens": 975_077_376,
+                "tokens_present": 975_077_376,
+                "declared_tokens": 975_077_376,
+                "sum": 3_064_083_268.0,
+                "shards": 12,
+            },
+        )
+        return json.loads(capsys.readouterr().out)
+
+    return run
+
+
+def test_the_end_of_run_record_reaches_wandb_and_not_only_stdout(summarised, fake_wandb):
+    """The endpoint of the whole comparison must survive the container it was computed in.
+
+    ``val_ce``, the steady-state throughput, the peak memory and the decode footprint are all
+    produced after ``fit()`` has closed W&B, so a record that is only printed exists on a
+    CloudWatch stream no credential on the platform side may read -- and ``edullm logs`` takes
+    a run id with no cell in it, so a 24-cell fan-out has no per-cell way back to it either.
+    """
+    printed = summarised()
+
+    assert fake_wandb.runs, "the record never reached W&B and stdout is the only copy"
+    recorded = fake_wandb.runs[-1].summary
+    assert {field: recorded.get(field) for field in printed} == printed
+
+
+def test_the_record_resumes_this_cells_own_run_rather_than_opening_a_twentyfifth(
+    summarised, fake_wandb
+):
+    """Resumed by id, because the alternative is a stray run per cell with no curves in it."""
+    summarised()
+
+    opened = fake_wandb.runs[-1].opened
+    assert opened["id"] == "run_0199-cell-17"
+    assert opened["resume"] == "allow"
+    assert opened["project"] == "memory-split"
+    # No `name`. The trainer's callback already named this run, and a name passed here would
+    # rename every cell at the moment it finishes -- silently, and only for the cells that got
+    # far enough to report, which is the worst half to relabel.
+    assert "name" not in opened
+    assert fake_wandb.runs[-1].finished
+
+
+def test_a_run_the_platform_gave_no_wandb_project_reports_to_stdout_alone(
+    summarised, fake_wandb, monkeypatch
+):
+    """Same gate the trainer's callback uses, so running the image by hand still works."""
+    monkeypatch.delenv("EDULLM_WANDB_PROJECT")
+
+    assert summarised()["arm"] == "gdn"
+    assert fake_wandb.runs == []
+
+
+def test_a_wandb_that_will_not_answer_costs_the_run_nothing(summarised, fake_wandb):
+    """The print happens first and the failure is swallowed, for the reason the crash path is.
+
+    A reporting channel that can take down the run it reports on is worse than the gap it was
+    added to close, and W&B is reached over a network a finishing container has no other need
+    of.
+    """
+
+    def refuse(**_):
+        raise RuntimeError("wandb is unreachable")
+
+    fake_wandb.module.init = refuse
+
+    printed = summarised()
+
+    assert printed["val_ce"] == 3.1416
+    assert printed["throughput_tok_s_steady"] is not None
