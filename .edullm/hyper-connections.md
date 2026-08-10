@@ -2256,6 +2256,158 @@ confirms groups exist and not that the lane split is why.
 python .edullm/wandb_panels.py --verify --run <full run id> --cells 5 --arm baseline
 ```
 
+## `--hours 4` was the baseline's number carried onto arms that have lanes
+
+`run_019fe7bc-49d0`, the `faithful` stage, died complete: five of five cells, at steps 4,640 to
+4,699 of 6,000, each at a runtime of 3.99 hours. Nothing was wrong with any of them.
+
+The bound came from `A100_MEASURED_CELL_HOURS = 3.00`, and that is the *baseline's* measured cell.
+The baseline has no hyper-connection lanes to compute and runs at 1.700 s/step; measured over their
+own histories the three lane arms run at 2.87 to 3.15. Four hours buys a lane arm about 4,950
+steps and the tranche asks for 6,000. The 33% margin the four hours was chosen for was 33% over an
+arm that was not being submitted.
+
+### What a wall looks like, so that the next one is recognised in a minute
+
+A fault takes one cell, at one step, at one moment. A bound takes every cell at the same *runtime*,
+at whatever step each of them had reached:
+
+| cell | started | last step | died | runtime |
+| --- | --- | --- | --- | --- |
+| 0 | 18:27:42Z | 4,694 | 22:27:42Z | 4.00 h |
+| 1 | 19:35:41Z | 4,640 | 23:34:57Z | 3.99 h |
+| 2 | 18:34:40Z | 4,699 | 22:34:40Z | 4.00 h |
+| 3 | 18:28:00Z | 4,660 | 22:27:31Z | 3.99 h |
+| 4 | 19:40:46Z | 4,694 | 23:40:47Z | 4.00 h |
+
+The five deaths are spread over 73 minutes of wall clock and **none of that spread is information**
+— it is the 73 minutes the starts were spread over, because `gpu-8xa100` places after a wait and
+`check` reports a median of 61 minutes for it. What is information is the second column against
+the fifth.
+
+The 59 steps of spread in the third column is the confirming detail rather than slack, and it is
+worth the arithmetic because it is what distinguishes a bound from a coincidence. The five cells
+ran at 3.044, 3.074, 3.043, 3.065 and 3.043 s/step — a 1.0% spread over five different hosts — and
+1.0% of 4,700 steps is 47. Same time, slightly different rates, therefore slightly different steps.
+A fault that caught five cells within 59 steps of one another would have had to be triggered *by*
+the step count, and then the runtimes are what would have disagreed.
+
+## A timeout gets no second attempt, and the run that proves the instrument got one
+
+`--attempts 2` does not cover a run that ran out of time. This was measured on seven cells and it
+is the opposite of what the platform's own text says, so it is worth setting out in full.
+
+**Seven cells have hit the four-hour wall** — all five of `run_019fe7bc-49d0` and cells 0 and 1 of
+`run_019fe7bc-53f3`. Six of the seven still had an unused second attempt. **Not one of them started
+a second process**, read 2.1 hours after the earliest of the seven walls.
+
+**The instrument is not merely silent, because one retry did fire and is plainly visible.** Cell 1
+of the `faithful` stage lost its first attempt about a minute in: its system-metrics stream runs
+18:38:15Z to 18:39:00Z and then stops for **56.9 minutes**, resuming at 19:35:57Z, and the
+`wandb-metadata.json` the second process left behind reports `startedAt` 19:35:41Z against a run
+created at 18:38:00Z. A retry reuses the cell's W&B run id, so it appears as a second process under
+the first one's name, and a 57-minute wait for it is what the capacity note predicts. That cell is
+the positive control: retries happen, they are placed within about an hour, and they show up here.
+Six timeouts with an attempt in hand produced nothing that looks like it.
+
+**When that retry ran it started from step 0, correctly**, because its first attempt died before
+writing a checkpoint. It then ran a clean 3.96 hours and hit the same wall as its siblings. So the
+one retry this tranche has been granted was also the one that had nothing to resume from, and the
+resume path is still unexercised on the platform.
+
+### The mechanism, which is an exit code the platform was not expected to see
+
+`policy.yaml` reasons that a timeout records no container exit code, so `OnExitCode "*"` cannot
+match it and Batch's fall-through grants the attempt. `TRANCHE_STEPS` already doubted this on the
+grounds that torchrun re-raises `SignalException` on SIGTERM and exits non-zero, calling it a dead
+heat with the container stop timeout. The heat is not dead, and cell 0 of `run_019fe7bc-53f3` says
+so in its own summary:
+
+```
+edullm_stage       TRAINING_ITSELF_FAILED
+edullm_exit_code   72
+edullm_explanation RuntimeError: DataLoader worker (pid 9068) is killed by signal: Terminated.
+```
+
+The SIGTERM at the wall reaches the dataloader workers first, surfaces inside the training loop as
+an ordinary `RuntimeError`, and `cli` turns it into a `Refusal` and returns its stage as the
+process's exit status. **The container exits 72.** Rule three matches an exit code of any value, so
+the retry is refused — not because the platform failed to notice the timeout, but because this
+program is well enough behaved to report one. The better the error handling, the more certainly the
+attempt is forfeited.
+
+What `edullm check --json` says under `retries.said` is that "the attempt a retry is actually spent
+on is the one that ran out of time, and it gets the same bound again". On this workload that is not
+what happens, seven times out of seven.
+
+**Keep `--attempts 2` anyway.** It buys exactly what `A100_STAGE_ATTEMPTS` always said it bought —
+a lost host — and cell 1 above is a cell that would otherwise have been missing from the arm mean
+for a failure sixty seconds long. It costs nothing in expected spend, because billing is wall clock.
+
+### A cell that reported its own death overwrote the evidence of its life
+
+Cell 0 of `run_019fe7bc-53f3` was read as "seed 0 failed at step None" and treated as a cell that
+never trained. It trained for 3.993 hours and reached **step 4,910**, further than any other cell
+in the tranche, and then died at the wall like the rest.
+
+`leave_the_reason_in_wandb` is why the summary said otherwise. It calls `wandb.init` when
+`wandb.run` is None, which it is by the time the trainer's callback has gone, and the platform sets
+`WANDB_RUN_ID` in the environment — so the diagnostic run is not created *beside* the cell, it is
+created *as* the cell. It renames the run to `…-died` and replaces the summary, taking `_step` with
+it. The history survives and the step count is recoverable from it, but nothing that reads
+`summary["_step"]` — `tranche_watch` included — can see it.
+
+This is the second time this has happened and the first went unnoticed: three cells of the stage-1
+baseline `run_019fe279-4ef0` carry the same `-died` name for the same reason. A diagnostic that
+destroys the record it is annotating is worth fixing, and until it is, **a cell reporting `step
+None` should be read from its history before it is believed**.
+
+## What the lane arms cost, measured on the arms themselves
+
+Every cell's history gives a least-squares fit of runtime against step. The slope is the marginal
+cost of a step with the twelve evaluations and thirteen checkpoints amortised into it, and the
+intercept is start-up. Fitted from step 200 onward, over 4,900 steps where they exist:
+
+| arm | marginal s/step, per cell | slowest | 6,000 steps | at `--hours 6` |
+| --- | --- | --- | --- | --- |
+| `output-only` | 2.914, 2.929, 2.941, 2.867, 2.961 | 2.961 | **4.98 h** | 1.02 h spare, 17% |
+| `faithful` | 3.044, 3.074, 3.043, 3.065, 3.043 | 3.074 | **5.17 h** | 0.83 h spare, 14% |
+| `mhc` | 3.145, 3.128, 3.145, 3.126, 3.123 | 3.145 | **5.29 h** | 0.71 h spare, 12% |
+
+The projection is `intercept + slope × 6000` plus one more evaluation-and-checkpoint pair for step
+6,000 itself, which the histories measure at 57.5 to 60.6 seconds and which is therefore 0.017 h
+and not worth arguing about. Start-up is 79 to 97 seconds on every cell.
+
+**Six hours covers all three arms and is the right bound.** `mhc` has the thinnest margin at 12%
+and it is still four times the shortfall that killed the `faithful` stage.
+
+**The `mhc` estimate is trustworthy despite being taken early.** It is the one arm with no
+completed cell, and Sinkhorn-Knopp was expected to make it the slowest, which it is — but only by
+2.3% over `faithful`, not by the margin the kernel-launch count suggested. Truncating the finished
+`faithful` cells to the same prefix says how much an early read misleads: fitted on their first
+1,000 steps they give 3.033, 3.069, 3.033, 3.056 and 3.035 against full-history values of 3.044,
+3.074, 3.043, 3.065 and 3.043. **A 1,000-step prefix understates the settled rate by 0.36%**, and
+by 2,000 steps it is within 0.1%. `mhc` is read at 900 to 2,200 steps, so 3.145 is low by about a
+hundredth of a second and 5.29 hours is low by about a minute.
+
+Seven hours is available at a ceiling of $1,537.03 against six hours' $1,317.46, and both price as
+`routine`. It buys nothing the measurement asks for. It is also not free of a cost that is not
+money: `STAGE_HOURS` records why a bound has to be the same across stages, which is that an arm
+under a looser bound survives drift the others die of, and a treatment arm missing its slowest cell
+is not missing it at random.
+
+### A resubmission cannot inherit a dead cell's checkpoints
+
+`EDULLM_CHECKPOINT_DIR` is `…/runs/<run id>/cell-<index>/checkpoints/` and a resubmission is a new
+run id, so it is a new and empty prefix. The 20.9 node-hours the `faithful` stage spent reaching
+step 4,700 five times are not recoverable by resubmitting it, and the same will be true of every
+cell now running. That is the whole reason the retry question was worth an hour of anybody's time:
+a granted retry resumes inside the run and costs one save interval, and a resubmission starts from
+zero and costs the arm.
+
+It follows that **a cell that cannot reach 6,000 within its bound should be cancelled as soon as
+that is known, not left to reach its wall.** It is not accruing anything that survives it.
+
 ## Order of operations
 
 1. **Rehearse.** Done: `run_019fdfe9-e6c0`, `faithful` at the rehearsal size, 200 steps,
