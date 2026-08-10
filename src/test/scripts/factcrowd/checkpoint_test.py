@@ -411,12 +411,12 @@ def test_a_corpus_may_only_be_reused_for_the_cell_it_was_built_for(tmp_path):
 # --- completeness and double counting ---------------------------------------------------------------
 
 
-def _cp(cell_id, replicate, step, planned, endpoints=("mano",)):
+def _cp(cell_id, replicate, step, planned, endpoints=("mano",), run="a"):
     from factcrowd.measure.checkpoint import CheckpointRef
     from factcrowd.measure.endpoints import EndpointResult
 
     return ScoredCheckpoint(
-        ref=CheckpointRef(step=step, path=f"/p/{cell_id}/step{step}"),
+        ref=CheckpointRef(step=step, path=f"/p/{run}/{cell_id}/checkpoints/step{step}"),
         cell={"cell_id": cell_id, "row": "13M", "replicate": replicate},
         endpoints=tuple(
             EndpointResult(
@@ -444,10 +444,12 @@ def test_a_crashed_run_and_its_rerun_are_one_cell_and_the_partial_one_loses():
     prefix's highest is the one before it died.
     """
     planned = [53, 107, 214, 429, 858, 1717, 3434, 5366, 8049, 10732]
-    kept, notes = collect.select_complete(
-        [_cp("13m_d0p6", 0, 3434, planned), _cp("13m_d0p6", 0, 10732, planned)]
-    )
-    assert [c.ref.step for c in kept] == [10732]
+    crashed = [_cp("13m_d0p6", 0, s, planned, run="crash") for s in (1717, 3434)]
+    finished = [_cp("13m_d0p6", 0, s, planned, run="rerun") for s in (1717, 3434, 10732)]
+    kept, notes = collect.select_complete(crashed + finished)
+    # The whole trajectory of the finished run, and nothing from the crashed one.
+    assert [c.ref.step for c in kept] == [1717, 3434, 10732]
+    assert all("rerun" in str(c.ref.path) for c in kept)
     assert any("2 runs found" in n for n in notes)
 
 
@@ -458,9 +460,9 @@ def test_a_cell_that_never_reached_its_planned_final_step_is_dropped_and_named()
     measurement of the same thing, it is a measurement of something else.
     """
     planned = [53, 107, 3434, 10732]
-    kept, notes = collect.select_complete([_cp("13m_d0p6", 0, 3434, planned)])
+    kept, notes = collect.select_complete([_cp("13m_d0p6", 0, s, planned) for s in (53, 107, 3434)])
     assert kept == []
-    assert any("never finished" in n and "3,434" in n and "10,732" in n for n in notes)
+    assert any("no run of it finished" in n and "3,434" in n and "10,732" in n for n in notes)
 
 
 def test_replicates_of_one_cell_are_kept_apart():

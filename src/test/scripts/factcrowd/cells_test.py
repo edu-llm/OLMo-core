@@ -857,3 +857,81 @@ def test_every_committed_gate_config_resolves_and_matches_the_generator():
     for cell_id, cell in on_disk.items():
         assert cell.to_dict() == written[cell_id].to_dict()
         cell.resolve()  # the arithmetic has to close on every arm
+
+
+# --- phase 2: the endpoint fixes --------------------------------------------------------------------
+
+
+def test_the_expression_length_is_a_cell_field_and_moves_the_task_fingerprint():
+    """
+    It was a module constant through the whole first campaign, which is why no depth sweep was possible.
+
+    The consequence was not theoretical: `<mano>` at length 10 produced a constant function at every
+    width, eighteen trained cells sat at the degenerate floor, and that was discovered by scoring the
+    grid rather than by a two-hour calibration. The fingerprint has to move with it, or a rebuild at a
+    different length would score an old checkpoint against a task it never saw.
+    """
+    base = C.load_cell(CONFIG_ROOT / "count" / "13m_ctrl.yaml")
+    assert base.mano_length == 10  # the committed grid is unchanged
+    assert replace(base, mano_length=3).mano_length == 3
+
+    import tempfile
+
+    from factcrowd.corpus.build import BuiltCorpus
+
+    prints = {}
+    for length in (10, 3):
+        with tempfile.TemporaryDirectory() as raw:
+            corpus = BuiltCorpus(
+                replace(base, mano_length=length).resolve(),
+                Path(raw),
+                split="eval",
+                with_streams=False,
+            )
+            task = next(t for t in corpus.tasks if t.name == "mano")
+            prints[length] = task.structure_fingerprint()
+    assert prints[10] != prints[3]
+
+
+def test_the_calibration_sweep_brackets_the_length_that_failed():
+    """
+    The sweep starts where the task is almost certainly trivial and walks up to the length that failed.
+
+    Reasoning only: the question is whether the *task* is learnable at a width and token budget, and with
+    no facts each cell is 1.0B tokens rather than up to 35B. That also makes it G1's task-depth evidence.
+    """
+    cells = C.mano_calibration_cells(("13M", "113M"))
+    assert len(cells) == 2 * len(C.MANO_CALIBRATION_LENGTHS)
+    assert 10 in C.MANO_CALIBRATION_LENGTHS  # the length that produced a constant function
+    assert min(C.MANO_CALIBRATION_LENGTHS) == 2
+    for cell in cells:
+        assert cell.is_control  # no facts
+        assert cell.related_reasoning_tokens == 0  # and so no <compare> either
+        assert cell.reasoning_slice_names == ("mano",)
+        assert cell.resolve().total_tokens(69.2) == C.REASONING_TOKENS
+    # Every id is distinct, so nine of them cannot land on one filename.
+    assert len({c.qualified_id for c in cells}) == len(cells)
+
+
+def test_the_compare_pools_are_disjoint_across_splits():
+    """
+    The leak that made `<compare>` unusable, closed by construction rather than by retuning.
+
+    Its answer is the earlier person's birth-*year value*, so a training item states
+    `min(year(A), year(B)) = Y` and an entity's own year is exactly the maximum answer over its items
+    whenever it is the earlier one even once. Measured: 97.1% of years recovered from 400k items and
+    **99.7% eval accuracy with no biographies at all**.
+
+    Reducing mentions per entity does not help -- at 1.6 mentions 58% of years are still recovered,
+    because one item where an entity is earliest reveals its year outright. Disjoint pools remove the
+    trade entirely: no training item mentions an entity the evaluation asks about.
+    """
+    table = E.EntityTable.build(V.bios_schema().schema, 60_000, 7)
+    train = table.probe_ids_for("train")
+    evaluation = table.probe_ids_for("eval")
+    assert train.size == evaluation.size > 0
+    assert set(train.tolist()).isdisjoint(evaluation.tolist())
+    # Both still come out of the shared prefix, so they are the same people in every cell.
+    assert int(train.max()) < int(evaluation.min())
+    with pytest.raises(OLMoConfigurationError, match="unknown split"):
+        table.probe_ids_for("holdout")

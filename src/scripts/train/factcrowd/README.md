@@ -6,6 +6,14 @@ Does storing facts consume capacity that would otherwise serve reasoning? We tra
 synthetic biographies, sweep the fact bits they demand per parameter, and measure reasoning on the
 same checkpoints.
 
+> **PHASE 1 IS COMPLETE AND ITS ENDPOINT FAILED.** All 32 cells trained; scoring found `<mano>` accuracy to
+> be a *constant function* in all 18 confirmatory cells — 4.13%–4.61% against a 4.695% best-constant floor,
+> zero cells above it — so the count and entropy axes measured noise about a constant and crowding is
+> untested rather than refuted. The storage half produced a real one-seed result at demand 0.3.
+> **Read `PHASE2.md` before running anything**: the first job there is a 14-cell, 14B-token `<mano>`
+> calibration that gates every other spend, and `<compare>` has been redesigned because its answer leaked
+> the value it asked for.
+
 ## Check it locally first
 
 Nothing here needs a GPU, and `--dry-run` catches every config and arithmetic error:
@@ -201,7 +209,7 @@ fit on four; both were wrong.
 The first grid ran as the third row, so `28m_d4p8` is currently at world size 8 while its five siblings
 are at 4 — and only the top cell differs, which is exactly the correlation with demand that makes it a
 second treatment. That partial run is **descriptive only**. Re-running it on four devices is $115 and
-puts the row back on one world size; `SUBMIT.md` job 6 is that command.
+puts the row back on one world size, and phase 1 did exactly that.
 
 The 13M row never had the problem: all six cells fit on 4×A10G, `13m_d4p8` at 5.0 h. 64M's fact cells go
 to the P pool, where one world size covers the row anyway.
@@ -218,8 +226,9 @@ against. As of 2026-08-05 it stands at ten of twelve cells complete, with two to
 | `28m_d4p8` | killed at step 97,450 / 134,480 after 13.80 h, last checkpoint step 67,239 |
 
 235 GPU-hours and about $399 spent. Nothing is scored yet and no gate report exists, so every row of it is
-`confirmatory=False` — correctly. **`SUBMIT.md` has the six commands** that score what exists, re-run the
-two gaps, and run M0 and the entropy sweep.
+`confirmatory=False` — correctly, and it stayed that way: G4 refused the endpoint. **`PHASE2.md` is the
+live plan**; the operational notes for phase 1's submissions have been removed now that they have all run,
+and `PRD.md` §16 keeps the incident history.
 
 One reading to avoid: `train/CE loss` falls monotonically with demand across this grid, from 1.689 at both
 controls to 0.79 at `28m_d2p4`. That is not the model getting better at reasoning. Fact share rises from
@@ -347,6 +356,8 @@ array index to a cell by position — its size has to be what `ls` says, and one
 | `entropy/` | 6 | the iso-token entropy axis at 28M — the identified one |
 | `gates/` | 5 | G8's dilution ladder, the cheapest run in the design |
 | `sigma/` | 9 | M0's σ block: the three controls × three replicates |
+| `calibration/` | 14 | `<mano>` depth sweep, 13M and 113M × 7 lengths — **run this before any grid** |
+| `round2/` | 3 | the three cells that hit the checkpoint-save defect, kept for provenance |
 | `smoke/` | 4 | local end-to-end tests, never submitted |
 
 A cell states **either** its demand or its entity count, never both — the other is derived, so a cell's

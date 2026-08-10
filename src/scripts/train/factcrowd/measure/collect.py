@@ -154,55 +154,68 @@ def select_complete(
     scored: Sequence[ScoredCheckpoint],
 ) -> Tuple[List[ScoredCheckpoint], List[str]]:
     """
-    Keep one checkpoint per ``(cell_id, replicate)`` and only where training actually finished.
+    Resolve each ``(cell_id, replicate)`` to **one run**, and keep every checkpoint of that run.
 
-    Three things go wrong without this, and all three are quiet.
+    THE UNIT OF CHOICE IS THE RUN, NOT THE CHECKPOINT, AND GETTING THAT WRONG BROKE THE TRAJECTORY.
+    An earlier version kept the single highest-stepped checkpoint per cell. That deduplicated a crashed
+    run against its re-run correctly and silently destroyed everything else: the bit curve over training,
+    the per-checkpoint diagnostics that locate a late-training change, and the end-to-end test that asks
+    for three steps and got one. A cell's ten checkpoints are its trajectory; only its *duplicate runs*
+    are the redundancy.
 
-    **A crashed cell and its re-run are two prefixes and one cell.** ``13m_d0p6`` died at step 3,441 and
-    was re-run to 10,732; both wrote checkpoints, both are under prefixes the scorer is pointed at, and
-    the table then carries the cell twice with different numbers.
+    Two things go wrong without this, and both are quiet.
 
-    **``--last-only`` means "the highest checkpoint in this prefix", not "the planned final step".** For a
-    crashed run the highest checkpoint is the one before it died, which is a partially-trained model
-    presented in the same column as fully-trained ones.
+    **A crashed run and its re-run are two runs and one cell.** ``13m_d0p6`` died at step 3,441 and was
+    re-run to 10,732. Both wrote checkpoints, both sit under prefixes the scorer is pointed at, and the
+    table would otherwise carry the cell twice with different numbers -- including a partially-trained
+    model in the same column as finished ones.
 
     **A short grid still writes a table.** Nothing compared what was scored against what should exist, so
-    an analysis could be run on fifteen cells believing it had eighteen.
+    an analysis could run on fifteen cells believing it had eighteen. That is what ``--expect-cells``
+    is for; this function supplies the count it checks.
 
-    Completion is judged against the cell's own recorded plan -- the last entry of
-    ``checkpoint_steps`` -- rather than against a number passed in, because each cell has its own.
+    Completion is judged against each cell's own recorded plan -- the last entry of ``checkpoint_steps``
+    -- because every cell has a different one.
 
-    :param scored: Scored checkpoints, possibly several per cell and possibly partial.
+    :param scored: Scored checkpoints, possibly several runs per cell and possibly partial.
 
-    :returns: The kept checkpoints, one per cell, and a list of human-readable notes about what was
-        dropped and why. The notes are returned rather than logged so a caller can put them in the record.
+    :returns: The kept checkpoints -- every checkpoint of one run per cell -- and human-readable notes
+        about what was dropped. Notes are returned rather than logged so a caller can put them in a record.
     """
-    by_cell: Dict[Tuple[str, int], List[ScoredCheckpoint]] = {}
+
+    def run_of(entry: ScoredCheckpoint) -> str:
+        """The run a checkpoint belongs to: its path with the trailing ``stepNNNN`` removed."""
+        return str(entry.ref.path).rstrip("/").rsplit("/", 1)[0]
+
+    by_cell: Dict[Tuple[str, int], Dict[str, List[ScoredCheckpoint]]] = {}
     for entry in scored:
         key = (str(entry.stated("cell_id")), int(entry.stated("replicate", 0)))
-        by_cell.setdefault(key, []).append(entry)
+        by_cell.setdefault(key, {}).setdefault(run_of(entry), []).append(entry)
 
     kept: List[ScoredCheckpoint] = []
     notes: List[str] = []
-    for (cell_id, replicate), entries in sorted(by_cell.items()):
+    for (cell_id, replicate), runs in sorted(by_cell.items()):
         planned = 0
-        for entry in entries:
-            steps = entry.extra.get("checkpoint_steps") or []
-            if steps:
-                planned = max(planned, int(max(steps)))
-        best = max(entries, key=lambda e: e.ref.step)
-        if planned and best.ref.step < planned:
+        for entries in runs.values():
+            for entry in entries:
+                steps = entry.extra.get("checkpoint_steps") or []
+                if steps:
+                    planned = max(planned, int(max(steps)))
+        reached = {run: max(e.ref.step for e in entries) for run, entries in runs.items()}
+        best_run = max(reached, key=lambda run: reached[run])
+        if planned and reached[best_run] < planned:
             notes.append(
-                f"{cell_id} r{replicate}: highest checkpoint is step {best.ref.step:,} but the cell "
-                f"planned {planned:,}, so this run never finished and is dropped"
+                f"{cell_id} r{replicate}: highest checkpoint is step {reached[best_run]:,} but the cell "
+                f"planned {planned:,}, so no run of it finished and it is dropped"
             )
             continue
-        if len(entries) > 1:
+        if len(runs) > 1:
+            dropped = sorted(reached[r] for r in runs if r != best_run)
             notes.append(
-                f"{cell_id} r{replicate}: {len(entries)} runs found "
-                f"(steps {sorted(e.ref.step for e in entries)}); kept step {best.ref.step:,}"
+                f"{cell_id} r{replicate}: {len(runs)} runs found; kept the one reaching step "
+                f"{reached[best_run]:,} and dropped {len(dropped)} reaching {dropped}"
             )
-        kept.append(best)
+        kept.extend(sorted(runs[best_run], key=lambda e: e.ref.step))
     return kept, notes
 
 

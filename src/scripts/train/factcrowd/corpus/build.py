@@ -28,6 +28,13 @@ DOMAIN_TOKENS: Tuple[str, ...] = ("<facts>", "<mano>", "<compare>")
 
 MANO_LENGTH = 10
 """
+Default operands in a ``<mano>`` expression, and now only a default.
+
+:attr:`factcrowd.cells.CellSpec.mano_length` overrides it per cell. It lived here as a constant through
+the first campaign, which is why no depth sweep was possible and why the endpoint's unlearnability was
+discovered by scoring eighteen trained cells rather than by a two-hour calibration.
+"""
+"""
 Expression length for Mano. Ten, not thirteen.
 
 At thirteen the task sits about a point above its own degenerate policy at 13M-28M, which fails
@@ -148,7 +155,7 @@ class BuiltCorpus:
                 tasks_module.ManoTask(
                     self.vocabulary,
                     domain_token="<mano>",
-                    length=MANO_LENGTH,
+                    length=resolved.spec.mano_length,
                     seed=spec.seed + 4,
                     split=split,
                 )
@@ -170,7 +177,7 @@ class BuiltCorpus:
                         self.corpus_schema,
                         self.vocabulary,
                         domain_token="<compare>",
-                        probe_ids=self.table.probe_ids,
+                        probe_ids=self.table.probe_ids_for(split),
                         seed=spec.seed + 5,
                         split=split,
                     )

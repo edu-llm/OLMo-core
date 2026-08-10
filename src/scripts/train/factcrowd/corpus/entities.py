@@ -413,6 +413,43 @@ class EntityTable:
         """
         return np.arange(min(PROBE_SIZE, self.n_entities), dtype=_INDEX_DTYPE)
 
+    def probe_ids_for(self, split: str) -> np.ndarray:
+        """
+        The ``<compare>`` entity pool for one split, and the two are **disjoint**.
+
+        THIS IS THE FIX FOR A LEAK THAT MADE THE ENDPOINT UNUSABLE. ``<compare>``'s answer is the earlier
+        person's birth-*year value*, so every training item states ``min(year(A), year(B)) = Y`` -- and an
+        entity's own year is exactly the maximum answer over the items it appears in, whenever it is the
+        earlier one even once. Measured on the first campaign's corpus: 97.1% of years recovered from 400k
+        of the 2.63M items, and **99.7% eval accuracy from those alone, with no biographies and no model**.
+
+        Reducing mentions per entity does not fix it. At 1.6 mentions 58% of years are still recovered,
+        because one item in which an entity is the earlier one reveals that entity's year outright. The
+        pools have to be disjoint instead: no training item mentions an entity the evaluation asks about,
+        so triangulation has nothing to trade on and the model must retrieve the years from the biographies
+        it read. That is the thing the endpoint was always supposed to measure.
+
+        Even split, train first, so the eval pool is the same people in every cell for the same reason
+        :attr:`probe_ids` gives the first ids.
+
+        :param split: ``"train"`` or ``"eval"``.
+
+        :returns: The ids.
+
+        :raises OLMoConfigurationError: On an unknown split, or a table too small to halve.
+        """
+        pool = self.probe_ids
+        if pool.size < 4:
+            raise OLMoConfigurationError(
+                f"a table of {self.n_entities} entities cannot supply two disjoint <compare> pools"
+            )
+        half = pool.size // 2
+        if split == "train":
+            return pool[:half]
+        if split == "eval":
+            return pool[half : 2 * half]
+        raise OLMoConfigurationError(f"unknown split {split!r}; expected 'train' or 'eval'")
+
     @classmethod
     def build(cls, schema: Schema, n_entities: int, seed: int) -> "EntityTable":
         """

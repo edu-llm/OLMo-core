@@ -20,7 +20,7 @@ the value itself also drifted between cells there would be nothing left to attri
 import json
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 from olmo_core.exceptions import OLMoConfigurationError
 
@@ -36,6 +36,8 @@ __all__ = [
     "first_run_cells",
     "entropy_sweep_cells",
     "dilution_ladder_cells",
+    "mano_calibration_cells",
+    "MANO_CALIBRATION_LENGTHS",
     "replicate_block",
     "grid_summary",
     "load_cell",
@@ -160,6 +162,11 @@ class CellSpec:
     :param related_reasoning_tokens: The related slice's own absolute budget, sized on per-entity
         coverage rather than on parity with the unrelated slice. See :data:`RELATED_REASONING_TOKENS`.
         Ignored where the cell carries no related slice.
+    :param mano_length: Operands in a ``<mano>`` expression. **The calibration knob, and it was a module
+        constant until the endpoint failed.** It had already been cut from 13 to 10 because 13 sat a point
+        above its own degenerate policy; at 10 the first campaign found every model a constant function and
+        every cell at the floor. Where the task becomes learnable has never been measured, and a
+        confirmatory grid built on an unlearnable endpoint measures nothing however many seeds it carries.
     :param reasoning_tokens: Absolute tokens for the **unrelated** reasoning slice, identical in every
         cell. Per slice rather than a total split between them, because the control
         carries only the unrelated slice and an evenly split total would hand it twice the exposure of
@@ -196,6 +203,7 @@ class CellSpec:
     warmup_fraction: float = 0.02
     warmup_steps: Optional[int] = None
     decay_fraction: float = 0.1
+    mano_length: int = 10
     reasoning_tokens: int = 0
     related_reasoning_tokens: int = 0
     replicate: int = 0
@@ -816,6 +824,65 @@ def dilution_ladder_cells(
             )
         )
     return tuple(cells)
+
+
+MANO_CALIBRATION_LENGTHS: Tuple[int, ...] = (2, 3, 4, 5, 6, 8, 10)
+"""
+Expression lengths the calibration sweep covers.
+
+Bracketing rather than guessing. 10 is what the first campaign ran and it produced a constant function at
+every width; 13 had already been rejected for sitting a point above its own degenerate policy. Nothing
+between 2 and 8 has ever been measured, so the sweep starts where the task is almost certainly trivial and
+walks up until it is not.
+"""
+
+
+def mano_calibration_cells(
+    rows: Sequence[str] = ("13M",),
+    lengths: Sequence[int] = MANO_CALIBRATION_LENGTHS,
+    **overrides: Any,
+) -> Tuple[CellSpec, ...]:
+    """
+    The reasoning-only depth sweep that has to run before any confirmatory grid.
+
+    **This is the cheapest experiment in the project and the one whose absence invalidated the first
+    campaign.** ``<mano>`` accuracy is the design's dependent variable; at length 10 every one of eighteen
+    trained cells collapsed to a constant and sat at the degenerate floor, so the count and entropy axes
+    measured noise about a constant. No amount of replication fixes that -- an endpoint with no dynamic
+    range has none at three seeds either.
+
+    No facts, because the question is whether the *task* is learnable at all at a given width and token
+    budget. That also makes each cell 1.0B tokens rather than up to 35B, and makes the sweep serve as
+    G1's task-depth evidence at the same time.
+
+    :param rows: Ladder rows to sweep. One row answers "is it learnable here"; two answer "does width
+        rescue it", which is the question G6 asks and could not be asked while every cell was at the floor.
+    :param lengths: Expression lengths.
+    :param overrides: Applied to every cell, e.g. ``seed``.
+
+    :returns: One reasoning-only cell per (row, length).
+    """
+    settings: Dict[str, Any] = {
+        "reasoning_tokens": REASONING_TOKENS,
+        # No facts, so no orderable attribute and therefore no `<compare>` slice either.
+        "related_reasoning_tokens": 0,
+        **overrides,
+    }
+    out: List[CellSpec] = []
+    for row in rows:
+        for length in lengths:
+            out.append(
+                CellSpec(
+                    cell_id=f"{row.lower()}_manoL{length:02d}",
+                    row=row,
+                    sweep="count",
+                    demand_bits_per_param=0.0,
+                    mano_length=length,
+                    notes=f"mano calibration: reasoning only, expression length {length}",
+                    **settings,
+                )
+            )
+    return tuple(out)
 
 
 def load_cell(path: Union[str, Path]) -> CellSpec:

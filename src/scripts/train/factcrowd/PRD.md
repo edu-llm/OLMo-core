@@ -1578,7 +1578,66 @@ demand is ~0.200 b/param entirely from names while achieved storage is identical
 `check_against_demand` cannot fire because value storage is capped below value-plus-name demand by
 construction. Report it as a proxy, signed as well as clamped, with both denominators.
 
-### 16.11 Deferred, with reasons
+### 16.11 Phase 2: two endpoint defects, and the ordering that would have caught them
+
+Phase 1 finished. `PHASE2.md` carries the plan; this records why the plan looks the way it does.
+
+**Both endpoints were broken, and neither failure needed a GPU to find.**
+
+`<mano>` at length 10 is a constant function. Eighteen scored cells span 4.127%–4.610% against a 4.695%
+best-constant floor with **none above it**, and eleven of them scored *exactly* 1342/30000 — the number of
+eval items answered `<n0>`. `MANO_LENGTH` was a module constant, so no depth sweep was expressible and the
+unlearnability was discovered by training eighteen cells rather than by the two-hour, 14B-token calibration
+that is now §4.A. The docstring had already recorded a reduction from 13 to 10 for the same reason; nobody
+measured where the task becomes learnable, and the answer was "not at 10 either".
+
+`<compare>` leaks the value it asks for. Its answer is the earlier person's birth-*year value*, so every
+training item states ``min(year(A), year(B)) = Y`` and an entity's own year is the **maximum answer over
+the items it appears in**, exactly, whenever it is the earlier one even once. Measured on `13m_d0p3` with
+400,000 of the 2.63M available items: **97.09% of years recovered, and 99.72% eval accuracy with no
+biographies and no model.** That is worse than the audit that raised it estimated.
+
+The leak came from an earlier fix. The answer was a *name* until a copy policy scored 50.2% on it; moving
+the answer to the year killed the copy floor and created a supervision channel. Both changes were locally
+correct and the second undid the point of the task.
+
+**Reducing exposure does not fix it**, which is worth recording because it was the obvious first idea. At
+1.59 mentions per entity the reconstruction still recovers 58.5%, because a single item in which an entity
+is the earlier one reveals that entity's year outright. The pools have to be disjoint, and now are:
+`EntityTable.probe_ids_for(split)` splits the probe prefix in half, verified at 0 of 30,000 eval items
+sharing an entity with training supervision.
+
+**What phase 1's own models did, versus what the task allowed.** No phase-1 model exploited the leak — they
+scored 0.5%–1.0% against a 0.605% floor, not the ~99.7% available. So the observed `<compare>` numbers were
+never inflated; the task was simply unlearned, like `<mano>`. Both readings condemn the endpoint, and the
+distinction matters for the write-up: the earlier claim that `<compare>` "measures its own supervision
+shortcut" describes what a *competent* model would have done here, not what these did.
+
+**The storage half survives, with a bound rather than a caveat.** Stored bits decompose additively over
+attribute spans, so `birth_year` contributes at most its 8.644-bit prior. At demand 0.3 that leaves
+13.0 bits (13M) and 15.9 bits (28M) of genuine multi-attribute storage; at demand ≥ 0.6 the entire signal
+is consistent with `birth_year` alone. No re-run was needed to establish that, and the `--bit-offset` flag
+now available would turn the bound into a direct measurement.
+
+**`28m_b32`'s anomaly is resolved as a measurement artefact.** It claims 35.2% of prior stored while
+reconstructing 0.097% of attributes, where `28m_b4` reconstructs 6.2% and claims 0.0%. Anti-correlated
+measurements on the same axis mean the CE reduction is not retrievable knowledge. §16.9 left this open as
+the discriminator to look for; the confirmatory scoring supplied it.
+
+**Hardware, since phase 2 was expected to move to A100s.** 8×A10G returned **1.06×** of 4×A10G at 28M.
+These sizes are communication- and launch-bound, not FLOP-bound, so a faster card does not return its FLOP
+ratio and the case for an A100 cluster rests on running a *bigger model* rather than the same one faster.
+That is an argument for the 113M rung, which has been defined in `ladder/sizes.py` since the beginning and
+has never been trained. It is also why §7 asks for one paired measurement before any large commitment: the
+README's 1.9× guess for eight devices was really 1.06×, a submission set its runtime bound from it, and the
+run was killed at 72% after 13.8 hours.
+
+**The ordering lesson, stated once.** Every defect above was findable without training: a depth sweep is
+1.0B tokens per cell, a reconstruction attack on the compare stream is a hundred lines of numpy, and the
+cohort overlap is two `range` calls compared. Phase 1 ran the confirmatory grid first because it was ready
+first. §4 is ordered by what can invalidate what, not by what is ready.
+
+### 16.12 Deferred, with reasons
 
 FLD's 1,700 core-hours and 51.1% floor — decided in M0, not now. The exposure placebo and the
 mechanism battery — M4. Qwen3-0.6B continuation — after M3. Retiring
@@ -1587,7 +1646,9 @@ spec that disagrees with this one on architecture, materialisation, model sizes 
 is a change in another repository and belongs to whoever owns it. **This file is the single source of
 truth.**
 
-Still owed for admission, and blocking it: G1's task-depth sweep, G2's untrained-checkpoint control and
-G3's premise-ablated probe all need task or corpus variants that do not exist. Each is cheap to run once
+Still owed for admission: **G1 is now expressible** — `configs/cells/calibration/` is its task-depth
+sweep, and running it is §4.A of `PHASE2.md`. **G2 is nearly free** and was overlooked all along:
+`CheckpointerCallback.pre_train_checkpoint` writes a step-0 checkpoint, which is the untrained control the
+gate asks for. Only **G3's premise-ablated probe** still needs a corpus variant that does not exist. Each is cheap to run once
 built — the expense is the variant, not the compute — and until they exist `score_run` will mark every
 row `confirmatory=False`, which is the correct answer rather than a defect to work around.

@@ -398,13 +398,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     scored, completeness = collect_module.select_complete(scored)
     for note in completeness:
         log.warning("  completeness: %s", note)
-    if args.expect_cells and len(scored) != args.expect_cells:
+    # DISTINCT CELLS, NOT CHECKPOINTS. `select_complete` keeps a cell's whole trajectory, so without
+    # --last-only `scored` holds about ten entries per cell and comparing its length to a cell count
+    # would refuse every correct grid.
+    cells_scored = {(str(e.stated("cell_id")), int(e.stated("replicate", 0))) for e in scored}
+    if args.expect_cells and len(cells_scored) != args.expect_cells:
         raise OLMoConfigurationError(
-            f"{len(scored)} complete cells were scored but --expect-cells said {args.expect_cells}. "
-            f"A table is a claim about a grid, so a short one is refused rather than written. The notes "
-            f"above name what was dropped."
+            f"{len(cells_scored)} complete cells were scored but --expect-cells said "
+            f"{args.expect_cells}. A table is a claim about a grid, so a short one is refused rather "
+            f"than written. The notes above name what was dropped."
         )
-    log.info("scored %d complete cell(s)", len(scored))
+    log.info("scored %d complete cell(s), %d checkpoint(s)", len(cells_scored), len(scored))
 
     if args.write_gate_report:
         # Assembled from the runs just scored, so the report cannot claim evidence that was not measured.
