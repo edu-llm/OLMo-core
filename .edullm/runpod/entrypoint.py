@@ -15,10 +15,30 @@ EDULLM_DIR = RUNPOD_DIR.parent
 if str(EDULLM_DIR) not in sys.path:
     sys.path.insert(0, str(EDULLM_DIR))
 
-DATASET_ID = "pretrain/regmix-10b"
+LEGACY_DATASET_ID = "pretrain/regmix-10b"
+PARENT_DATASET_ID = "pretrain/opt-with-synthetic-10b"
+ORDER_DATASET_ID = "curriculum/opt-with-synthetic-10b"
 DATASET_VERSION = "v1"
 TOKENIZER_ID = "tokenizer/dolma2-bpe"
-ARM_NAMES = {"full_acronym_soup", "no_centaur", "no_proxy"}
+PARENT_GROUP = "tokens"
+ORDER_GROUP = "mtld"
+PARENT_MANIFEST_SHA256 = "e4eb0ce47b27c5d923b97e593a0fdc51edf4a78710caedc4557ae3488777f797"
+ORDER_MANIFEST_SHA256 = "8ea6573b84f656c58366dab91d17f2140d6d6f817632d1b9e8ce47633140671d"
+NUMPY_DTYPE_CHARS = {
+    "uint16": "u2",
+    "uint32": "u4",
+    "uint64": "u8",
+    "int16": "i2",
+    "int32": "i4",
+    "int64": "i8",
+}
+ARM_NAMES = {
+    "full_acronym_soup",
+    "no_centaur",
+    "no_proxy",
+    "curriculum_quadratic_mtld",
+    "curriculum_quadratic_mtld_no_centaur",
+}
 AWS_KEYS = (
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
@@ -50,11 +70,14 @@ def load_manifest(path: Path) -> dict[str, Any]:
     """Load and validate the sealed local-data manifest."""
 
     payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("schema_version") == 2:
+        return _load_multi_release_manifest(payload)
+
     dataset = payload.get("dataset", {})
     if (
         payload.get("schema_version") != 1
         or payload.get("family") != "hpo-probe"
-        or dataset.get("dataset_id") != DATASET_ID
+        or dataset.get("dataset_id") != LEGACY_DATASET_ID
         or dataset.get("version") != DATASET_VERSION
         or dataset.get("tokenizer_id") != TOKENIZER_ID
         or int(dataset.get("header_bytes", -1)) != 0
@@ -68,7 +91,176 @@ def load_manifest(path: Path) -> dict[str, Any]:
         raise RuntimeError("RunPod manifest train and held-out paths overlap")
     payload["_local_train_paths"] = train_paths
     payload["_local_val_paths"] = val_paths
+    payload["_local_releases"] = {
+        (LEGACY_DATASET_ID, DATASET_VERSION, None): {
+            **dataset,
+            "group": None,
+            "_local_train_paths": train_paths,
+            "_local_val_paths": val_paths,
+        }
+    }
     return payload
+
+
+def _load_multi_release_manifest(payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("family") != "hpo-probe" or not isinstance(payload.get("releases"), list):
+        raise RuntimeError("RunPod manifest does not describe staged HPO releases")
+
+    local_releases: dict[tuple[str, str, str | None], dict[str, Any]] = {}
+    for release in payload["releases"]:
+        if not isinstance(release, dict) or int(release.get("header_bytes", -1)) != 0:
+            raise RuntimeError("RunPod manifest contains an invalid release")
+        identity = (
+            str(release.get("dataset_id")),
+            str(release.get("version")),
+            release.get("group"),
+        )
+        if identity in local_releases:
+            raise RuntimeError(f"RunPod manifest repeats release {identity!r}")
+        train_paths = checked_paths(release.get("train_objects", []))
+        val_paths = checked_paths(release.get("val_objects", []))
+        if not train_paths:
+            raise RuntimeError(f"RunPod release {identity!r} has no train objects")
+        if set(train_paths) & set(val_paths):
+            raise RuntimeError(f"RunPod release {identity!r} overlaps train and held-out paths")
+        local_releases[identity] = {
+            **release,
+            "_local_train_paths": train_paths,
+            "_local_val_paths": val_paths,
+        }
+
+    parent_key = (PARENT_DATASET_ID, DATASET_VERSION, PARENT_GROUP)
+    order_key = (ORDER_DATASET_ID, DATASET_VERSION, ORDER_GROUP)
+    legacy_key = (LEGACY_DATASET_ID, DATASET_VERSION, None)
+    has_legacy = legacy_key in local_releases
+    has_parent = parent_key in local_releases
+    has_order = order_key in local_releases
+    if has_parent != has_order:
+        missing = order_key if has_parent else parent_key
+        raise RuntimeError(f"RunPod curriculum manifest is missing paired release {missing!r}")
+    if not has_legacy and not has_parent:
+        raise RuntimeError("RunPod manifest contains no complete HPO release set")
+
+    if has_parent:
+        parent = local_releases[parent_key]
+        order = local_releases[order_key]
+        if not parent["_local_val_paths"]:
+            raise RuntimeError("RunPod curriculum parent must contain a held-out split")
+        expected_parent = {
+            "profile": "pretrain-tokens/v1",
+            "manifest_sha256": PARENT_MANIFEST_SHA256,
+            "tokenizer_id": TOKENIZER_ID,
+        }
+        expected_order = {
+            "profile": "token-order/v1",
+            "manifest_sha256": ORDER_MANIFEST_SHA256,
+        }
+        if any(parent.get(key) != value for key, value in expected_parent.items()):
+            raise RuntimeError("RunPod manifest has the wrong immutable curriculum parent")
+        if any(order.get(key) != value for key, value in expected_order.items()):
+            raise RuntimeError("RunPod manifest has the wrong immutable MTLD order")
+        if order["_local_val_paths"]:
+            raise RuntimeError("RunPod MTLD order must not contain a held-out split")
+
+    payload["_local_releases"] = local_releases
+    return payload
+
+
+def local_dataset_paths(
+    manifest: dict[str, Any],
+    dataset_id: str,
+    version: str,
+    *,
+    split: str | None = None,
+    group: str | None = None,
+    include_held_out: bool = False,
+    **_: Any,
+) -> SimpleNamespace:
+    """Resolve one registry request entirely from the staged multi-release manifest."""
+
+    matching = [
+        (identity, release)
+        for identity, release in manifest["_local_releases"].items()
+        if identity[:2] == (dataset_id, version) and (group is None or identity[2] == group)
+    ]
+    if len(matching) != 1:
+        available = sorted(
+            repr(identity)
+            for identity in manifest["_local_releases"]
+            if identity[:2] == (dataset_id, version)
+        )
+        raise RuntimeError(
+            f"RunPod did not stage one unambiguous {dataset_id}/{version} group={group!r}; "
+            f"available={available}"
+        )
+    identity, release = matching[0]
+    train_paths = list(release["_local_train_paths"])
+    val_paths = list(release["_local_val_paths"])
+    if split == "train":
+        paths = train_paths
+    elif split in {"val", "validation", "heldout", "test"}:
+        paths = val_paths
+    elif split is None:
+        paths = [*train_paths, *val_paths] if include_held_out else train_paths
+    else:
+        raise RuntimeError(f"RunPod local reader does not support split {split!r}")
+    dtype = str(release["dtype"])
+    byte_order = release.get("byte_order")
+    byte_prefix = {"little": "<", "big": ">"}.get(byte_order)
+    numpy_dtype = f"{byte_prefix}{NUMPY_DTYPE_CHARS.get(dtype, dtype)}" if byte_prefix else dtype
+    return SimpleNamespace(
+        dataset_id=dataset_id,
+        version=version,
+        group=identity[2],
+        profile=release.get("profile"),
+        manifest_sha256=release.get("manifest_sha256"),
+        tokenizer_id=release.get("tokenizer_id"),
+        split=split or "*",
+        paths=paths,
+        train=train_paths,
+        val=val_paths or None,
+        splits={"train": train_paths, **({"val": val_paths} if val_paths else {})},
+        split_rows={},
+        rows=None,
+        kwargs={},
+        dtype=dtype,
+        numpy_dtype=numpy_dtype,
+        byte_order=byte_order,
+        header_bytes=int(release["header_bytes"]),
+    )
+
+
+def validate_manifest_for_mode(manifest: dict[str, Any], mode: str) -> None:
+    """Refuse a launch before W&B initialization when its staged release is absent."""
+
+    curriculum_modes = {
+        "curriculum_quadratic_mtld",
+        "curriculum_quadratic_mtld_no_centaur",
+    }
+    legacy_modes = {
+        "proxy-cohort",
+        "full_acronym_soup",
+        "no_centaur",
+        "no_proxy",
+    }
+    if mode not in curriculum_modes | legacy_modes:
+        raise RuntimeError(f"unsupported RunPod HPO mode {mode!r}")
+
+    releases = manifest.get("_local_releases")
+    if releases is None:
+        if mode in curriculum_modes:
+            raise RuntimeError("selected curriculum mode requires the parent and MTLD releases")
+        return
+
+    if mode in curriculum_modes:
+        required = {
+            (PARENT_DATASET_ID, DATASET_VERSION, PARENT_GROUP),
+            (ORDER_DATASET_ID, DATASET_VERSION, ORDER_GROUP),
+        }
+        if not required.issubset(releases):
+            raise RuntimeError("selected curriculum mode requires the parent and MTLD releases")
+    elif (LEGACY_DATASET_ID, DATASET_VERSION, None) not in releases:
+        raise RuntimeError("selected historical HPO mode requires the RegMix release")
 
 
 def install_local_dataset_reader(manifest: dict[str, Any]) -> None:
@@ -77,24 +269,8 @@ def install_local_dataset_reader(manifest: dict[str, Any]) -> None:
     import edullm_data.read as read_module
     import edullm_data.s3 as s3_module
 
-    dataset = manifest["dataset"]
-    train_paths = manifest["_local_train_paths"]
-    val_paths = manifest["_local_val_paths"]
-
-    def dataset_paths(dataset_id: str, version: str, *, s3):
-        del s3
-        if dataset_id != DATASET_ID or version != DATASET_VERSION:
-            raise RuntimeError(
-                f"RunPod staged {DATASET_ID}/{DATASET_VERSION}, not {dataset_id}/{version}"
-            )
-        return SimpleNamespace(
-            paths=list(train_paths),
-            train=list(train_paths),
-            val=list(val_paths),
-            dtype=dataset["dtype"],
-            byte_order=dataset.get("byte_order"),
-            header_bytes=int(dataset["header_bytes"]),
-        )
+    def dataset_paths(dataset_id: str, version: str, **kwargs):
+        return local_dataset_paths(manifest, dataset_id, version, **kwargs)
 
     read_module.dataset_paths = dataset_paths
     s3_module.Boto3S3.default = classmethod(lambda cls: object())
@@ -112,7 +288,7 @@ def materialize_runtime_spec(
     payload = json.loads(source.read_text(encoding="utf-8"))
     arm = payload.get("arm")
     if arm not in ARM_NAMES:
-        raise RuntimeError(f"unsupported three-arm HPO spec: {arm!r}")
+        raise RuntimeError(f"unsupported HPO spec: {arm!r}")
 
     checkpoint_root = job_root / "checkpoints"
     payload["controller"]["checkpoint_root"] = str(checkpoint_root)
@@ -158,9 +334,7 @@ def rewrite_spec_args(
                 job_root=job_root,
                 shared_root=shared_root,
             )
-            result[replace_index] = (
-                str(destination) if value == flag else f"{flag}={destination}"
-            )
+            result[replace_index] = str(destination) if value == flag else f"{flag}={destination}"
     return result
 
 
@@ -189,9 +363,7 @@ def _patch_probe_durability(hpo_module) -> None:
     def probe_durable_roots(spec, checkpoint_root):
         from olmo_core.io import is_url
 
-        return tuple(
-            root for root in original(spec, checkpoint_root) if is_url(root)
-        )
+        return tuple(root for root in original(spec, checkpoint_root) if is_url(root))
 
     hpo_module._probe_durable_roots = probe_durable_roots
 
@@ -205,6 +377,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     )
     manifest = load_manifest(manifest_path)
+    mode = os.environ.get("MODE")
+    if mode:
+        validate_manifest_for_mode(manifest, mode)
     install_local_dataset_reader(manifest)
 
     import hpo_on_corpus as hpo

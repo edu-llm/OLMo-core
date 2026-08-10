@@ -11,6 +11,7 @@ VECTOR="${VECTOR:?set VECTOR=no-proxy-winner or VECTOR=no-centaur-winner}"
 RUN_SLOT="${RUN_SLOT:-${VECTOR}}"
 RECOVERY_MODE="${RECOVERY_MODE:-fresh}"
 HARD_TIME_LIMIT="${HARD_TIME_LIMIT:-48h}"
+GLOBAL_BATCH_TOKENS="${GLOBAL_BATCH_TOKENS:-}"
 
 case "${VECTOR}" in
   no-proxy-winner|no-centaur-winner) ;;
@@ -21,6 +22,10 @@ case "${VECTOR}" in
 esac
 [[ "${RUN_SLOT}" =~ ^[A-Za-z0-9_.-]+$ ]] || {
   echo "RUN_SLOT may contain only letters, digits, dot, underscore, and dash" >&2
+  exit 2
+}
+[[ -z "${GLOBAL_BATCH_TOKENS}" || "${GLOBAL_BATCH_TOKENS}" =~ ^[0-9]+$ ]] || {
+  echo "GLOBAL_BATCH_TOKENS must be an integer number of tokens" >&2
   exit 2
 }
 [[ -d "${REPO_DIR}/.git" ]] || { echo "missing checkout: ${REPO_DIR}" >&2; exit 2; }
@@ -59,8 +64,8 @@ case "${RECOVERY_MODE}" in
     run_name="hpo-final-370m-10b-${VECTOR}-runpod-$(date -u +%Y%m%d-%H%M%S)"
     wandb_id="$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
     umask 077
-    printf "export EDULLM_RUN_ID='%s'\nexport WANDB_RUN_ID='%s'\n" \
-      "${run_name}" "${wandb_id}" > "${identity_file}"
+    printf "export EDULLM_RUN_ID='%s'\nexport WANDB_RUN_ID='%s'\nexport GLOBAL_BATCH_TOKENS='%s'\n" \
+      "${run_name}" "${wandb_id}" "${GLOBAL_BATCH_TOKENS}" > "${identity_file}"
     export WANDB_RESUME=never
     ;;
   resume)
@@ -96,10 +101,14 @@ export EDULLM_EVAL_WORK_DIR="${job_root}/eval-work"
 export PYTHONDONTWRITEBYTECODE=1
 
 echo "Launching ${VECTOR}/${RUN_SLOT}; hard wall-time limit=${HARD_TIME_LIMIT}"
+validation_args=("--vector" "${VECTOR}")
+if [[ -n "${GLOBAL_BATCH_TOKENS}" ]]; then
+  validation_args+=("--global-batch-tokens" "${GLOBAL_BATCH_TOKENS}")
+fi
 set +e
 timeout --signal=TERM --kill-after=120s "${HARD_TIME_LIMIT}" \
   python3 "${REPO_DIR}/.edullm/runpod/final_validation_entrypoint.py" \
-    --vector "${VECTOR}" 2>&1 | tee -a "${job_root}/run.log"
+    "${validation_args[@]}" 2>&1 | tee -a "${job_root}/run.log"
 status=${PIPESTATUS[0]}
 set -e
 printf '%s\n' "${status}" > "${job_root}/last-exit-code"

@@ -35,9 +35,15 @@ AWS_FILE_KEYS = set(AWS_CREDENTIAL_KEYS) | {
 }
 EXPORT = re.compile(r"^export ([A-Z0-9_]+)=(.*)$")
 
-DATASET_ID = "pretrain/regmix-10b"
-DATASET_VERSION = "v1"
 TOKENIZER_ID = "tokenizer/dolma2-bpe"
+LEGACY_DATASET_ID = "pretrain/regmix-10b"
+PARENT_DATASET_ID = "pretrain/opt-with-synthetic-10b"
+ORDER_DATASET_ID = "curriculum/opt-with-synthetic-10b"
+DATASET_VERSION = "v1"
+PARENT_GROUP = "tokens"
+ORDER_GROUP = "mtld"
+PARENT_MANIFEST_SHA256 = "e4eb0ce47b27c5d923b97e593a0fdc51edf4a78710caedc4557ae3488777f797"
+ORDER_MANIFEST_SHA256 = "8ea6573b84f656c58366dab91d17f2140d6d6f817632d1b9e8ce47633140671d"
 
 
 def load_credentials(path: Path) -> None:
@@ -119,6 +125,12 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path("/workspace/edullm-inputs/hpo-probe"),
     )
+    parser.add_argument(
+        "--release-set",
+        choices=("all", "legacy", "curriculum"),
+        default="all",
+        help="Stage all releases, only RegMix, or only the curriculum parent/order pair.",
+    )
     parser.add_argument("--workers", type=int, default=12)
     return parser.parse_args()
 
@@ -134,24 +146,118 @@ def credential_path_from_argv() -> Path:
     return result
 
 
-def _validate_read(read) -> tuple[list[str], list[str]]:
+def _validate_read(
+    read,
+    *,
+    label: str,
+    require_val: bool,
+) -> tuple[list[str], list[str]]:
     train_uris = [str(path) for path in read.paths]
     val_uris = [str(path) for path in (read.val or ())]
     if not train_uris:
-        raise RuntimeError("registry returned no train split")
-    if not val_uris:
-        raise RuntimeError("registry returned no held-out split")
+        raise RuntimeError(f"{label} registry returned no train split")
+    if require_val and not val_uris:
+        raise RuntimeError(f"{label} registry returned no held-out split")
     if set(train_uris) & set(val_uris):
-        raise RuntimeError("registry train and held-out splits overlap")
+        raise RuntimeError(f"{label} train and held-out splits overlap")
     if int(read.header_bytes) != 0:
-        raise RuntimeError("HPO corpus declares a nonzero header")
+        raise RuntimeError(f"{label} declares a nonzero header")
     if read.byte_order is not None and str(read.byte_order) != sys.byteorder:
         raise RuntimeError(
-            f"dataset byte order {read.byte_order!r} does not match host {sys.byteorder!r}"
+            f"{label} byte order {read.byte_order!r} does not match host {sys.byteorder!r}"
         )
     if read.dtype is None:
-        raise RuntimeError("HPO corpus declares no fixed-width dtype")
+        raise RuntimeError(f"{label} declares no fixed-width dtype")
     return train_uris, val_uris
+
+
+def resolve_release_inputs(
+    dataset_paths,
+    s3,
+    *,
+    release_set: str = "all",
+) -> list[dict[str, object]]:
+    """Resolve every immutable release needed by the existing and curriculum HPO modes."""
+
+    requests = [
+        {
+            "dataset_id": LEGACY_DATASET_ID,
+            "release_set": "legacy",
+            "version": DATASET_VERSION,
+            "group": None,
+            "profile": None,
+            "manifest_sha256": None,
+            "tokenizer_id": TOKENIZER_ID,
+            "require_val": True,
+        },
+        {
+            "dataset_id": PARENT_DATASET_ID,
+            "release_set": "curriculum",
+            "version": DATASET_VERSION,
+            "group": PARENT_GROUP,
+            "profile": "pretrain-tokens/v1",
+            "manifest_sha256": PARENT_MANIFEST_SHA256,
+            "tokenizer_id": TOKENIZER_ID,
+            "require_val": True,
+        },
+        {
+            "dataset_id": ORDER_DATASET_ID,
+            "release_set": "curriculum",
+            "version": DATASET_VERSION,
+            "group": ORDER_GROUP,
+            "profile": "token-order/v1",
+            "manifest_sha256": ORDER_MANIFEST_SHA256,
+            "tokenizer_id": None,
+            "require_val": False,
+        },
+    ]
+    if release_set not in {"all", "legacy", "curriculum"}:
+        raise ValueError(f"unsupported release set {release_set!r}")
+    selected = [
+        request
+        for request in requests
+        if release_set == "all" or request["release_set"] == release_set
+    ]
+    releases: list[dict[str, object]] = []
+    for request in selected:
+        read = dataset_paths(
+            str(request["dataset_id"]),
+            str(request["version"]),
+            s3=s3,
+            group=request["group"],
+        )
+        expected_identity = {
+            key: request[key]
+            for key in ("profile", "manifest_sha256", "tokenizer_id")
+            if request[key] is not None
+        }
+        actual_identity = {key: getattr(read, key, None) for key in expected_identity}
+        if actual_identity != expected_identity:
+            raise RuntimeError(
+                f"{request['dataset_id']}/{request['version']} registry returned the wrong "
+                f"immutable release: expected {expected_identity}, got {actual_identity}"
+            )
+        train_uris, val_uris = _validate_read(
+            read,
+            label=f"{request['dataset_id']}/{request['version']}",
+            require_val=bool(request["require_val"]),
+        )
+        releases.append(
+            {
+                "dataset_id": request["dataset_id"],
+                "version": request["version"],
+                "group": request["group"],
+                "profile": request["profile"],
+                "manifest_sha256": request["manifest_sha256"],
+                "tokenizer_id": request["tokenizer_id"],
+                "dtype": str(getattr(read.dtype, "value", read.dtype)),
+                "byte_order": read.byte_order,
+                "header_bytes": int(read.header_bytes),
+                "train_uris": train_uris,
+                "val_uris": val_uris,
+            }
+        )
+    return releases
 
 
 def main() -> None:
@@ -169,9 +275,18 @@ def main() -> None:
         from edullm_data.read import dataset_paths
         from edullm_data.s3 import Boto3S3
 
-        read = dataset_paths(DATASET_ID, DATASET_VERSION, s3=Boto3S3.default())
-        train_uris, val_uris = _validate_read(read)
-        ordered_uris = list(dict.fromkeys([*train_uris, *val_uris]))
+        releases = resolve_release_inputs(
+            dataset_paths,
+            Boto3S3.default(),
+            release_set=args.release_set,
+        )
+        ordered_uris = list(
+            dict.fromkeys(
+                uri
+                for release in releases
+                for uri in [*release["train_uris"], *release["val_uris"]]
+            )
+        )
         client = boto3.client(
             "s3",
             region_name=os.environ.get("AWS_REGION", "us-east-1"),
@@ -194,23 +309,25 @@ def main() -> None:
                 )
             )
         by_uri = {str(record["uri"]): record for record in records}
+        staged_releases = []
+        for release in releases:
+            train_uris = list(release.pop("train_uris"))
+            val_uris = list(release.pop("val_uris"))
+            staged_releases.append(
+                {
+                    **release,
+                    "train_objects": [by_uri[uri] for uri in train_uris],
+                    "val_objects": [by_uri[uri] for uri in val_uris],
+                }
+            )
         payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "family": "hpo-probe",
-            "dataset": {
-                "dataset_id": DATASET_ID,
-                "version": DATASET_VERSION,
-                "tokenizer_id": TOKENIZER_ID,
-                "dtype": str(getattr(read.dtype, "value", read.dtype)),
-                "byte_order": read.byte_order,
-                "header_bytes": int(read.header_bytes),
-            },
+            "releases": staged_releases,
             "object_list_sha256": hashlib.sha256(
                 "\n".join(ordered_uris).encode("utf-8")
             ).hexdigest(),
             "total_bytes": sum(int(record["size"]) for record in records),
-            "train_objects": [by_uri[uri] for uri in train_uris],
-            "val_objects": [by_uri[uri] for uri in val_uris],
         }
         manifest = args.stage_root / "ready.json"
         manifest.parent.mkdir(parents=True, exist_ok=True)

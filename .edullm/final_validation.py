@@ -7,7 +7,7 @@ import argparse
 import json
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -161,6 +161,22 @@ def validate_vector(vector: WinningVector) -> None:
         raise FinalValidationConfigError(f"{vector.name}: warmup and decay overlap")
     if not 0.0 < hps["max_grad_norm"]:
         raise FinalValidationConfigError(f"{vector.name}: max_grad_norm must be positive")
+
+
+def with_global_batch_tokens(vector: WinningVector, global_batch_tokens: int) -> WinningVector:
+    """Return a vector rebound to an explicit whole-sequence global batch."""
+
+    global_batch_tokens = int(global_batch_tokens)
+    if global_batch_tokens <= 0 or global_batch_tokens % (GPU_RANKS * SEQUENCE_LENGTH):
+        raise FinalValidationConfigError(
+            "global batch must be a positive multiple of one sequence on every rank "
+            f"({GPU_RANKS * SEQUENCE_LENGTH} tokens)"
+        )
+    hps = dict(vector.hps)
+    hps["global_batch_mult"] = global_batch_tokens / BASE_PROBE_GLOBAL_BATCH_TOKENS
+    overridden = replace(vector, hps=hps)
+    validate_vector(overridden)
+    return overridden
 
 
 def validation_steps(total_steps: int, points: int = VALIDATION_POINTS) -> list[int]:
@@ -386,7 +402,11 @@ def platform_values(environ: Mapping[str, str]) -> tuple[str, str]:
     return checkpoint_dir, environ.get("EDULLM_RUN_ID", "hpo-final-validation")
 
 
-def torchrun_command(vector_name: str, length_tokens: int | None) -> list[str]:
+def torchrun_command(
+    vector_name: str,
+    length_tokens: int | None,
+    global_batch_tokens: int | None = None,
+) -> list[str]:
     """Build the fixed eight-rank worker command."""
 
     command = [
@@ -402,6 +422,8 @@ def torchrun_command(vector_name: str, length_tokens: int | None) -> list[str]:
     ]
     if length_tokens is not None:
         command.extend(["--length-tokens", str(length_tokens)])
+    if global_batch_tokens is not None:
+        command.extend(["--global-batch-tokens", str(global_batch_tokens)])
     return command
 
 
@@ -412,6 +434,11 @@ def parser() -> argparse.ArgumentParser:
         "--length-tokens",
         type=int,
         help="smoke-only token budget; production omits this for the full 10B budget",
+    )
+    result.add_argument(
+        "--global-batch-tokens",
+        type=int,
+        help="explicit whole-sequence global batch override",
     )
     result.add_argument("--train-worker", action="store_true", help=argparse.SUPPRESS)
     return result
@@ -430,9 +457,14 @@ def main(
                 f"unknown vector {args.vector!r}; choose one of {sorted(vectors)}"
             )
         vector = vectors[args.vector]
+        if args.global_batch_tokens is not None:
+            vector = with_global_batch_tokens(vector, args.global_batch_tokens)
         checkpoint_dir, run_id = platform_values(os.environ)
         if not args.train_worker:
-            os.execv(sys.executable, torchrun_command(vector.name, args.length_tokens))
+            os.execv(
+                sys.executable,
+                torchrun_command(vector.name, args.length_tokens, args.global_batch_tokens),
+            )
         if int(os.environ.get("WORLD_SIZE", "0")) != GPU_RANKS:
             raise FinalValidationConfigError(f"worker requires WORLD_SIZE={GPU_RANKS}")
         os.environ["WANDB_NAME"] = f"{run_id}-{vector.name}"

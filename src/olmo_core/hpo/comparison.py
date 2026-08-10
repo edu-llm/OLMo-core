@@ -154,6 +154,7 @@ def build_comparison_experiment(
     init_seed: int = 110007,
     eval_steps: int = 2,
     work_dir: str = "/tmp/hpo-comparison-data",
+    dataset_group: str | None = None,
 ) -> ComparisonExperimentConfig:
     """Build the matched model/data/eval contract used by both comparison arms."""
     if sequence_length <= 0 or global_batch_size <= 0:
@@ -173,11 +174,10 @@ def build_comparison_experiment(
     from edullm_data.read import dataset_paths
     from edullm_data.s3 import Boto3S3
 
-    read = dataset_paths(
-        dataset_id,
-        version,
-        s3=Boto3S3.default(),
-    )
+    read_kwargs: dict[str, Any] = {"s3": Boto3S3.default()}
+    if dataset_group is not None:
+        read_kwargs["group"] = dataset_group
+    read = dataset_paths(dataset_id, version, **read_kwargs)
     corpus = comparison_dataset_from_read(
         read,
         dataset_id=dataset_id,
@@ -195,9 +195,7 @@ def build_comparison_experiment(
     )
     eval_dataset = NumpyPaddedFSLDatasetConfig(
         paths=list(corpus.val_paths),
-        metadata=[
-            {"label": comparison_heldout_label(dataset_id)} for _ in corpus.val_paths
-        ],
+        metadata=[{"label": comparison_heldout_label(dataset_id)} for _ in corpus.val_paths],
         sequence_length=sequence_length,
         tokenizer=tokenizer,
         dtype=corpus.dtype,

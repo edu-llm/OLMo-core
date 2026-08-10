@@ -1,0 +1,129 @@
+{
+  "arm": "curriculum_quadratic_mtld",
+  "algorithm": "brainlift",
+  "seed": 20260808,
+  "search_space": [
+    {"name": "lr", "low": 0.00025, "high": 0.004, "log": true},
+    {"name": "weight_decay", "low": 0.01, "high": 0.3, "log": true},
+    {"name": "beta2_gap", "low": 0.001, "high": 0.1, "log": true},
+    {"name": "eps", "low": 1e-12, "high": 1e-06, "log": true},
+    {"name": "warmup_fraction", "low": 0.005, "high": 0.08},
+    {"name": "decay_fraction", "low": 0.05, "high": 0.3},
+    {"name": "terminal_lr_ratio", "low": 0.0, "high": 0.2},
+    {"name": "global_batch_mult", "low": 0.5, "high": 2.0, "log": true},
+    {"name": "max_grad_norm", "low": 0.3, "high": 3.0, "log": true}
+  ],
+  "normalizer": {"ce_at_zero": 16.0, "ce_at_one": 2.0},
+  "posterior": {"kind": "ftpfn", "device": "cpu"},
+  "proposer": {"kind": "ifbo"},
+  "btt": {
+    "min_fidelity": 50331648,
+    "window": 4,
+    "same_fidelity_top_fraction": 0.25,
+    "late_bloomer_reserve": 0.05
+  },
+  "ipbt": {
+    "population_size": 16,
+    "initial_oversample": 16,
+    "top_quantile": 0.25,
+    "bottom_quantile": 0.25,
+    "update_interval_init": 50331648,
+    "reset_fraction": 0.5,
+    "random_hp_fraction": 0.5
+  },
+  "centaur": {
+    "scope": "multi_action",
+    "model": "gpt-5.6-sol",
+    "ratio": 0.3,
+    "warmup": 0,
+    "advisor_factory": "olmo_core.hpo.openai_advisor:build_openai_advisor"
+  },
+  "controller": {
+    "target_tokens": 503316480,
+    "quantum": 50331648,
+    "n_fidelity_bins": 10,
+    "worker_count": 8,
+    "budget_tokens": 2013265920,
+    "checkpoint_root": "${EDULLM_CHECKPOINT_DIR}/curriculum-quadratic-mtld/${EDULLM_RUN_ID}",
+    "restart_mode": "btt_aggregate",
+    "btt_restart_fraction": 0.5
+  },
+  "base_global_batch_size": 524288,
+  "gpu_ids": [0, 1, 2, 3, 4, 5, 6, 7],
+  "finalist_continuation": {
+    "enabled": true,
+    "world_size": 8,
+    "rank_microbatch_size": 4096
+  },
+  "experiment_factory": "olmo_core.hpo.curriculum:build_curriculum_hpo_experiment",
+  "factory_kwargs": {
+    "sequence_length": 2048,
+    "global_batch_size": 524288,
+    "rank_microbatch_size": 4096,
+    "data_seed": 210007,
+    "init_seed": 110007,
+    "eval_steps": 2,
+    "target_tokens": 503316480
+  },
+  "model_parameterization": {
+    "kind": "standard",
+    "architecture": "olmo2_190M",
+    "depth": 12,
+    "backend": "none"
+  },
+  "fidelity": {"kind": "exact"},
+  "curriculum_identity": {
+    "parent": {
+      "dataset_id": "pretrain/opt-with-synthetic-10b",
+      "version": "v1",
+      "group": "tokens",
+      "profile": "pretrain-tokens/v1",
+      "manifest_sha256": "e4eb0ce47b27c5d923b97e593a0fdc51edf4a78710caedc4557ae3488777f797",
+      "source_ids": [
+        "algebraic-stack",
+        "arxiv",
+        "dclm",
+        "nemotron-hqdqa",
+        "open-web-math",
+        "pes2o",
+        "starcoder",
+        "wiki"
+      ]
+    },
+    "order": {
+      "dataset_id": "curriculum/opt-with-synthetic-10b",
+      "version": "v1",
+      "group": "mtld",
+      "profile": "token-order/v1",
+      "manifest_sha256": "8ea6573b84f656c58366dab91d17f2140d6d6f817632d1b9e8ce47633140671d",
+      "source_ids": []
+    },
+    "pacing": "arm9_warmup_quadratic_n10_token_fraction_v1",
+    "token_phase_boundaries": [
+      0,
+      3800209,
+      11400625,
+      23012373,
+      38424329,
+      57636493,
+      80648866,
+      107461447,
+      138074236,
+      172698356,
+      211122685
+    ],
+    "difficulty_metric": "mtld",
+    "heldout_label": "opt-with-synthetic-10b-val",
+    "target_tokens": 503316480,
+    "sequence_length": 2048
+  },
+  "search_validation_callback": "search_validation",
+  "untouched_evaluator": "final_evaluation",
+  "heldout_metric": "eval/lm/opt-with-synthetic-10b-val/CE loss",
+  "final_evaluator_factory": "olmo_core.hpo.comparison:smoke_final_evaluator",
+  "controller_state_path": "/tmp/hpo-curriculum-quadratic-mtld-${EDULLM_RUN_ID}.jsonl",
+  "controller_snapshot_root": "${EDULLM_CHECKPOINT_DIR}/curriculum-quadratic-mtld/${EDULLM_RUN_ID}",
+  "study_result_path": "/tmp/hpo-curriculum-quadratic-mtld-${EDULLM_RUN_ID}-result.json",
+  "max_rounds": 10000,
+  "require_final_winner": true
+}

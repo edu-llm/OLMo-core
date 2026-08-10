@@ -11,6 +11,8 @@ from olmo_core.hpo.arms import (
 
 def test_all_preregistered_arms_are_registered():
     assert {arm.value for arm in Arm} == {
+        "curriculum_quadratic_mtld",
+        "curriculum_quadratic_mtld_no_centaur",
         "full_acronym_soup",
         "no_centaur",
         "no_proxy",
@@ -22,6 +24,8 @@ def test_only_declared_centaur_and_complete_proxy_bundle_ablations_vary():
     full = matrix[Arm.FULL_ACRONYM_SOUP]
     no_centaur = matrix[Arm.NO_CENTAUR]
     no_proxy = matrix[Arm.NO_PROXY]
+    curriculum = matrix[Arm.CURRICULUM_QUADRATIC_MTLD]
+    curriculum_no_centaur = matrix[Arm.CURRICULUM_QUADRATIC_MTLD_NO_CENTAUR]
     assert full["llm_ratio"] == 0.3
     assert full["llm_scope"] == "multi_action"
     assert no_centaur["llm_ratio"] == 0.0
@@ -32,6 +36,12 @@ def test_only_declared_centaur_and_complete_proxy_bundle_ablations_vary():
         assert full[key] == no_centaur[key]
     for key in {"ftpfn", "ifbo", "ipbt", "btt_aggregate_restarts", "llm_ratio", "llm_scope"}:
         assert full[key] == no_proxy[key]
+    assert curriculum == no_proxy
+    assert curriculum_no_centaur == {
+        **curriculum,
+        "llm_ratio": 0.0,
+        "llm_scope": "none",
+    }
 
 
 def test_budget_ledger_counts_every_category_and_totals():

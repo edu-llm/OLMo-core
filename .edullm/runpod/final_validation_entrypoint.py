@@ -26,8 +26,12 @@ def _patch_validation_worker_entrypoint(final_validation_module) -> None:
     original = final_validation_module.torchrun_command
     entrypoint = str(Path(__file__).resolve())
 
-    def torchrun_command(vector_name: str, length_tokens: int | None) -> list[str]:
-        command = original(vector_name, length_tokens)
+    def torchrun_command(
+        vector_name: str,
+        length_tokens: int | None,
+        global_batch_tokens: int | None = None,
+    ) -> list[str]:
+        command = original(vector_name, length_tokens, global_batch_tokens)
         script = str(Path(final_validation_module.__file__).resolve())
         return [entrypoint if part == script else part for part in command]
 

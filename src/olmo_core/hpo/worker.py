@@ -65,6 +65,7 @@ __all__ = [
     "configure_hpo_experiment",
     "validate_umup_model",
     "assert_resume_batch_size",
+    "assert_data_loader_token_progress",
     "TrialConfigArtifact",
     "reconstruct_scheduler",
     "WorkerConfig",
@@ -121,6 +122,7 @@ def execute_segment(
             load_trainer_state=getattr(trainer, "load_trainer_state", None),
             load_optim_state=getattr(trainer, "load_optim_state", None),
         )
+    assert_data_loader_token_progress(trainer)
     if fresh_parameters is not None:
         import torch
 
@@ -459,6 +461,24 @@ def assert_resume_batch_size(
         )
 
 
+def assert_data_loader_token_progress(trainer) -> None:
+    """Require a token-aware loader resume to match the trainer's restored progress."""
+
+    loader_tokens = getattr(
+        getattr(trainer, "data_loader", None),
+        "global_train_tokens_seen",
+        None,
+    )
+    if loader_tokens is None:
+        return
+    trainer_tokens = int(trainer.global_train_tokens_seen)
+    if int(loader_tokens) != trainer_tokens:
+        raise RuntimeError(
+            "data-loader token progress does not match trainer token progress after resume: "
+            f"{int(loader_tokens)} != {trainer_tokens}"
+        )
+
+
 @dataclass(frozen=True)
 class TrialConfigArtifact:
     """An immutable, content-hashed record of a lineage's configuration.
@@ -553,19 +573,21 @@ class WorkerConfig:
     realized_hps: Dict[str, float]
     checkpoint_root: str
     evaluator_gate: EvaluatorGate
+    curriculum_identity: Optional[Mapping[str, Any]] = None
 
     def assert_evaluator_ready(self, available: Set[str]) -> None:
         """Fail closed unless the search-validation evaluator is present at a segment boundary."""
         self.evaluator_gate.require_ready(available)
 
     def config_artifact(self) -> TrialConfigArtifact:
-        return TrialConfigArtifact(
-            payload={
-                "realized_hps": dict(self.realized_hps),
-                "global_batch_size": self.global_batch_size,
-                "target_tokens": self.target_tokens,
-            }
-        )
+        payload: Dict[str, Any] = {
+            "realized_hps": dict(self.realized_hps),
+            "global_batch_size": self.global_batch_size,
+            "target_tokens": self.target_tokens,
+        }
+        if self.curriculum_identity is not None:
+            payload["curriculum_identity"] = dict(self.curriculum_identity)
+        return TrialConfigArtifact(payload=payload)
 
     def segment_spec(
         self,

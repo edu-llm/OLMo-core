@@ -98,6 +98,30 @@ def test_preregistered_vectors_are_the_two_probe_winners() -> None:
         assert vector.global_batch_tokens == 16_384
 
 
+def test_global_batch_override_rebinds_only_the_batch_hyperparameter() -> None:
+    original = final_validation.load_vectors()["no-proxy-winner"]
+    overridden = final_validation.with_global_batch_tokens(original, 262_144)
+
+    assert original.global_batch_tokens == 16_384
+    assert overridden.global_batch_tokens == 262_144
+    assert overridden.hps == {
+        **original.hps,
+        "global_batch_mult": 8.0,
+    }
+    config = final_validation.build_experiment_config(
+        overridden,
+        _corpus(),
+        save_folder="/workspace/run/checkpoints",
+        length_tokens=262_144 * 100,
+        environ=_environment(),
+    )
+    assert config.data_loader.global_batch_size == 262_144
+    assert config.train_module.rank_microbatch_size == 32_768
+    assert final_validation.scientific_identity(overridden, config)["optimized_hps"][
+        "global_batch_mult"
+    ] == 8.0
+
+
 @pytest.mark.parametrize("name", ["no-proxy-winner", "no-centaur-winner"])
 def test_stock_olmo2_370m_contract_changes_only_optimized_fields(name: str) -> None:
     vector, config = _config(name)
@@ -207,9 +231,9 @@ def test_scientific_identity_names_only_probe_overrides() -> None:
 
 
 def test_torchrun_and_platform_contract() -> None:
-    command = final_validation.torchrun_command("no-proxy-winner", None)
+    command = final_validation.torchrun_command("no-proxy-winner", None, 262_144)
     assert "--nproc-per-node=8" in command
-    assert command[-2:] == ["--vector", "no-proxy-winner"]
+    assert command[-4:] == ["--vector", "no-proxy-winner", "--global-batch-tokens", "262144"]
     assert final_validation.platform_values(_environment()) == (
         "/workspace/run/checkpoints",
         "run-123",

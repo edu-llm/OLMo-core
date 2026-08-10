@@ -32,6 +32,16 @@ def _load():
 entry = _load()
 
 
+def _probe_stub():
+    return SimpleNamespace(
+        log_heartbeat=lambda: None,
+        log_controller=lambda controller: None,
+        mirror_ephemeral_path=lambda *args, **kwargs: None,
+        mirror_ephemeral_directory=lambda *args, **kwargs: None,
+        close=lambda **kwargs: None,
+    )
+
+
 def test_controller_must_be_cpu_only_and_not_under_torchrun():
     entry.assert_controller_is_cpu_only({"WORLD_SIZE": "1", "RANK": "0"})  # ok
     entry.assert_controller_is_cpu_only({})  # ok (nothing inherited)
@@ -96,10 +106,10 @@ def test_committed_run_command_parses():
     run_yaml = Path(__file__).parent.parent.parent / ".edullm" / "run.yaml"
     command = yaml.safe_load(run_yaml.read_text())["command"]
     argv = shlex.split(command.replace('"$EDULLM_RUN_ID"', "run-abc"))
-    assert argv[:2] == ["python", ".edullm/hpo_on_corpus.py"]
-    parsed = entry._parse_args(argv[2:])
-    assert parsed.run_id == "run-abc"
-    assert parsed.param_dtype == "bfloat16"
+    assert argv[:2] == ["bash", "-lc"]
+    assert "python .edullm/hpo_on_corpus.py run-abc" in argv[2]
+    assert "--controller-spec" in argv[2]
+    assert "--param-dtype bfloat16" in argv[2]
 
 
 def test_non_dry_run_modes_reach_their_runners(monkeypatch):
@@ -148,10 +158,12 @@ def test_run_segment_loads_factory_executes_and_emits_observation(monkeypatch, t
         "search_validation_callback": "search_validation",
         "untouched_evaluator": "final_evaluation",
         "heldout_metric": "eval/search_validation/val/CE loss",
+        "checkpoint_ref": "/run/ckpt/donor/step2",
+        "transition": None,
     }
     path = tmp_path / "segment.json"
     path.write_text(json.dumps(segment_spec))
-    config = object()
+    config = SimpleNamespace(trainer=SimpleNamespace())
     monkeypatch.setattr(entry, "_load_object", lambda ref: lambda **kwargs: config)
     monkeypatch.setattr(
         entry,
@@ -174,7 +186,7 @@ def test_run_segment_loads_factory_executes_and_emits_observation(monkeypatch, t
             "--trial-id",
             "t0",
             "--checkpoint-dir",
-            "/run/ckpt/trials/t0",
+            str(Path("/run/ckpt") / "trials" / "t0"),
             "--hard-stop-tokens",
             "3072",
             "--segment-spec",
@@ -182,6 +194,8 @@ def test_run_segment_loads_factory_executes_and_emits_observation(monkeypatch, t
         ]
     )
     assert entry.run_segment(args) == 0
+    assert config.trainer.load_path == "/run/ckpt/donor/step2"
+    assert config.trainer.load_optim_state is True
     emitted = json.loads(capsys.readouterr().out)
     assert emitted["trial_id"] == "t0"
     assert emitted["checkpoint_ref"].endswith("/step3")
@@ -215,6 +229,7 @@ def test_run_controller_restores_dispatches_ingests_and_persists(monkeypatch, tm
 
     controller = FakeController()
     monkeypatch.setattr(entry, "_build_controller_from_spec", lambda spec: controller)
+    monkeypatch.setattr(entry, "_open_hpo_probe_session", lambda **kwargs: _probe_stub())
     monkeypatch.setattr(
         entry,
         "_dispatch_allocations",
@@ -272,6 +287,7 @@ def test_controller_persists_event_log_when_proposal_raises(monkeypatch, tmp_pat
             raise RuntimeError("advisor failed")
 
     monkeypatch.setattr(entry, "_build_controller_from_spec", lambda spec: FakeController())
+    monkeypatch.setattr(entry, "_open_hpo_probe_session", lambda **kwargs: _probe_stub())
     monkeypatch.setattr(
         entry,
         "_persist_controller_log",
@@ -312,6 +328,7 @@ def test_restored_pending_allocations_are_redispatched_first(monkeypatch, tmp_pa
             calls.append(("ingest", results[0].trial_id))
 
     monkeypatch.setattr(entry, "_build_controller_from_spec", lambda spec: FakeController())
+    monkeypatch.setattr(entry, "_open_hpo_probe_session", lambda **kwargs: _probe_stub())
 
     def dispatch(**kwargs):
         calls.append(("dispatch", kwargs["allocations"][0].trial_id))
@@ -378,6 +395,124 @@ def test_segment_payload_contains_worker_config_hash():
         },
     )
     assert frozen["config_hash"] != payload["config_hash"]
+
+
+def test_curriculum_identity_is_in_segment_artifact_and_config_hash():
+    allocation = SimpleNamespace(
+        realized_hps={"global_batch_mult": 1.0},
+        checkpoint_ref="/ckpt/donor",
+        transition={"donor_trial_id": "parent"},
+    )
+    identity = {
+        "parent": {"manifest_sha256": "a" * 64},
+        "order": {"manifest_sha256": "b" * 64},
+        "pacing": "arm9_warmup_quadratic_n10_token_fraction_v1",
+    }
+    spec = {
+        "base_global_batch_size": 524_288,
+        "experiment_factory": "olmo_core.hpo.curriculum:build_curriculum_hpo_experiment",
+        "controller": {
+            "target_tokens": 503_316_480,
+            "quantum": 50_331_648,
+            "checkpoint_root": "/ckpt",
+        },
+        "factory_kwargs": {"rank_microbatch_size": 4096},
+        "search_validation_callback": "search_validation",
+        "untouched_evaluator": "final_evaluation",
+        "heldout_metric": "eval/lm/opt-with-synthetic-10b-val/CE loss",
+        "curriculum_identity": identity,
+    }
+
+    payload = entry._segment_payload(allocation, controller_spec=spec)
+
+    assert payload["curriculum_identity"] == identity
+    changed = {
+        **payload,
+        "curriculum_identity": {
+            **identity,
+            "order": {"manifest_sha256": "c" * 64},
+        },
+    }
+    assert entry._segment_config_hash(changed) != payload["config_hash"]
+
+
+def test_segment_refuses_factory_with_different_curriculum_identity(monkeypatch, tmp_path):
+    expected = {
+        "parent": {"manifest_sha256": "a" * 64},
+        "order": {"manifest_sha256": "b" * 64},
+        "pacing": "arm9_warmup_quadratic_n10_token_fraction_v1",
+    }
+    segment_spec = {
+        "experiment_factory": "module:factory",
+        "factory_kwargs": {},
+        "curriculum_identity": expected,
+    }
+    path = tmp_path / "segment.json"
+    path.write_text(json.dumps(segment_spec))
+    monkeypatch.setattr(
+        entry,
+        "_load_object",
+        lambda ref: lambda **kwargs: SimpleNamespace(
+            curriculum_identity={
+                **expected,
+                "order": {"manifest_sha256": "c" * 64},
+            }
+        ),
+    )
+    args = entry._parse_args(
+        [
+            "run",
+            "--run-segment",
+            "--trial-id",
+            "trial",
+            "--checkpoint-dir",
+            "/ckpt/trial",
+            "--hard-stop-tokens",
+            "10",
+            "--segment-spec",
+            str(path),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="curriculum identity"):
+        entry.run_segment(args)
+
+
+def test_hpo_probe_receives_curriculum_identity_and_heldout_metric(monkeypatch):
+    import olmo_core.hpo.wandb_probe as probe_module
+
+    captured = {}
+    monkeypatch.setattr(
+        probe_module.HpoProbeSession,
+        "open",
+        lambda **kwargs: captured.update(kwargs) or object(),
+    )
+    identity = {
+        "parent": {"manifest_sha256": "a" * 64},
+        "order": {"manifest_sha256": "b" * 64},
+        "pacing": "arm9_warmup_quadratic_n10_token_fraction_v1",
+        "token_phase_boundaries": [0, 10, 20],
+        "source_ids": ["a", "b"],
+    }
+    spec = {
+        "arm": "curriculum_quadratic_mtld",
+        "algorithm": "brainlift",
+        "controller": {"checkpoint_root": "/ckpt"},
+        "model_parameterization": {"kind": "standard"},
+        "fidelity": {"kind": "exact"},
+        "curriculum_identity": identity,
+        "heldout_metric": "eval/lm/opt-with-synthetic-10b-val/CE loss",
+    }
+
+    entry._open_hpo_probe_session(
+        run_id="run",
+        job_type="controller",
+        spec=spec,
+        checkpoint_root="/ckpt",
+    )
+
+    assert captured["config"]["curriculum_identity"] == identity
+    assert captured["config"]["heldout_metric"] == spec["heldout_metric"]
 
 
 def test_segment_payload_merges_fixed_and_searched_hps():
@@ -540,9 +675,7 @@ def test_worker_oom_returns_typed_fatal_observation(monkeypatch, tmp_path):
     assert result.heldout_ce != result.heldout_ce
 
 
-def test_single_resume_opt_in_uses_eight_rank_finalist_and_charges_all_gpus(
-    monkeypatch, tmp_path
-):
+def test_single_resume_opt_in_uses_eight_rank_finalist_and_charges_all_gpus(monkeypatch, tmp_path):
     allocation = SimpleNamespace(
         trial_id="winner",
         decision_id=41,
@@ -883,9 +1016,7 @@ def test_proxy_cohort_executes_paired_first_rung_and_persists_admission(
     assert set(artifact["proxy_observations"]) == set(artifact["reference_observations"])
     assert len(artifact["proxy_observations"]) == 16
     assert artifact["metrics"]["proxy_kind"] == "umup_frozen_layer"
-    assert artifact["metrics"]["net_compute_savings"] == pytest.approx(
-        1.0 - proxy_seconds / 10.0
-    )
+    assert artifact["metrics"]["net_compute_savings"] == pytest.approx(1.0 - proxy_seconds / 10.0)
     assert len(calls) == 4  # two 8-worker batches for each side
     assert json.loads(capsys.readouterr().out)["output_path"] == str(output)
 
@@ -1250,6 +1381,131 @@ def test_three_arm_specs_have_shared_2b_contract_and_only_declared_ablations():
     assert entry._validate_evidence_gates(full).value == "reporting_only"
     assert entry._validate_evidence_gates(no_centaur).value == "reporting_only"
     assert entry._validate_evidence_gates(no_proxy).value == "prune_promote"
+
+
+def test_curriculum_spec_matches_no_proxy_except_approved_data_and_budget_contract():
+    root = Path(__file__).resolve().parents[2] / ".edullm"
+    no_proxy = json.loads((root / "hpo-no-proxy.json").read_text())
+    curriculum = json.loads((root / "hpo-curriculum-quadratic-mtld.json").read_text())
+
+    assert curriculum["arm"] == "curriculum_quadratic_mtld"
+    assert curriculum["experiment_factory"].endswith(":build_curriculum_hpo_experiment")
+    assert curriculum["model_parameterization"] == no_proxy["model_parameterization"]
+    assert curriculum["fidelity"] == no_proxy["fidelity"] == {"kind": "exact"}
+    assert "proxy_evidence_contract" not in curriculum
+    assert curriculum["search_space"] == no_proxy["search_space"]
+    assert curriculum["centaur"] == no_proxy["centaur"]
+    assert curriculum["posterior"] == no_proxy["posterior"]
+    assert curriculum["proposer"] == no_proxy["proposer"]
+    assert curriculum["controller"]["quantum"] == 50_331_648
+    assert curriculum["controller"]["target_tokens"] == 503_316_480
+    assert curriculum["controller"]["budget_tokens"] == 2_013_265_920
+    assert curriculum["btt"]["min_fidelity"] == 50_331_648
+    assert curriculum["ipbt"]["update_interval_init"] == 50_331_648
+    assert curriculum["base_global_batch_size"] == 524_288
+    assert curriculum["factory_kwargs"]["global_batch_size"] == 524_288
+    assert curriculum["heldout_metric"] == "eval/lm/opt-with-synthetic-10b-val/CE loss"
+    assert curriculum["curriculum_identity"]["parent"] == {
+        "dataset_id": "pretrain/opt-with-synthetic-10b",
+        "version": "v1",
+        "group": "tokens",
+        "profile": "pretrain-tokens/v1",
+        "manifest_sha256": "e4eb0ce47b27c5d923b97e593a0fdc51edf4a78710caedc4557ae3488777f797",
+        "source_ids": [
+            "algebraic-stack",
+            "arxiv",
+            "dclm",
+            "nemotron-hqdqa",
+            "open-web-math",
+            "pes2o",
+            "starcoder",
+            "wiki",
+        ],
+    }
+    assert curriculum["curriculum_identity"]["order"] == {
+        "dataset_id": "curriculum/opt-with-synthetic-10b",
+        "version": "v1",
+        "group": "mtld",
+        "profile": "token-order/v1",
+        "manifest_sha256": "8ea6573b84f656c58366dab91d17f2140d6d6f817632d1b9e8ce47633140671d",
+        "source_ids": [],
+    }
+    assert curriculum["curriculum_identity"]["token_phase_boundaries"][-1] == 211_122_685
+    for batch_size in (256 * 1024, 512 * 1024, 1024 * 1024):
+        assert curriculum["controller"]["quantum"] % batch_size == 0
+        assert curriculum["controller"]["target_tokens"] % batch_size == 0
+
+
+def test_curriculum_no_centaur_spec_is_a_clean_controller_ablation():
+    from olmo_core.hpo.arms import Arm
+
+    root = Path(__file__).resolve().parents[2] / ".edullm"
+    curriculum = json.loads((root / "hpo-curriculum-quadratic-mtld.json").read_text())
+    no_centaur = json.loads((root / "hpo-curriculum-quadratic-mtld-no-centaur.json").read_text())
+
+    assert Arm.CURRICULUM_QUADRATIC_MTLD_NO_CENTAUR.value == no_centaur["arm"]
+    assert no_centaur["centaur"] is None
+    assert no_centaur["fidelity"] == {"kind": "exact"}
+    assert entry._validate_evidence_gates(no_centaur).value == "prune_promote"
+    assert no_centaur["experiment_factory"].endswith(":build_curriculum_hpo_experiment")
+    assert no_centaur["curriculum_identity"] == curriculum["curriculum_identity"]
+    assert no_centaur["heldout_metric"] == curriculum["heldout_metric"]
+
+    ignored = {
+        "arm",
+        "centaur",
+        "controller",
+        "controller_state_path",
+        "controller_snapshot_root",
+        "study_result_path",
+    }
+    assert {key: value for key, value in no_centaur.items() if key not in ignored} == {
+        key: value for key, value in curriculum.items() if key not in ignored
+    }
+    assert no_centaur["controller"] == {
+        **curriculum["controller"],
+        "checkpoint_root": (
+            "${EDULLM_CHECKPOINT_DIR}/curriculum-quadratic-mtld-no-centaur/${EDULLM_RUN_ID}"
+        ),
+    }
+    assert no_centaur["controller_state_path"].startswith(
+        "/tmp/hpo-curriculum-quadratic-mtld-no-centaur-"
+    )
+    assert no_centaur["controller_snapshot_root"].startswith(
+        "${EDULLM_CHECKPOINT_DIR}/curriculum-quadratic-mtld-no-centaur/"
+    )
+    assert no_centaur["study_result_path"].startswith(
+        "/tmp/hpo-curriculum-quadratic-mtld-no-centaur-"
+    )
+
+
+@pytest.mark.parametrize(
+    "spec_name",
+    (
+        "hpo-curriculum-quadratic-mtld.json",
+        "hpo-curriculum-quadratic-mtld-no-centaur.json",
+    ),
+)
+@pytest.mark.parametrize("global_batch_mult", (0.5, 1.0, 2.0))
+def test_curriculum_finalist_continuation_uses_all_eight_gpus(spec_name, global_batch_mult):
+    root = Path(__file__).resolve().parents[2] / ".edullm"
+    spec = json.loads((root / spec_name).read_text())
+    allocation = SimpleNamespace(
+        kind="resume",
+        checkpoint_ref="/checkpoints/winner",
+        transition=None,
+        realized_hps={"global_batch_mult": global_batch_mult},
+    )
+
+    assert entry._eligible_finalist_continuation(
+        [allocation],
+        controller_spec=spec,
+        gpu_ids=spec["gpu_ids"],
+    ) == {
+        "enabled": True,
+        "world_size": 8,
+        "rank_microbatch_size": 4_096,
+    }
 
 
 def test_posthoc_no_centaur_variant_removes_the_failed_proxy():

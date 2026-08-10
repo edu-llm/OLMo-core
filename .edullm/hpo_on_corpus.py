@@ -567,6 +567,8 @@ def _segment_payload(
             "model_parameterization", {"kind": "standard"}
         ),
     }
+    if controller_spec.get("curriculum_identity") is not None:
+        payload["curriculum_identity"] = copy.deepcopy(controller_spec["curriculum_identity"])
     if finalist_continuation is not None:
         payload["finalist_continuation"] = dict(finalist_continuation)
     payload["config_hash"] = _segment_config_hash(payload)
@@ -582,6 +584,7 @@ def _segment_config_hash(payload: Mapping[str, Any]) -> str:
         "model_parameterization": payload.get("model_parameterization", {"kind": "standard"}),
         "experiment_factory": payload["experiment_factory"],
         "factory_kwargs": payload.get("factory_kwargs", {}),
+        "curriculum_identity": payload.get("curriculum_identity"),
         "transition": payload.get("transition"),
         "finalist_continuation": payload.get("finalist_continuation"),
     }
@@ -998,6 +1001,9 @@ def _persist_study_result(
         "frozen_ranking_status": evidence_decision.value,
         "trusted_for_selection": evidence_decision.value == "prune_promote",
     }
+    if spec.get("curriculum_identity") is not None:
+        payload["curriculum_identity"] = copy.deepcopy(spec["curriculum_identity"])
+        payload["heldout_metric"] = spec.get("heldout_metric")
     target = Path(str(result_path))
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_suffix(target.suffix + ".tmp")
@@ -1037,6 +1043,8 @@ def _open_hpo_probe_session(
             "controller_spec": spec.get("controller"),
             "model_parameterization": spec.get("model_parameterization"),
             "fidelity": spec.get("fidelity"),
+            "curriculum_identity": spec.get("curriculum_identity"),
+            "heldout_metric": spec.get("heldout_metric"),
         },
         tags=tags,
     )
@@ -1611,6 +1619,12 @@ def run_segment(args: argparse.Namespace) -> int:
         require_official_umup_forward()
     factory = _load_object(spec["experiment_factory"])
     config = factory(**spec.get("factory_kwargs", {}))
+    expected_curriculum_identity = spec.get("curriculum_identity")
+    if (
+        expected_curriculum_identity is not None
+        and getattr(config, "curriculum_identity", None) != expected_curriculum_identity
+    ):
+        raise ValueError("resolved curriculum identity does not match the segment artifact")
     fidelity = spec.get("fidelity", {"kind": "exact"})
 
     from olmo_core.hpo.objective import EvaluatorGate
@@ -1628,6 +1642,7 @@ def run_segment(args: argparse.Namespace) -> int:
             search_validation=str(spec["search_validation_callback"]),
             untouched=str(spec["untouched_evaluator"]),
         ),
+        curriculum_identity=expected_curriculum_identity,
     )
     expected_save_folder = trial_namespace(worker.checkpoint_root, worker.trial_id)
     if args.checkpoint_dir != expected_save_folder:

@@ -3,7 +3,8 @@ param(
   [Parameter(Mandatory = $true)][int]$Port,
   [Parameter(Mandatory = $true)][string]$Role,
   [string]$Commit = "064a5b2ab1b8854b14a3153e7902655c89da3e57",
-  [string]$Profile = "sbsandbox"
+  [string]$Profile = "sbsandbox",
+  [ValidateSet("all", "legacy", "curriculum")][string]$ReleaseSet = "all"
 )
 
 $ErrorActionPreference = "Stop"
@@ -60,7 +61,7 @@ try {
     throw "AWS session mint failed for $Role"
   }
   Copy-ToPod $awsEnv "/workspace/aws-session.env"
-  Invoke-PodSsh "chmod 600 /workspace/aws-session.env; cd /workspace/OLMo-core && PYTHONPATH=/workspace/OLMo-core/src:/workspace/OLMo-core/.edullm python3 .edullm/runpod/stage_inputs.py --credentials-file /workspace/aws-session.env"
+  Invoke-PodSsh "chmod 600 /workspace/aws-session.env; cd /workspace/OLMo-core && PYTHONPATH=/workspace/OLMo-core/src:/workspace/OLMo-core/.edullm python3 .edullm/runpod/stage_inputs.py --credentials-file /workspace/aws-session.env --release-set '$ReleaseSet'"
 
   $wandbKey = (Get-Content (Join-Path $env:USERPROFILE ".wandb_api_key") -Raw).Trim()
   $openaiKey = (Get-Content (Join-Path $env:USERPROFILE ".openai_api_key") -Raw).Trim()

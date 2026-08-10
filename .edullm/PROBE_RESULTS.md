@@ -140,12 +140,58 @@ Highest **partial** fidelities from controller-state observations (search-val CE
 
 Both winners chose the lower edge of `global_batch_mult` and `decay_fraction`. Several no-centaur fields sit on search-space floors (`weight_decay`, `beta2_gap`, `eps`, `terminal_lr_ratio`).
 
+## MixLaw mix01 control vs probe winners
+
+Reference control for final 370M / ~10B validation: the finished **mix01** run with **cosine LR decay** on the **RegMix validation mixture** (not `olmo-mix-1124`, not MixLaw/LightGBM-optimized mixes).
+
+| | Control (mix01) | no-proxy `t9_0` | no-centaur `t8_0` |
+|--|-----------------|-----------------|-------------------|
+| Role | baseline / ladder recipe | HPO winner | HPO winner |
+| W&B source | [`eduLLM/mixlaw/uc48hhcz`](https://wandb.ai/eduLLM/mixlaw/runs/uc48hhcz) | [`eduLLM/hpo-probe/904ea39d…`](https://wandb.ai/eduLLM/hpo-probe/runs/904ea39d368dfe412048a6063c1600df) | [`eduLLM/hpo-probe/06e12699…`](https://wandb.ai/eduLLM/hpo-probe/runs/06e12699f744b8d2e562e78afa003b7f) |
+| Cloned to `hpo-validation` | [`9xy0yl6v`](https://wandb.ai/eduLLM/hpo-validation/runs/9xy0yl6v) (`mixlaw-mix01-control-cosine-regmix`; control steps × **16**) | [`e65cd29c…`](https://wandb.ai/eduLLM/hpo-validation/runs/e65cd29c7dd34fcd6b8a34eb81f8e716) (256 Ki batch override) | not yet launched |
+| Model | OLMo2-370M | OLMo2-370M (validation) | OLMo2-370M (validation) |
+| Search model | — | OLMo2 ~190M | OLMo2 ~190M |
+| Training data | mix01 domain mixture (`validation_mixtures_10b.json` weights on `olmo-127b` shards) | `regmix-10b` sealed corpus | `regmix-10b` sealed corpus |
+| Scheduler | **Cosine + warmup** (`CosWithWarmup`) | **WSD** (warmup / stable / decay) | **WSD** |
+| `lr` (peak) | **0.0004** | 0.0004125 | 0.0003006 |
+| `weight_decay` | **0.1**† | 0.01473 | 0.01 (floor) |
+| `beta2_gap` (`β₂ = 1 − gap`) | **0.05** (β₂ = 0.95)† | 0.00147 (β₂ ≈ 0.9985) | 0.001 (floor, β₂ = 0.999) |
+| `eps` | **1e-8**† | 1.48e-12 | 1e-12 (floor) |
+| Warmup | **24 steps** (~100.7M tokens, ≈ **1.01%** of 10B) | `warmup_fraction` **0.0113** | `warmup_fraction` **0.0070** |
+| Decay schedule | cosine over all post-warmup steps (`lr_alpha_f` **0.1** → terminal LR **4e-5**) | `decay_fraction` **0.05** tail | `decay_fraction` **0.05** tail |
+| `terminal_lr_ratio` | **0.1** (`lr_alpha_f`; cosine floor) | **0.0215** (WSD terminal) | **0.0** (floor) |
+| Global batch (tokens) | **4,194,304** (4 Mi) | **16,384** (`mult` 0.5)‡ | **16,384** (`mult` 0.5)‡ |
+| `max_grad_norm` | **1.0**† | 0.3 (floor) | 0.348 |
+
+† **Not logged on the mix01 W&B run** (`uc48hhcz` / `run-meta:v1`). Values match the shared 370M validation ladder (`SkipStepAdamW` + `CosWithWarmup`, `max_grad_norm=1.0`, `weight_decay=0.1`, `betas=(0.9, 0.95)`, stock `eps`) used by the MixLaw / curriculum 370M recipes (`train_stack` on the control run).
+
+‡ Probe winners at `global_batch_mult=0.5` yield **16,384** tokens/step on the 370M validation recipe (`BASE_PROBE_GLOBAL_BATCH_TOKENS=32_768`). The control uses **256×** that batch. The live no-proxy validation run overrides to **262,144** tokens/step (256 Ki).
+
+### What aligns vs what differs
+
+**Roughly aligned**
+
+- Peak LR: control **4e-4** sits between the two winners (3.0e-4 – 4.1e-4).
+- Warmup length: control **24 steps / ~1.0%** of 10B is close to no-proxy `warmup_fraction` **0.0113**; no-centaur warmup is shorter.
+- `decay_fraction` **0.05** on both winners matches the search-space floor but is **not comparable** to cosine decay shape on the control.
+
+**Material differences**
+
+- **Scheduler family:** cosine (control) vs WSD (probe winners and final validation). `terminal_lr_ratio` / `lr_alpha_f` are not interchangeable.
+- **Global batch:** control **4 Mi** vs probe-default **16 Ki** (and **256 Ki** on the current RunPod validation). This dominates step count and learning-rate noise scale.
+- **Optimizer tail:** control uses much higher `weight_decay` (**0.1**) and `beta2_gap` (**0.05**) than either winner; both winners sit at or near search floors for `eps`, `max_grad_norm`, and (for no-centaur) `weight_decay` / `beta2_gap` / `terminal_lr_ratio`.
+- **Data path:** mix01 **domain-weighted** stream over multi-source `olmo-127b` shards vs **single-corpus** `regmix-10b` for probe and validation.
+- **Model scale during search:** probe tuned on **~190M**; control and validation are **370M**.
+
+Use the cloned control in `hpo-validation` for task-loss curves on the **optimizer-step x-axis** (control steps multiplied by **16** so 4 Mi-token batches align with 256 Ki validation steps); interpret HP gaps above when comparing training dynamics, not just downstream BPB.
+
 ## Provenance
 
 | Arm | Entity/project | Run ID | Trial | Local vector name |
 |-----|----------------|--------|-------|-------------------|
 | no-proxy | `eduLLM/hpo-probe` | [`904ea39d368dfe412048a6063c1600df`](https://wandb.ai/eduLLM/hpo-probe/runs/904ea39d368dfe412048a6063c1600df) | `t9_0` | `no-proxy-winner` |
 | no-centaur | `eduLLM/hpo-probe` | [`06e12699f744b8d2e562e78afa003b7f`](https://wandb.ai/eduLLM/hpo-probe/runs/06e12699f744b8d2e562e78afa003b7f) | `t8_0` | `no-centaur-winner` |
+| mix01 control | `eduLLM/mixlaw` | [`uc48hhcz`](https://wandb.ai/eduLLM/mixlaw/runs/uc48hhcz) | — | cloned → `hpo-validation` [`9xy0yl6v`](https://wandb.ai/eduLLM/hpo-validation/runs/9xy0yl6v) (steps × 16) |
 
 Cross-check: W&B winner HPs and trial IDs match `.edullm/final-validation-vectors.json` exactly (within float representation).
 

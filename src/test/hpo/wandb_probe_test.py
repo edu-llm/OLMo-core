@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -35,13 +36,15 @@ def test_storage_path_is_durable_for_urls_and_checkpoint_roots(tmp_path):
 def test_durable_storage_roots_include_checkpoint_dir_and_env(monkeypatch, tmp_path):
     monkeypatch.setenv("EDULLM_CHECKPOINT_DIR", "/mnt/checkpoints")
     roots = durable_storage_roots(checkpoint_dir=str(tmp_path / "override"))
-    assert "/mnt/checkpoints" in roots
+    assert str(Path("/mnt/checkpoints")) in roots
     assert str(tmp_path / "override") in roots
 
 
 def test_collect_controller_metrics_reports_budget_and_best_ce():
     controller = SimpleNamespace(
-        state=lambda: SimpleNamespace(tokens_charged=100, accelerator_seconds_charged=12.5, trials={"a": 1}),
+        state=lambda: SimpleNamespace(
+            tokens_charged=100, accelerator_seconds_charged=12.5, trials={"a": 1}
+        ),
         log=[1, 2, 3],
         top_candidates=lambda limit: [("trial-a", (0.1,), 2.5)],
     )
@@ -137,8 +140,49 @@ def test_hpo_probe_session_mirrors_only_ephemeral_files(tmp_path, monkeypatch):
     assert logged_metrics[0][1] == 7
 
 
+def test_hpo_probe_resume_continues_after_backend_history_step(monkeypatch):
+    monkeypatch.setenv("WANDB_API_KEY", "test-key")
+    logged = []
+
+    class FakeRun:
+        step = 0
+        entity = "eduLLM"
+        project = HPO_PROBE_PROJECT
+        id = "run-1"
+
+    class FakePublicRun:
+        _attrs = {"historyKeys": {"lastStep": 41}}
+
+    class FakeApi:
+        def run(self, path):
+            assert path == f"eduLLM/{HPO_PROBE_PROJECT}/run-1"
+            return FakePublicRun()
+
+    class FakeWandb:
+        def init(self, **kwargs):
+            del kwargs
+            return FakeRun()
+
+        def Api(self):
+            return FakeApi()
+
+        def log(self, metrics, step):
+            logged.append((metrics, step))
+
+    monkeypatch.setitem(sys.modules, "wandb", FakeWandb())
+    session = HpoProbeSession.open(
+        run_id="run-1",
+        job_type="controller",
+        durable_roots=(),
+    )
+    session.log_heartbeat()
+
+    assert logged[0][1] == 42
+
+
 def test_hpo_probe_session_requires_api_key(monkeypatch):
     monkeypatch.delenv("WANDB_API_KEY", raising=False)
+    monkeypatch.setattr("olmo_core.hpo.wandb_probe.load_wandb_api_key", lambda: None)
     with pytest.raises(RuntimeError, match="WANDB_API_KEY"):
         HpoProbeSession.open(
             run_id="run-1",
