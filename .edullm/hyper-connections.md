@@ -2297,9 +2297,15 @@ the step count, and then the runtimes are what would have disagreed.
 `--attempts 2` does not cover a run that ran out of time. This was measured on seven cells and it
 is the opposite of what the platform's own text says, so it is worth setting out in full.
 
-**Seven cells have hit the four-hour wall** — all five of `run_019fe7bc-49d0` and cells 0 and 1 of
-`run_019fe7bc-53f3`. Six of the seven still had an unused second attempt. **Not one of them started
-a second process**, read 2.1 hours after the earliest of the seven walls.
+**Fifteen cells have hit the four-hour wall** — every cell of all three treatment stages,
+`run_019fe7bc-49d0`, `run_019fe7bc-53f3` and `run_019fe7bc-73a6`, between 22:27Z and 03:41Z.
+Fourteen of the fifteen still had an unused second attempt. **Not one of them started a second
+process.** Every one reads as a single continuous run of system metrics ending at its wall, with a
+largest internal gap of 0.2 minutes, which is the sampling interval.
+
+The last of them was watched through its wall deliberately, because it was the cheapest available
+test. Cell 3 of `run_019fe7bc-53f3` was projected from its own fitted rate to stop at step 4,995,
+and it stopped at **step 4,995**, at a runtime of 3.993 hours, and did not come back.
 
 **The instrument is not merely silent, because one retry did fire and is plainly visible.** Cell 1
 of the `faithful` stage lost its first attempt about a minute in: its system-metrics stream runs
@@ -2308,7 +2314,7 @@ of the `faithful` stage lost its first attempt about a minute in: its system-met
 created at 18:38:00Z. A retry reuses the cell's W&B run id, so it appears as a second process under
 the first one's name, and a 57-minute wait for it is what the capacity note predicts. That cell is
 the positive control: retries happen, they are placed within about an hour, and they show up here.
-Six timeouts with an attempt in hand produced nothing that looks like it.
+Fourteen timeouts with an attempt in hand produced nothing that looks like it, over five hours.
 
 **When that retry ran it started from step 0, correctly**, because its first attempt died before
 writing a checkpoint. It then ran a clean 3.96 hours and hit the same wall as its siblings. So the
@@ -2338,7 +2344,7 @@ attempt is forfeited.
 
 What `edullm check --json` says under `retries.said` is that "the attempt a retry is actually spent
 on is the one that ran out of time, and it gets the same bound again". On this workload that is not
-what happens, seven times out of seven.
+what happens, fifteen times out of fifteen.
 
 **Keep `--attempts 2` anyway.** It buys exactly what `A100_STAGE_ATTEMPTS` always said it bought —
 a lost host — and cell 1 above is a cell that would otherwise have been missing from the arm mean
@@ -2357,10 +2363,12 @@ created *as* the cell. It renames the run to `…-died` and replaces the summary
 it. The history survives and the step count is recoverable from it, but nothing that reads
 `summary["_step"]` — `tranche_watch` included — can see it.
 
-This is the second time this has happened and the first went unnoticed: three cells of the stage-1
-baseline `run_019fe279-4ef0` carry the same `-died` name for the same reason. A diagnostic that
-destroys the record it is annotating is worth fixing, and until it is, **a cell reporting `step
-None` should be read from its history before it is believed**.
+It took four more cells the same way at their own walls — cell 4 of `run_019fe7bc-53f3` and cells 1
+and 3 of `run_019fe7bc-73a6`, whose `startedAt` all post-date their own last system metric — and
+three cells of the stage-1 baseline `run_019fe279-4ef0` carry the same `-died` name from before
+anybody noticed. Seven clobbered summaries and every one of them read as a cell that never trained.
+A diagnostic that destroys the record it is annotating is worth fixing, and until it is, **a cell
+reporting `step None` should be read from its history before it is believed**.
 
 ## What the lane arms cost, measured on the arms themselves
 
@@ -2370,9 +2378,9 @@ intercept is start-up. Fitted from step 200 onward, over 4,900 steps where they 
 
 | arm | marginal s/step, per cell | slowest | 6,000 steps | at `--hours 6` |
 | --- | --- | --- | --- | --- |
-| `output-only` | 2.914, 2.929, 2.941, 2.867, 2.961 | 2.961 | **4.98 h** | 1.02 h spare, 17% |
+| `output-only` | 2.914, 2.929, 2.942, 2.867, 2.961 | 2.961 | **4.98 h** | 1.02 h spare, 17% |
 | `faithful` | 3.044, 3.074, 3.043, 3.065, 3.043 | 3.074 | **5.17 h** | 0.83 h spare, 14% |
-| `mhc` | 3.145, 3.128, 3.145, 3.126, 3.123 | 3.145 | **5.29 h** | 0.71 h spare, 12% |
+| `mhc` | 3.149, 3.128, 3.129, 3.126, 3.110 | 3.149 | **5.30 h** | 0.70 h spare, 12% |
 
 The projection is `intercept + slope × 6000` plus one more evaluation-and-checkpoint pair for step
 6,000 itself, which the histories measure at 57.5 to 60.6 seconds and which is therefore 0.017 h
@@ -2381,6 +2389,12 @@ and not worth arguing about. Start-up is 79 to 97 seconds on every cell.
 **Six hours covers all three arms and is the right bound.** `mhc` has the thinnest margin at 12%
 and it is still four times the shortfall that killed the `faithful` stage.
 
+**The `faithful` resubmission is already confirming it.** `run_019fe90b-f99e` went out at
+`--hours 6` and its five cells fit at 3.050, 3.043, 3.083, 3.046 and 3.027 s/step — the same arm on
+new hosts, projecting 5.07 to 5.16 hours against a six-hour bound. The host-to-host spread across
+the two submissions of this arm is 1.8%, which is the number to carry into any later bound rather
+than the 1.0% a single submission suggested.
+
 **The `mhc` estimate is trustworthy despite being taken early.** It is the one arm with no
 completed cell, and Sinkhorn-Knopp was expected to make it the slowest, which it is — but only by
 2.3% over `faithful`, not by the margin the kernel-launch count suggested. Truncating the finished
@@ -2388,7 +2402,8 @@ completed cell, and Sinkhorn-Knopp was expected to make it the slowest, which it
 1,000 steps they give 3.033, 3.069, 3.033, 3.056 and 3.035 against full-history values of 3.044,
 3.074, 3.043, 3.065 and 3.043. **A 1,000-step prefix understates the settled rate by 0.36%**, and
 by 2,000 steps it is within 0.1%. `mhc` is read at 900 to 2,200 steps, so 3.145 is low by about a
-hundredth of a second and 5.29 hours is low by about a minute.
+hundredth of a second and 5.29 hours is low by about a minute. Its cells then ran to their walls and
+settled at 3.110 to 3.149, so the prefix was low by 0.13% and the projection by 24 seconds.
 
 Seven hours is available at a ceiling of $1,537.03 against six hours' $1,317.46, and both price as
 `routine`. It buys nothing the measurement asks for. It is also not free of a cost that is not
@@ -2399,14 +2414,21 @@ is not missing it at random.
 ### A resubmission cannot inherit a dead cell's checkpoints
 
 `EDULLM_CHECKPOINT_DIR` is `…/runs/<run id>/cell-<index>/checkpoints/` and a resubmission is a new
-run id, so it is a new and empty prefix. The 20.9 node-hours the `faithful` stage spent reaching
-step 4,700 five times are not recoverable by resubmitting it, and the same will be true of every
-cell now running. That is the whole reason the retry question was worth an hour of anybody's time:
+run id, so it is a new and empty prefix. Nothing the three stages wrote is reachable from the runs
+that replace them. That is the whole reason the retry question was worth an hour of anybody's time:
 a granted retry resumes inside the run and costs one save interval, and a resubmission starts from
 zero and costs the arm.
 
+**The four-hour bound cost 60.9 node-hours across fifteen cells, and none of it survives.** Every
+cell reached between 75% and 83% of its steps, which is the expensive place to stop: far enough in
+to have paid for nearly all of a cell and not far enough to leave a checkpoint anybody will load.
+At the rate `check` reports it is about $1,340, and the arithmetic that would have avoided it —
+6,000 steps times a step time measured on an arm that has lanes — is one line.
+
 It follows that **a cell that cannot reach 6,000 within its bound should be cancelled as soon as
-that is known, not left to reach its wall.** It is not accruing anything that survives it.
+that is known, not left to reach its wall.** It is not accruing anything that survives it. Ten of
+the fifteen were still running when the bound error was understood and every one of them was
+allowed to reach its wall regardless, which is about $385 of the total.
 
 ## Order of operations
 
