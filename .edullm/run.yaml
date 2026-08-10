@@ -1,4 +1,4 @@
-# Written by edullm check, from config/workload-catalog.yaml in /Users/philote/projects-local/platform-resume/config.
+# Written by edullm check, from config/workload-catalog.yaml in the reviewed configuration.
 # Everything here is a property of the code and travels with it in git.
 # The machine, the corpus and the experiment are supplied at submit time,
 # because one commit run by two people belongs to two teams.
