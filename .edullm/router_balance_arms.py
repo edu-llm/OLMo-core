@@ -48,7 +48,7 @@ import argparse
 import shlex
 import sys
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 #: Everything every arm holds fixed. The three dataset arguments cannot come from the
 #: environment on this lane -- the block bootstrap sets the run id, the prefixes and the data
@@ -99,6 +99,7 @@ class Arm:
     gamma: Optional[float] = None
     lb: float = DEFAULT_LB
     z: float = DEFAULT_Z
+    extra: Tuple[str, ...] = ()
 
     def args(self) -> List[str]:
         out = list(COMMON) + ["--hard-stop-steps", str(self.stop)]
@@ -112,7 +113,7 @@ class Arm:
 
     def argv(self) -> List[str]:
         """The full argv, run name first. The name has to be first and has to be there."""
-        return [self.name] + self.args() + OVERRIDES
+        return [self.name] + self.args() + OVERRIDES + list(self.extra)
 
     def command(self, nproc: int = 8) -> str:
         return " ".join(
@@ -183,6 +184,18 @@ ARMS: List[Arm] = [
         "say the optimum is the largest gamma that has not begun to thrash, not the smallest "
         "one anybody tried.",
     ),
+    Arm(
+        name="rb-uniform",
+        stop=300,
+        extra=("model.block.feed_forward_moe.router.uniform_expert_assignment=true",),
+        why="THE CEILING, AND NOT A CANDIDATE. Round-robin assignment ignores the router "
+        "entirely, so the model it trains is worthless and the only number worth reading off it "
+        "is the step time at imbalance 1.000. It exists because 'the fraction of the headroom "
+        "captured' needs a denominator measured on THIS corpus and THIS machine; borrowing the "
+        "31% from a probe that ran a different corpus at a different microbatch would be "
+        "comparing two boxes. Three hundred steps is plenty -- there is no controller to "
+        "converge, the balance is perfect from step one.",
+    ),
 ]
 
 
@@ -191,7 +204,10 @@ def _expected(arm: Arm) -> Dict[str, object]:
         "bias_gamma": arm.gamma,
         "lb_loss_weight": arm.lb,
         "z_loss_weight": arm.z,
-        "uniform_expert_assignment": False,
+        "uniform_expert_assignment": any(
+            o == "model.block.feed_forward_moe.router.uniform_expert_assignment=true"
+            for o in arm.extra
+        ),
         "rank_microbatch_size": 8192,
         "run_name": arm.name,
     }
@@ -217,7 +233,7 @@ def verify(only: Optional[str] = None) -> int:
         if opts.run_name != arm.name:
             failures.append(f"{arm.name}: run_name resolved to {opts.run_name!r}")
             continue
-        if sorted(overrides) != sorted(OVERRIDES):
+        if sorted(overrides) != sorted(list(OVERRIDES) + list(arm.extra)):
             failures.append(f"{arm.name}: leftover overrides are {overrides!r}")
             continue
 

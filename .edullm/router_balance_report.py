@@ -103,18 +103,33 @@ def parse(path: Path) -> Tuple[List[Record], List[Tuple[int, float]], Optional[d
 
 
 def _window(records: List[Record], last: int, width: int) -> Dict[str, Optional[float]]:
+    """Steady state over a trailing window, reported as a MEDIAN and not as a mean.
+
+    THE EVALUATION STEP IS AN OUTLIER AND A MEAN OF TWENTY SAMPLES CANNOT ABSORB IT. Held-out
+    evaluation runs inside the step it is scheduled on, so that one step's `throughput/device/BPS`
+    carries the whole evaluation, and the step reads five times as long as its neighbours. In a
+    trailing window that happens to end on an evaluation the mean moves by half a second and the
+    standard deviation by more than the mean itself -- 2.63 +/- 1.30 against a true 2.35 was the
+    reading that found this. The median of twenty samples is unmoved by one or two such steps and
+    is the number the arms should be compared on.
+
+    The mean is kept beside it because it is not wrong, it is a different question: summed over a
+    run it is the wall clock including evaluation, which every arm pays equally.
+    """
     chosen = [r for r in records if last - width < r.step <= last and r.seconds_per_step]
     if not chosen:
         return {"n": 0, "sps": None, "mfu": None, "imb": None}
+    sps = [r.seconds_per_step for r in chosen]
+    mfus = [r.mfu for r in chosen if r.mfu is not None]
     imbalances = [r.imbalance()[0] for r in chosen if r.imbalance()]
     return {
         "n": len(chosen),
-        "sps": statistics.fmean([r.seconds_per_step for r in chosen]),
-        "mfu": statistics.fmean([r.mfu for r in chosen if r.mfu is not None]),
-        "imb": statistics.fmean(imbalances) if imbalances else None,
-        "sps_sd": statistics.stdev([r.seconds_per_step for r in chosen])
-        if len(chosen) > 1
-        else 0.0,
+        "sps": statistics.median(sps),
+        "mfu": statistics.median(mfus) if mfus else None,
+        "imb": statistics.median(imbalances) if imbalances else None,
+        "sps_mean": statistics.fmean(sps),
+        "sps_sd": statistics.stdev(sps) if len(sps) > 1 else 0.0,
+        "sps_max": max(sps),
     }
 
 
@@ -145,9 +160,11 @@ def report(path: Path, every: int, width: int) -> Optional[Dict[str, object]]:
 
     steady = _window(records, last, width)
     print(
-        f"  steady state, last {width} steps (n={steady['n']}): "
-        f"{steady['sps']:.4f} s/step +/- {steady['sps_sd']:.4f}, "
-        f"{steady['mfu']:.2f}% MFU, imbalance {steady['imb']:.3f}"
+        f"  steady state, last {width} steps (n={steady['n']}, median): "
+        f"{steady['sps']:.4f} s/step, {steady['mfu']:.2f}% MFU, "
+        f"imbalance {steady['imb']:.3f}"
+        f"   [mean {steady['sps_mean']:.4f}, slowest {steady['sps_max']:.4f}, "
+        f"an evaluation step if it is far out]"
         if steady["n"]
         else "  steady state: no records in the window"
     )
