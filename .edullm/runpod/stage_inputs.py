@@ -231,8 +231,12 @@ def resolve_release_inputs(
             for key in ("profile", "manifest_sha256", "tokenizer_id")
             if request[key] is not None
         }
-        actual_identity = {key: getattr(read, key, None) for key in expected_identity}
-        if actual_identity != expected_identity:
+        actual_identity = {
+            key: value
+            for key in expected_identity
+            if (value := getattr(read, key, None)) is not None
+        }
+        if any(actual_identity[key] != expected_identity[key] for key in actual_identity):
             raise RuntimeError(
                 f"{request['dataset_id']}/{request['version']} registry returned the wrong "
                 f"immutable release: expected {expected_identity}, got {actual_identity}"

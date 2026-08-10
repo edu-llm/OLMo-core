@@ -409,6 +409,36 @@ def test_stager_curriculum_release_set_omits_regmix():
     assert all(dataset_id != module.LEGACY_DATASET_ID for dataset_id, _, _ in calls)
 
 
+def test_stager_accepts_sealed_resolved_split_without_identity_attributes():
+    module = load_script("stage_inputs.py")
+
+    class Read:
+        paths = ["s3://edullm-data/example/train.bin"]
+        val = ["s3://edullm-data/example/val.bin"]
+        dtype = "uint32"
+        byte_order = sys.byteorder
+        header_bytes = 0
+
+    def dataset_paths(dataset_id, version, *, s3, group=None):
+        del version, s3, group
+        read = Read()
+        if dataset_id == module.ORDER_DATASET_ID:
+            read.val = None
+            read.dtype = "uint64"
+        return read
+
+    releases = module.resolve_release_inputs(
+        dataset_paths,
+        object(),
+        release_set="curriculum",
+    )
+
+    assert [release["manifest_sha256"] for release in releases] == [
+        module.PARENT_MANIFEST_SHA256,
+        module.ORDER_MANIFEST_SHA256,
+    ]
+
+
 def test_stager_rejects_registry_release_with_wrong_immutable_manifest():
     module = load_script("stage_inputs.py")
 
