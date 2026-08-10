@@ -717,12 +717,15 @@ TRANCHE_WARMUP_FRACTION = 0.02
 #: the two that were under are blocks 01 and 02, and hyper-connections.md records why a
 #: shallow dead zone is a finding about depth rather than a reason to abort.
 #:
-#: IT MUST NOT BE SET ON ``mhc``, AND THAT IS MEASURED RATHER THAN FEARED. See
-#: :data:`MHC_LANE_DISPERSION_AT_GATE`: the Sinkhorn projection contracts the lane mixing
-#: towards the lane mean, which is the mechanism working, and lane dispersion is exactly the
-#: statistic that contraction compresses. The floor was calibrated against unconstrained
-#: mixing, so on this arm the guard reads the constraint as an absence of one and would abort
-#: all five cells at step 400.
+#: IT IS OMITTED ON ``mhc``, AND THE REASON ON RECORD FOR THAT DOES NOT SURVIVE THE ARM'S OWN
+#: CELLS. See :data:`MHC_LANE_DISPERSION_AT_GATE`, which was read at the rehearsal size on CPU
+#: and predicted an abort here, and :data:`MHC_DIFFERENTIATED_FRACTION_AT_GATE_370M`, which is
+#: what the five 370M cells of ``run_019fe7bc-73a6`` actually read at this step. The
+#: contraction is real and it is visible for about a hundred steps; by 400 the arm clears the
+#: floor on every block of every cell. The omission stands for this tranche because the specs
+#: are submitted, and it costs nothing either way -- a guard that would pass and a guard that
+#: is absent train the same model -- but it is not buying the protection the other two arms
+#: have, and the next tranche should set it here too.
 TRANCHE_FAIL_CLOSED_BY_STEP = 400
 
 #: What the guard above would read on the ``mhc`` arm, and therefore why that arm's stage does
@@ -757,7 +760,44 @@ TRANCHE_FAIL_CLOSED_BY_STEP = 400
 #: would cost all five cells with certainty, and what replaces it is the radius the monitor
 #: records at the same interval, which on this arm is pinned at 1 by construction and is the
 #: quantity H5 is actually about.
+#:
+#: THE ARM HAS NOW RUN AND THIS NUMBER DID NOT PREDICT IT. Everything above is a reading from
+#: four blocks of d_model 64 on a CPU, and it does not carry to the model that was submitted.
+#: :data:`MHC_LANE_DISPERSION_AT_GATE_370M` is the same statistic off the arm itself. Keep this
+#: constant: it is a true record of what the rehearsal said, and it is why the flag was left
+#: out. Do not read it as a statement about the tranche.
 MHC_LANE_DISPERSION_AT_GATE = 4.1e-3
+
+#: The lowest per-block lane dispersion any ``mhc`` cell read at the gate step, on the arm
+#: itself: 370M, sixteen blocks, the tranche's own optimizer, batch and corpus. Taken from the
+#: five cells of ``run_019fe7bc-73a6``, whose ``hc/`` history reaches step 4,584.
+#:
+#: It is 2.7 times the 5e-03 floor rather than under it, and the median block sits at 4.2e-02
+#: to 4.9e-02, which is nine times the floor and within a factor of two of ``faithful``.
+MHC_LANE_DISPERSION_AT_GATE_370M = 1.34e-2
+
+#: What ``hc/differentiated block fraction`` reads on ``mhc`` at
+#: :data:`TRANCHE_FAIL_CLOSED_BY_STEP`, which is the quantity the guard actually refuses on.
+#:
+#: ONE, ON ALL FIVE CELLS. The guard needs half. So it would have passed and disabled itself,
+#: and the sentence this table carried for two days -- that setting the flag here "would abort
+#: all five cells at step 400" -- is false on the arm it is about. It was true of the rehearsal
+#: and the rehearsal is four blocks wide.
+MHC_DIFFERENTIATED_FRACTION_AT_GATE_370M = 1.0
+
+#: The step by which every ``mhc`` cell has crossed the floor on a majority of its blocks.
+#:
+#: THE CONTRACTION IS REAL AND IT IS EARLY, WHICH IS HOW A RIGHT OBSERVATION BECAME A WRONG
+#: PREDICTION. At step 50 the five cells read a differentiated fraction of exactly 0 and a
+#: median dispersion of 2.4e-03, well under the floor -- Sinkhorn pulling the lanes together,
+#: exactly as the mechanism says. At step 100 it is 0 on four cells and 0.31 on the fifth. At
+#: step 150 it is 1.0 on all five and the median has reached 1.0e-02, and it keeps rising to
+#: 4.5e-02 by step 400. So the rehearsal saw the first hundred steps correctly and extrapolated
+#: a fall that the real arm does not have: at 370M ``mhc`` rises like ``faithful`` does, from
+#: further back and to a lower plateau.
+#:
+#: A gate anywhere below about 150 would have taken all five cells. The tranche's gate is 400.
+MHC_LANE_DISPERSION_CROSSES_FLOOR_BY_STEP = 150
 
 #: The throughput probe, which is the other thing ``.edullm/run.yaml`` is ever allowed to be.
 #:
@@ -1276,13 +1316,18 @@ STAGE_CONTRAST_EXEMPT: Dict[str, str] = {
         "train_hyper_connections.train attaches HyperConnectionMonitorCallback only when "
         "arm.hyper_connections is not None, and the baseline's is None -- so the stage-1 "
         "command that omits it and a stage-2 command that sets it describe the same run. On "
-        "MHC it is reachable and would fire: the Sinkhorn projection contracts the lane "
-        "mixing towards the lane mean, lane dispersion is the statistic that contraction "
+        "MHC it is reachable and was expected to fire: the Sinkhorn projection contracts the "
+        "lane mixing towards the lane mean, lane dispersion is the statistic that contraction "
         "compresses, and the floor was calibrated against unconstrained mixing, so the guard "
-        "reads a working constraint as a missing mechanism and aborts all five cells at step "
-        "400. MHC_LANE_DISPERSION_AT_GATE carries the measurement. Neither omission touches "
+        "was predicted to read a working constraint as a missing mechanism. That prediction "
+        "came off a four-block CPU rehearsal and the arm has since run: at step 400 all five "
+        "370M cells read a differentiated fraction of 1.0, so the guard would have passed. "
+        "MHC_DIFFERENTIATED_FRACTION_AT_GATE_370M carries that measurement and "
+        "MHC_LANE_DISPERSION_AT_GATE the rehearsal it replaced. The omission is now an arm "
+        "running without a guard rather than an arm that needs to. Neither omission touches "
         "the contrast, because a threshold that never fires and a threshold that is absent "
-        "train the same model."
+        "train the same model -- which is as true of a threshold that would have passed as of "
+        "one that is unreachable."
     ),
 }
 

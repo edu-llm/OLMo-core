@@ -1353,12 +1353,15 @@ def test_the_two_stages_that_omit_the_lane_guard_omit_it_for_the_reasons_claimed
     an ordinary residual stream, say, which is a reasonable thing to want -- the exemption stops
     being sound and this fails.
 
-    On MHC the option is REACHABLE AND MISCALIBRATED, which is the opposite situation and the
-    more dangerous one: setting it would abort all five cells at step 400, because the Sinkhorn
-    projection compresses the lane dispersion the guard reads.
-    ``test_the_mhc_arm_is_the_only_stage_the_lane_gate_would_refuse`` in
-    ``test_hyper_connection_arms.py`` measures that; what this asserts is that the arm which
-    would be refused is the arm whose command leaves the flag out.
+    On MHC the option is REACHABLE, and it was left out because a four-block CPU rehearsal
+    said it would abort all five cells at step 400: Sinkhorn compresses the lane dispersion the
+    guard reads. ``test_the_mhc_arm_is_the_only_stage_the_lane_gate_would_refuse`` in
+    ``test_hyper_connection_arms.py`` still measures that at that size. THE ARM HAS SINCE RUN
+    AT 370M AND CLEARS THE FLOOR ON EVERY BLOCK BY STEP 150, so the guard would have passed;
+    ``test_the_gate_the_mhc_arm_is_exempt_from_would_have_passed_at_370M`` carries that. What
+    this asserts is unchanged and is the thing that matters here -- the flag is where each
+    stage's command puts it -- and the exemption still holds, because a guard that would pass
+    and a guard that is absent train the same model.
     """
     seen: set = set()
 

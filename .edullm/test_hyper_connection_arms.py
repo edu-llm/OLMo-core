@@ -181,6 +181,13 @@ def test_the_mhc_arm_is_the_only_stage_the_lane_gate_would_refuse():
     ``MHC_LANE_DISPERSION_AT_GATE`` came from. A test on the maximum would go red on a deeper
     model or a longer run while the guard's answer stayed the same. Short and small on purpose:
     the separation is a factor of several and arrives within a few dozen steps.
+
+    WHAT IT ESTABLISHES IS A FACT ABOUT FOUR BLOCKS OF d_model 64 AFTER THIRTY STEPS, AND THAT
+    IS NOW KNOWN NOT TO CARRY. The arm has run at 370M and clears the floor on every block by
+    step 150; see ``test_the_gate_the_mhc_arm_is_exempt_from_would_have_passed_at_370M``. This
+    test is kept because it is the reasoning the flag was dropped on and it is still true at
+    the size it was taken at -- which is the whole lesson, so it is asserted rather than
+    deleted.
     """
     floor = HyperConnectionMonitorCallback.min_lane_norm_spread
     needed = HyperConnectionMonitorCallback.min_differentiated_fraction
@@ -216,6 +223,50 @@ def test_the_mhc_arm_is_the_only_stage_the_lane_gate_would_refuse():
     # And the arm the guard passes is separated from the arm it refuses by a wide margin rather
     # than by a block or two either side of the floor.
     assert min(dispersions["faithful"]) > 2 * max(dispersions["mhc"]), dispersions
+
+
+def test_the_gate_the_mhc_arm_is_exempt_from_would_have_passed_at_370M():
+    """
+    THE EXEMPTION IS SOUND AND THE REASON RECORDED FOR IT IS NOT, WHICH IS WORTH A TEST OF ITS
+    OWN BECAUSE THE TWO GET CONFUSED THE MOMENT SOMEBODY REVISITS THE FLAG.
+
+    The test above establishes that the guard refuses ``mhc`` at four blocks of d_model 64 on
+    a CPU after thirty steps, and that is the measurement the flag was dropped on. The arm has
+    since run five cells at 370M over sixteen blocks -- ``run_019fe7bc-73a6``, which reached
+    step 4,584 before the four-hour wall took it -- and its ``hc/`` history says the opposite
+    at the step the guard would have read:
+
+      step  50   differentiated fraction 0.00 on all five, median dispersion 2.4e-03
+      step 100   0.00 on four cells and 0.31 on the fifth, median 4.0e-03 to 4.5e-03
+      step 150   1.00 on all five, median 1.0e-02
+      step 400   1.00 on all five, lowest block 1.3e-02, median 4.2e-02 to 4.9e-02
+
+    So the contraction the exemption describes is real, it is what the first hundred steps
+    look like, and it is over long before the gate. A rehearsal four blocks wide read the
+    early part and extrapolated a fall; the real arm rises.
+
+    WHAT FOLLOWS FROM IT IS NOT "PUT THE FLAG BACK ON A LIVE RUN". The specs are submitted and
+    a guard that would pass changes nothing a cell does, so the contrast is untouched either
+    way -- that is why ``fail_closed_by_step`` is exempt at all. What follows is that ``mhc``
+    is the one funded lane arm with no fail-closed protection, on a premise its own cells
+    contradict, and the next tranche should carry the flag on all three treatments.
+    """
+    floor = HyperConnectionMonitorCallback.min_lane_norm_spread
+    needed = HyperConnectionMonitorCallback.min_differentiated_fraction
+
+    # At the gate the arm is over the floor on every block, not under it on all of them.
+    assert arms.MHC_LANE_DISPERSION_AT_GATE_370M > floor
+    assert arms.MHC_LANE_DISPERSION_AT_GATE_370M / floor > 2.5
+    assert arms.MHC_DIFFERENTIATED_FRACTION_AT_GATE_370M >= needed
+
+    # The rehearsal is the other side of the floor, and both readings are kept so that the
+    # disagreement is the reviewable thing rather than a number that quietly moved.
+    assert arms.MHC_LANE_DISPERSION_AT_GATE < floor < arms.MHC_LANE_DISPERSION_AT_GATE_370M
+
+    # And the crossing happens with the gate a long way clear of it, which is the only reason
+    # the omission cost nothing: a gate at 100 would have taken all five cells.
+    assert arms.MHC_LANE_DISPERSION_CROSSES_FLOOR_BY_STEP < arms.TRANCHE_FAIL_CLOSED_BY_STEP
+    assert arms.TRANCHE_FAIL_CLOSED_BY_STEP >= 2 * arms.MHC_LANE_DISPERSION_CROSSES_FLOOR_BY_STEP
 
 
 def _lane_dispersions(model, tokens) -> list:
