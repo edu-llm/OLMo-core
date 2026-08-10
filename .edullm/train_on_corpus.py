@@ -1223,6 +1223,40 @@ def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> 
     )
 
 
+def which_olmo_core() -> str:
+    """Which ``olmo_core`` this process imported, and whether it is the branch's.
+
+    The header of this file argues at length that the block at the top defeats the image's
+    own copy, and until this line ran nothing had ever checked it on a machine. It cannot be
+    checked from outside the process either: a separate ``python -c "import olmo_core"`` in
+    the same container does not execute that block, so it resolves to the image's copy and
+    reports a failure that is not happening. The attribute is free and the alternative to
+    reading it is inferring which library trained the model from the shape of a loss curve.
+    """
+    import olmo_core
+
+    # `getattr` on both, because this line runs before anything else is known to work and a
+    # diagnostic that raises is worse than no diagnostic. `__file__` is absent on a namespace
+    # package, which is itself the answer to a question somebody would otherwise ask twice.
+    where = getattr(olmo_core, "__file__", None)
+    if where is None:
+        return "olmo_core resolved to a namespace package with no __file__"
+    where = os.path.abspath(where)
+    branch = os.path.abspath(_BRANCH_LIBRARY)
+    whose = "the branch's clone" if where.startswith(branch + os.sep) else "THE IMAGE'S COPY"
+    version = getattr(olmo_core, "__version__", None) or _library_version()
+    return f"olmo_core {version} from {where} -- {whose}"
+
+
+def _library_version() -> str:
+    try:
+        from olmo_core.version import VERSION
+
+        return VERSION
+    except Exception:  # pragma: no cover - a version is a nicety, the path is the answer
+        return "unknown"
+
+
 def show(config) -> None:
     """Print the config with the shard list replaced by its length.
 
@@ -1247,6 +1281,7 @@ def train(config, opts=None) -> None:
     # would leave every rank on the slow path while the log said otherwise.
     verdict = install_grouped_mm(enabled=getattr(opts, "moe_grouped_mm", True))
     log.info("MoE kernel: %s", verdict)
+    log.info("library: %s", which_olmo_core())
 
     model = config.model.build(init_device="meta")
     train_module = config.train_module.build(model)

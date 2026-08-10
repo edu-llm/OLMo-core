@@ -1482,3 +1482,35 @@ def test_the_branch_library_is_the_src_beside_this_entry_point():
     """Resolved from ``__file__`` rather than hardcoded to /work, so a worktree works too."""
     assert Path(entry._BRANCH_LIBRARY) == REPOSITORY / "src"
     assert (Path(entry._BRANCH_LIBRARY) / "olmo_core" / "__init__.py").is_file()
+
+
+def test_which_olmo_core_names_the_branch_clone_when_that_is_what_was_imported():
+    """The report the test above cannot make: which library a *running* process ended up on.
+
+    The decoy test proves the ``sys.path`` order in a fresh interpreter. This proves the line
+    that says so out loud in a real run, which is the only form of the answer anybody reading
+    a training log on a node can get at.
+    """
+    reported = entry.which_olmo_core()
+    assert "the branch's clone" in reported
+    assert str(REPOSITORY / "src" / "olmo_core") in reported
+
+
+def test_which_olmo_core_says_so_loudly_when_the_image_copy_won(monkeypatch):
+    """The failure this exists to catch, which is silent everywhere else.
+
+    A run against the image's library trains, reports a falling loss and writes a checkpoint,
+    and the only difference is that the model is not the one the branch defines. So the wrong
+    answer has to be shouted rather than merely printed.
+    """
+    monkeypatch.setattr(entry, "_BRANCH_LIBRARY", "/work/src")
+    reported = entry.which_olmo_core()
+    assert "THE IMAGE'S COPY" in reported
+
+
+def test_which_olmo_core_survives_a_library_that_answers_nothing(monkeypatch):
+    """A diagnostic that raises is worse than no diagnostic, because it takes the run with it."""
+    import olmo_core
+
+    monkeypatch.delattr(olmo_core, "__file__", raising=False)
+    assert "namespace package" in entry.which_olmo_core()
