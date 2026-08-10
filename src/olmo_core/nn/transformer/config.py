@@ -1123,6 +1123,48 @@ class TransformerConfig(ModelConfig):
         # NOT DeepGrove's published 20.2B, and that is correct rather than an error.** The whole
         # 211,288,064 gap is `2*d*(151936 - 100352)`; see `MAPLE_EXPECTED_PARAMS` below.
         "M20": dict(d_model=2048, n_layers=24, num_experts=256, n_heads=16, n_kv_heads=4),
+        # M7B -- the configured shape for the 7B full-pretraining PoC. Shape FROZEN 2026-08-10;
+        # `maple/plan/m7b-shape.md` is the authority, and every integer filed for it below was
+        # re-derived from the closed form against that spec rather than copied from a lane report.
+        #
+        # A ratio-faithful point, not a scale-down convenience: it preserves all six identities
+        # that M20 satisfies by construction.
+        #   f_e/d   = 384/1536   = 1/4    OK
+        #   k*f_e/d = 8*384/1536 = 2.0    OK
+        #   k/E     = 8/256      = 1/32   OK  (claimed at R3, M20 and M7B)
+        #   n_h*h_d = 12*128     = 1536 = d  OK (1.0x, the D-012/D-014 assertion)
+        #   GQA     = 12/3       = 4:1    OK
+        #   L % 4   = 16 % 4     = 0      OK
+        #
+        # **The ONE ratio it breaks, stated plainly: d/L = 96.0 against Maple's 85.33, +12.5%.**
+        # Everything else is exact, and this is not slack anyone left in -- **no admissible shape
+        # totals exactly 7.00B.** Verified by exhaustive enumeration of the family (`d % 512 == 0`
+        # so that `n_h*h_d == d` at head_dim 128 with `n_heads % 4 == 0` for integer n_kv; `E=256`;
+        # `L % 4 == 0`) over d <= 20,480 and L <= 400: zero hits on 7,000,000,000. Among the points
+        # that clear 7.00B, M7B is the SMALLEST whose aspect ratio is within 2x of Maple's 85.33 --
+        # the nearer totals are d=512/L=136 (aspect 3.76, a 0.04x pancake) and d=1024/L=36
+        # (aspect 28.4). So 7.66B is the structural floor at a Maple-like aspect, and rounding d or
+        # L to chase a rounder headline number buys nothing.
+        #
+        # **A caveat, recorded because the spec states it and it is wrong:**
+        # `maple/plan/m7b-shape.md` argues unreachability from "every admissible total is
+        # `0 mod 1024` while 7e9 has an odd 512-cofactor". **That argument does not hold.** The
+        # trailing `+ d` (the LM head's own final RMSNorm) makes the residue depend on the parity
+        # of `d/512`, so admissible totals occupy `{0, 512} mod 1024`, and `7e9 mod 1024 == 512`
+        # is in that set. The *conclusion* survives -- exhaustive search finds no exact hit -- but
+        # the modular proof does not, so do not re-derive from it. **The five parameter integers
+        # are unaffected and were confirmed exactly; only the justification prose is defective.**
+        #
+        # **n_kv=3 is INTENTIONAL, and is what GQA 4:1 forces at n_heads=12.** It is the first odd
+        # KV count on the ladder and it is verified harmless rather than assumed so: there is no
+        # divisibility, evenness or power-of-2 constraint on `n_kv_heads` anywhere under
+        # `src/olmo_core/` (grep filtered to raise/assert/ValueError/ConfigurationError matches
+        # nothing), `w_k` is a plain `Linear(d_model, 3*128 = 384)`, `n_rep = 12/3 = 4` is exact,
+        # and `_repeat_kv` is pure expand/reshape. Tensor parallelism is the one place an odd n_kv
+        # would bite, and **TP is never configured** -- `.edullm/train_on_corpus.py` builds
+        # `TransformerDataParallelConfig(fsdp)` and nothing else, and FSDP2 shards flattened dim 0
+        # (384), never the head count. Do NOT "fix" this to 4; that would break GQA 4:1.
+        "M7B": dict(d_model=1536, n_layers=16, num_experts=256, n_heads=12, n_kv_heads=3),
     }
 
     #: Expected ``(total, active)`` params per rung at ``V=100352``, asserted to within 1%.
@@ -1164,6 +1206,33 @@ class TransformerConfig(ModelConfig):
             # wrong the assertion below FAILS THE RUN at config-build time for $1.43 and no GPU,
             # which is the cheapest possible place to find out.
             "M20": (20_002_742_272, 1_279_369_216),
+            # M7B is DERIVED, NOT MEASURED, exactly as M20 is -- **this shape has never been
+            # constructed on a GPU, and nor has any rung above R3.** Frozen 2026-08-10 from
+            # `maple/plan/m7b-shape.md`, whose own integers came from two independent solves
+            # (D-7B and V-7B, which reached 7,656,756,736 without seeing each other's answer) and
+            # whose closed forms reproduce all five prior rungs exactly.
+            #
+            # That is *three* methods agreeing, and per D-076 that is still not proof: they share
+            # the premise that the factory builds the config tree the closed form describes. The
+            # thing that closes it is a CPU dry-run printing `PARAM_LEDGER` off a built config.
+            # **Until then treat this row as a falsifiable prediction** -- if it is wrong,
+            # `_maple_assert_ladder` fails the run at config-build time before any GPU is billed.
+            #
+            # Term by term at V=100,352 (see the closed form in the ladder contract):
+            #   2dV                          = 2*1536*100352        =   308,281,344
+            #   per block 2d*n_h*h_d         = 2*1536*12*128        =     4,718,592
+            #             2d*n_kv*h_d        = 2*1536*3*128         =     1,179,648
+            #             2h_d               (per-head QK-norm)     =           256
+            #             dE                 = 1536*256            =       393,216
+            #             3d*f_e*E           = 3*1536*384*256       =   452,984,832
+            #             2d                 (block's two RMSNorms) =         3,072
+            #                                                 block =   459,279,616
+            #   total = 308,281,344 + 16*459,279,616 + 1,536        = 7,656,756,736
+            # Active swaps the expert term for `3d*f_e*k`, giving 635,491,840.
+            #
+            # **Report bits-per-byte, never raw loss** -- V=100,352 against Maple's 151,936 is a
+            # 0.415-nat offset before fertility, so raw loss is not comparable to Maple's.
+            "M7B": (7_656_756_736, 635_491_840),
         }
     }
 
@@ -1188,6 +1257,14 @@ class TransformerConfig(ModelConfig):
             # out of the `expected is None` branch below -- NOT because any invariance is claimed
             # between M20 and R1-R3, which have a different d and L entirely.
             "M20": 1_266_786_304,
+            # DERIVED, not measured -- see the note in MAPLE_EXPECTED_PARAMS. Routers at M7B are
+            # L*d*E = 16*1536*256 = 6,291,456, so active-minus-routers is
+            # 635,491,840 - 6,291,456 = 629,200,384. As with M20, **no invariance is claimed**
+            # between M7B and the R1-R3 E-sweep: M7B has a different d and L entirely and is a
+            # single point, not a rung of the sweep. The row exists so the ledger is complete and
+            # so M7B does not fall into the `expected is None` branch below, which would SKIP its
+            # assertions while announcing nothing.
+            "M7B": 629_200_384,
         }
     }
 
@@ -1539,13 +1616,16 @@ class TransformerConfig(ModelConfig):
                 f"k*f_e/d must be 2.0: got k={top_k}, f_e={expert_hidden_size}, d={d_model} "
                 f"(ratio {top_k * expert_hidden_size / d_model:.4f})"
             )
-        # k/E == 1/32 is claimed at the two Maple-faithful points, R3 and M20. R1/R2/E8 vary E
-        # deliberately -- that variation IS the E-sweep -- so asserting it everywhere would
-        # forbid the experiment. M20 is Maple's literal config, so if this ever fails there the
-        # transcription from `evidence/config.json` is wrong, which is the more valuable catch.
-        if rung in ("R3", "M20") and top_k * 32 != num_experts:
+        # k/E == 1/32 is claimed at the three Maple-faithful points: R3, M20 and M7B. R1/R2/E8
+        # vary E deliberately -- that variation IS the E-sweep -- so asserting it everywhere
+        # would forbid the experiment. M20 is Maple's literal config, so if this ever fails there
+        # the transcription from `evidence/config.json` is wrong, which is the more valuable
+        # catch. M7B claims the identity too (`maple/plan/m7b-shape.md`: E=256 is *forced* by
+        # k/E = 1/32 once k=8 is forced by k*f_e/d = 2.0), so it is gated here rather than being
+        # a faithfulness claim made only in prose.
+        if rung in ("R3", "M20", "M7B") and top_k * 32 != num_experts:
             problems.append(
-                f"k/E must be 1/32 at R3: got k={top_k}, E={num_experts} "
+                f"k/E must be 1/32 at {rung}: got k={top_k}, E={num_experts} "
                 f"(ratio {top_k / num_experts:.5f})"
             )
 
@@ -1800,6 +1880,45 @@ class TransformerConfig(ModelConfig):
         only **derived** row in the table. It has never been built.
         """
         return cls.maple_scaled(vocab_size, rung="M20", **kwargs)
+
+    @classmethod
+    def maple_m7b(cls, vocab_size: int, **kwargs) -> "TransformerConfig":
+        """M7B, the shape configured for the 7B full-pretraining PoC. d=1536, L=16, E=256.
+
+        Shape **FROZEN 2026-08-10**; `maple/plan/m7b-shape.md` is the authority. It is a
+        ratio-faithful point rather than a scale-down convenience: f_e/d = 1/4 and k*f_e/d = 2.0
+        force k=8, k/E = 1/32 then forces E=256, and n_h*h_d = d with head_dim 128 and L % 4 == 0
+        fix the geometry at 12 heads over 16 layers. Six of Maple's seven identities hold exactly.
+
+        **The one it breaks: d/L = 96.0 against Maple's 85.33, +12.5%.** That is structural, not
+        slack -- **no admissible shape totals exactly 7.00B**, by exhaustive enumeration of the
+        family, and among those that clear it M7B is the smallest at a Maple-like aspect ratio. So
+        7.66B is the floor. Nothing was rounded to get closer to "7B", and nothing should be. Note
+        the spec's *modular* version of this argument is defective -- see the `MAPLE_RUNGS` entry;
+        the conclusion holds but the proof does not, and the parameter integers are unaffected.
+
+        **Why not the d=2048 / L=8 rival**, which at 6.94B is 0.83% closer to 7B: it has **13.0%
+        less transformer-body compute** (289.4M vs 327.2M active body) for only 0.20% lower cost
+        per token, spending the difference on a wider embedding/head pair (2dV = 411.0M vs 308.3M)
+        rather than on computation. It loses depth *and* body compute, so the usual "width buys
+        back what depth loses" trade is unavailable. The compute-allocation argument decided this,
+        **not** aspect ratio -- aspect 256 sits inside Kaplan et al.'s flat region, so depth alone
+        would not have. It survives as a cheap depth-ablation instrument, not as the model.
+
+        **n_kv=3 is intentional** -- GQA 4:1 at n_heads=12 -- and is checked rather than assumed
+        safe; see the `MAPLE_RUNGS` entry for the four separate reasons an odd KV count is inert
+        here, the load-bearing one being that TP is never configured.
+
+        Counts in :data:`MAPLE_EXPECTED_PARAMS`, not here. Like M20's, M7B's row is **derived, not
+        measured** -- this shape has never been constructed on a GPU. **Report bits-per-byte, not
+        raw loss:** V=100,352 against Maple's 151,936 is a 0.415-nat offset before fertility.
+
+        Expectation management, on the record: at the planned 60B tokens this is **94.4 tokens per
+        active param** (183.4 excluding embeddings), against OLMoE-1B-7B's 3,949 at almost exactly
+        this shape. Expect fluent and coherent, **not knowledgeable**; MMLU near random is the
+        predicted outcome rather than a failure.
+        """
+        return cls.maple_scaled(vocab_size, rung="M7B", **kwargs)
 
     @classmethod
     def smallmoe(cls, vocab_size: int, **kwargs) -> "TransformerConfig":
