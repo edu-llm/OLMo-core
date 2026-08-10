@@ -418,7 +418,15 @@ def test_output_init_scaling_reaches_the_forward_pass():
     it compensates for is followed by a scale-invariant final norm, so with the correction off
     the logits are already the baseline's -- which is what
     ``test_init_is_equivalent_to_the_residual_stack_it_replaces`` asserts. What the correction
-    does instead is hold the residual stream well below the baseline's through the early blocks.
+    does instead is hold the residual stream below the baseline's through the early blocks.
+
+    How far below is not a property of the scaling alone. See
+    ``test_the_distortion_is_the_norms_epsilon_and_not_a_reweighting_of_depth``: in a
+    reordered-norm block the factor is absorbed by the norm that follows the module it scales,
+    and what survives is the ``eps`` in ``rsqrt(variance + eps)`` at the sublayers whose
+    pre-norm variance is small enough for it to matter. That is width- and sequence-length
+    dependent, so the threshold below is a loose one and the tight numbers live at the shape
+    they were measured on, in ``.edullm/test_output_init_scaling.py``.
     """
     input_ids = torch.randint(0, VOCAB_SIZE, (2, SEQ_LEN))
     hc = HyperConnectionConfig(n_lanes=4)
@@ -455,14 +463,17 @@ def test_the_scaling_corrects_a_magnitude_the_final_norm_deletes_and_costs_the_e
 
     So the correction does not restore the paper's section 2.3 equivalence to a standard
     residual network -- it is what breaks it. Off, the logits *are* the baseline's to six
-    decimal places. On, at the shipped exponent of 0.5, they are most of a unit away in relative
-    terms, because a per-block factor of ``n ** -0.5`` is not a global rescale the final norm can
-    absorb; it reweights depth against depth, which the sibling test sees as block 1 sitting well
-    under the baseline's residual.
+    decimal places. On, at the shipped exponent of 0.5, they are most of a unit away at this
+    shape.
 
     Arm 4 therefore satisfies the paper's equivalence claim and arm 2 satisfies its
     Implementation paragraph. Both are faithful, to different and incompatible sentences, and H1
     cannot be attributed to the mechanism until they are separated.
+
+    The ``> 0.1`` below is deliberately loose. This shape is 64 wide and reads 16 tokens, and it
+    is one of the places the distortion is largest; the number a document may quote has to come
+    from the model that ran, not from here. See
+    ``test_the_distortion_is_the_norms_epsilon_and_not_a_reweighting_of_depth``.
     """
     input_ids = torch.randint(0, VOCAB_SIZE, (2, SEQ_LEN))
     hc = HyperConnectionConfig(n_lanes=4)
@@ -505,6 +516,51 @@ def test_the_scaling_corrects_a_magnitude_the_final_norm_deletes_and_costs_the_e
         "the same experiment and one of them should be cancelled"
     )
     assert float(on_hidden.norm() / baseline_hidden.norm()) > 1.0
+
+
+def test_the_distortion_is_the_norms_epsilon_and_not_a_reweighting_of_depth():
+    """
+    WHY THE SAME MEASUREMENT WAS QUOTED AT THREE MAGNITUDES IN THREE DOCUMENTS, and the
+    correction to the explanation those documents gave for it.
+
+    They said a per-block ``n ** -0.5`` cannot be absorbed by a norm because it reweights depth
+    against depth. In a pre-norm stack that holds. In this one it does not: a reordered-norm
+    block normalizes *after* its sublayer, so a constant factor on ``attention.w_out`` or
+    ``feed_forward.w2`` is divided straight back out by the very next operation, and the
+    equivalence the correction is supposed to break survives it exactly.
+
+    What does not survive is ``rsqrt(variance + eps)``, which is scale-invariant only while
+    ``variance`` dominates ``eps``. Halving a sublayer's output quarters its variance, and where
+    that lands at or below ``eps`` the norm stops normalizing and the factor passes through. The
+    sublayers that fail are the ones fed the raw embedding stream -- at this shape block 0's
+    attention and feed-forward, at the 370M shape block 0's attention alone.
+
+    So the size of the effect is a fact about the width, the sequence length and ``eps``, not
+    about the number of blocks. Drop ``eps`` far enough and the whole thing goes away, which is
+    what makes it an artifact rather than the depth reweighting it was reported as.
+    """
+    input_ids = torch.randint(0, VOCAB_SIZE, (2, SEQ_LEN))
+    hc = HyperConnectionConfig(n_lanes=4)
+
+    def logits_at(eps: float, exponent: float | None) -> torch.Tensor:
+        hyper_connections = None if exponent is None else replace(hc, output_init_exponent=exponent)
+        model = build_model(build_config(hyper_connections=hyper_connections, layer_norm_eps=eps))
+        with torch.no_grad():
+            return model(input_ids)
+
+    def relative(actual, expected):
+        return float((actual - expected).norm() / expected.norm())
+
+    shipped = relative(logits_at(1e-6, 0.5), logits_at(1e-6, None))
+    exact = relative(logits_at(1e-12, 0.5), logits_at(1e-12, None))
+
+    assert shipped > 0.1, "the shipped epsilon no longer produces the effect these tests explain"
+    assert exact < 1e-4, (
+        "the output-init scaling now survives a norm that is scale-invariant to floating point, "
+        "so it is no longer absorbed by the block's own norm and every document's reading of "
+        "arm 4 -- and of what H1b measures -- has to be revisited"
+    )
+    assert shipped > 1_000 * exact
 
 
 def test_added_flops_keep_the_arms_iso_flop():

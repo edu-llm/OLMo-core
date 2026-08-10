@@ -193,14 +193,23 @@ module exists to expose in somebody else's work.
 the baseline starts. Eq. 14 makes hyper-connections compute exactly what the residual stack
 computes at initialization, and the test suite asserts it — but only with the output-init
 rescale off. Turn the rescale on at the paper's `output_init_exponent=0.5` and a same-seed
-baseline and a same-seed arm 2 differ in their logits by 1.0e+00 in the max, a relative 8.4e-01,
-against 7.2e-07 at exponent 0.0. So arm 2 is two changes away from arm 1, not one: the mechanism
+baseline and a same-seed arm 2 differ in their logits by a relative **0.362**, against under
+1e-06 at exponent 0.0. So arm 2 is two changes away from arm 1, not one: the mechanism
 and a smaller initialization for every attention output projector and second feed-forward
 linear. An H1 gap is therefore attributable to **hyper-connections plus their initialization
 prescription**, and the write-up says exactly that unless arm 4 comes back flat against arm 1 —
 in which case the rescale is doing nothing on its own and H1 can be read as the mechanism.
 This is not a reason to change arm 2, which is the published method and has to stay it. It is a
 reason arm 4 is load-bearing for H1 as well as for H3.
+
+**Correction, 2026-08-10: that relative figure read 8.4e-01 here until today**, against 7.2e-07
+at exponent 0.0. It was measured on the 64-wide, four-layer toy model in
+`src/test/nn/transformer/hyper_connection_test.py` at a sequence length of 16, and quoted as
+though it described `hc_370M`. It does not: at `hc_370M`, on the 4,096-token sequences the
+tranche trained on, the same measurement is **0.362**. What the confound *is* also changed with
+the re-measurement, and [Which arm is faithful](#which-arm-is-faithful-depends-on-which-sentence-of-the-paper-you-read)
+now carries the corrected reading. Arm 4 is still load-bearing; what it is load-bearing *for* is
+narrower than this paragraph used to imply.
 
 Downstream is deliberately not produced in-loop, for the reasons under
 [Where the runs land](#where-the-runs-land-and-what-they-log), so H2b needs the separate
@@ -1699,33 +1708,74 @@ correction is worth stating precisely, because it changes what a null on H1b wou
 The paper makes two claims that cannot both describe one model. §2.3 says a hyper-connection
 network is **equivalent to a standard residual network at initialization**. Its Implementation
 paragraph says to scale the output modules by `n^-0.5`. Measured at `n = 4` on identical seeds,
-with the pre-unembedding hidden captured at the final norm's input:
+**at `hc_370M` and at the 4,096-token sequence length every cell of the tranche trained on**,
+batch 1, init seed 12,536, with the pre-unembedding hidden captured at the final norm's input:
 
 | | pre-unembedding hidden, vs `baseline` | logits, relative to `baseline` |
 | --- | --- | --- |
-| scaling **off** — arm 4 | **exactly 4.0000×** | **1.3e-06** |
-| scaling **on** at 0.5 — `faithful` | 2.618× | 0.73 |
+| scaling **off** — arm 4 | **exactly 4.0000×** | **< 1e-06** |
+| scaling **on** at 0.5 — `faithful` | 3.99× | **0.362** |
+
+**Correction, 2026-08-10. This table read 2.618× and 0.73 until today.** Those came from the
+64-wide, four-layer toy model in `src/test/nn/transformer/hyper_connection_test.py` read at a
+sequence length of 16 — a sixteenth of this model's width and a two-hundred-and-fifty-sixth of
+its sequence length — and were quoted as though they described the model that ran. At `hc_370M`
+the figure is **0.362** over seeds 12,536–12,538 (spread 0.362 to 0.373), and **0.106** if the
+same model is read at a sequence length of 32. Every number in this section now names the shape
+*and* the length it was measured at, because the second turns out to matter as much as the
+first. `.edullm/test_output_init_scaling.py` measures them against the live arm configs and
+parses this document for them.
 
 **The scaling corrects a magnitude that has no effect on the model.** The lane sum is followed by
 an RMSNorm, and RMSNorm is scale-invariant, so a 4× on its input is a 1× on its output. With the
-correction *off* the logits already are the baseline's, to six decimal places. Applying the
-correction is what **breaks** the equivalence, because a per-block `n^-0.5` is not a global
-rescale a norm can absorb — it reweights depth against depth, which is why block 1 reads under
-three quarters of the baseline's residual.
+correction *off* the logits already are the baseline's, to six decimal places. That much is
+unchanged and it is still the point: arm 4, not arm 2, is the model the paper's §2.3 describes.
+
+**What the correction does instead is not what this document said it was.** Until today this
+section said a per-block `n^-0.5` "is not a global rescale a norm can absorb — it reweights depth
+against depth". In a pre-norm stack that is right. In *this* stack it is wrong, and the
+difference is the reordered norm OLMo-2 and OLMo-3 use. A reordered-norm block normalizes
+**after** its sublayer, so a constant factor on `attention.w_out` or `feed_forward.w2` is divided
+straight back out by the very next operation. Three measurements say so:
+
+| at `hc_370M`, 4,096 tokens, seed 12,536 | logits, relative to `baseline` |
+| --- | --- |
+| the scaling, as shipped | 0.362 |
+| the scaling, with every layer norm's `eps` at 1e-12 instead of 1e-6 | **0.00001** |
+| the scaling applied to block 0's attention output **only** | 0.362 |
+| the scaling applied to **every module except** block 0's attention output | 0.002 |
+
+So the whole of it is `eps`, and the whole of it is one weight matrix. RMSNorm computes
+`rsqrt(variance + eps)`, which is scale-invariant only while `variance` dominates `eps`. Exactly
+one sublayer in this model fails that: block 0's attention output, whose input is the raw
+embedding stream and whose pre-norm variance is **3.1e-07 against an `eps` of 1e-06** at 4,096
+tokens. There the norm is not normalizing, so the factor of two passes through. Every other
+sublayer sits three to eight orders of magnitude clear of `eps` and absorbs the scaling exactly.
+The apparent taper across blocks — 0.918× at block 1, 0.994× by block 8, 0.993× at block 15 — is
+one early perturbation being diluted as the stream grows, not a gradient applied across depth.
+
+**Which also means the shape dependence is not depth.** Holding the 370M width and varying only
+depth at 4,096 tokens: 0.319 at 4 layers, 0.346 at 8, 0.362 at 16, 0.379 at 32 — and the block-1
+read is **0.9184× at every one of them, identical to four decimal places**. What moves the number
+is width, through the pre-norm variance (relative distance 0.63 at `d_model` 256, 0.35 at 512,
+0.28 at 1024, 0.23 at 1536, measured at 512 tokens), and sequence length, through the averaging
+that shrinks block 0's attention output (0.108 at 32 tokens, 0.293 at 512, 0.362 at 4,096).
 
 So **arm 4 satisfies the paper's §2.3 and `faithful` satisfies its Implementation paragraph.**
 Both are faithful, to sentences that contradict each other. Arm 4 is not an ablation of arm 2;
 they are two readings of a self-contradicting method description, and the contradiction is the
-experiment.
-
-`src/test/nn/transformer/hyper_connection_test.py` asserts every number in that table, in both
-directions — that off is equivalent, and that on is not — so a change to the scaling that
-silently made the two arms the same experiment fails a test rather than wasting five cells.
-
-The earlier figures in this section were 8.4e-01 and 7.2e-07 and are now 0.73 and 1.3e-06. Both
-pairs are the same measurement at different model shapes and neither is wrong; the conclusion is
-identical and does not depend on which is quoted, which is worth knowing before anyone reconciles
-them.
+experiment. **But what H1b measures is narrower than this document has been claiming.** Because
+the forward function is invariant to the scaling except at that one module, arm 2 and arm 4 begin
+at very nearly the same function, and what actually differs between them for the rest of training
+is that `attention.w_out` and `feed_forward.w2` start at half scale in every block. Under AdamW
+the update size is set by the gradient's own second moment rather than by the weight's magnitude,
+so a weight that starts twice as small takes twice as large a *relative* step — H1b is an
+effective-learning-rate contrast on two module families, plus a transient at block 0 that will
+stop mattering as soon as that activation grows past `eps`. That is a real thing to measure and a
+plausible source of hundredths of a nat. It is not "the paper's initialization prescription
+distorts the model", and it is not evidence about the published sign inversion, because in the
+pre-norm stack both papers most likely used the same scaling gives **0.578** relative and is
+unmoved by `eps` — a genuine intervention that this architecture happens to be immune to.
 
 **That reasoning has the dependency backwards, and the amended σ̂ is what makes it matter.** H1 is
 a joint test of the mechanism and its initialization prescription whatever it returns. At the

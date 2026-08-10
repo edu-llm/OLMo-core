@@ -21,20 +21,31 @@
 # The paper says a hyper-connection network is equivalent to a standard residual network at
 # initialization. Its Implementation paragraph says to scale the output modules by n**-0.5. Those
 # are two different models and only one of them is the equivalence -- and it is this one, not the
-# one the paper ships. Measured at n=4 on identical seeds:
+# one the paper ships. Measured at n=4 on identical seeds, on hc_370M, at the 4,096-token
+# sequence length this run trains at:
 #
 #   scaling OFF (this arm)  pre-unembedding hidden is EXACTLY 4.0000x the baseline's, and the
-#                           logits are the baseline's to ~1e-06 relative. The lane sum is
+#                           logits are the baseline's to under 1e-06 relative. The lane sum is
 #                           followed by a scale-invariant RMSNorm, so the magnitude the
 #                           correction exists to fix has no effect on the function at all.
-#   scaling ON (`faithful`) logits ~0.7 relative from the baseline's, block 1 reading well under
-#                           three quarters of the baseline's residual. A per-block n**-0.5 is not
-#                           a global rescale a norm can absorb; it reweights depth against depth.
+#   scaling ON (`faithful`) logits 0.362 relative from the baseline's, block 1 reading 0.918x of
+#                           the baseline's residual, every later block within a percent of it.
+#
+# CORRECTED 2026-08-10, AND THE CORRECTION CHANGES WHAT H1b MEASURES. Those two figures read
+# "~0.7 relative" and "well under three quarters", taken from a 64-wide four-layer toy model, and
+# the reason given was that a per-block n**-0.5 "reweights depth against depth" and cannot be
+# absorbed by a norm. It can: this block normalizes AFTER its sublayer, so the factor is divided
+# straight back out. Take every eps to 1e-12 and the 0.362 becomes 0.00001; scale block 0's
+# attention output alone and all 0.362 comes back. One sublayer -- block 0's attention, pre-norm
+# variance 3.1e-07 against an eps of 1e-06 -- carries the whole thing. So this arm and `faithful`
+# start from very nearly the same function, and what H1b actually contrasts is two module
+# families starting at half scale, which under AdamW is an effective-learning-rate difference.
+# That is still worth five cells and it is a narrower claim than this file used to make.
 #
 # So the correction does not restore the equivalence, it is what breaks it. This arm satisfies
 # the paper's section 2.3 and `faithful` satisfies its Implementation paragraph; both are
 # faithful, to sentences that contradict each other, and the contradiction is what H1a and H1b
-# are for. `src/test/nn/transformer/hyper_connection_test.py` asserts every number above.
+# are for. `.edullm/test_output_init_scaling.py` asserts every number above.
 #
 # STAGED BEFORE ANY TREATMENT ENDPOINT WAS VISIBLE, 2026-08-10. `run_019fe90b-f99e` had about
 # three hours left and the other two were queuing. Submitted after `baseline`, `faithful` and

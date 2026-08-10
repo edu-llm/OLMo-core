@@ -238,16 +238,24 @@ ARMS: Dict[str, Arm] = {
         "The paper says a hyper-connection network is equivalent to a standard residual network "
         "at initialization; its Implementation paragraph says to scale the output modules by "
         "n**-0.5. Those are different models and only one of them is the equivalence. Measured "
-        "at n=4: with the scaling OFF the pre-unembedding hidden is exactly 4.0000x the "
-        "baseline's and the logits are the baseline's to about 1e-06 relative, because a "
-        "scale-invariant RMSNorm sits between the lane sum and the unembedding, so the "
-        "magnitude the correction exists to fix has no effect on the function. With the "
-        "scaling ON the logits are ~0.7 relative away and block 1 reads well under three "
-        "quarters of the baseline's residual, because a per-block n**-0.5 reweights depth "
-        "against depth and is not a global rescale any norm absorbs. So THIS arm satisfies the "
+        "at n=4 on hc_370M at the 4,096-token sequence length the tranche ran: with the scaling "
+        "OFF the pre-unembedding hidden is exactly 4.0000x the baseline's and the logits are "
+        "the baseline's to under 1e-06 relative, because a scale-invariant RMSNorm sits between "
+        "the lane sum and the unembedding, so the magnitude the correction exists to fix has no "
+        "effect on the function. With the scaling ON the logits are 0.362 relative away and "
+        "block 1 reads 0.918x the baseline's residual. CORRECTED 2026-08-10: those two figures "
+        "read '~0.7 relative' and 'well under three quarters', measured on a 64-wide four-layer "
+        "toy model, and the reason given was that a per-block n**-0.5 'reweights depth against "
+        "depth'. It does not, in a reordered-norm block: the norm sits AFTER the sublayer and "
+        "divides the factor straight back out. Take every eps to 1e-12 and the scaling moves "
+        "the logits by 0.00001; scale block 0's attention output alone and you get all 0.362 of "
+        "it back. One sublayer in this model -- block 0's attention, pre-norm variance 3.1e-07 "
+        "against an eps of 1e-06 -- is where the whole effect lives. So THIS arm satisfies the "
         "paper's equivalence claim and `faithful` satisfies its Implementation paragraph; both "
         "are faithful to a self-contradicting paper and the contradiction is the experiment. "
-        "`hyper_connection_test.py` asserts every number in this paragraph.",
+        "What H1b then measures is mostly an effective-learning-rate difference on two module "
+        "families that start at half scale, not a distorted forward function. "
+        "`test_output_init_scaling.py` asserts every number in this paragraph.",
         seeds=5,
         hyper_connections=_hc(output_init_exponent=0.0),
     ),
