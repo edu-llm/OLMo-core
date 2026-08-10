@@ -12,6 +12,7 @@ reachable without it.
 
 import importlib.util
 import logging
+import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -649,6 +650,182 @@ def test_nothing_is_sent_to_wandb_when_the_platform_named_no_project(monkeypatch
     entry.leave_the_reason_in_wandb(
         run_name="run_x", stage=entry.Stage.TRAINING_ITSELF_FAILED, explanation="whatever"
     )
+
+
+class FakeRun:
+    """One W&B run, with the two summary keys that were destroyed."""
+
+    def __init__(self, run_id: str, name: str, summary: Optional[Dict[str, Any]] = None) -> None:
+        self.id = run_id
+        self.name = name
+        self.summary: Dict[str, Any] = dict(summary or {})
+        self.finished_with: Optional[int] = None
+
+    def finish(self, exit_code: int = 0) -> None:
+        self.finished_with = exit_code
+
+
+class FakeWandB:
+    """A W&B that reproduces the two client behaviours the defect was made of.
+
+    A fake that only recorded the arguments it was handed would pass against the code that
+    clobbered seven summaries, because that code passed nothing wrong -- it passed nothing at
+    all, and the client filled the gap. So both halves of the real semantics are here:
+
+    1. ``init`` with no ``id`` takes one from ``WANDB_RUN_ID``.
+    2. ``init`` landing on an id that already exists replaces that run. The summary starts
+       empty again, which is where ``_step`` and ``_runtime`` went. ``resume="never"`` is the
+       documented way to be refused instead.
+    """
+
+    def __init__(self, existing: Optional[FakeRun] = None) -> None:
+        self.runs: Dict[str, FakeRun] = {existing.id: existing} if existing else {}
+        self.run: Optional[FakeRun] = None
+        self.init_calls: List[Dict[str, Any]] = []
+        self.run_id_visible_to_init: List[Optional[str]] = []
+
+    def init(self, **kwargs: Any) -> FakeRun:
+        self.init_calls.append(kwargs)
+        self.run_id_visible_to_init.append(os.environ.get("WANDB_RUN_ID"))
+        run_id = kwargs.get("id") or os.environ.get("WANDB_RUN_ID") or "wandb-generated"
+        if run_id in self.runs and kwargs.get("resume") == "never":
+            raise RuntimeError(f"run {run_id} already exists and resume is 'never'")
+        fresh = FakeRun(run_id, kwargs.get("name") or run_id)
+        self.runs[run_id] = fresh
+        self.run = fresh
+        return fresh
+
+
+def a_cell_that_trained() -> FakeRun:
+    """Cell 0 of ``run_019fe7bc-53f3`` as W&B held it before the diagnostic reached it.
+
+    3.993 hours and step 4,910, further than any other cell in its arm. Afterwards it read
+    ``step None, runtime 0.0``, which is also what a cell that never started reads, and it was
+    reported to the researcher as one.
+    """
+    return FakeRun(
+        "run_019fe7bc-53f3-cell-0",
+        "run_019fe7bc-53f3",
+        {"_step": 4910, "_runtime": 14375.0, "eval/lm/dclm/BPB": 0.8123},
+    )
+
+
+@pytest.fixture
+def crashing(monkeypatch):
+    """A dying cell: the platform's environment, and a training run already closed."""
+    import types
+
+    monkeypatch.setenv("EDULLM_WANDB_PROJECT", "pre-training")
+    monkeypatch.setenv("WANDB_RUN_ID", "run_019fe7bc-53f3-cell-0")
+    fake = FakeWandB(existing=a_cell_that_trained())
+    module: Any = types.ModuleType("wandb")
+    module.init = fake.init
+    # None by the time `cli` runs: the trainer's W&B callback finalises the run in `on_error`,
+    # which is the whole reason the old code took its `wandb.run is None` branch here and
+    # believed it meant the cell had never reached W&B.
+    module.run = None
+    monkeypatch.setitem(sys.modules, "wandb", module)
+    return fake
+
+
+def test_the_crash_report_does_not_overwrite_the_run_it_is_reporting_on(crashing):
+    """Mutation: drop the ``id`` argument, and ``WANDB_RUN_ID`` fills it in.
+
+    This is the defect itself. The cell had trained for four hours; the diagnostic re-created
+    it under its own id and the summary came back empty, so the analysis -- which reads
+    endpoints out of summaries -- saw a replicate that looked like a crash. Replicates lost
+    this way are not lost at random: it happens to cells that hit a wall.
+    """
+    entry.leave_the_reason_in_wandb(
+        run_name="run_019fe7bc-53f3",
+        stage=entry.Stage.TRAINING_ITSELF_FAILED,
+        explanation="RuntimeError: DataLoader worker killed by signal: Terminated.",
+    )
+
+    cell = crashing.runs["run_019fe7bc-53f3-cell-0"]
+    assert cell.summary["_step"] == 4910, "the diagnostic replaced the training run"
+    assert cell.summary["_runtime"] == pytest.approx(14375.0)
+    assert cell.summary["eval/lm/dclm/BPB"] == pytest.approx(0.8123)
+    assert cell.name == "run_019fe7bc-53f3"
+    assert "edullm_stage" not in cell.summary
+
+    reports = [run for run in crashing.runs.values() if "edullm_stage" in run.summary]
+    assert len(reports) == 1, "the reason has to land somewhere"
+    assert reports[0].id != cell.id
+    assert reports[0].summary["edullm_cell_run_id"] == cell.id
+    assert reports[0].summary["edullm_exit_code"] == int(entry.Stage.TRAINING_ITSELF_FAILED)
+
+
+def test_the_crash_report_cannot_attach_itself_to_a_run_that_already_exists(crashing):
+    """Mutation: pass the id but leave ``resume`` unset, and W&B overwrites on a collision.
+
+    The id being right is a property of this function today; the id being *unable* to be a
+    training run's is a property W&B will enforce on every future edit of it. ``never`` is the
+    documented spelling: "always starts a new run; if a run with the same ID already exists,
+    it will result in failure".
+    """
+    entry.leave_the_reason_in_wandb(
+        run_name="run_019fe7bc-53f3",
+        stage=entry.Stage.TRAINING_ITSELF_FAILED,
+        explanation="whatever",
+    )
+
+    (call,) = crashing.init_calls
+    assert call["resume"] == "never"
+    assert call["id"] == "run_019fe7bc-53f3-cell-0" + entry.CRASH_REPORT_SUFFIX
+    assert call["id"] != os.environ["WANDB_RUN_ID"]
+    assert call["job_type"] == entry.CRASH_REPORT_JOB_TYPE
+    # The tag says what the run is. The one it replaced said "died-before-training" on seven
+    # runs that had trained for hours, which is the sentence that got one of them reported as
+    # a cell that never started.
+    assert entry.CRASH_REPORT_TAG in call["tags"]
+    assert "died-before-training" not in call["tags"]
+
+
+def test_nothing_in_the_environment_can_name_the_run_the_report_lands_on(crashing):
+    """Mutation: keep ``WANDB_RUN_ID`` set across the init, and an explicit id is all that stands.
+
+    Belt and braces on purpose. Which of ``id``, ``WANDB_RUN_ID`` and ``WANDB_RESUME`` wins is
+    a precedence rule inside a client that gets rewritten, and this failure cost seven records
+    the first time. Hiding them costs one context manager and depends on no precedence at all.
+    """
+    entry.leave_the_reason_in_wandb(
+        run_name="run_019fe7bc-53f3", stage=entry.Stage.THE_CONFIG_WOULD_NOT_BUILD, explanation="x"
+    )
+
+    assert crashing.run_id_visible_to_init == [None]
+    # Put back afterwards, because a swallowed diagnostic must leave the process it was called
+    # from exactly as it found it.
+    assert os.environ["WANDB_RUN_ID"] == "run_019fe7bc-53f3-cell-0"
+
+
+def test_a_run_still_open_is_annotated_rather_than_re_created(monkeypatch):
+    """Mutation: init unconditionally, and the open run is replaced by a copy of itself.
+
+    A handle already held can only add keys, so this is the one way of touching the training
+    run that cannot reset it -- and it is better than a second run when it is available,
+    because the reason ends up on the record a reader is already looking at.
+    """
+    import types
+
+    monkeypatch.setenv("EDULLM_WANDB_PROJECT", "pre-training")
+    monkeypatch.setenv("WANDB_RUN_ID", "run_019fe7bc-53f3-cell-0")
+    live = a_cell_that_trained()
+    fake = FakeWandB(existing=live)
+    fake.run = live
+    module: Any = types.ModuleType("wandb")
+    module.init = fake.init
+    module.run = live
+    monkeypatch.setitem(sys.modules, "wandb", module)
+
+    entry.leave_the_reason_in_wandb(
+        run_name="run_019fe7bc-53f3", stage=entry.Stage.TRAINING_ITSELF_FAILED, explanation="why"
+    )
+
+    assert fake.init_calls == []
+    assert live.summary["_step"] == 4910
+    assert live.summary["edullm_explanation"] == "why"
+    assert live.finished_with == int(entry.Stage.TRAINING_ITSELF_FAILED)
 
 
 def write(path: Path, contents: str = "x") -> Path:

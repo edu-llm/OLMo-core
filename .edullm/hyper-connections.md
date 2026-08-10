@@ -2367,8 +2367,84 @@ It took four more cells the same way at their own walls — cell 4 of `run_019fe
 and 3 of `run_019fe7bc-73a6`, whose `startedAt` all post-date their own last system metric — and
 three cells of the stage-1 baseline `run_019fe279-4ef0` carry the same `-died` name from before
 anybody noticed. Seven clobbered summaries and every one of them read as a cell that never trained.
-A diagnostic that destroys the record it is annotating is worth fixing, and until it is, **a cell
-reporting `step None` should be read from its history before it is believed**.
+
+**The cost is not the lost diagnostic, it is the missing replicate.** The analysis reads endpoints
+out of W&B, a clobbered summary looks like a crash, and a replicate excluded for looking like a
+crash is excluded *non-randomly* — it happens to cells that hit a wall, never to cells drawn at
+random. It changes n, it changes the df, and nothing downstream says so.
+
+#### The fix: a report can create a run and can never attach to one
+
+The report now gets a run of its own, at the cell's id with `-died` appended, and two things make
+that a guarantee rather than an intention. The id is passed to `wandb.init` explicitly, and
+`WANDB_RUN_ID`, `WANDB_RESUME` and `WANDB_NAME` are out of the environment while it runs, so no
+precedence rule inside a client that gets rewritten can put the cell's id back. And `resume="never"`
+is W&B's own instruction to *fail* rather than attach if a run with that id already exists — so a
+future edit that got the id wrong would be refused instead of quietly overwriting a training
+record. The cost is one case: a second attempt that also dies finds its own report already there
+and is refused, leaving the first attempt's, which is on stderr either way.
+
+Appending to the cell's id rather than replacing it is what keeps `…-cell-3-died` readable as cell
+3, so a report is still placed in cell position by anything that addresses cells by index. Where
+the training run is still open in the process the reason goes into it instead: a write through a
+handle already held adds keys and creates nothing, which is the one way of touching the training
+run that cannot reset it. The tag `died-before-training` is gone — it was the sentence that made a
+four-hour cell read as one that never started — and `edullm-crash-report` says what the run is
+while the stage tag beside it says when.
+
+The two runs this was always for are unharmed and are the control: `run_019fdf85-b356` and
+`run_019fdfcf-0822` carry a `-died` name, no config and no history, because they really did die
+before the trainer reached W&B. There was nothing there to overwrite.
+
+#### What is recoverable, and it is everything that matters
+
+`lastHistoryStep` is the recovery and it is a field rather than a scan — W&B keeps it beside the
+history, and on an intact run it equals the summary's `_step`, which is what makes it safe to
+prefer. All seven cells keep their full per-step history, their saved config and their held-out
+evaluations:
+
+| submission | arm | cell | seed | step, from history | runtime | held-out evaluations |
+| --- | --- | --- | --- | --- | --- | --- |
+| `run_019fe279-4ef0` | `baseline` (stage 1) | 0 | 0 | 910 | 2.13 h | 2 |
+| `run_019fe279-4ef0` | `baseline` (stage 1) | 1 | 1 | 915 | 2.12 h | 2 |
+| `run_019fe279-4ef0` | `baseline` (stage 1) | 3 | 3 | 900 | 2.13 h | 2 |
+| `run_019fe7bc-53f3` | `output-only` | 0 | 0 | **4,910** | 3.99 h | 10 |
+| `run_019fe7bc-53f3` | `output-only` | 4 | 4 | 4,835 | 3.99 h | 10 |
+| `run_019fe7bc-73a6` | `mhc` | 1 | 1 | 4,565 | 3.99 h | 10 |
+| `run_019fe7bc-73a6` | `mhc` | 3 | 3 | 4,580 | 3.99 h | 10 |
+
+**All seven cells are usable data and none of them was ever missing from a noise floor**, because
+`read_seed_series` takes its per-source endpoints from `scan_history` and not from the summary. Each
+of the four treatment cells carries the same ten evaluations to step 4,500 that its intact siblings
+do, so both arms read at five seeds and df 4, not three and df 2. What was wrong was every number
+*about* those runs: `step None`, `runtime 0.0`, and a name saying they died before training.
+
+Genuinely lost, and not worth chasing: the summary's own copy of the final metric values, which the
+history holds anyway; the display name; and the run's W&B metadata, so `gpu` reads empty and
+`startedAt` is the crash process's clock. The card is the one thing a reader might want from that,
+and every cell of a submission runs on the same shape, so a sibling names it.
+
+#### What the analysis does now when it meets one
+
+Nothing rewrites W&B. The recovery is in the readers:
+
+- `noise_floor` records `summary_step` and `history_step` separately, prefers the history where the
+  summary has none, and prints which cells it had to recover and from what. `excluded()` is the
+  complement of `contributing()`: every run that is dropped is now named with the reason it was
+  dropped, and any exclusion is a `provisional` reason, which is what `--freeze` refuses on. A
+  reading short a replicate can no longer be written into the frozen artifact.
+- `stage_gate` recovers both the step and the held-out source list from history. This one was a
+  silent skip rather than a wrong number: the per-cell held-out check runs over the cells that have
+  sources, so a cell whose summary lost its `eval/lm/*` keys was not failed, it was passed over.
+- `tranche_watch` recovers the step from `lastHistoryStep`, which arrives with the run object and so
+  costs a poller nothing, and reads `…-cell-N-died` as a report against cell N rather than as a cell.
+
+**A report test that reads only the metadata deletes the runs it is meant to rescue**, and this was
+caught by running it: the seven clobbered cells carry `job_type: crash` *themselves*, because the
+report was written onto them. Filtering reports out of an arm on `job_type` alone dropped cells 0
+and 4 of `run_019fe7bc-53f3` and turned a five-cell submission into a three-cell one — the original
+failure, one layer up and with the fix's name on it. A run that logged a step trained, whatever its
+metadata was overwritten to say, so `is_crash_report` will not call anything with history a report.
 
 ## What the lane arms cost, measured on the arms themselves
 

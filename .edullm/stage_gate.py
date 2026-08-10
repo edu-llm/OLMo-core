@@ -58,7 +58,7 @@ import statistics
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
@@ -430,6 +430,16 @@ class CellHealth:
     cell: int
     state: str
     step: int
+    summary_lost_its_step: bool = False
+    """
+    Whether :attr:`step` had to be recovered from the history because the summary had none.
+
+    True on the seven cells whose summaries a crash report overwrote. Kept as a field rather
+    than folded into the step, because "step 4,910, recovered" and "step 4,910" are the same
+    number and not the same statement: only one of them tells a reader that this run's summary
+    is not to be believed about anything else either.
+    """
+
     init_seed: Optional[int] = None
     model_init_seed: Optional[int] = None
     data_seed: Optional[int] = None
@@ -589,6 +599,28 @@ def seeds_are_distinct(cells: Sequence[CellHealth]) -> Tuple[bool, str]:
     )
 
 
+def _held_out_sources(keys: Iterable[str], ending: str) -> Tuple[str, ...]:
+    """
+    The held-out sources named by whichever set of metric keys is handed over.
+
+    Called with the summary's keys and then, where those hold none, with the history's -- see
+    :func:`_read_one`. Both spellings of the same fact, and only one of them can be destroyed
+    by a run that re-initialises W&B under an id it did not own.
+
+    :param keys: Metric key names.
+    :param ending: ``/CE loss`` or ``/BPB``.
+
+    :returns: The source names, sorted.
+    """
+    return tuple(
+        sorted(
+            str(key).split("/")[2]
+            for key in keys
+            if str(key).startswith("eval/lm/") and str(key).endswith(ending)
+        )
+    )
+
+
 def read_cells(
     entity: str, project_name: str, run_id: str, cells: int, eval_interval: int
 ) -> List[CellHealth]:
@@ -627,20 +659,6 @@ def _read_one(run, index: int, eval_interval: int) -> CellHealth:
     model = config.get("model") if isinstance(config.get("model"), dict) else {}
     loader = config.get("data_loader") if isinstance(config.get("data_loader"), dict) else {}
 
-    summary_keys = [k for k in run.summary.keys() if not str(k).startswith("_")]
-    sources = tuple(
-        sorted(
-            k.split("/")[2]
-            for k in summary_keys
-            if k.startswith("eval/lm/") and k.endswith("/CE loss")
-        )
-    )
-    bpb = tuple(
-        sorted(
-            k.split("/")[2] for k in summary_keys if k.startswith("eval/lm/") and k.endswith("/BPB")
-        )
-    )
-
     # NO ``keys=`` FILTER, AND THAT IS NOT LAZINESS. Asking ``scan_history`` for a named list
     # returns zero rows on a *running* run as soon as the list contains
     # "throughput/in-loop eval time (s)" -- the same call against the same key returns rows
@@ -649,6 +667,23 @@ def _read_one(run, index: int, eval_interval: int) -> CellHealth:
     # live, and it would report a healthy fan-out as one with no losses and no z-loss. The
     # unfiltered scan is also cheap: a finished 6,000-step cell is a few thousand rows.
     rows = list(run.scan_history(page_size=2000))
+
+    # THE SUMMARY FIRST AND THE HISTORY WHERE THE SUMMARY HAS NOTHING, WHICH IS NOT THE SAME
+    # AS BEING CAREFUL. Seven cells have a summary a crash report overwrote: no ``_step``, no
+    # ``eval/lm/*`` keys, and a history holding every one of them. Read from the summary alone
+    # those cells report step 0 and no held-out sources, and the per-cell checks below run
+    # over `evaluated`, so a cell with no sources is not failed -- it is skipped. That is a
+    # gate quietly deciding on four cells while saying five. The history is not overwritable
+    # and it is already in hand here, so both are recovered from it.
+    summary_keys = list(run.summary.keys())
+    history_keys = {key for row in rows for key in row}
+    sources = _held_out_sources(summary_keys, "/CE loss") or _held_out_sources(
+        history_keys, "/CE loss"
+    )
+    bpb = _held_out_sources(summary_keys, "/BPB") or _held_out_sources(history_keys, "/BPB")
+
+    summary_step = run.summary.get("_step")
+    history_step = max((int(r["_step"]) for r in rows if r.get("_step") is not None), default=-1)
 
     losses = [r["train/CE loss"] for r in rows if r.get("train/CE loss") is not None]
     finite = [x for x in losses if math.isfinite(x)]
@@ -701,7 +736,8 @@ def _read_one(run, index: int, eval_interval: int) -> CellHealth:
     return CellHealth(
         cell=index,
         state=run.state,
-        step=int(run.summary.get("_step") or 0),
+        step=int(summary_step) if summary_step is not None else max(history_step, 0),
+        summary_lost_its_step=summary_step is None and history_step >= 0,
         init_seed=config.get("init_seed"),
         model_init_seed=model.get("init_seed"),
         data_seed=loader.get("seed"),
@@ -765,8 +801,19 @@ def report(
         print(
             f"{c.cell:>4}  {c.state:<9} {c.step:>6}  {str(c.model_init_seed):>4}  "
             f"{c.evaluations:>5}  {loss:>17}  {st}"
+            + ("  [step and sources from history]" if c.summary_lost_its_step else "")
         )
     print()
+
+    overwritten = [c for c in cells if c.summary_lost_its_step]
+    if overwritten:
+        print(
+            "cell(s) "
+            + ", ".join(str(c.cell) for c in overwritten)
+            + " have a W&B summary carrying no step, so everything above about them was read "
+            "from their history instead. Their summaries were overwritten and are not evidence "
+            "of anything, in either direction -- least of all that the cell never started.\n"
+        )
 
     failures: List[str] = []
     holds: List[str] = []
@@ -909,10 +956,18 @@ def report(
             continue
         datasheet = peak_bf16_flops(c.device_name)
         if datasheet is None:
-            print(
-                f"[mfu]          FAIL  cell {c.cell}: '{c.device_name}' is not a part this "
-                "module has a dense BF16 figure for, so its MFU cannot be checked"
+            # A CELL WHOSE SUMMARY WENT ALSO LOST ITS METADATA, AND THE TWO REFUSALS READ THE
+            # SAME WHILE MEANING OPPOSITE THINGS. "This card is not in the table" is a gap in
+            # the table; "the metadata was overwritten" is a gap in the record, and the card
+            # is whatever its siblings in the same fan-out report. Only the first is a reason
+            # to distrust the run.
+            why = (
+                "its W&B metadata was overwritten along with its summary, so the card it ran "
+                "on is not recorded here -- read it off a sibling cell of the same submission"
+                if c.summary_lost_its_step
+                else f"'{c.device_name}' is not a part this module has a dense BF16 figure for"
             )
+            print(f"[mfu]          FAIL  cell {c.cell}: {why}, so its MFU cannot be checked")
             failures.append(
                 f"cell {c.cell} ran on '{c.device_name}', which matches no entry in "
                 "DENSE_BF16_PEAK_FLOPS -- and which SpeedMonitorCallback's `else` therefore "

@@ -222,6 +222,37 @@ def read_failure(exc: BaseException) -> Stage:
     return Stage.THE_READER_FAILED_IN_SOME_OTHER_WAY
 
 
+#: What a crash report's W&B run id and display name end in, so that one sorts beside the run
+#: it is about and never lands on it. Appended to the *cell's* id rather than replacing it, so
+#: ``...-cell-3-died`` still says which cell of the fan-out died and every tool that addresses
+#: cells by index can place it. ``noise_floor`` and ``tranche_watch`` read the same constant.
+CRASH_REPORT_SUFFIX = "-died"
+
+#: ``job_type`` on a crash report, which is how a reader that has only the run object can tell
+#: one from a cell without parsing its id.
+CRASH_REPORT_JOB_TYPE = "crash"
+
+#: The tag every crash report carries. It says what the run *is* and not when the death
+#: happened, which the tag it replaced -- ``died-before-training`` -- claimed on seven runs
+#: that had trained for four hours. The stage tag beside it is where the timing actually is.
+CRASH_REPORT_TAG = "edullm-crash-report"
+
+#: Everything the wandb client reads to decide which run ``init`` attaches to. The platform
+#: sets ``WANDB_RUN_ID`` for every cell, and the whole of this defect was ``init`` picking it
+#: up unasked, so the crash report is built with all three out of the environment.
+_ENV_VARS_THAT_NAME_A_RUN = ("WANDB_RUN_ID", "WANDB_RESUME", "WANDB_NAME")
+
+
+@contextlib.contextmanager
+def _without(*names: str) -> Iterator[None]:
+    """Hide these environment variables for the duration of the block, then put them back."""
+    held = {name: os.environ.pop(name) for name in names if name in os.environ}
+    try:
+        yield
+    finally:
+        os.environ.update(held)
+
+
 def leave_the_reason_in_wandb(*, run_name: str, stage: Stage, explanation: str) -> None:
     """Put the traceback where the researcher already looks, since the log is unreachable.
 
@@ -230,9 +261,32 @@ def leave_the_reason_in_wandb(*, run_name: str, stage: Stage, explanation: str) 
     initialises well after the corpus is resolved -- so the runs that most need explaining are
     exactly the ones that leave nothing behind.
 
-    This creates a run of its own for that case, named after the platform run id and tagged so
-    it sorts away from real training. If training itself failed there is already a run open and
-    the reason is written into that one instead of beside it.
+    THIS USED TO DESTROY THE RECORD IT WAS ANNOTATING, AND THAT IS WHAT THE ``id`` AND THE
+    ``resume`` ARGUMENT BELOW ARE FOR. ``wandb.init`` with no ``id`` takes one from
+    ``WANDB_RUN_ID``, which the platform sets on every cell, so the report was not created
+    *beside* the cell but *as* it: same id, renamed to ``...-died``, and a fresh summary in
+    place of the one the run had earned. Seven cells across the treatment tranche and stage 1
+    were taken that way. One of them had trained 3.993 hours and reached step 4,910, further
+    than any other cell in its arm, and afterwards read ``step None, runtime 0.0`` -- which is
+    also exactly what a cell that never started reads, so it was reported as one.
+
+    That is worse than losing the diagnostic. The analysis reads endpoints out of W&B, a
+    clobbered summary looks like a crash rather than a replicate, and a replicate dropped for
+    looking like a crash is dropped *non-randomly*: it happens to the cells that ran into a
+    wall, never to cells picked at random. It changes n, it changes the df, and nothing
+    downstream says so.
+
+    So the report gets a run of its own, and two things make that a guarantee rather than an
+    intention. The id is passed explicitly, derived from the cell's by appending
+    :data:`CRASH_REPORT_SUFFIX`. And ``resume="never"`` tells W&B to refuse rather than attach
+    if a run with that id already exists -- so even a future edit that got the id wrong would
+    fail loudly instead of quietly overwriting a training record. The cost of that is one
+    case: a second attempt that also dies finds its own report already there and is refused,
+    leaving the first attempt's, which is on stderr either way. Worth it.
+
+    If the training run is still open in this process the reason goes into it instead, because
+    a write through a handle already held adds keys and creates nothing. That is the one
+    version of touching the training run that cannot reset it.
 
     Every failure in here is swallowed. A diagnostic that replaces the error it was reporting
     with its own is worse than no diagnostic, and W&B is reachable over a network that a
@@ -247,17 +301,27 @@ def leave_the_reason_in_wandb(*, run_name: str, stage: Stage, explanation: str) 
         # Through the environment rather than through Settings, whose accepted fields move
         # between wandb versions. A default here only applies if nothing else set one.
         os.environ.setdefault("WANDB_INIT_TIMEOUT", "60")
+        cell = os.environ.get("WANDB_RUN_ID", "")
         run = wandb.run
         if run is None:
-            run = wandb.init(
-                project=project,
-                name=f"{run_name}-died",
-                job_type="crash",
-                tags=["died-before-training", stage.name.lower().replace("_", "-")],
-            )
+            with _without(*_ENV_VARS_THAT_NAME_A_RUN):
+                run = wandb.init(
+                    project=project,
+                    # None only when nothing named a run to begin with -- somebody running the
+                    # image by hand -- and then there is no record to land on and W&B may pick.
+                    id=f"{cell}{CRASH_REPORT_SUFFIX}" if cell else None,
+                    name=f"{run_name}{CRASH_REPORT_SUFFIX}",
+                    job_type=CRASH_REPORT_JOB_TYPE,
+                    resume="never",
+                    tags=[CRASH_REPORT_TAG, stage.name.lower().replace("_", "-")],
+                )
         run.summary["edullm_stage"] = stage.name
         run.summary["edullm_exit_code"] = int(stage)
         run.summary["edullm_explanation"] = explanation
+        # Which run this is about, said in the one identifier that is stable. A display name
+        # is not: these are the runs whose names get edited, and the cells of a fan-out share
+        # one anyway.
+        run.summary["edullm_cell_run_id"] = cell
         run.finish(exit_code=int(stage))
     except BaseException as exc:  # noqa: BLE001 -- see the docstring
         print(f"could not leave the reason in W&B: {type(exc).__name__}: {exc}", file=sys.stderr)

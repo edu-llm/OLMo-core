@@ -37,8 +37,8 @@ import datetime as _dt
 import os
 import re
 import sys
-from dataclasses import dataclass
-from typing import List, Optional, Sequence
+from dataclasses import dataclass, replace
+from typing import Dict, List, Optional, Sequence
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
@@ -52,6 +52,11 @@ WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "pre-training")
 #: How a fan-out cell's W&B run id ends. The platform run id is the prefix and every cell of
 #: one submission shares it.
 CELL_SUFFIX = re.compile(r"^(?P<submission>.+)-cell-(?P<index>\d+)$")
+
+#: How the crash report filed *beside* a cell ends. ``train_on_corpus`` appends ``-died`` to
+#: the cell's own id rather than replacing it, which is what keeps the cell index readable
+#: here: a report is a run of its own and it still knows which cell of the fan-out it is about.
+CELL_CRASH_SUFFIX = re.compile(r"^(?P<submission>.+)-cell-(?P<index>\d+)-died$")
 
 
 @dataclass(frozen=True)
@@ -67,6 +72,18 @@ class CellProgress:
 
     labelled_arm: Optional[str] = None
     """What the caller said this submission was, if anything."""
+
+    summary_lost_its_step: bool = False
+    """
+    Whether :attr:`step` came from the history because the summary had none.
+
+    True on the seven cells a crash report overwrote before it was fixed to file beside a run
+    rather than on top of one. Their summaries read ``_step: None``, which is also what a cell
+    that never started reads -- and one of them, at step 4,910, was reported as exactly that.
+    """
+
+    died_with: Optional[str] = None
+    """The stage from this cell's crash report, where one was filed."""
 
     @property
     def arm(self) -> str:
@@ -104,39 +121,72 @@ def cells_of(
     and it is not even stable, since the L40S submission's three cells were all renamed to
     ``...-died`` after they were cancelled. The id is what the platform assigned.
 
+    THE STEP IS READ FROM THE SUMMARY AND THEN, WHERE THE SUMMARY HAS NONE, FROM THE HISTORY.
+    Not defensiveness: seven cells have a summary that a crash report overwrote, and they read
+    ``step None`` here while their history holds every step they ran. ``lastHistoryStep``
+    arrives with the run object, so the recovery costs no extra request and is safe in a
+    poller.
+
     :param run_prefix: The platform run id, or a unique prefix of it.
     :param labelled_arm: What the caller says this submission is, used only for a cell that
         has not logged a config yet.
     :param entity: W&B entity.
     :param project: W&B project.
 
-    :returns: One :class:`CellProgress` per cell that has logged anything, in cell order.
+    :returns: One :class:`CellProgress` per cell that has logged anything or left a crash
+        report, in cell order.
     """
     import wandb
 
     api = wandb.Api(timeout=120)
-    found: List[CellProgress] = []
+    found: Dict[int, CellProgress] = {}
+    reports: Dict[int, str] = {}
     for run in api.runs(f"{entity}/{project}", per_page=200):
-        match = CELL_SUFFIX.match(run.id)
+        crash = CELL_CRASH_SUFFIX.match(run.id)
+        match = crash or CELL_SUFFIX.match(run.id)
         if not match or not match.group("submission").startswith(run_prefix):
+            continue
+        index = int(match.group("index"))
+        if crash is not None:
+            reports[index] = str(run.summary.get("edullm_stage") or "died")
             continue
         config = run.config or {}
         model = config.get("model") if isinstance(config.get("model"), dict) else {}
         step = run.summary.get("_step")
-        found.append(
-            CellProgress(
-                index=int(match.group("index")),
-                state=run.state,
-                step=int(step) if step is not None else -1,
-                seed=model.get("init_seed", config.get("init_seed")),
-                # An empty config means the cell has started but not yet written one, so
-                # `arms_consistent_with` would answer "every arm without lanes" from no
-                # evidence. That is exactly the case the caller's label is kept for.
-                arms=arms_consistent_with(config) if model else (),
+        history_step = getattr(run, "lastHistoryStep", None)
+        recovered = int(history_step) if isinstance(history_step, (int, float)) else -1
+        found[index] = CellProgress(
+            index=index,
+            state=run.state,
+            step=int(step) if step is not None else recovered,
+            seed=model.get("init_seed", config.get("init_seed")),
+            # An empty config means the cell has started but not yet written one, so
+            # `arms_consistent_with` would answer "every arm without lanes" from no
+            # evidence. That is exactly the case the caller's label is kept for.
+            arms=arms_consistent_with(config) if model else (),
+            labelled_arm=labelled_arm,
+            summary_lost_its_step=step is None and recovered >= 0,
+        )
+
+    for index, stage in reports.items():
+        cell = found.get(index)
+        found[index] = (
+            replace(cell, died_with=stage)
+            if cell is not None
+            # A cell that died before the trainer reached W&B has a report and no run of its
+            # own. Kept in cell position anyway: "logged nothing" is what a cell still queuing
+            # for capacity says, and a dead one is not that.
+            else CellProgress(
+                index=index,
+                state="died",
+                step=-1,
+                seed=None,
+                arms=(),
                 labelled_arm=labelled_arm,
+                died_with=stage,
             )
         )
-    return sorted(found, key=lambda c: c.index)
+    return sorted(found.values(), key=lambda c: c.index)
 
 
 def _bar(step: int, total: int, width: int = 24) -> str:
@@ -167,9 +217,22 @@ def render(
     for cell in cells:
         pct = 100.0 * cell.step / total_steps if total_steps and cell.step >= 0 else 0.0
         label = f"cell {cell.index} seed {cell.seed} {cell.arm}"
+        note = f"  died: {cell.died_with}" if cell.died_with else ""
+        note += "  [step from history]" if cell.summary_lost_its_step else ""
         lines.append(
             f"   {label:38} {cell.state:9} step {cell.step:>6}/{total_steps} "
-            f"{_bar(cell.step, total_steps)} {pct:5.1f}%"
+            f"{_bar(cell.step, total_steps)} {pct:5.1f}%{note}"
+        )
+
+    recovered = [c for c in cells if c.summary_lost_its_step]
+    if recovered:
+        lines.append(
+            "   "
+            + ", ".join(f"cell {c.index}" for c in recovered)
+            + " read step None from their summary and the number above came from their "
+            "history instead. A summary can be overwritten and a history cannot, so believe "
+            "the history; step None on its own is indistinguishable from a cell that never "
+            "started, and one cell at step 4,910 was reported as one."
         )
 
     contradicted = [c for c in cells if c.contradicts_label]

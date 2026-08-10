@@ -11,10 +11,20 @@ import re
 
 import pytest
 import tranche_watch
-from tranche_watch import CELL_SUFFIX, CellProgress, render
+from tranche_watch import CELL_CRASH_SUFFIX, CELL_SUFFIX, CellProgress, render
 
 
-def cell(index, *, arms=("baseline",), label=None, step=1000, state="running", seed=None):
+def cell(
+    index,
+    *,
+    arms=("baseline",),
+    label=None,
+    step=1000,
+    state="running",
+    seed=None,
+    recovered=False,
+    died_with=None,
+):
     return CellProgress(
         index=index,
         state=state,
@@ -22,6 +32,8 @@ def cell(index, *, arms=("baseline",), label=None, step=1000, state="running", s
         seed=index if seed is None else seed,
         arms=tuple(arms),
         labelled_arm=label,
+        summary_lost_its_step=recovered,
+        died_with=died_with,
     )
 
 
@@ -43,6 +55,22 @@ class TestCellIdParsing:
         ``...-died`` after they were cancelled. Only the id carries the cell index.
         """
         assert CELL_SUFFIX.match("run_019fe279-4ef0-7035-9432-4e24d23fba97-died") is None
+
+    def test_a_crash_report_is_read_as_a_report_and_never_as_a_cell(self):
+        """
+        The report is filed at the cell's id with ``-died`` appended, so it still says which
+        cell it is about -- and it must not be counted as one, or a five-cell fan-out with two
+        deaths reports seven cells.
+        """
+        report = "run_019fe7bc-53f3-7081-8306-42fdfc376459-cell-0-died"
+        assert CELL_SUFFIX.match(report) is None
+        got = CELL_CRASH_SUFFIX.match(report)
+        assert got is not None
+        assert got.group("submission") == "run_019fe7bc-53f3-7081-8306-42fdfc376459"
+        assert int(got.group("index")) == 0
+
+    def test_a_live_cell_is_not_read_as_a_crash_report(self):
+        assert CELL_CRASH_SUFFIX.match("run_019fe2f4-f528-70a8-9242-d22f358ede0a-cell-0") is None
 
 
 class TestArmIdentification:
@@ -132,6 +160,45 @@ class TestRender:
     def test_the_percentage_is_the_step_over_the_horizon(self, step, expected):
         got = render("run_x", [cell(0, step=step)], 1, 6000)
         assert re.search(rf"{expected:5.1f}%", got)
+
+    def test_a_step_recovered_from_history_is_shown_and_said_to_be_recovered(self):
+        """
+        The number on its own would be a quiet correction. What a reader needs is that this
+        cell's summary is not evidence about anything -- it was overwritten, and reading
+        ``step None`` off it is how a cell at 4,910 was reported as one that never started.
+        """
+        got = render("run_x", [cell(0, step=4910, recovered=True)], 5, 6000)
+        assert "step   4910/6000" in got
+        assert "[step from history]" in got
+        assert "cell 0 read step None from their summary" in got
+
+    def test_an_ordinary_cell_says_nothing_about_history(self):
+        got = render("run_x", [cell(0, step=4910)], 5, 6000)
+        assert "history" not in got
+
+    def test_a_cell_that_left_only_a_crash_report_is_kept_in_cell_position(self):
+        """
+        It has no run of its own, and "logged nothing" is what a cell still queuing for
+        capacity says. A dead cell and a slow one are the distinction this watcher exists for.
+        """
+        got = render(
+            "run_x",
+            [
+                cell(0),
+                cell(
+                    1,
+                    state="died",
+                    step=-1,
+                    seed=None,
+                    arms=(),
+                    died_with="THE_CONFIG_WOULD_NOT_BUILD",
+                ),
+            ],
+            5,
+            6000,
+        )
+        assert "died: THE_CONFIG_WOULD_NOT_BUILD" in got
+        assert "2/5 cells reporting" in got
 
 
 def test_a_transient_does_not_kill_the_watcher(monkeypatch):

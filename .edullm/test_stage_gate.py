@@ -432,6 +432,52 @@ class TestArmFromConfig:
         assert stage_gate.arms_consistent_with({}) != ()
 
 
+class TestASummaryThatWasOverwritten:
+    """
+    A crash report that re-initialised W&B under a cell's own id took the summary with it, on
+    seven cells. What is left there is no ``_step`` and no ``eval/lm/*`` keys, and the gate
+    reads both from the summary -- so such a cell arrives at step 0 with no held-out sources,
+    and the per-cell held-out check runs over ``[c for c in cells if c.sources]`` and therefore
+    does not fail it. It skips it. The history holds every one of those keys.
+    """
+
+    def test_the_sources_are_found_in_the_history_when_the_summary_holds_none(self):
+        rows = [
+            {"_step": 500, "eval/lm/dclm/CE loss": 2.6, "eval/lm/dclm/BPB": 0.81},
+            {"_step": 500, "eval/lm/wiki/CE loss": 2.4, "eval/lm/wiki/BPB": 0.76},
+        ]
+        keys = {key for row in rows for key in row}
+        assert stage_gate._held_out_sources(keys, "/CE loss") == ("dclm", "wiki")
+        assert stage_gate._held_out_sources(keys, "/BPB") == ("dclm", "wiki")
+
+    def test_a_summary_that_has_them_is_still_what_is_read(self):
+        summary = ["_step", "eval/lm/arxiv/CE loss", "eval/lm/arxiv/BPB", "train/CE loss"]
+        assert stage_gate._held_out_sources(summary, "/CE loss") == ("arxiv",)
+
+    def test_nothing_anywhere_is_no_sources_rather_than_an_error(self):
+        assert stage_gate._held_out_sources([], "/CE loss") == ()
+        assert stage_gate._held_out_sources(["train/CE loss"], "/CE loss") == ()
+
+    def test_the_gate_says_which_cells_it_had_to_read_from_history(self, capsys):
+        cells = [
+            CellHealth(cell=0, state="failed", step=4910, summary_lost_its_step=True),
+            CellHealth(cell=1, state="failed", step=4995),
+        ]
+        stage_gate.report(cells, expected_cells=5, arm_name="output-only", bound_hours=6.0)
+        printed = capsys.readouterr().out
+        assert "[step and sources from history]" in printed
+        assert "cell(s) 0 have a W&B summary carrying no step" in printed
+
+    def test_a_gate_over_intact_cells_says_nothing_about_history(self, capsys):
+        stage_gate.report(
+            [CellHealth(cell=0, state="running", step=500)],
+            expected_cells=5,
+            arm_name="baseline",
+            bound_hours=6.0,
+        )
+        assert "from history" not in capsys.readouterr().out
+
+
 def test_the_self_test_passes():
     assert stage_gate.self_test() == 0
 

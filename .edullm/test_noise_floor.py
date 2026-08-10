@@ -880,6 +880,143 @@ def test_provisional_reasons_name_every_way_a_reading_is_not_the_answer(
     assert len(nf.provisional_reasons(n_seeds, final_step, 6000)) == expected
 
 
+# ---------------------------------------------------------------------------------------
+# A summary a crash report overwrote, and the history that outlived it.
+# ---------------------------------------------------------------------------------------
+
+
+class FakeRun:
+    """A W&B run reduced to the three things this recovery reads."""
+
+    def __init__(self, run_id, summary, last_history_step, job_type=None):
+        self.id = run_id
+        self.summary = summary
+        self.lastHistoryStep = last_history_step  # noqa: N815 -- the public API's own spelling
+        self.job_type = job_type
+
+
+@pytest.mark.parametrize(
+    "run_id, job_type, history_step, expected",
+    [
+        (f"{A100}-cell-0", None, 6000, False),
+        (f"{A100}-cell-0-died", None, -1, True),
+        # job_type answers for the reports written before the id convention existed, which
+        # logged nothing.
+        ("run_019fdf85-b356-7060-be18-c5fcd4119776", "crash", -1, True),
+        ("run_019fdf85-b356-7060-be18-c5fcd4119776", None, -1, False),
+    ],
+)
+def test_a_crash_report_is_not_a_cell_of_any_arm(run_id, job_type, history_step, expected):
+    """
+    A report carries no model config, and a config with no hyper-connection block is exactly
+    how ``_arm_of`` spells ``baseline``. Left in, the diagnostic filed against a dead ``mhc``
+    cell arrives in the baseline arm as a seed-0 replicate with nothing in it.
+    """
+    assert nf.is_crash_report(run_id, job_type, history_step) is expected
+
+
+def test_a_cell_the_report_was_written_on_top_of_is_still_a_cell():
+    """
+    THIS EXACT FILTER DELETED TWO REPLICATES WHEN IT WAS FIRST WRITTEN, and it did it silently,
+    which is the same failure the filter was added to stop. The seven clobbered cells carry
+    ``job_type: crash`` themselves -- the report was written onto them, and that is the whole
+    defect -- so a report test that reads only the metadata deletes precisely the runs being
+    rescued. Cells 0 and 4 of ``run_019fe7bc-53f3`` disappeared from their own arm and it read
+    as a three-cell submission.
+    """
+    clobbered_cell = "run_019fe7bc-53f3-cell-0"
+    assert nf.is_crash_report(clobbered_cell, "crash", 4910) is False
+    assert nf.is_crash_report(clobbered_cell, "crash", -1) is True, "with no history it is one"
+
+
+def test_the_step_is_recovered_from_the_history_when_the_summary_has_lost_it():
+    """
+    Cell 0 of ``run_019fe7bc-53f3`` as W&B holds it now: 3.993 hours and step 4,910 in the
+    history, and a summary its own crash report replaced. Read from the summary it is
+    ``step None``, which is also what a cell that never started reads -- and it was reported
+    as one, having gone further than any other cell in its arm.
+    """
+    clobbered = FakeRun("x-cell-0", {"_runtime": 0}, 4910)
+    assert nf.steps_from_summary_and_history(clobbered) == (None, 4910)
+
+    intact = FakeRun("x-cell-3", {"_step": 4995, "_runtime": 14376.1}, 4995)
+    assert nf.steps_from_summary_and_history(intact) == (4995, 4995)
+
+    never_started = FakeRun("x-cell-2", {}, -1)
+    assert nf.steps_from_summary_and_history(never_started) == (None, -1)
+
+
+def test_a_summary_with_no_step_is_only_clobbered_when_a_history_contradicts_it():
+    """
+    The two look identical in a summary and are opposite facts. A cell that never started has
+    nothing to recover and must not be dressed up as a cell that did.
+    """
+    recovered = nf.SeedSeries(
+        run_name="x", seed=0, arm="baseline", state="failed", last_step=4910, history_step=4910
+    )
+    assert recovered.summary_was_clobbered
+
+    absent = nf.SeedSeries(
+        run_name="x", seed=0, arm="baseline", state="failed", last_step=-1, history_step=-1
+    )
+    assert not absent.summary_was_clobbered
+
+    healthy = nf.SeedSeries(
+        run_name="x",
+        seed=0,
+        arm="baseline",
+        state="finished",
+        last_step=6000,
+        summary_step=6000,
+        history_step=6000,
+    )
+    assert not healthy.summary_was_clobbered
+
+
+def test_every_run_that_is_dropped_is_named_with_the_reason_it_was_dropped():
+    """
+    ``contributing`` is a filter and a filter with no complement loses a replicate in silence:
+    n falls, the df falls with it, the interval narrows, and the only thing said out loud is
+    that a cell "has not landed". Nor is it a random cell that goes -- evaluations are lost by
+    hitting a wall, so the arm mean is left to the cells that finished comfortably.
+    """
+    live = {0: {"arxiv": 1.0}, 500: {"arxiv": 0.9}}
+    trained_but_unevaluated = series(1, {})
+    trained_but_unevaluated.history_step = 4910
+    entries = [series(0, live), trained_but_unevaluated, series(2, {})]
+
+    kept = nf.contributing(entries)
+    dropped = nf.excluded(entries)
+    assert len(kept) + len(dropped) == len(entries), "every run is either used or explained"
+    assert [entry.seed for entry, _ in dropped] == [1, 2]
+    assert "4910" in dropped[0][1], "a run that trained has to say how far it got"
+    assert "no history at all" in dropped[1][1]
+
+
+def test_a_reading_that_dropped_a_replicate_cannot_be_frozen():
+    """
+    The freeze is the moment a number stops being revisable, so it is the one place that has
+    to know a cell went missing. Without this an arm short one replicate freezes at df 3
+    wearing the label of df 4.
+    """
+    stands = nf.provisional_reasons(5, 6000, 6000)
+    assert stands == []
+
+    excluded = nf.provisional_reasons(5, 6000, 6000, exclusions=["run-x (seed 2) logged nothing"])
+    assert len(excluded) == 1
+    assert "run-x" in excluded[0]
+
+
+def test_the_frozen_record_carries_the_runs_that_were_left_out(capsys):
+    values, sources, steps = nf.synthetic_baseline(rng_seed=3)
+    frozen = nf.report(
+        values, sources, steps, tuple(range(5)), "strata", "measured", 6000, exclusions=["run-x"]
+    )
+    assert frozen["excluded"] == ["run-x"]
+    assert frozen["provisional"], "an exclusion makes a reading provisional"
+    assert "PROVISIONAL" in capsys.readouterr().out
+
+
 def test_the_arm_is_recovered_from_the_model_and_not_from_a_label():
     """
     No ``--arm`` string reaches the saved config, so a run is identified by what it is. That

@@ -1014,6 +1014,69 @@ def render_mde_table(
 #: How a fan-out cell's W&B run id ends, matched exactly as ``tranche_watch`` matches it.
 CELL_SUFFIX = re.compile(r"^(?P<submission>.+)-cell-(?P<index>\d+)$")
 
+#: What ``train_on_corpus.leave_the_reason_in_wandb`` appends to a cell's id when it files a
+#: crash report beside it. Spelled out here as well as there, for the reason ``stage_gate``
+#: keeps its own copy of the source list: the image that runs the entry point installs neither
+#: scipy nor this file, so nothing in ``.edullm/`` imports across that line for a constant.
+CRASH_REPORT_SUFFIX = "-died"
+
+#: ``job_type`` on a crash report, which is the same fact stated where a reader holding only
+#: the run object can see it.
+CRASH_REPORT_JOB_TYPE = "crash"
+
+
+def is_crash_report(run_id: str, job_type: Optional[str] = None, history_step: int = -1) -> bool:
+    """
+    Whether a run is a crash report rather than a cell that trained.
+
+    A crash report shares the group and the display-name stem of the cell it is about, so a
+    query that selects a submission selects it too -- and a report carries no model config,
+    which makes :func:`_arm_of` read it as ``baseline``. Left in, the diagnostic filed against
+    a dead ``mhc`` cell arrives in the baseline arm as a seed-0 replicate with nothing in it.
+
+    ``history_step`` IS NOT DEFENSIVENESS AND LEAVING IT OUT DROPS TWO REPLICATES. The seven
+    clobbered cells carry ``job_type: crash`` themselves, because the report was written *onto*
+    them rather than beside them -- that is the defect. Filtering on ``job_type`` alone
+    therefore deletes exactly the runs this recovery exists to rescue, and it deletes them
+    silently, which is the same failure again one layer up. A run that logged a step trained,
+    whatever its metadata was overwritten to say, so the history settles it.
+
+    :param run_id: The W&B run id.
+    :param job_type: The run's ``job_type``, where the caller has it.
+    :param history_step: The last step the run's history holds, from
+        :func:`steps_from_summary_and_history`. Anything at zero or above is a run that
+        trained and is never a report.
+
+    :returns: Whether to leave it out of an arm.
+    """
+    if history_step >= 0:
+        return False
+    return run_id.endswith(CRASH_REPORT_SUFFIX) or job_type == CRASH_REPORT_JOB_TYPE
+
+
+def steps_from_summary_and_history(run) -> Tuple[Optional[int], int]:
+    """
+    What a run's summary says its last step was, and what its history actually holds.
+
+    THESE DISAGREE ON SEVEN RUNS AND THE DISAGREEMENT IS THE WHOLE POINT. A crash report that
+    re-initialised W&B under the cell's own id replaced the summary and left the history
+    alone, so those cells read ``_step: None, _runtime: 0.0`` -- which is also what a cell
+    that never started reads. One of them had trained 3.993 hours to step 4,910.
+
+    ``lastHistoryStep`` is the recovery and it is a field rather than a scan: W&B tracks it
+    beside the history and the public API hands it over with the run. On an intact run it
+    equals the summary's ``_step``, which is what makes it safe to prefer.
+
+    :param run: A W&B API run.
+
+    :returns: ``(the summary's step or None, the history's last step or -1)``.
+    """
+    raw_summary = run.summary.get("_step")
+    summary_step = int(raw_summary) if isinstance(raw_summary, (int, float)) else None
+    raw_history = getattr(run, "lastHistoryStep", None)
+    history_step = int(raw_history) if isinstance(raw_history, (int, float)) else -1
+    return summary_step, history_step
+
 
 @dataclass
 class SeedSeries:
@@ -1024,6 +1087,8 @@ class SeedSeries:
     arm: str
     state: str
     last_step: int
+    """The furthest step this run reached, from its history where its summary has lost it."""
+
     per_source: Dict[int, Dict[str, float]] = field(default_factory=dict)
     """Evaluation step -> source -> bits-per-byte."""
 
@@ -1033,6 +1098,21 @@ class SeedSeries:
     artifact names the exact five runs it was computed from rather than a group that will
     keep acquiring members after the freeze.
     """
+
+    summary_step: Optional[int] = None
+    """
+    What the run's own summary claims, or None where it carries nothing. Kept apart from
+    :attr:`last_step` so that "the summary was overwritten" stays a fact the report can state
+    rather than a difference that quietly disappears into a recovered number.
+    """
+
+    history_step: int = -1
+    """The last step the per-step history holds, which a crash report cannot reach."""
+
+    @property
+    def summary_was_clobbered(self) -> bool:
+        """Whether this run's summary lost a record its history still has."""
+        return self.summary_step is None and self.history_step >= 0
 
 
 def belongs_to_submission(run_id: str, submission: Optional[str]) -> bool:
@@ -1074,6 +1154,42 @@ def contributing(series: Sequence["SeedSeries"]) -> List["SeedSeries"]:
     :returns: The subset with at least one evaluation, in the order given.
     """
     return [entry for entry in series if entry.per_source]
+
+
+def excluded(series: Sequence["SeedSeries"]) -> List[Tuple["SeedSeries", str]]:
+    """
+    The runs :func:`contributing` drops, each with the reason it was dropped.
+
+    DROPPING A REPLICATE QUIETLY IS THE FAILURE THIS EXISTS TO END, AND IT IS WORSE THAN A
+    WRONG NUMBER BECAUSE IT LOOKS LIKE A RIGHT ONE. ``contributing`` is a filter, and a filter
+    with no complement reports four cells where five were submitted as though four were what
+    was asked for: n falls, the df falls with it, the interval narrows, and the report says
+    only that a cell "has not landed". It is also not a random four. Cells lose their
+    evaluations by hitting a wall or dying, so the ones that leave are the slow ones and the
+    unlucky ones, and an arm mean over the survivors is biased in a direction nobody chose.
+
+    So every run that goes is named here with a reason, and :func:`provisional_reasons` turns
+    that into something ``--freeze`` refuses to write.
+
+    :param series: One entry per run, as :func:`read_seed_series` returned them.
+
+    :returns: ``(run, reason)`` for each run carrying no evaluation, in the order given.
+    """
+    out: List[Tuple[SeedSeries, str]] = []
+    for entry in series:
+        if entry.per_source:
+            continue
+        if entry.history_step >= 0:
+            out.append(
+                (
+                    entry,
+                    f"reached step {entry.history_step} but logged no held-out evaluation this "
+                    "read can find, so it has an endpoint nobody can compare",
+                )
+            )
+        else:
+            out.append((entry, "logged no history at all -- queued, or died before its first step"))
+    return out
 
 
 def sources_from_config(config: Mapping) -> Tuple[str, ...]:
@@ -1156,6 +1272,13 @@ def read_seed_series(
     for run in runs:
         if not belongs_to_submission(run.id, submission):
             continue
+        summary_step, history_step = steps_from_summary_and_history(run)
+        # BEFORE THE ARM TEST, BECAUSE A CRASH REPORT WOULD PASS IT. It carries no model
+        # config, and a config without a hyper-connection block is how `_arm_of` spells
+        # `baseline` -- so a report filed against a dead `mhc` cell would join the baseline
+        # arm as a seed-0 replicate with nothing in it.
+        if is_crash_report(run.id, run.job_type, history_step):
+            continue
         config = run.config or {}
         if _arm_of(config) != arm:
             continue
@@ -1166,8 +1289,13 @@ def read_seed_series(
             seed=int(((config.get("data_loader") or {}).get("seed")) or 0),
             arm=arm,
             state=run.state,
-            last_step=int(run.summary.get("_step") or -1),
+            # The history's answer wherever the summary has none. A summary that was
+            # overwritten says None here and a run that never stepped says None too, and the
+            # difference between those two is the whole of `summary_was_clobbered`.
+            last_step=summary_step if summary_step is not None else history_step,
             run_id=run.id,
+            summary_step=summary_step,
+            history_step=history_step,
         )
         for row in run.scan_history(keys=["_step", *keys]):
             step = row.get("_step")
@@ -1345,6 +1473,7 @@ def provisional_reasons(
     final_step: int,
     horizon: int,
     expected_seeds: int = 5,
+    exclusions: Sequence[str] = (),
 ) -> List[str]:
     """
     Everything that makes a reading provisional rather than the frozen noise floor.
@@ -1361,10 +1490,13 @@ def provisional_reasons(
     :param final_step: The last step every one of them evaluated at.
     :param horizon: The step count the tranche was submitted for.
     :param expected_seeds: How many cells the fan-out has.
+    :param exclusions: One sentence per run that was read and then left out, from
+        :func:`excluded`. Each is a reason on its own, so a reading missing a replicate cannot
+        be frozen without somebody having read why.
 
     :returns: One sentence per reason, empty when the reading stands.
     """
-    reasons = []
+    reasons = [f"a cell was read and excluded: {reason}" for reason in exclusions]
     if n_seeds < expected_seeds:
         reasons.append(
             f"{n_seeds} of {expected_seeds} cells have landed, so the df is "
@@ -1391,6 +1523,8 @@ def report(
     scheme: str = "strata",
     label: str = "measured",
     horizon: int = 6000,
+    *,
+    exclusions: Sequence[str] = (),
 ) -> Dict[str, object]:
     """
     Print the noise-floor table and return the numbers that get frozen.
@@ -1402,6 +1536,9 @@ def report(
     :param scheme: Which weighting scheme to freeze.
     :param label: ``measured`` or ``synthetic``, printed on every line that came from it.
     :param horizon: The submitted step count, for :func:`provisional_reasons`.
+    :param exclusions: Runs that were read and left out, from :func:`excluded`. Carried into
+        the banner and into the frozen dict, so a number computed without a replicate says so
+        wherever it is read.
 
     :returns: A JSON-serializable dict of the frozen numbers.
     """
@@ -1413,7 +1550,7 @@ def report(
         f"[{label}] {n_seeds} seed(s) {list(seeds)}, {n_steps} checkpoint(s), "
         f"{len(sources)} source(s), final step {steps[-1]}"
     )
-    reasons = provisional_reasons(n_seeds, int(steps[-1]), horizon)
+    reasons = provisional_reasons(n_seeds, int(steps[-1]), horizon, exclusions=exclusions)
     if reasons:
         print()
         print("PROVISIONAL. This is not the frozen noise floor, because:")
@@ -1521,6 +1658,7 @@ def report(
     return {
         "label": label,
         "provisional": reasons,
+        "excluded": list(exclusions),
         "n_seeds": n_seeds,
         "seeds": list(seeds),
         "final_step": int(steps[-1]),
@@ -1765,6 +1903,7 @@ def main() -> int:
     steps: Tuple[int, ...] = ()
     seeds: Tuple[int, ...] = ()
     contributors: List[str] = []
+    exclusions: List[str] = []
     label = "measured"
 
     if opts.group:
@@ -1778,10 +1917,41 @@ def main() -> int:
         if not series:
             print(f"no runs of arm '{opts.arm}' in this group yet.")
         for entry in series:
+            recovered = "  [step recovered from history]" if entry.summary_was_clobbered else ""
             print(
                 f"  {entry.run_id or entry.run_name}  seed {entry.seed}  {entry.state}  "
-                f"last step {entry.last_step}  {len(entry.per_source)} evaluation(s)"
+                f"last step {entry.last_step}  {len(entry.per_source)} evaluation(s){recovered}"
             )
+
+        # SAID SEPARATELY FROM THE LINE ABOVE, BECAUSE THE RECOVERY IS THE INTERESTING PART
+        # AND A SUFFIX ON A DENSE LINE IS NOT READ. A cell whose summary was overwritten by
+        # its own crash report reads `step None` in W&B and in anything built on summaries,
+        # which is also what a cell that never started reads -- and one of these was reported
+        # to the researcher as exactly that when it was the furthest-progressed cell in its
+        # arm. The endpoints below come from history and are unaffected; what needed saying is
+        # that the two records disagree and which one was believed.
+        clobbered = [e for e in series if e.summary_was_clobbered]
+        if clobbered:
+            print()
+            print(
+                f"  {len(clobbered)} cell(s) have a summary that has lost its step. Recovered "
+                "from history; the endpoints below never came from a summary:"
+            )
+            for entry in clobbered:
+                print(
+                    f"    {entry.run_id}  summary says step None, history says "
+                    f"{entry.history_step}  ({len(entry.per_source)} evaluation(s) intact)"
+                )
+            print()
+
+        left_out = excluded(series)
+        exclusions = [
+            f"{entry.run_id or entry.run_name} (seed {entry.seed}) {reason}"
+            for entry, reason in left_out
+        ]
+        for entry, reason in left_out:
+            print(f"  EXCLUDED  {entry.run_id or entry.run_name}  seed {entry.seed}: {reason}")
+
         contributors = [e.run_id or e.run_name for e in contributing(series)]
         candidate, steps, seeds = aligned_matrix(series, sources)
         if len(set(seeds)) != len(seeds):
@@ -1812,7 +1982,9 @@ def main() -> int:
         synthetic, sources, steps = synthetic_baseline()
         values, seeds, label = synthetic, tuple(range(synthetic.shape[0])), "synthetic"
 
-    frozen = report(values, sources, steps, seeds, opts.scheme, label, opts.horizon)
+    frozen = report(
+        values, sources, steps, seeds, opts.scheme, label, opts.horizon, exclusions=exclusions
+    )
     frozen["entity"] = opts.entity
     frozen["project"] = opts.project
     frozen["group"] = opts.group
