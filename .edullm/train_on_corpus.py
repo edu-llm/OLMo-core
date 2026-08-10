@@ -173,7 +173,7 @@ from olmo_core.distributed.parallel import DataParallelType
 from olmo_core.distributed.utils import barrier, get_rank
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.io import clear_directory, list_directory, normalize_path
-from olmo_core.nn.transformer import TransformerConfig
+from olmo_core.nn.transformer import TransformerBlockConfig, TransformerConfig
 from olmo_core.optim import AdamWConfig, CosWithWarmup, OptimGroupOverride
 from olmo_core.train import (
     Duration,
@@ -411,7 +411,11 @@ OLMOE_7B_32X4_ROUTED_EXPERTS = 32
 OLMOE_7B_32X4_ROUTED_HIDDEN_SIZE = 2048
 
 
-def olmoe_7b_32x4(vocab_size: int, shared_experts: int = 0) -> TransformerConfig:
+def olmoe_7b_32x4(
+    vocab_size: int,
+    shared_experts: int = 0,
+    router_bias_gamma: Optional[float] = None,
+) -> TransformerConfig:
     """Build the ~7B total / 32x4 routed MoE that every arm is measured against.
 
     ``shared_experts`` is zero here and that is the whole point: this is the
@@ -423,8 +427,13 @@ def olmoe_7b_32x4(vocab_size: int, shared_experts: int = 0) -> TransformerConfig
     width is the number of shared experts times one routed expert's width --
     two shared experts is one 4096-wide MLP, evaluated for every token in
     addition to the top-four routed experts.
+
+    ``router_bias_gamma`` is None here for the same reason, and see
+    ``--moe-router-bias-gamma`` for what turning it on trades. It is set after
+    construction because ``llama_like_moe`` builds the ``MoERouterConfig``
+    itself and takes no argument that reaches it.
     """
-    return TransformerConfig.llama_like_moe(
+    config = TransformerConfig.llama_like_moe(
         vocab_size=vocab_size,
         d_model=2048,
         n_layers=16,
@@ -443,6 +452,12 @@ def olmoe_7b_32x4(vocab_size: int, shared_experts: int = 0) -> TransformerConfig
         rope_theta=500_000,
         layer_norm_eps=1e-6,
     )
+    if router_bias_gamma is not None:
+        block = config.block
+        assert isinstance(block, TransformerBlockConfig), type(block)
+        assert block.feed_forward_moe is not None
+        block.feed_forward_moe.router.bias_gamma = router_bias_gamma
+    return config
 
 
 def is_olmoe_7b_32x4(opts) -> bool:
@@ -906,8 +921,21 @@ def build_config(opts, overrides: List[str]):
 
     if is_olmoe_7b_32x4(opts):
         validate_olmoe_parallelism(opts)
-        factory = functools.partial(olmoe_7b_32x4, shared_experts=opts.moe_shared_experts)
+        factory = functools.partial(
+            olmoe_7b_32x4,
+            shared_experts=opts.moe_shared_experts,
+            router_bias_gamma=opts.moe_router_bias_gamma,
+        )
     else:
+        if opts.moe_router_bias_gamma is not None:
+            raise Refusal(
+                Stage.THE_CONFIG_WOULD_NOT_BUILD,
+                "--moe-router-bias-gamma is only wired for the "
+                f"{OLMOE_7B_32X4_FACTORY!r} recipe, and {opts.model_factory!r} was asked for. "
+                "Reach the field directly instead, with "
+                "`<run-id> model.block.feed_forward_moe.router.bias_gamma=...`, and note that "
+                "the run id has to be there or the override becomes the run's name.",
+            )
         factory = getattr(TransformerConfig, opts.model_factory, None)
         if factory is None:
             raise Refusal(
@@ -955,6 +983,7 @@ def build_config(opts, overrides: List[str]):
                 reduce_dtype=DType.float32,
                 num_replicas=opts.moe_num_replicas,
                 shard_degree=opts.moe_shard_degree,
+                prefetch_factor=opts.fsdp_prefetch_factor,
             ),
             ep_config=TransformerExpertParallelConfig(degree=opts.moe_shard_degree),
             z_loss_multiplier=1e-5,
@@ -988,6 +1017,7 @@ def build_config(opts, overrides: List[str]):
                 name=DataParallelType.fsdp,
                 param_dtype=DType(opts.param_dtype),
                 reduce_dtype=DType.float32,
+                prefetch_factor=opts.fsdp_prefetch_factor,
             ),
             max_grad_norm=1.0,
             # `warmup`, not the `warmup_steps` the example still passes -- that spelling is
@@ -1364,13 +1394,50 @@ def train(config, opts=None) -> None:
         )
 
 
+def a_run_name_and_not_an_override(value: str) -> str:
+    """Refuse a positional that is obviously a dotted config override.
+
+    THE FAILURE THIS EXISTS FOR IS SILENT AND COSTS A WHOLE RUN. ``main`` calls
+    ``parse_known_args`` and merges what is left over into the config, which is how a person
+    changes a nested field without a flag for it. But ``run_name`` is a positional with
+    ``nargs="?"``, and ``.edullm/run.yaml`` names no run -- the platform supplies it in
+    ``EDULLM_RUN_ID``. So the FIRST bare word appended to that command is not left over at
+    all: argparse binds it to ``run_name``. Appending
+    ``train_module.dp_config.prefetch_factor=2`` therefore does not set the prefetch factor,
+    it renames the run to ``train_module.dp_config.prefetch_factor=2`` -- which is the W&B
+    run name and the ``run_id`` written into the lineage record. Nothing warns, the setting
+    silently does not apply, and the run that finds out is the one nobody can repeat.
+
+    ``src/test/edullm_train_on_corpus_test.py`` asserted ``leftover == []`` to catch exactly
+    this class of mistake and could not see it, because the stray word had been eaten rather
+    than left over.
+
+    An ``=`` is the test because every override has one and no run id the platform generates
+    does. Overrides are still available and still supported; they just have to come after a
+    run id, which on the block means writing ``${EDULLM_RUN_ID}`` or accepting the flag that
+    exists instead.
+    """
+    if "=" in value:
+        raise argparse.ArgumentTypeError(
+            f"{value!r} is the run's name here, not a config override -- a positional cannot "
+            "be both, and argparse binds the first bare word to the name. Put the run id "
+            "in front of it, or use the flag if there is one."
+        )
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="train_on_corpus",
         description="Train a transformer on a published eduLLM corpus.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("run_name", nargs="?", default=os.environ.get("EDULLM_RUN_ID", "local"))
+    parser.add_argument(
+        "run_name",
+        nargs="?",
+        type=a_run_name_and_not_an_override,
+        default=os.environ.get("EDULLM_RUN_ID", "local"),
+    )
     parser.add_argument("--dataset-id", default=os.environ.get("EDULLM_DATASET_ID", ""))
     parser.add_argument("--dataset-version", default=os.environ.get("EDULLM_DATASET_VERSION", ""))
     parser.add_argument(
@@ -1524,6 +1591,44 @@ def build_parser() -> argparse.ArgumentParser:
         "image that carries grouped_gemm -- the package wins either way.",
     )
     parser.set_defaults(moe_grouped_mm=True)
+    parser.add_argument(
+        "--fsdp-prefetch-factor",
+        type=int,
+        default=0,
+        help="How many blocks ahead FSDP issues its parameter all-gather. THE DEFAULT IS THE "
+        "LIBRARY'S AND MEANS NO FORWARD PREFETCH AT ALL: at 0 `Transformer.apply_fsdp` never "
+        "calls `set_modules_to_forward_prefetch`, so every block's all-gather is issued when "
+        "that block is entered. 2 is the usual value. This is pure scheduling -- it changes "
+        "when a collective is launched and nothing about what it computes -- so it is safe in "
+        "a way that no other throughput flag here is, and it cannot break comparability with "
+        "a run that did not use it. EXPECT LITTLE. The blocks it prefetches hold the "
+        "non-expert parameters, which HSDP shards inside a node over NVLink; the 90%% of this "
+        "model that is expert parameters sits in a nested FSDP group sharded across nodes, "
+        "and naming a block does not reach a group nested inside it. It also does nothing at "
+        "all on a single node, where there is no cross-node traffic to overlap, so a "
+        "single-node probe cannot measure it either way. Costs the unsharded parameters of "
+        "the extra blocks in flight, about 34 MB each.",
+    )
+    parser.add_argument(
+        "--moe-router-bias-gamma",
+        type=float,
+        default=None,
+        help="Turn on DeepSeek-V3's auxiliary-loss-free load balancing at this bias update "
+        "speed. OFF BY DEFAULT AND THIS IS A MODEL CHANGE, NOT A TUNING KNOB. A per-expert "
+        "bias is added to the router scores for top-k SELECTION only, and nudged by gamma "
+        "each step towards whichever experts were under-used; the gating value multiplied "
+        "into the expert output stays the unbiased score and no term is added to the loss. "
+        "But routing differs from step one, so the model differs, and the control every arm "
+        "is compared against would no longer be plain OLMoE -- take it for the whole family "
+        "or not at all. WHY IT IS HERE: measured load imbalance on this recipe is 4.9-6.9 per "
+        "block, and AI2's own OLMoE ablation measured perfectly balanced routing 20%% faster "
+        "than learned token-choice routing on this architecture, which is the largest "
+        "throughput lever anybody has found on this model. 0.0001 is the order OLMo-core's "
+        "own docstring suggests for softmax gating; DeepSeek-V3 used 0.001 against sigmoid "
+        "scores, which are on a different scale. IT CHANGES THE STATE DICT: the router "
+        "registers a `score_bias` buffer only when this is set, so a checkpoint written "
+        "without it does not resume into a run with it. Decide before step one.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Resolve and print, do not train.")
     return parser
 

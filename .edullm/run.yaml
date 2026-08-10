@@ -63,7 +63,58 @@ command: >-
   --hf-export-interval 2400
   --hf-tokenizer .edullm/tokenizer/dolma2
   --data-seed 0
+  --fsdp-prefetch-factor 2
 
+# ---------------------------------------------------------------------------------------
+# THE THROUGHPUT FLAG THAT IS IN THIS COMMAND, THE ONE THAT IS NOT, AND WHY NEITHER IS A BARE
+# DOTTED OVERRIDE.
+#
+# NOTHING BARE MAY BE APPENDED HERE, WHICH IS NOT WHAT THE ENTRY POINT'S OWN DOCSTRING IMPLIES.
+# `main` merges leftover words into the config as dotted overrides, so appending
+# `train_module.dp_config.prefetch_factor=2` looks like the cheap way to set it. It is not.
+# `run_name` is a positional with `nargs="?"` and this command names no run -- the platform puts
+# the id in `EDULLM_RUN_ID` -- so argparse binds the FIRST bare word to `run_name`. The setting
+# does not apply, and the run is named `train_module.dp_config.prefetch_factor=2` in W&B and in
+# the lineage record. `leftover == []` in the suite passed while this was true, because the word
+# had been eaten rather than left over. `a_run_name_and_not_an_override` now refuses a positional
+# containing `=`, so the same mistake exits 2 in the first second instead. An override is still
+# fine after an explicit run id; it is only the first bare word that is dangerous.
+#
+# `--fsdp-prefetch-factor 2` IS HERE BECAUSE IT CANNOT MOVE A NUMBER. The library default is 0,
+# and at 0 `Transformer.apply_fsdp` never calls `set_modules_to_forward_prefetch` at all, so every
+# block's all-gather is issued when that block is entered rather than ahead of it. This is pure
+# scheduling, so it is bit-identical to leaving it out and cannot break comparability with any run
+# that did not carry it.
+#
+# EXPECT LITTLE, AND EXPECT NONE OF IT ON ONE NODE. The blocks it prefetches carry the non-expert
+# parameters, which HSDP shards over `dp_shard` -- one node's eight cards, over NVLink. The 90% of
+# this model that is expert parameters lives in a NESTED FSDP group that `prepare_experts_for_fsdp`
+# shards over `dp_replicate`, the cross-node dimension and the expensive one, and naming a block in
+# a prefetch list does not reach a group nested inside it. So this addresses the cheap collective
+# and not the dear one. It is in the command because it is free, not because it is big. On a
+# single-node probe `dp_replicate` is 1 and there is no cross-node traffic to overlap, so a probe
+# cannot measure it either way.
+#
+# `--moe-router-bias-gamma 0.0001` IS NOT HERE, AND THAT IS A DECISION SOMEBODY HAS TO TAKE
+# RATHER THAN A GAP. It turns on DeepSeek-V3's auxiliary-loss-free load balancing: a per-expert
+# bias added to the router scores for top-k SELECTION ONLY, nudged towards whichever experts were
+# under-used. The gating value multiplied into the expert output is still the unbiased score and
+# no term is added to the loss. It is the single largest throughput lever anybody has found on
+# this model -- measured load imbalance is 4.9-6.9 per block, and AI2's own OLMoE ablation
+# measured perfectly balanced routing 20% ahead of learned token-choice routing on this exact
+# architecture.
+#
+# It is left off because it changes the model. Routing differs from step one, so the control every
+# arm is compared against would no longer be plain OLMoE, and every arm would have to carry the
+# same flag or the comparison is confounded. That is the owner's call and not this file's. See
+# `docs-frank/working/final-model/mfu.md` in the platform repository for the evidence, and for the
+# twenty-minute experiment that would settle it before the money is spent.
+#
+# WHICHEVER WAY IT GOES, IT HAS TO GO THAT WAY BEFORE STEP ONE. The router registers a
+# `score_bias` buffer only when gamma is set, so the flag changes the state dict: a checkpoint
+# written without it does not resume into a run with it, or the other way round.
+# `.edullm/verify_router_overrides.py` pins all of this, reaches no network and needs no GPU.
+#
 # ---------------------------------------------------------------------------------------
 # WHERE EACH NUMBER CAME FROM. Every one is computed here or read from a file named here;
 # none is quoted from a document.

@@ -334,6 +334,46 @@ def corpus(monkeypatch):
     )
 
 
+def test_the_router_bias_is_absent_by_default_and_reaches_every_block_when_asked_for():
+    """A CONFIG FIELD THAT NEVER REACHES A MODULE IS THE FAILURE MODE HERE.
+
+    `MoELinearRouter` reads `bias_gamma` in `__init__` and registers `score_bias` there, so a
+    value that arrives after the model is built leaves the config honest and the mechanism
+    absent. `llama_like_moe` builds the `MoERouterConfig` itself and takes no argument that
+    reaches it, which is why `olmoe_7b_32x4` sets the field after construction -- and why this
+    checks the built router rather than the config that describes it.
+
+    The state-dict assertions are the load-bearing ones. The buffer exists only when the flag
+    does, so this is a before-step-one decision and not something a resume can change its mind
+    about.
+    """
+    import torch
+
+    plain = entry.olmoe_7b_32x4(vocab_size=100_352)
+    biased = entry.olmoe_7b_32x4(vocab_size=100_352, router_bias_gamma=0.0001)
+
+    assert plain.block.feed_forward_moe.router.bias_gamma is None
+    assert biased.block.feed_forward_moe.router.bias_gamma == 0.0001
+
+    with torch.device("meta"):
+        plain_model = plain.build(init_device="meta")
+        biased_model = biased.build(init_device="meta")
+
+    assert plain_model.blocks["0"].feed_forward_moe.router.score_bias is None
+    assert biased_model.blocks["0"].feed_forward_moe.router.score_bias.shape == (32,)
+
+    assert not [k for k in plain_model.state_dict() if k.endswith("router.score_bias")]
+    assert len([k for k in biased_model.state_dict() if k.endswith("router.score_bias")]) == 16
+
+
+def test_the_router_bias_flag_is_refused_on_a_factory_it_is_not_wired_for(corpus):
+    # Rather than accepted and ignored. The flag sets a field on the recipe this file owns; on
+    # any other factory it would look applied and do nothing, which is the same silent class of
+    # failure as the positional above.
+    with pytest.raises(entry.Refusal, match="moe-router-bias-gamma"):
+        configure("--model-factory=olmo2_190M", "--moe-router-bias-gamma=0.0001")
+
+
 def configure(*extra: str):
     opts, overrides = entry.build_parser().parse_known_args(
         [
@@ -1359,6 +1399,53 @@ def test_the_base_run_command_leaves_no_token_the_parser_did_not_want(shard_degr
     assert leftover == []
     assert opts.moe_shard_degree == int(shard_degree)
     assert opts.moe_num_replicas == int(replicas)
+    # And the run is still named by the environment rather than by a word in the command. This
+    # assertion is the one the check above could not make: a bare override appended to the
+    # command is not a leftover, because argparse binds the first bare word to `run_name`.
+    assert opts.run_name == "local"
+
+
+@pytest.mark.parametrize("shard_degree,replicas", MESHES)
+def test_the_base_run_asks_for_forward_prefetch_and_not_for_the_router_bias(
+    shard_degree, replicas
+):
+    """The two throughput settings, pinned in opposite directions and for opposite reasons.
+
+    Forward prefetch is on because it is pure scheduling and cannot change a number. The router
+    bias is off because it changes routing from step one, which makes the control a different
+    model from plain OLMoE and would have to be carried by every arm compared against it. Both
+    are assertions about a decision, so both should fail loudly if somebody flips one quietly.
+    """
+    opts, _ = entry.build_parser().parse_known_args(base_run_arguments(shard_degree, replicas))
+
+    assert opts.fsdp_prefetch_factor == 2
+    assert opts.moe_router_bias_gamma is None
+
+
+def test_a_dotted_override_in_the_first_bare_position_is_refused_rather_than_renaming_the_run():
+    """THE FAILURE IS SILENT WITHOUT THIS AND COSTS THE SETTING PLUS THE RUN'S NAME.
+
+    `.edullm/run.yaml` names no run, so the first bare word appended to its command is bound to
+    `run_name` rather than left over for `config.merge`. The setting does not apply and the run
+    is called `train_module.dp_config.prefetch_factor=2` in W&B and in the lineage record.
+    Exit 2 in the first second is the right answer; `leftover == []` cannot see it.
+    """
+    with pytest.raises(SystemExit) as refused:
+        entry.build_parser().parse_args(
+            base_run_arguments(*MESHES[0]) + ["train_module.dp_config.prefetch_factor=2"]
+        )
+
+    assert refused.value.code == 2
+
+
+def test_an_override_after_an_explicit_run_id_still_reaches_the_config():
+    """The guard above refuses a position, not the mechanism. Overrides remain the escape hatch."""
+    opts, leftover = entry.build_parser().parse_known_args(
+        ["a-run-id", "train_module.dp_config.prefetch_factor=4"]
+    )
+
+    assert opts.run_name == "a-run-id"
+    assert leftover == ["train_module.dp_config.prefetch_factor=4"]
 
 
 @pytest.mark.parametrize("shard_degree,replicas", MESHES)
@@ -1386,8 +1473,11 @@ def test_the_base_run_token_budget_is_the_arithmetic_it_claims():
 
     assert opts.global_batch_size == 2**22 == 4_194_304
     assert opts.global_batch_size % opts.sequence_length == 0
-    assert opts.steps == -(-100_000_000_000 // opts.global_batch_size) == 23_842
-    assert opts.steps * opts.global_batch_size == 100_000_595_968
+    # 50B since 2026-08-08, halved from 100B. `round` rather than a ceiling because 11,921 is the
+    # nearer of the two and the file's own comment derives it that way; the overshoot is 297,984
+    # tokens, one part in 168,000.
+    assert opts.steps == round(50_000_000_000 / opts.global_batch_size) == 11_921
+    assert opts.steps * opts.global_batch_size == 50_000_297_984
     # Every export has a core checkpoint beside it, which is what --hf-export-interval promises.
     assert opts.hf_export_interval % opts.save_interval == 0
 
