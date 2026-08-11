@@ -12,9 +12,11 @@ def _pack_twn_kernel(
     weight,
     packed,
     alpha,
+    materialized,
     K: tl.constexpr,
     BLOCK_K: tl.constexpr,
     BLOCK_WORDS: tl.constexpr,
+    WRITE_MATERIALIZED: tl.constexpr,
 ):
     row = tl.program_id(0)
     offsets = tl.arange(0, BLOCK_K)
@@ -39,6 +41,9 @@ def _pack_twn_kernel(
         words,
         mask=word_offsets < ((K + 15) // 16),
     )
+    if WRITE_MATERIALIZED:
+        trits = tl.where(codes == 2, row_alpha, tl.where(codes == 0, -row_alpha, 0.0))
+        tl.store(materialized + row * K + offsets, trits, mask=mask)
 
 
 @triton.jit
@@ -82,7 +87,13 @@ def _logical_weight(weight: torch.Tensor, in_dim: int) -> Tuple[torch.Tensor, in
     return logical, experts, logical.shape[-2], logical.shape[-1]
 
 
-def pack_twn(weight: torch.Tensor, in_dim: int, *, include_transpose: bool = True):
+def pack_twn(
+    weight: torch.Tensor,
+    in_dim: int,
+    *,
+    include_transpose: bool = True,
+    include_materialized: bool = False,
+):
     """
     Pack a latent BF16 weight with exact FP32 row statistics.
 
@@ -108,13 +119,20 @@ def pack_twn(weight: torch.Tensor, in_dim: int, *, include_transpose: bool = Tru
         (experts, out_features, packed_in), device=weight.device, dtype=torch.uint32
     )
     alpha = torch.empty((experts, out_features), device=weight.device, dtype=torch.bfloat16)
+    materialized = (
+        torch.empty_like(logical)
+        if include_materialized
+        else torch.empty(0, device=weight.device, dtype=torch.bfloat16)
+    )
     _pack_twn_kernel[(rows,)](
         flat_weight,
         codes,
         alpha,
+        materialized,
         K=in_features,
         BLOCK_K=block_k,
         BLOCK_WORDS=block_k // 16,
+        WRITE_MATERIALIZED=include_materialized,
     )
     if include_transpose:
         codes_t = torch.empty(
@@ -141,12 +159,18 @@ def pack_twn(weight: torch.Tensor, in_dim: int, *, include_transpose: bool = Tru
         in_features=in_features,
         out_features=out_features,
         num_experts=experts,
+        materialized=materialized if include_materialized else None,
     )
 
 
 def pack_twn_forward_only(weight: torch.Tensor, in_dim: int):
-    """Pack without the transposed codes when backward reuses a BF16 materialization."""
-    return pack_twn(weight, in_dim, include_transpose=False)
+    """Pack codes and BF16 logical weights together, omitting unused transposed codes."""
+    return pack_twn(
+        weight,
+        in_dim,
+        include_transpose=False,
+        include_materialized=True,
+    )
 
 
 @triton.jit

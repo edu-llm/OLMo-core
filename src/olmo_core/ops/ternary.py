@@ -61,6 +61,7 @@ class PackedTWN:
     in_features: int
     out_features: int
     num_experts: int
+    materialized: Optional[torch.Tensor] = None
 
 
 @dataclass(frozen=True)
@@ -346,9 +347,9 @@ class _NativePackedLinear(torch.autograd.Function):
             packer=kernels.pack_twn_forward_only,
         )
         x2 = x.reshape(-1, x.shape[-1]).contiguous()
-        materialized = kernels.materialize_packed_twn(
-            packed.codes, packed.alpha, packed.in_features
-        )
+        if packed.materialized is None:
+            raise RuntimeError("forward-only TWN pack did not produce a BF16 materialization")
+        materialized = packed.materialized
         out = x2 @ materialized.transpose(0, 1)
         if bias is not None:
             out = out + bias
@@ -393,9 +394,9 @@ class _NativePackedFixedGroupedLinear(torch.autograd.Function):
         # each packed weight once and handing both GEMMs to cuBLAS. Keep the ephemeral packed
         # representation as the source of truth, then retain only its BF16 materialization until
         # backward so forward and input-gradient share it.
-        materialized = kernels.materialize_packed_twn(
-            packed.codes, packed.alpha, packed.in_features
-        )
+        if packed.materialized is None:
+            raise RuntimeError("forward-only TWN pack did not produce a BF16 materialization")
+        materialized = packed.materialized
         out = torch.bmm(x.contiguous(), materialized.transpose(1, 2))
         ctx.save_for_backward(x, materialized)
         ctx.in_dim = in_dim
