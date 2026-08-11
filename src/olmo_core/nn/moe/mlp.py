@@ -1,7 +1,8 @@
 import logging
 import math
 import warnings
-from typing import List, Optional
+from collections import defaultdict
+from typing import Dict, List, Optional
 
 import torch
 import torch.distributed as dist
@@ -14,7 +15,7 @@ from torch.distributed.tensor import Placement, Shard, distribute_tensor
 from olmo_core.distributed.parallel import get_device_mesh_info
 from olmo_core.distributed.utils import get_local_tensor
 from olmo_core.exceptions import OLMoConfigurationError
-from olmo_core.nn.quantization import QuantConfig, twn_quantize_ste
+from olmo_core.nn.quantization import QuantConfig, TWNQuantCache, twn_quantize_ste
 from olmo_core.utils import log_once
 
 try:
@@ -49,13 +50,25 @@ class MoEMLPBase(nn.Module):
         self.hidden_size = hidden_size
         self.num_experts = num_experts
         self.quant = quant
+        # Mirrors `QuantLinear.quant_enabled`: a per-module switch rather than a read of the
+        # shared config, so a QAT schedule can turn the quantizer on mid-run without mutating
+        # a config object that other modules also point at.
+        self.quant_enabled = quant is not None and quant.enabled
+        # One memo per weight: w1/w2/w3 are distinct tensors, so a single shared entry would
+        # be evicted by the next call and never hit. Built whenever caching is configured, not
+        # only when the quantizer starts enabled, so a scheduled switch-on finds them ready.
+        self.quant_caches: Optional[Dict[str, TWNQuantCache]] = (
+            defaultdict(TWNQuantCache)
+            if quant is not None and quant.cache_quantized_weight
+            else None
+        )
 
         self.num_local_experts = num_experts
         self.hidden_sharding_degree = 1
         self.ep_mesh: Optional[DeviceMesh] = None
         self.ep_pg: Optional[dist.ProcessGroup] = None
 
-    def maybe_quantize(self, w: torch.Tensor, *, in_dim: int) -> torch.Tensor:
+    def maybe_quantize(self, w: torch.Tensor, *, in_dim: int, slot: str = "") -> torch.Tensor:
         """
         Apply ternary QAT to a stacked expert weight, or return it untouched.
 
@@ -74,9 +87,15 @@ class MoEMLPBase(nn.Module):
         ``quant=None`` and ``QuantConfig(enabled=False)`` both return ``w`` **by identity**, so
         the control arm is not merely numerically close to the unquantized path, it *is* the
         unquantized path.
+
+        ``slot`` names which weight is being quantized, so that each one gets its own memo when
+        :attr:`~olmo_core.nn.quantization.QuantConfig.cache_quantized_weight` is on. Two weights
+        sharing a slot would evict each other on every call and never hit.
         """
-        if self.quant is None or not self.quant.enabled:
+        if not self.quant_enabled:
             return w
+        if self.quant_caches is not None:
+            return self.quant_caches[slot].quantize(w, in_dim=in_dim)
         return twn_quantize_ste(w, in_dim=in_dim)
 
     def apply_ep(self, ep_mesh: DeviceMesh):
@@ -248,9 +267,9 @@ class MoEMLP(MoEMLPBase):
         # The divisibility guard is what makes post-shard quantization equivalent to pre-shard,
         # not the shard axis alone. Verified under real DTensor, FSDP2, and stacked EP+FSDP2 in
         # `maple/agents/lanes/L4-ternary/verify/in-dim-orientation.md`.
-        w1 = self.maybe_quantize(w1, in_dim=1)
-        w2 = self.maybe_quantize(w2, in_dim=1)
-        w3 = self.maybe_quantize(w3, in_dim=1)
+        w1 = self.maybe_quantize(w1, in_dim=1, slot="w1")
+        w2 = self.maybe_quantize(w2, in_dim=1, slot="w2")
+        w3 = self.maybe_quantize(w3, in_dim=1, slot="w3")
 
         x = x.type_as(w1)
 
@@ -401,9 +420,9 @@ class DroplessMoEMLP(MoEMLPBase):
         # Using 2 for w2 would compute alpha across d_model for a matmul whose output rows are
         # indexed by d_model -- a per-input-row scale, i.e. a different quantizer that trains
         # without complaint. If L3 changes a `trans_b`, this must change with it.
-        w1 = self.maybe_quantize(w1, in_dim=2)
-        w3 = self.maybe_quantize(w3, in_dim=2)
-        w2 = self.maybe_quantize(w2, in_dim=1)
+        w1 = self.maybe_quantize(w1, in_dim=2, slot="w1")
+        w3 = self.maybe_quantize(w3, in_dim=2, slot="w3")
+        w2 = self.maybe_quantize(w2, in_dim=1, slot="w2")
 
         # Compute the MLP.
         x1 = self.gmm(x, w1, batch_size_per_expert, trans_b=True)

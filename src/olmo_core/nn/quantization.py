@@ -57,6 +57,8 @@ __all__ = [
     "twn_threshold_and_scale",
     "twn_quantize",
     "twn_quantize_ste",
+    "TWNQuantCache",
+    "reset_twn_quant_caches",
     "audit_quantization",
     "assert_no_float8_conflict",
     "QuantAuditEntry",
@@ -246,6 +248,108 @@ def twn_quantize_ste(w: torch.Tensor, *, in_dim: Optional[int] = None) -> torch.
     return _TWNQuantizeSTE.apply(w, _resolve_in_dim(w, in_dim))  # type: ignore[no-any-return]
 
 
+class _CachedSTE(torch.autograd.Function):
+    """
+    Return an already-quantized weight, routing the gradient to the latent weight.
+
+    Identical backward to :class:`_TWNQuantizeSTE`. The forward does no elementwise work at
+    all: ``q`` was computed on an earlier microbatch and is handed straight back, so a cache
+    hit costs one autograd node instead of a full pass over the weight.
+    """
+
+    @staticmethod
+    def forward(ctx, w: torch.Tensor, q: torch.Tensor) -> torch.Tensor:  # type: ignore[override]
+        del ctx, w
+        # `view_as` rather than returning `q` itself: autograd attaches output metadata to
+        # whatever forward returns, and `q` outlives this call inside the cache.
+        return q.view_as(q)
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):  # type: ignore[override]
+        del ctx
+        return grad_output, None
+
+
+class TWNQuantCache:
+    """
+    Memo of one quantized weight, valid until the latent weight it came from changes.
+
+    ``twn_quantize`` is a scan over the whole weight -- abs, a mean reduction for ``delta``, a
+    comparison, a masked sum for ``alpha``, a sign, and a multiply -- and ``MoEMLP.forward``
+    and :class:`QuantLinear.forward` call it inline on every forward. Under gradient
+    accumulation that repeats the identical scan once per microbatch, because the latent
+    weights do not move until the optimizer steps. At M20 the ternarized weights total ~19.6B
+    elements, which measured ~630ms of pure scan per forward when scaled to H100 bandwidth, so
+    the repeat is worth removing.
+
+    Validity is keyed on the latent tensor's version counter, which PyTorch bumps on the
+    in-place update the optimizer performs. A cache entry therefore survives exactly the window
+    in which the weight is unchanged, and no explicit "new step" signal is needed.
+
+    **The entry holds a reference to the latent tensor.** That is what makes the key sound --
+    an address cannot be recycled underneath a live reference -- and it is free when the tensor
+    is a persistent parameter. Under FSDP2 the unsharded weight is transient and pinning it
+    would defeat resharding, which is why :attr:`QuantConfig.cache_quantized_weight` defaults
+    to off and has to be turned on deliberately.
+    """
+
+    __slots__ = ("_source", "_version", "_quantized")
+
+    def __init__(self) -> None:
+        self._source: Optional[torch.Tensor] = None
+        self._version: Optional[int] = None
+        self._quantized: Optional[torch.Tensor] = None
+
+    def clear(self) -> None:
+        """Drop the entry and release the tensors it holds."""
+        self._source = None
+        self._version = None
+        self._quantized = None
+
+    def quantize(self, w: torch.Tensor, *, in_dim: int) -> torch.Tensor:
+        """
+        Return the quantized ``w`` with an identity-STE backward, reusing the memo if valid.
+
+        :param w: The latent weight.
+        :param in_dim: The axis the forward pass treats as input features. See
+            :func:`twn_quantize`.
+
+        :returns: The quantized weight, differentiable back to ``w``.
+        """
+        if (
+            self._quantized is not None
+            and self._source is w
+            and self._version == w._version
+        ):
+            return _CachedSTE.apply(w, self._quantized)  # type: ignore[no-any-return]
+
+        quantized = twn_quantize(w, in_dim=in_dim)
+        self._source = w
+        self._version = w._version
+        self._quantized = quantized
+        return _CachedSTE.apply(w, quantized)  # type: ignore[no-any-return]
+
+
+def reset_twn_quant_caches(module: nn.Module) -> int:
+    """
+    Clear every :class:`TWNQuantCache` reachable from ``module``.
+
+    Only needed to release the memory an entry holds -- correctness does not depend on it,
+    since entries invalidate themselves on the latent weight's version counter.
+
+    :param module: The root module to walk.
+
+    :returns: How many caches were cleared.
+    """
+    cleared = 0
+    for submodule in module.modules():
+        for attribute in vars(submodule).values():
+            if isinstance(attribute, TWNQuantCache):
+                attribute.clear()
+                cleared += 1
+    return cleared
+
+
 @dataclass
 class QuantConfig(Config):
     """
@@ -265,6 +369,19 @@ class QuantConfig(Config):
     enabled: bool = True
     """
     Whether the quantizer actually fires. ``False`` gives an exact-equality control arm.
+    """
+    cache_quantized_weight: bool = False
+    """
+    Reuse the quantized weight across microbatches until the optimizer moves the latent one.
+
+    The quantized values are a pure function of the latent weight, so recomputing them for each
+    microbatch of a gradient-accumulation window returns the same numbers every time. Turning
+    this on makes the result bitwise identical while paying the scan once per optimizer step
+    instead of once per microbatch. See :class:`TWNQuantCache` for how validity is tracked.
+
+    Off by default because the entry holds the latent tensor alive. That costs nothing for a
+    persistent parameter, but under FSDP2 the unsharded weight is transient and pinning it
+    would defeat resharding.
     """
 
 
@@ -298,11 +415,13 @@ class QuantLinear(nn.Linear):
         bias: bool = False,
         *,
         enabled: bool = True,
+        cache_quantized_weight: bool = False,
         device: Any = None,
         dtype: Any = None,
     ):
         super().__init__(in_features, out_features, bias=bias, device=device, dtype=dtype)
         self.quant_enabled = enabled
+        self.quant_cache = TWNQuantCache() if cache_quantized_weight else None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if not self.quant_enabled:
@@ -310,10 +429,15 @@ class QuantLinear(nn.Linear):
             # the quantized branch -- the exact-equality property is what makes the control
             # arm a control.
             return F.linear(x, self.weight, self.bias)
+        if self.quant_cache is not None:
+            return F.linear(x, self.quant_cache.quantize(self.weight, in_dim=-1), self.bias)
         return F.linear(x, twn_quantize_ste(self.weight, in_dim=-1), self.bias)
 
     def extra_repr(self) -> str:
-        return f"{super().extra_repr()}, quant_enabled={self.quant_enabled}"
+        return (
+            f"{super().extra_repr()}, quant_enabled={self.quant_enabled}, "
+            f"quant_cached={self.quant_cache is not None}"
+        )
 
     def assert_no_tensor_parallel(self) -> None:
         """

@@ -28,6 +28,7 @@ from .metric_saver import MetricSaverCallback
 from .model_merger import ModelMergeCallback
 from .monkey_patcher import MonkeyPatcherCallback
 from .profiler import ProfilerCallback
+from .qat_scheduler import QATSchedulerCallback, count_quant_modules, set_quant_enabled
 from .sequence_length_scheduler import SequenceLengthSchedulerCallback
 from .slack_notifier import SlackNotificationSetting, SlackNotifierCallback
 from .speed_monitor import SpeedMonitorCallback
@@ -52,6 +53,9 @@ __all__ = [
     "GPUMemoryMonitorCallback",
     "HFConverterCallback",
     "ProfilerCallback",
+    "QATSchedulerCallback",
+    "count_quant_modules",
+    "set_quant_enabled",
     "SlackNotifierCallback",
     "SlackNotificationSetting",
     "SequenceLengthSchedulerCallback",

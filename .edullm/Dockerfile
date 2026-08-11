@@ -214,12 +214,71 @@ COPY pyproject.toml ./
 # The import assertion below is the same argument as the one above it: `import edullm_data`
 # would prove the distribution installed, and `from edullm_data.read import dataset_paths`
 # proves the module a training run actually reaches for loads.
+#
+# ---------------------------------------------------------------------------------------------
+# flash-attn 2 IS AN ARITHMETIC FIX HERE, NOT A KERNEL PREFERENCE.
+#
+# Without it every Maple layer runs `TorchAttentionBackend`, whose sliding-window path is a
+# PESSIMIZATION. It materializes a dense `(s, s)` boolean mask, and the backend reads
+# `is_causal=attn_mask is None` -- so the moment a window exists `is_causal` goes False and SDPA
+# loses its causal fast path, computing the full score matrix and discarding `1 - 512/s` of it.
+# Measured at s=2048 on the 3:1 SWA:global layout: the window costs 3.4x plain global causal
+# attention, against the 1.749x the FLOP count alone predicts, because the explicit mask also
+# forces SDPA off its fused kernel. Maple's headline efficiency feature, inverted.
+#
+# NOTHING IN THE CODE NEEDS A FLAG. `_maple_uniform_attn_backend()`
+# (`nn/transformer/config.py:40-62`) probes `flash_attn_api.has_flash_attn_2()` at call time and
+# returns `flash_2` when the import succeeds, `torch` otherwise. Installing the package is the
+# whole switch, and the backend stays uniform across sliding and global layers, which is what
+# keeps MFU comparable. flash-attn also takes the window as a native `window_size` argument, so
+# the masked-out blocks are never formed, and it supports the intra-document masking that torch
+# SDPA raises on -- a packed corpus with `generate_doc_lengths=True` dies without it.
+#
+# ############# READ BEFORE CHANGING THIS LINE: THE sm_80 TRAP. #############
+#
+# THIS MUST STAY A PREBUILT WHEEL. DO NOT "TIDY" IT INTO `pip install flash-attn==...`.
+#
+# `src/Dockerfile` -- the AI2 Beaker image, NOT this one -- does exactly that, with
+# `FLASH_ATTN_CUDA_ARCHS="90;100"`, which builds for Hopper and Blackwell and EXCLUDES sm_80.
+# The funded target is 8xA100, which IS sm_80. Copying that line here produces an image that
+# builds green and dies at the first A100 micro-step, and a crash gets no retry, so the run is
+# paid for and lost. This is the second occurrence of one bug: `grouped_gemm` was installed with
+# `TORCH_CUDA_ARCH_LIST="9.0 10.0"`, built clean, and failed at the first GPU call. A BUILD THAT
+# SUCCEEDS IS NOT EVIDENCE THE KERNEL RUNS ON OUR HARDWARE. Naming the release asset sidesteps
+# the trap: no compile step, so no arch list to get wrong, and upstream's `publish.yml` sets no
+# arch override so its default `"80;90;100;120"` applies and sm_80 is in the published wheel.
+#
+# THE FILENAME IS THE COMPATIBILITY CONTRACT, and every field is load-bearing:
+#   2.8.3          the newest release publishing a torch-2.9 wheel (2.8.2 stops at torch 2.8)
+#   cu12           against the `nvidia-*-cu12` stack torch 2.9.0's own wheel depends on
+#   torch2.9       matches the `torch==2.9.0` pin on the first line of this RUN
+#   cxx11abiTRUE   torch 2.9.0's manylinux wheels are C++11-ABI; FALSE would fail to link
+#   cp312          the registered base carries python 3.12.13
+#   linux_x86_64   the platform's A100 shape is `p4d.24xlarge`
+# If the torch pin above ever moves, THIS URL MOVES WITH IT or the extension will not load.
+#
+# `--no-deps` because the wheel's `install_requires` is `["torch", "einops"]`: torch is pinned
+# above and must not be re-resolved by a bare `torch` requirement, so `einops` is named
+# explicitly on the same invocation instead.
+#
+# THE HASH GOES THROUGH A REQUIREMENTS FILE BECAUSE IT HAS TO. `--hash` is not a command-line
+# option -- `pip install <url> --hash=sha256:...` fails with `no such option`. It is recognized
+# only inside a requirements file, and naming any hash there implies `--require-hashes` for that
+# file, which is the wanted behaviour: pip refuses rather than warns. Written inline rather than
+# committed separately so the URL and its digest cannot drift apart across two locations, and on
+# one line with no `\` continuation because a backslash inside a RUN is already both the shell's
+# and Docker's escape character. Digest is the asset's own recorded sha256 from the GitHub
+# release API, not one computed locally.
 RUN set -eux; \
     python -m pip install --no-cache-dir "torch==2.9.0"; \
     python -c "import tomllib; project = tomllib.load(open('pyproject.toml', 'rb'))['project']; open('/tmp/dependencies.txt', 'w').write('\n'.join(project['dependencies'] + project['optional-dependencies']['wandb']) + '\n')"; \
     python -m pip install --no-cache-dir -r /tmp/dependencies.txt boto3 "botocore[crt]"; \
     rm /tmp/dependencies.txt; \
-    python -m pip install --no-cache-dir "edullm-data @ https://github.com/edu-llm/edullm-data/archive/38bf831a6c3f445e394784018441fd59288b876c.tar.gz"
+    python -m pip install --no-cache-dir "edullm-data @ https://github.com/edu-llm/edullm-data/archive/38bf831a6c3f445e394784018441fd59288b876c.tar.gz"; \
+    python -m pip install --no-cache-dir einops; \
+    printf '%s\n' "flash-attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3%2Bcu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl --hash=sha256:4e2f9e39313266b1544b68138b15b91ee6221eccf14f7902b7c6620351340810" > /tmp/flash-attn.txt; \
+    python -m pip install --no-cache-dir --no-deps -r /tmp/flash-attn.txt; \
+    rm /tmp/flash-attn.txt
 
 # The build context is the repository root, so the root .dockerignore is what keeps .git
 # out of this layer, and out of the context entirely.
