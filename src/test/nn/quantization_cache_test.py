@@ -9,6 +9,7 @@ from olmo_core.nn.quantization import (
     QuantLinear,
     TWNQuantCache,
     reset_twn_quant_caches,
+    twn_quant_cache_stats,
     twn_quantize,
     twn_quantize_ste,
 )
@@ -132,6 +133,25 @@ def test_quant_linear_cached_matches_uncached():
     assert cached.quant_cache is not None
     for _ in range(3):
         torch.testing.assert_close(cached(x), plain(x))
+
+
+def test_cache_stats_aggregate_over_a_model():
+    model = torch.nn.Sequential(
+        QuantLinear(8, 8, enabled=True, cache_quantized_weight=True),
+        QuantLinear(8, 8, enabled=True, cache_quantized_weight=True),
+    )
+    x = torch.randn(2, 8)
+    for _ in range(3):
+        model(x)
+
+    hits, misses = twn_quant_cache_stats(model)
+    assert (hits, misses) == (4, 2)  # two layers: one miss each, then two hits each
+
+
+def test_cache_stats_report_zero_for_a_model_that_does_not_cache():
+    model = torch.nn.Sequential(QuantLinear(8, 8, enabled=True, cache_quantized_weight=False))
+    model(torch.randn(2, 8))
+    assert twn_quant_cache_stats(model) == (0, 0)
 
 
 def test_cache_counts_hits_and_misses_so_a_useless_cache_is_visible():

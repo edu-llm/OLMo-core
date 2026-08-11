@@ -105,7 +105,11 @@ from olmo_core.distributed.parallel import DataParallelType
 from olmo_core.distributed.utils import barrier, get_rank
 from olmo_core.io import clear_directory, list_directory, normalize_path
 from olmo_core.nn.lm_head import LMLossImplementation
-from olmo_core.nn.quantization import TWN_DELTA_FACTOR, audit_quantization
+from olmo_core.nn.quantization import (
+    TWN_DELTA_FACTOR,
+    audit_quantization,
+    twn_quant_cache_stats,
+)
 from olmo_core.nn.transformer import TransformerConfig
 from olmo_core.optim import (
     AdamWConfig,
@@ -1475,6 +1479,13 @@ def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> 
         return
     device = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"
 
+    # Defensive for the same reason as the `gpu_monitor` lookup below: this is a diagnostic
+    # field, and no diagnostic is worth losing the one JSON line the platform parses.
+    try:
+        twn_cache_hits, twn_cache_misses = twn_quant_cache_stats(trainer.train_module.model)
+    except AttributeError:
+        twn_cache_hits, twn_cache_misses = 0, 0
+
     # PEAK MEMORY: TRUNCATED AT SOURCE, AND THIS IS THE FIELD PEOPLE SIZE HARDWARE WITH.
     #
     # `torch.cuda.max_memory_allocated()` here reports the peak since the last reset -- and
@@ -1514,6 +1525,13 @@ def summarise(*, opts, config, trainer, losses: LossWatcher, seconds: float) -> 
                     parameter.numel() for parameter in trainer.train_module.model.parameters()
                 ),
                 "steps": trainer.global_step,
+                # Whether --cache-quantized-weight actually paid. It is off by default and is
+                # documented as a speedup, but under FSDP2 the weight a forward sees is a fresh
+                # all-gather buffer on every unshard, so the memo cannot match and the flag buys
+                # nothing while pinning a stale buffer. A run with misses and no hits has paid
+                # for a cache it never used, and nothing else in the log would say so.
+                "twn_cache_hits": twn_cache_hits,
+                "twn_cache_misses": twn_cache_misses,
                 "first_loss": losses.first,
                 "last_loss": losses.last,
                 "seconds": seconds,

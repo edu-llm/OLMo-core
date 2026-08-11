@@ -59,6 +59,7 @@ __all__ = [
     "twn_quantize_ste",
     "TWNQuantCache",
     "reset_twn_quant_caches",
+    "twn_quant_cache_stats",
     "audit_quantization",
     "assert_no_float8_conflict",
     "QuantAuditEntry",
@@ -385,6 +386,35 @@ class TWNQuantCache:
         self._data_ptr = w.data_ptr()
         self._quantized = quantized
         return _CachedSTE.apply(w, quantized)  # type: ignore[no-any-return]
+
+
+def twn_quant_cache_stats(module: nn.Module) -> Tuple[int, int]:
+    """
+    Total cache hits and misses across every :class:`TWNQuantCache` reachable from ``module``.
+
+    Enabling the cache is documented as a speedup, and there is one configuration where it is
+    the opposite: under FSDP2 the weight a forward pass sees is a freshly materialized
+    all-gather buffer, a new tensor with new storage on every unshard, so the key cannot match.
+    The memo then never hits, costs a pinned stale buffer, and the only symptom is a throughput
+    number that did not move. Reading these counters after a few steps distinguishes that from a
+    cache that is working: expect one miss per quantized tensor per optimizer step and a hit for
+    every microbatch after the first.
+
+    Note that ``ternary_comm`` sidesteps the problem rather than fixing it -- it quantizes each
+    rank's shard inside ``fsdp_pre_all_gather``, so the work happens once per all-gather on
+    1/world_size of the weights and there is nothing left for a memo to save.
+
+    :param module: The root module to walk.
+
+    :returns: ``(hits, misses)``, summed. ``(0, 0)`` if no cache is configured.
+    """
+    hits = misses = 0
+    for submodule in module.modules():
+        for attribute in vars(submodule).values():
+            if isinstance(attribute, TWNQuantCache):
+                hits += attribute.hits
+                misses += attribute.misses
+    return hits, misses
 
 
 def reset_twn_quant_caches(module: nn.Module) -> int:
