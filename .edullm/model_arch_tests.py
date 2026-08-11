@@ -582,12 +582,22 @@ def _treatment_mixer(arm: str, layer_index: int):
     raise ValueError(f"unsupported arm: {arm}")
 
 
-# Every arm feeds its mixer the reordered (post-)norm block that the wave was frozen with,
-# except the faithful Mamba arm: published Mamba is pre-norm, and the fidelity audit found that
-# feeding the raw residual stream through a post-norm shell was one of this arm's deviations.
-# The switch is param-neutral (reordered_norm and default carry the same two norms, only the
-# forward ordering differs), so it changes the arm's behaviour without moving its parameter count.
-_PRE_NORM_ARMS = frozenset({"mamba-b3"})
+# Every arm feeds its mixer the reordered (post-)norm block that the wave was frozen with, except
+# the two whose recurrences are documented to want a normalized input.
+#
+# `mamba-b3`: published Mamba is pre-norm, and the fidelity audit found that feeding the raw
+# residual stream through a post-norm shell was one of this arm's deviations.
+#
+# `xlstm`: the A/B run while chasing the step-1 NaN put 132 non-finite parameter gradients on the
+# post-norm shell against none on pre-norm at the same sequence length. The mlstm-kernels chunk-256
+# defect turned out to be the primary cause and the arm now trains cleanly either way, but post-norm
+# was plainly the amplifier, and leaving the one arm we have direct evidence against in the shell we
+# rejected for Mamba is an asymmetry rather than a control.
+#
+# The switch is free in both senses: reordered_norm and default carry the same two norms and the
+# same parameters, so no count or FFN width moves, and a paired block benchmark put the two within
+# 0.5% -- well inside the run-to-run spread -- so no throughput is traded for it either.
+_PRE_NORM_ARMS = frozenset({"mamba-b3", "xlstm"})
 
 
 def _block_type(arm: str) -> TransformerBlockType:

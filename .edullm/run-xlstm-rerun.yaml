@@ -1,5 +1,13 @@
-# xLSTM repair wave: rerun only the three failed V2 cells after fixing the
-# mlstm-kernels 2.0.4 chunk-256 backward indexing defect.
+# xLSTM-only wave: rerun the three xLSTM cells under the unchanged V2 recipe.
+#
+# Used twice. First for the mlstm-kernels 2.0.4 chunk-256 backward indexing
+# defect, which this spec's cells cleared (all three SUCCEEDED, mean held-out CE
+# 3.7012). Then again for the pre-norm shell, which the post-fix A/B and a paired
+# block benchmark showed is strictly better for this arm: no parameter, width or
+# throughput cost, and it removes the shell that carried 132 non-finite gradients
+# in the gradient A/B. The spec itself is unchanged between the two -- only the
+# commit the image is built from differs -- so give each wave its own
+# `--experiment` slug to keep them apart in `edullm status`.
 #
 # Check:
 #   edullm check --json \

@@ -19,9 +19,11 @@ and TPP about 1.54. The source of truth is
 
 Every arm has 16 layers, `d_model=1024`, a tied 100,352-token embedding/LM
 head, sequence length 4096, and PyTorch fused-SDPA GQA layers at indices 3, 7,
-11, and 15. Those four attention layers are byte-identical across the seven
-post-norm arms; the faithful `mamba-b3` arm is pre-norm throughout, so its
-attention layers differ from the others only in that norm ordering.
+11, and 15. Those four attention layers are byte-identical across the six
+post-norm arms; `mamba-b3` and `xlstm` are pre-norm throughout, so their
+attention layers differ from the others only in that norm ordering. The block
+type is parameter-neutral and measured within 0.5% on throughput, so it moves no
+count, no FFN width, and no speed — only what the mixer sees at its input.
 
 - `mamba-b3`: twelve faithful published Mamba-3 SISO layers with the single
   intentional deviation that SO(2) is generalized to SO(3) b=3. Faithful means
@@ -30,10 +32,14 @@ attention layers differ from the others only in that norm ordering.
   applied after BCNorm, a learned `D` skip initialized to one, norm-before-gate
   output ordering, and the official `tanh(angle)·π·dt` per-head rotation over
   half of `d_state=192` (the rest identity), all on the `official_fast` SSD
-  backend. This arm alone uses a pre-norm shell (published Mamba is pre-norm), so
-  its four attention layers are pre-norm too; the other seven arms are unchanged.
+  backend. Uses a pre-norm shell (published Mamba is pre-norm), so its four
+  attention layers are pre-norm too.
 - `xlstm`: `[mLSTM, mLSTM, mLSTM, attention, mLSTM, mLSTM, sLSTM, attention]`
-  repeated twice, giving exactly 10 mLSTM, 2 sLSTM, and 4 attention layers.
+  repeated twice, giving exactly 10 mLSTM, 2 sLSTM, and 4 attention layers. Also
+  pre-norm: an A/B at fixed sequence length put 132 non-finite parameter
+  gradients on the post-norm shell against none on pre-norm, and while the
+  mlstm-kernels chunk-256 defect was the primary cause, post-norm was the
+  amplifier and there is no reason to leave this arm in it.
 - `mamba3-siso-pd`: twelve native SISO PD-SSM layers with the Mamba-3
   projection, normalization, and discretization improvements.
 - `native-pd`: twelve published native Flash PD-SSM layers.
