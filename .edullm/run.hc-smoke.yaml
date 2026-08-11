@@ -8,10 +8,9 @@
 #     --team input-core --compute gpu-1xa10g --hours 1
 #
 # Forty steps of the arm the tranche is actually going to run, on the corpus it is actually
-# going to read, on one card. Nothing here is a scientific measurement and nothing about it
-# is meant to be reported: what it buys is the answer to "does this command reach step 40 and
-# write a checkpoint", for about two dollars, before five twelve-hour cells find out for a
-# hundred and thirty.
+# going to read, on one card, for $2.01. Nothing here is a scientific measurement and nothing
+# about it is meant to be reported: what it buys is the answer to "does this command reach step
+# 40 and write a checkpoint", before five twelve-hour cells find out for $201.
 #
 # ---------------------------------------------------------------------------------------
 # WHY THIS EXISTS AT ALL
@@ -29,25 +28,37 @@
 # differs from the run it is smoke-testing in any other respect is testing something else.
 #
 # ---------------------------------------------------------------------------------------
-# THE NUMBER TO READ OFF IT, AND WHAT TO DO WITH IT
+# THE TWO NUMBERS TO READ OFF IT, AND WHAT TO DO WITH THEM
 # ---------------------------------------------------------------------------------------
 #
 # train_on_corpus.summarise prints one JSON object on rank zero at the end, carrying `steps`,
-# `seconds`, `peak_memory_gib`, `parameters`, `first_loss` and `last_loss`. Two of those size
-# the real run and neither can be known from here:
+# `seconds`, `peak_memory_gib`, `parameters`, `first_loss` and `last_loss`.
 #
 #   step_seconds = seconds / steps
-#       --steps in run.hc-baseline.yaml is set from this. See the arithmetic in that file's
-#       header. The committed value is an estimate from the card's peak bf16 throughput at an
-#       assumed 20% MFU, and an MoE with 32 experts of hidden size 384 is exactly the shape
-#       where that assumption is worth least.
+#       --steps and --save-interval in run.hc-baseline.yaml are both set from this. NOTE THAT
+#       `seconds` TIMES THE WHOLE OF Trainer.fit, so it includes the three checkpoint writes
+#       this run makes; subtract them, or read the per-step time out of the W&B curve, rather
+#       than dividing 40 into the total and calling it compute.
 #
-#   peak_memory_gib
-#       --rank-microbatch-size is 8192 rather than train_on_corpus's own default of 16384,
-#       because a 565M-parameter model under FSDP at world size 1 holds its own fp32 master
-#       weights and both Adam moments -- about 10 GiB before a single activation -- and the
-#       cards this is sized for have 24. If the smoke reports comfortable headroom, raising it
-#       to 16384 halves the number of gradient-accumulation microbatches per step.
+#   peak_memory_gib, read against 22.35 and NOT against 24
+#       `gpu-1xa10g` carries 22,888 MiB of device memory, which is 22.35 GiB
+#       (config/accelerators.yaml). The headroom at --rank-microbatch-size 8192 is not the
+#       comfortable margin a "24 GB card" suggests, and the term that decides it is not the one
+#       an optimizer-state calculation names:
+#
+#         parameters, gradients and Adam state at world size 1     9.47 GiB
+#         one fp32 logits tensor, 8192 tokens x 100,352 vocab      3.06 GiB
+#         block activations over 12 layers, roughly                2.8  GiB
+#
+#       At the LM head's backward the logits, the log_softmax output that F.cross_entropy saves,
+#       and the logit gradients can all be live at once, so the total lands somewhere between
+#       18 and 21.5 GiB. It probably fits. It has no margin, and **raising
+#       --rank-microbatch-size to 16384 doubles the logits term specifically**, which does not.
+#       So the condition for raising it is a measured peak below about 16 GiB, not merely a peak
+#       below 22. If memory turns out to be binding, adding liger-kernel to .edullm/Dockerfile
+#       and setting model.lm_head.loss_implementation=fused_linear is the change that buys the
+#       most headroom; the override exists today and raises RuntimeError because the kernel is
+#       not in the image.
 #
 # The last loss is worth a glance and nothing more. Forty steps of warmup on a 565M model is
 # not a training curve; what it establishes is that the loss is finite and falling, which is
@@ -59,50 +70,53 @@
 #
 #   - RESUME. Checkpoints are written at step 20 and step 40, so the write path and the
 #     credential behind it are exercised. Whether a second attempt reads them back is only
-#     exercised by an attempt that fails, and nothing here can arrange one. See the note on
-#     unverified_resume in the platform's own checkpoint guard: two checks stand between a
-#     submission and a working retry and neither of them reads the trainer.
+#     exercised by an attempt that fails, and nothing here can arrange one. Worth knowing that
+#     the second attempt is narrower than it looks: `RETRY_ONLY_WHAT_A_RETRY_FIXES` in the
+#     platform's execution module retries `Host EC2*` and exits on everything else, so a run
+#     that exceeds its wall clock is NOT retried. See the horizon note in the baseline spec.
 #   - MULTI-RANK ANYTHING. --nproc-per-node=1 by design, because the tranche this belongs to
 #     runs one card per cell. A submission that moves this to a multi-card shape without
 #     moving --nproc-per-node is refused by the launch guard before it costs anything, which
 #     is the good direction for that mistake to fail in.
-#   - THE TREATMENT. There is no hyper-connection and no MoE stream balancing in this command.
-#     This is the unmodified `smallmoe` factory that ships in
-#     src/olmo_core/nn/transformer/config.py, which is the point: it needs no code that did
-#     not already exist and pass its tests.
+#   - THE TREATMENT. There is no hyper-connection and no stream balancing in this command. This
+#     is the unmodified `smallmoe` factory that ships in
+#     src/olmo_core/nn/transformer/config.py, which is the point: it needs no code that did not
+#     already exist and pass its tests.
 #
 # ---------------------------------------------------------------------------------------
-# THE FOUR THINGS IN THE COMMAND TEXT THAT ARE THERE FOR THE GUARDS
+# THE THREE THINGS IN THE COMMAND TEXT THAT ARE THERE FOR THE PLATFORM
 # ---------------------------------------------------------------------------------------
 #
-#   1. A SPACE BEFORE EVERY `;`. The launch guard reads the shlex-split command and recognises
-#      an operator only where it is a word of its own. `foo;` splits as one word ending in a
-#      semicolon, which folds the next command into this one, hides the launcher from
-#      `read_launch_plan`, and is refused as `process_per_device` -- a refusal whose text is
-#      about GPUs and whose cause is a missing space.
-#   2. `--param-dtype bfloat16` IN THE TEXT. The precision guard reads command words. It
-#      cannot see the dtype train_on_corpus sets in code, so a command that does not name one
-#      is accepted onto a T4, whose Turing silicon has no bfloat16 at all and whose
+#   1. `--param-dtype bfloat16` IN THE TEXT. The precision guard reads command words. It cannot
+#      see the dtype train_on_corpus sets in code, so a command that does not name one is
+#      accepted onto a T4, whose Turing silicon has no bfloat16 at all and whose
 #      torch.cuda.is_bf16_supported() says otherwise. Naming it turns a dead instance into a
-#      free refusal at check time.
-#   3. `"$EDULLM_CHECKPOINT_DIR"` IN DOUBLE QUOTES INSIDE THE OUTER SINGLE QUOTES. The
+#      free refusal at check time -- verified: this spec on `gpu-1xt4` is refused with
+#      `bfloat16_not_in_the_hardware`, and the same spec with the flag deleted is not.
+#   2. `"$EDULLM_CHECKPOINT_DIR"` IN DOUBLE QUOTES INSIDE THE OUTER SINGLE QUOTES. The
 #      checkpoint guard scans the characters of the text a shell is handed, not its words,
 #      because single quotes suppress the expansion and shlex deletes the evidence. A mention
-#      the shell will never expand is not a reference and is refused as such.
-#   4. THE REDIRECT AND THE REPLAY, INLINE. The platform shows the last 50 lines of container
-#      output and torchrun's epilogue is most of that by itself, so the launcher's own output
-#      goes to a file and the last 40 lines are replayed at the end. Inline rather than inside
-#      a shell function, because a function definition puts the launcher somewhere
-#      `read_launch_plan` does not look: the segment's first word would be the function name.
-#      `status=$?` is captured before the replay and `exit "$status"` is what the container
-#      exits with, so a failed run still fails -- `cmd || tail` would exit 0 on the tail and
-#      report a dead run as a successful one, which is worse than having no replay at all.
+#      the shell will never expand is not a reference and is refused as such -- verified:
+#      replacing it with a literal path produces `checkpoint_path_not_in_command`.
+#   3. `exec` IN FRONT OF THE LAUNCHER, WHICH IS THE ONE THAT CHANGED AFTER AN AUDIT.
+#      This command used to redirect the launcher to a file and replay the last forty lines
+#      afterwards, so that the platform's fifty-line view would show a traceback rather than
+#      torchrun's epilogue. That shape is wrong in three ways at once and they compound.
+#      Because the shell runs the launcher as a child rather than replacing itself with it, a
+#      SIGTERM from `edullm cancel` or from the attempt timeout kills the wrapper and leaves
+#      the trainer running -- reproduced locally: `children_alive_after_term: [22533]`. The
+#      platform's own FANOUT_PROLOGUE uses `exec` for exactly this reason and says so. And on
+#      those two paths the wrapper is gone, so the replay never runs and the log file dies with
+#      the instance, which means the redirect removed the live output for twelve hours and
+#      supplied nothing in the two cases it was written for.
+#      `exec` fixes all three. At --nproc-per-node=1 torchrun's epilogue is a few lines rather
+#      than the fifty the redirect was defending against, so streaming to stdout costs nothing
+#      and buys a log that can be read while the run is alive.
 schema_version: 1
 workload_profile: olmo-core-train
 suggested_compute: gpu-1xa10g
 command: >-
-  bash -lc 'LOG=/tmp/edullm-train.log ;
-  python -m torch.distributed.run --nproc-per-node=1 --standalone
+  bash -lc 'exec python -m torch.distributed.run --nproc-per-node=1 --standalone
   .edullm/train_on_corpus.py "$EDULLM_RUN_ID"
   --save-folder "$EDULLM_CHECKPOINT_DIR"
   --model-factory smallmoe
@@ -117,8 +131,4 @@ command: >-
   --param-dtype bfloat16
   init_seed=0
   model.init_seed=0
-  train_module.compile_model=false
-  > "$LOG" 2>&1 ;
-  status=$? ;
-  tail -n 40 "$LOG" ;
-  exit "$status"'
+  train_module.compile_model=false'

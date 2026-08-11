@@ -1,21 +1,42 @@
-# STAGE 1: five seeds of the baseline arm, and no treatment arm.
+# STAGE 1: five seeds of the untreated arm, and no treatment arm.
 #
 #   edullm check  --json --spec .edullm/run.hc-baseline.yaml \
 #     --experiment hc-moe-stream-balance --dataset regmix-10b-v1 \
-#     --team input-core --compute gpu-1xa10g --hours 12
+#     --team input-core --compute gpu-1xa10g --hours 20
 #   edullm submit       --spec .edullm/run.hc-baseline.yaml \
 #     --experiment hc-moe-stream-balance --dataset regmix-10b-v1 \
-#     --team input-core --compute gpu-1xa10g --hours 12
+#     --team input-core --compute gpu-1xa10g --hours 20
 #
-# RUN .edullm/run.hc-smoke.yaml FIRST. It is the same command at forty steps for two dollars,
-# and the number it prints is what --steps below should be set from. See "THE HORIZON".
+# RUN .edullm/run.hc-smoke.yaml FIRST. It is the same command at forty steps for $2.01, and the
+# two numbers it prints are what --steps and --save-interval below should be set from.
 #
-# The pre-registration this belongs to -- `38b66591`, `.edullm/run.baseline-stage.yaml` on
-# `edullm/hyper-connections-370m` -- forbids submitting a treatment arm before the noise-floor
-# table has numbers in it, and this is the run that fills it. Nothing here is a treatment:
-# every cell runs the identical command and the fan-out index moves the replicate and nothing
-# else. There is no hyper-connection in this command and no stream balancing; `smallmoe` is
-# the unmodified factory in src/olmo_core/nn/transformer/config.py.
+# ---------------------------------------------------------------------------------------
+# WHAT THIS RUN IS, AND WHAT IT IS NOT
+# ---------------------------------------------------------------------------------------
+#
+# It is the noise floor for the `hc-moe-stream-balance` experiment: five replicates of the
+# untreated shape, so that the treatment arms have a measured sigma to be tested against
+# instead of a literature guess. Every cell runs the identical command and the fan-out index
+# moves the replicate and nothing else. There is no hyper-connection in this command and no
+# stream balancing; `smallmoe` is the unmodified factory in
+# src/olmo_core/nn/transformer/config.py.
+#
+# **IT DOES NOT FILL THE NOISE-FLOOR TABLE THE PRE-REGISTRATION AT `38b66591` ASKS FOR, AND AN
+# EARLIER VERSION OF THIS HEADER SAID IT DID.** That pre-registration names two required
+# outputs -- sigma-hat on held-out bits-per-byte at df = 4, and per-source inverse-variance
+# weights -- and this run produces neither. It also describes a different experiment: `hc_370M`
+# at sequence length 4096, batch 786,432 and 6,000 steps, against this file's `smallmoe` at
+# 2048, 262,144 and the horizon below. So the correct reading is narrower and is the one that
+# stands: this measures the seed sigma of **final training cross-entropy** for **this** shape,
+# corpus and horizon, and the `hc-moe-stream-balance` treatment arms must match this shape
+# exactly for it to be their noise floor. The 370M pre-registration's gate stays unfilled.
+#
+# Why the difference matters, rather than being a bookkeeping note: training cross-entropy on
+# the stream the model is fitting is not the held-out quantity a superiority claim needs, and
+# per-source weights -- worth another 1.2-2.9x on sigma at zero compute -- cannot be recovered
+# afterwards from a run that never evaluated per source. Two routes to closing it are costed in
+# docs/hc-ablation/EXPERIMENT-DESIGN.md section 8 and named in AGENT-STATUS.md under DECISIONS
+# NEEDED FROM HUMAN. Both are cheaper before this runs than after.
 #
 # ---------------------------------------------------------------------------------------
 # WHY FIVE SEEDS, AND WHY THAT IS THE CHEAP CHOICE RATHER THAN THE THOROUGH ONE
@@ -33,11 +54,10 @@
 # dollar moved out of replicates and into horizon makes the experiment less sensitive. That is
 # the entire argument for the shape of this file: the horizon is short and the seeds are five.
 #
-# Five rather than three because a variance estimate on df = 2 has a 95% interval spanning a
-# factor of 12.1 end to end, which is not a noise floor but a rumour of one. df = 4 takes that
-# to about 5.6, and pooling with the treatment arms later takes it further. See
-# docs/hc-ablation/EXPERIMENT-DESIGN.md for the resulting minimum detectable effect and for
-# the honest statement of what it can and cannot detect.
+# Five rather than three because a variance estimate at df = 2 has a 95% interval for sigma
+# spanning a factor of 12.07 end to end. df = 4 takes that to 4.80, which is where the number
+# comes from: chi-square quantiles 0.0506/7.3778 at df = 2 and 0.4844/11.1433 at df = 4. (An
+# earlier version of this header said 5.6, which is not the ratio at any df.)
 #
 # ---------------------------------------------------------------------------------------
 # WHAT A CELL VARIES, AND WHY IT IS THREE SEEDS AND NOT ONE
@@ -66,39 +86,57 @@
 # underestimate of exactly the quantity the gate is built out of, so it fails toward claiming
 # results that are not there.
 #
-# `${AWS_BATCH_JOB_ARRAY_INDEX:-0}` rather than the bare variable, so that the same command
-# runs outside a fan-out -- which is how the smoke spec runs it, and how anybody debugging
-# will.
+# **`:?` AND NOT `:-0`, WHICH IS A CHANGE AN AUDIT FORCED.** This read
+# `${AWS_BATCH_JOB_ARRAY_INDEX:-0}` so that the same command would run outside a fan-out. That
+# default is the failure the paragraph above exists to prevent, wearing a convenience: if the
+# variable is ever unset, renamed or shadowed, all five cells silently run seed 0, sigma is
+# measured as exactly zero, and every later arm is significant against it. `:?` turns that into
+# a container that refuses to start and says why, which costs a debugging convenience nobody
+# was using on a command nobody runs interactively. The smoke spec hard-codes 0 and is the
+# thing to run by hand.
 #
 # ---------------------------------------------------------------------------------------
-# THE HORIZON, AND THE ONE NUMBER HERE THAT IS A GUESS
+# THE HORIZON, AND THE RETRY THAT IS NOT THERE
 # ---------------------------------------------------------------------------------------
 #
-# --steps 3000 at 262,144 tokens a step is 786M tokens per cell. That number came from
-# arithmetic, not from a measurement, and the arithmetic is worth stating so it can be
-# corrected rather than trusted:
+# --steps 3000 at 262,144 tokens a step is 786M tokens per cell. The arithmetic, from the
+# model's own accounting rather than a rule of thumb:
 #
-#   `smallmoe` activates about 190.7M parameters per token -- 12 layers x (2.36M attention +
-#   3.54M shared MLP + 3.54M of 4-in-32 experts) plus the 77.07M output projection -- which is
-#   about 1.37 GFLOP/token forward and backward including attention. An A10G is 125 TFLOP/s
-#   bf16 dense; at an assumed 20% MFU that is 18.2k tokens/s, so 786M tokens is about 12.0
-#   hours. An MoE whose experts are 32 GEMMs of hidden size 384 is precisely the shape where a
-#   20% MFU assumption is worth least, and nothing in this repository has measured it.
+#   TransformerConfig.smallmoe(...).build().num_flops_per_token(2048) is 1.3706 GFLOP, over
+#   267,765,504 active parameters of which 190,695,168 are in matmuls -- the rest is the
+#   embedding table, which is a lookup. One step is 262,144 x 1.3706 GFLOP = 359.3 TFLOP. An
+#   A10G is 125 TFLOP/s bf16; at an assumed 20% MFU that is 14.4 s/step and 3,000 steps is
+#   12.0 hours.
 #
-# SO SET IT FROM THE SMOKE. Take `seconds / steps` out of the smoke run's summary JSON and set
+# **THE SECOND ATTEMPT DOES NOT COVER AN OVERRUN, WHICH IS WHY --hours IS 20 AND NOT 12.**
+# `RETRY_ONLY_WHAT_A_RETRY_FIXES` in edullm_platform/execution.py retries `Host EC2*`, exits on
+# `OutOfMemoryError*`, and exits on every other exit code. A cell that runs out of wall clock is
+# not retried, so an earlier version of this file, which sized 3,000 steps into a 12-hour bound
+# and argued that attempt two would finish the job, was sizing every cell to time out and lose
+# its last two hours. The second attempt is for a host that went away, and for nothing else.
 #
-#   --steps  =  floor( 0.85 * 12 * 3600 / step_seconds )
+# So the horizon is bounded by --steps and the wall clock is given room: 20 hours against an
+# estimate of 12 absorbs an MFU 40% worse than assumed. It costs nothing that is not spent --
+# `rate x nodes x hours x attempts x cells` is the approval ceiling and billing is by actual
+# runtime -- and it takes the priced worst case from $120.72 to $201.20, which `edullm check`
+# still classifies as routine. Raising a ceiling nobody reaches is the cheap way to buy margin
+# on this platform; lowering --steps buys the same margin by giving up science.
 #
-# rounded down to a multiple of --save-interval. Then commit that edit and push it, because
-# the image is built from the commit.
+# SET BOTH FROM THE SMOKE ANYWAY. Take the per-step time out of the smoke's W&B curve and
+# set --steps to floor(0.75 * 20 * 3600 / step_seconds), rounded down to a multiple of
+# --save-interval. Then commit that edit and push it, because the image is built from the
+# commit. What is NOT recoverable is a tranche in which some cells reached 3,000 steps and
+# others did not, because the horizon is then confounded with the cell.
 #
-# OVERSHOOTING IS RECOVERABLE AND UNDERSHOOTING IS SAFE, WHICH IS WHY 3000 IS LEFT IN RATHER
-# THAN SOMETHING TIMID. `olmo-core-train` allows two attempts and checkpoints every 500 steps,
-# so a cell that runs out of wall clock resumes and finishes on the second attempt -- that is
-# what the second attempt is priced for. What is NOT recoverable is a tranche in which some
-# cells reached 3000 steps and others did not, because the horizon is then confounded with the
-# cell. If the smoke says the estimate was optimistic, lower --steps before submitting; do not
-# submit and hope.
+# --save-interval 125 and not 500, which is the other thing the audit moved. `olmo-core-train`
+# declares `checkpoint: {interval_minutes: 30, resume_required: true}`, and that declaration is
+# what a second attempt is priced against; 500 steps at 14.4 s/step is two hours, four times
+# the interval the profile promises. Nothing enforces it -- `check`'s own `retries.said`
+# explains that the guard verifies only that the declaration exists and that
+# $EDULLM_CHECKPOINT_DIR expands -- so this passed and would have discarded up to two hours per
+# cell on any attempt that ended early. 125 steps is about thirty minutes at the estimate. It
+# gives 24 checkpoints per cell rather than the six 500 would have given, and a checkpoint of a
+# 565M model is cheap against half an hour of an A10G.
 #
 # ---------------------------------------------------------------------------------------
 # WHAT THIS RUN CAN AND CANNOT MEASURE
@@ -106,25 +144,19 @@
 #
 # CAN: sigma-hat of the final training cross-entropy across five seeds, at df = 4, on the
 # corpus and the shape the treatment arms will use. Wall-clock, tokens/second and peak memory
-# per cell, from the summary JSON. Five checkpoints per cell, at 500-step intervals.
+# per cell, from the summary JSON. Twenty-four checkpoints per cell.
 #
 # CANNOT: anything held out, and this is the honest limit of using only code that already
 # exists. train_on_corpus.py wires no evaluator, deliberately -- its header says so and says
-# why -- and regmix-10b declares no validation split, so there is no `.val` for an evaluator to
-# read and no per-source breakdown to weight. The per-source inverse-variance weights the
-# pre-registration wants from this stage are therefore NOT produced here.
-#
-# The route to both, which costs no GPU time now: every cell saves checkpoints, so a separate
-# scoring job over those checkpoints produces held-out and per-source numbers after the fact.
-# Carving a held-out set out of regmix-10b's 41 shards is what `--held-out-shards` on
-# `edullm/hyper-connections-370m`'s train_hyper_connections.py does, and porting that file is
-# the smallest change that would make this stage produce the metric the gate is written
-# against. It is named in docs/hc-ablation/AGENT-STATUS.md under DECISIONS NEEDED FROM HUMAN
-# rather than done here, because a stage-1 baseline whose entrypoint nobody has run is not a
-# stage-1 baseline.
+# why -- and whether regmix-10b publishes a validation split is a question two committed
+# documents disagree about (this repository's earlier note says it declares none; `38b66591`'s
+# a100 tranche spec says it declares seven validation shards, which reads like a confusion with
+# its seven source categories). Settling that needs one read of the sealed manifest from a
+# machine with the grant. It is in AGENT-STATUS.md under DECISIONS NEEDED FROM HUMAN, and it is
+# worth settling BEFORE this runs rather than after.
 #
 # ---------------------------------------------------------------------------------------
-# THE FLAGS THAT ARE NOT HERE, AND THE FIVE THINGS IN THE TEXT THAT ARE THERE FOR THE GUARDS
+# THE FLAGS THAT ARE NOT HERE, AND THE ONE DEVIATION WORTH DECLARING
 # ---------------------------------------------------------------------------------------
 #
 # --work-dir is absent because train_on_corpus's default (/tmp/dataset-cache) is right and
@@ -134,21 +166,25 @@
 # torch.compile ON, which is right for the dense models it was written for and is unproven
 # against an MoE whose expert dispatch is data-dependent. Compiling is a throughput decision
 # and this tranche is a variance measurement; turning it on later is one word, and finding out
-# in hour one of five twelve-hour cells that it graph-breaks or silently changes numerics is
-# not. It has to be identical across every arm either way, which is the actual requirement.
+# in hour one of five cells that it graph-breaks or silently changes numerics is not. It has to
+# be identical across every arm either way, which is the actual requirement, and
+# src/scripts/ablations/hc_launch_check.py asserts it reaches the field rather than trusting
+# that it is written down.
 #
-# The five things in the command text that exist for the platform's guards -- the space before
-# every `;`, the dtype named in the text, the checkpoint variable in expandable quotes, the
-# inline redirect and replay, and the exit status carried past the replay -- are each explained
-# in the header of .edullm/run.hc-smoke.yaml. They are the same five and they are load-bearing
-# in the same way.
+# --warmup-steps 200 of 3,000 is 6.7%, against the 2% the 370M pre-registration used. Declared
+# rather than silent, because this file's whole argument is that every arm is identical: what
+# matters is that every arm of this experiment uses 200, not that it matches a different
+# experiment.
+#
+# The three things in the command text that exist for the platform -- the dtype named in the
+# text, the checkpoint variable in expandable quotes, and `exec` in front of the launcher --
+# are each explained in the header of .edullm/run.hc-smoke.yaml.
 schema_version: 1
 workload_profile: olmo-core-train
 suggested_compute: gpu-1xa10g
 command: >-
-  bash -lc 'SEED="${AWS_BATCH_JOB_ARRAY_INDEX:-0}" ;
-  LOG=/tmp/edullm-train.log ;
-  python -m torch.distributed.run --nproc-per-node=1 --standalone
+  bash -lc 'SEED="${AWS_BATCH_JOB_ARRAY_INDEX:?refusing_to_run_without_a_fanout_index}" ;
+  exec python -m torch.distributed.run --nproc-per-node=1 --standalone
   .edullm/train_on_corpus.py "$EDULLM_RUN_ID"
   --save-folder "$EDULLM_CHECKPOINT_DIR"
   --model-factory smallmoe
@@ -157,17 +193,13 @@ command: >-
   --rank-microbatch-size 8192
   --steps 3000
   --warmup-steps 200
-  --save-interval 500
+  --save-interval 125
   --learning-rate 6e-4
   --data-seed "$SEED"
   --param-dtype bfloat16
   init_seed="$SEED"
   model.init_seed="$SEED"
-  train_module.compile_model=false
-  > "$LOG" 2>&1 ;
-  status=$? ;
-  tail -n 40 "$LOG" ;
-  exit "$status"'
+  train_module.compile_model=false'
 fanout:
   size: 5
   index_parameter: seed

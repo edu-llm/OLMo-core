@@ -1,31 +1,40 @@
 """
 What ``edullm check`` cannot ask: does the command in a run spec, once the platform has
-wrapped it and a shell has run it, hand the trainer the arguments it was meant to?
+wrapped it and a shell has run it, build the config it was meant to build?
 
 ``edullm check`` reads the command's *words*. It answers whether a launcher is in command
 position, whether the process count matches the shape, whether a dtype the hardware lacks is
 named, and whether the checkpoint variable is written somewhere a shell would expand. It
-cannot answer the question that actually killed a run, which is whether
-``train_on_corpus.py`` receives ``--data-seed 3`` when the third cell of a fan-out starts.
+cannot answer the questions that actually cost a tranche: whether the third cell of a fan-out
+hands ``train_on_corpus.py`` a seed of 3, and whether ``train_module.compile_model=false``
+reaches the field it names.
 
-This script answers that one, on a CPU, without a network:
+So this runs the whole path:
 
 1. Reads a spec and splits its command exactly as the submission workflow does (``shlex``).
 2. Wraps it in :func:`edullm_platform.execution.fanout_cell_command`'s prologue when the spec
-   declares a fan-out, which is the text a cell's container is actually handed. When the
-   ``edullm`` CLI is not installed the prologue is reproduced from the platform's own source
-   and the run says which of the two it used.
-3. Runs that text in a real ``bash`` with the environment Batch sets, against a stub
-   ``python`` that records its argv rather than training anything.
-4. Feeds the recorded argv to ``train_on_corpus.build_parser().parse_known_args`` and merges
-   the leftover dotted overrides into a real :class:`TransformerConfig`, then asserts that
-   every seed the spec meant to move has moved.
+   declares a fan-out, which is the text a cell's container is actually handed.
+3. Runs that text in a real ``bash`` with the environment Batch sets, against a stub ``python``
+   that records its argv rather than training anything.
+4. Feeds the recorded argv to **``train_on_corpus.build_config``**, the container's own config
+   constructor, with only the corpus resolution stubbed out — and asserts every value in
+   :data:`SPEC_EXPECTATIONS` against the resulting config.
 
-What it cannot do is run the model, reach S3, or say anything about throughput. Those need a
-GPU and a corpus; see ``docs/hc-ablation/AGENT-STATUS.md``.
+**Step 4 is the whole of why this file was rewritten.** An earlier version checked that some
+leftover argument began with ``train_module.`` and that the seeds parsed, which is a check
+that cannot fail: deleting ``train_module.compile_model=false`` outright made the second
+disjunct true and the finding stayed green, while the run it cleared had ``torch.compile``
+silently back on for every cell. Two independent audits found that, along with three more
+mutations it passed. The expectations table below is the remedy and it is deliberately a
+maintenance burden: changing a spec's shape now requires changing this file, which is what
+makes a silent change impossible.
+
+What it still cannot do is run the model, reach S3, or say anything about throughput. Those
+need a GPU and a corpus; see ``docs/hc-ablation/AGENT-STATUS.md``.
 
     python src/scripts/ablations/hc_launch_check.py
     python src/scripts/ablations/hc_launch_check.py --spec .edullm/run.hc-baseline.yaml
+    python src/scripts/ablations/hc_launch_check.py --json
 """
 
 import argparse
@@ -35,28 +44,79 @@ import os
 import shlex
 import subprocess
 import sys
+import sysconfig
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
-#: The specs this checks when it is given none. Every spec this repository asks a human to
-#: submit belongs here, so that adding one and forgetting to check it is a failing run of this
-#: script rather than a discovery on the platform.
-DEFAULT_SPECS: Tuple[str, ...] = (
-    ".edullm/run.hc-smoke.yaml",
-    ".edullm/run.hc-baseline.yaml",
-    ".edullm/run.hc-treatment.yaml",
-)
+#: What every spec's command has to build, checked against the config
+#: ``train_on_corpus.build_config`` actually produces. A spec whose shape changes without this
+#: table changing is a failing run of this script rather than a discovery on the platform.
+#:
+#: ``seed`` is ``None`` where the seed comes from the fan-out index, in which case each cell is
+#: expected to draw its own index; anything else is a literal the command hard-codes.
+SPEC_EXPECTATIONS: Dict[str, Dict[str, Any]] = {
+    ".edullm/run.hc-smoke.yaml": {
+        "model_factory": "smallmoe",
+        "sequence_length": 2048,
+        "global_batch_size": 262_144,
+        "rank_microbatch_size": 8_192,
+        "steps": 40,
+        "save_interval": 20,
+        "warmup_steps": 10,
+        "learning_rate": 6e-4,
+        "param_dtype": "bfloat16",
+        "compile_model": False,
+        "seed": 0,
+        "launcher_processes": 1,
+        "expects_fanout": False,
+    },
+    ".edullm/run.hc-baseline.yaml": {
+        "model_factory": "smallmoe",
+        "sequence_length": 2048,
+        "global_batch_size": 262_144,
+        "rank_microbatch_size": 8_192,
+        "steps": 3_000,
+        "save_interval": 125,
+        "warmup_steps": 200,
+        "learning_rate": 6e-4,
+        "param_dtype": "bfloat16",
+        "compile_model": False,
+        "seed": None,
+        "launcher_processes": 1,
+        "expects_fanout": True,
+    },
+    ".edullm/run.hc-treatment.yaml": {
+        "model_factory": None,  # a different entrypoint; see `_expectations_for`
+        "sequence_length": 2048,
+        "global_batch_size": 262_144,
+        "rank_microbatch_size": 8_192,
+        "steps": 3_000,
+        "save_interval": 125,
+        "warmup_steps": 200,
+        "learning_rate": 6e-4,
+        "param_dtype": "bfloat16",
+        "compile_model": False,
+        "seed": None,
+        "launcher_processes": 1,
+        "expects_fanout": True,
+    },
+}
+
+#: The launcher every spec is required to name, and the flag whose value has to match the
+#: compute profile's device count. Asserted exactly rather than pattern-matched: a mutation to
+#: ``torch.distributed.runn`` used to pass, and it is a container that dies on `No module named`.
+REQUIRED_LAUNCHER_MODULE = "torch.distributed.run"
 
 #: Reproduced from ``edullm_platform.execution.FANOUT_PROLOGUE`` for the case where the CLI is
-#: not installed beside this checkout. The import is tried first and this is the fallback, so a
-#: machine with ``edullm`` present is always checking against the platform's own text; the copy
-#: exists so that CI without the CLI still checks something, and the report says which was used.
+#: not installed. The import is tried first, including into the ``uv`` tool's own virtual
+#: environment, and this is the fallback; the report says which was used and the run fails if it
+#: had to fall back while the CLI is on the PATH, because that is drift the copy would hide.
 FALLBACK_FANOUT_PROLOGUE = (
     'export EDULLM_OUTPUT_PREFIX="${EDULLM_OUTPUT_PREFIX}cell-${AWS_BATCH_JOB_ARRAY_INDEX}/"; '
     'export EDULLM_CHECKPOINT_DIR="${EDULLM_OUTPUT_PREFIX}checkpoints/"; '
@@ -78,9 +138,7 @@ CONTAINER_ENVIRONMENT: Dict[str, str] = {
     "WANDB_RUN_ID": "run_0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000",
 }
 
-#: A stand-in for ``python`` that writes its own argv out and exits. ``os.execv``-free and
-#: dependency-free on purpose: it is invoked by whatever interpreter the outer shell finds, and
-#: the only thing it must not do is import this repository.
+#: A stand-in for ``python`` that writes its own argv out and exits.
 STUB_PYTHON = """#!/bin/sh
 # Records the argv the shell built, then exits 0 so the rest of the command text runs.
 printf '%s\\n' "$@" > "$EDULLM_ARGV_CAPTURE"
@@ -110,27 +168,72 @@ class SpecReport:
     def failures(self) -> List[Finding]:
         return [finding for finding in self.findings if not finding.ok]
 
+    def record(self, ok: bool, what: str, detail: str = "") -> None:
+        self.findings.append(Finding(bool(ok), what, detail))
+
+
+def _import_edullm_platform():
+    """
+    Import ``edullm_platform``, looking inside the ``uv`` tool venv if it is not importable.
+
+    ``edullm`` is installed as a uv tool, which puts it in its own virtual environment rather
+    than on this interpreter's path, so a plain import fails on the very machines where the CLI
+    is present. That made the drift check below report "not installed" on a machine with the
+    CLI installed, so it never once compared anything.
+
+    :returns: The module, or ``None``.
+    """
+    try:
+        import edullm_platform  # type: ignore[import-not-found]
+
+        return edullm_platform
+    except ImportError:
+        pass
+    home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    version = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    candidates = [
+        home / "uv" / "tools" / "edullm" / "lib" / version / "site-packages",
+        home / "uv" / "tools" / "edullm" / "lib" / sysconfig.get_python_version(),
+    ]
+    for candidate in candidates:
+        if (candidate / "edullm_platform").is_dir():
+            sys.path.insert(0, str(candidate))
+            try:
+                import edullm_platform  # type: ignore[import-not-found]
+
+                return edullm_platform
+            except ImportError:
+                sys.path.pop(0)
+    return None
+
+
+def _cli_is_on_the_path() -> bool:
+    """Whether ``edullm`` is runnable, which is what makes a failed import drift rather than
+    an absence."""
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        candidate = Path(directory) / "edullm"
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return True
+    return False
+
 
 def fanout_prologue() -> Tuple[str, str]:
     """
     The prologue a fan-out cell's container runs before the submitted command.
 
-    :returns: The prologue text and where it came from, so a report can say whether it was the
-        platform's own or this file's copy of it.
+    :returns: The prologue text and where it came from.
     """
-    try:
+    module = _import_edullm_platform()
+    if module is not None:
         from edullm_platform.execution import FANOUT_PROLOGUE  # type: ignore[import-not-found]
-    except ImportError:
-        return FALLBACK_FANOUT_PROLOGUE, "this file's copy (edullm CLI not installed)"
-    return FANOUT_PROLOGUE, "edullm_platform.execution.FANOUT_PROLOGUE"
+
+        return FANOUT_PROLOGUE, "edullm_platform.execution.FANOUT_PROLOGUE"
+    return FALLBACK_FANOUT_PROLOGUE, "this file's copy (edullm_platform not importable)"
 
 
 def load_train_on_corpus():
     """
     Import ``.edullm/train_on_corpus.py`` by path.
-
-    It is not on ``sys.path`` and is not a package, and it is the file whose argument parser
-    this script exists to check, so importing it by path is the only honest option.
 
     :returns: The imported module.
 
@@ -139,11 +242,43 @@ def load_train_on_corpus():
     path = REPO_ROOT / ".edullm" / "train_on_corpus.py"
     if not path.is_file():
         raise FileNotFoundError(path)
-    spec = importlib.util.spec_from_file_location("_edullm_train_on_corpus", path)
+    name = "_edullm_train_on_corpus"
+    spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    # Registered before it is executed. ``ExperimentConfig`` is a dataclass whose field types
+    # are resolved by name out of its defining module, so a module that is not in
+    # ``sys.modules`` builds fine and then raises ``No module named`` from inside
+    # ``build_config`` -- which reads as the command being wrong rather than as this file being
+    # wrong, which is the worst way for a checker to fail.
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _stub_corpus(module):
+    """
+    Replace ``resolve_corpus`` with something that needs no network and no credential.
+
+    Everything downstream of it — the model factory lookup, the dataset config, the train
+    module and the trainer, and the dotted-override merge that is the point of this script — is
+    the container's own code, unmodified.
+
+    :param module: The imported ``train_on_corpus`` module.
+    """
+    from olmo_core.data import NumpyDatasetDType, TokenizerConfig
+
+    def resolve(*, dataset_id: str, version: str, tokenizer_id: str):
+        return module.Corpus(
+            dataset_id=dataset_id or "pretrain/regmix-10b",
+            version=version or "v1",
+            paths=[f"s3://edullm-data/pretrain/regmix-10b/v1/shard-{i:03d}.npy" for i in range(4)],
+            dtype=NumpyDatasetDType.uint32,
+            tokenizer=TokenizerConfig.dolma2(),
+            rows=None,
+        )
+
+    module.resolve_corpus = resolve
 
 
 def container_command(spec: dict, *, array_index: Optional[int]) -> Tuple[List[str], str]:
@@ -169,8 +304,7 @@ def capture_argv(command: Sequence[str], *, array_index: Optional[int]) -> List[
     :param command: The container's argv.
     :param array_index: The fan-out index Batch would set, or ``None``.
 
-    :returns: The arguments the training entrypoint would have been called with, the program
-        name included.
+    :returns: The arguments the training entrypoint would have been called with.
 
     :raises RuntimeError: If the command exits nonzero or never invokes ``python``.
     """
@@ -186,10 +320,6 @@ def capture_argv(command: Sequence[str], *, array_index: Optional[int]) -> List[
         environment = dict(os.environ)
         environment.update(CONTAINER_ENVIRONMENT)
         environment["EDULLM_ARGV_CAPTURE"] = str(capture)
-        # In front of the real interpreter so the stub wins. A login shell may rewrite PATH,
-        # which is why the specs use `bash -lc` and why this has to survive that: BASH_ENV is
-        # not read by an interactive-less login shell, so the guard is that the stub directory
-        # is first here and `-l` prepends rather than replaces on every image this runs on.
         environment["PATH"] = f"{stub_dir}{os.pathsep}{environment.get('PATH', '')}"
         if array_index is not None:
             environment["AWS_BATCH_JOB_ARRAY_INDEX"] = str(array_index)
@@ -216,20 +346,33 @@ def capture_argv(command: Sequence[str], *, array_index: Optional[int]) -> List[
         return capture.read_text(encoding="utf-8").splitlines()
 
 
-def entrypoint_argv(argv: Sequence[str]) -> List[str]:
+def split_launcher(argv: Sequence[str]) -> Tuple[List[str], List[str]]:
     """
-    Strip the launcher off a recorded argv, leaving what the training script is handed.
+    Separate the launcher's own arguments from the training script's.
 
-    :param argv: The argv the ``python`` stub recorded, ``-m torch.distributed.run`` included.
+    :param argv: The argv the ``python`` stub recorded.
 
-    :returns: The arguments from the training script's path onward.
+    :returns: ``(launcher_argv, entrypoint_argv)``.
 
-    :raises RuntimeError: If the training script is not in the argv at all.
+    :raises RuntimeError: If no training entrypoint is present.
     """
     for position, word in enumerate(argv):
-        if word.endswith("train_on_corpus.py") or word.endswith("train_hc_moe.py"):
-            return list(argv[position:])
+        if word.endswith(".py") and "/" in word:
+            return list(argv[:position]), list(argv[position:])
     raise RuntimeError(f"no training entrypoint found in argv: {argv}")
+
+
+def _expectations_for(path: str) -> Dict[str, Any]:
+    """
+    The expectations for one spec.
+
+    :param path: The spec's repository-relative path.
+
+    :returns: The expectations.
+
+    :raises KeyError: If the spec has no entry, which is the point of the table.
+    """
+    return SPEC_EXPECTATIONS[path]
 
 
 def check_spec(path: Path, *, cells: Sequence[int]) -> SpecReport:
@@ -241,16 +384,40 @@ def check_spec(path: Path, *, cells: Sequence[int]) -> SpecReport:
 
     :returns: The report.
     """
-    report = SpecReport(path=str(path.relative_to(REPO_ROOT)))
+    relative = str(path.relative_to(REPO_ROOT))
+    report = SpecReport(path=relative)
     spec = yaml.safe_load(path.read_text(encoding="utf-8"))
+    expected = _expectations_for(relative)
     train_on_corpus = load_train_on_corpus()
+    _stub_corpus(train_on_corpus)
 
     fanout = spec.get("fanout")
+    report.record(
+        bool(fanout) == expected["expects_fanout"],
+        "the fan-out block matches what the experiment design expects",
+        f"spec fanout={fanout}, expected_fanout={expected['expects_fanout']}",
+    )
     indices: List[Optional[int]] = (
         [index for index in cells if index < fanout["size"]] if fanout else [None]
     )
     if fanout and not indices:
         indices = [0]
+
+    # A fan-out command must refuse to start without its index, or five cells silently run one
+    # replicate and the measured noise floor is exactly zero. Checked by running it with the
+    # variable unset and requiring a nonzero exit.
+    if fanout:
+        try:
+            bare, _ = container_command(spec, array_index=None)
+            capture_argv(bare, array_index=None)
+            ran_without_index = True
+        except (RuntimeError, subprocess.TimeoutExpired):
+            ran_without_index = False
+        report.record(
+            not ran_without_index,
+            "the command refuses to start when the fan-out index is unset",
+            "it started anyway, so an unset or renamed index runs every cell on one seed",
+        )
 
     seeds_seen: Dict[Optional[int], Tuple[int, int, int]] = {}
     for index in indices:
@@ -259,98 +426,108 @@ def check_spec(path: Path, *, cells: Sequence[int]) -> SpecReport:
         try:
             recorded = capture_argv(command, array_index=index)
         except (RuntimeError, subprocess.TimeoutExpired) as failure:
-            report.findings.append(
-                Finding(False, f"cell {index}: the command runs and reaches python", str(failure))
-            )
+            report.record(False, f"cell {index}: the command runs and reaches python", str(failure))
             continue
-        argv = entrypoint_argv(recorded)
+        launcher, argv = split_launcher(recorded)
         if index in (None, indices[0]):
             report.argv = argv
 
+        # THE LAUNCHER, EXACTLY. `torch.distributed.runn` used to pass here and is a container
+        # that dies on `No module named`.
+        report.record(
+            launcher[:2] == ["-m", REQUIRED_LAUNCHER_MODULE],
+            f"cell {index}: the launcher is python -m {REQUIRED_LAUNCHER_MODULE}",
+            f"got {launcher}",
+        )
+        report.record(
+            f"--nproc-per-node={expected['launcher_processes']}" in launcher,
+            f"cell {index}: --nproc-per-node is {expected['launcher_processes']}",
+            f"got {launcher}",
+        )
+        # `exec` in front of the launcher is what lets a SIGTERM from `edullm cancel` or from
+        # the attempt timeout reach the trainer instead of killing a wrapper shell that leaves
+        # it running and billing.
+        report.record(
+            "exec " in spec["command"],
+            f"cell {index}: the launcher is exec'd rather than run as a child of the wrapper",
+            "without exec, SIGTERM kills the wrapper and the trainer keeps running",
+        )
+
         opts, extras = train_on_corpus.build_parser().parse_known_args(argv[1:])
 
-        report.findings.append(
-            Finding(
-                opts.run_name == CONTAINER_ENVIRONMENT["EDULLM_RUN_ID"],
-                f"cell {index}: $EDULLM_RUN_ID expanded into the run name",
-                f"got {opts.run_name!r}",
-            )
+        # `init_seed=` absent is NOT the same as `init_seed=0`: the field's default is 12536, so
+        # a spec that dropped the override would run a seed the checker reported as 0.
+        experiment_seed_overrides = [o for o in extras if o.startswith("init_seed=")]
+        report.record(
+            len(experiment_seed_overrides) == 1,
+            f"cell {index}: exactly one init_seed= override is present",
+            f"extras: {extras}",
         )
-        # The whole reason the checkpoint guard exists: a save folder that is not the platform's
-        # per-run prefix is a run whose retry starts from nothing and whose checkpoints nobody
-        # can reach. Under a fan-out the prologue moves the prefix per cell, so the expected
-        # value is the cell's and not the job's.
+
+        # THE CONFIG THE CONTAINER WOULD BUILD, from the container's own constructor.
+        try:
+            config = train_on_corpus.build_config(opts, extras)
+            built = True
+            detail = ""
+        except Exception as failure:  # noqa: BLE001 - a bad override is exactly what this finds
+            config, built, detail = None, False, repr(failure)
+        report.record(
+            built, f"cell {index}: train_on_corpus.build_config accepts the command", detail
+        )
+        if config is None:
+            continue
+
+        expected_seed = expected["seed"] if expected["seed"] is not None else index
+        checks: List[Tuple[str, Any, Any]] = [
+            ("model factory", opts.model_factory, expected["model_factory"]),
+            ("sequence length", config.dataset.sequence_length, expected["sequence_length"]),
+            (
+                "global batch size",
+                config.data_loader.global_batch_size,
+                expected["global_batch_size"],
+            ),
+            (
+                "rank microbatch size",
+                config.train_module.rank_microbatch_size,
+                expected["rank_microbatch_size"],
+            ),
+            ("steps", opts.steps, expected["steps"]),
+            ("save interval", opts.save_interval, expected["save_interval"]),
+            ("warmup steps", opts.warmup_steps, expected["warmup_steps"]),
+            ("learning rate", config.train_module.optim.lr, expected["learning_rate"]),
+            (
+                "param dtype",
+                str(config.train_module.dp_config.param_dtype),
+                expected["param_dtype"],
+            ),
+            ("compile_model", config.train_module.compile_model, expected["compile_model"]),
+            ("experiment init seed", config.init_seed, expected_seed),
+            ("model init seed", config.model.init_seed, expected_seed),
+            ("data loader seed", config.data_loader.seed, expected_seed),
+        ]
+        if expected["model_factory"] is None:
+            checks = [entry for entry in checks if entry[0] != "model factory"]
+        for name, actual, want in checks:
+            report.record(actual == want, f"cell {index}: {name} is {want!r}", f"got {actual!r}")
+
         expected_save = CONTAINER_ENVIRONMENT["EDULLM_CHECKPOINT_DIR"]
         if index is not None:
             expected_save = (
                 f"{CONTAINER_ENVIRONMENT['EDULLM_OUTPUT_PREFIX']}cell-{index}/checkpoints/"
             )
-        report.findings.append(
-            Finding(
-                opts.save_folder == expected_save,
-                f"cell {index}: --save-folder is this cell's own checkpoint prefix",
-                f"got {opts.save_folder!r}, expected {expected_save!r}",
-            )
+        report.record(
+            config.trainer.save_folder == expected_save,
+            f"cell {index}: the save folder is this cell's own checkpoint prefix",
+            f"got {config.trainer.save_folder!r}, expected {expected_save!r}",
         )
-        report.findings.append(
-            Finding(
-                opts.param_dtype == "bfloat16",
-                f"cell {index}: --param-dtype reaches the parser as bfloat16",
-                f"got {opts.param_dtype!r}",
-            )
-        )
-
-        # The dotted overrides have to survive argparse and then land on a real config. Both
-        # halves have failed independently before: argparse can swallow an unrecognised
-        # positional, and a merge can accept a key that no field reads.
-        from olmo_core.data import TokenizerConfig
-        from olmo_core.nn.transformer import TransformerConfig
-
-        vocab_size = TokenizerConfig.dolma2().padded_vocab_size()
-        model = getattr(TransformerConfig, opts.model_factory)(vocab_size=vocab_size)
-        model_overrides = [
-            override[len("model.") :] for override in extras if override.startswith("model.")
-        ]
-        merged = model.merge(model_overrides) if model_overrides else model
-        experiment_seed = next(
-            (
-                int(override.split("=", 1)[1])
-                for override in extras
-                if override.startswith("init_seed=")
-            ),
-            None,
-        )
-        seeds = (opts.data_seed, merged.init_seed, experiment_seed if experiment_seed else 0)
-        seeds_seen[index] = seeds
-
-        expected = 0 if index is None else index
-        report.findings.append(
-            Finding(
-                seeds == (expected, expected, expected),
-                f"cell {index}: all three seeds are {expected}",
-                f"got data={seeds[0]} model.init={seeds[1]} experiment.init={seeds[2]}",
-            )
-        )
-        report.findings.append(
-            Finding(
-                any(override.startswith("train_module.") for override in extras)
-                or "train_module" not in spec["command"],
-                f"cell {index}: train_module overrides survive argparse",
-                f"extras: {extras}",
-            )
-        )
+        seeds_seen[index] = (config.data_loader.seed, config.model.init_seed, config.init_seed)
 
     if len(seeds_seen) > 1:
         distinct = len(set(seeds_seen.values()))
-        report.findings.append(
-            Finding(
-                distinct == len(seeds_seen),
-                f"the {len(seeds_seen)} cells checked draw {len(seeds_seen)} distinct seed "
-                "triples",
-                # The failure this line exists for is the expensive one: identical cells
-                # measure a noise floor of zero and make every later arm significant.
-                f"got {distinct} distinct out of {len(seeds_seen)}: {seeds_seen}",
-            )
+        report.record(
+            distinct == len(seeds_seen),
+            f"the {len(seeds_seen)} cells checked draw {len(seeds_seen)} distinct seed triples",
+            f"got {distinct} distinct out of {len(seeds_seen)}: {seeds_seen}",
         )
     return report
 
@@ -366,36 +543,35 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
+    parser.add_argument("--spec", action="append", default=None, help="a run spec; repeatable")
     parser.add_argument(
-        "--spec",
-        action="append",
-        default=None,
-        help="a run spec to check; repeatable. Defaults to every spec this repository ships.",
-    )
-    parser.add_argument(
-        "--cells",
-        default="0,1,4",
-        help="which fan-out indices to exercise, comma separated (default: 0,1,4)",
+        "--cells", default="0,1,4", help="which fan-out indices to exercise (default: 0,1,4)"
     )
     parser.add_argument("--json", action="store_true", help="print one JSON document instead")
     args = parser.parse_args(argv)
 
     cells = [int(entry) for entry in args.cells.split(",") if entry.strip()]
-    wanted = args.spec if args.spec else list(DEFAULT_SPECS)
+    wanted = args.spec if args.spec else list(SPEC_EXPECTATIONS)
 
     reports: List[SpecReport] = []
     missing: List[str] = []
     for entry in wanted:
         path = REPO_ROOT / entry
         if not path.is_file():
-            # A default spec that does not exist yet is not a failure; a spec somebody named
-            # explicitly is.
-            if args.spec:
-                missing.append(entry)
+            # A MISSING SPEC IS A FAILURE, WHICH IT USED NOT TO BE. Skipping one silently meant
+            # deleting a spec reduced this script's coverage while leaving it green.
+            missing.append(entry)
             continue
         reports.append(check_spec(path, cells=cells))
 
-    failed = sum(len(report.failures) for report in reports) + len(missing)
+    drift = []
+    if _cli_is_on_the_path() and _import_edullm_platform() is None:
+        drift.append(
+            "edullm is on the PATH and edullm_platform is not importable, so the fan-out "
+            "prologue was checked against this file's copy rather than the platform's."
+        )
+
+    failed = sum(len(report.failures) for report in reports) + len(missing) + len(drift)
 
     if args.json:
         print(
@@ -414,6 +590,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                         for report in reports
                     ],
                     "missing": missing,
+                    "drift": drift,
                     "failures": failed,
                 },
                 indent=2,
@@ -422,7 +599,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1 if failed else 0
 
     for entry in missing:
-        print(f"MISSING  {entry}")
+        print(f"MISSING  {entry} -- it is in SPEC_EXPECTATIONS and not on disk")
+    for note in drift:
+        print(f"DRIFT    {note}")
     for report in reports:
         print(f"\n=== {report.path}")
         print(f"    fan-out prologue: {report.prologue_source}")
@@ -434,8 +613,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(
         f"\n{len(reports)} spec(s) checked, {failed} problem(s).\n"
         "Nothing here trained, reached a network, or allocated a GPU. What it establishes is "
-        "that\nthe command text produces the arguments it was written to produce, in the "
-        "container the\nplatform builds around it."
+        "that\nthe command text builds the config it was written to build, inside the "
+        "container the\nplatform assembles around it."
     )
     return 1 if failed else 0
 
