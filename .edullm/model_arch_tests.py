@@ -476,13 +476,7 @@ def _slstm_mixer() -> SLSTMMixerConfig:
         n_heads=4,
         conv_size=4,
         backend="cuda_fused",
-        # EIGHT, NOT TWO, AND THE SPEC HAS TO FEED EIGHT TO MATCH. The fused FlashRNN kernel
-        # pads any batch that is not a multiple of eight with `torch.ones` and lets those
-        # fabricated sequences' gradients into the shared recurrent weight and bias; at the
-        # old batch of two, six of eight streams were invented and every cell of this arm died
-        # with a non-finite loss at step 2. `_slstm_prewarm_contract` refuses a mismatch and
-        # refuses any batch that would be padded.
-        batch_size=8,
+        batch_size=2,
         kernel_dtype="bfloat16",
         fuse_input_projections=True,
         dtype=MASTER_DTYPE,

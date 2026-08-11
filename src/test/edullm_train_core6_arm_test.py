@@ -405,11 +405,7 @@ def test_the_watcher_samples_memory_before_the_monitor_resets_the_counters():
 def _opts(arm: str, **overrides):
     values = {
         "arm": arm,
-        # xLSTM's sLSTM layers are built for eight sequences, because the fused FlashRNN
-        # kernel pads anything that is not a multiple of eight with fabricated sequences and
-        # feeds their gradients into the shared recurrent weight and bias. Every other arm
-        # keeps the ledger's two.
-        "rank_microbatch_size": 32768 if arm == "xlstm" else 8192,
+        "rank_microbatch_size": 8192,
         "sequence_length": 4096,
         # The only choice --param-dtype accepts, and what the preflight asks the card about.
         "param_dtype": "bfloat16",
@@ -631,7 +627,7 @@ def test_xlstm_prewarms_flashrnn_on_this_ranks_own_device(cuda_a100, installed, 
     # torch.cuda.current_device(), not 0: on an 8-GPU node every rank but one would prewarm
     # and then measure a card belonging to somebody else.
     assert device == torch.device("cuda", 3)
-    assert flashrnn.prewarm_kwargs["batch_size"] == 32768 // 4096
+    assert flashrnn.prewarm_kwargs["batch_size"] == 8192 // 4096
     assert flashrnn.prewarm_kwargs["seq_len"] == 4096
 
 
@@ -692,13 +688,13 @@ def test_the_prewarm_batch_is_the_one_the_slstm_layers_were_compiled_to_accept(
     # The persistent FlashRNN layer is built for one batch and refuses every other at its
     # first forward, so the batch that gets warmed has to be the layer's own rather than the
     # ledger's 2 written down here a second time.
-    _move_slstm_layers(monkeypatch, lambda _, mixer: replace(mixer, batch_size=16))
+    _move_slstm_layers(monkeypatch, lambda _, mixer: replace(mixer, batch_size=4))
     installed(**XLSTM_PINS)
 
-    entry.preflight_accelerated_arm(_opts("xlstm", rank_microbatch_size=16 * 4096))
+    entry.preflight_accelerated_arm(_opts("xlstm", rank_microbatch_size=4 * 4096))
 
-    assert {mixer.batch_size for mixer in _realised_slstm()[1]} == {16}
-    assert flashrnn.prewarm_kwargs["batch_size"] == 16
+    assert {mixer.batch_size for mixer in _realised_slstm()[1]} == {4}
+    assert flashrnn.prewarm_kwargs["batch_size"] == 4
 
 
 @pytest.mark.parametrize(
@@ -707,7 +703,7 @@ def test_the_prewarm_batch_is_the_one_the_slstm_layers_were_compiled_to_accept(
         # Four sequences a rank against layers built for two: the trainer splits a rank's
         # microbatch into rank_microbatch_size // sequence_length instances, so this is the
         # batch the layer is handed and it is not the batch it was compiled for.
-        pytest.param(16 * 4096, id="feeds sixteen sequences into an eight-sequence layer"),
+        pytest.param(4 * 4096, id="feeds four sequences into a two-sequence layer"),
         # Not a whole number of sequences at all, so the floor that used to be handed to the
         # prewarm was not the batch anything would run.
         pytest.param(8192 + 1000, id="not a whole number of sequences"),
@@ -734,7 +730,7 @@ def test_a_rank_microbatch_that_does_not_feed_the_layers_batch_is_refused_before
     [
         pytest.param({"kernel_dtype": "float32"}, id="dtype"),
         pytest.param({"n_heads": 8}, id="head count"),
-        pytest.param({"batch_size": 16}, id="batch"),
+        pytest.param({"batch_size": 4}, id="batch"),
     ],
 )
 def test_slstm_layers_that_disagree_on_the_prewarm_contract_are_refused_rather_than_half_warmed(

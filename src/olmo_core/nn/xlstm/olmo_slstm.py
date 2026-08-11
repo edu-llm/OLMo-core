@@ -35,37 +35,37 @@ FLASHRNN_VERSION = "1.0.6"
 
 #: Which FlashRNN kernel evaluates the sLSTM recurrence.
 #:
-#: ``cuda_fused`` IS SAFE ONLY AT A BATCH THAT IS A MULTIPLE OF EIGHT, AND THAT IS ENFORCED
-#: ELSEWHERE. ``FlashRNNFuncGeneratorFused`` rounds the batch up with
-#: ``round_to_multiple(batch_size, 8)`` and pads the inputs and the initial state with
-#: ``torch.ones``; on the way back it slices ``grads[0]`` and ``grads[1]`` -- the input and state
-#: gradients -- to the real batch and leaves ``grads[2]`` and ``grads[3]`` alone. Those two are
-#: the gradients of the recurrent weight and the bias, which are SHARED, so at a padded batch
-#: they arrive carrying the accumulated contribution of fabricated streams.
+#: ``cuda_fused`` is the persistent kernel: it holds the recurrent matrix in registers and SRAM
+#: for the whole sequence, where the non-fused ``cuda`` generator re-reads it every one of the
+#: 4,096 steps, launches two kernels per step per direction, and calls a DEVICE-WIDE
+#: ``torch::cuda::synchronize`` four times per layer per step. That costs about 4.8x here, and
+#: none of it is tunable.
 #:
-#: That is not a hypothetical. The wave ran 8,192 tokens per rank at sequence length 4,096, so
-#: the batch was 2, six of the eight streams were invented, and all three cells of the arm died
-#: with a non-finite loss at step 2 -- the first forward after the first optimizer update wrote
-#: those gradients into the weights. ``recurrent_weight_init`` is ``"zeros"``, which is why step 1
-#: survived, and the pad is a constant, which is why every seed failed identically.
+#: THE FUSED KERNEL PADS THE BATCH UP TO A MULTIPLE OF EIGHT AND THAT IS SAFE, WHICH IS NOT
+#: OBVIOUS AND HAS BEEN MISREAD ONCE. It rounds with ``round_to_multiple(batch_size, 8)``, fills
+#: the forward states with ``torch.ones``, and returns ``dR`` and ``db`` -- the recurrent weight
+#: and bias gradients, which are SHARED -- accumulated over the padded batch without slicing.
+#: The fabricated lanes nonetheless contribute exactly zero, because ``backward`` zero-fills the
+#: incoming gradient (``states_grads_pad = torch.zeros(...)``) and the cached gates, and the
+#: pointwise backward is homogeneous in that gradient with no additive term: ``dy_total`` is
+#: zero, so all four gate gradients are zero and ``dc_i``/``dn_i`` carry zero to the previous
+#: step, for every step. Summing those exact zeros into ``dR`` leaves it bit-identical.
 #:
-#: The arm now declares a batch of eight, so no padding happens and the fast kernel is sound.
-#: ``_slstm_prewarm_contract`` refuses any batch that is not a multiple of eight, which is what
-#: keeps this true rather than merely true today.
+#: The ``torch.ones`` is the reason it is safe rather than a symptom of carelessness:
+#: ``dy_inter = dy_total / n_new`` needs ``n_new != 0``, and ones give ``0/1``. Padding the
+#: states with ZEROS -- which is what the FlashRNN paper describes for the Triton backend --
+#: would give ``0/0`` and poison every shared gradient. Do not "fix" it that way.
 #:
-#: THE ALTERNATIVES COST TOO MUCH. ``FlashRNNFuncGenerator``, the non-fused generator, has no
-#: padding at all and is correct at any batch, but measured 8.581x a GDN2 control against the
-#: fused kernel's recorded 1.793x on the same card -- about five times slower for the two layers
-#: that use it. ``triton_fused`` cannot run this shape: it asks for 524 KB of shared memory at
-#: this head dimension against an A100's 164 KB limit.
+#: At batch 2 this wastes six of eight recurrent-kernel lanes: ``round_to_multiple`` maps 2, 4,
+#: and 8 all to 8, so ConstrINT emits the same persistent kernel work for all three. Raising the
+#: model's batch is not free, however: the convolution, projections, norm, and activation storage
+#: still scale with the real batch (the measured mixer was 55% slower at batch 8). Keep batch 2.
+#:
+#: ``triton_fused`` is not an option at this geometry: it stages four ``head_dim``-squared
+#: recurrent matrices in shared memory, 524 KB against an A100's 164 KB, and keeps four dense
+#: fp32 accumulators in registers in the backward. FlashRNN's own paper caps it at head dimension
+#: 128 forward and 64 backward; this arm runs 256.
 FLASHRNN_BACKEND = "cuda_fused"
-
-#: The batch multiple the fused kernel pads up to, or ``0`` when the backend does not pad.
-#:
-#: Derived from FlashRNN's own ``round_to_multiple(config.batch_size, 8)`` for any non-float32
-#: dtype. Exported so the runner can refuse a batch that would be padded instead of discovering
-#: it as a non-finite loss at step 2; see :data:`FLASHRNN_BACKEND` for what the padding does.
-FLASHRNN_FUSED_BATCH_MULTIPLE = 8 if FLASHRNN_BACKEND == "cuda_fused" else 0
 _PREFLIGHTED_FLASHRNN = None
 _PREFLIGHTED_FLASHRNN_CONFIG = None
 _PREWARMED_FLASHRNN_SHAPES = set()
@@ -460,6 +460,14 @@ def _preflight_flashrnn():
     return _PREFLIGHTED_FLASHRNN
 
 
+def _validate_flashrnn_capability(capability: tuple[int, int]) -> None:
+    if capability < (8, 0):
+        raise RuntimeError(
+            "the sLSTM cuda_fused backend requires CUDA compute capability >= 8.0; "
+            f"found {capability[0]}.{capability[1]}"
+        )
+
+
 def _prewarm_flashrnn(
     *,
     batch_size: int,
@@ -477,11 +485,13 @@ def _prewarm_flashrnn(
     except AttributeError as exc:
         raise ValueError(f"unsupported FlashRNN kernel dtype '{kernel_dtype}'") from exc
     capability = torch.cuda.get_device_capability(device)
+    _validate_flashrnn_capability(capability)
     torch_version = torch.__version__
     cuda_build = torch.version.cuda or "none"
     sm = f"sm_{capability[0]}{capability[1]}"
     cache_key = (
         FLASHRNN_VERSION,
+        FLASHRNN_BACKEND,
         torch_version,
         cuda_build,
         capability,
@@ -543,11 +553,7 @@ def _validate_flashrnn_device(x: torch.Tensor, *, head_dim: int) -> None:
     if not x.is_cuda:
         raise RuntimeError("the sLSTM cuda_fused backend requires a CUDA input")
     capability = torch.cuda.get_device_capability(x.device)
-    if capability < (8, 0):
-        raise RuntimeError(
-            "the sLSTM cuda_fused backend requires CUDA compute capability >= 8.0; "
-            f"found {capability[0]}.{capability[1]}"
-        )
+    _validate_flashrnn_capability(capability)
     if head_dim % 8 != 0:
         raise RuntimeError(
             "the sLSTM cuda_fused backend requires a head dimension divisible by 8; "
@@ -578,14 +584,14 @@ def _flashrnn_opaque(
         dtype = getattr(torch, kernel_dtype)
     except AttributeError as exc:
         raise ValueError(f"unsupported FlashRNN kernel dtype '{kernel_dtype}'") from exc
-    # FlashRNN compiles one pointer type per tensor role, and an unnamed role inherits
-    # another role instead of the kernel dtype. Describing the roles by the dtype the
-    # tensors happen to carry -- bfloat16 once FSDP casts the parameters -- builds a kernel
-    # whose own arguments do not fit its signature, so the kernel dtype names every role
-    # and the tensors are cast to it.
+    # FlashRNN compiles one pointer type per tensor role, and each input must match it.
+    # Inputs, recurrent weights, gates, and states follow the requested kernel dtype. Biases
+    # and the Wx + Ry + b accumulation remain float32, matching upstream sLSTM's numerical
+    # contract; in particular the power-law forget bias should not be rounded to bfloat16
+    # before it reaches exp/logsigmoid.
     gate_inputs = gate_inputs.to(dtype)
     recurrent = recurrent.to(dtype)
-    bias = bias.to(dtype)
+    bias = bias.to(torch.float32)
     if flash_state is not None:
         flash_state = flash_state.to(dtype)
     kwargs = {
@@ -604,10 +610,10 @@ def _flashrnn_opaque(
             dtype=kernel_dtype,
             dtype_w=kernel_dtype,
             dtype_r=kernel_dtype,
-            dtype_b=kernel_dtype,
+            dtype_b="float32",
             dtype_g=kernel_dtype,
             dtype_s=kernel_dtype,
-            dtype_a=kernel_dtype,
+            dtype_a="float32",
             input_shape="TBHDG",
             output_shape="SBHTD",
             recurrent_shape="HDGP",
@@ -627,7 +633,7 @@ class _FlashRNNPersistentSLSTMLayer(nn.Module):
         kernel_dtype: str,
     ):
         super().__init__()
-        self.config = replace(layer.config, backend="cuda_fused")
+        self.config = replace(layer.config, backend=FLASHRNN_BACKEND)
         self.batch_size = batch_size
         self.kernel_dtype = kernel_dtype
         self.backend_identity = (

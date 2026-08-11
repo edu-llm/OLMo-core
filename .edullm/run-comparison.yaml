@@ -16,19 +16,6 @@
 # exactly the original study, `15` the five-arm one, and `24` the extended one. The control is
 # still the first arm.
 #
-# xLSTM ALONE TAKES A LARGER RANK MICROBATCH, AND IT IS NOT A TUNING CHOICE. Its two sLSTM
-# layers run FlashRNN's fused kernel, which pads any batch that is not a multiple of eight with
-# `torch.ones` and then returns the recurrent-weight and bias gradients accumulated over the
-# padded batch without slicing them back. At 8,192 tokens over sequence length 4,096 the batch
-# is two, six of the eight streams are fabricated, and all three cells of this arm died with a
-# non-finite loss at step 2. 32,768 tokens is eight sequences, so nothing is padded.
-#
-# The global batch is unchanged at 524,288 tokens, so the optimizer sees exactly the same steps;
-# only the accumulation split differs, and with it this arm's memory and wall clock. Its
-# throughput is therefore not measured against the other seven on equal footing, which is a
-# smaller price than the seven cells this defect has already cost. `_slstm_prewarm_contract`
-# refuses a batch that would be padded, so a return to 8,192 here fails at preflight.
-#
 # The decode probe is ON: `--no-decode-probe` is deliberately not passed. Decode latency and
 # recurrent-state bytes are the serving-side cost, which training throughput does not predict --
 # a mixer's state is fixed per sequence where attention's KV cache grows with context. It costs
@@ -66,17 +53,9 @@ command: >-
   125012 135019 145026
   128013 138020 148027
   131014 141021 151028) &&
-  MICRO=(8192 8192 8192
-  32768 32768 32768
-  8192 8192 8192
-  8192 8192 8192
-  8192 8192 8192
-  8192 8192 8192
-  8192 8192 8192
-  8192 8192 8192) &&
   python -m torch.distributed.run --nproc-per-node=8 --standalone
   .edullm/train_core6_arm.py "$EDULLM_RUN_ID"
   --arm "${ARMS[$I]}" --data-seed "${DSEEDS[$I]}" --init-seed "${ISEEDS[$I]}"
   --sequence-length 4096 --steps 1144 --warmup-steps 114 --learning-rate 3e-4
-  --global-batch-size 524288 --rank-microbatch-size "${MICRO[$I]}" --save-interval 572
+  --global-batch-size 524288 --rank-microbatch-size 8192 --save-interval 572
   --save-folder "$EDULLM_CHECKPOINT_DIR" --param-dtype bfloat16'

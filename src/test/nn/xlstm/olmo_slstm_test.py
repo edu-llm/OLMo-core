@@ -75,10 +75,12 @@ class RecordedFlashRNNConfig:
     def launch_batch_size(self) -> int:
         """The batch a launch actually runs at, which only ``cuda_fused`` rounds up.
 
-        THE ROUNDING IS THE REASON THIS ARM MOVED OFF ``cuda_fused``. That generator pads the
-        inputs and the initial state up to the multiple with ``torch.ones`` and, on the way
-        back, slices only the input and state gradients to the real batch -- the recurrent
-        weight and bias gradients are shared and keep the fabricated streams' contribution.
+        The rounding is real and it is harmless. That generator pads the inputs and the initial
+        state up to the multiple with ``torch.ones`` and, on the way back, slices only the input
+        and state gradients to the real batch -- the shared recurrent weight and bias gradients
+        are returned accumulated over the padded batch. The fabricated lanes contribute exactly
+        zero to them anyway, because the backward zero-fills their incoming gradient and the
+        pointwise backward has no additive term; see ``FLASHRNN_BACKEND``.
         ``FlashRNNFuncGenerator``, the non-fused one, contains no padding at all, so its launch
         batch is the batch it was handed.
         """
@@ -140,6 +142,108 @@ class RecordingFlashRNN:
         return states, states[:, :, :, -1:]
 
 
+@dataclass
+class RecordedOfficialSLSTMConfig:
+    """The official layer fields retained by the FlashRNN wrapper."""
+
+    backend: str = "vanilla"
+    num_heads: int = 1
+    head_dim: int = 2
+    embedding_dim: int = 2
+
+
+def recorded_official_slstm_layer() -> SimpleNamespace:
+    """Build the smallest official-layer-shaped object the wrapper accepts."""
+    slstm_cell = nn.Module()
+    slstm_cell._recurrent_kernel_ = nn.Parameter(torch.zeros(1, 8, 2))
+    slstm_cell._bias_ = nn.Parameter(torch.zeros(8))
+    return SimpleNamespace(
+        config=RecordedOfficialSLSTMConfig(),
+        conv1d=nn.Identity(),
+        conv_act_fn=nn.Identity(),
+        slstm_cell=slstm_cell,
+        group_norm=nn.Identity(),
+        dropout=nn.Identity(),
+        fgate=nn.Linear(2, 2, bias=False),
+        igate=nn.Linear(2, 2, bias=False),
+        zgate=nn.Linear(2, 2, bias=False),
+        ogate=nn.Linear(2, 2, bias=False),
+    )
+
+
+def test_flashrnn_backend_is_one_contract_for_wrapper_and_exact_shape_prewarm(monkeypatch):
+    flashrnn = RecordingFlashRNN()
+    monkeypatch.setattr(olmo_slstm, "_PREFLIGHTED_FLASHRNN", flashrnn)
+    monkeypatch.setattr(olmo_slstm, "_PREFLIGHTED_FLASHRNN_CONFIG", RecordedFlashRNNConfig)
+    monkeypatch.setattr(olmo_slstm, "_PREWARMED_FLASHRNN_SHAPES", set())
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda _device: (8, 0))
+
+    monkeypatch.setattr(olmo_slstm, "FLASHRNN_BACKEND", "cuda_fused")
+    fused_identity = olmo_slstm._prewarm_flashrnn(
+        batch_size=2,
+        seq_len=8,
+        n_heads=1,
+        head_dim=2,
+        kernel_dtype="bfloat16",
+        device=torch.device("cpu"),
+    )
+
+    monkeypatch.setattr(olmo_slstm, "FLASHRNN_BACKEND", "cuda")
+    alternating_identity = olmo_slstm._prewarm_flashrnn(
+        batch_size=2,
+        seq_len=8,
+        n_heads=1,
+        head_dim=2,
+        kernel_dtype="bfloat16",
+        device=torch.device("cpu"),
+    )
+    wrapped = _FlashRNNPersistentSLSTMLayer(
+        recorded_official_slstm_layer(),
+        batch_size=2,
+        kernel_dtype="bfloat16",
+    )
+
+    assert fused_identity != alternating_identity
+    assert [call.kwargs["config"].backend for call in flashrnn.calls] == [
+        "cuda_fused",
+        "cuda",
+    ]
+    assert wrapped.config.backend == "cuda"
+    assert "backend=cuda" in wrapped.backend_identity
+
+
+def test_flashrnn_fused_accepts_sm120_in_the_pinned_cu128_environment(monkeypatch):
+    x = SimpleNamespace(
+        is_cuda=True,
+        device=torch.device("cuda"),
+        dtype=torch.bfloat16,
+    )
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda _device: (12, 0))
+    monkeypatch.setattr(shutil, "which", lambda _executable: "/usr/bin/nvcc")
+
+    olmo_slstm._validate_flashrnn_device(x, head_dim=256)
+
+
+def test_flashrnn_exact_shape_prewarm_accepts_sm120_and_calls_kernel(monkeypatch):
+    flashrnn = RecordingFlashRNN()
+    monkeypatch.setattr(olmo_slstm, "_PREFLIGHTED_FLASHRNN", flashrnn)
+    monkeypatch.setattr(olmo_slstm, "_PREFLIGHTED_FLASHRNN_CONFIG", RecordedFlashRNNConfig)
+    monkeypatch.setattr(olmo_slstm, "_PREWARMED_FLASHRNN_SHAPES", set())
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda _device: (12, 0))
+
+    identity = olmo_slstm._prewarm_flashrnn(
+        batch_size=2,
+        seq_len=8,
+        n_heads=1,
+        head_dim=2,
+        kernel_dtype="bfloat16",
+        device=torch.device("cpu"),
+    )
+
+    assert ":sm_120:" in identity
+    assert len(flashrnn.calls) == 1
+
+
 def persistent_layer(
     *,
     kernel_dtype: str,
@@ -191,7 +295,7 @@ def parameter_identity(parameter: nn.Parameter) -> tuple:
 
 
 @pytest.mark.parametrize("kernel_dtype", ["bfloat16", "float32"])
-def test_bfloat16_parameters_compile_one_flashrnn_pointer_type(monkeypatch, kernel_dtype):
+def test_flashrnn_keeps_bias_and_gate_accumulation_in_float32(monkeypatch, kernel_dtype):
     monkeypatch.setattr(olmo_slstm, "_PREFLIGHTED_FLASHRNN_CONFIG", RecordedFlashRNNConfig)
     flashrnn = RecordingFlashRNN()
     num_heads, head_dim, batch_size, seq_len = 4, 256, 2, 8
@@ -208,13 +312,25 @@ def test_bfloat16_parameters_compile_one_flashrnn_pointer_type(monkeypatch, kern
 
     (call,) = flashrnn.calls
     config = call.kwargs["config"]
-    assert config.role_dtypes == (kernel_dtype,) * 7
-    assert config.compiled_pointer_types == {CUDA_POINTER_TYPE[kernel_dtype]}
+    assert config.role_dtypes == (
+        kernel_dtype,
+        "float32",
+        kernel_dtype,
+        kernel_dtype,
+        kernel_dtype,
+        kernel_dtype,
+        "float32",
+    )
+    assert config.compiled_pointer_types == {
+        CUDA_POINTER_TYPE[kernel_dtype],
+        CUDA_POINTER_TYPE["float32"],
+    }
     assert call.kwargs["dtype"] == kernel_dtype
-    # The kernel dereferences these as the type it was compiled with, and it is also the
-    # config flashrnn infers for itself when the wrapper passes none.
-    for tensor in (call.gate_inputs, call.recurrent, call.bias):
+    # Inputs, recurrent weights, gates, and states follow the kernel dtype. The forget bias and
+    # the Wx + Ry + b accumulation follow upstream sLSTM's float32 numerical contract.
+    for tensor in (call.gate_inputs, call.recurrent):
         assert tensor.dtype is getattr(torch, kernel_dtype)
+    assert call.bias.dtype is torch.float32
     torch.testing.assert_close(
         call.recurrent,
         layer.slstm_cell._recurrent_kernel_.detach()
@@ -229,11 +345,11 @@ def test_bfloat16_parameters_compile_one_flashrnn_pointer_type(monkeypatch, kern
         .permute(1, 2, 0)
         .to(call.bias.dtype),
     )
-    # NEITHER IS ROUNDED NOW, BECAUSE THE ARM RUNS `FLASHRNN_BACKEND` AND THAT IS NOT THE FUSED
-    # KERNEL. Under `cuda_fused` this read `16 if float32 else batch_size` for the compiled
-    # batch and `16 if float32 else 8` for the launch, pinning the pad that silently fed six
-    # fabricated sequences into the shared recurrent-weight and bias gradients at this arm's
-    # batch of 2. The non-fused generator does no padding, so both are the real batch.
+    # Both are read off `FLASHRNN_BACKEND` rather than pinned, so this test states the padding
+    # the arm actually gets. Under `cuda_fused` the compiled batch is `16 if float32 else
+    # batch_size` and the launch batch is `16 if float32 else 8`, so at this arm's batch of 2 six
+    # of eight lanes are fabricated -- and contribute nothing, per `FLASHRNN_BACKEND`. The
+    # non-fused generator does no padding, so both are the real batch.
     fused = olmo_slstm.FLASHRNN_BACKEND == "cuda_fused"
     expected_compiled_batch_size = 16 if fused and kernel_dtype == "float32" else batch_size
     expected_launch_batch_size = config.launch_batch_size
@@ -255,7 +371,8 @@ def test_bfloat16_flashrnn_kernel_compiles_and_backpropagates():
     if not torch.cuda.is_available():
         pytest.skip("the persistent sLSTM kernel needs a CUDA device")
     device = torch.device("cuda", torch.cuda.current_device())
-    if torch.cuda.get_device_capability(device) < (8, 0):
+    capability = torch.cuda.get_device_capability(device)
+    if capability < (8, 0):
         pytest.skip("the persistent sLSTM kernel needs compute capability >= 8.0")
     if shutil.which("nvcc") is None:
         pytest.skip("FlashRNN JIT-compiles its persistent kernel and needs nvcc")
@@ -303,6 +420,71 @@ def test_bfloat16_flashrnn_kernel_compiles_and_backpropagates():
         assert tensor.grad is not None
         assert tensor.grad.dtype is torch.bfloat16
         assert torch.isfinite(tensor.grad.float()).all()
+
+
+@pytest.mark.gpu
+def test_fused_batch_padding_contributes_exactly_zero_to_shared_gradients():
+    pytest.importorskip("flashrnn")
+    if not torch.cuda.is_available():
+        pytest.skip("the persistent sLSTM kernel needs a CUDA device")
+    device = torch.device("cuda", torch.cuda.current_device())
+    if torch.cuda.get_device_capability(device) < (8, 0):
+        pytest.skip("the persistent sLSTM kernel needs compute capability >= 8.0")
+    if shutil.which("nvcc") is None:
+        pytest.skip("FlashRNN JIT-compiles its persistent kernel and needs nvcc")
+
+    num_heads, head_dim, seq_len = 1, 64, 8
+    olmo_slstm._preflight_flashrnn()
+    gate_inputs = torch.randn(
+        seq_len,
+        8,
+        num_heads,
+        head_dim,
+        4,
+        dtype=torch.bfloat16,
+        device=device,
+    )
+    recurrent = torch.randn(
+        num_heads,
+        head_dim,
+        4,
+        head_dim,
+        dtype=torch.bfloat16,
+        device=device,
+    )
+    bias = torch.randn(
+        num_heads,
+        head_dim,
+        4,
+        dtype=torch.float32,
+        device=device,
+    )
+
+    def shared_gradients(batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
+        local_inputs = gate_inputs[:, :batch_size].detach().clone().requires_grad_(True)
+        local_recurrent = recurrent.detach().clone().requires_grad_(True)
+        local_bias = bias.detach().clone().requires_grad_(True)
+        states, _ = olmo_slstm._flashrnn_opaque(
+            olmo_slstm._PREFLIGHTED_FLASHRNN,
+            local_inputs,
+            local_recurrent,
+            local_bias,
+            None,
+            "bfloat16",
+            olmo_slstm._PREFLIGHTED_FLASHRNN_CONFIG,
+        )
+        states[0, :2].float().square().sum().backward()
+        assert local_recurrent.grad is not None
+        assert local_bias.grad is not None
+        return local_recurrent.grad, local_bias.grad
+
+    padded_d_r, padded_d_b = shared_gradients(2)
+    full_d_r, full_d_b = shared_gradients(8)
+
+    assert padded_d_r.float().norm() > 0
+    assert padded_d_b.float().norm() > 0
+    assert torch.equal(padded_d_r, full_d_r)
+    assert torch.equal(padded_d_b, full_d_b)
 
 
 def test_flashrnn_parameters_convert_vanilla_storage_with_gradients():
