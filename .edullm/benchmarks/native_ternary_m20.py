@@ -116,6 +116,10 @@ def main() -> None:
     parser.add_argument("--tokens", type=int, default=4096)
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--repeats", type=int, default=20)
+    # block-run-distributed appends these mesh arguments to every command. This benchmark runs
+    # one independent harness per local GPU, so the values are intentionally accepted but unused.
+    parser.add_argument("--moe-shard-degree", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--moe-num-replicas", type=int, help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     # The capacity-block launcher always uses torchrun. Select the assigned card explicitly;
