@@ -35,7 +35,7 @@
     "target_tokens": 499908608,
     "quantum": 49807360,
     "n_fidelity_bins": 10,
-    "worker_count": 8,
+    "worker_count": 6,
     "budget_tokens": 2000158720,
     "checkpoint_root": "${EDULLM_CHECKPOINT_DIR}/olmoe-no-centaur/${EDULLM_RUN_ID}",
     "restart_mode": "btt_aggregate",
@@ -44,7 +44,7 @@
   "base_global_batch_size": 262144,
   "launch_backend": "capacity_block",
   "worker_world_size": 8,
-  "max_workers": 8,
+  "max_workers": 6,
   "capacity_block": {
     "branch": "edullm/hpo-complex",
     "repository": "edu-llm/OLMo-core",

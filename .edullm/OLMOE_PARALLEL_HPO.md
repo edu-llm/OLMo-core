@@ -28,7 +28,7 @@ search dimensions.
 ## Parallel capacity-block dispatch
 
 The CPU-only controller discovers currently IDLE capacity-block nodes before every round. It sets
-the usable worker count to the smaller of the number of IDLE nodes and `max_workers=8`, then makes
+the usable worker count to the smaller of the number of IDLE nodes and `max_workers=6`, then makes
 one `block-run.yml` dispatch per IDLE node selected for that round. Each dispatch binds one trial
 segment to one full node with `processes=all`; different node IDs can therefore run independent
 trials concurrently.

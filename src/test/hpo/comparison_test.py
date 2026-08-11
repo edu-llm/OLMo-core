@@ -287,10 +287,10 @@ def test_olmoe_probe_specs_are_separate_fixed_batch_capacity_block_arms():
         assert spec["capacity_block"]["branch"] == "edullm/hpo-complex"
         assert spec["capacity_block"]["repository"] == "edu-llm/OLMo-core"
         assert spec["worker_world_size"] == 8
-        assert spec["max_workers"] == 8
+        assert spec["max_workers"] == 6
         assert spec["capacity_block"]["branch"] == "edullm/hpo-complex"
         assert spec["capacity_block"]["repository"] == "edu-llm/OLMo-core"
-        assert spec["controller"]["worker_count"] == 8
+        assert spec["controller"]["worker_count"] == 6
         assert spec["controller"]["quantum"] == 49_807_360
         assert spec["controller"]["target_tokens"] == 499_908_608
         assert spec["controller"]["budget_tokens"] == 2_000_158_720
