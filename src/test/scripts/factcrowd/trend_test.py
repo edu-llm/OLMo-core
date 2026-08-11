@@ -743,7 +743,8 @@ def test_the_mde_falls_faster_than_one_over_root_n_at_small_n():
     """
     ratio_small = T.minimum_detectable_effect(1.0, 6) / T.minimum_detectable_effect(1.0, 3)
     assert ratio_small < 1.0 / math.sqrt(2.0)
-    assert ratio_small == pytest.approx(0.460, abs=0.005)  # against 0.707 from the normal form
+    # 0.4395 with exact noncentral-t power; the central-t approximation this replaced gave 0.460.
+    assert ratio_small == pytest.approx(0.4395, abs=0.005)  # against 0.707 from the normal form
 
     # And it converges to the normal answer once df stops mattering.
     ratio_large = T.minimum_detectable_effect(1.0, 2000) / T.minimum_detectable_effect(1.0, 1000)
@@ -766,15 +767,17 @@ def test_the_mde_is_monotone_in_the_replicates_and_in_the_power_demanded():
 
 def test_the_mde_of_the_planned_design_is_far_above_the_margin_it_is_meant_to_test():
     """
-    Three replicates and a 1pp-per-bit seed SD resolve 12.8pp across the sweep, against a 2pp margin.
+    Three replicates and a 1pp-per-bit seed SD resolve 13.5pp across the sweep, against a 2pp margin.
 
     This is PRD 8.6's finding in one assertion: "the design is 8-50x short and the old gate would not
     have noticed". Pinned with real numbers so that publishing the MDE beside a null is a statement
     with content -- and so that anyone who improves sigma or the seed count can see the figure move.
     """
     per_bit = T.minimum_detectable_effect(1.0, 3)
-    assert per_bit == pytest.approx(3.0965, abs=1e-4)
-    assert per_bit * SPAN == pytest.approx(12.83, abs=0.01)
+    # 3.2640, not the 3.0965 the central-t approximation gave: that formula treats the alternative as a
+    # central t and was ~5.4% optimistic at k=3, in the direction that flatters an under-powered design.
+    assert per_bit == pytest.approx(3.2640, abs=1e-3)
+    assert per_bit * SPAN == pytest.approx(13.52, abs=0.01)
     assert per_bit * SPAN > 6.0 * T.EQUIVALENCE_MARGIN_PP
 
 
@@ -805,7 +808,8 @@ def test_the_trend_summary_publishes_sigma_and_the_mde():
     """
     summary = T.pooled_trend(lines(-0.6, -0.5, -0.4)).summary()
     assert summary["slope_sd_pp_per_bit"] == pytest.approx(0.1)
-    assert summary["mde_pp_per_bit"] == pytest.approx(0.3097, abs=1e-4)
+    # Exact small-sample power; 0.3097 was the central-t approximation.
+    assert summary["mde_pp_per_bit"] == pytest.approx(0.32640, abs=1e-4)
     assert summary["n_blocks"] == 3 and summary["df"] == 2
     assert float(summary["ci90_low_pp_per_bit"]) < float(  # type: ignore[arg-type]
         summary["slope_mean_pp_per_bit"]  # type: ignore[arg-type]
@@ -896,3 +900,48 @@ def test_a_trend_through_a_subset_cannot_be_reported_as_the_pre_registered_one()
     T.check_blocks(blocks, required_levels=len(ENTROPY_DEMANDS))
     with pytest.raises(OLMoConfigurationError, match="not the 3 the pre-registered design states"):
         T.check_blocks(blocks, required_levels=3)
+
+
+def test_the_mde_uses_exact_small_sample_power_not_the_central_t_approximation():
+    """
+    The old formula was optimistic in the direction that makes an under-powered design look adequate.
+
+    `t(1-a/2, df) + t(power, df)` over sqrt(n) treats the alternative as a *central* t. At k=3 that returns
+    3.0965 x SD where exact 80% power needs 3.264 x SD -- about 5.4% optimistic, and every MDE this project
+    published for a three-seed design was understated by that much.
+
+    Integrated rather than approximated: a noncentral t is `(Z + lambda) / sqrt(V/df)`, so the power is an
+    expectation over a chi-square of a normal tail and needs nothing beyond `erf`.
+    """
+    exact = {3: 3.264, 4: 2.128, 6: 1.435}
+    for blocks, expected in exact.items():
+        assert T.minimum_detectable_effect(1.0, blocks) == pytest.approx(expected, abs=0.005)
+
+    # The old approximation, reproduced, so the direction of the error is pinned rather than described.
+    df = 2
+    central = (T._t_quantile(0.975, df) + T._t_quantile(0.80, df)) / math.sqrt(3)
+    assert central == pytest.approx(3.0965, abs=0.001)
+    assert T.minimum_detectable_effect(1.0, 3) > central
+
+    # Monotone in replicates, and linear in the SD it is expressed in.
+    values = [T.minimum_detectable_effect(1.0, k) for k in (3, 4, 6, 8, 12)]
+    assert values == sorted(values, reverse=True)
+    assert T.minimum_detectable_effect(2.0, 6) == pytest.approx(
+        2 * T.minimum_detectable_effect(1.0, 6)
+    )
+
+
+def test_three_seeds_only_resolve_the_two_point_margin_at_a_sub_point_sigma():
+    """
+    The number that decides how many seeds phase 2 needs, stated where it cannot be lost.
+
+    PRD 8.5's margin is 2pp on the end-to-end effect. At three replicates the MDE is 3.264 x SD, so three
+    seeds reach 80% power only if the true between-seed SD is at or under 0.61pp -- and phase 1's sigma was
+    measured on models pinned at a constant-policy floor, which says nothing about a live endpoint.
+    """
+    margin = 2.0
+    ceiling = margin / T.minimum_detectable_effect(1.0, 3)
+    assert ceiling == pytest.approx(0.613, abs=0.01)
+    # Six seeds are adequate at a full point of SD, which is why phase 2 targets six.
+    assert T.minimum_detectable_effect(1.0, 6) < margin
+    assert T.minimum_detectable_effect(1.0, 4) > margin

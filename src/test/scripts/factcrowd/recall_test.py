@@ -172,8 +172,18 @@ def test_the_column_names_survive_the_trip_into_a_row():
         "template_all_generation",
         "template_all_recognition",
         "template_all_chance",
+        "template_all_generation_over_chance",
         "template_all_n",
     }
+    # Chance is published unrounded, and the ratio beside it. `round(chance, 9)` used to store 2**-32 as
+    # literal 0.0, which made "times chance" uncomputable for exactly the high-entropy cells where it
+    # decided a conclusion -- b4 at 6.26% is 1.0x chance and b32 at 0.056% is 2.4 million x chance, and a
+    # reading that compared the raw rates got the sign of the finding backwards.
+    tiny = RecallResult(
+        attribute="all", n_probed=64, n_generated=1, n_recognised=1, chance=2**-32
+    )
+    assert tiny.summary()["template_all_chance"] == 2**-32
+    assert tiny.summary()["template_all_generation_over_chance"] > 1e6
 
     row = ScoredCheckpoint(
         ref=CheckpointRef(step=7, path="/tmp/step7"),
@@ -203,7 +213,7 @@ def test_two_attributes_do_not_collide_in_one_row():
                 attribute=name, n_probed=8, n_generated=4, n_recognised=5, chance=0.5
             ).summary()
         )
-    assert len(merged) == 12  # four fields x three attributes, none overwritten
+    assert len(merged) == 15  # five fields x three attributes, none overwritten
 
     row = ScoredCheckpoint(
         ref=CheckpointRef(step=1, path="p"), cell={"cell_id": "c", "row": "28M"}, recall=merged

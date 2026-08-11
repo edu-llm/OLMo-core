@@ -53,12 +53,33 @@ supervises — contributes at most its own prior of 8.644 bits. That bounds the 
 
 A real one-seed descriptive result at demand 0.3, and nothing above it.
 
-### b32's storage number is an artefact
+### b32 is a real, unresolved storage-like signal — an earlier draft of this file had it backwards
 
-`28m_b32` claims 67.56 bits/entity — 35.2% of prior, three orders of magnitude above every other entropy
-cell — while reconstructing **0.097%** of attributes. `28m_b4` reconstructs 6.2% and claims 0.0%. The two
-measurements are anti-correlated on that axis, so b32's late-training CE drop is not retrievable knowledge.
-Not a phase transition, not memorisation.
+`28m_b32` claims 67.56 bits/entity, 35.2% of prior, three orders of magnitude above every other entropy
+cell. An earlier revision called that an artefact because b32 reconstructs 0.097% of attributes while b4
+reconstructs 6.2%, and read the two as anti-correlated.
+
+**That comparison was invalid.** Those are raw rates, and the chance levels differ by eight orders of
+magnitude:
+
+| b | pool per attribute | chance | reconstruction | × chance |
+|---|---|---|---|---|
+| 4 | 16 | 6.25e-02 | 6.26% | **1.0×** |
+| 8 | 256 | 3.91e-03 | 0.448% | 1.1× |
+| 32 | 4.29e9 | 2.33e-10 | 0.056% | **2,400,000×** |
+
+b4 is *at* chance. b32 is 2.4 million times chance. The reconstruction **corroborates** the storage
+estimate rather than contradicting it. The scorer's `round(chance, 9)` stored b32's chance as literal `0.0`,
+which is how the error survived; chance is no longer rounded and a
+`template_<attr>_generation_over_chance` column is published beside it.
+
+There is also a structural reason "artefact" was never a coherent story: probability mass on inactive
+softmax rows can only *suppress* a CE-based storage estimate, never manufacture a positive 67.56-bit
+reduction.
+
+**Correct statement:** b32 shows a large, late-emerging teacher-forced value-information signal. It is
+neither proven memorisation nor proven artefact, and it is single-seed and post-hoc. Do not discard it —
+run §5.2 first.
 
 ---
 
@@ -91,7 +112,8 @@ existing checkpoints without retraining.**
 - Every `<compare>` number from phase 1. The task was invalid by design and has now changed, so old values
   are not comparable — even though no phase-1 model actually exploited the leak (they scored 0.5–1.0%
   against a 0.605% floor, not the ~99.7% the leak permits).
-- `28m_b32`'s storage figure, pending §5.2.
+- **Not** `28m_b32`'s storage figure. An earlier revision of this file listed it for discard on a
+  comparison that ignored chance levels; it is the most interesting unresolved result here.
 
 **Nothing needs retraining to be *correct*.** It needs a working endpoint to be *meaningful*.
 
@@ -104,12 +126,27 @@ got wrong.
 
 ### A. Mano calibration — gates everything
 
-14 cells, **14.0B tokens**, reasoning only. `configs/cells/calibration/`: 13M and 113M × lengths
-{2, 3, 4, 5, 6, 8, 10}.
-
 Reasoning-only, so each cell is 1.0B tokens rather than up to 35B, and the sweep doubles as **G1's
-task-depth evidence**. Two rows, because "does width rescue it" is G6's question and could not be asked
-while every cell sat at the floor.
+task-depth evidence**.
+
+**Calibrate at the treatment architecture, which the committed configs do not.** They are 13M and 113M on
+the *count* vocabulary (3,584 padded rows). The primary treatment is 28M on the *entropy union* vocabulary
+(8,064 rows) — a different softmax width and a different total parameter count, 31.43M against 29.71M. An
+exit rule reading "at least one row passes" could therefore be satisfied by 113M while the 28M treatment
+stays unlearnable. **Calibrate 28M in the exact entropy architecture first; use 13M and 113M afterwards as
+width-response evidence for G6, once a length is frozen.**
+
+**Content-disjoint splits are now in force, and they change what short lengths mean.** The expression space
+is `23**L * 2**(L-1)`: 1,058 at L2, and a 1.0B-token budget buys 125M items, so every expression appeared
+about 118,000 times and 100% of the eval set was trained on verbatim. Measured from a 60,000-item sample:
+100% overlap at L2, 72% at L3, and L4 is exhausted at the full stream too (37 items per expression). Those
+lengths were measuring lookup, not computation.
+
+`ManoTask` now assigns an expression to the train or eval half by hashing **its content**, redrawing when a
+draw lands in the wrong half. Verified at **0.00% overlap at every length**, and the answer distribution is
+undisturbed — entropy 4.52 bits of a 4.524-bit maximum, floors within sampling noise of their old values.
+Short lengths are now honest tests of computation, which is what makes them usable as calibration points
+rather than only as pipeline controls.
 
 G4 requires floor-to-ceiling ≥ 10 pp. Measured floors, which shift because at short lengths a *copy* policy
 beats a constant:
@@ -124,8 +161,20 @@ beats a constant:
 | 8 | 4.680% | constant `<n2>` | 14.7% |
 | 10 | 4.695% | constant `<n16>` | 14.7% |
 
-**Exit condition:** at least one (row, length) reaching floor + 10 pp with `modal_rate` well under 1. If
-nothing does, §6 applies instead of §4.B.
+**Exit condition, and floor + 10 pp is not it.** That threshold is only G4's *range* requirement. The
+binding constraint is G1, whose in-band lower bound is 20% of the floor-to-100 range: at a ~4.65% floor
+that is **≥ 23.8% absolute accuracy**, not 14.7%. G1 additionally wants a ≥15 pp spread across depths, and
+G3 a ≥15 pp ablation drop. So the rule is:
+
+> Select the **hardest content-disjoint length** at 28M in the entropy architecture that reaches
+> **≥ 23.8% absolute**, shows a **≥ 15 pp spread** across the swept depths, and has `modal_rate` bounded
+> away from 1. Confirm the selected length on independent seeds before freezing it.
+
+`modal_rate` is a diagnostic, not yet a gate input — no gate consumes it, and treating it as an exit
+criterion without a pre-registered threshold would be inventing one. Pre-register the bound or drop it from
+the rule.
+
+If nothing clears 23.8%, §6 applies instead of §4.B.
 
 Submit with `--config-dir …/configs/cells/calibration` and `fanout_size: 14`. The index maps by *filename*,
 and `113m` sorts before `13m` because `"113" < "13"` as strings — so **0–6 are the 113M cells and 7–13 are
@@ -144,8 +193,14 @@ make it the first block in this project capable of an equivalence or non-inferio
 
 18 cells, **214.6B tokens** at 28M; or reduced to demands {0, 0.6, 2.4}, 9 cells, **71.8B tokens**.
 
-The count axis exists so **B − C** separates crowding from tokens-and-steps. Run the reduced form first:
-three levels still give a slope.
+**B − C is not a decomposition, and earlier revisions of this file said it was.** The two axes differ in
+schema and templates, vocabulary, active support and target frequency, entity count, total tokens and
+steps, mixture ratio and optimiser history, demand range, and in `<compare>` being present only in positive
+count cells. Subtracting their slopes does not isolate "tokens and steps". Treat C as **descriptive
+sensitivity and external validity**, run it after the primary block, and keep subtraction language out of
+the write-up.
+
+Run the reduced form first: three levels still give a slope.
 
 ### D. Scale
 
@@ -215,7 +270,7 @@ At the measured 28M rate on 4×A10G:
 
 | block | slot-hours | rate used |
 |---|---|---|
-| A | 8 | measured, 28M (13M is faster; conservative) |
+| A | **13.5–18.3** | 13M measured (886k) + 113M fitted (172k)/FLOP-linear (121k) |
 | B | 62 | measured, 28M |
 | C reduced | 41 | measured, 28M |
 | C′ full | 123 | measured, 28M |

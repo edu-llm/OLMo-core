@@ -95,7 +95,16 @@ class RecallResult:
         return {
             f"template_{self.attribute}_generation": round(self.generation, 6),
             f"template_{self.attribute}_recognition": round(self.recognition, 6),
-            f"template_{self.attribute}_chance": round(self.recognition_chance, 9),
+            # NOT ROUNDED, AND THE ROUNDING COST A CONCLUSION. At 32 bits per attribute the chance level
+            # is 2**-32 = 2.3e-10, which `round(..., 9)` stores as literal 0.0 -- so "times chance" became
+            # uncomputable for exactly the cells where it mattered, and a reading that compared *raw*
+            # reconstruction rates across cells whose chance differs by eight orders of magnitude
+            # concluded that b32 contradicted its own storage estimate. It corroborates it: b4's 6.26% is
+            # 1.0x chance and b32's 0.056% is 2.4 million x chance.
+            f"template_{self.attribute}_chance": self.recognition_chance,
+            f"template_{self.attribute}_generation_over_chance": (
+                self.generation / self.recognition_chance if self.recognition_chance > 0 else None
+            ),
             f"template_{self.attribute}_n": self.n_probed,
         }
 

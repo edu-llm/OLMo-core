@@ -930,6 +930,40 @@ def non_inferiority(
     )
 
 
+def _one_sample_t_power(effect_over_sd: float, n: int, critical: float) -> float:
+    """
+    Power of a two-sided one-sample t-test, integrated rather than approximated.
+
+    A noncentral ``t`` is ``(Z + lambda) / sqrt(V / df)`` with ``Z`` standard normal and ``V`` chi-square
+    on ``df``, so the power is an expectation over ``V`` of a normal tail and needs no special function
+    beyond ``erf`` -- which is what lets this be exact without scipy, which the project does not carry.
+
+    Only the upper rejection region is counted. The lower one contributes less than 1e-9 of the power at
+    any effect worth reporting, and including it would need a second integral to add nothing.
+
+    :param effect_over_sd: The standardised effect, ``delta / sd``.
+    :param n: Replicates.
+    :param critical: The two-sided critical value at ``df = n - 1``.
+
+    :returns: Power in ``[0, 1]``.
+    """
+    df = n - 1
+    ncp = effect_over_sd * math.sqrt(n)
+    # Chi-square density on df, integrated over a range wide enough that the tails are negligible.
+    steps = 4000
+    upper = df + 12.0 * math.sqrt(2.0 * df) + 12.0
+    width = upper / steps
+    half_df = 0.5 * df
+    log_norm = half_df * math.log(0.5) - math.lgamma(half_df)
+    total = 0.0
+    for index in range(steps):
+        v = (index + 0.5) * width
+        log_density = log_norm + (half_df - 1.0) * math.log(v) - 0.5 * v
+        tail = 0.5 * (1.0 - math.erf((critical * math.sqrt(v / df) - ncp) / math.sqrt(2.0)))
+        total += math.exp(log_density) * tail * width
+    return min(1.0, max(0.0, total))
+
+
 def minimum_detectable_effect(
     slope_sd: float, n_blocks: int, *, alpha: float = 0.05, power: float = 0.80
 ) -> float:
@@ -972,5 +1006,17 @@ def minimum_detectable_effect(
     if not 0.0 < power < 1.0:
         raise OLMoConfigurationError(f"'power' must be in (0, 1), got {power}")
     df = n_blocks - 1
-    quantile_sum = _t_quantile(1.0 - 0.5 * alpha, df) + _t_quantile(power, df)
-    return quantile_sum * slope_sd / math.sqrt(n_blocks)
+    # EXACT SMALL-SAMPLE POWER, NOT THE CENTRAL-t APPROXIMATION, AND THE DIFFERENCE MATTERS MOST WHERE
+    # THIS PROJECT LIVES. `t(1-a/2, df) + t(power, df)` treats the alternative as a central t, which
+    # understates the effect a t-test can actually resolve: at k=3 it returns 3.0965 x SD where exact
+    # 80% power needs 3.264 x SD, so every MDE this printed was about 5.4% optimistic -- in the
+    # direction that makes an under-powered design look adequate.
+    critical = _t_quantile(1.0 - 0.5 * alpha, df)
+    lo, hi = 0.0, 50.0
+    for _ in range(200):  # bisection on the standardised effect; monotone in it
+        mid = 0.5 * (lo + hi)
+        if _one_sample_t_power(mid, n_blocks, critical) < power:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi) * slope_sd

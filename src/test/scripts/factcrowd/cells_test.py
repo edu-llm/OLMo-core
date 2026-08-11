@@ -935,3 +935,79 @@ def test_the_compare_pools_are_disjoint_across_splits():
     assert int(train.max()) < int(evaluation.min())
     with pytest.raises(OLMoConfigurationError, match="unknown split"):
         table.probe_ids_for("holdout")
+
+
+def test_short_mano_expressions_are_content_disjoint_not_merely_index_disjoint():
+    """
+    The difference between measuring computation and measuring a lookup table.
+
+    `item_key` gives train and eval different index streams, which guarantees different *items* and
+    nothing about different *expressions*. The space is `23**L * 2**(L-1)` -- 1,058 at L2 -- and a
+    1.0B-token budget buys 125M items, so every expression appeared ~118,000 times and the eval set was
+    trained on verbatim. Measured before the fix: 100% overlap at L2, 72% at L3, and L4 exhausted at the
+    full stream.
+
+    Asserted at the two lengths where the space is small enough for a sampled check to be decisive; the
+    mechanism is length-independent.
+    """
+    import tempfile
+
+    from factcrowd.corpus.build import BuiltCorpus
+
+    base = C.load_cell(CONFIG_ROOT / "calibration" / "13m_manoL02.yaml")
+    for length in (2, 3):
+        cell = replace(base, mano_length=length)
+        with tempfile.TemporaryDirectory() as raw:
+            train = BuiltCorpus(cell.resolve(), Path(raw) / "t", split="train", with_streams=False)
+            evaluation = BuiltCorpus(
+                cell.resolve(), Path(raw) / "e", split="eval", with_streams=False
+            )
+            trained = {
+                tuple(next(t for t in train.tasks if t.name == "mano").item(i).tokens.tolist())
+                for i in range(20_000)
+            }
+            task = next(t for t in evaluation.tasks if t.name == "mano")
+            overlap = sum(1 for i in range(2_000) if tuple(task.item(i).tokens.tolist()) in trained)
+        assert overlap == 0, f"L{length}: {overlap} of 2,000 eval expressions were trained on"
+
+
+def test_the_content_split_does_not_skew_the_answer_distribution():
+    """
+    Rejection sampling on content could have biased which answers survive, which would move the floor
+    and make the depth sweep's own baseline a function of the split rule.
+
+    23 residues is 4.524 bits, so an undisturbed answer distribution sits just under that.
+    """
+    import math
+    import tempfile
+    from collections import Counter
+
+    from factcrowd.corpus.build import BuiltCorpus
+
+    base = C.load_cell(CONFIG_ROOT / "calibration" / "13m_manoL02.yaml")
+    for length in (2, 6, 10):
+        cell = replace(base, mano_length=length)
+        with tempfile.TemporaryDirectory() as raw:
+            corpus = BuiltCorpus(cell.resolve(), Path(raw), split="eval", with_streams=False)
+            task = next(t for t in corpus.tasks if t.name == "mano")
+            counts = Counter(task.item(i).answer for i in range(8_000))
+        total = sum(counts.values())
+        entropy = -sum((n / total) * math.log2(n / total) for n in counts.values())
+        assert entropy > 4.40, f"L{length}: answer entropy {entropy:.3f} of a possible 4.524"
+
+
+def test_a_phase_tag_keeps_a_reused_cell_id_from_conflating_two_campaigns():
+    """
+    Two things key on cell ids and neither can see a task change.
+
+    `select_complete` groups by `(cell_id, replicate)`, and `verify_fingerprints` skips any check a
+    checkpoint never recorded -- and phase-1 checkpoints recorded no `reasoning_structure`. So a phase-2
+    `28m_b8` at a different `mano_length` and a phase-1 `28m_b8` at the same step would be treated as
+    duplicate runs of one cell, with the wrong one able to win.
+    """
+    phase1 = C.load_cell(CONFIG_ROOT / "entropy" / "28m_b8.yaml")
+    assert phase1.phase == "p1" and phase1.qualified_id == "28m_b8"  # committed grid unchanged
+    phase2 = replace(phase1, phase="p2", mano_length=6)
+    assert phase2.qualified_id == "p2_28m_b8"
+    assert replace(phase2, replicate=1).qualified_id == "p2_28m_b8_r1"
+    assert phase1.qualified_id != phase2.qualified_id

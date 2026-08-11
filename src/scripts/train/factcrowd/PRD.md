@@ -1637,7 +1637,84 @@ run was killed at 72% after 13.8 hours.
 cohort overlap is two `range` calls compared. Phase 1 ran the confirmatory grid first because it was ready
 first. §4 is ordered by what can invalidate what, not by what is ready.
 
-### 16.12 Deferred, with reasons
+### 16.12 A re-audit that reversed one of my own conclusions
+
+**§16.10 and `PHASE2.md` called b32's storage figure an artefact. That was wrong, and the error was a
+comparison across incommensurable scales.**
+
+The reasoning was: b32 claims 67.56 bits/entity while reconstructing 0.097% of attributes, and b4
+reconstructs 6.2% while claiming 0.0% — anti-correlated, so the CE reduction is not knowledge. Both numbers
+are raw rates, and the chance levels differ by eight orders of magnitude:
+
+| b | pool | chance | reconstruction | × chance |
+|---|---|---|---|---|
+| 4 | 16 | 6.25e-02 | 6.26% | **1.0×** |
+| 8 | 256 | 3.91e-03 | 0.448% | 1.1× |
+| 32 | 4.29e9 | 2.33e-10 | 0.056% | **2,400,000×** |
+
+b4 is *at* chance; b32 is 2.4 million times it. The reconstruction corroborates the storage estimate. The
+mechanism that hid this was `round(self.recognition_chance, 9)` in `recall.py`, which stores 2⁻³² as
+literal `0.0` — so the one quantity that would have caught the error was destroyed on the way into the
+table. Chance is now unrounded and a `generation_over_chance` column sits beside it.
+
+There was also a structural reason "artefact" could never have been the explanation, and I did not apply
+it: probability mass on inactive softmax rows can *suppress* a CE-based storage estimate and cannot
+manufacture a positive 67.56-bit reduction. A story that requires the bookkeeping to create signal rather
+than lose it should have been rejected on its face.
+
+**Correct statement:** b32 shows a large, late-emerging teacher-forced value-information signal, single-seed
+and post-hoc. Neither proven memorisation nor proven artefact. It is the most interesting unresolved result
+in the project and was one revision away from being discarded.
+
+**The calibration sweep was measuring lookup at short lengths.** Index-disjoint splits guarantee different
+*items* and nothing about different *expressions*. The space is `23**L · 2**(L-1)`: 1,058 at L2, against
+125M items in a 1.0B-token budget — about 118,000 repetitions of every expression, and 100% of the eval set
+trained on verbatim. Measured from a 60,000-item sample: 100% overlap at L2, 72% at L3, and L4 exhausted at
+the full stream (37 items per expression). `ManoTask` now hashes an expression's *content* to a half and
+redraws when a draw lands in the wrong one: 0.00% overlap at every length, answer entropy 4.52 bits of a
+4.524-bit maximum, floors within sampling noise.
+
+**The exit rule was the wrong threshold.** "Floor + 10 pp" is G4's *range* requirement. G1 binds harder: its
+in-band lower bound is 20% of the floor-to-100 range, so at a ~4.65% floor the endpoint needs **≥ 23.8%
+absolute accuracy**, not 14.7%. Corrected, along with the target architecture — the committed calibration is
+13M/113M on the count vocabulary while the treatment is 28M on the entropy union vocabulary, a different
+softmax width and 31.43M against 29.71M parameters, so "at least one row passes" could have been satisfied
+by a row that is not the treatment.
+
+**`minimum_detectable_effect` was optimistic in the flattering direction.** It used
+`t(1-α/2, df) + t(power, df)` over √n, which treats the alternative as a *central* t. At k=3 that returns
+3.0965·SD where exact 80% power needs 3.264·SD — 5.4% understated, i.e. every MDE this project published for
+a three-seed design made an under-powered plan look adequate. Replaced with exact noncentral-t power by
+numerical integration over the chi-square, needing nothing beyond `erf`. It reproduces 3.264 at k=3.
+
+The consequence for the design: at a 2 pp margin, **three seeds reach 80% power only if the true SD is
+≤ 0.61 pp**, and phase 1's σ was measured on floor-pinned models. Phase 2 targets **six** seeds, set by a
+variance-adaptive rule rather than by that table.
+
+**B − C is not a decomposition**, and earlier revisions said it was. The axes differ in schema, vocabulary,
+active support and target frequency, entity count, tokens and steps, mixture ratio, optimiser history, and
+in `<compare>` existing only in positive count cells. C is descriptive sensitivity, not a subtraction that
+isolates tokens-and-steps.
+
+**Cell ids could conflate two campaigns.** `select_complete` groups by `(cell_id, replicate)` and
+`verify_fingerprints` skips any check a checkpoint never recorded — and phase-1 checkpoints recorded no
+`reasoning_structure`. A phase-2 `28m_b8` at a different `mano_length` and a phase-1 `28m_b8` at the same
+step would have been treated as duplicate runs of one cell. `CellSpec.phase` is now part of
+:attr:`qualified_id`.
+
+**And the calibration cost was wrong.** §7 quoted 8 slot-hours "conservatively" using the 28M rate, for a
+sweep that is 13M and **113M** — and 113M is the slowest row in the project. The real figure is 13.5–18.3
+slot-hours. Quoting a rate for a model that is not in the job is the same class of error as the 1.9×
+eight-device guess.
+
+**Accepted and not yet done**, in the audit's own order: common-width padded, label-masked reasoning items
+(the packing confound, which varies non-monotonically with length and so confounds a depth sweep); G1/G2/G3
+evidence assembly, since `evidence.py` recognises neither `*_manoLxx` cells nor a step-0 checkpoint; binding
+gate reports to task, model row, vocabulary and eval identity rather than to an endpoint name; per-cell
+headroom at scoring time; the b24/b32 trajectory, active-mass and name-permutation diagnostics; phase-2
+treatment config sets; and `--bit-offset` defaulting to 0 where count rescoring should require 25,000.
+
+### 16.13 Deferred, with reasons
 
 FLD's 1,700 core-hours and 51.1% floor — decided in M0, not now. The exposure placebo and the
 mechanism battery — M4. Qwen3-0.6B continuation — after M3. Retiring

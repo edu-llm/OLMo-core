@@ -162,6 +162,13 @@ class CellSpec:
     :param related_reasoning_tokens: The related slice's own absolute budget, sized on per-entity
         coverage rather than on parity with the unrelated slice. See :data:`RELATED_REASONING_TOKENS`.
         Ignored where the cell carries no related slice.
+    :param phase: Which campaign this cell belongs to. **Part of the identity, because two things key on
+        cell ids and neither can see a task change.** ``select_complete`` groups by
+        ``(cell_id, replicate)``, and ``verify_fingerprints`` skips a check whose value a checkpoint never
+        recorded -- so a phase-2 ``28m_b8`` at a different ``mano_length`` and a phase-1 ``28m_b8`` at the
+        same step would be silently treated as duplicate runs of one cell, and the wrong one could win.
+        :attr:`qualified_id` carries it, so the two cannot collide in a filename or a checkpoint prefix
+        either.
     :param mano_length: Operands in a ``<mano>`` expression. **The calibration knob, and it was a module
         constant until the endpoint failed.** It had already been cut from 13 to 10 because 13 sat a point
         above its own degenerate policy; at 10 the first campaign found every model a constant function and
@@ -204,6 +211,7 @@ class CellSpec:
     warmup_steps: Optional[int] = None
     decay_fraction: float = 0.1
     mano_length: int = 10
+    phase: str = "p1"
     reasoning_tokens: int = 0
     related_reasoning_tokens: int = 0
     replicate: int = 0
@@ -322,7 +330,8 @@ class CellSpec:
 
         Replicate 0 keeps the bare id, so the committed single-replicate grid is unchanged.
         """
-        return self.cell_id if self.replicate == 0 else f"{self.cell_id}_r{self.replicate}"
+        stem = self.cell_id if self.phase == "p1" else f"{self.phase}_{self.cell_id}"
+        return stem if self.replicate == 0 else f"{stem}_r{self.replicate}"
 
     @property
     def init_seed(self) -> int:

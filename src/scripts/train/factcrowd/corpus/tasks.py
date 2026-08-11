@@ -31,7 +31,7 @@ what they plug into.
 import hashlib
 import math
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Sequence, Tuple, Type
+from typing import Dict, Final, List, Optional, Sequence, Tuple, Type
 
 import numpy as np
 
@@ -365,6 +365,36 @@ class ReasoningTask(ABC):
         return best, counts[best] / sample
 
 
+_MANO_SPLIT_ATTEMPTS: Final = 64
+"""
+How many redraws a content-disjoint split may take before giving up.
+
+Half the draws land in the wanted half, so two attempts is the mean and 64 is 2**-64 territory. Bounded
+rather than unbounded because a future generator with a degenerate content hash would otherwise hang a
+data loader rather than fail.
+"""
+
+
+def _content_half(residues: Sequence[int], operators: Sequence[int]) -> int:
+    """
+    Which split an expression belongs to, from its content alone.
+
+    Keyed on the expression rather than on an index, because two different indices routinely encode the
+    same expression -- which is exactly how index-disjoint splits leak content.
+
+    :param residues: The operands.
+    :param operators: The operator bits.
+
+    :returns: ``0`` for the train half, ``1`` for the eval half.
+    """
+    mixed = np.uint64(0x9E3779B97F4A7C15)
+    for value in list(residues) + list(operators):
+        mixed = np.uint64(
+            splitmix64(np.array([mixed ^ np.uint64(int(value) + 1)], dtype=np.uint64))[0]
+        )
+    return int(mixed & np.uint64(1))
+
+
 class ManoTask(ReasoningTask):
     """
     Mod-23 mental arithmetic with no chain of thought, in the spirit of Physics 4.1's Mano.
@@ -446,11 +476,48 @@ class ManoTask(ReasoningTask):
         return mano_words()
 
     def item(self, index: int) -> TaskItem:
-        # One mix per item gives 64 bits to spend; the expression needs `length` residues and
-        # `length - 1` operator bits, which fits comfortably for any length worth training on.
+        # CONTENT-DISJOINT SPLITS, NOT INDEX-DISJOINT ONES, AND THE DIFFERENCE DECIDES WHAT THE ENDPOINT
+        # MEASURES. `item_key` gives train and eval different index streams, which guarantees different
+        # *items* and guarantees nothing about different *expressions*. The space is
+        # `23**length * 2**(length-1)`: 1,058 at length 2, and a 1.0B-token budget buys 125M items, so
+        # every expression appears about 118,000 times and 100% of the eval set is trained on verbatim.
+        # Measured overlap from a 60,000-item sample: 100% at L2, 72% at L3, and at the full stream L4 is
+        # exhausted too (37 items per expression). A depth sweep over those lengths measures lookup.
+        #
+        # So the *content* is hashed and assigned to a half, and a draw landing in the wrong half is
+        # redrawn. Two attempts on average, bounded below. An eval expression is then one the training
+        # stream never contained at any length, and the model has to compute it.
         draw = item_key(
             class_tag=0x4D414E4F, split=self._split, seed=self._seed, index=index  # 'MANO'
         )
+        wanted = 0 if self._split == "train" else 1
+        for attempt in range(_MANO_SPLIT_ATTEMPTS):
+            residues, operators = self._expression(draw)
+            if _content_half(residues, operators) == wanted:
+                break
+            draw = int(
+                splitmix64(
+                    np.array([np.uint64(draw) ^ np.uint64(0xC2B2AE3D + attempt)], dtype=np.uint64)
+                )[0]
+            )
+        else:  # pragma: no cover - 2**-64 territory
+            raise OLMoConfigurationError(
+                f"could not draw a {self._split!r}-half expression for index {index} in "
+                f"{_MANO_SPLIT_ATTEMPTS} attempts"
+            )
+        return self._assemble(residues, operators)
+
+    def _expression(self, draw: int) -> Tuple[List[int], List[int]]:
+        """
+        The residues and operators one draw encodes.
+
+        Split out of :meth:`item` so the content can be generated, hashed and rejected before any tokens
+        are laid down -- which is what makes a content-disjoint split possible at all.
+
+        :param draw: A 64-bit mix.
+
+        :returns: The residues and the operator bits.
+        """
         residues: List[int] = []
         operators: List[int] = []
         state = draw
@@ -494,6 +561,17 @@ class ManoTask(ReasoningTask):
                             ]
                         )
 
+        return residues, operators
+
+    def _assemble(self, residues: List[int], operators: List[int]) -> TaskItem:
+        """
+        Lay one expression out as tokens and compute its answer.
+
+        :param residues: The operands.
+        :param operators: The operator bits, ``0`` for ``+`` and ``1`` for ``x``.
+
+        :returns: The item.
+        """
         total = residues[0]
         for operator, residue in zip(operators, residues[1:]):
             total = (
