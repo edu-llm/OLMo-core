@@ -64,12 +64,17 @@ command: >-
   --test-data $DATA/heldout-00000.jsonl || exit 1;
   python src/scripts/latentcot/verify_checkpoint.py --model olmo3_370M
   --init-checkpoint "$BASE" || exit 1;
-  pids=(); for i in 0 1 2 3 4; do mkdir -p "$EDULLM_CHECKPOINT_DIR/A$i";
+  LOGS=/tmp/armlogs; mkdir -p "$LOGS";
+  pids=(); tails=(); for i in 0 1 2 3 4; do : > "$LOGS/A$i.log";
   CUDA_VISIBLE_DEVICES=$i python src/scripts/latentcot/train_codi.py
   --arm ${ARMS[$i]} --rung olmo3_370M --init-checkpoint "$BASE"
   --steps 2000 --batch-size 16 --precision bf16 --lr 2e-5
   --init-seed 0 --seed 1 --log-every 50
   --train-data $DATA/train-00000.jsonl --test-data $DATA/heldout-00000.jsonl
   --out "$EDULLM_CHECKPOINT_DIR/A$i"
-  > "$EDULLM_CHECKPOINT_DIR/A$i/train.log" 2>&1 & pids+=($!); done;
-  rc=0; for p in "${pids[@]}"; do wait "$p" || rc=1; done; exit $rc'
+  > "$LOGS/A$i.log" 2>&1 & pids+=($!);
+  ( tail -n +1 -f "$LOGS/A$i.log" | sed -u "s|^|[A$i] |" ) & tails+=($!); done;
+  rc=0; for p in "${pids[@]}"; do wait "$p" || rc=1; done;
+  sleep 5; kill "${tails[@]}" 2>/dev/null || true;
+  for i in 0 1 2 3 4; do echo "===== A$i last 40 ====="; tail -n 40 "$LOGS/A$i.log"; done;
+  exit $rc'
