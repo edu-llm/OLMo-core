@@ -1856,3 +1856,39 @@ def test_a_label_that_received_no_data_is_nan_rather_than_a_believable_number():
 
     assert math.isnan(ce), "an unpopulated label must be NaN, never a believable number"
     assert ce != 0.0, "0.0 would read as a perfect held-out loss"
+
+
+# ---------------------------------------------------------------------------------------------
+# Throughput flags: the quantized-weight cache and the QAT schedule.
+#
+# Both act on a quantizer, so both have to refuse a command line that asks for them without one.
+# A silent no-op is the failure worth testing: the run would train, report itself as scheduled
+# or cached, and be neither.
+
+
+def _throughput_opts(*flags: str):
+    opts, _ = entry.build_parser().parse_known_args(["a-run-id", *flags])
+    return opts
+
+
+def test_qat_start_is_none_unless_asked_for():
+    assert entry._qat_start(_throughput_opts()) is None
+
+
+def test_qat_start_reads_either_spelling():
+    assert entry._qat_start(_throughput_opts("--qat-start-step", "1000")) == {"start_step": 1000}
+    assert entry._qat_start(_throughput_opts("--qat-start-fraction", "0.7")) == {
+        "start_fraction": 0.7
+    }
+
+
+def test_the_two_qat_spellings_are_mutually_exclusive():
+    with pytest.raises(SystemExit):
+        entry.build_parser().parse_known_args(
+            ["a-run-id", "--qat-start-step", "5", "--qat-start-fraction", "0.5"]
+        )
+
+
+def test_the_cache_flag_defaults_off():
+    assert _throughput_opts().cache_quantized_weight is False
+    assert _throughput_opts("--cache-quantized-weight").cache_quantized_weight is True

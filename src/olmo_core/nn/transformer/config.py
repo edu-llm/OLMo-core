@@ -1198,6 +1198,7 @@ class TransformerConfig(ModelConfig):
         *,
         rung: str = "R3",
         quantize: Optional[bool] = None,
+        cache_quantized_weight: bool = False,
         **kwargs,
     ) -> "TransformerConfig":
         """
@@ -1230,6 +1231,12 @@ class TransformerConfig(ModelConfig):
             property `contracts/quant-surface.md` calls the cheapest thing to verify. So
             ``False`` is not a synonym for ``None``, and picking the wrong one produces a
             comparison that looks fine and is not paired.
+        :param cache_quantized_weight: Reuse the quantized weight across the microbatches of a
+            gradient-accumulation window instead of recomputing it per forward. The values are
+            identical either way -- the latent weights do not move until the optimizer steps --
+            so this is a pure throughput setting. See
+            :attr:`~olmo_core.nn.quantization.QuantConfig.cache_quantized_weight` for the
+            memory trade-off that keeps it off by default.
         """
         if rung not in cls.MAPLE_RUNGS:
             raise OLMoConfigurationError(
@@ -1263,7 +1270,9 @@ class TransformerConfig(ModelConfig):
                     "a ternary arm that quietly ran in bf16 would look like a *successful* "
                     "paired comparison, which is the worst outcome for X4a."
                 ) from e
-            quant = QuantConfig(enabled=quantize)
+            quant = QuantConfig(
+                enabled=quantize, cache_quantized_weight=cache_quantized_weight
+            )
 
         config = cls._maple_config(
             quant=quant,

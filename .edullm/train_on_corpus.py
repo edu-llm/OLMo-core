@@ -113,6 +113,7 @@ from olmo_core.train.callbacks import (
     GPUMemoryMonitorCallback,
     LMEvaluatorCallbackConfig,
     MetricAssertionCallback,
+    QATSchedulerCallback,
     ResultProtocolCallback,
     SteadyStateThroughputCallback,
     WandBCallback,
@@ -859,6 +860,26 @@ def build_config(opts, overrides: List[str]):
             Stage.THE_CONFIG_WOULD_NOT_BUILD, f"unknown model factory: {opts.model_factory}"
         )
 
+    qat_start = _qat_start(opts)
+    # Both of these act on a quantizer, so without --quantize they would silently do nothing on
+    # a run whose command line says otherwise. Refuse instead.
+    if getattr(opts, "cache_quantized_weight", False) and opts.quantize is None:
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            "--cache-quantized-weight requires --quantize (use 'control' or 'ternary'); "
+            "without it the model has no quantizer whose output could be cached.",
+        )
+    if qat_start is not None and opts.quantize is not True:
+        # `control` is the required starting state, not `ternary`: the schedule turns the
+        # quantizer on, so a run that starts already ternary has nothing to schedule, and a run
+        # built with `None` has no QuantLinear to switch.
+        raise Refusal(
+            Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            "--qat-start-step/--qat-start-fraction require --quantize ternary. The schedule "
+            "runs the model in full precision until the transition and switches the quantizer "
+            "on there, so the ternary module tree has to be built from step 0.",
+        )
+
     # padded rather than exact for the same reason the example pads: a vocab that is a
     # multiple of 128 keeps the embedding matmul on a fast path. dolma2's 100,278 pads to
     # 100,352.
@@ -874,6 +895,8 @@ def build_config(opts, overrides: List[str]):
     factory_kwargs: Dict[str, Any] = {}
     if opts.quantize is not None:
         factory_kwargs["quantize"] = opts.quantize
+        if getattr(opts, "cache_quantized_weight", False):
+            factory_kwargs["cache_quantized_weight"] = True
     model_config = factory(vocab_size=corpus.tokenizer.padded_vocab_size(), **factory_kwargs)
 
     # THE LOSS IMPLEMENTATION, WHICH IS A MEMORY DECISION MASQUERADING AS A NUMERICS ONE.
@@ -1571,6 +1594,9 @@ def train(config, opts=None) -> None:
             cv_warmup = getattr(opts, "expert_load_cv_warmup_steps", None)
             if cv_warmup is not None:
                 assertion_kwargs["expert_load_cv_warmup_steps"] = int(cv_warmup)
+    qat_start = _qat_start(opts) if opts is not None else None
+    if qat_start is not None:
+        trainer.add_callback("maple_qat_schedule", QATSchedulerCallback(**qat_start))
     trainer.add_callback("maple_assertions", MetricAssertionCallback(**assertion_kwargs))
     trainer.add_callback(
         "maple_result",
@@ -1660,6 +1686,22 @@ def _quantize_arg(value: str) -> Optional[bool]:
         ) from None
 
 
+def _qat_start(opts: Any) -> Optional[Dict[str, Any]]:
+    """The QAT transition point as kwargs for the scheduler, or ``None`` if unscheduled.
+
+    Returned as kwargs rather than a step so the caller does not have to re-derive which of the
+    two mutually exclusive spellings was used; the callback resolves a fraction against the
+    run's own length, which is not known here.
+    """
+    step = getattr(opts, "qat_start_step", None)
+    fraction = getattr(opts, "qat_start_fraction", None)
+    if step is not None:
+        return {"start_step": step}
+    if fraction is not None:
+        return {"start_fraction": fraction}
+    return None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="train_on_corpus",
@@ -1715,6 +1757,36 @@ def build_parser() -> argparse.ArgumentParser:
         "omitting the flag, but with the ternary arm's module tree, which is what makes the "
         "comparison paired; this is X4a's bf16 arm, NOT the same as omitting. 'ternary' is the "
         "quantized arm. 'off' is an explicit spelling of the default. Maple factories only.",
+    )
+    # Throughput only: the quantized weight is a pure function of the latent one, so reusing it
+    # across a gradient-accumulation window returns identical numbers. Measured 2.03x/4.07x/8.04x
+    # at 2/4/8 microbatches on the M20 expert shape, and +3% when it misses. Off by default and
+    # opt-in here rather than on, because the cache entry holds the latent tensor alive, which
+    # is free for a persistent parameter and fights FSDP2 resharding for a transient one.
+    parser.add_argument(
+        "--cache-quantized-weight",
+        action="store_true",
+        help="Reuse the quantized weight across the microbatches of a gradient-accumulation "
+        "window instead of recomputing the TWN scan per forward. Requires --quantize.",
+    )
+    # A full-precision phase before QAT is what the compute-optimal QAT literature recommends:
+    # the quantization penalty grows with the number of tokens trained under it, so spending the
+    # early budget in full precision is both faster per step and better at the end. Requires
+    # --quantize control (not ternary): the modules must exist from step 0 so the state dict and
+    # module tree never change, with only the arithmetic switching at the transition.
+    qat_schedule = parser.add_mutually_exclusive_group()
+    qat_schedule.add_argument(
+        "--qat-start-step",
+        type=int,
+        default=None,
+        help="Step at which ternary QAT switches on. Before it the run is full precision.",
+    )
+    qat_schedule.add_argument(
+        "--qat-start-fraction",
+        type=float,
+        default=None,
+        help="Fraction of the run after which ternary QAT switches on, e.g. 0.7 for the last "
+        "30%% of steps.",
     )
     parser.add_argument("--sequence-length", type=int, default=2048)
     parser.add_argument("--steps", type=int, default=200)
