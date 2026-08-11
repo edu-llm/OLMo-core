@@ -69,6 +69,7 @@ from .mamba3_ssd_api import (
     _block_rotations,
     _mamba3_siso_combined_eager,
     _rotate_bc,
+    apply_partial_rotation,
     kernel_padded_width,
 )
 
@@ -1050,25 +1051,32 @@ def _fast_rotate_bc_pair(
     """
     impl = resolve_rotation_scan_impl(scan_impl)
     theta = theta.to(torch.promote_types(theta.dtype, torch.float32))
-    if block_size == 2:
-        theta_cumulative = torch.cumsum(theta.squeeze(-1) if theta.dim() == 5 else theta, dim=1)
-        theta_cumulative = theta_cumulative.to(B.dtype)
-        return _rotate_bc(B, theta_cumulative), _rotate_bc(C, theta_cumulative)
 
-    if theta.dim() != 5:
-        raise ValueError(
-            f"theta must be 5-D (batch, seq_len, n_groups, n_blocks, angles_per_block) "
-            f"for block_size={block_size}, got shape {tuple(theta.shape)}"
+    def _rotate(B_in: torch.Tensor, C_in: torch.Tensor, angles: torch.Tensor):
+        if block_size == 2:
+            cumulative = torch.cumsum(
+                angles.squeeze(-1) if angles.dim() == 5 else angles, dim=1
+            ).to(B_in.dtype)
+            return _rotate_bc(B_in, cumulative), _rotate_bc(C_in, cumulative)
+
+        if angles.dim() != 5:
+            raise ValueError(
+                f"theta must be 5-D (batch, seq_len, n_groups, n_blocks, angles_per_block) "
+                f"for block_size={block_size}, got shape {tuple(angles.shape)}"
+            )
+        if impl == "quaternion" and block_size == 3:
+            return _fused_quaternion_rotate_bc(B_in, C_in, angles)
+
+        cumulative_rot = fast_cumulative_block_rotation(
+            fast_block_rotations(angles, block_size),
+            chunk_size=chunk_size,
+            scan_impl=impl,
         )
-    if impl == "quaternion" and block_size == 3:
-        return _fused_quaternion_rotate_bc(B, C, theta)
+        return _rotate_bc_fused(B_in, C_in, cumulative_rot.to(B_in.dtype))
 
-    cumulative_rot = fast_cumulative_block_rotation(
-        fast_block_rotations(theta, block_size),
-        chunk_size=chunk_size,
-        scan_impl=impl,
-    )
-    return _rotate_bc_fused(B, C, cumulative_rot.to(B.dtype))
+    # ``theta`` may cover only the leading blocks (``rope_fraction`` < 1); the tail is identity
+    # and is skipped rather than scanned. See `apply_partial_rotation` for what that is worth.
+    return apply_partial_rotation(B, C, theta, block_size, _rotate)
 
 
 def mamba3_ssd_fast(

@@ -5,7 +5,6 @@ import contextlib
 import copy
 import enum
 import logging
-import math
 import os
 import sys
 from collections.abc import Iterator
@@ -184,7 +183,7 @@ FROZEN_SAVE_INTERVAL = 572
 PARAMETER_TARGET = 390_135_552
 PARAMETER_TOLERANCE = 195_068
 EXACT_PARAMETER_COUNTS = {
-    "mamba-b3": 390_153_344,
+    "mamba-b3": 390_100_352,
     "xlstm": 390_143_056,
     "mamba3-siso-pd": 390_169_664,
     "native-pd": 390_142_976,
@@ -226,7 +225,11 @@ EXACT_PARAMETER_COUNTS = {
 # copying Mamba-3's three-pattern row onto them would not read as a smaller mistake in a diff
 # while being a fatal one at optimizer-build time.
 WEIGHT_DECAY_EXEMPT_PATTERNS_BY_ARM: dict[str, tuple[str, ...]] = {
-    "mamba-b3": ("*.A_log", "*.dt_bias"),
+    # The faithful Mamba arm now carries a learned ``D`` skip alongside ``A_log`` and ``dt_bias``,
+    # so it exempts all three timescale-class parameters -- the same row as the two PD arms. The
+    # token-dependent ``a_proj`` is a plain input GEMM and is deliberately NOT exempt; the decay
+    # baseline still lives in the exempt ``A_log``.
+    "mamba-b3": ("*.A_log", "*.dt_bias", "*.D"),
     # xLSTM's timescale parameters are its GATE BIASES, and the empty tuple that stood here
     # decayed every one of them. mLSTM packs the input and forget gate biases into `w_if.bias`
     # and initializes them to -10 and a 3..6 ramp; sLSTM's `_bias_` spans about -7..5 under
@@ -499,27 +502,43 @@ def _treatment_mixer(arm: str, layer_index: int):
     if arm == "kda-gconv":
         return _kda_gated_conv_mixer()
     if arm == "mamba-b3":
+        # Faithful published Mamba-3 SISO, with the single intentional deviation that SO(2) is
+        # generalized to SO(3) b=3 for NC^1 state-tracking. The fidelity audit found the prior
+        # arm departed from published SISO in six ways beyond the rotation; each is restored here:
+        #   - expand=2 (32 heads x 64 = 2048 inner), the published SISO mixer width;
+        #   - token-dependent decay A on top of the per-head A_log baseline (dynamic_a);
+        #   - head-specific B/C bias initialized to one, applied AFTER BCNorm (bc_bias_after_norm);
+        #   - a learned D skip initialized to one (d_skip);
+        #   - norm-before-gate output ordering (norm_before_gate);
+        #   - the official tanh(angle)*pi*dt per-head rotation over half the state, the rest
+        #     identity (dt_scaled_rotation + rope_fraction=0.5).
+        # b=3, d_state=192, SISO rank 1, official_fast/quaternion, and the pre-norm shell (set in
+        # `_block_type`) complete the arm. The faithful options are only wired for the unfused
+        # layout, so `fuse_input_projections` is False; theta_max is unused because tanh*pi*dt
+        # bounds the angle itself.
         return Mamba3MixerConfig(
-            n_heads=16,
+            n_heads=32,
             head_dim=64,
-            # Restore the state capacity of the successful July b=2/b=3 ablation. 196 is not
-            # admissible for SO(3): d_state must be divisible by rotation_block_size, and 192
-            # is the proven nearby value.
             d_state=192,
             n_groups=1,
             mimo_rank=1,
             rotation_block_size=3,
             norm_eps=1e-6,
             bc_norm=True,
-            bc_bias=True,
+            bc_bias=False,
+            dynamic_a=True,
+            d_skip=True,
+            norm_before_gate=True,
+            bc_bias_after_norm=True,
+            dt_scaled_rotation=True,
+            rope_fraction=0.5,
             prefer_official_kernel=True,
             rotation_scan_impl="quaternion",
-            # Exact fused Mamba-3 recurrence used by the successful run. ``simple_gla`` is an
-            # approximate algebraic fold with non-zero forward/gradient parity tolerances; it
-            # remains available as an explicit benchmark backend, not as this quality control.
+            # Exact fused Mamba-3 recurrence. ``simple_gla`` is an approximate algebraic fold with
+            # non-zero parity tolerances; it stays an explicit benchmark backend, not the default.
             ssd_backend="official_fast",
-            theta_max=1 / math.sqrt(SEQUENCE_LENGTH),
-            fuse_input_projections=True,
+            theta_max=None,
+            fuse_input_projections=False,
             dtype=MASTER_DTYPE,
         )
     if arm == "xlstm":
@@ -563,9 +582,25 @@ def _treatment_mixer(arm: str, layer_index: int):
     raise ValueError(f"unsupported arm: {arm}")
 
 
-def _block(mixer, width: int) -> TransformerBlockConfig:
+# Every arm feeds its mixer the reordered (post-)norm block that the wave was frozen with,
+# except the faithful Mamba arm: published Mamba is pre-norm, and the fidelity audit found that
+# feeding the raw residual stream through a post-norm shell was one of this arm's deviations.
+# The switch is param-neutral (reordered_norm and default carry the same two norms, only the
+# forward ordering differs), so it changes the arm's behaviour without moving its parameter count.
+_PRE_NORM_ARMS = frozenset({"mamba-b3"})
+
+
+def _block_type(arm: str) -> TransformerBlockType:
+    return (
+        TransformerBlockType.default
+        if arm in _PRE_NORM_ARMS
+        else TransformerBlockType.reordered_norm
+    )
+
+
+def _block(mixer, width: int, block_type: TransformerBlockType) -> TransformerBlockConfig:
     return TransformerBlockConfig(
-        name=TransformerBlockType.reordered_norm,
+        name=block_type,
         sequence_mixer=mixer,
         feed_forward=_feed_forward(width),
         layer_norm=_layer_norm(),
@@ -579,7 +614,8 @@ def _model_for_widths(arm: str, widths: tuple[int, ...], init_seed: int) -> Tran
         raise ValueError(
             f"expected {len(RECURRENT_LAYERS)} recurrent FFN widths, got {len(widths)}"
         )
-    blocks = {"attention": _block(_attention_mixer(), BASE_FFN_WIDTH)}
+    block_type = _block_type(arm)
+    blocks = {"attention": _block(_attention_mixer(), BASE_FFN_WIDTH, block_type)}
     pattern: list[str] = []
     width_by_layer = dict(zip(RECURRENT_LAYERS, widths))
     for index in range(N_LAYERS):
@@ -587,7 +623,7 @@ def _model_for_widths(arm: str, widths: tuple[int, ...], init_seed: int) -> Tran
             pattern.append("attention")
         else:
             name = f"recurrent-{index}"
-            blocks[name] = _block(_treatment_mixer(arm, index), width_by_layer[index])
+            blocks[name] = _block(_treatment_mixer(arm, index), width_by_layer[index], block_type)
             pattern.append(name)
     return TransformerConfig(
         d_model=D_MODEL,

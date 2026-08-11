@@ -18,11 +18,20 @@ and TPP about 1.54. The source of truth is
 ## Frozen architectures
 
 Every arm has 16 layers, `d_model=1024`, a tied 100,352-token embedding/LM
-head, sequence length 4096, and identical PyTorch fused-SDPA GQA layers at
-indices 3, 7, 11, and 15.
+head, sequence length 4096, and PyTorch fused-SDPA GQA layers at indices 3, 7,
+11, and 15. Those four attention layers are byte-identical across the seven
+post-norm arms; the faithful `mamba-b3` arm is pre-norm throughout, so its
+attention layers differ from the others only in that norm ordering.
 
-- `mamba-b3`: twelve Mamba-3 SISO layers with rotation block size 3,
-  `d_state=192`, and the exact `official_fast` SSD backend.
+- `mamba-b3`: twelve faithful published Mamba-3 SISO layers with the single
+  intentional deviation that SO(2) is generalized to SO(3) b=3. Faithful means
+  `expand=2` (32×64 = 2048 inner), a token-dependent decay `A` on top of the
+  per-head `A_log` baseline, a head-specific `B`/`C` bias initialized to one
+  applied after BCNorm, a learned `D` skip initialized to one, norm-before-gate
+  output ordering, and the official `tanh(angle)·π·dt` per-head rotation over
+  half of `d_state=192` (the rest identity), all on the `official_fast` SSD
+  backend. This arm alone uses a pre-norm shell (published Mamba is pre-norm), so
+  its four attention layers are pre-norm too; the other seven arms are unchanged.
 - `xlstm`: `[mLSTM, mLSTM, mLSTM, attention, mLSTM, mLSTM, sLSTM, attention]`
   repeated twice, giving exactly 10 mLSTM, 2 sLSTM, and 4 attention layers.
 - `mamba3-siso-pd`: twelve native SISO PD-SSM layers with the Mamba-3
@@ -46,7 +55,7 @@ so the arm's parameter count and FFN widths did not move.
 Attention FFNs remain fixed at width 4608. A deterministic `/32` solver changes
 only recurrent-layer FFN widths. Exact totals are:
 
-- `mamba-b3`: 390,153,344 parameters.
+- `mamba-b3`: 390,100,352 parameters.
 - `xlstm`: 390,143,056 parameters.
 - `mamba3-siso-pd`: 390,169,664 parameters.
 - `native-pd`: 390,142,976 parameters.
@@ -72,11 +81,13 @@ between `kda-hh-r2` and `kda-gconv` varies two things at once and is not
 attributable.
 
 Weight decay is uniform across the wave: every arm exempts the timescale
-parameters it actually has, and no arm names one it does not. `mamba3-siso-pd`
-and `native-pd` exempt `A_log`, `dt_bias`, and `D`; `mamba-b3`, `gdn`, and all
-three KDA arms exempt `A_log` and `dt_bias`, having no `D`; `xlstm` exempts
-nothing beyond the embeddings, because neither of its recurrences carries such a
-parameter. An unmatched pattern is fatal rather than inert — the optimizer is
+parameters it actually has, and no arm names one it does not. `mamba-b3`,
+`mamba3-siso-pd`, and `native-pd` exempt `A_log`, `dt_bias`, and `D` (the
+faithful Mamba arm now carries a learned `D` skip); `gdn` and all three KDA arms
+exempt `A_log` and `dt_bias`, having no `D`; `xlstm` exempts nothing beyond the
+embeddings, because neither of its recurrences carries such a parameter. The
+token-dependent `a_proj` on `mamba-b3` is an ordinary input GEMM and is not
+exempt, so the decay baseline still lives in the exempt `A_log`. An unmatched pattern is fatal rather than inert — the optimizer is
 built with `strict=True` — so these rows are asserted against the mixers' own
 `_no_weight_decay` tags rather than maintained by hand.
 

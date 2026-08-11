@@ -17,6 +17,7 @@ PYPROJECT = ROOT / "pyproject.toml"
 RUN_CONFIG = ROOT / ".edullm/run.yaml"
 COMPARISON_RUN_CONFIG = ROOT / ".edullm/run-comparison.yaml"
 XLSTM_RERUN_CONFIG = ROOT / ".edullm/run-xlstm-rerun.yaml"
+MAMBA_FAITHFUL_RERUN_CONFIG = ROOT / ".edullm/run-mamba-b3-faithful.yaml"
 SEED_SCHEDULE = ROOT / "docs/mamba-comparison/seeds.json"
 RUN_GUIDE = ROOT / "MODEL_ARCH_RUNS.md"
 
@@ -213,21 +214,24 @@ def test_eight_arm_geometry_has_identical_attention_and_full_recurrent_treatment
             else:
                 assert block.feed_forward.hidden_size == width_by_layer[index]
 
-    # THE INVARIANT THE WHOLE COMPARISON RESTS ON. Every arm's four attention blocks -- mixer,
-    # feed-forward and layer norm together -- must be one shared object, so that the only thing
-    # that differs between arms is the twelve recurrent slots. Parameter respend happens in
-    # recurrent-block FFN widths and nowhere else. Adding an arm must not move this, and the
-    # fingerprint below is pinned to the value the four-arm wave was first measured under: the
-    # three KDA arms are inside it now and it did not move.
+    # THE INVARIANT THE WHOLE COMPARISON RESTS ON. Outside the twelve recurrent slots the arms
+    # must be identical, so that a difference is attributable to the mixer. The seven post-norm
+    # arms still share one byte-identical attention block. The faithful Mamba arm is the one
+    # disclosed exception: published Mamba is pre-norm throughout, so its four attention blocks
+    # differ from the shared ones ONLY in the block norm ordering -- same mixer, feed-forward and
+    # layer norm -- which is asserted explicitly below rather than folded into the fingerprint.
     assert len(configs) == 8
-    reference = configs[module.ARMS[0]]
+    pre_norm_arms = set(module._PRE_NORM_ARMS)
+    shared_arms = [arm for arm in module.ARMS if arm not in pre_norm_arms]
+    reference = configs[shared_arms[0]]
     fingerprints = set()
-    for arm, config in configs.items():
-        for index, (expected, actual) in enumerate(
-            zip(reference.resolved_block_configs, config.resolved_block_configs)
-        ):
-            if index in module.ATTENTION_LAYERS:
-                assert actual.as_config_dict() == expected.as_config_dict(), (arm, index)
+    for arm in shared_arms:
+        config = configs[arm]
+        for index in module.ATTENTION_LAYERS:
+            assert (
+                config.resolved_block_configs[index].as_config_dict()
+                == reference.resolved_block_configs[index].as_config_dict()
+            ), (arm, index)
         attention_blocks = [
             config.resolved_block_configs[index].as_config_dict()
             for index in module.ATTENTION_LAYERS
@@ -238,7 +242,20 @@ def test_eight_arm_geometry_has_identical_attention_and_full_recurrent_treatment
                 json.dumps(attention_blocks, sort_keys=True).encode(), digest_size=8
             ).hexdigest()
         )
+    # Pinned to the value the four-arm wave was first measured under; the three KDA arms are
+    # inside it now and it did not move, and the pre-norm Mamba arm does not perturb it.
     assert fingerprints == {"deb8ff528e7359fa"}
+
+    for arm in pre_norm_arms:
+        config = configs[arm]
+        for index in module.ATTENTION_LAYERS:
+            block = config.resolved_block_configs[index].as_config_dict()
+            shared = reference.resolved_block_configs[index].as_config_dict()
+            assert block["name"] == "default", (arm, index)
+            assert shared["name"] == "reordered_norm", index
+            assert {k: v for k, v in block.items() if k != "name"} == {
+                k: v for k, v in shared.items() if k != "name"
+            }, (arm, index)
 
 
 def test_mamba_b3_restores_the_successful_state_size_and_official_backend():
@@ -272,7 +289,7 @@ def test_treatment_mixers_are_strict_and_parameter_matched():
     from olmo_core.nn.mamba3 import Mamba3MixerConfig
 
     expected_counts = {
-        "mamba-b3": 390_153_344,
+        "mamba-b3": 390_100_352,
         "xlstm": 390_143_056,
         "mamba3-siso-pd": 390_169_664,
         "native-pd": 390_142_976,
@@ -282,7 +299,9 @@ def test_treatment_mixers_are_strict_and_parameter_matched():
         "kda-gconv": 390_094_784,
     }
     expected_widths = {
-        "mamba-b3": (4704,) * 7 + (4672,) * 5,
+        # Faithful SISO expand=2 makes the Mamba mixer ~6.89M a layer (vs ~3.77M before), so the
+        # arm buys back much less FFN than it used to: ~3,680 a recurrent slot against ~4,704.
+        "mamba-b3": (3680,) * 9 + (3648,) * 3,
         "xlstm": (4672,) * 8 + (4640,) * 4,
         "mamba3-siso-pd": (2752,) * 11 + (2720,),
         "native-pd": (2432,) * 6 + (2400,) * 6,
@@ -313,6 +332,17 @@ def test_treatment_mixers_are_strict_and_parameter_matched():
             assert all(mixer.rotation_scan_impl == "quaternion" for mixer in mixers)
             assert all(mixer.prefer_official_kernel is True for mixer in mixers)
             assert all(mixer.ssd_backend == "official_fast" for mixer in mixers)
+            # Faithful published SISO: expand=2 (32x64=2048 inner), token-dependent decay,
+            # post-BCNorm head bias, learned D skip, norm-before-gate, and the per-head
+            # dt-scaled rotation over half the state. The unfused layout is required for them.
+            assert all(mixer.n_heads == 32 and mixer.head_dim == 64 for mixer in mixers)
+            assert all(mixer.dynamic_a for mixer in mixers)
+            assert all(mixer.d_skip for mixer in mixers)
+            assert all(mixer.norm_before_gate for mixer in mixers)
+            assert all(mixer.bc_bias_after_norm and not mixer.bc_bias for mixer in mixers)
+            assert all(mixer.dt_scaled_rotation for mixer in mixers)
+            assert all(mixer.rope_fraction == 0.5 for mixer in mixers)
+            assert all(mixer.fuse_input_projections is False for mixer in mixers)
         elif arm == "xlstm":
             names = [type(mixer).__name__ for mixer in mixers]
             assert names.count("XLSTMMixerConfig") == 10
@@ -707,6 +737,43 @@ def test_xlstm_rerun_spec_is_exactly_the_three_failed_cells():
     assert arrays["ARMS"] == ["xlstm", "xlstm", "xlstm"]
     assert arrays["DSEEDS"] == ["210007", "220014", "230021"]
     assert arrays["ISEEDS"] == ["113008", "123015", "133022"]
+    assert "AWS_BATCH_JOB_ARRAY_INDEX" in rerun_yaml
+    assert ".edullm/train_core6_arm.py" in rerun_yaml
+    assert "--sequence-length 4096" in rerun_yaml
+    assert "--steps 1144" in rerun_yaml
+    assert "--warmup-steps 114" in rerun_yaml
+    assert "--learning-rate 3e-4" in rerun_yaml
+    assert "--global-batch-size 524288" in rerun_yaml
+    assert "--rank-microbatch-size 8192" in rerun_yaml
+    assert "--save-interval 572" in rerun_yaml
+    assert "--param-dtype bfloat16" in rerun_yaml
+
+
+def test_mamba_b3_faithful_rerun_spec_is_exactly_the_three_mamba_cells():
+    """The faithful-Mamba wave must rerun mamba-b3 only, under the unchanged V2 recipe.
+
+    Same seeds, optimizer flags, token budget, and hardware shape as cells 0-2 of the V2 wave --
+    only the faithful arm architecture and the code commit differ, which is what makes these
+    three rows a replacement for the V2 mamba-b3 rows rather than a separately-tuned follow-up.
+    The init seeds are exactly the ledger's mamba-b3 seeds for the first three data seeds.
+    """
+    module = load_entrypoint()
+    assert MAMBA_FAITHFUL_RERUN_CONFIG.is_file()
+    rerun_yaml = MAMBA_FAITHFUL_RERUN_CONFIG.read_text()
+
+    arrays = {}
+    for name in ("ARMS", "DSEEDS", "ISEEDS"):
+        match = re.search(rf"{name}=\((.*?)\) &&", rerun_yaml, flags=re.DOTALL)
+        assert match is not None, name
+        arrays[name] = match.group(1).split()
+
+    assert arrays["ARMS"] == ["mamba-b3", "mamba-b3", "mamba-b3"]
+    assert arrays["DSEEDS"] == ["210007", "220014", "230021"]
+    # The exact ledger seeds for mamba-b3 at the first three data seeds, not a hand-typed copy.
+    assert arrays["ISEEDS"] == [
+        str(module.INIT_SEEDS_BY_ARM["mamba-b3"][int(s)]) for s in arrays["DSEEDS"]
+    ]
+    assert arrays["ISEEDS"] == ["110007", "120014", "130021"]
     assert "AWS_BATCH_JOB_ARRAY_INDEX" in rerun_yaml
     assert ".edullm/train_core6_arm.py" in rerun_yaml
     assert "--sequence-length 4096" in rerun_yaml

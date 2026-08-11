@@ -88,6 +88,29 @@ def admissible_block_sizes(
     return tuple(b for b in range(2, max_block_size + 1) if d_state % b == 0)
 
 
+def _rotated_blocks(n_rotation_blocks: int, rope_fraction: float) -> int:
+    """
+    The number of leading rotation blocks that carry real angles for a given ``rope_fraction``.
+
+    Published Mamba-3 rotates only part of the state; the rest is an identity transition. This
+    keeps the block structure (and the SSD kernel contract) at the full ``d_state`` -- the
+    un-rotated blocks are represented as identity SO(b) blocks, not removed -- while shrinking the
+    angle projection to only the rotated prefix.
+
+    :raises OLMoConfigurationError: If ``rope_fraction`` is outside ``(0, 1]`` or does not land on
+        at least one whole rotation block.
+    """
+    if not (0.0 < rope_fraction <= 1.0):
+        raise OLMoConfigurationError(f"rope_fraction must be in (0, 1], got {rope_fraction}")
+    rotated = round(n_rotation_blocks * rope_fraction)
+    if rotated < 1 or rotated > n_rotation_blocks:
+        raise OLMoConfigurationError(
+            f"rope_fraction ({rope_fraction}) selects {rotated} of {n_rotation_blocks} rotation "
+            f"blocks; it must land on between 1 and {n_rotation_blocks} whole blocks"
+        )
+    return rotated
+
+
 def mamba3_modules_to_ignore_for_fp8(model: nn.Module) -> set:
     """
     Fully-qualified names of every Mamba-3 SSM-parameterising projection in ``model``.
@@ -287,6 +310,12 @@ class Mamba3Mixer(SequenceMixer):
         rotation_scan_impl: Optional[str] = None,
         ssd_backend: Optional[str] = None,
         theta_max: Optional[float] = None,
+        dynamic_a: bool = False,
+        d_skip: bool = False,
+        norm_before_gate: bool = False,
+        bc_bias_after_norm: bool = False,
+        dt_scaled_rotation: bool = False,
+        rope_fraction: float = 1.0,
         dtype: torch.dtype = torch.float32,
         init_device: str = "cpu",
         fuse_input_projections: bool = False,
@@ -359,12 +388,61 @@ class Mamba3Mixer(SequenceMixer):
         if theta_max is not None and theta_max <= 0:
             raise OLMoConfigurationError(f"theta_max must be positive, got {theta_max}")
         self.theta_max = theta_max
+
+        # Faithful published-SISO options. Each defaults off so the general mixer and the seven
+        # peer arms are untouched, and each is validated here rather than on the first forward so
+        # a bad combination costs a model build, not a GPU-hour. They are only wired for the
+        # unfused layout: the fused input GEMMs would have to grow an `a_proj` column and change
+        # the theta width, which is checkpoint-layout surgery that buys nothing this arm needs.
+        self.dynamic_a = dynamic_a
+        self.d_skip = d_skip
+        self.norm_before_gate = norm_before_gate
+        self.bc_bias_after_norm = bc_bias_after_norm
+        self.dt_scaled_rotation = dt_scaled_rotation
+        self.rope_fraction = rope_fraction
+        self.n_rotated_blocks = _rotated_blocks(self.n_rotation_blocks, rope_fraction)
+        faithful = (
+            dynamic_a
+            or d_skip
+            or norm_before_gate
+            or bc_bias_after_norm
+            or dt_scaled_rotation
+            or rope_fraction != 1.0
+        )
+        if faithful and fuse_input_projections:
+            raise OLMoConfigurationError(
+                "the faithful SISO options (dynamic_a, d_skip, norm_before_gate, "
+                "bc_bias_after_norm, dt_scaled_rotation, rope_fraction) are only supported with "
+                "fuse_input_projections off; the fused input GEMMs do not carry the extra "
+                "projection or the narrowed rotation"
+            )
+        if bc_bias_after_norm:
+            if not dt_scaled_rotation:
+                raise OLMoConfigurationError(
+                    "bc_bias_after_norm needs dt_scaled_rotation: the post-BCNorm bias is "
+                    "head-specific, which only the per-head rotation path produces"
+                )
+            if bc_bias:
+                raise OLMoConfigurationError(
+                    "bc_bias_after_norm replaces the pre-BCNorm linear B/C bias; set bc_bias=False"
+                )
+        if bc_bias_after_norm and not bc_norm:
+            raise OLMoConfigurationError("bc_bias_after_norm requires bc_norm=True")
+        if dt_scaled_rotation and theta_max is not None:
+            # Two competing bounds on the same angle. `dt_scaled_rotation` already bounds it with
+            # tanh(theta) * pi * dt, and the faithful path never reads `theta_max`, so accepting
+            # both would silently ignore one of them.
+            raise OLMoConfigurationError(
+                "dt_scaled_rotation bounds the angle with tanh(theta) * pi * dt, so theta_max "
+                "would be silently ignored; leave theta_max unset with dt_scaled_rotation"
+            )
+
         self.fuse_input_projections = fuse_input_projections
         self._cache = cache if cache is not None else BufferCache()
 
         inner = self.n_heads * self.head_dim
         bc_out = self.n_groups * self.mimo_rank * self.d_state
-        theta_out = self.n_groups * self.n_rotation_blocks * self.angles_per_block
+        theta_out = self.n_groups * self.n_rotated_blocks * self.angles_per_block
 
         self.in_x: Optional[nn.Linear] = None
         self.in_z: Optional[nn.Linear] = None
@@ -408,6 +486,16 @@ class Mamba3Mixer(SequenceMixer):
             )
         self.out_proj = nn.Linear(inner, d_model, bias=False, dtype=dtype, device=init_device)
 
+        # Token-dependent decay: a per-head modulation of the static A_log baseline. Its own
+        # projection (never fused) so the fused input GEMMs stay byte-identical, and it is left
+        # out of `exempt_timescale_params_from_weight_decay`: the projection weight is an ordinary
+        # input GEMM (decayed like in_x/in_B), while the *baseline* timescale still lives in A_log.
+        self.a_proj: Optional[nn.Linear] = None
+        if dynamic_a:
+            self.a_proj = nn.Linear(
+                d_model, self.n_heads, bias=False, dtype=dtype, device=init_device
+            )
+
         # SSM parameters are kept in float32 for stability, like GatedDeltaNet.
         self.A_log = nn.Parameter(
             torch.empty(self.n_heads, dtype=torch.float32, device=init_device)
@@ -418,6 +506,14 @@ class Mamba3Mixer(SequenceMixer):
         if exempt_timescale_params_from_weight_decay:
             self.A_log._no_weight_decay = True  # type: ignore[attr-defined]
             self.dt_bias._no_weight_decay = True  # type: ignore[attr-defined]
+
+        # Learned D skip (published Mamba), a per-head identity path initialized to one. A
+        # timescale-class parameter, so it is tagged for the same weight-decay exemption.
+        self.D: Optional[nn.Parameter] = None
+        if d_skip:
+            self.D = nn.Parameter(torch.ones(self.n_heads, dtype=torch.float32, device=init_device))
+            if exempt_timescale_params_from_weight_decay:
+                self.D._no_weight_decay = True  # type: ignore[attr-defined]
 
         # Norm weights default to ones so the module is usable even before ``init_weights``.
         self.o_norm_weight = nn.Parameter(
@@ -430,10 +526,28 @@ class Mamba3Mixer(SequenceMixer):
             self.register_parameter("bc_norm_b", None)
             self.register_parameter("bc_norm_c", None)
 
+        # Head-specific additive B/C bias applied after BCNorm and before the rotation, the
+        # published post-norm Q/K bias. Initialized to one and shaped (n_heads, d_state) because
+        # the per-head rotation path has already broadcast B/C to heads by the time it is added.
+        self.bc_post_bias_b: Optional[nn.Parameter] = None
+        self.bc_post_bias_c: Optional[nn.Parameter] = None
+        if bc_bias_after_norm:
+            self.bc_post_bias_b = nn.Parameter(
+                torch.ones(self.n_heads, self.d_state, dtype=dtype, device=init_device)
+            )
+            self.bc_post_bias_c = nn.Parameter(
+                torch.ones(self.n_heads, self.d_state, dtype=dtype, device=init_device)
+            )
+
     def fp8_sensitive_projections(self) -> tuple[str, ...]:
         """Return recurrence-sensitive projection names for the active layout."""
         if self.fuse_input_projections:
             return self.FUSED_FP8_SENSITIVE_PROJECTIONS
+        # ``a_proj`` sets the token-dependent decay, exactly the kind of recurrence-parameterising
+        # projection fp8 must skip. It only exists when ``dynamic_a`` is on, so it is appended per
+        # instance rather than baked into the class constant the base tests pin.
+        if self.a_proj is not None:
+            return self.FP8_SENSITIVE_PROJECTIONS + ("a_proj",)
         return self.FP8_SENSITIVE_PROJECTIONS
 
     def _convert_projection_state_dict(self, state_dict: dict, prefix: str) -> None:
@@ -548,7 +662,7 @@ class Mamba3Mixer(SequenceMixer):
             xv, z = self.in_xz(x).split((H * P, H * P), dim=-1)
             Bm, Cm = self.in_bc(x).split((G * R * N, G * R * N), dim=-1)
             dt_logits, lam_logits, theta = self.in_dynamics(x).split(
-                (H, H, G * self.n_rotation_blocks * self.angles_per_block), dim=-1
+                (H, H, G * self.n_rotated_blocks * self.angles_per_block), dim=-1
             )
         else:
             assert self.in_x is not None
@@ -572,31 +686,18 @@ class Mamba3Mixer(SequenceMixer):
         Cm = Cm.view(batch, seq_len, G, R, N)
         dt = F.softplus(dt_logits.float() + self.dt_bias)  # (batch, T, H), > 0
         lam = torch.sigmoid(lam_logits)  # (batch, T, H) in (0, 1)
-        theta = theta.view(batch, seq_len, G, self.n_rotation_blocks, self.angles_per_block)
-        if self.theta_max is not None:
-            # Bound the per-step rotation angle, because an unbounded one silently
-            # destroys the state channel it exists to carry. The cumulative rotation
-            # Q_t Q_s^T = R_t ... R_{s+1} is a random walk on the *non-abelian* SO(b), which mixes
-            # to Haar measure in ~1/||theta||^2 steps; past that, C_t^T (R_t ... R_{s+1}) B_s
-            # averages to zero and no information survives the gap. Measured on this code at
-            # seq 4096, the lag at which tr(Q_t Q_{t-d}^T) falls to half is 72 steps at
-            # ||theta|| = 0.1, 746 at 0.03, and beyond the sequence at 0.01 -- and the default
-            # init (theta_proj std = 1e-3 * ...) already emits ||theta|| ~ 0.1 per block, i.e. a
-            # 72-token horizon on a 4096-token sequence, before a single gradient step. Keeping
-            # ||theta|| <~ 1/sqrt(seq_len) keeps the mixing time past the sequence length.
-            #
-            # `c * tanh(x / c)` rather than a clamp: it is the identity near zero (so it does not
-            # perturb the near-identity init the rotation is designed around) and saturates
-            # smoothly, keeping the gradient finite everywhere -- a hard clamp would zero the
-            # gradient for every angle that needed correcting most.
-            #
-            # b == 2 is bounded on the same grounds, despite its walk being abelian. A cumulative
-            # scalar angle still diffuses: E[cos(sum theta)] = prod E[cos theta_u] decays
-            # geometrically in the gap, so the 2-D phase relaxes to the uniform measure on the
-            # circle exactly as the SO(b >= 3) walk mixes to Haar. Periodicity bounds the rotation
-            # matrix, not the information it carries across a gap.
-            theta = self.theta_max * torch.tanh(theta / self.theta_max)
-        A = -torch.exp(self.A_log.float())  # (H,), < 0
+        theta = theta.view(batch, seq_len, G, self.n_rotated_blocks, self.angles_per_block)
+
+        if self.dynamic_a:
+            # Token-dependent decay (published Mamba-3): a per-token modulation of the static
+            # per-head log baseline, floored so no head becomes a non-decaying accumulator. With
+            # a_proj at zero this is exactly -exp(A_log), i.e. the static per-head decay, so the
+            # feature reduces to the historical scalar A when the projection has learned nothing.
+            assert self.a_proj is not None
+            log_decay = self.A_log.float() + self.a_proj(x).float()  # (batch, T, H)
+            A = -torch.exp(log_decay).clamp(min=self.a_log_init_min)  # (batch, T, H), < 0
+        else:
+            A = -torch.exp(self.A_log.float())  # (H,), < 0
 
         if self.bc_norm_enabled:
             # Normalize *before* the rotation, and note the order is load-bearing. The rotation
@@ -609,8 +710,24 @@ class Mamba3Mixer(SequenceMixer):
             Cm = _rms_norm(Cm, self.bc_norm_c, self.norm_eps)
 
         if decode:
-            y = self._decode_step(xv, Bm, Cm, dt, A, lam, theta)
+            if self.dynamic_a or self.dt_scaled_rotation or self.bc_bias_after_norm:
+                raise NotImplementedError(
+                    "one-token Mamba3 decode is not implemented for the faithful SISO options "
+                    "(dynamic_a, dt_scaled_rotation, bc_bias_after_norm)"
+                )
+            y = self._decode_step(xv, Bm, Cm, dt, A, lam, self._pad_rotation_identity(theta))
+        elif self.dt_scaled_rotation:
+            y = self._faithful_ssd(xv, Bm, Cm, dt, A, lam, theta)
         else:
+            if self.theta_max is not None:
+                # Bound the per-step rotation angle, because an unbounded one silently
+                # destroys the state channel it exists to carry. The cumulative rotation
+                # Q_t Q_s^T = R_t ... R_{s+1} is a random walk on the *non-abelian* SO(b), which
+                # mixes to Haar measure in ~1/||theta||^2 steps; past that,
+                # C_t^T (R_t ... R_{s+1}) B_s averages to zero and no information survives the
+                # gap. `c * tanh(x / c)` is the identity near zero and saturates smoothly, so it
+                # does not perturb the near-identity init and keeps the gradient finite.
+                theta = self.theta_max * torch.tanh(theta / self.theta_max)
             y = dispatch_mamba3_ssd(
                 xv,
                 Bm,
@@ -626,10 +743,90 @@ class Mamba3Mixer(SequenceMixer):
                 ssd_backend=self.ssd_backend,
             )  # (batch, T, H, P)
 
-        # Gated RMS norm (Mamba-style): normalize the gated output.
-        y = _rms_norm(y * F.silu(z), self.o_norm_weight, self.norm_eps)
+        if self.d_skip:
+            # Learned per-head identity path (published Mamba D skip), added to the SSM output
+            # before the gated norm. Broadcasts over the value/head dim.
+            assert self.D is not None
+            y = y + (self.D.float().view(1, 1, H, 1) * xv.float()).to(y.dtype)
+
+        if self.norm_before_gate:
+            # Published hybrid ordering: normalize, then gate.
+            y = _rms_norm(y, self.o_norm_weight, self.norm_eps) * F.silu(z)
+        else:
+            # Gated RMS norm (Mamba-style): gate, then normalize.
+            y = _rms_norm(y * F.silu(z), self.o_norm_weight, self.norm_eps)
         y = y.reshape(batch, seq_len, H * P)
         return self.out_proj(y)
+
+    def _pad_rotation_identity(self, theta: torch.Tensor) -> torch.Tensor:
+        """
+        Pad the rotated-block angles out to the full ``d_state`` with identity (zero) blocks.
+
+        Only the one-token decode path needs this. The training paths hand the narrow ``theta``
+        straight to the rotation, which leaves the un-covered tail alone
+        (:func:`~olmo_core.nn.mamba3.mamba3_ssd_api.apply_partial_rotation`) rather than scanning
+        identity blocks; ``_decode_step`` rotates every block itself, and at one token the padding
+        costs nothing.
+        """
+        pad = self.n_rotation_blocks - self.n_rotated_blocks
+        if pad == 0:
+            return theta
+        zeros = theta.new_zeros(*theta.shape[:-2], pad, theta.shape[-1])
+        return torch.cat([theta, zeros], dim=-2)
+
+    def _faithful_ssd(
+        self,
+        xv: torch.Tensor,
+        Bm: torch.Tensor,
+        Cm: torch.Tensor,
+        dt: torch.Tensor,
+        A: torch.Tensor,
+        lam: torch.Tensor,
+        theta: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Per-head, dt-scaled, partial-state SO(b) rotation through the shared scalar-decay scan.
+
+        The published rotation is per head and scaled by that head's ``dt`` -- unlike the
+        group-shared angles the other path feeds the scan. ``B``/``C`` (already BCNorm'd) are
+        broadcast to heads, given the head-specific post-norm bias, and rotated per head over
+        only the leading ``rope_fraction`` blocks; the rest are identity. Handing the scan
+        per-head ``B``/``C`` (``n_groups == n_heads``, ``heads_per_group == 1``) and a per-head
+        angle tensor keeps it the exact scalar-decay SSD the existing kernels already implement,
+        so no kernel or dispatch change is needed.
+        """
+        H = self.n_heads
+        if self.heads_per_group != 1:
+            Bm = Bm.repeat_interleave(self.heads_per_group, dim=2)
+            Cm = Cm.repeat_interleave(self.heads_per_group, dim=2)
+        if self.bc_bias_after_norm:
+            assert self.bc_post_bias_b is not None and self.bc_post_bias_c is not None
+            Bm = Bm + self.bc_post_bias_b.to(Bm.dtype).view(1, 1, H, 1, self.d_state)
+            Cm = Cm + self.bc_post_bias_c.to(Cm.dtype).view(1, 1, H, 1, self.d_state)
+        # Official per-head angle: tanh(raw) * pi bounds it to a half-turn, then dt scales it, so
+        # a head with a short timestep rotates little. dt drives both the decay (dt * A) and the
+        # rotation here, exactly as the official kernel's cumsum(tanh(Angles) * pi * DT) does.
+        if self.heads_per_group != 1:
+            theta = theta.repeat_interleave(self.heads_per_group, dim=2)
+        theta = torch.tanh(theta) * math.pi
+        theta = theta * dt.unsqueeze(-1).unsqueeze(-1)
+        # ``theta`` deliberately covers only the rotated prefix: the rotation entry points leave
+        # the remaining state untouched instead of scanning identity blocks, which measured 1.82x
+        # cheaper than padding it out at this geometry.
+        return dispatch_mamba3_ssd(
+            xv,
+            Bm,
+            Cm,
+            dt,
+            A,
+            lam,
+            theta,
+            heads_per_group=1,
+            block_size=self.rotation_block_size,
+            prefer_official_kernel=self.prefer_official_kernel,
+            rotation_scan_impl=self.rotation_scan_impl,
+            ssd_backend=self.ssd_backend,
+        )
 
     def _decode_step(
         self,
@@ -789,7 +986,7 @@ class Mamba3Mixer(SequenceMixer):
 
             inner = self.n_heads * self.head_dim
             bc_out = self.n_groups * self.mimo_rank * self.d_state
-            theta_out = self.n_groups * self.n_rotation_blocks * self.angles_per_block
+            theta_out = self.n_groups * self.n_rotated_blocks * self.angles_per_block
             # Each fused weight is drawn slice by slice, in the order the unfused projections
             # are drawn, so one seed produces the same weights in either layout. `_apply_init`
             # is what keeps that true once FSDP has turned the weight into a sharded `DTensor`:
@@ -832,6 +1029,10 @@ class Mamba3Mixer(SequenceMixer):
             for w in (self.in_x, self.in_z, self.in_B, self.in_C, self.dt_proj, self.lam_proj):
                 init_linear(w, std=std, generator=generator)
             init_linear(self.theta_proj, std=std * 0.1, generator=generator)
+            if self.a_proj is not None:
+                # Small like theta_proj so the token-dependent decay starts as a gentle
+                # modulation of the A_log baseline rather than a wide per-token swing.
+                init_linear(self.a_proj, std=std * 0.1, generator=generator)
 
         # A = -Uniform(a_log_init_min, a_log_init_max), stored as its log. The lower bound is
         # load-bearing: at 0 a head can draw A ~ 0, which never decays and turns that channel
@@ -865,6 +1066,16 @@ class Mamba3Mixer(SequenceMixer):
             assert self.bc_norm_b is not None and self.bc_norm_c is not None
             self.bc_norm_b.fill_(1.0)
             self.bc_norm_c.fill_(1.0)
+
+        # The learned skip and the post-BCNorm B/C biases are the published "start as identity /
+        # start as one" defaults, reset deterministically here like the norm weights above.
+        if self.d_skip:
+            assert self.D is not None
+            self.D.fill_(1.0)
+        if self.bc_bias_after_norm:
+            assert self.bc_post_bias_b is not None and self.bc_post_bias_c is not None
+            self.bc_post_bias_b.fill_(1.0)
+            self.bc_post_bias_c.fill_(1.0)
 
         # Depth-scale the output projection like GatedDeltaNet / Llama.
         if init_method == InitMethod.llama:
@@ -917,9 +1128,13 @@ class Mamba3Mixer(SequenceMixer):
         - the official kernel's zero-padding to a power-of-two width
           (:meth:`kernel_padding_waste`);
         - the chunked path's intra-chunk ``Q x Q`` form, which trades extra arithmetic for
-          parallelism and so does more FLOPs than the recurrence it implements.
+          parallelism and so does more FLOPs than the recurrence it implements;
+        - the identity blocks ``rope_fraction < 1`` leaves in the rotation. The model is defined
+          to rotate only the leading ``n_rotated_blocks``; running the scan over the identity tail
+          as well is an implementation choice, so it is excluded here for the same reason padding
+          is.
 
-        Both show up correctly as extra wall-clock against an unchanged numerator.
+        All three show up correctly as extra wall-clock against an unchanged numerator.
         """
         projections: Sequence[nn.Linear]
         if self.fuse_input_projections:
@@ -945,6 +1160,8 @@ class Mamba3Mixer(SequenceMixer):
                 self.theta_proj,
                 self.out_proj,
             )
+        if self.a_proj is not None:
+            projections = (*projections, self.a_proj)
         linear_flops = 2 * sum(m.weight.numel() for m in projections)
         # State-input outer product + readout, each ~2 FLOPs per element of the rank-R state.
         state_size = self.n_heads * self.mimo_rank * self.d_state * self.head_dim
@@ -953,9 +1170,17 @@ class Mamba3Mixer(SequenceMixer):
         del seq_len  # every term below is per-token and sequence-length independent
 
         b = self.rotation_block_size
+        # The dt-scaled rotation is per HEAD, not per (B, C) group, because dt is per head. That
+        # multiplies the rotation and its prefix scan by `n_heads / n_groups` -- 32x for the
+        # faithful arm -- and it is real model arithmetic rather than an implementation overhead,
+        # so it is counted. Reading `n_groups` here under-reported the arm's FLOPs (and therefore
+        # its MFU) by that factor.
+        rotation_groups = self.n_heads if self.dt_scaled_rotation else self.n_groups
+        # Only the rotated prefix is model arithmetic; see the docstring on the identity tail.
+        rotated_blocks = self.n_rotated_blocks
         # Applying Q^T to B and C: a b x b matvec per block, per rank, per group, for each of
         # the two. Scales as N*b, so it is monotone in the block size.
-        rotation_flops = 2 * 2 * self.n_groups * self.mimo_rank * self.n_rotation_blocks * b * b
+        rotation_flops = 2 * 2 * rotation_groups * self.mimo_rank * rotated_blocks * b * b
 
         # Prefix product over SO(b), plus building the per-step rotations. The b == 2 path
         # collapses to a cumulative sum of angles and pays neither.
@@ -972,7 +1197,7 @@ class Mamba3Mixer(SequenceMixer):
             # Building R_t itself: Rodrigues is two 3x3 matmuls plus elementwise work; the
             # `matrix_exp` fallback at other b costs several times this and is not modelled.
             per_token_matmuls += 2
-            scan_flops = 2 * per_token_matmuls * self.n_groups * self.n_rotation_blocks * b**3
+            scan_flops = 2 * per_token_matmuls * rotation_groups * rotated_blocks * b**3
 
         return int(linear_flops + recurrent_flops + rotation_flops + scan_flops)
 
@@ -1087,6 +1312,53 @@ class Mamba3MixerConfig(SequenceMixerConfig[Mamba3Mixer]):
     Fuse ``x/z``, ``B/C``, and ``dt/lambda/theta`` into three input GEMMs. ``None`` preserves
     the original seven-projection checkpoint layout, execution path, and serialized config.
     """
+    dynamic_a: bool = False
+    """
+    Give the decay ``A`` a token-dependent term, as published Mamba-3 does, on top of the static
+    per-head ``A_log`` baseline. Adds an ``a_proj`` linear so the realized log-decay is
+    ``A_log + a_proj(x)`` and ``|A_t|`` is floored at :attr:`a_log_init_min`. ``False`` (the
+    default) keeps the single static per-head ``A = -exp(A_log)`` every existing arm and
+    checkpoint uses. Only supported with ``fuse_input_projections`` off.
+    """
+    d_skip: bool = False
+    """
+    Add a learned per-head ``D`` skip connection ``y += D * x``, initialized to one, as published
+    Mamba does. ``False`` (the default) has no ``D`` at all, which is why the arm exemption globs
+    name it only where it exists. Only supported with ``fuse_input_projections`` off.
+    """
+    norm_before_gate: bool = False
+    """
+    Order the gated output norm as ``rmsnorm(y) * silu(z)`` (norm before the gate), the published
+    hybrid ordering, instead of ``rmsnorm(y * silu(z))``. ``False`` (the default) keeps the
+    gate-then-norm ordering. Only supported with ``fuse_input_projections`` off.
+    """
+    bc_bias_after_norm: bool = False
+    """
+    Replace the pre-BCNorm linear ``B``/``C`` bias with a head-specific additive bias applied
+    *after* BCNorm and initialized to one, matching the published post-norm ``Q``/``K`` bias.
+    Requires :attr:`dt_scaled_rotation` (the per-head path that makes ``B``/``C`` head-specific)
+    and ``bc_bias=False``. ``False`` (the default) keeps the historical pre-norm linear bias.
+    """
+    dt_scaled_rotation: bool = False
+    """
+    Build the per-step rotation from the official ``tanh(angle) * pi * dt`` parameterization,
+    which -- because ``dt`` is per head -- makes the SO(b) rotation head-specific rather than
+    group-shared. ``B``/``C`` are broadcast to heads and rotated per head before the scan.
+    ``False`` (the default) feeds the raw group-shared angles straight to the scan, as every
+    existing arm does. Only supported with ``fuse_input_projections`` off.
+    """
+    rope_fraction: float = 1.0
+    """
+    Rotate only the leading ``rope_fraction`` of the state; the remaining blocks are identity and
+    carry no angle parameters, matching published Mamba-3's partial rotation. Must land on a whole
+    number of ``rotation_block_size`` blocks. ``1.0`` (the default) rotates the whole state.
+
+    The tail is *skipped*, not scanned as zero-angle blocks: the rotation entry points leave the
+    un-covered channels exactly as they arrived
+    (:func:`~olmo_core.nn.mamba3.mamba3_ssd_api.apply_partial_rotation`). Padding it out instead
+    is the same arithmetic but measured 1.82x the cost at the 370M per-head geometry, because the
+    prefix product then runs over blocks whose rotation is the identity.
+    """
 
     def num_params(self, d_model: int) -> int:
         """
@@ -1122,13 +1394,20 @@ class Mamba3MixerConfig(SequenceMixerConfig[Mamba3Mixer]):
         params += d_model * H  # dt_proj
         params += d_model * H  # lam_proj
         b = self.rotation_block_size
-        params += d_model * (G * (N // b) * (b * (b - 1) // 2))  # theta_proj
+        n_rotated = _rotated_blocks(N // b, self.rope_fraction)
+        params += d_model * (G * n_rotated * (b * (b - 1) // 2))  # theta_proj
         params += inner * d_model  # out_proj
         params += H  # A_log
         params += H  # dt_bias
+        if self.dynamic_a:
+            params += d_model * H  # a_proj
+        if self.d_skip:
+            params += H  # D
         params += P  # o_norm_weight
         if self.bc_norm:
             params += 2 * N  # bc_norm_b + bc_norm_c
+        if self.bc_bias_after_norm:
+            params += 2 * H * N  # bc_post_bias_b + bc_post_bias_c
         return params
 
     def build(
@@ -1163,6 +1442,12 @@ class Mamba3MixerConfig(SequenceMixerConfig[Mamba3Mixer]):
             rotation_scan_impl=self.rotation_scan_impl,
             ssd_backend=self.ssd_backend,
             theta_max=self.theta_max,
+            dynamic_a=self.dynamic_a,
+            d_skip=self.d_skip,
+            norm_before_gate=self.norm_before_gate,
+            bc_bias_after_norm=self.bc_bias_after_norm,
+            dt_scaled_rotation=self.dt_scaled_rotation,
+            rope_fraction=self.rope_fraction,
             fuse_input_projections=bool(self.fuse_input_projections),
             cache=mixer_cache,
             dtype=self.dtype.as_pt(),

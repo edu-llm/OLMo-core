@@ -1,0 +1,36 @@
+# Faithful Mamba-3 b=3 wave: rerun only the three mamba-b3 cells after refactoring the arm
+# into the faithful published SISO architecture (expand=2, token-dependent decay, post-BCNorm
+# head bias, D skip, norm-before-gate, per-head dt-scaled half-state SO(3) rotation, pre-norm
+# shell), with b=3 kept as the single intentional deviation.
+#
+# Check:
+#   edullm check --json \
+#     --experiment mamba-comparison-mamba-b3-faithful \
+#     --dataset reservoir-dolma2-v1 \
+#     --team memory-split \
+#     --wandb-project linear-comparison \
+#     --spec .edullm/run-mamba-b3-faithful.yaml \
+#     --compute gpu-8xa100 --hours 3 --attempts 1 \
+#     --fanout-size 3 \
+#     --fanout-index-parameter AWS_BATCH_JOB_ARRAY_INDEX
+#
+# Submit by replacing `check --json` with `submit`. The data seeds, init seeds, optimizer recipe
+# (LR 3e-4, AdamW beta2 .999 via the entrypoint default, weight decay .01, clip 1.0, no z-loss),
+# token budget, and hardware shape are byte-identical to cells 0-2 of the V2 wave; only the
+# faithful arm architecture and the code commit differ, so these three rows replace the V2
+# mamba-b3 rows rather than being a separately-tuned follow-up.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'export TRITON_F32_DEFAULT=ieee PYTHONDONTWRITEBYTECODE=1 &&
+  I=${AWS_BATCH_JOB_ARRAY_INDEX:-0} &&
+  ARMS=(mamba-b3 mamba-b3 mamba-b3) &&
+  DSEEDS=(210007 220014 230021) &&
+  ISEEDS=(110007 120014 130021) &&
+  python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/train_core6_arm.py "$EDULLM_RUN_ID"
+  --arm "${ARMS[$I]}" --data-seed "${DSEEDS[$I]}" --init-seed "${ISEEDS[$I]}"
+  --sequence-length 4096 --steps 1144 --warmup-steps 114 --learning-rate 3e-4
+  --global-batch-size 524288 --rank-microbatch-size 8192 --save-interval 572
+  --save-folder "$EDULLM_CHECKPOINT_DIR" --param-dtype bfloat16'

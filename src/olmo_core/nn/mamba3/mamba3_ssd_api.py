@@ -296,6 +296,74 @@ def _rotate_bc_blocks(bc: torch.Tensor, cumulative_rot: torch.Tensor) -> torch.T
     return rotated.reshape(*lead, d_state)
 
 
+def rotated_block_count(theta: torch.Tensor, block_size: int) -> int:
+    """
+    How many ``block_size``-wide state blocks a ``theta`` tensor carries angles for.
+
+    Handles both layouts: the 5-D ``(batch, seq, groups, blocks, angles)`` form every
+    ``block_size`` accepts, and the legacy 4-D ``(batch, seq, groups, d_state // 2)`` form the
+    ``b == 2`` path also takes, where one angle *is* one block.
+
+    This is where the layout rule lives, because it is the first thing to interpret ``theta``'s
+    shape: a 4-D tensor is only meaningful at ``b == 2``, and reading one as a block count at a
+    wider block size would silently mis-size the rotation.
+
+    :raises ValueError: If ``theta`` is not 5-D and ``block_size`` is not 2.
+    """
+    if theta.dim() == 5:
+        return theta.shape[-2]
+    if block_size != 2:
+        raise ValueError(
+            f"theta must be 5-D (batch, seq_len, n_groups, n_blocks, angles_per_block) "
+            f"for block_size={block_size}, got shape {tuple(theta.shape)}"
+        )
+    return theta.shape[-1]
+
+
+def apply_partial_rotation(
+    B: torch.Tensor,
+    C: torch.Tensor,
+    theta: torch.Tensor,
+    block_size: int,
+    rotate,
+):
+    """
+    Rotate only the leading state blocks ``theta`` carries angles for, leaving the tail alone.
+
+    Published Mamba-3 rotates a *fraction* of the state (``rope_fraction``). Representing the
+    remainder as zero-angle identity blocks is mathematically correct but pays the full prefix
+    product for a rotation that is the identity: measured at the 370M per-head geometry, running
+    the scan over the identity tail cost 1.82x what rotating the prefix alone does. Slicing here
+    -- outside any custom autograd boundary, so the slice and concatenation differentiate
+    natively and ``rotate`` still sees the matched widths its own tests pin -- removes that.
+
+    When ``theta`` covers the whole state this is exactly ``rotate(B, C, theta)``, so every caller
+    that does not use a partial rotation is unaffected.
+
+    :param B: State-input projection, ``(..., rank, d_state)``.
+    :param C: State-output projection, same shape.
+    :param theta: Angles covering the leading blocks.
+    :param block_size: The rotation block size ``b``.
+    :param rotate: Callable ``(B, C, theta) -> (B, C)`` requiring matched widths.
+
+    :raises ValueError: If ``theta`` covers more blocks than ``B``/``C`` have.
+    """
+    d_state = B.shape[-1]
+    covered = rotated_block_count(theta, block_size) * block_size
+    if covered == d_state:
+        return rotate(B, C, theta)
+    if covered <= 0 or covered > d_state:
+        raise ValueError(
+            f"theta covers {covered} of {d_state} state channels; it must cover between one "
+            f"block and the whole state"
+        )
+    rotated_B, rotated_C = rotate(B[..., :covered], C[..., :covered], theta)
+    return (
+        torch.cat((rotated_B, B[..., covered:]), dim=-1),
+        torch.cat((rotated_C, C[..., covered:]), dim=-1),
+    )
+
+
 def mamba3_ssd_reference(
     x: torch.Tensor,
     B: torch.Tensor,
@@ -342,22 +410,23 @@ def mamba3_ssd_reference(
     lam = lam.float()
     theta = theta.float()
 
-    # Data-dependent RoPE trick: cumulative rotation applied to both B and C (§3.2).
-    if block_size == 2:
-        # Abelian fast path: SO(2) prefix products collapse to a cumsum of angles. Kept
-        # separate so the default configuration stays bit-identical to the pre-blocked code.
-        theta_cumulative = torch.cumsum(theta.squeeze(-1) if theta.dim() == 5 else theta, dim=1)
-        B = _rotate_bc(B, theta_cumulative)
-        C = _rotate_bc(C, theta_cumulative)
-    else:
-        if theta.dim() != 5:
+    # Data-dependent RoPE trick: cumulative rotation applied to both B and C (§3.2). ``theta``
+    # may cover only the leading blocks, in which case the tail is left unrotated.
+    def _rotate(B_in: torch.Tensor, C_in: torch.Tensor, angles: torch.Tensor):
+        if block_size == 2:
+            # Abelian fast path: SO(2) prefix products collapse to a cumsum of angles. Kept
+            # separate so the default configuration stays bit-identical to the pre-blocked code.
+            cumulative = torch.cumsum(angles.squeeze(-1) if angles.dim() == 5 else angles, dim=1)
+            return _rotate_bc(B_in, cumulative), _rotate_bc(C_in, cumulative)
+        if angles.dim() != 5:
             raise ValueError(
                 f"theta must be 5-D (batch, seq_len, n_groups, n_blocks, angles_per_block) "
-                f"for block_size={block_size}, got shape {tuple(theta.shape)}"
+                f"for block_size={block_size}, got shape {tuple(angles.shape)}"
             )
-        cumulative_rot = _cumulative_block_rotation(_block_rotations(theta, block_size))
-        B = _rotate_bc_blocks(B, cumulative_rot)
-        C = _rotate_bc_blocks(C, cumulative_rot)
+        cumulative_rot = _cumulative_block_rotation(_block_rotations(angles, block_size))
+        return _rotate_bc_blocks(B_in, cumulative_rot), _rotate_bc_blocks(C_in, cumulative_rot)
+
+    B, C = apply_partial_rotation(B, C, theta, block_size, _rotate)
 
     # Broadcast groups to heads: (B, T, G, R, N) -> (B, T, H, R, N).
     if heads_per_group != 1:

@@ -784,3 +784,431 @@ def test_mixer_forwards_rotation_scan_impl_to_the_dispatcher(monkeypatch):
     module(torch.randn(1, 8, 32))
 
     assert seen.get("rotation_scan_impl") == "chunked"
+
+
+# ======================================================================================
+# Faithful published-Mamba-3 SISO options (opt-in; default off keeps every arm above and
+# every existing checkpoint byte-identical).
+#
+# Each of the five options below is a distinct deviation of *this* arm from the published
+# SISO architecture that the fidelity audit identified: a token-dependent decay ``A``, a
+# learned ``D`` skip, norm-before-gate output ordering, a post-BCNorm per-head ``B``/``C``
+# bias initialized to one, and the official per-head ``tanh(angle) * pi * dt`` rotation
+# generalized to SO(3) over only part of the state. They all default off, so the general
+# mixer, the seven peer arms, and the reference/kernel parity oracle are untouched.
+# ======================================================================================
+
+
+def _copy_shared_named_params(src: torch.nn.Module, dst: torch.nn.Module) -> None:
+    """Copy every parameter that both modules share by name (ignoring the extras either adds)."""
+    src_params = dict(src.named_parameters())
+    with torch.no_grad():
+        for name, p in dst.named_parameters():
+            if name in src_params and src_params[name].shape == p.shape:
+                p.copy_(src_params[name])
+
+
+def _faithful_siso_config(**overrides) -> Mamba3MixerConfig:
+    """A small CPU-runnable faithful SISO b=3 config (the chunked path handles it without a GPU)."""
+    base = dict(
+        n_heads=4,
+        head_dim=8,
+        d_state=12,
+        n_groups=1,
+        mimo_rank=1,
+        rotation_block_size=3,
+        bc_norm=True,
+        bc_bias=False,
+        dynamic_a=True,
+        d_skip=True,
+        norm_before_gate=True,
+        bc_bias_after_norm=True,
+        dt_scaled_rotation=True,
+        rope_fraction=0.5,
+        fuse_input_projections=False,
+    )
+    base.update(overrides)
+    return Mamba3MixerConfig(**base)
+
+
+def test_faithful_options_default_off_and_round_trip():
+    """All five faithful options must default off and survive config serialization."""
+    default = Mamba3MixerConfig(n_heads=4)
+    assert default.dynamic_a is False
+    assert default.d_skip is False
+    assert default.norm_before_gate is False
+    assert default.bc_bias_after_norm is False
+    assert default.dt_scaled_rotation is False
+    assert default.rope_fraction == 1.0
+
+    cfg = _faithful_siso_config()
+    rebuilt = Mamba3MixerConfig.from_dict(cfg.as_config_dict())
+    assert rebuilt == cfg
+    assert rebuilt.num_params(64) == cfg.num_params(64)
+
+
+def test_dynamic_a_reduces_to_static_when_the_projection_is_zero():
+    """
+    Token-dependent ``A`` must be a modulation of the static per-head baseline: with the
+    projection zeroed the decay is exactly ``-exp(A_log)`` again, so the output has to match a
+    static-``A`` mixer sharing every other weight. This pins both that ``a_proj`` exists and
+    that it composes with ``A_log`` rather than replacing it.
+    """
+    torch.manual_seed(0)
+    d_model = 32
+    dyn = Mamba3MixerConfig(
+        n_heads=4, head_dim=8, d_state=12, n_groups=1, mimo_rank=1, dynamic_a=True
+    ).build(d_model, layer_idx=0, n_layers=2, init_device="cpu")
+    static = Mamba3MixerConfig(
+        n_heads=4, head_dim=8, d_state=12, n_groups=1, mimo_rank=1, dynamic_a=False
+    ).build(d_model, layer_idx=0, n_layers=2, init_device="cpu")
+    static.init_weights(init_method=InitMethod.normal, d_model=d_model, block_idx=0, num_blocks=2)
+    _copy_shared_named_params(static, dyn)
+    assert dyn.a_proj is not None
+    with torch.no_grad():
+        dyn.a_proj.weight.zero_()
+
+    x = torch.randn(2, 6, d_model)
+    torch.testing.assert_close(dyn(x), static(x))
+
+    # A non-zero projection must actually change the decay, hence the output.
+    with torch.no_grad():
+        dyn.a_proj.weight.normal_(std=0.5)
+    assert not torch.allclose(dyn(x), static(x))
+
+
+def test_d_skip_is_a_learned_identity_path_initialized_to_one():
+    """``D`` is a per-head skip initialized to one; zeroing it recovers the no-skip output."""
+    torch.manual_seed(0)
+    d_model = 32
+    with_d = Mamba3MixerConfig(
+        n_heads=4, head_dim=8, d_state=12, n_groups=1, mimo_rank=1, d_skip=True
+    ).build(d_model, layer_idx=0, n_layers=2, init_device="cpu")
+    without_d = Mamba3MixerConfig(
+        n_heads=4, head_dim=8, d_state=12, n_groups=1, mimo_rank=1, d_skip=False
+    ).build(d_model, layer_idx=0, n_layers=2, init_device="cpu")
+    without_d.init_weights(
+        init_method=InitMethod.normal, d_model=d_model, block_idx=0, num_blocks=2
+    )
+    with_d.init_weights(init_method=InitMethod.normal, d_model=d_model, block_idx=0, num_blocks=2)
+    _copy_shared_named_params(without_d, with_d)
+
+    assert with_d.D is not None
+    assert with_d.D.shape == (4,)
+    assert torch.allclose(with_d.D, torch.ones_like(with_d.D))
+
+    x = torch.randn(2, 6, d_model)
+    assert not torch.allclose(with_d(x), without_d(x))
+    with torch.no_grad():
+        with_d.D.zero_()
+    torch.testing.assert_close(with_d(x), without_d(x))
+
+
+def test_norm_before_gate_changes_the_output_ordering():
+    """norm-before-gate (``rmsnorm(y) * silu(z)``) must differ from gate-then-norm."""
+    torch.manual_seed(0)
+    d_model = 32
+    before = Mamba3MixerConfig(
+        n_heads=4, head_dim=8, d_state=12, n_groups=1, mimo_rank=1, norm_before_gate=True
+    ).build(d_model, layer_idx=0, n_layers=2, init_device="cpu")
+    after = Mamba3MixerConfig(
+        n_heads=4, head_dim=8, d_state=12, n_groups=1, mimo_rank=1, norm_before_gate=False
+    ).build(d_model, layer_idx=0, n_layers=2, init_device="cpu")
+    after.init_weights(init_method=InitMethod.normal, d_model=d_model, block_idx=0, num_blocks=2)
+    _copy_shared_named_params(after, before)
+
+    x = torch.randn(2, 6, d_model)
+    assert not torch.allclose(before(x), after(x))
+
+
+def test_bc_bias_after_norm_is_per_head_initialized_to_one():
+    """The post-BCNorm bias is head-specific, initialized to one, and requires the per-head path."""
+    module = _faithful_siso_config().build(32, layer_idx=0, n_layers=2, init_device="cpu")
+    module.init_weights(init_method=InitMethod.normal, d_model=32, block_idx=0, num_blocks=2)
+    assert module.bc_post_bias_b is not None and module.bc_post_bias_c is not None
+    assert module.bc_post_bias_b.shape == (module.n_heads, module.d_state)
+    assert torch.allclose(module.bc_post_bias_b, torch.ones_like(module.bc_post_bias_b))
+    assert torch.allclose(module.bc_post_bias_c, torch.ones_like(module.bc_post_bias_c))
+
+    # It must not silently ride on the old pre-BCNorm linear bias.
+    assert module.in_B is not None and module.in_B.bias is None
+
+    with pytest.raises(OLMoConfigurationError, match="bc_bias_after_norm"):
+        _faithful_siso_config(bc_bias=True).build(32, layer_idx=0, n_layers=1, init_device="meta")
+    with pytest.raises(OLMoConfigurationError, match="dt_scaled_rotation"):
+        _faithful_siso_config(dt_scaled_rotation=False).build(
+            32, layer_idx=0, n_layers=1, init_device="meta"
+        )
+
+
+def test_rope_fraction_narrows_theta_proj_and_leaves_the_rest_identity():
+    """
+    ``rope_fraction`` rotates only a prefix of the state; the remaining blocks are identity and
+    carry no angle parameters. At 0.5 the angle projection is exactly half the full-state width.
+    """
+    full = Mamba3MixerConfig(
+        n_heads=4, head_dim=8, d_state=12, n_groups=1, rotation_block_size=3, rope_fraction=1.0
+    ).build(64, layer_idx=0, n_layers=1, init_device="meta")
+    half = Mamba3MixerConfig(
+        n_heads=4, head_dim=8, d_state=12, n_groups=1, rotation_block_size=3, rope_fraction=0.5
+    ).build(64, layer_idx=0, n_layers=1, init_device="meta")
+    assert full.theta_proj is not None and half.theta_proj is not None
+    assert half.theta_proj.out_features == full.theta_proj.out_features // 2
+
+    with pytest.raises(OLMoConfigurationError, match="rope_fraction"):
+        Mamba3MixerConfig(n_heads=4, d_state=12, rotation_block_size=3, rope_fraction=0.0).build(
+            64, layer_idx=0, n_layers=1, init_device="meta"
+        )
+
+
+def test_dt_scaled_rotation_is_bounded_and_per_head():
+    """
+    The official rotation is ``tanh(angle) * pi * dt`` per head, so it differs from feeding raw
+    per-group angles straight to the scan, and the whole faithful mixer stays finite end to end.
+    """
+    torch.manual_seed(0)
+    d_model = 32
+    scaled = _faithful_siso_config().build(d_model, layer_idx=0, n_layers=2, init_device="cpu")
+    scaled.init_weights(init_method=InitMethod.normal, d_model=d_model, block_idx=0, num_blocks=2)
+    raw = _faithful_siso_config(dt_scaled_rotation=True).build(
+        d_model, layer_idx=0, n_layers=2, init_device="cpu"
+    )
+    _copy_shared_named_params(scaled, raw)
+
+    x = torch.randn(2, 6, d_model, requires_grad=True)
+    y = scaled(x)
+    assert y.shape == x.shape
+    assert torch.isfinite(y).all()
+    y.float().pow(2).mean().backward()
+    assert x.grad is not None and torch.isfinite(x.grad).all()
+    for name, p in scaled.named_parameters():
+        assert p.grad is not None, f"no grad for {name}"
+        assert torch.isfinite(p.grad).all(), f"non-finite grad for {name}"
+
+
+def test_faithful_num_params_matches_the_built_module():
+    """``num_params`` has to count ``a_proj``, ``D``, the post-BCNorm biases and the narrowed theta."""
+    for cfg in (
+        _faithful_siso_config(),
+        _faithful_siso_config(rope_fraction=1.0),
+        Mamba3MixerConfig(n_heads=4, head_dim=8, d_state=12, dynamic_a=True),
+        Mamba3MixerConfig(n_heads=4, head_dim=8, d_state=12, d_skip=True),
+    ):
+        module = cfg.build(64, layer_idx=0, n_layers=2, init_device="meta")
+        assert cfg.num_params(64) == sum(p.numel() for p in module.parameters())
+
+
+def test_faithful_path_forwards_the_scan_choice_and_per_head_grouping():
+    """
+    The faithful path must hand the dispatcher the same scan choice the config records, and hand
+    it per-head ``B``/``C``.
+
+    Dropping ``rotation_scan_impl`` here would be silent and expensive: dispatch would fall back
+    to the ``MAMBA3_ROTATION_SCAN_IMPL`` default (``chunked``) with nothing raising, which is the
+    exact 2.2x regression :func:`resolve_rotation_scan_impl` exists to prevent. The grouping is
+    pinned alongside it because the whole per-head construction is what makes ``heads_per_group``
+    1 at the boundary; a stale ``self.heads_per_group`` there would silently mis-broadcast B/C.
+    """
+    import olmo_core.nn.mamba3.mixer as mixer_mod
+
+    seen: dict = {}
+    real = mixer_mod.dispatch_mamba3_ssd
+
+    def spy(*args, **kwargs):
+        seen["args"] = args
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    d_model = 32
+    module = _faithful_siso_config(rotation_scan_impl="chunked").build(
+        d_model, layer_idx=0, n_layers=2, init_device="cpu"
+    )
+    module.init_weights(init_method=InitMethod.normal, d_model=d_model, block_idx=0, num_blocks=2)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(mixer_mod, "dispatch_mamba3_ssd", spy)
+        module(torch.randn(2, 6, d_model))
+
+    assert seen["rotation_scan_impl"] == "chunked"
+    assert seen["heads_per_group"] == 1
+    _, B_seen, C_seen, _, _, _, theta_seen = seen["args"]
+    # B/C arrive per head, and theta covers only the rotated prefix -- the identity tail is left
+    # for the rotation to skip rather than padded out and scanned.
+    assert B_seen.shape[2] == module.n_heads
+    assert C_seen.shape[2] == module.n_heads
+    assert theta_seen.shape[2] == module.n_heads
+    assert theta_seen.shape[3] == module.n_rotated_blocks
+    assert module.n_rotated_blocks < module.n_rotation_blocks
+
+
+def test_faithful_flops_count_the_extra_projection_and_the_per_head_rotation():
+    """
+    The FLOP model feeds reported MFU, so it has to see what the faithful arm actually does.
+
+    Two undercounts are pinned here: ``a_proj`` was missing from the projection list entirely, and
+    the rotation term read ``n_groups`` when the dt-scaled rotation runs per *head* -- a 32x
+    undercount of that term on the shipped arm, which would have made its MFU read low.
+    ``rope_fraction`` must cut the counted rotation, because the identity tail is not model work.
+    """
+    d_model = 64
+    base = dict(n_heads=4, head_dim=8, d_state=12, n_groups=1, mimo_rank=1, rotation_block_size=3)
+
+    def flops(**over):
+        cfg = Mamba3MixerConfig(**base, **over)
+        module = cfg.build(d_model, layer_idx=0, n_layers=1, init_device="meta")
+        return module.num_flops_per_token(2048)
+
+    # a_proj is a real GEMM and is counted exactly once.
+    assert flops(dynamic_a=True) == flops(dynamic_a=False) + 2 * d_model * base["n_heads"]
+    # The per-head rotation costs more than the group-shared one.
+    assert flops(dt_scaled_rotation=True) > flops(dt_scaled_rotation=False)
+    # And only the rotated prefix counts.
+    assert flops(dt_scaled_rotation=True, rope_fraction=0.5) < flops(dt_scaled_rotation=True)
+
+
+@pytest.mark.parametrize("block_size", [2, 3], ids=["b2", "b3"])
+@pytest.mark.parametrize("scan_impl", ["chunked", "quaternion"])
+def test_partial_rotation_equals_padding_the_tail_with_identity_blocks(
+    block_size: int, scan_impl: str
+):
+    """
+    Skipping the identity tail must be a pure optimization: identical numbers, less work.
+
+    ``rope_fraction`` was first expressed by padding ``theta`` with zero-angle blocks, which is
+    mathematically right but pays the whole prefix product for a rotation that is the identity
+    (measured 1.82x the cost of rotating the prefix alone). The rotation entry points now leave
+    the un-covered tail exactly as it arrived. This pins that the two forms agree -- if they ever
+    diverge, the optimization has silently changed the model.
+    """
+    from olmo_core.nn.mamba3.mamba3_ssd_fast import _fast_rotate_bc_pair
+
+    torch.manual_seed(0)
+    batch, seq, groups, rank = 2, 8, 2, 1
+    n_blocks, rotated = 6, 3
+    d_state = n_blocks * block_size
+    angles = block_size * (block_size - 1) // 2
+
+    B = torch.randn(batch, seq, groups, rank, d_state)
+    C = torch.randn(batch, seq, groups, rank, d_state)
+    theta = 0.2 * torch.randn(batch, seq, groups, rotated, angles)
+    padded = torch.cat([theta, torch.zeros(batch, seq, groups, n_blocks - rotated, angles)], dim=-2)
+
+    narrow_B, narrow_C = _fast_rotate_bc_pair(B, C, theta, block_size, None, scan_impl=scan_impl)
+    padded_B, padded_C = _fast_rotate_bc_pair(B, C, padded, block_size, None, scan_impl=scan_impl)
+    torch.testing.assert_close(narrow_B, padded_B)
+    torch.testing.assert_close(narrow_C, padded_C)
+
+    # The tail must be untouched, not merely equal to the padded form.
+    covered = rotated * block_size
+    assert torch.equal(narrow_B[..., covered:], B[..., covered:])
+    assert torch.equal(narrow_C[..., covered:], C[..., covered:])
+
+    # And the same holds end to end through the sequential reference recurrence.
+    x = torch.randn(batch, seq, groups, 4)
+    dt = torch.rand(batch, seq, groups) * 0.1 + 0.01
+    A = -torch.rand(groups) - 0.5
+    lam = torch.rand(batch, seq, groups)
+    common = dict(heads_per_group=1, block_size=block_size)
+    torch.testing.assert_close(
+        mamba3_ssd_reference(x, B, C, dt, A, lam, theta, **common),
+        mamba3_ssd_reference(x, B, C, dt, A, lam, padded, **common),
+    )
+
+
+def test_dt_scaled_rotation_rejects_a_second_angle_bound():
+    """``theta_max`` is unread on the faithful path, so pairing the two must fail, not be ignored."""
+    with pytest.raises(OLMoConfigurationError, match="theta_max"):
+        _faithful_siso_config(theta_max=0.01).build(32, layer_idx=0, n_layers=1, init_device="meta")
+
+
+def test_faithful_options_reject_fused_projections():
+    """The faithful path is only wired for the unfused layout; fusing it must fail loudly."""
+    with pytest.raises(OLMoConfigurationError, match="fuse_input_projections"):
+        _faithful_siso_config(fuse_input_projections=True).build(
+            32, layer_idx=0, n_layers=1, init_device="meta"
+        )
+
+
+@requires_gpu
+def test_faithful_mixer_fwd_bwd_cuda_is_finite_and_matches_cpu():
+    """
+    The faithful arm's forward/backward must be finite on CUDA and agree with the CPU result.
+
+    This is the plan's CUDA finite-gradient and parity gate for the faithful SISO b=3 arm. With
+    ``prefer_official_kernel=None`` the CUDA side takes ``official_fast`` where ``mamba-ssm`` is
+    installed and the CPU side takes the chunked reference, so a match cross-checks that the
+    per-head dt-scaled half-state rotation, the token-dependent decay, the post-BCNorm bias, and
+    the D skip all flow through the fast kernel path the same way the reference computes them.
+    Tolerance is bf16-scale because the official kernel hard-casts internally.
+    """
+    torch.manual_seed(0)
+    d_model = 32
+    cfg = _faithful_siso_config()
+    module_cpu = cfg.build(d_model, layer_idx=0, n_layers=2, init_device="cpu")
+    module_cpu.init_weights(
+        init_method=InitMethod.normal, d_model=d_model, block_idx=0, num_blocks=2
+    )
+    module_cuda = copy.deepcopy(module_cpu).to("cuda")
+
+    x_cpu = torch.randn(2, 16, d_model, requires_grad=True)
+    x_cuda = x_cpu.detach().to("cuda").requires_grad_(True)
+
+    y_cpu = module_cpu(x_cpu)
+    y_cuda = module_cuda(x_cuda)
+    assert torch.isfinite(y_cuda).all()
+
+    y_cpu.float().pow(2).mean().backward()
+    y_cuda.float().pow(2).mean().backward()
+    assert x_cuda.grad is not None and torch.isfinite(x_cuda.grad).all()
+    for name, p in module_cuda.named_parameters():
+        assert p.grad is not None, f"no grad for {name}"
+        assert torch.isfinite(p.grad).all(), f"non-finite grad for {name}"
+
+    # official_fast on CUDA vs the chunked reference on CPU: same recurrence, different kernels.
+    torch.testing.assert_close(y_cuda.float().cpu(), y_cpu.float(), rtol=3e-2, atol=3e-2)
+
+
+def test_faithful_ssd_composes_broadcast_bias_dt_scaled_rotation_and_identity_tail():
+    """
+    Pin the per-head plumbing against an independent reference, not just finiteness.
+
+    ``_faithful_ssd`` must (a) broadcast the group ``B``/``C`` to heads, (b) add the per-head
+    post-BCNorm bias, (c) build the angle as ``tanh(raw) * pi * dt`` per head, and (d) pad the
+    un-rotated tail with identity blocks -- then hand the result to the ordinary per-head
+    scalar-decay scan. Reconstructing exactly that by hand and feeding it to the sequential
+    reference catches a wrong axis, a dropped ``tanh``/``dt``, or a mis-sized identity pad, any
+    of which a finiteness check would sail past.
+    """
+    import math
+
+    torch.manual_seed(0)
+    d_model = 32
+    module = _faithful_siso_config().build(d_model, layer_idx=0, n_layers=2, init_device="cpu")
+    module.init_weights(init_method=InitMethod.normal, d_model=d_model, block_idx=0, num_blocks=2)
+
+    batch, seq_len = 2, 6
+    H, P, N = module.n_heads, module.head_dim, module.d_state
+    G, R = module.n_groups, module.mimo_rank
+    hpg = module.heads_per_group
+
+    xv = torch.randn(batch, seq_len, H, P)
+    Bm = torch.randn(batch, seq_len, G, R, N)  # stands in for post-BCNorm group B/C
+    Cm = torch.randn(batch, seq_len, G, R, N)
+    dt = torch.rand(batch, seq_len, H) * 0.1 + 0.01
+    A = -torch.rand(H) - 0.5
+    lam = torch.rand(batch, seq_len, H)
+    theta = torch.randn(batch, seq_len, G, module.n_rotated_blocks, module.angles_per_block)
+
+    y = module._faithful_ssd(xv, Bm, Cm, dt, A, lam, theta)
+
+    Bh = Bm.repeat_interleave(hpg, dim=2) + module.bc_post_bias_b.view(1, 1, H, 1, N)
+    Ch = Cm.repeat_interleave(hpg, dim=2) + module.bc_post_bias_c.view(1, 1, H, 1, N)
+    th = torch.tanh(theta.repeat_interleave(hpg, dim=2)) * math.pi * dt.unsqueeze(-1).unsqueeze(-1)
+    pad = module.n_rotation_blocks - module.n_rotated_blocks
+    th = torch.cat([th, th.new_zeros(batch, seq_len, H, pad, module.angles_per_block)], dim=-2)
+    expected = mamba3_ssd_reference(
+        xv, Bh, Ch, dt, A, lam, th, heads_per_group=1, block_size=module.rotation_block_size
+    )
+
+    # `_faithful_ssd` routes through the chunked kernel on CPU; the reference is the sequential
+    # oracle. They agree to a few float32 ULPs over this tiny contraction.
+    torch.testing.assert_close(y, expected, rtol=1e-4, atol=1e-4)

@@ -55,6 +55,7 @@ from .mamba3_ssd_api import (
     _mamba3_siso_combined_eager,
     _rotate_bc,
     _rotate_bc_blocks,
+    apply_partial_rotation,
     has_mamba3,
     kernel_padded_width,
 )
@@ -100,17 +101,22 @@ def _rotate_bc_pair(
     ``T`` matmuls whose orthogonality drift is ``O(T * eps)``, which bf16 cannot survive.
     """
     theta = theta.float()
-    if block_size == 2:
-        theta_cumulative = torch.cumsum(theta.squeeze(-1) if theta.dim() == 5 else theta, dim=1)
-        return _rotate_bc(B, theta_cumulative), _rotate_bc(C, theta_cumulative)
 
-    if theta.dim() != 5:
-        raise ValueError(
-            f"theta must be 5-D (batch, seq_len, n_groups, n_blocks, angles_per_block) "
-            f"for block_size={block_size}, got shape {tuple(theta.shape)}"
-        )
-    cumulative_rot = _cumulative_block_rotation(_block_rotations(theta, block_size))
-    return _rotate_bc_blocks(B, cumulative_rot), _rotate_bc_blocks(C, cumulative_rot)
+    def _rotate(B_in: torch.Tensor, C_in: torch.Tensor, angles: torch.Tensor):
+        if block_size == 2:
+            cumulative = torch.cumsum(angles.squeeze(-1) if angles.dim() == 5 else angles, dim=1)
+            return _rotate_bc(B_in, cumulative), _rotate_bc(C_in, cumulative)
+
+        if angles.dim() != 5:
+            raise ValueError(
+                f"theta must be 5-D (batch, seq_len, n_groups, n_blocks, angles_per_block) "
+                f"for block_size={block_size}, got shape {tuple(angles.shape)}"
+            )
+        cumulative_rot = _cumulative_block_rotation(_block_rotations(angles, block_size))
+        return _rotate_bc_blocks(B_in, cumulative_rot), _rotate_bc_blocks(C_in, cumulative_rot)
+
+    # ``theta`` may cover only the leading blocks; the identity tail is left as it arrived.
+    return apply_partial_rotation(B, C, theta, block_size, _rotate)
 
 
 def mamba3_ssd_official(

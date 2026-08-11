@@ -142,8 +142,8 @@
       11,
       15
     ],
-    "attention": "4 identical GQA FlashAttention-2 layers in every arm",
-    "mamba-b3": "12 Mamba-3 SISO layers with rotation block size 3, d_state 192, and official_fast SSD",
+    "attention": "4 identical GQA FlashAttention-2 layers in every arm (pre-norm in the mamba-b3 arm, post-norm elsewhere)",
+    "mamba-b3": "12 faithful Mamba-3 SISO layers (expand=2 32x64, dynamic A, post-BCNorm head bias, D skip, norm-before-gate, pre-norm shell) with rotation block size 3 over half of d_state 192 and official_fast SSD",
     "xlstm": "10 mLSTM + 2 sLSTM layers in [m,m,m,a,m,m,s,a] x 2",
     "mamba3-siso-pd": "12 Mamba-3-improved native SISO PD-SSM layers",
     "native-pd": "12 published native Flash PD-SSM layers",
@@ -155,7 +155,7 @@
   "parameter_target": 390135552,
   "parameter_tolerance": 195068,
   "parameters_by_arm": {
-    "mamba-b3": 390153344,
+    "mamba-b3": 390100352,
     "xlstm": 390143056,
     "mamba3-siso-pd": 390169664,
     "native-pd": 390142976,
@@ -166,18 +166,18 @@
   },
   "recurrent_ffn_widths_by_arm": {
     "mamba-b3": [
-      4704,
-      4704,
-      4704,
-      4704,
-      4704,
-      4704,
-      4704,
-      4672,
-      4672,
-      4672,
-      4672,
-      4672
+      3680,
+      3680,
+      3680,
+      3680,
+      3680,
+      3680,
+      3680,
+      3680,
+      3680,
+      3648,
+      3648,
+      3648
     ],
     "xlstm": [
       4672,
@@ -283,7 +283,7 @@
   "tokens_per_cell": 599785472,
   "target_tokens_per_parameter": 1.5373,
   "tokens_per_parameter_by_arm": {
-    "mamba-b3": 1.53732517,
+    "mamba-b3": 1.53751584,
     "xlstm": 1.53734755,
     "mamba3-siso-pd": 1.53724271,
     "native-pd": 1.53734787,

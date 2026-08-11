@@ -13,6 +13,43 @@ cuSPARSE development headers FlashRNN needs for xLSTM preflight. Historical
 recommendations remain below as the audit record, not as a description of the
 repaired arm.
 
+Post-run correction (2026-08-11): the Mamba-b3 arm has been refactored into a
+faithful published Mamba-3 SISO architecture, keeping b=3 as the single
+intentional deviation (SO(2) → SO(3)). The six departures the fidelity audit
+found are all restored: `expand=2` (32×64 = 2048 inner, mixer now ~6.89M a layer
+against ~3.77M before), a token-dependent decay `A` on top of the `A_log`
+baseline, a head-specific post-BCNorm `B`/`C` bias initialized to one, a learned
+`D` skip initialized to one, norm-before-gate output ordering, the official
+`tanh(angle)·π·dt` per-head rotation over half of `d_state=192`, and a pre-norm
+shell for the whole arm. The arm is now 390,100,352 parameters with recurrent
+FFN widths re-solved to ~3,680, exempts `A_log`/`dt_bias`/`D` from weight decay,
+and the optimizer recipe is unchanged (LR 3e-4, β₂ .999, weight decay .01, clip
+1.0, no z-loss). **Every Mamba-b3 throughput number below is therefore stale and
+does not reflect the faithful arm; do not rank on it until remeasured.** The
+rerun spec is `.edullm/run-mamba-b3-faithful.yaml` (three seeds, project
+`linear-comparison`).
+
+Rotation cost of the faithful arm, measured on the production
+`_fused_quaternion_rotate_bc` (seq 2048, per layer, forward+backward, RTX 5050 —
+relative figures, not an A100 claim):
+
+| rotation | lanes/token | fwd+bwd | vs per-group |
+| --- | ---: | ---: | ---: |
+| old, per-group (1 x 64 blocks) | 64 | 32.9 ms | 1.00x |
+| per-head, identity tail padded (32 x 64) | 2048 | 125.6 ms | 3.81x |
+| per-head, tail skipped (32 x 32) | 1024 | 68.9 ms | 2.09x |
+
+Two things follow. Making the rotation per head — which is what the official
+`tanh(angle) * pi * dt` parameterization forces, since `dt` is per head — costs
+about 3.8x, not the 32x the lane count suggests: the prefix scan is latency-bound
+over the sequence, so the extra lanes largely fill the machine instead of adding
+time. Almost all of it is the backward. And `rope_fraction=0.5` only pays for
+itself if the un-rotated tail is *skipped*; representing it as zero-angle
+identity blocks costs the same as rotating the whole state.
+`apply_partial_rotation` therefore leaves the tail untouched, which is 1.82x
+cheaper for bit-identical output (pinned by
+`test_partial_rotation_equals_padding_the_tail_with_identity_blocks`).
+
 ## Run-correctness defects found and fixed
 
 ### Fixed: weight decay was applied to every recurrence timescale parameter

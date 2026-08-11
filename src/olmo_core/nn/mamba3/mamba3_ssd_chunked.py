@@ -28,7 +28,7 @@ from typing import Optional
 
 import torch
 
-from .mamba3_ssd_api import _rotate_bc
+from .mamba3_ssd_api import _rotate_bc, apply_partial_rotation
 
 # The rotation is identical in both fast paths, so it is imported rather than duplicated. No
 # cycle: `mamba3_ssd_fast` imports only from `mamba3_ssd_api`, and `mamba3_ssd_api` imports both
@@ -217,18 +217,21 @@ def _rotate_and_broadcast(
     ``matrix_exp`` and a 64-long sequential scan while the official path did not, so every fp32
     eval, CPU run and ``mimo_rank > 1`` call silently gave up the speedup.
     """
-    if block_size == 2:
-        theta_cumulative = torch.cumsum(theta.squeeze(-1) if theta.dim() == 5 else theta, dim=1)
-        B = _rotate_bc(B, theta_cumulative)
-        C = _rotate_bc(C, theta_cumulative)
-    else:
-        if theta.dim() != 5:
+
+    def _rotate(B_in: torch.Tensor, C_in: torch.Tensor, angles: torch.Tensor):
+        if block_size == 2:
+            cumulative = torch.cumsum(angles.squeeze(-1) if angles.dim() == 5 else angles, dim=1)
+            return _rotate_bc(B_in, cumulative), _rotate_bc(C_in, cumulative)
+        if angles.dim() != 5:
             raise ValueError(
                 f"theta must be 5-D (batch, seq_len, n_groups, n_blocks, angles_per_block) "
-                f"for block_size={block_size}, got shape {tuple(theta.shape)}"
+                f"for block_size={block_size}, got shape {tuple(angles.shape)}"
             )
-        cumulative_rot = fast_cumulative_block_rotation(fast_block_rotations(theta, block_size))
-        B, C = _rotate_bc_fused(B, C, cumulative_rot)
+        cumulative_rot = fast_cumulative_block_rotation(fast_block_rotations(angles, block_size))
+        return _rotate_bc_fused(B_in, C_in, cumulative_rot)
+
+    # ``theta`` may cover only the leading blocks; the identity tail is skipped, not scanned.
+    B, C = apply_partial_rotation(B, C, theta, block_size, _rotate)
 
     if heads_per_group != 1:
         B = B.repeat_interleave(heads_per_group, dim=2)
