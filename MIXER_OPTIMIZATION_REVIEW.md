@@ -140,7 +140,9 @@ on a `/32` grid to keep every model near 390,135,552 parameters.
 `[mLSTM, mLSTM, mLSTM, global, mLSTM, mLSTM, sLSTM, global] x 2`
 
 - 10 mLSTM layers using
-  `mlstm-kernels==2.0.4:chunkwise--triton_xl_chunk`, chunk 256, BF16.
+  `mlstm-kernels==2.0.4:chunkwise--triton_xl_chunk`, chunk 128, BF16. Chunk
+  256 is excluded because its sparse saved-state layout is indexed as dense by
+  the pinned backward kernel, producing NaN gradients at sequence length 4096.
 - 2 sLSTM layers at indices 6 and 14 using
   `flashrnn==1.0.6`, `cuda_fused`, BF16, fixed rank batch 2.
 - Recurrent FFNs: eight at 4672, four at 4640.
@@ -322,12 +324,13 @@ already optimized.
 1. mLSTM is already the fastest measured mixer. Profile its packed projection
    `einsum` and layout conversions before replacing them with `Linear`; both may
    lower to the same GEMM.
-2. The padded mLSTM backend is unused at 4096/256, but removing its construction
+2. The padded mLSTM backend is unused at 4096/128, but removing its construction
    is not a steady-state throughput optimization.
 3. sLSTM remains slower than GDN2 locally, but only two layers use it. Preserve
    FlashRNN `cuda_fused`, BF16 pointers, exact-shape prewarm, and per-forward
    parameter conversion unless an FSDP-safe cache invalidation test exists.
-4. Sweep mLSTM chunk size on A100 only after projection/layout profiling.
+4. Do not sweep mLSTM above chunk 128 until the pinned backward's sparse-state
+   indexing defect is fixed and covered by a gradient-parity test.
 
 ### Frozen GDN2 and shared attention
 

@@ -465,7 +465,13 @@ def _mlstm_mixer() -> XLSTMMixerConfig:
         v_dim_factor=1.0,
         conv_size=4,
         chunkwise_kernel="chunkwise--triton_xl_chunk",
-        chunk_size=256,
+        # 128, NOT 256. In mlstm-kernels 2.0.4, chunk 256 uses 128-token
+        # recurrent chunks but saves only every second state. At T=4096 the
+        # forward allocates 17 max-state slots while the backward indexes
+        # through slot 32, producing finite logits and NaN gradients on the
+        # first backward pass. At 128 every indexed recurrent state is saved;
+        # it was also level with 256 in the paired local mixer benchmark.
+        chunk_size=128,
         autocast_kernel_dtype="bfloat16",
         dtype=MASTER_DTYPE,
     )

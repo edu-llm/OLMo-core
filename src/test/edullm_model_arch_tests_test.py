@@ -790,6 +790,23 @@ def test_the_three_kda_arms_are_the_verified_mixers_at_the_frozen_head_geometry(
     assert module._treatment_mixer("kda", 0).gate_params(module.D_MODEL) == 0
 
 
+def test_xlstm_mlstm_chunk_size_avoids_sparse_state_backward_indexing():
+    """The pinned XL-chunk backward must save every inter-chunk state.
+
+    ``mlstm-kernels==2.0.4`` always advances its recurrent backward over 128-token
+    inter-chunks. At a 256-token target chunk the forward saves only every second state,
+    while the backward still indexes every inter-chunk slot; at sequence length 4096 that
+    means allocating 17 max-state slots and reading through slot 32. Chunk 128 makes the
+    inter- and intra-chunks identical, so every state the backward indexes is present.
+    """
+    module = load_entrypoint()
+    mixer = module._mlstm_mixer()
+
+    assert mixer.chunkwise_kernel == "chunkwise--triton_xl_chunk"
+    assert mixer.chunk_size == 128
+    assert module.SEQUENCE_LENGTH % mixer.chunk_size == 0
+
+
 def test_native_pd_chunk_size_is_64_and_the_change_shaped_no_weights():
     """The measured chunk size, and proof that moving it did not move a single parameter.
 
