@@ -69,6 +69,7 @@ __all__ = [
     "permutation_matrices",
     "stream_utilisation",
     "stream_balance_loss",
+    "spectral_collapse_index",
 ]
 
 
@@ -145,18 +146,37 @@ class StreamUtilisationType(StrEnum):
     """
     How "how much is this stream being used" is measured, for the stream-balancing loss.
 
-    The two differ in one respect and it decides whether the loss does anything at all. See
-    :func:`stream_utilisation`.
+    The three differ in what they will accept as "not collapsed", and each of the first two
+    accepts something that is collapsed. See :func:`stream_utilisation` and
+    :func:`spectral_collapse_index`.
+    """
+
+    spectral = "spectral"
+    """
+    One minus the normalised effective rank of the streams: how many independent directions the
+    ``n`` streams actually span, from the participation ratio of their Gram matrix.
+
+    **This is the one the treatment uses, and it is the third attempt.** Collapse is a statement
+    about the *span* of the streams, and the two below are statements about their energies, so
+    both can be satisfied by streams that are scalar multiples of one vector — which is rank 1,
+    which is collapse. This cannot: a rank-one stream matrix has one nonzero eigenvalue whatever
+    the scales and the signs are, so its participation ratio is exactly 1 and the loss is exactly
+    its maximum.
     """
 
     dispersion = "dispersion"
     """
-    The share of residual energy each stream carries **that no other stream carries**, with the
-    energy common to all of them counted as one more bin.
+    The share of residual energy each stream carries that is not common to all of them, with the
+    common part as one more bin.
 
-    This is the one the treatment uses. Its uniform point is ``n`` streams carrying equal and
-    distinct content; its worst point is ``n`` streams carrying the same vector, which is
-    exactly stream collapse.
+    **A control, and degenerate in a way that is not obvious.** It fixes the failure of
+    :data:`energy` below and introduces its own: it measures deviation from the *mean* of the
+    streams, which differently-scaled copies of one vector have plenty of. Measured on
+    ``[3v, 3v, -v, -v]`` — rank one, participation ratio exactly 1.00000 — it returns a loss of
+    **0.0**, its global minimum. And that is not a corner the optimizer avoids: run against this
+    statistic, the treatment moved the write-out gate's spread by 65x and left the streams rank-1
+    to five significant figures, because manufacturing unequal scales is the cheapest way to
+    satisfy it. Kept as an arm precisely because that is worth showing.
     """
 
     energy = "energy"
@@ -305,6 +325,49 @@ def stream_utilisation(
     return mass / mass.sum().clamp_min(torch.finfo(mass.dtype).tiny)
 
 
+def spectral_collapse_index(streams: torch.Tensor, *, eps: float = 1e-12) -> torch.Tensor:
+    """
+    How far the ``n`` streams are from spanning ``n`` independent directions, on ``[0, 1]``.
+
+    Collapse is a statement about rank. Write ``G`` for the Gram matrix of the streams averaged
+    over tokens, ``G[i, j] = E<Z_i, Z_j>``; its participation ratio
+
+    .. math::
+
+        \mathrm{PR}(G) = \frac{(\operatorname{tr} G)^2}{\|G\|_F^2}
+                        = \frac{(\sum_k \lambda_k)^2}{\sum_k \lambda_k^2}
+
+    is the effective number of directions the streams occupy: 1 when they are all multiples of
+    one vector, ``n`` when they are orthogonal and equal in size. The loss is
+    ``(n / PR - 1) / (n - 1)``, which is 0 at full rank and 1 at rank one.
+
+    :param streams: A tensor of shape ``(batch_size, seq_len, n_streams, d_model)``.
+    :param eps: A floor under the denominator.
+
+    :returns: A scalar in ``[0, 1]``, in ``float32``.
+
+    **Why the participation ratio and not an eigendecomposition.** The natural statistic is the
+    entropy of the eigenvalue spectrum, and its gradient is not usable here: at collapse the
+    spectrum is ``(lambda, 0, 0, 0)`` with a triply degenerate zero, and the backward of
+    ``eigvalsh`` needs eigenvectors, which are undefined under degeneracy and produce ``nan``.
+    The participation ratio is the same reading — it is ``exp`` of a Renyi-2 entropy — as a ratio
+    of two traces, so it needs no eigenvectors and differentiates cleanly everywhere.
+
+    **What it still cannot do, and this is shared with every smooth statistic of the streams.**
+    At *exact* rank one the derivative of ``PR`` with respect to the streams is zero: it is a
+    critical point. So this amplifies an asymmetry rather than creating one, and
+    :data:`HyperConnectionConfig.init_noise_std` must stay nonzero in every arm. What it does
+    guarantee is that the asymmetry it amplifies is one that raises the rank, rather than one
+    that rescales copies of a single direction.
+    """
+    values = streams.float()
+    batch, seq_len, n_streams, _ = values.shape
+    gram = torch.einsum("btnd,btmd->nm", values, values) / (batch * seq_len)
+    participation = gram.diagonal().sum().pow(2) / gram.pow(2).sum().clamp_min(eps)
+    participation = participation.clamp(1.0, float(n_streams))
+    return (n_streams / participation - 1.0) / (n_streams - 1)
+
+
 def stream_balance_loss(
     utilisation: torch.Tensor,
     *,
@@ -432,10 +495,12 @@ class HyperConnectionConfig(ModuleConfig):
     guess: the losses are on different scales and nothing has tuned this.
     """
 
-    stream_balance_statistic: StreamUtilisationType = StreamUtilisationType.dispersion
+    stream_balance_statistic: StreamUtilisationType = StreamUtilisationType.spectral
     """
-    Which utilisation statistic the balancing loss is computed on. See
-    :class:`StreamUtilisationType`; the default is the one that is not degenerate at collapse.
+    Which statistic the balancing loss is computed on. See :class:`StreamUtilisationType`; the
+    default is the only one of the three that cannot be satisfied by a collapsed set of streams,
+    and the other two are kept as arms because each is a way of getting this wrong that looks
+    right.
     """
 
     stream_balance_loss_type: StreamBalanceLossType = StreamBalanceLossType.entropy
@@ -588,7 +653,7 @@ class HyperConnection(nn.Module):
         sinkhorn_iters: int = 20,
         sinkhorn_eps: float = 1e-6,
         stream_balance_loss_weight: float = 0.0,
-        stream_balance_statistic: StreamUtilisationType = StreamUtilisationType.dispersion,
+        stream_balance_statistic: StreamUtilisationType = StreamUtilisationType.spectral,
         stream_balance_loss_type: StreamBalanceLossType = StreamBalanceLossType.entropy,
         dtype: torch.dtype = torch.float32,
         init_device: str = "cpu",
@@ -624,6 +689,7 @@ class HyperConnection(nn.Module):
         # checkpoint, and a buffer would have to be sharded by FSDP for no reason.
         self._balance_loss: Optional[torch.Tensor] = None
         self._utilisation: Optional[torch.Tensor] = None
+        self._collapse_index: Optional[torch.Tensor] = None
         # Turned on for one step at a time by `HyperConnectionMonitorCallback`, and off the
         # rest of the time.
         #
@@ -899,17 +965,22 @@ class HyperConnection(nn.Module):
         if self.stream_balance_loss_weight <= 0.0:
             if self.diagnostics_enabled:
                 with torch.no_grad():
+                    self._collapse_index = spectral_collapse_index(streams)
                     self._utilisation = stream_utilisation(
-                        streams, statistic=self.stream_balance_statistic
+                        streams, statistic=StreamUtilisationType.dispersion
                     )
             return streams
 
-        utilisation = stream_utilisation(streams, statistic=self.stream_balance_statistic)
-        loss = stream_balance_loss(utilisation, loss_type=self.stream_balance_loss_type)
+        if self.stream_balance_statistic == StreamUtilisationType.spectral:
+            utilisation = None
+            loss = spectral_collapse_index(streams)
+        else:
+            utilisation = stream_utilisation(streams, statistic=self.stream_balance_statistic)
+            loss = stream_balance_loss(utilisation, loss_type=self.stream_balance_loss_type)
         # Kept for `compute_metrics`, detached so that holding it cannot extend the graph's
         # lifetime past the backward pass.
         self._balance_loss = loss.detach()
-        self._utilisation = utilisation.detach()
+        self._utilisation = None if utilisation is None else utilisation.detach()
         return attach_auxiliary_loss(streams, self.stream_balance_loss_weight * loss)
 
     def compute_metrics(
@@ -963,9 +1034,22 @@ class HyperConnection(nn.Module):
                 # movement this whole treatment is judged on.
                 out["stream dispersion share"] = (utilisation[1:].sum(), ReduceType.mean)
 
+        if self._collapse_index is not None:
+            # THE ONE TO WATCH. 0 is n streams spanning n directions and 1 is all of them on one,
+            # and unlike the shares below it cannot be moved by rescaling.
+            out["stream collapse index"] = (self._collapse_index, ReduceType.mean)
+            out["stream effective rank"] = (
+                self.n_streams
+                / (1.0 + self._collapse_index * (self.n_streams - 1)).clamp_min(1e-6),
+                ReduceType.mean,
+            )
+
         read_concentration, write_concentration = self.gate_concentration()
         out["read gate concentration"] = (read_concentration, ReduceType.mean)
         out["write gate concentration"] = (write_concentration, ReduceType.mean)
+
+        if self._balance_loss is not None and self._collapse_index is None:
+            out["stream collapse index"] = (self._balance_loss, ReduceType.mean)
 
         if self._balance_loss is not None:
             out["stream balance loss"] = (
@@ -985,6 +1069,7 @@ class HyperConnection(nn.Module):
         """
         self._balance_loss = None
         self._utilisation = None
+        self._collapse_index = None
 
     def stream_norms(self, streams: torch.Tensor) -> torch.Tensor:
         """

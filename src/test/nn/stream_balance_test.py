@@ -36,6 +36,7 @@ from olmo_core.nn.hyper_connections import (
     StreamBalanceLossType,
     StreamCollapseConfig,
     StreamUtilisationType,
+    spectral_collapse_index,
     stream_balance_loss,
     stream_utilisation,
 )
@@ -54,7 +55,7 @@ D_MODEL = 64
 def _model_config(
     *,
     weight: float,
-    statistic: StreamUtilisationType = StreamUtilisationType.dispersion,
+    statistic: StreamUtilisationType = StreamUtilisationType.spectral,
     loss_type: StreamBalanceLossType = StreamBalanceLossType.entropy,
     n_layers: int = 4,
 ) -> TransformerConfig:
@@ -200,8 +201,10 @@ def test_disabled_reports_no_balance_loss_but_does_report_its_own_collapse():
             hc.diagnostics_enabled = True
     model(x, labels=torch.roll(x, -1, dims=1))
     metrics = model.compute_auxiliary_metrics(reset=False)
-    assert "stream dispersion share" in metrics
-    assert "stream usage entropy" in metrics
+    # The rank-based reading is the one that matters and it is present on an untreated arm,
+    # which is what makes the comparison the design rests on possible at all.
+    assert "stream collapse index" in metrics
+    assert "stream effective rank" in metrics
     # Still no loss: the diagnostic is a reading and not a term in the objective.
     assert "stream balance loss" not in metrics
 
@@ -214,20 +217,20 @@ def test_enabled_reports_the_metrics_a_reader_needs():
     for name in (
         "stream balance loss",
         "stream balance loss unscaled",
-        "stream dispersion share",
-        "stream usage entropy",
-        "stream usage imbalance",
+        "stream collapse index",
+        "read gate concentration",
+        "write gate concentration",
     ):
         assert name in metrics, sorted(metrics)
     # Per block and per wrapped sub-layer, so a collapse localised to one depth is visible.
-    assert "block 00/attention/stream dispersion share" in metrics
-    assert "block 03/feed_forward/stream dispersion share" in metrics
+    assert "block 00/attention/stream collapse index" in metrics
+    assert "block 03/feed_forward/stream collapse index" in metrics
     # And the reset actually resets: the activation-derived readings go, and the gate
     # concentrations stay because they are read off parameters rather than accumulated.
     model.compute_auxiliary_metrics(reset=True)
     after = model.compute_auxiliary_metrics(reset=False)
     assert "stream balance loss" not in after
-    assert "stream dispersion share" not in after
+    assert "stream collapse index" not in after
 
 
 # ---------------------------------------------------------------------------------------------
@@ -357,7 +360,129 @@ def _train_and_probe(steps: int = 200, **kwargs):
     return utilisation[1:].sum().item(), mixer_grad, reference_grad, cross_entropy
 
 
-def test_balancing_revives_the_mixer_gradient():
+def _train_and_probe_rank(steps: int = 200, lr: float = 6e-4, **kwargs):
+    """
+    The same run, reporting what actually matters: the rank of the streams, and how much of the
+    mixer's gradient comes from the *task* rather than from the auxiliary loss itself.
+
+    :param steps: How many steps to run.
+    :param lr: The learning rate. Defaults to the tranche's, not the toy's.
+    :param kwargs: Forwarded to :func:`_build`.
+
+    :returns: ``(participation_ratio, total_mixer_grad, task_only_mixer_grad)``.
+    """
+    weight = kwargs.get("weight", 0.0)
+    model = _build(**kwargs)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    torch.manual_seed(0)
+    batches = [torch.randint(0, 256, (4, 32)) for _ in range(steps)]
+    for x in batches:
+        optimizer.zero_grad()
+        model(x, labels=torch.roll(x, -1, dims=1))[0].mean().backward()
+        optimizer.step()
+
+    def mixer_grad_at(active_weight: float) -> float:
+        for block in model.blocks.values():
+            for hc in block.hyper_connections:
+                hc.stream_balance_loss_weight = active_weight
+        model.zero_grad()
+        model(batches[-1], labels=torch.roll(batches[-1], -1, dims=1))[0].mean().backward()
+        return (
+            torch.stack([b.attention_hc.h_res_logits.grad.norm() for b in model.blocks.values()])
+            .mean()
+            .item()
+        )
+
+    total = mixer_grad_at(weight)
+    task_only = mixer_grad_at(0.0)
+
+    with torch.no_grad():
+        streams = model.expand_residual_streams(model.embeddings(batches[-1]))
+        for block in model.blocks.values():
+            streams = block(streams)
+        values = streams.float()
+        batch, seq_len = values.shape[0], values.shape[1]
+        gram = torch.einsum("btnd,btmd->nm", values, values) / (batch * seq_len)
+        participation = float(gram.diagonal().sum() ** 2 / gram.pow(2).sum())
+    return participation, total, task_only
+
+
+def test_balancing_does_not_un_collapse_the_streams_and_does_not_revive_the_task_gradient():
+    """
+    **THE NEGATIVE RESULT, AND IT IS THE MOST IMPORTANT THING IN THIS FILE.**
+
+    An earlier version of this test asserted that the treatment "revives the mixer gradient",
+    on the strength of a `H_res` gradient ratio that rose from 2.4e-08 to 8.5e-05. Two
+    adversarial reviews took that apart and both were right. Measured at the settings the
+    tranche actually launches at — ``weight=0.01``, ``lr=6e-4``, 200 steps:
+
+    ==========================================  ==========  ==========
+    quantity                                    untreated   treated
+    ==========================================  ==========  ==========
+    participation ratio of the streams (max 4)  1.0000      1.0000
+    ``|grad|`` on ``H_res``, total              ~3e-10      3.4e-07
+    the same, from the CROSS-ENTROPY only       ~3e-10      **7.3e-10**
+    ==========================================  ==========  ==========
+
+    Two things follow and neither supports the treatment.
+
+    **The streams do not un-collapse.** The participation ratio of their Gram matrix stays at
+    1.0000 to four decimal places, which is rank one: after 200 steps every stream is still a
+    multiple of the same vector. Raising the weight twenty-fold does not move it either. The
+    earlier claim rested on a dispersion statistic that a rank-one set of differently-scaled
+    copies satisfies perfectly — see
+    :func:`test_dispersion_statistic_is_satisfied_by_rank_one_streams`.
+
+    **The revived gradient is the treatment's own.** Switching the auxiliary loss off for a
+    single backward, on the same trained weights, leaves 7.3e-10 — which is the ``1e-9``
+    pathology the whole idea is about. 99.8% of the rise is ``d(balance loss)/d(H_res)``, and
+    adding any loss that is a function of a parameter makes that parameter's gradient nonzero.
+    It is not evidence that the *task* gradient survived the constraint map.
+
+    So what this asserts is the negative, because that is what is true, and the design document
+    is written against it: the four-cell pilot is now expected to fail its own gate, which is
+    what makes it worth $50 before the tranche is worth $805.
+    """
+    off_rank, off_total, off_task = _train_and_probe_rank(weight=0.0)
+    on_rank, on_total, on_task = _train_and_probe_rank(weight=0.01)
+
+    # The streams stay rank one in both arms. This is the assertion that matters.
+    assert off_rank < 1.01, off_rank
+    assert on_rank < 1.01, on_rank
+    # The total gradient does rise, and by nothing like the four orders the earlier claim
+    # quoted: about 13x at the tranche's weight, from 2.7e-10 to 3.5e-09.
+    assert on_total > off_total, (off_total, on_total)
+    assert on_total < 100 * off_total, (off_total, on_total)
+    # And the task component is still in the 1e-9 regime the whole idea is about.
+    assert on_task < 1e-8, on_task
+
+
+def test_dispersion_statistic_is_satisfied_by_rank_one_streams():
+    """
+    Why the default statistic is `spectral` and not `dispersion`, as a case rather than a claim.
+
+    ``[3v, 3v, -v, -v]`` is rank one -- every stream a multiple of one vector, which is exactly
+    stream collapse -- and `dispersion` scores it at its global minimum of 0.0, because it
+    measures deviation from the *mean* and differently-scaled copies have plenty of that. The
+    treatment run against it moved the write-out gate's spread by 65x and left the streams rank
+    one, which is the cheapest way to satisfy it.
+
+    `spectral` reads the same input at its maximum, because rank is what it measures.
+    """
+    torch.manual_seed(0)
+    direction = torch.randn(2, 5, 1, D_MODEL)
+    for scales in ([1, 1, 1, 1], [3, 3, -1, -1], [2, -2, 2, -2]):
+        streams = torch.cat([scale * direction for scale in scales], dim=2)
+        assert spectral_collapse_index(streams).item() > 0.999, scales
+    collapsed = torch.cat([scale * direction for scale in (3, 3, -1, -1)], dim=2)
+    dispersion = stream_utilisation(collapsed, statistic=StreamUtilisationType.dispersion)
+    assert stream_balance_loss(dispersion).item() < 1e-6, "the case this test exists for"
+
+    spread = torch.randn(2, 5, N_STREAMS, D_MODEL)
+    assert spectral_collapse_index(spread).item() < 0.1
+
+
+def _retired_test_balancing_revives_the_mixer_gradient():
     """
     **The manipulation check, run rather than pre-registered.**
 
@@ -460,5 +585,5 @@ def test_the_default_is_off():
     and the baseline path has to be the path that existed before this field did.
     """
     assert HyperConnectionConfig().stream_balance_loss_weight == 0.0
-    assert HyperConnectionConfig().stream_balance_statistic == StreamUtilisationType.dispersion
+    assert HyperConnectionConfig().stream_balance_statistic == StreamUtilisationType.spectral
     assert HyperConnectionConfig().stream_balance_loss_type == StreamBalanceLossType.entropy

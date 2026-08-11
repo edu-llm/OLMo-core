@@ -325,15 +325,22 @@ That does not make the endpoint powered on a GPU at this shape, and it is not a 
 model is better for it. What it does is turn the manipulation check below from a hope into a
 prediction with a measured effect size behind it:
 
-> If, at step 500, the median `H_res` gradient norm in the `mhc_moe_balanced` cells has not
-> risen by at least three orders of magnitude over the `mhc_moe` cells at the same step, the
-> treatment is not doing what it was built to do. Stop the tranche and fix the implementation.
-> Nothing about the idea has been tested at that point and nothing will be claimed about it.
+> **The gate is on rank, and on the task gradient, and not on the total gradient.** At step
+> 500, in each `mhc_moe_balanced` cell: (a) the stream effective rank, pooled over
+> hyper-connections, must have risen above 1.05 against its own `mhc_moe` pair, and (b) the
+> `H_res` gradient norm **with the auxiliary loss switched off for that backward** must have
+> risen by at least one order of magnitude over the same pair. If either fails, the treatment
+> is not doing what it was built to do. Stop the tranche.
+>
+> An earlier version gated on the total `H_res` gradient rising three orders of magnitude. That
+> gate is unusable and is withdrawn: the treatment is a loss on `H_res`, so it moves the total
+> gradient by construction, and a gate a treatment passes by existing is not a gate. It is the
+> same objection this document already makes to using stream-usage entropy as a check, applied
+> where it also holds.
 
-Three orders of magnitude is chosen against the `1e-9` versus `1.84` reference, which is nine.
-A statistic whose control value sits nine orders of magnitude below its neighbours does not
-need a noise floor estimated to two significant figures to be told apart from one that does
-not; what it needs is for the ratio to be reported per seed, which the monitor does.
+Reporting the decomposition costs one extra forward on the monitored steps and is the only way
+either half of that gate can be read. The CPU harness predicts (a) fails, so this is a check
+that is expected to fire, and the tranche is not submitted until it does or does not.
 
 **Sigma for `D` is estimated from the tranche itself and reported before any H4 claim.** Five
 seeds on each of the four arms gives df = 16 for it exactly as for the loss, and the H4

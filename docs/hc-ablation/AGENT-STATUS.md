@@ -2,6 +2,21 @@
 
 Branch `hc/moe-stream-balancing-5bd7`, off `hc/moe-base`. Nothing here has run on a GPU.
 
+> ### The headline, which is negative
+>
+> **The treatment does not work on the CPU harness, and the $50 four-cell pilot is predicted to
+> fail its own pre-registered gate.** At the settings the tranche launches at, the streams stay
+> rank one — participation ratio 1.0000 out of 4 after 200 steps — and 99.8% of the rise in the
+> `H_res` gradient is the balancing loss's own gradient rather than the task's. An earlier
+> version of this work claimed the opposite on the strength of numbers measured at five times
+> the weight and five times the learning rate, against a statistic that rank-one streams with
+> unequal scales satisfy perfectly. Two adversarial reviews took it apart and both were right.
+>
+> The statistic is fixed (`spectral`, which reads rank), the tests now assert the negative, and
+> the pre-registered gate is rewritten onto rank and the task-only gradient. **Run the pilot in
+> section 9 of the design before spending the $805 on the tranche.** If it reproduces the CPU
+> result, the answer to the falsifiable prediction is no, and $50 bought it.
+
 ---
 
 # START HERE
@@ -90,6 +105,9 @@ All three carry the same three deferred checks, which no laptop can make: `no_pu
 ```bash
 pip install -e '.[all]'
 pytest -q src/test/nn/ --ignore=src/test/nn/hf      # 538 passed, 1206 skipped
+# `attention_test.py::test_tensor_parallel_attention` is flaky under gloo and fails on a
+# different parametrisation each run. It fails the same way on `hc/moe-base` in a clean
+# worktree, so it is pre-existing and not a regression from this branch.
 python src/scripts/ablations/hc_gate1_check.py       # GATE_1 PASSED: 63 passed, 0 failed
 python src/scripts/ablations/hc_launch_check.py      # 3 specs checked, 0 problems
 python src/scripts/ablations/hc_ablation.py --dry-run --model-size tiny
@@ -161,15 +179,24 @@ not, the arms train with an unbalanced router and look healthy.
 `src/olmo_core/nn/hyper_connections.py` (+~230), `src/test/nn/stream_balance_test.py` (390).
 One flag, `stream_balance_loss_weight`, defaulting to `0.0`.
 
-**CPU-verified.** Disabled is exactly a no-op: the statistic is replaced by something that raises
-and a full forward and backward runs through the disabled path. The reported cross-entropy is
-bit-identical at weights 0, 0.05 and 0.5, because the loss reaches the optimizer through
-`attach_auxiliary_loss` — which is what keeps every loss comparison in the tranche between the
-same quantity. Over 200 AdamW steps on a four-block model the treatment moves the stream dispersion
-from 5.9e-08 to 3.0e-03 and the `H_res` gradient ratio from 2.4e-08 to 8.5e-05, and the degenerate
-`energy` statistic moves neither, which is the negative control.
+**CPU-verified, and the verification is what falsified the claim.** Disabled is exactly a no-op:
+the statistic is replaced by something that raises and a full forward and backward runs through
+the disabled path. The reported cross-entropy is bit-identical at weights 0, 0.05 and 0.5,
+because the loss reaches the optimizer through `attach_auxiliary_loss` — which is what keeps
+every loss comparison in the tranche between the same quantity.
 
-**NOT verified.** Whether reviving that gradient makes the model better. That is the experiment.
+**And the treatment does not do what it was built to do.** See the box at the top. The streams
+stay rank one and the rise in the mixer's gradient is the balancing loss's own. Three things
+were wrong and all three are fixed rather than reported: the statistic was satisfiable by
+rank-one streams with unequal scales (`dispersion`, now a control; the default is `spectral`,
+which reads the participation ratio of the streams' Gram matrix and cannot be); the numbers were
+measured at five times the tranche's weight and learning rate; and the gradient was never
+decomposed into the task's part and the treatment's own.
+
+**NOT verified.** Whether any of this transfers from a four-block, `d_model=64`, dense, 200-step
+CPU harness to `smallmoe` at 565M over 786M tokens. It may not, and the four-cell pilot is the
+instrument. What the CPU establishes is that the prediction is falsifiable and that, on the one
+harness available, it is currently false.
 
 ### WP3 — diagnostics
 
@@ -246,15 +273,57 @@ orders of magnitude below its neighbours, and loss is a secondary reported with 
 
 ---
 
+## FOUND BY THE FINAL AUDIT, NOT FIXED — the exact list
+
+Two adversarial reviews of the whole deliverable produced more than the remaining time could
+absorb. Everything scientifically load-bearing is fixed; these are the rest, with enough detail
+to act on.
+
+1. **The balance loss is multiplied by the gradient-accumulation count.**
+   `attach_auxiliary_loss` seeds its gradient once per `backward`, and the trainer runs one
+   backward per micro-batch while the cross-entropy is normalised to one batch. At
+   `--global-batch-size 262144 --rank-microbatch-size 8192` that is 32 micro-batches, so the
+   treatment's effective weight is `0.01 x 24 sub-layers x 32 = 7.68` per optimizer step rather
+   than the 0.24 the design says. MoE avoids this by dividing by the batch token count. **Fix:**
+   thread `loss_div_factor` into `HyperConnection.write_out` and scale by
+   `(batch * seq_len) / loss_div_factor`, and add `--rank-microbatch-size` to the frozen list in
+   the design's section 7, since the smoke is expected to change it.
+2. **The monitor's mixer read is rank-local under FSDP above world size 1.** Probed at world
+   size 2 the value differs by 0.0018 in the max entry with no exception, and the row sums still
+   read 1.0 so the callback's own guard reports clean. The tranche is one card per cell so it is
+   not hit, but the primary endpoint goes through that path. **Fix:** `full_tensor()` on a
+   `DTensor`, or refuse above world size 1.
+3. **Two metrics are pooled by the wrong rule.** `model.py` pools any metric whose name contains
+   `loss` by summation, which catches `stream balance loss unscaled` (a per-sub-layer quantity in
+   [0,1]); and `stream usage imbalance` is labelled `max` and pooled across blocks with a mean.
+   **Fix:** pool by `reduce_type` as `MoETransformer.compute_auxiliary_metrics` does.
+4. **`hc_power.py`'s conservatism claim is wrong at df = 4.** Against exact noncentral-t it is
+   exact at df = 16 and 1.16% *anti*-conservative at df = 4, which is the paired primary
+   analysis. The docstring says 1-3% conservative. **Fix:** replace the claim with the measured
+   table, or add the exact solve.
+5. **`test_disabled_is_bit_identical_to_the_untreated_baseline` does not test its name.** Its
+   loop runs `weight` in `(0.0, 0.0)` into a dict keyed by weight, so the second overwrites the
+   first and nothing compares them. The only live assertion is that the treated model differs.
+6. **`num_flops_per_token` does not count the mixing** — about 0.057% at this shape, so MFU is
+   overstated by that.
+7. **`apply_fsdp` on the HC MoE blocks discards `prefetch_factor` and `wrapping_strategy`**
+   silently. Documented, not warned.
+
 ## RISKS — what I most expect to fail on real hardware, in order
 
-1. **The router's auxiliary loss does not survive the write-out gate.** The load-balancing loss
-   reaches the optimizer through `attach_auxiliary_loss`, an autograd function that returns its
-   activation unchanged and seeds the aux loss's gradient in the backward pass. A hyper-connection
-   puts two einsums and an addition between that activation and the loss. I believe it survives —
-   the activation flows into the streams and the streams flow into the loss — but I could not run
-   it. If it does not, every MoE arm trains with an unbalanced router while looking healthy.
-   `test_router_auxiliary_loss_survives_the_write_out_gate` is the check and it needs a GPU.
+0. **That the pilot confirms the CPU result and the idea is dead.** This is now the most likely
+   single outcome and it is the cheap one: $50 against $805. It is a real answer to a
+   falsifiable prediction, and the write-up would be that stream collapse can be measured, that
+   a balancing loss on it does not lift the streams off rank one, and that the mixer's task
+   gradient stays at 1e-9 regardless — which is evidence against the hypothesis that collapse is
+   what freezes the mixer.
+
+1. ~~**The router's auxiliary loss does not survive the write-out gate.**~~ **Retired: it
+   survives.** One of the final judges built a stand-in that does what `MoEBase` does — computes
+   a router loss from a real parameter and calls `attach_auxiliary_loss` — zeroed the primary
+   term so only the attached loss could produce a gradient, and found the router reached on all
+   four hyper-connected MoE block types and both mixers, on a CPU. The GPU test stays for the
+   kernel path, and this is no longer the top risk.
 
 2. **Memory.** The term that decides whether `--rank-microbatch-size 8192` fits is not the
    optimizer state but the fp32 logits: 8,192 tokens x 100,352 vocab is 3.06 GiB per copy, and at

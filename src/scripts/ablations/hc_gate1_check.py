@@ -282,7 +282,7 @@ def check_stream_balancing_is_off_by_default() -> List[CheckResult]:
 
     config = HyperConnectionConfig()
     off = config.stream_balance_loss_weight == 0.0
-    statistic = config.stream_balance_statistic == StreamUtilisationType.dispersion
+    statistic = config.stream_balance_statistic == StreamUtilisationType.spectral
     form = config.stream_balance_loss_type == StreamBalanceLossType.entropy
     return [
         (
