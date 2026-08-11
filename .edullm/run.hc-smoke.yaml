@@ -1,0 +1,124 @@
+# THE FIRST GPU HOUR: prove the path before the arms spend the budget on it.
+#
+#   edullm check  --json --spec .edullm/run.hc-smoke.yaml \
+#     --experiment hc-moe-stream-balance --dataset regmix-10b-v1 \
+#     --team input-core --compute gpu-1xa10g --hours 1
+#   edullm submit       --spec .edullm/run.hc-smoke.yaml \
+#     --experiment hc-moe-stream-balance --dataset regmix-10b-v1 \
+#     --team input-core --compute gpu-1xa10g --hours 1
+#
+# Forty steps of the arm the tranche is actually going to run, on the corpus it is actually
+# going to read, on one card. Nothing here is a scientific measurement and nothing about it
+# is meant to be reported: what it buys is the answer to "does this command reach step 40 and
+# write a checkpoint", for about two dollars, before five twelve-hour cells find out for a
+# hundred and thirty.
+#
+# ---------------------------------------------------------------------------------------
+# WHY THIS EXISTS AT ALL
+# ---------------------------------------------------------------------------------------
+#
+# Two runs on this platform died in their first minutes this month, and neither failure was
+# visible from anything a laptop could run: one was a corpus whose declared dtype the image
+# would not accept, and one was a launcher the guard could not see. Both are the same shape of
+# problem -- something that is only true inside the container -- and the only instrument for
+# that shape of problem is a container.
+#
+# It is the same entrypoint, the same corpus, the same model factory, the same dtype and the
+# same save-folder contract as .edullm/run.hc-baseline.yaml. The four things it changes are
+# --steps, --warmup-steps, --save-interval and the absence of a fan-out. A smoke test that
+# differs from the run it is smoke-testing in any other respect is testing something else.
+#
+# ---------------------------------------------------------------------------------------
+# THE NUMBER TO READ OFF IT, AND WHAT TO DO WITH IT
+# ---------------------------------------------------------------------------------------
+#
+# train_on_corpus.summarise prints one JSON object on rank zero at the end, carrying `steps`,
+# `seconds`, `peak_memory_gib`, `parameters`, `first_loss` and `last_loss`. Two of those size
+# the real run and neither can be known from here:
+#
+#   step_seconds = seconds / steps
+#       --steps in run.hc-baseline.yaml is set from this. See the arithmetic in that file's
+#       header. The committed value is an estimate from the card's peak bf16 throughput at an
+#       assumed 20% MFU, and an MoE with 32 experts of hidden size 384 is exactly the shape
+#       where that assumption is worth least.
+#
+#   peak_memory_gib
+#       --rank-microbatch-size is 8192 rather than train_on_corpus's own default of 16384,
+#       because a 565M-parameter model under FSDP at world size 1 holds its own fp32 master
+#       weights and both Adam moments -- about 10 GiB before a single activation -- and the
+#       cards this is sized for have 24. If the smoke reports comfortable headroom, raising it
+#       to 16384 halves the number of gradient-accumulation microbatches per step.
+#
+# The last loss is worth a glance and nothing more. Forty steps of warmup on a 565M model is
+# not a training curve; what it establishes is that the loss is finite and falling, which is
+# the difference between a corpus being read and a corpus being read at the wrong width.
+#
+# ---------------------------------------------------------------------------------------
+# WHAT THIS DOES NOT PROVE
+# ---------------------------------------------------------------------------------------
+#
+#   - RESUME. Checkpoints are written at step 20 and step 40, so the write path and the
+#     credential behind it are exercised. Whether a second attempt reads them back is only
+#     exercised by an attempt that fails, and nothing here can arrange one. See the note on
+#     unverified_resume in the platform's own checkpoint guard: two checks stand between a
+#     submission and a working retry and neither of them reads the trainer.
+#   - MULTI-RANK ANYTHING. --nproc-per-node=1 by design, because the tranche this belongs to
+#     runs one card per cell. A submission that moves this to a multi-card shape without
+#     moving --nproc-per-node is refused by the launch guard before it costs anything, which
+#     is the good direction for that mistake to fail in.
+#   - THE TREATMENT. There is no hyper-connection and no MoE stream balancing in this command.
+#     This is the unmodified `smallmoe` factory that ships in
+#     src/olmo_core/nn/transformer/config.py, which is the point: it needs no code that did
+#     not already exist and pass its tests.
+#
+# ---------------------------------------------------------------------------------------
+# THE FOUR THINGS IN THE COMMAND TEXT THAT ARE THERE FOR THE GUARDS
+# ---------------------------------------------------------------------------------------
+#
+#   1. A SPACE BEFORE EVERY `;`. The launch guard reads the shlex-split command and recognises
+#      an operator only where it is a word of its own. `foo;` splits as one word ending in a
+#      semicolon, which folds the next command into this one, hides the launcher from
+#      `read_launch_plan`, and is refused as `process_per_device` -- a refusal whose text is
+#      about GPUs and whose cause is a missing space.
+#   2. `--param-dtype bfloat16` IN THE TEXT. The precision guard reads command words. It
+#      cannot see the dtype train_on_corpus sets in code, so a command that does not name one
+#      is accepted onto a T4, whose Turing silicon has no bfloat16 at all and whose
+#      torch.cuda.is_bf16_supported() says otherwise. Naming it turns a dead instance into a
+#      free refusal at check time.
+#   3. `"$EDULLM_CHECKPOINT_DIR"` IN DOUBLE QUOTES INSIDE THE OUTER SINGLE QUOTES. The
+#      checkpoint guard scans the characters of the text a shell is handed, not its words,
+#      because single quotes suppress the expansion and shlex deletes the evidence. A mention
+#      the shell will never expand is not a reference and is refused as such.
+#   4. THE REDIRECT AND THE REPLAY, INLINE. The platform shows the last 50 lines of container
+#      output and torchrun's epilogue is most of that by itself, so the launcher's own output
+#      goes to a file and the last 40 lines are replayed at the end. Inline rather than inside
+#      a shell function, because a function definition puts the launcher somewhere
+#      `read_launch_plan` does not look: the segment's first word would be the function name.
+#      `status=$?` is captured before the replay and `exit "$status"` is what the container
+#      exits with, so a failed run still fails -- `cmd || tail` would exit 0 on the tail and
+#      report a dead run as a successful one, which is worse than having no replay at all.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-1xa10g
+command: >-
+  bash -lc 'LOG=/tmp/edullm-train.log ;
+  python -m torch.distributed.run --nproc-per-node=1 --standalone
+  .edullm/train_on_corpus.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --model-factory smallmoe
+  --sequence-length 2048
+  --global-batch-size 262144
+  --rank-microbatch-size 8192
+  --steps 40
+  --warmup-steps 10
+  --save-interval 20
+  --learning-rate 6e-4
+  --data-seed 0
+  --param-dtype bfloat16
+  init_seed=0
+  model.init_seed=0
+  train_module.compile_model=false
+  > "$LOG" 2>&1 ;
+  status=$? ;
+  tail -n 40 "$LOG" ;
+  exit "$status"'
