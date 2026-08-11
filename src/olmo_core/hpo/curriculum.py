@@ -152,6 +152,35 @@ def _require_manifest(read: Any, expected: str, *, role: str) -> None:
         )
 
 
+def _populate_manifest_identity(
+    read: Any,
+    *,
+    s3: Any,
+    data_bucket: str,
+    dataset_id: str,
+    version: str,
+    group: str,
+) -> None:
+    """Fill manifest identity omitted by older ``edullm-data`` readers from sealed metadata."""
+
+    if getattr(read, "manifest_sha256", None) is not None:
+        return
+    payload = json.loads(s3.get(data_bucket, f"{dataset_id}/{version}/dataset.json").decode())
+    if (
+        payload.get("dataset_id") != dataset_id
+        or (payload.get("version") or {}).get("id") != version
+    ):
+        raise CurriculumDataError(
+            f"resolved metadata identity does not match {dataset_id}/{version}"
+        )
+    groups = [entry for entry in payload.get("groups", ()) if entry.get("name") == group]
+    if len(groups) != 1 or not groups[0].get("manifest_sha256"):
+        raise CurriculumDataError(
+            f"resolved metadata does not declare one manifest hash for group {group!r}"
+        )
+    read.manifest_sha256 = str(groups[0]["manifest_sha256"])
+
+
 def curriculum_corpus_from_reads(parent_read: Any, order_read: Any) -> CurriculumCorpus:
     """Validate resolved train/validation/order reads against the immutable arm inputs."""
 
@@ -649,10 +678,11 @@ def _build_curriculum_hpo_experiment(
         data_bucket=data_bucket,
     )
 
-    from edullm_data.read import dataset_paths
+    from edullm_data.read import DATA_BUCKET, dataset_paths
     from edullm_data.s3 import Boto3S3
 
     s3 = Boto3S3.default()
+    resolved_data_bucket = data_bucket or DATA_BUCKET
     read_kwargs: dict[str, Any] = {"s3": s3}
     if data_bucket is not None:
         read_kwargs["data_bucket"] = data_bucket
@@ -668,6 +698,22 @@ def _build_curriculum_hpo_experiment(
         split="train",
         group=CURRICULUM_ORDER_GROUP,
         **read_kwargs,
+    )
+    _populate_manifest_identity(
+        parent_read,
+        s3=s3,
+        data_bucket=resolved_data_bucket,
+        dataset_id=PARENT_DATASET_ID,
+        version=PARENT_DATASET_VERSION,
+        group=PARENT_DATASET_GROUP,
+    )
+    _populate_manifest_identity(
+        order_read,
+        s3=s3,
+        data_bucket=resolved_data_bucket,
+        dataset_id=CURRICULUM_DATASET_ID,
+        version=CURRICULUM_DATASET_VERSION,
+        group=CURRICULUM_ORDER_GROUP,
     )
     corpus = curriculum_corpus_from_reads(parent_read, order_read)
     tokenizer = TokenizerConfig.dolma2()

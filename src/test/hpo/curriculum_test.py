@@ -269,7 +269,6 @@ def test_factory_requests_exact_parent_and_order_groups(monkeypatch):
         dtype="uint32",
         byte_order=None,
         header_bytes=0,
-        manifest_sha256=PARENT_HASH,
     )
     order = SimpleNamespace(
         paths=["/data/mtld/train-00000.bin"],
@@ -278,7 +277,6 @@ def test_factory_requests_exact_parent_and_order_groups(monkeypatch):
         dtype="uint64",
         byte_order=None,
         header_bytes=0,
-        manifest_sha256=ORDER_HASH,
     )
     calls = []
 
@@ -290,11 +288,38 @@ def test_factory_requests_exact_parent_and_order_groups(monkeypatch):
     fake_read = types.ModuleType("edullm_data.read")
     fake_s3 = types.ModuleType("edullm_data.s3")
     fake_read.dataset_paths = dataset_paths
+    fake_read.DATA_BUCKET = "edullm-data"
+
+    class S3:
+        metadata_reads = []
+
+        def get(self, bucket, key):
+            self.metadata_reads.append((bucket, key))
+            order_metadata = key.startswith("curriculum/")
+            dataset_id = (
+                "curriculum/opt-with-synthetic-10b"
+                if order_metadata
+                else "pretrain/opt-with-synthetic-10b"
+            )
+            return json.dumps(
+                {
+                    "dataset_id": dataset_id,
+                    "version": {"id": "v1"},
+                    "groups": [
+                        {
+                            "name": "mtld" if order_metadata else "tokens",
+                            "manifest_sha256": ORDER_HASH if order_metadata else PARENT_HASH,
+                        }
+                    ],
+                }
+            ).encode()
+
+    s3 = S3()
 
     class Boto3S3:
         @classmethod
         def default(cls):
-            return object()
+            return s3
 
     fake_s3.Boto3S3 = Boto3S3
     monkeypatch.setitem(sys.modules, "edullm_data", fake_package)
@@ -314,6 +339,7 @@ def test_factory_requests_exact_parent_and_order_groups(monkeypatch):
         ("curriculum/opt-with-synthetic-10b", "mtld"),
     ]
     assert all(kwargs["data_bucket"] == "edullm-data-us-east-2" for _, _, _, kwargs in calls)
+    assert len(s3.metadata_reads) == 2
 
 
 def test_synthetic_factory_loader_checkpoint_resume_end_to_end(monkeypatch, tmp_path):
@@ -368,6 +394,7 @@ def test_synthetic_factory_loader_checkpoint_resume_end_to_end(monkeypatch, tmp_
     fake_read = types.ModuleType("edullm_data.read")
     fake_s3 = types.ModuleType("edullm_data.s3")
     fake_read.dataset_paths = dataset_paths
+    fake_read.DATA_BUCKET = "edullm-data"
 
     class Boto3S3:
         @classmethod
