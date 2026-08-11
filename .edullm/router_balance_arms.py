@@ -196,6 +196,27 @@ ARMS: List[Arm] = [
         "comparing two boxes. Three hundred steps is plenty -- there is no controller to "
         "converge, the balance is perfect from step one.",
     ),
+    Arm(
+        name="rb-lb10-long",
+        stop=1500,
+        lb=0.1,
+        why="THE ARM THE FIRST ROUND MADE NECESSARY. lb=0.1 was the fastest thing in the sweep by "
+        "a distance -- +29% against the anchor, imbalance 1.74, every block flattened -- and it "
+        "was also the only arm whose held-out loss was clearly WORSE than the anchor's: 4.0201 "
+        "against 3.9066 at step 500. Eight hundred steps cannot say whether that is a gap or a "
+        "delay. Fifteen hundred puts it on exactly the step the 0.0001 arm reported 3.0627 at, "
+        "and a matched-step comparison there is what decides whether the extra fourteen points "
+        "of throughput can be taken at all.",
+    ),
+    Arm(
+        name="rb-lb3",
+        stop=1500,
+        lb=0.03,
+        why="Between the recipe's 0.01 and the 0.1 that was fast and lossy, because nothing says "
+        "the trade is linear. Balance improved 4.88 -> 1.74 for a tenfold weight; if most of that "
+        "arrives by threefold while the loss penalty is mostly avoided, this is the arm that "
+        "should ship rather than either neighbour.",
+    ),
 ]
 
 
