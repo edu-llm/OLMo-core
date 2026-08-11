@@ -2,18 +2,8 @@
 Vision encoder modules for multimodal (VLM) training.
 """
 
-from .config import (
-    VisionBlockConfig,
-    VisionBlockType,
-    VisionEncoderConfig,
-    VisionEncoderType,
-)
-from .connector import (
-    ImagePoolingType,
-    ImageProjectorType,
-    VisionConnector,
-    VisionConnectorConfig,
-)
+from .config import VisionBlockConfig, VisionBlockType, VisionEncoderConfig, VisionEncoderType
+from .connector import ImagePoolingType, ImageProjectorType, VisionConnector, VisionConnectorConfig
 from .image_vit import VisionTransformer, ViTAttention, ViTBlock, ViTMLP
 from .multimodal import MultimodalLM, MultimodalLMConfig
 

@@ -13,11 +13,7 @@ from olmo_core.nn.transformer.block import (
     ReorderedNormTransformerBlock,
     TransformerBlock,
 )
-from olmo_core.nn.transformer.model import (
-    MoETransformer,
-    NormalizedTransformer,
-    Transformer,
-)
+from olmo_core.nn.transformer.model import MoETransformer, NormalizedTransformer, Transformer
 
 log = logging.getLogger(__name__)
 

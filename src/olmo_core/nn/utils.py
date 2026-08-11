@@ -2,11 +2,7 @@ from collections import defaultdict
 from typing import Dict, Tuple, Type
 
 import torch
-from torch.distributed.tensor.parallel import (
-    ColwiseParallel,
-    PrepareModuleInput,
-    RowwiseParallel,
-)
+from torch.distributed.tensor.parallel import ColwiseParallel, PrepareModuleInput, RowwiseParallel
 
 
 def _get_custom_checkpoint_policy(meta: Dict[str, int]):

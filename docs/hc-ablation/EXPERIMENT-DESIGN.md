@@ -39,6 +39,23 @@ usage should make learned mixing start to matter.
 hyper-connection config, which is off by default and leaves the untreated path bit-identical.
 Nothing else moves between the treatment arm and its reference.
 
+**What that flag turns on is a package, and the estimand is named as one.** Enabling it chooses
+a utilisation statistic (`dispersion`, the share of residual energy each stream carries that no
+other stream carries) *and* a penalty form (`entropy`), and both default away from the literal
+mirror of MoE's loss for reasons measured in `src/test/nn/stream_balance_test.py`: the naive
+statistic is uniform at full collapse, and the squared-share form stops responding as the
+collapse deepens. So the contrast under test is **"the dispersion-entropy stream-balancing
+package, on or off"**, not "stream balancing in the abstract". The two components are exposed as
+config values so a later tranche can separate them; this one does not, and does not claim to.
+
+Two things the treatment cannot do, stated here rather than discovered later. Its gradient is
+proportional to the deviation between streams, which is quadratic in the utilisation statistic,
+so **at exact collapse the treatment's own gradient is zero too** — it amplifies an existing
+asymmetry rather than creating one, which is what `init_noise_std` is for and why it must stay
+nonzero in every arm. And the weight is applied **per wrapped sub-layer**: 12 blocks x 2
+hyper-connections at 0.01 each, so the model-level total is up to 0.24 and is not comparable to
+`MoEConfig.lb_loss_weight`'s 0.01, which is one router's.
+
 ## 2. What the machine actually is, and why it is not the p5 node
 
 The brief for this work said "one p5 node (8xH100 80GB) for 12 hours", and observed correctly
@@ -252,9 +269,18 @@ The largest effect the literature attributes to hyper-connections *in total* is 
 does not add hyper-connections, it tries to make the mixing matrix inside them useful, and the
 same literature says that matrix is currently worth zero or slightly negative. So the honest
 prior on H1 is **well under 0.030 nats**, against an MDE of 0.0347 at five seeds and 0.0267 at
-ten. Buying seeds does not close it: the MDE falls as `1/sqrt(seeds)` and would need about 30
-seeds per arm — 120 cells, $2,900 priced — to reach 0.014, which is still only a guess at the
-effect.
+ten. Buying seeds does not close it: the MDE falls as `1/sqrt(seeds)` and is 0.0267 at eight seeds
+and 0.0237 at ten, so reaching 0.014 needs about 30 seeds an arm — 120 cells — which is still
+only a guess at the effect.
+
+**Two caveats on that table, both of which make it an upper bound rather than the number.** The
+standard errors are the independent-arm ones and the primary analysis is the *paired*
+difference, which can only be smaller; the within-pair correlation that would say how much
+smaller has not been measured, and the table is quoted unpaired because that is the honest
+direction to be wrong in. And the `2·SE` gate is not the same test as the 5% MDE: at df = 16 a
+two-sided `2·SE` threshold is alpha 0.063, not 0.05. Both numbers are reported per contrast so
+a reader can apply whichever they want; the gate is `2·SE` and the exact two-sided t p-value is
+printed beside every contrast.
 
 Two further reasons to expect less, not more:
 
@@ -338,15 +364,33 @@ n = 5 is low; **a pass is not evidence of equal variances and will not be writte
 | primary `D` and gradient ratio | loss (H1/H4) | reading | what we do |
 | --- | --- | --- | --- |
 | does not move | anything | the treatment does not do its own job | fix the implementation; claim nothing |
-| moves | inside the interval | **the mechanism hypothesis is refuted at this scale**: streams un-collapsed, mixer moving, and it buys nothing | **abandon the idea.** Write it up as a null with the mechanism evidence, which is worth more than a shrug |
+| moves | inside the interval, upper bound below 0.03 | the mechanism happened and bought nothing **detectable at this power** | see the sentence below the table: this is not on its own a refutation |
 | moves | H1 clears the gate, H4 does not | balancing helps and the interaction is unresolved | do not claim the mechanism. H5 says whether it is a generic regulariser |
 | moves | H1 and H4 both clear the gate | the prediction holds | fund a replication at 1B and a longer horizon before claiming anything |
 
-**What would make us abandon the idea, stated as a single sentence so it cannot be
-renegotiated afterwards:** a treatment that demonstrably un-collapses the streams and
-demonstrably moves `H_res` off its initialisation, and whose loss difference against its own
-reference has a 95% interval containing zero and an upper bound below 0.03 nats, kills the
-hypothesis that collapse is why learned mixing looks useless.
+**What would make us abandon the idea.** An earlier version of this document said: a treatment
+that demonstrably un-collapses the streams, demonstrably moves `H_res`, and whose loss interval
+contains zero with an upper bound below 0.03 nats, kills the hypothesis. **That rule is not
+sound and is withdrawn.** The MDE on that contrast is 0.035, so a real effect of 0.01 nats — a
+third of what the whole of hyper-connections is worth in the literature, and a perfectly
+interesting result — satisfies it. It is a rule that abandons the idea for being under-powered
+against it, which is the failure this document spends section 6 diagnosing in somebody else's
+design.
+
+What replaces it is narrower and is what this budget can actually support:
+
+- **The idea is abandoned if the mechanism does not happen.** If the balanced arms do not
+  un-collapse the streams and do not move `H_res` off its initialisation, then the claim that
+  collapse is what freezes the mixer has been tested by the one instrument that can test it here
+  and has failed. That is a mechanism claim answered on a mechanism endpoint, and it is
+  conclusive at this budget.
+- **The idea is not abandoned on a loss null.** If the mechanism happens and the loss interval
+  contains zero, the honest conclusion is that the effect on loss is smaller than 0.035 nats at
+  this scale and this horizon, which is reported as a bound and as an argument for a replication
+  at 1B, not as a refutation. Turning that into a real equivalence claim needs a stated smallest
+  relevant effect and a TOST powered against it, and this design cannot supply one: the smallest
+  margin it could reject is larger than the effect the literature attributes to the entire
+  method.
 
 **What is fixed here and may not move afterwards:** the arms and their definitions, the primary
 and secondary endpoints, the gate, the seed count, the horizon, the corpus, and the four rows

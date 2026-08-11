@@ -2,10 +2,7 @@ from typing import Dict
 
 import pytest
 
-from olmo_core.nn.conversion.state_mapping import (
-    StateMappingTemplate,
-    TemplatePlaceholder,
-)
+from olmo_core.nn.conversion.state_mapping import StateMappingTemplate, TemplatePlaceholder
 
 EXPERT = TemplatePlaceholder.EXPERT
 LAYER = TemplatePlaceholder.LAYER

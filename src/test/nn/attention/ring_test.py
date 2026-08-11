@@ -1,9 +1,6 @@
 import torch
 
-from olmo_core.nn.attention.ring import (
-    RingAttentionZigZagLoadBalancer,
-    UlyssesLoadBalancer,
-)
+from olmo_core.nn.attention.ring import RingAttentionZigZagLoadBalancer, UlyssesLoadBalancer
 
 
 def _get_zigzag_lb(rank: int, world_size: int) -> RingAttentionZigZagLoadBalancer:

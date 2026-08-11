@@ -13,15 +13,8 @@ from torch.distributed.tensor import DTensor, Shard, init_device_mesh
 import olmo_core.nn.transformer.model as transformer_model
 from olmo_core.config import DType
 from olmo_core.data.utils import get_labels
-from olmo_core.distributed.checkpoint import (
-    load_model_and_optim_state,
-    save_model_and_optim_state,
-)
-from olmo_core.distributed.parallel import (
-    DataParallelConfig,
-    DataParallelType,
-    build_world_mesh,
-)
+from olmo_core.distributed.checkpoint import load_model_and_optim_state, save_model_and_optim_state
+from olmo_core.distributed.parallel import DataParallelConfig, DataParallelType, build_world_mesh
 from olmo_core.distributed.utils import get_full_tensor, get_world_size
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.nn.attention import (
@@ -31,10 +24,7 @@ from olmo_core.nn.attention import (
     RingAttentionLoadBalancerType,
     SlidingWindowAttentionConfig,
 )
-from olmo_core.nn.attention.ring import (
-    RingContextParallelStyle,
-    UlyssesContextParallelStyle,
-)
+from olmo_core.nn.attention.ring import RingContextParallelStyle, UlyssesContextParallelStyle
 from olmo_core.nn.feed_forward import ActivationFunction, FeedForwardConfig
 from olmo_core.nn.layer_norm import LayerNorm, LayerNormConfig, LayerNormType
 from olmo_core.nn.lm_head import LMHeadConfig
@@ -60,9 +50,7 @@ from olmo_core.testing import (
     run_distributed_test,
 )
 from olmo_core.testing.utils import FLA_MARKS, has_fla, requires_fla, requires_gpu
-from olmo_core.train.train_module.transformer.config import (
-    TransformerPipelineParallelConfig,
-)
+from olmo_core.train.train_module.transformer.config import TransformerPipelineParallelConfig
 from olmo_core.utils import get_default_device, seed_all
 
 log = logging.getLogger(__name__)

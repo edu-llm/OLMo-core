@@ -15,11 +15,7 @@ from torch.distributed.tensor import DTensor
 from torch.optim import Optimizer
 
 from olmo_core.data.utils import get_labels
-from olmo_core.distributed.checkpoint import (
-    merge_state_dicts,
-    prune_state_dict,
-    swap_param_keys,
-)
+from olmo_core.distributed.checkpoint import merge_state_dicts, prune_state_dict, swap_param_keys
 from olmo_core.distributed.parallel import (
     PipelineSchedule,
     build_world_mesh,
@@ -41,13 +37,7 @@ from olmo_core.nn.lm_head import LMOutputWithLoss
 from olmo_core.nn.transformer import Transformer
 from olmo_core.optim import OptimConfig, SkipStepOptimizer
 from olmo_core.optim.scheduler import Scheduler
-from olmo_core.utils import (
-    gc_cuda,
-    get_default_device,
-    log_once,
-    move_to_device,
-    warn_once,
-)
+from olmo_core.utils import gc_cuda, get_default_device, log_once, move_to_device, warn_once
 
 from ...common import MetricMergeStrategy, ReduceType
 from ..train_module import EvalBatchSizeUnit, EvalBatchSpec, TrainModule

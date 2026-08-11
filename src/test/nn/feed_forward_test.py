@@ -4,10 +4,7 @@ import pytest
 import torch
 from torch.distributed.tensor import Shard, init_device_mesh
 
-from olmo_core.distributed.checkpoint import (
-    load_model_and_optim_state,
-    save_model_and_optim_state,
-)
+from olmo_core.distributed.checkpoint import load_model_and_optim_state, save_model_and_optim_state
 from olmo_core.distributed.utils import get_rank, get_world_size
 from olmo_core.nn.feed_forward import ActivationFunction, FeedForward
 from olmo_core.testing import BACKENDS, run_distributed_test

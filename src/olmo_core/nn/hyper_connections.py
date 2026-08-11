@@ -624,6 +624,16 @@ class HyperConnection(nn.Module):
         # checkpoint, and a buffer would have to be sharded by FSDP for no reason.
         self._balance_loss: Optional[torch.Tensor] = None
         self._utilisation: Optional[torch.Tensor] = None
+        # Turned on for one step at a time by `HyperConnectionMonitorCallback`, and off the
+        # rest of the time.
+        #
+        # **THIS IS WHAT LETS AN UNTREATED ARM REPORT ITS COLLAPSE, AND WITHOUT IT THE
+        # EXPERIMENT CANNOT BE READ.** The balancing loss computes the utilisation as a side
+        # effect, so a treated arm logged a dispersion share and a control arm logged nothing --
+        # which is to say the comparison the whole design rests on had a number on one side of
+        # it. Under this flag the statistic is computed under `no_grad` and recorded, and
+        # nothing is attached to the graph, so a control arm stays numerically a control arm.
+        self.diagnostics_enabled: bool = False
 
         n = self.n_streams
         self.h_pre_logits = nn.Parameter(torch.empty(n, device=init_device, dtype=dtype))
@@ -743,9 +753,17 @@ class HyperConnection(nn.Module):
             mask = mask & ~mask.all(dim=-1, keepdim=True)
         return logits.masked_fill(mask, float("-inf"))
 
-    def residual_mixer(self) -> torch.Tensor:
+    def residual_mixer(self, *, deterministic: bool = False) -> torch.Tensor:
         """
         Build the residual mixer :math:`H_{res}`.
+
+        :param deterministic: Skip the residual-logit dropout even in training mode. **Anything
+            that reads this matrix to measure it rather than to use it must pass ``True``.**
+            The dropout masks entries to ``-inf`` before the constraint map, so a matrix read
+            during training is a draw and not the matrix: measured on an unchanged parameter,
+            successive reads differ from the initialisation by 0.44 to 0.86 in relative
+            Frobenius norm while the underlying logits have not moved at all. A displacement
+            monitor that did not pass this would report dropout as learning.
 
         Computed in :data:`~HyperConnectionConfig.dtype` (``float32`` by default) whatever dtype
         the parameters and activations are in.
@@ -770,7 +788,8 @@ class HyperConnection(nn.Module):
         if self.mixer == ResidualMixerType.unconstrained:
             return logits
 
-        logits = self._drop_residual_logits(logits)
+        if not deterministic:
+            logits = self._drop_residual_logits(logits)
 
         if self.mixer == ResidualMixerType.sinkhorn:
             return sinkhorn_log_space(
@@ -878,6 +897,11 @@ class HyperConnection(nn.Module):
         :returns: The same tensor, with the auxiliary loss attached when the loss is on.
         """
         if self.stream_balance_loss_weight <= 0.0:
+            if self.diagnostics_enabled:
+                with torch.no_grad():
+                    self._utilisation = stream_utilisation(
+                        streams, statistic=self.stream_balance_statistic
+                    )
             return streams
 
         utilisation = stream_utilisation(streams, statistic=self.stream_balance_statistic)
@@ -939,6 +963,10 @@ class HyperConnection(nn.Module):
                 # movement this whole treatment is judged on.
                 out["stream dispersion share"] = (utilisation[1:].sum(), ReduceType.mean)
 
+        read_concentration, write_concentration = self.gate_concentration()
+        out["read gate concentration"] = (read_concentration, ReduceType.mean)
+        out["write gate concentration"] = (write_concentration, ReduceType.mean)
+
         if self._balance_loss is not None:
             out["stream balance loss"] = (
                 self.stream_balance_loss_weight * self._balance_loss,
@@ -957,6 +985,33 @@ class HyperConnection(nn.Module):
         """
         self._balance_loss = None
         self._utilisation = None
+
+    def stream_norms(self, streams: torch.Tensor) -> torch.Tensor:
+        """
+        The mean L2 norm of each stream, which is the collapse probe stated plainly.
+
+        :param streams: A tensor of shape ``(batch_size, seq_len, n_streams, d_model)``.
+
+        :returns: A ``float32`` vector of length ``n_streams``.
+        """
+        return streams.float().norm(dim=-1).mean(dim=(0, 1))
+
+    def gate_concentration(self) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        How concentrated the read-in and write-out gates are, on ``[0, 1]``.
+
+        Alimaskina et al.'s stream-dominance probe: the gates, not the content. Zero is uniform
+        over the streams and one is everything on a single stream, so the two together separate
+        "one stream dominates because the gates say so" from "the streams carry the same thing".
+
+        :returns: ``(read_concentration, write_concentration)``.
+        """
+        results = []
+        for gate in (self.read_in_gate(), self.write_out_gate()):
+            shares = gate.float() / gate.float().sum().clamp_min(1e-12)
+            bins = shares.shape[-1]
+            results.append((bins * shares.pow(2).sum() - 1.0) / (bins - 1))
+        return results[0], results[1]
 
     def forward(
         self,

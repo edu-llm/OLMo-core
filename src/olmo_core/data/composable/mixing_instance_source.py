@@ -17,12 +17,7 @@ from .instance_source import (
     InstanceSourceConfig,
 )
 from .sampling_instance_source import SamplingInstanceSource
-from .utils import (
-    SEED_NOT_SET,
-    calculate_sample_sizes,
-    format_token_count,
-    resolve_seed,
-)
+from .utils import SEED_NOT_SET, calculate_sample_sizes, format_token_count, resolve_seed
 
 log = logging.getLogger(__name__)
 

@@ -15,10 +15,7 @@ from .source_abc import SourceABC
 from .utils import SEED_NOT_SET, resolve_seed
 
 if TYPE_CHECKING:
-    from .sampling_instance_source import (
-        SamplingInstanceSource,
-        SamplingInstanceSourceConfig,
-    )
+    from .sampling_instance_source import SamplingInstanceSource, SamplingInstanceSourceConfig
     from .sliced_instance_source import SlicedInstanceSource
 
 

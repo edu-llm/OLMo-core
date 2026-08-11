@@ -17,12 +17,7 @@ from .token_source import (
     DocumentSourceConfig,
     TokenRange,
 )
-from .utils import (
-    SEED_NOT_SET,
-    calculate_sample_sizes,
-    format_token_count,
-    resolve_seed,
-)
+from .utils import SEED_NOT_SET, calculate_sample_sizes, format_token_count, resolve_seed
 
 log = logging.getLogger(__name__)
 

@@ -7,10 +7,7 @@ import torch.nn as nn
 
 from olmo_core.config import Config, DType
 from olmo_core.exceptions import OLMoConfigurationError
-from olmo_core.utils import (
-    BFLOAT16_MIN_COMPUTE_CAPABILITY,
-    get_devices_without_bfloat16,
-)
+from olmo_core.utils import BFLOAT16_MIN_COMPUTE_CAPABILITY, get_devices_without_bfloat16
 
 if TYPE_CHECKING:
     from .train_module import TrainModule

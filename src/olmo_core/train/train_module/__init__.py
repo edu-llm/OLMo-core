@@ -1,10 +1,5 @@
 from .config import TrainModuleConfig, validate_precision_support
-from .train_module import (
-    BasicTrainModule,
-    EvalBatchSizeUnit,
-    EvalBatchSpec,
-    TrainModule,
-)
+from .train_module import BasicTrainModule, EvalBatchSizeUnit, EvalBatchSpec, TrainModule
 from .transformer import (
     TransformerActivationCheckpointingConfig,
     TransformerActivationCheckpointingMode,

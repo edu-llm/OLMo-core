@@ -318,8 +318,11 @@ CONTRASTS: Tuple[Contrast, ...] = (
         reads="whether mixing earns its keep once the streams are not collapsed.",
     ),
     Contrast(
+        # H3 is (0, +1, 0, -1) and H2 is (+1, 0, -1, 0), so H3 - H2 is (-1, +1, +1, -1). This
+        # read (+1, -1, -1, +1), which is the negative: the same standard error and MDE, and the
+        # opposite sign on the estimate, on a hypothesis whose whole content is directional.
         name="H4  the interaction (H3 - H2)",
-        weights=(1.0, -1.0, -1.0, 1.0),
+        weights=(-1.0, 1.0, 1.0, -1.0),
         reads=(
             "THE MECHANISM CLAIM. Balancing should help a LEARNED mixer more than it helps a "
             "pinned one; anything else and balancing is a generic regulariser."

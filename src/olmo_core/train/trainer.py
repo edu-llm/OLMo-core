@@ -45,15 +45,7 @@ from ..distributed.utils import (
     is_distributed,
 )
 from ..exceptions import OLMoConfigurationError
-from ..io import (
-    copy_dir,
-    copy_file,
-    dir_is_empty,
-    file_exists,
-    is_url,
-    join_path,
-    normalize_path,
-)
+from ..io import copy_dir, copy_file, dir_is_empty, file_exists, is_url, join_path, normalize_path
 from ..utils import cuda_sync_debug_mode, gc_cuda, get_default_thread_count
 from .callbacks import (
     Callback,

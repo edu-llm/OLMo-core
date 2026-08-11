@@ -870,6 +870,11 @@ def test_router_auxiliary_loss_survives_the_write_out_gate(
     **THIS HAS NEVER BEEN RUN**, for the reason on the test above. It is the single most
     important GPU check in this file: if it fails, the MoE arms train with an unbalanced router
     and the experiment measures the wrong thing while looking healthy.
+
+    An earlier version of it could not fail. It ran an ordinary backward on the cross-entropy
+    and asserted the router had a gradient — which it does regardless, because the primary loss
+    flows through the expert weights the router produces. The primary term is multiplied by zero
+    now, so the only remaining path to a router gradient is the attached auxiliary loss.
     """
     del base_block, n_hc
     seed_all(23)
@@ -884,7 +889,12 @@ def test_router_auxiliary_loss_survives_the_write_out_gate(
     labels = torch.randint(0, 256, (2, 8), device=device)
     out = model(input_ids, labels=labels)
     loss = out[0] if isinstance(out, tuple) else out
-    loss.sum().backward()
+    # **MULTIPLIED BY ZERO, WHICH IS THE ENTIRE POINT OF THIS TEST.** The router receives
+    # gradients from the primary objective anyway, through the expert weights it produces, so a
+    # backward on the cross-entropy gives it a gradient whether or not the auxiliary loss is
+    # attached at all -- and this test passed with `attach_auxiliary_loss` deleted. Zeroing the
+    # primary term leaves the attached auxiliary loss as the only thing that can produce one.
+    (loss.sum() * 0.0).backward()
 
     for block in model.blocks.values():
         router_grads = [

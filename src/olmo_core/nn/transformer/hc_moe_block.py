@@ -58,9 +58,14 @@ class HyperConnectionMoEBlockMixin(HyperConnectionBlockMixin):
     """
     The half of a hyper-connected MoE block that does not depend on which MoE block it is.
 
-    Adds two things to :class:`~olmo_core.nn.transformer.HyperConnectionBlockMixin`: the
-    ``__init__`` that every MoE variant shares, and the expert-parallelism refusal.
+    Adds three things to :class:`~olmo_core.nn.transformer.HyperConnectionBlockMixin`: the
+    ``__init__`` that every MoE variant shares, the FSDP plan that keeps the router and the
+    routing parameters in float32, and the expert-parallelism refusal.
     """
+
+    #: Declared for the type checker; it comes from ``MoETransformerBlock``, which every
+    #: concrete user of this mixin also inherits.
+    feed_forward_moe: "torch.nn.Module"
 
     def _init_moe_hyper_connections(
         self,
@@ -95,6 +100,58 @@ class HyperConnectionMoEBlockMixin(HyperConnectionBlockMixin):
         self._init_hyper_connections(
             hyper_connection, names=names, init_device=init_device, dropout=dropout
         )
+
+    def apply_fsdp(
+        self,
+        dp_mesh: Optional[DeviceMesh] = None,
+        prefetch_factor: int = 0,
+        wrapping_strategy: Optional[object] = None,
+        **fsdp_kwargs,
+    ):
+        """
+        Shard the block, holding the router and the routing parameters in float32.
+
+        **THIS OVERRIDE IS LOAD-BEARING AND ITS ABSENCE WAS SILENT.**
+        ``MoEHybridTransformerBlockBase.apply_fsdp`` shards ``feed_forward_moe.router`` under
+        ``MixedPrecisionPolicy(param_dtype=torch.float32)`` and says why: the router's decision
+        is a discrete argmax over small differences and rounding it changes which expert a token
+        goes to. ``MoEReorderedNormTransformerBlock.apply_fsdp`` -- which is what the arms in
+        ``docs/hc-ablation/EXPERIMENT-DESIGN.md`` actually run -- does not, so under
+        ``param_dtype=bfloat16`` the router's weights are bfloat16 inside the forward and the
+        ``.float()`` in the router upcasts numbers that have already been rounded.
+
+        The same is true of every :class:`~olmo_core.nn.hyper_connections.HyperConnection`, and
+        it is worse there. The whole claim of mHC is that ``H_res`` is doubly stochastic, and in
+        bfloat16 the Sinkhorn fixed point is reached to about two decimal digits and the row and
+        column sums drift far enough off 1 that the property stops holding. The module computes
+        its routing in float32 and the test suite asserts that it does -- but it can only
+        compute in float32 from whatever the parameter holds, and FSDP decides that. A
+        bfloat16-sharded gate is a float32 computation over three decimal digits of input.
+
+        Neither shows up as an error and neither shows up on a CPU, where FSDP is not applied.
+        So both are sharded here under their own float32 policies, before the block root.
+
+        :param dp_mesh: The data-parallel mesh.
+        :param prefetch_factor: Accepted and ignored; the prefetch plans in ``block.py`` name
+            sub-modules this method has already placed under their own policies.
+        :param wrapping_strategy: Accepted and ignored, for the same reason.
+        :param fsdp_kwargs: Forwarded to ``fully_shard`` for the block root.
+        """
+        del prefetch_factor, wrapping_strategy
+        from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+
+        from ..hyper_connections import HyperConnection
+
+        float32 = MixedPrecisionPolicy(param_dtype=torch.float32)
+        fully_shard(self.feed_forward_moe.router, mesh=dp_mesh, mp_policy=float32)
+        for module in self.hyper_connections:
+            if isinstance(module, HyperConnection) and any(module.parameters(recurse=False)):
+                fully_shard(module, mesh=dp_mesh, mp_policy=float32)
+        # The root last, and with the caller's own kwargs: everything already sharded above is
+        # skipped by `fully_shard`, and the wrapping strategy is deliberately not honoured here
+        # because the fine-grained plans in `block.py` name sub-modules by attribute and would
+        # re-shard the two this method just placed.
+        fully_shard(self, mesh=dp_mesh, **fsdp_kwargs)
 
     def apply_ep(self, ep_mesh: DeviceMesh, **kwargs):
         """

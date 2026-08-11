@@ -172,12 +172,38 @@ def test_disabled_is_bit_identical_to_the_untreated_baseline():
     assert any("_hc." in name for name in moved), moved
 
 
-def test_disabled_reports_no_balance_metrics():
+def test_disabled_reports_no_balance_loss_but_does_report_its_own_collapse():
+    """
+    An untreated arm reports no *loss* and does report its diagnostics, and the second half is
+    what makes the experiment readable.
+
+    The balancing loss computes the utilisation as a side effect, so for a while a treated arm
+    logged a dispersion share and its own control logged nothing — which is a comparison with a
+    number on one side of it. ``diagnostics_enabled`` is what the monitor turns on for the steps
+    it reads: under it the statistic is computed under ``no_grad`` and recorded, and nothing is
+    attached to the graph.
+    """
     model = _build(weight=0.0)
     x = torch.randint(0, 256, (2, 16))
+
+    model(x, labels=torch.roll(x, -1, dims=1))
+    metrics = model.compute_auxiliary_metrics(reset=True)
+    assert "stream balance loss" not in metrics
+    assert "stream dispersion share" not in metrics
+    # The gates are parameters rather than activations, so their concentration is readable on
+    # every arm at every step and costs nothing.
+    assert "read gate concentration" in metrics
+    assert "write gate concentration" in metrics
+
+    for block in model.blocks.values():
+        for hc in block.hyper_connections:
+            hc.diagnostics_enabled = True
     model(x, labels=torch.roll(x, -1, dims=1))
     metrics = model.compute_auxiliary_metrics(reset=False)
-    assert metrics == {}
+    assert "stream dispersion share" in metrics
+    assert "stream usage entropy" in metrics
+    # Still no loss: the diagnostic is a reading and not a term in the objective.
+    assert "stream balance loss" not in metrics
 
 
 def test_enabled_reports_the_metrics_a_reader_needs():
@@ -196,9 +222,12 @@ def test_enabled_reports_the_metrics_a_reader_needs():
     # Per block and per wrapped sub-layer, so a collapse localised to one depth is visible.
     assert "block 00/attention/stream dispersion share" in metrics
     assert "block 03/feed_forward/stream dispersion share" in metrics
-    # And the reset actually resets.
+    # And the reset actually resets: the activation-derived readings go, and the gate
+    # concentrations stay because they are read off parameters rather than accumulated.
     model.compute_auxiliary_metrics(reset=True)
-    assert model.compute_auxiliary_metrics(reset=False) == {}
+    after = model.compute_auxiliary_metrics(reset=False)
+    assert "stream balance loss" not in after
+    assert "stream dispersion share" not in after
 
 
 # ---------------------------------------------------------------------------------------------

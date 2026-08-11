@@ -17,16 +17,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Optimizer
 
 from olmo_core.data.utils import get_labels, split_batch
-from olmo_core.distributed.checkpoint import (
-    merge_state_dicts,
-    prune_state_dict,
-    swap_param_keys,
-)
-from olmo_core.distributed.parallel import (
-    DataParallelType,
-    build_world_mesh,
-    get_dp_process_group,
-)
+from olmo_core.distributed.checkpoint import merge_state_dicts, prune_state_dict, swap_param_keys
+from olmo_core.distributed.parallel import DataParallelType, build_world_mesh, get_dp_process_group
 from olmo_core.distributed.utils import (
     get_local_tensor,
     get_reduce_divide_factor,
@@ -40,13 +32,7 @@ from olmo_core.nn.transformer import Transformer
 from olmo_core.nn.transformer.config import TransformerActivationCheckpointingMode
 from olmo_core.optim import OptimConfig, SkipStepOptimizer
 from olmo_core.optim.scheduler import Scheduler
-from olmo_core.utils import (
-    gc_cuda,
-    get_default_device,
-    log_once,
-    move_to_device,
-    warn_once,
-)
+from olmo_core.utils import gc_cuda, get_default_device, log_once, move_to_device, warn_once
 
 from ...common import ReduceType
 from ..train_module import EvalBatchSpec, TrainModule

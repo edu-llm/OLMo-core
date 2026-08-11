@@ -53,17 +53,56 @@ class HyperConnectionMonitorCallback(Callback):
     def pre_train(self):
         """
         Snapshot every mixer at initialisation, so displacement has something to be measured
-        from.
+        from — **unless a resumed run has already restored one**.
 
-        Taken here rather than in ``__init__`` because a resumed run has already loaded its
-        checkpoint by this point, and a displacement measured from a resumed state would silently
-        restart at zero half way through a run.
+        The guard is the point. ``Trainer`` loads a checkpoint before ``pre_train``, so a
+        callback that snapshotted unconditionally would snapshot the *trained* state on the
+        second attempt and restart displacement at exactly zero half way through a run, with
+        nothing in the logs to say so. Two attempts are what this workload is priced for, so
+        that is not a corner case. :meth:`state_dict` is what carries the original across.
         """
         from olmo_core.nn.hyper_connections import HyperConnection
 
+        if self._initial:
+            return
         for name, module in self.trainer.train_module.model.named_modules():
             if isinstance(module, HyperConnection):
-                self._initial[name] = module.residual_mixer().detach().float().clone()
+                self._initial[name] = (
+                    module.residual_mixer(deterministic=True).detach().float().clone()
+                )
+
+    def state_dict(self) -> Dict[str, torch.Tensor]:
+        """
+        The initialisation snapshot, so a resumed run measures displacement from where the run
+        started rather than from where it resumed.
+
+        :returns: The snapshot, keyed by module name.
+        """
+        return {name: value.cpu() for name, value in self._initial.items()}
+
+    def load_state_dict(self, state_dict: Dict[str, torch.Tensor]):
+        """
+        Restore the initialisation snapshot.
+
+        :param state_dict: What :meth:`state_dict` returned.
+        """
+        self._initial = {name: value.clone() for name, value in state_dict.items()}
+
+    def pre_step(self, batch):
+        """
+        Turn the streams' diagnostics on for the steps this callback is going to read.
+
+        Off the rest of the time, and off entirely in an untreated arm otherwise, which is what
+        makes the untreated arm's collapse measurable at all: the balancing loss computes the
+        utilisation as a side effect, so without this a treated arm logged a dispersion share
+        and its own control logged nothing.
+
+        :param batch: The batch, unused.
+        """
+        del batch
+        wanted = self.interval > 0 and self.trainer.global_step % self.interval == 0
+        for _, module in self._hyper_connections():
+            module.diagnostics_enabled = wanted
 
     def _hyper_connections(self) -> List[Tuple[str, "torch.nn.Module"]]:
         from olmo_core.nn.hyper_connections import HyperConnection
@@ -102,7 +141,7 @@ class HyperConnectionMonitorCallback(Callback):
         worst_row_error = 0.0
 
         for name, module in connections:
-            mixer = module.residual_mixer().detach().float()
+            mixer = module.residual_mixer(deterministic=True).detach().float()
             initial = self._initial.get(name)
             if initial is not None and float(initial.norm()) > 0:
                 displacement = float((mixer - initial).norm() / initial.norm())
@@ -145,9 +184,13 @@ class HyperConnectionMonitorCallback(Callback):
         self.trainer.record_metric("hc/largest residual logit", largest_logit)
         self.trainer.record_metric("hc/doubly stochastic row error", worst_row_error)
 
+        # Per-stream L2 norms and the read/write gate concentrations are the other two probes
+        # `docs/hc-ablation/EXPERIMENT-DESIGN.md` names; the gates come out of
+        # `compute_auxiliary_metrics` on every arm and the norms need activations, which is why
+        # the utilisation statistic stands in for them here.
         if self.matrix_interval > 0 and step % self.matrix_interval == 0:
             for name, module in connections:
-                mixer = module.residual_mixer().detach().float()
+                mixer = module.residual_mixer(deterministic=True).detach().float()
                 for row in range(mixer.shape[0]):
                     for column in range(mixer.shape[1]):
                         self.trainer.record_metric(

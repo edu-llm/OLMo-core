@@ -15,14 +15,8 @@ from olmo_core.distributed.parallel.context_parallel import (
     all_to_all_single_hp2cp,
 )
 from olmo_core.nn.attention.base import SequenceMixer, SequenceMixerConfig
-from olmo_core.nn.attention.flash_linear_attn_api import (
-    dispatch_chunk_gated_delta_rule,
-    has_fla,
-)
-from olmo_core.nn.attention.ring import (
-    RingContextParallelStyle,
-    UlyssesContextParallelStyle,
-)
+from olmo_core.nn.attention.flash_linear_attn_api import dispatch_chunk_gated_delta_rule, has_fla
+from olmo_core.nn.attention.ring import RingContextParallelStyle, UlyssesContextParallelStyle
 from olmo_core.nn.buffer_cache import BufferCache
 from olmo_core.nn.convolution import CausalConv1d
 from olmo_core.nn.feed_forward import ActivationFunction

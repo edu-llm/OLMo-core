@@ -1,11 +1,7 @@
 import pytest
 import torch
 
-from olmo_core.nn.vision import (
-    VisionEncoderConfig,
-    VisionEncoderType,
-    VisionTransformer,
-)
+from olmo_core.nn.vision import VisionEncoderConfig, VisionEncoderType, VisionTransformer
 
 # ---------------------------------------------------------------------------
 # Tiny configs for fast CPU tests
