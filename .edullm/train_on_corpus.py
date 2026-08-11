@@ -148,6 +148,7 @@ from olmo_core.train.callbacks import (
 from olmo_core.train.checkpoint import Checkpointer
 from olmo_core.train.train_module import (
     TransformerDataParallelConfig,
+    TransformerExpertParallelConfig,
     TransformerTrainModuleConfig,
 )
 from olmo_core.utils import seed_all
@@ -889,6 +890,29 @@ def build_config(opts, overrides: List[str]):
             "--quant-backend and --native-packed-fallback require --quantize "
             "(use 'control' or 'ternary')",
         )
+    mesh_values = (opts.moe_shard_degree, opts.moe_num_replicas)
+    if any(value is not None for value in mesh_values):
+        if any(value is None or value <= 0 for value in mesh_values):
+            raise Refusal(
+                Stage.THE_CONFIG_WOULD_NOT_BUILD,
+                "--moe-shard-degree and --moe-num-replicas must both be positive",
+            )
+        expected_world_size = opts.moe_shard_degree * opts.moe_num_replicas
+        world_size = os.environ.get("WORLD_SIZE")
+        if world_size is not None:
+            try:
+                world_size_int = int(world_size)
+            except ValueError:
+                raise Refusal(
+                    Stage.THE_CONFIG_WOULD_NOT_BUILD,
+                    f"WORLD_SIZE must be an integer, got {world_size!r}",
+                ) from None
+            if world_size_int != expected_world_size:
+                raise Refusal(
+                    Stage.THE_CONFIG_WOULD_NOT_BUILD,
+                    f"WORLD_SIZE={world_size_int} does not match --moe-num-replicas="
+                    f"{opts.moe_num_replicas} x --moe-shard-degree={opts.moe_shard_degree}",
+                )
     corpus = resolve_corpus(
         dataset_id=opts.dataset_id,
         version=opts.dataset_version,
@@ -967,6 +991,28 @@ def build_config(opts, overrides: List[str]):
         num_workers=4,
     )
 
+    if opts.moe_shard_degree is not None:
+        dp_config = TransformerDataParallelConfig(
+            name=DataParallelType.hsdp,
+            param_dtype=DType(opts.param_dtype),
+            reduce_dtype=DType.float32,
+            num_replicas=opts.moe_num_replicas,
+            shard_degree=opts.moe_shard_degree,
+        )
+        ep_config = TransformerExpertParallelConfig(degree=opts.moe_shard_degree)
+        log.info(
+            "MoE mesh: %d replicas x %d HSDP/expert-parallel ranks",
+            opts.moe_num_replicas,
+            opts.moe_shard_degree,
+        )
+    else:
+        dp_config = TransformerDataParallelConfig(
+            name=DataParallelType.fsdp,
+            param_dtype=DType(opts.param_dtype),
+            reduce_dtype=DType.float32,
+        )
+        ep_config = None
+
     train_module_config = TransformerTrainModuleConfig(
         rank_microbatch_size=opts.rank_microbatch_size,
         max_sequence_length=opts.sequence_length,
@@ -1002,11 +1048,8 @@ def build_config(opts, overrides: List[str]):
         # reduce_dtype stays float32 and has no flag. It is the gradient reduction, fp32 is the
         # numerically safe answer at every scale this platform runs, and the dotted override
         # `train_module.dp_config.reduce_dtype=...` reaches it for anyone who disagrees.
-        dp_config=TransformerDataParallelConfig(
-            name=DataParallelType.fsdp,
-            param_dtype=DType(opts.param_dtype),
-            reduce_dtype=DType.float32,
-        ),
+        dp_config=dp_config,
+        ep_config=ep_config,
         max_grad_norm=1.0,
         scheduler=build_scheduler(opts),
         # Z-loss is a field on the TRAIN MODULE, not on the model and not on the trainer. The
@@ -1934,6 +1977,20 @@ def build_parser() -> argparse.ArgumentParser:
         "NOTE this flag is not numerics-neutral for an MoE: expert_capacity is computed from it "
         "(parallel_mlp.py:388-408), so it changes WHICH tokens get expert compute. Hold it fixed "
         "across every arm of a comparison.",
+    )
+    parser.add_argument(
+        "--moe-shard-degree",
+        type=int,
+        default=None,
+        help="HSDP and expert-parallel shard degree supplied by the capacity-block launcher. "
+        "When set, --moe-num-replicas is also required.",
+    )
+    parser.add_argument(
+        "--moe-num-replicas",
+        type=int,
+        default=None,
+        help="HSDP replica count supplied by the capacity-block launcher. When set, "
+        "--moe-shard-degree is also required.",
     )
     parser.add_argument(
         "--lm-loss-implementation",

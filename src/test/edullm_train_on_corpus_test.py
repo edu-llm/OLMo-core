@@ -334,6 +334,40 @@ def test_throughput_mode_can_remove_the_step0_checkpointer(monkeypatch):
     assert opts.no_init_loss_band is True
 
 
+def test_capacity_block_mesh_flags_configure_hsdp_and_expert_parallel(monkeypatch):
+    monkeypatch.setattr(
+        entry,
+        "resolve_corpus",
+        lambda **kwargs: entry.corpus_from_manifest(
+            FakeManifest(),
+            dataset_id=kwargs["dataset_id"],
+            version=kwargs["version"],
+            tokenizer_id=kwargs["tokenizer_id"],
+        ),
+    )
+    monkeypatch.setenv("WORLD_SIZE", "8")
+    opts, overrides = entry.build_parser().parse_known_args(
+        [
+            "mesh-run",
+            "--dataset-id=pretrain/regmix-10b",
+            "--dataset-version=v1",
+            "--dataset-tokenizer=tokenizer/dolma2-bpe",
+            "--save-folder=s3://outputs/mesh-run/checkpoints/",
+            "--model-factory=maple_m20",
+            "--moe-shard-degree=8",
+            "--moe-num-replicas=1",
+        ]
+    )
+
+    config = entry.build_config(opts, overrides)
+
+    assert overrides == []
+    assert config.train_module.dp_config.name.value == "hsdp"
+    assert config.train_module.dp_config.shard_degree == 8
+    assert config.train_module.dp_config.num_replicas == 1
+    assert config.train_module.ep_config.degree == 8
+
+
 def test_an_override_on_the_command_line_reaches_the_config(monkeypatch):
     # The escape hatch researchers actually use: everything after the flags is merged into the
     # config, so a person can change the learning rate without a new entry point.
