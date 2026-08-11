@@ -65,7 +65,8 @@
     "data_seed": 210007,
     "init_seed": 110007,
     "eval_steps": 2,
-    "target_tokens": 503316480
+    "target_tokens": 503316480,
+    "data_bucket": "edullm-data-us-east-2"
   },
   "worker_environment": {
     "EDULLM_DATASET_ID": "pretrain/opt-with-synthetic-10b",

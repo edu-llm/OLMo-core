@@ -122,7 +122,14 @@ def test_comparison_factory_builds_matched_train_and_eval_config(
     fake_package = types.ModuleType("edullm_data")
     fake_read = types.ModuleType("edullm_data.read")
     fake_s3 = types.ModuleType("edullm_data.s3")
-    fake_read.dataset_paths = lambda dataset_id, version, *, s3: read
+    data_buckets = []
+
+    def dataset_paths(dataset_id, version, *, s3, data_bucket=None):
+        del dataset_id, version, s3
+        data_buckets.append(data_bucket)
+        return read
+
+    fake_read.dataset_paths = dataset_paths
 
     class Boto3S3:
         @classmethod
@@ -143,7 +150,9 @@ def test_comparison_factory_builds_matched_train_and_eval_config(
         global_batch_size=32768,
         rank_microbatch_size=4096,
         eval_steps=2,
+        data_bucket="edullm-data-us-east-2",
     )
+    assert data_buckets == ["edullm-data-us-east-2"]
     assert config.dataset.paths == read.paths
     evaluator = config.trainer.callbacks["search_validation"]
     assert evaluator.eval_dataset.paths == read.val
@@ -318,6 +327,7 @@ def test_olmoe_curriculum_no_proxy_spec_combines_required_contracts():
     assert "global_batch_mult" not in json.dumps(spec["search_space"])
     assert spec["base_global_batch_size"] == 262_144
     assert spec["factory_kwargs"]["rank_microbatch_size"] == 32_768
+    assert spec["factory_kwargs"]["data_bucket"] == "edullm-data-us-east-2"
     assert spec["controller"]["worker_count"] == spec["max_workers"] == 6
     assert spec["controller"]["quantum"] == 50_331_648
     assert spec["controller"]["target_tokens"] == 503_316_480

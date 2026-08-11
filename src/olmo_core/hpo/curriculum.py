@@ -619,6 +619,7 @@ def _build_curriculum_hpo_experiment(
     eval_steps: int = 2,
     target_tokens: int = CURRICULUM_TARGET_TOKENS,
     work_dir: str = "/tmp/hpo-curriculum-data",
+    data_bucket: str | None = None,
 ) -> CurriculumExperimentConfig:
     """Build a supplied model recipe with arm 9's fixed token-progress MTLD pacing."""
 
@@ -645,24 +646,28 @@ def _build_curriculum_hpo_experiment(
         eval_steps=eval_steps,
         work_dir=work_dir,
         dataset_group=PARENT_DATASET_GROUP,
+        data_bucket=data_bucket,
     )
 
     from edullm_data.read import dataset_paths
     from edullm_data.s3 import Boto3S3
 
     s3 = Boto3S3.default()
+    read_kwargs: dict[str, Any] = {"s3": s3}
+    if data_bucket is not None:
+        read_kwargs["data_bucket"] = data_bucket
     parent_read = dataset_paths(
         PARENT_DATASET_ID,
         PARENT_DATASET_VERSION,
         group=PARENT_DATASET_GROUP,
-        s3=s3,
+        **read_kwargs,
     )
     order_read = dataset_paths(
         CURRICULUM_DATASET_ID,
         CURRICULUM_DATASET_VERSION,
         split="train",
         group=CURRICULUM_ORDER_GROUP,
-        s3=s3,
+        **read_kwargs,
     )
     corpus = curriculum_corpus_from_reads(parent_read, order_read)
     tokenizer = TokenizerConfig.dolma2()
@@ -718,6 +723,7 @@ def build_curriculum_hpo_experiment(
     eval_steps: int = 2,
     target_tokens: int = CURRICULUM_TARGET_TOKENS,
     work_dir: str = "/tmp/hpo-curriculum-data",
+    data_bucket: str | None = None,
 ) -> CurriculumExperimentConfig:
     """Build stock ``olmo2_190M`` with arm 9's fixed token-progress MTLD pacing."""
 
@@ -731,6 +737,7 @@ def build_curriculum_hpo_experiment(
         eval_steps=eval_steps,
         target_tokens=target_tokens,
         work_dir=work_dir,
+        data_bucket=data_bucket,
     )
 
 
@@ -744,6 +751,7 @@ def build_olmoe_curriculum_hpo_experiment(
     eval_steps: int = 2,
     target_tokens: int = CURRICULUM_TARGET_TOKENS,
     work_dir: str = "/tmp/hpo-olmoe-curriculum-data",
+    data_bucket: str | None = None,
 ) -> CurriculumExperimentConfig:
     """Build stock OLMoE-1B-7B with arm 9's fixed token-progress MTLD pacing."""
 
@@ -757,4 +765,5 @@ def build_olmoe_curriculum_hpo_experiment(
         eval_steps=eval_steps,
         target_tokens=target_tokens,
         work_dir=work_dir,
+        data_bucket=data_bucket,
     )

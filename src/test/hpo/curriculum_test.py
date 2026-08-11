@@ -305,7 +305,7 @@ def test_factory_requests_exact_parent_and_order_groups(monkeypatch):
     monkeypatch.setenv("EDULLM_DATASET_TOKENIZER", "tokenizer/dolma2-bpe")
     monkeypatch.setenv("EDULLM_CHECKPOINT_DIR", "/tmp/checkpoints")
 
-    config = build_curriculum_hpo_experiment()
+    config = build_curriculum_hpo_experiment(data_bucket="edullm-data-us-east-2")
 
     assert config.data_loader.order_dtype.value == "uint64"
     assert [(dataset_id, group) for dataset_id, _, group, _ in calls] == [
@@ -313,6 +313,7 @@ def test_factory_requests_exact_parent_and_order_groups(monkeypatch):
         ("pretrain/opt-with-synthetic-10b", "tokens"),
         ("curriculum/opt-with-synthetic-10b", "mtld"),
     ]
+    assert all(kwargs["data_bucket"] == "edullm-data-us-east-2" for _, _, _, kwargs in calls)
 
 
 def test_synthetic_factory_loader_checkpoint_resume_end_to_end(monkeypatch, tmp_path):

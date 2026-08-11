@@ -8,9 +8,10 @@ The OLMoE study has three additive probe specifications:
   MTLD curriculum and the 30% Centaur policy. This is the curriculum/no-proxy capacity run.
 
 These files do not replace the historical dense `hpo-no-proxy.json` or
-`hpo-no-centaur.json` arms. Both OLMoE arms use
+`hpo-no-centaur.json` arms. The two stock OLMoE arms use
 `olmo_core.hpo.comparison:build_olmoe_hpo_experiment`, exact fidelity, and an eight-dimensional
-search space. The global batch is fixed rather than searched.
+search space. The curriculum arm composes that same model recipe with the existing arm 9
+token-progress loader. The global batch is fixed rather than searched.
 
 ## Fixed batch and fidelity contract
 
@@ -19,9 +20,9 @@ search space. The global batch is fixed rather than searched.
 - Sequence length: 2,048 tokens.
 - Worker world size: 8 ranks on one node.
 - Gradient accumulation: `262144 / (8 * 32768) = 1`.
-- Quantum: 49,807,360 tokens (190 optimizer steps).
-- Target: 499,908,608 tokens (1,907 optimizer steps).
-- Budget: 2,000,158,720 tokens (7,630 optimizer steps).
+- Capacity-block data source: the read-only `edullm-data-us-east-2` corpus mirror.
+- Stock-arm quantum/target/budget: 49,807,360 / 499,908,608 / 2,000,158,720 tokens.
+- Curriculum-arm quantum/target/budget: 50,331,648 / 503,316,480 / 2,013,265,920 tokens.
 
 BTT minimum fidelity and the initial IPBT update interval equal one quantum. The batch,
 microbatch, sequence length, topology, quantum, target, and budget are frozen study inputs, not

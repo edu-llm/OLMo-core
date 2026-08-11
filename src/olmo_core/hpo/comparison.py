@@ -158,6 +158,7 @@ def build_comparison_experiment(
     eval_steps: int = 2,
     work_dir: str = "/tmp/hpo-comparison-data",
     dataset_group: str | None = None,
+    data_bucket: str | None = None,
 ) -> ComparisonExperimentConfig:
     """Build the matched model/data/eval contract used by both comparison arms."""
     if sequence_length <= 0 or global_batch_size <= 0:
@@ -180,6 +181,8 @@ def build_comparison_experiment(
     read_kwargs: dict[str, Any] = {"s3": Boto3S3.default()}
     if dataset_group is not None:
         read_kwargs["group"] = dataset_group
+    if data_bucket is not None:
+        read_kwargs["data_bucket"] = data_bucket
     read = dataset_paths(dataset_id, version, **read_kwargs)
     corpus = comparison_dataset_from_read(
         read,
@@ -284,6 +287,7 @@ def build_olmoe_hpo_experiment(
     eval_steps: int = 2,
     work_dir: str = "/tmp/hpo-comparison-data",
     dataset_group: str | None = None,
+    data_bucket: str | None = None,
 ) -> ComparisonExperimentConfig:
     """Build the stock OLMoE-1B-7B HPO experiment with its fixed eight-rank batch contract."""
 
@@ -312,6 +316,7 @@ def build_olmoe_hpo_experiment(
         eval_steps=eval_steps,
         work_dir=work_dir,
         dataset_group=dataset_group,
+        data_bucket=data_bucket,
     )
     config.model = TransformerConfig.olmoe_1B_7B(vocab_size=config.model.vocab_size)
     config.train_module = TransformerTrainModuleConfig(
