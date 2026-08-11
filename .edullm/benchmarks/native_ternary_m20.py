@@ -13,8 +13,19 @@ import gc
 import json
 import os
 import statistics
+import sys
 import time
 from typing import Callable, Dict
+
+# Benchmark the checkout that supplied this script, not the possibly older package baked into
+# the capacity-block image. The launcher clones the repository to /work, but resolving from this
+# file keeps the harness valid in worktrees and on developer machines as well.
+_REPO_SRC = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "src",
+)
+if os.path.isdir(_REPO_SRC):
+    sys.path.insert(0, _REPO_SRC)
 
 import torch
 import torch.nn.functional as F
