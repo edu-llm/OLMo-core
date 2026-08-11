@@ -1267,6 +1267,34 @@ class FakeManifestWithVal(FakeManifest):
     val: Optional[List[str]] = None
 
 
+def test_throughput_mode_can_disable_heldout_evaluation(monkeypatch):
+    monkeypatch.setattr(
+        entry,
+        "resolve_corpus",
+        lambda **kwargs: entry.corpus_from_manifest(
+            FakeManifestWithVal(val=["s3://edullm-data/x/v1/tokens/val-00000.u32le.bin"]),
+            dataset_id=kwargs["dataset_id"],
+            version=kwargs["version"],
+            tokenizer_id=kwargs["tokenizer_id"],
+        ),
+    )
+    opts, overrides = entry.build_parser().parse_known_args(
+        [
+            "throughput-run",
+            "--dataset-id=pretrain/regmix-10b",
+            "--dataset-version=v1",
+            "--dataset-tokenizer=tokenizer/dolma2-bpe",
+            "--save-folder=s3://outputs/throughput-run/checkpoints/",
+            "--no-evals",
+        ]
+    )
+
+    config = entry.build_config(opts, overrides)
+
+    assert opts.no_evals is True
+    assert "lm_eval" not in config.trainer.callbacks
+
+
 @pytest.mark.parametrize(
     "steps,expected",
     [

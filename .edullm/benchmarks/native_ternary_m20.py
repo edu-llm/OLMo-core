@@ -11,6 +11,7 @@ change to the opt-in status of ``native_packed``.
 import argparse
 import gc
 import json
+import os
 import statistics
 import time
 from typing import Callable, Dict
@@ -105,6 +106,10 @@ def main() -> None:
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--repeats", type=int, default=20)
     args = parser.parse_args()
+
+    # The capacity-block launcher always uses torchrun. Select the assigned card explicitly;
+    # otherwise every local rank defaults to cuda:0 and eight independent harnesses OOM it.
+    torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", "0")))
 
     status = native_packed_status()
     if not status["available"]:

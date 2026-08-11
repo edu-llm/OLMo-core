@@ -1145,7 +1145,7 @@ def build_config(opts, overrides: List[str]):
     # `{label}/CE loss` and `{label}/PPL` (eval/lm_evaluator.py:118-121), and no manifest
     # carries a UTF-8 byte denominator -- a .u32le.bin shard's `bytes` is 4x its tokens, the
     # storage width.
-    if corpus.val_paths:
+    if corpus.val_paths and not opts.no_evals:
         eval_steps = ladder_steps(opts.steps)
         # LOCAL paths, and this is load-bearing rather than an optimisation. `iter_document
         # _indices` only scans the array for EOS boundaries when the path is NOT a url
@@ -1205,6 +1205,12 @@ def build_config(opts, overrides: List[str]):
         )
         log.info(
             "held-out ladder at steps %s (from %d val shards)", eval_steps, len(corpus.val_paths)
+        )
+    elif opts.no_evals:
+        log.warning(
+            "HELD-OUT EVALUATION DELIBERATELY DISABLED for this throughput-only run; "
+            "training throughput excludes evaluator work and this run must not be cited as "
+            "validation evidence"
         )
     else:
         # Not fatal, but it must not pass silently: without a ladder the run still trains and
@@ -1820,6 +1826,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable only the step-0 CE-loss calibration band for a throughput diagnostic. "
         "Finite loss/gradient and all other requested metric assertions remain active; the run "
         "logs that initialization was not certified.",
+    )
+    parser.add_argument(
+        "--no-evals",
+        action="store_true",
+        help="Disable held-out evaluation for a disposable throughput run. This removes evaluator "
+        "startup and final scoring from the run, so it must not be cited as validation evidence.",
     )
     parser.add_argument(
         "--lr-schedule",

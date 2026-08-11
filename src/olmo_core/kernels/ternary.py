@@ -252,6 +252,146 @@ def _packed_matmul_transpose_kernel(
     tl.store(grad_input + offsets_m * IN_FEATURES + in_idx, acc, mask=valid_m)
 
 
+@triton.jit
+def _packed_dot_kernel(
+    x,
+    packed,
+    alpha,
+    output,
+    M: tl.constexpr,
+    OUT_FEATURES: tl.constexpr,
+    IN_FEATURES: tl.constexpr,
+    PACKED_IN: tl.constexpr,
+    ROWS_PER_EXPERT: tl.constexpr,
+    BLOCKS_M_PER_EXPERT: tl.constexpr,
+    GROUPED: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+):
+    """
+    Tensor-core packed forward for dense and fixed-capacity expert matrices.
+
+    The previous add/sub kernel assigned one program to one output feature. That reloaded every
+    activation once per output and reduced K in scalar ALUs, leaving Hopper tensor cores idle.
+    This kernel decodes only the current weight tile into registers and feeds BF16 trits to
+    ``tl.dot``; the full quantized matrix is never materialized.
+    """
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    if GROUPED:
+        expert = pid_m // BLOCKS_M_PER_EXPERT
+        local_block_m = pid_m % BLOCKS_M_PER_EXPERT
+        local_m = local_block_m * BLOCK_M + tl.arange(0, BLOCK_M)
+        offsets_m = expert * ROWS_PER_EXPERT + local_m
+        valid_m = local_m < ROWS_PER_EXPERT
+    else:
+        expert = 0
+        offsets_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+        valid_m = offsets_m < M
+
+    offsets_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    valid_n = offsets_n < OUT_FEATURES
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+
+    for k_start in tl.range(0, IN_FEATURES, BLOCK_K):
+        offsets_k = k_start + tl.arange(0, BLOCK_K)
+        valid_k = offsets_k < IN_FEATURES
+        activations = tl.load(
+            x + offsets_m[:, None] * IN_FEATURES + offsets_k[None, :],
+            mask=valid_m[:, None] & valid_k[None, :],
+            other=0.0,
+        ).to(tl.bfloat16)
+        words = tl.load(
+            packed
+            + (expert * OUT_FEATURES + offsets_n[:, None]) * PACKED_IN
+            + offsets_k[None, :] // 16,
+            mask=valid_n[:, None] & valid_k[None, :],
+            other=1,
+        )
+        codes = (words >> (2 * (offsets_k[None, :] % 16))) & 0x3
+        trits = tl.where(codes == 2, 1.0, tl.where(codes == 0, -1.0, 0.0)).to(
+            tl.bfloat16
+        )
+        acc += tl.dot(activations, tl.trans(trits))
+
+    row_alpha = tl.load(
+        alpha + expert * OUT_FEATURES + offsets_n, mask=valid_n, other=0.0
+    ).to(tl.float32)
+    tl.store(
+        output + offsets_m[:, None] * OUT_FEATURES + offsets_n[None, :],
+        acc * row_alpha[None, :],
+        mask=valid_m[:, None] & valid_n[None, :],
+    )
+
+
+@triton.jit
+def _packed_dot_transpose_kernel(
+    grad_output,
+    packed_t,
+    alpha,
+    grad_input,
+    M: tl.constexpr,
+    OUT_FEATURES: tl.constexpr,
+    IN_FEATURES: tl.constexpr,
+    PACKED_OUT: tl.constexpr,
+    ROWS_PER_EXPERT: tl.constexpr,
+    BLOCKS_M_PER_EXPERT: tl.constexpr,
+    GROUPED: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_I: tl.constexpr,
+    BLOCK_O: tl.constexpr,
+):
+    """Tensor-core input-gradient for dense and fixed-capacity packed matrices."""
+    pid_m = tl.program_id(0)
+    pid_i = tl.program_id(1)
+    if GROUPED:
+        expert = pid_m // BLOCKS_M_PER_EXPERT
+        local_block_m = pid_m % BLOCKS_M_PER_EXPERT
+        local_m = local_block_m * BLOCK_M + tl.arange(0, BLOCK_M)
+        offsets_m = expert * ROWS_PER_EXPERT + local_m
+        valid_m = local_m < ROWS_PER_EXPERT
+    else:
+        expert = 0
+        offsets_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+        valid_m = offsets_m < M
+
+    offsets_i = pid_i * BLOCK_I + tl.arange(0, BLOCK_I)
+    valid_i = offsets_i < IN_FEATURES
+    acc = tl.zeros((BLOCK_M, BLOCK_I), dtype=tl.float32)
+
+    for o_start in tl.range(0, OUT_FEATURES, BLOCK_O):
+        offsets_o = o_start + tl.arange(0, BLOCK_O)
+        valid_o = offsets_o < OUT_FEATURES
+        grad = tl.load(
+            grad_output + offsets_m[:, None] * OUT_FEATURES + offsets_o[None, :],
+            mask=valid_m[:, None] & valid_o[None, :],
+            other=0.0,
+        ).to(tl.bfloat16)
+        words = tl.load(
+            packed_t
+            + (expert * IN_FEATURES + offsets_i[None, :]) * PACKED_OUT
+            + offsets_o[:, None] // 16,
+            mask=valid_i[None, :] & valid_o[:, None],
+            other=1,
+        )
+        codes = (words >> (2 * (offsets_o[:, None] % 16))) & 0x3
+        trits = tl.where(codes == 2, 1.0, tl.where(codes == 0, -1.0, 0.0)).to(
+            tl.bfloat16
+        )
+        row_alpha = tl.load(
+            alpha + expert * OUT_FEATURES + offsets_o, mask=valid_o, other=0.0
+        ).to(tl.bfloat16)
+        scaled_trits = (trits * row_alpha[:, None]).to(tl.bfloat16)
+        acc += tl.dot(grad, scaled_trits)
+
+    tl.store(
+        grad_input + offsets_m[:, None] * IN_FEATURES + offsets_i[None, :],
+        acc,
+        mask=valid_m[:, None] & valid_i[None, :],
+    )
+
+
 def _forward(
     x: torch.Tensor,
     packed: torch.Tensor,
@@ -275,22 +415,48 @@ def _forward(
     out = torch.empty((x2.shape[0], out_features), device=x.device, dtype=x.dtype)
     if x2.shape[0] == 0:
         return out.reshape(*x.shape[:-1], out_features)
-    _packed_matmul_kernel[(triton.cdiv(x2.shape[0], 16), out_features)](
-        x2,
-        packed3,
-        alpha2,
-        expert_ids,
-        out,
-        M=x2.shape[0],
-        OUT_FEATURES=out_features,
-        IN_FEATURES=in_features,
-        PACKED_IN=triton.cdiv(in_features, 16),
-        ROWS_PER_EXPERT=rows_per_expert,
-        GROUPED=grouped,
-        JAGGED=jagged,
-        BLOCK_M=16,
-        BLOCK_K=64,
-    )
+    if jagged:
+        _packed_matmul_kernel[(triton.cdiv(x2.shape[0], 16), out_features)](
+            x2,
+            packed3,
+            alpha2,
+            expert_ids,
+            out,
+            M=x2.shape[0],
+            OUT_FEATURES=out_features,
+            IN_FEATURES=in_features,
+            PACKED_IN=triton.cdiv(in_features, 16),
+            ROWS_PER_EXPERT=rows_per_expert,
+            GROUPED=grouped,
+            JAGGED=True,
+            BLOCK_M=16,
+            BLOCK_K=64,
+        )
+    else:
+        block_m = 64
+        blocks_m_per_expert = triton.cdiv(rows_per_expert, block_m) if grouped else 0
+        grid_m = (
+            packed3.shape[0] * blocks_m_per_expert
+            if grouped
+            else triton.cdiv(x2.shape[0], block_m)
+        )
+        _packed_dot_kernel[(grid_m, triton.cdiv(out_features, 64))](
+            x2,
+            packed3,
+            alpha2,
+            out,
+            M=x2.shape[0],
+            OUT_FEATURES=out_features,
+            IN_FEATURES=in_features,
+            PACKED_IN=triton.cdiv(in_features, 16),
+            ROWS_PER_EXPERT=rows_per_expert,
+            BLOCKS_M_PER_EXPERT=blocks_m_per_expert,
+            GROUPED=grouped,
+            BLOCK_M=block_m,
+            BLOCK_N=64,
+            BLOCK_K=32,
+            num_warps=4,
+        )
     return out.reshape(*x.shape[:-1], out_features)
 
 
@@ -315,22 +481,48 @@ def _backward_input(
     grad_input = torch.empty((grad2.shape[0], in_features), device=grad2.device, dtype=grad2.dtype)
     if grad2.shape[0] == 0:
         return grad_input.reshape(*grad_output.shape[:-1], in_features)
-    _packed_matmul_transpose_kernel[(triton.cdiv(grad2.shape[0], 16), in_features)](
-        grad2,
-        packed_t3,
-        alpha2,
-        expert_ids,
-        grad_input,
-        M=grad2.shape[0],
-        OUT_FEATURES=grad2.shape[-1],
-        IN_FEATURES=in_features,
-        PACKED_OUT=triton.cdiv(grad2.shape[-1], 16),
-        ROWS_PER_EXPERT=rows_per_expert,
-        GROUPED=grouped,
-        JAGGED=jagged,
-        BLOCK_M=16,
-        BLOCK_O=64,
-    )
+    if jagged:
+        _packed_matmul_transpose_kernel[(triton.cdiv(grad2.shape[0], 16), in_features)](
+            grad2,
+            packed_t3,
+            alpha2,
+            expert_ids,
+            grad_input,
+            M=grad2.shape[0],
+            OUT_FEATURES=grad2.shape[-1],
+            IN_FEATURES=in_features,
+            PACKED_OUT=triton.cdiv(grad2.shape[-1], 16),
+            ROWS_PER_EXPERT=rows_per_expert,
+            GROUPED=grouped,
+            JAGGED=True,
+            BLOCK_M=16,
+            BLOCK_O=64,
+        )
+    else:
+        block_m = 64
+        blocks_m_per_expert = triton.cdiv(rows_per_expert, block_m) if grouped else 0
+        grid_m = (
+            packed_t3.shape[0] * blocks_m_per_expert
+            if grouped
+            else triton.cdiv(grad2.shape[0], block_m)
+        )
+        _packed_dot_transpose_kernel[(grid_m, triton.cdiv(in_features, 64))](
+            grad2,
+            packed_t3,
+            alpha2,
+            grad_input,
+            M=grad2.shape[0],
+            OUT_FEATURES=grad2.shape[-1],
+            IN_FEATURES=in_features,
+            PACKED_OUT=triton.cdiv(grad2.shape[-1], 16),
+            ROWS_PER_EXPERT=rows_per_expert,
+            BLOCKS_M_PER_EXPERT=blocks_m_per_expert,
+            GROUPED=grouped,
+            BLOCK_M=block_m,
+            BLOCK_I=64,
+            BLOCK_O=32,
+            num_warps=4,
+        )
     return grad_input.reshape(*grad_output.shape[:-1], in_features)
 
 
