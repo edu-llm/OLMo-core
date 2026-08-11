@@ -60,7 +60,7 @@ edullm submit --spec .edullm/run.hc-baseline.yaml \
 `HEAD` rather than a literal SHA on purpose: `edullm check` prints the `commit_sha` it would
 submit, and it refuses a commit no remote branch contains, so step 2 tells you whether step 3
 pushed the right thing. The numbers below were checked at
-`6ea77919cf5b0b138c4a12efe5e959e731b58eef` (the commit before this one-line edit; nothing but this
+`8d8f0d59cda68b9887f92e603519a06afa9fa478` (the commit before this one-line edit; nothing but this
 sentence changed).
 
 Do not submit `.edullm/run.hc-treatment.yaml` yet. Its header lists three things that have to
