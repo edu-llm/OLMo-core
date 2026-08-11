@@ -140,6 +140,45 @@ class MoEStandIn(nn.Module):
         pass
 
 
+class RouterishStandIn(MoEStandIn):
+    """
+    A stand-in that also does the one thing :class:`MoEStandIn` leaves out: attach an auxiliary
+    loss to its input the way ``MoEBase`` does.
+
+    That omission is exactly what the substitution was hiding. The load-balancing loss reaches
+    the optimizer through ``attach_auxiliary_loss``, an autograd function that returns its
+    activation unchanged and seeds the auxiliary loss's gradient in the backward pass, and a
+    hyper-connection puts two einsums and an addition between that activation and the loss. A
+    stand-in with no auxiliary loss in it cannot answer whether the router still gets a
+    gradient, which was the largest unverified risk in this work.
+
+    It does not need CUDA — the graph in question is einsums — so this is asserted on every CPU
+    run rather than waiting for the GPU test.
+
+    :param d_model: The model dimensionality.
+    :param seed: The seed for this module's weights.
+    """
+
+    def __init__(self, d_model: int, seed: int):
+        super().__init__(d_model, seed)
+        generator = torch.Generator().manual_seed(seed + 1)
+        # Stands for the router: a real parameter whose only path to the loss is the attached
+        # auxiliary term.
+        self.router_weight = nn.Parameter(torch.randn(d_model, 4, generator=generator))
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        loss_div_factor: Optional[Union[torch.Tensor, float]] = None,
+    ) -> torch.Tensor:
+        del loss_div_factor
+        from olmo_core.ops import attach_auxiliary_loss
+
+        logits = x @ self.router_weight
+        aux_loss = logits.float().softmax(dim=-1).pow(2).mean()
+        return torch.tanh(attach_auxiliary_loss(x, aux_loss) @ self.w)
+
+
 def _swap_in_stand_ins(model: nn.Module, *, d_model: int) -> None:
     """
     Replace every block's ``feed_forward_moe`` with a CPU-runnable stand-in.
@@ -811,6 +850,56 @@ def test_streams_diverge_only_with_symmetry_breaking(
 # ---------------------------------------------------------------------------------------------
 # What needs a GPU
 # ---------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("mixer", [ResidualMixerType.sinkhorn, ResidualMixerType.identity])
+@pytest.mark.parametrize("factory,base_block,hc_block,n_hc", MOE_BLOCK_PAIRS, ids=MOE_BLOCK_IDS)
+def test_an_auxiliary_loss_reaches_its_own_parameter_through_the_write_out_gate(
+    mixer: ResidualMixerType,
+    factory: str,
+    base_block: TransformerBlockType,
+    hc_block: TransformerBlockType,
+    n_hc: int,
+):
+    """
+    **The largest unverified risk in this work, retired on a CPU.**
+
+    The MoE router's load-balancing loss reaches the optimizer through
+    ``attach_auxiliary_loss``, which returns its activation unchanged and seeds the auxiliary
+    loss's gradient in the backward pass. A hyper-connection puts two einsums and an addition
+    between that activation and the loss, so the question is whether the router still receives
+    a gradient — and if it does not, every MoE arm trains with an unbalanced router while
+    looking perfectly healthy.
+
+    This was left to a ``@requires_gpu`` test that has never run, on the reasoning that the MoE
+    needs CUDA kernels. The kernels are needed for the expert *dispatch*; the graph between the
+    auxiliary loss and the router is einsums, and it runs anywhere. So
+    :class:`RouterishStandIn` does what ``MoEBase`` does — computes a loss from a real
+    parameter and attaches it — the primary objective is multiplied by zero so only the
+    attached loss can produce a gradient, and the parameter is checked.
+
+    What this still does not cover is the real dispatch, the capacity drop path and the
+    kernels' dtype behaviour. That is what the GPU test below is for.
+    """
+    del base_block, n_hc
+    seed_all(23)
+    model = _hc_config(factory, hc_block, mixer, init_noise_std=1e-2).build()
+    model.init_weights()
+    for block_idx, block in model.blocks.items():
+        block.feed_forward_moe = RouterishStandIn(64, 2000 + int(block_idx))
+    model.train()
+
+    x = torch.randint(0, 256, (2, 16))
+    out = model(x, labels=torch.roll(x, -1, dims=1))
+    loss = out[0] if isinstance(out, tuple) else out
+    # Zeroed, so the only surviving path to `router_weight` is the attached auxiliary loss.
+    (loss.mean() * 0.0).backward()
+
+    for name, block in model.blocks.items():
+        grad = block.feed_forward_moe.router_weight.grad
+        assert grad is not None, f"block {name}: no gradient reached the router at all"
+        assert torch.isfinite(grad).all(), f"block {name}: non-finite router gradient"
+        assert grad.abs().max() > 0, f"block {name}: the auxiliary loss did not reach the router"
 
 
 @requires_gpu

@@ -106,9 +106,12 @@ All three carry the same three deferred checks, which no laptop can make: `no_pu
 ```bash
 pip install -e '.[all]'
 pytest -q src/test/nn/ --ignore=src/test/nn/hf      # 538 passed, 1206 skipped
-# `attention_test.py::test_tensor_parallel_attention` is flaky under gloo and fails on a
-# different parametrisation each run. It fails the same way on `hc/moe-base` in a clean
-# worktree, so it is pre-existing and not a regression from this branch.
+# `test_tensor_parallel_attention` and `test_tensor_parallel_transformer` are flaky under
+# gloo. Measured on THIS tree, unchanged between runs: run 1 failed
+# `[qk-layernorm-backend=GLOO]`, runs 2 and 3 passed all seven. The failing parametrisation
+# moves between runs, which is flakiness by definition, and `hc/moe-base` in a clean worktree
+# fails the same way. Not a regression from this branch, and worth knowing before you read a
+# red suite as one.
 python src/scripts/ablations/hc_gate1_check.py       # GATE_1 PASSED: 63 passed, 0 failed
 python src/scripts/ablations/hc_launch_check.py      # 3 specs checked, 0 problems
 python src/scripts/ablations/hc_ablation.py --dry-run --model-size tiny
@@ -305,6 +308,8 @@ to act on.
 5. **`test_disabled_is_bit_identical_to_the_untreated_baseline` does not test its name.** Its
    loop runs `weight` in `(0.0, 0.0)` into a dict keyed by weight, so the second overwrites the
    first and nothing compares them. The only live assertion is that the treated model differs.
+   The no-op claim itself is covered by the sentinel test and by the bit-identical
+   cross-entropy check, so this is a misleading name rather than an unguarded property.
 6. **`num_flops_per_token` does not count the mixing** — about 0.057% at this shape, so MFU is
    overstated by that.
 7. **`apply_fsdp` on the HC MoE blocks discards `prefetch_factor` and `wrapping_strategy`**
@@ -319,12 +324,15 @@ to act on.
    gradient stays at 1e-9 regardless — which is evidence against the hypothesis that collapse is
    what freezes the mixer.
 
-1. ~~**The router's auxiliary loss does not survive the write-out gate.**~~ **Retired: it
-   survives.** One of the final judges built a stand-in that does what `MoEBase` does — computes
-   a router loss from a real parameter and calls `attach_auxiliary_loss` — zeroed the primary
-   term so only the attached loss could produce a gradient, and found the router reached on all
-   four hyper-connected MoE block types and both mixers, on a CPU. The GPU test stays for the
-   kernel path, and this is no longer the top risk.
+1. ~~**The router's auxiliary loss does not survive the write-out gate.**~~ **Retired, and now
+   asserted on every CPU run.** A judge pointed out that this never needed a GPU — the kernels
+   are for the expert dispatch, and the graph between the auxiliary loss and the router is
+   einsums — and demonstrated the property with a stand-in that attaches a loss the way
+   `MoEBase` does. That is now `RouterishStandIn` and
+   `test_an_auxiliary_loss_reaches_its_own_parameter_through_the_write_out_gate` in the
+   committed suite: eight cases, four block types by two mixers, primary objective multiplied
+   by zero so only the attached loss can produce a gradient. The `@requires_gpu` test stays for
+   the dispatch kernels.
 
 2. **Memory.** The term that decides whether `--rank-microbatch-size 8192` fits is not the
    optimizer state but the fp32 logits: 8,192 tokens x 100,352 vocab is 3.06 GiB per copy, and at

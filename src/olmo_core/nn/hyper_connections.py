@@ -326,7 +326,7 @@ def stream_utilisation(
 
 
 def spectral_collapse_index(streams: torch.Tensor, *, eps: float = 1e-12) -> torch.Tensor:
-    """
+    r"""
     How far the ``n`` streams are from spanning ``n`` independent directions, on ``[0, 1]``.
 
     Collapse is a statement about rank. Write ``G`` for the Gram matrix of the streams averaged
@@ -476,11 +476,18 @@ class HyperConnectionConfig(ModuleConfig):
     rather than a small number.**
 
     This is the treatment in ``docs/hc-ablation/EXPERIMENT-DESIGN.md`` and the one isolated
-    change the experiment turns on. At zero, :meth:`HyperConnection.write_out` does not compute
-    the statistic, does not attach a loss, and does not record a metric, so the untreated path
-    is bit-identical to the path that existed before this field did — which
-    ``src/test/nn/stream_balance_test.py`` asserts by running the code with the statistic
-    replaced by something that raises.
+    change the experiment turns on. At zero nothing is attached to the autograd graph and no
+    loss is added, so the untreated path is numerically the path that existed before this field
+    did — which ``src/test/nn/stream_balance_test.py`` asserts by running the code with the
+    statistic replaced by something that raises, and by requiring the reported cross-entropy to
+    be bit-identical at weights 0, 0.05 and 0.5.
+
+    It is **not** true that nothing is computed. When
+    :data:`HyperConnection.diagnostics_enabled` is set — which the monitor does on every arm for
+    the steps it reads — the collapse statistic is computed under ``no_grad`` and recorded, on
+    the treated and untreated arms alike. That is deliberate and it is what makes a control arm
+    comparable to a treated one at all; what it is not is the absolute no-op an earlier version
+    of this docstring claimed.
 
     **What it is for.** Every constrained residual mixer starts at the uniform doubly stochastic
     matrix, which averages the streams, which drives them toward carrying the same vector; and
@@ -947,10 +954,13 @@ class HyperConnection(nn.Module):
         """
         Attach the stream-balancing auxiliary loss to the outgoing streams, if it is turned on.
 
-        **The zero-weight path is the one that has to stay free, and it does: this returns
-        before touching anything.** No statistic is computed, no tensor is allocated, nothing is
-        attached to the autograd graph and no metric is recorded, so a model with the weight at
-        its default is numerically the model that existed before this method did.
+        **The zero-weight path is numerically free, and that is a narrower claim than "returns
+        before touching anything", which is what this said and which is false in the
+        configuration the tranche runs.** At weight zero nothing is attached to the autograd
+        graph, no RNG is consumed and the forward value is unchanged, so the model is
+        numerically the model that existed before this method did. What does happen is that
+        when :data:`diagnostics_enabled` is set the collapse statistic is computed under
+        ``no_grad`` and recorded — on every arm, which is the point of it.
 
         Measured on the streams this hyper-connection *writes*, not the ones it reads, for two
         reasons. It is the quantity the next sub-layer sees, so it is what collapse means at
@@ -1008,10 +1018,15 @@ class HyperConnection(nn.Module):
         if self._utilisation is not None:
             utilisation = self._utilisation
             bins = utilisation.shape[-1]
-            # Normalised entropy, so 1 is perfectly spread and 0 is everything in one bin. The
-            # complement of the balance loss rather than a second reading of it: the loss is the
-            # squared-share form MoE uses and this is the information-theoretic one, and they
-            # disagree about which of two unequal vectors is worse.
+            # Normalised entropy over the utilisation shares, so 1 is perfectly spread and 0 is
+            # everything in one bin.
+            #
+            # This comment used to say it was the complement of the balance loss "rather than a
+            # second reading of it, because the loss is the squared-share form". The default
+            # loss form is `entropy`, so on the default it IS an affine duplicate of the loss --
+            # and on the default statistic there is no utilisation vector at all, so this block
+            # only runs for the `dispersion` and `energy` arms. Kept for those, where it is the
+            # per-bin reading `stream collapse index` cannot give.
             entropy = -(utilisation.clamp_min(1e-12).log() * utilisation).sum()
             out["stream usage entropy"] = (
                 entropy / math.log(bins),
