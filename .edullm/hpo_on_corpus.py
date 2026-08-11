@@ -40,6 +40,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
+# Capacity-block nodes clone the branch into /work without installing it. Prefer the cloned
+# source tree over the image's older installed package so additive HPO modules are importable.
+_SOURCE_ROOT = Path(__file__).resolve().parents[1] / "src"
+if str(_SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SOURCE_ROOT))
+
 # Environment variables that betray an outer (torchrun/torchelastic) launcher.
 _TORCHRUN_MARKERS = (
     "TORCHELASTIC_RUN_ID",
