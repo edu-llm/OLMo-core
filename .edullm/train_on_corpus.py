@@ -1040,6 +1040,10 @@ def build_config(opts, overrides: List[str]):
             metrics_collect_interval=5,
             cancel_check_interval=5,
             max_duration=Duration.steps(opts.steps),
+            # Trainer automatically installs a default CheckpointerCallback when one is absent.
+            # This field is the authoritative benchmarking control: it suppresses both that
+            # callback and Trainer's automatic load/save paths.
+            no_checkpoints=opts.no_checkpoints,
         )
         .with_callback("gpu_monitor", GPUMemoryMonitorCallback())
         # STEADY-STATE THROUGHPUT, BECAUSE NEITHER EXISTING MFU METRIC EXCLUDES WARMUP.
@@ -1108,11 +1112,10 @@ def build_config(opts, overrides: List[str]):
         )
         .with_callback("config_saver", ConfigSaverCallback())
     )
-    if opts.no_checkpoints:
+    if trainer_config.no_checkpoints:
         # A throughput smoke test has nothing to resume and the M20 step-0 checkpoint is more
-        # than 14 GiB. Removing the callback also prevents Trainer from starting its otherwise
-        # unconditional step-0 save, which can outlive a failed one-step diagnostic.
-        trainer_config.callbacks.pop("checkpointer", None)
+        # than 14 GiB. Trainer.no_checkpoints filters the callback and disables its own load/save
+        # paths; merely removing the callback would not work because Trainer reinstalls one.
         log.warning(
             "CHECKPOINTS DELIBERATELY DISABLED for this throughput-only run; it cannot resume "
             "and must not be cited as checkpoint validation"

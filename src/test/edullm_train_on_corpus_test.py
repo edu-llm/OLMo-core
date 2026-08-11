@@ -330,7 +330,7 @@ def test_throughput_mode_can_remove_the_step0_checkpointer(monkeypatch):
 
     config = entry.build_config(opts, overrides)
 
-    assert "checkpointer" not in config.trainer.callbacks
+    assert config.trainer.no_checkpoints is True
     assert opts.no_init_loss_band is True
 
 
