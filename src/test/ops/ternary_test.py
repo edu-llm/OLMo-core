@@ -320,6 +320,21 @@ def test_triton_pack_is_bit_exact_to_reference():
 
 @pytest.mark.gpu
 @requires_native_cuda
+def test_forward_only_pack_fuses_exact_bf16_materialization():
+    from olmo_core.kernels import ternary as ternary_kernels
+
+    torch.manual_seed(21)
+    weight = torch.randn(5, 37, 65, device="cuda", dtype=torch.bfloat16)
+    expected = dequantize_packed_twn(pack_twn_reference(weight, 2))
+
+    actual = ternary_kernels.pack_twn_forward_only(weight, 2)
+
+    assert torch.equal(actual.materialized, expected)
+    assert actual.codes_t.numel() == 0
+
+
+@pytest.mark.gpu
+@requires_native_cuda
 def test_native_dense_forward_and_all_gradients_match_fake_quant():
     torch.manual_seed(1)
     x_ref = torch.randn(37, 48, device="cuda", dtype=torch.bfloat16, requires_grad=True)
