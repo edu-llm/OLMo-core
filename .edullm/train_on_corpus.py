@@ -60,7 +60,37 @@ WHAT A RETRY HAS TO CLEAN UP BEFORE IT CAN GET PAST THE STEP THAT KILLED IT. See
 that skips an unfinished step directory on the way in still meets it on the way out, when
 the trainer reaches that step number again and refuses to write into a directory that is
 not empty.
+
+WHICH ``olmo_core`` THIS TRAINS AGAINST, WHICH IS NOT THE ONE THE BRANCH IS ON UNLESS THE
+BLOCK BELOW RUNS. The image sets ``ENV PYTHONPATH=/opt/olmo-core/src`` and also pip-installs
+the project, so a container carries two copies of the library and both are the commit the
+image was built from. The node clones this branch and mounts the whole tree at ``/work`` --
+``src/`` included, not just ``.edullm/`` -- but nothing puts ``/work/src`` on ``sys.path``, so
+``import olmo_core`` reaches the image's copy and the branch's library is present on disk and
+never executed. Nothing warns. The run trains, the loss goes down, and it goes down against a
+model this branch did not define.
+
+Today those two happen to compose, because the image was built from an ancestor of this
+branch. That is luck with an expiry date on it, and the failure when it expires is silent.
 """
+
+import os
+import sys
+
+#: The ``src/`` of the tree this file was cloned into, which is the library this branch means.
+#: Resolved from ``__file__`` rather than written as ``/work/src`` because the mount point is
+#: the caller's choice: the block nodes use ``/work``, a laptop uses a checkout, and a git
+#: worktree uses neither. All three want the ``src/`` that is a sibling of this file's parent.
+_BRANCH_LIBRARY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
+
+if os.path.isdir(_BRANCH_LIBRARY):
+    sys.path.insert(0, _BRANCH_LIBRARY)
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
 import argparse
 import contextlib
@@ -68,9 +98,7 @@ import copy
 import enum
 import json
 import logging
-import os
 import re
-import sys
 import time
 import traceback
 from dataclasses import dataclass, field, replace
