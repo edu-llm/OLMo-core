@@ -1660,13 +1660,61 @@ def _quantize_arg(value: str) -> Optional[bool]:
         ) from None
 
 
+def a_run_name_and_not_an_override(value: str) -> str:
+    """Refuse a positional that is obviously a dotted config override.
+
+    THE FAILURE THIS EXISTS FOR IS SILENT AND COSTS A WHOLE RUN. ``main`` calls
+    ``parse_known_args`` and merges what is left over into the config, which is how a person
+    changes a nested field without a flag for it. But ``run_name`` is a positional with
+    ``nargs="?"``, and ``.edullm/run.yaml`` names no run -- the platform supplies it in
+    ``EDULLM_RUN_ID``. So the FIRST bare word appended to that command is not left over at
+    all: argparse binds it to ``run_name``. Appending
+    ``train_module.dp_config.prefetch_factor=2`` therefore does not set the prefetch factor,
+    it renames the run to ``train_module.dp_config.prefetch_factor=2`` -- which is the W&B
+    run name and the ``run_id`` written into the lineage record. Nothing warns, the setting
+    silently does not apply, and the run that finds out is the one nobody can repeat.
+
+    ``src/test/edullm_train_on_corpus_test.py`` asserted ``leftover == []`` to catch exactly
+    this class of mistake and could not see it, because the stray word had been eaten rather
+    than left over.
+
+    An ``=`` is the test because every override has one and no run id the platform generates
+    does. Overrides are still available and still supported; they just have to come after a
+    run id, which on the block means writing ``${EDULLM_RUN_ID}`` or accepting the flag that
+    exists instead.
+
+    THIS FUNCTION IS PR #71's, COPIED RATHER THAN REWRITTEN, AND THAT IS DELIBERATE. We hit the
+    same trap independently on this branch -- ``... --model-factory maple_m7b
+    model.ternary_comm=true`` bound ``run_name="model.ternary_comm=true"`` and left ``overrides``
+    EMPTY, so the flag this branch exists to exercise was silently never requested and the config
+    saved beside the checkpoint agreed it had not been. Reproduced against stdlib argparse. #71
+    (merged ``dbb19e3b``) fixes it on ``edullm/final-model``, which is not an ancestor of this
+    base, so the guard is genuinely absent here and cannot simply be inherited. Matching its
+    name, signature, message and semantics byte-for-byte means the two converge textually
+    whenever the branches meet, instead of leaving two differently-worded guards for the same
+    trap and a merge conflict to resolve between them.
+    """
+    if "=" in value:
+        raise argparse.ArgumentTypeError(
+            f"{value!r} is the run's name here, not a config override -- a positional cannot "
+            "be both, and argparse binds the first bare word to the name. Put the run id "
+            "in front of it, or use the flag if there is one."
+        )
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="train_on_corpus",
         description="Train a transformer on a published eduLLM corpus.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("run_name", nargs="?", default=os.environ.get("EDULLM_RUN_ID", "local"))
+    parser.add_argument(
+        "run_name",
+        nargs="?",
+        type=a_run_name_and_not_an_override,
+        default=os.environ.get("EDULLM_RUN_ID", "local"),
+    )
     parser.add_argument("--dataset-id", default=os.environ.get("EDULLM_DATASET_ID", ""))
     parser.add_argument("--dataset-version", default=os.environ.get("EDULLM_DATASET_VERSION", ""))
     parser.add_argument(

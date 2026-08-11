@@ -1856,3 +1856,44 @@ def test_a_label_that_received_no_data_is_nan_rather_than_a_believable_number():
 
     assert math.isnan(ce), "an unpopulated label must be NaN, never a believable number"
     assert ce != 0.0, "0.0 would read as a perfect held-out loss"
+
+
+def test_a_dotted_override_in_the_first_bare_position_is_refused_rather_than_renaming_the_run():
+    """THE FAILURE IS SILENT WITHOUT THIS AND COSTS THE SETTING PLUS THE RUN'S NAME.
+
+    ``.edullm/run.yaml`` names no run -- the platform supplies the id in ``EDULLM_RUN_ID`` -- so
+    the first bare word appended to its command is bound to ``run_name`` rather than left over
+    for ``config.merge``. The setting does not apply, and the run is called
+    ``model.ternary_comm=true`` in W&B and in the lineage record. Exit 2 in the first second is
+    the right answer; ``leftover == []`` cannot see it, because the word was eaten rather than
+    left over.
+
+    ``model.ternary_comm=true`` specifically, because that is the flag this branch adds and the
+    one whose silent disappearance would make a ternary arm indistinguishable from the control
+    while the saved config agreed it had never been requested.
+    """
+    with pytest.raises(SystemExit) as refused:
+        entry.build_parser().parse_args(["--model-factory", "maple_m7b", "model.ternary_comm=true"])
+
+    assert refused.value.code == 2
+
+
+def test_an_override_after_an_explicit_run_id_still_reaches_the_config():
+    """The guard refuses a POSITION, not the mechanism. Overrides remain the escape hatch."""
+    opts, leftover = entry.build_parser().parse_known_args(["a-run-id", "model.ternary_comm=true"])
+
+    assert opts.run_name == "a-run-id"
+    assert leftover == ["model.ternary_comm=true"]
+
+
+def test_the_platform_supplied_run_id_is_untouched_by_the_guard():
+    """The legitimate path does not depend on argv position at all, and must stay that way.
+
+    An id the platform generates carries no ``=``, so the guard is invisible to every real
+    submission. Pinned because a guard that also refused the normal case would be caught only
+    by a queued run.
+    """
+    opts, leftover = entry.build_parser().parse_known_args(["run_019fde30-1d27-7096-8bd9"])
+
+    assert opts.run_name == "run_019fde30-1d27-7096-8bd9"
+    assert leftover == []
