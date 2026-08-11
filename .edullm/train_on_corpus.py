@@ -505,12 +505,26 @@ def resolve_corpus(*, dataset_id: str, version: str, tokenizer_id: str) -> Corpu
     # environment, which on Batch is the workload role.
     s3 = Boto3S3.default()
 
+    # The capacity-block fleet runs in us-east-2 and can read its regional data mirror, not
+    # the reader's canonical bucket. The bootstrap exports that mirror as EDULLM_DATA_BUCKET;
+    # pass it explicitly because edullm_data does not read the environment variable itself.
+    # Keep the keyword absent outside the block so existing Batch and local callers continue
+    # to use the reader's own default.
+    data_bucket = os.environ.get("EDULLM_DATA_BUCKET") or None
+    bucket_kwargs = {"data_bucket": data_bucket} if data_bucket else {}
+    log.info(
+        "reading %s/%s from bucket %s",
+        dataset_id,
+        version,
+        data_bucket or "the reader's own default",
+    )
+
     # "latest" resolves through the catalog rather than being an alias anybody can move. A
     # pinned version is the normal case and what the platform sends; this branch exists so a
     # person poking at the image by hand does not have to look one up first.
     if version in ("", "latest"):
         try:
-            resolved = resolve_latest(dataset_id, s3=s3)
+            resolved = resolve_latest(dataset_id, s3=s3, **bucket_kwargs)
         except Refusal:
             raise
         except BaseException as exc:
@@ -532,7 +546,7 @@ def resolve_corpus(*, dataset_id: str, version: str, tokenizer_id: str) -> Corpu
     # and a role without that grant and a registry entry pointing at an unpublished prefix
     # both arrive here as a failed read. read_failure separates them.
     try:
-        read = dataset_paths(dataset_id, version, s3=s3)
+        read = dataset_paths(dataset_id, version, s3=s3, **bucket_kwargs)
     except Refusal:
         raise
     except BaseException as exc:
