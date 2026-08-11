@@ -119,7 +119,8 @@ def resolve_cell(cell: Optional[int], *, seeds_per_arm: int, arm: Optional[str])
         )
     if seeds_per_arm < 1:
         raise TOC.Refusal(
-            TOC.Stage.THE_CONFIG_WOULD_NOT_BUILD, f"--seeds-per-arm must be >= 1, got {seeds_per_arm}"
+            TOC.Stage.THE_CONFIG_WOULD_NOT_BUILD,
+            f"--seeds-per-arm must be >= 1, got {seeds_per_arm}",
         )
     if arm is not None:
         if arm not in ARMS:

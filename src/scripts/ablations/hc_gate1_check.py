@@ -123,6 +123,178 @@ def _hc_model_config(mixer: ResidualMixerType, *, init_noise_std: float = 0.0):
     )
 
 
+#: The four hyper-connected MoE block types, against the unwrapped block each one wraps.
+MOE_BLOCK_PAIRS = [
+    ("smallmoe", TransformerBlockType.moe, TransformerBlockType.hyper_connection_moe, 2),
+    (
+        "smallmoe",
+        TransformerBlockType.moe_reordered_norm,
+        TransformerBlockType.hyper_connection_moe_reordered_norm,
+        2,
+    ),
+    (
+        "small_hybrid_moe",
+        TransformerBlockType.moe_hybrid,
+        TransformerBlockType.hyper_connection_moe_hybrid,
+        3,
+    ),
+    (
+        "small_hybrid_moe",
+        TransformerBlockType.moe_hybrid_reordered_norm,
+        TransformerBlockType.hyper_connection_moe_hybrid_reordered_norm,
+        3,
+    ),
+]
+
+
+class _MoEStandIn(torch.nn.Module):
+    """An MoE's interface, on a CPU.
+
+    ``olmo_core.ops.moe`` asserts CUDA kernels, so the real expert dispatch cannot run here and
+    every MoE test in this repository carries ``@requires_gpu``. Substituted on BOTH sides of
+    every comparison below, which makes this a check of the residual wiring -- the thing this
+    work adds -- and not of the MoE.
+    """
+
+    def __init__(self, d_model: int, seed: int):
+        super().__init__()
+        generator = torch.Generator().manual_seed(seed)
+        self.w = torch.nn.Parameter(
+            torch.randn(d_model, d_model, generator=generator) / d_model**0.5
+        )
+
+    def forward(self, x, loss_div_factor=None):
+        del loss_div_factor
+        return torch.tanh(x @ self.w)
+
+    def compute_metrics(self, reset: bool = True):
+        del reset
+        return {}
+
+    def reset_metrics(self):
+        pass
+
+
+def _swap_in_stand_ins(model) -> None:
+    for block_idx, block in model.blocks.items():
+        block.feed_forward_moe = _MoEStandIn(D_MODEL, 1000 + int(block_idx))
+
+
+def _moe_configs(factory: str, base_block, hc_block, mixer: ResidualMixerType):
+    base = getattr(TransformerConfig, factory)(
+        vocab_size=VOCAB_SIZE, d_model=D_MODEL, n_layers=2, n_heads=4
+    )
+    unwrapped = dataclasses.replace(
+        base,
+        block=dataclasses.replace(cast(TransformerBlockConfig, base.block), name=base_block),
+        name=TransformerType.moe,
+        init_seed=7,
+    )
+    wrapped = dataclasses.replace(
+        base,
+        block=dataclasses.replace(
+            cast(TransformerBlockConfig, base.block),
+            name=hc_block,
+            hyper_connection=HyperConnectionConfig(
+                n_streams=N_STREAMS, mixer=mixer, init_noise_std=0.0, residual_dropout_p=0.0
+            ),
+        ),
+        name=TransformerType.hyper_connection_moe,
+        stream_collapse=StreamCollapseConfig(n_streams=N_STREAMS),
+        init_seed=7,
+    )
+    return unwrapped, wrapped
+
+
+def check_moe_baseline_equivalent_init() -> List[CheckResult]:
+    """
+    Every hyper-connected MoE block reproduces the block it wraps, bit for bit, at
+    initialisation with the noise off -- and adds exactly the routing parameters it claims.
+    """
+    results: List[CheckResult] = []
+    for factory, base_block, hc_block, n_hc in MOE_BLOCK_PAIRS:
+        for mixer in MIXERS:
+            seed_all(23)
+            unwrapped_config, wrapped_config = _moe_configs(factory, base_block, hc_block, mixer)
+            unwrapped, wrapped = unwrapped_config.build(), wrapped_config.build()
+            unwrapped.init_weights()
+            wrapped.init_weights()
+            unwrapped.eval()
+            wrapped.eval()
+            _swap_in_stand_ins(unwrapped)
+            _swap_in_stand_ins(wrapped)
+            input_ids = torch.randint(0, VOCAB_SIZE, (2, 8))
+            with torch.no_grad():
+                difference = (wrapped(input_ids) - unwrapped(input_ids)).abs().max().item()
+            expected_routing = (
+                2 * n_hc * HyperConnectionConfig(n_streams=N_STREAMS, mixer=mixer).num_params()
+            )
+            measured_routing = sum(p.numel() for p in wrapped.parameters()) - sum(
+                p.numel() for p in unwrapped.parameters()
+            )
+            results.append(
+                (
+                    f"MoE baseline equivalence [{hc_block}/{mixer}]",
+                    difference == 0.0 and measured_routing == expected_routing,
+                    f"max|logits - baseline| = {difference:.3e}, routing params "
+                    f"{measured_routing} (want {expected_routing})",
+                )
+            )
+    return results
+
+
+def check_moe_parallelism_refusals() -> List[CheckResult]:
+    """
+    Expert, tensor and context parallelism must raise on a hyper-connected MoE block rather
+    than silently applying a plan written for a three-dimensional hidden state. Refusing is the
+    only option that fails loudly: the alternative trains, reports a loss curve, and computes
+    something other than what the config says.
+    """
+    results: List[CheckResult] = []
+    for factory, base_block, hc_block, _ in MOE_BLOCK_PAIRS:
+        _, wrapped_config = _moe_configs(factory, base_block, hc_block, ResidualMixerType.sinkhorn)
+        block = wrapped_config.build().blocks["0"]
+        for method in ("apply_ep", "apply_tp", "apply_cp"):
+            try:
+                getattr(block, method)(None)
+                raised = False
+            except NotImplementedError:
+                raised = True
+            except Exception:  # noqa: BLE001 - anything else is the wrong refusal
+                raised = False
+            results.append(
+                (
+                    f"MoE {method} refuses [{hc_block}]",
+                    raised,
+                    "raises NotImplementedError" if raised else "did NOT raise NotImplementedError",
+                )
+            )
+    return results
+
+
+def check_stream_balancing_is_off_by_default() -> List[CheckResult]:
+    """
+    The treatment has to default to off, because every arm that is not the treatment is built
+    from that default and the untreated path has to be the path that existed before the field
+    did.
+    """
+    from olmo_core.nn.hyper_connections import StreamBalanceLossType, StreamUtilisationType
+
+    config = HyperConnectionConfig()
+    off = config.stream_balance_loss_weight == 0.0
+    statistic = config.stream_balance_statistic == StreamUtilisationType.dispersion
+    form = config.stream_balance_loss_type == StreamBalanceLossType.entropy
+    return [
+        (
+            "stream balancing defaults to off",
+            off and statistic and form,
+            f"weight={config.stream_balance_loss_weight}, "
+            f"statistic={config.stream_balance_statistic}, "
+            f"form={config.stream_balance_loss_type}",
+        )
+    ]
+
+
 def check_baseline_equivalent_init() -> List[CheckResult]:
     """
     A hyper-connected model must, at initialisation with the symmetry-breaking noise off,
@@ -432,6 +604,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         ("Symmetry breaking", check_symmetry_breaking),
         ("Float32 routing", check_float32_routing),
         ("Eager / compile parity", lambda: check_eager_compile_parity(args.check_compile)),
+        ("MoE baseline equivalence", check_moe_baseline_equivalent_init),
+        ("MoE parallelism refusals", check_moe_parallelism_refusals),
+        ("Stream balancing default", check_stream_balancing_is_off_by_default),
     ]
 
     print("\nGATE_1_CORRECTNESS - hyper-connections, CPU only\n")

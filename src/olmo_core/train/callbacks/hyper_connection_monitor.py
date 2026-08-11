@@ -11,7 +11,7 @@ initialisation. A run that reports only a loss cannot tell that story apart from
 
 import math
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import ClassVar, Dict, List, Optional, Tuple
 
 import torch
 
@@ -42,9 +42,10 @@ class HyperConnectionMonitorCallback(Callback):
     matrix_interval: int = 500
     reference_parameter: str = "attention.w_out.weight"
 
-    # After the optimizer step would be too late: `pre_optim_step` is the last moment the
-    # gradients from this step are still on the parameters.
-    priority: int = -1
+    # A ClassVar, as `Callback` declares it: a dataclass field of the same name would shadow
+    # the class variable the trainer sorts on. After the optimizer step would be too late --
+    # `pre_optim_step` is the last moment this step's gradients are still on the parameters.
+    priority: ClassVar[int] = -1
 
     def __post_init__(self):
         self._initial: Dict[str, torch.Tensor] = {}

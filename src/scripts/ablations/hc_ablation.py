@@ -50,10 +50,7 @@ from olmo_core.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     GarbageCollectorCallback,
 )
-from olmo_core.train.train_module import (
-    TransformerDataParallelConfig,
-    TransformerTrainModuleConfig,
-)
+from olmo_core.train.train_module import TransformerDataParallelConfig, TransformerTrainModuleConfig
 
 log = logging.getLogger(__name__)
 
@@ -141,6 +138,12 @@ class Arm:
     mixer: Optional[ResidualMixerType]
     n_streams: int = N_STREAMS
     description: str = ""
+    #: Whether this arm is a mixture of experts. MoE arms build `smallmoe` and the
+    #: hyper-connected MoE block types instead of the dense OLMo-2 backbone.
+    moe: bool = False
+    #: The weight on the stream-balancing auxiliary loss. Zero is off and is the default on
+    #: every arm; the treatment arms are the only ones that set it.
+    stream_balance_loss_weight: float = 0.0
 
     @property
     def is_baseline(self) -> bool:
@@ -167,6 +170,7 @@ class Arm:
             init_noise_std=INIT_NOISE_STD,
             residual_dropout_p=RESIDUAL_DROPOUT_P,
             collapse=COLLAPSE,
+            stream_balance_loss_weight=self.stream_balance_loss_weight,
         )
 
 
@@ -205,6 +209,44 @@ ARMS: List[Arm] = [
         mixer=ResidualMixerType.identity,
         description="streams and gates but H_res = I; isolates the mixing itself",
     ),
+    # The MoE 2x2. These are the arms `.edullm/run.hc-treatment.yaml` actually submits, carried
+    # here so that `--dry-run` builds them on a CPU beside the dense ones and the arm table is
+    # one table rather than two. `.edullm/train_hc_moe.py` owns the shape they run at; what this
+    # file owns is that they build, carry the parameter count they claim, and produce the right
+    # shapes.
+    Arm(
+        name="moe_baseline",
+        mixer=None,
+        n_streams=1,
+        moe=True,
+        description="smallmoe, no hyper-connections; what stage 1 measures the noise floor of",
+    ),
+    Arm(
+        name="mhc_moe",
+        mixer=ResidualMixerType.sinkhorn,
+        moe=True,
+        description="hyper-connected MoE, learned Sinkhorn mixer, balancing OFF (the reference)",
+    ),
+    Arm(
+        name="mhc_moe_balanced",
+        mixer=ResidualMixerType.sinkhorn,
+        moe=True,
+        stream_balance_loss_weight=0.01,
+        description="the same, balancing ON. The one isolated change under test.",
+    ),
+    Arm(
+        name="mhc_moe_identity",
+        mixer=ResidualMixerType.identity,
+        moe=True,
+        description="H_res = I, balancing OFF; no constraint map for the treatment to act through",
+    ),
+    Arm(
+        name="mhc_moe_identity_balanced",
+        mixer=ResidualMixerType.identity,
+        moe=True,
+        stream_balance_loss_weight=0.01,
+        description="H_res = I, balancing ON; the generic-regulariser control",
+    ),
 ]
 
 
@@ -224,6 +266,8 @@ def build_model_config(arm: Arm, *, model_size: str = "190M") -> TransformerConf
     :raises ValueError: If ``model_size`` is not recognised.
     """
     vocab_size = TOKENIZER_CONFIG.padded_vocab_size()
+    if arm.moe:
+        return _build_moe_model_config(arm, vocab_size=vocab_size, model_size=model_size)
     if model_size == "190M":
         base = TransformerConfig.olmo2_190M(vocab_size=vocab_size, init_seed=INIT_SEED)
     elif model_size == "tiny":
@@ -255,6 +299,36 @@ def build_model_config(arm: Arm, *, model_size: str = "190M") -> TransformerConf
         base,
         block=block,
         name=TransformerType.hyper_connection,
+        stream_collapse=StreamCollapseConfig(n_streams=arm.n_streams, policy=COLLAPSE),
+    )
+
+
+def _build_moe_model_config(arm: Arm, *, vocab_size: int, model_size: str) -> TransformerConfig:
+    """
+    Build an MoE arm's model config.
+
+    :param arm: The arm.
+    :param vocab_size: The padded vocabulary size.
+    :param model_size: ``"190M"`` for the real `smallmoe` shape, ``"tiny"`` for a CPU-sized one.
+
+    :returns: The model config.
+    """
+    kwargs = {} if model_size == "190M" else dict(d_model=128, n_layers=2, n_heads=4)
+    base = TransformerConfig.smallmoe(vocab_size=vocab_size, **kwargs)
+    base = dataclasses.replace(base, init_seed=INIT_SEED)
+    if arm.is_baseline:
+        return base
+    hc_config = arm.hyper_connection
+    assert hc_config is not None
+    block = dataclasses.replace(
+        cast(TransformerBlockConfig, base.block),
+        name=TransformerBlockType.hyper_connection_moe_reordered_norm,
+        hyper_connection=hc_config,
+    )
+    return dataclasses.replace(
+        base,
+        block=block,
+        name=TransformerType.hyper_connection_moe,
         stream_collapse=StreamCollapseConfig(n_streams=arm.n_streams, policy=COLLAPSE),
     )
 
@@ -354,6 +428,10 @@ class ArmSummary:
     output_shape: Optional[tuple] = None
     stream_shape: Optional[tuple] = None
     notes: List[str] = field(default_factory=list)
+    #: Whether the forward pass was skipped rather than run. A skipped arm is not a failed one
+    #: and must not print as one: an MoE arm cannot run a forward on a CPU, and reporting that
+    #: as FAIL teaches a reader to ignore the word.
+    skipped: bool = False
 
 
 def summarize_arm(arm: Arm, *, model_size: str = "190M") -> ArmSummary:
@@ -398,7 +476,7 @@ def format_table(summaries: List[ArmSummary]) -> str:
     lines.append("")
     lines.append("Descriptions:")
     for summary in summaries:
-        lines.append(f"  {summary.arm.name:<18}{summary.arm.description}")
+        lines.append(f"  {summary.arm.name:<28}{summary.arm.description}")
     return "\n".join(lines)
 
 
@@ -422,6 +500,22 @@ def dry_run(model_size: str = "190M", *, batch_size: int = 2, seq_len: int = 16)
 
     for arm in ARMS:
         config = build_model_config(arm, model_size=model_size)
+        if arm.moe:
+            # The MoE forward asserts CUDA kernels (`olmo_core.ops.moe`), so an arm with real
+            # experts cannot be run here. It is still built and its parameter count still
+            # checked, and the note says which half was skipped rather than reporting a pass.
+            summaries.append(
+                ArmSummary(
+                    arm=arm,
+                    total_params=config.num_params,
+                    routing_params=config.num_routing_params,
+                    non_embedding_params=config.num_non_embedding_params,
+                    notes=["forward skipped: MoE dispatch needs CUDA kernels"],
+                    skipped=True,
+                )
+            )
+            config.build()
+            continue
         summary = ArmSummary(
             arm=arm,
             total_params=config.num_params,
@@ -470,16 +564,18 @@ def dry_run(model_size: str = "190M", *, batch_size: int = 2, seq_len: int = 16)
     print(format_table(summaries))
     print("\nShapes and per-arm results:")
     for summary in summaries:
-        status = "FAIL" if summary.notes else "ok"
+        status = "skip" if summary.skipped else ("FAIL" if summary.notes else "ok")
         print(
-            f"  {summary.arm.name:<18}{status:<6}streams={summary.stream_shape} "
+            f"  {summary.arm.name:<28}{status:<6}streams={summary.stream_shape} "
             f"logits={summary.output_shape}"
         )
         for note in summary.notes:
             print(f"      {note}")
 
+    skipped = sum(1 for summary in summaries if summary.skipped)
     print(
-        f"\n{len(ARMS) - failures}/{len(ARMS)} arms built and ran."
+        f"\n{len(ARMS) - failures - skipped}/{len(ARMS)} arms built and ran, "
+        f"{skipped} built and skipped their forward (MoE needs a GPU)."
         if not failures
         else f"\n{failures} problem(s) across {len(ARMS)} arms."
     )
