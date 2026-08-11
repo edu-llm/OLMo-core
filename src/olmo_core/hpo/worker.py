@@ -4,14 +4,14 @@ resume guards, and bounded diagnostics.
 
 OLMo has no in-process pause API, so freeze/thaw is *checkpoint + process exit + a freshly built
 trainer that loads that checkpoint*. The controller runs CPU-only and never initializes one
-global process group; it normally spawns an isolated subprocess per segment with ``WORLD_SIZE=1``.
-An explicitly marked finalist continuation may instead use one multi-rank FSDP subprocess. This
-module owns the pieces of that decision:
+global process group; by default it spawns an isolated subprocess per segment with
+``WORLD_SIZE=1``. An explicitly configured search worker or finalist continuation may instead use
+one multi-rank FSDP subprocess. This module owns the pieces of that decision:
 
-- :func:`world_size_one_env` / :func:`finalist_distributed_env` -- isolated worker launch
-  environments.
-- :func:`assert_worker_topology` -- a guard that permits multiple ranks only for the explicit
-  finalist continuation.
+- :func:`world_size_one_env` / :func:`distributed_worker_env` /
+  :func:`finalist_distributed_env` -- isolated worker launch environments.
+- :func:`assert_worker_topology` -- a guard that permits multiple ranks only for an explicit
+  distributed worker launch.
 - :func:`trial_checkpoint_dir` and friends -- per-trial checkpoint namespaces so two trials
   never collide on a flat ``step{N}`` directory, and latest-checkpoint lookup scoped to one
   trial only.
@@ -52,6 +52,7 @@ __all__ = [
     "execute_segment",
     "BatchSizeMismatch",
     "world_size_one_env",
+    "distributed_worker_env",
     "finalist_distributed_env",
     "assert_single_process_topology",
     "assert_worker_topology",
@@ -273,6 +274,7 @@ _TORCHRUN_MARKERS = (
 )
 _FINALIST_CONTINUATION_ENV = "EDULLM_FINALIST_CONTINUATION"
 _FINALIST_WORLD_SIZE_ENV = "EDULLM_FINALIST_WORLD_SIZE"
+_WORKER_WORLD_SIZE_ENV = "EDULLM_WORKER_WORLD_SIZE"
 
 
 def world_size_one_env(
@@ -286,6 +288,7 @@ def world_size_one_env(
     env: Dict[str, str] = dict(base_env if base_env is not None else os.environ)
     for marker in _TORCHRUN_MARKERS:
         env.pop(marker, None)
+    env.pop(_WORKER_WORLD_SIZE_ENV, None)
     env.update(
         {
             "CUDA_VISIBLE_DEVICES": str(gpu),
@@ -295,6 +298,39 @@ def world_size_one_env(
             "LOCAL_WORLD_SIZE": "1",
             "MASTER_ADDR": "127.0.0.1",
             "MASTER_PORT": str(master_port),
+        }
+    )
+    return env
+
+
+def distributed_worker_env(
+    gpu_ids: List[int],
+    *,
+    world_size: int,
+    base_env: Optional[Mapping[str, str]] = None,
+) -> Dict[str, str]:
+    """Build the parent environment for an explicitly configured search-worker ``torchrun``."""
+    if world_size <= 1:
+        raise ValueError("distributed worker world size must be greater than one")
+    if len(gpu_ids) != world_size or len(set(gpu_ids)) != world_size:
+        raise ValueError("distributed worker launch requires one distinct GPU per rank")
+    env: Dict[str, str] = dict(base_env if base_env is not None else os.environ)
+    for name in (
+        *_TORCHRUN_MARKERS,
+        "WORLD_SIZE",
+        "RANK",
+        "LOCAL_RANK",
+        "LOCAL_WORLD_SIZE",
+        "MASTER_ADDR",
+        "MASTER_PORT",
+        _FINALIST_CONTINUATION_ENV,
+        _FINALIST_WORLD_SIZE_ENV,
+    ):
+        env.pop(name, None)
+    env.update(
+        {
+            "CUDA_VISIBLE_DEVICES": ",".join(str(gpu) for gpu in gpu_ids),
+            _WORKER_WORLD_SIZE_ENV: str(world_size),
         }
     )
     return env
@@ -324,6 +360,7 @@ def finalist_distributed_env(
         "LOCAL_WORLD_SIZE",
         "MASTER_ADDR",
         "MASTER_PORT",
+        _WORKER_WORLD_SIZE_ENV,
     ):
         env.pop(name, None)
     env.update(
@@ -353,7 +390,41 @@ def assert_single_process_topology(env: Mapping[str, str]) -> None:
 
 
 def assert_worker_topology(env: Mapping[str, str]) -> None:
-    """Permit distributed topology only for an explicitly marked finalist continuation."""
+    """Permit multiple ranks only for an explicitly marked distributed worker launch."""
+    if _WORKER_WORLD_SIZE_ENV in env:
+        try:
+            expected_world_size = int(env[_WORKER_WORLD_SIZE_ENV])
+            world_size = int(env["WORLD_SIZE"])
+            rank = int(env["RANK"])
+            local_rank = int(env["LOCAL_RANK"])
+            local_world_size = int(env["LOCAL_WORLD_SIZE"])
+        except (KeyError, ValueError) as exc:
+            raise RuntimeError("distributed worker is missing valid rank metadata") from exc
+        if expected_world_size <= 1 or world_size != expected_world_size:
+            raise RuntimeError(
+                f"distributed worker WORLD_SIZE={world_size} does not match "
+                f"expected world size {expected_world_size}"
+            )
+        if local_world_size != expected_world_size:
+            raise RuntimeError(
+                f"single-node distributed worker requires LOCAL_WORLD_SIZE={expected_world_size}, "
+                f"found {local_world_size}"
+            )
+        if not 0 <= rank < world_size or not 0 <= local_rank < local_world_size:
+            raise RuntimeError("distributed worker rank metadata is out of range")
+        visible_value = env.get("CUDA_VISIBLE_DEVICES")
+        if visible_value is not None:
+            visible_devices = [device for device in visible_value.split(",") if device]
+            if len(visible_devices) != expected_world_size or len(set(visible_devices)) != len(
+                visible_devices
+            ):
+                raise RuntimeError(
+                    "distributed worker requires one distinct CUDA_VISIBLE_DEVICES entry per rank"
+                )
+        if "TORCHELASTIC_RUN_ID" not in env:
+            raise RuntimeError("distributed worker must be launched through torchrun")
+        return
+
     if env.get(_FINALIST_CONTINUATION_ENV) != "1":
         assert_single_process_topology(env)
         return
@@ -378,7 +449,9 @@ def assert_worker_topology(env: Mapping[str, str]) -> None:
         )
     if not 0 <= rank < world_size or not 0 <= local_rank < local_world_size:
         raise RuntimeError("finalist distributed rank metadata is out of range")
-    visible_devices = [device for device in env.get("CUDA_VISIBLE_DEVICES", "").split(",") if device]
+    visible_devices = [
+        device for device in env.get("CUDA_VISIBLE_DEVICES", "").split(",") if device
+    ]
     if len(visible_devices) != expected_world_size:
         raise RuntimeError(
             "finalist distributed worker requires one CUDA_VISIBLE_DEVICES entry per rank"
@@ -389,7 +462,8 @@ def assert_worker_topology(env: Mapping[str, str]) -> None:
 
 def should_emit_worker_result(env: Mapping[str, str]) -> bool:
     """Return whether this worker rank owns the controller-facing observation JSON."""
-    return env.get(_FINALIST_CONTINUATION_ENV) != "1" or env.get("RANK", "0") == "0"
+    distributed = _WORKER_WORLD_SIZE_ENV in env or env.get(_FINALIST_CONTINUATION_ENV) == "1"
+    return not distributed or env.get("RANK", "0") == "0"
 
 
 # --- Checkpoint namespaces (scoped strictly to one trial) ---

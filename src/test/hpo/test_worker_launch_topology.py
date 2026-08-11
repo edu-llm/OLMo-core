@@ -3,6 +3,7 @@ import pytest
 from olmo_core.hpo.worker import (
     assert_single_process_topology,
     assert_worker_topology,
+    distributed_worker_env,
     finalist_distributed_env,
     should_emit_worker_result,
     world_size_one_env,
@@ -67,9 +68,46 @@ def test_finalist_distributed_topology_requires_explicit_valid_torchrun():
         )
 
 
+def test_search_distributed_topology_requires_explicit_valid_torchrun():
+    parent_env = distributed_worker_env(
+        list(range(8)),
+        world_size=8,
+        base_env={"WORLD_SIZE": "99", "TORCHELASTIC_RUN_ID": "stale"},
+    )
+    assert parent_env["CUDA_VISIBLE_DEVICES"] == "0,1,2,3,4,5,6,7"
+    assert parent_env["EDULLM_WORKER_WORLD_SIZE"] == "8"
+    assert "WORLD_SIZE" not in parent_env
+    assert "TORCHELASTIC_RUN_ID" not in parent_env
+
+    rank_env = {
+        **parent_env,
+        "WORLD_SIZE": "8",
+        "RANK": "3",
+        "LOCAL_RANK": "3",
+        "LOCAL_WORLD_SIZE": "8",
+        "TORCHELASTIC_RUN_ID": "search-segment",
+    }
+    assert_worker_topology(rank_env)
+    workflow_rank_env = dict(rank_env)
+    workflow_rank_env.pop("CUDA_VISIBLE_DEVICES")
+    assert_worker_topology(workflow_rank_env)
+    with pytest.raises(RuntimeError, match="expected world size"):
+        assert_worker_topology({**rank_env, "WORLD_SIZE": "4"})
+    with pytest.raises(RuntimeError, match="torchrun"):
+        assert_worker_topology(
+            {key: value for key, value in rank_env.items() if key != "TORCHELASTIC_RUN_ID"}
+        )
+
+
 def test_only_finalist_rank_zero_emits_controller_result():
     ordinary = {"WORLD_SIZE": "1", "RANK": "0"}
     finalist = {"EDULLM_FINALIST_CONTINUATION": "1"}
     assert should_emit_worker_result(ordinary)
     assert should_emit_worker_result({**finalist, "RANK": "0"})
     assert not should_emit_worker_result({**finalist, "RANK": "7"})
+
+
+def test_only_distributed_search_rank_zero_emits_controller_result():
+    distributed = {"EDULLM_WORKER_WORLD_SIZE": "8"}
+    assert should_emit_worker_result({**distributed, "RANK": "0"})
+    assert not should_emit_worker_result({**distributed, "RANK": "7"})

@@ -1,0 +1,79 @@
+{
+  "arm": "olmoe_no_centaur",
+  "algorithm": "brainlift",
+  "seed": 20260808,
+  "search_space": [
+    {"name": "lr", "low": 0.00025, "high": 0.004, "log": true},
+    {"name": "weight_decay", "low": 0.01, "high": 0.3, "log": true},
+    {"name": "beta2_gap", "low": 0.001, "high": 0.1, "log": true},
+    {"name": "eps", "low": 1e-12, "high": 1e-06, "log": true},
+    {"name": "warmup_fraction", "low": 0.005, "high": 0.08},
+    {"name": "decay_fraction", "low": 0.05, "high": 0.3},
+    {"name": "terminal_lr_ratio", "low": 0.0, "high": 0.2},
+    {"name": "max_grad_norm", "low": 0.3, "high": 3.0, "log": true}
+  ],
+  "normalizer": {"ce_at_zero": 16.0, "ce_at_one": 2.0},
+  "posterior": {"kind": "ftpfn", "device": "cpu"},
+  "proposer": {"kind": "ifbo"},
+  "btt": {
+    "min_fidelity": 49807360,
+    "window": 4,
+    "same_fidelity_top_fraction": 0.25,
+    "late_bloomer_reserve": 0.05
+  },
+  "ipbt": {
+    "population_size": 16,
+    "initial_oversample": 16,
+    "top_quantile": 0.25,
+    "bottom_quantile": 0.25,
+    "update_interval_init": 49807360,
+    "reset_fraction": 0.5,
+    "random_hp_fraction": 0.5
+  },
+  "centaur": null,
+  "controller": {
+    "target_tokens": 499908608,
+    "quantum": 49807360,
+    "n_fidelity_bins": 10,
+    "worker_count": 8,
+    "budget_tokens": 2000158720,
+    "checkpoint_root": "${EDULLM_CHECKPOINT_DIR}/olmoe-no-centaur/${EDULLM_RUN_ID}",
+    "restart_mode": "btt_aggregate",
+    "btt_restart_fraction": 0.5
+  },
+  "base_global_batch_size": 262144,
+  "launch_backend": "capacity_block",
+  "worker_world_size": 8,
+  "max_workers": 8,
+  "capacity_block": {
+    "branch": "edullm/hpo-complex",
+    "repository": "edu-llm/OLMo-core",
+    "platform_repository": "edu-llm/platform",
+    "wandb_project": "hpo-probe"
+  },
+  "experiment_factory": "olmo_core.hpo.comparison:build_olmoe_hpo_experiment",
+  "factory_kwargs": {
+    "sequence_length": 2048,
+    "global_batch_size": 262144,
+    "rank_microbatch_size": 32768,
+    "data_seed": 210007,
+    "init_seed": 110007,
+    "eval_steps": 2
+  },
+  "model_parameterization": {
+    "kind": "standard",
+    "architecture": "olmoe_1B_7B",
+    "depth": 16,
+    "backend": "none"
+  },
+  "fidelity": {"kind": "exact"},
+  "search_validation_callback": "search_validation",
+  "untouched_evaluator": "final_evaluation",
+  "heldout_metric": "eval/lm/regmix-10b-val/CE loss",
+  "final_evaluator_factory": "olmo_core.hpo.comparison:smoke_final_evaluator",
+  "controller_state_path": "${EDULLM_CHECKPOINT_DIR}/olmoe-no-centaur/${EDULLM_RUN_ID}/controller.jsonl",
+  "controller_snapshot_root": "${EDULLM_CHECKPOINT_DIR}/olmoe-no-centaur/${EDULLM_RUN_ID}",
+  "study_result_path": "${EDULLM_CHECKPOINT_DIR}/olmoe-no-centaur/${EDULLM_RUN_ID}/study-result.json",
+  "max_rounds": 10000,
+  "require_final_winner": true
+}

@@ -18,6 +18,8 @@ class Arm(str, Enum):
     NO_PROXY = "no_proxy"
     CURRICULUM_QUADRATIC_MTLD = "curriculum_quadratic_mtld"
     CURRICULUM_QUADRATIC_MTLD_NO_CENTAUR = "curriculum_quadratic_mtld_no_centaur"
+    OLMOE_NO_PROXY = "olmoe_no_proxy"
+    OLMOE_NO_CENTAUR = "olmoe_no_centaur"
 
 
 # Every category of compute that must be counted toward an arm's budget.
@@ -143,6 +145,22 @@ def ablation_matrix() -> Dict[Arm, Dict[str, object]]:
             **shared,
             "model_parameterization": "stock_olmo2_190m",
             "target_depth": 12,
+            "freeze_first_n_blocks": 0,
+            "llm_ratio": 0.0,
+            "llm_scope": "none",
+        },
+        Arm.OLMOE_NO_PROXY: {
+            **shared,
+            "model_parameterization": "stock_olmoe_1b_7b",
+            "target_depth": 16,
+            "freeze_first_n_blocks": 0,
+            "llm_ratio": 0.3,
+            "llm_scope": "multi_action",
+        },
+        Arm.OLMOE_NO_CENTAUR: {
+            **shared,
+            "model_parameterization": "stock_olmoe_1b_7b",
+            "target_depth": 16,
             "freeze_first_n_blocks": 0,
             "llm_ratio": 0.0,
             "llm_scope": "none",

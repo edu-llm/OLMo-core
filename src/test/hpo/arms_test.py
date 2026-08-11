@@ -16,6 +16,8 @@ def test_all_preregistered_arms_are_registered():
         "full_acronym_soup",
         "no_centaur",
         "no_proxy",
+        "olmoe_no_centaur",
+        "olmoe_no_proxy",
     }
 
 

@@ -675,6 +675,165 @@ def test_worker_oom_returns_typed_fatal_observation(monkeypatch, tmp_path):
     assert result.heldout_ce != result.heldout_ce
 
 
+def test_search_segment_worker_world_size_uses_torchrun_and_charges_all_gpus(monkeypatch, tmp_path):
+    allocation = SimpleNamespace(
+        trial_id="search-trial",
+        decision_id=42,
+        kind="start",
+        target_fidelity=49_807_360,
+        realized_hps={"lr": 1e-3},
+        checkpoint_ref=None,
+        transition=None,
+    )
+    spec = {
+        "base_global_batch_size": 262_144,
+        "experiment_factory": "module:factory",
+        "factory_kwargs": {
+            "sequence_length": 2_048,
+            "rank_microbatch_size": 32_768,
+        },
+        "fixed_hps": {
+            "weight_decay": 0.1,
+            "beta2_gap": 0.01,
+            "eps": 1e-8,
+            "warmup_fraction": 0.02,
+            "decay_fraction": 0.2,
+            "terminal_lr_ratio": 0.1,
+            "max_grad_norm": 1.0,
+        },
+        "controller": {
+            "target_tokens": 499_808_608,
+            "quantum": 49_807_360,
+            "checkpoint_root": "/ckpt",
+            "worker_count": 1,
+        },
+        "search_validation_callback": "search_validation",
+        "untouched_evaluator": "final_evaluation",
+        "heldout_metric": "eval/search_validation/val/CE loss",
+        "gpu_ids": list(range(8)),
+        "segment_spec_dir": str(tmp_path),
+        "worker_world_size": 8,
+    }
+    captured = {}
+
+    def run(argv, *, env, **kwargs):
+        captured.update(argv=argv, env=env, kwargs=kwargs)
+        return SimpleNamespace(
+            returncode=0,
+            stderr="",
+            stdout=json.dumps(
+                {
+                    "trial_id": "search-trial",
+                    "tokens": 49_807_360,
+                    "heldout_ce": 3.25,
+                    "train_ce_history": [3.4, 3.3],
+                    "grad_norm_history": [0.9],
+                    "activation_ratio": None,
+                    "numeric_failure": False,
+                    "checkpoint_ref": "/ckpt/trials/search-trial/step190",
+                }
+            ),
+        )
+
+    ticks = iter((100.0, 103.0))
+    monkeypatch.setattr(entry.subprocess, "run", run)
+    monkeypatch.setattr(entry.time, "perf_counter", lambda: next(ticks))
+
+    result = entry._dispatch_allocations(
+        allocations=[allocation],
+        controller_spec=spec,
+        run_id="same-run",
+        param_dtype="bfloat16",
+    )[0]
+
+    assert captured["argv"][1:3] == ["-m", "torch.distributed.run"]
+    assert "--nproc-per-node=8" in captured["argv"]
+    assert captured["env"]["CUDA_VISIBLE_DEVICES"] == "0,1,2,3,4,5,6,7"
+    assert captured["env"]["EDULLM_WORKER_WORLD_SIZE"] == "8"
+    assert "EDULLM_FINALIST_CONTINUATION" not in captured["env"]
+    assert "WORLD_SIZE" not in captured["env"]  # torchrun owns rank metadata
+    payload = json.loads((tmp_path / "decision-42.json").read_text())
+    assert payload["factory_kwargs"]["rank_microbatch_size"] == 32_768
+    assert "finalist_continuation" not in payload
+    assert result.checkpoint_ref.endswith("step190")
+    assert result.accelerator_seconds == pytest.approx(24.0)
+
+
+def test_olmo2_190m_search_defaults_to_original_single_gpu_launch(monkeypatch, tmp_path):
+    allocation = SimpleNamespace(
+        trial_id="dense-probe",
+        decision_id=43,
+        target_fidelity=32_768,
+        realized_hps={"global_batch_mult": 1.0},
+        checkpoint_ref=None,
+        transition=None,
+    )
+    spec = {
+        "base_global_batch_size": 32_768,
+        "experiment_factory": "olmo_core.hpo.comparison:build_comparison_experiment",
+        "factory_kwargs": {
+            "sequence_length": 2_048,
+            "global_batch_size": 32_768,
+            "rank_microbatch_size": 4_096,
+        },
+        "model_parameterization": {
+            "kind": "standard",
+            "architecture": "olmo2_190M",
+            "depth": 12,
+            "backend": "none",
+        },
+        "controller": {
+            "target_tokens": 327_680,
+            "quantum": 32_768,
+            "checkpoint_root": "/ckpt",
+            "worker_count": 8,
+        },
+        "search_validation_callback": "search_validation",
+        "untouched_evaluator": "final_evaluation",
+        "heldout_metric": "eval/search_validation/val/CE loss",
+        "gpu_ids": list(range(8)),
+        "segment_spec_dir": str(tmp_path),
+    }
+    captured = {}
+
+    def run(argv, *, env, **kwargs):
+        captured.update(argv=argv, env=env)
+        return SimpleNamespace(
+            returncode=0,
+            stderr="",
+            stdout=json.dumps(
+                {
+                    "trial_id": "dense-probe",
+                    "tokens": 32_768,
+                    "heldout_ce": 4.0,
+                    "train_ce_history": [4.1],
+                    "grad_norm_history": [1.0],
+                    "activation_ratio": None,
+                    "numeric_failure": False,
+                    "checkpoint_ref": "/ckpt/trials/dense-probe/step1",
+                }
+            ),
+        )
+
+    monkeypatch.setattr(entry.subprocess, "run", run)
+    result = entry._dispatch_allocations(
+        allocations=[allocation],
+        controller_spec=spec,
+        run_id="dense-run",
+        param_dtype="bfloat16",
+    )[0]
+
+    assert captured["argv"][1] != "-m"
+    assert captured["env"]["CUDA_VISIBLE_DEVICES"] == "0"
+    assert captured["env"]["WORLD_SIZE"] == "1"
+    assert "EDULLM_WORKER_WORLD_SIZE" not in captured["env"]
+    payload = json.loads((tmp_path / "decision-43.json").read_text())
+    assert payload["experiment_factory"] == spec["experiment_factory"]
+    assert payload["model_parameterization"]["architecture"] == "olmo2_190M"
+    assert payload["factory_kwargs"] == spec["factory_kwargs"]
+    assert result.trial_id == "dense-probe"
+
+
 def test_single_resume_opt_in_uses_eight_rank_finalist_and_charges_all_gpus(monkeypatch, tmp_path):
     allocation = SimpleNamespace(
         trial_id="winner",
@@ -1128,6 +1287,32 @@ def test_brainlift_builder_uses_ifbo_and_rejects_cma(monkeypatch):
     )
     assert deterministic.action_centaur is None
     assert deterministic.action_advisor is None
+    olmoe_parameterization = {
+        "kind": "standard",
+        "architecture": "olmoe_1B_7B",
+        "depth": 16,
+        "backend": "none",
+    }
+    olmoe_no_proxy = entry._build_controller_from_spec(
+        {
+            **base,
+            "arm": "olmoe_no_proxy",
+            "model_parameterization": olmoe_parameterization,
+            "fidelity": {"kind": "exact"},
+        }
+    )
+    olmoe_no_centaur = entry._build_controller_from_spec(
+        {
+            **base,
+            "arm": "olmoe_no_centaur",
+            "centaur": None,
+            "model_parameterization": olmoe_parameterization,
+            "fidelity": {"kind": "exact"},
+        }
+    )
+    assert olmoe_no_proxy.action_centaur.ratio == 0.3
+    assert olmoe_no_centaur.action_centaur is None
+    assert olmoe_no_centaur.action_advisor is None
     with pytest.raises(ValueError, match="CMA-ES"):
         entry._build_controller_from_spec(
             {**base, "proposer": {"kind": "cma", "population_size": 4}}

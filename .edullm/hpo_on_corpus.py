@@ -1,10 +1,11 @@
 """Hybrid HPO controller entry point for the eduLLM platform.
 
 This is the CPU-only controller process. It must **not** initialize one global process group,
-and it must **not** be launched under ``torchrun --nproc-per-node=N``: instead it spawns one
-isolated single-process subprocess per trial *segment*, each with ``WORLD_SIZE=1`` and its own
-``CUDA_VISIBLE_DEVICES`` and ``MASTER_PORT``. OLMo has no in-process pause API, so freeze/thaw is
-checkpoint + process exit + a freshly built trainer that loads that checkpoint.
+and it must **not** be launched under ``torchrun --nproc-per-node=N``: instead it spawns an
+isolated subprocess per trial *segment*. Segments default to ``WORLD_SIZE=1`` for compatibility;
+an explicit ``worker_world_size`` may wrap every search segment in its own single-node
+``torchrun``. OLMo has no in-process pause API, so freeze/thaw is checkpoint + process exit + a
+freshly built trainer that loads that checkpoint.
 
 Like ``train_on_corpus.py`` this file lives in ``.edullm/`` (that is what the platform image copies
 and runs) and keeps its heavy imports lazy so it can be loaded and its guards tested without
@@ -21,6 +22,8 @@ file contacts a cloud provider.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import concurrent.futures
 import copy
 import hashlib
@@ -140,13 +143,35 @@ def build_worker_argv(
     return argv
 
 
+def build_distributed_worker_argv(
+    worker_argv: List[str],
+    *,
+    world_size: int,
+    master_port: int,
+) -> List[str]:
+    """Wrap one segment worker in a single-node ``torchrun`` launch."""
+    if world_size <= 1:
+        raise ValueError("distributed worker world size must be greater than one")
+    if len(worker_argv) < 2:
+        raise ValueError("worker argv must name a Python executable and script")
+    return [
+        worker_argv[0],
+        "-m",
+        "torch.distributed.run",
+        f"--nproc-per-node={world_size}",
+        "--master-addr=127.0.0.1",
+        f"--master-port={master_port}",
+        *worker_argv[1:],
+    ]
+
+
 def build_finalist_worker_argv(
     worker_argv: List[str],
     *,
     world_size: int,
     master_port: int,
 ) -> List[str]:
-    """Wrap one segment worker in a single-node ``torchrun`` finalist launch."""
+    """Wrap one segment worker in the compatibility finalist ``torchrun`` path."""
     if world_size <= 1:
         raise ValueError("finalist world size must be greater than one")
     if len(worker_argv) < 2:
@@ -170,6 +195,7 @@ def _parse_args(argv: Optional[List[str]]) -> argparse.Namespace:
     parser.add_argument(
         "--run-segment", action="store_true", help="Internal: run one trial segment."
     )
+    parser.add_argument("--worker-world-size", type=int, default=None)
     parser.add_argument(
         "--run-proxy-cohort",
         action="store_true",
@@ -179,6 +205,8 @@ def _parse_args(argv: Optional[List[str]]) -> argparse.Namespace:
     parser.add_argument("--checkpoint-dir", default=None)
     parser.add_argument("--hard-stop-tokens", type=int, default=None)
     parser.add_argument("--segment-spec", default=None)
+    parser.add_argument("--segment-spec-payload", default=None)
+    parser.add_argument("--observation-path", default=None)
     parser.add_argument("--controller-spec", default=os.environ.get("EDULLM_HPO_SPEC"))
     parser.add_argument("--controller-state", default=None)
     parser.add_argument("--proxy-spec", default=None)
@@ -347,6 +375,7 @@ def _build_controller_from_spec(spec: Dict[str, Any]):
     is_brainlift = algorithm in ("brainlift", "brainlift_test")
     arm_name = spec.get("arm")
     arm = None if arm_name is None else Arm(arm_name)
+    contract = None
     if arm is not None:
         contract = _arm_contract(arm, spec.get("posthoc_variant"))
         expected_fidelity = (
@@ -364,12 +393,25 @@ def _build_controller_from_spec(spec: Dict[str, Any]):
                 or int(parameterization.get("depth", -1)) != 16
             ):
                 raise ValueError(f"arm {arm.value} requires the same-depth u-muP proxy")
-        elif (
-            parameterization.get("kind") != "standard"
-            or parameterization.get("architecture") != "olmo2_190M"
-            or int(parameterization.get("depth", -1)) != 12
-        ):
-            raise ValueError(f"arm {arm.value} requires conventional stock olmo2_190M")
+        elif contract["model_parameterization"] == "stock_olmo2_190m":
+            if (
+                parameterization.get("kind") != "standard"
+                or parameterization.get("architecture") != "olmo2_190M"
+                or int(parameterization.get("depth", -1)) != 12
+            ):
+                raise ValueError(f"arm {arm.value} requires conventional stock olmo2_190M")
+        elif contract["model_parameterization"] == "stock_olmoe_1b_7b":
+            if (
+                parameterization.get("kind") != "standard"
+                or parameterization.get("architecture") != "olmoe_1B_7B"
+                or int(parameterization.get("depth", -1)) != 16
+            ):
+                raise ValueError(f"arm {arm.value} requires stock olmoe_1B_7B")
+        else:
+            raise ValueError(
+                f"arm {arm.value} has unknown model contract "
+                f"{contract['model_parameterization']!r}"
+            )
     if algorithm == "brainlift" and posterior_spec["kind"] != "ftpfn":
         raise ValueError("production Brainlift mode requires the real FT-PFN posterior")
     proposer_spec = spec.get("proposer", {"kind": "ifbo"})
@@ -416,10 +458,11 @@ def _build_controller_from_spec(spec: Dict[str, Any]):
     if is_brainlift:
         if spec.get("ipbt") is None:
             raise ValueError("Brainlift mode requires the IPBT population shell")
-        if centaur_spec is None and arm is not Arm.NO_CENTAUR:
+        centaur_disabled = contract is not None and float(contract["llm_ratio"]) == 0.0
+        if centaur_spec is None and not centaur_disabled:
             raise ValueError("Brainlift mode requires 5.6 Sol Centaur")
-        if arm is Arm.NO_CENTAUR and centaur_spec is not None:
-            raise ValueError("the no_centaur arm must disable Centaur entirely")
+        if centaur_disabled and centaur_spec is not None:
+            raise ValueError(f"the {arm.value} arm must disable Centaur entirely")
         if centaur_spec is not None and (
             centaur_spec.get("scope") != "multi_action"
             or centaur_spec.get("model") != "gpt-5.6-sol"
@@ -547,9 +590,7 @@ def _segment_payload(
     target_tokens = int(controller_spec["controller"]["target_tokens"])
     factory_kwargs = copy.deepcopy(controller_spec.get("factory_kwargs", {}))
     if finalist_continuation is not None:
-        factory_kwargs["rank_microbatch_size"] = int(
-            finalist_continuation["rank_microbatch_size"]
-        )
+        factory_kwargs["rank_microbatch_size"] = int(finalist_continuation["rank_microbatch_size"])
     payload = {
         "experiment_factory": controller_spec["experiment_factory"],
         "factory_kwargs": factory_kwargs,
@@ -596,6 +637,60 @@ def _segment_config_hash(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _build_capacity_block_backend(controller_spec: Mapping[str, Any]):
+    from olmo_core.hpo.capacity_block import (
+        CapacityBlockBackend,
+        CapacityBlockConfig,
+        GhWorkflowGateway,
+    )
+
+    values = controller_spec.get("capacity_block", {})
+    if not isinstance(values, Mapping):
+        raise ValueError("capacity_block configuration must be an object")
+    config = CapacityBlockConfig(
+        branch=str(values.get("branch", "")),
+        repository=str(values.get("repository", "edu-llm/OLMo-core")),
+        platform_repository=str(values.get("platform_repository", "edu-llm/platform")),
+        checkpoint_root=str(controller_spec["controller"]["checkpoint_root"]),
+        max_workers=int(controller_spec.get("max_workers", 8)),
+        worker_world_size=int(controller_spec.get("worker_world_size", 8)),
+        wandb_project=str(values.get("wandb_project", "hpo-probe")),
+        reservation_id=str(values.get("reservation_id", "")),
+        region=str(values.get("region", "us-east-2")),
+        outputs_bucket=str(values.get("outputs_bucket", "edullm-block-outputs-us-east-2")),
+        poll_interval_seconds=float(values.get("poll_interval_seconds", 30.0)),
+        observation_sync_attempts=int(values.get("observation_sync_attempts", 4)),
+    )
+    gateway = GhWorkflowGateway(repository=config.platform_repository)
+    return CapacityBlockBackend(config, gateway)
+
+
+def _refresh_capacity_workers(
+    controller,
+    backend,
+    *,
+    heartbeat: Optional[Callable[[], None]] = None,
+) -> tuple[int, ...]:
+    """Wait for capacity, update the controller width, and return bound slots."""
+
+    nodes = backend.wait_for_idle_nodes(heartbeat=heartbeat)
+    count = backend.worker_count(nodes)
+    controller.config.worker_count = count
+    return tuple(nodes[:count])
+
+
+def _segment_worker_environment(args: argparse.Namespace) -> Dict[str, str]:
+    """Return topology metadata augmented by the explicit remote-worker contract."""
+
+    env = dict(os.environ)
+    world_size = getattr(args, "worker_world_size", None)
+    if world_size is not None:
+        if world_size <= 1:
+            raise ValueError("--worker-world-size must be greater than one")
+        env["EDULLM_WORKER_WORLD_SIZE"] = str(world_size)
+    return env
+
+
 def _dispatch_allocations(
     *,
     allocations,
@@ -604,25 +699,46 @@ def _dispatch_allocations(
     param_dtype: str,
     heartbeat: Optional[Callable[[], None]] = None,
     heartbeat_interval_seconds: float = 60.0,
+    capacity_backend=None,
+    capacity_nodes=None,
 ):
-    from olmo_core.hpo.types import WorkerObservation
-    from olmo_core.hpo.worker import (
-        finalist_distributed_env,
-        trial_namespace,
-        world_size_one_env,
-    )
+    launch_backend = str(controller_spec.get("launch_backend", "local"))
+    if launch_backend not in {"local", "capacity_block"}:
+        raise ValueError(f"unsupported HPO launch_backend {launch_backend!r}")
 
-    gpu_ids = controller_spec.get(
-        "gpu_ids",
-        list(range(int(controller_spec["controller"]["worker_count"]))),
-    )
-    if len(gpu_ids) < len(allocations):
-        raise ValueError("controller spec provides fewer GPU ids than allocations")
-    finalist_continuation = _eligible_finalist_continuation(
-        allocations,
-        controller_spec=controller_spec,
-        gpu_ids=gpu_ids,
-    )
+    worker_world_size = int(controller_spec.get("worker_world_size", 1))
+    if worker_world_size < 1:
+        raise ValueError("worker_world_size must be at least one")
+    if launch_backend == "capacity_block" and worker_world_size != 8:
+        raise ValueError("capacity-block HPO requires worker_world_size=8")
+    finalist_continuation = None
+    if launch_backend == "local":
+        from olmo_core.hpo.worker import (
+            distributed_worker_env,
+            finalist_distributed_env,
+            trial_namespace,
+            world_size_one_env,
+        )
+
+        default_gpu_count = int(controller_spec["controller"]["worker_count"]) * worker_world_size
+        gpu_ids = controller_spec.get(
+            "gpu_ids",
+            list(range(default_gpu_count)),
+        )
+        required_gpu_count = len(allocations) * worker_world_size
+        if len(gpu_ids) < required_gpu_count:
+            raise ValueError("controller spec provides fewer GPU ids than allocations")
+        if worker_world_size > 1 and len(set(gpu_ids[:required_gpu_count])) != required_gpu_count:
+            raise ValueError("distributed allocations require distinct GPU ids")
+        finalist_continuation = (
+            _eligible_finalist_continuation(
+                allocations,
+                controller_spec=controller_spec,
+                gpu_ids=gpu_ids,
+            )
+            if worker_world_size == 1
+            else None
+        )
     spec_dir = Path(
         controller_spec.get(
             "segment_spec_dir",
@@ -631,6 +747,7 @@ def _dispatch_allocations(
     )
     spec_dir.mkdir(parents=True, exist_ok=True)
     launches = []
+    capacity_trials = []
     for index, allocation in enumerate(allocations):
         payload = _segment_payload(
             allocation,
@@ -639,6 +756,18 @@ def _dispatch_allocations(
         )
         spec_path = spec_dir / f"decision-{allocation.decision_id}.json"
         spec_path.write_text(json.dumps(payload, sort_keys=True))
+        if launch_backend == "capacity_block":
+            from olmo_core.hpo.capacity_block import CapacityTrial
+
+            capacity_trials.append(
+                CapacityTrial(
+                    trial_id=allocation.trial_id,
+                    decision_id=int(allocation.decision_id),
+                    target_fidelity=int(allocation.target_fidelity),
+                    payload=payload,
+                )
+            )
+            continue
         checkpoint_dir = trial_namespace(
             controller_spec["controller"]["checkpoint_root"],
             allocation.trial_id,
@@ -652,7 +781,19 @@ def _dispatch_allocations(
             segment_spec=str(spec_path),
         )
         master_port = int(controller_spec.get("master_port_base", 29500)) + index
-        if finalist_continuation is None:
+        if worker_world_size > 1:
+            accelerator_count = worker_world_size
+            argv = build_distributed_worker_argv(
+                argv,
+                world_size=accelerator_count,
+                master_port=master_port,
+            )
+            first_gpu = index * accelerator_count
+            env = distributed_worker_env(
+                [int(gpu) for gpu in gpu_ids[first_gpu : first_gpu + accelerator_count]],
+                world_size=accelerator_count,
+            )
+        elif finalist_continuation is None:
             env = world_size_one_env(int(gpu_ids[index]), master_port)
             accelerator_count = 1
         else:
@@ -667,6 +808,17 @@ def _dispatch_allocations(
                 world_size=accelerator_count,
             )
         launches.append((allocation, argv, env, accelerator_count))
+
+    if launch_backend == "capacity_block":
+        backend = capacity_backend or _build_capacity_block_backend(controller_spec)
+        return backend.run(
+            capacity_trials,
+            run_id=run_id,
+            idle_nodes=capacity_nodes,
+            heartbeat=heartbeat,
+        )
+
+    from olmo_core.hpo.types import WorkerObservation
 
     def run_one(launch):
         allocation, argv, env, accelerator_count = launch
@@ -776,9 +928,7 @@ def _eligible_finalist_continuation(
                 "quantum", controller_spec["controller"]["target_tokens"]
             )
         ),
-        multiple=int(
-            controller_spec.get("factory_kwargs", {}).get("rank_microbatch_size", 1)
-        ),
+        multiple=int(controller_spec.get("factory_kwargs", {}).get("rank_microbatch_size", 1)),
     )
     if global_batch_size % (world_size * rank_microbatch_size):
         # Preserve the lineage batch exactly. An indivisible winner safely remains on one GPU.
@@ -1012,7 +1162,9 @@ def _persist_study_result(
     return payload
 
 
-def _probe_durable_roots(spec: Mapping[str, Any], checkpoint_root: Optional[str]) -> tuple[str, ...]:
+def _probe_durable_roots(
+    spec: Mapping[str, Any], checkpoint_root: Optional[str]
+) -> tuple[str, ...]:
     from olmo_core.hpo.wandb_probe import durable_storage_roots
 
     extra_roots = [
@@ -1077,7 +1229,12 @@ def _finalize_hpo_probe_session(
     probe.close(exit_code=exit_code)
 
 
-def _write_json_artifact(path: str, payload: Mapping[str, Any]) -> None:
+def _write_json_artifact(
+    path: str,
+    payload: Mapping[str, Any],
+    *,
+    overwrite: bool = False,
+) -> None:
     """Atomically persist a JSON artifact locally or through OLMo's URL backend."""
 
     text = json.dumps(payload, sort_keys=True, indent=2, allow_nan=False)
@@ -1089,7 +1246,7 @@ def _write_json_artifact(path: str, payload: Mapping[str, Any]) -> None:
         with tempfile.TemporaryDirectory(prefix="hpo-proxy-evidence-") as temp_dir:
             local = Path(temp_dir) / "proxy-evidence.json"
             local.write_text(text)
-            upload(local, path, save_overwrite=False)
+            upload(local, path, save_overwrite=overwrite)
         return
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -1346,7 +1503,10 @@ def run_proxy_cohort(args: argparse.Namespace) -> int:
             run_id=args.run_id,
             param_dtype=args.param_dtype,
         )
-        from olmo_core.hpo.proxy import ProxyAdmission, evaluate_paired_proxy_observations
+        from olmo_core.hpo.proxy import (
+            ProxyAdmission,
+            evaluate_paired_proxy_observations,
+        )
 
         metrics = evaluate_paired_proxy_observations(
             contract,
@@ -1391,7 +1551,9 @@ def run_proxy_cohort(args: argparse.Namespace) -> int:
             segment_spec_dir = Path(
                 proxy_spec.get(
                     "segment_spec_dir",
-                    os.path.join(tempfile.gettempdir(), f"edullm-hpo-{args.run_id}-proxy-cohort-{side}"),
+                    os.path.join(
+                        tempfile.gettempdir(), f"edullm-hpo-{args.run_id}-proxy-cohort-{side}"
+                    ),
                 )
             )
             probe.mirror_ephemeral_directory(
@@ -1501,6 +1663,12 @@ def run_controller(args: argparse.Namespace) -> int:
         from olmo_core.hpo.umup import require_official_umup_forward
 
         require_official_umup_forward()
+    capacity_backend = None
+    capacity_nodes = None
+    if spec.get("launch_backend", "local") == "capacity_block":
+        capacity_backend = _build_capacity_block_backend(spec)
+        capacity_nodes = capacity_backend.wait_for_idle_nodes()
+        spec["controller"]["worker_count"] = capacity_backend.worker_count(capacity_nodes)
     controller = _build_controller_from_spec(spec)
     state_path = args.controller_state or spec.get(
         "controller_state_path",
@@ -1538,12 +1706,20 @@ def run_controller(args: argparse.Namespace) -> int:
                 run_id=args.run_id,
                 param_dtype=args.param_dtype,
                 heartbeat=probe.log_heartbeat,
+                capacity_backend=capacity_backend,
+                capacity_nodes=capacity_nodes,
             )
             controller.ingest(results)
             _persist_controller_log(controller, state_path, remote_root)
             probe.log_controller(controller)
         max_rounds = int(spec.get("max_rounds", 10_000))
         for _ in range(max_rounds):
+            if capacity_backend is not None:
+                capacity_nodes = _refresh_capacity_workers(
+                    controller,
+                    capacity_backend,
+                    heartbeat=probe.log_heartbeat,
+                )
             try:
                 allocations = controller.propose_round()
             except Exception:
@@ -1560,12 +1736,16 @@ def run_controller(args: argparse.Namespace) -> int:
                 run_id=args.run_id,
                 param_dtype=args.param_dtype,
                 heartbeat=probe.log_heartbeat,
+                capacity_backend=capacity_backend,
+                capacity_nodes=capacity_nodes,
             )
             controller.ingest(results)
             _persist_controller_log(controller, state_path, remote_root)
             probe.log_controller(controller)
         final_completed_method = getattr(controller, "final_evaluation_completed", None)
-        final_completed = bool(final_completed_method()) if callable(final_completed_method) else False
+        final_completed = (
+            bool(final_completed_method()) if callable(final_completed_method) else False
+        )
         exact_result = None
         if not final_completed:
             exact_result = _run_exact_retrain(
@@ -1607,11 +1787,23 @@ def run_controller(args: argparse.Namespace) -> int:
 
 def run_segment(args: argparse.Namespace) -> int:
     """Run one isolated OLMo trial segment."""
-    if not args.segment_spec:
-        raise ValueError("--segment-spec is required in segment mode")
+    segment_sources = [
+        bool(args.segment_spec),
+        bool(args.segment_spec_payload),
+    ]
+    if sum(segment_sources) != 1:
+        raise ValueError("segment mode requires exactly one segment-spec input")
     if not args.trial_id or not args.checkpoint_dir or args.hard_stop_tokens is None:
         raise ValueError("segment mode requires trial id, checkpoint directory, and hard stop")
-    spec = json.loads(Path(args.segment_spec).read_text())
+    encoded_spec = args.segment_spec_payload
+    if encoded_spec:
+        try:
+            decoded_spec = base64.b64decode(encoded_spec, altchars=b"-_", validate=True)
+            spec = json.loads(decoded_spec.decode("utf-8"))
+        except (binascii.Error, ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("encoded segment spec is not valid JSON") from exc
+    else:
+        spec = json.loads(Path(args.segment_spec).read_text())
     model_parameterization = spec.get("model_parameterization", {"kind": "standard"})
     if model_parameterization.get("kind") == "umup":
         from olmo_core.hpo.umup import require_official_umup_forward
@@ -1671,8 +1863,12 @@ def run_segment(args: argparse.Namespace) -> int:
         payload["heldout_ce"] = None
     from olmo_core.hpo.worker import should_emit_worker_result
 
-    if should_emit_worker_result(os.environ):
-        print(json.dumps(payload, sort_keys=True, allow_nan=False), flush=True)
+    if should_emit_worker_result(_segment_worker_environment(args)):
+        encoded = json.dumps(payload, sort_keys=True, allow_nan=False)
+        if args.observation_path:
+            _write_json_artifact(args.observation_path, payload, overwrite=True)
+            print(f"EDULLM_HPO_OBSERVATION={encoded}", flush=True)
+        print(encoded, flush=True)
     return 0
 
 
@@ -1683,11 +1879,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = _parse_args(argv)
     if args.run_segment and args.run_proxy_cohort:
         raise ValueError("--run-segment and --run-proxy-cohort are mutually exclusive")
-    # Trial segments are world-size-one unless explicitly marked as a finalist continuation.
+    # Trial segments are world-size-one unless explicitly marked as a distributed worker.
     if args.run_segment:
         from olmo_core.hpo.worker import assert_worker_topology
 
-        assert_worker_topology(os.environ)
+        assert_worker_topology(_segment_worker_environment(args))
     else:
         assert_controller_is_cpu_only(os.environ)
     if args.dry_run:
