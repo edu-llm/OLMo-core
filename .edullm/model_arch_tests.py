@@ -183,7 +183,7 @@ FROZEN_SAVE_INTERVAL = 572
 PARAMETER_TARGET = 390_135_552
 PARAMETER_TOLERANCE = 195_068
 EXACT_PARAMETER_COUNTS = {
-    "mamba-b3": 390_100_352,
+    "mamba-b3": 390_154_112,
     "xlstm": 390_143_056,
     "mamba3-siso-pd": 390_169_664,
     "native-pd": 390_142_976,
@@ -513,9 +513,10 @@ def _treatment_mixer(arm: str, layer_index: int):
         #   - the official tanh(angle)*pi*dt per-head rotation over half the state, the rest
         #     identity (dt_scaled_rotation + rope_fraction=0.5).
         # b=3, d_state=192, SISO rank 1, official_fast/quaternion, and the pre-norm shell (set in
-        # `_block_type`) complete the arm. The faithful options are only wired for the unfused
-        # layout, so `fuse_input_projections` is False; theta_max is unused because tanh*pi*dt
-        # bounds the angle itself.
+        # `_block_type`) complete the arm. `fuse_input_projections` stays off: fusing the eight
+        # input GEMMs into three measured within 2% either way, which does not pay for the fused
+        # dynamics GEMM having to slice `a_proj` at a fixed offset. theta_max is unused because
+        # tanh*pi*dt bounds the angle itself.
         return Mamba3MixerConfig(
             n_heads=32,
             head_dim=64,
@@ -532,6 +533,22 @@ def _treatment_mixer(arm: str, layer_index: int):
             bc_bias_after_norm=True,
             dt_scaled_rotation=True,
             rope_fraction=0.5,
+            # THE ONE PLACE THIS ARM TRADES FIDELITY FOR SPEED. Published Mamba-3 scales the
+            # rotation by the per-head dt, which makes the rotation head-specific and so forces
+            # B/C to be broadcast to heads before the scan -- handing the kernel n_heads copies
+            # of Q/K instead of letting GQA share one group, on top of an n_heads-times-wider
+            # prefix product. Measured on the production quaternion path at this arm's own
+            # microbatch shape (batch 2, seq 4096): 276.8 ms a layer against 14.7 ms for the
+            # group-shared form, 18.8x the work, and the group-shared form is cheaper than even
+            # the pre-faithful arm's rotation because rope_fraction halves the blocks.
+            #
+            # `group_mean` averages dt over each group's heads. The rotation still advances with
+            # the timestep, just at group granularity, and nothing requires the rotation's
+            # timescale to be the decay's -- but the published model ties them, so this is a
+            # departure and is recorded as one. It also makes the post-BCNorm B/C bias
+            # group-shared rather than head-specific, because a head-specific additive bias
+            # cannot exist without head-specific B/C; that is what moves the parameter count.
+            rotation_timescale="group_mean",
             prefer_official_kernel=True,
             rotation_scan_impl="quaternion",
             # Exact fused Mamba-3 recurrence. ``simple_gla`` is an approximate algebraic fold with

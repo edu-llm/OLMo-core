@@ -33,7 +33,14 @@ count, no FFN width, and no speed — only what the mixer sees at its input.
   output ordering, and the official `tanh(angle)·π·dt` per-head rotation over
   half of `d_state=192` (the rest identity), all on the `official_fast` SSD
   backend. Uses a pre-norm shell (published Mamba is pre-norm), so its four
-  attention layers are pre-norm too.
+  attention layers are pre-norm too. One deliberate speed deviation: the rotation
+  timescale is the group mean of `dt` rather than per head. Per-head is the
+  published semantics but forces `B`/`C` to be broadcast to heads before the
+  scan, which costs 18.8x the rotation work at this arm's microbatch shape
+  (276.8 ms a layer against 14.7 ms, measured on the production quaternion path)
+  and gives up GQA into the kernel. The post-BCNorm `B`/`C` bias is group-shared
+  for the same reason: a head-specific additive bias cannot exist without
+  head-specific `B`/`C`.
 - `xlstm`: `[mLSTM, mLSTM, mLSTM, attention, mLSTM, mLSTM, sLSTM, attention]`
   repeated twice, giving exactly 10 mLSTM, 2 sLSTM, and 4 attention layers. Also
   pre-norm: an A/B at fixed sequence length put 132 non-finite parameter
@@ -61,7 +68,7 @@ so the arm's parameter count and FFN widths did not move.
 Attention FFNs remain fixed at width 4608. A deterministic `/32` solver changes
 only recurrent-layer FFN widths. Exact totals are:
 
-- `mamba-b3`: 390,100,352 parameters.
+- `mamba-b3`: 390,154,112 parameters.
 - `xlstm`: 390,143,056 parameters.
 - `mamba3-siso-pd`: 390,169,664 parameters.
 - `native-pd`: 390,142,976 parameters.

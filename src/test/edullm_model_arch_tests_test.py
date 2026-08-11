@@ -289,7 +289,7 @@ def test_treatment_mixers_are_strict_and_parameter_matched():
     from olmo_core.nn.mamba3 import Mamba3MixerConfig
 
     expected_counts = {
-        "mamba-b3": 390_100_352,
+        "mamba-b3": 390_154_112,
         "xlstm": 390_143_056,
         "mamba3-siso-pd": 390_169_664,
         "native-pd": 390_142_976,
@@ -299,9 +299,9 @@ def test_treatment_mixers_are_strict_and_parameter_matched():
         "kda-gconv": 390_094_784,
     }
     expected_widths = {
-        # Faithful SISO expand=2 makes the Mamba mixer ~6.89M a layer (vs ~3.77M before), so the
+        # Faithful SISO expand=2 makes the Mamba mixer ~6.88M a layer (vs ~3.77M before), so the
         # arm buys back much less FFN than it used to: ~3,680 a recurrent slot against ~4,704.
-        "mamba-b3": (3680,) * 9 + (3648,) * 3,
+        "mamba-b3": (3680,) * 11 + (3648,),
         "xlstm": (4672,) * 8 + (4640,) * 4,
         "mamba3-siso-pd": (2752,) * 11 + (2720,),
         "native-pd": (2432,) * 6 + (2400,) * 6,
@@ -343,6 +343,10 @@ def test_treatment_mixers_are_strict_and_parameter_matched():
             assert all(mixer.dt_scaled_rotation for mixer in mixers)
             assert all(mixer.rope_fraction == 0.5 for mixer in mixers)
             assert all(mixer.fuse_input_projections is False for mixer in mixers)
+            # The one deliberate speed-for-fidelity trade: a group-shared rotation timescale, so
+            # B/C stay one group wide and the scan keeps GQA. Measured 18.8x less rotation work
+            # than the published per-head form at this arm's microbatch shape.
+            assert all(mixer.rotation_timescale == "group_mean" for mixer in mixers)
         elif arm == "xlstm":
             names = [type(mixer).__name__ for mixer in mixers]
             assert names.count("XLSTMMixerConfig") == 10

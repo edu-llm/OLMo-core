@@ -1120,12 +1120,77 @@ def test_dt_scaled_rotation_rejects_a_second_angle_bound():
         _faithful_siso_config(theta_max=0.01).build(32, layer_idx=0, n_layers=1, init_device="meta")
 
 
-def test_faithful_options_reject_fused_projections():
-    """The faithful path is only wired for the unfused layout; fusing it must fail loudly."""
-    with pytest.raises(OLMoConfigurationError, match="fuse_input_projections"):
-        _faithful_siso_config(fuse_input_projections=True).build(
-            32, layer_idx=0, n_layers=1, init_device="meta"
+@pytest.mark.parametrize("timescale", ["per_head", "group_mean"])
+def test_faithful_options_work_fused_and_unfused_at_the_same_parameter_count(timescale: str):
+    """
+    Fusing the input projections is a layout choice, not a feature switch.
+
+    ``a_proj`` rides inside the fused dynamics GEMM instead of adding a ninth launch, so the two
+    layouts must hold the same parameters and both run. The fused ordering is dt, lambda, a,
+    theta; getting it wrong slices every dynamics tensor at the wrong offset, which the
+    round-trip below would catch.
+    """
+    d_model = 64
+    unfused = _faithful_siso_config(rotation_timescale=timescale, fuse_input_projections=False)
+    fused = _faithful_siso_config(rotation_timescale=timescale, fuse_input_projections=True)
+    assert unfused.num_params(d_model) == fused.num_params(d_model)
+
+    built_unfused = unfused.build(d_model, layer_idx=0, n_layers=2, init_device="cpu")
+    built_fused = fused.build(d_model, layer_idx=0, n_layers=2, init_device="cpu")
+    assert sum(p.numel() for p in built_unfused.parameters()) == unfused.num_params(d_model)
+    assert sum(p.numel() for p in built_fused.parameters()) == fused.num_params(d_model)
+    assert built_fused.a_proj is None and built_unfused.a_proj is not None
+
+    for module in (built_unfused, built_fused):
+        module.init_weights(
+            init_method=InitMethod.normal, d_model=d_model, block_idx=0, num_blocks=2
         )
+        y = module(torch.randn(2, 6, d_model))
+        assert y.shape == (2, 6, d_model)
+        assert torch.isfinite(y).all()
+
+    # A fused checkpoint must load into the unfused module and vice versa.
+    built_unfused.load_state_dict(built_fused.state_dict())
+    built_fused.load_state_dict(built_unfused.state_dict())
+
+
+def test_group_mean_timescale_keeps_the_bc_path_one_group_wide():
+    """
+    The point of ``group_mean`` is that ``B``/``C`` never get broadcast to heads.
+
+    That is what preserves GQA into the scan, and it is the whole throughput argument for the
+    option, so it is asserted on the tensors handed to the dispatcher rather than inferred.
+    ``per_head`` is checked alongside it so the contrast is explicit.
+    """
+    import olmo_core.nn.mamba3.mixer as mixer_mod
+
+    d_model = 32
+    seen: dict = {}
+    real = mixer_mod.dispatch_mamba3_ssd
+
+    def spy(*args, **kwargs):
+        seen["args"] = args
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    for timescale, expected_groups in (("per_head", None), ("group_mean", 1)):
+        module = _faithful_siso_config(rotation_timescale=timescale).build(
+            d_model, layer_idx=0, n_layers=2, init_device="cpu"
+        )
+        module.init_weights(
+            init_method=InitMethod.normal, d_model=d_model, block_idx=0, num_blocks=2
+        )
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(mixer_mod, "dispatch_mamba3_ssd", spy)
+            module(torch.randn(2, 6, d_model))
+        _, B_seen, _, _, _, _, theta_seen = seen["args"]
+        groups = expected_groups if expected_groups is not None else module.n_heads
+        assert B_seen.shape[2] == groups, timescale
+        assert theta_seen.shape[2] == groups, timescale
+        assert seen["heads_per_group"] == module.n_heads // groups, timescale
+        # The post-norm bias has exactly one row per lane the scan sees.
+        assert module.bc_post_bias_b is not None
+        assert module.bc_post_bias_b.shape[0] == groups, timescale
 
 
 @requires_gpu
