@@ -112,6 +112,44 @@ def test_parent_chunks_are_shard_local_and_reserve_a_next_token(tmp_path):
     assert dataset[-1]["input_ids"].tolist() == [104, 105, 106, 107]
 
 
+def test_parent_chunks_and_order_support_remote_range_reads(monkeypatch):
+    import olmo_core.hpo.curriculum as curriculum_module
+
+    parent_path = "s3://mirror/parent/source-a/train-00000.u32le.bin"
+    order_path = "s3://mirror/order/mtld/train-00000.u64le.bin"
+    parent = np.arange(9, dtype="<u4")
+    order = np.array([1, 0], dtype="<u8")
+    objects = {parent_path: parent.tobytes(), order_path: order.tobytes()}
+
+    monkeypatch.setattr(
+        curriculum_module,
+        "get_file_size",
+        lambda path: len(objects[str(path)]),
+    )
+    monkeypatch.setattr(
+        curriculum_module,
+        "get_bytes_range",
+        lambda path, start, length: objects[str(path)][start : start + length],
+    )
+    monkeypatch.setattr(
+        curriculum_module,
+        "load_array_slice_into_tensor",
+        lambda path, start, end, dtype: curriculum_module.torch.tensor(
+            np.frombuffer(objects[str(path)], dtype=dtype)[start:end].astype(np.int64)
+        ),
+    )
+
+    dataset = ParentChunkDataset([parent_path], sequence_length=4, dtype="<u4")
+    resolved_order = curriculum_module._load_order(
+        [order_path], curriculum_module.NumpyDatasetDType.uint64
+    )
+
+    assert len(dataset) == 2
+    assert dataset.source_ids == ("source-a",)
+    assert dataset[1]["input_ids"].tolist() == [4, 5, 6, 7]
+    assert resolved_order.tolist() == [1, 0]
+
+
 def test_arm9_boundaries_use_exact_integer_token_fractions_for_every_batch_size():
     target_tokens = 503_316_480
     boundaries = token_phase_boundaries(target_tokens)

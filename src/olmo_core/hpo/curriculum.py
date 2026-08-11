@@ -21,8 +21,10 @@ from ..config import Config
 from ..data import NumpyDatasetDType, TokenizerConfig
 from ..data.collator import DataCollator
 from ..data.data_loader import DataLoaderConfig, TextDataLoaderBase
+from ..data.utils import load_array_slice_into_tensor
 from ..distributed.parallel import get_dp_process_group
 from ..distributed.utils import get_fs_local_rank, get_rank, get_world_size
+from ..io import get_bytes_range, get_file_size, is_url
 from .comparison import (
     ComparisonExperimentConfig,
     build_comparison_experiment,
@@ -252,7 +254,7 @@ class ParentChunkDataset:
         sequence_length: int,
         dtype: str | np.dtype[Any] | type[np.unsignedinteger],
     ) -> None:
-        self.paths = tuple(Path(path) for path in paths)
+        self.paths = tuple(str(path) for path in paths)
         self.sequence_length = int(sequence_length)
         self.dtype = np.dtype(dtype)
         if self.sequence_length <= 0:
@@ -260,14 +262,23 @@ class ParentChunkDataset:
         if not self.paths:
             raise CurriculumDataError("parent pool has no shards")
         self.source_ids = _source_ids(tuple(str(path) for path in self.paths))
-        self._arrays: list[np.memmap[Any, Any]] = []
+        self._arrays: list[np.memmap[Any, Any] | None] = []
         self._ends: list[int] = []
         total = 0
         for path in self.paths:
-            if not path.is_file():
-                raise CurriculumDataError(f"missing staged parent shard: {path}")
-            array = np.memmap(path, mode="r", dtype=self.dtype)
-            chunks = (len(array) - 1) // self.sequence_length
+            if is_url(path):
+                size_bytes = get_file_size(path)
+                if size_bytes % self.dtype.itemsize:
+                    raise CurriculumDataError(f"parent shard has a partial token: {path}")
+                token_count = size_bytes // self.dtype.itemsize
+                array = None
+            else:
+                local_path = Path(path)
+                if not local_path.is_file():
+                    raise CurriculumDataError(f"missing staged parent shard: {path}")
+                array = np.memmap(local_path, mode="r", dtype=self.dtype)
+                token_count = len(array)
+            chunks = (token_count - 1) // self.sequence_length
             if chunks <= 0:
                 continue
             self._arrays.append(array)
@@ -290,11 +301,21 @@ class ParentChunkDataset:
         prior_end = self._ends[shard - 1] if shard else 0
         local_index = index - prior_end
         start = local_index * self.sequence_length
-        tokens = np.asarray(
-            self._arrays[shard][start : start + self.sequence_length],
-            dtype=np.int64,
-        )
-        return {"input_ids": torch.from_numpy(tokens.copy()), "index": index}
+        array = self._arrays[shard]
+        if array is None:
+            tokens = load_array_slice_into_tensor(
+                self.paths[shard],
+                start,
+                start + self.sequence_length,
+                self.dtype.type,
+            )
+        else:
+            values = np.asarray(
+                array[start : start + self.sequence_length],
+                dtype=np.int64,
+            )
+            tokens = torch.from_numpy(values.copy())
+        return {"input_ids": tokens, "index": index}
 
 
 def token_phase_boundaries(target_tokens: int) -> tuple[int, ...]:
@@ -564,7 +585,16 @@ class ParentChunkDatasetConfig(Config):
 
 
 def _load_order(paths: Sequence[str], dtype: NumpyDatasetDType) -> np.ndarray:
-    parts = [np.memmap(path, mode="r", dtype=dtype.as_np_dtype()) for path in paths]
+    np_dtype = np.dtype(dtype.as_np_dtype())
+    parts = []
+    for path in paths:
+        if is_url(path):
+            size_bytes = get_file_size(path)
+            if size_bytes % np_dtype.itemsize:
+                raise CurriculumDataError(f"curriculum order has a partial index: {path}")
+            parts.append(np.frombuffer(get_bytes_range(path, 0, size_bytes), dtype=np_dtype))
+        else:
+            parts.append(np.memmap(path, mode="r", dtype=np_dtype))
     if not parts:
         raise CurriculumDataError("curriculum order resolved to no objects")
     return np.asarray(
