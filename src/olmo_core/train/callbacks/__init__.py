@@ -17,6 +17,10 @@ from .evaluator_callback import (
 from .gap_monitor import GAPMonitorCallback
 from .garbage_collector import GarbageCollectorCallback
 from .gpu_memory_monitor import GPUMemoryMonitorCallback
+from .hyper_connection_monitor import (
+    HyperConnectionMonitorCallback,
+    HyperConnectionMonitorCallbackConfig,
+)
 from .hf_converter import HFConverterCallback
 from .list_checkpointer import ListCheckpointerCallback
 from .metric_saver import MetricSaverCallback
@@ -44,6 +48,8 @@ __all__ = [
     "GAPMonitorCallback",
     "GarbageCollectorCallback",
     "GPUMemoryMonitorCallback",
+    "HyperConnectionMonitorCallback",
+    "HyperConnectionMonitorCallbackConfig",
     "HFConverterCallback",
     "ProfilerCallback",
     "SlackNotifierCallback",

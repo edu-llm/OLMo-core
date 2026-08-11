@@ -1,0 +1,117 @@
+# STAGE 2: the 2x2, four arms at five seeds, twenty cells.
+#
+#   edullm check  --json --spec .edullm/run.hc-treatment.yaml \
+#     --experiment hc-moe-stream-balance --dataset regmix-10b-v1 \
+#     --team input-core --compute gpu-1xa10g --hours 20
+#   edullm submit       --spec .edullm/run.hc-treatment.yaml \
+#     --experiment hc-moe-stream-balance --dataset regmix-10b-v1 \
+#     --team input-core --compute gpu-1xa10g --hours 20
+#
+# DO NOT SUBMIT THIS UNTIL THREE THINGS HAVE HAPPENED, in this order:
+#
+#   1. .edullm/run.hc-smoke.yaml has reported, and --steps, --save-interval and
+#      --rank-microbatch-size here and in run.hc-baseline.yaml have been set from it. Identical
+#      values in both files: a treatment arm on a different horizon from its own noise floor is
+#      not a comparison.
+#   2. The four-cell mechanism pilot has reported. That is this same spec at --steps 500 and
+#      --fanout-size 4 with --seeds-per-arm 1, which runs one seed of each arm for about an
+#      hour a cell. If the H_res gradient ratio in the balanced arms has not risen by three
+#      orders of magnitude over the unbalanced ones by step 500, the treatment is not doing
+#      what it was built to do and these twenty cells would measure nothing. This is the
+#      highest-value hour in the plan; see EXPERIMENT-DESIGN.md section 9.
+#   3. .edullm/run.hc-baseline.yaml has reported, and
+#      `python src/scripts/ablations/hc_power.py --sigma <measured>` has been re-run. Every
+#      threshold in the design scales linearly with sigma and the committed one is an
+#      extrapolation.
+#
+# ---------------------------------------------------------------------------------------
+# THE ARMS, AND WHERE THE MAPPING FROM AN INDEX TO AN ARM LIVES
+# ---------------------------------------------------------------------------------------
+#
+#   cell 0-4    mhc_moe                    learned Sinkhorn mixer, balancing OFF  (reference)
+#   cell 5-9    mhc_moe_balanced           learned Sinkhorn mixer, balancing ON   (treatment)
+#   cell 10-14  mhc_moe_identity           H_res pinned to I,      balancing OFF
+#   cell 15-19  mhc_moe_identity_balanced  H_res pinned to I,      balancing ON
+#
+# The seed is the index within the arm, so arm A seed k and arm B seed k share a data order and
+# the primary analysis is the paired difference. The one isolated change between the reference
+# and the treatment is `stream_balance_loss_weight`, 0.0 against 0.01; everything else in
+# .edullm/train_hc_moe.py's ARMS table is identical between them.
+#
+# **THE MAPPING IS PYTHON AND NOT SHELL, WHICH IS DELIBERATE.** The platform hands a container
+# one integer in AWS_BATCH_JOB_ARRAY_INDEX and nothing else. Turning 0..19 into an arm and a
+# replicate with shell arithmetic inside a YAML folded scalar inside two levels of quoting is
+# exactly the class of thing that fails quietly and gives twenty cells one arm, and the failure
+# is invisible in every log. `train_hc_moe.resolve_cell` does it instead: it refuses an index
+# outside 0..19 rather than taking a modulus, because a modulus would map a mis-sized fan-out's
+# cell 20 onto arm 0 seed 0 and report a duplicate replicate as a fresh one.
+# `src/scripts/ablations/hc_launch_check.py` runs the real command and asserts the mapping.
+#
+# **THE FAN-OUT SIZE AND --seeds-per-arm HAVE TO AGREE, AND NOTHING ON THE PLATFORM CHECKS
+# THAT.** 20 = 4 arms x 5 seeds. If you change one, change both, and re-run the launch check.
+#
+# ---------------------------------------------------------------------------------------
+# WHAT IS BEING MEASURED, AND WHY IT IS NOT THE LOSS
+# ---------------------------------------------------------------------------------------
+#
+# The primary endpoint is the residual mixer's displacement from its initialisation and the
+# H_res gradient norm relative to a reference parameter in the same block, both logged by
+# `HyperConnectionMonitorCallback` at --monitor-interval. Validation loss is a SECONDARY
+# endpoint here, reported with its interval and no claim attached, and the reason is arithmetic
+# rather than modesty: at the planning sigma the minimum detectable effect is 0.035 nats on the
+# simple contrast and 0.049 on the interaction, against a literature effect of 0.030 for the
+# whole of hyper-connections, of which this treatment is second-order. Thirty seeds an arm
+# would not close it. EXPERIMENT-DESIGN.md section 6 carries the table and says so plainly.
+#
+# The mechanism endpoint is not in that position. Measured on a CPU over 200 optimizer steps
+# (src/test/nn/stream_balance_test.py), the treatment moves the H_res gradient ratio from
+# 2.4e-08 to 8.5e-05 and the stream dispersion from 5.9e-08 to 3.0e-03. 2.4e-08 is the regime a
+# public mHC reproduction reported when it measured 1e-9 against 1.84 and concluded the matrix
+# never left its initialisation. An intervention with a three-and-a-half order of magnitude
+# effect does not need a tight noise floor to be visible; a 0.01-nat loss difference does.
+#
+# ---------------------------------------------------------------------------------------
+# WHAT IS NOT VERIFIED, STATED HERE BECAUSE THIS IS THE EXPENSIVE ONE
+# ---------------------------------------------------------------------------------------
+#
+# No hyper-connected MoE block has run a single step on a GPU. The MoE forward needs CUDA
+# kernels -- `olmo_core.ops.moe` asserts them and every MoE test in this repository carries
+# `@requires_gpu` -- so the CPU suite substitutes a stand-in for the expert dispatch on both
+# sides of every comparison. That covers the residual wiring exactly, which is what this work
+# adds, and covers nothing about the interaction between that wiring and the real dispatch. The
+# two tests that would, `test_real_moe_forward_matches_the_unwrapped_block` and
+# `test_router_auxiliary_loss_survives_the_write_out_gate`, are marked `@requires_gpu` and have
+# never been run. Run them before this spec:
+#
+#   pytest -v src/test/nn/hc_moe_block_test.py -k requires_gpu
+#
+# Expert parallelism raises `NotImplementedError` by design; these blocks run under data
+# parallelism, which at one card per cell is no parallelism at all.
+#
+# The three things in the command text that exist for the platform -- the dtype named in the
+# text, the checkpoint variable in expandable quotes, and `exec` in front of the launcher --
+# are each explained in the header of .edullm/run.hc-smoke.yaml.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-1xa10g
+command: >-
+  bash -lc 'CELL="${AWS_BATCH_JOB_ARRAY_INDEX:?refusing_to_run_without_a_fanout_index}" ;
+  exec python -m torch.distributed.run --nproc-per-node=1 --standalone
+  .edullm/train_hc_moe.py "$EDULLM_RUN_ID"
+  --save-folder "$EDULLM_CHECKPOINT_DIR"
+  --cell "$CELL"
+  --seeds-per-arm 5
+  --sequence-length 2048
+  --global-batch-size 262144
+  --rank-microbatch-size 8192
+  --steps 3000
+  --warmup-steps 200
+  --save-interval 125
+  --learning-rate 6e-4
+  --monitor-interval 50
+  --matrix-interval 500
+  --param-dtype bfloat16
+  train_module.compile_model=false'
+fanout:
+  size: 20
+  index_parameter: arm-and-seed

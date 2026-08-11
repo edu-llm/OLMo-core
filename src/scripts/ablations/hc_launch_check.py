@@ -62,6 +62,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 #: expected to draw its own index; anything else is a literal the command hard-codes.
 SPEC_EXPECTATIONS: Dict[str, Dict[str, Any]] = {
     ".edullm/run.hc-smoke.yaml": {
+        "entrypoint": "train_on_corpus.py",
         "model_factory": "smallmoe",
         "sequence_length": 2048,
         "global_batch_size": 262_144,
@@ -77,6 +78,7 @@ SPEC_EXPECTATIONS: Dict[str, Dict[str, Any]] = {
         "expects_fanout": False,
     },
     ".edullm/run.hc-baseline.yaml": {
+        "entrypoint": "train_on_corpus.py",
         "model_factory": "smallmoe",
         "sequence_length": 2048,
         "global_batch_size": 262_144,
@@ -92,7 +94,11 @@ SPEC_EXPECTATIONS: Dict[str, Dict[str, Any]] = {
         "expects_fanout": True,
     },
     ".edullm/run.hc-treatment.yaml": {
-        "model_factory": None,  # a different entrypoint; see `_expectations_for`
+        # A different entrypoint, so `--model-factory` is not a flag it takes: the shape comes
+        # from `train_hc_moe.build_model_config`, and the arm comes from the cell index.
+        "model_factory": None,
+        "entrypoint": "train_hc_moe.py",
+        "arms_by_cell": {0: "mhc_moe", 1: "mhc_moe", 4: "mhc_moe"},
         "sequence_length": 2048,
         "global_batch_size": 262_144,
         "rank_microbatch_size": 8_192,
@@ -105,6 +111,7 @@ SPEC_EXPECTATIONS: Dict[str, Dict[str, Any]] = {
         "seed": None,
         "launcher_processes": 1,
         "expects_fanout": True,
+        "fanout_size": 20,
     },
 }
 
@@ -231,18 +238,27 @@ def fanout_prologue() -> Tuple[str, str]:
     return FALLBACK_FANOUT_PROLOGUE, "this file's copy (edullm_platform not importable)"
 
 
-def load_train_on_corpus():
+def load_entrypoint(filename: str = "train_on_corpus.py"):
     """
-    Import ``.edullm/train_on_corpus.py`` by path.
+    Import one of the ``.edullm/`` entrypoints by path.
+
+    Which one matters: the tranche's arms run ``train_hc_moe.py``, whose parser takes ``--cell``
+    and whose ``build_config`` resolves an arm from it. Checking every spec against
+    ``train_on_corpus``'s parser reported the treatment spec's own flags as unrecognised
+    overrides, which is this script being wrong rather than the spec.
+
+    :param filename: The entrypoint's file name under ``.edullm/``.
 
     :returns: The imported module.
 
     :raises FileNotFoundError: If the entrypoint is not where the specs say it is.
     """
-    path = REPO_ROOT / ".edullm" / "train_on_corpus.py"
+    path = REPO_ROOT / ".edullm" / filename
     if not path.is_file():
         raise FileNotFoundError(path)
-    name = "_edullm_train_on_corpus"
+    name = f"_edullm_{path.stem}"
+    if name in sys.modules:
+        return sys.modules[name]
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -388,10 +404,19 @@ def check_spec(path: Path, *, cells: Sequence[int]) -> SpecReport:
     report = SpecReport(path=relative)
     spec = yaml.safe_load(path.read_text(encoding="utf-8"))
     expected = _expectations_for(relative)
-    train_on_corpus = load_train_on_corpus()
-    _stub_corpus(train_on_corpus)
+    entrypoint = load_entrypoint(expected["entrypoint"])
+    # The arm entrypoint delegates every corpus decision to the sibling it imports, so the stub
+    # goes on whichever module owns `resolve_corpus`.
+    _stub_corpus(getattr(entrypoint, "TOC", entrypoint))
 
     fanout = spec.get("fanout")
+    if "fanout_size" in expected:
+        report.record(
+            bool(fanout) and fanout["size"] == expected["fanout_size"],
+            f"the fan-out declares {expected['fanout_size']} cells",
+            f"got {fanout}. It has to equal arms x --seeds-per-arm, and nothing on the "
+            "platform checks that.",
+        )
     report.record(
         bool(fanout) == expected["expects_fanout"],
         "the fan-out block matches what the experiment design expects",
@@ -453,20 +478,22 @@ def check_spec(path: Path, *, cells: Sequence[int]) -> SpecReport:
             "without exec, SIGTERM kills the wrapper and the trainer keeps running",
         )
 
-        opts, extras = train_on_corpus.build_parser().parse_known_args(argv[1:])
+        opts, extras = entrypoint.build_parser().parse_known_args(argv[1:])
 
         # `init_seed=` absent is NOT the same as `init_seed=0`: the field's default is 12536, so
-        # a spec that dropped the override would run a seed the checker reported as 0.
-        experiment_seed_overrides = [o for o in extras if o.startswith("init_seed=")]
-        report.record(
-            len(experiment_seed_overrides) == 1,
-            f"cell {index}: exactly one init_seed= override is present",
-            f"extras: {extras}",
-        )
+        # a spec that dropped the override would run a seed the checker reported as 0. Only
+        # asserted where the command is what sets the seed; the arm entrypoint sets all three
+        # from the cell index instead, and the seed assertions below cover it either way.
+        if expected["entrypoint"] == "train_on_corpus.py":
+            report.record(
+                len([o for o in extras if o.startswith("init_seed=")]) == 1,
+                f"cell {index}: exactly one init_seed= override is present",
+                f"extras: {extras}",
+            )
 
         # THE CONFIG THE CONTAINER WOULD BUILD, from the container's own constructor.
         try:
-            config = train_on_corpus.build_config(opts, extras)
+            config = entrypoint.build_config(opts, extras)
             built = True
             detail = ""
         except Exception as failure:  # noqa: BLE001 - a bad override is exactly what this finds
@@ -477,7 +504,14 @@ def check_spec(path: Path, *, cells: Sequence[int]) -> SpecReport:
         if config is None:
             continue
 
-        expected_seed = expected["seed"] if expected["seed"] is not None else index
+        # The seed a cell draws. For the fan-out-over-replicates specs it is the index; for
+        # the 2x2 the index also picks an arm, so the replicate is the remainder.
+        if expected["seed"] is not None:
+            expected_seed = expected["seed"]
+        elif "arms_by_cell" in expected:
+            expected_seed = (index or 0) % opts.seeds_per_arm
+        else:
+            expected_seed = index
         checks: List[Tuple[str, Any, Any]] = [
             ("model factory", opts.model_factory, expected["model_factory"]),
             ("sequence length", config.dataset.sequence_length, expected["sequence_length"]),
@@ -507,6 +541,15 @@ def check_spec(path: Path, *, cells: Sequence[int]) -> SpecReport:
         ]
         if expected["model_factory"] is None:
             checks = [entry for entry in checks if entry[0] != "model factory"]
+        # The 2x2's whole design is that a cell index picks an arm. A modulus or an off-by-one
+        # here gives twenty cells one arm, or two cells one replicate reported as two.
+        for cell_index, arm in expected.get("arms_by_cell", {}).items():
+            if cell_index == index:
+                resolved, resolved_seed = entrypoint.resolve_cell(
+                    index, seeds_per_arm=opts.seeds_per_arm, arm=None
+                )
+                checks.append((f"cell {index} resolves to an arm", resolved, arm))
+                checks.append((f"cell {index} resolves to a seed", resolved_seed, expected_seed))
         for name, actual, want in checks:
             report.record(actual == want, f"cell {index}: {name} is {want!r}", f"got {actual!r}")
 
