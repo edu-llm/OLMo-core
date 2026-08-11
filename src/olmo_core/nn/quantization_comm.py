@@ -608,7 +608,12 @@ def apply_ternary_comm(model: nn.Module) -> List[str]:
     try:
         from torch._dynamo.compiled_autograd import compiled_autograd_enabled
 
-        if compiled_autograd_enabled():
+        enabled = (
+            compiled_autograd_enabled()
+            if callable(compiled_autograd_enabled)
+            else compiled_autograd_enabled
+        )
+        if enabled:
             raise OLMoConfigurationError(
                 "ternary-compressed all-gather is incompatible with compiled autograd: at torch "
                 "2.9.0 both FSDPParam.all_gather_inputs and init_unsharded_param guard the "

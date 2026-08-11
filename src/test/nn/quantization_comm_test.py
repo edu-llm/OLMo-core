@@ -38,11 +38,12 @@ import pytest
 import torch
 
 from olmo_core.exceptions import OLMoConfigurationError
-from olmo_core.nn.quantization import twn_quantize
+from olmo_core.nn.quantization import QuantLinear, twn_quantize
 from olmo_core.nn.quantization_comm import (
     TRITS_PER_BYTE,
     TernaryCommSpec,
     TernaryCommTensor,
+    apply_ternary_comm,
     pack_trits,
     reconstruct_from_trits,
     ternary_comm_bytes_report,
@@ -425,6 +426,16 @@ def test_bytes_report_full_precision_share_caps_the_win():
 # ===================================================================================
 # Config surface: both models, default OFF, and off means untouched
 # ===================================================================================
+
+
+def test_apply_ternary_comm_accepts_boolean_compiled_autograd_flag():
+    """PyTorch 2.9 exposes ``compiled_autograd_enabled`` as a bool, not a callable."""
+    model = torch.nn.Sequential(QuantLinear(8, 8, enabled=True, bias=False))
+
+    converted = apply_ternary_comm(model)
+
+    assert converted == ["0.weight"]
+    assert isinstance(model[0].weight, TernaryCommTensor)
 
 
 @pytest.mark.parametrize("factory", ["maple_m7b", "maple_m20", "maple_r0"])
