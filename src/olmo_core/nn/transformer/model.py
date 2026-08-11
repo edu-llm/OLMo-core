@@ -189,6 +189,10 @@ class Transformer(nn.Module):
         self._tp_enabled = False
         self._tp_mesh: Optional[DeviceMesh] = None
         self._fsdp_enabled = False
+        # Set from `TransformerConfig.ternary_comm` by `build()`. Read by
+        # `train_module/transformer/common.py` immediately before `fully_shard`, which is the only
+        # point at which FSDP2's all-gather extension hooks can still be attached.
+        self._ternary_comm_enabled = False
 
         # Cache the value of these properties up-front in case the parameters are removed
         # later, like for pipeline parallelism.
@@ -231,6 +235,17 @@ class Transformer(nn.Module):
     @property
     def fsdp_enabled(self) -> bool:
         return self._fsdp_enabled
+
+    @property
+    def ternary_comm_enabled(self) -> bool:
+        """
+        Whether this model's quantized weights should all-gather as packed ternary under FSDP2.
+
+        **UNVALIDATED ON HARDWARE as of 2026-08-10.** Default ``False``; see
+        ``src/test/nn/quantization_comm_test.py`` for the bitwise-identity gate that must pass
+        before this is turned on for a funded run.
+        """
+        return self._ternary_comm_enabled
 
     @property
     def is_moe(self) -> bool:
