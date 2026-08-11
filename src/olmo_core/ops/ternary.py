@@ -379,22 +379,24 @@ class _NativePackedFixedGroupedLinear(torch.autograd.Function):
         _require_native(weight, x)
         assert kernels is not None
         packed = cache.get_or_pack(weight, in_dim=in_dim, orientation=orientation)
-        out = kernels.fixed_grouped_packed_matmul(
-            x.contiguous(), packed.codes, packed.alpha, packed.in_features
+        # M20's fine-grained experts make decode-inside-MMA substantially slower than decoding
+        # each packed weight once and handing both GEMMs to cuBLAS. Keep the ephemeral packed
+        # representation as the source of truth, then retain only its BF16 materialization until
+        # backward so forward and input-gradient share it.
+        materialized = kernels.materialize_packed_twn(
+            packed.codes, packed.alpha, packed.in_features
         )
-        ctx.save_for_backward(x, packed.codes_t, packed.alpha)
+        out = torch.bmm(x.contiguous(), materialized.transpose(1, 2))
+        ctx.save_for_backward(x, materialized)
         ctx.in_dim = in_dim
         return out
 
     @staticmethod
     @torch.amp.custom_bwd(device_type="cuda")
     def backward(ctx, grad_output: torch.Tensor):  # type: ignore[override]
-        assert kernels is not None
-        x, codes_t, alpha = ctx.saved_tensors
+        x, materialized = ctx.saved_tensors
         grad_output = grad_output.contiguous()
-        grad_input = kernels.fixed_grouped_packed_matmul_transpose(
-            grad_output, codes_t, alpha, x.shape[-1]
-        )
+        grad_input = torch.bmm(grad_output, materialized)
         grad_logical = torch.bmm(grad_output.transpose(1, 2), x)
         grad_weight = _restore_weight_orientation(grad_logical, ctx.in_dim)
         return grad_input, grad_weight, None, None, None

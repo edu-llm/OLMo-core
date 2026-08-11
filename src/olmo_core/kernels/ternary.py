@@ -142,6 +142,63 @@ def pack_twn(weight: torch.Tensor, in_dim: int):
 
 
 @triton.jit
+def _materialize_packed_twn_kernel(
+    packed,
+    alpha,
+    output,
+    IN_FEATURES: tl.constexpr,
+    PACKED_IN: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+):
+    """Decode one packed row tile directly to its scaled BF16 representation."""
+    row = tl.program_id(0)
+    offsets_k = tl.program_id(1) * BLOCK_K + tl.arange(0, BLOCK_K)
+    valid_k = offsets_k < IN_FEATURES
+    words = tl.load(
+        packed + row * PACKED_IN + offsets_k // 16,
+        mask=valid_k,
+        other=1,
+    )
+    codes = (words >> (2 * (offsets_k % 16))) & 0x3
+    trits = tl.where(codes == 2, 1.0, tl.where(codes == 0, -1.0, 0.0))
+    row_alpha = tl.load(alpha + row).to(tl.float32)
+    tl.store(
+        output + row * IN_FEATURES + offsets_k,
+        trits * row_alpha,
+        mask=valid_k,
+    )
+
+
+def materialize_packed_twn(
+    packed: torch.Tensor, alpha: torch.Tensor, in_features: int
+) -> torch.Tensor:
+    """
+    Materialize packed ternary rows as BF16 for a vendor grouped GEMM.
+
+    Fine-grained MoE experts have too little work per expert for decoding inside every MMA tile:
+    profiling M20 on H100 showed that repeated decode consuming over 76% of total GPU time.
+    Decoding each weight once lets cuBLAS reuse it across forward and input-gradient GEMMs.
+    """
+    rows = packed.numel() // packed.shape[-1]
+    output = torch.empty(
+        (*packed.shape[:-1], in_features),
+        device=packed.device,
+        dtype=torch.bfloat16,
+    )
+    block_k = 256
+    _materialize_packed_twn_kernel[(rows, triton.cdiv(in_features, block_k))](
+        packed,
+        alpha,
+        output,
+        IN_FEATURES=in_features,
+        PACKED_IN=triton.cdiv(in_features, 16),
+        BLOCK_K=block_k,
+        num_warps=4,
+    )
+    return output
+
+
+@triton.jit
 def _packed_matmul_kernel(
     x,
     packed,
