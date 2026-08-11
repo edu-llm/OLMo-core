@@ -93,6 +93,7 @@ def pack_twn(
     *,
     include_transpose: bool = True,
     include_materialized: bool = False,
+    out=None,
 ):
     """
     Pack a latent BF16 weight with exact FP32 row statistics.
@@ -115,15 +116,44 @@ def pack_twn(
     packed_in = triton.cdiv(in_features, 16)
     packed_out = triton.cdiv(out_features, 16)
     flat_weight = logical.reshape(rows, in_features)
-    codes = torch.empty(
-        (experts, out_features, packed_in), device=weight.device, dtype=torch.uint32
+    final_codes_shape = (
+        (out_features, packed_in)
+        if logical.ndim == 2
+        else (experts, out_features, packed_in)
     )
-    alpha = torch.empty((experts, out_features), device=weight.device, dtype=torch.bfloat16)
-    materialized = (
-        torch.empty_like(logical)
-        if include_materialized
-        else torch.empty(0, device=weight.device, dtype=torch.bfloat16)
+    final_alpha_shape = (out_features,) if logical.ndim == 2 else (experts, out_features)
+    can_reuse = (
+        include_materialized
+        and not include_transpose
+        and out is not None
+        and out.materialized is not None
+        and out.in_features == in_features
+        and out.out_features == out_features
+        and out.num_experts == experts
+        and tuple(out.codes.shape) == final_codes_shape
+        and tuple(out.alpha.shape) == final_alpha_shape
+        and tuple(out.materialized.shape) == tuple(logical.shape)
+        and out.codes.device == weight.device
+        and out.alpha.device == weight.device
+        and out.materialized.device == weight.device
+        and out.codes.dtype == torch.uint32
+        and out.alpha.dtype == torch.bfloat16
+        and out.materialized.dtype == torch.bfloat16
     )
+    if can_reuse:
+        codes = out.codes.unsqueeze(0) if logical.ndim == 2 else out.codes
+        alpha = out.alpha.unsqueeze(0) if logical.ndim == 2 else out.alpha
+        materialized = out.materialized
+    else:
+        codes = torch.empty(
+            (experts, out_features, packed_in), device=weight.device, dtype=torch.uint32
+        )
+        alpha = torch.empty((experts, out_features), device=weight.device, dtype=torch.bfloat16)
+        materialized = (
+            torch.empty_like(logical)
+            if include_materialized
+            else torch.empty(0, device=weight.device, dtype=torch.bfloat16)
+        )
     _pack_twn_kernel[(rows,)](
         flat_weight,
         codes,
@@ -148,6 +178,8 @@ def pack_twn(
         )
     else:
         codes_t = torch.empty(0, device=weight.device, dtype=torch.uint32)
+    if can_reuse:
+        return out
     if logical.ndim == 2:
         codes = codes.squeeze(0)
         codes_t = codes_t.squeeze(0)
@@ -163,13 +195,14 @@ def pack_twn(
     )
 
 
-def pack_twn_forward_only(weight: torch.Tensor, in_dim: int):
+def pack_twn_forward_only(weight: torch.Tensor, in_dim: int, *, out=None):
     """Pack codes and BF16 logical weights together, omitting unused transposed codes."""
     return pack_twn(
         weight,
         in_dim,
         include_transpose=False,
         include_materialized=True,
+        out=out,
     )
 
 

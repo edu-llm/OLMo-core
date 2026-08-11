@@ -78,7 +78,7 @@ class _PackCacheKey:
     orientation: str
 
 
-PackFn = Callable[[torch.Tensor, int], PackedTWN]
+PackFn = Callable[..., PackedTWN]
 
 
 class PackedTWNCache:
@@ -116,9 +116,8 @@ class PackedTWNCache:
         )
 
     def clear(self) -> None:
-        """Drop any packed codes and alpha owned by this cache."""
+        """Invalidate the pack while retaining native output buffers for safe repacking."""
         self._key = None
-        self._packed = None
 
     def get_or_pack(
         self,
@@ -141,7 +140,10 @@ class PackedTWNCache:
             packer = kernels.pack_twn
 
         with torch.no_grad():
-            packed = packer(weight, in_dim)
+            if kernels is not None and packer is kernels.pack_twn_forward_only:
+                packed = packer(weight, in_dim, out=self._packed)
+            else:
+                packed = packer(weight, in_dim)
         self._key = key
         self._packed = packed
         self.misses += 1
