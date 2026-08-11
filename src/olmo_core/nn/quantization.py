@@ -199,6 +199,16 @@ def twn_quantize(w: torch.Tensor, *, in_dim: Optional[int] = None) -> torch.Tens
     :param in_dim: The input-feature axis. See the table above.
     """
     in_dim = _resolve_in_dim(w, in_dim)
+
+    # The fused kernel is the same arithmetic in three streaming reads instead of a dozen
+    # whole-tensor temporaries. It declines rather than raises when it cannot apply, so this
+    # stays a pure optimization and the definition below remains the reference.
+    from ..kernels import fused_twn_quantize
+
+    fused = fused_twn_quantize(w, in_dim=in_dim)
+    if fused is not None:
+        return fused
+
     delta, alpha = twn_threshold_and_scale(w, in_dim=in_dim)
     w32 = w.detach().to(torch.float32)
     q = torch.sign(w32) * (w32.abs() > delta) * alpha
