@@ -77,6 +77,48 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple, cast
 
+#: THE BRANCH'S OWN LIBRARY GOES ON `sys.path` AHEAD OF THE IMAGE'S, AND WITHOUT THIS THE
+#: FAILURE IS SILENT OR FATAL DEPENDING ONLY ON LUCK.
+#:
+#: The block launches by cloning this branch onto the node and mounting it at `/work`, so the
+#: *script* is this branch's. The *library* is whatever `/opt/olmo-core/src` the image was built
+#: with -- and the image is baked once, at fleet bootstrap, by `block-launch-fleet.yml`.
+#: `block-run-distributed.yml` has no `image_tag` input, so a run cannot change it. Fleet
+#: `31422602883` baked `73a248613add`; pushing `5aeb0993` built an image nothing would ever pull.
+#: That mismatch killed 32 ranks at `from olmo_core.nn.quantization import audit_quantization`,
+#: because the baked commit predates that module.
+#:
+#: Resolved from `__file__` rather than written as `/work/src`, because the mount point is the
+#: caller's choice: the block uses `/work`, a laptop uses a checkout, a worktree uses neither.
+#: All three want the `src/` that is a sibling of this file's parent.
+_BRANCH_LIBRARY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
+
+# AHEAD OF THE IMAGE RATHER THAN INSTEAD OF IT. The image keeps supplying torch, edullm_data and
+# the rest; it stops supplying `olmo_core`, because a regular package resolves entirely from the
+# first `sys.path` entry holding it and never merges with a later one. Note the image carries two
+# copies already (`PYTHONPATH=/opt/olmo-core/src` and a `pip install ".[wandb]"`), so a
+# `sys.path.insert(0, ...)` is what shadows both.
+#
+# HERE AND NOT AS `PYTHONPATH=/work/src` IN FRONT OF THE COMMAND, which is the spelling that
+# looks right and cannot work: the dispatch prepends the torchrun rendezvous form, so the first
+# word of our command becomes torchrun's positional `training_script` and is exec'd as a program.
+# An env assignment there is a filename Python cannot open, on every rank at once --
+# `block_multinode.py:539` refuses a first word containing "=" for exactly this reason.
+#
+# `isdir` rather than unconditional, so a tree laid out some other way falls through to whatever
+# the image installed instead of prepending a path holding nothing.
+if os.path.isdir(_BRANCH_LIBRARY):
+    sys.path.insert(0, _BRANCH_LIBRARY)
+
+# AND THIS FILE'S OWN DIRECTORY, FOR ITS SIBLINGS. `python .edullm/train_on_corpus.py` already
+# puts `.edullm/` on the path as the script's directory, so on the block this changes nothing. It
+# is here for every other way in -- `python -m`, an exec from elsewhere, a debugger, a test that
+# imports the module -- because a sibling import that works under only one invocation breaks the
+# first time somebody invokes it another way.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
 import rich
 import torch
 
