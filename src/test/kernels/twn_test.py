@@ -54,6 +54,44 @@ def test_fused_matches_reference(shape, in_dim, dtype):
     torch.testing.assert_close(fused.float(), expected.float(), rtol=1e-5, atol=1e-6)
 
 
+def test_disagreement_with_the_reference_is_only_near_threshold_ties():
+    """The kernel is not bitwise identical to the reference, and this pins what it does promise.
+
+    `test_fused_matches_reference` asserts exact sign agreement, which holds on the shapes it
+    covers but is a stronger claim than the kernel can make in general: it sums each row in a
+    different order, so `delta` can differ in its last bits and a weight lying within about one
+    bf16 ulp of its row threshold can be classified either way. Measured at up to ~1.7e-5 of
+    elements on adversarial draws. What must never happen is a sign inversion or a disagreement
+    away from the threshold -- either would mean a different quantizer rather than a tie.
+    """
+    _requires_cuda()
+    for seed in range(4):
+        torch.manual_seed(seed)
+        w = torch.randn(2048, 1024, device="cuda", dtype=torch.bfloat16)
+        fused = fused_twn_quantize(w, in_dim=-1)
+        assert fused is not None
+        expected = _reference(w, in_dim=-1)
+
+        disagree = fused != expected
+        count = int(disagree.sum())
+        if count == 0:
+            continue
+
+        assert count / w.numel() < 1e-4, f"seed {seed}: {count} disagreements is too many"
+
+        # A tie flips a weight between zero and +-alpha. One of the two sides is therefore zero,
+        # so their product is zero; a sign inversion would give a strictly negative product.
+        products = torch.sign(fused.float())[disagree] * torch.sign(expected.float())[disagree]
+        assert bool((products == 0).all()), f"seed {seed}: sign inversion, not a tie"
+
+        # And every one of them must actually sit next to the threshold it straddles.
+        magnitudes = w.detach().float().abs()
+        delta, _ = twn_threshold_and_scale(w, in_dim=-1)
+        delta = delta.expand_as(magnitudes)
+        distance = (magnitudes[disagree] - delta[disagree]).abs() / delta[disagree]
+        assert float(distance.max()) < 2**-7, f"seed {seed}: disagreement away from the threshold"
+
+
 @pytest.mark.parametrize("in_dim", [-1, 0])
 def test_each_output_row_holds_at_most_three_values(in_dim):
     """The scale is per output row, so a row spans at most {-alpha, 0, +alpha}.

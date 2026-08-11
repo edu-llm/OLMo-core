@@ -988,7 +988,11 @@ def test_the_summary_survives_a_trainer_with_no_gpu_monitor_callback(capsys, mon
     """
     import json
 
+    # Every CUDA call `summarise` makes in this branch is stubbed, not just the ones that
+    # motivate the test. Leaving `get_device_name` live made this pass on a GPU box and fail
+    # everywhere else, which is the opposite of what forcing the branch was supposed to buy.
     monkeypatch.setattr(entry.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(entry.torch.cuda, "get_device_name", lambda _=0: "STUB-GPU")
     monkeypatch.setattr(entry.torch.cuda, "max_memory_allocated", lambda: 8 * 1024**3)
     monkeypatch.setattr(entry.torch.cuda, "memory_allocated", lambda: 4 * 1024**3)
 

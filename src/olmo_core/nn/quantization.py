@@ -206,8 +206,16 @@ def twn_quantize(
     in_dim = _resolve_in_dim(w, in_dim)
 
     # The fused kernel is the same arithmetic in three streaming reads instead of a dozen
-    # whole-tensor temporaries. It declines rather than raises when it cannot apply, so this
-    # stays a pure optimization and the definition below remains the reference.
+    # whole-tensor temporaries, and it declines rather than raises when it cannot apply, so the
+    # definition below stays reachable as the reference. Measured 3.3x to 18.4x faster than it.
+    #
+    # It is not, however, bitwise identical to the reference on all inputs. It sums each row in
+    # a different order, so `delta` can differ in its last bits, and a weight lying within about
+    # one bf16 ulp of its row threshold can be classified either way. Measured at up to ~1.7e-5
+    # of elements on adversarial draws, deterministic for given data, and always a zero/nonzero
+    # tie rather than a sign inversion. That is a small fraction of one step's natural ternary
+    # flip rate (~3e-4), so it is immaterial to training -- but it does mean a run with the
+    # kernel and a run without are not bit-reproducible against each other.
     from ..kernels import fused_twn_quantize
 
     fused = fused_twn_quantize(w, in_dim=in_dim, delta_factor=delta_factor)
@@ -301,28 +309,44 @@ class TWNQuantCache:
     elements, which measured ~630ms of pure scan per forward when scaled to H100 bandwidth, so
     the repeat is worth removing.
 
-    Validity is keyed on the latent tensor's version counter, which PyTorch bumps on the
-    in-place update the optimizer performs. A cache entry therefore survives exactly the window
-    in which the weight is unchanged, and no explicit "new step" signal is needed.
+    Validity is keyed on the latent tensor's identity, its version counter, and the address of
+    its storage. The version counter alone covers the in-place update an optimizer performs, so
+    an entry survives exactly the window in which the weight is unchanged and no explicit "new
+    step" signal is needed. It does not cover ``param.data = <fresh tensor>``, which keeps the
+    Parameter object and restarts the counter at zero -- the collision against an entry stored
+    at zero is silent, and ``Module._apply`` (``.to()``, ``.cuda()``, a dtype cast) swaps
+    storage exactly that way. The storage address closes that hole.
 
-    **The entry holds a reference to the latent tensor.** That is what makes the key sound --
-    an address cannot be recycled underneath a live reference -- and it is free when the tensor
-    is a persistent parameter. Under FSDP2 the unsharded weight is transient and pinning it
-    would defeat resharding, which is why :attr:`QuantConfig.cache_quantized_weight` defaults
-    to off and has to be turned on deliberately.
+    **The entry holds a reference to the latent tensor and to its storage.** That is what makes
+    the address half of the key sound -- an address cannot be recycled while a live reference
+    pins it -- and it is free when the tensor is a persistent parameter. Under FSDP2 the
+    unsharded weight is transient and pinning it would defeat resharding, which is why
+    :attr:`QuantConfig.cache_quantized_weight` defaults to off and has to be turned on
+    deliberately.
     """
 
-    __slots__ = ("_source", "_version", "_quantized")
+    __slots__ = ("_source", "_version", "_storage", "_data_ptr", "_quantized", "hits", "misses")
 
     def __init__(self) -> None:
         self._source: Optional[torch.Tensor] = None
         self._version: Optional[int] = None
+        self._storage: Optional[torch.UntypedStorage] = None
+        self._data_ptr: Optional[int] = None
         self._quantized: Optional[torch.Tensor] = None
+        # Lifetime counters, deliberately not reset by `clear()`. An entry pins the latent
+        # tensor, so a cache that never hits is worse than no cache -- and that is exactly what
+        # happens under FSDP2, where the weight the forward sees is a fresh all-gather buffer on
+        # every unshard and the key can never match. Counting makes that visible instead of
+        # leaving it to be inferred from a throughput number that did not move.
+        self.hits = 0
+        self.misses = 0
 
     def clear(self) -> None:
         """Drop the entry and release the tensors it holds."""
         self._source = None
         self._version = None
+        self._storage = None
+        self._data_ptr = None
         self._quantized = None
 
     def quantize(
@@ -342,8 +366,12 @@ class TWNQuantCache:
             self._quantized is not None
             and self._source is w
             and self._version == w._version
+            and self._data_ptr == w.data_ptr()
         ):
+            self.hits += 1
             return _CachedSTE.apply(w, self._quantized)  # type: ignore[no-any-return]
+
+        self.misses += 1
 
         # Release a stale entry before allocating its replacement. At M20 scale the cached
         # quantized weights nearly fill the remaining H100 memory; keeping each old tensor
@@ -353,6 +381,8 @@ class TWNQuantCache:
         quantized = twn_quantize(w, in_dim=in_dim, delta_factor=delta_factor)
         self._source = w
         self._version = w._version
+        self._storage = w.untyped_storage()
+        self._data_ptr = w.data_ptr()
         self._quantized = quantized
         return _CachedSTE.apply(w, quantized)  # type: ignore[no-any-return]
 
