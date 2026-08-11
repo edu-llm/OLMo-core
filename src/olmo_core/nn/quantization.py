@@ -333,6 +333,11 @@ class TWNQuantCache:
         ):
             return _CachedSTE.apply(w, self._quantized)  # type: ignore[no-any-return]
 
+        # Release a stale entry before allocating its replacement. At M20 scale the cached
+        # quantized weights nearly fill the remaining H100 memory; keeping each old tensor
+        # alive until after its replacement is produced creates a transient double buffer
+        # and can OOM while refreshing an otherwise viable cache.
+        self.clear()
         quantized = twn_quantize(w, in_dim=in_dim)
         self._source = w
         self._version = w._version

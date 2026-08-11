@@ -1,6 +1,9 @@
+import weakref
+
 import pytest
 import torch
 
+import olmo_core.nn.quantization as quantization
 from olmo_core.nn.quantization import (
     QuantConfig,
     QuantLinear,
@@ -37,6 +40,25 @@ def test_cache_invalidates_when_latent_weight_changes():
     after = cache.quantize(w, in_dim=-1)
     assert not torch.equal(before, after)
     assert torch.equal(after, twn_quantize(w, in_dim=-1))
+
+
+def test_cache_releases_stale_weight_before_allocating_replacement(monkeypatch):
+    w = torch.randn(32, 64)
+    cache = TWNQuantCache()
+    cache.quantize(w, in_dim=-1)
+    stale = weakref.ref(cache._quantized)
+
+    with torch.no_grad():
+        w.add_(1)
+
+    original_quantize = quantization.twn_quantize
+
+    def assert_stale_released(*args, **kwargs):
+        assert stale() is None
+        return original_quantize(*args, **kwargs)
+
+    monkeypatch.setattr(quantization, "twn_quantize", assert_stale_released)
+    cache.quantize(w, in_dim=-1)
 
 
 def test_cache_invalidates_for_a_different_tensor():
