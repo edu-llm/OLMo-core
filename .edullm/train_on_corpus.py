@@ -1666,7 +1666,35 @@ def build_parser() -> argparse.ArgumentParser:
         description="Train a transformer on a published eduLLM corpus.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("run_name", nargs="?", default=os.environ.get("EDULLM_RUN_ID", "local"))
+    # THE POSITIONAL TRAP, AND WHY `run_name` VALIDATES ITS OWN VALUE.
+    #
+    # `run_name` is positional with `nargs="?"`, and `main()` reaches this parser through
+    # `parse_known_args()`. Together those are a silent-corruption pair: append a bare dotlist
+    # override to the command -- `... --steps 200 model.ternary_comm=true` -- and argparse binds
+    # `run_name="model.ternary_comm=true"` and leaves the overrides EMPTY. The setting vanishes,
+    # nothing raises, and the run is named after the option it dropped. A wrong number that
+    # reproduces cleanly is the worst thing this file can emit, so make the mistake
+    # unrepresentable rather than documented: no legitimate run name contains "=", and the
+    # platform always exports EDULLM_RUN_ID anyway.
+    #
+    # Upstream PR #71 fixes the same trap on `edullm/final-model` by giving the two throughput
+    # levers real flags. That is the better fix wherever a flag exists; this guard is the
+    # backstop for every override that does not have one.
+    def _run_name(value: str) -> str:
+        if "=" in value:
+            raise argparse.ArgumentTypeError(
+                f"run_name={value!r} contains '=', so it is a dotlist override that argparse "
+                "would silently swallow as the run name. Give the run an explicit name first, "
+                "then pass the override."
+            )
+        return value
+
+    parser.add_argument(
+        "run_name",
+        nargs="?",
+        type=_run_name,
+        default=os.environ.get("EDULLM_RUN_ID", "local"),
+    )
     parser.add_argument("--dataset-id", default=os.environ.get("EDULLM_DATASET_ID", ""))
     parser.add_argument("--dataset-version", default=os.environ.get("EDULLM_DATASET_VERSION", ""))
     parser.add_argument(
