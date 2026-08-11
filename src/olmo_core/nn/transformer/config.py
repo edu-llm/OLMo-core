@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import InitVar, dataclass, field
 from fnmatch import fnmatch
 from itertools import cycle, islice
-from typing import TYPE_CHECKING, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 from olmo_core.config import UNSET, DType, StrEnum
 from olmo_core.doc_utils import beta_feature
@@ -102,6 +102,17 @@ class TransformerType(StrEnum):
     ➡️ :class:`HyperConnectionTransformer`
     """
 
+    hyper_connection_moe = "hyper_connection_moe"
+    """
+    ➡️ :class:`HyperConnectionMoETransformer`
+
+    A separate member rather than reusing :data:`hyper_connection` with MoE blocks inside it,
+    because the two model classes differ in what reaches the trainer: an MoE model routes the
+    router's load-balancing loss and z-loss out through ``compute_auxiliary_metrics``, and a
+    hyper-connected MoE model built as a plain :data:`hyper_connection` would train with those
+    losses unreported and nothing would say so.
+    """
+
 
 class TransformerBlockType(StrEnum):
     """
@@ -157,6 +168,53 @@ class TransformerBlockType(StrEnum):
     """
     ➡️ :class:`HyperConnectionTransformerBlock`
     """
+
+    hyper_connection_moe = "hyper_connection_moe"
+    """
+    ➡️ :class:`~olmo_core.nn.transformer.hc_moe_block.HyperConnectionMoETransformerBlock`
+    """
+
+    hyper_connection_moe_reordered_norm = "hyper_connection_moe_reordered_norm"
+    """
+    ➡️ :class:`~olmo_core.nn.transformer.hc_moe_block.HyperConnectionMoEReorderedNormTransformerBlock`
+    """
+
+    hyper_connection_moe_hybrid = "hyper_connection_moe_hybrid"
+    """
+    ➡️ :class:`~olmo_core.nn.transformer.hc_moe_block.HyperConnectionMoEHybridTransformerBlock`
+    """
+
+    hyper_connection_moe_hybrid_reordered_norm = "hyper_connection_moe_hybrid_reordered_norm"
+    """
+    ➡️ :class:`~olmo_core.nn.transformer.hc_moe_block.HyperConnectionMoEHybridReorderedNormTransformerBlock`
+    """
+
+
+#: Every block type that carries hyper-connections, dense and MoE.
+#:
+#: Held as one frozen set rather than written out at each of the five places that ask, because
+#: those five places are validations and parameter counts: a block type added to the enum and
+#: missed at one of them is a model that builds, trains, and reports a parameter count that is
+#: short by however many routing parameters it has.
+HYPER_CONNECTION_BLOCK_TYPES: frozenset = frozenset(
+    {
+        TransformerBlockType.hyper_connection,
+        TransformerBlockType.hyper_connection_moe,
+        TransformerBlockType.hyper_connection_moe_reordered_norm,
+        TransformerBlockType.hyper_connection_moe_hybrid,
+        TransformerBlockType.hyper_connection_moe_hybrid_reordered_norm,
+    }
+)
+
+#: The subset of the above whose blocks carry an MoE.
+HYPER_CONNECTION_MOE_BLOCK_TYPES: frozenset = HYPER_CONNECTION_BLOCK_TYPES - {
+    TransformerBlockType.hyper_connection
+}
+
+#: Every model type that carries ``n`` residual streams.
+HYPER_CONNECTION_MODEL_TYPES: frozenset = frozenset(
+    {TransformerType.hyper_connection, TransformerType.hyper_connection_moe}
+)
 
 
 @dataclass
@@ -222,10 +280,10 @@ class TransformerBlockConfig(ModuleConfig):
             raise OLMoConfigurationError(
                 "TransformerBlockConfig requires 'sequence_mixer' to be set."
             )
-        if self.hyper_connection is not None and self.name != TransformerBlockType.hyper_connection:
+        if self.hyper_connection is not None and self.name not in HYPER_CONNECTION_BLOCK_TYPES:
             raise OLMoConfigurationError(
-                f"'hyper_connection' is only valid on "
-                f"'{TransformerBlockType.hyper_connection}' blocks, not '{self.name}'"
+                f"'hyper_connection' is only valid on hyper-connected blocks "
+                f"({', '.join(sorted(HYPER_CONNECTION_BLOCK_TYPES))}), not '{self.name}'"
             )
 
     def build(
@@ -249,6 +307,12 @@ class TransformerBlockConfig(ModuleConfig):
             TransformerBlock,
         )
         from .hc_block import HyperConnectionTransformerBlock
+        from .hc_moe_block import (
+            HyperConnectionMoEHybridReorderedNormTransformerBlock,
+            HyperConnectionMoEHybridTransformerBlock,
+            HyperConnectionMoEReorderedNormTransformerBlock,
+            HyperConnectionMoETransformerBlock,
+        )
 
         kwargs = self.as_dict(exclude_none=True, recurse=False)
         kwargs.pop("name")
@@ -281,6 +345,14 @@ class TransformerBlockConfig(ModuleConfig):
                 return MoEHybridReorderedNormTransformerBlock(**kwargs)
             elif self.name == TransformerBlockType.hyper_connection:
                 return HyperConnectionTransformerBlock(**kwargs)
+            elif self.name == TransformerBlockType.hyper_connection_moe:
+                return HyperConnectionMoETransformerBlock(**kwargs)
+            elif self.name == TransformerBlockType.hyper_connection_moe_reordered_norm:
+                return HyperConnectionMoEReorderedNormTransformerBlock(**kwargs)
+            elif self.name == TransformerBlockType.hyper_connection_moe_hybrid:
+                return HyperConnectionMoEHybridTransformerBlock(**kwargs)
+            elif self.name == TransformerBlockType.hyper_connection_moe_hybrid_reordered_norm:
+                return HyperConnectionMoEHybridReorderedNormTransformerBlock(**kwargs)
             else:
                 raise NotImplementedError(self.name)
         except TypeError as e:
@@ -315,12 +387,30 @@ class TransformerBlockConfig(ModuleConfig):
             assert self.layer_norm is not None
             block_params += 2 * self.layer_norm.num_params(d_model)
 
-        # Routing params for both wrapped sub-layers of a hyper-connected block.
-        if self.name == TransformerBlockType.hyper_connection:
+        # Routing params for every wrapped sub-layer of a hyper-connected block. A hybrid MoE
+        # block wraps three -- attention, the dense feed-forward and the MoE -- and the others
+        # wrap two, which is what `num_hyper_connections` counts.
+        if self.name in HYPER_CONNECTION_BLOCK_TYPES:
             hc = self.hyper_connection or HyperConnectionConfig()
-            block_params += 2 * hc.num_params()
+            block_params += self.num_hyper_connections * hc.num_params()
 
         return block_params
+
+    @property
+    def num_hyper_connections(self) -> int:
+        """
+        How many sub-layers of this block are wrapped in a hyper-connection.
+
+        :returns: 3 for a hybrid MoE block, 2 for the other hyper-connected blocks, 0 otherwise.
+        """
+        if self.name not in HYPER_CONNECTION_BLOCK_TYPES:
+            return 0
+        if self.name in (
+            TransformerBlockType.hyper_connection_moe_hybrid,
+            TransformerBlockType.hyper_connection_moe_hybrid_reordered_norm,
+        ):
+            return 3
+        return 2
 
     def num_active_params(self, d_model: int) -> int:
         num_params = self.num_params(d_model)
@@ -385,21 +475,35 @@ class TransformerConfig(ModelConfig):
                 self.n_layers,
                 len(self.block_pattern),
             )
-        if self.stream_collapse is not None and self.name != TransformerType.hyper_connection:
+        if self.stream_collapse is not None and self.name not in HYPER_CONNECTION_MODEL_TYPES:
             raise OLMoConfigurationError(
-                f"'stream_collapse' is only valid on '{TransformerType.hyper_connection}' "
-                f"models, not '{self.name}'"
+                f"'stream_collapse' is only valid on hyper-connected models "
+                f"({', '.join(sorted(HYPER_CONNECTION_MODEL_TYPES))}), not '{self.name}'"
             )
-        if self.name == TransformerType.hyper_connection:
+        if self.name in HYPER_CONNECTION_MODEL_TYPES:
             hc_blocks = [
-                b
-                for b in self.resolved_block_configs
-                if b.name == TransformerBlockType.hyper_connection
+                b for b in self.resolved_block_configs if b.name in HYPER_CONNECTION_BLOCK_TYPES
             ]
             if not hc_blocks:
                 raise OLMoConfigurationError(
-                    f"a '{TransformerType.hyper_connection}' model needs at least one "
-                    f"'{TransformerBlockType.hyper_connection}' block"
+                    f"a '{self.name}' model needs at least one hyper-connected block, one of "
+                    f"{', '.join(sorted(HYPER_CONNECTION_BLOCK_TYPES))}"
+                )
+            # An MoE model class routes the router's auxiliary losses out to the trainer and a
+            # dense one does not, so mixing the two is a run whose load-balancing loss is
+            # silently unreported. Caught here rather than left to be noticed in a metrics panel.
+            moe_blocks = [b for b in hc_blocks if b.name in HYPER_CONNECTION_MOE_BLOCK_TYPES]
+            if self.name == TransformerType.hyper_connection_moe and not moe_blocks:
+                raise OLMoConfigurationError(
+                    f"a '{TransformerType.hyper_connection_moe}' model needs at least one "
+                    "hyper-connected MoE block; every block here is dense, so use "
+                    f"'{TransformerType.hyper_connection}'"
+                )
+            if self.name == TransformerType.hyper_connection and moe_blocks:
+                raise OLMoConfigurationError(
+                    f"a '{TransformerType.hyper_connection}' model does not route MoE auxiliary "
+                    f"losses to the trainer, and {len(moe_blocks)} of its blocks are MoE. Use "
+                    f"'{TransformerType.hyper_connection_moe}', whose model class does."
                 )
             n_streams = {
                 (b.hyper_connection or HyperConnectionConfig()).n_streams for b in hc_blocks
@@ -426,6 +530,7 @@ class TransformerConfig(ModelConfig):
             distributed setting it usually makes sense to set this to "meta".
         """
         from .model import (
+            HyperConnectionMoETransformer,
             HyperConnectionTransformer,
             MoETransformer,
             NormalizedTransformer,
@@ -491,8 +596,12 @@ class TransformerConfig(ModelConfig):
                 block_pattern=self.block_pattern,
                 tie_word_embeddings=self.tie_word_embeddings,
             )
-        elif self.name == TransformerType.hyper_connection:
-            model = HyperConnectionTransformer(
+        elif self.name in HYPER_CONNECTION_MODEL_TYPES:
+            # The two classes take the same arguments and differ only in whether they also
+            # inherit `MoETransformer`'s auxiliary-metric and expert plumbing. Spelled as two
+            # calls rather than one through a variable because the two constructors are what a
+            # reader wants to see named.
+            hc_kwargs: Dict[str, Any] = dict(
                 d_model=self.d_model,
                 vocab_size=self.vocab_size,
                 n_layers=self.n_layers,
@@ -511,6 +620,10 @@ class TransformerConfig(ModelConfig):
                 embed_scale=self.embed_scale,
                 tie_word_embeddings=self.tie_word_embeddings,
             )
+            if self.name == TransformerType.hyper_connection:
+                model = HyperConnectionTransformer(**hc_kwargs)
+            else:
+                model = HyperConnectionMoETransformer(**hc_kwargs)
         else:
             raise NotImplementedError(self.name)
 
@@ -576,15 +689,15 @@ class TransformerConfig(ModelConfig):
     def num_routing_params(self) -> int:
         """
         The number of hyper-connection routing parameters a model from this config would have,
-        counting both wrapped sub-layers of every hyper-connected block plus the stream readout.
+        counting every wrapped sub-layer of every hyper-connected block plus the stream readout.
 
         :returns: The parameter count, which is 0 for an ordinary single-stream model.
         """
         num_params = 0
         for block_config in self.resolved_block_configs:
-            if block_config.name == TransformerBlockType.hyper_connection:
+            if block_config.name in HYPER_CONNECTION_BLOCK_TYPES:
                 hc = block_config.hyper_connection or HyperConnectionConfig()
-                num_params += 2 * hc.num_params()
+                num_params += block_config.num_hyper_connections * hc.num_params()
         if self.stream_collapse is not None:
             num_params += self.stream_collapse.num_params()
         return num_params

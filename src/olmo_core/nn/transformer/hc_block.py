@@ -3,7 +3,7 @@ A transformer block whose attention and feed-forward sub-layers are each wrapped
 :class:`~olmo_core.nn.hyper_connections.HyperConnection`.
 """
 
-from typing import Optional, Union
+from typing import Optional, Tuple, Union, cast
 
 import torch
 import torch.nn as nn
@@ -16,14 +16,125 @@ from ..attention.base import SequenceMixerConfig
 from ..attention.ring import RingContextParallelStyle, UlyssesContextParallelStyle
 from ..buffer_cache import BufferCache
 from ..feed_forward import FeedForwardConfig
-from ..hyper_connections import HyperConnectionConfig
+from ..hyper_connections import HyperConnection, HyperConnectionConfig
 from ..layer_norm import LayerNormConfig
 from .block import TransformerBlock
 
-__all__ = ["HyperConnectionTransformerBlock"]
+__all__ = ["HyperConnectionBlockMixin", "HyperConnectionTransformerBlock"]
 
 
-class HyperConnectionTransformerBlock(TransformerBlock):
+class HyperConnectionBlockMixin:
+    """
+    What every hyper-connected block has in common, whatever it wraps.
+
+    A dense block and an MoE block differ in what their sub-layers are and in how many of them
+    there are; they do not differ in how the hyper-connections are built, counted, or refused
+    under tensor and context parallelism. That shared half lives here so that
+    :class:`~olmo_core.nn.transformer.HyperConnectionTransformer` can recognise a hyper-connected
+    block with one ``isinstance`` — the alternative is a growing tuple of block classes in
+    ``_validate_block``, which is the kind of list that stops being complete.
+
+    A plain mixin rather than a common base class, deliberately. The dense block extends
+    :class:`~olmo_core.nn.transformer.TransformerBlock` and the MoE ones extend
+    :class:`~olmo_core.nn.transformer.MoETransformerBlock`, which are siblings under
+    ``TransformerBlockBase``; anything shared has to arrive from the side.
+
+    Subclasses call :meth:`_init_hyper_connections` from their own ``__init__`` after the
+    wrapped block is built, and are responsible for using ``self.hyper_connections`` in their
+    ``forward``.
+    """
+
+    #: Set by :meth:`_init_hyper_connections`.
+    hc_config: HyperConnectionConfig
+    n_streams: int
+    hc_names: Tuple[str, ...]
+    branch_dropout: nn.Module
+
+    def _init_hyper_connections(
+        self,
+        hc_config: Optional[HyperConnectionConfig],
+        *,
+        names: Tuple[str, ...],
+        init_device: str = "cpu",
+        dropout: float = 0.0,
+    ) -> None:
+        """
+        Build one :class:`~olmo_core.nn.hyper_connections.HyperConnection` per wrapped sub-layer.
+
+        :param hc_config: The hyper-connection config, or ``None`` for the default.
+        :param names: The attribute name for each wrapped sub-layer's hyper-connection, in the
+            order the block applies them. Each gets its own parameters.
+        :param init_device: The device to allocate routing parameters on.
+        :param dropout: Dropout applied to each branch output before it is written back.
+        """
+        assert isinstance(self, nn.Module)
+        config = hc_config if hc_config is not None else HyperConnectionConfig()
+        self.hc_config = config
+        self.n_streams = config.n_streams
+        self.hc_names = tuple(names)
+        for name in self.hc_names:
+            self.add_module(name, config.build(init_device=init_device))
+        self.branch_dropout = nn.Dropout(dropout) if dropout > 0.0 else nn.Identity()
+
+    @property
+    def hyper_connections(self) -> Tuple[HyperConnection, ...]:
+        """
+        Every :class:`~olmo_core.nn.hyper_connections.HyperConnection` this block owns, in the
+        order the forward pass applies them.
+
+        :returns: The hyper-connections.
+        """
+        assert isinstance(self, nn.Module)
+        return tuple(cast(HyperConnection, getattr(self, name)) for name in self.hc_names)
+
+    @property
+    def num_routing_params(self) -> int:
+        """
+        The number of routing parameters this block adds over an ordinary block.
+
+        Measured off the built modules rather than recomputed from the config, so that a block
+        whose wrapped sub-layer count changes cannot quietly keep reporting the old number.
+
+        :returns: The parameter count.
+        """
+        return sum(
+            sum(p.numel() for p in hc.parameters(recurse=False)) for hc in self.hyper_connections
+        )
+
+    def apply_tp(
+        self,
+        tp_mesh: DeviceMesh,
+        *,
+        input_layout: Optional[Placement] = None,
+        float8_enabled: bool = False,
+    ):
+        """
+        :raises NotImplementedError: Always. Tensor parallelism over a four-dimensional residual
+            stream needs its own placement plan for the routing parameters and for the stream
+            dimension, and none has been written or tested yet.
+        """
+        del tp_mesh, input_layout, float8_enabled
+        raise NotImplementedError(
+            f"tensor parallelism is not implemented for {type(self).__name__}"
+        )
+
+    def apply_cp(
+        self,
+        cp_mesh: DeviceMesh,
+        ring: Optional[RingContextParallelStyle] = None,
+        uly: Optional[UlyssesContextParallelStyle] = None,
+    ):
+        """
+        :raises NotImplementedError: Always. Context parallelism has not been validated against
+            the four-dimensional stream layout.
+        """
+        del cp_mesh, ring, uly
+        raise NotImplementedError(
+            f"context parallelism is not implemented for {type(self).__name__}"
+        )
+
+
+class HyperConnectionTransformerBlock(HyperConnectionBlockMixin, TransformerBlock):
     """
     A hyper-connected transformer block.
 
@@ -97,27 +208,17 @@ class HyperConnectionTransformerBlock(TransformerBlock):
             cache=cache,
         )
 
-        hc_config = hyper_connection if hyper_connection is not None else HyperConnectionConfig()
-        self.hc_config = hc_config
-        self.n_streams = hc_config.n_streams
-
         # `TransformerBlock` built two `ResidualStream`s that a hyper-connected block has no use
         # for. Drop them rather than leave dead modules that a hook or a TP plan could find.
         del self.attention_residual_stream
         del self.feed_forward_residual_stream
 
-        self.attention_hc = hc_config.build(init_device=init_device)
-        self.feed_forward_hc = hc_config.build(init_device=init_device)
-        self.branch_dropout = nn.Dropout(dropout) if dropout > 0.0 else nn.Identity()
-
-    @property
-    def num_routing_params(self) -> int:
-        """
-        The number of routing parameters this block adds over an ordinary block.
-
-        :returns: Twice the per-sub-layer routing parameter count.
-        """
-        return 2 * self.hc_config.num_params()
+        self._init_hyper_connections(
+            hyper_connection,
+            names=("attention_hc", "feed_forward_hc"),
+            init_device=init_device,
+            dropout=dropout,
+        )
 
     def forward(
         self,
@@ -147,30 +248,3 @@ class HyperConnectionTransformerBlock(TransformerBlock):
         streams = self.attention_hc(x, attention_branch)
         return self.feed_forward_hc(streams, feed_forward_branch)
 
-    def apply_tp(
-        self, tp_mesh: DeviceMesh, *, input_layout: Placement, float8_enabled: bool = False
-    ):
-        """
-        :raises NotImplementedError: Always. Tensor parallelism over a four-dimensional residual
-            stream needs its own placement plan for the routing parameters and for the stream
-            dimension, and none has been written or tested yet.
-        """
-        del tp_mesh, input_layout, float8_enabled
-        raise NotImplementedError(
-            "tensor parallelism is not implemented for HyperConnectionTransformerBlock"
-        )
-
-    def apply_cp(
-        self,
-        cp_mesh: DeviceMesh,
-        ring: Optional[RingContextParallelStyle] = None,
-        uly: Optional[UlyssesContextParallelStyle] = None,
-    ):
-        """
-        :raises NotImplementedError: Always. Context parallelism has not been validated against
-            the four-dimensional stream layout.
-        """
-        del cp_mesh, ring, uly
-        raise NotImplementedError(
-            "context parallelism is not implemented for HyperConnectionTransformerBlock"
-        )

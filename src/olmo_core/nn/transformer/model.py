@@ -6,6 +6,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Dict,
+    Iterator,
     List,
     Literal,
     Optional,
@@ -20,11 +21,7 @@ import torch.nn as nn
 from torch.distributed import DeviceMesh
 from torch.distributed.fsdp import FSDPModule, MixedPrecisionPolicy, fully_shard
 from torch.distributed.tensor import Replicate, Shard
-from torch.distributed.tensor.parallel import (
-    RowwiseParallel,
-    SequenceParallel,
-    parallelize_module,
-)
+from torch.distributed.tensor.parallel import RowwiseParallel, SequenceParallel, parallelize_module
 
 from olmo_core.data.utils import get_cumulative_document_lengths
 from olmo_core.distributed.parallel import get_pp_mesh
@@ -32,18 +29,10 @@ from olmo_core.distributed.utils import hide_from_torch, unhide_from_torch
 from olmo_core.doc_utils import beta_feature
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.float8 import Float8Config
-from olmo_core.nn.attention.ring import (
-    RingContextParallelStyle,
-    UlyssesContextParallelStyle,
-)
+from olmo_core.nn.attention.ring import RingContextParallelStyle, UlyssesContextParallelStyle
 from olmo_core.utils import get_default_device, mark_dynamic, move_to_device
 
-from ..attention import (
-    Attention,
-    FusedAttention,
-    RingAttentionLoadBalancer,
-    SequenceMixer,
-)
+from ..attention import Attention, FusedAttention, RingAttentionLoadBalancer, SequenceMixer
 from ..buffer_cache import BufferCache
 from ..functional import l2_normalize
 from ..hyper_connections import HyperConnection, StreamCollapse, StreamCollapseConfig
@@ -64,7 +53,6 @@ from .config import (
     TransformerDataParallelWrappingStrategy,
     resolve_block_configs,
 )
-from .hc_block import HyperConnectionTransformerBlock
 from .init import InitMethod
 
 if TYPE_CHECKING:
@@ -1275,32 +1263,46 @@ class MoETransformer(Transformer):
             block.feed_forward_moe.post_batch(dry_run=dry_run)
 
 
-@beta_feature
-class HyperConnectionTransformer(Transformer):
+class HyperConnectionStreamsMixin:
     """
-    A transformer that carries ``n`` parallel residual streams instead of one, to be used with
-    :class:`~olmo_core.nn.transformer.HyperConnectionTransformerBlock` blocks.
+    The ``n``-stream residual contract, independent of what the blocks inside it are.
 
-    Everything outside the blocks is unchanged. The embeddings still produce one
-    ``(batch, seq, d_model)`` hidden state, which is lifted into ``n`` identical streams before
-    the first block, and the ``n`` streams are collapsed back to one before the LM head, so the
-    head, the loss and every callback see exactly what they see for a single-stream model.
+    A hyper-connected dense transformer and a hyper-connected MoE transformer differ in exactly
+    the things :class:`MoETransformer` adds — auxiliary metrics, expert parallelism, expert FSDP
+    preparation — and not at all in how the streams are expanded, collapsed, seeded or counted.
+    Holding that half here is what lets the MoE variant inherit :class:`MoETransformer` without
+    either copying those four methods or losing them.
 
-    :param stream_collapse: How to reduce the ``n`` streams back to one before the LM head.
-
-    See :class:`Transformer` for the other parameters.
+    Subclasses call :meth:`_init_streams` from their own ``__init__`` after ``super().__init__``.
     """
 
-    def __init__(
-        self,
-        *,
-        stream_collapse: Optional[StreamCollapseConfig] = None,
-        **kwargs,
-    ):
-        super().__init__(**kwargs)
+    #: Declared for the type checker. Every concrete user of this mixin also inherits
+    #: :class:`Transformer`, which is where these actually come from; a mixin cannot say so
+    #: without a circular base class.
+    if TYPE_CHECKING:
+        num_params: int
+        num_non_embedding_params: int
+        blocks: nn.ModuleDict
+        dtype: torch.dtype
+
+        def modules(self) -> Iterator[nn.Module]:
+            ...
+
+    n_streams: int
+    stream_collapse: StreamCollapse
+
+    def _init_streams(
+        self, stream_collapse: Optional[StreamCollapseConfig], *, init_device: str = "cpu"
+    ) -> None:
+        """
+        Build the stream readout and drop the parameter counts cached before it existed.
+
+        :param stream_collapse: How to reduce the ``n`` streams back to one before the LM head.
+        :param init_device: The device to allocate the readout's parameters on.
+        """
         collapse_config = stream_collapse if stream_collapse is not None else StreamCollapseConfig()
         self.n_streams = collapse_config.n_streams
-        self.stream_collapse = collapse_config.build(init_device=kwargs.get("init_device", "cpu"))
+        self.stream_collapse = collapse_config.build(init_device=init_device)
 
         # `Transformer.__init__` reads `num_params` and `num_non_embedding_params` on its way
         # out to freeze them before pipeline parallelism can strip parameters, which happens
@@ -1311,10 +1313,25 @@ class HyperConnectionTransformer(Transformer):
         self.num_non_embedding_params
 
     def _validate_block(self, block: TransformerBlockBase) -> TransformerBlockBase:
-        if not isinstance(block, HyperConnectionTransformerBlock):
+        """
+        Refuse a block that does not carry hyper-connections.
+
+        Asked as ``isinstance`` against
+        :class:`~olmo_core.nn.transformer.HyperConnectionBlockMixin` rather than against a tuple
+        of concrete classes, so that a block type added later is covered without an edit here —
+        a list of class names is the kind that stops being complete quietly.
+
+        :param block: The block to check.
+
+        :returns: The block.
+
+        :raises OLMoConfigurationError: If the block is not hyper-connected.
+        """
+        from .hc_block import HyperConnectionBlockMixin
+
+        if not isinstance(block, HyperConnectionBlockMixin):
             raise OLMoConfigurationError(
-                f"'{self.__class__.__name__}' requires "
-                f"'{HyperConnectionTransformerBlock.__name__}' blocks, got "
+                f"'{self.__class__.__name__}' requires hyper-connected blocks, got "
                 f"'{block.__class__.__name__}'"
             )
         return block
@@ -1359,8 +1376,8 @@ class HyperConnectionTransformer(Transformer):
 
         :returns: The generator, as :meth:`Transformer.init_weights` does.
         """
-        generator = super().init_weights(**kwargs)
-        for module in self.modules():
+        generator = super().init_weights(**kwargs)  # type: ignore[misc]
+        for module in self.modules():  # type: ignore[attr-defined]
             if isinstance(module, (HyperConnection, StreamCollapse)):
                 module.reset_parameters(generator=generator)
         return generator
@@ -1373,10 +1390,70 @@ class HyperConnectionTransformer(Transformer):
         :returns: The parameter count.
         """
         num_params = 0
-        for module in self.modules():
+        for module in self.modules():  # type: ignore[attr-defined]
             if isinstance(module, (HyperConnection, StreamCollapse)):
                 num_params += sum(p.numel() for p in module.parameters(recurse=False))
         return num_params
+
+
+@beta_feature
+class HyperConnectionTransformer(HyperConnectionStreamsMixin, Transformer):
+    """
+    A transformer that carries ``n`` parallel residual streams instead of one, to be used with
+    :class:`~olmo_core.nn.transformer.HyperConnectionTransformerBlock` blocks.
+
+    Everything outside the blocks is unchanged. The embeddings still produce one
+    ``(batch, seq, d_model)`` hidden state, which is lifted into ``n`` identical streams before
+    the first block, and the ``n`` streams are collapsed back to one before the LM head, so the
+    head, the loss and every callback see exactly what they see for a single-stream model.
+
+    :param stream_collapse: How to reduce the ``n`` streams back to one before the LM head.
+
+    See :class:`Transformer` for the other parameters.
+    """
+
+    def __init__(
+        self,
+        *,
+        stream_collapse: Optional[StreamCollapseConfig] = None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self._init_streams(stream_collapse, init_device=kwargs.get("init_device", "cpu"))
+
+
+@beta_feature
+class HyperConnectionMoETransformer(HyperConnectionStreamsMixin, MoETransformer):
+    """
+    An MoE transformer that carries ``n`` parallel residual streams instead of one, to be used
+    with the block types in :mod:`~olmo_core.nn.transformer.hc_moe_block`.
+
+    Both halves are inherited rather than reimplemented: the stream contract from
+    :class:`HyperConnectionStreamsMixin` and everything MoE-specific — the router's auxiliary
+    metrics, ``post_batch``, expert FSDP and DDP preparation — from :class:`MoETransformer`.
+    That matters more than it looks: the load-balancing loss and the router z-loss reach the
+    trainer through ``compute_auxiliary_metrics``, and a hyper-connected MoE model that
+    subclassed :class:`Transformer` instead would train with those losses silently unreported.
+
+    ``apply_ep`` is inherited from :class:`MoETransformer` and walks the blocks calling
+    ``block.apply_ep``, each of which raises — see
+    :meth:`~olmo_core.nn.transformer.hc_moe_block.HyperConnectionMoEBlockMixin.apply_ep` for the
+    argument. The refusal is deliberately at the block rather than here, so that it fires
+    whoever reaches for it.
+
+    :param stream_collapse: How to reduce the ``n`` streams back to one before the LM head.
+
+    See :class:`Transformer` for the other parameters.
+    """
+
+    def __init__(
+        self,
+        *,
+        stream_collapse: Optional[StreamCollapseConfig] = None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self._init_streams(stream_collapse, init_device=kwargs.get("init_device", "cpu"))
 
 
 def _hide_cpu_inputs_from_torch(m, args, kwargs) -> Optional[Tuple[Any, Dict[str, Any]]]:

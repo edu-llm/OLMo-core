@@ -19,9 +19,18 @@ from .config import (
     TransformerDataParallelWrappingStrategy,
     TransformerType,
 )
-from .hc_block import HyperConnectionTransformerBlock
+from .hc_block import HyperConnectionBlockMixin, HyperConnectionTransformerBlock
+from .hc_moe_block import (
+    HyperConnectionMoEBlockMixin,
+    HyperConnectionMoEHybridReorderedNormTransformerBlock,
+    HyperConnectionMoEHybridTransformerBlock,
+    HyperConnectionMoEReorderedNormTransformerBlock,
+    HyperConnectionMoETransformerBlock,
+)
 from .init import InitMethod
 from .model import (
+    HyperConnectionMoETransformer,
+    HyperConnectionStreamsMixin,
     HyperConnectionTransformer,
     MoETransformer,
     NormalizedTransformer,
@@ -35,7 +44,15 @@ __all__ = [
     "NormalizedTransformer",
     "MoETransformer",
     "HyperConnectionTransformer",
+    "HyperConnectionMoETransformer",
+    "HyperConnectionStreamsMixin",
     "HyperConnectionTransformerBlock",
+    "HyperConnectionBlockMixin",
+    "HyperConnectionMoEBlockMixin",
+    "HyperConnectionMoETransformerBlock",
+    "HyperConnectionMoEReorderedNormTransformerBlock",
+    "HyperConnectionMoEHybridTransformerBlock",
+    "HyperConnectionMoEHybridReorderedNormTransformerBlock",
     "MoEHybridTransformerBlockBase",
     "MoEHybridTransformerBlock",
     "MoEHybridReorderedNormTransformerBlock",

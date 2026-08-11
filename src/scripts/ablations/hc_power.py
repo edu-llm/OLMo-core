@@ -31,7 +31,7 @@ import json
 import math
 import sys
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Tuple
 
 __all__ = [
     "DATADECIDE_SIGMA_EXPONENT",
@@ -68,7 +68,11 @@ SMALL_MOE_SIGMA_FACTOR = 1.35
 
 
 def scale_sigma_with_horizon(
-    sigma: float, *, from_tokens: float, to_tokens: float, exponent: float = DATADECIDE_SIGMA_EXPONENT
+    sigma: float,
+    *,
+    from_tokens: float,
+    to_tokens: float,
+    exponent: float = DATADECIDE_SIGMA_EXPONENT,
 ) -> float:
     """
     Move a seed sigma from one token budget to another along ``sigma ~ D^-exponent``.
@@ -166,9 +170,12 @@ def _betainc(a: float, b: float, x: float) -> float:
     front = math.exp(a * math.log(x) + b * math.log(1.0 - x) - _log_beta(a, b))
     if x < (a + 1.0) / (a + b + 2.0):
         return front * _betacf(a, b, x) / a
-    return 1.0 - math.exp(
-        b * math.log(1.0 - x) + a * math.log(x) - _log_beta(b, a)
-    ) * _betacf(b, a, 1.0 - x) / b
+    return (
+        1.0
+        - math.exp(b * math.log(1.0 - x) + a * math.log(x) - _log_beta(b, a))
+        * _betacf(b, a, 1.0 - x)
+        / b
+    )
 
 
 def t_cdf(t: float, df: float) -> float:
@@ -428,9 +435,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"{'hypothesis':<36}{'SE':>9}{'2*SE gate':>12}{'MDE':>9}")
     print("-" * 66)
     for row in rows:
-        print(
-            f"{row['hypothesis']:<36}{row['se']:>9.4f}{row['gate_2se']:>12.4f}{row['mde']:>9.4f}"
-        )
+        print(f"{row['hypothesis']:<36}{row['se']:>9.4f}{row['gate_2se']:>12.4f}{row['mde']:>9.4f}")
     print("\nWhat each one reads:")
     for row in rows:
         print(f"  {row['hypothesis'].split()[0]:<5}{row['reads']}")
@@ -440,9 +445,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         keys = sorted({key for values in sweep.values() for key in values})
         print(f"{'seeds':>6}" + "".join(f"{key:>9}" for key in keys))
         for seeds in sorted(sweep):
-            print(
-                f"{seeds:>6}" + "".join(f"{sweep[seeds].get(key, 0.0):>9.4f}" for key in keys)
-            )
+            print(f"{seeds:>6}" + "".join(f"{sweep[seeds].get(key, 0.0):>9.4f}" for key in keys))
         print(
             "\nEvery column falls as 1/sqrt(seeds) and the money is linear in seeds, so the\n"
             "returns diminish; the design document argues where to stop."
