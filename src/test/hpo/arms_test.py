@@ -17,6 +17,7 @@ def test_all_preregistered_arms_are_registered():
         "no_centaur",
         "no_proxy",
         "olmoe_no_centaur",
+        "olmoe_curriculum_no_proxy",
         "olmoe_no_proxy",
     }
 
@@ -28,6 +29,7 @@ def test_only_declared_centaur_and_complete_proxy_bundle_ablations_vary():
     no_proxy = matrix[Arm.NO_PROXY]
     curriculum = matrix[Arm.CURRICULUM_QUADRATIC_MTLD]
     curriculum_no_centaur = matrix[Arm.CURRICULUM_QUADRATIC_MTLD_NO_CENTAUR]
+    olmoe_curriculum = matrix[Arm.OLMOE_CURRICULUM_NO_PROXY]
     assert full["llm_ratio"] == 0.3
     assert full["llm_scope"] == "multi_action"
     assert no_centaur["llm_ratio"] == 0.0
@@ -44,6 +46,7 @@ def test_only_declared_centaur_and_complete_proxy_bundle_ablations_vary():
         "llm_ratio": 0.0,
         "llm_scope": "none",
     }
+    assert olmoe_curriculum == matrix[Arm.OLMOE_NO_PROXY]
 
 
 def test_budget_ledger_counts_every_category_and_totals():

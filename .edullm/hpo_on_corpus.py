@@ -616,6 +616,8 @@ def _segment_payload(
     }
     if controller_spec.get("curriculum_identity") is not None:
         payload["curriculum_identity"] = copy.deepcopy(controller_spec["curriculum_identity"])
+    if controller_spec.get("worker_environment") is not None:
+        payload["worker_environment"] = copy.deepcopy(controller_spec["worker_environment"])
     if finalist_continuation is not None:
         payload["finalist_continuation"] = dict(finalist_continuation)
     payload["config_hash"] = _segment_config_hash(payload)
@@ -632,6 +634,7 @@ def _segment_config_hash(payload: Mapping[str, Any]) -> str:
         "experiment_factory": payload["experiment_factory"],
         "factory_kwargs": payload.get("factory_kwargs", {}),
         "curriculum_identity": payload.get("curriculum_identity"),
+        "worker_environment": payload.get("worker_environment"),
         "transition": payload.get("transition"),
         "finalist_continuation": payload.get("finalist_continuation"),
     }
@@ -1810,6 +1813,26 @@ def run_segment(args: argparse.Namespace) -> int:
             raise ValueError("encoded segment spec is not valid JSON") from exc
     else:
         spec = json.loads(Path(args.segment_spec).read_text())
+    worker_environment = spec.get("worker_environment")
+    if worker_environment is not None:
+        if not isinstance(worker_environment, Mapping):
+            raise ValueError("segment worker_environment must be an object")
+        allowed_worker_environment = {
+            "EDULLM_DATASET_ID",
+            "EDULLM_DATASET_VERSION",
+            "EDULLM_DATASET_TOKENIZER",
+        }
+        unknown_environment = set(worker_environment) - allowed_worker_environment
+        if unknown_environment:
+            raise ValueError(
+                f"segment worker_environment contains unsupported keys "
+                f"{sorted(unknown_environment)}"
+            )
+        for name, value in worker_environment.items():
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"segment worker_environment {name} must be a non-empty string")
+            os.environ[name] = value
+        os.environ["EDULLM_CHECKPOINT_DIR"] = args.checkpoint_dir
     model_parameterization = spec.get("model_parameterization", {"kind": "standard"})
     if model_parameterization.get("kind") == "umup":
         from olmo_core.hpo.umup import require_official_umup_forward

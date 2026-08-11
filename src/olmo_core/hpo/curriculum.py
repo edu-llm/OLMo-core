@@ -10,7 +10,7 @@ import sys
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 import torch
@@ -26,6 +26,7 @@ from ..distributed.utils import get_fs_local_rank, get_rank, get_world_size
 from .comparison import (
     ComparisonExperimentConfig,
     build_comparison_experiment,
+    build_olmoe_hpo_experiment,
     comparison_heldout_label,
 )
 
@@ -48,6 +49,7 @@ __all__ = [
     "ParentChunkDataset",
     "ParentChunkDatasetConfig",
     "build_curriculum_hpo_experiment",
+    "build_olmoe_curriculum_hpo_experiment",
     "curriculum_corpus_from_reads",
     "curriculum_pool_for_tokens",
     "token_phase_boundaries",
@@ -606,7 +608,8 @@ def _required_env(name: str) -> str:
     return value
 
 
-def build_curriculum_hpo_experiment(
+def _build_curriculum_hpo_experiment(
+    base_builder: Callable[..., ComparisonExperimentConfig],
     *,
     sequence_length: int = 2048,
     global_batch_size: int = 524_288,
@@ -617,7 +620,7 @@ def build_curriculum_hpo_experiment(
     target_tokens: int = CURRICULUM_TARGET_TOKENS,
     work_dir: str = "/tmp/hpo-curriculum-data",
 ) -> CurriculumExperimentConfig:
-    """Build stock ``olmo2_190M`` with arm 9's fixed token-progress MTLD pacing."""
+    """Build a supplied model recipe with arm 9's fixed token-progress MTLD pacing."""
 
     dataset_id = _required_env("EDULLM_DATASET_ID")
     version = _required_env("EDULLM_DATASET_VERSION")
@@ -633,7 +636,7 @@ def build_curriculum_hpo_experiment(
     if global_batch_size < 256 * 1024 or global_batch_size > 1024 * 1024:
         raise ValueError("curriculum HPO global batch must be in the approved 256 Ki-1 Mi range")
 
-    base = build_comparison_experiment(
+    base = base_builder(
         sequence_length=sequence_length,
         global_batch_size=global_batch_size,
         rank_microbatch_size=rank_microbatch_size,
@@ -702,4 +705,56 @@ def build_curriculum_hpo_experiment(
         umup_parity_validated=base.umup_parity_validated,
         umup_metadata=base.umup_metadata,
         curriculum_identity=curriculum_identity,
+    )
+
+
+def build_curriculum_hpo_experiment(
+    *,
+    sequence_length: int = 2048,
+    global_batch_size: int = 524_288,
+    rank_microbatch_size: int = 4096,
+    data_seed: int = 210007,
+    init_seed: int = 110007,
+    eval_steps: int = 2,
+    target_tokens: int = CURRICULUM_TARGET_TOKENS,
+    work_dir: str = "/tmp/hpo-curriculum-data",
+) -> CurriculumExperimentConfig:
+    """Build stock ``olmo2_190M`` with arm 9's fixed token-progress MTLD pacing."""
+
+    return _build_curriculum_hpo_experiment(
+        build_comparison_experiment,
+        sequence_length=sequence_length,
+        global_batch_size=global_batch_size,
+        rank_microbatch_size=rank_microbatch_size,
+        data_seed=data_seed,
+        init_seed=init_seed,
+        eval_steps=eval_steps,
+        target_tokens=target_tokens,
+        work_dir=work_dir,
+    )
+
+
+def build_olmoe_curriculum_hpo_experiment(
+    *,
+    sequence_length: int = 2048,
+    global_batch_size: int = 262_144,
+    rank_microbatch_size: int = 32_768,
+    data_seed: int = 210007,
+    init_seed: int = 110007,
+    eval_steps: int = 2,
+    target_tokens: int = CURRICULUM_TARGET_TOKENS,
+    work_dir: str = "/tmp/hpo-olmoe-curriculum-data",
+) -> CurriculumExperimentConfig:
+    """Build stock OLMoE-1B-7B with arm 9's fixed token-progress MTLD pacing."""
+
+    return _build_curriculum_hpo_experiment(
+        build_olmoe_hpo_experiment,
+        sequence_length=sequence_length,
+        global_batch_size=global_batch_size,
+        rank_microbatch_size=rank_microbatch_size,
+        data_seed=data_seed,
+        init_seed=init_seed,
+        eval_steps=eval_steps,
+        target_tokens=target_tokens,
+        work_dir=work_dir,
     )

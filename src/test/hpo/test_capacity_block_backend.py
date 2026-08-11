@@ -1,6 +1,7 @@
 import base64
 import importlib.util
 import json
+import os
 import shlex
 import sys
 import threading
@@ -15,6 +16,7 @@ from olmo_core.hpo.capacity_block import (
     CapacityTrial,
     GhWorkflowGateway,
     parse_idle_nodes,
+    parse_stale_nodes,
 )
 from olmo_core.hpo.types import WorkerObservation
 
@@ -123,6 +125,19 @@ def test_idle_parser_only_accepts_explicit_idle_nodes():
         parse_idle_nodes("workflow completed without a fleet table")
 
 
+def test_stale_parser_only_accepts_explicit_stale_claims():
+    logs = "\n".join(
+        (
+            "Read fleet\t2026-08-11T12:00:00Z node 1  STALE CLAIM  user / old-run exited",
+            "Read fleet\t2026-08-11T12:00:00Z node 2  IDLE",
+            "Read fleet\t2026-08-11T12:00:00Z node 7  8/8 GPUs busy",
+        )
+    )
+    assert parse_stale_nodes(logs) == [1]
+    with pytest.raises(RuntimeError, match="duplicate"):
+        parse_stale_nodes("node 1  STALE CLAIM x\nnode 1  STALE CLAIM x\n")
+
+
 def test_backend_dispatches_independent_safe_eight_gpu_trials_before_waiting():
     gateway = FakeGateway({"a": _observation("a"), "b": _observation("b")})
     ticks = iter((10.0, 10.0, 13.0, 14.0))
@@ -162,6 +177,37 @@ def test_backend_dispatches_independent_safe_eight_gpu_trials_before_waiting():
     assert [result.trial_id for result in results] == ["a", "b"]
     assert results[0].accelerator_seconds == pytest.approx(24.0)
     assert results[1].accelerator_seconds == pytest.approx(32.0)
+
+
+def test_backend_releases_its_stale_claim_after_segment_exit():
+    class ExitingGateway(FakeGateway):
+        states = iter(
+            (
+                "node 2  8/8 GPUs busy\n",
+                "node 2  STALE CLAIM  researcher / hpo-10-a exited\n",
+                "node 2  IDLE\n",
+            )
+        )
+
+        def wait(self, run_id: str) -> str:
+            if run_id.startswith("block-status"):
+                return next(self.states)
+            return super().wait(run_id)
+
+    gateway = ExitingGateway({"a": _observation("a")})
+    ticks = iter((10.0, 13.0))
+    backend = CapacityBlockBackend(_config(), gateway, clock=lambda: next(ticks))
+
+    result = backend.run(
+        [CapacityTrial("a", 10, 49_807_360, _payload("a"))],
+        idle_nodes=(2,),
+    )
+
+    assert result[0].trial_id == "a"
+    releases = [
+        inputs for workflow, inputs, _ in gateway.dispatches if workflow == "block-release.yml"
+    ]
+    assert releases == [{"nodes": "2", "region": "us-east-2"}]
 
 
 def test_backend_discovers_capacity_and_caps_dynamic_worker_count():
@@ -325,6 +371,11 @@ def test_remote_worker_decodes_payload_and_persists_durable_observation(
     entry = _load_entrypoint()
     payload = _payload("remote")
     payload.pop("config_hash")
+    payload["worker_environment"] = {
+        "EDULLM_DATASET_ID": "pretrain/opt-with-synthetic-10b",
+        "EDULLM_DATASET_VERSION": "v1",
+        "EDULLM_DATASET_TOKENIZER": "tokenizer/dolma2-bpe",
+    }
     encoded = base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("ascii")
     config = SimpleNamespace(trainer=SimpleNamespace())
     result = _observation("remote")
@@ -358,6 +409,10 @@ def test_remote_worker_decodes_payload_and_persists_durable_observation(
     )
 
     assert entry.run_segment(args) == 0
+    assert os.environ["EDULLM_DATASET_ID"] == "pretrain/opt-with-synthetic-10b"
+    assert os.environ["EDULLM_DATASET_VERSION"] == "v1"
+    assert os.environ["EDULLM_DATASET_TOKENIZER"] == "tokenizer/dolma2-bpe"
+    assert os.environ["EDULLM_CHECKPOINT_DIR"] == "s3://checkpoints/hpo/trials/remote"
     lines = capsys.readouterr().out.splitlines()
     assert lines[0].startswith("EDULLM_HPO_OBSERVATION=")
     assert json.loads(lines[0].split("=", 1)[1])["trial_id"] == "remote"

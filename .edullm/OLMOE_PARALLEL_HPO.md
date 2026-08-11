@@ -1,9 +1,11 @@
 # OLMoE parallel-node HPO
 
-The OLMoE study has two frozen, additive probe specifications:
+The OLMoE study has three additive probe specifications:
 
 - `hpo-olmoe-no-proxy.json`: stock OLMoE-1B-7B with the 30% Centaur policy.
 - `hpo-olmoe-no-centaur.json`: the identical stock OLMoE-1B-7B study with Centaur disabled.
+- `hpo-olmoe-curriculum-no-proxy.json`: OLMoE-1B-7B with the warmup quadratic
+  MTLD curriculum and the 30% Centaur policy. This is the curriculum/no-proxy capacity run.
 
 These files do not replace the historical dense `hpo-no-proxy.json` or
 `hpo-no-centaur.json` arms. Both OLMoE arms use

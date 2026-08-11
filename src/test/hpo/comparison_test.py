@@ -306,6 +306,29 @@ def test_olmoe_probe_specs_are_separate_fixed_batch_capacity_block_arms():
     assert no_centaur["centaur"] is None
 
 
+def test_olmoe_curriculum_no_proxy_spec_combines_required_contracts():
+    spec = json.loads((_repo_root() / ".edullm/hpo-olmoe-curriculum-no-proxy.json").read_text())
+
+    assert spec["arm"] == "olmoe_curriculum_no_proxy"
+    assert spec["centaur"]["ratio"] == 0.3
+    assert spec["centaur"]["scope"] == "multi_action"
+    assert spec["experiment_factory"].endswith(":build_olmoe_curriculum_hpo_experiment")
+    assert spec["curriculum_identity"]["pacing"] == "arm9_warmup_quadratic_n10_token_fraction_v1"
+    assert spec["model_parameterization"]["architecture"] == "olmoe_1B_7B"
+    assert "global_batch_mult" not in json.dumps(spec["search_space"])
+    assert spec["base_global_batch_size"] == 262_144
+    assert spec["factory_kwargs"]["rank_microbatch_size"] == 32_768
+    assert spec["controller"]["worker_count"] == spec["max_workers"] == 6
+    assert spec["controller"]["quantum"] == 50_331_648
+    assert spec["controller"]["target_tokens"] == 503_316_480
+    assert spec["controller"]["budget_tokens"] == 2_013_265_920
+    assert spec["worker_environment"] == {
+        "EDULLM_DATASET_ID": "pretrain/opt-with-synthetic-10b",
+        "EDULLM_DATASET_VERSION": "v1",
+        "EDULLM_DATASET_TOKENIZER": "tokenizer/dolma2-bpe",
+    }
+
+
 def test_dense_probe_specs_remain_byte_for_byte_intact():
     root = _repo_root() / ".edullm"
     expected_sha256 = {

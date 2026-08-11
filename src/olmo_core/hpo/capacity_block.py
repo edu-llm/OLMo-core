@@ -22,6 +22,7 @@ PLATFORM_REPOSITORY = "edu-llm/platform"
 STATUS_WORKFLOW = "block-status.yml"
 RUN_WORKFLOW = "block-run.yml"
 LOGS_WORKFLOW = "block-logs.yml"
+RELEASE_WORKFLOW = "block-release.yml"
 OBSERVATION_MARKER = "EDULLM_HPO_OBSERVATION="
 
 
@@ -88,6 +89,19 @@ def parse_idle_nodes(log_text: str) -> list[int]:
     if len(idle) != len(set(idle)):
         raise RuntimeError("block-status workflow emitted a duplicate IDLE node")
     return sorted(idle)
+
+
+def parse_stale_nodes(log_text: str) -> list[int]:
+    """Extract nodes whose detached run exited but whose claim still needs release."""
+
+    reading_pattern = re.compile(r"\bnode\s+(\d+)\s{2,}.*$", re.MULTILINE)
+    stale_pattern = re.compile(r"\bnode\s+(\d+)\s{2,}.*\bSTALE CLAIM\b.*$", re.MULTILINE)
+    if not reading_pattern.search(log_text):
+        raise RuntimeError("block-status workflow emitted no node readings")
+    stale = [int(match.group(1)) for match in stale_pattern.finditer(log_text)]
+    if len(stale) != len(set(stale)):
+        raise RuntimeError("block-status workflow emitted a duplicate STALE CLAIM node")
+    return sorted(stale)
 
 
 def _parse_observation(log_text: str) -> Mapping[str, Any]:
@@ -244,11 +258,14 @@ class CapacityBlockBackend:
         self._clock = clock
 
     def discover_idle_nodes(self) -> list[int]:
+        return parse_idle_nodes(self._status_log())
+
+    def _status_log(self) -> str:
         inputs = {"region": self.config.region}
         if self.config.reservation_id:
             inputs["reservation_id"] = self.config.reservation_id
         run_id = self.gateway.dispatch(STATUS_WORKFLOW, inputs)
-        return parse_idle_nodes(self.gateway.wait(run_id))
+        return self.gateway.wait(run_id)
 
     def worker_count(self, idle_nodes: Sequence[int]) -> int:
         return min(self.config.max_workers, len(idle_nodes))
@@ -339,6 +356,15 @@ class CapacityBlockBackend:
             "lines": "400",
             "region": self.config.region,
             "outputs_bucket": self.config.outputs_bucket,
+        }
+        if self.config.reservation_id:
+            inputs["reservation_id"] = self.config.reservation_id
+        return inputs
+
+    def _release_inputs(self, nodes: Sequence[int]) -> dict[str, str]:
+        inputs = {
+            "nodes": ",".join(str(node) for node in sorted(nodes)),
+            "region": self.config.region,
         }
         if self.config.reservation_id:
             inputs["reservation_id"] = self.config.reservation_id
@@ -458,10 +484,19 @@ class CapacityBlockBackend:
         # All runs are dispatched before any one startup workflow is awaited. Per-node
         # concurrency groups then allow them to claim distinct nodes in parallel.
         self._wait_many(run_workflows)
+        selected_set = set(selected)
         while True:
-            now_idle = set(self.discover_idle_nodes())
-            if set(selected).issubset(now_idle):
+            status_log = self._status_log()
+            now_idle = set(parse_idle_nodes(status_log))
+            if selected_set.issubset(now_idle):
                 break
+            stale = selected_set.intersection(parse_stale_nodes(status_log))
+            if stale:
+                release_workflow = self.gateway.dispatch(
+                    RELEASE_WORKFLOW, self._release_inputs(sorted(stale))
+                )
+                self.gateway.wait(release_workflow)
+                continue
             if heartbeat is not None:
                 heartbeat()
             self._sleep(self.config.poll_interval_seconds)

@@ -27,6 +27,7 @@ from olmo_core.hpo.curriculum import (
     CurriculumInputIdentity,
     ParentChunkDataset,
     build_curriculum_hpo_experiment,
+    build_olmoe_curriculum_hpo_experiment,
     curriculum_corpus_from_reads,
     curriculum_pool_for_tokens,
     token_phase_boundaries,
@@ -238,6 +239,26 @@ def test_read_contract_keeps_token_and_permutation_dtypes_independent():
 
     assert corpus.dtype.value == "uint32"
     assert corpus.order_dtype.value == "uint64"
+
+
+def test_olmoe_curriculum_factory_uses_fixed_olmoe_batch_contract(monkeypatch):
+    import olmo_core.hpo.curriculum as curriculum_module
+
+    captured = {}
+    marker = object()
+
+    def fake_build(base_builder, **kwargs):
+        captured["base_builder"] = base_builder
+        captured.update(kwargs)
+        return marker
+
+    monkeypatch.setattr(curriculum_module, "_build_curriculum_hpo_experiment", fake_build)
+
+    assert build_olmoe_curriculum_hpo_experiment() is marker
+    assert captured["base_builder"].__name__ == "build_olmoe_hpo_experiment"
+    assert captured["sequence_length"] == 2_048
+    assert captured["global_batch_size"] == 262_144
+    assert captured["rank_microbatch_size"] == 32_768
 
 
 def test_factory_requests_exact_parent_and_order_groups(monkeypatch):
