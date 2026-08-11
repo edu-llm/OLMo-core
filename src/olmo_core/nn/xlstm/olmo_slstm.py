@@ -32,6 +32,28 @@ if TYPE_CHECKING:
 
 
 FLASHRNN_VERSION = "1.0.6"
+
+#: Which FlashRNN kernel evaluates the sLSTM recurrence.
+#:
+#: ``cuda`` AND NOT ``cuda_fused``, BECAUSE THE FUSED KERNEL CORRUPTS THE SHARED WEIGHTS AT ANY
+#: BATCH THAT IS NOT A MULTIPLE OF EIGHT. ``FlashRNNFuncGeneratorFused`` rounds the batch up with
+#: ``round_to_multiple(batch_size, 8)`` and pads the inputs and the initial state with
+#: ``torch.ones``; on the way back it slices ``grads[0]`` and ``grads[1]`` -- the input and state
+#: gradients -- to the real batch and leaves ``grads[2]`` and ``grads[3]`` alone. Those two are
+#: the gradients of the recurrent weight and the bias, which are SHARED, so they arrive carrying
+#: the accumulated contribution of the fabricated streams.
+#:
+#: This wave runs 8,192 tokens per rank at sequence length 4,096, so the batch is 2, six of the
+#: eight streams are invented, and every cell of the arm died with a non-finite loss at step 2 --
+#: the first forward after the first optimizer update wrote those gradients into the weights.
+#: ``recurrent_weight_init`` is ``"zeros"``, which is why step 1 survives and step 2 does not, and
+#: the pad is a constant, which is why all three seeds failed identically.
+#:
+#: ``FlashRNNFuncGenerator``, the non-fused generator, contains no padding at all. It is the same
+#: package and the same CUDA implementation family, so the arm keeps FlashRNN and keeps its
+#: architecture; only the fusion goes. ``triton_fused`` is not an option here: it asks for 524 KB
+#: of shared memory at this head dimension against an A100's 164 KB limit.
+FLASHRNN_BACKEND = "cuda"
 _PREFLIGHTED_FLASHRNN = None
 _PREFLIGHTED_FLASHRNN_CONFIG = None
 _PREWARMED_FLASHRNN_SHAPES = set()
@@ -460,7 +482,7 @@ def _prewarm_flashrnn(
         kernel_dtype,
     )
     identity = (
-        f"flashrnn=={FLASHRNN_VERSION}:slstm:cuda_fused:torch={torch_version}:"
+        f"flashrnn=={FLASHRNN_VERSION}:slstm:{FLASHRNN_BACKEND}:torch={torch_version}:"
         f"cuda={cuda_build}:{sm}:dtype={kernel_dtype}:B{batch_size}:T{seq_len}:"
         f"H{n_heads}:D{head_dim}"
     )
@@ -557,7 +579,7 @@ def _flashrnn_opaque(
     kwargs = {
         "states": flash_state,
         "function": "slstm",
-        "backend": "cuda_fused",
+        "backend": FLASHRNN_BACKEND,
         "dtype": kernel_dtype,
     }
     if config_class is not None:
@@ -566,7 +588,7 @@ def _flashrnn_opaque(
             num_heads=gate_inputs.shape[2],
             batch_size=gate_inputs.shape[1],
             function="slstm",
-            backend="cuda_fused",
+            backend=FLASHRNN_BACKEND,
             dtype=kernel_dtype,
             dtype_w=kernel_dtype,
             dtype_r=kernel_dtype,
@@ -597,7 +619,8 @@ class _FlashRNNPersistentSLSTMLayer(nn.Module):
         self.batch_size = batch_size
         self.kernel_dtype = kernel_dtype
         self.backend_identity = (
-            f"flashrnn=={FLASHRNN_VERSION}:function=slstm:backend=cuda_fused:dtype={kernel_dtype}"
+            f"flashrnn=={FLASHRNN_VERSION}:function=slstm:backend={FLASHRNN_BACKEND}:"
+            f"dtype={kernel_dtype}"
         )
         self._flashrnn = _PREFLIGHTED_FLASHRNN
         self.conv1d = layer.conv1d
@@ -904,6 +927,19 @@ class SLSTMMixer(SequenceMixer):
             fuse_input_projections=fuse_input_projections,
         )
         self.backend_identity = getattr(self.layer, "backend_identity", f"xlstm.{backend}")
+
+        # THE CELL BIAS IS A TIMESCALE, NOT A WEIGHT. ``_bias_`` packs sLSTM's four gate
+        # biases, and the forget slice is initialized by upstream's ``powerlaw_blockdependent``
+        # to a block-dependent range -- roughly -7 to 5 at these depths. That sets how long the
+        # cell retains, exactly as ``A_log`` and ``dt_bias`` do for the Mamba and delta-rule
+        # mixers, so decaying it shortens the recurrence rather than regularizing a weight.
+        #
+        # Tagged here rather than upstream because the cell is built by the ``xlstm`` package.
+        # The tag is inert until an ``OptimGroupOverride`` names it; the matching glob lives in
+        # ``WEIGHT_DECAY_EXEMPT_PATTERNS_BY_ARM`` in ``.edullm/model_arch_tests.py``.
+        cell_bias = getattr(getattr(self.layer, "slstm_cell", None), "_bias_", None)
+        if cell_bias is not None:
+            cell_bias._no_weight_decay = True
 
     def _load_from_state_dict(
         self,

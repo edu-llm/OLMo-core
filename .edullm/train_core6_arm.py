@@ -772,6 +772,16 @@ def build_config(opts, overrides: list[str]):
             save_overwrite=False,
             metrics_collect_interval=5,
             cancel_check_interval=5,
+            # THE LOSS GUARD ALONE LET A CORRUPT UPDATE THROUGH, AND xLSTM COST THREE CELLS TO
+            # IT. Only `train/CE loss` is checked by default; the gradient norm is not, and
+            # `clip_grad_norm` is called with `error_if_nonfinite=False`, so a NaN norm leaves
+            # NaN gradients that plain AdamW writes straight into the weights. The step that
+            # produced them reports a finite loss and passes. The failure then surfaces one
+            # step later as a NaN loss, naming the wrong step and telling you nothing about
+            # where it came from -- which is exactly how xLSTM's three seeds read.
+            #
+            # Checking the norm turns that into a refusal on the step that actually broke.
+            raise_on_nonfinite_grad_norm=True,
             max_duration=Duration.steps(opts.steps),
         )
         .with_callback("gpu_monitor", GPUMemoryMonitorCallback())

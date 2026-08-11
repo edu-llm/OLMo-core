@@ -439,6 +439,17 @@ class XLSTMMixer(SequenceMixer):
             dtype=dtype,
             device=init_device,
         )
+        # THIS BIAS IS A TIMESCALE, NOT A WEIGHT. It holds the packed input and forget gate
+        # biases, initialized to -10 and a 3..6 ramp, and those set how long the matrix memory
+        # retains -- the same role ``A_log`` and ``dt_bias`` play for Mamba and the delta-rule
+        # mixers, which tag them for the same reason. An input gate parked at -10 exists to
+        # start closed; weight decay is a force pulling it open, so decaying it moves the
+        # recurrence's horizon rather than regularizing a weight.
+        #
+        # The tag is inert until an ``OptimGroupOverride`` names the parameter. See
+        # ``WEIGHT_DECAY_EXEMPT_PATTERNS_BY_ARM`` in ``.edullm/model_arch_tests.py``, which
+        # carries the matching glob, and ``no_weight_decay_param_names`` for the collector.
+        self.w_if.bias._no_weight_decay = True  # type: ignore[attr-defined]
         self.o_norm = _MultiHeadLayerNorm(
             n_heads,
             self.head_v_dim,

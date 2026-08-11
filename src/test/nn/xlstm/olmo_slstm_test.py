@@ -73,7 +73,17 @@ class RecordedFlashRNNConfig:
 
     @property
     def launch_batch_size(self) -> int:
-        """The batch multiple ``cuda_fused`` pads every launch up to."""
+        """The batch a launch actually runs at, which only ``cuda_fused`` rounds up.
+
+        THE ROUNDING IS THE REASON THIS ARM MOVED OFF ``cuda_fused``. That generator pads the
+        inputs and the initial state up to the multiple with ``torch.ones`` and, on the way
+        back, slices only the input and state gradients to the real batch -- the recurrent
+        weight and bias gradients are shared and keep the fabricated streams' contribution.
+        ``FlashRNNFuncGenerator``, the non-fused one, contains no padding at all, so its launch
+        batch is the batch it was handed.
+        """
+        if self.backend != "cuda_fused":
+            return self.batch_size
         if self.dtype == "float32":
             return FLOAT32_FUSED_BATCH_SIZE
         return round_to_multiple(self.batch_size, FUSED_BATCH_MULTIPLE)
@@ -219,10 +229,14 @@ def test_bfloat16_parameters_compile_one_flashrnn_pointer_type(monkeypatch, kern
         .permute(1, 2, 0)
         .to(call.bias.dtype),
     )
-    # A float32 fused kernel is compiled for batch 16 whatever batch it was configured with,
-    # and every launch is padded up to the batch the kernel was compiled for.
-    expected_compiled_batch_size = 16 if kernel_dtype == "float32" else batch_size
-    expected_launch_batch_size = 16 if kernel_dtype == "float32" else 8
+    # NEITHER IS ROUNDED NOW, BECAUSE THE ARM RUNS `FLASHRNN_BACKEND` AND THAT IS NOT THE FUSED
+    # KERNEL. Under `cuda_fused` this read `16 if float32 else batch_size` for the compiled
+    # batch and `16 if float32 else 8` for the launch, pinning the pad that silently fed six
+    # fabricated sequences into the shared recurrent-weight and bias gradients at this arm's
+    # batch of 2. The non-fused generator does no padding, so both are the real batch.
+    fused = olmo_slstm.FLASHRNN_BACKEND == "cuda_fused"
+    expected_compiled_batch_size = 16 if fused and kernel_dtype == "float32" else batch_size
+    expected_launch_batch_size = config.launch_batch_size
     assert (config.batch_size, config.num_heads, config.head_dim) == (
         expected_compiled_batch_size,
         num_heads,

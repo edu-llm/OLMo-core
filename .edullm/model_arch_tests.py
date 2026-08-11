@@ -227,7 +227,14 @@ EXACT_PARAMETER_COUNTS = {
 # while being a fatal one at optimizer-build time.
 WEIGHT_DECAY_EXEMPT_PATTERNS_BY_ARM: dict[str, tuple[str, ...]] = {
     "mamba-b3": ("*.A_log", "*.dt_bias"),
-    "xlstm": (),
+    # xLSTM's timescale parameters are its GATE BIASES, and the empty tuple that stood here
+    # decayed every one of them. mLSTM packs the input and forget gate biases into `w_if.bias`
+    # and initializes them to -10 and a 3..6 ramp; sLSTM's `_bias_` spans about -7..5 under
+    # `powerlaw_blockdependent`. Those set the recurrence's retention horizon exactly as
+    # `A_log` and `dt_bias` do for Mamba and the delta-rule arms, so decaying them pulls the
+    # gates toward zero -- an input gate at -10 exists to start closed, and 0.01 of weight
+    # decay is a force pushing it open. Every other arm in this table exempts its equivalent.
+    "xlstm": ("*.w_if.bias", "*._bias_"),
     "mamba3-siso-pd": ("*.A_log", "*.dt_bias", "*.D"),
     "native-pd": ("*.A_log", "*.dt_bias", "*.D"),
     "gdn": ("*.A_log", "*.dt_bias"),
@@ -779,7 +786,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--steps", type=int, default=FROZEN_STEPS)
     parser.add_argument("--save-interval", type=int, default=FROZEN_SAVE_INTERVAL)
     parser.add_argument("--warmup-steps", type=int, default=FROZEN_WARMUP_STEPS)
-    parser.add_argument("--learning-rate", type=float, default=1.4e-3)
+    # Kept equal to `train_core6_arm.py`'s default, which is the program every spec in
+    # `.edullm/` actually invokes. This one is reachable only by running this file directly,
+    # and a default that disagreed would train a different recipe under the same arm names.
+    parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--global-batch-size", type=int, default=FROZEN_GLOBAL_BATCH_SIZE)
     parser.add_argument("--rank-microbatch-size", type=int, default=8192)
     parser.add_argument("--param-dtype", choices=("bfloat16",), default="bfloat16")
