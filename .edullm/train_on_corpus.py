@@ -141,6 +141,7 @@ from olmo_core.train.callbacks import (
     GPUMemoryMonitorCallback,
     LMEvaluatorCallbackConfig,
     MetricAssertionCallback,
+    ProfilerCallback,
     ResultProtocolCallback,
     SteadyStateThroughputCallback,
     WandBCallback,
@@ -1155,6 +1156,14 @@ def build_config(opts, overrides: List[str]):
         )
         .with_callback("config_saver", ConfigSaverCallback())
     )
+    if opts.profile:
+        # Keep profiling opt-in because even a short torch.profiler window perturbs throughput.
+        # The callback prints its CUDA/CPU key averages to the ordinary block log, so a disposable
+        # no-checkpoint run remains diagnosable even when its trace is not retained.
+        trainer_config = trainer_config.with_callback(
+            "profiler",
+            ProfilerCallback(wait=0, warmup=2, active=3, with_stack=False),
+        )
     if trainer_config.no_checkpoints:
         # A throughput smoke test has nothing to resume and the M20 step-0 checkpoint is more
         # than 14 GiB. Trainer.no_checkpoints filters the callback and disables its own load/save
@@ -1884,6 +1893,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable held-out evaluation for a disposable throughput run. This removes evaluator "
         "startup and final scoring from the run, so it must not be cited as validation evidence.",
+    )
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help="Profile rank 0 for two warmup and three active steps and print operator summaries. "
+        "Profiling perturbs throughput and should only be used in a dedicated diagnostic run.",
     )
     parser.add_argument(
         "--lr-schedule",
