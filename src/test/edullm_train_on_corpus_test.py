@@ -33,6 +33,13 @@ def _load():
 entry = _load()
 
 
+def test_entrypoint_prefers_the_checked_out_branch_library():
+    expected = str(Path(__file__).parent.parent.parent / "src")
+
+    assert entry._BRANCH_LIBRARY == expected
+    assert sys.path[0] == expected
+
+
 @dataclass
 class FakeManifest:
     """The shape ``edullm_data.read.dataset_paths`` returns, with the fields that matter.
@@ -91,12 +98,14 @@ def reader(monkeypatch):
             handed["region"] = region
             return adapter
 
-    def dataset_paths(dataset_id, version, *, s3, **_):
+    def dataset_paths(dataset_id, version, *, s3, **kwargs):
         handed["s3"] = s3
+        handed["dataset_paths_kwargs"] = kwargs
         return FakeManifest()
 
-    def resolve_latest(dataset_id, *, s3, **_):
+    def resolve_latest(dataset_id, *, s3, **kwargs):
         handed["resolve_latest_s3"] = s3
+        handed["resolve_latest_kwargs"] = kwargs
         return "v7"
 
     # Typed Any because these are modules being built rather than imported, and mypy is
@@ -144,6 +153,28 @@ def test_resolving_the_latest_version_uses_the_same_adapter(reader):
     )
 
     assert reader["resolve_latest_s3"] is reader["s3"]
+
+
+def test_the_block_data_mirror_is_passed_to_every_reader_call(reader, monkeypatch):
+    monkeypatch.setenv("EDULLM_DATA_BUCKET", "edullm-data-us-east-2")
+
+    entry.resolve_corpus(
+        dataset_id="pretrain/regmix-10b", version="latest", tokenizer_id="tokenizer/dolma2-bpe"
+    )
+
+    expected = {"data_bucket": "edullm-data-us-east-2"}
+    assert reader["resolve_latest_kwargs"] == expected
+    assert reader["dataset_paths_kwargs"] == expected
+
+
+def test_the_reader_keeps_its_default_bucket_outside_the_block(reader, monkeypatch):
+    monkeypatch.delenv("EDULLM_DATA_BUCKET", raising=False)
+
+    entry.resolve_corpus(
+        dataset_id="pretrain/regmix-10b", version="v1", tokenizer_id="tokenizer/dolma2-bpe"
+    )
+
+    assert reader["dataset_paths_kwargs"] == {}
 
 
 def test_a_healthy_corpus_keeps_the_width_the_manifest_declared():
@@ -228,6 +259,71 @@ def test_the_whole_config_builds_from_a_corpus_without_touching_s3(monkeypatch):
     # Serializing is what the config saver does beside the checkpoint; a config that cannot be
     # written is one whose record of what ran does not exist.
     assert config.as_config_dict()["dataset_version"] == "v1"
+
+
+def test_throughput_mode_uses_authoritative_checkpoint_and_eval_controls(monkeypatch):
+    monkeypatch.setattr(
+        entry,
+        "resolve_corpus",
+        lambda **kwargs: entry.corpus_from_manifest(
+            FakeManifest(),
+            dataset_id=kwargs["dataset_id"],
+            version=kwargs["version"],
+            tokenizer_id=kwargs["tokenizer_id"],
+        ),
+    )
+    opts, overrides = entry.build_parser().parse_known_args(
+        [
+            "throughput-run",
+            "--dataset-id=pretrain/regmix-10b",
+            "--dataset-version=v1",
+            "--dataset-tokenizer=tokenizer/dolma2-bpe",
+            "--save-folder=s3://outputs/throughput-run/checkpoints/",
+            "--no-checkpoints",
+            "--no-init-loss-band",
+            "--no-evals",
+        ]
+    )
+
+    config = entry.build_config(opts, overrides)
+
+    assert config.trainer.no_checkpoints is True
+    assert opts.no_init_loss_band is True
+    assert opts.no_evals is True
+
+
+def test_capacity_block_mesh_flags_configure_hsdp_and_expert_parallel(monkeypatch):
+    monkeypatch.setattr(
+        entry,
+        "resolve_corpus",
+        lambda **kwargs: entry.corpus_from_manifest(
+            FakeManifest(),
+            dataset_id=kwargs["dataset_id"],
+            version=kwargs["version"],
+            tokenizer_id=kwargs["tokenizer_id"],
+        ),
+    )
+    monkeypatch.setenv("WORLD_SIZE", "8")
+    opts, overrides = entry.build_parser().parse_known_args(
+        [
+            "mesh-run",
+            "--dataset-id=pretrain/regmix-10b",
+            "--dataset-version=v1",
+            "--dataset-tokenizer=tokenizer/dolma2-bpe",
+            "--save-folder=s3://outputs/mesh-run/checkpoints/",
+            "--model-factory=maple_m20",
+            "--moe-shard-degree=8",
+            "--moe-num-replicas=1",
+        ]
+    )
+
+    config = entry.build_config(opts, overrides)
+
+    assert overrides == []
+    assert config.train_module.dp_config.name.value == "hsdp"
+    assert config.train_module.dp_config.shard_degree == 8
+    assert config.train_module.dp_config.num_replicas == 1
+    assert config.train_module.ep_config.degree == 8
 
 
 def test_an_override_on_the_command_line_reaches_the_config(monkeypatch):
