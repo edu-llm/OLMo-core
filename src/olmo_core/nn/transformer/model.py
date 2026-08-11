@@ -1395,6 +1395,65 @@ class HyperConnectionStreamsMixin:
                 num_params += sum(p.numel() for p in module.parameters(recurse=False))
         return num_params
 
+    def compute_auxiliary_metrics(
+        self, reset: bool = True
+    ) -> Dict[str, Tuple[torch.Tensor, Optional["ReduceType"]]]:
+        """
+        Whatever the wrapped model class reports, plus the stream diagnostics.
+
+        ``super()`` first and unconditionally, so that the MoE variant keeps reporting its
+        router's load-balancing loss and z-loss: those are what a hyper-connected MoE run is
+        still an MoE run because of, and dropping them here would be the same silent failure
+        ``_validate_block`` refuses a dense model for.
+
+        Every hyper-connection is reported per block and per sub-layer, and pooled across the
+        model. The pooling is a **sum** for the balancing loss, because that is the quantity
+        actually added to the objective, and a **mean** for the shares and entropies, because
+        those are per-sub-layer readings and a sum of them means nothing. That distinction is
+        the one thing here that a copy of ``MoETransformer.compute_auxiliary_metrics`` would
+        have got wrong: it sums everything.
+
+        :param reset: Whether to clear the recorded values afterwards.
+
+        :returns: A mapping from metric name to (value, reduction).
+        """
+        from .hc_block import HyperConnectionBlockMixin
+
+        out = super().compute_auxiliary_metrics(reset=reset)  # type: ignore[misc]
+
+        summed: Dict[str, torch.Tensor] = {}
+        collected: Dict[str, List[torch.Tensor]] = {}
+        reductions: Dict[str, Optional["ReduceType"]] = {}
+        for block_idx, block in self.blocks.items():
+            if not isinstance(block, HyperConnectionBlockMixin):
+                continue
+            for name, (value, reduce_type) in block.compute_stream_metrics(reset=reset).items():
+                out[f"block {int(block_idx):02d}/{name}"] = (value, reduce_type)
+                metric = name.split("/", 1)[-1]
+                reductions[metric] = reduce_type
+                if "loss" in metric:
+                    summed[metric] = summed.get(metric, torch.zeros_like(value)) + value
+                else:
+                    collected.setdefault(metric, []).append(value)
+
+        for metric, value in summed.items():
+            out[metric] = (value, reductions[metric])
+        for metric, values in collected.items():
+            out[metric] = (torch.stack(values).mean(), reductions[metric])
+        return out
+
+    def reset_auxiliary_metrics(self):
+        """
+        Forget what the last forward pass measured, on the wrapped model and on every
+        hyper-connection.
+        """
+        from .hc_block import HyperConnectionBlockMixin
+
+        super().reset_auxiliary_metrics()  # type: ignore[misc]
+        for block in self.blocks.values():
+            if isinstance(block, HyperConnectionBlockMixin):
+                block.reset_stream_metrics()
+
 
 @beta_feature
 class HyperConnectionTransformer(HyperConnectionStreamsMixin, Transformer):

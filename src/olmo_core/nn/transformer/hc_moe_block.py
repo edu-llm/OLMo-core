@@ -284,7 +284,9 @@ class HyperConnectionMoEReorderedNormTransformerBlock(
         return self.feed_forward_moe_hc(streams, moe_branch)
 
 
-class _HyperConnectionMoEHybridBlockBase(HyperConnectionMoEBlockMixin, MoEHybridTransformerBlockBase):
+class _HyperConnectionMoEHybridBlockBase(
+    HyperConnectionMoEBlockMixin, MoEHybridTransformerBlockBase
+):
     """
     The construction and the forward pass shared by the two hybrid variants.
 

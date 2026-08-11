@@ -41,7 +41,7 @@ References:
 import math
 from dataclasses import dataclass
 from itertools import permutations
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -49,18 +49,26 @@ import torch.nn.functional as F
 
 from olmo_core.config import DType, StrEnum
 from olmo_core.exceptions import OLMoConfigurationError
+from olmo_core.ops import attach_auxiliary_loss
 
 from .config import ModuleConfig
+
+if TYPE_CHECKING:
+    from olmo_core.train.common import ReduceType
 
 __all__ = [
     "ResidualMixerType",
     "StreamCollapseType",
+    "StreamUtilisationType",
+    "StreamBalanceLossType",
     "HyperConnectionConfig",
     "HyperConnection",
     "StreamCollapseConfig",
     "StreamCollapse",
     "sinkhorn_log_space",
     "permutation_matrices",
+    "stream_utilisation",
+    "stream_balance_loss",
 ]
 
 
@@ -133,6 +141,58 @@ class StreamCollapseType(StrEnum):
     """
 
 
+class StreamUtilisationType(StrEnum):
+    """
+    How "how much is this stream being used" is measured, for the stream-balancing loss.
+
+    The two differ in one respect and it decides whether the loss does anything at all. See
+    :func:`stream_utilisation`.
+    """
+
+    dispersion = "dispersion"
+    """
+    The share of residual energy each stream carries **that no other stream carries**, with the
+    energy common to all of them counted as one more bin.
+
+    This is the one the treatment uses. Its uniform point is ``n`` streams carrying equal and
+    distinct content; its worst point is ``n`` streams carrying the same vector, which is
+    exactly stream collapse.
+    """
+
+    energy = "energy"
+    """
+    The share of total residual energy each stream carries. The literal mirror of MoE's
+    load-balancing loss with streams in place of experts.
+
+    **Kept as a control and deliberately not the default, because it is degenerate on the case
+    it is meant to fix.** ``n`` identical streams have exactly equal energy, so this statistic
+    is already uniform at full collapse, the loss is already at its minimum, and the gradient it
+    contributes is zero precisely when the problem is worst. Anybody mirroring MoE's loss
+    without noticing that would ship a treatment that cannot work and a null result that means
+    nothing, which is why the alternative is in the enum rather than in a comment.
+    """
+
+
+class StreamBalanceLossType(StrEnum):
+    """
+    The functional form of the stream-balancing penalty. See :func:`stream_balance_loss` for
+    why the two are not interchangeable.
+    """
+
+    entropy = "entropy"
+    """
+    The normalised entropy deficit, ``1 - H(p) / log K``. The default: its gradient grows as the
+    utilisation vector concentrates, so it pushes hardest exactly where collapse is worst.
+    """
+
+    squared_share = "squared_share"
+    """
+    ``(K * sum p^2 - 1) / (K - 1)``, which is the shape MoE's load-balancing loss takes when its
+    hard assignment and its soft probability coincide. Nearly flat at the concentrated end, and
+    kept so that the choice of form is an arm rather than an assumption.
+    """
+
+
 def permutation_matrices(n: int, *, device: Optional[torch.device] = None) -> torch.Tensor:
     """
     Enumerate every ``n x n`` permutation matrix.
@@ -200,6 +260,109 @@ def sinkhorn_log_space(
     return p
 
 
+def stream_utilisation(
+    streams: torch.Tensor, *, statistic: StreamUtilisationType = StreamUtilisationType.dispersion
+) -> torch.Tensor:
+    """
+    How the residual energy is shared out over the streams, as a probability vector.
+
+    :param streams: A tensor of shape ``(batch_size, seq_len, n_streams, d_model)``.
+    :param statistic: Which utilisation definition to use.
+
+    :returns: A ``float32`` vector summing to 1 — length ``n_streams`` for
+        :data:`StreamUtilisationType.energy` and ``n_streams + 1`` for
+        :data:`StreamUtilisationType.dispersion`, whose extra leading entry is the share carried
+        by the component common to every stream.
+
+    :raises NotImplementedError: If the statistic is not recognised.
+
+    **Why `dispersion` has an extra bin, which is the whole design of this function.** The
+    obvious statistic — each stream's share of the total energy — is uniform when the streams
+    are identical, because identical streams have identical energy. That is the collapsed state,
+    so a balancing loss built on it is already satisfied exactly where the problem is. Splitting
+    each stream into the part every stream shares and the part only it carries fixes that: write
+    ``Z_i = Zbar + D_i`` with ``Zbar`` the mean over streams, put ``n * E||Zbar||^2`` in bin zero
+    and ``E||D_i||^2`` in bin ``i``, and full collapse puts all the mass in bin zero, which is
+    as far from uniform as the vector goes.
+
+    Computed in float32 whatever the activations are, for the reason the rest of the routing is:
+    a sum of squares over ``d_model`` in bfloat16 loses most of the precision the ratio needs.
+    """
+    values = streams.float()
+    if statistic == StreamUtilisationType.energy:
+        mass = values.pow(2).sum(dim=-1).mean(dim=(0, 1))
+    elif statistic == StreamUtilisationType.dispersion:
+        n_streams = values.shape[-2]
+        common = values.mean(dim=-2, keepdim=True)
+        deviation = values - common
+        # `n *` on the common bin so that the vector is uniform exactly when each stream's own
+        # content matches the content it shares, rather than when it matches n times as much.
+        common_mass = n_streams * common.pow(2).sum(dim=-1).squeeze(-1).mean(dim=(0, 1))
+        deviation_mass = deviation.pow(2).sum(dim=-1).mean(dim=(0, 1))
+        mass = torch.cat([common_mass.reshape(1), deviation_mass], dim=0)
+    else:
+        raise NotImplementedError(statistic)
+    return mass / mass.sum().clamp_min(torch.finfo(mass.dtype).tiny)
+
+
+def stream_balance_loss(
+    utilisation: torch.Tensor,
+    *,
+    loss_type: "StreamBalanceLossType" = None,  # type: ignore[assignment]
+    eps: float = 1e-9,
+) -> torch.Tensor:
+    """
+    How far a utilisation vector is from uniform, on a scale where 0 is uniform and 1 is fully
+    concentrated on one bin.
+
+    :param utilisation: A probability vector, as returned by :func:`stream_utilisation`.
+    :param loss_type: The functional form. Defaults to
+        :data:`StreamBalanceLossType.entropy`.
+    :param eps: The floor under a share before its logarithm is taken, which is what bounds the
+        entropy form's gradient.
+
+    :returns: A scalar in ``[0, 1]``.
+
+    :raises NotImplementedError: If the loss type is not recognised.
+
+    **The two forms differ in how they behave as the vector concentrates, and the difference
+    is measured rather than argued.** Both are zero at uniform and one at full concentration and
+    both are smooth, so the choice reads as stylistic. Differentiated with respect to the
+    unnormalised masses the loss is really a function of, with ``d`` for one small bin's share:
+
+    ======  ==================  ==================
+    ``d``   ``entropy``         ``squared_share``
+    ======  ==================  ==================
+    1e-1    0.73                0.82
+    1e-2    2.65                2.20
+    1e-4    5.72                2.50
+    1e-6    8.58                2.50
+    1e-8    11.45               2.50
+    ======  ==================  ==================
+
+    ``squared_share`` saturates at a constant; ``entropy`` grows as ``log(1/d)``. So the
+    entropy form pushes harder the worse the collapse is, and the MoE-shaped form does not push
+    any harder at ``1e-8`` than at ``1e-4``. It is a factor of 4.6 at the deep end rather than
+    orders of magnitude, and it compounds: over 200 optimizer steps in
+    ``src/test/nn/stream_balance_test.py`` the entropy form reaches about 18 times the stream
+    dispersion the squared-share form does, from the same initialisation.
+
+    Note the first row. At a share of 0.1 the squared-share form is very slightly the stronger
+    of the two, so this is not a claim that one dominates everywhere -- it is a claim about the
+    regime a collapsed hyper-connection is actually in, which is the last row and not the first.
+    """
+    if loss_type is None:
+        loss_type = StreamBalanceLossType.entropy
+    bins = utilisation.shape[-1]
+    if loss_type == StreamBalanceLossType.squared_share:
+        return (bins * utilisation.pow(2).sum(dim=-1) - 1.0) / (bins - 1)
+    if loss_type == StreamBalanceLossType.entropy:
+        clamped = utilisation.clamp_min(eps)
+        entropy = -(clamped * clamped.log()).sum(dim=-1)
+        return 1.0 - entropy / math.log(bins)
+    raise NotImplementedError(loss_type)
+
+
 @dataclass
 class HyperConnectionConfig(ModuleConfig):
     """
@@ -244,6 +407,44 @@ class HyperConnectionConfig(ModuleConfig):
     describe a whole hyper-connected model. See :class:`StreamCollapseConfig`.
     """
 
+    stream_balance_loss_weight: float = 0.0
+    """
+    The weight on the stream-balancing auxiliary loss. **Zero, and zero is a hard off switch
+    rather than a small number.**
+
+    This is the treatment in ``docs/hc-ablation/EXPERIMENT-DESIGN.md`` and the one isolated
+    change the experiment turns on. At zero, :meth:`HyperConnection.write_out` does not compute
+    the statistic, does not attach a loss, and does not record a metric, so the untreated path
+    is bit-identical to the path that existed before this field did — which
+    ``src/test/nn/stream_balance_test.py`` asserts by running the code with the statistic
+    replaced by something that raises.
+
+    **What it is for.** Every constrained residual mixer starts at the uniform doubly stochastic
+    matrix, which averages the streams, which drives them toward carrying the same vector; and
+    the gradient that survives the constraint map is exactly the part proportional to how far
+    apart they are. Measured on a block at initialisation, that leaves the mixer's gradient norm
+    seven to eight orders of magnitude below the unconstrained mixer's on the same inputs, which
+    is the mechanism behind the ``1e-9`` gradient a public mHC reproduction reported. A loss
+    that keeps the streams apart is what keeps the mixer learning. See
+    ``src/test/nn/hc_moe_block_test.py::test_constrained_mixer_gradient_is_orders_below_the_unconstrained_one``.
+
+    A sensible nonzero value is ``0.01``, matching ``MoEConfig.lb_loss_weight``, and it is a
+    guess: the losses are on different scales and nothing has tuned this.
+    """
+
+    stream_balance_statistic: StreamUtilisationType = StreamUtilisationType.dispersion
+    """
+    Which utilisation statistic the balancing loss is computed on. See
+    :class:`StreamUtilisationType`; the default is the one that is not degenerate at collapse.
+    """
+
+    stream_balance_loss_type: StreamBalanceLossType = StreamBalanceLossType.entropy
+    """
+    The functional form of the penalty. See :class:`StreamBalanceLossType` and
+    :func:`stream_balance_loss`; the default is the one whose gradient does not vanish where
+    collapse is worst.
+    """
+
     sinkhorn_iters: int = 20
     """
     The number of Sinkhorn-Knopp iterations, for :data:`ResidualMixerType.sinkhorn`.
@@ -285,6 +486,16 @@ class HyperConnectionConfig(ModuleConfig):
         if self.init_noise_std < 0.0:
             raise OLMoConfigurationError(
                 f"'init_noise_std' must be non-negative, got {self.init_noise_std}"
+            )
+        if self.stream_balance_loss_weight < 0.0:
+            raise OLMoConfigurationError(
+                "'stream_balance_loss_weight' must be non-negative, got "
+                f"{self.stream_balance_loss_weight}"
+            )
+        if self.stream_balance_loss_weight > 0.0 and self.n_streams < 2:
+            raise OLMoConfigurationError(
+                "'stream_balance_loss_weight' is meaningless with one stream: there is nothing "
+                "to balance and the loss is identically zero"
             )
 
     def num_residual_mixer_params(self) -> int:
@@ -331,6 +542,9 @@ class HyperConnectionConfig(ModuleConfig):
             residual_dropout_p=self.residual_dropout_p,
             sinkhorn_iters=self.sinkhorn_iters,
             sinkhorn_eps=self.sinkhorn_eps,
+            stream_balance_loss_weight=self.stream_balance_loss_weight,
+            stream_balance_statistic=self.stream_balance_statistic,
+            stream_balance_loss_type=self.stream_balance_loss_type,
             dtype=self.dtype.as_pt(),
             init_device=init_device,
         )
@@ -373,6 +587,9 @@ class HyperConnection(nn.Module):
         residual_dropout_p: float = 0.1,
         sinkhorn_iters: int = 20,
         sinkhorn_eps: float = 1e-6,
+        stream_balance_loss_weight: float = 0.0,
+        stream_balance_statistic: StreamUtilisationType = StreamUtilisationType.dispersion,
+        stream_balance_loss_type: StreamBalanceLossType = StreamBalanceLossType.entropy,
         dtype: torch.dtype = torch.float32,
         init_device: str = "cpu",
     ):
@@ -386,6 +603,9 @@ class HyperConnection(nn.Module):
             residual_dropout_p=residual_dropout_p,
             sinkhorn_iters=sinkhorn_iters,
             sinkhorn_eps=sinkhorn_eps,
+            stream_balance_loss_weight=stream_balance_loss_weight,
+            stream_balance_statistic=StreamUtilisationType(stream_balance_statistic),
+            stream_balance_loss_type=StreamBalanceLossType(stream_balance_loss_type),
             dtype=DType.from_pt(dtype),
         )
 
@@ -395,7 +615,15 @@ class HyperConnection(nn.Module):
         self.residual_dropout_p = config.residual_dropout_p
         self.sinkhorn_iters = config.sinkhorn_iters
         self.sinkhorn_eps = config.sinkhorn_eps
+        self.stream_balance_loss_weight = config.stream_balance_loss_weight
+        self.stream_balance_statistic = config.stream_balance_statistic
+        self.stream_balance_loss_type = config.stream_balance_loss_type
         self.routing_dtype = dtype
+        # Where the last forward's diagnostics land, for `compute_metrics` to read. Plain
+        # attributes rather than buffers: they are per-step readings and have no place in a
+        # checkpoint, and a buffer would have to be sharded by FSDP for no reason.
+        self._balance_loss: Optional[torch.Tensor] = None
+        self._utilisation: Optional[torch.Tensor] = None
 
         n = self.n_streams
         self.h_pre_logits = nn.Parameter(torch.empty(n, device=init_device, dtype=dtype))
@@ -627,7 +855,108 @@ class HyperConnection(nn.Module):
             mixed = torch.einsum("nm,btmd->btnd", h_res, streams)
 
         h_post = self.write_out_gate().to(branch_out.dtype)
-        return mixed + torch.einsum("n,btd->btnd", h_post, branch_out)
+        out = mixed + torch.einsum("n,btd->btnd", h_post, branch_out)
+        return self._maybe_balance_streams(out)
+
+    def _maybe_balance_streams(self, streams: torch.Tensor) -> torch.Tensor:
+        """
+        Attach the stream-balancing auxiliary loss to the outgoing streams, if it is turned on.
+
+        **The zero-weight path is the one that has to stay free, and it does: this returns
+        before touching anything.** No statistic is computed, no tensor is allocated, nothing is
+        attached to the autograd graph and no metric is recorded, so a model with the weight at
+        its default is numerically the model that existed before this method did.
+
+        Measured on the streams this hyper-connection *writes*, not the ones it reads, for two
+        reasons. It is the quantity the next sub-layer sees, so it is what collapse means at
+        this depth. And the mixer is between the two, so a loss on the outgoing streams reaches
+        ``H_res`` directly rather than only through the next block.
+
+        :param streams: The outgoing streams, shape
+            ``(batch_size, seq_len, n_streams, d_model)``.
+
+        :returns: The same tensor, with the auxiliary loss attached when the loss is on.
+        """
+        if self.stream_balance_loss_weight <= 0.0:
+            return streams
+
+        utilisation = stream_utilisation(streams, statistic=self.stream_balance_statistic)
+        loss = stream_balance_loss(utilisation, loss_type=self.stream_balance_loss_type)
+        # Kept for `compute_metrics`, detached so that holding it cannot extend the graph's
+        # lifetime past the backward pass.
+        self._balance_loss = loss.detach()
+        self._utilisation = utilisation.detach()
+        return attach_auxiliary_loss(streams, self.stream_balance_loss_weight * loss)
+
+    def compute_metrics(
+        self, reset: bool = True
+    ) -> Dict[str, Tuple[torch.Tensor, Optional["ReduceType"]]]:
+        """
+        What the last forward pass measured about this hyper-connection.
+
+        Reported whether or not the balancing loss is on, because the diagnostics are the point
+        even in the control arm: a null result on an arm whose streams never collapsed says
+        nothing about a treatment for collapse. The loss itself is reported only where there is
+        one.
+
+        Mirrors :meth:`~olmo_core.nn.moe.MoEBase.compute_metrics` in shape and in the
+        scaled/unscaled pairing, so that a panel written for the MoE router reads these too.
+
+        :param reset: Whether to clear the recorded values afterwards.
+
+        :returns: A mapping from metric name to (value, reduction).
+        """
+        from olmo_core.train.common import ReduceType
+
+        out: Dict[str, Tuple[torch.Tensor, Optional["ReduceType"]]] = {}
+
+        if self._utilisation is not None:
+            utilisation = self._utilisation
+            bins = utilisation.shape[-1]
+            # Normalised entropy, so 1 is perfectly spread and 0 is everything in one bin. The
+            # complement of the balance loss rather than a second reading of it: the loss is the
+            # squared-share form MoE uses and this is the information-theoretic one, and they
+            # disagree about which of two unequal vectors is worse.
+            entropy = -(utilisation.clamp_min(1e-12).log() * utilisation).sum()
+            out["stream usage entropy"] = (
+                entropy / math.log(bins),
+                ReduceType.mean,
+            )
+            out["stream usage imbalance"] = (
+                utilisation.max() * bins,
+                ReduceType.max,
+            )
+            if self.stream_balance_statistic == StreamUtilisationType.dispersion:
+                # The share of residual energy that is NOT common to every stream. This is the
+                # quantity the mixer's surviving gradient is proportional to, so it is the one
+                # to watch: it going to zero is stream collapse, and it is what the treatment
+                # exists to hold up.
+                # `utilisation[1:].sum()` and NOT `1 - utilisation[0]`. The two are equal in
+                # exact arithmetic and not in float32: at initialisation the share is around
+                # 1e-6, so the subtraction cancels every significant digit and logs a clean
+                # 0.000000 for a quantity that is small and nonzero. The metric that told a
+                # reader the streams were exactly collapsed when they were not is the one whose
+                # movement this whole treatment is judged on.
+                out["stream dispersion share"] = (utilisation[1:].sum(), ReduceType.mean)
+
+        if self._balance_loss is not None:
+            out["stream balance loss"] = (
+                self.stream_balance_loss_weight * self._balance_loss,
+                ReduceType.mean,
+            )
+            out["stream balance loss unscaled"] = (self._balance_loss.clone(), ReduceType.mean)
+
+        if reset:
+            self.reset_metrics()
+
+        return out
+
+    def reset_metrics(self) -> None:
+        """
+        Forget what the last forward pass measured.
+        """
+        self._balance_loss = None
+        self._utilisation = None
 
     def forward(
         self,

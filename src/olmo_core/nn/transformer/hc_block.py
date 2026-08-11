@@ -3,7 +3,7 @@ A transformer block whose attention and feed-forward sub-layers are each wrapped
 :class:`~olmo_core.nn.hyper_connections.HyperConnection`.
 """
 
-from typing import Optional, Tuple, Union, cast
+from typing import Any, Dict, Optional, Tuple, Union, cast
 
 import torch
 import torch.nn as nn
@@ -100,6 +100,34 @@ class HyperConnectionBlockMixin:
         return sum(
             sum(p.numel() for p in hc.parameters(recurse=False)) for hc in self.hyper_connections
         )
+
+    def compute_stream_metrics(self, reset: bool = True) -> Dict[str, Any]:
+        """
+        Every hyper-connection's diagnostics, keyed by which sub-layer it wraps.
+
+        Separate from ``compute_metrics``, which on an MoE block already means the router's
+        metrics. Merging the two here would make a dense block and an MoE block disagree about
+        what the method returns.
+
+        :param reset: Whether to clear the recorded values afterwards.
+
+        :returns: A mapping from ``"<sub-layer>/<metric>"`` to (value, reduction).
+        """
+        out: Dict[str, Any] = {}
+        for name, hc in zip(self.hc_names, self.hyper_connections):
+            # `attention_hc` reads better as `attention` in a metrics panel, and the suffix
+            # carries no information a reader of this list does not already have.
+            label = name[: -len("_hc")] if name.endswith("_hc") else name
+            for metric, value in hc.compute_metrics(reset=reset).items():
+                out[f"{label}/{metric}"] = value
+        return out
+
+    def reset_stream_metrics(self) -> None:
+        """
+        Forget what the last forward pass measured, on every hyper-connection in this block.
+        """
+        for hc in self.hyper_connections:
+            hc.reset_metrics()
 
     def apply_tp(
         self,
@@ -247,4 +275,3 @@ class HyperConnectionTransformerBlock(HyperConnectionBlockMixin, TransformerBloc
 
         streams = self.attention_hc(x, attention_branch)
         return self.feed_forward_hc(streams, feed_forward_branch)
-
