@@ -1,0 +1,32 @@
+# xLSTM repair wave: rerun only the three failed V2 cells after fixing the
+# mlstm-kernels 2.0.4 chunk-256 backward indexing defect.
+#
+# Check:
+#   edullm check --json \
+#     --experiment mamba-comparison-xlstm-v2 \
+#     --dataset reservoir-dolma2-v1 \
+#     --team memory-split \
+#     --wandb-project linear-comparison \
+#     --spec .edullm/run-xlstm-rerun.yaml \
+#     --compute gpu-8xa100 --hours 3 --attempts 1 \
+#     --fanout-size 3 \
+#     --fanout-index-parameter AWS_BATCH_JOB_ARRAY_INDEX
+#
+# Submit by replacing `check --json` with `submit`. The data seeds, init seeds,
+# optimizer recipe, token budget, hardware shape, and reporting path match cells
+# 3-5 of run_019fee7d-dc7e exactly. Only the repaired code commit differs.
+schema_version: 1
+workload_profile: olmo-core-train
+suggested_compute: gpu-8xa100
+command: >-
+  bash -lc 'export TRITON_F32_DEFAULT=ieee PYTHONDONTWRITEBYTECODE=1 &&
+  I=${AWS_BATCH_JOB_ARRAY_INDEX:-0} &&
+  ARMS=(xlstm xlstm xlstm) &&
+  DSEEDS=(210007 220014 230021) &&
+  ISEEDS=(113008 123015 133022) &&
+  python -m torch.distributed.run --nproc-per-node=8 --standalone
+  .edullm/train_core6_arm.py "$EDULLM_RUN_ID"
+  --arm "${ARMS[$I]}" --data-seed "${DSEEDS[$I]}" --init-seed "${ISEEDS[$I]}"
+  --sequence-length 4096 --steps 1144 --warmup-steps 114 --learning-rate 3e-4
+  --global-batch-size 524288 --rank-microbatch-size 8192 --save-interval 572
+  --save-folder "$EDULLM_CHECKPOINT_DIR" --param-dtype bfloat16'

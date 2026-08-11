@@ -16,6 +16,7 @@ DOCKERFILE = ROOT / ".edullm/Dockerfile"
 PYPROJECT = ROOT / "pyproject.toml"
 RUN_CONFIG = ROOT / ".edullm/run.yaml"
 COMPARISON_RUN_CONFIG = ROOT / ".edullm/run-comparison.yaml"
+XLSTM_RERUN_CONFIG = ROOT / ".edullm/run-xlstm-rerun.yaml"
 SEED_SCHEDULE = ROOT / "docs/mamba-comparison/seeds.json"
 RUN_GUIDE = ROOT / "MODEL_ARCH_RUNS.md"
 
@@ -690,6 +691,32 @@ def test_comparison_wave_is_arm_major_three_seed_single_image_fanout():
     assert schedule["cell_order"][12:15] == ["gdn"] * 3
     assert schedule["cell_order"][15:] == ["kda"] * 3 + ["kda-hh-r2"] * 3 + ["kda-gconv"] * 3
     assert spec_arms[:15] == schedule["cell_order"][:15]
+
+
+def test_xlstm_rerun_spec_is_exactly_the_three_failed_cells():
+    """The repair wave must rerun xLSTM only, under the unchanged V2 recipe."""
+    assert XLSTM_RERUN_CONFIG.is_file()
+    rerun_yaml = XLSTM_RERUN_CONFIG.read_text()
+
+    arrays = {}
+    for name in ("ARMS", "DSEEDS", "ISEEDS"):
+        match = re.search(rf"{name}=\((.*?)\) &&", rerun_yaml, flags=re.DOTALL)
+        assert match is not None, name
+        arrays[name] = match.group(1).split()
+
+    assert arrays["ARMS"] == ["xlstm", "xlstm", "xlstm"]
+    assert arrays["DSEEDS"] == ["210007", "220014", "230021"]
+    assert arrays["ISEEDS"] == ["113008", "123015", "133022"]
+    assert "AWS_BATCH_JOB_ARRAY_INDEX" in rerun_yaml
+    assert ".edullm/train_core6_arm.py" in rerun_yaml
+    assert "--sequence-length 4096" in rerun_yaml
+    assert "--steps 1144" in rerun_yaml
+    assert "--warmup-steps 114" in rerun_yaml
+    assert "--learning-rate 3e-4" in rerun_yaml
+    assert "--global-batch-size 524288" in rerun_yaml
+    assert "--rank-microbatch-size 8192" in rerun_yaml
+    assert "--save-interval 572" in rerun_yaml
+    assert "--param-dtype bfloat16" in rerun_yaml
 
 
 def test_single_platform_image_bundles_all_five_accelerated_backends():
