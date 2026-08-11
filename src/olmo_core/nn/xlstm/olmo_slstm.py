@@ -35,25 +35,37 @@ FLASHRNN_VERSION = "1.0.6"
 
 #: Which FlashRNN kernel evaluates the sLSTM recurrence.
 #:
-#: ``cuda`` AND NOT ``cuda_fused``, BECAUSE THE FUSED KERNEL CORRUPTS THE SHARED WEIGHTS AT ANY
-#: BATCH THAT IS NOT A MULTIPLE OF EIGHT. ``FlashRNNFuncGeneratorFused`` rounds the batch up with
+#: ``cuda_fused`` IS SAFE ONLY AT A BATCH THAT IS A MULTIPLE OF EIGHT, AND THAT IS ENFORCED
+#: ELSEWHERE. ``FlashRNNFuncGeneratorFused`` rounds the batch up with
 #: ``round_to_multiple(batch_size, 8)`` and pads the inputs and the initial state with
 #: ``torch.ones``; on the way back it slices ``grads[0]`` and ``grads[1]`` -- the input and state
 #: gradients -- to the real batch and leaves ``grads[2]`` and ``grads[3]`` alone. Those two are
-#: the gradients of the recurrent weight and the bias, which are SHARED, so they arrive carrying
-#: the accumulated contribution of the fabricated streams.
+#: the gradients of the recurrent weight and the bias, which are SHARED, so at a padded batch
+#: they arrive carrying the accumulated contribution of fabricated streams.
 #:
-#: This wave runs 8,192 tokens per rank at sequence length 4,096, so the batch is 2, six of the
-#: eight streams are invented, and every cell of the arm died with a non-finite loss at step 2 --
-#: the first forward after the first optimizer update wrote those gradients into the weights.
-#: ``recurrent_weight_init`` is ``"zeros"``, which is why step 1 survives and step 2 does not, and
-#: the pad is a constant, which is why all three seeds failed identically.
+#: That is not a hypothetical. The wave ran 8,192 tokens per rank at sequence length 4,096, so
+#: the batch was 2, six of the eight streams were invented, and all three cells of the arm died
+#: with a non-finite loss at step 2 -- the first forward after the first optimizer update wrote
+#: those gradients into the weights. ``recurrent_weight_init`` is ``"zeros"``, which is why step 1
+#: survived, and the pad is a constant, which is why every seed failed identically.
 #:
-#: ``FlashRNNFuncGenerator``, the non-fused generator, contains no padding at all. It is the same
-#: package and the same CUDA implementation family, so the arm keeps FlashRNN and keeps its
-#: architecture; only the fusion goes. ``triton_fused`` is not an option here: it asks for 524 KB
-#: of shared memory at this head dimension against an A100's 164 KB limit.
-FLASHRNN_BACKEND = "cuda"
+#: The arm now declares a batch of eight, so no padding happens and the fast kernel is sound.
+#: ``_slstm_prewarm_contract`` refuses any batch that is not a multiple of eight, which is what
+#: keeps this true rather than merely true today.
+#:
+#: THE ALTERNATIVES COST TOO MUCH. ``FlashRNNFuncGenerator``, the non-fused generator, has no
+#: padding at all and is correct at any batch, but measured 8.581x a GDN2 control against the
+#: fused kernel's recorded 1.793x on the same card -- about five times slower for the two layers
+#: that use it. ``triton_fused`` cannot run this shape: it asks for 524 KB of shared memory at
+#: this head dimension against an A100's 164 KB limit.
+FLASHRNN_BACKEND = "cuda_fused"
+
+#: The batch multiple the fused kernel pads up to, or ``0`` when the backend does not pad.
+#:
+#: Derived from FlashRNN's own ``round_to_multiple(config.batch_size, 8)`` for any non-float32
+#: dtype. Exported so the runner can refuse a batch that would be padded instead of discovering
+#: it as a non-finite loss at step 2; see :data:`FLASHRNN_BACKEND` for what the padding does.
+FLASHRNN_FUSED_BATCH_MULTIPLE = 8 if FLASHRNN_BACKEND == "cuda_fused" else 0
 _PREFLIGHTED_FLASHRNN = None
 _PREFLIGHTED_FLASHRNN_CONFIG = None
 _PREWARMED_FLASHRNN_SHAPES = set()

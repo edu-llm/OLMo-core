@@ -321,7 +321,10 @@ def test_treatment_mixers_are_strict_and_parameter_matched():
             # be the bfloat16 that FSDP hands the persistent kernel.
             assert all(mixer.kernel_dtype == "bfloat16" for mixer in slstm)
             assert all(mixer.backend == "cuda_fused" for mixer in slstm)
-            assert all(mixer.batch_size == 2 for mixer in slstm)
+            # EIGHT, BECAUSE THE FUSED KERNEL PADS ANY OTHER MULTIPLE WITH FABRICATED
+            # SEQUENCES AND LETS THEIR GRADIENTS INTO THE SHARED RECURRENT WEIGHT AND BIAS.
+            # At the old 2 this arm lost all three cells to a non-finite loss at step 2.
+            assert all(mixer.batch_size == 8 for mixer in slstm)
             assert all(mixer.fuse_input_projections is True for mixer in slstm)
         elif arm == "native-pd":
             assert all(isinstance(mixer, NativeFlashPDMixerConfig) for mixer in mixers)

@@ -3443,7 +3443,7 @@ def _slstm_prewarm_contract(opts) -> SLSTMPrewarmContract:
     """
     from model_arch_tests import build_model_config
 
-    from olmo_core.nn.xlstm import SLSTMMixerConfig
+    from olmo_core.nn.xlstm import FLASHRNN_FUSED_BATCH_MULTIPLE, SLSTMMixerConfig
 
     model = build_model_config(opts.arm, opts.init_seed)
     contracts = {
@@ -3476,6 +3476,28 @@ def _slstm_prewarm_contract(opts) -> SLSTMPrewarmContract:
             "and the persistent FlashRNN layer refuses every other, while "
             f"--rank-microbatch-size {opts.rank_microbatch_size} over --sequence-length "
             f"{opts.sequence_length} feeds {opts.rank_microbatch_size / opts.sequence_length:g}"
+        )
+
+    # A BATCH THAT IS NOT A MULTIPLE OF EIGHT SILENTLY CORRUPTS THE SHARED WEIGHTS, AND THAT IS
+    # WHAT KILLED THIS ARM'S FIRST THREE CELLS. FlashRNN's fused generator rounds the batch up
+    # and pads the inputs and initial state with `torch.ones`, then returns the recurrent-weight
+    # and bias gradients accumulated over the padded batch without slicing them back -- so the
+    # fabricated streams write into parameters every layer shares. Nothing raises; the loss goes
+    # non-finite one optimizer step later, at step 2, naming a kernel in a different layer.
+    #
+    # Refused here rather than at the kernel because the kernel is happy: this is a property of
+    # `--rank-microbatch-size` over `--sequence-length`, which is a command line away from being
+    # wrong again. See `FLASHRNN_BACKEND` for the padding and slicing, and the non-fused backend
+    # if a batch below eight is ever genuinely needed.
+    if FLASHRNN_FUSED_BATCH_MULTIPLE and sequences_per_rank % FLASHRNN_FUSED_BATCH_MULTIPLE:
+        raise _environment_refusal(
+            f"the fused FlashRNN sLSTM kernel pads any batch that is not a multiple of "
+            f"{FLASHRNN_FUSED_BATCH_MULTIPLE} with fabricated sequences and lets their "
+            "gradients into the shared recurrent weight and bias, so "
+            f"--rank-microbatch-size {opts.rank_microbatch_size} over --sequence-length "
+            f"{opts.sequence_length} feeding {sequences_per_rank} sequences would train on "
+            "corrupted updates from step 2. Feed a multiple of "
+            f"{FLASHRNN_FUSED_BATCH_MULTIPLE} sequences per rank"
         )
     return contract
 
