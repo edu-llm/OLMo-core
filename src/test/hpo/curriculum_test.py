@@ -296,7 +296,7 @@ def test_olmoe_curriculum_factory_uses_fixed_olmoe_batch_contract(monkeypatch):
     assert captured["base_builder"].__name__ == "build_olmoe_hpo_experiment"
     assert captured["sequence_length"] == 2_048
     assert captured["global_batch_size"] == 262_144
-    assert captured["rank_microbatch_size"] == 16_384
+    assert captured["rank_microbatch_size"] == 8_192
 
 
 def test_factory_requests_exact_parent_and_order_groups(monkeypatch):

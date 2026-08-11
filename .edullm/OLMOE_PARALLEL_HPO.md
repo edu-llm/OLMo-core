@@ -16,11 +16,11 @@ token-progress loader. The global batch is fixed rather than searched.
 ## Fixed batch and fidelity contract
 
 - Global batch: 262,144 tokens per optimizer step.
-- Rank microbatch: 16,384 tokens, the largest divisor of the per-rank global batch below the
-  measured 32,768-token OOM point on an 80 GiB H100.
+- Rank microbatch: 8,192 tokens. Live one-step probes OOMed at both 32,768 and 16,384 tokens
+  per rank on an 80 GiB H100, so this is the next-largest divisor of the per-rank global batch.
 - Sequence length: 2,048 tokens.
 - Worker world size: 8 ranks on one node.
-- Gradient accumulation: `262144 / (8 * 16384) = 2`.
+- Gradient accumulation: `262144 / (8 * 8192) = 4`.
 - Capacity-block data source: the read-only `edullm-data-us-east-2` corpus mirror.
 - Stock-arm quantum/target/budget: 49,807,360 / 499,908,608 / 2,000,158,720 tokens.
 - Curriculum-arm quantum/target/budget: 50,331,648 / 503,316,480 / 2,013,265,920 tokens.
